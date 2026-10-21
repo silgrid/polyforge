@@ -1,0 +1,386 @@
+package cli
+
+import (
+	"flag"
+	"fmt"
+	"strings"
+
+	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+)
+
+// Management face M1–M5 (same port, same auth, admin unless noted).
+// Semantics ported from the v0 CLI: users, api-keys, projects
+// (incl. membership), backup.
+
+// ---------------------------------------------------------------------------
+// users (M1)
+// ---------------------------------------------------------------------------
+
+var cmdUsers = &Command{
+	Name:    "users",
+	Group:   GroupMgmt,
+	Summary: "User management (M1, admin only)",
+	Usage: "pf users create --display-name N [--user-type human|machine] [--role writer|admin]\n" +
+		"pf users list\n" +
+		"pf users get <id>\n" +
+		"pf users patch <id> [--display-name N] [--role writer|admin]",
+	Setup: func(fs *flag.FlagSet) {},
+	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
+		if len(args) == 0 {
+			return fmt.Errorf("users: expected create|list|get|patch")
+		}
+		client := ctx.aihub()
+		sub, rest := args[0], args[1:]
+		switch sub {
+		case "create":
+			f := subFlags(ctx, "users create")
+			name := f.String("display-name", "", "human-readable display name (required)")
+			kind := f.String("user-type", "human", "human|machine")
+			role := f.String("role", "writer", "writer|admin (global role)")
+			rest, err := parseCommandArgs(f, rest)
+			if err != nil {
+				return err
+			}
+			if len(rest) != 0 || *name == "" {
+				return fmt.Errorf("users create: --display-name is required")
+			}
+			raw, err := client.CreateUser(aihubclient.UserCreateRequest{
+				DisplayName: *name,
+				UserType:    *kind,
+				Role:        *role,
+			})
+			if err != nil {
+				return err
+			}
+			finishAs(ctx, raw, func(u *api.User) {
+				fmt.Fprintf(ctx.Stdout, "created user %s (%s, %s)\n", u.ID, u.UserType, u.Role)
+			})
+			return nil
+		case "list":
+			raw, err := client.ListUsers()
+			if err != nil {
+				return err
+			}
+			finishAs(ctx, raw, func(l *itemList[api.User]) {
+				renderUsers(ctx.Stdout, l.Items)
+			})
+			return nil
+		case "get":
+			if len(rest) != 1 {
+				return fmt.Errorf("users get: expected exactly one user id")
+			}
+			raw, err := client.GetUser(rest[0])
+			if err != nil {
+				return err
+			}
+			ctx.finish(raw, func() { printJSON(ctx.Stdout, raw) })
+			return nil
+		case "patch":
+			f := subFlags(ctx, "users patch")
+			name := f.String("display-name", "", "new display name")
+			role := f.String("role", "", "writer|admin")
+			ids, err := parseCommandArgs(f, rest)
+			if err != nil {
+				return err
+			}
+			if len(ids) != 1 || (*name == "" && *role == "") {
+				return fmt.Errorf("users patch: expected <id> and at least one of --display-name / --role")
+			}
+			raw, err := client.PatchUser(ids[0], aihubclient.UserPatchRequest{
+				DisplayName: *name,
+				Role:        *role,
+			})
+			if err != nil {
+				return err
+			}
+			ctx.finishLine(raw, "user %s updated\n", ids[0])
+			return nil
+		default:
+			return fmt.Errorf("users: unknown action %q", sub)
+		}
+	},
+}
+
+// ---------------------------------------------------------------------------
+// api-keys (M2)
+// ---------------------------------------------------------------------------
+
+var cmdApiKeys = &Command{
+	Name:    "api-keys",
+	Group:   GroupMgmt,
+	Summary: "API key management (M2, admin only; plaintext shown exactly once)",
+	Usage: "pf api-keys create --user U [--name N] [--project-scope P]\n" +
+		"pf api-keys list\n" +
+		"pf api-keys revoke <id>",
+	Setup: func(fs *flag.FlagSet) {},
+	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
+		if len(args) == 0 {
+			return fmt.Errorf("api-keys: expected create|list|revoke")
+		}
+		client := ctx.aihub()
+		sub, rest := args[0], args[1:]
+		switch sub {
+		case "create":
+			f := subFlags(ctx, "api-keys create")
+			user := f.String("user", "", "user id to mint the key for (required)")
+			scope := f.String("project-scope", "", "optional project scope (narrows, never grants)")
+			name := f.String("name", "", "optional key name")
+			rest, err := parseCommandArgs(f, rest)
+			if err != nil {
+				return err
+			}
+			if len(rest) != 0 || *user == "" {
+				return fmt.Errorf("api-keys create: --user is required")
+			}
+			req := aihubclient.ApiKeyCreateRequest{UserID: *user, Name: *name}
+			if *scope != "" {
+				req.ProjectID = strPtr(*scope)
+			}
+			raw, err := client.CreateApiKey(req)
+			if err != nil {
+				return err
+			}
+			ctx.finish(raw, func() {
+				printJSON(ctx.Stdout, raw)
+				fmt.Fprintln(ctx.Stdout, "NOTE: the key plaintext is shown exactly once and never stored.")
+			})
+			return nil
+		case "list":
+			raw, err := client.ListApiKeys()
+			if err != nil {
+				return err
+			}
+			ctx.finish(raw, func() {
+				renderApiKeys(ctx.Stdout, raw)
+			})
+			return nil
+		case "revoke":
+			if len(rest) != 1 {
+				return fmt.Errorf("api-keys revoke: expected exactly one key id")
+			}
+			raw, err := client.RevokeApiKey(rest[0])
+			if err != nil {
+				return err
+			}
+			ctx.finishLine(raw, "key %s revoked\n", rest[0])
+			return nil
+		default:
+			return fmt.Errorf("api-keys: unknown action %q", sub)
+		}
+	},
+}
+
+// ---------------------------------------------------------------------------
+// projects (M3), including membership add/remove
+// ---------------------------------------------------------------------------
+
+var cmdProjects = &Command{
+	Name:    "projects",
+	Group:   GroupMgmt,
+	Summary: "Project and membership management (M3)",
+	Usage: "pf projects create --name N [--visible]\n" +
+		"pf projects list\n" +
+		"pf projects get <id-or-name>\n" +
+		"pf projects patch <id-or-name> [--visible[=true|false]] [--repos name=url[,name=url...]]\n" +
+		"pf projects members add <id-or-name> --user U --role viewer|writer|maintainer\n" +
+		"pf projects members remove <id-or-name> --user U [--user U ...]",
+	Setup: func(fs *flag.FlagSet) {},
+	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
+		if len(args) == 0 {
+			return fmt.Errorf("projects: expected create|list|get|patch|members")
+		}
+		client := ctx.aihub()
+		sub, rest := args[0], args[1:]
+		switch sub {
+		case "create":
+			f := subFlags(ctx, "projects create")
+			name := f.String("name", "", "project name (required)")
+			visible := f.Bool("visible", true, "directory-listing visibility (grants no data access)")
+			rest, err := parseCommandArgs(f, rest)
+			if err != nil {
+				return err
+			}
+			if len(rest) != 0 || *name == "" {
+				return fmt.Errorf("projects create: --name is required")
+			}
+			raw, err := client.CreateProject(aihubclient.ProjectCreateRequest{
+				Name:    *name,
+				Visible: visible,
+			})
+			if err != nil {
+				return err
+			}
+			finishAs(ctx, raw, func(p *api.Project) {
+				fmt.Fprintf(ctx.Stdout, "created project %s (%s)\n", p.Name, p.ID)
+			})
+			return nil
+		case "list":
+			raw, err := client.ListProjects()
+			if err != nil {
+				return err
+			}
+			finishAs(ctx, raw, func(l *itemList[api.Project]) {
+				renderProjects(ctx.Stdout, l.Items)
+			})
+			return nil
+		case "get":
+			if len(rest) != 1 {
+				return fmt.Errorf("projects get: expected exactly one project id or name")
+			}
+			raw, err := client.GetProject(rest[0])
+			if err != nil {
+				return err
+			}
+			ctx.finish(raw, func() { printJSON(ctx.Stdout, raw) })
+			return nil
+		case "patch":
+			f := subFlags(ctx, "projects patch")
+			// The wire body carries `visible` ONLY when the flag was
+			// given; a plain patch must not flip a private project
+			// visible.
+			visible := optBool{}
+			f.Var(&visible, "visible", "directory-listing visibility (omit to leave unchanged)")
+			// -repos is the task-repo inventory as an EXPLICIT FULL
+			// REPLACEMENT (the wire face's semantics): omit to leave
+			// unchanged, -repos "" clears, and every spelling is
+			// name=url pairs, comma-separated.
+			repos := f.String("repos", "", "task-repo inventory (explicit full replacement): name=url[,name=url...]")
+			ids, err := parseCommandArgs(f, rest)
+			if err != nil {
+				return err
+			}
+			if len(ids) != 1 {
+				return fmt.Errorf("projects patch: expected one project id or name")
+			}
+			req := aihubclient.ProjectPatchRequest{Visible: visible.Ptr()}
+			if flagChanged(f, "repos") {
+				refs, perr := parseRepoRefs(*repos)
+				if perr != nil {
+					return fmt.Errorf("projects patch: %v", perr)
+				}
+				req.Repos = &refs
+			}
+			raw, err := client.PatchProject(ids[0], req)
+			if err != nil {
+				return err
+			}
+			ctx.finishLine(raw, "project %s updated\n", ids[0])
+			return nil
+		case "members":
+			return projectsMembers(ctx, client, rest)
+		default:
+			return fmt.Errorf("projects: unknown action %q", sub)
+		}
+	},
+}
+
+// projectsMembers handles `pf projects members add|remove ...` — both map
+// onto the M3 project PATCH (members upsert / remove_members).
+func projectsMembers(ctx *Context, client *aihubclient.Client, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("projects members: expected add|remove")
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "add":
+		f := subFlags(ctx, "projects members add")
+		user := f.String("user", "", "user id (required)")
+		role := f.String("role", "writer", "viewer|writer|maintainer")
+		ids, err := parseCommandArgs(f, rest)
+		if err != nil {
+			return err
+		}
+		if len(ids) != 1 || *user == "" {
+			return fmt.Errorf("projects members add: expected <id-or-name> --user U --role R")
+		}
+		switch *role {
+		case "viewer", "writer", "maintainer":
+		default:
+			return fmt.Errorf("projects members add: --role must be viewer|writer|maintainer")
+		}
+		members := []aihubclient.ProjectMember{{UserID: *user, Role: *role}}
+		raw, err := client.PatchProject(ids[0], aihubclient.ProjectPatchRequest{Members: &members})
+		if err != nil {
+			return err
+		}
+		ctx.finishLine(raw, "member %s upserted on %s as %s\n", *user, ids[0], *role)
+		return nil
+	case "remove", "rm":
+		f := subFlags(ctx, "projects members remove")
+		var users stringList
+		f.Var(&users, "user", "user id to remove (repeatable)")
+		ids, err := parseCommandArgs(f, rest)
+		if err != nil {
+			return err
+		}
+		if len(ids) != 1 || len(users) == 0 {
+			return fmt.Errorf("projects members remove: expected <id-or-name> --user U [--user U ...]")
+		}
+		rem := []string(users)
+		raw, err := client.PatchProject(ids[0], aihubclient.ProjectPatchRequest{RemoveMembers: &rem})
+		if err != nil {
+			return err
+		}
+		ctx.finishLine(raw, "removed from %s: %s\n", ids[0], strings.Join(rem, ","))
+		return nil
+	default:
+		return fmt.Errorf("projects members: unknown action %q", sub)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// backup (M4)
+// ---------------------------------------------------------------------------
+
+var cmdBackup = &Command{
+	Name:    "backup",
+	Group:   GroupMgmt,
+	Summary: "Write a database snapshot on the server (M4, admin only; every memory, no git repos)",
+	Usage: "pf backup\n" +
+		"  Writes a consistent snapshot of the database (VACUUM INTO) under the server's data dir backups/, on the same disk.\n" +
+		"  Memories live in the database, so it holds every memory; it does NOT include the git repos (git/).\n" +
+		"  For a full backup use the backup steps of .polyforge/deploy.sh, or copy the whole data dir.",
+	Setup: func(fs *flag.FlagSet) {},
+	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
+		raw, err := ctx.aihub().Backup()
+		if err != nil {
+			return err
+		}
+		finishOrRaw(ctx, raw, func(resp *struct {
+			Backup string `json:"backup"`
+		}) bool {
+			fmt.Fprintf(ctx.Stdout, "snapshot written: %s\n", resp.Backup)
+			return true
+		})
+		return nil
+	},
+}
+
+// ---------------------------------------------------------------------------
+// machines (M3 heartbeat wiring) — the machines liveness read
+// face; the operator half of GET /api/v1/machines (admin).
+
+var cmdMachines = &Command{
+	Name:    "machines",
+	Group:   GroupMgmt,
+	Summary: "Daemon liveness face (M3, admin only)",
+	Usage: "pf machines list\n\n" +
+		"Requires an admin credential: the daemon liveness face is admin-only.",
+	Setup: func(fs *flag.FlagSet) {},
+	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
+		if len(args) != 1 || args[0] != "list" {
+			return fmt.Errorf("machines: expected list")
+		}
+		raw, err := ctx.aihub().ListMachinesRaw()
+		if err != nil {
+			return err
+		}
+		// House rule: --json is byte-for-byte passthrough of the server
+		// body; human mode decodes the same body for the table render.
+		finishAs(ctx, raw, func(out *aihubclient.MachinesList) {
+			renderMachines(ctx.Stdout, out)
+		})
+		return nil
+	},
+}

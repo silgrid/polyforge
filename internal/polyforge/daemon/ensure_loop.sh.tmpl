@@ -1,0 +1,16 @@
+{{- define "script" -}}
+cd {{q .Home}} 2>/dev/null || cd /
+exec /usr/bin/env -i {{range .Env}}{{.}} {{end}}/bin/sh -c {{q .Body}}
+{{end}}
+{{- define "body" -}}
+while :; do
+  if [ "$(wc -c < {{q .Log}} 2>/dev/null || echo 0)" -gt {{.RotateBytes}} ]; then mv -f {{q .Log}} {{q .Log}}.1; fi
+  echo "pf daemon ensure loop: starting the daemon at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {{q .Log}}
+  nohup {{range .Argv}}{{q .}} {{end}}< /dev/null >> {{q .Log}} 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then echo "pf daemon ensure loop: the daemon exited cleanly; the loop ends" >> {{q .Log}}; break; fi
+  if [ "$rc" -eq {{.NeedsOperator}} ]; then echo "pf daemon ensure loop: the daemon refused to start (exit $rc: needs an operator fix, see above); the loop ends — fix the cause, then run pf daemon ensure" >> {{q .Log}}; break; fi
+  echo "pf daemon ensure loop: the daemon failed (exit $rc); restarting in {{.Delay}}s" >> {{q .Log}}
+  sleep {{.Delay}}
+done
+{{end}}

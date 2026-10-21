@@ -1,0 +1,26 @@
+# Production shape for aihub.
+# The volume carries SQLite + per-WI bare repos + the memory tree TOGETHER:
+# backup and restore are always whole-volume operations.
+services:
+  aihub:
+    # Images are built by .polyforge/release.sh (docker build from deploy/Dockerfile
+    # + the released binary, pushed to ghcr.io/silgrid/aihub:<tag>) and pulled /
+    # loaded by .polyforge/deploy.sh (deploy.sh builds only the legacy rollback
+    # image of a release that predates the GHCR image), never by compose: a
+    # container recreate must not silently fall back to an older image. Production pins the literal tag
+    # (polyforge/aihub:<tag>); here it comes from the environment.
+    image: polyforge/aihub:${AIHUB_TAG:?set AIHUB_TAG to a built tag}
+    # SIGKILL deadline on stop: longer than aihub's own drain (it waits up to
+    # 10s for in-flight HTTP after SIGTERM), so the drain always completes
+    stop_grace_period: 15s
+    container_name: aihub
+    ports: ["8080:8080"]
+    volumes: ["<your-data-dir>:/data"]
+    restart: unless-stopped
+    healthcheck:
+      # aihub has no unauthenticated health route: any HTTP answer (even a
+      # 401/404) proves the server is up; curl fails only on connect errors.
+      test: ["CMD", "curl", "-s", "-o", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
