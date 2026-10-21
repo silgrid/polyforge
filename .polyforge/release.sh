@@ -106,9 +106,11 @@ IMAGE="${RELEASE_IMAGE:-ghcr.io/silgrid/aihub}"
 GH_REPO="${RELEASE_GH_REPO:-silgrid/polyforge}"
 SEMVER_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
 # Owner-direct allowlist (polyforge#240; see the PR-only check above): author
-# emails, space-separated, whose direct commits pass the PR-only check. One-time
-# legacy bridge - delete once every change goes through PR-review-merge.
-OWNER_DIRECT_EMAILS="chenlinbo@modelbest.cn"
+# emails, space-separated, whose direct commits pass the PR-only check. Empty
+# by default - every change goes through PR-review-merge. Forks carrying
+# owner-direct history set OWNER_DIRECT_EMAILS in the environment (or their
+# own delta here).
+OWNER_DIRECT_EMAILS="${OWNER_DIRECT_EMAILS:-}"
 
 die() { echo "release: $*" >&2; exit 1; }
 gh_() { gh "$@" -R "$GH_REPO"; }

@@ -90,8 +90,8 @@ func TestBuildAmbiguousInverseRejected(t *testing.T) {
 	wsA := t.TempDir()
 	wsB := t.TempDir()
 	_, err := Build([]Entry{
-		{Workspace: wsA, Projects: []string{"ieops"}},
-		{Workspace: wsB, Projects: []string{"ieops"}},
+		{Workspace: wsA, Projects: []string{"demo-ops"}},
+		{Workspace: wsB, Projects: []string{"demo-ops"}},
 	})
 	if err == nil {
 		t.Fatal("a project under two workspaces must be a load error")
@@ -100,7 +100,7 @@ func TestBuildAmbiguousInverseRejected(t *testing.T) {
 	if !errors.As(err, &ae) {
 		t.Fatalf("ambiguity must be the typed AmbiguityError, got %T: %v", err, err)
 	}
-	for _, want := range []string{"ieops", wsA, wsB} {
+	for _, want := range []string{"demo-ops", wsA, wsB} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q must name %q", err, want)
 		}

@@ -731,8 +731,8 @@ func TestReleaseScriptVerifyPROnly(t *testing.T) {
 // ---- owner-direct allowlist (polyforge#240)
 
 const (
-	ownerDirectEmail = "chenlinbo@modelbest.cn" // the one allowlisted author
-	agentEmail       = "xiaokang.w@gmicloud.ai" // workspace / step-agent identity: never allowlisted (#149)
+	ownerDirectEmail = "owner@example.com" // the one allowlisted author (the test sets OWNER_DIRECT_EMAILS)
+	agentEmail       = "agent@example.com" // workspace / step-agent identity: never allowlisted (#149)
 )
 
 // commitOnMainAs is commitOnMain with the given author email (the committer
@@ -790,7 +790,7 @@ func TestReleaseScriptOwnerDirectAllowlist(t *testing.T) {
 			w := newRelWorld(t, []string{"v1.2.0"}, nil)
 			owner, bad := c.setup(w)
 			w.landPR("later", "a later PR")
-			out, err := w.run(nil)
+			out, err := w.run([]string{"OWNER_DIRECT_EMAILS=" + ownerDirectEmail})
 			if owner != "" && !strings.Contains(out, "PASS pr-only: owner-direct: "+owner+" "+ownerDirectEmail+"\n") {
 				t.Errorf("no owner-direct audit line for %s\n%s", owner, out)
 			}
@@ -832,7 +832,7 @@ func TestReleaseScriptVerifyOwnerDirectAllowlist(t *testing.T) {
 			relGit(t, w.work, "tag", "-a", "-m", "v1.3.0", "v1.3.0")
 			relGit(t, w.work, "push", "-q", "origin", "v1.3.0")
 			w.publishFake("v1.3.0", goodRelease())
-			out, err := w.run(nil, "--verify", "v1.3.0")
+			out, err := w.run([]string{"OWNER_DIRECT_EMAILS=" + ownerDirectEmail}, "--verify", "v1.3.0")
 			if owner != "" && !strings.Contains(out, "PASS pr-only: owner-direct: "+owner+" "+ownerDirectEmail+"\n") {
 				t.Errorf("no owner-direct audit line for %s\n%s", owner, out)
 			}

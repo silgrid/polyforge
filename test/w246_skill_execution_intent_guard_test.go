@@ -2,12 +2,12 @@ package test
 
 // w246 (polyforge#246, bug-fix lane, step "repro"): the routing skill
 // never loads for an execution intent. Reported incident (2026-10-20,
-// gmi-ws): the owner directed code work in a pi session ("先升级 reverst
+// ws-b): the owner directed code work in a pi session ("先升级 reverst
 // 库" — upgrade the reverst library, quic-go v0.59→v0.64.1); the session
-// agent hand-executed it end-to-end — a branch in .repo/ieops-reverst,
+// agent hand-executed it end-to-end — a branch in .repo/demo-ops-reverst,
 // the go.mod change, a 19-minute full test run, commit, push, PR
-// GMISWE/ieops-reverst#61 — with no ticket until after the PR (the
-// after-the-fact registration ticket ieops#1359 was refused bundle-less,
+// GMISWE/demo-ops-reverst#61 — with no ticket until after the PR (the
+// after-the-fact registration ticket demo-ops#1359 was refused bundle-less,
 // CORE-409; bound to a bundle it was claimed and ran normally). Nothing
 // the session had loaded said not to.
 //

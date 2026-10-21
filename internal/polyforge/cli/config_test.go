@@ -62,7 +62,7 @@ daemon_socket = "/tmp/pfd.sock"  # trailing comment
 user_id = "usr_toml"
 
 [workspace."`+t.TempDir()+`"]
-projects = ["polyforge", "ieops"]
+projects = ["polyforge", "demo-ops"]
 `)
 	cfg, err = LoadConfig(path)
 	if err != nil {
@@ -72,7 +72,7 @@ projects = ["polyforge", "ieops"]
 		cfg.DaemonSocket != "/tmp/pfd.sock" || cfg.UserID != "usr_toml" {
 		t.Fatalf("toml level: got %+v", cfg)
 	}
-	if got := cfg.Mapping.Projects(); len(got) != 2 || got[0] != "polyforge" || got[1] != "ieops" {
+	if got := cfg.Mapping.Projects(); len(got) != 2 || got[0] != "polyforge" || got[1] != "demo-ops" {
 		t.Fatalf("toml mapping projects = %v", got)
 	}
 
@@ -111,7 +111,7 @@ server = "http://x:1"
 projects = ["e2e"]
 
 [workspace."`+wsAbs+`"]
-projects = ["ieops"]
+projects = ["demo-ops"]
 `)
 	cfg, err := LoadConfig(path)
 	if err != nil {
@@ -122,7 +122,7 @@ projects = ["ieops"]
 	if len(got) != 2 || got[0] != wantTilde || got[1] != wsAbs {
 		t.Fatalf("workspaces = %v, want [%s %s]", got, wantTilde, wsAbs)
 	}
-	for proj, wantWS := range map[string]string{"e2e": wantTilde, "ieops": wsAbs} {
+	for proj, wantWS := range map[string]string{"e2e": wantTilde, "demo-ops": wsAbs} {
 		ws, err := cfg.Mapping.WorkspaceFor(proj)
 		if err != nil || ws != wantWS {
 			t.Fatalf("WorkspaceFor(%q) = %q, %v", proj, ws, err)
@@ -175,7 +175,7 @@ func TestConfigMappingValidationRefusals(t *testing.T) {
 	wsB := t.TempDir()
 	t.Run("ambiguous inverse", func(t *testing.T) {
 		path := writeTempConfig(t,
-			"[workspace.\""+wsA+"\"]\nprojects = [\"ieops\"]\n[workspace.\""+wsB+"\"]\nprojects = [\"ieops\"]\n")
+			"[workspace.\""+wsA+"\"]\nprojects = [\"demo-ops\"]\n[workspace.\""+wsB+"\"]\nprojects = [\"demo-ops\"]\n")
 		_, err := LoadConfig(path)
 		if err == nil {
 			t.Fatal("ambiguous inverse must refuse loading")
@@ -184,7 +184,7 @@ func TestConfigMappingValidationRefusals(t *testing.T) {
 		if !errorsAs(err, &ae) {
 			t.Fatalf("want the typed AmbiguityError, got %T: %v", err, err)
 		}
-		for _, tok := range []string{"ieops", wsA, wsB} {
+		for _, tok := range []string{"demo-ops", wsA, wsB} {
 			if !strings.Contains(err.Error(), tok) {
 				t.Errorf("error %q misses %q", err, tok)
 			}

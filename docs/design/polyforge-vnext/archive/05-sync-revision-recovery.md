@@ -492,9 +492,9 @@ dirty 标记作为"是否值得扫一次"的提示，`watcher/` 绝不反向调�
 { "work_item_id": "wi_…", "seq": 7, "parent": 6, "generation": 3,
   "kind": "incremental",
   "ops": [
-    { "op": "put",     "path": "repos/ieops/internal/x.go", "sha256": "…", "bytes": 1840, "mode": 420 },
+    { "op": "put",     "path": "repos/demo-ops/internal/x.go", "sha256": "…", "bytes": 1840, "mode": 420 },
     { "op": "delete",  "path": "artifacts/scratch.tmp" },
-    { "op": "symlink", "path": "repos/ieops/vendor/self", "target": "." },
+    { "op": "symlink", "path": "repos/demo-ops/vendor/self", "target": "." },
     { "op": "chmod",   "path": "scripts/run.sh", "mode": 493 },
     { "op": "put",     "path": "runtime-state/execution.json", "sha256": "…", "bytes": 412, "mode": 420 }
   ],

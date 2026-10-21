@@ -8,7 +8,7 @@ GO_LDFLAGS := -X github.com/silgrid/polyforge/internal/version.Version=$(VERSION
 .PHONY: check build crossbuild vet fmt test xrefs release
 
 build:
-	go build -ldflags "$(GO_LDFLAGS)" ./...
+	go build -trimpath -ldflags "$(GO_LDFLAGS)" ./...
 
 vet:
 	go vet ./...
@@ -17,8 +17,8 @@ vet:
 # build for both darwin architectures, so pf and aihub binaries can exist on
 # macOS. This is part of `check`, ahead of the test gate.
 crossbuild:
-	GOWORK=off GOOS=darwin GOARCH=arm64 go build ./...
-	GOWORK=off GOOS=darwin GOARCH=amd64 go build ./...
+	GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./...
+	GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./...
 
 test:
 	# go test suppresses skip messages unless -v (or -json) is on, so a plain
@@ -66,9 +66,9 @@ release:
 		echo "make release: no git tag on HEAD and no VERSION=<tag> given; refusing to stamp 'dev'"; \
 		exit 1; \
 	fi
-	GOWORK=off go build -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/ ./cmd/aihub ./cmd/pf
-	GOWORK=off GOOS=darwin GOARCH=arm64 go build -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/aihub-darwin-arm64 ./cmd/aihub
-	GOWORK=off GOOS=darwin GOARCH=arm64 go build -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/pf-darwin-arm64 ./cmd/pf
-	GOWORK=off GOOS=darwin GOARCH=amd64 go build -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/aihub-darwin-amd64 ./cmd/aihub
-	GOWORK=off GOOS=darwin GOARCH=amd64 go build -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/pf-darwin-amd64 ./cmd/pf
+	GOWORK=off go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/ ./cmd/aihub ./cmd/pf
+	GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/aihub-darwin-arm64 ./cmd/aihub
+	GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/pf-darwin-arm64 ./cmd/pf
+	GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/aihub-darwin-amd64 ./cmd/aihub
+	GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/pf-darwin-amd64 ./cmd/pf
 	@echo "release: injected internal/version.Version=$(VERSION) (ldflags -X) into the 6 binaries: aihub/pf linux-amd64 + darwin-arm64 + darwin-amd64"

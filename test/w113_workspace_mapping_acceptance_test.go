@@ -851,7 +851,7 @@ func w113CopyFile(src, dst string) error {
 // mapping-bearing config.
 func TestW113MappingTildeExpansionAndRouting(t *testing.T) {
 	inst := newV1Install(t)
-	w113EnsureProject(t, inst, "ieops")
+	w113EnsureProject(t, inst, "demo-ops")
 
 	home := t.TempDir()
 	tildeWS := filepath.Join(home, "w113home")
@@ -863,7 +863,7 @@ func TestW113MappingTildeExpansionAndRouting(t *testing.T) {
 		inst.url, inst.adminKey, "",
 		[]w113WS{
 			{key: "~/w113home", projects: []string{"e2e"}},
-			{key: absWS, projects: []string{"ieops"}},
+			{key: absWS, projects: []string{"demo-ops"}},
 		})
 
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfg), w113DOptHome(home))
@@ -872,7 +872,7 @@ func TestW113MappingTildeExpansionAndRouting(t *testing.T) {
 
 	wiA := w113NewWI(t, inst, "e2e", "w113 tilde-keyed workspace claim",
 		envelopeAutopilot())
-	wiB := w113NewWI(t, inst, "ieops", "w113 absolute-keyed workspace claim",
+	wiB := w113NewWI(t, inst, "demo-ops", "w113 absolute-keyed workspace claim",
 		envelopeAutopilot())
 	d.pfWant(inst, -1, "submit", wiA)
 	d.pfWant(inst, -1, "submit", wiB)
@@ -923,7 +923,7 @@ func TestW113MappingInvalidKeysRejected(t *testing.T) {
 				"http://127.0.0.1:1", "w113key", "",
 				[]w113WS{
 					{key: goodWS, projects: []string{"e2e"}},
-					{key: c.key, projects: []string{"ieops"}},
+					{key: c.key, projects: []string{"demo-ops"}},
 				})
 			// CLI reader.
 			out, code := w113Pf(t, inst, w113Env{config: cfg, noConn: true}, "queue")
@@ -1016,14 +1016,14 @@ func TestW113AmbiguousInverseRejected(t *testing.T) {
 	cfg := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"),
 		"http://127.0.0.1:1", "w113key", "",
 		[]w113WS{
-			{key: wsA, projects: []string{"ieops"}},
-			{key: wsB, projects: []string{"ieops"}},
+			{key: wsA, projects: []string{"demo-ops"}},
+			{key: wsB, projects: []string{"demo-ops"}},
 		})
 	out, code := w113Pf(t, inst, w113Env{config: cfg, noConn: true}, "queue")
 	if code != 1 {
 		t.Fatalf("pf queue on ambiguous inverse: exit %d, want 1 (output %q)", code, out)
 	}
-	for _, tok := range []string{"ieops", "w113dupA", "w113dupB"} {
+	for _, tok := range []string{"demo-ops", "w113dupA", "w113dupB"} {
 		if !strings.Contains(out, tok) {
 			t.Fatalf("pf queue on ambiguous inverse: error misses %q (output %q)", tok, out)
 		}
@@ -1037,7 +1037,7 @@ func TestW113AmbiguousInverseRejected(t *testing.T) {
 	if dcode != w113ExitNeedsOperator {
 		t.Fatalf("daemon on ambiguous inverse: exit %d, want 78 (output %q)", dcode, doutput)
 	}
-	for _, tok := range []string{"ieops", "w113dupA", "w113dupB"} {
+	for _, tok := range []string{"demo-ops", "w113dupA", "w113dupB"} {
 		if !strings.Contains(doutput, tok) {
 			t.Fatalf("daemon on ambiguous inverse: error misses %q (output %q)", tok, doutput)
 		}
@@ -1093,13 +1093,13 @@ func TestW113DuplicateProjectInOneListRejected(t *testing.T) {
 // exit 0 with byte-identical output covering all mapped projects.
 func TestW113CLIIgnoresRetiredEnv(t *testing.T) {
 	inst := newV1Install(t)
-	w113EnsureProject(t, inst, "ieops")
+	w113EnsureProject(t, inst, "demo-ops")
 	ws := t.TempDir()
 	cfg := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"),
 		inst.url, inst.adminKey, "",
-		[]w113WS{{key: ws, projects: []string{"e2e", "ieops"}}})
+		[]w113WS{{key: ws, projects: []string{"e2e", "demo-ops"}}})
 	w113NewWI(t, inst, "e2e", "w113 env-indifference alpha", nil)
-	w113NewWI(t, inst, "ieops", "w113 env-indifference beta", nil)
+	w113NewWI(t, inst, "demo-ops", "w113 env-indifference beta", nil)
 
 	withVar, codeSet := w113Pf(t, inst, w113Env{config: cfg, extra: []string{w113EnvProjectTok() + "=w113unmapped"}}, "queue")
 	withoutVar, codeUnset := w113Pf(t, inst, w113Env{config: cfg}, "queue")
@@ -1110,7 +1110,7 @@ func TestW113CLIIgnoresRetiredEnv(t *testing.T) {
 	if withVar != withoutVar {
 		t.Fatalf("pf queue output differs under the retired env var:\nset:   %q\nunset: %q", withVar, withoutVar)
 	}
-	for _, tok := range []string{"w113 env-indifference alpha", "w113 env-indifference beta", "e2e", "ieops"} {
+	for _, tok := range []string{"w113 env-indifference alpha", "w113 env-indifference beta", "e2e", "demo-ops"} {
 		if !strings.Contains(withVar, tok) {
 			t.Fatalf("pf queue output does not cover the mapped projects (%q missing): %q", tok, withVar)
 		}
@@ -1213,7 +1213,7 @@ func TestW113DaemonValidatesAllMappedWorkspaces(t *testing.T) {
 		"http://127.0.0.1:1", "w113key", "",
 		[]w113WS{
 			{key: existing, projects: []string{"e2e"}},
-			{key: missing, projects: []string{"ieops"}},
+			{key: missing, projects: []string{"demo-ops"}},
 		})
 	d := w113NewDaemon(t, nil, w113DOptConfig(cfg))
 	served, output, code := d.boot(30 * time.Second)
@@ -1239,14 +1239,14 @@ func TestW113DaemonValidatesAllMappedWorkspaces(t *testing.T) {
 
 // TestW113CrossProjectClaimsRoutePerWorkspace pins criteria #9 and #12
 // (and the live halves of #8 and #14): one daemon, workspace A mapping
-// `e2e` and workspace B mapping `ieops`, claims land the capsules at
+// `e2e` and workspace B mapping `demo-ops`, claims land the capsules at
 // A/capsules/<project>-<seq> and B/capsules/<project>-<seq>, each workspace's top level
 // holds only capsules/, `pf ops status` names BOTH workspaces, and the
 // WI-anchored `pf watch --once` works with no project anywhere (unchanged
 // face).
 func TestW113CrossProjectClaimsRoutePerWorkspace(t *testing.T) {
 	inst := newV1Install(t)
-	w113EnsureProject(t, inst, "ieops")
+	w113EnsureProject(t, inst, "demo-ops")
 	wsA := filepath.Join(t.TempDir(), "w113wsA")
 	wsB := filepath.Join(t.TempDir(), "w113wsB")
 	for _, ws := range []string{wsA, wsB} {
@@ -1258,14 +1258,14 @@ func TestW113CrossProjectClaimsRoutePerWorkspace(t *testing.T) {
 		inst.url, inst.adminKey, "",
 		[]w113WS{
 			{key: wsA, projects: []string{"e2e"}},
-			{key: wsB, projects: []string{"ieops"}},
+			{key: wsB, projects: []string{"demo-ops"}},
 		})
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfg))
 	d.start()
 	defer d.stop()
 
 	wiA := w113NewWI(t, inst, "e2e", "w113 neighborhood A claim", envelopeAutopilot())
-	wiB := w113NewWI(t, inst, "ieops", "w113 neighborhood B claim", envelopeAutopilot())
+	wiB := w113NewWI(t, inst, "demo-ops", "w113 neighborhood B claim", envelopeAutopilot())
 	d.pfWant(inst, -1, "submit", wiA)
 	d.pfWant(inst, -1, "submit", wiB)
 
@@ -1423,7 +1423,7 @@ func TestW113InflightCapsulesKeepHomesAcrossRestart(t *testing.T) {
 // and the workflow finishes.
 func TestW113UnmappedMidflightWIBlocksThenResumes(t *testing.T) {
 	inst := newV1Install(t)
-	w113EnsureProject(t, inst, "ieops")
+	w113EnsureProject(t, inst, "demo-ops")
 	wsA := filepath.Join(t.TempDir(), "w113wsA")
 	wsX := filepath.Join(t.TempDir(), "w113wsX")
 	for _, ws := range []string{wsA, wsX} {
@@ -1435,12 +1435,12 @@ func TestW113UnmappedMidflightWIBlocksThenResumes(t *testing.T) {
 	w113ConfigFile(t, fullCfgPath, inst.url, inst.adminKey, "",
 		[]w113WS{
 			{key: wsA, projects: []string{"e2e"}},
-			{key: wsX, projects: []string{"ieops"}},
+			{key: wsX, projects: []string{"demo-ops"}},
 		})
 	sock := filepath.Join(shortTmp(t, "w113sock"), "d.sock")
 	dataDir := t.TempDir()
 
-	wi := w113NewWI(t, inst, "ieops", "w113 unmapped mid-flight work item",
+	wi := w113NewWI(t, inst, "demo-ops", "w113 unmapped mid-flight work item",
 		[]map[string]any{
 			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 4000},
@@ -1467,7 +1467,7 @@ func TestW113UnmappedMidflightWIBlocksThenResumes(t *testing.T) {
 		t.Fatalf("an unmapped mid-flight project must not stop the daemon: %s", output)
 	}
 	inst.waitWIStatus(t, wi, "blocked", 60*time.Second)
-	if raw := wiRawWithEvents(t, inst, wi); !strings.Contains(raw, "ieops") || !strings.Contains(raw, "[workspace] mapping") {
+	if raw := wiRawWithEvents(t, inst, wi); !strings.Contains(raw, "demo-ops") || !strings.Contains(raw, "[workspace] mapping") {
 		t.Fatalf("the blocked reason does not name the project: %s", raw)
 	}
 	slug := wiSlug(t, inst, wi) // ops status names the WI by its slug
@@ -1491,7 +1491,7 @@ func TestW113UnmappedMidflightWIBlocksThenResumes(t *testing.T) {
 	w113ConfigFile(t, fullCfgPath, inst.url, inst.adminKey, "",
 		[]w113WS{
 			{key: wsA, projects: []string{"e2e"}},
-			{key: wsX, projects: []string{"ieops"}},
+			{key: wsX, projects: []string{"demo-ops"}},
 		})
 	d3 := w113NewDaemon(t, inst,
 		w113DOptConfig(fullCfgPath), w113DOptSock(sock), w113DOptDataDir(dataDir))
@@ -1605,18 +1605,18 @@ func TestW113PlacementVerbsValidateProject(t *testing.T) {
 // which every record carries its project.
 func TestW113QueueMergedAllMapped(t *testing.T) {
 	inst := newV1Install(t)
-	w113EnsureProject(t, inst, "ieops")
+	w113EnsureProject(t, inst, "demo-ops")
 	ws := t.TempDir()
 	cfg := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"),
 		inst.url, inst.adminKey, "",
-		[]w113WS{{key: ws, projects: []string{"e2e", "ieops"}}})
+		[]w113WS{{key: ws, projects: []string{"e2e", "demo-ops"}}})
 	goalA := "w113 merged queue presentation alpha"
 	goalB := "w113 merged queue presentation beta"
 	w113NewWI(t, inst, "e2e", goalA, nil)
-	w113NewWI(t, inst, "ieops", goalB, nil)
+	w113NewWI(t, inst, "demo-ops", goalB, nil)
 
 	out := w113PfWant(t, inst, -1, w113Env{config: cfg}, "queue")
-	for _, tok := range []string{goalA, goalB, "e2e", "ieops"} {
+	for _, tok := range []string{goalA, goalB, "e2e", "demo-ops"} {
 		if !strings.Contains(out, tok) {
 			t.Fatalf("pf queue (all mapped) output misses %q — the merged presentation must identify each row's project: %q", tok, out)
 		}
@@ -1648,7 +1648,7 @@ func TestW113QueueMergedAllMapped(t *testing.T) {
 		}
 		seen[it.Project] = true
 	}
-	if !seen["e2e"] || !seen["ieops"] {
+	if !seen["e2e"] || !seen["demo-ops"] {
 		t.Fatalf("the merged queue items do not cover all mapped projects (seen %v, output %q)", seen, jout)
 	}
 }
@@ -1726,7 +1726,7 @@ func TestW113QueueNoMappingFailsLoudly(t *testing.T) {
 // mapped projects — no daemon-level project scope exists anymore.
 func TestW113DrainIteratesAllMappedProjects(t *testing.T) {
 	inst := newV1Install(t)
-	w113EnsureProject(t, inst, "ieops")
+	w113EnsureProject(t, inst, "demo-ops")
 	wsA := filepath.Join(t.TempDir(), "w113wsA")
 	wsB := filepath.Join(t.TempDir(), "w113wsB")
 	for _, ws := range []string{wsA, wsB} {
@@ -1738,10 +1738,10 @@ func TestW113DrainIteratesAllMappedProjects(t *testing.T) {
 		inst.url, inst.adminKey, "",
 		[]w113WS{
 			{key: wsA, projects: []string{"e2e"}},
-			{key: wsB, projects: []string{"ieops"}},
+			{key: wsB, projects: []string{"demo-ops"}},
 		})
 	wiA := w113NewWI(t, inst, "e2e", "w113 drain across workspaces alpha", envelopeAutopilot())
-	wiB := w113NewWI(t, inst, "ieops", "w113 drain across workspaces beta", envelopeAutopilot())
+	wiB := w113NewWI(t, inst, "demo-ops", "w113 drain across workspaces beta", envelopeAutopilot())
 
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfg), w113DOptArgs("--auto"))
 	d.start()
@@ -1830,7 +1830,7 @@ func TestW113DoctorMappingChecks(t *testing.T) {
 			name: "workspace dir missing",
 			ws: []w113WS{
 				{key: t.TempDir(), projects: []string{"e2e"}},
-				{key: filepath.Join(t.TempDir(), "w113missing"), projects: []string{"ieops"}},
+				{key: filepath.Join(t.TempDir(), "w113missing"), projects: []string{"demo-ops"}},
 			},
 			need: []string{"w113missing"},
 		},
@@ -1844,8 +1844,8 @@ func TestW113DoctorMappingChecks(t *testing.T) {
 		{
 			name: "ambiguous inverse",
 			ws: []w113WS{
-				{key: filepath.Join(t.TempDir(), "w113ambA"), projects: []string{"ieops"}},
-				{key: filepath.Join(t.TempDir(), "w113ambB"), projects: []string{"ieops"}},
+				{key: filepath.Join(t.TempDir(), "w113ambA"), projects: []string{"demo-ops"}},
+				{key: filepath.Join(t.TempDir(), "w113ambB"), projects: []string{"demo-ops"}},
 			},
 			need: []string{"w113ambA", "w113ambB"},
 		},

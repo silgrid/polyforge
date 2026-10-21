@@ -417,7 +417,7 @@ v1 trusted internal repo，host-native，不引入 per-step isolation；INV-6（
 
 > **ARCHIVED — 本节描述或依赖已删除的机制（CAP-* 码、Revision/CAS/manifest）；do not build from this.** 现行设计以 [v2-converge.md](../v2-converge.md) 与代码为准。
 
-**问题**：`05` 定义的 Revision 恢复（`apply_ops` 增量应用 / `apply_full_replace` 全量替换）把远端记录的文件树落盘到 Capsule 的 `repos/<name>/` 与 `artifacts/`。若恢复逻辑只检查目标路径**字符串**是否包含 `..`，则无法防御这样的攻击：先在工作树内创建一个 symlink（例如 `repos/ieops/evil -> ../../runtime-state`），字符串本身不含 `..`，但该 symlink 的**父目录**在恢复时会被“跟随”到 Capsule 根之外，导致后续对 `repos/ieops/evil/execution.json` 的写入实际落在 `runtime-state/execution.json` 上，绕过 §6.2 的只读权限位保护。
+**问题**：`05` 定义的 Revision 恢复（`apply_ops` 增量应用 / `apply_full_replace` 全量替换）把远端记录的文件树落盘到 Capsule 的 `repos/<name>/` 与 `artifacts/`。若恢复逻辑只检查目标路径**字符串**是否包含 `..`，则无法防御这样的攻击：先在工作树内创建一个 symlink（例如 `repos/demo-ops/evil -> ../../runtime-state`），字符串本身不含 `..`，但该 symlink 的**父目录**在恢复时会被“跟随”到 Capsule 根之外，导致后续对 `repos/demo-ops/evil/execution.json` 的写入实际落在 `runtime-state/execution.json` 上，绕过 §6.2 的只读权限位保护。
 
 **权威规则**：
 
@@ -427,10 +427,10 @@ v1 trusted internal repo，host-native，不引入 per-step isolation；INV-6（
 
 **测试场景（对应 §10 的可注入故障之一）**：
 
-1. 正常初始化一个 Capsule，`repos/ieops/` 检出完成。
-2. 在 `repos/ieops/` 内创建符号链接 `evil -> ../../runtime-state`（字符串不含 `..` 之外的可疑片段，仅一级 `..`，属于合法相对路径写法）。
-3. 触发一次 Revision 恢复，其中声明的目标路径为 `repos/ieops/evil/execution.json`（意图覆盖真正的 `runtime-state/execution.json`）。
-4. **预期**：规则 1 在逐级检查到 `repos/ieops/evil` 这一级时发现它是 symlink，立即以 `CAP-406 SYMLINK_ESCAPE_DENIED` 拒绝整次恢复；`runtime-state/execution.json` 内容不受影响；`repos/ieops/evil` 本身也不被跟随写入。
+1. 正常初始化一个 Capsule，`repos/demo-ops/` 检出完成。
+2. 在 `repos/demo-ops/` 内创建符号链接 `evil -> ../../runtime-state`（字符串不含 `..` 之外的可疑片段，仅一级 `..`，属于合法相对路径写法）。
+3. 触发一次 Revision 恢复，其中声明的目标路径为 `repos/demo-ops/evil/execution.json`（意图覆盖真正的 `runtime-state/execution.json`）。
+4. **预期**：规则 1 在逐级检查到 `repos/demo-ops/evil` 这一级时发现它是 symlink，立即以 `CAP-406 SYMLINK_ESCAPE_DENIED` 拒绝整次恢复；`runtime-state/execution.json` 内容不受影响；`repos/demo-ops/evil` 本身也不被跟随写入。
 
 ### 6.4 命令执行流程（编号步骤，非伪代码） <!-- §6.4 -->
 

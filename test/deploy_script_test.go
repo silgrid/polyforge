@@ -345,8 +345,8 @@ func TestDeployTarSpaceCheckedInPreflight(t *testing.T) {
 
 func TestDeployUnexpectedExitAfterSwapRollsBackAndCleansUp(t *testing.T) {
 	d := newReadyWorld(t)
-	d.env = append(d.env, "FAKE_TERM_ON_LOGS=1") // SIGTERM reaches the script in step 7
-	cmd := exec.Command("sh", filepath.Join("..", ".polyforge", "deploy.sh"), "v2.3.0", "--confirm", "v2.3.0")
+	d.env = append(d.env, "FAKE_TERM_ON_LOGS=1")                         // SIGTERM reaches the script in step 7
+	cmd := exec.Command("sh", d.script, "v2.3.0", "--confirm", "v2.3.0") // d.script: the hermetic deployer-repo copy (the outer ../.polyforge path leaks the outer repo's tags into the check)
 	cmd.Env = d.env
 	var b strings.Builder
 	cmd.Stdout, cmd.Stderr = &b, &b

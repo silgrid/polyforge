@@ -812,9 +812,9 @@ vNext：失败结果只有基础设施失败与业务 gate FAIL 两类（INV-9�
 机械反例断言：在 step 执行的任意时点终止其进程，该 step 在 `runtime-state/execution.json` 中的落点必属于
 `{done, in_progress（可 resume）}` 之一；状态模型中不存在无法被任何既定路径处理的终态。
 
-**R7 `aihub#754`** — 缺陷：一次对本机某类临时目录的批量清理操作，误删了一个仍在运行中的 WI
+**R7 `aihub#7`** — 缺陷：一次对本机某类临时目录的批量清理操作，误删了一个仍在运行中的 WI
 的工作区与状态文件（数小时未提交的实现工作因此丢失）。
-真实来源：`pf_get_work_item(aihub#754)` → `wi_P7avSVU7`，goal 逐字为「worktree/state 清理面误删运行中工作项：2026-09-21 21:21 另一会话全量清扫 pf.* 目录，删掉 running 状态 ieops#1157 的 worktree（含 ~4h 未提交实现）与 state 文件 —— 所有删除路径必须先过 server 端 wi 状态校验，running/paused/blocked 一律拒绝」。
+真实来源：`pf_get_work_item(aihub#7)` → `wi_P7avSVU7`，goal 逐字为「worktree/state 清理面误删运行中工作项：2026-09-21 21:21 另一会话全量清扫 pf.* 目录，删掉 running 状态 demo-ops#7 的 worktree（含 ~4h 未提交实现）与 state 文件 —— 所有删除路径必须先过 server 端 wi 状态校验，running/paused/blocked 一律拒绝」。
 git 考证（本仓 git 历史）：`--grep='#754'` 无命中——2026-09-21 的清扫事件无引用该编号的 commit；
 同类「清理面误删活跃现场」缺陷在本仓有更早一次可考修复：2b8e924（fix(doctor): stop --fix
 deleting live worktrees，aihub#307，2026-09-01，落点 `internal/cli/doctor.go`），证明该缺陷

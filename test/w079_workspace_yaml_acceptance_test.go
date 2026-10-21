@@ -382,26 +382,26 @@ func TestW079AbsentAndEmptyYamlRunExactlyAsHead(t *testing.T) {
 // serving three projects: project step-id list > bundle step list > project
 // default > bundle defaults. e2e declares default + fix (the fix step
 // gets the fix list, verification keeps its own step list, the rest get
-// the default), ieops declares only a default (it governs every step
+// the default), demo-ops declares only a default (it governs every step
 // without a list of its own, never a step's own list — polyforge#164),
 // and a third project the yaml does not list stays bundle-only — no
 // cross-project leak.
 func TestW079PerProjectModelPrecedence(t *testing.T) {
 	inst := newV1Install(t)
-	w113EnsureProject(t, inst, "ieops")
+	w113EnsureProject(t, inst, "demo-ops")
 	w113EnsureProject(t, inst, "w079third")
 	ws := t.TempDir()
 	w079Yaml(t, ws, `steps:
   e2e:
     default: { models: [pi:w079-e2e-def] }
     fix: { models: [pi:w079-e2e-code-a, pi:w079-e2e-code-b] }
-  ieops:
-    default: { models: [pi:w079-ieops-def] }
+  demo-ops:
+    default: { models: [pi:w079-demo-ops-def] }
 `)
-	d := w079Setup(t, inst, w113WS{key: ws, projects: []string{"e2e", "ieops", "w079third"}})
+	d := w079Setup(t, inst, w113WS{key: ws, projects: []string{"e2e", "demo-ops", "w079third"}})
 
 	wiE := w113NewWI(t, inst, "e2e", "w079 e2e models", envelopeAutopilot())
-	wiI := w113NewWI(t, inst, "ieops", "w079 ieops models", envelopeAutopilot())
+	wiI := w113NewWI(t, inst, "demo-ops", "w079 demo-ops models", envelopeAutopilot())
 	wiT := w113NewWI(t, inst, "w079third", "w079 unlisted project models", envelopeAutopilot())
 	capE := w079Run(t, d, inst, ws, wiE)
 	capI := w079Run(t, d, inst, ws, wiI)
@@ -416,12 +416,12 @@ func TestW079PerProjectModelPrecedence(t *testing.T) {
 		}
 	}
 	for _, step := range []string{"grill", "fix"} {
-		if got := w079Model(t, capI, step); got != "w079-ieops-def" {
-			t.Fatalf("ieops %s model %q, want its project default w079-ieops-def", step, got)
+		if got := w079Model(t, capI, step); got != "w079-demo-ops-def" {
+			t.Fatalf("demo-ops %s model %q, want its project default w079-demo-ops-def", step, got)
 		}
 	}
 	if got := w079Model(t, capI, "verification"); got != w079VerificationStepHead {
-		t.Fatalf("ieops verification model %q, want its own step-level head %q (a step list outranks the project default)", got, w079VerificationStepHead)
+		t.Fatalf("demo-ops verification model %q, want its own step-level head %q (a step list outranks the project default)", got, w079VerificationStepHead)
 	}
 	if got := w079Model(t, capT, "verification"); got != w079VerificationStepHead {
 		t.Fatalf("unlisted project verification model %q, want the bundle step-level head %q", got, w079VerificationStepHead)
@@ -429,14 +429,14 @@ func TestW079PerProjectModelPrecedence(t *testing.T) {
 	if got := w079Model(t, capT, "grill"); got != w079DefaultsHead {
 		t.Fatalf("unlisted project grill model %q, want the bundle defaults head %q", got, w079DefaultsHead)
 	}
-	if raw := w079CapsuleRaw(t, capT); strings.Contains(raw, "w079-e2e") || strings.Contains(raw, "w079-ieops") {
+	if raw := w079CapsuleRaw(t, capT); strings.Contains(raw, "w079-e2e") || strings.Contains(raw, "w079-demo-ops") {
 		t.Fatalf("the unlisted project's capsule leaks another project's models: %s", raw)
 	}
 	// e2e's capsule records no effective-candidates audit (the field was
 	// deleted with the audit's dead-code sweep — the yaml governs
 	// dispatches directly; the model pins above are the behavior) and
 	// leaks nothing of the other project's.
-	if raw := w079CapsuleRaw(t, capE); strings.Contains(raw, "effective_candidates") || strings.Contains(raw, "w079-ieops") {
+	if raw := w079CapsuleRaw(t, capE); strings.Contains(raw, "effective_candidates") || strings.Contains(raw, "w079-demo-ops") {
 		t.Fatalf("e2e's capsule must carry no effective-candidates audit and leak nothing: %s", raw)
 	}
 }
@@ -466,7 +466,7 @@ func TestW079ProjectStepOnlyFallsThroughToBundle(t *testing.T) {
 // workspace's yaml.
 func TestW079OneDaemonTwoWorkspacesTwoYamls(t *testing.T) {
 	inst := newV1Install(t)
-	w113EnsureProject(t, inst, "ieops")
+	w113EnsureProject(t, inst, "demo-ops")
 	wsA := filepath.Join(t.TempDir(), "wsA")
 	wsB := filepath.Join(t.TempDir(), "wsB")
 	for _, p := range []string{wsA, wsB} {
@@ -475,11 +475,11 @@ func TestW079OneDaemonTwoWorkspacesTwoYamls(t *testing.T) {
 		}
 	}
 	w079Yaml(t, wsA, "steps:\n  e2e:\n    default: { models: [pi:w079a-flow] }\n")
-	w079Yaml(t, wsB, "steps:\n  ieops:\n    fix: { models: [pi:w079b-code] }\n")
-	d := w079Setup(t, inst, w113WS{key: wsA, projects: []string{"e2e"}}, w113WS{key: wsB, projects: []string{"ieops"}})
+	w079Yaml(t, wsB, "steps:\n  demo-ops:\n    fix: { models: [pi:w079b-code] }\n")
+	d := w079Setup(t, inst, w113WS{key: wsA, projects: []string{"e2e"}}, w113WS{key: wsB, projects: []string{"demo-ops"}})
 
 	wiA := w113NewWI(t, inst, "e2e", "w079 two-workspace claim A", envelopeAutopilot())
-	wiB := w113NewWI(t, inst, "ieops", "w079 two-workspace claim B", envelopeAutopilot())
+	wiB := w113NewWI(t, inst, "demo-ops", "w079 two-workspace claim B", envelopeAutopilot())
 	capA := w079Run(t, d, inst, wsA, wiA)
 	capB := w079Run(t, d, inst, wsB, wiB)
 
@@ -618,7 +618,7 @@ func TestW079FixYamlAndResubmitIsClean(t *testing.T) {
 // serving the other.
 func TestW079InvalidYamlOfOneWorkspaceDoesNotBlockAnother(t *testing.T) {
 	inst := newV1Install(t)
-	w113EnsureProject(t, inst, "ieops")
+	w113EnsureProject(t, inst, "demo-ops")
 	wsA, wsB := filepath.Join(t.TempDir(), "wsA"), filepath.Join(t.TempDir(), "wsB")
 	for _, p := range []string{wsA, wsB} {
 		if err := os.MkdirAll(p, 0o755); err != nil {
@@ -626,11 +626,11 @@ func TestW079InvalidYamlOfOneWorkspaceDoesNotBlockAnother(t *testing.T) {
 		}
 	}
 	w079Yaml(t, wsA, "projects: {}\n")
-	d := w079Setup(t, inst, w113WS{key: wsA, projects: []string{"e2e"}}, w113WS{key: wsB, projects: []string{"ieops"}})
+	d := w079Setup(t, inst, w113WS{key: wsA, projects: []string{"e2e"}}, w113WS{key: wsB, projects: []string{"demo-ops"}})
 	wiA := w113NewWI(t, inst, "e2e", "w079 bad workspace", envelopeAutopilot())
 	out, code := d.pf(inst, "submit", wiA)
 	w079Refused(t, d, inst, wsA, wiA, out, code, ".polyforge.yaml")
-	w079Run(t, d, inst, wsB, w113NewWI(t, inst, "ieops", "w079 good workspace", envelopeAutopilot()))
+	w079Run(t, d, inst, wsB, w113NewWI(t, inst, "demo-ops", "w079 good workspace", envelopeAutopilot()))
 }
 
 // w079ProviderErr is the stderr text a crashing fake harness leaves behind:
@@ -1107,7 +1107,7 @@ func w079ScanRestartLines(path, text string, restarts, negations []string, hits 
 // green before AND after (placement reads cli.toml only).
 func TestW079PlacementFollowsCliTomlOnly(t *testing.T) {
 	inst := newV1Install(t)
-	w113EnsureProject(t, inst, "ieops")
+	w113EnsureProject(t, inst, "demo-ops")
 	wsX := filepath.Join(t.TempDir(), "wsX") // its yaml claims e2e
 	wsY := t.TempDir()                       // the mapping routes e2e here
 	if err := os.MkdirAll(wsX, 0o755); err != nil {
@@ -1117,7 +1117,7 @@ func TestW079PlacementFollowsCliTomlOnly(t *testing.T) {
 	cfg := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"),
 		inst.url, inst.adminKey, "",
 		[]w113WS{
-			{key: wsX, projects: []string{"ieops"}},
+			{key: wsX, projects: []string{"demo-ops"}},
 			{key: wsY, projects: []string{"e2e"}},
 		})
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfg))

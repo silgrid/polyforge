@@ -155,7 +155,7 @@ func TestValidateAllMappedWorkspaces(t *testing.T) {
 	cfg.Mapping = mappingFor(wsOK, "proj")
 	plan, err := mapping.Build([]mapping.Entry{
 		{Workspace: wsOK, Projects: []string{"proj"}},
-		{Workspace: wsMissing, Projects: []string{"ieops"}},
+		{Workspace: wsMissing, Projects: []string{"demo-ops"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestValidateAllMappedWorkspaces(t *testing.T) {
 	}
 	plan2, err := mapping.Build([]mapping.Entry{
 		{Workspace: wsOK, Projects: []string{"proj"}},
-		{Workspace: wsB, Projects: []string{"ieops"}},
+		{Workspace: wsB, Projects: []string{"demo-ops"}},
 	})
 	if err != nil {
 		t.Fatal(err)

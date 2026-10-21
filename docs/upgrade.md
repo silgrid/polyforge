@@ -463,8 +463,8 @@ is refused at every claim (DAEMON-414: `unknown top-level key "models"
 (only `steps` and `memory_policy`)`; earlier versions added a migration hint, dropped by
 decision 2026-10-16 G10 once every workspace was rewritten), the work
 item stays queued, and `pf doctor` reports the same under `workspace
-yaml`. Deploying this version therefore requires rewriting osp-ws,
-gmi-ws and yf-ws's `.polyforge.yaml` (below) at the same time; until a
+yaml`. Deploying this version therefore requires rewriting ws-a,
+ws-b and ws-c's `.polyforge.yaml` (below) at the same time; until a
 file is rewritten, no work item of that workspace's projects is claimed
 on that machine.
 
@@ -515,7 +515,7 @@ in autopilot).
 
 ### The three workspaces
 
-The #169 rewrite of osp-ws, gmi-ws and yf-ws is superseded: use the
+The #169 rewrite of ws-a, ws-b and ws-c is superseded: use the
 prefixed lists in "Rewriting the three workspaces" under polyforge#175
 below (they carry both the `steps:` shape and the `pi:` / `claude:`
 prefixes). The precedence line for a file header is in the README's
@@ -800,7 +800,7 @@ examples below keep today's behaviour and show that alternative as a
 comment). Keep each file's header comment but drop any `harness`
 wording.
 
-osp-ws (`<osp-workspace>/.polyforge.yaml`):
+ws-a (`<osp-workspace>/.polyforge.yaml`):
 
 ```yaml
 steps:
@@ -835,11 +835,11 @@ bare `claude-opus-5-5` was being skipped there — write the list that
 bundle step should really walk. The bundle itself must also be
 rewritten: no `harness` key, prefixed `model_candidates`.)
 
-gmi-ws (`<gmi-workspace>/.polyforge.yaml`):
+ws-b (`<gmi-workspace>/.polyforge.yaml`):
 
 ```yaml
 steps:
-  ieops:
+  demo-ops:
     default:
       # today's behaviour: #159 skipped claude-opus-5-5 on these (pi) steps.
       # Alternative — keep it as a real Claude Code fallback (adds Claude spend):
@@ -854,7 +854,7 @@ steps:
       models: [pi:sub2api-glm/glm-5.3]
 ```
 
-yf-ws (`<yf-workspace>/.polyforge.yaml`):
+ws-c (`<yf-workspace>/.polyforge.yaml`):
 
 ```yaml
 steps:
