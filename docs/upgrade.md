@@ -1442,14 +1442,6 @@ answers 0 when the table exists (a database created by v2.17.0 is
 already in that shape — `core.Open` installs the same DDL) and nonzero
 when it is absent, so a re-deploy never applies the SQL twice.
 
- ## The watch summarize lane returns, demand-gated (polyforge#224)
- 
- The transcript-delta watch summarize lane (deleted with the simplify era,
-@@ -1509,3 +1579,30 @@ unknown `summarize.interval_sec` key and every claim of that workspace
- with it.
- 
- No schema change, no aihub change; the upgrade is the `pf` binary alone.
-
 ## Work machines: per-work-item events and owner subscriptions (polyforge#181)
 
 The daemon now keeps one events file per work item under
