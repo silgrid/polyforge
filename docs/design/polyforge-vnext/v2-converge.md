@@ -1,664 +1,663 @@
-# v2 收敛设计：减法、监督重构、watch 与身份模型
+# v2 convergence design: subtraction, the supervision restructuring, watch and the identity model
 
-> 状态：**r3，owner 裁决已全部纳入，待审阅**（2026-10-12）。
-> 来源：2026-10-12 owner 与 review 会话的完整讨论；r2 吸收了一次独立深度审查（25 个漏洞 + 历史回归对照，附录 A/B），owner 已同意其 18 条修补默认值。
-> 本文取代的范围：`archive/04-local-runtime.md#§6.2` 监督车道、`archive/v1.5-session-model.md` 中 watch/adoption 相关描述、`skills/polyforge/scripts/watch.sh`。
-> 落地进度：本文第 2–8 节的设计均已落地（含监督重写与 `pf watch` 进展字段）；见第 8 节状态列、第 10 节映射与文末「已知缺口」。
-> 落地方式：**快速落地**——直接切换到新设计，不走"新旧并行观察 → 再删旧"的分阶段迁移（owner 2026-10-12）。
+> Status: **r3, all owner rulings folded in, awaiting review** (2026-10-12).
+> Source: the full discussion of the owner and the review session on 2026-10-12; r2 absorbed one independent deep review (25 holes + a historical-regression comparison, appendices A/B), and the owner agreed to its 18 patch defaults.
+> The scope this document replaces: the supervision lane of `archive/04-local-runtime.md#§6.2`, the watch/adoption-related descriptions in `archive/v1.5-session-model.md`, and `skills/polyforge/scripts/watch.sh`.
+> Landing progress: the designs of sections 2–8 have all landed (the supervision rewrite and the `pf watch` progress fields included); see the status column of section 8, the mapping of section 10 and the "Known gaps" at the end.
+> Landing method: **fast landing** — switch straight to the new design, with no phased "run old and new in parallel and observe → then delete the old" migration (owner 2026-10-12).
 
 ---
 
-## 0. 定位与规则（已定） <!-- §0 -->
+## 0. Positioning and rules (settled) <!-- §0 -->
 
-- polyforge 是**团队级多 agent 系统**，将开源；保持克制，不大量加功能。
-- 核心三根支柱：**任务**（aihub WI）、**记忆**（项目演进与知识沉淀）、**workflow**（团队统一的任务处理规范）——目标是团队的 agent 在同一套体系下像一个 agent 一样运转。
-- 新功能冻结，先做减法；大改现有逻辑先问 owner；**心智模型越简单越好**（以"概念数减少"衡量方案）。
-- **按步骤选模型**是核心能力，保留；**按步骤选 harness**（pi / Claude Code / Codex）要做，排在减法之后。
-- **信任模型（owner 裁定 2026-10-14，取代 2026-10-12 的"agent 不可信"）**：polyforge 只在团队内部使用；harness（pi / Claude Code）由人事先登录，daemon 只调用 CLI，**从不管理登录凭证**；不做重型隔离（独立 uid / bwrap 等）——**#135 冻结**，设计稿保留备查。仍然要防的是**事故**而非恶意：agent 推到 GitHub main（2026-10-13 #149 事故）、发布未经评审的提交、step agent 代答自己的人工 gate 问题（#122）。本文中以"agent 不可信"为理由的机制，现在一律按**事故护栏**理解：已建成并付出成本的护栏保留（#122/V-1 的 UDS step 进程拒绝、#156 的 ls-tree 检查与无 hook 推送、#158 的临时仓库 carrier 推送、V4 取证门禁、固定模板唤醒），但不再扩展为对抗性防御。step agent 按设计写 capsule（其结果信封经 `pf result submit` 由 daemon 写入 `runtime-state/pending-results/`，polyforge#214），这不是缺陷。
+- polyforge is a **team-level multi-agent system** and will be open-sourced; stay restrained and do not add features in bulk.
+- The three core pillars: **tasks** (aihub WI), **memory** (project evolution and knowledge accumulation) and **workflow** (the team's unified task-handling norms) — the goal is for the team's agents to operate under one system like a single agent.
+- New features are frozen and subtraction comes first; ask the owner before any large change to existing logic; **the simpler the mental model the better** (a proposal is measured by "the number of concepts decreasing").
+- **Choosing the model per step** is a core capability and is kept; **choosing the harness per step** (pi / Claude Code / Codex) is to be done, after the subtraction.
+- **Trust model (owner ruling 2026-10-14, replacing the 2026-10-12 "agents are untrusted")**: polyforge is used only inside the team; harnesses (pi / Claude Code) are logged in by a human beforehand, the daemon only calls the CLI and **never manages login credentials**; no heavy isolation (a separate uid / bwrap and so on) — **#135 is frozen**, the design draft kept for reference. What must still be guarded against is **accidents**, not malice: an agent pushing to GitHub main (the 2026-10-13 #149 incident), publishing an unreviewed commit, a step agent answering its own human-gate question on a human's behalf (#122). Any mechanism in this document justified by "the agent is untrusted" is now to be read as an **accident guardrail**: guardrails already built and paid for are kept (the UDS step-process refusal of #122/V-1, the ls-tree check and hook-free push of #156, the temporary-repo carrier push of #158, the V4 evidence gate, the fixed-template wake-up), but they are no longer extended into adversarial defence. A step agent writing the capsule is by design (its result envelope is written by the daemon through `pf result submit` into `runtime-state/pending-results/`, polyforge#214), and that is not a defect.
 
-## 1. 业务领域划分 <!-- §1 -->
+## 1. Business domain division <!-- §1 -->
 
-| 类型 | 领域 | 主要内容 |
+| Type | Domain | Main content |
 |---|---|---|
-| 主线 | 安装与升级 | install.sh（安装与升级均重跑它）、发版、aihub 部署 |
-| 主线 | 团队与权限 | 用户、key、项目、成员角色、agent 信任边界 |
-| 主线 | 任务管理与生命周期 | WI 状态机、依赖、就绪队列、领取（session 锁）、blocked 出口 |
-| 主线 | 记忆 | 存储与检索、recall/remember、领取时快照（`runtime-state/recalled-memories.json`：以 goal + labels 为查询、`match=any` 排序检索本项目记忆取前 10 条；driver 以"非约束性历史"注入每个 step 提示，有界；无快照则不加该节） |
-| 主线 | workflow 定义 | bundle、step、gate/rewind、按步骤选模型（将来：harness） |
-| 主线 | 执行 | daemon、capsule、driver、并发、工作区映射 |
-| 主线 | 交付 | ship → git 分支 / PR (removed by polyforge#166: delivery is the workflows' deliver step. The driver checks the deliver step's recorded commands and the delivered history after the fact and escalates violations to a human; prevention rests on the step contract and the machine's local pre-push hook.) |
-| 横切 | 人工协同 | 提问/回答、暂停/继续、进展可见（`pf watch`） |
-| 横切 | 可靠性 | 监督（判死）、恢复、session 隔离、接管 |
-| 横切 | 运维 | doctor、backup、ops status、事件日志 |
+| Mainline | Install and upgrade | install.sh (both install and upgrade rerun it), releases, aihub deployment |
+| Mainline | Team and permissions | users, keys, projects, member roles, the agent trust boundary |
+| Mainline | Task management and lifecycle | the WI state machine, dependencies, the ready queue, claim (the session lock), the blocked exit |
+| Mainline | Memory | storage and retrieval, recall/remember, the claim-time snapshot (`runtime-state/recalled-memories.json`: goal + labels as the query, a `match=any` ranked search of this project's memory taking the top 10; the driver injects it into every step prompt as "non-binding history", bounded; with no snapshot the section is not added) |
+| Mainline | Workflow definition | bundle, step, gate/rewind, choosing the model per step (in future: harness) |
+| Mainline | Execution | daemon, capsule, driver, concurrency, workspace mapping |
+| Mainline | Delivery | ship → git branch / PR (removed by polyforge#166: delivery is the workflows' deliver step. The driver checks the deliver step's recorded commands and the delivered history after the fact and escalates violations to a human; prevention rests on the step contract and the machine's local pre-push hook.) |
+| Cross-cutting | Human collaboration | ask/answer, pause/resume, progress visibility (`pf watch`) |
+| Cross-cutting | Reliability | supervision (judging death), recovery, session isolation, takeover |
+| Cross-cutting | Operations | doctor, backup, ops status, the event log |
 
-## 2. 执行与监督 <!-- §2 -->
+## 2. Execution and supervision <!-- §2 -->
 
-### 2.1 分工（已定） <!-- §2.1 -->
+### 2.1 Division of labor (settled) <!-- §2.1 -->
 
-| 组件 | 职责 | 不做什么 |
+| Component | Responsibility | What it does not do |
 |---|---|---|
-| **driver** | 执行 WI：按步骤派发 step 进程、收结果文件、推进 `execution.json`、按死因处理、维护失败计数 | 不判断"活着但不推进" |
-| **supervisor**（原 observe 组件，改名以免与命令混淆） | 观察执行动态、**判断 step 是否已死**、判断 **driver 是否卡在步骤之间**、M4 僵尸会话重验、记录事件、推送进度到 aihub、提供查询接口 | 不推进执行 |
-| **恢复引擎**（runtime） | driver 自身异常退出后的重拉；保留有界失败语义（连续多次恢复失败 → blocked；唯一的失败账本是“连续恢复失败”计数器，步骤结果被接受即清零） | 不判 step 死活 |
-| **`pf watch`**（CLI） | 面向人的进展与决策通知 | 不做任何判断 |
+| **driver** | executes the WI: dispatches step processes step by step, collects result files, advances `execution.json`, handles by cause of death, maintains failure counts | does not judge "alive but not advancing" |
+| **supervisor** (the former observe component, renamed to avoid confusion with the command) | observes execution dynamics, **judges whether a step is dead**, judges **whether the driver is stuck between steps**, re-validates M4 zombie sessions, records events, pushes progress to aihub, serves the query interface | does not advance execution |
+| **recovery engine** (runtime) | re-raises the driver after it exits abnormally; keeps bounded-failure semantics (several consecutive recovery failures → blocked; the only failure ledger is the "consecutive recovery failures" counter, cleared as soon as a step result is accepted) | does not judge whether a step is alive |
+| **`pf watch`** (CLI) | human-facing progress and decision notifications | makes no judgement |
 
-**例外（已定）**：step 进程**退出却没交结果**，由 driver 直接处理（它在等结果时就能看到），再告知 supervisor。
+**Exception (settled)**: when a step process **exits without delivering a result**, the driver handles it directly (it can see this while waiting for the result), then informs the supervisor.
 
-### 2.2 driver ↔ supervisor 契约 <!-- §2.2 -->
+### 2.2 The driver ↔ supervisor contract <!-- §2.2 -->
 
-二者同在 `pf daemon` 进程内。
+Both live in the same `pf daemon` process.
 
-**通道规则**
-- 实时信号走进程内通道：**每个 WI 一条无界队列，发送方永不阻塞**（supervisor 的 select 循环与 runtime 的串行处理都不得被投递卡住）；**事实与判定不得丢弃**。
-- driver 消费判定时**不得在跨 WI 的锁下做网络 / git 等长操作**（避免一个 WI 的推送卡住所有 WI）；runtime 只按 WI 加锁跨网络，全局的任务表锁持有期间不做任何 I/O。
-- harness 的海量输出**只保留最新状态**（合并，不排队）。
-- 持久化：`execution.json` 是**唯一权威**（进度、待答问题、失败计数、放宽后的阈值、终态）；事件日志是**补充记录**——driver 事件也写入（替代只打 stderr 的 `stdLogger`），每条事件带**跨重启单调递增 id**（不再每次重启从 1 重编），每个 WI 一个文件；磁盘满时事件追加失败只降级为日志告警，权威仍在 `execution.json`。
-- supervisor 不再轮询 `execution.json` 作为主路径；推送进度到 aihub 改由事件触发，**失败按指数退避重试**（F18/F22 教训：曾 185 次推送风暴；见 §14.1）。
-- 转录同步（F3）以最近一次 `step_started.transcript_path` 为源，commit 前同步。（现状：job 级收尾前的活转录同步**保留**——C11 裁定，polyforge#150；实现为 `runtime/pitranscript.go` 的 `syncLiveTranscript`（commit 24cde0d 恢复）：job 在 pause / bounded-fail / seal 等收尾路径上结束时，当前派发的 step 未走到提交边界，其活转录若不在收尾提交前同步就会丢失——收尾前同步保证终态前转录落盘。）
+**Channel rules**
+- Real-time signals go through in-process channels: **one unbounded queue per WI, and the sender never blocks** (neither the supervisor's select loop nor the runtime's serial processing may be stuck by a delivery); **facts and verdicts must not be dropped**.
+- When the driver consumes a verdict it **must not do long operations such as network / git under a cross-WI lock** (so one WI's push cannot stall all WIs); the runtime locks per WI only across the network, and while the global task-table lock is held no I/O is done.
+- The harness's massive output **keeps only the latest state** (merged, not queued).
+- Persistence: `execution.json` is the **sole authority** (progress, pending questions, failure counts, relaxed thresholds, the terminal state); the event log is a **supplementary record** — driver events are written to it too (replacing the `stdLogger` that only printed to stderr), every event carries an id **monotonically increasing across restarts** (no longer renumbered from 1 at every restart), one file per WI; when the disk is full an event append failure only degrades to a log warning, and the authority remains in `execution.json`.
+- The supervisor no longer polls `execution.json` as the main path; pushing progress to aihub is now event-triggered and **failures retry with exponential backoff** (the F18/F22 lesson: there was once a storm of 185 pushes; see §14.1).
+- Transcript sync (F3) takes the most recent `step_started.transcript_path` as its source and syncs before commit. (Current state: the job-level live-transcript sync before wrap-up is **kept** — ruling C11, polyforge#150; implemented as `syncLiveTranscript` in `runtime/pitranscript.go` (restored in commit 24cde0d): when a job ends on the pause / bounded-fail / seal wrap-up paths, the currently dispatched step has not reached a commit boundary, and its live transcript would be lost unless synced before the wrap-up commit — syncing before wrap-up guarantees the transcript is on disk before the terminal state.)
 
-**driver → supervisor（事实）**
+**driver → supervisor (facts)**
 
-| 事件 | 字段 |
+| Event | Fields |
 |---|---|
-| `step_started` | step, spawn_n, model, harness, pid, transcript_path, started_at, 本步阈值（含已放宽值，见 2.4） |
+| `step_started` | step, spawn_n, model, harness, pid, transcript_path, started_at, this step's thresholds (relaxed values included, see 2.4) |
 | `step_waiting_human` / `step_answered` | step, spawn_n, question_id |
-| `step_ended` | step, spawn_n, outcome（正常交结果 / 退出未交结果）, exit_code, 最后一条错误信号 |
+| `step_ended` | step, spawn_n, outcome (delivered a result normally / exited without a result), exit_code, the last error signal |
 
-**supervisor → driver（判定）**
+**supervisor → driver (verdicts)**
 
-| 事件 | 字段 |
+| Event | Fields |
 |---|---|
-| `step_dead` | step, spawn_n, cause（见 2.3）, evidence |
-| `driver_stalled` | 当前所处步骤间隙、持续时长 |
+| `step_dead` | step, spawn_n, cause (see 2.3), evidence |
+| `driver_stalled` | the between-steps gap currently in, its duration |
 
-**围栏与幂等（r2 补）**
-- driver 只接受 `spawn_n == 当前派发` 的判定，过期判定丢弃。
-- **每次派发至多一次判定、至多一次失败记录**：driver 收到判定后该派发进入 terminating 状态，之后这次派发的进程退出、后续判定一律忽略；supervisor 对某次派发发出判定后静默，直到 `step_ended`。
-- supervisor 的状态**按每次派发一份**：`step_started` 新建，`step_ended` 丢弃（根治 #124 turn_duration 跨步不清零误杀）；**步骤级累计量**（总时长 T 的已用时间）由 driver 持久化在 `execution.json`，随 `step_started` 下发。
+**Fencing and idempotency (r2 addition)**
+- The driver accepts only verdicts with `spawn_n == the current dispatch`; stale verdicts are dropped.
+- **At most one verdict and at most one failure record per dispatch**: once the driver receives a verdict, that dispatch enters the terminating state, and the process exit and any later verdicts of that dispatch are all ignored; after the supervisor issues a verdict for a dispatch it stays silent until `step_ended`.
+- The supervisor's state is **one copy per dispatch**: `step_started` creates it and `step_ended` discards it (the root-cause fix of the #124 wrongful kill where turn_duration did not reset across steps); **step-level accumulations** (the used portion of the total duration T) are persisted by the driver in `execution.json` and sent down with `step_started`.
 
-### 2.3 判死规则（supervisor）与死因处理（driver） <!-- §2.3 -->
+### 2.3 Death-judgement rules (supervisor) and handling by cause of death (driver) <!-- §2.3 -->
 
-supervisor 对每次派发维护：派发时刻、最后一次"真实输出"时间、当前是否在执行工具（哪个、何时开始）、是否在等模型回复（何时开始）、本次派发的"工具时间 / 等模型时间"。
+For every dispatch the supervisor maintains: the dispatch moment, the time of the last "real output", whether a tool is currently executing (which, since when), whether it is waiting for a model reply (since when), and this dispatch's "tool time / model-wait time".
 
-**"真实输出"**：只有工作类事件算活着；UI 刷新类不算（F15 教训）。
+**"Real output"**: only work-type events count as alive; UI-refresh types do not (the F15 lesson).
 
-**判死规则（多条同时命中时按编号优先）**
+**Death-judgement rules (when several hit at once, the lower number takes priority)**
 
-| # | 规则 | 条件 | 死因 cause |
+| # | Rule | Condition | Cause of death `cause` |
 |---|---|---|---|
-| ⓪ | 启动后无信号 | 派发后 X 内没有任何工作类信号（harness 卡在启动、stdout 被孙进程持有等） | `harness_silent` |
-| ① | 本轮结束后停住 | harness 发出"本轮结束"，宽限 1 分钟仍无结果文件：原因出错 → `model_error`（换候选；但该轮错误文本先过与退出路径相同的 D7 分类，见下表与 polyforge#162）；正常结束 → `ended_without_result`（同模型重试） | `model_error` / `ended_without_result` |
-| ② | 等模型太久 | 在等模型回复，超过 X 无任何输出 | `model_hung` |
-| ③ | 工具太久 | 某工具超过 Y 未结束 | `tool_hung` |
-| ④ | 总时长超 | 本步**累计**运行超过 T | `step_timeout_long_task`（主要耗在工具上）或 `step_timeout_slow_model`（主要耗在等模型 / 单次回复异常慢） |
-| — | 步骤之间卡住 | driver 不在任何 step、也不在等人，超过 N 分钟（如推送 git 子进程卡死仍持锁） | `driver_stalled` |
+| ⓪ | No signal after start | no work-type signal within X after dispatch (the harness stuck at startup, stdout held by a grandchild process, and so on) | `harness_silent` |
+| ① | Stuck after the turn ends | the harness emits "turn ended" and still no result file after a 1-minute grace: error cause → `model_error` (switch candidate; but that turn's error text first goes through the same D7 classification as the exit path, see the table below and polyforge#162); normal end → `ended_without_result` (retry on the same model) | `model_error` / `ended_without_result` |
+| ② | Waiting for the model too long | waiting for a model reply, no output at all for more than X | `model_hung` |
+| ③ | A tool too long | some tool has not ended after Y | `tool_hung` |
+| ④ | Total duration exceeded | this step's **cumulative** run exceeds T | `step_timeout_long_task` (mostly spent in tools) or `step_timeout_slow_model` (mostly spent waiting for the model / single replies abnormally slow) |
+| — | Stuck between steps | the driver is in no step and not waiting for a human, for more than N minutes (e.g. a push git subprocess hung while still holding a lock) | `driver_stalled` |
 
-等人回答期间没有 step 进程，**不计时**。
+While waiting for a human's answer there is no step process and **no timing**.
 
-**"退出未交结果"的细分（driver 自己发现，r2 补）**
+**Breakdown of "exited without a result" (found by the driver itself, r2 addition)**
 
-| 细分 | 判据 | 处理 |
+| Breakdown | Criterion | Handling |
 |---|---|---|
-| 模型类 | 错误文本命中额度·鉴权特征（401/403/鉴权失败/api key、quota / insufficient / billing / credit；中文：余额不足 / 欠费 / 额度·配额用尽 / 认证失败 / 模型·接口无权限 等）或模型名不可解析，或退出前最后信号为"本轮出错"且文本不属限流类/上游瞬时类。规则 ① 的判决（进程**存活**的出错轮次，pi rpc 出错后不退出）同样把该轮错误文本送入 `classifyWaitFailure`（polyforge#162），不命中限流 / 上游瞬时时仍记 `model_error` 换模型 | 同 `model_error`：换模型（F4 教训：模型 pin 失败必须推进候选）。额度·鉴权文本最先判：同时带 429 或连接中断特征（"429 … exceeded your current quota"、"insufficient balance … connection reset"）仍立即换模型 |
-| 限流类（polyforge#147 D7） | 错误文本命中瞬时限流特征（429 / rate limit / too many requests / overloaded；中文：并发数过高 / 请求过于频繁 / 请求过多 / 限流 / 繁忙 等），且不命中额度·鉴权特征 | `rate_limited`：原模型退避重试，不推进候选指针、不计失败计数 |
-| 上游瞬时类（wi_seWTgHeKtaa8） | harness 报告的上游返回损坏或上游流中断：工具调用参数 / JSON 不完整·截断·畸形、空回复（0 token）、上游连接 reset / refused / closed / EOF、上游流在完成前结束（"Upstream response stream ended before completion"，polyforge#202；须带 upstream / provider / stream / connection 主语，裸的 "the model ended the turn" 不算）；网关回复同时点名上游错误**且**明确请求重试（`400: {"message":"The model request failed due to an upstream error. Please retry.",…}`，polyforge#227；按两者合取判定，不看 400 状态码或 invalid_request_error，只有其一仍属模型类）；不命中额度·鉴权与限流特征 | `upstream_transient`：原模型按 D7 退避重试，**最多 2 次**，第 3 次即归档为模型类（`exit_model_class`）并换模型；不计失败计数。裸的 "invalid …"（工具名、请求参数）、上下文超长、driver 自身的本地 I/O 错误（如 "read transcript: unexpected EOF"）都**不**属此类 |
+| Model class | the error text hits the allowance/auth signature (401/403/auth failure/api key, quota / insufficient / billing / credit; Chinese: `余额不足` (balance insufficient) / `欠费` (account overdue) / `额度`·`配额` (allowance·quota) exhausted / `认证失败` (authentication failed) / `模型`·`接口` (model·interface) without permission, and so on) or the model name cannot be resolved, or the last signal before exit is "turn errored" and the text is not of the rate-limit class / upstream-transient class. The rule ① verdict (a turn that errored while the process is **alive**, pi rpc not exiting after an error) likewise sends that turn's error text into `classifyWaitFailure` (polyforge#162), and when it hits neither rate-limit nor upstream-transient it is still recorded as `model_error` and switches model | same as `model_error`: switch model (the F4 lesson: a model pin failure must advance the candidate). Allowance/auth text is judged first: one that also carries a 429 or connection-interrupt signature ("429 … exceeded your current quota", "insufficient balance … connection reset") still switches model at once |
+| Rate-limit class (polyforge#147 D7) | the error text hits a transient rate-limit signature (429 / rate limit / too many requests / overloaded; Chinese: `并发`…`过高` (concurrency … too high) / `请求`…`频繁` (requests … too frequent) / `请求过多` (too many requests) / `限流` (rate limiting) / `繁忙` (busy) and so on) and does not hit the allowance/auth signature | `rate_limited`: retry with backoff on the original model, the candidate pointer is not advanced, the failure count is not charged |
+| Upstream-transient class (wi_seWTgHeKtaa8) | the harness reports a corrupt upstream return or an interrupted upstream stream: tool-call arguments / JSON incomplete·truncated·malformed, an empty reply (0 tokens), upstream connection reset / refused / closed / EOF, the upstream stream ending before completion ("Upstream response stream ended before completion", polyforge#202; it must carry an upstream / provider / stream / connection subject, a bare "the model ended the turn" does not count); a gateway reply that names an upstream error **and** explicitly asks for a retry (`400: {"message":"The model request failed due to an upstream error. Please retry.",…}`, polyforge#227; judged by the conjunction of the two, regardless of the 400 status or invalid_request_error, and either alone is still model class); not hitting the allowance/auth and rate-limit signatures | `upstream_transient`: retry on the original model with the D7 backoff, **at most 2 times**, and the 3rd is archived as model class (`exit_model_class`) and switches model; the failure count is not charged. A bare "invalid …" (tool name, request argument), context overflow, and the driver's own local I/O errors (such as "read transcript: unexpected EOF") **do not** belong to this class |
 
-**文本分类顺序**（`driver/supervision.go` `classifyWaitFailure`）：机器类 → 正常结束一轮后干净退出（`ended_without_result`）→ 额度·鉴权（换模型）→ 限流（同模型）→ 上游瞬时（同模型，界 2）→ 模型名不可解析（换模型）→ 本轮出错（模型类）→ 其余。非进程退出（driver 自身失败）不做上游瞬时匹配。中文 provider 文本同样覆盖（polyforge#155）：额度·鉴权类含 余额不足 / 欠费 / 额度·配额 用尽·不足·超出 / 账户…停用 / 鉴权失败 / 认证失败 / 模型·接口·API·服务 无权限 等（裸"权限不足"不算，本地 权限不够 / 权限被拒绝 / 拒绝访问 归机器类），限流类含 并发数过高·超限 / 并发超额 / 请求过于频繁 / 请求频率 / 请求过多 / 限流 / 速率限制 / 繁忙 / 负载过高；均为多字短语（CJK 下 `(?i)`、`\b` 无效，不用单字），两者同时出现仍额度·鉴权优先（换模型）。
-| 机器类 | driver 自身 I/O 错误（ENOSPC、EACCES 等）或翻译器上报的宿主错误 | 机器问题 |
-| 其余 | — | 同模型重试 |
+**Text classification order** (`classifyWaitFailure` in `driver/supervision.go`): machine class → clean exit after a normal turn end (`ended_without_result`) → allowance/auth (switch model) → rate limit (same model) → upstream-transient (same model, bound 2) → model name unresolvable (switch model) → turn errored (model class) → the rest. A non-process-exit (the driver's own failure) gets no upstream-transient matching. Chinese provider texts are covered likewise (polyforge#155): the allowance/auth class contains `余额不足` / `欠费` / `额度`·`配额` followed by `用尽` (exhausted) · `不足` (insufficient) · `超出` (exceeded) / `账户`…`停用` (account … disabled) / `鉴权失败` / `认证失败` / `模型`·`接口`·API·`服务` followed by `无权限` (no permission) and so on (a bare "insufficient permission" phrase does not count, the local `权限不够` / `权限被拒绝` / `拒绝访问` belong to machine class), and the rate-limit class contains `并发`…`过高`·`超限` (concurrency … too high · over the limit) / the "concurrency over quota" phrase / `请求过于频繁` / the phrase for "request frequency" / `请求过多` / `限流` / `速率限制` (rate limit) / `繁忙` / the "load too high" phrase; all are multi-character phrases (under CJK `(?i)` and `\b` are ineffective, and single characters are not used), and when both appear the allowance/auth class still wins (switch model).
+| Machine class | the driver's own I/O error (ENOSPC, EACCES and so on) or a host error reported by the translator | a machine problem |
+| The rest | — | retry on the same model |
 
-**driver 按死因处理（已定）**
+**The driver handles by cause of death (settled)**
 
-| 死因 | 处理 |
+| Cause of death | Handling |
 |---|---|
-| 退出未交结果（其余） | 同模型重试 |
-| `harness_silent` | 同模型重试 |
-| `ended_without_result` | 同模型重试；重试的 prompt 明确告知"上一轮已结束但没有写结果信封"。进程在正常结束一轮后以退出码 0 自行退出且无结果，也归此类（被杀 / 崩溃仍是退出其余） |
-| `model_error`、`model_hung`、退出（模型类） | 换下一个候选模型。规则 ① 的 `model_error`（存活进程的出错轮次）先把轮次错误文本过与退出路径相同的 D7 分类（polyforge#162）：只有限流类 / 上游瞬时类文本把失败记录的死因改为 `rate_limited` / `upstream_transient`（原模型重试、退避计入 T、上游瞬时界 2）；机器类特征及其余文本一律保持 `model_error`（换模型）。`step_dead` / supervisor 判决的 cause 仍是 `model_error`，失败记录（`step_failed`、attempt）才带 `rate_limited` / `upstream_transient`——有意如此，由 `test/v2_live_error_turn_d7_test.go` 固定 |
-| `step_timeout_slow_model` | **放宽 T（翻倍，写入 `execution.json`）后换下一个候选模型**（polyforge#147 D6）：新候选在**放宽后的完整额度**下运行，累计耗时连续结转但严格低于翻倍后的界——绝不在启动瞬间即被判超时 |
-| `rate_limited`（429 / rate limit / too many requests / overloaded / 中文限流文本；额度/账单/权限类不在此列，归模型类换模型） | **不换模型**：原模型退避重试（polyforge#147 D7），退避 1s 起逐次翻倍、单次上限 300s；**退避等待计入该步累计 T**；**不另设重试次数上限**，唯一的界是该步累计 T（T 耗尽即走既有超时处理）；**不放宽 T**（只有超时类死因放宽）；不计入失败计数 |
-| `upstream_transient`（上游返回损坏 / 上游流中断，见上表） | **不换模型**：原模型按 D7 同一退避重试（1s 起翻倍、单次上限 300s，**退避计入该步累计 T**），不推进候选指针、不计失败计数；**连续 2 次后**第 3 次归档为 `exit_model_class` → 换下一个候选（界只由 attempts 归档里尾部连续的 `upstream_transient` 计数，崩溃恢复后的 driver 读到同样的剩余次数） |
-| `tool_hung` | 同模型重试，并**放宽 Y**（同 T 的放宽规则） |
-| `step_timeout_long_task` | 同模型重试（**不换模型**）并放宽 T（翻倍并持久化）；再超时 → 同样再翻倍 T 并持久化，然后 blocked（人工"继续"在新放宽的界下运行，不会一启动就超时） |
-| 机器问题 | blocked，通知人，不换模型 |
-| daemon 重启 | 同模型重新派发，**不计失败** |
-| `driver_stalled` | 终止当前 git/推送子进程，driver 重拉（计入 driver 异常退出界） |
-| driver 自身异常退出 | 恢复引擎重拉；**连续多次恢复失败（唯一账本：连续恢复失败计数器）→ blocked**——防止"崩溃 → 重启不计失败 → 再崩溃"无界循环（#97 教训） |
-| 同一步失败计数达上限（默认 3） | blocked，通知人 |
+| Exit without a result (the rest) | retry on the same model |
+| `harness_silent` | retry on the same model |
+| `ended_without_result` | retry on the same model; the retry's prompt states explicitly that "the previous turn ended but no result envelope was written". A process that exits by itself with exit code 0 after a normal turn end and without a result also falls in this class (being killed / crashing is still exit-the-rest) |
+| `model_error`, `model_hung`, exit (model class) | switch to the next candidate model. Rule ①'s `model_error` (an errored turn of a live process) first passes the turn's error text through the same D7 classification as the exit path (polyforge#162): only rate-limit-class / upstream-transient-class text changes the failure record's cause to `rate_limited` / `upstream_transient` (retry on the original model, backoff counted into T, upstream-transient bound 2); machine-class signatures and all other text stay `model_error` (switch model). The cause of `step_dead` / the supervisor verdict is still `model_error`, and only the failure record (`step_failed`, the attempt) carries `rate_limited` / `upstream_transient` — deliberately so, pinned by `test/v2_live_error_turn_d7_test.go` |
+| `step_timeout_slow_model` | **relax T (doubled, written into `execution.json`), then switch to the next candidate model** (polyforge#147 D6): the new candidate runs under the **full relaxed allowance**, with the cumulative time carried over continuously but strictly below the doubled bound — it is never judged timed out at the instant it starts |
+| `rate_limited` (429 / rate limit / too many requests / overloaded / Chinese rate-limit text; allowance/billing/permission classes are not here and fall under model class and switch model) | **no model switch**: retry with backoff on the original model (polyforge#147 D7), backoff starting at 1s and doubling each time with a per-wait cap of 300s; **the backoff wait counts into the step's cumulative T**; **no separate retry-count cap**, the only bound is the step's cumulative T (once T is exhausted the existing timeout handling applies); **T is not relaxed** (only timeout-class causes relax); not charged to the failure count |
+| `upstream_transient` (a corrupt upstream return / an interrupted upstream stream, see the table above) | **no model switch**: retry on the original model with the same D7 backoff (starting at 1s and doubling, per-wait cap 300s, **the backoff counted into the step's cumulative T**), the candidate pointer is not advanced and the failure count is not charged; **after 2 consecutive occurrences** the 3rd is archived as `exit_model_class` → switch to the next candidate (the bound is counted only from the trailing consecutive `upstream_transient` in the attempts archive, so a driver after crash recovery reads the same remaining count) |
+| `tool_hung` | retry on the same model and **relax Y** (the same relaxing rule as T) |
+| `step_timeout_long_task` | retry on the same model (**no model switch**) and relax T (doubled and persisted); on another timeout → double T again and persist, then blocked (a human "continue" runs under the newly relaxed bound and does not time out at once on start) |
+| Machine problem | blocked, notify a human, no model switch |
+| Daemon restart | re-dispatch on the same model, **no failure charged** |
+| `driver_stalled` | terminate the current git/push subprocess and re-raise the driver (counted into the driver-abnormal-exit bound) |
+| The driver itself exits abnormally | the recovery engine re-raises it; **several consecutive recovery failures (the only ledger: the consecutive-recovery-failures counter) → blocked** — preventing the unbounded "crash → a restart is not charged → crash again" loop (the #97 lesson) |
+| The same step's failure count reaches the cap (default 3) | blocked, notify a human |
 
-**候选用尽**：指针停在末尾，后续"换模型"按同模型重试计数；决策事件注明"候选已用尽"。
+**Candidates exhausted**: the pointer stays at the end, and later "switch model" counts as a same-model retry; the decision event notes "candidates exhausted".
 
-**重试形态**：第一次重试接着原对话（resume 原 transcript）；第二次起重开对话（fresh），把上次 transcript 作为只读参考输入——避免上下文超限类错误在任何模型上都重复失败（F13 一族）。
+**Retry form**: the first retry continues the original conversation (resuming the original transcript); from the second on the conversation is reopened (fresh), with the last transcript as read-only reference input — so that a context-overflow-class error does not fail repeatedly on every model (the F13 family).
 
-**失败计数（r2 补）**
-- 存放：`execution.json` 该 step 的字段（attempts 记录带 cause 子类）。
-- 计入：上表除"daemon 重启"、"限流类 `rate_limited`"（polyforge#147 D7：退避重试只受 T 约束）与界内的"上游瞬时类 `upstream_transient`"外的所有死因。**信封被拒不计入**——polyforge#147 C4 起它不再走"进程内重试耗尽后重启 driver"的升级车道：进程内重试 3 次仍不合格 → 该步直接 blocked，原因码 `result_invalid`，不重启 driver、不路由 `on_fail`（rewind 只留给评审 FAIL 裁决）。
-- 清零：gate rewind 回到该步、换到新候选模型、人工"继续"。
-- daemon 重启触发的中断**不归档为失败、不推进候选指针**；一般地，被中断的 attempt 永不推进候选指针。（现状：`FaultClass` 分类层已删除，改为**死因规则**——只有模型类死因 `model_error`、`model_hung`、`step_timeout_slow_model`、`exit_model_class` 推进候选指针；指针在 gate_fail rewind 时重置；见 `driver/candidates.go`、`driver/supervision.go`。事件体与 attempts 记录带 `failure_cause`，不再有 `fault_class`。）
-- （现状：候选列表五级优先，高到低：`pf submit --models a,b,c` 的手工列表（仅由本 daemon 保存、按 WI、作用于该 WI 的每一步；随 submit 队列落盘，认领时写入 daemon 数据目录的 `manual-models.json`（不进 capsule），本机 daemon 重启、恢复、`pf resume` 重新认领均沿用，WI 终态（wrapped/failed/canceled）时删除；在另一台机器上重新认领则没有该列表，使用那台机器自己的设置）> 工作区 yaml 文件的 `steps.<project>.<step-id>.models`（polyforge#169：按步骤 id 配置，顶层键 `steps:` 取代 `models:`，旧 `models:` 不兼容、加载即拒绝并给迁移提示，同名步骤跨 bundle 共用一个键；非 `default` 的键必须是已安装 workflows 中的步骤 id，否则 DAEMON-414 拒绝认领、`pf doctor` 报告）> bundle 步骤自带 `model_candidates` > `steps.<project>.default.models` > bundle `defaults.model_candidates`（polyforge#164：步骤自带列表高于项目 default，项目 default 只兜底未自选模型的步骤）；推进/重置语义不变。见 `workspace/compose.go`。）
-- 失败处理按死因表（上节）执行；`PolicyFor` / provider·host·operator·schema 分类已随 FaultClass 层删除（`driver/supervision.go`）。
+**Failure count (r2 addition)**
+- Stored: in that step's field of `execution.json` (the attempts records carry a cause sub-kind).
+- Counted: every cause in the table above except "daemon restart", "rate-limit class `rate_limited`" (polyforge#147 D7: the backoff retry is constrained only by T) and "upstream-transient class `upstream_transient`" within its bound. **A rejected envelope is not counted** — since polyforge#147 C4 it no longer takes the "restart the driver after in-process retries are exhausted" escalation lane: if it is still non-conforming after 3 in-process retries → that step is directly blocked, reason code `result_invalid`, with no driver restart and no `on_fail` routing (rewind is reserved for review FAIL verdicts).
+- Cleared: a gate rewind back to that step, switching to a new candidate model, a human "continue".
+- An interruption triggered by a daemon restart is **not archived as a failure and does not advance the candidate pointer**; in general, an interrupted attempt never advances the candidate pointer. (Current state: the `FaultClass` classification layer has been deleted, replaced by the **cause-of-death rules** — only the model-class causes `model_error`, `model_hung`, `step_timeout_slow_model`, `exit_model_class` advance the candidate pointer; the pointer is reset at a gate_fail rewind; see `driver/candidates.go`, `driver/supervision.go`. Event bodies and attempts records carry `failure_cause`, and there is no more `fault_class`.)
+- (Current state: the candidate list has five priority levels, high to low: the manual list of `pf submit --models a,b,c` (kept only by this daemon, per WI, applying to every step of that WI; persisted with the submit queue, written at claim into the daemon data directory's `manual-models.json` (not into the capsule), and followed by this machine's daemon restart, recovery and a `pf resume` re-claim, deleted when the WI reaches a terminal state (wrapped/failed/canceled); a re-claim on another machine has no such list and uses that machine's own settings) > the workspace yaml file's `steps.<project>.<step-id>.models` (polyforge#169: configured per step id, the top-level key `steps:` replaces `models:`, the old `models:` is incompatible, refused at load with a migration hint, a same-named step shares one key across bundles; a key other than `default` must be a step id in the installed workflows, else DAEMON-414 refuses the claim and `pf doctor` reports it) > the bundle step's own `model_candidates` > `steps.<project>.default.models` > the bundle's `defaults.model_candidates` (polyforge#164: a step's own list outranks the project default, and the project default only backstops steps that did not choose a model themselves); advance/reset semantics unchanged. See `workspace/compose.go`.)
+- Failure handling executes per the cause-of-death table (the previous section); `PolicyFor` and the provider·host·operator·schema classification were deleted together with the FaultClass layer (`driver/supervision.go`).
 
-### 2.4 阈值（已定） <!-- §2.4 -->
+### 2.4 Thresholds (settled) <!-- §2.4 -->
 
-- X（⓪②）、Y（③）、T（④）、N（driver_stalled）**全局默认**；step 级只能覆盖 T（见下条）。
-- **T 的 step 级覆盖复用现有 `budget.wall_minutes`**，但它是**估计值而非硬上限**（polyforge#164：≤30 分钟的估计在下式下不起作用，交付 bundle 已全部删除，只剩 release bundle 的 `release: 45` → T=135）：声明了 `wall_minutes` 的 step，总时长界 **T = max(3 × wall_minutes, 全局 `--step-timeout` 默认)**；未声明则就是全局默认。不新增键；X、Y 没有 step 级覆盖（polyforge#147 C5 删除了 `silence_minutes` / `tool_minutes`，旧 bundle 中残留的这两个键被静默忽略）。覆盖值随 bundle 在领取时钉住，对之后领取的 WI 生效。
-- X 默认按 harness 翻译器声明的**输出粒度**取：逐字粒度（思考时也有输出）可短（例 10 分钟）；整条粒度或模型不返回思考内容时放长（例 30 分钟）。"模型不返回思考内容"在模型配置中声明。
-- Y 默认 30 分钟（#83 教训）；T 默认 60–90 分钟（#117 教训）；N 默认 10 分钟。
-- **放宽**：每次放宽翻倍（放宽后的界 = 放宽前界 × 2），写入 `execution.json`（`steps.<id>.supervision.relaxed_wall_ms` / `relaxed_tool_ms`），重启后沿用。**只有超时类死因放宽 T**（`step_timeout_slow_model` 与 `step_timeout_long_task` 每次处置都放宽一次，第二次 `step_timeout_long_task` 也先翻倍再 blocked）；换模型、人工继续、限流退避一律不放宽（polyforge#147 D6）。
-- T 按**整个步骤累计**（跨该步的多次派发、跨换模型、跨人工继续连续累计，polyforge#147 D6 起不再有任何"重开窗口"的 rebase——`runtime_base_ms` 已删）；计入 agent 实际运行时间与**限流退避的等待时间**（D7：同模型重试只受 T 约束，owner 裁定），等人回答（needs_input）的挂钟时间不计入。**被打断的派发（D6，owner 裁定）**：以结果或失败结束的派发在同一次写入里记账；**操作员暂停**取消的派发不计入任何挂钟时间（无论之后以重新领取还是 live-holder 的 `operator resume` 继续，暂停期间也不计；重新领取时若当前派发未结算，driver 先写一次 `claim_reentry` 把 `step_started_at` 重新打点，之后即便系统重拉也只从领取时刻起算）；**系统**在挂起 / 停滞 / 死亡后重拉的派发**计入**其运行时间——由继任 driver 的 interrupted 归档写入记账，从该派发开始（或该派发上一次归档）到归档写入为止（其间恢复车道的处理时间一并计入），因此挂起→重拉循环仍会达到 T。daemon 重启（`daemon_restart`）与操作员 attach 属生命周期事件，同暂停一样不计（停机时间不是运行时间）；判定用 runtime 的 `LifecycleCause`（与连续恢复失败预算的豁免表同一张），在 daemon 的 `interruptedFromCause`（`daemon/daemon.go`）处决定，被取消的 driver 自身不写任何东西。
-- **rewind 重跑清零**：gate FAIL rewind 回到某步时，该步的累计 T 归零（旧窗口的记账随归档 attempt 留存）；发起 rewind 的 gate 步自身（不归档、保持 in_progress）的累计 T 同样归零，重入在新窗口下评审。
+- X (⓪②), Y (③), T (④) and N (driver_stalled) have **global defaults**; a step can override only T (see the next item).
+- **A step's override of T reuses the existing `budget.wall_minutes`**, but it is an **estimate and not a hard cap** (polyforge#164: an estimate of ≤30 minutes has no effect under the formula below, every delivery bundle's has been deleted, and only the release bundle's `release: 45` remains → T=135): for a step that declares `wall_minutes`, the total duration bound is **T = max(3 × wall_minutes, the global `--step-timeout` default)**; undeclared, it is just the global default. No new key is added; X and Y have no step-level override (polyforge#147 C5 deleted `silence_minutes` / `tool_minutes`, and leftovers of these two keys in old bundles are silently ignored). The override value is pinned with the bundle at claim and takes effect for WIs claimed afterwards.
+- X's default is taken from the **output granularity** the harness translator declares: per-character granularity (output exists even while thinking) can be short (e.g. 10 minutes); whole-message granularity, or a model that does not return thinking content, calls for longer (e.g. 30 minutes). "The model does not return thinking content" is declared in the model configuration.
+- Y defaults to 30 minutes (the #83 lesson); T defaults to 60–90 minutes (the #117 lesson); N defaults to 10 minutes.
+- **Relaxing**: each relaxation doubles (relaxed bound = pre-relaxation bound × 2) and is written into `execution.json` (`steps.<id>.supervision.relaxed_wall_ms` / `relaxed_tool_ms`), carried over after a restart. **Only timeout-class causes of death relax T** (`step_timeout_slow_model` and `step_timeout_long_task` each relax once on every disposition, and the second `step_timeout_long_task` also doubles first and then blocks); switching model, a human continue and rate-limit backoff never relax (polyforge#147 D6).
+- T accumulates over the **whole step** (continuously across the step's several dispatches, across model switches and across human continues; since polyforge#147 D6 there is no "reopen the window" rebase any more — `runtime_base_ms` is deleted); it counts the agent's actual running time and **the waiting time of rate-limit backoff** (D7: a same-model retry is constrained only by T, owner ruling), while the wall-clock time spent waiting for a human answer (needs_input) is not counted. **Interrupted dispatches (D6, owner ruling)**: a dispatch that ends with a result or a failure is accounted in the same write; a dispatch canceled by an **operator pause** counts into no wall-clock time (whether it continues afterwards by a re-claim or by a live-holder's `operator resume`, the paused period is not counted either; on a re-claim, if the current dispatch is unsettled the driver first writes a `claim_reentry` that re-stamps `step_started_at`, and thereafter even if the system re-raises it, counting starts only from the claim moment); a dispatch that the **system** re-raises after a hang / stall / death **counts** into its running time — accounted by the successor driver's interrupted-archive write, from the start of that dispatch (or its previous archive) to the archive write (the recovery lane's processing time in between is counted too), so a hang→re-raise loop still reaches T. A daemon restart (`daemon_restart`) and an operator attach are lifecycle events and, like a pause, are not counted (downtime is not running time); the decision uses the runtime's `LifecycleCause` (the same table as the exemption table of the consecutive-recovery-failure budget), made at the daemon's `interruptedFromCause` (`daemon/daemon.go`), and the canceled driver itself writes nothing.
+- **A rewind rerun zeroes it**: when a gate FAIL rewinds back to a step, that step's cumulative T is zeroed (the old window's accounting stays with the archived attempt); the cumulative T of the gate step that initiated the rewind (not archived, staying in_progress) is likewise zeroed, and the re-entry is judged under a new window.
 
-### 2.5 harness 翻译器 <!-- §2.5 -->
+### 2.5 The harness translator <!-- §2.5 -->
 
-每个 harness 一个翻译器，把原生事件翻成标准信号：活着、在等模型、模型在输出（思考/正文）、工具开始（名称+参数）、工具结束、本轮结束（成功/出错）、**进程退出（退出码、最后一条错误）**。supervisor 只认标准信号。**这也是"按步骤选 harness"的接入点**。
+Each harness has one translator that turns native events into standard signals: alive, waiting for the model, the model outputting (thinking / body), tool start (name + arguments), tool end, turn end (success / error), **process exit (exit code, last error)**. The supervisor recognizes only standard signals. **This is also the access point of "choosing the harness per step"**.
 
-| harness | 对接方式 | 思考时有输出 | 核实来源 |
+| harness | Integration | Output while thinking | Verified against |
 |---|---|---|---|
-| pi | `--mode rpc` | ✅ `thinking_delta` | 本机源码 `agent-loop.js` |
-| Claude Code | `-p --output-format stream-json --verbose --include-partial-messages`（由 driver 一律加上） | ✅ | 2.1.296 二进制事件名 |
-| Codex | **`codex app-server`**（JSON-RPC），**不用 `exec --json`** | ✅ `item/reasoning/textDelta` 等 | 0.162.1 源码；`exec --json` 会过滤掉回复/思考的开始事件且无增量 |
+| pi | `--mode rpc` | ✅ `thinking_delta` | the local source `agent-loop.js` |
+| Claude Code | `-p --output-format stream-json --verbose --include-partial-messages` (always added by the driver) | ✅ | event names of the 2.1.296 binary |
+| Codex | **`codex app-server`** (JSON-RPC), **not `exec --json`** | ✅ `item/reasoning/textDelta` and so on | 0.162.1 source; `exec --json` filters out the start events of replies/thinking and has no increments |
 
-第一版只实现 pi 翻译器；Claude Code / Codex 随"按步骤选 harness"落地，接入时按当时最新版本复核协议。
+The first version implements only the pi translator; Claude Code / Codex land together with "choosing the harness per step", and the protocol is re-verified against the then-latest version when integrating.
 
-### 2.6 结果信封、`context_policy` 与 `handoff`（polyforge#147 定稿） <!-- §2.6 -->
+### 2.6 The result envelope, `context_policy` and `handoff` (finalized in polyforge#147) <!-- §2.6 -->
 
-**结果信封 = 最小契约**：step agent 用 `pf result submit` 交付**一个** JSON 对象，这是提示词里唯一的交付通道（polyforge#214；不再描述手写落盘，helper 交付失败时 agent 报告后结束本轮，按"进程退出未交结果"走既有恢复车道，绝不改为手写）。agent 只给 `outcome` + `output`，`needs_input` 时另带 `question_id` + `question`（欠取证的 step 另带 `command_evidence`）；daemon 的 `POST /step/result` 像 `/step/memories` 一样按调用方进程树认定 step（只有本 daemon 的 step 进程可达），调用方自带的 `wi_id` / `step_id` / `spawn_n` 与之不符即拒，轻量形状缺陷（非 JSON、outcome 不在闭集、`output` 不是对象、needs_input 缺合法问题对）也拒，拒绝时不写任何文件；通过后由 daemon 盖上派发身份围栏（`wi_id` / `step_id` / `spawn_n`）与 `submitted_at`，原子写到约定位置 `runtime-state/pending-results/<spawn_n>.json`（位置与命名不变），调用方 cwd 与 harness 沙箱都影响不到落点。driver 收取时 `wi_id` / `step_id` 非空且不是本次派发的即按身份不符拒收。`protocol_version`、`result_id`、`artifacts` 哈希清单、`handoff_ref` 摘要引用**全部删除**，driver 不再校验它们，缺这些旧字段 MUST NOT 判不合格；result_id 宽容等补全层一并删除，不留兼容分支。**V4 命令取证门禁保留**（owner 裁定；按 2026-10-14 信任模型它是**事故护栏**——防 agent 漏跑或误报验证命令，取证检查留在 driver）：欠取证的 step（声明了 `requires_command_evidence: true`；按 step id `verification` 的隐式规则已由 2026-10-16 裁定 G10 删除）的 completed 结果另带 `command_evidence: [{argv, exit_code, duration_ms}]`——至少一条、argv 非空、`duration_ms > 0`，否则信封被拒（进程内重试车道）；任意 step 的 `command_evidence` 若不是列表、或含非对象 / 无法解析的条目，信封被拒（同一车道，拒绝原因点名该条目），不做部分保留；被接受的取证由 driver 写入 `output.commands`（B10，step 自写的同名键被覆盖）。其余 step 的信封不带该字段。**已提交测试文件门禁**（polyforge#156，任意 step）：completed 结果的 `output.test_files` 非空时，每条路径必须是 repo 相对路径、至少存在于一个 task repo，且在其存在的每个 task repo 中都已提交在 HEAD，否则信封被拒（同一进程内重试车道，拒绝原因点名路径）——resume 只按 `refs/pf-task/<name>`（HEAD）恢复 task repo，未提交文件会丢。**声明输出 schema 校验**（polyforge#164 H3）：step 定义文件 frontmatter 的 `output:`（draft-07 JSON Schema，YAML 书写）既注入提示词（放在 step 正文之前，"per the schema above" 成立），也由 driver 机械校验 completed 结果的 `output`（值为 `null` 的可选属性按缺省处理）。release bundle 的 `release`、`deploy` 两步**强制校验**（polyforge#193 所有者裁定；`outputSchemaEnforced`）：不合格即信封被拒（同一进程内重试车道），其 schema 就是发布判定契约（verdict 精确枚举；pass 带 version，release 另带 commit 与至少一条 artifacts_published；fail 带非空 fail_reason；deploy 的 defer 不带 version / artifacts_published）；`defer` 判定在 deploy 之外的任何 step 上都被拒。其余 step 为**只记录模式**：不合格时不拒信封，只记持久事件 `output_schema_violation`（step、schema 路径、截断的校验错误）——用近期真实 result.json 回放约 64% 不合格（agent 此前从未见过 schema）。声明了却加载失败的 schema 记 `output_schema_unloadable` 事件并写 stderr；`release`/`deploy` 上 schema 缺失或加载失败则结果被拒。**轻量重入的 `needs_code_change` 自报**（polyforge#222）：completed 结果的 `needs_code_change` 必须是布尔值，且只有该 step 台账里先有一条轻量回退（最后一条非 `infra_failure` 归档 attempt 为 `gate_fail_rewind_text_only`）的轻量重入才可携带——非布尔值、或无轻量上下文而携带，信封被拒（同一进程内重试车道）；该字段只是结构性修复的自报通道，正常完成不带。**既有失败的边界**（#164 S6）：repro 检查、作者 step 的 `test_files`、bug-fix fix 的 `regression_test` 永远不能标为 `pre_existing`（它们在 base 上失败是设计使然，未修好的 bug 会被当成既有失败放过），pre_existing 检查的 detail 必须带 base sha，且至少有一条 `<repo 相对路径>: <测试名>` 形式的 `pre_existing_failures` 条目（路径按完整路径或目录前缀的路径分段精确比对，不做子串匹配）；bug-fix 的 repro 已复现时，verification 的 pass 必须带一条名为 repro、状态 pass 的检查；违者信封被拒（同一车道）。**已写测试不可改**（polyforge#164 H4）：声明 `test_files` 的 step（e2e-author / repro）被接受时，driver 在其 `output.test_files_commit` 记下各 task repo 的 HEAD（只由 driver 写，step 自写的同名键被丢弃）；之后每个 completed 的 step 都机械比对这些文件在该提交与 HEAD 之间是否一致（等价于 `git diff <author-commit>..HEAD -- <test_files>`，以两次 `git ls-tree -r` 实现，沿用 #156 的加固 git 调用），有差异即信封被拒——除非该 step 当前尝试链里有人工回答（step 认为测试本身错了，必须用 needs_input 提出），此时改动成为新基线（driver 把新的 HEAD 写回前面作者 step 的 `test_files_commit`，故该 step 之后被 rewind 也不丢），并记持久事件 `authored_tests_rebaselined`（列出被改的文件）。**`requires_human_answer` 取值**：`true` = 完成前必须有人工回答（feature-full grill-review）；`if_asked`（polyforge#164 H11，autopilot grill）= 提出的问题只能由人回答，零问题可直接完成，但 driver 记一条持久事件 `human_gate_unasked`，watcher 据此通知 owner。
+**The result envelope = a minimal contract**: a step agent delivers **one** JSON object with `pf result submit`, the only delivery channel in the prompt (polyforge#214; hand-writing to disk is no longer described, and when the helper's delivery fails the agent reports it and ends the turn, taking the existing recovery lane of "process exited without a result", never switching to hand-writing). The agent gives only `outcome` + `output`, and `needs_input` also carries `question_id` + `question` (a step owing evidence also carries `command_evidence`); the daemon's `POST /step/result`, like `/step/memories`, identifies the step by the caller's process tree (reachable only by this daemon's step processes), refuses when the caller's own `wi_id` / `step_id` / `spawn_n` disagree with it, and also refuses light shape defects (non-JSON, an outcome outside the closed set, an `output` that is not an object, a needs_input lacking a legal question pair), writing no file on refusal; once passed, the daemon stamps the dispatch-identity fence (`wi_id` / `step_id` / `spawn_n`) and `submitted_at`, and writes it atomically to the conventional location `runtime-state/pending-results/<spawn_n>.json` (location and naming unchanged), a landing spot that neither the caller's cwd nor the harness sandbox can influence. When the driver collects it, a non-empty `wi_id` / `step_id` that is not this dispatch's is rejected as an identity mismatch. `protocol_version`, `result_id`, the `artifacts` hash manifest and the `handoff_ref` digest reference are **all deleted**, the driver no longer validates them, and lacking these old fields MUST NOT make a result non-conforming; the result_id leniency completion layer is deleted too, leaving no compatibility branch. **The V4 command-evidence gate is kept** (owner ruling; under the 2026-10-14 trust model it is an **accident guardrail** — guarding against an agent omitting or misreporting verification commands, with the evidence check staying in the driver): the completed result of a step owing evidence (declaring `requires_command_evidence: true`; the implicit rule by step id `verification` was deleted by ruling G10 of 2026-10-16) also carries `command_evidence: [{argv, exit_code, duration_ms}]` — at least one entry, argv non-empty, `duration_ms > 0`, else the envelope is rejected (the in-process retry lane); if any step's `command_evidence` is not a list, or contains a non-object / unparseable entry, the envelope is rejected (the same lane, the rejection reason naming that entry), with no partial retention; accepted evidence is written by the driver into `output.commands` (B10, a same-named key the step wrote itself is overwritten). The envelopes of other steps do not carry the field. **The committed-test-files gate** (polyforge#156, any step): when a completed result's `output.test_files` is non-empty, every path must be repo-relative, exist in at least one task repo, and be committed at HEAD in every task repo where it exists, else the envelope is rejected (the same in-process retry lane, the rejection reason naming the path) — resume restores a task repo only from `refs/pf-task/<name>` (HEAD), and an uncommitted file would be lost. **Declared output schema validation** (polyforge#164 H3): the `output:` in the step definition file frontmatter (a draft-07 JSON Schema, written in YAML) is both injected into the prompt (placed before the step body, so "per the schema above" holds) and mechanically validated by the driver against a completed result's `output` (an optional property whose value is `null` is treated as default). The release bundle's `release` and `deploy` steps are **validated by force** (polyforge#193 owner ruling; `outputSchemaEnforced`): a non-conforming result means the envelope is rejected (the same in-process retry lane), and their schema is the release verdict contract (the verdict an exact enum; pass carries version, release also carries commit and at least one artifacts_published; fail carries a non-empty fail_reason; deploy's defer carries no version / artifacts_published); a `defer` verdict is rejected on any step other than deploy. The other steps are in **record-only mode**: a non-conforming result does not reject the envelope and only records a durable `output_schema_violation` event (step, schema path, truncated validation error) — replaying recent real result.json files showed about 64% non-conforming (the agent had never seen the schema before). A schema declared but failing to load records an `output_schema_unloadable` event and writes stderr; on `release`/`deploy` a missing or unloadable schema means the result is rejected. **The `needs_code_change` self-report of a light re-entry** (polyforge#222): a completed result's `needs_code_change` must be a boolean, and only a light re-entry — the step's ledger first holding a light rewind (the last non-`infra_failure` archived attempt being `gate_fail_rewind_text_only`) — may carry it; a non-boolean value, or carrying it without the light context, gets the envelope rejected (the same in-process retry lane); the field is only the channel for self-reporting a structural fix and a normal completion does not carry it. **The pre-existing-failure boundary** (#164 S6): the repro check, an author step's `test_files` and bug-fix fix's `regression_test` can never be marked `pre_existing` (failing on base is by design for them, and an unfixed bug would be waved through as a pre-existing failure); a pre_existing check's detail must carry the base sha and at least one `pre_existing_failures` entry of the form `<repo-relative path>: <test name>` (the path compared exactly by full path or by directory-prefix path segments, with no substring matching); when a bug-fix's repro has reproduced, verification's pass must carry a check named repro with status pass; a violator's envelope is rejected (the same lane). **Written tests are immutable** (polyforge#164 H4): when a step declaring `test_files` (e2e-author / repro) is accepted, the driver records each task repo's HEAD in its `output.test_files_commit` (written only by the driver, a same-named key the step wrote itself is discarded); thereafter every completed step is mechanically compared on whether those files are identical between that commit and HEAD (equivalent to `git diff <author-commit>..HEAD -- <test_files>`, implemented with two `git ls-tree -r` calls, reusing #156's hardened git invocation), and any difference gets the envelope rejected — unless a human answer exists in that step's current attempt chain (the step believes the tests themselves are wrong and must raise it with needs_input), in which case the change becomes the new baseline (the driver writes the new HEAD back to the earlier author step's `test_files_commit`, so a later rewind of that step does not lose it) and a durable `authored_tests_rebaselined` event is recorded (listing the changed files). **Values of `requires_human_answer`**: `true` = a human answer is required before completion (feature-full grill-review); `if_asked` (polyforge#164 H11, autopilot grill) = the questions raised can be answered only by a human, and zero questions may complete directly, but the driver records a durable `human_gate_unasked` event, on which the watcher notifies the owner.
 
-**`context_policy`（step 键，`inherit`\|`fresh`，缺省 `inherit`）**：声明一个 step 与上游的上下文关系。`inherit` = 本 step 续上游的活：派发时 driver 找**最近一个已 done 且声明 `handoff: true` 的更早 step**，按路径约定 `artifacts/handoff-<step-id>.md` 读出交接正文，原样拼进派发 prompt 的「Handoff from step …」小节；`fresh` = 从零开始，不注入交接正文，要读的上游产物按产物路径约定自取。`gate: true` 的 step 强制 `fresh`——闸只凭自己的输入判，不继承有倾向性的上下文。
+**`context_policy` (a step key, `inherit`\|`fresh`, default `inherit`)**: declares a step's context relation to upstream. `inherit` = this step continues upstream's work: at dispatch the driver finds the **nearest earlier step that is done and declares `handoff: true`**, reads the handoff body from `artifacts/handoff-<step-id>.md` by path convention, and splices it verbatim into the "Handoff from step …" subsection of the dispatch prompt; `fresh` = start from zero, with no handoff body injected, and the upstream artifacts to read are fetched by artifact-path convention. A `gate: true` step is forced `fresh` — a gate judges only on its own input and does not inherit a leaning context.
 
-**`handoff`（step 键，bool，缺省 false）**：`true` 的 step 必须在收尾前把交接内容写成 `artifacts/handoff-<step-id>.md`。**路径约定就是全部契约**：没有摘要、没有字节数、没有信封字段，driver 不校验交接文件的哈希、不比对清单；交接文件不在时，下游 inherit step 的派发只是少了那一段正文，不构成信封级失败。权威细节见 `01-workflow-skills.md#§4.4a`。
+**`handoff` (a step key, bool, default false)**: a `true` step must write its handoff content to `artifacts/handoff-<step-id>.md` before wrapping up. **The path convention is the entire contract**: no digest, no byte count, no envelope field; the driver neither validates the handoff file's hash nor compares a manifest; when the handoff file is absent, the dispatch of the downstream inherit step merely lacks that subsection of body and it is not an envelope-level failure. The authoritative details are in `01-workflow-skills.md#§4.4a`.
 
-### 2.7 harness 适配层的隔离保证（owner 裁决 A4，2026-10-13） <!-- §2.7 -->
+### 2.7 The isolation guarantee of the harness adapter layer (owner ruling A4, 2026-10-13) <!-- §2.7 -->
 
-**禁止 step agent 使用 harness 后台任务，是 harness 适配层的责任，不是写进提示词的纪律。** 后台任务会让一个步骤在它的派生进程之外留下活动，监督面（判死、step 结束、派生计数）全部失真；靠"规则里写了不许用"约束的只是诚实的 agent。
+**Forbidding a step agent from using harness background tasks is the responsibility of the harness adapter layer, not a discipline written into the prompt.** A background task lets a step leave activity outside its spawned process, distorting every supervision surface (death judgement, step end, spawn counting); constraining by "the rule says do not use it" binds only honest agents.
 
-pi 适配层的具体机制：**专用 step agent 目录**。daemon 维护 `<harness-root>/step-agent/`（`--harness-root`，生产由 daemon 读 cli.toml `[daemon] harness_root`，缺省 `<data-dir>`；polyforge#171；env 回退已于 2026-10-16 G2 删除），派生每个 step 进程时注入 `PI_CODING_AGENT_DIR=<harness-root>/step-agent`（会话另置于 `PI_CODING_AGENT_SESSION_DIR=<harness-root>/step-agent-sessions/<dashified-capsule-dir>`——每个 capsule 一个目录，pi 把会话平铺写入该目录，实时 transcript 定位器扫描的正是它；polyforge#211）。该目录是 operator agent 目录（`--operator-agent-dir`，生产由 daemon 读 cli.toml `[daemon] operator_agent_dir`，缺省 `~/.pi/agent`；配置了却没有可读的 `auth.json` 即拒绝启动）的**最小快照**——只有 `auth.json`（模型服务凭证）、`models.json`（模型服务配置，保留源文件权限）、`agents/`（子 agent 定义）、`extensions/subagent/`（子 agent **工具**本身），**没有 `settings.json`**，而用户级 package（例如提供后台任务工具的 `npm:pi-background-tasks`）正是在 `settings.json` 里声明的：没有声明就没有加载，后台任务工具对 step agent **机械不可见**，与提示词无关。
+The concrete mechanism of the pi adapter layer: a **dedicated step agent directory**. The daemon maintains `<harness-root>/step-agent/` (`--harness-root`, in production read by the daemon from cli.toml `[daemon] harness_root`, default `<data-dir>`; polyforge#171; the env fallback was deleted in G2 of 2026-10-16) and injects `PI_CODING_AGENT_DIR=<harness-root>/step-agent` when spawning every step process (sessions are placed separately at `PI_CODING_AGENT_SESSION_DIR=<harness-root>/step-agent-sessions/<dashified-capsule-dir>` — one directory per capsule, into which pi writes sessions flat, and which the live-transcript locator scans; polyforge#211). That directory is a **minimal snapshot** of the operator agent directory (`--operator-agent-dir`, in production read by the daemon from cli.toml `[daemon] operator_agent_dir`, default `~/.pi/agent`; configured but with no readable `auth.json`, startup is refused) — only `auth.json` (model-service credentials), `models.json` (model-service configuration, preserving the source file's permissions), `agents/` (sub-agent definitions) and `extensions/subagent/` (the sub-agent **tool** itself), and **no `settings.json`**, while user-level packages (for example `npm:pi-background-tasks`, which provides the background-task tool) are declared exactly in `settings.json`: without the declaration there is no loading, and the background-task tool is **mechanically invisible** to the step agent, regardless of the prompt.
 
-- **子 agent 工具如何送达**：它不是 pi 内建工具，而是 operator agent 目录下的扩展 `extensions/subagent/`；pi 只从 `<agent 目录>/extensions/` 自动发现全局扩展（`resource-loader` / `package-manager` 的全局 extensions 根）。所以快照**恰好**拷贝 `extensions/subagent/` 这一个子目录，其余扩展一律不带（例如 `extensions/polyforge` 是交互会话用的），`settings.json` 与 packages 永远不带。
-- 拷贝而非链接：快照不跟随 operator 后续改动（包括全局重装），也没有任何符号链接把专用目录变成整个 operator 目录的窗口（树内符号链接跳过不拷）。**每次派生前**只刷新白名单成员（源文件大小+mtime 变化即重拷，源里没了就删）；清除白名单以外的条目**只在 daemon 启动时**做——那时本 daemon 没有存活的 step 进程，不会把文件从运行中的 step 进程脚下抽走。凭证不可读 = 大声拒绝派生，绝不降级运行。
-- **凭证限制**：拷贝的 `auth.json` 支持 API-key 条目。OAuth 条目在 pi 刷新令牌之前可用；pi 会把刷新后的令牌写进**副本**，而下一次同步发现副本与 operator 文件不一致，就用 operator 的（旧）条目覆盖它——step 侧的刷新结果会丢失。没有为此设机制：step agent 应使用 API-key 凭证。
-- 位置在数据目录下，**绝不在 capsule 内**：capsule 会提交并推送到 aihub，且对 agent 可写。
-- `--no-extensions` 仍然**不传**：子 agent 工具就是上面那个扩展，关掉它等于关掉整条 step-agent 派发路径；隔离由目录（只带这一个扩展）而非开关完成。
-- **任何未来的 harness 在接入前，必须提供等价的保证**（一个 harness 若无法从启动配置上关掉后台任务族，就不具备接入资格）——这是适配层的准入条件，写在这里而不是写在执行者规则里。
-- 凭证边界（2026-10-14 裁定）：daemon 不管理凭证——`auth.json` / `models.json` 是人登录 harness 后留在 operator agent 目录里的文件，daemon 只按白名单**拷贝**进 step-agent 目录，不签发、不刷新、不轮换；claude step 的凭证同理只在 `<harness-root>/claude-config/settings.json` 的 env 块里，由人维护。（原"与 #135 独立 agent 用户方向一致"的注随 #135 冻结作废。）
+- **How the sub-agent tool is delivered**: it is not a pi built-in tool but the extension `extensions/subagent/` under the operator agent directory; pi auto-discovers global extensions only from `<agent directory>/extensions/` (the global extensions root of `resource-loader` / `package-manager`). So the snapshot copies **exactly** the one subdirectory `extensions/subagent/` and no other extension (for example `extensions/polyforge` is for interactive sessions), and never `settings.json` or packages.
+- Copy, not link: the snapshot does not follow the operator's later changes (a global reinstall included), and no symlink turns the dedicated directory into a window onto the whole operator directory (symlinks inside the tree are skipped, not copied). **Before every spawn** only the allowlist members are refreshed (re-copied when the source file's size+mtime changed, deleted when gone from the source); removing entries outside the allowlist is done **only at daemon startup** — at that moment this daemon has no live step process, so no file is pulled from under a running step process. An unreadable credential = a loud refusal to spawn, never a degraded run.
+- **Credential limitation**: the copied `auth.json` supports API-key entries. OAuth entries work until pi refreshes the token; pi writes the refreshed token into the **copy**, and the next sync finds the copy inconsistent with the operator's file and overwrites it with the operator's (old) entry — the step-side refresh result is lost. No mechanism was added for this: step agents should use API-key credentials.
+- The location is under the data directory and **never inside the capsule**: the capsule is committed and pushed to aihub, and is writable by the agent.
+- `--no-extensions` is still **not passed**: the sub-agent tool is exactly that extension above, and turning it off would turn off the whole step-agent dispatch path; isolation is done by the directory (carrying only that one extension), not by a switch.
+- **Any future harness must provide an equivalent guarantee before integration** (a harness that cannot turn off the background-task family from its startup configuration does not qualify for integration) — this is an admission condition of the adapter layer, written here and not in the executor rules.
+- The credential boundary (ruling of 2026-10-14): the daemon does not manage credentials — `auth.json` / `models.json` are files a human leaves in the operator agent directory after logging in to the harness, and the daemon only **copies** them into the step-agent directory per the allowlist, never issuing, refreshing or rotating; a claude step's credentials likewise live only in the env block of `<harness-root>/claude-config/settings.json`, maintained by a human. (The earlier note "consistent with the direction of #135's separate agent user" lapsed when #135 was frozen.)
 
-## 3. 人工协同：`pf watch`（已定） <!-- §3 -->
+## 3. Human collaboration: `pf watch` (settled) <!-- §3 -->
 
-### 3.1 形态 <!-- §3.1 -->
+### 3.1 Form <!-- §3.1 -->
 
-- Go 实现的 `pf watch`，**取代 `watch.sh` 与 `pf watch-probe`**；`pf observe` 并入为 `pf watch <wi> --once`。
-- `pf watch --chat <id>`（缺省取 `PF_CHAT_ID`）**不因订阅的 WI 结束而退出**（保持常驻；D10 裁定，polyforge#150：以代码为准——只跳过已结束的 WI；仍会在父 harness 进程消失、stdout 关闭、或 `--wait-decision` 打印首批决策后退出，`watcher/engine.go`）；一个会话一个进程。
-- 只产出两种信号：
-  - **进展**：当前 step、已运行时长、正在执行的命令及时长、最近修改的文件、工具调用计数（由翻译器信号机械生成，**不调用模型**）。
-  - **决策事件**：有问题要回答/gate、失败、blocked、完成、被判死并已处理、候选已用尽；以及状态/来源类事件（C13 裁定，polyforge#150，与 `watcher/decision.go` 的事件类别表对齐）：`canceled`（终态）、`paused`（非终态，可继续）、`submit_rejected`、`submit_dropped`、`daemon_restarted`；以及 `carrier_push_failed`（polyforge#158：capsule 链推送成功而某任务仓库的 carrier ref 推送失败或被拒，resume 可能丢该仓库的提交；提醒行带经字符集过滤的仓库名，不带错误文本；每个 job 每个仓库只提醒一次，直到该仓库推送再次成功）；以及 `human_gate_unasked`（polyforge#164 H11：`requires_human_answer: if_asked` 的人工关口——autopilot grill——零问题完成，工作流照常继续，owner 收到一次提醒）。
-- **订阅关系与读取游标存于 daemon**（按 chat id），不存在 agent 可写的位置。
-- **重连 / daemon 重启后**：先以 `execution.json` 核对每个订阅 WI 的当前状态（权威），再按单调事件 id 补读事件——"WI 在 watch 不在时结束"也不会漏。
-- **提交后、监控尚未注册**：显示"排队 / 准备中"，不当作错误（#98/#101 注册竞态）。
-- daemon 不可达：明确提示"daemon 无法连接，进展暂停"，而不是静默循环。
-- pidfile + 锁；**父进程（会话）消失即退出**，不留孤儿。
+- A Go-implemented `pf watch`, **replacing `watch.sh` and `pf watch-probe`**; `pf observe` is merged in as `pf watch <wi> --once`.
+- `pf watch --chat <id>` (default taken from `PF_CHAT_ID`) **does not exit because a subscribed WI ended** (it stays resident; D10 ruling, polyforge#150: the code is authoritative — it only skips WIs that have ended; it still exits when the parent harness process disappears, stdout closes, or `--wait-decision` prints the first batch of decisions, `watcher/engine.go`); one process per session.
+- It produces only two kinds of signal:
+  - **Progress**: the current step, elapsed time, the command being executed and its duration, recently modified files, the tool-call count (generated mechanically from translator signals, **calling no model**).
+  - **Decision events**: a question to answer / a gate, failure, blocked, completion, judged dead and already handled, candidates exhausted; plus state/source events (C13 ruling, polyforge#150, aligned with the event-category table of `watcher/decision.go`): `canceled` (terminal), `paused` (non-terminal, can continue), `submit_rejected`, `submit_dropped`, `daemon_restarted`; plus `carrier_push_failed` (polyforge#158: the capsule chain push succeeded while some task repo's carrier ref push failed or was rejected, so a resume may lose that repo's commits; the reminder line carries a charset-filtered repo name and no error text; one reminder per repo per job, until that repo's push succeeds again); plus `human_gate_unasked` (polyforge#164 H11: a human gate of `requires_human_answer: if_asked` — autopilot grill — completed with zero questions, the workflow continues as usual, and the owner gets one reminder).
+- **Subscriptions and read cursors live in the daemon** (per chat id), in no agent-writable place.
+- **After a reconnect / daemon restart**: first reconcile every subscribed WI's current state against `execution.json` (the authority), then backfill events by the monotonic event id — "the WI ended while watch was absent" is not missed either.
+- **After submit, before the monitor is registered**: show "queued / preparing", not treated as an error (the #98/#101 registration race).
+- Daemon unreachable: say plainly "the daemon cannot be reached, progress paused" rather than looping silently.
+- pidfile + lock; **it exits when the parent process (the session) disappears**, leaving no orphan.
 
-### 3.2 两条通道（已定） <!-- §3.2 -->
+### 3.2 Two channels (settled) <!-- §3.2 -->
 
-| 信息 | 通道 | 进 agent 上下文？ |
+| Information | Channel | Enters the agent context? |
 |---|---|---|
-| 进展 | 直接显示：Claude Code 用 `statusLine`（可多行，最快每秒刷新）；pi 用扩展 `setWidget`/`setStatus` | 否 |
-| 决策事件 | 唤醒 agent，**只给一句由 daemon 按固定模板生成的短话** | 是（少而短） |
-| 用户主动问进展 | agent 执行一次 `pf watch <wi> --once` | 仅此时 |
+| Progress | shown directly: Claude Code uses `statusLine` (multi-line, refreshing as fast as once a second); pi uses the extension `setWidget`/`setStatus` | no |
+| Decision events | wake the agent, **giving only one short sentence generated by the daemon from a fixed template** | yes (few and short) |
+| The user asks about progress on their own | the agent runs `pf watch <wi> --once` once | only then |
 
-**事故护栏（r2 补；#135 已冻结，这些约束就是现行机制）**
-- 唤醒语句**只用 daemon 生成的固定模板**（WI 编号、事件类型、问题 id），**不夹带任何 agent 可写的自由文本**——防止 step agent 借此对交互 agent 做提示注入。问题正文由人通过 `pf watch <wi> --once` 主动查看。
-- 唤醒语句固定附带一句："这是需要人做的决定，agent 不得代答"（#122 教训）。
-- 进展状态文件由常驻 watcher（`pf watch --chat`，`watcher/engine.go`）写在固定路径 `$XDG_RUNTIME_DIR/polyforge/chat-<chat>.status`；statusLine 用 `pf watch --statusline` 直接读文件、不经 daemon，见附录 E.2。（同 uid、不隔离的信任模型（#135）下，任何本地路径对 step agent 都同样可写，不再区分主/回退路径。）
+**Accident guardrails (r2 addition; #135 is frozen and these constraints are the current mechanism)**
+- The wake-up sentence **uses only the daemon's fixed template** (WI number, event type, question id) and **carries no agent-writable free text** — preventing a step agent from prompt-injecting the interactive agent through it. The question body is viewed by a human actively through `pf watch <wi> --once`.
+- The wake-up sentence always appends one sentence: "this is a decision for a human to make, and the agent must not answer on their behalf" (the #122 lesson).
+- The progress state file is written by the resident watcher (`pf watch --chat`, `watcher/engine.go`) at the fixed path `$XDG_RUNTIME_DIR/polyforge/chat-<chat>.status`; statusLine reads the file directly with `pf watch --statusline`, not through the daemon, see appendix E.2. (Under the same-uid, non-isolating trust model (#135), any local path is equally writable to a step agent, and primary/fallback paths are no longer distinguished.)
 
-**不做**：tmux 分屏（owner 否决）；把进展原样经过 agent（污染上下文、耗 token）。
+**Not done**: tmux split panes (vetoed by the owner); passing progress through the agent verbatim (it pollutes the context and burns tokens).
 
-### 3.3 唤醒适配 <!-- §3.3 -->
+### 3.3 Wake-up adaptation <!-- §3.3 -->
 
-| 交互 harness | 唤醒方式 |
+| Interactive harness | Wake-up method |
 |---|---|
-| pi | 扩展托管常驻 `pf watch`，决策事件用 `sendMessage(..., {triggerTurn: true})` 直接唤醒 |
-| Claude Code | 只能"进程退出即唤醒"：agent 以后台任务运行 `pf watch --chat "$PF_CHAT_ID" --wait-decision`（它同时写进度文件），出现决策事件即打印固定模板行并以 0 退出唤醒，agent 处理后重新挂上（`skills/polyforge/SKILL.md` Claude Code adapter；现状 2026-10-16）。Monitor 工具有 30 分钟上限且每行耗 token，不用 |
+| pi | the extension hosts a resident `pf watch`, and decision events wake directly with `sendMessage(..., {triggerTurn: true})` |
+| Claude Code | can only "wake when a process exits": the agent runs `pf watch --chat "$PF_CHAT_ID" --wait-decision` as a background task (it also writes the progress file), prints a fixed-template line and exits 0 as soon as a decision event appears to wake the agent, and the agent re-attaches after handling it (`skills/polyforge/SKILL.md` Claude Code adapter; as of 2026-10-16). The Monitor tool has a 30-minute cap and burns tokens on every line, so it is not used |
 
-### 3.4 待验证 <!-- §3.4 -->
+### 3.4 To be verified <!-- §3.4 -->
 
-- Claude Code 上下文压缩后 SessionStart（`compact`）是否触发（用于补注入提示）。
-- `claude --resume` 后 harness session_id 是否不变（决定 chat 映射依据）；pi 的 resume 行为；`/clear`、fork 后的语义。
-- pi 事件中 `tool_execution_start.args` 足以提取命令与文件路径。
+- Whether SessionStart (`compact`) fires after Claude Code context compaction (used to re-inject the hint).
+- Whether the harness session_id stays unchanged after `claude --resume` (which decides the basis of the chat mapping); pi's resume behavior; the semantics after `/clear` and fork.
+- That `tool_execution_start.args` in pi events suffices to extract the command and file paths.
 
-## 4. 身份模型（已定） <!-- §4 -->
+## 4. The identity model (settled) <!-- §4 -->
 
-| 概念 | 规则 |
+| Concept | Rule |
 |---|---|
-| **daemon**（取代"机器"） | **沿用现有 machine-id 字符串作为 daemon id**（默认 `m-<短主机名>`，不生成新值——aihub 注册新 id 需要 admin/maintainer，daemon key 没有该权限，`server.go:1050-1075`）；改为首次启动时写入 daemon 数据目录，之后以数据目录为准（不放 `cli.toml`：会被 install.sh 重写、会被复制到别的机器）；在途 WI 的 `session_machine` 因值不变而不受影响。另有仅供显示的名字（默认主机名）。aihub machines 表/心跳/凭证概念改称 daemon，表结构可后迁 |
-| **chat**（原称 session，改名 `PF_CHAT_ID`，避免与 v1.5"session_id = 推送凭证"重名） | 由 **pf 生成**，会话启动时由 Claude Code SessionStart 钩子 / pi 扩展调用 pf 生成，经环境变量 **`PF_CHAT_ID`** 注入每条命令（CC：`CLAUDE_ENV_FILE`，按会话隔离，已核实 `~/.claude/session-env/<id>/`；pi：`tool_call` 钩子改写命令）。模型不经手；上下文只放一句提示，丢失不影响功能。**resume 同一对话 = 同一 chat**（harness 会话 → chat id 映射存于 daemon 数据目录） |
-| 隔离 | 每会话独立进程；daemon 派生 step 时清除所有 `PF_*`，只加回 `PF_WI_ID` / `PF_DAEMON_ID` 标记与本 daemon 的 `PF_DAEMON_SOCKET`（`runtime/spawn.go`），step agent 拿不到 chat id |
-| 性质 | `PF_CHAT_ID` 是"通知谁"的**标签，不是凭证**，不得用于权限判断；不得写入任何共享或 agent 可写的文件 |
-| **负责人** | 该 WI 的 **reporter**（创建它的认证用户；交互提交、自动领取与在途 WI 一律如此——aihub 没有比 reporter 更可信的身份来源，D5 裁定）。门范围：负责人可 continue（resume-blocked）与 abandon（cancel）；ForceEnd 等恢复门仍限 admin/maintainer |
-| **任务来源 origin** | 每个 WI 的 daemon 侧记录：`chat`（含 chat id、负责人）或 `auto`（仅负责人） |
-| 通知路由 | 有订阅 chat → 通知 chat；否则 → 通知负责人（其下次任一会话启动时提示，可选择订阅；将来经 #84 推外部渠道）。负责人路由（subscribe-owned）给负责人的其他 chat 加的订阅记下 origin chat，并与 origin chat 的订阅共用同一份送达记录（游标、已送达决策键、done）：决策只唤醒 origin chat（它的 watcher 在线时），其他 chat 只显示进度；origin chat 的 watcher 一分钟没轮询时，由共用记录、id 最小的在线 chat 兜底，且只补送记录里谁都没送达过的决策——origin chat 已拿到的决策绝不再交给兜底 chat。显式 `pf watch subscribe` 让该 chat 成为独立的唤醒对象（polyforge#199） |
+| **daemon** (replacing "machine") | **keep the existing machine-id string as the daemon id** (default `m-<short-hostname>`, generating no new value — registering a new id in aihub needs admin/maintainer, which the daemon key lacks, `server.go:1050-1075`); changed to be written into the daemon data directory at first startup, after which the data directory is authoritative (not placed in `cli.toml`: it would be rewritten by install.sh and copied to another machine); the `session_machine` of in-flight WIs is unaffected since the value does not change. There is also a display-only name (default the hostname). The aihub machines table / heartbeat / credential concepts are renamed daemon, and the table structure can be migrated later |
+| **chat** (formerly called session, renamed `PF_CHAT_ID` to avoid the name clash with v1.5's "session_id = push credential") | **generated by pf**, produced by the Claude Code SessionStart hook / the pi extension calling pf when the session starts, and injected into every command through the environment variable **`PF_CHAT_ID`** (CC: `CLAUDE_ENV_FILE`, isolated per session, verified at `~/.claude/session-env/<id>/`; pi: the `tool_call` hook rewrites the command). The model never handles it; the context carries only one hint sentence, and losing it does not affect function. **Resuming the same conversation = the same chat** (the harness session → chat id mapping is stored in the daemon data directory) |
+| Isolation | each session is an independent process; when the daemon spawns a step it clears all `PF_*` and adds back only the `PF_WI_ID` / `PF_DAEMON_ID` markers and this daemon's `PF_DAEMON_SOCKET` (`runtime/spawn.go`), so a step agent cannot get the chat id |
+| Nature | `PF_CHAT_ID` is a **label for "whom to notify", not a credential**, and must not be used for permission decisions; it must not be written into any shared or agent-writable file |
+| **Owner (responsible person)** | the WI's **reporter** (the authenticated user who created it; interactive submission, auto claim and in-flight WIs all alike — aihub has no identity source more trustworthy than the reporter, D5 ruling). Gate scope: the owner may continue (resume-blocked) and abandon (cancel); recovery gates such as ForceEnd remain limited to admin/maintainer |
+| **Task source origin** | each WI's daemon-side record: `chat` (carrying the chat id and the owner) or `auto` (the owner only) |
+| Notification routing | with a subscribed chat → notify the chat; otherwise → notify the owner (prompted at the start of their next session of any kind, who may choose to subscribe; in future pushed to external channels via #84). A subscription that owner routing (subscribe-owned) adds to the owner's other chats records the origin chat and shares one delivery record (cursor, delivered decision keys, done) with the origin chat's subscription: a decision wakes only the origin chat (when its watcher is online), and other chats show progress only; when the origin chat's watcher has not polled for a minute, the online chat with the smallest id in the shared record takes over as a fallback and backfills only the decisions that nobody in the record has delivered — a decision the origin chat has already received is never handed to the fallback chat. An explicit `pf watch subscribe` makes that chat an independent wake-up target (polyforge#199) |
 
-"会话绑定 + adoption（接管 watcher）"整套规则被"负责人（必有）+ 订阅（可选）"取代。
+The whole "session binding + adoption (taking over the watcher)" rule set is replaced by "owner (always present) + subscription (optional)".
 
-## 5. 执行模式与提交（已定） <!-- §5 -->
+## 5. Execution modes and submission (settled) <!-- §5 -->
 
-- **drain 暂不做**，但架构保留支持：领取与执行分离（已是）；人与任务的交互不绑死在执行机上（依赖 #84 跨 daemon 通信）。
-- 形态（**已落地**，分支 `v2/m2-modes`）：`pf ops auto on|off` + `pf ops max N`，自动领取与手动提交并存。`auto off` = 只有显式 `pf submit`；`auto on` = daemon 另外自己拉 aihub 就绪队列（即原 drain 循环，origin 仍为 `auto`）。已删除 interactive/batch/drain 三模式、`abort-drain`、`batch-confirm`、`batch_submit`、`get_recommendation`（只是原样转发就绪队列，改用 `pf queue --ready`）、DAEMON-409「drain 是唯一建 job 入口」拒绝。`status` 头为 `auto: on|off  max: N`；heartbeat 体仍带 mode 字符串（`auto` / `manual`）以兼容 aihub。daemon 旗标 `-auto`（`-mode` 别名与 `daemon-state.json` 旧 `mode` 字段的迁移均已删除，见第 8 节「兼容垫片」行：v2 不留向后兼容代码）。drain 作为产品能力仍属「暂不做」范围（跨 daemon 通信 #84 未到），但架构上已可用。
-- **名额已满时的提交**：daemon 排队队列**持久化到 daemon 数据目录**（方案 B），重启不丢。重放规则（r2 补）：
-  - 条目带 origin 与提交时间；
-  - 只重放普通提交；
-  - 重放前先查 aihub 状态（已被领取 / 已结束则丢弃）；
-  - 与 B1 claiming journal 重放去重，避免同一 WI 双重领取；
-  - 被拒一律发决策事件给订阅者 / 负责人。
-- `pf submit` 只在本机执行；跨机器使用方式 = 建票进就绪队列由执行方领取（auto 打开后）。
+- **drain is not done for now**, but the architecture keeps room for it: claiming and execution are separated (already so); the interaction between a human and a task is not tied to the execution machine (depends on #84 cross-daemon communication).
+- Form (**landed**, branch `v2/m2-modes`): `pf ops auto on|off` + `pf ops max N`, with auto claiming and manual submission coexisting. `auto off` = only an explicit `pf submit`; `auto on` = the daemon additionally pulls the aihub ready queue itself (the former drain loop, origin still `auto`). The three modes interactive/batch/drain, `abort-drain`, `batch-confirm`, `batch_submit`, `get_recommendation` (which only forwarded the ready queue verbatim, replaced by `pf queue --ready`) and the DAEMON-409 refusal "drain is the only job-creation entry" are deleted. The `status` header is `auto: on|off  max: N`; the heartbeat body still carries the mode string (`auto` / `manual`) for aihub compatibility. The daemon flag `-auto` (the `-mode` alias and the migration of the old `mode` field of `daemon-state.json` are both deleted, see the "compatibility shim" row of section 8: v2 keeps no backward-compatibility code). drain as a product capability is still within the "not for now" scope (cross-daemon communication #84 has not arrived), but is architecturally usable.
+- **Submission when slots are full**: the daemon's queue is **persisted into the daemon data directory** (option B), not lost on restart. Replay rules (r2 addition):
+  - entries carry the origin and the submission time;
+  - only ordinary submissions are replayed;
+  - before replay, check aihub's state first (already claimed / already ended → discard);
+  - deduplicate with the B1 claiming-journal replay, to avoid claiming the same WI twice;
+  - a rejection always sends a decision event to subscribers / the owner.
+- `pf submit` runs only on this machine; the cross-machine usage = create a ticket into the ready queue for the executing side to claim (once auto is on).
 
-## 6. 恢复与重启 <!-- §6 -->
+## 6. Recovery and restart <!-- §6 -->
 
-**原则**：session 是唯一的锁；`execution.json` 是唯一的进度账本；推到 aihub git 才算保存；**绝不悄悄从远端重建本地现场**（#103）。
+**Principle**: the session is the only lock; `execution.json` is the only progress ledger; only what is pushed to the aihub git counts as saved; **never quietly rebuild the local scene from the remote** (#103).
 
-**已定**
-- 某 WI 的 capsule 在重启时缺失 / 项目未映射（cli.toml 无该项目的 workspace 映射）：**只该 WI 被置为普通的 aihub `blocked`**——经与其他 blocked 结局相同的 bounded-fail 收尾发 SessionEnd(blocked)，原因备注写明成因（"capsule missing at <path> …" / "project <p> is not in the daemon's [workspace] mapping …"）；**本地不停放任何东西**（无本地 job 记录、无槽位），仍写 `capsule_missing` / `project_unmapped` 事件（`pf watch` 可见）；daemon 照常启动、其余 WI 照常恢复。人（如需）先修复成因（补映射），再 `pf resume <wi>`：这是普通的 blocked 门（resume-blocked + daemon claim）= 从 aihub capsule 链 + task-repo 载体 ref（`refs/pf-task/<name>`）**重新领取**；死现场（如有）被隔离，已完成的步骤不重跑，最后一次推送之后发布的工作丢失。blocked 的两个出口就是 **`pf resume <wi>`（继续）/ `pf cancel <wi>`（放弃）**；`pf wrap --fail <wi>` 不是 blocked 的门，对 parked 工作流不再有任何 hub 门（§6.4 收紧）：daemon 以 DAEMON-409 拒绝并点名这两条路；daemon 无法判定时（本机无 job，DAEMON-404）CLI 只打印这两条路的提示，不调用 hub、不终结任何东西（审计减法 pass B，C9）。session-end 只接受 wrapped|failed|blocked|paused。
-- **重启时 aihub 不可达（repo review 2026-10-16 B-2 裁定，取代未成文的 "C6 audit-subtraction" 姿态）**：重启时 SessionVerify 的**传输错误**（连不上、超时、5xx）不是裁决，**不做任何 hub 转换**：保留本地记录（它持有 session 秘钥的唯一副本和尚未推送的 capsule 提交），先回收孤儿 step 进程（单写者），记录保持原状态（`pf ops status` 可见；其间对它的 `pf wrap`/`pf pause` 在该 WI 的 actor 里排队，verify 应答后得到最终答复），由该 WI 的 actor 退避重试 verify；首个应答走普通对账路径——WI 无需 `pf resume` 即在原 capsule 里续跑，不丢提交。aihub 的 typed 拒绝（4xx）是应答：走原有路径（blocked 并写明原因）。sealing/paused 记录保持其状态，verify 应答后照常对账。关停停止重试，记录持久化，下次重启重新 verify。
-- **end_pending 先推链再收尾（同一裁定）**：bounded-fail 在裁决前 commit 脏 capsule；若当时 push 失败（多半正是让 SessionEnd 失败的同一次中断），end_pending 车道的每次重试**先用 session 凭证推送本地链，再发 SessionEnd(blocked)**，push 失败即整体重试；仅当 verify 表明 session 已不再持有该 WI（凭证已死，推不上去）时不带推送收尾。
-- **终态关闭的 SessionEnd 失败（同一评审 B-4）**：job 停在 SEALING 时——或保留的 paused 记录已带上终态 stop_reason（暂停后的 wrap/fail/block，即"待处理的终态关闭"）时——该 WI 的 actor 退避后以记录的结论重跑与重启收尾器相同的 `stopOp(alreadySealing)`；待处理的终态关闭期间，再来的 `pf wrap`/`--fail`/`pause` 以 DAEMON-409 拒绝（关闭已在进行），重启对账或 `pf resume` 遇到它时只重放该关闭、绝不恢复执行（polyforge#197）；typed `STALE_SESSION` 停止重试并本地收尾（job 本地 Done，事件 `seal_finished_locally` 注明 hub 状态以管理员/先前已落地的关闭为准）。
-- **领取的克隆不持任何锁（repo review 2026-10-16 B-8）**：`Start` 在该 WI 的 actor 里做准入检查、写 claiming journal、领取，并把 job 以 **CLAIMING** 占位放进表（占槽，不写 state.json——journal 即其持久形态）；capsule 克隆与 materialize（含 task-repo 克隆）在该 actor 里进行，不挡其他 WI。dispatcher 每个领取一个 goroutine，队列把未落定的领取计入并发上限。CLAIMING 期间 `pf wrap`/`--fail` 取消克隆、隔离半成品 capsule，并以该结论 SessionEnd，**不做 seal 推送**（未跑过 agent，capsule 链未变）；hub 拒绝该关闭时退回 blocked 收尾（后台重试至落地）。`pf pause` 无可保留的现场，同样取消、隔离后以 **blocked** 收尾并写事件 `claim_paused_ended_blocked`——继续走 `pf resume`（resume-blocked 门：owner/maintainer/admin）重新领取。关停取消 actor 的上下文（`Runtime.Close`），所有在途领取**延后**：不 SessionEnd、不置 blocked，journal 与队列条目保留，下次启动按 B1 重放同一领取；关停不等任何领取或 agent 启动：在途领取遇取消自行延后，仍在装入的 agent 启动由装入方自行拆除。
-- **每张票一个 actor（polyforge#182，取代 #178 的每 WI 状态锁、重启 lane 及其闩）**：runtime 对每个 WI（按 canonical id）有一个 mailbox 与一个 goroutine（`runtime/actor.go`）。改变该 WI job 的一切操作——Start 的领取与落定、关闭、暂停、`pf resume`、恢复、被接管处理、重启对账及其重试——都是发给它的消息，逐条执行，网络步骤在 actor 里一路做完（状态边照旧先迁移并持久化）。同一 WI 的并发操作**排队**并得到最终答复（不再答 `DAEMON-409`/`DAEMON-503`）；daemon 的 wrap/pause 遇到表中尚无 job、但该 WI 的 actor 正有操作时同样排队。其他 WI 的任何入口都不等它。任务表锁只护任务表、别名与 mailbox 表，持有期间不做任何网络或磁盘 I/O，`pf ops status`/`pf watch` 只取它与 job 自己的互斥量，hub 挂住时照常应答；`persist` 在它下面取快照并编代号、在自己的互斥量下写盘，旧快照永远不会最后落盘。挂起的 hub 步骤（hub 未接受的关闭、verify、claim 重放）共用一条退避（EndRetryBase → EndRetryMax）。**重启**不问 hub：先把 state.json 的全部记录与 claiming journal 条目种进表（种完之前无人写 state.json），再给每个 WI 发一条消息：回收孤儿 step 进程，然后对账——journal 条目先 verify 其 session 再重放或丢弃，记录先 verify 再按应答恢复、收尾、重放或释放。**会话栅栏**：每个 actor 在重新派生 agent、以该 session 推送或发 SessionEnd 之前都先 verify，不匹配时一件都不做（daemon 停机期间被 hub 结束或接管的 WI 只做本地释放）。**关停** = `Runtime.Close` 取消 actor 的上下文：之后不再启动 agent、不再调度重试；正在装入的 agent 装上即拆除（领取延后、journal 保留；恢复的记录留在 recovering）；关停不等任何 actor。被接管的 daemon 由 M4 每 30 秒复核发现；推送因凭据被拒时 monitor 立即复核，恢复的推送被拒且 verify 确认不匹配时立即停掉该 WI。
-- **不加租约**（保留 v1.5 裁决：领取永不驱逐活着的持有者，接管是单独的特权操作）。改为 WI 级"失联"提示：**WI 失联 = 其持有 daemon 的心跳超时（统一一个阈值，替代 aihub 展示层的 5 分钟与本文早先的 15 分钟两套），或该 WI 从该 daemon 心跳上报的在跑列表中消失**；在 `pf queue`/`pf watch` 提示"可接管"并发事件。
-- 同一步失败计数上限（2.3）；driver 异常退出界（2.3）。
+**Settled**
+- A WI whose capsule is missing at restart / whose project is unmapped (cli.toml has no workspace mapping for that project): **only that WI is put into an ordinary aihub `blocked`** — through the same bounded-fail wrap-up as other blocked outcomes, sending SessionEnd(blocked), with the reason note stating the cause ("capsule missing at <path> …" / "project <p> is not in the daemon's [workspace] mapping …"); **nothing is parked locally** (no local job record, no slot), a `capsule_missing` / `project_unmapped` event is still written (visible to `pf watch`); the daemon starts as usual and the other WIs recover as usual. A human (if needed) first repairs the cause (adds the mapping), then `pf resume <wi>`: this is the ordinary blocked gate (resume-blocked + daemon claim) = a **re-claim** from the aihub capsule chain + the task-repo carrier ref (`refs/pf-task/<name>`); the dead scene (if any) is quarantined, completed steps do not rerun, and work published after the last push is lost. The two exits of blocked are **`pf resume <wi>` (continue) / `pf cancel <wi>` (give up)**; `pf wrap --fail <wi>` is not a gate of blocked and no longer has any hub gate for a parked workflow (§6.4 tightened): the daemon refuses it with DAEMON-409 naming these two paths; when the daemon cannot decide (no local job on this machine, DAEMON-404) the CLI only prints the hint of these two paths, calling no hub and terminating nothing (audit subtraction pass B, C9). session-end accepts only wrapped|failed|blocked|paused.
+- **aihub unreachable at restart (repo review 2026-10-16 B-2 ruling, replacing the unwritten "C6 audit-subtraction" posture)**: a **transport error** (cannot connect, timeout, 5xx) of SessionVerify at restart is not a verdict and **no hub transition is made**: keep the local record (it holds the only copy of the session secret and the not-yet-pushed capsule commits), first reclaim orphan step processes (single writer), and the record keeps its original state (visible to `pf ops status`; meanwhile a `pf wrap`/`pf pause` on it queues in that WI's actor and gets its final answer once verify answers), and that WI's actor retries verify with backoff; the first answer takes the ordinary reconciliation path — the WI continues in the original capsule without needing `pf resume`, losing no commits. aihub's typed refusal (4xx) is an answer: take the original path (blocked, with the reason stated). A sealing/paused record keeps its state and reconciles as usual once verify answers. Shutdown stops retrying, the record is persisted, and the next restart verifies again.
+- **end_pending pushes the chain before wrapping up (the same ruling)**: bounded-fail commits the dirty capsule before the verdict; if the push fails then (most likely the same interruption that made SessionEnd fail), every retry of the end_pending lane **first pushes the local chain with the session credential, then sends SessionEnd(blocked)**, and a push failure retries the whole; only when verify shows the session no longer holds that WI (the credential is dead and the push cannot land) does it wrap up without the push.
+- **SessionEnd failure of a terminal close (the same review, B-4)**: when a job stops in SEALING — or when the retained paused record already carries a terminal stop_reason (a wrap/fail/block after a pause, i.e. a "pending terminal close") — that WI's actor, after backoff, reruns the same `stopOp(alreadySealing)` as the restart finisher with the recorded verdict; while a terminal close is pending, a further `pf wrap`/`--fail`/`pause` is refused with DAEMON-409 (the close is already in progress), and when restart reconciliation or `pf resume` meets it, it only replays that close and never resumes execution (polyforge#197); a typed `STALE_SESSION` stops retrying and wraps up locally (the job is locally Done, the event `seal_finished_locally` noting that the hub state follows the admin / the earlier-landed close).
+- **A claim's clone holds no lock (repo review 2026-10-16 B-8)**: `Start` does the admission check, writes the claiming journal and claims inside that WI's actor, and puts the job into the table as a **CLAIMING** placeholder (taking a slot, writing no state.json — the journal is its persistent form); the capsule clone and materialize (the task-repo clone included) proceed inside that actor and do not block other WIs. The dispatcher runs one goroutine per claim, and the queue counts unsettled claims against the concurrency limit. During CLAIMING, `pf wrap`/`--fail` cancels the clone, quarantines the half-finished capsule, and runs SessionEnd with that verdict, **with no seal push** (no agent has run, the capsule chain is unchanged); when the hub refuses that close it falls back to the blocked wrap-up (retried in the background until it lands). `pf pause` has no scene to keep, and likewise cancels, quarantines and wraps up as **blocked**, writing the event `claim_paused_ended_blocked` — to continue, `pf resume` (the resume-blocked gate: owner/maintainer/admin) re-claims. Shutdown cancels the actor's context (`Runtime.Close`) and every in-flight claim is **deferred**: no SessionEnd, no blocked, the journal and queue entry kept, and the next startup replays the same claim by B1; shutdown waits for no claim or agent start: an in-flight claim defers itself on cancellation, and an agent start still being installed is torn down by the installer itself.
+- **One actor per ticket (polyforge#182, replacing #178's per-WI state lock, restart lane and its latch)**: the runtime has one mailbox and one goroutine per WI (by canonical id) (`runtime/actor.go`). Every operation that changes that WI's job — Start's claim and settlement, close, pause, `pf resume`, recovery, takeover handling, restart reconciliation and its retries — is a message sent to it, executed one by one, with network steps done through inside the actor (state edges still migrate and persist first). Concurrent operations on the same WI **queue** and get a final answer (no more `DAEMON-409`/`DAEMON-503`); the daemon's wrap/pause likewise queues when it meets a WI that has no job in the table yet but whose actor is mid-operation. No entry for another WI waits for it. The task-table lock guards only the task table, aliases and the mailbox table, and no network or disk I/O is done while it is held; `pf ops status`/`pf watch` take only it and the job's own mutex and answer as usual while the hub hangs; `persist` takes the snapshot and assigns a generation number beneath it and writes to disk under its own mutex, so an old snapshot never lands last. Pending hub steps (a close the hub has not accepted, verify, a claim replay) share one backoff (EndRetryBase → EndRetryMax). **Restart** does not ask the hub: first seed all records of state.json and the claiming-journal entries into the table (until the seeding is done no one writes state.json), then send each WI one message: reclaim orphan step processes, then reconcile — a journal entry first verifies its session and then replays or discards, a record first verifies and then, per the answer, resumes, wraps up, replays or releases. **The session fence**: before respawning an agent, pushing with that session or sending SessionEnd, every actor first verifies, and on a mismatch does nothing at all (a WI that the hub ended or took over during the daemon's downtime is only released locally). **Shutdown** = `Runtime.Close` cancels the actors' context: after it no agent is started and no retry is scheduled; an agent being installed is torn down once installed (the claim deferred, the journal kept; a recovered record stays in recovering); shutdown waits for no actor. A taken-over daemon is found by M4's 30-second recheck; when a push is refused for its credential the monitor rechecks at once, and when a resumed push is refused and verify confirms the mismatch it stops that WI at once.
+- **No lease added** (keeping the v1.5 ruling: a claim never evicts a live holder, and takeover is a separate privileged operation). Instead a WI-level "lost contact" hint: **WI lost contact = its holding daemon's heartbeat times out (one unified threshold, replacing both the aihub display layer's 5 minutes and this document's earlier 15 minutes), or the WI disappears from the running list that daemon's heartbeat reports**; `pf queue`/`pf watch` show "can be taken over" and emit an event.
+- The same-step failure-count cap (2.3); the driver abnormal-exit bound (2.3).
 
-**曾经的缺陷（均已修复，保留作回归清单）**
-1. 重新领取时克隆失败会退化为本地 init，`execution.json` 丢失，工作流从第 1 步重来（`runtime/runtime.go:1143-1153`）→ 改为本地"待 blocked"，保留现场，**持续重试 SessionEnd**（克隆失败多半因 aihub 不可达，此时 SessionEnd 也会失败，不能假设立刻 blocked 成功）；修复须保留 #108 的 task-ref 拉取（`FetchTaskRef`）。
-2. 同机重新领取接上旧 git-dir（`gitops.go:649-656`，ENOTEMPTY 被 `os.IsExist` 视为已存在）。
-3. daemon 崩溃后 step 进程及其子进程不回收（`recover.go:534-545`）→ 重启时按 spawn journal 中的 pid 与 `PF_WI_ID` + `PF_DAEMON_ID` 双环境标记（同机另一 daemon 的同 WI 进程不受影响）回收（四层清理对 pid=0 也执行）。
-4. 部分 bounded-fail 分支不杀 driver、不 commitDirty（`recover.go:62-75`）。
-5. bounded-fail 时 SessionEnd 失败仍删除本地记录 → 孤儿（`recover.go:483-499`）。
-6. 正常关停白等 ~60s 的 flush(shutdown)（#136）。
-7. 重启后 `pf observe` 只读内存事件环，历史从头开始（由 2.2 的持久事件 + 单调 id 解决）。
-8. 重启后无任何"daemon 重启过"的信号给会话（→ 决策事件）。
+**Defects that once existed (all fixed, kept as a regression list)**
+1. A clone failure at re-claim degraded to a local init, `execution.json` was lost, and the workflow restarted from step 1 (`runtime/runtime.go:1143-1153`) → changed to a local "pending blocked", keeping the scene and **retrying SessionEnd continuously** (a clone failure is mostly due to aihub being unreachable, in which case SessionEnd fails too, and one cannot assume blocked succeeds at once); the fix must keep #108's task-ref fetch (`FetchTaskRef`).
+2. A same-machine re-claim attached to the old git-dir (`gitops.go:649-656`, ENOTEMPTY treated by `os.IsExist` as already existing).
+3. After a daemon crash the step process and its children were not reclaimed (`recover.go:534-545`) → at restart they are reclaimed by the pid in the spawn journal together with the double environment marker `PF_WI_ID` + `PF_DAEMON_ID` (a same-WI process of another daemon on the same machine is unaffected) (the four-layer cleanup also runs for pid=0).
+4. Some bounded-fail branches did not kill the driver and did not commitDirty (`recover.go:62-75`).
+5. At bounded-fail a failed SessionEnd still deleted the local record → an orphan (`recover.go:483-499`).
+6. A normal shutdown idly waited ~60s for flush(shutdown) (#136).
+7. After a restart `pf observe` read only the in-memory event ring and history started from scratch (solved by §2.2's durable events + monotonic ids).
+8. After a restart no "the daemon restarted" signal reached the session (→ a decision event).
 
-**事实澄清**：正常关停后 WI 在 aihub 上保持 `running`（session 保留），下次 daemon 启动时恢复。
+**Fact clarification**: after a normal shutdown the WI stays `running` on aihub (the session retained) and is recovered at the next daemon startup.
 
-## 7. 生命周期简化（已定方向） <!-- §7 -->
+## 7. Lifecycle simplification (settled direction) <!-- §7 -->
 
-- "resume"现有 5 种含义 → 对人只保留 **暂停 / 继续**；系统内部自动处理统一称 **恢复（recover）**，不再叫 resume。
-- blocked 两扇门（unblock / resume-blocked）→ **继续 / 放弃**两个动作（terminate 门已删，polyforge#149）。
-- **暂停后的"继续"（wi_seWTgHeKtaa8）**：`pf resume <wi>`（WI 为 paused）先在 aihub 清 `clean_pause`，再调本机 daemon 的 `POST /jobs/{wi}/resume-paused`：本机 daemon 若持有该 paused 记录，**立即原地继续**——与重启时相同的流程（session verify → SessionAttach → 恢复引擎续跑当前步；未答问题重新提出并等待人回答），不必等 daemon 重启。daemon 回答 `attached`（原地继续）/ `already_live`（已在跑，幂等）/ `closed`（已 attach，但恢复续跑当场把 job 收尾——终态裁决或重拉耗尽——不再原地继续）；拒绝：DAEMON-404（本机不持有，CLI 提示到持有机器上 resume）、DAEMON-409（`clean_pause` 未清 / 该记录有待处理的终态关闭——resume 不得与它要取消的关闭赛跑 / session 已不持有 / capsule 缺失则置 blocked）、DAEMON-503（aihub 不可达，未继续）。hub 侧已清 flag 而 daemon 拒绝或不可达时，flag 保持清除，持有 daemon 下次启动的重启对账照常 attach（有待处理的终态关闭时改为重放该关闭）。
-- **"继续"的范围（r2 补）**：默认由**原持有 daemon 原地继续**；跨 daemon 继续前，必须确认 aihub 上的 capsule 版本等于原 daemon 封存时的版本，否则拒绝（#116 教训：防止拿到 blocked 之前的旧状态）。
-- 继续 / 放弃的权限（已定）：**任务负责人、项目 maintainer、admin** 均可；顺带修 resume-blocked 只查 key scope 不查成员。
-- WI 依赖关系保留（#120 已解冻）。
+- "resume" currently has 5 meanings → for humans only **pause / continue** are kept; what the system handles automatically is uniformly called **recover** and is no longer called resume.
+- Blocked's two gates (unblock / resume-blocked) → the two actions **continue / abandon** (the terminate gate is deleted, polyforge#149).
+- **"Continue" after a pause (wi_seWTgHeKtaa8)**: `pf resume <wi>` (the WI being paused) first clears `clean_pause` on aihub, then calls the local daemon's `POST /jobs/{wi}/resume-paused`: if the local daemon holds that paused record it **continues in place at once** — the same flow as at restart (session verify → SessionAttach → the recovery engine resumes the current step; an unanswered question is re-raised and waits for a human answer), with no need to wait for a daemon restart. The daemon answers `attached` (continued in place) / `already_live` (already running, idempotent) / `closed` (attached, but the recovery resume wrapped the job up on the spot — a terminal verdict or re-raise exhaustion — and no longer continues in place); refusals: DAEMON-404 (not held on this machine, the CLI hints to resume on the holding machine), DAEMON-409 (`clean_pause` not cleared / that record has a pending terminal close — resume must not race the close it would cancel / the session no longer held / capsule missing puts it into blocked), DAEMON-503 (aihub unreachable, not continued). When the hub side has cleared the flag but the daemon refuses or is unreachable, the flag stays cleared and the holding daemon's restart reconciliation at its next startup attaches as usual (with a pending terminal close it replays that close instead).
+- **The scope of "continue" (r2 addition)**: by default the **original holding daemon continues in place**; before a cross-daemon continue it must be confirmed that the capsule version on aihub equals the version sealed by the original daemon, else refuse (the #116 lesson: preventing fetching the old pre-blocked state).
+- Permission for continue / abandon (settled): the **task owner, the project maintainer and admin** may all do it; incidentally fix resume-blocked checking only the key scope and not membership.
+- WI dependencies are kept (#120 has been unfrozen).
 
-## 8. 减法清单 <!-- §8 -->
+## 8. The subtraction list <!-- §8 -->
 
-| 档 | 内容 | 状态 |
+| Tier | Content | Status |
 |---|---|---|
-| 一（直接删） | `v0/`（已打 tag `v0-archive`，workflow digest 测试向量已迁入活测试）；根目录 `fakepi` 二进制；旧答案缓存 `observe/answers.go`+`answerfile.go`；`tools/gate-metrics`、`tools/capsule-audit.go` | **集成分支已完成**（`3a036b9`、`90d95bf`、`34fdf86`）；deadcode 函数清扫**已完成**（`EffectiveModel` 属 CORE 模型候选特性，保留） |
-| 二（#106 残骸） | flush 车道全套、answer 缓存/ledger、recall/remember 代理路由、step 进程 stdio 控制通道、`PF_AGENT_ROLE`（#81）；步骤文本旧协议（#137） | **集成分支已完成**（`34fdf86`、`5f4fc3c`、`4c4564f`）；`agents/` 布局兼容（#136）**未单独核对** |
-| 三（改逻辑，随本设计） | supervisor 猜测型车道（hang/idle/probe/wall/turn_duration/工具豁免/问题豁免/ack veto）→ 2.3 规则（**M4 重验保留**）；watch.sh → `pf watch`；三模式 → 第 5 节 | `pf watch`（Go）、watch.sh / watch-probe 删除：**已完成**（`f642e06`、`c01bd94`）；supervisor 车道重写：**已完成**（`internal/polyforge/supervise`、`driver/supervision.go`）；三模式简化：**已完成**（`v2/m2-modes`：`pf ops auto on|off` + `pf ops max N`，守护进程旗标 `-auto`，无兼容别名） |
-| 四 | takeover/adopt-session 简化（先验证"结束会话后重新领取能从断点继续"）；心跳保留并修权限漏洞 | takeover 简化：**已验证并完成**——验收测试 `test/v2_m3_end_session_recovery_test.go`（A 完成两步后被 SIGKILL → 管理员强制结束会话 → B 普通领取，从中断步继续、A 的任务仓提交经 `refs/pf-task` 还原、旧密钥写入被拒、A 重启后释放不复活）通过后，删除 `pf takeover`、`pf submit --takeover`、`pf verify-session`、daemon `takeover`/`adopt-session` 路由、`runtime/adopted.go` 托管、aihub `force-takeover` 端点；恢复路径 = 管理员/维护者 `pf ops end-session <wi> --reason ...`（aihub `POST /work-items/{id}/force-end-session`，WI→queued，审计事件 `session_superseded`）+ 任意 daemon 普通 `pf submit`；**M4 重验保留**。心跳权限漏洞：未动 |
-| 已完成 | release-intent 门禁（#139，commit a159c8c）；driver 机械保证（needs_input 校验、仅 feature-full grill-review 的 `requires_human_answer`、V4 command_evidence 门禁，`f00b398`）；重新领取两个 bug（git-dir 隔离、克隆失败拒绝 InitLocal / DAEMON-516）；身份模型（daemon-id 文件、`pf chat init`、`PF_CHAT_ID`、origin）；持久化提交队列 + 待修复停放 + `pf resume` 续跑（DAEMON-517；此后已并入 blocked，见第6节）+ `daemon_restarted`/`submit_*` 事件；bounded-fail 杀树 + 推送、end_pending 重试、隔离原子性、继续/放弃走人的 key（`pf resume`/`pf cancel`/`pf wrap --fail`）、`unblock` 动词移除、blocked 封存跨 daemon 校验（DAEMON-518）；待修复 WI 的放弃路径（此后已并入 blocked，见第6节）；孤儿 step 进程回收；`atomicWrite` 修复 | 已完成（`v2/final`）；含孤儿回收的双标记边界（`PF_WI_ID` + `PF_DAEMON_ID`，同机多 daemon 互不误杀）|
-| 审计减法 A（polyforge#147） | 结果信封瘦身为最小契约（`protocol_version`/`result_id`/`artifacts` 清单/`handoff_ref` 摘要及 result_id 宽容层全删，§2.6；V4 `command_evidence` 门禁按 owner 裁定保留，仅欠取证的 step 携带）；拒绝重启层删除（3 次进程内重试仍不合格 → blocked `result_invalid`）；未用 frontmatter 键删除（`inputs`/`outputs`+`schema`/`silence_minutes`/`tool_minutes`/`include_verdict`/`on_fail: terminate`）；三个 bundle 的 release step 删除（与 #134 一致；release/deploy 的判定契约按 #134 保留，供 `workflows/release` bundle 使用，作用于最小信封的 `output`——现由这两步强制执行的 output schema 承载，代码里只剩 `defer` 仅限 `deploy` 一条）；driver 死代码（`Driver.Rewind`/`Terminate`、`Budget.USD`/`Tokens`、stdLogger 兜底、调试输出）删除；T 累计语义归位（`runtime_base_ms` 删）+ 超时类死因放宽翻倍（D6）；限流类死因独立成类、原模型退避重试（D7） | **已完成**（本票；交付清单见 WI capsule 的 `artifacts/code-summary.md`） |
-| workflow 结构精简（polyforge#165） | feature-full 11→9 步：`e2e-baseline` 并入 `e2e-author`（作者提交测试后在实现前的树上只跑作者文件、证明逐场景断言级红，同一步内修接线 / 删除已有行为的场景（`already_satisfied`）/ 重写空断言；只有"全部通过"或"环境跑不起来"才 needs_input；新增 `requires_command_evidence`），`e2e-run` 并入 feature-full `verification`（输出 `authored_titles` + `scenarios`；全量 bar 没覆盖作者测试时补一条定向命令进 `test_bar`）；所有交付 bundle 统一为 `verification → review → deliver`（chore 调换顺序）；e2e-author 只写新行为场景、软上限新增 400 行测试，超出填 `size_justification` 由 review 判定（driver 不检查）；review 读完整 diff `git diff $(git merge-base HEAD origin/HEAD)..HEAD`（含 e2e-author / repro 的测试提交），测试错误或空断言 = blocking（code 走 H4 的 needs_input 重新定基线），冗余或超规模 = non-blocking；删除无生产调用方的操作员 rewind（`TransRewind` / `applyRewindLocked`），blocked 只有 `pf resume` / `pf cancel`；加载期校验补 kind 集合与 on_fail（只在 gate 上、目标存在且更早），01 文档 V 表改为只列代码执行的规则（#118） | **已完成**（本票） |
-| 删除步骤 kind（polyforge#169） | 步骤 `kind` 概念整体删除：bundle frontmatter 的 `kind` 字段、`KindVocabulary`/`ValidKind`、driver 的 Kind 字段与 #165 的 kind 校验；`.polyforge.yaml` 改为 `steps.<project>.<default|step-id>.models`（每个条目目前只允许 `models` 键，#159 再加 `harness`；顶层 `models:` 不兼容、拒绝），拼写保护改为"键必须是已安装 workflows 的步骤 id"（DAEMON-414 拒绝认领 + `pf doctor` 报告）；旧 bundle 快照里遗留的 `kind:` 被宽松解析忽略，同 daemon 恢复不受影响；迁移对照表见 `docs/upgrade.md` | **已完成**（本票） |
-| 迁移代码 | v0→v1 迁移（`migrate-memories`/`migrate-work-items`、`core/import.go`、`tools/v0export`、`seed-v1.sh` 等）：owner 裁定提前删除，不再设观察期 | **已完成**（`v2/m1-migrate`） |
-| 兼容垫片 | owner 裁定 v2 不留向后兼容代码：`-mode` 别名、`daemon-state.json` 的 `mode` 迁移、`pf observe` 别名、`pf unblock` 提示桩、aihub `unblock` 端点与 `WIManager.Unblock`、`[watch.*]`/`watch_*` 配置容忍、`project_scope` 别名、对遗留 `takeover` 队列项的专名处理 | **已完成**（`v2/final`）；配置加载现对未知 section（含 `[watch.*]`）报错，未知顶层平铺键同样报错（含已移除的 `url` 别名；`533e032`）；2026-10-16 G5 再删 pre-#175 状态读兼容（`step_harness`/裸 id 候选）、`manual_models_dropped` 丢弃路径、pre-#144 按 id 命名 capsule 的隔离、无 `capsule_dir` 记录的目录回退 |
+| One (delete directly) | `v0/` (tagged `v0-archive`, the workflow digest test vectors migrated into live tests); the root-directory `fakepi` binary; the old answer cache `observe/answers.go`+`answerfile.go`; `tools/gate-metrics`, `tools/capsule-audit.go` | **done on the integration branch** (`3a036b9`, `90d95bf`, `34fdf86`); the deadcode function sweep **done** (`EffectiveModel` belongs to the CORE model-candidate feature and is kept) |
+| Two (#106 remnants) | the whole flush lane, the answer cache/ledger, the recall/remember proxy routes, the step process stdio control channel, `PF_AGENT_ROLE` (#81); the old protocol in step texts (#137) | **done on the integration branch** (`34fdf86`, `5f4fc3c`, `4c4564f`); the `agents/` layout compatibility (#136) **not separately verified** |
+| Three (logic changes, with this design) | the supervisor's guess-type lanes (hang/idle/probe/wall/turn_duration/tool exemption/question exemption/ack veto) → the 2.3 rules (**the M4 re-validation is kept**); watch.sh → `pf watch`; three modes → section 5 | `pf watch` (Go), watch.sh / watch-probe deleted: **done** (`f642e06`, `c01bd94`); supervisor lane rewrite: **done** (`internal/polyforge/supervise`, `driver/supervision.go`); three-mode simplification: **done** (`v2/m2-modes`: `pf ops auto on|off` + `pf ops max N`, the daemon flag `-auto`, no compatibility alias) |
+| Four | simplify takeover/adopt-session (first verify that "re-claiming after ending the session can continue from the breakpoint"); keep the heartbeat and fix the permission hole | takeover simplification: **verified and done** — after the acceptance test `test/v2_m3_end_session_recovery_test.go` (A completes two steps and is SIGKILLed → an admin force-ends the session → B claims normally, continuing from the interrupted step, A's task-repo commits restored via `refs/pf-task`, writes with the old key refused, and A after restart releasing rather than reviving) passed, deleted `pf takeover`, `pf submit --takeover`, `pf verify-session`, the daemon `takeover`/`adopt-session` routes, the `runtime/adopted.go` hosting, and aihub's `force-takeover` endpoint; the recovery path = admin/maintainer `pf ops end-session <wi> --reason ...` (aihub `POST /work-items/{id}/force-end-session`, WI→queued, audit event `session_superseded`) + an ordinary `pf submit` on any daemon; **the M4 re-validation is kept**. The heartbeat permission hole: untouched |
+| Done | the release-intent gate (#139, commit a159c8c); the driver's mechanical guarantees (needs_input validation, `requires_human_answer` only on feature-full grill-review, the V4 command_evidence gate, `f00b398`); the two re-claim bugs (git-dir isolation, clone-failure refusing InitLocal / DAEMON-516); the identity model (daemon-id file, `pf chat init`, `PF_CHAT_ID`, origin); the persistent submit queue + pending-repair parking + `pf resume` continuation (DAEMON-517; since merged into blocked, see section 6) + `daemon_restarted`/`submit_*` events; bounded-fail kill-tree + push, end_pending retry, quarantine atomicity, continue/abandon going through a human's key (`pf resume`/`pf cancel`/`pf wrap --fail`), removal of the `unblock` verb, the blocked seal's cross-daemon check (DAEMON-518); the abandon path of pending-repair WIs (since merged into blocked, see section 6); orphan step process reclaim; the `atomicWrite` fix | done (`v2/final`); including the double-marker boundary of orphan reclaim (`PF_WI_ID` + `PF_DAEMON_ID`, several daemons on one machine not killing each other by mistake) |
+| Audit subtraction A (polyforge#147) | the result envelope slimmed to the minimal contract (`protocol_version`/`result_id`/the `artifacts` manifest/the `handoff_ref` digest and the result_id leniency layer all deleted, §2.6; the V4 `command_evidence` gate kept by owner ruling, carried only by steps owing evidence); the reject-restart layer deleted (still non-conforming after 3 in-process retries → blocked `result_invalid`); unused frontmatter keys deleted (`inputs`/`outputs`+`schema`/`silence_minutes`/`tool_minutes`/`include_verdict`/`on_fail: terminate`); the release step of three bundles deleted (consistent with #134; the verdict contract of release/deploy is kept per #134 for the `workflows/release` bundle, acting on the minimal envelope's `output` — now carried by the output schema these two steps enforce, and the code retains only the one rule that `defer` is limited to `deploy`); the driver's dead code (`Driver.Rewind`/`Terminate`, `Budget.USD`/`Tokens`, the stdLogger fallback, debug output) deleted; T's cumulative semantics restored (`runtime_base_ms` deleted) + timeout-class causes of death relax by doubling (D6); the rate-limit cause of death made its own class, retried with backoff on the original model (D7) | **done** (this ticket; the delivery list is in the WI capsule's `artifacts/code-summary.md`) |
+| Workflow structure slimming (polyforge#165) | feature-full 11→9 steps: `e2e-baseline` merged into `e2e-author` (after committing the tests the author runs only the author's files on the pre-implementation tree to prove them red scenario by scenario at the assertion level, within the same step fixing wiring / deleting scenarios for existing behavior (`already_satisfied`) / rewriting empty assertions; only "all pass" or "the environment cannot run" gives needs_input; adds `requires_command_evidence`), `e2e-run` merged into feature-full `verification` (outputs `authored_titles` + `scenarios`; when the full bar does not cover the authored tests, a targeted command is added into `test_bar`); every delivery bundle unified as `verification → review → deliver` (chore swaps the order); e2e-author writes only new-behavior scenarios, with a soft cap of 400 added lines of tests, and beyond it `size_justification` is filled and judged by review (the driver does not check); review reads the complete diff `git diff $(git merge-base HEAD origin/HEAD)..HEAD` (the e2e-author / repro test commits included), a test error or an empty assertion = blocking (code re-baselines through H4's needs_input), redundant or oversized = non-blocking; the operator rewind with no production caller (`TransRewind` / `applyRewindLocked`) deleted, and blocked has only `pf resume` / `pf cancel`; load-time validation adds the kind set and on_fail (only on a gate, the target exists and is earlier), and the 01 document's V table now lists only the rules the code enforces (#118) | **done** (this ticket) |
+| Deleting step kind (polyforge#169) | the step `kind` concept deleted wholesale: the bundle frontmatter's `kind` field, `KindVocabulary`/`ValidKind`, the driver's Kind field and #165's kind validation; `.polyforge.yaml` becomes `steps.<project>.<default|step-id>.models` (each entry currently allows only the `models` key, #159 adds `harness`; the top-level `models:` is incompatible and refused), the spelling guard becomes "the key must be a step id of the installed workflows" (DAEMON-414 refuses the claim + `pf doctor` reports); a leftover `kind:` in an old bundle snapshot is leniently parsed and ignored, so recovery on the same daemon is unaffected; the migration table is in `docs/upgrade.md` | **done** (this ticket) |
+| Migration code | the v0→v1 migration (`migrate-memories`/`migrate-work-items`, `core/import.go`, `tools/v0export`, `seed-v1.sh` and so on): the owner ruled to delete it early, with no observation period | **done** (`v2/m1-migrate`) |
+| Compatibility shims | the owner ruled v2 keeps no backward-compatibility code: the `-mode` alias, the `mode` migration of `daemon-state.json`, the `pf observe` alias, the `pf unblock` hint stub, the aihub `unblock` endpoint and `WIManager.Unblock`, tolerance of `[watch.*]`/`watch_*` config, the `project_scope` alias, the special-case handling of legacy `takeover` queue items | **done** (`v2/final`); config loading now errors on an unknown section (`[watch.*]` included), and an unknown top-level flat key likewise errors (the removed `url` alias included; `533e032`); on 2026-10-16 G5 further deleted the pre-#175 state-read compatibility (`step_harness` / bare-id candidates), the `manual_models_dropped` drop path, the quarantine of pre-#144 id-named capsules, and the directory fallback for records without `capsule_dir` |
 
-## 9. 快速落地顺序 <!-- §9 -->
+## 9. Fast-landing order <!-- §9 -->
 
-不做新旧并行观察，按依赖关系直接替换：
+No old/new parallel observation; replace directly by dependency:
 
-1. **止血**：去掉 release-intent 门禁（已完成待部署）；修步骤文本旧协议（#137）；driver 人工确认保证（#138）；**重新领取路径的两个 bug（第 6 节 1、2）**——已暂停的 #130、#134 恢复依赖它们，修复前不要 resume。
-   - git-dir 修法：隔离 capsule 时把外置 git-dir 一并移入隔离区；目标已存在时报错而非复用（含跨文件系统 EXDEV 合并情形）；加"同机隔离后重新领取 → HEAD 等于 aihub 最新提交"的测试。
-   - **V4 验证证据门禁移入 driver**（已定）：driver 接受 verification 步骤的 completed 结果时，要求结构化命令证据（argv、exit_code、duration_ms），缺失则走信封拒绝的进程内重试；旧 flush 路径上的同名检查随 #136 删除。
-   - 步骤 1 完成后：**验证"结束会话 + 重新领取能从断点继续"**，通过则按第 8 节四档简化 takeover / adopt-session / verify-session（**已完成**，见第 8 节四档）。
-2. **事件底座**：driver 事件写入事件日志；单调 id、每 WI 一个文件；`execution.json` 权威。
-3. **监督替换（同一批上线）**：driver ↔ supervisor 契约 + 判死规则 + 死因处理 + 失败计数 + 阈值 + 恢复引擎的 driver 异常退出界 + **孤儿 step 进程回收（第 6 节 bug 3，必须同批——否则"重启后同模型重派"会与孤儿进程双写同一 capsule，#99 教训）**。
-4. **`pf watch`**：Go 实现、双通道、固定模板唤醒、订阅/游标存 daemon、Claude Code statusLine 与唤醒适配、pi 扩展；删除 watch.sh / watch-probe。
-5. **身份模型**：daemon id 存放迁移、`PF_CHAT_ID`、负责人、origin、通知路由。
-6. **恢复与重启其余 bug**（第 6 节 4、5、6、8）+ 坏任务置 blocked 后 `pf resume` 重新领取（原"待修复"原地续跑，此后已并入 blocked，见第6节） + 持久化排队队列（含重放规则）+ "继续"范围校验。
-7. **减法一、二档**（可与 2–6 并行）。
-8. 之后：按步骤选 harness、drain + 跨 daemon 通信（#84）。（权限隔离 #135 已于 2026-10-14 冻结，不在计划内。）
+1. **Stop the bleeding**: remove the release-intent gate (done, awaiting deployment); fix the old protocol in step texts (#137); the driver's human-confirmation guarantee (#138); **the two bugs of the re-claim path (section 6, items 1 and 2)** — the paused #130 and #134 depend on them to resume, so do not resume before they are fixed.
+   - git-dir fix: when quarantining a capsule move the externalized git-dir into the quarantine too; error rather than reuse when the target already exists (the cross-filesystem EXDEV merge case included); add a "re-claim on the same machine after quarantine → HEAD equals aihub's latest commit" test.
+   - **The V4 verification-evidence gate moves into the driver** (settled): when the driver accepts the completed result of a verification step it requires structured command evidence (argv, exit_code, duration_ms), and when it is missing the in-process retry of envelope rejection applies; the same-named check on the old flush path was deleted with #136.
+   - After step 1 is done: **verify that "ending the session + re-claiming can continue from the breakpoint"**, and if it passes, simplify takeover / adopt-session / verify-session per the four tiers of section 8 (**done**, see the four tiers of section 8).
+2. **Event foundation**: driver events written to the event log; monotonic ids, one file per WI; `execution.json` the authority.
+3. **Supervision replacement (shipped in the same batch)**: the driver ↔ supervisor contract + death-judgement rules + handling by cause of death + failure counts + thresholds + the recovery engine's driver abnormal-exit bound + **orphan step process reclaim (section 6 bug 3, which must be in the same batch — otherwise "re-dispatch on the same model after a restart" would double-write the same capsule together with the orphan process, the #99 lesson)**.
+4. **`pf watch`**: Go implementation, two channels, fixed-template wake-up, subscriptions/cursors stored in the daemon, the Claude Code statusLine and wake-up adaptation, the pi extension; delete watch.sh / watch-probe.
+5. **The identity model**: daemon id storage migration, `PF_CHAT_ID`, owner, origin, notification routing.
+6. **The remaining recovery and restart bugs** (section 6, items 4, 5, 6, 8) + after a bad task is put into blocked, `pf resume` re-claims (the former "pending repair" in-place continuation, since merged into blocked, see section 6) + the persistent queue (replay rules included) + the "continue" scope check.
+7. **Subtraction tiers one and two** (can run in parallel with 2–6).
+8. Afterwards: choosing the harness per step, drain + cross-daemon communication (#84). (Permission isolation #135 was frozen on 2026-10-14 and is not in the plan.)
 
-## 10. 现有 WI 映射 <!-- §10 -->
+## 10. Mapping of existing WIs <!-- §10 -->
 
-| WI | 去向 |
+| WI | Where it goes |
 |---|---|
-| #119 | 已取消（本文即其产出） |
-| #102 | 已取消（残留） |
-| #87、#88 | 被已失联的 `machine-x` 持有自 10-06；接管路径（`pf ops end-session <wi> --reason ...` + 任意 daemon 普通 `pf submit`）已落地，**现在可清理** |
-| #122 | 由 #137/#138 与 3.2 的唤醒约束修复后复现验证关闭 |
-| #139 | 由门禁删除分支解决（已落在集成分支） |
-| #136、#137、#138 | 归入第 9 节 1、7；集成分支已落：#137（步骤文本，`5f4fc3c`）、#138（driver 人工确认保证，`f00b398`）、#136 的 flush/stdio/`PF_AGENT_ROLE` 部分（`34fdf86`）；`agents/` 布局兼容未单独核对 |
-| #135 | **冻结**（owner 2026-10-14：团队内部使用，不做重型隔离）；3.2 的事故护栏与「已知缺口」(b) 的 UDS 拒绝即现行机制 |
-| #84 | 重要性上升：drain 与跨机器回答的前提；仍冻结，范围待改写 |
-| #120 | 已解冻 |
-| #130（执行 #126）、#134（执行 #133） | owner 已于 2026-10-12 暂停（paused，进度已推到 aihub）；重新领取 bug 已在集成分支修复（git-dir 隔离、克隆失败 DAEMON-516），**部署后**再 resume；#134 的 **epic/task 概念保留**（已定） |
-| #71、#73、#74、#118、#132、#133 | 不受影响 |
-| #78、#121、#125、#126、#128 | 继续冻结 |
+| #119 | canceled (this document is its output) |
+| #102 | canceled (residue) |
+| #87, #88 | held by the lost-contact `machine-x` since 10-06; the takeover path (`pf ops end-session <wi> --reason ...` + an ordinary `pf submit` on any daemon) has landed, and they **can be cleaned up now** |
+| #122 | closed after the fixes of #137/#138 and 3.2's wake-up constraints and a reproduction check |
+| #139 | resolved by the gate-deletion branch (landed on the integration branch) |
+| #136, #137, #138 | folded into section 9 items 1 and 7; landed on the integration branch: #137 (step texts, `5f4fc3c`), #138 (the driver's human-confirmation guarantee, `f00b398`), the flush/stdio/`PF_AGENT_ROLE` part of #136 (`34fdf86`); the `agents/` layout compatibility not separately verified |
+| #135 | **frozen** (owner 2026-10-14: internal team use, no heavy isolation); 3.2's accident guardrails and the UDS refusal of "Known gaps" (b) are the current mechanism |
+| #84 | importance rises: the prerequisite of drain and cross-machine answers; still frozen, scope to be rewritten |
+| #120 | unfrozen |
+| #130 (executing #126), #134 (executing #133) | paused by the owner on 2026-10-12 (paused, progress pushed to aihub); the re-claim bugs are fixed on the integration branch (git-dir isolation, clone failure DAEMON-516), and they resume **after deployment**; #134's **epic/task concept is kept** (settled) |
+| #71, #73, #74, #118, #132, #133 | unaffected |
+| #78, #121, #125, #126, #128 | remain frozen |
 
-## 11. owner 裁决（2026-10-12，原待定项全部已定） <!-- §11 -->
+## 11. Owner rulings (2026-10-12, all formerly pending items settled) <!-- §11 -->
 
-1. **V4 验证证据门禁**：移入 driver（第 9 节步骤 1）。
-2. **`PF_AGENT_ROLE`**：删除（第 8 节二档）。
-3. **历史设计文档**：00–08、v1-*、v1.5-* 开头加注"部分内容已被本文取代，冲突时以本文为准"，不逐篇改写。（2026-10-16 repo review wave 4 取代：00、02–05、07 与 v1/v1.5 规格整体移入 `archive/`；现行参考为 `reference.md`，01/06 修剪为现状。）
-4. **takeover 简化**：**已完成**（先验证"结束会话 + 重新领取能从断点继续"，通过后删除 takeover；见第 8 节四档）。
-5. **#87、#88**：保留至"失联提示 + 接管"落地后再清理；接管（`pf ops end-session`）已落地，现可清理。
-6. **epic/task 概念（#133/#134）**：保留。
-7. **继续 / 放弃权限**：任务负责人、项目 maintainer、admin。
+1. **The V4 verification-evidence gate**: moved into the driver (section 9 step 1).
+2. **`PF_AGENT_ROLE`**: deleted (section 8 tier two).
+3. **Historical design documents**: 00–08, v1-*, v1.5-* get a note at the head "parts have been superseded by this document, and this document wins on conflict", not rewritten one by one. (Superseded on 2026-10-16 by repo review wave 4: 00, 02–05, 07 and the v1/v1.5 specs were moved wholesale into `archive/`; the current reference is `reference.md`, and 01/06 were trimmed to the present state.)
+4. **Takeover simplification**: **done** (first verify that "ending the session + re-claiming can continue from the breakpoint", then delete takeover after it passes; see section 8 tier four).
+5. **#87, #88**: kept until after "lost-contact hint + takeover" has landed, then cleaned up; takeover (`pf ops end-session`) has landed and they can be cleaned up now.
+6. **The epic/task concept (#133/#134)**: kept.
+7. **Continue / abandon permission**: the task owner, the project maintainer, admin.
 
-## 12. polyforge#140 裁决（2026-10-13，拆分 a：wi-kind 契约——父子与 bundle 规则） <!-- §12 -->
+## 12. polyforge#140 rulings (2026-10-13, split a: the wi-kind contract — parent/child and bundle rules) <!-- §12 -->
 
-拆分 a（aihub 端 + 设计文档）落地 grill-review 的调整 1–6（w140 裁决记录；拆分 b 承接客户端面：CLI/skills/daemon submit 预检）。接口细节（字段、reason 清单、响应形状、部署与回滚）权威在 `wi-kind-contract.md`；本节登记裁决本身：
+Split a (the aihub side + design documents) lands adjustments 1–6 of the grill-review (the w140 ruling record; split b takes the client surface: CLI/skills/daemon submit prechecks). The authority for interface details (fields, the reason list, response shapes, deployment and rollback) is `wi-kind-contract.md`; this section registers the rulings themselves:
 
-1. **epic 由数据派生，不落列**：不引入 `work_items.kind` 列、无迁移、无 PARENT_NOT_EPIC/EPIC_NO_BUNDLE 等新错误码；有子票（`parent_id` 指向它）即 epic，可选 `epic` label 仅展示，服务端不据此强制任何行为。
-2. **父子规则对称化**：两条对称规则取代旧“父票必须 epic”的单向表述——①有子票的票不可绑定 bundle（create 与 PATCH 共用同一校验路径，`CORE-400`，`reason=HAS_CHILDREN_NO_BUNDLE`）；②已绑 bundle 的票不可作父票（沿用 `PARENT_NOT_REGISTRY` 语义，不留旧名别名）。bundle 只落在叶子上，epic/父票永远是登记票。
-3. **R2 窗口**：`bundle_name` 的固化时点从“建票即冻结”改为**首次认领冻结**（R2 窗口：status=queued ∧ 从未认领；waiting_on 非空不单独拒绝）；窗口内 `PATCH bundle_name` 三向变更（NULL→X / X→Y / X→NULL 解绑），与 create 共用同一落库路径（引用即名字本身——digest 链已删，polyforge#149 B9：不再派生 stand-in，也不接受显式 digest）；`repo_inventory` 不触碰。
-4. **待选 bundle 分段**：ready queue 新增“待选 bundle”分段——bundle 为空 ∧ 无子票 ∧ queued 的票，与可执行分段同样排除 waiting_on 非空与依赖未完成的票；epic 不出现在任何分段；响应形状只做加法（不改名不删减旧字段）。（此条已删：无读者，polyforge#194；现行响应见 `wi-kind-contract.md#§3`）
-5. **父票完成状态由子票派生、不写终态**：全部子票终态且 ≥1 wrapped → 派生“完成”，否则“进行中”（附子票计数：总数/已终态/wrapped）；父票库内 status 保持 queued，任何终态不写；新增子票自动回到“进行中”（纯读派生，无重开写路径）；暴露只做加法。（此条已删：无读者，polyforge#194；现行响应见 `wi-kind-contract.md#§3`）
-6. **执行中发现的问题不挂子票**（本票及后续执行期行为约束）：范围内→顺手修（改动重新声明进 touched files）；越界不阻塞→新票 + `related`；阻塞→新票 + `blocks` 依赖；方向错误→`wrap --fail`/`cancel` 后新开 task。四分支均不向正在执行的票挂子票。
+1. **An epic is derived from data and not stored in a column**: no `work_items.kind` column, no migration, no new error codes such as PARENT_NOT_EPIC/EPIC_NO_BUNDLE; having children (`parent_id` pointing at it) makes it an epic, an optional `epic` label is for display only, and the server enforces no behavior on it.
+2. **The parent/child rules made symmetric**: two symmetric rules replace the old one-way statement "a parent must be an epic": ① a ticket with children cannot bind a bundle (create and PATCH share one validation path, `CORE-400`, `reason=HAS_CHILDREN_NO_BUNDLE`); ② a ticket already bound to a bundle cannot be a parent (keeping the `PARENT_NOT_REGISTRY` semantics, with no old-name alias). A bundle lands only on leaves, and an epic/parent ticket is always a registry ticket.
+3. **The R2 window**: the moment `bundle_name` is fixed changes from "frozen at ticket creation" to **frozen at first claim** (the R2 window: status=queued ∧ never claimed; a non-empty waiting_on does not by itself refuse); inside the window `PATCH bundle_name` allows three-way changes (NULL→X / X→Y / X→NULL unbind), sharing one landing path with create (the reference is the name itself — the digest chain is deleted, polyforge#149 B9: no stand-in is derived and no explicit digest accepted); `repo_inventory` is untouched.
+4. **The "bundle pending selection" segment**: the ready queue gains a "bundle pending selection" segment — tickets with an empty bundle ∧ no children ∧ queued, excluding, as the executable segment does, tickets with a non-empty waiting_on or unfinished dependencies; an epic appears in no segment; the response shape is additive only (no old field renamed or removed). (This item was deleted: it has no reader, polyforge#194; for the current response see `wi-kind-contract.md#§3`)
+5. **A parent ticket's completion state is derived from its children and no terminal state is written**: all children terminal and ≥1 wrapped → derived "done", else "in progress" (with the child counts: total/terminal/wrapped); the parent's in-database status stays queued and no terminal state is written; a newly added child automatically returns it to "in progress" (a pure read derivation, with no reopen write path); exposure is additive only. (This item was deleted: it has no reader, polyforge#194; for the current response see `wi-kind-contract.md#§3`)
+6. **A problem found during execution does not hang a child ticket** (a behavior constraint on this ticket and on later execution): in scope → fix in passing (the change is re-declared into touched files); out of scope and non-blocking → a new ticket + `related`; blocking → a new ticket + a `blocks` dependency; wrong direction → `wrap --fail`/`cancel`, then open a new task. None of the four branches hangs a child on the ticket being executed.
 
-**并发（两组，均有测试覆盖）**：只靠单写者事务串行化加各自的 CAS，不另设仲裁（不用内存闩、不用定时等待）。PATCH bundle vs Claim：绑定或改名的 PATCH 不会让 Claim 失败（解绑若排在前，Claim 按无 bundle 票被拒）；PATCH 排在 Claim 之前则 Claim 冻结新 bundle，排在之后则被拒且不写库（`CORE-400 reason=IMMUTABLE`，或 `CORE-409 reason=RACE_LOST`）——两种次序的终态都正确。绑定 bundle vs 新增子票：恰好一方成功，终态不同时出现“有子票 ∧ bundle 非空”。
+**Concurrency (two groups, both covered by tests)**: only the single-writer transaction serialization plus each side's own CAS, with no separate arbitration (no in-memory latch, no timed wait). PATCH bundle vs Claim: a bind or rename PATCH cannot make the Claim fail (an unbind ordered first leaves the Claim refused as a no-bundle ticket); a PATCH ordered before the Claim lets the Claim freeze the new bundle, and ordered after it is refused and writes nothing (`CORE-400 reason=IMMUTABLE`, or `CORE-409 reason=RACE_LOST`) — the end state of both orders is correct. Bind bundle vs add a child: exactly one side succeeds, and the end state never shows "has children ∧ bundle non-empty" together.
 
-## 13. 审计裁定（2026-10-13，polyforge#150：文档对齐——以代码为准） <!-- §13 -->
+## 13. Audit rulings (2026-10-13, polyforge#150: documentation alignment — the code wins) <!-- §13 -->
 
-来源：`audit-2026-10-13-invented-logic.md` §三/§七 + owner 同日补登（claim 幂等记录保留期），划归本票的全部 11 条裁定集中登记于此。每条一行：编号、一句话裁定、现文档落点（本次修订均已落盘）。
+Sources: `audit-2026-10-13-invented-logic.md` §3/§7 + the owner's same-day addition (the claim idempotency-record retention period); all 11 rulings assigned to this ticket are registered together here. One line each: number, the one-sentence ruling, and where the current documents hold it (all landed in this revision).
 
-| # | 裁定（一句话） | 文档落点 |
+| # | Ruling (one sentence) | Where in the documents |
 |---|---|---|
-| D1 | 就绪队列（`GET /api/v1/projects/{project}/ready-queue`）响应为 `{items, running, paused}` 三段（`internal/aihub/core/queue.go`；`pending_bundles` 段已于 polyforge#194 删除）；无 `blocked` 数组，等依赖的票不出现 | `archive/02-aihub-core.md#§5.1b`（重写）及 §5.1 行 4 / §4.2a 行 26 / §7 / §10 关联句；`archive/00-architecture.md#§3.1` 组件表、§3.4b/§3.4c 与 `archive/07-deployment-pilot.md#§9.2` 同步最小修订 |
-| D2 | `seq` 项目内唯一（`UNIQUE(project_id, seq)`），非全局 | `archive/02-aihub-core.md#§4.2` DDL |
-| D4 | claim 需该 project 的 writer/maintainer membership 或全局 admin（`hSessionClaim`→`requireWrite`，403 otherwise）；key scope 不构成认领授权 | `archive/02-aihub-core.md#§4.10`、`#§8`；`archive/04-local-runtime.md#§6.1` 关联句 |
-| D8 | 先推 capsule 链，再推任务仓库 carrier ref（`refs/pf-task/<name>`）；任务仓库推送失败不回滚 capsule 链（polyforge#158 起另发 `carrier_push_failed` 决策提醒，见本文 §14.2） | `archive/v1-spec-full.md`（单行最小修订）+ 本表登记（“或”：两处都做） |
-| D10 | watcher 不因订阅的 WI 结束而退出（保持常驻），只跳过已结束的 WI；父 harness 消失、stdout 关闭或 `--wait-decision` 打印后仍退出 | 本文 §3.1 |
-| D14 | `paused` 的 WI 保留会话，可直接 wrap/fail/block，无需先 resume（`End()` 同一 session-hash fence，通过后清空会话） | `archive/02-aihub-core.md#§2.5` 表行与相邻文字、§5.1 行 9 |
-| C5 | `context_policy` / `handoff` 保留并写入文档 | **已由 #147 落地**，见 `01-workflow-skills.md#§4`/`§4.4a` 与本文 §2.6（本票不重复修改） |
-| C11 | job 级收尾前活转录同步保留（`runtime/pitranscript.go`） | 本文 §2.2 |
-| C13 | 决策类别补 `canceled`/`paused`/`submit_dropped`（另含 `submit_rejected`/`daemon_restarted`，与 `watcher/decision.go` 代码表对齐） | 本文 §3.1 |
-| C16 | `pf file create` 在 cwd 恰落一个映射 workspace 且该 workspace 恰映射一个 project 时推断 `--project`；其余一切情形要求显式 | `archive/00-architecture.md#§3.1` |
-| 补登 | claim 幂等记录永不过期、无任何清理任务（缓存应答只含公开 fingerprint，永久保留无安全问题）——已被取代：claim 缓存表已删，重放按 session secret 识别（`reference.md#§3.2`） | `archive/02-aihub-core.md#§4.3`、`#§6.6` |
+| D1 | the ready queue (`GET /api/v1/projects/{project}/ready-queue`) answers three segments `{items, running, paused}` (`internal/aihub/core/queue.go`; the `pending_bundles` segment was deleted in polyforge#194); there is no `blocked` array, and a ticket waiting on dependencies does not appear | `archive/02-aihub-core.md#§5.1b` (rewritten) and the related sentences of §5.1 row 4 / §4.2a row 26 / §7 / §10; `archive/00-architecture.md#§3.1` component table, §3.4b/§3.4c and `archive/07-deployment-pilot.md#§9.2` minimally revised in sync |
+| D2 | `seq` is unique inside a project (`UNIQUE(project_id, seq)`), not global | `archive/02-aihub-core.md#§4.2` DDL |
+| D4 | claim needs that project's writer/maintainer membership or global admin (`hSessionClaim`→`requireWrite`, 403 otherwise); a key scope does not constitute claim authorization | `archive/02-aihub-core.md#§4.10`, `#§8`; the related sentence of `archive/04-local-runtime.md#§6.1` |
+| D8 | push the capsule chain first, then the task repo's carrier ref (`refs/pf-task/<name>`); a task-repo push failure does not roll back the capsule chain (since polyforge#158 a `carrier_push_failed` decision reminder is also sent, see §14.2 of this document) | `archive/v1-spec-full.md` (a one-line minimal revision) + this table's registration ("or": both are done) |
+| D10 | the watcher does not exit because a subscribed WI ended (it stays resident) and only skips ended WIs; it still exits when the parent harness disappears, stdout closes, or after `--wait-decision` prints | §3.1 of this document |
+| D14 | a `paused` WI keeps its session and may be wrapped/failed/blocked directly without a resume first (`End()` with the same session-hash fence, clearing the session once passed) | the table row and adjacent text of `archive/02-aihub-core.md#§2.5`, §5.1 row 9 |
+| C5 | `context_policy` / `handoff` are kept and written into the documents | **landed by #147**, see `01-workflow-skills.md#§4`/`§4.4a` and §2.6 of this document (not modified again by this ticket) |
+| C11 | the job-level live-transcript sync before wrap-up is kept (`runtime/pitranscript.go`) | §2.2 of this document |
+| C13 | the decision categories gain `canceled`/`paused`/`submit_dropped` (plus `submit_rejected`/`daemon_restarted`, aligned with the code table of `watcher/decision.go`) | §3.1 of this document |
+| C16 | `pf file create` infers `--project` when the cwd falls in exactly one mapped workspace and that workspace maps exactly one project; every other case requires it explicit | `archive/00-architecture.md#§3.1` |
+| Addition | claim idempotency records never expire and there is no cleanup task (the cached answer holds only the public fingerprint, so permanent retention is no security issue) — since superseded: the claim cache table is deleted and a replay is recognized by the session secret (`reference.md#§3.2`) | `archive/02-aihub-core.md#§4.3`, `#§6.6` |
 
-其余审计条目（B*、C1–C4、C6–C10、C12、C14–C15、D3/D5–D7/D9/D11–D13/D15 等）属其他票（#144/#145/#146/#147 等），不在本票范围。
+The remaining audit items (B*, C1–C4, C6–C10, C12, C14–C15, D3/D5–D7/D9/D11–D13/D15 and so on) belong to other tickets (#144/#145/#146/#147 and so on) and are outside this ticket's scope.
 
 ---
 
-## 14. capsule 链与任务仓库保全（现行机制；2026-10-16 自 05 文档 7.5/7.6 节迁入） <!-- §14 -->
+## 14. The capsule chain and task-repo preservation (current mechanism; migrated on 2026-10-16 from sections 7.5/7.6 of document 05) <!-- §14 -->
 
-`archive/05-sync-revision-recovery.md` 的其余部分描述已删除的 Revision/CAS/SYNC 模型（已归档）；本节是 capsule 链规则、任务仓库
-carrier ref 与 WIP ref 这三项**现行**机制的唯一设计记录。§14.2、§14.3 逐字迁自原 `archive/05-sync-revision-recovery.md#§7.5`、`archive/05-sync-revision-recovery.md#§7.6`（仅按 2026-10-14 信任模型改写了
-理由句，交叉引用改为本节编号）；原处随 05 归档为历史副本，以本节为准。
+The rest of `archive/05-sync-revision-recovery.md` describes the deleted Revision/CAS/SYNC model (archived); this section is the sole design record of three **current** mechanisms: the capsule-chain rules, the task-repo
+carrier ref and the WIP ref. §14.2 and §14.3 are migrated verbatim from the original `archive/05-sync-revision-recovery.md#§7.5` and `archive/05-sync-revision-recovery.md#§7.6` (only the
+rationale sentences were rewritten for the 2026-10-14 trust model, and cross-references changed to this section's numbering); the original place is a historical copy archived with 05, and this section wins.
 
-### 14.1 capsule 链规则 <!-- §14.1 -->
+### 14.1 Capsule chain rules <!-- §14.1 -->
 
-- **一条 FF-only 链**：每个 WI 在 aihub 有一个裸仓库，capsule 的提交推到 `refs/heads/main`。aihub pre-receive hook（`internal/aihub/git/hook.go`）
-  强制：只能快进、不得删除 ref（`refs/pf-wip/*` 除外）、提交树中不得有 gitlink（`GIT-412`；daemon 在本地 commit 前、以及推送前对待推送范围内的每个提交（含 step 自己的提交）预检同一规则并拒绝，`repos/`、`artifacts/release-*` 下的 gitlink 指引是恢复 capsule `.gitignore`，绝不删任务仓库的 `.git`）、blob ≤ 16 MiB（`capsule.MaxBlobBytes`）。
-  提交不带序号 trailer：step 在 capsule 根自己 `git commit` 的提交就是链上一个普通快进提交，随下一次发布原样推送。
-- **会话围栏**：推送经 aihub git 代理，Basic 口令必须是该 WI **当前活会话**的 secret（一次性 `GIT_ASKPASS` 传递，不进 argv）；被取代或已
-  结束的会话被拒（`GIT-401`）。
-- **异步推送的重试调度**（`observe/observe.go`、`observe/monitor.go`）：每次失败一条 `push_failed`，同一 Version 按指数退避重试
-  （10s 起，每次翻倍，上限 5 分钟）；退避触顶时发一次 `push_backpressure` 降级事件。新的 Version（提交边界）立即推送但不重置退避，
-  一次成功推送结束本轮。每次推送上界 60s（`protocol.PushTimeout`）。
-- **再认领 = 重新 clone**：blocked→`pf resume` 等再认领从 aihub 链 clone capsule，再按 §14.2 的 carrier ref 与 §14.3 的 WIP ref 恢复任务仓库；
-  已有发布进度的 WI clone 失败时拒绝本地初始化（`DAEMON-516`，否则会从第 1 步重跑）；aihub 链头不等于封存时记录的 head 时，封存机从该 WI
-  的隔离 git-dir（`<git-dir>.quarantined.<ts>`，新者优先）取回该 head 并把链移过去，由下一次发布推送，任务仓库（carrier head 与未提交改动）也从同一代隔离 capsule 恢复；另一台 daemon，或封存机上找不到该 head，
-  则拒绝（`DAEMON-518`）。
+- **One FF-only chain**: each WI has a bare repository on aihub, and the capsule's commits are pushed to `refs/heads/main`. The aihub pre-receive hook (`internal/aihub/git/hook.go`)
+  enforces: fast-forward only, no ref deletion (except `refs/pf-wip/*`), no gitlink in a commit tree (`GIT-412`; before a local commit, and before a push for every commit in the range to be pushed (the step's own commits included), the daemon prechecks the same rule and refuses; the guidance for a gitlink under `repos/` or `artifacts/release-*` is to restore the capsule `.gitignore`, never to delete a task repo's `.git`), blobs ≤ 16 MiB (`capsule.MaxBlobBytes`).
+  Commits carry no sequence trailer: a commit the step makes itself with `git commit` at the capsule root is an ordinary fast-forward commit on the chain, pushed verbatim with the next publication.
+- **The session fence**: pushes go through the aihub git proxy, and the Basic password must be the secret of that WI's **current live session** (passed by a one-shot `GIT_ASKPASS`, never in argv); a superseded or
+  ended session is refused (`GIT-401`).
+- **The retry schedule of asynchronous pushes** (`observe/observe.go`, `observe/monitor.go`): every failure emits one `push_failed`, and the same Version retries with exponential backoff
+  (from 10s, doubling each time, capped at 5 minutes); when the backoff hits the cap a `push_backpressure` degradation event is emitted once. A new Version (a commit boundary) pushes at once without resetting the backoff,
+  and one successful push ends the round. Each push is bounded at 60s (`protocol.PushTimeout`).
+- **Re-claim = re-clone**: a re-claim such as blocked→`pf resume` clones the capsule from the aihub chain and then restores the task repos by §14.2's carrier ref and §14.3's WIP ref;
+  when the clone of a WI that already has published progress fails, local initialization is refused (`DAEMON-516`, otherwise it would rerun from step 1); when the aihub chain head does not equal the head recorded at sealing, the sealing machine retrieves that head from that WI's
+  quarantined git-dir (`<git-dir>.quarantined.<ts>`, the newer taking priority) and moves the chain over, to be pushed by the next publication, and the task repos (the carrier head and uncommitted changes) are also restored from the same generation of quarantined capsule; another daemon, or the sealing machine not finding that head,
+  is refused (`DAEMON-518`).
 
-### 14.2 任务仓库 carrier ref（polyforge#108 / #158） <!-- §14.2 -->
+### 14.2 The task-repo carrier ref (polyforge#108 / #158) <!-- §14.2 -->
 
-本节描述当前代码（v2 Go 执行驱动）。每次 capsule 发布，daemon 先推 capsule 链（`refs/heads/main`），
-再把每个任务仓库 `repos/<name>` 的本地 HEAD 推到该 WI 裸仓库的 carrier ref `refs/pf-task/<name>`（`gitops.pushTaskRefsLocked`）；
-blocked→resume 等重新认领从上游 clone 后按 carrier ref 恢复任务仓库（`runtime.restoreTaskRepoState`）。carrier 推送失败不回滚、
-不阻塞 capsule 链发布（D8）。
+This section describes the current code (the v2 Go execution driver). At every capsule publication the daemon first pushes the capsule chain (`refs/heads/main`),
+then pushes each task repo `repos/<name>`'s local HEAD to the carrier ref `refs/pf-task/<name>` of that WI's bare repository (`gitops.pushTaskRefsLocked`);
+a re-claim such as blocked→resume clones from upstream and then restores the task repos by the carrier ref (`runtime.restoreTaskRepoState`). A carrier push failure neither rolls back nor
+blocks the capsule chain publication (D8).
 
-- **blob 上限分两档**：aihub pre-receive hook 对 capsule 链沿用 16 MiB（`capsule.MaxBlobBytes`，env `GIT_PF_MAX_BLOB`），
-  对 `refs/pf-task/*` 用 100 MiB（`capsule.MaxTaskBlobBytes`，env `GIT_PF_MAX_TASK_BLOB`）。原因：任务仓库在 aihub 上最初为空，
-  首次 carrier 推送带上整个上游历史，上游历史里的大资源（例：skypilot 的 21 MB `streamlit_app.mp4`）不能让该仓库永远无法携带。
-  超过 100 MiB 的上游 blob 仍会被拒（"carrier 只存 WI 自己的提交"的根治方案未实施）。
-- **失败即决策**：carrier 推送因任何原因失败或被拒（超限、non-fast-forward 分叉、传输、下述仓库配置拒绝），除 stderr 日志外，
-  **仅当本次 capsule 链推送成功时** daemon 写 `carrier_push_failed` 事件（body：`repo`、`ref`、截断到约 2 KB 的 git 错误或拒绝原因）；
-  链推送也失败（aihub 不可达、会话被 fence）时不提醒，仍失败的 carrier 在下一次链推送成功的发布时提醒。watcher 把它归为人工决策，
-  提醒行为固定模板：
-  `[polyforge] <slug> carrier_push_failed <repo> — this task repo cannot be saved; a resume may lose its commits; this is a human decision, the agent must not answer it`。
-  仓库名经与 WI id 相同的字符集过滤；错误文本只在 `pf watch <wi> --once` 的事件里。每个 job 每个仓库只提醒一次，直到该仓库的 carrier
-  推送再次成功（状态挂在 runtime job 上的内存里：job 结束即消失，重新认领 = 新 job 会再提醒；daemon 重启后同样重新提醒一次）。
-  non-fast-forward 失败另外照旧发 `task_ref_diverged`。
-- **凭证安全：带凭证的推送从不在任务仓库里执行**（任务仓库由 agent 操作——按 2026-10-14 信任模型这是**防事故**：agent 可能在仓库里留下 credential helper、insteadOf、hook 等配置；git 没有忽略仓库本地配置的开关，
-  配置也可能在检查与推送之间变化，所以不做配置黑名单）。每个任务仓库：
-  1. 只读校验（不带凭证）：仓库必须完全自有其存储——`repos/<name>/.git` 是真实目录（Lstat：非 symlink、非 gitfile）；
-     不存在 `.git/commondir`；`.git/HEAD`、`.git/packed-refs`、`.git/refs` 及其下任何条目都不是 symlink；`.git/objects` 是真实目录，
-     其每个条目（`pack`、`info`、`??` 扇出目录）与 `objects/pack/` 的每个条目都不是 symlink；不存在 `objects/info/alternates`
-     与 `objects/info/http-alternates`。在仓库内执行 `git rev-parse --absolute-git-dir` 必须恰好等于该 `.git`；再读一次 HEAD：
-     `git rev-parse --verify -q HEAD^{commit}`（unborn = 无可携带，静默跳过）。仓库内的这两次读取另带 `-c safe.directory=<repo>`
-     （仓库属主与 daemon 不同时仍可读）。任一校验失败即拒绝并发 `carrier_push_failed`（原因写在事件里），不准备凭证。
-  2. 在任务仓库之外（WI 裸仓库目录旁，`pf-carrier-*` 临时目录）建一个 daemon 自有的临时裸仓库，`objects/info/alternates`
-     指向 `<repo>/.git/objects`，`update-ref refs/pf-carrier/tmp <sha>`；推送完即删除。
-  3. 从临时仓库推送：
-     `git --git-dir=<tmp> -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helper= -c http.proxy= -c protocol.allow=never -c protocol.<RemoteURL 的 scheme>.allow=always push --no-recurse-submodules <RemoteURL> <sha>:refs/pf-task/<name>`。
-  carrier 通道上每一次 git 调用（校验与推送）用同一个环境：daemon 环境去掉全部 `GIT_*`，加 `GIT_CONFIG_NOSYSTEM=1`、
-  `GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CEILING_DIRECTORIES=<解析 symlink 后的 repos 目录>`（校验与推送用同一个值）；推送另加一次性 askpass（`GIT_ASKPASS`、`GIT_TERMINAL_PROMPT=0`）。
-  于是任务仓库里的 `credential.helper`、`url.*.insteadOf`/`pushInsteadOf`、`remote.<url>.vcs`（remote helper）、
-  `push.recurseSubmodules`/`submodule.recurse` 与子模块自己的 origin、hooks 等都不参与推送。git 从 alternates 只读取对象数据，
-  不执行其中任何东西。carrier 通道的每次 git 调用都有超时（校验与临时仓库准备 1 分钟，推送 10 分钟，超时杀掉整个 git 进程组），
-  挂住的 hub 不会永久占住该 WI 的锁；daemon 启动时清理残留的 `pf-carrier-*` 临时仓库（与 askpass 清理相同）。
-  **残余**：上述无竞态的借用方式（commondir、symlink 的 refs/objects、alternates）一律拒绝；但对象读取与打包
-  仍以 daemon 的 uid 读 agent 可写的目录，校验到推送之间的窗口里被改写的仓库布局仍可能把别处的内容带进本 WI 的 carrier ref。
-  这只能是蓄意行为；按 2026-10-14 信任模型（团队内部使用，#135 冻结）不再追加防御——这一层是事故护栏，不是隔离边界。
+- **The blob cap has two tiers**: the aihub pre-receive hook keeps 16 MiB for the capsule chain (`capsule.MaxBlobBytes`, env `GIT_PF_MAX_BLOB`)
+  and uses 100 MiB for `refs/pf-task/*` (`capsule.MaxTaskBlobBytes`, env `GIT_PF_MAX_TASK_BLOB`). The reason: a task repo on aihub is initially empty, and
+  the first carrier push brings the whole upstream history, in which large assets (for example skypilot's 21 MB `streamlit_app.mp4`) must not make that repo forever unable to be carried.
+  An upstream blob over 100 MiB is still refused (the root-cause plan of "the carrier stores only the WI's own commits" is not implemented).
+- **A failure is a decision**: when a carrier push fails or is refused for any reason (over the cap, a non-fast-forward divergence, transport, the repo-configuration refusals below), besides the stderr log,
+  **only when this round's capsule chain push succeeded** the daemon writes a `carrier_push_failed` event (body: `repo`, `ref`, the git error or refusal reason truncated to about 2 KB);
+  when the chain push also failed (aihub unreachable, session fenced) no reminder is sent, and a carrier that still fails is reminded at the next publication whose chain push succeeds. The watcher classifies it as a human decision,
+  and the reminder line is a fixed template:
+  `[polyforge] <slug> carrier_push_failed <repo> — this task repo cannot be saved; a resume may lose its commits; this is a human decision, the agent must not answer it`.
+  The repo name is filtered by the same character set as the WI id; the error text appears only in the events of `pf watch <wi> --once`. One reminder per repo per job, until that repo's carrier
+  push succeeds again (the state hangs in memory on the runtime job: it vanishes when the job ends, a re-claim = a new job reminds again; and after a daemon restart it likewise reminds once more).
+  A non-fast-forward failure additionally emits `task_ref_diverged` as before.
+- **Credential safety: a push carrying a credential is never executed inside a task repo** (the task repo is operated by the agent — under the 2026-10-14 trust model this is **accident prevention**: the agent may leave a credential helper, insteadOf, hooks and similar config in the repo; git has no switch to ignore repo-local configuration,
+  and the configuration may change between the check and the push, so no configuration blacklist is used). For each task repo:
+  1. A read-only check (carrying no credential): the repo must fully own its storage — `repos/<name>/.git` is a real directory (Lstat: not a symlink, not a gitfile);
+     there is no `.git/commondir`; `.git/HEAD`, `.git/packed-refs`, `.git/refs` and any entry under it are not symlinks; `.git/objects` is a real directory,
+     each of its entries (`pack`, `info`, the `??` fan-out directories) and each entry of `objects/pack/` is not a symlink; there is no `objects/info/alternates`
+     and no `objects/info/http-alternates`. Running `git rev-parse --absolute-git-dir` inside the repo must equal exactly that `.git`; then read HEAD once more:
+     `git rev-parse --verify -q HEAD^{commit}` (unborn = nothing to carry, silently skipped). These two reads inside the repo additionally carry `-c safe.directory=<repo>`
+     (still readable when the repo's owner differs from the daemon's). Any failed check is refused and sends `carrier_push_failed` (the reason written in the event), with no credential prepared.
+  2. Outside the task repo (beside the WI bare repo directory, a `pf-carrier-*` temporary directory) create a daemon-owned temporary bare repo whose `objects/info/alternates`
+     points at `<repo>/.git/objects`, then `update-ref refs/pf-carrier/tmp <sha>`; delete it after the push.
+  3. Push from the temporary repo:
+     `git --git-dir=<tmp> -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helper= -c http.proxy= -c protocol.allow=never -c protocol.<the scheme of RemoteURL>.allow=always push --no-recurse-submodules <RemoteURL> <sha>:refs/pf-task/<name>`.
+  Every git call on the carrier channel (check and push) uses the same environment: the daemon environment with all `GIT_*` removed, plus `GIT_CONFIG_NOSYSTEM=1`,
+  `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CEILING_DIRECTORIES=<the repos directory with symlinks resolved>` (the same value for check and push); the push adds a one-shot askpass (`GIT_ASKPASS`, `GIT_TERMINAL_PROMPT=0`).
+  Hence a task repo's `credential.helper`, `url.*.insteadOf`/`pushInsteadOf`, `remote.<url>.vcs` (a remote helper),
+  `push.recurseSubmodules`/`submodule.recurse`, a submodule's own origin, hooks and so on all take no part in the push. From alternates git reads only object data
+  and executes nothing in it. Every git call of the carrier channel has a timeout (1 minute for checks and temporary-repo preparation, 10 minutes for the push, the whole git process group killed on timeout),
+  so a hung hub cannot hold that WI's lock forever; at daemon startup leftover `pf-carrier-*` temporary repos are cleaned (the same as the askpass cleanup).
+  **Residual**: the race-free borrowing ways above (commondir, symlinked refs/objects, alternates) are all refused; but object reading and packing
+  still read an agent-writable directory with the daemon's uid, and a repo layout rewritten in the window between the check and the push could still carry content from elsewhere into this WI's carrier ref.
+  This can only be deliberate; under the 2026-10-14 trust model (internal team use, #135 frozen) no further defence is added — this layer is an accident guardrail, not an isolation boundary.
 
-### 14.3 任务仓库未提交改动：WIP ref（polyforge#167） <!-- §14.3 -->
+### 14.3 Uncommitted changes of task repos: the WIP ref (polyforge#167) <!-- §14.3 -->
 
-carrier ref 只记录 HEAD，重新认领会丢掉任务仓库里未提交的改动。补充一条 WIP ref `refs/pf-wip/<name>`（`gitops.PushTaskWIP`）：
+The carrier ref records only HEAD, so a re-claim would lose the uncommitted changes in a task repo. A WIP ref `refs/pf-wip/<name>` is added (`gitops.PushTaskWIP`):
 
-- **何时写**：只在步骤进程已退出的关闭点——bounded-fail（blocked，SessionEnd 之前）、`stopOp` 收尾（failed / blocked 等非 wrapped）、
-  operator pause（`pauseOp`）、daemon 关停（杀掉 agent 树之后）、以及每个 step 结束时（driver 在该次派发的进程退出后、写入其结果或失败之前
-  调用 `StepEnded`，即 `runtime.SaveTaskWIP`，上限 30 秒（因此可能把该 step 结果的写入推迟至多 30 秒）；失败不影响该 step，不持任何 runtime 锁），所以 kill -9 至多丢掉当前 step
-  尚未结束的改动。observe 的常规发布不写。
-  先按 §14.2 镜像每个仓库的 HEAD 到 `refs/pf-task/<name>`，再对每个仓库：有未提交改动（已跟踪修改、删除与未跟踪文件）→ 生成一个
-  WIP 提交（唯一父提交 = HEAD）并强推到 `refs/pf-wip/<name>`；干净或 wrapped 关闭 → 直接推 `:refs/pf-wip/<name>` 删除
-  （hub 上没有该 ref 时静默）。本次 WIP 生成/推送失败时**保留** hub 上较旧的 WIP ref：它只在父提交等于恢复后的 HEAD（即它被拍下时
-  的状态）时才会被应用，应用它总比什么都没有好；失败只记日志并发 `carrier_push_failed`（`ref` = WIP ref，`error` 注明 hub 上的
-  WIP 早于本次关闭；同样仅在链推送成功时、每 job 每 ref 一次），从不让关闭失败。
-  unborn HEAD 跳过。
-- **生成方式**：在 §14.2 的 `pf-carrier-*` 临时裸仓库里完成（alternates 借任务仓库对象），任务仓库只作 `--work-tree`，
-  index 用临时文件（`GIT_INDEX_FILE=<tmp>/pf-wip-index`）：`read-tree <HEAD>`、预扫描（见下）、`add -A --ignore-errors`、剔除、
-  `write-tree`（树与 HEAD 相同 =
-  干净）、`commit-tree <tree> -p <HEAD>`（作者/提交者 `polyforge-daemon`），再用 §14.2 同一条推送命令推 `+<wip>:refs/pf-wip/<name>`。
-  同样的 env 与 `-c` 标志、超时（`add -A` 用推送的 10 分钟）。不写任务仓库的 HEAD、分支、index、对象库，也不把它的配置当配置读——
-  git 读的是临时仓库的配置，所以仓库里定义的 clean filter、fsmonitor、hook 都不会运行。不用 `git stash create`：它在 agent
-  仓库里执行（读其配置、写其对象库），且不收未跟踪文件。
-- **快照是工作树原始字节**：不应用任何 clean/smudge filter 与属性驱动的转换（eol、`working-tree-encoding` 等）。因此属性声明
-  `filter=lfs` 或 `filter=git-crypt` 的已改动文件不进快照（其原始内容是 smudge 后的对象/明文）。
-- **忽略与属性来源**：工作树里的 `.gitignore` / `.gitattributes`（数据）照常生效；carrier env 丢掉的来源复制进临时仓库的
-  `info/exclude` / `info/attributes`：生效的 `core.excludesFile` / `core.attributesFile`（任务仓库自己配置里的值——只按文件读该键、
-  不跟 include；否则运维者的全局配置（含 `GIT_CONFIG_GLOBAL`）；否则 `$XDG_CONFIG_HOME/git/ignore|attributes`），再加仓库的
-  `.git/info/exclude` / `.git/info/attributes`。只读普通文件（非阻塞打开），每个上限 1 MiB。
-- **剔除并记录**（WIP 提交说明列出路径，并发 `task_wip_skipped` 事件：`repo`、`ref`、`skipped`），单个坏路径不再让整个快照丢失：
-  - 预扫描（`add` 之前，不读文件内容）：`ls-files -o --exclude-standard`（临时 exclude 生效，不进入被忽略目录）列出未跟踪路径——
-    嵌套 git 仓库显示为一个 `dir/` 条目（HEAD 记为子模块的不在其中；没有提交的嵌套仓库原本会让 `add -A` 整体失败）、超过 carrier
-    blob 上限（`capsule.MaxTaskBlobBytes`）的未跟踪文件、未跟踪总量超过同一上限时的最大文件，都写进 `info/exclude`；工作区大小超过
-    blob 上限的已跟踪文件设 `skip-worktree`，保持 HEAD 条目（大小与 HEAD 的 blob 不同时记录）。这些文件从不被哈希。
-  - `add -A --ignore-errors`：读不了的文件（root 拥有的构建产物、mode 000）跳过，退出码 1 视为部分成功，跳过的路径来自
-    `unable to index file` 行。
-  - `add` 之后兜底剔除：属性为 lfs/git-crypt filter 的改动文件；单个超过 blob 上限的；改动总量超过上限时先剔除最大的。
-  被剔除的已跟踪路径在快照里保持 HEAD 的内容（不会变成删除），未跟踪路径直接不收。
-- **关停与 step 结束**：快照在一个 context 下运行（`gitops.Opts.Ctx`；关停：所有 job 并行、共用一个 30 秒期限；step 结束：driver 的
-  context 加 30 秒期限）：carrier 通道每次 git 调用的超时都截到其期限，context 结束（到期或取消）即杀掉整个 git 进程组并释放
-  per-WI 锁；之后剩下的仓库不再尝试，`carrier_push_failed` 写明 `deadline exceeded` 或 `cancelled`（而不是误导的仓库布局拒绝原因）。
-- **hook**：`refs/pf-wip/*` 是草稿 ref，允许删除与 non-fast-forward；只检查新对象（`rev-list --objects <new> --not --all`）的
-  blob 上限，用 carrier 的 100 MiB；不做 gitlink 检查。其余 ref 的规则不变（`refs/pf-task/*` 仍禁止删除与非快进）。
-- **恢复**（`runtime.restoreTaskWIP`，在 `restoreTaskRepoState` 之后，只对新 clone）：取 `refs/pf-wip/<name>`；若其唯一父提交等于
-  恢复后的 HEAD，把新 clone 的 `.git/index` 复制成临时 `GIT_INDEX_FILE`，由 git 执行 `read-tree -m -u <head> <wip>` 把改动写入
-  工作树（删除、mode、目录变 symlink 都由 git 处理，不跟随 symlink 走出工作树；没有手写的删除）——不提交、不移动 HEAD、
-  仓库 index 不变，改动以未暂存/未跟踪形式出现（原先暂存与否的区别不保留）。父提交不一致（carrier 已前进）或读取/应用失败 →
-  不应用，发 `task_wip_not_applied` 事件（`repo`、`ref`、`head`、`wip`、`wip_parent`、`reason`）。不阻塞认领。
-  应用后 WIP ref 保留，由下一个关闭点覆盖或删除；在那之前崩溃再认领会再次应用同一份（HEAD 未变时结果相同）。
+- **When it is written**: only at close points where the step process has already exited — bounded-fail (blocked, before SessionEnd), the `stopOp` wrap-up (failed / blocked and other non-wrapped), the
+  operator pause (`pauseOp`), the daemon shutdown (after the agent tree is killed), and at the end of every step (the driver calls `StepEnded`, i.e. `runtime.SaveTaskWIP`, after that dispatch's process exits and before writing its result or failure,
+  capped at 30 seconds (so it may postpone writing that step's result by up to 30 seconds); a failure does not affect the step, and no runtime lock is held), so kill -9 loses at most the changes of the current step
+  that has not ended. observe's regular publication does not write it.
+  First mirror each repo's HEAD to `refs/pf-task/<name>` per §14.2, then for each repo: with uncommitted changes (tracked modifications, deletions and untracked files) → generate one
+  WIP commit (sole parent = HEAD) and force-push it to `refs/pf-wip/<name>`; clean or a wrapped close → directly push `:refs/pf-wip/<name>` to delete
+  (silent when the hub has no such ref). When this round's WIP generation/push fails, the older WIP ref on the hub is **kept**: it is applied only when its parent commit equals the recovered HEAD (i.e. the state it was snapshotted in),
+  and applying it is always better than nothing; a failure only logs and emits `carrier_push_failed` (`ref` = the WIP ref, `error` noting that the WIP on the hub
+  predates this close; likewise only when the chain push succeeded, once per job per ref), and never makes the close fail.
+  An unborn HEAD is skipped.
+- **How it is generated**: done inside §14.2's `pf-carrier-*` temporary bare repo (alternates borrowing the task repo's objects), with the task repo serving only as the `--work-tree`
+  and the index a temporary file (`GIT_INDEX_FILE=<tmp>/pf-wip-index`): `read-tree <HEAD>`, a pre-scan (see below), `add -A --ignore-errors`, pruning,
+  `write-tree` (a tree identical to HEAD's =
+  clean), `commit-tree <tree> -p <HEAD>` (author/committer `polyforge-daemon`), then pushed with the same push command as §14.2, `+<wip>:refs/pf-wip/<name>`.
+  The same env and `-c` flags and timeouts (`add -A` uses the push's 10 minutes). It writes none of the task repo's HEAD, branches, index or object store, and does not read its configuration as configuration —
+  git reads the temporary repo's configuration, so no clean filter, fsmonitor or hook defined in the repo runs. `git stash create` is not used: it executes inside the agent
+  repo (reading its config, writing its object store) and does not take untracked files.
+- **The snapshot is the working tree's raw bytes**: no clean/smudge filter and no attribute-driven conversion (eol, `working-tree-encoding` and so on) is applied. So a changed file whose attributes declare
+  `filter=lfs` or `filter=git-crypt` does not enter the snapshot (its raw content is the post-smudge object / plaintext).
+- **Sources of ignores and attributes**: the working tree's `.gitignore` / `.gitattributes` (data) take effect as usual; the sources the carrier env drops are copied into the temporary repo's
+  `info/exclude` / `info/attributes`: the effective `core.excludesFile` / `core.attributesFile` (the value in the task repo's own configuration — reading only that key by file, not following includes; otherwise the operator's global configuration (`GIT_CONFIG_GLOBAL` included); otherwise `$XDG_CONFIG_HOME/git/ignore|attributes`), plus the repo's
+  `.git/info/exclude` / `.git/info/attributes`. Only regular files are read (opened non-blocking), each capped at 1 MiB.
+- **Pruned and recorded** (the WIP commit message lists the paths, and a `task_wip_skipped` event is sent: `repo`, `ref`, `skipped`); a single bad path no longer loses the whole snapshot:
+  - Pre-scan (before `add`, reading no file content): `ls-files -o --exclude-standard` (the temporary exclude in effect, not entering ignored directories) lists untracked paths —
+    a nested git repo shows as one `dir/` entry (one recorded in HEAD as a submodule is not among them; a nested repo with no commit would otherwise make `add -A` fail as a whole), an untracked file over the carrier
+    blob cap (`capsule.MaxTaskBlobBytes`), and, when the untracked total exceeds the same cap, the largest files, are all written into `info/exclude`; a tracked file whose working-tree size exceeds the
+    blob cap is set `skip-worktree`, keeping HEAD's entry (recorded when the size differs from HEAD's blob). These files are never hashed.
+  - `add -A --ignore-errors`: files that cannot be read (root-owned build products, mode 000) are skipped, exit code 1 counts as partial success, and the skipped paths come from the
+    `unable to index file` lines.
+  - Fallback pruning after `add`: changed files whose attributes carry an lfs/git-crypt filter; any single one over the blob cap; and when the changed total exceeds the cap, the largest first.
+  A pruned tracked path keeps HEAD's content in the snapshot (it does not become a deletion), and a pruned untracked path is simply not taken.
+- **Shutdown and step end**: the snapshot runs under one context (`gitops.Opts.Ctx`; shutdown: all jobs in parallel sharing one 30-second deadline; step end: the driver's
+  context plus a 30-second deadline): the timeout of every git call on the carrier channel is clipped to its deadline, and when the context ends (expiry or cancellation) the whole git process group is killed and the
+  per-WI lock released; the remaining repos are then not attempted, and `carrier_push_failed` states `deadline exceeded` or `cancelled` (rather than a misleading repo-layout refusal reason).
+- **hook**: `refs/pf-wip/*` is a scratch ref, allowing deletion and non-fast-forward; it checks only the new objects' (`rev-list --objects <new> --not --all`)
+  blob cap, using the carrier's 100 MiB; it does no gitlink check. The rules of other refs are unchanged (`refs/pf-task/*` still forbids deletion and non-fast-forward).
+- **Restore** (`runtime.restoreTaskWIP`, after `restoreTaskRepoState`, for a fresh clone only): take `refs/pf-wip/<name>`; if its sole parent commit equals the
+  recovered HEAD, copy the fresh clone's `.git/index` to a temporary `GIT_INDEX_FILE` and have git run `read-tree -m -u <head> <wip>` to write the changes into the
+  working tree (deletions, mode, a directory turning into a symlink are all handled by git, never following a symlink out of the working tree; there is no hand-written deletion) — no commit, HEAD not moved,
+  the repo index unchanged, and the changes appear as unstaged/untracked (the original staged-or-not distinction is not kept). A parent mismatch (the carrier has moved on) or a read/apply failure →
+  not applied, and a `task_wip_not_applied` event is sent (`repo`, `ref`, `head`, `wip`, `wip_parent`, `reason`). It does not block the claim.
+  After applying, the WIP ref is kept, to be overwritten or deleted by the next close point; a crash before that and a re-claim apply the same one again (the same result when HEAD is unchanged).
 
 ---
 
-## 附录 A：r2 深度审查漏洞清单与处置 <!-- §A -->
+## Appendix A: the r2 deep-review hole list and dispositions <!-- §A -->
 
-| # | 严重度 | 漏洞 | 处置（本文位置） |
+| # | Severity | Hole | Disposition (location in this document) |
 |---|---|---|---|
-| 1 | 高 | 退出未交结果一律同模型重试（F4 回归），"机器问题"无来源 | 2.3 细分表；2.5 翻译器上报进程退出 |
-| 2 | 高 | 一次派发多次判定、kill 后再计一次失败；多规则优先级未定义 | 2.2 围栏与幂等；2.3 规则按编号优先 |
-| 3 | 高 | T 作用域矛盾，放宽值无处持久化 | 2.2、2.4：步骤累计、写入 execution.json |
-| 4 | 高 | 失败计数未定义 | 2.3 失败计数 |
-| 5 | 高 | driver 异常退出无人管、重启不计失败致无界循环、M4 无归属 | 2.1 恢复引擎；2.3 driver 异常退出界；8 三档保留 M4 |
-| 6 | 高 | 事件日志 best-effort、seq 不跨重启 | 2.2 execution.json 权威 + 单调 id；3.1 重连先核对状态 |
-| 7 | 高 | daemon id 新生成会被 aihub 拒绝注册 | 4：沿用 machine-id 字符串 |
-| 8 | 高 | 孤儿回收晚于"重启同模型重派"（#99 回归） | 9：同批上线 |
-| 9 | 高 | 坏任务 blocked 后继续会重新克隆（#103 回归）；克隆失败时 SessionEnd 也会失败 | 6：置 blocked + `pf resume` 重新领取（原待修复原地续跑，此后已并入 blocked，见第6节）；bug 1 持续重试 |
-| 10 | 高 | watch 状态/唤醒/映射/队列文件 agent 可写 | 3.1、3.2、4、5：存 daemon 数据目录、固定模板 |
-| 11 | 中 | 工具超时重试不放宽（#83 回归）；阈值受 bundle 钉住 | 2.3 tool_hung 放宽；2.4 覆盖对之后领取的 WI 生效 |
-| 12 | 中 | 零事件只能靠 T 兜底（#114 退化） | 2.3 规则 ⓪ |
-| 13 | 中 | 重试形态未定义 | 2.3 重试形态 |
-| 14 | 中 | 持久化队列重放与 aihub 分歧、takeover 重放抢占 | 5 重放规则 |
-| 15 | 中 | 步骤之间卡住无人管 | 2.3 driver_stalled |
-| 16 | 中 | watch 生命周期、注册竞态 | 3.1 |
-| 17 | 中 | 负责人未定义 | 4 负责人 |
-| 18 | 中 | 候选用尽语义 | 2.3 候选用尽 |
-| 19 | 中 | 阻塞投递与非阻塞循环冲突 | 2.2 无界队列、不在跨 WI 的锁下做长操作 |
-| 20 | 中 | T 与 `budget.wall_minutes` 关系、命名撞车 | 2.4 复用 wall_minutes；改名 step_timeout_* |
-| 21 | 中 | 跨机继续拿到 blocked 前旧状态（#116 回归） | 7 继续范围 |
-| 22 | 中 | 继续/放弃角色未定 | 11 第 7 条 |
-| 23 | 低 | PF_SESSION_ID 与 session_id 凭证重名 | 4 改名 PF_CHAT_ID |
-| 24 | 低 | 转录同步来源未写明 | 2.2 |
-| 25 | 低 | 失联阈值两套、WI 级失联定义 | 6 |
+| 1 | High | exit without a result always retried on the same model (the F4 regression), and "machine problem" had no source | 2.3 breakdown table; 2.5 the translator reports process exit |
+| 2 | High | several verdicts per dispatch, a failure counted again after the kill; multi-rule priority undefined | 2.2 fencing and idempotency; 2.3 rules prioritized by number |
+| 3 | High | T's scope contradictory, relaxed values persisted nowhere | 2.2, 2.4: step-cumulative, written into execution.json |
+| 4 | High | failure count undefined | 2.3 failure count |
+| 5 | High | nobody handles the driver's abnormal exit, a restart not counted as a failure gives an unbounded loop, M4 has no owner | 2.1 recovery engine; 2.3 driver abnormal-exit bound; 8 tier three keeps M4 |
+| 6 | High | the event log is best-effort, seq does not span restarts | 2.2 execution.json authority + monotonic id; 3.1 reconnect reconciles state first |
+| 7 | High | a newly generated daemon id would be refused registration by aihub | 4: keep the machine-id string |
+| 8 | High | orphan reclaim later than "re-dispatch on the same model after restart" (the #99 regression) | 9: ship in the same batch |
+| 9 | High | continuing a bad task after blocked would re-clone (the #103 regression); SessionEnd also fails when the clone fails | 6: put into blocked + `pf resume` re-claims (the former pending-repair in-place continuation, since merged into blocked, see section 6); bug 1 retries continuously |
+| 10 | High | the watch state/wake-up/mapping/queue files are agent-writable | 3.1, 3.2, 4, 5: stored in the daemon data directory, fixed template |
+| 11 | Medium | tool-timeout retry does not relax (the #83 regression); thresholds pinned by the bundle | 2.3 tool_hung relaxes; 2.4 the override takes effect for WIs claimed afterwards |
+| 12 | Medium | zero events could only be backstopped by T (the #114 degradation) | 2.3 rule ⓪ |
+| 13 | Medium | retry form undefined | 2.3 retry form |
+| 14 | Medium | the persistent queue replay diverging from aihub, a takeover replay preempting | 5 replay rules |
+| 15 | Medium | nobody handles a stall between steps | 2.3 driver_stalled |
+| 16 | Medium | watch lifecycle, the registration race | 3.1 |
+| 17 | Medium | owner undefined | 4 owner |
+| 18 | Medium | candidates-exhausted semantics | 2.3 candidates exhausted |
+| 19 | Medium | blocking delivery conflicting with a non-blocking loop | 2.2 unbounded queue, no long operations under a cross-WI lock |
+| 20 | Medium | the relation of T to `budget.wall_minutes`, a naming collision | 2.4 reuses wall_minutes; renamed step_timeout_* |
+| 21 | Medium | a cross-machine continue getting the old pre-blocked state (the #116 regression) | 7 continue scope |
+| 22 | Medium | the continue/abandon roles undecided | 11 item 7 |
+| 23 | Low | PF_SESSION_ID clashing in name with the session_id credential | 4 renamed PF_CHAT_ID |
+| 24 | Low | transcript sync source unstated | 2.2 |
+| 25 | Low | two lost-contact thresholds, the WI-level lost-contact definition | 6 |
 
-## 附录 B：历史问题回归对照 <!-- §B -->
+## Appendix B: regression cross-check against historical problems <!-- §B -->
 
-| 历史问题 | 新方案覆盖机制 |
+| Historical problem | The mechanism of the new design that covers it |
 |---|---|
-| #44 agent 死无人知 | driver 退出检测 + ②③④ |
-| #48 活动量误判、incident 风暴 | "真实输出"定义 + 失败计数上限 |
-| #83 长工具被误杀 | ③ 默认 30 分钟 + 重试放宽 Y |
-| #97 快速死亡死循环 | 恢复引擎 driver 异常退出界（连续恢复失败计数器） |
-| #99 等人期间假卡死 | 等人期间无进程、不计时 |
-| #99 双写者 | 孤儿回收与监督替换同批 |
-| #103 绝不悄悄重建 | 坏任务置 blocked，人显式 `pf resume` 才重新领取（原"待修复"原地续跑，此后已并入 blocked，见第6节） |
-| #108 task-repo 持久 | 保留 FetchTaskRef |
-| #114 探针洗白 / 零事件 | 无探针 + 规则 ⓪ + ④ |
-| #116 blocked 前状态 | 继续范围校验 |
-| #117/#124 trickle-wedge | ④ 步骤累计 T；状态按派发、不跨步 |
-| #122 agent 自答 | #138 + 唤醒固定附带"不得代答" + 唤醒不夹带自由文本 |
-| F3 转录 | step_started.transcript_path + commit 前同步 |
-| F4 模型 pin 失败 | 退出细分：模型类 → 换候选 |
-| F5 致命错误后永久 idle | ① 1 分钟宽限 |
-| F13 上下文超限 | 第二次起重开对话 |
-| F15 UI 噪声掩盖卡死 | "真实输出"定义 |
-| F16/B2 僵尸 flush | spawn_n 围栏 |
-| F18/F22 推送风暴 | 事件触发推送保留退避与熔断 |
-| B1 领取日志 | 不变；与持久化队列重放去重 |
-| M4 僵尸会话发现 | 保留在 supervisor |
-| NEW-1/2/3 | 指纹围栏、判定不丢、待关闭回放不变 |
-| #92 孙进程持管道 | 组杀不变 |
-| #107 信封拒绝 | 进程内重试不变，不计入失败计数 |
-| watch 四次修补 | Go 实现、不调模型、进展不进上下文 |
+| #44 nobody knew an agent died | driver exit detection + ②③④ |
+| #48 activity-volume misjudgement, incident storm | the "real output" definition + the failure-count cap |
+| #83 a long tool wrongly killed | ③ default 30 minutes + a relaxed Y on retry |
+| #97 the fast-death loop | the recovery engine's driver abnormal-exit bound (the consecutive-recovery-failure counter) |
+| #99 false stuck during a human wait | no process during the wait, no timing |
+| #99 two writers | orphan reclaim in the same batch as the supervision replacement |
+| #103 never quietly rebuild | a bad task is put into blocked, and only a human's explicit `pf resume` re-claims (the former "pending repair" in-place continuation, since merged into blocked, see section 6) |
+| #108 task-repo persistence | keep FetchTaskRef |
+| #114 probe whitewashing / zero events | no probe + rule ⓪ + ④ |
+| #116 pre-blocked state | the continue-scope check |
+| #117/#124 trickle-wedge | ④ step-cumulative T; state per dispatch, not across steps |
+| #122 agent answering itself | #138 + the wake-up always appends "must not answer on a human's behalf" + the wake-up carries no free text |
+| F3 transcript | step_started.transcript_path + sync before commit |
+| F4 model pin failure | exit breakdown: model class → switch candidate |
+| F5 permanent idle after a fatal error | ① the 1-minute grace |
+| F13 context overflow | reopen the conversation from the second retry |
+| F15 UI noise masking a hang | the "real output" definition |
+| F16/B2 zombie flush | the spawn_n fence |
+| F18/F22 push storm | event-triggered push keeps backoff and the circuit breaker |
+| B1 claiming journal | unchanged; deduplicated with the persistent queue replay |
+| M4 zombie session discovery | kept in the supervisor |
+| NEW-1/2/3 | fingerprint fence, verdicts not dropped, pending-close replay unchanged |
+| #92 a grandchild process holding the pipe | group kill unchanged |
+| #107 envelope rejection | in-process retry unchanged, not counted into the failure count |
+| watch's four patches | Go implementation, calls no model, progress does not enter the context |
 
 ---
 
-## 附录 C：已知缺口（集成分支，2026-10-12） <!-- §C -->
+## Appendix C: known gaps (the integration branch, 2026-10-12) <!-- §C -->
 
-- **(a) bundle digest**：已不存在——digest 链随 polyforge#149 B9 删除，`internal/` 中没有 `Digest` / `FileEntry`；`internal/common/workflow` 只读 frontmatter 的模型候选字段。`01-workflow-skills.md#§4.5` 的 digest 描述已归档。
-- **(b) 人工确认保证是事故护栏，不是对抗性防御**：driver 的 `requires_human_answer` 与 needs_input 校验是进程内的机械保证；step agent 可写 capsule，蓄意绕过不在 2026-10-14 信任模型的防御范围内（#135 冻结）。daemon 的 UDS 面（polyforge#122 起于 answer 路由，#164 并入；repo review 2026-10-16 V-1 扩到全部变更路由）按 UDS 对端凭据的 pid（Linux SO_PEERCRED，darwin LOCAL_PEERCRED + LOCAL_PEERPID）拒绝来自本 daemon step 进程树的一切非读请求（DAEMON-403）：对端、其祖先或其进程组 leader 带有 `PF_WI_ID` + `PF_DAEMON_ID=<本 daemon>` 标记即拒；取不到对端凭据也拒（fail closed）。拒绝面是一个包住整张路由表的中间件：`/jobs/{wi}/answer|claim|resume-paused|pause|wrap`、`/ops/config`、`/shutdown`、`/chat/init`、`/chats/{id}/subscribe|unsubscribe|subscribe-owned|ack`；开放的只有纯读（`GET /status`、`/jobs/{wi}/watch`、`/chats/{id}/subscriptions`、`/step/memories/...`）与 step 的记忆写入 `POST /step/memories`（只作用于调用方自己的 WI，`daemon/stepmem.go`）。answer 路由保留其 #122 拒绝文案。残余：`setsid` 脱离进程组且清空环境的进程不在此检查内——这只能是蓄意行为，按信任模型不再追加防御（#135 冻结）。（曾有的 abandon-repair 路由随 repair_pending 一并删除，此实例已不存在。）
-- **(c) `pf watch` 进展字段**：已随监督重写合入——daemon watch 路由从 `Observe.Progress(wi)` 填充命令、命令时长、最近文件、工具调用数（见附录 D）。
+- **(a) bundle digest**: no longer exists — the digest chain was deleted with polyforge#149 B9, `internal/` has no `Digest` / `FileEntry`, and `internal/common/workflow` reads only the frontmatter's model-candidate fields. The digest description of `01-workflow-skills.md#§4.5` has been archived.
+- **(b) The human-confirmation guarantee is an accident guardrail, not adversarial defence**: the driver's `requires_human_answer` and needs_input validation are in-process mechanical guarantees; a step agent can write the capsule, and deliberate circumvention is outside the defence scope of the 2026-10-14 trust model (#135 frozen). The daemon's UDS surface (starting with the answer route in polyforge#122, merged in #164; extended to all mutating routes by repo review 2026-10-16 V-1) refuses every non-read request from this daemon's step process tree by the UDS peer credential's pid (Linux SO_PEERCRED, darwin LOCAL_PEERCRED + LOCAL_PEERPID) (DAEMON-403): it refuses when the peer, one of its ancestors or its process-group leader carries the `PF_WI_ID` + `PF_DAEMON_ID=<this daemon>` markers; it also refuses when the peer credential cannot be obtained (fail closed). The refusal surface is a middleware wrapping the whole route table: `/jobs/{wi}/answer|claim|resume-paused|pause|wrap`, `/ops/config`, `/shutdown`, `/chat/init`, `/chats/{id}/subscribe|unsubscribe|subscribe-owned|ack`; open are only pure reads (`GET /status`, `/jobs/{wi}/watch`, `/chats/{id}/subscriptions`, `/step/memories/...`) and the step's memory write `POST /step/memories` (acting only on the caller's own WI, `daemon/stepmem.go`). The answer route keeps its #122 refusal wording. Residual: a process that detached from the process group with `setsid` and cleared its environment is outside this check — this can only be deliberate, and under the trust model no further defence is added (#135 frozen). (The abandon-repair route that once existed was deleted together with repair_pending, and this instance no longer exists.)
+- **(c) `pf watch` progress fields**: merged with the supervision rewrite — the daemon watch route fills the command, command duration, recent files and tool-call count from `Observe.Progress(wi)` (see appendix D).
 
-## 附录 D：监督替换落地对照（第 9 节步骤 2–3，分支 `v2/a-supervision`） <!-- §D -->
+## Appendix D: the landing cross-check of the supervision replacement (section 9 steps 2–3, branch `v2/a-supervision`) <!-- §D -->
 
-**代码位置**
-- 契约、翻译器、判死规则：`internal/polyforge/supervise`（`contract.go` 事实/判定/无界队列/每 WI 的 `Link`；`translator.go` + `pi.go` 翻译器接口与 pi 实现；`tracker.go` 每次派发一份的合并状态；`rules.go` 规则 ⓪–④ 的纯函数 `Judge`；`defaults.go` 全局阈值）。
-- driver 一侧：`internal/polyforge/driver/supervision.go`（判定围栏、死因表、失败计数、放宽、事实发送）；`TransStepFailed` 在 `transition.go`，一次原子写入记录 attempt（带死因子类）、计数、放宽值、下一次派发形态，必要时写 blocked。
-- supervisor 一侧：`internal/polyforge/observe/monitor.go`（消费事实、每派发一份状态、判定、`driver_stalled`、事件触发推送、M4 保留）；事件底座 `observe/events.go`（每 WI 一个 JSONL 文件，逐行带 id、重启后续号、`?after` 从文件读）。
-- 失败计数等持久字段：`capsule.Step.Supervision`、`Attempt.FailureCause`、`Execution.BlockedReason`。
+**Code locations**
+- The contract, translators, death-judgement rules: `internal/polyforge/supervise` (`contract.go` facts/verdicts/the unbounded queue/the per-WI `Link`; `translator.go` + `pi.go` the translator interface and the pi implementation; `tracker.go` the merged state kept one copy per dispatch; `rules.go` the pure function `Judge` of rules ⓪–④; `defaults.go` the global thresholds).
+- The driver side: `internal/polyforge/driver/supervision.go` (the verdict fence, the cause-of-death table, failure counts, relaxing, fact sending); `TransStepFailed` is in `transition.go` and records, in one atomic write, the attempt (carrying the cause sub-kind), the count, the relaxed values and the next dispatch form, writing blocked where needed.
+- The supervisor side: `internal/polyforge/observe/monitor.go` (consuming facts, per-dispatch state, verdicts, `driver_stalled`, event-triggered push, M4 retained); the event foundation `observe/events.go` (one JSONL file per WI, every line carrying an id, numbering continuing after a restart, `?after` read from the file).
+- The persistent fields such as failure counts: `capsule.Step.Supervision`, `Attempt.FailureCause`, `Execution.BlockedReason`.
 
-**规则 ① 与 T 的后续修订（集成分支）**：规则 ① 扩展到正常结束的轮次（`ended_without_result`，见 2.3 表）；T 取 `max(3 × wall_minutes, 全局默认)`（见 2.4）。
+**Later revisions to rule ① and T (the integration branch)**: rule ① was extended to turns that ended normally (`ended_without_result`, see the 2.3 table); T takes `max(3 × wall_minutes, the global default)` (see 2.4).
 
-**阈值配置名**：旗标 `--silence-window`（X）、`--tool-window`（Y）、`--step-timeout`（T）、`--stall-window`（N）、`--model-error-grace`（规则 ① 宽限）；step 级覆盖在 workflow.md 只剩 `budget.wall_minutes`（T）——polyforge#147 C5 删除了从未被 bundle 使用的 `silence_minutes` / `tool_minutes` 键，X、Y 只有全局默认。旧旗标 `--hang-window/--idle-window/--probe-timeout/--wall-window` 已删，传入即解析失败。生产中 daemon 只经 `pf daemon ensure` 启动：T、N 来自 cli.toml `[daemon]` 表的 `step_timeout` / `stall_window`，由 daemon 从 `--config` 自行读取，ensure 的 argv 保持固定（2026-10-16 G2；优先级：显式命令行旗标 > `[daemon]` 表 > 内建默认；同表还有 `harness_root`、`operator_agent_dir`、`max_concurrent_jobs`——`pf ops max N` 即时生效、不持久化，daemon 重启后回到配置值）；X、Y、规则 ① 宽限及其余旗标只供测试/开发。
+**Threshold configuration names**: the flags `--silence-window` (X), `--tool-window` (Y), `--step-timeout` (T), `--stall-window` (N), `--model-error-grace` (rule ①'s grace); the step-level override in workflow.md is left with only `budget.wall_minutes` (T) — polyforge#147 C5 deleted the `silence_minutes` / `tool_minutes` keys that no bundle ever used, and X and Y have only the global defaults. The old flags `--hang-window/--idle-window/--probe-timeout/--wall-window` are deleted and passing them fails parsing. In production the daemon is started only via `pf daemon ensure`: T and N come from the `step_timeout` / `stall_window` of cli.toml's `[daemon]` table, read by the daemon itself from `--config`, and ensure's argv stays fixed (2026-10-16 G2; precedence: an explicit command-line flag > the `[daemon]` table > the built-in default; the same table also has `harness_root`, `operator_agent_dir`, `max_concurrent_jobs` — `pf ops max N` takes effect at once, is not persisted, and after a daemon restart returns to the configured value); X, Y, rule ①'s grace and the other flags are for tests/development only.
 
-**与正文的实现差异（均为补充，不改契约语义）**
-- 事实集合多一条 `exec_committed{version}`：事件触发推送需要"driver 提交了新 Version"的提示，否则只能回到轮询 `execution.json`。
-- 事实/判定走 `supervise.Link`（进程内）；driver 与 supervisor 之外的"harness 海量输出"由翻译器直接折叠进每派发一份的 `Tracker`（只保留最新状态，不排队）。
-- `driver_stalled`：supervisor 同时向 driver 发判定，并经 `OBNeedsRecovery(reason=driver_stalled)` 交给恢复引擎——卡死的 driver 无法自己消费判定；恢复引擎杀树并重拉，计入连续恢复失败计数器。当前 driver 自身不做 git/推送（推送在 supervisor 的推送环里，受 60s 单次上界约束），所以该规则管的是"driver 在步骤之间的任何卡死"。
-- **终态关闭的封存推送**（repo review 2026-10-16 B-7）：workflow 以 completed / failed 结束时，关闭路径照常执行一次 seal 推送（`CommitPush`，干净树只是重推 HEAD），不再假设 driver 已推送（driver 不做 git，终态 `execution.json` 与 transcript 尾只经推送到达 hub）；最终推送重试后仍失败则关闭降级为 **blocked**（本地提交保留字节，hub 从未收到终态），而不是在缺终态的链上 `SessionEnd(wrapped|failed)`；这个 blocked 关闭与其他 blocked 关闭一样带本地链 head（`head_sha`），hub 据此写 `attrs.blocked_seal`，别的机器从缺这些提交的 hub head 继续会被 `DAEMON-518` 拒绝（E.3）。
-- 前一次 transcript 作为"只读参考"仅在 capsule 里读得到时才附上（capsule 内的转录靠提交边界同步，进程刚死时可能还没有）；声明的 resume 路径不可读时，resume 退化为 fresh。
+**Implementation differences from the body text (all additions, not changing the contract semantics)**
+- The fact set has one more, `exec_committed{version}`: event-triggered push needs the hint "the driver committed a new Version", otherwise it can only go back to polling `execution.json`.
+- Facts/verdicts go through `supervise.Link` (in-process); the "massive harness output" outside the driver and supervisor is folded by the translator directly into the per-dispatch `Tracker` (keeping only the latest state, not queued).
+- `driver_stalled`: the supervisor sends a verdict to the driver and also hands it to the recovery engine through `OBNeedsRecovery(reason=driver_stalled)` — a stuck driver cannot consume the verdict itself; the recovery engine kills the tree and re-raises, counting into the consecutive-recovery-failure counter. The driver itself currently does no git/push (the push is in the supervisor's push loop, bounded by the 60s per-attempt limit), so this rule covers "any stall of the driver between steps".
+- **The seal push of a terminal close** (repo review 2026-10-16 B-7): when a workflow ends completed / failed, the close path performs one seal push as usual (`CommitPush`; on a clean tree it just re-pushes HEAD), no longer assuming the driver has pushed (the driver does no git, and the terminal `execution.json` and the transcript tail reach the hub only through a push); if the final push still fails after retries, the close degrades to **blocked** (the local commits keep their bytes, the hub never received the terminal state), rather than `SessionEnd(wrapped|failed)` on a chain lacking the terminal state; this blocked close, like other blocked closes, carries the local chain head (`head_sha`), from which the hub writes `attrs.blocked_seal`, and another machine continuing from the hub head lacking those commits is refused with `DAEMON-518` (E.3).
+- The previous transcript is attached as "read-only reference" only when it can be read inside the capsule (a transcript inside the capsule is synced at commit boundaries and may not be there yet when the process has just died); when the declared resume path is unreadable, resume degrades to fresh.
 
-## 附录 E：运行中实际存在的契约清单（自代码生成，2026-10-16，decision 2026-10-16 G17） <!-- §E -->
+## Appendix E: the list of contracts that actually exist at runtime (generated from the code, 2026-10-16, decision 2026-10-16 G17) <!-- §E -->
 
-本附录只登记现状，不新增也不改变任何机制：以下各项在代码里是活的、有读者或有外部可见面，但此前设计文档里查不到。来源即表中的常量与文件；与代码不一致时以代码为准，并回改本表。
+This appendix only registers the status quo and adds or changes no mechanism: each item below is live in the code and has readers or an externally visible surface, yet could not be found in the earlier design documents. The source is the constants and files in the table; where it disagrees with the code, the code wins, and this table is corrected.
 
-### E.1 事件 kind（`<data-dir>/events/wi-<id>.jsonl`，daemon 级为 `events/daemon.jsonl`；`protocol.EventEntry` 一行一条）
+### E.1 Event kinds (`<data-dir>/events/wi-<id>.jsonl`, the daemon level being `events/daemon.jsonl`; one `protocol.EventEntry` per line)
 
-事件是"新闻"不是状态：执行态权威始终是 capsule 的 `runtime-state/execution.json`（INV-1），追加失败只降级不影响正确性（`observe/events.go`）。`pf watch` 读取的就是这些行。
+Events are "news", not state: the execution-state authority is always the capsule's `runtime-state/execution.json` (INV-1), and an append failure only degrades without affecting correctness (`observe/events.go`). `pf watch` reads exactly these lines.
 
-| kind | 发射者 | 含义 |
+| kind | Emitter | Meaning |
 |---|---|---|
-| `job_started` / `job_stopped` | observe（`monitor.go`、`observe.go`） | 监督开始 / 结束一个 job |
-| `needs_recovery` | observe `monitor.go` | 同一 attempt 内的信号要求恢复（reason/detail/spawn_n） |
-| `wi_agent_rederived` | observe `monitor.go` | 恢复后的后继 step 进程已起（spawn_n） |
-| `pending_invalid` | observe `monitor.go` | `execution.json` 的 `pending_question` 缺 `id`，状态面不把它当待答问题（每次看到一条） |
-| `transcript_missing` | observe `monitor.go` | 提交边界找不到本次派生的 harness 会话文件（F3，仅告警，提交照常） |
-| `published` / `push_failed` / `push_backpressure` / `push_poisoned_local` | observe `monitor.go`；`push_failed` 另由 runtime 封存路径经 EventTap 发出（`runtime.go`、`restart.go`） | capsule 链推送成功 / 失败 / 背压 / 本地 gitlink 预检拒绝（后者不计入 M8） |
-| `session_superseded` | observe `session.go`；runtime `runtime.go` | 周期 session 校验发现另一 daemon 持有该 WI（载荷只有公开指纹） |
-| `session_verify_failed` | observe `session.go` | 周期 session 校验连不上 aihub（只记录，不采取行动） |
-| `queue_fetch_denied` | daemon `daemon.go`（`wi=""`） | auto-pull 的 ready 队列拉取被 401/403/404 拒绝；每个"健康→拒绝"周期一次 |
-| `submit_rejected` / `submit_dropped` | daemon `restartsignal.go`、`modes.go`、`daemon.go` | 已应答 accepted 的 submit 在派发时失败 / 重启后不再重放（body 写原因） |
-| `daemon_restarted` | daemon `restartsignal.go` | 写入每个重启对账恢复或停放的 WI；body 带该 job 的状态 |
-| `capsule_missing` / `project_unmapped` / `session_verify_outage` | runtime `restart.go` | 重启对账把 WI 置 blocked 的原因（同时是 blocked 原因码） |
-| `session_released` | runtime `restart.go` | 重启时发现 WI 已被别的 session 持有：杀进程树、隔离 capsule、丢弃记录 |
-| `interrupted_seal` / `pending_close_replay` / `pending_close_replay_failed` / `seal_finished_locally` | runtime `restart.go` | 中断的封存以 blocked 收尾 / 重放持久化的收尾意图 / 该重放未被 hub 接受（记录保留，退避重试） / hub 已不再持有 session，本地完成封存 |
-| `missing_midflight_capsule` | runtime `recover.go` | 运行中 capsule 消失，拒绝静默重建（#103） |
-| `claim_paused_ended_blocked` | runtime `runtime.go` | 领取尚在克隆时被 `pf pause`：取消克隆并以 blocked 收尾（§6） |
-| `retired_env_ignored` | daemon `daemon.go`（`wi=""`） | 已退役的 `POLYFORGE_*` 变量在 daemon 环境里且与解析值不同（只告警） |
-| `carrier_push_failed` / `task_ref_diverged` / `task_wip_skipped` / `task_wip_not_applied` | gitops `gitops.go`、`wip.go` | 任务仓库 carrier / WIP ref 推送失败 / carrier 分叉 / WIP 快照剔除的路径 / 恢复时未应用 WIP（§14.2、§14.3） |
-| `exec_init` / `step_started` / `step_done` / `gate_verdict` / `needs_input` / `incomplete` / `rewind` / `terminal` / `answered` / `interrupted` / `resumed` / `step_failed` / `blocked` / `candidate_switched` / `candidates_exhausted` | driver `transition.go`（`emitLocked` 按已提交的状态转移发出） | 状态转移的进度新闻；body 带 spawn_n 与 step |
-| `step_dead` / `verdict_stale` / `schema_fault` | driver `driver.go`、`supervision.go` | driver 收到的监督裁决（cause/证据）/ 过期裁决被丢弃 / 结果信封持续被拒（契约坏了而非模型问题）；`driver_stalled` 只记在 `needs_recovery.reason` |
-| `envelope_rejected` / `gate_verdict_bound` / `human_gate_unasked` | driver `result.go` 常量 | 信封校验拒绝（原文带错误）/ gate 步以 completed 交了 fail 判定，被改绑为 gate_failed / `requires_human_answer: if_asked` 步零提问完成 |
-| `output_schema_violation` / `output_schema_unloadable` | driver `outputschema.go` | 输出不符合声明的 schema / schema 读不出来 |
-| `authored_tests_rebaselined` | driver `testfiles.go` | 人工批准的测试文件改动成为新基线 |
+| `job_started` / `job_stopped` | observe (`monitor.go`, `observe.go`) | supervision starts / ends a job |
+| `needs_recovery` | observe `monitor.go` | a signal within the same attempt demands recovery (reason/detail/spawn_n) |
+| `wi_agent_rederived` | observe `monitor.go` | the successor step process after recovery has started (spawn_n) |
+| `pending_invalid` | observe `monitor.go` | the `pending_question` of `execution.json` lacks `id`, and the state surface does not treat it as a pending question (one per sighting) |
+| `transcript_missing` | observe `monitor.go` | at a commit boundary the harness session file of this spawn cannot be found (F3, warning only, the commit proceeds as usual) |
+| `published` / `push_failed` / `push_backpressure` / `push_poisoned_local` | observe `monitor.go`; `push_failed` is also emitted by the runtime seal path through the EventTap (`runtime.go`, `restart.go`) | the capsule chain push succeeded / failed / backpressure / the local gitlink precheck refused (the latter not counted into M8) |
+| `session_superseded` | observe `session.go`; runtime `runtime.go` | the periodic session verification finds another daemon holding the WI (the payload carries only the public fingerprint) |
+| `session_verify_failed` | observe `session.go` | the periodic session verification cannot reach aihub (recorded only, no action taken) |
+| `queue_fetch_denied` | daemon `daemon.go` (`wi=""`) | the auto-pull's ready-queue fetch was refused with 401/403/404; once per "healthy→refused" cycle |
+| `submit_rejected` / `submit_dropped` | daemon `restartsignal.go`, `modes.go`, `daemon.go` | a submit that was answered accepted failed at dispatch / is no longer replayed after a restart (the body states the reason) |
+| `daemon_restarted` | daemon `restartsignal.go` | written to every WI that restart reconciliation recovered or parked; the body carries that job's state |
+| `capsule_missing` / `project_unmapped` / `session_verify_outage` | runtime `restart.go` | the reason restart reconciliation puts a WI into blocked (also the blocked reason code) |
+| `session_released` | runtime `restart.go` | at restart the WI is found already held by another session: kill the process tree, quarantine the capsule, discard the record |
+| `interrupted_seal` / `pending_close_replay` / `pending_close_replay_failed` / `seal_finished_locally` | runtime `restart.go` | an interrupted seal wrapped up as blocked / the persisted close intent replayed / that replay was not accepted by the hub (the record kept, retried with backoff) / the hub no longer holds the session and the seal is finished locally |
+| `missing_midflight_capsule` | runtime `recover.go` | the in-flight capsule is gone and a silent rebuild is refused (#103) |
+| `claim_paused_ended_blocked` | runtime `runtime.go` | a claim still cloning was hit by `pf pause`: the clone canceled and wrapped up as blocked (§6) |
+| `retired_env_ignored` | daemon `daemon.go` (`wi=""`) | a retired `POLYFORGE_*` variable is in the daemon environment and differs from the resolved value (warning only) |
+| `carrier_push_failed` / `task_ref_diverged` / `task_wip_skipped` / `task_wip_not_applied` | gitops `gitops.go`, `wip.go` | a task-repo carrier / WIP ref push failed / the carrier diverged / the paths pruned from a WIP snapshot / a WIP not applied at restore (§14.2, §14.3) |
+| `exec_init` / `step_started` / `step_done` / `gate_verdict` / `needs_input` / `incomplete` / `rewind` / `terminal` / `answered` / `interrupted` / `resumed` / `step_failed` / `blocked` / `candidate_switched` / `candidates_exhausted` | driver `transition.go` (`emitLocked` emits per committed state transition) | progress news of state transitions; the body carries spawn_n and step |
+| `step_dead` / `verdict_stale` / `schema_fault` | driver `driver.go`, `supervision.go` | the supervision verdict the driver received (cause/evidence) / a stale verdict was dropped / result envelopes keep being rejected (the contract is broken rather than a model problem); `driver_stalled` is recorded only in `needs_recovery.reason` |
+| `envelope_rejected` / `gate_verdict_bound` / `human_gate_unasked` | driver `result.go` constants | envelope validation rejected (the original text carries the error) / a gate step delivered a fail verdict as completed and was rebound to gate_failed / a `requires_human_answer: if_asked` step completed with zero questions |
+| `output_schema_violation` / `output_schema_unloadable` | driver `outputschema.go` | the output does not match the declared schema / the schema cannot be read |
+| `authored_tests_rebaselined` | driver `testfiles.go` | a human-approved change to test files became the new baseline |
 
-### E.2 chat / watch 文件
+### E.2 chat / watch files
 
-| 路径 | 写者 | 内容 |
+| Path | Writer | Content |
 |---|---|---|
-| `<data-dir>/chats.json` | daemon `identity.go` | (harness, harness-session) → chat id，让恢复的会话沿用同一 chat；chat id 只是通知标签，不是凭据 |
-| `<data-dir>/chat-subs.json` | daemon `chatsubs.go` | 每个 chat 订阅的 WI、事件游标与已送达的决策键；负责人路由加的订阅另存 `origin_chat`（与 origin chat 的订阅共用送达记录）；原子写 |
-| `$XDG_RUNTIME_DIR/polyforge/chat-<chat>.{lock,pid,status}`（无 `XDG_RUNTIME_DIR` 时为临时目录下按 uid 区分的 0700 目录） | 常驻 watcher `watcher/files.go` | 单实例锁、pid 文件、该 chat 的进度文件；临时目录不是本人所有或可被他人写入时拒绝使用 |
+| `<data-dir>/chats.json` | daemon `identity.go` | (harness, harness-session) → chat id, so a resumed session keeps the same chat; the chat id is only a notification label, not a credential |
+| `<data-dir>/chat-subs.json` | daemon `chatsubs.go` | the WIs each chat subscribes to, the event cursors and the delivered decision keys; a subscription added by owner routing additionally stores `origin_chat` (sharing the delivery record with the origin chat's subscription); written atomically |
+| `$XDG_RUNTIME_DIR/polyforge/chat-<chat>.{lock,pid,status}` (without `XDG_RUNTIME_DIR`, a 0700 directory per uid under the temp directory) | the resident watcher `watcher/files.go` | the single-instance lock, the pid file and that chat's progress file; a temp directory not owned by the user or writable by others is refused |
 
-### E.3 `attrs.blocked_seal` 与 `sealed_head` / `sealed_machine`
+### E.3 `attrs.blocked_seal` and `sealed_head` / `sealed_machine`
 
-- `work_items.attrs.blocked_seal = {"head": <sha>, "machine": <id>}`（`core/session.go` `blockedSealKey`）：带 head 的 `End(blocked)` 写入，其他任何 End/Pause 清除；不改 schema，搭在业务 attrs JSON 上。
-- 领取应答的 `sealed_head` / `sealed_machine`（`api/types.go` `SessionClaim`）由它读出：继续一个 blocked WI 时 clone 的 head 必须等于它：封存机从隔离 git-dir 取回该 head 后继续，另一台机器（或封存机上已找不到该 head）则拒绝（第 7 节"跨 daemon 继续"）。`attrs` 不在 PATCH 可更新键中（`core/workitem.go` `patchableFields`，只在 create 时写入），用户无法改写或删掉它（2026-10-16 wave 4 按代码更正：原文称 PATCH 可删）。
-- 与 `archive/02-aihub-core.md#§2.6` INV-2c（attrs 不得承载执行态字段）的关系：02 已归档，不再是权威；现行代码是权威。代码里 create 只拒顶层保留键 `blocked_seal`（`core/workitem.go` `checkAttrs`；保留键，不是执行态），带它即 `CORE-400 EXECUTION_STATE_REJECTED`；执行态不进 attrs 由 daemon 只写 capsule 保证。现行行为：`blocked_seal` 只由 aihub 在 session 事务里读写（`setBlockedSealTx` 直接 UPDATE，不经 create 校验 / `blockedSealTx`），daemon 只能经 `End(blocked)` 间接写入，用户既不能在 create 时带入也不能 PATCH；它不是执行态（执行态的唯一权威仍是 capsule 的 `runtime-state/execution.json`），只记录 blocked 封存时的交接点——哪台机器、哪个 head。读不到它（键不存在或 attrs 解析失败）时领取应答的 `sealed_head` 为空，跨机继续不做 head 校验（fail open）。不做迁移（G17 选 A，I-5 不做 D）。
+- `work_items.attrs.blocked_seal = {"head": <sha>, "machine": <id>}` (`blockedSealKey` in `core/session.go`): written by an `End(blocked)` carrying a head and cleared by any other End/Pause; no schema change, riding on the business attrs JSON.
+- The claim answer's `sealed_head` / `sealed_machine` (`SessionClaim` in `api/types.go`) are read from it: when continuing a blocked WI the cloned head must equal it: the sealing machine continues after retrieving that head from the quarantined git-dir, while another machine (or the sealing machine no longer finding that head) is refused (section 7 "cross-daemon continue"). `attrs` is not among the PATCH-updatable keys (`patchableFields` in `core/workitem.go`, written only at create), so a user can neither rewrite nor delete it (corrected to the code in wave 4 of 2026-10-16: the original said PATCH could delete it).
+- Its relation to INV-2c of `archive/02-aihub-core.md#§2.6` (attrs must not carry execution-state fields): 02 is archived and no longer the authority; the current code is. In the code, create refuses only the top-level reserved key `blocked_seal` (`checkAttrs` in `core/workitem.go`; a reserved key, not execution state), and carrying it gives `CORE-400 EXECUTION_STATE_REJECTED`; that execution state stays out of attrs is guaranteed by the daemon writing only the capsule. Current behavior: `blocked_seal` is read and written only by aihub inside the session transaction (`setBlockedSealTx` UPDATEs directly, bypassing create validation / `blockedSealTx`), the daemon can write it only indirectly through `End(blocked)`, and a user can neither bring it in at create nor PATCH it; it is not execution state (the sole authority of execution state remains the capsule's `runtime-state/execution.json`), it only records the handoff point at a blocked seal — which machine, which head. When it cannot be read (the key absent or attrs failing to parse) the claim answer's `sealed_head` is empty and a cross-machine continue does no head check (fail open). No migration is done (G17 chose A, I-5 did not do D).
 
-### E.4 daemon data dir（默认 `~/.local/share/polyforge`）
+### E.4 The daemon data dir (default `~/.local/share/polyforge`)
 
-| 文件 | 写者 | 内容 |
+| File | Writer | Content |
 |---|---|---|
-| `daemon-id` | daemon `identity.go` | 首次启动记录的 daemon id；之后与 flag/env 不一致即拒绝启动 |
-| `daemon.lock` / `ensure.lock` | daemon `daemon.go` / `ensure.go` | 单 daemon flock / `pf daemon ensure` 与安装器互斥 |
-| `daemon.log` | `pf daemon ensure` 的重启循环 | daemon 输出，超过 10 MiB 轮转为 `.1` |
-| `daemon.sock` | daemon `main.go` | 未配置 socket 时 CLI 与 daemon 共用的缺省 UDS（`cli.DataDir`，`reference.md#§6.1`） |
-| `daemon-state.json` | daemon `modes.go` | auto 开关（`pf ops max N` 不持久化） |
-| `submit-queue.json` | daemon `modes.go` | 已接受、待派发的 submit 队列（重启后重放） |
-| `runtime-state.json` | runtime `runtime.go` | runtime 的 job 记录（旧文档称作 `state.json`） |
-| `claiming.json` | runtime `claiming.go` | 领取前的持久化意图日志（B1，`reference.md#§3.5`），崩溃后重放 |
-| `manual-models.json` | runtime `manualmodels.go` | 每个 WI 的 `pf submit --models` 列表（只在本机有效） |
-| `events/wi-<id>.jsonl`、`events/daemon.jsonl` | observe `events.go` | 每 WI 一个事件 JSONL（seq = 文件末行 seq + 1，跨重启单调）；静默超过 30 天的文件（含 daemon.jsonl）在 daemon 启动时删除 |
-| `chats.json`、`chat-subs.json` | 见 E.2 | |
-| `git/<wi>.git` | runtime | capsule 的外置 git-dir（agent 碰不到 hooks/config） |
-| `release/<tag>`、`release/current` | `tools/install.sh` | release checkout；daemon 以 `release/current/workflows` 为 `-workflows-dir` |
-| `step-agent/`、`step-agent-sessions/`、`claude-config/` | runtime（harness root，默认即 data dir） | 专用 pi agent 目录 / pi 会话 / Claude Code 配置目录（其 `settings.json` env 块是凭据权威层） |
+| `daemon-id` | daemon `identity.go` | the daemon id recorded at first startup; startup is refused afterwards if it disagrees with the flag/env |
+| `daemon.lock` / `ensure.lock` | daemon `daemon.go` / `ensure.go` | the single-daemon flock / mutual exclusion between `pf daemon ensure` and the installer |
+| `daemon.log` | the restart loop of `pf daemon ensure` | daemon output, rotated to `.1` beyond 10 MiB |
+| `daemon.sock` | daemon `main.go` | the default UDS shared by the CLI and the daemon when no socket is configured (`cli.DataDir`, `reference.md#§6.1`) |
+| `daemon-state.json` | daemon `modes.go` | the auto switch (`pf ops max N` is not persisted) |
+| `submit-queue.json` | daemon `modes.go` | the queue of accepted, not-yet-dispatched submits (replayed after a restart) |
+| `runtime-state.json` | runtime `runtime.go` | the runtime's job records (called `state.json` in old documents) |
+| `claiming.json` | runtime `claiming.go` | the persistent intent log before a claim (B1, `reference.md#§3.5`), replayed after a crash |
+| `manual-models.json` | runtime `manualmodels.go` | each WI's `pf submit --models` list (effective on this machine only) |
+| `events/wi-<id>.jsonl`, `events/daemon.jsonl` | observe `events.go` | one event JSONL per WI (seq = the last line's seq + 1, monotonic across restarts); files silent for over 30 days (daemon.jsonl included) are deleted at daemon startup |
+| `chats.json`, `chat-subs.json` | see E.2 | |
+| `git/<wi>.git` | runtime | the capsule's externalized git-dir (hooks/config out of the agent's reach) |
+| `release/<tag>`, `release/current` | `tools/install.sh` | release checkouts; the daemon takes `release/current/workflows` as `-workflows-dir` |
+| `step-agent/`, `step-agent-sessions/`, `claude-config/` | runtime (the harness root, by default the data dir) | the dedicated pi agent directory / pi sessions / the Claude Code configuration directory (whose `settings.json` env block is the credential authority layer) |
 
-### E.5 capsule 布局（`common/capsule/capsule.go` 及各常量）
+### E.5 The capsule layout (`common/capsule/capsule.go` and its constants)
 
-| 路径 | 内容 |
+| Path | Content |
 |---|---|
-| `capsule.json`、`.gitignore` | capsule 身份（含各仓库领取时 SHA）/ 只忽略 `repos/`、`artifacts/release-*/` 与 `sync/` |
-| `runtime-state/work-item.json` | daemon 写入的 WI 快照 |
-| `runtime-state/execution.json` | 执行态唯一权威（结构：`capsule.Execution`） |
-| `runtime-state/spawn-journal.jsonl` | 每次 step 派生一行（harness、会话、transcript 路径） |
-| `runtime-state/pending-results/<spawn_n>.json` | 结果信封的唯一落点：step agent 经 `pf result submit` 交付，由 daemon（`POST /step/result`）盖上派发身份后原子写入 |
-| `runtime-state/recalled-memories.json` | 领取时的记忆快照（any-term 排序检索，见 `06-memory-search.md#§8`）；driver 以"非约束性历史"注入 step 提示（G3），每条一行 `[type] title`，至多 10 行 |
-| `runtime-state/memory-policy.json` | 领取时该项目生效的记忆策略（`.polyforge.yaml` 的 `memory_policy`，缺段为内置默认）；driver 渲染进最后一步的 wrap 摘要职责节 |
-| `artifacts/steps/<step>/s<spawn_n>/result.json` | 已接受信封的归档 |
-| `artifacts/handoff-<step>.md` | 声明 `handoff` 的步骤按路径约定写出，后续 inherit 步读取 |
-| `session/session-<token>.jsonl` | harness 会话文件，在提交边界同步进来 |
-| `sync/materialized.json` | daemon 私有（不进链）：bundle 物化完成标记（恢复前的信任门） |
-| `workflows/<bundle>/`、`agents/` | 物化的 workflow bundle / step 定义副本（`agents/` 是 decision 2026-10-16 G4 的删除对象） |
-| `repos/<name>/`、`logs/`、`artifacts/` | 任务仓库 clone（各有自己的 git 历史）/ 日志 / step 产出 |
+| `capsule.json`, `.gitignore` | the capsule identity (including each repo's SHA at claim) / ignoring only `repos/`, `artifacts/release-*/` and `sync/` |
+| `runtime-state/work-item.json` | the WI snapshot written by the daemon |
+| `runtime-state/execution.json` | the sole authority of execution state (structure: `capsule.Execution`) |
+| `runtime-state/spawn-journal.jsonl` | one line per step spawn (harness, session, transcript path) |
+| `runtime-state/pending-results/<spawn_n>.json` | the sole landing spot of result envelopes: the step agent delivers through `pf result submit`, and the daemon (`POST /step/result`) stamps the dispatch identity and writes atomically |
+| `runtime-state/recalled-memories.json` | the claim-time memory snapshot (any-term ranked retrieval, see `06-memory-search.md#§8`); the driver injects it into the step prompt as "non-binding history" (G3), one line `[type] title` per entry, at most 10 lines |
+| `runtime-state/memory-policy.json` | the memory policy in effect for that project at claim (`memory_policy` of `.polyforge.yaml`, the built-in default when the section is missing); the driver renders it into the last step's wrap-summary duty section |
+| `artifacts/steps/<step>/s<spawn_n>/result.json` | the archive of accepted envelopes |
+| `artifacts/handoff-<step>.md` | written by a step declaring `handoff` by path convention, read by later inherit steps |
+| `session/session-<token>.jsonl` | the harness session file, synced in at commit boundaries |
+| `sync/materialized.json` | daemon-private (not in the chain): the marker that bundle materialization completed (the trust gate before recovery) |
+| `workflows/<bundle>/`, `agents/` | the materialized workflow bundle / step definition copy (`agents/` is a deletion target of decision 2026-10-16 G4) |
+| `repos/<name>/`, `logs/`, `artifacts/` | task repo clones (each with its own git history) / logs / step outputs |
