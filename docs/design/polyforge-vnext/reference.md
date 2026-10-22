@@ -453,6 +453,6 @@ one fragment per verb under `verbs/` (`ship.md` only says delivery is the workfl
 Archived (`archive/`, 2026-10-16): `00-architecture`, `02-aihub-core`, `03-execution-capsule`,
 `04-local-runtime`, `05-sync-revision-recovery`, `07-deployment-pilot`, `v1-architecture-spec`,
 `v1-spec-full`, `v1.5-session-model`, `v1.5-api-contract`, `v1.5-change-coverage-rules` (its rules now
-live in README "Contributing & filing work items"). They describe the v0/v1 design (WI Agent, owner
+live in [docs/contributing.md](../../contributing.md)). They describe the v0/v1 design (WI Agent, owner
 generations, Revision/CAS sync, interactive/batch/drain modes, `pf upgrade`, …). Live mechanisms they
 held were moved here or into `v2-converge.md` §14 / Appendix E. Lessons: `v0-lessons-ledger.md`.
