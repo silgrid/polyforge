@@ -87,21 +87,21 @@ forms.
   lane](../workflows/autopilot/workflow.md), the [feature-full
   lane](../workflows/feature-full/workflow.md). The shipped bundles are
   listed in the design docs' [system
-  reference](design/polyforge-vnext/reference.md#71-bundles-and-materialization);
+  reference](design/polyforge-vnext/reference.md#71-bundles-and-materialization-);
   a lane's own narrative is its `workflows/<bundle>/workflow.md`.
 - **Gate** -- a step that can FAIL the run and rewind it to an earlier step;
   which steps are gates is the lane's own: the autopilot lane gates
   verification and deliver, the feature-full lane grill-review, verification,
   review and deliver. What each gate's FAIL means is the design docs'
-  [execution section](design/polyforge-vnext/reference.md#7-execution).
+  [execution section](design/polyforge-vnext/reference.md#7-execution-).
 - **Rewind** -- a gate FAIL sending the run back to an earlier step to redo;
   bounded per bundle, and past the bounds the run ends failed. The bounds are
-  the same [execution section](design/polyforge-vnext/reference.md#7-execution)'s
+  the same [execution section](design/polyforge-vnext/reference.md#7-execution-)'s
   subject.
 - **Capsule** -- the work item's private workspace directory (`artifacts/`,
   `repos/`, `runtime-state/`) that the daemon creates, drives, and commits to
   aihub. The contract is the design docs' [capsule
-  section](design/polyforge-vnext/reference.md#8-capsule-and-git-chain).
+  section](design/polyforge-vnext/reference.md#8-capsule-and-git-chain-).
 - **Chat identity** -- the id of one interactive harness conversation
   (`chat_...`): how the daemon knows which chat to wake for a decision. The
   adapter wiring is [SKILL.md](../skills/polyforge/SKILL.md)'s chat identity
@@ -118,7 +118,7 @@ The order the system actually runs:
    when the new one clearly waits on a running ticket.
 2. **Submit.** `pf submit <id>` claims it on this machine's daemon and the Go
    execution driver takes over (the mechanism is the design docs' [execution
-   section](design/polyforge-vnext/reference.md#7-execution)'s subject).
+   section](design/polyforge-vnext/reference.md#7-execution-)'s subject).
 3. **Grill questions.** A lane's clarification checkpoint asks its questions
    after submit, when the run reaches it. They arrive as a needs_input wake-up
    line: read the question with `pf watch <id> --once`, answer with
