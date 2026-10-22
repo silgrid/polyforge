@@ -35,6 +35,11 @@
 # nothing changes: wait, pause them (`pf pause <wi>`), or override (their
 # agent trees are terminated and recover at the next daemon start):
 #   curl ... | PF_INSTALL_FORCE=1 bash -s -- <api-key> [server-host]
+# The release channel is PF_INSTALL_REPO (owner/name; unset or empty =
+# silgrid/polyforge): the latest release, the pf asset + SHA256SUMS, the
+# release checkout and the pi entry match all come from that repo. Pass it
+# on every run — it is not remembered:
+#   curl ... | PF_INSTALL_REPO=<owner>/<name> bash -s -- <api-key> [server-host]
 #
 # Requires: gh authenticated (gh needs a login, even for a public repo);
 # gh, curl, python3 and git on PATH (checked and reported, never
@@ -46,7 +51,7 @@ set -e
 KEY="${1:?usage: install.sh <api-key> [server-host]}"
 HOST="${2:-${PF_HOST:-}}"
 API="http://$HOST:8080"
-REPO="silgrid/polyforge"
+REPO="${PF_INSTALL_REPO:-silgrid/polyforge}"
 BIN="${PF_BIN:-/usr/local/bin/pf}"
 CFG="$HOME/.config/polyforge/cli.toml"
 # has_config: this machine already has its config (kept, never rewritten)
