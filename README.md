@@ -8,6 +8,7 @@ execution driver).
 
 ## Documentation
 
+- 中文导读 (Chinese orientation): [docs/zh.md](docs/zh.md)
 - What a term means: [concepts and glossary](docs/concepts.md) — every
   term a newcomer meets, defined once
 - Installing, platforms, upgrading a work machine: [install](docs/install.md)
