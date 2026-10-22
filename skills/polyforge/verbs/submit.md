@@ -30,8 +30,9 @@ or duplicate candidates, else a local bad-input refusal. Every candidate is
 claude:claude-opus-5-5:high,pi:sub2api-glm/glm-5.3`); a candidate without a
 prefix, with an unknown prefix, an empty model or an effort the harness does
 not take is refused up front, naming it. Syntax and precedence (`--models`
-is the highest level): the README's "Extending › Model candidates"
-subsection. Before the daemon is
+is the highest level): the "Model candidates" subsection of
+docs/extending.md (routing to docs/reference/config.md's `steps:`
+section, the one authority). Before the daemon is
 involved, the CLI prechecks the work item against Core with the caller's own
 api key, so obviously doomed submissions fail fast with a visible verdict.
 

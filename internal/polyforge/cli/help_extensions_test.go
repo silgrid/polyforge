@@ -15,23 +15,16 @@ import (
 // the README "Extending" subsection that owns it; `pf help` lists the
 // topic; doctor's config failures point at the same place.
 
-// readmeExtendingSubsections answers the `### ` headings of the README's
-// `## Extending` section, in order.
-func readmeExtendingSubsections(t *testing.T) []string {
+// extendingSubsections answers the `### ` headings of
+// docs/extending.md (the extension-point index page), in order.
+func extendingSubsections(t *testing.T) []string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "README.md"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "extending.md"))
 	if err != nil {
-		t.Fatalf("read README.md: %v", err)
-	}
-	_, after, ok := strings.Cut(string(raw), "\n## Extending\n")
-	if !ok {
-		t.Fatal("README.md has no `## Extending` section")
-	}
-	if i := strings.Index(after, "\n## "); i >= 0 {
-		after = after[:i]
+		t.Fatalf("read docs/extending.md: %v", err)
 	}
 	var subs []string
-	for _, line := range strings.Split(after, "\n") {
+	for _, line := range strings.Split(string(raw), "\n") {
 		if s, ok := strings.CutPrefix(line, "### "); ok {
 			subs = append(subs, s)
 		}
@@ -45,10 +38,10 @@ func TestHelpExtensionsIndexesTheReadmeSubsections(t *testing.T) {
 		t.Fatalf("pf help extensions exited %d; stderr=%s stdout=%s", code, stderr, stdout)
 	}
 	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
-	if len(lines) < 2 || !strings.Contains(lines[0], `README "Extending"`) {
-		t.Fatalf("want a header naming README \"Extending\" then the items:\n%s", stdout)
+	if len(lines) < 2 || !strings.Contains(lines[0], `docs/extending.md`) {
+		t.Fatalf("want a header naming docs/extending.md then the items:\n%s", stdout)
 	}
-	item := regexp.MustCompile(`^  \S.*\S\s+README Extending › (.+)$`)
+	item := regexp.MustCompile(`^  \S.*\S\s+docs/extending\.md › (.+)$`)
 	guide := regexp.MustCompile(`^Daily-use guide: docs/user-guide\.md$`)
 	var got []string
 	guideSeen := false
@@ -66,16 +59,16 @@ func TestHelpExtensionsIndexesTheReadmeSubsections(t *testing.T) {
 	if !guideSeen {
 		t.Fatalf("the extensions index must name the daily-use guide (docs/user-guide.md, polyforge#241):\n%s", stdout)
 	}
-	want := readmeExtendingSubsections(t)
+	want := extendingSubsections(t)
 	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("help index subsections %q, want exactly the README Extending subsections %q (one line each, same order)", got, want)
+		t.Fatalf("help index subsections %q, want exactly the docs/extending.md subsections %q (one line each, same order)", got, want)
 	}
 	// polyforge#243/#250: the summarize line names all of its keys
 	if !strings.Contains(stdout, ".polyforge.yaml summarize.models, summarize.language, summarize.interval_sec") {
 		t.Fatalf("the index does not name summarize.language and summarize.interval_sec:\n%s", stdout)
 	}
 	if len(want) != 9 {
-		t.Fatalf("README Extending has %d subsections %q, want the 9 inventory items", len(want), want)
+		t.Fatalf("docs/extending.md has %d subsections %q, want the 9 inventory items", len(want), want)
 	}
 }
 
@@ -97,7 +90,7 @@ func TestHelpRegistryListsTheExtensionsTopic(t *testing.T) {
 }
 
 func TestDoctorConfigFailuresPointAtExtending(t *testing.T) {
-	const hint = `README "Extending" (pf help extensions)`
+	const hint = `docs/extending.md (pf help extensions)`
 	t.Run("workspace mapping", func(t *testing.T) {
 		srv := aiSever(t, &reqRecorder{}, nil, 0, "")
 		env := doctorServerConfig(t, srv.URL, "k", "")

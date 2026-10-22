@@ -57,8 +57,9 @@ projects = ["polyforge", "pi-web"]
 projects = ["demo"]
 ```
 
-`~` at the start of a key does NOT expand (the key must be absolute
-already); keys must be absolute with no trailing separator. Every mapped
+`~` at the start of a key expands to the home directory (`~` alone or
+`~/…`); the result must be absolute with no trailing separator (never
+silently trimmed). Every mapped
 workspace directory must pre-exist; the daemon creates and writes only
 `capsules/` inside each and refuses to start when any is missing or
 unusable (or when the config carries zero sections). Capsules route per
@@ -133,7 +134,8 @@ daemon's installed workflows, a project the cli.toml mapping does not
 route to this workspace, and duplicate model ids in one list are all
 load errors. The retired top-level `models:` section (the pre-#169
 shape) refuses with a migration message; `projects:` /
-`workflow_defaults:` are unknown keys like any other. YAML merge keys
+`workflow_defaults:` are unknown keys like any other (upgrading from
+the pre-#169 shape: [upgrade.md](upgrade.md)). YAML merge keys
 (`<<`) are refused — share a list with anchors,
 `models: &x [...]` / `{ models: *x }`.
 

@@ -257,7 +257,8 @@ Seven standing rules, binding on every polyforge session:
    --models`). The daemon reads it fresh before every claim; an invalid
    file refuses the claim (DAEMON-414) WITHOUT claiming — the work item
    stays queued for other machines. Schema, syntax and precedence: the
-   README's "Extending › Model candidates" subsection (via `verbs/init.md`).
+   "Model candidates" subsection of docs/extending.md, routing to
+   docs/reference/config.md's `steps:` section (via `verbs/init.md`).
    Its second optional section, `memory_policy:` (`default` / `<project>`:
    `{ record: [...], skip: [...] }`, a project's lists appended to
    `default`'s), says what the last step puts into the work item's

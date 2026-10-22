@@ -80,8 +80,7 @@ surface that owns the mechanism; this guide never restates the mechanism.
   [pf file](../skills/polyforge/verbs/file.md).
 - **Bundle** -- the workflow a work item runs, chosen at filing
   (`--bundle autopilot`); the shipped bundles live under `workflows/`, and the
-  shape is the [README's Custom workflow
-  bundles](../README.md#custom-workflow-bundles) subsection.
+  shape is the [bundle-authoring chapter](bundles.md).
 - **Lane** -- informal for one bundle's flow: the [autopilot
   lane](../workflows/autopilot/workflow.md), the [feature-full
   lane](../workflows/feature-full/workflow.md). The shipped bundles are
@@ -245,4 +244,4 @@ branches.
 | Upgrading (the server-side schema story) | [upgrade.md](upgrade.md), plus re-running the installer line |
 | Admin and operator work (users, api-keys, projects, machines, deploy) | the [README](../README.md)'s Quickstart and the management verbs (`pf users`, `pf api-keys`, `pf projects`, `pf machines`) |
 | Releases | the [release reference](reference/release.md): maintainer-only, cut on explicit owner request |
-| Extending polyforge (config keys, custom bundles) | `pf help extensions` and the [README's Extending section](../README.md#extending) |
+| Extending polyforge (config keys, custom bundles) | `pf help extensions` and [extending](extending.md), the extension-point index |
