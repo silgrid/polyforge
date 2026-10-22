@@ -278,32 +278,98 @@ func TestW254ConceptsSixteenTerms(t *testing.T) {
 	}
 }
 
+// w254Sentences answers the section's statements: each bullet or
+// paragraph, emphasis markers dropped and whitespace normalized, split
+// into sentences — the unit a framing must hold within, so a doc that
+// names the right tokens in the wrong framing (e.g. "feature-full
+// merges unattended") does not pass.
+func w254Sentences(sec string) []string {
+	var units []string
+	var cur []string
+	flush := func() {
+		if len(cur) > 0 {
+			units = append(units, strings.Join(cur, " "))
+			cur = nil
+		}
+	}
+	for _, l := range strings.Split(sec, "\n") {
+		l = strings.TrimSpace(l)
+		switch {
+		case l == "":
+			flush()
+			continue
+		case strings.HasPrefix(l, "- "), w254HeadingRe.MatchString(l):
+			flush()
+		}
+		cur = append(cur, l)
+	}
+	flush()
+	end := regexp.MustCompile(`[.!?]\s+`)
+	var out []string
+	for _, u := range units {
+		u = w254Norm(strings.ReplaceAll(u, "**", ""))
+		out = append(out, end.Split(u, -1)...)
+	}
+	return out
+}
+
+// w254Framed reports whether one sentence of sentences matches every
+// one of res (and, when not is non-nil, does not match not).
+func w254Framed(sentences []string, not *regexp.Regexp, res ...string) bool {
+	for _, s := range sentences {
+		if not != nil && not.MatchString(s) {
+			continue
+		}
+		all := true
+		for _, re := range res {
+			if !regexp.MustCompile(re).MatchString(s) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
 // TestW254UnattendedModeActualBehavior: the unattended-mode section
 // states the behavior the code actually has — when no question is asked
 // and the merge rule holds, the work item merges unattended in the
 // autopilot, bug-fix and chore lanes, and never in feature-full (its
 // grill-review requires a human answer) — not the original ticket's
-// "choose autopilot to enable unattended" framing.
+// "choose autopilot to enable unattended" framing; and bug-fix and
+// chore have no declared checkpoint, but any step may still ask a
+// human. Each framing must hold within one sentence, not as tokens
+// scattered over the section.
 func TestW254UnattendedModeActualBehavior(t *testing.T) {
 	page, sec := w254UnattendedSection(t)
-	norm := w254Norm(sec)
+	sentences := w254Sentences(sec)
+	negated := regexp.MustCompile(`(?i)\b(never|not|no\s+longer)\b`)
 	var missing []string
-	for _, c := range []struct{ what, re string }{
-		{"the no-question precondition", `(?i)no\s+question`},
-		{"the merge rule", `(?i)\bmerge\b`},
-		{"the autopilot lane merging unattended", `(?i)\bautopilot\b`},
-		{"the bug-fix lane merging unattended", `(?i)\bbug-?fix\b`},
-		{"the chore lane merging unattended", `(?i)\bchore\b`},
-		{"feature-full never merging unattended", `(?i)feature-?full\b`},
-		{"the never", `(?i)\bnever\b`},
-		{"the human answer feature-full's grill-review requires", `(?i)\bhuman\b`},
+	for _, c := range []struct {
+		what string
+		not  *regexp.Regexp
+		res  []string
+	}{
+		{"no question asked + the merge rule holding ⇒ the work item merges unattended", nil,
+			[]string{`(?i)no\s+question`, `(?i)merge\s+rule`, `(?i)\bmerges?\s+unattended\b`}},
+		{"the autopilot, bug-fix and chore lanes merging unattended", negated,
+			[]string{`(?i)\bautopilot\b`, `(?i)\bbug-?fix\b`, `(?i)\bchore\b`, `(?i)\bmerges?\s+unattended\b`}},
+		{"feature-full never merging unattended, because its grill-review requires a human answer", nil,
+			[]string{`(?i)feature-?full\b`, `(?i)\bnever\s+merges?\s+unattended\b`, `(?i)\bhuman\s+answer\b`}},
+		{"bug-fix and chore having no declared checkpoint, while any step may still ask a human", nil,
+			[]string{`(?i)\bbug-?fix\b`, `(?i)\bchore\b`, `(?i)\bno\s+declared\s+checkpoint\b`, `(?i)\bany\s+step\s+may\s+still\s+ask\b`}},
+		{"deliver asking deliver-merge when the merge rule does not hold", nil,
+			[]string{`(?i)\bdeliver\b`, `deliver-merge`, `(?i)merge\s+rule`}},
 	} {
-		if !regexp.MustCompile(c.re).MatchString(norm) {
+		if !w254Framed(sentences, c.not, c.res...) {
 			missing = append(missing, c.what)
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("%s's unattended-mode section must state the behavior the code actually has — no question + the merge rule ⇒ auto-merge in autopilot, bug-fix and chore, never feature-full (its grill-review requires a human answer) — it never states: %s", page, strings.Join(missing, ", "))
+		t.Fatalf("%s's unattended-mode section must state the behavior the code actually has, each framing within one sentence — no question + the merge rule ⇒ auto-merge in autopilot, bug-fix and chore, never feature-full (its grill-review requires a human answer); bug-fix and chore declare no checkpoint, but any step may still ask — no sentence states: %s", page, strings.Join(missing, "; "))
 	}
 }
 
@@ -312,8 +378,9 @@ func TestW254UnattendedModeActualBehavior(t *testing.T) {
 // schema or data migration, credentials and permission surface,
 // removing features or weakening guarantees, security-related changes,
 // large cross-repo changes) as settled docs-only policy the code does
-// not enforce — avoiding unattended merges is the user choosing the
-// feature-full bundle — never as a draft awaiting confirmation.
+// not enforce — stated within one sentence — and avoiding unattended
+// merges as the user choosing the feature-full bundle, never as a draft
+// awaiting confirmation.
 func TestW254NeverUnattendedSettledPolicy(t *testing.T) {
 	page, sec := w254UnattendedSection(t)
 	norm := w254Norm(sec)
@@ -325,16 +392,20 @@ func TestW254NeverUnattendedSettledPolicy(t *testing.T) {
 		{"removing features or weakening guarantees", `(?i)(\bremov|\bweaken)`},
 		{"security-related changes", `(?i)\bsecur`},
 		{"large cross-repo changes", `(?i)\bcross-?repo\b`},
-		{"the list as policy (settled, not a draft)", `(?i)\bpolicy\b`},
-		{"the honesty that the code does not enforce it", `(?i)\benforc`},
-		{"feature-full as the way to avoid unattended merges", `(?i)feature-?full\b`},
 	} {
 		if !regexp.MustCompile(c.re).MatchString(norm) {
 			missing = append(missing, c.what)
 		}
 	}
+	sentences := w254Sentences(sec)
+	if !w254Framed(sentences, nil, `(?i)\bsettled\b`, `(?i)\bpolicy\b`, `(?i)\b(does\s+not|doesn't|never)\s+enforce`) {
+		missing = append(missing, "the list as settled policy the code does not enforce, within one sentence")
+	}
+	if !w254Framed(sentences, nil, `(?i)\bavoid\b`, `(?i)\bunattended\s+merge`, `(?i)feature-?full\b`) {
+		missing = append(missing, "choosing feature-full as the way to avoid an unattended merge, within one sentence")
+	}
 	if len(missing) > 0 {
-		t.Fatalf("%s's unattended-mode section must present the owner-confirmed never-unattended list as settled docs-only policy the code does not enforce (avoiding unattended merges is choosing the feature-full bundle) — it never covers: %s", page, strings.Join(missing, ", "))
+		t.Fatalf("%s's unattended-mode section must present the owner-confirmed never-unattended list as settled docs-only policy the code does not enforce (avoiding unattended merges is choosing the feature-full bundle) — it never covers: %s", page, strings.Join(missing, "; "))
 	}
 }
 
