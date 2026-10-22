@@ -168,6 +168,14 @@ type fakeHub struct {
 	// adapters make (search + memory create); nil answers a typed
 	// refusal. The tests that exercise the memory lanes script it.
 	memDo func(method, path string, body, out any) error
+	// repoInventory, when non-nil, maps a canonical id to the repo names
+	// its frozen repo_inventory declares (an absent id = none declared);
+	// projectRepos, when non-nil, maps a project name to its repo names
+	// (an absent project = no repos). Do serves the submit-placement reads
+	// (the work-item view + the project) from them before memDo; a nil
+	// map falls through exactly as before.
+	repoInventory map[string][]string
+	projectRepos  map[string][]string
 	// memContent scripts GetMemoryContent (the step memory read).
 	memContent func(id string) ([]byte, error)
 	// queueErr, when non-nil, is what Queue answers instead of the
@@ -422,8 +430,47 @@ func (h *fakeHub) heartbeatsSnapshot() []aihubclient.MachineHeartbeat {
 	return out
 }
 
-// Do serves the generic typed-request face the F6 memory adapters use.
+// Do serves the generic typed-request face: the submit-placement reads
+// (the work-item view's repo_inventory, the project's repos) from the
+// scripted maps, everything else through memDo as before.
 func (h *fakeHub) Do(method, path string, body, out any) error {
+	if method == "GET" {
+		if id, ok := strings.CutPrefix(path, "/api/v1/work-items/"); ok {
+			h.mu.Lock()
+			cid := h.canonicalID(id)
+			inv := h.repoInventory
+			names := inv[cid]
+			h.mu.Unlock()
+			if inv != nil {
+				decls := make([]repoDecl, 0, len(names))
+				for _, n := range names {
+					decls = append(decls, repoDecl{Name: n})
+				}
+				raw, err := json.Marshal(wiView{WorkItem: api.WorkItem{ID: cid, ProjectName: "proj"}, RepoInventory: decls})
+				if err != nil {
+					return err
+				}
+				return json.Unmarshal(raw, out)
+			}
+		}
+		if name, ok := strings.CutPrefix(path, "/api/v1/projects/"); ok {
+			h.mu.Lock()
+			reposMap := h.projectRepos
+			names := reposMap[name]
+			h.mu.Unlock()
+			if reposMap != nil {
+				repos := make([]api.ProjectRepo, 0, len(names))
+				for _, n := range names {
+					repos = append(repos, api.ProjectRepo{Name: n, URL: "file:///nonexistent/" + n + ".git"})
+				}
+				raw, err := json.Marshal(api.Project{Name: name, Repos: repos})
+				if err != nil {
+					return err
+				}
+				return json.Unmarshal(raw, out)
+			}
+		}
+	}
 	h.mu.Lock()
 	fn := h.memDo
 	h.mu.Unlock()

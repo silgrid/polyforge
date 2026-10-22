@@ -55,6 +55,18 @@ var cmdSubmit = &Command{
 				return false
 			}
 			fmt.Fprintf(ctx.Stdout, "submitted %s (accepted by the local daemon)\n", name)
+			// The placement (the claim's target machine
+			// + capsule landing path) when the daemon resolved it, then one
+			// warning line naming every repo whose clone is missing from
+			// the mapped workspace — the claim clones fresh, so the submit
+			// stays accepted; no override flag exists. An unknown placement
+			// prints nothing beyond the acceptance line (nothing invented).
+			if sr.MachineID != "" && sr.CapsulePath != "" {
+				fmt.Fprintf(ctx.Stdout, "placement: claimed by machine %s, capsule %s\n", sr.MachineID, sr.CapsulePath)
+			}
+			if len(sr.MissingRepos) > 0 {
+				fmt.Fprintf(ctx.Stdout, "warning: no local clone under .repo/ for repo(s) %s — the claim clones fresh\n", strings.Join(sr.MissingRepos, ", "))
+			}
 			return true
 		})
 		return nil

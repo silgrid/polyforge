@@ -165,10 +165,20 @@ type OpsConfigRequest struct {
 	Max  *int  `json:"max,omitempty"`
 }
 
-// SubmitResponse is the claim-family answer.
+// SubmitResponse is the claim-family answer. The placement fields ride
+// the answer: machine_id / capsule_path state the
+// claim's landing (absent when the placement is unknown — a probe that
+// did not resolve), missing_repos names every repo the claim will clone
+// whose clone is missing from the mapped workspace, sorted (absent when
+// every clone is present or the check was skipped). The old
+// {accepted, work_item_id}-only shape is replaced in place — no dual
+// shape (docs/upgrade.md notes the change for external parsers).
 type SubmitResponse struct {
-	Accepted   bool   `json:"accepted"`
-	WorkItemID string `json:"work_item_id"`
+	Accepted     bool     `json:"accepted"`
+	WorkItemID   string   `json:"work_item_id"`
+	MachineID    string   `json:"machine_id,omitempty"`
+	CapsulePath  string   `json:"capsule_path,omitempty"`
+	MissingRepos []string `json:"missing_repos,omitempty"`
 }
 
 // StatusResponse is the GET /status answer: local bookkeeping + auto switch +

@@ -36,12 +36,54 @@ section, the one authority). Before the daemon is
 involved, the CLI prechecks the work item against Core with the caller's own
 api key, so obviously doomed submissions fail fast with a visible verdict.
 
+## Before submitting: the placement precheck
+
+`pf submit` always targets the local daemon, and the claim lands where
+this machine's mapping says — resolve the placement and the clone context
+from the existing faces before submitting (no preview flag exists):
+
+1. The target workspace: the `[workspace."<path>"]` sections of
+   `~/.config/polyforge/cli.toml` (XDG) — the section whose `projects`
+   carries the ticket's project. The machine: `pf ops status`'s
+   `machine_id` (the local daemon — the claim's target machine).
+2. The repos the claim will clone: `pf file show <id>`'s
+   `repo_inventory` when the work item declared one (exactly that
+   list), else `pf projects get <project>`'s `repos`.
+3. The session cwd is the target workspace and every one of those
+   repos is cloned under `<workspace>/.repo/<name>` → submit directly,
+   no extra hop.
+
+A target workspace that differs from the session cwd (a cwd inside no
+mapped workspace counts as differing), or a repo without a local clone:
+ask the owner first — "this ticket will land in X", the machine id and
+the workspace — and submit only after the owner agrees. The owner
+declines → no `pf submit` (nothing is submitted on the owner's behalf).
+
 ## Success
 
 `submitted <slug> (accepted by the local daemon)` — acceptance means the daemon
 queued the job; its dispatcher derives the Go driver for it within a
-moment, priority-desc against the machine's concurrency cap. `--json`: the
-raw answer `{accepted, work_item_id}`.
+moment, priority-desc against the machine's concurrency cap.
+
+The acceptance line is followed by the placement line — `placement:
+claimed by machine <machine_id>, capsule <capsule_path>` — the claim's
+target machine and the workspace / capsule landing path the work item
+will occupy. When the mapped workspace lacks a git clone under
+`<workspace>/.repo/<name>` for a repo the claim will clone, a warning
+line names each missing repo (`warning: no local clone under .repo/ for
+repo(s) <names> — the claim clones fresh`): the submit is still
+accepted — the claim clones fresh, no override flag exists. A placement
+the daemon could not resolve prints nothing beyond the acceptance line.
+
+`--json`: the raw answer `{accepted, work_item_id, machine_id,
+capsule_path, missing_repos}` — `machine_id` + `capsule_path` are absent
+when the placement is unknown, `missing_repos` when every clone is
+present.
+
+Relay the placement line and any missing-clone warning to the owner,
+word for word. A warning the precheck above did not predict: tell the owner
+`pf pause <id>` / `pf cancel <id>` can stop the work item before it
+invests work.
 
 ## Failure branches
 
