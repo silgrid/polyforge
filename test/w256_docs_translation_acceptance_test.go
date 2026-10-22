@@ -48,6 +48,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -124,9 +125,17 @@ func w256Read(t *testing.T, rel string) string {
 }
 
 // w256Strip removes every allowlisted literal occurrence from body —
-// what remains must carry no Han rune.
+// what remains must carry no Han rune. Longest-first: the entries are
+// sorted by rune length, descending, before the ReplaceAll pass, so a
+// shorter entry (不足) cannot destroy a longer allowlisted literal
+// (权限不足) before it is matched as a whole (owner ruling
+// w256-review-b1-b5-b6, B1).
 func w256Strip(body string) string {
-	for _, lit := range w256Allowlist {
+	ordered := append([]string(nil), w256Allowlist...)
+	sort.Slice(ordered, func(i, j int) bool {
+		return len([]rune(ordered[i])) > len([]rune(ordered[j]))
+	})
+	for _, lit := range ordered {
 		body = strings.ReplaceAll(body, lit, "")
 	}
 	return body
@@ -189,7 +198,11 @@ func TestW256ReadmeZhRoutingDriftBar(t *testing.T) {
 		if !inSection {
 			continue
 		}
-		if m := w256DocLinkRe.FindStringSubmatch(line); m != nil {
+		// every docs link on the line, not just the first — a README line
+		// may carry several (line 17 carries both quickstart links);
+		// owner ruling w256-review-b1-b5-b6, B5. The first-line logic
+		// is unchanged: the line carrying the first target.
+		for _, m := range w256DocLinkRe.FindAllStringSubmatch(line, -1) {
 			if len(targets) == 0 {
 				firstLine = strings.TrimSpace(line)
 			}
