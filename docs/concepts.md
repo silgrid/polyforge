@@ -128,17 +128,25 @@ step with no file of its own falls back to the shared
 
 ### Gate
 
-A step that can FAIL the whole run and rewind it to an earlier step:
-verification, review, grill-review, deliver. Which steps are gates is
-the lane's own choice — the autopilot lane gates verification and
-deliver; feature-full gates grill-review, verification, review and
-deliver. A gate's FAIL verdict is the input of the rewind it triggers.
+A step that can FAIL the whole run: the delivery lanes' gates rewind it
+to an earlier step, the release lane's gates end it (published
+releases are immutable — no `on_fail`, no rewind into a re-release).
+Which steps are gates is the lane's own choice — the autopilot lane
+gates verification and deliver; bug-fix gates root-cause, verification,
+review and deliver; chore gates verification, review and deliver;
+feature-full gates grill-review, verification, review and deliver; the
+release lane's release, verify and deploy steps are all gates. A
+gate's FAIL verdict is the input of the rewind (or the ending) it
+triggers.
 
 ### Rewind
 
 A gate FAIL sending the run back to an earlier step to redo the work:
-verification FAIL rewinds to the code step, grill-review FAIL rewinds to
-spec. Rewinds are bounded per bundle (`max_total`, `max_per_step` in the
+verification FAIL rewinds to the fix step in the autopilot and bug-fix
+lanes and to the code step in the chore and feature-full lanes;
+grill-review FAIL rewinds to spec; root-cause FAIL rewinds to repro.
+The target is the gate's own `on_fail` declaration — never a later
+step. Rewinds are bounded per bundle (`max_total`, `max_per_step` in the
 frontmatter); past the bounds the run ends failed
 (`failed_rewind_exhausted`) and the honest move is a re-filed work item
 on a heavier lane, not more loops.
@@ -169,10 +177,12 @@ human ever looking at it. Which lanes do this is the lane set, not a
 setting:
 
 - The **autopilot**, **bug-fix** and **chore** lanes merge unattended.
-  Their clarification steps may ask a question (and then a human answers
-  it), but a run that asks none and passes its gates ends merged. In
-  autopilot there is no review step at all — verification's pass stands in
-  for the independent review at the merge rule.
+  Only autopilot has a human checkpoint at all (its grill step, which
+  may ask a question — and then a human answers it); bug-fix and chore
+  have none, so a run that asks no question and passes their gates ends
+  merged with no human ever looking at it. In autopilot there is no
+  review step at all — verification's pass stands in for the
+  independent review at the merge rule.
 - The **feature-full** lane never merges unattended: its grill-review
   gate requires a human answer, so a human is always in the loop before
   deliver can merge. That is the lane's shape, not a preference.
