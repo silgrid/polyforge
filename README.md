@@ -25,7 +25,7 @@ execution driver).
 - Extending without changing code: [extending](docs/extending.md)
 - Authoring a custom workflow bundle: [bundles](docs/bundles.md)
 - Contributing, filing work items, change coverage: [contributing](docs/contributing.md)
-- Daily use: [user guide](docs/user-guide.md)
+- Daily use, including the recommended pi-web UI: [user guide](docs/user-guide.md)
 
 ## Commercial licensing
 

@@ -49,6 +49,14 @@ server-side schema story is [upgrade.md](upgrade.md)).
 
 ## Daily use in your harness
 
+The recommended daily setup is pi with
+[silgrid/pi-web](https://github.com/silgrid/pi-web) (npm package
+`@silgrid/pi-web`), a local web UI for the pi coding agent. Polyforge is being
+deeply integrated into pi-web: its polyforge progress dock has shipped, and a
+Polyforge settings tab is in progress. pi-web drives pi only; Claude Code and
+the plain terminal remain supported paths, and everything below applies to
+them too.
+
 The primary path is natural language. The install wired the polyforge routing
 skill into your harness, both pi and Claude Code, and the skill maps your words
 to the right `pf` verb: file a ticket for X, how is polyforge#140 going, pause
