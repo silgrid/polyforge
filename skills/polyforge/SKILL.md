@@ -113,6 +113,8 @@ otherwise name none and let the repo's procedure default. Never file a release o
 bundle (`feature-full`, `bug-fix`, `autopilot`, `chore` have no release step), and never run a
 release or deploy procedure from this skill directly.
 
+When the user repeatedly walks the same flow, read the docs' bundle-authoring chapter ([docs/bundles.md](../../docs/bundles.md)) and propose sedimenting it into a custom workflow bundle.
+
 ## Human coordination: `pf watch` (subscription = adoption)
 
 The execution plane never notifies a session by itself. `pf watch` is the
@@ -255,7 +257,8 @@ Seven standing rules, binding on every polyforge session:
    --models`). The daemon reads it fresh before every claim; an invalid
    file refuses the claim (DAEMON-414) WITHOUT claiming — the work item
    stays queued for other machines. Schema, syntax and precedence: the
-   README's "Extending › Model candidates" subsection (via `verbs/init.md`).
+   "Model candidates" subsection of docs/extending.md, routing to
+   docs/reference/config.md's `steps:` section (via `verbs/init.md`).
    Its second optional section, `memory_policy:` (`default` / `<project>`:
    `{ record: [...], skip: [...] }`, a project's lists appended to
    `default`'s), says what the last step puts into the work item's

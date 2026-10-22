@@ -329,7 +329,7 @@ func printUsage(w io.Writer) {
 		}
 	}
 	fmt.Fprintln(w, "Topics (pf help <topic>):")
-	fmt.Fprintf(w, "  %-14s %s\n", helpTopicExtensions, "where each user extension point is documented (README \"Extending\")")
+	fmt.Fprintf(w, "  %-14s %s\n", helpTopicExtensions, "where each user extension point is documented (docs/extending.md)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Global flags (before the command):")
 	fmt.Fprintln(w, "  --json          machine-readable output (server JSON as-is)")
@@ -346,11 +346,11 @@ const helpTopicExtensions = "extensions"
 
 // extensionsPointer is the hint naming where the extension points'
 // shapes are documented (doctor's config failure details carry it).
-const extensionsPointer = "shapes: README \"Extending\" (pf help extensions)"
+const extensionsPointer = "shapes: docs/extending.md (pf help extensions)"
 
 // extensionPoints is the index `pf help extensions` prints: one line per
-// user extension point, naming the README "Extending" subsection that
-// owns it. The README is the one authority; this index restates no shape.
+// user extension point, naming the docs/extending.md subsection that
+// owns it. docs/extending.md is the one authority; this index restates no shape.
 var extensionPoints = []struct{ what, section string }{
 	{"repos/<repo>/AGENTS.md (else CLAUDE.md)", "Per-repo rules"},
 	{"docs/agents/ area notes", "Area notes"},
@@ -365,9 +365,9 @@ var extensionPoints = []struct{ what, section string }{
 
 // printExtensions prints the extension-point index (local text only).
 func printExtensions(w io.Writer) {
-	fmt.Fprintln(w, "Extension points — each documented in one README \"Extending\" subsection:")
+	fmt.Fprintln(w, "Extension points — each documented in one docs/extending.md subsection:")
 	for _, e := range extensionPoints {
-		fmt.Fprintf(w, "  %-54s README Extending › %s\n", e.what, e.section)
+		fmt.Fprintf(w, "  %-54s docs/extending.md › %s\n", e.what, e.section)
 	}
 	fmt.Fprintln(w, "Daily-use guide: docs/user-guide.md")
 }

@@ -294,7 +294,7 @@ func TestW241GuideWhereToFindWhat(t *testing.T) {
 		{"why it works that way → the design docs", `(?i)design\s+doc`},
 	} {
 		if !regexp.MustCompile(c.re).MatchString(norm) {
-			t.Fatalf("the guide's where-to-find-what section maps each kind of question to the document that owns the answer (install detail → README, a verb's shapes → pf help, why → the design docs, upgrading → docs/upgrade.md); it never covers %s", c.what)
+			t.Fatalf("the guide's where-to-find-what section maps each kind of question to the document that owns the answer (install detail → docs/install.md, a verb's shapes → pf help, why → the design docs, upgrading → docs/upgrade.md); it never covers %s", c.what)
 		}
 	}
 }

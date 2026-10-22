@@ -28,3 +28,5 @@ below as a blocking finding.
   implementation.
 - **Release and deploy.** aihub ships before `tools/install.sh`;
   `.polyforge/release.sh` and `.polyforge/deploy.sh` are the only entry points.
+
+Contributor guide (filing work items, change coverage): docs/contributing.md.

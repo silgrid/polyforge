@@ -939,7 +939,7 @@ func w079Doc(t *testing.T, parts ...string) string {
 // selective sync, the [workspace] mapping, the models yaml).
 func TestW079InitFragmentPointerAndWorkspaceInit(t *testing.T) {
 	text := w079Doc(t, "skills", "polyforge", "verbs", "init.md")
-	for _, tok := range []string{"README", "install.sh", ".polyforge.yaml", "[workspace", "scan", "sync", "models:"} {
+	for _, tok := range []string{"docs/install.md", "install.sh", ".polyforge.yaml", "[workspace", "scan", "sync", "models:"} {
 		if !strings.Contains(strings.ToLower(text), strings.ToLower(tok)) {
 			t.Fatalf("verbs/init.md does not carry %q", tok)
 		}

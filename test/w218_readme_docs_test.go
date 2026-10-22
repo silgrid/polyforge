@@ -1,6 +1,6 @@
 package test
 
-// polyforge#218 e2e: the README's platform support matrix (darwin
+// polyforge#218 e2e: the platform support matrix (darwin
 // hardware-verified, per polyforge#247 after the Mac run passed against the
 // released darwin assets) and the macOS Quickstart's machine registration
 // (B6). Spec (artifacts/spec.md, "## Requirements"): the documentation
@@ -14,9 +14,9 @@ package test
 // conditional (registers because its key's user is a maintainer of demo;
 // registration requires an admin or a project maintainer; a failure shows
 // in ~/.local/share/polyforge/daemon.log) — no unconditional
-// self-registration claim remains. Today the README names no platform at
-// all (no darwin/macOS/WSL/Windows/arm64 mention exists) and has no macOS
-// Quickstart.
+// self-registration claim remains. (polyforge#254 moved the matrix into
+// docs/install.md and the Quickstart into docs/quickstart-macos.md; the
+// assertions follow, intact.)
 //
 // The assertions are on the statements, not the wording: any line pairing
 // the platform with its verdict matches; the Quickstart's commands and
@@ -53,24 +53,29 @@ var (
 	w218ReNoSeparateRegistration = regexp.MustCompile(`(?i)no\s+separate\s+registration`)
 )
 
-// w218Readme answers the README body and its whitespace-normalized form.
-func w218Readme(t *testing.T) (string, string) {
+// w218Page answers one doc-set page's body and its
+// whitespace-normalized form (polyforge#254 moved the platform matrix
+// into docs/install.md and the macOS Quickstart into
+// docs/quickstart-macos.md; the assertions follow the content).
+func w218Page(t *testing.T, rel string) (string, string) {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "README.md"))
+	raw, err := os.ReadFile(filepath.Join("..", rel))
 	if err != nil {
-		t.Fatalf("read README.md: %v", err)
+		t.Fatalf("read %s: %v", rel, err)
 	}
 	body := string(raw)
 	norm := regexp.MustCompile(`\s+`).ReplaceAllString(body, " ")
 	return body, norm
 }
 
-// TestW218ReadmePlatformMatrix: the README MUST state the platform support
+// TestW218ReadmePlatformMatrix: the docs MUST state the platform support
 // matrix — darwin arm64 and amd64 are supported platforms, stated
 // hardware-verified; one line says WSL2 is treated as Linux; native
-// Windows is out of scope.
+// Windows is out of scope. (polyforge#254 moved the matrix from README
+// into docs/install.md; the assertions are intact, reading the new
+// location.)
 func TestW218ReadmePlatformMatrix(t *testing.T) {
-	body, norm := w218Readme(t)
+	body, norm := w218Page(t, filepath.Join("docs", "install.md"))
 	var missing []string
 	for _, c := range []struct {
 		name string
@@ -87,7 +92,7 @@ func TestW218ReadmePlatformMatrix(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("README.md must state the platform support matrix (darwin arm64 + amd64 supported, hardware-verified; WSL2 treated as Linux; native Windows out of scope); missing statements: %s", strings.Join(missing, "; "))
+		t.Fatalf("docs/install.md must state the platform support matrix (darwin arm64 + amd64 supported, hardware-verified; WSL2 treated as Linux; native Windows out of scope); missing statements: %s", strings.Join(missing, "; "))
 	}
 }
 
@@ -100,14 +105,14 @@ func TestW218ReadmePlatformMatrix(t *testing.T) {
 // project maintainer), a failure shows in daemon.log — replaces the false
 // unconditional self-registration claim.
 func TestW218ReadmeQuickstartRegistration(t *testing.T) {
-	_, norm := w218Readme(t)
+	_, norm := w218Page(t, filepath.Join("docs", "quickstart-macos.md"))
 	grant := w218ReGrant.FindStringIndex(norm)
 	if grant == nil {
-		t.Fatalf("the Quickstart's project-creation step must grant the machine user the maintainer role on demo (projects members add demo --user <MACHINE_USER_ID> --role maintainer, run with the bootstrap key) so the daemon's first heartbeat actually registers the machine; no such command exists in README.md")
+		t.Fatalf("the Quickstart's project-creation step must grant the machine user the maintainer role on demo (projects members add demo --user <MACHINE_USER_ID> --role maintainer, run with the bootstrap key) so the daemon's first heartbeat actually registers the machine; no such command exists in docs/quickstart-macos.md")
 	}
 	cond := w218ReFirstHeartbeat.FindStringIndex(norm)
 	if cond == nil {
-		t.Fatalf("the Quickstart's daemon-start step must state the accurate conditional: the first heartbeat registers this machine because its key's user is a maintainer of demo (registration requires an admin or a project maintainer); no such statement exists in README.md")
+		t.Fatalf("the Quickstart's daemon-start step must state the accurate conditional: the first heartbeat registers this machine because its key's user is a maintainer of demo (registration requires an admin or a project maintainer); no such statement exists in docs/quickstart-macos.md")
 	}
 	if cond[0] < grant[0] {
 		t.Fatalf("the maintainer grant must precede the daemon start (the machine registers on the first heartbeat BECAUSE its key's user already is a maintainer); grant at %d, conditional at %d", grant[0], cond[0])
@@ -120,6 +125,6 @@ func TestW218ReadmeQuickstartRegistration(t *testing.T) {
 		t.Fatal("the Quickstart must state that a registration failure shows in ~/.local/share/polyforge/daemon.log")
 	}
 	if m := w218ReNoSeparateRegistration.FindString(norm); m != "" {
-		t.Fatalf("the README still carries the unconditional self-registration claim B6 removed (%q): registration requires the maintainer grant of the project-creation step", m)
+		t.Fatalf("docs/quickstart-macos.md still carries the unconditional self-registration claim B6 removed (%q): registration requires the maintainer grant of the project-creation step", m)
 	}
 }

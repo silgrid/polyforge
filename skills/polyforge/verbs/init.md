@@ -3,9 +3,9 @@
 Two levels, never mixed:
 
 - **Machine install** is `tools/install.sh`. This fragment is a POINTER,
-  not a parallel procedure: the README's install section ("Install (team
-  machines — read this first)") carries the one-liner and the credential
-  prerequisites, the script itself owns every step. The one thing the
+  not a parallel procedure: the docs' install page (`docs/install.md`,
+  "Install (team machines — read this first)") carries the one-liner and
+  the credential prerequisites, the script itself owns every step. The one thing the
   script defers to the operator is reproduced below (the `[workspace]`
   example edit).
 - **Workspace init** is the agent-driven flow that maps a workspace's
@@ -15,10 +15,11 @@ Two levels, never mixed:
 
 ## Machine install — the pointer
 
-Install and upgrade are the same command, `tools/install.sh`: the README's
-"Install (team machines — read this first)" section carries the one-liner,
-the prerequisites and what an upgrade does (busy-job refusal,
-`PF_INSTALL_FORCE=1`); this fragment does not repeat them. The one step
+Install and upgrade are the same command, `tools/install.sh`: the
+`docs/install.md` page ("Install (team machines — read this first)")
+carries the one-liner, the prerequisites and what an upgrade does
+(busy-job refusal, `PF_INSTALL_FORCE=1`); this fragment does not repeat
+them. The one step
 the script leaves to the operator: uncomment ONE
 `[workspace."<path>"]` section per workspace (with its
 `projects = ["..."]`) in the template it writes to
@@ -42,11 +43,12 @@ the user saying "init workspace".
    `projects` list. Nothing rewrites cli.toml behind the operator's back —
    the agent proposes the section, the operator's config carries it.
 4. **Optionally write `.polyforge.yaml`** at the workspace root to pin
-   model candidates per project. The README's "Extending › Model
-   candidates" subsection (release checkout:
-   `~/.local/share/polyforge/release/current/README.md`) is the one
-   authority for its closed schema, the `<harness>:<model>[:<effort>]`
-   candidate syntax and the precedence — read it before writing. The
+   model candidates per project. The "Model candidates" subsection of
+   docs/extending.md (release checkout:
+   `~/.local/share/polyforge/release/current/docs/extending.md`)
+   routes to the one authority for its closed schema, the
+   `<harness>:<model>[:<effort>]` candidate syntax and the precedence —
+   docs/reference/config.md's `steps:` section — read it before writing. The
    shape:
 
    ```yaml
