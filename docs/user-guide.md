@@ -255,6 +255,6 @@ branches.
 | One verb's exact shapes, success and failure branches | `pf help <verb>`, then the [skill fragment](../skills/polyforge/verbs/help.md) that owns the verb |
 | Why it works that way (designs and decisions) | the [design docs](design/polyforge-vnext/reference.md) |
 | Upgrading (the server-side schema story) | [upgrade.md](upgrade.md), plus re-running the installer line |
-| Admin and operator work (users, api-keys, projects, machines, deploy) | the [quickstarts](quickstart-developers.md) and the management verbs (`pf users`, `pf api-keys`, `pf projects`, `pf machines`) |
+| Admin and operator work (users, api-keys, projects, machines, deploy) | the [quickstarts](quickstart-developers.md) and the management verbs (`pf users`, `pf api-keys`, `pf projects`, `pf machines`) — `pf projects delete` is the irreversible one: run `pf backup` first (and copy the server's `git/` directory; the backup does not include it) |
 | Releases | the [release reference](reference/release.md): maintainer-only, cut on explicit owner request |
 | Extending polyforge (config keys, custom bundles) | `pf help extensions` and [extending](extending.md), the extension-point index |

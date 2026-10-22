@@ -3,7 +3,9 @@ package git
 // Janitor: the periodic reconciler pass over the bare-repo tree
 // (reference.md §8 定期 gc/repack). A simple janitor: every repo whose
 // objects have grown past a threshold is gc'd; repositories disappear
-// only with the data dir (no auto-deletion of WI chains).
+// only with the data dir or with their project's hard delete
+// (server.removeRepos / ReplayDeletedRepos) — no
+// auto-deletion of WI chains.
 
 import (
 	"log"

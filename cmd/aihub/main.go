@@ -118,6 +118,13 @@ func main() {
 	}
 	logMigration(rep)
 
+	// Converge an interrupted project delete: the per-WI bare git repos
+	// a committed delete recorded (admin_audit.wi_ids) are removed here
+	// when the request itself could not (a crash between the delete's
+	// commit and the removal). Idempotent; errors are logged, never
+	// fatal — the next start retries.
+	srv.ReplayDeletedRepos()
+
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

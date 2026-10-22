@@ -340,6 +340,17 @@ func (c *Client) PatchProject(idOrName string, req ProjectPatchRequest) (json.Ra
 	return c.raw("PATCH", "/api/v1/projects/"+url.PathEscape(idOrName), req)
 }
 
+// DeleteProject hard-deletes a project (DELETE /api/v1/projects/{id};
+// admin only). dryRun runs the same checks and answers the same body
+// with nothing written (?dry_run=1 — the CLI's confirmation preflight).
+func (c *Client) DeleteProject(idOrName string, dryRun bool) (json.RawMessage, error) {
+	path := "/api/v1/projects/" + url.PathEscape(idOrName)
+	if dryRun {
+		path += "?dry_run=1"
+	}
+	return c.raw("DELETE", path, nil)
+}
+
 // Backup triggers the on-demand snapshot (M4).
 func (c *Client) Backup() (json.RawMessage, error) {
 	return c.raw("POST", "/api/v1/admin/backup", map[string]any{})

@@ -113,6 +113,17 @@ type ProjectMember struct {
 	Role   string `json:"role"` // maintainer|writer|viewer
 }
 
+// ProjectDeleteResult is the hard-delete answer (DELETE
+// /api/v1/projects/{id}, plain or ?dry_run=1): the deleted (or
+// to-be-deleted) project's id and name, its work-item count, and whether
+// the request was a dry run (the checks ran, nothing was written).
+type ProjectDeleteResult struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	WorkItems int    `json:"work_items"`
+	DryRun    bool   `json:"dry_run"`
+}
+
 // User (reference.md §4.1).
 type User struct {
 	ID          string     `json:"id"`

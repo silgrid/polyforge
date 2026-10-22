@@ -129,7 +129,7 @@ aihub proxy only — pushes a step makes to an external origin are not fenced.
 
 ### 4.1 HTTP routes <!-- §4.1 -->
 
-Registered in `internal/aihub/server/server.go` `routes()` — 34 registrations. Auth: **key** = Bearer API
+Registered in `internal/aihub/server/server.go` `routes()` — 35 registrations. Auth: **key** = Bearer API
 key (`s.auth`), **admin** = key of a `role=admin` user (`s.authAdmin`). Project access
 (`canRead`/`canWrite`): any membership (`viewer`/`writer`/`maintainer`) reads, `writer`+ writes, a global
 admin does both; a key scoped to one project is refused elsewhere (`AUTH-403`). No unauthenticated route, no
@@ -160,6 +160,7 @@ health route. All paths under `/api/v1` except `/git/`.
 | POST, GET / DELETE | `/api-keys`, `/api-keys/{id}` | admin | |
 | POST, GET / GET | `/projects`, `/projects/{id}` | admin | |
 | PATCH | `/projects/{id}` | key + in-handler role gate | repos, membership, description, visible |
+| DELETE | `/projects/{id}` | admin (+key scope, same as PATCH) | hard delete: 409 non-terminal WIs (every offending slug) / unrevoked scoped keys (key ids); audit row in `admin_audit`; `?dry_run=1` = the checks and the same body, nothing written; per-WI bare repos removed after the commit |
 | POST | `/admin/backup` | admin | `VACUUM INTO <data-dir>/backups/aihub-<ts>.db` — the SQLite database, every memory included (memories live in it); no git repos (`core/admin.go`) |
 | ANY | `/git/` | session Basic auth (§3.4) | git smart-HTTP via `git http-backend` |
 

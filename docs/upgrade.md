@@ -1395,6 +1395,61 @@ it spawned — could inherit `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` /
   `m-<full hostname>`. A recorded id always wins, so running machines keep
   theirs.
 
+ 
+## v2.17.0: the project hard delete
+
+The admin-only project delete lands: `DELETE /api/v1/projects/{id}`
+(id or name) and `pf projects delete <id-or-name> [--yes]` remove a
+project and everything it owns — work items, events, dependency edges,
+memories (with their FTS rows), memberships, revoked project-scoped api
+keys and the per-WI bare git repos under `git/` — in one SQLite
+transaction, recording one audit row per performed deletion. Every work
+item must be terminal (wrapped|failed|canceled) and no unrevoked api key
+may be scoped to the project (CORE-409 otherwise, naming every offender);
+the route is admin-only (AUTH-403 otherwise) and an unknown project
+answers CORE-404. The delete is irreversible and takes no automatic
+backup: run `POST /api/v1/admin/backup` (`pf backup`) first, and copy the
+server's `git/` directory if the bare repos must be kept — the backup
+does not include it (see the README's management-face section).
+
+**Deploy aihub before upgrading `pf`.** `pf projects delete` calls the
+new `DELETE /api/v1/projects/{id}` route, which an older hub answers with
+a bare 404/405. An older `pf` against the new hub changes nothing (the
+verb does not exist there, and the daemon does not proxy the route).
+
+### Upgrade SQL
+
+The new `admin_audit` table records every performed deletion (actor,
+time, project id and name, the deleted work-item ids as a JSON array —
+the startup replay's repo-removal intent). It carries no FK to
+`projects`: the cascade of a later delete must never touch it. The file
+`deploy/sql/v2.17.0/upgrade.sql` is the source of truth; its content:
+
+```sql
+CREATE TABLE IF NOT EXISTS admin_audit (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor        TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  project_id   TEXT NOT NULL,
+  project_name TEXT NOT NULL,
+  wi_ids       TEXT NOT NULL DEFAULT '[]'
+);
+```
+
+`deploy/sql/v2.17.0/rollback.sql` drops the table (no release before
+v2.17.0 reads it; nothing references it). `deploy/sql/v2.17.0/probe.sql`
+answers 0 when the table exists (a database created by v2.17.0 is
+already in that shape — `core.Open` installs the same DDL) and nonzero
+when it is absent, so a re-deploy never applies the SQL twice.
+
+ ## The watch summarize lane returns, demand-gated (polyforge#224)
+ 
+ The transcript-delta watch summarize lane (deleted with the simplify era,
+@@ -1509,3 +1579,30 @@ unknown `summarize.interval_sec` key and every claim of that workspace
+ with it.
+ 
+ No schema change, no aihub change; the upgrade is the `pf` binary alone.
+
 ## Work machines: per-work-item events and owner subscriptions (polyforge#181)
 
 The daemon now keeps one events file per work item under
