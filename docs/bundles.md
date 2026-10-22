@@ -3,9 +3,9 @@
 The bundle-authoring chapter: what a workflow bundle is, the format of
 its two file kinds, and a worked custom-bundle example whose every file
 is the real format — the acceptance test
-(`internal/common/workflow/docs_example_test.go`) parses this page's
-example with the same loader the daemon uses, so the documented example
-cannot drift from the actual format. What a bundle IS (the concept) is
+(`internal/polyforge/driver/docs_example_test.go`) runs this page's
+example through the same loader the daemon runs bundles with, so the
+documented example cannot drift from the actual format. What a bundle IS (the concept) is
 defined on the [concepts page](concepts.md); the model-candidate
 format is the [config reference](reference/config.md)'s
 (`steps:` section) — one authority.
@@ -137,7 +137,7 @@ The step definitions, one file per step id — `steps/scan.md`:
 ```
 ---
 name: scan
-description: Scan the repo's API surface and write the handoff artifact artifacts/api-surface.md - every public entry point the reference must cover, with file paths.
+description: Scan the repo's API surface and write the handoff artifact artifacts/handoff-scan.md - every public entry point the reference must cover, with file paths.
 output:
   type: object
   required: [summary]
@@ -153,8 +153,9 @@ You run first in this lane. {{principles}}
 
 Scan the repo worktree declared for this work item (repos/<name>/)
 for its API surface: every public entry point the reference docs
-must cover. Write the findings to artifacts/api-surface.md (the
-handoff artifact the next step inherits): one section per area, each
+must cover. Write the findings to artifacts/handoff-scan.md (the
+handoff artifact the next step inherits — the driver injects it into
+the regen step's prompt): one section per area, each
 entry naming its file path and its exported shape.
 
 Work only inside the capsule and commit nothing. Your summary
@@ -188,7 +189,7 @@ output:
 
 # regen
 
-You inherit the scan's handoff (artifacts/api-surface.md). Regenerate
+You inherit the scan's handoff (artifacts/handoff-scan.md). Regenerate
 the reference docs the repo owns from the worktree's code, keeping
 every page's existing shape, and commit each regenerated page as one
 compilable unit whose message names this lane.
