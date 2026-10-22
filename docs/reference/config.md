@@ -253,10 +253,13 @@ spec/plan (they live in the work item and the capsule), what code or
 git shows directly, transient state, and credential values. The daemon
 writes the claimed project's effective policy to the capsule
 (`runtime-state/memory-policy.json`) and renders it into the last
-step's wrap duty; every step's prompt asks it to recall first. `pf init
-<ws>` appends the default section as text when the file has none and
-`pf doctor` warns about a `.polyforge.yaml` without one (no file at all
-passes on the built-in default).
+step's wrap duty; every step's prompt asks it to recall first. The
+built-in default described above is an English paraphrase: the section
+`pf init` appends carries the same lists written in Chinese, and the
+built-in policy the daemon parses from it is the one described here.
+`pf init <ws>` appends the default section as text when the file has
+none and `pf doctor` warns about a `.polyforge.yaml` without one (no
+file at all passes on the built-in default).
 
 Step agents hold no aihub credential path: inside a step `pf recall` /
 `pf memory show` read through the daemon (scoped to the step's own

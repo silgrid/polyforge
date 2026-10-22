@@ -4,9 +4,12 @@ How to contribute: filing work items, and the change-coverage disciplines
 that govern when new coverage must be added. The binding rules for any
 agent working in this repository are the repository's own
 [AGENTS.md](../AGENTS.md) — the sole binding rule list; this guide
-restates no rule, it links. The terms (work item, bundle, lane, gate) are
-defined on the [concepts page](concepts.md); the release flow and the
-build/test surface are the [release reference](reference/release.md).
+restates no rule, it links. (The disciplines below are this guide's own
+contract: they bind as change-coverage policy, not as project rules —
+AGENTS.md stays the only rule list.) The terms (work item, bundle,
+lane, gate) are defined on the [concepts page](concepts.md); the
+release flow and the build/test surface are the [release
+reference](reference/release.md).
 
 
 Change coverage is tiered by the change's **behavior face**, not by a

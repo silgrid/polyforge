@@ -72,7 +72,10 @@ is fine; the chat path is the main road.
 ## Core concepts
 
 Seven terms carry daily use. Each gets one definition here and a link to the
-surface that owns the mechanism; this guide never restates the mechanism.
+surface that owns the mechanism; this guide never restates the mechanism. The
+full newcomer glossary — every term, defined once — is the
+[concepts page](concepts.md); the definitions below are its daily-use short
+forms.
 
 - **Work item** -- a unit of tracked work: a goal, a content body, a project, a
   status, and a human slug like `polyforge#140`. Filed and edited with

@@ -59,7 +59,7 @@ rules inside a step: the config reference's
 
 The `[workspace."<path>"]` sections of `cli.toml` — the daemon's only
 workspace source (polyforge#113): the config reference's
-[`[workspace]` section](reference/config.md#workspace-path--the-repo-mapping).
+[`[workspace]` section](reference/config.md#workspacepath--the-repo-mapping).
 
 ### Daemon knobs
 
