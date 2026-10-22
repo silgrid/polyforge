@@ -244,5 +244,5 @@ branches.
 | Why it works that way (designs and decisions) | the [design docs](design/polyforge-vnext/reference.md) |
 | Upgrading (the server-side schema story) | [upgrade.md](upgrade.md), plus re-running the installer line |
 | Admin and operator work (users, api-keys, projects, machines, deploy) | the [README](../README.md)'s Quickstart and the management verbs (`pf users`, `pf api-keys`, `pf projects`, `pf machines`) |
-| Releases | the [README's release flow](../README.md#release-flow): maintainer-only, cut on explicit owner request |
+| Releases | the [release reference](reference/release.md): maintainer-only, cut on explicit owner request |
 | Extending polyforge (config keys, custom bundles) | `pf help extensions` and the [README's Extending section](../README.md#extending) |

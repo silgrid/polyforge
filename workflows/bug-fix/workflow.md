@@ -166,7 +166,7 @@ surface that honestly instead of burning the budget on repeat attempts.
 ## Budget guidance
 
 No workflow-level budget and no step `budget.wall_minutes`: the bounds are the rewind limits
-above and the daemon's per-step runtime bound T (README, `pf daemon` flags).
+above and the daemon's per-step runtime bound T (docs/reference/commands.md, `pf help daemon`).
 
 ## Delivery and releases
 

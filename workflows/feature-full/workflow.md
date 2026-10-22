@@ -174,7 +174,7 @@ the workflow in `failed_rewind_exhausted`, not an infinite loop.
 ## Budget guidance
 
 No workflow-level budget and no step `budget.wall_minutes`: the bounds are the rewind limits
-above and the daemon's per-step runtime bound T (README, `pf daemon` flags).
+above and the daemon's per-step runtime bound T (docs/reference/commands.md, `pf help daemon`).
 
 ## Delivery and releases
 
