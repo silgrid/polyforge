@@ -16,6 +16,7 @@ execution driver).
 - The daemon's local routes: [UDS routes](docs/reference/uds-routes.md)
 - Recovery failure codes: [failure codes](docs/reference/failure-codes.md)
 - Releases, build and test: [release](docs/reference/release.md)
+- The system, the modules, the design docs: [architecture](docs/architecture.md)
 - Daily use: [user guide](docs/user-guide.md)
 
 ## Platform support (polyforge#218)
@@ -362,53 +363,6 @@ from-zero smoke run above from step **5. File a minimal smoke work item** —
 drop the `bin/` prefix (pf is installed) and the `--config` flags (your
 config lives at `~/.config/polyforge/cli.toml`; same verbs). File →
 submit → watch → wrap; `pf doctor` at any point.
-
-## Architecture
-
-Current-system reference: `docs/design/polyforge-vnext/reference.md` (one
-file: components, WI state machine, session fencing, aihub and daemon
-routes, error codes, bundle keys, candidates, daemon lifecycle). Decision
-authority: `docs/design/polyforge-vnext/v2-converge.md` (with
-`wi-kind-contract.md`, `01-workflow-skills.md` for bundle authoring,
-`06-memory-search.md` and `08-capsule-base-migration.md`). The v0/v1 design
-set (00, 02–05, 07, the v1/v1.5 specs) is under
-`docs/design/polyforge-vnext/archive/` — history only; do not build from it.
-The subsections below describe the code as it actually exists in this tree —
-the live code is the authority; design-doc references are for traceability.
-
-### Modules
-
-One row per sub-package, exactly as `internal/` exists today:
-
-| Package | Role |
-| --- | --- |
-| `internal/common/api` | Shared business contract between aihub and pf: work items, projects, users, sessions, memories, and the typed error-code registry (`CORE-*`, `MEM-*`, `AUTH-*`, `DAEMON-*`, `GIT-*`). |
-| `internal/common/atomicfile` | The one crash-safe "replace this file" primitive every state writer uses. |
-| `internal/common/capsule` | Execution-capsule contract shared by pf (runtime creates capsules, the driver writes `execution.json`, the observe lane commits them) and aihub (serves the matching bare repos; git-dir lives outside the capsule). |
-| `internal/common/protocol` | The in-machine contracts: Runtime↔Observe messages and the pf CLI↔daemon UDS HTTP API surface. |
-| `internal/common/harness` | The closed step-harness set (`pi` \| `claude`) and the one model-candidate format `<harness>:<model>`. |
-| `internal/common/spawn` | Process-derivation contract shared by the runtime (daemon assembly) and the driver (step-process spawning). |
-| `internal/common/workflow` | The minimal workflow-bundle frontmatter read surface (defaults + per-step `model_candidates`) that drives model and harness selection, and the step-definition lookup: a bundle's own `steps/<id>.md` wins, else the shared `workflows/_shared/steps/<id>.md` (`_shared` is not a bundle; it is materialized beside the bundle). No digest contract: the bundle digest chain was deleted (polyforge#149). |
-| `internal/aihub/core` | aihub persistent layer: SQLite store (single writer, WAL), the work-item state machine, claim/session arbitration (one live session per WI, its hashed push secret and public fingerprint), the ready queue and the admin face. |
-| `internal/aihub/git` | aihub git surface: per-WI bare-repo lifecycle, the git-http-backend smart-protocol proxy, session-secret auth (only the WI's live session secret pushes) and the pre-receive hook enforcing the capsule-chain invariants. |
-| `internal/aihub/memory` | Core-side memory store: memories kept in the database (`memories.content`), FTS5-trigram full-text search, and the one-time content migration from the former `memory.md` files. |
-| `internal/aihub/server` | The AIHub HTTP face: business endpoints, the admin face, and the `/git/{wi}.git/...` proxy mount; Bearer API key auth, typed `api.Error` envelope. |
-| `internal/polyforge/aihubclient` | Shared HTTP client for the aihub server, used by runtime, observe and the CLI verbs; decodes the typed error envelope back into `*api.Error`. |
-| `internal/polyforge/cli` | The `pf` client CLI: the routing verbs (file, queue, cancel, recall, remember, memory, submit, `watch`, answer, pause, resume, wrap, ops), `chat`, the management face (users, api-keys, projects, machines, backup), the daemon client over the UDS socket, and config resolution. |
-| `internal/polyforge/daemon` | Assembly of the local work machine: the UDS HTTP face, runtime, observe lane and driver wired together, the auto switch, the pending-job dispatcher, the auto-pull loop, the driver start (a running `Driver.Run` is the job's agent handle) and the shutdown. |
-| `internal/polyforge/gitops` | Shared capsule-git operations layer used by Runtime (clone at start, dirty-commit at recover) and Observe (async commit+push); owns the per-WI git mutex. |
-| `internal/polyforge/mapping` | The workspace→projects plan read from cli.toml's `[workspace]` sections, and its validated inverse (project → workspace). |
-| `internal/polyforge/sessionjsonl` | The single parser of the harness session-jsonl format (live transcript tail extraction). |
-| `internal/polyforge/supervisor` | The daemon's own supervision on a work machine: the `polyforge-daemon` tmux restart loop shared by `pf daemon ensure` and `pf doctor`. |
-| `internal/polyforge/supervise` | The driver↔supervisor contract: facts, verdicts and the per-WI link (v2-converge §2.2–2.5). |
-| `internal/polyforge/workspace` | The `.polyforge.yaml` loader (`steps.<project>.<default\|step-id>.models`, `summarize.models`, `summarize.language`, `summarize.interval_sec`), read and validated by the daemon before every claim and by `pf doctor` (an invalid file refuses the claim without claiming). |
-| `internal/polyforge/observe` | Observe lane: the per-work-item events files, per-WI monitor goroutines fed by the runtime's lifecycle queue, the capsule push loop, live-transcript streaming, session revalidation, and the live activity / progress views the daemon reads. |
-| `internal/polyforge/driver` | The Go execution driver: owns `runtime-state/execution.json`, spawns one step process per workflow step and validates each result envelope (needs_input rules; the human gate — a `requires_human_answer: true` step can neither complete nor gate-fail without a human answer in the current attempt, such an envelope is rejected; the command-evidence gate). |
-| `internal/polyforge/watcher` | The `pf watch` engine: decision classification (fixed-template wake-up lines) and the resident per-chat watcher with its progress file. |
-| `internal/polyforge/runtime` | Runtime lane: the WI lifecycle manager (one actor per work item: Start/Stop/Recover/Restart), the pi-harness agent spawner, the layered (L1–L5) process cleanup and the recovery engine. |
-
-Binaries: `cmd/aihub` (server binary) and `cmd/pf` (work-machine binary:
-CLI verbs + `pf daemon`).
 
 ## Extending
 
