@@ -1,39 +1,102 @@
-# WI kind 契约（polyforge#140 拆分 a：aihub 端） <!-- wi-kind-contract -->
+# WI kind contract (polyforge#140 split a: the aihub side) <!-- wi-kind-contract -->
 
-> 状态：拆分 a 交付物（2026-10-13）。供拆分 b（pf 客户端：CLI / skills / daemon submit 预检）对接的**接口契约**；裁决背景见 `v2-converge.md#§12`。
-> 本票无 schema 变更、无迁移、无新表新列；**部署**与**回滚**见 §4。
-> 通用约束：全部新增面**只做加法**——旧字段不改名、不删减，旧客户端对未知 JSON 键天然忽略。
+> Status: split a's deliverable (2026-10-13). The **interface contract** for split
+> b (the pf client: CLI / skills / the daemon's submit prechecks) to integrate
+> against; the ruling context is `v2-converge.md#§12`.
+> This ticket carries no schema change, no migration, no new table or column;
+> **deploy** and **rollback** are §4.
+> General constraint: every added surface **is additive only** — old fields are
+> never renamed or dropped, and old clients ignore unknown JSON keys by nature.
 
-## 1. `bundle_name` 的请求与响应字段 <!-- §1 -->
+## 1. `bundle_name` request and response fields <!-- §1 -->
 
-- **create**（`POST /api/v1/work-items`）：请求体可选 `bundle_name`（非空字符串）。非空 = 执行票；NULL / 缺省 = 纯登记票。（digest 链已删，polyforge#149 B9：载荷携带 digest 字段会被忽略，不再落库。）
-- **PATCH**（`PATCH /api/v1/work-items/{id}`）：`bundle_name` 为 R2 窗口内可更新键（string 或 null）；`null` = 解绑（票成为登记票，不再出现在 ready queue 任何分段）。digest 键已从可更新键集合删除（polyforge#149 B9）：携带该键的 PATCH 整体拒绝 `CORE-400`（未知/不可更新字段）。
-- **落库规则（create 与 PATCH 共用同一代码路径）**：bundle 引用即 `bundle_name` 本身，无 digest（不再派生 stand-in，也不接受显式 pin）；`repo_inventory`（建票时冻结，`reference.md#§2.1`）不受 PATCH 影响。
-- **响应面**：WI 视图（GET 详情 / 列表 / queue 条目）携带 `bundle_name`（既有字段，形状不变）。
+- **create** (`POST /api/v1/work-items`): the request body carries an optional
+  `bundle_name` (a non-empty string). Non-empty = an execution ticket; NULL /
+  absent = a pure registry ticket. (The digest chain is deleted, polyforge#149
+  B9: a payload carrying a digest field is ignored and never lands in the
+  database.)
+- **PATCH** (`PATCH /api/v1/work-items/{id}`): `bundle_name` is an updatable
+  key inside the R2 window (string or null); `null` = unbind (the ticket
+  becomes a registry ticket and no longer appears in any ready-queue segment).
+  The digest key is deleted from the updatable-key set (polyforge#149 B9): a
+  PATCH carrying it is rejected whole with `CORE-400` (unknown / not
+  updatable).
+- **Landing rule (create and PATCH share one code path)**: the bundle
+  reference is `bundle_name` itself, no digest (no stand-in is derived and no
+  explicit pin accepted); `repo_inventory` (frozen at ticket creation,
+  `reference.md#§2.1`) is untouched by PATCH.
+- **Response surface**: the WI views (GET detail / list / queue entry) carry
+  `bundle_name` (an existing field, shape unchanged).
 
-## 2. R2 窗口语义（首次认领冻结） <!-- §2 -->
+## 2. R2 window semantics (frozen at first claim) <!-- §2 -->
 
-- **窗口**：`status='queued'` 且**从未认领**（无活跃 session 行且无 `session_claimed` 事件；force-end 后 session 行清空但认领事件仍在，冻结保持）。窗口内三向 PATCH 均接受：NULL→X（补挂）、X→Y（换名）、X→NULL（解绑）。
-- `waiting_on` 非空**不**单独拒绝窗口内 PATCH（是否出现在 ready queue 是队列过滤问题，不是不可变问题）。
-- **窗口外拒绝且不写库**：
-  - 已认领 / 非 queued → `CORE-400`，`reason=IMMUTABLE`
-  - 终态（wrapped / failed / canceled）→ `CORE-410`，`reason=TERMINAL_STATE`
-- **对称父子规则**：
-  - 有子票（任意子票状态，含已终态）→ PATCH 绑非 NULL bundle 拒绝：`CORE-400`，`reason=HAS_CHILDREN_NO_BUNDLE`（只有 PATCH 会触发：create 出的新票天然无子票；create 侧对应的是下一条 PARENT_NOT_REGISTRY）
-  - 已绑 bundle 的票作 parent 的 create 拒绝：`CORE-400`，`reason=PARENT_NOT_REGISTRY`（沿用原语义，无旧名别名）
-- **并发（两组；终态一致，被拒的一方得到 typed 拒绝且不写库）**：
-  - PATCH bundle vs Claim：不另设仲裁，单写者事务串行化 + 各自的 CAS 保证终态一致。绑定或改名的 PATCH 不会让 Claim 失败（解绑 X→NULL 若排在前，Claim 按无 bundle 票照常被拒 NOT_CLAIMABLE）；PATCH 若排在 Claim 之前则成功（Claim 冻结的是新 bundle），若排在之后则被拒：通常为 `CORE-400 reason=IMMUTABLE`（已有认领），`CORE-409 reason=RACE_LOST` 为防御性兜底（单写者单连接下实际不会出现）。之后的任何 bundle PATCH 都被拒（已冻结）。
-  - 绑定 bundle vs 新增子票：创建事务内父票 bundle 复查 + 绑定的守卫写复查子票；终态不同时出现「有子票 ∧ bundle 非空」。
-- **Claim 无 bundle 票**仍被拒：`CORE-409`，`reason=NOT_CLAIMABLE`（现行路径不变）。
+- **The window**: `status='queued'` and **never claimed** (no active session
+  row and no `session_claimed` event; after a force-end the session row is
+  emptied but the claim event remains, so the freeze holds). Inside the window
+  all three PATCH directions are accepted: NULL→X (attach), X→Y (rename),
+  X→NULL (unbind).
+- A non-empty `waiting_on` does **not** by itself refuse an in-window PATCH
+  (whether the ticket shows in the ready queue is a queue-filter question,
+  not an immutability question).
+- **Outside the window it is refused and nothing is written**:
+  - claimed / not queued → `CORE-400`, `reason=IMMUTABLE`
+  - terminal (wrapped / failed / canceled) → `CORE-410`,
+    `reason=TERMINAL_STATE`
+- **The symmetric parent/child rules**:
+  - a ticket with children (any child state, terminal included) → a PATCH
+    binding a non-NULL bundle is refused: `CORE-400`,
+    `reason=HAS_CHILDREN_NO_BUNDLE` (only PATCH can trigger it: a ticket
+    created by create has no children by nature; create's counterpart is the
+    next rule's PARENT_NOT_REGISTRY)
+  - create naming a bundle-bound ticket as parent is refused: `CORE-400`,
+    `reason=PARENT_NOT_REGISTRY` (the original semantics kept, no old-name
+    alias)
+- **Concurrency (two groups; the end state is consistent, the refused side
+  gets a typed refusal and nothing is written)**:
+  - PATCH bundle vs Claim: no separate arbiter — the single-writer
+    transaction serializes and each side's own CAS guarantees a consistent
+    end state. A bind or rename PATCH cannot make the Claim fail (an unbind
+    X→NULL ordered first leaves the Claim refused as a no-bundle ticket,
+    NOT_CLAIMABLE); the PATCH ordered before the Claim succeeds (the Claim
+    freezes the new bundle), ordered after it is refused: usually
+    `CORE-400 reason=IMMUTABLE` (already claimed), with
+    `CORE-409 reason=RACE_LOST` as a defensive fallback (practically
+    unreachable under one writer and one connection). Every later bundle
+    PATCH is refused (frozen).
+  - bind bundle vs add a child: inside the create transaction the parent's
+    bundle is rechecked and the binding guard rechecks the child; the end
+    state never shows "has children ∧ bundle non-empty" together.
+- **Claiming a no-bundle ticket** stays refused: `CORE-409`,
+  `reason=NOT_CLAIMABLE` (the current path unchanged).
 
-## 3. ready queue 与父票（响应形状） <!-- §3 -->
+## 3. ready queue and parent tickets (response shape) <!-- §3 -->
 
-- `GET /api/v1/projects/{p}/ready-queue` 响应为 `project` / `items` / `running` / `paused`。无 bundle 的登记票（含 epic，即有子票的票）不出现在任何分段。
-- 父票没有派生完成状态：aihub 不自动写终态，子票进度从子票本身读取；子票全部终态后，由 owner 用 `pf wrap` 关单（`POST …/wrap`，无 bundle 的票才可用；仍有非终态子票 → `CORE-409`，`reason=OPEN_CHILDREN`）。
-- 存量违规行（bundle 非空且有子票）不迁移、不拒读，按字面数据展示；对称规则只约束新写入。
+- `GET /api/v1/projects/{p}/ready-queue` answers `project` / `items` /
+  `running` / `paused`. Registry tickets without a bundle (epics included,
+  i.e. tickets with children) appear in no segment.
+- Parent tickets carry no derived completion state: aihub never writes a
+  terminal state automatically, child progress is read from the children
+  themselves; once every child is terminal the owner closes the parent with
+  `pf wrap` (`POST …/wrap`, available only to tickets without a bundle; a
+  non-terminal child still standing → `CORE-409`, `reason=OPEN_CHILDREN`).
+- Extant violating rows (bundle non-empty and children present) are not
+  migrated and not refused on read; they are shown as literal data. The
+  symmetric rules bind new writes only.
 
-## 4. 部署与回滚 <!-- §4 -->
+## 4. Deploy and rollback <!-- §4 -->
 
-- **部署顺序：新 aihub 先于新 pf**。拆分 a 只改 aihub 端；响应只做加法，旧 pf 对新增 JSON 键天然忽略，先部署 aihub 不破坏现行客户端；拆分 b 的客户端改造随后上线。「已绑 bundle 的票不再可作父票」等语义变化属预期，不算回归。
-- **回滚**：本票无 schema 变更、无迁移、无新表新列——**回滚仅需回退 aihub 二进制**。数据面无需清理：R2 窗口内发生过的 bundle 变更是普通 UPDATE，回退后按旧只读语义照常展示。
-- **上线验证（本地临时 aihub）**：`go test ./...` 全绿（含 w140 验收套件 `test/w140_wi_kind_contract_acceptance_test.go`）；不触碰生产 aihub、不替换 `/usr/local/bin/pf`、不重启 pf daemon。
+- **Deploy order: the new aihub before the new pf**. Split a changes the
+  aihub side only; the responses are additive, old pf ignores the new JSON
+  keys by nature, so deploying aihub first breaks no current client; split
+  b's client changes land after. Semantic changes such as "a bundle-bound
+  ticket is no longer usable as a parent" are expected, not regressions.
+- **Rollback**: this ticket carries no schema change, no migration, no new
+  table or column — **rollback is just rolling back the aihub binary**. The
+  data surface needs no cleanup: bundle changes that happened inside the R2
+  window are ordinary UPDATEs, and after rollback the old read-only semantics
+  show them as they are.
+- **Pre-deploy verification (a local throwaway aihub)**: `go test ./...` all
+  green (including the w140 acceptance suite
+  `test/w140_wi_kind_contract_acceptance_test.go`); no touch of the
+  production aihub, no replacement of `/usr/local/bin/pf`, no restart of the
+  pf daemon.

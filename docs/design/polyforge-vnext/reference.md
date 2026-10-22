@@ -2,7 +2,7 @@
 
 > What exists in this tree (v2.14.0 line), derived from the code; every claim names its source file.
 > **The code is the authority**; where this file and the code disagree, fix this file. Decisions and
-> their rationale live in [v2-converge.md](v2-converge.md) (decision authority, Chinese); the
+> their rationale live in [v2-converge.md](v2-converge.md) (decision authority); the
 > parent/child/bundle contract in [wi-kind-contract.md](wi-kind-contract.md); bundle authoring in
 > [01-workflow-skills.md](01-workflow-skills.md); memory in [06-memory-search.md](06-memory-search.md);
 > capsule base migration in [08-capsule-base-migration.md](08-capsule-base-migration.md). The v0/v1

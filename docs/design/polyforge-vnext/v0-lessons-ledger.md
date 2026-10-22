@@ -2,7 +2,7 @@
 # (source: pilot history, HANDOFF, ticket records; the authoritative
 # registry the v1 implementation should have been audited against)
 
-> **注意（2026-10-12）**：`docs/pilot/` 已删除；本文引用的 pilot 路径请到 git 历史查看（tag `v2.1.0`）。
+> **Note (2026-10-12)**: `docs/pilot/` has been deleted; to see the pilot paths this document cites, look in git history (tag `v2.1.0`).
 >
 > **Superseded marks (repo review 2026-10-16 wave 4)**: entries whose *mechanism* no longer exists carry a
 > `〔SUPERSEDED …〕` line naming what replaced it; the lesson itself still applies. Open entries fixed
@@ -154,267 +154,264 @@ F4  The candidate chain was a decoration and settings pollution was open
     steps.<id>.model and the observe face renders it.
     Fixed in this lane (v1-lessons-fix, base 1059da5).
 
-F5  Fatal provider error 处置与 idle 看门狗（I1 re-hit）：fatal 级 provider
-    错误此前按普通中断处理（不自恢复、不能及时判死），长静默步无看门狗。
-    Fixed: fatal provider error 即刻恢复 + idle watchdog（10 分钟窗口 +
-    probe）。已修，main d84115b（分支 v1-f5-watchdog，branch commit
-    2a0ab4a）。
+F5  Fatal provider error handling and the idle watchdog (I1 re-hit): a fatal-level provider
+    error was previously handled as an ordinary interruption (no self-recovery, no timely death
+    judgement), and a long silent step had no watchdog.
+    Fixed: fatal provider error recovers at once + idle watchdog (10-minute window +
+    probe). Fixed, main d84115b (branch v1-f5-watchdog, branch commit
+    2a0ab4a).
 
-F6  Goal 携带的 recall 指令不可执行（X4 re-hit）：agent 无 agent→server
-    memory 读路径，无法先读台账再动手。Fixed: materialize 时静态记忆快照 +
-    UDS 窄通道 recall/remember + CLI memory 动词（`pf recall` /
-    `pf remember`）。已修，main c740fb0（分支 v1-f6f7，commit e0db578）。
+F6  The recall instruction carried in the goal was not executable (X4 re-hit): the agent had no agent→server
+    memory read path and could not read the ledger before acting. Fixed: a static memory snapshot at materialize +
+    a narrow UDS recall/remember channel + the CLI memory verbs (`pf recall` /
+    `pf remember`). Fixed, main c740fb0 (branch v1-f6f7, commit e0db578).
 
-F7  步定义物化错位与完成标记缺失（03-execution-capsule §4.5 re-hit）：
-    物化把步定义复制到 capsule `agents/` 而非 Pi 发现目录 `.pi/agents/`，
-    且未写完成标记。Fixed: `.pi/agents` 物化目标目录 + 完成标记
-    `sync/materialized.json`（RelMaterializeMarker）+ trust gate
-    （snapshot 仅在 marker 完整且匹配 pinned bundle 身份时可信）。已修，
-    main c740fb0（分支 v1-f6f7，commit e0db578）。
+F7  Step-definition materialization misplaced and the completion marker missing (03-execution-capsule §4.5 re-hit):
+    materialization copied the step definitions into the capsule's `agents/` instead of Pi's discovery directory `.pi/agents/`,
+    and wrote no completion marker. Fixed: the `.pi/agents` materialization target directory + the completion marker
+    `sync/materialized.json` (RelMaterializeMarker) + trust gate
+    (a snapshot is trusted only when the marker is complete and matches the pinned bundle identity). Fixed,
+    main c740fb0 (branch v1-f6f7, commit e0db578).
 
-F11 e2e daemon 拆除泄漏 fakepi 孤儿（D1/X3 re-hit）：e2e 各拆除路径
-    （graceful stop、crash、SIGKILL fallback 等）拆除 daemon 后，带场景
-    `PF_WI_ID` 标记的 fakepi 孤儿进程仍可存活。修复：拆除后扫描 /proc 中带
-    该场景 PF_WI_ID 标记的存活进程，SIGKILL 全部幸存者，并以有界轮询断言
-    零残留（作为场景 FIRST cleanup 注册，LIFO 保证在所有拆除 cleanup 之后
-    运行）。状态注记：已修（main d586396，in HEAD feaf127；测试改动
-    test/v1_harness_test.go +70、s12/s13 各 +3）。
+F11 e2e daemon teardown leaked fakepi orphans (D1/X3 re-hit): after every e2e teardown path
+    (graceful stop, crash, SIGKILL fallback and so on) tore the daemon down, fakepi orphan processes carrying the scenario's
+    `PF_WI_ID` marker could still survive. Fix: after teardown scan /proc for live processes carrying
+    that scenario's PF_WI_ID marker, SIGKILL all survivors, and assert zero residue by bounded polling
+    (registered as the scenario's FIRST cleanup, so LIFO guarantees it runs after all teardown cleanups).
+    Status note: fixed (main d586396, in HEAD feaf127; test changes
+    test/v1_harness_test.go +70, s12/s13 each +3).
 
-F12 停机 push 竞态（S1/#46 re-hit）：daemon 停机时 flush(shutdown) push
-    （observe/monitor.go flushShutdown，~line 1333）与异步 archival push
-    （schedulePush，~line 901）/ 进程退出竞速，远端可落后于本地 sealed
-    head——v0 #46「push 必须终于 sealed HEAD，绝非 stale/base sha」
-    教训类的 v1 再命中。状态注记：已补偿（由 #46 修复的校验面兜底：
-    ship.go ls-remote 校验 remote==sealed commit、绝不 force-push 已移动
-    的分支（~lines 160–200）；重启和解补完 seal——测试 fa9ed17「s17
-    SIGKILL inside the SEALING window」）。
+F12 Shutdown push race (S1/#46 re-hit): when the daemon shuts down, the flush(shutdown) push
+    (observe/monitor.go flushShutdown, ~line 1333) races the asynchronous archival push
+    (schedulePush, ~line 901) / the process exit, so the remote can lag the local sealed
+    head — a v1 re-hit of the lesson class of v0 #46 "a push must end at the sealed HEAD, never a stale/base sha".
+    Status note: compensated (backstopped by the verification surface that the #46 fix put in place:
+    ship.go ls-remote verifies remote==sealed commit, and a moved branch is never
+    force-pushed (~lines 160–200); restart reconciliation completes the seal — test fa9ed17 "s17
+    SIGKILL inside the SEALING window").
     〔SUPERSEDED (2026-10-16): flush(shutdown) is deleted with the flush lane; see S4. The lesson stands.〕
 
-F13 maxTokens 双事故（P6 re-hit ×2）：操作员全局模型配置两起分别设
-    maxTokens 超过/等于模型 contextWindow（163840 > 131072、
-    131072 = 131072），继承 provider 均以 400 崩——settings 污染两连击。
-    纪律：操作员模型配置须 maxTokens << contextWindow。状态注记：已补偿
-    （spawn.go 刻意不设 max_tokens——被 pin 模型自身默认即保守选择，自造
-    上限恰是 v0 settings 污染失败形状的另一面（注释块 ~line 234）；F4 的
-    argv 模型 pin 移除 defaultModel 继承向量；残余 per-model 操作员覆盖
-    为文档化故意接受）。
+F13 Two maxTokens incidents (P6 re-hit ×2): in two cases the operator's global model configuration set
+    maxTokens above/equal to the model's contextWindow (163840 > 131072,
+    131072 = 131072), and the inheriting providers crashed with 400 both times — a settings-pollution double hit.
+    Discipline: the operator's model configuration must keep maxTokens << contextWindow. Status note: compensated
+    (spawn.go deliberately sets no max_tokens — the pinned model's own default is the conservative choice, and a self-made
+    cap is exactly the other face of the v0 settings-pollution failure shape (comment block ~line 234); F4's
+    argv model pin removes the defaultModel inheritance vector; the residual per-model operator override
+    is a documented, deliberate acceptance).
 
-F14 boot.sh 全栈重启误伤：2026-09-30 操作员想重启单个 daemon，跑了
-    `/root/polyforge-pilot-v1/boot.sh`（全栈幂等重启器：kill 旧 aihub +
-    双 daemon 后三者全部重拉），整个 v1 pilot 栈被一并停掉。
-    状态注记：已补偿（单点重启脚本已建：`boot-b-only.sh`，2026-09-30
-    11:46 创建——只 kill daemon-b、轮询 ≤120s 等 `b/daemon.sock`
-    释放、setsid 单独重启 daemon-b；仓库内已录于
-    `docs/pilot/ops-scripts.md` 运维注意事项，lines 75–77）。
+F14 boot.sh full-stack restart collateral damage: on 2026-09-30 an operator wanted to restart a single daemon and ran
+    `/root/polyforge-pilot-v1/boot.sh` (the full-stack idempotent restarter: kill the old aihub +
+    both daemons, then re-raise all three), and the whole v1 pilot stack was stopped along with it.
+    Status note: compensated (a single-point restart script has been built: `boot-b-only.sh`, created 2026-09-30
+    11:46 — it kills only daemon-b, polls ≤120s for `b/daemon.sock`
+    to be released, and restarts daemon-b alone with setsid; recorded in the repo in
+    `docs/pilot/ops-scripts.md` operations notes, lines 75–77).
 
-编号对账（polyforge#51 追加批）：本 WI goal 写作「台账补 F13-F17」时
-F13/F14 尚不存在，其后 #47（commit `c1c55be`）已追加 F13/F14，故本批
-自 F15（下一空号）起连续编号；F8–F10 仍按上台账原注刻意保留、不回填。
-phase-0 观测窗真机发现实际共 6 条（F15–F20），多于 goal 暗示的 5 个
-槽位——按证据如实登记，不为凑数增删。
+Numbering reconciliation (the polyforge#51 appended batch): when this WI's goal was written as "ledger adds F13-F17"
+F13/F14 did not exist yet, and #47 (commit `c1c55be`) later appended F13/F14, so this batch
+numbers consecutively from F15 (the next free number); F8–F10 are still deliberately kept as the earlier ledger note says and not backfilled.
+The phase-0 observation window's real-machine findings actually number 6 (F15–F20), more than the 5 slots
+the goal implied — registered as the evidence shows, neither adding nor dropping to fit the count.
 
-F15 watchdog 进度语义盲区「UI noise is not progress」（F5 引入的看门狗
-    自身的新失败形状，非 v0 条目再命中）：真机两连击——subagent 派发在
-    双盲看门狗下楔死 2.7 小时（hang 判据要求静默，被 streaming
-    extension_ui 噪声持续刷新 lastRecordAt 挡住；idle 判据要求无开放
-    turn，被真实开放的 turn 挡住——两判据互盲，谁都不开火）。修复：
-    记录分流 progress（message_*/toolResult/lifecycle/response）vs noise
-    （extension_ui_request/未分类/不可解析），Silent() 与 idle 判据锚定
-    LastProgressAt（shape A/B/C 三形 + s21 e2e 对真 daemon 钉死；另加
-    no_progress owner 可见事件、ops status 的 LAST-PROGRESS 列）。
-    状态注记：已修（main `ef67aa7`，分支 v1-f15 merge `d485c72`；修复
-    落地前 #46 期间由手动 shim `/root/polyforge-pilot-v1/f15-shim.sh`
-    补位——capsule transcript 静默 >15min 且 WI 仍在跑即杀进程树交恢复
-    接管，WI 终态自退出）。
+F15 Watchdog progress-semantics blind spot "UI noise is not progress" (a new failure shape of the watchdog F5
+    introduced, not a re-hit of a v0 entry): a real-machine double hit — a subagent dispatch wedged for 2.7 hours
+    under the doubly blind watchdog (the hang criterion requires silence, and streaming
+    extension_ui noise kept refreshing lastRecordAt and blocked it; the idle criterion requires no open
+    turn, and a genuinely open turn blocked it — the two criteria blind to each other, neither firing). Fix: records are split into progress (message_*/toolResult/lifecycle/response) vs noise
+    (extension_ui_request/unclassified/unparseable), and Silent() and the idle criterion anchor on
+    LastProgressAt (the three shapes A/B/C + an s21 e2e against a real daemon pin it down; also added the
+    no_progress owner-visible event and the LAST-PROGRESS column of ops status).
+    Status note: fixed (main `ef67aa7`, branch v1-f15 merge `d485c72`; before the fix
+    landed, during #46, a manual shim `/root/polyforge-pilot-v1/f15-shim.sh`
+    filled in — when the capsule transcript was silent >15min and the WI was still running it killed the process tree and handed over to recovery,
+    and exited on its own at the WI's terminal state).
 
-F16 flush 栅栏收养窗洞（S3 同型：被取代的世代必须被栅栏挡住）：monitor
-    滞后的 current-id 若仍等于 flush 方 id，在 hub 最新已知已指向后继时
-    其实早已 stale——只有僵尸会用前代的名字说话，旧栅栏却放行这种
-    「current-id 命中」的 zombie flush。由 F15 修复引入的时间扰动暴露
-    （s10 红，wait 修复后确定性复现）。状态注记：已修（main `a91ef69`：
-    flush fence 增加 hub 最新已知的收养窗 cross-check；s10 改等 monitor
-    收养事件（wi_agent_rederived）而非 spawn journal；
-    flush_recovery_window HTTP 测试钉死收紧语义；同 commit 另将 s19
-    ShipPR 的 gh 建仓限流按可用性门处理——skip 不 fail）。
+F16 Hole in the flush-fence adoption window (same type as S3: a superseded generation must be blocked by the fence): if the monitor's
+    lagging current-id still equals the flush party's id, it is in fact already stale when the hub's latest known has pointed at the successor
+    — only a zombie speaks in a predecessor's name, yet the old fence let such
+    "current-id hit" zombie flushes through. Exposed by the timing perturbation the F15 fix introduced
+    (s10 red, deterministically reproduced after the wait fix). Status note: fixed (main `a91ef69`:
+    the flush fence gains a cross-check against the hub's latest-known adoption window; s10 now waits for the monitor's
+    adoption event (wi_agent_rederived) instead of the spawn journal;
+    the flush_recovery_window HTTP test pins the tightened semantics; the same commit also treats s19
+    ShipPR's gh repo-creation rate limit as an availability gate — skip, not fail).
     〔SUPERSEDED (2026-10-16): the flush fence is deleted with the flush lane; dispatch fencing is spawn_n in the driver — v2-converge.md §2.2. The lesson stands.〕
 
-F17 M4 证据链断裂（C3' 同型：执行权威文件里该有的证据从未落进）：39 个
-    已执行 verification step 中 17 个无结构化命令证据（12 个旧 schema
-    execution.json 无 commands 字段 + 5 个 commands 无可读条目），
-    M4 = 22/39 = 56.41%，PILOT-V4 否决触发——触发的主体是证据面缺口
-    而非谎报证实，且旧 schema 票无法追溯补分。状态注记：已修（V4/V8
-    修复 lane，台账 F21：verification 证据契约三层硬强制 + wrap 侧
-    fail-closed；分支 v1-v4v8，合入后回填 commit）。
+F17 M4 evidence chain broken (same type as C3': evidence that should have landed in the execution authority file never did): of 39
+    executed verification steps, 17 had no structured command evidence (12 old-schema
+    execution.json files with no commands field + 5 whose commands had no readable entry),
+    M4 = 22/39 = 56.41%, the PILOT-V4 veto triggered — the cause was a gap in the evidence surface,
+    not a false claim being proven, and old-schema tickets cannot be retroactively scored. Status note: fixed (the V4/V8
+    fix lane, ledger F21: the verification evidence contract hard-enforced in three layers + wrap-side
+    fail-closed; branch v1-v4v8, commit to be backfilled after merge).
 
-F18 持续类拒绝下的 push 风暴（S4 有界性裁定在发布重试面的缺失）：
-    wi_VCyBYf7uYeb2（polyforge#48）对同一 capsule 以 ~10s 固定节奏连推
-    185 次全部 push_failed（前段 aihub gitlink mode-160000 拒绝、后段
-    commit c82791fd… 拒绝，另 2 次 wrap_blocked），无退避、无熔断、无
-    上报升级，风暴持续约 1 小时；该批样本直接把 M8 推到 188/647 =
-    29.06% > 1%，PILOT-V8 否决触发（M7 仅计 1 段 ≤ 3，未触发）。
-    状态注记：已修（V4/V8 修复 lane，台账 F22：毒链本地预检
-    GIT-412 + push_poisoned_local 分类 + 同错误重试上限；分支
-    v1-v4v8，合入后回填 commit）。
+F18 Push storm under persistent rejection (the S4 bounded-ness ruling missing on the publish-retry surface):
+    wi_VCyBYf7uYeb2 (polyforge#48) pushed the same capsule 185 times in a row at a fixed ~10s cadence, all
+    push_failed (first the aihub gitlink mode-160000 rejection, then the
+    commit c82791fd… rejection, plus 2 wrap_blocked), with no backoff, no circuit breaker, no
+    escalation, the storm lasting about 1 hour; that sample batch alone pushed M8 to 188/647 =
+    29.06% > 1%, triggering the PILOT-V8 veto (M7 counted only 1 segment ≤ 3, not triggered).
+    Status note: fixed (the V4/V8 fix lane, ledger F22: poisoned-chain local precheck
+    GIT-412 + the push_poisoned_local classification + a same-error retry cap; branch
+    v1-v4v8, commit to be backfilled after merge).
 
-F19 M6 观测字段从未随事件面发出：整个窗口 events.log 共 33 条
-    memory_remember 事件、携带 write_ms 字段 0 条（旧 schema 事件面未含
-    该观测字段；迁移 CLI 直写与服务端 reconcile 回写不产生事件——已
-    登记的样本集边界），PILOT-V6 本窗口无样本、不参与判定：检索实时性
-    面（2026-10-16 前版本的 06-memory-search §4.5 p99 ≤ 5s，见 git 历史）全程不可观测。状态注记：
-    未修——已登记为 phase-1 输入（`docs/pilot/v1-phase-0-report.md`
-    §5.2「M6 样本集边界」：需新事件 kind 或样本面补齐，未获授权前不动）。
+F19 The M6 observation field was never emitted on the event surface: in the whole window events.log held 33
+    memory_remember events, 0 of them carrying a write_ms field (the old-schema event surface did not contain
+    that observation field; the migration CLI's direct writes and the server-side reconcile write-back produce no events — an already
+    registered boundary of the sample set), PILOT-V6 had no samples this window and took no part in the verdict: the search real-time
+    surface (the pre-2026-10-16 version's 06-memory-search §4.5 p99 ≤ 5s, see git history) was unobservable throughout. Status note:
+    not fixed — registered as a phase-1 input (`docs/pilot/v1-phase-0-report.md`
+    §5.2 "M6 sample-set boundary": it needs a new event kind or the sample surface completed, and is not touched before authorization).
     〔SUPERSEDED (2026-10-18): since v1 (b1839e23) memories are written through aihub only — Store.Create inserts the row and its FTS row in one transaction (06-memory-search.md §2), so a memory is searchable the moment `pf remember` returns; no write-to-search latency is left to observe, and the p99 ≤ 5s goal (060c9f9a), the M6 gate and docs/pilot are deleted. The lesson stands.〕
 
-F20 M3 心跳面未接线：整个窗口 aihub.db machines 表 0 行——机器心跳面
-    从未被写入，M3 只剩 step 时长面（in_progress > 24h）可判，机器失联
-    面（last_heartbeat_at 超存活阈值）无数据，`--m3-heartbeat-max-age`
-    无真实数据可配。状态注记：未修——已登记为 phase-1 输入
-    （`docs/pilot/v1-phase-0-report.md` §5.2「M3 心跳面未接线」）。
+F20 The M3 heartbeat surface was not wired up: in the whole window the aihub.db machines table had 0 rows — the machine heartbeat surface
+    was never written, so M3 had only the step-duration surface (in_progress > 24h) to judge by, the machine-lost-contact
+    surface (last_heartbeat_at beyond the liveness threshold) had no data, and `--m3-heartbeat-max-age`
+    had no real data to configure. Status note: not fixed — registered as a phase-1 input
+    (`docs/pilot/v1-phase-0-report.md` §5.2 "M3 heartbeat surface not wired up").
     〔FIXED (2026-10-02, 65b33708 "daemon+aihub: wire the M3 heartbeat face"): the daemon heartbeats aihub on its own goroutine (internal/polyforge/daemon/heartbeat.go) and `pf machines list` reads machines.last_heartbeat_at — e2e test/v1_s24_machines_cli_test.go.〕
 
-F21 V4 证据契约机械强制（PILOT-V4 否决门槛的修复面；对应发现 F17）：
-    三层同一谓词硬强制 verification 步的结构化命令证据——驱动契约
-    （`skills/pf-execute/SKILL.md` §4：verification 步标 `done` 的同一次
-    写入必须已携带至少一条可读 `{argv, exit_code, duration_ms}`，无证据
-    不许写 done；中译镜像 `references/agent-contract.md` §十一同步；四个
-    参考包的 `agents/verification.md` 补「Evidence obligation (hard
-    gate)」硬约束）、daemon 侧 fail-closed（observe 的 flush(wrap) 子协程
-    校验 execution.json 全部已执行 verification 步，缺证据的 seal 答
-    `DAEMON-400 VERIFICATION_EVIDENCE_MISSING`（引票 + step 名），非终局、
-    补证据后重 flush 过；事件面 `wrap_evidence_refused` 留痕），谓词与
-    M4 读数器（`tools/gate-metrics.go` 的 `commandEvidence`）逐位一致
-    （step id `verification`、已执行 = 非 pending/非空、argv 非空 +
-    exit_code/duration_ms 可读）——门与指标判定同一张脸，未来无证据
-    verification 不可能再通过 wrap。回归：observe 单测 + e2e
-    `v1_s22_evidence_gitlink_test.go` S22a。状态注记：已修
-    （分支 v1-v4v8；合入后回填 commit）。
+F21 The V4 evidence contract mechanically enforced (the fix surface of the PILOT-V4 veto threshold; corresponds to finding F17):
+    the same predicate hard-enforces the verification step's structured command evidence in three layers — the driver contract
+    (`skills/pf-execute/SKILL.md` §4: the same write that marks a verification step `done`
+    must already carry at least one readable `{argv, exit_code, duration_ms}`, and with no evidence
+    done is not allowed; the Chinese mirror `references/agent-contract.md` §11 synced in step; the `agents/verification.md` of the four
+    reference bundles gains the hard constraint "Evidence obligation (hard
+    gate)"), the daemon-side fail-closed (observe's flush(wrap) sub-goroutine
+    validates every executed verification step of execution.json, and a seal lacking evidence is answered
+    `DAEMON-400 VERIFICATION_EVIDENCE_MISSING` (citing the ticket + the step name), non-final, and passes
+    a re-flush after the evidence is supplied; the event surface `wrap_evidence_refused` leaves a trace), the predicate being bit-for-bit identical with
+    the M4 reader (`commandEvidence` of `tools/gate-metrics.go`)
+    (step id `verification`, executed = not pending / non-empty, argv non-empty +
+    exit_code/duration_ms readable) — the gate and the metric judge with the same face, so in future an evidence-less
+    verification cannot pass wrap again. Regression: observe unit tests + e2e
+    `v1_s22_evidence_gitlink_test.go` S22a. Status note: fixed
+    (branch v1-v4v8; commit to be backfilled after merge).
     〔SUPERSEDED (2026-10-16): the evidence gate lives in the driver envelope check (requires_command_evidence), not in observe flush(wrap); skills/pf-execute and tools/gate-metrics are deleted — reference.md §7.3. The lesson stands.〕
 
-F22 毒链本地预检 + 同错误重试上限（PILOT-V8 否决门槛的修复面；对应
-    发现 F18）：gitops 的 CommitPush 在 `git add -A` 后、commit 前扫描
-    `git ls-files --stage`，出现 mode 160000 条目即类型化错误
-    `GIT-412 LOCAL_GITLINK_DETECTED`（不产生 commit——毒链根本进不了
-    本地历史，#48 事故的「毒 commit 已产生只能反复推」形状从源头消
-    除；错误信息给出污染路径与清除指引〔2026-10-16 更正，repo review B-25/V-13：清除指引**绝不**让人删任务仓库的
-    .git——`repos/` 或 `artifacts/release-*` 下出现 gitlink 只说明 capsule `.gitignore` 丢了对应行，指引是恢复
-    `.gitignore` 后重试，并明言不要删该 `.git`（那会毁掉任务仓库历史，含未推送工作）；其他位置的嵌套仓库是
-    agent 残留，指引是把它移出 capsule 或写进 capsule `.gitignore`，仅当其历史可丢弃时才删其 `.git`，
-    再 `git rm --cached` 并以 `git ls-files --stage | grep ^160000` 为空验证〕；
-    嵌套 .git 无 commit 时 add 直接失败的同型错误同样归类）；observe
-    的 push 路径把它归类为新事件 `push_poisoned_local`（与 push_failed
-    分开——本地预检拒绝的是「从未合法存在的 commit」，不是「已发生的
-    边界同步请求失败」，不进 M8 分子分母；钩子端拒收若仍发生照旧计
-    push_failed），同时自动重试加上界：连续 5 次同错误即停本轮重试、落
-    `push_backpressure(reason=same_error)` 降级事件，等下一个边界
-    （execution.json Version bump）或一次成功 push 再续——防 185 次风
-    暴再现。回归：gitops 单测（本地嵌套 .git → GIT-412 不产生 commit）
-    + e2e `v1_s22_evidence_gitlink_test.go` S22b（5 次拒绝后停，清理后
-    链恢复、裸仓历史无 gitlink）。状态注记：已修（分支 v1-v4v8；
-    合入后回填 commit）。
+F22 Poisoned-chain local precheck + same-error retry cap (the fix surface of the PILOT-V8 veto threshold; corresponds to
+    finding F18): gitops' CommitPush scans `git ls-files --stage` after `git add -A` and before commit,
+    and a mode-160000 entry gives the typed error
+    `GIT-412 LOCAL_GITLINK_DETECTED` (no commit is produced — a poisoned chain can never enter
+    local history, eliminating at the source the #48 incident's shape "a poisoned commit has already been produced and can only be pushed again and again"; the error message gives the polluted path and removal guidance 〔2026-10-16 correction, repo review B-25/V-13: the removal guidance **never** tells anyone to delete a task repo's
+    .git — a gitlink under `repos/` or `artifacts/release-*` only shows that the capsule `.gitignore` lost the corresponding line, and the guidance is to restore
+    `.gitignore` and retry, stating explicitly not to delete that `.git` (it would destroy the task repo history, unpushed work included); a nested repo elsewhere is
+    an agent leftover, and the guidance is to move it out of the capsule or write it into the capsule `.gitignore`, deleting its `.git` only when its history is disposable,
+    then `git rm --cached` and verify with `git ls-files --stage | grep ^160000` being empty〕;
+    the same type of error, where add fails outright when a nested .git has no commit, is classified the same way); observe's
+    push path classifies it as the new event `push_poisoned_local` (kept apart from push_failed
+    — the local precheck rejected "a commit that never legitimately existed", not "a
+    failed boundary-sync request that did happen", and it enters neither the numerator nor the denominator of M8; a hook-side rejection, if it still occurs, still counts
+    as push_failed), while the automatic retry gains a bound: 5 consecutive identical errors stop that round of retries and emit the
+    `push_backpressure(reason=same_error)` degradation event, resuming at the next boundary
+    (execution.json Version bump) or after one successful push — preventing the 185-push storm from recurring. Regression: gitops unit test (a local nested .git → GIT-412 produces no commit)
+    + e2e `v1_s22_evidence_gitlink_test.go` S22b (stops after 5 rejections, after cleanup the
+    chain recovers and the bare repo's history has no gitlink). Status note: fixed (branch v1-v4v8;
+    commit to be backfilled after merge).
 
-编号对账（V4/V8 修复 lane 追加批）：本批 goal 原写「F18/F19」时 F18
-    （push 风暴）与 F19（M6 观测字段）已由 #51 追加批占用（F15–F20 连
-    续编号），故本批自 F21（下一空号）起登记，并把两条修复面分别对应
-    到其真正修复的发现：F21 修 F17（M4 证据链断裂）、F22 修 F18
-    （push 风暴）；F17/F18 的状态注记同步指向本批。
+Numbering reconciliation (the V4/V8 fix-lane appended batch): when this batch's goal originally wrote "F18/F19", F18
+    (push storm) and F19 (M6 observation field) were already occupied by the #51 appended batch (F15–F20 numbered
+    consecutively), so this batch registers from F21 (the next free number) and maps the two fix surfaces respectively
+    to the findings they really fix: F21 fixes F17 (the M4 evidence chain broken), F22 fixes F18
+    (the push storm); the status notes of F17/F18 point at this batch in step.
 
-## 追认记录（2026-10-01，owner 逐条确认）
+## Ratification record (2026-10-01, confirmed one by one by the owner)
 
-Phase-0 观测窗期间由操作员 agent 代理的 14 项设计/运营级裁定，
-已向 owner 逐条追认：14/14 过，零推翻。
-涉及：flush 围栏收严（F16）、git 面读不开后门、转录 commit 前同步、
-答案先落盘再投递、停机双进程先 reconcile 再开 UDS、版本号抢号、
-release 授权批量（alpha.4-30，只新建不覆盖不升级）、tag 不推 origin、
-e2e 缺口全开真票、M6/M8 最小仪器化、V4 wrap 证据硬门、V8 毒链本地
-预检+防御不计失败、needs_input 代理答题（自本条起改为 owner 亲自答）、
-#52 takeover 提前。
+14 design/operations-level rulings made by the operator agent on the owner's behalf during the phase-0 observation window
+were ratified to the owner one by one: 14/14 passed, zero overturned.
+Covering: tightening the flush fence (F16), no back door to read the git surface, syncing transcripts before commit,
+answers persisted before delivery, a shutdown of two processes reconciling first and then opening the UDS, grabbing version numbers,
+a release authorization batch (alpha.4-30, create new only, no overwrite, no upgrade), tags not pushed to origin,
+e2e gaps all opened as real tickets, minimal instrumentation of M6/M8, the V4 wrap evidence hard gate, the V8 poisoned-chain local
+precheck + defence not counted as a failure, needs_input proxy answering (from this item on, the owner answers personally),
+and #52 takeover brought forward.
 
-## v1.5 附录（2026-10-01，session-model 实施轨迹）
+## v1.5 appendix (2026-10-01, the session-model implementation trail)
 
-v1.5 session-model 实施期间的设计裁定、评审轨迹与残余未修项，按
-本台账 house style 追记（append-only；不触动上台账任何条目）。
+The design rulings, review trail and residual unfixed items of the v1.5 session-model implementation, appended in
+this ledger's house style (append-only; no entry of the earlier ledger is touched).
 
-1. 总述：v1.5 session-ID ownership model（session_id CAS claim、
-   fencing-on-use、spawn_n、quarantine）取代 generation/attempt/
-   instance lineage，作为协调层替换合入 main @ b5ab060；lineage 全删
-   ——aihub（b1dba93）、wire types（03dc291）、runtime（5e440db）、
-   observe re-key onto spawn_n（41da6e7）、daemon/cli render spawn_n
-   + session_fingerprint（da250ef）。设计权威记录指向
-   `v1.5-session-model.md`（含 industry-research appendix：epoch+
-   fencing 家族、invalidation-on-claim vs fencing-on-use、ZooKeeper
-   GUID ambiguous-claim 教训）与 `v1.5-api-contract.md` §1.5 AMEND。
-   状态注记：已落地。
+1. Overview: the v1.5 session-ID ownership model (session_id CAS claim,
+   fencing-on-use, spawn_n, quarantine) replaced the generation/attempt/
+   instance lineage as the coordination layer, merged into main @ b5ab060; the lineage was entirely deleted
+   — aihub (b1dba93), wire types (03dc291), runtime (5e440db),
+   observe re-keyed onto spawn_n (41da6e7), daemon/cli render spawn_n
+   + session_fingerprint (da250ef). The design authority record points at
+   `v1.5-session-model.md` (with the industry-research appendix: the epoch+
+   fencing family, invalidation-on-claim vs fencing-on-use, the ZooKeeper
+   GUID ambiguous-claim lesson) and `v1.5-api-contract.md` §1.5 AMEND.
+   Status note: landed.
 
-2. B1/B2/B3 裁定与解决：三条 fable BLOCKER 强制追加项，在实施评审
-   （commit 3158d25，verdict APPROVE-WITH-FINDINGS）全部 RESOLVED
-   with evidence——B1 pre-claim durable journal（崩溃安全，D5
-   #Start-crash 修复兼 CAS retry-idempotency 锚，正面回答 ZooKeeper
-   GUID ambiguous-claim 教训）；B2 flush fence = (session_id,
-   spawn_n) 双键（取代收养窗栅栏，F16 修复的接棒者）；B3
-   identity/credential split（PF_SESSION_HANDLE 仅展示指纹 vs 受
-   栅栏保护的 push 凭据，GIT_ASKPASS 单次投递）。状态注记：已落地。
+2. B1/B2/B3 rulings and resolution: three mandatory fable BLOCKER additions, all RESOLVED
+   with evidence in the implementation review
+   (commit 3158d25, verdict APPROVE-WITH-FINDINGS) — B1 the pre-claim durable journal (crash-safe, the D5
+   #Start-crash fix and also the CAS retry-idempotency anchor, answering the ZooKeeper
+   GUID ambiguous-claim lesson head-on); B2 the flush fence = the (session_id,
+   spawn_n) double key (replacing the adoption-window fence, the successor of the F16 fix); B3
+   identity/credential split (PF_SESSION_HANDLE shows only a fingerprint vs the
+   fence-protected push credential, GIT_ASKPASS single delivery). Status note: landed.
 
-3. M1–M5 裁定落地（逐条短条目）：
-   - M1 空会话既终态又可领 → CAS 改 (status, session) 联合判定，
-     claim gates 恢复。状态注记：已落地。
-   - M2 bounded fail：session 清空 + status=blocked，restart 不动，
-     blocked 排除出 CAS 可领集合直至 unblock。状态注记：已落地。
-   - M3 paused-with-session：SessionEnd 第 4 态 `paused`、
-     StatePaused 加入 runtime 状态机、clean_pause 标记、operator
-     pause 保留 job record（secret 本地存活，pf resume 兑现续跑
-     承诺）。状态注记：已落地。
-   - M4 周期性会话重验：monitor tick 上重验（~30 秒；常量见
-     `internal/polyforge/observe/session.go`：defaultRevalidateEvery
-     30s / verifyErrorBackoff 30s / verifyCallBound 70s），由
-     3158d25 补上 Lane D 缺口接线；`--revalidate-every` 旗标由姊妹
-     胶囊 wi_brFjFISWrAFC 落地（fa2e091、4045576、0b6ac8a）。
-     状态注记：已落地。
-   - M5 同机双 daemon TOCTOU → daemon data dir 上 flock。
-     状态注记：已落地。
+3. M1–M5 rulings landed (short entries one by one):
+   - M1 an empty session being both terminal and claimable → the CAS changed to a joint (status, session) judgement,
+     and the claim gates restored. Status note: landed.
+   - M2 bounded fail: session cleared + status=blocked, restart leaves it alone,
+     and blocked is excluded from the CAS-claimable set until unblock. Status note: landed.
+   - M3 paused-with-session: SessionEnd's 4th state `paused`,
+     StatePaused added to the runtime state machine, the clean_pause marker, operator
+     pause retaining the job record (the secret stays alive locally, and pf resume honors the resume
+     promise). Status note: landed.
+   - M4 periodic session re-validation: re-validated on the monitor tick (~30 seconds; constants in
+     `internal/polyforge/observe/session.go`: defaultRevalidateEvery
+     30s / verifyErrorBackoff 30s / verifyCallBound 70s), the Lane D gap wired
+     in by 3158d25; the `--revalidate-every` flag landed by the sister
+     capsule wi_brFjFISWrAFC (fa2e091, 4045576, 0b6ac8a).
+     Status note: landed.
+   - M5 same-machine two-daemon TOCTOU → a flock on the daemon data dir.
+     Status note: landed.
 
-   追记 §1.5 AMEND 批准的实施后 delta：paused 第 4 态、StatePaused
-   retain、POST /work-items/{id}/unblock + `pf unblock`
-   （admin-or-maintainer，M2 的出口门）。
+   Also recorded, the post-implementation deltas approved by §1.5 AMEND: the 4th state paused, StatePaused
+   retain, POST /work-items/{id}/unblock + `pf unblock`
+   (admin-or-maintainer, the exit gate of M2).
 
-4. 评审轨迹（三轮回合）：先 fable 设计评审——REQUEST-CHANGES，强制
-   B1/B2/B3 + M1–M5；实施评审 @ 3158d25——APPROVE-WITH-FINDINGS
-   （B1/B2/B3 全 RESOLVED；3 新 MAJOR：OBSuperseded 丢失、pause
-   摧毁 record、无 unblock 门；另 2 MINOR）；修复 lane e2137f5 +
-   合入 856ff5c——CONFIRM-APPROVE。
+4. Review trail (three rounds): first the fable design review — REQUEST-CHANGES, mandating
+   B1/B2/B3 + M1–M5; the implementation review @ 3158d25 — APPROVE-WITH-FINDINGS
+   (B1/B2/B3 all RESOLVED; 3 new MAJORs: OBSuperseded lost, pause
+   destroys the record, no unblock gate; plus 2 MINORs); the fix lane e2137f5 +
+   merged as 856ff5c — CONFIRM-APPROVE.
 
-5. NEW-1：陈旧 OBSuperseded 对后继 job 的会话指纹栅栏修复——commit
-   3114915「v1.5 NEW-1: OBSuperseded fenced on the session
-   fingerprint」（+ gofmt b5ab060）。状态注记：已修。
+5. NEW-1: the fix fencing a stale OBSuperseded against the successor job's session fingerprint — commit
+   3114915 "v1.5 NEW-1: OBSuperseded fenced on the session
+   fingerprint" (+ gofmt b5ab060). Status note: fixed.
 
-6. NEW-2：姊妹胶囊 wi_y50ZfykBewso（已 wrap）——commits 7786e99
-   「runtime: bounded release lane for observe releases (NEW-2)」+
-   f1fb1ee「daemon: close the runtime release lane at shutdown」，
-   随 v0.3.2 发布（tag 在 f1fb1ee）。界定 terminal RTFinished
-   observe release 的重发上限——observe 通道满时推迟而非摧毁被
-   取代/暂停的 release。状态注记：已修——但留一条非阻塞残余（未修
-   候选跟进）：observe 侧 RTFinished handler
-   （internal/polyforge/observe/observe.go ~296-307）不感知
-   spawnN，复合竞态窗内延后的 RTFinished(paused) 可能在后继
-   RTStarted 之后送达并无条件删 latestSpawn、Forget 答案台账、
-   停掉新 monitor；另注：长寿非 daemon Runtime 不 Close 则 lane
-   goroutine 泊住。
+6. NEW-2: sister capsule wi_y50ZfykBewso (already wrapped) — commits 7786e99
+   "runtime: bounded release lane for observe releases (NEW-2)" +
+   f1fb1ee "daemon: close the runtime release lane at shutdown",
+   released with v0.3.2 (tag at f1fb1ee). It bounds the resend cap of the terminal RTFinished
+   observe release — when the observe channel is full, it defers rather than destroys a superseded/
+   paused release. Status note: fixed — but one non-blocking residual remains (an unfixed
+   candidate follow-up): the observe-side RTFinished handler
+   (internal/polyforge/observe/observe.go ~296-307) is not aware of
+   spawnN, and inside a compound race window a deferred RTFinished(paused) may arrive after the successor's
+   RTStarted and unconditionally delete latestSpawn, Forget the answer ledger,
+   and stop the new monitor; also noted: if a long-lived non-daemon Runtime is not Closed the lane
+   goroutine stays parked.
    〔SUPERSEDED (2026-10-18): the residual is moot — latestSpawn and the answer ledger are deleted (b1f336e8; 34fdf867), the release lane became unbounded FIFO mailboxes (f0f8cd36, v2.2.0), and since the per-work-item actor (bd17b6af, #190) all of a work item's RT messages are pushed from its one actor goroutine into a single-consumer FIFO, so a stale RTFinished cannot arrive after its successor's RTStarted. The observe handler is still spawn-agnostic and relies on that ordering. The lesson stands.〕
 
-7. NEW-3：姊妹胶囊 wi_YONafuu9hiy9（已 wrap）——commits 01ddc26
-   「runtime: replay a pending terminal close of a retained Paused
-   record at restart (NEW-3)」+ c297133「docs: mark NEW-3 resolved
-   in the v1.5 session-model record」，随 v0.3.3 发布。
-   状态注记：已修——但留一条非阻塞 SIBLING 窗（未修候选跟进）：
-   restartResume 的 StatePaused 分支仍忽略 pending terminal close
-   （需仿 retain 分支的修复、咨询 isTerminalStopReason）；FAILED
-   pending-close 回放无独立失败事件（仅 stderr 呈现）。
+7. NEW-3: sister capsule wi_YONafuu9hiy9 (already wrapped) — commits 01ddc26
+   "runtime: replay a pending terminal close of a retained Paused
+   record at restart (NEW-3)" + c297133 "docs: mark NEW-3 resolved
+   in the v1.5 session-model record", released with v0.3.3.
+   Status note: fixed — but one non-blocking SIBLING window remains (an unfixed candidate follow-up):
+   restartResume's StatePaused branch still ignores the pending terminal close
+   (the fix modelled on the retain branch is needed, consulting isTerminalStopReason); a FAILED
+   pending-close replay has no separate failure event (surfaced on stderr only).
    〔OPEN (2026-10-18): restartResume is deleted (bd17b6af, #190), but reconcileRecord still resumes a Paused record carrying a terminal stop_reason when the hub answers running, or paused without clean_pause — only paused + clean_pause replays the close — and #190 dropped 735a9ad9's resume guard; a failed fromPaused SessionEnd is not retried during the run, and a failed replay still emits no failure event. Tracked in polyforge#197.〕
    〔FIXED (2026-10-18, PR #205 "a pending terminal close is replayed, never resumed"): a pending close replays whenever the hub shows the session live, whatever clean_pause says; pf resume and a repeat close are refused while it is pending; a failed close of a retained Paused record is retried during the run; a failed replay emits pending_close_replay_failed.〕
 
-8. NEW-9：跨机 spawn_n ordinal 碰撞，保持 open，cosmetic/audit-only。
-   状态注记：未修（故意接受，仅审计面）。
+8. NEW-9: the cross-machine spawn_n ordinal collision, kept open, cosmetic/audit-only.
+   Status note: not fixed (deliberately accepted, audit surface only).
 
-9. 收尾注记：运维演练 D1–D5 全 PASS（commit 8b2a249，报告在
-   docs/design/polyforge-vnext/，runbook
-   docs/pilot/v1.5-drills-runbook.md af3e4a5）；本台账仍是唯一失败
-   记忆权威——正是本附录存在的理由（X4 纪律的延续）。
+9. Closing note: the operations drills D1–D5 all PASS (commit 8b2a249, the report in
+   docs/design/polyforge-vnext/, the runbook docs/pilot/v1.5-drills-runbook.md af3e4a5); this ledger remains the only authority of
+   failure memory — exactly the reason this appendix exists (a continuation of the X4 discipline).
