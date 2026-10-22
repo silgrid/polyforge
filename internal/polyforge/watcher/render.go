@@ -87,7 +87,8 @@ func ProgressLine(s *protocol.WatchSnapshot, now time.Time) string {
 
 // FormatOnce renders the `pf watch <wi> --once` snapshot for a human: the
 // state, current step and age, last work signal, the pending question (id
-// and text — the one place the question text is shown, on explicit request)
+// and text — the one place the question text is shown; the session runs it
+// as soon as a needs_input wake line arrives)
 // and the latest events.
 func FormatOnce(s *protocol.WatchSnapshot, now time.Time, maxEvents int) string {
 	var b strings.Builder
