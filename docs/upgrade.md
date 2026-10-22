@@ -1533,3 +1533,30 @@ unknown `summarize.interval_sec` key and every claim of that workspace
 with it.
 
 No schema change, no aihub change; the upgrade is the `pf` binary alone.
+
+## `pf submit --json` answers the placement + missing-clone warnings
+
+The submit answer's `--json` shape changed in place. `pf submit <id> --json`
+now answers the placement and the missing-clone warnings beside the
+acceptance:
+
+    {"accepted":true,"work_item_id":"wi_…","machine_id":"m-…",
+     "capsule_path":"<workspace>/capsules/<project>-<seq>",
+     "missing_repos":["<repo>"]}
+
+- `machine_id` — the local daemon's machine id, the claim's target machine;
+- `capsule_path` — the workspace / capsule landing path the work item will
+  occupy (the claim's own resolution);
+- `missing_repos` — every repo the claim will clone whose clone is missing
+  from the mapped workspace, sorted. The claim still clones fresh, so the
+  submit stays accepted — the field is a warning, never a refusal.
+
+`machine_id` and `capsule_path` are absent when the placement is unknown
+(the submit face's hub probe did not resolve the work item; the submit
+stays accepted and durable-queued). `missing_repos` is absent when every
+clone is present or the check could not read the repo set. The old
+`{accepted, work_item_id}`-only shape is gone — no dual shape, no
+compatibility shim: external parsers of the submit answer must read the
+new fields. The human face prints the same facts as plain lines.
+
+No schema change, no aihub change; the upgrade is the `pf` binary alone.

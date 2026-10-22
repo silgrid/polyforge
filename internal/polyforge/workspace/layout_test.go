@@ -502,3 +502,33 @@ func TestNotes(t *testing.T) {
 		}
 	}
 }
+
+func TestIsRepoCloneAndRepoCloneDir(t *testing.T) {
+	ws := t.TempDir()
+	// a clone: .git is a directory
+	clone := filepath.Join(ws, ReposDir, "ra")
+	writeFile(t, filepath.Join(clone, ".git", "HEAD"), "ref: refs/heads/main\n")
+	// a linked worktree's pointer file: .git is a regular file
+	wt := filepath.Join(ws, ReposDir, "rb")
+	writeFile(t, filepath.Join(wt, ".git"), "gitdir: /elsewhere/rb.git\n")
+	// a plain directory: no .git of its own
+	plain := filepath.Join(ws, ReposDir, "rc")
+	if err := os.MkdirAll(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !IsRepoClone(clone) {
+		t.Errorf("IsRepoClone(%s) = false, want true (.git directory)", clone)
+	}
+	if !IsRepoClone(wt) {
+		t.Errorf("IsRepoClone(%s) = false, want true (.git pointer file)", wt)
+	}
+	if IsRepoClone(plain) {
+		t.Errorf("IsRepoClone(%s) = true, want false (no .git)", plain)
+	}
+	if IsRepoClone(filepath.Join(ws, ReposDir, "missing")) {
+		t.Errorf("IsRepoClone of a missing dir = true, want false")
+	}
+	if got, want := RepoCloneDir(ws, "ra"), filepath.Join(ws, ".repo", "ra"); got != want {
+		t.Errorf("RepoCloneDir = %q, want %q", got, want)
+	}
+}

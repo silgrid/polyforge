@@ -30,9 +30,15 @@ it" of an existing work item → `verbs/submit.md`.
    bundle is REQUIRED: a registration ticket (no bundle) is not claimable
    (CORE-409). Background goes in `--content`, the clone scope in `--repo`,
    dependencies in `--after` (full shape: `verbs/file.md`).
-3. `pf submit <id>` (`verbs/submit.md`) — then watch and answer needs_input
-   (`verbs/answer.md`); the deliver step's merge question is human-only
-   (`verbs/ship.md`).
+3. `pf submit <id>` (`verbs/submit.md`) — run its placement precheck first:
+   resolve the target workspace from the `[workspace."<path>"]` sections of
+   cli.toml and the repo set from the ticket's `repo_inventory` (else the
+   project's repos); ask the owner to confirm before submitting when the
+   target workspace differs from the session cwd or a repo clone is
+   missing under `<workspace>/.repo/<name>` ("this ticket will land in
+   X": machine + workspace), and submit only after the owner agrees.
+   Then watch and answer needs_input (`verbs/answer.md`); the deliver
+   step's merge question is human-only (`verbs/ship.md`).
 
 ## The discipline: routing, not executing
 

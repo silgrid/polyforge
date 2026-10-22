@@ -315,6 +315,15 @@ func (d *Daemon) submitRoute() http.HandlerFunc {
 				}
 			}
 		}
+		// Past the gate (probe resolved), the answer
+		// carries the claim's placement — machine id + capsule landing
+		// path — and every repo clone missing from the mapped workspace
+		// (warn-only: the submit never blocks on it). A probe that did not
+		// resolve answers no placement: nothing is invented.
+		var placement *submitPlacement
+		if probe != nil {
+			placement = d.placementFor(probe)
+		}
 		cursor := d.lastSeq(canonical)
 		if body.Resume {
 			// The daemon's run context, NOT the HTTP request's: the claim's
@@ -353,7 +362,12 @@ func (d *Daemon) submitRoute() http.HandlerFunc {
 			writeJSON(w, http.StatusOK, resumeBlockedResponse{Resumed: true, WorkItemID: canonical, Deferred: true})
 			return
 		}
-		writeJSON(w, http.StatusOK, submitResponse{Accepted: true, WorkItemID: canonical})
+		ans := submitResponse{Accepted: true, WorkItemID: canonical}
+		if placement != nil {
+			ans.MachineID, ans.CapsulePath = placement.MachineID, placement.CapsulePath
+			ans.MissingRepos = placement.MissingRepos
+		}
+		writeJSON(w, http.StatusOK, ans)
 	}
 }
 

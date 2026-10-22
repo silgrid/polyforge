@@ -15,6 +15,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // doctor_repos.go: the read-only git probe layer behind `pf doctor`'s
@@ -76,10 +77,12 @@ func workspaceRepoUnits(ws string) []repoUnit {
 	}
 	seen := map[string]bool{}
 	units := make([]repoUnit, 0, len(entries))
-	// Phase one: every entry carrying .git is the clone it is.
+	// Phase one: every entry carrying .git is the clone it is (the
+	// clone-presence rule is workspace.IsRepoClone — the one rule every
+	// check matches by).
 	for _, e := range entries {
 		clone := filepath.Join(repoDir, e.Name())
-		if !isRepoDir(clone) {
+		if !workspace.IsRepoClone(clone) {
 			continue
 		}
 		seen[clone] = true
@@ -108,14 +111,6 @@ func workspaceRepoUnits(ws string) []repoUnit {
 		}
 	}
 	return units
-}
-
-// isRepoDir reports dir as a git repo: its .git is a directory (a clone) or
-// a regular file (a linked worktree's pointer file — a worktree that sits
-// directly under .repo/ is itself enumerated as the clone it is).
-func isRepoDir(dir string) bool {
-	fi, err := os.Lstat(filepath.Join(dir, ".git"))
-	return err == nil && (fi.IsDir() || fi.Mode().IsRegular())
 }
 
 // cloneWorktreeDirs parses `git worktree list --porcelain` in dir and cleans

@@ -51,6 +51,23 @@ const (
 // ScratchMaxAge is the age past which a scratch entry is stale.
 const ScratchMaxAge = 14 * 24 * time.Hour
 
+// IsRepoClone reports whether dir is a git clone: its .git is a directory
+// (a clone) or a regular file (a linked worktree's pointer file — a
+// worktree that sits directly under .repo/ is itself enumerated as the
+// clone it is). It is the ONE clone-presence rule every check matches by:
+// `pf doctor`'s repo enumeration and the daemon's
+// missing-clone warning share it.
+func IsRepoClone(dir string) bool {
+	fi, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil && (fi.IsDir() || fi.Mode().IsRegular())
+}
+
+// RepoCloneDir answers the clone location of repo name under the
+// workspace at ws: <ws>/.repo/<name> (this package owns the convention).
+func RepoCloneDir(ws, name string) string {
+	return filepath.Join(ws, ReposDir, name)
+}
+
 // rootAllowed are the non-dot root entries of the convention. Every
 // dot-entry is tolerated too (harnesses and tools own .pi, .claude,
 // .mcp.json, .gitignore, .git, …) except the config backups StrayEntries

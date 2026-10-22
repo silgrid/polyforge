@@ -846,6 +846,15 @@ func (d *Daemon) startEntry(e qEntry) {
 	if serr := d.q.Settle(e.WorkItemID); serr != nil {
 		fmt.Fprintf(os.Stderr, "daemon: submit queue persist after %s: %v\n", e.WorkItemID, serr)
 	}
+	// An origin=auto claim that settled warns on every
+	// repo clone missing from the mapped workspace — one stderr line here
+	// on the dispatch goroutine, holding no lock, the claim already
+	// settled: nothing is blocked or delayed, no event type or field (an
+	// auto-pulled claim has no submit output to read). A hub read failure
+	// skips the line.
+	if e.Origin.Kind == runtime.OriginAuto && err == nil {
+		d.warnMissingClones(e.WorkItemID)
+	}
 }
 
 // fetchAutoWave pulls the ready queue and enqueues what is claimable
