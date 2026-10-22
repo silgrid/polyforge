@@ -413,5 +413,5 @@ this ledger's house style (append-only; no entry of the earlier ledger is touche
    Status note: not fixed (deliberately accepted, audit surface only).
 
 9. Closing note: the operations drills D1–D5 all PASS (commit 8b2a249, the report in
-   docs/pilot/v1.5-drills-runbook.md af3e4a5); this ledger remains the only authority of
+   docs/design/polyforge-vnext/, the runbook docs/pilot/v1.5-drills-runbook.md af3e4a5); this ledger remains the only authority of
    failure memory — exactly the reason this appendix exists (a continuation of the X4 discipline).
