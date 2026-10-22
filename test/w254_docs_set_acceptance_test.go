@@ -21,9 +21,13 @@ package test
 // are judged by review against the same spec
 // (artifacts/e2e-scenarios.md). The docs-only nature of this work item
 // shows in the scenario shape: the project's real interfaces here are
-// the doc files themselves, the `pf help` surface that points into
-// them, and the real workflow loader the bundle chapter's worked
-// example must parse with — no daemon, no aihub, no harness is spawned.
+// the doc files themselves and the `pf help` surface that points into
+// them — no daemon, no aihub, no harness is spawned. Two guarantees
+// live in their packages instead (polyforge#255, one fact one place):
+// the sixteen glossary terms in internal/polyforge/cli
+// (TestDocsConceptsCarriesSixteenTerms) and the bundle chapter's worked
+// example through the real loader in internal/polyforge/driver
+// (TestDocsBundleExampleLoadsThroughTheDaemonPath).
 
 import (
 	"crypto/sha256"
@@ -34,8 +38,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
 // w254Pages is the new/moved doc set (the spec's destinations; the page
@@ -99,29 +101,6 @@ func w254Page(t *testing.T, rel string) string {
 // still matches; test/w218_readme_docs_test.go's convention).
 func w254Norm(body string) string {
 	return regexp.MustCompile(`\s+`).ReplaceAllString(body, " ")
-}
-
-// w254Fences answers the fenced-block contents of a Markdown body
-// (``` … ``` lines exclusive): where a docs chapter presents its worked
-// example files.
-func w254Fences(body string) []string {
-	var out []string
-	in := false
-	var cur []string
-	for _, l := range strings.Split(body, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(l), "```") {
-			if in {
-				out = append(out, strings.Join(cur, "\n"))
-				cur = nil
-			}
-			in = !in
-			continue
-		}
-		if in {
-			cur = append(cur, l)
-		}
-	}
-	return out
 }
 
 // w254HeadingRe matches one Markdown heading line (any level); the
@@ -235,47 +214,60 @@ func TestW254ReadmeLandingPage(t *testing.T) {
 	}
 }
 
-// TestW254ConceptsSixteenTerms: the concepts page — the newcomer manual
-// doubling as glossary — defines every one of the sixteen grill-summary
-// terms (capsule, work item, workflow/lane, memory, step, result
-// delivery, project, workspace, machine/work machine, repo mapping,
-// data plane vs execution plane (aihub vs daemon), bundle, gate,
-// rewind, claim, chat identity) and carries the where-to-find-what
-// mapping into the doc set.
-func TestW254ConceptsSixteenTerms(t *testing.T) {
-	norm := w254Norm(w254Page(t, "docs/concepts.md"))
-	if !regexp.MustCompile(`(?i)where\s+to\s+find`).MatchString(norm) {
-		t.Fatalf("docs/concepts.md must carry the where-to-find-what mapping into the doc set (which page answers which kind of question); it is absent")
-	}
-	var missing []string
-	for _, c := range []struct{ term, re string }{
-		{"capsule", `(?i)\bcapsule\b`},
-		{"work item", `(?i)\bwork\s+item\b`},
-		{"workflow (lane)", `(?i)\bworkflow\b`},
-		{"lane", `(?i)\blane\b`},
-		{"memory", `(?i)\bmemory\b`},
-		{"step", `(?i)\bstep\b`},
-		{"result delivery", `(?i)\bresult\s+delivery\b`},
-		{"project", `(?i)\bproject\b`},
-		{"workspace", `(?i)\bworkspace\b`},
-		{"machine (work machine)", `(?i)\bmachine\b`},
-		{"repo mapping", `(?i)\brepo\s+mapping\b`},
-		{"data plane", `(?i)\bdata\s+plane\b`},
-		{"execution plane", `(?i)\bexecution\s+plane\b`},
-		{"aihub vs daemon", `(?i)\baihub\b`},
-		{"bundle", `(?i)\bbundle\b`},
-		{"gate", `(?i)\bgate\b`},
-		{"rewind", `(?i)\brewind\b`},
-		{"claim", `(?i)\bclaim\b`},
-		{"chat identity", `(?i)\bchat\s+identity\b`},
-	} {
-		if !regexp.MustCompile(c.re).MatchString(norm) {
-			missing = append(missing, c.term)
+// w254Sentences answers the section's statements: each bullet or
+// paragraph, emphasis markers dropped and whitespace normalized, split
+// into sentences — the unit a framing must hold within, so a doc that
+// names the right tokens in the wrong framing (e.g. "feature-full
+// merges unattended") does not pass.
+func w254Sentences(sec string) []string {
+	var units []string
+	var cur []string
+	flush := func() {
+		if len(cur) > 0 {
+			units = append(units, strings.Join(cur, " "))
+			cur = nil
 		}
 	}
-	if len(missing) > 0 {
-		t.Fatalf("docs/concepts.md is the newcomer manual doubling as glossary and must define every term a newcomer meets — it never names: %s", strings.Join(missing, ", "))
+	for _, l := range strings.Split(sec, "\n") {
+		l = strings.TrimSpace(l)
+		switch {
+		case l == "":
+			flush()
+			continue
+		case strings.HasPrefix(l, "- "), w254HeadingRe.MatchString(l):
+			flush()
+		}
+		cur = append(cur, l)
 	}
+	flush()
+	end := regexp.MustCompile(`[.!?]\s+`)
+	var out []string
+	for _, u := range units {
+		u = w254Norm(strings.ReplaceAll(u, "**", ""))
+		out = append(out, end.Split(u, -1)...)
+	}
+	return out
+}
+
+// w254Framed reports whether one sentence of sentences matches every
+// one of res (and, when not is non-nil, does not match not).
+func w254Framed(sentences []string, not *regexp.Regexp, res ...string) bool {
+	for _, s := range sentences {
+		if not != nil && not.MatchString(s) {
+			continue
+		}
+		all := true
+		for _, re := range res {
+			if !regexp.MustCompile(re).MatchString(s) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 // TestW254UnattendedModeActualBehavior: the unattended-mode section
@@ -283,27 +275,37 @@ func TestW254ConceptsSixteenTerms(t *testing.T) {
 // and the merge rule holds, the work item merges unattended in the
 // autopilot, bug-fix and chore lanes, and never in feature-full (its
 // grill-review requires a human answer) — not the original ticket's
-// "choose autopilot to enable unattended" framing.
+// "choose autopilot to enable unattended" framing; and bug-fix and
+// chore have no declared checkpoint, but any step may still ask a
+// human. Each framing must hold within one sentence, not as tokens
+// scattered over the section.
 func TestW254UnattendedModeActualBehavior(t *testing.T) {
 	page, sec := w254UnattendedSection(t)
-	norm := w254Norm(sec)
+	sentences := w254Sentences(sec)
+	negated := regexp.MustCompile(`(?i)\b(never|not|no\s+longer)\b`)
 	var missing []string
-	for _, c := range []struct{ what, re string }{
-		{"the no-question precondition", `(?i)no\s+question`},
-		{"the merge rule", `(?i)\bmerge\b`},
-		{"the autopilot lane merging unattended", `(?i)\bautopilot\b`},
-		{"the bug-fix lane merging unattended", `(?i)\bbug-?fix\b`},
-		{"the chore lane merging unattended", `(?i)\bchore\b`},
-		{"feature-full never merging unattended", `(?i)feature-?full\b`},
-		{"the never", `(?i)\bnever\b`},
-		{"the human answer feature-full's grill-review requires", `(?i)\bhuman\b`},
+	for _, c := range []struct {
+		what string
+		not  *regexp.Regexp
+		res  []string
+	}{
+		{"no question asked + the merge rule holding ⇒ the work item merges unattended", nil,
+			[]string{`(?i)no\s+question`, `(?i)merge\s+rule`, `(?i)\bmerges?\s+unattended\b`}},
+		{"the autopilot, bug-fix and chore lanes merging unattended", negated,
+			[]string{`(?i)\bautopilot\b`, `(?i)\bbug-?fix\b`, `(?i)\bchore\b`, `(?i)\bmerges?\s+unattended\b`}},
+		{"feature-full never merging unattended, because its grill-review requires a human answer", nil,
+			[]string{`(?i)feature-?full\b`, `(?i)\bnever\s+merges?\s+unattended\b`, `(?i)\bhuman\s+answer\b`}},
+		{"bug-fix and chore having no declared checkpoint, while any step may still ask a human", nil,
+			[]string{`(?i)\bbug-?fix\b`, `(?i)\bchore\b`, `(?i)\bno\s+declared\s+checkpoint\b`, `(?i)\bany\s+step\s+may\s+still\s+ask\b`}},
+		{"deliver asking deliver-merge when the merge rule does not hold", nil,
+			[]string{`(?i)\bdeliver\b`, `deliver-merge`, `(?i)merge\s+rule`}},
 	} {
-		if !regexp.MustCompile(c.re).MatchString(norm) {
+		if !w254Framed(sentences, c.not, c.res...) {
 			missing = append(missing, c.what)
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("%s's unattended-mode section must state the behavior the code actually has — no question + the merge rule ⇒ auto-merge in autopilot, bug-fix and chore, never feature-full (its grill-review requires a human answer) — it never states: %s", page, strings.Join(missing, ", "))
+		t.Fatalf("%s's unattended-mode section must state the behavior the code actually has, each framing within one sentence — no question + the merge rule ⇒ auto-merge in autopilot, bug-fix and chore, never feature-full (its grill-review requires a human answer); bug-fix and chore declare no checkpoint, but any step may still ask — no sentence states: %s", page, strings.Join(missing, "; "))
 	}
 }
 
@@ -312,8 +314,9 @@ func TestW254UnattendedModeActualBehavior(t *testing.T) {
 // schema or data migration, credentials and permission surface,
 // removing features or weakening guarantees, security-related changes,
 // large cross-repo changes) as settled docs-only policy the code does
-// not enforce — avoiding unattended merges is the user choosing the
-// feature-full bundle — never as a draft awaiting confirmation.
+// not enforce — stated within one sentence — and avoiding unattended
+// merges as the user choosing the feature-full bundle, never as a draft
+// awaiting confirmation.
 func TestW254NeverUnattendedSettledPolicy(t *testing.T) {
 	page, sec := w254UnattendedSection(t)
 	norm := w254Norm(sec)
@@ -325,16 +328,20 @@ func TestW254NeverUnattendedSettledPolicy(t *testing.T) {
 		{"removing features or weakening guarantees", `(?i)(\bremov|\bweaken)`},
 		{"security-related changes", `(?i)\bsecur`},
 		{"large cross-repo changes", `(?i)\bcross-?repo\b`},
-		{"the list as policy (settled, not a draft)", `(?i)\bpolicy\b`},
-		{"the honesty that the code does not enforce it", `(?i)\benforc`},
-		{"feature-full as the way to avoid unattended merges", `(?i)feature-?full\b`},
 	} {
 		if !regexp.MustCompile(c.re).MatchString(norm) {
 			missing = append(missing, c.what)
 		}
 	}
+	sentences := w254Sentences(sec)
+	if !w254Framed(sentences, nil, `(?i)\bsettled\b`, `(?i)\bpolicy\b`, `(?i)\b(does\s+not|doesn't|never)\s+enforce`) {
+		missing = append(missing, "the list as settled policy the code does not enforce, within one sentence")
+	}
+	if !w254Framed(sentences, nil, `(?i)\bavoid\b`, `(?i)\bunattended\s+merge`, `(?i)feature-?full\b`) {
+		missing = append(missing, "choosing feature-full as the way to avoid an unattended merge, within one sentence")
+	}
 	if len(missing) > 0 {
-		t.Fatalf("%s's unattended-mode section must present the owner-confirmed never-unattended list as settled docs-only policy the code does not enforce (avoiding unattended merges is choosing the feature-full bundle) — it never covers: %s", page, strings.Join(missing, ", "))
+		t.Fatalf("%s's unattended-mode section must present the owner-confirmed never-unattended list as settled docs-only policy the code does not enforce (avoiding unattended merges is choosing the feature-full bundle) — it never covers: %s", page, strings.Join(missing, "; "))
 	}
 }
 
@@ -576,103 +583,5 @@ func TestW254InTreePointersFollowMoves(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "docs/extending.md") {
 		t.Fatalf("`pf help extensions` must point its extension topics at docs/extending.md (the wired discovery surface follows the move); its output names no such location:\n%s", out)
-	}
-}
-
-// TestW254BundleExampleLoaderParsed: the bundle-authoring chapter's
-// worked example cannot drift from the actual bundle format: the
-// chapter presents the example's files as fenced blocks — the
-// workflow.md as a frontmatter-bearing block declaring steps, each
-// step it names as a frontmatter-bearing block whose name: is the step
-// id — and the real workflow loader parses and renders every one of
-// them.
-func TestW254BundleExampleLoaderParsed(t *testing.T) {
-	fences := w254Fences(w254Page(t, "docs/bundles.md"))
-	if len(fences) == 0 {
-		t.Fatalf("docs/bundles.md is the bundle-authoring chapter and must present its worked example in fenced blocks; the page carries none")
-	}
-	stepRe := regexp.MustCompile(`(?m)^steps:`)
-	nameRe := func(id string) *regexp.Regexp {
-		return regexp.MustCompile(`(?m)^name:\s*` + regexp.QuoteMeta(id) + `\s*$`)
-	}
-	placeholderRe := regexp.MustCompile(`\{\{([a-z][a-z0-9_]*)\}\}`)
-
-	// the workflow.md-shaped fences: frontmatter-bearing blocks that
-	// declare steps — the real loader must parse each.
-	var stepIDs []string
-	seen := map[string]bool{}
-	workflowShaped := 0
-	for i, f := range fences {
-		front, _, ok := workflow.SplitFrontmatter([]byte(f))
-		if !ok || !stepRe.MatchString(string(front)) {
-			continue
-		}
-		workflowShaped++
-		tmp := filepath.Join(t.TempDir(), "workflow.md")
-		if err := os.WriteFile(tmp, []byte(f), 0o644); err != nil {
-			t.Fatalf("plant the documented workflow.md example for the real loader: %v", err)
-		}
-		fm, err := workflow.ReadFrontmatter(tmp)
-		if err != nil {
-			t.Fatalf("docs/bundles.md's worked example (fenced block %d) is the real format's workflow.md and must parse with the real workflow loader — it does not: %v", i+1, err)
-		}
-		if fm == nil || len(fm.Steps) == 0 {
-			t.Fatalf("docs/bundles.md's worked example (fenced block %d) presents a workflow.md but parses to no steps — the example has drifted from the actual format", i+1)
-		}
-		for _, s := range fm.Steps {
-			if s.ID == "" {
-				t.Fatalf("docs/bundles.md's worked example (fenced block %d) names a step entry with no id", i+1)
-			}
-			if !seen[s.ID] {
-				seen[s.ID] = true
-				stepIDs = append(stepIDs, s.ID)
-			}
-		}
-	}
-	if workflowShaped == 0 {
-		t.Fatalf("docs/bundles.md's worked example must present the custom bundle's workflow.md — a fenced block whose frontmatter declares steps — so the real loader can parse it; no such block exists")
-	}
-
-	// each step the example names needs its steps/<id>.md fence, and
-	// the real loader must render it (placeholders satisfied by the
-	// scan; {{principles}} renders from the shared stub).
-	root := t.TempDir()
-	bundle := filepath.Join(root, "workflows", "w254-documented-example")
-	shared := filepath.Join(root, "workflows", workflow.SharedDir)
-	if err := os.MkdirAll(filepath.Join(bundle, "steps"), 0o755); err != nil {
-		t.Fatalf("plant the documented example's bundle dir: %v", err)
-	}
-	if err := os.MkdirAll(shared, 0o755); err != nil {
-		t.Fatalf("plant the documented example's shared dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(shared, workflow.PrinciplesFile), []byte("w254 stub principles\n"), 0o644); err != nil {
-		t.Fatalf("plant the shared principles stub: %v", err)
-	}
-	for _, id := range stepIDs {
-		var def string
-		for _, f := range fences {
-			front, _, ok := workflow.SplitFrontmatter([]byte(f))
-			if ok && nameRe(id).MatchString(string(front)) {
-				def = f
-				break
-			}
-		}
-		if def == "" {
-			t.Fatalf("docs/bundles.md's worked example names step %s but presents no fenced step definition for it (a frontmatter-bearing block whose name: is %s) — the example has drifted from the actual format", id, id)
-		}
-		p := filepath.Join(bundle, "steps", id+".md")
-		if err := os.WriteFile(p, []byte(def), 0o644); err != nil {
-			t.Fatalf("plant the documented step definition for %s: %v", id, err)
-		}
-		vars := map[string]string{}
-		for _, m := range placeholderRe.FindAllStringSubmatch(def, -1) {
-			if m[1] == workflow.PrinciplesVar {
-				continue // the loader renders it from _shared/principles.md
-			}
-			vars[m[1]] = "w254-example-value"
-		}
-		if _, err := workflow.ReadStepDefinition(bundle, id, vars); err != nil {
-			t.Fatalf("docs/bundles.md's documented step definition for %s must render with the real workflow loader — it does not: %v", id, err)
-		}
 	}
 }

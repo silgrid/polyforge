@@ -20,7 +20,7 @@ import (
 // DaemonClient speaks the daemon's UDS HTTP face: HTTP over the local
 // unix socket (<data-dir>/daemon.sock by default). The authoritative route
 // list is the mount list in internal/polyforge/daemon/routes.go (mirrored
-// in README "Daemon UDS routes"); the core of it:
+// in docs/reference/uds-routes.md); the core of it:
 //
 //	POST /jobs/{id}/claim                   body {"priority":"normal"} or {"resume":true}
 //	POST /jobs/{id}/resume-paused
