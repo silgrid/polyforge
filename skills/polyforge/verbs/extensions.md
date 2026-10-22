@@ -13,5 +13,6 @@ docs/extending.md (release checkout:
 extension-point index — each config-shape subsection routes to the
 one authority for its shape (docs/reference/config.md; custom bundles:
 docs/bundles.md) — read the named subsection before proposing or
-writing any file; never restate a shape from memory. The topic needs no config and touches no face (aihub,
-daemon), so it answers anywhere, including inside a workflow step.
+writing any file; never restate a shape from memory. The topic needs no
+config and touches no face (aihub, daemon), so it answers anywhere,
+including inside a workflow step.

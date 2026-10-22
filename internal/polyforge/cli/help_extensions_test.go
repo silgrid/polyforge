@@ -12,7 +12,7 @@ import (
 
 // help_extensions_test.go: polyforge#229 — `pf help extensions` is a
 // one-line-per-item index of the user extension points, each line naming
-// the README "Extending" subsection that owns it; `pf help` lists the
+// the docs/extending.md subsection that owns it; `pf help` lists the
 // topic; doctor's config failures point at the same place.
 
 // extendingSubsections answers the `### ` headings of
@@ -32,7 +32,7 @@ func extendingSubsections(t *testing.T) []string {
 	return subs
 }
 
-func TestHelpExtensionsIndexesTheReadmeSubsections(t *testing.T) {
+func TestHelpExtensionsIndexesTheExtendingSubsections(t *testing.T) {
 	code, stdout, stderr := runPf(t, map[string]string{}, "help", "extensions")
 	if code != 0 {
 		t.Fatalf("pf help extensions exited %d; stderr=%s stdout=%s", code, stderr, stdout)
@@ -54,7 +54,7 @@ func TestHelpExtensionsIndexesTheReadmeSubsections(t *testing.T) {
 			guideSeen = true
 			continue
 		}
-		t.Fatalf("index line %q is not `<extension point>  README Extending › <subsection>` or the daily-use guide pointer:\n%s", l, stdout)
+		t.Fatalf("index line %q is not `<extension point>  docs/extending.md › <subsection>` or the daily-use guide pointer:\n%s", l, stdout)
 	}
 	if !guideSeen {
 		t.Fatalf("the extensions index must name the daily-use guide (docs/user-guide.md, polyforge#241):\n%s", stdout)

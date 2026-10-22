@@ -86,7 +86,7 @@ func TestDocsSetNoDrift(t *testing.T) {
 			}
 			// verbs, flags, links — the same check the guide meets.
 			dir := filepath.Dir(filepath.Join(root, p))
-			_, _, _, _, bad := docDriftCheck(p, dir, body)
+			_, _, _, _, bad := docDriftCheck(t, p, dir, body)
 			if len(bad) > 0 {
 				t.Fatalf("%s drifted from the pf surface:\n%s", p, strings.Join(bad, "\n"))
 			}

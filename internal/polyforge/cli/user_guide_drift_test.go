@@ -141,7 +141,8 @@ func guideSlug(heading string) string {
 // own Setup flags, and this package's sub-action flag literals
 // (srcFlagDefRe / srcFlagVarRe / srcFlagLitRe / srcFlagCaseRe over the
 // non-test sources) for flags.
-func docDriftSets() (knownVerbs, global, pkg map[string]bool, verbFlags map[string]map[string]bool) {
+func docDriftSets(t *testing.T) (knownVerbs, global, pkg map[string]bool, verbFlags map[string]map[string]bool) {
+	t.Helper()
 	knownVerbs = map[string]bool{"help": true}
 	for _, c := range commands {
 		knownVerbs[c.Name] = true
@@ -166,7 +167,7 @@ func docDriftSets() (knownVerbs, global, pkg map[string]bool, verbFlags map[stri
 	pkg = map[string]bool{}
 	srcs, err := filepath.Glob("*.go")
 	if err != nil {
-		panic(err) // a build broke: the scan cannot proceed
+		t.Fatalf("glob this package's sources: %v", err) // a build broke: the scan cannot proceed
 	}
 	for _, p := range srcs {
 		if strings.HasSuffix(p, "_test.go") {
@@ -174,7 +175,7 @@ func docDriftSets() (knownVerbs, global, pkg map[string]bool, verbFlags map[stri
 		}
 		raw, err := os.ReadFile(p)
 		if err != nil {
-			panic(err)
+			t.Fatalf("read %s: %v", p, err)
 		}
 		for _, re := range []*regexp.Regexp{srcFlagDefRe, srcFlagVarRe} {
 			for _, m := range re.FindAllStringSubmatch(string(raw), -1) {
@@ -213,8 +214,9 @@ func docDriftSets() (knownVerbs, global, pkg map[string]bool, verbFlags map[stri
 // Sub-action names (the word after file, ops, chat, result) are
 // intentionally not checked: the spec's bar is verbs and flags, and no
 // sub-action registry exists as data — they are switch arms.
-func docDriftCheck(name, dir, body string) (checkedVerbs, checkedFlags, checkedLinks, skippedLinks int, bad []string) {
-	knownVerbs, global, pkg, verbFlags := docDriftSets()
+func docDriftCheck(t *testing.T, name, dir, body string) (checkedVerbs, checkedFlags, checkedLinks, skippedLinks int, bad []string) {
+	t.Helper()
+	knownVerbs, global, pkg, verbFlags := docDriftSets(t)
 	var checkedVerbsN, checkedFlagsN int
 	for _, entry := range guideScanned(body) {
 		lineNo, line := entry[0], entry[1]
@@ -326,7 +328,7 @@ func docDriftCheck(name, dir, body string) (checkedVerbs, checkedFlags, checkedL
 // the scan against losing its subject).
 func TestUserGuideNoDrift(t *testing.T) {
 	body := guideBody(t)
-	checkedVerbs, checkedFlags, _, _, bad := docDriftCheck("docs/user-guide.md", filepath.Dir(guidePath), body)
+	checkedVerbs, checkedFlags, _, _, bad := docDriftCheck(t, "docs/user-guide.md", filepath.Dir(guidePath), body)
 	// Sanity floor: a scan that lost its subject (a broken extraction)
 	// would pass vacuously — the counts guard it, the same way
 	// skill_flags_test.go's `checked < 20` does.
