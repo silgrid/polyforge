@@ -4,7 +4,9 @@ The ops page of the work-machine install: the platform support
 matrix, the one-line install and what an upgrade does. The two
 Quickstarts — [developers](quickstart-developers.md),
 [macOS](quickstart-macos.md) — walk a first run end to end; daily
-use is the [user guide](user-guide.md).
+use is the [user guide](user-guide.md). The terms this page uses
+(machine, work machine, daemon, workspace) are defined on the
+[concepts page](concepts.md).
 
 ## Platform support (polyforge#218)
 

@@ -2,7 +2,9 @@
 
 A from-zero smoke run on one machine: start a local aihub, set up a
 project and a machine identity, file a minimal work item, and drive it
-through file → submit → watch → wrap on a local `pf daemon`.
+through file → submit → watch → wrap on a local `pf daemon`. The
+terms this walkthrough uses (work item, project, machine, workspace,
+capsule, daemon) are defined on the [concepts page](concepts.md).
 
 Prerequisites: a Go toolchain; `git` with a configured
 `user.name`/ `user.email` (capsule commits need it); and the `pi` agent

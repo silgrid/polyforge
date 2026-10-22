@@ -4,7 +4,9 @@ Everything below uses existing commands only — the macOS-native aihub
 asset from the release, the same CLI verbs, and `tools/install.sh` (a
 port conflict beware: aihub here keeps the standard port 8080 so the
 installer's config matches; use another port only if 8080 is taken —
-both sides, consistently).
+both sides, consistently). The terms this walkthrough uses (work item,
+project, machine, workspace, daemon, lane) are defined on the
+[concepts page](concepts.md).
 
 **1. Download both native darwin assets from the current release** —
 `aihub-darwin-arm64` (or `-amd64` on an Intel Mac) and `pf-darwin-*`:
