@@ -1,131 +1,129 @@
-# 06 — Memory / Search：数据库存储、FTS 索引、一次性内容迁移
+# 06 — Memory / Search: database storage, the FTS index, the one-shot content migration
 
-> 现行文档（2026-10-16 repo review wave 4 重写为只描述代码现状）。原文描述的 HTML 派生链、`backupBarrier`
-> 与一致性快照、`PATCH /memories`、分享链接、wrap 摘要条目、`MEM-501` 等**从未建成或已删除**，原文见 git 历史
-> （本文件 2026-10-16 之前的版本）。代码权威：`internal/aihub/memory`（`store.go`、`authority.go`、`migrate.go`）、
-> `internal/aihub/server/server.go` 的 memory 路由、`internal/polyforge/cli/verbs_aihub.go`、`internal/polyforge/runtime/recall.go`。
-> 一页式摘要见 `reference.md#§9`。
+> Current document (rewritten 2026-10-16, repo review wave 4, to describe only what the code does today). The original described an HTML derivation chain, `backupBarrier`
+> and consistent snapshots, `PATCH /memories`, share links, wrap-summary entries, `MEM-501` and more — all of which were **never built or have been deleted**; the original is in git history
+> (versions of this file before 2026-10-16). Code authority: `internal/aihub/memory` (`store.go`, `authority.go`, `migrate.go`),
+> the memory routes of `internal/aihub/server/server.go`, `internal/polyforge/cli/verbs_aihub.go`, `internal/polyforge/runtime/recall.go`.
+> The one-page summary is `reference.md#§9`.
 
-## 1. 范围 <!-- §1 -->
+## 1. Scope <!-- §1 -->
 
-Memory 是 Core 域数据（项目知识沉淀）：一条 memory = `memories` 表的一行（`content` 列存文档）+ 一行 FTS 索引，
-全部在 Core 数据库里，数据库是唯一的事实来源。写入只有创建与 redact（软删除）两种；**没有更新路径**（改内容 = 新建一条，
-必要时 redact 旧的）。检索只有 FTS5 trigram 文本检索，没有向量/语义层。
+Memory is Core-domain data (project knowledge accumulation): one memory = one row of the `memories` table (the `content` column stores the document) + one FTS index row,
+all inside the Core database, which is the single source of truth. Writes are only create and redact (soft delete); **there is no update path** (changing content = creating a new one,
+redacting the old one if needed). Retrieval is FTS5 trigram text search only; there is no vector / semantic layer.
 
-## 2. 不变量 <!-- §2 -->
+## 2. Invariants <!-- §2 -->
 
-- 创建：一个事务插入行（含 `content`）+ FTS 行（FTS 先删后插）（`Store.Create`）。redact：一个事务置
-  `status='redacted'` + 删除 FTS 行；文档留在行里，此后永不服务（`Store.Redact`）。
-- `content_sha` = `content` 的 SHA-256，`content_len` = 其字节数（`pf memory show` 显示的 `content_len`）。
-- 运行时不写也不读 memory 文件。行的 `authority_path`（`memory/<project_id>/<mem_id>`）只供 §4 的迁移定位旧文件。
-- `content` 为 NULL 的行（只可能来自迁移时找不到文件，§4）对一切读写路径等同不存在（`MEM-404`）。
+- Create: one transaction inserts the row (`content` included) + the FTS row (the FTS row is deleted first, then inserted) (`Store.Create`). Redact: one transaction sets
+  `status='redacted'` + deletes the FTS row; the document stays in the row and is never served again (`Store.Redact`).
+- `content_sha` = the SHA-256 of `content`, `content_len` = its byte count (the `content_len` that `pf memory show` displays).
+- At runtime no memory file is written or read. A row's `authority_path` (`memory/<project_id>/<mem_id>`) is used only by the §4 migration to locate old files.
+- A row whose `content` is NULL (which can only come from a file not found during migration, §4) is equivalent to nonexistent on every read and write path (`MEM-404`).
 
-## 3. 文档格式 <!-- §3 -->
+## 3. Document format <!-- §3 -->
 
-`content` 存完整文档：YAML frontmatter + 正文原样。frontmatter 与 `memories` 表列一一镜像，按固定顺序序列化
-（`authority.go` `frontmatter`）：`id`、`type`、`owner_user_id`、`title?`、`tags?`、`visibility`、`work_item_id?`、
-`project_id`、`idempotency_key?`、`related?`、`created_at`、`updated_at`。`id` 由服务端分配（`mem_` 前缀）。
-`?format=content` 与检索摘录只返回正文（`memory.Body` 去掉 frontmatter）。行的 `title` 在创建时确定
-（`memory/title.go` `rowTitle`）：请求有非空白 `title` 时原样使用，否则从正文派生——第一个非空行，
-去掉行首 markdown 标记（`#`、`>`、`-`/`*`/`+`、`[ ]`、`1.`/`1)`），跳过代码围栏行与分隔线，按字符边界截到
-80 字符（截断时末尾为 `…`）。派生标题只写入行，不写进 frontmatter。`visibility` ∈
-`private|project|team|public|admin`。正文上限 1 MiB（`MEM-413`）。
+`content` stores the complete document: YAML frontmatter + the body verbatim. The frontmatter mirrors the `memories` table columns one to one and is serialized in a fixed order
+(`authority.go` `frontmatter`): `id`, `type`, `owner_user_id`, `title?`, `tags?`, `visibility`, `work_item_id?`,
+`project_id`, `idempotency_key?`, `related?`, `created_at`, `updated_at`. `id` is assigned by the server (`mem_` prefix).
+`?format=content` and the search excerpts return the body only (`memory.Body` strips the frontmatter). A row's `title` is fixed at creation
+(`memory/title.go` `rowTitle`): a non-blank `title` in the request is used as is, otherwise it is derived from the body — the first non-empty line,
+with leading markdown markers removed (`#`, `>`, `-`/`*`/`+`, `[ ]`, `1.`/`1)`), skipping code-fence lines and separator lines, cut at a character boundary to
+80 characters (a truncated title ends with `…`). A derived title is written to the row only, never into the frontmatter. `visibility` ∈
+`private|project|team|public|admin`. The body limit is 1 MiB (`MEM-413`).
 
-## 4. 一次性内容迁移（启动期） <!-- §4 -->
+## 4. The one-shot content migration (at startup) <!-- §4 -->
 
-此前的版本把文档存为 `<data-dir>/memory/<project_id>/<mem_id>/memory.md`（redact 后在
-`<project_id>/_redacted/<mem_id>/`），行里没有 `content`。aihub 启动时、开始服务之前运行
-`Store.MigrateContent`（`cmd/aihub/main.go`；先 listen，迁移完成后才 serve，连接在 backlog 里等待）：表缺
-`content` 列时 `ALTER TABLE ADD COLUMN`；对每个 `content IS NULL` 的行，按 `authority_path` 读文件（先按行状态
-找 active / `_redacted` 位置，再找另一个），文件字节原样写入 `content`，按 16 MiB 一批小事务提交。文件 sha 与
-`content_sha` 一致 → 复制；不一致 → 以文件为准（旧版本的规则），重算 `content_sha`/`content_len`，active 行重写
-FTS；active 行的文件只在 `_redacted/` 下（redact 在挪文件后、提交前中断）→ 补完 redact；找不到文件 → 留 NULL、
-不服务，下次启动重试。随后同一趟为标题为空的 active 行按其文档派生标题（与创建同一规则：frontmatter 的非空
-`title`，否则正文首个可用行；派生不出的保持为空）。每次启动记一行计数日志，非简单复制的行逐个列出 id。已填的行不再被选中：迁移过的库上
-不读 memory 文件、不写。文件一律保留不删。耗时：生产备份副本上 3,810 条约 1.5 s。
+Earlier versions stored documents as `<data-dir>/memory/<project_id>/<mem_id>/memory.md` (after redact, under
+`<project_id>/_redacted/<mem_id>/`), and rows had no `content`. When aihub starts, before it begins serving, it runs
+`Store.MigrateContent` (`cmd/aihub/main.go`; listen first, serve only after the migration completes, connections wait in the backlog): when the table lacks the
+`content` column, `ALTER TABLE ADD COLUMN`; for each row with `content IS NULL`, the file is read by `authority_path` (first the active / `_redacted` location matching the row's status,
+then the other one), the file bytes are written into `content` verbatim, committed in small transactions of 16 MiB per batch. File sha equals
+`content_sha` → copy; mismatch → the file wins (the old versions' rule), `content_sha`/`content_len` are recomputed, and an active row's
+FTS is rewritten; an active row whose file is only under `_redacted/` (redact was interrupted after moving the file, before commit) → the redact is completed; file not found → left NULL,
+not served, retried at the next startup. Then the same pass derives titles for active rows with an empty title from their document (the same rule as create: the frontmatter's non-empty
+`title`, otherwise the body's first usable line; where none can be derived the title stays empty). Every startup logs one count line, and the rows that were not a plain copy are listed by id. Filled rows are never selected again: on a migrated database
+no memory file is read or written. Files are always kept, never deleted. Duration: about 1.5 s for 3,810 entries on a production backup copy.
 
-## 5. API 与错误码 <!-- §5 -->
+## 5. API and error codes <!-- §5 -->
 
 ### 5.1 API <!-- §5.1 -->
 
-| 方法 | 路径 | 权限 | 说明 |
+| Method | Path | Permission | Notes |
 |---|---|---|---|
-| POST | `/api/v1/memories` | 项目 writer/maintainer 或 admin，否则 `MEM-403`；key 限定在其他项目 → `AUTH-403`；项目不存在 → `CORE-404` | body `{project, type, title, visibility, content, tags, related, work_item_id, idempotency_key}`；`work_item_id` 接受 id 或 `<project>#<seq>`，须同项目；`type` 须为 `kind` 或 `kind.name`，kind（第一个 `.` 之前）属于 `authority.go` `typeKinds`（experience/fact/doc/rule/methodology），否则 `MEM-400` 并点名被拒类型与合法 kind（polyforge#210，类型命名空间的唯一权威）；`title` 缺省或空白时由服务端从正文派生（§3）；同一 `idempotency_key`（同 owner、同项目）重放返回原条目，键属于他人或他项目 → `MEM-409 IDEMPOTENCY_KEY_REUSED` |
-| GET | `/api/v1/memories/search` | 任意 key；结果按可见性过滤 | `q`（必填）、`match`（`all` 缺省 / `any`，其他值 → `MEM-400`）、`type`（精确值，或 `X.*` 前缀匹配 `X.`）、`tags`（逗号）、`limit`（缺省 50；≤0 或 >200 时取 50）、`project`（先过读权限再作过滤）、`excerpt`（>0 时每条带 `content_excerpt`，上限 8192 字符）；只返回 `status='active'` |
-| GET | `/api/v1/memories/{id}` | 读权限；无权与不存在同为 `MEM-404` | 元数据；`?format=content` 返回原始 Markdown 正文 |
-| POST | `/api/v1/memories/{id}/redact` | 先过读门（`memRead`）：无读权限 → `MEM-404`；能读但非 owner 且非 admin → `MEM-403` | 软删除；非 active → `MEM-409` |
+| POST | `/api/v1/memories` | project writer/maintainer or admin, else `MEM-403`; key scoped to another project → `AUTH-403`; project absent → `CORE-404` | body `{project, type, title, visibility, content, tags, related, work_item_id, idempotency_key}`; `work_item_id` accepts an id or `<project>#<seq>` and must be in the same project; `type` must be `kind` or `kind.name`, and the kind (before the first `.`) must be one of `authority.go` `typeKinds` (experience/fact/doc/rule/methodology), else `MEM-400` naming the rejected type and the legal kinds (polyforge#210, the sole authority of the type namespace); when `title` is absent or blank the server derives it from the body (§3); replaying the same `idempotency_key` (same owner, same project) returns the original entry, a key belonging to someone else or another project → `MEM-409 IDEMPOTENCY_KEY_REUSED` |
+| GET | `/api/v1/memories/search` | any key; results filtered by visibility | `q` (required), `match` (`all` default / `any`, other values → `MEM-400`), `type` (exact value, or an `X.*` prefix matching `X.`), `tags` (comma-separated), `limit` (default 50; ≤0 or >200 becomes 50), `project` (passes the read permission first, then acts as a filter), `excerpt` (when >0 every item carries `content_excerpt`, at most 8192 characters); only `status='active'` is returned |
+| GET | `/api/v1/memories/{id}` | read permission; no permission and nonexistent are both `MEM-404` | metadata; `?format=content` returns the raw Markdown body |
+| POST | `/api/v1/memories/{id}/redact` | passes the read gate (`memRead`) first: no read permission → `MEM-404`; readable but neither owner nor admin → `MEM-403` | soft delete; not active → `MEM-409` |
 
-检索有两种模式，唯一入口 `Store.SearchMode`（`server.go` 按 `match=` 选择；membership / 可见性 / `type` / `tags` 过滤与 `limit` 在两种模式下完全相同，`project=` 在两种模式下都在候选 SQL 内收窄）：
+Search has two modes, with the single entry point `Store.SearchMode` (`server.go` selects by `match=`; membership / visibility / `type` / `tags` filtering and `limit` are exactly the same in both modes, and `project=` narrows inside the candidate SQL in both modes):
 
-- **`match=all`（缺省，`Store.Search`）**：每个词都必须命中——≥3 字符的词作为 FTS5 trigram 短语 AND 起来，更短的词走子串匹配（中文短词常见）。适合 2–4 个关键词的短查询。
-- **`match=any`（`memory/search_any.go` `anyTerms`）**：查询转小写，按词字符（字母、数字、组合附标 `unicode.IsMark`、`_`）的连续段切分，段内在 CJK 与非 CJK 文字切换处再切开。
-  - 非 CJK 段是一个词：保留 3–40 字符且不在停用词表（英文虚词 + markdown/URL 噪声）中的词。
-  - CJK 段（汉字、平假名、片假名、谚文）是没有词界的分句：切成重叠的 3 字符片段（「重试阶梯」→ 重试阶、试阶梯）；不足 3 字符的段不产生任何项；40 字符上限不适用于 CJK。
-  - 去重后取至多 32 项：在词池（最长优先）与 CJK 片段池（各分句轮流取）之间交替，任一池用完由另一池补满，互不挤占。
-  - 各项加引号以 OR 连接，按 bm25 × 新鲜度排序（见下）；只检查该顺序的前 max(100, 10×limit) 个候选，不再翻页（AND 模式翻页到底）。过滤后没有可用项 → 无命中（不报错）。用于长的描述性查询（领取时 recall）。
+- **`match=all` (default, `Store.Search`)**: every term must hit — terms of ≥3 characters are ANDed together as FTS5 trigram phrases, shorter ones go through substring matching (short Chinese words are common). Suited to short queries of 2–4 keywords.
+- **`match=any` (`memory/search_any.go` `anyTerms`)**: the query is lowercased and split into runs of word characters (letters, digits, combining marks `unicode.IsMark`, `_`), and a run is split again wherever it switches between CJK and non-CJK script.
+  - A non-CJK run is one term: kept when 3–40 characters long and not in the stopword list (English function words + markdown/URL noise).
+  - A CJK run (Han, hiragana, katakana, hangul) is a clause with no word boundaries: it is cut into overlapping 3-character slices (a four-character phrase ABCD yields ABC and BCD); a run shorter than 3 characters yields no term; the 40-character cap does not apply to CJK.
+  - After deduplication at most 32 terms are taken: alternating between the word pool (longest first) and the CJK-slice pool (clauses taking turns), and when one pool runs out the other fills the remainder, neither crowding the other out.
+  - Each term is quoted and joined with OR, ranked by bm25 × freshness (see below); only the first max(100, 10×limit) candidates in that order are examined, with no further paging (AND mode pages to the end). No usable term after filtering → no hits (not an error). Used for long descriptive queries (the recall at claim time).
 
-两种模式的排序相同（`memory/freshness.go`）：`w = exp(-age_days / stability_days)`，`age_days` 按
-`memories.updated_at`（没有更新端点，等于 `created_at`）到查询时刻计算；
-`score = rank × (1 + 0.5 × w)`（rank 为 FTS5 bm25，越负越好），升序，平分时按 `updated_at` 降序（按解析后的时刻比较——整秒与带小数秒的 RFC3339 并存；解析不了的视为最旧）、再按 id。
-stability：`rule.*`、`doc.design`、`doc.decision` 不衰减（w = 1）；`doc.review`、`doc.audit` 及其他 `doc.*`
-（时点快照）180 天；`experience.*` 90 天；`fact.*` 与 `methodology.*` 180 天；其他类型 90 天。`updated_at`
-解析不了按完全陈旧（w = 0），未来时间按 age 0（w ≤ 1）。新鲜度最多把相关度放大 1.5 倍：相近的命中里新的在前，相关度高出 1.5 倍以上的旧条目始终排在
-较弱的新条目之前。只有短词（无 rank）的子串扫描按 w 降序。实现上（`ftsPage`）先只从 FTS 索引读出全部命中的
-rowid 与 rank，再沿 rank 顺序分批读取条目元数据，直到下界 (1+0.5)×rank 已劣于当前第 offset+limit 名，正文只读
-本页；结果与对全部命中精确排序相同。
+The ranking of both modes is the same (`memory/freshness.go`): `w = exp(-age_days / stability_days)`, with `age_days` computed from
+`memories.updated_at` (there is no update endpoint, so it equals `created_at`) to the query time;
+`score = rank × (1 + 0.5 × w)` (rank is the FTS5 bm25, more negative is better), ascending, ties broken by `updated_at` descending (compared as parsed instants — whole-second and fractional-second RFC3339 coexist; unparseable counts as oldest), then by id.
+Stability: `rule.*`, `doc.design`, `doc.decision` do not decay (w = 1); `doc.review`, `doc.audit` and other `doc.*`
+(point-in-time snapshots) 180 days; `experience.*` 90 days; `fact.*` and `methodology.*` 180 days; other types 90 days. An unparseable `updated_at`
+counts as fully stale (w = 0), a future time as age 0 (w ≤ 1). Freshness amplifies relevance by at most 1.5×: among close hits the newer comes first, and an older entry whose relevance is more than 1.5× higher always ranks ahead of a
+weaker newer one. Only the substring scan of short terms (no rank) sorts by w descending. In the implementation (`ftsPage`) it first reads only the rowids and ranks of all hits from the FTS index, then reads entry metadata in batches along the rank order, until the lower bound (1+0.5)×rank is worse than the current (offset+limit)-th place; bodies are read
+for this page only; the result equals an exact ranking over all hits.
 
-### 5.2 错误码 <!-- §5.2 -->
+### 5.2 Error codes <!-- §5.2 -->
 
-`MEM-400` 输入不合法（缺 `q`/`type`/`content`、`type` 不在命名空间内、可见性越界、frontmatter 不合法）；`MEM-403` 无写权限 / 能读但非 owner
-的 redact；`MEM-404` 不存在或无权读（含 redact 时无读权限）；`MEM-409` 幂等键复用、redact 非 active 条目；`MEM-413` 正文超 1 MiB；
-`MEM-503` FTS 查询/扫描失败；数据库事务失败 → `CORE-500`（未分类的服务端错误）（常量见 `internal/common/api/errors.go` `ErrMem*`）。另：key 限定在其他项目 → `AUTH-403`；
-创建时项目不存在 → `CORE-404`。
+`MEM-400` invalid input (missing `q`/`type`/`content`, `type` outside the namespace, visibility out of range, invalid frontmatter); `MEM-403` no write permission / redact by a reader who is not the owner;
+`MEM-404` nonexistent or no read permission (including no read permission at redact); `MEM-409` idempotency-key reuse, redact of a non-active entry; `MEM-413` body over 1 MiB;
+`MEM-503` FTS query/scan failure; a database transaction failure → `CORE-500` (an unclassified server error) (constants in `internal/common/api/errors.go` `ErrMem*`). Also: key scoped to another project → `AUTH-403`;
+project absent at create → `CORE-404`.
 
-## 6. 可见性 <!-- §6 -->
+## 6. Visibility <!-- §6 -->
 
-先按 project membership 过滤、再按可见性（`server.go` `memAllowed`）：`admin` 只给 admin；`private` 只给 owner
-与 admin；`project`/`team`/`public` 给该项目任意有读权限的成员（三者当前行为相同）与 admin。
+Filtered by project membership first, then by visibility (`server.go` `memAllowed`): `admin` goes to admins only; `private` to the owner
+and admins only; `project`/`team`/`public` to any member with read permission on the project (the three currently behave the same) and to admins.
 
-## 7. 备份 <!-- §7 -->
+## 7. Backup <!-- §7 -->
 
-`pf backup` → `POST /api/v1/admin/backup`（admin）对 SQLite 做 `VACUUM INTO <data-dir>/backups/aihub-<ts>.db`
-（`core/admin.go`）：memory 全部在库里，快照即包含全部 memory（含已 redact 的文档）；**不含** git 仓库（`git/`），
-落在同一块盘上。生产完整备份由 `.polyforge/deploy.sh` 的在线备份完成（`docs/upgrade.md`）。
+`pf backup` → `POST /api/v1/admin/backup` (admin) runs `VACUUM INTO <data-dir>/backups/aihub-<ts>.db` on SQLite
+(`core/admin.go`): memory lives entirely in the database, so the snapshot contains all memory (redacted documents included); it does **not** contain the git repositories (`git/`),
+which sit on the same disk. The full production backup is done by the online backup of `.polyforge/deploy.sh` (`docs/upgrade.md`).
 
-## 8. CLI 与领取时快照 <!-- §8 -->
+## 8. CLI and the claim-time snapshot <!-- §8 -->
 
-- `pf recall --project P <query> [--any] [--type T|X.*|*] [--tags] [--limit 1..200，缺省 20]`：`--project` 必填且须在本机
-  `[workspace]` 映射中；以 `excerpt=120` 调 search，缺省 `match=all`，`--any` 改用 `match=any`。`pf remember --project P --type T [--title] [--visibility project]
-  [--tags] [--work-item] <content|-|@file>`。`pf memory show <id> [--max-bytes 262144] [--json]`。
-  （`cli/verbs_aihub.go`；fragment：`skills/polyforge/verbs/{recall,remember,memory}.md`。）
-- 领取时 daemon 以 WI 的 goal + labels 为查询（不带 content），用 `match=any`、限定该 WI 的项目，取前 10 条（`-recall-topk`，上限 50）写入
-  capsule `runtime-state/recalled-memories.json`（`{work_item_id, query, top_k, items[{id,type,title,excerpt}], notice,
-  created_at}`，摘录 1200 字符）；出错或无命中时写空列表 + notice，从不让领取失败（`runtime/recall.go`、
-  `daemon/memface.go`）。driver 把它作为「非约束性历史」注入每个 step 的 prompt（`v2-converge.md#§1`）——每条只渲染一行
-  `[type] title`（不含 id 与正文；title 为空时取摘录的第一个非空行），丢弃 id-only 噪声标题
-  （`^Verification Report — \S+$`、`^Controller-sink artifact`），至多 10 行，无条目则不加该节（`driver/spawn.go`）。
-  部署顺序：先升级 aihub 再升级 daemon——旧 aihub 忽略 `match=`、按 AND 检索，长查询于是没有命中，快照为空。
-- step agent 不持有 aihub 凭据路径，记忆访问全部由 daemon 代理（owner 裁决 option C，2026-10-17 简化）。step 进程带
-  `PF_WI_ID` / `PF_DAEMON_ID` 标记（与 step-origin 守卫、reaper 用的是同一组），另带 `PF_DAEMON_SOCKET`（本 daemon 的 socket）；其余 `PF_*` / `POLYFORGE_*` 被剥掉。
-  `PF_WI_ID` 与 `PF_DAEMON_ID` 同时存在时 `pf` 进入 step 模式（`cli/stepctx.go`）：`pf recall` / `pf memory show` 走
-  `GET /step/memories/search`、`GET /step/memories/{id}`，`pf remember` 同步走 `POST /step/memories`
-  （`daemon/stepmem.go`；step-origin 守卫唯一放行的 step 写请求）。work item 不取自请求、也不取自调用方的环境变量：
-  沿 UDS 对端 pid 的祖先链（含进程组长）找本 daemon 派生的 step 进程（某个活跃 job 的 spawn journal 任一条目的 pid，
-  且该进程仍带着这个 job 的标记；最新的匹配条目给出 step 与 attempt）；必须恰好一个 job 匹配，且等于调用方最近的
-  `PF_WI_ID`，否则拒绝。项目取自该 job（请求里别的项目 → DAEMON-403，项目外的 id 一律 MEM-404）。写入只收
-  `experience.wrap`、要求 title、正文 ≤2KB、无疑似凭据值（`internal/common/stepmem`，CLI 先做同样检查），
-  `work_item_id` / `project` 取自 job，以 aihub 已有的 idempotency key `pf-step-memory:<wi>:<step>:<attempt>`
-  创建——丢了应答后的重试返回同一条记忆；aihub 不可达答 DAEMON-503，CLI 报清楚的错误，prompt 说明失败不让 step
-  失败。其余直连 aihub 的动词、`pf doctor`、`pf daemon` 在 step 内一律拒绝，该次调用的 aihub client 拒绝一切请求，
-  `cli.toml` 的 `api_key` 不被使用；`cli.toml` 仍在共享 HOME 下可读——这是防误用，不防恶意。
-- 每个 step 的 prompt 带共享的召回节（`workflows/_shared/memory.md`）：开工前用 2–3 组不同关键词（含中英文）
-  `pf recall --any`，读相关条目正文。只有 workflow 的最后一步写记忆（`workflows/_shared/memory-wrap.md`，变量
-  `{{record}}` `{{skip}}` 为生效的记忆策略）：每个 WI 恰好一条 `experience.wrap`（title `<wi slug>: <做了什么>`，
-  正文：做了什么、关键决定、遗留及合乎 record 的经验；不在 record 里但有价值的照写并加「建议新增条目：…」、打
-  `policy-proposal` 标签）。
-- 记忆策略：`.polyforge.yaml` 的可选段 `memory_policy:`（`default` / `<project>`: `{record: [...], skip: [...]}`；
-  `default` 未声明的列表取内置默认，项目的列表追加到 `default` 之后、去重）。领取时 daemon 把该项目的生效策略写入
-  capsule `runtime-state/memory-policy.json`（`runtime/memorypolicy.go`），driver 渲染进最后一步的 wrap 职责节；缺段＝内置默认
-  （`workspace.DefaultMemoryPolicySection`），从不拒绝领取；段格式错误同整个文件无效一样拒绝领取（DAEMON-414）。
-  `pf init` 在缺段时把默认段以文本追加到文件末尾（不重写原有字节）；`pf doctor` 只读：无文件 pass（内置默认），
-  文件缺段 warn 并提示 `pf init`，有段 pass。
+- `pf recall --project P <query> [--any] [--type T|X.*|*] [--tags] [--limit 1..200, default 20]`: `--project` is required and must be in this machine's
+  `[workspace]` mapping; it calls search with `excerpt=120`, default `match=all`, and `--any` switches to `match=any`. `pf remember --project P --type T [--title] [--visibility project]
+  [--tags] [--work-item] <content|-|@file>`. `pf memory show <id> [--max-bytes 262144] [--json]`.
+  (`cli/verbs_aihub.go`; fragments: `skills/polyforge/verbs/{recall,remember,memory}.md`.)
+- At claim the daemon takes the WI's goal + labels as the query (no content), uses `match=any` restricted to the WI's project, and writes the first 10 hits (`-recall-topk`, cap 50) into the
+  capsule's `runtime-state/recalled-memories.json` (`{work_item_id, query, top_k, items[{id,type,title,excerpt}], notice,
+  created_at}`, excerpts of 1200 characters); on error or no hit it writes an empty list + notice and never fails the claim (`runtime/recall.go`,
+  `daemon/memface.go`). The driver injects it into every step's prompt as "non-binding history" (`v2-converge.md#§1`) — each entry renders as one line
+  `[type] title` only (no id, no body; when the title is empty the first non-empty line of the excerpt is used), id-only noise titles are dropped
+  (`^Verification Report — \S+$`, `^Controller-sink artifact`), at most 10 lines, and with no entries the section is omitted (`driver/spawn.go`).
+  Deploy order: upgrade aihub first, then the daemon — an old aihub ignores `match=` and searches with AND, so a long query then has no hit and the snapshot is empty.
+- A step agent holds no aihub credential path; all memory access is proxied by the daemon (owner ruling option C, 2026-10-17 simplification). The step process carries the
+  `PF_WI_ID` / `PF_DAEMON_ID` markers (the same pair the step-origin guard and the reaper use), plus `PF_DAEMON_SOCKET` (this daemon's socket); the other `PF_*` / `POLYFORGE_*` variables are stripped.
+  When `PF_WI_ID` and `PF_DAEMON_ID` are both present `pf` enters step mode (`cli/stepctx.go`): `pf recall` / `pf memory show` go through
+  `GET /step/memories/search`, `GET /step/memories/{id}`, and `pf remember` synchronously goes through `POST /step/memories`
+  (`daemon/stepmem.go`; the only step write request the step-origin guard lets through). The work item is taken neither from the request nor from the caller's environment variables:
+  it is found along the UDS peer pid's ancestor chain (process-group leader included) as a step process this daemon spawned (the pid of any entry in an active job's spawn journal,
+  and the process still carrying that job's markers; the latest matching entry gives the step and attempt); exactly one job must match, and it must equal the caller's nearest
+  `PF_WI_ID`, otherwise it is refused. The project is taken from that job (another project in the request → DAEMON-403, an id outside the project is always MEM-404). A write accepts only
+  `experience.wrap`, requires a title, a body ≤2KB, no suspected credential value (`internal/common/stepmem`, the CLI performs the same check first),
+  `work_item_id` / `project` are taken from the job, and it is created with aihub's existing idempotency key `pf-step-memory:<wi>:<step>:<attempt>`
+  — a retry after a lost reply returns the same memory; aihub unreachable answers DAEMON-503, the CLI reports a clear error, and the prompt says a failure does not fail the step. Every other verb that talks to aihub directly, `pf doctor`, and `pf daemon` are refused inside a step, the aihub client of that call refuses every request,
+  and the `api_key` of `cli.toml` is not used; `cli.toml` is still readable under the shared HOME — this guards against misuse, not against malice.
+- Every step's prompt carries the shared recall section (`workflows/_shared/memory.md`): before starting, run `pf recall --any` with 2–3 different keyword sets (including Chinese and English variants)
+  and read the bodies of the relevant entries. Only the workflow's last step writes memory (`workflows/_shared/memory-wrap.md`, variables
+  `{{record}}` `{{skip}}` are the effective memory policy): exactly one `experience.wrap` per WI (title `<wi slug>: <做了什么 (what was done)>`,
+  body: 做了什么 (what was done), 关键决定 (the key decisions), 遗留 (follow-ups) and lessons that fit record; a valuable one not in record is written anyway, with `建议新增条目：` (suggested new entry:) followed by the proposed entry, and tagged
+  `policy-proposal`).
+- Memory policy: the optional `memory_policy:` section of `.polyforge.yaml` (`default` / `<project>`: `{record: [...], skip: [...]}`;
+  a list `default` does not declare takes the built-in default, and a project's list is appended after `default`, deduplicated). At claim the daemon writes the project's effective policy into the
+  capsule's `runtime-state/memory-policy.json` (`runtime/memorypolicy.go`), and the driver renders it into the last step's wrap-duty section; a missing section = the built-in default
+  (`workspace.DefaultMemoryPolicySection`) and never refuses the claim; a malformed section refuses the claim just as an invalid file as a whole does (DAEMON-414).
+  `pf init` appends the default section as text to the end of the file when the section is missing (the original bytes are not rewritten); `pf doctor` is read-only: no file → pass (built-in default),
+  file lacking the section → warn and suggest `pf init`, section present → pass.
