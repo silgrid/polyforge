@@ -21,9 +21,13 @@ package test
 // are judged by review against the same spec
 // (artifacts/e2e-scenarios.md). The docs-only nature of this work item
 // shows in the scenario shape: the project's real interfaces here are
-// the doc files themselves, the `pf help` surface that points into
-// them, and the real workflow loader the bundle chapter's worked
-// example must parse with — no daemon, no aihub, no harness is spawned.
+// the doc files themselves and the `pf help` surface that points into
+// them — no daemon, no aihub, no harness is spawned. Two guarantees
+// live in their packages instead (polyforge#255, one fact one place):
+// the sixteen glossary terms in internal/polyforge/cli
+// (TestDocsConceptsCarriesSixteenTerms) and the bundle chapter's worked
+// example through the real loader in internal/polyforge/driver
+// (TestDocsBundleExampleLoadsThroughTheDaemonPath).
 
 import (
 	"crypto/sha256"
@@ -34,8 +38,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
 // w254Pages is the new/moved doc set (the spec's destinations; the page
@@ -99,29 +101,6 @@ func w254Page(t *testing.T, rel string) string {
 // still matches; test/w218_readme_docs_test.go's convention).
 func w254Norm(body string) string {
 	return regexp.MustCompile(`\s+`).ReplaceAllString(body, " ")
-}
-
-// w254Fences answers the fenced-block contents of a Markdown body
-// (``` … ``` lines exclusive): where a docs chapter presents its worked
-// example files.
-func w254Fences(body string) []string {
-	var out []string
-	in := false
-	var cur []string
-	for _, l := range strings.Split(body, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(l), "```") {
-			if in {
-				out = append(out, strings.Join(cur, "\n"))
-				cur = nil
-			}
-			in = !in
-			continue
-		}
-		if in {
-			cur = append(cur, l)
-		}
-	}
-	return out
 }
 
 // w254HeadingRe matches one Markdown heading line (any level); the
@@ -232,49 +211,6 @@ func TestW254ReadmeLandingPage(t *testing.T) {
 		if empty {
 			t.Fatalf("README.md keeps a placeholder heading (%q) — a heading with no content under it exists only to preserve an old anchor; the moved content's links point at its new home", m[2])
 		}
-	}
-}
-
-// TestW254ConceptsSixteenTerms: the concepts page — the newcomer manual
-// doubling as glossary — defines every one of the sixteen grill-summary
-// terms (capsule, work item, workflow/lane, memory, step, result
-// delivery, project, workspace, machine/work machine, repo mapping,
-// data plane vs execution plane (aihub vs daemon), bundle, gate,
-// rewind, claim, chat identity) and carries the where-to-find-what
-// mapping into the doc set.
-func TestW254ConceptsSixteenTerms(t *testing.T) {
-	norm := w254Norm(w254Page(t, "docs/concepts.md"))
-	if !regexp.MustCompile(`(?i)where\s+to\s+find`).MatchString(norm) {
-		t.Fatalf("docs/concepts.md must carry the where-to-find-what mapping into the doc set (which page answers which kind of question); it is absent")
-	}
-	var missing []string
-	for _, c := range []struct{ term, re string }{
-		{"capsule", `(?i)\bcapsule\b`},
-		{"work item", `(?i)\bwork\s+item\b`},
-		{"workflow (lane)", `(?i)\bworkflow\b`},
-		{"lane", `(?i)\blane\b`},
-		{"memory", `(?i)\bmemory\b`},
-		{"step", `(?i)\bstep\b`},
-		{"result delivery", `(?i)\bresult\s+delivery\b`},
-		{"project", `(?i)\bproject\b`},
-		{"workspace", `(?i)\bworkspace\b`},
-		{"machine (work machine)", `(?i)\bmachine\b`},
-		{"repo mapping", `(?i)\brepo\s+mapping\b`},
-		{"data plane", `(?i)\bdata\s+plane\b`},
-		{"execution plane", `(?i)\bexecution\s+plane\b`},
-		{"aihub vs daemon", `(?i)\baihub\b`},
-		{"bundle", `(?i)\bbundle\b`},
-		{"gate", `(?i)\bgate\b`},
-		{"rewind", `(?i)\brewind\b`},
-		{"claim", `(?i)\bclaim\b`},
-		{"chat identity", `(?i)\bchat\s+identity\b`},
-	} {
-		if !regexp.MustCompile(c.re).MatchString(norm) {
-			missing = append(missing, c.term)
-		}
-	}
-	if len(missing) > 0 {
-		t.Fatalf("docs/concepts.md is the newcomer manual doubling as glossary and must define every term a newcomer meets — it never names: %s", strings.Join(missing, ", "))
 	}
 }
 
@@ -647,103 +583,5 @@ func TestW254InTreePointersFollowMoves(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "docs/extending.md") {
 		t.Fatalf("`pf help extensions` must point its extension topics at docs/extending.md (the wired discovery surface follows the move); its output names no such location:\n%s", out)
-	}
-}
-
-// TestW254BundleExampleLoaderParsed: the bundle-authoring chapter's
-// worked example cannot drift from the actual bundle format: the
-// chapter presents the example's files as fenced blocks — the
-// workflow.md as a frontmatter-bearing block declaring steps, each
-// step it names as a frontmatter-bearing block whose name: is the step
-// id — and the real workflow loader parses and renders every one of
-// them.
-func TestW254BundleExampleLoaderParsed(t *testing.T) {
-	fences := w254Fences(w254Page(t, "docs/bundles.md"))
-	if len(fences) == 0 {
-		t.Fatalf("docs/bundles.md is the bundle-authoring chapter and must present its worked example in fenced blocks; the page carries none")
-	}
-	stepRe := regexp.MustCompile(`(?m)^steps:`)
-	nameRe := func(id string) *regexp.Regexp {
-		return regexp.MustCompile(`(?m)^name:\s*` + regexp.QuoteMeta(id) + `\s*$`)
-	}
-	placeholderRe := regexp.MustCompile(`\{\{([a-z][a-z0-9_]*)\}\}`)
-
-	// the workflow.md-shaped fences: frontmatter-bearing blocks that
-	// declare steps — the real loader must parse each.
-	var stepIDs []string
-	seen := map[string]bool{}
-	workflowShaped := 0
-	for i, f := range fences {
-		front, _, ok := workflow.SplitFrontmatter([]byte(f))
-		if !ok || !stepRe.MatchString(string(front)) {
-			continue
-		}
-		workflowShaped++
-		tmp := filepath.Join(t.TempDir(), "workflow.md")
-		if err := os.WriteFile(tmp, []byte(f), 0o644); err != nil {
-			t.Fatalf("plant the documented workflow.md example for the real loader: %v", err)
-		}
-		fm, err := workflow.ReadFrontmatter(tmp)
-		if err != nil {
-			t.Fatalf("docs/bundles.md's worked example (fenced block %d) is the real format's workflow.md and must parse with the real workflow loader — it does not: %v", i+1, err)
-		}
-		if fm == nil || len(fm.Steps) == 0 {
-			t.Fatalf("docs/bundles.md's worked example (fenced block %d) presents a workflow.md but parses to no steps — the example has drifted from the actual format", i+1)
-		}
-		for _, s := range fm.Steps {
-			if s.ID == "" {
-				t.Fatalf("docs/bundles.md's worked example (fenced block %d) names a step entry with no id", i+1)
-			}
-			if !seen[s.ID] {
-				seen[s.ID] = true
-				stepIDs = append(stepIDs, s.ID)
-			}
-		}
-	}
-	if workflowShaped == 0 {
-		t.Fatalf("docs/bundles.md's worked example must present the custom bundle's workflow.md — a fenced block whose frontmatter declares steps — so the real loader can parse it; no such block exists")
-	}
-
-	// each step the example names needs its steps/<id>.md fence, and
-	// the real loader must render it (placeholders satisfied by the
-	// scan; {{principles}} renders from the shared stub).
-	root := t.TempDir()
-	bundle := filepath.Join(root, "workflows", "w254-documented-example")
-	shared := filepath.Join(root, "workflows", workflow.SharedDir)
-	if err := os.MkdirAll(filepath.Join(bundle, "steps"), 0o755); err != nil {
-		t.Fatalf("plant the documented example's bundle dir: %v", err)
-	}
-	if err := os.MkdirAll(shared, 0o755); err != nil {
-		t.Fatalf("plant the documented example's shared dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(shared, workflow.PrinciplesFile), []byte("w254 stub principles\n"), 0o644); err != nil {
-		t.Fatalf("plant the shared principles stub: %v", err)
-	}
-	for _, id := range stepIDs {
-		var def string
-		for _, f := range fences {
-			front, _, ok := workflow.SplitFrontmatter([]byte(f))
-			if ok && nameRe(id).MatchString(string(front)) {
-				def = f
-				break
-			}
-		}
-		if def == "" {
-			t.Fatalf("docs/bundles.md's worked example names step %s but presents no fenced step definition for it (a frontmatter-bearing block whose name: is %s) — the example has drifted from the actual format", id, id)
-		}
-		p := filepath.Join(bundle, "steps", id+".md")
-		if err := os.WriteFile(p, []byte(def), 0o644); err != nil {
-			t.Fatalf("plant the documented step definition for %s: %v", id, err)
-		}
-		vars := map[string]string{}
-		for _, m := range placeholderRe.FindAllStringSubmatch(def, -1) {
-			if m[1] == workflow.PrinciplesVar {
-				continue // the loader renders it from _shared/principles.md
-			}
-			vars[m[1]] = "w254-example-value"
-		}
-		if _, err := workflow.ReadStepDefinition(bundle, id, vars); err != nil {
-			t.Fatalf("docs/bundles.md's documented step definition for %s must render with the real workflow loader — it does not: %v", id, err)
-		}
 	}
 }
