@@ -17,6 +17,7 @@ execution driver).
 - Recovery failure codes: [failure codes](docs/reference/failure-codes.md)
 - Releases, build and test: [release](docs/reference/release.md)
 - The system, the modules, the design docs: [architecture](docs/architecture.md)
+- Authoring a custom workflow bundle: [bundles](docs/bundles.md)
 - Daily use: [user guide](docs/user-guide.md)
 
 ## Platform support (polyforge#218)

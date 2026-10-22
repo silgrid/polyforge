@@ -113,6 +113,8 @@ otherwise name none and let the repo's procedure default. Never file a release o
 bundle (`feature-full`, `bug-fix`, `autopilot`, `chore` have no release step), and never run a
 release or deploy procedure from this skill directly.
 
+When the user repeatedly walks the same flow, read the docs' bundle-authoring chapter ([docs/bundles.md](../../docs/bundles.md)) and propose sedimenting it into a custom workflow bundle.
+
 ## Human coordination: `pf watch` (subscription = adoption)
 
 The execution plane never notifies a session by itself. `pf watch` is the
