@@ -16,8 +16,8 @@ its links take you from there to a first filed and submitted work item.
 You are a team member, not the admin. Creating users, api-keys and projects,
 registering the machine, deploying, and cutting releases are admin and operator
 work; this guide points at the surfaces that own them and never teaches them.
-Standing up your own aihub is the README's
-[Quickstart](../README.md#quickstart-developers--from-zero-smoke-run).
+Standing up your own aihub is the
+[developers' Quickstart](quickstart-developers.md).
 
 ## Install
 
@@ -43,9 +43,8 @@ mapping -- the installer skips the daemon start until one exists. With the
 mapping in place, run `pf daemon ensure` (or open a new harness session, which
 runs the same ensure), then `pf doctor`.
 
-Prerequisites, the macOS notes, and what an upgrade does are the [README's Install
-section](../README.md#install-team-machines--read-this-first); this guide does
-not restate them. Upgrading a work machine is re-running the same line (the
+Prerequisites, the macOS notes, and what an upgrade does are the
+[install page](install.md); this guide does not restate them. Upgrading a work machine is re-running the same line (the
 server-side schema story is [upgrade.md](upgrade.md)).
 
 ## Daily use in your harness
@@ -238,10 +237,10 @@ branches.
 
 | The question | Where the answer lives |
 | --- | --- |
-| Install detail (prerequisites, macOS, what an upgrade does) | the [README](../README.md)'s Install section |
+| Install detail (prerequisites, macOS, what an upgrade does) | the [install page](install.md) |
 | One verb's exact shapes, success and failure branches | `pf help <verb>`, then the [skill fragment](../skills/polyforge/verbs/help.md) that owns the verb |
 | Why it works that way (designs and decisions) | the [design docs](design/polyforge-vnext/reference.md) |
 | Upgrading (the server-side schema story) | [upgrade.md](upgrade.md), plus re-running the installer line |
-| Admin and operator work (users, api-keys, projects, machines, deploy) | the [README](../README.md)'s Quickstart and the management verbs (`pf users`, `pf api-keys`, `pf projects`, `pf machines`) |
+| Admin and operator work (users, api-keys, projects, machines, deploy) | the [quickstarts](quickstart-developers.md) and the management verbs (`pf users`, `pf api-keys`, `pf projects`, `pf machines`) |
 | Releases | the [release reference](reference/release.md): maintainer-only, cut on explicit owner request |
 | Extending polyforge (config keys, custom bundles) | `pf help extensions` and [extending](extending.md), the extension-point index |
