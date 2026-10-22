@@ -139,13 +139,24 @@ force.
 
 **Supervision bounds** are Go duration strings (e.g. `700ms`, `5m`); a
 flag omitted or passed `0` keeps the default, and every flag's meaning
-is in `pf help daemon`. In production only T (`--step-timeout`) and N
-(`--stall-window`) are settable, through the `cli.toml` `[daemon]`
-table; the other bounds are test/dev-only. The only per-step override
-in `workflow.md` is `budget.wall_minutes` (an estimate: T becomes
-`max(3 x wall_minutes, --step-timeout)`); the former `silence_minutes` /
-`tool_minutes` keys were deleted (polyforge#147) and an old bundle that
-still carries them has them silently ignored.
+is in `pf help daemon`. Each bound's verdict names the failure it
+detects: X (`--silence-window`, test/dev-only) ends a dispatch as
+`harness_silent` when no real work signal arrives after it, or
+`model_hung` when no model output arrives while waiting for the model
+(UI chatter never counts as work); Y (`--tool-window`, test/dev-only)
+ends a turn as `tool_hung` when one tool runs longer than it; T
+(`--step-timeout`) ends a step as `step_timeout_long_task` /
+`step_timeout_slow_model`; N (`--stall-window`) ends the driver between
+steps as `driver_stalled`; and a turn that ends with no result file
+inside `--model-error-grace` (test/dev-only) is `model_error` (switch
+candidate) when it ended on a model error, `ended_without_result`
+(same-model retry) when it ended normally. In production only T
+(`--step-timeout`) and N (`--stall-window`) are settable, through the
+`cli.toml` `[daemon]` table; the other bounds are test/dev-only. The
+only per-step override in `workflow.md` is `budget.wall_minutes` (an
+estimate: T becomes `max(3 x wall_minutes, --step-timeout)`); the former
+`silence_minutes` / `tool_minutes` keys were deleted (polyforge#147)
+and an old bundle that still carries them has them silently ignored.
 
 ## `pf recall` — memory search
 

@@ -12,8 +12,8 @@ release is a work item filed against the project-agnostic `release`
 workflow bundle (`workflows/release/`), and the delivery lanes
 (`feature-full`, `bug-fix`, `autopilot`, `chore`) never release or
 deploy. Trigger it by filing a release work item (`pf file --bundle
-release ...`, or ask the routing skill: "release" / "deploy"
-files that work item). If the goal names a bump (`major`, `minor`,
+release ...`, or ask the routing skill: "release" / "deploy" /
+"发版" files that work item). If the goal names a bump (`major`, `minor`,
 `patch`) it is passed verbatim to the repo's procedure; otherwise the
 repo default applies.
 
@@ -109,6 +109,9 @@ run `make xrefs` whenever a change touches the design docs.
 Opt-in tests (skipped with a clear message unless their variable is set):
 `POLYFORGE_TEST_SYSTEM_INSTALL=1` runs the installer scenarios, which
 write `/usr/local/bin/pf` (disposable hosts only).
+
+Minimal external dependencies: pure-Go SQLite (modernc.org/sqlite),
+yaml.v3, goldmark, jsonschema, klauspost/compress, x/sys.
 
 ## Contributing and change coverage
 
