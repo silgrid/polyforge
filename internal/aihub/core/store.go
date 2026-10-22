@@ -189,6 +189,23 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
   mem_id UNINDEXED, body,
   tokenize='trigram'
 );
+
+CREATE TABLE IF NOT EXISTS admin_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- One row per performed project hard delete (DELETE
+  -- /api/v1/projects/{id}): the actor (user id), the deleted project's
+  -- id and name, and the deleted work-item ids as a JSON array — the
+  -- durable record of the per-WI bare repos to remove from disk (the
+  -- startup replay converges a delete that died between its commit
+  -- and the removal). No FK to anything: the table must survive the
+  -- delete cascade it records. No read route or verb exposes it;
+  -- operators inspect it with sqlite directly.
+  actor        TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  project_id  TEXT NOT NULL,
+  project_name TEXT NOT NULL,
+  wi_ids      TEXT NOT NULL DEFAULT '[]'
+);
 `
 
 // Open opens (creating if needed) the Core database at

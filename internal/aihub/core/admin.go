@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -605,6 +606,187 @@ func (m *AdminManager) PatchProject(idOrName string, req ProjectPatchRequest) (*
 		return nil, err
 	}
 	return m.GetProject(projectID)
+}
+
+// ---------------------------------------------------------------------------
+// Project hard delete
+
+// DeleteProject hard-deletes a project and everything it owns — work
+// items, events, dependency edges, memories (with their FTS rows),
+// memberships and revoked project-scoped api keys — in ONE SQLite
+// transaction, recording one admin_audit row. The checks and the
+// cascade run inside that same transaction (no check-then-act gap):
+//
+//   - an unknown id/name answers CORE-404;
+//   - any work item not in a terminal status (wrapped|failed|canceled —
+//     bundled execution tickets and bundle-less registry/epic tickets
+//     alike; the check is a plain row query) answers CORE-409 naming
+//     every offending <project>#<seq> slug;
+//   - any unrevoked api key scoped to the project answers CORE-409 naming
+//     the key ids (a revoked scoped key is deleted silently instead).
+//
+// dryRun runs the same checks and answers the same result with nothing
+// written (the transaction rolls back; no audit row). The per-WI bare
+// git repos are NOT touched here: removing them is disk I/O, so it
+// belongs to the caller AFTER the commit (no I/O while the single-writer
+// connection is held). The deleted work-item ids travel in the answer
+// and are recorded in admin_audit.wi_ids — the durable intent the
+// startup replay uses to converge a delete that died between its commit
+// and the removal (crash-equals-shutdown: before the commit nothing
+// happened, after it the rows are gone and the next start removes any
+// leftover repos).
+//
+// Cross-project references cannot exist (dependency edges refuse them,
+// parents must share the project, a memory's work item must belong to
+// the memory's project), so the explicit delete list is complete; with
+// foreign_keys(1) on, any reference the list misses fails the
+// transaction loudly and rolls back instead of leaving an orphan.
+func (m *AdminManager) DeleteProject(idOrName, actorID string, dryRun bool) (*api.ProjectDeleteResult, []string, error) {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	var projectID, name string
+	err = tx.QueryRow(`SELECT id, name FROM projects WHERE id=?1 OR name=?1`, idOrName).Scan(&projectID, &name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, Fail(api.ErrCoreNotFound, "", "project %q", idOrName)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	// Non-terminal work items: every one of them blocks the delete.
+	var slugs []string
+	rows, err := tx.Query(`SELECT seq FROM work_items WHERE project_id=?1
+		AND status NOT IN ('wrapped','failed','canceled') ORDER BY seq`, projectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	for rows.Next() {
+		var seq int
+		if err := rows.Scan(&seq); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		slugs = append(slugs, fmt.Sprintf("%s#%d", name, seq))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if len(slugs) > 0 {
+		return nil, nil, Fail(api.ErrCoreConflict, "",
+			"project %s has non-terminal work items (move them to wrapped|failed|canceled first): %s",
+			name, strings.Join(slugs, ", "))
+	}
+	// Unrevoked project-scoped api keys: every one of them blocks the
+	// delete (a project no key can reach must not strand its scope).
+	var keyIDs []string
+	rows, err = tx.Query(`SELECT id FROM api_keys WHERE project_id=?1 AND revoked_at IS NULL ORDER BY id`, projectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		keyIDs = append(keyIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if len(keyIDs) > 0 {
+		return nil, nil, Fail(api.ErrCoreConflict, "",
+			"project %s has unrevoked project-scoped api keys (revoke them first): %s",
+			name, strings.Join(keyIDs, ", "))
+	}
+	// The work items the cascade deletes (the audit row's wi_ids).
+	wiIDs := []string{}
+	rows, err = tx.Query(`SELECT id FROM work_items WHERE project_id=?1`, projectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		wiIDs = append(wiIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	res := &api.ProjectDeleteResult{ID: projectID, Name: name, WorkItems: len(wiIDs), DryRun: dryRun}
+	if dryRun {
+		return res, wiIDs, nil // nothing written: the deferred rollback discards the transaction
+	}
+	// The cascade, children before parents. work_items deletes parents
+	// and children in ONE statement: SQLite checks the parent_id
+	// self-references at statement end, so a parent and its child inside
+	// the set go together.
+	for _, stmt := range []string{
+		`DELETE FROM memory_fts WHERE mem_id IN (SELECT id FROM memories WHERE project_id=?1)`,
+		`DELETE FROM memories WHERE project_id=?1`,
+		`DELETE FROM wi_events WHERE work_item_id IN (SELECT id FROM work_items WHERE project_id=?1)`,
+		`DELETE FROM wi_dependencies WHERE blocking_wi_id IN (SELECT id FROM work_items WHERE project_id=?1)
+			OR blocked_wi_id IN (SELECT id FROM work_items WHERE project_id=?1)`,
+		`DELETE FROM work_items WHERE project_id=?1`,
+		`DELETE FROM project_members WHERE project_id=?1`,
+		`DELETE FROM api_keys WHERE project_id=?1 AND revoked_at IS NOT NULL`,
+		`DELETE FROM projects WHERE id=?1`,
+	} {
+		if _, err := tx.Exec(stmt, projectID); err != nil {
+			return nil, nil, err
+		}
+	}
+	// The audit row — plain text columns, no FK, so it survives the
+	// cascade it records.
+	blob, err := json.Marshal(wiIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := tx.Exec(`INSERT INTO admin_audit(actor, created_at, project_id, project_name, wi_ids)
+		VALUES (?1,?2,?3,?4,?5)`, actorID, Now(), projectID, name, string(blob)); err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return res, wiIDs, nil
+}
+
+// DeletedWorkItemIDs answers the union of every admin_audit row's
+// wi_ids — the work items whose bare git repos a performed delete
+// recorded. The startup replay removes those repos (idempotently: a
+// repo already gone is a no-op), converging a delete that died between
+// its commit and the removal.
+func (m *AdminManager) DeletedWorkItemIDs() ([]string, error) {
+	rows, err := m.db.Query(`SELECT wi_ids FROM admin_audit`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	out := []string{}
+	for rows.Next() {
+		var blob string
+		if err := rows.Scan(&blob); err != nil {
+			return nil, err
+		}
+		var ids []string
+		if err := json.Unmarshal([]byte(blob), &ids); err != nil {
+			return nil, fmt.Errorf("admin_audit: decode wi_ids %q: %v", blob, err)
+		}
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	return out, rows.Err()
 }
 
 // ---------------------------------------------------------------------------

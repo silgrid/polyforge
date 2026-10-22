@@ -286,16 +286,18 @@ func upgradeStatements(block string) []string {
 // sqlVer is the first in-window instance directory: the release tag that
 // ships polyforge#149's schema delta (the next release after v2.3.0).
 // sqlVer250 ships polyforge#157's (the repo inventory column);
-// sqlVer2140 drops the memories freshness columns and claim_idempotency.
+// sqlVer2140 drops the memories freshness columns and claim_idempotency;
+// sqlVer2170 adds the project-delete audit table.
 const (
 	sqlVer     = "v2.4.0"
 	sqlVer250  = "v2.5.0"
 	sqlVer2140 = "v2.14.0"
+	sqlVer2170 = "v2.17.0"
 )
 
 // sqlVers lists every deploy/sql version in ascending order: a pre-#149
 // database needs all of them before the current code runs on it.
-var sqlVers = []string{sqlVer, sqlVer250, sqlVer2140}
+var sqlVers = []string{sqlVer, sqlVer250, sqlVer2140, sqlVer2170}
 
 // loadSQLFile reads one file of deploy/sql/v2.4.0/.
 func loadSQLFile(t *testing.T, name string) string { return loadSQLFileOf(t, sqlVer, name) }
@@ -478,7 +480,13 @@ func applySQLText(t *testing.T, db *sql.DB, sqlText string) {
 	}
 }
 
-func isMandatoryBlock(upper string) bool { return strings.Contains(upper, "DROP") }
+// isMandatoryBlock answers whether one doc sql block is a window
+// upgrade: a DROP (the subtraction releases) or a CREATE TABLE (the
+// admin_audit release — its upgrade carries no DROP). The optional
+// waiting_on cleanup UPDATE matches neither, so it stays excluded.
+func isMandatoryBlock(upper string) bool {
+	return strings.Contains(upper, "DROP") || strings.Contains(upper, "CREATE TABLE")
+}
 func isCleanupBlock(upper string) bool {
 	return strings.Contains(upper, "UPDATE") && strings.Contains(upper, "WAITING_ON")
 }

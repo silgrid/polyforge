@@ -1,0 +1,11 @@
+-- deploy/sql/v2.17.0/rollback.sql — the automatic-rollback counterpart of
+-- upgrade.sql.
+--
+-- deploy.sh runs this ONLY for a version applied in the same deploy run,
+-- as ONE SQLite transaction, BEFORE the old image is recreated.
+--
+-- Semantics: the audit table is dropped (no release before v2.17.0 reads
+-- it; nothing references it, so no other table is touched). Audit rows
+-- written by the failed deploy are lost with it — the deletions they
+-- recorded are already complete, and the old version removes no repos.
+DROP TABLE IF EXISTS admin_audit;

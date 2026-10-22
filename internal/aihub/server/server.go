@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -105,6 +107,14 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/projects", s.authAdmin(s.hListProjects))
 	m.HandleFunc("GET /api/v1/projects/{id}", s.auth(s.hGetProject))
 	m.HandleFunc("PATCH /api/v1/projects/{id}", s.auth(s.hPatchProject))
+	// The project hard delete: admin role (authAdmin)
+	// plus the same api-key project-scope check as PATCH, inside the
+	// handler. Reachability: a step agent cannot reach this route — the
+	// daemon's aihub face is an explicit allowlist that forwards nothing
+	// of the admin face, and `pf projects` is refused inside a workflow
+	// step (cli/stepctx.go) — so no project deletion is reachable from
+	// a capsule.
+	m.HandleFunc("DELETE /api/v1/projects/{id}", s.authAdmin(s.hDeleteProject))
 	m.HandleFunc("POST /api/v1/admin/backup", s.authAdmin(s.hBackup))
 
 	// Git proxy (own auth: session-scoped Basic credential).
@@ -1312,4 +1322,73 @@ func (s *Server) hBackup(w http.ResponseWriter, r *http.Request, idn *identity) 
 		return err
 	}
 	return reply(w, http.StatusOK, map[string]string{"backup": name})
+}
+
+// ---------------------------------------------------------------------------
+// Project hard delete
+
+// hDeleteProject serves DELETE /api/v1/projects/{id}: the admin-only
+// project hard delete — every project-owned row in one transaction
+// (core.AdminManager.DeleteProject), then the per-WI bare git repos
+// from disk AFTER the commit (no I/O while the single-writer connection
+// is held). ?dry_run=1 runs the same checks and answers the same body
+// with nothing written and no repo removed. The 200 body identifies the
+// deleted project (api.ProjectDeleteResult). No automatic backup is
+// taken: the docs instruct `POST /api/v1/admin/backup` first.
+func (s *Server) hDeleteProject(w http.ResponseWriter, r *http.Request, idn *identity) error {
+	projectID, err := s.projectIDOf(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	if err := scopeCheck(idn, projectID); err != nil {
+		return err
+	}
+	dryRun := r.URL.Query().Get("dry_run") == "1"
+	res, wiIDs, err := s.Admin.DeleteProject(r.PathValue("id"), idn.UserID, dryRun)
+	if err != nil {
+		return err
+	}
+	if !dryRun {
+		// The transaction has committed: the repos go from disk now,
+		// under no lock. A removal failure answers CORE-500 naming the
+		// dirs — the delete itself is complete, and the next aihub start
+		// (ReplayDeletedRepos) retries the removal.
+		if failed := s.removeRepos(wiIDs); len(failed) > 0 {
+			return core.Fail(api.ErrCoreInternal, "",
+				"project %s deleted but removing its git repos failed: %s (the delete is complete; the next aihub start retries)",
+				res.Name, strings.Join(failed, ", "))
+		}
+	}
+	return reply(w, http.StatusOK, res)
+}
+
+// removeRepos removes the per-WI bare git repos from disk. It runs only
+// AFTER the delete transaction has committed and holds no lock. It
+// answers the repo dirs that could not be removed; os.RemoveAll of a
+// missing dir is a no-op, so a retry (the startup replay) is idempotent.
+func (s *Server) removeRepos(wiIDs []string) []string {
+	var failed []string
+	for _, id := range wiIDs {
+		if err := os.RemoveAll(s.Git.RepoDir(id)); err != nil {
+			failed = append(failed, s.Git.RepoDir(id))
+		}
+	}
+	return failed
+}
+
+// ReplayDeletedRepos converges an interrupted project delete: every
+// work item a performed delete recorded (admin_audit.wi_ids) gets its
+// bare git repo removed — a delete that died between its commit and
+// the removal is finished here on the next start
+// (crash-equals-shutdown). Errors are logged, never fatal: the next
+// start retries.
+func (s *Server) ReplayDeletedRepos() {
+	ids, err := s.Admin.DeletedWorkItemIDs()
+	if err != nil {
+		log.Printf("server: deleted-repo replay: %v", err)
+		return
+	}
+	if failed := s.removeRepos(ids); len(failed) > 0 {
+		log.Printf("server: deleted-repo replay: removing %s failed (the next start retries)", strings.Join(failed, ", "))
+	}
 }

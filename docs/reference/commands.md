@@ -47,6 +47,22 @@ catch-up, consistency check, off-host copy) runs only as part of a
 deploy, so an ad-hoc full backup is these manual steps (or a copy of the
 whole data dir while aihub is stopped).
 
+`pf projects delete <id-or-name> [--yes]` (`DELETE /api/v1/projects/{id}`,
+admin only) hard-deletes a project and everything it owns — work items, events,
+dependency edges, memories, memberships, revoked project-scoped api keys and
+the per-WI bare git repos on the server — in one transaction. It is refused
+(CORE-409) while any work item is not terminal (wrapped|failed|canceled) or any
+unrevoked api key is scoped to the project; an admin key scoped to another
+project is refused (AUTH-403), an unknown project answers CORE-404. The
+delete is irreversible and takes no automatic backup: run `pf backup` first
+(and copy the server's `git/` directory if the bare repos must be kept — the
+backup does not include it), then revoke any project-scoped key. Each
+performed deletion is recorded in the `admin_audit` table (actor, time,
+project id/name, the deleted work-item ids), which survives the cascade and
+has no read API — inspect it with sqlite directly. On a terminal the CLI
+prompts for the project name after a dry-run preview; without `--yes` on a
+pipe it refuses outright.
+
 Human moves: continue = `pf resume <id>` (a paused or blocked
 work item), abandon = `pf cancel <id>` (queued, paused or blocked),
 owner's failed verdict on a live run = `pf wrap <id> --fail` (refused on

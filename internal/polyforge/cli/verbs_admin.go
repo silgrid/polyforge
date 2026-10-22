@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -178,17 +182,24 @@ var cmdApiKeys = &Command{
 var cmdProjects = &Command{
 	Name:    "projects",
 	Group:   GroupMgmt,
-	Summary: "Project and membership management (M3)",
+	Summary: "Project and membership management (M3), plus the hard delete",
 	Usage: "pf projects create --name N [--visible]\n" +
 		"pf projects list\n" +
 		"pf projects get <id-or-name>\n" +
 		"pf projects patch <id-or-name> [--visible[=true|false]] [--repos name=url[,name=url...]]\n" +
 		"pf projects members add <id-or-name> --user U --role viewer|writer|maintainer\n" +
-		"pf projects members remove <id-or-name> --user U [--user U ...]",
+		"pf projects members remove <id-or-name> --user U [--user U ...]\n" +
+		"pf projects delete <id-or-name> [--yes]\n" +
+		"\n" +
+		"delete is IRREVERSIBLE and takes no automatic backup: run `pf backup` first\n" +
+		"(it does not include the git repos — copy the server's git/ directory too).\n" +
+		"Every work item must be terminal and no unrevoked api key may be scoped\n" +
+		"to the project. --yes skips the typed-name confirmation; a terminal\n" +
+		"prompts for the project name, anything else cancels.\n",
 	Setup: func(fs *flag.FlagSet) {},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if len(args) == 0 {
-			return fmt.Errorf("projects: expected create|list|get|patch|members")
+			return fmt.Errorf("projects: expected create|list|get|patch|members|delete")
 		}
 		client := ctx.aihub()
 		sub, rest := args[0], args[1:]
@@ -269,10 +280,83 @@ var cmdProjects = &Command{
 			return nil
 		case "members":
 			return projectsMembers(ctx, client, rest)
+		case "delete":
+			f := subFlags(ctx, "projects delete")
+			yes := f.Bool("yes", false, "delete without the typed-name confirmation")
+			ids, err := parseCommandArgs(f, rest)
+			if err != nil {
+				return err
+			}
+			if len(ids) != 1 {
+				return fmt.Errorf("projects delete: expected exactly one project id or name")
+			}
+			return projectsDelete(ctx, client, ids[0], *yes)
 		default:
 			return fmt.Errorf("projects: unknown action %q", sub)
 		}
 	},
+}
+
+// stdinIsTerminal answers whether r is an interactive terminal (a
+// tty) — NOT merely a char device: /dev/null is one of those and is,
+// by spec, the outright refusal. A package var so tests can drive both
+// faces (no pty harness exists in a test run; a piped stdin is, by
+// spec, the refusal too).
+var stdinIsTerminal = func(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	return termiosOK(f)
+}
+
+// projectsDelete runs the project hard delete (DELETE
+// /api/v1/projects/{id}, its CLI face). --yes
+// deletes without prompting; a terminal first prints the dry-run
+// preview (project name, work-item count — the server's dry run IS
+// the terminal check) and requires typing the project name, and a
+// wrong name cancels with no write. Without --yes on a non-TTY stdin
+// it refuses naming the escape hatch and performs no request at all.
+// The preview and the prompt go to stderr, so stdout carries only the
+// result (the raw body under --json).
+func projectsDelete(ctx *Context, client *aihubclient.Client, idOrName string, yes bool) error {
+	if !yes && !stdinIsTerminal(ctx.Stdin) {
+		return fmt.Errorf("projects delete: stdin is not a terminal and --yes was not given (the delete is irreversible; re-run with --yes, after `pf backup` — the backup does not include the git repos)")
+	}
+	if !yes {
+		// The dry run: the server's checks answer the preview, and a
+		// typed refusal renders with no prompt and no write.
+		raw, err := client.DeleteProject(idOrName, true)
+		if err != nil {
+			return err
+		}
+		var res api.ProjectDeleteResult
+		if err := json.Unmarshal(raw, &res); err != nil {
+			return err
+		}
+		fmt.Fprintf(ctx.Stderr, "project %s (%s): %d work item(s), terminal check: passed\n",
+			res.Name, res.ID, res.WorkItems)
+		fmt.Fprintf(ctx.Stderr, "the delete is irreversible and takes no automatic backup: run `pf backup` first (it does not include the git repos)\n")
+		fmt.Fprintf(ctx.Stderr, "type the project name to confirm: ")
+		line, rerr := bufio.NewReader(ctx.Stdin).ReadString('\n')
+		if rerr != nil && rerr != io.EOF {
+			return fmt.Errorf("projects delete: %v", rerr)
+		}
+		if answer := strings.TrimSpace(line); answer != res.Name {
+			return fmt.Errorf("projects delete: canceled (%q does not name the project %q)", answer, res.Name)
+		}
+	}
+	raw, err := client.DeleteProject(idOrName, false)
+	if err != nil {
+		return err
+	}
+	ctx.finish(raw, func() {
+		var res api.ProjectDeleteResult
+		if json.Unmarshal(raw, &res) == nil {
+			fmt.Fprintf(ctx.Stdout, "deleted project %s (%s), %d work item(s)\n", res.Name, res.ID, res.WorkItems)
+		}
+	})
+	return nil
 }
 
 // projectsMembers handles `pf projects members add|remove ...` — both map
