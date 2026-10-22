@@ -38,8 +38,11 @@ not grading the spec's writing quality, you are checking for a match against int
 
 1. Read `artifacts/spec.md` in full.
 2. Present a concise summary of the spec's scope, non-goals, and requirements back to the
-   user via a needs_input envelope - ask
-   one clear confirmation question: does this match what you meant, or is something off?
+   user via a needs_input envelope, as prose above a one-row markdown table with
+   exactly three columns, header `| 问题 | 推荐选项 | 理由 |` (owner ruling
+   2026-10-21): the row asks one clear confirmation question (`1. Does this match
+   what you meant, or is something off?`), with your recommended answer in 推荐选项
+   and why in 理由; no fourth column, and a literal `|` inside a cell escaped as `\|`.
    To ask: mint a `question_id`, return a result envelope with `outcome: "needs_input"`, that
    `question_id` and the `question` text, and end your turn. The answer arrives in the NEXT
    dispatch of this step under "# Answered questions" - continue from it; never fabricate

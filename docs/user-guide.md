@@ -128,8 +128,11 @@ The order the system actually runs:
    execution driver takes over (the mechanism is the design docs' [execution
    section](design/polyforge-vnext/reference.md#7-execution-)'s subject).
 3. **Grill questions.** A lane's clarification checkpoint asks its questions
-   after submit, when the run reaches it. They arrive as a needs_input wake-up
-   line: read the question with `pf watch <id> --once`, answer with
+   after submit, when the run reaches it, as one table
+   (`| 问题 | 推荐选项 | 理由 |`: numbered question, recommended option,
+   rationale). They arrive as a needs_input wake-up line; your session runs
+   `pf watch <id> --once` right away and shows you the question text verbatim.
+   Answer row by row with
    `pf answer <id> --question q-1 --text "<your words>"`. Answers are the
    human's; a step agent never answers them.
 4. **Watch.** `pf watch <id> --once` for a snapshot (status, current step,

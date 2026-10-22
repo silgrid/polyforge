@@ -43,13 +43,17 @@ every ambiguity you can find as a question, not an assumption.
    `chore`, or an explicit waiver to keep this WI on feature-full with its untrimmed
    e2e lane).
 3. BATCH your questions (owner ruling 2026-10-02): collect ALL material
-   ambiguities you can find first, then ask them in ONE needs_input envelope as a
-   NUMBERED list (each item one focused question, answerable in one line each) -
-   the owner answers all of them in one reply (same numbering). Only a question
-   whose content GENUINELY depends on an earlier answer may wait for a
-   follow-up dispatch; do not drip independent questions one at a time.
-   The numbered list rides in one question body with one `question_id`, and the
-   combined answer comes back as one text. To ask: mint a `question_id`, return a result envelope with `outcome: "needs_input"`, that
+   ambiguities you can find first, then ask them in ONE needs_input envelope whose
+   `question` carries a markdown table with exactly three columns, header
+   `| 问题 | 推荐选项 | 理由 |` (owner ruling 2026-10-21). One row per focused
+   question, answerable in one line; the row number opens the 问题 cell (`1. …`,
+   `2. …`) - no fourth column; every row fills 推荐选项 (your recommended answer)
+   and 理由 (why). Escape a literal `|` inside a cell as `\|`. Context or evidence
+   goes in prose above the table. The owner answers all rows in one reply, keyed
+   by row number. Only a question whose content GENUINELY depends on an earlier
+   answer may wait for a follow-up dispatch; do not drip independent questions
+   one at a time. The table rides in one question body with one `question_id`,
+   and the combined answer comes back as one text. To ask: mint a `question_id`, return a result envelope with `outcome: "needs_input"`, that
    `question_id` and the `question` text, and end your turn. The answer arrives in the NEXT
    dispatch of this step under "# Answered questions" - continue from it; never fabricate
    or guess an answer you did not receive.
