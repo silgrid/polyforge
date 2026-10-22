@@ -9,14 +9,15 @@ package workspace
 //
 //	<workspace>/
 //	  .polyforge.yaml   the human-written model candidates and memory policy
-//	  CLAUDE.md         the workspace notes (polyforge-managed block + human part)
+//	  AGENTS.md         the workspace notes (polyforge-managed block + human part);
+//	                    a workspace without AGENTS.md keeps them in CLAUDE.md (Notes)
 //	  .repo/<repo>/     clones for humans and interactive agents
 //	  capsules/<wi>/    work item workspaces (daemon-managed)
 //	  .polyforge/       polyforge-generated files only (no documents)
 //	  scratch/          disposable output; entries older than 14 days are stale
 //
 // `pf init` applies it (Init); `pf doctor` lints it (StrayEntries,
-// LayoutSection, Scratch). Nothing here moves or deletes anything except
+// Notes, LayoutSection, Scratch). Nothing here moves or deletes anything except
 // Scratch with prune, and that only inside scratch/.
 
 import (
@@ -39,7 +40,12 @@ const (
 	CapsulesDir  = "capsules"
 	ReposDir     = ".repo"
 	GeneratedDir = ".polyforge"
-	NotesFile    = "CLAUDE.md"
+)
+
+// The two names the workspace notes file goes by (Notes picks one).
+const (
+	AgentsNotes = "AGENTS.md"
+	ClaudeNotes = "CLAUDE.md"
 )
 
 // ScratchMaxAge is the age past which a scratch entry is stale.
@@ -52,9 +58,9 @@ const ScratchMaxAge = 14 * 24 * time.Hour
 var rootAllowed = map[string]bool{
 	CapsulesDir:       true,
 	ScratchDir:        true,
-	NotesFile:         true,
+	AgentsNotes:       true,
+	ClaudeNotes:       true,
 	"CLAUDE.local.md": true,
-	"AGENTS.md":       true,
 	// A Go workspace file at the root ties the .repo/ clones together.
 	"go.work":     true,
 	"go.work.sum": true,
@@ -227,7 +233,7 @@ func newestChange(path string) (time.Time, error) {
 	return newest, err
 }
 
-// The CLAUDE.md markers: the polyforge-managed block (shared with the
+// The notes file markers: the polyforge-managed block (shared with the
 // repo listing a workspace may already carry) and, inside it, the
 // layout section `pf init` owns.
 const (
@@ -238,7 +244,7 @@ const (
 	layoutClose  = "<!-- /polyforge:layout -->"
 )
 
-// LayoutBlock is the convention as `pf init` writes it into CLAUDE.md
+// LayoutBlock is the convention as `pf init` writes it into the notes file
 // (markers included).
 func LayoutBlock() string {
 	return layoutOpen + `
@@ -270,8 +276,9 @@ Never write documents into the workspace root or ` + "`.polyforge/`" + `;
 // InitResult reports what Init did.
 type InitResult struct {
 	Workspace string `json:"workspace"`
-	Scratch   string `json:"scratch"`   // created | exists
-	NotesFile string `json:"claude_md"` // created | inserted | updated | unchanged
+	Scratch   string `json:"scratch"`    // created | exists
+	NotesFile string `json:"notes_file"` // created | inserted | updated | unchanged
+	NotesPath string `json:"notes_path"` // the notes file chosen (Notes): AGENTS.md | CLAUDE.md
 	// Yaml is what happened to .polyforge.yaml's memory_policy section:
 	// created (a new file holding only it) | appended | unchanged |
 	// skipped (the file does not load: YamlWarning says why).
@@ -280,11 +287,13 @@ type InitResult struct {
 }
 
 // Init gives an existing workspace directory its local layout: scratch/,
-// the layout section of CLAUDE.md (upsertLayout; written atomically with
-// its mode kept, through a symlink to its target) and the default
-// memory_policy of .polyforge.yaml (planMemoryPolicy, planned first; a
-// yaml that does not load is left untouched and reported in
-// YamlWarning). Idempotent.
+// the layout section of the notes file Notes picks (upsertLayout; written
+// atomically with its mode kept, through a symlink to its target) and the
+// default memory_policy of .polyforge.yaml (planMemoryPolicy, planned
+// first; a yaml that does not load is left untouched and reported in
+// YamlWarning). A CLAUDE.md that carries a second polyforge-managed block
+// beside AGENTS.md is refused before anything is written: pf never edits
+// it, the operator removes that block by hand. Idempotent.
 func Init(root string) (InitResult, error) {
 	res := InitResult{Workspace: root}
 	st, err := os.Stat(root)
@@ -295,6 +304,14 @@ func Init(root string) (InitResult, error) {
 		return res, fmt.Errorf("%s is not a directory", root)
 	}
 	ypath, ydata, ymode, yhow, yerr := planMemoryPolicy(root)
+	name, dup, err := Notes(root)
+	if err != nil {
+		return res, err
+	}
+	if dup {
+		return res, fmt.Errorf("%s carries a polyforge-managed block, but %s is the workspace notes file — remove the block from %s by hand, then re-run",
+			filepath.Join(root, ClaudeNotes), AgentsNotes, ClaudeNotes)
+	}
 	scratch := filepath.Join(root, ScratchDir)
 	switch st, err := os.Lstat(scratch); {
 	case err == nil && st.IsDir():
@@ -310,7 +327,7 @@ func Init(root string) (InitResult, error) {
 		return res, err
 	}
 
-	notes := filepath.Join(root, NotesFile)
+	notes := filepath.Join(root, name)
 	if fi, err := os.Lstat(notes); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 		target, err := filepath.EvalSymlinks(notes)
 		if err != nil {
@@ -334,7 +351,7 @@ func Init(root string) (InitResult, error) {
 	if err != nil {
 		return res, fmt.Errorf("%s: %w", notes, err)
 	}
-	res.NotesFile = how
+	res.NotesFile, res.NotesPath = how, name
 	if how != "unchanged" {
 		if err := writeLayoutFile(notes, []byte(text), mode); err != nil {
 			return res, err
@@ -363,14 +380,53 @@ func writeLayoutFile(path string, data []byte, mode fs.FileMode) error {
 	return nil
 }
 
-// LayoutSection reports whether the workspace's CLAUDE.md exists and,
-// when it does, whether its polyforge-managed block carries the layout
+// Notes resolves the workspace notes file: AGENTS.md when it exists,
+// else CLAUDE.md when that exists, else AGENTS.md (the one `pf init`
+// creates). Both names are permanent; the rule is the same for Init and
+// `pf doctor`. dup reports a CLAUDE.md that is a separate file beside
+// AGENTS.md and carries a polyforge-managed block of its own — a second
+// block that would drift from the canonical one. Two names resolving to
+// the same file (a symlink either way) are one file, never a duplicate.
+func Notes(root string) (name string, dup bool, err error) {
+	agents, claude := filepath.Join(root, AgentsNotes), filepath.Join(root, ClaudeNotes)
+	if _, err := os.Lstat(agents); errors.Is(err, fs.ErrNotExist) {
+		if _, err := os.Lstat(claude); err == nil {
+			return ClaudeNotes, false, nil
+		}
+		return AgentsNotes, false, nil
+	} else if err != nil {
+		return "", false, err
+	}
+	cfi, err := os.Stat(claude)
+	if errors.Is(err, fs.ErrNotExist) {
+		return AgentsNotes, false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	afi, err := os.Stat(agents)
+	if err != nil {
+		return "", false, fmt.Errorf("%s: %w", agents, err)
+	}
+	if os.SameFile(afi, cfi) {
+		return AgentsNotes, false, nil
+	}
+	raw, err := os.ReadFile(claude)
+	if err != nil {
+		return "", false, err
+	}
+	i, _, _ := managedBlock(string(raw)) // an unclosed block is still a block
+	return AgentsNotes, i >= 0, nil
+}
+
+// LayoutSection reports whether the notes file at path exists and, when
+// it does, whether its polyforge-managed block carries the layout
 // section (the same placement rule as upsertLayout: a layout marker
-// outside the managed block does not count). A missing CLAUDE.md is
+// outside the managed block does not count). A missing file is
 // (false, false, nil): there is nothing `pf init` would be repairing. A
 // managed block without its closing marker is an error, as in Init.
-func LayoutSection(root string) (exists, has bool, err error) {
-	raw, err := os.ReadFile(filepath.Join(root, NotesFile))
+func LayoutSection(path string) (exists, has bool, err error) {
+	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, false, nil
 	}
@@ -400,7 +456,7 @@ func managedBlock(text string) (int, int, error) {
 	return i, i + j, nil
 }
 
-// upsertLayout answers the CLAUDE.md text with the layout section in
+// upsertLayout answers the notes file text with the layout section in
 // place and how it got there. The layout markers count only inside the
 // polyforge-managed block (one quoted in the human part is ignored);
 // more than one layout section there is refused. A CRLF file gets a CRLF

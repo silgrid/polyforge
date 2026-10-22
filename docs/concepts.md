@@ -81,10 +81,12 @@ workspace by the repo mapping.
 
 A directory on a work machine that holds the capsules of the projects
 mapped to it: `<workspace>/capsules/<project>-<seq>/`. Its layout is the
-convention `pf init` writes: `.polyforge.yaml`, `CLAUDE.md`, `.repo/`
-clones for humans, `capsules/` (daemon-managed) and `scratch/`
-(disposable output). Anything meant to be shared goes to aihub, never to
-a workspace file.
+convention `pf init` writes: `.polyforge.yaml`, the workspace notes file,
+`.repo/` clones for humans, `capsules/` (daemon-managed) and `scratch/`
+(disposable output). The notes file is `AGENTS.md` when it exists, else
+`CLAUDE.md` — both names are supported permanently, and `pf init` creates
+`AGENTS.md` in a workspace with neither. Anything meant to be shared goes
+to aihub, never to a workspace file.
 
 ### Machine (work machine)
 

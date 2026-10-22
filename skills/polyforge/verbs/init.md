@@ -82,9 +82,17 @@ the user saying "init workspace".
 
 5. **Lay out the workspace**: `pf init <workspace-root>` (default: the
    current directory) creates `scratch/` and writes the runtime-artifact
-   convention (polyforge#177) into CLAUDE.md as a layout section inside
-   the `polyforge:managed` block — appended to an existing block, or a
-   new block on top. Re-running it is safe: it only rewrites its own
+   convention (polyforge#177) into the workspace notes file as a layout
+   section inside the `polyforge:managed` block — appended to an
+   existing block, or a new block on top. The notes file is `AGENTS.md`
+   when it exists, else `CLAUDE.md`; a workspace with neither gets
+   `AGENTS.md`. When both exist as separate files and `CLAUDE.md` also
+   carries a `polyforge:managed` block, `pf init` refuses (non-zero exit,
+   neither file written): relay that the operator removes the block from
+   `CLAUDE.md` by hand, then re-run. A `CLAUDE.md` without a block (an
+   `@AGENTS.md` import) is left alone; two names linked to one file are
+   one file. The output names the file chosen (`--json`: `notes_file` =
+   created / inserted / updated / unchanged, `notes_path` = the name). Re-running it is safe: it only rewrites its own
    section, never the human part. The convention: shared content goes to
    aihub (a design → its work item's content while open, else a
    `doc.design` memory; reviews / decisions / audits → `doc.review` /
@@ -97,7 +105,7 @@ the user saying "init workspace".
    exactly, never re-marshalled) — or creates the file holding only it.
    A file that already declares `memory_policy` is left alone; one that
    does not load is left untouched too and reported as a `warning:` line
-   (exit 0 — scratch/ and CLAUDE.md are still laid out; fix the file —
+   (exit 0 — scratch/ and the notes file are still laid out; fix the file —
    `pf doctor` names the defect — and re-run `pf init`).
 
 ## Verify

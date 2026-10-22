@@ -1,7 +1,7 @@
 package workspace
 
 // layout_test.go: the runtime-artifact convention (polyforge#177) —
-// Init's idempotent CLAUDE.md upsert, the stray-entry classification
+// Init's idempotent notes-file upsert (AGENTS.md, else CLAUDE.md), the stray-entry classification
 // and the scratch staleness/prune rules. Temp dirs only.
 
 import (
@@ -48,10 +48,10 @@ func TestInitFreshWorkspace(t *testing.T) {
 	if st, err := os.Stat(filepath.Join(ws, ScratchDir)); err != nil || !st.IsDir() {
 		t.Fatalf("scratch/ not created: %v", err)
 	}
-	text := readFile(t, filepath.Join(ws, NotesFile))
+	text := readFile(t, filepath.Join(ws, AgentsNotes))
 	for _, want := range []string{managedOpen, managedClose, layoutOpen, layoutClose, "doc.design", "doc.review", "doc.decision", "doc.audit", "experience.*", "fact.*", "scratch/", ".repo/", "capsules/", ".polyforge/", "14 days", "--prune-scratch"} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("CLAUDE.md lacks %q:\n%s", want, text)
+			t.Fatalf("AGENTS.md lacks %q:\n%s", want, text)
 		}
 	}
 	// a second run changes nothing
@@ -62,15 +62,21 @@ func TestInitFreshWorkspace(t *testing.T) {
 	if res.Scratch != "exists" || res.NotesFile != "unchanged" {
 		t.Fatalf("second init = %+v", res)
 	}
-	if again := readFile(t, filepath.Join(ws, NotesFile)); again != text {
-		t.Fatalf("second init rewrote CLAUDE.md:\n%s", again)
+	if again := readFile(t, filepath.Join(ws, AgentsNotes)); again != text {
+		t.Fatalf("second init rewrote AGENTS.md:\n%s", again)
+	}
+	if res.NotesPath != AgentsNotes {
+		t.Fatalf("notes_path = %q, want %s", res.NotesPath, AgentsNotes)
+	}
+	if _, err := os.Lstat(filepath.Join(ws, ClaudeNotes)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a fresh init created CLAUDE.md: %v", err)
 	}
 }
 
 func TestInitKeepsHumanPartAndManagedListing(t *testing.T) {
 	ws := t.TempDir()
 	orig := managedOpen + "\n## Workspace\n\n### polyforge\nrepo listing\n" + managedClose + "\n\n## My notes\n\nhuman text\n"
-	writeFile(t, filepath.Join(ws, NotesFile), orig)
+	writeFile(t, filepath.Join(ws, ClaudeNotes), orig)
 	res, err := Init(ws)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +84,7 @@ func TestInitKeepsHumanPartAndManagedListing(t *testing.T) {
 	if res.NotesFile != "inserted" {
 		t.Fatalf("init = %+v, want inserted", res)
 	}
-	text := readFile(t, filepath.Join(ws, NotesFile))
+	text := readFile(t, filepath.Join(ws, ClaudeNotes))
 	want := managedOpen + "\n## Workspace\n\n### polyforge\nrepo listing\n\n" + LayoutBlock() + managedClose + "\n\n## My notes\n\nhuman text\n"
 	if text != want {
 		t.Fatalf("CLAUDE.md =\n%s\nwant\n%s", text, want)
@@ -89,22 +95,22 @@ func TestInitKeepsHumanPartAndManagedListing(t *testing.T) {
 	}
 	// an outdated layout section is replaced in place, nothing else moves
 	old := strings.Replace(text, LayoutBlock(), layoutOpen+"\nold convention\n"+layoutClose+"\n", 1)
-	writeFile(t, filepath.Join(ws, NotesFile), old)
+	writeFile(t, filepath.Join(ws, ClaudeNotes), old)
 	if res, err := Init(ws); err != nil || res.NotesFile != "updated" {
 		t.Fatalf("refresh init = %+v, %v", res, err)
 	}
-	if got := readFile(t, filepath.Join(ws, NotesFile)); got != want {
+	if got := readFile(t, filepath.Join(ws, ClaudeNotes)); got != want {
 		t.Fatalf("refreshed CLAUDE.md =\n%s\nwant\n%s", got, want)
 	}
 }
 
 func TestInitWithoutManagedBlockPrependsOne(t *testing.T) {
 	ws := t.TempDir()
-	writeFile(t, filepath.Join(ws, NotesFile), "# Human notes\n")
+	writeFile(t, filepath.Join(ws, ClaudeNotes), "# Human notes\n")
 	if res, err := Init(ws); err != nil || res.NotesFile != "inserted" {
 		t.Fatalf("init = %+v, %v", res, err)
 	}
-	text := readFile(t, filepath.Join(ws, NotesFile))
+	text := readFile(t, filepath.Join(ws, ClaudeNotes))
 	if !strings.HasPrefix(text, managedOpen+"\n"+LayoutBlock()+managedClose+"\n\n") || !strings.HasSuffix(text, "# Human notes\n") {
 		t.Fatalf("CLAUDE.md =\n%s", text)
 	}
@@ -113,11 +119,11 @@ func TestInitWithoutManagedBlockPrependsOne(t *testing.T) {
 func TestInitRefusesBrokenMarkersAndScratchFile(t *testing.T) {
 	ws := t.TempDir()
 	broken := "x\n" + managedOpen + "\n" + layoutOpen + "\nno end\n" + managedClose + "\n"
-	writeFile(t, filepath.Join(ws, NotesFile), broken)
+	writeFile(t, filepath.Join(ws, ClaudeNotes), broken)
 	if _, err := Init(ws); err == nil {
 		t.Fatal("init accepted an unclosed layout section")
 	}
-	if got := readFile(t, filepath.Join(ws, NotesFile)); got != broken {
+	if got := readFile(t, filepath.Join(ws, ClaudeNotes)); got != broken {
 		t.Fatalf("a refused init wrote CLAUDE.md: %q", got)
 	}
 	ws2 := t.TempDir()
@@ -272,23 +278,23 @@ func TestInitMarkerEdgeCases(t *testing.T) {
 	t.Run("two layout sections refused", func(t *testing.T) {
 		ws := t.TempDir()
 		body := managedOpen + "\n" + LayoutBlock() + LayoutBlock() + managedClose + "\n"
-		writeFile(t, filepath.Join(ws, NotesFile), body)
+		writeFile(t, filepath.Join(ws, ClaudeNotes), body)
 		if _, err := Init(ws); err == nil || !strings.Contains(err.Error(), "2") {
 			t.Fatalf("init on two sections: %v", err)
 		}
-		if readFile(t, filepath.Join(ws, NotesFile)) != body {
+		if readFile(t, filepath.Join(ws, ClaudeNotes)) != body {
 			t.Fatal("a refused init wrote CLAUDE.md")
 		}
 	})
 	t.Run("marker quoted in the human part is ignored", func(t *testing.T) {
 		ws := t.TempDir()
 		human := "\n## notes\n\nthe section starts at `" + layoutOpen + "` and ends at `" + layoutClose + "`\n"
-		writeFile(t, filepath.Join(ws, NotesFile), managedOpen+"\nlisting\n"+managedClose+"\n"+human)
+		writeFile(t, filepath.Join(ws, ClaudeNotes), managedOpen+"\nlisting\n"+managedClose+"\n"+human)
 		if res, err := Init(ws); err != nil || res.NotesFile != "inserted" {
 			t.Fatalf("init = %+v %v", res, err)
 		}
 		want := managedOpen + "\nlisting\n\n" + LayoutBlock() + managedClose + "\n" + human
-		if got := readFile(t, filepath.Join(ws, NotesFile)); got != want {
+		if got := readFile(t, filepath.Join(ws, ClaudeNotes)); got != want {
 			t.Fatalf("CLAUDE.md =\n%s\nwant\n%s", got, want)
 		}
 		if res, err := Init(ws); err != nil || res.NotesFile != "unchanged" {
@@ -297,11 +303,11 @@ func TestInitMarkerEdgeCases(t *testing.T) {
 	})
 	t.Run("CRLF kept", func(t *testing.T) {
 		ws := t.TempDir()
-		writeFile(t, filepath.Join(ws, NotesFile), managedOpen+"\r\nlisting\r\n"+managedClose+"\r\n# me\r\n")
+		writeFile(t, filepath.Join(ws, ClaudeNotes), managedOpen+"\r\nlisting\r\n"+managedClose+"\r\n# me\r\n")
 		if _, err := Init(ws); err != nil {
 			t.Fatal(err)
 		}
-		got := readFile(t, filepath.Join(ws, NotesFile))
+		got := readFile(t, filepath.Join(ws, ClaudeNotes))
 		if strings.Count(got, "\n") != strings.Count(got, "\r\n") {
 			t.Fatalf("mixed line endings after init: %q", got)
 		}
@@ -316,7 +322,7 @@ func TestInitMarkerEdgeCases(t *testing.T) {
 		if err := os.Chmod(real, 0o640); err != nil {
 			t.Fatal(err)
 		}
-		link := filepath.Join(ws, NotesFile)
+		link := filepath.Join(ws, ClaudeNotes)
 		if err := os.Symlink(real, link); err != nil {
 			t.Fatal(err)
 		}
@@ -354,9 +360,9 @@ func TestLayoutSection(t *testing.T) {
 	for _, c := range cases {
 		root := t.TempDir()
 		if c.notes != "" {
-			writeFile(t, filepath.Join(root, NotesFile), c.notes)
+			writeFile(t, filepath.Join(root, ClaudeNotes), c.notes)
 		}
-		exists, has, err := LayoutSection(root)
+		exists, has, err := LayoutSection(filepath.Join(root, ClaudeNotes))
 		if exists != c.exists || has != c.has || (err != nil) != c.err {
 			t.Fatalf("%s: LayoutSection = %v, %v, %v; want %v, %v, err=%v", c.name, exists, has, err, c.exists, c.has, c.err)
 		}
@@ -380,11 +386,119 @@ func TestInitToleratesDirSyncFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a directory-fsync failure must not fail init: %v", err)
 	}
-	if res.NotesFile != "created" || !strings.Contains(readFile(t, filepath.Join(ws, NotesFile)), layoutOpen) {
-		t.Fatalf("init = %+v; CLAUDE.md must carry the layout", res)
+	if res.NotesFile != "created" || !strings.Contains(readFile(t, filepath.Join(ws, AgentsNotes)), layoutOpen) {
+		t.Fatalf("init = %+v; AGENTS.md must carry the layout", res)
 	}
 	layoutWrite = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
 	if _, err := Init(t.TempDir()); err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("a real write failure must be reported, got %v", err)
+	}
+}
+
+// The notes file resolution: AGENTS.md, else
+// CLAUDE.md; a separate CLAUDE.md with its own managed block beside
+// AGENTS.md is refused, a block-less one ignored; a symlink pair is one
+// file.
+func TestInitNotesFileResolution(t *testing.T) {
+	block := managedOpen + "\n" + LayoutBlock() + managedClose + "\n"
+	t.Run("only AGENTS.md", func(t *testing.T) {
+		ws := t.TempDir()
+		writeFile(t, filepath.Join(ws, AgentsNotes), "# agents\n")
+		res, err := Init(ws)
+		if err != nil || res.NotesFile != "inserted" || res.NotesPath != AgentsNotes {
+			t.Fatalf("init = %+v, %v", res, err)
+		}
+		if got := readFile(t, filepath.Join(ws, AgentsNotes)); got != block+"\n# agents\n" {
+			t.Fatalf("AGENTS.md =\n%s", got)
+		}
+		if _, err := os.Lstat(filepath.Join(ws, ClaudeNotes)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("init created CLAUDE.md beside AGENTS.md: %v", err)
+		}
+	})
+	t.Run("only CLAUDE.md", func(t *testing.T) {
+		ws := t.TempDir()
+		writeFile(t, filepath.Join(ws, ClaudeNotes), "# claude\n")
+		res, err := Init(ws)
+		if err != nil || res.NotesFile != "inserted" || res.NotesPath != ClaudeNotes {
+			t.Fatalf("init = %+v, %v", res, err)
+		}
+		if got := readFile(t, filepath.Join(ws, ClaudeNotes)); got != block+"\n# claude\n" {
+			t.Fatalf("CLAUDE.md =\n%s", got)
+		}
+		if _, err := os.Lstat(filepath.Join(ws, AgentsNotes)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("init created AGENTS.md beside CLAUDE.md: %v", err)
+		}
+	})
+	t.Run("both, CLAUDE.md without a block", func(t *testing.T) {
+		ws := t.TempDir()
+		writeFile(t, filepath.Join(ws, AgentsNotes), "# agents\n")
+		writeFile(t, filepath.Join(ws, ClaudeNotes), "@AGENTS.md\n")
+		res, err := Init(ws)
+		if err != nil || res.NotesPath != AgentsNotes || res.NotesFile != "inserted" {
+			t.Fatalf("init = %+v, %v", res, err)
+		}
+		if got := readFile(t, filepath.Join(ws, ClaudeNotes)); got != "@AGENTS.md\n" {
+			t.Fatalf("init touched CLAUDE.md: %q", got)
+		}
+	})
+	t.Run("both, CLAUDE.md with a duplicate block refused", func(t *testing.T) {
+		ws := t.TempDir()
+		claude := managedOpen + "\nlisting\n" + managedClose + "\n"
+		writeFile(t, filepath.Join(ws, AgentsNotes), "# agents\n")
+		writeFile(t, filepath.Join(ws, ClaudeNotes), claude)
+		_, err := Init(ws)
+		if err == nil || !strings.Contains(err.Error(), ClaudeNotes) || !strings.Contains(err.Error(), "by hand") {
+			t.Fatalf("init on a duplicate block: %v", err)
+		}
+		if readFile(t, filepath.Join(ws, AgentsNotes)) != "# agents\n" || readFile(t, filepath.Join(ws, ClaudeNotes)) != claude {
+			t.Fatal("a refused init wrote a notes file")
+		}
+	})
+	for _, dir := range []struct{ link, target string }{{ClaudeNotes, AgentsNotes}, {AgentsNotes, ClaudeNotes}} {
+		t.Run("symlink "+dir.link+" -> "+dir.target, func(t *testing.T) {
+			ws := t.TempDir()
+			writeFile(t, filepath.Join(ws, dir.target), managedOpen+"\nlisting\n"+managedClose+"\n")
+			if err := os.Symlink(dir.target, filepath.Join(ws, dir.link)); err != nil {
+				t.Fatal(err)
+			}
+			res, err := Init(ws)
+			if err != nil || res.NotesPath != AgentsNotes || res.NotesFile != "inserted" {
+				t.Fatalf("init = %+v, %v", res, err)
+			}
+			if fi, err := os.Lstat(filepath.Join(ws, dir.link)); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("%s is no longer a symlink: %v", dir.link, err)
+			}
+			if got := readFile(t, filepath.Join(ws, dir.target)); !strings.Contains(got, layoutOpen) {
+				t.Fatalf("%s lacks the layout:\n%s", dir.target, got)
+			}
+		})
+	}
+}
+
+func TestNotes(t *testing.T) {
+	cases := []struct {
+		name, agents, claude string // "" = absent
+		want                 string
+		dup                  bool
+	}{
+		{"neither", "", "", AgentsNotes, false},
+		{"only AGENTS.md", "x\n", "", AgentsNotes, false},
+		{"only CLAUDE.md", "", "x\n", ClaudeNotes, false},
+		{"both, import only", "x\n", "@AGENTS.md\n", AgentsNotes, false},
+		{"both, duplicate block", "x\n", managedOpen + "\n" + managedClose + "\n", AgentsNotes, true},
+		{"both, unclosed duplicate block", "x\n", managedOpen + "\n", AgentsNotes, true},
+	}
+	for _, c := range cases {
+		ws := t.TempDir()
+		if c.agents != "" {
+			writeFile(t, filepath.Join(ws, AgentsNotes), c.agents)
+		}
+		if c.claude != "" {
+			writeFile(t, filepath.Join(ws, ClaudeNotes), c.claude)
+		}
+		name, dup, err := Notes(ws)
+		if err != nil || name != c.want || dup != c.dup {
+			t.Fatalf("%s: Notes = %q, %v, %v; want %q, %v", c.name, name, dup, err, c.want, c.dup)
+		}
 	}
 }

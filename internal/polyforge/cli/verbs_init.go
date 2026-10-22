@@ -12,17 +12,18 @@ import (
 
 // verbs_init.go: `pf init [<workspace-dir>]` — the local half of
 // workspace init (polyforge#177). It gives an existing workspace its
-// runtime-artifact layout: scratch/, the convention section of
-// CLAUDE.md's polyforge-managed block and .polyforge.yaml's default
-// memory_policy (workspace.Init: idempotent, the human part of CLAUDE.md
-// is never touched). It needs no config, no
+// runtime-artifact layout: scratch/, the convention section of the
+// notes file's polyforge-managed block (workspace.Notes: AGENTS.md, else
+// CLAUDE.md; a fresh workspace gets AGENTS.md) and .polyforge.yaml's
+// default memory_policy (workspace.Init: idempotent, the human part of
+// the notes file is never touched). It needs no config, no
 // aihub and no daemon; mapping the workspace stays the operator's
 // cli.toml edit (skills/polyforge/verbs/init.md). Machine install is
 // tools/install.sh, not this verb.
 var cmdInit = &Command{
 	Name:         "init",
 	Group:        GroupDiag,
-	Summary:      "Give a workspace its local layout: scratch/, the layout section of CLAUDE.md, the memory_policy of .polyforge.yaml",
+	Summary:      "Give a workspace its local layout: scratch/, the layout section of AGENTS.md (else CLAUDE.md), the memory_policy of .polyforge.yaml",
 	Usage:        "pf init [<workspace-dir>]   (default: the current directory)",
 	NoConfigLoad: true,
 	Setup:        func(*flag.FlagSet) {},
@@ -55,7 +56,7 @@ var cmdInit = &Command{
 		}
 		fmt.Fprintf(ctx.Stdout, "workspace %s\n", res.Workspace)
 		fmt.Fprintf(ctx.Stdout, "  %s/  %s\n", workspace.ScratchDir, res.Scratch)
-		fmt.Fprintf(ctx.Stdout, "  %s  layout section %s\n", workspace.NotesFile, res.NotesFile)
+		fmt.Fprintf(ctx.Stdout, "  %s  layout section %s\n", res.NotesPath, res.NotesFile)
 		fmt.Fprintf(ctx.Stdout, "  %s  %s section %s\n", workspace.FileName, workspace.MemoryPolicyKey, res.Yaml)
 		if res.YamlWarning != "" {
 			fmt.Fprintf(ctx.Stdout, "  warning: %s left untouched: %s\n", workspace.FileName, res.YamlWarning)

@@ -92,7 +92,7 @@ func TestDoctorWorkspaceLayoutWarnsWithDestination(t *testing.T) {
 	}
 }
 
-// A CLAUDE.md without the layout section warns with the `pf init` fix;
+// A CLAUDE.md (the only notes file) without the layout section warns with the `pf init` fix;
 // `pf init` clears it. (No CLAUDE.md at all is the clean case above
 // minus init — see TestDoctorWorkspaceLayoutWarnsWithDestination, whose
 // detail carries no layout-section row.)
@@ -113,6 +113,54 @@ func TestDoctorWorkspaceNotesWithoutLayoutWarns(t *testing.T) {
 	_, _, doc = doctorStatus(t, env, "--json", "doctor")
 	if st, detail := doctorFind(t, doc, docChLayout); st != "pass" {
 		t.Fatalf("after pf init: layout = %s (%s), want pass", st, detail)
+	}
+}
+
+// The notes file is AGENTS.md, else CLAUDE.md: doctor
+// checks AGENTS.md and names it; a block-less CLAUDE.md beside it (the
+// @AGENTS.md import) is silent; a CLAUDE.md with its own managed block
+// warns as a duplicate, and pf init refuses until it is removed by hand.
+func TestDoctorWorkspaceAgentsNotes(t *testing.T) {
+	env, ws := doctorWorkspace(t)
+	agents, claude := filepath.Join(ws, "AGENTS.md"), filepath.Join(ws, "CLAUDE.md")
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(agents, "<!-- polyforge:managed:version=\"1.0\" -->\n## Repos\n<!-- /polyforge:managed -->\n")
+	_, _, doc := doctorStatus(t, env, "--json", "doctor")
+	if st, detail := doctorFind(t, doc, docChLayout); st != "warn" || !strings.Contains(detail, agents+" has no <!-- polyforge:layout -->") || !strings.Contains(detail, "pf init "+ws) {
+		t.Fatalf("only AGENTS.md: layout = %s (%s), want warn naming %s", st, detail, agents)
+	}
+	code, stdout, stderr := runPf(t, env, "init", ws)
+	if code != 0 || !strings.Contains(stdout, "AGENTS.md  layout section inserted") {
+		t.Fatalf("pf init: exit %d %s (%s)", code, stdout, stderr)
+	}
+	if _, err := os.Lstat(claude); !os.IsNotExist(err) {
+		t.Fatalf("pf init created CLAUDE.md beside AGENTS.md: %v", err)
+	}
+	write(claude, "@AGENTS.md\n")
+	_, _, doc = doctorStatus(t, env, "--json", "doctor")
+	if st, detail := doctorFind(t, doc, docChLayout); st != "pass" {
+		t.Fatalf("AGENTS.md + import-only CLAUDE.md: layout = %s (%s), want pass", st, detail)
+	}
+	dup := "<!-- polyforge:managed:version=\"1.0\" -->\nold\n<!-- /polyforge:managed -->\n"
+	write(claude, dup)
+	_, _, doc = doctorStatus(t, env, "--json", "doctor")
+	if st, detail := doctorFind(t, doc, docChLayout); st != "warn" || !strings.Contains(detail, claude+" carries a duplicate polyforge-managed block") || !strings.Contains(detail, agents+" is the canonical notes file") {
+		t.Fatalf("duplicate block: layout = %s (%s), want warn naming %s", st, detail, claude)
+	}
+	before, _ := os.ReadFile(agents)
+	if code, _, stderr := runPf(t, env, "init", ws); code == 0 || !strings.Contains(stderr, "remove the block from CLAUDE.md by hand") {
+		t.Fatalf("pf init over a duplicate block: exit %d (%s), want a refusal", code, stderr)
+	}
+	if after, _ := os.ReadFile(agents); string(after) != string(before) {
+		t.Fatal("a refused pf init wrote AGENTS.md")
+	}
+	if got, _ := os.ReadFile(claude); string(got) != dup {
+		t.Fatal("pf init edited CLAUDE.md")
 	}
 }
 
@@ -247,16 +295,19 @@ func TestInitVerb(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("pf init: exit %d (%s)", code, stderr)
 	}
-	var res struct{ Workspace, Scratch, Claude_md, Polyforge_yaml string }
-	if err := json.Unmarshal([]byte(stdout), &res); err != nil || res.Workspace != ws || res.Scratch != "created" || res.Claude_md != "inserted" || res.Polyforge_yaml != "created" {
+	var res struct{ Workspace, Scratch, Notes_file, Notes_path, Polyforge_yaml string }
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil || res.Workspace != ws || res.Scratch != "created" || res.Notes_file != "inserted" || res.Notes_path != "CLAUDE.md" || res.Polyforge_yaml != "created" {
 		t.Fatalf("pf --json init = %s (%v)", stdout, err)
+	}
+	if strings.Contains(stdout, "claude_md") {
+		t.Fatalf("pf --json init still carries claude_md: %s", stdout)
 	}
 	raw, _ := os.ReadFile(filepath.Join(ws, "CLAUDE.md"))
 	if !strings.HasSuffix(string(raw), human) || !strings.Contains(string(raw), "doc.design") {
 		t.Fatalf("CLAUDE.md after init:\n%s", raw)
 	}
 	code, stdout, _ = runPf(t, nil, "init", ws)
-	if code != 0 || !strings.Contains(stdout, "scratch/  exists") || !strings.Contains(stdout, "layout section unchanged") || !strings.Contains(stdout, "memory_policy section unchanged") {
+	if code != 0 || !strings.Contains(stdout, "scratch/  exists") || !strings.Contains(stdout, "CLAUDE.md  layout section unchanged") || !strings.Contains(stdout, "memory_policy section unchanged") {
 		t.Fatalf("second pf init: exit %d output %s", code, stdout)
 	}
 	bad := t.TempDir()
@@ -264,7 +315,7 @@ func TestInitVerb(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, stdout, stderr = runPf(t, nil, "init", bad)
-	if code != 0 || !strings.Contains(stdout, "layout section created") || !strings.Contains(stdout, "memory_policy section skipped") ||
+	if code != 0 || !strings.Contains(stdout, "AGENTS.md  layout section created") || !strings.Contains(stdout, "memory_policy section skipped") ||
 		!strings.Contains(stdout, "warning: .polyforge.yaml left untouched:") {
 		t.Fatalf("pf init over a broken yaml: exit %d output %s (%s)", code, stdout, stderr)
 	}

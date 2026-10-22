@@ -15,8 +15,10 @@ import (
 // that exists, never fail and never write — except --prune-scratch:
 //
 //   - "workspace layout": root and .polyforge/ entries outside the
-//     convention, each with its suggested destination, and a CLAUDE.md
-//     whose polyforge-managed block lacks the layout section.
+//     convention, each with its suggested destination, a notes file
+//     (workspace.Notes: AGENTS.md, else CLAUDE.md) whose polyforge-managed
+//     block lacks the layout section, and a CLAUDE.md beside AGENTS.md
+//     that carries a duplicate managed block.
 //   - "workspace scratch": scratch/ entries older than 14 days, reported;
 //     `pf doctor --prune-scratch` removes them and lists them. Deletion
 //     stays an explicit operator act so doctor remains a probe anyone may
@@ -43,12 +45,20 @@ func capRows(rows []string) []string {
 // workspaceLayoutCheck warns about entries outside the convention.
 func workspaceLayoutCheck(wss []string) doctorCheck {
 	c := doctorCheck{Name: docChLayout}
-	var rows, noLayout, errs []string
+	var rows, notes, errs []string
 	for _, ws := range wss {
-		if exists, has, err := workspace.LayoutSection(ws); err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", filepath.Join(ws, workspace.NotesFile), err))
+		name, dup, err := workspace.Notes(ws)
+		path := filepath.Join(ws, name)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", ws, err))
+		} else if exists, has, err := workspace.LayoutSection(path); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", path, err))
 		} else if exists && !has {
-			noLayout = append(noLayout, ws)
+			notes = append(notes, fmt.Sprintf("%s has no <!-- polyforge:layout --> section in its polyforge-managed block — run `pf init %s` to add it", path, ws))
+		}
+		if dup {
+			notes = append(notes, fmt.Sprintf("%s carries a duplicate polyforge-managed block — %s is the canonical notes file; remove the block from %s by hand (pf never edits it)",
+				filepath.Join(ws, workspace.ClaudeNotes), path, workspace.ClaudeNotes))
 		}
 		strays, err := workspace.StrayEntries(ws)
 		if err != nil {
@@ -60,12 +70,9 @@ func workspaceLayoutCheck(wss []string) doctorCheck {
 		}
 	}
 	switch {
-	case len(rows) > 0 || len(noLayout) > 0 || len(errs) > 0:
+	case len(rows) > 0 || len(notes) > 0 || len(errs) > 0:
 		c.Status = "warn"
-		var parts []string
-		for _, ws := range noLayout {
-			parts = append(parts, fmt.Sprintf("%s has no <!-- polyforge:layout --> section in its polyforge-managed block — run `pf init %s` to add it", filepath.Join(ws, workspace.NotesFile), ws))
-		}
+		parts := notes
 		if len(rows) > 0 {
 			parts = append(parts, fmt.Sprintf("%d entr(ies) outside the workspace layout: %s — share documents through aihub (`pf file edit <wi> --content @f` while the work item is open, else `pf remember --project <p> --type doc.design|doc.review|doc.decision|doc.audit [--work-item <wi>] @f`), move disposable output to scratch/; nothing was moved or deleted",
 				len(rows), strings.Join(capRows(rows), "; ")))

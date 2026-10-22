@@ -1028,8 +1028,10 @@ belongs in aihub; a workspace keeps locally only `.repo/`, `capsules/`,
 the full convention. Per existing workspace, after upgrading `pf`:
 
 1. `pf init <workspace>` — creates `scratch/` and adds the layout
-   section to CLAUDE.md (inside the existing `polyforge:managed` block;
-   the human part is untouched; safe to re-run).
+   section to the workspace notes file, `AGENTS.md` when it exists, else
+   `CLAUDE.md` (inside the existing `polyforge:managed` block; the human
+   part is untouched; safe to re-run). See "The workspace notes file is
+   AGENTS.md, else CLAUDE.md" below.
 2. `pf doctor` — the `workspace layout` row lists every root entry and
    every `.polyforge/` entry outside the convention, with its
    destination. Nothing is moved for you.
@@ -1055,6 +1057,28 @@ the full convention. Per existing workspace, after upgrading `pf`:
    tolerates them, and you may delete them (CLAUDE.md lines pointing at
    `repo-map/*.md` then dangle — drop them too). `pf doctor` reports scratch entries older than 14 days;
    `pf doctor --prune-scratch` deletes them and lists what it deleted.
+
+## The workspace notes file is AGENTS.md, else CLAUDE.md
+
+`pf init` and `pf doctor`'s `workspace layout` row used to know only
+`CLAUDE.md`. Both now resolve the notes file with one rule: `AGENTS.md`
+when it exists, else `CLAUDE.md`; a workspace with neither gets
+`AGENTS.md` from `pf init`. A workspace that has only `CLAUDE.md` behaves
+as before. Nothing is migrated:
+
+- A workspace with only `AGENTS.md` no longer gets a second `CLAUDE.md`
+  holding just the managed block. If an earlier `pf init` created one,
+  `pf doctor` now warns about its duplicate managed block and `pf init`
+  refuses (non-zero exit, nothing written) until you remove that block
+  from `CLAUDE.md` by hand (or delete the file if it holds nothing
+  else). A `CLAUDE.md` with no managed block, such as an `@AGENTS.md`
+  import, is fine.
+- `AGENTS.md` and `CLAUDE.md` linked to the same file count as one file.
+- `pf init --json` reports the notes outcome as `notes_file` (was
+  `claude_md`; same values) plus `notes_path`, the file chosen. Update
+  any script that reads `claude_md`.
+
+No schema change, no aihub change; the upgrade is the `pf` binary alone.
 
 ## Hub git calls ignore the operator's git config (repo review 2026-10-16 V-5)
 
