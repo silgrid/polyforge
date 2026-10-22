@@ -15,6 +15,7 @@ package cli
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -131,36 +132,25 @@ func guideSlug(heading string) string {
 // TestUserGuideNoDrift is the drift check over docs/user-guide.md:
 //
 //   - every `pf <verb>` the guide names in a code span or fenced block
-//     is a verb of the CLI (the commands registry, plus help — the one
-//     verb Run special-cases; that registry is exactly what `pf help`
-//     prints);
-//   - every `--flag` inside a `pf <verb>` segment (to the next `pf `
-//     start or a shell boundary |;#, skill_flags_test.go's
-//     segmentation) is known to the CLI: the global flag set, the verb's
-//     own Setup flags, a sub-action flag literal of this package, or —
-//     for pf daemon — the daemon help text (daemonUsage);
-//   - every markdown link target — inline, image or reference
-//     definition — resolves: absolute URLs are skipped, a same-file
-//     #anchor must slug-match one of the guide's own #-headings, and a
-//     path target (its #fragment stripped) must exist under docs/ (the
-//     guide's own directory). Cross-file fragments are not checked:
-//     path existence is the bar.
-//
-// Sub-action names (the word after file, ops, chat, result) are
-// intentionally not checked: the spec's bar is verbs and flags, and no
-// sub-action registry exists as data — they are switch arms.
-func TestUserGuideNoDrift(t *testing.T) {
-	body := guideBody(t)
 
-	knownVerbs := map[string]bool{"help": true}
+// docDriftSets answers the known-surface sets every documented page's
+// drift check compares against — built exactly the way
+// skill_flags_test.go builds its own: the commands registry (plus
+// help, the one verb Run special-cases; that registry is exactly what
+// `pf help` prints) for verbs; the global flag set of Run, each verb's
+// own Setup flags, and this package's sub-action flag literals
+// (srcFlagDefRe / srcFlagVarRe / srcFlagLitRe / srcFlagCaseRe over the
+// non-test sources) for flags.
+func docDriftSets() (knownVerbs, global, pkg map[string]bool, verbFlags map[string]map[string]bool) {
+	knownVerbs = map[string]bool{"help": true}
 	for _, c := range commands {
 		knownVerbs[c.Name] = true
 	}
-	global := map[string]bool{}
+	global = map[string]bool{}
 	for _, n := range []string{"json", "config", "server", "api-key", "socket", "user", "version", "help", "h"} {
 		global["--"+n] = true
 	}
-	verbFlags := map[string]map[string]bool{}
+	verbFlags = map[string]map[string]bool{}
 	for _, c := range commands {
 		fs := flag.NewFlagSet(c.Name, flag.ContinueOnError)
 		if c.Setup != nil {
@@ -173,10 +163,10 @@ func TestUserGuideNoDrift(t *testing.T) {
 	// pkg collects the flag literals this package's sub-actions define
 	// or match themselves (file create, ops end-session, chat init,
 	// watch subcommands, ...) — the same scan skill_flags_test.go runs.
-	pkg := map[string]bool{}
+	pkg = map[string]bool{}
 	srcs, err := filepath.Glob("*.go")
 	if err != nil {
-		t.Fatal(err)
+		panic(err) // a build broke: the scan cannot proceed
 	}
 	for _, p := range srcs {
 		if strings.HasSuffix(p, "_test.go") {
@@ -184,7 +174,7 @@ func TestUserGuideNoDrift(t *testing.T) {
 		}
 		raw, err := os.ReadFile(p)
 		if err != nil {
-			t.Fatal(err)
+			panic(err)
 		}
 		for _, re := range []*regexp.Regexp{srcFlagDefRe, srcFlagVarRe} {
 			for _, m := range re.FindAllStringSubmatch(string(raw), -1) {
@@ -197,19 +187,45 @@ func TestUserGuideNoDrift(t *testing.T) {
 			}
 		}
 	}
+	return knownVerbs, global, pkg, verbFlags
+}
 
-	var bad []string
-	checkedVerbs, checkedFlags := 0, 0
+// docDriftCheck checks one documented page's body against the pf
+// surface — the core of TestUserGuideNoDrift and TestDocsSetNoDrift
+// (docs_drift_test.go), so the doc set and the guide meet the same bar:
+//
+//   - every `pf <verb>` the page names in a code span or fenced block
+//     is a verb of the CLI (docDriftSets' registry);
+//   - every `--flag` inside a `pf <verb>` segment (to the next `pf `
+//     start or a shell boundary |;#, skill_flags_test.go's
+//     segmentation) is known to the CLI: the global flag set, the
+//     verb's own Setup flags, a sub-action flag literal of this
+//     package, or — for pf daemon — the daemon help text
+//     (daemonUsage);
+//   - every markdown link target — inline, image or reference
+//     definition — resolves: absolute URLs are skipped, a same-file
+//     #anchor must slug-match one of the page's own #-headings, and a
+//     path target (its #fragment stripped) must exist under the page's
+//     own directory (dir, a path from this package's cwd). Cross-file
+//     fragments are not checked: path existence is the bar.
+//
+// name is the page's repo-relative path (error messages carry it).
+// Sub-action names (the word after file, ops, chat, result) are
+// intentionally not checked: the spec's bar is verbs and flags, and no
+// sub-action registry exists as data — they are switch arms.
+func docDriftCheck(name, dir, body string) (checkedVerbs, checkedFlags, checkedLinks, skippedLinks int, bad []string) {
+	knownVerbs, global, pkg, verbFlags := docDriftSets()
+	var checkedVerbsN, checkedFlagsN int
 	for _, entry := range guideScanned(body) {
 		lineNo, line := entry[0], entry[1]
 		locs := guidePfRe.FindAllStringSubmatchIndex(line, -1)
 		for i, loc := range locs {
 			verb := line[loc[2]:loc[3]]
 			if !knownVerbs[verb] {
-				bad = append(bad, "docs/user-guide.md:"+lineNo+": pf "+verb+" is not a pf verb (not in `pf help`) — the guide names a verb that does not exist")
+				bad = append(bad, name+":"+lineNo+": pf "+verb+" is not a pf verb (not in `pf help`) — the page names a verb that does not exist")
 				continue
 			}
-			checkedVerbs++
+			checkedVerbsN++
 			end := len(line)
 			if i+1 < len(locs) {
 				end = locs[i+1][0]
@@ -222,19 +238,19 @@ func TestUserGuideNoDrift(t *testing.T) {
 			}
 			for _, m := range guideFlagRe.FindAllStringSubmatch(seg, -1) {
 				f := m[1]
-				checkedFlags++
+				checkedFlagsN++
 				known := global[f] || pkg[f] || verbFlags[verb][f]
 				if verb == "daemon" {
 					known = known || strings.Contains(daemonUsage, f+" ") || strings.Contains(daemonUsage, f+"\n") || strings.Contains(daemonUsage, f+"]")
 				}
 				if !known {
-					bad = append(bad, "docs/user-guide.md:"+lineNo+": pf "+verb+" "+f+" is not a flag of that verb (not in `pf help "+verb+"`) — the guide names a flag that does not exist")
+					bad = append(bad, name+":"+lineNo+": pf "+verb+" "+f+" is not a flag of that verb (not in `pf help "+verb+"`) — the page names a flag that does not exist")
 				}
 			}
 		}
 	}
 
-	// The guide's own #-headings, as slugs, for same-file anchors.
+	// The page's own #-headings, as slugs, for same-file anchors.
 	// Fenced lines are skipped: a `#` line inside a fence is shell text,
 	// not a heading.
 	anchors := map[string]bool{}
@@ -251,20 +267,18 @@ func TestUserGuideNoDrift(t *testing.T) {
 			anchors[guideSlug(strings.TrimSpace(strings.TrimLeft(h, "#")))] = true
 		}
 	}
-	guideDir := filepath.Dir(guidePath)
 	// Links are scanned over the whole visible body, not per line: a
 	// link whose [text] wraps onto the next line is still one link, and
 	// its line number comes from its offset (guideLine).
 	visible := guideVisible(body)
-	checkedLinks, skippedLinks := 0, 0
 	// checkTarget verifies one relative target: a same-file #anchor
-	// must slug-match one of the guide's own headings; a path target
-	// (its #fragment stripped) must resolve under docs/. Absolute URLs
-	// never reach here (the callers skip them).
+	// must slug-match one of the page's own headings; a path target
+	// (its #fragment stripped) must resolve under the page's dir.
+	// Absolute URLs never reach here (the callers skip them).
 	checkTarget := func(where, target string) {
 		if strings.HasPrefix(target, "#") {
 			if !anchors[guideSlug(target[1:])] {
-				bad = append(bad, where+": #"+target[1:]+" matches no heading of the guide — the link is dead")
+				bad = append(bad, where+": #"+target[1:]+" matches no heading of the page — the link is dead")
 			}
 			return
 		}
@@ -275,27 +289,44 @@ func TestUserGuideNoDrift(t *testing.T) {
 		if path == "" {
 			return
 		}
-		if _, err := os.Stat(filepath.Join(guideDir, path)); err != nil {
-			bad = append(bad, where+": "+target+" resolves to no file or directory under docs/ — the link is dead")
+		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
+			bad = append(bad, where+": "+target+" resolves to no file or directory under "+filepath.ToSlash(dir)+" — the link is dead")
 		}
 	}
 	for _, m := range guideInlineRe.FindAllStringSubmatchIndex(visible, -1) {
 		target := visible[m[2]:m[3]]
 		if strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") {
-			skippedLinks++ // absolute URL: not the guide's business
+			skippedLinks++ // absolute URL: not the page's business
 			continue
 		}
 		checkedLinks++
-		checkTarget("docs/user-guide.md:"+strconv.Itoa(guideLine(visible, m[0])), target)
+		checkTarget(name+":"+strconv.Itoa(guideLine(visible, m[0])), target)
 	}
 	for _, m := range guideRefDefRe.FindAllStringSubmatchIndex(visible, -1) {
 		target := visible[m[2]:m[3]]
 		if strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") {
-			continue // absolute URL: not the guide's business
+			continue // absolute URL: not the page's business
 		}
-		checkTarget("docs/user-guide.md:"+strconv.Itoa(guideLine(visible, m[0]))+" (reference definition)", target)
+		checkTarget(name+":"+strconv.Itoa(guideLine(visible, m[0]))+" (reference definition)", target)
 	}
+	// The links guard is exact, not a floor: every '](' a renderer
+	// sees outside fences and code spans is one inline or image link,
+	// and the scan must have examined exactly that many (checked, or
+	// skipped as an absolute URL). A link shape the regex missed fails
+	// here instead of passing vacuously.
+	if n := strings.Count(visible, "]("); n != checkedLinks+skippedLinks {
+		bad = append(bad, fmt.Sprintf("%s carries %d '](' link shapes outside fences and code spans, but the scan examined %d (%d checked, %d skipped as absolute URLs) — the scan lost links", name, n, checkedLinks+skippedLinks, checkedLinks, skippedLinks))
+	}
+	return checkedVerbsN, checkedFlagsN, checkedLinks, skippedLinks, bad
+}
 
+// TestUserGuideNoDrift is the drift check over docs/user-guide.md:
+// every pf verb and flag the guide names exists in the real surface and
+// every link resolves (docDriftCheck; the sanity floors below guard
+// the scan against losing its subject).
+func TestUserGuideNoDrift(t *testing.T) {
+	body := guideBody(t)
+	checkedVerbs, checkedFlags, _, _, bad := docDriftCheck("docs/user-guide.md", filepath.Dir(guidePath), body)
 	// Sanity floor: a scan that lost its subject (a broken extraction)
 	// would pass vacuously — the counts guard it, the same way
 	// skill_flags_test.go's `checked < 20` does.
@@ -304,15 +335,6 @@ func TestUserGuideNoDrift(t *testing.T) {
 	}
 	if checkedFlags < 10 {
 		t.Errorf("only %d flags scanned in docs/user-guide.md — the scan lost its subject", checkedFlags)
-	}
-	// The links guard is exact, not a floor: every '](' a renderer
-	// sees outside fences and code spans is one inline or image link,
-	// and the scan must have examined exactly that many (checked, or
-	// skipped as an absolute URL). A link shape the regex missed — one
-	// wrapped across lines, or a form yet uninvented — fails here
-	// instead of passing vacuously.
-	if n := strings.Count(visible, "]("); n != checkedLinks+skippedLinks {
-		t.Errorf("docs/user-guide.md carries %d '](' link shapes outside fences and code spans, but the scan examined %d (%d checked, %d skipped as absolute URLs) — the scan lost links", n, checkedLinks+skippedLinks, checkedLinks, skippedLinks)
 	}
 	if len(bad) > 0 {
 		t.Fatalf("docs/user-guide.md drifted from the pf surface:\n%s", strings.Join(bad, "\n"))

@@ -135,7 +135,7 @@ route to this workspace, and duplicate model ids in one list are all
 load errors. The retired top-level `models:` section (the pre-#169
 shape) refuses with a migration message; `projects:` /
 `workflow_defaults:` are unknown keys like any other (upgrading from
-the pre-#169 shape: [upgrade.md](upgrade.md)). YAML merge keys
+the pre-#169 shape: [upgrade.md](../upgrade.md)). YAML merge keys
 (`<<`) are refused — share a list with anchors,
 `models: &x [...]` / `{ models: *x }`.
 

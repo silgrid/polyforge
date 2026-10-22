@@ -75,8 +75,8 @@ seconds of downtime (no startup auto-migration, see
                mono-repo git tag (single semver per tag)
                               |
                               v
-     GitHub release: aihub/pf linux-amd64 + darwin-arm64 +
-     darwin-amd64, aihub-image.digest, SHA256SUMS
+     GitHub release: the linux and darwin binaries (aihub, pf),
+     aihub-image.digest, SHA256SUMS
                               |  +  ghcr.io image <tag> (linux/amd64)
                               v
  DEPLOYMENT: `deploy.sh` for the aihub host; re-run `tools/install.sh` on work machines
@@ -114,4 +114,4 @@ write `/usr/local/bin/pf` (disposable hosts only).
 
 Change coverage is tiered by a change's behavior face, and the
 disciplines that govern when new coverage must be added, live on the
-[contributing page](contributing.md).
+[contributing page](../contributing.md).
