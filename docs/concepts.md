@@ -177,12 +177,15 @@ human ever looking at it. Which lanes do this is the lane set, not a
 setting:
 
 - The **autopilot**, **bug-fix** and **chore** lanes merge unattended.
-  Only autopilot has a human checkpoint at all (its grill step, which
-  may ask a question — and then a human answers it); bug-fix and chore
-  have none, so a run that asks no question and passes their gates ends
-  merged with no human ever looking at it. In autopilot there is no
-  review step at all — verification's pass stands in for the
-  independent review at the merge rule.
+  Only autopilot declares a human checkpoint (its grill step, which may
+  ask a question — and then a human answers it). Bug-fix and chore have
+  no declared checkpoint, but any step may still ask a human when it
+  needs one: deliver asks `deliver-merge` when the merge rule does not
+  hold, and in bug-fix a change to the authored repro or regression
+  test must be asked of a human. A run that asks no question and
+  passes their gates ends merged with no human ever looking at it. In
+  autopilot there is no review step at all — verification's pass
+  stands in for the independent review at the merge rule.
 - The **feature-full** lane never merges unattended: its grill-review
   gate requires a human answer, so a human is always in the loop before
   deliver can merge. That is the lane's shape, not a preference.
