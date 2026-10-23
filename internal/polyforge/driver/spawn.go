@@ -158,6 +158,13 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		Memories:                recalledMemoriesSection(a.WI.CapsuleDir),
 		MemoryDuty:              memoryDutySection(a.BundleDir, a.WI.CapsuleDir, a.Workflow.lastStep(sp.StepID)),
 	}
+	// polyforge#260: the armed verification prompt carries the shared
+	// classification duty as its own section (an unarmed lane carries
+	// none - its FAIL rewinds exactly as today, so the agent is never
+	// told to classify).
+	if spec.MechanicalFix && sp.StepID == verificationStepID {
+		parts.MechanicalClassify = mechanicalFixSection(a.BundleDir, "Classification duty (an armed full verification FAIL)")
+	}
 	// H3 (polyforge#164): the declared output schema rides the prompt —
 	// the same schema the driver validates the completed output against.
 	if schema, err := loadStepOutputSchema(a.BundleDir, sp.StepID, spec.Vars); err != nil {
@@ -394,6 +401,12 @@ type promptParts struct {
 	// OutputSchema is the step definition's declared output schema
 	// (YAML), shown ahead of the definition body; "" = none declared.
 	OutputSchema string
+	// MechanicalClassify is the shared fast-lane material's
+	// classification duty (workflows/_shared/mechanical-fix.md), rendered
+	// into an ARMED verification dispatch's prompt as its own section
+	// (polyforge#260); "" = the lane is unarmed (or this is not the
+	// verification step) and no classification duty rides.
+	MechanicalClassify string
 	// Reference is the previous attempt's transcript path (a fresh retry
 	// carries it as read-only reference material; "" = none).
 	Reference string
@@ -457,12 +470,21 @@ func assembleStepPrompt(p promptParts) string {
 		b.WriteString("\n")
 	}
 	// The light re-entry instruction (polyforge#222): a rewind input whose
-	// Note is set rides beside the verdict as its own section — the resumed
+	// Note is set rides beside the verdict as its own section - the resumed
 	// session sees the text-only boundary duty and the needs_code_change
 	// self-report channel without re-deriving them from the verdict.
 	if p.Rewind != nil && strings.TrimSpace(p.Rewind.Note) != "" {
 		b.WriteString("\n# Light rewind re-entry (this verdict is all text-only)\n\n")
 		b.WriteString(p.Rewind.Note)
+		b.WriteString("\n")
+	}
+	// The mechanical classification duty (polyforge#260): an armed
+	// verification dispatch's own section, the rewind-note pattern - the
+	// agent sees the static-only boundary, the all-or-nothing rule and the
+	// bound contract without re-deriving them from the workflow.
+	if p.MechanicalClassify != "" {
+		b.WriteString("\n# Mechanical classification (this lane is armed)\n\n")
+		b.WriteString(p.MechanicalClassify)
 		b.WriteString("\n")
 	}
 	if p.PriorRejection != "" {
@@ -731,6 +753,51 @@ func stepDefBody(raw []byte) string {
 		raw = body
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// mechanicalFixFile is the shared fast-lane material's conventional path
+// beside the bundle (workflows/_shared/mechanical-fix.md).
+func mechanicalFixFile(bundleDir string) string {
+	return filepath.Join(filepath.Dir(bundleDir), workflow.SharedDir, "mechanical-fix.md")
+}
+
+// mechanicalFixSection answers one H2 section of the shared fast-lane
+// material's body (the text under "## <heading>" up to the next H2),
+// trimmed; "" when the file, its frontmatter or the section is absent -
+// an armed lane without the material classifies nothing (fail-closed,
+// never a dispatch error).
+func mechanicalFixSection(bundleDir, heading string) string {
+	raw, err := os.ReadFile(mechanicalFixFile(bundleDir))
+	if err != nil {
+		return ""
+	}
+	_, body, ok := workflow.SplitFrontmatter(raw)
+	if !ok {
+		return ""
+	}
+	return h2Section(body, heading)
+}
+
+// h2Section answers the text under one "## <heading>" line up to the
+// next H2 heading ("" when the heading is absent).
+func h2Section(body []byte, heading string) string {
+	var b strings.Builder
+	in := false
+	for _, line := range strings.Split(string(body), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "## ") {
+			if in {
+				break // the next H2 ends the section
+			}
+			in = t == "## "+heading
+			continue
+		}
+		if in {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // checkRelPath asserts one capsule-relative path: non-empty, not

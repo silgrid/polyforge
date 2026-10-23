@@ -36,6 +36,20 @@ output:
           repo: { type: string, description: "The task repo (repos/<repo>) the command runs in." }
           command: { type: string, description: "The command exactly as you ran it inside that repo (no leading cd)." }
       description: The full test bar - the build/lint/test commands that make this verdict, one entry per command per repo, exactly as run. The deliver step re-runs exactly these after merging the latest default branch, and the driver only accepts that re-run as covering the tests when the commands match; without a test_bar a moved default branch always needs a human.
+    mechanical_bound:
+      type: array
+      items:
+        type: object
+        required: [check, repo, command, files]
+        properties:
+          check: { type: string, description: "The failing check's name, exactly as recorded in checks." }
+          repo: { type: string, description: "The task repo (repos/<repo>) the command runs in." }
+          command: { type: string, description: "The exact command that reproduces the check (no leading cd)." }
+          files:
+            type: array
+            minItems: 1
+            items: { type: string }
+      description: "Only on an ARMED lane (mechanical_fix: true on this step's workflow.md entry) and only on a FAIL verdict whose every failed check is static - the mechanical classification. One entry per check recorded fail, covering them exactly; its presence on an armed FAIL verdict IS the classification. An unarmed lane never writes it (the driver ignores it there)."
     authored_titles:
       type: array
       minItems: 1

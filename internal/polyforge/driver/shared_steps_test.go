@@ -238,6 +238,7 @@ func spawnStepPrompt(t *testing.T, bundle, stepID string) string {
 	t.Helper()
 	capDir := capsuleWithShippedBundle(t, bundle)
 	shared, _ := filepath.Glob(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "steps", "*.md"))
+	shared = append(shared, filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "mechanical-fix.md"))
 	shared = append(shared, filepath.Join(shippedWorkflowsDir, workflow.SharedDir, workflow.PrinciplesFile))
 	for _, p := range shared {
 		raw, err := os.ReadFile(p)
@@ -352,6 +353,38 @@ func TestSharedStepPromptsKeepLaneFacts(t *testing.T) {
 						t.Errorf("%s/%s prompt carries %s's lane fact %q", bundle, stepID, other, w)
 					}
 				}
+			}
+		}
+	}
+}
+
+// TestMechanicalClassifySectionRendersOnArmedLanesOnly (polyforge#260):
+// the shared classification duty (workflows/_shared/mechanical-fix.md)
+// rides an armed verification prompt as its own section - feature-full
+// declares mechanical_fix: true - and no unarmed lane's verification
+// prompt carries any of it (an unarmed FAIL rewinds exactly as today, so
+// its agent is never told to classify).
+func TestMechanicalClassifySectionRendersOnArmedLanesOnly(t *testing.T) {
+	p := spawnStepPrompt(t, "feature-full", "verification")
+	for _, want := range []string{
+		"# Mechanical classification (this lane is armed)",
+		"mechanical fast lane",
+		"FAIL mechanical: write `mechanical_bound`",
+		"the rule is all-or-nothing",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("feature-full's armed verification prompt lost the classification fact %q", want)
+		}
+	}
+	for _, bundle := range []string{"bug-fix", "chore", "autopilot"} {
+		p := spawnStepPrompt(t, bundle, "verification")
+		for _, noise := range []string{
+			"# Mechanical classification (this lane is armed)",
+			"FAIL mechanical: write `mechanical_bound`",
+			"the rule is all-or-nothing",
+		} {
+			if strings.Contains(p, noise) {
+				t.Errorf("%s's unarmed verification prompt carries the classification duty %q", bundle, noise)
 			}
 		}
 	}
