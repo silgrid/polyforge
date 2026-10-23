@@ -331,6 +331,18 @@ func TestRunMechanicalFastLaneSettlesLightPass(t *testing.T) {
 	if got := canoJSON(ver.Output["test_bar"]); got != canoJSON(wantBar) {
 		t.Errorf("the carried test_bar = %s, want the FAIL verdict's recorded bar %s", got, canoJSON(wantBar))
 	}
+	// the IN-MEMORY round-trip (the regression the deliver merge rule once
+	// hit): buildResultSpec reads the driver's live state, not the disk —
+	// the light record's recheck_heads must assert there too, or deliver's
+	// merge rule sees no light head and asks a human for every light-passed
+	// repo.
+	spec := d.buildResultSpec(deliverStepID, 5)
+	if spec.LightRecheckHeads["app"] == "" {
+		t.Fatalf("buildResultSpec(deliver) carries no light recheck head in memory: %+v", spec.LightRecheckHeads)
+	}
+	if spec.VerifiedHeads["app"] != "" {
+		t.Errorf("a light-passed workflow must carry no verified head to deliver either: %+v", spec.VerifiedHeads)
+	}
 }
 
 // TestRunBrokenRepairBoundEscalatesInPlace: a repair diff that breaks the

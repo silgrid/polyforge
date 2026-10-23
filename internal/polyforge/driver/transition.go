@@ -618,11 +618,20 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 			// marker cleared by this same write.
 			var boundAny any
 			_ = json.Unmarshal(st.PendingLightRecheck.Bound, &boundAny)
+			// recheck_heads as the JSON shape (map[string]any): the record is
+			// read back from the driver's IN-MEMORY state too (buildResultSpec
+			// → lightRecheckHeads for the deliver merge rule), and a
+			// map[string]string would not assert as map[string]any there —
+			// only the disk round-trip would fix it.
+			recheckHeads := make(map[string]any, len(req.LightSettle.heads))
+			for repo, sha := range req.LightSettle.heads {
+				recheckHeads[repo] = sha
+			}
 			out[mechanicalPassKey] = map[string]any{
 				"bound":         boundAny,
 				"diff":          map[string]any{"files": req.LightSettle.diff.Files, "lines": req.LightSettle.diff.Lines},
 				"recheck":       recheck,
-				"recheck_heads": req.LightSettle.heads,
+				"recheck_heads": recheckHeads,
 				"escalated":     false,
 			}
 			if tb, ok := st.Output["test_bar"]; ok {
