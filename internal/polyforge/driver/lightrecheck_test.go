@@ -735,12 +735,15 @@ func TestLightRecheckPromptCarriesLightSection(t *testing.T) {
 	}
 }
 
-// TestEscalatedFullRerunPromptCarriesEscalationNote (polyforge#260): the
-// ESCALATED full verification re-run's prompt carries the escalation note
-// (the report's fast-lane section duty - the light recheck that would have
-// written it never settled) beside the classification duty (an escalated
-// full FAIL may be classified mechanical again) - and no light section
-// (no marker, no light dispatch).
+// TestEscalatedFullRerunPromptCarriesEscalationNote (polyforge#260,
+// provenance single-sourced by polyforge#261 NB5): the ESCALATED full
+// verification re-run's prompt carries the escalation note — rendered
+// from the shared material's `Escalated full re-run (the mechanical fast
+// lane)` section (workflows/_shared/mechanical-fix.md — the report's
+// fast-lane section duty - the light recheck that would have written it
+// never settled) beside the classification duty (an escalated full FAIL
+// may be classified mechanical again) - and no light section (no
+// marker, no light dispatch).
 func TestEscalatedFullRerunPromptCarriesEscalationNote(t *testing.T) {
 	capDir := capsuleWithShippedBundle(t, "feature-full")
 	shared, _ := filepath.Glob(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "steps", "*.md"))
@@ -771,6 +774,9 @@ func TestEscalatedFullRerunPromptCarriesEscalationNote(t *testing.T) {
 	p, _ := sp.last()
 	for _, want := range []string{
 		"# Escalated full verification (the mechanical fast lane)",
+		// NB5 (polyforge#261): the body now renders from the shared
+		// material's own section, not a Go const.
+		"the ESCALATED full mode of the mechanical",
 		"escalated in place to this full verification",
 		"write the fast-lane section of artifacts/verification-report.md",
 	} {

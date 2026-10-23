@@ -43,7 +43,7 @@ output:
         required: [check, repo, command, files]
         properties:
           check: { type: string, description: "The failing check's name, exactly as recorded in checks." }
-          repo: { type: string, description: "The task repo (repos/<repo>) the command runs in." }
+          repo: { type: string, description: "The task repo's name, exactly as the `repos/` directory names it (bare, no `repos/` prefix)." }
           command: { type: string, description: "The exact command that reproduces the check (no leading cd)." }
           files:
             type: array

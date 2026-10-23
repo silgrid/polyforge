@@ -50,8 +50,8 @@ output:
 # The mechanical fast lane (polyforge#260)
 
 One file, the whole fast-lane contract: the classification duty an armed
-full verification owes, and the light-recheck contract the light dispatch
-runs under. The driver renders each into the prompt it belongs to; the
+full verification owes, the light-recheck contract the light dispatch
+runs under, and the escalation note the ESCALATED full re-run carries. The driver renders each into the prompt it belongs to; the
 driver never judges staticness itself - deliver's unconditional full-bar
 re-run after a light pass is the backstop that keeps the tests-covered
 guarantee even if a classification is wrong.
@@ -69,7 +69,8 @@ FAIL mechanical: write `mechanical_bound` into your FAIL verdict's output,
 one entry per FAILED check -
 
 - `check`: the failing check's `name`, exactly as recorded in `checks`,
-- `repo`: the task repo it ran in (`repos/<name>`),
+- `repo`: the task repo's name, exactly as the `repos/` directory names
+  it (bare, no `repos/` prefix),
 - `command`: the exact command that reproduces the check (no leading `cd`),
 - `files`: the non-empty list of repo-relative paths the check named.
 
@@ -110,3 +111,20 @@ A bound command that still exits non-zero fails the recheck: record the
 check `fail` and the verdict `fail` - never fabricate a pass. A semantic
 confirmation you cannot make fails the recheck too: say so in
 `fail_reason`.
+
+## Escalated full re-run (the mechanical fast lane)
+
+This verification re-run is the ESCALATED full mode of the mechanical
+fast lane (polyforge#260): a light-path failure - a malformed
+classification, a repair outside the mechanical bound, or a light
+recheck that did not pass - escalated in place to this full verification
+(execution.json archives the escalation attempt, cause
+light_recheck_escalated, with the reason and the audit facts). Run the
+full bar exactly as the step definition demands; nothing changes there.
+Additionally write the fast-lane section of artifacts/verification-report.md:
+what was skipped on the light path (the full bar's scope beyond the bound
+commands, and the authored acceptance scenarios), on what grounds it was
+skipped (the mechanical classification), the bound (per failed check its
+repo, its exact command and the files it named), the escalation's reason
+(archived with the attempt), and your own full-bar results that supersede
+the light path.
