@@ -471,10 +471,11 @@ func assembleStepPrompt(p promptParts) string {
 	}
 	// The light re-entry instruction (polyforge#222): a rewind input whose
 	// Note is set rides beside the verdict as its own section - the resumed
-	// session sees the text-only boundary duty and the needs_code_change
-	// self-report channel without re-deriving them from the verdict.
+	// session sees the re-entry boundary duty and the needs_code_change
+	// self-report channel without re-deriving them from the verdict (the
+	// note itself states which kind of light rewind this is).
 	if p.Rewind != nil && strings.TrimSpace(p.Rewind.Note) != "" {
-		b.WriteString("\n# Light rewind re-entry (this verdict is all text-only)\n\n")
+		b.WriteString("\n# Light rewind re-entry\n\n")
 		b.WriteString(p.Rewind.Note)
 		b.WriteString("\n")
 	}

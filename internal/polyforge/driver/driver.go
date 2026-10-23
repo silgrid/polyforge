@@ -555,6 +555,7 @@ func (d *Driver) settle(stepID string, n int64, res *StepResult, run StepRun) (s
 		TestFilesCommit:         d.testFilesStamp(res),
 		RebaselineAuthoredTests: res.rebaseline,
 		VerifiedHeads:           d.verifiedHeads(stepID, res),
+		LightDiffBase:           d.lightDiffBase(stepID, res),
 	}); err != nil {
 		return true, fmt.Errorf("driver: step %s result transition failed: %w", stepID, err)
 	}
@@ -1076,6 +1077,41 @@ func (d *Driver) verifiedHeads(stepID string, res *StepResult) map[string]any {
 		return nil
 	}
 	return repoHeads(filepath.Join(d.wi.CapsuleDir, capsule.DirRepos))
+}
+
+// lightDiffBase pre-reads the task repos' HEADs the mechanical rewind
+// records as the light recheck's repair-diff base (polyforge#260; git
+// I/O, so outside the transition's lock — the verifiedHeads pattern):
+// each repo's HEAD at this FAIL verdict's settlement, carried in the
+// TransitionRequest, never step-supplied. Nil unless this is an armed
+// verification gate-FAIL that carries a mechanical classification (the
+// mechanical rewind's own precondition — everything else rewinds as
+// today, with no marker to feed).
+func (d *Driver) lightDiffBase(stepID string, res *StepResult) map[string]string {
+	if stepID != verificationStepID || res.Outcome != OutcomeGateFailed || d.wi.CapsuleDir == "" {
+		return nil
+	}
+	if !d.mechanicalArmed() {
+		return nil
+	}
+	out, err := parseOutput(res.Output)
+	if err != nil || !mechanicalBoundPresent(out) {
+		return nil
+	}
+	return repoHeadShas(filepath.Join(d.wi.CapsuleDir, capsule.DirRepos))
+}
+
+// repoHeadShas answers each task repo's HEAD sha (repos with an unborn or
+// unreadable HEAD omitted) — the mechanical rewind's diff base and the
+// light pass's recheck heads.
+func repoHeadShas(reposDir string) map[string]string {
+	heads := map[string]string{}
+	for name, v := range repoHeads(reposDir) {
+		if sha, ok := v.(string); ok {
+			heads[name] = sha
+		}
+	}
+	return heads
 }
 
 // parseOutput coerces a result's output payload to a JSON object map
