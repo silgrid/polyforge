@@ -176,10 +176,25 @@ func TestTransitionMechanicalRewindUnarmedOrUnclassifiedRewindsFresh(t *testing.
 // budget bypass — an over-bound mechanical FAIL ends
 // failed_rewind_exhausted BEFORE any mutation (no archive, no slot, no
 // marker, no verdict routed), exactly like every rewind.
+// TestTransitionMechanicalRewindBoundsHold: the mechanical rewind is no
+// budget bypass - an over-bound mechanical FAIL ends
+// failed_rewind_exhausted BEFORE any mutation (no archive, no slot, no
+// verdict routed), exactly like every rewind. The second mechanical FAIL
+// arrives after the light path settled (the light recheck FAILed and
+// escalated in place): the follow-up mechanical rewind attempt hits
+// max_per_step.
 func TestTransitionMechanicalRewindBoundsHold(t *testing.T) {
 	d, _, _, execPath := testEnv(t, spec("code"), mechGateSpec("code"))
 	d.workflow.MaxPerStep = 1
 	mustInit(t, d)
+	complete := func(n int64, stepID string) {
+		t.Helper()
+		mustStart(t, d, stepID, n)
+		if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: stepID, SpawnN: n,
+			Result: completedResult(stepID, n, `{}`)}); err != nil {
+			t.Fatalf("result %s %d: %v", stepID, n, err)
+		}
+	}
 	mechFail := func(n int64) {
 		t.Helper()
 		mustStart(t, d, verificationStepID, n)
@@ -193,18 +208,35 @@ func TestTransitionMechanicalRewindBoundsHold(t *testing.T) {
 			t.Fatalf("gate_fail %d: %v", n, err)
 		}
 	}
-	mustStart(t, d, "code", 1)
-	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "code", SpawnN: 1,
-		Result: completedResult("code", 1, `{}`)}); err != nil {
-		t.Fatal(err)
+	lightFail := func(n int64) {
+		t.Helper()
+		mustStart(t, d, verificationStepID, n)
+		if err := d.transition(TransitionRequest{
+			Kind: TransStepResult, StepID: verificationStepID, SpawnN: n,
+			Result: &StepResult{StepID: verificationStepID, SpawnN: n, Outcome: OutcomeGateFailed,
+				Output: json.RawMessage(`{"verdict":"fail","fail_reason":"the bound command is still red"}`)},
+			Gate: &GateVerdict{GateStepID: verificationStepID, TargetStep: "code", VerdictText: "still red"},
+		}); err != nil {
+			t.Fatalf("light recheck fail %d: %v", n, err)
+		}
 	}
-	mechFail(2) // round 1: the mechanical rewind lands (one slot)
-	mustStart(t, d, "code", 3)
-	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "code", SpawnN: 3,
-		Result: completedResult("code", 3, `{}`)}); err != nil {
-		t.Fatal(err)
+	// round 1: code completes, the armed classified FAIL rewinds
+	// mechanically (one slot, the marker set).
+	complete(1, "code")
+	mechFail(2)
+	if readExec(t, execPath).Steps[verificationStepID].PendingLightRecheck == nil {
+		t.Fatalf("the mechanical rewind must set the marker first")
 	}
-	mechFail(4) // round 2: the per-step bound hits
+	// the light re-entry completes; the light recheck FAILs (a bound
+	// command still red) and escalates in place - marker cleared, no slot.
+	complete(3, "code")
+	lightFail(4)
+	if readExec(t, execPath).Steps[verificationStepID].PendingLightRecheck != nil {
+		t.Fatalf("the light-path escalation must clear the marker")
+	}
+	// the escalated full re-run FAILs classified mechanical again: the
+	// follow-up mechanical rewind hits max_per_step BEFORE any mutation.
+	mechFail(5)
 	exec := readExec(t, execPath)
 	if exec.WorkflowStatus != StatusFailedRewindExhausted {
 		t.Fatalf("the second mechanical rewind must hit max_per_step, got %q", exec.WorkflowStatus)
@@ -218,13 +250,8 @@ func TestTransitionMechanicalRewindBoundsHold(t *testing.T) {
 	if mech != 1 || exec.RewindStats.Count != 1 {
 		t.Fatalf("the bound fired before any mutation: mechanical archives %d, count %d", mech, exec.RewindStats.Count)
 	}
-	if exec.Steps["code"].PendingRewindInput != nil {
-		t.Fatalf("the exhausted rewind must not route a verdict")
-	}
-	// the round-1 marker legitimately rides the terminal workflow (the
-	// bound refusal mutates nothing — it neither sets nor clears)
-	if marker := exec.Steps[verificationStepID].PendingLightRecheck; marker != nil && marker.DiffBase["app"] != "0123" {
-		t.Fatalf("a mutated marker on the exhausted rewind: %+v", marker)
+	if code := exec.Steps["code"]; code.PendingRewindInput != nil || code.Status != capsule.StepDone {
+		t.Fatalf("the exhausted rewind must not route a verdict nor reset the target: %+v", code)
 	}
 }
 

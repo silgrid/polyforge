@@ -31,7 +31,9 @@ import (
 
 // Event kinds emitted by the supervisor. Driver events (step_started,
 // step_done, needs_input, answered, interrupted, rewind, terminal,
-// step_dead, step_failed, blocked, ...) land in the same log through the
+// step_dead, step_failed, blocked, light_recheck_escalated (the
+// mechanical fast lane's in-place escalation, polyforge#260), ...)
+// land in the same log through the
 // daemon binding — a supervisor verdict is recorded there, by the driver
 // that consumes it. A closed set per emitter: job lifecycle, recovery
 // and the push bookkeeping.

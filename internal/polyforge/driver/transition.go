@@ -83,8 +83,17 @@ const (
 	// the re-entry resumes the previous conversation (lightRewindContext),
 	// and the needs_code_change self-report's fresh rewind reuses its slot.
 	CauseGateFailRewindMechanical = "gate_fail_rewind_mechanical"
-	CauseSupersededByRewind       = "superseded_by_rewind"
-	CauseInfraFailure             = "infra_failure"
+	// CauseLightRecheckEscalated is the audit-only attempt cause of the
+	// light path's in-place escalation (polyforge#260): a light-path
+	// failure — a malformed classification, a broken repair bound, or a
+	// light recheck that did not pass — escalated the verification step
+	// to the existing full gate in the same dispatch. It is neither a
+	// rewind archive nor model-class infra: it charges no rewind slot
+	// and leaves the candidate pointer's count alone. The reason rides
+	// Detail.
+	CauseLightRecheckEscalated = "light_recheck_escalated"
+	CauseSupersededByRewind    = "superseded_by_rewind"
+	CauseInfraFailure          = "infra_failure"
 )
 
 // LightRewindNote is the light re-entry instruction a light rewind routes
@@ -161,6 +170,16 @@ const (
 	// failed dispatch and its death-cause disposal in one atomic write
 	// (applyStepFailedLocked).
 	TransStepFailed TransitionKind = "step_failed"
+	// TransLightEscalate is the mechanical fast lane's in-place escalation
+	// write (polyforge#260): a light-path failure detected BEFORE any
+	// dispatch (a malformed classification or a broken repair bound) —
+	// the escalation archives the audit-only light_recheck_escalated
+	// attempt on the verification step with the reason, clears the
+	// pending light recheck marker and orders the next dispatch fresh —
+	// no rewind slot, no rewind input — so the loop re-dispatches the
+	// step in full mode (the existing full verification, unchanged). It
+	// consumes no derivation ordinal (like TransUnblock).
+	TransLightEscalate TransitionKind = "light_recheck_escalate"
 	// TransClaimReentry is a claim's re-entry of an in_progress step whose
 	// dispatch never settled (cancelled by an operator pause, a shutdown
 	// or a crash before this claim): it re-stamps step_started_at, so a
@@ -214,7 +233,13 @@ type TransitionRequest struct {
 	// transition takes the driver's lock (the verifiedHeads pattern: git
 	// I/O never under the lock, never step-supplied).
 	LightDiffBase map[string]string
-	SpawnN        int64
+	// LightSettle (polyforge#260) is the light recheck's pre-read
+	// settlement facts (set only for a completed verification result
+	// whose step holds the pending light recheck marker): the re-measured
+	// repair diff and the recheck heads, both read before the transition
+	// takes the driver's lock. Nil = no light settlement.
+	LightSettle *lightSettleFacts
+	SpawnN      int64
 }
 
 // GateVerdict is one business gate FAIL judgment (01 §6.2): the policy
@@ -243,6 +268,13 @@ type appliedInfo struct {
 	// light gate that rewound it.
 	selfRewind bool
 	rewindGate string
+	// escalated marks the light path's in-place escalation
+	// (polyforge#260): the light recheck did not settle a light pass — the
+	// same write archived the audit-only escalation attempt instead — so
+	// the step is not done and the event is the escalation, never
+	// step_done; escalateReason carries why.
+	escalated      bool
+	escalateReason string
 }
 
 // appliedEvent is a follow-up event of one transition.
@@ -329,6 +361,8 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 		return d.applyClaimReentryLocked()
 	case TransStepFailed:
 		return d.applyStepFailedLocked(req, info)
+	case TransLightEscalate:
+		return d.applyLightEscalateLocked(req.StepID, req.Reason, info)
 	default:
 		return fmt.Errorf("driver: unknown transition kind %q", req.Kind)
 	}
@@ -537,6 +571,65 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 				return nil
 			}
 		}
+		// The light recheck's settlement (polyforge#260): a completed
+		// verification result whose step holds the pending light recheck
+		// marker is the light recheck's own claim. Judged (verdict pass,
+		// every check pass, every bound command shown run with exit 0 in
+		// its repo — the pure judgments below — plus the pre-read facts'
+		// re-measured diff), it either settles the light pass (the
+		// mechanical_pass record, no verified_heads, the carried test_bar,
+		// the marker cleared) or escalates IN PLACE — the same write, never
+		// a rewind. Judged before the accepted-result handling: an
+		// escalated recheck is not done.
+		if req.LightSettle != nil {
+			if st.PendingLightRecheck == nil {
+				return fmt.Errorf("driver: step %q light settlement without a pending light recheck marker", req.StepID)
+			}
+			reason := req.LightSettle.diffBroken
+			var recheck []map[string]any
+			if reason == "" {
+				bound, perr := parseMechBound(st.PendingLightRecheck.Bound)
+				switch perr {
+				case nil:
+					var r string
+					recheck, r = lightRecheckEvidence(bound, res.CommandEvidence, d.wi.CapsuleDir)
+					if r != "" {
+						reason = r
+					} else if r = lightRecheckVerdictHolds(out); r != "" {
+						reason = r
+					}
+				default:
+					reason = "the mechanical classification is malformed: " + perr.Error()
+				}
+			}
+			if reason != "" {
+				if err := d.applyLightEscalateLocked(req.StepID, reason, info); err != nil {
+					return err
+				}
+				st.Output = out // the light recheck's own record stays on the gate (audit)
+				return nil
+			}
+			// The light pass: mechanical_pass built from the marker, the
+			// re-measured diff, the recheck evidence and the driver-read
+			// recheck heads; test_bar carried verbatim from the FAIL
+			// verdict's record (the driver copies — the step agent never
+			// re-transcribes it, the #203 lesson); NO verified_heads (a head
+			// verified only by a light recheck is never tests-covered); the
+			// marker cleared by this same write.
+			var boundAny any
+			_ = json.Unmarshal(st.PendingLightRecheck.Bound, &boundAny)
+			out[mechanicalPassKey] = map[string]any{
+				"bound":         boundAny,
+				"diff":          map[string]any{"files": req.LightSettle.diff.Files, "lines": req.LightSettle.diff.Lines},
+				"recheck":       recheck,
+				"recheck_heads": req.LightSettle.heads,
+				"escalated":     false,
+			}
+			if tb, ok := st.Output["test_bar"]; ok {
+				out["test_bar"] = tb // carried byte-for-byte from the FAIL verdict's record
+			}
+			st.PendingLightRecheck = nil // cleared by the settling write
+		}
 		// B10: the only accepted command evidence, decoded (known fields
 		// only; ValidateStepResult already proved it decodes)
 		if ev, _ := decodeCommandEvidence(res.CommandEvidence); len(ev) > 0 {
@@ -585,6 +678,17 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 			d.exec.ReviewRounds = map[string]int64{}
 		}
 		d.exec.ReviewRounds[req.StepID]++
+		if st.PendingLightRecheck != nil {
+			// The light recheck's own FAIL verdict (polyforge#260): a bound
+			// command still red, or a semantic confirmation the agent cannot
+			// make. Escalate IN PLACE, in this same write — never a rewind
+			// (the light path's one fallback); the loop re-dispatches the
+			// step in full mode.
+			if err := d.applyLightEscalateLocked(req.StepID, lightRecheckFailReason(out), info); err != nil {
+				return err
+			}
+			return nil
+		}
 		d.applyGateFailLocked(req.StepID, verdict, out, req.LightDiffBase, info)
 	case OutcomeNeedsInput:
 		st.PendingQuestion = &capsule.PendingQuestion{
@@ -724,6 +828,51 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 			}
 		}
 	}
+}
+
+// applyLightEscalateLocked lands the light path's one fallback (polyforge#260,
+// the in-place escalation to the existing full verification): archive one
+// audit-only light_recheck_escalated attempt on the verification step
+// with the reason in Detail, clear the pending light recheck marker, and
+// order the next dispatch fresh — no rewind slot, no rewind input, no
+// budget reset. The loop then re-dispatches the step in full mode (no
+// marker ⇒ a full dispatch) and its result is processed by today's rules
+// unchanged. The escalation attempt is neither a rewind archive nor
+// model-class infra — it leaves the candidate pointer's count alone.
+// Two detection points share it: the pre-dispatch phase (a malformed
+// classification or a broken repair bound, TransLightEscalate) and the
+// light recheck's own settlement write (a recheck that did not pass).
+func (d *Driver) applyLightEscalateLocked(stepID, reason string, info *appliedInfo) error {
+	st := d.exec.Steps[stepID]
+	if st == nil {
+		return fmt.Errorf("driver: light escalation for unknown step %q", stepID)
+	}
+	if st.PendingLightRecheck == nil {
+		return fmt.Errorf("driver: light escalation without a pending light recheck marker on step %q", stepID)
+	}
+	if isTerminalStatus(d.exec.WorkflowStatus) {
+		return fmt.Errorf("driver: workflow is terminal (%s); light escalation refused", d.exec.WorkflowStatus)
+	}
+	if d.exec.WorkflowStatus == StatusBlocked {
+		return fmt.Errorf("driver: workflow is blocked; light escalation refused")
+	}
+	st.Attempts = append(st.Attempts, capsule.Attempt{
+		Cause:      CauseLightRecheckEscalated,
+		AttemptSeq: nextAttemptSeq(st),
+		StartedAt:  st.StepStartedAt,
+		ArchivedAt: d.stamp(),
+		Detail:     reason,
+	})
+	st.PendingLightRecheck = nil
+	// the full re-run is a fresh conversation (the light one judged this
+	// same FAIL; its transcript is at most read-only reference)
+	if st.Supervision == nil {
+		st.Supervision = &capsule.StepSupervision{}
+	}
+	st.Supervision.NextDispatch = capsule.NextDispatchFresh
+	info.escalated = true
+	info.escalateReason = reason
+	return nil
 }
 
 // lightRewindEligible answers whether one recorded gate output is an
@@ -1189,6 +1338,13 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 				body["archived"] = info.archived
 			} else {
 				kind = "step_done"
+			}
+			if info.escalated {
+				// the light recheck's in-place escalation (polyforge#260): the
+				// same write that would have settled it archived the escalation
+				// instead — never step_done for a step that is not done
+				kind = EvLightRecheckEscalated
+				body["detail"] = info.escalateReason
 			}
 		case OutcomeGateFailed:
 			kind = "gate_verdict"

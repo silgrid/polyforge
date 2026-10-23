@@ -69,6 +69,15 @@ const EvGateVerdictBound = "gate_verdict_bound"
 // is the record and the watcher's decision table notifies the owner.
 const EvHumanGateUnasked = "human_gate_unasked"
 
+// EvLightRecheckEscalated is the durable event kind of the mechanical
+// fast lane's in-place escalation (polyforge#260): one event per
+// escalation — pre-dispatch (a malformed classification or a broken
+// repair bound) or at the light recheck's settlement (a recheck that
+// did not pass) — carrying the reason. The escalation is not a rewind
+// and charges no slot; the audit record is the attempt the same write
+// archives (cause light_recheck_escalated).
+const EvLightRecheckEscalated = "light_recheck_escalated"
+
 // releaseStepID and deployStepID are the step ids of the `release`
 // workflow bundle (the only place a release or deploy happens). Their
 // declared output schemas are enforced (outputSchemaEnforced): `release`

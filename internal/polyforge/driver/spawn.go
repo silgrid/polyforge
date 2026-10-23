@@ -161,9 +161,14 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 	// polyforge#260: the armed verification prompt carries the shared
 	// classification duty as its own section (an unarmed lane carries
 	// none - its FAIL rewinds exactly as today, so the agent is never
-	// told to classify).
+	// told to classify); the LIGHT recheck dispatch carries the light
+	// section instead (the recheck does not classify).
 	if spec.MechanicalFix && sp.StepID == verificationStepID {
-		parts.MechanicalClassify = mechanicalFixSection(a.BundleDir, "Classification duty (an armed full verification FAIL)")
+		if sp.LightRecheck != nil {
+			parts.LightRecheck = lightRecheckSection(a.BundleDir, sp.LightRecheck)
+		} else {
+			parts.MechanicalClassify = mechanicalFixSection(a.BundleDir, "Classification duty (an armed full verification FAIL)")
+		}
 	}
 	// H3 (polyforge#164): the declared output schema rides the prompt —
 	// the same schema the driver validates the completed output against.
@@ -171,6 +176,15 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		fmt.Fprintf(os.Stderr, "driver: %s/%s: %v\n", a.WI.ID, sp.StepID, err)
 	} else if schema != nil {
 		parts.OutputSchema = schema.Text
+	}
+	// polyforge#260: the light recheck's output schema is the LIGHT one
+	// (the shared fast-lane material's frontmatter) instead of the full
+	// step schema — the light recheck's result carries only the light
+	// fields (verdict + checks), never the full bar's.
+	if sp.LightRecheck != nil {
+		if schema, err := loadLightOutputSchema(a.BundleDir); err == nil && schema != nil {
+			parts.OutputSchema = schema.Text
+		}
 	}
 	if policy == ContextInherit {
 		h, err := a.resolveHandoff(sp.StepID, sp.Done)
@@ -405,8 +419,14 @@ type promptParts struct {
 	// classification duty (workflows/_shared/mechanical-fix.md), rendered
 	// into an ARMED verification dispatch's prompt as its own section
 	// (polyforge#260); "" = the lane is unarmed (or this is not the
-	// verification step) and no classification duty rides.
+	// verification step, or this is the light recheck itself) and no
+	// classification duty rides.
 	MechanicalClassify string
+	// LightRecheck is the rendered light-recheck section (the bound
+	// commands per repo plus the shared light contract), an own section
+	// beside the untouched step definition (polyforge#260); "" = an
+	// ordinary (full) dispatch.
+	LightRecheck string
 	// Reference is the previous attempt's transcript path (a fresh retry
 	// carries it as read-only reference material; "" = none).
 	Reference string
@@ -486,6 +506,15 @@ func assembleStepPrompt(p promptParts) string {
 	if p.MechanicalClassify != "" {
 		b.WriteString("\n# Mechanical classification (this lane is armed)\n\n")
 		b.WriteString(p.MechanicalClassify)
+		b.WriteString("\n")
+	}
+	// The light recheck section (polyforge#260): the light dispatch's own
+	// order - the bound commands per repo plus the shared light contract
+	// - beside the untouched step definition. The bound is the fix's
+	// boundary; the recheck re-runs exactly the bound commands.
+	if p.LightRecheck != "" {
+		b.WriteString("\n# Light recheck (the mechanical fast lane)\n\n")
+		b.WriteString(p.LightRecheck)
 		b.WriteString("\n")
 	}
 	if p.PriorRejection != "" {
@@ -797,6 +826,28 @@ func h2Section(body []byte, heading string) string {
 			b.WriteString(line)
 			b.WriteByte('\n')
 		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// lightRecheckSection renders the light recheck's own prompt section
+// (polyforge#260): the bound commands per repo (byte-faithful, inside
+// the repo it names) plus the shared light contract
+// (workflows/_shared/mechanical-fix.md) — the light dispatch's complete
+// order, beside the untouched step definition.
+func lightRecheckSection(bundleDir string, order *LightRecheckOrder) string {
+	var b strings.Builder
+	b.WriteString("The failed verification verdict was classified mechanical; this dispatch is the LIGHT recheck, bounded to its failed checks. Re-run exactly each bound command below, byte-faithful, inside the repo it names; record command evidence for every command you run; do not modify any file.\n\n")
+	b.WriteString("The bound (per failed check - its repo, its exact command, the files it named):\n\n")
+	for _, e := range order.Bound {
+		var files []string
+		for _, f := range e.Files {
+			files = append(files, "`"+f+"`")
+		}
+		fmt.Fprintf(&b, "- check %q - repo `repos/%s`, command `%s`, files: %s\n", e.Check, e.Repo, e.Command, strings.Join(files, ", "))
+	}
+	if contract := mechanicalFixSection(bundleDir, "Light recheck contract"); contract != "" {
+		b.WriteString("\n" + contract + "\n")
 	}
 	return strings.TrimSpace(b.String())
 }

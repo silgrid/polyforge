@@ -95,6 +95,42 @@ func loadStepOutputSchema(bundleDir, stepID string, vars map[string]string) (*st
 	if node == nil {
 		return nil, nil
 	}
+	return compileStepOutputSchema(stepID, node)
+}
+
+// loadLightOutputSchema reads the shared fast-lane material
+// (workflows/_shared/mechanical-fix.md, beside the bundle) and answers
+// its declared LIGHT output schema — the light recheck's result contract
+// (verdict + checks, no full-bar fields; polyforge#260); (nil, nil) when
+// the material is absent or declares none. A declared schema that does
+// not parse or compile is an error, like any step's.
+func loadLightOutputSchema(bundleDir string) (*stepOutputSchema, error) {
+	raw, err := os.ReadFile(mechanicalFixFile(bundleDir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	front, _, ok := workflow.SplitFrontmatter(raw)
+	if !ok {
+		return nil, nil
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(front, &doc); err != nil {
+		return nil, fmt.Errorf("driver: mechanical-fix.md frontmatter unparsable: %w", err)
+	}
+	node := mappingValue(&doc, outputSchemaKey)
+	if node == nil {
+		return nil, nil
+	}
+	return compileStepOutputSchema("verification-light", node)
+}
+
+// compileStepOutputSchema answers one frontmatter output block's
+// compiled schema (the YAML text the prompt shows, the compiled form
+// the validator runs).
+func compileStepOutputSchema(stepID string, node *yaml.Node) (*stepOutputSchema, error) {
 	text, err := yaml.Marshal(node)
 	if err != nil {
 		return nil, fmt.Errorf("driver: step %q output schema: %w", stepID, err)
