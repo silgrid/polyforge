@@ -132,9 +132,21 @@ type Step struct {
 	// AnswerBase is len(Answers) at the step's last gate-fail rewind: the
 	// answers at index >= AnswerBase form the step's CURRENT attempt chain
 	// (the human-gate guarantee counts only those). Zero until a rewind.
-	AnswerBase         int              `json:"answer_base,omitempty"`
+	AnswerBase int `json:"answer_base,omitempty"`
+	// PendingQuestion is the step's open question (D8/D9): the durable
+	// waiting marker while a human is asked; the answer transition archives
+	// the pair and clears it in one atomic write.
 	PendingQuestion    *PendingQuestion `json:"pending_question,omitempty"`
 	PendingRewindInput *RewindInput     `json:"pending_rewind_input,omitempty"`
+	// PendingLightRecheck is the mechanical fast lane's pending light
+	// recheck marker (polyforge#260): set by the mechanical rewind's own
+	// atomic write, the durable carrier of the fast-lane state after the
+	// FAIL verdict's output is replaced — its presence makes the
+	// verification step's next dispatch the light recheck. Cleared by
+	// whichever write settles the light recheck (light pass or escalation)
+	// and by every rewind-range reset (a reset step never carries a stale
+	// marker).
+	PendingLightRecheck *LightRecheck `json:"pending_light_recheck,omitempty"`
 	// Supervision is the step's failure ledger and relaxed supervision
 	// thresholds (v2-converge 2.3/2.4): execution.json is the single
 	// authority for them, so a restart resumes the same counts.
@@ -200,6 +212,19 @@ type RewindInput struct {
 	Note   string             `json:"note"`
 	Refs   map[string]RepoRef `json:"refs"`
 	Reason string             `json:"reason"`
+}
+
+// LightRecheck is the pending light recheck marker (polyforge#260, the
+// mechanical fast lane): the durable carrier of the fast-lane state after
+// the FAIL verdict's output is replaced. Bound is the FAIL verdict's
+// mechanical classification copied verbatim at the mechanical rewind
+// write (never re-typed by any step agent); DiffBase is each task repo's
+// HEAD at the FAIL verdict's settlement (driver-recorded at the rewind
+// write, never step-supplied) — the light recheck's deterministic
+// repair-diff base.
+type LightRecheck struct {
+	Bound    json.RawMessage   `json:"bound"`
+	DiffBase map[string]string `json:"diff_base"`
 }
 
 type PendingQuestion struct {

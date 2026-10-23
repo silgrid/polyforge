@@ -11,6 +11,7 @@ steps:
     context_policy: fresh
     gate: true
     requires_command_evidence: true
+    mechanical_fix: true
     on_fail: { target: code }
     model_candidates: [pi:sub2api-glm/glm-5.3-flash, pi:sub2api-glm/glm-5.3, pi:sub2api-claude/pi-claude-opus-5]
     vars:
