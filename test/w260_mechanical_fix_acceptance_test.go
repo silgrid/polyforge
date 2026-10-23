@@ -22,9 +22,6 @@ package test
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +111,27 @@ func w260CodeRepair() map[string]any {
 				"git -c user.name=pf -c user.email=pf@polyforge.invalid " +
 				"commit -q -m 'mechanical repair: work.txt whitespace'",
 		}}
+}
+
+// w260CodeRepairStray is scenario 2's light re-entry: the in-bound
+// repair commit PLUS a second, out-of-bound commit (an add on a file
+// the bound does not name). NB2 (polyforge#261): the out-of-bound
+// commit rides the re-entry's own script — one writer, one index, and
+// strictly before the re-entry's completion, hence before the light
+// recheck's pre-dispatch diff measurement. The old shape (the test
+// side committing OTHER.txt in repos/demo right after the rewind
+// archive, while the resumed re-entry still held the same repo's
+// worktree and index) raced the re-entry's own commit on index.lock
+// and, on a late landing, the pre-dispatch measurement (a settlement-
+// time escalation, three verification dispatches) — the #140 lesson:
+// no sleeps or retries, order by construction.
+func w260CodeRepairStray() map[string]any {
+	e := w260CodeRepair()
+	e["run"] = append(e["run"].([]string),
+		"cd repos/demo && printf 'outside the bound\\n' > OTHER.txt && git add OTHER.txt && "+
+			"git -c user.name=pf -c user.email=pf@polyforge.invalid "+
+			"commit -q -m 'outside the bound'")
+	return e
 }
 
 // w260LightPass is the light recheck's verdict: pass over the checks,
@@ -298,41 +316,19 @@ func TestW260MechanicalRewindResumesCodeAndSettlesLightPass(t *testing.T) {
 // escalates IN PLACE, in the same dispatch, to the existing full
 // verification: no light dispatch, no new rewind slot, an audit-only
 // escalation attempt on verification, and the escalated full pass
-// records verified_heads and its own test_bar exactly as today.
+// records verified_heads and its own test_bar exactly as today. The
+// out-of-bound commit rides the resumed re-entry itself (NB2,
+// polyforge#261: one writer — see w260CodeRepairStray).
 func TestW260OutOfBoundRepairEscalatesToFullVerification(t *testing.T) {
 	inst := newV1Install(t)
 	remote := newTaskRemote(t)
 	plan := append(w260Head(remote.url),
 		w260FailVerdict(),
-		w260CodeRepair(),
-		w260FullPass(), // the escalated full verification (no light dispatch)
+		w260CodeRepairStray(), // the resumed code session repairs in-bound, then commits outside it
+		w260FullPass(),        // the escalated full verification (no light dispatch)
 		w260ReviewPass(),
 	)
 	_, capDir := w260SubmitFeatureFull(t, inst, "w260: an out-of-bound repair escalates in place", plan)
-	// Wait for the mechanical rewind's own write (code archived with a
-	// rewind cause), then break the bound from the test side: a commit
-	// on a file the bound does not name — the repair diff (base = the
-	// FAIL-settlement repo HEAD) must see it broken at the light
-	// recheck's preparation.
-	waitExecution(t, capDir, 180*time.Second, "the FAIL verdict never rewound", func(x *executionView) bool {
-		st := x.Steps["code"]
-		if st == nil {
-			return false
-		}
-		for _, a := range st.Attempts {
-			if strings.Contains(fmt.Sprint(a["cause"]), "rewind") {
-				return true
-			}
-		}
-		return false
-	})
-	demo := filepath.Join(capDir, "repos", "demo")
-	if err := os.WriteFile(filepath.Join(demo, "OTHER.txt"), []byte("outside the bound\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitRun(t, demo, "add", "OTHER.txt")
-	gitRun(t, demo, "-c", "user.name=pf", "-c", "user.email=pf@polyforge.invalid",
-		"commit", "-q", "-m", "outside the bound")
 	w222WaitSettled(t, capDir)
 	x := readExecution(t, capDir)
 	if x.WorkflowStatus != "completed" {
