@@ -581,6 +581,14 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 				return nil
 			}
 		}
+		// NB4 (polyforge#261): mechanical_pass is driver-written only,
+		// like verifiedHeads/testFilesCommit further down — a step-supplied
+		// value would forge the fast-lane audit trail. The delete sits
+		// BEFORE the light-settle block below, which writes the driver's
+		// own record on a light pass and must not have it eaten.
+		if req.StepID == verificationStepID {
+			delete(out, mechanicalPassKey)
+		}
 		// The light recheck's settlement (polyforge#260): a completed
 		// verification result whose step holds the pending light recheck
 		// marker is the light recheck's own claim. Judged (verdict pass,
@@ -697,10 +705,6 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 		})
 	case OutcomeGateFailed:
 		st.Output = out // the FAIL verdict stays on the gate; it is never done
-		if d.exec.ReviewRounds == nil {
-			d.exec.ReviewRounds = map[string]int64{}
-		}
-		d.exec.ReviewRounds[req.StepID]++
 		if st.PendingLightRecheck != nil {
 			// The light recheck's own FAIL verdict (polyforge#260): a bound
 			// command still red, or a semantic confirmation the agent cannot
@@ -717,6 +721,15 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 			}
 			return nil
 		}
+		// NB3 (polyforge#261): the increment sits BELOW the in-place light
+		// escalation above — a review round counts a full-gate review
+		// evaluation only; the light recheck's own FAIL verdict, which
+		// escalates in place and archives an audit-only attempt, is not
+		// one.
+		if d.exec.ReviewRounds == nil {
+			d.exec.ReviewRounds = map[string]int64{}
+		}
+		d.exec.ReviewRounds[req.StepID]++
 		d.applyGateFailLocked(req.StepID, verdict, out, req.LightDiffBase, info)
 	case OutcomeNeedsInput:
 		st.PendingQuestion = &capsule.PendingQuestion{
