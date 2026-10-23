@@ -528,3 +528,96 @@ func TestDeliverExemptFromAuthoredTestsGate(t *testing.T) {
 		t.Fatalf("fixture: with a baseline the merge would trip gate 7, got %v", err)
 	}
 }
+
+// TestDeliverLightPassMergeRule (polyforge#260): a light-passed repo
+// (the last verification pass was a light recheck - no verified head,
+// the light record's recheck head) is tests-covered ONLY by this
+// dispatch's recorded re-run of the carried test_bar - unconditionally,
+// no head-equality shortcut - and the hand-made-history walk anchors on
+// the recheck head. An empty carried bar, a missing re-run or a
+// hand-resolved merge means a human decides; an escalated full pass
+// (a verified head present) keeps today's rules unchanged.
+func TestDeliverLightPassMergeRule(t *testing.T) {
+	// lightPassed: verification light-passed at main's HEAD (no verified
+	// head, the recheck head), then the deliver merge moves HEAD past it
+	// by a side branch (hand-edited when asked).
+	lightPassed := func(t *testing.T, handEdit bool) (string, ResultSpec) {
+		t.Helper()
+		repos := deliverCapsule(t)
+		spec := deliverSpec(repos, true, 0)
+		dir := filepath.Join(repos, "demo")
+		tgit(t, dir, "checkout", "-q", "-b", "side", tgit(t, dir, "rev-parse", "HEAD"))
+		dwrite(t, filepath.Join(dir, "b.txt"), "b\n")
+		tgit(t, dir, "add", "-A")
+		tgit(t, dir, "commit", "-q", "-m", "side")
+		tgit(t, dir, "checkout", "-q", "main")
+		dwrite(t, filepath.Join(dir, "a.txt"), "main\n")
+		tgit(t, dir, "commit", "-q", "-am", "main work")
+		// the light recheck passed here: no verified head, the recheck head
+		// is the head the deliver merge starts from
+		light := tgit(t, dir, "rev-parse", "HEAD")
+		spec.VerifiedHeads = nil // a light pass never writes verified_heads
+		spec.LightRecheckHeads = map[string]string{"demo": light}
+		tgit(t, dir, "merge", "-q", "--no-edit", "side")
+		if handEdit {
+			dwrite(t, filepath.Join(dir, "b.txt"), "edited\n")
+			tgit(t, dir, "add", "-A")
+			tgit(t, dir, "commit", "-q", "--amend", "--no-edit")
+		}
+		pushFeature(t, dir)
+		return repos, spec
+	}
+	rerun := []CommandEvidence{{Argv: []string{"sh", "-c", "cd repos/demo && make test"}, DurationMs: 9}}
+	failingBar := []CommandEvidence{{Argv: []string{"sh", "-c", "cd repos/demo && make   test"}, DurationMs: 9, ExitCode: 2}}
+	push := ev(goodPush)
+	cases := []struct {
+		name     string
+		handEdit bool
+		noBar    bool
+		evidence []CommandEvidence
+		bad      string // "" = eligible without a human
+	}{
+		{"carried bar re-run in the merge dispatch", false, false, append(push, rerun...), ""},
+		{"no re-run at all", false, false, push, "light recheck"},
+		{"re-run failing", false, false, append(push, failingBar...), "light recheck"},
+		{"no carried bar entry", false, true, append(push, rerun...), "tests are not shown to pass"},
+		{"hand-edited merge after the recheck head", true, false, append(push, rerun...), "differs from git's own merge result"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, spec := lightPassed(t, c.handEdit)
+			if c.noBar {
+				spec.VerifiedTestBar = nil
+			}
+			r := deliverRepo{Name: "demo", Branch: "polyforge/polyforge-166",
+				PRURL: "https://github.com/o/r/pull/1", Merged: ptrTrue(), MergeCommit: "abc"}
+			why := mergeBlocker(spec, r, "polyforge/polyforge-166", c.evidence)
+			if c.bad == "" {
+				if why != "" {
+					t.Fatalf("the light-passed merge must be eligible, got %q", why)
+				}
+				return
+			}
+			if why == "" || !strings.Contains(why, c.bad) {
+				t.Fatalf("the blocker = %q, want it to contain %q", why, c.bad)
+			}
+		})
+	}
+	// an escalated full pass (a verified head present) keeps today's rules
+	// unchanged: the head differs from the verified commit and the bar was
+	// not re-run - today's message, not the light-path one.
+	t.Run("escalated full pass keeps today's rules", func(t *testing.T) {
+		repos, spec := lightPassed(t, false)
+		dir := filepath.Join(repos, "demo")
+		spec.VerifiedHeads = map[string]string{"demo": tgit(t, dir, "rev-parse", "HEAD~1")}
+		spec.LightRecheckHeads = nil
+		r := deliverRepo{Name: "demo", Branch: "polyforge/polyforge-166",
+			PRURL: "https://github.com/o/r/pull/1", Merged: ptrTrue(), MergeCommit: "abc"}
+		why := mergeBlocker(spec, r, "polyforge/polyforge-166", ev(goodPush))
+		if !strings.Contains(why, "differs from the commit verification passed on") {
+			t.Fatalf("the escalated-full-pass blocker = %q, want today's message", why)
+		}
+	})
+}
+
+func ptrTrue() *bool { b := true; return &b }

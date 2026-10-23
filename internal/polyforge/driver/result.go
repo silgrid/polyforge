@@ -238,6 +238,12 @@ type ResultSpec struct {
 	// it named) — deliver_facts.go.
 	VerifiedHeads   map[string]string
 	VerifiedTestBar []testBarCmd
+	// LightRecheckHeads (polyforge#260): the recheck heads of a
+	// light-passed verification record (mechanical_pass.recheck_heads,
+	// driver-written) — the deliver merge rule's anchor on the light path
+	// (a light pass never writes verified_heads, so the repo carries no
+	// verified head at all).
+	LightRecheckHeads map[string]string
 	// LightRewind (polyforge#222): the step's latest non-infra_failure
 	// archived attempt is a light rewind (gate_fail_rewind_text_only) —
 	// this dispatch is that rewind's re-entry, so the completed result

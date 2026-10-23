@@ -141,6 +141,15 @@ commits beyond its baseline (`git rev-list --count <baseline>..HEAD` is 0). Othe
      `gh pr merge`, in this same dispatch, each with exit 0. The driver checks exactly
      that, in the order your commands are recorded; tests run in an earlier dispatch do not
      count, and a verification without a `test_bar` for this repo means a human decides.
+   - **A light-passed workflow** (no `verified_heads.<name>` for this repo - the last
+     verification pass was a light recheck, `steps.verification.output.mechanical_pass`):
+     there is no verified head to equal, so the tests are covered ONLY by this dispatch's
+     recorded re-run of the CARRIED `test_bar` (`steps.verification.output.test_bar`) -
+     unconditionally, whatever HEAD is. Re-run every carried `test_bar` command of this
+     repo exactly as written, inside `repos/<name>/`, in this same dispatch, after your
+     last `git merge`/`git pull` of this repo and before its `gh pr merge`, each with exit
+     0, and record it. Without a recorded re-run - or without a carried `test_bar` entry
+     for this repo - a human decides.
    - **A conflict:** resolve it yourself in this worktree, keeping both sides' intent,
      commit the merge, then you MUST (a) re-run the test bar as above and (b) have the
      resolution reviewed in a FRESH context - start a sub-agent (a new agent with no history

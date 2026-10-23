@@ -1059,6 +1059,7 @@ func (d *Driver) buildResultSpec(stepID string, n int64) ResultSpec {
 		spec.ReviewPassed = reviewPassed(d.exec.Steps[reviewStepID])
 		spec.HasReview = d.workflow.step(reviewStepID) != nil
 		spec.VerifiedHeads, spec.VerifiedTestBar = verificationRecord(d.exec.Steps[verificationStepID])
+		spec.LightRecheckHeads = lightRecheckHeads(d.exec.Steps[verificationStepID])
 	}
 	// polyforge#260: a pending light recheck marker mode-selects the LIGHT
 	// output schema for this step's completed results — the light
