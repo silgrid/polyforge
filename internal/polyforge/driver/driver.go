@@ -194,6 +194,12 @@ type Driver struct {
 	// schemas caches each step's declared output schema (nil entry =
 	// none declared or unloadable), loaded on first validation.
 	schemas map[string]*stepOutputSchema
+	// lightSchema caches the light recheck's output schema (the shared
+	// fast-lane material's frontmatter, polyforge#260); lightSchemaLoaded
+	// marks the one load attempt (nil schema = none declared or
+	// unloadable — the full step schema stays in effect).
+	lightSchema       *stepOutputSchema
+	lightSchemaLoaded bool
 }
 
 // New builds a Driver: it resolves paths, loads the workflow graph from
@@ -352,6 +358,21 @@ func (d *Driver) Run(ctx context.Context) error {
 		}
 		if stop {
 			return nil
+		}
+
+		// polyforge#260: the light recheck's pre-dispatch phase — the
+		// marker peek under the lock, the bound coverage validation and
+		// the deterministic repair-diff measurement outside it. A malformed
+		// classification or a broken repair bound escalates IN PLACE, in
+		// the same step, instead of a light dispatch: the loop re-plans
+		// and re-dispatches the step in full mode (the existing full
+		// verification, unchanged).
+		esc, err := d.prepareLightRecheck(stepID)
+		if err != nil {
+			return err
+		}
+		if esc {
+			continue
 		}
 
 		spawn, n, err := d.prepareDispatch(stepID)
@@ -555,6 +576,8 @@ func (d *Driver) settle(stepID string, n int64, res *StepResult, run StepRun) (s
 		TestFilesCommit:         d.testFilesStamp(res),
 		RebaselineAuthoredTests: res.rebaseline,
 		VerifiedHeads:           d.verifiedHeads(stepID, res),
+		LightDiffBase:           d.lightDiffBase(stepID, res),
+		LightSettle:             d.lightSettleFactsOf(stepID, res),
 	}); err != nil {
 		return true, fmt.Errorf("driver: step %s result transition failed: %w", stepID, err)
 	}
@@ -632,6 +655,71 @@ func (d *Driver) plan(ctx context.Context) (stop bool, stepID string, err error)
 	}
 }
 
+// prepareLightRecheck is the light recheck's pre-dispatch phase
+// (polyforge#260): the marker peek under the lock, then — outside every
+// lock — the bound coverage validation (pure over the marker and the
+// gate's recorded FAIL verdict) and the deterministic repair-diff
+// measurement (git). A malformed classification or a broken repair bound
+// escalates IN PLACE: the TransLightEscalate transition instead of a
+// light dispatch (no rewind slot, no rewind input — the loop re-plans and
+// re-dispatches the step in full mode), answering escalated=true; the
+// measured diff (when one was measurable) rides the request as the
+// escalation audit's fact. No marker answers (false, nil): an ordinary
+// dispatch. Idempotent by construction: the same marker, FAIL verdict
+// and repo state always derive the same verdict, so an interrupted light
+// recheck re-dispatches and replays (or escalates) with no half state.
+func (d *Driver) prepareLightRecheck(stepID string) (escalated bool, err error) {
+	d.mu.Lock()
+	st := d.exec.Steps[stepID]
+	var marker *capsule.LightRecheck
+	var failOut map[string]any
+	if st != nil {
+		marker, failOut = st.PendingLightRecheck, st.Output
+	}
+	d.mu.Unlock()
+	if marker == nil {
+		return false, nil
+	}
+	reason := ""
+	if d.wi.CapsuleDir == "" {
+		reason = "the capsule carries no task repos to measure the repair diff in"
+	}
+	reposDir := ""
+	if d.wi.CapsuleDir != "" {
+		reposDir = filepath.Join(d.wi.CapsuleDir, capsule.DirRepos)
+	}
+	var bound []mechBound
+	if reason == "" {
+		var berr error
+		bound, berr = parseMechBound(marker.Bound)
+		if berr != nil {
+			reason = "the mechanical classification is malformed: " + berr.Error()
+		}
+	}
+	if reason == "" {
+		if r := validateBoundCoverage(bound, failOut, reposDir); r != "" {
+			reason = "the mechanical classification does not cover the FAIL verdict's failed checks: " + r
+		}
+	}
+	var measured *lightDiff
+	if reason == "" {
+		if diff, r := measureRepairDiff(bound, marker.DiffBase, reposDir); r != "" {
+			reason = "the repair diff breaks the bound: " + r
+			measured = &diff // the partial measurement is the escalation audit's fact
+		}
+	}
+	if reason == "" {
+		return false, nil
+	}
+	if err := d.transition(TransitionRequest{
+		Kind: TransLightEscalate, StepID: stepID, Reason: reason, SpawnN: d.currentSpawnN(),
+		LightEscalationDiff: measured,
+	}); err != nil {
+		return false, fmt.Errorf("driver: step %s light-path escalation failed: %w", stepID, err)
+	}
+	return true, nil
+}
+
 // prepareDispatch snapshots everything the spawn needs from under the
 // mutex: the resume flag (an in_progress step is a re-dispatch — answer
 // continuation, crash recovery, recovery-lane re-derivation; a pending
@@ -672,6 +760,28 @@ func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
 		// possible and degrades to fresh-with-reference when it is not.
 		if !sp.Resume && st.Status == capsule.StepPending && lightRewindContext(st.Attempts) {
 			sp.Resume = true
+		}
+		// polyforge#260: the pending light recheck marker makes this
+		// dispatch the light recheck — the mode switch the prompt (the
+		// light section) and the settlement (the light output schema, the
+		// mechanical_pass record) both key on. The bound is parsed here
+		// (pure); a malformed one never reaches a light dispatch (the
+		// pre-dispatch phase escalated instead).
+		if st.PendingLightRecheck != nil {
+			if bound, err := parseMechBound(st.PendingLightRecheck.Bound); err == nil {
+				sp.LightRecheck = &LightRecheckOrder{Bound: bound, DiffBase: st.PendingLightRecheck.DiffBase}
+			}
+		}
+		// polyforge#260: a verification step whose ledger's latest
+		// non-infra_failure archived attempt is the light path's in-place
+		// escalation is the ESCALATED full re-run — the dispatch carries
+		// the escalation order (the prompt's escalation note: the report's
+		// fast-lane section duty, which the light recheck that would have
+		// written it never settled to write). The order is that ledger
+		// fact (the escalation write archived it), the light re-entry's
+		// resume pattern; the full re-run's own accepted attempt ends it.
+		if escalatedRecheckContext(st.Attempts) {
+			sp.EscalatedRecheck = true
 		}
 	}
 	// the in-process rejection retry lane: the prior dispatch's
@@ -888,9 +998,35 @@ type StepSpawn struct {
 	// turn ENDED without the agent writing the result envelope (cause
 	// ended_without_result).
 	PriorEndedWithoutResult bool
+	// LightRecheck, when set, makes this verification dispatch the light
+	// recheck of the mechanical fast lane (polyforge#260): the step's
+	// pending light recheck marker is present. The prompt carries the
+	// light-recheck section (the bound commands per repo, the shared light
+	// contract and the light output schema) beside the untouched step
+	// definition, and the output schema shown is the light one. Nil = an
+	// ordinary (full) dispatch.
+	LightRecheck *LightRecheckOrder
+	// EscalatedRecheck, when set, makes this verification dispatch the
+	// ESCALATED full re-run of the mechanical fast lane (polyforge#260):
+	// the step's ledger's latest non-infra_failure archived attempt is
+	// the light path's in-place escalation (light_recheck_escalated). The
+	// prompt carries the escalation note (the report's fast-lane section
+	// duty) beside the untouched classification duty — an escalated full
+	// FAIL may be classified mechanical again. False = an ordinary
+	// dispatch.
+	EscalatedRecheck bool
 	// Done is the set of steps whose execution record is done (an
 	// inherit step's handoff producer must be one).
 	Done map[string]bool
+}
+
+// LightRecheckOrder is the light-mode order (polyforge#260): the
+// mechanical bound — per failed check its repo, its exact command and
+// the files it named — and the repair-diff base, rendered into the
+// light dispatch's prompt.
+type LightRecheckOrder struct {
+	Bound    []mechBound
+	DiffBase map[string]string
 }
 
 // StepRun is one spawned step execution awaiting its result envelope.
@@ -947,9 +1083,25 @@ func (d *Driver) buildResultSpec(stepID string, n int64) ResultSpec {
 		spec.ReviewPassed = reviewPassed(d.exec.Steps[reviewStepID])
 		spec.HasReview = d.workflow.step(reviewStepID) != nil
 		spec.VerifiedHeads, spec.VerifiedTestBar = verificationRecord(d.exec.Steps[verificationStepID])
+		spec.LightRecheckHeads = lightRecheckHeads(d.exec.Steps[verificationStepID])
+	}
+	// polyforge#260: a pending light recheck marker mode-selects the LIGHT
+	// output schema for this step's completed results — the light
+	// recheck's own contract (verdict + checks, no full-bar fields:
+	// authored_titles/scenarios/test_bar it must not fabricate) — instead
+	// of the full one. The marker is the mode switch on both sides (the
+	// dispatch's prompt and the settlement's validation).
+	var lightMode bool
+	if st := d.exec.Steps[stepID]; st != nil && st.PendingLightRecheck != nil {
+		lightMode = true
 	}
 	d.mu.Unlock()
 	spec.OutputSchema = d.outputSchema(stepID)
+	if lightMode {
+		if s := d.lightOutputSchema(); s != nil {
+			spec.OutputSchema = s
+		}
+	}
 	spec.PreExisting = preExistingRulesOf(outputs)
 	// Declared outputs, gate-ness and duties (gate-ness feeds the
 	// verdict binding — the #106 lesson).
@@ -1001,6 +1153,37 @@ func (d *Driver) outputSchema(stepID string) *jsonschema.Schema {
 		d.schemas[stepID] = s
 		d.mu.Unlock()
 	}
+	if s == nil {
+		return nil
+	}
+	return s.Schema
+}
+
+// lightOutputSchema answers the light recheck's output schema (the
+// shared fast-lane material's frontmatter output block,
+// workflows/_shared/mechanical-fix.md), cached; nil when the material
+// declares none or it does not load — the full step schema then stays
+// in effect (fail-closed to today's validation: the light envelope's
+// violations are recorded, and the settlement's own judgment decides).
+func (d *Driver) lightOutputSchema() *jsonschema.Schema {
+	if d.bundleDir == "" {
+		return nil
+	}
+	d.mu.Lock()
+	if !d.lightSchemaLoaded {
+		d.mu.Unlock()
+		s, err := loadLightOutputSchema(d.bundleDir)
+		if err != nil {
+			// loud, never a silent nil: stderr AND a durable event
+			fmt.Fprintf(os.Stderr, "driver: %s: %v (the light recheck's output is not schema-validated)\n", d.wi.ID, err)
+			d.emit(EvOutputSchemaUnloadable, map[string]any{"step": verificationStepID + " (light)", "error": err.Error()})
+			s = nil
+		}
+		d.mu.Lock()
+		d.lightSchema, d.lightSchemaLoaded = s, true
+	}
+	s := d.lightSchema
+	d.mu.Unlock()
 	if s == nil {
 		return nil
 	}
@@ -1070,12 +1253,99 @@ func (d *Driver) testFilesStamp(res *StepResult) map[string]any {
 
 // verifiedHeads reads the task repos' HEADs a completed verification
 // result records (git I/O, so outside the transition's lock); nil
-// otherwise.
+// otherwise. A LIGHT pass never writes them (polyforge#260): a head
+// verified only by a light recheck is never tests-covered — the last
+// full pass's heads, if any, stand.
 func (d *Driver) verifiedHeads(stepID string, res *StepResult) map[string]any {
 	if stepID != verificationStepID || res.Outcome != OutcomeCompleted || d.wi.CapsuleDir == "" {
 		return nil
 	}
+	d.mu.Lock()
+	st := d.exec.Steps[stepID]
+	light := st != nil && st.PendingLightRecheck != nil
+	d.mu.Unlock()
+	if light {
+		return nil
+	}
 	return repoHeads(filepath.Join(d.wi.CapsuleDir, capsule.DirRepos))
+}
+
+// lightDiffBase pre-reads the task repos' HEADs the mechanical rewind
+// records as the light recheck's repair-diff base (polyforge#260; git
+// I/O, so outside the transition's lock — the verifiedHeads pattern):
+// each repo's HEAD at this FAIL verdict's settlement, carried in the
+// TransitionRequest, never step-supplied. Nil unless this is an armed
+// verification gate-FAIL that carries a mechanical classification (the
+// mechanical rewind's own precondition — everything else rewinds as
+// today, with no marker to feed).
+func (d *Driver) lightDiffBase(stepID string, res *StepResult) map[string]string {
+	if stepID != verificationStepID || res.Outcome != OutcomeGateFailed || d.wi.CapsuleDir == "" {
+		return nil
+	}
+	if !d.mechanicalArmed() {
+		return nil
+	}
+	out, err := parseOutput(res.Output)
+	if err != nil || !mechanicalBoundPresent(out) {
+		return nil
+	}
+	return repoHeadShas(filepath.Join(d.wi.CapsuleDir, capsule.DirRepos))
+}
+
+// repoHeadShas answers each task repo's HEAD sha (repos with an unborn or
+// unreadable HEAD omitted) — the mechanical rewind's diff base and the
+// light pass's recheck heads.
+func repoHeadShas(reposDir string) map[string]string {
+	heads := map[string]string{}
+	for name, v := range repoHeads(reposDir) {
+		if sha, ok := v.(string); ok {
+			heads[name] = sha
+		}
+	}
+	return heads
+}
+
+// lightSettleFactsOf pre-reads the light recheck's settlement facts
+// (polyforge#260; git I/O outside the transition's lock): the repair diff
+// re-measured at settlement (deterministic — the same measurement the
+// pre-dispatch phase made; nothing moves between, and a rogue change
+// breaks the bound here, fail-closed) and the task repos' HEADs — the
+// recheck heads the light-pass record carries. Answered for a completed
+// verification result whose step holds the marker (the light recheck's
+// own claim — the light pass or its escalation) and for a gate_failed
+// one holding it (the recheck's own FAIL verdict — its escalation's audit
+// wants the same re-measured diff). Nil otherwise.
+func (d *Driver) lightSettleFactsOf(stepID string, res *StepResult) *lightSettleFacts {
+	if stepID != verificationStepID || d.wi.CapsuleDir == "" {
+		return nil
+	}
+	if res.Outcome != OutcomeCompleted && res.Outcome != OutcomeGateFailed {
+		return nil
+	}
+	d.mu.Lock()
+	var marker *capsule.LightRecheck
+	if st := d.exec.Steps[stepID]; st != nil {
+		marker = st.PendingLightRecheck
+	}
+	d.mu.Unlock()
+	if marker == nil {
+		return nil
+	}
+	facts := &lightSettleFacts{}
+	bound, err := parseMechBound(marker.Bound)
+	if err != nil {
+		facts.diffBroken = "the mechanical classification is malformed: " + err.Error()
+		return facts
+	}
+	facts.diffMeasured = true
+	reposDir := filepath.Join(d.wi.CapsuleDir, capsule.DirRepos)
+	var reason string
+	facts.diff, reason = measureRepairDiff(bound, marker.DiffBase, reposDir)
+	if reason != "" {
+		facts.diffBroken = "the repair diff breaks the bound: " + reason
+	}
+	facts.heads = repoHeadShas(reposDir)
+	return facts
 }
 
 // parseOutput coerces a result's output payload to a JSON object map

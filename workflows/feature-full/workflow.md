@@ -11,6 +11,7 @@ steps:
     context_policy: fresh
     gate: true
     requires_command_evidence: true
+    mechanical_fix: true
     on_fail: { target: code }
     model_candidates: [pi:sub2api-glm/glm-5.3-flash, pi:sub2api-glm/glm-5.3, pi:sub2api-claude/pi-claude-opus-5]
     vars:
@@ -149,6 +150,20 @@ gates, two distinct targets (`spec`, `code`). This section only explains
   visible before `code` ran. Rewinding to `code` re-runs the build step with the
   verdict attached as `pending_rewind_input`; the authored scenarios are still valid,
   so `e2e-author` is not re-run.
+- **The mechanical fast lane (`mechanical_fix: true`, polyforge#260).** This lane's
+  verification step entry arms it: a FAIL whose every failed check is static (lint/
+  format/vet/spelling — each reproducible by one deterministic command, no test failed)
+  may carry a mechanical classification (`mechanical_bound`: per failed check its repo,
+  its exact command and the files it named) and rewind cheaply — one slot, `code`
+  resuming its previous session to fix only inside the bound (modifications of
+  bound-named files, ≤ 40 changed lines and ≤ 5 files summed across repos), then one
+  light recheck that re-runs exactly the bound commands (no full bar, no authored
+  scenarios) and confirms the semantic claims in its report. Any light-path failure —
+  a malformed classification, a repair outside the bound, a recheck that does not
+  pass — escalates in place, in the same step, to this same full verification
+  (no new rewind slot); a light pass writes no `verified_heads`, and `deliver` covers
+  the tests only by re-running the carried `test_bar` in the merge dispatch,
+  unconditionally. `review` then runs in full as the first review either way.
 - **`review` FAILs -> rewind to `code`.** Review found the change wanting after the
   machine gate passed; `code` is re-run with the review verdict attached, and the
   re-run passes through `verification` again. `plan` is not re-run unless the

@@ -22,7 +22,7 @@ output:
       description: Build/test status of the tree at the end of this step's execution. Must be green unless this attempt is being deliberately handed off incomplete (see incomplete handling below).
     needs_code_change:
       type: boolean
-      description: Optional (polyforge#222). Absent on every normal completion. Set only when this attempt is a light rewind's re-entry (the rewind input's light-rewind section instructs it) and the verdict's fix needs a change OUTSIDE the text-only boundary - code, tests or assertions, user-facing string literals, workflows/** .md files, skills/** prompt material - deliver true instead of applying it, and the driver rewinds fresh with the same verdict, charging no additional rewind slot. Never set it on a normal completion, and never to dodge the plan.
+      description: Optional (polyforge#222, polyforge#260). Absent on every normal completion. Set only when this attempt is a light rewind's re-entry (the rewind input's light-rewind note names the kind - text-only or mechanical) and the verdict's fix needs a change OUTSIDE that kind's boundary - for the text-only kind, code, tests or assertions, user-facing string literals, workflows/** .md files, skills/** prompt material; for the mechanical kind, outside the verdict's mechanical_bound (a file it does not name, an added/deleted/renamed file, or its caps) - deliver true instead of applying it, and the driver rewinds fresh with the same verdict, charging no additional rewind slot. Never set it on a normal completion, and never to dodge the plan.
     summary:
       type: string
       description: Short prose summary of what was implemented, for review and rewind context.
@@ -82,15 +82,28 @@ honestly: leave `build_status: red` and explain the blocker in `summary`. A dish
 green here corrupts every downstream gate (`verification`, `review`) that
 trusts this step's word for it.
 
-## Light rewind re-entry (text-only fixes only)
+## Light rewind re-entry
 
-If your rewind input carries a light-rewind section, this attempt is a LIGHT re-entry:
-apply only text-only fixes — comments and documentation in any file, test files included
-(the boundary is defined once in the review step's own material). A fix that needs a
-change outside that boundary (code, tests, assertions, user-facing string literals,
-`workflows/**` `.md`, `skills/**` material) is NOT yours to apply: deliver the completed
-result carrying `needs_code_change: true` instead — the driver rewinds fresh with the same
-verdict. Fast checks, per-unit commits and the authored-tests gate are unchanged either way.
+If your rewind input carries a light-rewind note (a `# Light rewind re-entry` section),
+this attempt is a LIGHT re-entry. There are two light kinds, and the note names which
+one this is:
+
+- **Text-only** (polyforge#222): apply only text-only fixes — comments and
+  documentation in any file, test files included (the boundary is defined once in the
+  review step's own material).
+- **Mechanical** (polyforge#260): the fix is bounded to the verdict's
+  `mechanical_bound` — per failed check its repo, its exact command and the files it
+  named. Apply ONLY modifications of bound-named files (never add, delete or rename a
+  file), within the caps the note states (at most 40 changed lines and 5 files, summed
+  across repos). A lint or format fix in the bound-named code files IS yours to apply —
+  the bound is the boundary, not the text-only rule.
+
+A fix that must leave your light kind's boundary — for the text-only kind: code, tests
+or assertions, user-facing string literals, `workflows/**` `.md`, `skills/**` material;
+for the mechanical kind: a file the bound does not name, an added, deleted or renamed
+file, or the caps — is NOT yours to apply: deliver the completed result carrying
+`needs_code_change: true` instead — the driver rewinds fresh with the same verdict.
+Fast checks, per-unit commits and the authored-tests gate are unchanged either way.
 
 ## Principles
 

@@ -66,7 +66,16 @@ func mergeBlocker(spec ResultSpec, r deliverRepo, branch string, ev []CommandEvi
 		return "the delivered history has a hand-resolved or hand-made change (" + why + ")"
 	}
 	verified := spec.VerifiedHeads[r.Name]
-	if spec.ReposDir == "" || verified == "" {
+	// polyforge#260: a light-passed repo (the last verification pass was a
+	// light recheck) carries no verified head — a head verified only by a
+	// light recheck is never tests-covered — so the merge rule anchors on
+	// the light record's recheck head instead (the anchor replacement: the
+	// range the old anchor covered splits into the repair range
+	// (diff_base..recheck_head, covered strictly by the driver's
+	// modifications-only/caps check) and recheck_head..HEAD — the deliver
+	// merge itself, which must be git-reproducible like any other).
+	light := spec.LightRecheckHeads[r.Name]
+	if spec.ReposDir == "" || (verified == "" && light == "") {
 		return handMade("no verification record of this repo's head")
 	}
 	dir := filepath.Join(spec.ReposDir, r.Name)
@@ -75,8 +84,15 @@ func mergeBlocker(spec ResultSpec, r deliverRepo, branch string, ev []CommandEvi
 		return handMade("HEAD unreadable")
 	}
 	head := strings.TrimSpace(headOut)
-	if head != verified {
-		if why := handMadeHistory(dir, verified, head); why != "" {
+	switch {
+	case verified != "":
+		if head != verified {
+			if why := handMadeHistory(dir, verified, head); why != "" {
+				return handMade(why)
+			}
+		}
+	case light != "":
+		if why := handMadeHistory(dir, light, head); why != "" {
 			return handMade(why)
 		}
 	}
@@ -88,8 +104,20 @@ func mergeBlocker(spec ResultSpec, r deliverRepo, branch string, ev []CommandEvi
 		return "the step reports an LLM-resolved conflict"
 	case r.TestsPassed != nil && !*r.TestsPassed:
 		return "the step reports failing tests"
-	case head != verified && !testBarRerun(r.Name, strings.TrimSpace(r.PRURL), spec.VerifiedTestBar, evidenceEvents(ev, filepath.Dir(spec.ReposDir))):
-		return "the tests are not shown to pass on the pushed head (it differs from the commit verification passed on and this dispatch did not re-run verification's test_bar in that repo after its last merge and before its gh pr merge)"
+	case verified != "":
+		if head != verified && !testBarRerun(r.Name, strings.TrimSpace(r.PRURL), spec.VerifiedTestBar, evidenceEvents(ev, filepath.Dir(spec.ReposDir))) {
+			return "the tests are not shown to pass on the pushed head (it differs from the commit verification passed on and this dispatch did not re-run verification's test_bar in that repo after its last merge and before its gh pr merge)"
+		}
+	default:
+		// the light pass: the tests are covered ONLY by this dispatch's
+		// recorded re-run of the carried test_bar — unconditional (no
+		// head-equality shortcut exists on the light path: a light recheck
+		// never ran the full bar, so there is no verified head to equal). A
+		// repo with no carried test_bar entry keeps today's rule — a human
+		// decides (testBarRerun answers false: nothing to prove it with).
+		if !testBarRerun(r.Name, strings.TrimSpace(r.PRURL), spec.VerifiedTestBar, evidenceEvents(ev, filepath.Dir(spec.ReposDir))) {
+			return "the tests are not shown to pass on the pushed head (the last verification pass was a light recheck, which never ran the full bar: only this dispatch's recorded re-run of the carried test_bar, after its last merge and before its gh pr merge, covers them)"
+		}
 	}
 	return ""
 }
@@ -387,4 +415,27 @@ func verificationRecord(st *capsule.Step) (map[string]string, []testBarCmd) {
 		_ = json.Unmarshal(raw, &bar)
 	}
 	return heads, bar
+}
+
+// lightRecheckHeads reads the recheck heads of a light-passed verification
+// record (mechanical_pass.recheck_heads, driver-written) — the deliver
+// merge rule's anchor on the light path (polyforge#260: a light pass
+// never writes verified_heads).
+func lightRecheckHeads(st *capsule.Step) map[string]string {
+	if st == nil || st.Status != capsule.StepDone {
+		return nil
+	}
+	mp, ok := st.Output[mechanicalPassKey].(map[string]any)
+	if !ok {
+		return nil
+	}
+	heads := map[string]string{}
+	if h, ok := mp["recheck_heads"].(map[string]any); ok {
+		for k, v := range h {
+			if s, ok := v.(string); ok {
+				heads[k] = s
+			}
+		}
+	}
+	return heads
 }

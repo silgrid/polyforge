@@ -62,11 +62,39 @@ const (
 // by prepareDispatch/applyStepStartLocked — no second carrier). The rewind
 // accounting is identical (one slot, bounds before mutation); the
 // candidate pointer resets on it like on every rewind archive.
+//
+// polyforge#260: an armed verification gate's FAIL verdict that carries a
+// mechanical classification (mechanical_bound) archives its target as
+// gate_fail_rewind_mechanical — the mechanical light rewind, the second
+// light cause, a sibling of #222's with the same ledger semantics (one
+// slot, bounds before mutation, resume re-entry, candidate-pointer
+// reset) plus the pending light recheck marker it sets on the gate
+// (steps.<gate>.pending_light_recheck — the durable carrier of the
+// fast-lane state whose presence makes the gate's next dispatch the
+// light recheck).
 const (
 	CauseGateFailRewind         = "gate_fail_rewind"
 	CauseGateFailRewindTextOnly = "gate_fail_rewind_text_only"
-	CauseSupersededByRewind     = "superseded_by_rewind"
-	CauseInfraFailure           = "infra_failure"
+	// CauseGateFailRewindMechanical is the mechanical light rewind's
+	// target archive cause (polyforge#260): an armed verification gate's
+	// FAIL verdict that carried a mechanical classification rewound this
+	// step - the second light cause, a sibling of #222's text-only one. It
+	// joins the same ledger semantics: the candidate pointer resets on it,
+	// the re-entry resumes the previous conversation (lightRewindContext),
+	// and the needs_code_change self-report's fresh rewind reuses its slot.
+	CauseGateFailRewindMechanical = "gate_fail_rewind_mechanical"
+	// CauseLightRecheckEscalated is the audit-only attempt cause of the
+	// light path's in-place escalation (polyforge#260): a light-path
+	// failure — a malformed classification, a broken repair bound, or a
+	// light recheck that did not pass — escalated the verification step
+	// to the existing full gate in the same step. It is neither a
+	// rewind archive nor model-class infra: it charges no rewind slot
+	// and leaves the candidate pointer's count alone. The reason rides
+	// Detail; the audit facts (bound, diff base, measured diff, recheck,
+	// escalated flag) ride Result.
+	CauseLightRecheckEscalated = "light_recheck_escalated"
+	CauseSupersededByRewind    = "superseded_by_rewind"
+	CauseInfraFailure          = "infra_failure"
 )
 
 // LightRewindNote is the light re-entry instruction a light rewind routes
@@ -87,6 +115,26 @@ skills/** prompt material — is NOT yours to apply: do not apply it, and
 instead deliver your completed result carrying "needs_code_change": true;
 the driver rewinds fresh with the same verdict, charging no additional
 rewind slot.`
+
+// MechanicalRewindNote is the mechanical light re-entry instruction a
+// mechanical rewind routes beside the FAIL verdict (polyforge#260, the
+// rewind input's Note - rendered by assembleStepPrompt as its own
+// section): this re-entry is light and bounded to the verdict's
+// mechanical_bound - modifications of bound-named files only, inside the
+// hard-coded caps - and a fix that must leave the bound self-reports
+// needs_code_change instead of being applied.
+const MechanicalRewindNote = `This rewind is LIGHT and MECHANICAL: the verification gate's FAIL verdict
+carried a mechanical classification (every failed check static, each
+reproducible by one deterministic command). Apply ONLY the fix inside the
+verdict's mechanical_bound: per failed check — its repo, its exact command
+and the files it named — a modification of a bound-named file only; never
+add, delete or rename a file; at most 40 changed lines (added + deleted)
+and 5 files, summed across repos. Your step's existing discipline is
+unchanged (fast checks per unit, per-unit commits). A fix that must leave
+that bound, delete or rename a file, or exceed the caps is NOT yours to
+apply: do not apply it, and instead deliver your completed result carrying
+"needs_code_change": true; the driver rewinds fresh with the same verdict,
+charging no additional rewind slot.`
 
 // ErrStaleFence marks a transition refused by the spawn fence: the
 // request names a derivation that is no longer current (B2 carried into
@@ -123,6 +171,16 @@ const (
 	// failed dispatch and its death-cause disposal in one atomic write
 	// (applyStepFailedLocked).
 	TransStepFailed TransitionKind = "step_failed"
+	// TransLightEscalate is the mechanical fast lane's in-place escalation
+	// write (polyforge#260): a light-path failure detected BEFORE any
+	// dispatch (a malformed classification or a broken repair bound) —
+	// the escalation archives the audit-only light_recheck_escalated
+	// attempt on the verification step with the reason, clears the
+	// pending light recheck marker and orders the next dispatch fresh —
+	// no rewind slot, no rewind input — so the loop re-dispatches the
+	// step in full mode (the existing full verification, unchanged). It
+	// consumes no derivation ordinal (like TransUnblock).
+	TransLightEscalate TransitionKind = "light_recheck_escalate"
 	// TransClaimReentry is a claim's re-entry of an in_progress step whose
 	// dispatch never settled (cancelled by an operator pause, a shutdown
 	// or a crash before this claim): it re-stamps step_started_at, so a
@@ -170,7 +228,28 @@ type TransitionRequest struct {
 	// result records under verified_heads (deliver_facts.go), read
 	// before the transition takes the driver's lock.
 	VerifiedHeads map[string]any
-	SpawnN        int64
+	// LightDiffBase (polyforge#260) is the task repos' HEADs an armed
+	// verification gate-FAIL that carries a mechanical classification
+	// settles on — the light recheck's repair-diff base, read before the
+	// transition takes the driver's lock (the verifiedHeads pattern: git
+	// I/O never under the lock, never step-supplied).
+	LightDiffBase map[string]string
+	// LightSettle (polyforge#260) is the light recheck's pre-read
+	// settlement facts (set for a completed verification result whose
+	// step holds the pending light recheck marker — the light pass or
+	// its escalation — and for a gate_failed one holding it, the
+	// recheck's own FAIL verdict escalation): the re-measured repair
+	// diff and the recheck heads, both read before the transition takes
+	// the driver's lock. Nil = no light settlement.
+	LightSettle *lightSettleFacts
+	// LightEscalationDiff (polyforge#260) is the repair diff a
+	// pre-dispatch escalation (TransLightEscalate) measured before this
+	// request — nil when the classification was malformed and nothing
+	// was measurable. It is the audit fact the escalation attempt
+	// archives beside its reason, carried on the request because git
+	// I/O never runs under the transition's lock.
+	LightEscalationDiff *lightDiff
+	SpawnN              int64
 }
 
 // GateVerdict is one business gate FAIL judgment (01 §6.2): the policy
@@ -199,6 +278,13 @@ type appliedInfo struct {
 	// light gate that rewound it.
 	selfRewind bool
 	rewindGate string
+	// escalated marks the light path's in-place escalation
+	// (polyforge#260): the light recheck did not settle a light pass — the
+	// same write archived the audit-only escalation attempt instead — so
+	// the step is not done and the event is the escalation, never
+	// step_done; escalateReason carries why.
+	escalated      bool
+	escalateReason string
 }
 
 // appliedEvent is a follow-up event of one transition.
@@ -285,6 +371,8 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 		return d.applyClaimReentryLocked()
 	case TransStepFailed:
 		return d.applyStepFailedLocked(req, info)
+	case TransLightEscalate:
+		return d.applyLightEscalateLocked(req.StepID, req.Reason, req.LightEscalationDiff, nil, info)
 	default:
 		return fmt.Errorf("driver: unknown transition kind %q", req.Kind)
 	}
@@ -493,6 +581,78 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 				return nil
 			}
 		}
+		// The light recheck's settlement (polyforge#260): a completed
+		// verification result whose step holds the pending light recheck
+		// marker is the light recheck's own claim. Judged (verdict pass,
+		// every check pass, every bound command shown run with exit 0 in
+		// its repo — the pure judgments below — plus the pre-read facts'
+		// re-measured diff), it either settles the light pass (the
+		// mechanical_pass record, no verified_heads, the carried test_bar,
+		// the marker cleared) or escalates IN PLACE — the same write, never
+		// a rewind. Judged before the accepted-result handling: an
+		// escalated recheck is not done.
+		if req.LightSettle != nil {
+			if st.PendingLightRecheck == nil {
+				return fmt.Errorf("driver: step %q light settlement without a pending light recheck marker", req.StepID)
+			}
+			reason := req.LightSettle.diffBroken
+			var recheck []map[string]any
+			if reason == "" {
+				bound, perr := parseMechBound(st.PendingLightRecheck.Bound)
+				switch perr {
+				case nil:
+					var r string
+					recheck, r = lightRecheckEvidence(bound, res.CommandEvidence, d.wi.CapsuleDir)
+					if r != "" {
+						reason = r
+					} else if r = lightRecheckVerdictHolds(out); r != "" {
+						reason = r
+					}
+				default:
+					reason = "the mechanical classification is malformed: " + perr.Error()
+				}
+			}
+			if reason != "" {
+				var escDiff *lightDiff
+				if req.LightSettle.diffMeasured {
+					escDiff = &req.LightSettle.diff
+				}
+				if err := d.applyLightEscalateLocked(req.StepID, reason, escDiff, out["checks"], info); err != nil {
+					return err
+				}
+				st.Output = out // the light recheck's own record stays on the gate (audit)
+				return nil
+			}
+			// The light pass: mechanical_pass built from the marker, the
+			// re-measured diff, the recheck evidence and the driver-read
+			// recheck heads; test_bar carried verbatim from the FAIL
+			// verdict's record (the driver copies — the step agent never
+			// re-transcribes it, the #203 lesson); NO verified_heads (a head
+			// verified only by a light recheck is never tests-covered); the
+			// marker cleared by this same write.
+			var boundAny any
+			_ = json.Unmarshal(st.PendingLightRecheck.Bound, &boundAny)
+			// recheck_heads as the JSON shape (map[string]any): the record is
+			// read back from the driver's IN-MEMORY state too (buildResultSpec
+			// → lightRecheckHeads for the deliver merge rule), and a
+			// map[string]string would not assert as map[string]any there —
+			// only the disk round-trip would fix it.
+			recheckHeads := make(map[string]any, len(req.LightSettle.heads))
+			for repo, sha := range req.LightSettle.heads {
+				recheckHeads[repo] = sha
+			}
+			out[mechanicalPassKey] = map[string]any{
+				"bound":         boundAny,
+				"diff":          map[string]any{"files": req.LightSettle.diff.Files, "lines": req.LightSettle.diff.Lines},
+				"recheck":       recheck,
+				"recheck_heads": recheckHeads,
+				"escalated":     false,
+			}
+			if tb, ok := st.Output["test_bar"]; ok {
+				out["test_bar"] = tb // carried byte-for-byte from the FAIL verdict's record
+			}
+			st.PendingLightRecheck = nil // cleared by the settling write
+		}
 		// B10: the only accepted command evidence, decoded (known fields
 		// only; ValidateStepResult already proved it decodes)
 		if ev, _ := decodeCommandEvidence(res.CommandEvidence); len(ev) > 0 {
@@ -541,7 +701,23 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 			d.exec.ReviewRounds = map[string]int64{}
 		}
 		d.exec.ReviewRounds[req.StepID]++
-		d.applyGateFailLocked(req.StepID, verdict, out, info)
+		if st.PendingLightRecheck != nil {
+			// The light recheck's own FAIL verdict (polyforge#260): a bound
+			// command still red, or a semantic confirmation the agent cannot
+			// make. Escalate IN PLACE, in this same write — never a rewind
+			// (the light path's one fallback); the loop re-dispatches the
+			// step in full mode. The pre-read settlement facts carry the
+			// re-measured repair diff for the escalation's audit record.
+			var escDiff *lightDiff
+			if req.LightSettle != nil && req.LightSettle.diffMeasured {
+				escDiff = &req.LightSettle.diff
+			}
+			if err := d.applyLightEscalateLocked(req.StepID, lightRecheckFailReason(out), escDiff, out["checks"], info); err != nil {
+				return err
+			}
+			return nil
+		}
+		d.applyGateFailLocked(req.StepID, verdict, out, req.LightDiffBase, info)
 	case OutcomeNeedsInput:
 		st.PendingQuestion = &capsule.PendingQuestion{
 			ID:       qid,
@@ -587,7 +763,7 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 //
 // It runs inside the gate's step_result write, after that write checked
 // the gate is the running current step and the target (checkRewindTarget).
-func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string]any, info *appliedInfo) {
+func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string]any, diffBase map[string]string, info *appliedInfo) {
 	target := v.TargetStep
 	if target == "" { // no rewind edge declared: the gate verdict is terminal
 		d.exec.WorkflowStatus = StatusFailedGate
@@ -601,15 +777,24 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 		d.exec.WorkflowStatus = StatusFailedRewindExhausted
 		return
 	}
-	// The light path keys on the review gate id alone (the conventional id
-	// every shared-review bundle uses) and the verdict's own recorded
-	// markers — no re-classification, no owner round-trip. Any other gate,
-	// or a verdict that is not all-text-only, takes the fresh rewind
-	// exactly as before (fail closed on any malformed finding).
+	// The light paths key on the gate id alone and the verdict's own
+	// recorded markers — no re-classification, no owner round-trip. The
+	// text-only light rewind (#222) keys on the review gate; the mechanical
+	// light rewind (polyforge#260) keys on the verification gate of an
+	// ARMED lane (the workflow's mechanical_fix switch) whose FAIL verdict
+	// carries a mechanical classification (mechanical_bound present — the
+	// agent's own classification, never the driver's). Any other gate, or
+	// a verdict that is neither all-text-only nor classified mechanical,
+	// takes the fresh rewind exactly as before (fail closed on any
+	// malformed finding).
 	light := gate == reviewStepID && lightRewindEligible(out)
+	mech := gate == verificationStepID && d.mechanicalArmed() && mechanicalBoundPresent(out)
 	targetCause := CauseGateFailRewind
-	if light {
+	switch {
+	case light:
 		targetCause = CauseGateFailRewindTextOnly
+	case mech:
+		targetCause = CauseGateFailRewindMechanical
 	}
 	d.applyRewindRangeLocked(tIdx, gIdx, target, gate, targetCause, info)
 	// The gate itself stays in_progress, but its verdict closes the human
@@ -635,7 +820,8 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 		ToStep: target,
 		Reason: v.VerdictText,
 	}
-	if light {
+	switch {
+	case light:
 		// The light re-entry instruction rides beside the verdict (the
 		// prompt renders it as its own section). The re-dispatch's resume
 		// order is NOT a second write: the same single write above already
@@ -644,8 +830,111 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 		// that ledger fact — the same derivation the needs_code_change
 		// self-report validation reads (one fact, one place).
 		pri.Note = LightRewindNote
+	case mech:
+		// The mechanical light re-entry instruction (polyforge#260): the
+		// same rewind-note pattern — the resumed session sees the bound and
+		// the caps and the needs_code_change self-report channel without
+		// re-deriving them from the verdict.
+		pri.Note = MechanicalRewindNote
 	}
 	d.exec.Steps[target].PendingRewindInput = pri
+	if mech {
+		// The pending light recheck marker (polyforge#260): the durable
+		// carrier of the fast-lane state after this FAIL verdict's output is
+		// replaced — its presence makes the verification step's next
+		// dispatch the light recheck. The bound is copied verbatim from the
+		// FAIL verdict's own classification (never re-typed by any step
+		// agent); the diff base is the request-carried FAIL-settlement HEADs
+		// (driver-recorded, never step-supplied). The same single write
+		// (this one) sets it with the rewind — no half state.
+		if gst := d.exec.Steps[gate]; gst != nil {
+			if raw, err := json.Marshal(out[mechanicalBoundKey]); err == nil {
+				gst.PendingLightRecheck = &capsule.LightRecheck{
+					Bound:    json.RawMessage(raw),
+					DiffBase: diffBase,
+				}
+			}
+		}
+	}
+}
+
+// applyLightEscalateLocked lands the light path's one fallback (polyforge#260,
+// the in-place escalation to the existing full verification): archive one
+// audit-only light_recheck_escalated attempt on the verification step
+// with the reason in Detail and the spec's audit facts in Result — the
+// bound and diff base the marker carried, the measured repair diff
+// (when one was measurable) and the recheck's own record (when the
+// recheck ran), archived in this same write because it also clears the
+// marker and the full re-run's own output never carries them — clear
+// the pending light recheck marker, and order the next dispatch fresh —
+// no rewind slot, no rewind input, no budget reset. The loop then
+// re-dispatches the step in full mode (no marker ⇒ a full dispatch) and
+// its result is processed by today's rules unchanged. The escalation
+// attempt is neither a rewind archive nor model-class infra — it leaves
+// the candidate pointer's count alone. Two detection points share it:
+// the pre-dispatch phase (a malformed classification or a broken repair
+// bound, TransLightEscalate — no recheck ran, diff and recheck absent)
+// and the light recheck's own settlement write (a recheck that did not
+// pass).
+func (d *Driver) applyLightEscalateLocked(stepID, reason string, diff *lightDiff, recheck any, info *appliedInfo) error {
+	st := d.exec.Steps[stepID]
+	if st == nil {
+		return fmt.Errorf("driver: light escalation for unknown step %q", stepID)
+	}
+	if st.PendingLightRecheck == nil {
+		return fmt.Errorf("driver: light escalation without a pending light recheck marker on step %q", stepID)
+	}
+	if isTerminalStatus(d.exec.WorkflowStatus) {
+		return fmt.Errorf("driver: workflow is terminal (%s); light escalation refused", d.exec.WorkflowStatus)
+	}
+	if d.exec.WorkflowStatus == StatusBlocked {
+		return fmt.Errorf("driver: workflow is blocked; light escalation refused")
+	}
+	// the audit record (the spec's complete audit trail): the marker's
+	// own facts — the bound copied verbatim from the FAIL verdict's
+	// classification, the FAIL-settlement diff base — plus what this
+	// escalation measured and ran, the escalation flag and the reason.
+	// Archived in the attempt's Result before this same write clears the
+	// marker: after the escalation the full re-run's own output is the
+	// only thing that changes, and it never carries these.
+	var boundAny any
+	_ = json.Unmarshal(st.PendingLightRecheck.Bound, &boundAny)
+	audit := map[string]any{
+		"bound":     boundAny,
+		"diff_base": st.PendingLightRecheck.DiffBase,
+		"diff":      nil,
+		"recheck":   nil,
+		"escalated": true,
+		"reason":    reason,
+	}
+	if diff != nil {
+		audit["diff"] = map[string]any{"files": diff.Files, "lines": diff.Lines}
+	}
+	if recheck != nil {
+		audit["recheck"] = recheck
+	}
+	raw, err := json.Marshal(audit)
+	if err != nil {
+		return fmt.Errorf("driver: light escalation audit record: %w", err)
+	}
+	st.Attempts = append(st.Attempts, capsule.Attempt{
+		Cause:      CauseLightRecheckEscalated,
+		AttemptSeq: nextAttemptSeq(st),
+		StartedAt:  st.StepStartedAt,
+		ArchivedAt: d.stamp(),
+		Detail:     reason,
+		Result:     raw,
+	})
+	st.PendingLightRecheck = nil
+	// the full re-run is a fresh conversation (the light one judged this
+	// same FAIL; its transcript is at most read-only reference)
+	if st.Supervision == nil {
+		st.Supervision = &capsule.StepSupervision{}
+	}
+	st.Supervision.NextDispatch = capsule.NextDispatchFresh
+	info.escalated = true
+	info.escalateReason = reason
+	return nil
 }
 
 // lightRewindEligible answers whether one recorded gate output is an
@@ -682,21 +971,76 @@ func lightRewindEligible(out map[string]any) bool {
 }
 
 // lightRewindContext answers whether a step's latest non-infra_failure
-// archived attempt is a light rewind (gate_fail_rewind_text_only): the
-// completed result's needs_code_change self-report is legal only in that
-// context — the light rewind instructed this very re-entry, so the
-// self-report's fresh rewind reuses the light rewind's slot (a
-// classification error is not charged twice). An accepted attempt or a
-// fresh rewind archive answers false (a crash attempt interleaved after
-// the light rewind does not change the re-entry's nature).
+// archived attempt is a light rewind (gate_fail_rewind_text_only or
+// gate_fail_rewind_mechanical): the completed result's needs_code_change
+// self-report is legal only in that context — the light rewind instructed
+// this very re-entry, so the self-report's fresh rewind reuses the light
+// rewind's slot (a classification error is not charged twice). An accepted
+// attempt or a fresh rewind archive answers false (a crash attempt
+// interleaved after the light rewind does not change the re-entry's nature).
 func lightRewindContext(attempts []capsule.Attempt) bool {
 	for i := len(attempts) - 1; i >= 0; i-- {
 		if attempts[i].Cause == CauseInfraFailure {
 			continue // audit-only interruptions do not change the re-entry
 		}
-		return attempts[i].Cause == CauseGateFailRewindTextOnly
+		switch attempts[i].Cause {
+		case CauseGateFailRewindTextOnly, CauseGateFailRewindMechanical:
+			return true
+		}
+		return false
 	}
 	return false
+}
+
+// escalatedRecheckContext answers whether a step's latest non-
+// infra_failure archived attempt is the light path's in-place escalation
+// (light_recheck_escalated): this dispatch is the ESCALATED full re-run
+// of the mechanical fast lane (polyforge#260) — the prompt carries the
+// escalation note (the report's fast-lane section duty; the light
+// recheck that would have written it never settled). The order is that
+// ledger fact — archived by the escalation write itself, the light
+// re-entry's resume pattern — and the full re-run's own accepted
+// attempt ends the context.
+func escalatedRecheckContext(attempts []capsule.Attempt) bool {
+	for i := len(attempts) - 1; i >= 0; i-- {
+		if attempts[i].Cause == CauseInfraFailure {
+			continue // audit-only interruptions do not change the dispatch
+		}
+		return attempts[i].Cause == CauseLightRecheckEscalated
+	}
+	return false
+}
+
+// mechanicalBoundKey is the output key of the verification FAIL verdict's
+// mechanical classification (polyforge#260): an array, one entry per
+// failed check — {check, repo, command, files} — declared as an optional
+// property of the shared verification schema. Its presence on an ARMED
+// lane's FAIL verdict IS the classification; an unarmed lane never writes
+// it (and the driver ignores it there).
+const mechanicalBoundKey = "mechanical_bound"
+
+// mechanicalBoundPresent answers whether one recorded gate output carries
+// a mechanical classification: the mechanical_bound key present with a
+// non-nil value. Shape (an array of well-formed entries covering the
+// failed checks exactly) is NOT judged here — the light recheck's
+// preparation validates coverage and escalates on a malformed one
+// (lightrecheck.go); this check only routes the rewind.
+func mechanicalBoundPresent(out map[string]any) bool {
+	if out == nil {
+		return false
+	}
+	v, ok := out[mechanicalBoundKey]
+	return ok && v != nil
+}
+
+// mechanicalArmed answers whether this workflow's verification step is
+// armed for the mechanical fast lane (mechanical_fix: true on its
+// workflow.md step entry; absent = off). Every fast-lane branch in the
+// driver is gated on it — an unarmed lane's FAIL rewinds exactly as today,
+// whatever its verdicts carry.
+func (d *Driver) mechanicalArmed() bool {
+	spec := d.workflow.step(verificationStepID)
+	return spec != nil && spec.MechanicalFix
 }
 
 // needsCodeChangeOf answers one parsed completed output's needs_code_change
@@ -730,13 +1074,23 @@ func needsCodeChangeOf(out map[string]any) (present, value, malformed bool) {
 // re-entry's rewind input (Note empty: a fresh re-derivation). No stats
 // mutation, no bounds check (the light rewind's slot already paid; a
 // classification error is not charged twice), position unchanged (the
-// step is the current one). The caller emits the standard rewind event —
-// never step_done for a step that is not done.
+// step is the current one). A MECHANICAL light re-entry's self-report
+// abandons the light path, so the same write also clears the pending
+// light recheck marker on the gate (polyforge#260): the marker lives on
+// the gate, OUTSIDE the [target, gate) range this write archives — a
+// stale marker would make the gate's next dispatch a light recheck over
+// a fresh re-derivation's bound. The caller emits the standard rewind
+// event — never step_done for a step that is not done.
 func (d *Driver) applySelfReportRewindLocked(stepID string, st *capsule.Step, out map[string]any, info *appliedInfo) {
 	gate := ""
+	mech := false
 	for i := len(st.Attempts) - 1; i >= 0; i-- {
-		if st.Attempts[i].Cause == CauseGateFailRewindTextOnly {
-			gate = st.Attempts[i].RewindGate // the light gate that rewound this step
+		// the light gate that rewound this step — either light cause (#222's
+		// text-only review FAIL, or #260's mechanical verification FAIL)
+		if st.Attempts[i].Cause == CauseGateFailRewindTextOnly ||
+			st.Attempts[i].Cause == CauseGateFailRewindMechanical {
+			gate = st.Attempts[i].RewindGate
+			mech = st.Attempts[i].Cause == CauseGateFailRewindMechanical
 			break
 		}
 	}
@@ -768,6 +1122,15 @@ func (d *Driver) applySelfReportRewindLocked(stepID string, st *capsule.Step, ou
 		}
 	}
 	st.PendingRewindInput = &capsule.RewindInput{ToStep: stepID, Reason: reason}
+	// polyforge#260: a mechanical light re-entry's self-report abandons
+	// the light path — the fresh rewind re-derives from scratch — so this
+	// same write clears the pending light recheck marker on the gate (the
+	// marker lives on the gate, outside the range this write archives).
+	if mech {
+		if gst := d.exec.Steps[gate]; gst != nil {
+			gst.PendingLightRecheck = nil
+		}
+	}
 	info.selfRewind = true
 	info.rewindGate = gate
 	info.target = stepID
@@ -823,6 +1186,7 @@ func (d *Driver) applyRewindRangeLocked(from, to int, target, rewindGate, target
 		st.Output = nil
 		st.PendingQuestion = nil
 		st.PendingRewindInput = nil
+		st.PendingLightRecheck = nil    // a reset step never carries a stale light recheck marker (polyforge#260)
 		st.Supervision = nil            // a gate rewind into the step resets its failure ledger and relaxed bounds
 		st.AnswerBase = len(st.Answers) // a rewound step starts a new attempt chain: earlier answers no longer count toward the human gate
 		info.archived = append(info.archived, sid)
@@ -1072,16 +1436,34 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 			} else {
 				kind = "step_done"
 			}
+			if info.escalated {
+				// the light recheck's in-place escalation (polyforge#260): the
+				// same write that would have settled it archived the escalation
+				// instead — never step_done for a step that is not done
+				kind = EvLightRecheckEscalated
+				body["detail"] = info.escalateReason
+			}
 		case OutcomeGateFailed:
-			kind = "gate_verdict"
-			if isTerminalStatus(d.exec.WorkflowStatus) {
-				info.extra = append(info.extra, appliedEvent{"terminal", map[string]any{
-					"spawn_n": d.spawnN, "status": d.exec.WorkflowStatus, "gate": req.StepID,
-				}})
+			if info.escalated {
+				// the light recheck's own FAIL verdict escalated in place
+				// (polyforge#260): one event per escalation, carrying the
+				// reason (EvLightRecheckEscalated's own contract) — never a
+				// rewind (the escalation charges no slot and routes no
+				// verdict) and never a gate_verdict (no gate judgment landed:
+				// the light recheck is not a gate dispatch).
+				kind = EvLightRecheckEscalated
+				body["detail"] = info.escalateReason
 			} else {
-				info.extra = append(info.extra, appliedEvent{"rewind", map[string]any{
-					"spawn_n": d.spawnN, "gate": req.StepID, "target": info.target, "archived": info.archived,
-				}})
+				kind = "gate_verdict"
+				if isTerminalStatus(d.exec.WorkflowStatus) {
+					info.extra = append(info.extra, appliedEvent{"terminal", map[string]any{
+						"spawn_n": d.spawnN, "status": d.exec.WorkflowStatus, "gate": req.StepID,
+					}})
+				} else {
+					info.extra = append(info.extra, appliedEvent{"rewind", map[string]any{
+						"spawn_n": d.spawnN, "gate": req.StepID, "target": info.target, "archived": info.archived,
+					}})
+				}
 			}
 		case OutcomeNeedsInput:
 			kind = "needs_input"
@@ -1103,6 +1485,14 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 	case TransInterrupted:
 		kind = "interrupted"
 		body["step"] = d.exec.CurrentStep
+		body["detail"] = req.Reason
+	case TransLightEscalate:
+		// the pre-dispatch escalation (polyforge#260): one event per
+		// escalation, carrying the reason — the same kind and shape the
+		// settlement-side escalation emits (EvLightRecheckEscalated's
+		// own contract: one event per escalation).
+		kind = EvLightRecheckEscalated
+		body["step"] = req.StepID
 		body["detail"] = req.Reason
 	case TransStepFailed:
 		kind = "step_failed"

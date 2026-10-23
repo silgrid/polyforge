@@ -73,6 +73,14 @@ type StepSpec struct {
 	// (workflow.RenderStepVars): the lane-specific facts a shared
 	// workflows/_shared/steps/<id>.md leaves to each bundle.
 	Vars map[string]string
+	// MechanicalFix mirrors `mechanical_fix: true` (polyforge#260): the
+	// verification step entry arms the mechanical fast lane — an armed
+	// lane's all-static verification FAIL may carry a mechanical
+	// classification (mechanical_bound) and rewind cheaply (one slot, a
+	// light re-entry of code, one light recheck). Absent = false = off:
+	// every fast-lane branch in the driver is gated on it, and an unarmed
+	// lane's FAIL rewinds exactly as today.
+	MechanicalFix bool
 }
 
 // OnFail is the gate FAIL policy: the rewind target the gate's FAIL
@@ -171,6 +179,7 @@ func parseWorkflow(front []byte) (*Workflow, error) {
 			HumanAnswerIfAsked:      s.RequiresHumanAnswer.ifAsked,
 			RequiresCommandEvidence: s.RequiresCommandEvidence,
 			Vars:                    s.Vars,
+			MechanicalFix:           s.MechanicalFix,
 		}
 		if s.Budget != nil {
 			step.WallMinutes = s.Budget.WallMinutes
@@ -249,6 +258,7 @@ type extStep struct {
 	Handoff                 bool              `yaml:"handoff"`
 	RequiresHumanAnswer     humanGate         `yaml:"requires_human_answer"`
 	RequiresCommandEvidence bool              `yaml:"requires_command_evidence"`
+	MechanicalFix           bool              `yaml:"mechanical_fix"`
 	ContextPolicy           string            `yaml:"context_policy"`
 	OnFail                  *extOnFail        `yaml:"on_fail"`
 	Budget                  *extBudget        `yaml:"budget"`

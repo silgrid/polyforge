@@ -158,12 +158,40 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		Memories:                recalledMemoriesSection(a.WI.CapsuleDir),
 		MemoryDuty:              memoryDutySection(a.BundleDir, a.WI.CapsuleDir, a.Workflow.lastStep(sp.StepID)),
 	}
+	// polyforge#260: the armed verification prompt carries the shared
+	// classification duty as its own section (an unarmed lane carries
+	// none - its FAIL rewinds exactly as today, so the agent is never
+	// told to classify); the LIGHT recheck dispatch carries the light
+	// section instead (the recheck does not classify).
+	if spec.MechanicalFix && sp.StepID == verificationStepID {
+		if sp.LightRecheck != nil {
+			parts.LightRecheck = lightRecheckSection(a.BundleDir, sp.LightRecheck)
+		} else {
+			parts.MechanicalClassify = mechanicalFixSection(a.BundleDir, "Classification duty (an armed full verification FAIL)")
+			// polyforge#260: the ESCALATED full re-run carries the escalation
+			// note beside the classification duty (an escalated full FAIL may
+			// be classified mechanical again) — never beside the light section
+			// (no marker, no light dispatch).
+			if sp.EscalatedRecheck {
+				parts.EscalatedRecheck = lightEscalationNote
+			}
+		}
+	}
 	// H3 (polyforge#164): the declared output schema rides the prompt —
 	// the same schema the driver validates the completed output against.
 	if schema, err := loadStepOutputSchema(a.BundleDir, sp.StepID, spec.Vars); err != nil {
 		fmt.Fprintf(os.Stderr, "driver: %s/%s: %v\n", a.WI.ID, sp.StepID, err)
 	} else if schema != nil {
 		parts.OutputSchema = schema.Text
+	}
+	// polyforge#260: the light recheck's output schema is the LIGHT one
+	// (the shared fast-lane material's frontmatter) instead of the full
+	// step schema — the light recheck's result carries only the light
+	// fields (verdict + checks), never the full bar's.
+	if sp.LightRecheck != nil {
+		if schema, err := loadLightOutputSchema(a.BundleDir); err == nil && schema != nil {
+			parts.OutputSchema = schema.Text
+		}
 	}
 	if policy == ContextInherit {
 		h, err := a.resolveHandoff(sp.StepID, sp.Done)
@@ -394,6 +422,24 @@ type promptParts struct {
 	// OutputSchema is the step definition's declared output schema
 	// (YAML), shown ahead of the definition body; "" = none declared.
 	OutputSchema string
+	// MechanicalClassify is the shared fast-lane material's
+	// classification duty (workflows/_shared/mechanical-fix.md), rendered
+	// into an ARMED verification dispatch's prompt as its own section
+	// (polyforge#260); "" = the lane is unarmed (or this is not the
+	// verification step, or this is the light recheck itself) and no
+	// classification duty rides.
+	MechanicalClassify string
+	// LightRecheck is the rendered light-recheck section (the bound
+	// commands per repo plus the shared light contract), an own section
+	// beside the untouched step definition (polyforge#260); "" = an
+	// ordinary (full) dispatch.
+	LightRecheck string
+	// EscalatedRecheck is the escalation note the ESCALATED full
+	// verification re-run's prompt carries as its own section
+	// (polyforge#260: the light path failed and fell back to this full
+	// verification in place; it owes the report's fast-lane section);
+	// "" = an ordinary dispatch.
+	EscalatedRecheck string
 	// Reference is the previous attempt's transcript path (a fresh retry
 	// carries it as read-only reference material; "" = none).
 	Reference string
@@ -457,12 +503,40 @@ func assembleStepPrompt(p promptParts) string {
 		b.WriteString("\n")
 	}
 	// The light re-entry instruction (polyforge#222): a rewind input whose
-	// Note is set rides beside the verdict as its own section — the resumed
-	// session sees the text-only boundary duty and the needs_code_change
-	// self-report channel without re-deriving them from the verdict.
+	// Note is set rides beside the verdict as its own section - the resumed
+	// session sees the re-entry boundary duty and the needs_code_change
+	// self-report channel without re-deriving them from the verdict (the
+	// note itself states which kind of light rewind this is).
 	if p.Rewind != nil && strings.TrimSpace(p.Rewind.Note) != "" {
-		b.WriteString("\n# Light rewind re-entry (this verdict is all text-only)\n\n")
+		b.WriteString("\n# Light rewind re-entry\n\n")
 		b.WriteString(p.Rewind.Note)
+		b.WriteString("\n")
+	}
+	// The mechanical classification duty (polyforge#260): an armed
+	// verification dispatch's own section, the rewind-note pattern - the
+	// agent sees the static-only boundary, the all-or-nothing rule and the
+	// bound contract without re-deriving them from the workflow.
+	if p.MechanicalClassify != "" {
+		b.WriteString("\n# Mechanical classification (this lane is armed)\n\n")
+		b.WriteString(p.MechanicalClassify)
+		b.WriteString("\n")
+	}
+	// The light recheck section (polyforge#260): the light dispatch's own
+	// order - the bound commands per repo plus the shared light contract
+	// - beside the untouched step definition. The bound is the fix's
+	// boundary; the recheck re-runs exactly the bound commands.
+	if p.LightRecheck != "" {
+		b.WriteString("\n# Light recheck (the mechanical fast lane)\n\n")
+		b.WriteString(p.LightRecheck)
+		b.WriteString("\n")
+	}
+	// The escalation note (polyforge#260): the ESCALATED full re-run's
+	// own section - the light path failed and fell back to this full
+	// verification in place, and it owes the report's fast-lane section
+	// the light recheck that would have written it never settled to write.
+	if p.EscalatedRecheck != "" {
+		b.WriteString("\n# Escalated full verification (the mechanical fast lane)\n\n")
+		b.WriteString(p.EscalatedRecheck)
 		b.WriteString("\n")
 	}
 	if p.PriorRejection != "" {
@@ -731,6 +805,95 @@ func stepDefBody(raw []byte) string {
 		raw = body
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// mechanicalFixFile is the shared fast-lane material's conventional path
+// beside the bundle (workflows/_shared/mechanical-fix.md).
+func mechanicalFixFile(bundleDir string) string {
+	return filepath.Join(filepath.Dir(bundleDir), workflow.SharedDir, "mechanical-fix.md")
+}
+
+// mechanicalFixSection answers one H2 section of the shared fast-lane
+// material's body (the text under "## <heading>" up to the next H2),
+// trimmed; "" when the file, its frontmatter or the section is absent -
+// an armed lane without the material classifies nothing (fail-closed,
+// never a dispatch error).
+func mechanicalFixSection(bundleDir, heading string) string {
+	raw, err := os.ReadFile(mechanicalFixFile(bundleDir))
+	if err != nil {
+		return ""
+	}
+	_, body, ok := workflow.SplitFrontmatter(raw)
+	if !ok {
+		return ""
+	}
+	return h2Section(body, heading)
+}
+
+// h2Section answers the text under one "## <heading>" line up to the
+// next H2 heading ("" when the heading is absent).
+func h2Section(body []byte, heading string) string {
+	var b strings.Builder
+	in := false
+	for _, line := range strings.Split(string(body), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "## ") {
+			if in {
+				break // the next H2 ends the section
+			}
+			in = t == "## "+heading
+			continue
+		}
+		if in {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// lightEscalationNote is the escalation note the ESCALATED full
+// verification re-run's prompt carries as its own section
+// (polyforge#260): a light-path failure (a malformed classification, a
+// repair outside the mechanical bound, or a light recheck that did not
+// pass) escalated in place to this full verification. The re-run owes
+// the report's fast-lane section — the light recheck that would have
+// written it never settled (or never dispatched) to write it.
+const lightEscalationNote = `This verification re-run is the ESCALATED full mode of the mechanical
+fast lane (polyforge#260): a light-path failure - a malformed
+classification, a repair outside the mechanical bound, or a light
+recheck that did not pass - escalated in place to this full verification
+(execution.json archives the escalation attempt, cause
+light_recheck_escalated, with the reason and the audit facts). Run the
+full bar exactly as the step definition demands; nothing changes there.
+Additionally write the fast-lane section of artifacts/verification-report.md:
+what was skipped on the light path (the full bar's scope beyond the bound
+commands, and the authored acceptance scenarios), on what grounds it was
+skipped (the mechanical classification), the bound (per failed check its
+repo, its exact command and the files it named), the escalation's reason
+(archived with the attempt), and your own full-bar results that supersede
+the light path.`
+
+// lightRecheckSection renders the light recheck's own prompt section
+// (polyforge#260): the bound commands per repo (byte-faithful, inside
+// the repo it names) plus the shared light contract
+// (workflows/_shared/mechanical-fix.md) — the light dispatch's complete
+// order, beside the untouched step definition.
+func lightRecheckSection(bundleDir string, order *LightRecheckOrder) string {
+	var b strings.Builder
+	b.WriteString("The failed verification verdict was classified mechanical; this dispatch is the LIGHT recheck, bounded to its failed checks. Re-run exactly each bound command below, byte-faithful, inside the repo it names; record command evidence for every command you run; do not modify any file.\n\n")
+	b.WriteString("The bound (per failed check - its repo, its exact command, the files it named):\n\n")
+	for _, e := range order.Bound {
+		var files []string
+		for _, f := range e.Files {
+			files = append(files, "`"+f+"`")
+		}
+		fmt.Fprintf(&b, "- check %q - repo `repos/%s`, command `%s`, files: %s\n", e.Check, e.Repo, e.Command, strings.Join(files, ", "))
+	}
+	if contract := mechanicalFixSection(bundleDir, "Light recheck contract"); contract != "" {
+		b.WriteString("\n" + contract + "\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // checkRelPath asserts one capsule-relative path: non-empty, not

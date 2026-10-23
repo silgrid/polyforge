@@ -320,3 +320,51 @@ func TestNewRefusesExecutionWithRemovedSteps(t *testing.T) {
 		}
 	}
 }
+
+// TestParseMechanicalFixSwitch (polyforge#260): the mechanical_fix key
+// parses into StepSpec.MechanicalFix; absent = false = off (the default
+// every unarmed lane rides).
+func TestParseMechanicalFixSwitch(t *testing.T) {
+	wf := mustParseExt(t, "steps:\n  - { id: code }\n  - id: verification\n    gate: true\n    context_policy: fresh\n    mechanical_fix: true\n    on_fail: { target: code }\n")
+	ver := wf.step("verification")
+	if ver == nil || !ver.MechanicalFix {
+		t.Fatalf("verification mechanical_fix must parse true: %+v", ver)
+	}
+	if s := wf.step("code"); s == nil || s.MechanicalFix {
+		t.Fatalf("a step without the key must parse false: %+v", s)
+	}
+	wf = mustParseExt(t, "steps:\n  - { id: solo }\n")
+	if s := wf.step("solo"); s == nil || s.MechanicalFix {
+		t.Fatalf("absent mechanical_fix must default to false: %+v", s)
+	}
+}
+
+// TestShippedMechanicalFixArming (polyforge#260): the fast lane ships
+// default-off — feature-full's verification step entry declares
+// mechanical_fix: true and no other shipped bundle's does.
+func TestShippedMechanicalFixArming(t *testing.T) {
+	armed := 0
+	for _, dir := range shippedBundleDirs(t) {
+		wf, err := LoadWorkflow(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range wf.Steps {
+			if !s.MechanicalFix {
+				continue
+			}
+			armed++
+			if s.ID != verificationStepID {
+				t.Errorf("%s: step %q declares mechanical_fix — the key belongs to the verification step entry alone",
+					filepath.Base(dir), s.ID)
+			}
+			if filepath.Base(dir) != "feature-full" {
+				t.Errorf("%s: step %q declares mechanical_fix — the fast lane ships armed in feature-full only",
+					filepath.Base(dir), s.ID)
+			}
+		}
+	}
+	if armed != 1 {
+		t.Fatalf("shipped bundles arm the fast lane %d times, want exactly feature-full's verification (1)", armed)
+	}
+}

@@ -69,3 +69,49 @@ func TestCapsuleAuditFieldsRoundTrip(t *testing.T) {
 		t.Fatalf("audit-less identity marshals an effective_candidates key: %s", blob)
 	}
 }
+
+// TestStepLightRecheckMarkerRoundTrip (polyforge#260): the pending light
+// recheck marker — the mechanical fast lane's durable state carrier —
+// survives the execution.json round-trip verbatim (the bound's raw bytes
+// and the diff base), an absent marker marshals without the key, and a
+// legacy execution.json without it decodes loose.
+func TestStepLightRecheckMarkerRoundTrip(t *testing.T) {
+	st := Step{
+		Status: StepInProgress,
+		PendingLightRecheck: &LightRecheck{
+			Bound:    json.RawMessage(`[{"check":"lint","repo":"demo","command":"gofmt -l .","files":["a.go"]}]`),
+			DiffBase: map[string]string{"demo": "0123456789abcdef"},
+		},
+	}
+	blob, err := json.Marshal(&st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Step
+	if err := json.Unmarshal(blob, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.PendingLightRecheck == nil {
+		t.Fatalf("the marker did not round-trip: %s", blob)
+	}
+	if string(back.PendingLightRecheck.Bound) != string(st.PendingLightRecheck.Bound) {
+		t.Fatalf("the bound did not round-trip verbatim: %s vs %s",
+			back.PendingLightRecheck.Bound, st.PendingLightRecheck.Bound)
+	}
+	if back.PendingLightRecheck.DiffBase["demo"] != "0123456789abcdef" {
+		t.Fatalf("the diff base did not round-trip: %+v", back.PendingLightRecheck.DiffBase)
+	}
+	// an absent marker marshals without the key (omitempty)
+	blob, err = json.Marshal(Step{Status: StepPending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(blob), "pending_light_recheck") {
+		t.Fatalf("an absent marker must not marshal: %s", blob)
+	}
+	// a legacy execution.json without the marker decodes loose
+	var legacy Execution
+	if err := json.Unmarshal([]byte(`{"steps":{"code":{"status":"pending"}}}`), &legacy); err != nil {
+		t.Fatalf("legacy execution.json must parse: %v", err)
+	}
+}
