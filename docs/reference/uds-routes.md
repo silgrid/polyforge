@@ -21,10 +21,11 @@ page](../concepts.md); the failure codes of the recovery paths are the
 | GET | `/status` | Machine status: jobs (a pending question read from the capsule's `execution.json`), queue stats, auto switch and cap. | user |
 | POST | `/ops/config` | `pf ops auto on\|off` / `pf ops max N`: body `{"auto":bool,"max":N}` (either or both). | user |
 | POST | `/shutdown` | Shut the daemon down: stop the agents, save each job's task-repo WIP, exit (≤30s). | user |
-| POST | `/chat/init` | `pf chat init`: the chat id of a harness session (created on first use). | user |
+| POST | `/chat/init` | `pf chat init`: the chat id of a harness session (created on first use); the body's `workspace` (the workspace root the CLI resolved the session cwd to, `""` = unmapped) tags the chat — the tag scopes a gone-origin decision wake and adopt eligibility. | user |
 | GET | `/jobs/{wi}/watch` | `pf watch <wi> --once`: per-work-item snapshot (status, step, pending question, events). | user |
 | GET | `/chats/{id}/subscriptions` | A chat's daemon-held subscriptions. | user |
 | POST | `/chats/{id}/subscribe`, `/unsubscribe` | Subscribe / drop a work item for a chat. | user |
+| POST | `/chats/{id}/adopt` | `pf watch adopt <wi>`: an eligible same-workspace chat takes over the work item's wake-target role — it becomes the origin chat and inherits the delivery record (nothing replays). Refusals: DAEMON-400 naming the work item's workspace (untagged / cross-workspace adopter), DAEMON-409 naming the live target's chat id, DAEMON-404 without a local job. | user; step processes refused by the step-origin guard (DAEMON-403) — adopt runs only on an explicit human request |
 | POST | `/chats/{id}/ack` | Acknowledge consumed events / delivered decisions (advances the cursor). | user |
 | POST | `/chats/{id}/subscribe-owned` | Every watcher poll: subscribe the chat to the held work items it submitted or its owner owns (a work item submitted from another chat is shown as progress only; only its origin chat — or, while that chat's watcher is silent, one fallback chat — is woken), and mark the chat live. | user |
 | GET | `/step/memories/search` | A step agent's `pf recall`: search the calling step's own project's memories. | step |

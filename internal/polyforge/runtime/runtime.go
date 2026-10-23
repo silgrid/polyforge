@@ -184,6 +184,14 @@ type Runtime struct {
 	// Resolve's unknown-input answer is "", and the daemon's resolver
 	// falls back to aihub for those.
 	aliases map[string]string
+	// dropped (under mu) retains the scope facts — the origin chat id
+	// and the project — of every job record the table dropped (dropJob):
+	// a terminal close moves the job to DONE and drops it, and the scoped
+	// decision wake (the daemon's wakeScope resolvers through
+	// ScopeOf) must still resolve both facts after it — the terminal
+	// decision is exactly the one that fires it. In-memory only; the
+	// facts are the dropped record's own point-in-time view.
+	dropped map[string]wiScope
 	// manualMu guards the daemon-local manual-models.json (manualmodels.go).
 	manualMu sync.Mutex
 	// claimMu serializes the claiming journal's read-modify-writes: its
@@ -371,6 +379,7 @@ func New(cfg Config, hub Aihub, spawner Spawner, toOB *supervise.Queue[protocol.
 		jobs:      map[string]*job{},
 		boxes:     map[string]*mailbox{},
 		aliases:   map[string]string{},
+		dropped:   map[string]wiScope{},
 		statePath: filepath.Join(cfg.DataDir, "runtime-state.json"),
 	}
 }
@@ -511,6 +520,35 @@ func (r *Runtime) persistLog(wi string) bool {
 	return true
 }
 
+// AdoptOrigin rewrites the persisted job record's origin chat to the
+// adopting chat — the same field a resume rewrites — so the adopter is
+// the WI's origin chat in every sense (`pf watch adopt <wi>`;
+// the daemon's adopt route calls it after the chat-subs surgery). The
+// rewrite mutates under the job's own mutex and persists after it is
+// released (the existing record()/info() pattern: no I/O under the job
+// mutex, none under the job-table lock beyond the snapshot); the record
+// pointer is replaced, not mutated in place, so a reader that already
+// took it keeps its point-in-time view. Origin.Owner is untouched —
+// owner routing keys on the owner, never the chat. A record with no
+// origin gains one (kind chat). The chat id is a notification label,
+// never a credential.
+func (r *Runtime) AdoptOrigin(wi, chatID string) error {
+	j := r.resolveJob(wi)
+	if j == nil {
+		return fmt.Errorf("runtime: %s: no local job to adopt", wi)
+	}
+	j.mu.Lock()
+	if j.origin == nil {
+		j.origin = &Origin{Kind: OriginChat, ChatID: chatID}
+	} else {
+		o := *j.origin
+		o.Kind, o.ChatID = OriginChat, chatID
+		j.origin = &o
+	}
+	j.mu.Unlock()
+	return r.persist()
+}
+
 // writeStateFn is persist's file write; persistSnapped, when set, runs
 // between a snapshot and its write (seams for the write-ordering tests).
 var (
@@ -526,13 +564,24 @@ func (r *Runtime) putJob(j *job) {
 }
 
 // dropJob removes j (only if it is still its work item's job) and the
-// aliases naming it.
+// aliases naming it, retaining the record's scope facts (dropped): the
+// wake-target scope survives the drop.
 func (r *Runtime) dropJob(j *job) {
+	// the record's scope facts first, under the job's own mutex alone
+	// (persist's r.mu → j.mu order never nests the other way): origin
+	// chat id and project, the dropped record's point-in-time view.
+	j.mu.Lock()
+	sc := wiScope{project: j.project}
+	if j.origin != nil {
+		sc.origin = j.origin.ChatID
+	}
+	j.mu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.jobs[j.wi] != j {
 		return
 	}
+	r.dropped[j.wi] = sc
 	delete(r.jobs, j.wi)
 	for a, id := range r.aliases {
 		if id == j.wi {

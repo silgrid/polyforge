@@ -897,3 +897,357 @@ func TestW224NoStateFileOrWatchersDir(t *testing.T) {
 		t.Fatalf("a summarize state file exists under the workspace: %s", hit)
 	}
 }
+
+// TestSubStoreTagWorkspace — the chat's workspace tag is
+// recorded on the chatDoc (even untagged — an untagged chat is a
+// recorded chat), refreshed by a later tag, and survives a restart.
+func TestSubStoreTagWorkspace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), chatSubsFile)
+	s, err := newSubStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TagWorkspace("chat_t", "/ws/a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TagWorkspace("chat_t", "/ws/b"); err != nil { // a re-init refreshes
+		t.Fatal(err)
+	}
+	if err := s.TagWorkspace("chat_u", ""); err != nil { // untagged, still recorded
+		t.Fatal(err)
+	}
+	// daemon restart: a brand-new store over the same file
+	s2, err := newSubStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag := s2.WorkspaceOf("chat_t"); tag != "/ws/b" {
+		t.Fatalf("refreshed tag must survive a restart: %q", tag)
+	}
+	if tag := s2.WorkspaceOf("chat_u"); tag != "" {
+		t.Fatalf("untagged tag = %q, want \"\"", tag)
+	}
+	s2.mu.Lock()
+	_, recorded := s2.doc.Chats["chat_u"]
+	s2.mu.Unlock()
+	if !recorded {
+		t.Fatal("an untagged chat must be recorded in the tag store")
+	}
+	if tag := s2.WorkspaceOf("chat_never"); tag != "" {
+		t.Fatalf("an unknown chat answers no tag: %q", tag)
+	}
+}
+
+// TestSubStoreUnsubscribeRetainsRecord — the record a dropped
+// subscription carried (cursor, delivered keys, done) is retained on
+// the chat for a later adopter to inherit; a fresh subscribe deletes
+// it (a fresh subscription starts fresh).
+func TestSubStoreUnsubscribeRetainsRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), chatSubsFile)
+	s, err := newSubStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Subscribe("chat_o", "wi_1", "proj#1", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ack("chat_o", protocol.ChatAck{WI: "wi_1", Cursor: 7, Notified: []string{"needs_input:q-1", "needs_input:q-2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Unsubscribe("chat_o", "wi_1"); err != nil {
+		t.Fatal(err)
+	}
+	retained := func(store *subStore) *protocol.ChatSub {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		c := store.doc.Chats["chat_o"]
+		if c == nil {
+			return nil
+		}
+		return c.Records["wi_1"]
+	}
+	rec := retained(s)
+	if rec == nil || rec.Cursor != 7 || len(rec.Notified) != 2 || rec.Notified[0] != "needs_input:q-1" {
+		t.Fatalf("the dropped record must be retained: %+v", rec)
+	}
+	// the retained record survives a daemon restart
+	s2, err := newSubStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec = retained(s2); rec == nil || rec.Cursor != 7 || len(rec.Notified) != 2 {
+		t.Fatalf("the retained record must survive a restart: %+v", rec)
+	}
+	// a fresh subscribe starts fresh: the retained record is deleted,
+	// never resumed
+	if _, err := s2.Subscribe("chat_o", "wi_1", "proj#1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if rec = retained(s2); rec != nil {
+		t.Fatalf("a fresh subscription must drop the retained record: %+v", rec)
+	}
+	if subs := s2.List("chat_o"); len(subs) != 1 || subs[0].Cursor != 0 || len(subs[0].Notified) != 0 {
+		t.Fatalf("fresh record: %+v", subs)
+	}
+}
+
+// TestSubStoreAdoptSurgery — the adopt surgery unions the
+// target's retained record into the adopter's subscription (nothing
+// either side delivered replays), re-points every other owner-routed
+// subscription at the adopter, leaves explicit subscribers untouched,
+// consumes the retained record, and is idempotent — all persisted.
+func TestSubStoreAdoptSurgery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), chatSubsFile)
+	s, err := newSubStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the target (origin) chat: delivered q-1 and q-2, then unsubscribed
+	if _, err := s.Subscribe("chat_o", "wi_1", "proj#1", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ack("chat_o", protocol.ChatAck{WI: "wi_1", Cursor: 7, Notified: []string{"needs_input:q-1", "needs_input:q-2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Unsubscribe("chat_o", "wi_1"); err != nil {
+		t.Fatal(err)
+	}
+	// the adopter: its own subscription, cursor 5, delivered q-2
+	if _, err := s.Subscribe("chat_a", "wi_1", "proj#1", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ack("chat_a", protocol.ChatAck{WI: "wi_1", Cursor: 5, Notified: []string{"needs_input:q-2"}}); err != nil {
+		t.Fatal(err)
+	}
+	// one owner-routed subscription (cross-workspace or not) and one
+	// explicit subscriber
+	if _, err := s.SubscribeNew("chat_b", "wi_1", "proj#1", "chat_o", 9); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SubscribeNew("chat_x", "wi_1", "proj#1", "chat_o", 9); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Subscribe("chat_e", "wi_1", "proj#1", 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Adopt("chat_a", "wi_1", "proj#1", "chat_o"); err != nil {
+		t.Fatal(err)
+	}
+	sub := func(store *subStore, chat string) *protocol.ChatSub {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		c := store.doc.Chats[chat]
+		if c == nil {
+			return nil
+		}
+		return c.Subs["wi_1"]
+	}
+	a := sub(s, "chat_a")
+	if a == nil || a.OriginChat != "" || a.OwnerRouted {
+		t.Fatalf("the adopter's subscription is a wake target of its own record: %+v", a)
+	}
+	if a.Cursor != 7 {
+		t.Fatalf("cursor = the max of the two records (events either side consumed never replay): %d", a.Cursor)
+	}
+	if len(a.Notified) != 2 || a.Notified[0] != "needs_input:q-1" || a.Notified[1] != "needs_input:q-2" {
+		t.Fatalf("notified = the union, deduped (nothing replays): %+v", a.Notified)
+	}
+	for _, chat := range []string{"chat_b", "chat_x"} {
+		if o := sub(s, chat); o == nil || o.OriginChat != "chat_a" || !o.OwnerRouted {
+			t.Fatalf("%s's owner-routed subscription must re-point at the adopter: %+v", chat, o)
+		}
+	}
+	if e := sub(s, "chat_e"); e == nil || e.OriginChat != "" || e.OwnerRouted || e.Cursor != 2 || len(e.Notified) != 0 {
+		t.Fatalf("an explicit subscriber stays a wake target of its own record, untouched: %+v", e)
+	}
+	s.mu.Lock()
+	consumed := s.doc.Chats["chat_o"] == nil || s.doc.Chats["chat_o"].Records["wi_1"] == nil
+	s.mu.Unlock()
+	if !consumed {
+		t.Fatal("the target's retained record must be consumed by the adopt")
+	}
+	// idempotent: re-running the surgery over the adopted state changes nothing
+	if err := s.Adopt("chat_a", "wi_1", "proj#1", "chat_o"); err != nil {
+		t.Fatal(err)
+	}
+	if a2 := sub(s, "chat_a"); a2.Cursor != 7 || len(a2.Notified) != 2 || a2.Notified[0] != "needs_input:q-1" {
+		t.Fatalf("a re-run must change no state: %+v", a2)
+	}
+	// persisted: a brand-new store over the same file reads the same facts
+	s2, err := newSubStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a3 := sub(s2, "chat_a"); a3.Cursor != 7 || len(a3.Notified) != 2 || a3.OriginChat != "" {
+		t.Fatalf("the adopt must persist: %+v", a3)
+	}
+	if o := sub(s2, "chat_b"); o == nil || o.OriginChat != "chat_a" {
+		t.Fatalf("the re-route must persist: %+v", o)
+	}
+}
+
+// TestSubStoreAdoptWithoutRecordAndMute — an adopter that holds
+// no subscription gets one created (nothing to inherit, nothing of its
+// own delivered), and its mute mark on the WI is cleared — a stronger
+// act than the explicit subscribe it mirrors.
+func TestSubStoreAdoptWithoutRecordAndMute(t *testing.T) {
+	s, err := newSubStore(filepath.Join(t.TempDir(), chatSubsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the adopter muted the WI (unsubscribed from an owner routing it
+	// never held a subscription through)
+	if _, err := s.Unsubscribe("chat_a", "wi_1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Adopt("chat_a", "wi_1", "proj#1", ""); err != nil { // no origin record to inherit
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	c := s.doc.Chats["chat_a"]
+	muted, sub := c.Muted["wi_1"], c.Subs["wi_1"]
+	s.mu.Unlock()
+	if muted {
+		t.Fatal("adopt must clear the adopter's mute mark on the WI")
+	}
+	if sub == nil || sub.Cursor != 0 || len(sub.Notified) != 0 || sub.OriginChat != "" || sub.OwnerRouted || sub.Slug != "proj#1" {
+		t.Fatalf("an adopter without a subscription gets one created, fresh: %+v", sub)
+	}
+}
+
+// TestSubStoreScopedWakeAudience — with the WI's origin chat
+// gone (unsubscribed or none) and its workspace holding a live
+// subscribed chat, the decision wake is scoped: the eligible chat is a
+// wake target of its own record with the Adoptable flag (the adopt
+// hint), every other owner-routed subscriber is Passive, an explicit
+// subscriber stays a wake target of its own record untouched, and a
+// muted chat (no subscription) is excluded by construction. With the
+// origin holding a subscription, or an empty eligible set, or after an
+// adopt (the adopter IS the origin), today's semantics apply: no flag,
+// and the scoped demotion never fires.
+func TestSubStoreScopedWakeAudience(t *testing.T) {
+	const wi = "wi_g14"
+	s, err := newSubStore(filepath.Join(t.TempDir(), chatSubsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := "chat_o" // the job record's origin chat (the scope's fact)
+	s.scope = wakeScope{
+		originChat: func(string) string { return origin },
+		workspace:  func(string) string { return "/ws/a" },
+	}
+	// the audience: chat_a (tagged /ws/a, explicit), chat_x (tagged
+	// /ws/b, owner-routed to the origin), chat_u (untagged,
+	// owner-routed), chat_m (tagged /ws/a, mutes the WI itself)
+	if err := s.TagWorkspace("chat_a", "/ws/a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TagWorkspace("chat_x", "/ws/b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TagWorkspace("chat_m", "/ws/a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Subscribe("chat_a", wi, "proj#14", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SubscribeNew("chat_x", wi, "proj#14", origin, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SubscribeNew("chat_u", wi, "proj#14", origin, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Subscribe("chat_m", wi, "proj#14", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Unsubscribe("chat_m", wi); err != nil { // its explicit wish: nothing, ever
+		t.Fatal(err)
+	}
+	subOf := func(chat string) protocol.ChatSub {
+		t.Helper()
+		for _, sub := range s.List(chat) {
+			if sub.WI == wi {
+				return sub
+			}
+		}
+		t.Fatalf("%s holds no subscription to %s", chat, wi)
+		return protocol.ChatSub{}
+	}
+
+	// the origin unsubscribed: the scoped broadcast fires
+	if _, err := s.Subscribe("chat_o", wi, "proj#14", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Unsubscribe("chat_o", wi); err != nil {
+		t.Fatal(err)
+	}
+	if a := subOf("chat_a"); !a.Adoptable || a.Passive {
+		t.Fatalf("the eligible chat is a flagged wake target of its own record: %+v", a)
+	}
+	for _, chat := range []string{"chat_x", "chat_u"} {
+		if sub := subOf(chat); !sub.Passive || sub.Adoptable {
+			t.Fatalf("%s (owner-routed, outside the eligible set) must be Passive, unflagged: %+v", chat, sub)
+		}
+	}
+
+	// an explicit subscriber outside the set (a cross-workspace one)
+	// stays a wake target of its own record, untouched
+	if _, err := s.Subscribe("chat_e", wi, "proj#14", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TagWorkspace("chat_e", "/ws/b"); err != nil {
+		t.Fatal(err)
+	}
+	if e := subOf("chat_e"); e.Passive || e.Adoptable {
+		t.Fatalf("a cross-workspace explicit subscriber is untouched: %+v", e)
+	}
+
+	// the origin holds its subscription again: not gone — no flag, and
+	// the owner-routed go back to record sharing (Passive under the
+	// live origin)
+	if _, err := s.Subscribe("chat_o", wi, "proj#14", 0); err != nil {
+		t.Fatal(err)
+	}
+	if a := subOf("chat_a"); a.Adoptable {
+		t.Fatalf("a live origin scopes nothing: %+v", a)
+	}
+	if x := subOf("chat_x"); !x.Passive || x.Adoptable {
+		t.Fatalf("an owner-routed sub shares the live origin's record (Passive): %+v", x)
+	}
+
+	// an empty eligible set: today's owner-wide semantics — every
+	// subscribed chat wakes its own record, no Passive, no flag
+	if _, err := s.Unsubscribe("chat_o", wi); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.seen["chat_a"] = s.now().Add(-2 * chatLiveFor) // the eligible chat's watcher went silent
+	s.mu.Unlock()
+	for _, chat := range []string{"chat_a", "chat_x", "chat_u", "chat_e"} {
+		if sub := subOf(chat); sub.Passive || sub.Adoptable {
+			t.Fatalf("an empty eligible set is today's owner-wide fallback (no new output): %+v", sub)
+		}
+	}
+	delete(s.seen, "chat_a") // silent chats read as live again (born-based)
+
+	// after an adopt the condition is false by construction: the
+	// adopter IS the origin and holds the subscription — no further
+	// scoped broadcast, the re-pointed subscribers share its record
+	if err := s.Adopt("chat_a", wi, "proj#14", origin); err != nil {
+		t.Fatal(err)
+	}
+	adopter := "chat_a"
+	s.scope = wakeScope{
+		originChat: func(string) string { return adopter },
+		workspace:  func(string) string { return "/ws/a" },
+	}
+	if a := subOf("chat_a"); a.Adoptable || a.Passive {
+		t.Fatalf("the adopter is the origin now: no flag, no demotion: %+v", a)
+	}
+	if x := subOf("chat_x"); !x.Passive || x.Adoptable {
+		t.Fatalf("a re-pointed subscriber is Passive relative to the live adopter: %+v", x)
+	}
+	if u := subOf("chat_u"); !u.Passive || u.Adoptable {
+		t.Fatalf("a re-pointed cross-workspace subscriber is Passive to the adopter: %+v", u)
+	}
+}

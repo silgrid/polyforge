@@ -14,6 +14,7 @@ one resident watcher per chat for progress and human-decision wake-ups.
 ```
 pf watch <id> --once [--json] [--after N] [--events N] [--demand]    # one snapshot
 pf watch subscribe <id> | unsubscribe <id> | list          # this chat's subscriptions
+pf watch adopt <id>                                        # take over the wake-target role
 pf watch --chat <chat> [--wait-decision] [--poll D] [--no-parent-check]
                                                            # resident watcher (default chat: $PF_CHAT_ID)
 pf watch --chat <chat> --statusline                        # print the progress file
@@ -60,6 +61,23 @@ running — tell the human, who may check the grill's memo. Progress lines, wake
 `pf watch list` name the work item by its slug (`polyforge#140`); the id stands
 in only when no slug is known. Quote a slug when you pass it back
 (`pf watch 'polyforge#140' --once`) — `#` is a zsh glob character.
+
+## Taking the wake-target role over: `pf watch adopt <id>`
+
+When a work item's submitting (origin) chat has unsubscribed, or the work item
+has none, its decision wake is scoped to the work item's own workspace: the
+live, subscribed, non-muted chats tagged with that workspace are woken, and
+each such decision line carries the hint 「可用 `pf watch adopt <id>` 接管」.
+That hint is ONLY a hint: **adopt runs on an explicit user request, never
+automatic** — never adopt on your own, however inviting the line reads; say
+the option exists and let the user decide. When the user asks, `pf watch
+adopt <id>` (the chat resolves the same way as every other watch verb) makes
+this chat the work item's origin chat and inherits the delivery record —
+nothing already delivered replays. Refusals are the daemon's: a chat tagged
+with another workspace (or untagged) is refused naming the work item's
+workspace (the tag comes from `pf chat init` — re-init from that workspace),
+a chat is refused while the current wake target is still subscribed, and a
+step process can never reach the route (DAEMON-403 by the guard).
 
 ## Failure branches
 

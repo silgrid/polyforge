@@ -34,6 +34,8 @@ type watchDaemon struct {
 	// owned: the WIs subscribe-owned adds (each owner body recorded)
 	owned  []string
 	owners []string
+	// adopts: the "<chat> <wi>" bodies the adopt route recorded
+	adopts []string
 }
 
 // queryOf answers the last watch route's raw query string.
@@ -90,6 +92,14 @@ func newWatchDaemon(t *testing.T, snap protocol.WatchSnapshot, subs ...protocol.
 		var b struct{ WI string }
 		_ = json.NewDecoder(r.Body).Decode(&b)
 		json.NewEncoder(rw).Encode(protocol.ChatSubscribeAnswer{ChatID: r.PathValue("id"), WI: b.WI, Changed: false})
+	})
+	mux.HandleFunc("POST /chats/{id}/adopt", func(rw http.ResponseWriter, r *http.Request) {
+		var b struct{ WI string }
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		w.mu.Lock()
+		w.adopts = append(w.adopts, r.PathValue("id")+" "+b.WI)
+		w.mu.Unlock()
+		_ = json.NewEncoder(rw).Encode(protocol.ChatAdoptAnswer{ChatID: r.PathValue("id"), WI: b.WI, Slug: "proj#9", Adopted: true})
 	})
 	mux.HandleFunc("POST /chat/init", func(rw http.ResponseWriter, r *http.Request) {
 		w.mu.Lock()
@@ -483,5 +493,36 @@ func TestWatchDemandWithoutOnceIsUsageError(t *testing.T) {
 	code, _, stderr = runPf(t, watchEnv(w, t, nil), "watch", "--demand")
 	if code != 1 || !strings.Contains(stderr, "--once") {
 		t.Fatalf("code=%d stderr=%q — --demand with no path at all must be the same usage error", code, stderr)
+	}
+}
+
+// TestWatchAdoptVerbWiring — `pf watch adopt <wi>` resolves the
+// chat the watch lane's own way (flags > env) and answers the adopt
+// route's typed answer — a human line, or the raw answer under --json.
+// Adopt runs ONLY on an explicit user request: nothing here (and
+// nowhere in the watcher) adopts on its own.
+func TestWatchAdoptVerbWiring(t *testing.T) {
+	w := newWatchDaemon(t, protocol.WatchSnapshot{})
+	env := watchEnv(w, t, map[string]string{"PF_CHAT_ID": "chat_adopt"})
+	code, out, stderr := runPf(t, env, "watch", "adopt", "wi_9")
+	if code != 0 || !strings.Contains(out, "adopted proj#9") || !strings.Contains(out, "chat_adopt") {
+		t.Fatalf("adopt: %d %q %q", code, out, stderr)
+	}
+	w.mu.Lock()
+	adopts := append([]string{}, w.adopts...)
+	w.mu.Unlock()
+	if len(adopts) != 1 || adopts[0] != "chat_adopt wi_9" {
+		t.Fatalf("the adopt route must carry the chat and the wi: %v", adopts)
+	}
+	code, out, _ = runPf(t, env, "--json", "watch", "adopt", "wi_9")
+	if code != 0 || !strings.Contains(out, `"adopted":true`) || !strings.Contains(out, `"chat_id":"chat_adopt"`) {
+		t.Fatalf("adopt --json: %d %q", code, out)
+	}
+	// the verb needs exactly one work item and a chat
+	if code, _, _ = runPf(t, env, "watch", "adopt"); code != 1 {
+		t.Fatalf("adopt without a wi must be a usage error: %d", code)
+	}
+	if code, _, stderr = runPf(t, map[string]string{"XDG_CONFIG_HOME": t.TempDir()}, "watch", "adopt", "wi_9"); code != 1 || !strings.Contains(stderr, "no chat id") {
+		t.Fatalf("adopt without a chat must refuse: %d %q", code, stderr)
 	}
 }

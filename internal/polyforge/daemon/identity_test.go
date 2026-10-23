@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -55,7 +56,17 @@ func TestChatInitStableAcrossStoresAndSessions(t *testing.T) {
 }
 
 func TestChatInitRoute(t *testing.T) {
-	d := &Daemon{chats: &chatStore{path: filepath.Join(t.TempDir(), chatsFile)}}
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aPlan := mappingFor(ws)
+	subs, err := newSubStore(filepath.Join(dir, chatSubsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{chats: &chatStore{path: filepath.Join(dir, chatsFile)}, subs: subs, cfg: Config{Mapping: aPlan}}
 	call := func(body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		d.chatInitRoute(w, httptest.NewRequest("POST", "/chat/init", strings.NewReader(body)))
@@ -69,6 +80,79 @@ func TestChatInitRoute(t *testing.T) {
 	}
 	if w := call(`{"harness":"pi"}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("missing session: %d", w.Code)
+	}
+}
+
+// TestChatInitRecordsWorkspaceTag — the route records the
+// chat's workspace tag on the chat-subs chatDoc (recorded even
+// untagged), refreshes it on a re-init, refuses a workspace the
+// daemon's own mapping does not carry, and leaves chats.json — the
+// (harness, session)→id identity map — with its exact shape.
+func TestChatInitRecordsWorkspaceTag(t *testing.T) {
+	dir := t.TempDir()
+	wsA, wsB := filepath.Join(dir, "wsA"), filepath.Join(dir, "wsB")
+	for _, d := range []string{wsA, wsB} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	aPlan := mappingFor(wsA, "projA")
+	subs, err := newSubStore(filepath.Join(dir, chatSubsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{chats: &chatStore{path: filepath.Join(dir, chatsFile)}, subs: subs, cfg: Config{Mapping: aPlan}}
+	call := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		d.chatInitRoute(w, httptest.NewRequest("POST", "/chat/init", strings.NewReader(body)))
+		return w
+	}
+	chat := func() string {
+		t.Helper()
+		w := call(`{"harness":"pi","harness_session":"gmi14","workspace":"` + wsA + `"}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("chat init: %d %s", w.Code, w.Body)
+		}
+		var rec chatRecord
+		if err := json.Unmarshal(w.Body.Bytes(), &rec); err != nil || rec.ChatID == "" {
+			t.Fatalf("chat init answer: %s (%v)", w.Body, err)
+		}
+		return rec.ChatID
+	}
+	id := chat()
+	if tag := subs.WorkspaceOf(id); tag != wsA {
+		t.Fatalf("the tag must be recorded on the chat's chatDoc: %q", tag)
+	}
+	// a re-init from another cwd refreshes the tag
+	w := call(`{"harness":"pi","harness_session":"gmi14","workspace":""}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("re-init untagged: %d %s", w.Code, w.Body)
+	}
+	if tag := subs.WorkspaceOf(id); tag != "" {
+		t.Fatalf("re-init must refresh the tag from the current cwd: %q", tag)
+	}
+	// an untagged chat is a RECORDED chat (present in the tag store)
+	subs.mu.Lock()
+	_, recorded := subs.doc.Chats[id]
+	subs.mu.Unlock()
+	if !recorded {
+		t.Fatal("an untagged chat must exist in the tag store")
+	}
+	// a workspace outside the daemon's mapping is a DAEMON-400 refusal
+	w = call(`{"harness":"pi","harness_session":"gmi14","workspace":"` + wsB + `"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), wsB) || !strings.Contains(w.Body.String(), "DAEMON-400") {
+		t.Fatalf("a config drift must refuse naming the workspace: %d %s", w.Code, w.Body)
+	}
+	// chats.json keeps its exact shape: (harness, session)→id only
+	raw, err := os.ReadFile(filepath.Join(dir, chatsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Chats map[string]string `json:"chats"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil || len(doc.Chats) != 1 || doc.Chats["pi:gmi14"] != id {
+		t.Fatalf("chats.json shape: %s (%v)", raw, err)
 	}
 }
 

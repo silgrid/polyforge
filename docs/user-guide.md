@@ -111,9 +111,11 @@ forms.
   aihub. The contract is the design docs' [capsule
   section](design/polyforge-vnext/reference.md#8-capsule-and-git-chain-).
 - **Chat identity** -- the id of one interactive harness conversation
-  (`chat_...`): how the daemon knows which chat to wake for a decision. The
-  adapter wiring is [SKILL.md](../skills/polyforge/SKILL.md)'s chat identity
-  section.
+  (`chat_...`): how the daemon knows which chat to wake for a decision. Every
+  `pf chat init` also tags the chat with the workspace its session cwd
+  resolves to (refreshed on every init) — the tag decides the scoped
+  decision wake and `pf watch adopt` eligibility. The adapter wiring is
+  [SKILL.md](../skills/polyforge/SKILL.md)'s chat identity section.
 
 ## The flow of a work item
 
@@ -137,7 +139,20 @@ The order the system actually runs:
    human's; a step agent never answers them.
 4. **Watch.** `pf watch <id> --once` for a snapshot (status, current step,
    latest events); the resident watcher in your harness for progress and
-   wake-ups.
+   wake-ups. A work item's decisions wake its origin chat — the chat that
+   submitted (or last resumed) it. When that chat has unsubscribed, or the
+   work item has none, the wake is scoped to the work item's own
+   workspace: the live, subscribed, non-muted chats of that workspace are
+   woken (each such line carries one hint,
+   「可用 `pf watch adopt <id>` 接管」), every other owner-routed subscriber
+   sees progress only, and with no eligible chat in the workspace the
+   owner-wide wake of before applies. An eligible chat — the hint line is
+   only a hint, adoption is never automatic — takes the wake-target role
+   over with `pf watch adopt <id>`: it becomes the origin chat and inherits
+   the delivery record, so nothing that was already delivered replays; a
+   cross-workspace or untagged chat is refused (the daemon names the work
+   item's workspace), and so is any chat while the current target is still
+   subscribed.
 5. **The lane's work steps.** The bundle's own steps do the work: fix or code
    implements, verification runs the project's full bar, review judges. You
    watch and answer; you do not drive the steps.

@@ -222,6 +222,17 @@ type Daemon struct {
 	rt  *runtime.Runtime
 	obs *observe.Observe
 
+	// adoptMu serializes the adopt route's read-check-act sequence
+	// (see adopt): the eligibility facts (the job record's
+	// origin field, the target's held subscription) and the two writes
+	// (subStore.Adopt, AdoptOrigin) must not interleave between two
+	// concurrent adopts — the origin field would name one adopter while
+	// the re-pointed subscriptions name the other. A dedicated route
+	// lock: it guards nothing else, and the writes' own locks (subStore.mu,
+	// the job's mutex) are never taken together with it in the other
+	// order, so nothing waits on it but another adopt.
+	adoptMu sync.Mutex
+
 	// lane is the demand-gated summarize lane (polyforge#224): per-WI
 	// memory-only state, the gates, the background dispatch — wired into
 	// the watch route (the demand=1 marker on GET /jobs/{wi}/watch). The
@@ -405,6 +416,42 @@ func New(cfg Config) (*Daemon, error) {
 	subs, err := newSubStore(filepath.Join(cfg.DataDir, chatSubsFile))
 	if err != nil {
 		return nil, fmt.Errorf("daemon: %w", err)
+	}
+	// the wake-target scope resolvers the subStore's scoped
+	// broadcast reads — the WI's origin chat id (the job record's
+	// Origin.ChatID, "" = none) and its project-mapping workspace root
+	// (the job record's Project through the [workspace] inverse, "" =
+	// unmapped). Both facts come from rt.ScopeOf, which answers them
+	// for a job the runtime still holds AND for one it already dropped
+	// (terminal close: stopOp moves the job to DONE and dropJob drops
+	// it) — the terminal decision is exactly the one that fires the
+	// scoped wake, so the scope must survive the drop (otherwise the
+	// eligible set reads empty and List falls back to the owner-wide
+	// broadcast — the pi#122 blast radius). In-memory only, called under
+	// subStore.mu (List): ScopeOf takes the job's own mutex (or the
+	// table lock over the retained facts) briefly and WorkspaceFor is a
+	// map lookup — no I/O under any lock, no lock inversion (routes hold
+	// no runtime locks when they call List; the runtime never calls
+	// subStore). The closures read d.rt at call time: the store serves
+	// only once the daemon is assembled.
+	subs.scope = wakeScope{
+		originChat: func(wi string) string {
+			if origin, _, ok := d.rt.ScopeOf(wi); ok {
+				return origin
+			}
+			return ""
+		},
+		workspace: func(wi string) string {
+			_, project, ok := d.rt.ScopeOf(wi)
+			if !ok {
+				return "" // never held here: no workspace to scope to
+			}
+			ws, err := cfg.Mapping.WorkspaceFor(project)
+			if err != nil {
+				return "" // unmapped: the eligible set is necessarily empty
+			}
+			return ws
+		},
 	}
 	// polyforge#224: the summarize lane's dispatch seam — the exec
 	// dispatcher through the configured harness binaries in production

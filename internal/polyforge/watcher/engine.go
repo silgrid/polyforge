@@ -302,6 +302,16 @@ func cycle(d API, o *Options, fresh map[string]bool) ([]string, batch, error) {
 			for _, dec := range res.Decisions {
 				b.out = append(b.out, outLine{key: dec.id(), text: dec.Line()})
 			}
+			// a scoped-broadcast decision print carries the one
+			// human-readable adopt hint, once per flagged WI per batch that
+			// printed at least one of that WI's decision lines — attached to
+			// decision-line prints only (the fresh-subscription AttentionLine
+			// folds no decision lines, so it never carries the hint). ONLY a
+			// hint: nothing in this watcher (or anywhere else) ever adopts on
+			// its own — adopt runs on an explicit user request.
+			if sub.Adoptable && len(res.Decisions) > 0 {
+				b.out = append(b.out, outLine{key: "adopt-hint " + sub.WI, text: AdoptHintLine(sub.Slug, sub.WI)})
+			}
 		}
 		if len(res.Decisions) > 0 || res.Cursor != sub.Cursor || res.Done || !sameKeys(res.Notified, sub.Notified) {
 			b.acks = append(b.acks, protocol.ChatAck{WI: sub.WI, Cursor: res.Cursor, Notified: res.Notified, Done: res.Done})

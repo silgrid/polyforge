@@ -8,6 +8,7 @@ package protocol
 //	GET  /chats/{id}/subscriptions             -> ChatSubscriptions
 //	POST /chats/{id}/subscribe   {"wi"}        -> ChatSubscribeAnswer
 //	POST /chats/{id}/unsubscribe {"wi"}        -> ChatSubscribeAnswer
+//	POST /chats/{id}/adopt        {"wi"}        -> ChatAdoptAnswer
 //	POST /chats/{id}/ack         ChatAck       -> {"ok":true}
 //	POST /chats/{id}/heartbeat   {"pid"}       -> {"ok":true}
 //	GET  /chats/{id}/attention?owner=&mark=1[&ack=1] -> ChatAttention
@@ -164,11 +165,27 @@ type ChatSub struct {
 	// is a wake target with its own record (it submitted the WI,
 	// subscribed explicitly, or the WI has no origin chat).
 	OriginChat string `json:"origin_chat,omitempty"`
+	// OwnerRouted is set on a subscription the owner routing
+	// (subscribe-owned / SubscribeNew) added: an adopt re-points
+	// every owner-routed subscription — including a cross-workspace one
+	// — at the adopter, while an explicit subscriber (OwnerRouted clear)
+	// stays a wake target of its own record, untouched. Stored with the
+	// subscription; an explicit subscribe and the adopter's own
+	// subscription clear it.
+	OwnerRouted bool `json:"owner_routed,omitempty"`
 	// Passive is computed per subscriptions answer, never stored: another
 	// chat is woken for this WI (the origin chat while its watcher is
 	// live, else the fallback chat), so this chat's watcher keeps the
 	// WI's progress, prints none of its decisions and acks nothing.
 	Passive bool `json:"passive,omitempty"`
+	// Adoptable is computed per subscriptions answer, never stored
+	// (the Passive precedent): the WI's origin chat is gone
+	// (unsubscribed or none) and this chat is one of the live,
+	// subscribed chats of the WI's workspace its decision wake is
+	// scoped to — it may take the wake-target role over with `pf watch
+	// adopt <wi>`. The watcher turns the flag into one human-readable
+	// hint line; nothing ever adopts on its own.
+	Adoptable bool `json:"adoptable,omitempty"`
 }
 
 // ChatSubscriptions is the GET /chats/{id}/subscriptions answer, and the
@@ -184,6 +201,19 @@ type ChatSubscribeAnswer struct {
 	WI      string `json:"wi"`
 	Slug    string `json:"slug,omitempty"`
 	Changed bool   `json:"changed"`
+}
+
+// ChatAdoptAnswer answers POST /chats/{id}/adopt {"wi"} (`pf
+// watch adopt <wi>`): the chat took over the WI's wake-target role —
+// it is the WI's origin chat now and holds the union delivery record
+// (nothing replays). Refusals answer the typed api.Error envelope
+// instead (DAEMON-400 naming the WI's workspace, DAEMON-409 naming the
+// live target's chat id, DAEMON-403 to a step process tree).
+type ChatAdoptAnswer struct {
+	ChatID  string `json:"chat_id"`
+	WI      string `json:"wi"`
+	Slug    string `json:"slug,omitempty"`
+	Adopted bool   `json:"adopted"`
 }
 
 // ChatAck records a watcher's progress for one subscription: the new

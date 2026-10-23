@@ -63,9 +63,14 @@ type ChatRecord struct {
 }
 
 // ChatInit asks the daemon for the chat id of a harness session
-// (created on first use).
-func (d *DaemonClient) ChatInit(harness, session string) (json.RawMessage, error) {
-	return d.do("POST", "/chat/init", "", map[string]any{"harness": harness, "harness_session": session}, nil)
+// (created on first use). workspace is the workspace root the CLI
+// resolved the session cwd to against its own [workspace] mapping
+// ("" = unmapped): the daemon records it as the chat's workspace tag
+// adopt eligibility and the scoped decision broadcast read
+// it there.
+func (d *DaemonClient) ChatInit(harness, session, workspace string) (json.RawMessage, error) {
+	return d.do("POST", "/chat/init", "",
+		map[string]any{"harness": harness, "harness_session": session, "workspace": workspace}, nil)
 }
 
 // withOrigin adds the origin to a request body when one is configured.
@@ -462,4 +467,19 @@ func (d *DaemonClient) ChatSubscribeOwned(chat, owner string) ([]protocol.ChatSu
 		return nil, err
 	}
 	return out.Subscriptions, nil
+}
+
+// ChatAdopt transfers the WI's wake-target role to the chat (`pf
+// watch adopt <wi>`): the chat becomes the WI's origin chat in every
+// sense and inherits the delivery record — nothing replays. A refusal
+// answers the typed api.Error envelope (DAEMON-400 naming the WI's
+// workspace for an ineligible chat, DAEMON-409 naming the live target's
+// chat id, DAEMON-403 to a step process tree).
+func (d *DaemonClient) ChatAdopt(chat, wi string) (protocol.ChatAdoptAnswer, error) {
+	var out protocol.ChatAdoptAnswer
+	raw, err := d.do("POST", chatPath(chat, "adopt"), "", map[string]any{"wi": wi}, nil)
+	if err != nil {
+		return out, err
+	}
+	return out, json.Unmarshal(raw, &out)
 }

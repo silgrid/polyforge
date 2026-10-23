@@ -167,6 +167,31 @@ func (p *Plan) Workspaces() []string {
 	return out
 }
 
+// MatchWorkspace answers the mapped workspace root the path resolves to
+// (`pf chat init` tags the chat with it): among Workspaces() roots
+// (both sides filepath.Cleaned; roots are already absolute after ~
+// expansion), the longest root that equals the path or contains it at a
+// path boundary wins — a nested mapping's deeper root beats its parent.
+// "" when no root matches (an unmapped cwd: the chat is minted untagged).
+// The plan owns the roots; this is the one cwd→workspace resolution.
+func (p *Plan) MatchWorkspace(cwd string) string {
+	if p == nil {
+		return ""
+	}
+	cwd = filepath.Clean(cwd)
+	best := ""
+	for _, root := range p.Workspaces() {
+		root = filepath.Clean(root)
+		if cwd != root && !strings.HasPrefix(cwd, root+string(filepath.Separator)) {
+			continue
+		}
+		if len(root) > len(best) {
+			best = root
+		}
+	}
+	return best
+}
+
 // Projects answers every mapped project in config declaration order
 // (workspaces in file order, projects in their array order) — the
 // deterministic iteration order the merged queue/drain/recommendation

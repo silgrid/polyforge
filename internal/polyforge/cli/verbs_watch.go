@@ -6,6 +6,7 @@ package cli
 //	pf watch --chat <id> [--wait-decision] the resident per-chat watcher
 //	pf watch --chat <id> --statusline      print the progress file (fast)
 //	pf watch subscribe|unsubscribe <wi>    daemon-held subscriptions
+//	pf watch adopt <wi>                    take over the WI's wake-target role
 //	pf watch list                          the chat's subscriptions
 //
 // The chat defaults to PF_CHAT_ID; --harness-session maps a harness
@@ -64,6 +65,7 @@ var cmdWatch = &Command{
 		"       pf watch --chat ID --statusline                       (print the progress file)\n" +
 		"       pf watch --harness-session ID|- [--harness claude|pi] ...   (resolve the chat via the daemon; - reads {\"session_id\"} from stdin)\n" +
 		"       pf watch subscribe|unsubscribe <wi> [--chat ID]\n" +
+		"       pf watch adopt <wi> [--chat ID]                       (take over the WI's wake-target role)\n" +
 		"       pf watch list [--chat ID]",
 	Setup: func(fs *flag.FlagSet) {
 		fs.Bool("once", false, "print one snapshot of <wi> and exit (status, step, ages, pending question, latest events)")
@@ -110,6 +112,28 @@ var cmdWatch = &Command{
 				} else {
 					fmt.Fprintf(ctx.Stdout, "no change: %s %s was already %s\n", chat, api.DisplayName(ans.Slug, ans.WI), map[bool]string{true: "subscribed", false: "not subscribed"}[args[0] == "subscribe"])
 				}
+				return nil
+			case "adopt":
+				// an eligible same-workspace chat takes over the WI's
+				// wake-target role. ONLY on an explicit user request — never
+				// automatic (no watcher or extension code ever adopts).
+				if len(args) != 2 {
+					return fmt.Errorf("watch adopt: expected exactly one work item id")
+				}
+				chat, err := watchChat(ctx, fs)
+				if err != nil {
+					return err
+				}
+				ans, err := ctx.daemon().ChatAdopt(chat, args[1])
+				if err != nil {
+					return err
+				}
+				if asJSON {
+					b, _ := json.Marshal(ans)
+					ctx.Out(b)
+					return nil
+				}
+				fmt.Fprintf(ctx.Stdout, "adopted %s: %s is its wake target now\n", api.DisplayName(ans.Slug, ans.WI), chat)
 				return nil
 			case "list":
 				chat, err := watchChat(ctx, fs)
@@ -231,7 +255,11 @@ func chatFromHarnessSession(ctx *Context, harness, session string) (string, erro
 			return c, nil
 		}
 	}
-	raw, err := ctx.daemon().ChatInit(harness, session)
+	ws, werr := sessionWorkspace(ctx)
+	if werr != nil {
+		return "", werr
+	}
+	raw, err := ctx.daemon().ChatInit(harness, session, ws)
 	if err != nil {
 		return "", err
 	}

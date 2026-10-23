@@ -26,9 +26,26 @@ package daemon
 // lowest-id live one of them is the fallback and prints only what the
 // record says nobody has delivered yet. A WI without an origin chat, or
 // whose origin chat holds no subscription to it (unsubscribed there),
-// wakes every subscribed chat from its own record, as does an explicit
-// subscribe. "Live" is the in-memory last subscribe-owned call of the
-// chat's watcher (every poll makes one), within chatLiveFor.
+// scopes its decision wake to its project-mapping workspace:
+// the live subscribed chats tagged with that workspace are wake targets
+// of their own records — flagged Adoptable, one of them may `pf watch
+// adopt` the role over — while every other owner-routed subscriber is
+// Passive and an explicit subscriber stays a wake target of its own
+// record, untouched. An eligible chat's ack lands durably in those
+// Passive subscribers' records too (see Ack), so what the scoped
+// audience delivered never replays when the scope later lapses. With no
+// eligible chat the owner-wide broadcast of
+// before applies, unchanged, with no new output. An explicit subscribe
+// is a wake target of its own record in every case. "Live" is the
+// in-memory last subscribe-owned call of the chat's watcher (every poll
+// makes one), within chatLiveFor.
+//
+// Wake-target handover: an unsubscribed chat's dropped
+// delivery record is RETAINED on its chatDoc (Records) — `pf watch
+// adopt <wi>` (see Adopt) unions the current wake target's retained
+// record into the adopter's subscription, re-points every owner-routed
+// subscription at the adopter and rewrites the WI's origin chat to it;
+// nothing either side already delivered replays.
 
 import (
 	"encoding/json"
@@ -66,6 +83,18 @@ type subsDoc struct {
 
 type chatDoc struct {
 	Subs map[string]*protocol.ChatSub `json:"subs"`
+	// Workspace is the chat's workspace tag: the workspace root
+	// its session cwd resolved to at `pf chat init` ("" = untagged —
+	// neither adopt-eligible nor in a scoped decision broadcast). Absent
+	// on chats minted before the tag existed: no backfill; the session's
+	// next init records one, and every init refreshes it.
+	Workspace string `json:"workspace,omitempty"`
+	// Records holds the delivery records of the subscriptions the chat
+	// dropped (unsubscribed): the record survives there for a later
+	// adopter to inherit (nothing replays on an adopt). Subscribe
+	// deletes a retained record (a fresh subscription starts fresh);
+	// Adopt consumes it.
+	Records map[string]*protocol.ChatSub `json:"records,omitempty"`
 	// Muted holds the WIs the chat explicitly unsubscribed from: the
 	// owner routing (SubscribeNew) never re-adds them; an explicit
 	// subscribe clears the mark.
@@ -92,6 +121,29 @@ type subStore struct {
 	seen map[string]time.Time
 	born time.Time
 	now  func() time.Time
+	// scope answers the wake-target facts of a WI the scoped-broadcast
+	// computation reads: its origin chat id and its
+	// project-mapping workspace root. Wired by the daemon (in-memory
+	// resolvers; nil in a bare store — the scoped broadcast then never
+	// fires, which is exactly today's semantics).
+	scope wakeScope
+}
+
+// wakeScope is the subStore's view of the runtime's per-WI facts (the
+// daemon wires it; one fact, one place — the job record owns them, and
+// both facts still answer after the runtime dropped the job: a terminal
+// close is exactly the decision that fires the scoped wake, so the
+// daemon's resolvers read them through runtime.ScopeOf, which retains
+// the dropped record's facts).
+type wakeScope struct {
+	// originChat answers the WI's origin chat id (the job record's
+	// Origin.ChatID, the same field a resume rewrites; "" = none — a
+	// chat-less submit or a missing origin record).
+	originChat func(wi string) string
+	// workspace answers the WI's project-mapping workspace root (the
+	// job record's Project through the [workspace] inverse; "" =
+	// unmapped — the eligible set is then necessarily empty).
+	workspace func(wi string) string
 }
 
 // newSubStore loads (or starts) the store at path.
@@ -134,6 +186,30 @@ func (s *subStore) chatLocked(id string, create bool) *chatDoc {
 	return c
 }
 
+// TagWorkspace records (or refreshes) the chat's workspace tag (
+// `pf chat init"): the workspace root its session cwd resolved to, ""
+// = untagged. The chat is recorded even untagged — an untagged chat is
+// a recorded fact (neither adopt-eligible nor in a scoped broadcast),
+// not an absent one. One atomic write under the store's own mutex.
+func (s *subStore) TagWorkspace(chat, workspace string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.chatLocked(chat, true)
+	c.Workspace = workspace
+	return s.persistLocked()
+}
+
+// WorkspaceOf answers the chat's recorded workspace tag ("" = untagged
+// or never recorded). In-memory only, no persist.
+func (s *subStore) WorkspaceOf(chat string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.chatLocked(chat, false); c != nil {
+		return c.Workspace
+	}
+	return ""
+}
+
 // Subscribe adds (or re-arms) a subscription; cursor is the event seq the
 // watcher should start after for a NEW subscription (history is not
 // replayed), slug the WI's display name ("" = unknown). Re-subscribing a
@@ -144,6 +220,9 @@ func (s *subStore) Subscribe(chat, wi, slug string, cursor int64) (bool, error) 
 	c := s.chatLocked(chat, true)
 	unmuted := c.Muted[wi]
 	delete(c.Muted, wi)
+	// a fresh subscription starts fresh (ruling 3): the record the chat
+	// retained when it unsubscribed is dropped, not resumed.
+	delete(c.Records, wi)
 	if sub, ok := c.Subs[wi]; ok {
 		fill := sub.Slug == "" && slug != ""
 		if fill {
@@ -173,7 +252,9 @@ func (s *subStore) Subscribe(chat, wi, slug string, cursor int64) (bool, error) 
 // and has not muted it (a finished one is left finished); originChat is
 // the WI's origin chat when it is not this chat ("" otherwise): while
 // that chat holds a subscription to wi, this one shares its record and
-// cursor is not used. Reports whether it added one.
+// cursor is not used. The added subscription is marked OwnerRouted
+// an adopt re-points it at the adopter; an explicit subscribe
+// clears the mark. Reports whether it added one.
 func (s *subStore) SubscribeNew(chat, wi, slug, originChat string, cursor int64) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -181,8 +262,97 @@ func (s *subStore) SubscribeNew(chat, wi, slug, originChat string, cursor int64)
 	if c.Subs[wi] != nil || c.Muted[wi] {
 		return false, nil
 	}
-	c.Subs[wi] = &protocol.ChatSub{WI: wi, Slug: slug, Cursor: cursor, OriginChat: originChat}
+	c.Subs[wi] = &protocol.ChatSub{WI: wi, Slug: slug, Cursor: cursor, OriginChat: originChat, OwnerRouted: true}
 	return true, s.persistLocked()
+}
+
+// Adopt transfers the WI's wake-target role to the adopter chat
+// (`pf watch adopt <wi>`): the adopter's subscription becomes
+// the WI's single delivery record — the union of the current wake
+// target's retained record (what the target kept when it unsubscribed;
+// absent = nothing to inherit) and the adopter's own delivered keys —
+// so nothing either side already delivered replays. An adopter that
+// holds no subscription gets one created (its own delivered keys =
+// none); the adopter's mute mark on the WI is cleared (a stronger act
+// than the explicit subscribe it mirrors). Every OTHER owner-routed
+// subscription to the WI — including a cross-workspace one — is
+// re-pointed at the adopter (OriginChat = adopter), exactly as under a
+// live origin; explicit subscribers (OwnerRouted clear) stay wake
+// targets of their own records, untouched. The target's retained
+// record is consumed (deleted): after the adopt the adopter's
+// subscription is the single delivery record. Idempotent by
+// construction — re-running the surgery over an already-adopted state
+// changes nothing. One atomic write under the store's own mutex.
+// slug fills a created subscription's display name.
+func (s *subStore) Adopt(chat, wi, slug, target string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var (
+		inherited *protocol.ChatSub
+		tc        *chatDoc
+	)
+	if target != "" {
+		if tc = s.chatLocked(target, false); tc != nil {
+			inherited = tc.Records[wi]
+		}
+	}
+	c := s.chatLocked(chat, true)
+	delete(c.Muted, wi) // adopt mirrors the explicit subscribe that clears the mark
+	sub := c.Subs[wi]
+	if sub == nil {
+		sub = &protocol.ChatSub{WI: wi, Slug: slug}
+		c.Subs[wi] = sub
+	} else if sub.Slug == "" && slug != "" {
+		sub.Slug = slug // a subscription recorded before its slug was known
+	}
+	// the adopter's subscription is a wake target of its own record now
+	sub.OriginChat, sub.OwnerRouted = "", false
+	if inherited != nil {
+		if inherited.Cursor > sub.Cursor {
+			sub.Cursor = inherited.Cursor // events either side consumed never replay
+		}
+		sub.Notified = unionNotified(sub.Notified, inherited.Notified)
+		sub.Done = sub.Done || inherited.Done
+		if tc != nil {
+			delete(tc.Records, wi) // consumed: one delivery record, one place
+		}
+	}
+	for id, other := range s.doc.Chats {
+		if id == chat {
+			continue
+		}
+		if o := other.Subs[wi]; o != nil && o.OwnerRouted {
+			o.OriginChat = chat
+		}
+	}
+	return s.persistLocked()
+}
+
+// unionNotified answers the union of two delivered-key sets, deduped
+// and sorted (the adopter's record = its own ∪ the inherited keys).
+func unionNotified(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, keys := range [][]string{a, b} {
+		for _, k := range keys {
+			if !seen[k] {
+				seen[k] = true
+				out = append(out, k)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// HoldsSubscription reports whether the chat holds a subscription to
+// the WI (a muted chat never does — mute is the dropped subscription's
+// shadow). In-memory only, no persist; the adopt route's live-target
+// refusal reads it.
+func (s *subStore) HoldsSubscription(chat, wi string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.holdsLocked(chat, wi)
 }
 
 // Seen records that the chat's watcher is polling now.
@@ -202,8 +372,10 @@ func (s *subStore) Settled(chat, wi string) bool {
 }
 
 // Unsubscribe drops the chat's subscription to wi and mutes wi, so the
-// owner routing does not re-add it. Reports whether a subscription was
-// dropped.
+// owner routing does not re-add it. The dropped subscription's delivery
+// record (cursor, delivered keys, done) is RETAINED on the chat:
+// a later adopter inherits it, so nothing the chat already saw replays
+// after a handover. Reports whether a subscription was dropped.
 func (s *subStore) Unsubscribe(chat, wi string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -211,6 +383,12 @@ func (s *subStore) Unsubscribe(chat, wi string) (bool, error) {
 	had := c.Subs[wi] != nil
 	if !had && c.Muted[wi] {
 		return false, nil
+	}
+	if sub := c.Subs[wi]; sub != nil {
+		if c.Records == nil {
+			c.Records = map[string]*protocol.ChatSub{}
+		}
+		c.Records[wi] = sub
 	}
 	delete(c.Subs, wi)
 	if c.Muted == nil {
@@ -222,23 +400,101 @@ func (s *subStore) Unsubscribe(chat, wi string) (bool, error) {
 
 // List answers the chat's subscriptions, sorted by WI. An owner-routed
 // one whose origin chat holds a subscription is answered with that
-// record, Passive unless this chat is the WI's wake target now.
+// record, Passive unless this chat is the WI's wake target now. A WI
+// whose origin chat is gone (unsubscribed or none) and whose workspace
+// holds a live subscribed chat scopes its decision wake: the
+// eligible chats are wake targets of their own records with Adoptable
+// set (the adopt hint flag), every other owner-routed subscriber is
+// Passive, and an explicit subscriber stays a wake target of its own
+// record, untouched. With an empty eligible set today's owner-wide
+// semantics apply unchanged — every subscribed chat wakes its own
+// record, no Passive, no flag, no new output.
 func (s *subStore) List(chat string) []protocol.ChatSub {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []protocol.ChatSub{}
-	if c := s.chatLocked(chat, false); c != nil {
-		for _, sub := range c.Subs {
-			cp := *sub
-			if o := s.recordLocked(sub); o != sub {
-				cp.Cursor, cp.Notified, cp.Done = o.Cursor, o.Notified, o.Done
-				cp.Passive = !s.fallbackLocked(chat, sub)
+	c := s.chatLocked(chat, false)
+	if c == nil {
+		return out
+	}
+	scoped := map[string]*scopedWake{}
+	for _, sub := range c.Subs {
+		cp := *sub
+		if o := s.recordLocked(sub); o != sub {
+			cp.Cursor, cp.Notified, cp.Done = o.Cursor, o.Notified, o.Done
+			cp.Passive = !s.fallbackLocked(chat, sub)
+		} else if w, ok := s.scopedWakeOfLocked(scoped, sub.WI); ok && w.any {
+			// the WI's origin is gone and its workspace holds a live
+			// subscribed chat: the decision wake is scoped
+			if w.eligible[chat] {
+				// this chat IS one of them: a wake target of its own
+				// record, flagged for the adopt hint
+				cp.Adoptable = true
+			} else if sub.OwnerRouted {
+				// an owner-routed subscriber outside the eligible set:
+				// Passive — the owner-wide fanout is what stops
+				cp.Passive = true
 			}
-			out = append(out, cp)
+			// an explicit subscriber stays a wake target of its own
+			// record, untouched (design ruling 5)
 		}
+		out = append(out, cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].WI < out[j].WI })
 	return out
+}
+
+// scopedWake is the scoped-broadcast fact set of one WI.
+type scopedWake struct {
+	// eligible: the chat ids holding a subscription to the WI, tagged
+	// with its project-mapping workspace, live (chatLiveFor). A muted
+	// chat holds no subscription, so it is excluded by construction.
+	// Evaluated per poll: state-backed decisions persist until acted
+	// on, and a same-workspace chat that becomes live later joins then —
+	// for decisions not delivered yet (an eligible chat's ack marks a
+	// delivered one delivered for the Passive subscribers too, see Ack).
+	eligible map[string]bool
+	// any: the eligible set is non-empty — the scoped broadcast fires;
+	// empty falls back to today's owner-wide semantics.
+	any bool
+}
+
+// scopedWakeOfLocked answers the scoped-broadcast facts of one WI,
+// cached per List answer; ok=false when its origin chat is NOT gone
+// (there is one and it holds a subscription to the WI — the
+// wake-target model's record sharing applies, and after an adopt the
+// condition is false by construction: the adopter IS the origin and
+// holds the subscription, so no further scoped broadcast fires). A
+// bare store (no scope resolvers) answers not-gone: today's semantics.
+func (s *subStore) scopedWakeOfLocked(cache map[string]*scopedWake, wi string) (*scopedWake, bool) {
+	if w, ok := cache[wi]; ok {
+		return w, w != nil
+	}
+	var w *scopedWake
+	if s.scope.originChat != nil && s.scope.workspace != nil {
+		if origin := s.scope.originChat(wi); origin == "" || !s.holdsLocked(origin, wi) {
+			ws := s.scope.workspace(wi)
+			eligible := map[string]bool{}
+			if ws != "" {
+				for id, c := range s.doc.Chats {
+					if c.Subs[wi] != nil && c.Workspace == ws && s.liveLocked(id) {
+						eligible[id] = true
+					}
+				}
+			}
+			w = &scopedWake{eligible: eligible, any: len(eligible) > 0}
+		}
+	}
+	cache[wi] = w
+	return w, w != nil
+}
+
+// holdsLocked reports whether the chat holds a subscription to the WI
+// (the store-internal half of HoldsSubscription; a muted chat never
+// does — mute is the dropped subscription's shadow).
+func (s *subStore) holdsLocked(chat, wi string) bool {
+	c := s.chatLocked(chat, false)
+	return c != nil && c.Subs[wi] != nil
 }
 
 // recordLocked answers the delivery record a subscription reads and
@@ -285,6 +541,20 @@ func (s *subStore) liveLocked(chat string) bool {
 // Ack records a watcher's progress in the subscription's record (the
 // origin chat's for an owner-routed one, see recordLocked); unknown WIs
 // are ignored (the subscription may have been removed meanwhile).
+//
+// Under a scoped decision wake an eligible chat's ack also
+// lands in the record of every owner-routed subscriber outside the
+// eligible set — the Passive ones, which never ack themselves — the way
+// an ack lands in a shared record: cursor max, delivered keys set to the
+// acker's (still-pending keys only, so a key that cleared is pruned and
+// its recurrence fires again), done or. What the scoped audience
+// delivered is then delivered for them too, durably, in the same atomic
+// write. The eligible set is volatile (liveness, the runtime's in-memory
+// scope facts); the delivered keys are not, so a later owner-wide
+// fallback (a daemon restart, every eligible chat gone quiet) prints only
+// what the scoped audience has not delivered — the shared-record
+// semantics of a live origin. Explicit subscribers and the other
+// eligible chats keep their own records, untouched.
 func (s *subStore) Ack(chat string, a protocol.ChatAck) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -294,6 +564,21 @@ func (s *subStore) Ack(chat string, a protocol.ChatAck) error {
 	}
 	sub := s.recordLocked(c.Subs[a.WI])
 	sub.Cursor, sub.Notified, sub.Done = a.Cursor, a.Notified, a.Done
+	if sub == c.Subs[a.WI] {
+		if w, ok := s.scopedWakeOfLocked(map[string]*scopedWake{}, a.WI); ok && w.eligible[chat] {
+			for id, other := range s.doc.Chats {
+				o := other.Subs[a.WI]
+				if o == nil || !o.OwnerRouted || w.eligible[id] || s.recordLocked(o) != o {
+					continue
+				}
+				if sub.Cursor > o.Cursor {
+					o.Cursor = sub.Cursor
+				}
+				o.Notified = append([]string(nil), sub.Notified...)
+				o.Done = o.Done || sub.Done
+			}
+		}
+	}
 	return s.persistLocked()
 }
 
