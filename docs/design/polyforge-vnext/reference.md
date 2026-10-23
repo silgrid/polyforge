@@ -329,7 +329,8 @@ retired step `kind:`, `interactive:`, `tools:`); `name`/`description` are unread
 | `steps[].budget.wall_minutes` | estimate: T = max(3 × wall_minutes, `--step-timeout`) |
 
 Load-time rules (`validateWorkflow`): non-empty unique ids; `on_fail` only on gates and pointing
-earlier; `context_policy` ∈ {inherit, fresh}, gates fresh. `requires_human_answer` ∈ {true, false,
+earlier; `context_policy` ∈ {inherit, fresh}, gates fresh; `mechanical_fix` only on the
+`verification` entry (polyforge#261). `requires_human_answer` ∈ {true, false,
 if_asked} is enforced by its YAML decoder; candidates are validated in `driver.New` and, before the
 claim, against the daemon checkout (`common/workflow.CheckCandidates`: unprefixed candidates or a
 `harness` key → `DAEMON-414`, WI stays queued). Rewind bounds ≤0 fall back to 4 / 2. Step file frontmatter: only `output:` (draft-07 JSON Schema in YAML) is

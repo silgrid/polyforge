@@ -92,6 +92,7 @@ The frontmatter declares no inter-step input wiring, no `cwd` and no ordering ke
 | V3 | the array order is the sole execution order (guaranteed structurally, no separate check) |
 | V5 | `on_fail` appears only on a `gate: true` step; `target` exists and its array position is strictly earlier than this step |
 | V11 | `context_policy` ∈ `inherit`\|`fresh`; `gate: true` must be `fresh` |
+| V12 | `mechanical_fix` appears only on the `verification` step entry (polyforge#261) |
 
 Also: `requires_human_answer` accepts only `true`/`false`/`if_asked`; candidates are validated by `harness.ParseCandidate` when the driver is built (`driver/driver.go`). Deleted rule numbers (V1, V4, V6–V10) are not reused; the result envelope's "V4 command-evidence gate" is unrelated to them and remains in force.
 
