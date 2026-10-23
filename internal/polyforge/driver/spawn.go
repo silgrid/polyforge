@@ -168,6 +168,13 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 			parts.LightRecheck = lightRecheckSection(a.BundleDir, sp.LightRecheck)
 		} else {
 			parts.MechanicalClassify = mechanicalFixSection(a.BundleDir, "Classification duty (an armed full verification FAIL)")
+			// polyforge#260: the ESCALATED full re-run carries the escalation
+			// note beside the classification duty (an escalated full FAIL may
+			// be classified mechanical again) — never beside the light section
+			// (no marker, no light dispatch).
+			if sp.EscalatedRecheck {
+				parts.EscalatedRecheck = lightEscalationNote
+			}
 		}
 	}
 	// H3 (polyforge#164): the declared output schema rides the prompt —
@@ -427,6 +434,12 @@ type promptParts struct {
 	// beside the untouched step definition (polyforge#260); "" = an
 	// ordinary (full) dispatch.
 	LightRecheck string
+	// EscalatedRecheck is the escalation note the ESCALATED full
+	// verification re-run's prompt carries as its own section
+	// (polyforge#260: the light path failed and fell back to this full
+	// verification in place; it owes the report's fast-lane section);
+	// "" = an ordinary dispatch.
+	EscalatedRecheck string
 	// Reference is the previous attempt's transcript path (a fresh retry
 	// carries it as read-only reference material; "" = none).
 	Reference string
@@ -515,6 +528,15 @@ func assembleStepPrompt(p promptParts) string {
 	if p.LightRecheck != "" {
 		b.WriteString("\n# Light recheck (the mechanical fast lane)\n\n")
 		b.WriteString(p.LightRecheck)
+		b.WriteString("\n")
+	}
+	// The escalation note (polyforge#260): the ESCALATED full re-run's
+	// own section - the light path failed and fell back to this full
+	// verification in place, and it owes the report's fast-lane section
+	// the light recheck that would have written it never settled to write.
+	if p.EscalatedRecheck != "" {
+		b.WriteString("\n# Escalated full verification (the mechanical fast lane)\n\n")
+		b.WriteString(p.EscalatedRecheck)
 		b.WriteString("\n")
 	}
 	if p.PriorRejection != "" {
@@ -829,6 +851,28 @@ func h2Section(body []byte, heading string) string {
 	}
 	return strings.TrimSpace(b.String())
 }
+
+// lightEscalationNote is the escalation note the ESCALATED full
+// verification re-run's prompt carries as its own section
+// (polyforge#260): a light-path failure (a malformed classification, a
+// repair outside the mechanical bound, or a light recheck that did not
+// pass) escalated in place to this full verification. The re-run owes
+// the report's fast-lane section — the light recheck that would have
+// written it never settled (or never dispatched) to write it.
+const lightEscalationNote = `This verification re-run is the ESCALATED full mode of the mechanical
+fast lane (polyforge#260): a light-path failure - a malformed
+classification, a repair outside the mechanical bound, or a light
+recheck that did not pass - escalated in place to this full verification
+(execution.json archives the escalation attempt, cause
+light_recheck_escalated, with the reason and the audit facts). Run the
+full bar exactly as the step definition demands; nothing changes there.
+Additionally write the fast-lane section of artifacts/verification-report.md:
+what was skipped on the light path (the full bar's scope beyond the bound
+commands, and the authored acceptance scenarios), on what grounds it was
+skipped (the mechanical classification), the bound (per failed check its
+repo, its exact command and the files it named), the escalation's reason
+(archived with the attempt), and your own full-bar results that supersede
+the light path.`
 
 // lightRecheckSection renders the light recheck's own prompt section
 // (polyforge#260): the bound commands per repo (byte-faithful, inside

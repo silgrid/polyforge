@@ -11,6 +11,7 @@ package driver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,12 +130,16 @@ func TestMeasureRepairDiff(t *testing.T) {
 	// the breaks, each answering a reason that names it
 	broken := func(name, want string, breakIt func(repo string)) {
 		t.Helper()
-		r := gitRepo(t, dir, "app2-"+strings.ToLower(name), map[string]string{"main.go": "v1\n", "other.go": "o\n"})
+		repoName := "app2-" + strings.ToLower(name)
+		// the bound names the repo it measures (every bound repo must carry
+		// a diff base - the fail-closed rule the missing-base case pins)
+		repoBound := mechBoundOf(t, fmt.Sprintf(`[{"check":"lint","repo":%q,"command":"gofmt -l .","files":["main.go"]}]`, repoName))
+		r := gitRepo(t, dir, repoName, map[string]string{"main.go": "v1\n", "other.go": "o\n"})
 		b := headOf(t, r)
 		breakIt(r)
 		runGit(t, r, "add", "-A")
 		runGit(t, r, "commit", "-q", "-m", "break")
-		if _, reason := measureRepairDiff(bound, map[string]string{"app2-" + strings.ToLower(name): b}, reposDir); reason == "" {
+		if _, reason := measureRepairDiff(repoBound, map[string]string{repoName: b}, reposDir); reason == "" {
 			t.Errorf("%s: the broken bound held", name)
 		} else if !strings.Contains(reason, want) {
 			t.Errorf("%s: reason %q, want it to name %q", name, reason, want)
@@ -182,6 +187,14 @@ func TestMeasureRepairDiff(t *testing.T) {
 	// an unreadable base sha breaks it (fail-closed)
 	if _, reason := measureRepairDiff(bound, map[string]string{"app": "0000000000000000000000000000000000000000"}, reposDir); reason == "" {
 		t.Errorf("an unreadable diff base must break the bound")
+	}
+	// a bound repo with NO diff base entry (its HEAD was unreadable at
+	// the FAIL verdict's settlement) is never measured — fail closed,
+	// never open
+	if _, reason := measureRepairDiff(bound, map[string]string{}, reposDir); reason == "" {
+		t.Errorf("a bound repo without a diff base must break the bound (fail closed, never open)")
+	} else if !strings.Contains(reason, "no repair-diff base") {
+		t.Errorf("the missing-base reason: %q", reason)
 	}
 }
 
@@ -401,14 +414,46 @@ func TestRunBrokenRepairBoundEscalatesInPlace(t *testing.T) {
 	if !escalated {
 		t.Fatalf("no light_recheck_escalated attempt on verification (causes: %v)", attemptCauses(ver))
 	}
+	// the escalation's audit record (the spec's complete audit trail): the
+	// marker's bound and diff base, the measured (broken) diff, the
+	// escalation flag and the reason — archived in the attempt's result
+	// before the same write cleared the marker
+	audit := escalationAudit(t, ver)
+	assertEscalationAuditBound(t, audit)
+	if reason, _ := audit["reason"].(string); !strings.Contains(reason, "want a modification") {
+		t.Errorf("the escalation audit's reason = %q, want the broken-bound reason (modifications only)", audit["reason"])
+	}
+	if diff, _ := audit["diff"].(map[string]any); diff == nil {
+		t.Errorf("the escalation audit carries no measured diff: %s", canoJSON(audit))
+	}
+	if audit["recheck"] != nil {
+		t.Errorf("a pre-dispatch escalation never ran a recheck: %s", canoJSON(audit["recheck"]))
+	}
+	// the escalation event: exactly one light_recheck_escalated, carrying
+	// the reason — and never a rewind (the escalation charges no slot and
+	// routes no verdict)
+	escEvents := eventsOf(t, d, EvLightRecheckEscalated)
+	if len(escEvents) != 1 {
+		t.Fatalf("light_recheck_escalated events = %d, want exactly one (one event per escalation)", len(escEvents))
+	}
+	if det, _ := escEvents[0].body["detail"].(string); !strings.Contains(det, "want a modification") {
+		t.Errorf("the escalation event's detail = %q, want the broken-bound reason (modifications only)", det)
+	}
+	if n := len(eventsOf(t, d, "rewind")); n != 1 {
+		t.Errorf("rewind events = %d, want exactly one (the mechanical rewind's; the escalation never rewinds)", n)
+	}
 	// the escalated full pass records exactly as today: verified heads and
 	// its own test bar
 	heads, _ := ver.Output[verifiedHeadsKey].(map[string]any)
 	if heads == nil || heads["app"] == nil {
 		t.Fatalf("the escalated full pass recorded no verified head for app: %s", canoJSON(ver.Output[verifiedHeadsKey]))
 	}
-	if got := canoJSON(ver.Output["test_bar"]); got != canoJSON(ver.Output["test_bar"]) || got == "" {
-		t.Errorf("the escalated full pass's own test_bar: %s", got)
+	var wantBar any
+	if err := json.Unmarshal([]byte(`[{"repo":"app","command":"go test ./..."}]`), &wantBar); err != nil {
+		t.Fatal(err)
+	}
+	if got := canoJSON(ver.Output["test_bar"]); got != canoJSON(wantBar) {
+		t.Errorf("the escalated full pass's own test_bar = %s, want the fixture bar %s", got, canoJSON(wantBar))
 	}
 	// verification dispatched exactly twice: the FAIL verdict, the
 	// escalated full re-run (fresh) - no light dispatch
@@ -421,6 +466,9 @@ func TestRunBrokenRepairBoundEscalatesInPlace(t *testing.T) {
 	if len(vers) != 2 || vers[1].Resume {
 		t.Fatalf("verification dispatches %v, want 2 with the escalated full re-run fresh", vers)
 	}
+	if !vers[1].EscalatedRecheck {
+		t.Errorf("the escalated full re-run's dispatch must carry the escalation order (the prompt's escalation note)")
+	}
 }
 
 func attemptCauses(st *capsule.Step) []string {
@@ -429,6 +477,67 @@ func attemptCauses(st *capsule.Step) []string {
 		out = append(out, a.Cause)
 	}
 	return out
+}
+
+// eventsOf collects the driver's logged events of one kind (runEnv's
+// eventLog fake — the same log the daemon binding would carry them to).
+func eventsOf(t *testing.T, d *Driver, kind string) []loggedEvent {
+	t.Helper()
+	l, ok := d.log.(*eventLog)
+	if !ok {
+		t.Fatalf("runEnv's log is not the eventLog fake: %T", d.log)
+	}
+	var out []loggedEvent
+	for _, e := range l.entries {
+		if e.kind == kind {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// escalationAudit reads the light_recheck_escalated attempt's audit
+// record (its Result field) from one settled verification step — the
+// spec's complete audit trail: the marker's bound and diff base, the
+// measured diff, the recheck's own record, the escalation flag and the
+// reason.
+func escalationAudit(t *testing.T, ver *capsule.Step) map[string]any {
+	t.Helper()
+	for _, a := range ver.Attempts {
+		if a.Cause != CauseLightRecheckEscalated {
+			continue
+		}
+		if len(a.Result) == 0 {
+			t.Fatalf("the light_recheck_escalated attempt carries no audit record in result: %+v", a)
+		}
+		var audit map[string]any
+		if err := json.Unmarshal(a.Result, &audit); err != nil {
+			t.Fatalf("the escalation attempt's result is not JSON: %s", a.Result)
+		}
+		return audit
+	}
+	t.Fatalf("no light_recheck_escalated attempt on verification (causes: %v)", attemptCauses(ver))
+	return nil
+}
+
+// assertEscalationAuditBound checks the escalation audit's bound and
+// diff base: the FAIL verdict's own classification (copied verbatim into
+// the marker) and the FAIL-settlement base the marker carried.
+func assertEscalationAuditBound(t *testing.T, audit map[string]any) {
+	t.Helper()
+	var wantBound any
+	if err := json.Unmarshal([]byte(mechanicalBoundJSON), &wantBound); err != nil {
+		t.Fatal(err)
+	}
+	if got := canoJSON(audit["bound"]); got != canoJSON(wantBound) {
+		t.Errorf("the escalation audit's bound = %s, want the FAIL verdict's classification %s", got, mechanicalBoundJSON)
+	}
+	if db, _ := audit["diff_base"].(map[string]any); db == nil || db["app"] == nil {
+		t.Errorf("the escalation audit's diff_base = %s, want the marker's FAIL-settlement base", canoJSON(audit["diff_base"]))
+	}
+	if audit["escalated"] != true {
+		t.Errorf("the escalation audit's escalated = %v, want true", audit["escalated"])
+	}
 }
 
 // TestRunLightRecheckFailVerdictEscalates: a light recheck that does not
@@ -476,6 +585,42 @@ func TestRunLightRecheckFailVerdictEscalates(t *testing.T) {
 	}
 	if _, has := ver.Output[mechanicalPassKey]; has {
 		t.Fatalf("an escalated full pass must not carry mechanical_pass: %s", canoJSON(ver.Output))
+	}
+	// the escalation's audit record: the recheck's own recorded checks ride
+	// it (the recheck ran), beside the marker's bound, diff base and the
+	// re-measured (empty) repair diff
+	audit := escalationAudit(t, ver)
+	assertEscalationAuditBound(t, audit)
+	if reason, _ := audit["reason"].(string); !strings.Contains(reason, "still red") {
+		t.Errorf("the escalation audit's reason = %q, want the recheck's own fail reason", audit["reason"])
+	}
+	if diff, _ := audit["diff"].(map[string]any); diff == nil {
+		t.Errorf("the escalation audit carries no measured diff: %s", canoJSON(audit))
+	} else if diff["files"] != float64(0) || diff["lines"] != float64(0) {
+		t.Errorf("the escalation audit's diff = %s, want the measured empty repair diff (nothing was repaired)", canoJSON(diff))
+	}
+	var wantChecks any
+	if err := json.Unmarshal([]byte(`[{"name":"lint","status":"fail","detail":"still red"}]`), &wantChecks); err != nil {
+		t.Fatal(err)
+	}
+	if got := canoJSON(audit["recheck"]); got != canoJSON(wantChecks) {
+		t.Errorf("the escalation audit's recheck = %s, want the light recheck's own recorded checks %s", got, canoJSON(wantChecks))
+	}
+	// the escalation event: exactly one light_recheck_escalated, carrying
+	// the recheck's own fail reason — never a rewind, never a second
+	// gate_verdict (the recheck's FAIL verdict is not a gate judgment)
+	escEvents := eventsOf(t, d, EvLightRecheckEscalated)
+	if len(escEvents) != 1 {
+		t.Fatalf("light_recheck_escalated events = %d, want exactly one (one event per escalation)", len(escEvents))
+	}
+	if det, _ := escEvents[0].body["detail"].(string); !strings.Contains(det, "still red") {
+		t.Errorf("the escalation event's detail = %q, want the recheck's own fail reason", det)
+	}
+	if n := len(eventsOf(t, d, "rewind")); n != 1 {
+		t.Errorf("rewind events = %d, want exactly one (the mechanical rewind's; a recheck-FAIL escalation never rewinds)", n)
+	}
+	if n := len(eventsOf(t, d, "gate_verdict")); n != 1 {
+		t.Errorf("gate_verdict events = %d, want exactly one (the FAIL verdict's; the recheck FAIL escalates, never a gate verdict)", n)
 	}
 }
 
@@ -573,5 +718,58 @@ func TestLightRecheckPromptCarriesLightSection(t *testing.T) {
 	}
 	if !strings.Contains(p.InitialPrompt, s.Text) {
 		t.Errorf("the light recheck prompt must show the light output schema")
+	}
+}
+
+// TestEscalatedFullRerunPromptCarriesEscalationNote (polyforge#260): the
+// ESCALATED full verification re-run's prompt carries the escalation note
+// (the report's fast-lane section duty - the light recheck that would have
+// written it never settled) beside the classification duty (an escalated
+// full FAIL may be classified mechanical again) - and no light section
+// (no marker, no light dispatch).
+func TestEscalatedFullRerunPromptCarriesEscalationNote(t *testing.T) {
+	capDir := capsuleWithShippedBundle(t, "feature-full")
+	shared, _ := filepath.Glob(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "steps", "*.md"))
+	shared = append(shared, filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "mechanical-fix.md"))
+	shared = append(shared, filepath.Join(shippedWorkflowsDir, workflow.SharedDir, workflow.PrinciplesFile))
+	for _, p := range shared {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rel, _ := filepath.Rel(shippedWorkflowsDir, p)
+		writeCapsuleFile(t, capDir, "workflows/"+filepath.ToSlash(rel), string(raw))
+	}
+	sp := &captureSpawner{}
+	ad, err := NewStepSpawnAdapter(StepSpawnAdapter{
+		WI:           WIInfo{ID: "wi_esc", CapsuleDir: capDir, BundleName: "feature-full", SessionHandle: "ab12cd34"},
+		Spawner:      sp,
+		PollInterval: 2 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewStepSpawnAdapter: %v", err)
+	}
+	if _, err := ad.SpawnStep(context.Background(), StepSpawn{
+		StepID: "verification", SpawnN: 9, EscalatedRecheck: true,
+	}); err != nil {
+		t.Fatalf("SpawnStep escalated full re-run: %v", err)
+	}
+	p, _ := sp.last()
+	for _, want := range []string{
+		"# Escalated full verification (the mechanical fast lane)",
+		"escalated in place to this full verification",
+		"write the fast-lane section of artifacts/verification-report.md",
+	} {
+		if !strings.Contains(p.InitialPrompt, want) {
+			t.Errorf("the escalated full re-run's prompt lost %q", want)
+		}
+	}
+	// the classification duty still rides (an escalated full FAIL may be
+	// classified mechanical again); no light section (no marker)
+	if !strings.Contains(p.InitialPrompt, "# Mechanical classification (this lane is armed)") {
+		t.Errorf("the escalated full re-run must keep the classification duty")
+	}
+	if strings.Contains(p.InitialPrompt, "# Light recheck (the mechanical fast lane)") {
+		t.Errorf("the escalated full re-run is not a light dispatch")
 	}
 }

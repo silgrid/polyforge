@@ -282,6 +282,11 @@ func TestTransitionMechanicalSelfReportRewindsFreshSameSlot(t *testing.T) {
 		}
 	}
 	mechFailAt(2)
+	// the mechanical rewind set the pending light recheck marker on the
+	// gate — the self-report's fresh rewind must clear it in the same write
+	if readExec(t, execPath).Steps[verificationStepID].PendingLightRecheck == nil {
+		t.Fatalf("the mechanical rewind must set the light recheck marker first")
+	}
 	// the mechanical light re-entry starts (consuming the order) and
 	// self-reports a structural fix (the fix must leave the bound).
 	mustStart(t, d, "code", 3)
@@ -311,6 +316,13 @@ func TestTransitionMechanicalSelfReportRewindsFreshSameSlot(t *testing.T) {
 	// the fresh re-entry re-derives from scratch: no resume order
 	if lightRewindContext(st.Attempts) {
 		t.Fatalf("the self-report's fresh rewind must not order a resume: %+v", st.Attempts)
+	}
+	// the self-report's same write clears the pending light recheck marker
+	// on the gate (the marker lives on the gate, outside the range the
+	// self-report archives): a stale marker would make the gate's next
+	// dispatch a light recheck over a fresh re-derivation's bound
+	if marker := exec.Steps[verificationStepID].PendingLightRecheck; marker != nil {
+		t.Fatalf("the mechanical self-report's fresh rewind must clear the pending light recheck marker: %+v", marker)
 	}
 }
 

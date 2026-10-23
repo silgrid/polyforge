@@ -364,7 +364,7 @@ func (d *Driver) Run(ctx context.Context) error {
 		// marker peek under the lock, the bound coverage validation and
 		// the deterministic repair-diff measurement outside it. A malformed
 		// classification or a broken repair bound escalates IN PLACE, in
-		// the same dispatch, instead of a light dispatch: the loop re-plans
+		// the same step, instead of a light dispatch: the loop re-plans
 		// and re-dispatches the step in full mode (the existing full
 		// verification, unchanged).
 		esc, err := d.prepareLightRecheck(stepID)
@@ -662,11 +662,12 @@ func (d *Driver) plan(ctx context.Context) (stop bool, stepID string, err error)
 // measurement (git). A malformed classification or a broken repair bound
 // escalates IN PLACE: the TransLightEscalate transition instead of a
 // light dispatch (no rewind slot, no rewind input — the loop re-plans and
-// re-dispatches the step in full mode), answering escalated=true. No
-// marker answers (false, nil): an ordinary dispatch. Idempotent by
-// construction: the same marker, FAIL verdict and repo state always
-// derive the same verdict, so an interrupted light recheck re-dispatches
-// and replays (or escalates) with no half state.
+// re-dispatches the step in full mode), answering escalated=true; the
+// measured diff (when one was measurable) rides the request as the
+// escalation audit's fact. No marker answers (false, nil): an ordinary
+// dispatch. Idempotent by construction: the same marker, FAIL verdict
+// and repo state always derive the same verdict, so an interrupted light
+// recheck re-dispatches and replays (or escalates) with no half state.
 func (d *Driver) prepareLightRecheck(stepID string) (escalated bool, err error) {
 	d.mu.Lock()
 	st := d.exec.Steps[stepID]
@@ -700,9 +701,11 @@ func (d *Driver) prepareLightRecheck(stepID string) (escalated bool, err error) 
 			reason = "the mechanical classification does not cover the FAIL verdict's failed checks: " + r
 		}
 	}
+	var measured *lightDiff
 	if reason == "" {
-		if _, r := measureRepairDiff(bound, marker.DiffBase, reposDir); r != "" {
+		if diff, r := measureRepairDiff(bound, marker.DiffBase, reposDir); r != "" {
 			reason = "the repair diff breaks the bound: " + r
+			measured = &diff // the partial measurement is the escalation audit's fact
 		}
 	}
 	if reason == "" {
@@ -710,6 +713,7 @@ func (d *Driver) prepareLightRecheck(stepID string) (escalated bool, err error) 
 	}
 	if err := d.transition(TransitionRequest{
 		Kind: TransLightEscalate, StepID: stepID, Reason: reason, SpawnN: d.currentSpawnN(),
+		LightEscalationDiff: measured,
 	}); err != nil {
 		return false, fmt.Errorf("driver: step %s light-path escalation failed: %w", stepID, err)
 	}
@@ -767,6 +771,17 @@ func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
 			if bound, err := parseMechBound(st.PendingLightRecheck.Bound); err == nil {
 				sp.LightRecheck = &LightRecheckOrder{Bound: bound, DiffBase: st.PendingLightRecheck.DiffBase}
 			}
+		}
+		// polyforge#260: a verification step whose ledger's latest
+		// non-infra_failure archived attempt is the light path's in-place
+		// escalation is the ESCALATED full re-run — the dispatch carries
+		// the escalation order (the prompt's escalation note: the report's
+		// fast-lane section duty, which the light recheck that would have
+		// written it never settled to write). The order is that ledger
+		// fact (the escalation write archived it), the light re-entry's
+		// resume pattern; the full re-run's own accepted attempt ends it.
+		if escalatedRecheckContext(st.Attempts) {
+			sp.EscalatedRecheck = true
 		}
 	}
 	// the in-process rejection retry lane: the prior dispatch's
@@ -991,6 +1006,15 @@ type StepSpawn struct {
 	// definition, and the output schema shown is the light one. Nil = an
 	// ordinary (full) dispatch.
 	LightRecheck *LightRecheckOrder
+	// EscalatedRecheck, when set, makes this verification dispatch the
+	// ESCALATED full re-run of the mechanical fast lane (polyforge#260):
+	// the step's ledger's latest non-infra_failure archived attempt is
+	// the light path's in-place escalation (light_recheck_escalated). The
+	// prompt carries the escalation note (the report's fast-lane section
+	// duty) beside the untouched classification duty — an escalated full
+	// FAIL may be classified mechanical again. False = an ordinary
+	// dispatch.
+	EscalatedRecheck bool
 	// Done is the set of steps whose execution record is done (an
 	// inherit step's handoff producer must be one).
 	Done map[string]bool
@@ -1286,11 +1310,16 @@ func repoHeadShas(reposDir string) map[string]string {
 // re-measured at settlement (deterministic — the same measurement the
 // pre-dispatch phase made; nothing moves between, and a rogue change
 // breaks the bound here, fail-closed) and the task repos' HEADs — the
-// recheck heads the light-pass record carries. Nil unless this is a
-// completed verification result whose step holds the marker (the light
-// recheck's own claim).
+// recheck heads the light-pass record carries. Answered for a completed
+// verification result whose step holds the marker (the light recheck's
+// own claim — the light pass or its escalation) and for a gate_failed
+// one holding it (the recheck's own FAIL verdict — its escalation's audit
+// wants the same re-measured diff). Nil otherwise.
 func (d *Driver) lightSettleFactsOf(stepID string, res *StepResult) *lightSettleFacts {
-	if stepID != verificationStepID || res.Outcome != OutcomeCompleted || d.wi.CapsuleDir == "" {
+	if stepID != verificationStepID || d.wi.CapsuleDir == "" {
+		return nil
+	}
+	if res.Outcome != OutcomeCompleted && res.Outcome != OutcomeGateFailed {
 		return nil
 	}
 	d.mu.Lock()
@@ -1308,6 +1337,7 @@ func (d *Driver) lightSettleFactsOf(stepID string, res *StepResult) *lightSettle
 		facts.diffBroken = "the mechanical classification is malformed: " + err.Error()
 		return facts
 	}
+	facts.diffMeasured = true
 	reposDir := filepath.Join(d.wi.CapsuleDir, capsule.DirRepos)
 	var reason string
 	facts.diff, reason = measureRepairDiff(bound, marker.DiffBase, reposDir)

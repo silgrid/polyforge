@@ -144,10 +144,12 @@ func validateBoundCoverage(bound []mechBound, failOut map[string]any, reposDir s
 // bound-named file of that repo — any add, delete, rename or copy breaks
 // it, and so does any path outside the bound-named set — and the numstat
 // added+deleted lines and file counts sum across repos against the
-// hard-coded caps. It answers the measured diff and the escalation
-// reason ("" = the bound holds). Deterministic: the same base, HEAD and
-// bound always measure the same — running it twice (pre-dispatch and at
-// settlement) yields the same verdict.
+// hard-coded caps. Every BOUND repo must carry a diff base entry: a repo
+// whose HEAD was unreadable at the FAIL verdict's settlement is never
+// measured — fail closed, never open. It answers the measured diff and
+// the escalation reason ("" = the bound holds). Deterministic: the same
+// base, HEAD and bound always measure the same — running it twice
+// (pre-dispatch and at settlement) yields the same verdict.
 func measureRepairDiff(bound []mechBound, base map[string]string, reposDir string) (lightDiff, string) {
 	var diff lightDiff
 	boundFiles := map[string]map[string]bool{}
@@ -157,6 +159,14 @@ func measureRepairDiff(bound []mechBound, base map[string]string, reposDir strin
 		}
 		for _, f := range b.Files {
 			boundFiles[b.Repo][f] = true
+		}
+	}
+	// every bound repo must carry a diff base: a repo whose HEAD was
+	// unreadable at the FAIL verdict's settlement is never measured —
+	// fail closed, never open (the bound cannot be judged held)
+	for _, repo := range slices.Sorted(maps.Keys(boundFiles)) {
+		if _, ok := base[repo]; !ok {
+			return diff, fmt.Sprintf("repos/%s carries no repair-diff base (its HEAD was not recorded at the FAIL verdict's settlement); the bound cannot be measured", repo)
 		}
 	}
 	for _, repo := range slices.Sorted(maps.Keys(base)) {
@@ -306,14 +316,17 @@ func lightRecheckFailReason(out map[string]any) string {
 // (git I/O outside the transition lock): the repair diff re-measured at
 // settlement (deterministic — the same measurement the pre-dispatch phase
 // made; nothing moves between) with its escalation reason, and the task
-// repos' HEADs (the recheck heads the light-pass record carries). The
-// pure judgments (verdict pass, every check pass, every bound command
-// shown run with exit 0) are derived inside the settlement write from the
-// request's own data.
+// repos' HEADs (the recheck heads the light-pass record carries). A
+// gate_failed light recheck's facts carry only the re-measured diff — the
+// escalation audit's fact (the recheck's own FAIL verdict escalates
+// regardless of the measurement). The pure judgments (verdict pass, every
+// check pass, every bound command shown run with exit 0) are derived
+// inside the settlement write from the request's own data.
 type lightSettleFacts struct {
-	diff       lightDiff
-	diffBroken string // the re-measurement's escalation reason ("" = the bound holds)
-	heads      map[string]string
+	diff         lightDiff
+	diffMeasured bool   // the bound parsed and the diff was measured against it
+	diffBroken   string // the re-measurement's escalation reason ("" = the bound holds)
+	heads        map[string]string
 }
 
 // mechanicalPassKey is the driver-written output key of the light-pass
