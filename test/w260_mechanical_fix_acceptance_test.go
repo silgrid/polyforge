@@ -48,7 +48,7 @@ const w260BarCmd = "git diff --quiet HEAD"
 func w260Bound() []map[string]any {
 	return []map[string]any{{
 		"check": "lint", "repo": "demo", "command": w260BoundCmd,
-		"files": []string{"README"},
+		"files": []string{"work.txt"},
 	}}
 }
 
@@ -88,10 +88,10 @@ func w260FailVerdict() map[string]any {
 		}},
 		"output": map[string]any{
 			"verdict":     "fail",
-			"fail_reason": "lint: repos/demo README carries trailing whitespace (check lint)",
+			"fail_reason": "lint: repos/demo work.txt carries trailing whitespace (check lint)",
 			"checks": []map[string]any{
 				{"name": "build", "status": "pass"},
-				{"name": "lint", "status": "fail", "detail": "README carries trailing whitespace"},
+				{"name": "lint", "status": "fail", "detail": "work.txt carries trailing whitespace"},
 				{"name": "authored-scenarios", "status": "pass"},
 			},
 			"authored_titles":  []string{w260Title},
@@ -102,15 +102,17 @@ func w260FailVerdict() map[string]any {
 }
 
 // w260CodeRepair is code's light re-entry: an in-bound repair commit
-// (only the bound-named README, modifications only, well inside the
+// (only the bound-named work.txt — a file the claim commit already
+// tracks, so the repair diff is a modification, M — well inside the
 // caps) — the light recheck's repair-diff base is the FAIL-settlement
-// repo HEAD.
+// repo HEAD. (The fixture originally appended to an untracked README,
+// an add; the owner's answer (a) of 2026-10-23 authorized this shape.)
 func w260CodeRepair() map[string]any {
 	return map[string]any{"do": "envelope", "id": "code", "outcome": "completed", "handoff": true,
 		"run": []string{
-			"cd repos/demo && printf 'linted\\n' >> README && git add README && " +
+			"cd repos/demo && printf 'linted\\n' >> work.txt && git add work.txt && " +
 				"git -c user.name=pf -c user.email=pf@polyforge.invalid " +
-				"commit -q -m 'mechanical repair: README whitespace'",
+				"commit -q -m 'mechanical repair: work.txt whitespace'",
 		}}
 }
 
@@ -241,7 +243,7 @@ func w260AssertLightPass(t *testing.T, x *executionView) {
 		t.Errorf("mechanical_pass carries no measured diff: %s", w260JSON(mp))
 	} else {
 		if f, _ := diff["files"].(float64); f != 1 {
-			t.Errorf("mechanical_pass.diff.files = %v, want 1 (the in-bound README repair)", diff["files"])
+			t.Errorf("mechanical_pass.diff.files = %v, want 1 (the in-bound work.txt repair)", diff["files"])
 		}
 		if l, _ := diff["lines"].(float64); l < 1 {
 			t.Errorf("mechanical_pass.diff.lines = %v, want ≥ 1 (the repair commit's line)", diff["lines"])
