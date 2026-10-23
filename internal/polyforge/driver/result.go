@@ -244,8 +244,9 @@ type ResultSpec struct {
 	// (a light pass never writes verified_heads, so the repo carries no
 	// verified head at all).
 	LightRecheckHeads map[string]string
-	// LightRewind (polyforge#222): the step's latest non-infra_failure
-	// archived attempt is a light rewind (gate_fail_rewind_text_only) —
+	// LightRewind (polyforge#222, polyforge#260): the step's latest
+	// non-infra_failure archived attempt is a light rewind
+	// (gate_fail_rewind_text_only or gate_fail_rewind_mechanical) —
 	// this dispatch is that rewind's re-entry, so the completed result
 	// may carry the needs_code_change structural self-report. Assembled
 	// under the driver's lock from the same ledger the transition's

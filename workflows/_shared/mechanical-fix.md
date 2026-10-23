@@ -92,6 +92,9 @@ below). Your duties:
    command you run, as always.
 2. Do NOT re-run the full test bar, do NOT run the authored acceptance
    scenarios, do NOT modify any file - this step observes, it does not fix.
+   This light section OVERRIDES the step definition above it wherever the
+   two conflict: the definition describes the full verification's bar, and
+   none of it runs here beyond the bound commands.
 3. Confirm the semantic claims the classification rests on (for example
    that the failed check's findings name only the bound's files) in the
    report section of `artifacts/verification-report.md`: write the

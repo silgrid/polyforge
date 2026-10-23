@@ -160,7 +160,7 @@ gates, two distinct targets (`spec`, `code`). This section only explains
   light recheck that re-runs exactly the bound commands (no full bar, no authored
   scenarios) and confirms the semantic claims in its report. Any light-path failure —
   a malformed classification, a repair outside the bound, a recheck that does not
-  pass — escalates in place, in the same dispatch, to this same full verification
+  pass — escalates in place, in the same step, to this same full verification
   (no new rewind slot); a light pass writes no `verified_heads`, and `deliver` covers
   the tests only by re-running the carried `test_bar` in the merge dispatch,
   unconditionally. `review` then runs in full as the first review either way.
