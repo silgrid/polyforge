@@ -168,12 +168,14 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 			parts.LightRecheck = lightRecheckSection(a.BundleDir, sp.LightRecheck)
 		} else {
 			parts.MechanicalClassify = mechanicalFixSection(a.BundleDir, "Classification duty (an armed full verification FAIL)")
-			// polyforge#260: the ESCALATED full re-run carries the escalation
-			// note beside the classification duty (an escalated full FAIL may
-			// be classified mechanical again) — never beside the light section
-			// (no marker, no light dispatch).
+			// polyforge#261 NB5: the ESCALATED full re-run's escalation note
+			// renders from the shared fast-lane material (fail-closed: an
+			// absent section renders an empty prompt section) beside the
+			// classification duty (an escalated full FAIL may be classified
+			// mechanical again) — never beside the light section (no marker,
+			// no light dispatch).
 			if sp.EscalatedRecheck {
-				parts.EscalatedRecheck = lightEscalationNote
+				parts.EscalatedRecheck = mechanicalFixSection(a.BundleDir, "Escalated full re-run (the mechanical fast lane)")
 			}
 		}
 	}
@@ -851,28 +853,6 @@ func h2Section(body []byte, heading string) string {
 	}
 	return strings.TrimSpace(b.String())
 }
-
-// lightEscalationNote is the escalation note the ESCALATED full
-// verification re-run's prompt carries as its own section
-// (polyforge#260): a light-path failure (a malformed classification, a
-// repair outside the mechanical bound, or a light recheck that did not
-// pass) escalated in place to this full verification. The re-run owes
-// the report's fast-lane section — the light recheck that would have
-// written it never settled (or never dispatched) to write it.
-const lightEscalationNote = `This verification re-run is the ESCALATED full mode of the mechanical
-fast lane (polyforge#260): a light-path failure - a malformed
-classification, a repair outside the mechanical bound, or a light
-recheck that did not pass - escalated in place to this full verification
-(execution.json archives the escalation attempt, cause
-light_recheck_escalated, with the reason and the audit facts). Run the
-full bar exactly as the step definition demands; nothing changes there.
-Additionally write the fast-lane section of artifacts/verification-report.md:
-what was skipped on the light path (the full bar's scope beyond the bound
-commands, and the authored acceptance scenarios), on what grounds it was
-skipped (the mechanical classification), the bound (per failed check its
-repo, its exact command and the files it named), the escalation's reason
-(archived with the attempt), and your own full-bar results that supersede
-the light path.`
 
 // lightRecheckSection renders the light recheck's own prompt section
 // (polyforge#260): the bound commands per repo (byte-faithful, inside

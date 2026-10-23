@@ -263,7 +263,10 @@ func TestRunMechanicalFastLaneSettlesLightPass(t *testing.T) {
 		}
 	}
 	lightPass := fakeEntry{res: &StepResult{Outcome: OutcomeCompleted,
-		Output:          json.RawMessage(`{"verdict":"pass","checks":[{"name":"lint","status":"pass"}]}`),
+		// NB4 (polyforge#261): the forged step-supplied mechanical_pass
+		// must be stripped and the driver-written record kept — the delete
+		// sits before the light-settle write below it.
+		Output:          json.RawMessage(`{"verdict":"pass","checks":[{"name":"lint","status":"pass"}],"mechanical_pass":{"forged":true}}`),
 		CommandEvidence: json.RawMessage(`[{"argv":["sh","-c","cd repos/app && gofmt -l ."],"exit_code":0,"duration_ms":5}]`)}}
 	sp.script = []fakeEntry{
 		done(`{}`),                         // code's first round
@@ -377,7 +380,11 @@ func TestRunBrokenRepairBoundEscalatesInPlace(t *testing.T) {
 		}
 	}
 	fullPass := fakeEntry{res: &StepResult{Outcome: OutcomeCompleted,
-		Output:          json.RawMessage(`{"verdict":"pass","checks":[{"name":"build","status":"pass"},{"name":"lint","status":"pass"},{"name":"authored-scenarios","status":"pass"}],"test_bar":[{"repo":"app","command":"go test ./..."}]}`),
+		// NB4 (polyforge#261): the forged step-supplied mechanical_pass on
+		// the completed verification result must be stripped (the pass is
+		// the ESCALATED full re-run's, not a light pass — no driver-written
+		// record exists to keep).
+		Output:          json.RawMessage(`{"verdict":"pass","checks":[{"name":"build","status":"pass"},{"name":"lint","status":"pass"},{"name":"authored-scenarios","status":"pass"}],"test_bar":[{"repo":"app","command":"go test ./..."}],"mechanical_pass":{"forged":true}}`),
 		CommandEvidence: json.RawMessage(`[{"argv":["sh","-c","cd repos/app && go test ./..."],"exit_code":0,"duration_ms":50}]`)}}
 	sp.script = []fakeEntry{
 		done(`{}`),
@@ -622,6 +629,13 @@ func TestRunLightRecheckFailVerdictEscalates(t *testing.T) {
 	if n := len(eventsOf(t, d, "gate_verdict")); n != 1 {
 		t.Errorf("gate_verdict events = %d, want exactly one (the FAIL verdict's; the recheck FAIL escalates, never a gate verdict)", n)
 	}
+	// NB3 (polyforge#261): the in-place escalation is not a review round
+	// — review_rounds[verification] keeps exactly the armed FAIL's single
+	// full-gate evaluation, with no second entry from the recheck's own
+	// FAIL verdict.
+	if n := exec.ReviewRounds[verificationStepID]; n != 1 {
+		t.Fatalf("review_rounds[verification] = %d, want 1 (the armed FAIL alone; the escalation is not a round)", n)
+	}
 }
 
 // TestLightOutputSchemaCompiles (polyforge#260): the shared fast-lane
@@ -721,12 +735,15 @@ func TestLightRecheckPromptCarriesLightSection(t *testing.T) {
 	}
 }
 
-// TestEscalatedFullRerunPromptCarriesEscalationNote (polyforge#260): the
-// ESCALATED full verification re-run's prompt carries the escalation note
-// (the report's fast-lane section duty - the light recheck that would have
-// written it never settled) beside the classification duty (an escalated
-// full FAIL may be classified mechanical again) - and no light section
-// (no marker, no light dispatch).
+// TestEscalatedFullRerunPromptCarriesEscalationNote (polyforge#260,
+// provenance single-sourced by polyforge#261 NB5): the ESCALATED full
+// verification re-run's prompt carries the escalation note — rendered
+// from the shared material's `Escalated full re-run (the mechanical fast
+// lane)` section (workflows/_shared/mechanical-fix.md — the report's
+// fast-lane section duty - the light recheck that would have written it
+// never settled) beside the classification duty (an escalated full FAIL
+// may be classified mechanical again) - and no light section (no
+// marker, no light dispatch).
 func TestEscalatedFullRerunPromptCarriesEscalationNote(t *testing.T) {
 	capDir := capsuleWithShippedBundle(t, "feature-full")
 	shared, _ := filepath.Glob(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "steps", "*.md"))
@@ -757,6 +774,9 @@ func TestEscalatedFullRerunPromptCarriesEscalationNote(t *testing.T) {
 	p, _ := sp.last()
 	for _, want := range []string{
 		"# Escalated full verification (the mechanical fast lane)",
+		// NB5 (polyforge#261): the body now renders from the shared
+		// material's own section, not a Go const.
+		"the ESCALATED full mode of the mechanical",
 		"escalated in place to this full verification",
 		"write the fast-lane section of artifacts/verification-report.md",
 	} {

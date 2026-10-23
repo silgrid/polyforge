@@ -339,6 +339,28 @@ func TestParseMechanicalFixSwitch(t *testing.T) {
 	}
 }
 
+// TestValidateMechanicalFixPlacement (polyforge#261 NB7): the
+// mechanical_fix switch is a verification-entry-only key. Loading a
+// workflow that arms it anywhere else must fail loud at load time —
+// before NB7 the flag parsed and was then silently ignored everywhere
+// it matters (spawnStep gates on the verification step id).
+func TestValidateMechanicalFixPlacement(t *testing.T) {
+	for name, front := range map[string]string{
+		"non-verification":          "steps:\n  - { id: code, mechanical_fix: true }\n  - { id: verification, gate: true, context_policy: fresh }\n",
+		"gate but not verification": "steps:\n  - { id: review, gate: true, context_policy: fresh, mechanical_fix: true }\n",
+	} {
+		wf, err := parseWorkflow([]byte(front))
+		if err != nil {
+			t.Fatalf("%s: parse: %v", name, err)
+		}
+		err = validateWorkflow(wf)
+		if err == nil || !strings.Contains(err.Error(), "mechanical_fix") {
+			t.Fatalf("%s: must be refused, got %v", name, err)
+		}
+	}
+	mustParseExt(t, "steps:\n  - { id: code }\n  - { id: verification, gate: true, context_policy: fresh, mechanical_fix: true }\n")
+}
+
 // TestShippedMechanicalFixArming (polyforge#260): the fast lane ships
 // default-off — feature-full's verification step entry declares
 // mechanical_fix: true and no other shipped bundle's does.
