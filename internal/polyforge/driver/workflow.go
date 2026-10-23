@@ -201,7 +201,10 @@ func parseWorkflow(front []byte) (*Workflow, error) {
 // gate steps that are not fresh (a gate must judge on its own declared
 // inputs, never on an inherited persuasive context), and an on_fail that is
 // not on a gate or whose target is not an earlier step of the workflow
-// (otherwise the mistake would only surface at the gate's first FAIL).
+// (otherwise the mistake would only surface at the gate's first FAIL),
+// and mechanical_fix on any step entry other than the verification
+// gate (the switch arms a verification-only fast lane — see
+// spawnStep — and was silently ignored anywhere else).
 func validateWorkflow(wf *Workflow) error {
 	if wf == nil || len(wf.Steps) == 0 {
 		return fmt.Errorf("driver: workflow has no steps")
@@ -225,6 +228,9 @@ func validateWorkflow(wf *Workflow) error {
 		if s.Gate && s.ContextPolicy != ContextFresh {
 			return fmt.Errorf("driver: gate step %q must run context_policy: %s (found %q)",
 				s.ID, ContextFresh, s.ContextPolicy)
+		}
+		if s.MechanicalFix && s.ID != verificationStepID {
+			return fmt.Errorf("driver: step %q declares mechanical_fix — the switch belongs to the verification step entry alone", s.ID)
 		}
 		if s.OnFail != nil {
 			if !s.Gate {
