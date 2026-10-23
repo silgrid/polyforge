@@ -204,3 +204,47 @@ func TestProjectsOf(t *testing.T) {
 		t.Fatalf("zero-project workspace = %#v, want non-nil empty", got)
 	}
 }
+
+// TestMatchWorkspace pins the cwd→workspace resolution: a mapped
+// root and any subdirectory of it resolve to the root; among nested
+// mappings the longest prefix wins; an unmapped cwd answers "" (the
+// chat is minted untagged).
+func TestMatchWorkspace(t *testing.T) {
+	root := t.TempDir()                 // a mapped root
+	deep := filepath.Join(root, "deep") // a SECOND mapped root inside it
+	other := t.TempDir()                // an unrelated mapped root
+	p, err := Build([]Entry{
+		{Workspace: root, Projects: []string{"p1"}},
+		{Workspace: deep, Projects: []string{"p2"}},
+		{Workspace: other, Projects: []string{"p3"}},
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	for _, tc := range []struct {
+		cwd  string
+		want string
+	}{
+		{root, root}, // the root itself
+		{filepath.Join(root, "repos", "x"), root}, // any subdirectory
+		{deep, deep}, // the nested root itself
+		{filepath.Join(deep, "capsules", "g"), deep},  // under both: longest wins
+		{filepath.Join(root, "repos"), root},          // under the parent only
+		{other, other},                                // the unrelated root
+		{filepath.Join(t.TempDir(), "elsewhere"), ""}, // unmapped
+		{filepath.Dir(root) + "-sibling", ""},         // a string-prefix non-match
+	} {
+		if got := p.MatchWorkspace(tc.cwd); got != tc.want {
+			t.Errorf("MatchWorkspace(%q) = %q, want %q", tc.cwd, got, tc.want)
+		}
+	}
+	// a dirty cwd path resolves after Clean
+	if got := p.MatchWorkspace(filepath.Join(root, "capsules", "..", "repos")); got != root {
+		t.Errorf("MatchWorkspace(uncleaned) = %q, want %q", got, root)
+	}
+	// a nil / empty plan answers "" (unmapped)
+	var nilPlan *Plan
+	if got := nilPlan.MatchWorkspace(root); got != "" {
+		t.Errorf("nil plan MatchWorkspace = %q, want \"\"", got)
+	}
+}

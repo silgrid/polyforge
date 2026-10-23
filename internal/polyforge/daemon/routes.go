@@ -178,6 +178,12 @@ func (d *Daemon) routes() *http.ServeMux {
 	mux.HandleFunc("GET /chats/{id}/subscriptions", d.subscriptionsRoute)
 	mux.HandleFunc("POST /chats/{id}/subscribe", d.subscribeRoute(true))
 	mux.HandleFunc("POST /chats/{id}/unsubscribe", d.subscribeRoute(false))
+	// `pf watch adopt <wi>`: an eligible same-workspace chat
+	// takes over the WI's wake-target role. A POST outside the step-write
+	// allowlist: the whole UDS face sits behind refuseStepOrigin, so a
+	// step process tree is refused DAEMON-403 by construction — adopt
+	// runs only on an explicit human request, never automatic.
+	mux.HandleFunc("POST /chats/{id}/adopt", d.adoptRoute)
 	mux.HandleFunc("POST /chats/{id}/ack", d.ackRoute)
 	mux.HandleFunc("POST /chats/{id}/subscribe-owned", d.subscribeOwnedRoute)
 	// the step agent's memory face (stepmem.go), scoped to the calling
@@ -690,6 +696,122 @@ func (d *Daemon) shutdownRoute(w http.ResponseWriter, r *http.Request) {
 	// returns when it finishes (reference.md §6.2).
 	writeJSON(w, http.StatusOK, map[string]any{"shutting_down": true})
 	go func() { _ = d.Shutdown(context.Background(), cause) }()
+}
+
+// adoptRoute serves POST /chats/{id}/adopt {"wi"} — `pf watch adopt
+// <wi>`: an eligible same-workspace chat takes over the WI's
+// wake-target role. Eligibility, in order:
+//
+//  1. a locally held job record (every state whose decisions can still
+//     fire — running / paused / needs_input): DAEMON-404 otherwise (a
+//     sealed-and-dropped WI has no wake-target role left to take over);
+//  2. the WI's project-mapping workspace (job record Project → the
+//     [workspace] inverse): DAEMON-412 when unmapped;
+//  3. the adopting chat's workspace tag (the tag store): untagged or
+//     another workspace's tag is a DAEMON-400 refusal naming the WI's
+//     workspace — never a silent subscribe degradation, no mutation;
+//  4. the current wake target (the job record's origin chat, the same
+//     field a resume rewrites): the adopter itself, while it still
+//     holds its subscription to the WI, is an idempotent success with
+//     no state change — a self re-adopt after the chat unsubscribed is
+//     NOT one (a bare success answer would leave the chat unsubscribed
+//     and muted, its retained record unconsumed and the scoped
+//     broadcast firing): it runs the full surgery, which with
+//     target == chat inherits the chat's own retained record,
+//     re-creates the subscription and clears the mute; a target that
+//     still holds a subscription to the WI is a DAEMON-409 refusal
+//     naming its chat id; an absent origin ("" — a chat-less submit, a
+//     missing origin record) is eligible — nothing to inherit but the
+//     adopter's own record.
+//
+// The surgery runs chat-subs FIRST (one atomic write: the record union,
+// the owner-routed re-route) and the job record's origin rewrite SECOND
+// (decision 7's order): a crash between them leaves the pre-adopt
+// scoped broadcast firing — every recipient is still an eligible
+// same-workspace live subscribed chat, nothing is lost and nothing
+// reaches an ineligible chat; a re-run of the adopt by the adopter
+// completes the rewrite idempotently. The reverse order would leave
+// the old owner-wide fanout permanently resurrected — strictly worse.
+// Origin.Owner is untouched: owner routing keys on the owner, never
+// the chat.
+//
+// The whole eligibility-and-surgery sequence runs serialized under
+// adoptMu (see adopt): two concurrent adopts can never interleave their
+// read-check-act sequences — the origin field would otherwise name one
+// adopter while the re-pointed subscriptions name the other.
+//
+// Step reachability: a POST outside the step-write allowlist — the
+// step-origin guard (refuseStepOrigin) refuses a step process tree with
+// DAEMON-403 by construction, so a step agent can never adopt; only a
+// human session's chat may (docs/reference/uds-routes.md).
+func (d *Daemon) adoptRoute(w http.ResponseWriter, r *http.Request) {
+	id, ok := chatID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		WI string `json:"wi"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.WI) == "" {
+		writeErr(w, api.ErrDaemonBadInput, "wi is required")
+		return
+	}
+	ans, err := d.adopt(id, d.canonWI(strings.TrimSpace(body.WI)))
+	if err != nil {
+		writeErrOf(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ans)
+}
+
+// adopt is the adopt route's serialized half: the eligibility
+// reads and both writes run under adoptMu, start to finish, so two
+// concurrent adopts can never interleave (the route answers outside
+// the lock — no I/O under it). The refusals are typed api errors the
+// route surfaces verbatim (writeErrOf); the surgery's order and crash
+// window are adoptRoute's (decision 7).
+func (d *Daemon) adopt(id, wi string) (protocol.ChatAdoptAnswer, error) {
+	d.adoptMu.Lock()
+	defer d.adoptMu.Unlock()
+	ji, live := d.rt.Info(wi)
+	if !live {
+		return protocol.ChatAdoptAnswer{}, &api.Error{Code: api.ErrDaemonNotFound,
+			Detail: "work item is not running on this daemon"}
+	}
+	ws, err := d.cfg.Mapping.WorkspaceFor(ji.Project)
+	if err != nil {
+		return protocol.ChatAdoptAnswer{}, &api.Error{Code: api.ErrDaemonUnmappedProject, Detail: err.Error()}
+	}
+	if tag := d.subs.WorkspaceOf(id); tag != ws {
+		return protocol.ChatAdoptAnswer{}, &api.Error{Code: api.ErrDaemonBadInput, Detail: fmt.Sprintf(
+			"chat %s is tagged with workspace %q, not the work item's workspace %s — only a chat of the work item's workspace may adopt it (a chat is tagged by `pf chat init` from its session cwd; re-init the chat from that workspace)",
+			id, tag, ws)}
+	}
+	target := ""
+	if ji.Origin != nil {
+		target = ji.Origin.ChatID
+	}
+	slug := d.slugOf(wi)
+	if id == target && d.subs.HoldsSubscription(id, wi) {
+		// a self re-adopt while the chat still holds its subscription:
+		// idempotent success, no state change
+		return protocol.ChatAdoptAnswer{ChatID: id, WI: wi, Slug: slug, Adopted: true}, nil
+	}
+	if target != "" && d.subs.HoldsSubscription(target, wi) {
+		return protocol.ChatAdoptAnswer{}, &api.Error{Code: api.ErrDaemonConflict, Detail: fmt.Sprintf(
+			"the work item's wake target chat %s still holds a subscription to %s — it must unsubscribe before another chat may adopt",
+			target, api.DisplayName(slug, wi))}
+	}
+	if err := d.subs.Adopt(id, wi, slug, target); err != nil {
+		return protocol.ChatAdoptAnswer{}, err
+	}
+	if err := d.rt.AdoptOrigin(wi, id); err != nil {
+		return protocol.ChatAdoptAnswer{}, err
+	}
+	return protocol.ChatAdoptAnswer{ChatID: id, WI: wi, Slug: slug, Adopted: true}, nil
 }
 
 // refuseStepOrigin is the step-origin guard on the whole UDS face

@@ -1012,7 +1012,7 @@ migrates it in place; a second run changes nothing.
 
 `pf doctor` (and the installer's harness rows) now warn about v1
 polyforge artifacts still installed — the v1 aihub bridge as a pi package
-(`GMISWE/ieops-aihub`) or at `~/.pi/agent/extensions/polyforge/`, v1
+(`silgrid/polyforge`) or at `~/.pi/agent/extensions/polyforge/`, v1
 Claude skills (`using-polyforge`, `pf-*`) and v1 Claude plugins — and
 print one command line that first backs them up into
 `~/polyforge-v1-backup-<timestamp>/`, then removes them. Nothing is
@@ -1467,7 +1467,6 @@ Deploy aihub before upgrading `pf`: `pf wrap` of a work item with no
 bundle calls the new `POST /api/v1/work-items/{id}/wrap`, which an older
 hub answers with a bare 404 (the CLI then says to upgrade aihub first).
 No schema change.
-
 ## The watch summarize lane returns, demand-gated (polyforge#224)
 
 The transcript-delta watch summarize lane (deleted with the simplify era,
@@ -1607,3 +1606,64 @@ compatibility shim: external parsers of the submit answer must read the
 new fields. The human face prints the same facts as plain lines.
 
 No schema change, no aihub change; the upgrade is the `pf` binary alone.
+
+## Wake-target handover: chat workspace tags, scoped decision wake, `pf watch adopt`
+
+Three changes ride together; all of them are the `pf` binary alone (no
+schema change, no aihub change).
+
+**The chat workspace tag.** Every `pf chat init` now tags the chat with
+the workspace its session cwd resolves to: the root itself or any
+subdirectory of a `[workspace."<path>"]` mapping counts, nested mappings
+resolve by the longest prefix, and every init refreshes the tag from the
+current cwd (a resumed session that moved directories re-tags). An
+unmapped cwd mints an untagged chat — it is neither adopt-eligible nor
+in the scoped wake below. The tag is recorded in the daemon's
+`chat-subs.json` (per chat id); the tag the daemon accepts must be in
+the daemon's own `[workspace]` mapping — a drift between the CLI's and
+the daemon's `cli.toml` is a DAEMON-400 refusal, never a silently useless
+tag. There is **no backfill**: a chat minted before this change carries
+no tag until its session's next `pf chat init` records one. `chats.json`
+— the (harness, session)→id identity map pi-web reads back — keeps its
+exact shape, and `pf chat init` still prints the bare chat id.
+
+**The scoped gone-origin decision wake.** When a work item's origin chat
+has unsubscribed (or the work item has none — chat-less submit, or a
+missing origin record), its decisions no longer wake every subscribed
+chat daemon-wide: they go immediately — no claim window — to exactly the
+chats that are tagged with the work item's project-mapping workspace,
+live, holders of a subscription, and not muted on that work item by that
+chat itself. Every other owner-routed subscriber of that work item sees
+progress only (Passive); explicit subscribers stay wake targets of their
+own records, untouched. With no eligible chat in the workspace at
+decision time, the previous owner-wide wake applies unchanged, with no
+new output. Both scope facts — the work item's origin chat and its
+workspace — survive the job's terminal close in the running daemon: a
+`completed` / `failed` / `blocked` decision stays scoped after the job is
+dropped. What an eligible chat delivers is also recorded, in the same
+`chat-subs.json` write, for every Passive owner-routed subscriber of that
+work item: their records mirror that chat's. A later owner-wide fallback
+(after a daemon restart, or once every eligible chat has gone quiet)
+therefore never prints it again in any other chat, while a decision that
+cleared and recurs (blocked again, a reused question id) counts as
+undelivered again. Only a decision no eligible chat delivered before such
+a fallback still reaches the owner-wide audience.
+
+**`pf watch adopt <wi>`.** An eligible same-workspace chat takes the
+wake-target role over: it becomes the work item's origin chat in every
+sense (the same origin field a resume rewrites), and its delivery record
+is the union of the origin's retained record and its own delivered keys —
+nothing replays. Adopt suppresses further scoped broadcasts for that work
+item (the adopter IS the origin), re-points every owner-routed subscriber
+— cross-workspace ones included — at the adopter, and leaves explicit
+subscribers untouched. Refusals answer the existing DAEMON-4xx family: a
+cross-workspace or untagged adopter gets DAEMON-400 naming the work item's
+workspace (never a silent subscribe), an adopt while the wake target is
+still subscribed gets DAEMON-409 naming its chat id, and a step process
+tree can never reach the route (DAEMON-403 by the existing step-origin
+guard — adoption runs only on an explicit human request, never
+automatic). Subscriptions answers gain the stored `owner_routed` mark
+(set by the owner routing; an explicit subscribe and the adopter's own
+subscription clear it) and the computed `adoptable` flag (the `passive`
+precedent: computed per answer, never stored) that the watcher turns
+into the one human-readable hint line on a scoped decision print.

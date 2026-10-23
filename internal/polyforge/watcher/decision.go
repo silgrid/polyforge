@@ -145,6 +145,17 @@ func (d Decision) Line() string {
 	return fmt.Sprintf("[polyforge] %s %s%s — %s; %s", safeID(api.DisplayName(d.Slug, d.WI)), d.Class, qid, d.Phrase, suffix)
 }
 
+// AdoptHintLine is the fixed-template hint line one scoped-broadcast
+// decision print carries: the WI's origin chat is gone, so its
+// decisions wake the live subscribed chats of its workspace, and an
+// eligible chat may take the wake-target role over. ONLY a hint —
+// adopt runs on an explicit user request, never automatic; the WI is
+// named by its display name through the same safeID filter every line
+// uses, so no free text ever rides it.
+func AdoptHintLine(slug, wi string) string {
+	return fmt.Sprintf("可用 `pf watch adopt %s` 接管", safeID(api.DisplayName(slug, wi)))
+}
+
 // AttentionLine is the fixed-template notice for the work items a
 // watcher's start subscribed that already hold a decision; wis are their
 // display names (slug, else id).

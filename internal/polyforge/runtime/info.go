@@ -104,6 +104,37 @@ func (j *job) info() JobInfo {
 	}
 }
 
+// wiScope is the wake-target scope of one work item: the
+// origin chat id and the project of its job record — the two facts the
+// scoped decision wake resolves a WI's audience from.
+type wiScope struct {
+	origin  string
+	project string
+}
+
+// ScopeOf answers the wake-target scope of a work item — the origin
+// chat id and the project of its job record — for a job the runtime
+// still holds (the live record) and for one it already dropped (the
+// retained facts of the record dropJob kept): a terminal close moves
+// the job to DONE and drops it (Info answers false then), and the
+// scoped decision wake must still resolve both facts after
+// it — the terminal decision is exactly the one that fires it. ok=false
+// when this runtime never held the work item. In-memory only: the
+// job's own mutex, then the table lock, no I/O under either.
+func (r *Runtime) ScopeOf(wi string) (originChat, project string, ok bool) {
+	if ji, held := r.Info(wi); held {
+		origin := ""
+		if ji.Origin != nil {
+			origin = ji.Origin.ChatID
+		}
+		return origin, ji.Project, true
+	}
+	r.mu.Lock()
+	sc, held := r.dropped[wi]
+	r.mu.Unlock()
+	return sc.origin, sc.project, held
+}
+
 // Persist rewrites state.json on demand. The daemon's graceful-shutdown
 // sequence calls it as its final durability step (reference.md §6.2: the persisted
 // bookkeeping must reflect reality before the process exits).

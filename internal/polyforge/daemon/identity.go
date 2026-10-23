@@ -26,6 +26,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
+	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
 
@@ -121,11 +122,13 @@ func (s *chatStore) Init(harness, session string) (chatRecord, error) {
 	return rec, nil
 }
 
-// chatInitRoute serves POST /chat/init {"harness","harness_session"}.
+// chatInitRoute serves POST /chat/init
+// {"harness","harness_session","workspace"}.
 func (d *Daemon) chatInitRoute(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Harness        string `json:"harness"`
 		HarnessSession string `json:"harness_session"`
+		Workspace      string `json:"workspace"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
@@ -138,12 +141,47 @@ func (d *Daemon) chatInitRoute(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, api.ErrDaemonBadInput, "harness_session is required")
 		return
 	}
+	// the chat's workspace tag — the root the CLI resolved the
+	// session cwd to. Validated against the daemon's own [workspace]
+	// mapping: a config drift between the CLI's and the daemon's
+	// cli.toml surfaces as a DAEMON-400 refusal, never a silently useless
+	// tag. "" = unmapped: the chat is recorded untagged (neither
+	// adopt-eligible nor in a scoped broadcast). Absent field = untagged
+	// too — no backfill for chats minted before the tag existed; their
+	// sessions record one on the next init (a re-init refreshes).
+	if body.Workspace != "" && !workspaceMapped(d.cfg.Mapping, body.Workspace) {
+		writeErr(w, api.ErrDaemonBadInput,
+			fmt.Sprintf("workspace %q is not in the [workspace] mapping of this daemon — the chat cannot be tagged with it (fix the cli.toml drift between the CLI and the daemon; `pf doctor` checks the mapping)", body.Workspace))
+		return
+	}
 	rec, err := d.chats.Init(body.Harness, body.HarnessSession)
 	if err != nil {
 		writeErr(w, api.ErrDaemonInternal, err.Error())
 		return
 	}
+	// the tag is recorded beside the identity: the chat exists in the
+	// tag store even untagged, and the refresh overwrites any earlier
+	// cwd's tag. chats.json — the (harness, session)→id identity map, the
+	// pi-web readback contract — keeps its exact shape.
+	if err := d.subs.TagWorkspace(rec.ChatID, body.Workspace); err != nil {
+		writeErr(w, api.ErrDaemonInternal, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, rec)
+}
+
+// workspaceMapped reports whether root is one of the plan's mapped
+// workspace roots (the daemon's own cli.toml [workspace] mapping).
+func workspaceMapped(p *mapping.Plan, root string) bool {
+	if p == nil {
+		return false
+	}
+	for _, ws := range p.Workspaces() {
+		if ws == root {
+			return true
+		}
+	}
+	return false
 }
 
 // reqOrigin is the optional "origin" a submit-family body carries: the

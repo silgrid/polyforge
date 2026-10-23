@@ -149,9 +149,19 @@ A work item's decisions wake ONE chat: the chat that submitted it. Your
 other chats (another tab, another session) show its progress only; if the
 submitting chat's watcher has been silent for a minute, one of them is woken
 instead, but only for decisions the submitting chat has not received — a
-decision is delivered once, in whichever chat printed it. A work item with no
-submitting chat (auto-pulled, a CLI submit without a chat, or one the
-submitting chat unsubscribed) wakes every chat of its owner. An explicit
+decision is delivered once, in whichever chat printed it. A work item with
+no submitting chat (auto-pulled, a CLI submit without a chat, or one the
+submitting chat unsubscribed) scopes its decision wake to the work item's
+own workspace: the live, subscribed, non-muted chats tagged with that
+workspace (`pf chat init` records the tag from the session cwd) are woken —
+each such line carries the hint 「可用 `pf watch adopt <wi>` 接管」 — while
+every other chat of the owner sees progress only; with no eligible chat in
+the workspace, every chat of the owner is woken as before. `pf watch adopt
+<wi>` (an eligible same-workspace chat only) takes the wake-target role
+over: the chat becomes the work item's origin chat and inherits the
+delivery record, so nothing already delivered replays. **Adopt runs ONLY on
+an explicit user request** — never adopt on your own, however inviting the
+hint line reads. An explicit
 `pf watch subscribe <wi>` makes this chat a wake target of its own, so a
 second chat subscribed that way is woken too. Decisions the work items found
 at the watcher's start already hold surface as
