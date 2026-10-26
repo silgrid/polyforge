@@ -1,0 +1,19 @@
+{"type":"system","subtype":"init","session_id":"0b9f6a52-3c1d-4e8f-9a7b-1c2d3e4f5a6b","tools":["Bash","Read","Edit","Write","Glob","Grep","TodoWrite","Agent"],"model":"claude-opus-5-5","permissionMode":"dontAsk","mcp_servers":[],"apiKeySource":"ANTHROPIC_AUTH_TOKEN"}
+{"type":"stream_event","event":{"type":"message_start","message":{"role":"assistant"}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"ping"},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Reading"}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"command\""}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":null}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"go test ./..."}}]},"parent_tool_use_id":null}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]},"parent_tool_use_id":null}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Agent","input":{"description":"review","prompt":"review the diff"}}]},"parent_tool_use_id":null}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_sub","name":"Read","input":{"file_path":"a.go"}}]},"parent_tool_use_id":"toolu_2"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sub","content":"..."}]},"parent_tool_use_id":"toolu_2"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"looks fine"}]},"parent_tool_use_id":null}
+{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":500,"error_status":429,"error":"rate_limit"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}
+{"type":"system","subtype":"task_started","task_id":"t1"}
+not json
+{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"0b9f6a52-3c1d-4e8f-9a7b-1c2d3e4f5a6b"}

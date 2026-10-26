@@ -1,0 +1,17 @@
+{
+  "name": "polyforge",
+  "version": "1.0.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "description": "Polyforge routing skill",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "skills": [
+      "./skills/polyforge"
+    ],
+    "extensions": [
+      "./skills/polyforge/extensions/pf-chat.ts"
+    ]
+  }
+}

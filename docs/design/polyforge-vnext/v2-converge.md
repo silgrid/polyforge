@@ -1,0 +1,663 @@
+# v2 convergence design: subtraction, the supervision restructuring, watch and the identity model
+
+> Status: **r3, all owner rulings folded in, awaiting review** (2026-10-12).
+> Source: the full discussion of the owner and the review session on 2026-10-12; r2 absorbed one independent deep review (25 holes + a historical-regression comparison, appendices A/B), and the owner agreed to its 18 patch defaults.
+> The scope this document replaces: the supervision lane of `archive/04-local-runtime.md#§6.2`, the watch/adoption-related descriptions in `archive/v1.5-session-model.md`, and `skills/polyforge/scripts/watch.sh`.
+> Landing progress: the designs of sections 2–8 have all landed (the supervision rewrite and the `pf watch` progress fields included); see the status column of section 8, the mapping of section 10 and the "Known gaps" at the end.
+> Landing method: **fast landing** — switch straight to the new design, with no phased "run old and new in parallel and observe → then delete the old" migration (owner 2026-10-12).
+
+---
+
+## 0. Positioning and rules (settled) <!-- §0 -->
+
+- polyforge is a **team-level multi-agent system** and will be open-sourced; stay restrained and do not add features in bulk.
+- The three core pillars: **tasks** (aihub WI), **memory** (project evolution and knowledge accumulation) and **workflow** (the team's unified task-handling norms) — the goal is for the team's agents to operate under one system like a single agent.
+- New features are frozen and subtraction comes first; ask the owner before any large change to existing logic; **the simpler the mental model the better** (a proposal is measured by "the number of concepts decreasing").
+- **Choosing the model per step** is a core capability and is kept; **choosing the harness per step** (pi / Claude Code / Codex) is to be done, after the subtraction.
+- **Trust model (owner ruling 2026-10-14, replacing the 2026-10-12 "agents are untrusted")**: polyforge is used only inside the team; harnesses (pi / Claude Code) are logged in by a human beforehand, the daemon only calls the CLI and **never manages login credentials**; no heavy isolation (a separate uid / bwrap and so on) — **#135 is frozen**, the design draft kept for reference. What must still be guarded against is **accidents**, not malice: an agent pushing to GitHub main (the 2026-10-13 #149 incident), publishing an unreviewed commit, a step agent answering its own human-gate question on a human's behalf (#122). Any mechanism in this document justified by "the agent is untrusted" is now to be read as an **accident guardrail**: guardrails already built and paid for are kept (the UDS step-process refusal of #122/V-1, the ls-tree check and hook-free push of #156, the temporary-repo carrier push of #158, the V4 evidence gate, the fixed-template wake-up), but they are no longer extended into adversarial defence. A step agent writing the capsule is by design (its result envelope is written by the daemon through `pf result submit` into `runtime-state/pending-results/`, polyforge#214), and that is not a defect.
+
+## 1. Business domain division <!-- §1 -->
+
+| Type | Domain | Main content |
+|---|---|---|
+| Mainline | Install and upgrade | install.sh (both install and upgrade rerun it), releases, aihub deployment |
+| Mainline | Team and permissions | users, keys, projects, member roles, the agent trust boundary |
+| Mainline | Task management and lifecycle | the WI state machine, dependencies, the ready queue, claim (the session lock), the blocked exit |
+| Mainline | Memory | storage and retrieval, recall/remember, the claim-time snapshot (`runtime-state/recalled-memories.json`: goal + labels as the query, a `match=any` ranked search of this project's memory taking the top 10; the driver injects it into every step prompt as "non-binding history", bounded; with no snapshot the section is not added) |
+| Mainline | Workflow definition | bundle, step, gate/rewind, choosing the model per step (in future: harness) |
+| Mainline | Execution | daemon, capsule, driver, concurrency, workspace mapping |
+| Mainline | Delivery | ship → git branch / PR (removed by polyforge#166: delivery is the workflows' deliver step. The driver checks the deliver step's recorded commands and the delivered history after the fact and escalates violations to a human; prevention rests on the step contract and the machine's local pre-push hook.) |
+| Cross-cutting | Human collaboration | ask/answer, pause/resume, progress visibility (`pf watch`) |
+| Cross-cutting | Reliability | supervision (judging death), recovery, session isolation, takeover |
+| Cross-cutting | Operations | doctor, backup, ops status, the event log |
+
+## 2. Execution and supervision <!-- §2 -->
+
+### 2.1 Division of labor (settled) <!-- §2.1 -->
+
+| Component | Responsibility | What it does not do |
+|---|---|---|
+| **driver** | executes the WI: dispatches step processes step by step, collects result files, advances `execution.json`, handles by cause of death, maintains failure counts | does not judge "alive but not advancing" |
+| **supervisor** (the former observe component, renamed to avoid confusion with the command) | observes execution dynamics, **judges whether a step is dead**, judges **whether the driver is stuck between steps**, re-validates M4 zombie sessions, records events, pushes progress to aihub, serves the query interface | does not advance execution |
+| **recovery engine** (runtime) | re-raises the driver after it exits abnormally; keeps bounded-failure semantics (several consecutive recovery failures → blocked; the only failure ledger is the "consecutive recovery failures" counter, cleared as soon as a step result is accepted) | does not judge whether a step is alive |
+| **`pf watch`** (CLI) | human-facing progress and decision notifications | makes no judgement |
+
+**Exception (settled)**: when a step process **exits without delivering a result**, the driver handles it directly (it can see this while waiting for the result), then informs the supervisor.
+
+### 2.2 The driver ↔ supervisor contract <!-- §2.2 -->
+
+Both live in the same `pf daemon` process.
+
+**Channel rules**
+- Real-time signals go through in-process channels: **one unbounded queue per WI, and the sender never blocks** (neither the supervisor's select loop nor the runtime's serial processing may be stuck by a delivery); **facts and verdicts must not be dropped**.
+- When the driver consumes a verdict it **must not do long operations such as network / git under a cross-WI lock** (so one WI's push cannot stall all WIs); the runtime locks per WI only across the network, and while the global task-table lock is held no I/O is done.
+- The harness's massive output **keeps only the latest state** (merged, not queued).
+- Persistence: `execution.json` is the **sole authority** (progress, pending questions, failure counts, relaxed thresholds, the terminal state); the event log is a **supplementary record** — driver events are written to it too (replacing the `stdLogger` that only printed to stderr), every event carries an id **monotonically increasing across restarts** (no longer renumbered from 1 at every restart), one file per WI; when the disk is full an event append failure only degrades to a log warning, and the authority remains in `execution.json`.
+- The supervisor no longer polls `execution.json` as the main path; pushing progress to aihub is now event-triggered and **failures retry with exponential backoff** (the F18/F22 lesson: there was once a storm of 185 pushes; see §14.1).
+- Transcript sync (F3) takes the most recent `step_started.transcript_path` as its source and syncs before commit. (Current state: the job-level live-transcript sync before wrap-up is **kept** — ruling C11, polyforge#150; implemented as `syncLiveTranscript` in `runtime/pitranscript.go` (restored in commit 24cde0d): when a job ends on the pause / bounded-fail / seal wrap-up paths, the currently dispatched step has not reached a commit boundary, and its live transcript would be lost unless synced before the wrap-up commit — syncing before wrap-up guarantees the transcript is on disk before the terminal state.)
+
+**driver → supervisor (facts)**
+
+| Event | Fields |
+|---|---|
+| `step_started` | step, spawn_n, model, harness, pid, transcript_path, started_at, this step's thresholds (relaxed values included, see 2.4) |
+| `step_waiting_human` / `step_answered` | step, spawn_n, question_id |
+| `step_ended` | step, spawn_n, outcome (delivered a result normally / exited without a result), exit_code, the last error signal |
+
+**supervisor → driver (verdicts)**
+
+| Event | Fields |
+|---|---|
+| `step_dead` | step, spawn_n, cause (see 2.3), evidence |
+| `driver_stalled` | the between-steps gap currently in, its duration |
+
+**Fencing and idempotency (r2 addition)**
+- The driver accepts only verdicts with `spawn_n == the current dispatch`; stale verdicts are dropped.
+- **At most one verdict and at most one failure record per dispatch**: once the driver receives a verdict, that dispatch enters the terminating state, and the process exit and any later verdicts of that dispatch are all ignored; after the supervisor issues a verdict for a dispatch it stays silent until `step_ended`.
+- The supervisor's state is **one copy per dispatch**: `step_started` creates it and `step_ended` discards it (the root-cause fix of the #124 wrongful kill where turn_duration did not reset across steps); **step-level accumulations** (the used portion of the total duration T) are persisted by the driver in `execution.json` and sent down with `step_started`.
+
+### 2.3 Death-judgement rules (supervisor) and handling by cause of death (driver) <!-- §2.3 -->
+
+For every dispatch the supervisor maintains: the dispatch moment, the time of the last "real output", whether a tool is currently executing (which, since when), whether it is waiting for a model reply (since when), and this dispatch's "tool time / model-wait time".
+
+**"Real output"**: only work-type events count as alive; UI-refresh types do not (the F15 lesson).
+
+**Death-judgement rules (when several hit at once, the lower number takes priority)**
+
+| # | Rule | Condition | Cause of death `cause` |
+|---|---|---|---|
+| ⓪ | No signal after start | no work-type signal within X after dispatch (the harness stuck at startup, stdout held by a grandchild process, and so on) | `harness_silent` |
+| ① | Stuck after the turn ends | the harness emits "turn ended" and still no result file after a 1-minute grace: error cause → `model_error` (switch candidate; but that turn's error text first goes through the same D7 classification as the exit path, see the table below and polyforge#162); normal end → `ended_without_result` (retry on the same model) | `model_error` / `ended_without_result` |
+| ② | Waiting for the model too long | waiting for a model reply, no output at all for more than X | `model_hung` |
+| ③ | A tool too long | some tool has not ended after Y | `tool_hung` |
+| ④ | Total duration exceeded | this step's **cumulative** run exceeds T | `step_timeout_long_task` (mostly spent in tools) or `step_timeout_slow_model` (mostly spent waiting for the model / single replies abnormally slow) |
+| — | Stuck between steps | the driver is in no step and not waiting for a human, for more than N minutes (e.g. a push git subprocess hung while still holding a lock) | `driver_stalled` |
+
+While waiting for a human's answer there is no step process and **no timing**.
+
+**Breakdown of "exited without a result" (found by the driver itself, r2 addition)**
+
+| Breakdown | Criterion | Handling |
+|---|---|---|
+| Model class | the error text hits the allowance/auth signature (401/403/auth failure/api key, quota / insufficient / billing / credit; Chinese: `余额不足` (balance insufficient) / `欠费` (account overdue) / `额度`·`配额` (allowance·quota) exhausted / `认证失败` (authentication failed) / `模型`·`接口` (model·interface) without permission, and so on) or the model name cannot be resolved, or the last signal before exit is "turn errored" and the text is not of the rate-limit class / upstream-transient class. The rule ① verdict (a turn that errored while the process is **alive**, pi rpc not exiting after an error) likewise sends that turn's error text into `classifyWaitFailure` (polyforge#162), and when it hits neither rate-limit nor upstream-transient it is still recorded as `model_error` and switches model | same as `model_error`: switch model (the F4 lesson: a model pin failure must advance the candidate). Allowance/auth text is judged first: one that also carries a 429 or connection-interrupt signature ("429 … exceeded your current quota", "insufficient balance … connection reset") still switches model at once |
+| Rate-limit class (polyforge#147 D7) | the error text hits a transient rate-limit signature (429 / rate limit / too many requests / overloaded; Chinese: `并发`…`过高` (concurrency … too high) / `请求过于频繁` (requests too frequent) / `请求过多` (too many requests) / `限流` (rate limiting) / `繁忙` (busy) and so on) and does not hit the allowance/auth signature | `rate_limited`: retry with backoff on the original model, the candidate pointer is not advanced, the failure count is not charged |
+| Upstream-transient class (wi_seWTgHeKtaa8) | the harness reports a corrupt upstream return or an interrupted upstream stream: tool-call arguments / JSON incomplete·truncated·malformed, an empty reply (0 tokens), upstream connection reset / refused / closed / EOF, the upstream stream ending before completion ("Upstream response stream ended before completion", polyforge#202; it must carry an upstream / provider / stream / connection subject, a bare "the model ended the turn" does not count); a gateway reply that names an upstream error **and** explicitly asks for a retry (`400: {"message":"The model request failed due to an upstream error. Please retry.",…}`, polyforge#227; judged by the conjunction of the two, regardless of the 400 status or invalid_request_error, and either alone is still model class); not hitting the allowance/auth and rate-limit signatures | `upstream_transient`: retry on the original model with the D7 backoff, **at most 2 times**, and the 3rd is archived as model class (`exit_model_class`) and switches model; the failure count is not charged. A bare "invalid …" (tool name, request argument), context overflow, and the driver's own local I/O errors (such as "read transcript: unexpected EOF") **do not** belong to this class |
+
+**Text classification order** (`classifyWaitFailure` in `driver/supervision.go`): machine class → clean exit after a normal turn end (`ended_without_result`) → allowance/auth (switch model) → rate limit (same model) → upstream-transient (same model, bound 2) → model name unresolvable (switch model) → turn errored (model class) → the rest. A non-process-exit (the driver's own failure) gets no upstream-transient matching. Chinese provider texts are covered likewise (polyforge#155): the allowance/auth class contains `余额不足` / `欠费` / `额度`·`配额` followed by `用尽` (exhausted) · `不足` (insufficient) · `超出` (exceeded) / `账户`…`停用` (account … disabled) / `鉴权失败` (authorization failed) / `认证失败` / `模型`·`接口`·API·`服务` (service) followed by `无权限` (no permission) and so on (a bare `权限不足` (insufficient permission) does not count, the local `权限不够` (insufficient permission) / `权限被拒绝` (permission denied) / `拒绝访问` (access denied) belong to machine class), and the rate-limit class contains `并发`…`过高`·`超限` (concurrency … too high · over the limit) / `并发超额` (concurrency over quota) / `请求过于频繁` (requests too frequent) / `请求频率` (request frequency) / `请求过多` / `限流` / `速率限制` (rate limit) / `繁忙` / `负载过高` (load too high); all are multi-character phrases (under CJK `(?i)` and `\b` are ineffective, and single characters are not used), and when both appear the allowance/auth class still wins (switch model).
+| Machine class | the driver's own I/O error (ENOSPC, EACCES and so on) or a host error reported by the translator | a machine problem |
+| The rest | — | retry on the same model |
+
+**The driver handles by cause of death (settled)**
+
+| Cause of death | Handling |
+|---|---|
+| Exit without a result (the rest) | retry on the same model |
+| `harness_silent` | retry on the same model |
+| `ended_without_result` | retry on the same model; the retry's prompt states explicitly that "the previous turn ended but no result envelope was written". A process that exits by itself with exit code 0 after a normal turn end and without a result also falls in this class (being killed / crashing is still exit-the-rest) |
+| `model_error`, `model_hung`, exit (model class) | switch to the next candidate model. Rule ①'s `model_error` (an errored turn of a live process) first passes the turn's error text through the same D7 classification as the exit path (polyforge#162): only rate-limit-class / upstream-transient-class text changes the failure record's cause to `rate_limited` / `upstream_transient` (retry on the original model, backoff counted into T, upstream-transient bound 2); machine-class signatures and all other text stay `model_error` (switch model). The cause of `step_dead` / the supervisor verdict is still `model_error`, and only the failure record (`step_failed`, the attempt) carries `rate_limited` / `upstream_transient` — deliberately so, pinned by `test/v2_live_error_turn_d7_test.go` |
+| `step_timeout_slow_model` | **relax T (doubled, written into `execution.json`), then switch to the next candidate model** (polyforge#147 D6): the new candidate runs under the **full relaxed allowance**, with the cumulative time carried over continuously but strictly below the doubled bound — it is never judged timed out at the instant it starts |
+| `rate_limited` (429 / rate limit / too many requests / overloaded / Chinese rate-limit text; allowance/billing/permission classes are not here and fall under model class and switch model) | **no model switch**: retry with backoff on the original model (polyforge#147 D7), backoff starting at 1s and doubling each time with a per-wait cap of 300s; **the backoff wait counts into the step's cumulative T**; **no separate retry-count cap**, the only bound is the step's cumulative T (once T is exhausted the existing timeout handling applies); **T is not relaxed** (only timeout-class causes relax); not charged to the failure count |
+| `upstream_transient` (a corrupt upstream return / an interrupted upstream stream, see the table above) | **no model switch**: retry on the original model with the same D7 backoff (starting at 1s and doubling, per-wait cap 300s, **the backoff counted into the step's cumulative T**), the candidate pointer is not advanced and the failure count is not charged; **after 2 consecutive occurrences** the 3rd is archived as `exit_model_class` → switch to the next candidate (the bound is counted only from the trailing consecutive `upstream_transient` in the attempts archive, so a driver after crash recovery reads the same remaining count) |
+| `tool_hung` | retry on the same model and **relax Y** (the same relaxing rule as T) |
+| `step_timeout_long_task` | retry on the same model (**no model switch**) and relax T (doubled and persisted); on another timeout → double T again and persist, then blocked (a human "continue" runs under the newly relaxed bound and does not time out at once on start) |
+| Machine problem | blocked, notify a human, no model switch |
+| Daemon restart | re-dispatch on the same model, **no failure charged** |
+| `driver_stalled` | terminate the current git/push subprocess and re-raise the driver (counted into the driver-abnormal-exit bound) |
+| The driver itself exits abnormally | the recovery engine re-raises it; **several consecutive recovery failures (the only ledger: the consecutive-recovery-failures counter) → blocked** — preventing the unbounded "crash → a restart is not charged → crash again" loop (the #97 lesson) |
+| The same step's failure count reaches the cap (default 3) | blocked, notify a human |
+
+**Candidates exhausted**: the pointer stays at the end, and later "switch model" counts as a same-model retry; the decision event notes "candidates exhausted".
+
+**Retry form**: the first retry continues the original conversation (resuming the original transcript); from the second on the conversation is reopened (fresh), with the last transcript as read-only reference input — so that a context-overflow-class error does not fail repeatedly on every model (the F13 family).
+
+**Failure count (r2 addition)**
+- Stored: in that step's field of `execution.json` (the attempts records carry a cause sub-kind).
+- Counted: every cause in the table above except "daemon restart", "rate-limit class `rate_limited`" (polyforge#147 D7: the backoff retry is constrained only by T) and "upstream-transient class `upstream_transient`" within its bound. **A rejected envelope is not counted** — since polyforge#147 C4 it no longer takes the "restart the driver after in-process retries are exhausted" escalation lane: if it is still non-conforming after 3 in-process retries → that step is directly blocked, reason code `result_invalid`, with no driver restart and no `on_fail` routing (rewind is reserved for review FAIL verdicts).
+- Cleared: a gate rewind back to that step, switching to a new candidate model, a human "continue".
+- An interruption triggered by a daemon restart is **not archived as a failure and does not advance the candidate pointer**; in general, an interrupted attempt never advances the candidate pointer. (Current state: the `FaultClass` classification layer has been deleted, replaced by the **cause-of-death rules** — only the model-class causes `model_error`, `model_hung`, `step_timeout_slow_model`, `exit_model_class` advance the candidate pointer; the pointer is reset at a gate_fail rewind; see `driver/candidates.go`, `driver/supervision.go`. Event bodies and attempts records carry `failure_cause`, and there is no more `fault_class`.)
+- (Current state: the candidate list has five priority levels, high to low: the manual list of `pf submit --models a,b,c` (kept only by this daemon, per WI, applying to every step of that WI; persisted with the submit queue, written at claim into the daemon data directory's `manual-models.json` (not into the capsule), and followed by this machine's daemon restart, recovery and a `pf resume` re-claim, deleted when the WI reaches a terminal state (wrapped/failed/canceled); a re-claim on another machine has no such list and uses that machine's own settings) > the workspace yaml file's `steps.<project>.<step-id>.models` (polyforge#169: configured per step id, the top-level key `steps:` replaces `models:`, the old `models:` is incompatible, refused at load with a migration hint, a same-named step shares one key across bundles; a key other than `default` must be a step id in the installed workflows, else DAEMON-414 refuses the claim and `pf doctor` reports it) > the bundle step's own `model_candidates` > `steps.<project>.default.models` > the bundle's `defaults.model_candidates` (polyforge#164: a step's own list outranks the project default, and the project default only backstops steps that did not choose a model themselves); advance/reset semantics unchanged. See `workspace/compose.go`.)
+- Failure handling executes per the cause-of-death table (the previous section); `PolicyFor` and the provider·host·operator·schema classification were deleted together with the FaultClass layer (`driver/supervision.go`).
+
+### 2.4 Thresholds (settled) <!-- §2.4 -->
+
+- X (⓪②), Y (③), T (④) and N (driver_stalled) have **global defaults**; a step can override only T (see the next item).
+- **A step's override of T reuses the existing `budget.wall_minutes`**, but it is an **estimate and not a hard cap** (polyforge#164: an estimate of ≤30 minutes has no effect under the formula below, every delivery bundle's has been deleted, and only the release bundle's `release: 45` remains → T=135): for a step that declares `wall_minutes`, the total duration bound is **T = max(3 × wall_minutes, the global `--step-timeout` default)**; undeclared, it is just the global default. No new key is added; X and Y have no step-level override (polyforge#147 C5 deleted `silence_minutes` / `tool_minutes`, and leftovers of these two keys in old bundles are silently ignored). The override value is pinned with the bundle at claim and takes effect for WIs claimed afterwards.
+- X's default is taken from the **output granularity** the harness translator declares: per-character granularity (output exists even while thinking) can be short (e.g. 10 minutes); whole-message granularity, or a model that does not return thinking content, calls for longer (e.g. 30 minutes). "The model does not return thinking content" is declared in the model configuration.
+- Y defaults to 30 minutes (the #83 lesson); T defaults to 60–90 minutes (the #117 lesson); N defaults to 10 minutes.
+- **Relaxing**: each relaxation doubles (relaxed bound = pre-relaxation bound × 2) and is written into `execution.json` (`steps.<id>.supervision.relaxed_wall_ms` / `relaxed_tool_ms`), carried over after a restart. **Only timeout-class causes of death relax T** (`step_timeout_slow_model` and `step_timeout_long_task` each relax once on every disposition, and the second `step_timeout_long_task` also doubles first and then blocks); switching model, a human continue and rate-limit backoff never relax (polyforge#147 D6).
+- T accumulates over the **whole step** (continuously across the step's several dispatches, across model switches and across human continues; since polyforge#147 D6 there is no "reopen the window" rebase any more — `runtime_base_ms` is deleted); it counts the agent's actual running time and **the waiting time of rate-limit backoff** (D7: a same-model retry is constrained only by T, owner ruling), while the wall-clock time spent waiting for a human answer (needs_input) is not counted. **Interrupted dispatches (D6, owner ruling)**: a dispatch that ends with a result or a failure is accounted in the same write; a dispatch canceled by an **operator pause** counts into no wall-clock time (whether it continues afterwards by a re-claim or by a live-holder's `operator resume`, the paused period is not counted either; on a re-claim, if the current dispatch is unsettled the driver first writes a `claim_reentry` that re-stamps `step_started_at`, and thereafter even if the system re-raises it, counting starts only from the claim moment); a dispatch that the **system** re-raises after a hang / stall / death **counts** into its running time — accounted by the successor driver's interrupted-archive write, from the start of that dispatch (or its previous archive) to the archive write (the recovery lane's processing time in between is counted too), so a hang→re-raise loop still reaches T. A daemon restart (`daemon_restart`) and an operator attach are lifecycle events and, like a pause, are not counted (downtime is not running time); the decision uses the runtime's `LifecycleCause` (the same table as the exemption table of the consecutive-recovery-failure budget), made at the daemon's `interruptedFromCause` (`daemon/daemon.go`), and the canceled driver itself writes nothing.
+- **A rewind rerun zeroes it**: when a gate FAIL rewinds back to a step, that step's cumulative T is zeroed (the old window's accounting stays with the archived attempt); the cumulative T of the gate step that initiated the rewind (not archived, staying in_progress) is likewise zeroed, and the re-entry is judged under a new window.
+
+### 2.5 The harness translator <!-- §2.5 -->
+
+Each harness has one translator that turns native events into standard signals: alive, waiting for the model, the model outputting (thinking / body), tool start (name + arguments), tool end, turn end (success / error), **process exit (exit code, last error)**. The supervisor recognizes only standard signals. **This is also the access point of "choosing the harness per step"**.
+
+| harness | Integration | Output while thinking | Verified against |
+|---|---|---|---|
+| pi | `--mode rpc` | ✅ `thinking_delta` | the local source `agent-loop.js` |
+| Claude Code | `-p --output-format stream-json --verbose --include-partial-messages` (always added by the driver) | ✅ | event names of the 2.1.296 binary |
+| Codex | **`codex app-server`** (JSON-RPC), **not `exec --json`** | ✅ `item/reasoning/textDelta` and so on | 0.162.1 source; `exec --json` filters out the start events of replies/thinking and has no increments |
+
+The first version implements only the pi translator; Claude Code / Codex land together with "choosing the harness per step", and the protocol is re-verified against the then-latest version when integrating.
+
+### 2.6 The result envelope, `context_policy` and `handoff` (finalized in polyforge#147) <!-- §2.6 -->
+
+**The result envelope = a minimal contract**: a step agent delivers **one** JSON object with `pf result submit`, the only delivery channel in the prompt (polyforge#214; hand-writing to disk is no longer described, and when the helper's delivery fails the agent reports it and ends the turn, taking the existing recovery lane of "process exited without a result", never switching to hand-writing). The agent gives only `outcome` + `output`, and `needs_input` also carries `question_id` + `question` (a step owing evidence also carries `command_evidence`); the daemon's `POST /step/result`, like `/step/memories`, identifies the step by the caller's process tree (reachable only by this daemon's step processes), refuses when the caller's own `wi_id` / `step_id` / `spawn_n` disagree with it, and also refuses light shape defects (non-JSON, an outcome outside the closed set, an `output` that is not an object, a needs_input lacking a legal question pair), writing no file on refusal; once passed, the daemon stamps the dispatch-identity fence (`wi_id` / `step_id` / `spawn_n`) and `submitted_at`, and writes it atomically to the conventional location `runtime-state/pending-results/<spawn_n>.json` (location and naming unchanged), a landing spot that neither the caller's cwd nor the harness sandbox can influence. When the driver collects it, a non-empty `wi_id` / `step_id` that is not this dispatch's is rejected as an identity mismatch. `protocol_version`, `result_id`, the `artifacts` hash manifest and the `handoff_ref` digest reference are **all deleted**, the driver no longer validates them, and lacking these old fields MUST NOT make a result non-conforming; the result_id leniency completion layer is deleted too, leaving no compatibility branch. **The V4 command-evidence gate is kept** (owner ruling; under the 2026-10-14 trust model it is an **accident guardrail** — guarding against an agent omitting or misreporting verification commands, with the evidence check staying in the driver): the completed result of a step owing evidence (declaring `requires_command_evidence: true`; the implicit rule by step id `verification` was deleted by ruling G10 of 2026-10-16) also carries `command_evidence: [{argv, exit_code, duration_ms}]` — at least one entry, argv non-empty, `duration_ms > 0`, else the envelope is rejected (the in-process retry lane); if any step's `command_evidence` is not a list, or contains a non-object / unparseable entry, the envelope is rejected (the same lane, the rejection reason naming that entry), with no partial retention; accepted evidence is written by the driver into `output.commands` (B10, a same-named key the step wrote itself is overwritten). The envelopes of other steps do not carry the field. **The committed-test-files gate** (polyforge#156, any step): when a completed result's `output.test_files` is non-empty, every path must be repo-relative, exist in at least one task repo, and be committed at HEAD in every task repo where it exists, else the envelope is rejected (the same in-process retry lane, the rejection reason naming the path) — resume restores a task repo only from `refs/pf-task/<name>` (HEAD), and an uncommitted file would be lost. **Declared output schema validation** (polyforge#164 H3): the `output:` in the step definition file frontmatter (a draft-07 JSON Schema, written in YAML) is both injected into the prompt (placed before the step body, so "per the schema above" holds) and mechanically validated by the driver against a completed result's `output` (an optional property whose value is `null` is treated as default). The release bundle's `release` and `deploy` steps are **validated by force** (polyforge#193 owner ruling; `outputSchemaEnforced`): a non-conforming result means the envelope is rejected (the same in-process retry lane), and their schema is the release verdict contract (the verdict an exact enum; pass carries version, release also carries commit and at least one artifacts_published; fail carries a non-empty fail_reason; deploy's defer carries no version / artifacts_published); a `defer` verdict is rejected on any step other than deploy. The other steps are in **record-only mode**: a non-conforming result does not reject the envelope and only records a durable `output_schema_violation` event (step, schema path, truncated validation error) — replaying recent real result.json files showed about 64% non-conforming (the agent had never seen the schema before). A schema declared but failing to load records an `output_schema_unloadable` event and writes stderr; on `release`/`deploy` a missing or unloadable schema means the result is rejected. **The `needs_code_change` self-report of a light re-entry** (polyforge#222, polyforge#260): a completed result's `needs_code_change` must be a boolean, and only a light re-entry — the step's ledger first holding a light rewind (the last non-`infra_failure` archived attempt being `gate_fail_rewind_text_only` or `gate_fail_rewind_mechanical`) — may carry it; a non-boolean value, or carrying it without the light context, gets the envelope rejected (the same in-process retry lane); the field is only the channel for self-reporting a structural fix (a fix outside the light kind's boundary — the text-only boundary, or the mechanical bound) and a normal completion does not carry it. **The pre-existing-failure boundary** (#164 S6): the repro check, an author step's `test_files` and bug-fix fix's `regression_test` can never be marked `pre_existing` (failing on base is by design for them, and an unfixed bug would be waved through as a pre-existing failure); a pre_existing check's detail must carry the base sha and at least one `pre_existing_failures` entry of the form `<repo-relative path>: <test name>` (the path compared exactly by full path or by directory-prefix path segments, with no substring matching); when a bug-fix's repro has reproduced, verification's pass must carry a check named repro with status pass; a violator's envelope is rejected (the same lane). **Written tests are immutable** (polyforge#164 H4): when a step declaring `test_files` (e2e-author / repro) is accepted, the driver records each task repo's HEAD in its `output.test_files_commit` (written only by the driver, a same-named key the step wrote itself is discarded); thereafter every completed step is mechanically compared on whether those files are identical between that commit and HEAD (equivalent to `git diff <author-commit>..HEAD -- <test_files>`, implemented with two `git ls-tree -r` calls, reusing #156's hardened git invocation), and any difference gets the envelope rejected — unless a human answer exists in that step's current attempt chain (the step believes the tests themselves are wrong and must raise it with needs_input), in which case the change becomes the new baseline (the driver writes the new HEAD back to the earlier author step's `test_files_commit`, so a later rewind of that step does not lose it) and a durable `authored_tests_rebaselined` event is recorded (listing the changed files). **Values of `requires_human_answer`**: `true` = a human answer is required before completion (feature-full grill-review); `if_asked` (polyforge#164 H11, autopilot grill) = the questions raised can be answered only by a human, and zero questions may complete directly, but the driver records a durable `human_gate_unasked` event, on which the watcher notifies the owner.
+
+**`context_policy` (a step key, `inherit`\|`fresh`, default `inherit`)**: declares a step's context relation to upstream. `inherit` = this step continues upstream's work: at dispatch the driver finds the **nearest earlier step that is done and declares `handoff: true`**, reads the handoff body from `artifacts/handoff-<step-id>.md` by path convention, and splices it verbatim into the "Handoff from step …" subsection of the dispatch prompt; `fresh` = start from zero, with no handoff body injected, and the upstream artifacts to read are fetched by artifact-path convention. A `gate: true` step is forced `fresh` — a gate judges only on its own input and does not inherit a leaning context.
+
+**`handoff` (a step key, bool, default false)**: a `true` step must write its handoff content to `artifacts/handoff-<step-id>.md` before wrapping up. **The path convention is the entire contract**: no digest, no byte count, no envelope field; the driver neither validates the handoff file's hash nor compares a manifest; when the handoff file is absent, the dispatch of the downstream inherit step merely lacks that subsection of body and it is not an envelope-level failure. The authoritative details are in `01-workflow-skills.md#§4.4a`.
+
+### 2.7 The isolation guarantee of the harness adapter layer (owner ruling A4, 2026-10-13) <!-- §2.7 -->
+
+**Forbidding a step agent from using harness background tasks is the responsibility of the harness adapter layer, not a discipline written into the prompt.** A background task lets a step leave activity outside its spawned process, distorting every supervision surface (death judgement, step end, spawn counting); constraining by "the rule says do not use it" binds only honest agents.
+
+The concrete mechanism of the pi adapter layer: a **dedicated step agent directory**. The daemon maintains `<harness-root>/step-agent/` (`--harness-root`, in production read by the daemon from cli.toml `[daemon] harness_root`, default `<data-dir>`; polyforge#171; the env fallback was deleted in G2 of 2026-10-16) and injects `PI_CODING_AGENT_DIR=<harness-root>/step-agent` when spawning every step process (sessions are placed separately at `PI_CODING_AGENT_SESSION_DIR=<harness-root>/step-agent-sessions/<dashified-capsule-dir>` — one directory per capsule, into which pi writes sessions flat, and which the live-transcript locator scans; polyforge#211). That directory is a **minimal snapshot** of the operator agent directory (`--operator-agent-dir`, in production read by the daemon from cli.toml `[daemon] operator_agent_dir`, default `~/.pi/agent`; configured but with no readable `auth.json`, startup is refused) — only `auth.json` (model-service credentials), `models.json` (model-service configuration, preserving the source file's permissions), `agents/` (sub-agent definitions) and `extensions/subagent/` (the sub-agent **tool** itself), and **no `settings.json`**, while user-level packages (for example `npm:pi-background-tasks`, which provides the background-task tool) are declared exactly in `settings.json`: without the declaration there is no loading, and the background-task tool is **mechanically invisible** to the step agent, regardless of the prompt.
+
+- **How the sub-agent tool is delivered**: it is not a pi built-in tool but the extension `extensions/subagent/` under the operator agent directory; pi auto-discovers global extensions only from `<agent directory>/extensions/` (the global extensions root of `resource-loader` / `package-manager`). So the snapshot copies **exactly** the one subdirectory `extensions/subagent/` and no other extension (for example `extensions/polyforge` is for interactive sessions), and never `settings.json` or packages.
+- Copy, not link: the snapshot does not follow the operator's later changes (a global reinstall included), and no symlink turns the dedicated directory into a window onto the whole operator directory (symlinks inside the tree are skipped, not copied). **Before every spawn** only the allowlist members are refreshed (re-copied when the source file's size+mtime changed, deleted when gone from the source); removing entries outside the allowlist is done **only at daemon startup** — at that moment this daemon has no live step process, so no file is pulled from under a running step process. An unreadable credential = a loud refusal to spawn, never a degraded run.
+- **Credential limitation**: the copied `auth.json` supports API-key entries. OAuth entries work until pi refreshes the token; pi writes the refreshed token into the **copy**, and the next sync finds the copy inconsistent with the operator's file and overwrites it with the operator's (old) entry — the step-side refresh result is lost. No mechanism was added for this: step agents should use API-key credentials.
+- The location is under the data directory and **never inside the capsule**: the capsule is committed and pushed to aihub, and is writable by the agent.
+- `--no-extensions` is still **not passed**: the sub-agent tool is exactly that extension above, and turning it off would turn off the whole step-agent dispatch path; isolation is done by the directory (carrying only that one extension), not by a switch.
+- **Any future harness must provide an equivalent guarantee before integration** (a harness that cannot turn off the background-task family from its startup configuration does not qualify for integration) — this is an admission condition of the adapter layer, written here and not in the executor rules.
+- The credential boundary (ruling of 2026-10-14): the daemon does not manage credentials — `auth.json` / `models.json` are files a human leaves in the operator agent directory after logging in to the harness, and the daemon only **copies** them into the step-agent directory per the allowlist, never issuing, refreshing or rotating; a claude step's credentials likewise live only in the env block of `<harness-root>/claude-config/settings.json`, maintained by a human. (The earlier note "consistent with the direction of #135's separate agent user" lapsed when #135 was frozen.)
+
+## 3. Human collaboration: `pf watch` (settled) <!-- §3 -->
+
+### 3.1 Form <!-- §3.1 -->
+
+- A Go-implemented `pf watch`, **replacing `watch.sh` and `pf watch-probe`**; `pf observe` is merged in as `pf watch <wi> --once`.
+- `pf watch --chat <id>` (default taken from `PF_CHAT_ID`) **does not exit because a subscribed WI ended** (it stays resident; D10 ruling, polyforge#150: the code is authoritative — it only skips WIs that have ended; it still exits when the parent harness process disappears, stdout closes, or `--wait-decision` prints the first batch of decisions, `watcher/engine.go`); one process per session.
+- It produces only two kinds of signal:
+  - **Progress**: the current step, elapsed time, the command being executed and its duration, recently modified files, the tool-call count (generated mechanically from translator signals, **calling no model**).
+  - **Decision events**: a question to answer / a gate, failure, blocked, completion, judged dead and already handled, candidates exhausted; plus state/source events (C13 ruling, polyforge#150, aligned with the event-category table of `watcher/decision.go`): `canceled` (terminal), `paused` (non-terminal, can continue), `submit_rejected`, `submit_dropped`, `daemon_restarted`; plus `carrier_push_failed` (polyforge#158: the capsule chain push succeeded while some task repo's carrier ref push failed or was rejected, so a resume may lose that repo's commits; the reminder line carries a charset-filtered repo name and no error text; one reminder per repo per job, until that repo's push succeeds again); plus `human_gate_unasked` (polyforge#164 H11: a human gate of `requires_human_answer: if_asked` — autopilot grill — completed with zero questions, the workflow continues as usual, and the owner gets one reminder).
+- **Subscriptions and read cursors live in the daemon** (per chat id), in no agent-writable place.
+- **After a reconnect / daemon restart**: first reconcile every subscribed WI's current state against `execution.json` (the authority), then backfill events by the monotonic event id — "the WI ended while watch was absent" is not missed either.
+- **After submit, before the monitor is registered**: show "queued / preparing", not treated as an error (the #98/#101 registration race).
+- Daemon unreachable: say plainly "the daemon cannot be reached, progress paused" rather than looping silently.
+- pidfile + lock; **it exits when the parent process (the session) disappears**, leaving no orphan.
+
+### 3.2 Two channels (settled) <!-- §3.2 -->
+
+| Information | Channel | Enters the agent context? |
+|---|---|---|
+| Progress | shown directly: Claude Code uses `statusLine` (multi-line, refreshing as fast as once a second); pi uses the extension `setWidget`/`setStatus` | no |
+| Decision events | wake the agent, **giving only one short sentence generated by the daemon from a fixed template** | yes (few and short) |
+| The user asks about progress on their own | the agent runs `pf watch <wi> --once` once | only then |
+
+**Accident guardrails (r2 addition; #135 is frozen and these constraints are the current mechanism)**
+- The wake-up sentence **uses only the daemon's fixed template** (WI number, event type, question id) and **carries no agent-writable free text** — preventing a step agent from prompt-injecting the interactive agent through it. The question body is viewed by a human actively through `pf watch <wi> --once`.
+- The wake-up sentence always appends one sentence: "this is a decision for a human to make, and the agent must not answer on their behalf" (the #122 lesson).
+- The progress state file is written by the resident watcher (`pf watch --chat`, `watcher/engine.go`) at the fixed path `$XDG_RUNTIME_DIR/polyforge/chat-<chat>.status`; statusLine reads the file directly with `pf watch --statusline`, not through the daemon, see appendix E.2. (Under the same-uid, non-isolating trust model (#135), any local path is equally writable to a step agent, and primary/fallback paths are no longer distinguished.)
+
+**Not done**: tmux split panes (vetoed by the owner); passing progress through the agent verbatim (it pollutes the context and burns tokens).
+
+### 3.3 Wake-up adaptation <!-- §3.3 -->
+
+| Interactive harness | Wake-up method |
+|---|---|
+| pi | the extension hosts a resident `pf watch`, and decision events wake directly with `sendMessage(..., {triggerTurn: true})` |
+| Claude Code | can only "wake when a process exits": the agent runs `pf watch --chat "$PF_CHAT_ID" --wait-decision` as a background task (it also writes the progress file), prints a fixed-template line and exits 0 as soon as a decision event appears to wake the agent, and the agent re-attaches after handling it (`skills/polyforge/SKILL.md` Claude Code adapter; as of 2026-10-16). The Monitor tool has a 30-minute cap and burns tokens on every line, so it is not used |
+
+### 3.4 To be verified <!-- §3.4 -->
+
+- Whether SessionStart (`compact`) fires after Claude Code context compaction (used to re-inject the hint).
+- Whether the harness session_id stays unchanged after `claude --resume` (which decides the basis of the chat mapping); pi's resume behavior; the semantics after `/clear` and fork.
+- That `tool_execution_start.args` in pi events suffices to extract the command and file paths.
+
+## 4. The identity model (settled) <!-- §4 -->
+
+| Concept | Rule |
+|---|---|
+| **daemon** (replacing "machine") | **keep the existing machine-id string as the daemon id** (default `m-<short-hostname>`, generating no new value — registering a new id in aihub needs admin/maintainer, which the daemon key lacks, `server.go:1050-1075`); changed to be written into the daemon data directory at first startup, after which the data directory is authoritative (not placed in `cli.toml`: it would be rewritten by install.sh and copied to another machine); the `session_machine` of in-flight WIs is unaffected since the value does not change. There is also a display-only name (default the hostname). The aihub machines table / heartbeat / credential concepts are renamed daemon, and the table structure can be migrated later |
+| **chat** (formerly called session, renamed `PF_CHAT_ID` to avoid the name clash with v1.5's "session_id = push credential") | **generated by pf**, produced by the Claude Code SessionStart hook / the pi extension calling pf when the session starts, and injected into every command through the environment variable **`PF_CHAT_ID`** (CC: `CLAUDE_ENV_FILE`, isolated per session, verified at `~/.claude/session-env/<id>/`; pi: the `tool_call` hook rewrites the command). The model never handles it; the context carries only one hint sentence, and losing it does not affect function. **Resuming the same conversation = the same chat** (the harness session → chat id mapping is stored in the daemon data directory) |
+| Isolation | each session is an independent process; when the daemon spawns a step it clears all `PF_*` and adds back only the `PF_WI_ID` / `PF_DAEMON_ID` markers and this daemon's `PF_DAEMON_SOCKET` (`runtime/spawn.go`), so a step agent cannot get the chat id |
+| Nature | `PF_CHAT_ID` is a **label for "whom to notify", not a credential**, and must not be used for permission decisions; it must not be written into any shared or agent-writable file |
+| **Owner (responsible person)** | the WI's **reporter** (the authenticated user who created it; interactive submission, auto claim and in-flight WIs all alike — aihub has no identity source more trustworthy than the reporter, D5 ruling). Gate scope: the owner may continue (resume-blocked) and abandon (cancel); recovery gates such as ForceEnd remain limited to admin/maintainer |
+| **Task source origin** | each WI's daemon-side record: `chat` (carrying the chat id and the owner) or `auto` (the owner only) |
+| Notification routing | with a subscribed chat → notify the chat; otherwise → notify the owner (prompted at the start of their next session of any kind, who may choose to subscribe; in future pushed to external channels via #84). A subscription that owner routing (subscribe-owned) adds to the owner's other chats records the origin chat and shares one delivery record (cursor, delivered decision keys, done) with the origin chat's subscription: a decision wakes only the origin chat (when its watcher is online), and other chats show progress only; when the origin chat's watcher has not polled for a minute, the online chat with the smallest id in the shared record takes over as a fallback and backfills only the decisions that nobody in the record has delivered — a decision the origin chat has already received is never handed to the fallback chat. An explicit `pf watch subscribe` makes that chat an independent wake-up target (polyforge#199) |
+
+The whole "session binding + adoption (taking over the watcher)" rule set is replaced by "owner (always present) + subscription (optional)".
+
+## 5. Execution modes and submission (settled) <!-- §5 -->
+
+- **drain is not done for now**, but the architecture keeps room for it: claiming and execution are separated (already so); the interaction between a human and a task is not tied to the execution machine (depends on #84 cross-daemon communication).
+- Form (**landed**, branch `v2/m2-modes`): `pf ops auto on|off` + `pf ops max N`, with auto claiming and manual submission coexisting. `auto off` = only an explicit `pf submit`; `auto on` = the daemon additionally pulls the aihub ready queue itself (the former drain loop, origin still `auto`). The three modes interactive/batch/drain, `abort-drain`, `batch-confirm`, `batch_submit`, `get_recommendation` (which only forwarded the ready queue verbatim, replaced by `pf queue --ready`) and the DAEMON-409 refusal "drain is the only job-creation entry" are deleted. The `status` header is `auto: on|off  max: N`; the heartbeat body still carries the mode string (`auto` / `manual`) for aihub compatibility. The daemon flag `-auto` (the `-mode` alias and the migration of the old `mode` field of `daemon-state.json` are both deleted, see the "compatibility shim" row of section 8: v2 keeps no backward-compatibility code). drain as a product capability is still within the "not for now" scope (cross-daemon communication #84 has not arrived), but is architecturally usable.
+- **Submission when slots are full**: the daemon's queue is **persisted into the daemon data directory** (option B), not lost on restart. Replay rules (r2 addition):
+  - entries carry the origin and the submission time;
+  - only ordinary submissions are replayed;
+  - before replay, check aihub's state first (already claimed / already ended → discard);
+  - deduplicate with the B1 claiming-journal replay, to avoid claiming the same WI twice;
+  - a rejection always sends a decision event to subscribers / the owner.
+- `pf submit` runs only on this machine; the cross-machine usage = create a ticket into the ready queue for the executing side to claim (once auto is on).
+
+## 6. Recovery and restart <!-- §6 -->
+
+**Principle**: the session is the only lock; `execution.json` is the only progress ledger; only what is pushed to the aihub git counts as saved; **never quietly rebuild the local scene from the remote** (#103).
+
+**Settled**
+- A WI whose capsule is missing at restart / whose project is unmapped (cli.toml has no workspace mapping for that project): **only that WI is put into an ordinary aihub `blocked`** — through the same bounded-fail wrap-up as other blocked outcomes, sending SessionEnd(blocked), with the reason note stating the cause ("capsule missing at <path> …" / "project <p> is not in the daemon's [workspace] mapping …"); **nothing is parked locally** (no local job record, no slot), a `capsule_missing` / `project_unmapped` event is still written (visible to `pf watch`); the daemon starts as usual and the other WIs recover as usual. A human (if needed) first repairs the cause (adds the mapping), then `pf resume <wi>`: this is the ordinary blocked gate (resume-blocked + daemon claim) = a **re-claim** from the aihub capsule chain + the task-repo carrier ref (`refs/pf-task/<name>`); the dead scene (if any) is quarantined, completed steps do not rerun, and work published after the last push is lost. The two exits of blocked are **`pf resume <wi>` (continue) / `pf cancel <wi>` (give up)**; `pf wrap --fail <wi>` is not a gate of blocked and no longer has any hub gate for a parked workflow (§6.4 tightened): the daemon refuses it with DAEMON-409 naming these two paths; when the daemon cannot decide (no local job on this machine, DAEMON-404) the CLI only prints the hint of these two paths, calling no hub and terminating nothing (audit subtraction pass B, C9). session-end accepts only wrapped|failed|blocked|paused.
+- **aihub unreachable at restart (repo review 2026-10-16 B-2 ruling, replacing the unwritten "C6 audit-subtraction" posture)**: a **transport error** (cannot connect, timeout, 5xx) of SessionVerify at restart is not a verdict and **no hub transition is made**: keep the local record (it holds the only copy of the session secret and the not-yet-pushed capsule commits), first reclaim orphan step processes (single writer), and the record keeps its original state (visible to `pf ops status`; meanwhile a `pf wrap`/`pf pause` on it queues in that WI's actor and gets its final answer once verify answers), and that WI's actor retries verify with backoff; the first answer takes the ordinary reconciliation path — the WI continues in the original capsule without needing `pf resume`, losing no commits. aihub's typed refusal (4xx) is an answer: take the original path (blocked, with the reason stated). A sealing/paused record keeps its state and reconciles as usual once verify answers. Shutdown stops retrying, the record is persisted, and the next restart verifies again.
+- **end_pending pushes the chain before wrapping up (the same ruling)**: bounded-fail commits the dirty capsule before the verdict; if the push fails then (most likely the same interruption that made SessionEnd fail), every retry of the end_pending lane **first pushes the local chain with the session credential, then sends SessionEnd(blocked)**, and a push failure retries the whole; only when verify shows the session no longer holds that WI (the credential is dead and the push cannot land) does it wrap up without the push.
+- **SessionEnd failure of a terminal close (the same review, B-4)**: when a job stops in SEALING — or when the retained paused record already carries a terminal stop_reason (a wrap/fail/block after a pause, i.e. a "pending terminal close") — that WI's actor, after backoff, reruns the same `stopOp(alreadySealing)` as the restart finisher with the recorded verdict; while a terminal close is pending, a further `pf wrap`/`--fail`/`pause` is refused with DAEMON-409 (the close is already in progress), and when restart reconciliation or `pf resume` meets it, it only replays that close and never resumes execution (polyforge#197); a typed `STALE_SESSION` stops retrying and wraps up locally (the job is locally Done, the event `seal_finished_locally` noting that the hub state follows the admin / the earlier-landed close).
+- **A claim's clone holds no lock (repo review 2026-10-16 B-8)**: `Start` does the admission check, writes the claiming journal and claims inside that WI's actor, and puts the job into the table as a **CLAIMING** placeholder (taking a slot, writing no state.json — the journal is its persistent form); the capsule clone and materialize (the task-repo clone included) proceed inside that actor and do not block other WIs. The dispatcher runs one goroutine per claim, and the queue counts unsettled claims against the concurrency limit. During CLAIMING, `pf wrap`/`--fail` cancels the clone, quarantines the half-finished capsule, and runs SessionEnd with that verdict, **with no seal push** (no agent has run, the capsule chain is unchanged); when the hub refuses that close it falls back to the blocked wrap-up (retried in the background until it lands). `pf pause` has no scene to keep, and likewise cancels, quarantines and wraps up as **blocked**, writing the event `claim_paused_ended_blocked` — to continue, `pf resume` (the resume-blocked gate: owner/maintainer/admin) re-claims. Shutdown cancels the actor's context (`Runtime.Close`) and every in-flight claim is **deferred**: no SessionEnd, no blocked, the journal and queue entry kept, and the next startup replays the same claim by B1; shutdown waits for no claim or agent start: an in-flight claim defers itself on cancellation, and an agent start still being installed is torn down by the installer itself.
+- **One actor per ticket (polyforge#182, replacing #178's per-WI state lock, restart lane and its latch)**: the runtime has one mailbox and one goroutine per WI (by canonical id) (`runtime/actor.go`). Every operation that changes that WI's job — Start's claim and settlement, close, pause, `pf resume`, recovery, takeover handling, restart reconciliation and its retries — is a message sent to it, executed one by one, with network steps done through inside the actor (state edges still migrate and persist first). Concurrent operations on the same WI **queue** and get a final answer (no more `DAEMON-409`/`DAEMON-503`); the daemon's wrap/pause likewise queues when it meets a WI that has no job in the table yet but whose actor is mid-operation. No entry for another WI waits for it. The task-table lock guards only the task table, aliases and the mailbox table, and no network or disk I/O is done while it is held; `pf ops status`/`pf watch` take only it and the job's own mutex and answer as usual while the hub hangs; `persist` takes the snapshot and assigns a generation number beneath it and writes to disk under its own mutex, so an old snapshot never lands last. Pending hub steps (a close the hub has not accepted, verify, a claim replay) share one backoff (EndRetryBase → EndRetryMax). **Restart** does not ask the hub: first seed all records of state.json and the claiming-journal entries into the table (until the seeding is done no one writes state.json), then send each WI one message: reclaim orphan step processes, then reconcile — a journal entry first verifies its session and then replays or discards, a record first verifies and then, per the answer, resumes, wraps up, replays or releases. **The session fence**: before respawning an agent, pushing with that session or sending SessionEnd, every actor first verifies, and on a mismatch does nothing at all (a WI that the hub ended or took over during the daemon's downtime is only released locally). **Shutdown** = `Runtime.Close` cancels the actors' context: after it no agent is started and no retry is scheduled; an agent being installed is torn down once installed (the claim deferred, the journal kept; a recovered record stays in recovering); shutdown waits for no actor. A taken-over daemon is found by M4's 30-second recheck; when a push is refused for its credential the monitor rechecks at once, and when a resumed push is refused and verify confirms the mismatch it stops that WI at once.
+- **No lease added** (keeping the v1.5 ruling: a claim never evicts a live holder, and takeover is a separate privileged operation). Instead a WI-level "lost contact" hint: **WI lost contact = its holding daemon's heartbeat times out (one unified threshold, replacing both the aihub display layer's 5 minutes and this document's earlier 15 minutes), or the WI disappears from the running list that daemon's heartbeat reports**; `pf queue`/`pf watch` show "can be taken over" and emit an event.
+- The same-step failure-count cap (2.3); the driver abnormal-exit bound (2.3).
+
+**Defects that once existed (all fixed, kept as a regression list)**
+1. A clone failure at re-claim degraded to a local init, `execution.json` was lost, and the workflow restarted from step 1 (`runtime/runtime.go:1143-1153`) → changed to a local "pending blocked", keeping the scene and **retrying SessionEnd continuously** (a clone failure is mostly due to aihub being unreachable, in which case SessionEnd fails too, and one cannot assume blocked succeeds at once); the fix must keep #108's task-ref fetch (`FetchTaskRef`).
+2. A same-machine re-claim attached to the old git-dir (`gitops.go:649-656`, ENOTEMPTY treated by `os.IsExist` as already existing).
+3. After a daemon crash the step process and its children were not reclaimed (`recover.go:534-545`) → at restart they are reclaimed by the pid in the spawn journal together with the double environment marker `PF_WI_ID` + `PF_DAEMON_ID` (a same-WI process of another daemon on the same machine is unaffected) (the four-layer cleanup also runs for pid=0).
+4. Some bounded-fail branches did not kill the driver and did not commitDirty (`recover.go:62-75`).
+5. At bounded-fail a failed SessionEnd still deleted the local record → an orphan (`recover.go:483-499`).
+6. A normal shutdown idly waited ~60s for flush(shutdown) (#136).
+7. After a restart `pf observe` read only the in-memory event ring and history started from scratch (solved by §2.2's durable events + monotonic ids).
+8. After a restart no "the daemon restarted" signal reached the session (→ a decision event).
+
+**Fact clarification**: after a normal shutdown the WI stays `running` on aihub (the session retained) and is recovered at the next daemon startup.
+
+## 7. Lifecycle simplification (settled direction) <!-- §7 -->
+
+- "resume" currently has 5 meanings → for humans only **pause / continue** are kept; what the system handles automatically is uniformly called **recover** and is no longer called resume.
+- Blocked's two gates (unblock / resume-blocked) → the two actions **continue / abandon** (the terminate gate is deleted, polyforge#149).
+- **"Continue" after a pause (wi_seWTgHeKtaa8)**: `pf resume <wi>` (the WI being paused) first clears `clean_pause` on aihub, then calls the local daemon's `POST /jobs/{wi}/resume-paused`: if the local daemon holds that paused record it **continues in place at once** — the same flow as at restart (session verify → SessionAttach → the recovery engine resumes the current step; an unanswered question is re-raised and waits for a human answer), with no need to wait for a daemon restart. The daemon answers `attached` (continued in place) / `already_live` (already running, idempotent) / `closed` (attached, but the recovery resume wrapped the job up on the spot — a terminal verdict or re-raise exhaustion — and no longer continues in place); refusals: DAEMON-404 (not held on this machine, the CLI hints to resume on the holding machine), DAEMON-409 (`clean_pause` not cleared / that record has a pending terminal close — resume must not race the close it would cancel / the session no longer held / capsule missing puts it into blocked), DAEMON-503 (aihub unreachable, not continued). When the hub side has cleared the flag but the daemon refuses or is unreachable, the flag stays cleared and the holding daemon's restart reconciliation at its next startup attaches as usual (with a pending terminal close it replays that close instead).
+- **The scope of "continue" (r2 addition)**: by default the **original holding daemon continues in place**; before a cross-daemon continue it must be confirmed that the capsule version on aihub equals the version sealed by the original daemon, else refuse (the #116 lesson: preventing fetching the old pre-blocked state).
+- Permission for continue / abandon (settled): the **task owner, the project maintainer and admin** may all do it; incidentally fix resume-blocked checking only the key scope and not membership.
+- WI dependencies are kept (#120 has been unfrozen).
+
+## 8. The subtraction list <!-- §8 -->
+
+| Tier | Content | Status |
+|---|---|---|
+| One (delete directly) | `v0/` (tagged `v0-archive`, the workflow digest test vectors migrated into live tests); the root-directory `fakepi` binary; the old answer cache `observe/answers.go`+`answerfile.go`; `tools/gate-metrics`, `tools/capsule-audit.go` | **done on the integration branch** (`3a036b9`, `90d95bf`, `34fdf86`); the deadcode function sweep **done** (`EffectiveModel` belongs to the CORE model-candidate feature and is kept) |
+| Two (#106 remnants) | the whole flush lane, the answer cache/ledger, the recall/remember proxy routes, the step process stdio control channel, `PF_AGENT_ROLE` (#81); the old protocol in step texts (#137) | **done on the integration branch** (`34fdf86`, `5f4fc3c`, `4c4564f`); the `agents/` layout compatibility (#136) **not separately verified** |
+| Three (logic changes, with this design) | the supervisor's guess-type lanes (hang/idle/probe/wall/turn_duration/tool exemption/question exemption/ack veto) → the 2.3 rules (**the M4 re-validation is kept**); watch.sh → `pf watch`; three modes → section 5 | `pf watch` (Go), watch.sh / watch-probe deleted: **done** (`f642e06`, `c01bd94`); supervisor lane rewrite: **done** (`internal/polyforge/supervise`, `driver/supervision.go`); three-mode simplification: **done** (`v2/m2-modes`: `pf ops auto on|off` + `pf ops max N`, the daemon flag `-auto`, no compatibility alias) |
+| Four | simplify takeover/adopt-session (first verify that "re-claiming after ending the session can continue from the breakpoint"); keep the heartbeat and fix the permission hole | takeover simplification: **verified and done** — after the acceptance test `test/v2_m3_end_session_recovery_test.go` (A completes two steps and is SIGKILLed → an admin force-ends the session → B claims normally, continuing from the interrupted step, A's task-repo commits restored via `refs/pf-task`, writes with the old key refused, and A after restart releasing rather than reviving) passed, deleted `pf takeover`, `pf submit --takeover`, `pf verify-session`, the daemon `takeover`/`adopt-session` routes, the `runtime/adopted.go` hosting, and aihub's `force-takeover` endpoint; the recovery path = admin/maintainer `pf ops end-session <wi> --reason ...` (aihub `POST /work-items/{id}/force-end-session`, WI→queued, audit event `session_superseded`) + an ordinary `pf submit` on any daemon; **the M4 re-validation is kept**. The heartbeat permission hole: untouched |
+| Done | the release-intent gate (#139, commit a159c8c); the driver's mechanical guarantees (needs_input validation, `requires_human_answer` only on feature-full grill-review, the V4 command_evidence gate, `f00b398`); the two re-claim bugs (git-dir isolation, clone-failure refusing InitLocal / DAEMON-516); the identity model (daemon-id file, `pf chat init`, `PF_CHAT_ID`, origin); the persistent submit queue + pending-repair parking + `pf resume` continuation (DAEMON-517; since merged into blocked, see section 6) + `daemon_restarted`/`submit_*` events; bounded-fail kill-tree + push, end_pending retry, quarantine atomicity, continue/abandon going through a human's key (`pf resume`/`pf cancel`/`pf wrap --fail`), removal of the `unblock` verb, the blocked seal's cross-daemon check (DAEMON-518); the abandon path of pending-repair WIs (since merged into blocked, see section 6); orphan step process reclaim; the `atomicWrite` fix | done (`v2/final`); including the double-marker boundary of orphan reclaim (`PF_WI_ID` + `PF_DAEMON_ID`, several daemons on one machine not killing each other by mistake) |
+| Audit subtraction A (polyforge#147) | the result envelope slimmed to the minimal contract (`protocol_version`/`result_id`/the `artifacts` manifest/the `handoff_ref` digest and the result_id leniency layer all deleted, §2.6; the V4 `command_evidence` gate kept by owner ruling, carried only by steps owing evidence); the reject-restart layer deleted (still non-conforming after 3 in-process retries → blocked `result_invalid`); unused frontmatter keys deleted (`inputs`/`outputs`+`schema`/`silence_minutes`/`tool_minutes`/`include_verdict`/`on_fail: terminate`); the release step of three bundles deleted (consistent with #134; the verdict contract of release/deploy is kept per #134 for the `workflows/release` bundle, acting on the minimal envelope's `output` — now carried by the output schema these two steps enforce, and the code retains only the one rule that `defer` is limited to `deploy`); the driver's dead code (`Driver.Rewind`/`Terminate`, `Budget.USD`/`Tokens`, the stdLogger fallback, debug output) deleted; T's cumulative semantics restored (`runtime_base_ms` deleted) + timeout-class causes of death relax by doubling (D6); the rate-limit cause of death made its own class, retried with backoff on the original model (D7) | **done** (this ticket; the delivery list is in the WI capsule's `artifacts/code-summary.md`) |
+| Workflow structure slimming (polyforge#165) | feature-full 11→9 steps: `e2e-baseline` merged into `e2e-author` (after committing the tests the author runs only the author's files on the pre-implementation tree to prove them red scenario by scenario at the assertion level, within the same step fixing wiring / deleting scenarios for existing behavior (`already_satisfied`) / rewriting empty assertions; only "all pass" or "the environment cannot run" gives needs_input; adds `requires_command_evidence`), `e2e-run` merged into feature-full `verification` (outputs `authored_titles` + `scenarios`; when the full bar does not cover the authored tests, a targeted command is added into `test_bar`); every delivery bundle unified as `verification → review → deliver` (chore swaps the order); e2e-author writes only new-behavior scenarios, with a soft cap of 400 added lines of tests, and beyond it `size_justification` is filled and judged by review (the driver does not check); review reads the complete diff `git diff $(git merge-base HEAD origin/HEAD)..HEAD` (the e2e-author / repro test commits included), a test error or an empty assertion = blocking (code re-baselines through H4's needs_input), redundant or oversized = non-blocking; the operator rewind with no production caller (`TransRewind` / `applyRewindLocked`) deleted, and blocked has only `pf resume` / `pf cancel`; load-time validation adds the kind set and on_fail (only on a gate, the target exists and is earlier), and the 01 document's V table now lists only the rules the code enforces (#118) | **done** (this ticket) |
+| Deleting step kind (polyforge#169) | the step `kind` concept deleted wholesale: the bundle frontmatter's `kind` field, `KindVocabulary`/`ValidKind`, the driver's Kind field and #165's kind validation; `.polyforge.yaml` becomes `steps.<project>.<default|step-id>.models` (each entry currently allows only the `models` key, #159 adds `harness`; the top-level `models:` is incompatible and refused), the spelling guard becomes "the key must be a step id of the installed workflows" (DAEMON-414 refuses the claim + `pf doctor` reports); a leftover `kind:` in an old bundle snapshot is leniently parsed and ignored, so recovery on the same daemon is unaffected; the migration table is in `docs/upgrade.md` | **done** (this ticket) |
+| Migration code | the v0→v1 migration (`migrate-memories`/`migrate-work-items`, `core/import.go`, `tools/v0export`, `seed-v1.sh` and so on): the owner ruled to delete it early, with no observation period | **done** (`v2/m1-migrate`) |
+| Compatibility shims | the owner ruled v2 keeps no backward-compatibility code: the `-mode` alias, the `mode` migration of `daemon-state.json`, the `pf observe` alias, the `pf unblock` hint stub, the aihub `unblock` endpoint and `WIManager.Unblock`, tolerance of `[watch.*]`/`watch_*` config, the `project_scope` alias, the special-case handling of legacy `takeover` queue items | **done** (`v2/final`); config loading now errors on an unknown section (`[watch.*]` included), and an unknown top-level flat key likewise errors (the removed `url` alias included; `533e032`); on 2026-10-16 G5 further deleted the pre-#175 state-read compatibility (`step_harness` / bare-id candidates), the `manual_models_dropped` drop path, the quarantine of pre-#144 id-named capsules, and the directory fallback for records without `capsule_dir` |
+
+## 9. Fast-landing order <!-- §9 -->
+
+No old/new parallel observation; replace directly by dependency:
+
+1. **Stop the bleeding**: remove the release-intent gate (done, awaiting deployment); fix the old protocol in step texts (#137); the driver's human-confirmation guarantee (#138); **the two bugs of the re-claim path (section 6, items 1 and 2)** — the paused #130 and #134 depend on them to resume, so do not resume before they are fixed.
+   - git-dir fix: when quarantining a capsule move the externalized git-dir into the quarantine too; error rather than reuse when the target already exists (the cross-filesystem EXDEV merge case included); add a "re-claim on the same machine after quarantine → HEAD equals aihub's latest commit" test.
+   - **The V4 verification-evidence gate moves into the driver** (settled): when the driver accepts the completed result of a verification step it requires structured command evidence (argv, exit_code, duration_ms), and when it is missing the in-process retry of envelope rejection applies; the same-named check on the old flush path was deleted with #136.
+   - After step 1 is done: **verify that "ending the session + re-claiming can continue from the breakpoint"**, and if it passes, simplify takeover / adopt-session / verify-session per the four tiers of section 8 (**done**, see the four tiers of section 8).
+2. **Event foundation**: driver events written to the event log; monotonic ids, one file per WI; `execution.json` the authority.
+3. **Supervision replacement (shipped in the same batch)**: the driver ↔ supervisor contract + death-judgement rules + handling by cause of death + failure counts + thresholds + the recovery engine's driver abnormal-exit bound + **orphan step process reclaim (section 6 bug 3, which must be in the same batch — otherwise "re-dispatch on the same model after a restart" would double-write the same capsule together with the orphan process, the #99 lesson)**.
+4. **`pf watch`**: Go implementation, two channels, fixed-template wake-up, subscriptions/cursors stored in the daemon, the Claude Code statusLine and wake-up adaptation, the pi extension; delete watch.sh / watch-probe.
+5. **The identity model**: daemon id storage migration, `PF_CHAT_ID`, owner, origin, notification routing.
+6. **The remaining recovery and restart bugs** (section 6, items 4, 5, 6, 8) + after a bad task is put into blocked, `pf resume` re-claims (the former "pending repair" in-place continuation, since merged into blocked, see section 6) + the persistent queue (replay rules included) + the "continue" scope check.
+7. **Subtraction tiers one and two** (can run in parallel with 2–6).
+8. Afterwards: choosing the harness per step, drain + cross-daemon communication (#84). (Permission isolation #135 was frozen on 2026-10-14 and is not in the plan.)
+
+## 10. Mapping of existing WIs <!-- §10 -->
+
+| WI | Where it goes |
+|---|---|
+| #119 | canceled (this document is its output) |
+| #102 | canceled (residue) |
+| #87, #88 | held by the lost-contact `machine-x` since 10-06; the takeover path (`pf ops end-session <wi> --reason ...` + an ordinary `pf submit` on any daemon) has landed, and they **can be cleaned up now** |
+| #122 | closed after the fixes of #137/#138 and 3.2's wake-up constraints and a reproduction check |
+| #139 | resolved by the gate-deletion branch (landed on the integration branch) |
+| #136, #137, #138 | folded into section 9 items 1 and 7; landed on the integration branch: #137 (step texts, `5f4fc3c`), #138 (the driver's human-confirmation guarantee, `f00b398`), the flush/stdio/`PF_AGENT_ROLE` part of #136 (`34fdf86`); the `agents/` layout compatibility not separately verified |
+| #135 | **frozen** (owner 2026-10-14: internal team use, no heavy isolation); 3.2's accident guardrails and the UDS refusal of "Known gaps" (b) are the current mechanism |
+| #84 | importance rises: the prerequisite of drain and cross-machine answers; still frozen, scope to be rewritten |
+| #120 | unfrozen |
+| #130 (executing #126), #134 (executing #133) | paused by the owner on 2026-10-12 (paused, progress pushed to aihub); the re-claim bugs are fixed on the integration branch (git-dir isolation, clone failure DAEMON-516), and they resume **after deployment**; #134's **epic/task concept is kept** (settled) |
+| #71, #73, #74, #118, #132, #133 | unaffected |
+| #78, #121, #125, #126, #128 | remain frozen |
+
+## 11. Owner rulings (2026-10-12, all formerly pending items settled) <!-- §11 -->
+
+1. **The V4 verification-evidence gate**: moved into the driver (section 9 step 1).
+2. **`PF_AGENT_ROLE`**: deleted (section 8 tier two).
+3. **Historical design documents**: 00–08, v1-*, v1.5-* get a note at the head "parts have been superseded by this document, and this document wins on conflict", not rewritten one by one. (Superseded on 2026-10-16 by repo review wave 4: 00, 02–05, 07 and the v1/v1.5 specs were moved wholesale into `archive/`; the current reference is `reference.md`, and 01/06 were trimmed to the present state.)
+4. **Takeover simplification**: **done** (first verify that "ending the session + re-claiming can continue from the breakpoint", then delete takeover after it passes; see section 8 tier four).
+5. **#87, #88**: kept until after "lost-contact hint + takeover" has landed, then cleaned up; takeover (`pf ops end-session`) has landed and they can be cleaned up now.
+6. **The epic/task concept (#133/#134)**: kept.
+7. **Continue / abandon permission**: the task owner, the project maintainer, admin.
+
+## 12. polyforge#140 rulings (2026-10-13, split a: the wi-kind contract — parent/child and bundle rules) <!-- §12 -->
+
+Split a (the aihub side + design documents) lands adjustments 1–6 of the grill-review (the w140 ruling record; split b takes the client surface: CLI/skills/daemon submit prechecks). The authority for interface details (fields, the reason list, response shapes, deployment and rollback) is `wi-kind-contract.md`; this section registers the rulings themselves:
+
+1. **An epic is derived from data and not stored in a column**: no `work_items.kind` column, no migration, no new error codes such as PARENT_NOT_EPIC/EPIC_NO_BUNDLE; having children (`parent_id` pointing at it) makes it an epic, an optional `epic` label is for display only, and the server enforces no behavior on it.
+2. **The parent/child rules made symmetric**: two symmetric rules replace the old one-way statement "a parent must be an epic": ① a ticket with children cannot bind a bundle (create and PATCH share one validation path, `CORE-400`, `reason=HAS_CHILDREN_NO_BUNDLE`); ② a ticket already bound to a bundle cannot be a parent (keeping the `PARENT_NOT_REGISTRY` semantics, with no old-name alias). A bundle lands only on leaves, and an epic/parent ticket is always a registry ticket.
+3. **The R2 window**: the moment `bundle_name` is fixed changes from "frozen at ticket creation" to **frozen at first claim** (the R2 window: status=queued ∧ never claimed; a non-empty waiting_on does not by itself refuse); inside the window `PATCH bundle_name` allows three-way changes (NULL→X / X→Y / X→NULL unbind), sharing one landing path with create (the reference is the name itself — the digest chain is deleted, polyforge#149 B9: no stand-in is derived and no explicit digest accepted); `repo_inventory` is untouched.
+4. **The "bundle pending selection" segment**: the ready queue gains a "bundle pending selection" segment — tickets with an empty bundle ∧ no children ∧ queued, excluding, as the executable segment does, tickets with a non-empty waiting_on or unfinished dependencies; an epic appears in no segment; the response shape is additive only (no old field renamed or removed). (This item was deleted: it has no reader, polyforge#194; for the current response see `wi-kind-contract.md#§3`)
+5. **A parent ticket's completion state is derived from its children and no terminal state is written**: all children terminal and ≥1 wrapped → derived "done", else "in progress" (with the child counts: total/terminal/wrapped); the parent's in-database status stays queued and no terminal state is written; a newly added child automatically returns it to "in progress" (a pure read derivation, with no reopen write path); exposure is additive only. (This item was deleted: it has no reader, polyforge#194; for the current response see `wi-kind-contract.md#§3`)
+6. **A problem found during execution does not hang a child ticket** (a behavior constraint on this ticket and on later execution): in scope → fix in passing (the change is re-declared into touched files); out of scope and non-blocking → a new ticket + `related`; blocking → a new ticket + a `blocks` dependency; wrong direction → `wrap --fail`/`cancel`, then open a new task. None of the four branches hangs a child on the ticket being executed.
+
+**Concurrency (two groups, both covered by tests)**: only the single-writer transaction serialization plus each side's own CAS, with no separate arbitration (no in-memory latch, no timed wait). PATCH bundle vs Claim: a bind or rename PATCH cannot make the Claim fail (an unbind ordered first leaves the Claim refused as a no-bundle ticket); a PATCH ordered before the Claim lets the Claim freeze the new bundle, and ordered after it is refused and writes nothing (`CORE-400 reason=IMMUTABLE`, or `CORE-409 reason=RACE_LOST`) — the end state of both orders is correct. Bind bundle vs add a child: exactly one side succeeds, and the end state never shows "has children ∧ bundle non-empty" together.
+
+## 13. Audit rulings (2026-10-13, polyforge#150: documentation alignment — the code wins) <!-- §13 -->
+
+Sources: `audit-2026-10-13-invented-logic.md` §3/§7 + the owner's same-day addition (the claim idempotency-record retention period); all 11 rulings assigned to this ticket are registered together here. One line each: number, the one-sentence ruling, and where the current documents hold it (all landed in this revision).
+
+| # | Ruling (one sentence) | Where in the documents |
+|---|---|---|
+| D1 | the ready queue (`GET /api/v1/projects/{project}/ready-queue`) answers three segments `{items, running, paused}` (`internal/aihub/core/queue.go`; the `pending_bundles` segment was deleted in polyforge#194); there is no `blocked` array, and a ticket waiting on dependencies does not appear | `archive/02-aihub-core.md#§5.1b` (rewritten) and the related sentences of §5.1 row 4 / §4.2a row 26 / §7 / §10; `archive/00-architecture.md#§3.1` component table, §3.4b/§3.4c and `archive/07-deployment-pilot.md#§9.2` minimally revised in sync |
+| D2 | `seq` is unique inside a project (`UNIQUE(project_id, seq)`), not global | `archive/02-aihub-core.md#§4.2` DDL |
+| D4 | claim needs that project's writer/maintainer membership or global admin (`hSessionClaim`→`requireWrite`, 403 otherwise); a key scope does not constitute claim authorization | `archive/02-aihub-core.md#§4.10`, `#§8`; the related sentence of `archive/04-local-runtime.md#§6.1` |
+| D8 | push the capsule chain first, then the task repo's carrier ref (`refs/pf-task/<name>`); a task-repo push failure does not roll back the capsule chain (since polyforge#158 a `carrier_push_failed` decision reminder is also sent, see §14.2 of this document) | `archive/v1-spec-full.md` (a one-line minimal revision) + this table's registration ("or": both are done) |
+| D10 | the watcher does not exit because a subscribed WI ended (it stays resident) and only skips ended WIs; it still exits when the parent harness disappears, stdout closes, or after `--wait-decision` prints | §3.1 of this document |
+| D14 | a `paused` WI keeps its session and may be wrapped/failed/blocked directly without a resume first (`End()` with the same session-hash fence, clearing the session once passed) | the table row and adjacent text of `archive/02-aihub-core.md#§2.5`, §5.1 row 9 |
+| C5 | `context_policy` / `handoff` are kept and written into the documents | **landed by #147**, see `01-workflow-skills.md#§4`/`§4.4a` and §2.6 of this document (not modified again by this ticket) |
+| C11 | the job-level live-transcript sync before wrap-up is kept (`runtime/pitranscript.go`) | §2.2 of this document |
+| C13 | the decision categories gain `canceled`/`paused`/`submit_dropped` (plus `submit_rejected`/`daemon_restarted`, aligned with the code table of `watcher/decision.go`) | §3.1 of this document |
+| C16 | `pf file create` infers `--project` when the cwd falls in exactly one mapped workspace and that workspace maps exactly one project; every other case requires it explicit | `archive/00-architecture.md#§3.1` |
+| Addition | claim idempotency records never expire and there is no cleanup task (the cached answer holds only the public fingerprint, so permanent retention is no security issue) — since superseded: the claim cache table is deleted and a replay is recognized by the session secret (`reference.md#§3.2`) | `archive/02-aihub-core.md#§4.3`, `#§6.6` |
+
+The remaining audit items (B*, C1–C4, C6–C10, C12, C14–C15, D3/D5–D7/D9/D11–D13/D15 and so on) belong to other tickets (#144/#145/#146/#147 and so on) and are outside this ticket's scope.
+
+---
+
+## 14. The capsule chain and task-repo preservation (current mechanism; migrated on 2026-10-16 from sections 7.5/7.6 of document 05) <!-- §14 -->
+
+The rest of `archive/05-sync-revision-recovery.md` describes the deleted Revision/CAS/SYNC model (archived); this section is the sole design record of three **current** mechanisms: the capsule-chain rules, the task-repo
+carrier ref and the WIP ref. §14.2 and §14.3 are migrated verbatim from the original `archive/05-sync-revision-recovery.md#§7.5` and `archive/05-sync-revision-recovery.md#§7.6` (only the
+rationale sentences were rewritten for the 2026-10-14 trust model, and cross-references changed to this section's numbering); the original place is a historical copy archived with 05, and this section wins.
+
+### 14.1 Capsule chain rules <!-- §14.1 -->
+
+- **One FF-only chain**: each WI has a bare repository on aihub, and the capsule's commits are pushed to `refs/heads/main`. The aihub pre-receive hook (`internal/aihub/git/hook.go`)
+  enforces: fast-forward only, no ref deletion (except `refs/pf-wip/*`), no gitlink in a commit tree (`GIT-412`; before a local commit, and before a push for every commit in the range to be pushed (the step's own commits included), the daemon prechecks the same rule and refuses; the guidance for a gitlink under `repos/` or `artifacts/release-*` is to restore the capsule `.gitignore`, never to delete a task repo's `.git`), blobs ≤ 16 MiB (`capsule.MaxBlobBytes`).
+  Commits carry no sequence trailer: a commit the step makes itself with `git commit` at the capsule root is an ordinary fast-forward commit on the chain, pushed verbatim with the next publication.
+- **The session fence**: pushes go through the aihub git proxy, and the Basic password must be the secret of that WI's **current live session** (passed by a one-shot `GIT_ASKPASS`, never in argv); a superseded or
+  ended session is refused (`GIT-401`).
+- **The retry schedule of asynchronous pushes** (`observe/observe.go`, `observe/monitor.go`): every failure emits one `push_failed`, and the same Version retries with exponential backoff
+  (from 10s, doubling each time, capped at 5 minutes); when the backoff hits the cap a `push_backpressure` degradation event is emitted once. A new Version (a commit boundary) pushes at once without resetting the backoff,
+  and one successful push ends the round. Each push is bounded at 60s (`protocol.PushTimeout`).
+- **Re-claim = re-clone**: a re-claim such as blocked→`pf resume` clones the capsule from the aihub chain and then restores the task repos by §14.2's carrier ref and §14.3's WIP ref;
+  when the clone of a WI that already has published progress fails, local initialization is refused (`DAEMON-516`, otherwise it would rerun from step 1); when the aihub chain head does not equal the head recorded at sealing, the sealing machine retrieves that head from that WI's
+  quarantined git-dir (`<git-dir>.quarantined.<ts>`, the newer taking priority) and moves the chain over, to be pushed by the next publication, and the task repos (the carrier head and uncommitted changes) are also restored from the same generation of quarantined capsule; another daemon, or the sealing machine not finding that head,
+  is refused (`DAEMON-518`).
+
+### 14.2 The task-repo carrier ref (polyforge#108 / #158) <!-- §14.2 -->
+
+This section describes the current code (the v2 Go execution driver). At every capsule publication the daemon first pushes the capsule chain (`refs/heads/main`),
+then pushes each task repo `repos/<name>`'s local HEAD to the carrier ref `refs/pf-task/<name>` of that WI's bare repository (`gitops.pushTaskRefsLocked`);
+a re-claim such as blocked→resume clones from upstream and then restores the task repos by the carrier ref (`runtime.restoreTaskRepoState`). A carrier push failure neither rolls back nor
+blocks the capsule chain publication (D8).
+
+- **The blob cap has two tiers**: the aihub pre-receive hook keeps 16 MiB for the capsule chain (`capsule.MaxBlobBytes`, env `GIT_PF_MAX_BLOB`)
+  and uses 100 MiB for `refs/pf-task/*` (`capsule.MaxTaskBlobBytes`, env `GIT_PF_MAX_TASK_BLOB`). The reason: a task repo on aihub is initially empty, and
+  the first carrier push brings the whole upstream history, in which large assets (for example skypilot's 21 MB `streamlit_app.mp4`) must not make that repo forever unable to be carried.
+  An upstream blob over 100 MiB is still refused (the root-cause plan of "the carrier stores only the WI's own commits" is not implemented).
+- **A failure is a decision**: when a carrier push fails or is refused for any reason (over the cap, a non-fast-forward divergence, transport, the repo-configuration refusals below), besides the stderr log,
+  **only when this round's capsule chain push succeeded** the daemon writes a `carrier_push_failed` event (body: `repo`, `ref`, the git error or refusal reason truncated to about 2 KB);
+  when the chain push also failed (aihub unreachable, session fenced) no reminder is sent, and a carrier that still fails is reminded at the next publication whose chain push succeeds. The watcher classifies it as a human decision,
+  and the reminder line is a fixed template:
+  `[polyforge] <slug> carrier_push_failed <repo> — this task repo cannot be saved; a resume may lose its commits; this is a human decision, the agent must not answer it`.
+  The repo name is filtered by the same character set as the WI id; the error text appears only in the events of `pf watch <wi> --once`. One reminder per repo per job, until that repo's carrier
+  push succeeds again (the state hangs in memory on the runtime job: it vanishes when the job ends, a re-claim = a new job reminds again; and after a daemon restart it likewise reminds once more).
+  A non-fast-forward failure additionally emits `task_ref_diverged` as before.
+- **Credential safety: a push carrying a credential is never executed inside a task repo** (the task repo is operated by the agent — under the 2026-10-14 trust model this is **accident prevention**: the agent may leave a credential helper, insteadOf, hooks and similar config in the repo; git has no switch to ignore repo-local configuration,
+  and the configuration may change between the check and the push, so no configuration blacklist is used). For each task repo:
+  1. A read-only check (carrying no credential): the repo must fully own its storage — `repos/<name>/.git` is a real directory (Lstat: not a symlink, not a gitfile);
+     there is no `.git/commondir`; `.git/HEAD`, `.git/packed-refs`, `.git/refs` and any entry under it are not symlinks; `.git/objects` is a real directory,
+     each of its entries (`pack`, `info`, the `??` fan-out directories) and each entry of `objects/pack/` is not a symlink; there is no `objects/info/alternates`
+     and no `objects/info/http-alternates`. Running `git rev-parse --absolute-git-dir` inside the repo must equal exactly that `.git`; then read HEAD once more:
+     `git rev-parse --verify -q HEAD^{commit}` (unborn = nothing to carry, silently skipped). These two reads inside the repo additionally carry `-c safe.directory=<repo>`
+     (still readable when the repo's owner differs from the daemon's). Any failed check is refused and sends `carrier_push_failed` (the reason written in the event), with no credential prepared.
+  2. Outside the task repo (beside the WI bare repo directory, a `pf-carrier-*` temporary directory) create a daemon-owned temporary bare repo whose `objects/info/alternates`
+     points at `<repo>/.git/objects`, then `update-ref refs/pf-carrier/tmp <sha>`; delete it after the push.
+  3. Push from the temporary repo:
+     `git --git-dir=<tmp> -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helper= -c http.proxy= -c protocol.allow=never -c protocol.<the scheme of RemoteURL>.allow=always push --no-recurse-submodules <RemoteURL> <sha>:refs/pf-task/<name>`.
+  Every git call on the carrier channel (check and push) uses the same environment: the daemon environment with all `GIT_*` removed, plus `GIT_CONFIG_NOSYSTEM=1`,
+  `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CEILING_DIRECTORIES=<the repos directory with symlinks resolved>` (the same value for check and push); the push adds a one-shot askpass (`GIT_ASKPASS`, `GIT_TERMINAL_PROMPT=0`).
+  Hence a task repo's `credential.helper`, `url.*.insteadOf`/`pushInsteadOf`, `remote.<url>.vcs` (a remote helper),
+  `push.recurseSubmodules`/`submodule.recurse`, a submodule's own origin, hooks and so on all take no part in the push. From alternates git reads only object data
+  and executes nothing in it. Every git call of the carrier channel has a timeout (1 minute for checks and temporary-repo preparation, 10 minutes for the push, the whole git process group killed on timeout),
+  so a hung hub cannot hold that WI's lock forever; at daemon startup leftover `pf-carrier-*` temporary repos are cleaned (the same as the askpass cleanup).
+  **Residual**: the race-free borrowing ways above (commondir, symlinked refs/objects, alternates) are all refused; but object reading and packing
+  still read an agent-writable directory with the daemon's uid, and a repo layout rewritten in the window between the check and the push could still carry content from elsewhere into this WI's carrier ref.
+  This can only be deliberate; under the 2026-10-14 trust model (internal team use, #135 frozen) no further defence is added — this layer is an accident guardrail, not an isolation boundary.
+
+### 14.3 Uncommitted changes of task repos: the WIP ref (polyforge#167) <!-- §14.3 -->
+
+The carrier ref records only HEAD, so a re-claim would lose the uncommitted changes in a task repo. A WIP ref `refs/pf-wip/<name>` is added (`gitops.PushTaskWIP`):
+
+- **When it is written**: only at close points where the step process has already exited — bounded-fail (blocked, before SessionEnd), the `stopOp` wrap-up (failed / blocked and other non-wrapped), the
+  operator pause (`pauseOp`), the daemon shutdown (after the agent tree is killed), and at the end of every step (the driver calls `StepEnded`, i.e. `runtime.SaveTaskWIP`, after that dispatch's process exits and before writing its result or failure,
+  capped at 30 seconds (so it may postpone writing that step's result by up to 30 seconds); a failure does not affect the step, and no runtime lock is held), so kill -9 loses at most the changes of the current step
+  that has not ended. observe's regular publication does not write it.
+  First mirror each repo's HEAD to `refs/pf-task/<name>` per §14.2, then for each repo: with uncommitted changes (tracked modifications, deletions and untracked files) → generate one
+  WIP commit (sole parent = HEAD) and force-push it to `refs/pf-wip/<name>`; clean or a wrapped close → directly push `:refs/pf-wip/<name>` to delete
+  (silent when the hub has no such ref). When this round's WIP generation/push fails, the older WIP ref on the hub is **kept**: it is applied only when its parent commit equals the recovered HEAD (i.e. the state it was snapshotted in),
+  and applying it is always better than nothing; a failure only logs and emits `carrier_push_failed` (`ref` = the WIP ref, `error` noting that the WIP on the hub
+  predates this close; likewise only when the chain push succeeded, once per job per ref), and never makes the close fail.
+  An unborn HEAD is skipped.
+- **How it is generated**: done inside §14.2's `pf-carrier-*` temporary bare repo (alternates borrowing the task repo's objects), with the task repo serving only as the `--work-tree`
+  and the index a temporary file (`GIT_INDEX_FILE=<tmp>/pf-wip-index`): `read-tree <HEAD>`, a pre-scan (see below), `add -A --ignore-errors`, pruning,
+  `write-tree` (a tree identical to HEAD's =
+  clean), `commit-tree <tree> -p <HEAD>` (author/committer `polyforge-daemon`), then pushed with the same push command as §14.2, `+<wip>:refs/pf-wip/<name>`.
+  The same env and `-c` flags and timeouts (`add -A` uses the push's 10 minutes). It writes none of the task repo's HEAD, branches, index or object store, and does not read its configuration as configuration —
+  git reads the temporary repo's configuration, so no clean filter, fsmonitor or hook defined in the repo runs. `git stash create` is not used: it executes inside the agent
+  repo (reading its config, writing its object store) and does not take untracked files.
+- **The snapshot is the working tree's raw bytes**: no clean/smudge filter and no attribute-driven conversion (eol, `working-tree-encoding` and so on) is applied. So a changed file whose attributes declare
+  `filter=lfs` or `filter=git-crypt` does not enter the snapshot (its raw content is the post-smudge object / plaintext).
+- **Sources of ignores and attributes**: the working tree's `.gitignore` / `.gitattributes` (data) take effect as usual; the sources the carrier env drops are copied into the temporary repo's
+  `info/exclude` / `info/attributes`: the effective `core.excludesFile` / `core.attributesFile` (the value in the task repo's own configuration — reading only that key by file, not following includes; otherwise the operator's global configuration (`GIT_CONFIG_GLOBAL` included); otherwise `$XDG_CONFIG_HOME/git/ignore|attributes`), plus the repo's
+  `.git/info/exclude` / `.git/info/attributes`. Only regular files are read (opened non-blocking), each capped at 1 MiB.
+- **Pruned and recorded** (the WIP commit message lists the paths, and a `task_wip_skipped` event is sent: `repo`, `ref`, `skipped`); a single bad path no longer loses the whole snapshot:
+  - Pre-scan (before `add`, reading no file content): `ls-files -o --exclude-standard` (the temporary exclude in effect, not entering ignored directories) lists untracked paths —
+    a nested git repo shows as one `dir/` entry (one recorded in HEAD as a submodule is not among them; a nested repo with no commit would otherwise make `add -A` fail as a whole), an untracked file over the carrier
+    blob cap (`capsule.MaxTaskBlobBytes`), and, when the untracked total exceeds the same cap, the largest files, are all written into `info/exclude`; a tracked file whose working-tree size exceeds the
+    blob cap is set `skip-worktree`, keeping HEAD's entry (recorded when the size differs from HEAD's blob). These files are never hashed.
+  - `add -A --ignore-errors`: files that cannot be read (root-owned build products, mode 000) are skipped, exit code 1 counts as partial success, and the skipped paths come from the
+    `unable to index file` lines.
+  - Fallback pruning after `add`: changed files whose attributes carry an lfs/git-crypt filter; any single one over the blob cap; and when the changed total exceeds the cap, the largest first.
+  A pruned tracked path keeps HEAD's content in the snapshot (it does not become a deletion), and a pruned untracked path is simply not taken.
+- **Shutdown and step end**: the snapshot runs under one context (`gitops.Opts.Ctx`; shutdown: all jobs in parallel sharing one 30-second deadline; step end: the driver's
+  context plus a 30-second deadline): the timeout of every git call on the carrier channel is clipped to its deadline, and when the context ends (expiry or cancellation) the whole git process group is killed and the
+  per-WI lock released; the remaining repos are then not attempted, and `carrier_push_failed` states `deadline exceeded` or `cancelled` (rather than a misleading repo-layout refusal reason).
+- **hook**: `refs/pf-wip/*` is a scratch ref, allowing deletion and non-fast-forward; it checks only the new objects' (`rev-list --objects <new> --not --all`)
+  blob cap, using the carrier's 100 MiB; it does no gitlink check. The rules of other refs are unchanged (`refs/pf-task/*` still forbids deletion and non-fast-forward).
+- **Restore** (`runtime.restoreTaskWIP`, after `restoreTaskRepoState`, for a fresh clone only): take `refs/pf-wip/<name>`; if its sole parent commit equals the
+  recovered HEAD, copy the fresh clone's `.git/index` to a temporary `GIT_INDEX_FILE` and have git run `read-tree -m -u <head> <wip>` to write the changes into the
+  working tree (deletions, mode, a directory turning into a symlink are all handled by git, never following a symlink out of the working tree; there is no hand-written deletion) — no commit, HEAD not moved,
+  the repo index unchanged, and the changes appear as unstaged/untracked (the original staged-or-not distinction is not kept). A parent mismatch (the carrier has moved on) or a read/apply failure →
+  not applied, and a `task_wip_not_applied` event is sent (`repo`, `ref`, `head`, `wip`, `wip_parent`, `reason`). It does not block the claim.
+  After applying, the WIP ref is kept, to be overwritten or deleted by the next close point; a crash before that and a re-claim apply the same one again (the same result when HEAD is unchanged).
+
+---
+
+## Appendix A: the r2 deep-review hole list and dispositions <!-- §A -->
+
+| # | Severity | Hole | Disposition (location in this document) |
+|---|---|---|---|
+| 1 | High | exit without a result always retried on the same model (the F4 regression), and "machine problem" had no source | 2.3 breakdown table; 2.5 the translator reports process exit |
+| 2 | High | several verdicts per dispatch, a failure counted again after the kill; multi-rule priority undefined | 2.2 fencing and idempotency; 2.3 rules prioritized by number |
+| 3 | High | T's scope contradictory, relaxed values persisted nowhere | 2.2, 2.4: step-cumulative, written into execution.json |
+| 4 | High | failure count undefined | 2.3 failure count |
+| 5 | High | nobody handles the driver's abnormal exit, a restart not counted as a failure gives an unbounded loop, M4 has no owner | 2.1 recovery engine; 2.3 driver abnormal-exit bound; 8 tier three keeps M4 |
+| 6 | High | the event log is best-effort, seq does not span restarts | 2.2 execution.json authority + monotonic id; 3.1 reconnect reconciles state first |
+| 7 | High | a newly generated daemon id would be refused registration by aihub | 4: keep the machine-id string |
+| 8 | High | orphan reclaim later than "re-dispatch on the same model after restart" (the #99 regression) | 9: ship in the same batch |
+| 9 | High | continuing a bad task after blocked would re-clone (the #103 regression); SessionEnd also fails when the clone fails | 6: put into blocked + `pf resume` re-claims (the former pending-repair in-place continuation, since merged into blocked, see section 6); bug 1 retries continuously |
+| 10 | High | the watch state/wake-up/mapping/queue files are agent-writable | 3.1, 3.2, 4, 5: stored in the daemon data directory, fixed template |
+| 11 | Medium | tool-timeout retry does not relax (the #83 regression); thresholds pinned by the bundle | 2.3 tool_hung relaxes; 2.4 the override takes effect for WIs claimed afterwards |
+| 12 | Medium | zero events could only be backstopped by T (the #114 degradation) | 2.3 rule ⓪ |
+| 13 | Medium | retry form undefined | 2.3 retry form |
+| 14 | Medium | the persistent queue replay diverging from aihub, a takeover replay preempting | 5 replay rules |
+| 15 | Medium | nobody handles a stall between steps | 2.3 driver_stalled |
+| 16 | Medium | watch lifecycle, the registration race | 3.1 |
+| 17 | Medium | owner undefined | 4 owner |
+| 18 | Medium | candidates-exhausted semantics | 2.3 candidates exhausted |
+| 19 | Medium | blocking delivery conflicting with a non-blocking loop | 2.2 unbounded queue, no long operations under a cross-WI lock |
+| 20 | Medium | the relation of T to `budget.wall_minutes`, a naming collision | 2.4 reuses wall_minutes; renamed step_timeout_* |
+| 21 | Medium | a cross-machine continue getting the old pre-blocked state (the #116 regression) | 7 continue scope |
+| 22 | Medium | the continue/abandon roles undecided | 11 item 7 |
+| 23 | Low | PF_SESSION_ID clashing in name with the session_id credential | 4 renamed PF_CHAT_ID |
+| 24 | Low | transcript sync source unstated | 2.2 |
+| 25 | Low | two lost-contact thresholds, the WI-level lost-contact definition | 6 |
+
+## Appendix B: regression cross-check against historical problems <!-- §B -->
+
+| Historical problem | The mechanism of the new design that covers it |
+|---|---|
+| #44 nobody knew an agent died | driver exit detection + ②③④ |
+| #48 activity-volume misjudgement, incident storm | the "real output" definition + the failure-count cap |
+| #83 a long tool wrongly killed | ③ default 30 minutes + a relaxed Y on retry |
+| #97 the fast-death loop | the recovery engine's driver abnormal-exit bound (the consecutive-recovery-failure counter) |
+| #99 false stuck during a human wait | no process during the wait, no timing |
+| #99 two writers | orphan reclaim in the same batch as the supervision replacement |
+| #103 never quietly rebuild | a bad task is put into blocked, and only a human's explicit `pf resume` re-claims (the former "pending repair" in-place continuation, since merged into blocked, see section 6) |
+| #108 task-repo persistence | keep FetchTaskRef |
+| #114 probe whitewashing / zero events | no probe + rule ⓪ + ④ |
+| #116 pre-blocked state | the continue-scope check |
+| #117/#124 trickle-wedge | ④ step-cumulative T; state per dispatch, not across steps |
+| #122 agent answering itself | #138 + the wake-up always appends "must not answer on a human's behalf" + the wake-up carries no free text |
+| F3 transcript | step_started.transcript_path + sync before commit |
+| F4 model pin failure | exit breakdown: model class → switch candidate |
+| F5 permanent idle after a fatal error | ① the 1-minute grace |
+| F13 context overflow | reopen the conversation from the second retry |
+| F15 UI noise masking a hang | the "real output" definition |
+| F16/B2 zombie flush | the spawn_n fence |
+| F18/F22 push storm | event-triggered push keeps backoff and the circuit breaker |
+| B1 claiming journal | unchanged; deduplicated with the persistent queue replay |
+| M4 zombie session discovery | kept in the supervisor |
+| NEW-1/2/3 | fingerprint fence, verdicts not dropped, pending-close replay unchanged |
+| #92 a grandchild process holding the pipe | group kill unchanged |
+| #107 envelope rejection | in-process retry unchanged, not counted into the failure count |
+| watch's four patches | Go implementation, calls no model, progress does not enter the context |
+
+---
+
+## Appendix C: known gaps (the integration branch, 2026-10-12) <!-- §C -->
+
+- **(a) bundle digest**: no longer exists — the digest chain was deleted with polyforge#149 B9, `internal/` has no `Digest` / `FileEntry`, and `internal/common/workflow` reads only the frontmatter's model-candidate fields. The digest description of `01-workflow-skills.md#§4.5` has been archived.
+- **(b) The human-confirmation guarantee is an accident guardrail, not adversarial defence**: the driver's `requires_human_answer` and needs_input validation are in-process mechanical guarantees; a step agent can write the capsule, and deliberate circumvention is outside the defence scope of the 2026-10-14 trust model (#135 frozen). The daemon's UDS surface (starting with the answer route in polyforge#122, merged in #164; extended to all mutating routes by repo review 2026-10-16 V-1) refuses every non-read request from this daemon's step process tree by the UDS peer credential's pid (Linux SO_PEERCRED, darwin LOCAL_PEERCRED + LOCAL_PEERPID) (DAEMON-403): it refuses when the peer, one of its ancestors or its process-group leader carries the `PF_WI_ID` + `PF_DAEMON_ID=<this daemon>` markers; it also refuses when the peer credential cannot be obtained (fail closed). The refusal surface is a middleware wrapping the whole route table: `/jobs/{wi}/answer|claim|resume-paused|pause|wrap`, `/ops/config`, `/shutdown`, `/chat/init`, `/chats/{id}/subscribe|unsubscribe|subscribe-owned|ack`; open are only pure reads (`GET /status`, `/jobs/{wi}/watch`, `/chats/{id}/subscriptions`, `/step/memories/...`) and the step's memory write `POST /step/memories` (acting only on the caller's own WI, `daemon/stepmem.go`). The answer route keeps its #122 refusal wording. Residual: a process that detached from the process group with `setsid` and cleared its environment is outside this check — this can only be deliberate, and under the trust model no further defence is added (#135 frozen). (The abandon-repair route that once existed was deleted together with repair_pending, and this instance no longer exists.)
+- **(c) `pf watch` progress fields**: merged with the supervision rewrite — the daemon watch route fills the command, command duration, recent files and tool-call count from `Observe.Progress(wi)` (see appendix D).
+
+## Appendix D: the landing cross-check of the supervision replacement (section 9 steps 2–3, branch `v2/a-supervision`) <!-- §D -->
+
+**Code locations**
+- The contract, translators, death-judgement rules: `internal/polyforge/supervise` (`contract.go` facts/verdicts/the unbounded queue/the per-WI `Link`; `translator.go` + `pi.go` the translator interface and the pi implementation; `tracker.go` the merged state kept one copy per dispatch; `rules.go` the pure function `Judge` of rules ⓪–④; `defaults.go` the global thresholds).
+- The driver side: `internal/polyforge/driver/supervision.go` (the verdict fence, the cause-of-death table, failure counts, relaxing, fact sending); `TransStepFailed` is in `transition.go` and records, in one atomic write, the attempt (carrying the cause sub-kind), the count, the relaxed values and the next dispatch form, writing blocked where needed.
+- The supervisor side: `internal/polyforge/observe/monitor.go` (consuming facts, per-dispatch state, verdicts, `driver_stalled`, event-triggered push, M4 retained); the event foundation `observe/events.go` (one JSONL file per WI, every line carrying an id, numbering continuing after a restart, `?after` read from the file).
+- The persistent fields such as failure counts: `capsule.Step.Supervision`, `Attempt.FailureCause`, `Execution.BlockedReason`.
+
+**Later revisions to rule ① and T (the integration branch)**: rule ① was extended to turns that ended normally (`ended_without_result`, see the 2.3 table); T takes `max(3 × wall_minutes, the global default)` (see 2.4).
+
+**Threshold configuration names**: the flags `--silence-window` (X), `--tool-window` (Y), `--step-timeout` (T), `--stall-window` (N), `--model-error-grace` (rule ①'s grace); the step-level override in workflow.md is left with only `budget.wall_minutes` (T) — polyforge#147 C5 deleted the `silence_minutes` / `tool_minutes` keys that no bundle ever used, and X and Y have only the global defaults. The old flags `--hang-window/--idle-window/--probe-timeout/--wall-window` are deleted and passing them fails parsing. In production the daemon is started only via `pf daemon ensure`: T and N come from the `step_timeout` / `stall_window` of cli.toml's `[daemon]` table, read by the daemon itself from `--config`, and ensure's argv stays fixed (2026-10-16 G2; precedence: an explicit command-line flag > the `[daemon]` table > the built-in default; the same table also has `harness_root`, `operator_agent_dir`, `max_concurrent_jobs` — `pf ops max N` takes effect at once, is not persisted, and after a daemon restart returns to the configured value); X, Y, rule ①'s grace and the other flags are for tests/development only.
+
+**Implementation differences from the body text (all additions, not changing the contract semantics)**
+- The fact set has one more, `exec_committed{version}`: event-triggered push needs the hint "the driver committed a new Version", otherwise it can only go back to polling `execution.json`.
+- Facts/verdicts go through `supervise.Link` (in-process); the "massive harness output" outside the driver and supervisor is folded by the translator directly into the per-dispatch `Tracker` (keeping only the latest state, not queued).
+- `driver_stalled`: the supervisor sends a verdict to the driver and also hands it to the recovery engine through `OBNeedsRecovery(reason=driver_stalled)` — a stuck driver cannot consume the verdict itself; the recovery engine kills the tree and re-raises, counting into the consecutive-recovery-failure counter. The driver itself currently does no git/push (the push is in the supervisor's push loop, bounded by the 60s per-attempt limit), so this rule covers "any stall of the driver between steps".
+- **The seal push of a terminal close** (repo review 2026-10-16 B-7): when a workflow ends completed / failed, the close path performs one seal push as usual (`CommitPush`; on a clean tree it just re-pushes HEAD), no longer assuming the driver has pushed (the driver does no git, and the terminal `execution.json` and the transcript tail reach the hub only through a push); if the final push still fails after retries, the close degrades to **blocked** (the local commits keep their bytes, the hub never received the terminal state), rather than `SessionEnd(wrapped|failed)` on a chain lacking the terminal state; this blocked close, like other blocked closes, carries the local chain head (`head_sha`), from which the hub writes `attrs.blocked_seal`, and another machine continuing from the hub head lacking those commits is refused with `DAEMON-518` (E.3).
+- The previous transcript is attached as "read-only reference" only when it can be read inside the capsule (a transcript inside the capsule is synced at commit boundaries and may not be there yet when the process has just died); when the declared resume path is unreadable, resume degrades to fresh.
+
+## Appendix E: the list of contracts that actually exist at runtime (generated from the code, 2026-10-16, decision 2026-10-16 G17) <!-- §E -->
+
+This appendix only registers the status quo and adds or changes no mechanism: each item below is live in the code and has readers or an externally visible surface, yet could not be found in the earlier design documents. The source is the constants and files in the table; where it disagrees with the code, the code wins, and this table is corrected.
+
+### E.1 Event kinds (`<data-dir>/events/wi-<id>.jsonl`, the daemon level being `events/daemon.jsonl`; one `protocol.EventEntry` per line)
+
+Events are "news", not state: the execution-state authority is always the capsule's `runtime-state/execution.json` (INV-1), and an append failure only degrades without affecting correctness (`observe/events.go`). `pf watch` reads exactly these lines.
+
+| kind | Emitter | Meaning |
+|---|---|---|
+| `job_started` / `job_stopped` | observe (`monitor.go`, `observe.go`) | supervision starts / ends a job |
+| `needs_recovery` | observe `monitor.go` | a signal within the same attempt demands recovery (reason/detail/spawn_n) |
+| `wi_agent_rederived` | observe `monitor.go` | the successor step process after recovery has started (spawn_n) |
+| `pending_invalid` | observe `monitor.go` | the `pending_question` of `execution.json` lacks `id`, and the state surface does not treat it as a pending question (one per sighting) |
+| `transcript_missing` | observe `monitor.go` | at a commit boundary the harness session file of this spawn cannot be found (F3, warning only, the commit proceeds as usual) |
+| `published` / `push_failed` / `push_backpressure` / `push_poisoned_local` | observe `monitor.go`; `push_failed` is also emitted by the runtime seal path through the EventTap (`runtime.go`, `restart.go`) | the capsule chain push succeeded / failed / backpressure / the local gitlink precheck refused (the latter not counted into M8) |
+| `session_superseded` | observe `session.go`; runtime `runtime.go` | the periodic session verification finds another daemon holding the WI (the payload carries only the public fingerprint) |
+| `session_verify_failed` | observe `session.go` | the periodic session verification cannot reach aihub (recorded only, no action taken) |
+| `queue_fetch_denied` | daemon `daemon.go` (`wi=""`) | the auto-pull's ready-queue fetch was refused with 401/403/404; once per "healthy→refused" cycle |
+| `submit_rejected` / `submit_dropped` | daemon `restartsignal.go`, `modes.go`, `daemon.go` | a submit that was answered accepted failed at dispatch / is no longer replayed after a restart (the body states the reason) |
+| `daemon_restarted` | daemon `restartsignal.go` | written to every WI that restart reconciliation recovered or parked; the body carries that job's state |
+| `capsule_missing` / `project_unmapped` / `session_verify_outage` | runtime `restart.go` | the reason restart reconciliation puts a WI into blocked (also the blocked reason code) |
+| `session_released` | runtime `restart.go` | at restart the WI is found already held by another session: kill the process tree, quarantine the capsule, discard the record |
+| `interrupted_seal` / `pending_close_replay` / `pending_close_replay_failed` / `seal_finished_locally` | runtime `restart.go` | an interrupted seal wrapped up as blocked / the persisted close intent replayed / that replay was not accepted by the hub (the record kept, retried with backoff) / the hub no longer holds the session and the seal is finished locally |
+| `missing_midflight_capsule` | runtime `recover.go` | the in-flight capsule is gone and a silent rebuild is refused (#103) |
+| `claim_paused_ended_blocked` | runtime `runtime.go` | a claim still cloning was hit by `pf pause`: the clone canceled and wrapped up as blocked (§6) |
+| `retired_env_ignored` | daemon `daemon.go` (`wi=""`) | a retired `POLYFORGE_*` variable is in the daemon environment and differs from the resolved value (warning only) |
+| `carrier_push_failed` / `task_ref_diverged` / `task_wip_skipped` / `task_wip_not_applied` | gitops `gitops.go`, `wip.go` | a task-repo carrier / WIP ref push failed / the carrier diverged / the paths pruned from a WIP snapshot / a WIP not applied at restore (§14.2, §14.3) |
+| `exec_init` / `step_started` / `step_done` / `gate_verdict` / `needs_input` / `incomplete` / `rewind` / `terminal` / `answered` / `interrupted` / `resumed` / `step_failed` / `blocked` / `candidate_switched` / `candidates_exhausted` | driver `transition.go` (`emitLocked` emits per committed state transition) | progress news of state transitions; the body carries spawn_n and step |
+| `step_dead` / `verdict_stale` / `schema_fault` | driver `driver.go`, `supervision.go` | the supervision verdict the driver received (cause/evidence) / a stale verdict was dropped / result envelopes keep being rejected (the contract is broken rather than a model problem); `driver_stalled` is recorded only in `needs_recovery.reason` |
+| `envelope_rejected` / `gate_verdict_bound` / `human_gate_unasked` | driver `result.go` constants | envelope validation rejected (the original text carries the error) / a gate step delivered a fail verdict as completed and was rebound to gate_failed / a `requires_human_answer: if_asked` step completed with zero questions |
+| `output_schema_violation` / `output_schema_unloadable` | driver `outputschema.go` | the output does not match the declared schema / the schema cannot be read |
+| `authored_tests_rebaselined` | driver `testfiles.go` | a human-approved change to test files became the new baseline |
+
+### E.2 chat / watch files
+
+| Path | Writer | Content |
+|---|---|---|
+| `<data-dir>/chats.json` | daemon `identity.go` | (harness, harness-session) → chat id, so a resumed session keeps the same chat; the chat id is only a notification label, not a credential |
+| `<data-dir>/chat-subs.json` | daemon `chatsubs.go` | the WIs each chat subscribes to, the event cursors and the delivered decision keys; a subscription added by owner routing additionally stores `origin_chat` (sharing the delivery record with the origin chat's subscription); written atomically |
+| `$XDG_RUNTIME_DIR/polyforge/chat-<chat>.{lock,pid,status}` (without `XDG_RUNTIME_DIR`, a 0700 directory per uid under the temp directory) | the resident watcher `watcher/files.go` | the single-instance lock, the pid file and that chat's progress file; a temp directory not owned by the user or writable by others is refused |
+
+### E.3 `attrs.blocked_seal` and `sealed_head` / `sealed_machine`
+
+- `work_items.attrs.blocked_seal = {"head": <sha>, "machine": <id>}` (`blockedSealKey` in `core/session.go`): written by an `End(blocked)` carrying a head and cleared by any other End/Pause; no schema change, riding on the business attrs JSON.
+- The claim answer's `sealed_head` / `sealed_machine` (`SessionClaim` in `api/types.go`) are read from it: when continuing a blocked WI the cloned head must equal it: the sealing machine continues after retrieving that head from the quarantined git-dir, while another machine (or the sealing machine no longer finding that head) is refused (section 7 "cross-daemon continue"). `attrs` is not among the PATCH-updatable keys (`patchableFields` in `core/workitem.go`, written only at create), so a user can neither rewrite nor delete it (corrected to the code in wave 4 of 2026-10-16: the original said PATCH could delete it).
+- Its relation to INV-2c of `archive/02-aihub-core.md#§2.6` (attrs must not carry execution-state fields): 02 is archived and no longer the authority; the current code is. In the code, create refuses only the top-level reserved key `blocked_seal` (`checkAttrs` in `core/workitem.go`; a reserved key, not execution state), and carrying it gives `CORE-400 EXECUTION_STATE_REJECTED`; that execution state stays out of attrs is guaranteed by the daemon writing only the capsule. Current behavior: `blocked_seal` is read and written only by aihub inside the session transaction (`setBlockedSealTx` UPDATEs directly, bypassing create validation / `blockedSealTx`), the daemon can write it only indirectly through `End(blocked)`, and a user can neither bring it in at create nor PATCH it; it is not execution state (the sole authority of execution state remains the capsule's `runtime-state/execution.json`), it only records the handoff point at a blocked seal — which machine, which head. When it cannot be read (the key absent or attrs failing to parse) the claim answer's `sealed_head` is empty and a cross-machine continue does no head check (fail open). No migration is done (G17 chose A, I-5 did not do D).
+
+### E.4 The daemon data dir (default `~/.local/share/polyforge`)
+
+| File | Writer | Content |
+|---|---|---|
+| `daemon-id` | daemon `identity.go` | the daemon id recorded at first startup; startup is refused afterwards if it disagrees with the flag/env |
+| `daemon.lock` / `ensure.lock` | daemon `daemon.go` / `ensure.go` | the single-daemon flock / mutual exclusion between `pf daemon ensure` and the installer |
+| `daemon.log` | the restart loop of `pf daemon ensure` | daemon output, rotated to `.1` beyond 10 MiB |
+| `daemon.sock` | daemon `main.go` | the default UDS shared by the CLI and the daemon when no socket is configured (`cli.DataDir`, `reference.md#§6.1`) |
+| `daemon-state.json` | daemon `modes.go` | the auto switch (`pf ops max N` is not persisted) |
+| `submit-queue.json` | daemon `modes.go` | the queue of accepted, not-yet-dispatched submits (replayed after a restart) |
+| `runtime-state.json` | runtime `runtime.go` | the runtime's job records (called `state.json` in old documents) |
+| `claiming.json` | runtime `claiming.go` | the persistent intent log before a claim (B1, `reference.md#§3.5`), replayed after a crash |
+| `manual-models.json` | runtime `manualmodels.go` | each WI's `pf submit --models` list (effective on this machine only) |
+| `events/wi-<id>.jsonl`, `events/daemon.jsonl` | observe `events.go` | one event JSONL per WI (seq = the last line's seq + 1, monotonic across restarts); files silent for over 30 days (daemon.jsonl included) are deleted at daemon startup |
+| `chats.json`, `chat-subs.json` | see E.2 | |
+| `git/<wi>.git` | runtime | the capsule's externalized git-dir (hooks/config out of the agent's reach) |
+| `release/<tag>`, `release/current` | `tools/install.sh` | release checkouts; the daemon takes `release/current/workflows` as `-workflows-dir` |
+| `step-agent/`, `step-agent-sessions/`, `claude-config/` | runtime (the harness root, by default the data dir) | the dedicated pi agent directory / pi sessions / the Claude Code configuration directory (whose `settings.json` env block is the credential authority layer) |
+
+### E.5 The capsule layout (`common/capsule/capsule.go` and its constants)
+
+| Path | Content |
+|---|---|
+| `capsule.json`, `.gitignore` | the capsule identity (including each repo's SHA at claim) / ignoring only `repos/`, `artifacts/release-*/` and `sync/` |
+| `runtime-state/work-item.json` | the WI snapshot written by the daemon |
+| `runtime-state/execution.json` | the sole authority of execution state (structure: `capsule.Execution`) |
+| `runtime-state/spawn-journal.jsonl` | one line per step spawn (harness, session, transcript path) |
+| `runtime-state/pending-results/<spawn_n>.json` | the sole landing spot of result envelopes: the step agent delivers through `pf result submit`, and the daemon (`POST /step/result`) stamps the dispatch identity and writes atomically |
+| `runtime-state/recalled-memories.json` | the claim-time memory snapshot (any-term ranked retrieval, see `06-memory-search.md#§8`); the driver injects it into the step prompt as "non-binding history" (G3), one line `[type] title` per entry, at most 10 lines |
+| `runtime-state/memory-policy.json` | the memory policy in effect for that project at claim (`memory_policy` of `.polyforge.yaml`, the built-in default when the section is missing); the driver renders it into the last step's wrap-summary duty section |
+| `artifacts/steps/<step>/s<spawn_n>/result.json` | the archive of accepted envelopes |
+| `artifacts/handoff-<step>.md` | written by a step declaring `handoff` by path convention, read by later inherit steps |
+| `session/session-<token>.jsonl` | the harness session file, synced in at commit boundaries |
+| `sync/materialized.json` | daemon-private (not in the chain): the marker that bundle materialization completed (the trust gate before recovery) |
+| `workflows/<bundle>/`, `agents/` | the materialized workflow bundle / step definition copy (`agents/` is a deletion target of decision 2026-10-16 G4) |
+| `repos/<name>/`, `logs/`, `artifacts/` | task repo clones (each with its own git history) / logs / step outputs |
