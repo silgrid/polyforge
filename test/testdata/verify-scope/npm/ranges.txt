@@ -1,0 +1,27 @@
+# Recorded merge ranges from the npm seed repository: one line per range, the
+# range name and the recorded merge commit (newest first). Each range directory
+# carries that merge's real `git diff --name-status` list plus mechanically
+# derived selection skeletons, never the seed's source text:
+#
+#   e2e/*.mjs     one comment line per `from "./x.mjs"` specifier the file
+#                 contains (the helper set the selection excludes), a
+#                 `playwright` marker line when the file carries that marker,
+#                 and one line per changed path or extension-stripped stem the
+#                 file contains (the strings the scoped selection greps for).
+#   package.json  the real `scripts` map (the fast gates and the declared e2e
+#                 suites are read from it) plus a `typescript` key so the
+#                 TypeScript gate stays declared.
+#
+# Each skeleton keeps exactly the bytes the selection reads, so the frozen seed
+# and the engine stay byte-identical over every range; the contrast test
+# replays the ranges against the frozen seed.
+range-01-verify-scope-acceptance	6680f610af4b799181c16449448f70be27f2a0c1
+range-02-terminal-panel	1a8cacb4e039e0ee143e3e3cc1c3da7f40f7b1bc
+range-03-release-lane	d140cedce8f37426cdb7f8c1211dcd1940d649d6
+range-04-release-docs	a7ad6dc5bcd1d7a71b3c83f518c3531071b6b611
+range-05-release-bump-35	5ceee20d523e2acb06807c200d46d6330122f2d8
+range-06-polyforge-settings	2481a70b5b9ef23cb38847a7bc79101491446ea5
+range-07-settings-panel	0d69e3d3037066290e0e24ec24c2b28f1583e830
+range-08-pane-state	8acd5f48e95b917a2f3b220d2fa6a6c3b200cf4c
+range-09-release-bump-34	85afbf8704b26e4f7540851f02fa2ee4a4dcdcfd
+range-10-resizable-sheet	8be64b5298a2f49090a0f8f305d13b6773d5a668

@@ -1,0 +1,4 @@
+M	docs/agents/polyforge-panel.md
+M	e2e/polyforge-settings.mjs
+M	lib/polyforge-detect.test.mjs
+M	lib/polyforge-detect.ts

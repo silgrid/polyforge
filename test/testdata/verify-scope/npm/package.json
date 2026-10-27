@@ -1,0 +1,9 @@
+{
+  "name": "w25-npm-fixture",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "node e2e/run.mjs",
+    "test:e2e": "playwright test",
+    "test:terminal": "node e2e/terminal.mjs"
+  }
+}

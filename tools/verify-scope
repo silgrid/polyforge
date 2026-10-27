@@ -1,0 +1,786 @@
+#!/bin/sh
+# verify-scope — release-shipped verification-scope reporter.
+#
+# Usage:
+#   tools/verify-scope [--base <rev>] [--run]
+#
+# The report is written on stdout and nothing else. It covers the diff from
+# a base revision to HEAD:
+#
+#   mode: full|scoped
+#   path: <repo-relative path>      one per affected path, sorted, unique
+#   command: <command>              the commands to run, in the fixed order
+#
+# `--base <rev>` overrides the default base. The default base is
+# `git merge-base HEAD origin/<default>`, where <default> is the branch
+# `origin/HEAD` points at (fallback `main`). The capsule baseline in
+# `capsule.json` is NEVER read.
+#
+# The target repository is the current working directory. Diagnostics go to
+# stderr. `--run` prints the report and then executes the reported commands
+# in order with `sh -c`, stopping at the first non-zero and exiting non-zero;
+# their output goes to stderr so stdout keeps the machine-readable shape.
+#
+# Stack detection: go.mod selects the Go analyzer, package.json the npm
+# analyzer. An unsupported stack (neither manifest), an ambiguous one (both
+# manifests without a `stack=` pin) or a repo that cannot compute its scope
+# falls back to `mode: full`; an unsupported or ambiguous stack reports no
+# commands at all. A scope that cannot be computed always falls back to
+# `full`, never to a wrong `scoped`.
+#
+# A repository may declare a declarative `.polyforge/verify-scope.conf`
+# (line-oriented; `#` comments and blank lines ignored):
+#
+#   stack=go|npm           pin the analyzer when several manifests exist
+#   go_harness=<path>      a Go acceptance harness that owns its directory
+#   fast_gate=<command>    repeatable, ordered; replaces the default gates
+#   full_command=<command> repeatable, ordered; replaces the full-tier tail
+#   forced_full=<glob>     repeatable; a path matching it forces the full tier
+#   module_root=<path>     repeatable; Go spanning roots
+#   exclude=<glob>         repeatable; a path matching it is ignored by the
+#                          full-tier triggers and the full standalone npm pass
+#
+# The conf is declarative: it is never sourced or evaluated at parse time and
+# it has no hook-style keys (pre/post/exec); an unknown key is diagnosed and
+# contributes nothing. A command value is an opaque string: it is reported as a
+# `command:` line and, only with --run, executed by `sh -c`, with the same trust
+# as the repository's own Makefile. A value whose first characters are `$(` or
+# a backtick is skipped with a lint diagnostic; that check is a lint
+# convenience, not a security boundary (a value such as `true; touch x` is a
+# normal command and is not inspected).
+#
+# Zero-config defaults are stack-generic. A Go repo's top-level test/ directory
+# is an ordinary package unless the conf declares `go_harness=<path>` (for
+# example `go_harness=test/e2e-parallel.sh`): the engine then keeps the
+# harness's directory out of the Go package graph and runs the harness for the
+# tests whose source references a changed path. The npm fast gates come from
+# the scripts package.json actually declares (lint, test, and a TypeScript
+# typecheck only when TypeScript is configured); the full tier reports every
+# declared script that runs an e2e/*.mjs suite and every remaining standalone
+# suite. Repository-specific commands belong in the conf.
+#
+# This is a verification reporter, not a release or deploy entry point.
+
+set -u
+export LC_ALL=C
+
+usage() {
+	cat >&2 <<'EOF'
+usage: tools/verify-scope [--base <rev>] [--run]
+  --base <rev>   diff base (default: merge-base HEAD origin/<default>)
+  --run          print the report, then run the reported commands in order
+EOF
+}
+
+base_arg=""
+run=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--base)
+		[ $# -ge 2 ] || {
+			echo "verify-scope: --base needs a revision" >&2
+			usage
+			exit 2
+		}
+		base_arg="$2"
+		shift 2
+		;;
+	--base=*)
+		base_arg="${1#--base=}"
+		[ -n "$base_arg" ] || {
+			echo "verify-scope: --base needs a revision" >&2
+			usage
+			exit 2
+		}
+		shift
+		;;
+	--run)
+		run=1
+		shift
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		echo "verify-scope: unknown argument '$1'" >&2
+		usage
+		exit 2
+		;;
+	esac
+done
+
+root="$(pwd)"
+tmp="$(mktemp -d)" || exit 1
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+# path_dir answers the repo-relative directory of a repo-relative path.
+path_dir() {
+	d="${1%/*}"
+	[ "$d" = "$1" ] && d="."
+	printf '%s' "$d"
+}
+
+# rel_dir maps an absolute package directory back to the repo root.
+rel_dir() {
+	case "$1" in
+	"$root"/*) printf '%s' "${1#"$root"/}" ;;
+	"$root") printf '.' ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+# join_pipe prints the lines it reads joined by `|` (input pre-sorted).
+join_pipe() {
+	awk 'NR > 1 { printf "|" } { printf "%s", $0 }'
+}
+
+# add_cmd appends one command to the report.
+add_cmd() { printf '%s\n' "$1" >>"$tmp/commands"; }
+
+# strip_ext removes one trailing JS/TS module extension (an extensionless
+# import names a changed file through its stem).
+strip_ext() {
+	case "$1" in
+	*.ts | *.tsx | *.mjs | *.js | *.jsx) printf '%s' "${1%.*}" ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+# ---------------------------------------------------------------------------
+# Declarative conf. Every key is read without shell evaluation; a rejected
+# line is diagnosed on stderr and contributes nothing.
+# ---------------------------------------------------------------------------
+conf_fast="$tmp/conf_fast"
+conf_full="$tmp/conf_full"
+conf_forced="$tmp/conf_forced"
+conf_roots="$tmp/conf_roots"
+conf_excl="$tmp/conf_excl"
+conf_stack="$tmp/conf_stack"
+conf_harness="$tmp/conf_harness"
+: >"$conf_fast"
+: >"$conf_full"
+: >"$conf_forced"
+: >"$conf_roots"
+: >"$conf_excl"
+: >"$conf_stack"
+: >"$conf_harness"
+
+conf="$root/.polyforge/verify-scope.conf"
+if [ -f "$conf" ]; then
+	while IFS= read -r line || [ -n "$line" ]; do
+		line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//')"
+		case "$line" in
+		'' | '#'*) continue ;;
+		esac
+		case "$line" in
+		*=*) ;;
+		*)
+			echo "verify-scope: conf rejects a line without a key: $line" >&2
+			continue
+			;;
+		esac
+		key="${line%%=*}"
+		val="${line#*=}"
+		case "$key" in
+		stack)
+			val="$(printf '%s' "$val" | sed 's/[[:space:]]*$//')"
+			case "$val" in
+			go | npm) printf '%s\n' "$val" >>"$conf_stack" ;;
+			*)
+				echo "verify-scope: conf rejects stack '$val' (expected go or npm)" >&2
+				;;
+			esac
+			;;
+		fast_gate | full_command)
+			case "$val" in
+			'$('* | '`'*)
+				echo "verify-scope: conf lint: $key value begins with a command substitution (lint diagnostic only; command values run as reported command: lines): $line" >&2
+				continue
+				;;
+			esac
+			[ -n "$val" ] || {
+				echo "verify-scope: conf ignores an empty $key" >&2
+				continue
+			}
+			if [ "$key" = "fast_gate" ]; then
+				printf '%s\n' "$val" >>"$conf_fast"
+			else
+				printf '%s\n' "$val" >>"$conf_full"
+			fi
+			;;
+		forced_full)
+			[ -n "$val" ] || continue
+			printf '%s\n' "$val" >>"$conf_forced"
+			;;
+		module_root)
+			[ -n "$val" ] || continue
+			printf '%s\n' "$val" >>"$conf_roots"
+			;;
+		exclude)
+			[ -n "$val" ] || continue
+			printf '%s\n' "$val" >>"$conf_excl"
+			;;
+		go_harness)
+			[ -n "$val" ] || {
+				echo "verify-scope: conf ignores an empty go_harness" >&2
+				continue
+			}
+			printf '%s\n' "$val" >>"$conf_harness"
+			;;
+		*)
+			echo "verify-scope: conf rejects unknown key '$key'" >&2
+			;;
+		esac
+	done <"$conf"
+fi
+
+# go_harness is the repo's declared out-of-process acceptance harness value
+# (reported as `sh <value>`); go_harness_dir is the directory whose Go packages
+# it owns, kept out of the package graph and skipped by the `-run` selection.
+# Without the key no directory is special-cased.
+go_harness=""
+go_harness_dir=""
+if [ -s "$conf_harness" ]; then
+	go_harness="$(head -n 1 "$conf_harness")"
+	go_harness_dir="$(path_dir "$go_harness")"
+fi
+
+# path_excluded answers 0 when the path matches an exclude= glob (by path or
+# by basename).
+path_excluded() {
+	p="$1"
+	base="${p##*/}"
+	while IFS= read -r g; do
+		[ -n "$g" ] || continue
+		case "$p" in $g) return 0 ;; esac
+		case "$base" in $g) return 0 ;; esac
+	done <"$conf_excl"
+	return 1
+}
+
+# is_doc_path answers 0 for prose/documentation paths, which never count
+# toward zero-config spanning.
+is_doc_path() {
+	case "$1" in
+	*.md | *.markdown | *.rst | *.txt | docs/* | doc/*) return 0 ;;
+	esac
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Affected paths of base..HEAD (sorted, unique). Deleted files keep their
+# pre-image path; a rename contributes both the old and the new path.
+# ---------------------------------------------------------------------------
+changed="$tmp/changed"
+: >"$changed"
+full=0
+if ! git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	echo "verify-scope: not a git work tree; falling back to the full tier" >&2
+	full=1
+else
+	base=""
+	if [ -n "$base_arg" ]; then
+		base="$base_arg"
+	else
+		default="$(git -C "$root" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+		default="${default#origin/}"
+		[ -n "$default" ] || default="main"
+		base="$(git -C "$root" merge-base HEAD "origin/$default" 2>/dev/null || true)"
+		if [ -z "$base" ]; then
+			echo "verify-scope: cannot resolve the base (merge-base HEAD origin/$default); falling back to the full tier" >&2
+		fi
+	fi
+	if [ -z "$base" ]; then
+		full=1
+	elif git -C "$root" diff --name-status -M "$base"..HEAD >"$tmp/diff" 2>>"$tmp/stderr"; then
+		: >"$tmp/changed_raw"
+		while IFS= read -r line; do
+			[ -n "$line" ] || continue
+			status="${line%%	*}"
+			rest="${line#*	}"
+			case "$status" in
+			R* | C*)
+				printf '%s\n' "${rest%%	*}" >>"$tmp/changed_raw"
+				printf '%s\n' "${rest#*	}" >>"$tmp/changed_raw"
+				;;
+			*)
+				printf '%s\n' "$rest" >>"$tmp/changed_raw"
+				;;
+			esac
+		done <"$tmp/diff"
+		if [ -s "$tmp/changed_raw" ]; then
+			sort -u "$tmp/changed_raw" >"$changed"
+		fi
+	else
+		echo "verify-scope: cannot diff $base..HEAD; falling back to the full tier" >&2
+		full=1
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# Stack detection.
+# ---------------------------------------------------------------------------
+analyzer=""
+if [ -s "$conf_stack" ]; then
+	analyzer="$(head -n 1 "$conf_stack")"
+elif [ -f "$root/go.mod" ] && [ -f "$root/package.json" ]; then
+	echo "verify-scope: both go.mod and package.json are present without a stack= pin; falling back to the full tier with no commands" >&2
+elif [ -f "$root/go.mod" ]; then
+	analyzer="go"
+elif [ -f "$root/package.json" ]; then
+	analyzer="npm"
+else
+	echo "verify-scope: no supported stack manifest (go.mod or package.json); falling back to the full tier with no commands" >&2
+fi
+
+# The npm analyzer reads the scripts package.json actually declares. Node is
+# present wherever npm is; if it cannot read the manifest, the scope cannot be
+# computed and the report fails closed with no commands.
+npm_scripts="$tmp/npm_scripts"
+: >"$npm_scripts"
+if [ "$analyzer" = "npm" ]; then
+	if command -v node >/dev/null 2>&1 && node -e '
+		const fs = require("fs");
+		const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+		const s = p && p.scripts && typeof p.scripts === "object" ? p.scripts : {};
+		for (const k of Object.keys(s)) {
+			if (typeof s[k] === "string") console.log(k + "\t" + s[k]);
+		}
+	' "$root/package.json" >"$npm_scripts" 2>>"$tmp/stderr"; then
+		:
+	else
+		echo "verify-scope: cannot read package.json scripts; falling back to the full tier" >&2
+		analyzer=""
+	fi
+fi
+
+# npm_has_script answers 0 when package.json declares the named script.
+npm_has_script() {
+	awk -F'\t' -v n="$1" '$1 == n { found = 1 } END { exit found ? 0 : 1 }' "$npm_scripts"
+}
+
+# npm_has_typescript answers 0 when the package configures TypeScript.
+npm_has_typescript() {
+	[ -f "$root/tsconfig.json" ] && return 0
+	grep -q '"typescript"[[:space:]]*:' "$root/package.json" 2>/dev/null
+}
+
+# npm_script_suites lists name<TAB>e2e/file pairs for every declared script
+# whose command runs an e2e/*.mjs suite, so the suite is reported through its
+# script and not repeated standalone.
+npm_script_suites() {
+	while IFS='	' read -r name cmd; do
+		[ -n "$name" ] || continue
+		printf '%s\n' "$cmd" |
+			tr -c 'A-Za-z0-9._/-' '\n' |
+			grep -E '^e2e/[A-Za-z0-9._-]+\.mjs$' 2>/dev/null |
+			sort -u |
+			while IFS= read -r ref; do
+				printf '%s\t%s\n' "$name" "$ref"
+			done
+	done <"$npm_scripts"
+}
+
+if [ -z "$analyzer" ]; then
+	printf 'mode: full\n'
+	while IFS= read -r p; do
+		printf 'path: %s\n' "$p"
+	done <"$changed"
+	exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Forced-full triggers: stack-generic config files plus the repo's globs.
+# ---------------------------------------------------------------------------
+path_forced() {
+	p="$1"
+	base="${p##*/}"
+	case "$analyzer" in
+	go)
+		case "$p" in go.mod | go.sum) return 0 ;; esac
+		;;
+	npm)
+		case "$p" in package.json | package-lock.json | npm-shrinkwrap.json | tsconfig.json) return 0 ;; esac
+		case "$base" in tsconfig.* | eslint.config.* | .eslintrc | .eslintrc.*) return 0 ;; esac
+		;;
+	esac
+	while IFS= read -r g; do
+		[ -n "$g" ] || continue
+		case "$p" in $g) return 0 ;; esac
+		case "$base" in $g) return 0 ;; esac
+	done <"$conf_forced"
+	return 1
+}
+
+# spans_multiple_roots answers 0 when the changed paths touch two or more
+# module roots. With a conf the roots are its module_root= list; otherwise
+# each path's first-level directory is its root, and prose/doc paths never
+# count.
+spans_multiple_roots() {
+	roots="$tmp/span_roots"
+	: >"$roots"
+	if [ -s "$conf_roots" ]; then
+		while IFS= read -r p; do
+			[ -n "$p" ] || continue
+			path_excluded "$p" && continue
+			while IFS= read -r r; do
+				[ -n "$r" ] || continue
+				case "$p" in
+				"$r" | "$r"/*)
+					printf '%s\n' "$r" >>"$roots"
+					;;
+				esac
+			done <"$conf_roots"
+		done <"$changed"
+	else
+		while IFS= read -r p; do
+			[ -n "$p" ] || continue
+			path_excluded "$p" && continue
+			is_doc_path "$p" && continue
+			case "$p" in
+			*/*) printf '%s\n' "${p%%/*}" >>"$roots" ;;
+			*) printf '%s\n' "." >>"$roots" ;;
+			esac
+		done <"$changed"
+	fi
+	[ "$(sort -u "$roots" | wc -l | tr -d ' ')" -ge 2 ]
+}
+
+if [ "$full" -eq 0 ]; then
+	while IFS= read -r p; do
+		if path_forced "$p"; then
+			full=1
+			break
+		fi
+	done <"$changed"
+fi
+if [ "$full" -eq 0 ] && [ "$analyzer" = "go" ] && spans_multiple_roots; then
+	full=1
+fi
+
+# ---------------------------------------------------------------------------
+# Scoped selection. Answers non-zero when the package graph cannot be
+# computed, which turns the scope into the full tier instead of a wrong
+# scoped one.
+# ---------------------------------------------------------------------------
+: >"$tmp/scoped_cmds"
+add_scoped() { printf '%s\n' "$1" >>"$tmp/scoped_cmds"; }
+
+compute_scoped_go() {
+	golist="$tmp/golist"
+	if ! (cd "$root" && GOWORK=off go list -test -f '{{.ImportPath}}|{{.Dir}}|{{join .Deps " "}}|{{len .TestGoFiles}}|{{len .XTestGoFiles}}' ./...) >"$golist" 2>>"$tmp/stderr"; then
+		echo "verify-scope: go list failed; falling back to the full tier" >&2
+		return 1
+	fi
+	# Fail closed on an unexpected go list -test shape. Every record must carry
+	# the import path, the package directory, the dependency closure and the two
+	# test-file counts; every package that has test files must also have its
+	# `P.test` record, whose closure the fold below needs. A toolchain that stops
+	# emitting either fails the graph computation instead of silently degrading
+	# to plain Deps.
+	if ! awk -F'|' '
+		NF < 5 { bad = 1 }
+		$1 ~ /\.test$/ { testrec[$2] = 1; next }
+		$1 ~ / \[/ { next }
+		{ if (($4 + 0) > 0 || ($5 + 0) > 0) hastests[$2] = 1 }
+		END {
+			for (d in hastests) if (!(d in testrec)) bad = 1
+			exit bad ? 1 : 0
+		}
+	' "$golist"; then
+		echo "verify-scope: unexpected go list -test output shape; falling back to the full tier" >&2
+		return 1
+	fi
+	# go list -test also emits each package's test binary (`P.test`), whose
+	# Deps is the closure of everything `go test` compiles for P — test imports
+	# included. Fold that closure into P's plain entry, so the reverse-dependency
+	# scan below selects a package reached only through a `_test.go` import. The
+	# test-variant entries (`P [P.test]`, `P_test [P.test]`) are dropped: `go test
+	# ./P` already runs them with P.
+	packages="$tmp/packages"
+	awk -F'|' '
+		FNR == NR { if ($1 ~ /\.test$/) tdeps[$2] = $3; next }
+		$1 ~ / \[/ { next }
+		$1 ~ /\.test$/ { next }
+		$2 in tdeps { print $1 "|" $2 "|" tdeps[$2]; next }
+		{ print $1 "|" $2 "|" $3 }
+	' "$golist" "$golist" >"$packages"
+	# Map each changed path to its nearest ancestor `go list` package
+	# directory: a file in `<pkg>/testdata/` or another package subdirectory
+	# belongs to its owning package. A path with no ancestor package selects
+	# no package (and no test).
+	pkg_dirs="$tmp/pkg_dirs"
+	: >"$pkg_dirs"
+	while IFS='|' read -r imp dir deps; do
+		[ -n "$imp" ] || continue
+		printf '%s\n' "$(rel_dir "$dir")" >>"$pkg_dirs"
+	done <"$packages"
+	sort -u "$pkg_dirs" -o "$pkg_dirs"
+	mapped_dirs="$tmp/mapped_dirs"
+	: >"$mapped_dirs"
+	while IFS= read -r p; do
+		d="$(path_dir "$p")"
+		while :; do
+			if grep -Fxq -- "$d" "$pkg_dirs"; then
+				printf '%s\n' "$d" >>"$mapped_dirs"
+				break
+			fi
+			[ "$d" = "." ] && break
+			case "$d" in
+			*/*) d="${d%/*}" ;;
+			*) d="." ;;
+			esac
+		done
+	done <"$changed"
+	sort -u "$mapped_dirs" -o "$mapped_dirs"
+	changed_imports="$tmp/changed_imports"
+	: >"$changed_imports"
+	while IFS='|' read -r imp dir deps; do
+		[ -n "$imp" ] || continue
+		rel="$(rel_dir "$dir")"
+		if grep -Fxq -- "$rel" "$mapped_dirs"; then
+			printf '%s\n' "$imp" >>"$changed_imports"
+		fi
+	done <"$packages"
+	# Changed packages plus every package that (transitively) depends on one.
+	selected="$tmp/selected"
+	: >"$selected"
+	if [ -s "$changed_imports" ]; then
+		while IFS='|' read -r imp dir deps; do
+			[ -n "$imp" ] || continue
+			rel="$(rel_dir "$dir")"
+			# A declared harness owns its directory; otherwise it is an
+			# ordinary package and participates in the graph.
+			if [ -n "$go_harness" ] && [ "$rel" = "$go_harness_dir" ]; then
+				continue
+			fi
+			sel=0
+			if grep -Fxq -- "$rel" "$mapped_dirs"; then
+				sel=1
+			else
+				while IFS= read -r cp; do
+					case " $deps " in
+					*" $cp "*)
+						sel=1
+						break
+						;;
+					esac
+				done <"$changed_imports"
+			fi
+			[ "$sel" -eq 1 ] && printf '%s\n' "$rel" >>"$selected"
+		done <"$packages"
+	fi
+	if [ -s "$selected" ]; then
+		sort -u "$selected" -o "$selected"
+		pkgargs=""
+		while IFS= read -r rel; do
+			if [ "$rel" = "." ]; then
+				pkgargs="$pkgargs ."
+			else
+				pkgargs="$pkgargs ./$rel"
+			fi
+		done <"$selected"
+		add_scoped "GOWORK=off go test -count=1$pkgargs"
+	fi
+	# Tests that textually name a changed path, per package not already in
+	# the package command. A declared harness is handled below instead.
+	tr_pairs="$tmp/tr_pairs"
+	: >"$tr_pairs"
+	while IFS= read -r p; do
+		while IFS= read -r f; do
+			[ -n "$f" ] || continue
+			if [ -n "$go_harness" ]; then
+				case "$f" in
+				"$go_harness_dir"/*) continue ;;
+				esac
+			fi
+			case "$f" in
+			*_test.go) ;;
+			*) continue ;;
+			esac
+			names="$(sed -n 's/^func \(Test[^ (]*\).*/\1/p' "$root/$f" | sort -u)"
+			[ -n "$names" ] || continue
+			d="$(path_dir "$f")"
+			while IFS= read -r name; do
+				[ -n "$name" ] && printf '%s|%s\n' "$d" "$name" >>"$tr_pairs"
+			done <<EOF
+$names
+EOF
+		done <<EOF
+$(git -C "$root" grep -F -l -e "$p" 2>/dev/null || true)
+EOF
+	done <"$changed"
+	if [ -s "$tr_pairs" ]; then
+		cut -d'|' -f1 "$tr_pairs" | sort -u >"$tmp/tr_dirs"
+		while IFS= read -r d; do
+			grep -Fxq -- "$d" "$selected" && continue
+			names="$(awk -F'|' -v d="$d" '$1 == d { print $2 }' "$tr_pairs" | sort -u | join_pipe)"
+			if [ "$d" = "." ]; then
+				pkg="."
+			else
+				pkg="./$d"
+			fi
+			add_scoped "GOWORK=off go test -count=1 -run '^($names)\$' $pkg"
+		done <"$tmp/tr_dirs"
+	fi
+	# The repo's declared harness runs the acceptance tests whose source
+	# names a changed path, by test name.
+	if [ -n "$go_harness" ]; then
+		: >"$tmp/e2e_names"
+		while IFS= read -r p; do
+			while IFS= read -r f; do
+				[ -n "$f" ] || continue
+				case "$f" in
+				"$go_harness_dir"/*.go) ;;
+				*) continue ;;
+				esac
+				sed -n 's/^func \(Test[^ (]*\).*/\1/p' "$root/$f" >>"$tmp/e2e_names"
+			done <<EOF
+$(git -C "$root" grep -F -l -e "$p" 2>/dev/null || true)
+EOF
+		done <"$changed"
+		if [ -s "$tmp/e2e_names" ]; then
+			names="$(sort -u "$tmp/e2e_names" | join_pipe)"
+			add_scoped "E2E_RUN='^($names)\$' sh $go_harness"
+		fi
+	fi
+	return 0
+}
+
+# Helper modules imported by another e2e/*.mjs through a relative specifier
+# are not standalone suites: `node e2e/<helper>.mjs` does nothing. They are
+# excluded from the scoped selection and the full standalone pass alike.
+e2e_helpers="$tmp/e2e_helpers"
+: >"$e2e_helpers"
+compute_e2e_helpers() {
+	: >"$e2e_helpers"
+	if [ -d "$root/e2e" ]; then
+		grep -ho 'from "\./[^"]*\.mjs"' "$root"/e2e/*.mjs 2>/dev/null |
+			sed -e 's#^from "\./##' -e 's#"$##' | sort -u >"$e2e_helpers"
+	fi
+}
+
+compute_scoped_npm() {
+	compute_e2e_helpers
+	for script in "$root"/e2e/*.mjs; do
+		[ -f "$script" ] || continue
+		grep -qi 'playwright' "$script" && continue
+		base="${script##*/}"
+		grep -Fxq -- "$base" "$e2e_helpers" && continue
+		matched=0
+		while IFS= read -r p; do
+			[ -n "$p" ] || continue
+			if grep -qF -- "$p" "$script"; then
+				matched=1
+				break
+			fi
+			stem="$(strip_ext "$p")"
+			if [ "$stem" != "$p" ] && grep -qF -- "$stem" "$script"; then
+				matched=1
+				break
+			fi
+		done <"$changed"
+		[ "$matched" -eq 1 ] && add_scoped "node e2e/$base"
+	done
+	return 0
+}
+
+mode="full"
+if [ "$full" -eq 0 ]; then
+	if [ ! -s "$changed" ]; then
+		# Empty diff: scoped with an empty affected set, fast gates only.
+		mode="scoped"
+	else
+		case "$analyzer" in
+		go)
+			if compute_scoped_go; then mode="scoped"; else full=1; fi
+			;;
+		npm)
+			if compute_scoped_npm; then mode="scoped"; else full=1; fi
+			;;
+		esac
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# Commands: fast gates first, then the scoped selection or the full tail.
+# ---------------------------------------------------------------------------
+: >"$tmp/commands"
+fast_scripts="$tmp/fast_scripts"
+: >"$fast_scripts"
+if [ -s "$conf_fast" ]; then
+	cat "$conf_fast" >>"$tmp/commands"
+elif [ "$analyzer" = "go" ]; then
+	add_cmd "GOWORK=off go build ./..."
+	add_cmd "GOWORK=off go vet ./..."
+	add_cmd 'test -z "$(gofmt -l .)"'
+else
+	if [ ! -d "$root/node_modules" ]; then
+		add_cmd "npm ci"
+	fi
+	if npm_has_script lint; then
+		add_cmd "npm run lint"
+		printf 'lint\n' >>"$fast_scripts"
+	fi
+	if npm_has_typescript; then
+		add_cmd "node_modules/.bin/tsc --noEmit"
+	fi
+	if npm_has_script test; then
+		add_cmd "npm test"
+		printf 'test\n' >>"$fast_scripts"
+	fi
+fi
+
+if [ "$mode" = "full" ]; then
+	if [ -s "$conf_full" ]; then
+		cat "$conf_full" >>"$tmp/commands"
+	elif [ "$analyzer" = "go" ]; then
+		add_cmd "GOWORK=off go test -count=1 ./..."
+	else
+		compute_e2e_helpers
+		suite_refs="$tmp/suite_refs"
+		npm_script_suites >"$tmp/script_suites"
+		cut -f2 "$tmp/script_suites" | sed 's#^e2e/##' | sort -u >"$suite_refs"
+		# Report each declared script that runs an e2e/*.mjs suite; the fast-gate
+		# scripts already ran and are not repeated.
+		cut -f1 "$tmp/script_suites" | sort -u | while IFS= read -r name; do
+			[ -n "$name" ] || continue
+			grep -Fxq -- "$name" "$fast_scripts" && continue
+			add_cmd "npm run $name"
+		done
+		# Remaining standalone suites: not already run by a script, not an
+		# imported helper, and not suppressed by an exclude= glob.
+		for script in "$root"/e2e/*.mjs; do
+			[ -f "$script" ] || continue
+			base="${script##*/}"
+			grep -Fxq -- "$base" "$suite_refs" && continue
+			grep -Fxq -- "$base" "$e2e_helpers" && continue
+			path_excluded "e2e/$base" && continue
+			add_cmd "node e2e/$base"
+		done
+	fi
+else
+	cat "$tmp/scoped_cmds" >>"$tmp/commands"
+fi
+
+printf 'mode: %s\n' "$mode"
+while IFS= read -r p; do
+	printf 'path: %s\n' "$p"
+done <"$changed"
+while IFS= read -r c; do
+	printf 'command: %s\n' "$c"
+done <"$tmp/commands"
+
+if [ "$run" -eq 1 ]; then
+	while IFS= read -r c; do
+		if ! (cd "$root" && sh -c "$c" 1>&2); then
+			echo "verify-scope: reported command failed: $c" >&2
+			exit 1
+		fi
+	done <"$tmp/commands"
+fi

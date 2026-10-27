@@ -1,0 +1,13 @@
+M	app/globals.css
+M	components/AppShell.polyforge.test.mjs
+M	components/AppShell.tsx
+M	components/PolyforgePanel.test.mjs
+M	components/PolyforgePanel.tsx
+M	docs/agents/polyforge-panel.md
+A	hooks/useResizableSheet.test.mjs
+A	hooks/useResizableSheet.ts
+M	lib/i18n/messages/en.ts
+M	lib/i18n/messages/zh-CN.ts
+M	lib/i18n/messages/zh-TW.ts
+M	lib/panel-layout.test.mjs
+M	lib/panel-layout.ts

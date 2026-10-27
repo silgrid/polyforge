@@ -1,0 +1,200 @@
+package daemon
+
+// tasks.go: the one-shot task agent's daemon face (workbench#53, carried
+// from #40).
+//
+//	POST /task/spawn          {project, prompt, max_duration?, max_tokens?, origin_chat?}
+//	GET  /task/list
+//	GET  /task/show/{id}
+//	POST /task/cancel/{id}
+//	GET  /task/memories/search   (task peers only; scoped to the task's project)
+//	GET  /task/memories/{id}     (task peers only; scoped to the task's project)
+//
+// Reachability (AGENTS.md: every new entry point states it;
+// docs/reference/uds-routes.md carries the table):
+//
+//   - the UDS face only — no aihub route and no cross-machine face;
+//   - the spawn and cancel POSTs sit behind refuseStepOrigin, so a STEP
+//     process tree AND a TASK process tree are refused DAEMON-403 (no
+//     recursion, no lifecycle side channel). Only a human session may
+//     spawn or cancel;
+//   - /task/list, /task/show and the two /task/memories GETs are reads. Any
+//     local UDS peer may call list/show, exactly like GET /status; the two
+//     memory reads answer a task process tree only, and the route itself
+//     scopes them to the caller's own running task's project.
+//
+// The task manager is assembled here; the runner IS the real harness
+// (Config.TaskRunner is the test seam). There is no OS-level confinement:
+// a task agent's filesystem/network trust equals a session agent's (owner
+// ruling 2026-10-26). The one capability gate is the write-verb guard the
+// spawn env arms (PF_TASK_ID + PF_DAEMON_ID).
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/polyforge/runtime"
+	"github.com/silgrid/polyforge/internal/polyforge/task"
+)
+
+const (
+	taskMemSearchPath = "/task/memories/search"
+	taskMemPrefix     = "/task/memories/"
+)
+
+// newTaskManager assembles the daemon's task manager: live candidate
+// resolution, the project's workspace as the runner's working directory,
+// and the exec runner (Config.TaskRunner swaps it for tests).
+func (d *Daemon) newTaskManager(rtCfg *runtime.Config) *task.Manager {
+	runner := d.cfg.TaskRunner
+	if runner == nil {
+		runner = &task.ExecRunner{
+			PiBin:           d.cfg.PiBin,
+			ClaudeBin:       d.live.ClaudeBin,
+			ClaudeConfigDir: rtCfg.ClaudeConfigDir(),
+			PiAgentDir:      rtCfg.StepAgentDir(),
+			DaemonID:        d.cfg.MachineID,
+			SocketPath:      d.cfg.SocketPath,
+		}
+	}
+	return task.NewManager(task.Config{
+		Store:   task.NewStore(d.cfg.DataDir),
+		Runner:  runner,
+		Resolve: func(project string) ([]string, string, error) { return d.rt.TaskModels(project) },
+		WorkDir: d.taskWorkDir,
+	})
+}
+
+// taskWorkDir answers the directory one task's harness runs in: the
+// project's own workspace. A project that is not mapped on this daemon is
+// refused with the typed unmapped-project error (the same refusal the
+// claim path makes); nothing is widened to another workspace.
+func (d *Daemon) taskWorkDir(project string) (string, error) {
+	ws, err := d.plan().WorkspaceFor(project)
+	if err != nil {
+		return "", &api.Error{Code: api.ErrDaemonUnmappedProject, Detail: fmt.Sprintf(
+			"project %q is not mapped on this daemon — task spawn takes a mapped project name, never a path (`pf doctor` checks the mapping)", project)}
+	}
+	return ws, nil
+}
+
+// taskErr maps a manager error to its typed wire answer.
+func taskErr(w http.ResponseWriter, err error) {
+	var ae *api.Error
+	switch {
+	case errors.As(err, &ae):
+		writeErrOf(w, err)
+	case errors.Is(err, task.ErrLimit):
+		writeErr(w, api.ErrDaemonConflict, err.Error())
+	case errors.Is(err, task.ErrNotFound):
+		writeErr(w, api.ErrDaemonNotFound, err.Error())
+	case errors.Is(err, task.ErrNotRunning):
+		writeErr(w, api.ErrDaemonConflict, err.Error())
+	default:
+		writeErr(w, api.ErrDaemonBadInput, err.Error())
+	}
+}
+
+func (d *Daemon) taskSpawnRoute(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Project     string `json:"project"`
+		Prompt      string `json:"prompt"`
+		MaxDuration string `json:"max_duration"`
+		MaxTokens   int64  `json:"max_tokens"`
+		OriginChat  string `json:"origin_chat"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	spec := task.Spec{Project: req.Project, Prompt: req.Prompt, OriginChat: req.OriginChat, MaxTokens: req.MaxTokens}
+	if req.MaxDuration != "" {
+		dur, err := task.ParseDuration(req.MaxDuration)
+		if err != nil {
+			writeErr(w, api.ErrDaemonBadInput, err.Error())
+			return
+		}
+		spec.MaxDuration = dur
+	}
+	t, err := d.tasks.Spawn(spec)
+	if err != nil {
+		taskErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (d *Daemon) taskListRoute(w http.ResponseWriter, r *http.Request) {
+	ts, err := d.tasks.List()
+	if err != nil {
+		taskErr(w, err)
+		return
+	}
+	// the list carries no report bodies or prompts (pf task show reads one)
+	for i := range ts {
+		ts[i].Report = ""
+		ts[i].Prompt = ""
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": ts, "now": time.Now().UTC()})
+}
+
+func (d *Daemon) taskShowRoute(w http.ResponseWriter, r *http.Request) {
+	t, err := d.tasks.Show(r.PathValue("id"))
+	if err != nil {
+		taskErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (d *Daemon) taskCancelRoute(w http.ResponseWriter, r *http.Request) {
+	if err := d.tasks.Cancel(r.PathValue("id")); err != nil {
+		taskErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "cancelling": true})
+}
+
+// taskPeer answers the task whose process tree the UDS peer belongs to
+// ("" = not a task process of this daemon).
+func (d *Daemon) taskPeer(r *http.Request) (string, bool) {
+	cred, ok := requestPeerCred(r.Context())
+	if !ok {
+		return "", false
+	}
+	return runtime.TaskProcessOrigin(cred.pid, d.cfg.MachineID)
+}
+
+// taskProject resolves a /task/memories caller to its running task's
+// project, or writes the refusal and answers false.
+func (d *Daemon) taskProject(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id, ok := d.taskPeer(r)
+	if !ok {
+		writeErr(w, api.ErrDaemonForbidden, r.URL.Path+": serves task agents only (the caller is no task process of this daemon)")
+		return "", false
+	}
+	t, err := d.tasks.Show(id)
+	if err != nil || t.State != task.StateRunning {
+		writeErr(w, api.ErrDaemonNotFound, "task "+id+" of the caller is not running on this daemon")
+		return "", false
+	}
+	return t.Project, true
+}
+
+func (d *Daemon) taskSearchRoute(w http.ResponseWriter, r *http.Request) {
+	project, ok := d.taskProject(w, r)
+	if !ok {
+		return
+	}
+	d.forwardMemorySearch(w, r, project, "a task of "+project)
+}
+
+func (d *Daemon) taskMemoryRoute(w http.ResponseWriter, r *http.Request) {
+	project, ok := d.taskProject(w, r)
+	if !ok {
+		return
+	}
+	d.forwardMemoryRead(w, r.PathValue("id"), project)
+}

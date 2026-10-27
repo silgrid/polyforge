@@ -1,0 +1,12 @@
+M	components/TerminalPanel.test.mjs
+M	components/TerminalPanel.tsx
+A	components/terminal-panel-input.test.mjs
+A	components/terminal-panel-input.ts
+A	components/terminal-panel-stream.test.mjs
+A	components/terminal-panel-stream.ts
+M	docs/terminal.md
+A	e2e/absorb-pi84-pi105-batch.mjs
+M	e2e/terminal.mjs
+A	lib/mcp-host.hostile-config.test.mjs
+M	lib/mcp-host.test.mjs
+M	lib/mcp-host.ts

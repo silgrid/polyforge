@@ -1,0 +1,3 @@
+A	.polyforge/verify-scope.sh
+M	CONTRIBUTING.md
+A	e2e/verify-scope-acceptance.mjs

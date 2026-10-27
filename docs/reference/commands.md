@@ -1,0 +1,312 @@
+# Commands — the `pf` command reference
+
+The index of the `pf` CLI's verbs and the pointers to the surfaces that
+own each command's exact shapes. This page restates no flag table: the
+authorities are `pf help` (the registry), `pf help <verb>` (one verb's
+usage) and the routing skill's fragments
+([`skills/polyforge/verbs/`](../../skills/polyforge/verbs/) — each verb's
+success and failure shapes). The concepts behind the verbs (data plane
+vs execution plane, work item, claim) are defined on the
+[concepts page](../concepts.md).
+
+## The invocation shape
+
+```
+pf [--json] [--config PATH] [--server URL] [--api-key KEY] [--socket PATH]
+[--user ID] <verb> ...
+```
+
+Global flags come before the verb; `pf --version` prints the build
+version. `pf help` prints the registry; `pf help <verb>` one verb's usage
+line; `pf help extensions` the one-line index of the
+[extension points](../extending.md). Exit codes: 0 success; 1
+client-class (4xx, transport, local validation, and a sub-action's
+flag/argument mistake); 2 server-class (5xx), an unknown verb, or a flag
+error caught by the global / verb-level flag parse.
+
+## The verb index
+
+One row per group, exactly as `pf help` prints it:
+
+| `pf help` group | Verbs |
+| --- | --- |
+| Data-plane verbs (direct to aihub) | `file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg` (`send`, `list`, `show`, `analyze`) |
+| Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, resident watcher, `subscribe`/`unsubscribe`/`adopt`/`list`), `answer`, `pause`, `resume`, `wrap`, `ops` (`status`, `models`, `auto`, `max`, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `chat init`, `task` (`spawn`, `list`, `show`, `cancel`), `result submit` (inside a workflow step only: its one result-delivery path) |
+| Management face (M1–M5) | `users`, `api-keys`, `projects`, `machines` (`list`, `rekey`), `backup` (database snapshot, see below), `config` (the one `cli.toml` writer and the daemon reload entry) |
+| Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries), `version` (the verb form of `pf --version`), `init` (a workspace's local layout) |
+| Process | `daemon` (run the work machine; `pf daemon ensure` starts it) |
+
+## `pf msg` — user-to-user messages (workbench#11)
+
+`pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]`
+posts one direct message; the first message to a user creates the one 1:1
+conversation, and every later message reuses it. `pf msg list
+[--conversation <id>] [--after <seq>] [--limit N]` lists conversations or
+one conversation's permanent history; `pf msg show <id>` reads one
+message; `pf msg analyze <id>` asks the local daemon for the explicit,
+read-only, budget-capped analyzer run (conclusion stays on the caller's
+machine). Send/list/show are data-plane verbs and are refused inside a
+workflow step; `analyze` is an execution-plane daemon POST and is refused
+there too. `--json` is the server/daemon payload passthrough. Messages
+address human users only — a chat id, WI, machine or broadcast is not an
+address; secret-shaped content is refused before storing (`CORE-422`), text
+over 4096 bytes is `CORE-413`, and the per-sender flood cap is `CORE-429`.
+
+`pf machines rekey <machine> [--public-key <base64>|--key-file <path>]`
+(admin only) rebinds a machine's Ed25519 public key; without a source it
+reads the local `<data-dir>/machine-key` seed. `pf chat init ... --force`
+is the operator's explicit interactive supersession move (`pf machines
+list` now shows ROLE and LAUNCHER).
+
+`pf backup` writes a consistent snapshot of the database (`VACUUM INTO`)
+under the server's data dir `backups/`, on the same disk. Memories live
+entirely in the database, so the snapshot holds every memory; it does
+NOT include the git repos (`git/`). For a full backup take the sqlite
+backup-API snapshot of `aihub.db` (not a plain file copy of a live WAL
+database) and rsync `git/` alongside it, as `deploy.sh` does. There is
+no backup-only mode: `deploy.sh`'s online backup (snapshot, rsync
+catch-up, consistency check, off-host copy) runs only as part of a
+deploy, so an ad-hoc full backup is these manual steps (or a copy of the
+whole data dir while aihub is stopped).
+
+`pf projects delete <id-or-name> [--yes]` (`DELETE /api/v1/projects/{id}`,
+admin only) hard-deletes a project and everything it owns — work items, events,
+dependency edges, memories, memberships, revoked project-scoped api keys and
+the per-WI bare git repos on the server — in one transaction. It is refused
+(CORE-409) while any work item is not terminal (wrapped|failed|canceled) or any
+unrevoked api key is scoped to the project; an admin key scoped to another
+project is refused (AUTH-403), an unknown project answers CORE-404. The
+delete is irreversible and takes no automatic backup: run `pf backup` first
+(and copy the server's `git/` directory if the bare repos must be kept — the
+backup does not include it), then revoke any project-scoped key. Each
+performed deletion is recorded in the `admin_audit` table (actor, time,
+project id/name, the deleted work-item ids), which survives the cascade and
+has no read API — inspect it with sqlite directly. On a terminal the CLI
+prompts for the project name after a dry-run preview; without `--yes` on a
+pipe it refuses outright.
+
+Human moves: continue = `pf resume <id>` (a paused or blocked
+work item), abandon = `pf cancel <id>` (queued, paused or blocked),
+owner's failed verdict on a live run = `pf wrap <id> --fail` (refused on
+a blocked work item), done for a work item with no bundle (design,
+decision, tracking) = `pf wrap <id> [--fail] [--note …]` (aihub records
+it; no daemon needed). These run with the human's own api key: aihub's
+door checks the work item's reporter, a project maintainer or an admin.
+The shapes are the verbs' own fragments.
+
+## `pf task` — one-shot task agents (workbench#53, the re-established #40)
+
+```
+pf task spawn --project <p> [--max-duration D] [--max-tokens N] "<prompt>"
+pf task list [--json]
+pf task show <id> [--json]
+pf task cancel <id>
+```
+
+A task is ONE fresh harness agent started from a free-text prompt (no session
+reuse, no resume, no retry). `spawn` prints the task id (`task_` + 16 hex)
+at once; the task runs in the background, so poll `pf task show <id>`
+(`--json` re-emits the daemon's route document unchanged: the metadata plus
+the report). The `--json` documents of `task list` and `task show` carry
+durations as integer **nanoseconds** in `max_duration_ns` and
+`wall_consumed_ns`; the field name states the unit, while the human output
+keeps Go durations (`20m0s`).
+
+- **Trust: the same as a session agent's.** A task agent runs with the
+  daemon user's own filesystem and network reach — there is no OS-level
+  sandbox, no read-only mount, no masked home (owner ruling 2026-10-26; the
+  platform-level non-root design that would cover every agent class is
+  workbench#10). The harness runs in the selected project's workspace
+  directory, so its clones are right there; it may read and write anything a
+  human's session may. The harness tool allowlist (read/search, Bash and the
+  web tools) is the lane's own scope, not a security boundary.
+- **The one capability gate is the write-verb guard.** The task process is
+  spawned with `PF_TASK_ID` and `PF_DAEMON_ID`, so the daemon refuses it
+  `DAEMON-403` on EVERY mutating request to its Unix socket (spawning or
+  cancelling a task, `/step/result`, job lifecycle, shutdown included) and
+  `pf` refuses it every write verb locally before any config read or network
+  call. Its reads stay open: `pf recall` and `pf memory show` go through the
+  daemon's `/task/memories` face, scoped to the task's own project, so that
+  face needs no aihub key. The aihub-direct verbs (`file create/edit/dep`,
+  `remember`, `msg send`) never reach the daemon: the spawn env carries no
+  aihub key, and `pf` clears the key in task mode and refuses those verbs
+  locally. That local refusal is an **accident guard, not a boundary** —
+  `HOME` is inherited, so `cli.toml` (and its `api_key`) stays readable
+  under it, and a task process that reads the operator's config or speaks to
+  aihub directly is outside what this lane claims. Like the step guard, the
+  daemon keys on the process tree and environment, so `setsid` plus
+  `env -i` leaves it: it stops a model's ordinary mistakes, not a determined
+  attacker.
+- **Selectors.** `--project` takes a mapped project NAME; a filesystem path
+  is refused, naming the selector.
+- **Models.** `steps.<project>.task.models` (the only key under `task`), else
+  `steps.<project>.default.models`, else the spawn is refused naming those keys.
+  There is no `--models`, `--wait` or `--type`; each is refused.
+- **Budgets.** Wall clock 20m (ceiling 60m) and 300000 tokens (ceiling 1000000),
+  hard-killed on crossing; a larger `--max-duration`/`--max-tokens` is refused
+  naming the ceiling. No yaml key changes them.
+- **States.** `running`, then exactly one of `completed`, `capped` (a budget was
+  hit; the partial report is kept and marked `truncated`), `failed` (every
+  candidate errored) or `interrupted` (`cancel` or a daemon restart; never
+  resumed).
+- **Limit.** At most 2 tasks run per daemon (outside `max_concurrent_jobs`); a
+  third spawn is refused, never queued.
+- **Reports** live only on the machine (`<data-dir>/task-reports/`): the newest
+  50 and the last 7 days. Nothing is sent to aihub or memory. A task spawned
+  from a chat delivers a one-line summary (trailing 2000 chars plus
+  `pf task show <id>`) through the resident `pf watch --chat` watcher.
+- Inside a task, `pf recall`, `pf memory show` and `pf watch <wi> --once`
+  work; every other `pf` verb is refused with `DAEMON-403`. The refusal is an
+  accident guard, not a boundary: no aihub key is placed in the spawn env and
+  `pf` clears it in task mode, but the shared `HOME` keeps `cli.toml` (and
+  its `api_key`) readable.
+- `pf ops status` carries one line: `tasks: <running>/2 running (completed N,
+  capped N, failed N, interrupted N)`.
+
+## `pf config` — cli.toml and hot reload
+
+`pf config` is the one supported writer of `cli.toml`:
+`get <key>` (effective value + source `flag|env|file|default`),
+`set <key> <value>`, `unset <key>`, `list`, `validate` (no write) and
+`reload` (apply a hand edit). A key is a flat name (`server`,
+`claude_bin`, …), a `[daemon]` key (`max_concurrent_jobs`, …) or a whole
+`[workspace."<path>"]` section (`projects=a,b,c`). Writes preserve every
+other byte, are crash-atomic, keep the mode (a new file is `0600`) and
+pass the same validator the loader, daemon and doctor use; a refused
+write leaves the file untouched. `api_key` is write-only: stdin only,
+never argv, never emitted.
+
+The running daemon applies live keys on the write (`max_concurrent_jobs`,
+`step_timeout`, `stall_window`, `claude_bin`), takes a `[workspace]`
+mapping addition at the next claim (a removal/re-route with an in-flight
+job is refused and the work items are listed) and reports `server`,
+`api_key`, `daemon_socket`, `harness_root` and `operator_agent_dir` as
+pending restart. `pf ops status` shows what is pending or overridden by
+an explicit daemon flag. The exact keys, classes and outputs are on the
+[config page](config.md); the reload route and its refused caller class
+are on the [UDS routes page](uds-routes.md).
+
+`pf config workspace --cwd <dir>` reads the mapped workspace's yaml and its
+declared step candidates (one JSON document; see the [config page](config.md)).
+`set`/`unset` also accept `--expect-hash`, `--expect-state` and, for the
+`summarize.*` keys, `--workspace`/`--cwd`; the CAS comparison runs inside the
+writer flock.
+
+## The daemon (`pf daemon`)
+
+`pf daemon` runs the local work machine (runtime, driver and supervisor
+behind the UDS face). `pf help daemon` lists every flag, rendered from
+the flag set the daemon parses — that help text is the flag authority;
+this section carries the behavior around them.
+
+**Exit status 78** means the daemon refused to start for a reason only
+an operator can fix — configuration, the recorded daemon id, the
+workspace mapping or a workspace directory, unreadable on-disk state, or
+a failed restart reconciliation. The `pf daemon ensure` supervision loop
+then STOPS (it logs `the daemon refused to start (exit 78 …); the loop
+ends`) instead of restarting into the same failure every 5s; any other
+non-zero exit is still restarted after 5s. To recover: read
+`<data-dir>/daemon.log`, fix the cause, then run `pf daemon ensure`
+(the next harness session start also runs it).
+
+**Git on the work machine.** The daemon's git calls that talk to aihub
+with the session credential — the capsule chain push, the capsule clone
+and the carrier ls-remote/fetch/push — run with no system or global git
+config (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`) and with
+every inherited `GIT_*` variable stripped. So `http.proxy`,
+`http.sslCAInfo`, `url.*.insteadOf` and `credential.helper` from
+`~/.gitconfig` do NOT apply to them: give the daemon a proxy through
+`https_proxy` / `HTTPS_PROXY` in its environment, and since
+`GIT_SSL_CAINFO` is stripped too, an aihub behind an internal CA needs
+that CA in the system trust store. The capsule commit itself still
+reads the global config, so `user.name` / `user.email` must be set for
+the daemon user; task-repo git (inside `repos/<name>`) also still uses
+the global config.
+
+**The daemon's environment** is an explicit allow-list (defined once,
+in `internal/polyforge/supervisor/env.go`): `pf daemon ensure` launches
+it with only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`,
+`TZ`, `TMPDIR`, `PWD` (exported by the loop's shell itself), the proxy
+variables (`http_proxy`, `https_proxy`, `no_proxy`, `all_proxy`, upper
+and lower case), `SSL_CERT_FILE`, `SSL_CERT_DIR`, the XDG base dirs, the
+Go toolchain variables (`GOPATH`, `GOROOT`, `GOPROXY`, `GOPRIVATE`,
+`GONOSUMDB`, `GONOPROXY`, `GOFLAGS`, `GOTOOLCHAIN`, `GO111MODULE`,
+`GOCACHE`, `GOMODCACHE`), the task-repo Git low-speed thresholds
+(`GIT_HTTP_LOW_SPEED_LIMIT`, `GIT_HTTP_LOW_SPEED_TIME`),
+`POLYFORGE_DATA_DIR`, `GOCOVERDIR` and the
+`POLYFORGE_SUPERVISOR` marker, with the values of the shell that ran
+ensure (the tmux server's environment — whatever shell first started it
+— never reaches the daemon: the loop runs `env -i <allow-list> sh -c
+<loop>`). Nothing else gets through: no `ANTHROPIC_*`, no `PF_*`, no
+stale API key. A proxy or CA the daemon needs must therefore be set
+where ensure runs (the harness session, or the install.sh shell).
+`PF_SERVER`, `PF_API_KEY`, `PF_USER_ID` and `PF_DAEMON_SOCKET` in that
+shell do steer ensure's own config load (which socket it probes), but
+are not passed to the daemon: it reads `cli.toml` (`--config`). Step
+agents see only this environment: claude steps additionally drop every
+inherited `ANTHROPIC_*` (their credential and endpoint come only from
+`<harness-root>/claude-config/settings.json`); pi steps need their
+provider keys in `auth.json` or as literals in `models.json` — a
+`$NAME` there, or a provider `*_API_KEY`, that is not on the list never
+reaches them. `GET /status` reports the daemon's environment variable
+names (never values), and `pf doctor`'s `daemon env` row warns when a
+running daemon carries `ANTHROPIC_*` or another credential-looking
+name, or when the pi step agent's `models.json` references a variable
+off the list — restart it clean with `pf ops shutdown`, wait,
+`pf daemon ensure`.
+
+**Production knobs** come from the `cli.toml` `[daemon]` table: the
+[config reference](config.md) owns every key. The only environment
+variable the daemon reads besides the `PF_*` CLI ones is
+`POLYFORGE_DATA_DIR` (the `--data-dir` default; ensure reads it too) —
+and an ensure-started daemon sees no `PF_*` at all (its environment is
+the allow-list above). The retired `POLYFORGE_MACHINE_ID`,
+`POLYFORGE_DISPLAY_NAME`, `POLYFORGE_HARNESS_ROOT`,
+`POLYFORGE_OPERATOR_AGENT_DIR` and `POLYFORGE_RECALL_TOPK` fallbacks
+are gone; a value in the environment is ignored. Because harness state
+must never move silently (polyforge#171), the daemon warns at boot when
+one of the two harness variables is set to a value differing from what
+it resolved (stderr, a `retired_env_ignored` event, `env_warnings` in
+`GET /status`), and `pf doctor`'s `retired env` row warns too.
+
+**Model health:** `pf ops models` reads the daemon's read-only `GET /models` profile — one row per model+effort × step over the events-retention window (dispatches, successes, model deaths, rate, mean wall time from event timestamps, non-model deaths and the most recent death cause) — and states the rolling window above the table; `--json` re-emits the route document unchanged. It is advisory telemetry only: no dispatch is reordered, pinned, skipped or blocked, and the thresholds are compiled constants with no config key. `pf ops status` carries the same summary (current warnings, or an explicit no-warnings line, pointing at `pf ops models`), and `pf doctor`'s `model health` row warns at most without moving `ok` or the exit code.
+
+**Job cap:** `pf ops max N` applies at once and lasts until the daemon
+restarts; every start takes the configured cap (an explicit
+`--max-concurrent-jobs`, else the `[daemon]` table, else 4). A reload
+that **changes** `max_concurrent_jobs` also overrides a temporary
+`pf ops max` (last action wins), while an unrelated reload leaves the
+temporary value in force. The cap is never persisted; `pf ops max` and
+`pf ops status` show the one in force.
+
+**Supervision bounds** are Go duration strings (e.g. `700ms`, `5m`); a
+flag omitted or passed `0` keeps the default, and every flag's meaning
+is in `pf help daemon`. Each bound's verdict names the failure it
+detects: X (`--silence-window`, test/dev-only) ends a dispatch as
+`harness_silent` when no real work signal arrives after it, or
+`model_hung` when no model output arrives while waiting for the model
+(UI chatter never counts as work); Y (`--tool-window`, test/dev-only)
+ends a turn as `tool_hung` when one tool runs longer than it; T
+(`--step-timeout`) ends a step as `step_timeout_long_task` /
+`step_timeout_slow_model`; N (`--stall-window`) ends the driver between
+steps as `driver_stalled`; and a turn that ends with no result file
+inside `--model-error-grace` (test/dev-only) is `model_error` (switch
+candidate) when it ended on a model error, `ended_without_result`
+(the first retries on the same model, the second on one candidate switches) when it ended normally. In production only T
+(`--step-timeout`) and N (`--stall-window`) are settable, through the
+`cli.toml` `[daemon]` table; the other bounds are test/dev-only. Their
+running values are observable as `supervision.{step_timeout,stall_window}`
+in `pf ops status --json`, so a live reload of either key is visible
+without a restart. The
+only per-step override in `workflow.md` is `budget.wall_minutes` (an
+estimate: T becomes `max(3 x wall_minutes, --step-timeout)`); the former
+`silence_minutes` / `tool_minutes` keys were deleted (polyforge#147)
+and an old bundle that still carries them has them silently ignored.
+
+## `pf recall` — memory search
+
+`pf help recall` prints the usage; the flags, the `--project` mapping
+check and the failure codes are in
+[skills/polyforge/verbs/recall.md](../../skills/polyforge/verbs/recall.md),
+the fragment that owns the verb's shapes. What memory is and how
+recalls reach a step: the [concepts page](../concepts.md).
