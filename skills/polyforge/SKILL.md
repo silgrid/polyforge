@@ -13,7 +13,7 @@ user's request, decide which of the 15 routing verbs it is, and run the
 `pf` CLI verb that carries it.
 Nothing else. The split between the target faces is fixed (the architecture's routing table):
 
-- **Data-plane verbs** (`file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg send`/`list`/`show`): pure
+- **Data-plane verbs** (`file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg send`/`list`/`ack`/`show`): pure
   Core data reads/writes that do not touch any execution scene. The `pf` CLI
   talks HTTP **direct to AIHub** (single port, `Authorization: Bearer
   <api_key>`); the daemon is not involved.
@@ -73,7 +73,8 @@ EXTENDED_GLOB and starts a comment after whitespace.
 | remember this / save this lesson / note it down / 记下来 / 存个经验 / 写入项目记忆 | `verbs/remember.md` | AIHub |
 | show that memory's full body / open the stored note / 看看记忆正文 / 打开那条记忆 | `verbs/memory.md` | AIHub |
 | send a message to a user / send a DM / reach someone / 给 X 发消息 / 发私信 / 联系某人 | `verbs/message.md` (send) | AIHub |
-| check messages / inbox / 收信 / 看看有没有消息 / 有哪些消息 | `verbs/message.md` (list) | AIHub |
+| check messages / inbox / 收信 / 看看有没有消息 / 有哪些消息 | `verbs/message.md` (list; `--before` pages backwards) | AIHub |
+| acknowledge / mark read / 标为已读 / 确认看过消息 | `verbs/message.md` (ack; read cursor only) | AIHub |
 | read one message / 看那条消息 | `verbs/message.md` (show) | AIHub |
 | analyze a message / 分析这条消息 | `verbs/message.md` (analyze) | daemon |
 | owner-directed code work on a project repo / upgrade a library / bump the dependency / fix this bug in the repo / change the code / make it do X / refactor X / 升级 X 库 / 升级一下依赖 / 修一下这个 bug / 改一下仓里的 X / 让它支持 X / 重构一下 X | `verbs/execute-intent.md` (execution intent → execution ticket: `file create --bundle <lane>` + `submit`; the session agent never hand-executes) | AIHub + daemon |

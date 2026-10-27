@@ -1,4 +1,4 @@
--- deploy/sql/v2.21.0/rollback.sql — the automatic-rollback counterpart.
+-- deploy/sql/v2.20.8/rollback.sql — the automatic-rollback counterpart.
 -- The v2.20.6 binary selects and INSERTs machines.user_id NOT NULL, so the
 -- column comes back NOT NULL and is filled from operator_id, the one
 -- machine identity that survives. The heartbeat-minted users the upgrade

@@ -27,14 +27,14 @@ import (
 )
 
 type fakeFace struct {
-	mu      sync.Mutex
-	calls   int
-	lastWI  string
-	lastRel string
-	ans     *api.QueryAnswerBody
-	err     error
-	inbox   *api.MachineInbox
-	acks    []string
+	mu         sync.Mutex
+	calls      int
+	lastWI     string
+	lastRel    string
+	ans        *api.QueryAnswerBody
+	err        error
+	inbox      *api.MachineInbox
+	deliveries []string
 }
 
 func (f *fakeFace) Inbox(faces string, wait time.Duration) (*api.MachineInbox, error) {
@@ -58,10 +58,10 @@ func (f *fakeFace) ProgressQuery(wi, artifactPath string) (*api.QueryAnswerBody,
 	f.lastWI, f.lastRel = wi, artifactPath
 	return f.ans, f.err
 }
-func (f *fakeFace) AckMessage(conversationID string, seq int64) error {
+func (f *fakeFace) DeliverMessage(conversationID string, seq int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.acks = append(f.acks, fmt.Sprintf("%s/%d", conversationID, seq))
+	f.deliveries = append(f.deliveries, fmt.Sprintf("%s/%d", conversationID, seq))
 	return nil
 }
 func (f *fakeFace) SetMachineIdentity(machineID string, key ed25519.PrivateKey) {}

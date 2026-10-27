@@ -3,17 +3,20 @@ package cli
 // verbs_msg.go: the user-to-user messaging verbs (workbench#11).
 //
 //	pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]
-//	pf msg list [--conversation <id>] [--after <seq>] [--limit N]
+//	pf msg list [--conversation <id>] [--after <seq>] [--before <seq>] [--limit N]
+//	pf msg ack <conversation> [--seq N]
 //	pf msg show <id>
 //	pf msg analyze <id>
 //
-// send/list/show are data-plane (direct to aihub with the human's key);
+// send/list/ack/show are data-plane (direct to aihub with the human's key);
 // analyze is execution-plane (the recipient's daemon runs a read-only,
 // budget-capped one-shot). All support --json passthrough.
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -24,13 +27,14 @@ var cmdMsg = &Command{
 	Group:   GroupData,
 	Summary: "User-to-user messages: direct conversations with permanent, server-owned history",
 	Usage: "pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]\n" +
-		"       pf msg list [--conversation <id>] [--after <seq>] [--limit N]\n" +
+		"       pf msg list [--conversation <id>] [--after <seq>] [--before <seq>] [--limit N]\n" +
+		"       pf msg ack <conversation> [--seq N]\n" +
 		"       pf msg show <id>\n" +
 		"       pf msg analyze <id>",
 	Setup: func(fs *flag.FlagSet) {},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if len(args) == 0 {
-			return fmt.Errorf("msg: expected send|list|show|analyze")
+			return fmt.Errorf("msg: expected send|list|ack|show|analyze")
 		}
 		sub, rest := args[0], args[1:]
 		switch sub {
@@ -59,6 +63,7 @@ var cmdMsg = &Command{
 			f := subFlags(ctx, "msg list")
 			conv := f.String("conversation", "", "conversation id (without it: list conversations)")
 			after := f.Int64("after", 0, "only messages with seq above this cursor")
+			before := f.Int64("before", 0, "only messages with seq below this cursor (backward page)")
 			limit := f.Int("limit", 0, "page size (default 50, max 200)")
 			rest, err := parseCommandArgs(f, rest)
 			if err != nil {
@@ -68,7 +73,7 @@ var cmdMsg = &Command{
 				return fmt.Errorf("msg list: no positional arguments")
 			}
 			if *conv != "" {
-				raw, err := ctx.aihub().ListMessages(*conv, *after, 0, *limit)
+				raw, err := ctx.aihub().ListMessages(*conv, *after, *before, *limit)
 				if err != nil {
 					return err
 				}
@@ -80,6 +85,47 @@ var cmdMsg = &Command{
 				return err
 			}
 			finishAs(ctx, raw, func(l *api.ConversationsAnswer) { renderConversations(ctx.Stdout, l.Conversations) })
+			return nil
+		case "ack":
+			f := subFlags(ctx, "msg ack")
+			seq := f.Int64("seq", 0, "sequence to acknowledge (without it: the newest message)")
+			rest, err := parseCommandArgs(f, rest)
+			if err != nil {
+				return err
+			}
+			if len(rest) != 1 {
+				return fmt.Errorf("msg ack: expected exactly one conversation id")
+			}
+			conv := rest[0]
+			// Without --seq, read the newest sequence first. An explicit
+			// --seq (including 0 or a negative value) is forwarded unchanged
+			// so the server stays the single bound enforcer (CORE-400).
+			acked := *seq
+			explicit := false
+			f.Visit(func(fl *flag.Flag) {
+				if fl.Name == "seq" {
+					explicit = true
+				}
+			})
+			if !explicit {
+				raw, err := ctx.aihub().ListMessages(conv, 0, math.MaxInt64, 1)
+				if err != nil {
+					return err
+				}
+				var page api.MessagePage
+				if err := json.Unmarshal(raw, &page); err != nil {
+					return err
+				}
+				if page.LastSeq <= 0 {
+					return fmt.Errorf("msg ack: conversation %s has no messages to acknowledge", conv)
+				}
+				acked = page.LastSeq
+			}
+			payload, err := ctx.aihub().Acknowledge(conv, acked)
+			if err != nil {
+				return err
+			}
+			ctx.finishLine(payload, "acknowledged %s through seq %d\n", conv, acked)
 			return nil
 		case "show":
 			if len(rest) != 1 {

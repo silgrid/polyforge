@@ -3,7 +3,8 @@ package daemon
 // messaging.go: the daemon's live message delivery face (workbench#11).
 // It runs only for an interactive daemon whose operator has a second live
 // machine (the single-machine idle rule). Each message prints exactly one
-// line to the daemon log, then its server cursor is advanced per message;
+// line to the daemon log, then the operator's server-side DELIVERY cursor is
+// advanced per message (never the read cursor: delivery clears no unread);
 // no local cursor is kept, so a restart resumes from the server and a
 // kill -9 replays at most one line.
 
@@ -43,10 +44,10 @@ func (d *Daemon) messageLoop(ctx context.Context) {
 		for _, msg := range inbox.Messages {
 			fmt.Fprintf(os.Stderr, "daemon: message %s from %s (conversation %s): %s\n",
 				msg.ID, msg.SenderID, msg.ConversationID, oneLine(msg.Text))
-			if err := client.AckMessage(msg.ConversationID, msg.Seq); err != nil {
-				fmt.Fprintf(os.Stderr, "daemon: ack message %s: %v\n", msg.ID, err)
-				// The server will hand the same unread rows back; back off
-				// instead of spinning on a failing ack.
+			if err := client.DeliverMessage(msg.ConversationID, msg.Seq); err != nil {
+				fmt.Fprintf(os.Stderr, "daemon: deliver message %s: %v\n", msg.ID, err)
+				// The server will hand the same pending rows back; back off
+				// instead of spinning on a failing delivery.
 				if !faceSleep(ctx, time.Second) {
 					return
 				}

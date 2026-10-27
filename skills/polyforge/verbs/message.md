@@ -1,7 +1,7 @@
 # message — user-to-user messages (`pf msg`)
 
-Split-plane verb: `pf msg send` / `list` / `show` are data-plane (the `pf`
-CLI talks HTTP direct to AIHub with the human's own key); `pf msg analyze`
+Split-plane verb: `pf msg send` / `list` / `ack` / `show` are data-plane
+(the `pf` CLI talks HTTP direct to AIHub with the human's own key); `pf msg analyze`
 is execution-plane (the local daemon runs an explicit, read-only,
 budget-capped analyzer one-shot, and its conclusion stays on the caller's
 machine). A conversation is one direct 1:1 history per user pair: the first
@@ -20,7 +20,8 @@ not an address.
 
 ```
 pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]
-pf msg list [--conversation <id>] [--after <seq>] [--limit N]
+pf msg list [--conversation <id>] [--after <seq>] [--before <seq>] [--limit N]
+pf msg ack <conversation> [--seq N]
 pf msg show <id>
 pf msg analyze <id>
 ```
@@ -28,9 +29,17 @@ pf msg analyze <id>
 - `send`: `--to` names an existing human user id, `--text` is the body
   (≤4096 bytes UTF-8), `--about-wi` is an optional work-item anchor and
   `--reply-to` an optional message id in the same conversation.
-- `list`: without `--conversation` it lists the caller's conversations;
-  with it, that conversation's messages. `--after` is a sequence cursor and
-  `--limit` the page size.
+- `list`: without `--conversation` it lists the conversations the caller
+  may see (a member its own; an admin every conversation, as before) with
+  their unread counts; with it, that conversation's messages. `--after` is a forward sequence
+  cursor, `--before` a backward one (the page immediately below it, ascending
+  — the newest page is `--before <newest+1>`), and `--limit` the page size.
+- `ack <conversation> [--seq N]`: advances the caller's **read** cursor, and
+  only that. Without `--seq` it first reads the conversation's newest
+  sequence and acknowledges it; an explicit `--seq` is forwarded unchanged
+  (`0` or negative is refused by the server with `CORE-400`). A repeated or
+  backward acknowledgment is a successful no-op: the read cursor only moves
+  forward. Machine delivery is separate — delivery never clears unread.
 - `show <id>`: one message.
 - `analyze <id>`: the daemon's read-only, budget-capped analyzer run.
 
@@ -76,8 +85,9 @@ never becomes an address (`--to` stays a human user id).
 | `CORE-413` | `--text` over 4096 bytes, or `--about-wi` over its anchor bound | Shorten it: trim the body or move detail to a linked reference. |
 | `CORE-429` | per-sender flood cap | Wait for the window to roll over before sending again. |
 | `AUTH-401` | api key missing or invalid | Credential rejected — check `--api-key` / `PF_API_KEY` / the config's `api_key`. |
-| `AUTH-403` | `list --conversation` on a conversation you are not a member of | Only its members and admins can read it — ask a member, or list without `--conversation`. |
-| `CORE-404` | `--to` names no existing human user, or an unknown message / conversation id | Check the user id (a chat id, work item, machine or broadcast is not an address) or the message id. |
+| `AUTH-403` | `ack` of a conversation you are not a member of (admins included — an admin cannot acknowledge for someone else) | Only its members can acknowledge it — ask a member. An admin can still read it through `list --conversation` / `show`; reading never moves anyone's read cursor. |
+| `CORE-400` | `ack --seq` that is `0`/negative or past the conversation's newest message | Acknowledge a sequence the conversation actually has; without `--seq` the CLI uses the newest one. Nothing was written. |
+| `CORE-404` | `--to` names no existing human user, or an unknown message / conversation id (`ack` included) | Check the user id (a chat id, work item, machine or broadcast is not an address), the message id or the conversation id. |
 | `DAEMON-409` | `analyze` while another analyzer run is in progress, or the project has no `summarize.models` configured | Wait for the running analysis to finish and retry; or configure `summarize.models` for the project. |
 | `DAEMON-500` | the analyzer run failed within its budget (every candidate model failed, or the wall-clock budget ran out) | Retry once; if it keeps failing, check the project's `summarize.models`. |
 | `dial unix …` | daemon not running (`analyze` only) | Nothing was analyzed — run `pf daemon ensure`, then retry once (or check `--socket`). |
@@ -88,5 +98,7 @@ missing or extra message id (`show` / `analyze` take exactly one).
 
 ## Notes
 
-- `send` / `list` / `show` are refused inside a workflow step; `analyze` is
-  too. This fragment is for the interactive session, not a step agent.
+- `send` / `list` / `ack` / `show` are refused inside a workflow step;
+  `analyze` is too. This fragment is for the interactive session, not a step
+  agent: a step holds no aihub credential, so neither the ack nor the
+  delivery-cursor entry point is reachable from it.

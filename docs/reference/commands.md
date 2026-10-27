@@ -30,7 +30,7 @@ One row per group, exactly as `pf help` prints it:
 
 | `pf help` group | Verbs |
 | --- | --- |
-| Data-plane verbs (direct to aihub) | `file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg` (`send`, `list`, `show`, `analyze`) |
+| Data-plane verbs (direct to aihub) | `file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg` (`send`, `list`, `ack`, `show`, `analyze`) |
 | Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, resident watcher, `subscribe`/`unsubscribe`/`adopt`/`list`), `answer`, `pause`, `resume`, `wrap`, `ops` (`status`, `models`, `auto`, `max`, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `chat init`, `task` (`spawn`, `list`, `show`, `cancel`), `result submit` (inside a workflow step only: its one result-delivery path) |
 | Management face (M1–M5) | `users`, `api-keys`, `projects`, `machines` (`list`, `rekey`), `backup` (database snapshot, see below), `config` (the one `cli.toml` writer and the daemon reload entry) |
 | Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries), `version` (the verb form of `pf --version`), `init` (a workspace's local layout) |
@@ -41,13 +41,21 @@ One row per group, exactly as `pf help` prints it:
 `pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]`
 posts one direct message; the first message to a user creates the one 1:1
 conversation, and every later message reuses it. `pf msg list
-[--conversation <id>] [--after <seq>] [--limit N]` lists conversations or
-one conversation's permanent history; `pf msg show <id>` reads one
+[--conversation <id>] [--after <seq>] [--before <seq>] [--limit N]` lists
+the conversations the caller may see (a member its own; an admin every
+conversation, as before) or one conversation's permanent history; `--after`
+pages forward and `--before` pages backward (the page immediately below the
+cursor, ascending). `pf msg ack <conversation>
+[--seq N]` advances only the caller's read cursor — without `--seq` it reads
+the newest sequence first, a repeated/backward ack is a no-op, and `0`/
+negative or past-the-newest is `CORE-400`. `pf msg show <id>` reads one
 message; `pf msg analyze <id>` asks the local daemon for the explicit,
 read-only, budget-capped analyzer run (conclusion stays on the caller's
-machine). Send/list/show are data-plane verbs and are refused inside a
+machine). Send/list/ack/show are data-plane verbs and are refused inside a
 workflow step; `analyze` is an execution-plane daemon POST and is refused
-there too. `--json` is the server/daemon payload passthrough. Messages
+there too. The daemon advances the operator's separate delivery cursor as it
+delivers; delivery never clears unread, and neither the ack route nor the
+delivery route is reachable by a step agent (a step holds no aihub key). `--json` is the server/daemon payload passthrough. Messages
 address human users only — a chat id, WI, machine or broadcast is not an
 address; secret-shaped content is refused before storing (`CORE-422`), text
 over 4096 bytes is `CORE-413`, and the per-sender flood cap is `CORE-429`.

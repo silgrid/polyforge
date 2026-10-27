@@ -1,10 +1,11 @@
 package core
 
-// upgrade_v2210_test.go — the deploy/sql/v2.21.0 window SQL (workbench#57,
+// upgrade_v2208_test.go — the deploy/sql/v2.20.8 window SQL (workbench#57,
 // the machine-heartbeat permission model). The fixture is a real
-// v2.20.6-shape database: the pre-#149 DDL with every earlier upgrade
-// applied explicitly (NOT applyLaterUpgrades — the appended v2.21.0 entry
+// pre-heartbeat-shape database: the pre-#149 DDL with every earlier upgrade
+// applied explicitly (NOT applyLaterUpgrades — the appended v2.20.8 entry
 // turns that helper into the post-change shape this fixture must not be),
+// so it carries the v2.20.7 shape with `machines` still in its v2.20.6 form
 // populated with the three machine-user classes the migration must tell
 // apart (an unreferenced heartbeat-minted one, a referenced one, an
 // administrator-created one) and machines rows that carry an operator.
@@ -23,15 +24,19 @@ import (
 
 // The fixture's identities.
 const (
-	v2210OperatorID = "u-v2210-op"
-	v2210OrphanUser = "mac_v2210_orphan"
-	v2210RefUser    = "mac_v2210_referenced"
-	v2210AdminUser  = "mac_v2210_admin"
+	v2208OperatorID = "u-v2208-op"
+	v2208OrphanUser = "mac_v2208_orphan"
+	v2208RefUser    = "mac_v2208_referenced"
+	v2208AdminUser  = "mac_v2208_admin"
 )
 
-// v2206SchemaDB answers a populated v2.20.6-shape database (data dir + raw
-// handle). PRAGMA foreign_keys is ON, like the repo's Open: the migration
-// must be safe under the constraint the running server enforces.
+// v2206SchemaDB answers a populated database in the shape the last release
+// before the heartbeat one ships (data dir + raw handle): every deploy/sql
+// dir before v2.20.8 applied, so the messaging cursors are already split
+// (v2.20.7) and `machines` still carries the v2.20.6 shape (`user_id`
+// NOT NULL) that the migration changes. PRAGMA foreign_keys is ON, like the
+// repo's Open: the migration must be safe under the constraint the running
+// server enforces.
 func v2206SchemaDB(t *testing.T) (string, *sql.DB) {
 	t.Helper()
 	dataDir, raw := oldSchemaDB(t, false)
@@ -39,7 +44,7 @@ func v2206SchemaDB(t *testing.T) (string, *sql.DB) {
 		t.Fatalf("fixture: PRAGMA foreign_keys: %v", err)
 	}
 	for _, v := range sqlVers {
-		if v == sqlVer2210 {
+		if v == sqlVer2208 {
 			break
 		}
 		applySQLText(t, raw, loadSQLFileOf(t, v, "upgrade.sql"))
@@ -53,33 +58,33 @@ func v2206SchemaDB(t *testing.T) (string, *sql.DB) {
 		args []any
 	}{
 		{`INSERT INTO users(id,display_name,email,kind,role,created_at)
-			VALUES(?1,'v2210 operator','op@v2210.invalid','human','admin',?2)`,
-			[]any{v2210OperatorID, now}},
+			VALUES(?1,'v2208 operator','op@v2208.invalid','human','admin',?2)`,
+			[]any{v2208OperatorID, now}},
 		// A heartbeat-minted machine user nothing references.
 		{`INSERT INTO users(id,display_name,email,kind,role,created_at)
 			VALUES(?1,'orphan machine',?1||'@machines.local','machine','writer',?2)`,
-			[]any{v2210OrphanUser, now}},
+			[]any{v2208OrphanUser, now}},
 		// A heartbeat-minted machine user an api_keys row references.
 		{`INSERT INTO users(id,display_name,email,kind,role,created_at)
 			VALUES(?1,'referenced machine',?1||'@machines.local','machine','writer',?2)`,
-			[]any{v2210RefUser, now}},
+			[]any{v2208RefUser, now}},
 		{`INSERT INTO api_keys(id,user_id,project_id,name,key_hash,created_at)
-			VALUES('k-v2210-ref',?1,NULL,'ref','deadbeef',?2)`,
-			[]any{v2210RefUser, now}},
+			VALUES('k-v2208-ref',?1,NULL,'ref','deadbeef',?2)`,
+			[]any{v2208RefUser, now}},
 		// An administrator-created machine user (pf users create --user-type
 		// machine): kind machine, but not a @machines.local mint.
 		{`INSERT INTO users(id,display_name,email,kind,role,created_at)
-			VALUES(?1,'admin machine','ops-machine@v2210.invalid','machine','writer',?2)`,
-			[]any{v2210AdminUser, now}},
+			VALUES(?1,'admin machine','ops-machine@v2208.invalid','machine','writer',?2)`,
+			[]any{v2208AdminUser, now}},
 		// Four machines rows: one per user class plus a NULL-operator row.
 		{`INSERT INTO machines(id,user_id,last_heartbeat_at,role,operator_id)
-			VALUES('m-v2210-orphan',?1,?2,'runner',?3)`, []any{v2210OrphanUser, now, v2210OperatorID}},
+			VALUES('m-v2208-orphan',?1,?2,'runner',?3)`, []any{v2208OrphanUser, now, v2208OperatorID}},
 		{`INSERT INTO machines(id,user_id,last_heartbeat_at,role,operator_id)
-			VALUES('m-v2210-ref',?1,?2,'runner',?3)`, []any{v2210RefUser, now, v2210OperatorID}},
+			VALUES('m-v2208-ref',?1,?2,'runner',?3)`, []any{v2208RefUser, now, v2208OperatorID}},
 		{`INSERT INTO machines(id,user_id,last_heartbeat_at,role,operator_id)
-			VALUES('m-v2210-admin',?1,?2,'runner',?1)`, []any{v2210AdminUser, now}},
+			VALUES('m-v2208-admin',?1,?2,'runner',?1)`, []any{v2208AdminUser, now}},
 		{`INSERT INTO machines(id,user_id,last_heartbeat_at,role,operator_id)
-			VALUES('m-v2210-nullop',?1,?2,'runner',NULL)`, []any{v2210OrphanUser, now}},
+			VALUES('m-v2208-nullop',?1,?2,'runner',NULL)`, []any{v2208OrphanUser, now}},
 	}
 	for _, s := range stmts {
 		if _, err := raw.Exec(s.stmt, s.args...); err != nil {
@@ -89,10 +94,10 @@ func v2206SchemaDB(t *testing.T) (string, *sql.DB) {
 	return dataDir, raw
 }
 
-// probe2210 executes v2.21.0's probe.sql final statement.
-func probe2210(t *testing.T, db *sql.DB) int {
+// probe2208 executes v2.20.8's probe.sql final statement.
+func probe2208(t *testing.T, db *sql.DB) int {
 	t.Helper()
-	stmts := upgradeStatements(loadSQLFileOf(t, sqlVer2210, "probe.sql"))
+	stmts := upgradeStatements(loadSQLFileOf(t, sqlVer2208, "probe.sql"))
 	var v int
 	if err := db.QueryRow(stmts[len(stmts)-1]).Scan(&v); err != nil {
 		t.Fatalf("probe statement failed: %v", err)
@@ -100,8 +105,8 @@ func probe2210(t *testing.T, db *sql.DB) int {
 	return v
 }
 
-// v2210MachineRows answers id → operator_id for every machines row.
-func v2210MachineRows(t *testing.T, db *sql.DB) map[string]string {
+// v2208MachineRows answers id → operator_id for every machines row.
+func v2208MachineRows(t *testing.T, db *sql.DB) map[string]string {
 	t.Helper()
 	rows, err := db.Query(`SELECT id, COALESCE(operator_id,'') FROM machines`)
 	if err != nil {
@@ -122,8 +127,8 @@ func v2210MachineRows(t *testing.T, db *sql.DB) map[string]string {
 	return out
 }
 
-// v2210UserExists answers whether one users row survives.
-func v2210UserExists(t *testing.T, db *sql.DB, id string) bool {
+// v2208UserExists answers whether one users row survives.
+func v2208UserExists(t *testing.T, db *sql.DB, id string) bool {
 	t.Helper()
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE id=?1`, id).Scan(&n); err != nil {
@@ -155,64 +160,64 @@ func columnNotNull(t *testing.T, db *sql.DB, table, column string) (found, notNu
 	return false, false, sql.NullString{}
 }
 
-// TestUpgradeV2210ProbeRunOnce: apply on the v2.20.6 shape, skip once
+// TestUpgradeV2208ProbeRunOnce: apply on the v2.20.6 shape, skip once
 // applied, the rollback restores the column so a retry upgrade is allowed,
 // and the retry works. The upgrade is deliberately not re-runnable (the
 // second DROP COLUMN fails): the probe carries the run-once guarantee.
-func TestUpgradeV2210ProbeRunOnce(t *testing.T) {
+func TestUpgradeV2208ProbeRunOnce(t *testing.T) {
 	_, raw := v2206SchemaDB(t)
-	if v := probe2210(t, raw); v == 0 {
+	if v := probe2208(t, raw); v == 0 {
 		t.Fatal("probe answers 0 (already applied) on the v2.20.6 shape - machines.user_id exists")
 	}
-	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2210, "upgrade.sql"))
+	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2208, "upgrade.sql"))
 	if rawColumnExists(t, raw, "machines", "user_id") {
-		t.Fatal("machines.user_id still present after the v2.21.0 upgrade")
+		t.Fatal("machines.user_id still present after the v2.20.8 upgrade")
 	}
-	if v := probe2210(t, raw); v != 0 {
+	if v := probe2208(t, raw); v != 0 {
 		t.Fatalf("probe answers %d after the upgrade, want 0", v)
 	}
 	failed := false
-	for _, stmt := range upgradeStatements(loadSQLFileOf(t, sqlVer2210, "upgrade.sql")) {
+	for _, stmt := range upgradeStatements(loadSQLFileOf(t, sqlVer2208, "upgrade.sql")) {
 		if _, err := raw.Exec(stmt); err != nil {
 			failed = true
 			break
 		}
 	}
 	if !failed {
-		t.Fatal("re-running the v2.21.0 upgrade must fail - the probe is the run-once guard")
+		t.Fatal("re-running the v2.20.8 upgrade must fail - the probe is the run-once guard")
 	}
-	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2210, "rollback.sql"))
-	if v := probe2210(t, raw); v == 0 {
+	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2208, "rollback.sql"))
+	if v := probe2208(t, raw); v == 0 {
 		t.Fatal("probe answers 0 after the rollback - a retry upgrade must be allowed")
 	}
-	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2210, "upgrade.sql"))
-	if v := probe2210(t, raw); v != 0 {
+	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2208, "upgrade.sql"))
+	if v := probe2208(t, raw); v != 0 {
 		t.Fatalf("probe answers %d after the retry upgrade, want 0", v)
 	}
 }
 
-// TestUpgradeV2210DeletesOnlyUnreferencedMintUsers: the migration drops the
+// TestUpgradeV2208DeletesOnlyUnreferencedMintUsers: the migration drops the
 // column first and then deletes exactly the heartbeat-minted users nothing
 // references; every machines row survives, with its operator.
-func TestUpgradeV2210DeletesOnlyUnreferencedMintUsers(t *testing.T) {
+func TestUpgradeV2208DeletesOnlyUnreferencedMintUsers(t *testing.T) {
 	_, raw := v2206SchemaDB(t)
-	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2210, "upgrade.sql"))
+	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2208, "upgrade.sql"))
 
-	if v2210UserExists(t, raw, v2210OrphanUser) {
-		t.Errorf("the unreferenced heartbeat-minted user %s survived the upgrade", v2210OrphanUser)
+	if v2208UserExists(t, raw, v2208OrphanUser) {
+		t.Errorf("the unreferenced heartbeat-minted user %s survived the upgrade", v2208OrphanUser)
 	}
-	if !v2210UserExists(t, raw, v2210RefUser) {
-		t.Errorf("the referenced heartbeat-minted user %s was deleted (its api_keys row would dangle)", v2210RefUser)
+	if !v2208UserExists(t, raw, v2208RefUser) {
+		t.Errorf("the referenced heartbeat-minted user %s was deleted (its api_keys row would dangle)", v2208RefUser)
 	}
-	if !v2210UserExists(t, raw, v2210AdminUser) {
-		t.Errorf("the administrator-created machine user %s was deleted (out of scope, requirement 12)", v2210AdminUser)
+	if !v2208UserExists(t, raw, v2208AdminUser) {
+		t.Errorf("the administrator-created machine user %s was deleted (out of scope, requirement 12)", v2208AdminUser)
 	}
-	got := v2210MachineRows(t, raw)
+	got := v2208MachineRows(t, raw)
 	want := map[string]string{
-		"m-v2210-orphan": v2210OperatorID,
-		"m-v2210-ref":    v2210OperatorID,
-		"m-v2210-admin":  v2210AdminUser,
-		"m-v2210-nullop": "",
+		"m-v2208-orphan": v2208OperatorID,
+		"m-v2208-ref":    v2208OperatorID,
+		"m-v2208-admin":  v2208AdminUser,
+		"m-v2208-nullop": "",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("machines rows after the upgrade = %v, want %d rows", got, len(want))
@@ -229,13 +234,13 @@ func TestUpgradeV2210DeletesOnlyUnreferencedMintUsers(t *testing.T) {
 	}
 }
 
-// TestUpgradeV2210RollbackRestoresV2206Shape: the rollback re-adds
+// TestUpgradeV2208RollbackRestoresV2206Shape: the rollback re-adds
 // user_id NOT NULL filled from operator_id (” when there is none), the
 // deleted users stay deleted, and the v2.20.6 binary's INSERT shape works.
-func TestUpgradeV2210RollbackRestoresV2206Shape(t *testing.T) {
+func TestUpgradeV2208RollbackRestoresV2206Shape(t *testing.T) {
 	_, raw := v2206SchemaDB(t)
-	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2210, "upgrade.sql"))
-	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2210, "rollback.sql"))
+	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2208, "upgrade.sql"))
+	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2208, "rollback.sql"))
 
 	found, notNull, dflt := columnNotNull(t, raw, "machines", "user_id")
 	if !found {
@@ -247,10 +252,10 @@ func TestUpgradeV2210RollbackRestoresV2206Shape(t *testing.T) {
 	if !dflt.Valid || dflt.String != "''" {
 		t.Errorf("machines.user_id default = %+v, want ''", dflt)
 	}
-	if v2210UserExists(t, raw, v2210OrphanUser) {
+	if v2208UserExists(t, raw, v2208OrphanUser) {
 		t.Error("the rollback resurrected the deleted heartbeat-minted user")
 	}
-	wantOperators := v2210MachineRows(t, raw)
+	wantOperators := v2208MachineRows(t, raw)
 	rows, err := raw.Query(`SELECT id, user_id FROM machines ORDER BY id`)
 	if err != nil {
 		t.Fatalf("read machines after the rollback: %v", err)
@@ -276,28 +281,28 @@ func TestUpgradeV2210RollbackRestoresV2206Shape(t *testing.T) {
 	// The v2.20.6 registration shape (user_id NOT NULL named explicitly).
 	now := Now()
 	if _, err := raw.Exec(`INSERT INTO machines(id,user_id,last_heartbeat_at,role,operator_id)
-		VALUES('m-v2210-oldshape',?1,?2,'runner',?1)`, v2210OperatorID, now); err != nil {
+		VALUES('m-v2208-oldshape',?1,?2,'runner',?1)`, v2208OperatorID, now); err != nil {
 		t.Fatalf("a v2.20.6-shaped machines INSERT failed after the rollback: %v", err)
 	}
 }
 
-// TestUpgradeV2210MigratedSchemaColumns pins the migrated machines column
+// TestUpgradeV2208MigratedSchemaColumns pins the migrated machines column
 // set: the fresh DDL's columns minus user_id (a fresh database is compared
 // with the migrated one by the drop_machine_user_identity unit, which also
 // changes the fresh DDL).
-func TestUpgradeV2210MigratedSchemaColumns(t *testing.T) {
+func TestUpgradeV2208MigratedSchemaColumns(t *testing.T) {
 	_, raw := v2206SchemaDB(t)
-	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2210, "upgrade.sql"))
+	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2208, "upgrade.sql"))
 	for _, c := range []string{
 		"id", "runtime_version", "mode", "live_wi_ids", "last_heartbeat_at",
 		"public_key", "launcher", "role", "operator_id", "superseded_at", "capability",
 	} {
 		if !rawColumnExists(t, raw, "machines", c) {
-			t.Errorf("machines.%s missing after the v2.21.0 upgrade", c)
+			t.Errorf("machines.%s missing after the v2.20.8 upgrade", c)
 		}
 	}
 	if rawColumnExists(t, raw, "machines", "user_id") {
-		t.Error("machines.user_id present after the v2.21.0 upgrade")
+		t.Error("machines.user_id present after the v2.20.8 upgrade")
 	}
 }
 
@@ -326,12 +331,12 @@ func machinesPragma(t *testing.T, db *sql.DB) []string {
 	return out
 }
 
-// TestUpgradeV2210FreshAndMigratedSchemaAgree: a database the current Open
+// TestUpgradeV2208FreshAndMigratedSchemaAgree: a database the current Open
 // creates and one migrated from v2.20.6 end with the same machines schema —
 // and neither carries user_id.
-func TestUpgradeV2210FreshAndMigratedSchemaAgree(t *testing.T) {
+func TestUpgradeV2208FreshAndMigratedSchemaAgree(t *testing.T) {
 	dataDir, raw := v2206SchemaDB(t)
-	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2210, "upgrade.sql"))
+	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2208, "upgrade.sql"))
 	migrated := machinesPragma(t, raw)
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)

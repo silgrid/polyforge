@@ -591,7 +591,13 @@ func (c *Client) GetMessage(id string) (json.RawMessage, error) {
 	return c.raw("GET", "/api/v1/messages/"+url.PathEscape(id), nil)
 }
 
-// AckMessage advances the caller's read cursor.
-func (c *Client) AckMessage(convID string, seq int64) error {
-	return c.Do("POST", "/api/v1/messages/ack", api.AckMessage{ConversationID: convID, Seq: seq}, nil)
+// Acknowledge advances the caller's read cursor and answers the server
+// payload unchanged (the CLI's --json passthrough).
+func (c *Client) Acknowledge(convID string, seq int64) (json.RawMessage, error) {
+	return c.send("POST", "/api/v1/messages/ack", api.AckMessage{ConversationID: convID, Seq: seq})
+}
+
+// DeliverMessage advances the caller's machine delivery cursor only.
+func (c *Client) DeliverMessage(convID string, seq int64) error {
+	return c.Do("POST", "/api/v1/messages/delivered", api.AckMessage{ConversationID: convID, Seq: seq}, nil)
 }

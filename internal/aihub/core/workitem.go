@@ -290,7 +290,9 @@ func nullableString(p *string) any {
 	return *p
 }
 
-// Resolve maps an id or a "<project>#<seq>" slug to the work-item id.
+// Resolve maps an id, a "<project>#<seq>" slug, or the path-safe
+// "<project>-<seq>" form (api.PathName: capsule directory and delivery
+// branch spelling) to the work-item id.
 func (m *WIManager) Resolve(idOrSlug string) (string, error) {
 	return resolveWith(m.db, idOrSlug)
 }
@@ -301,11 +303,13 @@ func resolveWith(q queryRower, idOrSlug string) (string, error) {
 	if strings.HasPrefix(idOrSlug, "wi_") {
 		return idOrSlug, nil
 	}
-	i := strings.LastIndexByte(idOrSlug, '#')
-	if i < 0 {
+	project, seqStr, ok := splitSlug(idOrSlug, '#')
+	if !ok {
+		project, seqStr, ok = splitSlug(idOrSlug, '-')
+	}
+	if !ok {
 		return "", Fail(api.ErrCoreNotFound, "", "work item %s", idOrSlug)
 	}
-	project, seqStr := idOrSlug[:i], idOrSlug[i+1:]
 	seq, err := strconv.ParseInt(seqStr, 10, 64)
 	if err != nil {
 		return "", Fail(api.ErrCoreNotFound, "", "work item %s", idOrSlug)
@@ -320,6 +324,17 @@ func resolveWith(q queryRower, idOrSlug string) (string, error) {
 		return "", err
 	}
 	return id, nil
+}
+
+// splitSlug splits "<project><sep><seq>" at the last separator. The seq is
+// always the part after the last one in both the slug and PathName shapes
+// (project names carry neither "#" nor a trailing numeric segment).
+func splitSlug(value string, sep byte) (string, string, bool) {
+	i := strings.LastIndexByte(value, sep)
+	if i <= 0 || i == len(value)-1 {
+		return "", "", false
+	}
+	return value[:i], value[i+1:], true
 }
 
 // GetOptions controls detail assembly.

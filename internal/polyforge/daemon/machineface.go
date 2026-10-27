@@ -25,7 +25,7 @@ type MachineFace interface {
 	Inbox(faces string, wait time.Duration) (*api.MachineInbox, error)
 	AnswerQuery(qid string, body api.QueryAnswerBody) error
 	ProgressQuery(wi, artifactPath string) (*api.QueryAnswerBody, error)
-	AckMessage(conversationID string, seq int64) error
+	DeliverMessage(conversationID string, seq int64) error
 	SetMachineIdentity(machineID string, key ed25519.PrivateKey)
 }
 

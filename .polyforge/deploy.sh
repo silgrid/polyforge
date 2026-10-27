@@ -30,10 +30,14 @@
 # runs ONLINE (the service keeps running); the new image is loaded next to the
 # running container; only the SWITCH WINDOW interrupts service: the old
 # container stops (graceful drain), the version's UPGRADE SQL is applied
-# (deploy/sql/<TAG>/{upgrade,rollback,probe}.sql fetched from the target git
-# tag, probe-guarded run-once, ONE transaction per script), and the new
-# container starts. Images are never built by compose,
+# (deploy/sql/<TAG>/{upgrade,rollback,probe}.sql plus the optional
+# expected_deltas row-delta declaration, all fetched from the target git tag,
+# probe-guarded run-once, ONE transaction per script), and the new container
+# starts. Images are never built by compose,
 # so a recreate can no longer silently revert the binary to an older image.
+# A version that declares expected_deltas also gets two READ-ONLY counts of
+# just those tables inside the window (before and after its upgrade SQL); the
+# SQL itself and those counts are the whole in-window work.
 #
 #   0 preflight   tag, release assets + SHA256SUMS (covers the binaries and
 #                 aihub-image.digest), docker pull ghcr.io/silgrid/aihub:<tag> on
@@ -62,11 +66,16 @@
 #                       polyforge/aihub:<tag>, back up and edit ONLY the aihub service
 #                       of the compose file (image, no build:, stop_grace_period),
 #                       compose config -q, then the SWITCH WINDOW: compose stop
-#                       $AIHUB_SERVICE (drain <= DRAIN_SECS) -> apply the upgrade SQL
-#                       of every not-yet-applied version in (old, tag] (ascending,
-#                       one transaction each) -> compose up -d --no-deps aihub ->
-#                       poll HTTP, print downtime
-#   7 verify      image + version, logs panic/fatal, counts >= baseline, pf smoke
+#                       $AIHUB_SERVICE (drain <= DRAIN_SECS) -> when an applied
+#                       version declares expected_deltas, a read-only count of
+#                       just those tables -> apply the upgrade SQL of every
+#                       not-yet-applied version in (old, tag] (ascending, one
+#                       transaction each) -> count the declared tables again ->
+#                       compose up -d --no-deps aihub -> poll HTTP, print
+#                       downtime
+#   7 verify      image + version, logs panic/fatal, counts >= baseline (a table
+#                 declared in expected_deltas is rebased to its post-SQL count,
+#                 so it is still guarded across the swap), pf smoke
 #   8 rollback    concrete commands printed; final summary
 #
 # Safety rails:
@@ -251,6 +260,7 @@ SQLVERS=""        # release tags in (OLDVER, TAG] carrying deploy/sql/<tag>/, as
 SQLTODO=""        # the subset whose probe reports not-yet-applied (applied in the window)
 APPLIED_VERS=""   # versions whose upgrade.sql was applied THIS run (rollback.sql targets)
 SQLSRV=""         # server-side staging dir of the SQL files (filled before the window)
+DELTA_VERS=""     # the subset of SQLVERS that ships an expected_deltas declaration
 
 rssh() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$AIHUB_HOST" "$@"; }
 # check_lock [restore-compose]: the lock session (background ssh) must still be
@@ -442,7 +452,8 @@ vcmp() {
     print 0 }'
 }
 
-# ---- upgrade SQL (deploy/sql/<TAG>/{upgrade,rollback,probe}.sql) ----
+# ---- upgrade SQL (deploy/sql/<TAG>/{upgrade,rollback,probe}.sql plus the
+# ---- optional expected_deltas row-delta declaration) ----
 # Sourced per version from that version's git tag, with a working-tree
 # fallback, exactly like the legacy Dockerfile fetch. One directory per
 # release tag; no dir -> that release has no schema change -> the window is
@@ -583,10 +594,22 @@ sql_plan() {
         || die "deploy/sql/$v/ has upgrade.sql but no rollback.sql - incomplete SQL dir, refusing (nothing was changed)"
       sql_fetch "$v" probe.sql "$WORK/sql-$v-probe.sql" \
         || die "deploy/sql/$v/ has upgrade.sql but no probe.sql - incomplete SQL dir, refusing (nothing was changed)"
+      if sql_fetch "$v" expected_deltas "$WORK/sql-$v-deltas"; then
+        expected_deltas_sum "$WORK/deltas-check-$v" "$WORK/sql-$v-deltas" \
+          || die "deploy/sql/$v/expected_deltas is malformed (one 'table: signed-delta' per line; blank lines and # comments ignored) - refusing (nothing was changed)"
+        if [ -s "$WORK/deltas-check-$v" ]; then
+          DELTA_VERS="$DELTA_VERS$v
+"
+        fi
+      fi
       SQLVERS="$SQLVERS$v
 "
     fi
   done
+  if [ -n "$DELTA_VERS" ]; then
+    for v in $DELTA_VERS; do awk '{print $1}' "$WORK/deltas-check-$v"; done \
+      | sort -u >"$WORK/delta.tables"
+  fi
   [ -n "$SQLVERS" ] || { note "upgrade SQL: none (no deploy/sql dir in ($OLDVER, $TAG]) - the window is exactly today's"; return 0; }
   sql_version_gate
   if [ -n "$DRY" ]; then
@@ -715,6 +738,35 @@ finally:
 dbprobe_remote() { printf '%s\n' "$PYCHK" | rssh python3 - "$1" "$2"; }
 dbprobe_local() { printf '%s\n' "$PYCHK" | python3 -I - "$1" "$2"; }
 
+# The in-window declared-delta sample: read-only, COUNTS ONLY the declared
+# tables (no full db copy, no integrity_check - the service is stopped and
+# step 7's integrity check runs after the swap). The table names arrive as
+# argv: a real $AIHUB_HOST cannot read the deployer's $WORK. Tables that do
+# not exist are left out; the caller distinguishes "absent before" from
+# "gone after". Names are matched exactly (the same rule counts_deltas uses).
+# shellcheck disable=SC2016
+PYDELTA='
+import sqlite3, sys
+db, want = sys.argv[1], sys.argv[2:]
+c = sqlite3.connect("file:" + db + "?mode=ro", uri=True, timeout=30)
+names = {r[0] for r in c.execute(
+    "select name from sqlite_master where type=\"table\"")}
+for t in want:
+    if t not in names:
+        continue
+    print("count", t, c.execute("select count(*) from \"%s\"" % t.replace("\"", "")).fetchone()[0])
+'
+# delta_counts_to <db> <tables-file> <out>: the read-only declared-table
+# counts, "table n" lines in <out>. The names are already regex-validated in
+# expected_deltas_sum, so they are passed to the remote python as argv (one
+# per line, no blanks); the deployer-local <tables-file> is never a remote path.
+delta_counts_to() {
+  # shellcheck disable=SC2046  # validated names, one per line, no blanks
+  printf '%s\n' "$PYDELTA" | rssh python3 - "$1" $(cat "$2") >"$3.raw" 2>"$3.err" \
+    || die "read-only count of the declared tables on $1 failed: $(cat "$3.err")"
+  sed -n 's/^count //p' "$3.raw" >"$3"
+}
+
 # probe_to <remote|local> <db> <mode> <outfile>: runs the probe, requires
 # integrity ok and every key table, leaves "table n" lines in <outfile>.
 probe_to() {
@@ -747,6 +799,43 @@ counts_cmp() {
       }
       exit bad
     }' "$1" "$2"
+}
+
+# expected_deltas_sum <out> <file>...: validate and sum the versions'
+# expected_deltas declarations into <out>, one "table signed-delta" per
+# line. Each input line is "table: signed-delta"; blank lines and # comments
+# are ignored. Returns 1 on a malformed line (file:line named on stderr).
+expected_deltas_sum() {
+  ed_out="$1"; shift
+  [ "$#" -gt 0 ] || { : >"$ed_out"; return 0; }
+  awk '
+    { line = $0
+      sub(/#.*$/, "", line)
+      gsub(/^[ \t\r]+/, "", line); gsub(/[ \t\r]+$/, "", line) }
+    line == "" { next }
+    line !~ /^[A-Za-z_][A-Za-z0-9_]*[ \t]*:[ \t]*[+-]?[0-9]+$/ {
+      printf "   %s:%d: malformed expected_deltas line: %s\n", FILENAME, FNR, $0 > "/dev/stderr"
+      bad = 1; next }
+    { split(line, p, ":"); t = p[1]; gsub(/[ \t]/, "", t); sum[t] += p[2] + 0 }
+    END { if (bad) exit 1; for (t in sum) print t, sum[t] }
+  ' "$@" >"$ed_out"
+}
+
+# counts_deltas <pre> <post> <declared>: each declared table's actual
+# (post - pre) delta must equal the declared signed delta exactly; a missing
+# table or a different delta returns 1. Prints a line per declared table.
+counts_deltas() {
+  awk '
+    FILENAME == ARGV[1] { p[$1] = $2; next }
+    FILENAME == ARGV[2] { a[$1] = $2; next }
+    { t = $1; want = $2 + 0
+      if (!(t in p)) { printf "   table %s is declared but absent before the upgrade SQL\n", t; bad = 1; next }
+      if (!(t in a)) { printf "   table %s is declared but GONE after the upgrade SQL\n", t; bad = 1; next }
+      got = a[t] - p[t]
+      if (got != want) { printf "   table %s: delta %d != declared %d\n", t, got, want; bad = 1 }
+      else printf "   table %s: declared delta %+d matched\n", t, want
+    }
+    END { exit bad }' "$1" "$2" "$3"
 }
 
 show_counts() { sed 's/^\(.*\) \([0-9]*\)$/   \1 = \2/' "$1"; }
@@ -1132,7 +1221,7 @@ else
 fi
 
 echo
-echo "== plan for steps 2-8 (ONLINE backup; the only interruption is the switch window: old container stop -> upgrade SQL -> new container start) =="
+echo "== plan for steps 2-8 (ONLINE backup; the only interruption is the switch window: old container stop -> optional read-only count of the declared tables -> upgrade SQL -> count them again -> new container start) =="
 if [ -n "$SQLTODO" ]; then
   SQL_LINE=": $(printf '%s ' $SQLTODO)(ascending, one transaction each)"
 elif [ -n "$DRY" ] && [ -n "$SQLVERS" ]; then
@@ -1159,11 +1248,11 @@ cat <<EOF
                      docker save $GHCR_IMAGE:$TAG | ssh $AIHUB_HOST docker load  (service keeps running); server image ID == $NEW_LOCAL_ID
                      docker tag on the server -> $NEWIMG ; verify git, curl in it
                      back up $COMPOSE_FILE -> $COMPOSE_BAK ; edit ONLY service $AIHUB_SERVICE (planned diff below) ; docker compose config -q (failure -> backup restored, stop)
-   switch window     docker compose stop $AIHUB_SERVICE (graceful drain <= ${DRAIN_SECS}s) -> upgrade SQL${SQL_LINE} -> docker compose -f $COMPOSE_FILE -p $COMPOSE_PROJECT up -d --no-deps $AIHUB_SERVICE ; poll http://127.0.0.1:$AIHUB_PORT/ every 0.2s ; downtime = stop until HTTP answers (warn > ${MAX_DOWNTIME_SECS}s, fail if not up in ${UP_WAIT_SECS}s)
+   switch window     docker compose stop $AIHUB_SERVICE (graceful drain <= ${DRAIN_SECS}s) -> when an applied version declares expected_deltas, a read-only count of just those tables -> upgrade SQL${SQL_LINE} -> count the declared tables again -> docker compose -f $COMPOSE_FILE -p $COMPOSE_PROJECT up -d --no-deps $AIHUB_SERVICE ; poll http://127.0.0.1:$AIHUB_PORT/ every 0.2s ; downtime = stop until HTTP answers (warn > ${MAX_DOWNTIME_SECS}s, fail if not up in ${UP_WAIT_SECS}s)
    (a failure from the window on AUTO-ROLLS BACK: the rollback SQL of every version applied this run runs FIRST (descending, one transaction each), then the swap back to $OLDIMG; exits 10; rollback failure exits 11)
    lock               flock -n $DEPLOY_LOCK_FILE on $AIHUB_HOST held from step 2 to exit (not taken in dry-run)
 7. verify            container image == $NEWIMG ; wait <= ${WAIT_SECS}s for 'docker exec $AIHUB_CONTAINER /aihub -version' == $TAG ; docker logs --since <start>: print error lines, FAIL on Go runtime panic/fatal error
-                     integrity + row counts >= frozen baseline (read-only); local 'pf queue --limit 1'
+                     integrity + row counts >= frozen baseline (read-only; a declared table is rebased to its post-SQL count, so it is still checked across the swap); local 'pf queue --limit 1'
 8. rollback + summary; rollback commands for this run:
 EOF
 rollback_text
@@ -1383,8 +1472,20 @@ note "compose file edited and validated (docker compose config -q ok)"
 START_AT="$(rssh "date -u +%Y-%m-%dT%H:%M:%SZ")"
 check_lock restore   # the last look at the lock before the window (restores the compose file when it died)
 SWAPPED=1   # from here on the service is interrupted: a failure means "rollback"
+# A declared table's delta is measured with the service stopped, right
+# before and right after the upgrade SQL: the frozen baseline predates the
+# window, so a live write to that table must not look like migration work.
+# Only the declared tables are counted (read-only) - no full db copy and no
+# integrity_check inside the window; step 7 still does both after the swap.
+DELTA_TODO=""
+for v in $SQLTODO; do
+  if printf '%s\n' "$DELTA_VERS" | grep -qxF -- "$v"; then DELTA_TODO="$DELTA_TODO$v
+"; fi
+done
 window_stop || die "stopping the old container failed: \"$stopped_at\" (docker compose stop $AIHUB_SERVICE)"
+[ -z "$DELTA_TODO" ] || delta_counts_to "$AIHUB_DATA/aihub.db" "$WORK/delta.tables" "$WORK/pre_sql.counts"
 apply_upgrade_sql
+[ -z "$DELTA_TODO" ] || delta_counts_to "$AIHUB_DATA/aihub.db" "$WORK/delta.tables" "$WORK/post_sql.counts"
 swap_up "$stopped_at" || die "swap did not complete: \"$down\" (docker compose up failed, or no HTTP answer within ${UP_WAIT_SECS}s of the window start)"
 note "downtime: ${down}s (container stop [drain <= ${DRAIN_SECS}s] + upgrade SQL + compose up -d --no-deps $AIHUB_SERVICE, until HTTP answers)"
 if awk -v d="$down" -v m="$MAX_DOWNTIME_SECS" 'BEGIN{exit !(d + 0 > m + 0)}'; then
@@ -1454,6 +1555,29 @@ awk -v gone="$WORK/gone.tables" '
 while read -r t n; do
   note "table $t dropped by the upgrade SQL (was $n) - expected"
 done <"$WORK/gone.tables"
+# Declared tables are checked against the SQL's own effect (the in-window
+# pre/post counts, summed across the versions applied this run). The
+# declaration is a checklist, not an amnesty: a mismatch rolls back like
+# data loss. Their baseline is then REBASED to the post-SQL count instead of
+# dropped, so the post-swap >= check below still covers them (and the
+# missing-table check): rows lost after the SQL, e.g. by the new binary's
+# startup, are caught exactly as for every other table.
+deltas_files=""
+for v in $APPLIED_VERS; do
+  [ -s "$WORK/deltas-check-$v" ] && deltas_files="$deltas_files $WORK/deltas-check-$v"
+done
+if [ -n "$deltas_files" ]; then
+  # shellcheck disable=SC2086  # one path per applied version; tags carry no whitespace
+  awk '{ sum[$1] += $2 } END { for (t in sum) print t, sum[t] }' $deltas_files >"$WORK/declared.deltas"
+  counts_deltas "$WORK/pre_sql.counts" "$WORK/post_sql.counts" "$WORK/declared.deltas" \
+    || die "row count deltas after the upgrade SQL do not match the migration's expected_deltas"
+  awk '
+    FILENAME == ARGV[1] { d[$1] = 1; next }
+    FILENAME == ARGV[2] { if ($1 in d) post[$1] = $2; next }
+    { if ($1 in post) print $1, post[$1]; else print }
+  ' "$WORK/declared.deltas" "$WORK/post_sql.counts" "$WORK/verify.counts" >"$WORK/verify.rebased.counts"
+  mv "$WORK/verify.rebased.counts" "$WORK/verify.counts"
+fi
 counts_cmp "$WORK/verify.counts" "$WORK/after.counts" ge || die "row counts after the swap are BELOW the baseline"
 note "row counts >= baseline"
 note "HTTP answered during the restart poll (any status = serving)"

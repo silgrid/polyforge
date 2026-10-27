@@ -738,3 +738,95 @@ func TestDeployV250RepoInventorySQL(t *testing.T) {
 		}
 	})
 }
+
+// ---- the real heartbeat migration dir (workbench#66) ----
+//
+// deploy.sh selects window SQL only by the LOCAL release tags in
+// (OLDVER, TAG]; a deploy/sql dir with no tag of the same name is never
+// visited. The heartbeat migration first landed as deploy/sql/v2.21.0, a
+// minor tag release.sh refuses to cut, so no v2.20.* deploy would apply it:
+// a v2.20.7 cut from that main would run the workbench#57 code on the
+// v2.20.6 schema, where a new machine's first registration fails with
+// machines.user_id NOT NULL (root-cause artifact E1). No v2.20.7 has been
+// cut; the v2.20.6 deploy did apply its own dir. The dir must be named after
+// the patch tag that carries it (v2.20.8).
+
+// realHeartbeatSQLDirs: the deploy/sql dirs whose upgrade.sql is the
+// workbench#57 machines.user_id migration.
+func realHeartbeatSQLDirs(t *testing.T) []string {
+	t.Helper()
+	root := filepath.Join("..", "deploy", "sql")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read the real deploy/sql: %v", err)
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(root, e.Name(), "upgrade.sql"))
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(raw), "DROP COLUMN user_id") {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// copyRealSQLTree copies the repo's whole deploy/sql tree into the deployer
+// repo (the working-tree fallback sql_fetch reads). The tree is taken as
+// is: the test must see the real dir names, not a renamed copy.
+func copyRealSQLTree(t *testing.T, d *deployWorld) {
+	t.Helper()
+	root := filepath.Join("..", "deploy", "sql")
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(d.repo, "deploy", "sql", rel)
+		if info.IsDir() {
+			return os.MkdirAll(dst, 0o755)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, raw, 0o644)
+	})
+	if err != nil {
+		t.Fatalf("copy the real deploy/sql tree: %v", err)
+	}
+}
+
+// TestDeployV2208HeartbeatSQLSelected: the heartbeat migration lives in
+// deploy/sql/v2.20.8 and a v2.20.6 -> v2.20.8 deploy selects it, in order
+// with the v2.20.7 migration #56 added (both tags cut, as a consecutive
+// double release does — skipping v2.20.7 would drop #56's SQL). Before the
+// fix the dir was v2.21.0: the first assertion found v2.21.0 and the dry-run
+// reported no SQL candidate. Both fail on the old tree.
+func TestDeployV2208HeartbeatSQLSelected(t *testing.T) {
+	if got := realHeartbeatSQLDirs(t); len(got) != 1 || got[0] != "v2.20.8" {
+		t.Fatalf("the machines.user_id migration must live in exactly one deploy/sql dir named v2.20.8 (the patch tag that carries it), found %v", got)
+	}
+	d := newDeployWorld(t, "v2.20.6")
+	copyRealSQLTree(t, d)
+	d.git("add", "-A")
+	d.git("commit", "-q", "-m", "real deploy/sql")
+	d.release("v2.20.6", true, digOld, digOld)
+	d.release("v2.20.7", true, digOld, digOld)
+	d.release("v2.20.8", true, digNew, digNew)
+	out, err := d.run("", "v2.20.8", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run deploy failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "upgrade SQL candidates (dry-run - the probes run at deploy time): v2.20.7 v2.20.8") {
+		t.Fatalf("a v2.20.6 -> v2.20.8 deploy must select deploy/sql/v2.20.7 then deploy/sql/v2.20.8 (the #56 and heartbeat migrations run in the window, in order); output:\n%s", out)
+	}
+}

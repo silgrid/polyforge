@@ -155,13 +155,14 @@ health route. All paths under `/api/v1` except `/git/`.
 | POST | `/machines/heartbeat` | key + machine signature; the operator's Bearer; first registration and a legacy-row claim also need any project membership or a global admin | §4.3; body adds `public_key`, `launcher`, `role`, `force`, `capability`; answer adds `operator_id`, `machine_face_version`, negotiated `role`, `multi_machine`, `superseded`, `superseded_by`, `interactive_refused` (workbench#11, #57) |
 | GET | `/machines` | admin | §4.3; rows also project `public_key`, `launcher`, `role`, `operator_id` (never `user_id`) |
 | POST | `/machines/{id}/rekey` | admin | rebind `public_key` (no key history) |
-| GET | `/machines/inbox?faces=queries,messages&wait=25s` | signed machine | holder long-poll: pending queries (always) and the operator's unread messages to whichever signed machine asks; the daemon itself requests `faces=messages` only when interactive, not superseded and with a fresh peer (`messageFaceWanted`) |
+| GET | `/machines/inbox?faces=queries,messages&wait=25s` | signed machine | holder long-poll: pending queries (always) and the operator's messages pending delivery (above `delivered_seq`) to whichever signed machine asks; the daemon itself requests `faces=messages` only when interactive, not superseded and with a fresh peer (`messageFaceWanted`) |
 | POST | `/queries/{qid}/answer` | signed machine | only the addressed holder may answer |
 | POST | `/work-items/{id}/progress-query`, `/artifact-query` | signed machine + read | authorize the caller's project read, resolve the fresh holder, relay the answer (5 s deadline); in-memory only |
 | POST | `/messages` | key | send (`to` human user, text ≤4096, optional `about_wi`/`reply_to`); secret scan before any write |
-| POST | `/messages/ack` | key | max-advance the member read cursor |
+| POST | `/messages/ack` | key | max-advance the caller's own member read cursor (member-only; an admin cannot ack for someone else) |
+| POST | `/messages/delivered` | key | max-advance the caller's own member delivery cursor only; unread/read state unchanged (daemon delivery path) |
 | GET | `/messages/{id}` | key + member/admin | one message |
-| GET | `/conversations` | key | caller's conversations (admin: all) |
+| GET | `/conversations` | key | conversations the caller may see (admin: all; a member: its own); unread counts only other participants above `read_seq` |
 | GET | `/conversations/{id}/messages` | key + member/admin | permanent history; `after`/`before` seq cursor, default 50/max 200 |
 | POST | `/memories` | key + writer (else `MEM-403`) | §9 |
 | GET | `/memories/search` | key | `q` (required), `match` (`all` default: every term; `any`: ranked any-term; else `MEM-400`), `type` (exact or `X.*`), `tags`, `limit` (default 50; ≤0 or >200 → 50), `project`, `excerpt` (≤8192 runes → `content_excerpt`) |
