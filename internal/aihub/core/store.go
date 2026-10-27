@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE TABLE IF NOT EXISTS conversation_members (
   conversation_id TEXT NOT NULL REFERENCES conversations(id),
   user_id         TEXT NOT NULL REFERENCES users(id),
-  last_read_seq   INTEGER NOT NULL DEFAULT 0,
+  delivered_seq   INTEGER NOT NULL DEFAULT 0,
+  read_seq        INTEGER NOT NULL DEFAULT 0,
   joined_at       TEXT NOT NULL,
   PRIMARY KEY (conversation_id, user_id)
 );

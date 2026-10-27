@@ -159,8 +159,8 @@ func findOrCreateDirectTx(tx *sql.Tx, a, b string) (string, error) {
 		return "", err
 	}
 	for _, u := range pair {
-		if _, err := tx.Exec(`INSERT INTO conversation_members(conversation_id,user_id,last_read_seq,joined_at)
-			VALUES (?1,?2,0,?3)`, id, u, now); err != nil {
+		if _, err := tx.Exec(`INSERT INTO conversation_members(conversation_id,user_id,delivered_seq,read_seq,joined_at)
+			VALUES (?1,?2,0,0,?3)`, id, u, now); err != nil {
 			return "", err
 		}
 	}
@@ -263,30 +263,38 @@ func (m *AdminManager) Get(callerID, messageID string, isAdmin bool) (*api.Messa
 	return &msg, nil
 }
 
-// ListConversations answers the caller's conversations with member ids,
-// last seq and unread count.
+// ListConversations answers the conversations the caller may see (an admin
+// sees every conversation, a member its own) with member ids, last seq and
+// unread count. Unread counts only the other participant's messages above the
+// caller's read cursor; the caller's own messages never count. Member-only
+// filtering for the pi-web Messages surface happens in the pi-web server.
 func (m *AdminManager) ListConversations(callerID string, isAdmin bool) ([]api.Conversation, error) {
-	q := `SELECT c.id, c.kind, c.created_at, COALESCE(MAX(msg.seq),0)
+	q := `SELECT c.id, c.kind, c.created_at, COALESCE(MAX(msg.seq),0), COALESCE(cm.read_seq,0)
 		FROM conversations c
-		LEFT JOIN messages msg ON msg.conversation_id=c.id`
-	args := []any{}
+		LEFT JOIN messages msg ON msg.conversation_id=c.id
+		LEFT JOIN conversation_members cm ON cm.conversation_id=c.id AND cm.user_id=?1`
+	args := []any{callerID}
 	if !isAdmin {
-		q += ` JOIN conversation_members cm ON cm.conversation_id=c.id AND cm.user_id=?1`
-		args = append(args, callerID)
+		// The same join already constrains a member to its own rows; this
+		// WHERE keeps the join from degenerating for a non-member caller.
+		q += ` WHERE cm.user_id IS NOT NULL`
 	}
-	q += ` GROUP BY c.id, c.kind, c.created_at ORDER BY c.created_at ASC`
+	q += ` GROUP BY c.id, c.kind, c.created_at, cm.read_seq ORDER BY c.created_at ASC`
 	rows, err := m.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
 	out := []api.Conversation{}
+	reads := []int64{}
 	for rows.Next() {
 		var c api.Conversation
-		if err := rows.Scan(&c.ID, &c.Kind, &c.CreatedAt, &c.LastSeq); err != nil {
+		var read int64
+		if err := rows.Scan(&c.ID, &c.Kind, &c.CreatedAt, &c.LastSeq, &read); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		out = append(out, c)
+		reads = append(reads, read)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -301,12 +309,10 @@ func (m *AdminManager) ListConversations(callerID string, isAdmin bool) ([]api.C
 		if err != nil {
 			return nil, err
 		}
-		var read int64
-		_ = m.db.QueryRow(`SELECT COALESCE(last_read_seq,0) FROM conversation_members
-			WHERE conversation_id=?1 AND user_id=?2`, c.ID, callerID).Scan(&read)
-		if c.LastSeq > read {
-			if err := m.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE conversation_id=?1 AND seq>?2`,
-				c.ID, read).Scan(&c.Unread); err != nil {
+		if c.LastSeq > reads[i] {
+			if err := m.db.QueryRow(`SELECT COUNT(*) FROM messages
+				WHERE conversation_id=?1 AND seq>?2 AND sender_id<>?3`,
+				c.ID, reads[i], callerID).Scan(&c.Unread); err != nil {
 				return nil, err
 			}
 		}
@@ -331,27 +337,51 @@ func (m *AdminManager) conversationMembers(convID string) ([]string, error) {
 	return out, rows.Err()
 }
 
-// AdvanceCursor advances a member's read cursor (max-advance, idempotent).
-func (m *AdminManager) AdvanceCursor(callerID string, req api.AckMessage) error {
-	if req.ConversationID == "" || req.Seq <= 0 {
-		return Fail(api.ErrCoreBadInput, "", "conversation_id and a positive seq are required")
+// Acknowledge advances the caller's own read cursor (max-advance, idempotent).
+// It refuses a non-positive sequence and a sequence past the conversation's
+// newest message with CORE-400 before any write; an unknown conversation is
+// CORE-404 and a non-member (admin included) is AUTH-403.
+func (m *AdminManager) Acknowledge(callerID string, req api.AckMessage) error {
+	if req.Seq <= 0 {
+		return Fail(api.ErrCoreBadInput, "", "seq must be a positive message sequence")
 	}
 	if err := m.conversationAccess(callerID, req.ConversationID, false); err != nil {
 		return err
 	}
-	res, err := m.db.Exec(`UPDATE conversation_members SET last_read_seq=?3
-		WHERE conversation_id=?1 AND user_id=?2 AND last_read_seq<?3`,
-		req.ConversationID, callerID, req.Seq)
-	if err != nil {
+	var last int64
+	if err := m.db.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM messages WHERE conversation_id=?1`,
+		req.ConversationID).Scan(&last); err != nil {
 		return err
 	}
-	_ = res
-	return nil
+	if req.Seq > last {
+		return Fail(api.ErrCoreBadInput, "", "seq %d is past the newest message %d", req.Seq, last)
+	}
+	_, err := m.db.Exec(`UPDATE conversation_members SET read_seq=?3
+		WHERE conversation_id=?1 AND user_id=?2 AND read_seq<?3`,
+		req.ConversationID, callerID, req.Seq)
+	return err
 }
 
-// UnreadFor answers the messages for operatorID's machines that sit above
-// the operator's cursor (the live inbox feed).
-func (m *AdminManager) UnreadFor(userID string, limit int) ([]api.Message, error) {
+// MarkDelivered advances the caller's own delivery cursor (max-advance,
+// idempotent). Machine delivery is not read: read_seq and unread do not move.
+// The caller's Bearer credential decides the row; no body-supplied user id.
+func (m *AdminManager) MarkDelivered(callerID string, req api.AckMessage) error {
+	if req.Seq <= 0 {
+		return Fail(api.ErrCoreBadInput, "", "seq must be a positive message sequence")
+	}
+	if err := m.conversationAccess(callerID, req.ConversationID, false); err != nil {
+		return err
+	}
+	_, err := m.db.Exec(`UPDATE conversation_members SET delivered_seq=?3
+		WHERE conversation_id=?1 AND user_id=?2 AND delivered_seq<?3`,
+		req.ConversationID, callerID, req.Seq)
+	return err
+}
+
+// PendingDelivery answers the messages for operatorID's machines that sit
+// above the operator's delivery cursor (the live inbox feed). A restart
+// replays nothing at or below delivered_seq.
+func (m *AdminManager) PendingDelivery(userID string, limit int) ([]api.Message, error) {
 	if limit <= 0 {
 		limit = defaultPageSize
 	}
@@ -359,7 +389,7 @@ func (m *AdminManager) UnreadFor(userID string, limit int) ([]api.Message, error
 		COALESCE(msg.about_wi,''), COALESCE(msg.reply_to,''), msg.created_at
 		FROM messages msg
 		JOIN conversation_members cm ON cm.conversation_id=msg.conversation_id AND cm.user_id=?1
-		WHERE msg.seq > cm.last_read_seq AND msg.sender_id<>?1
+		WHERE msg.seq > cm.delivered_seq AND msg.sender_id<>?1
 		ORDER BY msg.seq ASC LIMIT ?2`, userID, limit)
 	if err != nil {
 		return nil, err

@@ -54,7 +54,8 @@ type ConversationsAnswer struct {
 }
 
 // AckMessage is the POST /api/v1/messages/ack body: a per-message read
-// cursor advance (max-advance, idempotent).
+// cursor advance (max-advance, idempotent). The delivery route reuses the
+// same body shape for POST /api/v1/messages/delivered.
 type AckMessage struct {
 	ConversationID string `json:"conversation_id"`
 	Seq            int64  `json:"seq"`

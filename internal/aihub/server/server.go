@@ -110,6 +110,7 @@ func (s *Server) routes() {
 	// (`pf msg` is refused inside a step; step processes hold no key).
 	m.HandleFunc("POST /api/v1/messages", s.auth(s.hSendMessage))
 	m.HandleFunc("POST /api/v1/messages/ack", s.auth(s.hAckMessage))
+	m.HandleFunc("POST /api/v1/messages/delivered", s.auth(s.hDeliveredMessage))
 	m.HandleFunc("GET /api/v1/messages/{id}", s.auth(s.hGetMessage))
 	m.HandleFunc("GET /api/v1/conversations", s.auth(s.hListConversations))
 	m.HandleFunc("GET /api/v1/conversations/{id}/messages", s.auth(s.hListMessages))

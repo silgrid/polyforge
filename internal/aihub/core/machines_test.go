@@ -70,7 +70,7 @@ func TestHeartbeatRegistersOnceThenRefreshes(t *testing.T) {
 	}
 
 	// A repeat is a refresh in place, same operator.
-	h2, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{MachineID: "m-reg", RuntimeVersion: "v2.21.0"},
+	h2, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{MachineID: "m-reg", RuntimeVersion: "v2.20.8"},
 		signedProof(env.UserID, "pk-reg"), nil)
 	if err != nil {
 		t.Fatalf("second heartbeat: %v", err)

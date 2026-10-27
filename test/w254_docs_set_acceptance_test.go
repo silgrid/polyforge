@@ -420,14 +420,17 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // TestW254UpgradeByteIdentical: docs/upgrade.md — per-version upgrade
 // records, append-only history — stays byte-identical (the sha256 of the
 // file is pinned here: main's bytes plus the appended,
-// workbench#11 and workbench#57 entries and nothing else) and is only
+// workbench#11, workbench#56 and workbench#57 entries, plus the absorbed
+// public PR #15/#16 rewrites — polyforge#262 identifier anonymization and
+// history-proof api-key example, polyforge#263 neutral candidate names, plus
+// workbench#85's expected_deltas contract — and nothing else) and is only
 // routed to, from the install ops page and the README landing page. The
 // pin moves in the same commit as each append (the append-only rule, spec
 // workbench#57 R14: docs change with the code, and the pin with the docs).
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "81159e8f13a072ab3d6bb930a813475d57774a9a694250485d665e86440cae40" {
+	if got := hex.EncodeToString(sum[:]); got != "9f47bd4dfc30e983e3c5e448ceeaa97e0868d30a79d7108b57c47d9798e85005" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	install := w254Norm(w254Page(t, "docs/install.md"))

@@ -75,6 +75,14 @@ func TestMsgListShowShapes(t *testing.T) {
 		!strings.Contains(got, "after=3") || !strings.Contains(got, "limit=2") {
 		t.Fatalf("list messages path = %s", got)
 	}
+	code, stdout, stderr = runPf(t, env, "msg", "list", "--conversation", "conv_1", "--before", "71", "--limit", "50")
+	if code != 0 || !strings.Contains(stdout, "hello there") {
+		t.Fatalf("list messages --before: exit %d %s %s", code, stdout, stderr)
+	}
+	if got := rec.last().Path; !strings.Contains(got, "before=71") || !strings.Contains(got, "limit=50") ||
+		strings.Contains(got, "after=") {
+		t.Fatalf("list messages --before path = %s", got)
+	}
 	code, stdout, stderr = runPf(t, env, "msg", "show", "msg_1")
 	if code != 0 || !strings.Contains(stdout, "#7 msg_1") || !strings.Contains(stdout, "hello there") {
 		t.Fatalf("show: exit %d %s %s", code, stdout, stderr)
@@ -118,6 +126,7 @@ func TestMsgVerbsAreRefusedInsideAStep(t *testing.T) {
 	for _, args := range [][]string{
 		{"msg", "send", "--to", "u_2", "--text", "hi"},
 		{"msg", "list"},
+		{"msg", "ack", "conv_1"},
 		{"msg", "show", "msg_1"},
 		{"machines", "rekey", "m-1", "--public-key", "pk"},
 	} {
@@ -131,5 +140,71 @@ func TestMsgVerbsAreRefusedInsideAStep(t *testing.T) {
 	}
 	if n := len(arec.all()); n != 0 {
 		t.Fatalf("a step process reached aihub %d time(s)", n)
+	}
+}
+
+// msgAckAihub answers the ack read-then-write path: the newest page first,
+// then the ack POST. conv_missing is CORE-404 on the read.
+func msgAckAihub(t *testing.T, rec *reqRecorder) string {
+	t.Helper()
+	srv := newFakeAihub(t, rec, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "conv_missing") {
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"code":"CORE-404","detail":"conversation conv_missing does not exist"}`)
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/messages") {
+			io.WriteString(w, `{"messages":[{"id":"msg_12","seq":12,"conversation_id":"conv_1","sender_id":"u_1","text":"newest"}],"last_seq":12}`)
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/messages/ack") {
+			io.WriteString(w, `{"ok":true}`)
+			return
+		}
+		io.WriteString(w, `{"conversations":[]}`)
+	})
+	return srv.URL
+}
+
+// TestMsgAckUsesTheNewestSequenceAndForwardsExplicitSeq: without --seq the
+// CLI reads the newest sequence first; an explicit --seq is forwarded
+// unchanged so the server enforces bounds; an unknown conversation surfaces
+// the read's CORE-404 and no ack is sent.
+func TestMsgAckUsesTheNewestSequenceAndForwardsExplicitSeq(t *testing.T) {
+	rec := &reqRecorder{}
+	url := msgAckAihub(t, rec)
+	env := map[string]string{"PF_SERVER": url, "PF_API_KEY": "k_msg"}
+
+	code, stdout, stderr := runPf(t, env, "msg", "ack", "conv_1")
+	if code != 0 || !strings.Contains(stdout, "acknowledged conv_1 through seq 12") {
+		t.Fatalf("ack newest: exit %d %s %s", code, stdout, stderr)
+	}
+	reqs := rec.all()
+	if len(reqs) != 2 || reqs[0].Method != http.MethodGet ||
+		!strings.Contains(reqs[0].Path, "/api/v1/conversations/conv_1/messages") ||
+		!strings.Contains(reqs[0].Path, "before=9223372036854775807") ||
+		reqs[1].Method != http.MethodPost || reqs[1].Path != "/api/v1/messages/ack" ||
+		!strings.Contains(reqs[1].Body, `"seq":12`) {
+		t.Fatalf("ack newest requests: %+v", reqs)
+	}
+
+	code, _, stderr = runPf(t, env, "msg", "ack", "conv_1", "--seq", "5")
+	if code != 0 || !strings.Contains(rec.last().Body, `"seq":5`) || rec.last().Path != "/api/v1/messages/ack" {
+		t.Fatalf("ack --seq 5: exit %d %s last=%+v", code, stderr, rec.last())
+	}
+	// An explicit non-positive sequence reaches the server unchanged: the
+	// CLI is not a second bound enforcer.
+	code, _, stderr = runPf(t, env, "msg", "ack", "conv_1", "--seq", "0")
+	if code != 0 || !strings.Contains(rec.last().Body, `"seq":0`) {
+		t.Fatalf("ack --seq 0: exit %d %s last=%+v", code, stderr, rec.last())
+	}
+
+	before := len(rec.all())
+	code, stdout, stderr = runPf(t, env, "msg", "ack", "conv_missing")
+	if code == 0 || !strings.Contains(stderr, "CORE-404") {
+		t.Fatalf("ack unknown conversation: exit %d stdout=%s stderr=%s", code, stdout, stderr)
+	}
+	if after := len(rec.all()); after != before+1 {
+		t.Fatalf("an unknown conversation ack sent the ack POST too: %d -> %d", before, after)
 	}
 }

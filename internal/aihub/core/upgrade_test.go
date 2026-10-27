@@ -289,7 +289,8 @@ func upgradeStatements(block string) []string {
 // sqlVer2140 drops the memories freshness columns and claim_idempotency;
 // sqlVer2170 adds the project-delete audit table;
 // sqlVer2206 adds the workbench#11 machine identity columns and messaging tables;
-// sqlVer2210 drops machines.user_id and deletes the unreferenced
+// sqlVer2207 splits the messaging read cursor into delivery and read cursors.
+// sqlVer2208 drops machines.user_id and deletes the unreferenced
 // heartbeat-minted machine users (workbench#57).
 const (
 	sqlVer     = "v2.4.0"
@@ -297,12 +298,13 @@ const (
 	sqlVer2140 = "v2.14.0"
 	sqlVer2170 = "v2.17.0"
 	sqlVer2206 = "v2.20.6"
-	sqlVer2210 = "v2.21.0"
+	sqlVer2207 = "v2.20.7"
+	sqlVer2208 = "v2.20.8"
 )
 
 // sqlVers lists every deploy/sql version in ascending order: a pre-#149
 // database needs all of them before the current code runs on it.
-var sqlVers = []string{sqlVer, sqlVer250, sqlVer2140, sqlVer2170, sqlVer2206, sqlVer2210}
+var sqlVers = []string{sqlVer, sqlVer250, sqlVer2140, sqlVer2170, sqlVer2206, sqlVer2207, sqlVer2208}
 
 // loadSQLFile reads one file of deploy/sql/v2.4.0/.
 func loadSQLFile(t *testing.T, name string) string { return loadSQLFileOf(t, sqlVer, name) }

@@ -132,6 +132,13 @@ func TestWorkItemCRUD(t *testing.T) {
 	if err != nil || got.ID != wi.ID {
 		t.Fatalf("get by slug: %v %v", got, err)
 	}
+	// The path-safe "<project>-<seq>" spelling resolves too (the capsule
+	// directory / delivery branch name the Messages anchors carry).
+	pathName := api.PathName(wi.Slug, wi.ID)
+	got, err = env.WIs.Get(pathName, GetOptions{})
+	if err != nil || got.ID != wi.ID {
+		t.Fatalf("get by path name %q: %v %v", pathName, got, err)
+	}
 	// Patch.
 	newGoal := "do it better"
 	updated, err := env.WIs.Patch(wi.ID, map[string]json.RawMessage{

@@ -29,14 +29,26 @@ so creating a project fails until the upgrade SQL has run.
      15s — the compose file's `stop_grace_period` is also 15s, longer than
      aihub's own 10s HTTP drain; the new default applies from the next
      deploy);
-  2. deploy.sh applies the upgrade SQL (see below), one transaction per
+  2. when an applied version declares `expected_deltas`, deploy.sh takes a
+     read-only count of **just those declared tables** (no full-db copy, no
+     integrity check);
+  3. deploy.sh applies the upgrade SQL (see below), one transaction per
      script;
-  3. the new container starts and HTTP is polled.
+  4. if step 2 ran, it counts the declared tables again;
+  5. the new container starts and HTTP is polled.
   The actual downtime is printed and warned past `MAX_DOWNTIME_SECS`. It
-  is still seconds: the SQL is a handful of DDL statements.
+  is still seconds: the SQL is a handful of DDL statements, and the two
+  in-window samples are read-only counts of the declared tables only.
 - **Post-swap verification**: row counts must be >= the frozen baseline,
   except tables dropped by a `DROP TABLE` in an upgrade.sql applied this
-  run, which are excluded from the post-swap row-count check.
+  run, which are excluded from the post-swap row-count check. Tables a
+  migration declares in `expected_deltas` are measured with the service
+  stopped, right before and right after the upgrade SQL, and must move by
+  exactly the declared amount (see below); their baseline is then rebased
+  to the post-SQL count, so the post-swap check still guards them against
+  any further loss. An undeclared decrease, a declared table whose actual
+  delta differs, or a declared table that loses rows after the SQL rolls
+  the deploy back.
 - **Automatic rollback**: if anything from the window on fails (the SQL
   transaction fails, the new container does not come up, verification
   fails, unexpected exit), deploy.sh first runs the `rollback.sql` of
@@ -50,9 +62,10 @@ so creating a project fails until the upgrade SQL has run.
 
 Every release tag that changes the schema ships a directory:
 
-    deploy/sql/<TAG>/upgrade.sql    the schema delta, applied as ONE transaction
-    deploy/sql/<TAG>/rollback.sql   restores the pre-release shape for auto-rollback
-    deploy/sql/<TAG>/probe.sql      the structural applied-check (run-once)
+    deploy/sql/<TAG>/upgrade.sql      the schema delta, applied as ONE transaction
+    deploy/sql/<TAG>/rollback.sql     restores the pre-release shape for auto-rollback
+    deploy/sql/<TAG>/probe.sql        the structural applied-check (run-once)
+    deploy/sql/<TAG>/expected_deltas  optional: the row-count deltas the migration makes
 
 deploy.sh reads the files **from the target git tag at deploy time**
 (`git -C .polyforge/.. show <TAG>:deploy/sql/<TAG>/...`, with a
@@ -69,6 +82,22 @@ target tag must exist locally — deploy.sh refuses in preflight otherwise
 Comments are fine before or between statements, but **nothing may follow
 the last statement's `;`** — a trailing comment after it is read as an
 incomplete final statement and the runner refuses the file.
+
+**Expected row deltas**: a migration that legitimately removes rows from a
+table it keeps may ship `expected_deltas` next to the three SQL files: one
+`table: signed-delta` per line, blank lines and `#` comments ignored, e.g.
+`users: -2`. deploy.sh fetches it from the target tag like the SQL files
+and sums the declarations of every version applied in the window. The
+declared tables' counts are sampled read-only with the service stopped,
+before and after the SQL (only those tables); each actual delta must equal
+the declaration exactly. A delta is a checklist, not an amnesty: an
+undeclared table keeps the strict `>= frozen baseline` rule, and a
+declared table that moves differently rolls back. After the exact check,
+the declared table's baseline becomes its post-SQL count, so the post-swap
+`>=` check still covers it. The file must be inside the release's own tag:
+a later addition on the branch is not visible to `git show <TAG>:...`
+(the working-tree fallback would still honor it on a deployer checkout
+that carries it, with a NOTE, but put it in the tag you deploy).
 
 **Downgrades**: a `--force` downgrade whose range (target, running] contains
 a `deploy/sql` version is refused in preflight — deploy.sh runs rollback SQL
@@ -1747,7 +1776,39 @@ after aihub: a machine that stays offline, or keeps running an old daemon,
 leaves its row unclaimed — and therefore unowned for the one-interactive
 rule — until it heartbeats once with the new daemon.
 
-## v2.21.0 (workbench#57, the machine-heartbeat permission model)
+## v2.20.7 (workbench#56, separate delivery and read cursors)
+
+aihub first, then the work machines. `conversation_members` stops carrying
+one `last_read_seq` and carries two independent cursors instead:
+`delivered_seq`, advanced by the operator's daemon as it delivers, and
+`read_seq`, advanced only by a human acknowledgment (`pf msg ack`, or the
+pi-web Messages panel). Unread counts only the other participant's messages
+above `read_seq`, so machine delivery no longer clears unread. Existing
+members are backfilled from the old cursor (read stays read, delivery starts
+at the same position) and the old column is dropped — there is no dual path.
+The file `deploy/sql/v2.20.7/upgrade.sql` is the source of truth; its
+content:
+
+```sql
+ALTER TABLE conversation_members ADD COLUMN delivered_seq INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE conversation_members ADD COLUMN read_seq INTEGER NOT NULL DEFAULT 0;
+UPDATE conversation_members SET delivered_seq = last_read_seq, read_seq = last_read_seq;
+ALTER TABLE conversation_members DROP COLUMN last_read_seq;
+```
+
+`deploy/sql/v2.20.7/rollback.sql` restores `last_read_seq` from
+`delivered_seq` and drops both new columns, so an old daemon resumes
+delivery where the new one stopped and never replays delivered messages; the
+read position is dropped with the new shape. `deploy/sql/v2.20.7/probe.sql`
+answers 0 once both `delivered_seq` and `read_seq` exist, and answers
+non-zero again after a rollback, so the window SQL runs at most once per
+direction. `pf msg ack <conversation> [--seq N]` advances only the caller's
+read cursor, refuses a non-positive or past-the-newest sequence with
+CORE-400, and an unknown conversation with CORE-404; it keeps the data-plane
+verb's permission surface (a step agent is refused locally and an admin
+cannot acknowledge another member's row).
+
+## v2.20.8 (workbench#57, the machine-heartbeat permission model)
 
 Deploy aihub first, then upgrade the work machines (`tools/install.sh`).
 `POST /api/v1/machines/heartbeat` now needs the row operator's Bearer PLUS
@@ -1762,7 +1823,7 @@ is accepted only from the row's operator and touches only liveness
 deletion condition: once the owner confirms `GET /machines` shows no live
 unsigned machine (a live row whose `runtime_version` predates this
 release), the next release deletes that code. The file
-`deploy/sql/v2.21.0/upgrade.sql` is the source of truth; its content:
+`deploy/sql/v2.20.8/upgrade.sql` is the source of truth; its content:
 
 ```sql
 ALTER TABLE machines DROP COLUMN user_id;
@@ -1784,9 +1845,9 @@ The column drops first so it cannot act as the reference that saves the
 machine users it used to name; the `LIKE '%@machines.local'` filter keeps
 an administrator-created `--user-type machine` user (a real email), and the
 `NOT EXISTS` set keeps any heartbeat-minted user something still references.
-`deploy/sql/v2.21.0/rollback.sql` brings `machines.user_id` back NOT NULL
+`deploy/sql/v2.20.8/rollback.sql` brings `machines.user_id` back NOT NULL
 and fills it from `operator_id`, the v2.20.6 binary's required shape. The
 deleted heartbeat-minted users are deliberately not resurrected: the
 column is a plain id string the old binary never joins on, and it mints a
-fresh user on its next registration. `deploy/sql/v2.21.0/probe.sql`
+fresh user on its next registration. `deploy/sql/v2.20.8/probe.sql`
 answers 0 once `machines.user_id` is gone.

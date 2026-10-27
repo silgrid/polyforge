@@ -143,7 +143,7 @@ func (s *Server) hMachineInbox(w http.ResponseWriter, r *http.Request, idn *iden
 			inbox.Queries = s.pending.take(m.MachineID)
 		}
 		if wantMessages {
-			msgs, err := s.Admin.UnreadFor(m.OperatorID, 200)
+			msgs, err := s.Admin.PendingDelivery(m.OperatorID, 200)
 			if err != nil {
 				return err
 			}

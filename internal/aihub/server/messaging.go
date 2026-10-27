@@ -70,7 +70,23 @@ func (s *Server) hAckMessage(w http.ResponseWriter, r *http.Request, idn *identi
 	if err := decodeBodyStrict(r, &req); err != nil {
 		return err
 	}
-	if err := s.Admin.AdvanceCursor(idn.UserID, req); err != nil {
+	if err := s.Admin.Acknowledge(idn.UserID, req); err != nil {
+		return err
+	}
+	return reply(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// hDeliveredMessage advances the caller's machine delivery cursor only; the
+// caller's Bearer credential decides the member row and read/unread never
+// move. Reachability (AGENTS.md): aihub Bearer route — a workflow step agent
+// holds no aihub key and the CLI's step guard refuses msg verbs before any
+// wire call, so this entry point is not step-reachable.
+func (s *Server) hDeliveredMessage(w http.ResponseWriter, r *http.Request, idn *identity) error {
+	var req api.AckMessage
+	if err := decodeBodyStrict(r, &req); err != nil {
+		return err
+	}
+	if err := s.Admin.MarkDelivered(idn.UserID, req); err != nil {
 		return err
 	}
 	return reply(w, http.StatusOK, map[string]any{"ok": true})

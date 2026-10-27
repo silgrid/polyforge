@@ -91,6 +91,10 @@ case "$1" in
       *) shift ;;
     esac; done
     if [ "$verb" = stop ]; then
+      # FAKE_BEFORE_STOP_SQL: python source run against the fixture db just
+      # before the old service exits - a "live write" after the step-3
+      # snapshot (the declared-delta guard measures across the window).
+      [ -z "${FAKE_BEFORE_STOP_SQL:-}" ] || python3 -I -c "$FAKE_BEFORE_STOP_SQL" "$FAKE_W/srv/data/aihub/aihub.db" || exit 1
       # the switch window: the old container exits (graceful drain); the
       # service stays DOWN until the next up - recorded for ordering asserts
       printf '%s\n' "$(sed -n 's/^    image: //p' "$f" | head -1)" > "$S/stopped-from"
@@ -98,6 +102,10 @@ case "$1" in
     fi
     img=$(sed -n 's/^    image: //p' "$f" | head -1)
     [ -n "$FAKE_FAIL_UP_IMG" ] && [ "$img" = "$FAKE_FAIL_UP_IMG" ] && { echo "fake: compose up failed" >&2; exit 1; }
+    # FAKE_AFTER_UP_SQL: python source run against the fixture db after the
+    # new container starts - a row loss in the post-SQL part of the window
+    # (the declared table's post-swap baseline must still catch it).
+    [ -z "${FAKE_AFTER_UP_SQL:-}" ] || python3 -I -c "$FAKE_AFTER_UP_SQL" "$FAKE_W/srv/data/aihub/aihub.db" || exit 1
     printf '%s\n' "$img" > "$S/container"; exit 0 ;;
 esac
 echo "fake docker: unhandled: $*" >&2; exit 99
@@ -108,6 +116,15 @@ while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; *) break ;; esac; done
 shift   # host
 export FAKE_SIDE=server
 echo "ssh $*" >> "$FAKE_W/log-ssh"
+# Unlike a real remote host this fake shares the deployer's filesystem. Refuse
+# any argument under the deployer's mktemp work dir ($WORK, pf-deploy.*), so a
+# remote program handed a deployer-local path fails here as it would in
+# production instead of quietly reading the deployer's copy.
+for a in "$@"; do
+  case "$a" in
+    */pf-deploy.*/*) echo "sh: cannot open $a: No such file or directory" >&2; exit 1 ;;
+  esac
+done
 case "$*" in flock\ -n*) echo $$ > "$FAKE_W/lockpid" ;; esac
 # FAKE_SSH_DROP_AFTER=<substring>: the matching remote command RUNS, then the
 # connection "drops" (exit 255) - a commit that landed but was never confirmed.

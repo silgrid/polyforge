@@ -1,8 +1,9 @@
 package daemon
 
-// messaging_test.go: live message delivery. A message is printed/acked
-// once per message within the 15 s target (the server cursor bounds a
-// kill -9 replay to the one unacked message), and the loop stops when
+// messaging_test.go: live message delivery. A message is printed and its
+// DELIVERY cursor advanced once per message within the 15 s target (the
+// server cursor bounds a kill -9 replay to the one undelivered message, and
+// never clears unread that no human acknowledged), and the loop stops when
 // its context ends.
 
 import (
@@ -33,13 +34,13 @@ func TestMessageLoopDeliversEachMessageOnce(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		face.mu.Lock()
-		n := len(face.acks)
+		n := len(face.deliveries)
 		face.mu.Unlock()
 		if n >= 2 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("messages were not delivered/acked within the target: %d acks", n)
+			t.Fatalf("messages were not delivered within the target: %d deliveries", n)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -49,10 +50,10 @@ func TestMessageLoopDeliversEachMessageOnce(t *testing.T) {
 		t.Fatalf("delivery took %v, over the 15 s target", elapsed)
 	}
 	face.mu.Lock()
-	acks := append([]string(nil), face.acks...)
+	deliveries := append([]string(nil), face.deliveries...)
 	face.mu.Unlock()
-	if len(acks) != 2 || acks[0] != "conv_1/1" || acks[1] != "conv_1/2" {
-		t.Fatalf("each message must be acked exactly once in order: %v", acks)
+	if len(deliveries) != 2 || deliveries[0] != "conv_1/1" || deliveries[1] != "conv_1/2" {
+		t.Fatalf("each message must be delivered exactly once in order: %v", deliveries)
 	}
 }
 
@@ -69,9 +70,9 @@ func TestMessageLoopIdleWhenFaceNotWanted(t *testing.T) {
 	go d.messageLoop(ctx)
 	time.Sleep(80 * time.Millisecond)
 	face.mu.Lock()
-	n := len(face.acks)
+	n := len(face.deliveries)
 	face.mu.Unlock()
 	if n != 0 {
-		t.Fatalf("a single-machine daemon consumed messages: %d acked", n)
+		t.Fatalf("a single-machine daemon consumed messages: %d delivered", n)
 	}
 }
