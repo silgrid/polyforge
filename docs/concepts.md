@@ -49,9 +49,11 @@ bug-fix, chore, feature-full and release.
 
 A durable note stored in aihub, scoped to a project: designs, decisions,
 reviews, pitfalls, experience. Written with `pf remember`, searched with
-`pf recall`. Memories are non-binding history — a step recalls them for
-context, never as instructions. The last step of a workflow writes the
-work item's one wrap-summary memory under the project's memory policy.
+`pf recall`. Memories are non-binding history — a decision or authoring
+step (its workflow entry declares `recall: true`) recalls them for context,
+never as instructions; the gates and the release steps do not recall. The
+last step of a workflow writes the work item's one wrap-summary memory under
+the project's memory policy.
 
 ### Step
 
@@ -144,32 +146,89 @@ triggers.
 ### Rewind
 
 A gate FAIL sending the run back to an earlier step to redo the work:
-verification FAIL rewinds to the fix step in the autopilot and bug-fix
-lanes and to the code step in the chore and feature-full lanes;
+review FAIL rewinds to the build step (fix/code) of its lane, running
+before verification so a quality failure never costs a full machine
+bar; verification FAIL rewinds to the build step too — `fix` in the
+autopilot and bug-fix lanes, `code` in the chore and feature-full
+lanes;
 grill-review FAIL rewinds to spec; root-cause FAIL rewinds to repro.
 The target is the gate's own `on_fail` declaration — never a later
 step — with one exception: a scoped `deliver` whose human answer is
 「全量重验」 carries `rewind_to: verification` and the driver rewinds to
 verification at the full tier (recording it full, so the next delivery
-carries no scoped chain). Rewinds are bounded per bundle (`max_total`, `max_per_step` in the
-frontmatter); past the bounds the run ends failed
+carries no scoped chain). Rewinds are bounded per bundle
+(`max_total`, `max_per_step` in the frontmatter): `max_per_step` is
+charged per gate→target edge — two gates rewinding to the same target
+carry their own slots and never eat each other's — while `max_total` is
+the global hard cap that counts every rewind. A light rewind (an
+all-text-only review FAIL, a classified mechanical verification FAIL)
+or a converging review round (every blocking finding a residual of the
+last verdict round, strictly fewer) charges no edge slot but still
+counts toward `max_total` — and a light re-entry that self-reports
+`needs_code_change: true` turns its light rewind into an ordinary fresh
+round, which charges that edge once; past the bounds the run ends failed
 (`failed_rewind_exhausted`) and the honest move is a re-filed work item
 on a heavier lane, not more loops.
 
+One rewind is not a gate's: in the bug-fix lane, a `fix` that completes
+reporting `root_cause_addressed: false` (the diagnosis did not hold) is
+routed by the driver back to `root-cause` before review or verification
+runs, with the fix's summary as the rewind input, charged on the
+`fix → root-cause` edge — once. A second false does not rewind again:
+the driver asks the owner (`needs_input`) whether to continue with
+corrective guidance or cancel and re-file, so an honest misdiagnosis
+never ends in `failed_rewind_exhausted`.
+
+`plan` is never a rewind target. In the chore and feature-full lanes the
+plan declares every file it writes together with its coupled obligations
+(the documents, tables and projection rules that must change with it, or
+an explicit none with a reason — a plan missing one is rejected), and the
+driver hands review (and chore's verification) the two-way scope check as
+computed facts: changed-but-undeclared files, and declared obligations or
+writes the diff left unchanged. A review-driven fix that needs a file
+outside the declared set cites the review finding for it instead of
+re-planning.
+
+A review pass covers the tree it judged: the driver records each task
+repo's HEAD at the pass (`reviewed_heads`), and the automatic merge
+needs a review that covers the delivered diff — any code change after
+the pass (a plain commit, a hand-resolved merge) invalidates it and
+routes the delivery to a human, fail-closed: a delivery whose facts are
+missing or inconsistent never merges unattended.
+
 ### Verification tier
 
-Verification runs the **full** bar by default. A work item opts into the
-narrower **scoped** tier only when its content carries the explicit
+Verification runs the **full** bar by default, after review (the three
+review-bearing delivery lanes run code → review → verification →
+deliver; autopilot keeps grill → fix → verification → deliver). A work
+item opts into the narrower **scoped** tier only when its content
+carries the explicit
 marker line `verification: scoped`, and only on a scoped-capable lane
 (`feature-full`, `bug-fix`, `chore`; autopilot always verifies full and
-the release lane has no verification step). A scoped verification
-declares a `scope` object (`mode`, `declared_paths`, `rationale`,
-`fast_gates_ref`); review answers `scope_adequate`, and `false` blocks
-the automatic merge without failing the review. A scoped delivery
+the release lane has no verification step). Review — which runs first —
+declares the scope it judged the diff against (`scope`:
+`mode`/`declared_paths`) and answers `scope_adequate`; the following
+verification must use exactly that scope (its `declared_paths` equal to
+review's, an incremental re-verification's prior union included), and a
+missing judgment or any disagreement blocks the automatic merge and
+routes the delivery to a human, without failing either gate. A scoped
+delivery whose scopes agree
 records the three-ring audit chain (marker, scope, `scope_adequate`) in
 its output; the deliver human question adds a fourth answer
 「全量重验」 that rewinds to verification at full. The default does not
 flip: full stays the baseline.
+
+Verification proves the merged tree: before its bar runs, it fetches and
+merges the latest origin default branch into the branch under test
+(inside each `repos/<name>/`, a machine-made `git merge --no-edit
+origin/<default>` — no rebase, squash, cherry-pick or hand edit — and
+"Already up to date" a legal no-op whose bar still runs), so the
+driver-recorded `verified_heads` names that merged head. A conflicting
+merge is aborted with `git merge --abort`, never resolved, and the bar
+runs on the unmerged tree. Deliver then re-runs the carried test bar only
+when its own merge moves HEAD past that verified head: with the default
+branch unmoved since verification, a delivery records no test-bar run
+and merges on the verified tree unchanged.
 
 ### Claim
 
@@ -203,7 +262,10 @@ human user only (never a chat, WI, machine or broadcast). Message content
 is secret-scanned before storing. `pf watch <wi> --once` resolves a WI held
 by another fresh machine through a signed, relayed progress query and shows
 `holder_machine`; stale holders answer a typed error rather than stale
-data, and nothing about a query is persisted.
+data, and nothing about a query is persisted. The asking daemon keeps the
+relayed snapshot for 10 s, so a resident watcher's remote progress
+refreshes every 10 s rather than on every 2 s poll (any change of the WI
+at aihub — a status change, a claim, a session end — refreshes at once).
 
 ### Chat identity
 

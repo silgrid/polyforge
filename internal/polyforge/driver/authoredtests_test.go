@@ -142,3 +142,129 @@ func TestRunAuthoredTestChangeAcceptedAfterHumanAnswer(t *testing.T) {
 		t.Fatalf("check must complete against the new baseline: %+v", exec.Steps["check"])
 	}
 }
+
+// authoredClone builds the verification-merge scene of the authored-tests
+// gate: an origin repo on main holding a ten-line authored test, its clone
+// at <capsule>/repos/app (so refs/remotes/origin/HEAD names the default
+// branch), the authoring step's commit (line 1 edited — the baseline) and a
+// code commit on top that never touches the test. It answers the capsule's
+// repos dir, the clone, the origin and the baseline sha.
+func authoredClone(t *testing.T) (reposDir, clone, origin, baseline string) {
+	t.Helper()
+	caps := t.TempDir()
+	origin = filepath.Join(t.TempDir(), "origin")
+	if err := os.MkdirAll(origin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, origin, "init", "-q", "-b", "main")
+	writeFile(t, origin, "t/a_test.go", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n")
+	writeFile(t, origin, "main.go", "v1\n")
+	runGit(t, origin, "add", "-A")
+	runGit(t, origin, "commit", "-q", "-m", "seed")
+	reposDir = filepath.Join(caps, capsule.DirRepos)
+	if err := os.MkdirAll(reposDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, reposDir, "clone", "-q", origin, "app")
+	clone = filepath.Join(reposDir, "app")
+	writeFile(t, clone, "t/a_test.go", "authored\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n")
+	runGit(t, clone, "commit", "-q", "-am", "author the test")
+	baseline = headOf(t, clone)
+	writeFile(t, clone, "main.go", "v2\n")
+	runGit(t, clone, "commit", "-q", "-am", "code")
+	return reposDir, clone, origin, baseline
+}
+
+// upstreamEditsTest is the default branch moving on: upstream edits the
+// authored test's last line (a hunk the author's edit does not touch, so
+// git merges it cleanly) and the clone fetches it.
+func upstreamEditsTest(t *testing.T, clone, origin string) {
+	t.Helper()
+	writeFile(t, origin, "t/a_test.go", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nupstream\n")
+	runGit(t, origin, "commit", "-q", "-am", "upstream edits the test")
+	runGit(t, clone, "fetch", "-q", "origin")
+}
+
+// TestAuthoredTestsUpstreamMergeIsNotAnAgentChange: verification merges the
+// latest default branch before its bar (`git merge --no-edit
+// origin/<default>`), so an authored test file upstream also edited reaches
+// HEAD with a blob that differs from the author commit's. A change that came
+// ONLY through machine-made merges of the default branch is not a change by
+// the agent: the gate accepts it (restoring the author blob would undo
+// upstream's edit). An agent's own edit, a side branch merged in to launder
+// one, and a hand-made merge are still changes.
+func TestAuthoredTestsUpstreamMergeIsNotAnAgentChange(t *testing.T) {
+	at := func(baseline string) *AuthoredTests {
+		return &AuthoredTests{Files: []string{"t/a_test.go"}, Baseline: map[string]string{"app": baseline}}
+	}
+	differs := func(t *testing.T, clone, baseline string) {
+		t.Helper()
+		b, _ := repoGit(clone, lsTreeArgs(baseline, []string{"t/a_test.go"})...)
+		h, _ := repoGit(clone, lsTreeArgs("HEAD", []string{"t/a_test.go"})...)
+		if b == h {
+			t.Fatalf("control: the test blob at HEAD must differ from the baseline's (the case would be vacuous): %q", h)
+		}
+	}
+	rejected := func(t *testing.T, reposDir string, baseline string) {
+		t.Helper()
+		changed, err := checkAuthoredTestsUnchanged(reposDir, at(baseline), 0)
+		if err == nil || len(changed) != 1 || changed[0] != "repos/app: t/a_test.go" {
+			t.Fatalf("the change must be rejected naming the file: changed=%v err=%v", changed, err)
+		}
+	}
+
+	t.Run("upstream edit merged in is accepted", func(t *testing.T) {
+		reposDir, clone, origin, baseline := authoredClone(t)
+		upstreamEditsTest(t, clone, origin)
+		runGit(t, clone, "merge", "-q", "--no-edit", "origin/main")
+		differs(t, clone, baseline)
+		changed, err := checkAuthoredTestsUnchanged(reposDir, at(baseline), 0)
+		if err != nil || len(changed) != 0 {
+			t.Fatalf("a test changed only by a machine-made merge of the default branch is not an agent change: changed=%v err=%v", changed, err)
+		}
+		// A later code commit (a rewind's fix on the merged HEAD) that leaves
+		// the test alone keeps it accepted.
+		writeFile(t, clone, "main.go", "v3\n")
+		runGit(t, clone, "commit", "-q", "-am", "fix")
+		if changed, err := checkAuthoredTestsUnchanged(reposDir, at(baseline), 0); err != nil || len(changed) != 0 {
+			t.Fatalf("a non-merge commit that does not touch the test keeps the merge accepted: changed=%v err=%v", changed, err)
+		}
+	})
+
+	t.Run("agent edit after the merge is rejected", func(t *testing.T) {
+		reposDir, clone, origin, baseline := authoredClone(t)
+		upstreamEditsTest(t, clone, origin)
+		runGit(t, clone, "merge", "-q", "--no-edit", "origin/main")
+		writeFile(t, clone, "t/a_test.go", "authored\nl2\nl3\nl4\nloosened\nl6\nl7\nl8\nl9\nupstream\n")
+		runGit(t, clone, "commit", "-q", "-am", "agent loosens the test")
+		rejected(t, reposDir, baseline)
+	})
+
+	t.Run("agent edit without any merge is rejected", func(t *testing.T) {
+		reposDir, clone, _, baseline := authoredClone(t)
+		writeFile(t, clone, "t/a_test.go", "authored\nl2\nl3\nl4\nloosened\nl6\nl7\nl8\nl9\nl10\n")
+		runGit(t, clone, "commit", "-q", "-am", "agent loosens the test")
+		rejected(t, reposDir, baseline)
+	})
+
+	t.Run("agent edit laundered through a side-branch merge is rejected", func(t *testing.T) {
+		reposDir, clone, _, baseline := authoredClone(t)
+		runGit(t, clone, "checkout", "-q", "-b", "side", baseline)
+		writeFile(t, clone, "t/a_test.go", "authored\nl2\nl3\nl4\nloosened\nl6\nl7\nl8\nl9\nl10\n")
+		runGit(t, clone, "commit", "-q", "-am", "agent loosens the test on a side branch")
+		runGit(t, clone, "checkout", "-q", "main")
+		runGit(t, clone, "merge", "-q", "--no-ff", "--no-edit", "side")
+		differs(t, clone, baseline)
+		rejected(t, reposDir, baseline)
+	})
+
+	t.Run("hand-made merge of the default branch is rejected", func(t *testing.T) {
+		reposDir, clone, origin, baseline := authoredClone(t)
+		upstreamEditsTest(t, clone, origin)
+		runGit(t, clone, "merge", "-q", "--no-commit", "origin/main")
+		writeFile(t, clone, "t/a_test.go", "authored\nl2\nl3\nl4\nloosened\nl6\nl7\nl8\nl9\nupstream\n")
+		runGit(t, clone, "add", "t/a_test.go")
+		runGit(t, clone, "commit", "-q", "--no-edit")
+		rejected(t, reposDir, baseline)
+	})
+}

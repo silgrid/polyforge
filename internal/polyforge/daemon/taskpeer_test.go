@@ -1,7 +1,7 @@
 package daemon
 
 // taskpeer_test.go: the task agent class at the daemon's caller
-// classification seam (workbench#53). The write guard itself is pinned
+// classification seam. The write guard itself is pinned
 // end-to-end by tasks_test.go and the frozen reproduction; this file pins
 // the second use of the same classification — a task's GET may read a watch
 // snapshot, but it is not the HUMAN side, so a demand-marked snapshot from

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -300,4 +301,34 @@ func routeTree(t *testing.T, roots ...string) map[string]string {
 		}
 	}
 	return out
+}
+
+// TestAnalyzerEscapesMessageIDs pins B3: both message ids the analyzer
+// puts in an aihub path (the route's and the fetched message's reply_to)
+// are one percent-encoded segment, so a `?`, `#` or `/` inside an id can
+// never rewrite the query or the route aihub sees.
+func TestAnalyzerEscapesMessageIDs(t *testing.T) {
+	td := newTestDaemon(t, nil)
+	var mu sync.Mutex
+	var paths []string
+	td.hub.mu.Lock()
+	td.hub.memDo = func(method, path string, _, out any) error {
+		mu.Lock()
+		paths = append(paths, path)
+		mu.Unlock()
+		if m, ok := out.(*api.Message); ok && len(paths) == 1 {
+			m.ReplyTo = "re/p?x=1#y"
+		}
+		return nil
+	}
+	td.hub.mu.Unlock()
+	req := httptest.NewRequest("POST", "/messages/x/analyze", nil)
+	req.SetPathValue("id", "m/1?all=1#frag")
+	td.analyzeRoute(httptest.NewRecorder(), req)
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"/api/v1/messages/m%2F1%3Fall=1%23frag", "/api/v1/messages/re%2Fp%3Fx=1%23y"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("hub request paths = %q, want %q", paths, want)
+	}
 }

@@ -1711,7 +1711,7 @@ into the one human-readable hint line on a scoped decision print.
 - Steps in flight from before this change restart once from the list head
   (their archived attempts carry no candidate stamp).
 
-## v2.20.6 (workbench#11, cross-machine identity, query relay and messaging)
+## v2.20.6 (cross-machine identity, query relay and messaging)
 
 Deploy aihub first, then upgrade the work machines (`tools/install.sh`).
 The new machine face is signed; an old daemon never sends a signature and
@@ -1776,7 +1776,7 @@ after aihub: a machine that stays offline, or keeps running an old daemon,
 leaves its row unclaimed — and therefore unowned for the one-interactive
 rule — until it heartbeats once with the new daemon.
 
-## v2.20.7 (workbench#56, separate delivery and read cursors)
+## v2.20.7 (separate delivery and read cursors)
 
 aihub first, then the work machines. `conversation_members` stops carrying
 one `last_read_seq` and carries two independent cursors instead:
@@ -1808,7 +1808,7 @@ CORE-400, and an unknown conversation with CORE-404; it keeps the data-plane
 verb's permission surface (a step agent is refused locally and an admin
 cannot acknowledge another member's row).
 
-## v2.20.8 (workbench#57, the machine-heartbeat permission model)
+## v2.20.8 (the machine-heartbeat permission model)
 
 Deploy aihub first, then upgrade the work machines (`tools/install.sh`).
 `POST /api/v1/machines/heartbeat` now needs the row operator's Bearer PLUS
@@ -1851,3 +1851,156 @@ deleted heartbeat-minted users are deliberately not resurrected: the
 column is a plain id string the old binary never joins on, and it mints a
 fresh user on its next registration. `deploy/sql/v2.20.8/probe.sql`
 answers 0 once `machines.user_id` is gone.
+
+## v2.20.10 (the signed-heartbeat version gate)
+
+Upgrade the daemon BEFORE deploying this aihub. The heartbeat's bounded
+unsigned transition is an already-registered pre-signing daemon's unsigned
+heartbeat; it is accepted only from the row's operator, only while BOTH the
+request's and the row's stored `runtime_version` parse as `vX.Y.Z` and
+predate `v2.20.8`, and it touches only liveness
+(`last_heartbeat_at`, `live_wi_ids`, `mode`, `runtime_version`). The gate
+fails closed: a daemon whose `runtime_version` is `dev`, empty or
+unparseable (for example a local build without the version ldflags) is
+refused and goes stale. A signed `v2.20.8+` beat ratchets the row closed:
+an unsigned beat can never raise the stored version back over the gate.
+Accepted limit (the owner's ruling): the gate does not stop a leaked
+operator API key from keeping a retired pre-`v2.20.8` machine online — an
+unsigned beat touches only liveness and can never ratchet the row closed,
+so a row no signed beat ever refreshed stays open to whoever holds the
+operator's key; revoking that key retires the machine, and only deleting
+the transition branch closes the residual for good. Its deletion condition:
+once the owner confirms `GET /machines` shows no live unsigned machine (a
+live row whose `runtime_version` predates `v2.20.8`, the release whose
+daemon signs), the next release deletes that code.
+
+## The recall duty rides the authoring steps only
+
+A step's prompt now carries the project-memory recall duty
+(`workflows/_shared/memory.md`: `pf recall` from three angles, read the
+relevant bodies, a `## Prior experience` section) only when its
+`workflow.md` step entry declares `recall: true`. The shipped lanes declare
+it on their decision and authoring steps (grill, spec, plan, repro,
+root-cause, e2e-author, code, fix); the review, verification and deliver
+gates, feature-full's grill-review and the release lane no longer recall,
+so they no longer spend their first seconds on searches. The workflow's
+last step still carries the one wrap-summary duty
+(`workflows/_shared/memory-wrap.md`), with or without `recall`.
+
+**A custom bundle** gets no recall duty on any step until its entries
+declare `recall: true`; add it to the steps that decide or author.
+
+**Gap for work items claimed before this release:** their capsule's own
+copy of the old `workflow.md` declares no `recall`, so the steps still
+ahead of them run without the recall duty (the claim-time recalled-memory
+titles still render). Recall is advisory, so nothing fails; a work item
+claimed after the upgrade gets the new bundle.
+
+## Parked closes, the parked resume outcome and the close-retry window
+
+Nothing to migrate: the daemon start that installs this release reconciles
+every record afresh. What operators see differently:
+
+- **`DAEMON-409 … is parked`.** When a work item's previous driver Run does
+  not stop within its bounded teardown, the daemon no longer commits,
+  pushes, saves WIP, seals or quarantines the capsule next to it. A wrap,
+  fail, pause or bounded-fail block answers `the close is parked …`; the
+  daemon's release of a session that is no longer its own (superseded, or
+  ended at aihub) answers `the release of this work item is parked …`. The
+  record keeps its state, `pf watch <id> --once` shows a `close_parked`
+  event (`kind`: close, pause, blocked or release), and the close finishes
+  by itself once that Run exits; a daemon restart finishes it too. Do not
+  repeat the verb meanwhile: it gets the same answer.
+- **`pf resume` → `parked`.** A resume whose recovery (or the close it led
+  to) waits on such a Run now answers the `parked` outcome (`--json`:
+  `"outcome": "parked"`) — nothing continues next to the old Run, and the
+  work item continues by itself once it exits. It used to answer `closed`.
+- **The close-retry window is 24 hours.** A close, verify or claim replay
+  aihub does not take is retried with the growing backoff and then once a
+  minute for 24 hours from its first retry (it used to stop after eight
+  attempts, about four minutes), so an aihub outage shorter than that is
+  ridden out with no restart. Past the window the record stays where it is
+  with a `retry_exhausted` event, and the doors say so: a `pf wrap` or
+  `pf pause` over it (and a `pf resume` of a paused record whose close is
+  pending) answers `its retry chain is exhausted (retry_exhausted) and
+  nothing retries it any more — restart the daemon` (`pf ops shutdown`,
+  then `pf daemon ensure`), instead of "retried with backoff" or "retry
+  later".
+- **Blocked notes carry the driver's reason.** When the driver parks a
+  workflow blocked on its own authority, the hub note of the blocked close
+  ends with `; blocked reason: <blocked_reason>` (at most 500 characters).
+- **Remote watch snapshots are cached for 10 seconds.** A `pf watch` or
+  chat progress line of a work item held by another machine is served from
+  the requesting daemon's 10-second cache (any aihub-visible change of the
+  work item misses it), so remote progress and a remote human-decision
+  wake lag by at most 10 seconds; a requesting daemon relays at most one
+  query per work item per 10 seconds to the holder (a failed relay is not
+  cached and is asked again on the next poll).
+
+## Claude steps' Bash timeouts follow the tool window (2026-10-29)
+
+Nothing to migrate. A claude step no longer runs its Bash commands under
+Claude Code's 2-minute per-call default: the daemon starts every claude
+step with `BASH_DEFAULT_TIMEOUT_MS=600000` (10 minutes) and
+`BASH_MAX_TIMEOUT_MS` set to the supervision tool window minus one minute
+(`1740000` for the default 30 minutes), so a `make test` or `go test` of a
+few minutes finishes in the foreground instead of being killed, moved to
+the background and polled. To choose other values, set the key in the env
+block of `<harness-root>/claude-config/settings.json`: a key set there wins
+over the daemon's value (details: the `claude_bin` section of
+docs/reference/config.md). pi steps are unchanged.
+
+## A model error resumes first; outage-shaped retries are paced
+
+Nothing to migrate: both rules read the attempts already archived in
+`execution.json`, so a work item in flight picks them up at its next
+failure. What operators see differently:
+
+- **The first `model_error` on a candidate no longer switches models.**
+  A turn that ends on an error naming no throttle, transient, allowance or
+  auth problem — in practice a gateway 5xx — is retried on the SAME
+  candidate, resuming its conversation; only the second consecutive
+  model-class death on that candidate moves to the next one. It still
+  counts toward the step's three-failure bound. An allowance or auth error
+  on a live turn (401/403, quota, insufficient balance, billing) or a
+  model name that cannot resolve is now recorded as `exit_model_class`, as
+  the same text on an exited process always was, and still switches at
+  once.
+- **Retries after an outage-shaped death are paced.** Consecutive
+  `model_error`, `upstream_transient` and `ended_without_result` deaths of
+  a step on one candidate wait 1m, 3m, then 9m (the cap) before the step's
+  next dispatch re-runs that candidate (an upstream transient used to wait
+  1s, 2s); a death that switches to the next candidate dispatches it at
+  once and that candidate's ladder starts again at 1m, and a throttle
+  keeps its own 1s-doubling backoff. The waits count into the step's cumulative time
+  bound. A daemon restart in the middle of a wait serves only what is left
+  of it; `pf resume` of a blocked step does not wait, and starts the
+  step's streaks afresh (the next 502 is again a first, resumed, 1m one).
+- **`pf ops status` shows the wait.** A RETRY column appears while some
+  job waits one: `retry in 3m: upstream_transient` (`--json`:
+  `retry_in_sec`, `retry_cause`). The supervisor does not count a declared
+  wait toward the driver-stall window.
+
+## The verification engine is conf-first and the step runs it through `pf verify-run` (, 2026-10-29)
+
+Nothing to migrate for Go and npm repositories: their engine line report is
+byte-identical. What changes:
+
+- **`tools/verify-scope` honours a repository's `.polyforge/verify-scope.conf`
+  on every stack.** A repository with no `go.mod` / `package.json` (or a
+  `stack=none` pin) verifies on the full tier with exactly the commands its
+  conf declares; without a conf it declares no commands and the step derives
+  the bar itself, as before. New keys (`check`, `check_requires_env`,
+  `check_requires_cmd`, `check_timeout`, `test_glob`, `base_setup`, `runner`,
+  `ci_evidence`) and the `--json` / `--full` flags are in
+  docs/reference/config.md. `--run` executes conf commands with `bash -c`
+  (it was `sh -c`): a conf line that relied on a strictly POSIX `sh` keeps
+  working, a line that needs bash now does too.
+- **The `verification` step calls `pf verify-run` once** for its mechanical
+  half (the default-branch merge, the engine plan, the whole plan, flaky
+  re-runs, the pre-existing proof, the test bar, the test-file checks) and
+  keeps only judgment. Installed releases pick this up with their next
+  `.polyforge/release.sh`; a running daemon keeps the previous step text
+  until then. `pf doctor`'s `scoped-gates readiness` row now reports a
+  conf-only repository as `pass` (full tier) and a stackless repository with
+  no conf as `warn`.

@@ -38,17 +38,9 @@ rewind re-entry, also read `execution.json`'s `pending_rewind_input` for this st
 - **Work only inside the declared repo worktree(s)** (`repos/<name>/**`); never touch
   paths outside them.
 - **Keep the build green between commits — fast checks only, per unit.** After each
-  compilable unit, run, via `bash`, the repo's fast checks: the project's own build, its
-  lint/format check, and the unit tests of the packages/modules this unit touched (the
-  changed files' packages/modules and their tests, no more) — as the repo itself defines
-  them (Makefile, package.json scripts, CI config). For a Go repo that is `go build
-  ./... && go vet ./... && gofmt -l .` plus `go test` of the touched packages. A
-  formatter listing any file (non-empty `gofmt -l` output, or the repo's equivalent)
-  counts as red, exactly like a non-zero exit. That is the whole per-unit bar: this
-  lane's 90-minute budget cannot absorb full-suite runs per unit. Full-suite testing
-  belongs to `verification` (the one gate that runs the project's full bar); do not run
-  the full suite (e.g. `go test ./...`) here, and do not proceed on top of a red fast
-  check.
+  compilable unit, run, via `bash`, the repo's fast checks: {{fast_checks}} {{fast_checks_build}}
+  This lane has no time budget that can absorb full-suite runs per unit — its bounds are
+  the rewind limits and the daemon's per-step runtime bound.
 - **Commit per compilable unit** with a message that names what it fixes. A quick fix is
   usually one or two commits - do not accumulate everything into one undifferentiated
   commit, and do not pad the change with drive-by edits the memo did not ask for: scope

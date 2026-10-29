@@ -56,8 +56,12 @@ func (d *Daemon) Shutdown(ctx context.Context, cause string) error {
 		wg.Add(1)
 		go func(ji runtime.JobInfo) {
 			defer wg.Done()
-			if err := ji.Agent.Terminate(10 * time.Second); err != nil {
-				fmt.Fprintf(os.Stderr, "daemon: %s: agent tree teardown incomplete: %v\n", ji.WorkItem, err)
+			if err := runtime.TerminateAgentHandle(ji.Agent, 10*time.Second); err != nil {
+				// The old driver/step may still write the task repos:
+				// snapshotting them now would race a live writer. The next
+				// daemon start reaps the tree first and then recovers.
+				fmt.Fprintf(os.Stderr, "daemon: %s: agent tree teardown incomplete: %v — WIP snapshot skipped (the old writer may still be alive)\n", ji.WorkItem, err)
+				return
 			}
 			d.rt.SaveTaskWIP(wctx, ji.WorkItem)
 		}(ji)
@@ -68,7 +72,7 @@ func (d *Daemon) Shutdown(ctx context.Context, cause string) error {
 			fmt.Fprintf(os.Stderr, "daemon: state.json persist failed: %v\n", err)
 		}
 	}
-	// workbench#14: Run assigns the tracker once the data-dir lock is held;
+	// Run assigns the tracker once the data-dir lock is held;
 	// the getter takes the same lock, so a shutdown racing startup cannot
 	// race the assignment.
 	if mh := d.modelHealthTracker(); mh != nil {

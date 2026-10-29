@@ -1,7 +1,7 @@
 package cli
 
 // doctor_model_health.go: the additive `model health` doctor row
-// (workbench#14). It follows the scoped-gates readiness precedent: warn at
+//. It follows the scoped-gates readiness precedent: warn at
 // most, never `fail`, never moves `ok` or the exit code, `skip` when its
 // input cannot be read, and absent from `--harness` (which skips
 // doctorChecks wholesale). It reads only the GET /status summary the

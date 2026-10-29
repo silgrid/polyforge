@@ -1,7 +1,7 @@
 package cli
 
 // config_yaml_edit.go: the byte-preserving `.polyforge.yaml` summarize
-// editor (workbench#22). It touches only the target child line inside the
+// editor. It touches only the target child line inside the
 // root `summarize:` block; every other byte — comments, ordering, the
 // `steps:` and `memory_policy:` sections — survives. The proposed bytes are
 // validated through workspace.Load (the same strict loader the daemon and

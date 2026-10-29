@@ -1,6 +1,6 @@
 package test
 
-// w25_engine_acceptance_test.go: the workbench#25 end-to-end acceptance suite
+// w25_engine_acceptance_test.go: the end-to-end acceptance suite
 // for the release-shipped verification-scope engine, `tools/verify-scope`.
 //
 // Authored from artifacts/spec.md's `## Acceptance criteria` and `####

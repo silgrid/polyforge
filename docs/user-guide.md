@@ -107,11 +107,16 @@ forms.
   a lane's own narrative is its `workflows/<bundle>/workflow.md`.
 - **Gate** -- a step that can FAIL the run and rewind it to an earlier step;
   which steps are gates is the lane's own: the autopilot lane gates
-  verification and deliver, the feature-full lane grill-review, verification,
-  review and deliver. What each gate's FAIL means is the design docs'
+  verification and deliver, the feature-full lane grill-review, review,
+  verification and deliver (review before verification: the judgment runs
+  first, then the machine bar verifies the tree review passed merged with
+  the latest origin default branch). What each gate's FAIL means is the
+  design docs'
   [execution section](design/polyforge-vnext/reference.md#7-execution-).
 - **Rewind** -- a gate FAIL sending the run back to an earlier step to redo;
-  bounded per bundle, and past the bounds the run ends failed. The bounds are
+  bounded per bundle — the per-step bound is charged per gate→target edge
+  and the global cap counts every rewind — and past the bounds the run
+  ends failed. The bounds are
   the same [execution section](design/polyforge-vnext/reference.md#7-execution-)'s
   subject.
 - **Capsule** -- the work item's private workspace directory (`artifacts/`,
@@ -164,13 +169,16 @@ The order the system actually runs:
    item's workspace), and so is any chat while the current target is still
    subscribed.
 5. **The lane's work steps.** The bundle's own steps do the work: fix or code
-   implements, verification runs the project's full bar by default (scoped only
-   on opt-in), review judges. You
+   implements, review judges the change (before the machine bar — it never
+   reads a verification report), verification runs the project's full bar by
+   default (scoped only on opt-in, using the scope review recorded). You
    watch and answer; you do not drive the steps.
 6. **Deliver.** The workflow's own `deliver` step finishes the run: it pushes
    the feature branch, opens or reuses the PR, and merges under the repo's
-   merge rule, or asks a human. Completion rides deliver; it is never a verb
-   you run.
+   merge rule, or asks a human. The automatic merge needs both coverages —
+   the review of the final diff and the verification of the final tree —
+   and any missing fact routes the delivery to a human. Completion rides
+   deliver; it is never a verb you run.
 
 `pf wrap` is not the workflow's completion. It is the human close verb, two
 moves only: closing a bundle-less ticket (a design, decision or tracking ticket
@@ -224,7 +232,8 @@ the work item wrapped -- deliver closed it. No human wrap verb ran.
 independent judgment around the fix: grill asks with a written spec,
 grill-review confirms it, plan plans the build, e2e-author writes acceptance
 scenarios for the new behaviour and proves them red before code implements,
-and review judges the finished change against the spec before deliver. The
+and review judges the finished change against the spec before verification
+runs the machine bar and deliver. The
 flow's shape is unchanged; what changes is how much clarification and judgment
 surrounds the fix. The [bundle's own
 workflow.md](../workflows/feature-full/workflow.md) owns the detail.
@@ -239,6 +248,34 @@ in your head or your workspace.
   and ignore the rest.
 - **When you learn something durable**, remember:
   `pf remember --project <project> --type experience.wrap --title "<lesson>" "<content>"`.
+- **To browse the project in a browser**, open the server's web console
+  at the aihub base URL (your `server` setting in `cli.toml`, for example
+  `http://localhost:8420`) with `/web/` appended — for example
+  `http://localhost:8420/web/`. The server speaks plain HTTP itself;
+  an `https://` console URL works only when the deployment terminates TLS
+  in front of it, and over plain HTTP the api key crosses the network
+  in clear. The browser asks for a user name and
+  a password: enter any user name and your api key as the password. The
+  console's first page lists the projects your key may read — pick one
+  and use its three modules, all read-only and scoped to that project:
+  - **Work items** — the project's items newest first, filterable by
+    status and searchable over goal and content, twenty to a page;
+    an item's page shows its content, metadata, both dependency
+    directions and its event timeline.
+  - **Memories** — the project's memories, newest first, page by page
+    with the Next link, or one keyword page of the top 50 matches (the
+    page tells you when it is only showing the top matches); a
+    memory's page shows its header card and its full body rendered
+    read-only. The private and admin visibility tiers stay hidden
+    from anyone but their readers, exactly as on the CLI.
+  - **Machines** (admins only) — a health snapshot of the registered
+    machines: role, runtime, launcher, heartbeat age and staleness.
+  The top bar also offers a project-scoped global search that groups
+  matching work items and memories. On a borrowed machine,
+  open the console in a private browser window so the credential leaves
+  no trace when the window closes; no step or task agent can reach the
+  console — it serves a human at a browser only, and the daemon proxies
+  no web route.
 
 The memory model (types, visibility, how search ranks) is the design docs'
 [memory section](design/polyforge-vnext/06-memory-search.md); the verbs' shapes

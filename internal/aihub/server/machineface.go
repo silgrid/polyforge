@@ -1,11 +1,13 @@
 package server
 
 // machineface.go: signature enforcement for the new cross-machine
-// endpoints (workbench#11). Every signed request carries the existing
+// endpoints. Every signed request carries the existing
 // Bearer authorization PLUS X-PF-Machine-ID, X-PF-Timestamp and
 // X-PF-Signature over METHOD\nPATH\nsha256hex(body)\nTIMESTAMP\nMACHINE_ID.
 // The Bearer user must equal the machine's operator_id. The ±300 s window
-// and the 4096/600 s replay cache live in internal/common/machinesign.
+// and the replay cache (512 live entries per bucket / 600 s) live in
+// internal/common/machinesign; aihub keys one bucket per machine id per
+// signed-route lane (replayLane below, A2).
 // Existing endpoints keep their auth byte-for-byte.
 
 import (
@@ -33,17 +35,44 @@ type machineAuth struct {
 
 type machineHandler func(w http.ResponseWriter, r *http.Request, idn *identity, m machineAuth) error
 
+// replayLane is the signed-route class whose anti-replay bucket a
+// machine's signature is recorded in ( A2). One shared
+// bucket per machine let traffic another member induces — the answers to
+// its relayed queries and the inbox wakes they cause — fill the quota the
+// machine's own heartbeat needs, so a third party could push a holder
+// stale. Each lane has its own machinesign.ReplayQuota: the heartbeat
+// lane holds only the machine's own beats, which no other party can add
+// to. The duplicate check loses nothing: a signature covers its method
+// and path, every path is served by exactly one route, and every route
+// names exactly one lane, so a signature is only ever checked in one
+// bucket.
+type replayLane string
+
+const (
+	laneHeartbeat replayLane = "heartbeat" // POST /machines/heartbeat
+	laneInbox     replayLane = "inbox"     // GET /machines/inbox
+	laneAnswer    replayLane = "answer"    // POST /queries/{qid}/answer
+	laneQuery     replayLane = "query"     // POST /work-items/{id}/progress-query, /artifact-query
+)
+
+// replayBucket is the cache key of one machine's lane. Lanes carry no
+// newline, so the last one splits a key unambiguously.
+func replayBucket(machineID string, lane replayLane) string {
+	return machineID + "\n" + string(lane)
+}
+
 // signedMachine authenticates the Bearer, verifies the machine signature,
-// requires the caller to speak for the machine's operator, and exposes the
-// verified machine id to the handler. Reachability: a step agent cannot
-// reach it — step processes hold no aihub key at all, and the daemon's
-// aihub face forwards no machine-face route.
-func (s *Server) signedMachine(next machineHandler) http.HandlerFunc {
+// requires the caller to speak for the machine's operator, records the
+// signature in the route's replay lane, and exposes the verified machine
+// id to the handler. Reachability: a step agent cannot reach it — step
+// processes hold no aihub key at all, and the daemon's aihub face
+// forwards no machine-face route.
+func (s *Server) signedMachine(lane replayLane, next machineHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idn, err := s.authenticate(r)
 		if err == nil {
 			var m machineAuth
-			m, err = s.verifyMachine(r, idn)
+			m, err = s.verifyMachine(r, idn, lane)
 			if err == nil {
 				err = next(w, r, idn, m)
 			}
@@ -54,7 +83,7 @@ func (s *Server) signedMachine(next machineHandler) http.HandlerFunc {
 	}
 }
 
-func (s *Server) verifyMachine(r *http.Request, idn *identity) (machineAuth, error) {
+func (s *Server) verifyMachine(r *http.Request, idn *identity, lane replayLane) (machineAuth, error) {
 	machineID := strings.TrimSpace(r.Header.Get(machinesign.HeaderMachineID))
 	tsRaw := strings.TrimSpace(r.Header.Get(machinesign.HeaderTimestamp))
 	sig := strings.TrimSpace(r.Header.Get(machinesign.HeaderSignature))
@@ -95,19 +124,47 @@ func (s *Server) verifyMachine(r *http.Request, idn *identity) (machineAuth, err
 	if operatorID == "" || idn.UserID != operatorID {
 		return machineAuth{}, core.Fail(api.ErrAuthForbidden, "", "the Bearer user does not speak for machine %s", machineID)
 	}
-	if !s.replay.Check(time.Now(), machineID, sig) {
-		return machineAuth{}, core.Fail(api.ErrAuthUnauthorized, "", "machine signature replayed")
+	// The cache's verdict, mapped: a verbatim replay stays AUTH-401; a
+	// machine over its lane's quota is CORE-429 (only that
+	// machine's lane is refused, and its own entries expire to recover).
+	if err := replayVerdict(s.replay.Check(time.Now(), replayBucket(machineID, lane), sig), machineID, lane, "machine signature replayed"); err != nil {
+		return machineAuth{}, err
 	}
 	return machineAuth{MachineID: machineID, OperatorID: operatorID}, nil
 }
 
-// heartbeatProof is the heartbeat face's cryptographic verdict (workbench#57
+// replayVerdict maps the shared anti-replay cache's verdict
+// to the machine face's two refusals — one mapping for every signed face,
+// verifyMachine and the heartbeat's Commit alike. A verbatim replay stays
+// AUTH-401 with the caller's own detail; a machine over its lane's quota
+// is CORE-429 naming the lane, and the quota and TTL in that detail text
+// come from machinesign's constants so the numbers cannot drift from the
+// cache's real bounds.
+func replayVerdict(v machinesign.ReplayVerdict, machineID string, lane replayLane, replayDetail string) error {
+	switch v {
+	case machinesign.ReplayDuplicate:
+		return core.Fail(api.ErrAuthUnauthorized, "", "%s", replayDetail)
+	case machinesign.ReplayOverQuota:
+		ttl := int(machinesign.ReplayTTL / time.Second)
+		return core.Fail(api.ErrCoreTooMany, "",
+			"machine %s filled its %s anti-replay quota (%d live signatures per machine id per lane, %d s TTL); its own oldest entries expire within %d s",
+			machineID, lane, machinesign.ReplayQuota, ttl, ttl)
+	}
+	return nil
+}
+
+// heartbeatProof is the heartbeat face's cryptographic verdict (
 // R2/R3/R7/R8). A beat with none of the X-PF-* headers at all is the bounded
-// transition for an already-registered v2.20.6 daemon and says so in the
-// proof; a partially signed beat is refused. A signed beat verifies against
+// transition for an already-registered pre-signing daemon and says so in
+// the proof (core's version gate accepts it only while both
+// the request version and the stored runtime_version predate v2.20.8 — a
+// signed v2.20.8+ beat ratchets the row closed); a partially signed beat is
+// refused. A signed beat verifies against
 // the key the body presents (a first registration, a first bind, a claim),
 // else the row's bound key, through the same ±300 s window and the shared
-// replay cache as the rest of the machine face — one scheme, no second one.
+// replay cache as the rest of the machine face — one scheme, no second one
+// — in the machine's heartbeat lane ( A2: no other party can
+// add an entry to it, so relayed traffic can never refuse a beat).
 //
 // The replay cache is in memory: an aihub restart forgets it, so at most one
 // ±300 s window reopens per restart (recorded in the decision record).
@@ -155,7 +212,12 @@ func (s *Server) heartbeatProof(r *http.Request, body []byte, req core.MachineHe
 	// The signature is recorded at the accepted write, not here: a refused
 	// beat must not burn it (the same body and second may be retried once the
 	// caller's eligibility is fixed), while an accepted one can never be
-	// replayed byte-for-byte.
+	// replayed byte-for-byte. The commit maps the cache's verdict: a
+	// verbatim repeat answers AUTH-401, a machine over its heartbeat
+	// lane's quota answers CORE-429.
 	return core.HeartbeatProof{CallerID: idn.UserID, Signed: true, KeyB64: expected,
-		Commit: func() bool { return s.replay.Check(time.Now(), machineID, sig) }}, nil
+		Commit: func() error {
+			return replayVerdict(s.replay.Check(time.Now(), replayBucket(machineID, laneHeartbeat), sig),
+				machineID, laneHeartbeat, "machine heartbeat signature replayed")
+		}}, nil
 }

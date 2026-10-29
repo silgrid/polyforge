@@ -1,59 +1,15 @@
 ---
 name: feature-full
 rewind:
-  max_total: 6
+  max_total: 9
   max_per_step: 3
 steps:
-  - { id: grill, context_policy: fresh, handoff: true }
-  - { id: spec, context_policy: inherit }
+  - { id: grill, context_policy: fresh, handoff: true, recall: true }
+  - { id: spec, context_policy: inherit, recall: true }
   - { id: grill-review, context_policy: fresh, handoff: true, requires_human_answer: true, gate: true, on_fail: { target: spec } }
-  - { id: plan, context_policy: inherit }
-  - { id: e2e-author, context_policy: fresh, handoff: true, requires_command_evidence: true, vars: { e2e_author_mode: required } }
-  - { id: code, context_policy: inherit }
-  - id: verification
-    context_policy: fresh
-    gate: true
-    requires_command_evidence: true
-    mechanical_fix: true
-    on_fail: { target: code }
-    model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5]
-    vars:
-      output_required: verdict, checks, authored_titles, scenarios
-      build_step: code
-      position: >-
-        Specific to this lane, you also run the acceptance scenarios `e2e-author` authored
-        and proved red before `code` ran. Design quality is `review`'s job — the step right
-        after this one; it reads your report. This lane is scoped-capable (the scoped
-        tier): a work item whose content carries the marker line `verification: scoped`
-        runs this step scoped — declare the `scope` object (`mode`/`declared_paths`/
-        `rationale`/`fast_gates_ref`) and keep the authored acceptance scenarios mandatory
-        (unless the owner-approved e2e-author mode is `skipped-with-rationale`); without
-        the marker it runs full and carries no `scope`.
-      lane_checks: |-
-        **Authored acceptance scenarios.** Copy `steps.e2e-author.output.scenario_titles`
-        verbatim into `authored_titles` and record one `scenarios` entry per title, same
-        order — on this lane both fields are required. If the full bar already ran
-        `e2e-author`'s test files (e.g. `go test ./test/` covers `test/...`), read each
-        scenario's result from that run. If it did not (e.g. the project's e2e runner is not
-        part of its unit test command), run those files with a targeted command and add that
-        command to `test_bar`, so the acceptance tests are re-run on delivery too. A
-        document-only scenario is driven through the project's actual interfaces and judged
-        against its THEN clause. Never rewrite, relax or skip a scenario because the
-        implementation does not satisfy it — record `fail` with a detailed `detail`. A skip
-        is legal only with a non-empty `detail` and does not fail this gate; `review` judges
-        it. Record the suite as its own named check (`authored-scenarios`): `fail` if any
-        scenario failed. For a failing authored scenario, `fail_reason` names its title and
-        expected vs observed.
-
-        **e2e-author mode.** The mode is `skipped-with-rationale` ONLY when
-        `artifacts/grill-qa.md` records both the approved mode and the owner's explicit
-        approval of it; with no such record — or with the owner's veto — the mode is
-        `required` (fail-closed), and the mandatory authored-suite text above applies
-        unchanged. On a skip, `steps.e2e-author.output.scenario_titles` and `.baseline`
-        are empty: echo them as empty `authored_titles`/`scenarios`, record the
-        `authored-scenarios` check as `skipped` with the recorded rationale in its
-        `detail`, and run no authored suite.
-      never_pre_existing: the authored acceptance tests (`steps.e2e-author.output.test_files`) and any repro check
+  - { id: plan, context_policy: inherit, recall: true }
+  - { id: e2e-author, context_policy: fresh, handoff: true, requires_command_evidence: true, vars: { e2e_author_mode: required }, recall: true }
+  - { id: code, context_policy: inherit, recall: true }
   - id: review
     context_policy: fresh
     gate: true
@@ -69,14 +25,15 @@ steps:
         rather than merely passing on a technicality.
       judge: |-
         1. Read, in this order: `artifacts/spec.md` (what was supposed to happen),
-           `artifacts/plan.md` (how it was supposed to be built), the full diff (what was
-           really built, tests included — see below), and `artifacts/verification-report.md`
-           (the machine gate's results, with the per-scenario results of the authored
-           acceptance suite). Judge whether `verification`'s scenario skips, if any, are
-           acceptable — skips do not fail that gate; you do.
+           `artifacts/plan.md` (how it was supposed to be built), and the full diff (what
+           was really built, tests included — see below). The machine gate (`verification`)
+           runs after you: you have no verification report to read — judge the diff, the
+           authored suite's intent and the spec's acceptance criteria themselves.
         2. Check the implementation against the spec's requirements and acceptance criteria one
-           by one — do not rubber-stamp because verification passed; the mechanical gate
-           checks different things than "is this the right change."
+           by one — do not rubber-stamp because the tests pass; the mechanical gate
+           behind you checks different things than "is this the right change." An authored
+           scenario `verification` later records as `skipped` blocks the automatic merge by
+           itself (a human decides at delivery) — it is never this gate's verdict to make.
         3. Judge the full diff, including the tests. Read the whole change, not only `code`'s
            commits: in each task repo, `git diff $(git merge-base HEAD origin/HEAD)..HEAD`
            (fall back to `origin/main` or `origin/master` when `origin/HEAD` is unset — the same
@@ -98,12 +55,79 @@ steps:
              soft cap (`added_test_lines`) whose `size_justification` does not hold up: record it
              as a `non-blocking` finding — removing a test would itself need a human round trip
              under the authored-tests gate, which is not worth it for size alone.
-        4. **e2e-author mode.** The mode is `skipped-with-rationale` ONLY when
+        4. **Plan conformance, both directions.** Read the plan-conformance facts section
+           of this prompt — the driver computed the set differences between the plan's
+           declared set and the diff; do not reconstruct them. In EVERY round, whatever the round contract says about new discoveries:
+           a changed file the plan did not declare and no review finding cites is
+           blocking; a declared coupled obligation the diff leaves unchanged is blocking;
+           a declared plain write left unchanged is non-blocking. A file `code` added
+           after a review FAIL counts as declared only when its `declared_extensions`
+           entry cites the finding (`s<n>#<k>`) that requires it — judge whether that
+           finding really does. Judge too whether the plan's coupled obligations are the
+           right ones: the repo's `AGENTS.md` names the project's known couplings, and one
+           it names that the plan omits is blocking.
+        5. **e2e-author mode.** The mode is `skipped-with-rationale` ONLY when
            `artifacts/grill-qa.md` records the owner's explicit approval of it; with no
            such record the mode is `required` (fail-closed). On a skip the new-behaviour
            scenario checks in step 3 (new-behaviour coverage and
            deleted-as-already-satisfied) are not applicable — judge the recorded
            rationale instead. When the mode is `required`, they apply as written.
+  - id: verification
+    context_policy: fresh
+    gate: true
+    requires_command_evidence: true
+    mechanical_fix: true
+    on_fail: { target: code }
+    model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5]
+    vars:
+      output_required: verdict, checks, authored_titles, scenarios
+      build_step: code
+      position: >-
+        Specific to this lane, you also run the acceptance scenarios `e2e-author` authored
+        and proved red before `code` ran. Design quality was already judged: `review` ran
+        before you (this lane's order is code → review → verification → deliver) and its
+        pass covers the tree you verify. This lane is scoped-capable (the scoped
+        tier): a work item whose content carries the marker line `verification: scoped`
+        runs this step scoped — declare the `scope` object (`mode`/`declared_paths`/
+        `rationale`/`fast_gates_ref`) with exactly the `declared_paths` review recorded
+        (`steps.review.output.scope`; the driver blocks the automatic merge on any
+        disagreement) and keep the authored acceptance scenarios mandatory
+        (unless the owner-approved e2e-author mode is `skipped-with-rationale`); without
+        the marker it runs full and carries no `scope`.
+      lane_checks: |-
+        **Authored acceptance scenarios.** Copy `steps.e2e-author.output.scenario_titles`
+        verbatim into `authored_titles` (`result.json`'s `authored_titles` is that list) and
+        record one `scenarios` entry per title, same order — on this lane both fields are
+        required. A title `e2e-author` bound to a command, unit and marker is resolved by
+        `pf verify-run`: take its `bound_scenarios` entry's status and detail as they are —
+        the binding's command ran and is in `test_bar`, and only a re-run of
+        `pf verify-run` changes its outcome. A title without a binding
+        (`unbound_titles`) is yours to judge. If the full bar already ran `e2e-author`'s
+        test files (e.g. `go test ./test/` covers `test/...`), read that scenario's result
+        from that run (`result.json`'s `units`, the command logs). If it did not (e.g. the
+        project's e2e runner is not part of its unit test command), run those files with a
+        targeted command and add that command to `test_bar`, so the acceptance tests are
+        re-run on delivery when deliver's own merge moves HEAD past the verified head (and
+        unconditionally after a light pass). A document-only scenario is driven through the
+        project's actual interfaces and judged against its THEN clause. Never rewrite, relax or skip a
+        scenario because the
+        implementation does not satisfy it — record `fail` with a detailed `detail`. A skip
+        is legal only with a non-empty `detail` and does not fail this gate; it blocks the
+        automatic merge — `deliver` routes the delivery to a human naming the skipped
+        title (the owner-approved `skipped-with-rationale` mode records an empty list and
+        triggers nothing). Record the suite as its own named check (`authored-scenarios`): `fail` if any
+        scenario failed. For a failing authored scenario, `fail_reason` names its title and
+        expected vs observed.
+
+        **e2e-author mode.** The mode is `skipped-with-rationale` ONLY when
+        `artifacts/grill-qa.md` records both the approved mode and the owner's explicit
+        approval of it; with no such record — or with the owner's veto — the mode is
+        `required` (fail-closed), and the mandatory authored-suite text above applies
+        unchanged. On a skip, `steps.e2e-author.output.scenario_titles` and `.baseline`
+        are empty: echo them as empty `authored_titles`/`scenarios`, record the
+        `authored-scenarios` check as `skipped` with the recorded rationale in its
+        `detail`, and run no authored suite.
+      never_pre_existing: the authored acceptance tests (`steps.e2e-author.output.test_files`) and any repro check
   - { id: deliver, context_policy: fresh, gate: true, requires_command_evidence: true, on_fail: { target: code } }
 defaults:
   model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
@@ -118,11 +142,11 @@ schema — the frontmatter `steps` array above is the *only* execution order. No
 ## Shape of the flow
 
 ```
-grill --> spec --> grill-review --> plan --> e2e-author --> code --> verification --> review --> deliver
+grill --> spec --> grill-review --> plan --> e2e-author --> code --> review --> verification --> deliver
 ```
 
 The four gate FAIL edges, each declared in the frontmatter as that gate's `on_fail`
-rewind target: `grill-review` --> `spec`, `verification` --> `code`, `review` -->
+rewind target: `grill-review` --> `spec`, `review` --> `code`, `verification` -->
 `code` and `deliver` --> `code`. One deliver result may override that target: a scoped
 delivery whose human answer is 「全量重验」 carries `rewind_to: verification`, and the driver
 rewinds there at the full tier.
@@ -132,31 +156,26 @@ replace a heavy spec-review loop with a leaner two-pass confirmation, an accepta
 step that runs BEFORE the build (`e2e-author` authors scenarios for the spec's new
 behaviour, commits them and proves each one red against the pre-implementation tree
 in the same step), a build step that implements against that executable acceptance
-(`code` continues `e2e-author`'s session via its inherit handoff), the machine gate
-(`verification` runs the full bar and reports each authored scenario, rewinding to
-`code` on red), the judgment gate (`review` reads the full diff, tests included, and
-the verification report) and `deliver`. Every delivery bundle runs `verification`
-before `review`: a mechanical failure never costs a review.
+(`code` inherits `e2e-author`'s handoff: test locations, the targeted run command, the
+red bar to turn green), the judgment gate
+(`review` reads the full diff, tests included, and judges design fit, scope and
+quality), the machine gate (`verification` runs the full bar and reports each authored
+scenario, rewinding to `code` on red) and `deliver`. Every delivery bundle runs
+`review` before `verification`: a quality failure never costs a full machine bar, and
+the machine gate verifies the tree the judgment already passed merged with the latest
+origin default branch.
 
 ## e2e-author mode
 
 The `e2e-author` step entry's `e2e_author_mode` var is the lane **default**, not a
 per-work-item value: it renders `required` on every run. The per-work-item mode is
-the owner-approved one recorded in `artifacts/grill-qa.md`; with no approved record
-the default `required` applies (fail-closed). The default is the untrimmed lane:
-every new-behaviour acceptance criterion gets an authored scenario, committed and
-proven red before `code` runs. The alternative is `skipped-with-rationale`: the
-owner approves it for an internal-mechanism or non-behaviour-face work item, the
-grill proposes it and records the approved mode plus its rationale and the owner's
-explicit approval in `artifacts/grill-qa.md`, and `plan` states it — the audit
-anchor. A behaviour-face work item (change-coverage discipline ①) MUST stay
-`required`: the mode exists to trim mechanism-only tickets, never to dodge authored
-e2e for a change on the behaviour face. On a skip, `e2e-author` writes its scenario
-document recording the mode and rationale, commits nothing and runs no authored
-suite, and reports the empty `scenario_titles`/`baseline`; `verification` and
-`review` honour
-the skip only on the recorded owner's explicit approval and skip the authored-suite
-checks rather than failing over an empty suite.
+the owner-approved one recorded in `artifacts/grill-qa.md`; without an approved
+record the default applies (fail-closed). `grill` proposes `skipped-with-rationale`
+for an internal-mechanism / non-behaviour-face work item, the owner approves it,
+and `plan` states it — the audit anchor. A work item on the behaviour face MUST
+stay `required`. On a skip, `e2e-author` commits nothing, reporting empty
+`scenario_titles`/`baseline`; `verification` and `review` honour the skip only on
+the recorded owner's explicit approval.
 
 ## Artifact flow between steps
 
@@ -170,9 +189,9 @@ file under `artifacts/`; no step declares frontmatter `inputs:`, so downstream s
 | `grill-review` | `artifacts/grill-qa.md` (grill-review section, appended) | `spec` (only on rewind, via `pending_rewind_input`) |
 | `plan` | `artifacts/plan.md` | `code` |
 | `e2e-author` | `artifacts/e2e-scenarios.md` with its `## Baseline run` section (the proven-red bar: one fail entry per scenario with evidence) + the committed test files under `repos/<name>/**` if the project runs them from the tree | `code` (primary, via its inherit handoff), `verification`, `review` |
-| `code` | changes under `repos/<name>/**`, `artifacts/code-summary.md` | `verification`, `review` |
-| `verification` | `artifacts/verification-report.md` (verdict, full bar + per-scenario results of the authored suite) | `review`, `deliver` |
-| `review` | `artifacts/review.md` (verdict) | `deliver` |
+| `code` | changes under `repos/<name>/**`, `artifacts/code-summary.md` | `review`, `verification` |
+| `review` | `artifacts/review.md` (verdict, findings) | `verification` (its scope record, on the scoped tier), `deliver` (the merge rule's independent review and its follow-up summary) |
+| `verification` | `artifacts/verification-report.md` (verdict, full bar + per-scenario results of the authored suite) | `deliver` (verified heads, test bar, authored-scenario outcomes) |
 | `deliver` | `artifacts/delivery.md` | (terminal) |
 
 `grill` and `grill-review` share one running document, `artifacts/grill-qa.md`, sectioned
@@ -194,14 +213,16 @@ flow" above and explained in `docs/concepts.md` §Rewind. This section only expl
   of them needs correction.
 - **`verification` FAILs -> rewind to `code`.** The full bar or an authored scenario
   is red: an implementation failure, not review material — the bar was proven red and
-  visible before `code` ran. Rewinding to `code` re-runs the build step with the
+  visible before `code` ran, and the judgment already passed on the earlier tree.
+  Rewinding to `code` re-runs the build step with the
   verdict attached as `pending_rewind_input`; the authored scenarios are still valid,
   so `e2e-author` is not re-run.
 - **The mechanical fast lane (`mechanical_fix: true`, polyforge#260).** This lane's
   verification step entry arms it: a FAIL whose every failed check is static (lint/
   format/vet/spelling — each reproducible by one deterministic command, no test failed)
   may carry a mechanical classification (`mechanical_bound`: per failed check its repo,
-  its exact command and the files it named) and rewind cheaply — one slot, `code`
+  its exact command and the files it named) and rewind cheaply — no edge slot charged
+  (the rewind counts toward `max_total` only), `code`
   resuming its previous session to fix only inside the bound (modifications of
   bound-named files, ≤ 40 changed lines and ≤ 5 files summed across repos), then one
   light recheck that re-runs exactly the bound commands (no full bar, no authored
@@ -210,27 +231,34 @@ flow" above and explained in `docs/concepts.md` §Rewind. This section only expl
   pass — escalates in place, in the same step, to this same full verification
   (no new rewind slot); a light pass writes no `verified_heads`, and `deliver` covers
   the tests only by re-running the carried `test_bar` in the merge dispatch,
-  unconditionally. `review` then runs in full as the first review either way.
-- **`review` FAILs -> rewind to `code`.** Review found the change wanting after the
-  machine gate passed; `code` is re-run with the review verdict attached, and the
-  re-run passes through `verification` again. `plan` is not re-run unless the
-  reviewer's verdict says the plan itself was wrong, in which case the plan step's own
-  re-authoring happens as part of the `code` step consuming the verdict text (the flow
-  does not need a third rewind target for this). A blocking finding against an
+  unconditionally. The re-entered round re-runs a fresh `review` over the repaired
+  diff before this verification re-runs — the mechanical lane never skips the
+  judgment.
+- **`review` FAILs -> rewind to `code`.** Review found the change wanting; `code`
+  is re-run with the review verdict attached, and the re-run re-enters a fresh `review`,
+  then `verification`, behind it. `plan` is never re-run and is not a rewind target:
+  when a finding requires a file outside the plan's declared set, the re-run `code`
+  changes it and cites the finding in its `declared_extensions` output (`path` plus
+  the finding's `s<n>#<k>` reference), and the driver counts that cited file as
+  declared in the next round's plan-conformance facts. A blocking finding against an
   authored test sends `code` through `needs_input`: it may not change those tests
   without a human answer (the driver's authored-tests gate).
   An all-text-only review FAIL (every blocking finding marked `text_only: true`) takes
   the light path: `code`'s previous session resumes with the verdict, applies only
-  text-only fixes, and the gate tail (`verification`, then a fresh `review`) re-runs
+  text-only fixes, and the gate tail (a fresh `review`, then `verification`) re-runs
   unchanged.
 - **`deliver` "back to code" -> rewind to `code`.** A human chose to send the change
   back instead of merging it.
 
-`code`'s per-step rewind allowance (`max_per_step`) is shared by the three gates that
-target it (`verification`, `review`, `deliver`).
+`code`'s per-step rewind allowance (`max_per_step`) is charged per gate→target edge:
+the three gates that target it (`review`, `verification`, `deliver`) carry three
+charged slots each, and the light (text-only), mechanical and converging rewinds
+charge none — until a light re-entry self-reports `needs_code_change: true`: that turns
+its light rewind into a fresh round, which charges the edge once.
 
-Workflow-level rewind bounds are declared in the frontmatter: `max_total: 6`,
-`max_per_step: 3`. A gate that keeps failing past those bounds ends the workflow in
+Workflow-level rewind bounds are declared in the frontmatter: `max_total: 9`,
+`max_per_step: 3` — the global cap counts every rewind, light ones included. A gate
+that keeps failing past its edge's bound ends the workflow in
 `failed_rewind_exhausted`, not an infinite loop.
 
 ## Budget guidance
@@ -244,6 +272,8 @@ above and the daemon's per-step runtime bound T (docs/reference/commands.md, `pf
 push only the feature branch, open or reuse the PR, merge under the merge rule or ask a
 human) is the shared step definition `workflows/_shared/steps/deliver.md`. Lane facts:
 its "back to code" answer rewinds to `code`, and the independent review it reads is this
-workflow's `review` gate (`steps.review.output`). There is no release slot: releases and
+workflow's `review` gate (`steps.review.output` — its verdict, its recorded scope on
+the scoped tier, and the `reviewed_heads` the driver wrote at its pass, which must
+cover the delivered diff). There is no release slot: releases and
 deploys happen only through the separate `release` bundle (a separate WI), cut from the
 merged origin head.

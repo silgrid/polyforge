@@ -30,11 +30,11 @@ it" of an existing work item → `verbs/submit.md`.
      `expected diff size` and `lane risk surface`; a small, low-risk ticket
      prefers `chore`/`autopilot` over `feature-full`. Shipped lanes:
      `bug-fix` (fix a failure: repro →
-     root-cause → fix → verification → review → deliver), `feature-full` (new
+     root-cause → fix → review → verification → deliver), `feature-full` (new
      user-visible behavior: grill → spec → grill-review → plan → e2e-author →
-     code → verification → review → deliver), `chore` (internal maintenance
+     code → review → verification → deliver), `chore` (internal maintenance
      with no new user-visible behavior — tools, docs, config, cleanup,
-     deletion: plan → code → verification → review → deliver), `autopilot`
+     deletion: plan → code → review → verification → deliver), `autopilot`
      (small well-understood changes: grill → fix → verification → deliver).
      `release` is the separate release lane — see the lane table in
      `verbs/file.md`. Every lane except `feature-full` can merge unattended, so

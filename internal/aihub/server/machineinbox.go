@@ -1,7 +1,7 @@
 package server
 
 // machineinbox.go: the in-memory relay registry and the holder inbox
-// long-poll (workbench#11). Progress/artifact queries are NEVER stored:
+// long-poll. Progress/artifact queries are NEVER stored:
 // a pending entry exists only between enqueue and answer/deadline.
 
 import (
@@ -12,12 +12,117 @@ import (
 
 	"github.com/silgrid/polyforge/internal/aihub/core"
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/machinesign"
 )
 
 const (
 	progressQueryDeadline = 5 * time.Second
 	inboxLongPoll         = 25 * time.Second
 )
+
+// The relay admission budget ( A2). A relayed query costs
+// its holder one signed inbox wake (laneInbox) and one signed answer
+// (laneAnswer), each recorded for machinesign.ReplayTTL; the answer comes
+// at most progressQueryDeadline after the admission. Counting admissions
+// over relayWindow = TTL + deadline therefore bounds the relay-driven
+// entries of both lanes at any instant by relayHolderQuota: 448 answers
+// ≤ 512, and 448 wakes plus the idle polls of the query and message loops
+// (one per 25 s each, ≤50 per window) = 498 ≤ 512. So no stream of
+// queries, from any number of members, can fill a holder's lanes — the
+// excess is refused here, before it reaches the holder. relayMemberQuota
+// keeps one member (per holder) under three quarters of that budget: it
+// is above the ≈303 queries one resident `pf watch` (2 s poll) sends per
+// window for one remote work item, and it leaves 128 for every other
+// member.
+const (
+	relayHolderQuota = 448
+	relayMemberQuota = 320
+	relayWindow      = machinesign.ReplayTTL + progressQueryDeadline
+)
+
+// relayBudget admits relayed queries per holder machine and per (member,
+// holder) over a sliding window. A refused query records nothing; every
+// admit sweeps every key, so memory follows live admissions (at most
+// 2 × relayHolderQuota timestamps per holder with live admissions).
+type relayBudget struct {
+	mu          sync.Mutex
+	holderQuota int
+	memberQuota int
+	window      time.Duration
+	byHolder    map[string][]time.Time
+	byMember    map[relayMember][]time.Time
+}
+
+type relayMember struct{ user, holder string }
+
+func newRelayBudget(holderQuota, memberQuota int, window time.Duration) *relayBudget {
+	return &relayBudget{holderQuota: holderQuota, memberQuota: memberQuota, window: window,
+		byHolder: map[string][]time.Time{}, byMember: map[relayMember][]time.Time{}}
+}
+
+// liveSince keeps the admissions at or after cutoff.
+func liveSince(ts []time.Time, cutoff time.Time) []time.Time {
+	kept := ts[:0]
+	for _, at := range ts {
+		if !at.Before(cutoff) {
+			kept = append(kept, at)
+		}
+	}
+	return kept
+}
+
+// retryWithin answers the whole seconds until the oldest admission in ts
+// leaves the window (at least 1).
+func (b *relayBudget) retryWithin(now time.Time, ts []time.Time) int {
+	oldest := ts[0]
+	for _, at := range ts[1:] {
+		if at.Before(oldest) {
+			oldest = at
+		}
+	}
+	secs := int(oldest.Add(b.window).Sub(now)/time.Second) + 1
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
+}
+
+// admit records one relayed query from userID to holder, or answers the
+// typed CORE-429 naming the bound that refused it.
+func (b *relayBudget) admit(now time.Time, userID, holder string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cutoff := now.Add(-b.window)
+	for k, ts := range b.byHolder {
+		if ts = liveSince(ts, cutoff); len(ts) == 0 {
+			delete(b.byHolder, k)
+		} else {
+			b.byHolder[k] = ts
+		}
+	}
+	for k, ts := range b.byMember {
+		if ts = liveSince(ts, cutoff); len(ts) == 0 {
+			delete(b.byMember, k)
+		} else {
+			b.byMember[k] = ts
+		}
+	}
+	window := int(b.window / time.Second)
+	key := relayMember{user: userID, holder: holder}
+	if ts := b.byMember[key]; len(ts) >= b.memberQuota {
+		return core.Fail(api.ErrCoreTooMany, "",
+			"relay refused: you already sent %d relayed queries to holder machine %s in the last %d s (at most %d per member per holder); retry within %d s",
+			len(ts), holder, window, b.memberQuota, b.retryWithin(now, ts))
+	}
+	if ts := b.byHolder[holder]; len(ts) >= b.holderQuota {
+		return core.Fail(api.ErrCoreTooMany, "",
+			"relay refused: holder machine %s already received %d relayed queries in the last %d s (at most %d per holder); retry within %d s",
+			holder, len(ts), window, b.holderQuota, b.retryWithin(now, ts))
+	}
+	b.byMember[key] = append(b.byMember[key], now)
+	b.byHolder[holder] = append(b.byHolder[holder], now)
+	return nil
+}
 
 type pendingQuery struct {
 	ID           string
@@ -28,6 +133,34 @@ type pendingQuery struct {
 	Deadline     time.Time
 	Delivered    bool
 	Waiter       chan *queryResult
+
+	// resMu/resSent are the first-wins result gate: at most
+	// one result is ever handed to Waiter — the expiry notice or the
+	// holder's answer, whichever arrives first; the other is dropped.
+	resMu   sync.Mutex
+	resSent bool
+}
+
+// deliver hands res to the waiter at most once and never blocks: the
+// gate guarantees at most one send per query, and the select's default
+// arm (the waiter already holds a result — first wins) keeps a full
+// buffer from blocking the sender, so delivery is safe to call from any
+// path, including with q.mu NOT held (the callers collect under the lock,
+// unlock, then deliver).
+func (p *pendingQuery) deliver(res *queryResult) {
+	if p == nil || p.Waiter == nil {
+		return
+	}
+	p.resMu.Lock()
+	defer p.resMu.Unlock()
+	if p.resSent {
+		return
+	}
+	p.resSent = true
+	select {
+	case p.Waiter <- res:
+	default:
+	}
 }
 
 type queryResult struct {
@@ -76,15 +209,13 @@ func (q *queryRegistry) add(p *pendingQuery) {
 
 func (q *queryRegistry) take(machineID string) []api.MachineQuery {
 	now := time.Now()
+	var expired []*pendingQuery
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	out := []api.MachineQuery{}
 	for id, p := range q.items {
 		if now.After(p.Deadline) {
 			delete(q.items, id)
-			if p.Waiter != nil {
-				p.Waiter <- &queryResult{Err: &api.Error{Code: api.ErrCoreUpstream, Detail: "holder did not answer within the deadline"}}
-			}
+			expired = append(expired, p)
 			continue
 		}
 		if p.Holder != machineID || p.Delivered {
@@ -93,20 +224,26 @@ func (q *queryRegistry) take(machineID string) []api.MachineQuery {
 		p.Delivered = true
 		out = append(out, api.MachineQuery{ID: p.ID, Kind: p.Kind, WorkItem: p.WorkItem, ArtifactPath: p.ArtifactPath})
 	}
+	q.mu.Unlock()
+	// Delivery happens only after q.mu is released: the
+	// send can never block (deliver), so holding the lock across it was
+	// pure deadlock surface.
+	for _, p := range expired {
+		p.deliver(&queryResult{Err: &api.Error{Code: api.ErrCoreUpstream, Detail: "holder did not answer within the deadline"}})
+	}
 	return out
 }
 
 func (q *queryRegistry) get(id string) *pendingQuery {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	p := q.items[id]
 	if p != nil && time.Now().After(p.Deadline) {
 		delete(q.items, id)
-		if p.Waiter != nil {
-			p.Waiter <- &queryResult{Err: &api.Error{Code: api.ErrCoreUpstream, Detail: "holder did not answer within the deadline"}}
-		}
+		q.mu.Unlock()
+		p.deliver(&queryResult{Err: &api.Error{Code: api.ErrCoreUpstream, Detail: "holder did not answer within the deadline"}})
 		return nil
 	}
+	q.mu.Unlock()
 	return p
 }
 
@@ -186,12 +323,13 @@ func (s *Server) hQueryAnswer(w http.ResponseWriter, r *http.Request, idn *ident
 		return core.Fail(api.ErrAuthForbidden, "", "query %s is addressed to machine %s", qid, p.Holder)
 	}
 	s.pending.remove(qid)
-	if p.Waiter != nil {
-		if body.Error != nil {
-			p.Waiter <- &queryResult{Err: body.Error}
-		} else {
-			p.Waiter <- &queryResult{Body: &body}
-		}
+	// First-wins delivery: if the expiry notice already
+	// reached the waiter, this answer is dropped instead of blocking the
+	// holder's HTTP answer forever — the holder still gets its 200.
+	if body.Error != nil {
+		p.deliver(&queryResult{Err: body.Error})
+	} else {
+		p.deliver(&queryResult{Body: &body})
 	}
 	return reply(w, http.StatusOK, map[string]any{"ok": true})
 }

@@ -545,6 +545,9 @@ func assertEscalationAuditBound(t *testing.T, audit map[string]any) {
 	if audit["escalated"] != true {
 		t.Errorf("the escalation audit's escalated = %v, want true", audit["escalated"])
 	}
+	if audit["abandoned"] != false {
+		t.Errorf("an in-place escalation is not an abandonment ( S2): abandoned = %v", audit["abandoned"])
+	}
 }
 
 // TestRunLightRecheckFailVerdictEscalates: a light recheck that does not

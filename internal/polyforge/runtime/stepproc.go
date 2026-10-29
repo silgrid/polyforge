@@ -16,7 +16,7 @@ package runtime
 // own group leader). A process that left both the tree and the group
 // (setsid) AND cleared its environment is outside this check.
 //
-// workbench#53: the one-shot task agent (taskproc.go) is classified by the
+// the one-shot task agent (taskproc.go) is classified by the
 // SAME walk with its own markers — StepProcessOrigin and TaskProcessOrigin
 // differ only in the marker reader they hand markedProcessOrigin.
 
@@ -38,7 +38,7 @@ func StepProcessOrigin(pid int, daemonID string) (wi string, ok bool) {
 }
 
 // markedProcessOrigin is the ONE membership walk both agent classes share
-// (workbench#53): the process itself, then each ancestor, then the leader
+// the process itself, then each ancestor, then the leader
 // of each visited process group, is asked for the class's markers. The
 // walk is identical for a step and a task process; only the markers (and
 // therefore the identity it answers) differ, so a new agent class adds a

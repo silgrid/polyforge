@@ -69,10 +69,10 @@ func TestW176MixedEffortChain(t *testing.T) {
 	// the step record names the candidate the step last ran on, effort
 	// apart from the model id
 	x := readExecution(t, capDir)
-	if st := x.Steps["fix"]; st == nil || st.Model != "example-gateway/model-a" || st.Effort != "low" {
+	if st := x.Steps["fix"]; st == nil || st.model() != "example-gateway/model-a" || st.effort() != "low" {
 		t.Fatalf("fix step record %+v, want model example-gateway/model-a effort low", st)
 	}
-	if st := x.Steps["grill"]; st == nil || st.Effort != "" {
+	if st := x.Steps["grill"]; st == nil || st.effort() != "" {
 		t.Fatalf("grill step record %+v, want no effort", st)
 	}
 }

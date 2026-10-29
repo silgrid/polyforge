@@ -1,0 +1,12 @@
+=== RUN   TestEq
+    a_test.go:10: setting up
+    a_test.go:11: 
+        	Error Trace:	/base/wt/a_test.go:11
+        	Error:      	Not equal: 
+        	            	expected: 3
+        	            	actual  : 4
+        	Test:       	TestEq
+--- FAIL: TestEq (0.00s)
+FAIL
+FAIL	example.invalid/tf	0.004s
+FAIL

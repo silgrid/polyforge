@@ -310,3 +310,204 @@ func TestRemoteFacesRefuseStepProcess(t *testing.T) {
 		t.Fatalf("a step process routed %d remote queries", face.called())
 	}
 }
+
+// TestWatchRouteRelaysOncePerCacheTTL pins A3: a resident
+// watcher polls every 2 s, and a WI held elsewhere used to cost one
+// signed relay per poll (≈300 per replay window per watcher). N polls
+// well inside the cache TTL relay exactly once, and every one of them
+// answers the holder's snapshot.
+func TestWatchRouteRelaysOncePerCacheTTL(t *testing.T) {
+	face := &fakeFace{}
+	td := newTestDaemon(t, func(c *Config) { c.MachineFace = face })
+	enableFace(td)
+	raw, _ := json.Marshal(testSnapshot("wi_cached"))
+	face.ans = &api.QueryAnswerBody{HolderMachine: "m-holder", Snapshot: raw}
+	td.hub.mu.Lock()
+	td.hub.status["wi_cached"] = api.StatusRunning
+	td.hub.mu.Unlock()
+	for i := 0; i < 5; i++ {
+		snap, err := td.client.WatchSnapshot("wi_cached", int64(i), false)
+		if err != nil {
+			t.Fatalf("poll %d: %v", i+1, err)
+		}
+		if snap.HolderMachine != "m-holder" || snap.WorkItem != "wi_cached" {
+			t.Fatalf("poll %d answered %+v, want the holder's snapshot", i+1, snap)
+		}
+	}
+	if got := face.called(); got != 1 {
+		t.Fatalf("5 polls inside the cache TTL relayed %d times, want 1", got)
+	}
+}
+
+// remoteCacheDaemon is a test daemon whose face answers wi's holder
+// snapshot, whose cache runs on the returned clock, and whose hub says
+// wi is running.
+func remoteCacheDaemon(t *testing.T, wi string) (*testDaemon, *fakeFace, func(time.Duration)) {
+	t.Helper()
+	face := &fakeFace{}
+	td := newTestDaemon(t, func(c *Config) { c.MachineFace = face })
+	enableFace(td)
+	raw, _ := json.Marshal(testSnapshot(wi))
+	face.ans = &api.QueryAnswerBody{HolderMachine: "m-holder", Snapshot: raw}
+	td.hub.mu.Lock()
+	td.hub.status[wi] = api.StatusRunning
+	td.hub.mu.Unlock()
+	var mu sync.Mutex
+	now := time.Unix(1_700_000_000, 0)
+	td.Daemon.remoteSnaps.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	return td, face, advance
+}
+
+func setHub(td *testDaemon, wi, status, updatedAt string) {
+	td.hub.mu.Lock()
+	defer td.hub.mu.Unlock()
+	td.hub.status[wi] = status
+	if td.hub.updatedAt == nil {
+		td.hub.updatedAt = map[string]string{}
+	}
+	td.hub.updatedAt[wi] = updatedAt
+}
+
+// pollRemote is one watcher poll of wi; it answers the snapshot.
+func pollRemote(t *testing.T, td *testDaemon, wi string) *protocol.WatchSnapshot {
+	t.Helper()
+	snap, err := td.client.WatchSnapshot(wi, 0, false)
+	if err != nil {
+		t.Fatalf("poll %s: %v", wi, err)
+	}
+	return snap
+}
+
+// TestRemoteSnapshotCacheTTLAndKey ( A3): a poll after the
+// TTL relays again, and inside the TTL any aihub-visible change of the
+// WI — a status change (running -> blocked, still remote) or a new
+// updated_at (a claim, a session end, a patch) — relays instead of
+// serving the entry.
+func TestRemoteSnapshotCacheTTLAndKey(t *testing.T) {
+	td, face, advance := remoteCacheDaemon(t, "wi_ttl")
+	setHub(td, "wi_ttl", api.StatusRunning, "t1")
+	pollRemote(t, td, "wi_ttl")
+	advance(remoteSnapTTL - time.Millisecond)
+	if snap := pollRemote(t, td, "wi_ttl"); snap.HolderMachine != "m-holder" || face.called() != 1 {
+		t.Fatalf("a poll inside the TTL relayed (calls=%d) or lost the holder snapshot: %+v", face.called(), snap)
+	}
+	advance(time.Millisecond)
+	if pollRemote(t, td, "wi_ttl"); face.called() != 2 {
+		t.Fatalf("a poll at the TTL served the cache: calls=%d, want 2", face.called())
+	}
+	setHub(td, "wi_ttl", api.StatusBlocked, "t1")
+	if pollRemote(t, td, "wi_ttl"); face.called() != 3 {
+		t.Fatalf("a status change inside the TTL served the cache: calls=%d, want 3", face.called())
+	}
+	setHub(td, "wi_ttl", api.StatusBlocked, "t2")
+	if pollRemote(t, td, "wi_ttl"); face.called() != 4 {
+		t.Fatalf("a new updated_at inside the TTL served the cache: calls=%d, want 4", face.called())
+	}
+	if pollRemote(t, td, "wi_ttl"); face.called() != 4 {
+		t.Fatalf("an unchanged WI inside the TTL relayed: calls=%d, want 4", face.called())
+	}
+}
+
+// TestRemoteSnapshotCacheBypassedForLocalOrClosedWI ( A3): a
+// WI the local side knows is not remote — paused, queued or terminal at
+// aihub, or now a local job — never reads the cache: it answers the
+// local snapshot without a relay, and its entry is gone, so a later
+// remote poll relays afresh.
+func TestRemoteSnapshotCacheBypassedForLocalOrClosedWI(t *testing.T) {
+	for _, st := range []string{api.StatusPaused, api.StatusQueued, api.StatusWrapped, api.StatusFailed, api.StatusCanceled} {
+		td, face, _ := remoteCacheDaemon(t, "wi_closed")
+		setHub(td, "wi_closed", api.StatusRunning, "t1")
+		pollRemote(t, td, "wi_closed") // primes the cache
+		setHub(td, "wi_closed", st, "t1")
+		snap := pollRemote(t, td, "wi_closed")
+		if snap.HolderMachine != "" || face.called() != 1 {
+			t.Fatalf("%s: answered %+v with %d relays, want the local snapshot and no new relay", st, snap, face.called())
+		}
+		setHub(td, "wi_closed", api.StatusRunning, "t1")
+		if pollRemote(t, td, "wi_closed"); face.called() != 2 {
+			t.Fatalf("%s: the entry survived the bypass (calls=%d, want a fresh relay)", st, face.called())
+		}
+	}
+
+	td, face, _ := remoteCacheDaemon(t, "wi_becomes_local")
+	pollRemote(t, td, "wi_becomes_local") // primes the cache
+	td.submitClaim(t, "wi_becomes_local")
+	snap := pollRemote(t, td, "wi_becomes_local")
+	if !snap.Known || snap.HolderMachine != "" || face.called() != 1 {
+		t.Fatalf("a WI now held locally answered %+v with %d relays, want the local job's snapshot", snap, face.called())
+	}
+}
+
+// TestRemoteSnapshotErrorsAreNotCached ( A3): a failed relay
+// is never stored — the next poll asks the holder again, as before — and
+// the first success after it is cached.
+func TestRemoteSnapshotErrorsAreNotCached(t *testing.T) {
+	td, face, _ := remoteCacheDaemon(t, "wi_err")
+	face.mu.Lock()
+	ans := face.ans
+	face.ans, face.err = nil, &api.Error{Code: api.ErrCoreUpstream, Detail: "holder did not answer"}
+	face.mu.Unlock()
+	for i := 1; i <= 2; i++ {
+		if _, err := td.client.WatchSnapshot("wi_err", 0, false); err == nil {
+			t.Fatalf("failed relay %d answered no error", i)
+		}
+		if face.called() != i {
+			t.Fatalf("failed relay %d: calls=%d, want %d (an error was cached)", i, face.called(), i)
+		}
+	}
+	face.mu.Lock()
+	face.ans, face.err = ans, nil
+	face.mu.Unlock()
+	pollRemote(t, td, "wi_err")
+	pollRemote(t, td, "wi_err")
+	if face.called() != 3 {
+		t.Fatalf("after recovery: calls=%d, want 3 (one relay, then the cache)", face.called())
+	}
+}
+
+// TestArtifactRouteIsNotCached ( A3): artifacts are fetched
+// on demand, so every remote artifact read relays — the progress cache
+// (primed here) never answers one.
+func TestArtifactRouteIsNotCached(t *testing.T) {
+	td, face, _ := remoteCacheDaemon(t, "wi_art")
+	pollRemote(t, td, "wi_art")
+	face.mu.Lock()
+	face.ans = &api.QueryAnswerBody{HolderMachine: "m-holder",
+		Artifact: &api.ArtifactAnswer{WorkItem: "wi_art", Path: "spec.md", Content: []byte("remote content")}}
+	face.mu.Unlock()
+	for i := 1; i <= 2; i++ {
+		code, body := udsGet(t, td.sock, "/jobs/wi_art/artifact?path="+url.QueryEscape("spec.md"))
+		if code != http.StatusOK {
+			t.Fatalf("artifact read %d: %d %s", i, code, body)
+		}
+	}
+	if face.called() != 3 || face.lastRel != "spec.md" {
+		t.Fatalf("artifact reads: calls=%d rel=%q, want 1 progress + 2 artifact relays", face.called(), face.lastRel)
+	}
+}
+
+// TestRemoteSnapCacheBoundedMemory ( A3): the cache never
+// holds more than its cap — the oldest entry goes — and a store sweeps
+// every expired entry.
+func TestRemoteSnapCacheBoundedMemory(t *testing.T) {
+	c := newRemoteSnapCache(10*time.Second, 2)
+	now := time.Unix(1_700_000_000, 0)
+	c.now = func() time.Time { return now }
+	item := func(id string) *api.WorkItem { return &api.WorkItem{ID: id, Status: api.StatusRunning} }
+	for _, id := range []string{"a", "b", "c"} {
+		c.put(item(id), protocol.WatchSnapshot{WorkItem: id})
+		now = now.Add(time.Second)
+	}
+	if _, ok := c.get(item("a")); ok || len(c.entries) != 2 {
+		t.Fatalf("the cap did not evict the oldest entry: %d entries, a cached=%v", len(c.entries), ok)
+	}
+	if _, ok := c.get(item("c")); !ok {
+		t.Fatal("the newest entry was evicted")
+	}
+	now = now.Add(time.Minute)
+	c.put(item("d"), protocol.WatchSnapshot{WorkItem: "d"})
+	if len(c.entries) != 1 {
+		t.Fatalf("a store left %d entries, want only the fresh one (expired entries swept)", len(c.entries))
+	}
+}

@@ -186,3 +186,37 @@ func TestStatusShowsCandidateEffort(t *testing.T) {
 		t.Fatalf("no candidate in flight: no column:\n%s", b.String())
 	}
 }
+
+// The ops status face shows a pending retry backoff as "retry in 3m:
+// <cause>"; the RETRY column only appears while some job waits one.
+func TestStatusShowsPendingRetry(t *testing.T) {
+	var b bytes.Buffer
+	renderStatus(&b, &StatusResponse{Jobs: []StatusJob{
+		{WorkItemID: "wi_a", Status: "running", RetryInSec: int64Ptr(161), RetryCause: "upstream_transient"},
+		{WorkItemID: "wi_b", Status: "running"},
+	}})
+	out := b.String()
+	if !strings.Contains(out, "RETRY") || !strings.Contains(out, "retry in 3m: upstream_transient") {
+		t.Fatalf("status must show the pending retry:\n%s", out)
+	}
+	b.Reset()
+	renderStatus(&b, &StatusResponse{Jobs: []StatusJob{{WorkItemID: "wi_b", Status: "running"}}})
+	if strings.Contains(b.String(), "RETRY") {
+		t.Fatalf("no retry pending: no column:\n%s", b.String())
+	}
+	for _, tc := range []struct {
+		sec   *int64
+		cause string
+		want  string
+	}{
+		{nil, "", "-"},
+		{int64Ptr(45), "model_error", "retry in 45s: model_error"},
+		{int64Ptr(60), "model_error", "retry in 1m: model_error"},
+		{int64Ptr(61), "ended_without_result", "retry in 2m: ended_without_result"},
+		{int64Ptr(540), "", "retry in 9m"},
+	} {
+		if got := retryFace(tc.sec, tc.cause); got != tc.want {
+			t.Errorf("retryFace(%v, %q) = %q, want %q", tc.sec, tc.cause, got, tc.want)
+		}
+	}
+}

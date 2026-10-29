@@ -478,3 +478,66 @@ func writeJournal(t *testing.T, capDir string, entries []capsule.SpawnJournalEnt
 		t.Fatal(err)
 	}
 }
+
+// TestStepMemorySearchForwardsNoBrowseParameters: the
+// step proxy's forwarded shape is fixed — a browse-shaped request (a
+// paging cursor, a sort value) forwards no such parameter and answers
+// the keyword page; the empty-q browse shape is refused before
+// anything is forwarded. No step agent reaches aihub's browse mode.
+func TestStepMemorySearchForwardsNoBrowseParameters(t *testing.T) {
+	td := stepDaemon(t, "wi_sm3")
+	var mu sync.Mutex
+	var paths []string
+	td.hub.mu.Lock()
+	td.hub.memDo = func(method, path string, body, out any) error {
+		mu.Lock()
+		paths = append(paths, method+" "+path)
+		mu.Unlock()
+		return json.Unmarshal([]byte(`{"items":[{"id":"mem_1","type":"experience.debug","title":"t"}]}`), out)
+	}
+	td.hub.mu.Unlock()
+
+	code, body := stepGet(t, td.sock, "/step/memories/search?q=needle&after=not-a-cursor&sort=created&limit=5")
+	if code != 200 || !strings.Contains(body, `"mem_1"`) {
+		t.Fatalf("browse-shaped search = %d %s, want the keyword answer", code, body)
+	}
+	mu.Lock()
+	got := paths[len(paths)-1]
+	mu.Unlock()
+	if strings.Contains(got, "after=") || strings.Contains(got, "sort=") {
+		t.Fatalf("the proxy forwarded a browse parameter: %s", got)
+	}
+	u, _ := url.Parse(strings.TrimPrefix(got, "GET "))
+	q := u.Query()
+	if u.Path != "/api/v1/memories/search" || q.Get("q") != "needle" || q.Get("limit") != "5" {
+		t.Fatalf("forwarded %s", got)
+	}
+	// The empty-q browse shape is refused before forwarding.
+	n := len(paths)
+	if code, _ := stepGet(t, td.sock, "/step/memories/search"); code != 400 {
+		t.Fatalf("empty q = %d, want 400 (no browse from a step)", code)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != n {
+		t.Fatalf("the empty-q browse shape was forwarded: %v", paths[n:])
+	}
+}
+
+// TestDaemonRouteSetHasNoWebRoute (extended by
+//): the daemon proxies no web face — neither the deleted
+// /view/ prefix nor the /web/ console — a web request on the daemon
+// socket answers the daemon's own 404, so no step or task process
+// reaches the console through the daemon.
+func TestDaemonRouteSetHasNoWebRoute(t *testing.T) {
+	td := stepDaemon(t, "wi_sm4")
+	for _, path := range []string{
+		"/view/", "/view/proj", "/view/proj/mem_1",
+		"/web/", "/web/api/context", "/web/proj/work-items", "/web/machines",
+	} {
+		if code, body := stepGet(t, td.sock, path); code != 404 ||
+			strings.Contains(body, "aihub console") || strings.Contains(body, "Memory viewer") {
+			t.Fatalf("GET %s on the daemon socket = %d %.200s, want the daemon's own 404", path, code, body)
+		}
+	}
+}

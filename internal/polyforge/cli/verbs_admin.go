@@ -188,10 +188,10 @@ var cmdProjects = &Command{
 	Name:    "projects",
 	Group:   GroupMgmt,
 	Summary: "Project and membership management (M3), plus the hard delete",
-	Usage: "pf projects create --name N [--visible]\n" +
+	Usage: "pf projects create --name N\n" +
 		"pf projects list\n" +
 		"pf projects get <id-or-name>\n" +
-		"pf projects patch <id-or-name> [--visible[=true|false]] [--repos name=url[,name=url...]]\n" +
+		"pf projects patch <id-or-name> [--repos name=url[,name=url...]]\n" +
 		"pf projects members add <id-or-name> --user U --role viewer|writer|maintainer\n" +
 		"pf projects members remove <id-or-name> --user U [--user U ...]\n" +
 		"pf projects delete <id-or-name> [--yes]\n" +
@@ -212,7 +212,6 @@ var cmdProjects = &Command{
 		case "create":
 			f := subFlags(ctx, "projects create")
 			name := f.String("name", "", "project name (required)")
-			visible := f.Bool("visible", true, "directory-listing visibility (grants no data access)")
 			rest, err := parseCommandArgs(f, rest)
 			if err != nil {
 				return err
@@ -220,10 +219,7 @@ var cmdProjects = &Command{
 			if len(rest) != 0 || *name == "" {
 				return fmt.Errorf("projects create: --name is required")
 			}
-			raw, err := client.CreateProject(aihubclient.ProjectCreateRequest{
-				Name:    *name,
-				Visible: visible,
-			})
+			raw, err := client.CreateProject(aihubclient.ProjectCreateRequest{Name: *name})
 			if err != nil {
 				return err
 			}
@@ -252,11 +248,6 @@ var cmdProjects = &Command{
 			return nil
 		case "patch":
 			f := subFlags(ctx, "projects patch")
-			// The wire body carries `visible` ONLY when the flag was
-			// given; a plain patch must not flip a private project
-			// visible.
-			visible := optBool{}
-			f.Var(&visible, "visible", "directory-listing visibility (omit to leave unchanged)")
 			// -repos is the task-repo inventory as an EXPLICIT FULL
 			// REPLACEMENT (the wire face's semantics): omit to leave
 			// unchanged, -repos "" clears, and every spelling is
@@ -269,7 +260,7 @@ var cmdProjects = &Command{
 			if len(ids) != 1 {
 				return fmt.Errorf("projects patch: expected one project id or name")
 			}
-			req := aihubclient.ProjectPatchRequest{Visible: visible.Ptr()}
+			req := aihubclient.ProjectPatchRequest{}
 			if flagChanged(f, "repos") {
 				refs, perr := parseRepoRefs(*repos)
 				if perr != nil {

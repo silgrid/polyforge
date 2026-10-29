@@ -6,8 +6,9 @@
 //
 //   - driver -> supervisor FACTS (step_started, step_waiting_human /
 //     step_answered, step_ended, plus the additive exec_committed commit
-//     boundary notice): an unbounded per-WI queue, the sender never
-//     blocks and a fact is never dropped;
+//     boundary notice and step_retry_wait backoff declaration): an
+//     unbounded per-WI queue, the sender never blocks and a fact is never
+//     dropped;
 //   - supervisor -> driver VERDICTS (step_dead, driver_stalled): the
 //     same queue shape in the other direction;
 //   - harness output rides a third, MERGED channel: the harness
@@ -27,7 +28,10 @@ import (
 
 // Cause is the supervisor's judgement of why a dispatch is dead
 // (v2-converge 2.3). The numeric prefix in the comments is the rule
-// priority: when several rules fire at once the lowest number wins.
+// priority: when several rules fire at once the lowest number wins. Rule 4
+// splits a cumulative-T expiry by the dying dispatch's own share
+// (slowModelOwnsTimeout): 4b only when it ran at least half of T and waited
+// on the model for at least half of its runtime, 4a otherwise.
 type Cause string
 
 const (
@@ -76,7 +80,7 @@ type Thresholds struct {
 	// step_timeout: max(3 x budget.wall_minutes, the step's persisted
 	// relaxed bound). It lets the supervisor recompute
 	// T = max(liveGlobal, StepTimeoutFloor) at every tick so a live
-	// step_timeout change reaches an in-flight dispatch (workbench#3).
+	// step_timeout change reaches an in-flight dispatch.
 	StepTimeoutFloor time.Duration `json:"step_timeout_floor,omitempty"`
 	// PriorRuntime is the step runtime already spent by earlier
 	// dispatches of the same step (execution.json is the authority);
@@ -134,6 +138,18 @@ type StepEnded struct {
 	LastError string  `json:"last_error,omitempty"`
 }
 
+// StepRetryWait declares the backoff the driver waits before its next
+// dispatch of Step (a decided backoff, or what a restarted driver found
+// still owed in the attempts ledger). It is additive to the spec'd facts:
+// the driver sits between steps while it waits, so the supervisor starts
+// its stall clock at Until instead of at the step_ended that preceded the
+// wait — a 9-minute retry pacing must not read as a stalled driver.
+type StepRetryWait struct {
+	Step  string    `json:"step"`
+	Cause string    `json:"cause"`
+	Until time.Time `json:"until"`
+}
+
 // ExecCommitted is the commit-boundary notice (additive to the spec'd
 // facts): the driver persisted a new execution.json Version. It is the
 // event that triggers the capsule push (the supervisor does not poll
@@ -147,6 +163,7 @@ func (StepStarted) FactKind() string      { return "step_started" }
 func (StepWaitingHuman) FactKind() string { return "step_waiting_human" }
 func (StepAnswered) FactKind() string     { return "step_answered" }
 func (StepEnded) FactKind() string        { return "step_ended" }
+func (StepRetryWait) FactKind() string    { return "step_retry_wait" }
 func (ExecCommitted) FactKind() string    { return "exec_committed" }
 
 // ---------------------------------------------------------------------------

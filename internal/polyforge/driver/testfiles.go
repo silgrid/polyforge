@@ -182,7 +182,11 @@ func repoGit(dir string, args ...string) (string, error) {
 // mechanically: the declared files must be identical between that
 // commit and HEAD — `git diff <author-commit>..HEAD -- <test_files>`,
 // computed as two `git ls-tree -r` listings so the untrusted repo runs
-// no diff driver, filter or hook. A difference rejects the envelope
+// no diff driver, filter or hook — except where the difference came only
+// through machine-made merges of the default branch (mergedFromDefault:
+// verification merges the latest default branch before its bar, and an
+// edit upstream made to an authored file is not the agent's). A
+// remaining difference rejects the envelope
 // (the ordinary retry lane) unless a human answered a question of the
 // step's current attempt chain: a step that believes an authored test
 // is wrong must say so through needs_input, and the approved change
@@ -252,8 +256,10 @@ func authoredTestsBefore(wf *Workflow, steps map[string]map[string]any, stepID s
 
 // changedAuthoredTests answers the authored test files that differ
 // between each repo's baseline commit and its HEAD ("repos/<name>:
-// <path>" entries). An unreadable baseline or HEAD is reported as a
-// change — fail closed: a rewritten history cannot hide an edit.
+// <path>" entries), less those whose difference came only through
+// machine-made merges of the default branch (mergedFromDefault). An
+// unreadable baseline or HEAD is reported as a change — fail closed: a
+// rewritten history cannot hide an edit.
 func changedAuthoredTests(reposDir string, at *AuthoredTests) []string {
 	if at == nil {
 		return nil
@@ -283,13 +289,102 @@ func changedAuthoredTests(reposDir string, at *AuthoredTests) []string {
 			}
 		}
 		sort.Strings(paths)
+		var differ []string
 		for _, p := range paths {
 			if bm[p] != hm[p] {
+				differ = append(differ, p)
+			}
+		}
+		merged := mergedFromDefault(dir, at.Baseline[repo], differ)
+		for _, p := range differ {
+			if !merged[p] {
 				changed = append(changed, "repos/"+repo+": "+p)
 			}
 		}
 	}
 	return changed
+}
+
+// mergedFromDefault answers which of the differing paths changed since
+// baseline ONLY through machine-made merges of the default branch
+// verification runs `git merge --no-edit
+// origin/<default>` before its bar, so an authored test upstream also
+// edited reaches HEAD with a new blob the agent never wrote — rejecting
+// it would block a correct pass, and restoring the author blob would
+// undo upstream's edit.
+//
+// The proof walks the first-parent history baseline..HEAD (baseline must
+// be an ancestor of HEAD): every merge must be a two-parent merge git
+// reproduces without conflict (mergeReproduced — the proof deliver's
+// handMadeHistory uses) whose second parent is on the fetched origin
+// default branch (so a side branch merged in cannot launder an edit), and
+// a path is explained only when no non-merge first-parent commit touched
+// it. Anything else — a hand-made merge, an octopus, a root commit, an
+// unknown default branch, an unreadable listing — explains nothing (fail
+// closed: the paths stay changed). An agent edit later reverted still
+// counts as touched; the gate then rejects as it did before.
+func mergedFromDefault(dir, baseline string, paths []string) map[string]bool {
+	if len(paths) == 0 {
+		return nil
+	}
+	if _, err := repoGit(dir, "merge-base", "--is-ancestor", baseline, "HEAD"); err != nil {
+		return nil
+	}
+	def := originDefaultRef(dir)
+	if def == "" {
+		return nil
+	}
+	out, err := repoGit(dir, "rev-list", "--first-parent", "--parents", baseline+"..HEAD")
+	if err != nil {
+		return nil
+	}
+	listings := map[string]map[string]string{}
+	listing := func(rev string) (map[string]string, bool) {
+		if m, ok := listings[rev]; ok {
+			return m, true
+		}
+		raw, err := repoGit(dir, lsTreeArgs(rev, paths)...)
+		if err != nil {
+			return nil, false
+		}
+		listings[rev] = lsTreeByPath(raw)
+		return listings[rev], true
+	}
+	touched := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		f := strings.Fields(line)
+		switch len(f) {
+		case 0:
+			continue
+		case 2: // a non-merge commit: does it touch a path?
+			cm, cok := listing(f[0])
+			pm, pok := listing(f[1])
+			if !cok || !pok {
+				return nil
+			}
+			for _, p := range paths {
+				if cm[p] != pm[p] {
+					touched[p] = true
+				}
+			}
+		case 3: // a merge: machine-made, of the default branch
+			if mergeReproduced(dir, f[0], f[1], f[2]) != "" {
+				return nil
+			}
+			if _, err := repoGit(dir, "merge-base", "--is-ancestor", f[2], def); err != nil {
+				return nil
+			}
+		default:
+			return nil
+		}
+	}
+	merged := map[string]bool{}
+	for _, p := range paths {
+		if !touched[p] {
+			merged[p] = true
+		}
+	}
+	return merged
 }
 
 // lsTreeArgs is `git ls-tree -r --full-tree <rev> -- <files...>`.

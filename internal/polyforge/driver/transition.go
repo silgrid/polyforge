@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
@@ -85,16 +86,35 @@ const (
 	CauseGateFailRewindMechanical = "gate_fail_rewind_mechanical"
 	// CauseLightRecheckEscalated is the audit-only attempt cause of the
 	// light path's in-place escalation (polyforge#260): a light-path
-	// failure — a malformed classification, a broken repair bound, or a
-	// light recheck that did not pass — escalated the verification step
-	// to the existing full gate in the same step. It is neither a
+	// failure — a malformed classification, a broken repair bound, a
+	// light recheck that did not pass, or a fresh gate rewind (a
+	// structural review FAIL) that abandoned the pending light recheck
+	// escalated the verification step to the existing
+	// full gate in the same step. It is neither a
 	// rewind archive nor model-class infra: it charges no rewind slot
 	// and leaves the candidate pointer's count alone. The reason rides
 	// Detail; the audit facts (bound, diff base, measured diff, recheck,
-	// escalated flag) ride Result.
+	// escalated flag, and the abandoned flag that tells a fresh
+	// re-derivation's abandonment from the in-place escalation —
+	// S2) ride Result.
 	CauseLightRecheckEscalated = "light_recheck_escalated"
-	CauseSupersededByRewind    = "superseded_by_rewind"
-	CauseInfraFailure          = "infra_failure"
+	// CauseGateFailVerdict is the audit-only attempt cause of a gate
+	// dispatch whose FAIL verdict rewound the workflow: the gate is never
+	// archived nor reset (it stays in_progress), so this entry is the one
+	// place its own ledger records that dispatch — the verdict output as
+	// Result, the window it consumed as ConsumedBudget. RewindGate stays
+	// empty: it is no rewind archive, so every rewind-ledger derivation
+	// (gateLastVerdictAtLocked, rewindReentryOrder,
+	// crashedBuildAfterRewindLocked) reads exactly what it read before.
+	CauseGateFailVerdict = "gate_fail_verdict"
+	// CauseRootCauseUnaddressed is the rewind archive cause of the
+	// diagnosis step when a completed fix honestly reported
+	// root_cause_addressed: false: the driver rewound the
+	// lane to root-cause once, before review and verification, with the
+	// fix's summary as the rewind input (rewind_gate = the fix step).
+	CauseRootCauseUnaddressed = "root_cause_unaddressed"
+	CauseSupersededByRewind   = "superseded_by_rewind"
+	CauseInfraFailure         = "infra_failure"
 )
 
 // LightRewindNote is the light re-entry instruction a light rewind routes
@@ -109,12 +129,14 @@ const LightRewindNote = `This rewind is LIGHT: the verdict's blocking findings a
 (comments and documentation in any file, test files included — the boundary
 is defined once in the review step's own material). Apply ONLY text-only
 fixes; your step's existing discipline is unchanged (fast checks per unit,
-per-unit commits). A fix that needs a change OUTSIDE that boundary — code,
+per-unit commits, the lane's own repro bar and authored-tests gate included).
+A fix that needs a change OUTSIDE that boundary — code,
 tests or assertions, user-facing string literals, workflows/** .md files,
 skills/** prompt material — is NOT yours to apply: do not apply it, and
 instead deliver your completed result carrying "needs_code_change": true;
-the driver rewinds fresh with the same verdict, charging no additional
-rewind slot.`
+the driver rewinds fresh with the same verdict, counting no additional
+rewind — but that fresh round uses one of the rewinding gate's per-step
+rewinds, like any ordinary FAIL.`
 
 // MechanicalRewindNote is the mechanical light re-entry instruction a
 // mechanical rewind routes beside the FAIL verdict (polyforge#260, the
@@ -129,12 +151,16 @@ reproducible by one deterministic command). Apply ONLY the fix inside the
 verdict's mechanical_bound: per failed check — its repo, its exact command
 and the files it named — a modification of a bound-named file only; never
 add, delete or rename a file; at most 40 changed lines (added + deleted)
-and 5 files, summed across repos. Your step's existing discipline is
-unchanged (fast checks per unit, per-unit commits). A fix that must leave
+and 5 files, summed across repos. A lint or format fix inside a
+bound-named code file IS yours to apply — the bound is the boundary, not
+the text-only rule. Your step's existing discipline is
+unchanged (fast checks per unit, per-unit commits, the lane's own repro
+bar and authored-tests gate included). A fix that must leave
 that bound, delete or rename a file, or exceed the caps is NOT yours to
 apply: do not apply it, and instead deliver your completed result carrying
 "needs_code_change": true; the driver rewinds fresh with the same verdict,
-charging no additional rewind slot.`
+counting no additional rewind — but that fresh round uses one of the
+rewinding gate's per-step rewinds, like any ordinary FAIL.`
 
 // ErrStaleFence marks a transition refused by the spawn fence: the
 // request names a derivation that is no longer current (B2 carried into
@@ -171,6 +197,12 @@ const (
 	// failed dispatch and its death-cause disposal in one atomic write
 	// (applyStepFailedLocked).
 	TransStepFailed TransitionKind = "step_failed"
+	// TransEnvelopeRejected is the in-process retry lane's durable
+	// rejection write: ONE consecutive-envelope-rejection count increment
+	// for the current dispatch (applyEnvelopeRejectedLocked), so the bound
+	// survives a restart and a re-collected archived envelope is counted
+	// once. It changes no other state and consumes no derivation ordinal.
+	TransEnvelopeRejected TransitionKind = "envelope_rejected"
 	// TransLightEscalate is the mechanical fast lane's in-place escalation
 	// write (polyforge#260): a light-path failure detected BEFORE any
 	// dispatch (a malformed classification or a broken repair bound) —
@@ -188,8 +220,9 @@ const (
 	// it never counts toward T (applyClaimReentryLocked).
 	TransClaimReentry TransitionKind = "claim_reentry"
 	// TransBlocked parks the workflow blocked on the driver's own
-	// authority before a dispatch (polyforge#33: the dispatch-time
-	// candidate composition failed). Plumbing only: it emits the existing
+	// authority before a dispatch: polyforge#33's dispatch-time candidate
+	// composition failure and's unchanged-tree gate park
+	// (blockUnchangedGateTree). Plumbing only: it emits the existing
 	// blocked event and the owner's `pf resume` unblocks it.
 	TransBlocked TransitionKind = "blocked"
 )
@@ -203,15 +236,14 @@ const (
 type TransitionRequest struct {
 	Kind       TransitionKind
 	StepID     string
-	Result     *StepResult  // step_result
-	Gate       *GateVerdict // step_result of a gate_failed outcome: the fail policy (nil = the workflow's on_fail)
-	Model      string       // step_start: the pinned candidate this dispatch runs under
-	Effort     string       // step_start: that candidate's thinking effort (polyforge#176)
-	Candidate  string       // step_start: the dispatch's full `<harness>:<model>[:effort]` candidate ("" = none in effect; polyforge#33)
-	Status     string       // terminal: the target workflow_status
-	Reason     string       // terminal/rewind reason; answer: the answer text
-	QuestionID string       // answer: the question id being answered
-	AnsweredBy string       // answer: who answered ("" → "owner")
+	Result     *StepResult // step_result
+	Model      string      // step_start: the pinned candidate this dispatch runs under
+	Effort     string      // step_start: that candidate's thinking effort (polyforge#176)
+	Candidate  string      // step_start: the dispatch's full `<harness>:<model>[:effort]` candidate ("" = none in effect; polyforge#33)
+	Status     string      // terminal: the target workflow_status
+	Reason     string      // terminal/rewind reason; answer: the answer text
+	QuestionID string      // answer: the question id being answered
+	AnsweredBy string      // answer: who answered ("" → "owner")
 	// Failure carries a step_failed write's failed-dispatch record.
 	Failure *StepFailure
 	// WallMs is the finished dispatch's wall time folded into the step's
@@ -220,7 +252,7 @@ type TransitionRequest struct {
 	// BookWall (interrupted): the system relaunched the dispatch after a
 	// hang, stall or death — book its wall time toward the step's T.
 	BookWall bool
-	// TreeHash (interrupted, workbench#21) is the capsule tree hash as of
+	// TreeHash (interrupted,) is the capsule tree hash as of
 	// the archive, computed before the transition takes the driver's lock
 	// (git I/O never under d.mu) and recorded on the archived attempt.
 	// Empty when hashing failed.
@@ -239,6 +271,19 @@ type TransitionRequest struct {
 	// result records under verified_heads (deliver_facts.go), read
 	// before the transition takes the driver's lock.
 	VerifiedHeads map[string]any
+	// ReviewedHeads is the task repos' HEADs a completed
+	// review PASS records under reviewed_heads (deliver_facts.go), read
+	// before the transition takes the driver's lock (the verifiedHeads
+	// pattern). Nil for any other step, outcome or verdict.
+	ReviewedHeads map[string]any
+	// JudgedHeads (code review) is the task repos' HEADs a
+	// VERDICT-BEARING review round judged — a FAIL names the tree it
+	// failed, a PASS the tree it covered — recorded on that round's own
+	// LastReviewRound so the next re-entry's fix surface has an anchor
+	// that survives rewinds (reviewed_heads exists on a PASS alone and a
+	// rewind archives it). Read before the transition takes the driver's
+	// lock; nil for any non-review step or verdict-less outcome.
+	JudgedHeads map[string]string
 	// LightDiffBase (polyforge#260) is the task repos' HEADs an armed
 	// verification gate-FAIL that carries a mechanical classification
 	// settles on — the light recheck's repair-diff base, read before the
@@ -260,19 +305,26 @@ type TransitionRequest struct {
 	// archives beside its reason, carried on the request because git
 	// I/O never runs under the transition's lock.
 	LightEscalationDiff *lightDiff
-	// ScopeChain (workbench#19) is the driver-built three-ring scope audit
+	// ScopeChain is the driver-built three-ring scope audit
 	// chain a completed scoped delivery records under `scope_chain`. It is
 	// built from the persisted verification/review facts before the
 	// transition takes the lock (the verifiedHeads pattern); nil = a full
 	// delivery (or an inconsistent chain), and the step-supplied value is
 	// always deleted.
 	ScopeChain map[string]any
-	// ScopeTier (workbench#19) is the effective verification tier a
+	// ScopeTier is the effective verification tier a
 	// verification step_start records: the marker-derived tier when the
 	// execution record has none yet. Empty falls back to the marker and
 	// the lane.
 	ScopeTier string
-	SpawnN    int64
+	// JudgedRepoHash ( criterion 6) is the task-repo tree hash
+	// a GATE step judged by delivering this result (PASS or FAIL), read
+	// before the transition takes the driver's lock. It is written to
+	// Step.JudgedRepoHash in the same settlement write; an empty value
+	// (hash error, or a non-gate/needs_input/incomplete result) records no
+	// judged tree, so the unchanged-tree guard fails open.
+	JudgedRepoHash string
+	SpawnN         int64
 }
 
 // GateVerdict is one business gate FAIL judgment (01 §6.2): the policy
@@ -305,6 +357,11 @@ type appliedInfo struct {
 	// light gate that rewound it.
 	selfRewind bool
 	rewindGate string
+	// selfRewindExhausted marks a self-report whose escalation found the
+	// light gate's edge spent: the same write ended the
+	// workflow failed_rewind_exhausted, so the event is the terminal —
+	// neither a rewind nor step_done.
+	selfRewindExhausted bool
 	// escalated marks the light path's in-place escalation
 	// (polyforge#260): the light recheck did not settle a light pass — the
 	// same write archived the audit-only escalation attempt instead — so
@@ -312,6 +369,18 @@ type appliedInfo struct {
 	// step_done; escalateReason carries why.
 	escalated      bool
 	escalateReason string
+	// recheckAbandoned carries why a fresh re-derivation abandoned
+	// verification's pending light recheck (
+	// abandonLightRecheckLocked): the event after the write's rewind is
+	// the escalation's own, naming verification.
+	recheckAbandoned string
+	// rootCauseRewind marks the fix→root-cause rewind of a first
+	// root_cause_addressed: false: the event is the
+	// standard rewind, never step_done (the fix is not accepted).
+	// rootCauseQuestion marks the second false's owner question: the
+	// event is needs_input.
+	rootCauseRewind   bool
+	rootCauseQuestion bool
 }
 
 // appliedEvent is a follow-up event of one transition.
@@ -398,12 +467,21 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 		return d.applyClaimReentryLocked()
 	case TransStepFailed:
 		return d.applyStepFailedLocked(req, info)
+	case TransEnvelopeRejected:
+		return d.applyEnvelopeRejectedLocked(req)
 	case TransBlocked:
 		if isTerminalStatus(d.exec.WorkflowStatus) {
 			return fmt.Errorf("driver: workflow is terminal (%s)", d.exec.WorkflowStatus)
 		}
 		d.exec.WorkflowStatus = StatusBlocked
 		d.exec.BlockedReason = req.Reason
+		// The block names the dispatch that could not be assembled, so the
+		// position, the panels/observe faces and the unblock Supervision
+		// reset all act on that step — never on the previous completed one
+		// ( C5).
+		if req.StepID != "" {
+			d.exec.CurrentStep = req.StepID
+		}
 		return nil
 	case TransLightEscalate:
 		return d.applyLightEscalateLocked(req.StepID, req.Reason, req.LightEscalationDiff, nil, info)
@@ -429,13 +507,13 @@ func (d *Driver) applyInitLocked() error {
 // applyStepStartLocked flips one step to in_progress (01 §6.5 dispatch)
 // and moves the execution position onto it. Two entry shapes share the
 // kind: a PENDING step is a fresh entry (first dispatch or rewind re-entry
-// — the pending rewind verdict is consumed by this very write,
-// D8, and the budget window re-opens after the rewind archived it); an
-// IN_PROGRESS step is a resume re-dispatch (answer continuation, crash
-// recovery, recovery-lane re-derivation — a new measurement window, the
-// prior partial output kept). From StatusBlocked only the current step
-// may resume: that is the owner's §6.4 unblock action, which also
-// rewrites the status back to running.
+// — the round's rewind verdict stays in pending_rewind_input for the
+// whole round,, and the budget window re-opens after the
+// rewind archived it); an IN_PROGRESS step is a resume re-dispatch (answer
+// continuation, crash recovery, recovery-lane re-derivation — a new
+// measurement window, the prior partial output kept). From StatusBlocked
+// only the current step may resume: that is the owner's §6.4 unblock
+// action, which also rewrites the status back to running.
 //
 // A pending entry whose ledger's latest non-infra_failure archived
 // attempt is the light rewind (polyforge#222) is the light re-entry — a
@@ -462,9 +540,10 @@ func (d *Driver) applyStepStartLocked(req TransitionRequest, info *appliedInfo) 
 	}
 	switch {
 	case st.Status == capsule.StepPending || st.Status == "":
-		st.PendingRewindInput = nil          // consumed by this dispatch (D8)
 		st.Output = nil                      // stale products never feed a re-run (01 §6.2 step 4)
 		st.BudgetConsumed = capsule.Budget{} // the rewind archived the prior window
+		st.EnvelopeRejects = 0               // a new re-entry round opens a fresh rejection window
+		st.EnvelopeRejectSpawnN = 0
 		st.Status = capsule.StepInProgress
 		if lightRewindContext(st.Attempts) {
 			info.resume = true // the light re-entry: a resume of the previous conversation (the ledger cause is the order)
@@ -485,19 +564,17 @@ func (d *Driver) applyStepStartLocked(req TransitionRequest, info *appliedInfo) 
 	// and was announced there.
 	if st.Candidate != "" && req.Candidate != "" && st.Candidate != req.Candidate {
 		cause := "config_changed"
-		if n, c := pendingAdvance(st.Attempts, st.Answers, st.Candidate); n > 0 {
+		if n, c := pendingAdvance(st.Attempts, answerEraStart(st.Answers), st.Candidate); n > 0 {
 			cause = c
 		}
 		info.extra = append(info.extra, appliedEvent{"candidate_switched", map[string]any{
 			"step": req.StepID, "from": st.Candidate, "to": req.Candidate, "cause": cause,
 		}})
 	}
-	st.Model = req.Model
-	st.Effort = req.Effort
 	st.Candidate = req.Candidate
 	st.Dispatch = req.SpawnN
 	st.StepStartedAt = d.stamp() // refreshes on every re-entry (reference.md §7.3)
-	// workbench#19: the verification tier is recorded once, on the first
+	// the verification tier is recorded once, on the first
 	// verification step_start (from the marker and the lane), and restored
 	// unchanged on every later dispatch. A later dispatch never recomputes
 	// it — the deliver 「全量重验」 rewind is its only writer besides this.
@@ -524,14 +601,43 @@ func (d *Driver) applyUnblockLocked() error {
 	if d.exec.WorkflowStatus != StatusBlocked {
 		return fmt.Errorf("driver: resume is the owner's blocked-step verdict; workflow is %q", d.exec.WorkflowStatus)
 	}
+	// The owner's explicit resume of a unchanged-tree park IS
+	// the override: forget the gate's last-judged tree so this one dispatch
+	// may run the gate on the same tree instead of blocking again. A later
+	// verdict records a fresh tree. (A plain resume of any other park
+	// leaves the record alone.)
+	if strings.HasPrefix(d.exec.BlockedReason, gateUnchangedBlockPrefix) {
+		// Every gate forgets its last-judged tree: the owner's explicit
+		// override covers the whole gate tail it just chose to run, not only
+		// the gate that happened to be next (verification would otherwise
+		// pass and the review behind it would block on the same facts).
+		for _, st := range d.exec.Steps {
+			if st != nil {
+				st.JudgedRepoHash = ""
+			}
+		}
+	}
 	d.exec.WorkflowStatus = StatusRunning
 	d.exec.BlockedReason = ""
 	// the human's "continue" resets the step's failure ledger (the
-	// relaxed thresholds stay: they are the step's learned bounds)
-	if st := d.exec.Steps[d.exec.CurrentStep]; st != nil && st.Supervision != nil {
-		st.Supervision.FailureCount = 0
-		st.Supervision.LongTaskTimeouts = 0
-		st.Supervision.NextDispatch = ""
+	// relaxed thresholds stay: they are the step's learned bounds) and
+	// opens a new streak era (ResumedAt, streakEra): the ledger-derived
+	// streaks — the model-class and EWR rotations, the retry pacing —
+	// start fresh, and the blocking death's backoff is not owed
+	if st := d.exec.Steps[d.exec.CurrentStep]; st != nil {
+		if st.Supervision == nil {
+			st.Supervision = &capsule.StepSupervision{}
+		}
+		sup := st.Supervision
+		sup.ResumedAt = d.stamp()
+		sup.FailureCount = 0
+		sup.LongTaskTimeouts = 0
+		sup.SlowModelTimeouts = 0
+		sup.NextDispatch = ""
+		// The owner's continue also opens a fresh envelope-rejection
+		// window: the park at the bound was the reason they intervened.
+		st.EnvelopeRejects = 0
+		st.EnvelopeRejectSpawnN = 0
 	}
 	return nil
 }
@@ -609,16 +715,22 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 		return err
 	}
 	if res.Outcome == OutcomeGateFailed {
-		verdict = req.Gate
-		if verdict == nil {
-			verdict = d.verdictFor(req.StepID, res)
-		}
-		if err := d.checkRewindTarget(req.StepID, verdict.TargetStep); err != nil {
-			return err
-		}
+		// the workflow's on_fail (validated at load to name an earlier
+		// step) is the one rewind-target authority
+		verdict = d.verdictFor(req.StepID, res)
 	}
 
 	st.Dispatch = 0
+	st.EnvelopeRejects = 0 // an accepted envelope ends the rejection streak
+	st.EnvelopeRejectSpawnN = 0
+	// criterion 6: a gate's verdict records the task-repo
+	// tree it judged, in this same settlement write. A later rewound
+	// re-entry compares the tree handed to the gate against it; an
+	// unavailable hash clears the record (the guard fails open).
+	if spec := d.workflow.step(req.StepID); spec != nil && spec.Gate &&
+		(res.Outcome == OutcomeCompleted || res.Outcome == OutcomeGateFailed) {
+		st.JudgedRepoHash = req.JudgedRepoHash
+	}
 	if req.WallMs > 0 {
 		// human-wait time is excluded by construction: no process runs
 		// while a question is open
@@ -627,16 +739,23 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 
 	switch res.Outcome {
 	case OutcomeCompleted:
+		// a completed fix that honestly reports its diagnosis
+		// was wrong routes before acceptance — once to root-cause, then to
+		// the owner. Judged before the light self-report below: a false
+		// diagnosis is never a light re-entry.
+		if d.rootCauseFalseLocked(req.StepID, out) {
+			return d.applyRootCauseFalseLocked(req.StepID, st, res, out, info)
+		}
 		// The needs_code_change self-report rewind (polyforge#222): a
 		// completed result of a LIGHT re-entry carrying
 		// needs_code_change: true is not archived done — the same write
-		// rewinds fresh with the same FAIL verdict, charging no new slot.
+		// rewinds fresh with the same FAIL verdict, charging the light
+		// rewind's edge once (no new slot;).
 		// Judged before any of the accepted-result handling below (the
 		// result is not accepted: no evidence decode, no stamps, no done).
 		if lightRewindContext(st.Attempts) {
 			if _, value, malformed := needsCodeChangeOf(out); !malformed && value {
-				d.applySelfReportRewindLocked(req.StepID, st, out, info)
-				return nil
+				return d.applySelfReportRewindLocked(req.StepID, st, out, info)
 			}
 		}
 		// NB4 (polyforge#261): mechanical_pass is driver-written only,
@@ -749,8 +868,18 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 				out[verifiedHeadsKey] = req.VerifiedHeads
 			}
 		}
+		if req.StepID == reviewStepID {
+			// the heads the review PASS covered, per task repo
+			// — the deliver merge rule's review-coverage anchor
+			// (deliver_facts.go); driver-written only, a step-supplied value
+			// is never kept
+			delete(out, reviewedHeadsKey)
+			if len(req.ReviewedHeads) > 0 {
+				out[reviewedHeadsKey] = req.ReviewedHeads
+			}
+		}
 		if req.StepID == deliverStepID {
-			// workbench#19: the three-ring scope audit chain is driver-
+			// the three-ring scope audit chain is driver-
 			// written only — a step-supplied value would forge the chain.
 			// The driver's record is present exactly for a consistent
 			// scoped delivery (nil otherwise); a full delivery keeps none.
@@ -761,6 +890,20 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 		}
 		st.Status = capsule.StepDone
 		st.Output = out
+		// a review round that carries a verdict records its
+		// facts (round ordinal, blocking count, judged heads) in this same
+		// atomic write — the completed shape is a PASS (a fail verdict is
+		// re-bound to gate_failed before the transition), so the blocking
+		// count is the honest count of what the output records (zero on a
+		// conforming pass).
+		if req.StepID == reviewStepID {
+			blocking, _, _ := reviewRoundFacts(out)
+			d.recordReviewRoundLocked(req.StepID, blocking, req.JudgedHeads)
+		}
+		// The round ends here: the rewind verdict that every
+		// dispatch of it carried is cleared by the acceptance write, so no
+		// later dispatch — the next round included — replays a stale verdict.
+		st.PendingRewindInput = nil
 		// Commit point: archive the accepted attempt (the step's attempt
 		// ledger; the candidate pointer recomputes over it), with the
 		// injected clock and the max-seq rule every other ledger entry
@@ -773,6 +916,13 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 		})
 	case OutcomeGateFailed:
 		st.Output = out // the FAIL verdict stays on the gate; it is never done
+		// A gate is never accepted, so delivering its own verdict is the
+		// end of ITS round: a rewind input the gate carried
+		// as a rewind target (the deliver 「全量重验」 override reruns
+		// verification) is cleared here, never replayed on the next
+		// verification round. The verdict this gate routes to its own
+		// target is written below, in this same write.
+		st.PendingRewindInput = nil
 		if st.PendingLightRecheck != nil {
 			// The light recheck's own FAIL verdict (polyforge#260): a bound
 			// command still red, or a semantic confirmation the agent cannot
@@ -798,7 +948,17 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 			d.exec.ReviewRounds = map[string]int64{}
 		}
 		d.exec.ReviewRounds[req.StepID]++
-		d.applyGateFailLocked(req.StepID, verdict, out, req.LightDiffBase, info)
+		if err := d.applyGateFailLocked(req.StepID, verdict, out, req.LightDiffBase, info); err != nil {
+			return err
+		}
+		// the FAIL verdict closes a review round — record its
+		// facts in this same atomic write, AFTER applyGateFailLocked consumed
+		// the previous round as its convergence baseline. needs_input and
+		// incomplete rounds touch neither the record nor the counter.
+		if req.StepID == reviewStepID {
+			blocking, _, _ := reviewRoundFacts(out)
+			d.recordReviewRoundLocked(req.StepID, blocking, req.JudgedHeads)
+		}
 	case OutcomeNeedsInput:
 		st.PendingQuestion = &capsule.PendingQuestion{
 			ID:       qid,
@@ -812,6 +972,103 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 		st.Output = out
 	}
 	return nil
+}
+
+// The bug-fix lane's diagnosis and fix steps: the fix's
+// root_cause_addressed: false routes back to the diagnosis step.
+const (
+	fixStepID          = "fix"
+	rootCauseStepID    = "root-cause"
+	rootCauseAddressed = "root_cause_addressed"
+	// RootCauseFalseQuestionID is the driver-authored owner question a
+	// second root_cause_addressed: false parks the workflow on.
+	RootCauseFalseQuestionID = "root_cause_false"
+)
+
+// rootCauseFalseLocked reports whether a completed result of stepID is a
+// fix reporting root_cause_addressed: false (the literal boolean) on a
+// workflow that declares the root-cause step before it — the bug-fix
+// lane; a lane without one (autopilot) accepts the report as before.
+func (d *Driver) rootCauseFalseLocked(stepID string, out map[string]any) bool {
+	if stepID != fixStepID {
+		return false
+	}
+	if v, ok := out[rootCauseAddressed].(bool); !ok || v {
+		return false
+	}
+	rc, ok := d.workflow.indexOf(rootCauseStepID)
+	fx, _ := d.workflow.indexOf(fixStepID)
+	return ok && rc < fx
+}
+
+// applyRootCauseFalseLocked lands the false routing in the fix's own
+// result write. The fix is not accepted: it stays
+// in_progress holding its false report (a gate holds its verdict the
+// same way).
+//
+//   - First false (no fix→root-cause record in the rewind ledger):
+//     root-cause is archived (root_cause_unaddressed, rewind_gate fix)
+//     and reset, the position moves to it, one CHARGED fix→root-cause
+//     record is appended, and the fix's summary becomes root-cause's
+//     pending_rewind_input. The ledger record IS the once-only memory —
+//     no new counter. The edge bound is not consulted (once is stricter)
+//     and max_total does not refuse it (the spec's unconditional first
+//     rewind); the global count still increments, so a later gate FAIL
+//     settles exactly as before. The fix re-dispatches fresh after the
+//     new diagnosis; root-cause's own fail verdict still rewinds to
+//     repro.
+//   - A later false: no second rewind. A driver-authored pending
+//     question (root_cause_false) parks the loop at needs_input for the
+//     owner — continue with corrective guidance, or cancel and re-file;
+//     the answer re-dispatches the fix in place (D9). This path never
+//     reaches failed_rewind_exhausted.
+//
+// The first false opens a fresh re-derivation of the fix after the new
+// diagnosis, so the same write abandons verification's pending light
+// recheck (abandonLightRecheckLocked, S1): the range
+// [root-cause, fix) never reaches verification. The later false resumes
+// the fix in place and abandons nothing.
+func (d *Driver) applyRootCauseFalseLocked(stepID string, st *capsule.Step, res *StepResult, out map[string]any, info *appliedInfo) error {
+	st.Output = out // the false report stays on the fix, for the record
+	if countToEdge(d.exec.RewindStats.Rewinds, stepID, rootCauseStepID) > 0 {
+		st.PendingQuestion = &capsule.PendingQuestion{
+			ID:   RootCauseFalseQuestionID,
+			Step: stepID,
+			Question: "The fix reported root_cause_addressed: false a second time: the driver already rewound to root-cause once " +
+				"and the re-diagnosed cause was not addressed either. Decide: continue — answer with corrective guidance " +
+				"(the cause to fix, or how to proceed) and the fix step resumes with it — or cancel this work item and re-file it.",
+			Context: res.Output,
+			AskedAt: d.stamp(),
+		}
+		info.rootCauseQuestion = true
+		return nil
+	}
+	rcIdx, _ := d.workflow.indexOf(rootCauseStepID)
+	fxIdx, _ := d.workflow.indexOf(stepID)
+	d.applyRewindRangeLocked(rcIdx, fxIdx, rootCauseStepID, stepID, CauseRootCauseUnaddressed, true, info)
+	summary, _ := out["summary"].(string)
+	if strings.TrimSpace(summary) == "" {
+		summary = "(the fix gave no summary)"
+	}
+	d.exec.Steps[rootCauseStepID].PendingRewindInput = &capsule.RewindInput{
+		ToStep: rootCauseStepID,
+		Reason: "`" + stepID + "` completed reporting `root_cause_addressed: false` — the diagnosis did not hold. Its summary:\n\n" + summary,
+	}
+	// The fix's next dispatch follows the new diagnosis: a fresh
+	// conversation and a fresh failure window, like a gate's re-entry.
+	st.AnswerBase = len(st.Answers)
+	if st.Supervision == nil {
+		st.Supervision = &capsule.StepSupervision{}
+	}
+	st.Supervision.NextDispatch = capsule.NextDispatchFresh
+	st.Supervision.FailureCount = 0
+	st.Supervision.LongTaskTimeouts = 0
+	st.Supervision.SlowModelTimeouts = 0
+	st.BudgetConsumed = capsule.Budget{}
+	info.rootCauseRewind = true
+	info.rewindGate = stepID
+	return d.abandonLightRecheckLocked("`"+stepID+"` reported root_cause_addressed: false and rewound the lane to `"+
+		rootCauseStepID+"` for a new diagnosis and a fresh fix", info)
 }
 
 // applyGateFailLocked consumes one gate FAIL policy (01 §6.2): a gate
@@ -843,20 +1100,42 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 // rewind slot.
 //
 // It runs inside the gate's step_result write, after that write checked
-// the gate is the running current step and the target (checkRewindTarget).
-func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string]any, diffBase map[string]string, info *appliedInfo) {
+// the gate is the running current step (the target is the workflow's
+// on_fail, validated at load to name an earlier step).
+func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string]any, diffBase map[string]string, info *appliedInfo) error {
 	target := v.TargetStep
 	if target == "" { // no rewind edge declared: the gate verdict is terminal
 		d.exec.WorkflowStatus = StatusFailedGate
-		return
+		return nil
 	}
 	tIdx, _ := d.workflow.indexOf(target)
 	gIdx, _ := d.workflow.indexOf(gate)
 	// Bounds BEFORE any mutation (01 §6.2 step 2: a hit must not rewind).
-	if d.exec.RewindStats.Count >= int64(d.workflow.MaxTotal) ||
-		countToStep(d.exec.RewindStats.ToStep, target) >= int64(d.workflow.MaxPerStep) {
+	// the classification runs first — an UNCHARGED rewind
+	// (light, mechanical, converging) occupies no edge slot, so the edge
+	// bound never refuses it; max_total stays the global hard cap over
+	// every rewind, charged or not, and max_per_step is counted per
+	// gate→target edge over the CHARGED records alone — two gates sharing
+	// one target no longer eat each other's slots. A ledger that cannot
+	// attribute its own count (a pre-w69 shape with no per-record
+	// history) proves no per-edge quota, so this rewind fails closed — no
+	// compat path, no guess at the attribution.
+	//
+	// Transition code (AGENTS.md): only an execution.json written before
+	// the per-edge ledger shipped can carry that shape. Delete this check,
+	// its rewind_ledger_unattributable event and
+	// TestRewindOldLedgerShapeFailsClosed once no capsule claimed before
+	// the first release carrying is still in flight (every
+	// such work item wrapped, cancelled or re-filed) — and with them the
+	// no-record note in applySelfReportRewindLocked, whose case is then
+	// unreachable.
+	if d.exec.RewindStats.Count > int64(len(d.exec.RewindStats.Rewinds)) {
 		d.exec.WorkflowStatus = StatusFailedRewindExhausted
-		return
+		info.extra = append(info.extra, appliedEvent{"rewind_ledger_unattributable", map[string]any{
+			"spawn_n": d.spawnN, "gate": gate, "target": target, "count": d.exec.RewindStats.Count,
+			"detail": "the rewind ledger predates per-edge accounting and cannot attribute its count, so no per-edge quota can be proven; the workflow fails closed",
+		}})
+		return nil
 	}
 	// The light paths key on the gate id alone and the verdict's own
 	// recorded markers — no re-classification, no owner round-trip. The
@@ -870,6 +1149,24 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 	// malformed finding).
 	light := gate == reviewStepID && lightRewindEligible(out)
 	mech := gate == verificationStepID && d.mechanicalArmed() && mechanicalBoundPresent(out)
+	// a CONVERGING review round — a FAIL whose blocking
+	// findings are all residuals of the last verdict round and strictly
+	// fewer — charges no edge slot either. The baseline is the record the
+	// previous verdict round wrote (read before this round's settlement
+	// updates it); anything unprovable (no record, a new discovery, a
+	// missing marker, a non-decreasing count) keeps the rewind charged —
+	// fail closed.
+	var lastRound *capsule.ReviewRound
+	if st := d.exec.Steps[reviewStepID]; st != nil {
+		lastRound = st.LastReviewRound
+	}
+	converging := gate == reviewStepID && reviewConverging(out, lastRound)
+	charged := !(light || mech || converging)
+	if d.exec.RewindStats.Count >= int64(d.workflow.MaxTotal) ||
+		(charged && countToEdge(d.exec.RewindStats.Rewinds, gate, target) >= int64(d.workflow.MaxPerStep)) {
+		d.exec.WorkflowStatus = StatusFailedRewindExhausted
+		return nil
+	}
 	targetCause := CauseGateFailRewind
 	switch {
 	case light:
@@ -877,21 +1174,48 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 	case mech:
 		targetCause = CauseGateFailRewindMechanical
 	}
-	d.applyRewindRangeLocked(tIdx, gIdx, target, gate, targetCause, info)
-	// workbench#19: the recorded tier returns to full whenever the run
+	d.applyRewindRangeLocked(tIdx, gIdx, target, gate, targetCause, charged, info)
+	// the recorded tier returns to full whenever the run
 	// re-runs verification — a verification-gate FAIL (the spec's A3: a
 	// verification FAIL has no passed prior run to union with, so it
 	// re-verifies full) or the deliver 「全量重验」 rewind (target
 	// verification). The re-run then renders the full section and a scoped
-	// claim is rejected. A review FAIL keeps the tier, so the incremental
-	// scoped re-verification can carry `scope.prior`.
+	// claim is rejected. A review FAIL keeps the tier: the re-entered
+	// round re-runs review first, and the re-run verification matches the
+	// scope that review recorded (its union with a `scope.prior`
+	// included).
 	if gate == verificationStepID || target == verificationStepID {
 		d.exec.ScopeTier = tierFull
+	}
+	// a FRESH rewind re-derives the target from scratch, so
+	// a pending light recheck its range did not reset — the marker lives
+	// on verification, which a review FAIL's range [code, review) no
+	// longer reaches now that review runs first — is abandoned in this
+	// same write (abandonLightRecheckLocked). A light rewind keeps the
+	// marker (its re-entry resumes the repair the marker describes); a
+	// mechanical one has just been set below.
+	if !light && !mech {
+		if err := d.abandonLightRecheckLocked("the "+gate+" gate's FAIL rewound "+target+" to a fresh re-derivation", info); err != nil {
+			return err
+		}
 	}
 	// The gate itself stays in_progress, but its verdict closes the human
 	// round it judged: answers recorded so far must not satisfy a
 	// requires_human_answer gate on re-entry (human-gate bypass).
 	if gst := d.exec.Steps[gate]; gst != nil {
+		// The rewound dispatch keeps its own record on the gate (captured
+		// before the budget window below resets).
+		raw, _ := json.Marshal(out)
+		consumed := gst.BudgetConsumed
+		gst.Attempts = append(gst.Attempts, capsule.Attempt{
+			Cause:          CauseGateFailVerdict,
+			AttemptSeq:     nextAttemptSeq(gst),
+			StartedAt:      gst.StepStartedAt,
+			ArchivedAt:     d.stamp(),
+			Result:         raw,
+			Detail:         "FAIL verdict rewound the workflow to " + target,
+			ConsumedBudget: &consumed,
+		})
 		gst.AnswerBase = len(gst.Answers)
 		// Its conversation judged the version now being redone: the
 		// re-entry must start a NEW conversation (prior transcript as
@@ -900,13 +1224,21 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 			gst.Supervision = &capsule.StepSupervision{}
 		}
 		gst.Supervision.NextDispatch = capsule.NextDispatchFresh
+		// B2: the verdict closes the gate's round, so its
+		// re-entry starts a FRESH failure window — the deaths counted
+		// before the verdict belonged to the round it already judged. The
+		// same reset a rewind gives its target (01 §6.3 item 5).
+		gst.Supervision.FailureCount = 0
+		gst.Supervision.LongTaskTimeouts = 0
+		gst.Supervision.SlowModelTimeouts = 0
 		// D6: a rewind resets T — the gate's re-entry judges the redone
 		// work in a fresh window, not on the runtime of the verdict it
 		// already delivered.
 		gst.BudgetConsumed = capsule.Budget{}
 	}
-	// The FAIL verdict text rides to the target's pending_rewind_input
-	// (D8) so the rewound step's next dispatch is guaranteed to see it.
+	// The FAIL verdict text rides to the target's pending_rewind_input so
+	// every dispatch of the round sees it, until the step is accepted or
+	// the next rewind/reset replaces it.
 	pri := &capsule.RewindInput{
 		ToStep: target,
 		Reason: v.VerdictText,
@@ -947,6 +1279,7 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 			}
 		}
 	}
+	return nil
 }
 
 // applyLightEscalateLocked lands the light path's one fallback (polyforge#260,
@@ -981,6 +1314,51 @@ func (d *Driver) applyLightEscalateLocked(stepID, reason string, diff *lightDiff
 	if d.exec.WorkflowStatus == StatusBlocked {
 		return fmt.Errorf("driver: workflow is blocked; light escalation refused")
 	}
+	if err := archiveLightEscalation(st, reason, diff, recheck, d.stamp(), false); err != nil {
+		return err
+	}
+	info.escalated = true
+	info.escalateReason = reason
+	return nil
+}
+
+// abandonLightRecheckLocked abandons verification's pending mechanical
+// light recheck in a write that opened a FRESH re-derivation of the build
+// step ( G3, S1): the marker's bound and diff base describe a
+// light repair that the fresh round replaces, so leaving it would make
+// verification's next dispatch a light recheck over a fresh re-derivation
+// — skipping the full bar and the authored scenarios. Every write that
+// opens such a round calls it: a structural (non-light) gate FAIL whose
+// range does not reset verification, a light re-entry's needs_code_change
+// self-report (whichever light cause rewound it) and the fix's first
+// root_cause_addressed: false. It lands like the light path's own fallback
+// (archiveLightEscalation: the audit-only attempt carrying why and the
+// marker's facts, the marker cleared, verification's next dispatch fresh)
+// and queues one light_recheck_escalated event after the write's own
+// rewind event. why opens the recorded reason. No marker: nothing to do.
+func (d *Driver) abandonLightRecheckLocked(why string, info *appliedInfo) error {
+	vst := d.exec.Steps[verificationStepID]
+	if vst == nil || vst.PendingLightRecheck == nil {
+		return nil
+	}
+	reason := why + ", abandoning the mechanical fast lane: the pending light recheck's bound and diff base describe a light repair that no longer exists"
+	if err := archiveLightEscalation(vst, reason, nil, nil, d.stamp(), true); err != nil {
+		return err
+	}
+	info.recheckAbandoned = reason
+	return nil
+}
+
+// archiveLightEscalation is the escalation's own write on the step holding
+// the pending light recheck marker: the audit-only light_recheck_escalated
+// attempt, the marker cleared and the next dispatch ordered fresh. The
+// in-place escalation (applyLightEscalateLocked) and the abandonment by a
+// fresh re-derivation (abandonLightRecheckLocked,) share it;
+// the audit record is marshaled before anything is mutated. abandoned
+// ( S2) marks the second kind in the audit record: the
+// unchanged-tree guard exempts only the in-place escalation's full re-run
+// (inPlaceEscalationContext), never the full run after a fresh round.
+func archiveLightEscalation(st *capsule.Step, reason string, diff *lightDiff, recheck any, now string, abandoned bool) error {
 	// the audit record (the spec's complete audit trail): the marker's
 	// own facts — the bound copied verbatim from the FAIL verdict's
 	// classification, the FAIL-settlement diff base — plus what this
@@ -996,6 +1374,7 @@ func (d *Driver) applyLightEscalateLocked(stepID, reason string, diff *lightDiff
 		"diff":      nil,
 		"recheck":   nil,
 		"escalated": true,
+		"abandoned": abandoned,
 		"reason":    reason,
 	}
 	if diff != nil {
@@ -1012,7 +1391,7 @@ func (d *Driver) applyLightEscalateLocked(stepID, reason string, diff *lightDiff
 		Cause:      CauseLightRecheckEscalated,
 		AttemptSeq: nextAttemptSeq(st),
 		StartedAt:  st.StepStartedAt,
-		ArchivedAt: d.stamp(),
+		ArchivedAt: now,
 		Detail:     reason,
 		Result:     raw,
 	})
@@ -1023,9 +1402,74 @@ func (d *Driver) applyLightEscalateLocked(stepID, reason string, diff *lightDiff
 		st.Supervision = &capsule.StepSupervision{}
 	}
 	st.Supervision.NextDispatch = capsule.NextDispatchFresh
-	info.escalated = true
-	info.escalateReason = reason
 	return nil
+}
+
+// reviewRoundFacts reads one recorded review verdict's
+// blocking facts: how many findings carry severity "blocking" and how
+// many of those reference their prior-round original via a non-empty
+// residual_of. ok is false when the findings record is not a list of
+// objects — an unparseable round proves nothing (fail closed).
+func reviewRoundFacts(out map[string]any) (blocking, residuals int, ok bool) {
+	if out == nil {
+		return 0, 0, false
+	}
+	items, isList := out["findings"].([]any)
+	if !isList {
+		return 0, 0, false
+	}
+	for _, it := range items {
+		m, isObj := it.(map[string]any)
+		if !isObj {
+			return 0, 0, false
+		}
+		if sev, _ := m["severity"].(string); sev != "blocking" {
+			continue
+		}
+		blocking++
+		if ref, _ := m["residual_of"].(string); strings.TrimSpace(ref) != "" {
+			residuals++
+		}
+	}
+	return blocking, residuals, true
+}
+
+// reviewConverging answers whether one recorded review
+// FAIL verdict is a CONVERGING round: at least one blocking finding,
+// every blocking finding a residual (residual_of set), strictly fewer
+// than the last verdict round's blocking count, and that baseline
+// exists. Anything else — a new discovery, a missing marker, a missing
+// or unparseable baseline, a non-decreasing count — answers false and
+// the rewind charges its edge like any fresh one (fail closed).
+func reviewConverging(out map[string]any, last *capsule.ReviewRound) bool {
+	if last == nil {
+		return false
+	}
+	blocking, residuals, ok := reviewRoundFacts(out)
+	if !ok || blocking == 0 || residuals != blocking {
+		return false
+	}
+	return int64(blocking) < last.Blocking
+}
+
+// recordReviewRoundLocked writes the review step's last-verdict-round
+// facts: the round ordinal, this round's blocking count
+// and the heads the round judged (code review), in the settlement write of
+// the verdict that closed the round. An unparseable findings record
+// still writes the round with its counted blocking (zero) — a baseline
+// of zero blocks every later convergence claim by arithmetic (nothing
+// is strictly fewer than zero), so a malformed round never subsidizes
+// the next one.
+func (d *Driver) recordReviewRoundLocked(stepID string, blocking int, heads map[string]string) {
+	st := d.exec.Steps[stepID]
+	if st == nil {
+		return
+	}
+	st.LastReviewRound = &capsule.ReviewRound{
+		Round:    d.exec.ReviewRounds[stepID],
+		Blocking: int64(blocking),
+		Heads:    heads,
+	}
 }
 
 // lightRewindEligible answers whether one recorded gate output is an
@@ -1102,6 +1546,33 @@ func escalatedRecheckContext(attempts []capsule.Attempt) bool {
 	return false
 }
 
+// inPlaceEscalationContext narrows escalatedRecheckContext to the light
+// path's IN-PLACE escalation ( S2): the latest non-
+// infra_failure attempt is light_recheck_escalated and its audit record
+// does not mark it abandoned. Only that full re-run is a designed same-tree
+// re-run — the unchanged-tree guard's exemption. A recheck abandoned by a
+// fresh re-derivation (abandonLightRecheckLocked) archives the same cause,
+// but the full run after it follows a fresh build round, so the guard
+// judges it like any gate dispatch. An audit record that does not parse
+// keeps the exemption (the in-place records written before the flag
+// carry none).
+func inPlaceEscalationContext(attempts []capsule.Attempt) bool {
+	for i := len(attempts) - 1; i >= 0; i-- {
+		if attempts[i].Cause == CauseInfraFailure {
+			continue
+		}
+		if attempts[i].Cause != CauseLightRecheckEscalated {
+			return false
+		}
+		var audit struct {
+			Abandoned bool `json:"abandoned"`
+		}
+		_ = json.Unmarshal(attempts[i].Result, &audit)
+		return !audit.Abandoned
+	}
+	return false
+}
+
 // mechanicalBoundKey is the output key of the verification FAIL verdict's
 // mechanical classification (polyforge#260): an array, one entry per
 // failed check — {check, repo, command, files} — declared as an optional
@@ -1162,28 +1633,53 @@ func needsCodeChangeOf(out map[string]any) (present, value, malformed bool) {
 // as the range rewind does), resets the step to pending with output
 // cleared, and routes the SAME FAIL verdict — re-marshaled from the gate's
 // recorded output, the durable verdict the gate step holds — as the fresh
-// re-entry's rewind input (Note empty: a fresh re-derivation). No stats
-// mutation, no bounds check (the light rewind's slot already paid; a
-// classification error is not charged twice), position unchanged (the
-// step is the current one). A MECHANICAL light re-entry's self-report
-// abandons the light path, so the same write also clears the pending
-// light recheck marker on the gate (polyforge#260): the marker lives on
-// the gate, OUTSIDE the [target, gate) range this write archives — a
-// stale marker would make the gate's next dispatch a light recheck over
-// a fresh re-derivation's bound. The caller emits the standard rewind
-// event — never step_done for a step that is not done.
-func (d *Driver) applySelfReportRewindLocked(stepID string, st *capsule.Step, out map[string]any, info *appliedInfo) {
+// re-entry's rewind input (Note empty: a fresh re-derivation). The fresh
+// round it opens charges the light rewind's gate→target edge exactly once
+// the light rewind counted toward max_total when it
+// landed but occupied no edge, so this write checks the edge bound BEFORE
+// any mutation — a spent edge ends failed_rewind_exhausted, the report
+// left on the step for the record — and otherwise flips the light record
+// to charged. No new record and no new max_total count: a classification
+// error is not charged twice. Without the charge, "light rewind →
+// needs_code_change → fresh round → light FAIL → …" never occupied the
+// edge and only max_total stopped it. Position unchanged (the step is the
+// current one). The fresh round abandons the light path, so the same
+// write also abandons verification's pending light recheck
+// (abandonLightRecheckLocked; polyforge#260, S1) whichever
+// light cause rewound the step — after a mechanical FAIL a text-only
+// review FAIL keeps the marker, so the self-report that follows it is the
+// write that opens the fresh round: the marker lives on verification,
+// OUTSIDE the [target, gate) range this write archives, and a stale one
+// would make verification's next dispatch a light recheck over a fresh
+// re-derivation. The caller emits the standard rewind event — never
+// step_done for a step that is not done.
+func (d *Driver) applySelfReportRewindLocked(stepID string, st *capsule.Step, out map[string]any, info *appliedInfo) error {
 	gate := ""
-	mech := false
 	for i := len(st.Attempts) - 1; i >= 0; i-- {
 		// the light gate that rewound this step — either light cause (#222's
 		// text-only review FAIL, or #260's mechanical verification FAIL)
 		if st.Attempts[i].Cause == CauseGateFailRewindTextOnly ||
 			st.Attempts[i].Cause == CauseGateFailRewindMechanical {
 			gate = st.Attempts[i].RewindGate
-			mech = st.Attempts[i].Cause == CauseGateFailRewindMechanical
 			break
 		}
+	}
+	// The edge charge, bounds before any mutation. The
+	// light record is the edge's latest: nothing else rewinds into the
+	// current step between the light rewind and this result. A ledger with
+	// no record of it has nothing to flip — and its count then exceeds its
+	// records, so the next gate FAIL fails closed (rewind_ledger_
+	// unattributable) and the loop cannot run on it.
+	rewinds := d.exec.RewindStats.Rewinds
+	if i := lastEdgeRecord(rewinds, gate, stepID); i >= 0 && !rewinds[i].Charged {
+		if countToEdge(rewinds, gate, stepID) >= int64(d.workflow.MaxPerStep) {
+			st.Output = out // the self-report stays on the step, for the record
+			d.exec.WorkflowStatus = StatusFailedRewindExhausted
+			info.selfRewindExhausted = true
+			info.rewindGate = gate
+			return nil
+		}
+		rewinds[i].Charged = true
 	}
 	raw, _ := json.Marshal(out)
 	consumed := st.BudgetConsumed
@@ -1203,6 +1699,8 @@ func (d *Driver) applySelfReportRewindLocked(stepID string, st *capsule.Step, ou
 	st.PendingRewindInput = nil
 	st.Supervision = nil
 	st.AnswerBase = len(st.Answers)
+	st.EnvelopeRejects = 0
+	st.EnvelopeRejectSpawnN = 0
 	// The same FAIL verdict rides as the fresh re-entry's rewind input,
 	// re-derived from the gate's recorded output (the durable verdict the
 	// gate step holds; the light Note is NOT carried — the fresh re-entry
@@ -1214,35 +1712,11 @@ func (d *Driver) applySelfReportRewindLocked(stepID string, st *capsule.Step, ou
 		}
 	}
 	st.PendingRewindInput = &capsule.RewindInput{ToStep: stepID, Reason: reason}
-	// polyforge#260: a mechanical light re-entry's self-report abandons
-	// the light path — the fresh rewind re-derives from scratch — so this
-	// same write clears the pending light recheck marker on the gate (the
-	// marker lives on the gate, outside the range this write archives).
-	if mech {
-		if gst := d.exec.Steps[gate]; gst != nil {
-			gst.PendingLightRecheck = nil
-		}
-	}
 	info.selfRewind = true
 	info.rewindGate = gate
 	info.target = stepID
 	info.archived = append(info.archived, stepID)
-}
-
-// checkRewindTarget refuses a gate FAIL policy whose rewind target is not
-// an earlier workflow step ("" = no rewind edge, always valid).
-func (d *Driver) checkRewindTarget(gate, target string) error {
-	if target == "" {
-		return nil
-	}
-	tIdx, ok := d.workflow.indexOf(target)
-	if !ok {
-		return fmt.Errorf("driver: rewind target %q is not in the workflow", target)
-	}
-	if gIdx, _ := d.workflow.indexOf(gate); tIdx >= gIdx {
-		return fmt.Errorf("driver: rewind target %q must be an earlier step than the gate %q", target, gate)
-	}
-	return nil
+	return d.abandonLightRecheckLocked("`"+stepID+"`'s needs_code_change self-report opened a fresh re-derivation", info)
 }
 
 // applyRewindRangeLocked archives every step in [from, to) and resets it
@@ -1250,8 +1724,11 @@ func (d *Driver) checkRewindTarget(gate, target string) error {
 // The target (index from) is archived with the targetCause the caller
 // chose (the fresh gate_fail_rewind, or gate_fail_rewind_text_only on the
 // light path); every later step in the range as superseded_by_rewind.
-// rewindGate names the triggering gate.
-func (d *Driver) applyRewindRangeLocked(from, to int, target, rewindGate, targetCause string, info *appliedInfo) {
+// rewindGate names the triggering gate; charged records
+// whether this rewind occupies its gate→target edge's max_per_step bound
+// — the ledger record the per-edge quota counts. Every rewind still
+// counts toward max_total.
+func (d *Driver) applyRewindRangeLocked(from, to int, target, rewindGate, targetCause string, charged bool, info *appliedInfo) {
 	for i := from; i < to; i++ {
 		sid := d.workflow.Steps[i].ID
 		st := d.exec.Steps[sid]
@@ -1282,10 +1759,14 @@ func (d *Driver) applyRewindRangeLocked(from, to int, target, rewindGate, target
 		st.PendingLightRecheck = nil    // a reset step never carries a stale light recheck marker (polyforge#260)
 		st.Supervision = nil            // a gate rewind into the step resets its failure ledger and relaxed bounds
 		st.AnswerBase = len(st.Answers) // a rewound step starts a new attempt chain: earlier answers no longer count toward the human gate
+		st.EnvelopeRejects = 0          // the rejected envelopes belonged to the round the rewind archived
+		st.EnvelopeRejectSpawnN = 0
 		info.archived = append(info.archived, sid)
 	}
 	d.exec.RewindStats.Count++
-	d.exec.RewindStats.ToStep = append(d.exec.RewindStats.ToStep, target)
+	d.exec.RewindStats.Rewinds = append(d.exec.RewindStats.Rewinds, capsule.RewindRecord{
+		Gate: rewindGate, ToStep: target, Charged: charged,
+	})
 	d.exec.CurrentStep = target
 	info.target = target
 }
@@ -1373,15 +1854,8 @@ func (d *Driver) applyAnswerLocked(req TransitionRequest) error {
 // step's own resolution. The no-archive shapes are silent, not errors —
 // the transition still lands (one version bump, no state change).
 func (d *Driver) applyInterruptedLocked(req TransitionRequest) error {
-	if d.exec.WorkflowStatus != StatusRunning {
-		return nil
-	}
-	cur := d.exec.CurrentStep
-	if cur == "" {
-		return nil
-	}
-	st := d.exec.Steps[cur]
-	if st == nil || st.Status != capsule.StepInProgress || st.PendingQuestion != nil {
+	st := d.unsettledStepLocked()
+	if st == nil {
 		return nil
 	}
 	// The interruption is audit only: it is NOT a counted failure (the
@@ -1396,10 +1870,11 @@ func (d *Driver) applyInterruptedLocked(req TransitionRequest) error {
 	if req.BookWall {
 		// A system relaunch books the interrupted dispatch's runtime so a
 		// hang→relaunch loop reaches T. Only an unsettled dispatch (its
-		// result or failure write books it otherwise), and only the time
-		// since its start or since the last interruption archived for it
-		// — a second relaunch before the next dispatch never re-books.
-		if ms := interruptedWallMs(st, now); ms > 0 && st.Dispatch != 0 {
+		// result or failure write books it otherwise; unsettledStepLocked
+		// is the one test of that), and only the time since its start or
+		// since the last interruption archived for it — a second relaunch
+		// before the next dispatch never re-books.
+		if ms := interruptedWallMs(st, now); ms > 0 {
 			d.addWallLocked(st, ms)
 		}
 	}
@@ -1421,6 +1896,22 @@ func (d *Driver) applyInterruptedLocked(req TransitionRequest) error {
 func (d *Driver) applyClaimReentryLocked() error {
 	if st := d.unsettledStepLocked(); st != nil {
 		st.StepStartedAt = d.stamp()
+	}
+	return nil
+}
+
+// applyEnvelopeRejectedLocked records ONE consecutive envelope rejection
+// durably on the current dispatch ( B3): the count is the
+// retry bound's authority, so a restart neither resets it nor counts the
+// same archived envelope twice (the ordinal it last counted is kept).
+func (d *Driver) applyEnvelopeRejectedLocked(req TransitionRequest) error {
+	if err := d.requireRunningStep(req.StepID); err != nil {
+		return err
+	}
+	st := d.exec.Steps[req.StepID]
+	if st.EnvelopeRejectSpawnN != req.SpawnN {
+		st.EnvelopeRejects++
+		st.EnvelopeRejectSpawnN = req.SpawnN
 	}
 	return nil
 }
@@ -1522,7 +2013,20 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 		body["step"] = req.StepID
 		switch req.Result.Outcome {
 		case OutcomeCompleted:
-			if info.selfRewind {
+			if info.rootCauseQuestion {
+				// the second root_cause_addressed: false: the
+				// driver-authored owner question parks the loop
+				kind = "needs_input"
+				q := d.exec.Steps[req.StepID].PendingQuestion
+				d.inputEventFor = q.ID
+				body["question_id"], body["question"] = q.ID, q.Question
+			} else if info.selfRewindExhausted {
+				// the self-report's escalation found its edge spent
+				//: the terminal, never a rewind or step_done
+				kind = "terminal"
+				body["status"] = d.exec.WorkflowStatus
+				body["gate"] = info.rewindGate
+			} else if info.selfRewind || info.rootCauseRewind {
 				// the needs_code_change self-report rewind: the standard rewind
 				// event (same kind, same shape — the ledger cause is the
 				// distinguishing record), never step_done for a step that is
@@ -1600,6 +2104,14 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 	case TransStepFailed:
 		kind = "step_failed"
 		d.failureEventsLocked(req, info, body)
+	}
+	if info.recheckAbandoned != "" {
+		// the abandonment of verification's pending light recheck by a
+		// fresh re-derivation: after the write's own
+		// rewind event, whichever write opened the round
+		info.extra = append(info.extra, appliedEvent{EvLightRecheckEscalated, map[string]any{
+			"spawn_n": d.spawnN, "step": verificationStepID, "detail": info.recheckAbandoned,
+		}})
 	}
 	if kind == "" {
 		return
@@ -1683,12 +2195,27 @@ func cloneExec(e *capsule.Execution) *capsule.Execution {
 	return &out
 }
 
-// countToStep counts how many times target appears in the rewind stats'
-// to_step log — the max_per_step bound's input.
-func countToStep(toStep []string, target string) int64 {
+// lastEdgeRecord answers the index of the latest rewind record of the
+// gate→target edge (-1 = none).
+func lastEdgeRecord(rewinds []capsule.RewindRecord, gate, target string) int {
+	for i := len(rewinds) - 1; i >= 0; i-- {
+		if rewinds[i].Gate == gate && rewinds[i].ToStep == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// countToEdge counts how many CHARGED rewind records the gate→target
+// edge already carries the max_per_step bound's input.
+// A light or converging rewind (charged false) counts toward max_total
+// only, never toward an edge's bound — unless a light re-entry's
+// needs_code_change self-report escalates it to a fresh round, which
+// flips its record to charged.
+func countToEdge(rewinds []capsule.RewindRecord, gate, target string) int64 {
 	var n int64
-	for _, s := range toStep {
-		if s == target {
+	for _, r := range rewinds {
+		if r.Charged && r.Gate == gate && r.ToStep == target {
 			n++
 		}
 	}

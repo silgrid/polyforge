@@ -2,19 +2,22 @@ package server
 
 // machines_test.go: the machines faces over real HTTP — the M3 liveness read
 // face (admin-only auth, the stale projection against the configured
-// threshold, the cannot-judge case) and, since workbench#57, the
+// threshold, the cannot-judge case) and, since, the
 // machine-heartbeat permission model: who may register, the operator-plus-
 // signature refresh, replay/staleness, and the machine_id collision.
 
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/machinesign"
 )
 
 const hbPath = "/api/v1/machines/heartbeat"
@@ -176,7 +179,7 @@ func TestMachinesFaceAuth(t *testing.T) {
 	}
 }
 
-// TestHeartbeatRegistrationGate pins workbench#57 R1: any project membership
+// TestHeartbeatRegistrationGate pins R1: any project membership
 // (viewer, writer or maintainer) and a global admin outside every project
 // may register; a key that belongs to no project is AUTH-403 and writes
 // nothing.
@@ -185,7 +188,7 @@ func TestHeartbeatRegistrationGate(t *testing.T) {
 
 	// A non-admin key with no project_members row: forbidden, nothing
 	// written (no machines row, no users row minted).
-	_, outsiderKey := memberUser(t, e, "wb57-outsider", "")
+	_, outsiderKey := memberUser(t, e, "w57-outsider", "")
 	var usersBefore int
 	if err := e.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&usersBefore); err != nil {
 		t.Fatalf("count users: %v", err)
@@ -209,7 +212,7 @@ func TestHeartbeatRegistrationGate(t *testing.T) {
 	// Every project role registers its own machine; the answer carries
 	// operator_id, never user_id, and no machine user is minted.
 	for _, role := range []string{"viewer", "writer", "maintainer"} {
-		opID, opKey := memberUser(t, e, "wb57-role-"+role, role)
+		opID, opKey := memberUser(t, e, "w57-role-"+role, role)
 		pub, priv := machineKey(t)
 		machine := "m-gate-" + role
 		code, body := e.doSigned(t, "POST", hbPath, opKey, machine, priv, 0, map[string]any{
@@ -255,7 +258,7 @@ func TestHeartbeatRefreshMatrix(t *testing.T) {
 	e := newSrvEnv(t)
 	pub, priv := machineKey(t)
 	e.registerSigned(t, e.key, "m-sig", pub, priv)
-	_, otherKey := memberUser(t, e, "wb57-other", "writer")
+	otherID, otherKey := memberUser(t, e, "w57-other", "writer")
 
 	// (a) the operator's signed beat refreshes.
 	if code, body := e.doSigned(t, "POST", hbPath, e.key, "m-sig", priv, 0, map[string]any{
@@ -269,7 +272,8 @@ func TestHeartbeatRefreshMatrix(t *testing.T) {
 	}
 
 	// (b) the same valid signature under another user's Bearer: AUTH-403,
-	// unchanged (and the collision message is actionable).
+	// unchanged (and the collision message is actionable but names no
+	// one —).
 	code, body := e.doSigned(t, "POST", hbPath, otherKey, "m-sig", priv, 0, map[string]any{
 		"machine_id": "m-sig", "live_wi_ids": []string{"wi-b"},
 	})
@@ -278,6 +282,10 @@ func TestHeartbeatRefreshMatrix(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "--machine-id") {
 		t.Fatalf("collision refusal does not suggest a different --machine-id: %s", body)
+	}
+	if strings.Contains(string(body), otherID) || strings.Contains(string(body), "w57-other") ||
+		strings.Contains(string(body), e.adminID) || strings.Contains(string(body), "root") {
+		t.Fatalf("collision refusal names an operator: %s", body)
 	}
 	if got := e.machineRow(t, "m-sig", "live_wi_ids"); got != live {
 		t.Fatalf("a refused beat changed live_wi_ids: %q", got)
@@ -335,11 +343,16 @@ func TestHeartbeatRefreshMatrix(t *testing.T) {
 
 // TestHeartbeatUnsignedTransition pins R6/guard: the operator's unsigned
 // beat is accepted and only liveness moves; the identity fields a v2.20.6
-// daemon restates are ignored.
+// daemon restates are ignored. registerSigned leaves runtime_version empty
+// and the gate refuses that (fail-closed), so the row is
+// seeded with the pre-signing version the daemon would have stored.
 func TestHeartbeatUnsignedTransition(t *testing.T) {
 	e := newSrvEnv(t)
 	pub, priv := machineKey(t)
 	e.registerSigned(t, e.key, "m-trans", pub, priv)
+	if _, err := e.db.Exec(`UPDATE machines SET runtime_version='v2.20.6' WHERE id='m-trans'`); err != nil {
+		t.Fatalf("seed stored version: %v", err)
+	}
 	pubOther, _ := machineKey(t)
 
 	code, body := e.doSigned(t, "POST", hbPath, e.key, "m-trans", nil, 0, map[string]any{
@@ -414,5 +427,330 @@ func TestMachinesFaceUnparseableStamp(t *testing.T) {
 	// Cannot-judge is not dead: no stale claim, no invented age.
 	if m.Stale || m.HeartbeatAgeSeconds != nil {
 		t.Fatalf("unparseable stamp must report stale=false, age omitted: %+v", m)
+	}
+}
+
+// TestReplayQuotaIsPerMachinePerLane pins's quota over HTTP
+// as it is keyed since A2 — per machine and per lane (the
+// lane split itself is TestRelayAnswersCannotStarveHeartbeat's): a machine
+// at its heartbeat lane's quota (512 live signatures) is CORE-429 while
+// another machine is accepted in the same period, and a verbatim replay stays
+// AUTH-401. The cache is pre-filled directly through e.srv.replay.Check
+// (cheap: no 512 HTTP round-trips), exactly the entries the heartbeat
+// commit path would have recorded in that machine's heartbeat lane
+// ( A2).
+func TestReplayQuotaIsPerMachinePerLane(t *testing.T) {
+	e := newSrvEnv(t)
+	pub, priv := machineKey(t)
+	e.registerSigned(t, e.key, "m-quota", pub, priv)
+	// m-quota's registration recorded one entry; fill the rest of its bucket.
+	for i := 1; i < machinesign.ReplayQuota; i++ {
+		if got := e.srv.replay.Check(time.Now(), replayBucket("m-quota", laneHeartbeat), fmt.Sprintf("filler-%d", i)); got != machinesign.ReplayFresh {
+			t.Fatalf("filler %d = %d, want ReplayFresh", i, got)
+		}
+	}
+	// The machine's next FRESH signed beat: over quota, refused 429, and
+	// the refusal writes nothing.
+	live := e.machineRow(t, "m-quota", "live_wi_ids")
+	code, body := e.doSigned(t, "POST", hbPath, e.key, "m-quota", priv, 0, map[string]any{
+		"machine_id": "m-quota", "live_wi_ids": []string{"wi-over"},
+	})
+	if code != http.StatusTooManyRequests || errCodeOf(body) != api.ErrCoreTooMany {
+		t.Fatalf("over-quota beat = %d %s, want 429 %s", code, body, api.ErrCoreTooMany)
+	}
+	if got := e.machineRow(t, "m-quota", "live_wi_ids"); got != live {
+		t.Fatalf("a refused over-quota beat wrote: %q", got)
+	}
+	// A different machine in the same period: accepted.
+	pub2, priv2 := machineKey(t)
+	e.registerSigned(t, e.key, "m-other", pub2, priv2)
+	if code, body := e.doSigned(t, "POST", hbPath, e.key, "m-other", priv2, 0, map[string]any{
+		"machine_id": "m-other", "live_wi_ids": []string{"wi-b"},
+	}); code != http.StatusOK {
+		t.Fatalf("another machine's beat = %d %s, want 200", code, body)
+	}
+	// A verbatim replay is still the replay refusal, not the quota one.
+	ts := time.Now().Unix()
+	replayBody := map[string]any{"machine_id": "m-other", "live_wi_ids": []string{"wi-replay"}}
+	if code, body := e.doSigned(t, "POST", hbPath, e.key, "m-other", priv2, ts, replayBody); code != http.StatusOK {
+		t.Fatalf("beat to replay = %d %s", code, body)
+	}
+	if code, body := e.doSigned(t, "POST", hbPath, e.key, "m-other", priv2, ts, replayBody); code != http.StatusUnauthorized || errCodeOf(body) != api.ErrAuthUnauthorized {
+		t.Fatalf("replayed beat = %d %s, want 401 %s", code, body, api.ErrAuthUnauthorized)
+	}
+}
+
+// TestRelayAnswersCannotStarveHeartbeat pins A2 over HTTP:
+// a holder's relay answers are driven by OTHER members' queries, so a
+// holder made to answer until its answer quota is full must still beat
+// (and write) and still poll its inbox — a third party cannot push it
+// stale. The duplicate check is kept on every route: a verbatim replay of
+// an answer (in the full lane) and of a beat is still AUTH-401.
+func TestRelayAnswersCannotStarveHeartbeat(t *testing.T) {
+	e := newSrvEnv(t)
+	pub, priv := machineKey(t)
+	e.registerSigned(t, e.key, "m-answers", pub, priv)
+	answer := func(i int, ts int64) (int, []byte) {
+		return e.doSigned(t, "POST", fmt.Sprintf("/api/v1/queries/q_flood_%d/answer", i), e.key, "m-answers", priv, ts,
+			map[string]any{"holder_machine": "m-answers"})
+	}
+	// Every signed answer is recorded at verification whatever its query
+	// id (an unknown one is CORE-404), exactly what answered relays cost.
+	firstTS := time.Now().Unix()
+	full := false
+	for i := 0; i < 2*machinesign.ReplayQuota && !full; i++ {
+		ts := int64(0)
+		if i == 0 {
+			ts = firstTS
+		}
+		code, body := answer(i, ts)
+		switch {
+		case code == http.StatusNotFound && errCodeOf(body) == api.ErrCoreNotFound:
+		case code == http.StatusTooManyRequests && errCodeOf(body) == api.ErrCoreTooMany:
+			full = true
+		default:
+			t.Fatalf("answer %d = %d %s", i, code, body)
+		}
+	}
+	if !full {
+		t.Fatalf("the answers never reached the quota within %d signed answers", 2*machinesign.ReplayQuota)
+	}
+	if code, body := answer(0, firstTS); code != http.StatusUnauthorized || errCodeOf(body) != api.ErrAuthUnauthorized {
+		t.Fatalf("a replayed answer at quota = %d %s, want 401 %s", code, body, api.ErrAuthUnauthorized)
+	}
+	ts := time.Now().Unix()
+	beat := map[string]any{"machine_id": "m-answers", "live_wi_ids": []string{"wi-after-flood"}}
+	if code, body := e.doSigned(t, "POST", hbPath, e.key, "m-answers", priv, ts, beat); code != http.StatusOK {
+		t.Fatalf("the holder's beat after its answers filled = %d %s, want 200", code, body)
+	}
+	if got := e.machineRow(t, "m-answers", "live_wi_ids"); !strings.Contains(got, "wi-after-flood") {
+		t.Fatalf("the accepted beat did not write: live_wi_ids=%q", got)
+	}
+	if code, body := e.doSigned(t, "POST", hbPath, e.key, "m-answers", priv, ts, beat); code != http.StatusUnauthorized || errCodeOf(body) != api.ErrAuthUnauthorized {
+		t.Fatalf("a replayed beat = %d %s, want 401 %s", code, body, api.ErrAuthUnauthorized)
+	}
+	if code, body := e.doSigned(t, "GET", "/api/v1/machines/inbox?faces=queries&wait=1ms", e.key, "m-answers", priv, 0, nil); code != http.StatusOK {
+		t.Fatalf("the holder's inbox poll after its answers filled = %d %s, want 200", code, body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// the heartbeat race over real HTTP — barrier + repetition,
+// fresh machine id per round. The fix is structural (one transaction per
+// beat on the store's single connection), so the assertions cannot flake.
+
+// beatContender is one signed-beat racer: its Bearer, the public key it
+// presents and the key that signs.
+type beatContender struct {
+	bearer string
+	pub    string
+	priv   ed25519.PrivateKey
+}
+
+type beatAnswer struct {
+	code int
+	body []byte
+}
+
+// raceHeartbeats releases one signed registration-shaped beat per contender
+// at a barrier (distinct live_wi_ids keep the signatures distinct) and
+// collects the answers.
+func (e *srvEnv) raceHeartbeats(t *testing.T, id string, cs []beatContender) []beatAnswer {
+	t.Helper()
+	start := make(chan struct{})
+	out := make([]beatAnswer, len(cs))
+	var wg sync.WaitGroup
+	for i, c := range cs {
+		wg.Add(1)
+		go func(i int, c beatContender) {
+			defer wg.Done()
+			<-start
+			out[i].code, out[i].body = e.doSigned(t, "POST", hbPath, c.bearer, id, c.priv, 0, map[string]any{
+				"machine_id": id, "public_key": c.pub, "launcher": "pi-web",
+				"role": "runner", "live_wi_ids": []string{fmt.Sprintf("wi-race-%d", i)},
+			})
+		}(i, c)
+	}
+	close(start)
+	wg.Wait()
+	return out
+}
+
+// checkOneRaceWinner asserts the different-operator race outcome: exactly
+// one 200, every loser the unnamed collision 403, one row bound to the
+// winner's operator and key.
+func (e *srvEnv) checkOneRaceWinner(t *testing.T, id string, answers []beatAnswer, cs []beatContender, operators []string) {
+	t.Helper()
+	winner := -1
+	for i, a := range answers {
+		switch a.code {
+		case http.StatusOK:
+			if winner >= 0 {
+				t.Fatalf("%s has two winners: %v", id, answers)
+			}
+			winner = i
+		case http.StatusForbidden:
+			if errCodeOf(a.body) != api.ErrAuthForbidden {
+				t.Fatalf("%s loser = %d %s, want %s", id, a.code, a.body, api.ErrAuthForbidden)
+			}
+			if !strings.Contains(strings.ToLower(string(a.body)), "another operator") {
+				t.Fatalf("%s loser no longer says another operator: %s", id, a.body)
+			}
+			for _, op := range operators {
+				if strings.Contains(string(a.body), op) {
+					t.Fatalf("%s refusal named operator %q: %s", id, op, a.body)
+				}
+			}
+		default:
+			t.Fatalf("%s contender %d = %d %s, want 200 or 403 (never 500)", id, i, a.code, a.body)
+		}
+	}
+	if winner < 0 {
+		t.Fatalf("%s answered no 200: %v", id, answers)
+	}
+	var n int
+	if err := e.db.QueryRow(`SELECT COUNT(*) FROM machines WHERE id=?1`, id).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%s left %d rows (err %v), want 1", id, n, err)
+	}
+	if got := e.machineRow(t, id, "operator_id"); got != operators[winner] {
+		t.Fatalf("%s operator_id = %q, want the winner %q", id, got, operators[winner])
+	}
+	if got := e.machineRow(t, id, "public_key"); got != cs[winner].pub {
+		t.Fatalf("%s public_key = %q, want the winner's", id, got)
+	}
+}
+
+func TestHeartbeatRaceOverHTTP(t *testing.T) {
+	e := newSrvEnv(t)
+	opA, keyA := memberUser(t, e, "w82-race-a", "maintainer")
+	opB, keyB := memberUser(t, e, "w82-race-b", "maintainer")
+	operators := []string{opA, opB}
+	pubA, privA := machineKey(t)
+	pubB, privB := machineKey(t)
+	contenders := []beatContender{{keyA, pubA, privA}, {keyB, pubB, privB}}
+
+	// Same operator, four contenders: all 200, exactly one registration.
+	for round := 0; round < 5; round++ {
+		id := fmt.Sprintf("w82-sameop-%d", round)
+		pub, priv := machineKey(t)
+		same := []beatContender{{keyA, pub, priv}, {keyA, pub, priv}, {keyA, pub, priv}, {keyA, pub, priv}}
+		answers := e.raceHeartbeats(t, id, same)
+		registered := 0
+		for i, a := range answers {
+			if a.code != http.StatusOK {
+				t.Fatalf("same-operator race %s contender %d = %d %s, want 200", id, i, a.code, a.body)
+			}
+			var hb struct {
+				Registered bool `json:"registered"`
+			}
+			if err := json.Unmarshal(a.body, &hb); err != nil {
+				t.Fatalf("decode %s answer: %v (%s)", id, err, a.body)
+			}
+			if hb.Registered {
+				registered++
+			}
+		}
+		if registered != 1 {
+			t.Fatalf("same-operator race %s answered %d registrations, want one: %v", id, registered, answers)
+		}
+		var n int
+		if err := e.db.QueryRow(`SELECT COUNT(*) FROM machines WHERE id=?1`, id).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("same-operator race %s left %d rows (err %v)", id, n, err)
+		}
+		if got := e.machineRow(t, id, "operator_id"); got != opA {
+			t.Fatalf("same-operator race %s operator_id = %q, want %q", id, got, opA)
+		}
+	}
+
+	// Different operators: exactly one winner, the loser the unnamed 403.
+	for round := 0; round < 8; round++ {
+		id := fmt.Sprintf("w82-diffop-%d", round)
+		e.checkOneRaceWinner(t, id, e.raceHeartbeats(t, id, contenders), contenders, operators)
+	}
+
+	// Concurrent claims of a legacy NULL-operator row: one owner, losers
+	// 403, no rebind of operator_id/public_key.
+	for round := 0; round < 5; round++ {
+		id := fmt.Sprintf("w82-claim-%d", round)
+		if _, err := e.db.Exec(`INSERT INTO machines(id, last_heartbeat_at, role)
+			VALUES (?1,?2,'runner')`, id, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			t.Fatalf("seed legacy row %s: %v", id, err)
+		}
+		e.checkOneRaceWinner(t, id, e.raceHeartbeats(t, id, contenders), contenders, operators)
+	}
+}
+
+// TestHeartbeatUnsignedGateAndRatchetOverHTTP pins over HTTP:
+// an unsigned beat is refused (401, nothing written) unless both the
+// request version and the stored runtime_version parse and predate v2.20.8,
+// and a signed v2.20.9 refresh ratchets the row closed.
+func TestHeartbeatUnsignedGateAndRatchetOverHTTP(t *testing.T) {
+	e := newSrvEnv(t)
+	pub, priv := machineKey(t)
+	e.registerSigned(t, e.key, "m-gate82", pub, priv)
+	seedVersion := func(v string) {
+		t.Helper()
+		if _, err := e.db.Exec(`UPDATE machines SET runtime_version=?1 WHERE id='m-gate82'`, v); err != nil {
+			t.Fatalf("seed stored version %q: %v", v, err)
+		}
+	}
+	liveness := func() map[string]string {
+		t.Helper()
+		return map[string]string{
+			"last_heartbeat_at": e.machineRow(t, "m-gate82", "last_heartbeat_at"),
+			"runtime_version":   e.machineRow(t, "m-gate82", "runtime_version"),
+			"mode":              e.machineRow(t, "m-gate82", "mode"),
+			"live_wi_ids":       e.machineRow(t, "m-gate82", "live_wi_ids"),
+		}
+	}
+
+	seedVersion("v2.20.6")
+	before := liveness()
+	for _, v := range []string{"v2.20.8", "v2.20.9", "dev", "", "garbage"} {
+		code, body := e.doSigned(t, "POST", hbPath, e.key, "m-gate82", nil, 0, map[string]any{
+			"machine_id": "m-gate82", "runtime_version": v, "mode": "bad", "live_wi_ids": []string{"wi-bad"},
+		})
+		if code != http.StatusUnauthorized || errCodeOf(body) != api.ErrAuthUnauthorized {
+			t.Fatalf("unsigned request version %q = %d %s, want 401 %s", v, code, body, api.ErrAuthUnauthorized)
+		}
+		for col, want := range before {
+			if got := e.machineRow(t, "m-gate82", col); got != want {
+				t.Fatalf("refused beat (version %q) wrote %s: %q, want %q", v, col, got, want)
+			}
+		}
+	}
+
+	// Fail closed on the stored side: dev, empty and unparseable too.
+	for _, stored := range []string{"dev", "", "garbage"} {
+		seedVersion(stored)
+		code, body := e.doSigned(t, "POST", hbPath, e.key, "m-gate82", nil, 0, map[string]any{
+			"machine_id": "m-gate82", "runtime_version": "v2.20.6", "mode": "run", "live_wi_ids": []string{"wi-x"},
+		})
+		if code != http.StatusUnauthorized || errCodeOf(body) != api.ErrAuthUnauthorized {
+			t.Fatalf("unsigned beat on a stored %q row = %d %s, want 401 %s", stored, code, body, api.ErrAuthUnauthorized)
+		}
+	}
+
+	// The ratchet: a signed v2.20.9 refresh closes the row.
+	seedVersion("v2.20.6")
+	if code, body := e.doSigned(t, "POST", hbPath, e.key, "m-gate82", priv, 0, map[string]any{
+		"machine_id": "m-gate82", "runtime_version": "v2.20.9", "mode": "signed", "live_wi_ids": []string{"wi-signed"},
+	}); code != http.StatusOK {
+		t.Fatalf("signed v2.20.9 beat = %d %s, want 200", code, body)
+	}
+	if got := e.machineRow(t, "m-gate82", "runtime_version"); got != "v2.20.9" {
+		t.Fatalf("signed beat stored runtime_version %q, want v2.20.9", got)
+	}
+	ratcheted := liveness()
+	code, body := e.doSigned(t, "POST", hbPath, e.key, "m-gate82", nil, 0, map[string]any{
+		"machine_id": "m-gate82", "runtime_version": "v2.20.6", "mode": "old", "live_wi_ids": []string{"wi-old"},
+	})
+	if code != http.StatusUnauthorized || errCodeOf(body) != api.ErrAuthUnauthorized {
+		t.Fatalf("unsigned beat after the ratchet = %d %s, want 401 %s", code, body, api.ErrAuthUnauthorized)
+	}
+	for col, want := range ratcheted {
+		if got := e.machineRow(t, "m-gate82", col); got != want {
+			t.Fatalf("ratcheted-refused beat wrote %s: %q, want %q", col, got, want)
+		}
 	}
 }

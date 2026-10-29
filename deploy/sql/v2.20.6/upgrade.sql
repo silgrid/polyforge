@@ -1,4 +1,4 @@
--- deploy/sql/v2.20.6/upgrade.sql — workbench#11 cross-machine identity,
+-- deploy/sql/v2.20.6/upgrade.sql — cross-machine identity,
 -- query relay and user-to-user messaging.
 --
 -- Applied by .polyforge/deploy.sh INSIDE the switch window as ONE SQLite

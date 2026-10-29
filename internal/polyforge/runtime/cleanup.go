@@ -36,7 +36,15 @@ var (
 	killFn = syscall.Kill
 	// sleepFn is the inter-poll pause of the bounded waits.
 	sleepFn = time.Sleep
+	// procListAllFn is the process-list walk every layer uses; a variable
+	// only so tests can count the walks.
+	procListAllFn = procListAll
 )
+
+// cleanupPoll is the inter-poll pause of the bounded waits: each poll
+// re-reads process state (a group-empty proof walks the whole process
+// list), so the cadence stays coarse — a teardown's bounds are seconds.
+const cleanupPoll = 100 * time.Millisecond
 
 // procIdent is one (pid, starttime) identity pair — L3's mis-kill guard.
 type procIdent struct {
@@ -144,7 +152,7 @@ func Cleanup(t CleanupTarget, bound time.Duration) (*CleanupReport, error) {
 		deadline := time.Now().Add(bound)
 		for _, pid := range marked {
 			for procExists(pid) && time.Now().Before(deadline) {
-				sleepFn(20 * time.Millisecond)
+				sleepFn(cleanupPoll)
 			}
 			if procExists(pid) {
 				signalPID(pid, syscall.SIGKILL, rep)
@@ -233,15 +241,34 @@ func rootIdentityHolds(t CleanupTarget) bool {
 	return startWall > recUnix-2 && startWall < recUnix+2
 }
 
+// processStartStamp is the identity stamp of a freshly started process:
+// its birth as the kernel records it (starttime, ticks since boot),
+// converted exactly as rootIdentityHolds and groupProvableOurs convert a
+// live process's starttime (bt + start/100 seconds) — so a later proof
+// compares like with like, however long the caller took between fork and
+// stamp. Fallback: when the process's starttime or the boot time is
+// unreadable (no procfs / sysctl answer), the current wall clock — the
+// pre-kernel-stamp behavior, accurate only when the stamp follows the
+// fork within the ±2 s identity window.
+func processStartStamp(pid int) string {
+	_, _, _, start, ok := procStat(pid)
+	bt := bootOnce()
+	if !ok || bt == 0 {
+		return nowStamp()
+	}
+	born := time.Unix(bt, 0).Add(time.Duration(start) * (time.Second / 100))
+	return born.UTC().Format(time.RFC3339Nano)
+}
+
 // snapshotDescendants walks the process list once and returns the full descendant set
 // of root (including root itself) with each member's starttime — L1's
 // pre-signal snapshot.
 func snapshotDescendants(root int) []procIdent {
-	if root <= 0 {
-		return nil
+	if root <= 0 || !procExists(root) {
+		return nil // a gone or zombie root roots no live tree: no walk
 	}
 	children := map[int64][]int{}
-	pids, err := procListAll()
+	pids, err := procListAllFn()
 	if err != nil {
 		return nil
 	}
@@ -306,7 +333,7 @@ func waitIdents(ids []procIdent, bound time.Duration) {
 		if live == 0 || time.Now().After(deadline) {
 			return
 		}
-		sleepFn(20 * time.Millisecond)
+		sleepFn(cleanupPoll)
 	}
 }
 
@@ -352,7 +379,7 @@ func groupProvableOurs(t CleanupTarget) bool {
 		return false // member birth times unverifiable: fail closed
 	}
 	floor := rec.Unix() - 2
-	pids, err := procListAll()
+	pids, err := procListAllFn()
 	if err != nil {
 		return false
 	}
@@ -372,7 +399,7 @@ func groupProvableOurs(t CleanupTarget) bool {
 // closed: an unreadable process list makes emptiness unprovable and answers
 // false.
 func groupEmpty(pgid int) bool {
-	pids, err := procListAll()
+	pids, err := procListAllFn()
 	if err != nil {
 		return false
 	}
@@ -402,8 +429,35 @@ func waitGroupEmpty(pgid int, bound time.Duration) bool {
 		if time.Now().After(deadline) {
 			return false
 		}
-		sleepFn(20 * time.Millisecond)
+		sleepFn(cleanupPoll)
 	}
+}
+
+// liveProcIDs answers, from one walk of the process list, every pid and
+// every process-group id with a live (non-zombie) member — the ids a
+// cleanup target can still have anything to signal under. ok=false (an
+// unreadable list, or a listed pid with an unreadable stat) fails closed:
+// the caller then cleans every target.
+func liveProcIDs() (map[int]bool, bool) {
+	pids, err := procListAllFn()
+	if err != nil {
+		return nil, false
+	}
+	live := map[int]bool{}
+	for _, pid := range pids {
+		state, _, pgrp, _, ok := procStat(pid)
+		if !ok {
+			if procStillListed(pid) {
+				return nil, false
+			}
+			continue
+		}
+		if state != "Z" {
+			live[pid] = true
+			live[int(pgrp)] = true
+		}
+	}
+	return live, true
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +469,7 @@ func waitGroupEmpty(pgid int, bound time.Duration) bool {
 // (another uid, an exit race) are skipped: not provably ours.
 func scanEnvMarker(wi, daemonID string) []int {
 	self := os.Getpid()
-	pids, err := procListAll()
+	pids, err := procListAllFn()
 	if err != nil {
 		return nil
 	}
@@ -446,7 +500,7 @@ func cwdScan(t CleanupTarget, rep *CleanupReport) {
 		return
 	}
 	self := os.Getpid()
-	pids, err := procListAll()
+	pids, err := procListAllFn()
 	if err != nil {
 		return
 	}

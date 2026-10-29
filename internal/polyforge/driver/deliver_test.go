@@ -80,6 +80,7 @@ func deliverSpec(repos string, reviewPassed bool, answers int) ResultSpec {
 	return ResultSpec{WIID: "wi_d", StepID: deliverStepID, SpawnN: 1, Gate: true,
 		RequireCommandEvidence: true, ReposDir: repos, ReviewPassed: reviewPassed, HasReview: true, HumanAnswers: answers,
 		VerifiedHeads:   map[string]string{"demo": strings.TrimSpace(head)},
+		ReviewedHeads:   map[string]string{"demo": strings.TrimSpace(head)},
 		VerifiedTestBar: []testBarCmd{{Repo: "demo", Command: "make test"}}}
 }
 
@@ -256,7 +257,7 @@ func TestReviewPassed(t *testing.T) {
 }
 
 // TestDeliverMergeFacts: the merge rule's facts come from the capsule, not
-// the step's self-report (polyforge#166 review B1).
+// the step's self-report (polyforge#166 code review).
 func TestDeliverMergeFacts(t *testing.T) {
 	// moved builds a repo whose HEAD moved past the verified commit by a
 	// merge of a side branch; resolve hand-edits the merge result.
@@ -294,6 +295,10 @@ func TestDeliverMergeFacts(t *testing.T) {
 				tgit(t, dir, "commit", "-q", "--amend", "--no-edit")
 			}
 		}
+		// the review pass is recorded on the pre-delivery
+		// tree (the merge above is the delivery's own, judged by the
+		// verified-anchor rule below).
+		spec.ReviewedHeads["demo"] = tgit(t, dir, "rev-parse", "HEAD")
 		pushFeature(t, dir)
 		return repos, spec
 	}
@@ -349,6 +354,7 @@ func TestDeliverMergeFacts(t *testing.T) {
 		dir := filepath.Join(repos, "demo")
 		dwrite(t, filepath.Join(dir, "a.txt"), "changed in deliver\n")
 		tgit(t, dir, "commit", "-q", "-am", "deliver edit")
+		spec.ReviewedHeads["demo"] = spec.VerifiedHeads["demo"] // the review covered the verified tree; the deliver edit came after it
 		err := ValidateStepResult(deliverRes(OutcomeCompleted, mergedOut, append(push, rerun...)), spec)
 		if err == nil || !strings.Contains(err.Error(), "not a two-parent merge") {
 			t.Fatalf("want a hand-made-change rejection, got %v", err)
@@ -400,6 +406,7 @@ func TestDeliverDeliveredHead(t *testing.T) {
 		dir := filepath.Join(repos, "demo")
 		tgit(t, dir, "commit", "-q", "--allow-empty", "-m", "after the push")
 		spec.VerifiedHeads["demo"] = tgit(t, dir, "rev-parse", "HEAD")
+		spec.ReviewedHeads["demo"] = spec.VerifiedHeads["demo"] // the review covered the pushed tree
 		err := ValidateStepResult(deliverRes(OutcomeCompleted, mergedOut, push), spec)
 		if err == nil || !strings.Contains(err.Error(), "is not the local HEAD") {
 			t.Fatalf("want a pushed-head mismatch, got %v", err)
@@ -462,8 +469,10 @@ func TestDeliverAutopilotEligibility(t *testing.T) {
 // polyforge#164 x #166: the authored-tests gate (H4) does not judge the
 // deliver step. Merging the latest default branch, which also edited an
 // authored test file, changes that file's blob since the author commit;
-// gate 7 would refuse the delivery and tell the agent to restore the
-// author commit's version, undoing upstream's edit.
+// since gate 7 itself accepts a change that came only
+// through such a machine-made merge, and the exemption keeps a conflict
+// deliver resolved by hand (after its push and merge) with deliver_facts'
+// human escalation instead of an envelope retry.
 func TestDeliverExemptFromAuthoredTestsGate(t *testing.T) {
 	repos := deliverCapsule(t)
 	dir := filepath.Join(repos, "demo")
@@ -520,17 +529,19 @@ func TestDeliverExemptFromAuthoredTestsGate(t *testing.T) {
 	// ...so the delivery of the merged head is accepted.
 	spec.HasReview, spec.ReviewPassed = true, true
 	spec.VerifiedHeads = map[string]string{"demo": verified}
+	spec.ReviewedHeads = map[string]string{"demo": verified} // the review covered the authored tree; the deliver merge is the delivery's own
 	spec.VerifiedTestBar = []testBarCmd{{Repo: "demo", Command: "make test"}}
 	evidence := append(ev(goodPush), CommandEvidence{Argv: []string{"sh", "-c", "cd repos/demo && git merge --no-edit origin/main"}, DurationMs: 9},
 		CommandEvidence{Argv: []string{"sh", "-c", "cd repos/demo && make test"}, DurationMs: 9})
 	if err := ValidateStepResult(deliverRes(OutcomeCompleted, mergedOut, evidence), spec); err != nil {
 		t.Fatalf("a clean delivery merge touching an authored test must be accepted: %v", err)
 	}
-	// The scenario does reach gate 7 when a baseline is set (what the
-	// exemption prevents).
+	// With a baseline set the clean default-branch merge passes gate 7 as
+	// well: the file changed only through a machine-made
+	// merge of the default branch, which is not the agent's change.
 	spec.AuthoredTests = &AuthoredTests{Files: []string{"x_test.go"}, Baseline: map[string]string{"demo": authored}}
-	if err := ValidateStepResult(deliverRes(OutcomeCompleted, mergedOut, evidence), spec); err == nil || !strings.Contains(err.Error(), "changed authored test files") {
-		t.Fatalf("fixture: with a baseline the merge would trip gate 7, got %v", err)
+	if err := ValidateStepResult(deliverRes(OutcomeCompleted, mergedOut, evidence), spec); err != nil {
+		t.Fatalf("a clean default-branch merge of an authored test must pass gate 7 too: %v", err)
 	}
 }
 
@@ -563,6 +574,7 @@ func TestDeliverLightPassMergeRule(t *testing.T) {
 		light := tgit(t, dir, "rev-parse", "HEAD")
 		spec.VerifiedHeads = nil // a light pass never writes verified_heads
 		spec.LightRecheckHeads = map[string]string{"demo": light}
+		spec.ReviewedHeads["demo"] = light // the review covered the pre-delivery tree
 		tgit(t, dir, "merge", "-q", "--no-edit", "side")
 		if handEdit {
 			dwrite(t, filepath.Join(dir, "b.txt"), "edited\n")
@@ -626,3 +638,57 @@ func TestDeliverLightPassMergeRule(t *testing.T) {
 }
 
 func ptrTrue() *bool { b := true; return &b }
+
+// TestScopedMergeRuleConsistency: on a scoped verification
+// pass the automatic merge needs review's scope_adequate true, review's
+// own scope record, and a verification that used exactly that scope —
+// a wider or narrower set, a missing review scope or a false answer
+// each route the delivery to the human; a consistent pair merges.
+func TestScopedMergeRuleConsistency(t *testing.T) {
+	adequate := true
+	sc := func(paths ...string) *scopeObject {
+		return &scopeObject{Mode: "scoped", DeclaredPaths: paths, Rationale: "r", FastGatesRef: "ref"}
+	}
+	rev := func(paths ...string) *reviewScope {
+		return &reviewScope{Mode: "scoped", DeclaredPaths: paths}
+	}
+	cases := []struct {
+		name    string
+		ver     *scopeObject
+		rev     *reviewScope
+		present bool
+		adeq    *bool
+		bad     string
+	}{
+		{"consistent scopes merge", sc("a.go", "b.go"), rev("b.go", "a.go"), true, &adequate, ""},
+		{"a wider review scope needs a human", sc("a.go"), rev("a.go", "b.go"), true, &adequate, "differs from the scope review declared"},
+		{"a narrower review scope needs a human", sc("a.go", "b.go"), rev("a.go"), true, &adequate, "differs from the scope review declared"},
+		{"review recorded no scope", sc("a.go"), nil, false, &adequate, "recorded no scope of its own"},
+		{"a false scope_adequate keeps its message", sc("a.go"), rev("a.go"), true, ptrFalse(), "did not answer scope_adequate true"},
+		{"no answer at all", sc("a.go"), rev("a.go"), true, nil, "did not answer scope_adequate true"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			repos := deliverCapsule(t)
+			spec := deliverSpec(repos, true, 0)
+			spec.VerificationScoped = true
+			spec.VerificationScope = c.ver
+			spec.ReviewScope, spec.ReviewScopePresent = c.rev, c.present
+			spec.ReviewScopeAdequate = c.adeq
+			r := deliverRepo{Name: "demo", Branch: "polyforge/polyforge-166",
+				PRURL: "https://github.com/o/r/pull/1", Merged: ptrTrue(), MergeCommit: "abc", TestsPassed: ptrTrue()}
+			why := mergeBlocker(spec, r, "polyforge/polyforge-166", ev(goodPush))
+			if c.bad == "" {
+				if why != "" {
+					t.Fatalf("a consistent scoped pair must merge, got %q", why)
+				}
+				return
+			}
+			if why == "" || !strings.Contains(why, c.bad) {
+				t.Fatalf("the blocker = %q, want it to contain %q", why, c.bad)
+			}
+		})
+	}
+}
+
+func ptrFalse() *bool { b := false; return &b }

@@ -1,6 +1,6 @@
 package driver
 
-// treehash_test.go: the capsule tree hash contract (workbench#21). Each
+// treehash_test.go: the capsule tree hash contract. Each
 // requirement-2 scenario is one subtest over a real git capsule.
 
 import (

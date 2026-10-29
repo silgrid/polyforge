@@ -1,6 +1,6 @@
 package daemon
 
-// ensure_git_lowspeed_repro_test.go (workbench#2): `pf daemon ensure` is
+// ensure_git_lowspeed_repro_test.go: `pf daemon ensure` is
 // the standard start entry, and the daemon it launches gets exactly the
 // filtered copy of the ensure caller's environment. An operator's
 // explicit GIT_HTTP_LOW_SPEED_LIMIT / GIT_HTTP_LOW_SPEED_TIME must reach

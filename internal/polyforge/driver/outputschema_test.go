@@ -197,6 +197,7 @@ func TestOutputSchemaPromptStatesEnforcement(t *testing.T) {
 	for step, want := range map[string]string{
 		releaseStepID: "rejects a non-conforming envelope", deployStepID: "rejects a non-conforming envelope",
 		verificationStepID: "records every violation",
+		planStepID:         "rejects: a `write` entry of `touched_files` without a `coupled_obligations` entry",
 	} {
 		if p := assembleStepPrompt(promptParts{StepID: step, OutputSchema: "type: object"}); !strings.Contains(p, want) {
 			t.Fatalf("%s prompt must say %q:\n%s", step, want, p)
@@ -277,14 +278,14 @@ var shippedSamples = map[string]string{
 	"bug-fix/fix":               `{"commits":[{"sha":"abc1234","message":"fix: init map"}],"build_status":"green","root_cause_addressed":true,"regression_test":"internal/x/x_test.go","summary":"init before write"}`,
 	"bug-fix/verification":      `{"verdict":"pass","checks":[{"name":"build","status":"pass"},{"name":"repro","status":"pass"}],"fail_reason":null,"test_bar":[{"repo":"app","command":"go build ./..."},{"repo":"app","command":"go test ./..."}]}`,
 	"bug-fix/review":            `{"verdict":"pass","findings":[{"severity":"non-blocking","detail":"nit"}],"fail_reason":null}`,
-	"chore/plan":                `{"plan_path":"artifacts/plan.md","step_ids":["s1"],"touched_files":[{"path":"a.go","intent":"write"}]}`,
+	"chore/plan":                `{"plan_path":"artifacts/plan.md","step_ids":["s1"],"touched_files":[{"path":"a.go","intent":"write","coupled_obligations":[{"none":true,"reason":"no document enumerates a.go"}]}]}`,
 	"chore/code":                `{"commits":[{"sha":"abc1234","message":"chore: drop dead code"}],"build_status":"green"}`,
 	"chore/review":              `{"verdict":"pass","findings":[]}`,
 	"chore/verification":        `{"verdict":"pass","checks":[{"name":"build","status":"pass"},{"name":"unit","status":"pre_existing","detail":"TestFlaky fails on base abc1234 too"}],"pre_existing_failures":["internal/x/flaky_test.go: TestFlaky"],"test_bar":[{"repo":"app","command":"go build ./..."},{"repo":"app","command":"go test ./..."}]}`,
 	"feature-full/grill":        `{"qa_log":"artifacts/grill-qa.md","ready_for_spec":true}`,
 	"feature-full/spec":         `{"spec_path":"artifacts/spec.md","requirement_titles":["R1"],"non_goals":[]}`,
 	"feature-full/grill-review": `{"verdict":"pass","qa_log":"artifacts/grill-qa.md","fail_reason":null}`,
-	"feature-full/plan":         `{"plan_path":"artifacts/plan.md","step_ids":["s1","s2"],"touched_files":[{"path":"a.go","intent":"write"},{"path":"b.go","intent":"read"}]}`,
+	"feature-full/plan":         `{"plan_path":"artifacts/plan.md","step_ids":["s1","s2"],"touched_files":[{"path":"a.go","intent":"write","coupled_obligations":[{"path":"docs/a.md","note":"the a table row"}]},{"path":"b.go","intent":"read"}]}`,
 	"feature-full/e2e-author":   `{"scenarios_path":"artifacts/e2e-scenarios.md","scenario_titles":["A","B"],"test_files":["test/a_test.go"],"baseline":[{"title":"A","status":"fail","evidence":"want 1 got 0"},{"title":"B","status":"fail","evidence":"404"}],"already_satisfied":["C"],"added_test_lines":512,"size_justification":"each scenario drives its own daemon lifecycle"}`,
 	"feature-full/code":         `{"commits":[{"step_id":"s1","sha":"abc1234","message":"feat: s1"}],"build_status":"green","summary":"done"}`,
 	"feature-full/review":       `{"verdict":"pass","findings":[{"severity":"non-blocking","detail":"nit"}]}`,
@@ -382,5 +383,71 @@ func TestFeatureFullMergedStepSchemasRejectContradictions(t *testing.T) {
 	s, _ := loadStepOutputSchema(bundle, "verification", shippedVars(t, bundle, "verification"))
 	if err := checkOutputSchema(s.Schema, json.RawMessage(`{"verdict":"pass","checks":[{"name":"build","status":"pass"}]}`)); err == nil {
 		t.Fatal("verification without authored_titles/scenarios accepted")
+	}
+}
+
+// w80MarkedSchemaDef is a step definition whose output schema marks two
+// properties with x-prompt-when.
+const w80MarkedSchemaDef = "---\noutput:\n  type: object\n  required: [verdict]\n  properties:\n" +
+	"    verdict: { type: string, enum: [pass, fail] }\n" +
+	"    scope:\n      x-prompt-when: scoped\n      type: object\n      required: [mode]\n      properties:\n        mode: { type: string, enum: [scoped] }\n" +
+	"    mechanical_bound:\n      x-prompt-when: armed\n      type: array\n" +
+	"---\nbody"
+
+// TestW80PromptTextPrunesUnmetConditions: an x-prompt-when entry whose
+// condition does not hold leaves the PROMPT text, a met one stays, an
+// unmarked one always stays, and the marker key itself never shows -
+// while validation still runs the FULL schema (a scope object is
+// checked even on a dispatch whose prompt pruned it).
+func TestW80PromptTextPrunesUnmetConditions(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "b")
+	writeCapsuleFile(t, dir, "b/steps/s.md", w80MarkedSchemaDef)
+	s, err := loadStepOutputSchema(bundle, "s", nil)
+	if err != nil || s == nil {
+		t.Fatalf("load: %v", err)
+	}
+	plain := s.PromptText(nil)
+	if strings.Contains(plain, "scope:") || strings.Contains(plain, "mechanical_bound") {
+		t.Errorf("plain prompt text keeps a pruned entry:\n%s", plain)
+	}
+	if !strings.Contains(plain, "verdict:") {
+		t.Errorf("plain prompt text lost the unmarked entry:\n%s", plain)
+	}
+	scoped := s.PromptText(map[string]bool{"scoped": true})
+	if !strings.Contains(scoped, "scope:") || strings.Contains(scoped, "mechanical_bound") {
+		t.Errorf("scoped prompt text wrong:\n%s", scoped)
+	}
+	both := s.PromptText(map[string]bool{"scoped": true, "armed": true})
+	for _, text := range []string{plain, scoped, both} {
+		if strings.Contains(text, promptWhenKey) {
+			t.Errorf("prompt text shows the marker:\n%s", text)
+		}
+	}
+	if !strings.Contains(both, "mechanical_bound") {
+		t.Errorf("armed prompt text lost mechanical_bound:\n%s", both)
+	}
+	// validation keeps the full schema
+	if err := checkOutputSchema(s.Schema, json.RawMessage(`{"verdict":"pass","scope":{"mode":"full"}}`)); err == nil {
+		t.Errorf("a bad scope object validated: the full schema must still check pruned entries")
+	}
+	if err := checkOutputSchema(s.Schema, json.RawMessage(`{"verdict":"pass","scope":{"mode":"scoped"}}`)); err != nil {
+		t.Errorf("a good scope object rejected: %v", err)
+	}
+	// the full text (and Text) keeps every entry - only PromptText prunes
+	if !strings.Contains(s.Text, "mechanical_bound") {
+		t.Errorf("Text lost an entry")
+	}
+}
+
+// TestW80PromptWhenUnknownConditionFailsLoad: a typo in the closed
+// condition set fails the schema load (fail-closed - never a silently
+// hidden fragment).
+func TestW80PromptWhenUnknownConditionFailsLoad(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "b")
+	writeCapsuleFile(t, dir, "b/steps/s.md", strings.Replace(w80MarkedSchemaDef, "x-prompt-when: armed", "x-prompt-when: armd", 1))
+	if _, err := loadStepOutputSchema(bundle, "s", nil); err == nil || !strings.Contains(err.Error(), promptWhenKey) {
+		t.Fatalf("an unknown x-prompt-when condition loaded: %v", err)
 	}
 }

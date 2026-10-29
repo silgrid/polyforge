@@ -1,7 +1,7 @@
 package cli
 
 // config_cas.go: the expected-file-hash (CAS) precondition every
-// `pf config set|unset` write may carry (workbench#22). The comparison runs
+// `pf config set|unset` write may carry. The comparison runs
 // inside the SAME writer flock as the read-modify-write, immediately before
 // the atomic write, so two callers that read one hash cannot both win. The
 // refusal is the typed CORE-409 envelope with a key-level diff; api_key is

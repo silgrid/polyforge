@@ -1,6 +1,6 @@
 package daemon
 
-// reload.go: the daemon's config reload entry point (workbench#3). A
+// reload.go: the daemon's config reload entry point. A
 // reload re-reads the daemon's own cli.toml, runs the SAME shared
 // validator `pf config` runs, and applies each key by its class:
 //

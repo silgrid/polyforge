@@ -374,7 +374,7 @@ func TestW174InstallMigratesOldLayoutThenIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestW174InstallKeepsForeignSkillDir (workbench#32 review B3): the
+// TestW174InstallKeepsForeignSkillDir (code review): the
 // pre-#174 destructive migration belongs to the polyforge routing skill
 // only. A user's own ~/.claude/skills/<other-name> entry must survive the
 // install untouched, with a WARN — never moved aside and rm -rf'd. This
@@ -1162,7 +1162,7 @@ func TestW174InstallMissingPrerequisiteRefuses(t *testing.T) {
 	}
 }
 
-// TestW174InstallReleaseSwitchWithoutGnuMvT (polyforge#218 review B5):
+// TestW174InstallReleaseSwitchWithoutGnuMvT (polyforge#218 code review):
 // the release/current swap must not depend on GNU-only `mv -T` — BSD/macOS
 // mv(1) (synopsis `mv [-f | -i | -n] [-hv] source target`) has no -T and
 // exits 64 with "illegal option -- T". An mv shim that rejects -T exactly

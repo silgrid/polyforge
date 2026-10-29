@@ -23,9 +23,15 @@ func sessionEnv(t *testing.T) (*testEnv, *SessionManager) {
 	return env, NewSessionManager(env.DB)
 }
 
-// mustSessionClaim claims wiID with a fresh secret.
+// mustSessionClaim claims wiID with a fresh secret. The shared "m1"
+// machine fixture carries a machines row owned by the caller
+// (only a caller-owned machine id is recorded).
 func mustSessionClaim(t *testing.T, m *SessionManager, env *testEnv, wiID, secret string) *api.SessionClaim {
 	t.Helper()
+	if _, err := env.DB.Exec(`INSERT OR IGNORE INTO machines(id, last_heartbeat_at, role, operator_id)
+		VALUES ('m1', ?1, 'runner', ?2)`, Now(), env.UserID); err != nil {
+		t.Fatalf("seed m1: %v", err)
+	}
 	claim, err := m.Claim(wiID, api.SessionClaimRequest{
 		SessionID: secret, MachineID: "m1",
 	}, env.UserID)
@@ -708,7 +714,7 @@ func TestRacePatchBundleVsClaim(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, patchErr = env.WIs.Patch(wi.ID, map[string]json.RawMessage{"bundle_name": json.RawMessage(`"` + renamed + `"`)})
+			_, patchErr = env.WIs.Patch(wi.ID, map[string]json.RawMessage{"bundle_name": json.RawMessage(`"` + renamed + `"`)}, env.UserID)
 		}()
 		go func() {
 			defer wg.Done()
@@ -742,7 +748,7 @@ func TestRacePatchBundleVsClaim(t *testing.T) {
 			t.Fatalf("round %d: bundle = %v, want %s (patchErr=%v)", i, got.BundleName, want, patchErr)
 		}
 		// frozen at the claim: any later bundle PATCH is refused.
-		if _, err := env.WIs.Patch(wi.ID, map[string]json.RawMessage{"bundle_name": json.RawMessage(`"w140-race1-late"`)}); err == nil {
+		if _, err := env.WIs.Patch(wi.ID, map[string]json.RawMessage{"bundle_name": json.RawMessage(`"w140-race1-late"`)}, env.UserID); err == nil {
 			t.Fatalf("round %d: bundle PATCH after the claim succeeded; the bundle must be frozen", i)
 		}
 	}
@@ -869,18 +875,18 @@ func TestUnbindRefusedWhileBlocking(t *testing.T) {
 		}
 		return wi.Slug
 	}()
-	_, err := env.WIs.Patch(a, map[string]json.RawMessage{"bundle_name": json.RawMessage(`null`)})
+	_, err := env.WIs.Patch(a, map[string]json.RawMessage{"bundle_name": json.RawMessage(`null`)}, env.UserID)
 	if !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "BLOCKER_STILL_BLOCKS" ||
 		!strings.Contains(err.Error(), bSlug) || !strings.Contains(err.Error(), "remove the edges first") {
 		t.Fatalf("unbind of a blocker: %v", err)
 	}
-	if _, err := env.WIs.Patch(a, map[string]json.RawMessage{"bundle_name": json.RawMessage(`"other-bundle"`)}); err != nil {
+	if _, err := env.WIs.Patch(a, map[string]json.RawMessage{"bundle_name": json.RawMessage(`"other-bundle"`)}, env.UserID); err != nil {
 		t.Fatalf("rebind of a blocker refused: %v", err)
 	}
 	if err := env.WIs.RemoveDependency(a, b, "blocks"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.WIs.Patch(a, map[string]json.RawMessage{"bundle_name": json.RawMessage(`null`)}); err != nil {
+	if _, err := env.WIs.Patch(a, map[string]json.RawMessage{"bundle_name": json.RawMessage(`null`)}, env.UserID); err != nil {
 		t.Fatalf("unbind after edge removal: %v", err)
 	}
 }

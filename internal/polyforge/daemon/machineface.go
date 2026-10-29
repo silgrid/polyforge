@@ -1,6 +1,6 @@
 package daemon
 
-// machineface.go: the daemon's cross-machine face state (workbench#11).
+// machineface.go: the daemon's cross-machine face state.
 // The heartbeat negotiates the role; the query long-poll runs for every
 // registered daemon, the message long-poll only for an interactive
 // daemon whose operator has a second live machine. A heartbeat response

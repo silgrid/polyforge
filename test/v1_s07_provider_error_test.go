@@ -99,12 +99,12 @@ func TestV1S07ProviderErrorStorm(t *testing.T) {
 		return strings.Contains(d.logTail(), "driver workflow failed (failed_rewind_exhausted)")
 	})
 
-	// ONE recovery signal for the whole ladder: the failure translation.
+	// No needs_recovery for the whole ladder: the failed exit is no death.
 	// The rewind cycles never left the driver (no re-derivation, no
 	// storm) — the storm bound that matters is the workflow's own.
 	kinds := d.eventKinds(t, wi)
-	if n := countOf(kinds, "needs_recovery"); n != 1 {
-		t.Fatalf("needs_recovery fired %d times, want 1 (the failure signal): %v", n, kinds)
+	if n := countOf(kinds, "needs_recovery"); n != 0 {
+		t.Fatalf("needs_recovery fired %d times, want 0 (a settled failed workflow's exit is no death): %v", n, kinds)
 	}
 	if n := countOf(kinds, "wi_agent_rederived"); n != 0 {
 		t.Fatalf("re-derivation count %d, want 0 (the ladder ran inside one driver): %v", n, kinds)

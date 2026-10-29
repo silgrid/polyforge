@@ -6,7 +6,6 @@
 package workflow
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,7 +18,9 @@ import (
 )
 
 // SharedDir is the sibling of the bundles under a workflows dir that holds
-// the step definitions several bundles share: workflows/_shared/steps/<id>.md.
+// the step definitions several bundles share (workflows/_shared/steps/<id>.md)
+// and the fragments a step definition includes (workflows/_shared/<name>.md,
+// rendered by a {{<name>}} placeholder that needs no vars declaration).
 // It is not a bundle (no workflow.md); materialization copies it next to
 // the bundle so the capsule resolves the same files.
 const SharedDir = "_shared"
@@ -41,45 +42,66 @@ func StepDefinitionPath(bundleDir, stepID string) string {
 	return own
 }
 
+// SharedFragment is the conventional path of one shared fragment a
+// step definition may include: workflows/_shared/<name>.md, rendered
+// by a {{<name>}} placeholder that needs no vars declaration (the
+// {{principles}} include generalized, a block several
+// step files repeat lives once as a fragment and every step file
+// includes it). Fragments are lane-neutral: no bundle, project or
+// repo name is hardcoded in one.
+func SharedFragment(bundleDir, name string) string {
+	return filepath.Join(filepath.Dir(bundleDir), SharedDir, name+".md")
+}
+
 // placeholder is one step-definition variable reference: {{name}}.
 var placeholder = regexp.MustCompile(`\{\{([a-z][a-z0-9_]*)\}\}`)
 
-// PrinciplesVar is the one placeholder a step definition may use without
-// declaring it: {{principles}} renders workflows/_shared/principles.md
-// (PrinciplesFile), the engineering principles shared by every bundle, so
-// the text lives once and each step states around it how it applies them.
+// PrinciplesVar is the reserved shared fragment every step definition
+// may include without declaring it: {{principles}} renders
+// workflows/_shared/principles.md (PrinciplesFile), the engineering
+// principles shared by every bundle, so the text lives once and each
+// step states around it how it applies them.
 const (
 	PrinciplesVar  = "principles"
 	PrinciplesFile = "principles.md"
 )
 
 // ReadStepDefinition reads the step definition StepDefinitionPath
-// resolves and renders it with the step entry's vars (RenderStepVars),
-// plus {{principles}} when the definition uses it (a step entry may not
-// declare that var itself). A read error is returned unwrapped
-// (os.IsNotExist holds).
+// resolves and renders it with the step entry's vars (RenderStepVars)
+// plus its shared fragments: every placeholder that is not a declared
+// var renders workflows/_shared/<name>.md ({{principles}} included —
+// PrinciplesFile, the reserved instance of the general rule). A read
+// error is returned unwrapped (os.IsNotExist holds).
 func ReadStepDefinition(bundleDir, stepID string, vars map[string]string) ([]byte, error) {
 	path := StepDefinitionPath(bundleDir, stepID)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := vars[PrinciplesVar]; ok {
-		return nil, fmt.Errorf("%s: step entry declares the reserved var %q (it renders %s/%s)", path, PrinciplesVar, SharedDir, PrinciplesFile)
+	// A declared var may never shadow a shared fragment file: the
+	// entry's value would silently replace what {{<name>}} renders
+	// from _shared/<name>.md, so the collision is a load error.
+	for name := range vars {
+		if _, err := os.Stat(SharedFragment(bundleDir, name)); err == nil {
+			return nil, fmt.Errorf("%s: step entry declares the reserved var %q (it renders %s/%s.md)", path, name, SharedDir, name)
+		}
 	}
-	if bytes.Contains(raw, []byte("{{"+PrinciplesVar+"}}")) {
-		text, err := os.ReadFile(filepath.Join(filepath.Dir(bundleDir), SharedDir, PrinciplesFile))
+	withFrag := make(map[string]string, len(vars)+1)
+	for k, v := range vars {
+		withFrag[k] = v
+	}
+	for _, m := range placeholder.FindAll(raw, -1) {
+		name := string(m[2 : len(m)-2])
+		if _, ok := withFrag[name]; ok {
+			continue
+		}
+		text, err := os.ReadFile(SharedFragment(bundleDir, name))
 		if err != nil {
-			return nil, fmt.Errorf("%s: {{%s}}: %w", path, PrinciplesVar, err)
+			return nil, fmt.Errorf("%s: {{%s}}: %w", path, name, err)
 		}
-		withP := make(map[string]string, len(vars)+1)
-		for k, v := range vars {
-			withP[k] = v
-		}
-		withP[PrinciplesVar] = strings.TrimSpace(string(text))
-		vars = withP
+		withFrag[name] = strings.TrimSpace(string(text))
 	}
-	out, err := RenderStepVars(raw, vars)
+	out, err := RenderStepVars(raw, withFrag)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}

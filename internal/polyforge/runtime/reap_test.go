@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func writeJournalPID(t *testing.T, capsuleDir string, pid int, startedAt string) {
@@ -111,5 +113,53 @@ func TestEnvMarkerSweepRequiresBothMarkers(t *testing.T) {
 	}
 	if got := scanEnvMarker(wi, daemonB); len(got) != 1 || got[0] != b.Process.Pid {
 		t.Fatalf("scan by B = %v, want [%d]", got, b.Process.Pid)
+	}
+}
+
+// TestReapOrphansWalksTheProcessListOncePerWI (D11): a WI whose journal
+// names many long-dead step pids costs one liveness walk plus the one
+// env-marker/cwd sweep — not a full Cleanup (L1/L2/L5 walks) per pid —
+// while a journaled pid that is still alive is torn down as before.
+func TestReapOrphansWalksTheProcessListOncePerWI(t *testing.T) {
+	wi := runMarker("wi_reap_walks")
+	capsuleDir := t.TempDir()
+	dir := filepath.Join(capsuleDir, "runtime-state")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var lines []byte
+	for i := 0; i < 12; i++ {
+		cmd := exec.Command("true")
+		if err := cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+		blob, _ := json.Marshal(map[string]any{"pid": cmd.Process.Pid, "started_at": "", "spawn_n": i + 1})
+		lines = append(append(lines, blob...), '\n')
+	}
+	livePID, startedAt := startTree(t, wi)
+	blob, _ := json.Marshal(map[string]any{"pid": livePID, "started_at": startedAt, "spawn_n": 13})
+	lines = append(append(lines, blob...), '\n')
+	if err := os.WriteFile(filepath.Join(dir, "spawn-journal.jsonl"), lines, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var walks atomic.Int64
+	orig := procListAllFn
+	procListAllFn = func() ([]int, error) { walks.Add(1); return orig() }
+	defer func() { procListAllFn = orig }()
+
+	(&Runtime{}).reapOrphans(wi, capsuleDir)
+
+	waitDead(t, livePID)
+	// 1 liveness walk + the live tree's own Cleanup (L1 snapshot, L2
+	// group proof/empty polls) + the WI sweep (L4, L5, verify) — 6 here,
+	// bounded independently of the dead pids (each cost 3 walks before: 42).
+	if n := walks.Load(); n > 8 {
+		t.Fatalf("reap walked the process list %d times for 13 journal pids (12 dead)", n)
+	}
+}
+
+func TestCleanupPollIsCoarse(t *testing.T) {
+	if cleanupPoll < 100*time.Millisecond {
+		t.Fatalf("cleanupPoll = %s, want at least 100ms", cleanupPoll)
 	}
 }

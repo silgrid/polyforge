@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/gitops"
@@ -29,7 +31,9 @@ import (
 )
 
 // cleanupBound bounds one teardown's waits inside the six-layer cleanup.
-const cleanupBound = 10 * time.Second
+// A variable (not a const) so the recovery park's bounded wait is testable
+// without a 20s test; production never changes it.
+var cleanupBound = 10 * time.Second
 
 // recoverCore is the recovery sequence, run by the work item's actor
 // across its pushes and the relaunch. cause
@@ -38,6 +42,9 @@ const cleanupBound = 10 * time.Second
 // detail is the observe
 // lane's free-text elaboration ("" when none).
 func (r *Runtime) recoverCore(ctx context.Context, j *job, cause, detail string) {
+	if j.closeParked() {
+		return // a parked close or release owns the job until the old Run exits
+	}
 	if err := j.transition(StateRecovering); err != nil {
 		return // lost the race to SEALING/DONE: the fence did its job
 	}
@@ -78,13 +85,13 @@ func (r *Runtime) recoverCore(ctx context.Context, j *job, cause, detail string)
 		// re-pushes HEAD; a failed push degrades the close to blocked like
 		// every other terminal close.
 		if err := r.stopOp(ctx, j, protocol.FinishWrapped, false, ""); err != nil {
-			fmt.Fprintf(os.Stderr, "runtime: %s: terminal wrap failed (record kept sealing, retrying): %v\n", j.wi, err)
+			logTerminalClose(j, "wrap", err)
 		}
 		return
 	case capsule.WorkflowStatusFailedGate, capsule.WorkflowStatusFailedRewindExhausted:
 		fmt.Fprintf(os.Stderr, "runtime: %s: driver workflow failed (%s) — closing failed (recovery cause %q)\n", j.wi, capsuleWorkflowStatus(j.capsuleDir), cause)
 		if err := r.stopOp(ctx, j, protocol.FinishFailed, false, ""); err != nil {
-			fmt.Fprintf(os.Stderr, "runtime: %s: terminal fail close failed (record kept sealing, retrying): %v\n", j.wi, err)
+			logTerminalClose(j, "fail close", err)
 		}
 		return
 	case capsule.WorkflowStatusBlocked:
@@ -101,7 +108,7 @@ func (r *Runtime) recoverCore(ctx context.Context, j *job, cause, detail string)
 		// commit+push the parked state — journal, step output and the blocked
 		// verdict together. The §6.4 owner moves (resume / cancel) and
 		// every re-materialization read exactly this state.
-		r.boundedFail(ctx, j, "workflow blocked: the owner holds the next move (resume / cancel)")
+		r.boundedFail(ctx, j, blockedWorkflowNote(j.capsuleDir))
 		return
 	}
 	// The single recovery ledger (C7): ONE counter of consecutive recovery
@@ -144,8 +151,20 @@ func (r *Runtime) recoverCore(ctx context.Context, j *job, cause, detail string)
 		}
 	}
 	// Kill the old tree first (§一 Recover): six layers, no writer may
-	// survive next to the re-derivation.
-	r.killAgentTree(j)
+	// survive next to the re-derivation. A handle whose Run is still alive
+	// after its bounded teardown is a live writer: the relaunch must not
+	// happen next to it. Park the WI in RECOVERING with the handle in place
+	// and re-enter recovery once that Run exits (parkRecovery); the
+	// persisted record also resumes at the next daemon start, where no old
+	// Run exists.
+	if err := r.killAgentTree(j); err != nil {
+		j.mu.Lock()
+		h := j.agent
+		j.mu.Unlock()
+		r.persistLog(j.wi)
+		r.parkRecovery(j, h, cause, detail)
+		return
+	}
 
 	// commit-dirty-on-recover (§六): the dead agent's unflushed capsule
 	// state is committed and pushed BEFORE the new instance can touch the
@@ -230,6 +249,18 @@ func (r *Runtime) recoverCore(ctx context.Context, j *job, cause, detail string)
 		}
 		fmt.Fprintf(os.Stderr, "runtime: %s: recovery failed (%d/%d), retrying the ladder\n", j.wi, fails, r.cfg.MaxRecoveries)
 	}
+}
+
+// logTerminalClose logs a terminal close (the completed workflow's wrap,
+// the failed one's fail close) that did not finish here: parked on a
+// driver Run that outlived its teardown — it finishes by itself once that
+// Run exits — or failed, the record kept sealing for the retry.
+func logTerminalClose(j *job, what string, err error) {
+	if j.closeParked() {
+		fmt.Fprintf(os.Stderr, "runtime: %s: terminal %s parked: the driver Run outlived its bounded teardown; the close finishes once that Run exits: %v\n", j.wi, what, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "runtime: %s: terminal %s failed (record kept sealing, retrying): %v\n", j.wi, what, err)
 }
 
 // errEngineStopped is startEngine's answer when the shutdown came while
@@ -346,20 +377,49 @@ func (r *Runtime) recovered(j *job, h AgentHandle, cause string) {
 	})
 }
 
-// capsuleWorkflowStatus answers the capsule's execution.json
-// workflow_status ("" when absent or unreadable — a legacy WI-Agent
-// capsule or a pre-init scene; the caller treats that as "no terminal
-// verdict" and recovers as before).
-func capsuleWorkflowStatus(capsuleDir string) string {
+// capsuleExecution reads the capsule's execution.json (the zero value
+// when absent or unreadable — a legacy WI-Agent capsule or a pre-init
+// scene).
+func capsuleExecution(capsuleDir string) capsule.Execution {
+	var exec capsule.Execution
 	raw, err := os.ReadFile(filepath.Join(capsuleDir, capsule.ExecutionJSON))
 	if err != nil {
-		return ""
+		return capsule.Execution{}
 	}
-	var exec capsule.Execution
 	if json.Unmarshal(raw, &exec) != nil {
-		return ""
+		return capsule.Execution{}
 	}
-	return exec.WorkflowStatus
+	return exec
+}
+
+// capsuleWorkflowStatus answers the capsule's execution.json
+// workflow_status ("" when absent or unreadable; the caller treats that
+// as "no terminal verdict" and recovers as before).
+func capsuleWorkflowStatus(capsuleDir string) string {
+	return capsuleExecution(capsuleDir).WorkflowStatus
+}
+
+// blockedReasonNoteMax bounds the driver's blocked_reason inside the
+// blocked close's note (runes): the note rides the SessionEnd, the
+// persisted record and RTFinished, and a reason the driver copied from a
+// step's output must not balloon them.
+const blockedReasonNoteMax = 500
+
+// blockedWorkflowNote is the hub note of a workflow the driver parked
+// blocked: the owner's moves, plus the driver's own blocked_reason when it
+// recorded one (a host-class fault, a failure counter at its bound) — the
+// owner reads why from the hub without opening the capsule. An honest
+// incomplete result records no reason and keeps the plain note.
+func blockedWorkflowNote(capsuleDir string) string {
+	const note = "workflow blocked: the owner holds the next move (resume / cancel)"
+	reason := strings.TrimSpace(capsuleExecution(capsuleDir).BlockedReason)
+	if reason == "" {
+		return note
+	}
+	if rs := []rune(reason); len(rs) > blockedReasonNoteMax {
+		reason = string(rs[:blockedReasonNoteMax]) + "…"
+	}
+	return note + "; blocked reason: " + reason
 }
 
 // boundedFail terminates the WI without a relaunch: SessionEnd(blocked)
@@ -380,8 +440,14 @@ func (r *Runtime) boundedFail(ctx context.Context, j *job, detail string) {
 	// and commits+pushes best-effort here, not in the callers. The head
 	// the capsule ends at rides the blocked verdict (cross-daemon continue
 	// check, §7). The observe monitor goes with the tree: none of its
-	// pushes may run after the SessionEnd(blocked) below.
-	r.killAgentTree(j)
+	// pushes may run after the SessionEnd(blocked) below. A driver Run
+	// that outlives its bounded teardown is still a writer: the verdict
+	// parks with the record as it is (the same state a crash right here
+	// leaves) and its waiter re-runs this close once that Run exits.
+	if err := r.killAgentTree(j); err != nil {
+		_ = r.parkClose(j, "blocked", protocol.FinishBlocked, func() { r.boundedFail(r.ctx, j, detail) })
+		return
+	}
 	r.releaseMonitor(j.wi)
 	head := ""
 	chainPushed := true // nothing local to push without a capsule
@@ -401,8 +467,7 @@ func (r *Runtime) boundedFail(ctx context.Context, j *job, detail string) {
 	// When boundedFail's own push did not land, the close goes through
 	// closeBlocked's push-then-close, so a hub blip never lets
 	// SessionEnd(blocked) land with unpushed commits.
-	settled := r.closeBlocked(j, !chainPushed)
-	r.finishBlocked(j, detail, settled)
+	r.finishBlocked(j, detail, r.closeBlocked(j, !chainPushed))
 }
 
 // commitDirty is the commit-dirty-on-recover step (§六): stage everything,
@@ -467,25 +532,251 @@ func (r *Runtime) SaveTaskWIP(ctx context.Context, wi string) {
 // write and the next dispatch.
 const stepWIPBound = 30 * time.Second
 
-// stepEnded is wi's driver step-end hook: the WIP push of the task-repo
-// work the step left uncommitted, so a kill -9 after a step end loses
-// none of it on a re-claim.
+// stepEnded is the driver's step-end sequence, run synchronously before the
+// dispatch's result/failure is written: first the escapee sweep, then the
+// WIP push of the task-repo work the step left uncommitted, so a kill -9
+// after a step end loses none of it on a re-claim. The driver dispatches
+// one step at a time per WI, so no successor exists while this runs; and
+// the dispatch's wall ends before this hook (driver.Run's endedAt), so
+// neither the sweep nor the push is booked into the step's T.
 func (r *Runtime) stepEnded(wi string) func(context.Context) {
 	return func(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(ctx, stepWIPBound)
 		defer cancel()
+		r.sweepStepEscapees(wi)
 		r.SaveTaskWIP(ctx, wi)
 	}
 }
 
+// sweepStepEscapees kills what the ended step left outside its process
+// group (a child that called setsid or double-forked): the same L4
+// env-marker layer the WI-level teardown runs.
+func (r *Runtime) sweepStepEscapees(wi string) {
+	rep, err := Cleanup(CleanupTarget{WIID: wi, DaemonID: r.cfg.MachineID}, cleanupBound)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: %s: step-end escapee sweep incomplete: %v (warnings: %v)\n", wi, err, rep.Warnings)
+	}
+}
+
+// EventRecoveryParked is the durable, owner-visible record of a recovery
+// that could not prove the old driver Run gone: the WI stays RECOVERING
+// with the old handle in place until that Run exits (parkRecovery), so no
+// second driver writes execution.json next to it.
+const EventRecoveryParked = "recovery_parked"
+
+// parkRecovery parks j's recovery on a live old handle and arranges its one
+// exit: as soon as that Run reports Done, the WI's actor re-enters recovery
+// (resumeRecord kills the now-done handle and relaunches). The wait is a
+// goroutine, never the actor, and it ends with the shutdown — the persisted
+// RECOVERING record then resumes at the next daemon start. The park emits an
+// owner-visible event so a WI that waits is visible, not silent.
+//
+// The re-entry is only for the JOB THAT IS STILL PARKED: while it waits the
+// owner may close the WI (Stop → stopOp: RECOVERING→SEALING, the close itself
+// parked on the same handle until it exits — parkClose) or it may be
+// superseded / no longer ours (a release, parked the same way while the Run
+// lives, then dropJob), so j.agent may still name h; re-entering then would
+// resumeRecord a closing or dropped record to RUNNING and relaunch a driver
+// for a closed or quarantined WI. Hence all three checks below (same job in
+// the table, still RECOVERING, same handle); a release parked while the job
+// stays RECOVERING is refused by resumeRecord itself, before any change.
+func (r *Runtime) parkRecovery(j *job, h AgentHandle, cause, detail string) {
+	if h == nil {
+		return
+	}
+	r.tap(j.wi, EventRecoveryParked, map[string]any{
+		"cause":  cause,
+		"detail": detail,
+		"note":   "the old driver Run outlived its bounded teardown; the WI stays RECOVERING until it exits, then recovery re-enters (a daemon restart resumes it too)",
+	})
+	fmt.Fprintf(os.Stderr, "runtime: %s: recovery parked: the old driver Run outlived its bounded teardown; re-entering recovery when it exits\n", j.wi)
+	go func() {
+		if !waitHandleDone(r.ctx, h) {
+			return // the shutdown: the persisted record waits for the next start
+		}
+		r.post(j.wi, func() {
+			if r.ctx.Err() != nil {
+				return
+			}
+			if r.jobOf(j.wi) != j {
+				return // closed or superseded while parked: the job is gone
+			}
+			if stateOf(j) != StateRecovering {
+				return // the close (SEALING/DONE) or another transition ended the park
+			}
+			j.mu.Lock()
+			parked := j.agent == h
+			j.mu.Unlock()
+			if !parked {
+				return // a different handle (or none) owns the job now
+			}
+			_, _ = r.resumeRecord(j, cause, detail)
+		})
+	}()
+}
+
+// EventCloseParked is the durable, owner-visible record of a close (a
+// seal, a pause, a blocked verdict, or a release of a session that is no
+// longer ours) that could not prove the old driver Run gone: nothing
+// pushes, saves WIP, seals or quarantines the capsule, and the record is
+// not dropped, until that Run exits; then the close finishes by itself
+// (parkClose).
+const EventCloseParked = "close_parked"
+
+// parkKindRelease is the park kind of a release (supersede, notOurs): its
+// operator answer names the release, not a close the operator asked for.
+const parkKindRelease = "release"
+
+// closePark names one parked close: the live handle it waits on and its
+// kind (close, pause, blocked, release).
+type closePark struct {
+	h    AgentHandle
+	kind string
+}
+
+// closeParked reports whether a close of j is parked on a live Run.
+func (j *job) closeParked() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.closePark != nil
+}
+
+// parkedError is the operator-facing answer of j's parked close.
+func (j *job) parkedError(wi string) error {
+	j.mu.Lock()
+	kind := ""
+	if j.closePark != nil {
+		kind = j.closePark.kind
+	}
+	j.mu.Unlock()
+	return closeParkedError(wi, kind)
+}
+
+// closeParkedError is the operator-facing answer of a parked close of the
+// given kind.
+func closeParkedError(wi, kind string) error {
+	if kind == parkKindRelease {
+		return &api.Error{Code: api.ErrDaemonConflict, Detail: fmt.Sprintf(
+			"%s: the release of this work item is parked — its session is no longer this daemon's, but the previous driver Run outlived its bounded teardown and may still write the capsule, so the capsule is not quarantined and the record not dropped next to it; the release finishes by itself once that Run exits (event %s; a daemon restart finishes it too)",
+			wi, EventCloseParked)}
+	}
+	return &api.Error{Code: api.ErrDaemonConflict, Detail: fmt.Sprintf(
+		"%s: the close is parked — the previous driver Run outlived its bounded teardown and may still write the capsule, so nothing is pushed, saved or sealed next to it; the close finishes by itself once that Run exits (event %s; a daemon restart finishes it too)",
+		wi, EventCloseParked)}
+}
+
+// parkClose parks a close of j whose teardown left the driver Run alive,
+// the close-side mirror of parkRecovery: the record keeps the state the
+// close already persisted (a crash here would leave the same record, and
+// the restart finishes it with no old Run around), the handle stays in
+// place, an owner-visible event names the park, and a waiter goroutine —
+// never the actor — runs finish on the actor once that Run exits. finish
+// runs only for the park still standing: the same job in the table, this
+// park not replaced, the same handle. It answers the operator's 409.
+func (r *Runtime) parkClose(j *job, kind, reason string, finish func()) error {
+	j.mu.Lock()
+	h := j.agent
+	p := &closePark{h: h, kind: kind}
+	j.closePark = p
+	j.mu.Unlock()
+	st, _ := j.snapshot()
+	r.persistLog(j.wi)
+	r.tap(j.wi, EventCloseParked, map[string]any{
+		"kind":   kind,
+		"reason": reason,
+		"state":  string(st),
+		"note":   "the old driver Run outlived its bounded teardown; the close waits (no push, WIP save or seal next to it) and finishes once that Run exits (a daemon restart finishes it too)",
+	})
+	fmt.Fprintf(os.Stderr, "runtime: %s: %s parked (%s): the old driver Run outlived its bounded teardown; finishing it when that Run exits\n", j.wi, kind, reason)
+	if h != nil {
+		go func() {
+			if !waitHandleDone(r.ctx, h) {
+				return // the shutdown: the persisted record finishes at the next start
+			}
+			r.post(j.wi, func() {
+				if r.ctx.Err() != nil || r.jobOf(j.wi) != j {
+					return
+				}
+				j.mu.Lock()
+				standing := j.closePark == p && j.agent == h
+				if standing {
+					j.closePark = nil
+				}
+				j.mu.Unlock()
+				if standing {
+					finish()
+				}
+			})
+		}()
+	}
+	return closeParkedError(j.wi, kind)
+}
+
+// waitHandleDone waits for h's Run to end, bounded only by the shutdown. A
+// handle that exposes Exit is selected on it; one that only answers Done is
+// polled. It reports false when ctx ended first.
+func waitHandleDone(ctx context.Context, h AgentHandle) bool {
+	if ex, ok := h.(interface{ Exit() <-chan struct{} }); ok {
+		select {
+		case <-ex.Exit():
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	t := time.NewTicker(20 * time.Millisecond)
+	defer t.Stop()
+	for {
+		if h.Done() {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+		}
+	}
+}
+
+// TerminateAgentHandle terminates h within bound and, when Terminate reports
+// that the handle outlived it, waits up to another bound for the handle's
+// own Done. It answers an error only when the handle is still alive at the
+// end: a done handle is a proven teardown whatever error its Run returned.
+// A caller that must not relaunch next to a live writer treats that error as
+// "park", never as a licence to proceed.
+func TerminateAgentHandle(h AgentHandle, bound time.Duration) error {
+	if h == nil {
+		return nil
+	}
+	terr := h.Terminate(bound)
+	if h.Done() {
+		return nil
+	}
+	deadline := time.Now().Add(bound)
+	for !h.Done() {
+		if time.Now().After(deadline) {
+			if terr == nil {
+				terr = errors.New("agent handle did not report Done")
+			}
+			return fmt.Errorf("agent handle still alive after the teardown wait: %w", terr)
+		}
+		sleepFn(cleanupPoll)
+	}
+	return nil
+}
+
 // killAgentTree tears the current agent's whole tree down through the six
-// layers and clears the handle.
-func (r *Runtime) killAgentTree(j *job) {
+// layers. It clears the handle only once the teardown is proven: a live
+// driver Run is a live writer, and its handle stays in place so recovery
+// cannot mistake the job for agentless.
+func (r *Runtime) killAgentTree(j *job) error {
 	j.mu.Lock()
 	pid := j.agentPID
 	start := j.agentStartedAt
 	h := j.agent
-	j.agent = nil
+	if pid > 0 || h == nil {
+		j.agent = nil
+	}
 	j.mu.Unlock()
 	// v2 driver shape (the #99 verification lesson): a bridge handle
 	// carries no process id (agentPID 0 — the handle's PID is the daemon
@@ -497,18 +788,24 @@ func (r *Runtime) killAgentTree(j *job) {
 	// canceling the driver context unwinds Run, which terminates its
 	// live step process on the way out.
 	if h != nil && pid <= 0 {
-		if err := h.Terminate(cleanupBound); err != nil {
-			fmt.Fprintf(os.Stderr, "runtime: %s: driver handle teardown incomplete: %v\n", j.wi, err)
+		if err := TerminateAgentHandle(h, cleanupBound); err != nil {
+			fmt.Fprintf(os.Stderr, "runtime: %s: driver handle teardown incomplete: %v (old Run still alive; the caller parks)\n", j.wi, err)
+			return err
 		}
+		j.mu.Lock()
+		if j.agent == h {
+			j.agent = nil
+		}
+		j.mu.Unlock()
 		r.reapOrphans(j.wi, j.capsuleDir)
-		return
+		return nil
 	}
 	if pid <= 0 {
 		// driver job with no live handle (the daemon crashed and the
 		// record carries pid 0): the journal + env-marker reap is the
 		// only way to find the step processes.
 		r.reapOrphans(j.wi, j.capsuleDir)
-		return
+		return nil
 	}
 	rep, err := Cleanup(CleanupTarget{
 		PID:        pid,
@@ -521,6 +818,7 @@ func (r *Runtime) killAgentTree(j *job) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "runtime: %s: agent tree cleanup incomplete: %v (warnings: %v)\n", j.wi, err, rep.Warnings)
 	}
+	return nil
 }
 
 // LifecycleCause reports whether a recovery cause is a daemon restart,

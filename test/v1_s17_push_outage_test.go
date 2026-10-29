@@ -129,8 +129,9 @@ func TestV1S17PushOutageKeepsDriverAndCatchesUp(t *testing.T) {
 			t.Fatalf("step %s: %+v, want done", step, st)
 		}
 	}
-	// Still exactly the one attempt instance across the whole episode.
-	if n := countOf(d.eventKinds(t, wi), "needs_recovery"); n != 1 {
-		t.Fatalf("needs_recovery fired %d times, want 1 (the completion signal): %v", n, d.eventKinds(t, wi))
+	// Still exactly the one attempt instance across the whole episode (and
+	// the completion records no needs_recovery).
+	if n := countOf(d.eventKinds(t, wi), "needs_recovery"); n != 0 {
+		t.Fatalf("needs_recovery fired %d times, want 0 (the completion is no death): %v", n, d.eventKinds(t, wi))
 	}
 }

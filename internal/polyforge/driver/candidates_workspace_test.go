@@ -75,6 +75,21 @@ func seedExecution(t *testing.T, execPath, stepID, status string, attempts []cap
 	}
 }
 
+// seedDispatch sets the step's awaited dispatch ordinal: the real in-flight
+// shape step_start always writes (Step.Dispatch = SpawnN).
+func seedDispatch(t *testing.T, execPath, stepID string, n int64) {
+	t.Helper()
+	exec := loadExecFile(t, execPath)
+	exec.Steps[stepID].Dispatch = n
+	blob, err := json.MarshalIndent(exec, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(execPath, blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // infraAttempt is the archive of dispatch n's death; cand is the
 // candidate string the dying dispatch ran (polyforge#33 stamps it).
 func infraAttempt(n int, failureCause, cand string) capsule.Attempt {
@@ -214,6 +229,7 @@ func TestInterruptedDispatchArchivesOnce(t *testing.T) {
 	dir := t.TempDir()
 	execPath := filepath.Join(dir, capsule.ExecutionJSON)
 	seedExecution(t, execPath, "fix", capsule.StepInProgress, nil)
+	seedDispatch(t, execPath, "fix", 1)
 	sp := &fakeSpawner{script: []fakeEntry{done(`{"summary":"ok"}`)}}
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
@@ -266,7 +282,9 @@ func TestInterruptedDispatchArchivesOnce(t *testing.T) {
 func TestCrashInSwitchWindowStillSwitches(t *testing.T) {
 	dir := t.TempDir()
 	execPath := filepath.Join(dir, capsule.ExecutionJSON)
-	seedExecution(t, execPath, "fix", capsule.StepInProgress, []capsule.Attempt{att(FailModelError, "pi:eff-a")})
+	// two consecutive model_errors on eff-a: the second chose the switch
+	// (the first alone resumes eff-a, ModelErrorRotationThreshold)
+	seedExecution(t, execPath, "fix", capsule.StepInProgress, []capsule.Attempt{att(FailModelError, "pi:eff-a"), att(FailModelError, "pi:eff-a")})
 	raw, err := os.ReadFile(execPath)
 	if err != nil {
 		t.Fatal(err)

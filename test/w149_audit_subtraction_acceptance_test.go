@@ -172,9 +172,17 @@ func w149Block(t *testing.T, inst *v1Install, id string) {
 }
 
 // w149Claim claims the WI with a fresh session and returns the session
-// secret (the WI is left RUNNING, its session held).
+// secret (the WI is left RUNNING, its session held). A claim records its
+// machine only when the machines row is the claimer's own,
+// so the probe machine is first registered to the install's admin — the
+// very identity inst.client claims with — keeping session_machine on the
+// wire.
 func w149Claim(t *testing.T, inst *v1Install, id string) string {
 	t.Helper()
+	pub, priv := w57Key(t, 0x49)
+	if ans := w57Register(t, inst, inst.adminKey, "m-e2e-probe", priv, pub); ans.Status != http.StatusOK {
+		t.Fatalf("premise: register m-e2e-probe to the claimer: %s", ans)
+	}
 	req := sessionClaimReq(id)
 	if _, err := inst.client.SessionClaim(req); err != nil {
 		t.Fatalf("claim %s: %v", id, err)

@@ -146,7 +146,7 @@ func sealedTaskStore(j *job) (string, error) {
 	if out, err := gitTask(context.Background(), store, "init", "--quiet", "--bare", "--template=", store); err != nil {
 		return store, fmt.Errorf("%v: %s", err, strings.TrimSpace(out))
 	}
-	// The carrier lane now pushes shallow (workbench#39); the local store
+	// The carrier lane now pushes shallow; the local store
 	// must take a shallow update exactly as the aihub bare repo does.
 	if out, err := gitTask(context.Background(), store, "--git-dir="+store, "config", "receive.shallowUpdate", "true"); err != nil {
 		return store, fmt.Errorf("%v: %s", err, strings.TrimSpace(out))

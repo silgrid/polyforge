@@ -116,7 +116,7 @@ type Config struct {
 	Limits supervise.Defaults
 	// LimitsFunc, when set, answers the CURRENT global defaults at every
 	// judgement, so a daemon reload of step_timeout/stall_window takes
-	// effect without a restart (workbench#3). nil keeps Limits.
+	// effect without a restart. nil keeps Limits.
 	LimitsFunc func() supervise.Defaults
 	// MaxStepFailures is the per-step failure counter bound (default 3).
 	MaxStepFailures int
@@ -187,11 +187,10 @@ type Driver struct {
 	// parked on an open question; one buffered slot, coalescing.
 	wake chan struct{}
 
-	// rejects/priorRejection track per-step envelope-rejection state for
-	// the in-process re-dispatch lane (the #97/#107 lessons): the count
-	// bounds the retries, the string rides the next dispatch's prompt as
-	// visible feedback so the author can fix the actual defect.
-	rejects        map[string]int
+	// priorRejection tracks the per-step envelope-rejection feedback for
+	// the in-process re-dispatch lane (the #97/#107 lessons): the string
+	// rides the next dispatch's prompt as visible feedback so the author
+	// can fix the actual defect. The count itself is durable on Step.
 	priorRejection map[string]string
 	// unbooked is the wall time of finished dispatches not yet written
 	// into the step's cumulative runtime (the T accumulator): folded into
@@ -296,7 +295,6 @@ func New(cfg Config) (*Driver, error) {
 		cfg:            cfg,
 		log:            cfg.Log,
 		wake:           make(chan struct{}, 1),
-		rejects:        make(map[string]int),
 		priorRejection: make(map[string]string),
 		unbooked:       make(map[string]int64),
 		bundleDir:      bundleDir,
@@ -364,6 +362,17 @@ func (d *Driver) Run(ctx context.Context) error {
 			return fmt.Errorf("driver: interrupted-dispatch archive failed: %w", err)
 		}
 	}
+	// A decided backoff survives this driver's predecessor: the attempts
+	// ledger names the death that owes it and when it happened (RetryOwed),
+	// so a restart or relaunch during the wait serves only its remainder
+	// before the next dispatch instead of re-dispatching into the same
+	// outage. Within one Run the failure path waits for itself
+	// (failDispatch), so this runs once per Run.
+	if collected == nil {
+		if err := d.awaitOwedRetry(ctx); err != nil {
+			return err
+		}
+	}
 	for {
 		if d.takeStalled() != nil {
 			return ErrDriverStalled // the supervisor's needs_recovery records the stall
@@ -371,6 +380,11 @@ func (d *Driver) Run(ctx context.Context) error {
 		if collected != nil {
 			res := collected
 			collected = nil
+			// Book the dead dispatch's runtime before its envelope settles
+			// ( B4): the measure ends where the dispatch actually
+			// ran — at the envelope's daemon stamp — so daemon downtime and a
+			// paused period are not counted (the D6 lifecycle ruling).
+			d.bookCollectedWall(res)
 			if stop, err := d.settle(res.StepID, collectedN, res, nil); stop {
 				return err
 			}
@@ -399,6 +413,19 @@ func (d *Driver) Run(ctx context.Context) error {
 			continue
 		}
 
+		// criterion 6 (widened by D3): a gate whose
+		// tree is unchanged since its last verdict, after a rewind of the
+		// build step, must not be re-run — crashed build attempt or not. Park
+		// the workflow with a human-visible reason (the rewinding verdict, the
+		// build step's summary, the crash when there was one) instead of
+		// spending a full verification/review and another rewind slot on an
+		// identical resubmission.
+		if blocked, err := d.blockUnchangedGateTree(stepID); err != nil {
+			return err
+		} else if blocked {
+			continue
+		}
+
 		if blocked, err := d.composeDispatch(stepID); err != nil {
 			return err
 		} else if blocked {
@@ -412,6 +439,18 @@ func (d *Driver) Run(ctx context.Context) error {
 		if spawn == nil {
 			continue // an open question is parked; plan again once answered
 		}
+		// item 6: the first dispatch of a round a rewind reset
+		// keeps its dispatch SHAPE across a crash that lands after the
+		// step_start but before the spawn journal line. The verdict itself
+		// needs no restoration: it stays in pending_rewind_input for the
+		// whole round, so prepareDispatch already put it on
+		// this spawn.
+		if d.rewindReentryOrder(stepID) {
+			spawn.Resume = false
+		}
+		// the gate's plan-conformance facts — git reads, so
+		// computed here, outside d.mu (the verifiedHeads pattern).
+		spawn.PlanConformance = d.planConformance(stepID)
 
 		if err := d.transition(TransitionRequest{
 			Kind:      TransStepStart,
@@ -436,13 +475,23 @@ func (d *Driver) Run(ctx context.Context) error {
 			// a failed dispatch like any other — classified, counted,
 			// retried or blocked.
 			cause, code, detail := classifyWaitFailure(fmt.Errorf("driver: step %s spawn %d failed: %w", stepID, n, err))
-			if stop, err := d.failDispatch(ctx, stepID, n, dispatchedAt, cause, code, detail, nil); stop {
+			if stop, err := d.failDispatch(ctx, stepID, n, dispatchedAt, d.now(), cause, code, detail, nil); stop {
 				return err
 			}
 			continue
 		}
-		d.announceStart(spawn, run, dispatchedAt)
+		announced := d.announceStart(spawn, run, dispatchedAt)
 		res, werr, verdict := d.awaitDispatch(ctx, run, stepID, n)
+		// The dispatch's wall ends when its process is known gone. The
+		// step-end hooks below are cleanup: charging their cost to T would
+		// turn a step-end /proc scan into the next dispatch's timeout.
+		endedAt := d.now()
+		// R4: the wall booked into T starts after the
+		// observation gaps the supervisor declared during this dispatch (a
+		// host or daemon freeze it forgave), so the next dispatch of the
+		// step does not inherit the freeze as PriorRuntime. Read before
+		// step_ended, which drops the dispatch's tracker.
+		bookedFrom := dispatchedAt.Add(d.declaredPause(n, announced))
 		if d.cfg.StepEnded != nil && ctx.Err() == nil {
 			d.cfg.StepEnded(ctx)
 		}
@@ -461,7 +510,7 @@ func (d *Driver) Run(ctx context.Context) error {
 			// step_failed write, so a reader that sees step_dead is guaranteed
 			// to see its step_failed too (the acceptance contract) without
 			// delaying the verdict behind the D7 backoff sleep.
-			if stop, err := d.failDispatch(ctx, stepID, n, dispatchedAt, verdictCause(*verdict), -1, verdict.Evidence, verdict); stop {
+			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, verdictCause(*verdict), -1, verdict.Evidence, verdict); stop {
 				return err
 			}
 			continue
@@ -479,13 +528,13 @@ func (d *Driver) Run(ctx context.Context) error {
 				return fmt.Errorf("driver: step %s dispatch %d ended without a result: %w", stepID, n, werr)
 			}
 			cause, code, detail := classifyWaitFailure(werr)
-			if stop, err := d.failDispatch(ctx, stepID, n, dispatchedAt, cause, code, detail, nil); stop {
+			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, cause, code, detail, nil); stop {
 				return err
 			}
 			continue
 		}
 		d.announceEnd(stepID, n, supervise.OutcomeResult, 0, "")
-		d.addUnbooked(stepID, dispatchedAt)
+		d.addUnbookedUntil(stepID, bookedFrom, endedAt)
 		crashpoint.At("driver.collected:" + stepID)
 		if stop, err := d.settle(stepID, n, res, run); stop {
 			return err
@@ -523,6 +572,354 @@ func (d *Driver) unconsumedResult() (*StepResult, int64) {
 	return res, n
 }
 
+// bookCollectedWall books the runtime of a dispatch whose envelope a dead
+// predecessor collected ( B4). The measure starts at the
+// dispatch's StepStartedAt and ends at the envelope's daemon-stamped
+// SubmittedAt: the agent stopped running when it delivered, so the daemon
+// downtime before this successor collected the envelope — and any paused
+// period, in which no successor re-stamped StepStartedAt — is not counted
+// (the D6 lifecycle ruling). Only a synthetic envelope without the stamp
+// (no production path) has no better bound than now.
+func (d *Driver) bookCollectedWall(res *StepResult) {
+	d.mu.Lock()
+	st := d.exec.Steps[res.StepID]
+	startedAt := ""
+	if st != nil {
+		startedAt = st.StepStartedAt
+	}
+	d.mu.Unlock()
+	from, err := time.Parse(time.RFC3339Nano, startedAt)
+	if err != nil {
+		return
+	}
+	until := res.SubmittedAt
+	if until.IsZero() {
+		until = d.now()
+	}
+	d.addUnbookedUntil(res.StepID, from, until)
+}
+
+// rewindReentryOrder answers the dispatch SHAPE a rewind still owes the
+// first new-round dispatch after a crash landed following that dispatch's
+// step_start but before its spawn-journal line ( item 6).
+// One rule covers every step the rewind re-enters: a resume never crosses
+// a rewind boundary. The boundary is the newest archive that reset or
+// re-entered the step — its own gate_fail_rewind* (the target) or
+// superseded_by_rewind attempt (a step between target and gate), or, for
+// the gate, any archive carrying that gate's rewind_gate.
+//
+// Until a dispatch of the new round is journaled, such a step starts
+// without resume (the light causes keep theirs); a superseded step and
+// the gate simply start fresh. Archived infra_failure attempts after the
+// boundary (daemon_restart, driver_relaunch, a pre-journal spawn failure's
+// step_failed) are audit only and never move it; the spawn journal is the
+// bound, after which the ordinary resume is correct.
+//
+// The verdict is NOT this function's business: it stays in
+// steps.<id>.pending_rewind_input for the whole round, so every dispatch
+// of the round — this crash re-entry, a post-journal retry, the restart
+// after a daemon death — reads it from there and no restoration path
+// exists.
+func (d *Driver) rewindReentryOrder(stepID string) (forceFresh bool) {
+	d.mu.Lock()
+	st := d.exec.Steps[stepID]
+	if st == nil || st.Status != capsule.StepInProgress {
+		d.mu.Unlock()
+		return false
+	}
+	// The step's own archives are the target/superseded boundary; every
+	// other step's archive whose rewind_gate names this step is the gate
+	// boundary. The newest one wins: an older rewind the step already
+	// re-entered no longer matters.
+	var boundary capsule.Attempt
+	boundaryAt := time.Time{}
+	own := false
+	found := false
+	take := func(a capsule.Attempt, ownArchive bool) {
+		if !rewindArchive(a.Cause) {
+			return
+		}
+		at, err := time.Parse(time.RFC3339Nano, a.ArchivedAt)
+		if err != nil {
+			return
+		}
+		if !found || at.After(boundaryAt) {
+			boundary, boundaryAt, own, found = a, at, ownArchive, true
+		}
+	}
+	for _, a := range st.Attempts {
+		take(a, true)
+	}
+	for _, other := range d.exec.Steps {
+		if other == st {
+			continue
+		}
+		for _, a := range other.Attempts {
+			if a.RewindGate == stepID {
+				take(a, false)
+			}
+		}
+	}
+	d.mu.Unlock()
+	if !found || d.spawnJournaledSince(stepID, boundaryAt) {
+		return false
+	}
+	// The light causes keep their resume; only the fresh target, a
+	// superseded step and the gate start a new conversation.
+	return !(own && (boundary.Cause == CauseGateFailRewindTextOnly || boundary.Cause == CauseGateFailRewindMechanical))
+}
+
+// gateUnchangedBlockPrefix marks the driver-authored blocked_reason of the
+// criterion-6 guard. The owner's resume clears the gate's
+// last-judged tree so the explicit override can run the gate once on the
+// same tree instead of blocking again.
+const gateUnchangedBlockPrefix = "gate tree unchanged: "
+
+// unchangedTreeSummaryRunes bounds the build step's own summary quoted into
+// the unchanged-tree block reason (one line, a human-facing excerpt).
+const unchangedTreeSummaryRunes = 300
+
+// blockUnchangedGateTree is the criterion-6 pre-dispatch
+// guard. It parks the workflow blocked (a human-visible result; the owner's
+// `pf resume` unblocks it) when ALL of the following hold:
+//
+//   - the step about to dispatch is a workflow gate with a recorded
+//     last-judged task-repo tree;
+//   - a rewind of the lane's BUILD step archived at/after that verdict
+//     re-entered this gate (its own range was [build step, gate));
+//   - the task-repo tree now is byte-identical to the one the gate last
+//     judged: the build round that rewind opened produced no change.
+//
+// Whether the rewound build step crashed on the way does not matter
+// ( D3): re-judging an identical tree can only repeat the
+// verdict or pass by chance, so a build agent that received the verdict
+// and changed nothing parks exactly like a crashed attempt's retry. The
+// reason names the gate that is not re-run, the rewinding gate and its
+// verdict round, the crashed build attempt when there was one, and a
+// bounded excerpt of the build step's own summary (why it changed nothing).
+//
+// The build-step condition is what keeps the guard off rewinds whose
+// target's product is an artifact (spec, repro, the deliver 「全量重验」
+// verification re-run): those may legitimately change the artifact while
+// the task-repo tree stays put, so they are not a "no progress"
+// resubmission. The build step is derived from the lane (buildStep), never
+// a hard-coded step id.
+//
+// It never starts the gate, so no full verification/review runs and no
+// rewind slot is charged. A light recheck and its in-place escalation are
+// deliberately exempt: they are the designed same-tree fast lanes. A light
+// REWIND (text_only, mechanical) is not: its re-entered build step resumes
+// to change the tree, and a resumed round that changed nothing parks like
+// any other. Nor is the full verification after a light recheck a fresh
+// re-derivation abandoned ( S2): it archives the same
+// light_recheck_escalated cause, but a fresh build round came between, so
+// only inPlaceEscalationContext exempts.
+func (d *Driver) blockUnchangedGateTree(stepID string) (bool, error) {
+	d.mu.Lock()
+	spec := d.workflow.step(stepID)
+	st := d.exec.Steps[stepID]
+	if spec == nil || !spec.Gate || st == nil || st.JudgedRepoHash == "" ||
+		st.PendingLightRecheck != nil || inPlaceEscalationContext(st.Attempts) {
+		d.mu.Unlock()
+		return false, nil
+	}
+	gateIdx, ok := d.workflow.indexOf(stepID)
+	if !ok {
+		d.mu.Unlock()
+		return false, nil
+	}
+	buildStep := d.workflow.buildStep()
+	if buildStep == "" {
+		d.mu.Unlock()
+		return false, nil
+	}
+	judgedAt, ok := d.gateLastVerdictAtLocked(stepID)
+	if !ok {
+		d.mu.Unlock()
+		return false, nil
+	}
+	target, rewindGate, crash, ok := d.buildRewindSinceLocked(gateIdx, buildStep, judgedAt)
+	if !ok {
+		d.mu.Unlock()
+		return false, nil
+	}
+	judgedHash, judgedStamp := st.JudgedRepoHash, judgedAt.UTC().Format(time.RFC3339Nano)
+	round := d.exec.ReviewRounds[rewindGate]
+	summary := fmt.Sprintf("%q gave no summary.", target)
+	if tst := d.exec.Steps[target]; tst != nil {
+		if s, _ := tst.Output["summary"].(string); strings.TrimSpace(s) != "" {
+			summary = fmt.Sprintf("%q's summary: %q.", target, oneLine(s, unchangedTreeSummaryRunes))
+		}
+	}
+	d.mu.Unlock()
+
+	if d.wi.CapsuleDir == "" {
+		return false, nil
+	}
+	cur, herr := reposTreeHashFn(d.wi.CapsuleDir)
+	if herr != nil || cur != judgedHash {
+		return false, nil
+	}
+	resubmitted, next := "re-submitted the identical tree",
+		fmt.Sprintf("Change %q's tree, or resume to have the gates judge this same tree once more.", target)
+	if crash != nil {
+		resubmitted = fmt.Sprintf("re-submitted the identical tree after its attempt %d (started %s) crashed with %s",
+			crash.AttemptSeq, crash.StartedAt, crash.FailureCause)
+		next = fmt.Sprintf("Resolve %q's failure (or change its tree) and resume.", target)
+	}
+	reason := fmt.Sprintf("%sgate %q last judged the task-repo tree %s at %s; the rewound step %q %s: the build round after gate %q's FAIL verdict (verdict round %d) produced no change, so the gate is not re-run and no rewind slot is charged. %s %s",
+		gateUnchangedBlockPrefix, stepID, shortTreeHash(judgedHash), judgedStamp, target, resubmitted,
+		rewindGate, round, summary, next)
+	if err := d.transition(TransitionRequest{
+		Kind: TransBlocked, StepID: stepID, Reason: reason, SpawnN: d.currentSpawnN(),
+	}); err != nil {
+		return false, fmt.Errorf("driver: step %s unchanged-tree block failed: %w", stepID, err)
+	}
+	return true, nil
+}
+
+// gateLastVerdictAtLocked answers when gate last delivered a verdict, from
+// the attempts ledger alone: its newest accepted attempt (a PASS) or its
+// newest rewind archive naming it in rewind_gate (a FAIL, archived by the
+// same write that routed the verdict). Deriving it here keeps the fact in
+// one place and makes the unchanged-tree comparison inclusive of a verdict
+// archived in the same write as the rewind. The caller holds d.mu.
+func (d *Driver) gateLastVerdictAtLocked(gate string) (time.Time, bool) {
+	var at time.Time
+	var ok bool
+	if gst := d.exec.Steps[gate]; gst != nil {
+		for i := len(gst.Attempts) - 1; i >= 0; i-- {
+			a := &gst.Attempts[i]
+			if a.Cause != "accepted" {
+				continue
+			}
+			if t, err := time.Parse(time.RFC3339Nano, a.ArchivedAt); err == nil {
+				at, ok = t, true
+			}
+			break
+		}
+	}
+	for _, other := range d.exec.Steps {
+		for i := range other.Attempts {
+			a := &other.Attempts[i]
+			if a.RewindGate != gate || !rewindTargetCause(a.Cause) {
+				continue
+			}
+			if t, err := time.Parse(time.RFC3339Nano, a.ArchivedAt); err == nil && (!ok || t.After(at)) {
+				at, ok = t, true
+			}
+		}
+	}
+	return at, ok
+}
+
+// buildRewindSinceLocked answers the lane's build step when a rewind of it
+// archived at/after the gate's last verdict has this gate in its range,
+// together with the gate that rewound it (the newest such rewind) and a
+// copy of the build step's newest infra_failure attempt after that rewind
+// (nil when the round did not crash — the reason names a crash only when
+// there was one). Everything is in the execution ledger; the caller holds
+// d.mu. ok=false: no rewind of the build step re-entered this gate.
+func (d *Driver) buildRewindSinceLocked(gateIdx int, buildStep string, since time.Time) (target, rewindGate string, crash *capsule.Attempt, ok bool) {
+	tIdx, known := d.workflow.indexOf(buildStep)
+	if !known || tIdx >= gateIdx {
+		return "", "", nil, false
+	}
+	tst := d.exec.Steps[buildStep]
+	if tst == nil {
+		return "", "", nil, false
+	}
+	var rewindAt time.Time
+	for i := range tst.Attempts {
+		a := &tst.Attempts[i]
+		if !rewindTargetCause(a.Cause) {
+			continue
+		}
+		gIdx, known := d.workflow.indexOf(a.RewindGate)
+		if !known || gateIdx > gIdx {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, a.ArchivedAt)
+		if err != nil || at.Before(since) {
+			continue
+		}
+		if !ok || at.After(rewindAt) {
+			rewindAt, rewindGate, ok = at, a.RewindGate, true
+		}
+	}
+	if !ok {
+		return "", "", nil, false
+	}
+	for i := len(tst.Attempts) - 1; i >= 0; i-- {
+		a := tst.Attempts[i]
+		if a.Cause != CauseInfraFailure {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, a.InterruptedAt)
+		if err != nil || at.Before(rewindAt) {
+			continue
+		}
+		crash = &a
+		break
+	}
+	return buildStep, rewindGate, crash, true
+}
+
+// rewindTargetCause reports whether an attempt is a rewind archive's target
+// record (the step a gate FAIL reset), as opposed to the collateral
+// superseded_by_rewind records or an infra_failure.
+func rewindTargetCause(cause string) bool {
+	switch cause {
+	case CauseGateFailRewind, CauseGateFailRewindTextOnly, CauseGateFailRewindMechanical:
+		return true
+	}
+	return false
+}
+
+// shortTreeHash shortens a tree hash for a human-facing block reason.
+func shortTreeHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
+}
+
+// rewindArchive reports whether the attempt cause is a rewind archive
+// (01 §6.3b): the target/superseded rollback records. infra_failure and
+// the accepted/audit causes are not.
+func rewindArchive(cause string) bool {
+	switch cause {
+	case CauseGateFailRewind, CauseGateFailRewindTextOnly, CauseGateFailRewindMechanical, CauseSupersededByRewind, CauseRootCauseUnaddressed:
+		return true
+	}
+	return false
+}
+
+// spawnJournaledSince reports whether a dispatch of this step was journaled
+// after the rewind archive: the new round's conversation exists on disk, so
+// an ordinary resume is correct and the rewind order no longer needs
+// restoring. An unreadable journal or stamp answers false: keeping the
+// rewind order is the safe side.
+func (d *Driver) spawnJournaledSince(stepID string, after time.Time) bool {
+	entries, err := capsule.ReadSpawnJournal(d.wi.CapsuleDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.StepID != stepID || e.Transcript == "" {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, e.At)
+		if err != nil {
+			return false
+		}
+		if at.After(after) {
+			return true
+		}
+	}
+	return false
+}
+
 // settle validates and accepts one collected result envelope of
 // dispatch n (run is nil for an envelope a dead predecessor collected:
 // there is no process to tear down). stop reports that Run must return
@@ -547,8 +944,6 @@ func (d *Driver) settle(stepID string, n int64, res *StepResult, run StepRun) (s
 			})
 		}
 		d.mu.Lock()
-		d.rejects[stepID]++
-		count := d.rejects[stepID]
 		feedback := fmt.Sprintf("dispatch %d: %v", n, verr)
 		if delivered == OutcomeNeedsInput {
 			// Keep the pending-question context across the retry: the
@@ -563,7 +958,18 @@ func (d *Driver) settle(stepID string, n int64, res *StepResult, run StepRun) (s
 		}
 		d.priorRejection[stepID] = feedback
 		d.mu.Unlock()
-		if count > maxEnvelopeRejects {
+		// The count is durable ( B3): one write per rejection,
+		// so a restart keeps the same bound and a re-collected archived
+		// envelope is not counted twice.
+		if err := d.transition(TransitionRequest{
+			Kind: TransEnvelopeRejected, StepID: stepID, SpawnN: n,
+		}); err != nil {
+			return true, fmt.Errorf("driver: step %s envelope-rejection write failed: %w", stepID, err)
+		}
+		d.mu.Lock()
+		count := d.exec.Steps[stepID].EnvelopeRejects
+		d.mu.Unlock()
+		if count >= maxEnvelopeRejects {
 			d.emit("schema_fault", map[string]any{
 				"step": stepID, "spawn_n": n, "rejections": count,
 				"detail": "persistent envelope rejection: the result contract is broken, not the model; reported to the owner",
@@ -576,7 +982,7 @@ func (d *Driver) settle(stepID string, n int64, res *StepResult, run StepRun) (s
 			// landed write is a clean stop: not relaunchable.
 			if err := d.transition(TransitionRequest{
 				Kind: TransStepFailed, StepID: stepID, SpawnN: n,
-				Failure: &StepFailure{Cause: FailResultInvalid, Detail: verr.Error()},
+				Failure: &StepFailure{Cause: FailResultInvalid, Detail: verr.Error(), WallMs: d.takeUnbooked(stepID)},
 			}); err != nil {
 				return true, fmt.Errorf("driver: step %s result-invalid block failed: %w", stepID, err)
 			}
@@ -597,9 +1003,24 @@ func (d *Driver) settle(stepID string, n int64, res *StepResult, run StepRun) (s
 		})
 	}
 	d.mu.Lock()
-	delete(d.rejects, stepID)
 	delete(d.priorRejection, stepID)
 	d.mu.Unlock()
+	// criterion 6: a gate's verdict records the task-repo tree
+	// it judged, read before the transition takes the driver's lock (git
+	// I/O never under d.mu). A hash error records none: the unchanged-tree
+	// guard fails open rather than blocking on an uncertain equality.
+	judgedRepoHash := ""
+	if spec := d.workflow.step(stepID); spec != nil && spec.Gate &&
+		(res.Outcome == OutcomeCompleted || res.Outcome == OutcomeGateFailed) {
+		var herr error
+		judgedRepoHash, herr = reposTreeHashFn(d.wi.CapsuleDir)
+		if herr != nil {
+			if !errors.Is(herr, os.ErrNotExist) {
+				fmt.Fprintf(os.Stderr, "driver: %s: step %s judged tree hash unavailable (recording none): %v\n", d.wi.ID, stepID, herr)
+			}
+			judgedRepoHash = ""
+		}
+	}
 	if err := d.transition(TransitionRequest{
 		Kind:                    TransStepResult,
 		StepID:                  stepID,
@@ -609,9 +1030,12 @@ func (d *Driver) settle(stepID string, n int64, res *StepResult, run StepRun) (s
 		TestFilesCommit:         d.testFilesStamp(res),
 		RebaselineAuthoredTests: res.rebaseline,
 		VerifiedHeads:           d.verifiedHeads(stepID, res),
+		ReviewedHeads:           d.reviewedHeads(stepID, res),
+		JudgedHeads:             d.judgedHeads(stepID, res),
 		LightDiffBase:           d.lightDiffBase(stepID, res),
 		LightSettle:             d.lightSettleFactsOf(stepID, res),
 		ScopeChain:              d.scopeChainFor(stepID, res),
+		JudgedRepoHash:          judgedRepoHash,
 	}); err != nil {
 		return true, fmt.Errorf("driver: step %s result transition failed: %w", stepID, err)
 	}
@@ -758,10 +1182,11 @@ func (d *Driver) prepareLightRecheck(stepID string) (escalated bool, err error) 
 // mutex: the resume flag (an in_progress step is a re-dispatch — answer
 // continuation, crash recovery, recovery-lane re-derivation; a pending
 // light-rewind target is the light re-entry, its resume derived from
-// the ledger), the rewind verdict about to be consumed by the start
-// write (it must reach the dispatched process's prompt inputs), the
-// step's archived answers (a resumed step continues with its Q&A
-// history), and the effective model candidate. Parking on an open
+// the ledger), the round's rewind verdict (it must reach the dispatched
+// process's prompt inputs, and it stays persisted until the step is
+// accepted, so every retry of the round reads it here), the step's
+// archived answers (a resumed step continues with its Q&A history), and
+// the effective model candidate. Parking on an open
 // question is plan()'s decision — a pending question can only exist on
 // the current in_progress step, which plan sees before dispatching here.
 func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
@@ -775,6 +1200,25 @@ func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
 	}
 	if st != nil {
 		sp.RewindInput = st.PendingRewindInput
+		if sp.RewindInput != nil && d.workflow.buildStep() == stepID {
+			// criterion 5: the tree this round started from is
+			// the one the rewinding gate last judged. A retry still sitting
+			// on it made no code progress, so the spawn adapter suppresses
+			// the continue-in-place wording. Only a rewind of the lane's
+			// BUILD step compares task-repo trees: an artifact-producing
+			// target (spec, repro, the deliver 「全量重验」 verification
+			// re-run) may legitimately change its artifact while the repos
+			// tree stays put.
+			for i := len(st.Attempts) - 1; i >= 0; i-- {
+				if !rewindArchive(st.Attempts[i].Cause) {
+					continue
+				}
+				if gst := d.exec.Steps[st.Attempts[i].RewindGate]; gst != nil {
+					sp.RewindRepoHash = gst.JudgedRepoHash
+				}
+				break
+			}
+		}
 		if len(st.Answers) > 0 {
 			sp.Answers = append([]capsule.ArchivedAnswer(nil), st.Answers...)
 		}
@@ -814,10 +1258,17 @@ func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
 		// written it never settled to write). The order is that ledger
 		// fact (the escalation write archived it), the light re-entry's
 		// resume pattern; the full re-run's own accepted attempt ends it.
+		// The full run after a recheck a fresh re-derivation abandoned
+		// carries the note too (escalatedRecheckContext, not the guard's
+		// narrower inPlaceEscalationContext — S2): the
+		// shipped escalation note (workflows/_shared/mechanical-fix.md)
+		// names that abandonment and owes the report's fast-lane section
+		// stating that no light recheck ran, so the fast lane's audit trail
+		// reaches the report either way.
 		if escalatedRecheckContext(st.Attempts) {
 			sp.EscalatedRecheck = true
 		}
-		// workbench#21: the fast-path inputs — the tree hash the step's
+		// the fast-path inputs — the tree hash the step's
 		// latest failed attempt archived and whether that attempt is a
 		// death rather than an answer continuation. Both come from the
 		// existing ledger (no new persisted state); a step with no
@@ -835,12 +1286,19 @@ func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
 	// the in-process rejection retry lane: the prior dispatch's
 	// validation error rides the prompt as visible feedback
 	sp.PriorRejection = d.priorRejection[stepID]
-	// The verification tier (workbench#19): the recorded tier once present,
+	// The verification tier: the recorded tier once present,
 	// else the effective tier derived from the marker and the lane. A
 	// re-dispatch therefore restores the recorded tier, never recomputes it.
 	sp.ScopeTier = d.exec.ScopeTier
 	if sp.ScopeTier == "" {
 		sp.ScopeTier = effectiveTier(d.scopeOptIn, d.wi.BundleName)
+	}
+	if stepID == reviewStepID {
+		// review's scoped obligation keys on the work item's
+		// opt-in (the scope_adequate validation does), never on the
+		// recorded verification tier a verification FAIL resets to full.
+		sp.ScopeTier = effectiveTier(d.scopeOptIn, d.wi.BundleName)
+		sp.ReviewReentry = st != nil && st.LastReviewRound != nil
 	}
 	if sp.PriorRejection == "" && st != nil && len(st.Attempts) > 0 && st.Attempts[len(st.Attempts)-1].FailureCause == FailEndedWithoutResult {
 		sp.PriorEndedWithoutResult = true
@@ -869,7 +1327,7 @@ func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
 
 // attemptAfterAnswer reports whether the step's latest archived attempt
 // is a death-triggered re-dispatch rather than a needs_input answer
-// continuation (workbench#21): true when there is no archived answer, or
+// continuation: true when there is no archived answer, or
 // the latest answer is no later than the attempt's stamp. The stamps are
 // RFC3339Nano; an unparsable stamp falls back to the lexicographic
 // comparison (both orders agree on well-formed RFC3339Nano strings). A
@@ -1071,7 +1529,7 @@ func (d *Driver) wakeLoopLocked() {
 // StepSpawn onto the runtime's SpawnParams (model pin, resume session,
 // spawn journal) and assembles the step prompt — the step definition
 // plus declared inputs plus, for inherit steps, the producing step's
-// handoff artifact and, when present, the consumed rewind verdict.
+// handoff artifact and, when present, the round's rewind verdict.
 
 // StepSpawner derives one step process per SpawnStep call. The driver
 // serializes: at most one live step run per Driver at any time.
@@ -1108,9 +1566,9 @@ type StepSpawn struct {
 	// Answers is the step's archived Q&A history — a resumed step
 	// continues from it, never from a blank slate.
 	Answers []capsule.ArchivedAnswer
-	// RewindInput is the gate FAIL verdict this dispatch consumes (set
-	// on a rewind re-entry; the start transition clears the persisted
-	// field in the same write that starts the step).
+	// RewindInput is the round's gate FAIL verdict (set from the rewind
+	// write until the step is accepted; every dispatch of the round — the
+	// first, a retry after an infra death, a restart — carries it).
 	RewindInput *capsule.RewindInput
 	// Fresh orders a new conversation for a retry (2nd+ failure, or a
 	// candidate switch): no resume of the old transcript; the previous
@@ -1119,11 +1577,18 @@ type StepSpawn struct {
 	// failure must not repeat on every model).
 	Fresh bool
 	// ScopeTier is the verification tier this dispatch runs at
-	// (workbench#19): "scoped" or "full". The prompt renders it on the
+	//: "scoped" or "full". The prompt renders it on the
 	// verification step; elsewhere it is inert. The value is the recorded
 	// exec.ScopeTier, or the effective tier derived from the marker and
 	// lane before it has been recorded.
 	ScopeTier string
+	// ReviewReentry marks a review dispatch with a prior
+	// verdict-bearing round on record (steps.review.last_review_round,
+	// which survives rewinds): the prompt then carries the shared
+	// re-entry section (the round contract, the two faces, the
+	// light-round mis-marking duty). False on every first round and on
+	// every other step.
+	ReviewReentry bool
 	// PriorRejection is the verbatim validation error the PREVIOUS
 	// dispatch's envelope was rejected for (the in-process retry lane):
 	// the step author sees exactly what to fix — required fields
@@ -1151,27 +1616,40 @@ type StepSpawn struct {
 	// FAIL may be classified mechanical again. False = an ordinary
 	// dispatch.
 	EscalatedRecheck bool
+	// PlanConformance is the driver-computed two-way plan-conformance
+	// fact set (planconformance.go): set on a review
+	// dispatch of a lane with a done plan step and on a verification
+	// dispatch whose entry declares plan_conformance; nil otherwise.
+	PlanConformance *PlanConformance
 	// Done is the set of steps whose execution record is done (an
 	// inherit step's handoff producer must be one).
 	Done map[string]bool
 	// RecordedTreeHash is the capsule tree hash the step's latest
-	// archived attempt recorded (workbench#21); "" = none (an older
+	// archived attempt recorded; "" = none (an older
 	// capsule, or the latest attempt archived no hash). The re-dispatch
 	// fast path requires it non-empty and equal to the current tree.
 	RecordedTreeHash string
 	// RetryTriggered reports that the latest archived attempt is a
 	// death-triggered re-dispatch rather than a needs_input answer
-	// continuation (workbench#21). It is derived from the existing
+	// continuation. It is derived from the existing
 	// Attempts/Answers stamps, never a new persisted fact.
 	RetryTriggered bool
 	// RecordedAttemptAt is the archive stamp (InterruptedAt, else
-	// ArchivedAt) of the step's latest archived attempt (workbench#21).
+	// ArchivedAt) of the step's latest archived attempt.
 	// The fast path additionally requires the dispatch to run on the SAME
 	// claim as that attempt: a re-claim re-materializes the capsule, which
 	// restores only tracked and non-ignored untracked files, so the
 	// fast path's "environment is intact" claim would be false. Derived
 	// in memory from the existing ledger, never a new persisted fact.
 	RecordedAttemptAt string
+	// RewindRepoHash is the task-repo tree hash the gate that rewound this
+	// round last judged ( criterion 5). A retry whose current
+	// repos tree still equals it made no code progress since the rewind, so
+	// the continue-in-place fast path must not claim there is work to
+	// continue. Empty = unknown (the hash-error / older-record path keeps
+	// the pre- wording). Derived from the step's newest rewind
+	// archive and the gate's JudgedRepoHash, never a new persisted fact.
+	RewindRepoHash string
 }
 
 // LightRecheckOrder is the light-mode order (polyforge#260): the
@@ -1227,13 +1705,17 @@ func (d *Driver) buildResultSpec(stepID string, n int64) ResultSpec {
 		// derivation: lightRewindContext over the archived attempts).
 		spec.LightRewind = lightRewindContext(st.Attempts)
 	}
-	// workbench#19: the recorded tier and the scoped-tier facts the scope
+	// the recorded tier and the scoped-tier facts the scope
 	// contract and the merge rule judge. VerificationScoped is the fact
 	// that the (done) verification result carried a scope declaration —
 	// it drives the review's scope_adequate obligation and the deliver
 	// merge condition regardless of the current step.
 	spec.ScopeTier = d.exec.ScopeTier
 	spec.VerificationScoped = verificationScoped(d.exec.Steps[verificationStepID])
+	// the review scope obligation keys on the work item's
+	// opt-in (review runs before verification now, so verification's own
+	// output cannot be its trigger).
+	spec.ScopedWorkItem = d.scopeOptIn && scopedLanes[d.wi.BundleName]
 	outputs := make(map[string]map[string]any, len(d.exec.Steps))
 	for id, st := range d.exec.Steps {
 		if st != nil && st.Status == capsule.StepDone {
@@ -1243,9 +1725,14 @@ func (d *Driver) buildResultSpec(stepID string, n int64) ResultSpec {
 	if stepID == deliverStepID {
 		spec.ReviewPassed = reviewPassed(d.exec.Steps[reviewStepID])
 		spec.HasReview = d.workflow.step(reviewStepID) != nil
-		spec.VerifiedHeads, spec.VerifiedTestBar = verificationRecord(d.exec.Steps[verificationStepID])
+		spec.VerifiedHeads, spec.VerifiedTestBar, spec.VerifiedScenarios = verificationRecord(d.exec.Steps[verificationStepID])
 		spec.LightRecheckHeads = lightRecheckHeads(d.exec.Steps[verificationStepID])
 		spec.ReviewScopeAdequate = reviewScopeAdequate(d.exec.Steps[reviewStepID])
+		spec.ReviewedHeads = reviewedHeadsOf(d.exec.Steps[reviewStepID])
+		spec.ReviewScope, spec.ReviewScopePresent = reviewScopeRecord(d.exec.Steps[reviewStepID])
+		if ver := d.exec.Steps[verificationStepID]; ver != nil {
+			spec.VerificationScope, _ = parseScope(ver.Output["scope"])
+		}
 	}
 	// polyforge#260: a pending light recheck marker mode-selects the LIGHT
 	// output schema for this step's completed results — the light
@@ -1274,11 +1761,15 @@ func (d *Driver) buildResultSpec(stepID string, n int64) ResultSpec {
 	}
 	if d.wi.CapsuleDir != "" {
 		spec.ReposDir = filepath.Join(d.wi.CapsuleDir, capsule.DirRepos)
-		// deliver is exempt from the authored-tests gate: merging the
-		// latest default branch legitimately changes an authored test file
-		// upstream also edited, and restoring the author commit's blob
-		// would undo upstream's edit. Verification passed on the verified
-		// head; anything hand-made since is escalated by deliver_facts.go.
+		// deliver is exempt from the authored-tests gate. A machine-made
+		// merge of the default branch passes the gate anyway (an edit
+		// upstream made to an authored test is not the agent's —
+		// mergedFromDefault, the verification step's own merge); what
+		// deliver adds beyond that is a conflict it resolved by hand, after
+		// its push and merge already happened, so rejecting its envelope
+		// would retry an irreversible step. Verification passed on the
+		// verified head; anything hand-made since is escalated to the human
+		// by deliver_facts.go.
 		if stepID != deliverStepID {
 			spec.AuthoredTests = authoredTestsBefore(d.workflow, outputs, stepID)
 		}
@@ -1432,6 +1923,50 @@ func (d *Driver) verifiedHeads(stepID string, res *StepResult) map[string]any {
 	return repoHeads(filepath.Join(d.wi.CapsuleDir, capsule.DirRepos))
 }
 
+// reviewedHeads reads the task repos' HEADs a completed review PASS
+// records (; git I/O, so outside the transition's lock — the
+// verifiedHeads pattern); nil otherwise. A FAIL verdict records nothing
+// (the pass it would anchor does not exist).
+func (d *Driver) reviewedHeads(stepID string, res *StepResult) map[string]any {
+	if stepID != reviewStepID || res.Outcome != OutcomeCompleted || d.wi.CapsuleDir == "" {
+		return nil
+	}
+	if v := topVerdict(res.Output); strings.ToLower(strings.TrimSpace(v)) != "pass" {
+		return nil
+	}
+	return repoHeads(filepath.Join(d.wi.CapsuleDir, capsule.DirRepos))
+}
+
+// judgedHeads pre-reads the task repos' HEADs a VERDICT-BEARING review
+// round judged ( code review; git I/O, so outside the
+// transition's lock — the verifiedHeads pattern): recorded on the
+// round's own LastReviewRound for every verdict-bearing round — a FAIL
+// names the tree it failed, a PASS the tree it covered — so the next
+// re-entry's fix surface has an anchor that survives rewinds (a PASS
+// round's heads equal its reviewed_heads; a FAIL round has no
+// reviewed_heads to point at). Nil for any non-review step or a
+// verdict-less outcome (needs_input, incomplete), and for a repo set
+// with no readable HEAD (the record then carries no heads at all).
+func (d *Driver) judgedHeads(stepID string, res *StepResult) map[string]string {
+	if stepID != reviewStepID || d.wi.CapsuleDir == "" {
+		return nil
+	}
+	switch res.Outcome {
+	case OutcomeCompleted:
+		if v := topVerdict(res.Output); strings.ToLower(strings.TrimSpace(v)) != "pass" {
+			return nil
+		}
+	case OutcomeGateFailed:
+	default:
+		return nil
+	}
+	heads := repoHeadShas(filepath.Join(d.wi.CapsuleDir, capsule.DirRepos))
+	if len(heads) == 0 {
+		return nil
+	}
+	return heads
+}
+
 // lightDiffBase pre-reads the task repos' HEADs the mechanical rewind
 // records as the light recheck's repair-diff base (polyforge#260; git
 // I/O, so outside the transition's lock — the verifiedHeads pattern):
@@ -1528,13 +2063,15 @@ func parseOutput(raw json.RawMessage) (map[string]any, error) {
 }
 
 // scopeChainFor builds the driver-written three-ring scope audit chain a
-// completed scoped delivery must carry (workbench#19): the opt-in marker,
-// verification's scope declaration (with the incremental union of the
-// prior and this increment's declared paths, when a prior is present) and
-// review's scope_adequate answer. It answers nil unless every ring is
-// present and consistent — a full delivery, a delivery whose verification
-// was full, or one whose review never answered adequate carries no scoped
-// chain and so no scoped merge credential. Pure over the in-memory
+// completed scoped delivery must carry (;
+// re-composes it): the opt-in marker, review's own scope declaration (the
+// scope review judged adequate) and verification's scope — present only
+// when the two declared the SAME path set (scopeConsistent, the union
+// with a prior included) and review answered scope_adequate. It answers
+// nil unless every ring is present and consistent — a full delivery, a
+// delivery whose verification was full, one whose review never declared
+// a scope, or one whose two scopes disagree carries no scoped chain and
+// so no scoped merge credential. Pure over the in-memory
 // already-persisted facts; the step-supplied value is deleted and this one
 // written by the transition.
 func (d *Driver) scopeChainFor(stepID string, res *StepResult) map[string]any {
@@ -1557,20 +2094,20 @@ func (d *Driver) scopeChainFor(stepID string, res *StepResult) map[string]any {
 	if err != nil || sc == nil {
 		return nil
 	}
+	revScope, present := reviewScopeRecord(rev)
+	if !present || revScope == nil || !scopeConsistent(sc, revScope) {
+		return nil
+	}
 	adequate, ok := rev.Output[scopeAdequateKey].(bool)
 	if !ok {
 		return nil
-	}
-	declared := sc.DeclaredPaths
-	if sc.Prior != nil {
-		declared = scopeCredentialUnion(sc.Prior.DeclaredPaths, sc.DeclaredPaths)
 	}
 	return map[string]any{
 		"tier":   tierScoped,
 		"marker": scopetier.Marker,
 		"scope": map[string]any{
 			"mode":           sc.Mode,
-			"declared_paths": declared,
+			"declared_paths": revScope.DeclaredPaths,
 			"rationale":      sc.Rationale,
 			"fast_gates_ref": sc.FastGatesRef,
 		},
@@ -1600,7 +2137,7 @@ func readWorkItemDoc(capsuleDir string) (capsule.WorkItemDoc, error) {
 // the workflow's on_fail rewind target (absent = no rewind edge, the
 // workflow fails on the gate) plus the verdict text — the result's
 // output payload in full, or a synthesized note when the gate produced
-// none. The deliver step's optional `rewind_to` (workbench#19) overrides
+// none. The deliver step's optional `rewind_to` overrides
 // the declared target when it names an earlier step of the workflow: the
 // human's 「全量重验」 answer rides it to re-run verification at full.
 func (d *Driver) verdictFor(stepID string, res *StepResult) *GateVerdict {
@@ -1713,5 +2250,8 @@ func (d *Driver) modelForLocked(stepID string) string {
 	if st == nil {
 		return list[0]
 	}
-	return list[CandidatePointer(st.Candidate, st.Attempts, st.Answers, list)]
+	// the answer era, not streakEra: the owner's continue starts the
+	// death streaks afresh but keeps an advance a chain-end or no-chain
+	// death still owes — the "edit the list, then pf resume" switch
+	return list[CandidatePointer(st.Candidate, st.Attempts, answerEraStart(st.Answers), list)]
 }

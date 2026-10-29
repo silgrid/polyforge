@@ -35,6 +35,10 @@ var baseSHAShape = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)
 // (repro, repro-run, "original repro"), never TestReproducibleBuild.
 var reproName = regexp.MustCompile(`(?i)\brepro\b`)
 
+// reproCheck is the exact check name the bug-fix lane records its repro
+// re-run under; only a passing check of this name shows the repro passed.
+const reproCheck = "repro"
+
 // preExistingEntry is the documented pre_existing_failures entry form:
 // `<repo-relative test file>: <test name>`.
 var preExistingEntry = regexp.MustCompile(`^(\S+): (\S.*)$`)
@@ -156,7 +160,9 @@ func checkPreExisting(output json.RawMessage, rules PreExistingRules, verificati
 	preChecks := 0
 	reproPassed := false
 	for _, c := range probe.Checks {
-		if reproName.MatchString(c.Name) && c.Status == "pass" {
+		// the pass rule wants THE repro check, exactly: a check that merely
+		// mentions the word (`app:repro-tools`, "original repro") is not it
+		if strings.TrimSpace(c.Name) == reproCheck && c.Status == "pass" {
 			reproPassed = true
 		}
 		if c.Status != statusPreExisting {

@@ -2,7 +2,7 @@ package test
 
 // deploy_expected_deltas_test.go — the post-swap baseline guard of
 // .polyforge/deploy.sh must accept a row-count DECREASE that the migrating
-// version DECLARES (workbench#85, after workbench#71: the v2.20.8 heartbeat
+// version DECLARES (after the v2.20.8 heartbeat
 // migration deletes the machine users it minted, the guard reads "rows lost"
 // and auto-rolls-back a perfectly legitimate deploy, exit 10).
 //
@@ -56,7 +56,7 @@ const (
   (2, 'mac_2@machines.local');
 `
 	// the declaration the migrating version ships
-	deltaDeclaration = `# workbench#71: the heartbeat migration deletes the machine users it minted
+	deltaDeclaration = `# the heartbeat migration deletes the machine users it minted
 users: -2
 `
 )

@@ -182,7 +182,9 @@ func TestRunGateVerdictBindingRewindsAndLogs(t *testing.T) {
 	if exec.WorkflowStatus != StatusRunning {
 		t.Fatalf("the workflow must stay running on a bound gate fail, got %q", exec.WorkflowStatus)
 	}
-	if exec.RewindStats.Count != 1 || len(exec.RewindStats.ToStep) != 1 || exec.RewindStats.ToStep[0] != "fix" {
+	if exec.RewindStats.Count != 1 || len(exec.RewindStats.Rewinds) != 1 ||
+		exec.RewindStats.Rewinds[0].Gate != "review" || exec.RewindStats.Rewinds[0].ToStep != "fix" ||
+		!exec.RewindStats.Rewinds[0].Charged {
 		t.Fatalf("rewind stats: %+v", exec.RewindStats)
 	}
 	fx := exec.Steps["fix"]

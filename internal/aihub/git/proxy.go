@@ -95,6 +95,15 @@ func (m *Manager) HandleGit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Request-body cap, declared half: a Content-Length
+	// above the constant cap is refused before any CGI is spawned, so
+	// the body is never streamed and no quarantine or partial objects
+	// can appear. GIT-400 — the existing bad-request shape, no new code.
+	if r.ContentLength > m.MaxGitRequestBodyBytes {
+		writeGitErr(w, api.ErrGitBadRequest,
+			"git request body %d bytes exceeds the %d-byte limit", r.ContentLength, m.MaxGitRequestBodyBytes)
+		return
+	}
 	// The repo must exist (created at claim time). A clone that races a
 	// claim is served a clean 404 rather than an empty CGI 500.
 	repoDir := m.RepoDir(wiID)
@@ -155,11 +164,52 @@ func (m *Manager) HandleGit(w http.ResponseWriter, r *http.Request) {
 		writeGitErr(w, api.ErrGitInternal, "start http-backend: %v", err)
 		return
 	}
-	// Body → CGI stdin (bounded by the request itself).
+	// Body → CGI stdin, capped: the wrapper passes at
+	// most cap bytes and probes one more to catch a chunked/undeclared
+	// over-limit body — the CGI then sees a truncated pack, rejects it
+	// and cleans its own quarantine up (no process kill, no residue).
+	// The copy's verdict (over / not over) is AWAITED below before any
+	// status line is written: git http-backend writes its CGI response
+	// headers BEFORE run_service reads stdin (verified on git 2.43: a
+	// receive-pack POST's headers arrive while the pack is still in
+	// flight), so the headers' arrival decides nothing — a non-blocking
+	// probe after the header parse would answer a chunked over-cap body
+	// with the CGI's 200.
+	capped := &overCapReader{rc: r.Body, limit: m.MaxGitRequestBodyBytes}
+	verdict := make(chan bool, 1)
 	go func() {
-		_, _ = io.Copy(stdin, r.Body)
+		_, _ = io.Copy(stdin, capped)
 		stdin.Close()
+		verdict <- capped.over
 	}()
+
+	// Await the verdict BEFORE reading the CGI response at all. This
+	// cannot deadlock: http-backend writes only its small header block
+	// before it consumes stdin (far under any pipe buffer), and it
+	// writes its response body only after stdin is fully read — the
+	// CGI can never block on a full stdout pipe while the copy still
+	// holds unread stdin. The copy ends on the body's EOF or a
+	// broken CGI stdin (EPIPE) either way, so the verdict always
+	// arrives; TestOverCapChunkedBodyRefused exercises exactly the
+	// sensitive ordering (CGI headers out, stdin still open, proxy
+	// waiting).
+	if over := <-verdict; over {
+		// Drain the body's unread remainder first, bounded: closing
+		// with unread request bytes would RST the connection and could
+		// clobber the refusal the client is about to read. A caller
+		// that keeps streaming past this bound loses the response leg,
+		// never the refusal itself.
+		_, _ = io.CopyN(io.Discard, r.Body, 1<<20)
+		// The CGI saw exactly cap bytes then EOF — a truncated pack it
+		// rejects and cleans up itself. Discard its output, reap it,
+		// answer the refusal (GIT-400) instead of forwarding the CGI's
+		// status.
+		_, _ = io.Copy(io.Discard, stdout)
+		_ = cmd.Wait()
+		writeGitErr(w, api.ErrGitBadRequest,
+			"git request body exceeds the %d-byte limit", m.MaxGitRequestBodyBytes)
+		return
+	}
 
 	// Parse the CGI response: headers, then body.
 	br := bufio.NewReader(stdout)
@@ -200,6 +250,42 @@ func (m *Manager) HandleGit(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(status)
 	_, _ = io.Copy(w, br)
 	_ = cmd.Wait()
+}
+
+// overCapReader passes at most limit bytes of the underlying body
+// through to the CGI and decides, with one probe read past the limit,
+// whether the request carries more: a body that crosses the limit
+// yields EOF after exactly limit bytes (the CGI gets a truncated pack
+// it rejects and cleans up itself — no process kill, so no SIGKILL
+// quarantine residue) and sets over; a body that ends at or under the
+// limit passes through untouched, probe and all. The proxy awaits the
+// copy's over flag before answering anything — the CGI's response
+// headers say nothing about the body: http-backend writes them before
+// it reads stdin.
+type overCapReader struct {
+	rc    io.ReadCloser
+	limit int64
+	over  bool
+}
+
+func (r *overCapReader) Read(p []byte) (int, error) {
+	if r.limit <= 0 {
+		// One probe byte past the limit: data there means the body is
+		// over the cap and the connection is refused, not streamed.
+		var b [1]byte
+		n, err := r.rc.Read(b[:])
+		if n > 0 {
+			r.over = true
+			return 0, io.EOF
+		}
+		return 0, err // an honest EOF at exactly the limit
+	}
+	if int64(len(p)) > r.limit {
+		p = p[:r.limit]
+	}
+	n, err := r.rc.Read(p)
+	r.limit -= int64(n)
+	return n, err
 }
 
 func remoteAddr(r *http.Request) string {

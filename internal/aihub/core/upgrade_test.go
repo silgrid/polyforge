@@ -288,10 +288,10 @@ func upgradeStatements(block string) []string {
 // sqlVer250 ships polyforge#157's (the repo inventory column);
 // sqlVer2140 drops the memories freshness columns and claim_idempotency;
 // sqlVer2170 adds the project-delete audit table;
-// sqlVer2206 adds the workbench#11 machine identity columns and messaging tables;
+// sqlVer2206 adds the machine identity columns and messaging tables;
 // sqlVer2207 splits the messaging read cursor into delivery and read cursors.
 // sqlVer2208 drops machines.user_id and deletes the unreferenced
-// heartbeat-minted machine users (workbench#57).
+// heartbeat-minted machine users.
 const (
 	sqlVer     = "v2.4.0"
 	sqlVer250  = "v2.5.0"
@@ -577,7 +577,7 @@ func upgradeRun(t *testing.T, populate bool) {
 	if populate {
 		// The old rows read and write through the live columns.
 		old := oldWIID(2)
-		if _, err := env.WIs.Patch(old, map[string]json.RawMessage{"priority": json.RawMessage(`"high"`)}); err != nil {
+		if _, err := env.WIs.Patch(old, map[string]json.RawMessage{"priority": json.RawMessage(`"high"`)}, env.UserID); err != nil {
 			t.Fatalf("post-upgrade patch of an old row: %v", err)
 		}
 		if _, err := env.WIs.Cancel(oldWIID(0), env.UserID); err != nil {
@@ -723,7 +723,7 @@ func TestUpgradeRollbackRoundTrip(t *testing.T) {
 	}, env.UserID); err != nil {
 		t.Fatalf("post-upgrade claim: %v", err)
 	}
-	if _, err := env.WIs.Patch(oldWIID(2), map[string]json.RawMessage{"priority": json.RawMessage(`"high"`)}); err != nil {
+	if _, err := env.WIs.Patch(oldWIID(2), map[string]json.RawMessage{"priority": json.RawMessage(`"high"`)}, env.UserID); err != nil {
 		t.Fatalf("post-upgrade patch of an old row: %v", err)
 	}
 	if _, err := env.WIs.ReadyQueue("legacy"); err != nil {

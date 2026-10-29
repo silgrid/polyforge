@@ -193,16 +193,16 @@ func TestV1S01DefaultInstallSmoke(t *testing.T) {
 	})
 
 	// The events file tells the whole story in order: the job lifecycle,
-	// the C3 pushes, and exactly ONE recovery — the driver's completed
-	// exit, which the v2 terminal wiring translates into the wrap (the
-	// completion signal, not a death).
+	// the C3 pushes, and NO needs_recovery — the driver's completed exit
+	// still reaches the v2 terminal wiring that wraps it, but a finish is
+	// not a death and records none.
 	kinds := d.eventKinds(t, wi)
 	for _, want := range []string{"job_started", "published", "job_stopped"} {
 		if !contains(kinds, want) {
 			t.Fatalf("events %v miss %q", kinds, want)
 		}
 	}
-	if n := countOf(kinds, "needs_recovery"); n != 1 {
-		t.Fatalf("needs_recovery fired %d times, want exactly 1 (the completion signal): %v", n, kinds)
+	if n := countOf(kinds, "needs_recovery"); n != 0 {
+		t.Fatalf("needs_recovery fired %d times, want 0 (a completed driver's exit is a finish, not a death): %v", n, kinds)
 	}
 }

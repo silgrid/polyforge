@@ -1,4 +1,4 @@
-// Package task is the one-shot task agent (workbench#53, the
+// Package task is the one-shot task agent (the
 // re-established #40): the pure core (states, spec/record shapes, fixed
 // budgets, id minting, candidate resolution), the streamed
 // dispatch/usage seam, the local atomic report store and the in-memory
@@ -13,7 +13,7 @@
 // refuses it every write and the CLI refuses it every write verb — the
 // lane's one real gate. There is no OS-level isolation (owner ruling
 // 2026-10-26, mem_TdI0isaGmTgG): a task agent's filesystem/network trust is
-// a session agent's, and platform-level isolation belongs to workbench#10.
+// a session agent's, and platform-level isolation belongs to.
 package task
 
 import (
@@ -47,7 +47,7 @@ func (s State) Terminal() bool {
 	return false
 }
 
-// The fixed limits and budgets of the task lane (workbench#40). They are
+// The fixed limits and budgets of the task lane. They are
 // code constants: no `.polyforge.yaml` key may change them and no spawn
 // flag may raise them above the ceilings.
 const (
@@ -238,7 +238,7 @@ func (t Task) Summary() string {
 
 // tailRunes answers the trailing n bytes of s cut on a rune boundary: a
 // multi-byte UTF-8 character straddling the cut would otherwise become
-// invalid (polyforge#40 review N2).
+// invalid (polyforge#40 code review).
 func tailRunes(s string, n int) string {
 	if n <= 0 || len(s) <= n {
 		return s

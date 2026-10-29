@@ -7,14 +7,20 @@ package git
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/aihub/core"
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -776,6 +782,210 @@ func TestTaskWIPRefScratch(t *testing.T) {
 	}
 	if out, err := runGit(t, wt, "push", cred, ":refs/pf-task/demo-src"); err == nil {
 		t.Fatalf("carrier ref deletion accepted: %s", out)
+	}
+}
+
+// gitPost sends one raw HTTP request to the proxy with the session
+// credential and the given headers/body writer, and answers the status
+// code and the response text.
+func (e *gitEnv) gitPost(t *testing.T, wiID, secret, endpoint string, hdr map[string]string, body func(io.Writer) error) (int, string) {
+	t.Helper()
+	u, err := url.Parse(e.ts.URL)
+	if err != nil {
+		t.Fatalf("parse ts url: %v", err)
+	}
+	conn, err := net.Dial("tcp", u.Host)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	cred := base64.StdEncoding.EncodeToString([]byte(wiID + ":" + secret))
+	var head strings.Builder
+	fmt.Fprintf(&head, "POST /git/%s.git/%s HTTP/1.1\r\nHost: %s\r\nAuthorization: Basic %s\r\n", wiID, endpoint, u.Host, cred)
+	for k, v := range hdr {
+		fmt.Fprintf(&head, "%s: %s\r\n", k, v)
+	}
+	head.WriteString("Connection: close\r\n\r\n")
+	if _, err := io.WriteString(conn, head.String()); err != nil {
+		t.Fatalf("write headers: %v", err)
+	}
+	if body != nil {
+		if err := body(conn); err != nil {
+			t.Fatalf("write body: %v", err)
+		}
+	}
+	raw, rerr := io.ReadAll(io.LimitReader(conn, 64<<10))
+	if rerr != nil {
+		return 0, rerr.Error()
+	}
+	text := string(raw)
+	if !strings.HasPrefix(text, "HTTP/") {
+		return 0, text
+	}
+	fields := strings.Fields(strings.SplitN(text, "\r\n", 2)[0])
+	code, _ := strconv.Atoi(fields[1])
+	return code, text
+}
+
+// bareCommitCount answers how many commits main carries in the WI's bare
+// repo (0 = refs unchanged for a fresh claim).
+func (e *gitEnv) bareCommitCount(t *testing.T, wiID string) int {
+	t.Helper()
+	out, err := runGit(t, e.mgr.RepoDir(wiID), "rev-list", "--count", "refs/heads/main")
+	if err != nil {
+		if strings.Contains(err.Error(), "unknown revision") || strings.Contains(out, "unknown revision") {
+			return 0
+		}
+		t.Fatalf("rev-list: %v (%s)", err, out)
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(out))
+	return n
+}
+
+// noQuarantine asserts the bare repo carries no quarantine/incoming
+// directories and nothing landed in the object store.
+func (e *gitEnv) noQuarantine(t *testing.T, wiID string) {
+	t.Helper()
+	objects := filepath.Join(e.mgr.RepoDir(wiID), "objects")
+	for _, pat := range []string{"incoming-*", "tmp_*"} {
+		if hits, _ := filepath.Glob(filepath.Join(objects, pat)); len(hits) != 0 {
+			t.Fatalf("residue %s under %s: %v", pat, objects, hits)
+		}
+	}
+}
+
+// TestGitBodyCapDefaultAndManagerField: the proxy's cap defaults to the
+// 1GiB capsule constant and lives on the manager as a test-injectable
+// field — no flag, config key or environment variable reaches it.
+func TestGitBodyCapDefaultAndManagerField(t *testing.T) {
+	e := newGitEnv(t)
+	if e.mgr.MaxGitRequestBodyBytes != capsule.MaxGitRequestBodyBytes {
+		t.Fatalf("MaxGitRequestBodyBytes = %d, want the capsule default %d", e.mgr.MaxGitRequestBodyBytes, capsule.MaxGitRequestBodyBytes)
+	}
+	if capsule.MaxGitRequestBodyBytes != int64(1)<<30 {
+		t.Fatalf("the capsule cap = %d, want the 1GiB owner ruling", capsule.MaxGitRequestBodyBytes)
+	}
+}
+
+// TestOverCapDeclaredReceivePackRefused: a receive-pack declaring a body
+// above the cap is answered 4xx before the body is streamed, with refs
+// unchanged and no residue. (Red on the pre- tree: the old
+// proxy blocks copying the declared body and this test times out.)
+func TestOverCapDeclaredReceivePackRefused(t *testing.T) {
+	e := newGitEnv(t)
+	wiID, secret := e.claimWI(t)
+	const cap = capsule.MaxGitRequestBodyBytes
+	code, body := e.gitPost(t, wiID, secret, "git-receive-pack",
+		map[string]string{
+			"Content-Type":   "application/x-git-receive-pack-request",
+			"Content-Length": strconv.FormatInt(cap+1, 10),
+		}, nil) // the body is deliberately never sent
+	if code < 400 || code > 499 {
+		t.Fatalf("over-cap receive-pack answered %d, want 4xx before the body is read: %s", code, body)
+	}
+	if !strings.Contains(body, api.ErrGitBadRequest) {
+		t.Fatalf("wrong envelope: %s", body)
+	}
+	if n := e.bareCommitCount(t, wiID); n != 0 {
+		t.Fatalf("the refused push moved refs (main has %d commits)", n)
+	}
+	e.noQuarantine(t, wiID)
+}
+
+// TestOverCapDeclaredUploadPackRefused: the same declared cap refuses an
+// upload-pack. (Red on the pre- tree: the old proxy answers
+// 200 without ever reading the declared body.)
+func TestOverCapDeclaredUploadPackRefused(t *testing.T) {
+	e := newGitEnv(t)
+	wiID, secret := e.claimWI(t)
+	const cap = capsule.MaxGitRequestBodyBytes
+	code, body := e.gitPost(t, wiID, secret, "git-upload-pack",
+		map[string]string{
+			"Content-Type":   "application/x-git-upload-pack-request",
+			"Content-Length": strconv.FormatInt(cap+1, 10),
+		}, nil)
+	if code < 400 || code > 499 {
+		t.Fatalf("over-cap upload-pack answered %d, want 4xx before the body is read: %s", code, body)
+	}
+	if !strings.Contains(body, api.ErrGitBadRequest) {
+		t.Fatalf("wrong envelope: %s", body)
+	}
+	e.noQuarantine(t, wiID)
+}
+
+// TestOverCapChunkedBodyRefused: a chunked (undeclared) body crossing the
+// cap is cut at the cap, the CGI finishes on the truncated pack, and the
+// proxy answers 4xx with refs unchanged and no residue — no process
+// kill. The over-cap tail is sent only AFTER the CGI has had every
+// chance to write its response headers — git http-backend writes them
+// BEFORE it reads stdin (verified on git 2.43: a receive-pack POST's
+// headers arrive while the pack is still in flight) — so nothing about
+// the headers can decide the verdict any more: the proxy must still
+// answer 4xx, and a status line arriving before the tail (the old code
+// forwarded the CGI's 200 the moment its headers were parsed, the
+// over-cap probe still pending) is itself the failure. Red on the
+// pre- tree twice over: the whole chunked body streamed
+// into the CGI, and the early status line is the race made visible.
+func TestOverCapChunkedBodyRefused(t *testing.T) {
+	e := newGitEnv(t)
+	e.mgr.MaxGitRequestBodyBytes = 1024
+	wiID, secret := e.claimWI(t)
+	chunked := func(w io.Writer) error {
+		// The first chunk fills the cap exactly.
+		if _, err := fmt.Fprintf(w, "400\r\n%s\r\n", strings.Repeat("x", 1024)); err != nil {
+			return err
+		}
+		// Give the CGI time to start and write its response headers.
+		// If the proxy forwards anything in this window it has answered
+		// before the verdict was in — that is the bug.
+		c, ok := w.(net.Conn)
+		if !ok {
+			t.Fatal("chunked body writer got no net.Conn")
+		}
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var early [512]byte
+		n, _ := c.Read(early[:])
+		_ = c.SetReadDeadline(time.Time{})
+		if n > 0 {
+			return fmt.Errorf("the proxy answered before the over-cap tail was sent: %q", early[:n])
+		}
+		// The over-cap tail: one byte past the cap decides; the rest is
+		// chunked framing.
+		_, err := io.WriteString(w, "1\r\ny\r\n0\r\n\r\n")
+		return err
+	}
+	code, body := e.gitPost(t, wiID, secret, "git-receive-pack",
+		map[string]string{"Content-Type": "application/x-git-receive-pack-request", "Transfer-Encoding": "chunked"}, chunked)
+	if code < 400 || code > 499 {
+		t.Fatalf("over-cap chunked receive-pack answered %d, want 4xx: %s", code, body)
+	}
+	if !strings.Contains(body, "exceeds the 1024-byte limit") {
+		t.Fatalf("wrong refusal body: %s", body)
+	}
+	if n := e.bareCommitCount(t, wiID); n != 0 {
+		t.Fatalf("the refused chunked push moved refs (main has %d commits)", n)
+	}
+	e.noQuarantine(t, wiID)
+}
+
+// TestUnderCapPushStillSucceeds: with a small injected cap the streaming
+// wrapper is on the path of every push, and a normal-sized push still
+// succeeds (the legitimate-carrier regression face).
+func TestUnderCapPushStillSucceeds(t *testing.T) {
+	e := newGitEnv(t)
+	e.mgr.MaxGitRequestBodyBytes = 64 << 10
+	wiID, secret := e.claimWI(t)
+	cred := e.credURL(wiID, secret)
+	wt := newWorktree(t)
+	for i := 0; i < 3; i++ {
+		commitPlain(t, wt, fmt.Sprintf("f%d.txt", i), strings.Repeat("legit\n", 100))
+		if err := push(t, wt, cred); err != nil {
+			t.Fatalf("legit push under the cap rejected: %v", err)
+		}
+	}
+	if n := e.bareCommitCount(t, wiID); n != 3 {
+		t.Fatalf("bare main carries %d commits, want 3", n)
 	}
 }
 

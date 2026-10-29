@@ -1,19 +1,59 @@
 ---
 name: bug-fix
-description: Root-cause lane - reproduce the failure first, prove the cause before fixing, then run the fix/verification/review tail.
+description: Root-cause lane - reproduce the failure first, prove the cause before fixing, then fix and run the gate tail - repro → root-cause → fix → review → verification → deliver.
 rewind:
-  max_total: 6
+  max_total: 9
   max_per_step: 3
 defaults:
   model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
 steps:
-  - { id: repro, context_policy: fresh }
+  - { id: repro, context_policy: fresh, recall: true }
   # root-cause is a gate: it must run FRESH (the judge never inherits the
   # judged conversation — driver rule, separation of powers) and takes the
   # repro record (artifacts/repro.md) by path convention: it reads the
   # artifact, not the chat.
-  - { id: root-cause, context_policy: fresh, handoff: true, gate: true, model_candidates: [pi:example-claude/claude-opus-5, pi:example-openai/gpt-x, pi:example-gateway/model-a], on_fail: { target: repro } }
-  - { id: fix, context_policy: inherit }
+  - { id: root-cause, context_policy: fresh, handoff: true, gate: true, model_candidates: [pi:example-claude/claude-opus-5, pi:example-openai/gpt-x, pi:example-gateway/model-a], on_fail: { target: repro }, recall: true }
+  - { id: fix, context_policy: inherit, recall: true }
+  - id: review
+    context_policy: fresh
+    gate: true
+    on_fail: { target: fix }
+    vars:
+      build_step: fix
+      scope_source: the WI and the root-cause scope guidance
+      intro: |-
+        Judge whether this bug fix is ready to release. Unlike `verification`, this step is a
+        genuine quality judgment, not a mechanical check — and in this lane it has a specific
+        question to answer above all: **did the fix remove the actual cause?** The lane's whole
+        reason to exist is preventing symptom-patches. You run after `fix` and before
+        `verification`: judge the diff and the evidence chain (repro -> cause -> fix) yourself —
+        no machine results exist yet, and `verification` re-runs the repro behind you.
+      judge: |-
+        1. Read, in this order: `artifacts/root-cause.md` (the proven cause),
+           `artifacts/repro.md` (the observed failure), and the full diff (in each task repo
+           `git diff $(git merge-base HEAD origin/HEAD)..HEAD`, falling back to `origin/main` or
+           `origin/master` when `origin/HEAD` is unset — this carries `repro`'s test commit,
+           `fix`'s commits and any commit `fix` did not report). The machine gate
+           (`verification`) runs after you: you have no verification report to read — judge
+           the diff itself, the evidence chain and the corrected behaviour in it.
+        2. Judge the causal fit: does the diff remove the *diagnosed condition*, or does it
+           merely suppress the observed symptom at one call site? Would the failure still occur
+           through a path the diff did not touch? The lane requires the cause itself to be
+           gone. (A fix that reports `root_cause_addressed: false` never reaches you: the
+           driver routes it back to `root-cause` first.)
+        3. Judge the blast radius: the diff's effect on adjacent behavior the diagnosis did not
+           implicate; scope creep beyond what the cause demanded; missing test coverage of the
+           corrected behavior if the project expects tests alongside fixes.
+           Judge the tests in the diff too: a repro or regression test that does not actually
+           reproduce the diagnosed failure (vacuous, or passing whatever the code does) is a
+           blocking finding — `fix` may not change it on its own (the driver's authored-tests
+           gate) and must ask a human through `needs_input`, so name the test and why. A
+           redundant or oversized test is a `non-blocking` finding.
+        4. If your blocking finding is that the *diagnosis* was wrong, say exactly that in
+           `fail_reason`. The FAIL rewinds to `fix`, which reports `root_cause_addressed: false`
+           honestly instead of re-litigating the cause; the driver then rewinds to
+           `root-cause` once with that report as its input, and a second false asks the
+           owner (see `workflow.md`'s rewind-boundaries section).
   - id: verification
     context_policy: fresh
     gate: true
@@ -26,9 +66,12 @@ steps:
       position: >-
         Specific to this lane, you also re-run the original reproduction: the lane's core
         acceptance signal is *the artifact that originally failed now passes*. Design
-        quality is `review`'s job, next. This lane is scoped-capable (the scoped tier): a
+        quality was already judged: `review` ran before you (this lane's order is
+        fix → review → verification → deliver) and its pass covers the tree you verify.
+        This lane is scoped-capable (the scoped tier): a
         work item whose content carries the marker line `verification: scoped` runs this
-        step scoped — declare the `scope` object and keep the repro mandatory; without the
+        step scoped — declare the `scope` object with exactly the `declared_paths` review
+        recorded (`steps.review.output.scope`) and keep the repro mandatory; without the
         marker it runs full and carries no `scope`.
       lane_checks: |-
         **Re-run the repro.** Read `artifacts/repro.md` and execute its `## Steps` verbatim
@@ -39,44 +82,6 @@ steps:
         must record the repro re-run as a check named `repro` with status `pass` — the
         driver rejects a pass whose repro check is skipped or missing.
       never_pre_existing: the repro re-run (its check and the original repro case), every test in `steps.repro.output.test_files`, and the `steps.fix.output.regression_test` test(s)
-  - id: review
-    context_policy: fresh
-    gate: true
-    on_fail: { target: fix }
-    vars:
-      build_step: fix
-      scope_source: the WI and the root-cause scope guidance
-      intro: |-
-        Judge whether this bug fix is ready to release. Unlike `verification`, this step is a
-        genuine quality judgment, not a mechanical check — and in this lane it has a specific
-        question to answer above all: **did the fix remove the actual cause?** The lane's whole
-        reason to exist is preventing symptom-patches, and this is the last step positioned to
-        catch one; ship-readiness judgment needs both the mechanical results and the evidence
-        chain (repro -> cause -> fix -> verified) in hand.
-      judge: |-
-        1. Read, in this order: `artifacts/root-cause.md` (the proven cause),
-           `artifacts/repro.md` (the observed failure), the full diff (in each task repo
-           `git diff $(git merge-base HEAD origin/HEAD)..HEAD`, falling back to `origin/main` or
-           `origin/master` when `origin/HEAD` is unset — this carries `repro`'s test commit,
-           `fix`'s commits and any commit `fix` did not report), and
-           `artifacts/verification-report.md` (the mechanical results, repro re-run included).
-        2. Judge the causal fit: does the diff remove the *diagnosed condition*, or does it
-           merely suppress the observed symptom at one call site? Would the failure still occur
-           through a path the diff did not touch? If `fix` reported
-           `root_cause_addressed: false`, that is an automatic blocking finding — the lane
-           requires the cause itself to be gone.
-        3. Judge the blast radius: the diff's effect on adjacent behavior the diagnosis did not
-           implicate; scope creep beyond what the cause demanded; missing test coverage of the
-           corrected behavior if the project expects tests alongside fixes.
-           Judge the tests in the diff too: a repro or regression test that does not actually
-           reproduce the diagnosed failure (vacuous, or passing whatever the code does) is a
-           blocking finding — `fix` may not change it on its own (the driver's authored-tests
-           gate) and must ask a human through `needs_input`, so name the test and why. A
-           redundant or oversized test is a `non-blocking` finding.
-        4. If your blocking finding is that the *diagnosis* was wrong, say exactly that in
-           `fail_reason` — `fix` is expected to report it honestly rather than re-litigate the
-           cause mid-flow (there is no direct rewind to `root-cause` in this lane; see
-           `workflow.md`'s rewind-boundaries section).
   - { id: deliver, context_policy: fresh, gate: true, requires_command_evidence: true, on_fail: { target: fix } }
 ---
 
@@ -89,9 +94,10 @@ frontmatter `steps` array above is the *only* execution order. Nothing here over
 ## Shape of the flow
 
 ```
-repro --> root-cause --> fix --> verification --> review --> deliver
-   ^         |                     |                |           |
+repro --> root-cause --> fix --> review --> verification --> deliver
+   ^         |   ^         |        |            |                |
    |   (FAIL: rewind to repro)  (FAIL: rewind to fix)  (FAIL: rewind to fix)  (FAIL: rewind to fix)
+             +-- fix false, once --+
 ```
 
 The lane exists for bugs whose cause is NOT already known. Its contract with the rest of
@@ -129,9 +135,9 @@ convention — the driver injects nothing and there is no frontmatter declaratio
 |---|---|---|
 | `repro` | `artifacts/repro.md` (commands, environment, observed vs expected), plus a failing test under `repos/<name>/**` when one is authored | `root-cause`, `verification` |
 | `root-cause` | `artifacts/root-cause.md` (verdict, cause, evidence) | `fix`, `review` |
-| `fix` | changes under `repos/<name>/**`, `artifacts/fix-summary.md`, and the repro pinned as a regression test (required output `regression_test`; waived only with a review-visible reason) | `verification`, `review`, `deliver` |
-| `verification` | `artifacts/verification-report.md` (verdict) | `review`, `deliver` (verified heads, test bar) |
-| `review` | `artifacts/review.md` (verdict) | `deliver` (the merge rule's independent review) |
+| `fix` | changes under `repos/<name>/**`, `artifacts/fix-summary.md`, and the repro pinned as a regression test (required output `regression_test`; waived only with a review-visible reason) | `review`, `verification`, `deliver` |
+| `review` | `artifacts/review.md` (verdict, findings) | `verification` (its scope record, on the scoped tier), `deliver` (the merge rule's independent review and its follow-up summary) |
+| `verification` | `artifacts/verification-report.md` (verdict) | `deliver` (verified heads, test bar) |
 | `deliver` | the pushed feature branch, PR and merge outcome per repo, `artifacts/delivery.md` | (terminal) |
 
 The repro artifact is the spine of the lane: `root-cause` cites it as evidence, and
@@ -150,23 +156,36 @@ This section explains the choices:
   determine the cause from the evidence at hand. `repro` re-runs with the `fail_reason`
   (what was missing: intermittent behavior, missing logs, wrong environment) attached as
   its `pending_rewind_input`, and sharpens the reproduction accordingly.
-- **`verification` FAILs -> rewind to `fix`.** Build/lint/tests — including the original
-  repro case — did not pass; only `fix` can change the tree.
 - **`review` FAILs -> rewind to `fix`.** Review found the fix wanting (wrong cause
   addressed, incomplete fix, or a fix that breaks something adjacent). `fix` re-runs
-  with the blocking findings attached; `root-cause` is NOT a rewind target — if the
-  review verdict says the diagnosis itself was wrong, `fix`'s re-run is expected to say
-  so in its output and stop honestly rather than re-litigate the cause mid-flow.
+  with the blocking findings attached. If the verdict says the diagnosis itself was
+  wrong, `fix` reports `root_cause_addressed: false` honestly rather than re-litigating
+  the cause mid-flow.
+- **`fix` completes with `root_cause_addressed: false` -> the driver rewinds to
+  `root-cause`, once.** Before `review` or `verification` runs, the driver archives and
+  re-runs `root-cause` with the fix's `summary` as its rewind input, charged on the
+  `fix → root-cause` edge; `fix` then re-runs against the new diagnosis. A re-run
+  `root-cause` that cannot prove a cause still FAILs to `repro` as above. A second false
+  does not rewind again: the driver asks the owner (`needs_input`) whether to continue
+  with corrective guidance or cancel and re-file — so an honestly reported
+  misdiagnosis never ends in `failed_rewind_exhausted`.
   An all-text-only review FAIL (every blocking finding marked `text_only: true`) takes
   the light path: `fix`'s previous session resumes with the verdict, applies only
-  text-only fixes, and the gate tail (`verification`, then a fresh `review`) re-runs
+  text-only fixes, and the gate tail (a fresh `review`, then `verification`) re-runs
   unchanged.
+- **`verification` FAILs -> rewind to `fix`.** Build/lint/tests — including the original
+  repro case — did not pass; only `fix` can change the tree. The judgment already
+  passed on the earlier tree; the re-entered round re-runs it after the fix.
 - **`deliver` FAILs ("back to code") -> rewind to `fix`.** The human sent the delivery
   back; `fix` re-runs and the re-run delivery reuses the same branch and PR.
 
-Workflow-level rewind bounds: `max_total: 6`, `max_per_step: 3`. A diagnosis-fix loop
-that cannot converge in three bounded rewinds is telling you the WI is mis-scoped —
-surface that honestly instead of burning the budget on repeat attempts.
+Workflow-level rewind bounds: `max_total: 9`, `max_per_step: 3`. The per-step bound
+is charged per gate→target edge (the three gates that rewind to `fix` carry three
+charged slots each; light and converging rewinds charge none, until a light re-entry
+self-reports `needs_code_change: true` — that turns its light rewind into a fresh round,
+which charges the edge once), and `max_total` counts every rewind, light ones included. A diagnosis-fix loop that cannot converge in three
+charged rewinds per gate is telling you the WI is mis-scoped — surface that honestly
+instead of burning the budget on repeat attempts.
 
 ## Budget guidance
 
@@ -179,6 +198,8 @@ above and the daemon's per-step runtime bound T (docs/reference/commands.md, `pf
 push only the feature branch, open or reuse the PR, merge under the merge rule or ask a
 human) is the shared step definition `workflows/_shared/steps/deliver.md`. Lane facts:
 its "back to code" answer rewinds to `fix`, and the independent review it reads is this
-workflow's `review` gate (`steps.review.output`). There is no release slot: releases and
+workflow's `review` gate (`steps.review.output` — its verdict, its recorded scope on the
+scoped tier, and the `reviewed_heads` the driver wrote at its pass, which must cover the
+delivered diff). There is no release slot: releases and
 deploys happen only through the separate `release` bundle (a separate WI), cut from the
 merged origin head.

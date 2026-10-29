@@ -265,7 +265,7 @@ func TestNeedsInputFallsBackWhenTheOriginChatIsGone(t *testing.T) {
 	}
 }
 
-// polyforge#199 review B1/B2: the origin chat got the question (a Claude
+// polyforge#199 code review: the origin chat got the question (a Claude
 // Code --wait-decision watcher printed, acked and exited) and then stays
 // silent for longer than chatLiveFor while the human decides: the other
 // chat must NOT get q-1. A decision raised meanwhile, which nobody has

@@ -1,21 +1,21 @@
 package driver
 
 // deliver_testbar_shapes_test.go: the test-bar comparison against the
-// REAL recordings of the three incident dispatches (workbench#60).
+// REAL recordings of the three incident dispatches.
 //
 // The synthetic repro (deliver_testbar_setmatch_repro_test.go) encodes
 // the two reported failure modes. It is not enough on its own: two
 // plausible-looking fixes each pass it and still refuse a real delivery.
-// Rejoining a multi-word argv and re-splitting it breaks workbench#58
+// Rejoining a multi-word argv and re-splitting it breaks
 // entry 29, where an unquoted `|` inside one argv word is an argument
 // (`-run A|B`), not a pipe. Re-scanning only argv words with shell
-// syntax breaks workbench#27 entry 18, `test -z "$(gofmt -l .)"`, which
+// syntax breaks entry 18, `test -z "$(gofmt -l .)"`, which
 // matches today. These fixtures use the recorded command lines and argv
 // words from the three incident capsules' deliver steps:
 //
-//   - workbench-58 deliver s9
-//   - workbench-27 deliver s8
-//   - workbench-52 deliver s20
+//   - w58 deliver s9
+//   - w27 deliver s8
+//   - w52 deliver s20
 //
 // (their `artifacts/steps/deliver/<step>/result.json` command_evidence
 // and their `runtime-state/execution.json` verification test_bar). The
@@ -67,12 +67,12 @@ func TestTestBarRerunWorkbench58Shapes(t *testing.T) {
 		evLine(cwd, "sh test/e2e-parallel.sh", 0),
 		{Argv: []string{"GOWORK=off", "go", "test", "./test/", "-run", "TestW58GrillAttentionContract|TestGrillStepsRequireQuestionTable|TestW32OutputFormatSkillContract|TestW241GuideExistsForNewMember", "-count=1"}, Cwd: cwd, DurationMs: 5},
 		{Argv: []string{"GOWORK=off", "go", "test", "./internal/polyforge/driver/", "./internal/common/workflow/", "-run", "TestShippedPrinciplesRenderedOnce|TestShippedBundlesCarryNoKind|TestReadStepDefinitionPrinciples", "-count=1"}, Cwd: cwd, DurationMs: 5},
-		evLine(cwd, "git push origin HEAD:refs/heads/polyforge/workbench-58", 0),
+		evLine(cwd, "git push origin HEAD:refs/heads/polyforge/w58", 0),
 		evLine(cwd, "gh pr merge https://github.com/silgrid/polyforge/pull/705 --merge", 0),
 	}
 	const prURL = "https://github.com/silgrid/polyforge/pull/705"
 	if !testBarRerun(repo, prURL, bar, evidenceEvents(evidence, t.TempDir())) {
-		t.Fatal("workbench#58 s9: the recorded re-run of all ten bar commands (multi-word argv holding $(... | ...), literal `|` inside -run) was not recognised")
+		t.Fatal(" s9: the recorded re-run of all ten bar commands (multi-word argv holding $(... | ...), literal `|` inside -run) was not recognised")
 	}
 }
 
@@ -91,7 +91,7 @@ func TestTestBarRerunWorkbench27Shapes(t *testing.T) {
 		{Repo: repo, Command: "python3 -I docs/design/polyforge-vnext/tools/check-xrefs.py"},
 		{Repo: repo, Command: "GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./..."},
 		{Repo: repo, Command: "GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./..."},
-		{Repo: repo, Command: "GOWORK=off go test ./test/ -run '^TestWB27ScopedSelectionIncludesTestOnlyImporters$' -count=1 -v"},
+		{Repo: repo, Command: "GOWORK=off go test ./test/ -run '^TestW27ScopedSelectionIncludesTestOnlyImporters$' -count=1 -v"},
 		{Repo: repo, Command: "GOWORK=off go test ./test/ -run '^TestWB(20|27)' -count=1 -v"},
 		{Repo: repo, Command: "GOWORK=off go test ./test/ -run '^TestS18SyncProjectionAcceptance$' -count=1 -v"},
 		{Repo: repo, Command: "GOWORK=off go test ./cmd/... ./internal/... -count=1"},
@@ -107,7 +107,7 @@ func TestTestBarRerunWorkbench27Shapes(t *testing.T) {
 		evLine(cwd, "python3 -I docs/design/polyforge-vnext/tools/check-xrefs.py", 0),
 		evLine(cwd, "GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./...", 0),
 		evLine(cwd, "GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./...", 0),
-		{Argv: []string{"GOWORK=off", "go", "test", "./test/", "-run", "'^TestWB27ScopedSelectionIncludesTestOnlyImporters$'", "-count=1", "-v"}, Cwd: cwd, DurationMs: 5},
+		{Argv: []string{"GOWORK=off", "go", "test", "./test/", "-run", "'^TestW27ScopedSelectionIncludesTestOnlyImporters$'", "-count=1", "-v"}, Cwd: cwd, DurationMs: 5},
 		{Argv: []string{"GOWORK=off", "go", "test", "./test/", "-run", "'^TestWB(20|27)'", "-count=1", "-v"}, Cwd: cwd, DurationMs: 5},
 		{Argv: []string{"GOWORK=off", "go", "test", "./test/", "-run", "'^TestS18SyncProjectionAcceptance$'", "-count=1", "-v"}, Cwd: cwd, DurationMs: 5},
 		evLine(cwd, "GOWORK=off go test ./cmd/... ./internal/... -count=1", 1),
@@ -115,12 +115,12 @@ func TestTestBarRerunWorkbench27Shapes(t *testing.T) {
 		evLine(cwd, "GOWORK=off go test ./cmd/... ./internal/... -count=1", 0),
 		evLine(cwd, "GOWORK=off go test ./test/fakepi/ -count=1", 0),
 		evLine(cwd, "sh test/e2e-parallel.sh", 0),
-		evLine(cwd, "git push origin HEAD:refs/heads/polyforge/workbench-27", 0),
+		evLine(cwd, "git push origin HEAD:refs/heads/polyforge/w27", 0),
 		evLine(cwd, "gh pr merge https://github.com/silgrid/polyforge/pull/681 --merge", 0),
 	}
 	const prURL = "https://github.com/silgrid/polyforge/pull/681"
 	if !testBarRerun(repo, prURL, bar, evidenceEvents(evidence, t.TempDir())) {
-		t.Fatal("workbench#27 s8: the recorded re-run of all twelve bar commands (quoted argv words, argv substitution) was not recognised")
+		t.Fatal(" s8: the recorded re-run of all twelve bar commands (quoted argv words, argv substitution) was not recognised")
 	}
 	// The first ./cmd/... ./internal/... run exited 1 and the bar command
 	// was then re-run green: a red event must not satisfy it.
@@ -129,7 +129,7 @@ func TestTestBarRerunWorkbench27Shapes(t *testing.T) {
 		evLine(cwd, "GOWORK=off go test ./cmd/... ./internal/... -count=1", 1),
 	}
 	if testBarRerun(repo, "", []testBarCmd{{Repo: repo, Command: "GOWORK=off go test ./cmd/... ./internal/... -count=1"}}, evidenceEvents(redOnly, t.TempDir())) {
-		t.Fatal("workbench#27 s8: a bar command whose only recorded run exited 1 was counted as green")
+		t.Fatal(" s8: a bar command whose only recorded run exited 1 was counted as green")
 	}
 }
 
@@ -175,11 +175,11 @@ func TestTestBarRerunWorkbench52Order(t *testing.T) {
 		}
 		evidence = append(evidence, evLine(cwd, tb.Command, 0))
 	}
-	evidence = append(evidence, evLine(cwd, "git push origin HEAD:refs/heads/polyforge/workbench-52", 0))
+	evidence = append(evidence, evLine(cwd, "git push origin HEAD:refs/heads/polyforge/w52", 0))
 	evidence = append(evidence, evLine(cwd, "gh pr merge https://github.com/silgrid/pi-web-gmi/pull/7 --merge", 0))
 	const prURL = "https://github.com/silgrid/pi-web-gmi/pull/7"
 	if !testBarRerun(repo, prURL, bar, evidenceEvents(evidence, t.TempDir())) {
-		t.Fatal("workbench#52 s20: a complete green re-run recorded in execution order (bar entry 18 before 17) was not recognised")
+		t.Fatal(" s20: a complete green re-run recorded in execution order (bar entry 18 before 17) was not recognised")
 	}
 }
 
@@ -237,7 +237,7 @@ func TestTestBarRerunNestedMergeWindow(t *testing.T) {
 
 // TestLightRecheckEvidenceSubstitutionShape: the light recheck shares the
 // comparison key, so a bound command holding a substitution recorded as a
-// multi-word argv is recognised there too (workbench#60's format fix
+// multi-word argv is recognised there too ('s format fix
 // reaches both paths through barKey).
 func TestLightRecheckEvidenceSubstitutionShape(t *testing.T) {
 	root := t.TempDir()

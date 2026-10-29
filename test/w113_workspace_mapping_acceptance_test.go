@@ -325,6 +325,8 @@ func (d *w113Daemon) boot(bound time.Duration) (served bool, output string, code
 		// never the host's real claude; a test opts in through extraArgs
 		// (a later --claude-bin wins)
 		"--claude-bin", "/nonexistent/claude-test-guard",
+		// retries paced in milliseconds, not minutes (a later flag wins)
+		"--retry-backoff-base", e2eRetryBackoffBase.String(),
 	}
 	if d.config != "" {
 		args = append(args, "--config", d.config)
@@ -2088,7 +2090,7 @@ func TestW113InstallOldShapeUntouched(t *testing.T) {
 // S31 — fresh install writes flat connection keys only (no fabricated mapping).
 // ---------------------------------------------------------------------------
 
-// TestW113InstallFreshTemplate pins criterion #23 (owner ruling on workbench#3
+// TestW113InstallFreshTemplate pins criterion #23 (owner ruling on
 // review finding 9): a fresh install writes cli.toml through `pf config` with
 // the flat connection keys and NO [workspace] section at all — the installer
 // never knows or fabricates a mapping, it only tells the operator the daemon

@@ -25,7 +25,10 @@
 #   2. design-doc cross-reference gate (docs/design/polyforge-vnext/tools/
 #      check-xrefs.py, the Makefile's `xrefs` check; python3 is REQUIRED here -
 #      unlike `make xrefs`, a release never skips it), then the test gate
-#      (GOWORK=off make test, includes the long e2e);
+#      (GOWORK=off make test, includes the long e2e), then the
+#      production-dependency audit gate (the console SPA put npm inside
+#      the aihub trust surface, so a release refuses on a known vulnerable
+#      production dependency; the test bar never runs it);
 #   3. build the binaries (GOWORK=off make release VERSION=<tag>) -> the
 #      six-binary matrix aihub/pf × linux-amd64, darwin-arm64,
 #      darwin-amd64 (polyforge#218); build the image from the LINUX aihub
@@ -90,13 +93,19 @@
 #   RELEASE_XREFS_CMD   xrefs gate command        (default: python3 -I
 #                       docs/design/polyforge-vnext/tools/check-xrefs.py)
 #   RELEASE_TEST_CMD    test gate command         (default: GOWORK=off make test)
+#   RELEASE_AUDIT_CMD   production-dependency audit gate command
+#                       (default: sh -c 'cd webui && npm audit --omit=dev
+#                       --audit-level=high'); runs AFTER the test gate and
+#                       BEFORE the build, like the other gates
 #   RELEASE_BUILD_CMD   build command; sees TAG; must leave
 #                       artifacts/release-$TAG/aihub, .../pf and the four
 #                       darwin binaries .../aihub-darwin-arm64, .../pf-darwin-arm64,
 #                       .../aihub-darwin-amd64, .../pf-darwin-amd64
 #                                                 (default: GOWORK=off make release VERSION=$TAG)
 #   RELEASE_IMAGE       image repository          (default: ghcr.io/silgrid/aihub)
-#   RELEASE_GH_REPO     gh -R repo                (default: silgrid/polyforge)
+#   RELEASE_GH_REPO     gh -R repo                (REQUIRED; no default - an
+#                       unset or empty value refuses before any work. Set it
+#                       to the release repo, e.g. silgrid/polyforge)
 #   RELEASE_REMOTE      git remote                (default: origin)
 #   RELEASE_BRANCH      branch HEAD must equal    (default: main)
 #   DOCKER_CONFIG       docker config dir (ghcr login check; default ~/.docker)
@@ -108,7 +117,7 @@ set -eu
 REMOTE="${RELEASE_REMOTE:-origin}"
 BRANCH="${RELEASE_BRANCH:-main}"
 IMAGE="${RELEASE_IMAGE:-ghcr.io/silgrid/aihub}"
-GH_REPO="${RELEASE_GH_REPO:-silgrid/polyforge}"
+GH_REPO="${RELEASE_GH_REPO:-}"
 SEMVER_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
 # Owner-direct allowlist (polyforge#240; see the PR-only check above): author
 # emails, space-separated, whose direct commits pass the PR-only check. Empty
@@ -187,6 +196,12 @@ pr_only_why_of() { printf '%s\n' "$1" | grep -v '^owner-direct: ' | grep . || tr
 case "${1:-}" in
   -h|--help) usage; echo; echo "--verify <tag> checks an already published release without changing anything."; exit 0 ;;
 esac
+
+# GH_REPO must be explicit. Without it every gh call (-R and the PR-only
+# repos/$GH_REPO query) would silently use a guessed repository while git
+# pushes to REMOTE - releasing or auditing a tag in the wrong repo follows.
+# Refuse before any work in both modes; --help stays available without it.
+[ -n "$GH_REPO" ] || die "RELEASE_GH_REPO is unset or empty; set it to the release repo (e.g. silgrid/polyforge) - refusing to guess a repository"
 
 # ---------------------------------------------------------------- verify mode
 if [ "${1:-}" = "--verify" ]; then
@@ -370,6 +385,17 @@ else
 fi
 echo "release: running test gate"
 if [ -n "${RELEASE_TEST_CMD:-}" ]; then sh -c "$RELEASE_TEST_CMD"; else GOWORK=off make test; fi
+
+# 2b. production-dependency audit gate: the console SPA build chain put
+# npm inside the aihub trust surface, so the release
+# refuses when a PRODUCTION dependency carries a known high/critical
+# advisory. The test bar never runs this; only a release does.
+echo "release: running production-dependency audit gate"
+if [ -n "${RELEASE_AUDIT_CMD:-}" ]; then
+  sh -c "$RELEASE_AUDIT_CMD" || die "production-dependency audit gate failed (RELEASE_AUDIT_CMD); nothing built or published"
+else
+  (cd webui && npm audit --omit=dev --audit-level=high) || die "production-dependency audit failed: a production dependency of the console SPA carries a known high or critical advisory; nothing built or published"
+fi
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/release.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT INT TERM

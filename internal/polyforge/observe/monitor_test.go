@@ -14,6 +14,9 @@ package observe
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -232,11 +235,16 @@ func TestRuleStepTimeoutTrickleWedgePastT(t *testing.T) {
 	// #117/#124: the step trickles one progress record per window forever;
 	// no silence rule ever fires. Only the CUMULATIVE bound can — and it
 	// counts the runtime earlier dispatches of the step already spent.
+	// This dispatch runs only a sixth of T (the rest was spent before it),
+	// so although its own time all goes to the model the expiry is the
+	// step's length, not this model ( D1): long_task. Only a
+	// tick delayed past half of T (300ms) could flip the attribution, and
+	// the timing check below already fails at 250ms.
 	h := newFakeHandle("att_1")
 	m, _ := newTestMonitor(t, h, nil)
 	tr := startDispatch(m, 1, "fix", supervise.Thresholds{
 		Silence: time.Hour, Tool: time.Hour,
-		StepTimeout: 300 * time.Millisecond, PriorRuntime: 200 * time.Millisecond,
+		StepTimeout: 600 * time.Millisecond, PriorRuntime: 500 * time.Millisecond,
 	})
 	tr.WaitingModel()
 	stop := make(chan struct{})
@@ -253,11 +261,11 @@ func TestRuleStepTimeoutTrickleWedgePastT(t *testing.T) {
 	}()
 	t0 := time.Now()
 	dead, ok := nextVerdict(t, m, "step_timeout").(supervise.StepDead)
-	if !ok || dead.Cause != supervise.CauseStepTimeoutSlowModel {
-		t.Fatalf("verdict = %+v, want step_timeout_slow_model (the time went to the model)", dead)
+	if !ok || dead.Cause != supervise.CauseStepTimeoutLongTask {
+		t.Fatalf("verdict = %+v, want step_timeout_long_task (this dispatch ran a sixth of T: the step's history spent the rest)", dead)
 	}
 	if since := time.Since(t0); since > 250*time.Millisecond {
-		t.Fatalf("T accumulates across dispatches: fired after %v, want ~100ms (200ms already spent)", since)
+		t.Fatalf("T accumulates across dispatches: fired after %v, want ~100ms (500ms already spent)", since)
 	}
 }
 
@@ -568,5 +576,35 @@ func TestLiveStepTimeoutFloorStillWins(t *testing.T) {
 	expectNoVerdict(t, m, 200*time.Millisecond, "the step's own floor has not elapsed")
 	if dead, ok := nextVerdict(t, m, "floor-bound step_timeout").(supervise.StepDead); !ok {
 		t.Fatalf("verdict = %+v, want step_dead", dead)
+	}
+}
+
+// TestSettledDriverExitRecordsNoDeath (D10): a driver that exits over a
+// workflow_status it stops on by design — a terminal one, or blocked (the
+// owner park; recoverCore hands the WI to its owner) — finished: the
+// runtime's close door still gets the request (recoverCore translates the
+// status into the WI's close), but no needs_recovery event is recorded.
+// A mid-workflow exit still records its agent_death
+// (TestDeathDetectionSendsNeedsRecovery), as does a running one here.
+func TestSettledDriverExitRecordsNoDeath(t *testing.T) {
+	want := map[string]int{"completed": 0, "failed_gate": 0, "failed_rewind_exhausted": 0, "blocked": 0, "running": 1}
+	for _, status := range []string{"completed", "failed_gate", "failed_rewind_exhausted", "blocked", "running"} {
+		h := newFakeHandle("att_1")
+		m, ob := newTestMonitor(t, h, nil)
+		raw, _ := json.Marshal(map[string]any{
+			"capsule_id": "cap_wi_test", "work_item_id": "wi_test", "current_step": "deliver",
+			"workflow_status": status, "version": 9, "steps": map[string]any{},
+		})
+		if err := os.WriteFile(filepath.Join(m.wi.CapsuleDir, "runtime-state", "execution.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		h.die()
+		if msg := waitOB(t, ob, "the close request for a "+status+" exit"); msg.Kind != protocol.OBNeedsRecovery || msg.SpawnN != 1 {
+			t.Fatalf("%s: the runtime's close door must still get the request: %+v", status, msg)
+		}
+		time.Sleep(50 * time.Millisecond)
+		if n := len(eventsOf(m, EvNeedsRecovery)); n != want[status] {
+			t.Fatalf("%s: the driver exit recorded %d needs_recovery event(s), want %d", status, n, want[status])
+		}
 	}
 }

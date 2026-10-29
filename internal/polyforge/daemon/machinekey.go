@@ -1,7 +1,7 @@
 package daemon
 
 // machinekey.go: the daemon's data-dir-scoped Ed25519 identity
-// (workbench#11). <data-dir>/machine-key holds the hex seed, created once
+//. <data-dir>/machine-key holds the hex seed, created once
 // atomically (temp file + fsync + link + directory fsync, under the
 // data-dir flock) and reused forever. A corrupt or unreadable file refuses
 // the start — never a silent regeneration (that would silently re-register

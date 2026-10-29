@@ -1,6 +1,6 @@
 package test
 
-// w21_treehash_fastpath_acceptance_test.go: polyforge workbench#21 — the
+// w21_treehash_fastpath_acceptance_test.go: polyforge — the
 // driver's re-dispatch fast path (tree-hash resume), authored against
 // the spec BEFORE the implementation lands. Every bar below is RED on
 // the pre-implementation tree — an assertion-level red (the

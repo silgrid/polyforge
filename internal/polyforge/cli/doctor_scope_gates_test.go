@@ -10,7 +10,7 @@ import (
 )
 
 // doctor_scope_gates_test.go: `pf doctor`'s "scoped-gates readiness" row
-// (workbench#25). The row reads, never executes, the release tree's engine and
+//. The row reads, never executes, the release tree's engine and
 // the clone's manifests/conf. Fixtures install a manifest or a conf instead of
 // the retired repo-owned script.
 
@@ -94,8 +94,8 @@ func TestScopedGatesStackFirstValidPin(t *testing.T) {
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := scopedGatesStack(p); got != "npm" {
-		t.Fatalf("scopedGatesStack = %q, want the first valid pin npm", got)
+	if got, _ := scopedGatesReadConf(p); got != "npm" {
+		t.Fatalf("scopedGatesReadConf pin = %q, want the first valid pin npm", got)
 	}
 }
 
@@ -305,5 +305,164 @@ func TestScopedGatesNeverExecutesEngine(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatalf("the doctor executed the release engine (marker exists)")
+	}
+}
+
+// The conf reader mirrors the engine: stack=none is a valid pin, and only
+// the command lines the engine accepts count — fast_gate=, full_command= and
+// well-formed check= lines; an empty value, a leading command substitution,
+// a bad phase and a reserved or malformed check name are no command.
+func TestScopedGatesReadConfPinsAndCountsCommands(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "verify-scope.conf")
+	body := strings.Join([]string{
+		"# comment",
+		"stack=bogus",
+		"stack=none",
+		"stack=go",
+		"fast_gate=cargo fmt --check",
+		"full_command=cargo test",
+		"  check=clippy|fast|cargo clippy -- -D warnings",
+		"check=fast-1|fast|reserved name",
+		"check=bad name|fast|malformed name",
+		"check=slowpoke|slow|bad phase",
+		"check=empty|full|",
+		"fast_gate=$(touch pwned)",
+		"full_command=`touch pwned`",
+		"fast_gate=",
+		"exclude=docs/*",
+		"test_glob=tests/*.py",
+	}, "\n") + "\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pin, n := scopedGatesReadConf(p)
+	if pin != "none" || n != 3 {
+		t.Fatalf("scopedGatesReadConf = (%q, %d), want the first valid pin none and 3 commands", pin, n)
+	}
+	if pin, n := scopedGatesReadConf(filepath.Join(t.TempDir(), "absent.conf")); pin != "" || n != 0 {
+		t.Fatalf("a missing conf = (%q, %d), want no pin and no command", pin, n)
+	}
+}
+
+// Another stack (no go.mod / package.json) whose conf declares its bar: the
+// engine reports the conf's commands on the full tier, so the repo conf is
+// effective — pass, saying it is full tier only.
+func TestScopedGatesOtherStackConfPass(t *testing.T) {
+	srv := reposAihubDefault(t)
+	home := t.TempDir()
+	installReleaseEngine(t, home)
+	ws := t.TempDir()
+	clone := reposClone(t, ws, "pi-web", "main")
+	writeScopedManifest(t, clone, "Cargo.toml", "[package]\nname = \"x\"\n")
+	writeScopedConf(t, clone, "fast_gate=cargo fmt --check\ncheck=test|full|cargo test\n")
+	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
+	_, detail := scopedGatesRow(t, doc, "pass")
+	for _, tok := range []string{"repo conf effective", "full tier only", "e2e/pi-web"} {
+		if !strings.Contains(detail, tok) {
+			t.Fatalf("other-stack conf detail lacks %q: %q", tok, detail)
+		}
+	}
+}
+
+// Another stack with no conf: warn, with the consequence spelled out — the
+// bar is derived ad hoc every run, there is no scoped tier, and a future
+// runner dispatch fails closed.
+func TestScopedGatesOtherStackNoConfWarnsWithConsequence(t *testing.T) {
+	srv := reposAihubDefault(t)
+	home := t.TempDir()
+	installReleaseEngine(t, home)
+	ws := t.TempDir()
+	writeScopedManifest(t, reposClone(t, ws, "pi-web", "main"), "pyproject.toml", "[project]\nname = \"x\"\n")
+	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
+	_, detail := scopedGatesRow(t, doc, "warn")
+	for _, tok := range []string{"pi-web", "no supported stack manifest", "ad hoc on every run", "no scoped tier", "falls back to full", "runner dispatch fails closed", scopedGatesConf, scopedGatesPointer} {
+		if !strings.Contains(detail, tok) {
+			t.Fatalf("other-stack no-conf detail lacks %q: %q", tok, detail)
+		}
+	}
+}
+
+// Another stack whose conf declares no command the engine accepts is the
+// same gap as no conf: warn.
+func TestScopedGatesOtherStackConfWithoutCommandWarns(t *testing.T) {
+	srv := reposAihubDefault(t)
+	home := t.TempDir()
+	installReleaseEngine(t, home)
+	ws := t.TempDir()
+	clone := reposClone(t, ws, "pi-web", "main")
+	writeScopedManifest(t, clone, "Cargo.toml", "[package]\nname = \"x\"\n")
+	writeScopedConf(t, clone, "exclude=docs/*\nfast_gate=$(touch pwned)\n")
+	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
+	_, detail := scopedGatesRow(t, doc, "warn")
+	if !strings.Contains(detail, "no repo conf command") || !strings.Contains(detail, "runner dispatch fails closed") {
+		t.Fatalf("a command-less conf must warn like no conf: %q", detail)
+	}
+}
+
+// A stack=none pin counts as a conf: it resolves even an unpinned
+// multi-manifest repo to conf-only (pass when it declares a command), and a
+// stack=none conf with no command warns.
+func TestScopedGatesStackNonePinCountsAsConf(t *testing.T) {
+	srv := reposAihubDefault(t)
+	home := t.TempDir()
+	installReleaseEngine(t, home)
+	ws := t.TempDir()
+	clone := reposClone(t, ws, "pi-web", "main")
+	writeScopedManifest(t, clone, "go.mod", "module example.test/x\n\ngo 1.21\n")
+	writeScopedManifest(t, clone, "package.json", "{\n  \"name\": \"x\"\n}\n")
+	writeScopedConf(t, clone, "stack=none\ncheck=lint|fast|make lint\n")
+	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
+	_, detail := scopedGatesRow(t, doc, "pass")
+	if !strings.Contains(detail, "repo conf effective") || strings.Contains(detail, "unpinned multi-manifest") {
+		t.Fatalf("a stack=none pin with a command must be the effective repo conf: %q", detail)
+	}
+
+	writeScopedConf(t, clone, "stack=none\n")
+	doc = scopedGatesDoctorWithHome(t, srv, ws, home)
+	_, detail = scopedGatesRow(t, doc, "warn")
+	if !strings.Contains(detail, "pins stack=none but declares no command") || !strings.Contains(detail, "no scoped tier") {
+		t.Fatalf("a command-less stack=none conf must warn with the consequence: %q", detail)
+	}
+}
+
+// A conf-only repo still needs the release-tree engine: warn without it.
+func TestScopedGatesOtherStackConfWithoutEngineWarns(t *testing.T) {
+	srv := reposAihubDefault(t)
+	ws := t.TempDir()
+	clone := reposClone(t, ws, "pi-web", "main")
+	writeScopedManifest(t, clone, "Cargo.toml", "[package]\nname = \"x\"\n")
+	writeScopedConf(t, clone, "full_command=cargo test\n")
+	doc := scopedGatesDoctorWithHome(t, srv, ws, t.TempDir())
+	_, detail := scopedGatesRow(t, doc, "warn")
+	if !strings.Contains(detail, scopedGatesEngine) || strings.Contains(detail, "repo conf effective") {
+		t.Fatalf("a conf-only repo without the engine must warn about the engine: %q", detail)
+	}
+}
+
+// Mixed: a scoped-ready Go repo and a conf-only repo pass together; the
+// detail counts the scoped-ready one and names the conf-only one apart.
+func TestScopedGatesMixedScopedReadyAndConfOnlyPass(t *testing.T) {
+	srv := (&reposAihub{
+		known: map[string][]api.ProjectRepo{"e2e": {
+			{Name: "pi-web", URL: "file:///nonexistent/pi-web.git"},
+			{Name: "charts", URL: "file:///nonexistent/charts.git"},
+		}},
+		items: map[string]string{},
+	}).server(t)
+	home := t.TempDir()
+	installReleaseEngine(t, home)
+	ws := t.TempDir()
+	writeScopedManifest(t, reposClone(t, ws, "pi-web", "main"), "go.mod", "module example.test/x\n\ngo 1.21\n")
+	charts := reposClone(t, ws, "charts", "main")
+	writeScopedConf(t, charts, "check=lint|fast|helm lint charts/*\n")
+	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
+	_, detail := scopedGatesRow(t, doc, "pass")
+	for _, tok := range []string{"1 of 2 registered repo(s) are scoped-ready", "1 repo(s) with no analyzer", "repo conf effective", "e2e/charts"} {
+		if !strings.Contains(detail, tok) {
+			t.Fatalf("mixed detail lacks %q: %q", tok, detail)
+		}
+	}
+	if strings.Contains(detail, "e2e/pi-web") {
+		t.Fatalf("the scoped-ready repo must not be listed as conf-only: %q", detail)
 	}
 }

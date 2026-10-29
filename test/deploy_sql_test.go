@@ -739,20 +739,20 @@ func TestDeployV250RepoInventorySQL(t *testing.T) {
 	})
 }
 
-// ---- the real heartbeat migration dir (workbench#66) ----
+// ---- the real heartbeat migration dir ----
 //
 // deploy.sh selects window SQL only by the LOCAL release tags in
 // (OLDVER, TAG]; a deploy/sql dir with no tag of the same name is never
 // visited. The heartbeat migration first landed as deploy/sql/v2.21.0, a
 // minor tag release.sh refuses to cut, so no v2.20.* deploy would apply it:
-// a v2.20.7 cut from that main would run the workbench#57 code on the
+// a v2.20.7 cut from that main would run the code on the
 // v2.20.6 schema, where a new machine's first registration fails with
 // machines.user_id NOT NULL (root-cause artifact E1). No v2.20.7 has been
 // cut; the v2.20.6 deploy did apply its own dir. The dir must be named after
 // the patch tag that carries it (v2.20.8).
 
 // realHeartbeatSQLDirs: the deploy/sql dirs whose upgrade.sql is the
-// workbench#57 machines.user_id migration.
+// machines.user_id migration.
 func realHeartbeatSQLDirs(t *testing.T) []string {
 	t.Helper()
 	root := filepath.Join("..", "deploy", "sql")

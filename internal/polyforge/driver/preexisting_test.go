@@ -1,7 +1,7 @@
 package driver
 
 // preexisting_test.go: the boundary of the pre-existing-failure lane
-// (polyforge#164 S6, review B1). The tests that pin the change — the
+// (polyforge#164 S6, code review). The tests that pin the change — the
 // repro, the authored acceptance tests, the regression test — fail on
 // the base commit by definition; classifying them pre_existing would
 // pass an unfixed bug. Such a verification result is rejected in-process.
@@ -86,16 +86,20 @@ func TestRunBugFixPassNeedsPassingRepro(t *testing.T) {
 		done(`{"repro_path":"artifacts/repro.md","reproduces":true}`),
 		done(`{"regression_test":"waived: no test surface"}`),
 		verificationDone(`{"verdict":"pass","checks":[{"name":"build","status":"pass"},{"name":"repro","status":"skipped","detail":"slow"}]}`),
-		verificationDone(`{"verdict":"pass","checks":[{"name":"build","status":"pass"},{"name":"original repro","status":"pass"}]}`),
+		// a check that merely mentions the word is not the repro check
+		verificationDone(`{"verdict":"pass","checks":[{"name":"build","status":"pass"},{"name":"app:repro-tools","status":"pass"},{"name":"original repro","status":"pass"}]}`),
+		verificationDone(`{"verdict":"pass","checks":[{"name":"build","status":"pass"},{"name":"repro","status":"pass"}]}`),
 	}
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := sp.dispatched(); len(got) != 4 {
-		t.Fatalf("the skipped repro under a pass must be rejected once, got %v", got)
+	if got := sp.dispatched(); len(got) != 5 {
+		t.Fatalf("the skipped repro and the merely-named repro under a pass must each be rejected once, got %v", got)
 	}
-	if fb := sp.spawnAt(3).PriorRejection; !strings.Contains(fb, `check named "repro" with status pass`) {
-		t.Fatalf("feedback must ask for the passing repro check: %q", fb)
+	for _, at := range []int{3, 4} {
+		if fb := sp.spawnAt(at).PriorRejection; !strings.Contains(fb, `check named "repro" with status pass`) {
+			t.Fatalf("feedback %d must ask for the passing repro check: %q", at, fb)
+		}
 	}
 	if exec := readExec(t, execPath); exec.WorkflowStatus != StatusCompleted {
 		t.Fatalf("the pass with a passing repro completes: %s", exec.WorkflowStatus)

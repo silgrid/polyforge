@@ -27,6 +27,18 @@ output:
           status: { type: string, enum: [fail] }
           evidence: { type: string, minLength: 1 }
       description: The baseline run against the pre-implementation tree - one entry per scenario_titles entry, same order. Empty only when the approved mode is `skipped-with-rationale`; otherwise at least one. The status enum admits only fail - every kept scenario is an assertion-level red; a scenario that passed at baseline was deleted (already_satisfied) or rewritten before completing. evidence carries the failure proof - a runner output excerpt or an observed-vs-expected contrast.
+    bindings:
+      type: array
+      items:
+        type: object
+        required: [title, repo, command, unit, marker]
+        properties:
+          title: { type: string, description: "One of scenario_titles, verbatim." }
+          repo: { type: string, description: "The task repo the command runs in - the bare repos/ child name." }
+          command: { type: string, description: "The command that runs the scenario's test, exactly as it is run inside that repo (no leading cd) - normally your targeted baseline command." }
+          unit: { type: string, description: "The test unit the scenario lives in, as the command's output names it - a test function, a node id, a suite title." }
+          marker: { type: string, description: "A regular expression (RE2) that one line of the command's output matches only when this scenario passed, e.g. `^PASS S17$` or `^PASS: MP3`." }
+      description: Optional - one entry per scenario whose outcome a command's output shows mechanically (several titles may share one command and unit, each with its own marker). verification resolves a bound title from the command's run alone; a title without a binding is document-only and verification judges it. The driver rejects a binding whose title is not in scenario_titles, whose fields are empty, or whose marker does not compile.
     already_satisfied:
       type: array
       items: { type: string }
@@ -60,8 +72,8 @@ reason, so a mis-wired suite is fixed by its author instead of stalling the flow
 ## e2e-author mode
 
 The lane default is `{{e2e_author_mode}}`; this run's mode is the owner-approved one
-recorded in `artifacts/grill-qa.md`, and with no such record the default applies. The
-lane var is a static default, not a per-work-item value. Resolve the mode like this:
+`artifacts/grill-qa.md` records, and without that record the default applies
+(fail-closed). Resolve the mode like this:
 
 - **`required`** (the default, and the fail-closed fallback) — everything below
   applies unchanged: at least one scenario, every kept scenario proven red.
@@ -69,11 +81,10 @@ lane var is a static default, not a per-work-item value. Resolve the mode like t
   the owner's explicit approval of the skip; with no such record, or with the owner's
   veto, the mode is `required`. When it is honoured: author no test files; write
   `artifacts/e2e-scenarios.md` recording the mode and the grill-approved rationale;
-  write the handoff `artifacts/handoff-e2e-author.md`; run and record the skip's real
-  command evidence — the `artifacts/grill-qa.md` mode/approval read (e.g.
-  `grep -nE 'e2e-author mode|skipped-with-rationale|approved' artifacts/grill-qa.md`)
-  and a clean-tree check per repo worktree (e.g. `git status --porcelain`); commit
-  nothing; and complete with `e2e_author_mode: "skipped-with-rationale"`,
+  write the handoff `artifacts/handoff-e2e-author.md`; run and record the command
+  evidence — the read of the owner-approved mode out of `artifacts/grill-qa.md` (e.g.
+  `grep -nE 'e2e-author mode|skipped-with-rationale|approved' artifacts/grill-qa.md`);
+  commit nothing; and complete with `e2e_author_mode: "skipped-with-rationale"`,
   `skip_rationale`, empty `scenario_titles`, empty `baseline` and empty `test_files`.
   A skip is legal only for an internal-mechanism / non-behaviour-face work item; a
   behaviour-face work item stays `required`.
@@ -122,6 +133,22 @@ lane var is a static default, not a per-work-item value. Resolve the mode like t
 7. Record the run in `artifacts/e2e-scenarios.md` under a `## Baseline run` section,
    one entry per kept scenario in document order, with the evidence; fill `baseline`.
 
+## Bindings (how verification reads each scenario's result)
+
+`verification` runs the whole bar in one mechanical command and then judges only what that
+run cannot decide. Give it a `bindings` entry for every scenario whose outcome a command's
+output can show by itself: the `repo`, the `command` (normally your targeted baseline
+command, run inside that repo without a leading `cd`), the `unit` the scenario lives in as
+the output names it, and a `marker` — a regular expression one output line matches only
+when THIS scenario passed. When several scenarios share one test or one suite file, make
+the test print one marker line per scenario as it passes (e.g. `PASS S17`, matched by
+`^PASS S17$`) and bind each title to its own marker. The command must print that line on a
+passing run (a test runner that shows a passing test's output only in verbose mode needs
+its verbose flag in the command). At the baseline run no marker may match (every bound
+scenario is red); check it. A scenario without a binding is document-only: `verification`
+judges it itself. The driver rejects a binding whose title is not in `scenario_titles`,
+whose fields are empty, or whose marker does not compile.
+
 ## Executability against the pre-implementation tree
 
 Generated test files MUST compile against the tree as it stands at authoring time:
@@ -167,8 +194,8 @@ human-approved rebaseline. No `test_files`, no check.
 - **completed (skipped)** — the owner explicitly approved `skipped-with-rationale`
   in `artifacts/grill-qa.md`: the scenario document records the mode and rationale,
   `scenario_titles` and `baseline` are empty, no test file was authored or committed,
-  and `command_evidence` carries the skip's real commands (see "Command evidence"
-  below).
+  and `command_evidence` carries the one command that read the approval (see
+  "Command evidence" below).
 - **needs_input** — only in two cases, with the reason in the question:
   - EVERY scenario passes at baseline: the new behaviour the spec claims is already in
     the tree, so the spec and reality disagree — ask the owner;
@@ -186,25 +213,24 @@ entry.
 - **Mode `required`.** Evidence for the baseline run(s) you actually executed — the
   targeted command(s) that ran the authored scenarios against the pre-implementation
   tree.
-- **Mode `skipped-with-rationale`.** No baseline exists, so record the real commands
-  the skip runs and reads instead: (a) the command that reads the owner-approved mode,
-  its rationale and the owner's explicit approval out of `artifacts/grill-qa.md` (e.g.
-  `grep -nE 'e2e-author mode|skipped-with-rationale|approved' artifacts/grill-qa.md`),
-  and (b) a clean-tree check per repo worktree proving the skip authored and committed
-  nothing (e.g. `git status --porcelain` inside each `repos/<name>/`). Both run for
-  real; record their real exit codes and measured durations. A skip that cannot produce
-  any real command is not a skip: return the problem to the owner instead.
+- **Mode `skipped-with-rationale`.** No baseline exists, so record the one command the
+  skip really runs: the command that reads the owner-approved mode, its rationale and
+  the owner's explicit approval out of `artifacts/grill-qa.md` (e.g.
+  `grep -nE 'e2e-author mode|skipped-with-rationale|approved' artifacts/grill-qa.md`)
+  — the same artifact the mode resolution must read anyway (the audit anchor downstream
+  honours). It runs for real; record its real exit code and measured duration.
 
 ## Handoff
 
 This step declares `handoff: true`: `code` (the next step, `context_policy: inherit`)
 continues from your handoff file. Write `artifacts/handoff-e2e-author.md` with the
-test locations, the targeted command that runs them, and the red bar `code` must turn
-green.
+test locations, the targeted command that runs them, the red bar `code` must turn
+green, and the marker each bound scenario prints when it passes.
 
 ## Output
 
 Emit the final JSON object per the schema above: the scenario document path, the
 ordered scenario titles, any generated test file paths, the `baseline` (one `fail`
-entry per title, same order, with evidence), `already_satisfied` if you deleted any
-scenario, `added_test_lines`, and `size_justification` when above the soft cap.
+entry per title, same order, with evidence), the `bindings` of every mechanically
+observable scenario, `already_satisfied` if you deleted any scenario, `added_test_lines`,
+and `size_justification` when above the soft cap.

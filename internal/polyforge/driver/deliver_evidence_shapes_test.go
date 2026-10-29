@@ -54,7 +54,7 @@ func TestTestBarRerunAssignmentPrefixedBar(t *testing.T) {
 
 // The comparison is exact: the leading assignments and wrapper words
 // are part of the command. A re-run that drops or changes them is a
-// different run and must not license the merge (polyforge#203 review B1;
+// different run and must not license the merge (polyforge#203 code review;
 // the E2E_RUN-subset pitfall of polyforge#202).
 func TestTestBarRerunAssignmentMismatchRefused(t *testing.T) {
 	root := t.TempDir()

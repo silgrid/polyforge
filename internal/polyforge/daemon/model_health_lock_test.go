@@ -1,6 +1,6 @@
 package daemon
 
-// model_health_lock_test.go: workbench#14 — the model-health snapshot is a
+// model_health_lock_test.go: — the model-health snapshot is a
 // data-dir write, so it must happen only after Run holds the single-instance
 // flock. A start the guard refuses must not touch (or create) the running
 // daemon's model-health.json.

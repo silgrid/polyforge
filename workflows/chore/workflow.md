@@ -1,35 +1,14 @@
 ---
 name: chore
-description: Deletion-type maintenance lane - plan, code, verify, review, deliver; deletions and cleanup ship through this lane. No release slot.
+description: Deletion-type maintenance lane - plan → code → review → verification → deliver; deletions and cleanup ship through this lane. No release slot.
 rewind:
-  max_total: 6
+  max_total: 9
   max_per_step: 3
 defaults:
   model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
 steps:
-  - { id: plan, context_policy: fresh, handoff: true }
-  - { id: code, context_policy: inherit }
-  - id: verification
-    context_policy: fresh
-    gate: true
-    requires_command_evidence: true
-    on_fail: { target: code }
-    model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5]
-    vars:
-      output_required: verdict, checks
-      build_step: code
-      position: >-
-        `review` judges the change after you (reading your report), and there is no
-        release slot behind you: the full set runs here or not at all. This lane is
-        scoped-capable (the scoped tier): a work item whose content carries the marker
-        line `verification: scoped` runs this step scoped — declare the `scope` object
-        and keep every lane check; without the marker it runs full and carries no `scope`.
-      lane_checks: |-
-        **Plan conformance.** Check the diff `code` reported against `artifacts/plan.md`'s
-        touched-files declaration: undeclared writes are a finding worth recording even when
-        the checks pass — they signal a lock-scope gap. Record this as a `plan-conformance`
-        check.
-      never_pre_existing: any test the plan names as pinning this change, and any repro check
+  - { id: plan, context_policy: fresh, handoff: true, recall: true }
+  - { id: code, context_policy: inherit, recall: true }
   - id: review
     context_policy: fresh
     gate: true
@@ -47,19 +26,57 @@ steps:
         1. Read, in this order: `artifacts/plan.md` (the declared units and touched files),
            the full diff (in each task repo `git diff $(git merge-base HEAD origin/HEAD)..HEAD`,
            falling back to `origin/main` or `origin/master` when `origin/HEAD` is unset — this
-           includes any commit `code` did not report), `artifacts/code-summary.md` (the code
-           step's own account of what it did and why) and `artifacts/verification-report.md`
-           (the machine gate's results).
-        2. Judge plan conformance: the diff covers the plan's declared steps, touches no
-           files the plan did not declare (an undeclared write is a lock-scope gap, not a
-           paperwork gap), and a declared deletion is actually complete — no half-removed
-           feature left compiling against ghosts of itself.
+           includes any commit `code` did not report), and `artifacts/code-summary.md` (the
+           code step's own account of what it did and why). The machine gate
+           (`verification`) runs after you: you have no verification report to read —
+           judge the diff and the plan conformance themselves.
+        2. Judge plan conformance in both directions from the plan-conformance facts
+           section of this prompt — the driver computed the set differences, do not
+           reconstruct them. In EVERY round, whatever the round contract says about new
+           discoveries: a changed file the plan did not declare and no review finding
+           cites is blocking; a declared coupled obligation the diff
+           leaves unchanged is blocking; a declared plain write left unchanged is
+           non-blocking. A file `code` added after a review FAIL counts as declared only
+           when its `declared_extensions` entry cites the finding (`s<n>#<k>`) that
+           requires it — judge whether that finding really does. Judge too whether the
+           plan's coupled obligations are the right ones (the repo's `AGENTS.md` names
+           the project's known couplings; one it names that is missing is blocking), that
+           the diff covers the plan's declared steps, and that a declared deletion is
+           actually complete — no half-removed feature left compiling against ghosts of
+           itself.
         3. Judge the deletion-type acceptance bar: the existing test suite stays meaningful
            after the deletion, and the few targeted tests for behavior the deletion actually
            changes exist where the project expects tests. A full acceptance suite or an e2e
            lane is NOT this lane's bar — demanding one here is scope creep, not rigor. A test
            that asserts nothing real (vacuous) is a blocking finding; a redundant one is
            non-blocking.
+  - id: verification
+    context_policy: fresh
+    gate: true
+    requires_command_evidence: true
+    plan_conformance: true
+    on_fail: { target: code }
+    model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5]
+    vars:
+      output_required: verdict, checks
+      build_step: code
+      position: >-
+        `review` already judged the change before you (this lane's order is code →
+        review → verification → deliver), and there is no
+        release slot behind you: the full set runs here or not at all. This lane is
+        scoped-capable (the scoped tier): a work item whose content carries the marker
+        line `verification: scoped` runs this step scoped — declare the `scope` object
+        with exactly the `declared_paths` review recorded (`steps.review.output.scope`)
+        and keep every lane check; without the marker it runs full and carries no `scope`.
+      lane_checks: |-
+        **Plan conformance.** Read the plan-conformance facts section of this prompt: the
+        driver compared `artifacts/plan.md`'s declared set (writes, their coupled
+        obligations, finding-cited extensions) with the diff in both directions. A changed-but-undeclared file with no cited finding, or a declared
+        coupled obligation left unchanged, fails this check even when every other check
+        passes; a declared plain write left unchanged is recorded, not failed. When the
+        section says the diff could not be read, check the diff yourself. Record this as
+        a `plan-conformance` check.
+      never_pre_existing: any test the plan names as pinning this change, and any repro check
   - { id: deliver, context_policy: fresh, gate: true, requires_command_evidence: true, on_fail: { target: code } }
 ---
 
@@ -72,9 +89,9 @@ is the *only* execution order. Nothing here overrides it.
 ## Shape of the flow
 
 ```
-plan --> code --> verification --> review --> deliver
-          ^            |              |           |
-          +------------+--------------+-----------+
+plan --> code --> review --> verification --> deliver
+          ^         |            |              |
+          +---------+------------+--------------+
                     (FAIL: rewind to code)
 ```
 
@@ -111,9 +128,9 @@ file under `artifacts/`; no step declares frontmatter `inputs:`, so downstream s
 | step | primary artifact it writes | who reads it |
 |---|---|---|
 | `plan` | `artifacts/plan.md` (may legitimately be a single trivial step for a small chore) | `code` |
-| `code` | changes under `repos/<name>/**`, `artifacts/code-summary.md` | `verification`, `review` |
-| `verification` | `artifacts/verification-report.md` (verdict) | `review`, `deliver` |
-| `review` | `artifacts/review.md` (verdict) | `deliver`, (rewind context for `code` via `pending_rewind_input`) |
+| `code` | changes under `repos/<name>/**`, `artifacts/code-summary.md` | `review`, `verification` |
+| `review` | `artifacts/review.md` (verdict) | `verification` (its scope record, on the scoped tier), `deliver`, (rewind context for `code` via `pending_rewind_input`) |
+| `verification` | `artifacts/verification-report.md` (verdict) | `deliver` (verified heads, test bar) |
 | `deliver` | `artifacts/delivery.md` | (terminal) |
 
 ## `plan` is a normal step, not an optional one
@@ -132,21 +149,28 @@ exist and sit strictly earlier than the failing step. One exception: a scoped `d
 answered 「全量重验」 overrides its `on_fail` with `rewind_to: verification` (full tier).
 This section explains the choices:
 
-- **`verification` FAILs -> rewind to `code`.** Build/lint/tests failed on the changed
-  tree, and `code` is the only step that can change it. It runs before `review`, so a
-  mechanical failure never costs a review.
 - **`review` FAILs -> rewind to `code`.** The owner-rules checklist or the
   plan-conformance judgment found the change wanting (undeclared writes, a
   half-finished deletion, a rule hit); `code` is the only step that can change the
   tree, so every gate on this lane shares it as its rewind target (`deliver`'s "back to
-  code" included). The re-run passes through `verification` again before `review`.
+  code" included). The re-run passes through a fresh `review`, then `verification`.
   An all-text-only review FAIL (every blocking finding marked `text_only: true`) takes
   the light path: `code`'s previous session resumes with the verdict, applies only
-  text-only fixes, and the gate tail (`verification`, then a fresh `review`) re-runs
+  text-only fixes, and the gate tail (a fresh `review`, then `verification`) re-runs
   unchanged.
+- **`verification` FAILs -> rewind to `code`.** Build/lint/tests failed on the changed
+  tree, and `code` is the only step that can change it. The re-entered round re-runs the
+  whole gate tail after the fix — a fresh `review` judges the repaired diff, then
+  `verification` re-runs the machine bar on the tree that review passed merged with
+  the latest origin default branch.
 
-Workflow-level rewind bounds are the uniform `6 / 3` the delivery lanes share:
-`max_total: 6`, `max_per_step: 3`. A chore that needs more than three bounded attempts to
+Workflow-level rewind bounds are the uniform `9 / 3` the delivery lanes share:
+`max_total: 9`, `max_per_step: 3` — the per-step bound is charged per gate→target edge
+(the gates that rewind to `code` carry three charged slots each; light and converging
+rewinds charge none, until a light re-entry self-reports `needs_code_change: true` —
+that turns its light rewind into a fresh round, which charges the edge once), and the
+global cap counts every rewind, light ones included. A
+chore that needs more than three charged attempts per gate to
 keep the tree green is either not mechanical or is fighting a real problem — surface it
 honestly instead of burning the budget.
 
@@ -161,6 +185,8 @@ above and the daemon's per-step runtime bound T (docs/reference/commands.md, `pf
 push only the feature branch, open or reuse the PR, merge under the merge rule or ask a
 human) is the shared step definition `workflows/_shared/steps/deliver.md`. Lane facts:
 its "back to code" answer rewinds to `code`, and the independent review it reads is this
-workflow's `review` gate (`steps.review.output`). There is no release slot: releases and
+workflow's `review` gate (`steps.review.output` — its verdict, its recorded scope on
+the scoped tier, and the `reviewed_heads` the driver wrote at its pass, which must
+cover the delivered diff). There is no release slot: releases and
 deploys happen only through the separate `release` bundle (a separate WI), cut from the
 merged origin head.

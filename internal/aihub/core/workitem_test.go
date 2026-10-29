@@ -50,7 +50,7 @@ func patchBundle(t *testing.T, env *testEnv, id string, name *string) (*WIView, 
 	} else {
 		fields["bundle_name"] = json.RawMessage("null")
 	}
-	return env.WIs.Patch(id, fields)
+	return env.WIs.Patch(id, fields, env.UserID)
 }
 
 // TestPatchBundleR2ThreeWay walks NULL→X / X→Y / X→NULL inside the R2
@@ -91,7 +91,7 @@ func TestPatchBundleR2ThreeWay(t *testing.T) {
 		t.Fatalf("unbind wrote a status: %s", got.Status)
 	}
 	// a digest-carrying body and an empty-name shape are typed bad input.
-	if _, err := env.WIs.Patch(id, map[string]json.RawMessage{"bundle_digest": json.RawMessage(`"x"`)}); !IsCode(err, api.ErrCoreBadInput) {
+	if _, err := env.WIs.Patch(id, map[string]json.RawMessage{"bundle_digest": json.RawMessage(`"x"`)}, env.UserID); !IsCode(err, api.ErrCoreBadInput) {
 		t.Fatalf("bundle_digest field: want CORE-400 (not patchable), got %v", err)
 	}
 	if _, err := patchBundle(t, env, id, strPtrTest("")); !IsCode(err, api.ErrCoreBadInput) {
@@ -165,7 +165,7 @@ func TestPatchBundleWindowRefusals(t *testing.T) {
 func TestPatchBundleWaitingOnNotRefused(t *testing.T) {
 	env := newEnv(t)
 	id := mustCreateWI(t, env, "w140 waiting_on patch", nil, "")
-	if _, err := env.WIs.Patch(id, map[string]json.RawMessage{"waiting_on": json.RawMessage(`"owner"`)}); err != nil {
+	if _, err := env.WIs.Patch(id, map[string]json.RawMessage{"waiting_on": json.RawMessage(`"owner"`)}, env.UserID); err != nil {
 		t.Fatalf("patch waiting_on: %v", err)
 	}
 	got, err := patchBundle(t, env, id, strPtrTest("w140-wait-b"))
@@ -398,7 +398,7 @@ func TestPatchWaitingOnValueDomain(t *testing.T) {
 	patch := func(v string) (*WIView, error) {
 		return env.WIs.Patch(id, map[string]json.RawMessage{
 			"waiting_on": json.RawMessage(`"` + v + `"`),
-		})
+		}, env.UserID)
 	}
 	// the retained values persist (read back the same value).
 	for _, live := range []string{"owner", "dependency:demo-bundle"} {
@@ -424,7 +424,7 @@ func TestPatchWaitingOnValueDomain(t *testing.T) {
 		}
 	}
 	// the null clear is accepted.
-	got, err := env.WIs.Patch(id, map[string]json.RawMessage{"waiting_on": json.RawMessage("null")})
+	got, err := env.WIs.Patch(id, map[string]json.RawMessage{"waiting_on": json.RawMessage("null")}, env.UserID)
 	if err != nil {
 		t.Fatalf("null clear: %v", err)
 	}
@@ -446,7 +446,7 @@ func TestGoalLimitCountedInRunes(t *testing.T) {
 		t.Fatalf("create with a 500-character (1500-byte) goal refused: %v", err)
 	}
 	id := wi.ID
-	if _, err := env.WIs.Patch(id, map[string]json.RawMessage{"goal": json.RawMessage(`"` + cjk + `"`)}); err != nil {
+	if _, err := env.WIs.Patch(id, map[string]json.RawMessage{"goal": json.RawMessage(`"` + cjk + `"`)}, env.UserID); err != nil {
 		t.Fatalf("PATCH with a 500-character goal refused: %v", err)
 	}
 	long := strings.Repeat("目", 501)
@@ -455,7 +455,7 @@ func TestGoalLimitCountedInRunes(t *testing.T) {
 	}); !IsCode(err, api.ErrCoreBadInput) {
 		t.Fatalf("create with a 501-character goal: want CORE-400, got %v", err)
 	}
-	if _, err := env.WIs.Patch(id, map[string]json.RawMessage{"goal": json.RawMessage(`"` + long + `"`)}); !IsCode(err, api.ErrCoreBadInput) {
+	if _, err := env.WIs.Patch(id, map[string]json.RawMessage{"goal": json.RawMessage(`"` + long + `"`)}, env.UserID); !IsCode(err, api.ErrCoreBadInput) {
 		t.Fatalf("PATCH with a 501-character goal: want CORE-400, got %v", err)
 	}
 }

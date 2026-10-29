@@ -72,11 +72,11 @@ func TestV1S05AgentKill9(t *testing.T) {
 	// The re-dispatched workflow finished, and the terminal wiring wrapped.
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 
-	// The kill never reached the recovery engine: the ONLY recovery signal
-	// of the whole run is the completion wrap, and nothing was re-derived.
+	// The kill never reached the recovery engine: no needs_recovery for
+	// the whole run (the completion wrap is no death), nothing re-derived.
 	kinds := d.eventKinds(t, wi)
-	if n := countOf(kinds, "needs_recovery"); n != 1 {
-		t.Fatalf("needs_recovery fired %d times, want 1 (the completion signal only): %v", n, kinds)
+	if n := countOf(kinds, "needs_recovery"); n != 0 {
+		t.Fatalf("needs_recovery fired %d times, want 0 (the completion is no death): %v", n, kinds)
 	}
 	if n := countOf(kinds, "wi_agent_rederived"); n != 0 {
 		t.Fatalf("re-derivation count %d, want 0 (the driver retried in place): %v", n, kinds)

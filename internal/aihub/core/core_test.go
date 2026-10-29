@@ -144,7 +144,7 @@ func TestWorkItemCRUD(t *testing.T) {
 	updated, err := env.WIs.Patch(wi.ID, map[string]json.RawMessage{
 		"goal":   json.RawMessage(`"` + newGoal + `"`),
 		"labels": json.RawMessage(`["a","b"]`),
-	})
+	}, env.UserID)
 	if err != nil {
 		t.Fatalf("patch: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestWorkItemCRUD(t *testing.T) {
 	if exec.BundleName == nil || *exec.BundleName != "demo-bundle" {
 		t.Fatalf("bundle reference not persisted: %+v", exec)
 	}
-	patched, err := env.WIs.Patch(exec.ID, map[string]json.RawMessage{"bundle_name": json.RawMessage(`"other"`)})
+	patched, err := env.WIs.Patch(exec.ID, map[string]json.RawMessage{"bundle_name": json.RawMessage(`"other"`)}, env.UserID)
 	if err != nil {
 		t.Fatalf("bundle patch inside the R2 window (queued, never claimed) refused: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestTerminalTransitions(t *testing.T) {
 		t.Fatalf("wrap did not clear the session row: status=%s hash=%v", status, hash)
 	}
 	// Terminal is read-only.
-	if _, err := env.WIs.Patch(id, map[string]json.RawMessage{"goal": json.RawMessage(`"x"`)}); !IsCode(err, api.ErrCoreGone) {
+	if _, err := env.WIs.Patch(id, map[string]json.RawMessage{"goal": json.RawMessage(`"x"`)}, env.UserID); !IsCode(err, api.ErrCoreGone) {
 		t.Fatalf("terminal patch allowed: %v", err)
 	}
 	if _, err := m.Claim(id, api.SessionClaimRequest{SessionID: "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e"}, env.UserID); !IsCode(err, api.ErrCoreGone) {
@@ -326,7 +326,7 @@ func TestReadyQueueOrdering(t *testing.T) {
 	}
 	// A waiting_on-tagged queued WI is not executable.
 	wid := mustCreateWI(t, env, "waiting", nil, "")
-	if _, err := env.WIs.Patch(wid, map[string]json.RawMessage{"waiting_on": json.RawMessage(`"owner"`)}); err != nil {
+	if _, err := env.WIs.Patch(wid, map[string]json.RawMessage{"waiting_on": json.RawMessage(`"owner"`)}, env.UserID); err != nil {
 		t.Fatalf("patch waiting_on: %v", err)
 	}
 
@@ -401,7 +401,7 @@ func TestAdminFaces(t *testing.T) {
 	}
 	// Machine heartbeat: first registers; second refreshes. Registration
 	// mints no machine user: the operator is the machine's one identity
-	// (workbench#57).
+	//.
 	proof := HeartbeatProof{CallerID: env.UserID, Signed: true, KeyB64: "pk-m1"}
 	h1, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{MachineID: "m1", PublicKey: "pk-m1"}, proof, nil)
 	if err != nil || !h1.Registered {
@@ -411,7 +411,7 @@ func TestAdminFaces(t *testing.T) {
 	if err != nil || h2.Registered {
 		t.Fatalf("heartbeat repeat: %+v %v", h2, err)
 	}
-	users, err := env.Admin.ListUsers()
+	users, _, err := env.Admin.ListUsers()
 	if err != nil || len(users) != 2 { // admin + writer: no machine user
 		t.Fatalf("users: %v %d", err, len(users))
 	}

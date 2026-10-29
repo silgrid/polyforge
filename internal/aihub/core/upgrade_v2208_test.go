@@ -1,6 +1,6 @@
 package core
 
-// upgrade_v2208_test.go — the deploy/sql/v2.20.8 window SQL (workbench#57,
+// upgrade_v2208_test.go — the deploy/sql/v2.20.8 window SQL (
 // the machine-heartbeat permission model). The fixture is a real
 // pre-heartbeat-shape database: the pre-#149 DDL with every earlier upgrade
 // applied explicitly (NOT applyLaterUpgrades — the appended v2.20.8 entry

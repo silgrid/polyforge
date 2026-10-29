@@ -24,8 +24,12 @@ capsule, unmapped project) answers `DAEMON-409` and the work item is
 BLOCKED at aihub with the typed cause — never the restart copy.
 
 Success: `resumed <slug>: clean_pause cleared; the holder daemon re-attached
-the paused session and continues the current step in place`. `--json`: the
-raw answer.
+the paused session and continues the current step in place`. When the
+previous driver Run did not stop within its teardown bound, the answer says
+the recovery is parked instead: nothing continues next to that Run, and the
+work item continues by itself once it exits (`recovery_parked` /
+`close_parked` in `pf watch`) — nothing to redo. `--json`: the raw answer
+(`outcome`: `attached` / `already_live` / `closed` / `parked`).
 
 ## Door 2 — a blocked work item (hub status `blocked`)
 
@@ -100,9 +104,27 @@ it is a fresh re-claim from the aihub capsule chain plus the task-repo carrier
 refs (`refs/pf-task/<name>`); the dead scene (if any) is quarantined, completed
 steps are not re-run, and work published after the last push is lost.
 An aihub that was merely unreachable at restart does NOT block the work
-item: the daemon keeps it `recovering` (visible in `pf ops status`) and retries
-the verify on its own; it resumes in place once aihub answers — no
-`pf resume` needed.
+item: the daemon keeps it `recovering` (visible in `pf ops status`) and
+retries the verify on its own with a growing backoff, so it resumes in place
+once aihub answers — no `pf resume` needed. That retry chain is bounded by
+time (24 hours from its first retry, the backoff holding at one attempt a
+minute), so an aihub outage of up to a day is ridden out; at the bound it
+records a `retry_exhausted` event and leaves the record in its state for a
+human — nothing retries until the daemon is restarted, and that start
+reconciles the record afresh. A verify aihub refuses with a typed 4xx (a
+revoked or rotated machine key, a deleted work item) is an answer, not an
+outage. On a record whose close already ran (`end_pending`, `sealing`) the
+refusal re-runs nothing: the record is parked in its state with a
+`session_verify_outage` event and nothing retries it. On any other record —
+running, or retained paused with a pending close or pending pause — it takes
+the ordinary blocked close once: `session_verify_outage` names the refusal,
+the work item becomes `blocked` at the hub (or, when that blocked close is
+itself refused with a typed 4xx, the record rests `end_pending` with a
+`close_refused` event). A record that stays paused with a `close_refused`
+event instead means its verify matched and the replay of its own close (a
+terminal close or a pending pause) was refused. Fix the credential or the hub
+state, then restart the daemon (it reconciles the record afresh); `pf cancel
+<id>` frees the hub side, but this local record stays until a daemon start.
 
 ## Triggers
 
@@ -127,7 +149,7 @@ refused before anything else happens.
 |---|---|---|
 | `CORE-404` | Unknown or invisible id (CLI precheck) | No such work item — check the `wi_` id. |
 | (no code) `submit: <slug> is terminal (<status>)` | The work item is wrapped/failed/canceled | A finished work item cannot be resumed — file a new one. |
-| `DAEMON-409` | The work item is already active or queued on this daemon, the `clean_pause` flag was not yet cleared at the hub, or the paused resume was blocked by a typed mid-flight failure (missing capsule / unmapped project — the detail names the remediation) | `pf watch <id> --once` shows the state; for a blocked one, fix the named cause, then `pf resume` again. |
+| `DAEMON-409` | The work item is already active or queued on this daemon, the `clean_pause` flag was not yet cleared at the hub, the paused resume was blocked by a typed mid-flight failure (missing capsule / unmapped project — the detail names the remediation), or the pause is still parked on a driver Run that outlived its teardown (`the close is parked …`) | `pf watch <id> --once` shows the state; for a blocked one, fix the named cause, then `pf resume` again; a parked pause finishes by itself once that Run exits (`close_parked`), then resume. |
 | `DAEMON-410` (`SHUTTING_DOWN`) | The daemon is shutting down | Wait for restart, then resume. |
 | `AUTH-403` (from the resume door) | The caller is not the work item's reporter, a project maintainer or an admin | Ask the task owner or a maintainer to continue it. |
 | `DAEMON-503` (paused door) | The hub was unreachable while the holder daemon re-validated or re-attached the paused session | Nothing was resumed (`clean_pause` is already cleared, so the holder also attaches on its next start); retry `pf resume` once aihub answers. |

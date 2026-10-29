@@ -377,7 +377,7 @@ func firstLine(s string) string {
 }
 
 // renderReloadStatus is the cli.toml hot-reload line: keys pending a
-// daemon restart and keys an explicit daemon flag overrides (workbench#3).
+// daemon restart and keys an explicit daemon flag overrides.
 func renderReloadStatus(w io.Writer, r *ReloadStatus) {
 	if r == nil {
 		return
@@ -429,10 +429,11 @@ func renderStatus(w io.Writer, s *StatusResponse) {
 	wsSet := append([]string(nil), s.Workspaces...)
 	sort.Strings(wsSet)
 	fmt.Fprintf(w, "workspaces: %s\n\n", strings.Join(wsSet, ", "))
-	showOrigin, showCandidate := false, false
+	showOrigin, showCandidate, showRetry := false, false, false
 	for _, j := range s.Jobs {
 		showOrigin = showOrigin || j.Origin != nil
 		showCandidate = showCandidate || j.Candidate != ""
+		showRetry = showRetry || j.RetryInSec != nil
 	}
 	rows := make([][]string, 0, len(s.Jobs))
 	for _, j := range s.Jobs {
@@ -472,6 +473,9 @@ func renderStatus(w io.Writer, s *StatusResponse) {
 		if showCandidate {
 			row = append(row, orDash(j.Candidate))
 		}
+		if showRetry {
+			row = append(row, retryFace(j.RetryInSec, j.RetryCause))
+		}
 		if showOrigin {
 			row = append(row, origin)
 		}
@@ -481,10 +485,30 @@ func renderStatus(w io.Writer, s *StatusResponse) {
 	if showCandidate { // polyforge#176: the candidate a dispatch runs on, effort included
 		head = append(head, "CANDIDATE")
 	}
+	if showRetry { // the column appears only while some job waits a retry backoff
+		head = append(head, "RETRY")
+	}
 	if showOrigin { // the column appears only when some job has one
 		head = append(head, "ORIGIN")
 	}
 	printTable(w, head, rows)
+}
+
+// retryFace renders a pending retry backoff as "retry in 3m: <cause>"
+// (whole minutes rounded up from a minute on, seconds below); "-" when
+// none is owed.
+func retryFace(sec *int64, cause string) string {
+	if sec == nil {
+		return "-"
+	}
+	in := fmt.Sprintf("%ds", max(*sec, 0))
+	if *sec >= 60 {
+		in = fmt.Sprintf("%dm", (*sec+59)/60)
+	}
+	if cause == "" {
+		return "retry in " + in
+	}
+	return "retry in " + in + ": " + cause
 }
 
 // mmssAgo renders whole seconds as the mm:ss figure the STEP-AGE and
@@ -554,13 +578,9 @@ func renderMachines(w io.Writer, list *aihubclient.MachinesList) {
 func renderProjects(w io.Writer, items []api.Project) {
 	rows := make([][]string, 0, len(items))
 	for _, it := range items {
-		vis := "private"
-		if it.Visible {
-			vis = "visible"
-		}
-		rows = append(rows, []string{it.ID, it.Name, vis})
+		rows = append(rows, []string{it.ID, it.Name})
 	}
-	printTable(w, []string{"ID", "NAME", "DIRECTORY"}, rows)
+	printTable(w, []string{"ID", "NAME"}, rows)
 }
 
 // renderModelHealthSummary renders the additive model-health block of
@@ -631,7 +651,7 @@ func renderModels(w io.Writer, p *modelhealth.Profile) {
 }
 
 // renderTasksSummary prints the one-line task summary of `pf ops status`
-// (workbench#40); nothing for an older daemon that carries none.
+//; nothing for an older daemon that carries none.
 func renderTasksSummary(w io.Writer, t *task.Summary) {
 	if t == nil {
 		return

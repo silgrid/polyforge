@@ -42,12 +42,13 @@ func w222Env(id string, handoff bool) map[string]any {
 	return map[string]any{"do": "envelope", "id": id, "outcome": "completed", "handoff": handoff}
 }
 
-// w222BugFixHead is the bug-fix lane up to (excluding) its first review.
+// w222BugFixHead is the bug-fix lane up to (excluding) its first review
+// (review runs right after fix, before verification).
 func w222BugFixHead() []map[string]any {
 	return []map[string]any{
 		{"do": "envelope", "id": "repro", "outcome": "completed", "handoff": true,
 			"files": map[string]string{"artifacts/repro.md": "# repro\n\nfake agent reproduction record\n"}},
-		w222Env("root-cause", true), w222Env("fix", true), w222Env("verification", false),
+		w222Env("root-cause", true), w222Env("fix", true),
 	}
 }
 
@@ -132,9 +133,10 @@ func w222AssertLightLedger(t *testing.T, x *executionView, build string) {
 		t.Errorf("no %s attempt with cause gate_fail_rewind_text_only and rewind_gate=review — %s attempt causes %v",
 			build, build, w222Causes(x, build))
 	}
-	if c := w222Causes(x, "verification"); !strings.Contains(strings.Join(c, ","), "superseded_by_rewind") {
-		t.Errorf("verification attempt causes %v, want superseded_by_rewind kept", c)
-	}
+	// review rewinds [fix, review) — verification sits
+	// AFTER review now, so a review FAIL supersedes nothing; the fact the
+	// old order pinned (verification superseded) belongs to the deliver
+	// FAIL range and is pinned by w166's back-to-code round trip.
 	if n := w222RewindCount(x); n != 1 {
 		t.Errorf("rewind_stats.count = %v, want exactly one slot (rewind_stats=%v)", n, x.RewindStats)
 	}
@@ -143,13 +145,14 @@ func w222AssertLightLedger(t *testing.T, x *executionView, build string) {
 // Scenario 1 (pi, bug-fix `fix`): an all-text-only review FAIL — one
 // blocking text_only finding plus an unmarked NON-blocking one — takes the
 // light path: the fix re-dispatch resumes its previous pi transcript, the
-// ledger names the light cause in one slot, and the gate tail
-// (verification, then a fresh review) re-runs unchanged.
+// ledger names the light cause in one slot, and the gate tail (a fresh
+// review, then verification) re-runs unchanged ( order).
 func TestW222LightRewindResumesPiBuildSession(t *testing.T) {
 	plan := append(w222BugFixHead(),
 		w222TextOnlyFail(map[string]any{"severity": "non-blocking", "detail": "nit: a log line could be shorter"}),
-		w222Env("fix", true), w222Env("verification", false),
+		w67ChangedRound("fix", "demo-src", 1), // the light round's text fix
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{"verdict": "pass"}},
+		w222Env("verification", false),
 	)
 	capDir := w222RunPi(t, "w222: text-only review fail resumes fix (pi)", plan)
 	x := readExecution(t, capDir)
@@ -175,7 +178,7 @@ func TestW222LightRewindResumesPiBuildSession(t *testing.T) {
 	if !resumed {
 		t.Errorf("fake pi never launched with --session %v (resume)", fix[0]["transcript"])
 	}
-	if got := strings.Join(w222Order(t, capDir), ","); got != "repro,root-cause,fix,verification,review,fix,verification,review" {
+	if got := strings.Join(w222Order(t, capDir), ","); got != "repro,root-cause,fix,review,fix,review,verification" {
 		t.Errorf("dispatch order %s: the gate tail must re-run unchanged after the light rewind", got)
 	}
 	if rv := w222Steps(t, capDir, "review"); len(rv) == 2 && rv[1]["resume"] != false {
@@ -191,13 +194,14 @@ func TestW222SelfReportedStructuralFixRewindsFreshSameSlot(t *testing.T) {
 	plan := append(w222BugFixHead(), w222TextOnlyFail(),
 		map[string]any{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true,
 			"output": map[string]any{"needs_code_change": true}},
-		w222Env("fix", true), w222Env("verification", false),
+		w67ChangedRound("fix", "demo-src", 1), // the fresh structural fix
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{"verdict": "pass"}},
+		w222Env("verification", false),
 	)
 	capDir := w222RunPi(t, "w222: resumed fix self-reports a structural fix", plan)
 	x := readExecution(t, capDir)
-	if got := strings.Join(w222Order(t, capDir), ","); got != "repro,root-cause,fix,verification,review,fix,fix,verification,review" {
-		t.Errorf("SYMPTOM: dispatch order %s — a needs_code_change result must be followed by a fresh fix, not verification", got)
+	if got := strings.Join(w222Order(t, capDir), ","); got != "repro,root-cause,fix,review,fix,fix,review,verification" {
+		t.Errorf("SYMPTOM: dispatch order %s — a needs_code_change result must be followed by a fresh fix, not review", got)
 	}
 	fix := w222Steps(t, capDir, "fix")
 	if len(fix) >= 3 && (fix[1]["resume"] != true || fix[2]["resume"] != false) {
@@ -219,14 +223,15 @@ func TestW222SelfReportedStructuralFixRewindsFreshSameSlot(t *testing.T) {
 // own rewind slot, the fresh path.
 func TestW222MisMarkingFailRewindsFreshOwnSlot(t *testing.T) {
 	plan := append(w222BugFixHead(), w222TextOnlyFail(),
-		w222Env("fix", true), w222Env("verification", false),
+		w67ChangedRound("fix", "demo-src", 1), // the light round's edit
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{
 			"verdict":     "fail",
 			"fail_reason": "mis-marking: the light round changed an assertion, outside the text-only boundary",
 			"findings":    []map[string]any{{"severity": "blocking", "detail": "light round left text-only scope"}},
 		}},
-		w222Env("fix", true), w222Env("verification", false),
+		w67ChangedRound("fix", "demo-src", 2), // the fresh round's fix
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{"verdict": "pass"}},
+		w222Env("verification", false),
 	)
 	capDir := w222RunPi(t, "w222: mis-marked light round rewinds fresh", plan)
 	x := readExecution(t, capDir)
@@ -267,13 +272,21 @@ func w222ChoreClaude(t *testing.T, goal string, reviewOnClaude bool, plan []map[
 	return capDir, root
 }
 
-func w222ChorePlan(verificationMS int) []map[string]any {
-	ver := w222Env("verification", false)
-	ver["ms"] = verificationMS
+// w222ChorePlan scripts the chore lane in the order
+// (code → review → verification): the review FAIL right after code, the
+// light code re-entry, the fresh review re-run, then verification. The
+// hold lands on the review FAIL (spawn 3) — the window the session-gone
+// scenario deletes the native session in.
+func w222ChorePlan(reviewMS int) []map[string]any {
+	fail := w222TextOnlyFail()
+	if reviewMS > 0 {
+		fail["ms"] = reviewMS
+	}
 	return []map[string]any{
-		w222Env("plan", true), w222Env("code", true), ver, w222TextOnlyFail(),
-		w222Env("code", true), w222Env("verification", false),
+		w222Env("plan", true), w222Env("code", true), fail,
+		w222Env("code", true),
 		{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{"verdict": "pass"}},
+		w222Env("verification", false),
 	}
 }
 
@@ -315,14 +328,14 @@ func TestW222LightRewindResumesClaudeBuildSession(t *testing.T) {
 	if !resumedArgv {
 		t.Errorf("fake claude never launched with --resume %s", first)
 	}
-	if p := w222Prompt(t, capDir, 4); !strings.Contains(p, "text_only") {
-		t.Errorf("the review prompt (spawn 4) never offers the text_only finding marker")
+	if p := w222Prompt(t, capDir, 3); !strings.Contains(p, "text_only") {
+		t.Errorf("the review prompt (spawn 3) never offers the text_only finding marker")
 	}
-	if p := w222Prompt(t, capDir, 5); !strings.Contains(p, "needs_code_change") {
-		t.Errorf("the resumed build prompt (spawn 5) never instructs the needs_code_change self-report")
+	if p := w222Prompt(t, capDir, 4); !strings.Contains(p, "needs_code_change") {
+		t.Errorf("the resumed build prompt (spawn 4) never instructs the needs_code_change self-report")
 	}
-	if p := w222Prompt(t, capDir, 7); !strings.Contains(p, "gate_fail_rewind_text_only") {
-		t.Errorf("the re-run review prompt (spawn 7) is never pointed at the gate_fail_rewind_text_only record")
+	if p := w222Prompt(t, capDir, 5); !strings.Contains(p, "gate_fail_rewind_text_only") {
+		t.Errorf("the re-run review prompt (spawn 5) is never pointed at the gate_fail_rewind_text_only record")
 	}
 	if rv := w222Steps(t, capDir, "review"); len(rv) == 2 && rv[1]["resume"] != false {
 		t.Errorf("the review gate's re-entry must stay fresh: %v", rv[1])
@@ -335,11 +348,11 @@ func TestW222LightRewindResumesClaudeBuildSession(t *testing.T) {
 // recorded as fresh, still the light cause, in the same single slot.
 func TestW222LightRewindSessionGoneFallsBackFresh(t *testing.T) {
 	capDir, root := w222ChoreClaude(t, "w222: light rewind with the claude session gone", false, w222ChorePlan(6000))
-	// verification (spawn 3) holds its envelope for 6s: delete the native
+	// the review FAIL (spawn 3) holds its envelope for 6s: delete the native
 	// session of the finished code dispatch before review FAILs.
-	waitUntil(t, 120*time.Second, "verification never dispatched", func() bool {
+	waitUntil(t, 120*time.Second, "review never dispatched", func() bool {
 		raw, _ := os.ReadFile(filepath.Join(capDir, "runtime-state", "spawn-journal.jsonl"))
-		return strings.Contains(string(raw), `"step_id":"verification"`)
+		return strings.Contains(string(raw), `"step_id":"review"`)
 	})
 	native := filepath.Join(root, "claude-config", "projects", w159DashedName(t, capDir))
 	if _, err := os.Stat(native); err != nil {

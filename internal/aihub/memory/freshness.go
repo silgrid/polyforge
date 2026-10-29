@@ -21,8 +21,8 @@ package memory
 // updated_at DESC compared as instants (whole-second and fractional
 // RFC3339 stamps both occur; an unparseable one counts as oldest), then
 // id. The substring-scan path (short tokens only,
-// no rank) orders by w alone. ftsPage evaluates the order without
-// reading every match's stored row; see there.
+// no rank) orders by w alone. ftsPage reads every match's rank and row
+// meta, but never a stored document; see there.
 
 import (
 	"math"

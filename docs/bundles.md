@@ -15,8 +15,10 @@ format is the [config reference](reference/config.md)'s
 A bundle is a directory under the daemon's workflows dir:
 
     workflows/
-      _shared/               # not a bundle: the shared step definitions
+      _shared/               # not a bundle: the shared material
         principles.md       # the engineering principles every step renders
+        <name>.md           # shared fragments: blocks several step files
+                            # repeat, included by {{<name>}} (no vars entry)
         steps/<id>.md        # shared step definitions
       autopilot/             # a shipped bundle
         workflow.md          # frontmatter: the steps, their order, budgets, candidates
@@ -52,8 +54,16 @@ schema. The keys:
 
 - `name`, `description` — the bundle's identity.
 - `rewind:` — the workflow-level rewind bounds, `max_total` and
-  `max_per_step`. Past the bounds the run ends failed
-  (`failed_rewind_exhausted`).
+  `max_per_step`. `max_per_step` is charged per gate→target edge (two
+  gates rewinding to the same target carry their own slots); `max_total`
+  is the global hard cap counting every rewind, the light and
+  converging ones included. Nothing refuses a `max_total` above the
+  edges' charged capacity (`#on_fail edges × max_per_step`): the total
+  also counts the uncharged light, mechanical and converging rewinds,
+  so it stays reachable and binding there, while an omitted (or ≤0)
+  `max_total` derives the reachable default
+  `min(4, #on_fail edges × max_per_step)`. Past the bounds the run
+  ends failed (`failed_rewind_exhausted`).
 - `defaults:` — `model_candidates`, the workflow-level fallback chain
   (the format and the whole precedence chain: the
   [config reference](reference/config.md)).
@@ -64,8 +74,16 @@ schema. The keys:
     continues the previous step's context, its handoff included).
   - `gate: true` — the step can FAIL the run and rewind it; a gate must
     run `context_policy: fresh`. `on_fail: { target: <earlier step> }`
-    names the rewind target (a gate FAIL rewinds there). One deliver
-    result can override it: a scoped `deliver` whose human answer is
+    names the rewind target (a gate FAIL rewinds there). The delivery
+    lanes order their gates review → verification (the judgment first,
+    then the machine bar on the merged tree: what review passed merged
+    with the latest origin default branch), and the deliver merge
+    rule needs both coverages — the review of the final diff
+    (`reviewed_heads`) and the verification of the final tree
+    (`verified_heads`, the merged head verification proved: deliver
+    re-runs the carried bar only when its own merge moves HEAD past it).
+    One deliver
+    result can override the target: a scoped `deliver` whose human answer is
     「全量重验」 names `rewind_to: verification` and the driver rewinds
     there at the full tier.
   - `requires_human_answer: true` — a human gate: the step can neither
@@ -76,6 +94,14 @@ schema. The keys:
     completed result must record the commands it ran.
   - `handoff: true` — the step must produce a handoff artifact
     (`artifacts/handoff-<id>.md`) for a later inherit step.
+  - `recall: true` — the step's prompt carries the project-memory recall
+    duty (`_shared/memory.md`: `pf recall` from three angles, read the
+    relevant bodies, a `## Prior experience` section). The shipped lanes
+    declare it on their decision and authoring steps (grill, spec, plan,
+    repro, root-cause, e2e-author, code, fix), never on review,
+    verification, deliver or the release steps. The workflow's last step
+    carries the one wrap-summary duty (`_shared/memory-wrap.md`) whether
+    or not it declares `recall`.
   - `model_candidates` — the step-level override of the chain.
   - `vars:` — the map the step definition's `{{placeholders}}` render
     with: one lane-specific fact per var, so one shared step text
@@ -88,15 +114,48 @@ schema. The keys:
 Frontmatter: `name` (the step id), `description`, and `output` — the
 JSON Schema the step's result envelope validates against. The body is
 the step's prompt: what the step agent runs, its hard rules, its
-output duty. Two placeholder forms render before the agent sees it:
+output duty. Three placeholder forms render before the agent sees it:
 
-- `{{principles}}` — renders `workflows/_shared/principles.md`, the
-  engineering principles shared by every bundle. A step entry never
-  declares this var; the loader renders it.
+- `{{principles}}` — the reserved shared fragment: renders
+  `workflows/_shared/principles.md`, the engineering principles shared
+  by every bundle. A step entry never declares this var; the loader
+  renders it.
+- `{{<name>}}` with a `workflows/_shared/<name>.md` beside the bundles
+  — a shared fragment: a block several step files repeat lives once in
+  the fragment and every step file includes it. No `vars` entry
+  declares it; the loader renders the fragment's trimmed text, verbatim
+  and never re-scanned (a placeholder inside a fragment is inserted
+  literally, never rendered). A declared var that shadows a fragment
+  file is a load error.
 - `{{<name>}}` — any other placeholder renders with the workflow.md
   step entry's `vars` map. Rendering fails closed both ways: a
-  placeholder without a var, and a var no placeholder uses, are both
-  load errors — a typo cannot ship a half-rendered prompt.
+  placeholder with neither a var nor a fragment file, and a var no
+  placeholder uses, are both load errors — a typo cannot ship a
+  half-rendered prompt.
+
+A `properties` entry of the `output` schema may carry the prompt-only
+annotation `x-prompt-when: <condition>` — `scoped` (the dispatch's
+scope tier is scoped: a verification dispatch's recorded tier, a review
+dispatch's work-item opt-in), `armed` (the step entry declares
+`mechanical_fix`), `authored` (the bundle has an `e2e-author` step) or
+`reentry` (a review re-entry dispatch). Validation always runs the full
+schema; the prompt shows the entry only on a dispatch where the
+condition holds, and never shows the marker. An unknown condition is a
+load error.
+
+Some shared files are section material the driver renders itself, only
+on the dispatch shape that needs it, never through a placeholder:
+`_shared/scoped_verification.md` (the scoped tier's rules, on a scoped
+verification dispatch), `_shared/scoped_review.md` (review's scope
+obligation, on a scoped work item's review), `_shared/review_reentry.md`
+(the round contract and re-entry faces, on a review with a prior
+verdict-bearing round) beside `_shared/mechanical-fix.md` (an armed
+verification lane). A missing file renders no section (for the three
+scoped/re-entry files the daemon log names it: a capsule claimed before
+they existed carries the old static step text); a scoped or re-entry
+section that cannot render — unreadable, or a placeholder its step entry
+declares no var for — fails the dispatch instead of dropping the
+contract silently.
 
 ## The worked example: a custom `apidocs` bundle
 

@@ -1,7 +1,9 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -333,6 +335,13 @@ func TestMessagingListKeepsTheAdminWideListing(t *testing.T) {
 	if len(adminList[0].Members) != 2 {
 		t.Fatalf("admin row lost its member ids: %+v", adminList[0])
 	}
+	// The admin's wide row carries names for exactly those members too,
+	// with no admin-specific branch in the enrichment.
+	if len(adminList[0].MemberNames) != 2 ||
+		adminList[0].MemberNames[u2.ID] != "member-u2" ||
+		adminList[0].MemberNames[u3.ID] != "member-u3" {
+		t.Fatalf("admin row member_names = %+v", adminList[0].MemberNames)
+	}
 	if list, err := env.Admin.ListConversations(env.UserID, false); err != nil || len(list) != 0 {
 		t.Fatalf("member list includes a conversation it is not in: %+v %v", list, err)
 	}
@@ -353,5 +362,109 @@ func TestMessagingListKeepsTheAdminWideListing(t *testing.T) {
 	page, err := env.Admin.Page(env.UserID, own.ConversationID, false, 0, 0, 10)
 	if err != nil || len(page.Messages) != 1 {
 		t.Fatalf("page: %+v %v", page, err)
+	}
+}
+
+// TestMessagingMemberNamesMatchMembersExactly: member_names' scope is
+// membership and nothing else the key set equals members
+// for an admin's non-member row and for a member's own, a non-member's
+// display name never appears, the wire shape carries "member_names", and
+// an empty display name keeps its key with an empty value.
+func TestMessagingMemberNamesMatchMembersExactly(t *testing.T) {
+	env := newEnv(t)
+	u2, err := env.Admin.CreateUser("names-u2", "names2@example.com", "writer", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u3, err := env.Admin.CreateUser("names-u3", "names3@example.com", "writer", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsider, err := env.Admin.CreateUser("names-outsider", "outsider@example.com", "writer", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// u2 sets an empty display name straight in the store: display_name is
+	// NOT NULL but an empty string is legitimate data.
+	if _, err := env.DB.Exec(`UPDATE users SET display_name='' WHERE id=?1`, u2.ID); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := env.Admin.Send(u2.ID, api.SendMessage{To: u3.ID, Text: "names"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The key sets equal members exactly, for the admin's non-member row
+	// and for a member's own, with no admin branch anywhere.
+	checkKeysEqualMembers := func(label string, row api.Conversation) {
+		t.Helper()
+		if row.ID != conv.ConversationID {
+			t.Fatalf("%s: wrong conversation %+v", label, row)
+		}
+		if len(row.MemberNames) != len(row.Members) {
+			t.Fatalf("%s: member_names %v vs members %v", label, row.MemberNames, row.Members)
+		}
+		for _, id := range row.Members {
+			if _, ok := row.MemberNames[id]; !ok {
+				t.Fatalf("%s: member %q missing from member_names %v", label, id, row.MemberNames)
+			}
+		}
+		for id := range row.MemberNames {
+			found := false
+			for _, m := range row.Members {
+				if m == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("%s: member_names key %q is not a member (%v)", label, id, row.Members)
+			}
+		}
+	}
+	adminList, err := env.Admin.ListConversations(env.UserID, true)
+	if err != nil || len(adminList) != 1 {
+		t.Fatalf("admin list: %+v %v", adminList, err)
+	}
+	checkKeysEqualMembers("admin row", adminList[0])
+	memberList, err := env.Admin.ListConversations(u2.ID, false)
+	if err != nil || len(memberList) != 1 {
+		t.Fatalf("member list: %+v %v", memberList, err)
+	}
+	checkKeysEqualMembers("member row", memberList[0])
+
+	// The empty display name keeps its key with an empty value, and the
+	// other member's name is joined verbatim.
+	if got := memberList[0].MemberNames[u2.ID]; got != "" {
+		t.Fatalf("empty display name reads as %q", got)
+	}
+	if got := memberList[0].MemberNames[u3.ID]; got != "names-u3" {
+		t.Fatalf("u3 name = %q", got)
+	}
+
+	// The wire shape carries member_names (and never a wider scope).
+	wire, err := json.Marshal(memberList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"member_names"`) {
+		t.Fatalf("wire carries no member_names: %s", wire)
+	}
+	if strings.Contains(string(wire), "names-outsider") || strings.Contains(string(wire), outsider.ID) {
+		t.Fatalf("non-member leaks into the wire: %s", wire)
+	}
+
+	// A non-admin non-member gets neither the conversation nor any name
+	// from it.
+	other, err := env.Admin.ListConversations(outsider.ID, false)
+	if err != nil || len(other) != 0 {
+		t.Fatalf("outsider list: %+v %v", other, err)
+	}
+	otherWire, err := json.Marshal(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(otherWire), "names-u3") || strings.Contains(string(otherWire), conv.ConversationID) {
+		t.Fatalf("outsider wire leaks a name or conversation: %s", otherWire)
 	}
 }

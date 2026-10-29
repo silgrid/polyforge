@@ -96,7 +96,6 @@ type Project struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Repos       []ProjectRepo   `json:"repos"`
-	Visible     bool            `json:"visible"`
 	Members     []ProjectMember `json:"members"`
 	CreatedAt   string          `json:"created_at"`
 	UpdatedAt   string          `json:"updated_at"`
@@ -194,7 +193,6 @@ type ProjectCreateRequest struct {
 	Name        string        `json:"name"`
 	Description string        `json:"description,omitempty"`
 	Repos       []ProjectRepo `json:"repos,omitempty"` // task-repo inventory (served back on every claim)
-	Visible     *bool         `json:"visible,omitempty"`
 }
 
 // ProjectPatchRequest is the PATCH /api/v1/projects/{id} body:
@@ -205,7 +203,6 @@ type ProjectPatchRequest struct {
 	Description   *string          `json:"description,omitempty"`
 	Members       *[]ProjectMember `json:"members,omitempty"`
 	RemoveMembers *[]string        `json:"remove_members,omitempty"`
-	Visible       *bool            `json:"visible,omitempty"`
 	Repos         *[]ProjectRepo   `json:"repos,omitempty"`
 }
 
@@ -221,7 +218,7 @@ type MachineHeartbeat struct {
 	RuntimeVersion string   `json:"runtime_version,omitempty"`
 	Mode           string   `json:"mode,omitempty"`
 	LiveWIIDs      []string `json:"live_wi_ids"`
-	// workbench#11 machine identity: the daemon's Ed25519 public key
+	// machine identity: the daemon's Ed25519 public key
 	// (base64), its launcher kind, the desired role, and its capability
 	// card. An old-shape heartbeat carries none of them and is treated as
 	// having no cross-machine capability (absent field, no branch).
@@ -239,7 +236,7 @@ type MachineHeartbeatResult struct {
 	Registered bool   `json:"registered"` // true only on the first call
 	MachineID  string `json:"machine_id"`
 	OperatorID string `json:"operator_id"`
-	// workbench#11 coordination state: a daemon whose response lacks
+	// coordination state: a daemon whose response lacks
 	// MachineFaceVersion disables the cross-machine face (old hub).
 	MachineFaceVersion int    `json:"machine_face_version,omitempty"`
 	Role               string `json:"role,omitempty"`
@@ -261,7 +258,7 @@ type MachineStatus struct {
 	LastHeartbeatAt     string   `json:"last_heartbeat_at"`
 	HeartbeatAgeSeconds *int64   `json:"heartbeat_age_seconds,omitempty"`
 	Stale               bool     `json:"stale"`
-	// workbench#11 identity projection.
+	// identity projection.
 	PublicKey  string `json:"public_key,omitempty"`
 	Launcher   string `json:"launcher,omitempty"`
 	Role       string `json:"role,omitempty"`

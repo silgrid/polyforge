@@ -106,7 +106,7 @@ type Execution struct {
 	UpdatedAt      string           `json:"updated_at"`
 	Version        int64            `json:"version"`
 	// ScopeTier is the verification tier the work item runs at
-	// (workbench#19): "scoped" or "full" once derived, "" before the
+	//: "scoped" or "full" once derived, "" before the
 	// first verification dispatch. The driver records it once at that
 	// dispatch (from the work-item marker and the lane) and restores it
 	// unchanged on every later re-dispatch — a fresh retry never recomputes
@@ -128,14 +128,10 @@ const (
 
 type Step struct {
 	Status string `json:"status"`
-	// Model is the effective model id the step's dispatches currently
-	// run under (the F4 lane: the executor records the candidate it
-	// dispatched with into every step-starting execution.json write, so
-	// the observe face can render it — the daemon never derives it).
-	Model  string `json:"model,omitempty"`
-	Effort string `json:"effort,omitempty"` // that candidate's thinking effort (polyforge#176; absent = the harness default)
 	// Candidate is the `<harness>:<model>[:effort]` candidate string the
-	// step's current/next dispatch runs (polyforge#33/#34): written at
+	// step's current/next dispatch runs (polyforge#33/#34) — the step's
+	// one model fact (harness.ParseCandidate derives the model id and the
+	// effort; an older record's model/effort keys are ignored): written at
 	// step_start and at the failure that decides a switch (the decided next
 	// model, persisted with that death's archive entry), and the anchor of
 	// the candidate pointer. Archived attempts are stamped with the
@@ -154,8 +150,32 @@ type Step struct {
 	// PendingQuestion is the step's open question (D8/D9): the durable
 	// waiting marker while a human is asked; the answer transition archives
 	// the pair and clears it in one atomic write.
-	PendingQuestion    *PendingQuestion `json:"pending_question,omitempty"`
-	PendingRewindInput *RewindInput     `json:"pending_rewind_input,omitempty"`
+	PendingQuestion *PendingQuestion `json:"pending_question,omitempty"`
+	// PendingRewindInput is the round's gate FAIL verdict: written by the
+	// rewind (the same atomic write that resets the step to pending) and
+	// read by every dispatch of the round — the first one, a retry after
+	// an infra death, a restart after a daemon death. It is
+	// cleared by the acceptance write that ends the round and replaced by
+	// the next rewind or reset.
+	PendingRewindInput *RewindInput `json:"pending_rewind_input,omitempty"`
+	// LastReviewRound is the review step's last
+	// verdict-bearing round's facts — the convergence baseline the next
+	// review FAIL's residual-of judgment compares against. Survives
+	// rewinds (the record of the round that produced them); cleared by
+	// nothing except the next verdict-bearing round overwriting it.
+	LastReviewRound *ReviewRound `json:"last_review_round,omitempty"`
+	// JudgedRepoHash is the task-repo tree hash a GATE step judged when it
+	// last delivered a verdict (PASS or FAIL), driver-written at that
+	// settlement ( criterion 6). A gate re-entered after a
+	// rewind of the lane's build step whose target resubmitted the same
+	// code tree is not re-run: the driver blocks it with a human-visible
+	// reason naming the crashed build attempt. It covers repos/ only (not
+	// driver-owned artifacts/steps archives, which move every round).
+	// Empty for non-gates and before the gate's first verdict. When the
+	// last verdict was delivered is derived from the attempts ledger (the
+	// gate's newest accepted attempt, or the rewind archive naming it), not
+	// persisted a second time.
+	JudgedRepoHash string `json:"judged_repo_hash,omitempty"`
 	// PendingLightRecheck is the mechanical fast lane's pending light
 	// recheck marker (polyforge#260): set by the mechanical rewind's own
 	// atomic write, the durable carrier of the fast-lane state after the
@@ -175,6 +195,14 @@ type Step struct {
 	// starting with it equal to the current ordinal settles the envelope
 	// a dead predecessor already collected instead of dispatching again.
 	Dispatch int64 `json:"dispatch,omitempty"`
+	// EnvelopeRejects is the step's consecutive envelope-rejection count
+	// (the in-process retry lane's bound): incremented by the driver's
+	// rejection write, reset by an accepted result, a rewind reset or an
+	// owner continue. EnvelopeRejectSpawnN is the ordinal the last counted
+	// rejection belonged to, so a restart that re-collects the same
+	// archived envelope does not count it twice.
+	EnvelopeRejects      int   `json:"envelope_rejects,omitempty"`
+	EnvelopeRejectSpawnN int64 `json:"envelope_reject_spawn_n,omitempty"`
 }
 
 // StepSupervision is one step's driver-owned supervision state.
@@ -185,6 +213,11 @@ type StepSupervision struct {
 	// LongTaskTimeouts counts step_timeout_long_task verdicts since the
 	// last reset; the second one blocks the step.
 	LongTaskTimeouts int `json:"long_task_timeouts,omitempty"`
+	// SlowModelTimeouts counts step_timeout_slow_model rotations since the
+	// same resets as LongTaskTimeouts; a later slow-model timeout is
+	// archived as step_timeout_long_task, so the step rotates the
+	// candidate on a timeout at most once per reset.
+	SlowModelTimeouts int `json:"slow_model_timeouts,omitempty"`
 	// RelaxedToolMs / RelaxedWallMs are the relaxed Y and T (each
 	// relaxation doubles); zero = never relaxed.
 	RelaxedToolMs int64 `json:"relaxed_tool_ms,omitempty"`
@@ -193,6 +226,12 @@ type StepSupervision struct {
 	// the transcript, "fresh" starts a new conversation with the previous
 	// transcript as read-only reference. Cleared by the next step_start.
 	NextDispatch string `json:"next_dispatch,omitempty"`
+	// ResumedAt stamps the owner's last continue of the blocked step
+	// (RFC3339Nano). Like an answer, it opens a new streak era: the
+	// attempts-ledger streaks (the model-class and EWR rotations, the
+	// retry pacing) do not reach across it, and no backoff owed by an
+	// earlier death survives it.
+	ResumedAt string `json:"resumed_at,omitempty"`
 }
 
 // NextDispatchFresh is the StepSupervision.NextDispatch value that
@@ -220,7 +259,7 @@ type Attempt struct {
 	// Empty on every other attempt and on pre-#33 records.
 	Candidate string `json:"candidate,omitempty"`
 	// TreeHash is the capsule tree hash recorded when an infra_failure
-	// attempt was archived (workbench#21): the re-dispatch fast path
+	// attempt was archived: the re-dispatch fast path
 	// compares the current tree against it. Empty on every other attempt
 	// and on pre-feature records (the mismatch/no-hash path is exactly
 	// the pre-feature behavior).
@@ -271,9 +310,40 @@ type ArchivedAnswer struct {
 	AnsweredAt string `json:"answered_at"`
 }
 
+// RewindRecord is one rewind's ledger entry: the gate
+// that fired it (the edge attribution), its on_fail target and whether
+// it charged that gate→target edge's max_per_step bound. The list is the
+// single rewind ledger — Count is its tally — and a ledger that cannot
+// attribute its own count (Count > len(Rewinds), the pre-w69 shape with
+// no per-record history) proves no per-edge quota: the next rewind
+// fails closed (no compat path, no guess).
+type RewindRecord struct {
+	Gate    string `json:"gate"`
+	ToStep  string `json:"to_step"`
+	Charged bool   `json:"charged"`
+}
+
+// ReviewRound is the last verdict-bearing review
+// round's facts: the round ordinal (execution.json's review_rounds count),
+// its blocking-findings count, and the task-repo HEADs the round judged
+// (code review: recorded for EVERY verdict-bearing round — a FAIL names
+// the tree it failed, a PASS the tree it covered — so the next
+// re-entry's fix surface always has an anchor that survives rewinds,
+// unlike reviewed_heads which a PASS alone writes). Written only by
+// the settlement of a review round that carried a verdict — a pass
+// completion or a gate FAIL — in that same atomic write; a needs_input
+// or incomplete round records nothing. The converging-round quota
+// judgment compares the next FAIL's residual-marked blocking findings
+// against it.
+type ReviewRound struct {
+	Round    int64             `json:"round"`
+	Blocking int64             `json:"blocking"`
+	Heads    map[string]string `json:"heads,omitempty"`
+}
+
 type RewindStats struct {
-	Count  int64    `json:"count"`
-	ToStep []string `json:"to_step"`
+	Count   int64          `json:"count"`
+	Rewinds []RewindRecord `json:"rewinds"`
 }
 
 // MaxBlobBytes is the pre-receive blob size limit for the capsule chain
@@ -288,3 +358,15 @@ const MaxBlobBytes = 16 << 20
 // asset above MaxBlobBytes must not make a repo uncarriable
 // (polyforge#158).
 const MaxTaskBlobBytes = 100 << 20
+
+// MaxGitRequestBodyBytes caps the git smart-HTTP proxy's request bodies
+// (upload-pack and receive-pack alike) at exactly 1 GiB. The value is
+// the owner's ruling: 10× the largest blob the hook accepts
+// (MaxTaskBlobBytes = 100 MiB, so a shallow carrier's first push — a
+// whole root-commit tree snapshot — fits with an order of magnitude to
+// spare;), pinned at the binary GiB boundary the ruling
+// names (the raw 10× product is 1000 MiB; the cap must not shrink
+// below 1 GiB). It is a constant: no flag, config key or environment
+// variable adjusts it (the git.Manager field merely lets tests inject a
+// small value).
+const MaxGitRequestBodyBytes = int64(1) << 30

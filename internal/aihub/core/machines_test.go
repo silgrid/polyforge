@@ -1,6 +1,6 @@
 package core
 
-// machines_test.go: the workbench#57 machine-heartbeat permission model at
+// machines_test.go: the machine-heartbeat permission model at
 // the Core level — the WRITE decision. The cryptographic verdict is the
 // server's (it verifies the signature, the ±300 s window and the replay
 // cache), so these tests construct proofs directly: a signed proof carries
@@ -9,7 +9,9 @@ package core
 // v2.20.6 daemon.
 
 import (
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,7 +83,7 @@ func TestHeartbeatRegistersOnceThenRefreshes(t *testing.T) {
 
 	// Registration mints no machine user and issues no api key: the daemon
 	// runs on its operator-issued key, and operator_id is the machine's one
-	// identity (workbench#57).
+	// identity.
 	var minted int
 	if err := env.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE email LIKE '%@machines.local'`).Scan(&minted); err != nil {
 		t.Fatalf("count machine users: %v", err)
@@ -118,7 +120,7 @@ func TestHeartbeatLivenessProjectionKeepVsReplace(t *testing.T) {
 	proof := signedProof(env.UserID, "pk-live")
 	// Register with a full projection.
 	if _, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{
-		MachineID: "m-live", PublicKey: "pk-live", Mode: "interactive",
+		MachineID: "m-live", PublicKey: "pk-live", Mode: "interactive", Role: "interactive",
 		LiveWIIDs: []string{"wi_b", "wi_a"}, RuntimeVersion: "v1.5",
 	}, proof, nil); err != nil {
 		t.Fatalf("register: %v", err)
@@ -154,6 +156,27 @@ func TestHeartbeatLivenessProjectionKeepVsReplace(t *testing.T) {
 	}
 	if ms[0].Mode != "interactive" {
 		t.Fatalf("empty mode must keep stored mode: %+v", ms[0])
+	}
+
+	// The additive superseded_at read: a fresh machine
+	// carries no stamp; a supersession stamps it and the read model
+	// carries the stamp (the /api/v1 mapping ignores it).
+	if ms[0].SupersededAt != "" {
+		t.Fatalf("a never-superseded machine carries a supersession stamp: %+v", ms[0])
+	}
+	tx, err := env.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Admin.supersedeOthersTx(tx, env.UserID, "m-none"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	ms, _ = env.Admin.Machines()
+	if ms[0].SupersededAt == "" {
+		t.Fatalf("the supersession stamp is not read back: %+v", ms[0])
 	}
 
 	// A new mode replaces; a second machine appears in the same listing.
@@ -218,7 +241,7 @@ func TestHeartbeatRegistrationRequiresProof(t *testing.T) {
 	}
 
 	// The gate refuses a key outside every project; nothing is written.
-	refused := func() error { return Fail(api.ErrAuthForbidden, "", "outside every project") }
+	refused := Fail(api.ErrAuthForbidden, "", "outside every project")
 	if _, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{MachineID: "m-outsider", PublicKey: "pk"},
 		signedProof(env.UserID, "pk"), refused); !IsCode(err, api.ErrAuthForbidden) {
 		t.Fatalf("gate refusal: %v, want %s", err, api.ErrAuthForbidden)
@@ -238,16 +261,17 @@ func TestHeartbeatOnlyTheOperatorHasEffect(t *testing.T) {
 	op1, op2 := env.UserID, env.UserIDB
 	registerMachine(t, env, "m-op", op1, "pk-A")
 
-	// A different authenticated user → AUTH-403 naming the operator and
-	// suggesting --machine-id (the collision case), unchanged.
+	// A different authenticated user → AUTH-403 saying another operator
+	// and suggesting --machine-id, but naming no one ( changed
+	// this: the collision refusal no longer discloses the operator's id).
 	_, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{
 		MachineID: "m-op", Role: "interactive", Force: true, Launcher: "claude",
 	}, signedProof(op2, "pk-B"), nil)
 	if !IsCode(err, api.ErrAuthForbidden) {
 		t.Fatalf("non-operator beat must be AUTH-403, got %v", err)
 	}
-	if msg := err.Error(); !strings.Contains(msg, "--machine-id") || !strings.Contains(msg, op1) {
-		t.Fatalf("collision refusal must name the operator and suggest --machine-id: %s", msg)
+	if msg := err.Error(); !strings.Contains(msg, "--machine-id") || !strings.Contains(msg, "another operator") || strings.Contains(msg, op1) {
+		t.Fatalf("collision refusal must say another operator, suggest --machine-id and name no one: %s", msg)
 	}
 	if got := machineField(t, env, "m-op", "role"); got != "runner" {
 		t.Fatalf("a non-operator beat changed the role to %q", got)
@@ -281,7 +305,10 @@ func TestHeartbeatOnlyTheOperatorHasEffect(t *testing.T) {
 func TestHeartbeatUnsignedBeatTouchesLivenessOnly(t *testing.T) {
 	env := newEnv(t)
 	registerMachine(t, env, "m-trans", env.UserID, "pk-t")
-	if _, err := env.DB.Exec(`UPDATE machines SET launcher='pi-web' WHERE id='m-trans'`); err != nil {
+	// registerSigned leaves runtime_version empty and the version gate
+	// refuses that (fail-closed), so the row is seeded with the pre-signing
+	// version a v2.20.6 daemon would have stored.
+	if _, err := env.DB.Exec(`UPDATE machines SET launcher='pi-web', runtime_version='v2.20.6' WHERE id='m-trans'`); err != nil {
 		t.Fatalf("seed launcher: %v", err)
 	}
 	before := map[string]string{
@@ -369,11 +396,11 @@ func TestHeartbeatNullOperatorRowNeedsGateAndSignature(t *testing.T) {
 	env := newEnv(t)
 	seedMachineRow(t, env, "m-claim", "", "")
 
-	refused := func() error { return Fail(api.ErrAuthForbidden, "", "outside every project") }
+	refused := Fail(api.ErrAuthForbidden, "", "outside every project")
 	for _, c := range []struct {
 		name string
 		prf  HeartbeatProof
-		gate func() error
+		gate error
 	}{
 		{"unsigned, eligible", unsignedProof(env.UserID), nil},
 		{"signed, outside every project", signedProof(env.UserID, "pk-c"), refused},
@@ -406,18 +433,318 @@ func TestHeartbeatNullOperatorRowNeedsGateAndSignature(t *testing.T) {
 	}
 }
 
-// TestHeartbeatRefreshNeverRechecksTheGate pins R5: membership gates only
-// registration; a refresh is accepted without ever calling the gate.
-func TestHeartbeatRefreshNeverRechecksTheGate(t *testing.T) {
+// TestHeartbeatRefreshIgnoresTheGate pins R5 in the by-value gate's shape
+// the server evaluates the registration gate before the
+// core call, and core enforces the verdict only on the two registration
+// acts — a refresh ignores it, a claim still answers it.
+func TestHeartbeatRefreshIgnoresTheGate(t *testing.T) {
 	env := newEnv(t)
 	registerMachine(t, env, "m-refresh", env.UserID, "pk-r")
-	gateCalls := 0
-	gate := func() error { gateCalls++; return Fail(api.ErrAuthForbidden, "", "must not run on a refresh") }
+	gate := Fail(api.ErrAuthForbidden, "", "must not gate a refresh")
 	if _, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{MachineID: "m-refresh"},
 		signedProof(env.UserID, "pk-r"), gate); err != nil {
-		t.Fatalf("refresh: %v", err)
+		t.Fatalf("refresh must ignore the registration gate: %v", err)
 	}
-	if gateCalls != 0 {
-		t.Fatalf("a refresh re-checked membership %d time(s)", gateCalls)
+	seedMachineRow(t, env, "m-claim-g", "", "")
+	if _, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{MachineID: "m-claim-g", PublicKey: "pk-g"},
+		signedProof(env.UserID, "pk-g"), gate); !IsCode(err, api.ErrAuthForbidden) {
+		t.Fatalf("claim must answer the gate refusal: %v", err)
+	}
+	if got := machineField(t, env, "m-claim-g", "operator_id"); got != "" {
+		t.Fatalf("a gate-refused claim wrote operator_id %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// one heartbeat is one transaction — the race loser answers
+// the sequential outcome, never CORE-500, never a rebind.
+
+// raceBeats releases n beats at a barrier and collects their answers and
+// errors. The fix is structural (the store's single connection serializes
+// the heartbeat transactions), so the assertion cannot flake: repetition
+// with a fresh machine id per round is the evidence, per plan D6.
+func raceBeats(n int, beat func(i int) (*HeartbeatResult, error)) ([]*HeartbeatResult, []error) {
+	start := make(chan struct{})
+	res := make([]*HeartbeatResult, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			res[i], errs[i] = beat(i)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	return res, errs
+}
+
+// TestHeartbeatConcurrentSameOperatorRegistration: four concurrent first
+// registrations of one id by one operator — one registers, the other three
+// answer 200 as the refresh they would have been had the requests run one
+// after the other; exactly one row, bound to the operator's key.
+func TestHeartbeatConcurrentSameOperatorRegistration(t *testing.T) {
+	env := newEnv(t)
+	for round := 0; round < 5; round++ {
+		id := "m-race-same-" + strconv.Itoa(round)
+		res, errs := raceBeats(4, func(i int) (*HeartbeatResult, error) {
+			return env.Admin.HeartbeatAuthorized(MachineHeartbeat{
+				MachineID: id, PublicKey: "pk-race", LiveWIIDs: []string{"wi-" + strconv.Itoa(i)},
+			}, signedProof(env.UserID, "pk-race"), nil)
+		})
+		registered := 0
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d contender %d = %v, want the sequential outcome (never CORE-500)", round, i, err)
+			}
+			if res[i].Registered {
+				registered++
+			}
+		}
+		if registered != 1 {
+			t.Fatalf("round %d answered %d registrations, want one", round, registered)
+		}
+		var n int
+		if err := env.DB.QueryRow(`SELECT COUNT(*) FROM machines WHERE id=?1`, id).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("round %d left %d rows (err %v), want 1", round, n, err)
+		}
+		if got := machineField(t, env, id, "operator_id"); got != env.UserID {
+			t.Fatalf("round %d operator_id = %q, want %q", round, got, env.UserID)
+		}
+		if got := machineField(t, env, id, "public_key"); got != "pk-race" {
+			t.Fatalf("round %d public_key = %q, want pk-race", round, got)
+		}
+	}
+}
+
+// TestHeartbeatConcurrentDifferentOperatorRegistration: two operators race
+// the first registration — exactly one wins, the loser gets the unnamed
+// collision 403 it would have gotten sequentially, and the row keeps the
+// winner's operator and key.
+func TestHeartbeatConcurrentDifferentOperatorRegistration(t *testing.T) {
+	env := newEnv(t)
+	ops := []string{env.UserID, env.UserIDB}
+	for round := 0; round < 5; round++ {
+		id := "m-race-diff-" + strconv.Itoa(round)
+		_, errs := raceBeats(2, func(i int) (*HeartbeatResult, error) {
+			return env.Admin.HeartbeatAuthorized(MachineHeartbeat{
+				MachineID: id, PublicKey: "pk-" + strconv.Itoa(i), LiveWIIDs: []string{"wi-" + strconv.Itoa(i)},
+			}, signedProof(ops[i], "pk-"+strconv.Itoa(i)), nil)
+		})
+		winner := -1
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				if winner >= 0 {
+					t.Fatalf("round %d has two winners: %v", round, errs)
+				}
+				winner = i
+			case IsCode(err, api.ErrAuthForbidden):
+				if msg := err.Error(); strings.Contains(msg, ops[1-i]) {
+					t.Fatalf("round %d collision names the operator: %s", round, msg)
+				}
+			default:
+				t.Fatalf("round %d contender %d = %v, want 200 or the collision 403", round, i, err)
+			}
+		}
+		if winner < 0 {
+			t.Fatalf("round %d answered no 200: %v", round, errs)
+		}
+		if got := machineField(t, env, id, "operator_id"); got != ops[winner] {
+			t.Fatalf("round %d operator_id = %q, want the winner %q", round, got, ops[winner])
+		}
+		if got := machineField(t, env, id, "public_key"); got != "pk-"+strconv.Itoa(winner) {
+			t.Fatalf("round %d public_key = %q, want the winner's", round, got)
+		}
+	}
+}
+
+// TestHeartbeatConcurrentLegacyClaimKeepsOneOwner: four operators race the
+// claim of one NULL-operator legacy row — exactly one 200 owns it, the
+// losers get the collision 403, and the row keeps the winner's operator_id
+// and public_key (the old code answered several 200s and rebound the row).
+func TestHeartbeatConcurrentLegacyClaimKeepsOneOwner(t *testing.T) {
+	env := newEnv(t)
+	ops := []string{env.UserID, env.UserIDB}
+	for i := 2; i < 4; i++ {
+		u, err := env.Admin.CreateUser("w82-claim-op-"+strconv.Itoa(i), "w82-claim-op-"+strconv.Itoa(i)+"@example.com", "writer", "human")
+		if err != nil {
+			t.Fatalf("user: %v", err)
+		}
+		ops = append(ops, u.ID)
+	}
+	for round := 0; round < 5; round++ {
+		id := "m-race-claim-" + strconv.Itoa(round)
+		seedMachineRow(t, env, id, "", "")
+		_, errs := raceBeats(4, func(i int) (*HeartbeatResult, error) {
+			return env.Admin.HeartbeatAuthorized(MachineHeartbeat{
+				MachineID: id, PublicKey: "pk-" + strconv.Itoa(i), LiveWIIDs: []string{"wi-" + strconv.Itoa(i)},
+			}, signedProof(ops[i], "pk-"+strconv.Itoa(i)), nil)
+		})
+		winner := -1
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				if winner >= 0 {
+					t.Fatalf("round %d has two owners: %v", round, errs)
+				}
+				winner = i
+			case IsCode(err, api.ErrAuthForbidden):
+			default:
+				t.Fatalf("round %d claimer %d = %v, want 200 or the collision 403", round, i, err)
+			}
+		}
+		if winner < 0 {
+			t.Fatalf("round %d answered no 200: %v", round, errs)
+		}
+		if got := machineField(t, env, id, "operator_id"); got != ops[winner] {
+			t.Fatalf("round %d operator_id = %q, want the winner %q", round, got, ops[winner])
+		}
+		if got := machineField(t, env, id, "public_key"); got != "pk-"+strconv.Itoa(winner) {
+			t.Fatalf("round %d public_key = %q, want the winner's (no rebind)", round, got)
+		}
+	}
+}
+
+// TestHeartbeatSequentialLostClaimAnd409Backstop: the deterministic
+// companions of the race — a lost claim answered sequentially changes
+// nothing, and a residual registration INSERT UNIQUE violation maps to
+// CORE-409 (the backstop), never CORE-500.
+func TestHeartbeatSequentialLostClaimAnd409Backstop(t *testing.T) {
+	env := newEnv(t)
+	seedMachineRow(t, env, "m-seq-claim", "", "")
+	if _, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{MachineID: "m-seq-claim", PublicKey: "pk-1"},
+		signedProof(env.UserID, "pk-1"), nil); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	_, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{MachineID: "m-seq-claim", PublicKey: "pk-2"},
+		signedProof(env.UserIDB, "pk-2"), nil)
+	if !IsCode(err, api.ErrAuthForbidden) {
+		t.Fatalf("lost claim = %v, want the collision 403", err)
+	}
+	if got := machineField(t, env, "m-seq-claim", "operator_id"); got != env.UserID {
+		t.Fatalf("lost claim rebound operator_id to %q", got)
+	}
+	if got := machineField(t, env, "m-seq-claim", "public_key"); got != "pk-1" {
+		t.Fatalf("lost claim rebound public_key to %q", got)
+	}
+
+	// The backstop: a row that slipped past the transaction's read (not
+	// reachable through HeartbeatAuthorized — one transaction serializes
+	// the two) still maps the UNIQUE violation to CORE-409.
+	seedMachineRow(t, env, "m-backstop", env.UserID, "pk-b")
+	tx, terr := env.DB.Begin()
+	if terr != nil {
+		t.Fatalf("begin: %v", terr)
+	}
+	defer tx.Rollback()
+	if err := env.Admin.insertMachineRow(tx, MachineHeartbeat{MachineID: "m-backstop", PublicKey: "pk-b"},
+		env.UserIDB, api.MachineRoleRunner, nil); !IsCode(err, api.ErrCoreConflict) {
+		t.Fatalf("residual UNIQUE = %v, want %s", err, api.ErrCoreConflict)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// the unsigned-heartbeat version gate and ratchet.
+
+func TestParseMachineVersion(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want [3]int
+		ok   bool
+	}{
+		{"v2.20.8", [3]int{2, 20, 8}, true},
+		{"2.20.6", [3]int{2, 20, 6}, true},
+		{"v1.5.0", [3]int{1, 5, 0}, true},
+		{"v2.21.0", [3]int{2, 21, 0}, true},
+		{"dev", [3]int{}, false},
+		{"", [3]int{}, false},
+		{"garbage", [3]int{}, false},
+		{"v2.20", [3]int{}, false},
+		{"v2.20.8.1", [3]int{}, false},
+		{"v2.20.x", [3]int{}, false},
+		{"v2.20.-1", [3]int{}, false},
+		{"  v2.20.6  ", [3]int{2, 20, 6}, true},
+	} {
+		got, ok := parseMachineVersion(c.in)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("parseMachineVersion(%q) = %v %v, want %v %v", c.in, got, ok, c.want, c.ok)
+		}
+	}
+	if !belowSigningRelease("v2.20.7") || !belowSigningRelease("2.20.6") || !belowSigningRelease("v1.9.9") {
+		t.Error("pre-signing versions must pass the gate")
+	}
+	for _, v := range []string{"v2.20.8", "v2.20.9", "v3.0.0", "dev", "", "garbage"} {
+		if belowSigningRelease(v) {
+			t.Errorf("belowSigningRelease(%q) = true, want false (fail closed)", v)
+		}
+	}
+}
+
+// TestHeartbeatUnsignedVersionGateAndRatchet pins the gate end to end: only
+// a parseable pre-v2.20.8 request on a pre-v2.20.8 row is accepted; dev,
+// empty or unparseable on either side is refused and writes nothing; a
+// signed v2.20.9 beat ratchets the row closed for good.
+func TestHeartbeatUnsignedVersionGateAndRatchet(t *testing.T) {
+	env := newEnv(t)
+	registerMachine(t, env, "m-gate", env.UserID, "pk-g")
+	if _, err := env.DB.Exec(`UPDATE machines SET runtime_version='v2.20.6' WHERE id='m-gate'`); err != nil {
+		t.Fatalf("seed version: %v", err)
+	}
+	before := map[string]string{}
+	for _, col := range []string{"last_heartbeat_at", "runtime_version", "mode", "live_wi_ids"} {
+		before[col] = machineField(t, env, "m-gate", col)
+	}
+	for _, v := range []string{"v2.20.8", "v2.20.9", "dev", "", "garbage"} {
+		_, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{
+			MachineID: "m-gate", RuntimeVersion: v, Mode: "bad", LiveWIIDs: []string{"wi-bad"},
+		}, unsignedProof(env.UserID), nil)
+		if !IsCode(err, api.ErrAuthUnauthorized) {
+			t.Fatalf("unsigned request version %q = %v, want %s", v, err, api.ErrAuthUnauthorized)
+		}
+		for col, want := range before {
+			if got := machineField(t, env, "m-gate", col); got != want {
+				t.Fatalf("refused beat (version %q) wrote %s: %q, want %q", v, col, got, want)
+			}
+		}
+	}
+
+	// Fail closed on the stored side too.
+	if _, err := env.DB.Exec(`UPDATE machines SET runtime_version='dev' WHERE id='m-gate'`); err != nil {
+		t.Fatalf("seed dev: %v", err)
+	}
+	if _, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{
+		MachineID: "m-gate", RuntimeVersion: "v2.20.6", Mode: "run",
+	}, unsignedProof(env.UserID), nil); !IsCode(err, api.ErrAuthUnauthorized) {
+		t.Fatalf("unsigned beat on a stored dev row = %v, want %s (fail closed)", err, api.ErrAuthUnauthorized)
+	}
+
+	// The ratchet: a signed v2.20.9 beat stores it, and the row is closed.
+	if _, err := env.DB.Exec(`UPDATE machines SET runtime_version='v2.20.6' WHERE id='m-gate'`); err != nil {
+		t.Fatalf("reseed version: %v", err)
+	}
+	if _, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{
+		MachineID: "m-gate", RuntimeVersion: "v2.20.9", Mode: "signed", LiveWIIDs: []string{"wi-signed"},
+	}, signedProof(env.UserID, "pk-g"), nil); err != nil {
+		t.Fatalf("signed v2.20.9 beat: %v", err)
+	}
+	if got := machineField(t, env, "m-gate", "runtime_version"); got != "v2.20.9" {
+		t.Fatalf("signed beat stored runtime_version %q, want v2.20.9", got)
+	}
+	ratcheted := map[string]string{}
+	for _, col := range []string{"last_heartbeat_at", "runtime_version", "mode", "live_wi_ids"} {
+		ratcheted[col] = machineField(t, env, "m-gate", col)
+	}
+	if _, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{
+		MachineID: "m-gate", RuntimeVersion: "v2.20.6", Mode: "old", LiveWIIDs: []string{"wi-old"},
+	}, unsignedProof(env.UserID), nil); !IsCode(err, api.ErrAuthUnauthorized) {
+		t.Fatalf("unsigned beat after the ratchet = %v, want %s", err, api.ErrAuthUnauthorized)
+	}
+	for col, want := range ratcheted {
+		if got := machineField(t, env, "m-gate", col); got != want {
+			t.Fatalf("ratcheted-refused beat wrote %s: %q, want %q", col, got, want)
+		}
 	}
 }

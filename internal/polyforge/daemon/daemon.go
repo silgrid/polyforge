@@ -206,6 +206,10 @@ type SupervisionConfig struct {
 	// ModelErrorGrace is the rule-1 grace after an error-ended turn
 	// (default 1m).
 	ModelErrorGrace time.Duration
+	// RetryBackoffBase is the driver's first retry-pacing wait (default
+	// 1m; test/dev-only flag): consecutive outage-shaped deaths on one
+	// candidate wait 3x, then 9x it.
+	RetryBackoffBase time.Duration
 	// SessionRevalidateEvery is the M4 periodic session-revalidation
 	// cadence of the held records — observe's running jobs and the
 	// runtime's retained paused records (0 = the default 30s; negative =
@@ -217,6 +221,7 @@ func (c SupervisionConfig) limits() supervise.Defaults {
 	return supervise.Defaults{
 		Silence: c.SilenceWindow, Tool: c.ToolWindow,
 		StepTimeout: c.StepTimeout, ModelErrorGrace: c.ModelErrorGrace,
+		RetryBackoffBase: c.RetryBackoffBase,
 	}
 }
 
@@ -254,7 +259,7 @@ type Daemon struct {
 
 	rt  *runtime.Runtime
 	obs *observe.Observe
-	// modelHealth is the durable model-health tracker (workbench#14): the
+	// modelHealth is the durable model-health tracker: the
 	// read-side consumer of the events stream, the writer of
 	// <DataDir>/model-health.json and the source of GET /models + the
 	// additive GET /status summary. It never touches dispatch.
@@ -271,6 +276,11 @@ type Daemon struct {
 	// order, so nothing waits on it but another adopt.
 	adoptMu sync.Mutex
 
+	// remoteSnaps caches relayed remote snapshots for remoteSnapTTL so a
+	// polling watcher cannot exhaust the holder's relay budget
+	// ( A3; progresslookup.go). Memory-only.
+	remoteSnaps *remoteSnapCache
+
 	// lane is the demand-gated summarize lane (polyforge#224): per-WI
 	// memory-only state, the gates, the background dispatch — wired into
 	// the watch route (the demand=1 marker on GET /jobs/{wi}/watch). The
@@ -278,7 +288,7 @@ type Daemon struct {
 	// is the test seam.
 	lane *summarize.Lane
 
-	// tasks is the one-shot task manager (workbench#53; tasks.go).
+	// tasks is the one-shot task manager (; tasks.go).
 	tasks *task.Manager
 	// locateTranscript resolves the current dispatch's live transcript
 	// through the shared per-dispatch rule (runtime.LiveTranscript — the
@@ -343,7 +353,7 @@ type Daemon struct {
 
 	// live holds the reloadable settings (mapping, claude_bin, supervision
 	// bounds) behind a mutex; the daemon and the runtime read them at their
-	// use sites, so a reload takes effect without a restart (workbench#3).
+	// use sites, so a reload takes effect without a restart.
 	live *liveconfig.State
 	// reloadMu guards the reload BOOKKEEPING (pending/overridden/status),
 	// which GET /status reads. It is only ever held for an in-memory
@@ -360,7 +370,7 @@ type Daemon struct {
 	// unrelated reload never undoes `pf ops max`.
 	lastAppliedFile cli.Config
 
-	// Cross-machine identity and face (workbench#11): the Ed25519 key is
+	// Cross-machine identity and face: the Ed25519 key is
 	// loaded once by Run, the face state is guarded by faceMu.
 	machineKey   ed25519.PrivateKey
 	publicKeyB64 string
@@ -385,7 +395,7 @@ func New(cfg Config) (*Daemon, error) {
 		return nil, errors.New("daemon: DataDir is required")
 	}
 	// The mapping and workspace checks are the SHARED validator `pf config`
-	// and `pf doctor` use (workbench#3): one implementation of the
+	// and `pf doctor` use: one implementation of the
 	// workspace contract, no local copy. The daemon never creates a
 	// workspace directory itself — the operator (or installer) selects
 	// pre-existing ones — and the only subtree it ever writes under any of
@@ -409,11 +419,12 @@ func New(cfg Config) (*Daemon, error) {
 	// negative stall window still disables the stall check at the consumer.
 	liveLimits := func() supervise.Defaults {
 		return supervise.Defaults{
-			Silence:         cfg.Supervision.SilenceWindow,
-			Tool:            cfg.Supervision.ToolWindow,
-			StepTimeout:     live.StepTimeout(),
-			DriverStall:     live.StallWindow(),
-			ModelErrorGrace: cfg.Supervision.ModelErrorGrace,
+			Silence:          cfg.Supervision.SilenceWindow,
+			Tool:             cfg.Supervision.ToolWindow,
+			StepTimeout:      live.StepTimeout(),
+			DriverStall:      live.StallWindow(),
+			ModelErrorGrace:  cfg.Supervision.ModelErrorGrace,
+			RetryBackoffBase: cfg.Supervision.RetryBackoffBase,
 		}
 	}
 
@@ -433,6 +444,7 @@ func New(cfg Config) (*Daemon, error) {
 		WorkflowsDir:             cfg.WorkflowsDir,
 		PiBin:                    cfg.PiBin,
 		ClaudeBin:                cfg.ClaudeBin,
+		ToolWindow:               cfg.Supervision.ToolWindow,
 		HarnessRoot:              cfg.HarnessRoot,
 		OperatorAgentDir:         cfg.OperatorAgentDir,
 		OperatorAgentDirExplicit: cfg.OperatorAgentDirExplicit,
@@ -489,7 +501,7 @@ func New(cfg Config) (*Daemon, error) {
 				Limits: cfg.Supervision.limits(),
 				// a live reload of step_timeout/stall_window takes effect at
 				// the next threshold judgement, including in-flight steps
-				// (workbench#3)
+				//
 				LimitsFunc: func() supervise.Defaults { return liveLimits() },
 			})
 		}
@@ -567,10 +579,11 @@ func New(cfg Config) (*Daemon, error) {
 		shutDone:         make(chan struct{}),
 		sup:              supervise.NewRegistry(),
 		lane:             summarize.New(laneDispatcher),
+		remoteSnaps:      newRemoteSnapCache(remoteSnapTTL, remoteSnapCap),
 		face:             machineFaceState{desiredRole: roleFromLauncher(cfg.Launcher)},
 		analyzerDispatch: laneDispatcher,
 		// the file-only baseline the reload compares against until the
-		// first successful reload moves it (workbench#3)
+		// first successful reload moves it
 		lastAppliedFile: cfg.StartupFile,
 		maxConfigured:   cfg.MaxConcurrent,
 		locateTranscript: func(capsuleDir string, entries []capsule.SpawnJournalEntry) string {
@@ -637,7 +650,7 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	d.rt = rt
 	d.obs = obs
-	// workbench#14: the model-health tracker is opened by Run once the
+	// the model-health tracker is opened by Run once the
 	// data-dir flock is held. Its rebuild writes <DataDir>/model-health.json,
 	// and only the lock holder writes the data dir (AGENTS.md); opening it
 	// here in New would let a start the guard refuses overwrite the running
@@ -683,7 +696,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer d.releaseDataLock()
-	// workbench#11: the cross-machine identity is loaded/created once,
+	// the cross-machine identity is loaded/created once,
 	// with the data-dir flock held. A corrupt key refuses the start (an
 	// operator fix); the key is never regenerated silently.
 	key, pub, kerr := loadOrCreateMachineKey(d.cfg.DataDir)
@@ -695,7 +708,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if hc := d.faceClient(); hc != nil {
 		hc.SetMachineIdentity(d.cfg.MachineID, key)
 	}
-	// workbench#14: only now, with the data-dir flock held, rebuild the
+	// only now, with the data-dir flock held, rebuild the
 	// model-health aggregate from events/*.jsonl and write its snapshot.
 	// Open performs that write; running it in New would write the data dir
 	// before the single-instance guard has refused a second daemon. This
@@ -771,7 +784,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// tell every recovered/parked WI the daemon restarted.
 	d.replaySubmitQueue()
 	d.announceRestart()
-	// workbench#53: a task that was running when the previous daemon died
+	// a task that was running when the previous daemon died
 	// is marked interrupted (never resumed).
 	if err := d.tasks.Recover(); err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: task recovery: %v\n", err)

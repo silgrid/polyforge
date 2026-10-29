@@ -1,6 +1,6 @@
 package daemon
 
-// models_route_test.go: workbench#14 GET /models — the read-only profile
+// models_route_test.go: GET /models — the read-only profile
 // beside GET /status, its method refusal, its purity, the step-peer read
 // path and the additive model_health summary.
 

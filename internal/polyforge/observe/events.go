@@ -63,6 +63,12 @@ const (
 	// one event per attempt, never a spam loop.
 	EvTranscriptMissing = "transcript_missing"
 	EvJobStopped        = "job_stopped"
+	// EvSupervisorPaused is the supervisor's own observation gap:
+	// no tick for far longer than the poll interval — a host or daemon
+	// freeze. The unobserved span is removed from every judged duration
+	// (no tool_hung/model_hung/step_timeout from it); the body names how
+	// long the supervisor was paused (paused_ms) and the declared cadence.
+	EvSupervisorPaused = "supervisor_paused"
 	// EvQueueFetchDenied names the signal it actually carries: a
 	// project's ready-queue fetch was AUTHORIZATION-DENIED (typed aihub
 	// error with HTTP 401/403/404 — e.g. the machine key revoked
@@ -106,11 +112,11 @@ const (
 	// job's state.
 	EvDaemonRestarted = "daemon_restarted"
 	// EvModelUnhealthy is the model-health tracker's edge-triggered
-	// episode event (workbench#14): daemon-scope (wi=""), one per
+	// episode event: daemon-scope (wi=""), one per
 	// model+effort episode, body = modelhealth.Alert (never a secret).
 	EvModelUnhealthy = "model_unhealthy"
 	// EvConfigReload is the successful cli.toml reload record
-	// (workbench#3): daemon-scope, body = applied/pending/overridden key
+	//: daemon-scope, body = applied/pending/overridden key
 	// names only (never a value).
 	EvConfigReload = "config_reload"
 	// EvConfigReloadFailed is the refused reload record: the daemon
@@ -128,7 +134,7 @@ const (
 	HistoryCap = 5000
 	// EventsRetention: a work item's file silent this long is removed at
 	// open. Exported because it is the model-health profile window's ONE
-	// owner (workbench#14): the tracker states the same rolling window.
+	// owner: the tracker states the same rolling window.
 	EventsRetention = 30 * 24 * time.Hour
 	daemonEvents    = "daemon.jsonl"
 )
@@ -144,7 +150,7 @@ type EventLog struct {
 	logs   map[string]*wiLog
 	closed bool
 	// observer is invoked once per successful append, AFTER the per-WI
-	// lock is released (workbench#14): a callback that appends must not
+	// lock is released: a callback that appends must not
 	// deadlock. Set once before serving (SetObserver).
 	observer func(protocol.EventEntry)
 }

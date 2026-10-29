@@ -36,7 +36,7 @@ package protocol
 type WatchSnapshot struct {
 	WorkItem string `json:"work_item"`
 	// HolderMachine is set only on a snapshot relayed from another
-	// machine (workbench#11): the machine that produced it. The local
+	// machine: the machine that produced it. The local
 	// snapshot shape is otherwise field-for-field identical.
 	HolderMachine string `json:"holder_machine,omitempty"`
 	// Slug is the WI's "<project>#<seq>" display name, from the daemon's
@@ -144,6 +144,11 @@ type WatchProgress struct {
 	CommandAgeSec *int64   `json:"command_age_sec,omitempty"`
 	RecentFiles   []string `json:"recent_files,omitempty"`
 	ToolCalls     *int64   `json:"tool_calls,omitempty"`
+	// WaitCalls / WaitSeconds: the current step's wait calls (bash calls
+	// that only `sleep N`, N > 3s) and their summed seconds; absent when
+	// the step has none.
+	WaitCalls   *int64 `json:"wait_calls,omitempty"`
+	WaitSeconds *int64 `json:"wait_seconds,omitempty"`
 }
 
 // ChatSub is one daemon-held subscription of a chat to a WI.
@@ -231,7 +236,7 @@ type ChatAck struct {
 }
 
 // TaskNotice is one task terminal summary awaiting its chat's ack
-// (workbench#40): the one-line summary text the resident watcher prints.
+// the one-line summary text the resident watcher prints.
 type TaskNotice struct {
 	TaskID string `json:"task_id"`
 	Text   string `json:"text"`

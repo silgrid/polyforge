@@ -1,7 +1,7 @@
 package test
 
 // w25_verify_scope_engine_test.go: engine-level contract tests for the
-// workbench#25 release-shipped verification-scope reporter, `tools/verify-scope`.
+// release-shipped verification-scope reporter, `tools/verify-scope`.
 //
 // These cover the parts the authored acceptance suite delegates to `code`:
 // the frozen Go and npm byte-identical oracles, report grammar edge cases,
@@ -582,7 +582,7 @@ func TestW25EngineUnsupportedStackFallsBackFull(t *testing.T) {
 }
 
 // TestW25EngineGoByteContrast runs the frozen seed script and the engine with
-// the shipped conf over wb20/w27-shaped fixtures and requires byte-identical
+// the shipped conf over w20/w27-shaped fixtures and requires byte-identical
 // stdout.
 func TestW25EngineGoByteContrast(t *testing.T) {
 	frozen := filepath.Join(w25engRoot(t), "test", "testdata", "verify-scope", "verify-scope-go.sh")
@@ -595,13 +595,13 @@ func TestW25EngineGoByteContrast(t *testing.T) {
 		write map[string]string
 	}{
 		{
-			name: "wb20-shaped",
+			name: "w20-shaped",
 			files: map[string]string{
-				"go.mod":                        "module fixture.test/wb20\n\ngo 1.21\n",
+				"go.mod":                        "module fixture.test/w20\n\ngo 1.21\n",
 				"internal/polyforge/foo/foo.go": "package foo\n\nfunc Foo() int { return 1 }\n",
-				"internal/common/bar/bar.go":    "package bar\n\nimport \"fixture.test/wb20/internal/polyforge/foo\"\n\nfunc Bar() int { return foo.Foo() }\n",
-				"cmd/app/main.go":               "package main\n\nimport \"fixture.test/wb20/internal/common/bar\"\n\nfunc main() { _ = bar.Bar() }\n",
-				"test/e2e_test.go":              "package e2e\n\nimport (\n\t\"testing\"\n\n\t_ \"fixture.test/wb20/internal/polyforge/foo\"\n)\n\n// text reference to internal/polyforge/foo/foo.go\nfunc TestTextRef(t *testing.T) {}\n",
+				"internal/common/bar/bar.go":    "package bar\n\nimport \"fixture.test/w20/internal/polyforge/foo\"\n\nfunc Bar() int { return foo.Foo() }\n",
+				"cmd/app/main.go":               "package main\n\nimport \"fixture.test/w20/internal/common/bar\"\n\nfunc main() { _ = bar.Bar() }\n",
+				"test/e2e_test.go":              "package e2e\n\nimport (\n\t\"testing\"\n\n\t_ \"fixture.test/w20/internal/polyforge/foo\"\n)\n\n// text reference to internal/polyforge/foo/foo.go\nfunc TestTextRef(t *testing.T) {}\n",
 				"test/e2e-parallel.sh":          "#!/bin/sh\nexit 0\n",
 			},
 			write: map[string]string{
@@ -611,11 +611,11 @@ func TestW25EngineGoByteContrast(t *testing.T) {
 		{
 			name: "w27-shaped",
 			files: map[string]string{
-				"go.mod":                                   "module fixture.test/wb27\n\ngo 1.21\n",
+				"go.mod":                                   "module fixture.test/w27\n\ngo 1.21\n",
 				"internal/polyforge/runtime/runtime.go":    "package runtime\n\nfunc Value() int { return 1 }\n",
-				"internal/common/bar/bar.go":               "package bar\n\nimport \"fixture.test/wb27/internal/polyforge/runtime\"\n\nfunc Bar() int { return runtime.Value() }\n",
+				"internal/common/bar/bar.go":               "package bar\n\nimport \"fixture.test/w27/internal/polyforge/runtime\"\n\nfunc Bar() int { return runtime.Value() }\n",
 				"internal/polyforge/driver/driver.go":      "package driver\n\nfunc Name() string { return \"driver\" }\n",
-				"internal/polyforge/driver/driver_test.go": "package driver\n\nimport (\n\t\"testing\"\n\n\t_ \"fixture.test/wb27/internal/polyforge/runtime\"\n)\n\nfunc TestDriverImportsRuntime(t *testing.T) {}\n",
+				"internal/polyforge/driver/driver_test.go": "package driver\n\nimport (\n\t\"testing\"\n\n\t_ \"fixture.test/w27/internal/polyforge/runtime\"\n)\n\nfunc TestDriverImportsRuntime(t *testing.T) {}\n",
 			},
 			write: map[string]string{
 				"internal/polyforge/runtime/runtime.go": "package runtime\n\nfunc Value() int { return 2 }\n",

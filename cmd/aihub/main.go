@@ -50,35 +50,57 @@ func lockDataDir(dataDir string) (func(), error) {
 	}, nil
 }
 
+// aihubFlags carries the command-line configuration registerFlags fills.
+type aihubFlags struct {
+	dataDir     string
+	listen      string
+	janitorFreq time.Duration
+	// Machines liveness threshold for GET /api/v1/machines: 5× the
+	// daemon heartbeat default (60s). Tune to ≥5× the actual
+	// -heartbeat-every the fleet runs with.
+	staleAfter time.Duration
+	// --version / -version: print the build-injected version string
+	// (internal/version.Version, the git tag at build; "dev" un-injected)
+	// and exit 0 — before any data-dir lock or server start.
+	showVersion bool
+}
+
+// registerFlags registers the aihub command-line flags on fs. These are
+// the ONLY knobs the binary has: the HTTP pressure bounds (header
+// deadline, idle timeout, header size — internal/aihub/server) are
+// constants and are deliberately NOT registered here.
+func registerFlags(fs *flag.FlagSet) *aihubFlags {
+	f := &aihubFlags{
+		dataDir:     "/var/lib/polyforge/aihub",
+		listen:      ":8420",
+		janitorFreq: time.Hour,
+		staleAfter:  5 * time.Minute,
+	}
+	fs.StringVar(&f.dataDir, "data-dir", f.dataDir, "AIHub data directory")
+	fs.StringVar(&f.listen, "listen", ":8420", "HTTP listen address")
+	fs.DurationVar(&f.janitorFreq, "git-janitor-period", f.janitorFreq, "bare-repo gc/repack period")
+	fs.DurationVar(&f.staleAfter, "machines-stale-after", f.staleAfter, "machines liveness threshold for the stale projection (default 5m = 5× heartbeat default)")
+	fs.BoolVar(&f.showVersion, "version", false, "print version and exit")
+	return f
+}
+
 func main() {
-	var (
-		dataDir     = flag.String("data-dir", "/var/lib/polyforge/aihub", "AIHub data directory")
-		listen      = flag.String("listen", ":8420", "HTTP listen address")
-		janitorFreq = flag.Duration("git-janitor-period", time.Hour, "bare-repo gc/repack period")
-		// Machines liveness threshold for GET /api/v1/machines: 5× the
-		// daemon heartbeat default (60s). Tune to ≥5× the actual
-		// -heartbeat-every the fleet runs with.
-		staleAfter = flag.Duration("machines-stale-after", 5*time.Minute, "machines liveness threshold for the stale projection (default 5m = 5× heartbeat default)")
-		// --version / -version: print the build-injected version string
-		// (internal/version.Version, the git tag at build; "dev" un-injected)
-		// and exit 0 — before any data-dir lock or server start.
-		showVersion = flag.Bool("version", false, "print version and exit")
-	)
+	fl := registerFlags(flag.CommandLine)
 	flag.Parse()
 
-	if *showVersion {
+	if fl.showVersion {
 		fmt.Println(version.Version)
 		return
 	}
 
 	// Single-active guard: exclusive lock on the data dir (CORE-508).
-	release, err := lockDataDir(*dataDir)
+	release, err := lockDataDir(fl.dataDir)
 	if err != nil {
 		log.Fatalf("aihub: %v", err)
 	}
 	defer release()
 
-	db, err := core.Open(*dataDir)
+	db, err := core.Open(fl.dataDir)
 	if err != nil {
 		log.Fatalf("aihub: open core: %v", err)
 	}
@@ -87,28 +109,28 @@ func main() {
 	// Fresh-install bootstrap: an empty users table gets one admin; its
 	// one-time api key goes to a 0600 file in the data dir, never to the
 	// log (under compose the log is persisted by docker logs).
-	if keyFile := bootstrapAdmin(db, *dataDir); keyFile != "" {
+	if keyFile := bootstrapAdmin(db, fl.dataDir); keyFile != "" {
 		log.Printf("aihub: fresh install: seeded bootstrap admin usr_root — its api key is in %s (0600; store it, then delete the file)", keyFile)
 	}
 
-	gitMgr, err := git.NewManager(*dataDir, core.NewOwnerManager(db))
+	gitMgr, err := git.NewManager(fl.dataDir, core.NewOwnerManager(db))
 	if err != nil {
 		log.Fatalf("aihub: git manager: %v", err)
 	}
 
-	jan := git.NewJanitor(gitMgr, *janitorFreq)
+	jan := git.NewJanitor(gitMgr, fl.janitorFreq)
 	jan.Start()
 	defer jan.Stop()
 
-	srv := server.New(db, *dataDir, gitMgr)
-	srv.StaleAfter = *staleAfter
-	httpSrv := &http.Server{Addr: *listen, Handler: srv}
+	srv := server.New(db, fl.dataDir, gitMgr)
+	srv.StaleAfter = fl.staleAfter
+	httpSrv := server.NewHTTPServer(fl.listen, srv)
 
 	// Bind first, then migrate, then serve: a client connecting during the
 	// one-time memory content migration waits in the listen backlog
 	// instead of being refused, and no memory is served before its row
 	// carries its content.
-	ln, err := net.Listen("tcp", *listen)
+	ln, err := net.Listen("tcp", fl.listen)
 	if err != nil {
 		log.Fatalf("aihub: listen: %v", err)
 	}
@@ -135,7 +157,7 @@ func main() {
 		_ = httpSrv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("aihub: listening on %s (data-dir %s)", *listen, *dataDir)
+	log.Printf("aihub: listening on %s (data-dir %s)", fl.listen, fl.dataDir)
 	if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("aihub: %v", err)
 	}

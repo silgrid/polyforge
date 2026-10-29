@@ -5,7 +5,7 @@ package memory
 // the short-token scan), the non-decaying kinds (rule.*, doc.design,
 // doc.decision), a much better old match staying ahead of a weak fresh
 // one, the weight's edge cases (unparseable / future updated_at) and
-// ftsPage's early stop matching a full sort.
+// ftsPage's page matching a full sort of every match.
 
 import (
 	"fmt"
@@ -60,7 +60,7 @@ func TestSearchFresherWinsEqualMatch(t *testing.T) {
 	age(t, e, fresh.ID, 2)
 	age(t, e, stale.ID, 400)
 	for _, m := range []struct{ mode, q string }{{MatchAll, "quokka"}, {MatchAny, "quokka ladder"}, {MatchAll, "重试"}} {
-		hits, err := e.store.SearchMode(m.mode, "", m.q, "", nil, 10, nil)
+		hits, err := e.store.SearchMode(m.mode, nil, m.q, "", nil, 10, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +110,7 @@ func TestSearchMuchBetterOldMatchBeatsWeakFresh(t *testing.T) {
 		t.Fatalf("fixture too weak: bm25 strong %f vs weak %f", rs, rw)
 	}
 	for _, mode := range []string{MatchAll, MatchAny} {
-		hits, err := e.store.SearchMode(mode, "", "numbat", "", nil, 10, nil)
+		hits, err := e.store.SearchMode(mode, nil, "numbat", "", nil, 10, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -145,7 +145,7 @@ func TestSearchFresherWinsNearTie(t *testing.T) {
 		t.Fatalf("fixture is not a near-tie favouring the stale entry: bm25 stale %f fresh %f", rs, rf)
 	}
 	for _, mode := range []string{MatchAll, MatchAny} {
-		hits, err := e.store.SearchMode(mode, "", "quokka", "", nil, 10, nil)
+		hits, err := e.store.SearchMode(mode, nil, "quokka", "", nil, 10, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -264,13 +264,14 @@ func refSort(c []refCand) {
 	})
 }
 
-// refOrder ranks every active match of the given project ("" = all) by
-// brute force: every rank read, every score computed, one full sort.
-func refOrder(t *testing.T, db *core.DB, match, project string, now time.Time, keep func(id string) bool) []refCand {
+// refOrder ranks every active match of the given projects (nil = all)
+// by brute force: every rank read, every score computed, one full sort.
+func refOrder(t *testing.T, db *core.DB, match string, projects []string, now time.Time, keep func(id string) bool) []refCand {
 	t.Helper()
+	clause, pargs := sqlProjectSet(projects, 2)
 	rows, err := db.Query(`SELECT m.id, f.rank, m.type, m.updated_at
 		FROM memory_fts f JOIN memories m ON m.id = f.mem_id
-		WHERE memory_fts MATCH ?1 AND m.status='active' AND (?2 = '' OR m.project_id = ?2)`, match, project)
+		WHERE memory_fts MATCH ?1 AND m.status='active'`+clause, append([]any{match}, pargs...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +295,7 @@ func refOrder(t *testing.T, db *core.DB, match, project string, now time.Time, k
 	return ref
 }
 
-// TestFTSPageExactOrder: ftsPage's early-stopping page equals a full
+// TestFTSPageExactOrder: ftsPage's page equals a full
 // sort of every match by the documented score, on every page — with a
 // project filter, inactive rows still carrying an FTS row, exact score
 // ties and mixed whole-second / fractional timestamps.
@@ -338,27 +339,27 @@ func TestFTSPageExactOrder(t *testing.T) {
 	}
 	rare := ftsQuery([]string{"gowork"})
 	for _, match := range []string{rare, anyMatch} {
-		for _, project := range []string{"", alpha, beta.ID} {
-			ref := refOrder(t, s.db, match, project, now, nil)
+		for _, projects := range [][]string{nil, {alpha}, {beta.ID}} {
+			ref := refOrder(t, s.db, match, projects, now, nil)
 			for _, pg := range []struct{ limit, offset int }{{10, 0}, {10, 10}, {25, 30}, {50, 0}, {7, max(0, len(ref)-3)}, {5, len(ref) + 5}} {
-				got, err := s.ftsPage(match, project, now, pg.limit, pg.offset)
+				got, err := s.ftsPage(match, projects, now, pg.limit, pg.offset)
 				if err != nil {
 					t.Fatal(err)
 				}
 				lo, hi := min(pg.offset, len(ref)), min(pg.offset+pg.limit, len(ref))
 				if len(got) != hi-lo {
-					t.Fatalf("project %q page %+v: %d rows, want %d", project, pg, len(got), hi-lo)
+					t.Fatalf("projects %v page %+v: %d rows, want %d", projects, pg, len(got), hi-lo)
 				}
 				for i, c := range got {
 					if c.id != ref[lo+i].id || c.body == "" {
-						t.Fatalf("project %q page %+v row %d = %s, want %s", project, pg, i, c.id, ref[lo+i].id)
+						t.Fatalf("projects %v page %+v row %d = %s, want %s", projects, pg, i, c.id, ref[lo+i].id)
 					}
 				}
 			}
 		}
 		// The tie group, as instants: the two fractional stamps (id
 		// order between them) ahead of the whole second, then the older.
-		got, err := s.ftsPage(match, alpha, now, 1000, 0)
+		got, err := s.ftsPage(match, []string{alpha}, now, 1000, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -426,32 +427,34 @@ func TestSearchModeExactOrder(t *testing.T) {
 		}
 	}
 	cases := []struct {
-		mode, q, project, typ string
-		tags                  []string
-		limit                 int
+		mode, q, typ string
+		projects     []string
+		tags         []string
+		limit        int
 	}{
-		{MatchAll, "wallaby", "", "", nil, 50},
-		{MatchAll, "wallaby", alpha, "", nil, 7},
-		{MatchAll, "wallaby", beta.ID, "", nil, 50},
-		{MatchAll, "wallaby", "", "doc.*", nil, 50},
-		{MatchAll, "wallaby", "", "", []string{"ops"}, 5},
-		{MatchAny, "wallaby lantern harbour", "", "", nil, 10},
-		{MatchAny, "wallaby lantern harbour", alpha, "experience.*", nil, 50},
-		{MatchAny, "cobalt lantern", "", "", []string{"ops"}, 50},
+		{MatchAll, "wallaby", "", nil, nil, 50},
+		{MatchAll, "wallaby", "", []string{alpha}, nil, 7},
+		{MatchAll, "wallaby", "", []string{beta.ID}, nil, 50},
+		{MatchAll, "wallaby", "", []string{alpha, beta.ID}, nil, 50},
+		{MatchAll, "wallaby", "doc.*", nil, nil, 50},
+		{MatchAll, "wallaby", "", nil, []string{"ops"}, 5},
+		{MatchAny, "wallaby lantern harbour", "", nil, nil, 10},
+		{MatchAny, "wallaby lantern harbour", "experience.*", []string{alpha}, nil, 50},
+		{MatchAny, "cobalt lantern", "", nil, []string{"ops"}, 50},
 	}
 	for _, c := range cases {
 		match := ftsQuery([]string{c.q})
 		if c.mode == MatchAny {
 			match = ftsJoin(anyTerms(c.q), " OR ")
 		}
-		ref := refOrder(t, e.db, match, c.project, freshNow, func(id string) bool {
+		ref := refOrder(t, e.db, match, c.projects, freshNow, func(id string) bool {
 			return typeMatches(typeOf[id], c.typ) && (len(c.tags) == 0 || tagged[id])
 		})
 		want := make([]string, 0, c.limit)
 		for _, r := range ref[:min(c.limit, len(ref))] {
 			want = append(want, r.id)
 		}
-		hits, err := e.store.SearchMode(c.mode, c.project, c.q, c.typ, c.tags, c.limit, nil)
+		hits, err := e.store.SearchMode(c.mode, c.projects, c.q, c.typ, c.tags, c.limit, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -13,21 +13,33 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
 const grillTableHeader = "| 问题 | 推荐选项 | 理由 | 重点关注程度 |"
 
+// grillStepDef is a grill-family step's RENDERED definition (:
+// the question-table block lives in the shared fragment
+// workflows/_shared/batch_questions.md, so the contract reads the
+// definition the step agent sees, the include rendered in).
+func grillStepDef(t *testing.T, bundle, step string) string {
+	t.Helper()
+	raw, err := workflow.ReadStepDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, nil)
+	if err != nil {
+		t.Fatalf("render %s/%s: %v", bundle, step, err)
+	}
+	return string(raw)
+}
+
 func TestGrillStepsRequireQuestionTable(t *testing.T) {
 	for _, rel := range []string{
-		"workflows/autopilot/steps/grill.md",
-		"workflows/feature-full/steps/grill.md",
-		"workflows/feature-full/steps/grill-review.md",
+		"autopilot/grill",
+		"feature-full/grill",
+		"feature-full/grill-review",
 	} {
-		b, err := os.ReadFile(filepath.Join(v1Root(t), rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		s := string(b)
+		bundle, step, _ := strings.Cut(rel, "/")
+		s := grillStepDef(t, bundle, step)
 		if !strings.Contains(s, grillTableHeader) {
 			t.Errorf("%s does not require the %q question table", rel, grillTableHeader)
 		}

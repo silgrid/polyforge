@@ -2,52 +2,97 @@
 # verify-scope — release-shipped verification-scope reporter.
 #
 # Usage:
-#   tools/verify-scope [--base <rev>] [--run]
+#   tools/verify-scope [--base <rev>] [--full] [--json] [--run]
 #
 # The report is written on stdout and nothing else. It covers the diff from
-# a base revision to HEAD:
+# a base revision to HEAD. The default report is line-oriented:
 #
 #   mode: full|scoped
 #   path: <repo-relative path>      one per affected path, sorted, unique
 #   command: <command>              the commands to run, in the fixed order
 #
+# `--json` replaces the line report with exactly one JSON object (`schema: 1`,
+# the contract in docs/contributing.md "Verification tiers"): the same mode,
+# paths and commands — each command with its name, phase (fast|full|scoped),
+# declared prerequisites, declared timeout (null when none is declared, so
+# the consumer's own default applies) and source (conf|default) — plus the
+# stack,
+# the analyzer, whether the conf is present and whether the diff changed it,
+# the resolved base/head shas and default branch, the conf's test_glob,
+# base_setup, runner and ci_evidence declarations, and every stderr
+# diagnostic. The JSON is emitted by python3 (a documented `pf doctor`
+# prerequisite); without python3 `--json` exits 1.
+#
 # `--base <rev>` overrides the default base. The default base is
 # `git merge-base HEAD origin/<default>`, where <default> is the branch
 # `origin/HEAD` points at (fallback `main`). The capsule baseline in
-# `capsule.json` is NEVER read.
+# `capsule.json` is NEVER read. `--full` forces the full tier whatever the
+# diff; it never narrows anything (a caller verifying a full-tier work item
+# uses it to get the full command list).
 #
 # The target repository is the current working directory. Diagnostics go to
 # stderr. `--run` prints the report and then executes the reported commands
-# in order with `sh -c`, stopping at the first non-zero and exiting non-zero;
-# their output goes to stderr so stdout keeps the machine-readable shape.
+# in order with `bash -c` from the repository root (stdin closed), stopping at
+# the first non-zero and exiting non-zero; a command whose declared
+# prerequisites (an unset or empty check_requires_env variable, a
+# check_requires_cmd executable not on PATH) are missing is skipped with a
+# stderr notice, and timeouts are reported, not enforced. Their output goes to
+# stderr so stdout keeps the machine-readable shape.
 #
-# Stack detection: go.mod selects the Go analyzer, package.json the npm
-# analyzer. An unsupported stack (neither manifest), an ambiguous one (both
-# manifests without a `stack=` pin) or a repo that cannot compute its scope
-# falls back to `mode: full`; an unsupported or ambiguous stack reports no
-# commands at all. A scope that cannot be computed always falls back to
-# `full`, never to a wrong `scoped`.
+# Conf first: the repository's declared commands are reported for every
+# stack. Stack detection: go.mod selects the Go analyzer, package.json the
+# npm analyzer, and a `stack=` pin overrides detection; `stack=none` pins "no
+# analyzer". With no analyzer — `stack=none`, an unsupported stack (neither
+# manifest), an ambiguous one (both manifests without a pin) or an npm
+# manifest whose scripts cannot be read — the report is `mode: full` with the
+# conf's commands only (none without a conf). A scope that cannot be computed
+# always falls back to `full`, never to a wrong `scoped`.
 #
 # A repository may declare a declarative `.polyforge/verify-scope.conf`
-# (line-oriented; `#` comments and blank lines ignored):
+# (line-oriented; `#` comments and blank lines ignored; a value runs to the
+# end of its line, so there is no trailing comment on a value line):
 #
-#   stack=go|npm           pin the analyzer when several manifests exist
+#   stack=go|npm|none      pin the analyzer; none = conf commands, always full
 #   go_harness=<path>      a Go acceptance harness that owns its directory
-#   fast_gate=<command>    repeatable, ordered; replaces the default gates
-#   full_command=<command> repeatable, ordered; replaces the full-tier tail
+#   fast_gate=<command>    repeatable, ordered; anonymous, named fast-<i>
+#   full_command=<command> repeatable, ordered; anonymous, named full-<i>
+#   check=<name>|<fast|full>|<command>
+#                          repeatable; a named command of that phase, in file
+#                          order among the phase's lines
+#   check_requires_env=<name>|VAR[,VAR]  the named command needs these
+#                          variables set and non-empty
+#   check_requires_cmd=<name>|bin[,bin]  the named command needs these
+#                          executables on PATH
+#   check_timeout=<name>|<duration>      the named command's timeout, a
+#                          positive Go duration (undeclared: null in --json)
 #   forced_full=<glob>     repeatable; a path matching it forces the full tier
 #   module_root=<path>     repeatable; Go spanning roots
 #   exclude=<glob>         repeatable; a path matching it is ignored by the
 #                          full-tier triggers and the full standalone npm pass
+#   test_glob=<glob>       repeatable; a repo test-file pattern (reported only)
+#   base_setup=<command>   repeatable, ordered; the setup a base-tree rerun
+#                          needs first (reported only)
+#   runner=complete        the conf declares the complete bar (reported only)
+#   ci_evidence=<workflow>/<job>  repeatable; a CI job the deliver step may
+#                          accept as test evidence (reported only)
+#
+# Any fast-phase line (fast_gate= or check=<name>|fast|…) replaces the
+# analyzer's default fast gates, and any full-phase line replaces the default
+# full tail; the anonymous lines are numbered per phase from 1 in file order.
+# A check name is letters, digits, `.`, `_` and `-`, starts with a letter or
+# digit, is declared once, and never has the form fast-<n>, full-<n> or
+# scoped-<n> (the anonymous and analyzer commands' names). A check_* line
+# names a declared conf command (a check= name, or fast-<i>/full-<i>); a
+# line naming none is diagnosed and ignored, as is a malformed one.
 #
 # The conf is declarative: it is never sourced or evaluated at parse time and
 # it has no hook-style keys (pre/post/exec); an unknown key is diagnosed and
 # contributes nothing. A command value is an opaque string: it is reported as a
-# `command:` line and, only with --run, executed by `sh -c`, with the same trust
-# as the repository's own Makefile. A value whose first characters are `$(` or
-# a backtick is skipped with a lint diagnostic; that check is a lint
-# convenience, not a security boundary (a value such as `true; touch x` is a
-# normal command and is not inspected).
+# `command:` line and, only with --run, executed by `bash -c` (command values
+# are bash), with the same trust as the repository's own Makefile. A command
+# value whose first characters are `$(` or a backtick is skipped with a lint
+# diagnostic; that check is a lint convenience, not a security boundary (a
+# value such as `true; touch x` is a normal command and is not inspected).
 #
 # Zero-config defaults are stack-generic. A Go repo's top-level test/ directory
 # is an ordinary package unless the conf declares `go_harness=<path>` (for
@@ -66,14 +111,18 @@ export LC_ALL=C
 
 usage() {
 	cat >&2 <<'EOF'
-usage: tools/verify-scope [--base <rev>] [--run]
+usage: tools/verify-scope [--base <rev>] [--full] [--json] [--run]
   --base <rev>   diff base (default: merge-base HEAD origin/<default>)
+  --full         force the full tier whatever the diff
+  --json         print the report as one JSON object (needs python3)
   --run          print the report, then run the reported commands in order
 EOF
 }
 
 base_arg=""
 run=0
+json=0
+force_full=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--base)
@@ -98,6 +147,14 @@ while [ $# -gt 0 ]; do
 		run=1
 		shift
 		;;
+	--json)
+		json=1
+		shift
+		;;
+	--full)
+		force_full=1
+		shift
+		;;
 	-h | --help)
 		usage
 		exit 0
@@ -110,9 +167,19 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+if [ "$json" -eq 1 ] && ! command -v python3 >/dev/null 2>&1; then
+	echo "verify-scope: --json needs python3 (a documented pf doctor prerequisite)" >&2
+	exit 1
+fi
+
 root="$(pwd)"
 tmp="$(mktemp -d)" || exit 1
 trap 'rm -rf "$tmp"' EXIT INT TERM
+: >"$tmp/diag"
+
+# us is the ASCII unit separator: the field separator of the engine's own
+# record files (a conf value is one line, so it never carries one in practice).
+us="$(printf '\037')"
 
 # ---------------------------------------------------------------------------
 # Helpers.
@@ -139,8 +206,23 @@ join_pipe() {
 	awk 'NR > 1 { printf "|" } { printf "%s", $0 }'
 }
 
-# add_cmd appends one command to the report.
-add_cmd() { printf '%s\n' "$1" >>"$tmp/commands"; }
+# diag writes one diagnostic line to stderr and keeps it for the JSON report.
+diag() {
+	printf 'verify-scope: %s\n' "$1" >&2
+	printf 'verify-scope: %s\n' "$1" >>"$tmp/diag"
+}
+
+# add_cmd appends one analyzer-default command of a phase (fast|full|scoped)
+# to the report; its name (<phase>-<i>) is assigned once the list is complete.
+add_cmd() { printf '%s%s%s%s%s%s%s\n' "" "$us" "$1" "$us" "default" "$us" "$2" >>"$tmp/commands"; }
+
+# add_conf_cmds appends a phase's conf-declared commands (name<US>command
+# records, file order) to the report.
+add_conf_cmds() {
+	while IFS="$us" read -r cn cc; do
+		printf '%s%s%s%s%s%s%s\n' "$cn" "$us" "$1" "$us" "conf" "$us" "$cc" >>"$tmp/commands"
+	done <"$2"
+}
 
 # strip_ext removes one trailing JS/TS module extension (an extensionless
 # import names a changed file through its stem).
@@ -162,6 +244,13 @@ conf_roots="$tmp/conf_roots"
 conf_excl="$tmp/conf_excl"
 conf_stack="$tmp/conf_stack"
 conf_harness="$tmp/conf_harness"
+conf_names="$tmp/conf_names"
+conf_req_env="$tmp/conf_req_env"
+conf_req_cmd="$tmp/conf_req_cmd"
+conf_timeout="$tmp/conf_timeout"
+conf_globs="$tmp/conf_globs"
+conf_base_setup="$tmp/conf_base_setup"
+conf_ci="$tmp/conf_ci"
 : >"$conf_fast"
 : >"$conf_full"
 : >"$conf_forced"
@@ -169,9 +258,62 @@ conf_harness="$tmp/conf_harness"
 : >"$conf_excl"
 : >"$conf_stack"
 : >"$conf_harness"
+: >"$conf_names"
+: >"$conf_req_env"
+: >"$conf_req_cmd"
+: >"$conf_timeout"
+: >"$conf_globs"
+: >"$conf_base_setup"
+: >"$conf_ci"
+conf_runner=""
+anon_fast=0
+anon_full=0
+
+# A positive Go duration (time.ParseDuration's grammar without a sign).
+dur_re='^(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|ms|s|m|h))+$'
+
+# conf_cmd_ok answers 0 when a command value (key, value, line) is reportable;
+# a rejected value is diagnosed and contributes nothing.
+conf_cmd_ok() {
+	case "$2" in
+	'$('* | '`'*)
+		diag "conf lint: $1 value begins with a command substitution (lint diagnostic only; command values run as reported command: lines): $3"
+		return 1
+		;;
+	esac
+	[ -n "$2" ] || {
+		diag "conf ignores an empty $1"
+		return 1
+	}
+	return 0
+}
+
+# conf_items splits a comma-separated list (class env: variable names; class
+# cmd: executable names or paths) into $tmp/items, one per line, answering
+# non-zero when the list is empty or any item is not of its class.
+conf_items() {
+	printf '%s\n' "$2" | tr ',' '\n' >"$tmp/items"
+	while IFS= read -r it; do
+		case "$1" in
+		env)
+			case "$it" in
+			'' | [0-9]* | *[!A-Za-z0-9_]*) return 1 ;;
+			esac
+			;;
+		cmd)
+			case "$it" in
+			'' | *[!A-Za-z0-9._+/-]*) return 1 ;;
+			esac
+			;;
+		esac
+	done <"$tmp/items"
+	return 0
+}
 
 conf="$root/.polyforge/verify-scope.conf"
+conf_state="absent"
 if [ -f "$conf" ]; then
+	conf_state="present"
 	while IFS= read -r line || [ -n "$line" ]; do
 		line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//')"
 		case "$line" in
@@ -180,7 +322,7 @@ if [ -f "$conf" ]; then
 		case "$line" in
 		*=*) ;;
 		*)
-			echo "verify-scope: conf rejects a line without a key: $line" >&2
+			diag "conf rejects a line without a key: $line"
 			continue
 			;;
 		esac
@@ -190,28 +332,138 @@ if [ -f "$conf" ]; then
 		stack)
 			val="$(printf '%s' "$val" | sed 's/[[:space:]]*$//')"
 			case "$val" in
-			go | npm) printf '%s\n' "$val" >>"$conf_stack" ;;
+			go | npm | none) printf '%s\n' "$val" >>"$conf_stack" ;;
 			*)
-				echo "verify-scope: conf rejects stack '$val' (expected go or npm)" >&2
+				diag "conf rejects stack '$val' (expected go, npm or none)"
 				;;
 			esac
 			;;
 		fast_gate | full_command)
+			conf_cmd_ok "$key" "$val" "$line" || continue
+			if [ "$key" = "fast_gate" ]; then
+				anon_fast=$((anon_fast + 1))
+				printf '%s\n' "fast-$anon_fast" >>"$conf_names"
+				printf '%s%s%s\n' "fast-$anon_fast" "$us" "$val" >>"$conf_fast"
+			else
+				anon_full=$((anon_full + 1))
+				printf '%s\n' "full-$anon_full" >>"$conf_names"
+				printf '%s%s%s\n' "full-$anon_full" "$us" "$val" >>"$conf_full"
+			fi
+			;;
+		check)
 			case "$val" in
-			'$('* | '`'*)
-				echo "verify-scope: conf lint: $key value begins with a command substitution (lint diagnostic only; command values run as reported command: lines): $line" >&2
+			*'|'*'|'*) ;;
+			*)
+				diag "conf rejects check without the <name>|<fast|full>|<command> shape: $line"
 				continue
 				;;
 			esac
+			cname="${val%%|*}"
+			crest="${val#*|}"
+			cphase="${crest%%|*}"
+			ccmd="${crest#*|}"
+			case "$cname" in
+			'' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
+				diag "conf rejects check name '$cname' (letters, digits, '.', '_' and '-', starting with a letter or digit): $line"
+				continue
+				;;
+			fast-[0-9]* | full-[0-9]* | scoped-[0-9]*)
+				diag "conf rejects check name '$cname' (reserved for the anonymous and analyzer commands): $line"
+				continue
+				;;
+			esac
+			case "$cphase" in
+			fast | full) ;;
+			*)
+				diag "conf rejects check phase '$cphase' (expected fast or full): $line"
+				continue
+				;;
+			esac
+			if grep -Fxq -- "$cname" "$conf_names"; then
+				diag "conf rejects a second check named '$cname': $line"
+				continue
+			fi
+			conf_cmd_ok check "$ccmd" "$line" || continue
+			printf '%s\n' "$cname" >>"$conf_names"
+			if [ "$cphase" = "fast" ]; then
+				printf '%s%s%s\n' "$cname" "$us" "$ccmd" >>"$conf_fast"
+			else
+				printf '%s%s%s\n' "$cname" "$us" "$ccmd" >>"$conf_full"
+			fi
+			;;
+		check_requires_env | check_requires_cmd)
+			case "$val" in
+			*'|'*) ;;
+			*)
+				diag "conf rejects $key without the <name>|item[,item] shape: $line"
+				continue
+				;;
+			esac
+			rname="${val%%|*}"
+			if [ "$key" = "check_requires_env" ]; then
+				class="env"
+				dest="$conf_req_env"
+			else
+				class="cmd"
+				dest="$conf_req_cmd"
+			fi
+			if [ -z "$rname" ] || ! conf_items "$class" "${val#*|}"; then
+				diag "conf rejects $key value (expected <name>|item[,item] with valid $class items): $line"
+				continue
+			fi
+			while IFS= read -r it; do
+				printf '%s%s%s\n' "$rname" "$us" "$it" >>"$dest"
+			done <"$tmp/items"
+			;;
+		check_timeout)
+			case "$val" in
+			*'|'*) ;;
+			*)
+				diag "conf rejects check_timeout without the <name>|<duration> shape: $line"
+				continue
+				;;
+			esac
+			rname="${val%%|*}"
+			dur="${val#*|}"
+			if [ -z "$rname" ] || ! printf '%s\n' "$dur" | grep -Eq "$dur_re" || ! printf '%s\n' "$dur" | grep -q '[1-9]'; then
+				diag "conf rejects check_timeout value (expected <name>|<positive Go duration such as 20m or 1h30m>): $line"
+				continue
+			fi
+			if cut -d "$us" -f1 "$conf_timeout" | grep -Fxq -- "$rname"; then
+				diag "conf ignores a second check_timeout for '$rname': $line"
+				continue
+			fi
+			printf '%s%s%s\n' "$rname" "$us" "$dur" >>"$conf_timeout"
+			;;
+		test_glob)
 			[ -n "$val" ] || {
-				echo "verify-scope: conf ignores an empty $key" >&2
+				diag "conf ignores an empty test_glob"
 				continue
 			}
-			if [ "$key" = "fast_gate" ]; then
-				printf '%s\n' "$val" >>"$conf_fast"
-			else
-				printf '%s\n' "$val" >>"$conf_full"
-			fi
+			printf '%s\n' "$val" >>"$conf_globs"
+			;;
+		base_setup)
+			conf_cmd_ok "$key" "$val" "$line" || continue
+			printf '%s\n' "$val" >>"$conf_base_setup"
+			;;
+		runner)
+			val="$(printf '%s' "$val" | sed 's/[[:space:]]*$//')"
+			case "$val" in
+			complete) conf_runner="complete" ;;
+			*)
+				diag "conf rejects runner '$val' (expected complete)"
+				;;
+			esac
+			;;
+		ci_evidence)
+			case "$val" in
+			'' | /* | */) ;;
+			*/*)
+				printf '%s\n' "$val" >>"$conf_ci"
+				continue
+				;;
+			esac
+			diag "conf rejects ci_evidence value (expected <workflow>/<job>): $line"
 			;;
 		forced_full)
 			[ -n "$val" ] || continue
@@ -227,17 +479,35 @@ if [ -f "$conf" ]; then
 			;;
 		go_harness)
 			[ -n "$val" ] || {
-				echo "verify-scope: conf ignores an empty go_harness" >&2
+				diag "conf ignores an empty go_harness"
 				continue
 			}
 			printf '%s\n' "$val" >>"$conf_harness"
 			;;
 		*)
-			echo "verify-scope: conf rejects unknown key '$key'" >&2
+			diag "conf rejects unknown key '$key'"
 			;;
 		esac
 	done <"$conf"
 fi
+
+# conf_bind keeps a check_* key's declarations whose name is a declared conf
+# command and diagnoses (and drops) the rest; the check= line may follow the
+# check_* line in the file.
+conf_bind() {
+	: >"$2.kept"
+	while IFS="$us" read -r bn bv; do
+		if grep -Fxq -- "$bn" "$conf_names"; then
+			printf '%s%s%s\n' "$bn" "$us" "$bv" >>"$2.kept"
+		else
+			diag "conf ignores $1 for '$bn', which names no declared command (a check= name or fast-<i>/full-<i>)"
+		fi
+	done <"$2"
+	mv "$2.kept" "$2"
+}
+conf_bind check_requires_env "$conf_req_env"
+conf_bind check_requires_cmd "$conf_req_cmd"
+conf_bind check_timeout "$conf_timeout"
 
 # go_harness is the repo's declared out-of-process acceptance harness value
 # (reported as `sh <value>`); go_harness_dir is the directory whose Go packages
@@ -279,21 +549,28 @@ is_doc_path() {
 changed="$tmp/changed"
 : >"$changed"
 full=0
+default="main"
+base=""
+base_sha=""
+head_sha=""
 if ! git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-	echo "verify-scope: not a git work tree; falling back to the full tier" >&2
+	diag "not a git work tree; falling back to the full tier"
 	full=1
 else
-	base=""
+	default="$(git -C "$root" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+	default="${default#origin/}"
+	[ -n "$default" ] || default="main"
+	head_sha="$(git -C "$root" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null || true)"
 	if [ -n "$base_arg" ]; then
 		base="$base_arg"
 	else
-		default="$(git -C "$root" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-		default="${default#origin/}"
-		[ -n "$default" ] || default="main"
 		base="$(git -C "$root" merge-base HEAD "origin/$default" 2>/dev/null || true)"
 		if [ -z "$base" ]; then
-			echo "verify-scope: cannot resolve the base (merge-base HEAD origin/$default); falling back to the full tier" >&2
+			diag "cannot resolve the base (merge-base HEAD origin/$default); falling back to the full tier"
 		fi
+	fi
+	if [ -n "$base" ]; then
+		base_sha="$(git -C "$root" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true)"
 	fi
 	if [ -z "$base" ]; then
 		full=1
@@ -317,25 +594,55 @@ else
 			sort -u "$tmp/changed_raw" >"$changed"
 		fi
 	else
-		echo "verify-scope: cannot diff $base..HEAD; falling back to the full tier" >&2
+		diag "cannot diff $base..HEAD; falling back to the full tier"
 		full=1
 	fi
 fi
 
+# conf_changed answers whether the diff changed the conf: the conf is among
+# the affected paths, or it differs between the base and HEAD.
+conf_changed="false"
+if grep -Fxq ".polyforge/verify-scope.conf" "$changed"; then
+	conf_changed="true"
+elif [ -n "$base_sha" ] && [ -n "$head_sha" ] &&
+	! git -C "$root" diff --quiet "$base_sha" "$head_sha" -- .polyforge/verify-scope.conf 2>/dev/null; then
+	conf_changed="true"
+fi
+
+# --full forces the full tier; it never narrows anything.
+[ "$force_full" -eq 1 ] && full=1
+
 # ---------------------------------------------------------------------------
 # Stack detection.
 # ---------------------------------------------------------------------------
+# Conf first: with no analyzer the report is the full tier with the conf's
+# commands only, so the no-analyzer diagnostics name what the report carries.
+if [ -s "$conf_fast" ] || [ -s "$conf_full" ]; then
+	conf_only="the full tier with the conf's commands only"
+else
+	conf_only="the full tier with no commands (the conf declares none)"
+fi
 analyzer=""
+stack=""
 if [ -s "$conf_stack" ]; then
-	analyzer="$(head -n 1 "$conf_stack")"
+	stack="$(head -n 1 "$conf_stack")"
+	if [ "$stack" = "none" ]; then
+		diag "stack=none pins no analyzer; $conf_only"
+	else
+		analyzer="$stack"
+	fi
 elif [ -f "$root/go.mod" ] && [ -f "$root/package.json" ]; then
-	echo "verify-scope: both go.mod and package.json are present without a stack= pin; falling back to the full tier with no commands" >&2
+	stack="ambiguous"
+	diag "both go.mod and package.json are present without a stack= pin; falling back to $conf_only"
 elif [ -f "$root/go.mod" ]; then
+	stack="go"
 	analyzer="go"
 elif [ -f "$root/package.json" ]; then
+	stack="npm"
 	analyzer="npm"
 else
-	echo "verify-scope: no supported stack manifest (go.mod or package.json); falling back to the full tier with no commands" >&2
+	stack="unsupported"
+	diag "no supported stack manifest (go.mod or package.json); falling back to $conf_only"
 fi
 
 # The npm analyzer reads the scripts package.json actually declares. Node is
@@ -354,7 +661,7 @@ if [ "$analyzer" = "npm" ]; then
 	' "$root/package.json" >"$npm_scripts" 2>>"$tmp/stderr"; then
 		:
 	else
-		echo "verify-scope: cannot read package.json scripts; falling back to the full tier" >&2
+		diag "cannot read package.json scripts; falling back to $conf_only"
 		analyzer=""
 	fi
 fi
@@ -386,13 +693,9 @@ npm_script_suites() {
 	done <"$npm_scripts"
 }
 
-if [ -z "$analyzer" ]; then
-	printf 'mode: full\n'
-	while IFS= read -r p; do
-		printf 'path: %s\n' "$p"
-	done <"$changed"
-	exit 0
-fi
+# No analyzer: always the full tier, with the conf's commands only (the
+# forced-full triggers and the scoped selection need an analyzer).
+[ -n "$analyzer" ] || full=1
 
 # ---------------------------------------------------------------------------
 # Forced-full triggers: stack-generic config files plus the repo's globs.
@@ -474,7 +777,7 @@ add_scoped() { printf '%s\n' "$1" >>"$tmp/scoped_cmds"; }
 compute_scoped_go() {
 	golist="$tmp/golist"
 	if ! (cd "$root" && GOWORK=off go list -test -f '{{.ImportPath}}|{{.Dir}}|{{join .Deps " "}}|{{len .TestGoFiles}}|{{len .XTestGoFiles}}' ./...) >"$golist" 2>>"$tmp/stderr"; then
-		echo "verify-scope: go list failed; falling back to the full tier" >&2
+		diag "go list failed; falling back to the full tier"
 		return 1
 	fi
 	# Fail closed on an unexpected go list -test shape. Every record must carry
@@ -493,7 +796,7 @@ compute_scoped_go() {
 			exit bad ? 1 : 0
 		}
 	' "$golist"; then
-		echo "verify-scope: unexpected go list -test output shape; falling back to the full tier" >&2
+		diag "unexpected go list -test output shape; falling back to the full tier"
 		return 1
 	fi
 	# go list -test also emits each package's test binary (`P.test`), whose
@@ -714,34 +1017,34 @@ fi
 fast_scripts="$tmp/fast_scripts"
 : >"$fast_scripts"
 if [ -s "$conf_fast" ]; then
-	cat "$conf_fast" >>"$tmp/commands"
+	add_conf_cmds fast "$conf_fast"
 elif [ "$analyzer" = "go" ]; then
-	add_cmd "GOWORK=off go build ./..."
-	add_cmd "GOWORK=off go vet ./..."
-	add_cmd 'test -z "$(gofmt -l .)"'
-else
+	add_cmd fast "GOWORK=off go build ./..."
+	add_cmd fast "GOWORK=off go vet ./..."
+	add_cmd fast 'test -z "$(gofmt -l .)"'
+elif [ "$analyzer" = "npm" ]; then
 	if [ ! -d "$root/node_modules" ]; then
-		add_cmd "npm ci"
+		add_cmd fast "npm ci"
 	fi
 	if npm_has_script lint; then
-		add_cmd "npm run lint"
+		add_cmd fast "npm run lint"
 		printf 'lint\n' >>"$fast_scripts"
 	fi
 	if npm_has_typescript; then
-		add_cmd "node_modules/.bin/tsc --noEmit"
+		add_cmd fast "node_modules/.bin/tsc --noEmit"
 	fi
 	if npm_has_script test; then
-		add_cmd "npm test"
+		add_cmd fast "npm test"
 		printf 'test\n' >>"$fast_scripts"
 	fi
 fi
 
 if [ "$mode" = "full" ]; then
 	if [ -s "$conf_full" ]; then
-		cat "$conf_full" >>"$tmp/commands"
+		add_conf_cmds full "$conf_full"
 	elif [ "$analyzer" = "go" ]; then
-		add_cmd "GOWORK=off go test -count=1 ./..."
-	else
+		add_cmd full "GOWORK=off go test -count=1 ./..."
+	elif [ "$analyzer" = "npm" ]; then
 		compute_e2e_helpers
 		suite_refs="$tmp/suite_refs"
 		npm_script_suites >"$tmp/script_suites"
@@ -751,7 +1054,7 @@ if [ "$mode" = "full" ]; then
 		cut -f1 "$tmp/script_suites" | sort -u | while IFS= read -r name; do
 			[ -n "$name" ] || continue
 			grep -Fxq -- "$name" "$fast_scripts" && continue
-			add_cmd "npm run $name"
+			add_cmd full "npm run $name"
 		done
 		# Remaining standalone suites: not already run by a script, not an
 		# imported helper, and not suppressed by an exclude= glob.
@@ -761,24 +1064,132 @@ if [ "$mode" = "full" ]; then
 			grep -Fxq -- "$base" "$suite_refs" && continue
 			grep -Fxq -- "$base" "$e2e_helpers" && continue
 			path_excluded "e2e/$base" && continue
-			add_cmd "node e2e/$base"
+			add_cmd full "node e2e/$base"
 		done
 	fi
 else
-	cat "$tmp/scoped_cmds" >>"$tmp/commands"
+	while IFS= read -r c; do
+		add_cmd scoped "$c"
+	done <"$tmp/scoped_cmds"
 fi
 
-printf 'mode: %s\n' "$mode"
-while IFS= read -r p; do
-	printf 'path: %s\n' "$p"
-done <"$changed"
-while IFS= read -r c; do
-	printf 'command: %s\n' "$c"
-done <"$tmp/commands"
+# Name the analyzer-default commands <phase>-<i> in report order. A phase's
+# conf lines replace its defaults, so the two never share a phase.
+awk -F "$us" -v OFS="$us" '$1 == "" { n[$2]++; $1 = $2 "-" n[$2] } { print }' \
+	"$tmp/commands" >"$tmp/commands.named"
+mv "$tmp/commands.named" "$tmp/commands"
+
+# emit_json prints the report as exactly one JSON object (schema 1). python3
+# runs isolated (-I), so nothing in the target repository is imported.
+emit_json() {
+	python3 -I - "$tmp" "$root" "$stack" "$analyzer" "$conf_state" "$conf_changed" \
+		"$base_sha" "$head_sha" "$default" "$mode" "$conf_runner" <<'PY'
+import json
+import sys
+
+(tmp, root, stack, analyzer, conf, conf_changed, base, head, default,
+ mode, runner) = sys.argv[1:12]
+US = "\x1f"
+
+
+def lines(name):
+    try:
+        with open(tmp + "/" + name, "rb") as f:
+            data = f.read().decode("utf-8", "replace")
+    except FileNotFoundError:
+        return []
+    return [ln for ln in data.split("\n") if ln != ""]
+
+
+def bound(name):
+    out = {}
+    for ln in lines(name):
+        key, _, val = ln.partition(US)
+        vals = out.setdefault(key, [])
+        if val not in vals:
+            vals.append(val)
+    return out
+
+
+req_env = bound("conf_req_env")
+req_cmd = bound("conf_req_cmd")
+# An undeclared timeout is null: the consumer's own default applies.
+timeouts = {key: vals[0] for key, vals in bound("conf_timeout").items()}
+commands = []
+for ln in lines("commands"):
+    name, phase, source, cmd = ln.split(US, 3)
+    commands.append({
+        "name": name,
+        "phase": phase,
+        "cmd": cmd,
+        "requires_env": req_env.get(name, []),
+        "requires_cmd": req_cmd.get(name, []),
+        "timeout": timeouts.get(name),
+        "source": source,
+    })
+report = {
+    "schema": 1,
+    "root": root,
+    "stack": stack,
+    "analyzer": analyzer or None,
+    "conf": conf,
+    "conf_changed_in_diff": conf_changed == "true",
+    "base": base or None,
+    "head": head or None,
+    "default_branch": default,
+    "mode": mode,
+    "paths": lines("changed"),
+    "commands": commands,
+    "test_glob": lines("conf_globs"),
+    "base_setup": lines("conf_base_setup"),
+    "runner": runner or None,
+    "ci_evidence": lines("conf_ci"),
+    "diagnostics": lines("diag"),
+}
+sys.stdout.write(json.dumps(report, indent=2, ensure_ascii=True) + "\n")
+PY
+}
+
+if [ "$json" -eq 1 ]; then
+	if ! emit_json; then
+		echo "verify-scope: cannot emit the JSON report" >&2
+		exit 1
+	fi
+else
+	printf 'mode: %s\n' "$mode"
+	while IFS= read -r p; do
+		printf 'path: %s\n' "$p"
+	done <"$changed"
+	while IFS="$us" read -r cn _ _ c; do
+		printf 'command: %s\n' "$c"
+	done <"$tmp/commands"
+fi
+
+# run_missing prints a command's missing declared prerequisites (an unset or
+# empty variable, an executable not on PATH), comma-separated.
+run_missing() {
+	missing=""
+	while IFS="$us" read -r rn rv; do
+		[ "$rn" = "$1" ] || continue
+		[ -n "$(printenv "$rv" 2>/dev/null)" ] && continue
+		missing="${missing:+$missing, }env $rv"
+	done <"$conf_req_env"
+	while IFS="$us" read -r rn rv; do
+		[ "$rn" = "$1" ] || continue
+		command -v "$rv" >/dev/null 2>&1 && continue
+		missing="${missing:+$missing, }command $rv"
+	done <"$conf_req_cmd"
+	printf '%s' "$missing"
+}
 
 if [ "$run" -eq 1 ]; then
-	while IFS= read -r c; do
-		if ! (cd "$root" && sh -c "$c" 1>&2); then
+	while IFS="$us" read -r cn _ _ c; do
+		missing="$(run_missing "$cn")"
+		if [ -n "$missing" ]; then
+			echo "verify-scope: skipped $cn (missing $missing): $c" >&2
+			continue
+		fi
+		if ! (cd "$root" && bash -c "$c" 1>&2 </dev/null); then
 			echo "verify-scope: reported command failed: $c" >&2
 			exit 1
 		fi

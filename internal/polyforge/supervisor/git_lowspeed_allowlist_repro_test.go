@@ -1,6 +1,6 @@
 package supervisor
 
-// git_lowspeed_allowlist_repro_test.go (workbench#2): `pf daemon ensure`
+// git_lowspeed_allowlist_repro_test.go: `pf daemon ensure`
 // starts the daemon from a filtered copy of the ensure caller's
 // environment (DaemonEnv). An operator's explicit
 // GIT_HTTP_LOW_SPEED_LIMIT / GIT_HTTP_LOW_SPEED_TIME override must survive

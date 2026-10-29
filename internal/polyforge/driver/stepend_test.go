@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 // The step-end hook (the daemon's task-repo WIP push) runs once per
@@ -58,5 +61,39 @@ func TestStepEndedSkippedForACancelledDispatch(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("the hook ran %d time(s) for a cancelled dispatch", calls)
+	}
+}
+
+// TestStepEndCleanupIsNotChargedToStepT: the step-end hook is cleanup,
+// not dispatch runtime. A slow WIP push (StepEnded) must not be booked
+// into the step's cumulative T, or the previous dispatch's cleanup becomes
+// the next dispatch's timeout (the step-end escapee sweep
+// pushed a retry over a tiny T).
+func TestStepEndCleanupIsNotChargedToStepT(t *testing.T) {
+	d, sp, execPath := runEnv(t, spec("a"))
+	at := time.Unix(1_700_000_000, 0)
+	d.cfg.Now = func() time.Time { at = at.Add(10 * time.Millisecond); return at }
+	link := supervise.NewLink("wi_run")
+	d.cfg.Link = link
+	const hook = 10 * time.Minute
+	d.cfg.StepEnded = func(context.Context) { at = at.Add(hook) }
+	sp.script = []fakeEntry{{err: errors.New("step process exited 1")}, done(`{"summary":"A"}`)}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var starts []supervise.StepStarted
+	for _, f := range link.Facts.Drain() {
+		if s, ok := f.(supervise.StepStarted); ok {
+			starts = append(starts, s)
+		}
+	}
+	if len(starts) != 2 {
+		t.Fatalf("step_started facts: %d, want 2", len(starts))
+	}
+	if prior := starts[1].Thresholds.PriorRuntime; prior > time.Minute {
+		t.Fatalf("second dispatch prior runtime %s: the step-end hook was charged to T", prior)
+	}
+	if got := readExec(t, execPath).Steps["a"].BudgetConsumed.WallMs; got > time.Minute.Milliseconds() {
+		t.Fatalf("step booked %dms: the step-end hooks are not dispatch runtime", got)
 	}
 }

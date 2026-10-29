@@ -99,12 +99,16 @@ type deliverRepo struct {
 	NotMergedReason     string `json:"not_merged_reason"`
 	LLMResolvedConflict bool   `json:"llm_resolved_conflict"`
 	TestsPassed         *bool  `json:"tests_passed"`
+	// ciRuns: the output's top-level ci_evidence entries naming this
+	// repo, filled by deliverMergeRule.
+	ciRuns []ciCheckRun
 }
 
 func deliverMergeRule(res *StepResult, evidence []CommandEvidence, branch string, spec ResultSpec) error {
 	var out struct {
-		Verdict any           `json:"verdict"`
-		Repos   []deliverRepo `json:"repos"`
+		Verdict    any             `json:"verdict"`
+		Repos      []deliverRepo   `json:"repos"`
+		CIEvidence json.RawMessage `json:"ci_evidence"`
 	}
 	if len(res.Output) == 0 || json.Unmarshal(res.Output, &out) != nil {
 		return fmt.Errorf("driver: deliver output must be an object with verdict and repos")
@@ -121,6 +125,7 @@ func deliverMergeRule(res *StepResult, evidence []CommandEvidence, branch string
 			return fmt.Errorf("driver: deliver output has no repos entry for declared repo %q — one entry per repos/<name> (skipped_reason when it has nothing to deliver)", name)
 		}
 	}
+	ciRuns := decodeCIEvidence(out.CIEvidence)
 	var human []string
 	for i, r := range out.Repos {
 		label := fmt.Sprintf("repos[%d] (%s)", i, r.Name)
@@ -148,6 +153,11 @@ func deliverMergeRule(res *StepResult, evidence []CommandEvidence, branch string
 		}
 		if strings.TrimSpace(r.PRURL) == "" || strings.TrimSpace(r.MergeCommit) == "" {
 			return fmt.Errorf("driver: deliver output %s is merged and owes its pr_url and merge_commit", label)
+		}
+		for _, c := range ciRuns {
+			if c.Repo == r.Name {
+				r.ciRuns = append(r.ciRuns, c)
+			}
 		}
 		if why := mergeBlocker(spec, r, branch, evidence); why != "" {
 			human = append(human, r.Name+": merged although "+why)

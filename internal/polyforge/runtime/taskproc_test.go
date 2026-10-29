@@ -1,7 +1,7 @@
 package runtime
 
 // taskproc_test.go: the task agent's own origin classification
-// (workbench#53). The two classes must stay distinct: a process carrying
+//. The two classes must stay distinct: a process carrying
 // PF_TASK_ID is a task and NOT a step, whatever its id shape suggests.
 
 import (

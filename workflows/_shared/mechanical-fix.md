@@ -117,13 +117,20 @@ confirmation you cannot make fails the recheck too: say so in
 This verification re-run is the ESCALATED full mode of the mechanical
 fast lane (polyforge#260): a light-path failure - a malformed
 classification, a repair outside the mechanical bound, or a light
-recheck that did not pass - escalated in place to this full verification
+recheck that did not pass - escalated in place to this full verification,
+or a fresh re-derivation of the build step abandoned the pending light
+recheck before it ran: a structural gate FAIL (neither text-only nor
+mechanical, e.g. a structural review FAIL), a light re-entry's
+`needs_code_change` self-report, or a fix's `root_cause_addressed: false`
+report sent the build step back to a fresh re-derivation and so
+abandoned the pending light recheck before it ran
 (execution.json archives the escalation attempt, cause
 light_recheck_escalated, with the reason and the audit facts). Run the
 full bar exactly as the step definition demands; nothing changes there.
 Additionally write the fast-lane section of artifacts/verification-report.md:
 what was skipped on the light path (the full bar's scope beyond the bound
-commands, and the authored acceptance scenarios), on what grounds it was
+commands, and the authored acceptance scenarios - or, on an abandoned
+recheck, that no light recheck ran), on what grounds it was
 skipped (the mechanical classification), the bound (per failed check its
 repo, its exact command and the files it named), the escalation's reason
 (archived with the attempt), and your own full-bar results that supersede

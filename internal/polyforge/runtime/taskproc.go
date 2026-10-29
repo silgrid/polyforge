@@ -1,7 +1,7 @@
 package runtime
 
 // taskproc.go: is a process part of a one-shot task agent's tree?
-// (workbench#53, the re-established #40)
+// (the re-established #40)
 //
 // A task process is spawned by the daemon with PF_TASK_ID and PF_DAEMON_ID
 // and never with PF_WI_ID (task/dispatch.go taskEnv). Its env carries no

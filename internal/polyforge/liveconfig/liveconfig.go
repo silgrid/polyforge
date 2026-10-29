@@ -1,6 +1,6 @@
 // Package liveconfig holds the daemon's reloadable settings behind one
 // mutex so a running daemon can adopt a validated cli.toml change without
-// a restart (workbench#3). It is deliberately tiny: a leaf that imports
+// a restart. It is deliberately tiny: a leaf that imports
 // only mapping and stdlib, read by the daemon, the runtime and the step
 // spawners.
 //

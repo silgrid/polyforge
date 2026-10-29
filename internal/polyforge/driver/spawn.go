@@ -4,7 +4,8 @@ package driver
 // StepSpawn order onto the runtime derivation mechanism and owns:
 //
 //   - PROMPT ASSEMBLY: the step definition (workflows/<bundle>/steps/<id>.md)
-//     plus the consumed gate-FAIL rewind verdict, the step's archived Q&A,
+//     plus the round's gate-FAIL rewind verdict (persisted until the step
+//     is accepted), the step's archived Q&A,
 //     the producing step's handoff (inherit steps only) and the
 //     result-delivery contract;
 //   - PROCESS DERIVATION through spawn.Params -> spawn.Spawner: the model
@@ -158,7 +159,8 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		RequiresHumanAnswer:     spec.RequiresHumanAnswer,
 		HumanAnswerIfAsked:      spec.HumanAnswerIfAsked,
 		Memories:                recalledMemoriesSection(a.WI.CapsuleDir),
-		MemoryDuty:              memoryDutySection(a.BundleDir, a.WI.CapsuleDir, a.Workflow.lastStep(sp.StepID)),
+		MemoryDuty:              memoryDutySection(a.BundleDir, a.WI.CapsuleDir, spec.Recall, a.Workflow.lastStep(sp.StepID)),
+		PlanConformance:         renderPlanConformance(sp.PlanConformance),
 	}
 	// polyforge#260: the armed verification prompt carries the shared
 	// classification duty as its own section (an unarmed lane carries
@@ -181,12 +183,43 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 			}
 		}
 	}
+	// the scoped tier's rules ride only a scoped
+	// verification dispatch (the full tier's one-liner is its whole
+	// contract), read from the shared material beside the bundle.
+	if sp.StepID == verificationStepID && sp.ScopeTier == tierScoped {
+		if parts.ScopedRules, err = a.sharedPart(sp.StepID, "scoped_verification", nil); err != nil {
+			return nil, err
+		}
+	}
 	// H3 (polyforge#164): the declared output schema rides the prompt —
 	// the same schema the driver validates the completed output against.
+	// the schema shown is the PRUNED text (an x-prompt-when
+	// entry whose condition does not hold is dropped, the markers never
+	// shown); validation still compiles the full schema.
+	cond := map[string]bool{
+		"armed":    spec.MechanicalFix,
+		"scoped":   sp.ScopeTier == tierScoped,
+		"authored": a.Workflow.step(e2eAuthorStepID) != nil,
+		"reentry":  sp.ReviewReentry,
+	}
+	// review's rare-path material - the scoped obligation
+	// and the re-entry contract - rides only the dispatch that needs it.
+	if sp.StepID == reviewStepID {
+		if sp.ScopeTier == tierScoped {
+			if parts.ScopedReview, err = a.sharedPart(sp.StepID, "scoped_review", spec.Vars); err != nil {
+				return nil, err
+			}
+		}
+		if sp.ReviewReentry {
+			if parts.ReviewReentry, err = a.sharedPart(sp.StepID, "review_reentry", spec.Vars); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if schema, err := loadStepOutputSchema(a.BundleDir, sp.StepID, spec.Vars); err != nil {
 		fmt.Fprintf(os.Stderr, "driver: %s/%s: %v\n", a.WI.ID, sp.StepID, err)
 	} else if schema != nil {
-		parts.OutputSchema = schema.Text
+		parts.OutputSchema = schema.PromptText(cond)
 	}
 	// polyforge#260: the light recheck's output schema is the LIGHT one
 	// (the shared fast-lane material's frontmatter) instead of the full
@@ -248,7 +281,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 			parts.Reference = a.referenceTranscript(prev)
 		}
 	}
-	// workbench#7: the first ended_without_result retry that really
+	// the first ended_without_result retry that really
 	// resumes the same harness session re-enters a conversation that
 	// already holds the full step prompt. Re-sending it (~21KB) made the
 	// agent treat the retry as a new task, re-reading artifacts and
@@ -266,7 +299,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 			parts.Reference = a.referenceTranscript(prev)
 		}
 	}
-	// workbench#21: the fast path. A new-conversation re-dispatch (a
+	// the fast path. A new-conversation re-dispatch (a
 	// 2nd+ failure, a candidate switch, or a resume that degraded to a
 	// new conversation) whose current tree hash equals the hash the
 	// step's latest failed attempt archived keeps the reference but
@@ -277,10 +310,22 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 	// re-claim (a fresh capsule materialization after that attempt) is
 	// excluded as well: its ignored build directories did not survive,
 	// so the fast path's environment claim would be false.
+	//
+	// criterion 5: a retry inside a REWOUND round whose
+	// task-repo tree is still the one the rewinding gate judged made no
+	// code progress at all. "Continue the previous attempt's work from
+	// where it stopped" is then false (there is nothing to continue), so
+	// the wording stays from-scratch beside the verdict.
 	if (sp.Fresh || (sp.Resume && !resume)) && sp.RetryTriggered && parts.Reference != "" && sp.RecordedTreeHash != "" &&
 		!capsuleReclaimed(a.WI.CapsuleDir, sp.RecordedAttemptAt) {
 		if cur, herr := treeHashFn(a.WI.CapsuleDir); herr == nil && cur == sp.RecordedTreeHash {
-			parts.ContinueInPlace = true
+			progress := true
+			if sp.RewindInput != nil && sp.RewindRepoHash != "" {
+				if repos, rerr := reposTreeHashFn(a.WI.CapsuleDir); rerr == nil && repos == sp.RewindRepoHash {
+					progress = false
+				}
+			}
+			parts.ContinueInPlace = progress
 		}
 	}
 	if transcript == "" {
@@ -355,7 +400,7 @@ const materializeMarkerRel = "sync/materialized.json"
 // only the carrier HEAD and the WIP ref (tracked edits and non-ignored
 // untracked files), so every .gitignore'd build directory (node_modules/,
 // build outputs, venvs) is gone; the fast path's "its environment is
-// intact" claim would be false (workbench#21 owner ruling: owner
+// intact" claim would be false ( owner ruling: owner
 // `pf resume` / any re-claim keeps today's cold path). The per-claim
 // marker sync/materialized.json carries the claim's completed_at, which
 // postdates the recorded attempt on a re-claim and stays untouched across
@@ -474,10 +519,28 @@ type promptParts struct {
 	// completed is re-bound to gate_failed fail-closed.
 	Gate bool
 	// ScopeTier is the verification tier this dispatch runs at
-	// (workbench#19, "scoped" or "full"): rendered as its own section on
+	// ("scoped" or "full"): rendered as its own section on
 	// the verification step so a fresh re-dispatch restores the recorded
 	// tier without recomputation or re-asking. Inert elsewhere.
 	ScopeTier string
+	// ScopedRules is the shared scoped-tier material
+	// (workflows/_shared/scoped_verification.md,) rendered
+	// under the verification tier section only on a SCOPED verification
+	// dispatch; "" = a full dispatch (or the material is absent: the
+	// tier one-liner stays the contract, fail-closed, never an error).
+	ScopedRules string
+	// ScopedReview is the shared scoped-review material
+	// (workflows/_shared/scoped_review.md,): the review's
+	// scope_adequate/scope obligation, rendered as its own section on a
+	// review dispatch of a work item that opted into the scoped tier;
+	// "" = otherwise (or the material is absent).
+	ScopedReview string
+	// ReviewReentry is the shared review re-entry material
+	// (workflows/_shared/review_reentry.md,): the round
+	// contract, the two faces and the light-round mis-marking duty,
+	// rendered as its own section on a review dispatch with a prior
+	// verdict-bearing round on record; "" = a first round (or absent).
+	ReviewReentry string
 	// PriorRejection is the verbatim validation error from the previous
 	// dispatch's rejected envelope (the in-process retry lane): the
 	// author sees exactly what to fix instead of blindly re-authoring.
@@ -485,7 +548,7 @@ type promptParts struct {
 	// PriorEndedWithoutResult: the previous dispatch's turn ended without
 	// the result envelope being written (retry feedback).
 	PriorEndedWithoutResult bool
-	// ShortEwrResume (workbench#7): this dispatch resumes the SAME harness
+	// ShortEwrResume: this dispatch resumes the SAME harness
 	// session and follows an ended_without_result, so it sends only the
 	// short reminder (finish the remaining work, submit with `pf result
 	// submit`) instead of the assembled step prompt the resumed
@@ -524,10 +587,13 @@ type promptParts struct {
 	// verification in place; it owes the report's fast-lane section);
 	// "" = an ordinary dispatch.
 	EscalatedRecheck string
+	// PlanConformance is the rendered driver-computed plan-conformance
+	// section (renderPlanConformance); "" = none.
+	PlanConformance string
 	// Reference is the previous attempt's transcript path (a fresh retry
 	// carries it as read-only reference material; "" = none).
 	Reference string
-	// ContinueInPlace (workbench#21) selects the fast-path reference
+	// ContinueInPlace selects the fast-path reference
 	// instruction: the tree is byte-identical to the previous attempt's
 	// death, so the new conversation continues in place instead of
 	// starting from scratch. False = today's start-from-scratch wording.
@@ -536,8 +602,8 @@ type promptParts struct {
 	// ("" = no snapshot / no hits: no section).
 	Memories string
 	// MemoryDuty is the rendered recall/remember duty of the step (the
-	// shared memory.md, plus memory-wrap.md for the workflow's last
-	// step); "" = no section.
+	// shared memory.md on a step entry declaring `recall: true`, and
+	// memory-wrap.md on the workflow's last step); "" = no section.
 	MemoryDuty string
 }
 
@@ -551,11 +617,11 @@ type handoffSection struct {
 
 // assembleStepPrompt builds the step process's one instruction of
 // record: identity, the context-policy contract, the step definition,
-// the rewind verdict being consumed, the Q&A history a resumed step
+// the round's rewind verdict, the Q&A history a resumed step
 // continues from, the handoff (inherit only), the declared inputs and
 // the result-delivery contract. A first ended_without_result retry that
 // resumes the same harness session carries only the short reminder
-// (workbench#7): its resumed conversation already holds the full prompt.
+// its resumed conversation already holds the full prompt.
 func assembleStepPrompt(p promptParts) string {
 	if p.ShortEwrResume {
 		return ewrResumeReminder(p)
@@ -581,6 +647,8 @@ func assembleStepPrompt(p promptParts) string {
 		b.WriteString("The `output` object of a `completed` result envelope must validate against this JSON Schema (draft-07, written as YAML; omit an optional property rather than writing null). ")
 		if outputSchemaEnforced(p.StepID) {
 			b.WriteString("The driver validates it and rejects a non-conforming envelope:\n\n```yaml\n")
+		} else if p.StepID == planStepID {
+			b.WriteString("The driver validates it and records every violation for the owner, with one exception it rejects: a `write` entry of `touched_files` without a `coupled_obligations` entry (a non-empty list of `{path, note}`, or exactly one `{none: true, reason}`):\n\n```yaml\n")
 		} else {
 			b.WriteString("The driver validates it and records every violation for the owner:\n\n```yaml\n")
 		}
@@ -590,7 +658,7 @@ func assembleStepPrompt(p promptParts) string {
 	b.WriteString("# Step definition\n\n")
 	b.WriteString(p.Definition)
 	b.WriteString("\n")
-	// The verification tier (workbench#19): rendered on the verification
+	// The verification tier: rendered on the verification
 	// step only. The recorded tier rides every re-dispatch, so the agent
 	// never recomputes it and never asks the owner which tier to run.
 	if p.StepID == verificationStepID && p.ScopeTier != "" {
@@ -598,12 +666,27 @@ func assembleStepPrompt(p promptParts) string {
 		switch p.ScopeTier {
 		case tierScoped:
 			fmt.Fprintf(&b, "This work item opted into the SCOPED tier — its content carries the `%s` marker and the lane is scoped-capable. Declare a complete `scope` object in your output: `mode: scoped`, non-empty `declared_paths`, a `rationale` and a `fast_gates_ref` naming the repo's declaration. Run the repo's declared fast gates plus every lane check; never shed the contract-linked tests, the lane's own checks or the fail-closed fallback to full. On an incremental re-verification after a review FAIL, carry the original scope in `scope.prior` as `{tier: scoped, declared_paths}`.\n", scopetier.Marker)
+			if p.ScopedRules != "" {
+				b.WriteString("\n" + p.ScopedRules + "\n")
+			}
 		default:
 			b.WriteString("This work item runs the FULL tier: run the full bar. Carry no `scope` object — an absent scope is the single canonical shape of a full result.\n")
 		}
 	}
+	// the review's rare-path sections, each rendered only on
+	// the dispatch shape that needs it (the adapter reads the material).
+	if p.ScopedReview != "" {
+		b.WriteString("\n# Scoped tier (this work item opted in)\n\n")
+		b.WriteString(p.ScopedReview)
+		b.WriteString("\n")
+	}
+	if p.ReviewReentry != "" {
+		b.WriteString("\n# Review re-entry (a prior verdict-bearing round is on record)\n\n")
+		b.WriteString(p.ReviewReentry)
+		b.WriteString("\n")
+	}
 	if p.Rewind != nil && strings.TrimSpace(p.Rewind.Reason) != "" {
-		b.WriteString("\n# Gate FAIL verdict being consumed (rewind input)\n\n")
+		b.WriteString("\n# Gate FAIL verdict carried for the whole round (rewind input)\n\n")
 		b.WriteString("A downstream gate failed and the workflow rewound to this step. The verdict in full:\n\n")
 		b.WriteString(p.Rewind.Reason)
 		b.WriteString("\n")
@@ -645,6 +728,9 @@ func assembleStepPrompt(p promptParts) string {
 		b.WriteString(p.EscalatedRecheck)
 		b.WriteString("\n")
 	}
+	// The plan-conformance facts: the gate receives both
+	// set differences computed, never reconstructs them.
+	b.WriteString(p.PlanConformance)
 	if p.PriorRejection != "" {
 		b.WriteString("\n# Previous result envelope REJECTED — fix and rewrite\n\n")
 		b.WriteString("Your previous envelope for this step was rejected by the driver's validation:\n\n")
@@ -658,7 +744,7 @@ func assembleStepPrompt(p promptParts) string {
 	if p.Reference != "" {
 		b.WriteString("\n# Previous attempt (read-only reference)\n\n")
 		if p.ContinueInPlace {
-			// workbench#21: the tree matched the failed attempt's hash, so
+			// the tree matched the failed attempt's hash, so
 			// the environment is intact — continue instead of re-laying it.
 			fmt.Fprintf(&b, "A previous attempt of this step ended without delivering a result. Its conversation transcript is at `%s` (JSONL, capsule path). "+
 				"The capsule tree is byte-identical to the moment that attempt died, so its environment is intact (dependencies installed, half-run work preserved). "+
@@ -688,7 +774,7 @@ func assembleStepPrompt(p promptParts) string {
 
 // ewrResumeReminder is the whole instruction of the first
 // ended_without_result retry that resumes the same harness session
-// (workbench#7). The resumed conversation already holds the step
+//. The resumed conversation already holds the step
 // definition, the output schema, the context-policy line and the
 // recalled memories from its original dispatch, so re-sending the
 // assembled prompt would restart the work. The reminder carries only
@@ -781,12 +867,17 @@ func recalledMemoriesSection(capsuleDir string) string {
 	return b.String()
 }
 
-// memoryDutySection renders workflows/_shared/memory.md (recall first,
-// every step) and, for the workflow's last step, memory-wrap.md (the work
-// item's one experience.wrap summary, with the claimed project's memory
-// policy from capsule.MemoryPolicyJSON, else the built-in default). No
-// task definition or no template renders nothing.
-func memoryDutySection(bundleDir, capsuleDir string, last bool) string {
+// memoryDutySection renders workflows/_shared/memory.md (recall first)
+// on a step whose entry declares `recall: true` (the
+// decision/authoring steps; a gate or a release step gets no recall duty)
+// and, for the workflow's last step whatever it is, memory-wrap.md (the
+// work item's one experience.wrap summary, with the claimed project's
+// memory policy from capsule.MemoryPolicyJSON, else the built-in
+// default). Neither, no task definition or no template renders nothing.
+func memoryDutySection(bundleDir, capsuleDir string, recall, last bool) string {
+	if !recall && !last {
+		return ""
+	}
 	var wi capsule.WorkItemDoc
 	raw, err := os.ReadFile(filepath.Join(capsuleDir, filepath.FromSlash(capsule.WorkItemJSON)))
 	if err != nil || json.Unmarshal(raw, &wi) != nil || wi.Project == "" {
@@ -801,7 +892,10 @@ func memoryDutySection(bundleDir, capsuleDir string, last bool) string {
 		_ = json.Unmarshal(raw, &policy)
 	}
 	vars := map[string]string{"project": wi.Project, "work_item": ref}
-	names := []string{"memory.md"}
+	var names []string
+	if recall {
+		names = append(names, "memory.md")
+	}
 	if last {
 		names = append(names, "memory-wrap.md")
 	}
@@ -874,6 +968,10 @@ func deliveryContract(p promptParts) string {
 		"never write a result file yourself.\n\n")
 	b.WriteString("Rules: `output` is a JSON object; every file this step produced that downstream steps or the owner consume is written under `artifacts/` (that is, `" + p.CapsuleRoot + "/artifacts/`) and named by its path in the step's own instructions — the driver and downstream readers work by path convention, never by manifest")
 	if p.HandoffDue {
+		// Self-sufficient for every handoff-declaring step: not every one
+		// includes workflows/_shared/handoff_duty.md (bug-fix/root-cause,
+		// feature-full/grill-review and custom bundles carry no handoff
+		// text), so this line states the path and the path convention.
 		b.WriteString("; this step DECLARES handoff, so write the handoff file at `" + p.CapsuleRoot + "/artifacts/handoff-" + p.StepID + ".md` — the next inherit step reads it by that path convention")
 	}
 	b.WriteString("; a `needs_input` result carries `question_id` (1–64 chars of `A-Za-z0-9._-`) and `question` instead. End your turn once the submit succeeds.\n")
@@ -883,8 +981,10 @@ func deliveryContract(p promptParts) string {
 			"`cwd` is the directory the command ran in, capsule-relative: record each command where it ran — with that `cwd`, " +
 			"or with the `cd` you ran it after (`[\"bash\", \"-c\", \"cd repos/<name> && go test ./...\"]`); " +
 			"a command recorded with neither counts as run at the capsule root, not in a repo. " +
-			"Run at least one real check command and report every command you ran, in the order you ran it, with its measured `duration_ms` (> 0); " +
-			"an empty list, an entry without `argv`, or one without a positive `duration_ms` is rejected. Never fabricate an entry.\n")
+			"Run at least one real check command and report every command you ran, in the order you ran it, with its real `exit_code` and its measured `duration_ms` (> 0); " +
+			"an empty list, an entry without `argv`, or one without a positive `duration_ms` is rejected and the step is re-dispatched. " +
+			"This step never completes on reading code alone. Never fabricate an entry, an argv or a duration, and never claim a check ran without its command having run; " +
+			"if no check command can be run at all, do not complete: return the problem to the owner instead.\n")
 	}
 	if p.RequiresHumanAnswer {
 		b.WriteString("\nHuman answer: this step requires a human answer before completion: return `needs_input` first; " +
@@ -962,6 +1062,61 @@ func mechanicalFixSection(bundleDir, heading string) string {
 		return ""
 	}
 	return h2Section(body, heading)
+}
+
+// e2eAuthorStepID is the conventional id of the lane's authored
+// acceptance-suite step (feature-full's e2e-author): its presence in a
+// bundle marks the lane authored - the x-prompt-when "authored"
+// condition of the output-schema prompt visibility.
+const e2eAuthorStepID = "e2e-author"
+
+// sharedSectionVars answers the trimmed text of one shared section file
+// (workflows/_shared/<name>.md, beside the bundle) that the driver
+// renders on the dispatch shape that needs it, rendered
+// with the step entry's vars the material uses (a shared section names
+// the lane's facts - e.g. {{build_step}} - like the step body does). Any
+// failure is an error, a missing file included (fs.ErrNotExist); the
+// dispatch decides what each costs (sharedPart).
+func sharedSectionVars(bundleDir, name string, vars map[string]string) (string, error) {
+	raw, err := os.ReadFile(workflow.SharedFragment(bundleDir, name))
+	if err != nil {
+		return "", err
+	}
+	text := strings.TrimSpace(string(raw))
+	used := map[string]string{}
+	for k, v := range vars {
+		if strings.Contains(text, "{{"+k+"}}") {
+			used[k] = v
+		}
+	}
+	out, err := workflow.RenderStepVars([]byte(text), used)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// sharedPart renders one driver-rendered shared section for a dispatch
+// of stepID ( W3: never silently dropped). A section that
+// cannot render - unreadable, or a placeholder with no var - fails the
+// dispatch closed, like a step definition's missing fragment: no
+// half-rendered or silently absent contract. A MISSING file renders no
+// section and says so on stderr: that is transition code for a capsule
+// claimed before's release, whose snapshot carries the old
+// static step text (the section inline) and no section file. It is
+// deleted - a missing file becomes a dispatch error too - once no capsule
+// claimed before that release is still in flight.
+func (a *StepSpawnAdapter) sharedPart(stepID, name string, vars map[string]string) (string, error) {
+	text, err := sharedSectionVars(a.BundleDir, name, vars)
+	switch {
+	case err == nil:
+		return text, nil
+	case errors.Is(err, fs.ErrNotExist):
+		fmt.Fprintf(os.Stderr, "driver: %s/%s: shared section %s: %v (no section rendered)\n", a.WI.BundleName, stepID, name, err)
+		return "", nil
+	default:
+		return "", fmt.Errorf("driver: %s/%s: shared section %s: %w", a.WI.BundleName, stepID, name, err)
+	}
 }
 
 // h2Section answers the text under one "## <heading>" line up to the

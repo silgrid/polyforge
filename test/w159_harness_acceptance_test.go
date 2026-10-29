@@ -30,7 +30,7 @@ const w159Token = "w159-SENTINEL-token"
 // answers the daemon, the config path and the harness root. Note the
 // cli.toml carries no credential key ever again: a residual
 // anthropic_auth_token refuses the boot (TestConfigResidualAuthTokenRefused).
-func w159HarnessRoot(t *testing.T, inst *v1Install, ws, claudeBin string) (*w113Daemon, string, string) {
+func w159HarnessRoot(t *testing.T, inst *v1Install, ws, claudeBin string, daemonArgs ...string) (*w113Daemon, string, string) {
 	t.Helper()
 	sock := filepath.Join(shortTmp(t, "w159sock"), "d.sock")
 	cfg := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"), inst.url, inst.adminKey, sock,
@@ -48,7 +48,7 @@ func w159HarnessRoot(t *testing.T, inst *v1Install, ws, claudeBin string) (*w113
 		claudeBin = filepath.Join(v1Bins(t), "fakepi")
 	}
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfg), w113DOptSock(sock),
-		w113DOptArgs("--claude-bin", claudeBin, "--harness-root", root))
+		w113DOptArgs(append([]string{"--claude-bin", claudeBin, "--harness-root", root}, daemonArgs...)...))
 	d.start()
 	t.Cleanup(d.stop)
 	return d, cfg, root
@@ -140,7 +140,10 @@ func TestW159MixedHarnessWorkItem(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
 	w079Yaml(t, ws, w159Yaml)
-	d, _, root := w159HarnessRoot(t, inst, ws, "")
+	// a non-default tool window, so the Bash timeouts below prove the
+	// daemon threads its own Y into the claude step (a dropped value would
+	// read as the 30m default)
+	d, _, root := w159HarnessRoot(t, inst, ws, "", "--tool-window", "20m")
 	wi := w113NewWI(t, inst, "e2e", "w159 mixed harness", envelopeAutopilot())
 	capDir := w079Run(t, d, inst, ws, wi)
 
@@ -200,6 +203,14 @@ func TestW159MixedHarnessWorkItem(t *testing.T) {
 	}
 	if cl[0]["pi_agent_dir"] != "" {
 		t.Fatalf("a claude step got the pi agent dir: %v", cl[0]["pi_agent_dir"])
+	}
+	// the Bash tool timeouts (the settings.json above carries neither
+	// key): default 10m, max = the daemon's --tool-window 20m minus 1m
+	if got := cl[0]["bash_default_timeout_ms"]; got != "600000" {
+		t.Fatalf("claude step BASH_DEFAULT_TIMEOUT_MS %v, want 600000", got)
+	}
+	if got := cl[0]["bash_max_timeout_ms"]; got != "1140000" {
+		t.Fatalf("claude step BASH_MAX_TIMEOUT_MS %v, want 1140000 (--tool-window 20m - 1m)", got)
 	}
 	// the pi steps ran on the fake pi (never the claude persona)
 	pi := w159Spawns(t, capDir, "fakepi.jsonl")

@@ -37,13 +37,15 @@ every ambiguity you can find as a question, not an assumption.
    daemon has claimed this work item, so a down-lane takes effect only by
    **re-file**, never by a runtime switch. Every round — including a zero-question
    pass — states a `Lane proposal`: keep `feature-full`, or down-lane to
-   `chore`/`autopilot`, with a one-line reason on the same two axes as the filing
-   skill's `Down-lane check` (`verbs/file.md`): `expected diff size` (how much a
-   competent implementation touches) and `lane risk surface` (what the change can
-   break or newly expose). A small expected diff on a low risk surface proposes
-   the lighter lane. Work on `docs/concepts.md`'s "never unattended" list counts
+   `chore`/`autopilot`, with a one-line reason on two axes: `expected diff size`
+   (how much a competent implementation touches) and `lane risk surface` (what the
+   change can break or newly expose). A small expected diff on a low risk surface
+   proposes the lighter lane. Work on the never unattended list counts
    as a high `lane risk surface` and gets no down-lane proposal: such a ticket
-   keeps `feature-full`, whatever its `expected diff size`. This clause absorbs
+   keeps `feature-full`, whatever its `expected diff size`. The never unattended
+   list is: release/deploy work, schema or data migration, credentials and
+   permission surface, removing features or weakening guarantees,
+   security-related changes, large cross-repo changes. This clause absorbs
    the pure-deletion probe: a pure-deletion
    ticket (work whose substance is removing code, config, or behavior, with no new
    feature to spec) belongs on the `chore` lane, so it is a down-lane proposal too
@@ -60,19 +62,24 @@ every ambiguity you can find as a question, not an assumption.
    `reject` an acceptance that cannot name an external oracle: record it in
    `grill-qa.md` as unresolved, never hand it to `spec` as accepted, and never
    emit `ready_for_spec: true` while it stands — an unresolved acceptance is an
-   honest incomplete hand-off, not spec input. The four deepening points are
-   defined once in the filing skill (`verbs/execute-intent.md`).
+   honest incomplete hand-off, not spec input. The external oracle is one of four
+   deepening points; the other three are the expert gap (what a top practitioner
+   would do that the owner did not ask for), the raw material (logs, commit ids,
+   command output, source files - never a paraphrase) and the methods and tools
+   verification will use.
 4. **Tier proposal (mandatory every round).** Every round — including a
    round with no questions — states a `Tier proposal`: `scoped` or `full`
-   plus a one-line reason, by the same heuristic as the filing skill (a
-   text/docs change confined to one repository and a small surface → `scoped`;
+   plus a one-line reason, by this heuristic (a text/docs change confined to one
+   repository and a small surface → `scoped`;
    crossing modules or repos, touching the driver/daemon core, or gate-type →
    `full`; cannot determine → `full`). The owner may **veto a downgrade** and
-   insist on `full`. When you propose `scoped`, fill the filing skill's `Entry
-   confirmation` slot (`verbs/file.md`) — the `pf doctor` `scoped-gates readiness`
-   row or the clone check — and if it is not ready say the marker is inert and
-   the run falls back to full. Record the proposal and the owner's answer in
-   `artifacts/grill-qa.md`. When the filed ticket's marker and the proposal
+   insist on `full`. When you propose `scoped`, add an `Entry confirmation` line
+   naming the target repo's scoped readiness — the `pf doctor`
+   `scoped-gates readiness` row (`pass` / `warn` / `unknown`), or the clone check:
+   a supported stack manifest (`go.mod` / `package.json`) or a
+   `.polyforge/verify-scope.conf` that pins the stack — and if it is not ready say
+   the marker is inert and the run falls back to full. Record the proposal and the
+   owner's answer in `artifacts/grill-qa.md`. When the filed ticket's marker and the proposal
    disagree, say so in the batch — the driver read the marker at claim, so do
    not silently proceed and do not edit the work item mid-run: the owner may
    re-file the work item, or — only when the ticket carries no scoped marker —
@@ -94,27 +101,12 @@ every ambiguity you can find as a question, not an assumption.
    fail-closed).
 6. BATCH your questions (owner ruling 2026-10-02): collect ALL material
    ambiguities you can find first, then ask them in ONE needs_input envelope whose
-   `question` carries a markdown table with exactly four columns, header
-   `| 问题 | 推荐选项 | 理由 | 重点关注程度 |` (owner ruling 2026-10-21). One row per
-   focused question, answerable in one line; the row number opens the 问题 cell
-   (`1. …`, `2. …`) - no fifth column; every row fills 推荐选项 (your recommended
-   answer), 理由 (why) and 重点关注程度. `重点关注程度` is the LAST column and every
-   row carries one value (`每行必标`) on the `★~★★★★★` scale: ★ = 例行确认,
-   ★★★★★ = 方向性裁定 / 大影响 / 与既有裁定冲突, ★★–★★★★ scale with impact. Stars
-   are for owner attention only and are never mechanically consumed. Escape a
-   literal `|` inside a cell as `\|`. Context or evidence goes in prose above the
-   table. After the table ALWAYS (even for a one-row batch; each may be one line)
-   add `预期效果` (what happens once the batch is answered, e.g. "all recommended →
-   spec; row 3 is the only directional choice") and then `注意事项` (inter-row
-   dependencies or conflicts, relation to prior rulings, which rows are rubber
-   stamps answerable in bulk). The owner answers all rows in one reply, keyed
-   by row number. Only a question whose content GENUINELY depends on an earlier
+   `question` carries {{batch_questions}} For 预期效果 give the lane's concrete map
+   (e.g. "all recommended → spec; row 3 is the only directional choice"). The owner
+   answers all rows in one reply, keyed by row number. Only a question whose content
+   GENUINELY depends on an earlier
    answer may wait for a follow-up dispatch; do not drip independent questions
-   one at a time. The table rides in one question body with one `question_id`,
-   and the combined answer comes back as one text. To ask: mint a `question_id`, return a result envelope with `outcome: "needs_input"`, that
-   `question_id` and the `question` text, and end your turn. The answer arrives in the NEXT
-   dispatch of this step under "# Answered questions" - continue from it; never fabricate
-   or guess an answer you did not receive.
+   one at a time.
 7. Append every question and its answer to `artifacts/grill-qa.md` under a `## grill`
    heading, in the order asked, as they come in — this file is shared with `spec` (which
    reads it as primary input) and later with `grill-review` (which appends its own
@@ -148,14 +140,4 @@ Emit the final JSON output per the schema above once the questioning is complete
 open questions is not done), plus the path to the Q&A log and a short plain-language
 restatement of confirmed intent that `spec` can open with.
 
-## Handoff duty
-
-This step declares `handoff: true`. Before writing your result envelope:
-1. Write a handoff file at `artifacts/handoff-<step-id>.md` summarizing what
-   the next inherit step needs to know (decisions made, constraints
-   discovered, what was produced, where to find details).
-2. That path IS the contract: the next inherit step reads the file by the
-   path convention `artifacts/handoff-<step-id>.md`. There is no digest, no
-   byte count and no envelope field to fill in — the result envelope is the
-   minimal contract (outcome + output; needs_input adds question_id and
-   question), so write the file and leave the envelope lean.
+{{handoff_duty}}

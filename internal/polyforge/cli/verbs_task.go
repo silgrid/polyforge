@@ -1,6 +1,6 @@
 package cli
 
-// verbs_task.go: `pf task` — the one-shot task agent (workbench#53, carried
+// verbs_task.go: `pf task` — the one-shot task agent (carried
 // from #40), on the daemon's UDS face.
 //
 //	pf task spawn --project <p> [--max-duration D] [--max-tokens N] "<prompt>"

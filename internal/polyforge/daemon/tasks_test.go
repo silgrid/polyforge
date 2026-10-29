@@ -1,6 +1,6 @@
 package daemon
 
-// tasks_test.go: the one-shot task daemon face (workbench#53): spawn /
+// tasks_test.go: the one-shot task daemon face: spawn /
 // list / show / cancel over the real UDS, the two-slot refusal, the named
 // missing-key refusal, and the task-peer guard (a task process tree is
 // refused every non-GET route, its read face stays open).
@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -194,5 +195,66 @@ func TestTaskTerminalSummaryIsDeliveredOnceToTheOriginChat(t *testing.T) {
 	}
 	if _, again := stepGet(t, td.sock, "/chats/"+chat+"/task-notices"); strings.Contains(again, tk.ID) {
 		t.Fatalf("acked notice came back: %s", again)
+	}
+}
+
+// TestW103TaskBrowseHelperProcess is not a test: it is the marked task
+// process that sends one browse-shaped memory search through its
+// daemon's UDS face.
+func TestW103TaskBrowseHelperProcess(t *testing.T) {
+	sock := os.Getenv("W103_SOCK")
+	if sock == "" {
+		t.Skip("helper process only")
+	}
+	code, _ := stepGet(t, sock, "/task/memories/search?q=needle&after=not-a-cursor&sort=created&limit=5")
+	fmt.Printf("W103 GET /task/memories/search %d\n", code)
+}
+
+// TestW103TaskSearchForwardsNoBrowseParameters: the task
+// proxy shares forwardMemorySearch, so a browse-shaped request a task
+// agent may send forwards no cursor and no sort value — aihub sees the
+// plain keyword shape and the agent receives the keyword page, never a
+// browse page.
+func TestW103TaskSearchForwardsNoBrowseParameters(t *testing.T) {
+	td := taskDaemon(t, blockRunner{}, taskYaml)
+	code, body := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"browse shape"}`)
+	if code != 200 {
+		t.Fatalf("spawn = %d %s", code, body)
+	}
+	var tk task.Task
+	if err := json.Unmarshal([]byte(body), &tk); err != nil || tk.State != task.StateRunning {
+		t.Fatalf("spawn answer: %s (%v)", body, err)
+	}
+	var mu sync.Mutex
+	var paths []string
+	td.hub.mu.Lock()
+	td.hub.memDo = func(method, path string, body, out any) error {
+		mu.Lock()
+		paths = append(paths, method+" "+path)
+		mu.Unlock()
+		return json.Unmarshal([]byte(`{"items":[{"id":"mem_1","type":"experience.debug","title":"t"}]}`), out)
+	}
+	td.hub.mu.Unlock()
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestW103TaskBrowseHelperProcess$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "W103_SOCK="+td.sock, "PF_TASK_ID="+tk.ID, "PF_DAEMON_ID="+td.cfg.MachineID)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("child: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "W103 GET /task/memories/search 200") {
+		t.Fatalf("the task peer's browse-shaped search was not served as the keyword page:\n%s", out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) == 0 {
+		t.Fatal("nothing was forwarded")
+	}
+	got := paths[len(paths)-1]
+	if strings.Contains(got, "after=") || strings.Contains(got, "sort=") {
+		t.Fatalf("the task proxy forwarded a browse parameter: %s", got)
+	}
+	if !strings.Contains(got, "q=needle") {
+		t.Fatalf("the forwarded shape lost the query: %s", got)
 	}
 }

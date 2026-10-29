@@ -1,0 +1,148 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The console's token layer (the owner-confirmed visual language): CSS
+   variables for both themes, the dark values following the system
+   preference, the #103 memory type colour tokens, the 72ch prose
+   limit. No inline style attribute exists anywhere; no external font,
+   image or icon is referenced. */
+:root {
+  --bg: #f7f7f5;
+  --fg: #1f2328;
+  --muted: #57606a;
+  --line: #d8dee4;
+  --tint: #eef1f4;
+  --code: #f0f2f5;
+  --amber: #b45309;
+  --purple: #6f42c1;
+  --teal: #0d7f7f;
+  --blue: #0969da;
+  --green: #1a7f37;
+  --grey: #6e7781;
+  --red: #cf222e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --line: #30363d;
+    --tint: #161b22;
+    --code: #161b22;
+    --amber: #e3b341;
+    --purple: #a371f7;
+    --teal: #39d2c0;
+    --blue: #58a6ff;
+    --green: #3fb950;
+    --grey: #8b949e;
+    --red: #f85149;
+  }
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.5;
+  font-family: system-ui, -apple-system, 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI', sans-serif;
+}
+
+/* The #103 type colour tokens: the memory kind (experience, fact,
+   rule, methodology) — or the doc.* name (decision, design, review) —
+   picks the dot/badge colour. */
+.t-experience {
+  --c: var(--blue);
+}
+.t-fact {
+  --c: var(--green);
+}
+.t-rule {
+  --c: var(--red);
+}
+.t-methodology {
+  --c: var(--grey);
+}
+.t-decision {
+  --c: var(--amber);
+}
+.t-design {
+  --c: var(--purple);
+}
+.t-review {
+  --c: var(--teal);
+}
+.t-doc {
+  --c: var(--grey);
+}
+
+.type-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--c, var(--grey));
+}
+
+/* Zebra rows and thin tables (#103 visual spec). */
+.zebra tbody tr:nth-child(odd) {
+  background: var(--tint);
+}
+.zebra th,
+.zebra td {
+  border-bottom: 1px solid var(--line);
+}
+
+/* The #103 tag chip: one rounded bordered pill per row tag. */
+.tag-chip {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 9999px;
+  padding: 0 8px;
+  margin-right: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--bg);
+}
+
+/* The #103 monospace id footer: the object's id, verbatim, in the
+   body's monospace face — never styled into a link. */
+.id-footer {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+/* The sanitized body prose: 72 characters wide, headings demoted by
+   the server renderer (the page's own h1 stays the only h1). */
+.prose-body {
+  max-width: 72ch;
+}
+.prose-body pre {
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  overflow-x: auto;
+}
+.prose-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.prose-body table {
+  border-collapse: collapse;
+}
+.prose-body th,
+.prose-body td {
+  border: 1px solid var(--line);
+  padding: 4px 10px;
+}
+.prose-body .link-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

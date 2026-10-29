@@ -108,7 +108,11 @@ end), `CORE-410` (terminal).
   for a chat submit (the full chat id, never truncated or compacted, so it
   stays pasteable into `pf watch --chat <id>`), `chat:none` for a chat-kind
   submit with no chat id, `auto` for an auto-claim, and `-` when the job has
-  no origin). This is
+  no origin; plus RETRY while some job waits a retry backoff before its
+  step's next dispatch — `retry in 3m: upstream_transient`, the death cause
+  that owes it; the driver paces consecutive model_error /
+  upstream_transient / ended_without_result deaths on one candidate 1m, 3m,
+  then 9m before re-running it, a switch goes at once). This is
   bookkeeping about what this machine manages — not workflow execution
   progress (`pf watch` is the progress verb) — with two deliberately
   progress-shaped exceptions: STEP-AGE is mm:ss since the current dispatch

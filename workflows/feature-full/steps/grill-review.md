@@ -38,24 +38,12 @@ not grading the spec's writing quality, you are checking for a match against int
 
 1. Read `artifacts/spec.md` in full.
 2. Present a concise summary of the spec's scope, non-goals, and requirements back to the
-   user via a needs_input envelope, as prose above a one-row markdown table with
-   exactly four columns, header `| 问题 | 推荐选项 | 理由 | 重点关注程度 |` (owner ruling
-   2026-10-21): the row asks one clear confirmation question (`1. Does this match
-   what you meant, or is something off?`), with your recommended answer in 推荐选项
-   and why in 理由; no fifth column, and a literal `|` inside a cell escaped as
-   `\|`. `重点关注程度` is the LAST column and every row carries one value
-   (`每行必标`) on the `★~★★★★★` scale: ★ = 例行确认, ★★★★★ = 方向性裁定 / 大影响 /
-   与既有裁定冲突, ★★–★★★★ scale with impact. Stars are for owner attention only
-   and are never mechanically consumed. After the table ALWAYS (even for a one-row
-   batch; each may be one line) add `预期效果` (what happens once the batch is
-   answered, e.g. "confirm → `verdict: pass` and the spec moves on; any correction
-   → `verdict: fail` and a rewind to `spec`") and then `注意事项` (inter-row
-   dependencies or conflicts, relation to prior rulings, which rows are rubber
-   stamps answerable in bulk).
-   To ask: mint a `question_id`, return a result envelope with `outcome: "needs_input"`, that
-   `question_id` and the `question` text, and end your turn. The answer arrives in the NEXT
-   dispatch of this step under "# Answered questions" - continue from it; never fabricate
-   or guess an answer you did not receive.
+   user via a needs_input envelope, as prose above a one-row markdown table:
+   {{batch_questions}} The row asks one clear confirmation question
+   (`1. Does this match what you meant, or is something off?`), with your recommended
+   answer in 推荐选项 and why in 理由. For 预期效果 give the lane's concrete map
+   (e.g. "confirm → `verdict: pass` and the spec moves on; any correction →
+   `verdict: fail` and a rewind to `spec`").
 3. Append the question and the user's answer to `artifacts/grill-qa.md` under a
    `## grill-review` heading, below the existing `## grill` section — do not overwrite or
    remove the earlier section.

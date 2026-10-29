@@ -272,7 +272,7 @@ func anyTerms(q string) []string {
 // a q with no usable term after filtering (only stopwords / short
 // tokens) answers no hits, not an error.
 func (s *Store) SearchAny(q string, memType string, tags []string, limit int, allowed func(*Entry) bool) ([]Entry, error) {
-	return s.SearchMode(MatchAny, "", q, memType, tags, limit, allowed)
+	return s.SearchMode(MatchAny, nil, q, memType, tags, limit, allowed)
 }
 
 // searchAny runs the any-term mode for SearchMode (q and the limit are

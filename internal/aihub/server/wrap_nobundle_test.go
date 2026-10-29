@@ -216,7 +216,10 @@ func TestHubWrapAuthorizationMatchesCancel(t *testing.T) {
 	if code, raw := e.do(t, "POST", "/api/v1/work-items/"+id+"/wrap", otherKey, map[string]any{}, nil); code != 403 {
 		t.Fatalf("plain member wrap: %d %s", code, raw)
 	}
-	if code, raw := e.do(t, "POST", "/api/v1/work-items/"+id+"/wrap", outKey, map[string]any{}, nil); code != 403 && code != 404 {
+	// An outsider is concealed — the missing-work-item answer
+	//, byte-identical to an unknown reference.
+	code, raw := e.do(t, "POST", "/api/v1/work-items/"+id+"/wrap", outKey, map[string]any{}, nil)
+	if code != 404 || errCodeOf(raw) != api.ErrCoreNotFound {
 		t.Fatalf("outsider wrap: %d %s", code, raw)
 	}
 	if ev := closedEvents(t, e, id); len(ev) != 0 {

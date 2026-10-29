@@ -1,7 +1,7 @@
 package daemon
 
 // analyzer.go: the explicit, human-triggered, read-only message analyzer
-// (workbench#11). It reuses the narration lane's one-shot dispatcher
+//. It reuses the narration lane's one-shot dispatcher
 // (summarize.ExecDispatcher: stdin prompt, summarize-cwd, 5-minute bound),
 // runs one at a time outside max_concurrent_jobs, writes nothing to a
 // capsule/repo/aihub, and answers the conclusion only to the caller.
@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -39,7 +40,7 @@ func (d *Daemon) analyzeRoute(w http.ResponseWriter, r *http.Request) {
 
 	id := r.PathValue("id")
 	var msg api.Message
-	if err := d.hub.Do("GET", "/api/v1/messages/"+id, nil, &msg); err != nil {
+	if err := d.hub.Do("GET", "/api/v1/messages/"+url.PathEscape(id), nil, &msg); err != nil {
 		writeErrOf(w, err)
 		return
 	}
@@ -52,7 +53,7 @@ func (d *Daemon) analyzeRoute(w http.ResponseWriter, r *http.Request) {
 	var reply *api.Message
 	if msg.ReplyTo != "" {
 		var rm api.Message
-		if err := d.hub.Do("GET", "/api/v1/messages/"+msg.ReplyTo, nil, &rm); err == nil {
+		if err := d.hub.Do("GET", "/api/v1/messages/"+url.PathEscape(msg.ReplyTo), nil, &rm); err == nil {
 			reply = &rm
 		}
 	}

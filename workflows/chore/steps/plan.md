@@ -22,6 +22,21 @@ output:
         properties:
           path: { type: string, description: "repo-relative path" }
           intent: { type: string, enum: [read, write] }
+          coupled_obligations:
+            type: array
+            minItems: 1
+            description: "Required on every `write` entry (the driver rejects a write without it). The documents, tables, enumeration lists and projection rules that must change together with this file, each as `{path, note}`; or, when nothing is coupled, exactly one `{none: true, reason}` entry saying why."
+            items:
+              type: object
+              properties:
+                path: { type: string, description: "repo-relative path of the coupled document, table or rule" }
+                note: { type: string, description: "what in it must change (the row, entry or rule)" }
+                none: { type: boolean, enum: [true] }
+                reason: { type: string, description: "why no document, table or projection rule is coupled to this write" }
+        if:
+          properties: { intent: { const: write } }
+        then:
+          required: [coupled_obligations]
       description: Deduplicated list of every file the plan declares as read or written, across all steps (write wins over read for the same path). At least one entry is required (minItems 1) - a plan that touches nothing leaves `code` nothing to commit.
 ---
 
@@ -50,18 +65,25 @@ whether it exists:
    the steps so each leaves the tree buildable — same discipline as feature-full's
    `plan`, minus the spec input (chores carry no product spec).
 3. Declare each step's per-unit green bar as the repo's FAST-CHECK bar — the same bar
-   `code` runs per unit: the project's own build, its lint/format check, and the unit
-   tests of the packages/modules the unit touches, as the repo itself defines them
-   (Makefile, package.json scripts, CI config); for a Go repo, `go build ./... &&
-   go vet ./... && gofmt -l .` plus `go test` of the touched packages. Name the
+   `code` runs per unit: {{fast_checks}} Name the
    concrete commands. The full suite is not a per-unit bar — it belongs to
    `verification`.
 4. Every step MUST carry a `Touched files: <repo-relative path> (write|read), ...` line,
-   or `Touched files: (no file edits)` for steps that only verify. Declare honestly —
-   this list becomes the WI's `declared_resources` and, downstream, its file-scope
-   locks; an under-declared write is a real lock gap.
+   or `Touched files: (no file edits)` for steps that only verify, and a
+   `Coupled obligations:` line for its writes. Declare honestly — the list exists for
+   two checks: the coupled obligations (what must change with each written file), and
+   the scope check, where the driver compares the delivered diff with the declared set
+   in both directions and hands the differences to review and `verification`
+   as facts; an under-declared write shows up there as a blocking undeclared change.
+   For every `write`, name its coupled obligations: the documentation, tables,
+   enumeration lists and projection/exclusion rules that describe or enumerate the file
+   and must change with it — or an explicit `none` with the reason. Read the root
+   `AGENTS.md` (else `CLAUDE.md`) of every repo first: a project lists its own known
+   couplings there. A new file has no incoming references, so a grep for its name cannot
+   find its obligations — ask what documents, lists or rules would have to name it.
 5. Write `artifacts/plan.md` with an ordered `## Steps` section, then emit the ordered
-   step ids and the deduplicated touched-files list.
+   step ids and the deduplicated touched-files list with each write's
+   `coupled_obligations`.
 6. BEHAVIOR-FACE ESCALATION (change-coverage rules, discipline ① — hard rule): a
    chore graph authors no acceptance scenarios. If reading the WI reveals the work
    alters OBSERVABLE BEHAVIOR — new endpoint/verb, protocol/contract/semantics
@@ -89,16 +111,6 @@ Pick the simplest mechanism; before adding timing, shutdown or retry logic, chec
 
 Emit the final JSON object per the schema above: the artifact path, the ordered step
 ids, and the deduplicated touched-files list (each path once, `write` intent winning
-over `read` for the same path).
+over `read` for the same path; every `write` carrying its `coupled_obligations`).
 
-## Handoff duty
-
-This step declares `handoff: true`. Before writing your result envelope:
-1. Write a handoff file at `artifacts/handoff-<step-id>.md` summarizing what
-   the next inherit step needs to know (decisions made, constraints
-   discovered, what was produced, where to find details).
-2. That path IS the contract: the next inherit step reads the file by the
-   path convention `artifacts/handoff-<step-id>.md`. There is no digest, no
-   byte count and no envelope field to fill in — the result envelope is the
-   minimal contract (outcome + output; needs_input adds question_id and
-   question), so write the file and leave the envelope lean.
+{{handoff_duty}}

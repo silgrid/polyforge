@@ -1,7 +1,7 @@
 package cli
 
 // verbs_config.go: `pf config` — the single shipped writer/validator of
-// cli.toml (workbench#3). Verbs: get, set, unset, list, validate and
+// cli.toml. Verbs: get, set, unset, list, validate and
 // reload. The command is NoConfigLoad: it loads the file itself because
 // an unloadable file is the subject, and the step-origin guard runs
 // before any of that.
@@ -545,7 +545,7 @@ func parseProjectsValue(arg string) ([]string, error) {
 // mapping-less file is accepted and the daemon's start refusal is noted.
 // The flock guards only the local read-modify-write: it is released
 // before the daemon is notified, because that round trip is a
-// cross-process wait (workbench#41 F1).
+// cross-process wait ( F1).
 func applyConfigEdit(ctx *Context, k configKey, apply func([]byte) []byte, exp configExpectation) error {
 	path := configPath(ctx)
 	touchesMapping := k.isWorkspace()

@@ -76,7 +76,7 @@ const FileName = ".polyforge.yaml"
 const DefaultKey = "default"
 
 // TaskKey is the recognized, bundle-less step id of the one-shot task
-// agent (workbench#40). It belongs to no bundle; its only key is
+// agent. It belongs to no bundle; its only key is
 // `models`, the task lane's candidate list. When absent the task lane
 // falls back to DefaultKey; when neither is present the spawn refuses
 // naming both keys. It is never part of a bundle's precedence chain.
@@ -447,7 +447,7 @@ func contains(list []string, s string) bool {
 // checkStepIDs refuses a per-step key that is no step id in steps (every
 // unknown key named, sorted — or, when the workflows dir holds no
 // readable bundle at all, that fact). The task id is bundle-less by
-// design (workbench#40) and is recognized like DefaultKey.
+// design and is recognized like DefaultKey.
 func checkStepIDs(cfg *Config, steps map[string]bool, workflowsDir string) string {
 	seen := map[string]bool{}
 	var unknown []string

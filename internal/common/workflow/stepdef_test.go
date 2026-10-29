@@ -57,8 +57,10 @@ func TestRenderStepVars(t *testing.T) {
 }
 
 // ReadStepDefinition renders {{principles}} from the shared principles
-// file without a declared var, refuses a step entry declaring that var,
-// and needs no principles file for a definition that does not use it.
+// file without a declared var, refuses a step entry declaring a var that
+// shadows a shared fragment, and needs no fragment file for a definition
+// that includes none. A fragment's text is inserted verbatim — a
+// placeholder inside it is never re-scanned.
 func TestReadStepDefinitionPrinciples(t *testing.T) {
 	root := t.TempDir()
 	bundle := filepath.Join(root, "b")
@@ -85,5 +87,52 @@ func TestReadStepDefinitionPrinciples(t *testing.T) {
 	}
 	if _, err := ReadStepDefinition(bundle, "plain", map[string]string{"x": "1", PrinciplesVar: "mine"}); err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("declared principles var: %v", err)
+	}
+}
+
+// ReadStepDefinition renders any shared fragment the definition includes
+// without a declared var: {{<name>}} renders
+// workflows/_shared/<name>.md exactly like {{principles}}, a declared var
+// shadowing a fragment file is a reserved-var error, a placeholder with
+// neither a var nor a fragment file fails closed, and a fragment's own
+// {{placeholder}} text is inserted verbatim, never re-scanned.
+func TestReadStepDefinitionSharedFragments(t *testing.T) {
+	root := t.TempDir()
+	bundle := filepath.Join(root, "b")
+	write := func(p, s string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(root, SharedDir, "fast_checks.md"), "run the fast checks.\n")
+	write(filepath.Join(bundle, "steps", "one.md"), "## Fast checks\n\n{{fast_checks}}\n\nthen {{x}}")
+	got, err := ReadStepDefinition(bundle, "one", map[string]string{"x": "1"})
+	if err != nil || string(got) != "## Fast checks\n\nrun the fast checks.\n\nthen 1" {
+		t.Fatalf("fragment render = %q, %v", got, err)
+	}
+	// A fragment is never re-scanned: its own {{y}} is inserted verbatim.
+	write(filepath.Join(root, SharedDir, "fast_checks.md"), "literal {{y}} inside\n")
+	got, err = ReadStepDefinition(bundle, "one", map[string]string{"x": "1"})
+	if err != nil || string(got) != "## Fast checks\n\nliteral {{y}} inside\n\nthen 1" {
+		t.Fatalf("verbatim fragment = %q, %v", got, err)
+	}
+	// A declared var may not shadow a fragment file.
+	if _, err := ReadStepDefinition(bundle, "one", map[string]string{"x": "1", "fast_checks": "mine"}); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("declared fragment-shadowing var: %v", err)
+	}
+	// A placeholder with neither a var nor a fragment file fails closed.
+	write(filepath.Join(bundle, "steps", "two.md"), "{{missing_frag}}\n{{x}}")
+	if _, err := ReadStepDefinition(bundle, "two", map[string]string{"x": "1"}); err == nil || !strings.Contains(err.Error(), "missing_frag.md") {
+		t.Fatalf("missing fragment file: %v", err)
+	}
+	// A definition that includes no fragment never reads one: the
+	// bundle beside an empty _shared/steps only renders its own vars.
+	write(filepath.Join(bundle, "steps", "three.md"), "plain {{x}}")
+	if got, err := ReadStepDefinition(bundle, "three", map[string]string{"x": "1"}); err != nil || string(got) != "plain 1" {
+		t.Fatalf("no-fragment definition = %q, %v", got, err)
 	}
 }

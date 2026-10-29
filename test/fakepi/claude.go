@@ -179,6 +179,9 @@ func runClaude() {
 		"autoupdater_off": os.Getenv("DISABLE_AUTOUPDATER") == "1",
 		"startup_results": os.Getenv("CLAUDE_CODE_STARTUP_FAILURE_RESULTS") == "1",
 		"pi_agent_dir":    os.Getenv("PI_CODING_AGENT_DIR"),
+		// the Bash tool timeouts the adapter derived (raw values)
+		"bash_default_timeout_ms": os.Getenv("BASH_DEFAULT_TIMEOUT_MS"),
+		"bash_max_timeout_ms":     os.Getenv("BASH_MAX_TIMEOUT_MS"),
 		// polyforge#171 acceptance evidence: raw-environ counts (no
 		// duplicates, no injected token), the hard-set config dir value,
 		// the NONESSENTIAL switch and what the settings.json authority

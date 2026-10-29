@@ -143,7 +143,7 @@ func (r *Runtime) resolveJob(wi string) *job {
 }
 
 // TaskModels answers the one-shot task lane's candidate list of a
-// project read LIVE from its workspace yaml (workbench#40): the
+// project read LIVE from its workspace yaml: the
 // bundle-less `steps.<project>.task.models` list, else
 // `steps.<project>.default.models`. It is the daemon's single read of
 // that fact (workspace.TaskModels over a fresh LoadWorkspace), so an

@@ -169,6 +169,36 @@ func (db *DB) waitingForBatch(ids []string) (map[string][]WaitingBlocker, error)
 // ---------------------------------------------------------------------------
 // Claim (reference.md §3.2)
 
+// resolveSessionMachine resolves the machine id a claim/attach records
+//, on the caller's own transaction snapshot: a machines
+// row owned by the caller records its id; a row owned by another
+// operator is refused AUTH-403 with nothing written; an absent row, or
+// a row with no operator, records NULL and the claim/attach succeeds.
+// Admins follow the same rule — the ownership is the caller's, not the
+// role's. An empty machine_id (the attach default) keeps the recorded
+// machine and never reaches the machines table.
+func resolveSessionMachine(q queryRower, machineID, callerID string) (string, error) {
+	if machineID == "" {
+		return "", nil
+	}
+	var operator string
+	err := q.QueryRow(`SELECT COALESCE(operator_id,'') FROM machines WHERE id=?1`, machineID).Scan(&operator)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if operator == "" {
+		return "", nil // an operator-less row records NULL too
+	}
+	if operator == callerID {
+		return machineID, nil
+	}
+	return "", Fail(api.ErrAuthForbidden, "",
+		"machine %s is registered to another operator; claim or attach with a --machine-id you operate", machineID)
+}
+
 // Claim executes the v1.5 CAS claim. callerIdentity is the api-key's
 // user id (the claim's assignee). The response carries the public
 // fingerprint only — the secret never echoes.
@@ -195,35 +225,22 @@ func (m *SessionManager) Claim(wiID string, req api.SessionClaimRequest, callerI
 	}
 	defer tx.Rollback()
 
-	row, err := loadSessionRow(tx, wiID)
+	row, replay, err := claimGate(tx, wiID, req.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	if sessionHeld(row) && row.Hash.String == hash {
+	if replay {
 		return claimAnswerTx(tx, wiID, row) // the holder's replay: no write
 	}
-	if claimed, err := sessionClaimedBefore(tx, wiID, fp); err != nil {
-		return nil, err
-	} else if claimed {
-		return nil, Fail(api.ErrCoreForbidden, "STALE_SESSION",
-			"session %s no longer holds the work item (current holder %s)", fp, row.Fingerprint.String)
-	}
-	if err := diagnoseClaimGate(row); err != nil {
-		return nil, err
-	}
-	if blocked, err := unfinishedBlockers(tx, wiID); err != nil {
-		return nil, err
-	} else if blocked {
-		return nil, Fail(api.ErrCoreConflict, "DEPENDENCY_BLOCKED", dependencyBlockedDetail)
-	}
-	if err := diagnoseClaimBundle(row); err != nil {
-		return nil, err
-	}
 
+	machine, err := resolveSessionMachine(tx, req.MachineID, callerIdentity)
+	if err != nil {
+		return nil, err
+	}
 	now := Now()
 	var machineAny any
-	if req.MachineID != "" {
-		machineAny = req.MachineID
+	if machine != "" {
+		machineAny = machine
 	}
 	res, err := tx.Exec(`UPDATE work_items SET status='running', session_hash=?1, session_fingerprint=?2,
 		session_machine=?3, session_started_at=?4, clean_pause=0, assignee=?5,
@@ -237,7 +254,7 @@ func (m *SessionManager) Claim(wiID string, req api.SessionClaimRequest, callerI
 		return nil, Fail(api.ErrCoreConflict, "RACE_LOST", "state changed concurrently")
 	}
 	if err := appendEventTx(tx, wiID, now, callerIdentity, "session_claimed",
-		map[string]any{"session_fingerprint": fp, "machine_id": req.MachineID}); err != nil {
+		map[string]any{"session_fingerprint": fp, "machine_id": machine}); err != nil {
 		return nil, err
 	}
 	row, err = loadSessionRow(tx, wiID)
@@ -252,6 +269,54 @@ func (m *SessionManager) Claim(wiID string, req api.SessionClaimRequest, callerI
 		return nil, err
 	}
 	return claim, nil
+}
+
+// ClaimGate answers the refusal a claim with this secret would meet now
+// (nil: eligible, a holder's replay included), read on the store's own
+// snapshot with nothing written. The server asks it before creating the
+// work item's bare repo, so a refused claim (terminal, held, not queued,
+// dependency-blocked, registration-only) never leaves an empty repo;
+// Claim's own transaction stays the authority. A claim that passes here
+// and then loses the CAS race still created (idempotently) the repo.
+func (m *SessionManager) ClaimGate(wiID, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return Fail(api.ErrCoreBadInput, "", "session_id required (the client-minted secret)")
+	}
+	_, _, err := claimGate(m.db, wiID, sessionID)
+	return err
+}
+
+// claimGate is the claim's eligibility diagnosis on one snapshot: the
+// holder's replay (replay true), else STALE_SESSION for a secret that
+// claimed before, else the joint gate, blockers and bundle legs.
+func claimGate(q queryRower, wiID, sessionID string) (*sessionRow, bool, error) {
+	hash := api.SessionHashHex(sessionID)
+	fp := api.SessionFingerprint(sessionID)
+	row, err := loadSessionRow(q, wiID)
+	if err != nil {
+		return nil, false, err
+	}
+	if sessionHeld(row) && row.Hash.String == hash {
+		return row, true, nil
+	}
+	if claimed, err := sessionClaimedBefore(q, wiID, fp); err != nil {
+		return nil, false, err
+	} else if claimed {
+		return nil, false, Fail(api.ErrCoreForbidden, "STALE_SESSION",
+			"session %s no longer holds the work item (current holder %s)", fp, row.Fingerprint.String)
+	}
+	if err := diagnoseClaimGate(row); err != nil {
+		return nil, false, err
+	}
+	if blocked, err := unfinishedBlockers(q, wiID); err != nil {
+		return nil, false, err
+	} else if blocked {
+		return nil, false, Fail(api.ErrCoreConflict, "DEPENDENCY_BLOCKED", dependencyBlockedDetail)
+	}
+	if err := diagnoseClaimBundle(row); err != nil {
+		return nil, false, err
+	}
+	return row, false, nil
 }
 
 // claimAnswerTx assembles the claim answer of the session that holds row:
@@ -277,9 +342,9 @@ func claimAnswerTx(tx *sql.Tx, wiID string, row *sessionRow) (*api.SessionClaim,
 // sessionClaimedBefore reports whether the session with fingerprint fp
 // ever claimed the work item: its session_claimed event is the durable
 // record.
-func sessionClaimedBefore(tx *sql.Tx, wiID, fp string) (bool, error) {
+func sessionClaimedBefore(q queryRower, wiID, fp string) (bool, error) {
 	var one int
-	err := tx.QueryRow(`SELECT 1 FROM wi_events WHERE work_item_id=?1 AND event_type='session_claimed'
+	err := q.QueryRow(`SELECT 1 FROM wi_events WHERE work_item_id=?1 AND event_type='session_claimed'
 		AND json_extract(payload, '$.session_fingerprint')=?2 LIMIT 1`, wiID, fp).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -390,26 +455,24 @@ func (m *SessionManager) Attach(wiID string, req api.SessionAttachRequest, calle
 	}
 	defer tx.Rollback()
 
-	row, err := loadSessionRow(tx, wiID)
+	row, err := attachGate(tx, wiID, req.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	if !sessionHeld(row) || api.SessionHashHex(req.SessionID) != row.Hash.String {
-		return nil, Fail(api.ErrCoreForbidden, "STALE_SESSION",
-			"session does not match the current holder %s", row.Fingerprint.String)
-	}
-	if row.Status != api.StatusPaused || row.CleanPause {
-		return nil, Fail(api.ErrCoreConflict, "NOT_ATTACHABLE",
-			"attach requires a paused, non-clean-paused work item (got status %s, clean_pause %v)",
-			row.Status, row.CleanPause)
-	}
-	var machineAny any
+	// The recorded machine: the resolved ownership of the body's
+	// machine_id, or the row's own machine when the body
+	// names none.
+	machine := row.Machine.String
 	if req.MachineID != "" {
-		machineAny = req.MachineID
-	} else {
-		machineAny = row.Machine // keep the recorded machine
+		if machine, err = resolveSessionMachine(tx, req.MachineID, callerIdentity); err != nil {
+			return nil, err
+		}
 	}
 	now := Now()
+	var machineAny any
+	if machine != "" {
+		machineAny = machine
+	}
 	res, err := tx.Exec(`UPDATE work_items SET status='running', session_machine=?1,
 		assignee=?2, updated_at=?3
 		WHERE id=?4 AND status='paused' AND session_hash=?5 AND clean_pause=0`,
@@ -421,7 +484,7 @@ func (m *SessionManager) Attach(wiID string, req api.SessionAttachRequest, calle
 		return nil, Fail(api.ErrCoreConflict, "NOT_ATTACHABLE", "state changed concurrently")
 	}
 	if err := appendEventTx(tx, wiID, now, callerIdentity, "session_attached",
-		map[string]any{"session_fingerprint": row.Fingerprint.String, "machine_id": req.MachineID}); err != nil {
+		map[string]any{"session_fingerprint": row.Fingerprint.String, "machine_id": machine}); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -430,10 +493,39 @@ func (m *SessionManager) Attach(wiID string, req api.SessionAttachRequest, calle
 	return &api.SessionClaim{
 		WorkItemID:         wiID,
 		SessionFingerprint: row.Fingerprint.String,
-		MachineID:          req.MachineID,
+		MachineID:          machine,
 		BundleName:         row.BundleName.String,
 		ClaimedAt:          row.StartedAt.String, // the session's own start
 	}, nil
+}
+
+// AttachGate is ClaimGate for the attach route: the refusal an attach
+// with this secret would meet now, read with nothing written.
+func (m *SessionManager) AttachGate(wiID, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return Fail(api.ErrCoreBadInput, "", "session_id required")
+	}
+	_, err := attachGate(m.db, wiID, sessionID)
+	return err
+}
+
+// attachGate is the attach's eligibility diagnosis on one snapshot: the
+// secret holds the work item, which is paused and not clean-paused.
+func attachGate(q queryRower, wiID, sessionID string) (*sessionRow, error) {
+	row, err := loadSessionRow(q, wiID)
+	if err != nil {
+		return nil, err
+	}
+	if !sessionHeld(row) || api.SessionHashHex(sessionID) != row.Hash.String {
+		return nil, Fail(api.ErrCoreForbidden, "STALE_SESSION",
+			"session does not match the current holder %s", row.Fingerprint.String)
+	}
+	if row.Status != api.StatusPaused || row.CleanPause {
+		return nil, Fail(api.ErrCoreConflict, "NOT_ATTACHABLE",
+			"attach requires a paused, non-clean-paused work item (got status %s, clean_pause %v)",
+			row.Status, row.CleanPause)
+	}
+	return row, nil
 }
 
 // ---------------------------------------------------------------------------

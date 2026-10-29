@@ -101,8 +101,11 @@ var liveCases = []liveCase{
 	{"overloaded", `529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`, 3, FailRateLimited, true},
 	{"zh-concurrency", `当前模型并发数过高，请稍后再试`, 0, FailRateLimited, true},
 	{"upstream-malformed-tool-call", upstreamTransientToolArgs, 0, FailUpstreamTransient, true},
-	{"insufficient-balance", `402 {"error":{"message":"Insufficient balance","type":"insufficient_balance"}}`, 0, FailModelError, false},
-	{"401", `401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, 0, FailModelError, false},
+	// allowance/auth texts are archived as the exit path archives them
+	// (exit_model_class) and switch at once; only an unclassified error
+	// turn stays model_error and resumes first (ModelErrorRotationThreshold)
+	{"insufficient-balance", `402 {"error":{"message":"Insufficient balance","type":"insufficient_balance"}}`, 0, FailExitModel, false},
+	{"401", `401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, 0, FailExitModel, false},
 }
 
 // runLive runs the driver over len(errs) live error turns (one per
@@ -140,9 +143,9 @@ func runLive(t *testing.T, errs []liveCase) (*supEnv, []time.Duration) {
 
 // TestLiveErrorTurnGoesThroughD7Classification: one live error turn per
 // case, then a delivery. Throttles and upstream transients retry the
-// SAME model after the D7 backoff, booked into the step's T, without
-// moving the blocking counter; allowance/auth texts switch candidates
-// with no backoff.
+// SAME model after their backoff (D7 for a throttle, the retry pacing for
+// a transient), booked into the step's T, without moving the blocking
+// counter; allowance/auth texts switch candidates with no backoff.
 func TestLiveErrorTurnGoesThroughD7Classification(t *testing.T) {
 	for _, c := range liveCases {
 		t.Run(c.name, func(t *testing.T) {
@@ -167,11 +170,15 @@ func TestLiveErrorTurnGoesThroughD7Classification(t *testing.T) {
 				if body["disposition"] != "retry_same_model" {
 					t.Fatalf("disposition %v, want retry_same_model", body["disposition"])
 				}
-				if len(waits) != 1 || waits[0] != RateLimitBackoffBase {
-					t.Fatalf("backoff waits %v, want one %v", waits, RateLimitBackoffBase)
+				want := RateLimitBackoffBase
+				if c.cause == FailUpstreamTransient {
+					want = supervise.DefaultRetryBackoffBase
 				}
-				if got := st.BudgetConsumed.WallMs; got < RateLimitBackoffBase.Milliseconds() {
-					t.Fatalf("step T %dms, want the %v backoff booked in", got, RateLimitBackoffBase)
+				if len(waits) != 1 || waits[0] != want {
+					t.Fatalf("backoff waits %v, want one %v", waits, want)
+				}
+				if got := st.BudgetConsumed.WallMs; got < want.Milliseconds() {
+					t.Fatalf("step T %dms, want the %v backoff booked in", got, want)
 				}
 				if st.Supervision != nil && st.Supervision.FailureCount != 0 {
 					t.Fatalf("a D7 same-model retry must not move the blocking counter: %+v", st.Supervision)

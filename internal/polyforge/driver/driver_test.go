@@ -449,9 +449,11 @@ func TestRunGateFailRewindRecovers(t *testing.T) {
 	if exec.RewindStats.Count != 1 || exec.ReviewRounds["check"] != 1 {
 		t.Fatalf("stats: rewind=%+v review=%+v", exec.RewindStats, exec.ReviewRounds)
 	}
-	// The verdict was consumed: no pending_rewind_input remains.
+	// The round ended at acceptance: no pending_rewind_input remains
+	// (the verdict persists across every dispatch of the
+	// round and only the acceptance write clears it).
 	if pri := exec.Steps["build"].PendingRewindInput; pri != nil {
-		t.Fatalf("the verdict is consumed at dispatch: %+v", pri)
+		t.Fatalf("the verdict is cleared at acceptance: %+v", pri)
 	}
 }
 
@@ -933,11 +935,11 @@ func TestRunRejectedEnvelopeBlocksResultInvalidAfterBound(t *testing.T) {
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("a spent in-process retry bound must BLOCK cleanly, not error (no relaunch): %v", err)
 	}
-	if n := len(sp.spawns); n != maxEnvelopeRejects+1 {
-		t.Fatalf("exactly limit+1 dispatches before the block, got %d", n)
+	if n := len(sp.spawns); n != maxEnvelopeRejects {
+		t.Fatalf("exactly the bound (%d) dispatches before the block, got %d", maxEnvelopeRejects, n)
 	}
 	// every re-dispatch carried the feedback
-	for i := 1; i <= maxEnvelopeRejects; i++ {
+	for i := 1; i < maxEnvelopeRejects; i++ {
 		if sp.spawnAt(i).PriorRejection == "" {
 			t.Fatalf("re-dispatch %d must carry the rejection feedback", i)
 		}
@@ -985,8 +987,8 @@ func TestRejectionBoundBlocksOnceWithoutRelaunch(t *testing.T) {
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("the bound must block cleanly, not error: %v", err)
 	}
-	if n := len(sp.spawns); n != maxEnvelopeRejects+1 {
-		t.Fatalf("exactly limit+1 dispatches before the block, got %d", n)
+	if n := len(sp.spawns); n != maxEnvelopeRejects {
+		t.Fatalf("exactly the bound (%d) dispatches before the block, got %d", maxEnvelopeRejects, n)
 	}
 	x := readExec(t, execPath)
 	if x.WorkflowStatus != StatusBlocked || !strings.Contains(x.BlockedReason, "result_invalid") {
@@ -1004,6 +1006,8 @@ func TestRejectionBoundBlocksOnceWithoutRelaunch(t *testing.T) {
 }
 
 func (l *eventLog) count(kind string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	n := 0
 	for _, e := range l.entries {
 		if e.kind == kind {
@@ -1015,7 +1019,7 @@ func (l *eventLog) count(kind string) int {
 
 // The recovery lane's interrupted archive (Run's daemon-restart path)
 // computes the tree hash before the transition takes the driver's lock
-// and records it on the daemon_restart attempt (workbench#21).
+// and records it on the daemon_restart attempt.
 func TestRunInterruptedArchiveComputesTreeHash(t *testing.T) {
 	old := treeHashFn
 	t.Cleanup(func() { treeHashFn = old })
@@ -1024,6 +1028,7 @@ func TestRunInterruptedArchiveComputesTreeHash(t *testing.T) {
 	dir := t.TempDir()
 	execPath := filepath.Join(dir, capsule.ExecutionJSON)
 	seedExecution(t, execPath, "s", capsule.StepInProgress, nil)
+	seedDispatch(t, execPath, "s", 1)
 	sp := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
 	d, err := New(Config{
 		WI:          WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
@@ -1046,7 +1051,7 @@ func TestRunInterruptedArchiveComputesTreeHash(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// The re-dispatch fast-path decision inputs (workbench#21).
+// The re-dispatch fast-path decision inputs.
 
 func TestAttemptAfterAnswer(t *testing.T) {
 	at := "2026-09-20T08:00:02Z"

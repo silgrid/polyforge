@@ -10,16 +10,31 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/aihub/core"
 	"github.com/silgrid/polyforge/internal/common/api"
 )
 
+// seedSessionMachine ensures a machines row for machine owned by
+// operatorID (only a caller-owned machine id is recorded
+// on a claim/attach, so fixtures asserting a recorded machine need the
+// row).
+func seedSessionMachine(t *testing.T, e *srvEnv, machine, operatorID string) {
+	t.Helper()
+	if _, err := e.db.Exec(`INSERT OR IGNORE INTO machines(id, last_heartbeat_at, role, operator_id)
+		VALUES (?1, ?2, 'runner', ?3)`, machine, time.Now().UTC().Format(time.RFC3339Nano), operatorID); err != nil {
+		t.Fatalf("seed machine %s: %v", machine, err)
+	}
+}
+
 // sessClaim performs a session claim over HTTP and returns the decoded
-// envelope plus the raw body.
+// envelope plus the raw body. The claim runs as the admin key, so the
+// shared "m1" fixture is seeded caller-owned first.
 func sessClaim(t *testing.T, e *srvEnv, wiID, secret, key string) (int, []byte, api.SessionClaimResponse) {
 	t.Helper()
-	body := map[string]string{}
+	seedSessionMachine(t, e, "m1", e.adminID)
+	body := map[string]any{}
 	if secret != "" {
 		body["session_id"] = secret
 	}
@@ -174,12 +189,12 @@ func TestForceEndSessionOverHTTP(t *testing.T) {
 		t.Fatalf("claim: %d %s", code, raw)
 	}
 	path := "/api/v1/work-items/" + id + "/force-end-session"
-	// A non-member writer is refused AUTH-403.
+	// A non-member writer sees the missing-work-item answer.
 	outsider, _ := e.admin.CreateUser("plainw", "pw@example.com", "writer", "human")
 	okey, _ := e.admin.CreateAPIKey(outsider.ID, "pw", "")
-	if code, raw := e.do(t, "POST", path, okey.Plain, map[string]string{"reason": "x"}, nil); code != 403 {
+	if code, raw := e.do(t, "POST", path, okey.Plain, map[string]string{"reason": "x"}, nil); code != 404 {
 		t.Fatalf("non-member force-end: %d %s", code, raw)
-	} else if c, _ := errEnvelope(t, raw); c != "AUTH-403" {
+	} else if c, _ := errEnvelope(t, raw); c != api.ErrCoreNotFound {
 		t.Fatalf("wrong refusal class: %s", raw)
 	}
 	// Empty reason: 400.
@@ -262,7 +277,7 @@ func TestForceEndSessionAuthorization(t *testing.T) {
 		}
 	}
 	// A machine identity created by an administrator (`pf users create
-	// --user-type machine` — the workbench#57 requirement-12 path, not a
+	// --user-type machine` — the requirement-12 path, not a
 	// heartbeat mint, which no longer creates users) with writer membership
 	// and an admin-issued key.
 	machineUser, err := e.admin.CreateUser("m-self machine", "m-self@example.com", "writer", "machine")
@@ -459,10 +474,13 @@ func TestBlockedExitsUnifiedAuthorization(t *testing.T) {
 	id := block("blocked auth", s(1))
 
 	for _, door := range []string{"resume-blocked"} {
-		for who, key := range map[string]string{"plain member": otherKey, "outsider": outKey} {
-			if code, raw := e.do(t, "POST", "/api/v1/work-items/"+id+"/"+door, key, map[string]any{}, nil); code != 403 && code != 404 {
-				t.Fatalf("%s on %s must be refused, got %d %s", who, door, code, raw)
-			}
+		// A plain member keeps the door's AUTH-403; an outsider is
+		// concealed — the missing-work-item answer.
+		if code, raw := e.do(t, "POST", "/api/v1/work-items/"+id+"/"+door, otherKey, map[string]any{}, nil); code != 403 {
+			t.Fatalf("plain member %s: %d %s", door, code, raw)
+		}
+		if code, raw := e.do(t, "POST", "/api/v1/work-items/"+id+"/"+door, outKey, map[string]any{}, nil); code != 404 {
+			t.Fatalf("outsider %s: %d %s", door, code, raw)
 		}
 	}
 	// cancel (abandon) answers the same set
@@ -574,15 +592,18 @@ func TestSessionClaimRequiresWriter(t *testing.T) {
 	}
 	claim := func(key string) (int, []byte) {
 		return e.do(t, "POST", "/api/v1/work-items/"+id+"/claim", key,
-			map[string]string{"machine_id": "m1", "session_id": "s-" + key[:8], "idempotency_key": "k-" + key[:8]}, nil)
+			// No machine_id: the writer gate is under test, not the
+			// machine-ownership rule ( step 3).
+			map[string]string{"session_id": "s-" + key[:8], "idempotency_key": "k-" + key[:8]}, nil)
 	}
-	// Outsider: the WI is visible to wiProject, but the claim is refused.
+	// Outsider: the work item is concealed — the same missing-work-item
+	// answer an unknown reference gets, not AUTH-403.
 	code, raw := claim(okey.Plain)
-	if code != 403 {
+	if code != 404 {
 		t.Fatalf("outsider claim: %d %s", code, raw)
 	}
-	if c, _ := errEnvelope(t, raw); c != string(api.ErrAuthForbidden) {
-		t.Fatalf("outsider code = %q, want %s: %s", c, api.ErrAuthForbidden, raw)
+	if c, _ := errEnvelope(t, raw); c != api.ErrCoreNotFound {
+		t.Fatalf("outsider code = %q, want %s: %s", c, api.ErrCoreNotFound, raw)
 	}
 	// Viewer membership is not enough either.
 	if err := e.admin.AddMember(e.adminProjectID(t, "alpha"), outsider.ID, "viewer"); err != nil {
@@ -693,14 +714,14 @@ func TestReporterGateContinueAbandonOnly(t *testing.T) {
 	if code, raw := e.do(t, "POST", "/api/v1/work-items/"+qw.ID+"/cancel", repKey, map[string]any{}, &got); code != 200 || got.Status != "canceled" {
 		t.Fatalf("reporter abandon (queued): %d %s %s", code, raw, got.Status)
 	}
-	// An outsider (plain writer, not the reporter) is refused on both
-	// exits.
+	// An outsider (plain writer, not the reporter) is concealed on both
+	// exits — the missing-work-item answer.
 	x := block("d5 outsider refused", 5)
-	if code, _ := e.do(t, "POST", "/api/v1/work-items/"+x+"/resume-blocked", outKey, map[string]any{}, nil); code != 403 {
-		t.Fatalf("outsider continue: want 403, got %d", code)
+	if code, raw := e.do(t, "POST", "/api/v1/work-items/"+x+"/resume-blocked", outKey, map[string]any{}, nil); code != 404 {
+		t.Fatalf("outsider continue: want 404, got %d %s", code, raw)
 	}
-	if code, _ := e.do(t, "POST", "/api/v1/work-items/"+x+"/cancel", outKey, map[string]any{}, nil); code != 403 {
-		t.Fatalf("outsider abandon: want 403, got %d", code)
+	if code, raw := e.do(t, "POST", "/api/v1/work-items/"+x+"/cancel", outKey, map[string]any{}, nil); code != 404 {
+		t.Fatalf("outsider abandon: want 404, got %d %s", code, raw)
 	}
 
 	// The reporter is DENIED the admin/maintainer-only recovery gates:

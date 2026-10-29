@@ -1,6 +1,6 @@
 package test
 
-// w32_output_format_contract_test.go: text contract for workbench#32.
+// w32_output_format_contract_test.go: text contract for.
 //
 // Work item #32 ships a standalone output-format skill (skills/output-format/
 // SKILL.md): output discipline for the three owner-facing surfaces — the
@@ -17,7 +17,7 @@ package test
 // exist) and green only once the skill shipped. The qualitative half — that
 // a real recent session fragment obeys the session-face rules — is walked
 // through in the capsule's code summary and observed on real WIs, the same
-// way workbench#29 and #30 handled their non-machine-verifiable residuals.
+// way and #30 handled their non-machine-verifiable residuals.
 
 import (
 	"encoding/json"
@@ -33,11 +33,11 @@ func w32Frontmatter(t *testing.T, s string) string {
 	t.Helper()
 	rest, ok := strings.CutPrefix(s, "---\n")
 	if !ok {
-		t.Fatalf("workbench#32: SKILL.md must open with a frontmatter fence")
+		t.Fatalf("SKILL.md must open with a frontmatter fence")
 	}
 	fm, _, ok := strings.Cut(rest, "\n---\n")
 	if !ok {
-		t.Fatalf("workbench#32: SKILL.md frontmatter is not closed")
+		t.Fatalf("SKILL.md frontmatter is not closed")
 	}
 	return fm
 }
@@ -61,11 +61,11 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 	root := v1Root(t)
 	rel := filepath.Join("skills", "output-format", "SKILL.md")
 	if strings.HasPrefix(rel, filepath.Join("skills", "polyforge")+string(os.PathSeparator)) {
-		t.Fatalf("workbench#32: the standalone skill must live outside the routing skill directory, got %s", rel)
+		t.Fatalf("the standalone skill must live outside the routing skill directory, got %s", rel)
 	}
 	b, err := os.ReadFile(filepath.Join(root, rel))
 	if err != nil {
-		t.Fatalf("workbench#32: the standalone output-format skill must exist at %s: %v", rel, err)
+		t.Fatalf("the standalone output-format skill must exist at %s: %v", rel, err)
 	}
 	s := string(b)
 	// Markdown wraps lines; marker checks compare on collapsed whitespace.
@@ -74,17 +74,17 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 	// It is independent: the routing skill body must not absorb its content.
 	routing, rerr := os.ReadFile(filepath.Join(root, "skills", "polyforge", "SKILL.md"))
 	if rerr != nil {
-		t.Fatalf("workbench#32: cannot read the routing skill to prove independence: %v", rerr)
+		t.Fatalf("cannot read the routing skill to prove independence: %v", rerr)
 	}
 	if strings.Contains(string(routing), "off-screen is nonexistent") {
-		t.Fatalf("workbench#32: the output-format content leaked into skills/polyforge/SKILL.md — the two skills must load independently")
+		t.Fatalf("the output-format content leaked into skills/polyforge/SKILL.md — the two skills must load independently")
 	}
 
 	// Frontmatter: the name the release declares, and a description that is
 	// present and non-empty (Agent Skills legality).
 	fm := w32Frontmatter(t, s)
 	if !strings.Contains(fm, "name: output-format") {
-		t.Errorf("workbench#32: frontmatter must declare `name: output-format`")
+		t.Errorf("frontmatter must declare `name: output-format`")
 	}
 	desc := ""
 	for _, line := range strings.Split(fm, "\n") {
@@ -93,12 +93,12 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 		}
 	}
 	if strings.Trim(desc, `"'`) == "" {
-		t.Errorf("workbench#32: frontmatter must carry a non-empty description")
+		t.Errorf("frontmatter must carry a non-empty description")
 	}
 	// The description must name all three surfaces it governs.
 	for _, want := range []string{"session face", "envelope face", "panel face"} {
 		if !strings.Contains(strings.ToLower(desc), want) {
-			t.Errorf("workbench#32: the description must name the %s it governs", want)
+			t.Errorf("the description must name the %s it governs", want)
 		}
 	}
 
@@ -112,7 +112,7 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 		"Progress must be visible",            // 5. progress must be visible
 	} {
 		if !strings.Contains(flat, want) {
-			t.Errorf("workbench#32: the skill must carry the cognitive-fact marker %q", want)
+			t.Errorf("the skill must carry the cognitive-fact marker %q", want)
 		}
 	}
 
@@ -120,12 +120,12 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 	for _, face := range []string{"Session face", "Envelope face", "Panel face"} {
 		sec := w32Section(s, face)
 		if sec == "" {
-			t.Errorf("workbench#32: the skill must carry a `## %s` section", face)
+			t.Errorf("the skill must carry a `## %s` section", face)
 			continue
 		}
 		for _, marker := range []string{"**Bad**", "**Good**"} {
 			if !strings.Contains(sec, marker) {
-				t.Errorf("workbench#32: the %s section must carry a %s example pair", face, marker)
+				t.Errorf("the %s section must carry a %s example pair", face, marker)
 			}
 		}
 	}
@@ -133,11 +133,11 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 	// The envelope face is the existing four-column precedent, calibrated,
 	// not a new shape.
 	if !strings.Contains(flat, "| 问题 | 推荐选项 | 理由 | 重点关注程度 |") {
-		t.Errorf("workbench#32: the envelope face must carry the four-column `| 问题 | 推荐选项 | 理由 | 重点关注程度 |` table")
+		t.Errorf("the envelope face must carry the four-column `| 问题 | 推荐选项 | 理由 | 重点关注程度 |` table")
 	}
 	// The panel face is current step / next step / the one human action.
 	if !strings.Contains(flat, "current step / next step / the one thing only a human can do") {
-		t.Errorf("workbench#32: the panel face must state the current step / next step / one human action shape")
+		t.Errorf("the panel face must state the current step / next step / one human action shape")
 	}
 
 	// Common structural rules the work item named.
@@ -151,12 +151,12 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 		"Ban binary contrast",
 	} {
 		if !strings.Contains(flat, want) {
-			t.Errorf("workbench#32: the skill must carry the common-rule marker %q", want)
+			t.Errorf("the skill must carry the common-rule marker %q", want)
 		}
 	}
 
-	// Owner-ruled content the work item ordered absorbed (workbench#32
-	// review B5): the dual-track ban, the table-retention clause, and the
+	// Owner-ruled content the work item ordered absorbed (
+	// code review): the dual-track ban, the table-retention clause, and the
 	// binary-contrast Bad/Good pair across 中/EN word orders.
 	ownerRuled := []string{
 		// ruling 2: plain words the first time; the 技术版 + 人话版 double
@@ -181,14 +181,14 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 	}
 	for _, want := range ownerRuled {
 		if !strings.Contains(flat, want) {
-			t.Errorf("workbench#32: the skill must carry the owner-ruled marker %q", want)
+			t.Errorf("the skill must carry the owner-ruled marker %q", want)
 		}
 	}
 
 	// Pre-send first/last-line check.
 	check := w32Section(s, "Pre-send check")
 	if !strings.Contains(check, "first and last lines") {
-		t.Errorf("workbench#32: the pre-send check must be the first/last-line test — a reader seeing only those two lines knows what happened and what to do")
+		t.Errorf("the pre-send check must be the first/last-line test — a reader seeing only those two lines knows what happened and what to do")
 	}
 
 	// Persistence clause: whole session, survives a topic switch, ends only
@@ -196,22 +196,22 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 	persist := w32Section(s, "Persistence")
 	for _, want := range []string{"whole session", "topic switch", "close phrase"} {
 		if !strings.Contains(persist, want) {
-			t.Errorf("workbench#32: the persistence clause must state %q", want)
+			t.Errorf("the persistence clause must state %q", want)
 		}
 	}
 
 	// Attribution for the four inspirations (MIT / open sources; text rewritten).
 	for _, want := range []string{"ayghri/i-have-adhd", "hexiecs/talk-normal", "hardikpandya/stop-slop", "openai/codex"} {
 		if !strings.Contains(flat, want) {
-			t.Errorf("workbench#32: the credits must name the inspiration %q", want)
+			t.Errorf("the credits must name the inspiration %q", want)
 		}
 	}
 
-	// Independent pi loading (workbench#32 review N2): the release
+	// Independent pi loading (code review): the release
 	// package.json must declare the new skill, or pi never loads it.
 	pkg, perr := os.ReadFile(filepath.Join(root, "package.json"))
 	if perr != nil {
-		t.Fatalf("workbench#32: cannot read package.json to prove pi loads the skill: %v", perr)
+		t.Fatalf("cannot read package.json to prove pi loads the skill: %v", perr)
 	}
 	var manifest struct {
 		Pi struct {
@@ -219,7 +219,7 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 		} `json:"pi"`
 	}
 	if err := json.Unmarshal(pkg, &manifest); err != nil {
-		t.Fatalf("workbench#32: package.json is not valid JSON: %v", err)
+		t.Fatalf("package.json is not valid JSON: %v", err)
 	}
 	found := false
 	for _, s := range manifest.Pi.Skills {
@@ -228,6 +228,6 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("workbench#32: package.json pi.skills must declare ./skills/output-format (got %v)", manifest.Pi.Skills)
+		t.Errorf("package.json pi.skills must declare ./skills/output-format (got %v)", manifest.Pi.Skills)
 	}
 }

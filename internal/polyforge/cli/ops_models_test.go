@@ -1,6 +1,6 @@
 package cli
 
-// ops_models_test.go: workbench#14 `pf ops models` and the model-health
+// ops_models_test.go: `pf ops models` and the model-health
 // summary in `pf ops status`, driven through the real CLI over a fake
 // daemon socket.
 

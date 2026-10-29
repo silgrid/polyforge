@@ -4,7 +4,7 @@ package test
 // measured across the upgrade SQL itself, not against the step-3 baseline.
 // A live write to a declared table between the online snapshot and the
 // switch window is not migration work, so it must not turn a correct
-// declaration into a mismatch (workbench#85).
+// declaration into a mismatch.
 //
 // The write is injected by the fake docker's compose-stop hook,
 // FAKE_BEFORE_STOP_SQL: it lands after the step-3 snapshot and before the

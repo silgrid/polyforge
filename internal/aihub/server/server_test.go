@@ -49,6 +49,14 @@ func newSrvEnv(t *testing.T) *srvEnv {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	return newSrvEnvWithDB(t, dataDir, db)
+}
+
+// newSrvEnvWithDB assembles the server env over an existing database
+// handle (querycount_test.go opens the core schema through the counting
+// driver and hands it in; the caller owns the handle's cleanup).
+func newSrvEnvWithDB(t *testing.T, dataDir string, db *core.DB) *srvEnv {
+	t.Helper()
 	admin := core.NewAdminManager(db)
 	u, err := admin.CreateUser("root", "root@example.com", "admin", "human")
 	if err != nil {
@@ -189,6 +197,10 @@ func TestErrorEnvelopeShape(t *testing.T) {
 
 func TestClaimFlowOverHTTP(t *testing.T) {
 	e := newSrvEnv(t)
+	// The claim flow asserts a recorded session machine, so the "m1"
+	// fixture needs a machines row owned by the admin caller
+	// (only a caller-owned machine id is recorded).
+	seedSessionMachine(t, e, "m1", e.adminID)
 	// Create an EXECUTION ticket (bundle_name set): only execution tickets
 	// are claimable (#17).
 	var wi struct {
@@ -560,6 +572,34 @@ func TestMemoryWorkItemSlug(t *testing.T) {
 			t.Fatalf("existence leak: hidden %q detail %q vs unknown %q detail %q", existing, got.Detail, unknown, want.Detail)
 		}
 	}
+
+	// No existence leak through the key scope either ( A1):
+	// a key scoped to beta, held by a writer of BOTH projects, names
+	// alpha's existing work item in a beta memory and gets exactly the
+	// unknown-work-item answer — the scope, not the membership, conceals
+	// it (never the scope's AUTH-403, which only an existing one got).
+	both, err := e.admin.CreateUser("both3", "both3@example.com", "writer", "human")
+	if err != nil {
+		t.Fatalf("two-project writer: %v", err)
+	}
+	for _, p := range []string{"alpha", "beta"} {
+		if err := e.admin.AddMember(e.adminProjectID(t, p), both.ID, "writer"); err != nil {
+			t.Fatalf("member of %s: %v", p, err)
+		}
+	}
+	skey, err := e.admin.CreateAPIKey(both.ID, "s3", e.adminProjectID(t, "beta"))
+	if err != nil {
+		t.Fatalf("beta-scoped key: %v", err)
+	}
+	for _, pair := range [][2]string{{wi.Slug, "alpha#999"}, {wi.ID, "wi_doesnotexist"}} {
+		existing, unknown := pair[0], pair[1]
+		code, got, raw := remember(skey.Plain, "beta", existing)
+		ucode, want, uraw := remember(skey.Plain, "beta", unknown)
+		if code != ucode || code != 404 || got.Code != api.ErrCoreNotFound || want.Code != api.ErrCoreNotFound ||
+			strings.Replace(string(raw), existing, "X", 1) != strings.Replace(string(uraw), unknown, "X", 1) {
+			t.Fatalf("scoped key: existing %q → %d %s; unknown %q → %d %s", existing, code, raw, unknown, ucode, uraw)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -624,18 +664,18 @@ func TestAdminFaceEndpointsOverHTTP(t *testing.T) {
 		t.Fatalf("issued key not listed: %s", raw)
 	}
 
-	// projects patch: visibility first.
+	// projects patch: the description first.
 	var p struct {
-		ID      string `json:"id"`
-		Visible bool   `json:"visible"`
-		Members []struct {
+		ID          string `json:"id"`
+		Description string `json:"description"`
+		Members     []struct {
 			UserID string `json:"user_id"`
 			Role   string `json:"role"`
 		} `json:"members"`
 	}
 	if code, raw := e.do(t, "PATCH", "/api/v1/projects/alpha", e.key,
-		map[string]any{"visible": false}, &p); code != 200 || p.Visible {
-		t.Fatalf("projects patch visible: %d %s", code, raw)
+		map[string]any{"description": "first"}, &p); code != 200 || p.Description != "first" {
+		t.Fatalf("projects patch description: %d %s", code, raw)
 	}
 	// Membership: upsert u2 as maintainer; removal runs after upsert.
 	u2, _ := e.admin.CreateUser("maint", "maint@example.com", "writer", "human")
@@ -646,7 +686,7 @@ func TestAdminFaceEndpointsOverHTTP(t *testing.T) {
 	}
 	// The maintainer (non-admin) may patch; a writer member may not.
 	if code, raw := e.do(t, "PATCH", "/api/v1/projects/alpha", mk.Plain,
-		map[string]any{"visible": true}, &p); code != 200 || !p.Visible {
+		map[string]any{"description": "by the maintainer"}, &p); code != 200 || p.Description != "by the maintainer" {
 		t.Fatalf("maintainer patch: %d %s", code, raw)
 	}
 	// projects get: membership OR admin (the doctor projectsCheck and the
@@ -756,13 +796,18 @@ func TestApiKeyScopeField(t *testing.T) {
 	if err := json.Unmarshal(raw, &issued); err != nil || issued.Plain == "" {
 		t.Fatalf("no plaintext in issue response: %s", raw)
 	}
-	// The key is genuinely scoped: its own project reads fine, the other
-	// project is an AUTH-403 (scope check fires before membership).
+	// The key is genuinely scoped: its own project reads fine; on another
+	// project's work item the key sees the same missing-work-item answer as
+	// an unknown reference (the scope mismatch conceals the
+	// object, it does not announce it).
 	if code, _ := e.do(t, "GET", "/api/v1/work-items/"+alphaID, issued.Plain, nil, nil); code != 200 {
 		t.Fatalf("scoped key denied on its own project: %d", code)
 	}
-	if code, raw := e.do(t, "GET", "/api/v1/work-items/"+betaID, issued.Plain, nil, nil); code != 403 {
+	code, raw := e.do(t, "GET", "/api/v1/work-items/"+betaID, issued.Plain, nil, nil)
+	if code != 404 {
 		t.Fatalf("scoped key reached another project: %d %s", code, raw)
+	} else if c, _ := errEnvelope(t, raw); c != api.ErrCoreNotFound {
+		t.Fatalf("scoped key on another project's WI: %s", raw)
 	}
 }
 
@@ -883,9 +928,18 @@ func TestMemorySearchTypeWildcard(t *testing.T) {
 }
 
 // doSigned sends one machine-face-signed request over the exact bytes it
-// writes (METHOD\nPATH\nsha256(body)\nTS\nmachine_id). priv == nil sends
-// the request with no X-PF-* header at all — the heartbeat transition shape.
+// writes (METHOD\nPATH\nsha256(body)\nTS\nmachine_id) to the environment's
+// own listener. priv == nil sends the request with no X-PF-* header at
+// all — the heartbeat transition shape.
 func (e *srvEnv) doSigned(t *testing.T, method, path, key, machineID string, priv ed25519.PrivateKey, ts int64, body any) (int, []byte) {
+	t.Helper()
+	return e.doSignedTo(t, e.ts.URL, method, path, key, machineID, priv, ts, body)
+}
+
+// doSignedTo is doSigned against an explicit base URL (httpserver_test
+// drives signed requests at a second listener bound by the server
+// constructor's pressure bounds).
+func (e *srvEnv) doSignedTo(t *testing.T, baseURL, method, path, key, machineID string, priv ed25519.PrivateKey, ts int64, body any) (int, []byte) {
 	t.Helper()
 	var raw []byte
 	if body != nil {
@@ -895,7 +949,7 @@ func (e *srvEnv) doSigned(t *testing.T, method, path, key, machineID string, pri
 		}
 		raw = b
 	}
-	req, err := http.NewRequest(method, e.ts.URL+path, bytes.NewReader(raw))
+	req, err := http.NewRequest(method, baseURL+path, bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -909,9 +963,14 @@ func (e *srvEnv) doSigned(t *testing.T, method, path, key, machineID string, pri
 		if ts == 0 {
 			ts = time.Now().Unix()
 		}
+		// The signature covers r.URL.Path (machineface.go), never the query.
+		signPath := path
+		if i := strings.IndexByte(signPath, '?'); i >= 0 {
+			signPath = signPath[:i]
+		}
 		req.Header.Set(machinesign.HeaderMachineID, machineID)
 		req.Header.Set(machinesign.HeaderTimestamp, strconv.FormatInt(ts, 10))
-		req.Header.Set(machinesign.HeaderSignature, machinesign.Sign(priv, method, path, raw, ts, machineID))
+		req.Header.Set(machinesign.HeaderSignature, machinesign.Sign(priv, method, signPath, raw, ts, machineID))
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -934,4 +993,66 @@ func machineKey(t *testing.T) (string, ed25519.PrivateKey) {
 		t.Fatal(err)
 	}
 	return base64.StdEncoding.EncodeToString(pub), priv
+}
+
+// TestPatchRecordsRequestingUserAsActor pins a PATCH records
+// the authenticated requesting user as the wi_content_updated event's
+// actor — read back through GET ?include=events — with the payload
+// unchanged (empty; no backfill of historical events).
+func TestPatchRecordsRequestingUserAsActor(t *testing.T) {
+	e := newSrvEnv(t)
+	var created map[string]any
+	if code, raw := e.do(t, "POST", "/api/v1/work-items", e.key,
+		map[string]string{"project": "alpha", "goal": "patch actor"}, &created); code != http.StatusCreated {
+		t.Fatalf("create WI: %d %s", code, raw)
+	}
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("create WI answer: %v", created)
+	}
+	patcherID, patcherKey := memberUser(t, e, "w82-patcher", "writer")
+	if code, raw := e.do(t, "PATCH", "/api/v1/work-items/"+id, patcherKey,
+		map[string]any{"priority": api.PriorityHigh}, nil); code != http.StatusOK {
+		t.Fatalf("PATCH: %d %s", code, raw)
+	}
+	_, events := wiEvents(t, e, id)
+	updated := eventsOfType(events, "wi_content_updated")
+	if len(updated) != 1 {
+		t.Fatalf("wi_content_updated events: %v, want exactly one", events)
+	}
+	if got := updated[0]["actor"]; got != patcherID {
+		t.Fatalf("wi_content_updated actor = %#v, want the requesting user %q", got, patcherID)
+	}
+	if payload, _ := updated[0]["payload"].(map[string]any); len(payload) != 0 {
+		t.Fatalf("wi_content_updated payload changed: %v", updated[0]["payload"])
+	}
+}
+
+// TestAdminListTotalIsTheRowCount (C9e): an admin list answers one capped
+// page, and its total is the true row count — never the page length — so
+// a capped answer is distinguishable from a complete one.
+func TestAdminListTotalIsTheRowCount(t *testing.T) {
+	e := newSrvEnv(t)
+	var before struct {
+		Items []json.RawMessage `json:"items"`
+		Total int               `json:"total"`
+	}
+	if code, raw := e.do(t, "GET", "/api/v1/projects", e.key, nil, &before); code != 200 {
+		t.Fatalf("list projects: %d %s", code, raw)
+	}
+	for i := 0; len(before.Items)+i < 201; i++ {
+		if _, err := e.admin.CreateProject(core.CreateProjectRequest{Name: fmt.Sprintf("cap-%03d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var list struct {
+		Items []json.RawMessage `json:"items"`
+		Total int               `json:"total"`
+	}
+	if code, raw := e.do(t, "GET", "/api/v1/projects", e.key, nil, &list); code != 200 {
+		t.Fatalf("list projects: %d %s", code, raw)
+	}
+	if len(list.Items) != 200 || list.Total != 201 {
+		t.Fatalf("projects list: %d items total %d, want the 200 page and total 201", len(list.Items), list.Total)
+	}
 }

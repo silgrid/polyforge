@@ -1,6 +1,6 @@
 package core
 
-// upgrade_v2207_test.go: the workbench#56 migration's own proof on a
+// upgrade_v2207_test.go: the migration's own proof on a
 // POPULATED v2.20.6-shaped database (grill row 7). The fixture DDL is the
 // shipped v2.20.6 messaging shape copied verbatim; the real
 // deploy/sql/v2.20.7/*.sql files run against it. Assertions: the split

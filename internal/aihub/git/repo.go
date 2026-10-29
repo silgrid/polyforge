@@ -32,6 +32,10 @@ type Manager struct {
 	// MaxTaskBlobBytes is the blob limit for the refs/pf-task/* carrier
 	// refs (default capsule.MaxTaskBlobBytes).
 	MaxTaskBlobBytes int64
+	// MaxGitRequestBodyBytes caps every git smart-HTTP request body
+	// handed to git http-backend (default capsule.MaxGitRequestBodyBytes;
+	// a test-injectable field, never a flag/config/env).
+	MaxGitRequestBodyBytes int64
 
 	checker CredentialChecker
 
@@ -46,12 +50,13 @@ func NewManager(dataDir string, checker CredentialChecker) (*Manager, error) {
 		return nil, fmt.Errorf("git: create git root: %w", err)
 	}
 	return &Manager{
-		DataDir:          dataDir,
-		Root:             root,
-		MaxBlobBytes:     capsule.MaxBlobBytes,
-		MaxTaskBlobBytes: capsule.MaxTaskBlobBytes,
-		checker:          checker,
-		known:            map[string]bool{},
+		DataDir:                dataDir,
+		Root:                   root,
+		MaxBlobBytes:           capsule.MaxBlobBytes,
+		MaxTaskBlobBytes:       capsule.MaxTaskBlobBytes,
+		MaxGitRequestBodyBytes: capsule.MaxGitRequestBodyBytes,
+		checker:                checker,
+		known:                  map[string]bool{},
 	}, nil
 }
 
@@ -107,7 +112,7 @@ func (m *Manager) EnsureBare(wiID string) error {
 	// The carrier lane pushes each task repo's WI-owned commits with the
 	// upstream history cut off (a shallow push): without this the receive
 	// side refuses every such push ("shallow update not allowed"), so the
-	// hub setting is part of the shallow-carrier contract (workbench#39).
+	// hub setting is part of the shallow-carrier contract.
 	if _, err := git(dir, nil, "config", "receive.shallowUpdate", "true"); err != nil {
 		return err
 	}

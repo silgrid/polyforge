@@ -1,4 +1,4 @@
--- deploy/sql/v2.20.7/upgrade.sql — workbench#56 delivery/read cursor split.
+-- deploy/sql/v2.20.7/upgrade.sql — delivery/read cursor split.
 --
 -- Applied by .polyforge/deploy.sh INSIDE the switch window as ONE SQLite
 -- transaction (see docs/upgrade.md). conversation_members loses its single

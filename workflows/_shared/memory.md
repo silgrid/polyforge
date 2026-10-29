@@ -15,4 +15,4 @@ pf recall --project {{project}} --any '<keyword set 1>'
 pf recall --project {{project}} --any '<keyword set 2, e.g. 中文关键词>'
 ```
 
-Read the body of every relevant hit with `pf memory show <id>` before relying on it. Steps do not write memories, except the last step's one wrap summary below.
+Read the body of every relevant hit with `pf memory show <id>` before relying on it. Steps do not write memories: only the workflow's last step writes the work item's one wrap summary.

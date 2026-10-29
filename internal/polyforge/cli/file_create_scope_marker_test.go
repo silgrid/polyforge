@@ -1,7 +1,7 @@
 package cli
 
 // file_create_scope_marker_test.go: the file-create scoped-tier placement
-// guard (workbench#50). When the final create request's goal mentions the
+// guard. When the final create request's goal mentions the
 // scoped marker but the content carries no exact marker line, the verb
 // warns on stderr. Warn only: the request, the created work item, the
 // exit code and stdout (including --json) stay unchanged. The warning
@@ -49,7 +49,7 @@ func TestFileCreateScopeMarkerPlacementWarning(t *testing.T) {
 		content    string
 		hasContent bool
 	}{
-		{"workbench#44 shape: goal marker, content absent", "ship the guard (verification: scoped)", "", false},
+		{" shape: goal marker, content absent", "ship the guard (verification: scoped)", "", false},
 		{"goal marker, empty content", "ship the guard (verification: scoped)", "", true},
 		{"goal marker, content near-miss", "ship the guard (verification: scoped)", "- verification: scoped", true},
 		{"goal marker, wrong-case content", "ship the guard (verification: scoped)", "Verification: Scoped", true},

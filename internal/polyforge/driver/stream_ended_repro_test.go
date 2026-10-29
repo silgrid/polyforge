@@ -76,15 +76,15 @@ func TestStreamEndedBeforeCompletionLiveTurnRetriesSameModel(t *testing.T) {
 	if body["disposition"] != "retry_same_model" {
 		t.Fatalf("REPORTED FAILURE (polyforge#202): disposition %v, want retry_same_model", body["disposition"])
 	}
-	if len(waits) != 1 || waits[0] != RateLimitBackoffBase {
-		t.Fatalf("REPORTED FAILURE (polyforge#202): backoff waits %v, want one %v (the same-model retry's D7 backoff)", waits, RateLimitBackoffBase)
+	if base := supervise.DefaultRetryBackoffBase; len(waits) != 1 || waits[0] != base {
+		t.Fatalf("REPORTED FAILURE (polyforge#202): backoff waits %v, want one %v (the same-model retry's first retry-pacing backoff)", waits, base)
 	}
 	st := env.exec(t).Steps["s"]
 	if st.Supervision != nil && st.Supervision.FailureCount != 0 {
 		t.Fatalf("REPORTED FAILURE (polyforge#202): the same-model retry moved the blocking counter: %+v", st.Supervision)
 	}
-	if got := st.BudgetConsumed.WallMs; got < RateLimitBackoffBase.Milliseconds() {
-		t.Fatalf("step T %dms, want the %v backoff booked in", got, RateLimitBackoffBase)
+	if got := st.BudgetConsumed.WallMs; got < supervise.DefaultRetryBackoffBase.Milliseconds() {
+		t.Fatalf("step T %dms, want the %v backoff booked in", got, supervise.DefaultRetryBackoffBase)
 	}
 	_ = time.Second // keep time imported for the Waits/RateLimitBackoffBase comparisons' readability
 }

@@ -62,6 +62,16 @@ running — tell the human, who may check the grill's memo. Progress lines, wake
 in only when no slug is known. Quote a slug when you pass it back
 (`pf watch 'polyforge#140' --once`) — `#` is a zsh glob character.
 
+When a wake-up or snapshot line presents a work item as completed, read the
+work item's delivered PR body (its follow-up section) or its capsule's
+`artifacts/delivery.md` before presenting the completion. If either carries a
+follow-up list, present every unclaimed item to the human and mark it
+unclaimed — present only, and leave deciding, claiming, filing, routing or
+dismissing any follow-up to the human. The fixed line carries no count and no
+list, so this lookup is the session's own step, not a fact the daemon already
+checked. If neither source is reachable, say so and ask the human where to
+read it; never assume the list is empty.
+
 ## Taking the wake-target role over: `pf watch adopt <id>`
 
 When a work item's submitting (origin) chat has unsubscribed, or the work item

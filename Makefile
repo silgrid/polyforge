@@ -5,9 +5,25 @@
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || echo dev)
 GO_LDFLAGS := -X github.com/silgrid/polyforge/internal/version.Version=$(VERSION)
 
-.PHONY: check build crossbuild vet fmt test xrefs release
+.PHONY: check build webui-build crossbuild vet fmt test xrefs release
 
-build:
+# The console SPA build: every binary-producing target
+# builds the locked frontend FIRST, so the go:embed dist tree exists
+# before any go build. Node is checked with an explicit message (the
+# exact .nvmrc version — the repo-root pin nvm itself reads), and the
+# build is `npm ci` + `npm run build` from the one committed lockfile —
+# no node_modules shortcut, no version drift. A host without the
+# pinned node fails loudly, never skips.
+WEBUI_NODE := $(shell cat .nvmrc 2>/dev/null)
+
+webui-build:
+	@command -v node >/dev/null 2>&1 || { echo "webui-build: node $(WEBUI_NODE) is required (pinned by .nvmrc); install node $(WEBUI_NODE) first"; exit 1; }
+	@if [ "$$(node --version)" != "v$(WEBUI_NODE)" ]; then \
+		echo "webui-build: node $$(node --version) does not match .nvmrc ($(WEBUI_NODE)); install node $(WEBUI_NODE) first"; exit 1; \
+	fi
+	cd webui && npm ci && npm run build
+
+build: webui-build
 	go build -trimpath -ldflags "$(GO_LDFLAGS)" ./...
 
 vet:
@@ -16,11 +32,11 @@ vet:
 # crossbuild is the darwin cross-build gate (polyforge#218): the tree must
 # build for both darwin architectures, so pf and aihub binaries can exist on
 # macOS. This is part of `check`, ahead of the test gate.
-crossbuild:
+crossbuild: webui-build
 	GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./...
 	GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./...
 
-test:
+test: webui-build
 	# go test suppresses skip messages unless -v (or -json) is on, so a plain
 	# `make test` does NOT show which tests skipped; run `go test -v ./...` when
 	# that evidence matters. Opt-in tests (skipped unless their env var is set):
@@ -61,7 +77,7 @@ check: build vet fmt xrefs crossbuild test
 # names and the darwin ones under their asset names).
 # Pass VERSION=<tag> (the release procedure builds before tagging) or run
 # it on the tagged commit itself. Refuses to stamp the un-injected "dev".
-release:
+release: webui-build
 	@if [ "$(VERSION)" = dev ]; then \
 		echo "make release: no git tag on HEAD and no VERSION=<tag> given; refusing to stamp 'dev'"; \
 		exit 1; \

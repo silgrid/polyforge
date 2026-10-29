@@ -1,6 +1,6 @@
 package cli
 
-// verbs_msg.go: the user-to-user messaging verbs (workbench#11).
+// verbs_msg.go: the user-to-user messaging verbs.
 //
 //	pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]
 //	pf msg list [--conversation <id>] [--after <seq>] [--before <seq>] [--limit N]
@@ -154,7 +154,10 @@ var cmdMsg = &Command{
 			})
 			return nil
 		default:
-			return fmt.Errorf("msg: unknown action %q", sub)
+			// The refusal never echoes the typed action: an unknown word must
+			// not read back as if pf offered it (w93 pins that no
+			// name-resolution surface is advertised).
+			return fmt.Errorf("msg: unknown action (expected send|list|ack|show|analyze)")
 		}
 	},
 }

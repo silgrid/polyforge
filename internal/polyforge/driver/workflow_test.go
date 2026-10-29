@@ -31,9 +31,11 @@ steps:
   - id: grill
     context_policy: fresh
     handoff: true
+    recall: true
   - id: fix
     context_policy: inherit
     handoff: true
+    recall: true
   - id: verification
     gate: true
     context_policy: fresh
@@ -74,6 +76,10 @@ func TestParseExtendedFrontmatter(t *testing.T) {
 	ver := wf.step("verification")
 	if !ver.Gate || ver.ContextPolicy != ContextFresh {
 		t.Fatalf("verification gate/policy: %v/%q", ver.Gate, ver.ContextPolicy)
+	}
+	// recall is declared per step entry, absent = false.
+	if !grill.Recall || !fix.Recall || ver.Recall {
+		t.Fatalf("recall grill/fix/verification: %v/%v/%v, want true/true/false", grill.Recall, fix.Recall, ver.Recall)
 	}
 	if ver.OnFail == nil || ver.OnFail.Target != "fix" {
 		t.Fatalf("verification on_fail: %+v", ver.OnFail)

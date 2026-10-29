@@ -19,6 +19,10 @@ package runtime
 // single credential authority layer, polyforge#159 closeout #171), so
 // the daemon hard-sets CLAUDE_CONFIG_DIR there, and switches off
 // nonessential traffic (CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1).
+// It also sets the Bash tool's per-call timeouts (BASH_DEFAULT_TIMEOUT_MS,
+// BASH_MAX_TIMEOUT_MS) from the supervision tool window, each only when
+// that settings.json env block does not carry the key itself
+// (claudeBashTimeoutEnv).
 // The daemon never injects a credential: none ride the environment or
 // argv — the harness's own settings.json provides them.
 //
@@ -51,9 +55,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 // ClaudeStepTools is the step's whole tool surface: pre-approved, and
@@ -108,6 +115,63 @@ func ReadClaudeSettingsEnv(ccDir string) (map[string]string, error) {
 // credential: a non-empty ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY.
 func ClaudeTokenMode(env map[string]string) bool {
 	return env["ANTHROPIC_AUTH_TOKEN"] != "" || env["ANTHROPIC_API_KEY"] != ""
+}
+
+// The Bash tool timeout variables of Claude Code: the per-call timeout a
+// command gets when the model names none, and the largest one it may
+// name. Unset, claude's own defaults are 2m and 10m, so a step's
+// `make test` was killed at 2m and the agent fell back to polling a
+// backgrounded run.
+const (
+	envBashDefaultTimeout = "BASH_DEFAULT_TIMEOUT_MS"
+	envBashMaxTimeout     = "BASH_MAX_TIMEOUT_MS"
+)
+
+const (
+	// claudeBashDefaultTimeout is a claude step's Bash default timeout
+	// (clamped to the max).
+	claudeBashDefaultTimeout = 10 * time.Minute
+	// claudeBashToolMargin keeps the Bash max timeout this far under the
+	// supervision tool window, so a command claude lets run to its max
+	// ends before the supervisor judges the tool hung.
+	claudeBashToolMargin = time.Minute
+)
+
+// claudeBashTimeouts answers a claude step's Bash default and max timeout
+// for the supervision tool window Y (<= 0 resolves to the supervision
+// default, 30m, through the same supervise.Defaults.Fill the daemon's
+// supervisor uses): max = Y - 1m, default = 10m clamped to max (so a
+// window of 11m or less gives default = max). A window of 2m or less
+// (test/dev-only) keeps half of itself as the margin instead of 1m, and
+// the max never drops below 1ms.
+func claudeBashTimeouts(toolWindow time.Duration) (defTimeout, maxTimeout time.Duration) {
+	window := supervise.Defaults{Tool: toolWindow}.Fill().Tool
+	maxTimeout = max(window-min(claudeBashToolMargin, window/2), time.Millisecond)
+	return min(claudeBashDefaultTimeout, maxTimeout), maxTimeout
+}
+
+// claudeBashTimeoutEnv answers the Bash timeout variables the adapter
+// adds to a claude step's environment: each of the two only when the
+// claude-config settings.json env block does not carry that key (claude
+// applies that block itself, so the operator's value wins and the
+// daemon never writes the file). Claude raises its max to the default
+// when the default is larger, so a default injected next to an
+// operator's own max is clamped to that max (when it is a positive
+// integer) — the operator's max stays the max.
+func claudeBashTimeoutEnv(settings map[string]string, toolWindow time.Duration) []string {
+	defTimeout, maxTimeout := claudeBashTimeouts(toolWindow)
+	var out []string
+	if v, ok := settings[envBashMaxTimeout]; ok {
+		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && n > 0 {
+			defTimeout = min(defTimeout, time.Duration(n)*time.Millisecond)
+		}
+	} else {
+		out = append(out, envBashMaxTimeout+"="+strconv.FormatInt(maxTimeout.Milliseconds(), 10))
+	}
+	if _, ok := settings[envBashDefaultTimeout]; !ok {
+		out = append(out, envBashDefaultTimeout+"="+strconv.FormatInt(defTimeout.Milliseconds(), 10))
+	}
+	return out
 }
 
 // claudeSpawner derives Claude Code step processes. Like piSpawner it
@@ -179,6 +243,9 @@ func (s *claudeSpawner) buildCmd(p SpawnParams) (*exec.Cmd, error) {
 	// the "0" value is OFF for everything CLAUDE_CONFIG_DIR-side, so the
 	// existence is the semantic (see the WI ruling 5)
 	additions = append(additions, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
+	// the Bash tool's timeouts follow the supervision tool window, unless
+	// the settings.json env block carries the key (claudeBashTimeoutEnv)
+	additions = append(additions, claudeBashTimeoutEnv(settings, s.cfg.ToolWindow)...)
 	// Zero credential injection (polyforge#171, closing out #159's three-layer blind spot):
 	// the adapter NEVER injects ANTHROPIC_AUTH_TOKEN or any other
 	// credential — the settings.json env block under claude-config is
@@ -210,12 +277,16 @@ func (s *claudeSpawner) buildCmd(p SpawnParams) (*exec.Cmd, error) {
 	// dropped as well, so every adapter name appears exactly once with the
 	// adapter's value (polyforge#238: an inherited DISABLE_AUTOUPDATER,
 	// e.g. from an outer claude step, matched no prefix rule above and
-	// was duplicated).
-	own := make(map[string]bool, len(additions))
+	// was duplicated). The two Bash timeout names are the adapter's even
+	// when settings.json carries them and the adapter adds neither: an
+	// inherited value (an outer claude step's) never reaches the step, so
+	// the step's timeouts come from settings.json or the adapter only.
+	own := make(map[string]bool, len(additions)+2)
 	for _, kv := range additions {
 		name, _, _ := strings.Cut(kv, "=")
 		own[name] = true
 	}
+	own[envBashDefaultTimeout], own[envBashMaxTimeout] = true, true
 	inherited := newEnvSanitizer(s.cfg.EnvSecrets...).childEnv()
 	env := make([]string, 0, len(inherited)+len(additions))
 	for _, kv := range inherited {

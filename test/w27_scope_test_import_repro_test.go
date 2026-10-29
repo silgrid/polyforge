@@ -1,10 +1,10 @@
 package test
 
-// w27_scope_test_import_repro_test.go: the workbench#27 reproduction/regression
+// w27_scope_test_import_repro_test.go: the reproduction/regression
 // test for the scoped selection's test-import blind spot in
 // the release-shipped `tools/verify-scope` with the repository conf.
 //
-// The reported failure (workbench#20 review, blocking B1): `compute_scoped`
+// The reported failure ( review, blocking B1): `compute_scoped`
 // selects package P only when a changed import path appears in P's non-test
 // `go list {{.Deps}}` closure. A package whose `_test.go` files (internal or
 // external test package) import the changed package is not selected, even
@@ -26,7 +26,7 @@ package test
 // ./internal/polyforge/runtime but not ./internal/polyforge/driver.
 // Fixed:   it also selects ./internal/polyforge/driver.
 //
-// Run (targeted, from repos/<name>/): GOWORK=off go test ./test/ -run '^TestWB27' -count=1 -v
+// Run (targeted, from repos/<name>/): GOWORK=off go test ./test/ -run '^TestW27' -count=1 -v
 
 import (
 	"os"
@@ -36,14 +36,14 @@ import (
 	"testing"
 )
 
-// wb27Git runs one git command in dir with a fixed identity.
-func wb27Git(t *testing.T, dir string, args ...string) string {
+// w27Git runs one git command in dir with a fixed identity.
+func w27Git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	c := exec.Command("git", args...)
 	c.Dir = dir
 	c.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=wb27", "GIT_AUTHOR_EMAIL=wb27@e",
-		"GIT_COMMITTER_NAME=wb27", "GIT_COMMITTER_EMAIL=wb27@e")
+		"GIT_AUTHOR_NAME=w27", "GIT_AUTHOR_EMAIL=w27@e",
+		"GIT_COMMITTER_NAME=w27", "GIT_COMMITTER_EMAIL=w27@e")
 	out, err := c.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
@@ -51,8 +51,8 @@ func wb27Git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// wb27Write writes one file (creating parent dirs).
-func wb27Write(t *testing.T, dir, rel, body string) {
+// w27Write writes one file (creating parent dirs).
+func w27Write(t *testing.T, dir, rel, body string) {
 	t.Helper()
 	p := filepath.Join(dir, rel)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -63,10 +63,10 @@ func wb27Write(t *testing.T, dir, rel, body string) {
 	}
 }
 
-// wb27Fixture builds a clone over a local bare origin on main, commits a
+// w27Fixture builds a clone over a local bare origin on main, commits a
 // minimal Go module plus a COPY of the real entry point, and answers the clone
 // dir and its base SHA.
-func wb27Fixture(t *testing.T) (dir, base string) {
+func w27Fixture(t *testing.T) (dir, base string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -92,32 +92,32 @@ func wb27Fixture(t *testing.T) (dir, base string) {
 	}
 	root := t.TempDir()
 	origin, dir := filepath.Join(root, "origin.git"), filepath.Join(root, "work")
-	wb27Git(t, root, "init", "-q", "--bare", "-b", "main", origin)
-	wb27Git(t, root, "clone", "-q", origin, dir)
-	wb27Git(t, dir, "checkout", "-q", "-b", "main")
+	w27Git(t, root, "init", "-q", "--bare", "-b", "main", origin)
+	w27Git(t, root, "clone", "-q", origin, dir)
+	w27Git(t, dir, "checkout", "-q", "-b", "main")
 	files := map[string]string{
-		"go.mod":                                   "module fixture.test/wb27\n\ngo 1.21\n",
+		"go.mod":                                   "module fixture.test/w27\n\ngo 1.21\n",
 		"internal/polyforge/runtime/runtime.go":    "package runtime\n\nfunc Value() int { return 1 }\n",
-		"internal/common/bar/bar.go":               "package bar\n\nimport \"fixture.test/wb27/internal/polyforge/runtime\"\n\nfunc Bar() int { return runtime.Value() }\n",
+		"internal/common/bar/bar.go":               "package bar\n\nimport \"fixture.test/w27/internal/polyforge/runtime\"\n\nfunc Bar() int { return runtime.Value() }\n",
 		"internal/polyforge/driver/driver.go":      "package driver\n\nfunc Name() string { return \"driver\" }\n",
-		"internal/polyforge/driver/driver_test.go": "package driver\n\nimport (\n\t\"testing\"\n\n\t_ \"fixture.test/wb27/internal/polyforge/runtime\"\n)\n\nfunc TestDriverImportsRuntime(t *testing.T) {}\n",
+		"internal/polyforge/driver/driver_test.go": "package driver\n\nimport (\n\t\"testing\"\n\n\t_ \"fixture.test/w27/internal/polyforge/runtime\"\n)\n\nfunc TestDriverImportsRuntime(t *testing.T) {}\n",
 	}
 	for rel, body := range files {
-		wb27Write(t, dir, rel, body)
+		w27Write(t, dir, rel, body)
 	}
-	wb27Write(t, dir, "tools/verify-scope", string(raw))
+	w27Write(t, dir, "tools/verify-scope", string(raw))
 	if err := os.Chmod(filepath.Join(dir, "tools", "verify-scope"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	wb27Write(t, dir, ".polyforge/verify-scope.conf", string(confRaw))
-	wb27Git(t, dir, "add", "-A")
-	wb27Git(t, dir, "commit", "-q", "-m", "wb27 base")
-	wb27Git(t, dir, "push", "-q", "origin", "main")
-	return dir, wb27Git(t, dir, "rev-parse", "HEAD")
+	w27Write(t, dir, ".polyforge/verify-scope.conf", string(confRaw))
+	w27Git(t, dir, "add", "-A")
+	w27Git(t, dir, "commit", "-q", "-m", "w27 base")
+	w27Git(t, dir, "push", "-q", "origin", "main")
+	return dir, w27Git(t, dir, "rev-parse", "HEAD")
 }
 
-// wb27Run executes the fixture's entry point with cwd at the fixture root.
-func wb27Run(t *testing.T, dir string, args ...string) (string, string, int) {
+// w27Run executes the fixture's entry point with cwd at the fixture root.
+func w27Run(t *testing.T, dir string, args ...string) (string, string, int) {
 	t.Helper()
 	cmd := exec.Command(filepath.Join(dir, "tools", "verify-scope"), args...)
 	cmd.Dir = dir
@@ -135,15 +135,15 @@ func wb27Run(t *testing.T, dir string, args ...string) (string, string, int) {
 	return out.String(), errb.String(), code
 }
 
-// TestWB27ScopedSelectionIncludesTestOnlyImporters pins the repro: a package
+// TestW27ScopedSelectionIncludesTestOnlyImporters pins the repro: a package
 // whose _test.go imports the changed package is selected for `go test`.
-func TestWB27ScopedSelectionIncludesTestOnlyImporters(t *testing.T) {
-	dir, base := wb27Fixture(t)
-	wb27Write(t, dir, "internal/polyforge/runtime/runtime.go", "package runtime\n\nfunc Value() int { return 2 }\n")
-	wb27Git(t, dir, "add", "-A")
-	wb27Git(t, dir, "commit", "-q", "-m", "change runtime only")
+func TestW27ScopedSelectionIncludesTestOnlyImporters(t *testing.T) {
+	dir, base := w27Fixture(t)
+	w27Write(t, dir, "internal/polyforge/runtime/runtime.go", "package runtime\n\nfunc Value() int { return 2 }\n")
+	w27Git(t, dir, "add", "-A")
+	w27Git(t, dir, "commit", "-q", "-m", "change runtime only")
 
-	out, errb, code := wb27Run(t, dir, "--base", base)
+	out, errb, code := w27Run(t, dir, "--base", base)
 	if code != 0 {
 		t.Fatalf("tools/verify-scope --base %s: exit %d (stdout %q, stderr %q)", base, code, out, errb)
 	}
