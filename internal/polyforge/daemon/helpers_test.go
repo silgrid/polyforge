@@ -143,6 +143,9 @@ type fakeHub struct {
 	probeFails int
 	// gets counts GetWorkItem calls per canonical id.
 	gets map[string]int
+	// updatedAt maps a canonical id to the updated_at GetWorkItem answers
+	// (the remote-snapshot cache keys on it, A3).
+	updatedAt map[string]string
 	// claimLost, when > 0, makes the next N SessionClaim calls COMMIT the
 	// claim and then fail with a transport-class error (the answer lost
 	// in transit, repo review 2026-10-16 B-1).
@@ -360,7 +363,8 @@ func (h *fakeHub) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
 	if st == "" {
 		st = api.StatusRunning
 	}
-	wi := &api.WorkItem{ID: id, Slug: h.slugs[id], Status: st, ProjectName: "proj", Reporter: h.reporters[id]}
+	wi := &api.WorkItem{ID: id, Slug: h.slugs[id], Status: st, ProjectName: "proj", Reporter: h.reporters[id],
+		UpdatedAt: h.updatedAt[id]}
 	if b, ok := h.bundles[id]; ok {
 		wi.BundleName = &b
 	}

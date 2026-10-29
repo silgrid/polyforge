@@ -77,7 +77,7 @@ func TestReadyQueueSegments(t *testing.T) {
 	ec := mk("epic bound child", strPtrTest("q-ec"), strPtrTest(e))
 	v := mk("later unbound", strPtrTest("q-v"), nil) // bound now, unbound below
 
-	if _, err := env.WIs.Patch(w, map[string]json.RawMessage{"waiting_on": json.RawMessage(`"owner"`)}); err != nil {
+	if _, err := env.WIs.Patch(w, map[string]json.RawMessage{"waiting_on": json.RawMessage(`"owner"`)}, env.UserID); err != nil {
 		t.Fatalf("patch waiting_on: %v", err)
 	}
 	if err := env.WIs.AddDependency(bq, d, "blocks"); err != nil {
@@ -123,7 +123,7 @@ func TestReadyQueueSegments(t *testing.T) {
 	}
 
 	// unbind: X→NULL removes the ticket from the executable segment.
-	if _, err := env.WIs.Patch(v, map[string]json.RawMessage{"bundle_name": json.RawMessage("null")}); err != nil {
+	if _, err := env.WIs.Patch(v, map[string]json.RawMessage{"bundle_name": json.RawMessage("null")}, env.UserID); err != nil {
 		t.Fatalf("unbind %s in R2 window: %v", v, err)
 	}
 	q2, err := env.WIs.ReadyQueue("alpha")
@@ -158,7 +158,7 @@ func TestReadyQueueWaitingOnRetainedValueExclusion(t *testing.T) {
 		t.Helper()
 		if _, err := env.WIs.Patch(id, map[string]json.RawMessage{
 			"waiting_on": json.RawMessage(`"` + v + `"`),
-		}); err != nil {
+		}, env.UserID); err != nil {
 			t.Fatalf("patch waiting_on=%q on %s: %v", v, id, err)
 		}
 	}
@@ -175,7 +175,7 @@ func TestReadyQueueWaitingOnRetainedValueExclusion(t *testing.T) {
 		}
 	}
 
-	if _, err := env.WIs.Patch(wo, map[string]json.RawMessage{"waiting_on": json.RawMessage("null")}); err != nil {
+	if _, err := env.WIs.Patch(wo, map[string]json.RawMessage{"waiting_on": json.RawMessage("null")}, env.UserID); err != nil {
 		t.Fatalf("clear waiting_on on %s: %v", wo, err)
 	}
 	q2, err := env.WIs.ReadyQueue("alpha")

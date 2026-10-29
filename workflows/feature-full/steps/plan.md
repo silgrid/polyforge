@@ -22,6 +22,21 @@ output:
         properties:
           path: { type: string, description: "repo-relative path" }
           intent: { type: string, enum: [read, write] }
+          coupled_obligations:
+            type: array
+            minItems: 1
+            description: "Required on every `write` entry (the driver rejects a write without it). The documents, tables, enumeration lists and projection rules that must change together with this file, each as `{path, note}`; or, when nothing is coupled, exactly one `{none: true, reason}` entry saying why."
+            items:
+              type: object
+              properties:
+                path: { type: string, description: "repo-relative path of the coupled document, table or rule" }
+                note: { type: string, description: "what in it must change (the row, entry or rule)" }
+                none: { type: boolean, enum: [true] }
+                reason: { type: string, description: "why no document, table or projection rule is coupled to this write" }
+        if:
+          properties: { intent: { const: write } }
+        then:
+          required: [coupled_obligations]
       description: Deduplicated list of every file the plan declares as read or written, across all steps (write wins over read for the same path). At least one entry is required (minItems 1) - a plan that touches nothing leaves `code` nothing to commit.
 ---
 
@@ -39,16 +54,14 @@ the spec's requirement titles), plus an ordered `## Steps` section. Every step M
 - be phrased as a **compilable/testable unit** — something that leaves the tree in a
   working, buildable state when done, not a mid-refactor fragment;
 - declare each step's **per-unit green bar** as the repo's FAST-CHECK bar - the same
-  bar `code` runs per unit: the project's own build, its lint/format check, and the
-  unit tests of the packages/modules the unit touches, as the repo itself defines them
-  (Makefile, package.json scripts, CI config); for a Go repo, `go build ./... &&
-  go vet ./... && gofmt -l .` plus `go test` of the touched packages. Name the concrete
-  commands. The full suite is NOT a per-unit bar, not even for the final unit - it
-  belongs to `verification`, which also exercises `e2e-author`'s test files (those
-  are not part of any per-unit bar);
+  bar `code` runs per unit: {{fast_checks}} Name the concrete commands. The full
+  suite is NOT a per-unit bar, not even for the final unit - it belongs to
+  `verification`, which also exercises `e2e-author`'s test files (those are not part
+  of any per-unit bar);
 - carry a `Touched files: <repo-relative path> (write|read), ...` line, or
   `Touched files: (no file edits)` for steps that only reason/verify without changing
-  the tree.
+  the tree, and a `Coupled obligations:` line naming, for each write, what must change
+  with it (or `none` and why).
 
 Example:
 
@@ -57,10 +70,13 @@ Example:
 
 1. **implement_pvc_guard** (m) - add the bound-PVC check to the scheduler predicate
    - Touched files: `pkg/scheduler/predicates.go` (write)
+   - Coupled obligations: `docs/scheduling.md` (the predicate table gains the guard's row)
 2. **write_tests** (s) - unit tests for the guard
    - Touched files: `pkg/scheduler/predicates_test.go` (write)
+   - Coupled obligations: none — a test file no document or list enumerates
 3. **wire_config** (xs) - expose the new guard behind a feature flag
    - Touched files: `pkg/scheduler/config.go` (write), `pkg/scheduler/predicates.go` (read)
+   - Coupled obligations: `docs/configuration.md` (the flag table gains the new flag)
 ```
 
 ## What to do
@@ -70,13 +86,18 @@ Example:
    and run tests on the tree so far — do not plan a sequence that only compiles once
    every step has landed. This is what lets `code` commit per unit rather than in one
    undifferentiated blob.
-3. If this is a rewind re-entry (a `verification` or `review` FAIL verdict routed here
-   indirectly through a re-planned `code` pass — see `workflow.md`'s rewind-boundaries
-   section for why `plan` itself is not a direct rewind target in this bundle), still
-   re-derive the plan from the current spec rather than patching the old plan blindly.
-4. Declare every file each step will touch, honestly distinguishing read-only inspection
-   from actual writes — this list becomes the WI's `declared_resources` and, downstream,
-   its file-scope locks; an under-declared write is a real lock gap, not a paperwork gap.
+3. Declare every file each step will touch, honestly distinguishing read-only inspection
+   from actual writes — the list exists for two checks: the coupled obligations (what
+   must change with each written file), and the scope check, where the driver compares
+   the delivered diff with the declared set in both directions and hands the
+   differences to `review` as facts; an under-declared write shows up there as a
+   blocking undeclared change, not a paperwork gap.
+4. For every `write`, name its coupled obligations: the documentation, tables,
+   enumeration lists and projection/exclusion rules that describe or enumerate the file
+   and must change with it — or an explicit `none` with the reason. Read the root
+   `AGENTS.md` (else `CLAUDE.md`) of every repo first: a project lists its own known
+   couplings there. A new file has no incoming references, so a grep for its name cannot
+   find its obligations — ask what documents, lists or rules would have to name it.
 
 ## e2e-author mode
 
@@ -109,4 +130,5 @@ Pick the simplest mechanism; before adding timing, shutdown or retry logic, chec
 
 Emit the final JSON object per the schema above: the artifact path, the ordered step ids
 (at least one), and the deduplicated touched-files list (at least one entry; each path
-once, `write` intent winning over `read` for the same path).
+once, `write` intent winning over `read` for the same path; every `write` carrying its
+`coupled_obligations`).

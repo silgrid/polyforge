@@ -25,7 +25,20 @@ output:
           merge_commit: { type: string, description: The PR's merge commit sha (required when merged is true). }
           not_merged_reason: { type: string, description: Why the PR stays open (required when merged is false). }
           llm_resolved_conflict: { type: boolean, description: true when merging the default branch conflicted and you resolved it. }
-          tests_passed: { type: boolean, description: The full test bar passed on the pushed head (re-run after any merge that changed the tree). }
+          tests_passed: { type: boolean, description: "The full test bar passed on the pushed head - it is the verified commit, or the bar was re-run after any merge that changed the tree, or (only where that re-run is owed and the repo's default branch declares ci_evidence) every declared job's check-run succeeded on it." }
+    ci_evidence:
+      type: array
+      description: "Only for a repo whose .polyforge/verify-scope.conf declares ci_evidence lines, when its check-runs stand in for the test_bar re-run (section 2, step 3): one entry per declared job, read from the GitHub check-run of the pushed head."
+      items:
+        type: object
+        required: [repo, job, check_run_id, url, head_sha, conclusion]
+        properties:
+          repo: { type: string, description: The repo directory name under repos/. }
+          job: { type: string, description: "The declaration verbatim, <workflow-file>/<job-name>." }
+          check_run_id: { type: integer, description: The check-run's id. }
+          url: { type: string, description: The check-run's html_url. }
+          head_sha: { type: string, description: The check-run's head_sha - the full sha you pushed. }
+          conclusion: { type: string, description: The check-run's conclusion - only success is evidence. }
     delivery_note:
       type: string
       description: The delivery note - what was delivered where (branch, PR, merge commit or reason), the review and test conclusions, and anything a human must follow up. Also written to artifacts/delivery.md.
@@ -87,15 +100,23 @@ Prevention is these rules and the machine's local pre-push hook - follow them.
   to merge or not: ask (needs_input) and act on the human's answer. Only a human answers
   it. The driver refuses a completed result that merged outside the rule, or left a PR
   unmerged, without a human answer in this round.
-- Never run `pf` and never read polyforge credentials or configuration; the delivery
-  note goes into your result and `artifacts/delivery.md`.
+- `pf` is limited to the commands this prompt names - `pf result submit` (the delivery
+  contract) and what an injected memory section names - on this workflow's last step,
+  the one `pf remember` wrap summary; never any other
+  `pf` verb (in particular none that changes the work item's state), and never read
+  polyforge credentials or configuration; the delivery note goes into your result and
+  `artifacts/delivery.md`.
 
 ## 1. Inputs
 
 - `execution.json` (under `runtime-state/`): `steps.review.output` - the independent
-  review's verdict and findings - and `steps.verification.output`: its `verified_heads`
-  (written by the driver: each repo's HEAD when verification passed) and its `test_bar`
-  (`{repo, command}` - the test-bar commands it ran in each repo). A workflow without a `review` step has no independent review.
+  review's verdict, findings and (on a scoped work item) its `scope` declaration with the
+  `scope_adequate` answer - and `steps.verification.output`: its `verified_heads`
+  (written by the driver: each repo's HEAD when verification passed), its `test_bar`
+  (`{repo, command}` - the test-bar commands it ran in each repo) and its `scenarios`
+  (the authored acceptance suite's per-scenario outcomes; any `skipped` entry blocks the
+  automatic merge below). The review pass's own coverage is `steps.review.output.reviewed_heads`
+  (driver-written: each repo's HEAD when review passed). A workflow without a `review` step has no independent review.
 - `capsule.json`: `repos` records the sha each declared repo was checked out at by the latest
   materialization (a re-claim re-stamps it to the restored HEAD). It is not a delivery
   baseline: judge nothing to deliver against `origin/<default>` (below), never against it.
@@ -109,7 +130,7 @@ in the delivery note. Work inside `repos/<name>/`.
 
 1. **Fetch.** `git fetch origin`; find the default branch
    (`git remote show origin | sed -n 's/.*HEAD branch: //p'`, falling back to
-   `git symbolic-ref --short refs/remotes/origin/HEAD`) - call it `<default>`.
+   `git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||'`) - call it `<default>`.
    **Already delivered?** (a re-dispatch, a resume or a daemon restart after the merge):
    when `git merge-base --is-ancestor HEAD origin/<default>` holds and
    `gh pr list --head <branch> --state merged --json url,mergeCommit` names a PR, this
@@ -135,13 +156,20 @@ in the delivery note. Work inside `repos/<name>/`.
      (`for c in $(git rev-list origin/<default>..HEAD); do git tag --points-at "$c"; done` prints
      nothing - a release this WI must not have cut), and the capsule holds no
      `artifacts/release-*` tree.
-   - Where the repo's review checklist names owner-kept mechanisms (for polyforge: the
-     V4 command-evidence gate, the human gates, the enforced release/deploy output schemas), grep
-     that they still exist in the tree you deliver.
+   - Where the repo's `AGENTS.md` (else `CLAUDE.md`) or its review checklist names
+     mechanisms the change must not remove, grep that they still exist in the tree you
+     deliver.
    Judgment items (invented mechanisms, duplicated acceptance tests) belong to the
    review; list any you notice in the delivery note as review points for the human.
 3. **Merge the latest default branch.** Record `pre_merge=$(git rev-parse HEAD)`, then
    `git merge --no-edit origin/<default>`.
+   - **Verification proved the merged tree.** Verification already fetched and merged the
+     latest default branch before its bar, so when, after this step's merge,
+     `git rev-parse HEAD` equals `verified_heads.<name>` - the default branch has not
+     advanced since verification and no earlier dispatch's merge moved HEAD - this repo
+     records **no** `test_bar` command at all, reporting `tests_passed: true`. Only
+     commands recorded in THIS dispatch count, so verification's own bar run (an earlier
+     dispatch) never covers a delivery whose merge moves HEAD past the verified head.
    - **Tests are covered only when HEAD equals the commit verification passed on**
      (`verified_heads.<name>`). "Already up to date" is NOT enough: an earlier dispatch of
      this step (before a crash or a daemon restart) may already have merged. Whenever
@@ -167,6 +195,31 @@ in the delivery note. Work inside `repos/<name>/`.
      last `git merge`/`git pull` of this repo and before its `gh pr merge`, each with exit
      0, and record it. Without a recorded re-run - or without a carried `test_bar` entry
      for this repo - a human decides.
+   - **CI evidence instead of the re-run** (only for a repo that declares it): when the
+     `.polyforge/verify-scope.conf` of the fetched default branch (`origin/<default>`, which
+     the HEAD you push contains) declares `ci_evidence=<workflow-file>/<job-name>` lines and
+     your HEAD declares exactly the same ones, a successful GitHub check-run of EVERY
+     declared job for EXACTLY the pushed head may stand in for the `test_bar` re-run either
+     bullet above requires (never for a missing `test_bar`: that still goes to a human).
+     The CI path exists only where one of those re-runs would otherwise be owed: when HEAD
+     equals `verified_heads.<name>` nothing is owed, so read no check-runs and record no
+     `ci_evidence` for this repo. The declaration is read from the default branch, never
+     from your change: a change that adds, narrows, removes or breaks those lines gets no CI
+     path, nor does a change that edits anything under `.github/` (where the declared jobs
+     are defined - the check-runs would run your change's own version), nor a delivery
+     whose `origin/<default>` already contains HEAD.
+     After the push (step 4) and the PR (step 5), before `gh pr merge`, read
+     `gh api repos/<owner>/<repo>/commits/<sha>/check-runs` in this dispatch - `<owner>/<repo>`
+     as the PR URL names them, `<sha>` the full `git rev-parse HEAD` you pushed, both spelled
+     out literally, the command recorded with exit 0 - and record one `ci_evidence` entry
+     per declared job from the check-run whose `name` is its job name: `repo` (`<name>`),
+     `job` (the declaration verbatim), `check_run_id`, `url` (its `html_url`), `head_sha`
+     and `conclusion`. Only a check-run with `conclusion` `success` and `head_sha` equal to
+     the pushed head is evidence; a queued or in-progress one is not. To wait for one, wait
+     inside that same command: a loop that re-reads the check-runs at most every 3 s and
+     stops at a deadline. A job still pending at the deadline, failed or missing means the
+     re-run above applies unchanged, and a repo that declares no `ci_evidence` keeps the
+     re-run rule exactly.
    - **A conflict:** resolve it yourself in this worktree, keeping both sides' intent,
      commit the merge, then you MUST (a) re-run the test bar as above and (b) have the
      resolution reviewed in a FRESH context - start a sub-agent (a new agent with no history
@@ -178,7 +231,10 @@ in the delivery note. Work inside `repos/<name>/`.
      merge from the history itself (it re-does every merge since the verified commit), so
      the question is asked whatever you report.
    Never add other commits here. Record `tests_passed` for the head you are about to push:
-   true only when it equals the verified commit or you re-ran the test bar on it.
+   true only when it equals the verified commit or you re-ran the test bar on it. On the
+   CI-evidence path (only where a re-run is owed - never when HEAD equals the verified
+   commit) leave `tests_passed` undecided here: the check-runs it rests on exist only after
+   the push, so you decide it in step 5.
 4. **Push the feature branch (idempotent).** `git ls-remote origin refs/heads/<branch>`:
    (HEAD must contain `origin/<default>` as fetched - the driver checks it.)
    - absent, or an ancestor of HEAD (`git merge-base --is-ancestor <remote> HEAD`):
@@ -193,16 +249,34 @@ in the delivery note. Work inside `repos/<name>/`.
      `gh pr create --base <default> --head <branch> --title "<WI slug>: <one-line summary>" --body-file artifacts/deliver-pr-<name>.md`,
      the body naming the WI slug, a change summary, the review verdict and the test
      results (verification's, plus your re-run if any).
+   **CI-evidence path only** (the CI bullet in step 3, where a re-run is owed): now - after
+   the push, with the PR open, before step 6 - read the check-runs, record the `ci_evidence` entries, and only
+   then decide this repo's `tests_passed`: true when every declared job's check-run is
+   `success` for the pushed head; otherwise re-run the test bar now (still before
+   `gh pr merge`) and decide it on that re-run.
 6. **Merge rule.** The PR may be merged without asking iff ALL hold:
    - the independent review passed with no blocking finding
      (`steps.review.output.verdict` is pass, no finding with severity `blocking`); in a
      workflow without a `review` step (autopilot) verification's pass stands in for it;
+   - the review covers the final diff: `steps.review.output.reviewed_heads.<name>`
+     exists, and every commit between it and the delivered HEAD is a merge git itself
+     reproduces (the driver checks the first-parent history). A plain commit after the
+     review pass - by the build step's re-entry, by verification or by you - invalidates
+     the pass: a re-verification that does not move HEAD keeps it covered;
    - when verification ran **scoped** (`steps.verification.output.scope`), review answered
-     `scope_adequate: true` (`steps.review.output.scope_adequate`); a false or absent
-     answer means the rule does not hold and you ask the human — it is never a reason to
+     `scope_adequate: true` and recorded the same scope
+     (`steps.review.output.scope.declared_paths` equals verification's effective declared
+     paths, an incremental prior's union included); a missing answer, a missing review
+     scope or any disagreement means the rule does not hold and you ask the human — it is never a reason to
      rewind to code on its own;
-   - the tests are covered on the pushed head (HEAD is the verified commit, or you re-ran
-     the test bar after the last merge in this dispatch) and `tests_passed` is true;
+   - no authored scenario the verification report records is `skipped`
+     (`steps.verification.output.scenarios`): a skip is legal for the gate but never for
+     the automatic merge - it routes the delivery to the human question naming the
+     skipped title (an owner-approved `skipped-with-rationale` e2e-author mode records an
+     empty list and triggers nothing);
+   - the tests are covered on the pushed head (HEAD is the verified commit, you re-ran
+     the test bar after the last merge in this dispatch, or the repo's declared CI evidence
+     holds for the pushed head) and `tests_passed` is true;
    - no merge since the verified commit was hand-resolved (`llm_resolved_conflict` is
      not true);
    - the pre-flight found nothing.
@@ -249,8 +323,13 @@ else is a new question.
 
 Write `artifacts/delivery.md` (the delivery note) and emit `verdict: pass` with one
 `repos` entry per declared repo (`branch`, `pr_url`, `merged` and `merge_commit` or
-`not_merged_reason`, `llm_resolved_conflict`, `tests_passed`; or `skipped_reason`) and the
-same note in `delivery_note`. A repo left unmerged without a PR (non-GitHub origin) has
+`not_merged_reason`, `llm_resolved_conflict`, `tests_passed`; or `skipped_reason`), the
+`ci_evidence` entries of any repo whose tests its CI evidence covered, and the same note in
+`delivery_note`. The delivery note (and the PR body, which already goes
+through `--body-file`) also summarizes every `non-blocking` finding of
+`steps.review.output.findings` — the follow-ups the review recorded but did not block
+on — so the owner can decide which become tickets; no step ever files them
+automatically. A repo left unmerged without a PR (non-GitHub origin) has
 `pr_url` empty. An infrastructure failure (no push identity, origin unreachable) is
 outcome `incomplete` with the exact error - the
 work item blocks and a human fixes the machine and resumes; never work around it.

@@ -55,6 +55,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -162,36 +163,54 @@ func main() {
 		if json.Unmarshal(sc.Bytes(), &cmd) != nil || cmd.Type != "prompt" {
 			continue
 		}
-		emitRecord(map[string]any{
-			"id": cmd.ID, "type": "response", "command": "prompt", "success": true,
-		})
-		drv.journal("prompt", map[string]any{
-			"spawn_n": drv.spawnN,
-			// workbench#7: the EWR feedback is the phrase shared by the
-			// full-prompt notice and the first same-session retry's short
-			// reminder (spawn.go). The old "envelope file is written"
-			// wording is gone; keep this in step with spawn.go.
-			"ended_without_result_hint": strings.Contains(cmd.Message, "ended without submitting a result"),
-			// polyforge#175: a fresh dispatch after a candidate switch
-			// (possibly from another harness) carries the previous
-			// transcript as read-only reference
-			"prompt_has_reference": strings.Contains(cmd.Message, "Previous attempt (read-only reference)"),
-		})
-		// the full prompt lands beside the journal (polyforge#21: the
-		// retry-shape scenarios assert the dispatched prompt; the claude
-		// persona already persists fakeclaude-prompt-<N>.txt, this is the
-		// pi twin). Best effort: a write failure never affects the run.
-		_ = os.WriteFile(filepath.Join("logs", "fakepi-prompt-"+strconv.Itoa(drv.spawnN)+".txt"), []byte(cmd.Message), 0o644)
-		// the initial instruction: a plain assistant turn — unless this
-		// dispatch's action is the zero-signal harness (Silent: not even
-		// the greeting turn; rule 0's shape)
-		if !drv.silentThisSpawn() {
-			emitAssistantTurn(drv, "fakepi: instruction received; standing by.", "")
-		}
+		drv.answerPrompt(cmd.ID, cmd.Message)
 	}
 	// stdin EOF (the daemon died): park alive — the crash drills need
 	// the WI agent to survive the parent's kill.
 	parkForever()
+}
+
+// answerPrompt answers one prompt command the way pi does: the command
+// echo, then exactly ONE assistant turn. A spawn whose scripted action is
+// an error_turn or end_turn answers with that action's own turn (real pi
+// answers a prompt with one turn; a separate greeting turn before it would
+// open an ok-ended turn whose grace the scripted turn then races — under
+// load the supervisor judged that greeting ended_without_result); any
+// other spawn answers with the plain greeting turn, a zero-signal spawn
+// with no turn at all. A second prompt to the same process gets the
+// greeting: the scripted turn fires once.
+func (drv *driveEnv) answerPrompt(id, message string) {
+	emitRecord(map[string]any{
+		"id": id, "type": "response", "command": "prompt", "success": true,
+	})
+	drv.journal("prompt", map[string]any{
+		"spawn_n": drv.spawnN,
+		// the EWR feedback is the phrase shared by the
+		// full-prompt notice and the first same-session retry's short
+		// reminder (spawn.go). The old "envelope file is written"
+		// wording is gone; keep this in step with spawn.go.
+		"ended_without_result_hint": strings.Contains(message, "ended without submitting a result"),
+		// polyforge#175: a fresh dispatch after a candidate switch
+		// (possibly from another harness) carries the previous
+		// transcript as read-only reference
+		"prompt_has_reference": strings.Contains(message, "Previous attempt (read-only reference)"),
+	})
+	// the full prompt lands beside the journal (polyforge#21: the
+	// retry-shape scenarios assert the dispatched prompt; the claude
+	// persona already persists fakeclaude-prompt-<N>.txt, this is the
+	// pi twin). Best effort: a write failure never affects the run.
+	_ = os.WriteFile(filepath.Join("logs", "fakepi-prompt-"+strconv.Itoa(drv.spawnN)+".txt"), []byte(message), 0o644)
+	if act := drv.promptTurnAction(); act != nil && !drv.promptTurnDone {
+		drv.promptTurnDone = true
+		drv.emitScriptedTurn(*act)
+		return
+	}
+	// the initial instruction: a plain assistant turn — unless this
+	// dispatch's action is the zero-signal harness (Silent: not even
+	// the greeting turn; rule 0's shape)
+	if !drv.silentThisSpawn() {
+		emitAssistantTurn(drv, "fakepi: instruction received; standing by.", "")
+	}
 }
 
 // emitAssistantTurn streams one complete assistant message as the real
@@ -275,8 +294,11 @@ func emitRecord(rec map[string]any) {
 	}
 	outMu.Lock()
 	defer outMu.Unlock()
-	fmt.Println(string(raw))
+	fmt.Fprintln(stdout, string(raw))
 }
+
+// stdout is where the records go (the package's tests capture it).
+var stdout io.Writer = os.Stdout
 
 // watchTestBinary exits the process once the test binary named by
 // FAKEPI_TEST_PID is gone (see the package doc). No-op without it.

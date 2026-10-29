@@ -457,7 +457,7 @@ func (c *Client) ResumeBlockedWorkItemWith(idOrSlug string, req api.ResumeBlocke
 }
 
 // ---------------------------------------------------------------------------
-// workbench#11 machine face (signed client half)
+// machine face (signed client half)
 
 // SetMachineIdentity binds the daemon's Ed25519 key and machine id to this
 // client. The signer is immutable for the process lifetime.

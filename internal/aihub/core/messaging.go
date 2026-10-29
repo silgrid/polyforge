@@ -1,7 +1,7 @@
 package core
 
 // messaging.go: user-to-user conversations with permanent append-only
-// history and per-user read cursors (workbench#11). One direct 1:1
+// history and per-user read cursors. One direct 1:1
 // conversation per sorted user pair; no group is ever created. Text is
 // bounded, secret-shaped content is refused BEFORE any conversation or
 // message write, and the anti-flood cap is per sender per process.
@@ -264,7 +264,8 @@ func (m *AdminManager) Get(callerID, messageID string, isAdmin bool) (*api.Messa
 }
 
 // ListConversations answers the conversations the caller may see (an admin
-// sees every conversation, a member its own) with member ids, last seq and
+// sees every conversation, a member its own) with member ids, the members'
+// display names (member_names, exactly the members' scope), last seq and
 // unread count. Unread counts only the other participant's messages above the
 // caller's read cursor; the caller's own messages never count. Member-only
 // filtering for the pi-web Messages surface happens in the pi-web server.
@@ -305,7 +306,7 @@ func (m *AdminManager) ListConversations(callerID string, isAdmin bool) ([]api.C
 	// not be held while another statement runs (no nested queries on rows).
 	for i := range out {
 		c := &out[i]
-		c.Members, err = m.conversationMembers(c.ID)
+		c.Members, c.MemberNames, err = m.conversationMembers(c.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -320,21 +321,29 @@ func (m *AdminManager) ListConversations(callerID string, isAdmin bool) ([]api.C
 	return out, nil
 }
 
-func (m *AdminManager) conversationMembers(convID string) ([]string, error) {
-	rows, err := m.db.Query(`SELECT user_id FROM conversation_members WHERE conversation_id=?1 ORDER BY user_id`, convID)
+func (m *AdminManager) conversationMembers(convID string) ([]string, map[string]string, error) {
+	// One statement joins the member ids and their display names, so the
+	// member_names scope is exactly the members by construction. The map is
+	// always non-nil (an empty conversation reads as {}, never null), and an
+	// empty display name keeps its key with an empty value.
+	rows, err := m.db.Query(`SELECT cm.user_id, COALESCE(u.display_name,'')
+		FROM conversation_members cm LEFT JOIN users u ON u.id=cm.user_id
+		WHERE cm.conversation_id=?1 ORDER BY cm.user_id`, convID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
-	out := []string{}
+	ids := []string{}
+	names := map[string]string{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, nil, err
 		}
-		out = append(out, id)
+		ids = append(ids, id)
+		names[id] = name
 	}
-	return out, rows.Err()
+	return ids, names, rows.Err()
 }
 
 // Acknowledge advances the caller's own read cursor (max-advance, idempotent).

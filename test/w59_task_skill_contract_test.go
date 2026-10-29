@@ -1,8 +1,8 @@
 package test
 
-// w59_task_skill_contract_test.go: text contract for workbench#59.
+// w59_task_skill_contract_test.go: text contract for.
 //
-// Work item #59 routes the `pf task` CLI face (shipped by workbench#53,
+// Work item #59 routes the `pf task` CLI face (shipped by,
 // PR #706) into the routing skill: one intent-table row, a new
 // verbs/task.md fragment and the verb count in the SKILL.md description.
 // The change is skill text plus this pin — no endpoint, verb, flag or
@@ -38,7 +38,7 @@ func TestW59TaskSkillContract(t *testing.T) {
 
 	raw, err := os.ReadFile(filepath.Join(root, w59SkillRel))
 	if err != nil {
-		t.Fatalf("workbench#59: %s is the routing skill the task intent must be routable from: %v", w59SkillRel, err)
+		t.Fatalf("%s is the routing skill the task intent must be routable from: %v", w59SkillRel, err)
 	}
 	skill := string(raw)
 
@@ -47,11 +47,11 @@ func TestW59TaskSkillContract(t *testing.T) {
 	// this same bar pins the 1024-byte/char limit of the same value.
 	desc, err := w246FrontmatterDescription(skill)
 	if err != nil {
-		t.Fatalf("workbench#59: %s's frontmatter must parse as strict YAML (the description carries the task advertising): %v", w59SkillRel, err)
+		t.Fatalf("%s's frontmatter must parse as strict YAML (the description carries the task advertising): %v", w59SkillRel, err)
 	}
 	for _, tok := range []string{"15 routing verbs", "task"} {
 		if !strings.Contains(desc, tok) {
-			t.Errorf("workbench#59: the skill description must advertise the task verb — the marker %q is missing; the description is the only text a harness loads unconditionally, so without it a session never discovers `pf task`", tok)
+			t.Errorf("the skill description must advertise the task verb — the marker %q is missing; the description is the only text a harness loads unconditionally, so without it a session never discovers `pf task`", tok)
 		}
 	}
 
@@ -61,11 +61,11 @@ func TestW59TaskSkillContract(t *testing.T) {
 	// pin brittle.
 	for _, tok := range []string{"`verbs/task.md`", "起个任务", "只读跑腿"} {
 		if !strings.Contains(skill, tok) {
-			t.Errorf("workbench#59: %s must route the task intent to `verbs/task.md` — the marker %q is missing; without the intent-table row \"起个任务 / 派个只读跑腿\" matches nothing", w59SkillRel, tok)
+			t.Errorf("%s must route the task intent to `verbs/task.md` — the marker %q is missing; without the intent-table row \"起个任务 / 派个只读跑腿\" matches nothing", w59SkillRel, tok)
 		}
 	}
 	if !strings.Contains(skill, "decide which of the 15 routing verbs") {
-		t.Errorf("workbench#59: %s's body must say 15 routing verbs — the description and the body sentence must not disagree on the verb count", w59SkillRel)
+		t.Errorf("%s's body must say 15 routing verbs — the description and the body sentence must not disagree on the verb count", w59SkillRel)
 	}
 
 	// 3. The fragment exists and carries the shipped surface's facts: the
@@ -74,7 +74,7 @@ func TestW59TaskSkillContract(t *testing.T) {
 	// discipline.
 	fragRaw, err := os.ReadFile(filepath.Join(root, w59FragRel))
 	if err != nil {
-		t.Fatalf("workbench#59: %s must exist — the fragment that owns the task routing discipline; the intent table has no row to point at without it: %v", w59FragRel, err)
+		t.Fatalf("%s must exist — the fragment that owns the task routing discipline; the intent table has no row to point at without it: %v", w59FragRel, err)
 	}
 	frag := string(fragRaw)
 	for _, tok := range []string{
@@ -107,7 +107,7 @@ func TestW59TaskSkillContract(t *testing.T) {
 		"does not trigger an agent turn",
 	} {
 		if !strings.Contains(frag, tok) {
-			t.Errorf("workbench#59: %s must carry the task surface marker %q — the fragment exists but does not teach the surface workbench#53 shipped", w59FragRel, tok)
+			t.Errorf("%s must carry the task surface marker %q — the fragment exists but does not teach the surface shipped", w59FragRel, tok)
 		}
 	}
 
@@ -118,11 +118,11 @@ func TestW59TaskSkillContract(t *testing.T) {
 	// teaches, so no failure-table row may pair the code with a ceiling.
 	for _, line := range strings.Split(frag, "\n") {
 		if strings.Contains(line, "DAEMON-400") && strings.Contains(line, "ceiling") {
-			t.Errorf("workbench#59: %s pairs DAEMON-400 with a budget ceiling — `pf task spawn` refuses an over-ceiling budget locally (exit 1, `is above the … ceiling`), before any wire call; the typed code only answers a raw UDS request", w59FragRel)
+			t.Errorf("%s pairs DAEMON-400 with a budget ceiling — `pf task spawn` refuses an over-ceiling budget locally (exit 1, `is above the … ceiling`), before any wire call; the typed code only answers a raw UDS request", w59FragRel)
 		}
 	}
 	if !strings.Contains(frag, "over-ceiling or malformed budget") {
-		t.Errorf("workbench#59: %s must list an over-ceiling or malformed budget among the local `pf: task …` refusals — otherwise the closing paragraph contradicts the failure table", w59FragRel)
+		t.Errorf("%s must list an over-ceiling or malformed budget among the local `pf: task …` refusals — otherwise the closing paragraph contradicts the failure table", w59FragRel)
 	}
 
 	// 3c. The `cannot report token usage` branch fires at the FIRST such
@@ -133,13 +133,13 @@ func TestW59TaskSkillContract(t *testing.T) {
 	// named candidate has to be removed or replaced.
 	for _, line := range strings.Split(frag, "\n") {
 		if strings.Contains(line, "cannot report token usage") && strings.Contains(line, "every candidate") {
-			t.Errorf("workbench#59: %s says the token-usage refusal needs EVERY candidate to be non-reporting — `task spawn` refuses on the first candidate whose harness cannot report usage, even when the others report; the row must name that one candidate and tell the reader to remove or replace it", w59FragRel)
+			t.Errorf("%s says the token-usage refusal needs EVERY candidate to be non-reporting — `task spawn` refuses on the first candidate whose harness cannot report usage, even when the others report; the row must name that one candidate and tell the reader to remove or replace it", w59FragRel)
 		}
 	}
 
-	// 4. `--wi` does not exist in the shipped `pf task` face (workbench#53
+	// 4. `--wi` does not exist in the shipped `pf task` face (
 	// deleted it): the fragment must never teach it back.
 	if strings.Contains(frag, "--wi") {
-		t.Errorf("workbench#59: %s teaches --wi, which the shipped `pf task` CLI does not define — `--project <name>` is the only selector; teaching a nonexistent flag also fails TestSkillTaughtFlagsExistInCLI", w59FragRel)
+		t.Errorf("%s teaches --wi, which the shipped `pf task` CLI does not define — `--project <name>` is the only selector; teaching a nonexistent flag also fails TestSkillTaughtFlagsExistInCLI", w59FragRel)
 	}
 }

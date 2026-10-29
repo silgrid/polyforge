@@ -1,6 +1,6 @@
 package test
 
-// w3_pf_config_acceptance_test.go: workbench#3 end-to-end acceptance for
+// w3_pf_config_acceptance_test.go: end-to-end acceptance for
 // `pf config` (the single cli.toml write/validate authority) and the
 // daemon's per-key hot reload (live / next-claim / restart-only), authored
 // against artifacts/spec.md BEFORE the implementation lands.

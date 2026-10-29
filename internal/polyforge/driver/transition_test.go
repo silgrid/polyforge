@@ -12,14 +12,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/common/harness"
 )
 
-// eventLog is the counting EventLogger fake.
+// eventLog is the counting EventLogger fake. Its methods take the
+// mutex, so a test may poll them while the Run goroutine is still
+// appending (the direct .entries reads stay for after Run returns).
 type eventLog struct {
+	mu      sync.Mutex
 	entries []loggedEvent
 }
 
@@ -31,11 +36,28 @@ type loggedEvent struct {
 
 func (l *eventLog) Append(wi, kind string, body any) error {
 	b, _ := body.(map[string]any)
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.entries = append(l.entries, loggedEvent{wi: wi, kind: kind, body: b})
 	return nil
 }
 
+// has reports whether an event of the kind carrying the key/value pair
+// was appended. Safe to poll from the test goroutine while Run runs.
+func (l *eventLog) has(kind, key string, val any) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, e := range l.entries {
+		if e.kind == kind && e.body[key] == val {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *eventLog) kinds() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	out := make([]string, 0, len(l.entries))
 	for _, e := range l.entries {
 		out = append(out, e.kind)
@@ -248,7 +270,7 @@ func TestTransitionFence(t *testing.T) {
 // ---------------------------------------------------------------------------
 // step_start
 
-func TestTransitionStepStartFreshConsumesRewindInput(t *testing.T) {
+func TestTransitionStepStartKeepsRewindVerdictUntilAcceptance(t *testing.T) {
 	d, _, clk, _ := testEnv(t, spec("a"), spec("b"))
 	mustInit(t, d)
 	// Simulate a rewind having parked its verdict on step a.
@@ -259,20 +281,62 @@ func TestTransitionStepStartFreshConsumesRewindInput(t *testing.T) {
 	d.mu.Unlock()
 
 	before := clk.t
-	mustStart(t, d, "a", 1)
+	if err := d.transition(TransitionRequest{Kind: TransStepStart, StepID: "a", Model: "prov/m1", Candidate: "pi:prov/m1", SpawnN: 1}); err != nil {
+		t.Fatalf("start a: %v", err)
+	}
 	snap := d.Snapshot()
 	st := snap.Steps["a"]
-	if st.Status != capsule.StepInProgress || st.PendingRewindInput != nil {
-		t.Fatalf("start must flip to in_progress and consume the rewind verdict: %+v", st)
+	// the verdict lives for the whole round, so the first
+	// dispatch (and every retry of the round) still sees it.
+	if st.Status != capsule.StepInProgress || st.PendingRewindInput == nil || st.PendingRewindInput.Reason != "fix it harder" {
+		t.Fatalf("start must flip to in_progress and keep the round's rewind verdict: %+v", st)
 	}
 	if st.Output != nil || st.BudgetConsumed.WallMs != 0 {
 		t.Fatalf("a fresh start reopens a clean window: output=%v budget=%+v", st.Output, st.BudgetConsumed)
 	}
-	if st.Model != "prov/m1" || st.StepStartedAt == "" || st.StepStartedAt <= before.Format(time.RFC3339Nano) {
-		t.Fatalf("start must record model + a fresh measurement window: %+v", st)
+	if c, err := harness.ParseCandidate(st.Candidate); err != nil || c.Model != "prov/m1" ||
+		st.StepStartedAt == "" || st.StepStartedAt <= before.Format(time.RFC3339Nano) {
+		t.Fatalf("start must record the candidate (the one model fact) + a fresh measurement window: %+v", st)
 	}
 	if snap.CurrentStep != "a" || snap.WorkflowStatus != StatusRunning {
 		t.Fatalf("start must move the position: %+v", snap)
+	}
+
+	// The round ends at acceptance: that write is the one that clears the
+	// verdict, so a later dispatch never replays it.
+	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "a", SpawnN: 1,
+		Result: completedResult("a", 1, `{}`)}); err != nil {
+		t.Fatalf("result a: %v", err)
+	}
+	if st := d.Snapshot().Steps["a"]; st.Status != capsule.StepDone || st.PendingRewindInput != nil {
+		t.Fatalf("acceptance must end the round and clear the verdict: %+v", st)
+	}
+}
+
+// A gate is never "accepted", but its own verdict delivery ends the round
+// that rewound it: the rewind input it carried as a rewind target (the
+// deliver 「全量重验」 override reruns verification) is cleared by the
+// gate_failed write, in the same write that routes this verdict to its own
+// target — so the next verification round never replays a stale verdict.
+func TestTransitionGateVerdictEndsItsOwnRewindInputRound(t *testing.T) {
+	d, _, _, _ := testEnv(t, spec("a"), gateSpec("g", "a"))
+	mustInit(t, d)
+	d.mu.Lock()
+	d.exec.Steps["g"].PendingRewindInput = &capsule.RewindInput{ToStep: "g", Reason: "re-run the full verification"}
+	d.mu.Unlock()
+	mustStart(t, d, "g", 1)
+	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "g", SpawnN: 1,
+		Result: &StepResult{StepID: "g", SpawnN: 1, Outcome: OutcomeGateFailed,
+			Output: json.RawMessage(`{"verdict":"fail"}`)},
+	}); err != nil {
+		t.Fatalf("gate_failed: %v", err)
+	}
+	snap := d.Snapshot()
+	if st := snap.Steps["g"]; st.PendingRewindInput != nil {
+		t.Fatalf("the gate's own verdict delivery must end its rewind round: %+v", st)
+	}
+	if pri := snap.Steps["a"].PendingRewindInput; pri == nil || pri.Reason != `{"verdict":"fail"}` {
+		t.Fatalf("the gate's verdict must route to its target: %+v", pri)
 	}
 }
 
@@ -557,7 +621,6 @@ func lightGateFail(t *testing.T, gateID string, output json.RawMessage) *capsule
 	if err := d.transition(TransitionRequest{
 		Kind: TransStepResult, StepID: gateID, SpawnN: 3,
 		Result: &StepResult{StepID: gateID, SpawnN: 3, Outcome: OutcomeGateFailed, Output: output},
-		Gate:   &GateVerdict{GateStepID: gateID, TargetStep: "build", VerdictText: "comment wording only"},
 	}); err != nil {
 		t.Fatalf("gate_fail: %v", err)
 	}
@@ -610,10 +673,11 @@ func TestTransitionGateFailLightRewindEligibility(t *testing.T) {
 				t.Errorf("%s: the range must reset pending with output cleared: %+v", tc.name, st)
 			}
 		}
-		if exec.RewindStats.Count != 1 || len(exec.RewindStats.ToStep) != 1 || exec.RewindStats.ToStep[0] != "build" {
+		if exec.RewindStats.Count != 1 || len(exec.RewindStats.Rewinds) != 1 ||
+			exec.RewindStats.Rewinds[0].Gate != tc.gate || exec.RewindStats.Rewinds[0].ToStep != "build" {
 			t.Errorf("%s: exactly one slot, logged to build: %+v", tc.name, exec.RewindStats)
 		}
-		if pri := build.PendingRewindInput; pri == nil || pri.ToStep != "build" || pri.Reason != "comment wording only" {
+		if pri := build.PendingRewindInput; pri == nil || pri.ToStep != "build" || pri.Reason != string(lightReviewOutput(tc.findings)) {
 			t.Errorf("%s: the verdict must route to build: %+v", tc.name, pri)
 		} else if want := LightRewindNote; tc.light && pri.Note != want || !tc.light && pri.Note != "" {
 			t.Errorf("%s: rewind input Note = %q, want the light instruction on the light path and empty on the fresh one", tc.name, pri.Note)
@@ -643,12 +707,14 @@ func TestTransitionGateFailLightRewindEligibility(t *testing.T) {
 }
 
 // TestTransitionGateFailLightBoundsHold: a light rewind is no budget
-// bypass — an over-bound light FAIL ends failed_rewind_exhausted BEFORE
-// any mutation (no second archive, no second slot, no marker or verdict
-// left behind), exactly like the fresh rewind.
+// bypass — but its slot is max_total's, never the gate→target edge's
+// (a light rewind charges no edge). An over-bound light
+// FAIL ends failed_rewind_exhausted BEFORE any mutation (no second
+// archive, no second slot, no marker or verdict left behind), exactly
+// like the fresh rewind.
 func TestTransitionGateFailLightBoundsHold(t *testing.T) {
 	d, _, _, execPath := testEnv(t, spec("build"), gateSpec("review", "build"))
-	d.workflow.MaxPerStep = 1
+	d.workflow.MaxTotal = 1
 	mustInit(t, d)
 	failLight := func(n int64) {
 		t.Helper()
@@ -657,7 +723,6 @@ func TestTransitionGateFailLightBoundsHold(t *testing.T) {
 			Kind: TransStepResult, StepID: "review", SpawnN: n,
 			Result: &StepResult{StepID: "review", SpawnN: n, Outcome: OutcomeGateFailed,
 				Output: lightReviewOutput(`[{"severity":"blocking","detail":"d","text_only":true}]`)},
-			Gate: &GateVerdict{GateStepID: "review", TargetStep: "build", VerdictText: "comment wording only"},
 		}); err != nil {
 			t.Fatalf("gate_fail %d: %v", n, err)
 		}
@@ -669,7 +734,7 @@ func TestTransitionGateFailLightBoundsHold(t *testing.T) {
 	}
 	failLight(2)
 	// round 2: build re-enters (consuming the order) and completes; the
-	// second light FAIL hits max_per_step.
+	// second light FAIL hits max_total (the edge was never charged).
 	mustStart(t, d, "build", 3)
 	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "build", SpawnN: 3, Result: completedResult("build", 3, `{}`)}); err != nil {
 		t.Fatalf("result build: %v", err)
@@ -677,7 +742,7 @@ func TestTransitionGateFailLightBoundsHold(t *testing.T) {
 	failLight(4)
 	exec := readExec(t, execPath)
 	if exec.WorkflowStatus != StatusFailedRewindExhausted {
-		t.Fatalf("the second light rewind must hit max_per_step, got %q", exec.WorkflowStatus)
+		t.Fatalf("the second light rewind must hit max_total, got %q", exec.WorkflowStatus)
 	}
 	build := exec.Steps["build"]
 	var light int
@@ -691,6 +756,9 @@ func TestTransitionGateFailLightBoundsHold(t *testing.T) {
 	}
 	if light != 1 || exec.RewindStats.Count != 1 {
 		t.Fatalf("the bound fired before any mutation: light archives %d, count %d", light, exec.RewindStats.Count)
+	}
+	if len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0].Charged {
+		t.Fatalf("the light rewind must charge no edge slot: %+v", exec.RewindStats.Rewinds)
 	}
 	if build.PendingRewindInput != nil {
 		t.Errorf("the exhausted rewind must not route a verdict: %+v", build.PendingRewindInput)
@@ -717,7 +785,8 @@ func TestTransitionLightRewindOrderIsDurable(t *testing.T) {
 	if att.Cause != CauseGateFailRewindTextOnly || att.RewindGate != "review" {
 		t.Fatalf("the light archive must name the gate: %+v", att)
 	}
-	if pri := build.PendingRewindInput; pri == nil || pri.Note != LightRewindNote || pri.Reason != "comment wording only" {
+	if pri := build.PendingRewindInput; pri == nil || pri.Note != LightRewindNote ||
+		pri.Reason != string(lightReviewOutput(`[{"severity":"blocking","detail":"d","text_only":true}]`)) {
 		t.Fatalf("the persisted file must carry the verdict + light instruction: %+v", pri)
 	}
 }
@@ -728,9 +797,11 @@ func TestTransitionLightRewindOrderIsDurable(t *testing.T) {
 // gate_fail_rewind (rewind_gate = the light gate, the delivered result and
 // consumed budget archived), resets the step pending with output cleared,
 // routes the SAME FAIL verdict (re-derived from the gate's recorded
-// output) as the fresh re-entry's rewind input (no Note), charges NO new
-// slot, leaves the position on the step, and emits the rewind event —
-// never step_done for a step that is not done.
+// output) as the fresh re-entry's rewind input (no Note), takes NO new
+// slot (the light record's edge is charged instead —,
+// TestSelfReportEscalationChargesTheEdgeOnce), leaves the position on the
+// step, and emits the rewind event — never step_done for a step that is
+// not done.
 func TestTransitionSelfReportRewindRewindsFreshSameSlot(t *testing.T) {
 	d, log, _, execPath := testEnv(t, spec("build"), gateSpec("review", "build"))
 	mustInit(t, d)
@@ -741,7 +812,6 @@ func TestTransitionSelfReportRewindRewindsFreshSameSlot(t *testing.T) {
 			Kind: TransStepResult, StepID: "review", SpawnN: n,
 			Result: &StepResult{StepID: "review", SpawnN: n, Outcome: OutcomeGateFailed,
 				Output: lightReviewOutput(`[{"severity":"blocking","detail":"d","text_only":true}]`)},
-			Gate: &GateVerdict{GateStepID: "review", TargetStep: "build", VerdictText: "comment wording only"},
 		}); err != nil {
 			t.Fatalf("gate_fail %d: %v", n, err)
 		}
@@ -816,7 +886,6 @@ func TestTransitionLightCompletionWithoutSelfReportIsDone(t *testing.T) {
 		Kind: TransStepResult, StepID: "review", SpawnN: 2,
 		Result: &StepResult{StepID: "review", SpawnN: 2, Outcome: OutcomeGateFailed,
 			Output: lightReviewOutput(`[{"severity":"blocking","detail":"d","text_only":true}]`)},
-		Gate: &GateVerdict{GateStepID: "review", TargetStep: "build", VerdictText: "comment wording only"},
 	}); err != nil {
 		t.Fatalf("gate_fail: %v", err)
 	}
@@ -861,8 +930,6 @@ func TestTransitionGateFailRewind(t *testing.T) {
 		Kind: TransStepResult, StepID: "check", SpawnN: 3,
 		Result: &StepResult{StepID: "check", SpawnN: 3,
 			Outcome: OutcomeGateFailed, Output: json.RawMessage(`{"verdict":"FAIL: tests red"}`)},
-		Gate: &GateVerdict{GateStepID: "check", TargetStep: "build",
-			VerdictText: "FAIL: tests red"},
 	}); err != nil {
 		t.Fatalf("gate_fail: %v", err)
 	}
@@ -892,18 +959,23 @@ func TestTransitionGateFailRewind(t *testing.T) {
 			t.Fatalf("the archived attempt carries the prior result: %s", att.Result)
 		}
 	}
-	// The gate itself: untouched, still in_progress holding the verdict.
-	if st := snap.Steps["check"]; st.Status != capsule.StepInProgress || len(st.Attempts) != 0 || st.Output["verdict"] == nil {
+	// The gate itself: never archived nor reset, still in_progress holding
+	// the verdict; its ledger carries only the audit-only record of the
+	// rewound dispatch (verification_attempt_ledger_test.go).
+	if st := snap.Steps["check"]; st.Status != capsule.StepInProgress || st.Output["verdict"] == nil ||
+		len(st.Attempts) != 1 || st.Attempts[0].Cause != CauseGateFailVerdict {
 		t.Fatalf("the gate is neither archived nor reset: %+v", st)
 	}
 	// Position, stats, routed verdict.
 	if snap.CurrentStep != "build" {
 		t.Fatalf("position must move back to the target: %q", snap.CurrentStep)
 	}
-	if snap.RewindStats.Count != 1 || len(snap.RewindStats.ToStep) != 1 || snap.RewindStats.ToStep[0] != "build" {
+	if snap.RewindStats.Count != 1 || len(snap.RewindStats.Rewinds) != 1 ||
+		snap.RewindStats.Rewinds[0].Gate != "check" || snap.RewindStats.Rewinds[0].ToStep != "build" ||
+		!snap.RewindStats.Rewinds[0].Charged {
 		t.Fatalf("rewind stats: %+v", snap.RewindStats)
 	}
-	if pri := snap.Steps["build"].PendingRewindInput; pri == nil || pri.Reason != "FAIL: tests red" || pri.ToStep != "build" {
+	if pri := snap.Steps["build"].PendingRewindInput; pri == nil || pri.Reason != `{"verdict":"FAIL: tests red"}` || pri.ToStep != "build" {
 		t.Fatalf("the verdict must route to the target (D8): %+v", pri)
 	}
 }
@@ -926,7 +998,6 @@ func TestTransitionGateFailBounds(t *testing.T) {
 		if err := d.transition(TransitionRequest{
 			Kind: TransStepResult, StepID: "check", SpawnN: n + 1,
 			Result: &StepResult{StepID: "check", SpawnN: n + 1, Outcome: OutcomeGateFailed},
-			Gate:   &GateVerdict{GateStepID: "check", TargetStep: "a", VerdictText: "v"},
 		}); err != nil {
 			t.Fatalf("gate_fail (round %d): %v", round, err)
 		}
@@ -961,7 +1032,6 @@ func TestTransitionGateFailBounds(t *testing.T) {
 	if err := d2.transition(TransitionRequest{
 		Kind: TransStepResult, StepID: "check", SpawnN: 2,
 		Result: &StepResult{StepID: "check", SpawnN: 2, Outcome: OutcomeGateFailed},
-		Gate:   &GateVerdict{GateStepID: "check", TargetStep: "a", VerdictText: "v"},
 	}); err != nil {
 		t.Fatalf("first rewind: %v", err)
 	}
@@ -974,7 +1044,6 @@ func TestTransitionGateFailBounds(t *testing.T) {
 	if err := d2.transition(TransitionRequest{
 		Kind: TransStepResult, StepID: "check", SpawnN: 4,
 		Result: &StepResult{StepID: "check", SpawnN: 4, Outcome: OutcomeGateFailed},
-		Gate:   &GateVerdict{GateStepID: "check", TargetStep: "a", VerdictText: "v"},
 	}); err != nil {
 		t.Fatalf("second rewind: %v", err)
 	}
@@ -983,8 +1052,11 @@ func TestTransitionGateFailBounds(t *testing.T) {
 	}
 }
 
-func TestTransitionGateFailTerminateAndIllegalTarget(t *testing.T) {
-	d, _, _, _ := testEnv(t, spec("a"), gateSpec("check", "a"))
+// TestTransitionGateFailTerminate: a gate whose on_fail names no rewind
+// target ends the workflow failed_gate on its FAIL verdict. (A target at
+// or after the gate cannot reach the driver: LoadWorkflow refuses it.)
+func TestTransitionGateFailTerminate(t *testing.T) {
+	d, _, _, _ := testEnv(t, spec("a"), gateSpec("check", ""))
 	mustInit(t, d)
 	mustStart(t, d, "a", 1)
 	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "a", SpawnN: 1, Result: completedResult("a", 1, `{}`)}); err != nil {
@@ -994,7 +1066,6 @@ func TestTransitionGateFailTerminateAndIllegalTarget(t *testing.T) {
 	if err := d.transition(TransitionRequest{
 		Kind: TransStepResult, StepID: "check", SpawnN: 2,
 		Result: &StepResult{StepID: "check", SpawnN: 2, Outcome: OutcomeGateFailed},
-		Gate:   &GateVerdict{GateStepID: "check", VerdictText: "v"},
 	}); err != nil {
 		t.Fatalf("terminate: %v", err)
 	}
@@ -1004,26 +1075,6 @@ func TestTransitionGateFailTerminateAndIllegalTarget(t *testing.T) {
 	// Terminal freeze: nothing transitions anymore.
 	if err := d.transition(TransitionRequest{Kind: TransStepStart, StepID: "a", SpawnN: 3}); err == nil {
 		t.Fatal("a terminal workflow must refuse further transitions")
-	}
-
-	d2, _, _, _ := testEnv(t, spec("a"), spec("b"), gateSpec("check", "a"))
-	mustInit(t, d2)
-	mustStart(t, d2, "check", 1)
-	// A rewind target at or after the gate is illegal ("b" in
-	// [a, b, check] IS legal — the target only needs to be earlier than
-	// the gate); the refused verdict leaves the gate untouched.
-	for _, bad := range []string{"check", "nope"} {
-		err := d2.transition(TransitionRequest{
-			Kind: TransStepResult, StepID: "check", SpawnN: 1,
-			Result: &StepResult{StepID: "check", SpawnN: 1, Outcome: OutcomeGateFailed},
-			Gate:   &GateVerdict{GateStepID: "check", TargetStep: bad, VerdictText: "v"},
-		})
-		if err == nil {
-			t.Fatalf("rewind target %q must be refused", bad)
-		}
-	}
-	if st := d2.Snapshot().Steps["check"]; st.Status != capsule.StepInProgress || st.Output != nil {
-		t.Fatalf("a refused gate verdict must not half-land: %+v", st)
 	}
 }
 
@@ -1145,7 +1196,7 @@ func TestTransitionNeedsInputEmbeddedQuestionEventMatchesPersisted(t *testing.T)
 }
 
 // The interrupted-dispatch archive records the tree hash carried on the
-// request (workbench#21): the caller reads it off the lock, the
+// request: the caller reads it off the lock, the
 // transition only writes it.
 func TestInterruptedArchiveRecordsTreeHash(t *testing.T) {
 	d, _, _, execPath := testEnv(t, spec("a"))
@@ -1162,7 +1213,7 @@ func TestInterruptedArchiveRecordsTreeHash(t *testing.T) {
 	}
 }
 
-// TestVerdictForRestrictsDeliverRewindTo (workbench#19 B1): the deliver
+// TestVerdictForRestrictsDeliverRewindTo ( B1): the deliver
 // `rewind_to` override is honored ONLY for `verification` while the
 // recorded tier is scoped; every other value (code, spec, deliver, an
 // unknown step) and `verification` on a full-tier ticket keep the gate's
@@ -1207,7 +1258,7 @@ func TestVerdictForRestrictsDeliverRewindTo(t *testing.T) {
 	}
 }
 
-// TestTransitionVerificationFailResetsTierFull (workbench#19 B3): a
+// TestTransitionVerificationFailResetsTierFull ( B3): a
 // verification-gate FAIL resets the recorded tier to full, so the in-place
 // re-run renders the FULL section and a scoped claim is rejected (spec
 // A3). A review-gate FAIL keeps the scoped tier, so the incremental
@@ -1235,8 +1286,7 @@ func TestTransitionVerificationFailResetsTierFull(t *testing.T) {
 			mustStart(t, d, tc.gate, 2)
 			if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: tc.gate, SpawnN: 2,
 				Result: &StepResult{WIID: "wi_t1", StepID: tc.gate, SpawnN: 2, Outcome: OutcomeGateFailed,
-					Output: json.RawMessage(`{"verdict":"fail","fail_reason":"red"}`)},
-				Gate: &GateVerdict{GateStepID: tc.gate, TargetStep: "code", VerdictText: "red"}}); err != nil {
+					Output: json.RawMessage(`{"verdict":"fail","fail_reason":"red"}`)}}); err != nil {
 				t.Fatalf("%s gate_fail: %v", tc.gate, err)
 			}
 			if got := readExec(t, execPath).ScopeTier; got != tc.want {
@@ -1246,7 +1296,7 @@ func TestTransitionVerificationFailResetsTierFull(t *testing.T) {
 	}
 }
 
-// TestStepEventsCarryCandidateIdentity pins workbench#14 requirement 1: the
+// TestStepEventsCarryCandidateIdentity pins requirement 1: the
 // started and failed events self-describe the dispatch's composed candidate
 // and the failure names the candidate that DIED even when the decision
 // advances Step.Candidate; step_dead keeps its existing body.

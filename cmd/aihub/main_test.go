@@ -3,8 +3,10 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"flag"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -14,6 +16,22 @@ import (
 
 // TestMain isolates HOME/XDG/POLYFORGE_* so no test can touch the real install.
 func TestMain(m *testing.M) { testenv.Main(m) }
+
+// TestRegisteredFlagsCarryNoHTTPBoundKnobs: the flag set
+// is exactly the five production flags — nothing can change the HTTP
+// server's header deadline, idle timeout or header size, which are
+// constants in internal/aihub/server.
+func TestRegisteredFlagsCarryNoHTTPBoundKnobs(t *testing.T) {
+	fs := flag.NewFlagSet("aihub", flag.ContinueOnError)
+	registerFlags(fs)
+	var names []string
+	fs.VisitAll(func(f *flag.Flag) { names = append(names, f.Name) })
+	sort.Strings(names)
+	want := []string{"data-dir", "git-janitor-period", "listen", "machines-stale-after", "version"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("aihub flags = %v, want exactly %v (the HTTP pressure bounds are constants, not flags)", names, want)
+	}
+}
 
 // TestBootstrapAdminKeyFile pins repo review 2026-10-16 V-10: a fresh
 // install writes the bootstrap key to <data-dir>/bootstrap-admin.key

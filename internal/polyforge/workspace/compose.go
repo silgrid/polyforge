@@ -42,7 +42,7 @@ import (
 )
 
 // TaskModels answers the one-shot task lane's effective candidate list
-// of project (workbench#40): the bundle-less `steps.<project>.task.models`
+// of project: the bundle-less `steps.<project>.task.models`
 // list when declared, else `steps.<project>.default.models`. It is PURE
 // over the parsed workspace yaml and is read live by the daemon at every
 // spawn (the runtime accessor, runtime.TaskModels — no snapshot).
@@ -69,7 +69,7 @@ func TaskModels(cfg *Config, project string) (list []string, from string) {
 // MissingTaskModelsError names both configuration keys a task spawn of
 // project needs one of: the task list is absent and so is the project
 // default. There is no hardcoded model — the refusal is the whole
-// answer (workbench#40).
+// answer.
 func MissingTaskModelsError(project string) error {
 	return fmt.Errorf("task model candidates for project %q are not configured: set steps.%s.%s.models or fall back to steps.%s.%s.models (there is no default model)",
 		project, project, TaskKey, project, DefaultKey)

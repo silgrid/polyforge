@@ -1,7 +1,7 @@
 package test
 
 // w11_cross_machine_acceptance_test.go: the e2e acceptance suite for
-// workbench#11 (cross-machine agent communication), authored BEFORE
+// (cross-machine agent communication), authored BEFORE
 // `code` against `artifacts/spec.md` + `artifacts/plan.md` only.
 //
 // Every scenario drives the shipped `aihub` and `pf` binaries as real
@@ -63,7 +63,7 @@ func w11ErrCode(err error) string {
 	return "ERR:" + err.Error()
 }
 
-// w11Heartbeat posts one SIGNED heartbeat (workbench#57: the heartbeat is a
+// w11Heartbeat posts one SIGNED heartbeat (the heartbeat is a
 // machine-face request) and returns the decoded answer. priv is the key the
 // body's public_key presents — or the row's bound key when the body presents
 // none (the superseded refresh case).

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
@@ -236,10 +237,22 @@ func TestVerificationIDAloneOwesNoEvidenceInPrompt(t *testing.T) {
 // materialized layout) and answers the assembled prompt.
 func spawnStepPrompt(t *testing.T, bundle, stepID string) string {
 	t.Helper()
+	return spawnStepPromptWith(t, bundle, StepSpawn{StepID: stepID, SpawnN: 1})
+}
+
+// spawnStepPromptWith is spawnStepPrompt for one dispatch shape (the
+// tier, a re-entry fact): the same shipped bundle, the given StepSpawn.
+func spawnStepPromptWith(t *testing.T, bundle string, spawn StepSpawn) string {
+	t.Helper()
+	stepID := spawn.StepID
 	capDir := capsuleWithShippedBundle(t, bundle)
-	shared, _ := filepath.Glob(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "steps", "*.md"))
-	shared = append(shared, filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "mechanical-fix.md"))
-	shared = append(shared, filepath.Join(shippedWorkflowsDir, workflow.SharedDir, workflow.PrinciplesFile))
+	// the whole top-level _shared/ — the step definitions it ships beside
+	// the fragments a definition may include ({{principles}} and the
+	// fragment set); a missed file would fail a prompt test
+	// with a load error the moment a step uses its fragment.
+	shared, _ := filepath.Glob(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "*.md"))
+	stepDefs, _ := filepath.Glob(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "steps", "*.md"))
+	shared = append(shared, stepDefs...)
 	for _, p := range shared {
 		raw, err := os.ReadFile(p)
 		if err != nil {
@@ -257,7 +270,7 @@ func spawnStepPrompt(t *testing.T, bundle, stepID string) string {
 	if err != nil {
 		t.Fatalf("NewStepSpawnAdapter: %v", err)
 	}
-	if _, err := ad.SpawnStep(context.Background(), StepSpawn{StepID: stepID, SpawnN: 1}); err != nil {
+	if _, err := ad.SpawnStep(context.Background(), spawn); err != nil {
 		t.Fatalf("SpawnStep %s/%s: %v", bundle, stepID, err)
 	}
 	p, _ := sp.last()
@@ -275,7 +288,10 @@ func TestSharedStepPromptsKeepLaneFacts(t *testing.T) {
 	lanes := map[string]map[string]facts{
 		"verification": {
 			"chore": {[]string{"`plan-conformance`", "`artifacts/plan.md`'s", "any test the plan names as pinning this change",
-				"there is no release slot behind you"}},
+				"there is no release slot behind you",
+				// the two-way facts and their severities.
+				"plan-conformance facts section", "coupled obligation left unchanged, fails this check",
+				"declared plain write left unchanged is recorded, not failed"}},
 			"autopilot": {[]string{"`memo-conformance`", "`artifacts/fix-memo.md`'s `## Scope` and `## Non-goals`",
 				"the memo's `## What is broken or missing` case", "no separate review step behind you"}},
 			"bug-fix": {[]string{"Read `artifacts/repro.md` and execute its `## Steps` verbatim", "(`reproduces: true`)",
@@ -287,43 +303,48 @@ func TestSharedStepPromptsKeepLaneFacts(t *testing.T) {
 		},
 		"review": {
 			"chore": {[]string{"`artifacts/code-summary.md`", "Judge the deletion-type acceptance bar",
-				"concepts the WI and the plan did not request", "(the WI and the plan)"}},
+				"concepts the WI and the plan did not request", "(the WI and the plan)",
+				// the two-way facts.
+				"Judge plan conformance in both directions from the plan-conformance facts"}},
 			"bug-fix": {[]string{"Read, in this order: `artifacts/root-cause.md`", "`root_cause_addressed: false`",
-				"the *diagnosis* was wrong", "concepts the WI and the root-cause scope guidance did not request"}},
+				"the *diagnosis* was wrong",
+				// a false fix never reaches review; the one-time
+				// driver rewind and the owner question on a second false.
+				"never reaches you", "a second false asks the", "concepts the WI and the root-cause scope guidance did not request"}},
 			"feature-full": {[]string{"Read, in this order: `artifacts/spec.md`", "`steps.e2e-author.output.already_satisfied`",
-				"400-line", "concepts the spec did not request"}},
+				"400-line", "concepts the spec did not request",
+				"**Plan conformance, both directions.**"}},
 		},
 	}
 	common := map[string][]string{
-		"verification": {"command_evidence: [{argv, exit_code, duration_ms}]", "AT LEAST ONE entry", "## Pre-existing failures", "`test_bar`", "`no-untracked-test-files`",
+		"verification": {
+			// the command-evidence obligation lives once, in the
+			// driver's delivery contract (every shipped verification declares
+			// requires_command_evidence).
+			"Run at least one real check command", "never completes on reading code alone",
+			"## Pre-existing failures", "`test_bar`", "`no-untracked-test-files`",
 			"Write `artifacts/verification-report.md`", "which plan step or memo scope item"},
+		//'s scoped facts (`steps.review.output.scope`, the
+		// automatic-merge block on disagreement) ride a SCOPED dispatch
+		// only since TestW80VerificationPromptShapes.
 		"review": {"No faked concurrency semantics", "**Unruled destination change.**", "**I/O under a lock.**", "**Weak tests.**", "**Stale docs.**", "**Leaked credentials**", "**Guess as fact.**", "**Do not run tests or builds.**", "Write `artifacts/review.md`", "If any of the change's own requirements",
+			// review runs BEFORE verification — it never reads a
+			// verification report, and the project-rules violation keeps its
+			// blocking status at any position in any round.
+			"The machine gate is `verification`, the step AFTER you",
+			"a violation of any AGENTS.md rule", "blocks at any position, in any round",
+			"summarizes every `non-blocking` item into",
 			// polyforge#222: the text-only boundary (defined once in the shared
-			// review body) and the mis-marking judgment duty ride every lane's
-			// review prompt — the marker the driver's light-rewind eligibility
-			// reads, and the record the re-run judges the light round by.
+			// review body) rides every lane's review prompt — the marker the
+			// driver's light-rewind eligibility reads.
 			"comments and documentation in any file, test files included",
 			"code, tests and assertions", "`workflows/**` `.md` files", "prompts drive step agents",
 			"`text_only: true` only when its fix touches nothing but the",
-			"non-blocking findings never enter the rule", "cause: gate_fail_rewind_text_only",
-			// review B1: the trigger keys on the latest REWIND-ARCHIVE attempt
-			// (a normal light completion appends an accepted attempt after the
-			// light archive, so "the latest archived attempt" never fires at
-			// re-run time), and the light round is anchored to the archived
-			// record — the diff after the pre-light commits — never to
-			// output.commits, which a resumed session may re-list in full.
-			"the latest attempt whose cause is neither `accepted` nor `infra_failure`",
-			"archived `result` holds the pre-light output",
-			"what changed after the last sha that list names", "`git diff <that sha>..HEAD`",
-			"BLOCKING mis-marking", "record it WITHOUT `text_only`",
-			// workbench#29: review re-entry mode rides every lane's review
-			// prompt — the archived structured findings list is inherited
-			// (never the conversation), the checklist face references a
-			// still-open prior blocking finding by its position, and the
-			// fresh face still runs over the whole change.
-			"`artifacts/steps/review/`", "checklist face", "fresh face",
-			"prior round", "residual", "without re-deriving", "first round",
-			"conversation of a prior review round is never inherited"},
+			"non-blocking findings never enter the rule",
+			// the round contract, the re-entry faces and the
+			// light-round mis-marking duty ride a RE-ENTRY dispatch only
+			// (TestW80ReviewPromptShapes); every round names the boundary.
+			"first round"},
 	}
 	for stepID, byBundle := range lanes {
 		for bundle, f := range byBundle {
@@ -351,6 +372,11 @@ func TestSharedStepPromptsKeepLaneFacts(t *testing.T) {
 				if !strings.Contains(prompt, w) {
 					t.Errorf("%s/%s prompt lost lane fact %q", bundle, stepID, w)
 				}
+			}
+			// review runs before verification — its prompt never
+			// names the verification report as its evidence.
+			if stepID == reviewStepID && strings.Contains(prompt, "verification-report") {
+				t.Errorf("%s/review prompt still reads a verification report", bundle)
 			}
 			for other, of := range byBundle {
 				if other == bundle {
@@ -398,7 +424,142 @@ func TestMechanicalClassifySectionRendersOnArmedLanesOnly(t *testing.T) {
 	}
 }
 
-// TestW19TierLaneTextContentContract (workbench#19 B4): pins the phrases
+// TestSharedFragmentRendersOncePerDefinition: a shared
+// fragment a step file includes renders exactly once in that step's
+// rendered definition — the one-source rule (a second copy of a block
+// the fragment owns, or a step file that stopped including it, drifts).
+// The fragment's text is matched whole, so a partial re-copy inside a
+// step file is not mistaken for the include.
+func TestSharedFragmentRendersOncePerDefinition(t *testing.T) {
+	fragmentOnce := map[string][][2]string{
+		// the per-unit fast-check bar's definition: the four build steps
+		// that run it and the two plan steps that declare it.
+		"fast_checks.md": {
+			{"chore", "code"}, {"feature-full", "code"}, {"bug-fix", "fix"}, {"autopilot", "fix"},
+			{"chore", "plan"}, {"feature-full", "plan"},
+		},
+		// the run-time imperatives of that bar ( W2): only the
+		// four build steps that run it — a plan step declares the bar and
+		// runs nothing.
+		"fast_checks_build.md": {
+			{"chore", "code"}, {"feature-full", "code"}, {"bug-fix", "fix"}, {"autopilot", "fix"},
+		},
+		// the handoff duty of a handoff-declaring step: the three shipped
+		// steps that carried the block. The other handoff-declaring steps
+		// (bug-fix/root-cause, feature-full/grill-review) carry no handoff
+		// text of their own; the driver's delivery contract line states the
+		// capsule-root-bound path and the path convention for every one.
+		"handoff_duty.md": {
+			{"chore", "plan"}, {"feature-full", "grill"}, {"autopilot", "grill"},
+		},
+	}
+	for frag, targets := range fragmentOnce {
+		raw, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, frag))
+		if err != nil {
+			t.Fatalf("fragment %s: %v", frag, err)
+		}
+		text := strings.TrimSpace(string(raw))
+		for _, bs := range targets {
+			bundle, step := bs[0], bs[1]
+			def, err := readStepDefinition(filepath.Join(shippedWorkflowsDir, bundle), step, shippedVars(t, filepath.Join(shippedWorkflowsDir, bundle), step))
+			if err != nil {
+				t.Fatalf("%s/%s: %v", bundle, step, err)
+			}
+			if n := strings.Count(def, text); n != 1 {
+				t.Errorf("%s/%s renders the %s fragment %d times, want exactly 1", bundle, step, frag, n)
+			}
+		}
+	}
+	// W2: the plan steps DECLARE the bar — they never carry
+	// the build step's run-time imperatives, and each keeps its own
+	// declaration of where the full suite belongs (feature-full's "not
+	// even for the final unit" included).
+	build, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "fast_checks_build.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ bundle, want string }{
+		{"chore", "The full suite is not a per-unit bar — it belongs to `verification`."},
+		{"feature-full", "The full suite is NOT a per-unit bar, not even for the final unit - it belongs to `verification`"},
+	} {
+		def, err := readStepDefinition(filepath.Join(shippedWorkflowsDir, c.bundle), "plan", shippedVars(t, filepath.Join(shippedWorkflowsDir, c.bundle), "plan"))
+		if err != nil {
+			t.Fatalf("%s/plan: %v", c.bundle, err)
+		}
+		flat := strings.Join(strings.Fields(def), " ")
+		for _, imperative := range []string{strings.Join(strings.Fields(string(build)), " "), "do not run the full suite", "do not proceed on top of a red fast check"} {
+			if strings.Contains(flat, imperative) {
+				t.Errorf("%s/plan carries the build step's run-time imperative %q — a plan step declares the bar, it runs nothing", c.bundle, imperative)
+			}
+		}
+		if !strings.Contains(flat, c.want) {
+			t.Errorf("%s/plan lost its full-suite declaration %q", c.bundle, c.want)
+		}
+	}
+}
+
+// TestHandoffDutyFragmentAndContractPath: the handoff
+// duty block lives once in workflows/_shared/handoff_duty.md (the
+// exactly-once pin is TestSharedFragmentRendersOncePerDefinition); the
+// driver's delivery contract stays self-sufficient for every
+// handoff-declaring step — the capsule-root-bound path of the handoff file
+// plus the path-convention clause — whether or not the step includes the
+// fragment (chore/plan does; bug-fix/root-cause carries no handoff text).
+func TestHandoffDutyFragmentAndContractPath(t *testing.T) {
+	for _, bs := range [][2]string{{"chore", "plan"}, {"bug-fix", "root-cause"}} {
+		bundle, step := bs[0], bs[1]
+		capDir := capsuleWithShippedBundle(t, bundle)
+		for _, name := range []string{"fast_checks.md", "handoff_duty.md", "principles.md"} {
+			raw, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeCapsuleFile(t, capDir, "workflows/"+workflow.SharedDir+"/"+name, string(raw))
+		}
+		sp := &captureSpawner{}
+		ad, err := NewStepSpawnAdapter(StepSpawnAdapter{
+			WI:           WIInfo{ID: "wi_hd", CapsuleDir: capDir, BundleName: bundle, SessionHandle: "ab12cd34"},
+			Spawner:      sp,
+			PollInterval: 2 * time.Millisecond,
+		})
+		if err != nil {
+			t.Fatalf("NewStepSpawnAdapter: %v", err)
+		}
+		if _, err := ad.SpawnStep(context.Background(), StepSpawn{StepID: step, SpawnN: 1}); err != nil {
+			t.Fatalf("SpawnStep %s/%s: %v", bundle, step, err)
+		}
+		p, _ := sp.last()
+		want := "write the handoff file at `" + capDir + "/artifacts/handoff-" + step + ".md` — the next inherit step reads it by that path convention"
+		if !strings.Contains(p.InitialPrompt, want) {
+			t.Errorf("%s/%s: the handoff-declaring prompt lost the absolute handoff path or its path-convention clause %q\n%s", bundle, step, want, p.InitialPrompt)
+		}
+		if strings.Contains(p.InitialPrompt, "handoff duty section states") {
+			t.Errorf("%s/%s: the delivery contract points at a handoff duty section the step may not carry\n%s", bundle, step, p.InitialPrompt)
+		}
+	}
+}
+
+// TestNoStaticLightRewindSection: the light re-entry
+// instruction is the driver's LightRewindNote/MechanicalRewindNote,
+// rendered as its own prompt section exactly on a light rewind — no
+// shipped build-step definition carries a static second copy (which
+// would render on every normal dispatch too). The light-rewind
+// presence side is spawn_test.go's note-render pin.
+func TestNoStaticLightRewindSection(t *testing.T) {
+	for _, bs := range [][2]string{{"bug-fix", "fix"}, {"chore", "code"}, {"feature-full", "code"}, {"autopilot", "fix"}} {
+		bundle, step := bs[0], bs[1]
+		raw, err := workflow.ReadStepDefinition(filepath.Join(shippedWorkflowsDir, bundle), step, shippedVars(t, filepath.Join(shippedWorkflowsDir, bundle), step))
+		if err != nil {
+			t.Fatalf("%s/%s: %v", bundle, step, err)
+		}
+		body := stepDefBody(raw)
+		if strings.Contains(body, "Light rewind re-entry") {
+			t.Errorf("%s/%s carries a static light re-entry section (the driver's note is the single copy)", bundle, step)
+		}
+	}
+}
+
+// TestW19TierLaneTextContentContract ( B4): pins the phrases
 // this change adds to the SHIPPED lane text and docs. It reads the files
 // themselves - never a step's echo of a question it scripted - and every
 // phrase below is absent at base 314ec6e6. This is the content contract
@@ -435,7 +596,248 @@ func TestW19TierLaneTextContentContract(t *testing.T) {
 			t.Errorf("%s does not name the opt-in marker `verification: scoped`", rel)
 		}
 	}
-	if !strings.Contains(read("workflows/_shared/steps/verification.md"), "contract") {
-		t.Errorf("verification.md does not state the scoped run narrows breadth, never the contract")
+	// the scoped rules live in the shared scoped material
+	// the driver renders on a scoped verification dispatch only.
+	if !strings.Contains(read("workflows/_shared/scoped_verification.md"), "narrows breadth, never the contract") {
+		t.Errorf("scoped_verification.md does not state the scoped run narrows breadth, never the contract")
+	}
+}
+
+// w80SchemaBlock answers the output-schema block a dispatched prompt
+// shows ("" when it shows none).
+func w80SchemaBlock(prompt string) string {
+	const open = "```yaml\n"
+	i := strings.Index(prompt, "# Output schema")
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(prompt[i:], open)
+	if j < 0 {
+		return ""
+	}
+	rest := prompt[i+j+len(open):]
+	if k := strings.Index(rest, "\n```"); k >= 0 {
+		return rest[:k]
+	}
+	return rest
+}
+
+// w80ScopedVerificationPhrases are phrases of the shared scoped-tier
+// material (workflows/_shared/scoped_verification.md) only a scoped
+// verification dispatch carries.
+var w80ScopedVerificationPhrases = []string{
+	"narrows breadth, never the contract",
+	"Fast-gate scope comes from the release-shipped engine",
+	"Any engine failure falls back to the full tier",
+	"**Incremental re-verification.**",
+	"the driver blocks the automatic merge when the two",
+	"`steps.review.output.scope`",
+	"`.polyforge/verify-scope.conf`",
+}
+
+// TestW80VerificationPromptShapes: the verification
+// prompt carries its rare-path material only on the dispatch shape that
+// needs it. A plain FULL dispatch shows no scoped-tier rules and no
+// `scope` schema; an unarmed lane shows no `mechanical_bound`; a lane
+// without an authored suite shows no `authored_titles`/`scenarios`. A
+// SCOPED dispatch carries the scoped material exactly once plus the
+// `scope` schema; the armed + authored lane (feature-full) shows its
+// fragments. The x-prompt-when marker never reaches any prompt.
+func TestW80VerificationPromptShapes(t *testing.T) {
+	type shape struct{ armed, authored bool }
+	lanes := map[string]shape{
+		"chore":        {},
+		"bug-fix":      {},
+		"autopilot":    {},
+		"feature-full": {armed: true, authored: true},
+	}
+	for bundle, sh := range lanes {
+		full := spawnStepPromptWith(t, bundle, StepSpawn{StepID: verificationStepID, SpawnN: 1, ScopeTier: tierFull})
+		schema := w80SchemaBlock(full)
+		if schema == "" {
+			t.Fatalf("%s/verification: no output schema rendered", bundle)
+		}
+		if strings.Contains(full, promptWhenKey) {
+			t.Errorf("%s/verification prompt shows the %s marker", bundle, promptWhenKey)
+		}
+		if strings.Contains(schema, "\n    scope:") || strings.Contains(schema, "fast_gates_ref") {
+			t.Errorf("%s/verification FULL prompt shows the scope schema:\n%s", bundle, schema)
+		}
+		for _, p := range w80ScopedVerificationPhrases[:4] {
+			if strings.Contains(full, p) {
+				t.Errorf("%s/verification FULL prompt carries scoped material %q", bundle, p)
+			}
+		}
+		if !strings.Contains(full, "This work item runs the FULL tier") {
+			t.Errorf("%s/verification FULL prompt lost the full-tier contract line", bundle)
+		}
+		if got := strings.Contains(schema, "mechanical_bound"); got != sh.armed {
+			t.Errorf("%s/verification schema shows mechanical_bound = %v, want %v (armed)", bundle, got, sh.armed)
+		}
+		for _, f := range []string{"authored_titles", "\n    scenarios:"} {
+			if got := strings.Contains(schema, f); got != sh.authored {
+				t.Errorf("%s/verification schema shows %q = %v, want %v (authored)", bundle, f, got, sh.authored)
+			}
+		}
+		// always-shown fields stay
+		for _, f := range []string{"verdict:", "checks:", "test_bar:", "pre_existing_failures:", "oneOf:"} {
+			if !strings.Contains(schema, f) {
+				t.Errorf("%s/verification schema lost %q", bundle, f)
+			}
+		}
+	}
+	for _, bundle := range []string{"chore", "bug-fix", "feature-full"} {
+		scoped := spawnStepPromptWith(t, bundle, StepSpawn{StepID: verificationStepID, SpawnN: 1, ScopeTier: tierScoped})
+		for _, p := range w80ScopedVerificationPhrases {
+			if !strings.Contains(scoped, p) {
+				t.Errorf("%s/verification SCOPED prompt lost scoped fact %q", bundle, p)
+			}
+		}
+		if n := strings.Count(scoped, "Any engine failure falls back to the full tier"); n != 1 {
+			t.Errorf("%s/verification SCOPED prompt carries the scoped material %d times, want 1", bundle, n)
+		}
+		schema := w80SchemaBlock(scoped)
+		if !strings.Contains(schema, "\n    scope:") || !strings.Contains(schema, "fast_gates_ref") {
+			t.Errorf("%s/verification SCOPED prompt lost the scope schema", bundle)
+		}
+		if strings.Contains(scoped, promptWhenKey) {
+			t.Errorf("%s/verification SCOPED prompt shows the %s marker", bundle, promptWhenKey)
+		}
+	}
+	// another step never carries the scoped verification material
+	review := spawnStepPromptWith(t, "chore", StepSpawn{StepID: reviewStepID, SpawnN: 1, ScopeTier: tierScoped})
+	if strings.Contains(review, "Any engine failure falls back to the full tier") {
+		t.Errorf("chore/review prompt carries the scoped verification material")
+	}
+}
+
+// w80ReviewReentryPhrases are the facts of the shared re-entry material
+// (workflows/_shared/review_reentry.md):'s round contract,
+// polyforge#222's light-round mis-marking duty (keyed on the latest
+// REWIND-ARCHIVE attempt and anchored to the archived pre-light record,
+// never to output.commits) and's two re-entry faces (the
+// archived findings list inherited, never the conversation).
+var w80ReviewReentryPhrases = []string{
+	"**true bug anywhere**", "new discovery on the fix surface",
+	"cause: gate_fail_rewind_text_only",
+	"the latest attempt whose cause is neither `accepted` nor `infra_failure`",
+	"archived `result` holds the pre-light output",
+	"what changed after the last sha that list names", "`git diff <that sha>..HEAD`",
+	"BLOCKING mis-marking", "record it WITHOUT `text_only`",
+	"`artifacts/steps/review/`", "checklist face", "fresh face",
+	"prior round", "residual", "without re-deriving",
+	"conversation of a prior review round is never inherited",
+	"## The round contract",
+}
+
+// w80ScopedReviewPhrases are the facts of the shared scoped-review
+// material (workflows/_shared/scoped_review.md).
+var w80ScopedReviewPhrases = []string{
+	"**Answer `scope_adequate` and record your `scope`",
+	"automatic merge needs the two declarations to agree",
+	"completed review of a scoped work item that omits `scope_adequate`",
+}
+
+// TestW80ReviewPromptShapes: the review prompt carries
+// its rare-path material only on the dispatch that needs it. A FIRST
+// round (no prior verdict round on record) carries none of the re-entry,
+// round-contract or mis-marking text and no residual_of schema; a
+// RE-ENTRY carries all of it once, with the lane's build step rendered.
+// A full-tier work item's review shows no scope material or schema; a
+// scoped one shows both.
+func TestW80ReviewPromptShapes(t *testing.T) {
+	for _, bundle := range []string{"chore", "bug-fix", "feature-full"} {
+		wf, err := LoadWorkflow(filepath.Join(shippedWorkflowsDir, bundle))
+		if err != nil {
+			t.Fatal(err)
+		}
+		build := wf.buildStep()
+		first := spawnStepPromptWith(t, bundle, StepSpawn{StepID: reviewStepID, SpawnN: 1, ScopeTier: tierFull})
+		for _, p := range w80ReviewReentryPhrases {
+			if p == "prior round" || p == "residual" {
+				continue // the always-rendered pointer and output duty name them
+			}
+			if strings.Contains(first, p) {
+				t.Errorf("%s/review FIRST-round prompt carries re-entry material %q", bundle, p)
+			}
+		}
+		schema := w80SchemaBlock(first)
+		for _, f := range []string{"residual_of", "scope_adequate", "\n    scope:", promptWhenKey} {
+			if strings.Contains(schema, f) {
+				t.Errorf("%s/review FIRST-round full-tier schema shows %q", bundle, f)
+			}
+		}
+		for _, p := range w80ScopedReviewPhrases {
+			if strings.Contains(first, p) {
+				t.Errorf("%s/review full-tier prompt carries scoped material %q", bundle, p)
+			}
+		}
+		if strings.Contains(first, "\n# Review re-entry (") {
+			t.Errorf("%s/review FIRST-round prompt renders the re-entry section", bundle)
+		}
+
+		again := spawnStepPromptWith(t, bundle, StepSpawn{StepID: reviewStepID, SpawnN: 2, ScopeTier: tierFull, ReviewReentry: true})
+		for _, p := range w80ReviewReentryPhrases {
+			if !strings.Contains(again, p) {
+				t.Errorf("%s/review RE-ENTRY prompt lost %q", bundle, p)
+			}
+		}
+		if n := strings.Count(again, "## The round contract"); n != 1 {
+			t.Errorf("%s/review RE-ENTRY prompt carries the round contract %d times, want 1", bundle, n)
+		}
+		if strings.Contains(again, "{{") {
+			t.Errorf("%s/review RE-ENTRY prompt carries an unrendered placeholder", bundle)
+		}
+		if !strings.Contains(again, "`steps."+build+".attempts`") {
+			t.Errorf("%s/review RE-ENTRY prompt does not name its build step %q in the mis-marking duty", bundle, build)
+		}
+		if !strings.Contains(w80SchemaBlock(again), "residual_of") {
+			t.Errorf("%s/review RE-ENTRY schema lost residual_of", bundle)
+		}
+
+		scoped := spawnStepPromptWith(t, bundle, StepSpawn{StepID: reviewStepID, SpawnN: 1, ScopeTier: tierScoped})
+		for _, p := range w80ScopedReviewPhrases {
+			if !strings.Contains(scoped, p) {
+				t.Errorf("%s/review SCOPED prompt lost %q", bundle, p)
+			}
+		}
+		ss := w80SchemaBlock(scoped)
+		if !strings.Contains(ss, "scope_adequate") || !strings.Contains(ss, "\n    scope:") {
+			t.Errorf("%s/review SCOPED schema lost scope/scope_adequate", bundle)
+		}
+		if strings.Contains(scoped, promptWhenKey) {
+			t.Errorf("%s/review SCOPED prompt shows the %s marker", bundle, promptWhenKey)
+		}
+	}
+}
+
+// TestW80PrepareDispatchReviewFacts: the review dispatch
+// is a re-entry exactly when a prior verdict-bearing round is on record
+// (steps.review.last_review_round), and its scoped material keys on the
+// work item's opt-in - never on the recorded verification tier a
+// verification FAIL resets to full (the scope_adequate validation keys
+// on the opt-in too).
+func TestW80PrepareDispatchReviewFacts(t *testing.T) {
+	d := harnessDriver(t, nil, nil)
+	sp, _, err := d.prepareDispatch(reviewStepID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sp.ReviewReentry {
+		t.Errorf("a review with no round on record dispatched as a re-entry")
+	}
+	d.exec.Steps[reviewStepID].LastReviewRound = &capsule.ReviewRound{Round: 1, Blocking: 1}
+	d.scopeOptIn = true
+	d.wi.BundleName = "chore"
+	d.exec.ScopeTier = tierFull // a verification FAIL reset the recorded tier
+	sp, _, err = d.prepareDispatch(reviewStepID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sp.ReviewReentry {
+		t.Errorf("a review with a verdict round on record did not dispatch as a re-entry")
+	}
+	if sp.ScopeTier != tierScoped {
+		t.Errorf("an opted-in review dispatched at tier %q, want %q (the opt-in, not the reset verification tier)", sp.ScopeTier, tierScoped)
 	}
 }

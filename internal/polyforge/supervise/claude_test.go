@@ -32,8 +32,18 @@ func TestClaudeTranslatorReplay(t *testing.T) {
 		"alive",                                                // message_stop
 		"alive", `tool_start:Bash:{"command":"go test ./..."}`, // assistant tool_use
 		"tool_end:", "waiting", // tool_result → next request
+		// the wait-call records (wait.go): a translator hands them on like
+		// any tool call; the Tracker is what counts them
+		"alive", `tool_start:Bash:{"command":"sleep 120 && gh pr checks 7","description":"wait for CI"}`,
+		"tool_end:", "waiting",
+		"alive", `tool_start:Bash:{"command":"for i in 1 2 3 4 5; do gh pr checks 7 && break; sleep 30; done"}`,
+		"tool_end:", "waiting",
+		"alive", `tool_start:Bash:{"command":"sleep 2 && git fetch origin"}`,
+		"tool_end:", "waiting",
+		"alive", `tool_start:Bash:{"command":"sleep 1m"}`,
+		"tool_end:", "waiting",
 		"alive", `tool_start:Agent:{"description":"review","prompt":"review the diff"}`,
-		"alive", "alive", // sub-agent internals: life only
+		"alive", "alive", "alive", // sub-agent internals (its own sleep included): life only
 		"tool_end:", "waiting",
 		"alive", "waiting", "error:claude-code rate limit (429) (HTTP 429)", // api_retry
 		"noise", "noise", "noise", // rate_limit_event, task_started, garbage

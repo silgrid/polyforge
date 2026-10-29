@@ -28,7 +28,9 @@ func TestV2LiveErrorTurnGoesThroughD7(t *testing.T) {
 		{"429", `429 {"type":"error","error":{"type":"rate_limit_error","message":"rate limit exceeded"}}`, 2, "rate_limited", true},
 		{"zh-concurrency", "当前模型并发数过高，请稍后再试", 0, "rate_limited", true},
 		{"upstream-malformed-tool-call", "Upstream tool call has incomplete or invalid JSON arguments", 0, "upstream_transient", true},
-		{"insufficient-balance", `402 {"error":{"message":"Insufficient balance"}}`, 0, "model_error", false},
+		// an allowance text is archived as the exit path archives it and
+		// switches at once (a bare model_error's first death resumes)
+		{"insufficient-balance", `402 {"error":{"message":"Insufficient balance"}}`, 0, "exit_model_class", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -38,7 +40,11 @@ func TestV2LiveErrorTurnGoesThroughD7(t *testing.T) {
 					{"do": "envelope", "id": "grill", "error_turn": c.errMsg, "error_retries": c.retries},
 					{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 				}), nil)
-			d := newV1Daemon(t, inst, optSupervision(supBounds{modelErrorGrace: time.Second}))
+			// a 2s grace, as the other rule-1 e2e scenarios use: the
+			// verdict must not hinge on a loaded host scheduling the
+			// error turn inside a 1s window
+			grace := 2 * time.Second
+			d := newV1Daemon(t, inst, optSupervision(supBounds{modelErrorGrace: grace}))
 			d.start()
 			t.Cleanup(func() { killOrphans(wi) })
 			d.pf(t, "submit", wi)
@@ -72,13 +78,19 @@ func TestV2LiveErrorTurnGoesThroughD7(t *testing.T) {
 						backoff = b.BackoffMs
 					}
 				}
-				if backoff != 1000 {
-					t.Fatalf("live %s: backoff_ms %d, want the first D7 backoff (1000)", c.name, backoff)
+				// a throttle waits the first D7 backoff (1s); a transient the
+				// first retry-pacing wait (the e2e daemons' base)
+				want := int64(1000)
+				if c.cause == "upstream_transient" {
+					want = e2eRetryBackoffBase.Milliseconds()
 				}
-				// T carries the error dispatch (>= the 1s grace) plus the
-				// 1s backoff it imposed
-				if wall < 2000 {
-					t.Fatalf("live %s: step T %vms, want the dispatch and the 1s D7 backoff booked in", c.name, wall)
+				if backoff != want {
+					t.Fatalf("live %s: backoff_ms %d, want the first backoff (%d)", c.name, backoff, want)
+				}
+				// T carries the error dispatch (>= the grace) plus the
+				// backoff it imposed
+				if wall < float64(grace.Milliseconds()+want) {
+					t.Fatalf("live %s: step T %vms, want the dispatch and the %dms backoff booked in", c.name, wall, want)
 				}
 				return
 			}

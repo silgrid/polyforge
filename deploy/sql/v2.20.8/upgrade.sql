@@ -1,4 +1,4 @@
--- deploy/sql/v2.20.8/upgrade.sql — workbench#57 machine-heartbeat
+-- deploy/sql/v2.20.8/upgrade.sql — machine-heartbeat
 -- permission model: a machine is identified by its operator, not by a
 -- machine user.
 --

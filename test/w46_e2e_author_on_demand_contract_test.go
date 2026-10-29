@@ -1,6 +1,6 @@
 package test
 
-// w46_e2e_author_on_demand_contract_test.go: text contract for workbench#46.
+// w46_e2e_author_on_demand_contract_test.go: text contract for.
 //
 // Work item #46 gives the feature-full lane a per-work-item e2e-author mode:
 // a lane var `e2e_author_mode` whose default `required` is the untouched lane,
@@ -16,7 +16,13 @@ package test
 // shipped. The qualitative half — that a real grill actually proposes the mode
 // and the owner actually approves it — cannot be machine-verified from text
 // and is observed on real WIs, recorded in the capsule's code summary, the
-// same way workbench#30/#44 handled their non-machine-verifiable residual.
+// same way/#44 handled their non-machine-verifiable residual.
+//
+// The sweep later removed the mode text's "static default"
+// constant explanation and the manufactured clean-tree skip evidence
+// (the "git status --porcelain" proof and the "any real command is not a
+// skip" framing), keeping the mode's fail-closed resolution; the marker set
+// below was updated with that stated reason.
 
 import (
 	"os"
@@ -80,26 +86,27 @@ func TestW46E2eAuthorOnDemandContract(t *testing.T) {
 				"{{e2e_author_mode}}",
 				"skipped-with-rationale",
 				"skip_rationale",
-				// the rendered var is the lane default, not the run's mode;
-				// a skip needs the owner's explicit approval and records the
-				// real commands it ran (the grill-qa.md read + a clean tree).
+				// the rendered var is the lane default, not the run's mode; a
+				// skip needs the owner's explicit approval and records the one
+				// command that read it (the grill-qa.md read). The
+				// sweep removed the "static default" constant explanation and
+				// the manufactured clean-tree evidence ("git status
+				// --porcelain", "any real command is not a skip") while keeping
+				// the mode's fail-closed resolution.
 				"lane default",
-				"static default",
 				"the owner's explicit approval",
-				"git status --porcelain",
-				"any real command is not a skip",
 			},
 		},
 	}
 	for _, c := range cases {
 		b, err := os.ReadFile(filepath.Join(root, c.rel))
 		if err != nil {
-			t.Fatalf("workbench#46: %s is lane text the on-demand e2e-author mode must extend: %v", c.rel, err)
+			t.Fatalf("%s is lane text the on-demand e2e-author mode must extend: %v", c.rel, err)
 		}
 		s := string(b)
 		for _, want := range c.want {
 			if !strings.Contains(s, want) {
-				t.Errorf("workbench#46: %s must carry the on-demand marker %q — the feature-full lane carries one `e2e_author_mode` var (default `required`); `skipped-with-rationale` is owner-approved for an internal-mechanism / non-behaviour-face work item, proposed by grill and recorded in artifacts/grill-qa.md, applied by plan, and honoured by e2e-author (`skip_rationale`, empty scenarios/baseline); a behaviour face work item stays `required`", c.rel, want)
+				t.Errorf("%s must carry the on-demand marker %q — the feature-full lane carries one `e2e_author_mode` var (default `required`); `skipped-with-rationale` is owner-approved for an internal-mechanism / non-behaviour-face work item, proposed by grill and recorded in artifacts/grill-qa.md, applied by plan, and honoured by e2e-author (`skip_rationale`, empty scenarios/baseline); a behaviour face work item stays `required`", c.rel, want)
 			}
 		}
 	}
@@ -113,7 +120,7 @@ func TestW46E2eAuthorModeDefaultOnlyFeatureFull(t *testing.T) {
 	root := v1Root(t)
 	entries, err := os.ReadDir(filepath.Join(root, "workflows"))
 	if err != nil {
-		t.Fatalf("workbench#46: workflows/ must be readable: %v", err)
+		t.Fatalf("workflows/ must be readable: %v", err)
 	}
 	sawFeatureFull := false
 	for _, e := range entries {
@@ -129,15 +136,15 @@ func TestW46E2eAuthorModeDefaultOnlyFeatureFull(t *testing.T) {
 		if e.Name() == "feature-full" {
 			sawFeatureFull = true
 			if !strings.Contains(s, "e2e_author_mode: required") {
-				t.Errorf("workbench#46: feature-full's workflow.md must declare the default `e2e_author_mode: required` — the untrimmed lane is the shipped default")
+				t.Errorf("feature-full's workflow.md must declare the default `e2e_author_mode: required` — the untrimmed lane is the shipped default")
 			}
 			continue
 		}
 		if strings.Contains(s, "e2e_author_mode") {
-			t.Errorf("workbench#46: %s declares e2e_author_mode; the mode is feature-full only, and a non-adopting lane must stay unchanged", wf)
+			t.Errorf("%s declares e2e_author_mode; the mode is feature-full only, and a non-adopting lane must stay unchanged", wf)
 		}
 	}
 	if !sawFeatureFull {
-		t.Fatal("workbench#46: workflows/feature-full/workflow.md was not found")
+		t.Fatal("workflows/feature-full/workflow.md was not found")
 	}
 }

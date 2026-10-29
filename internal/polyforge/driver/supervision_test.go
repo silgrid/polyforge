@@ -861,7 +861,7 @@ func TestRetryPromptNamesEndedWithoutResult(t *testing.T) {
 	if !strings.Contains(out, "ended without submitting a result") {
 		t.Fatalf("retry prompt must tell the agent: %q", out)
 	}
-	// workbench#7: the EWR notice names the one delivery channel, never
+	// the EWR notice names the one delivery channel, never
 	// the stale "envelope file is written" shape.
 	if !strings.Contains(out, "pf result submit") || strings.Contains(out, "envelope file is written") {
 		t.Fatalf("the EWR notice must name `pf result submit` and drop the file wording: %q", out)
@@ -930,7 +930,7 @@ func TestStepRunWaitCancelSurfacesEnvelopeDefect(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// The capsule tree hash on the failure archive (workbench#21).
+// The capsule tree hash on the failure archive.
 
 // The step_failed archive records the capsule tree hash failDispatch
 // computed before the transition took the lock.

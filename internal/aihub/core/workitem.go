@@ -632,8 +632,12 @@ func refuseUnbindWhileBlockingTx(tx *sql.Tx, wiID string) error {
 	return nil
 }
 
-// Patch updates the mutable field set. fields maps field name → raw JSON.
-func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage) (*WIView, error) {
+// Patch updates the mutable field set. fields maps field name → raw JSON;
+// actor is the requesting user, recorded on the wi_content_updated event
+// (the event's actor is who PATCHed, read back through
+// GET /work-items/{id}?include=events; the payload stays empty and
+// historical events are not backfilled).
+func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, actor string) (*WIView, error) {
 	// Bundle fields (w140): parsed up front (pure — no DB access); the R2
 	// window gate and the CAS write run inside the transaction later on.
 	// Concurrency with Claim needs no extra arbitration: the single-writer
@@ -770,7 +774,7 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage) (*
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, Fail(api.ErrCoreNotFound, "", "work item %s", id)
 	}
-	if err := appendEventTx(tx, id, Now(), "", "wi_content_updated", nil); err != nil {
+	if err := appendEventTx(tx, id, Now(), actor, "wi_content_updated", nil); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1018,6 +1022,11 @@ type ListFilters struct {
 	// Limit caps the page. 0 = the production default (500, the queue
 	// views). Explicit values are clamped to maxListLimit.
 	Limit int
+	// ReadableProjects narrows the page to the caller's readable
+	// projects BEFORE the LIMIT is applied: nil = no
+	// narrowing (a global admin); a non-nil EMPTY set = nothing readable
+	// anywhere, answered as an empty page without a query.
+	ReadableProjects []string
 }
 
 // maxListLimit clamps an explicit list page.
@@ -1025,8 +1034,15 @@ const maxListLimit = 1000
 
 const defaultListLimit = 500
 
-// List returns work items matching the filters, newest first.
+// List returns work items matching the filters, newest first. The
+// readable-project narrowing runs INSIDE the SQL, before the LIMIT —
+// a caller with readable items never gets an empty page because newer
+// unreadable rows filled the limit window first.
 func (m *WIManager) List(f ListFilters) ([]WIView, error) {
+	if f.ReadableProjects != nil && len(f.ReadableProjects) == 0 {
+		// Nothing readable anywhere: the empty page, no query.
+		return []WIView{}, nil
+	}
 	q := wiSelect + wiFrom + ` WHERE 1=1`
 	var args []any
 	if f.Project != "" {
@@ -1048,6 +1064,17 @@ func (m *WIManager) List(f ListFilters) ([]WIView, error) {
 	if f.Milestone != "" {
 		q += ` AND w.milestone=?`
 		args = append(args, f.Milestone)
+	}
+	if f.ReadableProjects != nil {
+		q += ` AND w.project_id IN (`
+		for i, p := range f.ReadableProjects {
+			if i > 0 {
+				q += `,`
+			}
+			q += `?`
+			args = append(args, p)
+		}
+		q += `)`
 	}
 	q += ` ORDER BY w.created_at DESC LIMIT ?`
 	limit := f.Limit

@@ -1,6 +1,6 @@
 package runtime
 
-// task_git_env_lowspeed_repro_test.go (workbench#2): taskGitEnv's contract
+// task_git_env_lowspeed_repro_test.go: taskGitEnv's contract
 // is "team defaults only when the operator did not set the variable".
 // Every task-repo git call (clone, fetch, restore) runs with it, so an
 // explicit GIT_HTTP_LOW_SPEED_LIMIT / GIT_HTTP_LOW_SPEED_TIME that reached

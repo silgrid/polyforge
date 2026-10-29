@@ -33,22 +33,25 @@ func TestV1S27GateFailVerdictInsideCompletedEnvelopeMustRewind(t *testing.T) {
 
 	// The bug-fix lane, scripted per spawn ordinal (the Nth envelope
 	// action fires for spawn N — across fresh and re-dispatched spawns
-	// alike, so the entries after #5 only ever fire when the rewind
-	// machinery works; on the buggy driver the lane completes at #5).
+	// alike, so the entries after #4 only ever fire when the rewind
+	// machinery works; on the buggy driver the lane completes at #4).
 	plan := []map[string]any{
 		{"do": "envelope", "id": "repro", "outcome": "completed", "handoff": true,
 			"files": map[string]string{"artifacts/repro.md": "# repro\n\nfake agent reproduction record\n"}},
 		{"do": "envelope", "id": "root-cause", "outcome": "completed", "handoff": true},
 		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
 		// #106's exact shape: the review gate's FAIL verdict (with the
 		// fail_reason and blocking finding the review output schema
 		// demands) rides the output JSON of a COMPLETED envelope.
+		// (review is the first gate behind fix, so the shape
+		// fires at spawn 4; the entries after it only ever run when the
+		// rewind machinery works.)
 		{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{
 			"verdict":     "fail",
 			"fail_reason": "the fix suppresses the symptom at one call site; the cause is still reachable",
 			"findings":    []map[string]any{{"severity": "blocking", "detail": "root cause not removed"}},
 		}},
+		{"do": "envelope", "id": "verification", "outcome": "completed"},
 	}
 
 	wi := newWIWithBundle(t, inst, "s27: review fail verdict rides a completed envelope (#106 shape)", "bug-fix", plan)

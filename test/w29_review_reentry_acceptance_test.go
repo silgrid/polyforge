@@ -1,11 +1,14 @@
 package test
 
-// w29_review_reentry_acceptance_test.go: workbench#29 — the review
+// w29_review_reentry_acceptance_test.go: — the review
 // re-entry mode, end to end through the real daemon + driver and the
 // fake harness.
 //
-// The shared review body (`workflows/_shared/steps/review.md`) now
-// carries a re-entry section: on a re-entry the review still runs with a
+// The shared re-entry material (`workflows/_shared/review_reentry.md`,
+// which the driver renders as its own prompt section only on a review
+// dispatch with a prior verdict-bearing round on record — the w80 prompt
+// trim; the shared review body keeps a one-line pointer) carries the
+// re-entry contract: on a re-entry the review still runs with a
 // FRESH conversation (fresh is the base — the old reviewer's blind spots
 // are never inherited), and additionally reads the latest prior round's
 // structured findings list from its archive
@@ -25,7 +28,8 @@ package test
 // carries the re-entry material and names the archive path; (c) that
 // second dispatch is fresh (`resume` false — conversation is never
 // inherited); and (d) a one-round scenario has no prior review archive
-// when its only review dispatches. The judgment itself is not
+// when its only review dispatches, and its prompt carries none of the
+// re-entry material. The judgment itself is not
 // machine-verified anywhere in the suite; it is observed on real work
 // items during the contributing guide's discipline ③ observation window
 // for workflow/prompt changes.
@@ -49,6 +53,18 @@ var w29ReentryPhrases = []string{
 	"residual",
 	"without re-deriving",
 	"first round",
+}
+
+// w80FirstRoundAbsent are the w29ReentryPhrases only the re-entry
+// section carries ("prior round", "residual" and "first round" also
+// appear in the always-rendered review body's pointer and output duty).
+var w80FirstRoundAbsent = []string{
+	"`artifacts/steps/review/`",
+	"checklist face",
+	"fresh face",
+	"without re-deriving",
+	"## The round contract",
+	"BLOCKING mis-marking",
 }
 
 // w29Prompt reads the fake pi's persisted prompt of one derivation
@@ -108,24 +124,25 @@ func TestW29ReviewReentryTwoRound(t *testing.T) {
 				{"severity": "non-blocking", "detail": "nit: the helper name is terse"},
 			},
 		}},
-		w222Env("fix", true), w222Env("verification", false),
+		w67ChangedRound("fix", "demo-src", 1), // the fix pass adds the missing test
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{"verdict": "pass"}},
+		w222Env("verification", false),
 	)
 	capDir := w222RunPi(t, "w29: review re-entry reads the prior archived findings", plan)
 	x := readExecution(t, capDir)
 	if x.WorkflowStatus != "completed" {
 		t.Errorf("workflow_status %q, want completed (%s)", x.WorkflowStatus, execDigest(x))
 	}
-	// One review FAIL rewind to fix, then the gate tail re-runs unchanged.
-	if got := strings.Join(w222Order(t, capDir), ","); got != "repro,root-cause,fix,verification,review,fix,verification,review" {
+	// One review FAIL rewind to fix, then the gate tail re-runs unchanged
+	// (the tail is a fresh review, then verification).
+	if got := strings.Join(w222Order(t, capDir), ","); got != "repro,root-cause,fix,review,fix,review,verification" {
 		t.Errorf("dispatch order %s, want the two-round review tail", got)
 	}
 
 	// (a) The first-round verdict is archived and readable as the
 	// structured findings list the checklist face consumes: the first
-	// review is derivation 5 (repro 1, root-cause 2, fix 3,
-	// verification 4, review 5).
-	env := archivedEnvelope(t, capDir, "review", 5)
+	// review is derivation 4 (repro 1, root-cause 2, fix 3, review 4).
+	env := archivedEnvelope(t, capDir, "review", 4)
 	first := w29FindingsOf(t, env)
 	if len(first) != 2 {
 		t.Fatalf("first-round archived findings %v, want the two scripted findings", first)
@@ -139,11 +156,11 @@ func TestW29ReviewReentryTwoRound(t *testing.T) {
 
 	// (b) The second review dispatch's persisted prompt carries the
 	// re-entry material and names the archive path. The second review is
-	// derivation 8 (fix 6, verification 7, review 8).
-	prompt := w29Prompt(t, capDir, 8)
+	// derivation 6 (fix 5, review 6; verification 7 follows it).
+	prompt := w29Prompt(t, capDir, 6)
 	for _, want := range w29ReentryPhrases {
 		if !strings.Contains(prompt, want) {
-			t.Errorf("second review prompt (spawn 8) lost re-entry material %q", want)
+			t.Errorf("second review prompt (spawn 6) lost re-entry material %q", want)
 		}
 	}
 
@@ -164,6 +181,7 @@ func TestW29ReviewReentryTwoRound(t *testing.T) {
 func TestW29ReviewReentrySingleRound(t *testing.T) {
 	plan := append(w222BugFixHead(),
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{"verdict": "pass"}},
+		w222Env("verification", false),
 	)
 	capDir := w222RunPi(t, "w29: a single review round has no prior archive", plan)
 	x := readExecution(t, capDir)
@@ -175,8 +193,17 @@ func TestW29ReviewReentrySingleRound(t *testing.T) {
 		t.Fatalf("review dispatches %d, want 1: %v", len(rv), rv)
 	}
 	// (d) No prior archive existed when the only review dispatched: the
-	// sole archive is its own derivation (spawn 5).
-	if dirs := w29ReviewArchiveDirs(t, capDir); len(dirs) != 1 || dirs[0] != "s5" {
-		t.Errorf("review archives %v, want exactly [s5] — a first round has no prior round", dirs)
+	// sole archive is its own derivation (spawn 4 — review
+	// runs right after fix).
+	if dirs := w29ReviewArchiveDirs(t, capDir); len(dirs) != 1 || dirs[0] != "s4" {
+		t.Errorf("review archives %v, want exactly [s4] — a first round has no prior round", dirs)
+	}
+	// (d, w80) The first round's persisted prompt carries none of the
+	// re-entry material: it rides only a re-entry dispatch.
+	prompt := w29Prompt(t, capDir, 4)
+	for _, absent := range w80FirstRoundAbsent {
+		if strings.Contains(prompt, absent) {
+			t.Errorf("first-round review prompt (spawn 4) carries re-entry material %q", absent)
+		}
 	}
 }

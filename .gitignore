@@ -1,3 +1,11 @@
 .pi/
 /artifacts/release-*/
 /fakepi
+
+# aihub web console build output: the SPA builds into
+# webui/dist before the Go build; NOTHING under dist is tracked (the
+# authored acceptance bar asserts the empty ls-files), so the build
+# (scripts/clean-dist.mjs) creates the directory when missing. node_modules
+# is never tracked either.
+webui/dist/
+webui/node_modules/

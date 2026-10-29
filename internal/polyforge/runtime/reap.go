@@ -13,7 +13,7 @@
 //     (its process group, TERM -> bounded wait -> KILL);
 //  2. one pid-less Cleanup sweep: layer 4's PF_WI_ID + PF_DAEMON_ID env-marker scan
 //     catches whatever the journal could not name (torn journal, escapees
-//     that left the group).
+//     that left the group), and layer 5's cwd scan runs once for the WI.
 package runtime
 
 import (
@@ -88,15 +88,22 @@ func journalPIDIsOurs(jp journalPID, wi, daemonID string) bool {
 // caller's re-dispatch proceeds either way.
 func (r *Runtime) reapOrphans(wi, capsuleDir string) {
 	reaped := true
+	// One process-list walk decides which journaled trees still have a
+	// live member; a WI's journal names every step pid it ever ran, and
+	// the dead ones have nothing left to signal.
+	live, known := liveProcIDs()
 	for _, jp := range journalPIDs(capsuleDir) {
 		if !journalPIDIsOurs(jp, wi, r.cfg.MachineID) {
 			fmt.Fprintf(os.Stderr, "runtime: %s: journal pid %d no longer matches its recorded identity (pid reuse); not signaled\n", wi, jp.pid)
 			continue
 		}
-		// WIID "" here: the env sweep runs once, below.
+		if known && !live[jp.pid] {
+			continue // neither the pid nor its group has a live member
+		}
+		// WIID and CapsuleDir "" here: the env-marker and cwd sweeps run
+		// once for the WI, below.
 		if rep, err := Cleanup(CleanupTarget{
 			PID: jp.pid, Pgid: jp.pid, StartedAt: jp.startedAt,
-			CapsuleDir: capsuleDir,
 		}, cleanupBound); err != nil {
 			reaped = false
 			fmt.Fprintf(os.Stderr, "runtime: %s: orphan step tree %d cleanup incomplete: %v (warnings: %v)\n", wi, jp.pid, err, rep.Warnings)

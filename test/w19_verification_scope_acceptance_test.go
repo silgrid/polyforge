@@ -1,7 +1,7 @@
 package test
 
 // w19_verification_scope_acceptance_test.go: end-to-end acceptance for
-// workbench#19 (verification tiering P0 — lane text + envelope schema +
+// (verification tiering P0 — lane text + envelope schema +
 // merge/review/rewind rules). Authored against artifacts/spec.md BEFORE
 // the implementation: this suite is the red bar `code` must turn green.
 //
@@ -81,11 +81,17 @@ func w19Ver(scope map[string]any) map[string]any {
 }
 
 // w19Review is the review envelope action; a nil scopeAdequate omits the
-// field (the "scoped review must answer" probe).
-func w19Review(scopeAdequate *bool) map[string]any {
+// field (the "scoped review must answer" probe). on a
+// scoped work item review also records its own `scope` — the scope the
+// following verification must use for the two to form one merging
+// credential (a nil scope records none).
+func w19Review(scopeAdequate *bool, scope map[string]any) map[string]any {
 	o := map[string]any{"verdict": "pass"}
 	if scopeAdequate != nil {
 		o["scope_adequate"] = *scopeAdequate
+	}
+	if scope != nil {
+		o["scope"] = scope
 	}
 	return map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output": o}
 }
@@ -215,8 +221,10 @@ func TestW19ScopedFullChainRecordsTierAndChain(t *testing.T) {
 	branch := "polyforge/" + wiPathName(t, inst, wi)
 	scope := w19Scope("zzz/this/path/does/not/exist.go")
 	plan := append(w19FeatureHead(origin),
+		// review runs first and declares the scope; the
+		// verification behind it uses the same one
+		w19Review(w19Bool(true), scope),
 		w19Ver(scope),
-		w19Review(w19Bool(true)),
 		map[string]any{"do": "envelope", "id": "deliver", "outcome": "completed",
 			"run":         literalBranch(branch, pushAndPR("demo"), mergeRecord("demo", ""), assemble),
 			"output_file": deliverOutput},
@@ -244,7 +252,9 @@ func TestW19ScopeClaimWithoutMarkerRejected(t *testing.T) {
 	inst := newV1Install(t)
 	remote := newTaskRemote(t)
 	wi := w19CreateWI(t, inst, "w19: scope claim without the marker", "feature-full", false)
-	inst.setPlanFull(t, wi, append(w19FeatureHead(remote.url), w19Ver(w19Scope())), nil)
+	// review runs before verification; the unmarked work
+	// item owes it nothing, so a plain pass precedes the scoped claim.
+	inst.setPlanFull(t, wi, append(w19FeatureHead(remote.url), w19Review(nil, nil), w19Ver(w19Scope())), nil)
 	d := w19Start(t, inst, wi)
 
 	expectRejection(t, d, wi, "scope")
@@ -263,7 +273,9 @@ func TestW19IncompleteScopeRejected(t *testing.T) {
 		"fast_gates_ref": "docs/contributing.md#scoped-verification",
 		// rationale deliberately absent
 	}
-	inst.setPlanFull(t, wi, append(w19FeatureHead(remote.url), w19Ver(incomplete)), nil)
+	// the marked work item owes review a scope_adequate answer
+	// before verification's incomplete declaration is judged.
+	inst.setPlanFull(t, wi, append(w19FeatureHead(remote.url), w19Review(w19Bool(true), nil), w19Ver(incomplete)), nil)
 	d := w19Start(t, inst, wi)
 
 	expectRejection(t, d, wi, "scope")
@@ -296,7 +308,7 @@ func TestW19ReviewMustAnswerScopeAdequate(t *testing.T) {
 	inst := newV1Install(t)
 	remote := newTaskRemote(t)
 	wi := w19CreateWI(t, inst, "w19: scoped review must answer scope_adequate", "feature-full", true)
-	inst.setPlanFull(t, wi, append(w19FeatureHead(remote.url), w19Ver(w19Scope()), w19Review(nil)), nil)
+	inst.setPlanFull(t, wi, append(w19FeatureHead(remote.url), w19Review(nil, nil), w19Ver(w19Scope())), nil)
 	d := w19Start(t, inst, wi)
 
 	expectRejection(t, d, wi, "scope_adequate")
@@ -316,8 +328,8 @@ func TestW19FalseScopeAdequateBlocksAutoMergeAndAsks(t *testing.T) {
 	branch := "polyforge/" + wiPathName(t, inst, wi)
 	const qid = "deliver-merge"
 	plan := append(w19FeatureHead(origin),
+		w19Review(w19Bool(false), w19Scope()),
 		w19Ver(w19Scope()),
-		w19Review(w19Bool(false)),
 		// a lying dispatch that claims the PR is merged anyway
 		map[string]any{"do": "envelope", "id": "deliver", "outcome": "completed",
 			"run": literalBranch(branch, pushAndPR("demo"),
@@ -352,16 +364,17 @@ func TestW19FullReverifyAnswerRewindsToFull(t *testing.T) {
 	branch := "polyforge/" + wiPathName(t, inst, wi)
 	const qid = "deliver-merge"
 	plan := append(w19FeatureHead(origin),
+		w19Review(w19Bool(false), w19Scope()),
 		w19Ver(w19Scope()),
-		w19Review(w19Bool(false)),
 		map[string]any{"do": "envelope", "id": "deliver", "outcome": "needs_input", "question_id": qid,
 			"question": "PR https://github.com/fake/demo/pull/1: the scoped merge rule does not hold. merge / don't merge / back to code / 全量重验?"},
 		// the human answered 全量重验: rewind to the verification step at full
 		map[string]any{"do": "envelope", "id": "deliver", "outcome": "gate_failed",
 			"output": map[string]any{"verdict": "fail", "fail_reason": "human: 全量重验", "rewind_to": "verification"}},
-		// full re-verification (no scope), then review, then the full delivery
+		// full re-verification (no scope; review ran before
+		// verification and stays done — its earlier adequate=false no longer
+		// binds a full pass), then the full delivery
 		w19Ver(nil),
-		w19Review(w19Bool(true)),
 		map[string]any{"do": "envelope", "id": "deliver", "outcome": "completed",
 			"run":         literalBranch(branch, pushAndPR("demo"), mergeRecord("demo", ""), assemble),
 			"output_file": deliverOutput},
@@ -399,14 +412,19 @@ func TestW19IncrementalReverifyUnionsCredential(t *testing.T) {
 	increment := w19Scope("internal/polyforge/driver/result.go")
 	increment["prior"] = prior
 	plan := append(w19FeatureHead(origin),
-		w19Ver(w19Scope("internal/polyforge/driver/scope.go")),
+		// review runs first; its FAIL cites the scope gap and
+		// rewinds to code
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed",
 			"output": map[string]any{"verdict": "fail", "fail_reason": "scope gap: the increment must be re-verified",
 				"findings": []map[string]any{{"severity": "blocking", "detail": "re-verify the fix increment"}}}},
-		// the code re-entry (a rewind from review), then the scoped increment
-		map[string]any{"do": "envelope", "id": "code", "outcome": "completed", "handoff": true},
+		// the code re-entry (a rewind from review) commits the increment
+		w67ChangedRound("code", "demo", 1),
+		// the merging credential is the union of the original
+		// and the increment, so the re-run review declares exactly that set
+		w19Review(w19Bool(true), map[string]any{"mode": "scoped",
+			"declared_paths": []string{"internal/polyforge/driver/scope.go", "internal/polyforge/driver/result.go"}}),
+		// then the scoped increment verification (prior = the original scope)
 		w19Ver(increment),
-		w19Review(w19Bool(true)),
 		map[string]any{"do": "envelope", "id": "deliver", "outcome": "completed",
 			"run":         literalBranch(branch, pushAndPR("demo"), mergeRecord("demo", ""), assemble),
 			"output_file": deliverOutput},
@@ -436,10 +454,13 @@ func TestW19MovedBranchRerunsCarriedScopedBar(t *testing.T) {
 	ver := w19VerPass(w19Scope())
 	ver["test_bar"] = []map[string]any{{"repo": "demo", "command": deliverTestBar}}
 	plan := append(w19FeatureHead(origin),
-		map[string]any{"do": "envelope", "id": "verification", "outcome": "completed", "output": ver},
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed",
-			"output": map[string]any{"verdict": "pass", "scope_adequate": true},
-			"run":    []string{moveMain(origin, "other.txt", "another PR")}},
+			"output": map[string]any{"verdict": "pass", "scope_adequate": true,
+				"scope": w19Scope()}},
+		// verification is the last gate before deliver, so
+		// main's move rides its run (the local HEAD review covered stays)
+		map[string]any{"do": "envelope", "id": "verification", "outcome": "completed", "output": ver,
+			"run": []string{moveMain(origin, "other.txt", "another PR")}},
 		map[string]any{"do": "envelope", "id": "deliver", "outcome": "completed",
 			"run":         literalBranch(branch, pushAndPR("demo"), deliverTestBarCmd, mergeRecord("demo", ""), assemble),
 			"output_file": deliverOutput},
@@ -464,10 +485,10 @@ func TestW19FreshRedispatchRestoresScopedTier(t *testing.T) {
 	remote := newTaskRemote(t)
 	wi := w19CreateWI(t, inst, "w19: fresh re-dispatch restores the tier", "feature-full", true)
 	plan := append(w19FeatureHead(remote.url),
+		w19Review(w19Bool(true), w19Scope()),
 		map[string]any{"do": "envelope", "id": "verification", "outcome": "completed", "crash": "before",
 			"output": w19VerPass(w19Scope())},
 		w19Ver(w19Scope()),
-		w19Review(w19Bool(true)),
 	)
 	inst.setPlanFull(t, wi, plan, nil)
 	d := w19Start(t, inst, wi)

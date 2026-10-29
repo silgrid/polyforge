@@ -56,22 +56,39 @@ import (
 	"github.com/silgrid/polyforge/internal/common/capsule"
 )
 
+// wiLock is one work item's git mutex and the count of its holders and
+// waiters; the map entry lives exactly as long as that count is non-zero.
+type wiLock struct {
+	sync.Mutex
+	refs int
+}
+
 var (
 	mu    sync.Mutex
-	locks = map[string]*sync.Mutex{}
+	locks = map[string]*wiLock{}
 )
 
-// Lock acquires the per-WI git mutex and returns the release func.
+// Lock acquires the per-WI git mutex and returns the release func. A
+// waiter counts itself under mu before it blocks, so the entry is deleted
+// only when nobody holds or awaits it — never a second mutex for one WI.
 func Lock(workItemID string) func() {
 	mu.Lock()
 	l, ok := locks[workItemID]
 	if !ok {
-		l = &sync.Mutex{}
+		l = &wiLock{}
 		locks[workItemID] = l
 	}
+	l.refs++
 	mu.Unlock()
 	l.Lock()
-	return func() { l.Unlock() }
+	return func() {
+		l.Unlock()
+		mu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(locks, workItemID)
+		}
+		mu.Unlock()
+	}
 }
 
 // Opts describe one capsule worktree + its external git-dir.
@@ -956,7 +973,7 @@ func carrierLayoutRefusal(gitDir string) string {
 // symlink-resolved repos dir carrierSource used.
 //
 // The carrier ref must never carry the task repo's upstream history
-// (workbench#39): the aihub pre-receive hook walks the whole reachable
+// the aihub pre-receive hook walks the whole reachable
 // history of a NEW ref, so a single upstream blob above the carrier cap
 // would refuse the whole push and lose the WI's commits. Each push
 // therefore confines the ref's reachable history to the WI's own line:
@@ -968,7 +985,7 @@ func carrierLayoutRefusal(gitDir string) string {
 // deliver must push to HEAD) is NOT upstream and is excluded: otherwise
 // a delivered merge of a moved default branch would leave the walk empty
 // and cut at the head itself, which the hub refuses as a non-fast-forward
-// update (workbench#39 review B1). Every WI commit is therefore carried
+// update (code review). Every WI commit is therefore carried
 // and no upstream commit below that boundary (and no upstream blob, of
 // any size) is. When the origin refs are unusable, or the head adds
 // nothing above them, the cut is the hub's own carrier tip when head
@@ -1022,7 +1039,7 @@ func pushCarrier(o Opts, reposDir, objects, sha, name string, credAdditions []st
 // When the upstream walk answers nothing (the origin refs are unusable,
 // or the head adds nothing above them), a root the hub does not hold
 // would make the pushed head look parentless there and turn an update
-// into a non-fast-forward refusal (workbench#39 review B1/N1). The hub's
+// into a non-fast-forward refusal (code review). The hub's
 // own carrier tip is an ancestor of head in that case (it is the carried
 // WI line), so it is the cut when it is one. The recorded baseline, then
 // the head itself, are the fallbacks (the head keeps the head durable
@@ -1049,8 +1066,8 @@ func carrierBoundary(o Opts, env []string, tmp, reposDir, name, sha string, cred
 // boundary), which the shallow file takes one per line. The WI's own
 // feature branch (origin/polyforge/<name>, pushed to origin by deliver)
 // is excluded: it is this work item's line, not upstream, and treating it
-// as upstream empties the walk after a delivered merge (workbench#39
-// review B1). The exclude pattern is relative to `refs/remotes/`, as
+// as upstream empties the walk after a delivered merge (
+// code review). The exclude pattern is relative to `refs/remotes/`, as
 // git-rev-list(1) requires for --remotes. usable is false when the origin
 // refs are unusable (not a clone with origin-tracking refs, a failed
 // walk); usable with an empty answer means head adds nothing above the
@@ -1277,7 +1294,7 @@ func fetchCarrierRef(ctx context.Context, o Opts, dir, ref string) (string, erro
 		return "", err
 	}
 	// The carrier carries only the WI's own commits and is rooted at a
-	// shallow boundary (workbench#39), so the fetch must be allowed to
+	// shallow boundary, so the fetch must be allowed to
 	// record that boundary: without --update-shallow git refuses to write
 	// the new shallow root into a full clone and silently updates no ref
 	// ("shallow roots are not allowed to be updated"), which would read as
@@ -1305,7 +1322,7 @@ func refCasRejected(out string) bool {
 }
 
 // Clone materializes a fresh capsule worktree from the aihub bare repo
-// with its git-dir EXTERNAL at o.GitDir (ruling #2: the agent must never
+// with its git-dir EXTERNAL at o.GitDir (the design record: the agent must never
 // reach hooks/config/index): `git clone --separate-git-dir` writes the
 // git-dir there directly and leaves the one-line .git pointer file in the
 // worktree, so no move — and no cross-device copy — follows. The working
@@ -1402,16 +1419,11 @@ func credentialEnv(o Opts) (additions []string, cleanup func(), err error) {
 	if !strings.HasPrefix(o.RemoteURL, "http://") && !strings.HasPrefix(o.RemoteURL, "https://") {
 		return nil, noop, nil
 	}
+	// The script lives only under <GitDir>/../askpass, the directory
+	// SweepAskpass clears at startup: no git-dir, no credential delivery.
 	base := filepath.Dir(o.GitDir)
-	tempBase := false
-	if o.GitDir == "" || base == "" || base == "." {
-		if base, err = os.MkdirTemp("", "pf-askpass-"); err != nil {
-			return nil, noop, err
-		}
-		// The fallback base is ours alone (nothing else names it);
-		// cleaning it up WITH the call, or every invocation leaks a
-		// fresh temp base directory.
-		tempBase = true
+	if o.GitDir == "" || base == "." {
+		return nil, noop, fmt.Errorf("gitops: credential delivery for %s needs the external git-dir (Opts.GitDir is %q)", o.WorkItemID, o.GitDir)
 	}
 	dir := filepath.Join(base, "askpass")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -1437,9 +1449,6 @@ func credentialEnv(o Opts) (additions []string, cleanup func(), err error) {
 	cleanup = func() {
 		_ = os.Remove(script)
 		_ = os.Remove(dir) // best-effort: another WI's script may keep it alive
-		if tempBase {
-			_ = os.RemoveAll(base)
-		}
 	}
 	return []string{
 		"GIT_ASKPASS=" + script,

@@ -264,7 +264,7 @@ func lightRecheckVerdictHolds(out map[string]any) string {
 // evidence shows every bound command run with exit 0 in its repo (the
 // testBarRerun machinery: evidenceEvents + barKey, a leading `cd`
 // setting the repo — mechanical, never semantic; the key uses the same
-// barSegments canonicalisation as the test bar, workbench#60), and
+// barSegments canonicalisation as the test bar,), and
 // builds the recheck record entries for the light-pass audit. A missing
 // match answers the escalation reason; ("", "") = every bound command
 // ran.

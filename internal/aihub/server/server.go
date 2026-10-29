@@ -22,6 +22,7 @@ import (
 	"github.com/silgrid/polyforge/internal/aihub/memory"
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/machinesign"
+	"github.com/silgrid/polyforge/webui"
 )
 
 // Server wires the domain managers behind one mux.
@@ -41,11 +42,20 @@ type Server struct {
 	// default = 5m); cmd/aihub wires it to -machines-stale-after.
 	StaleAfter time.Duration
 
-	// pending is the in-memory progress/artifact relay registry and replay
-	// the bounded signed-request anti-replay cache (workbench#11). Neither
-	// persists anything.
+	// pending is the in-memory progress/artifact relay registry, relay its
+	// enqueue-time admission budget ( A2) and replay the
+	// signed-request anti-replay cache (; since
+	// 512-live-entry buckets, 600 s TTL, no global eviction; since
+	// one bucket per machine id per signed-route lane).
+	// None of them persists anything.
 	pending *queryRegistry
+	relay   *relayBudget
 	replay  *machinesign.ReplayCache
+
+	// webDist is the embedded console tree (webui/dist), resolved once at
+	// construction: the serving paths read it without a lazy write, so
+	// two first requests cannot race on it.
+	webDist distFS
 
 	mux *http.ServeMux
 }
@@ -62,7 +72,14 @@ func New(db *core.DB, dataDir string, gitMgr *git.Manager) *Server {
 		Git:      gitMgr,
 		DataDir:  dataDir,
 		pending:  newQueryRegistry(),
+		relay:    newRelayBudget(relayHolderQuota, relayMemberQuota, relayWindow),
 		replay:   machinesign.NewReplayCache(),
+	}
+	// The embedded console tree resolves once, here: an unbuilt dist (a
+	// clean checkout before webui-build) leaves it nil and the /web/
+	// routes answer the static 404, as before.
+	if dist, err := webui.Dist(); err == nil {
+		s.webDist = dist
 	}
 	s.routes()
 	return s
@@ -98,14 +115,15 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/machines/heartbeat", s.auth(s.hHeartbeat))
 	m.HandleFunc("GET /api/v1/machines", s.authAdmin(s.hListMachines))
 	m.HandleFunc("POST /api/v1/machines/{id}/rekey", s.authAdmin(s.hRekeyMachine))
-	// workbench#11 cross-machine face: signed, timestamped, replay-protected
-	// (see machineface.go). Reachability: a step agent cannot reach any of
-	// them — step processes hold no aihub key at all.
-	m.HandleFunc("GET /api/v1/machines/inbox", s.signedMachine(s.hMachineInbox))
-	m.HandleFunc("POST /api/v1/queries/{qid}/answer", s.signedMachine(s.hQueryAnswer))
-	m.HandleFunc("POST /api/v1/work-items/{id}/progress-query", s.signedMachine(s.hProgressQuery))
-	m.HandleFunc("POST /api/v1/work-items/{id}/artifact-query", s.signedMachine(s.hArtifactQuery))
-	// workbench#11 messaging: Bearer-auth user-to-user conversations with
+	// cross-machine face: signed, timestamped, replay-protected
+	// (see machineface.go), each route recording its signatures in its own
+	// replay lane ( A2). Reachability: a step agent cannot
+	// reach any of them — step processes hold no aihub key at all.
+	m.HandleFunc("GET /api/v1/machines/inbox", s.signedMachine(laneInbox, s.hMachineInbox))
+	m.HandleFunc("POST /api/v1/queries/{qid}/answer", s.signedMachine(laneAnswer, s.hQueryAnswer))
+	m.HandleFunc("POST /api/v1/work-items/{id}/progress-query", s.signedMachine(laneQuery, s.hProgressQuery))
+	m.HandleFunc("POST /api/v1/work-items/{id}/artifact-query", s.signedMachine(laneQuery, s.hArtifactQuery))
+	// messaging: Bearer-auth user-to-user conversations with
 	// permanent history. Reachability: a step agent cannot reach them
 	// (`pf msg` is refused inside a step; step processes hold no key).
 	m.HandleFunc("POST /api/v1/messages", s.auth(s.hSendMessage))
@@ -146,10 +164,28 @@ func (s *Server) routes() {
 	// Git proxy (own auth: session-scoped Basic credential).
 	m.Handle("/git/", http.HandlerFunc(s.Git.HandleGit))
 
+	// The read-only web console is served from the RAW
+	// path in ServeHTTP — BEFORE this mux — so no path-cleanup 301 can
+	// escape its header set and the face emits no redirects. /api/v1
+	// keeps Bearer-only authentication. The HTML face was
+	// deleted with the console, never aliased or redirected.
+
 	s.mux = m
 }
 
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The console face is intercepted from the RAW path before
+	// http.ServeMux can canonicalise it: ServeMux answers a cleaned
+	// 301 for /web//x, /web/./x and trailing-slash shapes WITHOUT the
+	// header set (the viewer's N5 defect), so the wrapper owns every
+	// /web response, including encoded separators, and the face emits
+	// no redirects at all.
+	if p := r.URL.Path; p == "/web" || strings.HasPrefix(p, "/web/") {
+		s.web(w, r)
+		return
+	}
+	s.mux.ServeHTTP(w, r)
+}
 
 // ---------------------------------------------------------------------------
 // Errors and JSON
@@ -197,7 +233,6 @@ func decodeBody(r *http.Request, v any) error {
 type identity struct {
 	UserID   string
 	Role     string // admin|writer
-	Kind     string // human|machine
 	KeyScope *string
 }
 
@@ -208,12 +243,20 @@ func (s *Server) authenticate(r *http.Request) (*identity, error) {
 	if token == "" {
 		return nil, core.Fail(api.ErrAuthUnauthorized, "", "missing api key")
 	}
+	return s.keyIdentity(token)
+}
+
+// keyIdentity resolves one api key token to its caller identity — the
+// one key query the Bearer face and the viewer's Basic password both go
+// through (hash-only storage; every key kind then meets the same read
+// gates, no viewer-specific policy).
+func (s *Server) keyIdentity(token string) (*identity, error) {
 	var id identity
 	var scope sql.NullString
-	err := s.DB.QueryRow(`SELECT u.id, u.role, u.kind, k.project_id
+	err := s.DB.QueryRow(`SELECT u.id, u.role, k.project_id
 		FROM api_keys k JOIN users u ON u.id = k.user_id
 		WHERE k.key_hash=?1 AND k.revoked_at IS NULL`, core.Sha256Hex(token)).
-		Scan(&id.UserID, &id.Role, &id.Kind, &scope)
+		Scan(&id.UserID, &id.Role, &scope)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, core.Fail(api.ErrAuthUnauthorized, "", "invalid api key")
 	}
@@ -332,30 +375,123 @@ func (s *Server) mustRead(idn *identity, projectID, notFound string, args ...any
 	return err
 }
 
-// wiProject loads a WI's project id (hidden objects stay hidden).
-func (s *Server) wiProject(idn *identity, idOrSlug string) (string, string, error) {
-	id, err := s.WIs.Resolve(idOrSlug)
-	if err != nil {
-		return "", "", err
-	}
-	var projectID string
-	if err := s.DB.QueryRow(`SELECT project_id FROM work_items WHERE id=?1`, id).Scan(&projectID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", "", core.Fail(api.ErrCoreNotFound, "", "work item %s", idOrSlug)
-		}
-		return "", "", err
-	}
-	return id, projectID, nil
+// wiGrant is the resolved authorization state of one work-item-addressed
+// request: the resolved id, the project, the caller's
+// project role, the global-admin and reporter flags, and whether the
+// caller's api key is scoped to another project. Its gates answer the
+// missing-work-item CORE-404 for a caller without access — a non-member
+// with no retained reporter right, or a key scoped away from the
+// project — before any body decoding or state change, so the refusal is
+// indistinguishable from a genuinely missing reference and structurally
+// writes nothing. A member whose role is too low keeps the route's
+// existing AUTH-403.
+type wiGrant struct {
+	id         string // the canonical work-item id
+	ref        string // the reference the caller sent (echoed in refusals)
+	projectID  string
+	role       string // the caller's project role ("" = not a member)
+	admin      bool
+	reporter   bool
+	scopedAway bool
 }
 
-// wiScoped is wiProject plus the api-key project scope check: the
-// prelude of the endpoints that authorize the caller themselves.
-func (s *Server) wiScoped(idn *identity, idOrSlug string) (string, string, error) {
-	id, projectID, err := s.wiProject(idn, idOrSlug)
-	if err == nil {
-		err = scopeCheck(idn, projectID)
+// resolveWIGrant resolves the addressed work item and the caller's
+// relationship to it. A missing reference answers the same typed
+// CORE-404 a concealed caller gets, so both sides of the comparison stay
+// byte-identical for the same reference.
+func (s *Server) resolveWIGrant(idn *identity, ref string) (*wiGrant, error) {
+	id, err := s.WIs.Resolve(ref)
+	var ae *api.Error
+	if err != nil {
+		if errors.As(err, &ae) && ae.Code == api.ErrCoreNotFound {
+			return nil, core.Fail(api.ErrCoreNotFound, "", "work item %s", ref)
+		}
+		return nil, err
 	}
-	return id, projectID, err
+	var projectID, reporter string
+	if err := s.DB.QueryRow(`SELECT project_id, reporter FROM work_items WHERE id=?1`, id).
+		Scan(&projectID, &reporter); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, core.Fail(api.ErrCoreNotFound, "", "work item %s", ref)
+		}
+		return nil, err
+	}
+	g := &wiGrant{id: id, ref: ref, projectID: projectID,
+		admin: idn.Role == "admin", reporter: reporter == idn.UserID,
+		scopedAway: idn.KeyScope != nil && *idn.KeyScope != projectID}
+	if !g.admin {
+		if g.role, err = s.memberRole(projectID, idn.UserID); err != nil {
+			return nil, err
+		}
+	}
+	return g, nil
+}
+
+// hidden is the missing-work-item answer: exactly what the route answers
+// for a reference that does not exist.
+func (g *wiGrant) hidden() error {
+	return core.Fail(api.ErrCoreNotFound, "", "work item %s", g.ref)
+}
+
+// requireRead conceals the work item from a caller without read access
+// (a non-member, or a key scoped to another project).
+func (g *wiGrant) requireRead() error {
+	if g.scopedAway || (!g.admin && g.role == "") {
+		return g.hidden()
+	}
+	return nil
+}
+
+// requireWrite conceals the work item from a non-member and keeps the
+// route's AUTH-403 for a member whose role is too low.
+func (g *wiGrant) requireWrite() error {
+	if g.scopedAway {
+		return g.hidden()
+	}
+	if g.admin {
+		return nil
+	}
+	switch g.role {
+	case "writer", "maintainer":
+		return nil
+	case "":
+		return g.hidden()
+	default:
+		return core.Fail(api.ErrAuthForbidden, "", "writer role on the project required")
+	}
+}
+
+// requireOwnerDecision conceals the work item from a caller with no
+// relationship to it. A reporter keeps the retained cancel/wrap/
+// resume-blocked right even after losing project membership
+//; the decision itself stays the reporter/
+// maintainer/admin rule.
+func (g *wiGrant) requireOwnerDecision() error {
+	if g.scopedAway {
+		return g.hidden()
+	}
+	if g.admin || g.role != "" || g.reporter {
+		return nil
+	}
+	return g.hidden()
+}
+
+// ownerDecision is the reporter/maintainer/admin verdict on the human
+// decision doors (cancel, wrap, resume-blocked) after concealment.
+func (g *wiGrant) ownerDecision() bool {
+	return g.admin || g.reporter || g.role == "maintainer"
+}
+
+// requireForceEnd is the recovery door's gate: concealment, then the
+// existing admin-or-project-maintainer rule (no reporter admission).
+func (g *wiGrant) requireForceEnd() error {
+	if err := g.requireRead(); err != nil {
+		return err
+	}
+	if g.admin || g.role == "maintainer" {
+		return nil
+	}
+	return core.Fail(api.ErrAuthForbidden, "", "end-session requires admin or project maintainer")
 }
 
 // ---------------------------------------------------------------------------
@@ -442,36 +578,38 @@ func (s *Server) replyWI(w http.ResponseWriter, id string) error {
 func (s *Server) hListWIs(w http.ResponseWriter, r *http.Request, idn *identity) error {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit")) // 0/absent = core default; clamped there
+	// The readable-project set is pushed into the list SQL:
+	// the page is filtered BEFORE the limit and no row costs a per-row
+	// canRead membership lookup. total stays "the returned count" — the
+	// same semantics for admin and non-admin.
+	readable, err := s.readableProjects(idn)
+	if err != nil {
+		return err
+	}
 	items, err := s.WIs.List(core.ListFilters{
-		Project:   q.Get("project"),
-		Status:    q.Get("status"),
-		Assignee:  q.Get("assignee"),
-		Priority:  q.Get("priority"),
-		Milestone: q.Get("milestone"),
-		Limit:     limit,
+		Project:          q.Get("project"),
+		Status:           q.Get("status"),
+		Assignee:         q.Get("assignee"),
+		Priority:         q.Get("priority"),
+		Milestone:        q.Get("milestone"),
+		Limit:            limit,
+		ReadableProjects: readable,
 	})
 	if err != nil {
 		return err
 	}
-	// Permission trim: non-admins see only their projects.
-	views := make([]core.WIView, 0, len(items))
-	for i := range items {
-		if ok, err := s.canRead(idn, items[i].ProjectID); err == nil && ok {
-			views = append(views, items[i])
-		}
-	}
 	return reply(w, http.StatusOK, struct {
 		Items []core.WIView `json:"items"`
 		Total int           `json:"total"`
-	}{Items: views, Total: len(views)})
+	}{Items: items, Total: len(items)})
 }
 
 func (s *Server) hGetWI(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, projectID, err := s.wiProject(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if err := s.mustRead(idn, projectID, "work item %s", r.PathValue("id")); err != nil {
+	if err := g.requireRead(); err != nil {
 		return err
 	}
 	opts := core.GetOptions{}
@@ -484,7 +622,7 @@ func (s *Server) hGetWI(w http.ResponseWriter, r *http.Request, idn *identity) e
 			return core.Fail(api.ErrCoreBadInput, "", "unknown include value %q", inc)
 		}
 	}
-	wi, err := s.WIs.Get(id, opts)
+	wi, err := s.WIs.Get(g.id, opts)
 	if err != nil {
 		return err
 	}
@@ -492,50 +630,39 @@ func (s *Server) hGetWI(w http.ResponseWriter, r *http.Request, idn *identity) e
 }
 
 func (s *Server) hPatchWI(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, projectID, err := s.wiProject(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if err := s.mustWrite(idn, projectID); err != nil {
+	if err := g.requireWrite(); err != nil {
 		return err
 	}
 	var fields map[string]json.RawMessage
 	if err := decodeBody(r, &fields); err != nil {
 		return err
 	}
-	wi, err := s.WIs.Patch(id, fields)
+	wi, err := s.WIs.Patch(g.id, fields, idn.UserID)
 	if err != nil {
 		return err
 	}
 	return reply(w, http.StatusOK, wi)
 }
 
-// ownerMaintainerOrAdmin is the one authorization of the human decisions on
-// a work item — cancel (abandon) and the blocked exit (continue;
-// v2-converge §7, §11 item 7): the WI's reporter (the task
-// owner), a project maintainer, or a global admin.
-func (s *Server) ownerMaintainerOrAdmin(idn *identity, projectID, wiID string) bool {
-	if idn.Role == "admin" {
-		return true
-	}
-	var reporter string
-	if err := s.DB.QueryRow(`SELECT reporter FROM work_items WHERE id=?1`, wiID).Scan(&reporter); err == nil && reporter == idn.UserID {
-		return true
-	}
-	role, err := s.memberRole(projectID, idn.UserID)
-	return err == nil && role == "maintainer"
-}
-
 func (s *Server) hCancelWI(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, projectID, err := s.wiScoped(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	// Cancel authorization: reporter, project maintainer, or admin (reference.md §2.1).
-	if !s.ownerMaintainerOrAdmin(idn, projectID, id) {
+	// Cancel authorization: reporter, project maintainer, or admin
+	// (reference.md §2.1); a caller with no relationship to the work item
+	// gets the missing-work-item answer.
+	if err := g.requireOwnerDecision(); err != nil {
+		return err
+	}
+	if !g.ownerDecision() {
 		return core.Fail(api.ErrAuthForbidden, "", "cancel requires reporter, maintainer or admin")
 	}
-	wi, err := s.WIs.Cancel(id, idn.UserID)
+	wi, err := s.WIs.Cancel(g.id, idn.UserID)
 	if err != nil {
 		return err
 	}
@@ -546,18 +673,21 @@ func (s *Server) hCancelWI(w http.ResponseWriter, r *http.Request, idn *identity
 // (core.Wrap). Same authorization as cancel: reporter, project
 // maintainer, or admin. The body is optional ({"fail":bool,"note":"..."}).
 func (s *Server) hWrapWI(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, projectID, err := s.wiScoped(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if !s.ownerMaintainerOrAdmin(idn, projectID, id) {
+	if err := g.requireOwnerDecision(); err != nil {
+		return err
+	}
+	if !g.ownerDecision() {
 		return core.Fail(api.ErrAuthForbidden, "", "wrap requires reporter, maintainer or admin")
 	}
 	var req api.WrapRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		return core.Fail(api.ErrCoreBadInput, "", "invalid JSON body: %v", err)
 	}
-	wi, err := s.WIs.Wrap(id, idn.UserID, req)
+	wi, err := s.WIs.Wrap(g.id, idn.UserID, req)
 	if err != nil {
 		return err
 	}
@@ -566,8 +696,8 @@ func (s *Server) hWrapWI(w http.ResponseWriter, r *http.Request, idn *identity) 
 
 // ---------------------------------------------------------------------------
 // v1.5 session endpoints (reference.md §3). The claim path is the machine
-// execution surface (a scope-checked key with writer/maintainer membership
-// or admin — hSessionClaim's mustWrite); force-end-session keeps
+// execution surface (a writer/maintainer member or a global admin — the
+// shared work-item grant's requireWrite); force-end-session keeps
 // the human decision gate (admin or project maintainer).
 
 // sessionClaimEnvelope is the claim/attach response: the SAME
@@ -607,37 +737,47 @@ func (s *Server) sessionClaimResponse(w http.ResponseWriter, id string, claim *a
 // session claim; it replaced the deleted v1 generation-era intent
 // handler).
 func (s *Server) hSessionClaim(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, projectID, err := s.wiProject(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if err := s.mustWrite(idn, projectID); err != nil {
+	if err := g.requireWrite(); err != nil {
 		return err
 	}
 	var req api.SessionClaimRequest
 	if err := decodeBody(r, &req); err != nil {
 		return err
 	}
-	req.WorkItemID = id
-	if err := s.ensureBare(id); err != nil {
+	req.WorkItemID = g.id
+	// the gate first: a refused claim never creates the bare repo
+	if err := s.Sessions.ClaimGate(g.id, req.SessionID); err != nil {
 		return err
 	}
-	claim, err := s.Sessions.Claim(id, req, idn.UserID)
-	return s.sessionClaimResponse(w, id, claim, err)
+	if err := s.ensureBare(g.id); err != nil {
+		return err
+	}
+	claim, err := s.Sessions.Claim(g.id, req, idn.UserID)
+	return s.sessionClaimResponse(w, g.id, claim, err)
 }
 
 // hSessionVerify serves the compare-only holder check (B3: the hub
 // stores only the hash; the secret never echoes, not even on a match).
+// Read access is required: a caller without access gets
+// the missing-work-item answer, so the verify answer is no existence
+// oracle and a leaked session secret changes nothing.
 func (s *Server) hSessionVerify(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, _, err := s.wiScoped(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
+		return err
+	}
+	if err := g.requireRead(); err != nil {
 		return err
 	}
 	var req api.SessionVerifyRequest
 	if err := decodeBody(r, &req); err != nil {
 		return err
 	}
-	resp, err := s.Sessions.Verify(id, req.SessionID)
+	resp, err := s.Sessions.Verify(g.id, req.SessionID)
 	if err != nil {
 		return err
 	}
@@ -645,70 +785,73 @@ func (s *Server) hSessionVerify(w http.ResponseWriter, r *http.Request, idn *ide
 }
 
 // hSessionAttach serves the same-session resume of a paused WI (M3).
+// Write access is required, like claim.
 func (s *Server) hSessionAttach(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, _, err := s.wiScoped(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
+		return err
+	}
+	if err := g.requireWrite(); err != nil {
 		return err
 	}
 	var req api.SessionAttachRequest
 	if err := decodeBody(r, &req); err != nil {
 		return err
 	}
-	req.WorkItemID = id
-	if err := s.ensureBare(id); err != nil {
+	req.WorkItemID = g.id
+	if err := s.Sessions.AttachGate(g.id, req.SessionID); err != nil {
 		return err
 	}
-	claim, err := s.Sessions.Attach(id, req, idn.UserID)
-	return s.sessionClaimResponse(w, id, claim, err)
+	if err := s.ensureBare(g.id); err != nil {
+		return err
+	}
+	claim, err := s.Sessions.Attach(g.id, req, idn.UserID)
+	return s.sessionClaimResponse(w, g.id, claim, err)
 }
 
 // hForceEndSession serves the admin/maintainer force-end of a held session
 // (WI -> queued, session cleared, the old secret fenced). Authorization is
 // admin or project maintainer: the human recovery decision.
 func (s *Server) hForceEndSession(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, projectID, err := s.wiScoped(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if !s.adminOrMaintainer(idn, projectID) {
-		return core.Fail(api.ErrAuthForbidden, "", "end-session requires admin or project maintainer")
+	if err := g.requireForceEnd(); err != nil {
+		return err
 	}
 	var req api.ForceEndSessionRequest
 	if err := decodeBody(r, &req); err != nil {
 		return err
 	}
-	if err := s.Sessions.ForceEnd(id, req.Reason, idn.UserID); err != nil {
+	if err := s.Sessions.ForceEnd(g.id, req.Reason, idn.UserID); err != nil {
 		return err
 	}
-	return s.replyWI(w, id)
-}
-
-// adminOrMaintainer is the human recovery gate (no reporter admission).
-func (s *Server) adminOrMaintainer(idn *identity, projectID string) bool {
-	if idn.Role == "admin" {
-		return true
-	}
-	role, err := s.memberRole(projectID, idn.UserID)
-	return err == nil && role == "maintainer"
+	return s.replyWI(w, g.id)
 }
 
 // hSessionEnd serves the session-fenced terminal verdict (wrapped|
 // failed|blocked) and — the merge amend — the M3 pause transition
 // ("paused": the session is KEPT, clean_pause rides the same fenced
-// update). It fully replaces the deleted v1 /end-generation endpoint.
+// update). Write access is required, like claim; a
+// leaked session secret does not lift the membership gate. It fully
+// replaces the deleted v1 /end-generation endpoint.
 func (s *Server) hSessionEnd(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, _, err := s.wiScoped(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
+		return err
+	}
+	if err := g.requireWrite(); err != nil {
 		return err
 	}
 	var req api.SessionEndRequest
 	if err := decodeBody(r, &req); err != nil {
 		return err
 	}
-	if err := s.Sessions.End(id, req, idn.UserID); err != nil {
+	if err := s.Sessions.End(g.id, req, idn.UserID); err != nil {
 		return err
 	}
-	return s.replyWI(w, id)
+	return s.replyWI(w, g.id)
 }
 
 // hResumeBlockedWI serves the §6.4 owner resume verdict's hub door
@@ -718,11 +861,14 @@ func (s *Server) hSessionEnd(w http.ResponseWriter, r *http.Request, idn *identi
 // cancel. accept_lost_work clears the blocked seal (core.ResumeBlockedWith)
 // under the same gate.
 func (s *Server) hResumeBlockedWI(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, projectID, err := s.wiScoped(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if !s.ownerMaintainerOrAdmin(idn, projectID, id) {
+	if err := g.requireOwnerDecision(); err != nil {
+		return err
+	}
+	if !g.ownerDecision() {
 		return core.Fail(api.ErrAuthForbidden, "", "resume-blocked requires the work item's reporter, a project maintainer or admin")
 	}
 	// The body is optional: an empty one is a plain resume.
@@ -730,7 +876,7 @@ func (s *Server) hResumeBlockedWI(w http.ResponseWriter, r *http.Request, idn *i
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		return core.Fail(api.ErrCoreBadInput, "", "invalid JSON body: %v", err)
 	}
-	wi, err := s.WIs.ResumeBlockedWith(id, idn.UserID, req)
+	wi, err := s.WIs.ResumeBlockedWith(g.id, idn.UserID, req)
 	if err != nil {
 		return err
 	}
@@ -741,13 +887,14 @@ func (s *Server) hResumeBlockedWI(w http.ResponseWriter, r *http.Request, idn *i
 // Dependencies
 
 func (s *Server) hAddDep(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	blocked, projectID, err := s.wiProject(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if err := s.mustWrite(idn, projectID); err != nil {
+	if err := g.requireWrite(); err != nil {
 		return err
 	}
+	blocked := g.id
 	var req struct {
 		BlockingWIID string `json:"blocking_wi_id"`
 		Kind         string `json:"kind,omitempty"`
@@ -767,14 +914,14 @@ func (s *Server) hAddDep(w http.ResponseWriter, r *http.Request, idn *identity) 
 }
 
 func (s *Server) hDeps(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	id, projectID, err := s.wiProject(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if err := s.mustRead(idn, projectID, "work item %s", id); err != nil {
+	if err := g.requireRead(); err != nil {
 		return err
 	}
-	return s.replyDeps(w, http.StatusOK, id)
+	return s.replyDeps(w, http.StatusOK, g.id)
 }
 
 // replyDeps answers the dependency edges of wiID. A query failure is a
@@ -789,13 +936,14 @@ func (s *Server) replyDeps(w http.ResponseWriter, status int, wiID string) error
 }
 
 func (s *Server) hDelDep(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	blocked, projectID, err := s.wiProject(idn, r.PathValue("id"))
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if err := s.mustWrite(idn, projectID); err != nil {
+	if err := g.requireWrite(); err != nil {
 		return err
 	}
+	blocked := g.id
 	blocking, err := s.visibleWI(idn, r.PathValue("blocking"))
 	if err != nil {
 		return err
@@ -833,7 +981,7 @@ func (s *Server) hReadyQueue(w http.ResponseWriter, r *http.Request, idn *identi
 const defaultMachinesStaleAfter = 5 * time.Minute
 
 // authorizeMachineRegistration gates the heartbeat path's two registration
-// acts (workbench#57 R1): a machine_id with no machines row, and the claim
+// acts ( R1): a machine_id with no machines row, and the claim
 // of a legacy row that has no operator. Any project_members row qualifies —
 // viewer, writer or maintainer, no role filter — and so does a global admin
 // outside every project. A refresh never calls it: membership gates
@@ -861,8 +1009,10 @@ func (s *Server) authorizeMachineRegistration(idn *identity) error {
 // freshness, replay) rides into core as a HeartbeatProof. Reachability: a
 // daemon holding its operator's API key plus the machine key reaches it;
 // during the transition the operator's key alone refreshes an
-// already-registered v2.20.6 machine's liveness. A step agent holds no
-// aihub key and reaches neither.
+// already-registered machine's liveness, and only while that row's stored
+// runtime_version still predates v2.20.8 — core's version gate, which a
+// signed v2.20.8+ beat ratchets closed. A step agent holds no aihub key
+// and reaches neither.
 func (s *Server) hHeartbeat(w http.ResponseWriter, r *http.Request, idn *identity) error {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	if err != nil {
@@ -874,8 +1024,8 @@ func (s *Server) hHeartbeat(w http.ResponseWriter, r *http.Request, idn *identit
 	}
 	// A machine belongs to its operator. Refuse anyone else here, before a
 	// signature they may not hold is checked, so the machine_id collision is
-	// AUTH-403 whatever the beat looks like (the message names the operator
-	// and suggests --machine-id).
+	// AUTH-403 whatever the beat looks like (the message says another
+	// operator and suggests --machine-id, naming no one —).
 	if err := s.Admin.HeartbeatCallerCheck(req.MachineID, idn.UserID); err != nil {
 		return err
 	}
@@ -883,7 +1033,13 @@ func (s *Server) hHeartbeat(w http.ResponseWriter, r *http.Request, idn *identit
 	if err != nil {
 		return err
 	}
-	res, err := s.Admin.HeartbeatAuthorized(req, proof, func() error { return s.authorizeMachineRegistration(idn) })
+	// The registration gate is evaluated here, by value: inside the
+	// core's heartbeat transaction the store's single connection is held,
+	// so the gate's membership query could never run. Core enforces the
+	// verdict only on the two registration acts; a refresh ignores it
+	// ( R5), and the refusal order is unchanged (#74).
+	gate := s.authorizeMachineRegistration(idn)
+	res, err := s.Admin.HeartbeatAuthorized(req, proof, gate)
 	if err != nil {
 		return err
 	}
@@ -912,6 +1068,23 @@ func (s *Server) machinesStaleAfter() time.Duration {
 	return s.StaleAfter
 }
 
+// machineHeartbeat is the API's one staleness definition, shared by
+// /api/v1/machines and the console's machines snapshot: the heartbeat
+// age in seconds (clamped at 0) and its staleness against the
+// threshold. ok is false when the stored timestamp does not parse —
+// the caller then carries neither the age nor the stale mark.
+func machineHeartbeat(lastHeartbeatAt string, now time.Time, staleAfter time.Duration) (age int64, stale, ok bool) {
+	hb, err := time.Parse(time.RFC3339, lastHeartbeatAt)
+	if err != nil {
+		return 0, false, false
+	}
+	age = int64(now.Sub(hb).Seconds())
+	if age < 0 {
+		age = 0
+	}
+	return age, time.Duration(age)*time.Second > staleAfter, true
+}
+
 // hListMachines is the operators' liveness read face (admin): every
 // registered machine with its last_heartbeat_at and the stale projection
 // computed against StaleAfter. This is the read half the M3 gate metric
@@ -936,13 +1109,9 @@ func (s *Server) hListMachines(w http.ResponseWriter, r *http.Request, idn *iden
 			Role:            m.Role,
 			OperatorID:      m.OperatorID,
 		}
-		if hb, err := time.Parse(time.RFC3339, m.LastHeartbeatAt); err == nil {
-			age := int64(now.Sub(hb).Seconds())
-			if age < 0 {
-				age = 0
-			}
+		if age, stale, ok := machineHeartbeat(m.LastHeartbeatAt, now, staleAfter); ok {
 			st.HeartbeatAgeSeconds = &age
-			st.Stale = time.Duration(age)*time.Second > staleAfter
+			st.Stale = stale
 		}
 		out = append(out, st)
 	}
@@ -954,10 +1123,52 @@ func (s *Server) hListMachines(w http.ResponseWriter, r *http.Request, idn *iden
 }
 
 // ---------------------------------------------------------------------------
+// Readable-project set
+
+// readableProjects answers the caller's readable project-id set in ONE
+// query — the single fact the multi-object reads (memory search, the WI
+// list) narrow their candidate SQL with, so no unreadable match costs a
+// per-candidate membership lookup. nil = no narrowing (a
+// global admin with an unscoped key keeps the all-projects semantics);
+// a non-nil EMPTY slice = nothing readable anywhere.
+func (s *Server) readableProjects(idn *identity) ([]string, error) {
+	if idn.Role == "admin" {
+		if idn.KeyScope == nil {
+			return nil, nil
+		}
+		// The admin's own membership is irrelevant, but the key's scope
+		// still applies: a scoped admin key never reads past its scope.
+		return []string{*idn.KeyScope}, nil
+	}
+	rows, err := s.DB.Query(`SELECT project_id FROM project_members WHERE user_id=?1`, idn.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	// Non-nil from here on: an empty answer means "nothing readable", not
+	// "no narrowing".
+	projects := []string{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		if idn.KeyScope == nil || p == *idn.KeyScope {
+			projects = append(projects, p)
+		}
+	}
+	return projects, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
 // Memory
 
-// memAllowed builds the visibility predicate for the caller.
-func (s *Server) memAllowed(idn *identity) func(*memory.Entry) bool {
+// memVisible is the visibility-tier predicate alone (no membership, no
+// SQL): the "admin" tier only an admin sees, "private" its owner or an
+// admin; every other tier passes — membership is already enforced by
+// the readable-project set the search query is narrowed with. The
+// single-object read path (memAllowed/memRead) adds membership back.
+func (s *Server) memVisible(idn *identity) func(*memory.Entry) bool {
 	return func(e *memory.Entry) bool {
 		switch e.Visibility {
 		case "admin":
@@ -965,12 +1176,25 @@ func (s *Server) memAllowed(idn *identity) func(*memory.Entry) bool {
 		case "private":
 			return e.OwnerUserID == idn.UserID || idn.Role == "admin"
 		default: // project | team | public: any project reader
+			return true
+		}
+	}
+}
+
+// memAllowed builds the single-object visibility predicate for a
+// memory READ by id (memRead): the visibility tiers (memVisible) plus
+// the project gate — membership or global admin — for the project tiers.
+func (s *Server) memAllowed(idn *identity) func(*memory.Entry) bool {
+	visible := s.memVisible(idn)
+	return func(e *memory.Entry) bool {
+		if e.Visibility != "admin" && e.Visibility != "private" {
 			if idn.Role == "admin" {
 				return true
 			}
 			ok, err := s.canRead(idn, e.ProjectID)
 			return err == nil && ok
 		}
+		return visible(e)
 	}
 }
 
@@ -1015,26 +1239,29 @@ func (s *Server) hCreateMemory(w http.ResponseWriter, r *http.Request, idn *iden
 	// do (id or "<project>#<seq>" slug) and is stored as the canonical
 	// id; an unknown or unreadable one is a typed CORE-404, never the
 	// foreign-key failure of the insert (polyforge#155). An empty one is
-	// no attribution. A memory belongs to one project: a readable work
-	// item of another project is refused as bad input (checked after the
-	// read gate, so an unreadable one stays indistinguishable from an
-	// unknown one).
+	// no attribution. Unreadable covers a non-member AND a key scoped to
+	// another project: both get the missing-work-item answer of the
+	// shared work-item grant, never the scope's AUTH-403, so the body
+	// field is no existence oracle across projects ( A1).
+	// A memory belongs to one project: a readable work item of another
+	// project is refused as bad input (checked after the read gate, so an
+	// unreadable one stays indistinguishable from an unknown one).
 	if req.WorkItemID != nil && *req.WorkItemID == "" {
 		req.WorkItemID = nil
 	}
 	if req.WorkItemID != nil {
-		wiID, wiProjectID, err := s.wiProject(idn, *req.WorkItemID)
+		g, err := s.resolveWIGrant(idn, *req.WorkItemID)
 		if err != nil {
 			return err
 		}
-		if err := s.mustRead(idn, wiProjectID, "work item %s", *req.WorkItemID); err != nil {
+		if err := g.requireRead(); err != nil {
 			return err
 		}
-		if wiProjectID != projectID {
+		if g.projectID != projectID {
 			return core.Fail(api.ErrCoreBadInput, "",
 				"work item %s belongs to another project than %s", *req.WorkItemID, req.Project)
 		}
-		req.WorkItemID = &wiID
+		req.WorkItemID = &g.id
 	}
 	e, err := s.Mems.Create(req, idn.UserID)
 	if err != nil {
@@ -1125,8 +1352,8 @@ func (s *Server) hSearchMemory(w http.ResponseWriter, r *http.Request, idn *iden
 	// project= narrows the search to one project. It is resolved, then
 	// read-gated with the same non-leaking not-found shape the rest of
 	// the read face uses (an unresolvable and an inaccessible project
-	// answer identically), and applied in the candidate predicate IN
-	// ADDITION to — never instead of — the membership and visibility
+	// answer identically), and applied inside the candidate SQL IN
+	// ADDITION to — never instead of — the readable-set and visibility
 	// layers (06-memory-search.md §6's fixed two-layer order).
 	project := ""
 	if p := q.Get("project"); p != "" {
@@ -1144,7 +1371,67 @@ func (s *Server) hSearchMemory(w http.ResponseWriter, r *http.Request, idn *iden
 	// any-term — the daemon's claim-time recall over a whole task
 	// description). An unknown mode is refused (MEM-400 from the store),
 	// never silently ANDed.
+	//
+	// An absent or blank q is browse mode: the read face
+	// lists the caller's readable memories instead of refusing. Cursor
+	// and sort stay confined to browse — a non-empty q that carries
+	// either (an empty value included) is refused before the keyword
+	// path, which stays byte-identical and never sees a cursor.
+	if strings.TrimSpace(q.Get("q")) == "" {
+		return s.hBrowseMemory(w, r, tags, project, idn)
+	}
+	if q.Has("after") || q.Has("sort") {
+		return core.Fail(api.ErrMemBadInput, "",
+			"after and sort are browse parameters and cannot be combined with q")
+	}
 	return s.hSearchRun(w, q.Get("match"), q.Get("q"), q.Get("type"), tags, project, limit, excerpt, idn)
+}
+
+// Browse page-size bounds: default 20, maximum 200.
+// The keyword path above keeps its own clamp to 50 unchanged.
+const (
+	defaultBrowseLimit = 20
+	maxBrowseLimit     = 200
+)
+
+// browseResponse is the browse-mode answer: the readable page plus the
+// next page's opaque cursor, omitted on the last page.
+type browseResponse struct {
+	Items      []memory.Entry `json:"items"`
+	Total      int            `json:"total"`
+	NextCursor string         `json:"next_cursor,omitempty"`
+}
+
+// hBrowseMemory serves the empty-q browse mode of GET
+// /api/v1/memories/search. limit is parsed strictly on this path alone
+// (absent = 20, 1..200 accepted, anything else MEM-400 — no silent
+// substitution); sort and after are validated by the store (a malformed
+// or sort-mismatched cursor is MEM-400, never a restart).
+func (s *Server) hBrowseMemory(w http.ResponseWriter, r *http.Request, tags []string, project string, idn *identity) error {
+	q := r.URL.Query()
+	limit := defaultBrowseLimit
+	if q.Has("limit") {
+		n, err := strconv.Atoi(q.Get("limit"))
+		if err != nil || n < 1 || n > maxBrowseLimit {
+			return core.Fail(api.ErrMemBadInput, "", "limit must be between 1 and %d", maxBrowseLimit)
+		}
+		limit = n
+	}
+	readable, err := s.readableProjects(idn)
+	if err != nil {
+		return err
+	}
+	projects := readable
+	if project != "" {
+		// The project read gate above already proved this caller may read
+		// it, so it subsumes the readable set.
+		projects = []string{project}
+	}
+	items, next, err := s.Mems.Browse(projects, q.Get("sort"), q.Get("after"), q.Get("type"), tags, limit, s.memVisible(idn))
+	if err != nil {
+		return err
+	}
+	return reply(w, http.StatusOK, browseResponse{Items: items, Total: len(items), NextCursor: next})
 }
 
 // maxMemoryExcerptRunes bounds the content excerpt a search answer may
@@ -1168,28 +1455,26 @@ type memoryHitList struct {
 }
 
 func (s *Server) hSearchRun(w http.ResponseWriter, match, query, memType string, tags []string, project string, limit, excerpt int, idn *identity) error {
-	// Membership-first filtering: restrict to the projects the caller can
-	// read before visibility tiers apply.
-	allowed := s.memAllowed(idn)
-	baseAllowed := allowed
-	allowed = func(e *memory.Entry) bool {
-		if idn.Role != "admin" {
-			ok, err := s.canRead(idn, e.ProjectID)
-			if err != nil || !ok {
-				return false
-			}
-		}
-		// The requested project narrows the membership-filtered
-		// candidate set further; an empty value keeps the union.
-		if project != "" && e.ProjectID != project {
-			return false
-		}
-		return baseAllowed(e)
+	// The caller's readable-project set (key scope ∩ membership) is
+	// computed once and pushed into the candidate SQL: unreadable matches
+	// cost no load at all. nil = no narrowing (an unscoped
+	// admin); an empty non-nil set answers the empty result without a
+	// candidate query.
+	readable, err := s.readableProjects(idn)
+	if err != nil {
+		return err
 	}
-	// The project also narrows the store's candidate SQL (a pure
-	// narrowing: allowed above still enforces it), so other projects'
-	// matches never cost a per-candidate load.
-	items, err := s.Mems.SearchMode(match, project, query, memType, tags, limit, allowed)
+	projects := readable
+	if project != "" {
+		// hSearchMemory's read gate already proved this caller may read
+		// the requested project, so it subsumes the set (a non-member
+		// project is 404-folded before it reaches here).
+		projects = []string{project}
+	}
+	if projects != nil && len(projects) == 0 {
+		return reply(w, http.StatusOK, api.ListResponse[memory.Entry]{Items: []memory.Entry{}, Total: 0})
+	}
+	items, err := s.Mems.SearchMode(match, projects, query, memType, tags, limit, s.memVisible(idn))
 	if err != nil {
 		return err
 	}
@@ -1256,11 +1541,12 @@ func (s *Server) hCreateUser(w http.ResponseWriter, r *http.Request, idn *identi
 }
 
 func (s *Server) hListUsers(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	users, err := s.Admin.ListUsers()
+	// one capped page (200, no cursor); total is the true user count
+	users, total, err := s.Admin.ListUsers()
 	if err != nil {
 		return err
 	}
-	return reply(w, http.StatusOK, api.ListResponse[api.User]{Items: users, Total: len(users)})
+	return reply(w, http.StatusOK, api.ListResponse[api.User]{Items: users, Total: total})
 }
 
 func (s *Server) hCreateAPIKey(w http.ResponseWriter, r *http.Request, idn *identity) error {
@@ -1299,11 +1585,12 @@ func (s *Server) hCreateProject(w http.ResponseWriter, r *http.Request, idn *ide
 }
 
 func (s *Server) hListProjects(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	projects, err := s.Admin.ListProjects()
+	// one capped page (200, no cursor); total is the true project count
+	projects, total, err := s.Admin.ListProjects()
 	if err != nil {
 		return err
 	}
-	return reply(w, http.StatusOK, api.ListResponse[api.Project]{Items: projects, Total: len(projects)})
+	return reply(w, http.StatusOK, api.ListResponse[api.Project]{Items: projects, Total: total})
 }
 
 func (s *Server) hGetProject(w http.ResponseWriter, r *http.Request, idn *identity) error {
@@ -1345,11 +1632,12 @@ func (s *Server) hPatchUser(w http.ResponseWriter, r *http.Request, idn *identit
 }
 
 func (s *Server) hListAPIKeys(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	keys, err := s.Admin.ListAPIKeys()
+	// one capped page (500, no cursor); total is the true key count
+	keys, total, err := s.Admin.ListAPIKeys()
 	if err != nil {
 		return err
 	}
-	return reply(w, http.StatusOK, api.ListResponse[core.APIKeyInfo]{Items: keys, Total: len(keys)})
+	return reply(w, http.StatusOK, api.ListResponse[core.APIKeyInfo]{Items: keys, Total: total})
 }
 
 // hPatchProject serves PATCH /api/v1/projects/{id} (M3): description,

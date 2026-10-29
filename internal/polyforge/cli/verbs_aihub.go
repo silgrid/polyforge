@@ -254,7 +254,7 @@ func fileCreate(ctx *Context, args []string) error {
 // request's goal mentions the scoped-tier marker but its content carries
 // no exact marker line: verification reads the tier from the content, so
 // a marker in the goal has no effect and the work item runs at the full
-// tier (workbench#50; the workbench#44 failure: goal marker, content
+// tier (; the failure: goal marker, content
 // null). Warn only — the request, the created work item, the exit code
 // and stdout are untouched.
 func warnScopeMarkerPlacement(ctx *Context, req aihubclient.CreateWorkItemRequest) {

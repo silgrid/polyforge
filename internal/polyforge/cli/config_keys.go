@@ -1,7 +1,7 @@
 package cli
 
 // config_keys.go: the canonical key model `pf config` edits and the
-// reload class table the daemon and the CLI report (workbench#3). One
+// reload class table the daemon and the CLI report. One
 // fact, one place: the key name, its class and how it is addressed live
 // here.
 

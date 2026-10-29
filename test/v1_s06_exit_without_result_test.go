@@ -15,8 +15,8 @@ import (
 // and re-dispatches the step in place — resuming the transcript, the
 // first retry's shape — under the next ordinal; the workflow completes
 // and wraps. No recovery fires for the exit (the recovery engine is the
-// DRIVER's crash bound now): exactly ONE needs_recovery signal for the
-// whole episode, the completion wrap. And the supervisor stays quiet
+// DRIVER's crash bound now): no needs_recovery for the whole episode —
+// the completion wrap is a finish, not a death. And the supervisor stays quiet
 // through the silent-but-live delay: no verdict, no driver stall.
 //
 // This scenario runs against the REAL `pf daemon` process.
@@ -87,8 +87,8 @@ func TestV1S06HangRecovery(t *testing.T) {
 	// wrap. The exit never reached the recovery engine, and the
 	// supervisor never judged the silent-but-live delay.
 	kinds := d.eventKinds(t, wi)
-	if n := countOf(kinds, "needs_recovery"); n != 1 {
-		t.Fatalf("needs_recovery fired %d times, want 1 (completion only): %v", n, kinds)
+	if n := countOf(kinds, "needs_recovery"); n != 0 {
+		t.Fatalf("needs_recovery fired %d times, want 0 (the completion is no death): %v", n, kinds)
 	}
 	if n := countOf(kinds, "step_dead"); n != 0 {
 		t.Fatalf("the supervisor judged a live step process dead: %v", kinds)

@@ -76,11 +76,26 @@ type StepSpec struct {
 	// MechanicalFix mirrors `mechanical_fix: true` (polyforge#260): the
 	// verification step entry arms the mechanical fast lane — an armed
 	// lane's all-static verification FAIL may carry a mechanical
-	// classification (mechanical_bound) and rewind cheaply (one slot, a
-	// light re-entry of code, one light recheck). Absent = false = off:
+	// classification (mechanical_bound) and rewind cheaply (no edge slot
+	// charged, a light re-entry of code, one light recheck). Absent = false = off:
 	// every fast-lane branch in the driver is gated on it, and an unarmed
 	// lane's FAIL rewinds exactly as today.
 	MechanicalFix bool
+	// Recall mirrors `recall: true`: the step's prompt
+	// carries the project-memory recall duty (workflows/_shared/memory.md:
+	// recall from three angles, read the relevant bodies, add a
+	// `## Prior experience` section). The lanes declare it on their
+	// decision/authoring steps; a judging or executing step (the review,
+	// verification and deliver gates, the release lane) declares none and
+	// spends no dispatch time recalling. Independent of it, the workflow's
+	// last step always carries the wrap-summary duty (memory-wrap.md).
+	Recall bool
+	// PlanConformance mirrors `plan_conformance: true`:
+	// the verification step entry receives the driver-computed
+	// plan-conformance facts (planconformance.go) beside review, which
+	// always receives them on a lane with a done plan step. Absent =
+	// false: the verification prompt carries no facts section.
+	PlanConformance bool
 }
 
 // OnFail is the gate FAIL policy: the rewind target the gate's FAIL
@@ -128,6 +143,32 @@ func (w *Workflow) stepVars(id string) map[string]string {
 	return nil
 }
 
+// buildStep answers the lane's build step — the step whose product is the
+// task-repo tree the unchanged-tree guard compares. It is
+// the verification entry's `build_step` var, else that gate's on_fail
+// target (both name the step a FAIL sends the build work back to); a
+// reduced lane without one falls back to the newest gate's on_fail target.
+// Empty = the lane declares no build step, and the guard stays out.
+func (w *Workflow) buildStep() string {
+	if w == nil {
+		return ""
+	}
+	if v := w.step(verificationStepID); v != nil {
+		if b := v.Vars["build_step"]; b != "" {
+			return b
+		}
+		if v.OnFail != nil {
+			return v.OnFail.Target
+		}
+	}
+	for i := len(w.Steps) - 1; i >= 0; i-- {
+		if s := &w.Steps[i]; s.Gate && s.OnFail != nil {
+			return s.OnFail.Target
+		}
+	}
+	return ""
+}
+
 // LoadWorkflow reads a materialized bundle's workflow.md, parses its
 // frontmatter and validates it.
 func LoadWorkflow(bundleDir string) (*Workflow, error) {
@@ -150,7 +191,10 @@ func LoadWorkflow(bundleDir string) (*Workflow, error) {
 }
 
 // parseWorkflow parses one frontmatter block, filling the defaults:
-// context_policy inherit, rewind bounds 4/2. Judging the filled values is
+// context_policy inherit, rewind bounds 4/2 ( code review: a
+// declared bound ≤0 falls back like an omitted one, and an omitted
+// max_total derives the reachable min(4, #on_fail edges × max_per_step)
+// — see the derivation below). Judging the filled values is
 // validateWorkflow's job.
 func parseWorkflow(front []byte) (*Workflow, error) {
 	var doc extDoc
@@ -161,11 +205,17 @@ func parseWorkflow(front []byte) (*Workflow, error) {
 		MaxTotal:   defaultMaxRewindTotal,
 		MaxPerStep: defaultMaxRewindPerStep,
 	}
+	// A declared bound ≤0 falls back like an omitted one — the driver
+	// never honors a ≤0 bound, and validation must see the same values
+	// the driver later uses (driver.New applies the identical fallback
+	// to an injected workflow).
+	declaredTotal := false
 	if doc.Rewind != nil {
-		if doc.Rewind.MaxTotal != nil {
+		if doc.Rewind.MaxTotal != nil && *doc.Rewind.MaxTotal > 0 {
 			wf.MaxTotal = *doc.Rewind.MaxTotal
+			declaredTotal = true
 		}
-		if doc.Rewind.MaxPerStep != nil {
+		if doc.Rewind.MaxPerStep != nil && *doc.Rewind.MaxPerStep > 0 {
 			wf.MaxPerStep = *doc.Rewind.MaxPerStep
 		}
 	}
@@ -180,6 +230,8 @@ func parseWorkflow(front []byte) (*Workflow, error) {
 			RequiresCommandEvidence: s.RequiresCommandEvidence,
 			Vars:                    s.Vars,
 			MechanicalFix:           s.MechanicalFix,
+			PlanConformance:         s.PlanConformance,
+			Recall:                  s.Recall,
 		}
 		if s.Budget != nil {
 			step.WallMinutes = s.Budget.WallMinutes
@@ -191,6 +243,25 @@ func parseWorkflow(front []byte) (*Workflow, error) {
 			step.OnFail = &OnFail{Target: s.OnFail.Target}
 		}
 		wf.Steps = append(wf.Steps, step)
+	}
+	// code review: an omitted max_total derives the reachable
+	// default min(4, #on_fail edges × max_per_step) instead of refusing
+	// the load — the driver's own 4/2 defaults must keep every previously
+	// loading workflow loading (the one-edge default shape was the one
+	// the plain 4 could make unreachable). A DECLARED total rides as
+	// declared: max_total counts the uncharged light, mechanical and
+	// converging rewinds too, so a total above edges × max_per_step is
+	// still reachable and binding — never a load error.
+	if !declaredTotal {
+		edges := 0
+		for i := range wf.Steps {
+			if wf.Steps[i].OnFail != nil {
+				edges++
+			}
+		}
+		if edgeCap := edges * wf.MaxPerStep; edges > 0 && wf.MaxTotal > edgeCap {
+			wf.MaxTotal = edgeCap
+		}
 	}
 	return wf, nil
 }
@@ -204,7 +275,8 @@ func parseWorkflow(front []byte) (*Workflow, error) {
 // (otherwise the mistake would only surface at the gate's first FAIL),
 // and mechanical_fix on any step entry other than the verification
 // gate (the switch arms a verification-only fast lane — see
-// spawnStep — and was silently ignored anywhere else).
+// spawnStep — and was silently ignored anywhere else); plan_conformance
+// likewise belongs to the verification entry alone.
 func validateWorkflow(wf *Workflow) error {
 	if wf == nil || len(wf.Steps) == 0 {
 		return fmt.Errorf("driver: workflow has no steps")
@@ -231,6 +303,9 @@ func validateWorkflow(wf *Workflow) error {
 		}
 		if s.MechanicalFix && s.ID != verificationStepID {
 			return fmt.Errorf("driver: step %q declares mechanical_fix — the switch belongs to the verification step entry alone", s.ID)
+		}
+		if s.PlanConformance && s.ID != verificationStepID {
+			return fmt.Errorf("driver: step %q declares plan_conformance — the switch belongs to the verification step entry alone (review always receives the facts)", s.ID)
 		}
 		if s.OnFail != nil {
 			if !s.Gate {
@@ -265,6 +340,8 @@ type extStep struct {
 	RequiresHumanAnswer     humanGate         `yaml:"requires_human_answer"`
 	RequiresCommandEvidence bool              `yaml:"requires_command_evidence"`
 	MechanicalFix           bool              `yaml:"mechanical_fix"`
+	PlanConformance         bool              `yaml:"plan_conformance"`
+	Recall                  bool              `yaml:"recall"`
 	ContextPolicy           string            `yaml:"context_policy"`
 	OnFail                  *extOnFail        `yaml:"on_fail"`
 	Budget                  *extBudget        `yaml:"budget"`

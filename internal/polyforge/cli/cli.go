@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
 
@@ -76,8 +75,10 @@ type Command struct {
 // `resume` = continue and `cancel` = abandon, v2-converge §7) + 7 on the
 // daemon UDS face (submit, watch, answer, pause, resume, wrap, ops) — with
 // `chat` (the harness chat identity, also GroupExec) between ops and watch
-// and `result` (a workflow step's result delivery, #214, also GroupExec, so
-// the help face shows 9 exec verbs) after watch, then the management face M1–M5, then the
+// and `result` (a workflow step's result delivery, #214, also GroupExec)
+// after watch, followed by `verify-run` (a verification step's one
+// mechanical run, local: no daemon, no aihub; also GroupExec, so the help
+// face shows 10 exec verbs), then the management face M1–M5, then the
 // machine health face (doctor, #113), the build version (version, #196:
 // the verb form of the `--version` flag) and the workspace layout (init,
 // #177), then the daemon
@@ -99,6 +100,7 @@ var commands = []*Command{
 	cmdWatch,
 	cmdTask,
 	cmdResult,
+	cmdVerifyRun,
 	cmdMsg,
 	cmdUsers,
 	cmdApiKeys,
@@ -173,7 +175,7 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	// A task agent never drives the daemon and cannot use the aihub-direct
-	// verbs (workbench#53): its write verbs are refused here, before the
+	// verbs: its write verbs are refused here, before the
 	// config read and before any wire call — the refusal must not depend on
 	// a readable cli.toml or a reachable daemon. The spawn env carries no
 	// aihub key and task mode clears it, but the shared HOME keeps cli.toml
@@ -446,32 +448,6 @@ func (o *optString) Set(s string) error {
 func (o *optString) IsSet() bool { return o.set }
 func (o *optString) Val() string { return o.val }
 func (o *optString) Ptr() *string {
-	if !o.set {
-		return nil
-	}
-	v := o.val
-	return &v
-}
-
-// optBool is a flag.Value that records whether it was explicitly set —
-// PATCH semantics need "flag absent" distinct from "flag set to false".
-type optBool struct {
-	val bool
-	set bool
-}
-
-func (o *optBool) String() string { return fmt.Sprintf("%v", o.val) }
-func (o *optBool) Set(s string) error {
-	v, err := strconv.ParseBool(s)
-	if err != nil {
-		return err
-	}
-	o.val, o.set = v, true
-	return nil
-}
-func (o *optBool) IsBoolFlag() bool { return true }
-func (o *optBool) IsSet() bool      { return o.set }
-func (o *optBool) Ptr() *bool {
 	if !o.set {
 		return nil
 	}

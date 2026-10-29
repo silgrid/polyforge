@@ -1,6 +1,6 @@
 package test
 
-// w47_lane_downgrade_contract_test.go: text contract for workbench#47.
+// w47_lane_downgrade_contract_test.go: text contract for.
 //
 // Work item #47 adds a down-lane mechanism: the filing skill judges a ticket on
 // two axes (expected diff size and lane risk surface) and prefers the lighter
@@ -18,7 +18,7 @@ package test
 // real filing proposal records a down-lane judgment and a real grill round asks
 // the owner to re-file or waive — cannot be machine-verified from text and is
 // observed on real WIs, recorded in the capsule's code summary, the same way
-// workbench#30 and #44 handled their non-machine-verifiable residual.
+// and #44 handled their non-machine-verifiable residual.
 
 import (
 	"os"
@@ -65,12 +65,12 @@ func TestW47LaneDowngradeContract(t *testing.T) {
 	for _, c := range cases {
 		b, err := os.ReadFile(filepath.Join(root, c.rel))
 		if err != nil {
-			t.Fatalf("workbench#47: %s is a file the down-lane mechanism must extend: %v", c.rel, err)
+			t.Fatalf("%s is a file the down-lane mechanism must extend: %v", c.rel, err)
 		}
 		s := string(b)
 		for _, want := range c.want {
 			if !strings.Contains(s, want) {
-				t.Errorf("workbench#47: %s must carry the down-lane marker %q — the filing skill defines the `Down-lane check` on `expected diff size` and `lane risk surface` (a small, low-risk ticket prefers `chore`/`autopilot` over `feature-full`; work on the `never unattended` list is a high `lane risk surface` and is `never down-laned`, whatever its diff size), and the feature-full grill answers a per-round `Lane proposal` (down-lane by re-file, recorded in `artifacts/grill-qa.md`; the `never unattended` list gets no down-lane proposal)", c.rel, want)
+				t.Errorf("%s must carry the down-lane marker %q — the filing skill defines the `Down-lane check` on `expected diff size` and `lane risk surface` (a small, low-risk ticket prefers `chore`/`autopilot` over `feature-full`; work on the `never unattended` list is a high `lane risk surface` and is `never down-laned`, whatever its diff size), and the feature-full grill answers a per-round `Lane proposal` (down-lane by re-file, recorded in `artifacts/grill-qa.md`; the `never unattended` list gets no down-lane proposal)", c.rel, want)
 			}
 		}
 	}

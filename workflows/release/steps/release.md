@@ -77,7 +77,7 @@ The release must build exactly the freshly fetched origin default-branch head.
 1. `git fetch origin` (fetch first; never trust the existing clone state).
 2. Determine the default branch from the remote (for example
    `git remote show origin | sed -n 's/.*HEAD branch: //p'`, falling back to
-   `git symbolic-ref --short refs/remotes/origin/HEAD`). Call it `<default>`.
+   `git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||'`). Call it `<default>`.
 3. Put the clone exactly at origin: `git checkout -B <default> origin/<default>`,
    `git reset --hard origin/<default>`, and `git clean -fd` (a release WI's clone holds
    no work worth keeping; the release builds origin's head, nothing else). Then require
@@ -114,10 +114,16 @@ neither skip nor replace them). Decide the bump argument:
 - Otherwise pass no argument (the repo's default applies). Never invent a bump, never
   pass flags that skip tests or checks, never use `--force`-style options.
 
-The run can be long (a full test gate plus build and publish). Make sure it survives your
-tool's per-command timeout, for example start it in the background with its output going
-to `artifacts/release.log` and its exit code written to a file, then poll until it
-finishes; record the invocation as command evidence with its real duration.
+The run can be long (a full test gate plus build and publish). Waiting is never a tool
+call of its own: run the procedure in the foreground with an explicit timeout at least as
+long as you expect it to take (the harness allows up to the daemon's tool bound), its
+output also written to `artifacts/release.log`. Only a procedure known to exceed that
+bound may be backgrounded (its output in `artifacts/release.log`, its exit code in a
+file), and it is then awaited inside one call: a loop that checks a real condition, sleeps
+at most 3 s per iteration and has a deadline. The condition is the exit-code file
+existing; a deadline that passes first is answered by the same loop in the next call. A
+bare `sleep N` call, or a loop whose only exit is the deadline, is a violation and is
+recorded. Record the invocation as command evidence with its real duration.
 
 A nonzero exit is a release failure: `verdict: fail`, never something to work around.
 Your `fail_reason` must say what the procedure printed and what (tag, image, release

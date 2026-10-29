@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
@@ -705,6 +706,10 @@ func optAPIKey(key string) daemonOpt {
 // supBounds are the supervision bounds a scenario injects through the
 // real `pf daemon` flags (v2-converge 2.4). A zero duration omits its
 // flag, leaving that bound at the production default.
+// e2eRetryBackoffBase is the retry pacing's first wait every e2e daemon
+// runs under (production: 1m, then 3m, then 9m; here 200ms, 600ms, 1.8s).
+const e2eRetryBackoffBase = 200 * time.Millisecond
+
 type supBounds struct {
 	silence, tool, stepTimeout, stall, modelErrorGrace time.Duration
 }
@@ -829,6 +834,9 @@ func (d *v1Daemon) launch() {
 		"--pi-bin", d.inst.fakepiPath,
 		// never the host's real claude (a test opts in with its own --claude-bin)
 		"--claude-bin", "/nonexistent/claude-test-guard",
+		// e2e daemons pace retries in milliseconds, not minutes (a test
+		// that pins the pacing passes its own, later flag)
+		"--retry-backoff-base", e2eRetryBackoffBase.String(),
 		// polyforge#113: the [workspace] mapping config is the ONLY
 		// workspace source (and it doubles as the config isolation file —
 		// the daemon never reads an operator config file).
@@ -1544,9 +1552,10 @@ func httpStatusOf(method, url, user, secret string) (int, http.Header, string) {
 // (a subset that keeps every unmarshal honest — the same discipline as
 // fakepi's own execStep).
 type execStepView struct {
-	Status             string           `json:"status"`
-	Model              string           `json:"model"`
-	Effort             string           `json:"effort"`
+	Status string `json:"status"`
+	// Candidate is the `<harness>:<model>[:effort]` the step last ran
+	// (or will next run) on — the one model fact of a step record.
+	Candidate          string           `json:"candidate"`
 	StepStartedAt      string           `json:"step_started_at"`
 	Output             map[string]any   `json:"output"`
 	Attempts           []map[string]any `json:"attempts"`
@@ -1560,6 +1569,17 @@ type execStepView struct {
 	// Dispatch is the ordinal of the dispatch the step awaits (set by
 	// its step_start, cleared once settled).
 	Dispatch int64 `json:"dispatch"`
+}
+
+// model and effort answer the step's candidate parts ("" when none).
+func (st *execStepView) model() string {
+	c, _ := harness.ParseCandidate(st.Candidate)
+	return c.Model
+}
+
+func (st *execStepView) effort() string {
+	c, _ := harness.ParseCandidate(st.Candidate)
+	return c.Effort
 }
 
 // executionView is the loose read shape of runtime-state/execution.json.

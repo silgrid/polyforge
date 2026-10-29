@@ -1,6 +1,6 @@
 package runtime
 
-// task_models_test.go: the live task-lane candidate read (workbench#40).
+// task_models_test.go: the live task-lane candidate read.
 // The accessor reads the workspace yaml at call time (no snapshot), so a
 // rewrite governs the next read.
 

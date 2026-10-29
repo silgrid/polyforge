@@ -4,7 +4,7 @@ package modelhealth
 // (protocol.EventEntry) and answers the profile + warnings; it touches no
 // file and imports no dispatch-facing package.
 //
-// Identity rule (workbench#14 spec, assumption 8): a failure's model is
+// Identity rule ( spec, assumption 8): a failure's model is
 // ALWAYS the most recent preceding step_started of the same work item and
 // step in seq order. step_failed.candidate is self-description only; the
 // candidate body field is deliberately not read here.

@@ -23,7 +23,7 @@ import (
 )
 
 // prepareCapsule makes CapsuleDir a git worktree whose git-dir is EXTERNAL
-// (ruling #2: agents never reach hooks/config/index). The aihub bare repo is
+// (the design record). The aihub bare repo is
 // cloned straight into that layout (gitops.Clone: the git-dir at
 // o.GitDir, a one-line .git pointer file in the worktree; an
 // empty-history clone succeeds with a warning).

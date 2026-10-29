@@ -310,6 +310,11 @@ var cmdResume = &Command{
 					fmt.Fprintf(ctx.Stdout, "resumed %s: the work item is already running on this daemon\n", name)
 					return
 				}
+				if res.Outcome == "parked" {
+					fmt.Fprintf(ctx.Stdout, "resumed %s: clean_pause cleared; the holder daemon re-attached the paused session, but its recovery is parked — the previous driver Run did not stop within its teardown bound, so nothing continues next to it yet; it continues by itself once that Run exits\n", name)
+					fmt.Fprintln(ctx.Stdout, "(`pf watch "+args[0]+" --once` shows recovery_parked or close_parked; a daemon restart also continues it)")
+					return
+				}
 				if res.Outcome == "closed" {
 					fmt.Fprintf(ctx.Stdout, "resumed %s: clean_pause cleared; the holder daemon re-attached the paused session, but its recovery closed the work item (terminal verdict or exhausted relaunch) — it does not continue in place\n", name)
 					fmt.Fprintln(ctx.Stdout, "(see `pf watch "+args[0]+" --once` for the close)")

@@ -1,6 +1,6 @@
 package task
 
-// manager.go: the in-memory task manager (workbench#53, carried from #40).
+// manager.go: the in-memory task manager (carried from #40).
 // It owns the fixed two-slot limiter (outside the job slots), the spawn
 // path (live candidate resolution, the project's working directory, a
 // background runner goroutine), candidate rotation inside ONE shared
@@ -245,7 +245,7 @@ func (m *Manager) finish(ctx context.Context, e *entry, report string, tokens in
 	// The store is the ONLY home of a finished task: dropping the
 	// in-memory entry here is what keeps pf task list/show/summary inside
 	// the store's 50-entry / 7-day retention bound and the daemon's memory
-	// flat over a long run (polyforge#40 review B6). A running task keeps
+	// flat over a long run (polyforge#40 code review). A running task keeps
 	// its entry (Cancel and the progress counter) until this point.
 	delete(m.tasks, t.ID)
 	m.mu.Unlock()

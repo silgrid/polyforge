@@ -62,7 +62,6 @@ func mechGateFail(t *testing.T, verification StepSpec, out string, base map[stri
 		Kind: TransStepResult, StepID: verificationStepID, SpawnN: 2,
 		Result: &StepResult{StepID: verificationStepID, SpawnN: 2, Outcome: OutcomeGateFailed,
 			Output: json.RawMessage(out)},
-		Gate:          &GateVerdict{GateStepID: verificationStepID, TargetStep: "code", VerdictText: "lint red"},
 		LightDiffBase: base,
 	}); err != nil {
 		t.Fatalf("gate_fail: %v", err)
@@ -89,8 +88,10 @@ func TestTransitionMechanicalRewindChargesSlotAndSetsMarker(t *testing.T) {
 	if code.Status != capsule.StepPending || code.Output != nil {
 		t.Fatalf("the mechanical rewind resets code pending, output cleared: %+v", code)
 	}
-	if exec.RewindStats.Count != 1 || len(exec.RewindStats.ToStep) != 1 || exec.RewindStats.ToStep[0] != "code" {
-		t.Fatalf("exactly one slot, logged to code: %+v", exec.RewindStats)
+	if exec.RewindStats.Count != 1 || len(exec.RewindStats.Rewinds) != 1 ||
+		exec.RewindStats.Rewinds[0].Gate != "verification" || exec.RewindStats.Rewinds[0].ToStep != "code" ||
+		exec.RewindStats.Rewinds[0].Charged {
+		t.Fatalf("exactly one slot, logged to code (a mechanical rewind charges no edge slot): %+v", exec.RewindStats)
 	}
 	if pri := code.PendingRewindInput; pri == nil || pri.ToStep != "code" ||
 		pri.Note != MechanicalRewindNote || !strings.Contains(pri.Reason, "lint red") {
@@ -173,19 +174,16 @@ func TestTransitionMechanicalRewindUnarmedOrUnclassifiedRewindsFresh(t *testing.
 }
 
 // TestTransitionMechanicalRewindBoundsHold: the mechanical rewind is no
-// budget bypass — an over-bound mechanical FAIL ends
-// failed_rewind_exhausted BEFORE any mutation (no archive, no slot, no
-// marker, no verdict routed), exactly like every rewind.
-// TestTransitionMechanicalRewindBoundsHold: the mechanical rewind is no
 // budget bypass - an over-bound mechanical FAIL ends
 // failed_rewind_exhausted BEFORE any mutation (no archive, no slot, no
 // verdict routed), exactly like every rewind. The second mechanical FAIL
 // arrives after the light path settled (the light recheck FAILed and
-// escalated in place): the follow-up mechanical rewind attempt hits
-// max_per_step.
+// escalated in place); the mechanical rewind charges NO edge slot
+// (the light rewinds are max_total's alone), so the bound
+// that stops it is max_total.
 func TestTransitionMechanicalRewindBoundsHold(t *testing.T) {
 	d, _, _, execPath := testEnv(t, spec("code"), mechGateSpec("code"))
-	d.workflow.MaxPerStep = 1
+	d.workflow.MaxTotal = 1
 	mustInit(t, d)
 	complete := func(n int64, stepID string) {
 		t.Helper()
@@ -202,7 +200,6 @@ func TestTransitionMechanicalRewindBoundsHold(t *testing.T) {
 			Kind: TransStepResult, StepID: verificationStepID, SpawnN: n,
 			Result: &StepResult{StepID: verificationStepID, SpawnN: n, Outcome: OutcomeGateFailed,
 				Output: json.RawMessage(`{"verdict":"fail","fail_reason":"lint red","mechanical_bound":` + mechanicalBoundJSON + `}`)},
-			Gate:          &GateVerdict{GateStepID: verificationStepID, TargetStep: "code", VerdictText: "lint red"},
 			LightDiffBase: map[string]string{"app": "0123"},
 		}); err != nil {
 			t.Fatalf("gate_fail %d: %v", n, err)
@@ -215,7 +212,6 @@ func TestTransitionMechanicalRewindBoundsHold(t *testing.T) {
 			Kind: TransStepResult, StepID: verificationStepID, SpawnN: n,
 			Result: &StepResult{StepID: verificationStepID, SpawnN: n, Outcome: OutcomeGateFailed,
 				Output: json.RawMessage(`{"verdict":"fail","fail_reason":"the bound command is still red"}`)},
-			Gate: &GateVerdict{GateStepID: verificationStepID, TargetStep: "code", VerdictText: "still red"},
 		}); err != nil {
 			t.Fatalf("light recheck fail %d: %v", n, err)
 		}
@@ -235,11 +231,12 @@ func TestTransitionMechanicalRewindBoundsHold(t *testing.T) {
 		t.Fatalf("the light-path escalation must clear the marker")
 	}
 	// the escalated full re-run FAILs classified mechanical again: the
-	// follow-up mechanical rewind hits max_per_step BEFORE any mutation.
+	// follow-up mechanical rewind hits max_total BEFORE any mutation (the
+	// edge was never charged — the first record below pins that).
 	mechFail(5)
 	exec := readExec(t, execPath)
 	if exec.WorkflowStatus != StatusFailedRewindExhausted {
-		t.Fatalf("the second mechanical rewind must hit max_per_step, got %q", exec.WorkflowStatus)
+		t.Fatalf("the second mechanical rewind must hit max_total, got %q", exec.WorkflowStatus)
 	}
 	var mech int
 	for _, a := range exec.Steps["code"].Attempts {
@@ -250,6 +247,9 @@ func TestTransitionMechanicalRewindBoundsHold(t *testing.T) {
 	if mech != 1 || exec.RewindStats.Count != 1 {
 		t.Fatalf("the bound fired before any mutation: mechanical archives %d, count %d", mech, exec.RewindStats.Count)
 	}
+	if len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0].Charged {
+		t.Fatalf("the mechanical rewind must charge no edge slot: %+v", exec.RewindStats.Rewinds)
+	}
 	if code := exec.Steps["code"]; code.PendingRewindInput != nil || code.Status != capsule.StepDone {
 		t.Fatalf("the exhausted rewind must not route a verdict nor reset the target: %+v", code)
 	}
@@ -258,8 +258,9 @@ func TestTransitionMechanicalRewindBoundsHold(t *testing.T) {
 // TestTransitionMechanicalSelfReportRewindsFreshSameSlot: a completed
 // result of the MECHANICAL light re-entry carrying needs_code_change:
 // true is not archived done — the same write rewinds fresh with the same
-// verdict, charging no additional slot (the generalization of #222's
-// self-report rewind to the second light cause).
+// verdict, taking no additional slot but charging the light record's
+// edge once (; the generalization of #222's self-report
+// rewind to the second light cause).
 func TestTransitionMechanicalSelfReportRewindsFreshSameSlot(t *testing.T) {
 	d, log, _, execPath := testEnv(t, spec("code"), mechGateSpec("code"))
 	mustInit(t, d)
@@ -275,7 +276,6 @@ func TestTransitionMechanicalSelfReportRewindsFreshSameSlot(t *testing.T) {
 			Kind: TransStepResult, StepID: verificationStepID, SpawnN: n,
 			Result: &StepResult{StepID: verificationStepID, SpawnN: n, Outcome: OutcomeGateFailed,
 				Output: json.RawMessage(`{"verdict":"fail","fail_reason":"lint red","mechanical_bound":` + mechanicalBoundJSON + `}`)},
-			Gate:          &GateVerdict{GateStepID: verificationStepID, TargetStep: "code", VerdictText: "lint red"},
 			LightDiffBase: map[string]string{"app": "0123"},
 		}); err != nil {
 			t.Fatalf("gate_fail %d: %v", n, err)
@@ -303,27 +303,181 @@ func TestTransitionMechanicalSelfReportRewindsFreshSameSlot(t *testing.T) {
 	if att.Cause != CauseGateFailRewind || att.RewindGate != verificationStepID {
 		t.Fatalf("the self-report archive must mirror the range rewind's shape (the light gate named): %+v", att)
 	}
-	if exec.RewindStats.Count != 1 {
-		t.Fatalf("the self-report reuses the mechanical rewind's slot (no charge): %+v", exec.RewindStats)
+	if exec.RewindStats.Count != 1 || len(exec.RewindStats.Rewinds) != 1 ||
+		exec.RewindStats.Rewinds[0] != (capsule.RewindRecord{Gate: verificationStepID, ToStep: "code", Charged: true}) {
+		t.Fatalf("the self-report reuses the mechanical rewind's slot and charges its edge once: %+v", exec.RewindStats)
 	}
 	if pri := st.PendingRewindInput; pri == nil || pri.ToStep != "code" || pri.Note != "" ||
 		!strings.Contains(pri.Reason, "lint red") {
 		t.Fatalf("the same FAIL verdict must ride the fresh re-entry (no Note): %+v", pri)
 	}
-	if got := log.kinds(); got[len(got)-1] != "rewind" {
-		t.Fatalf("the self-report emits the rewind event, never step_done: %v", got)
-	}
 	// the fresh re-entry re-derives from scratch: no resume order
 	if lightRewindContext(st.Attempts) {
 		t.Fatalf("the self-report's fresh rewind must not order a resume: %+v", st.Attempts)
 	}
-	// the self-report's same write clears the pending light recheck marker
-	// on the gate (the marker lives on the gate, outside the range the
+	// the self-report's same write abandons the pending light recheck on
+	// the gate (the marker lives on the gate, outside the range the
 	// self-report archives): a stale marker would make the gate's next
-	// dispatch a light recheck over a fresh re-derivation's bound
-	if marker := exec.Steps[verificationStepID].PendingLightRecheck; marker != nil {
-		t.Fatalf("the mechanical self-report's fresh rewind must clear the pending light recheck marker: %+v", marker)
+	// dispatch a light recheck over a fresh re-derivation's bound. Since
+	// S1 it is abandoned like every other fresh
+	// re-derivation's — with the audit record and the event, after the
+	// rewind event (never step_done).
+	assertLightRecheckAbandoned(t, exec, log, "needs_code_change")
+}
+
+// assertLightRecheckAbandoned pins's abandonment of
+// verification's pending light recheck by a write that opened a fresh
+// re-derivation of the build step: the marker cleared, the audit-only
+// light_recheck_escalated attempt archived on verification (the reason
+// naming why, the marker's facts, the abandoned flag) and, after the
+// write's own rewind event, one light_recheck_escalated event naming
+// verification and the same reason.
+func assertLightRecheckAbandoned(t *testing.T, exec *capsule.Execution, log *eventLog, why string) {
+	t.Helper()
+	ver := exec.Steps[verificationStepID]
+	if ver.PendingLightRecheck != nil {
+		t.Fatalf("a fresh re-derivation must clear verification's pending light recheck: %+v", ver.PendingLightRecheck)
 	}
+	if len(ver.Attempts) == 0 {
+		t.Fatalf("the abandonment must archive the audit-only escalation attempt on verification: none archived")
+	}
+	att := ver.Attempts[len(ver.Attempts)-1]
+	if att.Cause != CauseLightRecheckEscalated || !strings.Contains(att.Detail, why) {
+		t.Fatalf("the abandonment must archive the audit-only escalation attempt naming %q: %+v", why, att)
+	}
+	var audit map[string]any
+	if json.Unmarshal(att.Result, &audit) != nil || audit["escalated"] != true || audit["abandoned"] != true ||
+		audit["bound"] == nil || audit["diff_base"] == nil || audit["reason"] != att.Detail {
+		t.Fatalf("the audit record must carry the marker's facts, the reason and the abandoned flag: %s", att.Result)
+	}
+	if !escalatedRecheckContext(ver.Attempts) || inPlaceEscalationContext(ver.Attempts) {
+		t.Fatalf("an abandoned recheck orders the escalation note but never the unchanged-tree exemption ( S2): %+v", ver.Attempts)
+	}
+	kinds := log.kinds()
+	n := len(kinds)
+	if n < 2 || kinds[n-2] != "rewind" || kinds[n-1] != EvLightRecheckEscalated {
+		t.Fatalf("the write's rewind event, then one escalation event: %v", kinds)
+	}
+	last := log.entries[len(log.entries)-1]
+	if last.body["step"] != verificationStepID || last.body["detail"] != att.Detail {
+		t.Fatalf("the escalation event must name verification and the reason: %+v", last.body)
+	}
+}
+
+// mechFailThenLight drives a lane whose mechanical verification FAIL set
+// the pending light recheck marker on verification and rewound build:
+// build (1) and review PASS (2), the mechanical FAIL (3). The build
+// step's light re-entry is the caller's next dispatch (ordinal 4).
+func mechFailThenLight(t *testing.T, d *Driver, execPath, build string) {
+	t.Helper()
+	mustInit(t, d)
+	result := func(step string, n int64, out string) {
+		t.Helper()
+		mustStart(t, d, step, n)
+		if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: step, SpawnN: n,
+			Result: completedResult(step, n, out)}); err != nil {
+			t.Fatalf("result %s %d: %v", step, n, err)
+		}
+	}
+	result(build, 1, `{}`)
+	result("review", 2, `{"verdict":"pass"}`)
+	mustStart(t, d, verificationStepID, 3)
+	if err := d.transition(TransitionRequest{
+		Kind: TransStepResult, StepID: verificationStepID, SpawnN: 3,
+		Result: &StepResult{StepID: verificationStepID, SpawnN: 3, Outcome: OutcomeGateFailed,
+			Output: json.RawMessage(`{"verdict":"fail","fail_reason":"lint red","mechanical_bound":` + mechanicalBoundJSON + `}`)},
+		LightDiffBase: map[string]string{"app": "0123"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if readExec(t, execPath).Steps[verificationStepID].PendingLightRecheck == nil {
+		t.Fatalf("the mechanical rewind must set the marker first")
+	}
+}
+
+// TestTransitionTextOnlySelfReportAbandonsLightRecheck ( S1):
+// verification FAIL mechanical → code light re-entry → review FAIL
+// text_only (the marker kept: the code re-entry resumes the light repair)
+// → code self-reports needs_code_change: true. That self-report opens a
+// fresh re-derivation of code, so the marker must not survive it: left in
+// place, review PASS would hand verification a LIGHT recheck over a
+// fresh re-derivation — skipping the full bar and the authored scenarios.
+// The latest light cause is text_only here, so the mechanical-only clear
+// the self-report carried before never ran.
+func TestTransitionTextOnlySelfReportAbandonsLightRecheck(t *testing.T) {
+	d, log, _, execPath := testEnv(t, spec("code"), gateSpec("review", "code"), mechGateSpec("code"))
+	d.workflow.MaxTotal, d.workflow.MaxPerStep = 6, 2
+	mechFailThenLight(t, d, execPath, "code")
+	mustStart(t, d, "code", 4) // the mechanical light re-entry
+	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "code", SpawnN: 4,
+		Result: completedResult("code", 4, `{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	mustStart(t, d, "review", 5)
+	if err := d.transition(TransitionRequest{
+		Kind: TransStepResult, StepID: "review", SpawnN: 5,
+		Result: &StepResult{StepID: "review", SpawnN: 5, Outcome: OutcomeGateFailed,
+			Output: lightReviewOutput(`[{"severity":"blocking","detail":"d","text_only":true}]`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if readExec(t, execPath).Steps[verificationStepID].PendingLightRecheck == nil {
+		t.Fatal("control: a text-only review FAIL keeps the marker")
+	}
+	mustStart(t, d, "code", 6) // the text-only light re-entry
+	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "code", SpawnN: 6,
+		Result: completedResult("code", 6, `{"needs_code_change":true}`)}); err != nil {
+		t.Fatalf("self-report: %v", err)
+	}
+	exec := readExec(t, execPath)
+	if st := exec.Steps["code"]; st.Status != capsule.StepPending || lightRewindContext(st.Attempts) {
+		t.Fatalf("the self-report rewinds code fresh: %+v", st)
+	}
+	assertLightRecheckAbandoned(t, exec, log, "needs_code_change")
+}
+
+// TestTransitionRootCauseFalseFromMechanicalReentryAbandonsLightRecheck
+// ( S1): on a lane with a diagnosis step, the fix's
+// mechanical light re-entry completes reporting root_cause_addressed:
+// false. The driver rewinds to root-cause — a range [root-cause, fix)
+// that never reaches verification — and the fix re-derives after the new
+// diagnosis, so the pending light recheck is abandoned in that same
+// write.
+func TestTransitionRootCauseFalseFromMechanicalReentryAbandonsLightRecheck(t *testing.T) {
+	d, log, _, execPath := testEnv(t, spec("repro"), gateSpec("root-cause", "repro"), spec("fix"),
+		gateSpec("review", "fix"), mechGateSpec("fix"))
+	d.workflow.MaxTotal, d.workflow.MaxPerStep = 6, 2
+	mustInit(t, d)
+	result := func(step string, n int64, out string) {
+		t.Helper()
+		mustStart(t, d, step, n)
+		if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: step, SpawnN: n,
+			Result: completedResult(step, n, out)}); err != nil {
+			t.Fatalf("result %s %d: %v", step, n, err)
+		}
+	}
+	result("repro", 1, `{}`)
+	result("root-cause", 2, `{"verdict":"pass"}`)
+	result("fix", 3, `{}`)
+	result("review", 4, `{"verdict":"pass"}`)
+	mustStart(t, d, verificationStepID, 5)
+	if err := d.transition(TransitionRequest{
+		Kind: TransStepResult, StepID: verificationStepID, SpawnN: 5,
+		Result: &StepResult{StepID: verificationStepID, SpawnN: 5, Outcome: OutcomeGateFailed,
+			Output: json.RawMessage(`{"verdict":"fail","fail_reason":"lint red","mechanical_bound":` + mechanicalBoundJSON + `}`)},
+		LightDiffBase: map[string]string{"app": "0123"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if readExec(t, execPath).Steps[verificationStepID].PendingLightRecheck == nil {
+		t.Fatalf("the mechanical rewind must set the marker first")
+	}
+	result("fix", 6, `{"root_cause_addressed":false,"summary":"the lint failure exposed a wrong diagnosis"}`)
+	exec := readExec(t, execPath)
+	if exec.CurrentStep != rootCauseStepID {
+		t.Fatalf("the false report rewinds to root-cause: %q", exec.CurrentStep)
+	}
+	assertLightRecheckAbandoned(t, exec, log, "root_cause_addressed")
 }
 
 // TestTransitionRewindRangeClearsLightRecheckMarker: every rewind-range
@@ -344,7 +498,6 @@ func TestTransitionRewindRangeClearsLightRecheckMarker(t *testing.T) {
 		Kind: TransStepResult, StepID: verificationStepID, SpawnN: 2,
 		Result: &StepResult{StepID: verificationStepID, SpawnN: 2, Outcome: OutcomeGateFailed,
 			Output: json.RawMessage(`{"verdict":"fail","fail_reason":"lint red","mechanical_bound":` + mechanicalBoundJSON + `}`)},
-		Gate:          &GateVerdict{GateStepID: verificationStepID, TargetStep: "code", VerdictText: "lint red"},
 		LightDiffBase: map[string]string{"app": "0123"},
 	}); err != nil {
 		t.Fatal(err)
@@ -369,7 +522,6 @@ func TestTransitionRewindRangeClearsLightRecheckMarker(t *testing.T) {
 		Kind: TransStepResult, StepID: "review", SpawnN: 5,
 		Result: &StepResult{StepID: "review", SpawnN: 5, Outcome: OutcomeGateFailed,
 			Output: json.RawMessage(`{"verdict":"fail","fail_reason":"wrong"}`)},
-		Gate: &GateVerdict{GateStepID: "review", TargetStep: "code", VerdictText: "wrong"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -431,4 +583,124 @@ func canoJSON(v any) string {
 		return err.Error()
 	}
 	return string(b)
+}
+
+// TestTransitionStructuralReviewFailAbandonsLightRecheck:
+// review runs before verification, so a review FAIL's range [code,
+// review) no longer resets verification — a pending light recheck marker
+// an earlier mechanical verification FAIL set would survive a STRUCTURAL
+// review FAIL and make the next verification a light recheck over a fresh
+// re-derivation. A non-light review FAIL abandons it in the same write,
+// the light path's own fallback way: an audit-only light_recheck_escalated
+// attempt on verification (reason + the marker's audit facts), the marker
+// cleared, one light_recheck_escalated event after the review's own
+// gate_verdict and rewind. A TEXT-ONLY (light) review FAIL keeps it: the
+// code re-entry resumes the light repair the marker describes.
+func TestTransitionStructuralReviewFailAbandonsLightRecheck(t *testing.T) {
+	scene := func(t *testing.T, reviewFail json.RawMessage) (*eventLog, *capsule.Execution) {
+		t.Helper()
+		d, log, _, execPath := testEnv(t, spec("code"), gateSpec("review", "code"), mechGateSpec("code"))
+		d.workflow.MaxTotal, d.workflow.MaxPerStep = 6, 2
+		mustInit(t, d)
+		result := func(step string, n int64, out string) {
+			t.Helper()
+			mustStart(t, d, step, n)
+			if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: step, SpawnN: n,
+				Result: completedResult(step, n, out)}); err != nil {
+				t.Fatalf("result %s %d: %v", step, n, err)
+			}
+		}
+		result("code", 1, `{}`)
+		result("review", 2, `{"verdict":"pass"}`)
+		// the mechanical verification FAIL sets the marker and rewinds to code
+		mustStart(t, d, verificationStepID, 3)
+		if err := d.transition(TransitionRequest{
+			Kind: TransStepResult, StepID: verificationStepID, SpawnN: 3,
+			Result: &StepResult{StepID: verificationStepID, SpawnN: 3, Outcome: OutcomeGateFailed,
+				Output: json.RawMessage(`{"verdict":"fail","fail_reason":"lint red","mechanical_bound":` + mechanicalBoundJSON + `}`)},
+			LightDiffBase: map[string]string{"app": "0123"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if readExec(t, execPath).Steps[verificationStepID].PendingLightRecheck == nil {
+			t.Fatalf("the mechanical rewind must set the marker first")
+		}
+		// the mechanical light re-entry repairs, then review (now FIRST) FAILs
+		result("code", 4, `{}`)
+		mustStart(t, d, "review", 5)
+		if err := d.transition(TransitionRequest{
+			Kind: TransStepResult, StepID: "review", SpawnN: 5,
+			Result: &StepResult{StepID: "review", SpawnN: 5, Outcome: OutcomeGateFailed, Output: reviewFail},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return log, readExec(t, execPath)
+	}
+
+	t.Run("structural review FAIL abandons the light recheck", func(t *testing.T) {
+		log, exec := scene(t, json.RawMessage(`{"verdict":"fail","fail_reason":"wrong"}`))
+		if exec.WorkflowStatus != StatusRunning || exec.CurrentStep != "code" {
+			t.Fatalf("the review FAIL still rewinds to code: %q %q", exec.WorkflowStatus, exec.CurrentStep)
+		}
+		ver := exec.Steps[verificationStepID]
+		if ver.PendingLightRecheck != nil {
+			t.Fatalf("a structural review FAIL must clear verification's pending light recheck: %+v", ver.PendingLightRecheck)
+		}
+		att := ver.Attempts[len(ver.Attempts)-1]
+		if att.Cause != CauseLightRecheckEscalated || !strings.Contains(att.Detail, "review") {
+			t.Fatalf("the abandonment must archive the audit-only escalation attempt with its reason: %+v", att)
+		}
+		var audit map[string]any
+		if json.Unmarshal(att.Result, &audit) != nil || audit["escalated"] != true || audit["bound"] == nil ||
+			audit["diff_base"] == nil || audit["reason"] != att.Detail {
+			t.Fatalf("the audit record must carry the marker's facts and the reason: %s", att.Result)
+		}
+		if !escalatedRecheckContext(ver.Attempts) || ver.Supervision == nil || ver.Supervision.NextDispatch != capsule.NextDispatchFresh {
+			t.Fatalf("verification's next dispatch is the escalated full re-run, fresh: %+v %+v", ver.Attempts, ver.Supervision)
+		}
+		kinds := log.kinds()
+		n := len(kinds)
+		if n < 3 || kinds[n-3] != "gate_verdict" || kinds[n-2] != "rewind" || kinds[n-1] != EvLightRecheckEscalated {
+			t.Fatalf("the review's verdict and rewind, then one escalation event: %v", kinds)
+		}
+		last := log.entries[len(log.entries)-1]
+		if last.body["step"] != verificationStepID || last.body["detail"] != att.Detail {
+			t.Fatalf("the escalation event must name verification and the reason: %+v", last.body)
+		}
+	})
+
+	t.Run("text-only review FAIL keeps the light recheck", func(t *testing.T) {
+		log, exec := scene(t, lightReviewOutput(`[{"severity":"blocking","detail":"d","text_only":true}]`))
+		ver := exec.Steps[verificationStepID]
+		if ver.PendingLightRecheck == nil {
+			t.Fatal("a text-only (light) review FAIL resumes the light repair: the marker stays")
+		}
+		for _, a := range ver.Attempts {
+			if a.Cause == CauseLightRecheckEscalated {
+				t.Fatalf("a light review FAIL abandons nothing: %+v", a)
+			}
+		}
+		for _, k := range log.kinds() {
+			if k == EvLightRecheckEscalated {
+				t.Fatalf("a light review FAIL emits no escalation: %v", log.kinds())
+			}
+		}
+	})
+}
+
+// TestMechanicalRewindNoteKeepsCodeFixesInScope pins the one instruction the
+// de-duplication dropped from the step texts: on a mechanical
+// re-entry a lint or format fix inside a bound-named CODE file is the agent's
+// to apply, so it must not self-report needs_code_change for it.
+func TestMechanicalRewindNoteKeepsCodeFixesInScope(t *testing.T) {
+	for _, want := range []string{
+		"A lint or format fix inside a bound-named code file IS yours to apply",
+		"the bound is the boundary, not the text-only rule",
+	} {
+		// the note is hard-wrapped like every driver-rendered instruction:
+		// compare with whitespace runs collapsed
+		if !strings.Contains(strings.Join(strings.Fields(MechanicalRewindNote), " "), want) {
+			t.Errorf("MechanicalRewindNote lost %q", want)
+		}
+	}
 }

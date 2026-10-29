@@ -2,7 +2,7 @@ package api
 
 import "encoding/json"
 
-// machines_face.go: the cross-machine wire contract (workbench#11).
+// machines_face.go: the cross-machine wire contract.
 // Machines register an Ed25519 identity through the existing heartbeat,
 // opt into the machine face with a capability card, and exchange signed
 // progress/artifact queries and user-to-user messages through aihub.

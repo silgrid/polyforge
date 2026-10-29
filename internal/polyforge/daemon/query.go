@@ -1,7 +1,7 @@
 package daemon
 
 // query.go: the holder half of the cross-machine query face
-// (workbench#11). Every registered daemon — runner included — long-polls
+//. Every registered daemon — runner included — long-polls
 // the signed inbox and answers progress/artifact queries from its own
 // local state. Nothing is stored; the answer is relayed by aihub.
 

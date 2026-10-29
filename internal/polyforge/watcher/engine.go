@@ -23,7 +23,7 @@ type API interface {
 	SubscribeOwned(owner string) ([]protocol.ChatSub, error)
 }
 
-// NoticeAPI is the optional task-notice face of an API (workbench#40): a
+// NoticeAPI is the optional task-notice face of an API: a
 // task spawned from this chat delivers one terminal summary line,
 // fetch-then-ack like every other line. An API without it delivers none.
 type NoticeAPI interface {

@@ -333,3 +333,170 @@ func TestClaudeEnvStripsInheritedClaudeCode(t *testing.T) {
 		t.Fatal("ANTHROPIC_BASE_URL leaked into the step env")
 	}
 }
+
+// clearBashTimeoutEnv makes the test independent of an ambient Bash
+// timeout pair (a test run inside a claude step inherits the adapter's).
+func clearBashTimeoutEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{envBashDefaultTimeout, envBashMaxTimeout} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+}
+
+// envEntries answers every value one name carries in a built env.
+func envEntries(env []string, name string) []string {
+	var out []string
+	for _, kv := range env {
+		if n, v, _ := strings.Cut(kv, "="); n == name {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// A claude step's Bash tool timeouts: with no settings.json key the
+// adapter sets the default to 10m and the max to the supervision tool
+// window minus 1m (30m when the window is unset), each exactly once — an
+// inherited copy (an outer claude step's) is stripped, never duplicated.
+func TestClaudeBashTimeoutsInjectedWhenSettingsLacksThem(t *testing.T) {
+	clearBashTimeoutEnv(t)
+	t.Setenv(envBashDefaultTimeout, "1")
+	t.Setenv(envBashMaxTimeout, "2")
+	root := t.TempDir()
+	cfg := &Config{HarnessRoot: root}
+	ccDir := cfg.ClaudeConfigDir()
+	if err := os.MkdirAll(ccDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(ccDir, "settings.json")
+	for name, body := range map[string]string{
+		"no settings.json":           "",
+		"empty env block":            `{"env":{}}`,
+		"token, no timeout keys":     `{"env":{"ANTHROPIC_AUTH_TOKEN":"tok","BASH_MAX_OUTPUT_LENGTH":"1"}}`,
+		"near-miss key names differ": `{"env":{"BASH_DEFAULT_TIMEOUT":"5","bash_max_timeout_ms":"5"}}`,
+	} {
+		_ = os.Remove(settings)
+		if body != "" {
+			if err := os.WriteFile(settings, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, resume := range []bool{false, true} {
+			cmd, err := (&claudeSpawner{cfg: cfg}).buildCmd(SpawnParams{CapsuleDir: "/c", Resume: resume, HarnessSession: testSession})
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if got := envEntries(cmd.Env, envBashDefaultTimeout); !slices.Equal(got, []string{"600000"}) {
+				t.Fatalf("%s (resume=%v): %s entries %q, want exactly [600000]", name, resume, envBashDefaultTimeout, got)
+			}
+			if got := envEntries(cmd.Env, envBashMaxTimeout); !slices.Equal(got, []string{"1740000"}) {
+				t.Fatalf("%s (resume=%v): %s entries %q, want exactly [1740000] (30m - 1m)", name, resume, envBashMaxTimeout, got)
+			}
+		}
+	}
+}
+
+// The max follows the tool window the daemon threads into the runtime
+// config (max = Y - 1m, default 10m clamped to the max: a window of 11m
+// or less gives default = max), and a test/dev-only window of 2m or less
+// keeps half of itself as the margin.
+func TestClaudeBashTimeoutsFollowToolWindow(t *testing.T) {
+	clearBashTimeoutEnv(t)
+	for _, tc := range []struct {
+		window   time.Duration
+		def, max string
+	}{
+		{0, "600000", "1740000"},                              // unset: the supervision default 30m
+		{-time.Minute, "600000", "1740000"},                   // negative: unset as well
+		{30 * time.Minute, "600000", "1740000"},               // the default, explicit
+		{60 * time.Minute, "600000", "3540000"},               // a longer window raises only the max
+		{20 * time.Minute, "600000", "1140000"},               // a shorter one lowers it
+		{11 * time.Minute, "600000", "600000"},                // max = default exactly
+		{10*time.Minute + 30*time.Second, "570000", "570000"}, // max < 10m: default clamped to it
+		{10 * time.Minute, "540000", "540000"},                // window <= 10m: default = max
+		{5 * time.Minute, "240000", "240000"},
+		{2 * time.Minute, "60000", "60000"},  // the 1m margin still fits
+		{90 * time.Second, "45000", "45000"}, // below 2m: half the window is the margin
+		{time.Nanosecond, "1", "1"},          // never below 1ms
+	} {
+		cfg := &Config{ToolWindow: tc.window}
+		cmd, err := (&claudeSpawner{cfg: cfg}).buildCmd(SpawnParams{CapsuleDir: "/c", HarnessSession: testSession})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := envEntries(cmd.Env, envBashDefaultTimeout); !slices.Equal(got, []string{tc.def}) {
+			t.Errorf("window %v: %s %q, want [%s]", tc.window, envBashDefaultTimeout, got, tc.def)
+		}
+		if got := envEntries(cmd.Env, envBashMaxTimeout); !slices.Equal(got, []string{tc.max}) {
+			t.Errorf("window %v: %s %q, want [%s]", tc.window, envBashMaxTimeout, got, tc.max)
+		}
+	}
+}
+
+// An operator override in the claude-config settings.json env block wins
+// key by key: the adapter adds neither key the block carries (claude
+// applies the block itself; the daemon never writes it), and an
+// inherited copy is stripped either way. A default injected next to the
+// operator's own max is clamped to that max — claude would otherwise
+// raise its max to the larger default.
+func TestClaudeBashTimeoutsSettingsOverrideWins(t *testing.T) {
+	clearBashTimeoutEnv(t)
+	t.Setenv(envBashDefaultTimeout, "1")
+	t.Setenv(envBashMaxTimeout, "2")
+	root := t.TempDir()
+	cfg := &Config{HarnessRoot: root, ToolWindow: 30 * time.Minute}
+	ccDir := cfg.ClaudeConfigDir()
+	if err := os.MkdirAll(ccDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(ccDir, "settings.json")
+	for _, tc := range []struct {
+		name, body string
+		def, max   []string // the adapter's entries; nil = not injected
+	}{
+		{"both keys", `{"env":{"BASH_DEFAULT_TIMEOUT_MS":"900000","BASH_MAX_TIMEOUT_MS":"3600000"}}`, nil, nil},
+		{"both keys, empty values", `{"env":{"BASH_DEFAULT_TIMEOUT_MS":"","BASH_MAX_TIMEOUT_MS":""}}`, nil, nil},
+		{"default only", `{"env":{"BASH_DEFAULT_TIMEOUT_MS":"900000"}}`, nil, []string{"1740000"}},
+		{"max only, below 10m", `{"env":{"BASH_MAX_TIMEOUT_MS":"300000"}}`, []string{"300000"}, nil},
+		{"max only, above 10m", `{"env":{"BASH_MAX_TIMEOUT_MS":"7200000"}}`, []string{"600000"}, nil},
+		{"max only, not a number", `{"env":{"BASH_MAX_TIMEOUT_MS":"soon"}}`, []string{"600000"}, nil},
+		{"max only, zero", `{"env":{"BASH_MAX_TIMEOUT_MS":"0"}}`, []string{"600000"}, nil},
+	} {
+		if err := os.WriteFile(settings, []byte(tc.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd, err := (&claudeSpawner{cfg: cfg}).buildCmd(SpawnParams{CapsuleDir: "/c", HarnessSession: testSession})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := envEntries(cmd.Env, envBashDefaultTimeout); !slices.Equal(got, tc.def) {
+			t.Errorf("%s: %s entries %q, want %q", tc.name, envBashDefaultTimeout, got, tc.def)
+		}
+		if got := envEntries(cmd.Env, envBashMaxTimeout); !slices.Equal(got, tc.max) {
+			t.Errorf("%s: %s entries %q, want %q", tc.name, envBashMaxTimeout, got, tc.max)
+		}
+	}
+}
+
+// Negative control: pi steps are untouched — no Bash timeout variable is
+// added whatever the tool window, and an inherited one passes through
+// unchanged (pi has no such tool setting).
+func TestPiStepEnvGetsNoBashTimeouts(t *testing.T) {
+	clearBashTimeoutEnv(t)
+	sp := newPiSpawner(&Config{ToolWindow: 20 * time.Minute})
+	cmd := sp.buildCmd(SpawnParams{CapsuleDir: "/c", SpawnN: 1})
+	for _, k := range []string{envBashDefaultTimeout, envBashMaxTimeout} {
+		if got := envEntries(cmd.Env, k); got != nil {
+			t.Fatalf("the pi step env carries %s %q", k, got)
+		}
+	}
+	t.Setenv(envBashDefaultTimeout, "123")
+	cmd = sp.buildCmd(SpawnParams{CapsuleDir: "/c", SpawnN: 1})
+	if got := envEntries(cmd.Env, envBashDefaultTimeout); !slices.Equal(got, []string{"123"}) {
+		t.Fatalf("the pi step env changed the inherited %s: %q", envBashDefaultTimeout, got)
+	}
+	if got := envEntries(cmd.Env, envBashMaxTimeout); got != nil {
+		t.Fatalf("the pi step env carries %s %q", envBashMaxTimeout, got)
+	}
+}

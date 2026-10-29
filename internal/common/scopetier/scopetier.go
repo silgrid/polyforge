@@ -1,6 +1,6 @@
 // Package scopetier is the one definition of the verification-scope opt-in
 // marker and its line predicate, shared by the driver's tier judgment
-// (workbench#19) and the CLI's file-create placement guard (workbench#50).
+// and the CLI's file-create placement guard.
 package scopetier
 
 import "strings"

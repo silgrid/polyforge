@@ -175,21 +175,21 @@ func (d *Daemon) routes() *http.ServeMux {
 	mux.HandleFunc("POST /jobs/{wi}/pause", d.pauseRoute)
 	mux.HandleFunc("POST /jobs/{wi}/wrap", d.wrapRoute)
 	mux.HandleFunc("GET /status", d.statusRoute)
-	// GET /models (workbench#14): the read-only model+effort × step
+	// GET /models: the read-only model+effort × step
 	// profile beside GET /status. The method pattern makes every non-GET
 	// method on this path a 405; there is no write face, no config, no
 	// mutation. A step process may read it like GET /status (the
 	// step-origin guard refuses only mutating methods).
 	mux.HandleFunc("GET /models", d.modelsRoute)
 	mux.HandleFunc("POST /ops/config", d.opsConfigRoute)
-	// cli.toml hot reload (workbench#3): both writes sit behind the
+	// cli.toml hot reload: both writes sit behind the
 	// step-origin guard (a step process tree is refused DAEMON-403) and
 	// are reachable only over the local UDS.
 	mux.HandleFunc("POST /config/reload", d.configReloadRoute)
 	mux.HandleFunc("POST /config/check", d.configCheckRoute)
 	mux.HandleFunc("POST /shutdown", d.shutdownRoute)
 	mux.HandleFunc("POST /chat/init", d.chatInitRoute)
-	// The explicit, read-only message analyzer (workbench#11). A POST
+	// The explicit, read-only message analyzer. A POST
 	// outside the step-write allowlist: the whole UDS face sits behind
 	// refuseStepOrigin, so a step process is refused DAEMON-403 before
 	// this handler; no loop ever starts it.
@@ -216,7 +216,7 @@ func (d *Daemon) routes() *http.ServeMux {
 	// the step agent's result delivery (stepresult.go), stamped with
 	// and landed at the calling step's own dispatch identity
 	mux.HandleFunc("POST "+stepResultPath, d.stepResultRoute)
-	// the one-shot task agent (tasks.go, workbench#53): the spawn/cancel
+	// the one-shot task agent (tasks.go,): the spawn/cancel
 	// POSTs sit behind refuseStepOrigin, so a step OR task process tree is
 	// refused DAEMON-403; the two /task/memories GETs serve a task agent
 	// only and scope the read to its own project.
@@ -591,11 +591,11 @@ func (d *Daemon) wrapRoute(w http.ResponseWriter, r *http.Request) {
 
 // statusJobs builds the jobs[] bookkeeping (with the running-slot count);
 // the status route and the watch lane share it. The per-job needs_input
-// projection (D6) is read from each job's execution.json; the same loop
-// carries the per-job liveness reading (step age + last real-work-signal
-// age).
+// projection (D6) and the pending retry backoff are read from each job's
+// execution.json; the same loop carries the per-job liveness reading
+// (step age + last real-work-signal age).
 func (d *Daemon) statusJobs() ([]statusJob, int) {
-	pending := d.pendingQuestions()
+	faces := d.execFaces(time.Now())
 	activity := d.obs.Activities()
 	jobs := make([]statusJob, 0, 8)
 	// running slots: a retained PAUSED job (Finding 2) holds no agent and
@@ -616,7 +616,13 @@ func (d *Daemon) statusJobs() ([]statusJob, int) {
 			AgentPID:           ji.AgentPID,
 			Origin:             ji.Origin,
 		}
-		if qid, ok := pending[ji.WorkItem]; ok {
+		face := faces[ji.WorkItem]
+		if face.RetryIn > 0 {
+			// whole seconds, rounded up: a wait still owed never reads 0
+			in := int64((face.RetryIn + time.Second - 1) / time.Second)
+			sj.RetryInSec, sj.RetryCause = &in, face.RetryCause
+		}
+		if qid := face.QuestionID; qid != "" {
 			sj.QuestionID = qid
 			// the presentation rule: runtime says running but the monitor
 			// holds a pending question → needs_input wins. Any other
@@ -636,6 +642,10 @@ func (d *Daemon) statusJobs() ([]statusJob, int) {
 			if !act.LastWorkAt.IsZero() {
 				ago := int64(time.Since(act.LastWorkAt) / time.Second)
 				sj.LastWorkAgoSec = &ago
+			}
+			if act.WaitCalls > 0 {
+				calls, secs := int64(act.WaitCalls), act.WaitSeconds
+				sj.WaitCalls, sj.WaitSeconds = &calls, &secs
 			}
 		}
 		jobs = append(jobs, sj)
@@ -958,7 +968,7 @@ func (d *Daemon) adopt(id, wi string) (protocol.ChatAdoptAnswer, error) {
 // credential is unavailable is refused too: the guard fails closed. An
 // answer keeps its own #122 wording (answerFromStepProcess).
 //
-// workbench#53: a one-shot task agent's process tree (PF_TASK_ID +
+// a one-shot task agent's process tree (PF_TASK_ID +
 // PF_DAEMON_ID) is refused EVERY non-GET/HEAD request — before the step
 // allowlist is consulted and with none of its own, so a task cannot send
 // /step/result, /step/memories or spawn another task. Its read face is GET

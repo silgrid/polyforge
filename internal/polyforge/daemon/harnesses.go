@@ -101,7 +101,7 @@ func (d *Daemon) harnessStatuses() map[string]harnessStatus {
 	cl := harnessStatus{
 		// the live value, never the startup copy: a reloaded claude_bin is
 		// what the daemon spawns with and what doctor/ops status judge
-		// (workbench#41 F2)
+		// ( F2)
 		Bin:             cmp.Or(d.live.ClaudeBin(), "claude"),
 		AuthTokenEnv:    setOrUnset(os.Getenv("ANTHROPIC_AUTH_TOKEN")),
 		APIKeyEnv:       setOrUnset(os.Getenv("ANTHROPIC_API_KEY")),

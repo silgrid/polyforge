@@ -1,7 +1,7 @@
 package cli
 
 // verbs_config_test.go: the writer-flock order of `pf config set|unset`
-// (workbench#41 F1). The flock serializes the local read-modify-write; the
+// ( F1). The flock serializes the local read-modify-write; the
 // daemon notification is a cross-process round trip and must run after the
 // release — otherwise a slow daemon holds every other `pf config` writer
 // for the client timeout.

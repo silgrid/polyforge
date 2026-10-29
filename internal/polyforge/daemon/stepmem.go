@@ -10,6 +10,14 @@ package daemon
 //	GET  /step/memories/{id}     {meta, content}
 //	POST /step/memories          {type, title, tags, content[, project, work_item]}
 //
+// Reach: a step agent cannot reach the
+// read-only web console or the browse mode. The daemon proxies no /web/
+// route at all (routes.go registers none), a step process holds no
+// aihub key so it cannot authenticate there either, and forwardMemorySearch below
+// forwards only q/type/tags/limit/match plus the job's project — a
+// cursor or a sort value a caller may send is dropped on the floor and
+// the empty-q browse shape is refused before anything is forwarded.
+//
 // The POST is one of the step-origin guard's two step-allowed writes
 // (routes.go); the other is the result submit (stepresult.go).
 
@@ -111,7 +119,12 @@ func (d *Daemon) stepSearchRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 // forwardMemorySearch forwards one search scoped to project; who names
-// the caller in the refusal of a foreign-project ask.
+// the caller in the refusal of a foreign-project ask. The forwarded
+// shape is fixed: the job's project, q, and — when present —
+// type/tags/limit/match, plus the excerpt size. Nothing else rides: a
+// browse-shaped request (a paging cursor or a sort value) is answered
+// as a keyword search of the q it carries, and an empty q is refused —
+// a step agent never reaches aihub's browse mode.
 func (d *Daemon) forwardMemorySearch(w http.ResponseWriter, r *http.Request, project, who string) {
 	q := r.URL.Query()
 	if p := q.Get("project"); p != "" && p != project {

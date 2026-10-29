@@ -64,10 +64,10 @@ CREATE TABLE IF NOT EXISTS machines (
   mode        TEXT,
   live_wi_ids TEXT,
   last_heartbeat_at TEXT NOT NULL,
-  -- workbench#11 machine identity: the daemon's Ed25519 public key
+  -- machine identity: the daemon's Ed25519 public key
   -- (base64), launcher kind, negotiated role, the operator user this
   -- machine speaks for, and the supersession stamp. capability is the
-  -- JSON capability card the daemon advertised. workbench#57: the
+  -- JSON capability card the daemon advertised. the
   -- operator is the machine's one identity — there is no machine user
   -- column (registration mints no users row).
   public_key    TEXT,
@@ -112,7 +112,6 @@ CREATE TABLE IF NOT EXISTS projects (
   name        TEXT NOT NULL UNIQUE,
   description TEXT NOT NULL DEFAULT '',
   repos       TEXT NOT NULL DEFAULT '[]',
-  visible     INTEGER NOT NULL DEFAULT 1,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );

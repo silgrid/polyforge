@@ -93,15 +93,15 @@ func TestUpstream4xxRetryInvitationLiveTurnRetriesSameModel(t *testing.T) {
 	if body["disposition"] != "retry_same_model" {
 		t.Fatalf("REPORTED FAILURE (polyforge#227): disposition %v, want retry_same_model", body["disposition"])
 	}
-	if len(waits) != 1 || waits[0] != RateLimitBackoffBase {
-		t.Fatalf("REPORTED FAILURE (polyforge#227): backoff waits %v, want one %v (the same-model retry's D7 backoff)", waits, RateLimitBackoffBase)
+	if base := supervise.DefaultRetryBackoffBase; len(waits) != 1 || waits[0] != base {
+		t.Fatalf("REPORTED FAILURE (polyforge#227): backoff waits %v, want one %v (the same-model retry's first retry-pacing backoff)", waits, base)
 	}
 	st := env.exec(t).Steps["s"]
 	if st.Supervision != nil && st.Supervision.FailureCount != 0 {
 		t.Fatalf("REPORTED FAILURE (polyforge#227): the same-model retry moved the blocking counter: %+v", st.Supervision)
 	}
-	if got := st.BudgetConsumed.WallMs; got < RateLimitBackoffBase.Milliseconds() {
-		t.Fatalf("REPORTED FAILURE (polyforge#227): step T %dms, want the %v backoff booked in", got, RateLimitBackoffBase)
+	if got := st.BudgetConsumed.WallMs; got < supervise.DefaultRetryBackoffBase.Milliseconds() {
+		t.Fatalf("REPORTED FAILURE (polyforge#227): step T %dms, want the %v backoff booked in", got, supervise.DefaultRetryBackoffBase)
 	}
 	// the retry resumes the transcript: the #222 death forced a fresh
 	// re-derivation of the whole step instead.

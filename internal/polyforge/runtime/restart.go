@@ -22,8 +22,20 @@ package runtime
 //	  (M3); not ours → notOurs (no hub transition).
 //
 // An unreachable hub is not a verdict: the record is kept and its actor
-// retries with backoff (retry). A mid-flight record whose capsule
-// directory is missing, or whose project fell out of the [workspace]
+// retries with backoff (retry — one bounded chain, ending in a parked
+// record and a retry_exhausted event). A typed 4xx refusal IS a verdict,
+// and a deterministic one: on a record already closing (end_pending,
+// sealing) it re-runs nothing — the record is parked in that state with a
+// session_verify_outage event and nothing retries it. Any other record
+// (running, or a retained paused record with a pending close or pause)
+// takes the ordinary blocked path once: session_verify_outage names the
+// refusal, and the work item becomes blocked at the hub (or rests
+// end_pending, with close_refused, when that blocked close is itself
+// refused). A typed 4xx from the replay of a paused record's OWN close —
+// its terminal close or pending pause, its verify matching — is parked as
+// close_refused instead (parkRefused,). A
+// mid-flight record whose capsule directory is missing, or whose project
+// fell out of the [workspace]
 // mapping, blocks that ONE work item (blockUnrecoverable — the ordinary
 // bounded-fail close with a capsule_missing / project_unmapped event); the
 // daemon starts and every other work item reconciles as above.
@@ -202,6 +214,9 @@ func (r *Runtime) reconcile(wi string) {
 	if j == nil {
 		return
 	}
+	if j.closeParked() {
+		return // a parked close finishes from its own waiter once the old Run exits
+	}
 	switch stateOf(j) {
 	case StateClaiming, StateDone:
 		return
@@ -217,7 +232,17 @@ func (r *Runtime) reconcile(wi string) {
 		r.retry(j)
 		return
 	}
-	j.retryIn = 0 // the hub answered: a later episode backs off afresh
+	// The retry chain owns the backoff: the operation above may have just
+	// scheduled its next attempt (finishBlocked, stopOp, an end_pending
+	// close). Clearing it here reset every attempt to EndRetryBase, which
+	// pinned the chain at the base and made a refused close re-run its
+	// whole aftermath every base interval. Reset only when
+	// nothing is outstanding, so a LATER episode backs off afresh.
+	if !j.retryOutstanding() {
+		j.mu.Lock()
+		j.retryIn, j.retryN = 0, 0
+		j.mu.Unlock()
+	}
 }
 
 // replayable verifies a claiming-journal entry's session: nil when it
@@ -244,8 +269,13 @@ func stateOf(j *job) JobState {
 // engine logs and the interrupted-dispatch archive classifies (an
 // operator-shaped cause archives nothing; a daemon_restart re-derivation
 // archives the dispatch the crash interrupted). It answers the live
-// resume door's outcome.
+// resume door's outcome. A job whose close or release is parked on the
+// previous driver Run is refused before anything changes, the same parked
+// 409 every other door answers: the park's own waiter finishes it.
 func (r *Runtime) resumeRecord(j *job, recoveryCause, detail string) (string, error) {
+	if j.closeParked() {
+		return "", j.parkedError(j.wi)
+	}
 	j.mu.Lock()
 	j.state = StateRunning // the hub is the authority: Paused/Recovering resume as RUNNING
 	j.mu.Unlock()
@@ -259,6 +289,12 @@ func (r *Runtime) resumeRecord(j *job, recoveryCause, detail string) (string, er
 	case st == StateRecovering && r.ctx.Err() != nil:
 		// the relaunch met the shutdown: the record is kept for the next start
 		return "", &api.Error{Code: api.ErrDaemonGone, Detail: fmt.Sprintf("%s: the daemon is shutting down; nothing was resumed here (the next daemon start resumes it)", j.wi)}
+	case st == StateRecovering, j.closeParked():
+		// the recovery (parkRecovery) or the close it led to (parkClose)
+		// waits on the previous driver Run that outlived its teardown:
+		// nothing continues yet, and it re-enters by itself once that Run
+		// exits — neither attached nor closed
+		return ResumeParked, nil
 	}
 	return ResumeClosed, nil
 }
@@ -331,32 +367,77 @@ func (r *Runtime) finishSealLocally(j *job, reason string, cause error) {
 }
 
 // endBlockedAtHub sends SessionEnd(blocked) fenced on the secret and
-// reports whether the close is SETTLED: the hub accepted it, or a verify
+// answers how the close stands: SETTLED — the hub accepted it, or a verify
 // shows the session no longer holds the WI (our earlier close landed and
-// only its answer was lost, or another session took over).
-func (r *Runtime) endBlockedAtHub(wi, secret, note, head string) bool {
-	err := r.hub.SessionEnd(wi, api.SessionEndRequest{SessionID: secret, Status: api.StatusBlocked, Note: note, HeadSHA: head})
+// only its answer was lost, or another session took over); REFUSED — a
+// typed 4xx, a deterministic answer no retry can change, so the record is
+// parked (parkRefused) and nothing retries it; RETRY — a transient
+// failure (transport, timeout, 5xx).
+func (r *Runtime) endBlockedAtHub(j *job, secret, note, head string) closeOutcome {
+	err := r.hub.SessionEnd(j.wi, api.SessionEndRequest{SessionID: secret, Status: api.StatusBlocked, Note: note, HeadSHA: head})
 	if err == nil {
-		return true
+		return closeSettled
 	}
-	if v, verr := r.hub.SessionVerify(wi, secret); verr == nil && !v.Matches {
-		fmt.Fprintf(os.Stderr, "runtime: %s: blocked close failed (%v) but the session no longer holds the work item (status %s) — settled\n", wi, err, v.Status)
-		return true
+	if v, verr := r.hub.SessionVerify(j.wi, secret); verr == nil && !v.Matches {
+		fmt.Fprintf(os.Stderr, "runtime: %s: blocked close failed (%v) but the session no longer holds the work item (status %s) — settled\n", j.wi, err, v.Status)
+		return closeSettled
 	}
-	fmt.Fprintf(os.Stderr, "runtime: %s: session-end(blocked) failed (will retry): %v\n", wi, err)
-	return false
+	if claimRefused(err) {
+		// the blocked close lands END_PENDING (finishBlocked) — that is
+		// where the record rests for a human.
+		r.parkRefused(j, EventCloseRefused, StateEndPending, err)
+		return closeRefused
+	}
+	fmt.Fprintf(os.Stderr, "runtime: %s: session-end(blocked) failed (will retry): %v\n", j.wi, err)
+	return closeRetry
+}
+
+// closeOutcome is one pending-close attempt's answer.
+type closeOutcome int
+
+const (
+	// closeSettled: the hub took the close, or the session no longer holds
+	// the work item — nothing is left pending, the record may be dropped.
+	closeSettled closeOutcome = iota
+	// closeRetry: a transient failure (transport, timeout, 5xx) — the
+	// close is retried with the actor's backoff.
+	closeRetry
+	// closeRefused: the hub REFUSED the close (typed 4xx) — a
+	// deterministic answer, so the record is parked and never retried.
+	closeRefused
+)
+
+// parkRefused parks a record whose step the hub REFUSED (a typed 4xx: a
+// rotated/revoked key, a deleted work item, a session that is gone). The
+// refusal is a final answer — the same session cannot land that step
+// however often it is sent — so nothing retries it and the record stays
+// where it is (state: SEALING with its verdict persisted, END_PENDING for
+// a blocked close the hub never heard, PAUSED holding a terminal
+// stop_reason), which is what the operator sees together with the one
+// durable event naming the refusal. A later daemon start reconciles the
+// record afresh (once the credential or the hub state is fixed); `pf
+// cancel` frees the hub side, but this local record stays until that start.
+func (r *Runtime) parkRefused(j *job, kind string, state JobState, cause error) {
+	reason := fmt.Sprintf("the hub refused this step (%v) — a deterministic answer, so it is not retried automatically; the record stays %s for a human: fix the credential/hub state and restart the daemon (it reconciles the record afresh); `pf cancel %s` frees the hub side, but this local record stays until a daemon start", cause, state, j.wi)
+	r.tap(j.wi, kind, map[string]any{
+		"work_item": j.wi,
+		"state":     string(state),
+		"error":     cause.Error(),
+		"reason":    reason,
+	})
+	fmt.Fprintf(os.Stderr, "runtime: %s: %s\n", j.wi, reason)
 }
 
 // closeBlocked sends one job's SessionEnd(blocked), pushing the local
 // chain FIRST when push is set, with the session credential that dies
 // with the close (boundedFail's own push most often failed with the same
-// outage that fails the close). Reports whether the close is SETTLED.
+// outage that fails the close). Reports how the close stands.
 // Push outcomes: landed → the close goes out; transient failure → not
 // settled, unless the session no longer holds the WI (nothing can be
 // pushed under it; settled); PERMANENT rejection (hook refusal,
 // non-fast-forward, size limit) → stop pushing (persisted), raise
 // push_failed with the local head, and close without it.
-func (r *Runtime) closeBlocked(j *job, push bool) bool {
+func (r *Runtime) closeBlocked(j *job, push bool) closeOutcome {
 	j.mu.Lock()
 	secret, note, head, chain, gaveUp := j.sessionID, j.endNote, j.endHead, j.git, j.endPushGaveUp
 	j.mu.Unlock()
@@ -365,10 +446,10 @@ func (r *Runtime) closeBlocked(j *job, push bool) bool {
 			if !gitops.IsPermanentPushRejection(perr) {
 				if v, verr := r.hub.SessionVerify(j.wi, secret); verr == nil && !v.Matches {
 					fmt.Fprintf(os.Stderr, "runtime: %s: blocked-close chain push failed (%v) and the session no longer holds the work item (status %s) — settled without it\n", j.wi, perr, v.Status)
-					return true
+					return closeSettled
 				}
 				fmt.Fprintf(os.Stderr, "runtime: %s: blocked-close chain push failed (will retry before the close): %v\n", j.wi, perr)
-				return false
+				return closeRetry
 			}
 			j.mu.Lock()
 			j.endPushGaveUp = true
@@ -386,7 +467,7 @@ func (r *Runtime) closeBlocked(j *job, push bool) bool {
 		}
 	}
 	crashpoint.At("bounded.closing")
-	return r.endBlockedAtHub(j.wi, secret, note, head)
+	return r.endBlockedAtHub(j, secret, note, head)
 }
 
 // settleEndPending drops an end_pending job whose close is settled (and
@@ -417,7 +498,9 @@ func (r *Runtime) fence(j *job) error {
 	case err != nil:
 		return &api.Error{Code: api.ErrDaemonHubUnavailable, Detail: fmt.Sprintf("%s: the restart has not verified this work item's session yet (aihub: %v); nothing was done", j.wi, err)}
 	case !v.Matches:
-		r.notOurs(j, v)
+		if perr := r.notOurs(j, v); perr != nil {
+			return perr
+		}
 		return conflict("the session no longer holds %s (current holder %q); the local record was released", j.wi, v.CurrentFingerprint)
 	}
 	j.mu.Lock()
@@ -426,13 +509,14 @@ func (r *Runtime) fence(j *job) error {
 	return nil
 }
 
-// finishBlocked is boundedFail's tail once the blocked close went out
-// (settled reports whether the hub took it): success drops the job,
-// failure parks it end_pending (durable) and its actor retries. Observe
-// is released either way — the driver is already dead.
-func (r *Runtime) finishBlocked(j *job, detail string, settled bool) {
+// finishBlocked is boundedFail's tail once the blocked close was attempted
+// (outcome says how it stands): settled drops the job, a refusal parks it
+// end_pending (durable) with no retry — a deterministic answer — and a
+// transient failure parks it end_pending and its actor retries. Observe is
+// released either way — the driver is already dead.
+func (r *Runtime) finishBlocked(j *job, detail string, outcome closeOutcome) {
 	next := StateDone
-	if !settled {
+	if outcome != closeSettled {
 		next = StateEndPending
 	}
 	if err := j.transition(next); err != nil {
@@ -443,12 +527,15 @@ func (r *Runtime) finishBlocked(j *job, detail string, settled bool) {
 		j.state = next
 		j.mu.Unlock()
 	}
-	if settled {
+	if outcome == closeSettled {
 		r.dropJob(j)
 	}
 	r.persistLog(j.wi)
 	r.send(protocol.RTMsg{Kind: protocol.RTFinished, WorkItem: j.wi, Reason: protocol.FinishBlocked, Detail: detail})
-	if !settled {
+	switch outcome {
+	case closeRefused:
+		fmt.Fprintf(os.Stderr, "runtime: %s: blocked close refused by the hub — record kept end_pending for a human, not retried\n", j.wi)
+	case closeRetry:
 		fmt.Fprintf(os.Stderr, "runtime: %s: blocked close not acknowledged by the hub — record kept end_pending, retrying\n", j.wi)
 		r.retry(j)
 	}
@@ -461,19 +548,26 @@ func (r *Runtime) finishBlocked(j *job, detail string, settled bool) {
 // and the record dropped, so the owner's `pf resume` re-claims through the
 // ordinary Start. A work item another session holds is released
 // (supersede: quarantine, session_released). No hub transition either way.
-func (r *Runtime) notOurs(j *job, v *api.SessionVerifyResponse) {
+// A driver Run that outlives its teardown parks the drop as supersede parks
+// the quarantine (parkClose, kind release): a dropped record next to a live
+// writer would let a re-claim start a second one in the same capsule. It
+// answers nil once settled, or the parked 409.
+func (r *Runtime) notOurs(j *job, v *api.SessionVerifyResponse) error {
 	switch v.Status {
 	case api.StatusWrapped, api.StatusFailed, api.StatusCanceled:
 		r.clearManualModels(j.wi)
 		fallthrough
 	case api.StatusBlocked, api.StatusQueued:
+		if err := r.killAgentTree(j); err != nil {
+			return r.parkClose(j, parkKindRelease, "session_ended", func() { _ = r.notOurs(j, v) })
+		}
 		fmt.Fprintf(os.Stderr, "runtime: %s: the session no longer holds the work item (hub says %s) — record dropped\n", j.wi, v.Status)
-		r.killAgentTree(j)
 		r.dropJob(j)
 		r.persistLog(j.wi)
+		return nil
 	default:
 		fmt.Fprintf(os.Stderr, "runtime: %s: held by session %q — local tree killed, capsule quarantined, record dropped (no hub transition)\n", j.wi, v.CurrentFingerprint)
-		r.supersede(j, "session_released", "", v.CurrentFingerprint)
+		return r.supersede(j, "session_released", "", v.CurrentFingerprint)
 	}
 }
 
@@ -490,7 +584,7 @@ func (r *Runtime) refusedNotOurs(j *job, perr error) bool {
 	if err != nil || v.Matches {
 		return false
 	}
-	r.notOurs(j, v)
+	_ = r.notOurs(j, v) // a parked release finishes from its waiter
 	r.release(j.wi)
 	return true
 }
@@ -534,12 +628,17 @@ func conflict(format string, a ...any) error {
 // door's outcome; an unreachable hub answers DAEMON-503 (reconcile
 // retries it).
 //
-//	verify refused (4xx) → the WI parks blocked naming the refusal.
+//	verify refused (4xx) → on a record already closing (end_pending,
+//	  sealing) the record is parked in that state with session_verify_outage
+//	  and nothing retries it; any other record takes the ordinary blocked
+//	  path once (session_verify_outage, resting end_pending with
+//	  close_refused if that blocked close is itself refused).
 //	not ours → an end_pending close is settled; anything else notOurs.
 //	end_pending → push the chain and retry the blocked close.
 //	running or paused + a pending close (closePending: the daemon died, or
 //	  the SessionEnd failed, between a retained record's close persist and
-//	  its SessionEnd) → the close is replayed, whatever clean_pause says.
+//	  its SessionEnd) → the close is replayed, whatever clean_pause says; a
+//	  4xx refusal of that replay parks it (close_refused) and is not retried.
 //	running → a pending pause replays its network half; a sealing record
 //	  finishes its close; anything else recovers in place.
 //	paused + clean → the operator pause stands: nothing resumes.
@@ -552,6 +651,16 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 	if err != nil {
 		if claimRefused(err) {
 			fmt.Fprintf(os.Stderr, "runtime: %s: session verify refused: %v\n", rec.WorkItemID, err)
+			switch rec.State {
+			case string(StateEndPending), string(StateSealing):
+				// the record's close already ran its aftermath once (it left
+				// RUNNING with its verdict): a refusal is a final answer, so
+				// the record is parked here — re-blocking it re-ran the whole
+				// kill/push/WIP/SessionEnd aftermath every base interval and
+				// nothing could ever settle it.
+				r.parkRefused(j, EventSessionVerifyOutage, JobState(rec.State), &SessionVerifyOutageError{WI: rec.WorkItemID, Err: err})
+				return ResumeClosed, nil
+			}
 			r.blockUnrecoverable(j, &SessionVerifyOutageError{WI: rec.WorkItemID, Err: err})
 			return "", err
 		}
@@ -570,7 +679,9 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 			r.finishSealLocally(j, reason, fmt.Errorf("session verify: the session no longer holds the work item (hub says %s)", v.Status))
 			return "", nil
 		}
-		r.notOurs(j, v)
+		if perr := r.notOurs(j, v); perr != nil {
+			return "", perr
+		}
 		return "", conflict("the session no longer holds %s (current holder %q); the local record was released", rec.WorkItemID, v.CurrentFingerprint)
 	}
 	j.mu.Lock()
@@ -582,11 +693,15 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 		return "", &api.Error{Code: api.ErrDaemonGone, Detail: fmt.Sprintf("%s: the daemon is shutting down; nothing was resumed", rec.WorkItemID)}
 	}
 	if rec.State == string(StateEndPending) {
-		if !r.closeBlocked(j, true) {
-			return "", &api.Error{Code: api.ErrDaemonHubUnavailable, Detail: rec.WorkItemID + ": the blocked close has not reached aihub yet (retrying)"}
+		switch r.closeBlocked(j, true) {
+		case closeSettled:
+			r.settleEndPending(j)
+			return ResumeClosed, nil
+		case closeRefused:
+			// parked: the record keeps end_pending and nothing retries it
+			return ResumeClosed, nil
 		}
-		r.settleEndPending(j)
-		return ResumeClosed, nil
+		return "", &api.Error{Code: api.ErrDaemonHubUnavailable, Detail: rec.WorkItemID + ": the blocked close has not reached aihub yet (retrying)"}
 	}
 	switch {
 	case (v.Status == api.StatusRunning || v.Status == api.StatusPaused) && closePending(rec):
@@ -600,6 +715,13 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 			return "", conflict("%s", err.Error())
 		}
 		if err := r.stopOp(r.ctx, j, rec.StopReason, true, ""); err != nil {
+			if claimRefused(err) && !isStaleSession(err) {
+				// stopOp already parked the record (close_refused): a
+				// deterministic refusal the same session cannot land, so it
+				// is NOT an outage and the replay is not retried. STALE_SESSION
+				// stays a retry so the next verify can release the record.
+				return ResumeClosed, nil
+			}
 			r.tap(rec.WorkItemID, "pending_close_replay_failed", map[string]any{"reason": rec.StopReason, "error": err.Error()})
 			return "", &api.Error{Code: api.ErrDaemonHubUnavailable, Detail: fmt.Sprintf("%s: pending close replay failed (record kept, retrying): %v", rec.WorkItemID, err)}
 		}
@@ -611,6 +733,12 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 			"note":                "crash between the pause record persist and SessionEnd(paused); the pause replayed at restart",
 		})
 		if err := r.pauseNetwork(j); err != nil {
+			if claimRefused(err) && !isStaleSession(err) {
+				// the same deterministic 4xx as a terminal close: park it
+				// (close_refused) rather than retrying it as an outage.
+				r.parkRefused(j, EventCloseRefused, JobState(rec.State), err)
+				return "", conflict("%s: the hub refused the pending operator pause replay (%v); the record stays paused and is not retried automatically", rec.WorkItemID, err)
+			}
 			return "", &api.Error{Code: api.ErrDaemonHubUnavailable, Detail: fmt.Sprintf("%s: pending pause replay failed (retrying): %v", rec.WorkItemID, err)}
 		}
 		return "", conflict("%s: its pending operator pause was replayed; the record stays paused", rec.WorkItemID)
@@ -642,7 +770,9 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 		}
 		return r.resumeRecord(j, attachCause, "session attach after the operator's pf resume")
 	case v.Status == api.StatusWrapped, v.Status == api.StatusFailed, v.Status == api.StatusCanceled:
-		r.notOurs(j, v)
+		if perr := r.notOurs(j, v); perr != nil {
+			return "", perr
+		}
 		return ResumeClosed, nil
 	}
 	fmt.Fprintf(os.Stderr, "runtime: %s: hub says %s with our session; record dropped\n", rec.WorkItemID, v.Status)
@@ -683,7 +813,7 @@ func (r *Runtime) attach(j *job) error {
 // record, so the reconciliation the daemon's startup runs for it
 // (reconcileRecord: verify → attach → recovery continuation) runs NOW,
 // as a message of the work item's actor. It answers ResumeAttached /
-// ResumeAlreadyLive / ResumeClosed or a typed refusal: DAEMON-404 (no
+// ResumeAlreadyLive / ResumeClosed / ResumeParked or a typed refusal: DAEMON-404 (no
 // record here), DAEMON-409 (not a paused record, a terminal close of the
 // record still pending, clean_pause still set, the session no longer
 // holds the WI), DAEMON-503 (hub unreachable —
@@ -704,9 +834,14 @@ func (r *Runtime) ResumePaused(ctx context.Context, wi string) (string, error) {
 		default:
 			return conflict("work item is %s; only a paused record resumes in place", st)
 		}
+		if j.closeParked() {
+			// the pause (or close) still waits on the old Run: replaying
+			// it here would push next to that writer
+			return j.parkedError(id)
+		}
 		if rec := j.record(); closePending(rec) {
 			// a resume must not race the close it would cancel
-			return conflict("a %s close of the paused record is pending (its SessionEnd has not reached aihub); the daemon keeps retrying it — nothing was resumed", rec.StopReason)
+			return conflict("a %s close of the paused record is pending (its SessionEnd has not reached aihub); %s — nothing was resumed", rec.StopReason, j.closeRetryNote())
 		}
 		var err error
 		out, err = r.reconcileRecord(j, causeOperatorResume)
@@ -757,16 +892,17 @@ func (r *Runtime) revalidatePausedRecord(wi string) {
 	if err != nil || v.Matches {
 		return
 	}
-	r.notOurs(j, v)
+	_ = r.notOurs(j, v) // a parked release finishes from its waiter
 }
 
 // blockUnrecoverable blocks ONE mid-flight record whose capsule is
 // missing, whose project is unmapped, or whose session verify the hub
 // refused: the ordinary bounded-fail path (SessionEnd(blocked) with a
-// reason naming the cause, the orphan sweep, the durable end_pending
-// retry), so the work item shows `blocked` at aihub — the owner's `pf
-// resume` re-claims it from the capsule chain and the task-repo carrier —
-// and nothing stays parked locally. A durable event names the cause.
+// reason naming the cause, the orphan sweep, then an end_pending record
+// that the actor retries with backoff unless the hub refuses the close,
+// which parks it for a human), so the work item shows `blocked` at aihub
+// — the owner's `pf resume` re-claims it from the capsule chain and the
+// task-repo carrier. A durable event names the cause.
 func (r *Runtime) blockUnrecoverable(j *job, cause error) {
 	kind := EventCapsuleMissing
 	body := map[string]any{"work_item": j.wi, "project": j.project}
@@ -804,6 +940,13 @@ const (
 	EventCapsuleMissing      = "capsule_missing"
 	EventProjectUnmapped     = "project_unmapped"
 	EventSessionVerifyOutage = "session_verify_outage"
+	// EventCloseRefused: a close the hub REFUSED (a typed 4xx) was parked
+	// — the record keeps its state and nothing retries it.
+	EventCloseRefused = "close_refused"
+	// EventRetryExhausted: one retry chain reached its bound
+	// (EndRetryWindow since its first retry) and parked the record
+	// instead of scheduling another attempt.
+	EventRetryExhausted = "retry_exhausted"
 )
 
 // Resume outcomes for the live-holder resume door (ResumePaused).
@@ -819,6 +962,11 @@ const (
 	// failed, blocked — or an exhausted relaunch ladder); nothing
 	// continues in place.
 	ResumeClosed = "closed"
+	// ResumeParked: the session was re-attached, but the recovery (or the
+	// close it led to) is parked on the previous driver Run, which
+	// outlived its bounded teardown: the work item stays recovering (or
+	// closing) and continues by itself once that Run exits.
+	ResumeParked = "parked"
 )
 
 // CauseOperatorAttach is the recovery cause of a session attach after a

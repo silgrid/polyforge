@@ -29,5 +29,18 @@ below as a blocking finding.
   implementation.
 - **Release and deploy.** aihub ships before `tools/install.sh`;
   `.polyforge/release.sh` and `.polyforge/deploy.sh` are the only entry points.
+- **Coupled obligations.** A plan names, for every file it writes, the
+  documents, tables and projection rules that must change with it (or an
+  explicit none with a reason). A new file has no incoming references, so a
+  grep for its name cannot find these; check this list before deciding:
+  - a new `pf doctor` check needs its row in the doctor verb's enumeration,
+    `skills/polyforge/verbs/doctor.md`.
+  - `docs/upgrade.md` is append-only: a change adds a section at its end and
+    rewrites no existing byte, and every append moves the file's sha256 pin in
+    `test/w254_docs_set_acceptance_test.go` in the same commit (a pin left on
+    the old bytes is a red full bar).
+
+  Review treats a coupled obligation named here that the plan omits, or that
+  the delivered diff leaves unchanged, as a blocking finding.
 
 Contributor guide (filing work items, change coverage): docs/contributing.md.

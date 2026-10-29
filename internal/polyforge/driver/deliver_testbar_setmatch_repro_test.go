@@ -1,15 +1,15 @@
 package driver
 
-// deliver_testbar_setmatch_repro_test.go: workbench#60's repro. Two
+// deliver_testbar_setmatch_repro_test.go:'s repro. Two
 // deliveries on 2026-10-26 re-ran verification's whole test bar on the
 // pushed head, green, and were still refused by the merge rule with
 // "the tests are not shown to pass on the pushed head":
 //
-//   - workbench#58 (PR #705): the evidence recorded a bar command
+//   - (PR #705): the evidence recorded a bar command
 //     containing an unquoted `$(... | ...)` substitution as a multi-word
 //     argv, while the bar side splits that command at the shell
 //     metacharacters — barKey never met.
-//   - workbench#52 (pi-web-): the evidence recorded the bar in the
+//   - (pi-web-): the evidence recorded the bar in the
 //     order it actually ran (bar entry 18 before entry 17), and the
 //     comparison walks the evidence with a forward-only cursor, so
 //     everything after the inversion was "missing".
@@ -25,7 +25,7 @@ import (
 	"testing"
 )
 
-// TestTestBarRerunOutOfOrderEvidenceRepro is the workbench#52 /
+// TestTestBarRerunOutOfOrderEvidenceRepro is the /
 // pi-web- shape: every bar command re-ran green after the merge and
 // before the PR merge, but not in the bar's listed order.
 func TestTestBarRerunOutOfOrderEvidenceRepro(t *testing.T) {
@@ -44,11 +44,11 @@ func TestTestBarRerunOutOfOrderEvidenceRepro(t *testing.T) {
 		{Argv: []string{"gh pr merge " + prURL + " --merge"}, Cwd: "repos/demo", DurationMs: 5},
 	}
 	if !testBarRerun("demo", prURL, bar, evidenceEvents(evidence, root)) {
-		t.Fatal("REPORTED FAILURE (workbench#52): a re-run of the whole test bar, green, after the merge and before the PR merge, was not recognised because the evidence recorded the commands in execution order rather than the bar's listed order")
+		t.Fatal("REPORTED FAILURE: a re-run of the whole test bar, green, after the merge and before the PR merge, was not recognised because the evidence recorded the commands in execution order rather than the bar's listed order")
 	}
 }
 
-// TestTestBarRerunMultiWordArgvSubstitutionRepro is the workbench#58 /
+// TestTestBarRerunMultiWordArgvSubstitutionRepro is the /
 // PR #705 shape: one bar command carries an unquoted `$(... | ...)`
 // substitution and the evidence recorded it as a multi-word argv.
 func TestTestBarRerunMultiWordArgvSubstitutionRepro(t *testing.T) {
@@ -64,7 +64,7 @@ func TestTestBarRerunMultiWordArgvSubstitutionRepro(t *testing.T) {
 		}, Cwd: "repos/demo", DurationMs: 5},
 	}
 	if !testBarRerun("demo", "", bar, evidenceEvents(evidence, root)) {
-		t.Fatal("REPORTED FAILURE (workbench#58): the same command recorded as a multi-word argv (the bar side splits the substitution at its shell metacharacters) was not recognised as the bar command that ran green after the merge")
+		t.Fatal("REPORTED FAILURE: the same command recorded as a multi-word argv (the bar side splits the substitution at its shell metacharacters) was not recognised as the bar command that ran green after the merge")
 	}
 }
 
@@ -126,7 +126,7 @@ func TestTestBarRerunSetMatchKeepsStrictness(t *testing.T) {
 	}
 }
 
-// TestDeliverReorderedTestBarBlockerRepro shows the workbench#52 shape
+// TestDeliverReorderedTestBarBlockerRepro shows the shape
 // at the merge rule itself: origin/main had moved, the dispatch merged it
 // in, re-ran the whole bar green in its real order, pushed — and the
 // merge rule refused the completed envelope.
@@ -153,6 +153,6 @@ func TestDeliverReorderedTestBarBlockerRepro(t *testing.T) {
 		{Argv: []string{"git", "push", "origin", "HEAD:refs/heads/polyforge/polyforge-166"}, Cwd: "repos/demo", DurationMs: 5},
 	}
 	if why := mergeBlocker(spec, deliverRepo{Name: "demo"}, "polyforge/polyforge-166", evidence); why != "" {
-		t.Fatalf("REPORTED FAILURE (workbench#52): the merge rule refused a delivery whose whole test bar was re-run green after the merge and before the push, only because the evidence order differed from the bar's: %s", why)
+		t.Fatalf("REPORTED FAILURE: the merge rule refused a delivery whose whole test bar was re-run green after the merge and before the push, only because the evidence order differed from the bar's: %s", why)
 	}
 }

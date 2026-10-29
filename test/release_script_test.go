@@ -210,6 +210,8 @@ func (w *relWorld) env(extra ...string) []string {
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e",
 		"RELEASE_XREFS_CMD=echo xrefs >> \"$CALLLOG\"",
 		"RELEASE_TEST_CMD=echo tests >> \"$CALLLOG\"",
+		"RELEASE_AUDIT_CMD=echo audit >> \"$CALLLOG\"",
+		"RELEASE_GH_REPO=silgrid/polyforge",
 		"RELEASE_BUILD_CMD=echo build >> \"$CALLLOG\"; mkdir -p artifacts/release-$TAG; echo aihub-bin > artifacts/release-$TAG/aihub; echo pf-bin > artifacts/release-$TAG/pf; "+
 			"echo aihub-arm64-bin > artifacts/release-$TAG/aihub-darwin-arm64; echo pf-arm64-bin > artifacts/release-$TAG/pf-darwin-arm64; "+
 			"echo aihub-amd64-bin > artifacts/release-$TAG/aihub-darwin-amd64; echo pf-amd64-bin > artifacts/release-$TAG/pf-darwin-amd64",
@@ -256,7 +258,7 @@ func TestReleaseScriptHappyPathOrderAndAssets(t *testing.T) {
 		t.Fatalf("release failed: %v\n%s", err, out)
 	}
 	calls := w.calls()
-	order := []string{"xrefs", "tests", "build", "docker build", "git push", "docker push", "docker inspect", "gh release create"}
+	order := []string{"xrefs", "tests", "audit", "build", "docker build", "git push", "docker push", "docker inspect", "gh release create"}
 	last := -1
 	for _, p := range order {
 		i := relIndex(calls, p)
@@ -341,6 +343,44 @@ func TestReleaseScriptXrefsGateFailsBeforeTests(t *testing.T) {
 			for _, p := range []string{"tests", "build", "docker", "git push", "gh release"} {
 				if i := relIndex(w.calls(), p); i >= 0 {
 					t.Fatalf("%q ran after the xrefs gate failed: %v", p, w.calls())
+				}
+			}
+			if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+				t.Fatalf("tag pushed: %q", got)
+			}
+		})
+	}
+}
+
+func TestReleaseScriptAuditGateFailsBeforeBuild(t *testing.T) {
+	// The production-dependency audit gate sits between
+	// the test gate and the build: a vulnerable production dependency
+	// stops the release with nothing built or published, and a failing
+	// default (no webui tree) stops it the same way.
+	for name, cmd := range map[string]string{
+		"override": "RELEASE_AUDIT_CMD=echo audit >> \"$CALLLOG\"; exit 1",
+		"default":  "RELEASE_AUDIT_CMD=",
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newRelWorld(t, []string{"v1.2.0"}, nil)
+			out, err := w.run([]string{cmd})
+			if err == nil {
+				t.Fatalf("release passed with a failing audit gate:\n%s", out)
+			}
+			if !strings.Contains(out, "production-dependency audit") {
+				t.Fatalf("no clear audit message:\n%s", out)
+			}
+			if !strings.Contains(out, "nothing built or published") {
+				t.Fatalf("message does not say nothing was published:\n%s", out)
+			}
+			// The test gate already ran; the build and every publish effect
+			// must NOT have.
+			if i := relIndex(w.calls(), "tests"); i < 0 {
+				t.Fatalf("the test gate did not run before the audit gate: %v", w.calls())
+			}
+			for _, p := range []string{"build", "docker", "git push", "gh release"} {
+				if i := relIndex(w.calls(), p); i >= 0 {
+					t.Fatalf("%q ran after the audit gate failed: %v", p, w.calls())
 				}
 			}
 			if got := w.originTags(); strings.Contains(got, "v1.2.1") {

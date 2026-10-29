@@ -20,6 +20,12 @@ type Activity struct {
 	// `<harness>:<model>[:<effort>]` (polyforge#176: the ops status
 	// face shows the effort it runs at); "" = the harness default model.
 	Candidate string
+	// WaitCalls / WaitSeconds are the current step's wait calls (bash
+	// calls that only `sleep N`, N > 3s) and their summed seconds, over
+	// every dispatch of the step this daemon watched: counted and
+	// surfaced, never judged.
+	WaitCalls   int
+	WaitSeconds int64
 }
 
 // Activities answers the activity of every monitored work item:
@@ -56,6 +62,9 @@ type LiveProgress struct {
 	// first (at most five).
 	RecentFiles []string
 	ToolCalls   int
+	// WaitCalls / WaitSeconds: the step's wait calls, as on Activity.
+	WaitCalls   int
+	WaitSeconds int64
 }
 
 // Progress answers the live progress of one work item's current dispatch

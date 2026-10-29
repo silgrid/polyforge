@@ -100,7 +100,7 @@ func waitRetryIdle(t *testing.T, r *Runtime) {
 // actor (reconcile's end_pending step); true = settled (record dropped).
 func endPendingAttempt(r *Runtime, j *job) (settled bool) {
 	underLock(r, j.wi, func() {
-		if settled = r.closeBlocked(j, true); settled {
+		if settled = r.closeBlocked(j, true) == closeSettled; settled {
 			r.settleEndPending(j)
 		}
 	})

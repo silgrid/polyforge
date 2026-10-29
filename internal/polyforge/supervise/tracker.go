@@ -27,6 +27,21 @@ type ToolRun struct {
 	Since   time.Time
 }
 
+// closedPhase is one model/tool phase the tracker closed since the last
+// supervisor tick. It is kept only until that tick, so a declared
+// observation gap can remove the span the supervisor never watched from
+// the cumulative model/tool split (a phase open at the freeze that closed
+// after the resume but before the tick).
+type closedPhase struct {
+	model      bool
+	start, end time.Time
+}
+
+// maxClosedSinceTick bounds the pending list for a tracker whose monitor
+// never ticks (unit tests). The phases that can straddle one gap are the
+// first ones folded after the resume, so the list keeps the oldest.
+const maxClosedSinceTick = 256
+
 // Tracker implements Sink for one dispatch.
 type Tracker struct {
 	now func() time.Time
@@ -58,11 +73,27 @@ type Tracker struct {
 	toolCalls   int
 	recentFiles []string
 
+	// wait calls (wait.go): counted and surfaced, never
+	// judged. waitPending holds the calls TakeWaitCalls has not handed out
+	// yet; waitNotify (buffered, never blocks the reader) wakes the taker.
+	waitCalls   int
+	waitSecs    int64
+	waitPending []WaitCall
+	waitNotify  chan struct{}
+
 	turnEnded   bool
 	turnEndedAt time.Time
 	turnErr     bool
 	turnErrText string
 	turnErrAt   time.Time
+
+	// observation-gap bookkeeping (ObserveTick): the supervisor's own
+	// pause must not count as dispatch time. closedSinceTick holds the
+	// phases closed since the previous tick; ObserveTick removes the
+	// declared gap from any phase that straddled its cutoff. It is cleared
+	// every tick, so a live tracker's list stays tiny; the cap bounds a
+	// tracker no monitor ever ticks.
+	closedSinceTick []closedPhase
 
 	lastError string
 	exit      *ExitInfo
@@ -72,7 +103,7 @@ func newTracker(spawn int64, now func() time.Time) *Tracker {
 	if now == nil {
 		now = time.Now
 	}
-	return &Tracker{now: now, spawn: spawn, born: now(), tools: map[string]*ToolRun{}}
+	return &Tracker{now: now, spawn: spawn, born: now(), tools: map[string]*ToolRun{}, waitNotify: make(chan struct{}, 1)}
 }
 
 // Begin attaches the dispatch metadata of step_started.
@@ -111,8 +142,28 @@ func (t *Tracker) Noise() {
 
 func (t *Tracker) closeModelLocked(now time.Time) {
 	if t.waiting {
-		t.modelDur += now.Sub(t.waitingSince)
+		t.addClosedLocked(true, t.waitingSince, now)
 		t.waiting = false
+	}
+}
+
+// addClosedLocked folds one finished phase into the cumulative split and
+// keeps it pending for this tick's observation-gap correction. A phase
+// open when the gap was declared has already had its start shifted by
+// ObserveTick, so it is never corrected twice; a phase that closed after
+// the previous tick but straddles the cutoff loses the gap span here.
+func (t *Tracker) addClosedLocked(model bool, start, end time.Time) {
+	d := end.Sub(start)
+	if d < 0 {
+		d = 0
+	}
+	if len(t.closedSinceTick) < maxClosedSinceTick {
+		t.closedSinceTick = append(t.closedSinceTick, closedPhase{model: model, start: start, end: end})
+	}
+	if model {
+		t.modelDur += d
+	} else {
+		t.toolDur += d
 	}
 }
 
@@ -168,6 +219,9 @@ func (t *Tracker) ToolStart(id, name, args string) {
 	if path != "" && isFileWriteTool(name) {
 		t.noteFileLocked(path)
 	}
+	if w, ok := detectWaitCall(id, name, summary, now); ok {
+		t.noteWaitCallLocked(w)
+	}
 	t.turnEnded = false
 	t.turnErr = false
 }
@@ -188,6 +242,34 @@ func (t *Tracker) noteFileLocked(path string) {
 	}
 }
 
+// noteWaitCallLocked counts one wait call and queues it for the taker.
+func (t *Tracker) noteWaitCallLocked(w WaitCall) {
+	t.waitCalls++
+	t.waitSecs += w.Seconds
+	w.WaitCalls, w.WaitSeconds = t.waitCalls, t.waitSecs
+	if len(t.waitPending) < maxPendingWaitCalls {
+		t.waitPending = append(t.waitPending, w)
+	}
+	select {
+	case t.waitNotify <- struct{}{}:
+	default: // a wake-up is already pending; the taker drains everything
+	}
+}
+
+// WaitCallNotify is signalled whenever a wait call was folded; the
+// receiver takes them with TakeWaitCalls.
+func (t *Tracker) WaitCallNotify() <-chan struct{} { return t.waitNotify }
+
+// TakeWaitCalls hands out the wait calls folded since the previous take,
+// oldest first; each one is handed out once.
+func (t *Tracker) TakeWaitCalls() []WaitCall {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := t.waitPending
+	t.waitPending = nil
+	return out
+}
+
 // ToolEnd implements Sink.
 func (t *Tracker) ToolEnd(id, name string) {
 	t.mu.Lock()
@@ -198,7 +280,7 @@ func (t *Tracker) ToolEnd(id, name string) {
 		id = name
 	}
 	if run, ok := t.tools[id]; ok {
-		t.toolDur += now.Sub(run.Since)
+		t.addClosedLocked(false, run.Since, now)
 		delete(t.tools, id)
 	}
 }
@@ -235,6 +317,43 @@ func (t *Tracker) ProcessExit(info ExitInfo) {
 	c := info
 	t.exit = &c
 	t.mu.Unlock()
+}
+
+// ObserveTick records one supervisor observation. shift > 0 declares an
+// observation gap: every instant stamped at or before cutoff is moved
+// forward by shift (the span the supervisor did not watch), and the
+// cumulative model/tool split loses the same span for each phase that
+// straddles the cutoff. A zero shift just closes the window (the phases
+// closed since the previous tick were fully observed).
+func (t *Tracker) ObserveTick(cutoff time.Time, shift time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if shift > 0 {
+		at := func(ts *time.Time) {
+			if !ts.IsZero() && !ts.After(cutoff) {
+				*ts = ts.Add(shift)
+			}
+		}
+		at(&t.meta.StartedAt)
+		at(&t.waitingSince)
+		at(&t.lastOutput)
+		at(&t.turnEndedAt)
+		at(&t.turnErrAt)
+		for _, run := range t.tools {
+			at(&run.Since)
+		}
+		for _, c := range t.closedSinceTick {
+			if c.start.After(cutoff) || !c.end.After(cutoff) {
+				continue
+			}
+			if c.model {
+				t.modelDur = max(t.modelDur-shift, 0)
+			} else {
+				t.toolDur = max(t.toolDur-shift, 0)
+			}
+		}
+	}
+	t.closedSinceTick = t.closedSinceTick[:0]
 }
 
 // --- Snapshot ---
@@ -274,6 +393,11 @@ type Snapshot struct {
 	ToolCalls   int
 	RecentFiles []string
 
+	// WaitCalls counts the dispatch's wait calls (wait.go) and WaitSeconds
+	// sums their sleeps. Surfaced only: Judge never reads them.
+	WaitCalls   int
+	WaitSeconds int64
+
 	LastError string
 	Exit      *ExitInfo
 }
@@ -311,6 +435,8 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 		TurnErrAt:   t.turnErrAt,
 		ToolCalls:   t.toolCalls,
 		RecentFiles: append([]string(nil), t.recentFiles...),
+		WaitCalls:   t.waitCalls,
+		WaitSeconds: t.waitSecs,
 		LastError:   t.lastError,
 	}
 	if !t.begun {

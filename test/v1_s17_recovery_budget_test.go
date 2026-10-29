@@ -93,8 +93,9 @@ func TestV1S17RecoveryBudgetBoundedFail(t *testing.T) {
 	})
 
 	// THREE failure records (the kill plus two birth-deaths), same-model,
-	// counted 1/2/3, and the blocked decision on the third; ONE recovery
-	// signal — the translation of the blocked exit — and no re-derivation.
+	// counted 1/2/3, and the blocked decision on the third; no
+	// needs_recovery (the blocked exit is the driver's designed stop, not
+	// a death — its blocked event records it) and no re-derivation.
 	fails := stepFailures(t, d, wi)
 	if len(fails) != 3 {
 		t.Fatalf("step_failed records %+v, want 3 (the kill + two failed dispatches)", fails)
@@ -119,8 +120,8 @@ func TestV1S17RecoveryBudgetBoundedFail(t *testing.T) {
 	if n := countOf(kinds, "blocked"); n != 1 {
 		t.Fatalf("blocked events %d, want 1: %v", n, kinds)
 	}
-	if n := countOf(kinds, "needs_recovery"); n != 1 {
-		t.Fatalf("needs_recovery fired %d times, want 1 (the blocked-exit translation): %v", n, kinds)
+	if n := countOf(kinds, "needs_recovery"); n != 0 {
+		t.Fatalf("needs_recovery fired %d times, want 0 (a blocked driver's exit is no death): %v", n, kinds)
 	}
 	if n := countOf(kinds, "wi_agent_rederived"); n != 0 {
 		t.Fatalf("re-derivation count %d, want 0 (the counter, not the recovery ladder, bounded it): %v", n, kinds)

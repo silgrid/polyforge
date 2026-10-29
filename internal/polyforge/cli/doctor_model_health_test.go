@@ -1,6 +1,6 @@
 package cli
 
-// doctor_model_health_test.go: workbench#14 additive `model health` row —
+// doctor_model_health_test.go: additive `model health` row —
 // warn at most, skip when the daemon is down or reports no summary, and
 // out of the harness-only report.
 

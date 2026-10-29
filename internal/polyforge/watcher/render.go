@@ -137,6 +137,13 @@ func FormatOnce(s *protocol.WatchSnapshot, now time.Time, maxEvents int) string 
 		if p.ToolCalls != nil {
 			fmt.Fprintf(&b, "tool calls: %d\n", *p.ToolCalls)
 		}
+		if p.WaitCalls != nil {
+			var secs int64
+			if p.WaitSeconds != nil {
+				secs = *p.WaitSeconds
+			}
+			fmt.Fprintf(&b, "wait calls: %d (%ds)\n", *p.WaitCalls, secs)
+		}
 	}
 	if ex := s.Execution; ex != nil && ex.PendingQuestion != nil && ex.PendingQuestion.ID != "" {
 		q := ex.PendingQuestion

@@ -1,7 +1,7 @@
 package task
 
 // usage.go: the token-usage accumulator and text capture for the two
-// harness streams (workbench#40).
+// harness streams.
 //
 //   - claude: `--output-format stream-json` records. An `assistant` record
 //     carries message.usage (input_tokens + output_tokens +
@@ -176,7 +176,7 @@ func (p *StreamParser) feedClaude(line []byte) {
 			if json.Unmarshal(rec.Message, &msg) == nil {
 				// One API message is emitted as several content-block
 				// records, each repeating the SAME usage; count it once per
-				// message id (polyforge#40 review N3).
+				// message id (polyforge#40 code review).
 				if msg.Usage != nil && (msg.ID == "" || !p.claudeSeen[msg.ID]) {
 					p.total += msg.Usage.claudeSum()
 					p.claudeUsage = true

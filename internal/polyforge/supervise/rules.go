@@ -77,14 +77,61 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 		total := th.PriorRuntime + age
 		if total >= th.StepTimeout {
 			cause := CauseStepTimeoutLongTask
-			if s.ModelTime > s.ToolTime {
+			if slowModelOwnsTimeout(age, s.ModelTime, th.StepTimeout) {
 				cause = CauseStepTimeoutSlowModel
 			}
 			return dead(cause, fmt.Sprintf(
-				"step ran %s cumulatively (%s before this dispatch + %s now), bound %s; time went to tools %s, waiting on the model %s",
+				"step ran %s cumulatively (%s before this dispatch + %s now), bound %s; time went to tools %s, waiting on the model %s; this dispatch ran %d%% of the bound and spent %d%% of its own time waiting on the model (the slow-model cause needs at least 50%% of each)",
 				total.Round(time.Second), th.PriorRuntime.Round(time.Second), age.Round(time.Second),
-				th.StepTimeout.Round(time.Second), s.ToolTime.Round(time.Second), s.ModelTime.Round(time.Second)))
+				th.StepTimeout.Round(time.Second), s.ToolTime.Round(time.Second), s.ModelTime.Round(time.Second),
+				percentOf(age, th.StepTimeout), percentOf(s.ModelTime, age)))
 		}
 	}
 	return nil
+}
+
+// slowModelOwnsTimeout is rule 4's attribution ( D1, changing
+// polyforge#147 D6): T is CUMULATIVE over the whole step, so the dispatch
+// running when it runs out may have spent only a sliver of it. That
+// dispatch is the slow-model cause (step_timeout_slow_model: a model-class
+// death that switches the candidate) only when BOTH hold:
+//
+//   - it ran at least half of T itself (2·age ≥ T). Below half, the earlier
+//     dispatches together spent more of the bound than this one did, so a
+//     switch would charge the step's history to whichever model happened to
+//     be running and throw away its conversation (switched
+//     out after 12m38s of a 1h30m T, 1h17m22s of which came before it).
+//     Half is the least share that makes this dispatch the largest single
+//     consumer of the bound; "at least" keeps a dispatch that ran exactly
+//     half on the blamed side;
+//   - it waited on the model for at least half of its own runtime
+//     (2·model ≥ age): the model, not tool work, held the majority of the
+//     dispatch's clock. ModelTime is wall clock (one waiting phase at a
+//     time, closed when a tool starts), while ToolTime sums every running
+//     tool and double counts parallel ones, so the model's share of the
+//     dispatch is the measure, not a model-versus-tools comparison.
+//
+// Every other expiry is step_timeout_long_task: the step is long, so the
+// same candidate retries under the doubled T (the first retry resumes its
+// conversation) and a second long-task timeout blocks. A successor after a
+// timeout relaxation starts with the previous bound already spent, so it
+// holds about half of the doubled T and a later expiry is in practice
+// judged long_task — but only in practice: a successor whose tick
+// overshoot exceeds its predecessor's teardown reaches the half. The
+// at-most-once rotation is therefore the driver's, not this rule's: a
+// second slow-model timeout before the step's timeout ledger resets is
+// archived as step_timeout_long_task (applyStepFailedLocked,
+// S3).
+func slowModelOwnsTimeout(age, model, bound time.Duration) bool {
+	return age > 0 && 2*age >= bound && 2*model >= age
+}
+
+// percentOf answers part as an integer percentage of whole (0 when whole
+// is not positive), for the human-facing evidence. Floating point, so a
+// relaxed bound of many hours cannot overflow the nanosecond product.
+func percentOf(part, whole time.Duration) int64 {
+	if whole <= 0 {
+		return 0
+	}
+	return int64(float64(part) / float64(whole) * 100)
 }

@@ -1,7 +1,7 @@
 package task
 
 // dispatch.go: the streamed one-shot harness runner of the task lane
-// (workbench#53, carried from #40). One Run is ONE fresh harness process in
+// (carried from #40). One Run is ONE fresh harness process in
 // the project's workspace directory: no session id, no resume, no
 // `--models`; the prompt rides stdin, the stdout records are read line by
 // line into the usage accumulator, and the process is killed the moment the
@@ -68,8 +68,8 @@ type ExecRunner struct {
 	SocketPath      string
 }
 
-// resolveBin answers the executable path of a harness binary (workbench#40
-// review F2): the configured name or path is resolved through exec.LookPath
+// resolveBin answers the executable path of a harness binary (
+// code review): the configured name or path is resolved through exec.LookPath
 // — so a bare `claude` means the one on the daemon's PATH — and then its
 // symlink target through filepath.EvalSymlinks, because a native-installer
 // installs a versioned binary and links a stable name to it. Execing the
@@ -119,7 +119,7 @@ const TaskPiTools = "read,grep,find,ls,bash"
 // flag follows the dispatch ruling (--bare in token mode, --safe-mode in
 // OAuth mode), the same functions the summarize dispatch uses. The tool
 // allowlist replaces --permission-mode bypassPermissions: only the listed
-// tools exist (polyforge#40 review B4).
+// tools exist (polyforge#40 code review).
 func (r *ExecRunner) innerArgv(c harness.Candidate) ([]string, error) {
 	bin := r.bin(harness.Of(c.Harness))
 	var args []string

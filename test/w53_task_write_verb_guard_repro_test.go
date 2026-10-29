@@ -1,7 +1,7 @@
 package test
 
-// w53_task_write_verb_guard_repro_test.go: workbench#53 (the re-established
-// workbench#40) reproduction for the ONE real gate the owner kept in scope
+// w53_task_write_verb_guard_repro_test.go: (the re-established
+//) reproduction for the ONE real gate the owner kept in scope
 // (owner ruling 2026-10-26, mem_TdI0isaGmTgG): a task process carries
 // PF_TASK_ID + PF_DAEMON_ID, and every write verb it attempts must be
 // refused DAEMON-403 — at the daemon's UDS face (the gate a task cannot

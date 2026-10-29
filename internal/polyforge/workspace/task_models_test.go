@@ -1,6 +1,6 @@
 package workspace
 
-// task_models_test.go: the bundle-less `task` step id (workbench#40) —
+// task_models_test.go: the bundle-less `task` step id —
 // recognized by the strict loader, models-only, and the pure
 // task -> default candidate resolution.
 

@@ -458,7 +458,8 @@ func writeWIPInfo(tmp, name, content string) error {
 
 // effectiveInfoFile answers the file git would use for key
 // (core.excludesFile / core.attributesFile) in the task repo: the repo
-// config's value (read as a file — no includes), else the operator's
+// config's value (read as a file — no includes: `git config --file`
+// defaults to --no-includes), else the operator's
 // global value, else $XDG_CONFIG_HOME/git/<xdgName>. Relative values are
 // taken against the work tree.
 func effectiveInfoFile(o Opts, dir, tmp, key, xdgName string) string {

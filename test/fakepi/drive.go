@@ -226,6 +226,9 @@ type driveEnv struct {
 	// mustFail: this derivation is scripted to die at birth, before it
 	// reads the daemon's initial prompt (see plan.FailSpawnResume).
 	mustFail bool
+	// promptTurnDone: the scripted error_turn / end_turn was emitted as a
+	// prompt's own turn (the stdin loop's goroutine only).
+	promptTurnDone bool
 }
 
 // newDriveEnv assembles the executor from the spawn identity (the capsule
@@ -367,25 +370,9 @@ func (d *driveEnv) runEnvelopeAction(act planAction) {
 		parkForever()
 		return
 	}
-	if act.ErrorTurn != "" {
-		// F5: a turn that ends on a fatal provider error, then nothing.
-		d.journal("error_turn", map[string]any{"step": act.ID, "error": act.ErrorTurn, "spawn_n": d.spawnN})
-		for i := 1; i <= act.ErrorRetries; i++ {
-			emitErrorRound(act.ErrorTurn, true)
-			emitRecord(map[string]any{"type": "auto_retry_start", "attempt": i, "maxAttempts": act.ErrorRetries,
-				"delayMs": 10, "errorMessage": act.ErrorTurn})
-		}
-		emitAssistantTurn(d, "the provider connection dropped mid-reply", act.ErrorTurn)
-		if act.ErrorRetries > 0 {
-			emitRecord(map[string]any{"type": "auto_retry_end", "success": false, "attempt": act.ErrorRetries,
-				"finalError": act.ErrorTurn})
-		}
-		parkForever()
-		return
-	}
-	if act.EndTurn {
-		d.journal("end_turn", map[string]any{"step": act.ID, "spawn_n": d.spawnN})
-		emitAssistantTurn(d, "I have finished my reply.", "")
+	if act.ErrorTurn != "" || act.EndTurn {
+		// F5 / rule 1b: the turn IS the prompt's answer — the prompt
+		// handler emits it (answerPrompt → emitScriptedTurn), then nothing.
 		parkForever()
 		return
 	}
@@ -532,6 +519,39 @@ func (d *driveEnv) currentAction() *planAction {
 		}
 	}
 	return nil
+}
+
+// promptTurnAction answers this derivation's action when its scripted
+// turn is the answer to the prompt (error_turn / end_turn); nil otherwise.
+func (d *driveEnv) promptTurnAction() *planAction {
+	a := d.currentAction()
+	if a == nil || a.Silent || (a.ErrorTurn == "" && !a.EndTurn) {
+		return nil
+	}
+	return a
+}
+
+// emitScriptedTurn emits an error_turn / end_turn action's one turn:
+// F5, a turn that ends on a fatal provider error (after pi's own
+// auto-retry rounds when scripted), or rule 1b, a turn that ends normally
+// without a result. Nothing follows it.
+func (d *driveEnv) emitScriptedTurn(act planAction) {
+	if act.ErrorTurn != "" {
+		d.journal("error_turn", map[string]any{"step": act.ID, "error": act.ErrorTurn, "spawn_n": d.spawnN})
+		for i := 1; i <= act.ErrorRetries; i++ {
+			emitErrorRound(act.ErrorTurn, true)
+			emitRecord(map[string]any{"type": "auto_retry_start", "attempt": i, "maxAttempts": act.ErrorRetries,
+				"delayMs": 10, "errorMessage": act.ErrorTurn})
+		}
+		emitAssistantTurn(d, "the provider connection dropped mid-reply", act.ErrorTurn)
+		if act.ErrorRetries > 0 {
+			emitRecord(map[string]any{"type": "auto_retry_end", "success": false, "attempt": act.ErrorRetries,
+				"finalError": act.ErrorTurn})
+		}
+		return
+	}
+	d.journal("end_turn", map[string]any{"step": act.ID, "spawn_n": d.spawnN})
+	emitAssistantTurn(d, "I have finished my reply.", "")
 }
 
 // silentThisSpawn reports whether this derivation is the zero-signal

@@ -23,7 +23,17 @@ type Defaults struct {
 	// ModelErrorGrace is rule 1's grace after an error-ended turn
 	// (default 1m).
 	ModelErrorGrace time.Duration
+	// RetryBackoffBase is the driver's first retry-pacing wait after an
+	// outage-shaped death (model_error, upstream_transient,
+	// ended_without_result); consecutive ones on the same candidate wait
+	// 3x, then 9x it
+	// (default DefaultRetryBackoffBase; test/dev-only override).
+	RetryBackoffBase time.Duration
 }
+
+// DefaultRetryBackoffBase is the documented first retry-pacing wait:
+// 1m, then 3m, then 9m for every further consecutive death.
+const DefaultRetryBackoffBase = time.Minute
 
 // Fill answers the defaults with every zero field replaced (Silence
 // stays zero: it is resolved per harness by SilenceFor).
@@ -39,6 +49,9 @@ func (d Defaults) Fill() Defaults {
 	}
 	if d.ModelErrorGrace <= 0 {
 		d.ModelErrorGrace = DefaultModelErrorGrace
+	}
+	if d.RetryBackoffBase <= 0 {
+		d.RetryBackoffBase = DefaultRetryBackoffBase
 	}
 	return d
 }

@@ -204,7 +204,7 @@ func w079Model(t *testing.T, capDir, step string) string {
 	if st == nil {
 		t.Fatalf("no step %q in execution.json of %s (steps %v)", step, capDir, x.Steps)
 	}
-	return st.Model
+	return st.model()
 }
 
 // w079AttemptStats counts one step's archived attempts by cause: the

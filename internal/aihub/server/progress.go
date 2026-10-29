@@ -1,12 +1,16 @@
 package server
 
-// progress.go: the signed caller -> aihub query doors. The project read is
-// authorized BEFORE anything is enqueued; the holder resolution answers the
-// typed CORE-404/410/504/501; the holder's answer is relayed byte-for-byte
-// and nothing is written to the database.
+// progress.go: the signed caller -> aihub query doors. The work-item
+// read gate runs BEFORE anything is enqueued (a caller without access
+// gets the same missing-work-item answer an unknown reference gets, so
+// the relay is no existence oracle); the holder resolution answers the
+// typed CORE-404/410/504/501; the relay budget answers CORE-429 before
+// the holder is reached ( A2); the holder's answer is relayed
+// byte-for-byte and nothing is written to the database.
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/aihub/core"
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -21,23 +25,22 @@ func (s *Server) hArtifactQuery(w http.ResponseWriter, r *http.Request, idn *ide
 }
 
 func (s *Server) relayQuery(w http.ResponseWriter, r *http.Request, idn *identity, m machineAuth, kind string) error {
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	if err := g.requireRead(); err != nil {
+		return err
+	}
 	var req api.ProgressQuery
 	if r.ContentLength != 0 {
 		if err := decodeBody(r, &req); err != nil {
 			return err
 		}
 	}
-	wi := r.PathValue("id")
-	view, err := s.WIs.Get(wi, core.GetOptions{})
+	view, err := s.WIs.Get(g.id, core.GetOptions{})
 	if err != nil {
 		return err
-	}
-	ok, err := s.canRead(idn, view.ProjectID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return core.Fail(api.ErrAuthForbidden, "", "the caller may not read work item %s", view.ID)
 	}
 	if view.Status != api.StatusRunning && view.Status != api.StatusBlocked {
 		return core.Fail(api.ErrCoreNotFound, "", "work item %s is %s: no remote progress/artifact snapshot", view.ID, view.Status)
@@ -62,6 +65,12 @@ func (s *Server) relayQuery(w http.ResponseWriter, r *http.Request, idn *identit
 	}
 	if kind == "artifact" && req.ArtifactPath == "" {
 		return core.Fail(api.ErrCoreBadInput, "", "artifact_path is required")
+	}
+	// The last gate before the holder is reached ( A2): every
+	// relayed query costs the holder a signed inbox wake and a signed
+	// answer, so the budget bounds what any member can make it send.
+	if err := s.relay.admit(time.Now(), idn.UserID, holder.MachineID); err != nil {
+		return err
 	}
 	body, err := s.enqueueQuery(holder.MachineID, kind, view.ID, req.ArtifactPath)
 	if err != nil {

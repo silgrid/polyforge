@@ -1,6 +1,6 @@
 package api
 
-// messaging.go: the user-to-user messaging wire contract (workbench#11):
+// messaging.go: the user-to-user messaging wire contract:
 // one direct conversation per user pair, permanent append-only history,
 // per-user read cursors, and the send/ack/analyze bodies.
 
@@ -10,14 +10,19 @@ const MessageTextMaxBytes = 4096
 // Conversation kinds. Only direct 1:1 exists; no group is ever created.
 const ConversationKindDirect = "direct"
 
-// Conversation is one member-visible conversation row.
+// Conversation is one member-visible conversation row. MemberNames maps
+// exactly the members' user ids to their display names:
+// the scope is membership only, with no admin branch, no directory and no
+// name resolution. A member with an empty display name keeps its key with
+// an empty value, so the key set always equals Members.
 type Conversation struct {
-	ID        string   `json:"id"`
-	Kind      string   `json:"kind"`
-	Members   []string `json:"members"`
-	CreatedAt string   `json:"created_at"`
-	LastSeq   int64    `json:"last_seq"`
-	Unread    int      `json:"unread,omitempty"`
+	ID          string            `json:"id"`
+	Kind        string            `json:"kind"`
+	Members     []string          `json:"members"`
+	MemberNames map[string]string `json:"member_names"`
+	CreatedAt   string            `json:"created_at"`
+	LastSeq     int64             `json:"last_seq"`
+	Unread      int               `json:"unread,omitempty"`
 }
 
 // Message is one append-only message row.

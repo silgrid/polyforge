@@ -1,5 +1,5 @@
 // Package secretpat is the one secret-shape scanner aihub enforces before
-// a message row is stored (workbench#11, CORE-422). The patterns are the
+// a message row is stored (CORE-422). The patterns are the
 // plan's list: polyforge key prefixes, 64-hex runs, PEM private-key
 // blocks, and common cloud/LLM key shapes.
 package secretpat

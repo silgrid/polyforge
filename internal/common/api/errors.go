@@ -42,7 +42,7 @@ const (
 	ErrCoreNotFound  = "CORE-404"
 	ErrCoreConflict  = "CORE-409"
 	ErrCoreGone      = "CORE-410"
-	// workbench#11 cross-machine relay/messaging codes.
+	// cross-machine relay/messaging codes.
 	ErrCoreTooLarge    = "CORE-413" // text/artifact over the bound
 	ErrCoreSecret      = "CORE-422" // secret-shaped message, nothing stored
 	ErrCoreTooMany     = "CORE-429" // anti-flood cap

@@ -65,6 +65,7 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	maxConcurrent, recallTopK, auto := f.MaxConcurrent, f.RecallTopK, f.Auto
 	silenceWindow, toolWindow, stepTimeout, stallWindow := f.SilenceWindow, f.ToolWindow, f.StepTimeout, f.StallWindow
 	modelErrorGrace, revalidateEvery, heartbeatEvery := f.ModelErrorGrace, f.RevalidateEvery, f.HeartbeatEvery
+	retryBackoffBase := f.RetryBackoffBase
 	if err := fs.Parse(argv); err != nil {
 		return 2
 	}
@@ -80,7 +81,7 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	// StartupFile is the daemon's FILE-ONLY baseline: the reload path
 	// compares file values against it, so an env override (PF_SERVER and
-	// so on) never reads as a permanently pending restart (workbench#3).
+	// so on) never reads as a permanently pending restart.
 	startupFile, err := cli.LoadFileConfig(*cfgPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "pf daemon: %v\n", err)
@@ -179,6 +180,7 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			StepTimeout:            *stepTimeout,
 			StallWindow:            *stallWindow,
 			ModelErrorGrace:        *modelErrorGrace,
+			RetryBackoffBase:       *retryBackoffBase,
 			SessionRevalidateEvery: *revalidateEvery,
 		},
 	}

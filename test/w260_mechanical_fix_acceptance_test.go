@@ -54,9 +54,10 @@ func w260Bar() []map[string]any {
 	return []map[string]any{{"repo": "demo", "command": w260BarCmd}}
 }
 
-// w260Head is the feature-full lane up to (excluding) its first
-// verification: the four clarification steps, the authored acceptance
-// suite, and code claiming the demo task repo from origin.
+// w260Head is the feature-full lane up to (excluding) its first review
+// (review runs right after code, verification behind it):
+// the four clarification steps, the authored acceptance suite, and code
+// claiming the demo task repo from origin.
 func w260Head(origin string) []map[string]any {
 	return []map[string]any{
 		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
@@ -286,15 +287,17 @@ func w260AssertLightPass(t *testing.T, x *executionView) {
 // and resumes the code session, the in-bound repair settles a light
 // recheck over exactly the bound command, the light-pass record carries
 // the audit facts, no verified_heads is written, the test bar is carried
-// byte-faithfully, and review then runs in full as the first review.
+// byte-faithfully, and the review re-runs in full over the repaired tree
+// before the light recheck ('s order).
 func TestW260MechanicalRewindResumesCodeAndSettlesLightPass(t *testing.T) {
 	inst := newV1Install(t)
 	remote := newTaskRemote(t)
 	plan := append(w260Head(remote.url),
+		w260ReviewPass(),  // the first review, in full (before verification)
 		w260FailVerdict(), // the full verification FAILs all-static
 		w260CodeRepair(),  // the resumed code session fixes inside the bound
+		w260ReviewPass(),  // the re-run review over the repaired tree
 		w260LightPass(0),  // the light recheck over the bound command
-		w260ReviewPass(),  // the first review, in full
 	)
 	_, capDir := w260SubmitFeatureFull(t, inst, "w260: an all-static FAIL takes the light path", plan)
 	w222WaitSettled(t, capDir)
@@ -305,9 +308,9 @@ func TestW260MechanicalRewindResumesCodeAndSettlesLightPass(t *testing.T) {
 	w260AssertMechanicalRewind(t, x, capDir)
 	w260AssertLightPass(t, x)
 	if got := strings.Join(w222Order(t, capDir), ","); got !=
-		"grill,spec,grill-review,plan,e2e-author,code,verification,code,verification,review" {
-		t.Errorf("dispatch order %s — the light recheck must sit between the resumed code "+
-			"re-entry and the (one, full) review", got)
+		"grill,spec,grill-review,plan,e2e-author,code,review,verification,code,review,verification" {
+		t.Errorf("dispatch order %s — the light recheck must sit behind the resumed code "+
+			"re-entry and the re-run review", got)
 	}
 }
 
@@ -323,10 +326,11 @@ func TestW260OutOfBoundRepairEscalatesToFullVerification(t *testing.T) {
 	inst := newV1Install(t)
 	remote := newTaskRemote(t)
 	plan := append(w260Head(remote.url),
+		w260ReviewPass(),
 		w260FailVerdict(),
 		w260CodeRepairStray(), // the resumed code session repairs in-bound, then commits outside it
+		w260ReviewPass(),      // the re-run review over the repaired tree
 		w260FullPass(),        // the escalated full verification (no light dispatch)
-		w260ReviewPass(),
 	)
 	_, capDir := w260SubmitFeatureFull(t, inst, "w260: an out-of-bound repair escalates in place", plan)
 	w222WaitSettled(t, capDir)
@@ -390,10 +394,11 @@ func TestW260DeliverRerunsCarriedTestBarAfterLightPass(t *testing.T) {
 	deliver = append(deliver, "cd repos/demo && "+w260BarCmd)
 	deliver = append(deliver, literalBranch(branch, mergeRecord("demo", ""), assemble)...)
 	plan := append(w260Head(origin),
+		w260ReviewPass(),
 		w260FailVerdict(),
 		w260CodeRepair(),
-		w260LightPass(0),
 		w260ReviewPass(),
+		w260LightPass(0),
 		map[string]any{"do": "envelope", "id": "deliver", "outcome": "completed",
 			"run": deliver, "output_file": deliverOutput},
 	)
@@ -426,17 +431,19 @@ func TestW260Kill9MidLightRecheckReplaysIdempotently(t *testing.T) {
 	inst := newV1Install(t)
 	remote := newTaskRemote(t)
 	plan := append(w260Head(remote.url),
+		w260ReviewPass(),
 		w260FailVerdict(),
 		w260CodeRepair(),
+		w260ReviewPass(),
 		w260LightPass(6000), // the light recheck, holding mid-dispatch
 		w260LightPass(0),    // the replay after the restart
-		w260ReviewPass(),
 	)
 	d, capDir := w260SubmitFeatureFull(t, inst, "w260: kill -9 mid-light-recheck", plan)
-	// The light recheck dispatched (journal entry 9: the lane's ninth
-	// spawn) and holds: crash the daemon inside the hold.
+	// The light recheck dispatched (journal entry 11: the lane's eleventh
+	// spawn — adds the re-run review between the repair and
+	// the recheck) and holds: crash the daemon inside the hold.
 	waitUntil(t, 180*time.Second, "the light recheck never dispatched", func() bool {
-		return len(spawnJournal(t, capDir)) >= 9
+		return len(spawnJournal(t, capDir)) >= 11
 	})
 	d.crash()
 	d2 := d.restarted()

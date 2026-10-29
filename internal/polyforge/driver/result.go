@@ -72,8 +72,11 @@ const EvHumanGateUnasked = "human_gate_unasked"
 // EvLightRecheckEscalated is the durable event kind of the mechanical
 // fast lane's in-place escalation (polyforge#260): one event per
 // escalation — pre-dispatch (a malformed classification or a broken
-// repair bound) or at the light recheck's settlement (a recheck that
-// did not pass) — carrying the reason. The escalation is not a rewind
+// repair bound), at the light recheck's settlement (a recheck that
+// did not pass), or after a fresh gate rewind that abandoned the pending
+// light recheck (a structural review FAIL re-derives the
+// repair from scratch; the event names step verification) — carrying the
+// reason. The escalation is not a rewind
 // and charges no slot; the audit record is the attempt the same write
 // archives (cause light_recheck_escalated).
 const EvLightRecheckEscalated = "light_recheck_escalated"
@@ -238,6 +241,17 @@ type ResultSpec struct {
 	// it named) — deliver_facts.go.
 	VerifiedHeads   map[string]string
 	VerifiedTestBar []testBarCmd
+	// ReviewedHeads: the review step's driver-written
+	// record (task repo -> HEAD when a PASS review completed) — the merge
+	// rule's review-coverage anchor. Nil/empty on a workflow without a
+	// review step and on any delivery whose review pass predates the
+	// record (fail-closed: the human decides).
+	ReviewedHeads map[string]string
+	// VerifiedScenarios: the verification step's recorded
+	// authored-scenario outcomes. Any `skipped` entry blocks the automatic
+	// merge (the human decides); an empty list — the owner-approved
+	// skipped-with-rationale mode — triggers nothing.
+	VerifiedScenarios []authoredScenario
 	// LightRecheckHeads (polyforge#260): the recheck heads of a
 	// light-passed verification record (mechanical_pass.recheck_heads,
 	// driver-written) — the deliver merge rule's anchor on the light path
@@ -252,16 +266,31 @@ type ResultSpec struct {
 	// under the driver's lock from the same ledger the transition's
 	// self-report rewind reads (lightRewindContext).
 	LightRewind bool
-	// ScopeTier (workbench#19): the verification tier recorded in
+	// ScopeTier: the verification tier recorded in
 	// execution.json ("" before the first verification dispatch). The
 	// verification scope contract rejects a scoped claim unless ScopeTier
 	// is scoped.
 	ScopeTier string
-	// VerificationScoped (workbench#19): the done verification step's
+	// VerificationScoped: the done verification step's
 	// output carried the scoped `scope` declaration — the review's
 	// scope_adequate obligation and the deliver merge condition key on it.
 	VerificationScoped bool
-	// ReviewScopeAdequate (workbench#19): the review step's recorded
+	// VerificationScope: the parsed scope object of the
+	// done verification step — the merge rule's consistency input.
+	VerificationScope *scopeObject
+	// ScopedWorkItem: the work item opted into the scoped
+	// tier (its content carries the marker and the lane is scoped-capable)
+	// — review's scope_adequate obligation keys on this, judged at review
+	// dispatch time (review now runs BEFORE verification, so it can no
+	// longer key on verification's own output).
+	ScopedWorkItem bool
+	// ReviewScope / ReviewScopePresent: the review step's
+	// recorded scope declaration and whether any scope record exists at
+	// all — the merge rule's consistency input. A present-but-malformed
+	// record answers nil + present (fail-closed, named at the merge rule).
+	ReviewScope        *reviewScope
+	ReviewScopePresent bool
+	// ReviewScopeAdequate: the review step's recorded
 	// scope_adequate answer (nil when absent); the deliver merge rule
 	// requires true for a scoped pass.
 	ReviewScopeAdequate *bool
@@ -304,6 +333,16 @@ type ResultSpec struct {
 //     field without a light rewind preceding it in the step's ledger
 //     (spec.LightRewind), is an envelope rejection — the field belongs
 //     only to a light re-entry's structural self-report;
+//     3d'. the plan's coupled-obligation contract (
+//     checkPlanObligations): a completed `plan` result declaring a write
+//     without a coupled_obligations entry (a non-empty {path, note?}
+//     list or exactly one {none: true, reason}) is an envelope rejection
+//     — the one enforced part of the plan's otherwise recorded schema;
+//     3d2. the authored bindings contract (checkBindings): a completed
+//     e2e-author result's optional bindings must each name a title of
+//     its own scenario_titles and carry a non-empty repo, command, unit
+//     and a marker that compiles — the verification run resolves bound
+//     scenarios by them, so a broken binding is an envelope rejection;
 //  4. the command-evidence gate: every command_evidence item, on any
 //     step and outcome, must be an object that decodes as a
 //     CommandEvidence (decodeCommandEvidence); on a RequireCommandEvidence
@@ -321,9 +360,10 @@ type ResultSpec struct {
 //     passing (polyforge#164 S6);
 //  7. the authored-tests gate (ReposDir and AuthoredTests set; the
 //     driver never sets AuthoredTests for `deliver`): the test files an
-//     earlier step authored must be unchanged since its commit, unless a
-//     human answered in this attempt chain (then res.rebaseline is set)
-//     (polyforge#164 H4);
+//     earlier step authored must be unchanged since its commit (a change
+//     that came only through machine-made merges of the default branch is
+//     none — mergedFromDefault), unless a human answered in this attempt
+//     chain (then res.rebaseline is set) (polyforge#164 H4);
 //  8. the delivery binding (the `deliver` step only, deliverBinding):
 //     recorded pushes target only the feature branch, merges use
 //     --merge, and a completed pass that merged outside the merge rule
@@ -424,7 +464,29 @@ func ValidateStepResult(res *StepResult, spec ResultSpec) error {
 			}
 		}
 	}
-	// 3e. the verification scope contract (workbench#19): a completed
+	// 3d'. the plan's coupled-obligation contract: a
+	// completed plan declaring a write without a well-formed
+	// coupled_obligations entry is an envelope rejection, so the build
+	// step never runs on it. The rest of the plan schema stays recorded.
+	if res.Outcome == OutcomeCompleted && spec.StepID == planStepID {
+		if out, perr := parseOutput(res.Output); perr == nil {
+			if err := checkPlanObligations(out); err != nil {
+				return fmt.Errorf("driver: step %q completed but %w", spec.StepID, err)
+			}
+		}
+	}
+	// 3d2. the authored bindings contract: every binding of a completed
+	// e2e-author result names one of its scenario titles (not every title
+	// needs one — a title without a binding is document-only), carries
+	// non-empty fields and a marker regexp that compiles.
+	if res.Outcome == OutcomeCompleted && spec.StepID == e2eAuthorStepID {
+		if out, perr := parseOutput(res.Output); perr == nil {
+			if err := checkBindings(out); err != nil {
+				return fmt.Errorf("driver: step %q completed with %w", spec.StepID, err)
+			}
+		}
+	}
+	// 3e. the verification scope contract: a completed
 	// verification result's optional `scope` declaration must be complete
 	// and legal only on a work item that opted into the scoped tier. An
 	// absent scope is the canonical full shape — nothing is checked. The
@@ -436,15 +498,18 @@ func ValidateStepResult(res *StepResult, spec ResultSpec) error {
 			}
 		}
 	}
-	// 3f. the review scope_adequate obligation (workbench#19): a
-	// completed review over a scoped verification must answer it. Judged
-	// after the verdict binding, so a fail review (re-bound gate_failed)
-	// owes nothing — its scope judgment is moot and the re-verification
-	// round answers again.
-	if res.Outcome == OutcomeCompleted && spec.StepID == reviewStepID && spec.VerificationScoped {
+	// 3f. the review scope_adequate obligation (/#69): a
+	// completed review of a work item that opted into the scoped tier
+	// must answer it. The trigger is the work item's opt-in (the marker + a
+	// scoped-capable lane), judged at review dispatch — review now runs
+	// BEFORE verification, so keying on verification's own output would
+	// never fire. Judged after the verdict binding, so a fail review
+	// (re-bound gate_failed) owes nothing — its scope judgment is moot and
+	// the re-verification round answers again.
+	if res.Outcome == OutcomeCompleted && spec.StepID == reviewStepID && spec.ScopedWorkItem {
 		if out, perr := parseOutput(res.Output); perr == nil {
 			if _, ok := out[scopeAdequateKey].(bool); !ok {
-				return fmt.Errorf("driver: step %q completed over a scoped verification without a boolean scope_adequate — review must answer whether the scoped verification was adequate", spec.StepID)
+				return fmt.Errorf("driver: step %q completed on a scoped work item without a boolean scope_adequate — review must answer whether the scope it declared covers the diff it judged", spec.StepID)
 			}
 		}
 	}
@@ -492,6 +557,53 @@ func ValidateStepResult(res *StepResult, spec ResultSpec) error {
 	if spec.StepID == deliverStepID {
 		if err := deliverBinding(res, evidence, delivered, spec); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// checkBindings judges e2e-author's optional bindings list: absent or
+// null is none; otherwise a list of objects, each with a title among the
+// output's own scenario_titles, a non-empty repo, command and unit, and a
+// marker that compiles as a regular expression (Go RE2, the syntax the
+// verification run matches output lines with). Several bindings may
+// share a title (all must hold); titles are not required to have one.
+func checkBindings(out map[string]any) error {
+	raw, ok := out["bindings"]
+	if !ok || raw == nil {
+		return nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return errors.New("bindings that are not a list — bindings is [{title, repo, command, unit, marker}, ...]")
+	}
+	titles := map[string]bool{}
+	if ts, ok := out["scenario_titles"].([]any); ok {
+		for _, v := range ts {
+			if s, ok := v.(string); ok {
+				titles[s] = true
+			}
+		}
+	}
+	for i, item := range list {
+		b, ok := item.(map[string]any)
+		if !ok {
+			return fmt.Errorf("bindings[%d] that is not an object {title, repo, command, unit, marker}", i)
+		}
+		field := func(k string) string {
+			s, _ := b[k].(string)
+			return s
+		}
+		for _, k := range []string{"title", "repo", "command", "unit", "marker"} {
+			if strings.TrimSpace(field(k)) == "" {
+				return fmt.Errorf("bindings[%d] without a non-empty %s (every binding carries title, repo, command, unit and marker)", i, k)
+			}
+		}
+		if !titles[field("title")] {
+			return fmt.Errorf("bindings[%d] naming title %q, which is not one of this result's scenario_titles", i, clipAgentText(field("title")))
+		}
+		if _, err := regexp.Compile(field("marker")); err != nil {
+			return fmt.Errorf("bindings[%d] whose marker %q does not compile as a regular expression: %v", i, clipAgentText(field("marker")), err)
 		}
 	}
 	return nil

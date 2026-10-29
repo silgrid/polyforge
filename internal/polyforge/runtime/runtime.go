@@ -83,6 +83,11 @@ type Config struct {
 	// ClaudeBin is the Claude Code binary (default "claude"; cli.toml
 	// claude_bin / --claude-bin), used by steps whose harness is claude.
 	ClaudeBin string
+	// ToolWindow is the daemon's supervision tool window Y (one tool
+	// running longer than it is judged hung). A claude step's Bash tool
+	// timeouts derive from it (claudeBashTimeouts: max = Y - 1m, default
+	// 10m clamped to the max); <= 0 is the supervision default, 30m.
+	ToolWindow time.Duration
 	// HarnessRoot is the parent root of the three harness state dirs
 	// (polyforge#171): <harness-root>/step-agent (the dedicated step
 	// agent dir), <harness-root>/step-agent-sessions (the pi steps'
@@ -105,9 +110,13 @@ type Config struct {
 	// EndRetryBase/EndRetryMax shape the backoff of every pending hub
 	// step a work item's actor retries (a close the hub has not taken, a
 	// paused record's verify, a claiming-journal replay): first retry
-	// after Base, doubling up to Max (defaults 2s / 60s).
-	EndRetryBase time.Duration
-	EndRetryMax  time.Duration
+	// after Base, doubling up to Max, then every Max (defaults 2s / 60s).
+	// EndRetryWindow bounds one chain by the time since its first retry
+	// (default 24h): an aihub outage shorter than that is ridden out, a
+	// longer one has a person on it who restarts the daemon.
+	EndRetryBase   time.Duration
+	EndRetryMax    time.Duration
+	EndRetryWindow time.Duration
 	// SessionRevalidateEvery is the M4 cadence for the retained PAUSED
 	// records (revalidatePaused) — the records observe's monitor no
 	// longer revalidates. The daemon passes the same resolved cadence
@@ -171,6 +180,9 @@ func (c *Config) fill() {
 	}
 	if c.EndRetryMax <= 0 {
 		c.EndRetryMax = 60 * time.Second
+	}
+	if c.EndRetryWindow <= 0 {
+		c.EndRetryWindow = 24 * time.Hour
 	}
 }
 
@@ -337,8 +349,25 @@ type job struct {
 	// meanwhile (Stop). Both under mu.
 	claimCancel context.CancelFunc
 	claimClose  *claimClose
-	// retryIn is the backoff of the actor's next retry (retry).
-	retryIn time.Duration
+	// retryIn is the backoff of the actor's next retry (retry), retryN
+	// the retries of the current chain, retrySince the chain's start
+	// (its bound is EndRetryWindow from there) and retryPending whether
+	// one is already on a timer (retryOutstanding) — the mark that lets a
+	// reconcile tell the backoff an operation just scheduled from a
+	// settled episode. retryExhausted: the last chain hit its bound and
+	// nothing retries the record (the operator's doors say so); a newly
+	// scheduled retry clears it.
+	retryIn        time.Duration
+	retryN         int
+	retrySince     time.Time
+	retryPending   bool
+	retryExhausted bool
+	// closePark is the close (seal, pause or blocked verdict) parked on a
+	// driver Run that outlived its bounded teardown (parkClose): nothing
+	// writes the capsule until that Run exits, then the park's own waiter
+	// finishes the close. nil when no close is parked; a later park
+	// replaces an earlier one (its waiter then stands down).
+	closePark *closePark
 	// verified: the hub confirmed, since this process holds the job, that
 	// its session holds the work item (the claim, or a matching verify). A
 	// record restored at restart starts unverified: nothing pushes or ends
@@ -436,7 +465,7 @@ func (r *Runtime) applyOB(msg protocol.OBMsg) {
 		if state == StateClaiming || state == StateDone || (msg.SessionFP != "" && msg.SessionFP != fp) {
 			return
 		}
-		r.supersede(j, "session_superseded", msg.Detail, "")
+		_ = r.supersede(j, "session_superseded", msg.Detail, "") // a parked release finishes from its waiter
 		r.release(j.wi)
 	case protocol.OBNeedsRecovery:
 		if state == StateRunning && msg.SpawnN == spawn {
@@ -1259,19 +1288,23 @@ func (r *Runtime) Stop(ctx context.Context, wi, reason string) error {
 			return fmt.Errorf("runtime: %s: no active job", wi)
 		}
 		switch st, _ := j.snapshot(); {
+		case j.closeParked():
+			// the parked close finishes by itself once the old Run exits;
+			// a second close would only park again (or swap its verdict)
+			return j.parkedError(id)
 		case st == StatePaused && closePending(j.record()):
 			// one close at a time: a repeat would arm another retry, or
 			// swap the pending verdict mid-close
 			return &api.Error{Code: api.ErrDaemonConflict,
-				Detail: fmt.Sprintf("%s: its %s close is already in progress (retrying until aihub takes it)", id, j.record().StopReason)}
+				Detail: fmt.Sprintf("%s: its %s close is already in progress (%s)", id, j.record().StopReason, j.closeRetryNote())}
 		case st == StatePaused && reason == protocol.FinishPaused:
 			return nil // the pause already holds
 		case st == StateSealing, st == StateEndPending:
 			return &api.Error{Code: api.ErrDaemonConflict,
-				Detail: fmt.Sprintf("%s: work item is %s; its close is already in progress (retrying until aihub takes it)", id, st)}
+				Detail: fmt.Sprintf("%s: work item is %s; its close is already in progress (%s)", id, st, j.closeRetryNote())}
 		case st == StateClaiming:
 			return &api.Error{Code: api.ErrDaemonHubUnavailable,
-				Detail: fmt.Sprintf("%s: the claim of this work item is still waiting for aihub; retry later", id)}
+				Detail: fmt.Sprintf("%s: the claim of this work item is still waiting for aihub; %s", id, j.retryChainNote("retry later"))}
 		}
 		if err := r.fence(j); err != nil {
 			return err
@@ -1317,11 +1350,11 @@ func (r *Runtime) closeClaim(j *job, reason string) error {
 		fmt.Fprintf(os.Stderr, "runtime: %s: quarantine of the closed claim's capsule failed (scene left in place): %v\n", j.wi, err)
 	}
 	if err := r.hub.SessionEnd(j.wi, api.SessionEndRequest{SessionID: j.sessionID, Status: status, Note: note}); err != nil {
-		fmt.Fprintf(os.Stderr, "runtime: %s: session-end(%s) of the claim failed (kept end_pending, retrying a blocked close): %v\n", j.wi, status, err)
+		fmt.Fprintf(os.Stderr, "runtime: %s: session-end(%s) of the claim failed (kept end_pending; retried with backoff up to the chain's bound, or parked on a typed 4xx refusal): %v\n", j.wi, status, err)
 		if r.pendingClose(j, note) {
 			r.clearClaimingSession(j.wi, j.sessionID)
 		}
-		return fmt.Errorf("runtime: %s: the claim was stopped but its session-end failed (retrying a blocked close in the background): %w", j.wi, err)
+		return fmt.Errorf("runtime: %s: the claim was stopped but its session-end failed (the blocked close is retried with backoff up to the chain's bound, or parked on a typed 4xx refusal): %w", j.wi, err)
 	}
 	r.clearClaimingSession(j.wi, j.sessionID)
 	if status != api.StatusBlocked {
@@ -1365,8 +1398,16 @@ func IsClaimDeferred(err error) bool {
 // drops the record and emits the owner-visible event — the local capsule
 // (and any answers recorded in it) did not travel, so "answers may be
 // lost; question re-opened" (m3).
-func (r *Runtime) supersede(j *job, kind, detail, currentFP string) {
-	r.killAgentTree(j)
+//
+// A driver Run that outlives its bounded teardown may still write the
+// capsule: renaming the scene under it (or dropping the record, which lets
+// a re-claim start a second writer there) must wait. The release parks
+// (parkClose, kind release) and re-runs once that Run exits; the answer is
+// the parked 409.
+func (r *Runtime) supersede(j *job, kind, detail, currentFP string) error {
+	if err := r.killAgentTree(j); err != nil {
+		return r.parkClose(j, parkKindRelease, kind, func() { _ = r.supersede(j, kind, detail, currentFP) })
+	}
 	if err := quarantineCapsule(j.capsuleDir, j.git.GitDir); err != nil {
 		fmt.Fprintf(os.Stderr, "runtime: %s: superseded capsule quarantine failed (scene left in place): %v\n", j.wi, err)
 	}
@@ -1380,6 +1421,7 @@ func (r *Runtime) supersede(j *job, kind, detail, currentFP string) {
 		body["current_fingerprint"] = currentFP
 	}
 	r.tap(j.wi, kind, body)
+	return nil
 }
 
 // releaseMonitor stops wi's observe monitor and waits until it is gone
@@ -1404,8 +1446,12 @@ func (r *Runtime) release(wi string) {
 // when it already reached the hub. A SessionEnd the hub does not take
 // leaves the close pending — the job SEALING, or a retained PAUSED record
 // holding its terminal stop_reason (closePending) — persisted with its
-// verdict, and the actor retries the close (reconcile) — never a silent
-// half-seal.
+// verdict, and the ATTEMPT's own actor retry (retry) is the one scheduler
+// of the next try, first close and replay alike; the reconcile that runs
+// a replay must not clear that backoff. A 4xx refusal is
+// not a pending close at all: it is parked (parkRefused), since no retry
+// can change it — STALE_SESSION excepted, which the next reconcile
+// finishes locally.
 func (r *Runtime) stopOp(ctx context.Context, j *job, reason string, alreadySealing bool, note string) error {
 	if reason == protocol.FinishPaused && !alreadySealing {
 		return r.pauseOp(j)
@@ -1429,15 +1475,36 @@ func (r *Runtime) stopOp(ctx context.Context, j *job, reason string, alreadySeal
 		r.persistLog(j.wi)
 	}
 	// Six-layer teardown: no writer survives into the sealed scene —
-	// neither the agent tree nor the observe monitor's capsule pushes.
-	r.killAgentTree(j)
+	// neither the agent tree nor the observe monitor's capsule pushes. A
+	// driver Run that outlives its bounded teardown is still a writer: the
+	// seal push, the WIP lane and the read-only seal must not run next to
+	// it, so the close parks in its persisted state (SEALING, or the
+	// retained PAUSED record holding its terminal stop_reason) and its
+	// waiter replays it once that Run exits.
+	if err := r.killAgentTree(j); err != nil {
+		return r.parkClose(j, "close", reason, func() {
+			st, _ := j.snapshot()
+			if perr := r.stopOp(r.ctx, j, reason, st == StateSealing, note); perr != nil {
+				fmt.Fprintf(os.Stderr, "runtime: %s: parked %s close resumed and failed: %v\n", j.wi, reason, perr)
+			}
+		})
+	}
 	r.releaseMonitor(j.wi)
 	finalReason, endErr := r.sealNetwork(j, reason, note, alreadyPushed)
 	if endErr != nil {
 		// the close stays pending — SEALING, or a retained PAUSED record
-		// holding its terminal stop_reason — and reconcile replays it; a
-		// replay (alreadySealing) is retried by the reconcile that runs it
-		if st, _ := j.snapshot(); st == StateSealing || (st == StatePaused && !alreadySealing) {
+		// holding its terminal stop_reason — and this attempt's own retry
+		// is what replays it. A typed 4xx refusal is final instead: no
+		// retry can land it, so the record is parked. STALE_SESSION is not
+		// that case — it means the session is gone, and the next reconcile
+		// finishes the close locally (finishSeal).
+		st, _ := j.snapshot()
+		switch {
+		case claimRefused(endErr) && !isStaleSession(endErr):
+			r.persistLog(j.wi)
+			r.parkRefused(j, EventCloseRefused, st, endErr)
+			return fmt.Errorf("runtime: %s: session-end failed (the hub refused the close; the record is parked, not retried): %w", j.wi, endErr)
+		case st == StateSealing || (st == StatePaused && !alreadySealing):
 			r.persistLog(j.wi)
 			r.retry(j)
 		}
@@ -1534,7 +1601,23 @@ func (r *Runtime) pauseOp(j *job) error {
 	j.mu.Unlock()
 	r.persistLog(j.wi)
 	crashpoint.At("pause.persisted")
-	r.killAgentTree(j)
+	return r.finishPause(j)
+}
+
+// finishPause is pauseOp's half after the PAUSED record is persisted:
+// the teardown, the agentless record, the network half and the observe
+// release. A driver Run that outlives its teardown parks it — the pause's
+// push and WIP lane must not run next to that writer; the persisted
+// record is a pending pause a restart replays, and the park's waiter runs
+// finishPause again once the Run exits.
+func (r *Runtime) finishPause(j *job) error {
+	if err := r.killAgentTree(j); err != nil {
+		return r.parkClose(j, "pause", protocol.FinishPaused, func() {
+			if perr := r.finishPause(j); perr != nil {
+				fmt.Fprintf(os.Stderr, "runtime: %s: parked pause resumed and failed: %v\n", j.wi, perr)
+			}
+		})
+	}
 	// the retained record carries no live agent: the status face (and the
 	// restart's kill pass) read it agentless
 	j.mu.Lock()

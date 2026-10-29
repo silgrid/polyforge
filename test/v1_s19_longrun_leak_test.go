@@ -21,8 +21,8 @@ package test
 //     twice — a re-written/duplicated event line is the failure signal.
 //     The per-work-item accounting is the healthy driver-run shape:
 //     exactly one job_started and one job_stopped per work item (the
-//     per-job completion recovery emits needs_recovery, which the
-//     accounting deliberately tolerates).
+//     per-job completion runs through the recovery door without a
+//     needs_recovery event; the accounting tolerates either).
 //
 // Division of labor (the dual-scenario split): fd leaks and event
 // duplication are process-level realities, so the real binary is the

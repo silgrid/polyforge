@@ -19,6 +19,7 @@ type DaemonFlags struct {
 	Auto                                                            *bool
 	SilenceWindow, ToolWindow, StepTimeout, StallWindow             *time.Duration
 	ModelErrorGrace, RevalidateEvery, HeartbeatEvery                *time.Duration
+	RetryBackoffBase                                                *time.Duration
 }
 
 // DefineDaemonFlags defines the daemon launch flags on fs. Production
@@ -50,6 +51,7 @@ func DefineDaemonFlags(fs *flag.FlagSet) *DaemonFlags {
 		StepTimeout:      fs.Duration("step-timeout", 0, "T: cumulative step runtime across its dispatches ([daemon] step_timeout; default 90m); a step's budget.wall_minutes is an estimate, not an override: that step's T = max(3 x wall_minutes, this value)"),
 		StallWindow:      fs.Duration("stall-window", 0, "N: the driver between steps, not waiting on a human, for longer than this is judged stalled ([daemon] stall_window; default 10m; negative disables)"),
 		ModelErrorGrace:  fs.Duration("model-error-grace", 0, "test/dev-only: grace after a turn ends on a model error before the step is judged dead (default 1m)"),
+		RetryBackoffBase: fs.Duration("retry-backoff-base", 0, "test/dev-only: the first retry-pacing wait after a model_error, upstream_transient or ended_without_result death; consecutive ones on the same candidate wait 3x, then 9x it (default 1m)"),
 		RevalidateEvery:  fs.Duration("revalidate-every", 0, "test/dev-only: periodic session revalidation cadence for held records — running jobs and retained paused records (default 30s; negative disables)"),
 		HeartbeatEvery:   fs.Duration("heartbeat-every", 60*time.Second, "test/dev-only: machines heartbeat cadence (0 disables)"),
 	}

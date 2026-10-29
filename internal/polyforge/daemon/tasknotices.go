@@ -1,7 +1,7 @@
 package daemon
 
 // tasknotices.go: the delivery of a task's terminal summary to its origin
-// chat (workbench#53, carried from #40), riding the resident watcher's fetch-then-ack model
+// chat (carried from #40), riding the resident watcher's fetch-then-ack model
 // rather than a new push path.
 //
 //	GET  /chats/{id}/task-notices        {"notices":[{task_id, text}]}

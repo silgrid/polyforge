@@ -791,7 +791,7 @@ func TestCarrierIgnoresSubmoduleRecursion(t *testing.T) {
 // borrowing (objects/info/http-alternates) — is refused before any
 // credential is prepared, as a carrier_push_failed. A LOCAL alternates
 // file is not here: it is recoverable and healed, not refused
-// (TestCarrierSelfContainsLocalAlternates, workbench#55).
+// (TestCarrierSelfContainsLocalAlternates,).
 func TestCarrierRefusesForeignGitDir(t *testing.T) {
 	cases := map[string]func(t *testing.T, repoDir string){
 		"gitfile": func(t *testing.T, repoDir string) {
@@ -896,7 +896,7 @@ func TestCarrierRefusesForeignGitDir(t *testing.T) {
 // be the "alternates" sub-case of TestCarrierRefusesForeignGitDir, whose
 // alternate was an existing but empty directory; the carrier lane now
 // repacks the repo, drops the alternates file and carries it like any
-// other repo (workbench#55).
+// other repo.
 func TestCarrierSelfContainsLocalAlternates(t *testing.T) {
 	setIdentity(t)
 	o, base := taskOpts(t, "wi_task9b")
@@ -934,7 +934,7 @@ func TestCarrierSelfContainsLocalAlternates(t *testing.T) {
 // the refs (here: the carrierHealCut seam, standing in for that window), so
 // the connectivity check after cutting the borrow fails: the alternates file
 // must be restored and the repo refused, leaving it consistent for the next
-// publish to heal again (workbench#55 review B1).
+// publish to heal again (code review).
 func TestCarrierRestoresAlternatesWhenHealFindsRepoIncomplete(t *testing.T) {
 	setIdentity(t)
 	o, base := taskOpts(t, "wi_task9c")

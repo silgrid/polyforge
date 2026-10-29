@@ -1,6 +1,6 @@
 package driver
 
-// ewr_short_reminder_test.go: workbench#7 — the first
+// ewr_short_reminder_test.go: — the first
 // ended_without_result retry that really resumes the same harness
 // conversation sends only the short reminder (finish the remaining
 // work, submit with `pf result submit`), never the assembled step

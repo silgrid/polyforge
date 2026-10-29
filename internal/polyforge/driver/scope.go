@@ -1,7 +1,7 @@
 package driver
 
 // scope.go: the verification-tier vocabulary and its pure judgments
-// (workbench#19). Verification runs the full bar by default; a work item
+//. Verification runs the full bar by default; a work item
 // opts into the narrower SCOPED tier with one explicit marker line in its
 // content, and only on a scoped-capable lane. A scoped result declares a
 // `scope` object; the driver checks the declaration's completeness and
@@ -28,7 +28,7 @@ const (
 )
 
 // scopeChainKey is the driver-written deliver output key carrying the
-// three-ring scope audit chain (workbench#19).
+// three-ring scope audit chain.
 const scopeChainKey = "scope_chain"
 
 // scopeAdequateKey is the review output key answering whether a scoped
@@ -239,6 +239,80 @@ func scopeCredentialUnion(prior, declared []string) []string {
 		}
 	}
 	return out
+}
+
+// reviewScope is the review output's scope record: the
+// scope review itself judged adequate for the diff it reviewed — mode
+// scoped plus the declared paths, opaque strings the driver never
+// classifies. It is the scope the following verification MUST use for
+// the two to form one merging credential.
+type reviewScope struct {
+	Mode          string
+	DeclaredPaths []string
+}
+
+// reviewScopeRecord reads the review step's recorded scope declaration
+//. present is false only when no scope record exists; a
+// present-but-malformed record answers (nil, true) — present, but
+// proving nothing (fail-closed at the merge rule, which names it).
+func reviewScopeRecord(st *capsule.Step) (rec *reviewScope, present bool) {
+	if st == nil || st.Status != capsule.StepDone {
+		return nil, false
+	}
+	v, ok := st.Output["scope"]
+	if !ok || v == nil {
+		return nil, false
+	}
+	m, isObj := v.(map[string]any)
+	if !isObj {
+		return nil, true
+	}
+	rc := &reviewScope{}
+	if mode, _ := m["mode"].(string); strings.TrimSpace(mode) != "" {
+		rc.Mode = mode
+	} else {
+		return nil, true
+	}
+	paths, okPaths := stringList(m["declared_paths"])
+	if !okPaths || !anyNonEmpty(paths) {
+		return nil, true
+	}
+	rc.DeclaredPaths = paths
+	return rc, true
+}
+
+// scopeConsistent answers whether one verification pass used exactly the
+// scope review judged adequate: the declared path sets
+// are equal — verification's set is the union with its prior when an
+// incremental re-verification carried one. The strings stay opaque; a
+// missing side is never consistent.
+func scopeConsistent(ver *scopeObject, rev *reviewScope) bool {
+	if ver == nil || rev == nil {
+		return false
+	}
+	declared := ver.DeclaredPaths
+	if ver.Prior != nil {
+		declared = scopeCredentialUnion(ver.Prior.DeclaredPaths, ver.DeclaredPaths)
+	}
+	return samePathSet(declared, rev.DeclaredPaths)
+}
+
+// samePathSet answers multiset equality of two opaque path lists.
+func samePathSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, s := range a {
+		seen[s]++
+	}
+	for _, s := range b {
+		seen[s]--
+		if seen[s] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // verificationScoped reports whether the completed verification step's

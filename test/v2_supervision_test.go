@@ -22,13 +22,10 @@ package test
 //	two rules at once: one verdict, one failure   -> TestV2TwoRules...
 
 import (
-	"encoding/json"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
 // failEvent is the step_failed event body.
@@ -109,15 +106,21 @@ func plan(first []map[string]any) []map[string]any {
 // NOT self-retry after a fatal turn error: the turn ends, nobody sends
 // the next prompt, the session idles forever (35+ minutes observed).
 // Rule 1 judges it one grace after the error — the turn ended with an
-// error and no result file followed — and the driver advances the
-// candidate (a model-class death). The error text here is a fatal
-// request error: a throttle or upstream-transient text takes the D7
-// same-model path instead (v2_live_error_turn_d7_test.go, polyforge#162).
+// error and no result file followed — and the death is model_error (a
+// model-class death): the first on the candidate resumes the same
+// candidate after the retry pacing, the second consecutive one advances
+// the candidate. The error text here is a provider error naming no
+// throttle, transient, allowance or auth problem: a throttle or
+// upstream-transient text takes the D7 same-model path instead
+// (v2_live_error_turn_d7_test.go, polyforge#162), an allowance text
+// switches at once.
 func TestV2F5FatalProviderErrorThenIdleModelError(t *testing.T) {
 	inst := newV1Install(t)
+	fatal := "provider error: 400 invalid_request_error: messages must alternate between user and assistant"
 	wi := inst.newWI(t, "f5: fatal provider error then idle",
 		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "error_turn": "provider error: 400 invalid_request_error: messages must alternate between user and assistant"},
+			{"do": "envelope", "id": "grill", "error_turn": fatal},
+			{"do": "envelope", "id": "grill", "error_turn": fatal},
 			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 		}), nil)
 	grace := 2 * time.Second
@@ -138,6 +141,7 @@ func TestV2F5FatalProviderErrorThenIdleModelError(t *testing.T) {
 	for _, j := range fakeJournal(t, d.capsuleDir(wi)) {
 		if j["type"] == "error_turn" {
 			errAt, _ = time.Parse(time.RFC3339Nano, j["at"].(string))
+			break // the first error turn: the one this verdict judged
 		}
 	}
 	vAt, _ := time.Parse(time.RFC3339Nano, rec.At)
@@ -146,9 +150,13 @@ func TestV2F5FatalProviderErrorThenIdleModelError(t *testing.T) {
 	}
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 	fails := stepFailures(t, d, wi)
-	if len(fails) != 1 || fails[0].Cause != "model_error" || fails[0].Disposition != "switch_model" ||
-		fails[0].From == fails[0].To {
-		t.Fatalf("failure records %+v, want one model_error/switch_model", fails)
+	if len(fails) != 2 || fails[0].Cause != "model_error" || fails[0].Disposition != "retry_same_model" ||
+		fails[1].Cause != "model_error" || fails[1].Disposition != "switch_model" || fails[1].From == fails[1].To {
+		t.Fatalf("failure records %+v, want model_error/retry_same_model then model_error/switch_model", fails)
+	}
+	models := spawnModels(t, d.capsuleDir(wi))
+	if len(models) < 3 || models[0] != models[1] || models[2] == models[1] {
+		t.Fatalf("spawned models %v, want the first model twice (the resume), then the next candidate", models)
 	}
 }
 
@@ -380,8 +388,8 @@ func TestV2ModelPinFailureAdvancesCandidate(t *testing.T) {
 	if !sawClass {
 		t.Fatalf("the attempt must carry the cause sub-class: %+v", x.Steps["verification"].Attempts)
 	}
-	if x.Steps["verification"].Model != "example-claude/claude-opus-5" {
-		t.Fatalf("verification finished on model %q, want the advanced candidate", x.Steps["verification"].Model)
+	if x.Steps["verification"].model() != "example-claude/claude-opus-5" {
+		t.Fatalf("verification finished on model %q, want the advanced candidate", x.Steps["verification"].model())
 	}
 }
 
@@ -437,10 +445,11 @@ func TestV2DaemonRestartNotCountedSameModel(t *testing.T) {
 	}
 }
 
-// TestV2DriverCrashLoopBoundedThenBlocked: #97. A driver that keeps dying
-// is relaunched by the recovery engine — and only a bounded number of
-// times: the storm guard parks the work item blocked instead of looping
-// forever. The death here: grill completes but leaves a DIRECTORY at its
+// TestV2DriverCrashLoopBoundedThenBlocked: #97. A step that keeps dying
+// is retried only a bounded number of times: its failure counter parks
+// the work item blocked instead of looping forever, and the driver's
+// stop on that park is no death (no needs_recovery, no re-derivation).
+// The death here: grill completes but leaves a DIRECTORY at its
 // handoff convention path, so the next inherit step's handoff read fails
 // with a non-absence I/O error (a missing handoff file is merely
 // omitted; an unreadable one is an infrastructure inconsistency).
@@ -460,21 +469,15 @@ func TestV2DriverCrashLoopBoundedThenBlocked(t *testing.T) {
 
 	inst.waitWIStatus(t, wi, "blocked", 180*time.Second)
 	kinds := d.eventKinds(t, wi)
-	if n := countOf(kinds, "needs_recovery"); n == 0 || n > 4 {
-		t.Fatalf("needs_recovery fired %d times, want a small bounded number: %v", n, kinds)
+	fails := stepFailures(t, d, wi)
+	if n := len(fails); n == 0 || n > 4 || fails[n-1].Disposition != "blocked" {
+		t.Fatalf("step_failed records %+v, want a small bounded number, the last one parking the work item blocked", fails)
 	}
-	var reason string
-	for _, e := range d.eventsOf(t, wi) {
-		if e.Kind == "needs_recovery" {
-			var b struct {
-				Reason string `json:"reason"`
-			}
-			_ = json.Unmarshal(e.Body, &b)
-			reason = b.Reason
-		}
+	if n := countOf(kinds, "blocked"); n != 1 {
+		t.Fatalf("blocked events %d, want 1: %v", n, kinds)
 	}
-	if reason != protocol.RecoverDeath {
-		t.Fatalf("recovery reason %q, want %q (the driver returned an error)", reason, protocol.RecoverDeath)
+	if n := countOf(kinds, "needs_recovery") + countOf(kinds, "wi_agent_rederived"); n != 0 {
+		t.Fatalf("recovery fired %d times, want 0 (the failure counter bounded the loop; the blocked exit is no death): %v", n, kinds)
 	}
 }
 
@@ -522,7 +525,7 @@ func TestV2TwoRulesAtOnceOneVerdictOneFailure(t *testing.T) {
 // ENDS NORMALLY and then idles with no result file is dead one grace
 // later (ended_without_result), judged as a same-model retry — NOT a
 // candidate switch — and the same-session retry carries the
-// ended-without-result feedback (workbench#7: the short reminder).
+// ended-without-result feedback (the short reminder).
 func TestV2OkEndedTurnWithoutResultRetriesSameModel(t *testing.T) {
 	inst := newV1Install(t)
 	wi := inst.newWI(t, "rule 1b: ok-ended turn without result",

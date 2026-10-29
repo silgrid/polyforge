@@ -1,7 +1,7 @@
 package test
 
 // w25_verify_scope_ieops_contrast_test.go: the real-history byte-identical
-// contrast for workbench#25. The frozen seed script and the release-shipped
+// contrast for. The frozen seed script and the release-shipped
 // engine (driven by this repository's `.polyforge/verify-scope.conf`) must
 // print the same report for the same range, including the last ten real
 // first-parent merge ranges of this repository.

@@ -179,7 +179,6 @@ func TestD6RewindZeroesTheStepBudget(t *testing.T) {
 	if err := d.transition(TransitionRequest{
 		Kind: TransStepResult, StepID: "g", SpawnN: 2,
 		Result: &StepResult{StepID: "g", SpawnN: 2, Outcome: OutcomeGateFailed},
-		Gate:   &GateVerdict{GateStepID: "g", TargetStep: "a", VerdictText: "FAIL: redo it"},
 	}); err != nil {
 		t.Fatalf("gate fail: %v", err)
 	}
@@ -215,7 +214,6 @@ func TestD6GateFailRewindZeroesTheGateBudget(t *testing.T) {
 	if err := d.transition(TransitionRequest{
 		Kind: TransStepResult, StepID: "g", SpawnN: 2, WallMs: 7000,
 		Result: &StepResult{StepID: "g", SpawnN: 2, Outcome: OutcomeGateFailed},
-		Gate:   &GateVerdict{GateStepID: "g", TargetStep: "a", VerdictText: "FAIL: redo it"},
 	}); err != nil {
 		t.Fatalf("gate fail: %v", err)
 	}
@@ -456,5 +454,118 @@ func TestD6PausedDispatchNeverBookedByALaterRelaunch(t *testing.T) {
 	}
 	if got := readExec(t, execPath).Steps["s"].BudgetConsumed.WallMs; got != 0 {
 		t.Fatalf("a relaunch after a pause booked %dms of the paused dispatch", got)
+	}
+}
+
+// TestD6CumulativeTimeoutRotatesOnlyForTheDyingDispatch reproduces the two
+// production shapes of D1 end to end through the decision: the
+// supervisor's own rule 4 judges the dispatch's snapshot, and the driver
+// disposes of that verdict. The shape (a 12m38s tail of a step
+// that spent 1h17m22s before it) must NOT switch the model — it is the
+// step's length, so the same candidate resumes its conversation under the
+// doubled T; the shape (the whole T in one dispatch, mostly
+// waiting on the model) MUST switch, fresh.
+func TestD6CumulativeTimeoutRotatesOnlyForTheDyingDispatch(t *testing.T) {
+	const T = 90 * time.Minute
+	cases := []struct {
+		name                     string
+		prior, age, tools, model time.Duration
+		wantCause                string
+		wantModels               []string
+		wantResume               bool
+		wantLongTask             int
+	}{
+		{" code attempt 4", 77*time.Minute + 22*time.Second, 12*time.Minute + 38*time.Second,
+			30 * time.Second, 12*time.Minute + 2*time.Second,
+			FailStepTimeoutLongTask, []string{"a", "a"}, true, 1},
+		{" code attempt 1", 0, 90 * time.Minute, 31 * time.Minute, 59*time.Minute + time.Second,
+			FailStepTimeoutSlowModel, []string{"a", "b"}, false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Unix(10_000_000, 0)
+			verdict := supervise.Judge(supervise.Snapshot{
+				Step: "s", SpawnN: 1, Begun: true, StartedAt: now.Add(-tc.age),
+				Thresholds: supervise.Thresholds{StepTimeout: T, PriorRuntime: tc.prior},
+				ModelTime:  tc.model, ToolTime: tc.tools,
+			}, now, 0)
+			if verdict == nil {
+				t.Fatal("setup: rule 4 did not fire on an expired T")
+			}
+			env := newChainEnv(t, func(c *Config) {
+				c.Limits = supervise.Defaults{StepTimeout: T}
+			}, "s", "a", "b")
+			env.sp.script = []fakeEntry{{hold: true}, done(`{"ok":true}`)}
+			go func() {
+				waitForSpawns(env, 1)
+				env.link.Verdict(*verdict)
+			}()
+			if err := env.d.Run(context.Background()); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if m := env.models(); strings.Join(m, ",") != strings.Join(tc.wantModels, ",") {
+				t.Fatalf("dispatched models %v, want %v (%s)", m, tc.wantModels, verdict.Evidence)
+			}
+			st := env.exec(t).Steps["s"]
+			var cause string
+			for _, a := range st.Attempts {
+				if a.Cause == CauseInfraFailure {
+					cause = a.FailureCause
+				}
+			}
+			if cause != tc.wantCause {
+				t.Fatalf("archived failure_cause %q, want %q", cause, tc.wantCause)
+			}
+			if sp := env.sp.spawnAt(1); sp.Resume != tc.wantResume || sp.Fresh == tc.wantResume {
+				t.Fatalf("retry shape resume=%v fresh=%v, want resume=%v", sp.Resume, sp.Fresh, tc.wantResume)
+			}
+			sup := st.Supervision
+			if sup == nil || sup.RelaxedWallMs != (2*T).Milliseconds() || sup.LongTaskTimeouts != tc.wantLongTask {
+				t.Fatalf("supervision %+v, want T relaxed to %v and %d long-task timeouts", sup, 2*T, tc.wantLongTask)
+			}
+		})
+	}
+}
+
+// TestD6SlowModelRotatesAtMostOncePerTimeoutLedger ( S3):
+// "a T era switches the candidate on a timeout at most once" is enforced
+// by the driver, not left to timing (whether the successor's tick
+// overshoot beats its predecessor's teardown and so hands it half of the
+// doubled T). A second slow-model timeout before the step's timeout ledger
+// resets is archived as step_timeout_long_task: the SAME candidate retries
+// under the doubled T, and the long-task counter starts.
+func TestD6SlowModelRotatesAtMostOncePerTimeoutLedger(t *testing.T) {
+	env := newChainEnv(t, func(c *Config) {
+		c.Limits = supervise.Defaults{StepTimeout: 6 * time.Second}
+	}, "s", "a", "b", "c")
+	env.sp.script = []fakeEntry{{hold: true}, {hold: true}, done(`{"ok":true}`)}
+	go func() {
+		for n := int64(1); n <= 2; n++ {
+			waitForSpawns(env, int(n))
+			env.link.Verdict(supervise.StepDead{Step: "s", SpawnN: n, Cause: supervise.CauseStepTimeoutSlowModel, Evidence: "T exhausted"})
+		}
+	}()
+	if err := env.d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if m := env.models(); len(m) != 3 || m[0] == m[1] || m[1] != m[2] {
+		t.Fatalf("the first slow-model timeout switches, the second retries the same candidate: %v", m)
+	}
+	st := env.exec(t).Steps["s"]
+	var causes []string
+	for _, a := range st.Attempts {
+		if a.Cause == CauseInfraFailure {
+			causes = append(causes, a.FailureCause)
+		}
+	}
+	if len(causes) != 2 || causes[0] != FailStepTimeoutSlowModel || causes[1] != FailStepTimeoutLongTask {
+		t.Fatalf("the second slow-model timeout is archived as long_task: %v", causes)
+	}
+	if !strings.Contains(st.Attempts[len(st.Attempts)-2].Detail, "already rotated") {
+		t.Fatalf("the archived detail must say why it was not a second rotation: %q", st.Attempts[len(st.Attempts)-2].Detail)
+	}
+	// the rule reads the persisted counters: pin the shape it depends on
+	if sup := st.Supervision; sup == nil || sup.SlowModelTimeouts != 1 || sup.LongTaskTimeouts != 1 {
+		t.Fatalf("persisted supervision after one rotation and one re-classified timeout: want slow_model_timeouts=1 long_task_timeouts=1, got %+v", sup)
 	}
 }

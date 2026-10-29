@@ -49,8 +49,11 @@ requester, so whatever `fix` needs to know must end up in your memo.
    requester to make it falsifiable. If no oracle can be named once the answers
    are in, `reject` the acceptance — do not write it into the memo's
    expected-behavior section and do not improvise an outcome; re-file the WI on
-   a lane that can carry the open acceptance (step 7). The four deepening
-   points are defined once in the filing skill (`verbs/execute-intent.md`).
+   a lane that can carry the open acceptance (step 7). The external oracle is one
+   of four deepening points; the other three are the expert gap (what a top
+   practitioner would do that the requester did not ask for), the raw material
+   (logs, commit ids, command output, source files - never a paraphrase) and the
+   methods and tools verification will use.
 3. **Tier proposal (mandatory every round).** Every round — including the
    zero-question pass — records a `Tier proposal` line in
    `artifacts/grill-qa.md`, and its mechanically required answer is
@@ -59,26 +62,10 @@ requester, so whatever `fix` needs to know must end up in your memo.
    cannot lower the tier. State the line with a one-line reason; no question is
    needed unless the requester disputes it.
 4. BATCH your questions (owner ruling 2026-10-02): collect all material ambiguities
-   first, then ask them in ONE needs_input envelope whose `question` carries a markdown
-   table with exactly four columns, header
-   `| 问题 | 推荐选项 | 理由 | 重点关注程度 |` (owner ruling 2026-10-21). One row per
-   focused question, answerable in one line; the row number opens the 问题 cell
-   (`1. …`, `2. …`) - no fifth column; every row fills 推荐选项 (your recommended
-   answer), 理由 (why) and 重点关注程度. `重点关注程度` is the LAST column and every
-   row carries one value (`每行必标`) on the `★~★★★★★` scale: ★ = 例行确认,
-   ★★★★★ = 方向性裁定 / 大影响 / 与既有裁定冲突, ★★–★★★★ scale with impact. Stars
-   are for owner attention only and are never mechanically consumed. Escape a
-   literal `|` inside a cell as `\|`. Context or evidence goes in prose above the
-   table. After the table ALWAYS (even for a one-row batch; each may be one line)
-   add `预期效果` (what happens once the batch is answered, e.g. "all recommended →
-   spec; row 3 is the only directional choice") and then `注意事项` (inter-row
-   dependencies or conflicts, relation to prior rulings, which rows are rubber
-   stamps answerable in bulk). The owner answers row by row, keyed by row number.
-   To ask: mint a `question_id`, return a result envelope with `outcome: "needs_input"`, that
-   `question_id` and the `question` text, and end your turn. The answer arrives in the NEXT
-   dispatch of this step under "# Answered questions" - continue from it; never fabricate
-   or guess an answer you did not receive. Only a follow-up
-   whose content genuinely depends on an earlier answer waits for a later dispatch. Append every question and answer to
+   first, then ask them in ONE needs_input envelope whose `question` carries
+   {{batch_questions}} The owner answers row by row, keyed by row number. Only a
+   follow-up whose content genuinely depends on an earlier answer waits for a later
+   dispatch. Append every question and answer to
    `artifacts/grill-qa.md` under a `## grill` heading as they come in.
 5. Do not over-interrogate. This lane exists for small, well-understood changes: if after
    reading the goal you cannot find a materially ambiguous point, record that and move
@@ -124,14 +111,4 @@ Emit the final JSON object per the schema above: the Q&A log path, the memo path
 confirmed scope items (at least one - the schema rejects an empty list, because a fix
 with no confirmed scope is not a fix), and the non-goals.
 
-## Handoff duty
-
-This step declares `handoff: true`. Before writing your result envelope:
-1. Write a handoff file at `artifacts/handoff-<step-id>.md` summarizing what
-   the next inherit step needs to know (decisions made, constraints
-   discovered, what was produced, where to find details).
-2. That path IS the contract: the next inherit step reads the file by the
-   path convention `artifacts/handoff-<step-id>.md`. There is no digest, no
-   byte count and no envelope field to fill in — the result envelope is the
-   minimal contract (outcome + output; needs_input adds question_id and
-   question), so write the file and leave the envelope lean.
+{{handoff_duty}}

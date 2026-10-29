@@ -1,0 +1,11 @@
+--- FAIL: TestEq (0.00s)
+    a_test.go:10: setting up
+    a_test.go:11: 
+        	Error Trace:	/work/repo/a_test.go:11
+        	Error:      	Not equal: 
+        	            	expected: 3
+        	            	actual  : 4
+        	Test:       	TestEq
+FAIL
+FAIL	example.invalid/tf	0.004s
+FAIL

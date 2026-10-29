@@ -79,11 +79,18 @@ LOCAL tags: the target tag, and for a downgrade the running one,
 ```
 
 (`V` and `C` substituted). Never add `--force`; never run `--dry-run` as a stand-in for
-the real run; if the procedure refuses, that refusal is the result. The run can be long:
-keep it alive across your tool's per-command timeout (background it with its output in
-`artifacts/deploy.log` and its exit code in a file, then poll) and record the invocation
-as command evidence with its real duration. Do not interrupt it once it has started: the
-procedure holds a lock and owns its own rollback.
+the real run; if the procedure refuses, that refusal is the result. The run can be long.
+Waiting is never a tool call of its own: run the procedure in the foreground with an
+explicit timeout at least as long as you expect it to take (the harness allows up to the
+daemon's tool bound), its output also written to `artifacts/deploy.log`. Only a procedure
+known to exceed that bound may be backgrounded (its output in `artifacts/deploy.log`, its
+exit code in a file), and it is then awaited inside one call: a loop that checks a real
+condition, sleeps at most 3 s per iteration and has a deadline. The condition is the
+exit-code file existing; a deadline that passes first is answered by the same loop in the
+next call. A bare `sleep N` call, or a loop whose only exit is the deadline, is a
+violation and is recorded. Record the invocation as command evidence with its real
+duration. Do not interrupt it once it has started: the procedure holds a lock and owns its
+own rollback.
 
 ## 4. Judge the result
 

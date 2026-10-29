@@ -72,7 +72,7 @@ type Config struct {
 	DriverStall time.Duration
 	// LiveLimits, when set, answers the CURRENT supervision defaults at
 	// every tick so a live step_timeout / stall_window reload takes effect
-	// without a restart (workbench#3). A zero StepTimeout/DriverStall
+	// without a restart. A zero StepTimeout/DriverStall
 	// means unset and resolves to the documented default; a negative
 	// DriverStall still disables the stall check. nil keeps DriverStall
 	// and the dispatch-time T.

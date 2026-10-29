@@ -1,7 +1,7 @@
 package test
 
-// w40_task_acceptance_test.go: workbench#40's end-to-end acceptance for the
-// one-shot task agent, carried into workbench#53 (the re-established #40,
+// w40_task_acceptance_test.go:'s end-to-end acceptance for the
+// one-shot task agent, carried into (the re-established #40,
 // owner ruling 2026-10-26: the OS sandbox is deleted, the feature body and
 // the PF_TASK_ID write-verb guard stay). Authored against #40's spec
 // ("## Acceptance criteria" + "#### Scenario" blocks) BEFORE `code` ran.
@@ -41,7 +41,7 @@ package test
 // face here; the write-verb guard has its own frozen reproduction
 // (test/w53_task_write_verb_guard_repro_test.go). #40's read-only-boundary
 // scenarios went with the sandbox: a task agent's filesystem/network trust
-// now equals a session agent's (workbench#10 owns platform-level isolation).
+// now equals a session agent's ( owns platform-level isolation).
 
 import (
 	"os"
@@ -246,7 +246,7 @@ func TestW40TaskSpawnReturnsIDAndIsListed(t *testing.T) {
 // model, no missing-key refusal). The spawn must succeed (exit 0), return a
 // `task_<16hex>` id, and the task's route document must name the default
 // candidate `pi:w40-ok/m` — i.e. the default list was actually USED, not
-// merely not named as missing (review B7: the old assertions threw away the
+// merely not named as missing (code review: the old assertions threw away the
 // exit code and passed for any non-key refusal).
 func TestW40TaskZeroConfigDefaultFallback(t *testing.T) {
 	r := w40Start(t, w40TaskYaml("default: { models: [pi:w40-ok/m] }"))

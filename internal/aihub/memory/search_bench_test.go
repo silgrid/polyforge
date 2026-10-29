@@ -123,7 +123,7 @@ func BenchmarkFTSPage(b *testing.B) {
 		})
 		b.Run(q.name+"/weighted", func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				if c, err := s.ftsPage(q.match, "", now, 100, 0); err != nil || len(c) != 100 {
+				if c, err := s.ftsPage(q.match, nil, now, 100, 0); err != nil || len(c) != 100 {
 					b.Fatalf("weighted page: %d rows, %v", len(c), err)
 				}
 			}

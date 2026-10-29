@@ -533,3 +533,27 @@ func TestPushTaskWIPStopsPromptlyOnCancel(t *testing.T) {
 		}
 	}
 }
+
+// B4: the task repo's config is read without includes — an include.path
+// naming another file that sets core.excludesFile is not followed, while
+// a key set in the repo config itself still wins. A pin, not a repro:
+// `git config --file` already defaults to --no-includes, so this holds
+// on the code the audit read too.
+func TestEffectiveInfoFileIgnoresRepoIncludes(t *testing.T) {
+	o, repo, _ := wipEnv(t, "wi_wip_inc")
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	gc := filepath.Join(t.TempDir(), "gitconfig")
+	writeT(t, gc, "")
+	t.Setenv("GIT_CONFIG_GLOBAL", gc)
+	included := filepath.Join(t.TempDir(), "included.cfg")
+	writeT(t, included, "[core]\n\texcludesFile = /from/the/included/file\n")
+	mustRun(t, "git", "-C", repo, "config", "include.path", included)
+	if got := effectiveInfoFile(o, repo, t.TempDir(), "core.excludesFile", "ignore"); got != filepath.Join(xdg, "git", "ignore") {
+		t.Fatalf("effective excludes file = %q, want the XDG default (the include must not be followed)", got)
+	}
+	mustRun(t, "git", "-C", repo, "config", "core.excludesFile", "/set/directly")
+	if got := effectiveInfoFile(o, repo, t.TempDir(), "core.excludesFile", "ignore"); got != "/set/directly" {
+		t.Fatalf("effective excludes file = %q, want the repo config's own value", got)
+	}
+}

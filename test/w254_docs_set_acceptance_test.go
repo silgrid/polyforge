@@ -420,17 +420,28 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // TestW254UpgradeByteIdentical: docs/upgrade.md — per-version upgrade
 // records, append-only history — stays byte-identical (the sha256 of the
 // file is pinned here: main's bytes plus the appended,
-// workbench#11, workbench#56 and workbench#57 entries, plus the absorbed
+//, and entries, plus the absorbed
 // public PR #15/#16 rewrites — polyforge#262 identifier anonymization and
 // history-proof api-key example, polyforge#263 neutral candidate names, plus
-// workbench#85's expected_deltas contract — and nothing else) and is only
+//'s expected_deltas contract — plus the appended
+// v2.20.10 section (the signed-heartbeat version gate, its ratchet and the
+// owner-accepted leaked-key limit), plus the appended entries
+// (the recall duty rides the steps declaring `recall: true`; the parked
+// close and resume answers, the 24 h close-retry window, the blocked
+// reason in the hub note and the 10 s remote-watch snapshot cache), plus
+// the appended entry (claude steps' Bash timeouts follow
+// the tool window) and the appended entry (the first
+// model_error resumes, the paced retries and the status face's RETRY
+// column) and the appended/#115 entry (the conf-first
+// engine and `pf verify-run`), and nothing else) and is only
 // routed to, from the install ops page and the README landing page. The
-// pin moves in the same commit as each append (the append-only rule, spec
-// workbench#57 R14: docs change with the code, and the pin with the docs).
+// pin moves in the same commit as each append (the append-only rule,
+// spec R14: docs change with the code, and the pin with the
+// docs).
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "9f47bd4dfc30e983e3c5e448ceeaa97e0868d30a79d7108b57c47d9798e85005" {
+	if got := hex.EncodeToString(sum[:]); got != "c65b0452bfee7f7a3dd7897c501920e7ab99c308779ed0f639c780179b830ce8" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	install := w254Norm(w254Page(t, "docs/install.md"))

@@ -510,9 +510,13 @@ func TestAskpassScriptShapeAndCleanup(t *testing.T) {
 	if script == "" || prompt == "" {
 		t.Fatalf("env additions wrong: %v", additions)
 	}
-	// the helper lives OUTSIDE the capsule, in a 0700 dir
+	// the helper lives OUTSIDE the capsule, in a 0700 dir under the git
+	// root the startup sweep covers
 	if strings.HasPrefix(script, o.CapsuleDir) {
 		t.Fatal("the askpass helper must not live inside the capsule")
+	}
+	if filepath.Dir(script) != filepath.Join(filepath.Dir(o.GitDir), "askpass") {
+		t.Fatalf("askpass helper %s is not under the git root's askpass/", script)
 	}
 	st, err := os.Stat(filepath.Dir(script))
 	if err != nil || st.Mode().Perm() != 0o700 {
@@ -554,29 +558,23 @@ func TestCredentialEnvSkipsNonHTTPRemotes(t *testing.T) {
 	}
 }
 
-// TestAskpassFallbackBaseIsCleanedUp: the MkdirTemp fallback (no usable
-// GitDir parent) must clean up the whole temp base directory with the
-// call, not leak one fresh base per invocation.
-func TestAskpassFallbackBaseIsCleanedUp(t *testing.T) {
+// TestCredentialEnvRefusesEmptyGitDir (C6): without an external git-dir
+// there is no askpass home the startup sweep covers, so the delivery is
+// refused and nothing — no temp base, no script — is written anywhere.
+func TestCredentialEnvRefusesEmptyGitDir(t *testing.T) {
 	o, _ := testOpts(t, "wi_fallback")
-	o.GitDir = "" // forces the MkdirTemp("", "pf-askpass-") fallback
+	o.GitDir = ""
 	o.RemoteURL = "http://127.0.0.1:1/wi_fallback.git"
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
 
 	additions, cleanup, err := credentialEnv(o)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(additions) != 2 {
-		t.Fatalf("expected GIT_ASKPASS + GIT_TERMINAL_PROMPT additions: %v", additions)
-	}
-	script := strings.TrimPrefix(additions[0], "GIT_ASKPASS=")
-	base := filepath.Dir(filepath.Dir(script)) // <temp>/pf-askpass-xxx/askpass/<script>
-	if _, serr := os.Stat(base); serr != nil {
-		t.Fatalf("fallback base must exist before cleanup: %v", serr)
-	}
 	cleanup()
-	if _, serr := os.Stat(base); !os.IsNotExist(serr) {
-		t.Fatalf("cleanup must remove the fallback base dir %s", base)
+	if err == nil || len(additions) != 0 {
+		t.Fatalf("an empty GitDir must refuse the delivery: additions %v err %v", additions, err)
+	}
+	if ents, _ := os.ReadDir(tmp); len(ents) != 0 {
+		t.Fatalf("a refused delivery wrote %d entr(ies) under the temp dir", len(ents))
 	}
 }
 
@@ -1044,5 +1042,55 @@ func TestCommitPushSkipsInFlightTempFiles(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(filepath.Join(o.CapsuleDir, ".gitignore")); strings.Contains(string(raw), ".tmp") {
 		t.Fatal("the tracked .gitignore must not change")
+	}
+}
+
+// lockEntries answers the per-WI lock map's size.
+func lockEntries() int {
+	mu.Lock()
+	defer mu.Unlock()
+	return len(locks)
+}
+
+// TestLockMapReleasesEntries pins A2: a released per-WI lock leaves no map
+// entry behind, and concurrent holders of one id share one mutex whose
+// entry survives until the last of them releases.
+func TestLockMapReleasesEntries(t *testing.T) {
+	base := lockEntries()
+	for i := 0; i < 50; i++ {
+		Lock(fmt.Sprintf("wi_lockmap_%d", i))()
+	}
+	if n := lockEntries(); n != base {
+		t.Fatalf("lock map holds %d entries after 50 released locks, want %d", n, base)
+	}
+	release := Lock("wi_lockmap_shared")
+	acquired := make(chan func())
+	go func() { acquired <- Lock("wi_lockmap_shared") }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		refs := locks["wi_lockmap_shared"].refs
+		mu.Unlock()
+		if refs == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the waiter never registered on the shared entry (refs %d)", refs)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-acquired:
+		t.Fatal("the second holder got the lock while the first still holds it")
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	second := <-acquired
+	if n := lockEntries(); n != base+1 {
+		t.Fatalf("the shared entry vanished while a holder remains: %d entries, want %d", n, base+1)
+	}
+	second()
+	if n := lockEntries(); n != base {
+		t.Fatalf("lock map holds %d entries after the last release, want %d", n, base)
 	}
 }

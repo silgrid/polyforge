@@ -1,6 +1,6 @@
 package daemon
 
-// tasks.go: the one-shot task agent's daemon face (workbench#53, carried
+// tasks.go: the one-shot task agent's daemon face (carried
 // from #40).
 //
 //	POST /task/spawn          {project, prompt, max_duration?, max_tokens?, origin_chat?}
@@ -9,6 +9,15 @@ package daemon
 //	POST /task/cancel/{id}
 //	GET  /task/memories/search   (task peers only; scoped to the task's project)
 //	GET  /task/memories/{id}     (task peers only; scoped to the task's project)
+//
+// Reach: a task agent cannot reach the
+// read-only web console or the browse mode. The daemon proxies no /web/
+// route at all (routes.go registers none), a task process holds no
+// aihub key so it cannot authenticate there either, and the memory search both faces
+// share (forwardMemorySearch) forwards only q/type/tags/limit/match plus
+// the task's project — a cursor or a sort value a caller may send is
+// dropped on the floor and the empty-q browse shape is refused before
+// anything is forwarded.
 //
 // Reachability (AGENTS.md: every new entry point states it;
 // docs/reference/uds-routes.md carries the table):

@@ -1,6 +1,6 @@
 ---
 name: review
-description: Human-judgment gate over the completed change - the lane's own conformance judgment (from the workflow.md step entry's vars) plus the fixed owner-rules checklist - after the machine gate, before delivery. Shared by every delivery bundle with a review.
+description: Human-judgment gate over the completed change - the lane's own conformance judgment (from the workflow.md step entry's vars) plus the fixed owner-rules checklist - after the build step, before the machine gate and delivery. Shared by every delivery bundle with a review.
 output:
   type: object
   required: [verdict]
@@ -17,16 +17,32 @@ output:
         properties:
           severity: { type: string, enum: [blocking, non-blocking] }
           detail: { type: string }
+          residual_of:
+            x-prompt-when: reentry
+            type: string
+            description: "Optional per-finding reference. From the 2nd review round on, set it on a blocking finding that is a RESIDUAL of the previous verdict round's findings list - the prior round's `s<n>#k` position (e.g. `s4#2`), the same reference the checklist face records. Absent (or empty) = a new discovery. The driver reads the marker for rewind-quota classification only: a FAIL verdict whose blocking findings all carry it, and are strictly fewer than the last verdict round's, is a converging round and charges no gate→target edge slot (it still counts toward max_total). Never mark a new discovery with it - a round that mixes residuals with any unmarked blocking finding is charged like any fresh one."
           text_only:
             type: boolean
-            description: Optional per-finding classification (polyforge#222). True only when this finding's fix touches nothing but comments and documentation, in any file, test files included - the driver then rewinds {{build_step}} light (a resume of its previous session, this verdict as its rewind input) instead of fresh. Absent or false means the fix is structural (see the text-only boundary in the body) and the rewind is fresh. A fix that would change polyforge's own runtime behavior - a user-facing string literal, a workflows/** .md file, skills/** prompt material - is structural whatever the file type; never mark it text_only.
+            description: Optional per-finding classification (polyforge#222) - true only when this finding's fix is text-only by the boundary the body defines once; the driver then rewinds {{build_step}} light instead of fresh. Absent or false means structural (a fresh rewind).
       description: Individual review findings, whether or not they are severe enough to fail the gate. A pass verdict with a blocking finding is self-contradictory - the schema's oneOf forbids it. The text_only marker rides blocking findings only into the light-rewind eligibility - non-blocking findings never enter that rule.
     fail_reason:
       type: string
       description: Required when verdict is fail - a synthesis of the blocking findings, to be carried back to the step this gate rewinds to as its pending_rewind_input. The oneOf split below makes the requirement mechanical - a fail verdict without a non-empty fail_reason does not validate.
     scope_adequate:
+      x-prompt-when: scoped
       type: boolean
-      description: "Required whenever verification ran scoped (its result carried a `scope` object): whether the declared scope actually covered the change. `false` does not fail this review - it only blocks the automatic merge, routing the delivery to the human question. Omit it entirely when verification ran full."
+      description: "Required whenever the work item opted into the scoped tier (its content carries the marker line `verification: scoped` and the lane is scoped-capable): whether the scope you declared in `scope` actually covers the diff you judged. `false` does not fail this review - it only blocks the automatic merge, routing the delivery to the human question. Omit it entirely when the work item runs the full tier."
+    scope:
+      x-prompt-when: scoped
+      type: object
+      description: "The scope you judged the diff against, on a work item that opted into the scoped tier: `mode: scoped` plus the `declared_paths` (opaque strings) that cover the change you reviewed. The next step, `verification`, MUST verify with exactly this scope - the two declarations form one merging credential only when their path sets are equal, and any disagreement routes the delivery to the human. Record it together with `scope_adequate`; omit both on the full tier."
+      required: [mode, declared_paths]
+      properties:
+        mode: { type: string, enum: [scoped] }
+        declared_paths:
+          type: array
+          minItems: 1
+          items: { type: string, minLength: 1 }
   oneOf:
     - description: A pass verdict - zero blocking findings; any recorded findings must be non-blocking.
       properties:
@@ -60,17 +76,19 @@ output:
 
 Then, on every lane:
 
-- Run the owner-rules checklist below — any hit is a blocking finding.
-- **Answer `scope_adequate` when verification ran scoped.** When `steps.verification`
-  completed with a `scope` object, record a boolean `scope_adequate`: whether that
-  declared scope actually covered the change. `false` does **not** fail this review and
-  does not rewind to `{{build_step}}` — it only blocks the automatic merge, so the
-  delivery asks the human. The driver rejects a completed review over a scoped
-  verification that omits the field; a full verification requires nothing and an absent
-  field there is never a finding.
+- Run the owner-rules checklist below — a violation of any AGENTS.md rule
+  blocks at any position, in any round; any other checklist hit blocks on the
+  first round (on a re-entry the round contract narrows that set).
 - Record every finding in `findings`, tagged `blocking` or `non-blocking`.
-  Non-blocking findings (style nits, minor improvement suggestions) do not fail the
-  gate but are still useful history, even when the overall verdict is pass.
+  Non-blocking findings (style nits, minor improvement suggestions,
+  follow-ups outside the round's blocking set) do not fail the gate but are
+  still useful history — `deliver` summarizes every `non-blocking` item into
+  the delivery note and the PR body, and no step ever files them
+  automatically: the owner decides what becomes a ticket. A step's missing
+  `## Prior experience` section (the shared recall duty asks it only of the steps
+  whose entry declares `recall: true`) is never a blocking finding on its own -
+  record it `non-blocking` if noted at all; it is a form gap, not a defect in the
+  change.
 - `verdict: pass` only if there are zero blocking findings — the schema enforces
   this: under a pass verdict every recorded finding must be `non-blocking`.
 - `verdict: fail` if there is at least one blocking finding (the schema's fail
@@ -92,61 +110,20 @@ Then, on every lane:
   findings (at least one) are all marked `text_only` rewinds `{{build_step}}` light (a
   resume of its previous session carrying this verdict), any unmarked blocking finding
   keeps the rewind fresh, and non-blocking findings never enter the rule.
-- **Judge a light round for mis-marking.** Read `execution.json`'s attempts ledger
-  (`runtime-state/execution.json`). When `steps.{{build_step}}.attempts`'s latest
-  rewind-archive attempt — namely
-  the latest attempt whose cause is neither `accepted` nor `infra_failure` —
-  carries `cause: gate_fail_rewind_text_only`, this re-run follows a light rewind:
-  judge the light round's changes against the text-only boundary above, on top of
-  your normal full-change judgment (which is unchanged and stays the
-  adjacent-issue catcher). Anchor the light round to that record, not to
-  `steps.{{build_step}}.output.commits` (a resumed session may list its earlier
-  commits again): the `gate_fail_rewind_text_only` attempt's
-  archived `result` holds the pre-light output and its `commits`, and the light
-  round is what changed after the last sha that list names, per task repo
-  (`git diff <that sha>..HEAD`). Any structural change in the light round is a
-  BLOCKING mis-marking finding: record it WITHOUT `text_only` (it is structural),
-  so the resulting FAIL rewinds fresh with its own rewind slot. A light round
-  that stayed text-only records no mis-marking finding — a pass is possible if
-  nothing else is wrong.
 
-**Do not run tests or builds.** This step reads and judges; it never runs the build, the
-test suite (`go test ./...`, `make test`, the full `./test`, `npm test`) or an e2e suite.
-The full bar ran exactly once, in `verification` (before this step; `deliver`, after you,
-re-runs that same bar only after merging a moved default branch changed the tree): its
-report (`artifacts/verification-report.md`) is this step's test evidence. Reading a test
-file's source is part of the review; running it is not.
+**Do not run tests or builds.** This step reads and judges; it never runs the build,
+the test suite (`go test ./...`, `make test`, the full `./test`, `npm test`) or an
+e2e suite. The machine gate is `verification`, the step AFTER you: it runs the full
+bar on the tree you judged merged with the latest origin default branch, and
+`deliver` re-runs that same bar only when its own merge moves HEAD past the verified
+head. You have no verification report to read — this
+lane's order is `{{build_step}}` → review → verification → deliver, so judge the diff
+itself: reading a test file's source is part of the review; running it is not.
 
-## Re-entry
-
-This section changes nothing about the context policy: `review` always runs **fresh** —
-the conversation of a prior review round is never inherited. On a re-entry the only
-thing inherited is the prior round's **structured findings list**, read from the
-archive (`artifacts/steps/review/`), never from the conversation; a fresh context is
-the point, so the new reviewer does not inherit the old reviewer's blind spots.
-
-Detect a re-entry by listing `artifacts/steps/review/`: every `s<n>/result.json` whose
-`n` is earlier than this dispatch's derivation ordinal is a prior round. When there is
-no such archive this is the **first round**, and nothing below applies — the review is
-exactly the full judgment it has always been.
-
-On a re-entry, run two additive faces over the current tree:
-
-- **checklist face** — take the latest prior round's findings (the `findings` array of
-  its archived `result.json`) and verify each finding's disposition on the current tree
-  — fixed, or waived with an owner ruling on record. A prior **blocking** finding that
-  is still present is a **residual**: report it as a `blocking` finding and reference
-  the original by its position in that round's findings list (e.g. "prior round s<n>
-  finding #k") **without re-deriving** it as a new finding — it is the same finding,
-  still open, not a fresh one. A prior **non-blocking** finding that is still present
-  is recorded `non-blocking` and never fails the gate.
-- **fresh face** — the full judgment above still runs over the whole change, now
-  including the fixes' new surface (the commits since the prior round and their
-  semantic propagation), from the fresh context. Genuinely new defects are new findings
-  and are reported as such.
-
-The light-round mis-marking duty above still runs; the two faces are additive, not
-alternatives.
+This review always runs **fresh**. When a prior verdict-bearing review round is on record
+the driver adds a `# Review re-entry` section (the round contract, the two faces, the
+light-round mis-marking duty); without it this is the first round — the full judgment,
+every checklist hit blocking.
 
 ## Principles
 
@@ -154,11 +131,13 @@ Every principle is a check (a violation is blocking); the checklist spells them 
 
 {{principles}}
 
-## Owner-rules checklist (any hit is a blocking finding)
+## Owner-rules checklist (first round: any hit blocks; later rounds: the round contract)
 
 On top of the lane judgment above, check the diff against the owner's
-fixed rules. ANY hit is a blocking finding - there is no pass verdict with one of
-these present:
+fixed rules. On the first round ANY hit is a blocking finding; on a re-entry
+the round contract decides — a violation of any AGENTS.md rule blocks at any
+position, and every other hit outside the contract's blocking set is recorded
+`non-blocking` (a follow-up):
 
 - **No faked concurrency semantics.** No timing-based fakes (`time.Sleep` as a
   synchronization stand-in, backoff tuned to "usually long enough") and no
@@ -182,16 +161,21 @@ these present:
 - **Stale docs.** Docs not updated with the code they describe.
 - **Leaked credentials** in an agent's env, a command line, a log or an artifact.
 - **Guess as fact.** An unverified claim stated as fact.
-- **Prior experience ignored.** The change repeats a pitfall or a failed approach that a recalled memory records, without saying why this time differs; or the step skipped its `## Prior experience` section.
+- **Prior experience ignored.** The change repeats a pitfall or a failed approach that a recalled memory records, without saying why this time differs.
 
 ## Position in the flow
 
-In every delivery bundle that has a review this step sits between `verification`
-and `deliver`: the mechanical gate runs first, so a mechanical failure never costs a
-review, and the judgment reads its results.
+In every delivery bundle that has a review this step sits between the build step
+(`{{build_step}}`) and `verification`: the judgment runs first, so a quality
+failure never costs a full machine bar, and the machine gate behind you verifies
+the tree you already judged merged with the latest origin default branch. A review
+pass records the tree it covered (the driver writes the `reviewed_heads`); any code
+change after it invalidates the pass, and the delivery needs both coverages — the
+review of the final diff and the verification of the final tree.
 
 ## Output
 
 Write `artifacts/review.md` (this step's declared output): the verdict, every
-finding with its severity, and the `fail_reason` on a fail. Then emit the final JSON
-object per the schema above.
+finding with its severity (and, from round 2 on, its `residual_of` reference on
+a residual), and the `fail_reason` on a fail. Then emit the final JSON object
+per the schema above.

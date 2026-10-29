@@ -806,7 +806,7 @@ func (d *Daemon) watchSnapshotRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A step process may read its own local snapshot, but must never be
-	// the caller that routes a remote query (workbench#11): refused
+	// the caller that routes a remote query: refused
 	// BEFORE the request leaves this daemon.
 	if d.wouldRemote(item, snap) {
 		if reason := d.stepOriginRefusal(r); reason != "" {
@@ -1008,7 +1008,11 @@ func watchProgress(lp observe.LiveProgress) *protocol.WatchProgress {
 		n := int64(lp.ToolCalls)
 		p.ToolCalls = &n
 	}
-	if p.Command == "" && len(p.RecentFiles) == 0 && p.ToolCalls == nil {
+	if lp.WaitCalls > 0 {
+		n, secs := int64(lp.WaitCalls), lp.WaitSeconds
+		p.WaitCalls, p.WaitSeconds = &n, &secs
+	}
+	if p.Command == "" && len(p.RecentFiles) == 0 && p.ToolCalls == nil && p.WaitCalls == nil {
 		return nil
 	}
 	return p
@@ -1084,15 +1088,28 @@ func readExecutionFile(path string) *capsule.Execution {
 	return &ex
 }
 
-// pendingQuestions answers, per running job with a live driver, the id
-// of the question its execution.json (the authority) holds at the
-// current step — the status face presents such a job as needs_input
-// (D6), and an answer to it is accepted. Before the driver is
-// (re-)derived nothing could take the answer, so nothing is shown. A
-// pending without an id is unanswerable and ignored (the monitor's
+// execFace is one running job's status-face reading of its
+// execution.json (the authority).
+type execFace struct {
+	// QuestionID is the question the current step holds open ("" = none).
+	QuestionID string
+	// RetryIn / RetryCause: what is left of a decided backoff before the
+	// current step's next dispatch, and the death cause that owes it
+	// (driver.RetryOwed; zero = none owed).
+	RetryIn    time.Duration
+	RetryCause string
+}
+
+// execFaces answers, per running job with a live driver, what its
+// execution.json holds at the current step: the id of an open question —
+// the status face presents such a job as needs_input (D6), and an answer
+// to it is accepted — and a pending retry backoff (the status face shows
+// "retry in 3m: <cause>"). Before the driver is (re-)derived nothing
+// could take an answer or serve the wait, so nothing is shown. A pending
+// question without an id is unanswerable and ignored (the monitor's
 // pending_invalid names it).
-func (d *Daemon) pendingQuestions() map[string]string {
-	out := map[string]string{}
+func (d *Daemon) execFaces(now time.Time) map[string]execFace {
+	out := map[string]execFace{}
 	for _, ji := range d.rt.List() {
 		if ji.State != runtime.StateRunning || ji.Agent == nil || ji.CapsuleDir == "" {
 			continue
@@ -1101,8 +1118,13 @@ func (d *Daemon) pendingQuestions() map[string]string {
 		if ex == nil {
 			continue
 		}
+		var f execFace
 		if st := ex.Steps[ex.CurrentStep]; st != nil && st.PendingQuestion != nil && st.PendingQuestion.ID != "" {
-			out[ji.WorkItem] = st.PendingQuestion.ID
+			f.QuestionID = st.PendingQuestion.ID
+		}
+		f.RetryIn, f.RetryCause = driver.RetryOwed(ex, now, d.cfg.Supervision.RetryBackoffBase)
+		if f != (execFace{}) {
+			out[ji.WorkItem] = f
 		}
 	}
 	return out

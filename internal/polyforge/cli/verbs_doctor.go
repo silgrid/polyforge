@@ -67,14 +67,14 @@ const (
 	docChProjects = "aihub projects"
 	docChServer   = "server reach"
 	docChSocket   = "daemon socket"
-	// docChReload is the warn-only cli.toml hot-reload row (workbench#3):
+	// docChReload is the warn-only cli.toml hot-reload row:
 	// restart-only keys a reload left pending, and flag-overridden keys.
 	docChReload    = "config reload"
 	docChAuth      = "auth"
 	docChClaude    = "harness claude"
 	docChEnv       = "retired env"
 	docChDaemonEnv = "daemon env"
-	// docChModelHealth is the additive warn-at-most row (workbench#14).
+	// docChModelHealth is the additive warn-at-most row.
 	docChModelHealth = "model health"
 )
 
@@ -82,7 +82,8 @@ const (
 type doctorRun struct {
 	cfg               Config
 	present, missing  []string // mapped workspaces that exist as directories / do not
-	prune             bool
+	prune             bool     // --prune-scratch
+	pruneGitDirs      bool     // --prune-git-dirs
 	reachOK, sockOK   bool
 	reachMsg, sockMsg string
 	status            StatusResponse
@@ -115,6 +116,10 @@ var doctorChecks = []struct {
 	}},
 	{docChLayout, needMapping, func(r *doctorRun) (string, string) { return workspaceLayoutCheck(r.present).row() }},
 	{docChScratch, needMapping, func(r *doctorRun) (string, string) { return scratchCheck(r.present, time.Now(), r.prune).row() }},
+	{docChGitDirs, needConfig, func(r *doctorRun) (string, string) {
+		home, _ := os.UserHomeDir()
+		return gitDirsCheck(r, DataDir(home), time.Now())
+	}},
 	{docChRepoClones, needMapping, func(r *doctorRun) (string, string) { return repoClonesCheck(r) }},
 	{docChScopedGates, needMapping, func(r *doctorRun) (string, string) { return scopedGatesCheck(r) }},
 	{docChMemPolicy, needMapping, func(r *doctorRun) (string, string) { return memoryPolicyCheck(r.present).row() }},
@@ -146,7 +151,7 @@ var doctorChecks = []struct {
 	{docChAuth, needAihub, func(r *doctorRun) (string, string) { return r.auth.row() }},
 }
 
-// reloadCheck is the warn-only cli.toml hot-reload row (workbench#3, R13):
+// reloadCheck is the warn-only cli.toml hot-reload row (R13):
 // a restart-only key changed by a reload is pending until the daemon
 // restarts, and a flag-overridden key is reported too. It never fails —
 // a staged restart-only change is intentional.
@@ -244,11 +249,12 @@ var cmdDoctor = &Command{
 	Name:         "doctor",
 	Group:        GroupDiag,
 	Summary:      "Check this daemon's health: config, workspace mapping and layout, connectivity, progress display",
-	Usage:        "pf doctor [--harness] [--prune-scratch] [--json]",
+	Usage:        "pf doctor [--harness] [--prune-scratch] [--prune-git-dirs] [--json]",
 	NoConfigLoad: true,
 	Setup: func(fs *flag.FlagSet) {
 		fs.Bool("harness", false, "run only the harness progress-display checks")
 		fs.Bool("prune-scratch", false, "remove the mapped workspaces' scratch/ entries older than 14 days (default: report them only)")
+		fs.Bool("prune-git-dirs", false, "remove the external git dirs and set-aside scenes of wrapped/failed/canceled work items untouched for more than 14 days (default: report them only; never while the daemon is down)")
 	},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if len(args) != 0 {
@@ -256,7 +262,7 @@ var cmdDoctor = &Command{
 		}
 		checks := harnessDisplayChecks()
 		if !boolFlag(fs, "harness") {
-			checks = append(runDoctorChecks(ctx, boolFlag(fs, "prune-scratch")), checks...)
+			checks = append(runDoctorChecks(ctx, boolFlag(fs, "prune-scratch"), boolFlag(fs, "prune-git-dirs")), checks...)
 		}
 		rep := doctorReport{Checks: checks}
 		fails := countFails(rep)
@@ -295,8 +301,9 @@ func countFails(rep doctorReport) int {
 
 // runDoctorChecks runs the config check and then doctorChecks, skipping
 // each check whose prerequisite is missing. pruneScratch lets the
-// scratch check remove the stale entries it would otherwise report.
-func runDoctorChecks(ctx *Context, pruneScratch bool) []doctorCheck {
+// scratch check remove the stale entries it would otherwise report;
+// pruneGitDirs does the same for the git dir retention check.
+func runDoctorChecks(ctx *Context, pruneScratch, pruneGitDirs bool) []doctorCheck {
 	cfg, err := LoadConfig(ctx.ConfigPath)
 	if err != nil {
 		checks := []doctorCheck{{docChConfig, "fail", err.Error() + " — see the install docs for the migration steps"}}
@@ -311,7 +318,7 @@ func runDoctorChecks(ctx *Context, pruneScratch bool) []doctorCheck {
 	}
 	checks := []doctorCheck{{docChConfig, "pass", "loaded from " + where}}
 
-	r := &doctorRun{cfg: cfg, prune: pruneScratch}
+	r := &doctorRun{cfg: cfg, prune: pruneScratch, pruneGitDirs: pruneGitDirs}
 	for _, ws := range cfg.Mapping.Workspaces() {
 		if st, err := os.Stat(ws); err == nil && st.IsDir() {
 			r.present = append(r.present, ws)

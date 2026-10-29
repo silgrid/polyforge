@@ -1,7 +1,7 @@
 package runtime
 
 // pitranscript_test.go: the per-dispatch live-transcript resolution rule
-// (LiveTranscript, polyforge#224's review B1): a resumed pi dispatch's
+// (LiveTranscript, polyforge#224's code review): a resumed pi dispatch's
 // live transcript is the capsule file it appends to (the predecessor's
 // declared destination, validated — never verbatim from the
 // agent-writable journal); every other dispatch resolves through

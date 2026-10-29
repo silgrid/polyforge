@@ -81,8 +81,8 @@ func TestV1S17SealCrashResume(t *testing.T) {
 		}
 	}
 	kinds := d.eventKinds(t, wi)
-	if n := countOf(kinds, "needs_recovery"); n != 1 {
-		t.Fatalf("needs_recovery fired %d times, want 1 (the completion signal): %v", n, kinds)
+	if n := countOf(kinds, "needs_recovery"); n != 0 {
+		t.Fatalf("needs_recovery fired %d times, want 0 (the completion is no death): %v", n, kinds)
 	}
 	waitUntil(t, 15*time.Second, "processes survived the episode", func() bool {
 		return len(orphanPIDs(wi)) == 0

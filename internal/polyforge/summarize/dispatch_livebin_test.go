@@ -1,7 +1,7 @@
 package summarize
 
 // dispatch_livebin_test.go: the claude binary is read from the dispatcher's
-// source AT EACH DISPATCH, never from a construction-time copy (workbench#41
+// source AT EACH DISPATCH, never from a construction-time copy (
 // F2). The source changes between two dispatches and the script that runs is
 // the observable fact — so a daemon reload of claude_bin reaches the
 // summarize lane without a restart.

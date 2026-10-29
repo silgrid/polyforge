@@ -258,23 +258,23 @@ type StatusResponse struct {
 	PiModelsEnvRefs []string    `json:"pi_models_env_refs,omitempty"`
 	Jobs            []StatusJob `json:"jobs"`
 	Queue           QueueStats  `json:"queue"`
-	// ModelHealth is the additive model-health summary (workbench#14):
+	// ModelHealth is the additive model-health summary:
 	// the window and the currently firing warnings, never the full table
 	// (that stays `pf ops models`). Absent on an older daemon.
 	ModelHealth *modelhealth.Summary `json:"model_health,omitempty"`
 	// Supervision is the running daemon's live supervision bounds
-	// (workbench#3): T (`step_timeout`) and N (`stall_window`) as Go
+	//: T (`step_timeout`) and N (`stall_window`) as Go
 	// duration strings. It makes a live reload of those keys observable
 	// without a dispatch. Absent on an older daemon.
 	Supervision *SupervisionStatus `json:"supervision,omitempty"`
-	// Reload is the cli.toml hot-reload summary (workbench#3): keys
+	// Reload is the cli.toml hot-reload summary: keys
 	// pending a restart, keys overridden by an explicit daemon flag, and
 	// the last reload's per-key outcomes. Absent on an older daemon.
 	Reload *ReloadStatus `json:"reload,omitempty"`
-	// MachineFace is the cross-machine face state (workbench#11):
+	// MachineFace is the cross-machine face state:
 	// availability, negotiated role, supersession. Additive.
 	MachineFace map[string]any `json:"machine_face,omitempty"`
-	// Tasks is the one-shot task agent summary (workbench#53): running
+	// Tasks is the one-shot task agent summary: running
 	// count, the fixed limit and the terminal-state counts. Tasks run
 	// outside the job slots, so queue.running never counts them. Absent on
 	// an older daemon.
@@ -282,7 +282,7 @@ type StatusResponse struct {
 }
 
 // SupervisionStatus is the live supervision bounds GET /status carries
-// (workbench#3; 0 = unset, the documented default applies).
+// (; 0 = unset, the documented default applies).
 type SupervisionStatus struct {
 	StepTimeout string `json:"step_timeout"`
 	StallWindow string `json:"stall_window"`
@@ -347,6 +347,18 @@ type StatusJob struct {
 	// Candidate is the in-flight dispatch's `<harness>:<model>[:<effort>]`
 	// (polyforge#176; absent = none in flight or the harness default).
 	Candidate string `json:"candidate,omitempty"`
+	// WaitCalls / WaitSeconds are the in-flight step's wait calls — bash
+	// calls that only `sleep N`, N > 3s — and their summed seconds, over
+	// every dispatch of the step this daemon watched: counted and
+	// surfaced, never judged; nil = none.
+	WaitCalls   *int64 `json:"wait_calls,omitempty"`
+	WaitSeconds *int64 `json:"wait_seconds,omitempty"`
+	// RetryInSec / RetryCause: the current step waits a decided retry
+	// backoff before its next dispatch — whole seconds left (rounded up)
+	// and the death cause that owes it (absent = no wait owed). Rendered
+	// "retry in 3m: upstream_transient" in the RETRY column.
+	RetryInSec *int64 `json:"retry_in_sec,omitempty"`
+	RetryCause string `json:"retry_cause,omitempty"`
 	// Origin is how the job was submitted (may be absent).
 	Origin *protocol.Origin `json:"origin,omitempty"`
 }
@@ -356,7 +368,7 @@ type QueueStats struct {
 	Pending       int `json:"pending"`
 	Running       int `json:"running"`
 	MaxConcurrent int `json:"max_concurrent"`
-	// MaxConfigured is the daemon's last APPLIED/startup cap (workbench#22):
+	// MaxConfigured is the daemon's last APPLIED/startup cap:
 	// `pf ops max` changes only MaxConcurrent, so a differing pair tells the
 	// panel that a temporary ops override is in effect rather than a stale
 	// file value. Additive and read-only; absent on an older daemon.
@@ -403,7 +415,8 @@ type ResumePausedResponse struct {
 	Resumed    bool   `json:"resumed"`
 	WorkItemID string `json:"work_item_id"`
 	// Outcome: attached (continued in place) | already_live | closed
-	// (re-attached, but the recovery closed the job).
+	// (re-attached, but the recovery closed the job) | parked
+	// (re-attached, but the recovery waits on the previous driver Run).
 	Outcome string `json:"outcome,omitempty"`
 }
 
@@ -449,7 +462,7 @@ func (d *DaemonClient) Status() (json.RawMessage, error) {
 	return d.do("GET", "/status", "", nil, nil)
 }
 
-// Models reads the read-only model-health profile (workbench#14). The
+// Models reads the read-only model-health profile. The
 // raw answer is re-emitted unchanged by `pf ops models --json`.
 func (d *DaemonClient) Models() (json.RawMessage, error) {
 	return d.do("GET", "/models", "", nil, nil)

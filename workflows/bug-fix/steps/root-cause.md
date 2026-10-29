@@ -8,7 +8,7 @@ output:
     verdict:
       type: string
       enum: [pass, fail]
-      description: The gate verdict convention every executor reads (01-workflow-skills.md §6.2). pass means the root cause is identified and the evidence explains the observed repro (formerly worded "confirmed"); fail means it is not (formerly "inconclusive") - the gate FAILs and rewinds to repro for better evidence.
+      description: The gate verdict convention every executor reads. pass means the root cause is identified and the evidence explains the observed repro; fail means it is not - the gate FAILs and rewinds to repro for better evidence.
     root_cause:
       type: string
       description: The identified root cause as a causal statement (condition -> mechanism -> observed failure). Required even when verdict is fail - then it carries the best current hypothesis plus exactly what is missing to confirm it.
@@ -49,8 +49,19 @@ plausible-sounding theory".
 ## What to do
 
 1. Read `artifacts/repro.md` in full (and any failing test `repro` recorded), then read
-   the code paths it exercises. If this is a rewind re-entry, your `pending_rewind_input`
-   carries the previous `fail_reason` — start by addressing what it said was missing.
+   the code paths it exercises. A re-entry comes one of two ways, and each demands a
+   different opening move:
+   - after a completed `fix` reported that your diagnosis did not hold
+     (`root_cause_addressed: false`): that report is your `pending_rewind_input` — the old
+     diagnosis did not survive the fix attempt, so do NOT re-affirm it: re-derive the
+     cause, treating the previous causal statement as one more candidate to eliminate
+     against the evidence;
+   - after your own `fail`: it rewound to `repro`, which ran again with your `fail_reason`
+     as its input, and you re-enter fresh with no `pending_rewind_input`. Your previous
+     verdict is archived at `artifacts/steps/root-cause/s<n>/result.json` (the newest
+     archive whose `output.verdict` is `fail`) — read its `fail_reason` and start by
+     checking whether the updated `artifacts/repro.md` now holds the evidence it said was
+     missing.
 2. Form candidate explanations and eliminate them with evidence. Prefer **experiments**
    (`kind: experiment`): change one thing under controlled conditions via `bash` in a
    throwaway manner, observe, revert — an experiment that distinguishes two hypotheses
@@ -63,11 +74,10 @@ plausible-sounding theory".
    experiments run and what each ruled out, and (briefly) what a fix must change for
    the cause to be removed — scope guidance only, not an implementation plan.
 5. Verdict — always the executor's gate convention, `pass`/`fail`, never a synonym:
-   - `pass` when the causal chain is proven as above (this is the verdict formerly
-     worded `confirmed`).
+   - `pass` when the causal chain is proven as above.
    - `fail` when it is not — do NOT upgrade a hunch to `pass` because the lane wants
-     to move on (this is the verdict formerly worded `inconclusive`). Record the best
-     current hypothesis in `root_cause`, and write `fail_reason` as an actionable
+     to move on. Record the best current hypothesis in `root_cause`, and write
+     `fail_reason` as an actionable
      order to `repro`: which evidence is missing (intermittent trigger not captured,
      log level too low, environment delta untested) and how to get it. That text is
      `repro`'s `pending_rewind_input` on its next attempt, and the schema requires it —

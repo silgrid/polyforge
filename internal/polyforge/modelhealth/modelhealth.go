@@ -1,6 +1,6 @@
 // Package modelhealth aggregates the daemon's durable events stream into a
 // per-model+effort × step profile and the constant-threshold warnings the
-// operator faces read (workbench#14).
+// operator faces read.
 //
 // The package is a pure read-side consumer: Build has no I/O and no
 // dispatch-facing import, the tracker (tracker.go) persists the aggregate to

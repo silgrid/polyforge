@@ -31,12 +31,12 @@ One row per group, exactly as `pf help` prints it:
 | `pf help` group | Verbs |
 | --- | --- |
 | Data-plane verbs (direct to aihub) | `file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg` (`send`, `list`, `ack`, `show`, `analyze`) |
-| Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, resident watcher, `subscribe`/`unsubscribe`/`adopt`/`list`), `answer`, `pause`, `resume`, `wrap`, `ops` (`status`, `models`, `auto`, `max`, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `chat init`, `task` (`spawn`, `list`, `show`, `cancel`), `result submit` (inside a workflow step only: its one result-delivery path) |
+| Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, resident watcher, `subscribe`/`unsubscribe`/`adopt`/`list`), `answer`, `pause`, `resume`, `wrap`, `ops` (`status`, `models`, `auto`, `max`, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `chat init`, `task` (`spawn`, `list`, `show`, `cancel`), `result submit` (inside a workflow step only: its one result-delivery path), `verify-run` (a verification step's one mechanical run; local, below) |
 | Management face (M1–M5) | `users`, `api-keys`, `projects`, `machines` (`list`, `rekey`), `backup` (database snapshot, see below), `config` (the one `cli.toml` writer and the daemon reload entry) |
-| Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries), `version` (the verb form of `pf --version`), `init` (a workspace's local layout) |
+| Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries; `--prune-git-dirs` removes terminal work items' external git dirs and set-aside scenes past the 14-day retention), `version` (the verb form of `pf --version`), `init` (a workspace's local layout) |
 | Process | `daemon` (run the work machine; `pf daemon ensure` starts it) |
 
-## `pf msg` — user-to-user messages (workbench#11)
+## `pf msg` — user-to-user messages
 
 `pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]`
 posts one direct message; the first message to a user creates the one 1:1
@@ -45,7 +45,9 @@ conversation, and every later message reuses it. `pf msg list
 the conversations the caller may see (a member its own; an admin every
 conversation, as before) or one conversation's permanent history; `--after`
 pages forward and `--before` pages backward (the page immediately below the
-cursor, ascending). `pf msg ack <conversation>
+cursor, ascending). Each conversation row in the `--json` list payload
+carries `member_names`, the display-name mapping for exactly that
+conversation's members, passed through unchanged from the server. `pf msg ack <conversation>
 [--seq N]` advances only the caller's read cursor — without `--seq` it reads
 the newest sequence first, a repeated/backward ack is a no-op, and `0`/
 negative or past-the-newest is `CORE-400`. `pf msg show <id>` reads one
@@ -102,7 +104,7 @@ it; no daemon needed). These run with the human's own api key: aihub's
 door checks the work item's reporter, a project maintainer or an admin.
 The shapes are the verbs' own fragments.
 
-## `pf task` — one-shot task agents (workbench#53, the re-established #40)
+## `pf task` — one-shot task agents (the re-established #40)
 
 ```
 pf task spawn --project <p> [--max-duration D] [--max-tokens N] "<prompt>"
@@ -124,7 +126,7 @@ keeps Go durations (`20m0s`).
   daemon user's own filesystem and network reach — there is no OS-level
   sandbox, no read-only mount, no masked home (owner ruling 2026-10-26; the
   platform-level non-root design that would cover every agent class is
-  workbench#10). The harness runs in the selected project's workspace
+). The harness runs in the selected project's workspace
   directory, so its clones are right there; it may read and write anything a
   human's session may. The harness tool allowlist (read/search, Bash and the
   web tools) is the lane's own scope, not a security boundary.
@@ -170,6 +172,61 @@ keeps Go durations (`20m0s`).
   its `api_key`) readable.
 - `pf ops status` carries one line: `tasks: <running>/2 running (completed N,
   capped N, failed N, interrupted N)`.
+
+## `pf verify-run` — the verification step's mechanical run
+
+```
+pf verify-run [--tier full|scoped] [--deadline D] [--engine <path>] [--base <rev>]
+[--out <dir>] [--max-parallel-repos N] [--timeout D] [--budget D] [--e2e-jobs N]
+[--gomaxprocs N]
+```
+
+The `verification` step calls it exactly once, in the foreground, at the
+capsule root (the working directory); it is a local command — it never
+reaches the daemon or aihub and needs no `cli.toml`, so a step may run it.
+In each task repo it aborts a merge an interrupted run left in progress,
+runs `git fetch origin` and `git merge --no-edit origin/<default>` (a
+conflict is aborted and the bar runs on the unmerged tree), and skips a repo
+with no commit beyond its default branch. For each touched repo it asks the
+release-shipped scope engine (`--engine`, default
+`<data-dir>/release/current/tools/verify-scope`) for its plan — passing the
+engine's `--full` on the full tier — and runs the WHOLE plan through
+`bash -c`, never stopping at the first failure; a command whose declared
+prerequisite is missing is skipped (a required command naming a path, such
+as `./bin/tool`, is looked up in the repo, any other name on `PATH`). Each
+command runs with a private
+`TMPDIR` and a timeout (the plan's, else `--timeout`, default 20m); a
+command's process group dies with it. Failing tests are re-run at HEAD with
+the command's own flags (a pass there is recorded `flaky n/m`); a failure
+that exists on the base and fails there the same way on every base run, in
+a throwaway worktree outside the capsule, is pre-existing. A command whose
+every failure was explained that way passes only when, re-run whole once
+in its test-bar form, it exits 0 — or, for the repo's declared Go harness
+run directly (`sh <go_harness>`), when its own trailer counts every listed
+test as run or excluded; a command with neither (a Makefile target, an
+`&&` chain carrying a pre-existing failure, a runner without a skip
+switch) stays failed. A Go package whose test binary did not finish
+normally (a panic, a timeout, an `os.Exit`, `-failfast`) is a failure of
+its own beside its failed tests. `--budget`
+(default 20m) bounds when those re-runs and base runs may still start; a
+unit or command they no longer reach stays a failure. `--deadline` bounds
+the whole run (default: `BASH_MAX_TIMEOUT_MS` less 2 minutes when that is
+set, else 25m): no command runs past it — a command it cuts short or that
+can no longer start is recorded failed — and the result is written before
+it, so the step's own shell call never outlives its harness's bound. `--e2e-jobs` / `--gomaxprocs` export
+`E2E_JOBS` / `GOMAXPROCS` to every command; `--max-parallel-repos` (default
+1) bounds how many repos run at once.
+
+It writes `result.json` (envelope-ready `checks`, `pre_existing_failures`,
+`test_bar`, `command_evidence`, the merge outcomes, the parsed units and the
+authored scenarios their bindings resolve) and `report-mechanical.md` into
+`runtime-state/verify/<n>/` (or `--out`); the command logs stay there too,
+behind a `.gitignore` that keeps the tree out of the capsule chain. Exit 0
+whenever a result was produced — a red bar is data. Exit 1 when it could
+not run, and — deliberately, so it can never be read as a verdict — exit 1
+with `incomplete: <reason>` on stderr (and in `result.json`) when no
+merged-tree proof could be made (a failed fetch); the step returns that as
+an incomplete outcome.
 
 ## `pf config` — cli.toml and hot reload
 
@@ -295,21 +352,48 @@ detects: X (`--silence-window`, test/dev-only) ends a dispatch as
 `model_hung` when no model output arrives while waiting for the model
 (UI chatter never counts as work); Y (`--tool-window`, test/dev-only)
 ends a turn as `tool_hung` when one tool runs longer than it; T
-(`--step-timeout`) ends a step as `step_timeout_long_task` /
-`step_timeout_slow_model`; N (`--stall-window`) ends the driver between
+(`--step-timeout`) ends a step as `step_timeout_long_task` (same
+model, T doubled) or — only when the dispatch that hit T itself ran at
+least half of it and spent at least half of its own time waiting on the
+model — `step_timeout_slow_model` (switch candidate, T doubled); N (`--stall-window`) ends the driver between
 steps as `driver_stalled`; and a turn that ends with no result file
-inside `--model-error-grace` (test/dev-only) is `model_error` (switch
-candidate) when it ended on a model error, `ended_without_result`
-(the first retries on the same model, the second on one candidate switches) when it ended normally. In production only T
+inside `--model-error-grace` (test/dev-only) is `model_error` when it
+ended on a model error (the first on a candidate resumes it, the second
+consecutive model-class death switches candidate; an allowance or auth
+error, or a model name that cannot resolve, switches at once),
+`ended_without_result`
+(the first retries on the same model, the second on one candidate switches) when it ended normally. Consecutive
+`model_error` / `upstream_transient` / `ended_without_result` deaths on
+one candidate wait 1m, 3m, then 9m before a re-dispatch of that candidate
+(a switch to the next candidate dispatches at once and its own ladder
+starts at 1m; the first wait is
+the test/dev-only `--retry-backoff-base`); a restarted daemon serves
+only what is left of a wait, and `pf ops status` shows it as
+`retry in 3m: <cause>`. In production only T
 (`--step-timeout`) and N (`--stall-window`) are settable, through the
 `cli.toml` `[daemon]` table; the other bounds are test/dev-only. Their
 running values are observable as `supervision.{step_timeout,stall_window}`
 in `pf ops status --json`, so a live reload of either key is visible
-without a restart. The
+without a restart. A tick that arrives far later than its cadence declares
+the supervisor's own pause (a host or daemon freeze): the span it did not
+watch is not charged to the step — neither to the running dispatch's
+bounds nor to the step's cumulative runtime the next dispatch inherits
+under T — and is recorded as one `supervisor_paused` event. The
 only per-step override in `workflow.md` is `budget.wall_minutes` (an
 estimate: T becomes `max(3 x wall_minutes, --step-timeout)`); the former
 `silence_minutes` / `tool_minutes` keys were deleted (polyforge#147)
 and an old bundle that still carries them has them silently ignored.
+
+**Wait calls** are counted and surfaced, never judged: a bash tool call
+whose command starts with `sleep N` (N over 3 seconds; a `sleep` inside a
+condition loop, or after another command, is not one) spends the step's
+clock on a wait nothing can end early, but no bound reads it and nothing
+is killed for it. Each is recorded as one `wait_call` event (its seconds,
+a command excerpt of at most 120 characters, the tool call id and its
+dispatch's running totals, which restart at every dispatch), and the
+current step's total — every dispatch of the step the daemon watched —
+shows as the `wait calls: n (Ns)` line of `pf watch <wi> --once` and as
+`wait_calls` / `wait_seconds` on the job in `pf ops status --json`.
 
 ## `pf recall` — memory search
 

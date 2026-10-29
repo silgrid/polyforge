@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -287,6 +288,7 @@ func startHarness(cmd *exec.Cmd, p SpawnParams, keepStdin bool) (*proc, io.Write
 		errW.Close()
 		return nil, nil, fmt.Errorf("runtime: harness start failed: %w", err)
 	}
+	afterHarnessStartFn()
 	outW.Close()
 	errW.Close()
 	var procStdin io.WriteCloser
@@ -312,6 +314,11 @@ func startHarness(cmd *exec.Cmd, p SpawnParams, keepStdin bool) (*proc, io.Write
 	}
 	return proc, stdin, nil
 }
+
+// afterHarnessStartFn runs right after a harness process is born, before
+// its identity is stamped: a seam so the stamp-delay test can stall the
+// Go side there (a loaded host, a GC pause); production never changes it.
+var afterHarnessStartFn = func() {}
 
 // injectionFailed tears down a harness whose initial prompt could not be
 // delivered and returns the spawn error. A harness that died at startup
@@ -357,9 +364,14 @@ type proc struct {
 	pend sync.Mutex // guards pending ids (own lock: stdin writes may block)
 
 	pending map[string]bool
-	exited  chan struct{}
-	exit    spawn.ExitInfo // valid once exited is closed
-	tail    *tailBuffer
+	// reaped is set the moment cmd.Wait returns: until then the kernel
+	// holds the child's pid (and with it the pgid), so the number cannot
+	// have been handed to anyone else. Terminate's identity and provenance
+	// proof is needed only once it is true.
+	reaped atomic.Bool
+	exited chan struct{}
+	exit   spawn.ExitInfo // valid once exited is closed
+	tail   *tailBuffer
 }
 
 // tailBuffer keeps the last stderrTailBytes bytes written to it.
@@ -388,9 +400,11 @@ func (t *tailBuffer) String() string {
 
 func newProcOpts(cmd *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser, o procOpts) *proc {
 	p := &proc{
-		cmd:       cmd,
-		stdin:     stdin,
-		startedAt: nowStamp(),
+		cmd:   cmd,
+		stdin: stdin,
+		// the kernel's birth record, read before the exit watcher below
+		// can reap the child: the identity every teardown proof checks
+		startedAt: processStartStamp(cmd.Process.Pid),
 		pending:   map[string]bool{},
 		exited:    make(chan struct{}),
 		taps:      o.taps,
@@ -408,50 +422,37 @@ func newProcOpts(cmd *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser, o pr
 		close(stderrDone)
 	}
 	go func() {
-		// A grandchild (model provider connection, spawned tool) that
-		// inherited stdout keeps the pipe open past the pi process's own
-		// exit (#92): the exit sequence below waits for the reader only a
-		// bounded moment, and the group kill releases the pipe.
-		done := make(chan struct{})
-		go func() {
-			_ = cmd.Wait()
-			close(done)
-		}()
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
+		// cmd.Stdout/Stderr are *os.File pipe ends (Spawn's own pipes), so
+		// cmd.Wait never blocks on a copy: it returns when the direct
+		// child exits. A grandchild (model provider connection, spawned
+		// tool) that inherited a pipe keeps it open past that exit (#92):
+		// the drain below waits for it only a bounded moment, and the
+		// work item's teardown (killAgentTree at step end) releases it.
+		_ = cmd.Wait()
+		// the kernel may reuse the pid only from here on: Terminate runs its
+		// identity/provenance proofs only after this ( R1)
+		p.reaped.Store(true)
+		// Let the stdout reader AND the stderr copier drain what the
+		// dead process left in its pipes before the exit is announced:
+		// the last records (the error turn's agent_end) and the stderr
+		// tail decide the exit's class. Bounded: a grandchild holding a
+		// pipe must not hold the exit back.
+		drainDeadline := time.Now().Add(500 * time.Millisecond)
+		for _, ch := range []chan struct{}{readerDone, stderrDone} {
+			wait := time.Until(drainDeadline)
+			if wait < 0 {
+				wait = 0
+			}
 			select {
-			case <-done:
-				// Let the stdout reader AND the stderr copier drain what the
-				// dead process left in its pipes before the exit is
-				// announced: the last records (the error turn's agent_end)
-				// and the stderr tail decide the exit's class. Bounded: a
-				// grandchild holding a pipe must not hold the exit back.
-				drainDeadline := time.Now().Add(500 * time.Millisecond)
-				for _, ch := range []chan struct{}{readerDone, stderrDone} {
-					wait := time.Until(drainDeadline)
-					if wait < 0 {
-						wait = 0
-					}
-					select {
-					case <-ch:
-					case <-time.After(wait):
-					}
-				}
-				p.exit = p.exitInfo()
-				if o.onExit != nil {
-					o.onExit(p.exit)
-				}
-				close(p.exited)
-				return
-			case <-ticker.C:
-				if cmd.Process != nil && cmd.Process.Signal(syscall.Signal(0)) != nil {
-					// direct child gone but Wait still blocked → pipe held by
-					// a grandchild. Kill the process group to release it.
-					syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-				}
+			case <-ch:
+			case <-time.After(wait):
 			}
 		}
+		p.exit = p.exitInfo()
+		if o.onExit != nil {
+			o.onExit(p.exit)
+		}
+		close(p.exited)
 	}()
 	go func() {
 		defer close(readerDone)
@@ -568,13 +569,33 @@ func (p *proc) observeResponse(rec stdoutRecord) {
 
 // Terminate kills the WHOLE process group and proves it empty: SIGTERM to
 // -pgid, bounded wait for the group (not merely the leader), SIGKILL, wait
-// again.
+// again. While the leader is unreaped the group is ours by construction:
+// the kernel cannot reuse a pid before its parent's wait collects it, so
+// the group is signaled directly — the recorded startedAt is stamped after
+// cmd.Start and a stall between fork and stamp must never turn a live
+// step into "pid reuse; not signaled". Once reaped, the pid/pgid is just a
+// number the kernel may have reused, and the group is signaled only when
+// it is provably this dispatch's: the same identity and provenance proof
+// Cleanup's L2 applies. (The window between the reap inside cmd.Wait and
+// the reaped store is a few instructions; a reused pid would also have to
+// become a group leader inside it.)
 func (p *proc) Terminate(bound time.Duration) error {
 	if p.cmd.Process == nil {
 		return nil
 	}
 	// Setpgid: the child IS the group leader.
-	return killGroup(p.cmd.Process.Pid, bound)
+	pid := p.cmd.Process.Pid
+	if !p.reaped.Load() {
+		return killGroup(pid, bound)
+	}
+	target := CleanupTarget{PID: pid, Pgid: pid, StartedAt: p.startedAt}
+	if !rootIdentityHolds(target) {
+		return fmt.Errorf("runtime: step process %d no longer matches its recorded identity (pid reuse); process group not signaled", pid)
+	}
+	if !groupProvableOurs(target) {
+		return fmt.Errorf("runtime: process group %d cannot be proven ours (leader gone, member predates the step); not signaled", pid)
+	}
+	return killGroup(pid, bound)
 }
 
 // readBoundedLine reads one newline-terminated line, never accumulating

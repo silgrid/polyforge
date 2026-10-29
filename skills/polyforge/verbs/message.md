@@ -31,7 +31,9 @@ pf msg analyze <id>
   `--reply-to` an optional message id in the same conversation.
 - `list`: without `--conversation` it lists the conversations the caller
   may see (a member its own; an admin every conversation, as before) with
-  their unread counts; with it, that conversation's messages. `--after` is a forward sequence
+  their unread counts; with it, that conversation's messages. `--json` passes
+  each conversation row's `member_names` (display names, membership scope,
+  no lookup) through unchanged. `--after` is a forward sequence
   cursor, `--before` a backward one (the page immediately below it, ascending
   — the newest page is `--before <newest+1>`), and `--limit` the page size.
 - `ack <conversation> [--seq N]`: advances the caller's **read** cursor, and

@@ -26,7 +26,7 @@ package git
 // (polyforge#158). The daemon normally pushes the carrier as a shallow
 // push rooted at the WI line's upstream boundary, which cuts a foreign
 // upstream asset (even one above the limit) out of the carrier's
-// reachable history so it cannot block the push (workbench#39). The cut
+// reachable history so it cannot block the push. The cut
 // falls back to the hub's current carrier tip, or the recorded baseline,
 // when the upstream walk answers nothing: the commits between that cut
 // and the head (and their side history) are then carried, so an oversize
@@ -55,10 +55,17 @@ import (
 
 // hookTemplate is the hook body. Kept as a function so the blob limit
 // defaults can be baked in (the env overrides still win at runtime).
+//
+// The hook is fail-closed: `set -o pipefail` plus an
+// explicit error check on every pipeline/command means any failing
+// check command (git rev-list / cat-file / ls-tree, or the awk in the
+// pipeline) rejects the push — an inconclusive check never reads as
+// "no violation found".
 func hookTemplate(defaultMaxBlob, defaultMaxTaskBlob int64) string {
 	return fmt.Sprintf(`#!/usr/bin/env bash
 # aihub pre-receive (v1). Rejects the WHOLE push on any violation.
-set -u
+# Fail-closed: any check command that errors rejects the push.
+set -u -o pipefail
 MAXBLOB="${GIT_PF_MAX_BLOB:-%d}"
 MAXTASKBLOB="${GIT_PF_MAX_TASK_BLOB:-%d}"
 zero=0000000000000000000000000000000000000000
@@ -73,7 +80,8 @@ while read -r old new ref; do
     [ "$new" = "$zero" ] && continue
     badblob=$(git rev-list --objects "$new" --not --all | awk '{print $1}' \
       | git cat-file --batch-check='%%(objecttype) %%(objectsize) %%(objectname)' \
-      | awk -v max="$MAXTASKBLOB" '$1=="blob" && $2>max {print $3" ("$2" bytes)"}')
+      | awk -v max="$MAXTASKBLOB" '$1=="blob" && $2>max {print $3" ("$2" bytes)"}') \
+      || reject "blob size check failed for $ref (rev-list/cat-file pipeline)"
     [ -z "$badblob" ] || reject "blob exceeds the ${MAXTASKBLOB}-byte limit: $badblob"
     continue ;;
   esac
@@ -94,7 +102,8 @@ while read -r old new ref; do
   case "$ref" in refs/pf-task/*) limit="$MAXTASKBLOB" ;; esac
   badblob=$(git rev-list --objects "$range" | awk '{print $1}' \
     | git cat-file --batch-check='%%(objecttype) %%(objectsize) %%(objectname)' \
-    | awk -v max="$limit" '$1=="blob" && $2>max {print $3" ("$2" bytes)"}')
+    | awk -v max="$limit" '$1=="blob" && $2>max {print $3" ("$2" bytes)"}') \
+    || reject "blob size check failed for $ref (rev-list/cat-file pipeline)"
   [ -z "$badblob" ] || reject "blob exceeds the ${limit}-byte limit: $badblob"
 
   # Task-repo carrier namespace: foreign (task-repo) history — the
@@ -103,11 +112,21 @@ while read -r old new ref; do
   case "$ref" in refs/pf-task/*) continue ;; esac
 
   # gitlink: mode 160000 entries are submodule commits; the capsule chain
-  # must stay a single flat history.
-  for c in $(git rev-list "$range"); do
-    if git ls-tree -r "$c" | grep -q '^160000 '; then
-      reject "gitlink (mode 160000) in commit $c is not allowed"
-    fi
+  # must stay a single flat history. Both commands are checked explicitly
+  # (fail-closed), and the ls-tree output is judged line by line — a
+  # failed grep's exit status would be indistinguishable from "no match".
+  commits=$(git rev-list "$range") \
+    || reject "gitlink check failed for $ref (git rev-list)"
+  for c in $commits; do
+    entries=$(git ls-tree -r "$c") \
+      || reject "gitlink check failed for commit $c (git ls-tree)"
+    while IFS= read -r entry; do
+      case "$entry" in
+      160000\ *) reject "gitlink (mode 160000) in commit $c is not allowed" ;;
+      esac
+    done <<ENTRIES
+$entries
+ENTRIES
   done
 
 done

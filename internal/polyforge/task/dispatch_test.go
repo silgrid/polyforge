@@ -128,7 +128,7 @@ func TestTaskEnvStripsMarkersAndCredentials(t *testing.T) {
 	}
 }
 
-// TestResolveBinFollowsLookPathAndSymlinks pins carried bar F2 (workbench#40
+// TestResolveBinFollowsLookPathAndSymlinks pins carried bar F2 (
 // review): the harness binary is resolved with exec.LookPath and then
 // filepath.EvalSymlinks. A native-installer `claude` is a stable symlink
 // into a versioned directory; execing the bare name (or the link) without

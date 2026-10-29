@@ -126,8 +126,12 @@ func TestUpgradeV2140RoundTrip(t *testing.T) {
 		t.Fatalf("memory row after the upgrade: %q (%v), want its document", content, err)
 	}
 	id := mustCreateExecWI(t, env, "v2.14.0 smoke ticket", nil, "")
+	// No machine_id: this fixture stops at the v2.14.0 schema, whose
+	// machines table predates operator_id (deploy/sql/v2.20.6); the
+	// claim's machine-ownership read is not what this
+	// round-trip smokes.
 	if _, err := NewSessionManager(env.DB).Claim(id, api.SessionClaimRequest{
-		SessionID: strings.Repeat("9", 32), MachineID: "m1",
+		SessionID: strings.Repeat("9", 32),
 	}, env.UserID); err != nil {
 		t.Fatalf("post-upgrade claim: %v", err)
 	}

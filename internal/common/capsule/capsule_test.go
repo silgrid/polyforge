@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+// TestMaxGitRequestBodyBytes: the git proxy's body cap
+// is the 1GiB owner ruling, with no knob anywhere in this package; the
+// 10×-the-carrier-limit derivation is the rationale, so the cap must
+// never fall below it either.
+func TestMaxGitRequestBodyBytes(t *testing.T) {
+	if MaxGitRequestBodyBytes != int64(1)<<30 {
+		t.Fatalf("MaxGitRequestBodyBytes = %d, want the 1GiB owner ruling", MaxGitRequestBodyBytes)
+	}
+	if MaxGitRequestBodyBytes < 10*MaxTaskBlobBytes {
+		t.Fatalf("MaxGitRequestBodyBytes = %d, must stay at or above the 10× carrier bound %d", MaxGitRequestBodyBytes, 10*MaxTaskBlobBytes)
+	}
+}
+
 // TestNoCapsuleStructCarriesLineageKeys guards the fossil cleanup: the
 // v1 generation/attempt_id lineage keys must not creep back into the
 // frozen capsule shapes (the round-trip JSON of every struct in this
@@ -113,5 +126,25 @@ func TestStepLightRecheckMarkerRoundTrip(t *testing.T) {
 	var legacy Execution
 	if err := json.Unmarshal([]byte(`{"steps":{"code":{"status":"pending"}}}`), &legacy); err != nil {
 		t.Fatalf("legacy execution.json must parse: %v", err)
+	}
+}
+
+// TestStepCandidateIsTheOneModelFact: a step record carries the model
+// only inside its candidate; an execution.json an older driver wrote
+// with model/effort keys still loads, and the next write drops them.
+func TestStepCandidateIsTheOneModelFact(t *testing.T) {
+	var st Step
+	if err := json.Unmarshal([]byte(`{"status":"done","model":"prov/m1","effort":"low","candidate":"pi:prov/m1:low"}`), &st); err != nil {
+		t.Fatalf("an old-shape step record must still load: %v", err)
+	}
+	if st.Candidate != "pi:prov/m1:low" || st.Status != StepDone {
+		t.Fatalf("decoded %+v", st)
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"model"`) || strings.Contains(string(raw), `"effort"`) {
+		t.Fatalf("the rewritten step record still carries model/effort: %s", raw)
 	}
 }

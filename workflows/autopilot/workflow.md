@@ -7,8 +7,8 @@ rewind:
 defaults:
   model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
 steps:
-  - { id: grill, context_policy: fresh, handoff: true, requires_human_answer: if_asked }
-  - { id: fix, context_policy: inherit }
+  - { id: grill, context_policy: fresh, handoff: true, requires_human_answer: if_asked, recall: true }
+  - { id: fix, context_policy: inherit, recall: true }
   - id: verification
     context_policy: fresh
     gate: true
@@ -95,8 +95,11 @@ earlier than the failing step:
   step that can change the tree.
 
 Workflow-level rewind bounds for this bundle are declared once in the frontmatter:
-`max_total: 6`, `max_per_step: 3`. A quick fix that cannot land within three bounded
-rewinds is not a quick fix; past those bounds the workflow ends in
+`max_total: 6`, `max_per_step: 3`. The per-step bound is charged per gate→target edge —
+`verification` and `deliver` each carry three charged slots for their `fix` edge — and
+`max_total` is the global hard cap that counts every rewind (this lane has no review,
+so no light or converging exemption applies). A quick fix that cannot land within three
+charged rewinds per gate is not a quick fix; past those bounds the workflow ends in
 `failed_rewind_exhausted` and the honest response is a re-filed WI on a heavier lane,
 not more loops.
 

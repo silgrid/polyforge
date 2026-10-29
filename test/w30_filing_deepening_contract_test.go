@@ -1,6 +1,6 @@
 package test
 
-// w30_filing_deepening_contract_test.go: text contract for workbench#30.
+// w30_filing_deepening_contract_test.go: text contract for.
 //
 // Work item #30 put the four-point "deepening check" (expert gap / raw
 // material / methods and tools / external oracle) into the filing skill and
@@ -14,7 +14,7 @@ package test
 // existed there) and green only once the deepening check shipped. The
 // qualitative half — that a deepened ticket's oracle maps to a falsifiable
 // verification check — is walked through in the capsule's code summary and
-// observed on real WIs, the same way workbench#29 handled its
+// observed on real WIs, the same way handled its
 // non-machine-verifiable residual.
 
 import (
@@ -56,12 +56,12 @@ func TestW30FilingDeepeningContract(t *testing.T) {
 	for _, c := range cases {
 		b, err := os.ReadFile(filepath.Join(root, c.rel))
 		if err != nil {
-			t.Fatalf("workbench#30: %s is filing-skill text the deepening check must extend: %v", c.rel, err)
+			t.Fatalf("%s is filing-skill text the deepening check must extend: %v", c.rel, err)
 		}
 		s := string(b)
 		for _, want := range c.want {
 			if !strings.Contains(s, want) {
-				t.Errorf("workbench#30: %s must carry the deepening marker %q — before filing an execution ticket the four points (expert gap / raw material / methods and tools / external oracle) land in the ticket `content` as the gap and oracle sections, with acceptance that is external oracle-ized and falsifiable", c.rel, want)
+				t.Errorf("%s must carry the deepening marker %q — before filing an execution ticket the four points (expert gap / raw material / methods and tools / external oracle) land in the ticket `content` as the gap and oracle sections, with acceptance that is external oracle-ized and falsifiable", c.rel, want)
 			}
 		}
 	}
@@ -75,7 +75,7 @@ func TestW30GrillRequiresExternalOracle(t *testing.T) {
 	} {
 		b, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
-			t.Fatalf("workbench#30: %s is a grill-family step text the external-oracle clause must reach: %v", rel, err)
+			t.Fatalf("%s is a grill-family step text the external-oracle clause must reach: %v", rel, err)
 		}
 		s := string(b)
 		// `reject` is backticked: the base autopilot text already carries the
@@ -83,7 +83,7 @@ func TestW30GrillRequiresExternalOracle(t *testing.T) {
 		// the pre-change tree; only the new clause carries `reject`.
 		for _, want := range []string{"external oracle", "falsifiable", "`reject`"} {
 			if !strings.Contains(s, want) {
-				t.Errorf("workbench#30: %s must carry the external-oracle marker %q — grill reviews the owner proposal / acceptance and may reject an acceptance that is not external oracle-ized (falsifiable)", rel, want)
+				t.Errorf("%s must carry the external-oracle marker %q — grill reviews the owner proposal / acceptance and may reject an acceptance that is not external oracle-ized (falsifiable)", rel, want)
 			}
 		}
 	}

@@ -312,7 +312,7 @@ func TestSearchModeProjectNarrowsCandidates(t *testing.T) {
 	keep := e.create(t, "needle in alpha, a longer body so it ranks below every short beta entry in the trigram index")
 	scoped := func(en *Entry) bool { return en.ProjectID == keep.ProjectID }
 	for _, mode := range []string{MatchAll, MatchAny} {
-		hits, err := e.store.SearchMode(mode, keep.ProjectID, "needle", "", nil, 1, scoped)
+		hits, err := e.store.SearchMode(mode, []string{keep.ProjectID}, "needle", "", nil, 1, scoped)
 		if err != nil || len(hits) != 1 || hits[0].ID != keep.ID {
 			t.Fatalf("%s scoped search: %v %+v, want the alpha memory", mode, err, hits)
 		}
@@ -320,13 +320,13 @@ func TestSearchModeProjectNarrowsCandidates(t *testing.T) {
 	// Unscoped with the same predicate: the AND mode pages to it; the
 	// any-term mode examines only its bounded best-ranked window, which
 	// the beta entries fill — the bound holds.
-	if hits, err := e.store.SearchMode(MatchAll, "", "needle", "", nil, 1, scoped); err != nil || len(hits) != 1 {
+	if hits, err := e.store.SearchMode(MatchAll, nil, "needle", "", nil, 1, scoped); err != nil || len(hits) != 1 {
 		t.Fatalf("AND unscoped: %v %+v", err, hits)
 	}
-	if hits, err := e.store.SearchMode(MatchAny, "", "needle", "", nil, 1, scoped); err != nil || len(hits) != 0 {
+	if hits, err := e.store.SearchMode(MatchAny, nil, "needle", "", nil, 1, scoped); err != nil || len(hits) != 0 {
 		t.Fatalf("any-term unscoped must stop at its candidate bound: %v %+v", err, hits)
 	}
-	if _, err := e.store.SearchMode("some", "", "needle", "", nil, 1, nil); err == nil || err.(*APIError).Code != "MEM-400" {
+	if _, err := e.store.SearchMode("some", nil, "needle", "", nil, 1, nil); err == nil || err.(*APIError).Code != "MEM-400" {
 		t.Fatalf("unknown mode must be MEM-400: %v", err)
 	}
 }

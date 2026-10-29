@@ -1,0 +1,25 @@
+{"id":"pf-1","type":"response","command":"prompt","success":true}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"CI is still running"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","delta":"{\"command\""}}
+{"type":"message_end","message":{"role":"assistant","stopReason":"toolUse"}}
+{"type":"tool_execution_start","toolCallId":"call_w1","toolName":"bash","args":{"command":"sleep 300 && gh run view 42 --json status","timeout":600}}
+{"type":"tool_execution_update","toolCallId":"call_w1","toolName":"bash","partialResult":{}}
+{"type":"tool_execution_end","toolCallId":"call_w1","toolName":"bash","result":{},"isError":false}
+{"type":"turn_end","message":{"role":"assistant","stopReason":"toolUse"},"toolResults":[]}
+{"type":"turn_start"}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"polling the health endpoint"}}
+{"type":"tool_execution_start","toolCallId":"call_w2","toolName":"bash","args":{"command":"until curl -sf http://127.0.0.1:8080/healthz; do sleep 2; done"}}
+{"type":"tool_execution_end","toolCallId":"call_w2","toolName":"bash","result":{},"isError":false}
+{"type":"tool_execution_start","toolCallId":"call_w3","toolName":"bash","args":{"command":"\n  sleep 1m 30s\n  make check"}}
+{"type":"tool_execution_end","toolCallId":"call_w3","toolName":"bash","result":{},"isError":false}
+{"type":"tool_execution_start","toolCallId":"call_w4","toolName":"bash","args":{"command":"sleep 3; make check"}}
+{"type":"tool_execution_end","toolCallId":"call_w4","toolName":"bash","result":{},"isError":false}
+{"type":"tool_execution_start","toolCallId":"call_w5","toolName":"bash","args":{"command":"cd build && sleep 45"}}
+{"type":"tool_execution_end","toolCallId":"call_w5","toolName":"bash","result":{},"isError":false}
+{"type":"tool_execution_start","toolCallId":"call_w6","toolName":"read","args":{"path":"sleep 600"}}
+{"type":"tool_execution_end","toolCallId":"call_w6","toolName":"read","result":{},"isError":false}
+{"type":"turn_end","message":{"role":"assistant","stopReason":"toolUse"},"toolResults":[]}
+{"type":"extension_ui_request","request":{"method":"setStatus"}}
+{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop"}],"willRetry":false}

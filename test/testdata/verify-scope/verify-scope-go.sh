@@ -22,21 +22,25 @@
 # machine-readable report shape.
 #
 # Fixed command order (documented also in docs/contributing.md):
-#   1. GOWORK=off go build ./...
-#   2. GOWORK=off go vet ./...
-#   3. test -z "$(gofmt -l .)"
-#   4. python3 -I docs/design/polyforge-vnext/tools/check-xrefs.py
-#   5. GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./...
-#   6. GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./...
+#   1. cd webui && npm ci && npm run build
+#      (the console SPA build — the go:embed dist tree must exist before any
+#       go build, and a webui/ change forces the full tier)
+#   2. GOWORK=off go build ./...
+#   3. GOWORK=off go vet ./...
+#   4. test -z "$(gofmt -l .)"
+#   5. python3 -I docs/design/polyforge-vnext/tools/check-xrefs.py
+#   6. GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./...
+#   7. GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./...
 #   full tier only:
-#   7. GOWORK=off make test
+#   8. GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/test$') -count=1
+#   9. GOWORK=off sh test/e2e-parallel.sh
 #   scoped tier (after the fast gates):
-#   7. GOWORK=off go test -count=1 <changed + reverse-dependency packages>
+#   8. GOWORK=off go test -count=1 <changed + reverse-dependency packages>
 #      (reverse dependencies are computed over each package's test binary
 #       closure, so a package reached only through a `_test.go` import is
 #       selected too)
-#   8. GOWORK=off go test -count=1 -run '^(...)$' <pkg>  (text-referenced tests)
-#   9. E2E_RUN='^(...)$' sh test/e2e-parallel.sh          (text-referenced ./test)
+#   9. GOWORK=off go test -count=1 -run '^(...)$' <pkg>  (text-referenced tests)
+#  10. E2E_RUN='^(...)$' sh test/e2e-parallel.sh          (text-referenced ./test)
 #
 # GOWORK=off keeps the commands correct in a workspace whose root carries an
 # unrelated go.work. The xrefs gate runs python3 directly: a missing python3
@@ -181,6 +185,7 @@ forced_full() {
 		internal/polyforge/daemon | internal/polyforge/daemon/*) return 0 ;;
 		go.mod | go.sum | Makefile) return 0 ;;
 		test/main_test.go | test/e2e-parallel.sh | test/fakepi/*) return 0 ;;
+		webui | webui/*) return 0 ;;
 		esac
 	done <"$changed"
 	while IFS= read -r p; do
@@ -371,6 +376,7 @@ if [ "$full" -eq 0 ]; then
 fi
 
 : >"$tmp/commands"
+add_cmd "cd webui && npm ci && npm run build"
 add_cmd "GOWORK=off go build ./..."
 add_cmd "GOWORK=off go vet ./..."
 add_cmd 'test -z "$(gofmt -l .)"'
@@ -378,7 +384,8 @@ add_cmd "python3 -I docs/design/polyforge-vnext/tools/check-xrefs.py"
 add_cmd "GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./..."
 add_cmd "GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./..."
 if [ "$mode" = "full" ]; then
-	add_cmd "GOWORK=off make test"
+	add_cmd 'GOWORK=off go test $(GOWORK=off go list ./... | grep -v '"'"'/test$'"'"') -count=1'
+	add_cmd "GOWORK=off sh test/e2e-parallel.sh"
 else
 	cat "$tmp/scoped_cmds" >>"$tmp/commands"
 fi

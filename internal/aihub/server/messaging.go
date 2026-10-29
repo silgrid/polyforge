@@ -1,6 +1,6 @@
 package server
 
-// messaging.go: the user-to-user messaging HTTP face (workbench#11).
+// messaging.go: the user-to-user messaging HTTP face.
 // All routes are Bearer-authenticated; read access is conversation member
 // or global admin. The strict send decoder refuses unknown fields, so no
 // chat/WI/machine/broadcast/bulk address exists.

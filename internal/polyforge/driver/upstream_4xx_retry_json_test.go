@@ -4,7 +4,10 @@ package driver
 // verbatim as pi recorded it (JSON-wrapped gateway body, from the #222
 // session transcript) — the repro (upstream_4xx_retry_repro_test.go)
 // covers only the unwrapped renderings. The JSON form also carries
-// invalid_request_error, which must not pull it into model-class.
+// invalid_request_error, which must pull it neither into the
+// upstream-transient class nor — "invalid" is a whole word in the
+// model-name row — into exit_model_class: without the retry invitation it
+// is the same model_error as its unwrapped rendering.
 
 import (
 	"testing"
@@ -24,10 +27,20 @@ func TestUpstream4xxRetryInvitationJSONBody(t *testing.T) {
 	if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: upstream4xxRetryJSON}); got != FailUpstreamTransient {
 		t.Errorf("verdictCause(model_error, %q) = %q, want %q", upstream4xxRetryJSON, got, FailUpstreamTransient)
 	}
-	// the same JSON body without the retry invitation stays model-class.
+	// the same JSON body without the retry invitation stays model_error,
+	// exactly as its unwrapped rendering does (the JSON wrapping must not
+	// decide between resume-first and an immediate switch)
 	plain := `400: {"message":"The model request failed due to an upstream error.","type":"invalid_request_error"}`
-	if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: plain}); got != FailModelError {
-		t.Errorf("verdictCause(model_error, %q) = %q, want %q", plain, got, FailModelError)
+	unwrapped := "400: The model request failed due to an upstream error."
+	for _, text := range []string{plain, unwrapped} {
+		if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}); got != FailModelError {
+			t.Errorf("verdictCause(model_error, %q) = %q, want %q", text, got, FailModelError)
+		}
+	}
+	// and the exit path's model-name row no longer reads the
+	// invalid_request_error type as a model problem
+	if got := classifyText(plain, true); got != "" {
+		t.Errorf("classifyText(%q) = %q, want no text class", plain, got)
 	}
 
 	// the live path: same model, resumed, no candidate burn.

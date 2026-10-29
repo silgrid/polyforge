@@ -51,7 +51,9 @@ with `pf cancel <id>`, and `pf wrap --fail` on one is refused (`DAEMON-409`).
 `claiming`): the daemon cancels the clone, quarantines the partial
 capsule and ends the session `wrapped` (or `failed`) with no seal push —
 no agent ran, so the capsule chain is unchanged. If the hub refuses that
-close, the daemon falls back to a blocked close (retried until it lands).
+close, the daemon falls back to a blocked close: a typed 4xx parks it
+(`close_refused`, no retry), and a transient failure is retried with backoff
+only until the chain's bound (`retry_exhausted`).
 
 ## Success
 
@@ -65,6 +67,14 @@ already closed. After the close lands, the work item is terminal
 (`wrapped` / `failed`) and disappears from the local jobs list. A second
 wrap answers the graceful `already_terminal` shape, not an error.
 
+After a wrap is presented as complete, read the work item's delivered PR body
+(its follow-up section) or its capsule's `artifacts/delivery.md`: if either
+carries a follow-up list, present every unclaimed item to the human and mark it
+unclaimed — present only, and leave deciding, claiming, filing, routing or
+dismissing any follow-up to the human. If the work item has no PR and no
+delivery note, or neither source is reachable, say so and ask the human where
+to read it; never assume the list is empty.
+
 ## Failure branches
 
 | Code | When | What to tell the user |
@@ -72,7 +82,8 @@ wrap answers the graceful `already_terminal` shape, not an error.
 | `DAEMON-404` | No local job and the work item is not blocked or terminal on the server | It is not running here — check `pf watch <id> --once`; if it runs elsewhere, wrap it there. |
 | `DAEMON-409` `the work item is parked blocked …` | A close of a work item parked blocked on an incomplete result (polyforge#116) or by a pause during its claim: a parked workflow never completed, so there is nothing to seal — a `wrap` (success), a `--fail`, or a `pause` of a parked workflow is all refused; there is no hub verdict door for a parked `--fail` (the terminate door is deleted, polyforge#149) | Use `pf resume <id>` to continue it, or `pf cancel <id>` to abandon it — those are the only two exits of a parked workflow. |
 | `DAEMON-404` with `<id> has no running job on this daemon; if it is parked blocked …` | `--fail` on a work item with no local job (most often one parked blocked on an incomplete result, polyforge#116). The CLI makes NO hub call, terminates nothing and exits non-zero (the wrap did not happen): a parked workflow has exactly two owner moves, and neither of them is this verb | Continue it with `pf resume <id>`, or abandon it with `pf cancel <id>`. The work item stays blocked until one of those runs. |
-| `DAEMON-409` | The job's close is already in progress (sealing, or retrying the session end until aihub takes it) | Wait for the in-flight close to settle, then check `pf watch <id> --once`; the work item is being closed exactly once either way. |
+| `DAEMON-409` `the close is parked …` / `the release of this work item is parked …` | The work item's previous driver Run did not stop within its bounded teardown and may still be writing the capsule, so the close (or pause) — or the daemon's release of a session that is no longer its own — waits: nothing is pushed, saved, sealed or quarantined next to it | Nothing to redo: the close finishes by itself once that Run exits (`pf watch <id> --once` shows `close_parked`, then the close's own events); a daemon restart also finishes it. Do not repeat the verb meanwhile — it gets the same answer. |
+| `DAEMON-409` | The job's close is already in progress: it is retried with backoff up to the chain's bound (24 hours from the first retry), or the record is parked after a typed 4xx refusal or `retry_exhausted` — an exhausted chain's answer says `retry chain is exhausted` | Wait only while it is still retrying. If the answer says the retry chain is exhausted, or `pf watch <id> --once` shows `close_refused`, `session_verify_outage` or `retry_exhausted`, the close will not settle by itself: fix the credential or hub state and restart the daemon (`pf ops shutdown`, then `pf daemon ensure`), which reconciles the record afresh. `pf cancel <id>` frees only the hub side. |
 | `CORE-*` passthrough (e.g. `CORE-403`, `CORE-409`) | The server-side session end was refused | The typed Core verdict arrives verbatim — typically the session is no longer this daemon's to end; act per its detail. |
 | `DAEMON-500` | The close failed on the daemon side | The job is left mid-seal, recorded as such; the next daemon start finishes the close. Check the daemon log before retrying. |
 | `dial unix …` | Daemon not running | Nothing is executing here — run `pf daemon ensure`, then retry once (or check `--socket`). A work item with no bundle needs no daemon. |

@@ -24,7 +24,7 @@ func msgAihub(t *testing.T, rec *reqRecorder) string {
 			return
 		}
 		if r.Method == http.MethodGet {
-			io.WriteString(w, `{"conversations":[{"id":"conv_1","kind":"direct","last_seq":7,"unread":1,"members":["u_1","u_2"]}]}`)
+			io.WriteString(w, `{"conversations":[{"id":"conv_1","kind":"direct","last_seq":7,"unread":1,"members":["u_1","u_2"],"member_names":{"u_1":"Alice","u_2":"Bob"}}]}`)
 			return
 		}
 		io.WriteString(w, `{"id":"msg_9","seq":9,"conversation_id":"conv_1","sender_id":"u_1","text":"hi","about_wi":"wi_1","reply_to":"msg_1","created_at":"2026-10-25T00:00:00Z"}`)
@@ -66,6 +66,17 @@ func TestMsgListShowShapes(t *testing.T) {
 	}
 	if got := rec.last().Path; got != "/api/v1/conversations" {
 		t.Fatalf("list path = %s", got)
+	}
+	// The human render prints the conversation row but gains no name
+	// surface (renderConversations shows members, not names).
+	if strings.Contains(stdout, "Alice") || strings.Contains(stdout, "Bob") {
+		t.Fatalf("human render grew a name surface: %s", stdout)
+	}
+	// --json passes the server's member_names through unchanged, with no
+	// reshape or rename.
+	code, stdout, stderr = runPf(t, env, "--json", "msg", "list")
+	if code != 0 || !strings.Contains(stdout, `"member_names":{"u_1":"Alice","u_2":"Bob"}`) {
+		t.Fatalf("list --json member_names passthrough: exit %d %s %s", code, stdout, stderr)
 	}
 	code, stdout, stderr = runPf(t, env, "msg", "list", "--conversation", "conv_1", "--after", "3", "--limit", "2")
 	if code != 0 || !strings.Contains(stdout, "hello there") {

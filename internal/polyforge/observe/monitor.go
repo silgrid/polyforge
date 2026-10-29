@@ -10,8 +10,8 @@ package observe
 //
 // Input sources drained by the select:
 //   - the driver's FACTS (supervise.Link.Facts: step_started,
-//     step_waiting_human/answered, step_ended, exec_committed) — an
-//     unbounded in-process queue, never dropped;
+//     step_waiting_human/answered, step_ended, exec_committed,
+//     step_retry_wait) — an unbounded in-process queue, never dropped;
 //   - the confirmed driver-exit signal (Handle.Exit) → recovery;
 //   - RT messages (RTRecovered rides rtQ; RTFinished rides stopCh);
 //   - results of the sub-goroutines (push / verify);
@@ -117,6 +117,13 @@ const (
 	phaseWaiting = "waiting_human"
 )
 
+// observationGapFactor: a tick arriving later than this many poll
+// intervals after the previous one means the SUPERVISOR was stopped (a
+// host or daemon freeze), not the dispatch. The span it did not watch is
+// removed from every judged duration; one supervisor_paused event records
+// it. The factor keeps ordinary scheduler jitter (a few missed ticks) out.
+const observationGapFactor = 10
+
 // dispatchState is the supervisor's per-dispatch state (created on
 // step_started, dropped on step_ended).
 type dispatchState struct {
@@ -126,6 +133,17 @@ type dispatchState struct {
 	candidate string // the dispatch's `<harness>:<model>[:<effort>]` ("" = the harness default model)
 	tracker   *supervise.Tracker
 	verdicted bool
+	// waitsBefore is the step's wait-call total over the earlier
+	// dispatches this monitor watched (set before the state is published,
+	// never changed after: readers need no monitor-goroutine access).
+	waitsBefore waitTotal
+}
+
+// waitTotal is a step's folded wait-call count and summed seconds
+// (supervise wait.go): counted and surfaced, never judged.
+type waitTotal struct {
+	calls int
+	secs  int64
 }
 
 // Monitor supervises one work item.
@@ -159,6 +177,13 @@ type Monitor struct {
 	phase      string
 	phaseSince time.Time
 	stalled    bool // the driver stall was raised for the current gap
+	// stepWaits folds each ended dispatch's wait calls into its step's
+	// total, so the status and watch faces read a per-step figure across
+	// retries (monitor goroutine only; nil until the first fold).
+	stepWaits map[string]waitTotal
+	// lastTick is the monitor's own heartbeat: the instant of the last
+	// tick it ran. A much later tick declares its own observation gap.
+	lastTick time.Time
 
 	// execution.json state, refreshed on driver facts (monitor goroutine).
 	dirtyVersion  int64 // latest Version seen that has no confirmed push
@@ -287,9 +312,56 @@ func (m *Monitor) requestStop() { m.stop.Do(func() { close(m.stopCh) }) }
 // push whose backoff elapsed, M4 revalidation.
 func (m *Monitor) onTick() {
 	m.drainFacts() // belt and braces: a wake-up can coalesce
+	m.observeGap()
 	m.judge()
 	m.schedulePush()
 	m.checkRevalidate()
+}
+
+// observeGap removes the supervisor's own observation gap from everything
+// it judges. It keeps the previous tick's instant: a tick far later than
+// the declared cadence means the monitor (and usually the host) was
+// stopped, so the wall span in between was never watched and must not be
+// charged to the dispatch as inactivity. Every instant stamped at or
+// before the pause is moved forward, which leaves the observed age intact
+// and lets a real hang re-arm in observed time; the cumulative model/tool
+// split is corrected by the tracker. One event per gap names its length.
+func (m *Monitor) observeGap() {
+	now := m.now()
+	last := m.lastTick
+	m.lastTick = now
+	if last.IsZero() {
+		if m.cur != nil {
+			m.cur.tracker.ObserveTick(time.Time{}, 0)
+		}
+		return
+	}
+	poll := m.cfg.PollInterval
+	gap := now.Sub(last)
+	if gap <= observationGapFactor*poll {
+		if m.cur != nil {
+			m.cur.tracker.ObserveTick(time.Time{}, 0)
+		}
+		return
+	}
+	shift := gap - poll
+	cutoff := last.Add(poll)
+	if m.cur != nil {
+		m.cur.tracker.ObserveTick(cutoff, shift)
+	}
+	if !m.phaseSince.IsZero() && !m.phaseSince.After(cutoff) {
+		m.phaseSince = m.phaseSince.Add(shift)
+	} else if m.phaseSince.Before(now) {
+		// the clock started inside the unobserved span — the end of a
+		// declared retry wait (step_retry_wait) that ran out during the
+		// pause: none of that span was watched, so N starts now
+		m.phaseSince = now
+	}
+	_ = m.log.Append(m.wi.WorkItem, EvSupervisorPaused, map[string]any{
+		"paused_ms":        gap.Milliseconds(),
+		"poll_interval_ms": poll.Milliseconds(),
+		"spawn_n":          m.currentSpawn(),
+	})
 }
 
 // isQuiet reads the quiet state (markClosing sets it from another
@@ -334,6 +406,8 @@ func (m *Monitor) drainFacts() {
 			m.refreshExec(0)
 		case supervise.ExecCommitted:
 			m.refreshExec(v.Version)
+		case supervise.StepRetryWait:
+			m.onRetryWait(v)
 		}
 	}
 	m.schedulePush() // event-triggered: do not wait for the next tick
@@ -349,12 +423,13 @@ func (m *Monitor) setPhase(p string) {
 // dropped: the driver runs one dispatch at a time).
 func (m *Monitor) onStepStarted(f supervise.StepStarted) {
 	if m.cur != nil && m.cur.spawnN < f.SpawnN {
+		m.foldWaits(m.cur)
 		m.link.Release(m.cur.spawnN)
 	}
 	m.link.Release(f.SpawnN - 1) // fence every older ordinal
 	tr := m.link.Tracker(f.SpawnN)
 	tr.Begin(f)
-	d := &dispatchState{spawnN: f.SpawnN, step: f.Step, startedAt: f.StartedAt, tracker: tr}
+	d := &dispatchState{spawnN: f.SpawnN, step: f.Step, startedAt: f.StartedAt, tracker: tr, waitsBefore: m.stepWaits[f.Step]}
 	if f.Model != "" {
 		d.candidate = harness.Candidate{Harness: harness.Of(f.Harness), Model: f.Model, Effort: f.Effort}.String()
 	}
@@ -385,12 +460,41 @@ func (m *Monitor) onStepStarted(f supervise.StepStarted) {
 func (m *Monitor) onStepEnded(f supervise.StepEnded) {
 	m.link.Release(f.SpawnN)
 	if m.cur != nil && m.cur.spawnN <= f.SpawnN {
+		m.foldWaits(m.cur)
 		m.cur = nil
 		m.stateMu.Lock()
 		m.act = nil
 		m.stateMu.Unlock()
 	}
 	m.setPhase(phaseBetween)
+}
+
+// foldWaits adds an ending dispatch's wait calls to its step's total.
+func (m *Monitor) foldWaits(d *dispatchState) {
+	snap := d.tracker.Snapshot(m.now())
+	if snap.WaitCalls == 0 {
+		return
+	}
+	if m.stepWaits == nil {
+		m.stepWaits = map[string]waitTotal{}
+	}
+	w := m.stepWaits[d.step]
+	w.calls += snap.WaitCalls
+	w.secs += snap.WaitSeconds
+	m.stepWaits[d.step] = w
+}
+
+// onRetryWait moves the between-steps stall clock to the end of a backoff
+// the driver declared: the wait is the driver's decision, not a stall, so
+// the clock N runs from Until. A declaration that ends earlier than the
+// clock already starts (or arrives outside the between-steps phase)
+// changes nothing.
+func (m *Monitor) onRetryWait(f supervise.StepRetryWait) {
+	if m.phase != phaseBetween || !f.Until.After(m.phaseSince) {
+		return
+	}
+	m.phaseSince = f.Until
+	m.stalled = false
 }
 
 // refreshExec is the event-triggered read of the authoritative file: the
@@ -490,7 +594,8 @@ func (m *Monitor) activity() Activity {
 	}
 	now := m.now()
 	snap := d.tracker.Snapshot(now)
-	return Activity{Step: d.step, SpawnN: d.spawnN, StepStartedAt: d.startedAt, LastWorkAt: snap.LastWork, InDispatch: true, Candidate: d.candidate}
+	return Activity{Step: d.step, SpawnN: d.spawnN, StepStartedAt: d.startedAt, LastWorkAt: snap.LastWork, InDispatch: true, Candidate: d.candidate,
+		WaitCalls: d.waitsBefore.calls + snap.WaitCalls, WaitSeconds: d.waitsBefore.secs + snap.WaitSeconds}
 }
 
 // liveProgress answers the watch face's per-dispatch reading (any
@@ -505,7 +610,8 @@ func (m *Monitor) liveProgress() LiveProgress {
 	}
 	now := m.now()
 	snap := d.tracker.Snapshot(now)
-	p := LiveProgress{InDispatch: true, Step: d.step, RecentFiles: snap.RecentFiles, ToolCalls: snap.ToolCalls}
+	p := LiveProgress{InDispatch: true, Step: d.step, RecentFiles: snap.RecentFiles, ToolCalls: snap.ToolCalls,
+		WaitCalls: d.waitsBefore.calls + snap.WaitCalls, WaitSeconds: d.waitsBefore.secs + snap.WaitSeconds}
 	if n := len(snap.Tools); n > 0 {
 		cur := snap.Tools[n-1] // oldest first: the last is the newest
 		p.Command = cur.Summary
@@ -522,16 +628,54 @@ func (m *Monitor) liveProgress() LiveProgress {
 // recovery already requested for this derivation) is silent. A terminal
 // exit needs no publish first: the runtime's close seal-pushes the
 // capsule itself.
+//
+// A driver that exits over a settled workflow_status — a terminal one
+// (completed, failed_gate, failed_rewind_exhausted) or blocked, the
+// non-terminal owner park its Run loop stops on by design — finished; it
+// did not die. The driver writes that status before it returns, so the
+// read is race-free (and a relaunch over a parked capsule rewrites it to
+// running before its Run starts). The runtime's recovery door is still
+// the one that closes it (recoverCore translates the status into the WI's
+// close: wrapped, failed, or the owner's bounded-fail block), but no
+// needs_recovery event is recorded for it; the driver's own blocked event
+// (incomplete, for a park on an incomplete step result) already records
+// the park.
 func (m *Monitor) onExit() {
 	m.exitCh = nil // fires once per handle
 	m.drainFacts() // the driver's final commit-boundary facts may still be queued
-	m.needRecovery(protocol.RecoverDeath, "agent process exited")
+	m.signalRecovery(protocol.RecoverDeath, "agent process exited", !m.workflowSettled())
+}
+
+// workflowSettled reports whether execution.json carries a workflow_status
+// the driver stops on: a terminal one or blocked (an unreadable or torn
+// file is not settled).
+func (m *Monitor) workflowSettled() bool {
+	data, err := os.ReadFile(m.execPath())
+	if err != nil {
+		return false
+	}
+	var exec capsule.Execution
+	if json.Unmarshal(data, &exec) != nil {
+		return false
+	}
+	switch exec.WorkflowStatus {
+	case capsule.WorkflowStatusCompleted, capsule.WorkflowStatusFailedGate,
+		capsule.WorkflowStatusFailedRewindExhausted, capsule.WorkflowStatusBlocked:
+		return true
+	}
+	return false
 }
 
 // needRecovery sends the derivation's one WINeedsRecovery and turns the
 // monitor quiet until RTRecovered ("已发后静默到恢复完成"); a quiet or
 // closing monitor sends nothing.
 func (m *Monitor) needRecovery(reason, detail string) {
+	m.signalRecovery(reason, detail, true)
+}
+
+// signalRecovery is needRecovery; record=false sends the request without
+// the needs_recovery event (a settled driver exit is no death).
+func (m *Monitor) signalRecovery(reason, detail string, record bool) {
 	m.stateMu.Lock()
 	if m.quiet || m.closing {
 		m.stateMu.Unlock()
@@ -539,9 +683,11 @@ func (m *Monitor) needRecovery(reason, detail string) {
 	}
 	m.quiet = true
 	m.stateMu.Unlock()
-	_ = m.log.Append(m.wi.WorkItem, EvNeedsRecovery, map[string]any{
-		"reason": reason, "detail": detail, "spawn_n": m.currentSpawn(),
-	})
+	if record {
+		_ = m.log.Append(m.wi.WorkItem, EvNeedsRecovery, map[string]any{
+			"reason": reason, "detail": detail, "spawn_n": m.currentSpawn(),
+		})
+	}
 	m.sendOB(protocol.OBMsg{
 		Kind: protocol.OBNeedsRecovery, SpawnN: m.currentSpawn(),
 		WorkItem: m.wi.WorkItem, Reason: reason, Detail: detail,
@@ -564,6 +710,7 @@ func (m *Monitor) onRecovered(at Attach) {
 	}
 	m.exitCh = at.Handle.Exit()
 	if m.cur != nil {
+		m.foldWaits(m.cur) // the dropped dispatch's wait calls stay in its step's total
 		m.link.Release(m.cur.spawnN)
 	}
 	m.cur = nil

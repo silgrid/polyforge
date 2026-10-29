@@ -16,6 +16,8 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"sync/atomic"
 	"time"
 )
@@ -80,22 +82,91 @@ var errAbandoned = errors.New("runtime: the caller gave up before the work item'
 // retry reconciles j's work item again after a backoff — the one retry
 // every pending hub step (a close, a verify, a claim replay) shares: the
 // first after EndRetryBase, each next one twice as long, up to
-// EndRetryMax. The shutdown stops it (its waiting goroutine ends). Only
-// j's actor calls it.
+// EndRetryMax, then every EndRetryMax. This is the ONLY scheduler of a
+// retry: an operation that schedules one and the reconcile running it
+// must not clear it (a caller that cleared it pinned the chain at the
+// base —). A step the hub REFUSED (a typed 4xx) never
+// reaches it; that is a final answer (parkRefused).
+//
+// The chain is BOUNDED by time, not by a count: the
+// first scheduled retry stamps the chain's start, and the failed attempt
+// that finds EndRetryWindow (default 24h) elapsed since then schedules
+// nothing more — the record stays in its state, marked exhausted for the
+// operator's doors and named by a retry_exhausted event; a daemon start
+// reconciles it afresh. A count bound of eight attempts gave up after
+// about four minutes, so any longer aihub outage parked every closing
+// record until a restart. The shutdown stops the chain (its waiting
+// goroutine ends). Only j's actor calls it.
 func (r *Runtime) retry(j *job) {
 	if r.ctx.Err() != nil {
 		return
 	}
+	now := time.Now()
+	j.mu.Lock()
+	if j.retryN == 0 {
+		j.retrySince = now
+	} else if elapsed := now.Sub(j.retrySince); elapsed >= r.cfg.EndRetryWindow {
+		st := string(j.state)
+		attempts := j.retryN + 1 // the chain's first attempt plus every retry
+		j.retryExhausted = true
+		j.mu.Unlock()
+		reason := fmt.Sprintf("the retry chain gave up after %d attempts over %s without the hub settling this record (latest state %s): nothing more is retried and the record stays %s for a human — a daemon start reconciles it afresh", attempts, elapsed.Round(time.Second), st, st)
+		r.tap(j.wi, EventRetryExhausted, map[string]any{
+			"work_item":       j.wi,
+			"state":           st,
+			"attempts":        attempts,
+			"elapsed_seconds": int(elapsed.Seconds()),
+			"reason":          reason,
+		})
+		fmt.Fprintf(os.Stderr, "runtime: %s: %s\n", j.wi, reason)
+		return
+	}
+	j.retryN++
+	j.retryExhausted = false
 	j.retryIn = min(max(2*j.retryIn, r.cfg.EndRetryBase), r.cfg.EndRetryMax)
+	j.retryPending = true
+	wait := j.retryIn
+	j.mu.Unlock()
 	go func(wait time.Duration) {
 		t := time.NewTimer(wait)
 		defer t.Stop()
 		select {
 		case <-t.C:
+			j.mu.Lock()
+			j.retryPending = false // consumed: the attempt runs now
+			j.mu.Unlock()
 			r.post(j.wi, func() { r.reconcile(j.wi) })
 		case <-r.ctx.Done():
 		}
-	}(j.retryIn)
+	}(wait)
+}
+
+// retryChainNote is the operator-facing tail of an answer about an
+// operation the actor's retry chain owns (a close, a claim replay): live
+// while the chain lives and retries by itself; once exhausted nothing
+// does, and the answer must say so.
+func (j *job) retryChainNote(live string) string {
+	j.mu.Lock()
+	exhausted := j.retryExhausted
+	j.mu.Unlock()
+	if exhausted {
+		return "its retry chain is exhausted (retry_exhausted) and nothing retries it any more — restart the daemon (`pf ops shutdown`, then `pf daemon ensure`), whose start reconciles the record afresh"
+	}
+	return live
+}
+
+// closeRetryNote is retryChainNote for a close.
+func (j *job) closeRetryNote() string {
+	return j.retryChainNote("retried with backoff until the chain's bound; a typed 4xx refusal parks the record")
+}
+
+// retryOutstanding reports whether the actor's next retry is already on a
+// timer: the reconcile that runs an operation must not clear the backoff
+// such an operation just scheduled.
+func (j *job) retryOutstanding() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.retryPending
 }
 
 // Idle reports whether no work item has an operation queued or running

@@ -157,7 +157,7 @@ func TestWIRepoInventoryPatchRefused(t *testing.T) {
 	id := mustCreateWI(t, env, "patch carrier", nil, "")
 	_, err := env.WIs.Patch(id, map[string]json.RawMessage{
 		"repo_inventory": json.RawMessage(`[{"name":"app"}]`),
-	})
+	}, env.UserID)
 	if !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "IMMUTABLE" {
 		t.Fatalf("want IMMUTABLE for an inventory patch, got %v", err)
 	}

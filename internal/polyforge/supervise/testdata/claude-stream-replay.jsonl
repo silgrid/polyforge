@@ -8,8 +8,17 @@
 {"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":null}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"go test ./..."}}]},"parent_tool_use_id":null}
 {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]},"parent_tool_use_id":null}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_w1","name":"Bash","input":{"command":"sleep 120 && gh pr checks 7","description":"wait for CI"}}]},"parent_tool_use_id":null}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_w1","content":"pass"}]},"parent_tool_use_id":null}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_w2","name":"Bash","input":{"command":"for i in 1 2 3 4 5; do gh pr checks 7 && break; sleep 30; done"}}]},"parent_tool_use_id":null}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_w2","content":"pass"}]},"parent_tool_use_id":null}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_w3","name":"Bash","input":{"command":"sleep 2 && git fetch origin"}}]},"parent_tool_use_id":null}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_w3","content":""}]},"parent_tool_use_id":null}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_w4","name":"Bash","input":{"command":"sleep 1m"}}]},"parent_tool_use_id":null}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_w4","content":""}]},"parent_tool_use_id":null}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Agent","input":{"description":"review","prompt":"review the diff"}}]},"parent_tool_use_id":null}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_sub","name":"Read","input":{"file_path":"a.go"}}]},"parent_tool_use_id":"toolu_2"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_subw","name":"Bash","input":{"command":"sleep 60"}}]},"parent_tool_use_id":"toolu_2"}
 {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sub","content":"..."}]},"parent_tool_use_id":"toolu_2"}
 {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"looks fine"}]},"parent_tool_use_id":null}
 {"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":500,"error_status":429,"error":"rate_limit"}

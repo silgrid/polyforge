@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 // TestD8TransientTextsClassifyUpstreamTransient: the transient
@@ -100,9 +101,9 @@ func TestD8TransientStreakResetsOnAnotherCause(t *testing.T) {
 
 // TestD8TransientArchiveLedgerAndSwitch: three consecutive transients —
 // the first two archive upstream_transient and retry the same model
-// (counter untouched, backoff imposed, booked into T), the third
-// archives exit_model_class and switches. The archive alone answers the
-// remaining bound.
+// (counter untouched, the retry pacing's backoff imposed, booked into T),
+// the third archives exit_model_class and switches. The archive alone
+// answers the remaining bound.
 func TestD8TransientArchiveLedgerAndSwitch(t *testing.T) {
 	var slept []time.Duration
 	env := newChainEnv(t, func(c *Config) {
@@ -144,9 +145,11 @@ func TestD8TransientArchiveLedgerAndSwitch(t *testing.T) {
 	if st.Supervision != nil && st.Supervision.FailureCount != 0 {
 		t.Fatalf("the in-bound retries must not move the blocking counter: %+v", st.Supervision)
 	}
-	// the two in-bound retries waited the D7 ladder; the switch did not.
-	if len(slept) != 2 || slept[0] != RateLimitBackoffBase || slept[1] != 2*RateLimitBackoffBase {
-		t.Fatalf("backoff waits %v, want the D7 ladder [1s 2s] for the two retries only", slept)
+	// the two in-bound retries waited the retry pacing (1m, 3m); the
+	// exit_model_class switch is not a paced cause and did not wait.
+	base := supervise.DefaultRetryBackoffBase
+	if len(slept) != 2 || slept[0] != base || slept[1] != RetryBackoffFactor*base {
+		t.Fatalf("backoff waits %v, want the retry pacing [1m 3m] for the two retries only", slept)
 	}
 }
 

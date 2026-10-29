@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1188,11 +1189,12 @@ func copySharedMemoryTemplates(t *testing.T, capDir string) {
 	}
 }
 
-// TestSpawnStepPromptCarriesMemoryDuty: every step prompt carries the
-// recall-at-start / at-most-one-memory-at-end duty with the claimed
-// project's policy lists; only the workflow's last step adds the wrap
-// summary duty. Without a policy file the built-in default renders;
-// without the templates no section renders.
+// TestSpawnStepPromptCarriesMemoryDuty: a step whose entry declares
+// `recall: true` carries the recall-at-start duty; the workflow's last
+// step carries the wrap summary duty with the claimed project's policy
+// lists, and — a gate declaring no recall no recall
+// duty. Without a policy file the built-in default renders; without the
+// templates no section renders.
 func TestSpawnStepPromptCarriesMemoryDuty(t *testing.T) {
 	ad, sp, capDir := spawnEnv(t)
 	grillDone(t, capDir)
@@ -1213,7 +1215,7 @@ func TestSpawnStepPromptCarriesMemoryDuty(t *testing.T) {
 	for _, want := range []string{
 		"# Project memory", "non-binding history",
 		"pf recall --project e2e --any '<keyword set 1>'", "中文", "pf memory show <id>",
-		"Steps do not write memories, except the last step's one wrap summary",
+		"Steps do not write memories: only the workflow's last step writes the work item's one wrap summary",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q\n%s", want, prompt)
@@ -1239,8 +1241,16 @@ func TestSpawnStepPromptCarriesMemoryDuty(t *testing.T) {
 			t.Fatalf("last-step prompt missing %q\n%s", want, p.InitialPrompt)
 		}
 	}
+	for _, unwanted := range []string{"# Project memory", "pf recall", "pf memory show"} {
+		if strings.Contains(p.InitialPrompt, unwanted) {
+			t.Fatalf("the last step is a gate declaring no recall: it carries the wrap duty only, not the recall duty (%q)\n%s", unwanted, p.InitialPrompt)
+		}
+	}
 	if strings.Index(prompt, "# Project memory") > strings.Index(prompt, "# Result delivery") {
 		t.Fatal("the memory duty must precede the delivery contract")
+	}
+	if strings.Index(p.InitialPrompt, "# Work item wrap summary") > strings.Index(p.InitialPrompt, "# Result delivery") {
+		t.Fatal("the wrap duty must precede the delivery contract")
 	}
 
 	// without a policy file the built-in default renders
@@ -1256,9 +1266,21 @@ func TestSpawnStepPromptCarriesMemoryDuty(t *testing.T) {
 	}
 }
 
+// w109RecallSteps is the owner-approved recall set: the
+// decision/authoring steps carry the recall duty; the gates (review,
+// verification, deliver, grill-review) and the release lane's steps do
+// not.
+var w109RecallSteps = map[string]bool{
+	"grill": true, "spec": true, "plan": true, "repro": true,
+	"root-cause": true, "e2e-author": true, "code": true, "fix": true,
+}
+
 // TestShippedBundlesRenderMemoryDuty: the shipped templates render with
-// the vars the driver supplies, for every shipped bundle's steps, and the
-// wrap duty lands on each bundle's last step only.
+// the vars the driver supplies, for every shipped bundle's steps; the
+// recall duty lands exactly on the step entries declaring `recall: true`
+// — which in the shipped lanes are exactly the owner-approved
+// decision/authoring steps — and the wrap duty on each bundle's last
+// step only.
 func TestShippedBundlesRenderMemoryDuty(t *testing.T) {
 	capDir := t.TempDir()
 	writeCapsuleFile(t, capDir, capsule.WorkItemJSON, `{"id":"wi_1","project":"polyforge","goal":"g"}`)
@@ -1268,13 +1290,54 @@ func TestShippedBundlesRenderMemoryDuty(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, s := range wf.Steps {
-			sec := memoryDutySection(dir, capDir, wf.lastStep(s.ID))
-			if !strings.Contains(sec, "pf recall --project polyforge --any") || !strings.Contains(sec, "work item `wi_1`") {
-				t.Fatalf("%s/%s: memory duty not rendered:\n%s", filepath.Base(dir), s.ID, sec)
+			if s.Recall != w109RecallSteps[s.ID] {
+				t.Errorf("%s/%s: recall = %v, want %v — the recall duty rides the decision/authoring steps only", filepath.Base(dir), s.ID, s.Recall, w109RecallSteps[s.ID])
 			}
-			if got := strings.Contains(sec, "experience.wrap"); got != (s.ID == wf.Steps[len(wf.Steps)-1].ID) {
+			last := s.ID == wf.Steps[len(wf.Steps)-1].ID
+			sec := memoryDutySection(dir, capDir, s.Recall, wf.lastStep(s.ID))
+			if got := strings.Contains(sec, "pf recall --project polyforge --any"); got != s.Recall {
+				t.Fatalf("%s/%s: recall duty rendered = %v, want %v:\n%s", filepath.Base(dir), s.ID, got, s.Recall, sec)
+			}
+			if s.Recall && !strings.Contains(sec, "work item `wi_1`") {
+				t.Fatalf("%s/%s: recall duty without the work item:\n%s", filepath.Base(dir), s.ID, sec)
+			}
+			if got := strings.Contains(sec, "experience.wrap"); got != last {
 				t.Fatalf("%s/%s: wrap duty = %v", filepath.Base(dir), s.ID, got)
 			}
+			if !s.Recall && !last && sec != "" {
+				t.Fatalf("%s/%s: a step with neither duty renders no memory section:\n%s", filepath.Base(dir), s.ID, sec)
+			}
+		}
+	}
+}
+
+// TestW109DeliverPromptCarriesWrapNotRecall: the deliver prompt a shipped
+// lane really dispatches (the spawn adapter over the materialized bundle)
+// carries the wrap summary duty — it is the last step — but no recall
+// duty, while the lane's build step still carries the recall duty and no
+// wrap duty ( D2: deliver spent its first seconds on three
+// recalls and a memory show).
+func TestW109DeliverPromptCarriesWrapNotRecall(t *testing.T) {
+	done := map[string]bool{"grill": true, "spec": true, "plan": true, "e2e-author": true, "repro": true, "root-cause": true}
+	for _, c := range []struct{ bundle, build string }{
+		{"chore", "code"}, {"feature-full", "code"}, {"bug-fix", "fix"}, {"autopilot", "fix"},
+	} {
+		deliver := w109DispatchPrompt(t, c.bundle, "deliver", done)
+		if !strings.Contains(deliver, "# Work item wrap summary") ||
+			!strings.Contains(deliver, "pf remember --project demo --type experience.wrap --work-item 'demo#9'") {
+			t.Errorf("%s/deliver: the last step must carry the wrap summary duty\n%s", c.bundle, deliver)
+		}
+		for _, unwanted := range []string{"# Project memory", "pf recall --project", "run `pf recall` yourself", "## Prior experience` section: each memory"} {
+			if strings.Contains(deliver, unwanted) {
+				t.Errorf("%s/deliver: a gate carries no recall duty, found %q", c.bundle, unwanted)
+			}
+		}
+		build := w109DispatchPrompt(t, c.bundle, c.build, done)
+		if !strings.Contains(build, "# Project memory (`pf recall`)") || !strings.Contains(build, "pf recall --project") {
+			t.Errorf("%s/%s: the build step must still carry the recall duty", c.bundle, c.build)
+		}
+		if strings.Contains(build, "# Work item wrap summary") {
+			t.Errorf("%s/%s: a non-last step carries no wrap duty", c.bundle, c.build)
 		}
 	}
 }
@@ -1308,7 +1371,7 @@ func TestPromptBindsCapsuleRelativePathsToAbsoluteRoot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// The re-dispatch fast path (workbench#21).
+// The re-dispatch fast path.
 
 // stubTreeHash swaps the package-level hashing seam for one test.
 func stubTreeHash(t *testing.T, fn func(string) (string, error)) {
@@ -1489,7 +1552,7 @@ func TestSpawnStepFastPathDecision(t *testing.T) {
 	})
 }
 
-// TestCapsuleReclaimed pins the re-claim detection (workbench#21 owner
+// TestCapsuleReclaimed pins the re-claim detection ( owner
 // ruling): a materialization marker that postdates the recorded failure
 // attempt is a re-claim (the fast path is refused); a marker that
 // predates it is the same claim; a missing or unparsable marker fails
@@ -1518,5 +1581,105 @@ func TestCapsuleReclaimed(t *testing.T) {
 				t.Fatalf("capsuleReclaimed(%q, %q) = %v, want %v", root, c.recordedAt, got, c.want)
 			}
 		})
+	}
+}
+
+// w109DispatchPrompt dispatches one step of a shipped bundle through the
+// spawn adapter over a capsule carrying the materialized bundle, the
+// whole shared material (step definitions, fragments, memory templates)
+// and a work item with a project, and answers the assembled prompt.
+func w109DispatchPrompt(t *testing.T, bundle, stepID string, done map[string]bool) string {
+	t.Helper()
+	p, err := w109Dispatch(t, w109Capsule(t, bundle), bundle, StepSpawn{StepID: stepID, SpawnN: 1, Done: done})
+	if err != nil {
+		t.Fatalf("SpawnStep %s/%s: %v", bundle, stepID, err)
+	}
+	return p
+}
+
+// w109Capsule materializes a shipped bundle, the whole shared material
+// and a work item with a project into a fresh capsule.
+func w109Capsule(t *testing.T, bundle string) string {
+	t.Helper()
+	capDir := capsuleWithShippedBundle(t, bundle)
+	shared, _ := filepath.Glob(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "*.md"))
+	stepDefs, _ := filepath.Glob(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, "steps", "*.md"))
+	for _, p := range append(shared, stepDefs...) {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rel, _ := filepath.Rel(shippedWorkflowsDir, p)
+		writeCapsuleFile(t, capDir, "workflows/"+filepath.ToSlash(rel), string(raw))
+	}
+	writeCapsuleFile(t, capDir, capsule.WorkItemJSON, `{"id":"wi_w109","slug":"demo#9","project":"demo","goal":"g"}`)
+	return capDir
+}
+
+// w109Dispatch runs one SpawnStep over capDir and answers the assembled
+// prompt, or the dispatch error.
+func w109Dispatch(t *testing.T, capDir, bundle string, spawn StepSpawn) (string, error) {
+	t.Helper()
+	sp := &captureSpawner{}
+	ad, err := NewStepSpawnAdapter(StepSpawnAdapter{
+		WI:           WIInfo{ID: "wi_w109", CapsuleDir: capDir, BundleName: bundle, SessionHandle: "ab12cd34"},
+		Spawner:      sp,
+		PollInterval: 2 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewStepSpawnAdapter: %v", err)
+	}
+	if _, err := ad.SpawnStep(context.Background(), spawn); err != nil {
+		return "", err
+	}
+	p, _ := sp.last()
+	return p.InitialPrompt, nil
+}
+
+// TestW109SharedSectionNeverSilentlyDropped ( W3): a
+// driver-rendered shared section that cannot render fails the dispatch
+// closed - a placeholder the step entry declares no var for is a
+// dispatch error naming the bundle, step and section, never a review
+// re-entry without its round contract. A MISSING section file (the
+// transition shape of a capsule claimed before the section files
+// existed, its snapshot carrying the old static text) renders no
+// section and says so on stderr.
+func TestW109SharedSectionNeverSilentlyDropped(t *testing.T) {
+	reentry := StepSpawn{StepID: reviewStepID, SpawnN: 2, ReviewReentry: true, Done: map[string]bool{"plan": true, "code": true}}
+	// the control: the shipped section renders on a re-entry
+	capDir := w109Capsule(t, "chore")
+	p, err := w109Dispatch(t, capDir, "chore", reentry)
+	if err != nil || !strings.Contains(p, "On a re-entry, run two additive faces over the current tree:") {
+		t.Fatalf("control: the shipped re-entry section must render (err %v)", err)
+	}
+	// an unresolvable placeholder fails the dispatch closed
+	writeCapsuleFile(t, capDir, "workflows/"+workflow.SharedDir+"/review_reentry.md", "## Re-entry\n\nJudge {{not_a_declared_var}}.\n")
+	if _, err := w109Dispatch(t, capDir, "chore", reentry); err == nil ||
+		!strings.Contains(err.Error(), "chore/review: shared section review_reentry") ||
+		!strings.Contains(err.Error(), "not_a_declared_var") {
+		t.Fatalf("an unrenderable shared section must fail the dispatch naming bundle/step/section, got %v", err)
+	}
+	// a missing file renders no section, loudly
+	if err := os.Remove(filepath.Join(capDir, "workflows", workflow.SharedDir, "review_reentry.md")); err != nil {
+		t.Fatal(err)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	p, derr := w109Dispatch(t, capDir, "chore", reentry)
+	os.Stderr = orig
+	w.Close()
+	logged, _ := io.ReadAll(r)
+	if derr != nil {
+		t.Fatalf("a missing section file is the transition shape - the dispatch proceeds: %v", derr)
+	}
+	if strings.Contains(p, "On a re-entry, run two additive faces") {
+		t.Fatal("a missing section file renders no section")
+	}
+	if !strings.Contains(string(logged), "driver: chore/review: shared section review_reentry:") {
+		t.Fatalf("a missing section file must be reported on stderr, got %q", logged)
 	}
 }

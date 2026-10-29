@@ -1,6 +1,6 @@
 package test
 
-// w24_scoped_gates_contract_test.go: text contract for workbench#24.
+// w24_scoped_gates_contract_test.go: text contract for.
 //
 // Work item #24 adds the scoped-gate discoverability surfaces: the filing
 // skill fragments must teach the entry-point precondition before a ticket
@@ -61,19 +61,22 @@ func TestW24ScopedGatesFilingHintContract(t *testing.T) {
 				"verify-scope.conf",
 				"docs/contributing.md『Verification tiers』",
 				"no local clone",
-				"workbench#25",
+				// a projection-stable marker, not a ticket tag: the desensitize
+				// REWRITE rules wash workbench#NN literals to nothing, which
+				// would empty this check in the projected copy.
+				"never faked green",
 			},
 		},
 	}
 	for _, c := range cases {
 		b, err := os.ReadFile(filepath.Join(root, c.rel))
 		if err != nil {
-			t.Fatalf("workbench#24: %s is scoped-gate text the change must extend: %v", c.rel, err)
+			t.Fatalf("%s is scoped-gate text the change must extend: %v", c.rel, err)
 		}
 		s := string(b)
 		for _, want := range c.want {
 			if !strings.Contains(s, want) {
-				t.Errorf("workbench#25: %s must carry the scoped-gate marker %q — before filing a ticket that carries the opt-in line `verification: scoped`, the skill must confirm the release tree carries `tools/verify-scope` and the repo is scoped-ready (a supported manifest or `.polyforge/verify-scope.conf`; the `pf doctor` `scoped-gates readiness` row, or `pf projects get` plus a look in the local clone); when not ready the marker is inert and the ticket falls back to full; the contract is docs/contributing.md『Verification tiers』", c.rel, want)
+				t.Errorf("%s must carry the scoped-gate marker %q — before filing a ticket that carries the opt-in line `verification: scoped`, the skill must confirm the release tree carries `tools/verify-scope` and the repo is scoped-ready (a supported manifest or `.polyforge/verify-scope.conf`; the `pf doctor` `scoped-gates readiness` row, or `pf projects get` plus a look in the local clone); when not ready the marker is inert and the ticket falls back to full; the contract is docs/contributing.md『Verification tiers』", c.rel, want)
 			}
 		}
 	}

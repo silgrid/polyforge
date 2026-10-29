@@ -1,6 +1,6 @@
 package test
 
-// w22_config_panel_acceptance_test.go: workbench#22 end-to-end acceptance for
+// w22_config_panel_acceptance_test.go: end-to-end acceptance for
 // the polyforge half of the pi-web configuration panel — the five `pf config`
 // additions of artifacts/spec.md (reload class per key, validator-derived key
 // schema, expected-file-hash (CAS) writes with a key-level diff, live read and

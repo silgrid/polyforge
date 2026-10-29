@@ -2,15 +2,16 @@
 
 The one authority for Polyforge's two configuration files: `cli.toml`
 (the CLI and daemon config) and `.polyforge.yaml` (the workspace-level
-per-step settings). Every key that exists is documented here; a key not
-on this page does not exist. The load behavior (precedence, validation,
+per-step settings) — plus the per-repository verification bar,
+`.polyforge/verify-scope.conf`. Every key that exists is documented here; a
+key not on this page does not exist. The load behavior (precedence, validation,
 refusals) is stated once per file; the [commands page](commands.md) owns
 the command surface, and [extending](../extending.md) indexes the
 extension points that point into this page. The concepts (workspace,
 repo mapping, machine) are defined on the [concepts
 page](../concepts.md).
 
-## Cross-machine face: no new key (workbench#11)
+## Cross-machine face: no new key
 
 The cross-machine capability is default-on and zero-config. There is no
 `cli.toml` key, no `.polyforge.yaml` key and no daemon flag an operator must
@@ -129,6 +130,19 @@ The running daemon applies a changed `claude_bin` on the reload
 started with an explicit `--claude-bin` flag, which pins the value and is
 reported as overridden.
 
+Every claude step also starts with the Bash tool's per-call timeouts set:
+`BASH_DEFAULT_TIMEOUT_MS=600000` (10 minutes, for a command that names no
+timeout of its own) and `BASH_MAX_TIMEOUT_MS` = the daemon's supervision
+tool window (`--tool-window`, test/dev-only) minus one minute (`1740000`
+with the default 30-minute window), so a long `make test` runs in the
+foreground instead of hitting Claude Code's 2-minute default. The default
+never exceeds the max: a tool window of 11 minutes or less gives
+default = max. A key the claude-config settings.json env block carries
+itself wins: the daemon adds neither key that block sets (it never writes
+the file), and a default it adds next to an operator's own
+`BASH_MAX_TIMEOUT_MS` is clamped to that max. pi steps get neither
+variable.
+
 ### Writing `cli.toml` — `pf config`
 
 `pf config` is the one supported writer of `cli.toml` (the loader, the
@@ -171,7 +185,7 @@ Reload classes (one class per key):
 | restart-only | `server`, `api_key`, `daemon_socket`, `harness_root`, `operator_agent_dir` | reported pending; the running daemon keeps its value and a restart applies it |
 | CLI-only | `user_id` | never read by the daemon |
 
-### Machine-readable list, schema and CAS (workbench#22)
+### Machine-readable list, schema and CAS
 
 `pf --json config list` is additive: every item carries `class` (the same
 class table the reload path uses, including `next-claim` for a whole
@@ -195,7 +209,7 @@ says the target file is absent. With no `--expect-hash`/`--expect-state` the
 write is unconditional; `--expect-hash` alone refuses on a moved hash and
 lists the file's current values.
 
-### Workspace `.polyforge.yaml` summarize keys (workbench#22)
+### Workspace `.polyforge.yaml` summarize keys
 
 `pf --json config workspace --cwd <dir>` resolves the cwd through the same
 `MatchWorkspace` longest-prefix rule as every other workspace consumer and
@@ -290,8 +304,13 @@ recorded it (a re-claim, whose fresh materialization did not restore the
 ignored build directories, keeps the from-scratch reference), the
 reference keeps its transcript path
 but orders continuing in place (the tree is byte-identical, so completed
-environment setup is not redone); a mismatch, a missing hash or a re-claim keeps the
-from-scratch reference. A
+environment setup is not redone); in a rewound round of the lane's build step
+the fast path is additionally suppressed when the retry's task-repo (`repos/**`)
+tree still equals the tree the rewinding gate judged (`judged_repo_hash`) — no
+code progress, so the from-scratch reference stays beside the FAIL verdict
+( criterion 5; an unknown judged hash or a repos-hash error keeps
+this wording). A mismatch, a missing hash, a re-claim or an unreadable tree
+keeps the from-scratch reference. A
 step with no list (or an empty one) runs pi's own default model. The
 optional effort (polyforge#176) is the last segment only when it is one
 of `off minimal low medium high xhigh max` — `pi:ollama/llama3:8b`
@@ -319,7 +338,7 @@ steps:
     task: { models: ["pi:prov/model-a", "claude:claude-sonnet-5-5"] }
 ```
 
-`task` is a recognized, **bundle-less** step id (workbench#53, the
+`task` is a recognized, **bundle-less** step id (the
 re-established #40): it belongs to no workflow bundle and is never part of
 a step's precedence chain. Its only key is `models`, with the same
 candidate shape and strictness as any other step entry; any other key — a
@@ -417,7 +436,9 @@ spec/plan (they live in the work item and the capsule), what code or
 git shows directly, transient state, and credential values. The daemon
 writes the claimed project's effective policy to the capsule
 (`runtime-state/memory-policy.json`) and renders it into the last
-step's wrap duty; every step's prompt asks it to recall first. The
+step's wrap duty; a step whose workflow entry declares `recall: true`
+(the decision and authoring steps, never a gate like review,
+verification or deliver) is asked to recall first. The
 built-in default described above is an English paraphrase: the section
 `pf init` appends carries the same lists written in Chinese, and the
 built-in policy the daemon parses from it is the one described here.
@@ -434,3 +455,86 @@ to the step's own work item and project and stores it with an
 idempotency key of the step dispatch (a retry returns the same memory);
 a failure is reported and never fails the step. Every other aihub verb,
 `pf doctor` and `pf daemon` are refused there (DAEMON-403).
+
+## `.polyforge/verify-scope.conf` — the verification bar
+
+A repository's declarative verification bar, committed in the repository and
+read from its root by the release-shipped engine `tools/verify-scope`. The
+tier semantics — the analyzers, the scoped selection, the report and its JSON
+form, `--run` — are in [contributing's Verification
+tiers](../contributing.md#verification-tiers); this table is the key list.
+The file is line-oriented: one `key=value` per line, leading whitespace
+ignored, `#` comment lines and blank lines ignored, and a value runs to the
+end of its line (there is no trailing comment on a value line). It is never
+sourced or evaluated; an unknown key or a malformed line is diagnosed on
+stderr and contributes nothing.
+
+| Key | Value | Meaning |
+|---|---|---|
+| `stack` | `go`, `npm` or `none` | Pins the analyzer (the first valid pin wins). `none` pins no analyzer: always the full tier, the conf's commands only. |
+| `go_harness` | path | The Go acceptance harness that owns its directory; the scoped selection runs it for the tests that reference a changed path. |
+| `fast_gate` | command | Repeatable, ordered: an anonymous fast-phase command, named `fast-<i>` (the i-th `fast_gate` line). |
+| `full_command` | command | Repeatable, ordered: an anonymous full-phase command, named `full-<i>`. |
+| `check` | `<name>\|<fast\|full>\|<command>` | Repeatable: a named command of that phase, in file order among the phase's lines. |
+| `check_requires_env` | `<name>\|VAR[,VAR]` | The named command needs these variables set and non-empty. |
+| `check_requires_cmd` | `<name>\|bin[,bin]` | The named command needs these executables: a bare name is looked up on `PATH`, a name containing `/` is resolved against the repository root. |
+| `check_timeout` | `<name>\|<duration>` | The named command's timeout, a positive Go duration (`90s`, `20m`, `1h30m`); the first one per name wins. Without one the JSON report's `timeout` is `null` and the consumer's own default applies. |
+| `forced_full` | glob | Repeatable: a changed path matching it forces the full tier. |
+| `module_root` | path | Repeatable: the Go spanning roots. |
+| `exclude` | glob | Repeatable: a path the full-tier triggers and the npm full standalone pass ignore. |
+| `test_glob` | glob | Repeatable: a test-file pattern of the repository (echoed in the JSON report). |
+| `base_setup` | command | Repeatable, ordered: the setup a rerun on a base tree needs first (echoed). |
+| `runner` | `complete` | Declares that the conf's commands are the complete bar (echoed). |
+| `ci_evidence` | `<workflow>/<job>` | Repeatable: a CI job the deliver step may accept as test evidence (echoed). |
+
+Command values — `fast_gate`, `full_command`, the command of a `check`, and
+`base_setup` — are bash: `--run` executes them with `bash -c` from the
+repository root, and a value that begins with `$(` or a backtick is skipped
+with a lint diagnostic. A phase's conf lines, anonymous or named, replace the
+analyzer's default commands of that phase. A `<name>` is letters, digits,
+`.`, `_` and `-`, starts with a letter or digit, is declared once, and is
+never of the form `fast-<n>`, `full-<n>` or `scoped-<n>` (the anonymous and
+analyzer commands' names). A `check_*` line names a declared command — a
+`check` name or an anonymous `fast-<i>` / `full-<i>` — and may precede it;
+one naming no declared command is diagnosed and ignored. `pf doctor`'s
+`scoped-gates readiness` row reads this file (never executes it).
+
+### `ci_evidence` — what the deliver step reads
+
+Of the keys above, `deliver` reads one itself — read from the default
+branch, never from the change being delivered:
+
+- `ci_evidence=<workflow-file>/<job-name>` — repeatable, one line per job.
+  `<workflow-file>` is the workflow's file name under `.github/workflows/`
+  and `<job-name>` (everything after the first `/`) is the check-run name
+  GitHub shows for the job, matrix suffix included. The file's line rules
+  apply: `#` comments and blank lines are ignored, the key is exact up to
+  the first `=`, and a value line carries no trailing comment.
+
+When at least one job is declared, a delivery whose own merge moved HEAD
+past the verified commit (or that follows a light pass) may show its tests
+pass with GitHub check-runs instead of re-running the carried test bar: the
+step reads `gh api repos/<owner>/<repo>/commits/<sha>/check-runs` for the
+pushed head in the same dispatch — after its last merge, before its
+`gh pr merge`, exit 0 — and records one `ci_evidence` entry per declared
+job (`repo`, `job` as declared, `check_run_id`, `url`, `head_sha`,
+`conclusion`). The driver accepts that only when every declared job has an
+entry, each for exactly the pushed head with conclusion `success`; a
+queued or in-progress check-run is not evidence, and anything short of it
+leaves the re-run rule in force. The evidence stands in for a carried test
+bar, never for a missing one. A malformed declaration (no `/`, an empty
+side) gives the repository no CI path at all.
+
+The key relaxes what counts as proof, so a change never grants it to
+itself: the authoritative job set is the one in the conf of the fetched
+`origin/<default>`, which the pushed HEAD must contain and go beyond. When
+the pushed HEAD declares a different set — the change adds the key,
+narrows or removes a job, or breaks a line — or `origin/<default>` already
+contains HEAD, the CI path is refused and the re-run rule applies, with
+the reason named. The same holds when the change edits anything
+under
+`.github/` (workflows, local or composite actions): the declared jobs are
+defined there, and the pull request's check-runs would run the change's
+own version of them. Edits to the conf's other keys do not matter here.
+Without the key nothing changes: the carried test bar is re-run. This
+repository has no CI and declares none.

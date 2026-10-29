@@ -1,6 +1,6 @@
 package daemon
 
-// messaging.go: the daemon's live message delivery face (workbench#11).
+// messaging.go: the daemon's live message delivery face.
 // It runs only for an interactive daemon whose operator has a second live
 // machine (the single-machine idle rule). Each message prints exactly one
 // line to the daemon log, then the operator's server-side DELIVERY cursor is

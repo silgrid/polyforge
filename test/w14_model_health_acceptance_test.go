@@ -1,6 +1,6 @@
 package test
 
-// w14_model_health_acceptance_test.go: workbench#14 end-to-end acceptance
+// w14_model_health_acceptance_test.go: end-to-end acceptance
 // for model health tracking + the per-step model profile, authored against
 // artifacts/spec.md BEFORE the implementation lands. The scenarios drive
 // the project's real faces only: a real `pf daemon` over the durable
@@ -492,7 +492,7 @@ func TestW14EventCandidateIdentity(t *testing.T) {
 			{"do": "envelope", "id": "grill", "error_turn": "provider error: 400 invalid_request_error: messages must alternate"},
 			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 		}), nil)
-	d := newV1Daemon(t, inst, optSupervision(supBounds{modelErrorGrace: time.Second}))
+	d := newV1Daemon(t, inst, optSupervision(supBounds{modelErrorGrace: 2 * time.Second}))
 	d.start()
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pf(t, "submit", wi)

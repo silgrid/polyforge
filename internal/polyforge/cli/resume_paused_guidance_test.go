@@ -127,3 +127,29 @@ func TestResumePausedBlockedRefusalSurfaces(t *testing.T) {
 		t.Errorf("stderr must say the hub-side clear succeeded and the next daemon start reconciles it: %s", stderr)
 	}
 }
+
+// TestResumePausedParkedOutcomeGuidance: the holder re-attached the
+// session but its recovery is parked on the previous driver Run — the CLI
+// says so (it continues by itself once that Run exits) instead of
+// claiming the step continues in place or that the work item closed.
+func TestResumePausedParkedOutcomeGuidance(t *testing.T) {
+	var aihubRec reqRecorder
+	aihub := newFakeAihub(t, &aihubRec, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, cannedWI)
+	})
+	d := newDaemonFixture(t)
+	d.answer("POST", "/jobs/wi_abc/resume-paused", `{"resumed":false,"work_item_id":"wi_abc","outcome":"parked"}`)
+
+	code, stdout, stderr := runPf(t, map[string]string{
+		"PF_SERVER": aihub.URL, "PF_DAEMON_SOCKET": d.sock,
+	}, "resume", "wi_abc")
+	if code != 0 {
+		t.Fatalf("a parked resume is an answer, not an error: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "recovery is parked") || !strings.Contains(stdout, "once that Run exits") {
+		t.Errorf("stdout must name the park and how it ends: %s", stdout)
+	}
+	if strings.Contains(stdout, "continues the current step in place") || strings.Contains(stdout, "closed the work item") {
+		t.Errorf("a parked resume must not read as continued or closed: %s", stdout)
+	}
+}

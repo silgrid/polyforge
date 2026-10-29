@@ -9,6 +9,24 @@ split](concepts.md#data-plane-vs-execution-plane-aihub-vs-daemon) —
 the one concept this page assumes; every term a newcomer meets is
 defined on the [concepts page](concepts.md).
 
+The aihub server's only HTML face is the **read-only web console** on
+`/web/…` — a React single-page app embedded in the one aihub binary
+: work items, memories, machines and project-scoped
+search, all behind HTTP Basic authentication (an api key as the
+password). Everything else the server answers is the JSON API or the
+git proxy. The console's data comes from its private, non-contractual
+JSON face on `/web/api/…` — never from `/api/v1` — applying the same
+read gates the CLI applies (a key sees exactly its readable projects
+and objects; unknown and unreadable answer the same 404). Every `/web/`
+response carries
+`Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+`X-Content-Type-Options: nosniff`, `Cache-Control: no-store`,
+`Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex`: hashed
+same-origin script/style assets only, no inline script or style. The
+console answers GET and HEAD only, issues no cookie or session, and a
+workflow step or task agent cannot reach it — neither holds an aihub
+key, and the daemon proxies no web route.
+
 ## Modules
 
 One row per sub-package, exactly as `internal/` exists today — the live
@@ -20,7 +38,7 @@ code is the authority; design-doc references are for traceability:
 | `internal/common/atomicfile` | The one crash-safe "replace this file" primitive every state writer uses. |
 | `internal/common/capsule` | Execution-capsule contract shared by pf (runtime creates capsules, the driver writes `execution.json`, the observe lane commits them) and aihub (serves the matching bare repos; git-dir lives outside the capsule). |
 | `internal/common/protocol` | The in-machine contracts: Runtime↔Observe messages and the pf CLI↔daemon UDS HTTP API surface. |
-| `internal/common/machinesign` | The one cross-machine signature scheme: Ed25519 over `METHOD\nPATH\nsha256hex(body)\nTIMESTAMP\nMACHINE_ID`, the `X-PF-*` headers, the ±300 s window and the bounded 4096/600 s anti-replay cache; aihub verifies, the daemon signs. |
+| `internal/common/machinesign` | The one cross-machine signature scheme: Ed25519 over `METHOD\nPATH\nsha256hex(body)\nTIMESTAMP\nMACHINE_ID`, the `X-PF-*` headers, the ±300 s window and the anti-replay cache (512 live entries per bucket, 600 s TTL, no global eviction; aihub keys one bucket per machine id per signed-route lane — heartbeat, inbox, answer, query); aihub verifies, the daemon signs. |
 | `internal/common/secretpat` | The one secret-shape scanner aihub runs before storing a message (`CORE-422`). |
 | `internal/common/harness` | The closed step-harness set (`pi` \| `claude`) and the one model-candidate format `<harness>:<model>`. |
 | `internal/common/spawn` | Process-derivation contract shared by the runtime (daemon assembly) and the driver (step-process spawning). |
@@ -28,7 +46,7 @@ code is the authority; design-doc references are for traceability:
 | `internal/aihub/core` | aihub persistent layer: SQLite store (single writer, WAL), the work-item state machine, claim/session arbitration (one live session per work item, its hashed push secret and public fingerprint), the ready queue and the admin face. |
 | `internal/aihub/git` | aihub git surface: per-work-item bare-repo lifecycle, the git-http-backend smart-protocol proxy, session-secret auth (only the work item's live session secret pushes) and the pre-receive hook enforcing the capsule-chain invariants. |
 | `internal/aihub/memory` | Core-side memory store: memories kept in the database (`memories.content`), FTS5-trigram full-text search, and the one-time content migration from the former `memory.md` files. |
-| `internal/aihub/server` | The AIHub HTTP face: business endpoints, the admin face, the signed cross-machine machine face (inbox, query answer, progress/artifact relay) and the messaging API (`/messages/ack` moves the caller's read cursor, `/messages/delivered` the caller's delivery cursor), and the `/git/{wi}.git/...` proxy mount; Bearer API key auth, typed `api.Error` envelope. |
+| `internal/aihub/server` | The AIHub HTTP face: business endpoints, the admin face, the signed cross-machine machine face (inbox, query answer, progress/artifact relay) and the messaging API (`/messages/ack` moves the caller's read cursor, `/messages/delivered` the caller's delivery cursor), the `/git/{wi}.git/...` proxy mount, and the read-only web console on `/web/…` — the server's only HTML face: an embedded React SPA behind HTTP Basic auth with its private JSON face on `/web/api/…` (a step or task agent holds no aihub key and the daemon proxies no `/web/` route, so neither can reach it); Bearer API key auth on everything else, typed `api.Error` envelope. |
 | `internal/polyforge/aihubclient` | Shared HTTP client for the aihub server, used by runtime, observe and the CLI verbs; decodes the typed error envelope back into `*api.Error`. |
 | `internal/polyforge/cli` | The `pf` client CLI: the routing verbs (file, queue, cancel, recall, remember, memory, `msg` send/list/ack/show/analyze incl. `list --before`, submit, `watch`, answer, pause, resume, wrap, ops), `chat`, the management face (users, api-keys, projects, machines, backup), the daemon client over the UDS socket, and config resolution. |
 | `internal/polyforge/daemon` | Assembly of the local work machine: the UDS HTTP face, runtime, observe lane and driver wired together, the auto switch, the pending-job dispatcher, the auto-pull loop, the driver start (a running `Driver.Run` is the job's agent handle), the data-dir machine key, the cross-machine query/message faces (machine delivery advances a separate delivery cursor and clears no unread) and the shutdown. Step agents cannot reach either the ack or the delivery-cursor entry point (they hold no aihub key). |

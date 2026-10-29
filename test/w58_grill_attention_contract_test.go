@@ -1,6 +1,6 @@
 package test
 
-// w58_grill_attention_contract_test.go: text contract for workbench#58.
+// w58_grill_attention_contract_test.go: text contract for.
 // The grill question batch is a four-column table whose last column is the
 // owner-attention grade rendered as stars (★ routine confirmation up to
 // ★★★★★ directional ruling), followed by 预期效果 then 注意事项. Prompt
@@ -15,7 +15,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/silgrid/polyforge/internal/common/workflow"
 )
+
+// w58Step is a grill-family step's RENDERED definition (:
+// the batch-question block lives in the shared fragment
+// workflows/_shared/batch_questions.md, so the contract reads the
+// definition the step agent sees, placeholders included — not the raw
+// file bytes, which now carry only the include).
+func w58Step(t *testing.T, bundle, step string) string {
+	t.Helper()
+	raw, err := workflow.ReadStepDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, nil)
+	if err != nil {
+		t.Fatalf("render %s/%s: %v", bundle, step, err)
+	}
+	return string(raw)
+}
 
 func TestW58GrillAttentionContract(t *testing.T) {
 	const (
@@ -24,13 +40,21 @@ func TestW58GrillAttentionContract(t *testing.T) {
 		topStar   = "★★★★★"
 	)
 	templates := []string{
-		"workflows/feature-full/steps/grill.md",
-		"workflows/feature-full/steps/grill-review.md",
-		"workflows/autopilot/steps/grill.md",
+		"feature-full/grill",
+		"feature-full/grill-review",
+		"autopilot/grill",
+	}
+	rendered := map[string]string{
+		"feature-full/grill":        w58Step(t, "feature-full", "grill"),
+		"feature-full/grill-review": w58Step(t, "feature-full", "grill-review"),
+		"autopilot/grill":           w58Step(t, "autopilot", "grill"),
 	}
 	surfaces := append(append([]string{}, templates...),
 		"skills/output-format/SKILL.md", "docs/user-guide.md")
 	read := func(rel string) string {
+		if s, ok := rendered[rel]; ok {
+			return s
+		}
 		b, err := os.ReadFile(filepath.Join(v1Root(t), rel))
 		if err != nil {
 			t.Fatal(err)
