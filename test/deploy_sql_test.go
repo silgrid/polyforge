@@ -26,9 +26,11 @@ package test
 //     `git show <TAG>:deploy/sql/<TAG>/...` sourcing path is what runs — the
 //     working-tree fallback is never hit.
 //   - The server's python3 sqlite library version (the ≥ 3.35 gate) is
-//     faked by FAKE_SQLITE_VERSION: the ssh stub intercepts exactly the
-//     gate's one-line python program; every other python3 program runs for
-//     real.
+//     faked only when a test sets FAKE_SQLITE_VERSION
+//     (TestDeployRefusesOldSQLiteBeforeWindow does): the ssh stub then
+//     intercepts exactly the gate's one-line python program. With the
+//     variable unset the gate sees the host's real sqlite version. Every
+//     other python3 program runs for real.
 //   - Failure injection is the harness's own: FAKE_BAD_IMG (the new
 //     container never becomes healthy → post-swap verification failure) and
 //     a deliberately broken upgrade.sql (DROP COLUMN of a nonexistent
@@ -133,6 +135,21 @@ print("yes" if sys.argv[2] in cols else "no")`
 	return strings.TrimSpace(string(out)) == "yes"
 }
 
+// hostSQLiteVersion is the SQLite library version the test host's python3
+// links - what deploy.sh's >= 3.35 gate reads over ssh (the ssh stub runs the
+// same local interpreter, the one-line probe is the gate's own program) and
+// then prints in its note.
+func hostSQLiteVersion(t *testing.T) string {
+	t.Helper()
+	cmd := exec.Command("python3", "-")
+	cmd.Stdin = strings.NewReader("import sqlite3\nprint(sqlite3.sqlite_version)\n")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("host sqlite version probe: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // sqlRuns counts how often deploy.sh EXECUTED (not scp'd) one staged SQL
 // file on the "server" — the ssh log's `python3 - <db> <file>` lines.
 func sqlRuns(d *deployWorld, file string) int {
@@ -163,8 +180,13 @@ func TestDeployWindowAppliesUpgradeSQLInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deploy failed: %v\n%s", err, out)
 	}
+	// The preflight gate prints the SQLite version the server's python3 links.
+	// This test runs the real local python3 (it sets no FAKE_SQLITE_VERSION),
+	// so expect the gate's note for the host's actual version - a version
+	// literal would only hold on the hosts whose version happens to match it.
+	gateNote := "server python3 sqlite3: " + hostSQLiteVersion(t) + " (>= 3.35: DROP COLUMN supported)"
 	for _, want := range []string{
-		"server python3 sqlite3: 3.5", // >= 3.35 gate passed
+		gateNote,
 		"upgrade SQL v2.3.0: not yet applied (probe: 1) - runs in the window",
 		"upgrade SQL of v2.3.0 applied: SQL-OK",
 		"downtime: ", "upgrade SQL:    applied v2.3.0",

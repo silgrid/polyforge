@@ -36,9 +36,10 @@ steps:
            discoveries: a changed file the plan did not declare and no review finding
            cites is blocking; a declared coupled obligation the diff
            leaves unchanged is blocking; a declared plain write left unchanged is
-           non-blocking. A file `code` added after a review FAIL counts as declared only
-           when its `declared_extensions` entry cites the finding (`s<n>#<k>`) that
-           requires it — judge whether that finding really does. Judge too whether the
+           non-blocking. A file `code` added after a FAIL counts as declared only when its
+           `declared_extensions` entry cites what requires it (a review finding
+           `s<n>#<k>`, a verification FAIL `s<n>`, a human deliver answer) — judge
+           whether it really does. Judge too whether the
            plan's coupled obligations are the right ones (the repo's `AGENTS.md` names
            the project's known couplings; one it names that is missing is blocking), that
            the diff covers the plan's declared steps, and that a declared deletion is
@@ -99,7 +100,10 @@ The lane covers deletion-type and maintenance work: dead-code and feature remova
 cleanup sweeps, dependency bumps, tooling and lint config updates, mechanical
 refactors, doc sweeps, test hygiene. The bundle chosen at filing IS the
 classification — filing a WI on `chore` declares it a deletion-type change (no new
-label or field is added later), and `feature-full` is NOT trimmed by change type, so
+label or field is added later), and filing a removal the work item names on `chore` is
+the owner's ruling for that removal: review does not block it as an unruled
+destination change, while a removal or guarantee weakening the work item does not name
+still blocks, and `feature-full` is NOT trimmed by change type, so
 a pure-deletion ticket does not belong there (feature-full's `grill` probes that
 mismatch and asks the owner). Deletion-type acceptance on this lane is deliberately
 light: the existing test suite green plus a few targeted tests for any behavior the
@@ -114,7 +118,9 @@ Its two defining properties:
   concurrency semantics, no unrequested concepts, no manual-gate bypass, no unruled
   behavior change, among others) on top of plan conformance — a deletion-type change cannot dodge the rules by riding the light
   lane. If a "chore" turns out to need genuine design or spec work rather than
-  removal judgment, it was misrouted: cancel and re-file on `feature-full`.
+  removal judgment, it was misrouted: the step that finds it asks (`needs_input`), and
+  the owner answers with the reserved `cancel` (it ends this work item) and re-files on
+  `feature-full`.
 - **No release slot.** Deliverable does not mean self-releasing: the lane's changes
   merge as ordinary commits and ride the project's next release train; the release
   hook belongs to whichever WI carries that release (releases happen only via the
@@ -158,6 +164,17 @@ This section explains the choices:
   the light path: `code`'s previous session resumes with the verdict, applies only
   text-only fixes, and the gate tail (a fresh `review`, then `verification`) re-runs
   unchanged.
+  A review FAIL whose blocking findings are ALL off-graph (each finding's
+  `repair_target` names the authored suite, the spec, a declared obligation that is itself
+  wrong or an un-IDed instruction — never `code`, which covers every repair the
+  build step can make in its own round: updating a declared obligation the diff
+  left unchanged, withdrawing a moot one, citing an undeclared file) is not rewound: the driver asks the owner (the
+  review owner exit), who answers `amend-upstream: <words>` (recorded verbatim in
+  `artifacts/grill-qa.md` `## Owner rulings`; chore has no authoring step, so
+  every ruling is executed by `code`; spec and plan are never re-run), `waive <refs> —
+  <words>` (clears exactly the named findings; review re-runs) or `cancel`. That
+  rewind is owner-routed. A mixed FAIL rewinds `code` as above, the off-graph
+  findings riding along.
 - **`verification` FAILs -> rewind to `code`.** Build/lint/tests failed on the changed
   tree, and `code` is the only step that can change it. The re-entered round re-runs the
   whole gate tail after the fix — a fresh `review` judges the repaired diff, then
@@ -169,7 +186,7 @@ Workflow-level rewind bounds are the uniform `9 / 3` the delivery lanes share:
 (the gates that rewind to `code` carry three charged slots each; light and converging
 rewinds charge none, until a light re-entry self-reports `needs_code_change: true` —
 that turns its light rewind into a fresh round, which charges the edge once), and the
-global cap counts every rewind, light ones included. A
+global cap counts every automatic rewind, light ones included. Owner-routed rewinds charge neither the edge slot nor `max_total`: a `deliver` FAIL a human answered ("back to code", and on a scoped work item 「全量重验」, which is owner-routed too) and the review owner exit's rewind. A
 chore that needs more than three charged attempts per gate to
 keep the tree green is either not mechanical or is fighting a real problem — surface it
 honestly instead of burning the budget.

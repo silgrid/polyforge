@@ -217,6 +217,34 @@ type fakeHub struct {
 	heartbeats        []aihubclient.MachineHeartbeat
 	heartbeatErr      error
 	heartbeatAttempts int
+	// contacts maps a project to the include-caller member face answer
+	// ProjectContactsWithCaller serves; contactsErr, when non-nil, is
+	// answered instead. contactReads counts the calls; contactsHang, when
+	// set, answers only once the call's ctx is done (a hung hub), and
+	// contactsDeadline records the last call's ctx deadline (all guarded
+	// by mu; the hang waits outside it).
+	contacts         map[string][]api.ProjectMemberContact
+	contactsErr      error
+	contactReads     int
+	contactsHang     bool
+	contactsDeadline time.Time
+}
+
+func (h *fakeHub) ProjectContactsWithCaller(ctx context.Context, project string) ([]api.ProjectMemberContact, error) {
+	h.mu.Lock()
+	h.contactReads++
+	h.contactsDeadline, _ = ctx.Deadline()
+	hang, err := h.contactsHang, h.contactsErr
+	answer := append([]api.ProjectMemberContact(nil), h.contacts[project]...)
+	h.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return answer, nil
 }
 
 type endCall struct {

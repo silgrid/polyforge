@@ -2,41 +2,71 @@
 @tailwind components;
 @tailwind utilities;
 
-/* The console's token layer (the owner-confirmed visual language): CSS
-   variables for both themes, the dark values following the system
-   preference, the #103 memory type colour tokens, the 72ch prose
-   limit. No inline style attribute exists anywhere; no external font,
-   image or icon is referenced. */
+/* The console's one token layer: a neutral ramp, exactly one
+   interactive accent, the status and memory-kind data hues, the
+   four-step type scale and the system font stacks. Light values sit on
+   :root; the dark set follows the system preference only (no toggle, no
+   stored choice). Every value is chosen against WCAG: text >= 4.5:1 on
+   its surface, status/kind/band colours >= 3:1. No inline style, no
+   font file, no url() anywhere. */
 :root {
-  --bg: #f7f7f5;
-  --fg: #1f2328;
-  --muted: #57606a;
-  --line: #d8dee4;
-  --tint: #eef1f4;
-  --code: #f0f2f5;
-  --amber: #b45309;
-  --purple: #6f42c1;
-  --teal: #0d7f7f;
-  --blue: #0969da;
-  --green: #1a7f37;
-  --grey: #6e7781;
-  --red: #cf222e;
+  /* Neutral ramp. */
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --tint: #f1f1f3;
+  --line: #e2e2e6;
+  --fg: #18181b;
+  --muted: #52525b;
+  --code: #f4f4f5;
+  /* The one interactive accent family. */
+  --accent: #2563eb;
+  --accent-soft: #eaf0fe;
+  --accent-fg: #1d4ed8;
+  /* Status and heartbeat hues (data, never interactive). */
+  --ok: #15803d;
+  --warn: #b45309;
+  --bad: #b91c1c;
+  /* Memory kind hues: eight, mutually distinct. */
+  --k-experience: #1d4ed8;
+  --k-fact: #15803d;
+  --k-rule: #b91c1c;
+  --k-methodology: #be185d;
+  --k-decision: #b45309;
+  --k-design: #7e22ce;
+  --k-review: #0f766e;
+  --k-doc: #57534e;
+  /* Type scale: title > section > body > caption. */
+  --fs-title: 1.375rem;
+  --fs-section: 1rem;
+  --fs-body: 0.875rem;
+  --fs-caption: 0.75rem;
+  --radius: 8px;
+  --font-sans: system-ui, -apple-system, 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0d1117;
-    --fg: #e6edf3;
-    --muted: #8b949e;
-    --line: #30363d;
-    --tint: #161b22;
-    --code: #161b22;
-    --amber: #e3b341;
-    --purple: #a371f7;
-    --teal: #39d2c0;
-    --blue: #58a6ff;
-    --green: #3fb950;
-    --grey: #8b949e;
-    --red: #f85149;
+    --bg: #0b0b0d;
+    --surface: #141417;
+    --tint: #1d1d21;
+    --line: #2c2c32;
+    --fg: #ececef;
+    --muted: #a1a1aa;
+    --code: #1d1d21;
+    --accent: #60a5fa;
+    --accent-soft: #172036;
+    --accent-fg: #93c5fd;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --k-experience: #60a5fa;
+    --k-fact: #4ade80;
+    --k-rule: #f87171;
+    --k-methodology: #f472b6;
+    --k-decision: #fbbf24;
+    --k-design: #c084fc;
+    --k-review: #2dd4bf;
+    --k-doc: #a8a29e;
   }
 }
 
@@ -48,82 +78,153 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
   line-height: 1.5;
-  font-family: system-ui, -apple-system, 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI', sans-serif;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* The #103 type colour tokens: the memory kind (experience, fact,
-   rule, methodology) — or the doc.* name (decision, design, review) —
-   picks the dot/badge colour. */
+a {
+  color: var(--accent-fg);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Numbers line up: every table and metric uses tabular figures. */
+table,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dense list table: hairline row dividers, no striping. */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.data-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: var(--fs-caption);
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+.data-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 12px;
+  vertical-align: middle;
+}
+.data-table tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Card surface for detail, machine and list content. */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* The memory kind hooks: the kind (experience, fact, rule,
+   methodology) or the doc.* name (decision, design, review) picks the
+   colour token; the element carrying the hook renders it. */
 .t-experience {
-  --c: var(--blue);
+  --c: var(--k-experience);
 }
 .t-fact {
-  --c: var(--green);
+  --c: var(--k-fact);
 }
 .t-rule {
-  --c: var(--red);
+  --c: var(--k-rule);
 }
 .t-methodology {
-  --c: var(--grey);
+  --c: var(--k-methodology);
 }
 .t-decision {
-  --c: var(--amber);
+  --c: var(--k-decision);
 }
 .t-design {
-  --c: var(--purple);
+  --c: var(--k-design);
 }
 .t-review {
-  --c: var(--teal);
+  --c: var(--k-review);
 }
 .t-doc {
-  --c: var(--grey);
+  --c: var(--k-doc);
 }
-
-.type-dot {
+.kind-mark {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  margin-right: 6px;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
   vertical-align: middle;
-  background: var(--c, var(--grey));
+  background: var(--c, var(--muted));
 }
 
-/* Zebra rows and thin tables (#103 visual spec). */
-.zebra tbody tr:nth-child(odd) {
-  background: var(--tint);
-}
-.zebra th,
-.zebra td {
-  border-bottom: 1px solid var(--line);
+/* Status pill: the status hue on the surface, hairline border. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid currentColor;
+  border-radius: 9999px;
+  padding: 0 8px;
+  font-size: var(--fs-caption);
+  line-height: 18px;
+  white-space: nowrap;
 }
 
-/* The #103 tag chip: one rounded bordered pill per row tag. */
+/* The heartbeat band: green fresh, amber stale within an hour, red
+   older. */
+.band-green {
+  color: var(--ok);
+}
+.band-amber {
+  color: var(--warn);
+}
+.band-red {
+  color: var(--bad);
+}
+
+/* The tag chip: one rounded pill per tag, at the caption step. */
 .tag-chip {
   display: inline-block;
   border: 1px solid var(--line);
   border-radius: 9999px;
   padding: 0 8px;
-  margin-right: 4px;
-  font-size: 12px;
+  margin: 1px 4px 1px 0;
+  font-size: var(--fs-caption);
+  line-height: 18px;
   color: var(--muted);
-  background: var(--bg);
+  background: var(--tint);
 }
 
-/* The #103 monospace id footer: the object's id, verbatim, in the
-   body's monospace face — never styled into a link. */
+/* The monospace id footer: the object's id, verbatim, never a link. */
 .id-footer {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
   color: var(--muted);
   word-break: break-all;
 }
 
-/* The sanitized body prose: 72 characters wide, headings demoted by
-   the server renderer (the page's own h1 stays the only h1). */
+/* The sanitized body prose: at most 72 characters wide, headings
+   demoted by the server renderer (the page's own h1 stays the only
+   h1). */
 .prose-body {
   max-width: 72ch;
+  line-height: 1.65;
+}
+.prose-body > * + * {
+  margin-top: 0.75em;
 }
 .prose-body pre {
   background: var(--code);
@@ -133,9 +234,13 @@ body {
   overflow-x: auto;
 }
 .prose-body code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
 }
 .prose-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
 }
 .prose-body th,
@@ -144,5 +249,27 @@ body {
   padding: 4px 10px;
 }
 .prose-body .link-url {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+/* The navigation: icon + label at desktop width, an icon rail when
+   collapsed and always at the narrow width (labels stay as accessible
+   names). */
+.console-nav {
+  width: 13rem;
+}
+.console-nav.is-collapsed {
+  width: 3.5rem;
+}
+@media (max-width: 640px) {
+  .console-nav {
+    width: 3.5rem;
+  }
+  .console-nav .nav-label {
+    display: none;
+  }
+  .narrow-hidden {
+    display: none;
+  }
 }

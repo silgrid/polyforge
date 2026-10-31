@@ -35,7 +35,7 @@ func w69qTextOnlyFail() map[string]any {
 	return map[string]any{"do": "envelope", "outcome": "gate_failed",
 		"output": map[string]any{"verdict": "fail", "fail_reason": "w69: comment wording only",
 			"findings": []map[string]any{{
-				"severity": "blocking", "text_only": true,
+				"severity": "blocking", "repair_target": "code", "text_only": true,
 				"detail": "the doc comment above the changed function still names the old flag",
 			}}}}
 }
@@ -76,7 +76,7 @@ func w69qAssertEdge(t *testing.T, x *executionView, gate, target string, charged
 	for i, want := range charged {
 		g, _ := recs[i]["gate"].(string)
 		ts, _ := recs[i]["to_step"].(string)
-		ch, _ := recs[i]["charged"].(bool)
+		ch := recs[i]["class"] == "charged"
 		if g != gate || ts != target || ch != want {
 			t.Fatalf("SYMPTOM: rewind record %d = {gate %q, to_step %q, charged %v}, want "+
 				"{%q, %q, %v} — the per-edge quota charged the wrong slot (rewind_stats=%v)",
@@ -99,18 +99,18 @@ func TestW69ConvergingReviewSequenceIsNeverExhausted(t *testing.T) {
 	wi, branch := newDeliverWI(t, inst, "w69: a converging review sequence reaches delivery", "bug-fix")
 	plan := append(w69qBugFixDeliverHead(origin),
 		w69qFindingsFail([]map[string]any{
-			{"severity": "blocking", "detail": "w69: blocking finding a"},
-			{"severity": "blocking", "detail": "w69: blocking finding b"},
-			{"severity": "blocking", "detail": "w69: blocking finding c"},
+			{"severity": "blocking", "repair_target": "code", "detail": "w69: blocking finding a"},
+			{"severity": "blocking", "repair_target": "code", "detail": "w69: blocking finding b"},
+			{"severity": "blocking", "repair_target": "code", "detail": "w69: blocking finding c"},
 		}),
 		w67ChangedRound("fix", "demo", 1), // each fix round really fixes one finding
 		w69qFindingsFail([]map[string]any{
-			{"severity": "blocking", "detail": "w69: blocking finding a", "residual_of": "s4#1"},
-			{"severity": "blocking", "detail": "w69: blocking finding b", "residual_of": "s4#2"},
+			{"severity": "blocking", "repair_target": "code", "detail": "w69: blocking finding a", "residual_of": "s4#1"},
+			{"severity": "blocking", "repair_target": "code", "detail": "w69: blocking finding b", "residual_of": "s4#2"},
 		}),
 		w67ChangedRound("fix", "demo", 2),
 		w69qFindingsFail([]map[string]any{
-			{"severity": "blocking", "detail": "w69: blocking finding a", "residual_of": "s6#1"},
+			{"severity": "blocking", "repair_target": "code", "detail": "w69: blocking finding a", "residual_of": "s6#1"},
 		}),
 		w67ChangedRound("fix", "demo", 3),
 		w69GatePass(), // review passes on the fully fixed tree
@@ -145,8 +145,8 @@ func TestW69ConvergingReviewSequenceIsNeverExhausted(t *testing.T) {
 func TestW69NewTrueBugEveryRoundHitsTheReviewEdgeBound(t *testing.T) {
 	newBug := func(round int) map[string]any {
 		return w69qFindingsFail([]map[string]any{{
-			"severity": "blocking",
-			"detail":   fmt.Sprintf("w69: round %d found a new true bug (concurrency) elsewhere", round),
+			"severity": "blocking", "repair_target": "code",
+			"detail": fmt.Sprintf("w69: round %d found a new true bug (concurrency) elsewhere", round),
 		}})
 	}
 	plan := append(w69BugFixHead(),

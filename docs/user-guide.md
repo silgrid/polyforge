@@ -151,7 +151,9 @@ The order the system actually runs:
    away and shows you the question text verbatim.
    Answer row by row with
    `pf answer <id> --question q-1 --text "<your words>"`. Answers are the
-   human's; a step agent never answers them.
+   human's; a step agent never answers them. The answer `cancel` is reserved at
+   every question: it abandons the work item (authorized like `pf cancel`), which
+   ends canceled with no wrap.
 4. **Watch.** `pf watch <id> --once` for a snapshot (status, current step,
    latest events); the resident watcher in your harness for progress and
    wake-ups. A work item's decisions wake its origin chat — the chat that
@@ -167,7 +169,12 @@ The order the system actually runs:
    the delivery record, so nothing that was already delivered replays; a
    cross-workspace or untagged chat is refused (the daemon names the work
    item's workspace), and so is any chat while the current target is still
-   subscribed.
+   subscribed. A manual `pf watch unsubscribe <id>` in one chat silences that
+   chat for the work item, across daemon restarts, until an explicit
+   `pf watch subscribe <id>` (or adopt, or a submit/resume from that chat),
+   even though the owner-level automatic subscription would otherwise pick
+   it up again on every poll; the owner's other chats keep their own
+   subscriptions.
 5. **The lane's work steps.** The bundle's own steps do the work: fix or code
    implements, review judges the change (before the machine bar — it never
    reads a verification report), verification runs the project's full bar by
@@ -177,8 +184,12 @@ The order the system actually runs:
    the feature branch, opens or reuses the PR, and merges under the repo's
    merge rule, or asks a human. The automatic merge needs both coverages —
    the review of the final diff and the verification of the final tree —
-   and any missing fact routes the delivery to a human. Completion rides
-   deliver; it is never a verb you run.
+   and any missing fact routes the delivery to a human. When the work item
+   declared an `owner-review:` artifact (a screenshot matrix, a proof set),
+   deliver first shows it to you in a `deliver-owner-review` question and
+   merges only after you answer 「过目通过」; a work item that declares none
+   asks you nothing extra. Completion rides deliver; it is never a verb you
+   run.
 
 `pf wrap` is not the workflow's completion. It is the human close verb, two
 moves only: closing a bundle-less ticket (a design, decision or tracking ticket
@@ -271,7 +282,10 @@ in your head or your workspace.
   - **Machines** (admins only) — a health snapshot of the registered
     machines: role, runtime, launcher, heartbeat age and staleness.
   The top bar also offers a project-scoped global search that groups
-  matching work items and memories. On a borrowed machine,
+  matching work items and memories. The console follows your operating
+  system's light or dark setting (there is no theme switch), and on a
+  narrow screen the navigation shrinks to an icon rail — each icon keeps
+  its module name as its tooltip and accessible name. On a borrowed machine,
   open the console in a private browser window so the credential leaves
   no trace when the window closes; no step or task agent can reach the
   console — it serves a human at a browser only, and the daemon proxies

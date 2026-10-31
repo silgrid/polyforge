@@ -34,7 +34,7 @@ func gateRes(outcome Outcome, output string) *StepResult {
 }
 
 func TestValidateStepResultGateVerdictBinding(t *testing.T) {
-	failOutput := `{"verdict":"fail","fail_reason":"the fix suppresses the symptom at one call site","findings":[{"severity":"blocking","detail":"root cause not removed"}]}`
+	failOutput := `{"verdict":"fail","fail_reason":"the fix suppresses the symptom at one call site","findings":[{"severity":"blocking","repair_target":"code","detail":"root cause not removed"}]}`
 	cases := []struct {
 		name       string
 		spec       ResultSpec
@@ -130,7 +130,7 @@ func TestValidateStepResultGateVerdictBinding(t *testing.T) {
 // archive the rewind, leave the gate in_progress, hand the verdict to
 // the rewind target as its pending_rewind_input — and log the bind.
 func TestRunGateVerdictBindingRewindsAndLogs(t *testing.T) {
-	verdictJSON := `{"verdict":"fail","fail_reason":"the fix suppresses the symptom at one call site; the cause is still reachable","findings":[{"severity":"blocking","detail":"root cause not removed"}]}`
+	verdictJSON := `{"verdict":"fail","fail_reason":"the fix suppresses the symptom at one call site; the cause is still reachable","findings":[{"severity":"blocking","repair_target":"code","detail":"root cause not removed"}]}`
 	d, sp, execPath := runEnv(t, spec("fix"), gateSpec("review", "fix"))
 	log := &eventLog{}
 	d.log = log
@@ -184,7 +184,7 @@ func TestRunGateVerdictBindingRewindsAndLogs(t *testing.T) {
 	}
 	if exec.RewindStats.Count != 1 || len(exec.RewindStats.Rewinds) != 1 ||
 		exec.RewindStats.Rewinds[0].Gate != "review" || exec.RewindStats.Rewinds[0].ToStep != "fix" ||
-		!exec.RewindStats.Rewinds[0].Charged {
+		exec.RewindStats.Rewinds[0].Class != capsule.RewindCharged {
 		t.Fatalf("rewind stats: %+v", exec.RewindStats)
 	}
 	fx := exec.Steps["fix"]

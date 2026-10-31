@@ -2,7 +2,14 @@
 
 Execution-plane verb: routed to the local daemon (the answer route). The
 daemon hands the payload to the work item's in-process Go driver; it never
-parses or rewrites the answer.
+rewrites the answer. One answer is reserved: `cancel` (the whole answer, ignoring
+case and surrounding whitespace — every question states it) abandons the work
+item. The daemon first probes the hub's cancel door (`dry_run`) with its own
+credential, so the hub's `pf cancel` gate decides (reporter, project maintainer or
+admin — never the self-asserted `--by`); a refusal is returned and the question
+stays pending. An authorized cancel parks the workflow, ends the session blocked
+and cancels the work item through the hub's blocked→canceled door, with your
+verbatim answer on the cancel event; no memory wrap is written.
 
 ## Triggers
 

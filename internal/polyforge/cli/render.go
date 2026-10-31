@@ -369,6 +369,25 @@ func renderMemories(w io.Writer, items []memorySearchHit) {
 	printTable(w, []string{"ID", "TYPE", "SUMMARY", "UPDATED", "TAGS"}, rows)
 }
 
+// memoryPage is the browse-mode answer: the page, the
+// total aihub reports and the next page's cursor (absent on the last).
+type memoryPage struct {
+	Items      []memorySearchHit `json:"items"`
+	Total      int               `json:"total"`
+	NextCursor string            `json:"next_cursor"`
+}
+
+// renderMemoryPage renders a browse page: the memory table, then
+// "N of TOTAL" and, when more entries remain, the cursor to pass to
+// --after for the next page.
+func renderMemoryPage(w io.Writer, p *memoryPage) {
+	renderMemories(w, p.Items)
+	fmt.Fprintf(w, "%d of %d\n", len(p.Items), p.Total)
+	if p.NextCursor != "" {
+		fmt.Fprintf(w, "next: %s\n", p.NextCursor)
+	}
+}
+
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]

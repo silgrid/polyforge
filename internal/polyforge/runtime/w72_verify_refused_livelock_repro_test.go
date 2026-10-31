@@ -48,6 +48,10 @@ type w72RecordingHub struct {
 	mu       sync.Mutex
 	verifyAt []time.Time
 	endAt    []time.Time
+	// onEnd, when set, runs at each SessionEnd before the hub answers: a
+	// test samples the retry schedule there, which the actor's own work
+	// time cannot reorder.
+	onEnd func()
 }
 
 func (h *w72RecordingHub) SessionVerify(wi, sessionID string) (*api.SessionVerifyResponse, error) {
@@ -57,6 +61,9 @@ func (h *w72RecordingHub) SessionVerify(wi, sessionID string) (*api.SessionVerif
 
 func (h *w72RecordingHub) SessionEnd(wi string, req api.SessionEndRequest) error {
 	h.stamp(&h.endAt)
+	if h.onEnd != nil {
+		h.onEnd()
+	}
 	return h.fakeHub.SessionEnd(wi, req)
 }
 
@@ -87,6 +94,21 @@ func w72Gaps(at []time.Time) []time.Duration {
 	return gaps
 }
 
+// w72ScheduledWait answers the wait retry() schedules for the retry that
+// follows the first n attempts: EndRetryBase, doubled per retry, capped at
+// EndRetryMax. The test compares these with the product's own retryIn,
+// which contention cannot stretch.
+func w72ScheduledWait(base, ceil time.Duration, retries int) time.Duration {
+	if retries < 1 {
+		return 0
+	}
+	wait := base
+	for i := 1; i < retries; i++ {
+		wait = min(2*wait, ceil)
+	}
+	return wait
+}
+
 // w72BackoffGrows reports whether the spacing between retry rounds grew
 // across the window — at least 3× from the first gap to the last. An
 // exponential chain doubles per round; a chain whose backoff is cleared stays
@@ -104,13 +126,15 @@ func w72BackoffGrows(at []time.Time) bool {
 type w72EventCounter struct {
 	mu     sync.Mutex
 	counts map[string]int
+	lastAt map[string]time.Time
 }
 
 func newW72EventCounter(r *Runtime) *w72EventCounter {
-	c := &w72EventCounter{counts: map[string]int{}}
+	c := &w72EventCounter{counts: map[string]int{}, lastAt: map[string]time.Time{}}
 	r.cfg.EventTap = func(_ string, kind string, _ map[string]any) {
 		c.mu.Lock()
 		c.counts[kind]++
+		c.lastAt[kind] = time.Now()
 		c.mu.Unlock()
 	}
 	return c
@@ -120,6 +144,12 @@ func (c *w72EventCounter) get(kind string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.counts[kind]
+}
+
+func (c *w72EventCounter) at(kind string) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastAt[kind]
 }
 
 // The refused-verify entry: a RUNNING record whose verify the hub refuses

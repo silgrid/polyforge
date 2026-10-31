@@ -884,14 +884,18 @@ func (d *v1Daemon) launch() {
 	})
 }
 
-// waitUp waits until the launched daemon's UDS face answers.
+// waitUp waits until the launched daemon answers on its UDS face. A bare
+// dial is not readiness: listenUDS binds the socket before startup
+// recovery runs (daemon.Run), so a test that returned on the dial and then
+// seeded the data dir could race Recover. One answered GET /status means
+// the face is serving, which happens only after recovery finished.
 func (d *v1Daemon) waitUp() {
 	d.t.Helper()
+	probe := cli.NewDaemonClient(d.sock)
+	probe.HTTP.Timeout = time.Second
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		conn, err := net.Dial("unix", d.sock)
-		if err == nil {
-			conn.Close()
+		if _, err := probe.Status(); err == nil {
 			break
 		}
 		select {
@@ -901,7 +905,7 @@ func (d *v1Daemon) waitUp() {
 		default:
 		}
 		if time.Now().After(deadline) {
-			d.t.Fatalf("daemon UDS never came up on %s (log tail: %s)", d.sock, d.logTail())
+			d.t.Fatalf("daemon UDS never answered on %s (log tail: %s)", d.sock, d.logTail())
 		}
 		time.Sleep(25 * time.Millisecond)
 	}

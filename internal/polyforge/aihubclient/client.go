@@ -6,6 +6,7 @@ package aihubclient
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
@@ -42,7 +43,13 @@ func New(baseURL, apiKey string) *Client {
 // Do performs a typed request. body may be nil. out receives the decoded
 // JSON response when non-nil. Non-2xx answers decode as *api.Error.
 func (c *Client) Do(method, path string, body, out any) error {
-	data, err := c.send(method, path, body)
+	return c.DoContext(context.Background(), method, path, body, out)
+}
+
+// DoContext is Do bounded by ctx: a caller that must not wait the
+// client's full timeout gives the request its own deadline.
+func (c *Client) DoContext(ctx context.Context, method, path string, body, out any) error {
+	data, err := c.send(ctx, method, path, body)
 	if err != nil || out == nil || len(data) == 0 {
 		return err
 	}
@@ -51,7 +58,7 @@ func (c *Client) Do(method, path string, body, out any) error {
 
 // send performs one authenticated request and returns the response body
 // (bounded to 32 MiB); a non-2xx answer is the typed error.
-func (c *Client) send(method, path string, body any) ([]byte, error) {
+func (c *Client) send(ctx context.Context, method, path string, body any) ([]byte, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -60,7 +67,7 @@ func (c *Client) send(method, path string, body any) ([]byte, error) {
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, c.BaseURL+path, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, rdr)
 	if err != nil {
 		return nil, err
 	}
@@ -238,17 +245,31 @@ func (c *Client) DependenciesRaw(idOrSlug string) (json.RawMessage, error) {
 // it the recall table has no text).
 const SearchExcerptRunes = 120
 
-// SearchMemories runs the memory retrieval (06 §5.1). q is required;
-// memType, tags and limit are optional filters; match is the search
-// mode ("" — the server default, every token must match — or "any",
-// the ranked any-term mode). Each hit carries a SearchExcerptRunes
-// content_excerpt.
-func (c *Client) SearchMemories(project, q, memType string, tags []string, limit int, match string) (json.RawMessage, error) {
+// SearchMemories runs the memory retrieval (06 §5.1). A non-empty q is
+// the keyword search; an empty q is browse mode (the
+// human direct-aihub path only): the readable active memories as a
+// page, answered as {items, total, next_cursor?}. memType, tags and
+// limit are optional filters; match is the keyword search mode ("" —
+// the server default, every token must match — or "any", the ranked
+// any-term mode). sort ("updated"/"created") and after (a previous
+// browse page's next_cursor) are the browse paging parameters, sent
+// only when non-empty: aihub answers MEM-400 when they ride a keyword
+// search, so the mixed shape is refused there, never paraphrased here.
+// Each keyword hit carries a SearchExcerptRunes content_excerpt.
+func (c *Client) SearchMemories(project, q, memType string, tags []string, limit int, match, sort, after string) (json.RawMessage, error) {
 	v := url.Values{}
 	v.Set("project", project)
-	v.Set("q", q)
+	if q != "" {
+		v.Set("q", q)
+	}
 	if match != "" {
 		v.Set("match", match)
+	}
+	if sort != "" {
+		v.Set("sort", sort)
+	}
+	if after != "" {
+		v.Set("after", after)
 	}
 	v.Set("excerpt", strconv.Itoa(SearchExcerptRunes))
 	if memType != "" {
@@ -277,7 +298,7 @@ func (c *Client) GetMemory(id string) (json.RawMessage, error) {
 // body (no front-matter) as text/markdown, NOT JSON, so the body bytes
 // are returned undecoded — a JSON decode would refuse plain markdown.
 func (c *Client) GetMemoryContent(id string) ([]byte, error) {
-	return c.send("GET", "/api/v1/memories/"+url.PathEscape(id)+"?format=content", nil)
+	return c.send(context.Background(), "GET", "/api/v1/memories/"+url.PathEscape(id)+"?format=content", nil)
 }
 
 // The admin request bodies are the shared common/api wire types.
@@ -567,6 +588,28 @@ func (c *Client) ListConversations() (json.RawMessage, error) {
 	return c.raw("GET", "/api/v1/conversations", nil)
 }
 
+// ProjectContacts reads one project's member face: the caller's human
+// co-members as id + display name.
+func (c *Client) ProjectContacts(project string) ([]api.ProjectMemberContact, error) {
+	return c.projectContacts(context.Background(), project, "")
+}
+
+// ProjectContactsWithCaller reads the same member face with the caller's
+// own row kept (include_caller=true): the daemon's spawn-time reporter
+// resolution, where the caller is the daemon key's owner; ctx bounds the
+// read.
+func (c *Client) ProjectContactsWithCaller(ctx context.Context, project string) ([]api.ProjectMemberContact, error) {
+	return c.projectContacts(ctx, project, "?include_caller=true")
+}
+
+func (c *Client) projectContacts(ctx context.Context, project, query string) ([]api.ProjectMemberContact, error) {
+	var answer api.ProjectMemberContacts
+	if err := c.DoContext(ctx, "GET", "/api/v1/projects/"+url.PathEscape(project)+"/members"+query, nil, &answer); err != nil {
+		return nil, err
+	}
+	return answer.Contacts, nil
+}
+
 // ListMessages reads one conversation's history.
 func (c *Client) ListMessages(convID string, after, before int64, limit int) (json.RawMessage, error) {
 	v := url.Values{}
@@ -594,7 +637,7 @@ func (c *Client) GetMessage(id string) (json.RawMessage, error) {
 // Acknowledge advances the caller's read cursor and answers the server
 // payload unchanged (the CLI's --json passthrough).
 func (c *Client) Acknowledge(convID string, seq int64) (json.RawMessage, error) {
-	return c.send("POST", "/api/v1/messages/ack", api.AckMessage{ConversationID: convID, Seq: seq})
+	return c.send(context.Background(), "POST", "/api/v1/messages/ack", api.AckMessage{ConversationID: convID, Seq: seq})
 }
 
 // DeliverMessage advances the caller's machine delivery cursor only.

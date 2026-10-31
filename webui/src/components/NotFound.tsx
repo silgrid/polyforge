@@ -6,14 +6,10 @@ import { href } from '../router'
 // visitor whether a thing exists.
 export default function NotFound() {
   return (
-    <div data-testid="not-found" className="max-w-prose">
-      <h1 className="text-xl font-semibold mb-2">Not found</h1>
+    <div data-testid="not-found" className="card max-w-prose px-6 py-5">
+      <h1 className="mb-2 text-title font-semibold tracking-tight">Not found</h1>
       <p className="text-muted">
-        No such page — or nothing you can read here. Pick a project on the{' '}
-        <a className="text-accent" href={href()}>
-          console home
-        </a>
-        .
+        No such page — or nothing you can read here. Pick a project on the <a href={href()}>console home</a>.
       </p>
     </div>
   )

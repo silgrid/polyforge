@@ -182,6 +182,9 @@ func TestDaemonFaceVerbExitCodeGoldens(t *testing.T) {
 		{"answer", []string{"answer", "wi_x", "--question", "q_1", "--text", "yes", "--by", "usr_1"},
 			"POST /jobs/wi_x/answer", `{"applied":true,"delivered":true}`, false,
 			[]string{"answer", "wi_x"}, []string{"answer", "--no-such-flag"}},
+		{"revise-binding", []string{"revise-binding", "wi_x", "--step", "e2e-author", "--correction", "1=go test ./...", "--correction", "2=go test ./... -run TestCapture", "--by", "usr_1"},
+			"POST /jobs/wi_x/revise-binding", `{"status":"revised"}`, false,
+			[]string{"revise-binding", "wi_x"}, []string{"revise-binding", "--no-such-flag"}},
 		{"pause", []string{"pause", "wi_x"}, "POST /jobs/wi_x/pause", `{}`, false,
 			[]string{"pause"}, []string{"pause", "--no-such-flag"}},
 		{"wrap", []string{"wrap", "wi_x"}, "POST /jobs/wi_x/wrap", `{}`, false,
@@ -321,7 +324,7 @@ func TestDaemonVerbHelpOnlyExitGoldens(t *testing.T) {
 	// the #177 workspace layout).
 	want := []string{
 		"file", "queue", "cancel", "recall", "remember", "memory",
-		"submit", "answer", "pause", "resume",
+		"submit", "answer", "revise-binding", "pause", "resume",
 		"wrap", "ops", "chat", "watch", "task", "result", "verify-run", "msg", "users", "api-keys", "machines", "projects",
 		"backup",
 		"doctor", "version", "init", "config", "daemon",

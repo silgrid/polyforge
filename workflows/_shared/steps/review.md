@@ -17,6 +17,10 @@ output:
         properties:
           severity: { type: string, enum: [blocking, non-blocking] }
           detail: { type: string }
+          repair_target:
+            type: string
+            enum: [code, authored-suite, spec, declared-obligation, instruction]
+            description: "Required on a blocking finding (absent or unknown = an unfilled result, rejected) - where the fix lands. `code`: {{build_step}} fixes it in its own step - every repair it can make in its own round is `code`, including updating a declared obligation the diff left unchanged, withdrawing a moot one in `withdrawn_obligations` and citing an undeclared file. Off-graph: `authored-suite`, `spec`, `declared-obligation` (reserved for a plan-declared obligation that is itself wrong and that {{build_step}} can neither satisfy nor withdraw), `instruction` (an un-IDed verification FAIL or human deliver instruction). Any `code` finding rewinds {{build_step}}; an all-off-graph FAIL asks the owner instead (amend-upstream / waive / cancel)."
           residual_of:
             x-prompt-when: reentry
             type: string
@@ -43,6 +47,7 @@ output:
           type: array
           minItems: 1
           items: { type: string, minLength: 1 }
+          description: "The one definition of declared_paths: the path set review judged in this round and verification verifies for that same round (opaque strings, never classified by the driver)."
   oneOf:
     - description: A pass verdict - zero blocking findings; any recorded findings must be non-blocking.
       properties:
@@ -154,10 +159,11 @@ position, and every other hit outside the contract's blocking set is recorded
   must be refused" where both serializations are valid, which is what drove a sleep+latch hack - do not pass
   the diff for faithfully implementing it: flag it as a blocking finding and
   propose the spec change in that finding instead.
-- **Unruled destination change.** A feature removed or a guarantee weakened without an owner ruling (a shorter path with the same destination is not a finding).
+- **Unruled destination change.** A feature removed or a guarantee weakened without an owner ruling (a shorter path with the same destination is not a finding; a removal the work item names, filed on `chore`, is ruled).
 - **I/O under a lock.** Network or disk I/O while holding a lock.
-- **Weak tests.** A new test that passes on the old code, or an assertion relaxed
-  without a stated reason.
+- **Weak tests.** A new test that claims to pin new or changed behaviour yet passes on
+  the old code (a characterization test of existing behaviour is exempt), or an
+  assertion relaxed without a stated reason.
 - **Stale docs.** Docs not updated with the code they describe.
 - **Leaked credentials** in an agent's env, a command line, a log or an artifact.
 - **Guess as fact.** An unverified claim stated as fact.

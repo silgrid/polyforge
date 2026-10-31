@@ -117,6 +117,34 @@ type Execution struct {
 	// its own authority (host-class fault, failure counter at its bound);
 	// empty when blocked on an honest incomplete result or not blocked.
 	BlockedReason string `json:"blocked_reason,omitempty"`
+	// PreFixHeads is the bug-fix lane's pre-fix base: the task-repo
+	// HEADs the reproduction ran on, recorded at the first accepted
+	// repro result and never overwritten. A repro re-run after a fix →
+	// root-cause rewind is told to reproduce against these heads, never
+	// the tree that already carries the fix's mitigation.
+	PreFixHeads map[string]string `json:"pre_fix_heads,omitempty"`
+	// CancelRequested is the durable intent of an owner's reserved
+	// `cancel` answer: written by the answer's own transition together
+	// with workflow_status blocked (the closed status vocabulary is
+	// unchanged). The daemon's blocked close then ends the session at the
+	// hub as blocked and calls the hub's existing blocked→canceled door
+	// with the verbatim answer (the door treats an already-canceled work
+	// item as done). A blocked close that settles — at once, on a restart's
+	// end_pending replay, or with its answer lost — calls the door; a cancel
+	// that still does not land (a crash between the settled close and the
+	// door, a hub refusal) leaves the work item blocked, its blocked_reason
+	// naming the request: `pf cancel` finishes it, and the owner's resume
+	// drops this intent.
+	CancelRequested *CancelIntent `json:"cancel_requested,omitempty"`
+}
+
+// CancelIntent is one owner's reserved cancel answer: the question it
+// answered, the answer verbatim, the relayed identity and the stamp.
+type CancelIntent struct {
+	QuestionID string `json:"question_id"`
+	Answer     string `json:"answer"`
+	AnsweredBy string `json:"answered_by"`
+	At         string `json:"at"`
 }
 
 // Step statuses.
@@ -143,9 +171,12 @@ type Step struct {
 	BudgetConsumed Budget           `json:"budget_consumed"`
 	Attempts       []Attempt        `json:"attempts"`
 	Answers        []ArchivedAnswer `json:"answers"`
-	// AnswerBase is len(Answers) at the step's last gate-fail rewind: the
-	// answers at index >= AnswerBase form the step's CURRENT attempt chain
-	// (the human-gate guarantee counts only those). Zero until a rewind.
+	// AnswerBase is len(Answers) when the step's answer chain last closed
+	// (a gate-fail rewind, a rewind-range archive, or a
+	// root_cause_addressed:false report): the answers at index >= AnswerBase
+	// form the step's CURRENT attempt chain — the human-gate guarantee counts
+	// only those, and prepareDispatch hands only those to a new dispatch.
+	// Zero until the first close.
 	AnswerBase int `json:"answer_base,omitempty"`
 	// PendingQuestion is the step's open question (D8/D9): the durable
 	// waiting marker while a human is asked; the answer transition archives
@@ -169,8 +200,12 @@ type Step struct {
 	// settlement ( criterion 6). A gate re-entered after a
 	// rewind of the lane's build step whose target resubmitted the same
 	// code tree is not re-run: the driver blocks it with a human-visible
-	// reason naming the crashed build attempt. It covers repos/ only (not
-	// driver-owned artifacts/steps archives, which move every round).
+	// reason naming the crashed build attempt — unless the build round was a
+	// metadata-only plan-conformance repair: the facts the
+	// gate last judged carried a blocking entry and its current recomputed
+	// facts carry none, so the gate's input changed while the tree did not.
+	// It covers repos/ only (not driver-owned artifacts/steps archives, which
+	// move every round).
 	// Empty for non-gates and before the gate's first verdict. When the
 	// last verdict was delivered is derived from the attempts ledger (the
 	// gate's newest accepted attempt, or the rewind archive naming it), not
@@ -189,6 +224,14 @@ type Step struct {
 	// thresholds (v2-converge 2.3/2.4): execution.json is the single
 	// authority for them, so a restart resumes the same counts.
 	Supervision *StepSupervision `json:"supervision,omitempty"`
+	// BindingRevisions is the owner-authorized revision ledger of the
+	// step's accepted result: one entry per corrected e2e-author binding
+	// command. The output above carries the latest value;
+	// this list is the audit record of each correction, so a later
+	// materialization never resurrects the superseded command and a reader
+	// can see exactly what was changed, by whom and why. Nothing else in
+	// the output is touched by a revision.
+	BindingRevisions []BindingRevision `json:"binding_revisions,omitempty"`
 	// Dispatch is the derivation ordinal whose result the step awaits:
 	// written by the step_start of that dispatch, cleared by the write
 	// that settles it (an accepted result or a failed dispatch). A driver
@@ -203,6 +246,51 @@ type Step struct {
 	// archived envelope does not count it twice.
 	EnvelopeRejects      int   `json:"envelope_rejects,omitempty"`
 	EnvelopeRejectSpawnN int64 `json:"envelope_reject_spawn_n,omitempty"`
+	// OwnerRulings is the review step's machine copy of the owner's
+	// answers to the review owner exit (an all-off-graph FAIL): one
+	// entry per amend-upstream or waive ruling, written by the answer's
+	// own transition, read by the routing and by review re-entry. The
+	// verbatim record the later steps read is the `## Owner rulings`
+	// section of artifacts/grill-qa.md, which the driver appends once
+	// per ruling (keyed on QuestionID + AnsweredAt) after this write.
+	OwnerRulings []OwnerRuling `json:"owner_rulings,omitempty"`
+}
+
+// OwnerRuling is one owner answer to the review owner exit: its kind
+// (amend-upstream or waive), the answer verbatim with the hub-relayed
+// identity and the archive stamp, the answering question id, the
+// review findings it addresses (positional s<n>#<k> references) and the
+// step the ruling routed to ("" for a waive: review re-runs).
+type OwnerRuling struct {
+	Kind       string   `json:"kind"`
+	QuestionID string   `json:"question_id"`
+	Answer     string   `json:"answer"`
+	AnsweredBy string   `json:"answered_by"`
+	AnsweredAt string   `json:"answered_at"`
+	Findings   []string `json:"findings"`
+	RoutedTo   string   `json:"routed_to,omitempty"`
+}
+
+// BindingRevision is one owner-authorized correction of a done
+// e2e-author step's binding command: the same output
+// shape, one command replaced, everything else left byte-identical.
+type BindingRevision struct {
+	Index  int    `json:"index"`
+	Before string `json:"before"`
+	After  string `json:"after"`
+	By     string `json:"by,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	At     string `json:"at"`
+}
+
+// BindingCorrection is one requested correction in an owner revision
+// the binding at Index gets Command, verbatim. One
+// revision carries a list because a malformed quote can affect every
+// binding of the same authored result, and the corrected output is
+// validated as a whole.
+type BindingCorrection struct {
+	Index   int
+	Command string
 }
 
 // StepSupervision is one step's driver-owned supervision state.
@@ -311,17 +399,32 @@ type ArchivedAnswer struct {
 }
 
 // RewindRecord is one rewind's ledger entry: the gate
-// that fired it (the edge attribution), its on_fail target and whether
-// it charged that gate→target edge's max_per_step bound. The list is the
-// single rewind ledger — Count is its tally — and a ledger that cannot
-// attribute its own count (Count > len(Rewinds), the pre-w69 shape with
-// no per-record history) proves no per-edge quota: the next rewind
-// fails closed (no compat path, no guess).
+// that fired it (the edge attribution), its target and its accounting
+// class. The list is the single rewind ledger — Count is its tally
+// (Count == len(Rewinds)) — and a ledger that cannot attribute its own
+// count (Count > len(Rewinds), the pre-w69 shape with no per-record
+// history) proves no per-edge quota: the next rewind fails closed (no
+// compat path, no guess).
+//
+// Class decides what the record counts toward: RewindCharged occupies
+// its gate→target edge's max_per_step bound and counts toward
+// max_total; RewindUncharged (the automatic light, mechanical and
+// converging rewinds) counts toward max_total only — the runaway guard;
+// RewindOwner (a rewind an owner's explicit answer routed: deliver's
+// "back to code" and 「全量重验」, the review owner exit, the bug-fix and
+// e2e-author owner answers) counts toward neither.
 type RewindRecord struct {
-	Gate    string `json:"gate"`
-	ToStep  string `json:"to_step"`
-	Charged bool   `json:"charged"`
+	Gate   string `json:"gate"`
+	ToStep string `json:"to_step"`
+	Class  string `json:"class"`
 }
+
+// The rewind accounting classes (RewindRecord.Class).
+const (
+	RewindCharged   = "charged"
+	RewindUncharged = "uncharged"
+	RewindOwner     = "owner"
+)
 
 // ReviewRound is the last verdict-bearing review
 // round's facts: the round ordinal (execution.json's review_rounds count),

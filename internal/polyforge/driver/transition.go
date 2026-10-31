@@ -25,6 +25,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -225,6 +227,14 @@ const (
 	// (blockUnchangedGateTree). Plumbing only: it emits the existing
 	// blocked event and the owner's `pf resume` unblocks it.
 	TransBlocked TransitionKind = "blocked"
+	// TransStepRevision is the owner's correction of accepted
+	// e2e-author binding commands: the same single-writer
+	// path as every other state change, so the batch of corrections is
+	// persisted atomically and the observe publish appends it to the chain.
+	// It consumes no derivation ordinal and changes no step status; it
+	// replaces the named commands and appends one audit record per
+	// corrected index to the step.
+	TransStepRevision TransitionKind = "step_revision"
 )
 
 // TransitionRequest is one submitted execution.json mutation. SpawnN is
@@ -317,6 +327,15 @@ type TransitionRequest struct {
 	// execution record has none yet. Empty falls back to the marker and
 	// the lane.
 	ScopeTier string
+	// BindingRevision carries a step_revision write's owner corrections of
+	// done e2e-author binding commands, applied as one batch. RevisionOutput
+	// is the complete revised output ReviseBinding validated OUTSIDE the
+	// transition lock (the shell parse is I/O); RevisionBefore holds the
+	// commands it replaces (aligned with BindingRevision.Corrections), and
+	// the write re-checks them so a concurrent revision cannot be clobbered.
+	BindingRevision *BindingRevisionRequest
+	RevisionOutput  map[string]any
+	RevisionBefore  []string
 	// JudgedRepoHash ( criterion 6) is the task-repo tree hash
 	// a GATE step judged by delivering this result (PASS or FAIL), read
 	// before the transition takes the driver's lock. It is written to
@@ -324,7 +343,11 @@ type TransitionRequest struct {
 	// (hash error, or a non-gate/needs_input/incomplete result) records no
 	// judged tree, so the unchanged-tree guard fails open.
 	JudgedRepoHash string
-	SpawnN         int64
+	// ReproHeads are the task repos' HEADs a completed repro result ran on
+	// (pre-read outside the lock): the pre-fix base the first accepted
+	// repro records.
+	ReproHeads map[string]string
+	SpawnN     int64
 }
 
 // GateVerdict is one business gate FAIL judgment (01 §6.2): the policy
@@ -381,6 +404,10 @@ type appliedInfo struct {
 	// event is needs_input.
 	rootCauseRewind   bool
 	rootCauseQuestion bool
+	// question marks a driver-authored owner question this write parked
+	// on (the review owner exit, a re-ask of it): a needs_input event
+	// follows the write's own event.
+	question bool
 }
 
 // appliedEvent is a follow-up event of one transition.
@@ -421,6 +448,12 @@ func (d *Driver) transition(req TransitionRequest) error {
 	if err := d.applyLocked(req, info); err != nil {
 		return err
 	}
+	// Every open question offers the reserved cancel answer, stated by
+	// the driver in the one write that persists the question.
+	if st := d.exec.Steps[d.exec.CurrentStep]; st != nil && st.PendingQuestion != nil &&
+		!strings.HasSuffix(st.PendingQuestion.Question, CancelAnswerSentence) {
+		st.PendingQuestion.Question = strings.TrimRight(st.PendingQuestion.Question, "\n") + "\n\n" + CancelAnswerSentence
+	}
 	d.exec.Version++
 	d.exec.UpdatedAt = d.stamp()
 
@@ -460,7 +493,7 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 	case TransTerminal:
 		return d.applyTerminalLocked(req)
 	case TransAnswer:
-		return d.applyAnswerLocked(req)
+		return d.applyAnswerLocked(req, info)
 	case TransInterrupted:
 		return d.applyInterruptedLocked(req)
 	case TransClaimReentry:
@@ -485,6 +518,8 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 		return nil
 	case TransLightEscalate:
 		return d.applyLightEscalateLocked(req.StepID, req.Reason, req.LightEscalationDiff, nil, info)
+	case TransStepRevision:
+		return d.applyBindingRevisionLocked(req)
 	default:
 		return fmt.Errorf("driver: unknown transition kind %q", req.Kind)
 	}
@@ -619,6 +654,10 @@ func (d *Driver) applyUnblockLocked() error {
 	}
 	d.exec.WorkflowStatus = StatusRunning
 	d.exec.BlockedReason = ""
+	// The owner's resume supersedes a reserved cancel answer whose cancel
+	// never landed at the hub (review s8#1): a stale intent would cancel
+	// the resumed work item at its next blocked close.
+	d.exec.CancelRequested = nil
 	// the human's "continue" resets the step's failure ledger (the
 	// relaxed thresholds stay: they are the step's learned bounds) and
 	// opens a new streak era (ResumedAt, streakEra): the ledger-derived
@@ -745,6 +784,30 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 		// diagnosis is never a light re-entry.
 		if d.rootCauseFalseLocked(req.StepID, out) {
 			return d.applyRootCauseFalseLocked(req.StepID, st, res, out, info)
+		}
+		// A repro that honestly reports the bug does not reproduce is not
+		// accepted into the diagnosis: the owner is asked (bug-fix dead
+		// end) — re-run repro with more evidence, continue, or cancel.
+		if d.notReproducedLocked(req.StepID, out) {
+			st.Output = out // the report stays on the step, for the record
+			d.parkDeadEndLocked(st, req.StepID, ReproNotReproducedQuestionID, res.Output,
+				"`repro` completed reporting `reproduces: false`: the reported failure did not reproduce, so there is nothing to diagnose yet.", info)
+			return nil
+		}
+		// An authored suite whose every scenario is green at baseline is
+		// not a completion (the spec and the tree disagree): the owner is
+		// asked — rewind to spec, skip with a recorded rationale, or cancel.
+		if req.StepID == e2eAuthorStepID && allGreenBaseline(out) {
+			st.Output = out // the green baseline stays on the step, for the record
+			raw, _ := json.Marshal(out)
+			st.PendingQuestion = &capsule.PendingQuestion{
+				ID: E2EAllGreenQuestionID, Step: req.StepID, Question: allGreenQuestion(), Context: raw, AskedAt: d.stamp(),
+			}
+			info.question = true
+			return nil
+		}
+		if req.StepID == reproStepID && d.exec.PreFixHeads == nil && len(req.ReproHeads) > 0 {
+			d.exec.PreFixHeads = req.ReproHeads
 		}
 		// The needs_code_change self-report rewind (polyforge#222): a
 		// completed result of a LIGHT re-entry carrying
@@ -948,7 +1011,20 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 			d.exec.ReviewRounds = map[string]int64{}
 		}
 		d.exec.ReviewRounds[req.StepID]++
-		if err := d.applyGateFailLocked(req.StepID, verdict, out, req.LightDiffBase, info); err != nil {
+		if req.StepID == rootCauseStepID && verdict.TargetStep == reproStepID &&
+			countToEdge(d.exec.RewindStats.Rewinds, rootCauseStepID, reproStepID) > 0 {
+			// The second inconclusive diagnosis (bug-fix dead end): no
+			// second charged rewind — the owner is asked instead.
+			raw, _ := json.Marshal(out)
+			d.parkDeadEndLocked(st, req.StepID, RootCauseInconclusiveQuestionID, raw,
+				"`root-cause` is inconclusive again: the driver already rewound to `repro` once for more evidence.", info)
+		} else if req.StepID == reviewStepID && verdict.TargetStep != "" && reviewAllOffGraph(out) {
+			// The review owner exit: every blocking finding is off-graph,
+			// so the build step cannot settle the verdict — the owner is
+			// asked in this same write instead of a rewind (no edge slot,
+			// no max_total count).
+			d.raiseReviewOwnerExitLocked(st, out, req.SpawnN, info)
+		} else if err := d.applyGateFailLocked(req.StepID, verdict, out, req.LightDiffBase, info); err != nil {
 			return err
 		}
 		// the FAIL verdict closes a review round — record its
@@ -978,6 +1054,7 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 // root_cause_addressed: false routes back to the diagnosis step.
 const (
 	fixStepID          = "fix"
+	reproStepID        = "repro"
 	rootCauseStepID    = "root-cause"
 	rootCauseAddressed = "root_cause_addressed"
 	// RootCauseFalseQuestionID is the driver-authored owner question a
@@ -1045,7 +1122,7 @@ func (d *Driver) applyRootCauseFalseLocked(stepID string, st *capsule.Step, res 
 	}
 	rcIdx, _ := d.workflow.indexOf(rootCauseStepID)
 	fxIdx, _ := d.workflow.indexOf(stepID)
-	d.applyRewindRangeLocked(rcIdx, fxIdx, rootCauseStepID, stepID, CauseRootCauseUnaddressed, true, info)
+	d.applyRewindRangeLocked(rcIdx, fxIdx, rootCauseStepID, stepID, CauseRootCauseUnaddressed, capsule.RewindCharged, info)
 	summary, _ := out["summary"].(string)
 	if strings.TrimSpace(summary) == "" {
 		summary = "(the fix gave no summary)"
@@ -1114,7 +1191,8 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 	// the classification runs first — an UNCHARGED rewind
 	// (light, mechanical, converging) occupies no edge slot, so the edge
 	// bound never refuses it; max_total stays the global hard cap over
-	// every rewind, charged or not, and max_per_step is counted per
+	// every automatic rewind, charged or not (an OWNER-routed one counts
+	// toward neither bound), and max_per_step is counted per
 	// gate→target edge over the CHARGED records alone — two gates sharing
 	// one target no longer eat each other's slots. A ledger that cannot
 	// attribute its own count (a pre-w69 shape with no per-record
@@ -1161,9 +1239,21 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 		lastRound = st.LastReviewRound
 	}
 	converging := gate == reviewStepID && reviewConverging(out, lastRound)
-	charged := !(light || mech || converging)
-	if d.exec.RewindStats.Count >= int64(d.workflow.MaxTotal) ||
-		(charged && countToEdge(d.exec.RewindStats.Rewinds, gate, target) >= int64(d.workflow.MaxPerStep)) {
+	// An owner-routed rewind — a deliver FAIL delivered after a human
+	// answered in its attempt chain is that human's "back to code" or
+	// 「全量重验」 — is the owner's route: it charges neither its edge slot
+	// nor max_total, so neither bound refuses it. A deliver FAIL no human
+	// answered stays charged (fail closed: no unbounded loop without a
+	// human in it).
+	class := capsule.RewindCharged
+	switch {
+	case gate == deliverStepID && currentChainAnswers(d.exec.Steps[gate]) > 0:
+		class = capsule.RewindOwner
+	case light || mech || converging:
+		class = capsule.RewindUncharged
+	}
+	if class != capsule.RewindOwner && (countTowardTotal(d.exec.RewindStats.Rewinds) >= int64(d.workflow.MaxTotal) ||
+		(class == capsule.RewindCharged && countToEdge(d.exec.RewindStats.Rewinds, gate, target) >= int64(d.workflow.MaxPerStep))) {
 		d.exec.WorkflowStatus = StatusFailedRewindExhausted
 		return nil
 	}
@@ -1174,7 +1264,7 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 	case mech:
 		targetCause = CauseGateFailRewindMechanical
 	}
-	d.applyRewindRangeLocked(tIdx, gIdx, target, gate, targetCause, charged, info)
+	d.applyRewindRangeLocked(tIdx, gIdx, target, gate, targetCause, class, info)
 	// the recorded tier returns to full whenever the run
 	// re-runs verification — a verification-gate FAIL (the spec's A3: a
 	// verification FAIL has no passed prior run to union with, so it
@@ -1199,43 +1289,7 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 			return err
 		}
 	}
-	// The gate itself stays in_progress, but its verdict closes the human
-	// round it judged: answers recorded so far must not satisfy a
-	// requires_human_answer gate on re-entry (human-gate bypass).
-	if gst := d.exec.Steps[gate]; gst != nil {
-		// The rewound dispatch keeps its own record on the gate (captured
-		// before the budget window below resets).
-		raw, _ := json.Marshal(out)
-		consumed := gst.BudgetConsumed
-		gst.Attempts = append(gst.Attempts, capsule.Attempt{
-			Cause:          CauseGateFailVerdict,
-			AttemptSeq:     nextAttemptSeq(gst),
-			StartedAt:      gst.StepStartedAt,
-			ArchivedAt:     d.stamp(),
-			Result:         raw,
-			Detail:         "FAIL verdict rewound the workflow to " + target,
-			ConsumedBudget: &consumed,
-		})
-		gst.AnswerBase = len(gst.Answers)
-		// Its conversation judged the version now being redone: the
-		// re-entry must start a NEW conversation (prior transcript as
-		// read-only reference at most), never resume that judgment.
-		if gst.Supervision == nil {
-			gst.Supervision = &capsule.StepSupervision{}
-		}
-		gst.Supervision.NextDispatch = capsule.NextDispatchFresh
-		// B2: the verdict closes the gate's round, so its
-		// re-entry starts a FRESH failure window — the deaths counted
-		// before the verdict belonged to the round it already judged. The
-		// same reset a rewind gives its target (01 §6.3 item 5).
-		gst.Supervision.FailureCount = 0
-		gst.Supervision.LongTaskTimeouts = 0
-		gst.Supervision.SlowModelTimeouts = 0
-		// D6: a rewind resets T — the gate's re-entry judges the redone
-		// work in a fresh window, not on the runtime of the verdict it
-		// already delivered.
-		gst.BudgetConsumed = capsule.Budget{}
-	}
+	d.closeGateRoundLocked(gate, out, "FAIL verdict rewound the workflow to "+target)
 	// The FAIL verdict text rides to the target's pending_rewind_input so
 	// every dispatch of the round sees it, until the step is accepted or
 	// the next rewind/reset replaces it.
@@ -1260,6 +1314,9 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 		// re-deriving them from the verdict.
 		pri.Note = MechanicalRewindNote
 	}
+	if target == reproStepID {
+		pri.Note = d.preFixBaseNoteLocked()
+	}
 	d.exec.Steps[target].PendingRewindInput = pri
 	if mech {
 		// The pending light recheck marker (polyforge#260): the durable
@@ -1280,6 +1337,52 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 		}
 	}
 	return nil
+}
+
+// closeGateRoundLocked closes the human round a gate's FAIL verdict
+// judged, on the gate itself: the dispatch whose verdict routed the
+// workflow is archived (gate_fail_verdict, the verdict output and its
+// budget window), its answer chain closes, and its re-entry starts a new
+// conversation in a fresh failure and budget window. Shared by the
+// rewind of applyGateFailLocked and the review owner exit's settlement.
+func (d *Driver) closeGateRoundLocked(gate string, out map[string]any, detail string) {
+	// The gate itself stays in_progress, but its verdict closes the human
+	// round it judged: answers recorded so far must not satisfy a
+	// requires_human_answer gate on re-entry (human-gate bypass).
+	if gst := d.exec.Steps[gate]; gst != nil {
+		// The rewound dispatch keeps its own record on the gate (captured
+		// before the budget window below resets).
+		raw, _ := json.Marshal(out)
+		consumed := gst.BudgetConsumed
+		gst.Attempts = append(gst.Attempts, capsule.Attempt{
+			Cause:          CauseGateFailVerdict,
+			AttemptSeq:     nextAttemptSeq(gst),
+			StartedAt:      gst.StepStartedAt,
+			ArchivedAt:     d.stamp(),
+			Result:         raw,
+			Detail:         detail,
+			ConsumedBudget: &consumed,
+		})
+		gst.AnswerBase = len(gst.Answers)
+		// Its conversation judged the version now being redone: the
+		// re-entry must start a NEW conversation (prior transcript as
+		// read-only reference at most), never resume that judgment.
+		if gst.Supervision == nil {
+			gst.Supervision = &capsule.StepSupervision{}
+		}
+		gst.Supervision.NextDispatch = capsule.NextDispatchFresh
+		// B2: the verdict closes the gate's round, so its
+		// re-entry starts a FRESH failure window — the deaths counted
+		// before the verdict belonged to the round it already judged. The
+		// same reset a rewind gives its target (01 §6.3 item 5).
+		gst.Supervision.FailureCount = 0
+		gst.Supervision.LongTaskTimeouts = 0
+		gst.Supervision.SlowModelTimeouts = 0
+		// D6: a rewind resets T — the gate's re-entry judges the redone
+		// work in a fresh window, not on the runtime of the verdict it
+		// already delivered.
+		gst.BudgetConsumed = capsule.Budget{}
+	}
 }
 
 // applyLightEscalateLocked lands the light path's one fallback (polyforge#260,
@@ -1426,12 +1529,53 @@ func reviewRoundFacts(out map[string]any) (blocking, residuals int, ok bool) {
 		if sev, _ := m["severity"].(string); sev != "blocking" {
 			continue
 		}
+		// An off-graph finding rides along a mixed FAIL's rewind but is
+		// not the build step's to resolve: it never counts as an
+		// unresolved code finding for the convergence rule.
+		if offGraphFinding(m) {
+			continue
+		}
 		blocking++
 		if ref, _ := m["residual_of"].(string); strings.TrimSpace(ref) != "" {
 			residuals++
 		}
 	}
 	return blocking, residuals, true
+}
+
+// offGraphFinding answers whether one blocking finding names an
+// off-graph repair target (any known class but code). An absent or
+// unknown class is never off-graph: validation rejects it before a
+// verdict lands, and anything unprovable keeps the build-step route.
+func offGraphFinding(m map[string]any) bool {
+	c, _ := m[repairTargetKey].(string)
+	return c != RepairTargetCode && validRepairTarget(c)
+}
+
+// reviewAllOffGraph answers whether one recorded review FAIL verdict is
+// an ALL-OFF-GRAPH round: at least one blocking finding, and every
+// blocking finding carries an off-graph repair target. A malformed
+// findings record answers false (the build-step rewind holds).
+func reviewAllOffGraph(out map[string]any) bool {
+	items, ok := out["findings"].([]any)
+	if !ok {
+		return false
+	}
+	n := 0
+	for _, it := range items {
+		m, isObj := it.(map[string]any)
+		if !isObj {
+			return false
+		}
+		if sev, _ := m["severity"].(string); sev != "blocking" {
+			continue
+		}
+		if !offGraphFinding(m) {
+			return false
+		}
+		n++
+	}
+	return n > 0
 }
 
 // reviewConverging answers whether one recorded review
@@ -1671,7 +1815,7 @@ func (d *Driver) applySelfReportRewindLocked(stepID string, st *capsule.Step, ou
 	// records, so the next gate FAIL fails closed (rewind_ledger_
 	// unattributable) and the loop cannot run on it.
 	rewinds := d.exec.RewindStats.Rewinds
-	if i := lastEdgeRecord(rewinds, gate, stepID); i >= 0 && !rewinds[i].Charged {
+	if i := lastEdgeRecord(rewinds, gate, stepID); i >= 0 && rewinds[i].Class == capsule.RewindUncharged {
 		if countToEdge(rewinds, gate, stepID) >= int64(d.workflow.MaxPerStep) {
 			st.Output = out // the self-report stays on the step, for the record
 			d.exec.WorkflowStatus = StatusFailedRewindExhausted
@@ -1679,7 +1823,7 @@ func (d *Driver) applySelfReportRewindLocked(stepID string, st *capsule.Step, ou
 			info.rewindGate = gate
 			return nil
 		}
-		rewinds[i].Charged = true
+		rewinds[i].Class = capsule.RewindCharged
 	}
 	raw, _ := json.Marshal(out)
 	consumed := st.BudgetConsumed
@@ -1724,11 +1868,11 @@ func (d *Driver) applySelfReportRewindLocked(stepID string, st *capsule.Step, ou
 // The target (index from) is archived with the targetCause the caller
 // chose (the fresh gate_fail_rewind, or gate_fail_rewind_text_only on the
 // light path); every later step in the range as superseded_by_rewind.
-// rewindGate names the triggering gate; charged records
-// whether this rewind occupies its gate→target edge's max_per_step bound
-// — the ledger record the per-edge quota counts. Every rewind still
-// counts toward max_total.
-func (d *Driver) applyRewindRangeLocked(from, to int, target, rewindGate, targetCause string, charged bool, info *appliedInfo) {
+// rewindGate names the triggering gate; class is the
+// record's accounting class — charged occupies its gate→target edge's
+// max_per_step bound, uncharged counts toward max_total only, owner
+// toward neither (capsule.RewindRecord).
+func (d *Driver) applyRewindRangeLocked(from, to int, target, rewindGate, targetCause, class string, info *appliedInfo) {
 	for i := from; i < to; i++ {
 		sid := d.workflow.Steps[i].ID
 		st := d.exec.Steps[sid]
@@ -1758,14 +1902,14 @@ func (d *Driver) applyRewindRangeLocked(from, to int, target, rewindGate, target
 		st.PendingRewindInput = nil
 		st.PendingLightRecheck = nil    // a reset step never carries a stale light recheck marker (polyforge#260)
 		st.Supervision = nil            // a gate rewind into the step resets its failure ledger and relaxed bounds
-		st.AnswerBase = len(st.Answers) // a rewound step starts a new attempt chain: earlier answers no longer count toward the human gate
+		st.AnswerBase = len(st.Answers) // a rewound step starts a new attempt chain: earlier answers no longer count toward the human gate and are not handed to the re-dispatch
 		st.EnvelopeRejects = 0          // the rejected envelopes belonged to the round the rewind archived
 		st.EnvelopeRejectSpawnN = 0
 		info.archived = append(info.archived, sid)
 	}
 	d.exec.RewindStats.Count++
 	d.exec.RewindStats.Rewinds = append(d.exec.RewindStats.Rewinds, capsule.RewindRecord{
-		Gate: rewindGate, ToStep: target, Charged: charged,
+		Gate: rewindGate, ToStep: target, Class: class,
 	})
 	d.exec.CurrentStep = target
 	info.target = target
@@ -1809,7 +1953,7 @@ func (d *Driver) addWallLocked(st *capsule.Step, ms int64) {
 // by question id against the CURRENT step's open question — a mismatch
 // is refused (the DAEMON-409 semantics the observe answer face
 // enforces on its side of the relay).
-func (d *Driver) applyAnswerLocked(req TransitionRequest) error {
+func (d *Driver) applyAnswerLocked(req TransitionRequest, info *appliedInfo) error {
 	if isTerminalStatus(d.exec.WorkflowStatus) {
 		return fmt.Errorf("driver: workflow is terminal (%s); answers are moot", d.exec.WorkflowStatus)
 	}
@@ -1835,13 +1979,35 @@ func (d *Driver) applyAnswerLocked(req TransitionRequest) error {
 	if by == "" {
 		by = "owner"
 	}
+	at := d.stamp()
 	st.Answers = append(st.Answers, capsule.ArchivedAnswer{
 		QuestionID: q.ID,
 		Answer:     req.Reason,
 		AnsweredBy: by,
-		AnsweredAt: d.stamp(),
+		AnsweredAt: at,
 	})
 	st.PendingQuestion = nil
+	if IsCancelAnswer(req.Reason) {
+		// The reserved cancel answer (authorized by the hub before it
+		// reached the driver): the durable intent and the blocked park in
+		// this one write; the daemon's blocked close ends the work item
+		// in the hub's canceled status. No ruling, no routing.
+		d.exec.CancelRequested = &capsule.CancelIntent{QuestionID: q.ID, Answer: req.Reason, AnsweredBy: by, At: at}
+		d.exec.WorkflowStatus = StatusBlocked
+		d.exec.BlockedReason = "cancel requested: the owner answered `cancel` to question " + q.ID + "; the work item ends in the hub's canceled status"
+		info.extra = append(info.extra, appliedEvent{"blocked", map[string]any{
+			"spawn_n": d.spawnN, "step": cur, "reason": d.exec.BlockedReason, "report": false,
+		}})
+		return nil
+	}
+	switch {
+	case q.ID == ReviewOwnerExitQuestionID && cur == reviewStepID:
+		return d.routeReviewOwnerExitLocked(st, q, req.Reason, by, at, info)
+	case q.ID == ReproNotReproducedQuestionID || q.ID == RootCauseInconclusiveQuestionID:
+		return d.routeDeadEndLocked(cur, st, q, req.Reason, info)
+	case q.ID == E2EAllGreenQuestionID && cur == e2eAuthorStepID:
+		return d.routeAllGreenLocked(st, q, req.Reason, info)
+	}
 	return nil
 }
 
@@ -2013,7 +2179,8 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 		body["step"] = req.StepID
 		switch req.Result.Outcome {
 		case OutcomeCompleted:
-			if info.rootCauseQuestion {
+			if info.rootCauseQuestion || info.question {
+				info.question = false // this event is the needs_input itself
 				// the second root_cause_addressed: false: the
 				// driver-authored owner question parks the loop
 				kind = "needs_input"
@@ -2057,7 +2224,9 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 				body["detail"] = info.escalateReason
 			} else {
 				kind = "gate_verdict"
-				if isTerminalStatus(d.exec.WorkflowStatus) {
+				if info.question {
+					// the review owner exit: the owner is asked, nothing rewound
+				} else if isTerminalStatus(d.exec.WorkflowStatus) {
 					info.extra = append(info.extra, appliedEvent{"terminal", map[string]any{
 						"spawn_n": d.spawnN, "status": d.exec.WorkflowStatus, "gate": req.StepID,
 					}})
@@ -2104,6 +2273,43 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 	case TransStepFailed:
 		kind = "step_failed"
 		d.failureEventsLocked(req, info, body)
+	case TransStepRevision:
+		kind = EvBindingRevised
+		body["step"] = req.StepID
+		if rev := req.BindingRevision; rev != nil {
+			body["by"] = rev.By
+			body["reason"] = rev.Reason
+			// One durable event per corrected index: the batch is one
+			// write, but a reader following the chain sees each command
+			// that changed and what it became.
+			for i, corr := range rev.Corrections {
+				ev := map[string]any{
+					"spawn_n":       d.spawnN,
+					"step":          req.StepID,
+					"binding_index": corr.Index,
+					"before":        req.RevisionBefore[i],
+					"after":         corr.Command,
+					"by":            rev.By,
+					"reason":        rev.Reason,
+				}
+				if i == 0 {
+					body["binding_index"] = corr.Index
+					body["before"] = req.RevisionBefore[i]
+					body["after"] = corr.Command
+					continue
+				}
+				info.extra = append(info.extra, appliedEvent{EvBindingRevised, ev})
+			}
+		}
+	}
+	if info.question {
+		if st := d.exec.Steps[d.exec.CurrentStep]; st != nil && st.PendingQuestion != nil {
+			d.inputEventFor = st.PendingQuestion.ID
+			info.extra = append(info.extra, appliedEvent{"needs_input", map[string]any{
+				"spawn_n": d.spawnN, "step": d.exec.CurrentStep,
+				"question_id": st.PendingQuestion.ID, "question": st.PendingQuestion.Question,
+			}})
+		}
 	}
 	if info.recheckAbandoned != "" {
 		// the abandonment of verification's pending light recheck by a
@@ -2215,7 +2421,20 @@ func lastEdgeRecord(rewinds []capsule.RewindRecord, gate, target string) int {
 func countToEdge(rewinds []capsule.RewindRecord, gate, target string) int64 {
 	var n int64
 	for _, r := range rewinds {
-		if r.Charged && r.Gate == gate && r.ToStep == target {
+		if r.Class == capsule.RewindCharged && r.Gate == gate && r.ToStep == target {
+			n++
+		}
+	}
+	return n
+}
+
+// countTowardTotal counts the ledger records the max_total bound counts:
+// every record but an owner-routed one (charged and uncharged alike —
+// max_total is the automatic rewinds' runaway guard).
+func countTowardTotal(rewinds []capsule.RewindRecord) int64 {
+	var n int64
+	for _, r := range rewinds {
+		if r.Class != capsule.RewindOwner {
 			n++
 		}
 	}
@@ -2251,4 +2470,415 @@ func nextAttemptSeq(st *capsule.Step) int {
 		}
 	}
 	return seq + 1
+}
+
+// The review owner exit: a review FAIL whose every blocking finding is
+// off-graph (reviewAllOffGraph) cannot be settled by the build step, so
+// the settlement write asks the owner instead of rewinding. The answer's
+// own transition routes it: amend-upstream records the ruling and
+// rewinds, owner-routed, to the step that executes it (the authoring
+// step for a suite gap, append-only; otherwise the build step) — spec and
+// plan never re-run; waive records the exemption of exactly the named
+// findings and re-runs review; cancel is the universal reserved answer;
+// anything else is asked again.
+const (
+	// ReviewOwnerExitQuestionID is the driver-authored owner question of
+	// an all-off-graph review FAIL.
+	ReviewOwnerExitQuestionID = "review_owner_exit"
+	// The owner exit's answer verbs (the trimmed answer's first token,
+	// case-insensitive, a trailing ':' ignored).
+	OwnerAnswerAmend = "amend-upstream"
+	OwnerAnswerWaive = "waive"
+	// OwnerAmendSuiteNote rides the authoring step's rewind input of a
+	// suite-gap amendment: the append-only duty.
+	OwnerAmendSuiteNote = "Owner-approved suite amendment (append-only): keep every existing scenario, test and title byte-identical; append and title only the new scenarios the ruling names, prove them red, and complete with the full title list (old titles first, then the new ones) — the driver takes that list as the new baseline."
+)
+
+// ownerExitFinding is one blocking finding the exit question names.
+type ownerExitFinding struct {
+	Ref          string `json:"ref"`
+	RepairTarget string `json:"repair_target"`
+	Detail       string `json:"detail"`
+}
+
+// ownerExitContext is the exit question's driver-composed context: the
+// round's blocking findings with their positional references and the
+// verdict output in full.
+type ownerExitContext struct {
+	Round    int64              `json:"review_round"`
+	Blocking []ownerExitFinding `json:"blocking"`
+	Verdict  map[string]any     `json:"verdict"`
+}
+
+// ownerExitFindings lists one verdict's blocking findings with their
+// positional reference s<n>#<k> (n = the verdict dispatch's ordinal,
+// k = the 1-based position in its findings list).
+func ownerExitFindings(out map[string]any, n int64) []ownerExitFinding {
+	items, _ := out["findings"].([]any)
+	var fs []ownerExitFinding
+	for i, it := range items {
+		m, _ := it.(map[string]any)
+		if sev, _ := m["severity"].(string); sev != "blocking" {
+			continue
+		}
+		c, _ := m[repairTargetKey].(string)
+		detail, _ := m["detail"].(string)
+		fs = append(fs, ownerExitFinding{Ref: fmt.Sprintf("s%d#%d", n, i+1), RepairTarget: c, Detail: detail})
+	}
+	return fs
+}
+
+// ownerExitQuestion renders the exit question: the findings and the
+// three answers, stated so an answer is unambiguous.
+func ownerExitQuestion(fs []ownerExitFinding) string {
+	var b strings.Builder
+	b.WriteString("The review FAILed with blocking findings that are all off-graph — the build step cannot settle them, so the driver asks you instead of rewinding it:\n")
+	for _, f := range fs {
+		fmt.Fprintf(&b, "- %s [%s] %s\n", f.Ref, f.RepairTarget, oneLine(f.Detail, 300))
+	}
+	b.WriteString("Answer with exactly one of:\n")
+	b.WriteString("- `amend-upstream: <your words>` — approve the upstream correction. Your words are recorded verbatim in artifacts/grill-qa.md `## Owner rulings`; a suite gap re-runs the authoring step append-only, any other finding is executed by the build step; spec and plan are never re-run.\n")
+	b.WriteString("- `waive <ref> [<ref> ...] — <your words>` — exempt exactly the findings you name by their reference (e.g. " + fs[0].Ref + "); an unnamed finding stays blocking, and a waive naming none is asked again.\n")
+	b.WriteString("- `cancel` — abandon this work item.\n")
+	b.WriteString("Any other answer is treated as a new question and this one is asked again.")
+	return b.String()
+}
+
+// raiseReviewOwnerExitLocked parks the review gate on the owner exit in
+// its FAIL settlement write: the verdict stays on the gate (in_progress),
+// nothing is archived or rewound.
+func (d *Driver) raiseReviewOwnerExitLocked(st *capsule.Step, out map[string]any, n int64, info *appliedInfo) {
+	fs := ownerExitFindings(out, n)
+	ctx, _ := json.Marshal(ownerExitContext{Round: n, Blocking: fs, Verdict: out})
+	st.PendingQuestion = &capsule.PendingQuestion{
+		ID:       ReviewOwnerExitQuestionID,
+		Step:     reviewStepID,
+		Question: ownerExitQuestion(fs),
+		Context:  ctx,
+		AskedAt:  d.stamp(),
+	}
+	info.question = true
+}
+
+// answerVerb is an owner answer's routing verb: the trimmed answer's
+// first whitespace-separated token, lower-cased, a trailing ':' or ','
+// dropped.
+func answerVerb(answer string) string {
+	f := strings.Fields(strings.TrimSpace(answer))
+	if len(f) == 0 {
+		return ""
+	}
+	return strings.TrimRight(strings.ToLower(f[0]), ":,")
+}
+
+// findingRefsIn answers the well-formed s<n>#<k> references an answer
+// names, in order, de-duplicated.
+func findingRefsIn(answer string) []string {
+	seen := map[string]bool{}
+	var refs []string
+	for _, m := range findingRefScanRe.FindAllString(answer, -1) {
+		if !seen[m] {
+			seen[m] = true
+			refs = append(refs, m)
+		}
+	}
+	return refs
+}
+
+var findingRefScanRe = regexp.MustCompile(`s[1-9][0-9]*#[1-9][0-9]*`)
+
+// routeReviewOwnerExitLocked routes the owner's answer to the exit, in
+// the answer's own write (the pair is already archived).
+func (d *Driver) routeReviewOwnerExitLocked(st *capsule.Step, q *capsule.PendingQuestion, answer, by, at string, info *appliedInfo) error {
+	var ctx ownerExitContext
+	_ = json.Unmarshal(q.Context, &ctx)
+	reask := func(why string) error {
+		st.PendingQuestion = &capsule.PendingQuestion{
+			ID:       q.ID,
+			Step:     q.Step,
+			Question: why + "\n\n" + ownerExitQuestion(ctx.Blocking),
+			Context:  q.Context,
+			AskedAt:  at,
+		}
+		info.question = true
+		return nil
+	}
+	if len(ctx.Blocking) == 0 {
+		return reask("The driver could not read the findings this question names.")
+	}
+	ruling := capsule.OwnerRuling{QuestionID: q.ID, Answer: answer, AnsweredBy: by, AnsweredAt: at}
+	switch answerVerb(answer) {
+	case OwnerAnswerAmend:
+		ruling.Kind = OwnerAnswerAmend
+		target := d.workflow.step(reviewStepID).OnFail.Target
+		suite := false
+		for _, f := range ctx.Blocking {
+			ruling.Findings = append(ruling.Findings, f.Ref)
+			if f.RepairTarget == RepairTargetAuthoredSuite {
+				suite = true
+			}
+		}
+		note := ""
+		if suite {
+			if a := d.authoringStepBefore(reviewStepID); a != "" {
+				target, note = a, OwnerAmendSuiteNote
+			}
+		}
+		ruling.RoutedTo = target
+		st.OwnerRulings = append(st.OwnerRulings, ruling)
+		tIdx, _ := d.workflow.indexOf(target)
+		gIdx, _ := d.workflow.indexOf(reviewStepID)
+		d.applyRewindRangeLocked(tIdx, gIdx, target, reviewStepID, CauseGateFailRewind, capsule.RewindOwner, info)
+		d.closeGateRoundLocked(reviewStepID, st.Output, "the owner's amend-upstream ruling routed the workflow to "+target)
+		verdict, _ := json.Marshal(ctx.Verdict)
+		d.exec.Steps[target].PendingRewindInput = &capsule.RewindInput{
+			ToStep: target,
+			Reason: "The owner answered the review owner exit with an amend-upstream ruling (recorded verbatim in artifacts/grill-qa.md `## Owner rulings`, findings " +
+				strings.Join(ruling.Findings, ", ") + "). Execute it — spec and plan are not re-run; the ruling is the upstream correction:\n\n" +
+				answer + "\n\nThe review verdict it answers:\n\n" + string(verdict),
+			Note: note,
+		}
+		info.extra = append(info.extra, appliedEvent{"rewind", map[string]any{
+			"spawn_n": d.spawnN, "gate": reviewStepID, "target": target, "archived": info.archived, "cause": "owner_ruling",
+		}})
+		return d.abandonLightRecheckLocked("the owner's amend-upstream ruling rewound "+target+" to a fresh re-derivation", info)
+	case OwnerAnswerWaive:
+		valid := map[string]bool{}
+		for _, f := range ctx.Blocking {
+			valid[f.Ref] = true
+		}
+		for _, r := range findingRefsIn(answer) {
+			if valid[r] {
+				ruling.Findings = append(ruling.Findings, r)
+			}
+		}
+		if len(ruling.Findings) == 0 {
+			return reask("Your waive named no blocking finding of this review round by its reference, so it clears nothing.")
+		}
+		ruling.Kind = OwnerAnswerWaive
+		st.OwnerRulings = append(st.OwnerRulings, ruling)
+		// review re-runs on the same tree with the waiver on record: the
+		// owner's ruling is the new gate input, so the round closes here
+		// and the unchanged-tree record is forgotten
+		d.closeGateRoundLocked(reviewStepID, st.Output, "the owner waived "+strings.Join(ruling.Findings, ", ")+"; review re-runs")
+		st.JudgedRepoHash = ""
+		return nil
+	}
+	return reask("Your answer is not one of amend-upstream, waive or cancel.")
+}
+
+// authoringStepBefore answers the lane's authoring step before stepID —
+// the step whose accepted output declares the authored test files
+// (feature-full's e2e-author, bug-fix's repro) — or "" when the lane has
+// none.
+func (d *Driver) authoringStepBefore(stepID string) string {
+	idx, _ := d.workflow.indexOf(stepID)
+	for i := idx - 1; i >= 0; i-- {
+		switch d.workflow.Steps[i].ID {
+		case e2eAuthorStepID, reproStepID:
+			return d.workflow.Steps[i].ID
+		}
+	}
+	return ""
+}
+
+// The bug-fix dead ends: a repro that does not reproduce, and a second
+// inconclusive root cause. Both park a driver-authored owner question
+// with the same three answers instead of continuing or exhausting the
+// rewinds.
+const (
+	ReproNotReproducedQuestionID    = "repro_not_reproduced"
+	RootCauseInconclusiveQuestionID = "root_cause_inconclusive"
+	OwnerAnswerRerunRepro           = "re-run-repro"
+	OwnerAnswerContinue             = "continue"
+)
+
+// notReproducedLocked reports a completed repro result carrying the
+// literal reproduces: false on a lane whose root-cause step follows it.
+func (d *Driver) notReproducedLocked(stepID string, out map[string]any) bool {
+	if stepID != reproStepID {
+		return false
+	}
+	if v, ok := out["reproduces"].(bool); !ok || v {
+		return false
+	}
+	rp, _ := d.workflow.indexOf(reproStepID)
+	rc, ok := d.workflow.indexOf(rootCauseStepID)
+	return ok && rp < rc
+}
+
+// deadEndQuestion renders a dead end's owner question.
+func deadEndQuestion(why string) string {
+	return why + " Answer with exactly one of:\n" +
+		"- `re-run-repro: <evidence>` — supplement the reproduction evidence (environment, trigger, logs) and re-run `repro` with it, against the pre-fix base;\n" +
+		"- `continue: <guidance>` — continue on the current diagnosis with your corrective guidance;\n" +
+		"- `cancel` — abandon this work item.\n" +
+		"Any other answer is treated as a new question and this one is asked again."
+}
+
+// parkDeadEndLocked parks the step on a dead end's owner question.
+func (d *Driver) parkDeadEndLocked(st *capsule.Step, stepID, qid string, ctx json.RawMessage, why string, info *appliedInfo) {
+	st.PendingQuestion = &capsule.PendingQuestion{
+		ID: qid, Step: stepID, Question: deadEndQuestion(why), Context: ctx, AskedAt: d.stamp(),
+	}
+	info.question = true
+}
+
+// routeDeadEndLocked routes the owner's dead-end answer in its own write:
+//   - re-run-repro: repro re-runs with the answer (in place when the
+//     question sits on repro; an owner-routed rewind root-cause → repro
+//     otherwise), told to reproduce against the pre-fix base;
+//   - continue: on repro the held report is accepted and the lane moves
+//     on to root-cause, the guidance in repro's answers; on root-cause
+//     the gate re-runs in place with the guidance;
+//   - anything else (cancel is the reserved answer) is asked again.
+func (d *Driver) routeDeadEndLocked(cur string, st *capsule.Step, q *capsule.PendingQuestion, answer string, info *appliedInfo) error {
+	switch answerVerb(answer) {
+	case OwnerAnswerRerunRepro:
+		reason := "The owner answered the bug-fix dead end with re-run-repro — supplement the reproduction with this evidence and re-run it:\n\n" + answer
+		if cur == reproStepID {
+			st.Output = nil
+			st.PendingRewindInput = &capsule.RewindInput{ToStep: reproStepID, Reason: reason, Note: d.preFixBaseNoteLocked()}
+			if st.Supervision == nil {
+				st.Supervision = &capsule.StepSupervision{}
+			}
+			st.Supervision.NextDispatch = capsule.NextDispatchFresh
+			return nil
+		}
+		tIdx, _ := d.workflow.indexOf(reproStepID)
+		gIdx, _ := d.workflow.indexOf(cur)
+		d.applyRewindRangeLocked(tIdx, gIdx, reproStepID, cur, CauseGateFailRewind, capsule.RewindOwner, info)
+		d.closeGateRoundLocked(cur, st.Output, "the owner's re-run-repro answer routed the workflow to "+reproStepID)
+		d.exec.Steps[reproStepID].PendingRewindInput = &capsule.RewindInput{ToStep: reproStepID, Reason: reason, Note: d.preFixBaseNoteLocked()}
+		info.extra = append(info.extra, appliedEvent{"rewind", map[string]any{
+			"spawn_n": d.spawnN, "gate": cur, "target": reproStepID, "archived": info.archived, "cause": "owner_answer",
+		}})
+		return d.abandonLightRecheckLocked("the owner's re-run-repro answer rewound "+reproStepID+" to a fresh re-derivation", info)
+	case OwnerAnswerContinue:
+		if cur == reproStepID {
+			st.Status = capsule.StepDone
+			st.PendingRewindInput = nil
+			st.Attempts = append(st.Attempts, capsule.Attempt{
+				Cause: "accepted", AttemptSeq: nextAttemptSeq(st), StartedAt: st.StepStartedAt, ArchivedAt: d.stamp(),
+			})
+			// root-cause reads only repro's artifacts, written before this
+			// answer: the guidance rides its next dispatch's rewind input
+			// verbatim (review s8#2), cleared when that round ends.
+			if rc := d.exec.Steps[rootCauseStepID]; rc != nil {
+				rc.PendingRewindInput = &capsule.RewindInput{
+					ToStep: rootCauseStepID,
+					Reason: "The owner answered `repro`'s reproduces:false dead end with continue — accept the report and diagnose with this guidance:\n\n" + answer,
+				}
+			}
+			return nil
+		}
+		return nil // root-cause re-runs in place with the guidance in its answers
+	}
+	st.PendingQuestion = &capsule.PendingQuestion{
+		ID: q.ID, Step: q.Step, Context: q.Context, AskedAt: d.stamp(),
+		Question: "Your answer is not one of re-run-repro, continue or cancel.\n\n" + q.Question,
+	}
+	info.question = true
+	return nil
+}
+
+// preFixBaseNoteLocked is the pre-fix base duty a repro re-run carries
+// once a fix has run (a fix → root-cause record exists) and the base is
+// recorded; "" otherwise (the tree is still the pre-fix tree).
+func (d *Driver) preFixBaseNoteLocked() string {
+	if len(d.exec.PreFixHeads) == 0 || countToEdge(d.exec.RewindStats.Rewinds, fixStepID, rootCauseStepID) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(d.exec.PreFixHeads))
+	for name := range d.exec.PreFixHeads {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+"@"+d.exec.PreFixHeads[name])
+	}
+	return "Pre-fix base: a fix has already run on this tree, so reproduce against the pre-fix base " + strings.Join(parts, ", ") +
+		" (`execution.json` `pre_fix_heads`; a throwaway worktree at those heads), never against the current tree that carries the fix's mitigation."
+}
+
+// The e2e-author all-green baseline: every authored scenario passed on
+// the pre-implementation tree, so the spec claims behaviour the tree
+// already has. Three owner answers make it completable or rewindable.
+const (
+	E2EAllGreenQuestionID   = "e2e_all_green"
+	OwnerAnswerRewindToSpec = "rewind-to-spec"
+	OwnerAnswerSkip         = "skip"
+	specStepID              = "spec"
+)
+
+// allGreenBaseline reports an e2e-author output whose baseline lists at
+// least one scenario and none of them failing.
+func allGreenBaseline(out map[string]any) bool {
+	rows, _ := out["baseline"].([]any)
+	if len(rows) == 0 {
+		return false
+	}
+	for _, r := range rows {
+		m, _ := r.(map[string]any)
+		if st, _ := m["status"].(string); st != "pass" {
+			return false
+		}
+	}
+	return true
+}
+
+func allGreenQuestion() string {
+	return "`e2e-author`'s authored scenarios all pass on the pre-implementation tree: the behaviour the spec claims is new is already there, so the spec and the tree disagree. Answer with exactly one of:\n" +
+		"- `rewind-to-spec: <your words>` — the spec is corrected: the driver rewinds to `spec` (owner-routed) with your words;\n" +
+		"- `skip: <your rationale>` — the behaviour is already on main: `e2e-author` records your rationale verbatim in artifacts/grill-qa.md and completes with no authored scenarios (the named discipline-① exception);\n" +
+		"- `cancel` — abandon this work item.\n" +
+		"Any other answer is treated as a new question and this one is asked again."
+}
+
+// routeAllGreenLocked routes the owner's all-green answer in its own
+// write: rewind-to-spec is an owner-routed rewind of [spec, e2e-author];
+// skip re-dispatches e2e-author fresh with the answer (it records the
+// rationale and completes empty); anything else is asked again.
+func (d *Driver) routeAllGreenLocked(st *capsule.Step, q *capsule.PendingQuestion, answer string, info *appliedInfo) error {
+	switch answerVerb(answer) {
+	case OwnerAnswerRewindToSpec:
+		if sIdx, ok := d.workflow.indexOf(specStepID); ok {
+			eIdx, _ := d.workflow.indexOf(e2eAuthorStepID)
+			d.applyRewindRangeLocked(sIdx, eIdx+1, specStepID, e2eAuthorStepID, CauseGateFailRewind, capsule.RewindOwner, info)
+			d.exec.Steps[specStepID].PendingRewindInput = &capsule.RewindInput{
+				ToStep: specStepID,
+				Reason: "The owner answered `e2e-author`'s all-green baseline with rewind-to-spec: every authored scenario already passed on the pre-implementation tree, so the spec claims behaviour the tree already has. Correct the spec. The owner's words:\n\n" +
+					answer + "\n\nThe green baseline:\n\n" + string(q.Context),
+			}
+			info.extra = append(info.extra, appliedEvent{"rewind", map[string]any{
+				"spawn_n": d.spawnN, "gate": e2eAuthorStepID, "target": specStepID, "archived": info.archived, "cause": "owner_answer",
+			}})
+			return d.abandonLightRecheckLocked("the owner's rewind-to-spec answer rewound "+specStepID+" to a fresh re-derivation", info)
+		}
+	case OwnerAnswerSkip:
+		st.Output = nil
+		if st.Supervision == nil {
+			st.Supervision = &capsule.StepSupervision{}
+		}
+		st.Supervision.NextDispatch = capsule.NextDispatchFresh
+		return nil
+	}
+	st.PendingQuestion = &capsule.PendingQuestion{
+		ID: q.ID, Step: q.Step, Context: q.Context, AskedAt: d.stamp(),
+		Question: "Your answer is not one of rewind-to-spec, skip or cancel.\n\n" + allGreenQuestion(),
+	}
+	info.question = true
+	return nil
+}
+
+// CancelAnswerSentence is the reserved cancel answer's one statement,
+// appended by the driver to every question it persists.
+const CancelAnswerSentence = "Answer `cancel` (the whole answer, ignoring case and surrounding whitespace) to abandon this work item."
+
+// IsCancelAnswer reports the reserved cancel answer: the answer text,
+// trimmed of surrounding whitespace, equal to "cancel" ignoring case.
+// The daemon authorizes it at the hub before relaying it.
+func IsCancelAnswer(answer string) bool {
+	return strings.EqualFold(strings.TrimSpace(answer), "cancel")
 }

@@ -156,7 +156,7 @@ func gateFAIL() fakeEntry {
 // unmarked twin is gateFAIL's shape plus an unmarked blocking finding).
 func lightReviewFAIL() fakeEntry {
 	return fakeEntry{res: &StepResult{Outcome: OutcomeGateFailed, Output: json.RawMessage(
-		`{"verdict":"fail","fail_reason":"comment wording only","findings":[{"severity":"blocking","detail":"the doc comment names the old flag","text_only":true}]}`)}}
+		`{"verdict":"fail","fail_reason":"comment wording only","findings":[{"severity":"blocking","repair_target":"code","detail":"the doc comment names the old flag","text_only":true}]}`)}}
 }
 func incomplete() fakeEntry {
 	return fakeEntry{res: &StepResult{Outcome: OutcomeIncomplete, Output: json.RawMessage(`{"partial":true}`)}}

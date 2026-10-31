@@ -1,19 +1,30 @@
 package supervise
 
-// wait.go: the wait-call counter. A step agent that waits
-// by issuing `sleep N` as a tool call of its own spends the step's wall
-// clock on a wait with no condition that could end it early. For now such
-// a call is counted and surfaced only: no rule in rules.go reads it, no
-// verdict changes because of it and nothing is killed for it.
+// wait.go: the wait-call counter. A step
+// agent that waits by issuing `sleep N` as a tool call of its own, or that
+// blocks in the shell's `wait` builtin on background jobs, spends the
+// step's wall clock on a wait with no condition that could end it early.
+// For now such a call is counted and surfaced only: no rule in rules.go
+// reads it, no verdict changes because of it and nothing is killed for it.
 //
-// A wait call is a bash tool call (pi's "bash", Claude Code's "Bash")
-// whose command, trimmed, STARTS with `sleep` and whose duration operands
-// sum to more than WaitCallFloor. Only that leading form counts: a short
-// `sleep` inside a condition loop (`until ready; do sleep 2; done`) is the
-// legal way to wait and is never counted, and neither is a sleep that is
-// not the command's first word. Both translators hand every tool start to
-// the Tracker with the tool's name and arguments, so the Tracker detects
-// it for every harness at one place.
+// A wait call is a bash tool call (pi's "bash", Claude Code's "Bash") of
+// one of two forms, and one call counts at most once:
+//
+//   - sleep: the command, trimmed, STARTS with `sleep` and its duration
+//     operands sum to more than WaitCallFloor. Only that leading form
+//     counts: a short `sleep` inside a condition loop (`until ready; do
+//     sleep 2; done`) is the legal way to wait and is never counted, and
+//     neither is a sleep that is not the command's first word. Its seconds
+//     are the operand sum, known when the call starts.
+//   - wait: otherwise, the command runs the `wait` builtin at command
+//     position (waitBuiltin), as a call that backgrounds jobs with `&` and
+//     then awaits them does. Its seconds are the call's measured wall
+//     time, known only when the call ends (or the dispatch does, for a call
+//     still blocked then); it counts when that time exceeds WaitCallFloor.
+//
+// Both translators hand every tool start to the Tracker with the tool's
+// name and arguments, so the Tracker detects it for every harness at one
+// place.
 
 import (
 	"math"
@@ -22,9 +33,16 @@ import (
 	"time"
 )
 
-// WaitCallFloor is the longest leading sleep that is NOT a wait call: a
-// pause this short is a settle delay, not a wait.
+// WaitCallFloor is the longest leading sleep, or measured `wait` call,
+// that is NOT a wait call: a pause this short is a settle delay, not a
+// wait.
 const WaitCallFloor = 3 * time.Second
+
+// The wait-call forms (WaitCall.Form).
+const (
+	WaitFormSleep = "sleep"
+	WaitFormWait  = "wait"
+)
 
 // maxWaitArgv bounds the command excerpt a wait call keeps, in characters.
 const maxWaitArgv = 120
@@ -40,7 +58,10 @@ const maxPendingWaitCalls = 256
 
 // WaitCall is one wait call of a dispatch.
 type WaitCall struct {
-	// Seconds is the call's sleep, rounded to whole seconds.
+	// Form is WaitFormSleep or WaitFormWait.
+	Form string
+	// Seconds is, rounded to whole seconds, the leading sleep's operand
+	// sum (sleep form) or the call's measured wall time (wait form).
 	Seconds int64
 	// Argv is the command excerpt (trimmed, at most 120 characters).
 	Argv string
@@ -145,11 +166,98 @@ func detectWaitCall(id, name, command string, at time.Time) (WaitCall, bool) {
 		return WaitCall{}, false
 	}
 	return WaitCall{
+		Form:       WaitFormSleep,
 		Seconds:    int64(math.Round(d.Seconds())),
 		Argv:       excerpt(strings.TrimSpace(command), maxWaitArgv),
 		ToolCallID: id,
 		At:         at,
 	}, true
+}
+
+// detectWaitBuiltinCall answers the wait-form candidate a tool start is,
+// if its command runs the `wait` builtin: its Seconds are left for the
+// Tracker to measure when the call ends.
+func detectWaitBuiltinCall(id, name, command string, at time.Time) (WaitCall, bool) {
+	if !isBashTool(name) || !waitBuiltin(command) {
+		return WaitCall{}, false
+	}
+	return WaitCall{
+		Form:       WaitFormWait,
+		Argv:       excerpt(strings.TrimSpace(command), maxWaitArgv),
+		ToolCallID: id,
+		At:         at,
+	}, true
+}
+
+// waitBuiltin reports whether a command line runs the `wait` builtin: a
+// word that is exactly `wait`, unquoted, at command position — the start
+// of the line, or after `;`, `&`, `&&`, `|`, `||`, a newline, a
+// parenthesis or a brace, or after the reserved words `do`, `then`,
+// `else` and `!`. A `wait` that is an argument (`grep wait`), part of a
+// longer word (`await`, `waiting`, `--wait`), quoted or in a comment is
+// not the builtin, and the `&` of a redirection (`2>&1`, `&>file`) is no
+// separator.
+func waitBuiltin(cmd string) bool {
+	cmdPos := true // the next word starts a command
+	for i := 0; i < len(cmd); {
+		c := cmd[i]
+		switch {
+		case c == ' ' || c == '\t':
+			i++
+			continue
+		case c == '\n' || c == ';' || c == '|' || c == '(' || c == ')' || c == '{' || c == '}':
+			cmdPos = true
+			i++
+			continue
+		case c == '&':
+			if (i > 0 && (cmd[i-1] == '>' || cmd[i-1] == '<')) || (i+1 < len(cmd) && cmd[i+1] == '>') {
+				cmdPos = false // a redirection's &, not a job separator
+			} else {
+				cmdPos = true
+			}
+			i++
+			continue
+		case c == '#':
+			for i < len(cmd) && cmd[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		// one word: up to the next unquoted blank or separator
+		start, quoted := i, false
+		for i < len(cmd) {
+			c := cmd[i]
+			if c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|' || c == '(' || c == ')' {
+				break
+			}
+			switch c {
+			case '\\':
+				quoted = true
+				i += 2
+				continue
+			case '\'', '"':
+				quoted = true
+				if j := strings.IndexByte(cmd[i+1:], c); j >= 0 {
+					i += j + 2
+				} else {
+					i = len(cmd)
+				}
+				continue
+			}
+			i++
+		}
+		word := cmd[start:min(i, len(cmd))]
+		if cmdPos && !quoted && word == "wait" {
+			return true
+		}
+		switch word {
+		case "do", "then", "else", "!":
+			cmdPos = !quoted && cmdPos
+		default:
+			cmdPos = false
+		}
+	}
+	return false
 }
 
 // excerpt cuts s to at most n characters.

@@ -767,20 +767,26 @@ func (d *Driver) takeStalled() *supervise.DriverStalled {
 }
 
 // ---------------------------------------------------------------------------
-// Wait calls: counted and surfaced, never judged.
+// Wait calls: counted and surfaced, never
+// judged.
 
 // EvWaitCall records one wait call of a dispatch: a bash tool call whose
-// command starts with `sleep N`, N over supervise.WaitCallFloor. It is
-// news only — no rule reads it, no verdict changes and nothing is killed
-// for it. The body names the call (seconds, argv excerpt, tool call id,
-// at) and the dispatch's running totals (wait_calls, wait_seconds).
+// command starts with `sleep N`, N over supervise.WaitCallFloor (form
+// "sleep", seconds = N), or that runs the shell's `wait` builtin for over
+// the floor of measured wall time (form "wait", seconds = that time). It
+// is news only — no rule reads it, no verdict changes and nothing is
+// killed for it. The body names the call (form, seconds, argv excerpt,
+// tool call id, at) and the dispatch's running totals (wait_calls,
+// wait_seconds).
 const EvWaitCall = "wait_call"
 
 // relayWaitCalls records one wait_call event per wait call dispatch n's
 // tracker folds, while the dispatch runs. The returned stop ends the relay
 // and then takes what is left, so a call folded just before the dispatch
 // ended is recorded too, and each call exactly once (the tracker hands a
-// call out once, and the two takers never overlap). The appends are I/O:
+// call out once, and the two takers never overlap). Before that last take
+// it folds the wait-form calls still running — a dispatch killed while
+// blocked in `wait` never ends that call — with the time they ran. The appends are I/O:
 // they run on the relay goroutine — never on the harness stdout reader,
 // never under d.mu. Without a link nothing is relayed.
 func (d *Driver) relayWaitCalls(stepID string, n int64) (stop func()) {
@@ -792,7 +798,7 @@ func (d *Driver) relayWaitCalls(stepID string, n int64) (stop func()) {
 		for _, w := range tr.TakeWaitCalls() {
 			d.emit(EvWaitCall, map[string]any{
 				"step": stepID, "spawn_n": n,
-				"seconds": w.Seconds, "argv": w.Argv, "tool_call_id": w.ToolCallID,
+				"form": w.Form, "seconds": w.Seconds, "argv": w.Argv, "tool_call_id": w.ToolCallID,
 				"at":         w.At.UTC().Format(time.RFC3339Nano),
 				"wait_calls": w.WaitCalls, "wait_seconds": w.WaitSeconds,
 			})
@@ -813,6 +819,7 @@ func (d *Driver) relayWaitCalls(stepID string, n int64) (stop func()) {
 	return func() {
 		close(quit)
 		<-done
+		tr.FinishOpenWaitCalls()
 		record()
 	}
 }

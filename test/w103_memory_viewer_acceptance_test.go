@@ -219,8 +219,10 @@ func w103Browse(t *testing.T, inst *v1Install, key, query string) (int, w103Brow
 		if err := json.Unmarshal([]byte(raw), &page); err != nil {
 			t.Fatalf("browse %q answer: %v (%s)", query, err, raw)
 		}
-		if page.Total != len(page.Items) {
-			t.Fatalf("browse %q: total %d != len(items) %d: %s", query, page.Total, len(page.Items), raw)
+		// (owner ruling 2026-10-29): total is the whole
+		// walk the caller can see, no longer the page length.
+		if page.Total < len(page.Items) {
+			t.Fatalf("browse %q: total %d < len(items) %d: %s", query, page.Total, len(page.Items), raw)
 		}
 	}
 	return code, page, raw

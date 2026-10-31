@@ -72,7 +72,7 @@ func w80StepFiles(t *testing.T) []string {
 
 func TestW80SharedFragmentsAreTheOneSource(t *testing.T) {
 	files := w80StepFiles(t)
-	for _, frag := range []string{"fast_checks", "fast_checks_build", "batch_questions", "handoff_duty"} {
+	for _, frag := range []string{"fast_checks", "fast_checks_build", "batch_questions", "handoff_duty", "deliverable_carrier", "owner_review"} {
 		text := strings.TrimSpace(w80Read(t, "workflows/_shared/"+frag+".md"))
 		var users []string
 		for _, rel := range files {

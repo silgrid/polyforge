@@ -490,7 +490,7 @@ func TestOwnerDoorsOnBlockedWI(t *testing.T) {
 	if err := m.End(id, api.SessionEndRequest{SessionID: reclaim, Status: api.StatusBlocked, Note: "incomplete again"}, env.UserID); err != nil {
 		t.Fatalf("second session-end blocked: %v", err)
 	}
-	if _, err := env.WIs.Cancel(id, env.UserID); err != nil {
+	if _, err := env.WIs.Cancel(id, env.UserID, api.CancelRequest{}); err != nil {
 		t.Fatalf("abandon (cancel) of the parked WI: %v", err)
 	}
 	wi, err = env.WIs.Get(id, GetOptions{})
@@ -824,7 +824,7 @@ func TestDependencyOnlyWrappedBlockerReleases(t *testing.T) {
 	if err := env.WIs.AddDependency(canceledBlocker, depC, "blocks"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.WIs.Cancel(canceledBlocker, env.UserID); err != nil {
+	if _, err := env.WIs.Cancel(canceledBlocker, env.UserID, api.CancelRequest{}); err != nil {
 		t.Fatal(err)
 	}
 	if inItems(depC) {

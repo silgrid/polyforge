@@ -25,7 +25,12 @@ response carries
 same-origin script/style assets only, no inline script or style. The
 console answers GET and HEAD only, issues no cookie or session, and a
 workflow step or task agent cannot reach it — neither holds an aihub
-key, and the daemon proxies no web route.
+key, and the daemon proxies no web route. Its look is one token layer
+in `webui/src/styles.css` serving both the light and the dark theme from
+the operating system's `prefers-color-scheme` (no theme switch, nothing
+stored), the system font stack only (no font asset — the policy grants
+no font source) and hand-drawn inline SVG icons from one module, so the
+console still loads no inline script or style and no external resource.
 
 ## Modules
 
@@ -46,9 +51,9 @@ code is the authority; design-doc references are for traceability:
 | `internal/aihub/core` | aihub persistent layer: SQLite store (single writer, WAL), the work-item state machine, claim/session arbitration (one live session per work item, its hashed push secret and public fingerprint), the ready queue and the admin face. |
 | `internal/aihub/git` | aihub git surface: per-work-item bare-repo lifecycle, the git-http-backend smart-protocol proxy, session-secret auth (only the work item's live session secret pushes) and the pre-receive hook enforcing the capsule-chain invariants. |
 | `internal/aihub/memory` | Core-side memory store: memories kept in the database (`memories.content`), FTS5-trigram full-text search, and the one-time content migration from the former `memory.md` files. |
-| `internal/aihub/server` | The AIHub HTTP face: business endpoints, the admin face, the signed cross-machine machine face (inbox, query answer, progress/artifact relay) and the messaging API (`/messages/ack` moves the caller's read cursor, `/messages/delivered` the caller's delivery cursor), the `/git/{wi}.git/...` proxy mount, and the read-only web console on `/web/…` — the server's only HTML face: an embedded React SPA behind HTTP Basic auth with its private JSON face on `/web/api/…` (a step or task agent holds no aihub key and the daemon proxies no `/web/` route, so neither can reach it); Bearer API key auth on everything else, typed `api.Error` envelope. |
+| `internal/aihub/server` | The AIHub HTTP face: business endpoints, the admin face, the signed cross-machine machine face (inbox, query answer, progress/artifact relay) and the messaging API (`/messages/ack` moves the caller's read cursor, `/messages/delivered` the caller's delivery cursor), the read-only project member face (`GET /projects/{id}/members`: the caller's human co-members as id + display name only, gated by the project read — member or global admin, api-key scope applied; a step agent holds no aihub key and the daemon forwards no such route), the `/git/{wi}.git/...` proxy mount, and the read-only web console on `/web/…` — the server's only HTML face: an embedded React SPA behind HTTP Basic auth with its private JSON face on `/web/api/…` (a step or task agent holds no aihub key and the daemon proxies no `/web/` route, so neither can reach it); Bearer API key auth on everything else, typed `api.Error` envelope. |
 | `internal/polyforge/aihubclient` | Shared HTTP client for the aihub server, used by runtime, observe and the CLI verbs; decodes the typed error envelope back into `*api.Error`. |
-| `internal/polyforge/cli` | The `pf` client CLI: the routing verbs (file, queue, cancel, recall, remember, memory, `msg` send/list/ack/show/analyze incl. `list --before`, submit, `watch`, answer, pause, resume, wrap, ops), `chat`, the management face (users, api-keys, projects, machines, backup), the daemon client over the UDS socket, and config resolution. |
+| `internal/polyforge/cli` | The `pf` client CLI: the routing verbs (file, queue, cancel, recall, remember, memory, `msg` send/list/ack/show/analyze/contacts incl. `list --before`, submit, `watch`, answer, pause, resume, wrap, ops), `chat`, the management face (users, api-keys, projects, machines, backup), the daemon client over the UDS socket, and config resolution. |
 | `internal/polyforge/daemon` | Assembly of the local work machine: the UDS HTTP face, runtime, observe lane and driver wired together, the auto switch, the pending-job dispatcher, the auto-pull loop, the driver start (a running `Driver.Run` is the job's agent handle), the data-dir machine key, the cross-machine query/message faces (machine delivery advances a separate delivery cursor and clears no unread) and the shutdown. Step agents cannot reach either the ack or the delivery-cursor entry point (they hold no aihub key). |
 | `internal/polyforge/gitops` | Shared capsule-git operations layer used by Runtime (clone at start, dirty-commit at recover) and Observe (async commit+push); owns the per-work-item git mutex. |
 | `internal/polyforge/mapping` | The workspace→projects plan read from cli.toml's `[workspace]` sections, and its validated inverse (project → workspace). |

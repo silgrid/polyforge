@@ -43,9 +43,19 @@ non-reproducible record poisons the whole lane.
      is the best form: `verification` later runs it mechanically.
    - **A scripted repro** (shell commands, an API call sequence, a fixture plus steps)
      recorded verbatim in the repro document, with observed output captured.
+   Reproduce the failure the work item names, as narrowly as it can be reproduced: the
+   single test, suite or command that goes red. Do not run the project's whole test bar or
+   every suite to "confirm" — `verification` runs the full bar later, mechanically; a repro
+   that re-runs everything adds minutes and proves nothing the narrow run did not. When the
+   failure only reproduces in the whole suite (an order-dependent test), say so in the repro
+   document and keep the narrowest run that still shows it.
    If the reported failure does not reproduce, say so honestly — `reproduces: false`
    with everything you tried recorded is a valid, valuable outcome; a fabricated
-   reproduction is not.
+   reproduction is not. The driver then asks the owner (`re-run-repro` with more
+   evidence, `continue`, or `cancel`) instead of handing it to `root-cause`.
+   When your rewind input names a **pre-fix base** (`pre_fix_heads`), a fix has already
+   run on this tree: reproduce in a throwaway worktree at those heads
+   (`git worktree add <dir> <sha>` per repo), never against the current, mitigated tree.
 3. Write `artifacts/repro.md`:
    - `## Claim` - the reported failure, in one or two sentences
    - `## Environment` - repo state, platform, versions, config that mattered
@@ -61,6 +71,11 @@ non-reproducible record poisons the whole lane.
    (intermittent timing, missing log line, environment delta). Sharpen the repro
    accordingly — add logging around the failing path, tighten the trigger, capture more
    of the environment — rather than re-running the same script unchanged.
+
+6. If your `pending_rewind_input` carries the owner's amend-upstream ruling for a gap in
+   the authored suite (its note says append-only), keep every existing test and its
+   name byte-identical and append only the new failing tests the ruling names, committed
+   on their own.
 
 ## Commit duty for authored test files (hard rule)
 
@@ -95,6 +110,12 @@ needs a human-approved rebaseline. No `test_files`, no check.
 - Do not fix anything, even a one-line obvious fix — the lane's contract is that the
   cause is proven before the fix exists.
 - Do not diagnose. Observing is this step's whole job.
+
+## Principles
+
+Run each reproduction attempt in the foreground with an explicit timeout as long as it needs; await a slow failure inside that same call, and claim only what your own runs showed.
+
+{{principles}}
 
 ## Output
 

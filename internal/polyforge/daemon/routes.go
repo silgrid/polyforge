@@ -20,8 +20,10 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
+	"github.com/silgrid/polyforge/internal/polyforge/driver"
 	"github.com/silgrid/polyforge/internal/polyforge/liveconfig"
 	"github.com/silgrid/polyforge/internal/polyforge/modelhealth"
 	"github.com/silgrid/polyforge/internal/polyforge/observe"
@@ -150,6 +152,16 @@ func (d *Daemon) routes() *http.ServeMux {
 					return
 				}
 			}
+			// The reserved cancel answer ends the work item: the hub's
+			// cancel gate decides it (probed with the daemon's own
+			// credential, never the self-asserted answered_by) before
+			// anything is written; a refusal leaves the question pending.
+			if driver.IsCancelAnswer(payload.AnswerText) {
+				if err := d.authorizeCancelAnswer(wi, payload.QuestionID, payload.AnswerText); err != nil {
+					writeErrOf(w, err)
+					return
+				}
+			}
 			if err := h.Answer(payload.QuestionID, payload.AnswerText, payload.AnsweredBy); err != nil {
 				writeErr(w, api.ErrDaemonConflict, err.Error())
 				return
@@ -164,6 +176,53 @@ func (d *Daemon) routes() *http.ServeMux {
 		}
 		writeErr(w, api.ErrDaemonConflict,
 			"no live driver for work item "+wi+": the workflow is between derivations — retry after the daemon re-derives it")
+	})
+	// revise-binding is the owner's correction of done e2e-author binding
+	// commands. The route sits behind
+	// refuseStepOrigin: a step (or task) process tree is refused
+	// DAEMON-403 before this handler, so only a human session reaches the
+	// driver's revision transition. One request carries the whole batch of
+	// {index, command} corrections, applied in one step_revision write. A
+	// running driver revises through its live handle; a retained paused
+	// record revises through a record-only driver and the runtime commits
+	// the corrected record to the chain.
+	mux.HandleFunc("POST /jobs/{wi}/revise-binding", func(w http.ResponseWriter, r *http.Request) {
+		wi := d.canonWI(r.PathValue("wi"))
+		var payload cli.ReviseBindingPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			writeErr(w, api.ErrDaemonBadInput, "decode: "+err.Error())
+			return
+		}
+		if payload.By == "" {
+			payload.By = r.Header.Get("X-PF-User")
+		}
+		if payload.StepID == "" {
+			writeErr(w, api.ErrDaemonBadInput, "revise-binding: step_id is required")
+			return
+		}
+		if len(payload.Corrections) == 0 {
+			writeErr(w, api.ErrDaemonBadInput, "revise-binding: corrections must name at least one binding")
+			return
+		}
+		corrections := make([]capsule.BindingCorrection, 0, len(payload.Corrections))
+		for _, c := range payload.Corrections {
+			if c.Index < 0 {
+				writeErr(w, api.ErrDaemonBadInput, "revise-binding: binding index must be zero or greater")
+				return
+			}
+			if strings.TrimSpace(c.Command) == "" {
+				writeErr(w, api.ErrDaemonBadInput, "revise-binding: command is required for every correction")
+				return
+			}
+			corrections = append(corrections, capsule.BindingCorrection{Index: c.Index, Command: c.Command})
+		}
+		if err := d.rt.ReviseBinding(d.runCtx, wi, payload.StepID, corrections, payload.By, payload.Reason); err != nil {
+			writeErrOf(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "revised", "work_item_id": wi, "step": payload.StepID, "corrections": len(corrections),
+		})
 	})
 	mux.HandleFunc("POST /jobs/{wi}/claim", d.submitRoute())
 	// wi_seWTgHeKtaa8 (v2-converge §7): the live-holder half of the

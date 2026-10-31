@@ -97,7 +97,9 @@ it" of an existing work item → `verbs/submit.md`.
    missing under `<workspace>/.repo/<name>` ("this ticket will land in
    X": machine + workspace), and submit only after the owner agrees.
    Then watch and answer needs_input (`verbs/answer.md`); the deliver
-   step's merge question is human-only (`verbs/ship.md`).
+   step's two questions - the merge question (`deliver-merge`) and the
+   owner-review question (`deliver-owner-review`) - are human-only
+   (`verbs/ship.md`).
 
 ## The discipline: routing, not executing
 

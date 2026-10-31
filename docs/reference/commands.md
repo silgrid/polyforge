@@ -30,10 +30,10 @@ One row per group, exactly as `pf help` prints it:
 
 | `pf help` group | Verbs |
 | --- | --- |
-| Data-plane verbs (direct to aihub) | `file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg` (`send`, `list`, `ack`, `show`, `analyze`) |
-| Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, resident watcher, `subscribe`/`unsubscribe`/`adopt`/`list`), `answer`, `pause`, `resume`, `wrap`, `ops` (`status`, `models`, `auto`, `max`, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `chat init`, `task` (`spawn`, `list`, `show`, `cancel`), `result submit` (inside a workflow step only: its one result-delivery path), `verify-run` (a verification step's one mechanical run; local, below) |
+| Data-plane verbs (direct to aihub) | `file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg` (`send`, `list`, `ack`, `show`, `analyze`, `contacts`) |
+| Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, resident watcher, `subscribe`/`unsubscribe`/`adopt`/`list`), `answer` (the reserved answer `cancel` abandons the work item, authorized like `pf cancel`), `revise-binding` (the owner's one-pass correction of done `e2e-author` binding commands, `--correction <index>=<command>` repeatable; appended to the capsule chain), `pause`, `resume`, `wrap`, `ops` (`status`, `models`, `auto`, `max`, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `chat init`, `task` (`spawn`, `list`, `show`, `cancel`), `result submit` (inside a workflow step only: its one result-delivery path), `verify-run` (a verification step's one mechanical run; local, below) |
 | Management face (M1–M5) | `users`, `api-keys`, `projects`, `machines` (`list`, `rekey`), `backup` (database snapshot, see below), `config` (the one `cli.toml` writer and the daemon reload entry) |
-| Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries; `--prune-git-dirs` removes terminal work items' external git dirs and set-aside scenes past the 14-day retention), `version` (the verb form of `pf --version`), `init` (a workspace's local layout) |
+| Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries; `--prune-git-dirs` removes terminal work items' external git dirs and set-aside scenes past the 14-day retention that hold no uncommitted or unpushed task-repo work — a commit counts as pushed when either the task clone's own or the mapped workspace's `.repo/<name>` clone's remote-tracking refs reach it; a scene holding such work, and the work item's git dirs, are kept and named), `version` (the verb form of `pf --version`), `init` (a workspace's local layout) |
 | Process | `daemon` (run the work machine; `pf daemon ensure` starts it) |
 
 ## `pf msg` — user-to-user messages
@@ -53,11 +53,21 @@ the newest sequence first, a repeated/backward ack is a no-op, and `0`/
 negative or past-the-newest is `CORE-400`. `pf msg show <id>` reads one
 message; `pf msg analyze <id>` asks the local daemon for the explicit,
 read-only, budget-capped analyzer run (conclusion stays on the caller's
-machine). Send/list/ack/show are data-plane verbs and are refused inside a
+machine). `pf msg contacts` lists the people the caller can message: the
+union, deduplicated by user id (first display name wins, mapping
+declaration order), of the aihub project member face
+(`GET /api/v1/projects/{id}/members`: human co-members other than the
+caller, id + display name only, gated by the project read) over every
+project the `cli.toml` `[workspace.*]` mapping names, read at call time (no
+daemon restart). It issues one read per project, at most 4 at once, 15 s
+each, no retry; an unreadable project contributes nothing and the verb
+still exits 0, and no mapping answers `{"contacts":[]}`. Its `--json` is
+that assembled `{"contacts":[{"id","display_name"}]}`.
+Send/list/ack/show/contacts are data-plane verbs and are refused inside a
 workflow step; `analyze` is an execution-plane daemon POST and is refused
 there too. The daemon advances the operator's separate delivery cursor as it
-delivers; delivery never clears unread, and neither the ack route nor the
-delivery route is reachable by a step agent (a step holds no aihub key). `--json` is the server/daemon payload passthrough. Messages
+delivers; delivery never clears unread, and none of the ack, the delivery
+or the project member route is reachable by a step agent (a step holds no aihub key). `--json` is the server/daemon payload passthrough (assembled by pf for `contacts`). Messages
 address human users only — a chat id, WI, machine or broadcast is not an
 address; secret-shaped content is refused before storing (`CORE-422`), text
 over 4096 bytes is `CORE-413`, and the per-sender flood cap is `CORE-429`.
@@ -120,7 +130,20 @@ at once; the task runs in the background, so poll `pf task show <id>`
 the report). The `--json` documents of `task list` and `task show` carry
 durations as integer **nanoseconds** in `max_duration_ns` and
 `wall_consumed_ns`; the field name states the unit, while the human output
-keeps Go durations (`20m0s`).
+keeps Go durations (`20m0s`). Each `task list --json` row carries
+`prompt_summary` — the prompt's first non-empty line, at most 120 code points
+(empty for an empty prompt) — and no full prompt or report; `task show`
+carries both. Each row also carries `reporter` and
+`report_tail`: `reporter` is the display name of the
+spawning caller's self-asserted user id (`PF_USER_ID`, else `cli.toml`
+`user_id` — the same trust as a work item's `origin.owner`, not an
+authenticated identity) as a human member of the task's project, resolved
+once at spawn and stored as a snapshot (a later rename or an aihub outage
+does not change it; `list` never asks aihub), else `machine`; `report_tail`
+is the report's last non-empty line, trimmed, at most 200 code points (a
+longer line is `…` followed by its last 199), `""` while the task runs or for
+an empty report — never the error text and not masked. The text table keeps
+its four columns.
 
 - **Trust: the same as a session agent's.** A task agent runs with the
   daemon user's own filesystem and network reach — there is no OS-level
@@ -154,7 +177,11 @@ keeps Go durations (`20m0s`).
   There is no `--models`, `--wait` or `--type`; each is refused.
 - **Budgets.** Wall clock 20m (ceiling 60m) and 300000 tokens (ceiling 1000000),
   hard-killed on crossing; a larger `--max-duration`/`--max-tokens` is refused
-  naming the ceiling. No yaml key changes them.
+  naming the ceiling. No yaml key changes them. The token budget counts
+  **fresh tokens** per model call — uncached input, cache creation/write and
+  output. Context the harness re-sends and the provider serves from its prompt
+  cache (a cache read) was already paid for once and is not charged again, so
+  the budget tracks the work a task does, not the turns x context it resends.
 - **States.** `running`, then exactly one of `completed`, `capped` (a budget was
   hit; the partial report is kept and marked `truncated`), `failed` (every
   candidate errored) or `interrupted` (`cancel` or a daemon restart; never
@@ -210,10 +237,20 @@ normally (a panic, a timeout, an `os.Exit`, `-failfast`) is a failure of
 its own beside its failed tests. `--budget`
 (default 20m) bounds when those re-runs and base runs may still start; a
 unit or command they no longer reach stays a failure. `--deadline` bounds
-the whole run (default: `BASH_MAX_TIMEOUT_MS` less 2 minutes when that is
-set, else 25m): no command runs past it — a command it cuts short or that
-can no longer start is recorded failed — and the result is written before
-it, so the step's own shell call never outlives its harness's bound. `--e2e-jobs` / `--gomaxprocs` export
+the whole run (default: the tightest of `BASH_MAX_TIMEOUT_MS` and
+`PF_TOOL_WINDOW_MS` less a margin — 2 minutes, or half a bound smaller
+than that — else 25m): no command runs past it — a command it cuts short
+or that can no longer start is recorded failed — and the result is written
+before it, so the step's own shell call never outlives the daemon's tool
+rule. An explicit `--deadline` above that bound is clamped to it, and
+`result.json` records the value the caller asked for in
+`deadline_clamped_from` (`deadline` is the value the run used). A step
+environment carries `PF_TOOL_WINDOW_MS` on every harness (pi included) and
+`BASH_MAX_TIMEOUT_MS` on claude; outside a step neither is set and the
+fallback is 25m, so setting `PF_TOOL_WINDOW_MS` is how an operator raises
+that ceiling for a manual run. A private `TMPDIR` left by a run that
+was killed too hard to clean up is reclaimed by the next `pf verify-run`.
+`--e2e-jobs` / `--gomaxprocs` export
 `E2E_JOBS` / `GOMAXPROCS` to every command; `--max-parallel-repos` (default
 1) bounds how many repos run at once.
 
@@ -385,12 +422,20 @@ estimate: T becomes `max(3 x wall_minutes, --step-timeout)`); the former
 and an old bundle that still carries them has them silently ignored.
 
 **Wait calls** are counted and surfaced, never judged: a bash tool call
-whose command starts with `sleep N` (N over 3 seconds; a `sleep` inside a
-condition loop, or after another command, is not one) spends the step's
-clock on a wait nothing can end early, but no bound reads it and nothing
-is killed for it. Each is recorded as one `wait_call` event (its seconds,
-a command excerpt of at most 120 characters, the tool call id and its
-dispatch's running totals, which restart at every dispatch), and the
+that spends the step's clock on a wait nothing can end early, in one of
+two forms, each call counted once. Form `sleep`: the command starts with
+`sleep N` (N over 3 seconds; a `sleep` inside a condition loop, or after
+another command, is not one), and its seconds are N. Form `wait`:
+otherwise, the command runs the shell's `wait` builtin at command
+position (as a call that backgrounds jobs with `&` and then awaits them
+does; a quoted `wait`, an argument or a flag such as `--wait` is not
+one), and its seconds are the call's measured wall time — taken when the
+call ends, or when its dispatch ends for a call still blocked then — and
+it counts only when that time is over 3 seconds. No bound reads either
+form and nothing is killed for it. Each is recorded as one `wait_call`
+event (its `form`, `sleep` or `wait`, its seconds, a command excerpt of
+at most 120 characters, the tool call id and its dispatch's running
+totals, which restart at every dispatch), and the
 current step's total — every dispatch of the step the daemon watched —
 shows as the `wait calls: n (Ns)` line of `pf watch <wi> --once` and as
 `wait_calls` / `wait_seconds` on the job in `pf ops status --json`.

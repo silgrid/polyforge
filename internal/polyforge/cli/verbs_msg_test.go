@@ -8,8 +8,12 @@ package cli
 import (
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func msgAihub(t *testing.T, rec *reqRecorder) string {
@@ -139,6 +143,7 @@ func TestMsgVerbsAreRefusedInsideAStep(t *testing.T) {
 		{"msg", "list"},
 		{"msg", "ack", "conv_1"},
 		{"msg", "show", "msg_1"},
+		{"msg", "contacts"},
 		{"machines", "rekey", "m-1", "--public-key", "pk"},
 	} {
 		code, _, stderr := runPf(t, env, args...)
@@ -217,5 +222,102 @@ func TestMsgAckUsesTheNewestSequenceAndForwardsExplicitSeq(t *testing.T) {
 	}
 	if after := len(rec.all()); after != before+1 {
 		t.Fatalf("an unknown conversation ack sent the ack POST too: %d -> %d", before, after)
+	}
+}
+
+// contactsWorkspace writes a cli.toml whose one workspace maps projects in
+// the given order and returns the env pointing pf at it and at server.
+func contactsWorkspace(t *testing.T, server string, projects ...string) map[string]string {
+	t.Helper()
+	dir := t.TempDir()
+	quoted := make([]string, len(projects))
+	for i, p := range projects {
+		quoted[i] = `"` + p + `"`
+	}
+	body := "[workspace.\"" + filepath.Join(dir, "ws") + "\"]\nprojects = [" + strings.Join(quoted, ", ") + "]\n"
+	if err := os.MkdirAll(filepath.Join(dir, "polyforge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "polyforge", "cli.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return map[string]string{"XDG_CONFIG_HOME": dir, "PF_SERVER": server, "PF_API_KEY": "k_contacts"}
+}
+
+// TestMsgContactsOrderFirstNameWinsAndHumanRender: the union keeps mapping
+// declaration order, the first project's display name wins for a shared
+// user, a failing project contributes zero, and the human render is one
+// "<id>  <name>" line per contact.
+func TestMsgContactsOrderFirstNameWinsAndHumanRender(t *testing.T) {
+	rec := &reqRecorder{}
+	srv := newFakeAihub(t, rec, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/projects/pz/members":
+			io.WriteString(w, `{"contacts":[{"id":"u_z","display_name":"Zoe"},{"id":"u_s","display_name":"First"}]}`)
+		case "/api/v1/projects/pa/members":
+			io.WriteString(w, `{"contacts":[{"id":"u_s","display_name":"Second"},{"id":"u_a","display_name":"Abe"}]}`)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			io.WriteString(w, `{"code":"CORE-500","detail":"boom"}`)
+		}
+	})
+	env := contactsWorkspace(t, srv.URL, "pz", "pbroken", "pa")
+	code, stdout, stderr := runPf(t, env, "--json", "msg", "contacts")
+	want := `{"contacts":[{"id":"u_z","display_name":"Zoe"},{"id":"u_s","display_name":"First"},{"id":"u_a","display_name":"Abe"}]}`
+	if code != 0 || strings.TrimSpace(stdout) != want {
+		t.Fatalf("--json: exit %d %q %s, want %s", code, stdout, stderr, want)
+	}
+	code, stdout, stderr = runPf(t, env, "msg", "contacts")
+	if code != 0 || stdout != "u_z  Zoe\nu_s  First\nu_a  Abe\n" {
+		t.Fatalf("human: exit %d %q %s", code, stdout, stderr)
+	}
+	if code, _, stderr := runPf(t, env, "msg", "contacts", "extra"); code == 0 || stderr == "" {
+		t.Fatalf("a positional argument must be refused, got exit %d", code)
+	}
+}
+
+// TestMsgContactsBoundsInFlightReads: with more mapped projects than the
+// in-flight bound, at most contactsInFlight reads are outstanding at once
+// and every project is still read exactly once.
+func TestMsgContactsBoundsInFlightReads(t *testing.T) {
+	var mu sync.Mutex
+	active, peak := 0, 0
+	release := make(chan struct{})
+	var once sync.Once
+	rec := &reqRecorder{}
+	srv := newFakeAihub(t, rec, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		active++
+		if active > peak {
+			peak = active
+		}
+		if active == contactsInFlight {
+			once.Do(func() { close(release) })
+		}
+		mu.Unlock()
+		// Hold the read until the bound is reached (deadline only guards a
+		// broken bound from hanging the test).
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+		mu.Lock()
+		active--
+		mu.Unlock()
+		io.WriteString(w, `{"contacts":[]}`)
+	})
+	projects := []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7"}
+	env := contactsWorkspace(t, srv.URL, projects...)
+	code, stdout, stderr := runPf(t, env, "--json", "msg", "contacts")
+	if code != 0 || strings.TrimSpace(stdout) != `{"contacts":[]}` {
+		t.Fatalf("exit %d %q %s", code, stdout, stderr)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if peak != contactsInFlight {
+		t.Fatalf("peak in-flight reads = %d, want %d", peak, contactsInFlight)
+	}
+	if n := len(rec.all()); n != len(projects) {
+		t.Fatalf("reads = %d, want one per project (%d)", n, len(projects))
 	}
 }

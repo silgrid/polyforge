@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -218,6 +219,26 @@ func TestW72RetryChainIsBounded(t *testing.T) {
 	r.cfg.EndRetryWindow = window
 	events := newW72EventCounter(r)
 	const wi = "wi_w72_bounded"
+	// Sample the backoff the product schedules, not the wall-clock gap it
+	// took to run an attempt: each gap is the scheduled wait plus the
+	// actor's own work, whose length under load can exceed the 50 ms steps
+	// of the schedule and reorder raw gaps. j.retryIn at a
+	// SessionEnd is the wait that led to it; a chain whose backoff is
+	// cleared repeats the base there.
+	var waitsMu sync.Mutex
+	var waits []time.Duration
+	hub.onEnd = func() {
+		j := r.jobOf(wi)
+		if j == nil {
+			return
+		}
+		j.mu.Lock()
+		in := j.retryIn
+		j.mu.Unlock()
+		waitsMu.Lock()
+		waits = append(waits, in)
+		waitsMu.Unlock()
+	}
 
 	pid, startedAt := spawnSleeper(t, wi)
 	rec := matrixRecord(r, wi, pid, startedAt)
@@ -246,29 +267,58 @@ func TestW72RetryChainIsBounded(t *testing.T) {
 
 	ends := hub.endTimes()
 	gaps := w72Gaps(ends)
-	t.Logf("SessionEnd attempts=%d gaps=%v", len(ends), gaps)
-	// the backoff grows: each of the first three gaps waits twice the one
-	// before it (base, 2×base, 4×base = the ceiling), so adjacent gaps
-	// strictly increase while the doubling lasts
-	const growth = 3
-	if len(gaps) < growth+2 {
-		t.Fatalf("too few retries to show the backoff: %d SessionEnd attempts, gaps %v", len(ends), gaps)
+	waitsMu.Lock()
+	waits = append([]time.Duration(nil), waits...)
+	waitsMu.Unlock()
+	t.Logf("SessionEnd attempts=%d scheduled waits=%v gaps=%v", len(ends), waits, gaps)
+	// enough rounds to see the schedule: the first attempt has no wait, so
+	// three rounds contain two waits and the second must have doubled away
+	// from the base (waits[2] == 2xbase). Two rounds would only check
+	// waits[1] == base, which a chain pinned at the base also produces.
+	// How many attempts fit the fixed window is the product's time bound,
+	// not an assumption here; the pinned 16-hog runs still gave four.
+	if len(waits) < 3 || len(waits) != len(ends) {
+		t.Fatalf("too few retries to show the backoff: %d SessionEnd attempts, sampled waits %v", len(ends), waits)
 	}
-	for i := 1; i < growth; i++ {
-		if gaps[i] <= gaps[i-1] {
-			t.Fatalf("the backoff did not grow: gap %d (%s) <= gap %d (%s); gaps %v", i, gaps[i], i-1, gaps[i-1], gaps)
+	// the backoff grows away from the base and holds at the ceiling: the
+	// wait that led to retry i is the base doubled i-1 times, capped at
+	// the ceiling. A chain pinned at the base repeats it here.
+	for i := 1; i < len(waits); i++ {
+		want := w72ScheduledWait(base, ceil, i)
+		if waits[i] != want {
+			t.Fatalf("the retry schedule did not back off: retry %d was scheduled after %s, want %s (base %s, ceiling %s; scheduled waits %v)",
+				i, waits[i], want, base, ceil, waits)
 		}
 	}
-	// past the doubling it holds at the ceiling — never back toward the base
-	for i := growth; i < len(gaps); i++ {
-		if gaps[i] < ceil-ceil/10 {
-			t.Fatalf("a retry after the ceiling came early: gap %d is %s (ceiling %s); gaps %v", i, gaps[i], ceil, gaps)
+	// the schedule above is what the product intends; the gaps are what the
+	// hub observes. retry() arms its timer after SessionEnd i-1, and Go
+	// timers never fire early, so gap i-1 contains the full wait waits[i]
+	// and contention can only lengthen it. This is the floor check the
+	// rewrite dropped (gaps[i] >= ceiling-ceiling/10 after the doubling):
+	// it cannot go red under load, and a timer that ignored retryIn (the
+	// #72 symptom, a chain stuck at the base) breaks it.
+	for i := 1; i < len(waits) && i-1 < len(gaps); i++ {
+		if gaps[i-1] < waits[i] {
+			t.Fatalf("the observed retry came early: gap %d is %s, shorter than the %s scheduled before retry %d; gaps %v, scheduled waits %v",
+				i-1, gaps[i-1], waits[i], i, gaps, waits)
 		}
 	}
-	// the bound is the window, not an attempt count: the chain kept
-	// retrying at the ceiling until the window had passed
-	if span := ends[len(ends)-1].Sub(ends[0]); span < window {
-		t.Fatalf("the chain gave up after %s, before its %s window (%d attempts)", span, window, len(ends))
+	// the bound is the window, measured from the product's own chain
+	// start (retrySince), not from the first SessionEnd: the first retry
+	// is scheduled after it.
+	j := r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the record vanished before its bound could be checked")
+	}
+	j.mu.Lock()
+	since := j.retrySince
+	j.mu.Unlock()
+	exhaustedAt := events.at(EventRetryExhausted)
+	if since.IsZero() || exhaustedAt.IsZero() {
+		t.Fatalf("the chain's start (%v) or exhaustion (%v) was not observed", since, exhaustedAt)
+	}
+	if span := exhaustedAt.Sub(since); span < window {
+		t.Fatalf("the chain gave up after %s from its first retry, before its %s window (%d attempts)", span, window, len(ends))
 	}
 	if got := events.get(EventRetryExhausted); got != 1 {
 		t.Fatalf("the bound must be named once by a retry_exhausted event, got %d", got)

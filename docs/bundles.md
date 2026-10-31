@@ -56,8 +56,10 @@ schema. The keys:
 - `rewind:` — the workflow-level rewind bounds, `max_total` and
   `max_per_step`. `max_per_step` is charged per gate→target edge (two
   gates rewinding to the same target carry their own slots); `max_total`
-  is the global hard cap counting every rewind, the light and
-  converging ones included. Nothing refuses a `max_total` above the
+  is the global hard cap counting every automatic rewind, the light and
+  converging ones included. An owner-routed rewind (a human-answered
+  deliver FAIL — "back to code" or 「全量重验」 —, the review owner exit,
+  the e2e-author and bug-fix owner answers) counts toward neither bound. Nothing refuses a `max_total` above the
   edges' charged capacity (`#on_fail edges × max_per_step`): the total
   also counts the uncharged light, mechanical and converging rewinds,
   so it stays reachable and binding there, while an omitted (or ≤0)
@@ -81,11 +83,17 @@ schema. The keys:
     rule needs both coverages — the review of the final diff
     (`reviewed_heads`) and the verification of the final tree
     (`verified_heads`, the merged head verification proved: deliver
-    re-runs the carried bar only when its own merge moves HEAD past it).
+    re-runs the carried bar only when its own merge moves HEAD past it);
+    a lane without a review step (autopilot) has no review head, and its
+    verification's `verified_heads` stands in for the review coverage.
     One deliver
     result can override the target: a scoped `deliver` whose human answer is
     「全量重验」 names `rewind_to: verification` and the driver rewinds
-    there at the full tier.
+    there at the full tier. A work item that declares an `owner-review:`
+    artifact (in its plan or a build step's `summary`) makes deliver ask
+    `deliver-owner-review` before merging, showing the declared material;
+    the answer 「过目通过」 lets the merge rule proceed and 「不通过: …」
+    rewinds to the build step.
   - `requires_human_answer: true` — a human gate: the step can neither
     complete nor gate-fail without a human answer in the current
     attempt. `if_asked` — the softer form: a human answers only if the
@@ -142,6 +150,15 @@ dispatch's work-item opt-in), `armed` (the step entry declares
 schema; the prompt shows the entry only on a dispatch where the
 condition holds, and never shows the marker. An unknown condition is a
 load error.
+
+The `e2e-author` step entry's `e2e_author_mode` var is the lane default
+(`required`); the per-work-item mode is the owner approval recorded in
+`artifacts/grill-qa.md` — the one audit anchor (`plan` only restates it,
+and a proposal without an owner record resolves to `required`). When every
+authored scenario passes at baseline the driver parks the owner question
+`e2e_all_green` instead of advancing: `rewind-to-spec: <words>` (an
+owner-routed rewind to `spec`), `skip: <rationale>` (recorded verbatim in
+`artifacts/grill-qa.md`; `e2e-author` completes skipped) or `cancel`.
 
 Some shared files are section material the driver renders itself, only
 on the dispatch shape that needs it, never through a placeholder:

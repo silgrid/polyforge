@@ -548,7 +548,7 @@ func TestTransitionNeedsInputAndAnswer(t *testing.T) {
 	}
 	snap := d.Snapshot()
 	q := snap.Steps["a"].PendingQuestion
-	if q == nil || q.ID != "q_abc123" || q.Question != "lean or compatible?" || q.AskedAt == "" {
+	if q == nil || q.ID != "q_abc123" || q.Question != "lean or compatible?\n\n"+CancelAnswerSentence || q.AskedAt == "" {
 		t.Fatalf("the open question must persist atomically: %+v", q)
 	}
 	if string(q.Context) != `{"ctx":1}` {
@@ -757,7 +757,7 @@ func TestTransitionGateFailLightBoundsHold(t *testing.T) {
 	if light != 1 || exec.RewindStats.Count != 1 {
 		t.Fatalf("the bound fired before any mutation: light archives %d, count %d", light, exec.RewindStats.Count)
 	}
-	if len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0].Charged {
+	if len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0].Class == capsule.RewindCharged {
 		t.Fatalf("the light rewind must charge no edge slot: %+v", exec.RewindStats.Rewinds)
 	}
 	if build.PendingRewindInput != nil {
@@ -972,7 +972,7 @@ func TestTransitionGateFailRewind(t *testing.T) {
 	}
 	if snap.RewindStats.Count != 1 || len(snap.RewindStats.Rewinds) != 1 ||
 		snap.RewindStats.Rewinds[0].Gate != "check" || snap.RewindStats.Rewinds[0].ToStep != "build" ||
-		!snap.RewindStats.Rewinds[0].Charged {
+		snap.RewindStats.Rewinds[0].Class != capsule.RewindCharged {
 		t.Fatalf("rewind stats: %+v", snap.RewindStats)
 	}
 	if pri := snap.Steps["build"].PendingRewindInput; pri == nil || pri.Reason != `{"verdict":"FAIL: tests red"}` || pri.ToStep != "build" {
@@ -1180,7 +1180,7 @@ func TestTransitionNeedsInputEmbeddedQuestionEventMatchesPersisted(t *testing.T)
 	}); err != nil {
 		t.Fatalf("needs_input: %v", err)
 	}
-	if q := d.Snapshot().Steps["a"].PendingQuestion; q == nil || q.ID != "q_emb" || q.Question != "which one?" {
+	if q := d.Snapshot().Steps["a"].PendingQuestion; q == nil || q.ID != "q_emb" || q.Question != "which one?\n\n"+CancelAnswerSentence {
 		t.Fatalf("persisted question: %+v", q)
 	}
 	d.announceWaiting()
@@ -1190,7 +1190,7 @@ func TestTransitionNeedsInputEmbeddedQuestionEventMatchesPersisted(t *testing.T)
 			asked = append(asked, e.body)
 		}
 	}
-	if len(asked) != 1 || asked[0]["question_id"] != "q_emb" || asked[0]["question"] != "which one?" {
+	if len(asked) != 1 || asked[0]["question_id"] != "q_emb" || asked[0]["question"] != "which one?\n\n"+CancelAnswerSentence {
 		t.Fatalf("one needs_input event naming the persisted question, got %v", asked)
 	}
 }

@@ -145,8 +145,9 @@ type WatchProgress struct {
 	RecentFiles   []string `json:"recent_files,omitempty"`
 	ToolCalls     *int64   `json:"tool_calls,omitempty"`
 	// WaitCalls / WaitSeconds: the current step's wait calls (bash calls
-	// that only `sleep N`, N > 3s) and their summed seconds; absent when
-	// the step has none.
+	// that only `sleep N`, N > 3s, or that block in the `wait` builtin for
+	// over 3s of measured time) and their summed seconds; absent when the
+	// step has none.
 	WaitCalls   *int64 `json:"wait_calls,omitempty"`
 	WaitSeconds *int64 `json:"wait_seconds,omitempty"`
 }

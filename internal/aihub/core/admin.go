@@ -1012,6 +1012,37 @@ func (m *AdminManager) projectMembers(projectID string) ([]api.ProjectMember, er
 	return out, rows.Err()
 }
 
+// ListProjectMemberContacts returns the project's human members as id +
+// display name ordered by display name then id; callerID is left out
+// unless includeCaller is set (the daemon's spawn-time reporter
+// resolution asks for its own key owner's row too). One join decides the
+// scope: machine members never leave this function, so no client
+// re-classifies peers. An empty display name is kept (clients render
+// their own placeholder).
+func (m *AdminManager) ListProjectMemberContacts(projectID, callerID string, includeCaller bool) ([]api.ProjectMemberContact, error) {
+	excludeCaller, args := "", []any{projectID}
+	if !includeCaller {
+		excludeCaller, args = " AND u.id<>?2", append(args, callerID)
+	}
+	rows, err := m.db.Query(`SELECT u.id, u.display_name
+		FROM project_members pm JOIN users u ON u.id=pm.user_id
+		WHERE pm.project_id=?1 AND u.kind='human'`+excludeCaller+`
+		ORDER BY u.display_name, u.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []api.ProjectMemberContact{}
+	for rows.Next() {
+		var c api.ProjectMemberContact
+		if err := rows.Scan(&c.ID, &c.DisplayName); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // ListProjects returns the oldest listProjectsCap projects and the total
 // project count (the caller's object access is decided per object at the
 // business endpoints).

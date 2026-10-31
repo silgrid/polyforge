@@ -117,12 +117,11 @@ func (r *runner) execTo(ctx context.Context, spec execSpec, logPath string) exec
 	_, _ = fmt.Fprintf(logf, "$ %s\n# cwd: %s\n", strings.Join(spec.Argv, " "), spec.Cwd)
 
 	env := r.commandEnv()
-	var tmp string
 	if spec.PrivateTmp {
-		if tmp, err = os.MkdirTemp("", "pf-verify-tmp-"); err == nil {
+		if tmp, release, err := newPrivateTmp(); err == nil {
 			res.TmpDir = tmp
 			env = setEnv(env, "TMPDIR", tmp)
-			defer func() { _ = os.RemoveAll(tmp) }()
+			defer release()
 		}
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)

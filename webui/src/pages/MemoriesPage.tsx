@@ -5,9 +5,11 @@ import type { MemoryList, MemoryRow } from '../types'
 import NotFound from '../components/NotFound'
 import TypeDot from '../components/TypeDot'
 import RelativeTime from '../components/RelativeTime'
+import { ArrowRightIcon } from '../icons'
+import { buttonClass, Chip, DataTable, EmptyState, inputClass, Muted, PageHeader, SectionHeading } from '../components/ui'
 
 // MemoriesPage is the project's memory module — the #103 read face at
-// the console prefix: an empty query browses (date-grouped zebra rows
+// the console prefix: an empty query browses (date-grouped dense rows
 // with tag chips, a forward Next while the face returns a cursor); a
 // keyword renders the one top-50 page with the refine hint when it came
 // back full, and a zero-hit keyword answers a guiding empty state that
@@ -45,29 +47,20 @@ export default function MemoriesPage({ project }: { project: string }) {
   for (const row of list?.items ?? []) kinds.add(row.type.split('.')[0])
 
   return (
-    <div data-testid="memories" className="max-w-prose">
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        <h1 className="text-xl font-semibold mr-2">Memories · {project}</h1>
-        <a
-          href={listUrl({ type: '' })}
-          className={`no-underline text-xs border rounded-full px-2 py-0.5 ${
-            type === '' ? 'bg-tint text-fg border-fg' : 'text-muted border-line hover:text-fg'
-          }`}
-        >
-          all
-        </a>
-        {[...kinds].map((kind) => (
-          <a
-            key={kind}
-            href={listUrl({ type: kind + '.*' })}
-            className={`no-underline text-xs border rounded-full px-2 py-0.5 ${
-              type === kind + '.*' ? 'bg-tint text-fg border-fg' : 'text-muted border-line hover:text-fg'
-            }`}
-          >
-            {kind}
-          </a>
-        ))}
-        <form action={href(project, 'memories')} method="get" className="flex gap-2 ml-2">
+    <div data-testid="memories" className="max-w-4xl">
+      <PageHeader title={`Memories · ${project}`} />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Chip to={listUrl({ type: '' })} active={type === ''}>
+            all
+          </Chip>
+          {[...kinds].map((kind) => (
+            <Chip key={kind} to={listUrl({ type: kind + '.*' })} active={type === kind + '.*'}>
+              {kind}
+            </Chip>
+          ))}
+        </div>
+        <form action={href(project, 'memories')} method="get" className="flex w-full min-w-0 gap-2 sm:w-auto">
           <input type="hidden" name="type" value={type} />
           <input
             data-testid="memories-search"
@@ -75,29 +68,29 @@ export default function MemoriesPage({ project }: { project: string }) {
             name="q"
             defaultValue={q}
             placeholder="Search memories…"
-            className="bg-bg text-fg border border-line rounded px-2 py-1 w-64"
+            className={`${inputClass} w-full sm:w-64`}
           />
-          <button type="submit" className="border border-line rounded px-2 py-1 text-sm bg-tint">
+          <button type="submit" className={buttonClass}>
             Search
           </button>
         </form>
       </div>
 
       {q && list?.refine_hint ? (
-        <p data-testid="refine-hint" className="text-muted text-sm mb-2">
+        <p data-testid="refine-hint" className="mb-3 text-caption text-muted">
           Many matches — showing the top 50. Refine the query to narrow the results.
         </p>
       ) : null}
 
       {list === null ? (
-        <p className="text-muted">Loading…</p>
+        <Muted>Loading…</Muted>
       ) : list.items.length === 0 ? (
         q ? (
-          <p data-testid="empty-search" className="text-muted">
+          <EmptyState testid="empty-search">
             No memories match this query — refine it, or clear it to browse the newest memories.
-          </p>
+          </EmptyState>
         ) : (
-          <p className="text-muted">No memories.</p>
+          <EmptyState>No memories.</EmptyState>
         )
       ) : (
         <DateGroupedRows project={project} rows={list.items} />
@@ -105,8 +98,9 @@ export default function MemoriesPage({ project }: { project: string }) {
 
       {list?.next_cursor ? (
         <p className="mt-4">
-          <a data-testid="memories-next" className="text-accent" href={listUrl({ after: list.next_cursor })}>
+          <a data-testid="memories-next" className="inline-flex items-center gap-1" href={listUrl({ after: list.next_cursor })}>
             Next page
+            <ArrowRightIcon />
           </a>
         </p>
       ) : null}
@@ -115,7 +109,7 @@ export default function MemoriesPage({ project }: { project: string }) {
 }
 
 // DateGroupedRows renders the rows date-grouped (Today / Yesterday /
-// Earlier) over the zebra table.
+// Earlier): a section heading over one dense table per group.
 function DateGroupedRows({ project, rows }: { project: string; rows: MemoryRow[] }) {
   const groups: { label: string; rows: MemoryRow[] }[] = []
   for (const row of rows) {
@@ -125,38 +119,36 @@ function DateGroupedRows({ project, rows }: { project: string; rows: MemoryRow[]
     else groups.push({ label, rows: [row] })
   }
   return (
-    <div>
+    <div className="flex flex-col gap-6">
       {groups.map((g) => (
         <section key={g.label}>
-          <h2 className="text-sm font-semibold text-muted mt-4 mb-1">{g.label}</h2>
-          <table className="zebra w-full text-sm border-collapse">
-            <tbody>
-              {g.rows.map((row) => (
-                <tr key={row.id} data-testid="memory-row">
-                  <td className="py-1 pr-2">
-                    <TypeDot type={row.type} />
-                  </td>
-                  <td className="py-1 pr-2">
-                    <a className="text-accent" href={href(project, 'memories', row.id)}>
-                      {row.title}
-                    </a>
-                    <span className="text-muted ml-2">{row.type}</span>
-                  </td>
-                  <td className="py-1 pr-2">
-                    {row.tags.map((tag) => (
-                      <span key={tag} className="tag-chip">
-                        {tag}
-                      </span>
-                    ))}
-                  </td>
-                  <td className="py-1 pr-2 text-muted">{row.visibility}</td>
-                  <td className="py-1 text-muted text-right">
-                    <RelativeTime at={row.updated_at} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <SectionHeading className="mb-2">{g.label}</SectionHeading>
+          <DataTable>
+            {g.rows.map((row) => (
+              <tr key={row.id} data-testid="memory-row">
+                <td className="w-px">
+                  <TypeDot type={row.type} />
+                </td>
+                <td className="[overflow-wrap:anywhere]">
+                  <a className="font-medium text-fg hover:text-accent-fg" href={href(project, 'memories', row.id)}>
+                    {row.title}
+                  </a>
+                  <span className="ml-2 text-caption text-muted">{row.type}</span>
+                </td>
+                <td>
+                  {row.tags.map((tag) => (
+                    <span key={tag} className="tag-chip">
+                      {tag}
+                    </span>
+                  ))}
+                </td>
+                <td className="narrow-hidden w-px text-muted">{row.visibility}</td>
+                <td className="narrow-hidden w-px whitespace-nowrap text-right text-muted">
+                  <RelativeTime at={row.updated_at} />
+                </td>
+              </tr>
+            ))}
+          </DataTable>
         </section>
       ))}
     </div>

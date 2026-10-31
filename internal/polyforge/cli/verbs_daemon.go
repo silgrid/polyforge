@@ -163,6 +163,71 @@ var cmdAnswer = &Command{
 }
 
 // ---------------------------------------------------------------------------
+// revise-binding — the owner's correction of done e2e-author binding
+// commands. One invocation carries the whole batch; it
+// appends to the canonical capsule chain through the driver's single
+// writer; it is not a general step-output editor and never rewrites
+// history.
+// ---------------------------------------------------------------------------
+
+var cmdReviseBinding = &Command{
+	Name:    "revise-binding",
+	Group:   GroupExec,
+	Summary: "Correct done e2e-author binding commands in one batch (owner revision; appended to the capsule chain)",
+	Usage:   "pf revise-binding <id> --step <step-id> --correction <index>=<command> [--correction ...] [--by user] [--reason text]",
+	Setup: func(fs *flag.FlagSet) {
+		fs.String("step", "", "the done step whose bindings are corrected (e2e-author)")
+		corrections := &kvList{}
+		fs.Var(corrections, "correction", "one index=command correction, repeatable (index is the position in steps.<step>.output.bindings; the command is verbatim and must parse under bash -n)")
+		fs.String("by", "", "owner user id (default: config user_id / PF_USER_ID)")
+		fs.String("reason", "", "why the correction is authorized (recorded once per corrected index)")
+	},
+	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
+		if len(args) != 1 {
+			return fmt.Errorf("revise-binding: expected exactly one work item id")
+		}
+		step := stringFlag(fs, "step")
+		if step == "" {
+			return fmt.Errorf("revise-binding: --step is required")
+		}
+		pairs := *fs.Lookup("correction").Value.(*kvList)
+		if len(pairs) == 0 {
+			return fmt.Errorf("revise-binding: at least one --correction <index>=<command> is required")
+		}
+		corrections := make([]BindingCorrectionPayload, 0, len(pairs))
+		for _, pair := range pairs {
+			index, err := strconv.Atoi(pair.Key)
+			if err != nil || index < 0 {
+				return fmt.Errorf("revise-binding: --correction %s=%s: index must be zero or greater", pair.Key, pair.Value)
+			}
+			if strings.TrimSpace(pair.Value) == "" {
+				return fmt.Errorf("revise-binding: --correction for binding %d needs a non-empty command", index)
+			}
+			corrections = append(corrections, BindingCorrectionPayload{Index: index, Command: pair.Value})
+		}
+		who := stringFlag(fs, "by")
+		if who == "" {
+			who = ctx.Cfg.UserID
+		}
+		if who == "" {
+			return fmt.Errorf("revise-binding: owner identity required (--by or PF_USER_ID / user_id in config)")
+		}
+		raw, err := ctx.daemon().ReviseBinding(args[0], ReviseBindingPayload{
+			StepID: step, Corrections: corrections,
+			By: who, Reason: stringFlag(fs, "reason"),
+		})
+		if err != nil {
+			return err
+		}
+		ctx.finish(raw, func() {
+			fmt.Fprintf(ctx.Stdout, "revised %s step %s: %d binding command(s) are the canonical record now\n", args[0], step, len(corrections))
+			fmt.Fprintln(ctx.Stdout, "(the capsule chain carries the appended revision; a later resume/re-claim materializes it)")
+		})
+		return nil
+	},
+}
+
+// ---------------------------------------------------------------------------
 // pause — operator pause of a running WI: the daemon closes the job
 // locally AND the hub record is marked clean_pause=true so a daemon
 // restart never auto-resumes an operator-paused work item (M3).

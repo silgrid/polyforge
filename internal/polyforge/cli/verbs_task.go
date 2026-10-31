@@ -129,6 +129,12 @@ func taskSpawn(ctx *Context, fs *flag.FlagSet, args []string) error {
 	if ctx.Cfg.ChatID != "" {
 		body["origin_chat"] = ctx.Cfg.ChatID
 	}
+	// The caller's self-asserted id (PF_USER_ID, else cli.toml user_id —
+	// the same source as a work item's origin): the daemon resolves it
+	// once to the list's reporter.
+	if ctx.Cfg.UserID != "" {
+		body["caller_id"] = ctx.Cfg.UserID
+	}
 	raw, err := ctx.daemon().TaskSpawn(body)
 	if err != nil {
 		return err

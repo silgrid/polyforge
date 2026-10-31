@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react'
 import { apiGet } from '../api'
 import { href } from '../router'
 import type { Context, ProjectRef } from '../types'
+import { ChevronRightIcon, FolderIcon } from '../icons'
+import { Card, EmptyState, Muted, PageHeader } from '../components/ui'
 
 // PickerPage is the console home: exactly the caller's readable
-// projects, one link each into the work-item module. No default
+// projects, one row each linking into the work-item module. No default
 // project, no redirect.
 export default function PickerPage() {
   const [projects, setProjects] = useState<ProjectRef[] | null>(null)
@@ -15,21 +17,32 @@ export default function PickerPage() {
   }, [])
   return (
     <div data-testid="picker" className="max-w-prose">
-      <h1 className="text-2xl font-semibold mb-4">Projects</h1>
+      <PageHeader title="Projects" />
       {projects === null ? (
-        <p className="text-muted">Loading…</p>
+        <Muted>Loading…</Muted>
       ) : projects.length === 0 ? (
-        <p className="text-muted">No readable projects for this key.</p>
+        <EmptyState>No readable projects for this key.</EmptyState>
       ) : (
-        <ul className="list-none p-0">
-          {projects.map((p) => (
-            <li key={p.id} className="border-b border-line">
-              <a className="block py-2 text-accent no-underline" href={href(p.name, 'work-items')}>
-                {p.name}
-              </a>
-            </li>
-          ))}
-        </ul>
+        <Card>
+          <ul className="m-0 list-none p-0">
+            {projects.map((p) => (
+              <li key={p.id} className="border-b border-line last:border-b-0">
+                <a
+                  className="flex items-center gap-3 px-4 py-2.5 text-fg no-underline hover:bg-tint hover:no-underline"
+                  href={href(p.name, 'work-items')}
+                >
+                  <span className="text-muted">
+                    <FolderIcon />
+                  </span>
+                  <span className="min-w-0 flex-1 font-medium [overflow-wrap:anywhere]">{p.name}</span>
+                  <span className="text-muted">
+                    <ChevronRightIcon />
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </Card>
       )}
     </div>
   )

@@ -21,9 +21,10 @@ type Activity struct {
 	// face shows the effort it runs at); "" = the harness default model.
 	Candidate string
 	// WaitCalls / WaitSeconds are the current step's wait calls (bash
-	// calls that only `sleep N`, N > 3s) and their summed seconds, over
-	// every dispatch of the step this daemon watched: counted and
-	// surfaced, never judged.
+	// calls that only `sleep N`, N > 3s, or that block in the `wait`
+	// builtin for over 3s of measured time —) and their
+	// summed seconds, over every dispatch of the step this daemon
+	// watched: counted and surfaced, never judged.
 	WaitCalls   int
 	WaitSeconds int64
 }

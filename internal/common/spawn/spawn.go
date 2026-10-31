@@ -68,3 +68,11 @@ type Handle interface {
 type Spawner interface {
 	Spawn(ctx context.Context, p Params) (Handle, error)
 }
+
+// EnvToolWindow is the environment variable through which the daemon
+// threads its supervision tool window Y (milliseconds) into every step
+// process, whatever the harness. `pf verify-run` derives its whole-run
+// deadline from it (and from BASH_MAX_TIMEOUT_MS when that is smaller),
+// so no step — pi included — can make one blocking call outlive the
+// daemon's tool rule.
+const EnvToolWindow = "PF_TOOL_WINDOW_MS"

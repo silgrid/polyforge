@@ -580,7 +580,7 @@ func upgradeRun(t *testing.T, populate bool) {
 		if _, err := env.WIs.Patch(old, map[string]json.RawMessage{"priority": json.RawMessage(`"high"`)}, env.UserID); err != nil {
 			t.Fatalf("post-upgrade patch of an old row: %v", err)
 		}
-		if _, err := env.WIs.Cancel(oldWIID(0), env.UserID); err != nil {
+		if _, err := env.WIs.Cancel(oldWIID(0), env.UserID, api.CancelRequest{}); err != nil {
 			t.Fatalf("post-upgrade cancel of an old row: %v", err)
 		}
 		if _, err := env.WIs.Create(CreateRequest{Project: "legacy", Goal: "new in old project", Reporter: env.UserID}); err != nil {

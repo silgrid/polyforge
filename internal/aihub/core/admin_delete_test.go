@@ -223,7 +223,7 @@ func TestDeleteProjectFullCascade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("child create: %v", err)
 	}
-	if _, err := env.WIs.Cancel(child.ID, env.UserID); err != nil {
+	if _, err := env.WIs.Cancel(child.ID, env.UserID, api.CancelRequest{}); err != nil {
 		t.Fatalf("child cancel: %v", err)
 	}
 	// A memory row + its FTS row (raw SQL: the memory store imports core,

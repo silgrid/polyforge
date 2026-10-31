@@ -7,7 +7,9 @@ one (that is `pause` or `wrap --fail`). This is also the "abandon" of a
 owner moves on a parked workflow are exactly `pf resume` and this verb —
 `pf wrap --fail` on a blocked work item is refused (`DAEMON-409`, naming
 those two moves) and changes nothing. Allowed to the task's reporter, a project
-maintainer or an admin.
+maintainer or an admin. The same door ends a running work item whose owner answered
+an open question with the reserved `cancel` (see answer): the daemon checks this
+same authorization first, then cancels it once its session has ended blocked.
 
 ## Triggers
 

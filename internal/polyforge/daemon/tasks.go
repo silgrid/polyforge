@@ -3,15 +3,17 @@ package daemon
 // tasks.go: the one-shot task agent's daemon face (carried
 // from #40).
 //
-//	POST /task/spawn          {project, prompt, max_duration?, max_tokens?, origin_chat?}
+//	POST /task/spawn          {project, prompt, max_duration?, max_tokens?, origin_chat?, caller_id?}
 //	GET  /task/list
 //	GET  /task/show/{id}
 //	POST /task/cancel/{id}
 //	GET  /task/memories/search   (task peers only; scoped to the task's project)
 //	GET  /task/memories/{id}     (task peers only; scoped to the task's project)
 //
-// Reach: a task agent cannot reach the
-// read-only web console or the browse mode. The daemon proxies no /web/
+// Reach (,): a task agent cannot
+// reach the read-only web console or the browse mode — browse is the human
+// direct-aihub `pf recall` (no query), which also refuses it locally inside
+// a task or step. The daemon proxies no /web/
 // route at all (routes.go registers none), a task process holds no
 // aihub key so it cannot authenticate there either, and the memory search both faces
 // share (forwardMemorySearch) forwards only q/type/tags/limit/match plus
@@ -28,9 +30,22 @@ package daemon
 //     recursion, no lifecycle side channel). Only a human session may
 //     spawn or cancel;
 //   - /task/list, /task/show and the two /task/memories GETs are reads. Any
-//     local UDS peer may call list/show, exactly like GET /status; the two
+//     local UDS peer (a step or task agent included) may call list/show,
+//     exactly like GET /status (the list's rows carry only a bounded
+//     first-line prompt_summary, the reporter snapshot and a bounded
+//     last-line report_tail — no full prompt, no full report — and show
+//     the full record;,); the two
 //     memory reads answer a task process tree only, and the route itself
 //     scopes them to the caller's own running task's project.
+//
+// Reporter: the spawn route resolves the request's
+// self-asserted caller_id once, before the record is saved, through the
+// aihub member face with include_caller=true under the daemon's own key.
+// That read is internal to the route — no member route is proxied to any
+// UDS peer, and a step or task agent holds no aihub key — and its failure
+// never fails the spawn (the snapshot is then empty, read as `machine`).
+// The read is bounded by reporterResolveTimeout: a slow or hung hub is that
+// same failure, reached in seconds rather than the client's global timeout.
 //
 // The task manager is assembled here; the runner IS the real harness
 // (Config.TaskRunner is the test seam). There is no OS-level confinement:
@@ -39,9 +54,11 @@ package daemon
 // spawn env arms (PF_TASK_ID + PF_DAEMON_ID).
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -114,11 +131,13 @@ func (d *Daemon) taskSpawnRoute(w http.ResponseWriter, r *http.Request) {
 		MaxDuration string `json:"max_duration"`
 		MaxTokens   int64  `json:"max_tokens"`
 		OriginChat  string `json:"origin_chat"`
+		CallerID    string `json:"caller_id"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	spec := task.Spec{Project: req.Project, Prompt: req.Prompt, OriginChat: req.OriginChat, MaxTokens: req.MaxTokens}
+	spec := task.Spec{Project: req.Project, Prompt: req.Prompt, OriginChat: req.OriginChat, MaxTokens: req.MaxTokens,
+		CallerID: req.CallerID}
 	if req.MaxDuration != "" {
 		dur, err := task.ParseDuration(req.MaxDuration)
 		if err != nil {
@@ -127,12 +146,48 @@ func (d *Daemon) taskSpawnRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		spec.MaxDuration = dur
 	}
+	spec.Reporter = d.resolveReporter(r.Context(), spec.Project, spec.CallerID)
 	t, err := d.tasks.Spawn(spec)
 	if err != nil {
 		taskErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, t)
+	writeJSON(w, http.StatusOK, withoutReporterFacts(t))
+}
+
+// reporterResolveTimeout bounds the spawn-time member read (the same
+// short-probe bound ensure.go gives /status).
+const reporterResolveTimeout = 3 * time.Second
+
+// resolveReporter answers the display name of callerID as a human member
+// of project, read once at spawn within reporterResolveTimeout of ctx;
+// "" (read as task.ReporterMachine) for no id, no match, a blank name or
+// any hub failure, the bound expiring included — the spawn never fails on
+// it.
+func (d *Daemon) resolveReporter(ctx context.Context, project, callerID string) string {
+	if callerID == "" || d.hub == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, reporterResolveTimeout)
+	defer cancel()
+	contacts, err := d.hub.ProjectContactsWithCaller(ctx, project)
+	if err != nil {
+		return ""
+	}
+	for _, c := range contacts {
+		if c.ID == callerID && strings.TrimSpace(c.DisplayName) != "" {
+			return c.DisplayName
+		}
+	}
+	return ""
+}
+
+// withoutReporterFacts clears the record's internal caller id and reporter
+// snapshot: spawn and show answer the task document unchanged, and the
+// list carries the reporter only as its own row field.
+func withoutReporterFacts(t task.Task) task.Task {
+	t.CallerID, t.Reporter = "", ""
+	return t
 }
 
 func (d *Daemon) taskListRoute(w http.ResponseWriter, r *http.Request) {
@@ -141,12 +196,37 @@ func (d *Daemon) taskListRoute(w http.ResponseWriter, r *http.Request) {
 		taskErr(w, err)
 		return
 	}
-	// the list carries no report bodies or prompts (pf task show reads one)
+	// The list carries no report bodies or full prompts (pf task show
+	// reads one); each row's only prompt text is its bounded first-line
+	// summary and its only report text the bounded last
+	// line of a terminal task. reporter is the stored
+	// spawn-time snapshot — the list never consults aihub.
+	rows := make([]taskListRow, len(ts))
 	for i := range ts {
-		ts[i].Report = ""
-		ts[i].Prompt = ""
+		rows[i] = taskListRow{Task: ts[i], PromptSummary: task.PromptSummary(ts[i].Prompt),
+			Reporter: ts[i].Reporter}
+		if rows[i].Reporter == "" {
+			rows[i].Reporter = task.ReporterMachine
+		}
+		if ts[i].State != task.StateRunning {
+			rows[i].ReportTail = task.ReportTail(ts[i].Report)
+		}
+		rows[i].Task = withoutReporterFacts(rows[i].Task)
+		rows[i].Report = ""
+		rows[i].Prompt = ""
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": ts, "now": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": rows, "now": time.Now().UTC()})
+}
+
+// taskListRow is one GET /task/list row: the task record (report and
+// prompt cleared) plus the prompt's bounded summary, the reporter (a
+// human member's display name or task.ReporterMachine) and the report's
+// bounded last line ("" while running or for an empty report).
+type taskListRow struct {
+	task.Task
+	PromptSummary string `json:"prompt_summary"`
+	Reporter      string `json:"reporter"`
+	ReportTail    string `json:"report_tail"`
 }
 
 func (d *Daemon) taskShowRoute(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +235,7 @@ func (d *Daemon) taskShowRoute(w http.ResponseWriter, r *http.Request) {
 		taskErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, t)
+	writeJSON(w, http.StatusOK, withoutReporterFacts(t))
 }
 
 func (d *Daemon) taskCancelRoute(w http.ResponseWriter, r *http.Request) {

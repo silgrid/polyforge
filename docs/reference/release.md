@@ -23,7 +23,15 @@ The bundle runs three gate steps — `release`
 `deploy` reads) and `deploy` (`.polyforge/deploy.sh <version> --confirm
 <version>`; a project without `deploy.sh` releases without deploying).
 A failure terminates the work item: published tags, releases and images
-are immutable, so there is no rewind into a re-release. The
+are immutable, so there is no rewind into a re-release. A re-dispatched
+`release` adopts an already-published tag only when all three hold: the
+tag is on `origin_head`, this capsule's `artifacts/pre-release-tags.txt`
+exists, and the tag is absent from it (an earlier attempt published it,
+then died). It then writes the release record for that tag with
+`notes=<location>` = the published release page URL, which `verify`
+checks, and passes so `verify` audits it; without a capsule list (a hand
+release), with the tag already listed, or off `origin_head` it still
+refuses with `PF-RELEASE-ALREADY_RELEASED`. The
 step-by-step checks and failure codes are in
 [workflows/release/workflow.md](../../workflows/release/workflow.md)
 and its steps.

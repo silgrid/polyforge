@@ -45,7 +45,7 @@ var cmdVerifyRun = &Command{
 		fs.String("out", "", "directory for result.json and report-mechanical.md (default the run's runtime-state/verify/<n>)")
 		fs.Int("max-parallel-repos", 1, "how many repos run their bars at once")
 		fs.Duration("timeout", verifyrun.DefaultCommandTimeout, "per-command timeout when the plan declares none")
-		fs.Duration("deadline", 0, "the whole run's deadline: nothing runs past it and the result is written before it (default: BASH_MAX_TIMEOUT_MS less 2m when set, else 25m)")
+		fs.Duration("deadline", 0, "the whole run's deadline: nothing runs past it and the result is written before it (default: the tighter of BASH_MAX_TIMEOUT_MS and PF_TOOL_WINDOW_MS less a margin, else 25m; an explicit value above that is clamped)")
 		fs.Duration("budget", verifyrun.DefaultBudget, "wall budget for starting flaky re-runs, base runs and confirming re-runs")
 		fs.Int("e2e-jobs", 0, "export E2E_JOBS=N to every command (0 = inherited)")
 		fs.Int("gomaxprocs", 0, "export GOMAXPROCS=N to every command (0 = inherited)")

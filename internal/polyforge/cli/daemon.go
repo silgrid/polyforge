@@ -162,6 +162,24 @@ func parseWireError(status int, body []byte) *api.Error {
 	}
 }
 
+// ReviseBindingPayload is the POST /jobs/{id}/revise-binding body
+// one owner-authorized revision batch of done e2e-author
+// binding commands. Each correction is carried verbatim; the route turns
+// the list into one transition.
+type ReviseBindingPayload struct {
+	StepID      string                     `json:"step_id"`
+	Corrections []BindingCorrectionPayload `json:"corrections"`
+	By          string                     `json:"by,omitempty"`
+	Reason      string                     `json:"reason,omitempty"`
+}
+
+// BindingCorrectionPayload is one {index, command} correction in a revision
+// request.
+type BindingCorrectionPayload struct {
+	Index   int    `json:"index"`
+	Command string `json:"command"`
+}
+
 // AnswerPayload is the POST /jobs/{id}/answer body. An empty QuestionID
 // lets the daemon resolve the work item's pending question.
 type AnswerPayload struct {
@@ -439,6 +457,13 @@ func (d *DaemonClient) ResumePaused(wiID string) (*ResumePausedResponse, error) 
 func (d *DaemonClient) Answer(wiID string, payload AnswerPayload) (json.RawMessage, error) {
 	return d.do("POST", "/jobs/"+url.PathEscape(wiID)+"/answer", "", payload,
 		map[string]string{"X-PF-User": payload.AnsweredBy})
+}
+
+// ReviseBinding relays one owner binding-command revision to the daemon.
+// The caller identity travels in the X-PF-User header, like answer.
+func (d *DaemonClient) ReviseBinding(wiID string, payload ReviseBindingPayload) (json.RawMessage, error) {
+	return d.do("POST", "/jobs/"+url.PathEscape(wiID)+"/revise-binding", "", payload,
+		map[string]string{"X-PF-User": payload.By})
 }
 
 // Pause asks the daemon to pause a running WI (no body: the daemon's close

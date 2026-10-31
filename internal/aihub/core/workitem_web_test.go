@@ -115,7 +115,7 @@ func TestWebListStatusFilterAndSearch(t *testing.T) {
 	if _, err := env.WIs.Create(CreateRequest{Project: "elsewhere", Goal: "WEB foreign needle", Reporter: env.UserID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.WIs.Cancel(beta, env.UserID); err != nil {
+	if _, err := env.WIs.Cancel(beta, env.UserID, api.CancelRequest{}); err != nil {
 		t.Fatal(err)
 	}
 	f := WebListFilters{ProjectID: env.Project, ReadableProjects: []string{env.Project}}

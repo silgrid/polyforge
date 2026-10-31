@@ -36,6 +36,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
 
+	"github.com/silgrid/polyforge/internal/common/atomicfile"
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/common/scopetier"
@@ -327,6 +328,9 @@ func (d *Driver) Run(ctx context.Context) error {
 			return fmt.Errorf("driver: execution init failed: %w", err)
 		}
 	}
+	// a ruling whose write landed before a crash took its document
+	// append is landed now (idempotent: keyed on the ruling)
+	d.landOwnerRulings()
 	// polyforge#79 era: the recovery integration's interrupted-dispatch
 	// archive (the recovery lane triggers it; the single execution.json
 	// writer performs it). ONE audit-only infra_failure attempt for the
@@ -698,6 +702,23 @@ const unchangedTreeSummaryRunes = 300
 // verdict round, the crashed build attempt when there was one, and a
 // bounded excerpt of the build step's own summary (why it changed nothing).
 //
+// An identical task-repo tree is not by itself an identical gate input: on
+// a lane with a done plan step the gate also judges the driver-computed
+// plan-conformance facts (planconformance.go), and the designed repair for
+// the "changed but not declared" fact is metadata — the build step cites
+// the finding in its `declared_extensions` output and commits nothing
+//. After the tree-hash equality, the guard recomputes the
+// facts the gate last judged (the same diff, folding the build round the
+// FAIL's rewind archived as the live output and the older archives as
+// carried) and re-runs the gate only when those judged facts carried a
+// blocking entry and the current recomputed facts carry none: the input
+// the gate would judge changed. The exemption does not key on a live
+// citation, because `declared_extensions` is cumulative and a later
+// no-change round re-emits the same citation; that would re-judge an
+// already-judged input. A tree that still carries a blocking conformance
+// fact, an unreadable diff, or facts the gate already judged clean parks
+// as before (fixture B of the repro).
+//
 // The build-step condition is what keeps the guard off rewinds whose
 // target's product is an artifact (spec, repro, the deliver 「全量重验」
 // verification re-run): those may legitimately change the artifact while
@@ -710,7 +731,8 @@ const unchangedTreeSummaryRunes = 300
 // deliberately exempt: they are the designed same-tree fast lanes. A light
 // REWIND (text_only, mechanical) is not: its re-entered build step resumes
 // to change the tree, and a resumed round that changed nothing parks like
-// any other. Nor is the full verification after a light recheck a fresh
+// any other — unless that round is the metadata-only conformance repair
+// above. Nor is the full verification after a light recheck a fresh
 // re-derivation abandoned ( S2): it archives the same
 // light_recheck_escalated cause, but a fresh build round came between, so
 // only inPlaceEscalationContext exempts.
@@ -738,8 +760,16 @@ func (d *Driver) blockUnchangedGateTree(stepID string) (bool, error) {
 		d.mu.Unlock()
 		return false, nil
 	}
-	target, rewindGate, crash, ok := d.buildRewindSinceLocked(gateIdx, buildStep, judgedAt)
+	target, rewindGate, judgedRound, crash, ok := d.buildRewindSinceLocked(gateIdx, buildStep, judgedAt)
 	if !ok {
+		d.mu.Unlock()
+		return false, nil
+	}
+	// The review owner exit's amend-upstream ruling is new gate input:
+	// the owner approved an upstream correction the build round may
+	// legitimately execute without a task-repo change, so a re-entry it
+	// opened is never a "no progress" resubmission.
+	if rs := d.exec.RewindStats.Rewinds; len(rs) > 0 && rs[len(rs)-1].Gate == reviewStepID && rs[len(rs)-1].Class == capsule.RewindOwner {
 		d.mu.Unlock()
 		return false, nil
 	}
@@ -758,6 +788,9 @@ func (d *Driver) blockUnchangedGateTree(stepID string) (bool, error) {
 	}
 	cur, herr := reposTreeHashFn(d.wi.CapsuleDir)
 	if herr != nil || cur != judgedHash {
+		return false, nil
+	}
+	if d.gateConformanceRepaired(stepID, judgedRound) {
 		return false, nil
 	}
 	resubmitted, next := "re-submitted the identical tree",
@@ -815,19 +848,21 @@ func (d *Driver) gateLastVerdictAtLocked(gate string) (time.Time, bool) {
 
 // buildRewindSinceLocked answers the lane's build step when a rewind of it
 // archived at/after the gate's last verdict has this gate in its range,
-// together with the gate that rewound it (the newest such rewind) and a
-// copy of the build step's newest infra_failure attempt after that rewind
-// (nil when the round did not crash — the reason names a crash only when
-// there was one). Everything is in the execution ledger; the caller holds
-// d.mu. ok=false: no rewind of the build step re-entered this gate.
-func (d *Driver) buildRewindSinceLocked(gateIdx int, buildStep string, since time.Time) (target, rewindGate string, crash *capsule.Attempt, ok bool) {
+// together with the gate that rewound it (the newest such rewind), the
+// index of that rewind's archive on the build step (its result is the
+// output the gate judged), and a copy of the build step's newest
+// infra_failure attempt after that rewind (nil when the round did not
+// crash — the reason names a crash only when there was one). Everything is
+// in the execution ledger; the caller holds d.mu. ok=false: no rewind of
+// the build step re-entered this gate.
+func (d *Driver) buildRewindSinceLocked(gateIdx int, buildStep string, since time.Time) (target, rewindGate string, judgedRound int, crash *capsule.Attempt, ok bool) {
 	tIdx, known := d.workflow.indexOf(buildStep)
 	if !known || tIdx >= gateIdx {
-		return "", "", nil, false
+		return "", "", -1, nil, false
 	}
 	tst := d.exec.Steps[buildStep]
 	if tst == nil {
-		return "", "", nil, false
+		return "", "", -1, nil, false
 	}
 	var rewindAt time.Time
 	for i := range tst.Attempts {
@@ -844,11 +879,11 @@ func (d *Driver) buildRewindSinceLocked(gateIdx int, buildStep string, since tim
 			continue
 		}
 		if !ok || at.After(rewindAt) {
-			rewindAt, rewindGate, ok = at, a.RewindGate, true
+			rewindAt, rewindGate, judgedRound, ok = at, a.RewindGate, i, true
 		}
 	}
 	if !ok {
-		return "", "", nil, false
+		return "", "", -1, nil, false
 	}
 	for i := len(tst.Attempts) - 1; i >= 0; i-- {
 		a := tst.Attempts[i]
@@ -862,7 +897,7 @@ func (d *Driver) buildRewindSinceLocked(gateIdx int, buildStep string, since tim
 		crash = &a
 		break
 	}
-	return buildStep, rewindGate, crash, true
+	return buildStep, rewindGate, judgedRound, crash, true
 }
 
 // rewindTargetCause reports whether an attempt is a rewind archive's target
@@ -1036,6 +1071,7 @@ func (d *Driver) settle(stepID string, n int64, res *StepResult, run StepRun) (s
 		LightSettle:             d.lightSettleFactsOf(stepID, res),
 		ScopeChain:              d.scopeChainFor(stepID, res),
 		JudgedRepoHash:          judgedRepoHash,
+		ReproHeads:              d.reproHeads(stepID, res),
 	}); err != nil {
 		return true, fmt.Errorf("driver: step %s result transition failed: %w", stepID, err)
 	}
@@ -1185,7 +1221,8 @@ func (d *Driver) prepareLightRecheck(stepID string) (escalated bool, err error) 
 // the ledger), the round's rewind verdict (it must reach the dispatched
 // process's prompt inputs, and it stays persisted until the step is
 // accepted, so every retry of the round reads it here), the step's
-// archived answers (a resumed step continues with its Q&A history), and
+// current attempt chain of answers (a resumed step continues with the
+// Q&A of this round, never with an answer a rewind already consumed), and
 // the effective model candidate. Parking on an open
 // question is plan()'s decision — a pending question can only exist on
 // the current in_progress step, which plan sees before dispatching here.
@@ -1219,8 +1256,8 @@ func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
 				break
 			}
 		}
-		if len(st.Answers) > 0 {
-			sp.Answers = append([]capsule.ArchivedAnswer(nil), st.Answers...)
+		if n := currentChainAnswers(st); n > 0 {
+			sp.Answers = append([]capsule.ArchivedAnswer(nil), st.Answers[len(st.Answers)-n:]...)
 		}
 		if sp.Resume && st.Supervision != nil && st.Supervision.NextDispatch == capsule.NextDispatchFresh {
 			sp.Fresh = true
@@ -1442,6 +1479,9 @@ func (d *Driver) Answer(questionID, answer, answeredBy string) error {
 	}); err != nil {
 		return err
 	}
+	// an owner ruling the answer recorded lands in its verbatim document
+	// (outside the lock; idempotent, and re-checked at every Run start)
+	d.landOwnerRulings()
 	// the human answered: the driver is between steps again (the
 	// supervisor's stall clock restarts from here)
 	d.mu.Lock()
@@ -1563,8 +1603,13 @@ type StepSpawn struct {
 	// cause derives the resume) — a resume of the previous dispatch's
 	// conversation.
 	Resume bool
-	// Answers is the step's archived Q&A history — a resumed step
-	// continues from it, never from a blank slate.
+	// Answers is the step's current attempt-chain Q&A — the answers
+	// recorded since AnswerBase last advanced (st.Answers[st.AnswerBase:];
+	// a gate-fail rewind, a rewind-range archive or a
+	// root_cause_addressed:false report closes the chain) — and a resumed
+	// step continues from it, never from a blank slate. The consumed
+	// answers before that boundary stay in the durable archive for audit
+	// but are not handed to a new dispatch of the round.
 	Answers []capsule.ArchivedAnswer
 	// RewindInput is the round's gate FAIL verdict (set from the rewind
 	// write until the step is accepted; every dispatch of the round — the
@@ -2254,4 +2299,98 @@ func (d *Driver) modelForLocked(stepID string) string {
 	// death streaks afresh but keeps an advance a chain-end or no-chain
 	// death still owes — the "edit the list, then pf resume" switch
 	return list[CandidatePointer(st.Candidate, st.Attempts, answerEraStart(st.Answers), list)]
+}
+
+// grillQAPath is the capsule-relative document the owner rulings land
+// in: the one file spec and grill-review already share.
+const grillQAPath = "artifacts/grill-qa.md"
+
+// ownerRulingsHeading opens the append-only owner-rulings section.
+const ownerRulingsHeading = "## Owner rulings"
+
+// ownerRulingMarker keys one ruling's block in grill-qa.md (question id
+// + answer stamp): the append is idempotent across restarts.
+func ownerRulingMarker(r capsule.OwnerRuling) string {
+	return "<!-- owner-ruling: " + r.QuestionID + " " + r.AnsweredAt + " -->"
+}
+
+// landOwnerRulings appends every recorded owner ruling missing from
+// artifacts/grill-qa.md to its `## Owner rulings` section (created at
+// the end of the file on first use), the owner's words verbatim in a
+// fenced block with the identity, the stamp, the question and the
+// findings it addresses. The rulings are snapshotted under d.mu; the
+// file I/O runs outside it. A failure is logged and retried at the next
+// Run start — execution.json's machine copy stays the routing authority.
+func (d *Driver) landOwnerRulings() {
+	if d.wi.CapsuleDir == "" {
+		return
+	}
+	d.mu.Lock()
+	var rulings []capsule.OwnerRuling
+	if st := d.exec.Steps[reviewStepID]; st != nil {
+		rulings = append(rulings, st.OwnerRulings...)
+	}
+	d.mu.Unlock()
+	if len(rulings) == 0 {
+		return
+	}
+	path := filepath.Join(d.wi.CapsuleDir, filepath.FromSlash(grillQAPath))
+	raw, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "driver: %s: owner rulings not landed (read %s): %v\n", d.wi.ID, grillQAPath, err)
+		return
+	}
+	doc := string(raw)
+	var blocks strings.Builder
+	for _, r := range rulings {
+		if strings.Contains(doc, ownerRulingMarker(r)) {
+			continue
+		}
+		fence := "```"
+		for strings.Contains(r.Answer, fence) {
+			fence += "`"
+		}
+		fmt.Fprintf(&blocks, "\n### %s — %s, %s (question `%s`)\n\n%s\n\nFindings addressed: %s", r.Kind, r.AnsweredBy, r.AnsweredAt, r.QuestionID, ownerRulingMarker(r), strings.Join(r.Findings, ", "))
+		if r.RoutedTo != "" {
+			fmt.Fprintf(&blocks, "; routed to `%s`", r.RoutedTo)
+		}
+		fmt.Fprintf(&blocks, ".\n\n%stext\n%s\n%s\n", fence, r.Answer, fence)
+	}
+	if blocks.Len() == 0 {
+		return
+	}
+	add := ""
+	if !strings.Contains(doc, "\n"+ownerRulingsHeading+"\n") && !strings.HasPrefix(doc, ownerRulingsHeading+"\n") {
+		if doc != "" && !strings.HasSuffix(doc, "\n") {
+			add = "\n"
+		}
+		add += "\n" + ownerRulingsHeading + "\n\nAppend-only: the driver records each owner ruling here verbatim; review re-entry and the build step read it.\n"
+	}
+	add += blocks.String()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+		err = atomicfile.Write(path, []byte(doc+add), 0o644)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "driver: %s: owner rulings not landed (write %s): %v\n", d.wi.ID, grillQAPath, err)
+	}
+}
+
+// reproHeads pre-reads the task repos' HEADs a completed repro result ran
+// on (git I/O, so outside the transition's lock — the verifiedHeads
+// pattern): the bug-fix lane's pre-fix base candidate. Nil otherwise.
+func (d *Driver) reproHeads(stepID string, res *StepResult) map[string]string {
+	if stepID != reproStepID || res.Outcome != OutcomeCompleted || d.wi.CapsuleDir == "" {
+		return nil
+	}
+	d.mu.Lock()
+	recorded := d.exec.PreFixHeads != nil
+	d.mu.Unlock()
+	if recorded {
+		return nil
+	}
+	heads := repoHeadShas(filepath.Join(d.wi.CapsuleDir, capsule.DirRepos))
+	if len(heads) == 0 {
+		return nil
+	}
+	return heads
 }

@@ -6,12 +6,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // doctor_gitdirs.go: the "git dir retention" row of `pf doctor`. The
@@ -26,9 +28,17 @@ import (
 // An entry is deletable only when ALL hold: its work item's aihub state
 // is terminal (wrapped, failed, canceled); its newest change is older
 // than gitDirRetention; the daemon answers GET /status and names no job
-// for that work item. aihub unreachable, an unknown work item or an
-// unreadable entry is "unknown": counted, never deleted. The daemon down
-// prunes nothing.
+// for that work item; and, for a set-aside capsule, no task-repo clone
+// under its repos/ carries an uncommitted change or a commit that neither
+// its own nor the mapped workspace's .repo/<name> clone's remote-tracking
+// refs carry (a scene's own refs stop updating at quarantine time; the
+// .repo clone keeps fetched). Such a scene is retained, together with the
+// work item's git dirs (the scene's pair was moved aside together by
+// quarantine), because a prune must never delete work no remote carries. A
+// clone that cannot be read keeps the scene too: nothing is deleted on an
+// unproven clean. aihub unreachable, an unknown work item or an unreadable
+// entry is "unknown": counted, never deleted. The daemon down prunes
+// nothing.
 //
 // The run stays cheap however many entries there are, because it reads
 // only what a verdict needs. Local facts come first: an entry whose own
@@ -243,6 +253,71 @@ func workItemStates(client *aihubclient.Client, projects, owners []string) map[s
 	return states
 }
 
+// sceneHoldsUnmergedWork answers why a set-aside capsule must not be
+// pruned: one of its task-repo clones (repos/<name>) carries an
+// uncommitted change or a commit no fresh remote-tracking ref carries.
+// Only a capsule has repos/, so an external git dir answers "no". keep
+// also covers a clone or a repos/ that cannot be read: a prune deletes
+// nothing it cannot prove clean.
+func sceneHoldsUnmergedWork(capsuleDir string) (reason string, keep bool) {
+	reposDir := filepath.Join(capsuleDir, capsule.DirRepos)
+	entries, err := os.ReadDir(reposDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false
+		}
+		return "repos/ unreadable: " + err.Error(), true
+	}
+	// capsuleDir is <ws>/capsules/<name> (scanRetainedDirs builds it so):
+	// <ws>/.repo/<name> is the clone the workspace keeps fetched beside
+	// the scene's own frozen refs.
+	ws := filepath.Dir(filepath.Dir(capsuleDir))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		clone := filepath.Join(reposDir, e.Name())
+		if !workspace.IsRepoClone(clone) {
+			continue
+		}
+		if reason, keep := cloneHoldsUnmergedWork(clone, workspace.RepoCloneDir(ws, e.Name())); keep {
+			return e.Name() + ": " + reason, true
+		}
+	}
+	return "", false
+}
+
+// cloneHoldsUnmergedWork answers why one task-repo clone must not be
+// pruned. A commit counts as carried when either the clone's own
+// remote-tracking refs or the mapped workspace's .repo/<name> clone's
+// (the fresher view) reach it. Read-only, no fetch: an unreadable clone,
+// a missing upstream object or any probe error keeps the scene.
+func cloneHoldsUnmergedWork(clone, upstream string) (reason string, keep bool) {
+	dirty, err := probeGit(clone, "status", "--porcelain")
+	if err != nil {
+		return err.Error(), true
+	}
+	if strings.TrimSpace(dirty) != "" {
+		return "uncommitted changes", true
+	}
+	unpushed, err := probeGit(clone, "rev-list", "--all", "--not", "--remotes")
+	if err != nil {
+		return err.Error(), true
+	}
+	shas := strings.Fields(unpushed)
+	if len(shas) == 0 {
+		return "", false
+	}
+	left, err := probeGit(upstream, append(append([]string{"rev-list", "--count"}, shas...), "--not", "--remotes")...)
+	if err != nil {
+		return "commits on no remote-tracking ref (unreadable fresher .repo view: " + err.Error() + ")", true
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(left)); err != nil || n > 0 {
+		return "commits on no remote-tracking ref", true
+	}
+	return "", false
+}
+
 // gitDirsCheck is the row: it reports every class's count, the size of
 // the reclaimable and retired ones and, with prune, removes those.
 func gitDirsCheck(r *doctorRun, dataDir string, now time.Time) (string, string) {
@@ -270,8 +345,6 @@ func gitDirsCheck(r *doctorRun, dataDir string, now time.Time) (string, string) 
 		n    int
 		size int64
 	}
-	counts := map[string]*tally{}
-	var doomed []retainedDir
 	for i, d := range dirs {
 		class := classes[i]
 		if class == "" {
@@ -280,8 +353,38 @@ func gitDirsCheck(r *doctorRun, dataDir string, now time.Time) (string, string) 
 				d = measureEntry(d) // only a terminal owner's entry may be pruned: walk it
 				dirs[i] = d
 			}
-			class = classifyRetained(d, state, live, now)
+			classes[i] = classifyRetained(d, state, live, now)
 		}
+	}
+	// A prune must not delete work no remote carries: a set-aside capsule
+	// whose task-repo clone is dirty or holds commits no fresh
+	// remote-tracking ref carries is retained, and so are the work item's
+	// git dirs (quarantine moved the scene's pair aside together).
+	var kept []string
+	keptScene := map[string]string{}
+	for i, d := range dirs {
+		if classes[i] != retReclaimable && classes[i] != retRetired {
+			continue
+		}
+		if reason, keep := sceneHoldsUnmergedWork(d.Path); keep {
+			classes[i] = retRetained
+			keptScene[d.WI] = reason
+			kept = append(kept, d.Path+" ("+reason+")")
+		}
+	}
+	for i, d := range dirs {
+		if (classes[i] != retReclaimable && classes[i] != retRetired) || d.WI == "" {
+			continue
+		}
+		if reason, ok := keptScene[d.WI]; ok {
+			classes[i] = retRetained
+			kept = append(kept, d.Path+" (scene kept: "+reason+")")
+		}
+	}
+	counts := map[string]*tally{}
+	var doomed []retainedDir
+	for i, d := range dirs {
+		class := classes[i]
 		if counts[class] == nil {
 			counts[class] = &tally{}
 		}
@@ -307,6 +410,9 @@ func gitDirsCheck(r *doctorRun, dataDir string, now time.Time) (string, string) 
 		filepath.Join(dataDir, "git"), strings.Join(parts, ", "), int(gitDirRetention/(24*time.Hour)))
 	if !r.reachOK {
 		detail += "; aihub unreachable: every entry not retained by its age or a daemon job is unknown"
+	}
+	if len(kept) > 0 {
+		detail += "; kept for unmerged work: " + strings.Join(kept, "; ")
 	}
 	status := "pass"
 	switch {

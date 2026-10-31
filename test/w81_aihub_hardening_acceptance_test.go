@@ -396,7 +396,7 @@ func TestW81S7ScopedAdminSearchDoesNotLeak(t *testing.T) {
 		t.Fatalf("mint scoped admin key: %v (%s)", err, rawKey)
 	}
 	scoped := aihubclient.New(inst.url, key.Plain)
-	rawSearch, err := scoped.SearchMemories("", "w81leak", "", nil, 50, "")
+	rawSearch, err := scoped.SearchMemories("", "w81leak", "", nil, 50, "", "", "")
 	if err != nil {
 		t.Fatalf("scoped search: %v", err)
 	}

@@ -259,12 +259,12 @@ func TestTerminalTransitions(t *testing.T) {
 	if wi2.Status != api.StatusBlocked || wi2.WaitingOn == nil || *wi2.WaitingOn != "owner" {
 		t.Fatalf("block mapping wrong: %+v", wi2)
 	}
-	canceled, err := env.WIs.Cancel(id2, env.UserID)
+	canceled, err := env.WIs.Cancel(id2, env.UserID, api.CancelRequest{})
 	if err != nil || canceled.Status != api.StatusCanceled {
 		t.Fatalf("cancel: %v", err)
 	}
 	// A terminal WI cannot be cancelled again: CORE-410 TERMINAL_STATE.
-	if _, err := env.WIs.Cancel(id2, env.UserID); !IsCode(err, api.ErrCoreGone) || ErrorReason(err) != "TERMINAL_STATE" {
+	if _, err := env.WIs.Cancel(id2, env.UserID, api.CancelRequest{}); !IsCode(err, api.ErrCoreGone) || ErrorReason(err) != "TERMINAL_STATE" {
 		t.Fatalf("cancel of terminal not refused CORE-410: %v", err)
 	}
 	// Running WI cannot be cancelled directly.
@@ -273,7 +273,7 @@ func TestTerminalTransitions(t *testing.T) {
 	if _, err := m.Claim(id3, api.SessionClaimRequest{SessionID: secret3}, env.UserID); err != nil {
 		t.Fatalf("claim3: %v", err)
 	}
-	if _, err := env.WIs.Cancel(id3, env.UserID); !IsCode(err, api.ErrCoreConflict) {
+	if _, err := env.WIs.Cancel(id3, env.UserID, api.CancelRequest{}); !IsCode(err, api.ErrCoreConflict) {
 		t.Fatalf("cancel of running allowed: %v", err)
 	}
 }

@@ -55,10 +55,10 @@ func TestRewindQuotaCountsPerEdge(t *testing.T) {
 		t.Fatalf("four rewinds across two edges must all land: %q %+v", exec.WorkflowStatus, exec.RewindStats)
 	}
 	for i, want := range []capsule.RewindRecord{
-		{Gate: "checkA", ToStep: "build", Charged: true},
-		{Gate: "checkB", ToStep: "build", Charged: true},
-		{Gate: "checkA", ToStep: "build", Charged: true},
-		{Gate: "checkB", ToStep: "build", Charged: true},
+		{Gate: "checkA", ToStep: "build", Class: capsule.RewindCharged},
+		{Gate: "checkB", ToStep: "build", Class: capsule.RewindCharged},
+		{Gate: "checkA", ToStep: "build", Class: capsule.RewindCharged},
+		{Gate: "checkB", ToStep: "build", Class: capsule.RewindCharged},
 	} {
 		if got := exec.RewindStats.Rewinds[i]; got != want {
 			t.Fatalf("rewind record %d = %+v, want %+v (edge attribution in the ledger)", i, got, want)
@@ -219,7 +219,7 @@ func TestCrashAroundRewindKeepsEdgeLedger(t *testing.T) {
 		t.Fatal("the crash-instant execution.json is unreadable")
 	}
 	if atCrash.RewindStats.Count != 1 || len(atCrash.RewindStats.Rewinds) != 1 ||
-		atCrash.RewindStats.Rewinds[0] != (capsule.RewindRecord{Gate: "review", ToStep: "build", Charged: true}) {
+		atCrash.RewindStats.Rewinds[0] != (capsule.RewindRecord{Gate: "review", ToStep: "build", Class: capsule.RewindCharged}) {
 		t.Fatalf("the crash instant must hold the full rewind record (count + edge attribution): %+v", atCrash.RewindStats)
 	}
 	raw, _ := os.ReadFile(crashed)
@@ -244,7 +244,7 @@ func TestCrashAroundRewindKeepsEdgeLedger(t *testing.T) {
 		t.Fatalf("the restart must keep the crashed round's slot and charge one more (then the edge bound): %q %+v", x.WorkflowStatus, x.RewindStats)
 	}
 	for i := range x.RewindStats.Rewinds {
-		if got := x.RewindStats.Rewinds[i]; got != (capsule.RewindRecord{Gate: "review", ToStep: "build", Charged: true}) {
+		if got := x.RewindStats.Rewinds[i]; got != (capsule.RewindRecord{Gate: "review", ToStep: "build", Class: capsule.RewindCharged}) {
 			t.Fatalf("rewind record %d = %+v", i, got)
 		}
 	}
@@ -290,7 +290,7 @@ func TestSelfReportEscalationChargesTheEdgeOnce(t *testing.T) {
 	result(3, `{"needs_code_change":true}`)
 	exec := readExec(t, execPath)
 	if exec.WorkflowStatus != StatusRunning || exec.RewindStats.Count != 1 ||
-		len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0] != (capsule.RewindRecord{Gate: "review", ToStep: "build", Charged: true}) {
+		len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0] != (capsule.RewindRecord{Gate: "review", ToStep: "build", Class: capsule.RewindCharged}) {
 		t.Fatalf("the escalation must charge the light record's edge once (no new record, no new count): %q %+v", exec.WorkflowStatus, exec.RewindStats)
 	}
 	if st := exec.Steps["build"]; st.Status != capsule.StepPending || st.PendingRewindInput == nil {
@@ -307,7 +307,7 @@ func TestSelfReportEscalationChargesTheEdgeOnce(t *testing.T) {
 		t.Fatalf("the second escalation must find review→build spent (max_per_step 1), got %q %+v", exec.WorkflowStatus, exec.RewindStats)
 	}
 	if exec.RewindStats.Count != 2 || len(exec.RewindStats.Rewinds) != 2 ||
-		!exec.RewindStats.Rewinds[0].Charged || exec.RewindStats.Rewinds[1].Charged {
+		exec.RewindStats.Rewinds[0].Class != capsule.RewindCharged || exec.RewindStats.Rewinds[1].Class == capsule.RewindCharged {
 		t.Fatalf("the refused escalation must not mutate the ledger: %+v", exec.RewindStats)
 	}
 	st := exec.Steps["build"]

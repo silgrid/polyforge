@@ -1,7 +1,8 @@
 package supervise
 
-// wait_test.go: the wait-call counter (wait.go) — the
-// leading-sleep detector, the Tracker's counters and hand-out, and the
+// wait_test.go: the wait-call counter (
+// wait.go) — the leading-sleep and `wait`-builtin detectors, the
+// Tracker's counters, measured wait-form fold and hand-out, and the
 // replay of both harness shapes through their real translators: counted,
 // and the verdict never changes because of it.
 
@@ -73,8 +74,8 @@ func TestLeadingSleepDetection(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if w.Seconds != tc.seconds || w.ToolCallID != "c1" || !w.At.Equal(at) {
-			t.Errorf("%s: %+v, want %ds from tool call c1", tc.name, w, tc.seconds)
+		if w.Form != WaitFormSleep || w.Seconds != tc.seconds || w.ToolCallID != "c1" || !w.At.Equal(at) {
+			t.Errorf("%s: %+v, want a sleep-form %ds from tool call c1", tc.name, w, tc.seconds)
 		}
 		if n := len([]rune(w.Argv)); n > maxWaitArgv || !strings.HasPrefix(strings.TrimSpace(tc.command), w.Argv) {
 			t.Errorf("%s: argv excerpt %q (%d chars) must be the trimmed command's first %d at most", tc.name, w.Argv, n, maxWaitArgv)
@@ -85,6 +86,111 @@ func TestLeadingSleepDetection(t *testing.T) {
 	}
 	if w, ok := detectWaitCall("c", "bash", "sleep 99999999999999999999", at); !ok || w.Seconds != maxWaitSeconds {
 		t.Fatalf("an oversized operand is capped, got %+v ok=%v", w, ok)
+	}
+}
+
+// w135Command is the call (its capsule path shortened): 36
+// background spin loops, six test runs, `kill $pids` (which zsh never
+// word-split) and a `wait` that blocked until the tool call's 29-minute
+// bound killed it.
+const w135Command = `cd /ws/capsules/w135/repos/polyforge; GOWORK=off go test -c -o /tmp/w135-test.bin ./test/ && cd test && pids=""; for i in $(seq 1 36); do (nice -n 0 sh -c 'while :; do :; done') & pids="$pids $!"; done; for r in 1 2 3 4 5 6; do timeout 300 /tmp/w135-test.bin -test.run '^TestW105BrowserConsoleAcceptance$' -test.count=1 2>&1 | grep -E 'browser suite:|^ok|^PASS$|^FAIL$|--- FAIL' | head -3; echo "run $r done"; done; kill $pids; wait 2>/dev/null; echo cleaned`
+
+func TestWaitBuiltinDetection(t *testing.T) {
+	cases := []struct {
+		name, tool, command string
+		want                bool
+	}{
+		{"the call", "bash", w135Command, true},
+		{"a spin loop backgrounded, then awaited", "bash", "(while :; do :; done) & wait", true},
+		{"jobs backgrounded, then awaited by pid", "Bash", "make a & make b &\nwait $!", true},
+		{"wait after &&", "bash", "start-server & sleep 1 && wait", true},
+		{"wait first", "bash", "wait", true},
+		{"wait in a loop body", "bash", "for p in $pids; do wait $p; done", true},
+		{"wait in a subshell", "bash", "(make & wait)", true},
+		{"wait in a brace group", "bash", "{ make & wait; }", true},
+		{"wait after a pipe", "bash", "true | wait", true},
+
+		{"a long command with no wait", "bash", "go test ./... -count=1 -timeout 10m", false},
+		{"a condition loop's short sleep", "bash", "until ready; do sleep 2; done", false},
+		{"wait inside a word", "bash", "echo waiting", false},
+		{"wait as an argument", "bash", "grep -n wait file.go", false},
+		{"a --wait flag", "bash", "pf watch --wait-decision", false},
+		{"await", "bash", "await build", false},
+		{"a redirection's & is no separator", "bash", "make 2>&1 wait", false},
+		{"&> is no separator", "bash", "make &>log wait", false},
+		{"quoted", "bash", `echo "x; wait"`, false},
+		{"single-quoted", "bash", `sh -c 'make & wait'`, false},
+		{"escaped", "bash", `\wait`, false},
+		{"in a comment", "bash", "make # then wait", false},
+		{"not a bash tool", "read", "wait", false},
+	}
+	at := time.Unix(1000, 0)
+	for _, tc := range cases {
+		w, ok := detectWaitBuiltinCall("c1", tc.tool, tc.command, at)
+		if ok != tc.want {
+			t.Errorf("%s: %q detected=%v, want %v", tc.name, tc.command, ok, tc.want)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if w.Form != WaitFormWait || w.Seconds != 0 || w.ToolCallID != "c1" || !w.At.Equal(at) {
+			t.Errorf("%s: %+v, want an unmeasured wait-form candidate from tool call c1", tc.name, w)
+		}
+		if n := len([]rune(w.Argv)); n > maxWaitArgv || !strings.HasPrefix(strings.TrimSpace(tc.command), w.Argv) {
+			t.Errorf("%s: argv excerpt %q (%d chars) must be the trimmed command's first %d at most", tc.name, w.Argv, n, maxWaitArgv)
+		}
+	}
+}
+
+// TestTrackerCountsWaitFormAtCallEnd: a wait-form call is counted when it
+// ends, with its measured time, if that exceeds the floor; one still
+// running when the dispatch ends is folded once by FinishOpenWaitCalls;
+// a leading sleep that also waits counts once, as the sleep form; a long
+// command with no wait counts nothing however long it runs.
+func TestTrackerCountsWaitFormAtCallEnd(t *testing.T) {
+	c := &fixClock{now: time.Unix(1000, 0)}
+	tr := newTrackerAt(c, Thresholds{})
+	args := func(cmd string) string {
+		b, _ := json.Marshal(map[string]string{"command": cmd})
+		return string(b)
+	}
+	tr.ToolStart("w1", "bash", args("(while :; do :; done) & wait"))
+	if s := tr.Snapshot(c.now); s.WaitCalls != 0 {
+		t.Fatalf("a wait-form call is counted when it ends, counted %d at its start", s.WaitCalls)
+	}
+	c.advance(25 * time.Second)
+	tr.ToolEnd("w1", "bash")
+	tr.ToolStart("w2", "bash", args("make & wait")) // a settle delay
+	c.advance(time.Second)
+	tr.ToolEnd("w2", "bash")
+	tr.ToolStart("g", "bash", args("go test ./... -count=1 -timeout 10m"))
+	c.advance(10 * time.Minute)
+	tr.ToolEnd("g", "bash")
+	tr.ToolStart("s", "bash", args("sleep 60; wait"))
+	c.advance(90 * time.Second)
+	tr.ToolEnd("s", "bash")
+	got := tr.TakeWaitCalls()
+	if len(got) != 2 ||
+		got[0].ToolCallID != "w1" || got[0].Form != WaitFormWait || got[0].Seconds != 25 || got[0].WaitCalls != 1 ||
+		!got[0].At.Equal(time.Unix(1000, 0)) || got[0].Argv != "(while :; do :; done) & wait" ||
+		got[1].ToolCallID != "s" || got[1].Form != WaitFormSleep || got[1].Seconds != 60 || got[1].WaitCalls != 2 || got[1].WaitSeconds != 85 {
+		t.Fatalf("taken wait calls %+v", got)
+	}
+
+	// a dispatch that ends, or is killed, while the call is still blocked
+	// in `wait`: no ToolEnd arrives before FinishOpenWaitCalls
+	tr.ToolStart("k", "bash", args(w135Command))
+	c.advance(29 * time.Minute)
+	tr.FinishOpenWaitCalls()
+	tr.FinishOpenWaitCalls()
+	tr.ToolEnd("k", "bash")
+	got = tr.TakeWaitCalls()
+	if len(got) != 1 || got[0].ToolCallID != "k" || got[0].Form != WaitFormWait || got[0].Seconds != 29*60 {
+		t.Fatalf("an open wait-form call folds once with its measured time, got %+v", got)
+	}
+	if s := tr.Snapshot(c.now); s.WaitCalls != 3 || s.WaitSeconds != 85+29*60 {
+		t.Fatalf("snapshot wait calls %d (%ds), want 3 (%ds)", s.WaitCalls, s.WaitSeconds, 85+29*60)
 	}
 }
 
@@ -159,21 +265,21 @@ func TestWaitCallsReplayBothHarnessShapes(t *testing.T) {
 		// late starts one more leading sleep, in the harness's own shape,
 		// after the fixture: it is still running when Y runs out
 		late  string
-		calls []WaitCall // ToolCallID, Seconds, Argv
+		calls []WaitCall // Form, ToolCallID, Seconds, Argv
 	}{
 		{"pi-rpc-waitcall.jsonl", func(s Sink) Translator { return NewPi(s) },
 			`{"type":"tool_execution_start","toolCallId":"late","toolName":"bash","args":{"command":"sleep 3600"}}`,
 			[]WaitCall{
-				{ToolCallID: "call_w1", Seconds: 300, Argv: "sleep 300 && gh run view 42 --json status"},
-				{ToolCallID: "call_w3", Seconds: 90, Argv: "sleep 1m 30s\n  make check"},
-				{ToolCallID: "late", Seconds: 3600, Argv: "sleep 3600"},
+				{Form: WaitFormSleep, ToolCallID: "call_w1", Seconds: 300, Argv: "sleep 300 && gh run view 42 --json status"},
+				{Form: WaitFormSleep, ToolCallID: "call_w3", Seconds: 90, Argv: "sleep 1m 30s\n  make check"},
+				{Form: WaitFormSleep, ToolCallID: "late", Seconds: 3600, Argv: "sleep 3600"},
 			}},
 		{"claude-stream-replay.jsonl", func(s Sink) Translator { return NewClaude(s) },
 			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"late","name":"Bash","input":{"command":"sleep 3600"}}]},"parent_tool_use_id":null}`,
 			[]WaitCall{
-				{ToolCallID: "toolu_w1", Seconds: 120, Argv: "sleep 120 && gh pr checks 7"},
-				{ToolCallID: "toolu_w4", Seconds: 60, Argv: "sleep 1m"},
-				{ToolCallID: "late", Seconds: 3600, Argv: "sleep 3600"},
+				{Form: WaitFormSleep, ToolCallID: "toolu_w1", Seconds: 120, Argv: "sleep 120 && gh pr checks 7"},
+				{Form: WaitFormSleep, ToolCallID: "toolu_w4", Seconds: 60, Argv: "sleep 1m"},
+				{Form: WaitFormSleep, ToolCallID: "late", Seconds: 3600, Argv: "sleep 3600"},
 			}},
 	}
 	def := Defaults{}.Fill()
@@ -234,7 +340,7 @@ func TestWaitCallsReplayBothHarnessShapes(t *testing.T) {
 				t.Fatalf("taken %+v, want %+v", got, tc.calls)
 			}
 			for i, w := range tc.calls {
-				if got[i].ToolCallID != w.ToolCallID || got[i].Seconds != w.Seconds || got[i].Argv != w.Argv || got[i].WaitCalls != i+1 {
+				if got[i].Form != w.Form || got[i].ToolCallID != w.ToolCallID || got[i].Seconds != w.Seconds || got[i].Argv != w.Argv || got[i].WaitCalls != i+1 {
 					t.Fatalf("wait call %d = %+v, want %+v", i, got[i], w)
 				}
 			}
@@ -245,23 +351,29 @@ func TestWaitCallsReplayBothHarnessShapes(t *testing.T) {
 	}
 }
 
-// bashCounter counts the bash tool starts passing through to a Sink.
+// bashCounter counts the bash tool starts passing through to a Sink, and
+// those whose command runs the `wait` builtin.
 type bashCounter struct {
 	Sink
-	bash int
+	bash, waitBuiltin int
 }
 
 func (b *bashCounter) ToolStart(id, name, args string) {
 	if isBashTool(name) {
 		b.bash++
+		if cmd, _ := summarizeTool(name, args); waitBuiltin(cmd) {
+			b.waitBuiltin++
+		}
 	}
 	b.Sink.ToolStart(id, name, args)
 }
 
 // TestWaitCallsRealPiSessionHasNone: the real collected pi session stream
 // (the D15 fixture) runs many bash calls and waits with none of them, so
-// it counts no wait call — the detector does not fire on real ordinary
-// commands.
+// it counts no wait call — neither detector fires on real ordinary
+// commands. Its `&`s are all redirections (`2>&1`) and no command runs
+// `wait` at command position, so no wait-form candidate
+// exists either, even folded open at each dispatch's end.
 func TestWaitCallsRealPiSessionHasNone(t *testing.T) {
 	raw, err := os.ReadFile(replayFixturePath(t))
 	if err != nil {
@@ -269,11 +381,14 @@ func TestWaitCallsRealPiSessionHasNone(t *testing.T) {
 	}
 	clock := &replayClock{}
 	var sink *bashCounter
-	bash, waits := 0, 0
+	bash, waitBuiltins, waits := 0, 0, 0
 	flush := func() {
 		if sink != nil {
 			bash += sink.bash
-			waits += sink.Sink.(*Tracker).Snapshot(clock.now).WaitCalls
+			waitBuiltins += sink.waitBuiltin
+			tr := sink.Sink.(*Tracker)
+			tr.FinishOpenWaitCalls()
+			waits += tr.Snapshot(clock.now).WaitCalls
 		}
 	}
 	for _, line := range splitJSONLines(raw) {
@@ -297,7 +412,10 @@ func TestWaitCallsRealPiSessionHasNone(t *testing.T) {
 	if bash < 100 {
 		t.Fatalf("the real stream replayed only %d bash calls: too few to say anything", bash)
 	}
+	if waitBuiltins != 0 {
+		t.Fatalf("the real stream runs no `wait` builtin, yet %d of %d bash calls were detected as one", waitBuiltins, bash)
+	}
 	if waits != 0 {
-		t.Fatalf("the real stream has no leading-sleep call, yet %d wait calls were counted over %d bash calls", waits, bash)
+		t.Fatalf("the real stream has no leading-sleep or `wait` call, yet %d wait calls were counted over %d bash calls", waits, bash)
 	}
 }

@@ -20,7 +20,11 @@ func renderReport(res *Result) string {
 	} else {
 		fmt.Fprintf(&b, "Mechanical verdict: **%s**. Tier: requested %s, effective %s.\n\n", res.MechanicalVerdict, res.Tier.Requested, res.Tier.Effective)
 	}
-	fmt.Fprintf(&b, "Command logs (local, not part of the capsule chain): `%s/`. Whole-run deadline: %s.\n\n", res.LogDir, res.Deadline)
+	fmt.Fprintf(&b, "Command logs (local, not part of the capsule chain): `%s/`. Whole-run deadline: %s", res.LogDir, res.Deadline)
+	if res.DeadlineClampedFrom != "" {
+		fmt.Fprintf(&b, " (clamped from the requested %s, above the step's tool-window bound)", res.DeadlineClampedFrom)
+	}
+	b.WriteString(".\n\n")
 
 	b.WriteString("### Merge of the latest default branch\n\n")
 	b.WriteString("| repo | default | outcome | HEAD | base |\n| --- | --- | --- | --- | --- |\n")

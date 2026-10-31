@@ -35,7 +35,8 @@ every ambiguity you can find as a question, not an assumption.
 2. **Lane proposal (mandatory every round).** The bundle chosen at filing IS the
    classification — no label or field is added later — and it is frozen once the
    daemon has claimed this work item, so a down-lane takes effect only by
-   **re-file**, never by a runtime switch. Every round — including a zero-question
+   **re-file** (the owner answers this batch with the reserved `cancel`, which ends
+   this run, and re-files), never by a runtime switch. Every round — including a zero-question
    pass — states a `Lane proposal`: keep `feature-full`, or down-lane to
    `chore`/`autopilot`, with a one-line reason on two axes: `expected diff size`
    (how much a competent implementation touches) and `lane risk surface` (what the
@@ -44,14 +45,16 @@ every ambiguity you can find as a question, not an assumption.
    as a high `lane risk surface` and gets no down-lane proposal: such a ticket
    keeps `feature-full`, whatever its `expected diff size`. The never unattended
    list is: release/deploy work, schema or data migration, credentials and
-   permission surface, removing features or weakening guarantees,
-   security-related changes, large cross-repo changes. This clause absorbs
+   permission surface, removing features or weakening guarantees the work item
+   does not name, security-related changes, large cross-repo changes. A removal the
+   work item names is the owner's ruling for that removal once it is filed on
+   `chore`, so it is no never-unattended item. This clause absorbs
    the pure-deletion probe: a pure-deletion
    ticket (work whose substance is removing code, config, or behavior, with no new
    feature to spec) belongs on the `chore` lane, so it is a down-lane proposal too
    — `feature-full` is NOT trimmed by change type. A proposed down-lane is one row
-   of the single batch table (step 5): ask the owner to re-file on
-   `chore`/`autopilot`, or to waive the proposal and keep this run on
+   of the single batch table (step 5): ask the owner to answer `cancel` and re-file
+   on `chore`/`autopilot`, or to waive the proposal and keep this run on
    `feature-full`. Never silently proceed. Record the proposal and the owner's
    answer in `artifacts/grill-qa.md`.
 3. **External-oracle probe.** When you review the owner's proposal and
@@ -82,7 +85,7 @@ every ambiguity you can find as a question, not an assumption.
    owner's answer in `artifacts/grill-qa.md`. When the filed ticket's marker and the proposal
    disagree, say so in the batch — the driver read the marker at claim, so do
    not silently proceed and do not edit the work item mid-run: the owner may
-   re-file the work item, or — only when the ticket carries no scoped marker —
+   answer `cancel` and re-file the work item, or — only when the ticket carries no scoped marker —
    accept `full` for this run. The tier proposal is a row of the single batch
    table, never a second batch.
 5. **e2e-author mode proposal (mandatory every round).** Every round — including a

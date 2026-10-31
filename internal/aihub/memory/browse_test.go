@@ -293,3 +293,46 @@ func alphaID(t *testing.T, e *env) string {
 	}
 	return id
 }
+
+// TestBrowseTotalCountsTheVisibleWalk: the total is the
+// size of the whole walk under the same narrowing as the page — not the
+// page length — and an entry the visibility predicate hides is never
+// counted (no leak through a count).
+func TestBrowseTotalCountsTheVisibleWalk(t *testing.T) {
+	e := newEnv(t)
+	beta := seedBeta(t, e)
+	for i := 0; i < 3; i++ {
+		e.browseEntry(t, "experience.wrap", "kept", "total body", []string{"a", "b"}, "project")
+	}
+	e.browseEntry(t, "experience.debug", "wrong-tag", "total body", []string{"a"}, "project")
+	e.browseEntry(t, "fact.decision", "wrong-type", "total body", []string{"a", "b"}, "project")
+	e.browseEntry(t, "experience.wrap", "private", "total body", []string{"a", "b"}, "private")
+	foreign := e.browseEntry(t, "experience.wrap", "foreign", "total body", []string{"a", "b"}, "project")
+	if _, err := e.db.Exec(`UPDATE memories SET project_id=?1 WHERE id=?2`, beta, foreign.ID); err != nil {
+		t.Fatalf("foreign project: %v", err)
+	}
+	alpha := []string{alphaID(t, e)}
+
+	page, _, err := e.store.Browse(alpha, "", "", "experience.*", []string{"a", "b"}, 2, browseAll)
+	if err != nil || len(page) != 2 {
+		t.Fatalf("page = %d items, err %v; want a 2-row page", len(page), err)
+	}
+	for _, tc := range []struct {
+		name     string
+		projects []string
+		memType  string
+		tags     []string
+		allowed  func(*Entry) bool
+		want     int
+	}{
+		{"narrowed walk, admin", alpha, "experience.*", []string{"a", "b"}, browseAll, 4},
+		{"private hidden from the caller", alpha, "experience.*", []string{"a", "b"}, func(en *Entry) bool { return en.Visibility != "private" }, 3},
+		{"every project, every type", nil, "*", nil, browseAll, 7},
+		{"nothing readable", []string{}, "", nil, browseAll, 0},
+	} {
+		got, err := e.store.BrowseTotal(tc.projects, tc.memType, tc.tags, tc.allowed)
+		if err != nil || got != tc.want {
+			t.Fatalf("%s: total = %d (err %v), want %d", tc.name, got, err, tc.want)
+		}
+	}
+}

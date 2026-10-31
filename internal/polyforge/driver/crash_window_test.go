@@ -225,7 +225,7 @@ func (l *snapshotLog) Append(_, kind string, _ any) error {
 // in_progress continuation. No window degrades the light re-entry to
 // fresh.
 func TestCrashAroundLightRewindStillResumes(t *testing.T) {
-	lightOut := `{"verdict":"fail","fail_reason":"comment wording only","findings":[{"severity":"blocking","detail":"d","text_only":true}]}`
+	lightOut := `{"verdict":"fail","fail_reason":"comment wording only","findings":[{"severity":"blocking","repair_target":"code","detail":"d","text_only":true}]}`
 
 	// Window 1: the crash lands between the gate-FAIL transition write
 	// (the rewind event fires with the write) and the re-dispatch.

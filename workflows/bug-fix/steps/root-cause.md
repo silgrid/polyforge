@@ -81,7 +81,12 @@ plausible-sounding theory".
      order to `repro`: which evidence is missing (intermittent trigger not captured,
      log level too low, environment delta untested) and how to get it. That text is
      `repro`'s `pending_rewind_input` on its next attempt, and the schema requires it —
-     a `fail` without a non-empty `fail_reason` does not validate.
+     a `fail` without a non-empty `fail_reason` does not validate. Only the first `fail`
+     rewinds to `repro`: a second inconclusive diagnosis asks the owner instead
+     (`re-run-repro: <evidence>`, `continue: <guidance>` — your re-run then sees the
+     guidance among your answers — or `cancel`). When `repro` reported
+     `reproduces: false` and the owner answered `continue: <guidance>`, that guidance is
+     your `pending_rewind_input`: diagnose from the accepted report with it.
 
 ## Honesty
 

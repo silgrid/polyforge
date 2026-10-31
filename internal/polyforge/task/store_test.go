@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,6 +44,36 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	}
 	if _, ok, _ := s.Load("task_ffffffffffffffff"); ok {
 		t.Fatal("an absent report must answer not-found")
+	}
+}
+
+// TestStoreKeepsCallerAndReporter: the spawn-time caller id and reporter
+// snapshot survive a Save/Load round trip under their spec keys.
+func TestStoreKeepsCallerAndReporter(t *testing.T) {
+	s := NewStore(t.TempDir())
+	tk := Task{
+		ID: "task_00000000000000a1", State: StateCompleted, CreatedAt: time.Now().UTC(),
+		Spec: Spec{Project: "demo", MaxDuration: time.Minute, MaxTokens: 5,
+			CallerID: "usr_carol", Reporter: "Carol"},
+	}
+	if err := s.Save(tk); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.Dir(), tk.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"caller_id":"usr_carol"`, `"reporter":"Carol"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("stored record lacks %s: %s", want, raw)
+		}
+	}
+	got, ok, err := s.Load(tk.ID)
+	if err != nil || !ok {
+		t.Fatalf("Load: ok=%v err=%v", ok, err)
+	}
+	if got.CallerID != "usr_carol" || got.Reporter != "Carol" {
+		t.Fatalf("round trip lost caller/reporter: %+v", got.Spec)
 	}
 }
 

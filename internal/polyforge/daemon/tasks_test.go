@@ -8,6 +8,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
@@ -61,7 +63,11 @@ func TestTaskSpawnListShowCancel(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &tk); err != nil || !task.ValidID(tk.ID) || tk.State != task.StateRunning {
 		t.Fatalf("spawn answer = %s (%v)", body, err)
 	}
-	if code, body := stepGet(t, td.sock, "/task/list"); code != 200 || !strings.Contains(body, tk.ID) || strings.Contains(body, "look around") {
+	// The list row carries the bounded first-line summary only — no full
+	// prompt field, no report.
+	if code, body := stepGet(t, td.sock, "/task/list"); code != 200 || !strings.Contains(body, tk.ID) ||
+		!strings.Contains(body, `"prompt_summary":"look around"`) || strings.Contains(body, `"prompt":`) ||
+		strings.Contains(body, `"report":`) {
 		t.Fatalf("list = %d %s", code, body)
 	}
 	if code, body := stepGet(t, td.sock, "/task/show/"+tk.ID); code != 200 || !strings.Contains(body, tk.ID) {
@@ -256,5 +262,214 @@ func TestW103TaskSearchForwardsNoBrowseParameters(t *testing.T) {
 	}
 	if !strings.Contains(got, "q=needle") {
 		t.Fatalf("the forwarded shape lost the query: %s", got)
+	}
+}
+
+// TestTaskSpawnResolvesTheReporterOnce: the spawn route stores the
+// caller's display name only when the caller id matches a human member of
+// the task's project on the include-caller member face; no id (no hub
+// read at all), no match, a blank name and a hub failure each store the
+// empty snapshot (read as machine) and the spawn still succeeds. Spawn and
+// show answers carry neither internal fact.
+func TestTaskSpawnResolvesTheReporterOnce(t *testing.T) {
+	td := taskDaemon(t, quickRunner{}, taskYaml)
+	td.hub.mu.Lock()
+	td.hub.contacts = map[string][]api.ProjectMemberContact{
+		"proj":  {{ID: "usr_carol", DisplayName: "Carol C"}, {ID: "usr_blank", DisplayName: " "}},
+		"other": {{ID: "usr_dana", DisplayName: "Dana"}},
+	}
+	td.hub.mu.Unlock()
+	for _, tc := range []struct {
+		name, caller string
+		hubErr       error
+		want         string
+		wantReads    int
+	}{
+		{"human member", "usr_carol", nil, "Carol C", 1},
+		{"no id", "", nil, "", 0},
+		{"unresolved id", "usr_missing", nil, "", 1},
+		{"another project's member", "usr_dana", nil, "", 1},
+		{"blank display name", "usr_blank", nil, "", 1},
+		{"hub failure", "usr_carol", errors.New("hub down"), "", 1},
+	} {
+		td.hub.mu.Lock()
+		td.hub.contactsErr, td.hub.contactReads = tc.hubErr, 0
+		td.hub.mu.Unlock()
+		body := `{"project":"proj","prompt":"x"}`
+		if tc.caller != "" {
+			body = fmt.Sprintf(`{"project":"proj","prompt":"x","caller_id":%q}`, tc.caller)
+		}
+		code, answer := stepDo(t, td.sock, "POST", "/task/spawn", body)
+		if code != 200 {
+			t.Fatalf("%s: spawn = %d %s", tc.name, code, answer)
+		}
+		if strings.Contains(answer, "caller_id") || strings.Contains(answer, `"reporter"`) {
+			t.Fatalf("%s: spawn answer carries an internal reporter fact: %s", tc.name, answer)
+		}
+		var tk task.Task
+		if err := json.Unmarshal([]byte(answer), &tk); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := td.Daemon.tasks.Show(tk.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.Reporter != tc.want || stored.CallerID != tc.caller {
+			t.Fatalf("%s: stored caller=%q reporter=%q, want %q/%q", tc.name, stored.CallerID, stored.Reporter, tc.caller, tc.want)
+		}
+		td.hub.mu.Lock()
+		reads := td.hub.contactReads
+		td.hub.mu.Unlock()
+		if reads != tc.wantReads {
+			t.Fatalf("%s: %d member-face reads, want %d", tc.name, reads, tc.wantReads)
+		}
+		if _, show := stepGet(t, td.sock, "/task/show/"+tk.ID); strings.Contains(show, "caller_id") || strings.Contains(show, `"reporter"`) {
+			t.Fatalf("%s: show carries an internal reporter fact: %s", tc.name, show)
+		}
+		waitTaskTerminal(t, td, tk.ID)
+	}
+}
+
+// TestTaskSpawnReporterResolutionIsBounded: the spawn-time member read
+// runs under its own reporterResolveTimeout deadline and honours the
+// caller's context, so a hung hub ends as the documented fallback — the
+// empty snapshot, read as machine — instead of holding the spawn for the
+// client's global timeout.
+func TestTaskSpawnReporterResolutionIsBounded(t *testing.T) {
+	td := taskDaemon(t, quickRunner{}, taskYaml)
+	td.hub.mu.Lock()
+	td.hub.contacts = map[string][]api.ProjectMemberContact{"proj": {{ID: "usr_carol", DisplayName: "Carol C"}}}
+	td.hub.mu.Unlock()
+
+	// The read carries the bound even when the caller sets no deadline.
+	before := time.Now()
+	if got := td.Daemon.resolveReporter(context.Background(), "proj", "usr_carol"); got != "Carol C" {
+		t.Fatalf("resolveReporter = %q, want Carol C", got)
+	}
+	td.hub.mu.Lock()
+	deadline := td.hub.contactsDeadline
+	td.hub.contactsHang = true
+	td.hub.mu.Unlock()
+	if deadline.IsZero() || deadline.Before(before) || deadline.After(time.Now().Add(reporterResolveTimeout)) {
+		t.Fatalf("member read deadline = %v, want within %v of the call", deadline, reporterResolveTimeout)
+	}
+
+	// A hung hub answers only when the context ends; the caller's shorter
+	// deadline ends it, and the snapshot falls back to empty.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if got := td.Daemon.resolveReporter(ctx, "proj", "usr_carol"); got != "" {
+		t.Fatalf("resolveReporter on a hung hub = %q, want the empty snapshot", got)
+	}
+	if took := time.Since(start); took >= reporterResolveTimeout {
+		t.Fatalf("resolveReporter on a hung hub took %v, want the caller's 50ms deadline", took)
+	}
+}
+
+// waitTaskTerminal polls the manager until the task leaves running (the
+// two-slot limit never trips between a test's sequential spawns).
+func waitTaskTerminal(t *testing.T, td *testDaemon, id string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := td.Daemon.tasks.Show(id)
+		if err == nil && tk.State.Terminal() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task %s never ended: %+v %v", id, tk, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestTaskListRowCarriesReporterAndReportTail: each /task/list row carries
+// the stored reporter snapshot (machine when empty, never re-read from the
+// hub) and the bounded last report line of a terminal task ("" while
+// running, for an empty report, never the error); neither the full report
+// nor the full prompt is on the list.
+func TestTaskListRowCarriesReporterAndReportTail(t *testing.T) {
+	td := taskDaemon(t, quickRunner{}, taskYaml)
+	td.hub.mu.Lock()
+	td.hub.contacts = map[string][]api.ProjectMemberContact{"proj": {{ID: "usr_carol", DisplayName: "Carol C"}}}
+	td.hub.mu.Unlock()
+	code, answer := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"spawned","caller_id":"usr_carol"}`)
+	if code != 200 {
+		t.Fatalf("spawn = %d %s", code, answer)
+	}
+	var spawned task.Task
+	if err := json.Unmarshal([]byte(answer), &spawned); err != nil {
+		t.Fatal(err)
+	}
+	waitTaskTerminal(t, td, spawned.ID)
+	// A rename and a hub outage after spawn change nothing on the list.
+	td.hub.mu.Lock()
+	td.hub.contacts = map[string][]api.ProjectMemberContact{"proj": {{ID: "usr_carol", DisplayName: "Caroline"}}}
+	td.hub.contactsErr = errors.New("hub down")
+	td.hub.contactReads = 0
+	td.hub.mu.Unlock()
+
+	long := strings.Repeat("a", 150) + strings.Repeat("字", 100)
+	longRunes := []rune(long)
+	store := task.NewStore(td.cfg.DataDir)
+	now := time.Now().UTC()
+	seed := func(id string, state task.State, report, errText, reporter string) {
+		t.Helper()
+		if err := store.Save(task.Task{ID: id, State: state, CreatedAt: now, Report: report, Error: errText,
+			Spec: task.Spec{Project: "proj", Prompt: "label " + id + "\nsecret prompt body", MaxDuration: time.Minute, MaxTokens: 5,
+				Reporter: reporter}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("task_00000000000000b1", task.StateCompleted, "first secret line\n  short last  \n\n", "", "")
+	seed("task_00000000000000b2", task.StateRunning, "running body", "", "Dana")
+	seed("task_00000000000000b3", task.StateFailed, "", "boom", "")
+	seed("task_00000000000000b4", task.StateCapped, "head\n"+long, "", "")
+	seed("task_00000000000000b5", task.StateCompleted, "intro\n```json\n", "", "")
+
+	code, raw := stepGet(t, td.sock, "/task/list")
+	if code != 200 {
+		t.Fatalf("list = %d %s", code, raw)
+	}
+	var doc struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]map[string]any{}
+	for _, row := range doc.Tasks {
+		rows[row["id"].(string)] = row
+	}
+	for _, tc := range []struct{ id, reporter, tail string }{
+		{spawned.ID, "Carol C", "done"},
+		{"task_00000000000000b1", task.ReporterMachine, "short last"},
+		{"task_00000000000000b2", "Dana", ""},
+		{"task_00000000000000b3", task.ReporterMachine, ""},
+		{"task_00000000000000b4", task.ReporterMachine, "…" + string(longRunes[len(longRunes)-199:])},
+		{"task_00000000000000b5", task.ReporterMachine, "```json"},
+	} {
+		row := rows[tc.id]
+		if row == nil {
+			t.Fatalf("list lacks %s: %s", tc.id, raw)
+		}
+		if got, ok := row["reporter"].(string); !ok || got != tc.reporter {
+			t.Fatalf("%s reporter = %#v, want %q", tc.id, row["reporter"], tc.reporter)
+		}
+		if got, ok := row["report_tail"].(string); !ok || got != tc.tail {
+			t.Fatalf("%s report_tail = %#v, want %q", tc.id, row["report_tail"], tc.tail)
+		}
+	}
+	for _, leak := range []string{"first secret line", "running body", "secret prompt body", `"report":`, `"prompt":`, "caller_id", "Caroline"} {
+		if strings.Contains(raw, leak) {
+			t.Fatalf("list leaks %q: %s", leak, raw)
+		}
+	}
+	td.hub.mu.Lock()
+	reads := td.hub.contactReads
+	td.hub.mu.Unlock()
+	if reads != 0 {
+		t.Fatalf("list read the member face %d times, want none", reads)
 	}
 }

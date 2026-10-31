@@ -30,11 +30,14 @@ type Result struct {
 	// draft: the exact command, the new failures, the log).
 	FailReason string `json:"fail_reason,omitempty"`
 	// Deadline is the whole run's deadline it ran under.
-	Deadline    string         `json:"deadline"`
-	Tier        TierInfo       `json:"tier"`
-	Checks      []Check        `json:"checks"`
-	PreExisting []string       `json:"pre_existing_failures"`
-	TestBar     []TestBarEntry `json:"test_bar"`
+	Deadline string `json:"deadline"`
+	// DeadlineClampedFrom, when set, is the explicit --deadline the step's
+	// tool-window bound capped: the run used Deadline instead.
+	DeadlineClampedFrom string         `json:"deadline_clamped_from,omitempty"`
+	Tier                TierInfo       `json:"tier"`
+	Checks              []Check        `json:"checks"`
+	PreExisting         []string       `json:"pre_existing_failures"`
+	TestBar             []TestBarEntry `json:"test_bar"`
 	// TestBarNotes name the bar commands that carry a pre-existing
 	// failure but offer no skip switch (recorded as run).
 	TestBarNotes    []string                 `json:"test_bar_notes,omitempty"`

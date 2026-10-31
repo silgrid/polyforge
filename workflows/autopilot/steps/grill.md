@@ -48,8 +48,9 @@ requester, so whatever `fix` needs to know must end up in your memo.
    fix is not an oracle: it becomes one row of the single batch, asking the
    requester to make it falsifiable. If no oracle can be named once the answers
    are in, `reject` the acceptance — do not write it into the memo's
-   expected-behavior section and do not improvise an outcome; re-file the WI on
-   a lane that can carry the open acceptance (step 7). The external oracle is one
+   expected-behavior section and do not improvise an outcome; ask the owner, in a
+   needs_input question, to answer `cancel` (the reserved answer ends this WI) and
+   re-file it on a lane that can carry the open acceptance (step 7). The external oracle is one
    of four deepening points; the other three are the expert gap (what a top
    practitioner would do that the requester did not ask for), the raw material
    (logs, commit ids, command output, source files - never a paraphrase) and the
@@ -79,14 +80,16 @@ requester, so whatever `fix` needs to know must end up in your memo.
    - `## Non-goals` - the confirmed exclusions (write the heading even if the list is one
      short line)
 7. If the requester's answers reveal the work is actually large or needs a real spec,
-   say so in `summary` rather than compressing a big change into a memo — the honest
-   outcome is a re-filed WI on the feature-full or bug-fix lane.
+   say so in a needs_input question rather than compressing a big change into a memo —
+   the honest outcome is the owner answering `cancel` (the reserved answer ends this
+   WI) and re-filing it on the feature-full or bug-fix lane.
 8. BEHAVIOR-FACE ESCALATION (change-coverage rules, discipline ① — hard rule): if
    the goal's change alters OBSERVABLE BEHAVIOR — a new endpoint or verb, a
    protocol/contract/semantics change, an ownership or fence rule change, any
    externally visible capability — then an autopilot graph cannot carry it: it
    authors no acceptance scenarios. You MUST raise a needs_input question asking
-   the owner to either re-file on an e2e-carrying graph (feature-full) or supply
+   the owner to either answer `cancel` and re-file on an e2e-carrying graph
+   (feature-full) or supply
    an explicit waiver (recorded in the memo's `## Behavior-face waiver` section
    naming who waived and why). Proceeding on a behavior-facing goal without an
    owner answer here is a contract violation, not a judgment call.

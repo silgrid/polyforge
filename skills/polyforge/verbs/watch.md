@@ -62,15 +62,37 @@ running — tell the human, who may check the grill's memo. Progress lines, wake
 in only when no slug is known. Quote a slug when you pass it back
 (`pf watch 'polyforge#140' --once`) — `#` is a zsh glob character.
 
-When a wake-up or snapshot line presents a work item as completed, read the
-work item's delivered PR body (its follow-up section) or its capsule's
-`artifacts/delivery.md` before presenting the completion. If either carries a
-follow-up list, present every unclaimed item to the human and mark it
-unclaimed — present only, and leave deciding, claiming, filing, routing or
-dismissing any follow-up to the human. The fixed line carries no count and no
-list, so this lookup is the session's own step, not a fact the daemon already
-checked. If neither source is reachable, say so and ask the human where to
-read it; never assume the list is empty.
+When a wake-up or snapshot line presents a work item as completed, read its
+delivered follow-ups before presenting the completion: run the Ingest and
+Present steps in `verbs/followup.md` (the PR body's follow-up section or the
+capsule's `artifacts/delivery.md`; if neither is reachable, say so and ask —
+never assume the list is empty). The fixed line carries no count and no list,
+so this lookup is the session's own step, not a fact the daemon already
+checked.
+
+## Subscribing and unsubscribing
+
+A manual `pf watch unsubscribe <id>` is a persistent opt-out of this chat,
+and it outranks the resident watcher's two automatic subscriptions — every
+poll subscribes the chat to the work items it submitted and to those its
+owner owns, but never to one this chat unsubscribed. The work item does not
+reappear in `pf watch list`, and no decision of it wakes this chat.
+
+- **Per chat, not per owner.** Another chat of the same owner keeps its own
+  subscription. In each chat, the owner-level automatic subscription covers
+  every work item that chat has not unsubscribed; an unsubscribe in one chat
+  never removes the work item from another chat.
+- **It persists.** The opt-out is daemon state (`chat-subs.json`) and
+  survives a daemon restart.
+- **Only a chat-originated act lifts it:**
+
+| Path | Brings an unsubscribed work item back? |
+|---|---|
+| explicit `pf watch subscribe <id>` | yes — a fresh subscription; nothing already delivered or missed replays |
+| explicit `pf watch adopt <id>` | yes — the wake-target role, inheriting the retained delivery record (explicit user request only, see below) |
+| `pf submit` / `pf resume` of the work item from this chat | yes — that route subscribes the submitting chat |
+| the watcher's per-poll subscription of a work item this chat submitted | no |
+| the watcher's per-poll subscription of a work item this chat's owner owns | no |
 
 ## Taking the wake-target role over: `pf watch adopt <id>`
 

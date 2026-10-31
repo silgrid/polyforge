@@ -1,4 +1,4 @@
-# recall — search project memories
+# recall — search (or browse) project memories
 
 Data-plane verb: the `pf` CLI talks HTTP direct to AIHub (memory
 retrieval). The daemon is not involved. Write paths (creating or updating
@@ -14,6 +14,7 @@ memories) are not part of this verb — retrieval only.
 
 ```
 pf recall --project P <query> [--any] [--type T] [--tags a,b] [--limit N]
+pf recall --project P [--after CURSOR] [--sort updated|created] [--type T] [--tags a,b] [--limit N]
 ```
 
 The query is the positional argument (or `--q`); `--project` is REQUIRED
@@ -53,7 +54,11 @@ A step agent holds no aihub credential path. Inside a step (`PF_WI_ID` and
 daemon (`GET /step/memories/...`), which searches with its own
 credential, scoped to the step's own work item's project: `--project`
 must be that project (another one is refused, DAEMON-403), and no
-cli.toml mapping is needed.
+cli.toml mapping is needed. The same holds inside a task agent (`PF_TASK_ID`,
+`GET /task/memories/...`). Step and task agents search only: browse mode — an
+empty query, `--after` or `--sort` — is refused locally before any daemon
+request, and the daemon's memory proxy itself refuses an empty query and never
+forwards a cursor or sort.
 
 ## Success
 
@@ -61,12 +66,17 @@ cli.toml mapping is needed.
 `content_excerpt`). Human mode: `N hit(s)` + a table of ID, TYPE, SUMMARY
 (the title, else the excerpt's first line), UPDATED, TAGS.
 
+Browse mode: `--json` is the server body raw, `{items, total, next_cursor?}`.
+Human mode prints the same table, then `N of TOTAL` and, when more entries
+remain, `next: <cursor>` (the value for `--after`).
+
 ## Failure branches
 
 | Code | When | What to tell the user |
 |---|---|---|
 | `AUTH-401` | api key missing or invalid | Credential rejected — check `--api-key` / `PF_API_KEY` / config. |
-| `MEM-400` | Blank query | Give the search words — an empty query is refused. |
+| `MEM-400` | Browse: an unknown `--sort`, a malformed or other-sort cursor; a query mixed with `--after`/`--sort` | Drop `--after`/`--sort` for a search, or drop the query to browse; pass `next_cursor` unchanged with the same `--sort`. |
+| (no code) `recall: a query is required inside a workflow step or task …` | Browse attempted by a step or task agent — local refusal, nothing sent | Give search words: browse is the human direct-aihub path. |
 | `CORE-404` | Unknown project, or one you cannot read (same answer, by design) | The project does not exist or you are not a member — check `--project`, or ask a maintainer for membership. |
 | (no code) `recall: … mapped here: …` | `--project` is not in this machine's `[workspace]` mapping (or there is no mapping) — local refusal, exit 1, nothing sent | Use one of the listed projects, or add the project to a `[workspace."<path>"]` section of cli.toml (`pf doctor` checks the mapping). |
 

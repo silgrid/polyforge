@@ -50,7 +50,7 @@ func TestW67UnchangedGateTreeStopsTheLoop(t *testing.T) {
 			"verdict":     "fail",
 			"fail_reason": "w67: the fix still does not guard the rewind round",
 			"findings": []map[string]any{
-				{"severity": "blocking", "detail": "w67: the guard is missing"},
+				{"severity": "blocking", "repair_target": "code", "detail": "w67: the guard is missing"},
 			},
 		}},
 		// the rewound fix attempt dies of an upstream error (model class)
@@ -119,7 +119,7 @@ func TestW67UncrashedIdenticalResubmissionParks(t *testing.T) {
 			"verdict":     "fail",
 			"fail_reason": "w67: the fix still does not guard the rewind round",
 			"findings": []map[string]any{
-				{"severity": "blocking", "detail": "w67: the guard is missing"},
+				{"severity": "blocking", "repair_target": "code", "detail": "w67: the guard is missing"},
 			},
 		}},
 		// the rewound fix completes without touching the repo: the identical tree

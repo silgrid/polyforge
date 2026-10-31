@@ -1,42 +1,52 @@
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import { href, Route } from '../router'
+import { BrandIcon, ChevronLeftIcon, ChevronRightIcon, MachinesIcon, MemoriesIcon, WorkItemsIcon } from '../icons'
 
 // Sidebar is the collapsible left navigation: Work items, Memories and
-// (admins only) Machines — inline SVG icon + text, no icon package.
-// The collapse state is plain view state: nothing is persisted.
+// (admins only) Machines — inline SVG icon + text label. Collapsed, and
+// always at the narrow width (a CSS media query in styles.css), it is
+// an icon rail whose entries keep their names as title/aria-label. The
+// collapse state is plain view state: nothing is persisted.
 export default function Sidebar({ route, admin }: { route: Route; admin: boolean }) {
   const [open, setOpen] = useState(true)
 
-  const active = (view: Route['view']) =>
-    route.view === view ? 'bg-tint text-fg' : 'text-muted hover:text-fg'
+  const isActive = (...views: Route['view'][]) => views.includes(route.view)
 
   return (
     <nav
       data-testid="sidebar"
-      className={`${open ? 'w-52' : 'w-14'} shrink-0 border-r border-line bg-tint transition-[width]`}
+      className={`console-nav ${open ? '' : 'is-collapsed'} shrink-0 border-r border-line bg-surface`}
     >
-      <div className="flex items-center justify-between px-2 py-3">
-        <a href={href()} className="font-semibold text-fg no-underline truncate">
-          {open ? 'aihub' : 'a'}
+      <div className="sticky top-0 flex h-screen flex-col py-3">
+        <a
+          href={href()}
+          title="aihub"
+          className="mx-2 mb-4 flex items-center gap-2.5 rounded-md px-2.5 py-1 font-semibold text-fg no-underline hover:no-underline"
+        >
+          <span className="text-accent">
+            <BrandIcon />
+          </span>
+          {open ? <span className="nav-label truncate">aihub</span> : null}
         </a>
+        <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+          <NavItem icon={<WorkItemsIcon />} label="Work items" to={routeProjectHref(route, 'work-items')} open={open} active={isActive('work-items', 'work-item')} />
+          <NavItem icon={<MemoriesIcon />} label="Memories" to={routeProjectHref(route, 'memories')} open={open} active={isActive('memories', 'memory')} />
+          {admin ? (
+            <NavItem icon={<MachinesIcon />} label="Machines" to={href('machines')} open={open} active={isActive('machines')} />
+          ) : null}
+        </ul>
         <button
           type="button"
           data-testid="sidebar-toggle"
           aria-label={open ? 'Collapse navigation' : 'Expand navigation'}
           aria-expanded={open}
           onClick={() => setOpen(!open)}
-          className="text-muted hover:text-fg border border-line rounded px-1"
+          className="mx-2 mt-auto flex items-center justify-center rounded-md border border-line px-2.5 py-1.5 text-muted hover:bg-tint hover:text-fg"
         >
-          {open ? '‹' : '›'}
+          {open ? <ChevronLeftIcon /> : <ChevronRightIcon />}
         </button>
       </div>
-      <ul className="list-none p-0 m-0">
-        <NavItem icon={listIcon} label="Work items" to={routeProjectHref(route, 'work-items')} open={open} className={active('work-items') + (route.view === 'work-item' ? ' bg-tint text-fg' : '')} />
-        <NavItem icon={bookIcon} label="Memories" to={routeProjectHref(route, 'memories')} open={open} className={active('memories') + (route.view === 'memory' ? ' bg-tint text-fg' : '')} />
-        {admin ? (
-          <NavItem icon={chipIcon} label="Machines" to={href('machines')} open={open} className={active('machines')} />
-        ) : null}
-      </ul>
     </nav>
   )
 }
@@ -50,48 +60,37 @@ function routeProjectHref(route: Route, module: 'work-items' | 'memories'): stri
   return href(project, module)
 }
 
+// NavItem is one module entry: the active one sits on the accent-soft
+// fill with an accent left mark.
 function NavItem({
   icon,
   label,
   to,
   open,
-  className,
+  active,
 }: {
-  icon: JSX.Element
+  icon: ReactNode
   label: string
   to: string
   open: boolean
-  className: string
+  active: boolean
 }) {
   return (
-    <li>
+    <li className="mx-2">
       <a
         href={to}
         title={label}
-        className={`${className} flex items-center gap-2 no-underline px-3 py-2`}
+        aria-label={label}
+        aria-current={active ? 'page' : undefined}
+        className={`relative flex items-center gap-2.5 rounded-md px-3 py-1.5 no-underline hover:no-underline ${
+          active
+            ? 'bg-accent-soft text-accent-fg before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full before:bg-accent'
+            : 'text-muted hover:bg-tint hover:text-fg'
+        }`}
       >
         {icon}
-        {open ? <span className="truncate">{label}</span> : null}
+        {open ? <span className="nav-label truncate">{label}</span> : null}
       </a>
     </li>
   )
 }
-
-// The three module icons are inline SVG — no icon package, no external
-// resource (the CSP permits same-origin only).
-const listIcon = (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
-    <path d="M2 3h12M2 8h12M2 13h12" />
-  </svg>
-)
-const bookIcon = (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
-    <path d="M2 2h5v12H2zM9 2h5v12H9zM9 5.5h5" />
-  </svg>
-)
-const chipIcon = (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
-    <rect x="2" y="2" width="12" height="12" rx="2" />
-    <path d="M5 5h2v2H5zM9 9h2v2H9z" />
-  </svg>
-)

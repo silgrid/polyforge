@@ -50,7 +50,7 @@ func w111Flat(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // w111Principle is the waiting principle's text (after its bold title)
 // in workflows/_shared/principles.md.
-const w111Principle = "Waiting is never a tool call of its own. Run a command in the foreground with an explicit timeout at least as long as you expect it to take (the harness allows up to the daemon's tool bound). If something must be awaited — a server coming up, a procedure already started — wait INSIDE the same call: a loop that checks a real condition, sleeps at most 3 s per iteration and has a deadline. A bare `sleep N` call, or a loop whose only exit is the deadline, is a violation and is recorded."
+const w111Principle = "Waiting is never a tool call of its own. Run a command in the foreground with an explicit timeout at least as long as you expect it to take (the harness allows up to the daemon's tool bound). If something must be awaited — a server coming up, a procedure already started — wait INSIDE the same call: a loop that checks a real condition, sleeps at most 3 s per iteration and has a deadline. A bare `sleep N` call, or a loop whose only exit is the deadline, is a violation and is recorded. The same binding covers a shell's `wait` and every background job: a `wait` is a wait like `sleep`, so never wait on something with no timeout of its own — await a real condition with a deadline, or bound and poll what you started. A step never manufactures artificial load on a shared host to reproduce a load-sensitive flake (spin loops, `yes`, stress tools): use the test's own parallelism knobs (`-parallel`, `E2E_JOBS`) or record the flake as load-sensitive in the conclusion. Every background process a step starts is bounded: kill it by process group before the call returns, with a `trap` as the backstop, and never pass a pid list through an unquoted shell variable."
 
 // w111RuleSentences are the waiting rule's sentences that carry the word
 // "sleep": the principle states them and both release steps restate them
@@ -64,10 +64,16 @@ var w111RuleSentences = []string{
 // w111CodeSleepPhrases are the pre-existing phrases, per workflows/-
 // relative file, that name a sleep in the code under change — a design
 // rule and two review findings — never an instruction for the agent to
-// wait. Each is exempt only in its own file and only as this exact
-// phrase.
+// wait, plus the waiting rule's background-work sentence,
+// which names `sleep` only as the binding a `wait` shares and is stated
+// in the principles alone (the release steps do not restate it, so it is
+// not one of w111RuleSentences). Each is exempt only in its own file and
+// only as this exact phrase.
 var w111CodeSleepPhrases = map[string][]string{
-	"_shared/principles.md":   {"no sleep posing as synchronization"},
+	"_shared/principles.md": {
+		"no sleep posing as synchronization",
+		"The same binding covers a shell's `wait` and every background job: a `wait` is a wait like `sleep`, so never wait on something with no timeout of its own — await a real condition with a deadline, or bound and poll what you started.",
+	},
 	"_shared/steps/review.md": {"(`time.Sleep` as a synchronization stand-in", "which is what drove a sleep+latch hack"},
 }
 
@@ -133,7 +139,10 @@ func TestW111WaitingPrincipleInEveryPrincipledPrompt(t *testing.T) {
 			t.Errorf("the assembled %s/%s prompt renders {{principles}} but lacks the waiting principle", bundle, step)
 		}
 	}
-	// every principled step the principles test enumerates was checked
+	// every principled step the principles test enumerates was checked:
+	// the count is pinned to principledSteps, which since
+	// also covers bug-fix repro, feature-full e2e-author, the shared
+	// deliver in every delivery lane and release verify
 	want := 0
 	for _, steps := range principledSteps {
 		want += len(steps)

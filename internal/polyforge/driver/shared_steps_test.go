@@ -173,7 +173,9 @@ func TestOldLayoutCapsuleOwnDeliverStillRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	capDir := capsuleWithShippedBundle(t, "autopilot")
-	writeCapsuleFile(t, capDir, "workflows/autopilot/steps/deliver.md", string(shared))
+	// an old-layout snapshot predates the deliver step's {{principles}}
+	// include and has no _shared/principles.md to render it
+	writeCapsuleFile(t, capDir, "workflows/autopilot/steps/deliver.md", strings.ReplaceAll(string(shared), "{{principles}}", ""))
 	if _, err := os.Stat(filepath.Join(capDir, "workflows", workflow.SharedDir)); !os.IsNotExist(err) {
 		t.Fatalf("old layout must have no _shared: %v", err)
 	}
@@ -194,8 +196,14 @@ func TestCapsuleSharedDeliverAndOwnFileWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	principles, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, workflow.PrinciplesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
 	capDir := capsuleWithShippedBundle(t, "autopilot")
 	writeCapsuleFile(t, capDir, "workflows/_shared/steps/deliver.md", string(shared))
+	// materialization copies the whole _shared/, the principles deliver includes among it
+	writeCapsuleFile(t, capDir, "workflows/_shared/"+workflow.PrinciplesFile, string(principles))
 	if p := spawnDeliverPrompt(t, capDir, "autopilot"); !strings.Contains(p, "gh pr merge") {
 		t.Fatalf("shared deliver not used\n%s", p)
 	}
@@ -452,6 +460,18 @@ func TestSharedFragmentRendersOncePerDefinition(t *testing.T) {
 		"handoff_duty.md": {
 			{"chore", "plan"}, {"feature-full", "grill"}, {"autopilot", "grill"},
 		},
+		// the deliverable-carrier duty: the two plan steps
+		// map every downstream deliverable to the step contract carrying it.
+		"deliverable_carrier.md": {
+			{"chore", "plan"}, {"feature-full", "plan"},
+		},
+		// the owner-review declaration: the two plan steps
+		// and the four build steps may declare material deliver's
+		// owner-review gate shows the owner before merging.
+		"owner_review.md": {
+			{"chore", "plan"}, {"feature-full", "plan"},
+			{"chore", "code"}, {"feature-full", "code"}, {"bug-fix", "fix"}, {"autopilot", "fix"},
+		},
 	}
 	for frag, targets := range fragmentOnce {
 		raw, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, frag))
@@ -509,7 +529,7 @@ func TestHandoffDutyFragmentAndContractPath(t *testing.T) {
 	for _, bs := range [][2]string{{"chore", "plan"}, {"bug-fix", "root-cause"}} {
 		bundle, step := bs[0], bs[1]
 		capDir := capsuleWithShippedBundle(t, bundle)
-		for _, name := range []string{"fast_checks.md", "handoff_duty.md", "principles.md"} {
+		for _, name := range []string{"fast_checks.md", "handoff_duty.md", "principles.md", "deliverable_carrier.md", "owner_review.md"} {
 			raw, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, name))
 			if err != nil {
 				t.Fatal(err)

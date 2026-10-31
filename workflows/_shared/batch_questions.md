@@ -15,4 +15,6 @@ rubber stamps answerable in bulk). The table rides in one question body with one
 `question_id`, return a result envelope with `outcome: "needs_input"`, that
 `question_id` and the `question` text, and end your turn. The answer arrives in
 the NEXT dispatch of this step under "# Answered questions" - continue from it;
-never fabricate or guess an answer you did not receive.
+never fabricate or guess an answer you did not receive. The driver appends the
+reserved `cancel` answer's one sentence to every question it persists; you never
+restate it, and an answer of exactly `cancel` never reaches you (it ends the work item).

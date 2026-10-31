@@ -5,6 +5,8 @@ import type { SearchResults } from '../types'
 import NotFound from '../components/NotFound'
 import StatusPill from '../components/StatusPill'
 import TypeDot from '../components/TypeDot'
+import { ArrowRightIcon } from '../icons'
+import { Card, EmptyState, Muted, PageHeader, SectionHeading } from '../components/ui'
 
 // SearchPage renders the global search of ONE project: two labelled
 // groups — Work items and Memories — each capped at 20 by the face,
@@ -30,71 +32,67 @@ export default function SearchPage({ project }: { project: string }) {
   if (q === '') return <NotFound />
 
   return (
-    <div data-testid="search" className="max-w-prose">
-      <h1 className="text-xl font-semibold mb-4">
-        Search “{q}” · {project}
-      </h1>
+    <div data-testid="search" className="max-w-3xl">
+      <PageHeader title={`Search “${q}” · ${project}`} />
       {res === null ? (
-        <p className="text-muted">Searching…</p>
+        <Muted>Searching…</Muted>
       ) : (
-        <>
-          <section className="mb-6">
-            <h2 className="text-base font-semibold mb-2 flex items-center gap-2">
-              Work items
-              <a
-                data-testid="see-all-work-items"
-                className="text-accent text-sm font-normal"
-                href={`${href(project, 'work-items')}?q=${encodeURIComponent(q)}`}
-              >
-                see all
-              </a>
-            </h2>
+        <div className="flex flex-col gap-6">
+          <section>
+            <GroupHeading title="Work items" testid="see-all-work-items" to={`${href(project, 'work-items')}?q=${encodeURIComponent(q)}`} />
             {res.work_items.length === 0 ? (
-              <p className="text-muted">No matching work items.</p>
+              <EmptyState>No matching work items.</EmptyState>
             ) : (
-              <ul className="list-none p-0">
-                {res.work_items.map((it) => (
-                  <li key={it.id} className="py-1 border-b border-line text-sm">
-                    <a className="text-accent" href={href(project, 'work-items', it.id)}>
-                      {it.goal}
-                    </a>
-                    <span className="ml-2">
+              <Card>
+                <ul className="m-0 list-none p-0">
+                  {res.work_items.map((it) => (
+                    <li key={it.id} className="flex items-center gap-3 border-b border-line px-4 py-2 last:border-b-0">
+                      <a className="min-w-0 flex-1 font-medium text-fg [overflow-wrap:anywhere] hover:text-accent-fg" href={href(project, 'work-items', it.id)}>
+                        {it.goal}
+                      </a>
                       <StatusPill status={it.status} />
-                    </span>
-                  </li>
-                ))}
-              </ul>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
             )}
           </section>
           <section>
-            <h2 className="text-base font-semibold mb-2 flex items-center gap-2">
-              Memories
-              <a
-                data-testid="see-all-memories"
-                className="text-accent text-sm font-normal"
-                href={`${href(project, 'memories')}?q=${encodeURIComponent(q)}`}
-              >
-                see all
-              </a>
-            </h2>
+            <GroupHeading title="Memories" testid="see-all-memories" to={`${href(project, 'memories')}?q=${encodeURIComponent(q)}`} />
             {res.memories.length === 0 ? (
-              <p className="text-muted">No matching memories.</p>
+              <EmptyState>No matching memories.</EmptyState>
             ) : (
-              <ul className="list-none p-0">
-                {res.memories.map((m) => (
-                  <li key={m.id} className="py-1 border-b border-line text-sm">
-                    <TypeDot type={m.type} />
-                    <a className="text-accent" href={href(project, 'memories', m.id)}>
-                      {m.title}
-                    </a>
-                    <span className="text-muted ml-2">{m.type}</span>
-                  </li>
-                ))}
-              </ul>
+              <Card>
+                <ul className="m-0 list-none p-0">
+                  {res.memories.map((m) => (
+                    <li key={m.id} className="flex items-center gap-3 border-b border-line px-4 py-2 last:border-b-0">
+                      <TypeDot type={m.type} />
+                      <a className="min-w-0 flex-1 font-medium text-fg [overflow-wrap:anywhere] hover:text-accent-fg" href={href(project, 'memories', m.id)}>
+                        {m.title}
+                      </a>
+                      <span className="text-caption text-muted">{m.type}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
             )}
           </section>
-        </>
+        </div>
       )}
+    </div>
+  )
+}
+
+// GroupHeading is one result group's section heading with its accent
+// "see all" link carrying the query into the module.
+function GroupHeading({ title, testid, to }: { title: string; testid: string; to: string }) {
+  return (
+    <div className="mb-2 flex items-baseline justify-between gap-3">
+      <SectionHeading>{title}</SectionHeading>
+      <a data-testid={testid} className="inline-flex items-center gap-1 text-caption" href={to}>
+        see all
+        <ArrowRightIcon />
+      </a>
     </div>
   )
 }

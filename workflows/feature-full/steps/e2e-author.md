@@ -26,7 +26,7 @@ output:
           title: { type: string }
           status: { type: string, enum: [fail] }
           evidence: { type: string, minLength: 1 }
-      description: The baseline run against the pre-implementation tree - one entry per scenario_titles entry, same order. Empty only when the approved mode is `skipped-with-rationale`; otherwise at least one. The status enum admits only fail - every kept scenario is an assertion-level red; a scenario that passed at baseline was deleted (already_satisfied) or rewritten before completing. evidence carries the failure proof - a runner output excerpt or an observed-vs-expected contrast.
+      description: "The baseline run against the pre-implementation tree - one entry per scenario_titles entry, same order. Empty only when the approved mode is `skipped-with-rationale`; otherwise at least one. Every kept scenario is an assertion-level red (`fail`); a scenario that passed at baseline was deleted (already_satisfied) or rewritten before completing. The one exception is the all-green report: EVERY scenario passed, every row then says `pass` (outside the enum on purpose - the driver never accepts it as a completion and asks the owner instead, see Outcomes). evidence carries the failure proof - a runner output excerpt or an observed-vs-expected contrast."
     bindings:
       type: array
       items:
@@ -187,6 +187,27 @@ formatter-clean and nothing is edited outside that commit. Once the step complet
 the files are frozen by the authored-tests gate, and a later formatting fix needs a
 human-approved rebaseline. No `test_files`, no check.
 
+## No orphan from an all-green run
+
+An all-green run already made its one dedicated commit, and the driver then asked the
+owner. Every later run of this step on the same work item — the owner's `skip`, or the
+fresh run after `rewind-to-spec` — starts by reverting that commit in each task repo
+where it landed: find it with `git log --format='%H %s' $(git merge-base HEAD
+origin/<default>)..HEAD -- <its test files>` and run `git revert --no-edit <sha>`. A
+run that authors anew then makes its own one dedicated commit as above. Either way, every
+authored test file in the merge-base diff is one this run lists in `test_files`; a file
+an earlier run committed and this run does not list is an orphan that plan conformance
+blocks as undeclared.
+
+## Owner-approved suite amendment (append-only)
+
+When your `pending_rewind_input` carries the owner's amend-upstream ruling for a gap in
+the authored suite (its note says append-only), you re-run in append-only mode: every
+existing scenario, test file line and title stays byte-identical; append and title only
+the new scenarios the ruling names, prove each new one red, commit only the additions,
+and complete with the full `scenario_titles` list (the existing titles first, then the
+new ones) — the driver takes that list as the new baseline. Spec and plan are not re-run.
+
 ## Outcomes
 
 - **completed** — at least one scenario, every kept scenario an assertion-level red
@@ -196,12 +217,22 @@ human-approved rebaseline. No `test_files`, no check.
   `scenario_titles` and `baseline` are empty, no test file was authored or committed,
   and `command_evidence` carries the one command that read the approval (see
   "Command evidence" below).
-- **needs_input** — only in two cases, with the reason in the question:
-  - EVERY scenario passes at baseline: the new behaviour the spec claims is already in
-    the tree, so the spec and reality disagree — ask the owner;
-  - the authored tests cannot run in this environment at all (e.g. a missing browser
-    dependency) — name what is missing.
-- Never report `completed` with a passing or un-runnable scenario in `baseline`.
+- **completed (all green)** — EVERY scenario passes at baseline: the behaviour the spec
+  claims is new is already in the tree. Complete with every `baseline` row `status:
+  pass`; the driver does not advance to `code` but asks the owner: `rewind-to-spec:
+  <words>` (an owner-routed rewind to `spec`), `skip: <rationale>` or `cancel`.
+- **completed (skipped on the owner's `skip` answer)** — your answers carry the owner's
+  `skip`: first revert the all-green run's own authoring commit (see "No orphan from an
+  all-green run" below), so the merge-base diff carries no authored file; then append the
+  owner's rationale verbatim to `artifacts/grill-qa.md` (a `## e2e-author
+  skip` block naming the answer), record it in the scenario document, and complete with
+  `e2e_author_mode: "skipped-with-rationale"`, that `skip_rationale`, empty
+  `scenario_titles`/`baseline`/`test_files` — the named discipline-① exception for
+  behaviour already on main; `review` and `verification` honour it from that record.
+- **needs_input** — only when the authored tests cannot run in this environment at all
+  (e.g. a missing browser dependency) — name what is missing.
+- Never report `completed` with a mix of passing and failing rows, or an un-runnable
+  scenario, in `baseline`.
 
 ## Command evidence (hard gate)
 
@@ -226,6 +257,12 @@ This step declares `handoff: true`: `code` (the next step, `context_policy: inhe
 continues from your handoff file. Write `artifacts/handoff-e2e-author.md` with the
 test locations, the targeted command that runs them, the red bar `code` must turn
 green, and the marker each bound scenario prints when it passes.
+
+## Principles
+
+Run the baseline in the foreground with an explicit timeout as long as it needs; await anything it starts inside that same call. The red baseline is evidence only when your own run produced it.
+
+{{principles}}
 
 ## Output
 

@@ -280,7 +280,7 @@ func TestValidateStepResultReviewScopeAdequate(t *testing.T) {
 	// a fail verdict re-binds to gate_failed before the obligation is
 	// judged: no scope_adequate is owed on the failing round.
 	fail := map[string]any{"verdict": "fail", "fail_reason": "broken",
-		"findings": []any{map[string]any{"severity": "blocking", "detail": "d"}}}
+		"findings": []any{map[string]any{"severity": "blocking", "repair_target": "code", "detail": "d"}}}
 	if err := ValidateStepResult(res(fail), spec); err != nil {
 		t.Fatalf("failing scoped review rejected: %v", err)
 	}

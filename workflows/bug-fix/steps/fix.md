@@ -10,14 +10,13 @@ output:
       description: "Repo-relative path(s) of the regression test that pins the repro from the `repro` step (comma-separated if several). REQUIRED: the fix's last line of defense is a test that fails on the pre-fix tree and passes after — a bug fixed without its repro pinned is not fixed, it is deferred. If the project genuinely has no test surface, an explicit waiver string `waived: <reason>` is accepted, but the waiver is visible to `review` and must justify why no test can exist. `verification` runs it; `review` challenges weak waivers."
     commits:
       type: array
-      minItems: 1
       items:
         type: object
         required: [sha, message]
         properties:
           sha: { type: string }
           message: { type: string }
-      description: Every commit actually made, in the order committed. At least one commit is required (minItems 1) - a completed fix step that changed nothing is not a valid completion (report infeasibility honestly instead, never an empty list).
+      description: Every commit THIS attempt made, in the order committed. At least one is required, with one exception the driver checks - root_cause_addressed false with nothing changed may report an empty list. A true fix with no commit is rejected; never re-list an earlier attempt's commits to fill the list (they are not this attempt's change).
     build_status:
       type: string
       enum: [green, red]
@@ -49,10 +48,15 @@ wrong, `artifacts/root-cause.md` now holds the new diagnosis: fix against it.
   the change must remove the diagnosed condition itself. If mid-implementation you
   discover the diagnosis was wrong — or a review verdict says so — do NOT silently fix
   what you now believe is the real cause, and do not re-litigate the cause mid-flow:
-  complete with `root_cause_addressed: false` and put what you found in `summary`. The
+  complete with `root_cause_addressed: false` and put what you found in `summary` — with
+  an empty `commits` list when you changed nothing (the one legal empty list; never
+  re-list an earlier attempt's commits). The
   driver rewinds to `root-cause` once, with your summary as its rewind input, and this
   step re-runs against the new diagnosis; a second false asks the owner (`needs_input`)
-  whether to continue with corrective guidance or cancel and re-file.
+  whether to continue with corrective guidance or answer the reserved `cancel` (ending
+  this work item) and re-file. A `repro` re-run
+  after that rewind reproduces against the pre-fix base the driver recorded
+  (`pre_fix_heads`), so a mitigation you committed never hides the original failure.
 - **Work only inside the declared repo worktree(s)** (`repos/<name>/**`).
 - **Keep the build green between commits — fast checks only, per unit.** After each
   compilable unit, run, via `bash`, the repo's fast checks: {{fast_checks}}
@@ -73,6 +77,8 @@ wrong, `artifacts/root-cause.md` now holds the new diagnosis: fix against it.
 If the fix is infeasible as diagnosed, or the build cannot be made green within
 reasonable effort, do not fabricate `build_status: green`. Leave it `red`, explain in
 `summary`. A dishonest green corrupts `verification` and `review` downstream.
+
+{{owner_review}}
 
 ## Principles
 

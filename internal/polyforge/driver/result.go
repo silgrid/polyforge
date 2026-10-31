@@ -38,6 +38,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -464,6 +465,31 @@ func ValidateStepResult(res *StepResult, spec ResultSpec) error {
 			}
 		}
 	}
+	// 3d0. the review repair-target classes: every blocking finding of a
+	// review verdict (delivered completed or gate_failed) carries exactly
+	// one known repair_target class. A missing or unknown class is an
+	// unfilled review result — rejected here (the in-process rewrite
+	// lane), never guessed downstream: the owner exit keys on it.
+	if spec.StepID == reviewStepID && (delivered == OutcomeCompleted || delivered == OutcomeGateFailed) {
+		if out, perr := parseOutput(res.Output); perr == nil {
+			if err := checkRepairTargets(out); err != nil {
+				return fmt.Errorf("driver: step %q delivered an unfilled review result: %w", spec.StepID, err)
+			}
+		}
+	}
+	// 3d1. the fix's conditional commit minimum: a completed fix that
+	// reports root_cause_addressed owes at least one commit of this
+	// attempt unless the report is the literal false (the diagnosis did
+	// not hold and nothing was changed — the driver rewinds to
+	// root-cause on it). Never satisfied by re-listing an earlier
+	// attempt's commits: that stays forbidden by the contract text.
+	if delivered == OutcomeCompleted && spec.StepID == fixStepID {
+		if out, perr := parseOutput(res.Output); perr == nil {
+			if err := checkFixCommits(out); err != nil {
+				return fmt.Errorf("driver: step %q completed but %w", spec.StepID, err)
+			}
+		}
+	}
 	// 3d'. the plan's coupled-obligation contract: a
 	// completed plan declaring a write without a well-formed
 	// coupled_obligations entry is an envelope rejection, so the build
@@ -562,6 +588,75 @@ func ValidateStepResult(res *StepResult, spec ResultSpec) error {
 	return nil
 }
 
+// The review repair-target classes: where a blocking finding's fix has
+// to land. Only `code` is repaired by the build step the review gate
+// rewinds to; every other class is OFF-GRAPH — the authored acceptance
+// suite, the spec, a declared coupled obligation, or an un-IDed
+// instruction from a verification FAIL or a human deliver answer — and
+// a review FAIL whose blocking findings are all off-graph is settled by
+// the owner exit, not by a rewind to the build step.
+const (
+	repairTargetKey           = "repair_target"
+	RepairTargetCode          = "code"
+	RepairTargetAuthoredSuite = "authored-suite"
+	RepairTargetSpec          = "spec"
+	RepairTargetObligation    = "declared-obligation"
+	RepairTargetInstruction   = "instruction"
+)
+
+// validRepairTarget answers whether one class is of the closed set.
+func validRepairTarget(c string) bool {
+	switch c {
+	case RepairTargetCode, RepairTargetAuthoredSuite, RepairTargetSpec, RepairTargetObligation, RepairTargetInstruction:
+		return true
+	}
+	return false
+}
+
+// checkRepairTargets judges a review output's findings: every finding
+// with severity "blocking" must carry a repair_target of the closed
+// set. Non-blocking findings and an absent or non-list findings record
+// are not judged here (the schema lane records those).
+func checkRepairTargets(out map[string]any) error {
+	items, ok := out["findings"].([]any)
+	if !ok {
+		return nil
+	}
+	for i, it := range items {
+		m, isObj := it.(map[string]any)
+		if !isObj {
+			continue
+		}
+		if sev, _ := m["severity"].(string); sev != "blocking" {
+			continue
+		}
+		c, _ := m[repairTargetKey].(string)
+		if !validRepairTarget(c) {
+			return fmt.Errorf("blocking finding #%d carries repair_target %q — every blocking finding names exactly one of %s, %s, %s, %s, %s",
+				i+1, c, RepairTargetCode, RepairTargetAuthoredSuite, RepairTargetSpec, RepairTargetObligation, RepairTargetInstruction)
+		}
+	}
+	return nil
+}
+
+// checkFixCommits judges a completed fix output carrying
+// root_cause_addressed: an empty (or absent) commits list is legal only
+// with root_cause_addressed the literal false. An output without the
+// field (a fix schema that does not declare it) is not judged here.
+func checkFixCommits(out map[string]any) error {
+	rca, declared := out[rootCauseAddressed]
+	if !declared {
+		return nil
+	}
+	if commits, _ := out["commits"].([]any); len(commits) > 0 {
+		return nil
+	}
+	if v, ok := rca.(bool); ok && !v {
+		return nil
+	}
+	return fmt.Errorf("an empty commits list with root_cause_addressed %v: a completed fix lists at least one commit of this attempt unless root_cause_addressed is false (never re-list an earlier attempt's commits)", rca)
+}
+
 // checkBindings judges e2e-author's optional bindings list: absent or
 // null is none; otherwise a list of objects, each with a title among the
 // output's own scenario_titles, a non-empty repo, command and unit, and a
@@ -605,6 +700,31 @@ func checkBindings(out map[string]any) error {
 		if _, err := regexp.Compile(field("marker")); err != nil {
 			return fmt.Errorf("bindings[%d] whose marker %q does not compile as a regular expression: %v", i, clipAgentText(field("marker")), err)
 		}
+		if err := checkShellSyntax(field("command")); err != nil {
+			return fmt.Errorf("bindings[%d] whose command does not parse as a shell command: %v — verify-run executes the command literally with bash -c, so a malformed command can never pass", i, err)
+		}
+	}
+	return nil
+}
+
+// checkShellSyntax parses command with the same shell verify-run uses
+// (bash -c) but never executes it: bash -n reads and parses the command
+// only. A non-zero exit is the parse error bash would have answered at
+// run time (an unpaired quote, an unfinished compound command), so the
+// accept gate can refuse the value before it becomes canonical. The
+// command text is passed verbatim — never trimmed, requoted or otherwise
+// normalized: verify-run matches bindings to runs by exact TrimSpace
+// equality, so the stored command must be the one that was parsed.
+func checkShellSyntax(command string) error {
+	cmd := exec.Command("bash", "-n", "-c", command)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return errors.New(detail)
 	}
 	return nil
 }

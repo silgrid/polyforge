@@ -630,10 +630,11 @@ func TestTaskCarrierRefAccepted(t *testing.T) {
 	}
 }
 
-// TestTaskCarrierRefStillFenced: the namespace exemption is ONLY the
-// chain-only gitlink rule — deletion and fast-forward stay enforced for
-// carrier refs.
-func TestTaskCarrierRefStillFenced(t *testing.T) {
+// TestTaskCarrierRefRewindAcceptedDeletionFenced: the carrier namespace
+// takes the chain-only gitlink exemption AND a non-fast-forward update — a
+// rewind rewrites a carried commit, and the daemon's content-containment
+// lease is that lane's gate. Ref deletion stays rejected.
+func TestTaskCarrierRefRewindAcceptedDeletionFenced(t *testing.T) {
 	e := newGitEnv(t)
 	wiID, secret := e.claimWI(t)
 	cred := e.credURL(wiID, secret)
@@ -642,18 +643,20 @@ func TestTaskCarrierRefStillFenced(t *testing.T) {
 	if out, err := runGit(t, wt, "push", cred, "HEAD:refs/pf-task/demo-src"); err != nil {
 		t.Fatalf("base carrier push: %s", out)
 	}
-	// History rewrite: an amended (non-descendant) tip is rejected. The
-	// rewritten tree must actually diverge (an in-second amend would
+	// History rewrite: an amended (non-descendant) tip replaces the carrier.
+	// The rewritten tree must actually diverge (an in-second amend would
 	// reproduce the same commit SHA and push as up-to-date).
 	if err := os.WriteFile(filepath.Join(wt, "rewrite.txt"), []byte("divergent\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	mustGit(t, wt, "add", "-A")
 	mustGit(t, wt, "commit", "--amend", "--no-edit")
-	if out, err := runGit(t, wt, "push", cred, "HEAD:refs/pf-task/demo-src"); err == nil {
-		t.Fatalf("non-fast-forward carrier push accepted: %s", out)
-	} else if !strings.Contains(out, "non-fast-forward") {
-		t.Fatalf("wrong rejection: %s", out)
+	rewritten := strings.TrimSpace(mustGit(t, wt, "rev-parse", "HEAD"))
+	if out, err := runGit(t, wt, "push", cred, "+HEAD:refs/pf-task/demo-src"); err != nil {
+		t.Fatalf("non-fast-forward carrier push rejected: %s", out)
+	}
+	if got := strings.TrimSpace(mustGit(t, wt, "ls-remote", cred, "refs/pf-task/demo-src")); !strings.Contains(got, rewritten) {
+		t.Fatalf("carrier did not move to the rewritten head %s: %s", rewritten, got)
 	}
 	// Deletion stays rejected.
 	if out, err := runGit(t, wt, "push", cred, ":refs/pf-task/demo-src"); err == nil {

@@ -1,20 +1,21 @@
-// StatusPill renders one work-item status as a compact coloured pill
-// (the confirmed visual language). The colour comes from the status
-// token class — never an inline style.
+// StatusPill renders one work-item status as a compact pill in its
+// status hue (the status tokens of styles.css), keeping the lowercase
+// status word and its status-<status> test hook. Class-only colour —
+// never an inline style.
 const STATUS_CLASSES: Record<string, string> = {
-  queued: 'text-blue border-blue',
-  running: 'text-green border-green',
-  paused: 'text-amber border-amber',
-  blocked: 'text-purple border-purple',
-  wrapped: 'text-teal border-teal',
-  failed: 'text-red border-red',
-  canceled: 'text-muted border-muted',
+  queued: 'text-muted',
+  running: 'text-ok',
+  paused: 'text-warn',
+  blocked: 'text-bad',
+  wrapped: 'text-fg',
+  failed: 'text-bad',
+  canceled: 'text-muted',
 }
 
 export default function StatusPill({ status }: { status: string }) {
-  const cls = STATUS_CLASSES[status] ?? 'text-muted border-muted'
+  const cls = STATUS_CLASSES[status] ?? 'text-muted'
   return (
-    <span data-testid={`status-${status}`} className={`inline-block border rounded-full px-2 text-xs ${cls}`}>
+    <span data-testid={`status-${status}`} className={`pill ${cls}`}>
       {status}
     </span>
   )
