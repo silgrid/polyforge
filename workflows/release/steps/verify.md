@@ -83,8 +83,10 @@ The version is `V`, the claimed release commit is `C`, the default branch is `<d
   sorted lists must print nothing). A moved or deleted older tag is a `fail`.
 - **(d) release notes.** The notes for `V` must be non-empty. Check where the procedure
   said they are (the `notes` field): a repo path with `test -s`, a GitHub release with
-  `gh release view V --json body -q .body` (non-blank), another URL by fetching it. A
-  notes location you cannot check mechanically is a `fail`, not a skip.
+  `gh release view V --json body -q .body` (non-blank), another URL by fetching it - an
+  adopted release's `notes` is its published release page URL
+  (`.../releases/tag/V`): check it with `gh release view V`. A notes location you cannot
+  check mechanically is a `fail`, not a skip.
 - **(e) the repo's own verifier.** Put the clone on the released tree
   (`git checkout --detach C`, worktree clean) and run `.polyforge/release.sh --verify V`.
   The repo defines what that covers (format, ordering, artifacts, integrity). Exit zero
@@ -108,6 +110,12 @@ failed check.
 
 A false `pass` here puts an unverified artifact into deployment. Judge only what your
 own commands showed; never copy a previous step's statement into a check's `detail`.
+
+## Principles
+
+Run each audit check in the foreground with an explicit timeout; await a long procedure or remote read inside that same call. Every check's `detail` is your own command's evidence.
+
+{{principles}}
 
 ## Output
 

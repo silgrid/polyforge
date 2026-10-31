@@ -150,6 +150,21 @@ func TestShippedLaneExhaustionIsConstructive(t *testing.T) {
 				}
 				mustInit(t, d)
 				n := int64(1)
+				if s.ID == rootCauseStepID {
+					// the bug-fix dead end (spec: a second inconclusive
+					// root cause asks the owner): one charged rewind, then
+					// the next FAIL parks the owner question — never a
+					// second charged rewind, never exhaustion.
+					n = driveGateRound(t, d, wf, s.ID, n)
+					driveGateRound(t, d, wf, s.ID, n)
+					x := d.Snapshot()
+					q := x.Steps[s.ID].PendingQuestion
+					if x.WorkflowStatus != StatusRunning || x.RewindStats.Count != 1 || q == nil || q.ID != RootCauseInconclusiveQuestionID {
+						t.Fatalf("root-cause: the second FAIL must park the owner question, got %q count %d question %+v",
+							x.WorkflowStatus, x.RewindStats.Count, q)
+					}
+					return
+				}
 				for round := 0; round < wf.MaxPerStep; round++ {
 					n = driveGateRound(t, d, wf, s.ID, n)
 					if x := d.Snapshot(); x.RewindStats.Count != int64(round+1) {
@@ -166,7 +181,7 @@ func TestShippedLaneExhaustionIsConstructive(t *testing.T) {
 						s.ID, before.RewindStats.Count, x.WorkflowStatus, x.RewindStats.Count)
 				}
 				for _, r := range x.RewindStats.Rewinds {
-					if r.Gate != s.ID || r.ToStep != s.OnFail.Target || !r.Charged {
+					if r.Gate != s.ID || r.ToStep != s.OnFail.Target || r.Class != capsule.RewindCharged {
 						t.Fatalf("%s: every landed rewind must attribute to its edge: %+v", s.ID, x.RewindStats.Rewinds)
 					}
 				}

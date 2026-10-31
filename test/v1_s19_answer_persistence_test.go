@@ -26,6 +26,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/driver"
 )
 
 // ---------------------------------------------------------------------
@@ -59,8 +61,10 @@ func TestV1S19AwaitingAnswerIsPersistedToDisk(t *testing.T) {
 	if (*pq)["id"] != qid || (*pq)["step"] != "grill" {
 		t.Fatalf("pending_question identity wrong: %v", pq)
 	}
-	if (*pq)["question"] != question {
-		t.Fatalf("pending_question text wrong: %v", (*pq)["question"])
+	// The driver appends the reserved cancel answer's one statement to
+	// every persisted ask (plan step 8, cancel-answer).
+	if want := question + "\n\n" + driver.CancelAnswerSentence; (*pq)["question"] != want {
+		t.Fatalf("pending_question text wrong: %v (want %q)", (*pq)["question"], want)
 	}
 	if asked, _ := (*pq)["asked_at"].(string); asked == "" {
 		t.Fatalf("pending_question carries no asked_at: %v", pq)

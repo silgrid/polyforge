@@ -67,13 +67,11 @@ already closed. After the close lands, the work item is terminal
 (`wrapped` / `failed`) and disappears from the local jobs list. A second
 wrap answers the graceful `already_terminal` shape, not an error.
 
-After a wrap is presented as complete, read the work item's delivered PR body
-(its follow-up section) or its capsule's `artifacts/delivery.md`: if either
-carries a follow-up list, present every unclaimed item to the human and mark it
-unclaimed — present only, and leave deciding, claiming, filing, routing or
-dismissing any follow-up to the human. If the work item has no PR and no
-delivery note, or neither source is reachable, say so and ask the human where
-to read it; never assume the list is empty.
+After a wrap is presented as complete, read the work item's delivered
+follow-ups: run the Ingest and Present steps in `verbs/followup.md` (the PR
+body's follow-up section or the capsule's `artifacts/delivery.md`; with no PR
+and no delivery note, or neither reachable, say so and ask — never assume the
+list is empty).
 
 ## Failure branches
 

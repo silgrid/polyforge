@@ -13,7 +13,7 @@ import MemoryDetailPage from './pages/MemoryDetailPage'
 import MachinesPage from './pages/MachinesPage'
 import SearchPage from './pages/SearchPage'
 
-// App is the console root: the fixed layout (sidebar + top bar) around
+// App is the console root: the shell (sidebar + top bar) around
 // the routed view. Navigation is plain anchors — the server serves the
 // one shell for every document path, the browser reloads it, and each
 // view fetches its own data from the private JSON face. No history
@@ -33,26 +33,28 @@ export default function App() {
 
   if (authRequired) {
     return (
-      <main className="max-w-prose mx-auto p-8">
-        <h1 className="text-2xl font-semibold mb-2">aihub console</h1>
-        <p className="text-muted">Authentication required — reload the page to sign in with your api key.</p>
+      <main className="mx-auto max-w-prose p-8">
+        <div className="card p-6">
+          <h1 className="mb-2 text-title font-semibold">aihub console</h1>
+          <p className="text-muted">Authentication required — reload the page to sign in with your api key.</p>
+        </div>
       </main>
     )
   }
   if (ctx === null) {
     return (
-      <main className="max-w-prose mx-auto p-8">
+      <main className="mx-auto max-w-prose p-8">
         <p className="text-muted">Loading…</p>
       </main>
     )
   }
 
   return (
-    <div className="min-h-screen flex">
+    <div className="flex min-h-screen">
       <Sidebar route={route} admin={ctx.admin} />
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
         <TopBar ctx={ctx} route={route} />
-        <main className="flex-1 p-4">
+        <main className="w-full min-w-0 max-w-6xl flex-1 px-4 py-6 sm:px-8">
           <View route={route} />
         </main>
       </div>

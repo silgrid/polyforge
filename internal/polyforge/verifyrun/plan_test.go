@@ -339,12 +339,20 @@ func TestDefaultDeadlineFor(t *testing.T) {
 	for env, want := range map[string]time.Duration{
 		"":                            DefaultDeadline,
 		"BASH_MAX_TIMEOUT_MS=1740000": 27 * time.Minute,
-		"BASH_MAX_TIMEOUT_MS=60000":   time.Minute,
+		"BASH_MAX_TIMEOUT_MS=60000":   30 * time.Second, // half the bound, not the whole minute
 		"BASH_MAX_TIMEOUT_MS=bogus":   DefaultDeadline,
+		"PF_TOOL_WINDOW_MS=1800000":   28 * time.Minute,
+		"PF_TOOL_WINDOW_MS=600000":    8 * time.Minute,
+		"PF_TOOL_WINDOW_MS=bogus":     DefaultDeadline,
 	} {
 		if got := DefaultDeadlineFor([]string{"PATH=/bin", env}); got != want {
 			t.Errorf("%q: %s, want %s", env, got, want)
 		}
+	}
+	// the tighter of the two bounds wins
+	both := []string{"PATH=/bin", "BASH_MAX_TIMEOUT_MS=1740000", "PF_TOOL_WINDOW_MS=3600000"}
+	if got, want := DefaultDeadlineFor(both), 27*time.Minute; got != want {
+		t.Errorf("both bounds: %s, want the tighter %s", got, want)
 	}
 }
 

@@ -1,6 +1,6 @@
 ---
 name: polyforge
-description: "The harness's single install face — a pure intent-routing skill. Maps natural language to the 15 routing verbs (file, queue, cancel, recall, remember, memory, submit, task, watch, answer, pause, resume, wrap, ops, msg), the machine verbs doctor, version, help, the extensions fragment (`pf help extensions`) and the init fragment (machine install/upgrade; `pf init`), each a fragment under verbs/; data-plane verbs go to AIHub, execution-plane ones to the daemon. Owner-directed code work on a repo (change / upgrade a library / fix a bug) is an execution intent: route it to an execution ticket (`pf file create --bundle <lane>` + `pf submit`); the daemon's claimed capsule does the work — the session agent never hand-executes (no git branch/commit/push/PR, no Edit/Write under .repo/; ask which ticket a change hangs on — no answer, file one first). It never parses a workflow, never touches the execution scene (routing it to a ticket is routing, not execution), never saves state, and never executes a workflow."
+description: "The harness's single install face — a pure intent-routing skill. Maps natural language to the 15 routing verbs (file, queue, cancel, recall, remember, memory, submit, task, watch, answer, pause, resume, wrap, ops, msg), the machine verbs doctor, version, help, the fragments extensions (`pf help extensions`), init (machine setup; `pf init`) and follow-up ledger (`followup.md`), each under verbs/; data-plane verbs go to AIHub, execution-plane ones to the daemon. Owner-directed code work on a repo (change / upgrade a library / fix a bug) is an execution intent: route it to an execution ticket (`pf file create --bundle <lane>` + `pf submit`); the daemon's claimed capsule does the work — the session agent never hand-executes (no git branch/commit/push/PR, no Edit/Write under .repo/; ask which ticket a change hangs on — no answer, file one first). It never parses a workflow, never touches the execution scene (routing it to a ticket is routing, not execution), never saves state, and never executes a workflow."
 license: PolyForm-Noncommercial-1.0.0
 compatibility:
   harnesses: [pi, claude]
@@ -13,7 +13,7 @@ user's request, decide which of the 15 routing verbs it is, and run the
 `pf` CLI verb that carries it.
 Nothing else. The split between the target faces is fixed (the architecture's routing table):
 
-- **Data-plane verbs** (`file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg send`/`list`/`ack`/`show`): pure
+- **Data-plane verbs** (`file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg send`/`list`/`ack`/`show`/`contacts`): pure
   Core data reads/writes that do not touch any execution scene. The `pf` CLI
   talks HTTP **direct to AIHub** (single port, `Authorization: Bearer
   <api_key>`); the daemon is not involved.
@@ -76,6 +76,7 @@ EXTENDED_GLOB and starts a comment after whitespace.
 | check messages / inbox / 收信 / 看看有没有消息 / 有哪些消息 | `verbs/message.md` (list; `--before` pages backwards) | AIHub |
 | acknowledge / mark read / 标为已读 / 确认看过消息 | `verbs/message.md` (ack; read cursor only) | AIHub |
 | read one message / 看那条消息 | `verbs/message.md` (show) | AIHub |
+| who can I message / list my contacts / 我能联系谁 / 联系人列表 | `verbs/message.md` (contacts; union of the mapped projects' human co-members) | AIHub |
 | analyze a message / 分析这条消息 | `verbs/message.md` (analyze) | daemon |
 | owner-directed code work on a project repo / upgrade a library / bump the dependency / fix this bug in the repo / change the code / make it do X / refactor X / 升级 X 库 / 升级一下依赖 / 修一下这个 bug / 改一下仓里的 X / 让它支持 X / 重构一下 X | `verbs/execute-intent.md` (execution intent → execution ticket: `file create --bundle <lane>` + `submit`; the session agent never hand-executes) | AIHub + daemon |
 | run it / submit it / start this work item / execute / 跑起来 / 执行这个 WI / 提交执行 | `verbs/submit.md` | daemon |
@@ -86,6 +87,7 @@ EXTENDED_GLOB and starts a comment after whitespace.
 | pause it / stop for now / hold on / 暂停 / 先停一下 / 挂起 | `verbs/pause.md` | daemon |
 | resume it / continue the paused or blocked one / 恢复执行 / 接着跑（已暂停或已阻塞的）/ 继续 | `verbs/resume.md` | daemon |
 | wrap it up / we're done / mark it done / close this ticket / mark it failed / 收尾 / 完事了 / 判完成 / 关掉这张票 / 标记完成 / 判失败 | `verbs/wrap.md` (a running work item, or a ticket with no bundle — design, decision, tracking; "don't want it" stays `cancel`) | daemon; AIHub for a ticket with no bundle |
+| all unclaimed follow-ups / any follow-ups left / claim or dismiss a follow-up / 全部未认领 follow-up / 有没有遗留 / 处理这条 / 不修这个 | `verbs/followup.md` (the follow-up ledger in AIHub `doc.track` memories: ingest / present / claim / dismiss / dedupe; never auto-file) | AIHub (memories) + session |
 | ship it / deliver / push the branch / open the PR / merge it / 推上去 / 交付 | `verbs/ship.md` (deliver-step note: no verb; point at the workflow's `deliver` step and `pf watch`) | — |
 | cut a release / publish a version / deploy it / 发版 / 发布新版本 / 部署上线 | `verbs/file.md` (create, `--bundle release`) | AIHub |
 | daemon status / what's this machine running / what's happening / global state / 看看什么情况 / 全局状态 / auto-pull on/off / max concurrent jobs / shutdown / start the daemon / the daemon is down / 升级前自检 / 启停 / 拉起 daemon / 自动领取开关 / 调并发 / 优雅停机 | `verbs/ops.md` (start = `pf daemon ensure`) | daemon |
@@ -108,7 +110,7 @@ reason note names the cause): fix the cause if any, then `resume`, or `cancel`.
 `wrap --fail` (the owner's failed verdict), never to `cancel` (which only
 applies to WIs with no active execution — queued, paused or blocked). "Ship / deliver / push it / open the PR" has no
 verb: delivery is the workflow's own final `deliver` step (`verbs/ship.md`) — never route it to
-`submit` (which starts execution), and never answer the deliver step's merge question yourself.
+`submit` (which starts execution), and never answer either deliver question yourself: the merge question (`deliver-merge`) and the owner-review question (`deliver-owner-review`) are both human-only.
 
 "Change / upgrade / fix" of a project repo's code is an execution intent (`verbs/execute-intent.md`): file the execution ticket — the bundle is required, a registration ticket runs nothing (CORE-409) — and submit it; never hand-execute the work in the session. "Run it / submit it" of an existing work item stays `submit`; "release / deploy a version" stays the release-bundle route (`file create --bundle release`).
 
@@ -159,6 +161,12 @@ is no arming, no script copying and no adoption prompt: a new session simply
 subscribes to the work items it wants. A running watcher also subscribes its
 chat, every poll, to every work item the daemon holds that the chat submitted
 or its owner (`PF_USER_ID`; the reporter when the job has no owner) owns.
+A manual unsubscribe outranks both of those automatic subscriptions: it is a
+persistent opt-out of THIS chat (it survives a daemon restart), so the work
+item never comes back on a poll; the owner's other chats keep their own
+subscriptions. Only an explicit `pf watch subscribe <wi>` (or `pf watch adopt
+<wi>`, or submitting/resuming it from this chat) brings it back — the rule and
+its paths are in `verbs/watch.md`.
 A work item's decisions wake ONE chat: the chat that submitted it. Your
 other chats (another tab, another session) show its progress only; if the
 submitting chat's watcher has been silent for a minute, one of them is woken

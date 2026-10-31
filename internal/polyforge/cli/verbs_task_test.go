@@ -49,6 +49,29 @@ func TestTaskSpawnPrintsTheIDAndSendsOrigin(t *testing.T) {
 			t.Fatalf("body %s lacks %s", b, want)
 		}
 	}
+	// No caller id available: the body carries no caller_id at all.
+	if strings.Contains(b, "caller_id") {
+		t.Fatalf("body %s carries a caller_id with no PF_USER_ID set", b)
+	}
+}
+
+// TestTaskSpawnSendsTheCallerID: the spawn body carries the resolved
+// caller id (PF_USER_ID, the same source a work item's origin uses) as
+// caller_id for the daemon's reporter snapshot.
+func TestTaskSpawnSendsTheCallerID(t *testing.T) {
+	rec := &reqRecorder{}
+	sock := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.record(r)
+		_, _ = w.Write([]byte(`{"id":"task_0123456789abcdef","spec":{"project":"p"},"state":"running"}`))
+	}))
+	code, _, stderr := runPf(t, map[string]string{"PF_DAEMON_SOCKET": sock, "PF_USER_ID": "usr_carol"},
+		"task", "spawn", "--project", "p", "hi")
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if b := rec.last().Body; !strings.Contains(b, `"caller_id":"usr_carol"`) {
+		t.Fatalf("body %s lacks the caller id", b)
+	}
 }
 
 func TestTaskListAndShowRender(t *testing.T) {

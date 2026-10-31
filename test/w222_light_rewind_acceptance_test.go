@@ -28,7 +28,7 @@ import (
 // carries text_only: true; extra findings (e.g. a non-blocking one with
 // no marker) ride along.
 func w222TextOnlyFail(extra ...map[string]any) map[string]any {
-	findings := []map[string]any{{"severity": "blocking", "text_only": true,
+	findings := []map[string]any{{"severity": "blocking", "repair_target": "code", "text_only": true,
 		"detail": "the doc comment above the changed function still names the old flag"}}
 	findings = append(findings, extra...)
 	return map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{
@@ -227,7 +227,7 @@ func TestW222MisMarkingFailRewindsFreshOwnSlot(t *testing.T) {
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{
 			"verdict":     "fail",
 			"fail_reason": "mis-marking: the light round changed an assertion, outside the text-only boundary",
-			"findings":    []map[string]any{{"severity": "blocking", "detail": "light round left text-only scope"}},
+			"findings":    []map[string]any{{"severity": "blocking", "repair_target": "code", "detail": "light round left text-only scope"}},
 		}},
 		w67ChangedRound("fix", "demo-src", 2), // the fresh round's fix
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{"verdict": "pass"}},

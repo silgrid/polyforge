@@ -261,7 +261,10 @@ func TestPushTaskRefsWithoutReposIsANoop(t *testing.T) {
 // commits publishes a diverged head. The carrier push is rejected
 // non-fast-forward, the carrier on the hub stays on the WI's commits, and
 // the divergence is raised as a task_ref_diverged error event (not only
-// stderr).
+// stderr). A divergent (non-containing) head is never force-pushed: the
+// lease-backed replace is only for a same-line rewind whose tree still
+// contains every carried entry; this case has no containment, so the old
+// tip stays.
 func TestTaskRefDivergenceIsRejectedAndRaisedAsEvent(t *testing.T) {
 	setIdentity(t)
 	o, base := taskOpts(t, "wi_task3")

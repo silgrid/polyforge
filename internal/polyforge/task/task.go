@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // State is a task's lifecycle state. The four terminal states are
@@ -174,7 +175,18 @@ type Spec struct {
 	// (nanoseconds), which is what encoding/json emits for it.
 	MaxDuration time.Duration `json:"max_duration_ns"`
 	MaxTokens   int64         `json:"max_tokens"`
+	// CallerID is the spawning CLI's self-asserted user id (PF_USER_ID,
+	// else cli.toml user_id); empty when the caller had none.
+	CallerID string `json:"caller_id,omitempty"`
+	// Reporter is the spawn-time display-name snapshot of CallerID as a
+	// human member of Project; empty when it did not resolve (read as
+	// ReporterMachine). It is never refreshed after spawn.
+	Reporter string `json:"reporter,omitempty"`
 }
+
+// ReporterMachine is the task list's reporter for every task whose caller
+// did not resolve to a human member of its project at spawn.
+const ReporterMachine = "machine"
 
 // Task is one task record: its spec plus the observed outcome. Report is
 // the captured assistant text (up to ReportCapBytes); Truncated is true
@@ -213,6 +225,60 @@ func (t Task) Age(now time.Time) time.Duration {
 		return 0
 	}
 	return now.Sub(t.CreatedAt)
+}
+
+// PromptSummaryRunes bounds PromptSummary.
+const PromptSummaryRunes = 120
+
+// PromptSummary answers the bounded list label of a task's prompt
+// its first non-empty line, trimmed, cut to at most
+// PromptSummaryRunes code points on a code-point boundary; "" for an
+// empty or whitespace-only prompt. It is the only prompt text the task
+// list carries (the full prompt stays with `pf task show`).
+func PromptSummary(prompt string) string {
+	for _, line := range strings.Split(prompt, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if r := []rune(line); len(r) > PromptSummaryRunes {
+			line = strings.TrimSpace(string(r[:PromptSummaryRunes]))
+		}
+		return line
+	}
+	return ""
+}
+
+// ReportTailRunes bounds ReportTail.
+const ReportTailRunes = 200
+
+// ReportTail answers the task list's one bounded report line: the last
+// non-empty line of report (split on "\n", each candidate trimmed), as
+// plain text. A line longer than ReportTailRunes code points becomes "…"
+// followed by its last ReportTailRunes-1 code points; "" for an empty or
+// whitespace-only report. It is sliced verbatim from the report, which
+// `pf task show` already returns in full, so it adds no exposure.
+func ReportTail(report string) string {
+	for rest := report; rest != ""; {
+		i := strings.LastIndexByte(rest, '\n')
+		line := strings.TrimSpace(rest[i+1:])
+		if line != "" {
+			if utf8.RuneCountInString(line) <= ReportTailRunes {
+				return line
+			}
+			cut := len(line)
+			for n := 0; n < ReportTailRunes-1; n++ {
+				_, size := utf8.DecodeLastRuneInString(line[:cut])
+				cut -= size
+			}
+			return "…" + line[cut:]
+		}
+		if i < 0 {
+			break
+		}
+		rest = rest[:i]
+	}
+	return ""
 }
 
 // Summary answers the chat/watcher summary of a terminal task: the trailing

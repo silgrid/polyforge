@@ -1,6 +1,7 @@
-// TypeDot is the #103 type-colour token: the memory kind (experience,
-// fact, rule, methodology) — or the doc.* name (decision, design,
-// review) — picks the dot colour from the CSS token classes.
+// TypeDot is the memory kind mark: the kind (experience, fact, rule,
+// methodology) — or the doc.* name (decision, design, review) — picks
+// the colour through its .t-<kind> hook, and this element renders that
+// colour itself.
 export function typeClass(typeName: string): string {
   let kind = typeName.split('.')[0]
   if (kind === 'doc' && typeName.includes('.')) kind = typeName.split('.')[1]
@@ -8,5 +9,5 @@ export function typeClass(typeName: string): string {
 }
 
 export default function TypeDot({ type: memType }: { type: string }) {
-  return <span className={`type-dot ${typeClass(memType)}`} aria-hidden="true" />
+  return <span className={`kind-mark ${typeClass(memType)}`} aria-hidden="true" />
 }

@@ -61,14 +61,16 @@ steps:
            a changed file the plan did not declare and no review finding cites is
            blocking; a declared coupled obligation the diff leaves unchanged is blocking;
            a declared plain write left unchanged is non-blocking. A file `code` added
-           after a review FAIL counts as declared only when its `declared_extensions`
-           entry cites the finding (`s<n>#<k>`) that requires it — judge whether that
-           finding really does. Judge too whether the plan's coupled obligations are the
+           after a FAIL counts as declared only when its `declared_extensions` entry
+           cites what requires it (a review finding `s<n>#<k>`, a verification FAIL
+           `s<n>`, a human deliver answer) — judge whether it really does. Judge too whether the plan's coupled obligations are the
            right ones: the repo's `AGENTS.md` names the project's known couplings, and one
            it names that the plan omits is blocking.
         5. **e2e-author mode.** The mode is `skipped-with-rationale` ONLY when
-           `artifacts/grill-qa.md` records the owner's explicit approval of it; with no
-           such record the mode is `required` (fail-closed). On a skip the new-behaviour
+           `artifacts/grill-qa.md` records the owner's explicit approval of it — at grill,
+           or as the owner's `skip` answer to an all-green baseline (the named
+           discipline-① exception, behaviour already on main); with no such record the
+           mode is `required` (fail-closed), whatever `plan` states. On a skip the new-behaviour
            scenario checks in step 3 (new-behaviour coverage and
            deleted-as-already-satisfied) are not applicable — judge the recorded
            rationale instead. When the mode is `required`, they apply as written.
@@ -121,7 +123,7 @@ steps:
 
         **e2e-author mode.** The mode is `skipped-with-rationale` ONLY when
         `artifacts/grill-qa.md` records both the approved mode and the owner's explicit
-        approval of it; with no such record — or with the owner's veto — the mode is
+        approval of it (an all-green baseline's `skip` answer, recorded verbatim, is one); with no such record — or with the owner's veto — the mode is
         `required` (fail-closed), and the mandatory authored-suite text above applies
         unchanged. On a skip, `steps.e2e-author.output.scenario_titles` and `.baseline`
         are empty: echo them as empty `authored_titles`/`scenarios`, record the
@@ -171,9 +173,14 @@ The `e2e-author` step entry's `e2e_author_mode` var is the lane **default**, not
 per-work-item value: it renders `required` on every run. The per-work-item mode is
 the owner-approved one recorded in `artifacts/grill-qa.md`; without an approved
 record the default applies (fail-closed). `grill` proposes `skipped-with-rationale`
-for an internal-mechanism / non-behaviour-face work item, the owner approves it,
-and `plan` states it — the audit anchor. A work item on the behaviour face MUST
-stay `required`. On a skip, `e2e-author` commits nothing, reporting empty
+for an internal-mechanism / non-behaviour-face work item and the owner approves it;
+the audit anchor is `artifacts/grill-qa.md` alone — `plan` only restates the mode, and
+a plan proposal without an owner record resolves to `required`. A work item on the
+behaviour face MUST stay `required`, with one named exception: when every authored
+scenario passes at baseline (the behaviour is already on main), the driver asks the
+owner — `rewind-to-spec: <words>` (an owner-routed rewind to `spec`), `skip:
+<rationale>` (`e2e-author` records the rationale verbatim in `artifacts/grill-qa.md`
+and completes skipped) or `cancel`. On a skip, `e2e-author` commits nothing, reporting empty
 `scenario_titles`/`baseline`; `verification` and `review` honour the skip only on
 the recorded owner's explicit approval.
 
@@ -238,8 +245,10 @@ flow" above and explained in `docs/concepts.md` §Rewind. This section only expl
   is re-run with the review verdict attached, and the re-run re-enters a fresh `review`,
   then `verification`, behind it. `plan` is never re-run and is not a rewind target:
   when a finding requires a file outside the plan's declared set, the re-run `code`
-  changes it and cites the finding in its `declared_extensions` output (`path` plus
-  the finding's `s<n>#<k>` reference), and the driver counts that cited file as
+  changes it and cites the finding in its `declared_extensions` output (`path`,
+  `source: review`, `ref` = the finding's `s<n>#<k>`; a verification FAIL or a human
+  deliver answer is cited the same way, and a moot obligation is withdrawn in
+  `withdrawn_obligations`), and the driver counts that cited file as
   declared in the next round's plan-conformance facts. A blocking finding against an
   authored test sends `code` through `needs_input`: it may not change those tests
   without a human answer (the driver's authored-tests gate).
@@ -247,6 +256,17 @@ flow" above and explained in `docs/concepts.md` §Rewind. This section only expl
   the light path: `code`'s previous session resumes with the verdict, applies only
   text-only fixes, and the gate tail (a fresh `review`, then `verification`) re-runs
   unchanged.
+  A review FAIL whose blocking findings are ALL off-graph (each finding's
+  `repair_target` names the authored suite, the spec, a declared obligation that is itself
+  wrong or an un-IDed instruction — never `code`, which covers every repair the
+  build step can make in its own round: updating a declared obligation the diff
+  left unchanged, withdrawing a moot one, citing an undeclared file) is not rewound: the driver asks the owner (the
+  review owner exit), who answers `amend-upstream: <words>` (recorded verbatim in
+  `artifacts/grill-qa.md` `## Owner rulings`; a suite gap re-runs `e2e-author` append-only,
+  anything else is executed by `code`; spec and plan are never re-run), `waive <refs> —
+  <words>` (clears exactly the named findings; review re-runs) or `cancel`. That
+  rewind is owner-routed. A mixed FAIL rewinds `code` as above, the off-graph
+  findings riding along.
 - **`deliver` "back to code" -> rewind to `code`.** A human chose to send the change
   back instead of merging it.
 
@@ -257,7 +277,7 @@ charge none — until a light re-entry self-reports `needs_code_change: true`: t
 its light rewind into a fresh round, which charges the edge once.
 
 Workflow-level rewind bounds are declared in the frontmatter: `max_total: 9`,
-`max_per_step: 3` — the global cap counts every rewind, light ones included. A gate
+`max_per_step: 3` — the global cap counts every automatic rewind, light ones included. Owner-routed rewinds charge neither the edge slot nor `max_total`: a `deliver` FAIL a human answered ("back to code", and on a scoped work item 「全量重验」, which is owner-routed too), the review owner exit's rewind and the e2e-author all-green owner answers. A gate
 that keeps failing past its edge's bound ends the workflow in
 `failed_rewind_exhausted`, not an infinite loop.
 

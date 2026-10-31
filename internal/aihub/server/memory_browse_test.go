@@ -56,8 +56,9 @@ func browseGet(t *testing.T, e *srvEnv, key, params string) (int, []string, stri
 	for i, it := range r.Items {
 		ids[i] = it.ID
 	}
-	if code == http.StatusOK && r.Total != len(r.Items) {
-		t.Fatalf("browse %q: total %d != len(items) %d: %s", params, r.Total, len(r.Items), raw)
+	// total is the whole walk's size: never below the page.
+	if code == http.StatusOK && r.Total < len(r.Items) {
+		t.Fatalf("browse %q: total %d < len(items) %d: %s", params, r.Total, len(r.Items), raw)
 	}
 	return code, ids, r.NextCursor, string(raw)
 }
@@ -245,6 +246,31 @@ func TestBrowseFiltersTypeTagsVisibility(t *testing.T) {
 	_, ids, _, _ = browseGet(t, e, memberKey, "type=experience.*&tags=a,b&limit=50")
 	if len(ids) != 1 {
 		t.Fatalf("member filtered browse = %d items, want the one kept row", len(ids))
+	}
+}
+
+// TestBrowseTotalIsTheVisibleWalk: the browse answer's
+// total is the number of entries the whole walk covers for this caller —
+// larger than a page, and never counting a tier the caller cannot read.
+func TestBrowseTotalIsTheVisibleWalk(t *testing.T) {
+	e := newSrvEnv(t)
+	browseMems(t, e, "alpha", "fact.note", "W123 total", 5, nil, "project")
+	browseMems(t, e, "alpha", "fact.note", "W123 private", 2, nil, "private")
+	total := func(key, params string) int {
+		var r struct {
+			Total int `json:"total"`
+		}
+		if code, raw := e.do(t, "GET", "/api/v1/memories/search?"+params, key, nil, &r); code != http.StatusOK {
+			t.Fatalf("browse %q = %d: %s", params, code, raw)
+		}
+		return r.Total
+	}
+	if got := total(e.key, "project=alpha&limit=2"); got != 7 {
+		t.Fatalf("admin total on a 2-row page = %d, want the whole walk 7", got)
+	}
+	_, memberKey := memberUser(t, e, "w123-total-member", "viewer")
+	if got := total(memberKey, "project=alpha&limit=2"); got != 5 {
+		t.Fatalf("member total = %d, want 5 (private entries are never counted)", got)
 	}
 }
 

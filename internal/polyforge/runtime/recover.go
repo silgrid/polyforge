@@ -467,7 +467,28 @@ func (r *Runtime) boundedFail(ctx context.Context, j *job, detail string) {
 	// When boundedFail's own push did not land, the close goes through
 	// closeBlocked's push-then-close, so a hub blip never lets
 	// SessionEnd(blocked) land with unpushed commits.
-	r.finishBlocked(j, detail, r.closeBlocked(j, !chainPushed))
+	outcome := r.closeBlocked(j, !chainPushed)
+	r.finishBlocked(j, detail, outcome)
+	if outcome == closeSettled {
+		r.cancelIfRequested(j.wi, j.capsuleDir)
+	}
+}
+
+// cancelIfRequested completes an owner's reserved cancel answer once the
+// hub took the blocked close: the capsule's durable cancel intent is
+// handed to the daemon's cancel door (Config.CancelRequested). This
+// blocked branch is the single orchestration point — the answer itself
+// only wrote the intent and parked the workflow blocked — and a close
+// replayed after a restart reaches it again (the door is idempotent), as
+// does reconcile's settle of a close whose answer was lost. A cancel that
+// does not land leaves the work item blocked for `pf cancel`.
+func (r *Runtime) cancelIfRequested(wi, capsuleDir string) {
+	if r.cfg.CancelRequested == nil || capsuleDir == "" {
+		return
+	}
+	if intent := capsuleExecution(capsuleDir).CancelRequested; intent != nil {
+		r.cfg.CancelRequested(wi, *intent)
+	}
 }
 
 // commitDirty is the commit-dirty-on-recover step (§六): stage everything,

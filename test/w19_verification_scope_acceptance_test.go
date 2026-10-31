@@ -416,7 +416,7 @@ func TestW19IncrementalReverifyUnionsCredential(t *testing.T) {
 		// rewinds to code
 		map[string]any{"do": "envelope", "id": "review", "outcome": "completed",
 			"output": map[string]any{"verdict": "fail", "fail_reason": "scope gap: the increment must be re-verified",
-				"findings": []map[string]any{{"severity": "blocking", "detail": "re-verify the fix increment"}}}},
+				"findings": []map[string]any{{"severity": "blocking", "repair_target": "code", "detail": "re-verify the fix increment"}}}},
 		// the code re-entry (a rewind from review) commits the increment
 		w67ChangedRound("code", "demo", 1),
 		// the merging credential is the union of the original

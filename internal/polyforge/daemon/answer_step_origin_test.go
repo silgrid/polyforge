@@ -184,6 +184,7 @@ func TestMutatingRoutesFromStepProcessAreRefused(t *testing.T) {
 		"/shutdown",
 		"/ops/config",
 		"/jobs/wi_other/claim",
+		"/jobs/wi_122/revise-binding",
 		"/jobs/wi_122/pause",
 		"/chats/c1/subscribe",
 		"/chats/c1/subscribe-owned",

@@ -94,7 +94,7 @@ func TestReviewConvergingSequenceChargesNoEdge(t *testing.T) {
 	}
 	wantCharged := []bool{true, false, false}
 	for i, want := range wantCharged {
-		if got := x.RewindStats.Rewinds[i]; got.Charged != want || got.Gate != "review" || got.ToStep != "build" {
+		if got := x.RewindStats.Rewinds[i]; (got.Class == capsule.RewindCharged) != want || got.Gate != "review" || got.ToStep != "build" {
 			t.Fatalf("rewind record %d = %+v, want charged=%v", i, got, want)
 		}
 	}
@@ -124,7 +124,7 @@ func TestReviewNewDiscoveryChargesTheEdge(t *testing.T) {
 		t.Fatalf("the third charged round must exhaust the edge: %q %+v", x.WorkflowStatus, x.RewindStats)
 	}
 	for i, want := range []bool{true, true} {
-		if got := x.RewindStats.Rewinds[i]; got.Charged != want {
+		if got := x.RewindStats.Rewinds[i]; (got.Class == capsule.RewindCharged) != want {
 			t.Fatalf("rewind record %d = %+v, want charged=%v", i, got, want)
 		}
 	}
@@ -140,7 +140,7 @@ func TestReviewResidualsWithoutBaselineCharge(t *testing.T) {
 		{"severity":"blocking","detail":"a","residual_of":"s0#1"},
 		{"severity":"blocking","detail":"b","residual_of":"s0#2"}]`), 1)
 	x := readExec(t, execPath)
-	if x.RewindStats.Count != 1 || len(x.RewindStats.Rewinds) != 1 || !x.RewindStats.Rewinds[0].Charged {
+	if x.RewindStats.Count != 1 || len(x.RewindStats.Rewinds) != 1 || x.RewindStats.Rewinds[0].Class != capsule.RewindCharged {
 		t.Fatalf("a first round with no baseline must charge: %+v", x.RewindStats)
 	}
 }
@@ -196,7 +196,7 @@ func TestReviewNonVerdictRoundsMoveNoBaseline(t *testing.T) {
 		t.Fatalf("review fail after the answer: %v", err)
 	}
 	x = readExec(t, execPath)
-	if x.RewindStats.Count != 2 || len(x.RewindStats.Rewinds) != 2 || x.RewindStats.Rewinds[1].Charged {
+	if x.RewindStats.Count != 2 || len(x.RewindStats.Rewinds) != 2 || x.RewindStats.Rewinds[1].Class == capsule.RewindCharged {
 		t.Fatalf("the converging round after the answer must charge no edge: %+v", x.RewindStats)
 	}
 	// an incomplete round: blocked, no record move; the resumed re-run
@@ -219,7 +219,7 @@ func TestReviewNonVerdictRoundsMoveNoBaseline(t *testing.T) {
 	runReviewRound(t, d, reviewFailOut(`[
 		{"severity":"blocking","detail":"a","residual_of":"s6#1"}]`), 7)
 	x = readExec(t, execPath)
-	if x.RewindStats.Count != 3 || x.RewindStats.Rewinds[2].Charged {
+	if x.RewindStats.Count != 3 || x.RewindStats.Rewinds[2].Class == capsule.RewindCharged {
 		t.Fatalf("the converging round after the resume must charge no edge: %+v", x.RewindStats)
 	}
 }
@@ -258,7 +258,7 @@ func TestReviewLightRewindCountsTowardMaxTotalOnly(t *testing.T) {
 		t.Fatalf("light rewinds must exhaust max_total, never the edge: %q %+v", x.WorkflowStatus, x.RewindStats)
 	}
 	for i := range x.RewindStats.Rewinds {
-		if x.RewindStats.Rewinds[i].Charged {
+		if x.RewindStats.Rewinds[i].Class == capsule.RewindCharged {
 			t.Fatalf("a light rewind must charge no edge slot: %+v", x.RewindStats.Rewinds[i])
 		}
 	}

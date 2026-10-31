@@ -49,7 +49,7 @@ func TestV1S27GateFailVerdictInsideCompletedEnvelopeMustRewind(t *testing.T) {
 		{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{
 			"verdict":     "fail",
 			"fail_reason": "the fix suppresses the symptom at one call site; the cause is still reachable",
-			"findings":    []map[string]any{{"severity": "blocking", "detail": "root cause not removed"}},
+			"findings":    []map[string]any{{"severity": "blocking", "repair_target": "code", "detail": "root cause not removed"}},
 		}},
 		{"do": "envelope", "id": "verification", "outcome": "completed"},
 	}

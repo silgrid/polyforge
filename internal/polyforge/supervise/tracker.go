@@ -10,6 +10,8 @@ package supervise
 
 import (
 	"encoding/json"
+	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +27,10 @@ type ToolRun struct {
 	// tool name plus its key argument.
 	Summary string
 	Since   time.Time
+
+	// waitCall is the wait-form candidate (wait.go) this call is, until
+	// its measured time is folded at ToolEnd or FinishOpenWaitCalls.
+	waitCall *WaitCall
 }
 
 // closedPhase is one model/tool phase the tracker closed since the last
@@ -214,13 +220,16 @@ func (t *Tracker) ToolStart(id, name, args string) {
 	if len(evidence) > 240 {
 		evidence = evidence[:240] + "..."
 	}
-	t.tools[id] = &ToolRun{ID: id, Name: name, Args: evidence, Summary: summary, Since: now}
+	run := &ToolRun{ID: id, Name: name, Args: evidence, Summary: summary, Since: now}
+	t.tools[id] = run
 	t.toolCalls++
 	if path != "" && isFileWriteTool(name) {
 		t.noteFileLocked(path)
 	}
 	if w, ok := detectWaitCall(id, name, summary, now); ok {
 		t.noteWaitCallLocked(w)
+	} else if w, ok := detectWaitBuiltinCall(id, name, summary, now); ok {
+		run.waitCall = &w // its seconds are the call's measured time
 	}
 	t.turnEnded = false
 	t.turnErr = false
@@ -256,6 +265,43 @@ func (t *Tracker) noteWaitCallLocked(w WaitCall) {
 	}
 }
 
+// foldWaitFormLocked folds a run's wait-form candidate with the time the
+// call has run until now: a wait call when that exceeds WaitCallFloor.
+// The candidate is cleared, so a call is folded at most once.
+func (t *Tracker) foldWaitFormLocked(run *ToolRun, now time.Time) {
+	w := run.waitCall
+	if w == nil {
+		return
+	}
+	run.waitCall = nil
+	d := now.Sub(run.Since)
+	if d <= WaitCallFloor {
+		return
+	}
+	w.Seconds = int64(math.Round(min(d.Seconds(), maxWaitSeconds)))
+	t.noteWaitCallLocked(*w)
+}
+
+// FinishOpenWaitCalls folds, oldest first, every wait-form call still
+// running — a dispatch that ends (or is killed) while blocked in `wait`
+// never reports its ToolEnd — with the time it has run so far. A call
+// folded here is not folded again.
+func (t *Tracker) FinishOpenWaitCalls() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := t.now()
+	var open []*ToolRun
+	for _, run := range t.tools {
+		if run.waitCall != nil {
+			open = append(open, run)
+		}
+	}
+	sort.Slice(open, func(i, j int) bool { return open[i].Since.Before(open[j].Since) })
+	for _, run := range open {
+		t.foldWaitFormLocked(run, now)
+	}
+}
+
 // WaitCallNotify is signalled whenever a wait call was folded; the
 // receiver takes them with TakeWaitCalls.
 func (t *Tracker) WaitCallNotify() <-chan struct{} { return t.waitNotify }
@@ -281,6 +327,7 @@ func (t *Tracker) ToolEnd(id, name string) {
 	}
 	if run, ok := t.tools[id]; ok {
 		t.addClosedLocked(false, run.Since, now)
+		t.foldWaitFormLocked(run, now)
 		delete(t.tools, id)
 	}
 }
@@ -393,8 +440,9 @@ type Snapshot struct {
 	ToolCalls   int
 	RecentFiles []string
 
-	// WaitCalls counts the dispatch's wait calls (wait.go) and WaitSeconds
-	// sums their sleeps. Surfaced only: Judge never reads them.
+	// WaitCalls counts the dispatch's wait calls (wait.go: the sleep and
+	// the wait form) and WaitSeconds sums their seconds. Surfaced only:
+	// Judge never reads them.
 	WaitCalls   int
 	WaitSeconds int64
 

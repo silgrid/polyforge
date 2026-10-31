@@ -2004,3 +2004,140 @@ byte-identical. What changes:
   until then. `pf doctor`'s `scoped-gates readiness` row now reports a
   conf-only repository as `pass` (full tier) and a stackless repository with
   no conf as `warn`.
+
+## A step's tool window now bounds `pf verify-run`'s deadline
+
+Nothing to migrate: an omitted `--deadline` still gets a whole-run deadline
+below the daemon's supervision tool window, and a shorter explicit one is
+honoured. What changes:
+
+- **Every step environment carries the tool window.** `PF_TOOL_WINDOW_MS`
+  is the daemon's `--tool-window` (the 30-minute default) in milliseconds,
+  set for pi and claude steps alike; `pf verify-run` derives its default
+  whole-run deadline from it (and from `BASH_MAX_TIMEOUT_MS` when that is
+  smaller), leaving a margin below the bound.
+- **An explicit `--deadline` above that bound is clamped**, not honoured:
+  the run stops in time to write `result.json` before the daemon judges the
+  single blocking call hung. `result.json`'s `deadline_clamped_from` names
+  the value the caller asked for; `deadline` is the value the run used.
+- **The verification prompt no longer derives the deadline from the shell
+  timeout.** A pi step has no shell-call maximum to read; the runner owns
+  the bound.
+
+## A hard-killed `pf verify-run` no longer leaves its private TMPDIRs behind
+
+Nothing to migrate. pi kills its detached bash children with SIGKILL when
+the daemon tears the step down, so `pf verify-run` cannot run its own
+deferred cleanup. Every private `TMPDIR` is now marked with an owner lock
+held for the life of its run; the lock is released by the kernel however
+the process dies, and the next `pf verify-run` removes the marked
+directories whose owner is gone. A partial `result.json` after SIGKILL
+would need incremental writes during the run and is not claimed here; a
+clamped deadline (the previous entry) is what keeps the kill from being
+reached in the normal case.
+
+## v2.20.12 (`pf recall` browse mode and the task-list prompt summary)
+
+Nothing to migrate. aihub ships first (`tools/install.sh` after it). What
+changes:
+
+- **aihub's browse `total` is the whole walk.** `GET /api/v1/memories/search`
+  with an empty `q` now answers `total` = the number of entries the whole walk
+  covers for the caller (the same type/tags/project narrowing, visibility tiers
+  applied — an entry the caller cannot read is never counted), instead of the
+  page length. It costs one more statement per page over the narrowed
+  candidates. Keyword search and the web console are unchanged.
+
+- **`pf recall` with no query browses.** On the human direct-aihub path,
+  `pf recall --project P` lists the project's active memories newest first
+  (aihub's browse mode) instead of refusing: `--limit` is the page size
+  (default 20, `1..200`), `--sort updated|created` the descending order
+  (aihub's default `updated` when omitted), `--after <cursor>` continues the
+  walk. `--json` is aihub's `{items, total, next_cursor?}`; human mode adds
+  `N of TOTAL` and `next: <cursor>`. A query together with `--after`/`--sort`
+  is aihub's `MEM-400`; `--any` with no query is refused locally. Step and
+  task agents still search only: inside a step or task an empty query,
+  `--after` or `--sort` is refused locally, and the daemon's memory proxy is
+  unchanged.
+- **`GET /task/list` rows carry `prompt_summary`.** Each row of
+  `pf task list --json` gains the prompt's first non-empty line, at most 120
+  code points (empty for an empty prompt); the list still carries no full
+  prompt and no report, and `pf task show` is unchanged. The human table is
+  unchanged.
+- **pi-web's Memory and Tasks tabs need pf 2.20.12.** The dock's Memory tab
+  browses by default and the new Tasks tab reads `pf task list` /
+  `pf task show`; below 2.20.12 both show their upgrade-required state.
+
+## v2.20.12 (the project member face and `pf msg contacts`)
+
+Nothing to migrate. aihub ships first (`tools/install.sh` after it). What
+changes:
+
+- **aihub answers a project's human co-members.** The new read-only
+  `GET /api/v1/projects/{id}/members` answers
+  `{"contacts":[{"id","display_name"}]}`: the project's human members other
+  than the caller, nothing else (no machine row, no type, role or count). It
+  is gated by the existing project read — a member or a global admin, the
+  api-key project scope applied; anyone else gets the concealed `CORE-404`,
+  a key scoped to another project `AUTH-403`. A step agent cannot reach it
+  (it holds no aihub key and the daemon forwards no such route).
+- **`pf msg contacts` lists the people you can message.** It reads the
+  `cli.toml` `[workspace.*]` mapping at call time and returns the union,
+  deduplicated by user id, of every mapped project's member face — one read
+  per project, at most 4 at once, 15 s each, no retry. A project you cannot
+  read contributes nothing (exit 0); no mapping answers `{"contacts":[]}`.
+  It is refused inside a workflow step like every other `pf msg` verb.
+- **pi-web's Messages tab needs pf 2.20.12.** Its contact list is built from
+  `pf msg contacts`; below 2.20.12 it shows the upgrade-required state.
+
+## Owner exits, the reserved cancel answer and owner-routed rewinds
+
+No data migration; aihub ships first (`tools/install.sh` after it) — the
+daemon's cancel answer uses the cancel door's new optional body. What
+changes:
+
+- **`rewind_stats.rewinds[]` records carry `class`, not `charged`.** The
+  class is `charged` (the edge's `max_per_step` and `max_total`),
+  `uncharged` (light, mechanical, converging: `max_total` only) or `owner`
+  (neither). A work item claimed before this release keeps its old records,
+  which no longer count toward any per-edge quota: finish or re-file such an
+  in-flight item. The rewind numbers are unchanged.
+- **Owner-routed rewinds charge neither bound.** A deliver FAIL a human
+  answered ("back to code", the full re-verification answer), the review
+  owner exit's amend-upstream, the bug-fix dead ends' re-run-repro and
+  e2e-author's all-green rewind-to-spec never count toward `max_total` or
+  an edge slot; automatic rewinds still do.
+- **Every blocking review finding carries `repair_target`.** One of `code`,
+  `authored-suite`, `spec`, `declared-obligation`, `instruction`; a missing
+  or unknown class is an envelope rejection. A review FAIL whose blocking
+  findings are all off-graph asks the owner (`review_owner_exit`):
+  `amend-upstream: <words>` (recorded verbatim in `artifacts/grill-qa.md`
+  `## Owner rulings`, executed by the authoring step append-only or by the
+  build step; spec and plan never re-run), `waive <refs> — <words>` (exactly
+  the named findings) or `cancel`.
+- **`cancel` is a reserved answer at every question.** Every question
+  states it. The daemon first has the hub's cancel gate authorize it (a
+  dry-run of `POST /api/v1/work-items/{id}/cancel`, which now accepts an
+  optional `{reason, question_id, dry_run}` body); the workflow then parks
+  blocked with `cancel_requested`, the session ends blocked and the work
+  item is canceled through the existing door with the verbatim answer on
+  its event. No memory wrap is written.
+- **`declared_extensions` entries are `{path, source, ref}`.** `source` is
+  `review` (`ref` `s<n>#<k>`), `verification` (`s<n>`) or `deliver` (a
+  question id); the old `finding_id` field is gone. The mirror
+  `withdrawn_obligations` withdraws a cited moot coupled obligation, and an
+  obligation none of whose declaring writes is in the diff lapses.
+- **Bug-fix dead ends ask the owner.** `reproduces: false` parks
+  `repro_not_reproduced`, a second inconclusive root cause parks
+  `root_cause_inconclusive` (`re-run-repro` / `continue` / `cancel`), and a
+  repro re-run after a fix → root-cause rewind is pointed at the recorded
+  pre-fix heads (`pre_fix_heads`).
+- **An all-green e2e baseline asks the owner** (`e2e_all_green`:
+  `rewind-to-spec`, `skip`, `cancel`); the e2e-author mode's one anchor is
+  `artifacts/grill-qa.md`.
+- **A completed `fix` may list no commit only with
+  `root_cause_addressed: false`**; a true fix with no commit is rejected.
+- **Deliver offers `acknowledge` for an already-merged PR** and allows one
+  follow-up PR after a MERGED PR's "back to code"; a re-dispatched release
+  adopts a published tag only when it is on `origin_head`, this capsule's
+  `artifacts/pre-release-tags.txt` exists and the tag is absent from it.

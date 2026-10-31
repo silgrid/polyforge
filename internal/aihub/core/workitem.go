@@ -797,8 +797,11 @@ func validWaitingOn(wo string) bool {
 }
 
 // Cancel terminates a non-active WI (queued/paused/blocked); a running WI
-// must first end its session.
-func (m *WIManager) Cancel(idOrSlug string, actor string) (*WIView, error) {
+// must first end its session. A non-empty req.Reason / req.QuestionID
+// rides the work_item_canceled event body verbatim (an owner's cancel
+// answer); the dry-run probe never reaches here (the server answers it
+// after the authorization gate).
+func (m *WIManager) Cancel(idOrSlug string, actor string, req api.CancelRequest) (*WIView, error) {
 	id, err := m.Resolve(idOrSlug)
 	if err != nil {
 		return nil, err
@@ -836,7 +839,11 @@ func (m *WIManager) Cancel(idOrSlug string, actor string) (*WIView, error) {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, Fail(api.ErrCoreConflict, "", "state changed concurrently")
 	}
-	if err := appendEventTx(tx, id, now, actor, "work_item_canceled", nil); err != nil {
+	var body map[string]any
+	if req.Reason != "" || req.QuestionID != "" {
+		body = map[string]any{"reason": req.Reason, "question_id": req.QuestionID}
+	}
+	if err := appendEventTx(tx, id, now, actor, "work_item_canceled", body); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

@@ -121,6 +121,12 @@ func (o Opts) expired() bool {
 	return o.Ctx != nil && o.Ctx.Err() != nil
 }
 
+// laneCancelled reports a cancelled carrier lane (a pause, recovery or
+// shutdown), which is not a failure.
+func (o Opts) laneCancelled() bool {
+	return o.Ctx != nil && errors.Is(o.Ctx.Err(), context.Canceled)
+}
+
 // ended names why an expired o.Ctx ended, for the lane's failure details.
 func (o Opts) ended() string {
 	if errors.Is(o.Ctx.Err(), context.Canceled) {
@@ -695,13 +701,14 @@ func pushTaskRefsLocked(o Opts, chainOK bool) (string, []carrierSrc, []string) {
 		fmt.Fprintf(os.Stderr, "gitops: %s: task-ref push for repo %s failed (task-repo state may not survive a re-claim): %s: %s\n", o.WorkItemID, s.name, detail, strings.TrimSpace(out))
 		o.carrierFailed(s.name, chainOK, detail)
 		failed = append(failed, s.name)
-		// Never force: a non-fast-forward rejection that is not "behind"
-		// (pushCarrier answered that case above) means the carrier and
-		// this worktree DIVERGED (e.g. a re-claim that started from a
-		// clone lacking the carried commits). The carrier is left
-		// untouched and the divergence is raised as an error event, not
-		// left to stderr.
-		if IsNonFastForward(err, out) && o.EventSink != nil {
+		// A non-fast-forward rejection that is not "behind" and whose
+		// stale tip is not contained in this head (pushCarrier answered
+		// both cases above) means the carrier and this worktree DIVERGED
+		// (e.g. a re-claim that started from a clone lacking the carried
+		// commits, or foreign content). The carrier is left untouched and
+		// the divergence is raised as an error event, not left to stderr —
+		// once per repo per job, like carrier_push_failed.
+		if IsNonFastForward(err, out) && chainOK && !o.laneCancelled() && o.EventSink != nil && o.CarrierAlerts.firstDiverged(TaskRefName(s.name)) {
 			o.EventSink(EventTaskRefDiverged, map[string]any{
 				"repo":  s.name,
 				"ref":   TaskRefName(s.name),
@@ -997,8 +1004,16 @@ func carrierLayoutRefusal(gitDir string) string {
 //
 // behind reports a non-fast-forward rejection whose pushed sha is an
 // ancestor of the hub's carrier tip: the carrier already holds it, so
-// the push is answered as done (err nil) — nothing to carry. Any other
-// rejection (a true divergence, or a tip this repo lacks) stays an error.
+// the push is answered as done (err nil) — nothing to carry.
+//
+// A non-fast-forward whose pushed sha is a sibling of the hub's tip is a
+// rewind that rewrote a carried commit. When every entry
+// of the hub tip's tree (path, mode, type, blob) is present unchanged in
+// the new head's tree — the stale tip's content is contained in the new
+// head: the same line's work, rewritten — the carrier is replaced with
+// this head under a lease on the observed tip (`--force-with-lease`).
+// Foreign, unrelated or content-dropping heads keep the old refusal; an
+// unreadable or moved tip is never clobbered.
 func pushCarrier(o Opts, reposDir, objects, sha, name string, credAdditions []string) (out string, behind bool, err error) {
 	env := carrierEnv(reposDir)
 	tmp, out, err := carrierTempRepo(o, env, objects)
@@ -1022,10 +1037,24 @@ func pushCarrier(o Opts, reposDir, objects, sha, name string, credAdditions []st
 		}
 	}
 	out, err = carrierPush(o, env, tmp, sha+":"+ref, credAdditions)
-	if err != nil && IsNonFastForward(err, out) && carrierBehind(o, env, tmp, sha, ref, credAdditions) {
+	if err == nil || !IsNonFastForward(err, out) {
+		return out, false, err
+	}
+	tip := carrierTip(o, env, tmp, ref, credAdditions)
+	if tip == "" {
+		return out, false, err
+	}
+	if carrierIsAncestor(o, env, tmp, sha, tip) {
 		return out, true, nil
 	}
-	return out, false, err
+	if !carrierContainsTip(o, env, tmp, tip, sha) {
+		return out, false, err
+	}
+	if rout, rerr := carrierReconcilePush(o, env, tmp, sha, ref, tip, credAdditions); rerr == nil {
+		return rout, false, nil
+	} else {
+		return rout, false, rerr
+	}
 }
 
 // carrierBoundary answers the shallow boundary of one carrier push, or
@@ -1146,16 +1175,46 @@ func carrierTip(o Opts, env []string, tmp, ref string, credAdditions []string) s
 	return ""
 }
 
-// carrierBehind reports whether sha is an ancestor of the hub's current
-// ref tip, read with one ls-remote from the temporary repo tmp. The
-// ancestry check runs against tmp's borrowed object store: a tip the
-// task repo lacks fails it, so only a provable "behind" answers true.
-func carrierBehind(o Opts, env []string, tmp, sha, ref string, credAdditions []string) bool {
-	tip := carrierTip(o, env, tmp, ref, credAdditions)
-	if tip == "" {
+// carrierContainsTip reports whether every entry of the hub tip's tree is
+// present unchanged (same mode, type and object) in head's tree. Dropping
+// or rewriting a carried path is not containment: a rewrite that changes
+// the work itself keeps the old carrier rather than losing it. The stale
+// commit must be readable from tmp's borrowed object store; when it is not
+// (a fresh clone lacks the carried commits), containment cannot be proven
+// and the carrier is kept.
+func carrierContainsTip(o Opts, env []string, tmp, tip, head string) bool {
+	tipEntries, ok := carrierTreeEntries(o, env, tmp, tip)
+	if !ok {
 		return false
 	}
-	return carrierIsAncestor(o, env, tmp, sha, tip)
+	headEntries, ok := carrierTreeEntries(o, env, tmp, head)
+	if !ok {
+		return false
+	}
+	for p, entry := range tipEntries {
+		if headEntries[p] != entry {
+			return false
+		}
+	}
+	return true
+}
+
+// carrierTreeEntries answers every non-tree entry of commit's tree as
+// path -> "mode type object" (the empty set for an empty tree), or false
+// when the commit/tree cannot be read.
+func carrierTreeEntries(o Opts, env []string, tmp, commit string) (map[string]string, bool) {
+	out, err := o.gitT(carrierCheckTimeout, env, tmp, append(carrierTmpFlags(tmp), "ls-tree", "-r", "-z", commit)...)
+	if err != nil {
+		return nil, false
+	}
+	entries := map[string]string{}
+	for _, rec := range strings.Split(out, "\x00") {
+		meta, p, ok := strings.Cut(rec, "\t")
+		if ok && p != "" {
+			entries[p] = meta
+		}
+	}
+	return entries, true
 }
 
 // carrierTempRepo creates the daemon-owned temporary bare repo of one
@@ -1207,8 +1266,24 @@ func carrierProtocolFlags(o Opts) []string {
 // recursion, the push timeout. A
 // failure is the caller's; the next close or publish pushes again.
 func carrierPush(o Opts, env []string, tmp, refspec string, credAdditions []string) (string, error) {
+	return carrierPushWithOpts(o, env, tmp, refspec, credAdditions)
+}
+
+// carrierReconcilePush replaces ref with the rewritten head sha, guarded
+// by a lease on the tip the containment check read. If another writer
+// moved the ref in between, the lease refuses the push instead of
+// clobbering that update.
+func carrierReconcilePush(o Opts, env []string, tmp, sha, ref, tip string, credAdditions []string) (string, error) {
+	return carrierPushWithOpts(o, env, tmp, sha+":"+ref, credAdditions, "--force-with-lease="+ref+":"+tip)
+}
+
+// carrierPushWithOpts is carrierPush with extra push options before the
+// remote and refspec.
+func carrierPushWithOpts(o Opts, env []string, tmp, refspec string, credAdditions []string, opts ...string) (string, error) {
 	args := append(append(carrierTmpFlags(tmp), carrierProtocolFlags(o)...),
-		"push", "--no-recurse-submodules", o.RemoteURL, refspec)
+		"push", "--no-recurse-submodules")
+	args = append(args, opts...)
+	args = append(args, o.RemoteURL, refspec)
 	return o.gitT(carrierPushTimeout, append(env, credAdditions...), tmp, args...)
 }
 
@@ -1223,7 +1298,7 @@ func (o Opts) carrierFailed(repo string, chainOK bool, detail string) {
 // carrier or the WIP ref, polyforge#167); the once-per-job alert state is
 // kept per ref. A cancelled lane raises nothing.
 func (o Opts) carrierRefFailed(repo, ref string, chainOK bool, detail string) {
-	if o.Ctx != nil && errors.Is(o.Ctx.Err(), context.Canceled) {
+	if o.laneCancelled() {
 		// a cancelled lane (a pause, recovery or shutdown stopped it) is
 		// not a failure: the log line says it; the once-per-ref alert stays
 		// for a real one
@@ -1617,9 +1692,12 @@ func ClearIndexLocks(workItemID, gitDir, capsuleDir string) []string {
 }
 
 // EventTaskRefDiverged is the error event kind raised when the carrier
-// push of one task repo is rejected non-fast-forward and its HEAD is not
-// an ancestor of the carried head (a HEAD merely behind it is no
-// divergence: nothing to carry).
+// push of one task repo is rejected non-fast-forward, its HEAD is not an
+// ancestor of the carried head (a HEAD merely behind it is no divergence:
+// nothing to carry), and the carried tip's content is not contained in
+// that HEAD (a same-line rewind is reconciled instead). Raised once per
+// repo per job until a carrier push of that repo succeeds again, like
+// carrier_push_failed.
 const EventTaskRefDiverged = "task_ref_diverged"
 
 // EventCarrierPushFailed is the event kind raised when the carrier push
@@ -1637,10 +1715,13 @@ const EventCarrierPushFailed = "carrier_push_failed"
 // failure alerts again. The runtime keeps
 // one per job: it ends with the job, and a re-claim (a new job) starts
 // clean. The zero value is ready; a nil *CarrierAlerts raises every
-// failure.
+// failure. The divergence event has its own once-until-success state, so
+// a true divergence raises carrier_push_failed and task_ref_diverged
+// together on its first failure and neither again while it persists.
 type CarrierAlerts struct {
-	mu sync.Mutex
-	m  map[string]bool
+	mu       sync.Mutex
+	m        map[string]bool
+	diverged map[string]bool
 }
 
 // first records a failure of repo and reports whether it is the first
@@ -1661,6 +1742,24 @@ func (a *CarrierAlerts) first(repo string) bool {
 	return true
 }
 
+// firstDiverged records a task_ref_diverged failure of ref and reports
+// whether it is the first since the ref's last successful carrier push.
+func (a *CarrierAlerts) firstDiverged(ref string) bool {
+	if a == nil {
+		return true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.diverged[ref] {
+		return false
+	}
+	if a.diverged == nil {
+		a.diverged = map[string]bool{}
+	}
+	a.diverged[ref] = true
+	return true
+}
+
 // clear forgets repo's raised failure after a successful carrier push.
 func (a *CarrierAlerts) clear(repo string) {
 	if a == nil {
@@ -1668,6 +1767,7 @@ func (a *CarrierAlerts) clear(repo string) {
 	}
 	a.mu.Lock()
 	delete(a.m, repo)
+	delete(a.diverged, repo)
 	a.mu.Unlock()
 }
 

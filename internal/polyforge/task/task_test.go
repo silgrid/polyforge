@@ -95,6 +95,53 @@ func TestSummary(t *testing.T) {
 	}
 }
 
+// TestPromptSummary pins the task list's bounded prompt label
+// the first non-empty line, at most 120 code points cut
+// on a code-point boundary, "" for an empty or whitespace prompt.
+func TestPromptSummary(t *testing.T) {
+	for _, tc := range []struct{ prompt, want string }{
+		{"", ""},
+		{" \n\t \n", ""},
+		{"fix the build\nsecond line", "fix the build"},
+		{"\n\n  look around  \r\nmore", "look around"},
+		{strings.Repeat("字", 130) + "\nnext", strings.Repeat("字", 120)},
+		{strings.Repeat("a", 120), strings.Repeat("a", 120)},
+	} {
+		if got := PromptSummary(tc.prompt); got != tc.want {
+			t.Fatalf("PromptSummary(%q) = %q, want %q", tc.prompt, got, tc.want)
+		}
+	}
+}
+
+// TestReportTail pins the task list's one bounded report line: the last
+// non-empty trimmed line, verbatim up to 200 code points, else "…" plus the
+// last 199 code points; markdown is plain text and an empty or
+// whitespace-only report answers "".
+func TestReportTail(t *testing.T) {
+	long := strings.Repeat("字", 150) + "TAIL" + strings.Repeat("尾", 100)
+	longRunes := []rune(long)
+	for _, tc := range []struct{ name, report, want string }{
+		{"empty", "", ""},
+		{"whitespace only", " \n\t\r\n  \n", ""},
+		{"single line", "done", "done"},
+		{"last non-empty trimmed", "first\n  the last line  \n\n \n", "the last line"},
+		{"crlf", "one\r\ntwo\r\n", "two"},
+		{"markdown fence kept as text", "intro\n```json\n", "```json"},
+		{"markdown heading kept as text", "## Result **ok**", "## Result **ok**"},
+		{"exactly 200 runes", strings.Repeat("é", 200), strings.Repeat("é", 200)},
+		{"201 runes", "x" + strings.Repeat("é", 200), "…" + strings.Repeat("é", 199)},
+		{"long multi-byte line", "head\n" + long, "…" + string(longRunes[len(longRunes)-199:])},
+	} {
+		got := ReportTail(tc.report)
+		if got != tc.want {
+			t.Fatalf("%s: ReportTail = %q, want %q", tc.name, got, tc.want)
+		}
+		if n := len([]rune(got)); n > ReportTailRunes {
+			t.Fatalf("%s: %d runes, above the %d bound", tc.name, n, ReportTailRunes)
+		}
+	}
+}
+
 // TestJSONDurationFieldsNameTheirUnit pins the machine-readable task
 // document: time.Duration marshals as an integer count of nanoseconds, so
 // the JSON names must say _ns (not _ms) and the emitted numbers must be

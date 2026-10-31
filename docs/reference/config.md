@@ -140,8 +140,16 @@ never exceeds the max: a tool window of 11 minutes or less gives
 default = max. A key the claude-config settings.json env block carries
 itself wins: the daemon adds neither key that block sets (it never writes
 the file), and a default it adds next to an operator's own
-`BASH_MAX_TIMEOUT_MS` is clamped to that max. pi steps get neither
+`BASH_MAX_TIMEOUT_MS` is clamped to that max. pi steps get neither Bash
 variable.
+
+Every step, pi and claude alike, also starts with `PF_TOOL_WINDOW_MS` set
+to the supervision tool window in milliseconds (`1800000` with the default
+30-minute window). It is the harness-neutral binding `pf verify-run` uses
+to bound its whole-run deadline below the tool rule, so no single blocking
+call is still running when the daemon judges it hung; its
+`docs/reference/commands.md` entry describes the resulting `--deadline`
+default and the clamp.
 
 ### Writing `cli.toml` — `pf config`
 

@@ -7,17 +7,24 @@ package cli
 //	pf msg ack <conversation> [--seq N]
 //	pf msg show <id>
 //	pf msg analyze <id>
+//	pf msg contacts
 //
-// send/list/ack/show are data-plane (direct to aihub with the human's key);
-// analyze is execution-plane (the recipient's daemon runs a read-only,
-// budget-capped one-shot). All support --json passthrough.
+// send/list/ack/show/contacts are data-plane (direct to aihub with the
+// human's key); analyze is execution-plane (the recipient's daemon runs a
+// read-only, budget-capped one-shot). All support --json: passthrough of
+// the server body, except contacts, whose answer pf assembles from one
+// read per mapped project. Every msg verb is refused inside a workflow
+// step (stepctx.go) before any request leaves.
 
 import (
 	"encoding/json"
 	"flag"
 	"fmt"
 	"math"
+	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 )
@@ -30,11 +37,12 @@ var cmdMsg = &Command{
 		"       pf msg list [--conversation <id>] [--after <seq>] [--before <seq>] [--limit N]\n" +
 		"       pf msg ack <conversation> [--seq N]\n" +
 		"       pf msg show <id>\n" +
-		"       pf msg analyze <id>",
+		"       pf msg analyze <id>\n" +
+		"       pf msg contacts",
 	Setup: func(fs *flag.FlagSet) {},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if len(args) == 0 {
-			return fmt.Errorf("msg: expected send|list|ack|show|analyze")
+			return fmt.Errorf("msg: expected send|list|ack|show|analyze|contacts")
 		}
 		sub, rest := args[0], args[1:]
 		switch sub {
@@ -153,11 +161,25 @@ var cmdMsg = &Command{
 				fmt.Fprintf(ctx.Stdout, ":\n%s\n", r.Conclusion)
 			})
 			return nil
+		case "contacts":
+			if len(rest) != 0 {
+				return fmt.Errorf("msg contacts: no arguments")
+			}
+			raw, err := json.Marshal(readContacts(ctx))
+			if err != nil {
+				return err
+			}
+			finishAs(ctx, raw, func(a *api.ProjectMemberContacts) {
+				for _, c := range a.Contacts {
+					fmt.Fprintf(ctx.Stdout, "%s  %s\n", c.ID, msgText(c.DisplayName))
+				}
+			})
+			return nil
 		default:
 			// The refusal never echoes the typed action: an unknown word must
 			// not read back as if pf offered it (w93 pins that no
 			// name-resolution surface is advertised).
-			return fmt.Errorf("msg: unknown action (expected send|list|ack|show|analyze)")
+			return fmt.Errorf("msg: unknown action (expected send|list|ack|show|analyze|contacts)")
 		}
 	},
 }
@@ -195,4 +217,52 @@ func msgText(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// Contact-read bounds: at most contactsInFlight project reads at once,
+// each bounded by contactsTimeout, never retried.
+const (
+	contactsInFlight = 4
+	contactsTimeout  = 15 * time.Second
+)
+
+// readContacts assembles `pf msg contacts`: the union of the member faces
+// of every project the cli.toml [workspace.*] mapping names (read at call
+// time, so a mapping edit shows on the next call with no daemon restart),
+// one request per project (the mapping maps a project to one workspace),
+// merged in mapping declaration order and deduplicated by user id — the
+// first display name wins. A project the caller cannot read (or that
+// fails) contributes zero; no mapping is an empty answer. Self and
+// machine rows are dropped by aihub, not here.
+func readContacts(ctx *Context) api.ProjectMemberContacts {
+	projects := ctx.Cfg.Mapping.Projects()
+	client := ctx.aihub()
+	client.HTTP = &http.Client{Timeout: contactsTimeout}
+	answers := make([][]api.ProjectMemberContact, len(projects))
+	slots := make(chan struct{}, contactsInFlight)
+	var wg sync.WaitGroup
+	for i, project := range projects {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			if rows, err := client.ProjectContacts(project); err == nil {
+				answers[i] = rows
+			}
+		}()
+	}
+	wg.Wait()
+	out := api.ProjectMemberContacts{Contacts: []api.ProjectMemberContact{}}
+	seen := map[string]bool{}
+	for _, rows := range answers {
+		for _, c := range rows {
+			if c.ID == "" || seen[c.ID] {
+				continue
+			}
+			seen[c.ID] = true
+			out.Contacts = append(out.Contacts, c)
+		}
+	}
+	return out
 }

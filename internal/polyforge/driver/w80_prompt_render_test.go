@@ -64,8 +64,17 @@ func TestW80PromptSizeBudget(t *testing.T) {
 		{"chore", "review", 18000, nil},
 		{"feature-full", "verification", 27000, nil},
 		{"feature-full", "review", 20000, nil},
-		{"chore", "plan", 14000, nil},
-		{"chore", "code", 11000, map[string]bool{"plan": true}},
+		// 14000 + 1500: the deliverable-carrier block (
+		// about 1.3 KB) renders into every plan prompt; + 500: re-baselined
+		// (not trimmed) for the owner-review declaration (
+		// about 1.2 KB with the carrier's owner-presentation item)
+		{"chore", "plan", 16000, nil},
+		// 11000 + 678: the waiting rule's background-work sentences
+		// grow every principled prompt by that much;
+		// + 1522: re-baselined (not trimmed) for the owner-review
+		// declaration every build step renders (about 0.9 KB
+		// measured; the rest, about 0.6 KB, is granted headroom)
+		{"chore", "code", 13200, map[string]bool{"plan": true}},
 	} {
 		p := w80MeasurePrompt(t, c.bundle, c.step, tierFull, c.done)
 		t.Logf("w80 prompt size %s/%s: %d bytes", c.bundle, c.step, len(p))

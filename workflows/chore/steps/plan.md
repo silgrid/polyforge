@@ -88,11 +88,16 @@ whether it exists:
    chore graph authors no acceptance scenarios. If reading the WI reveals the work
    alters OBSERVABLE BEHAVIOR — new endpoint/verb, protocol/contract/semantics
    change, ownership or fence rule change — you cannot proceed silently. The
-   chore graph has no interactive checkpoint, so do NOT guess: emit the plan anyway BUT set
-   `out_of_scope: "behavior-face: requires an e2e-carrying graph"` in your output summary, so
-   the owner question is raised before `code` runs. A behavior-facing
+   chore graph has no interactive checkpoint, so do NOT guess: emit no plan and stop with
+   `needs_input` (`question_id` `plan-behavior-face`), naming the observable behavior the
+   work would change and asking the owner to answer `cancel` (the reserved answer ends
+   this work item) and re-file it on an e2e-carrying graph, or to record a waiver, so the owner question is answered before `code` runs. A behavior-facing
    change executed on the chore graph without an owner waiver on record is a
    contract violation.
+
+{{deliverable_carrier}}
+
+{{owner_review}}
 
 ## Non-goals
 

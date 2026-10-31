@@ -74,6 +74,39 @@ func TestStepRecallAndShowGoThroughTheDaemon(t *testing.T) {
 	}
 }
 
+// TestStepRecallCannotBrowse: browse is the human
+// direct-aihub shape. Inside a step an empty query, --after and --sort
+// are refused locally — no daemon request, no aihub request.
+func TestStepRecallCannotBrowse(t *testing.T) {
+	env, drec, arec := stepEnv(t)
+	for _, args := range [][]string{
+		{"recall", "--project", "polyforge"},
+		{"recall", "--project", "polyforge", "--sort", "created"},
+		{"recall", "--project", "polyforge", "x", "--after", "cur-1"},
+		{"recall", "--project", "polyforge", "x", "--sort", "updated"},
+	} {
+		code, _, stderr := runPf(t, env, args...)
+		if code != 1 || !strings.Contains(stderr, "human direct-aihub") {
+			t.Fatalf("%v: exit %d %s, want the local human-direct refusal", args, code, stderr)
+		}
+	}
+	if n := len(drec.all()); n != 0 {
+		t.Fatalf("a refused browse reached the daemon %d time(s)", n)
+	}
+	if n := len(arec.all()); n != 0 {
+		t.Fatalf("a step invocation reached aihub %d time(s)", n)
+	}
+	// Task mode refuses the same way.
+	env["PF_TASK_ID"] = "task_0123456789abcdef"
+	delete(env, "PF_WI_ID")
+	if code, _, stderr := runPf(t, env, "recall", "--project", "polyforge"); code != 1 || !strings.Contains(stderr, "human direct-aihub") {
+		t.Fatalf("task browse: exit %d %s", code, stderr)
+	}
+	if n := len(drec.all()); n != 0 {
+		t.Fatalf("a refused task browse reached the daemon %d time(s)", n)
+	}
+}
+
 func TestStepRememberGoesToTheDaemon(t *testing.T) {
 	env, drec, arec := stepEnv(t)
 	body := filepath.Join(t.TempDir(), "body.md")

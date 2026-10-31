@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -65,6 +66,11 @@ type Hub interface {
 	// generic entry): the F6 memory adapters use it for the calls the
 	// shared client carries no typed method for.
 	Do(method, path string, body, out any) error
+	// ProjectContactsWithCaller reads a project's human members with the
+	// daemon key's owner kept (the member face's include_caller=true):
+	// the task spawn route's one-time reporter resolution,
+	// bounded by ctx so a slow hub cannot hold the spawn.
+	ProjectContactsWithCaller(ctx context.Context, project string) ([]api.ProjectMemberContact, error)
 }
 
 // Config wires the daemon. Zero fields take the defaults in fill().
@@ -592,7 +598,26 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	d.runCtx, d.cancelRun = context.WithCancel(context.Background())
 	d.tasks = d.newTaskManager(&rtCfg)
+	// The paused-record owner revision: the runtime cannot
+	// import the driver (the driver's internal tests import runtime), so the
+	// daemon binds the record-only applier here. It uses the same
+	// transition single writer as a live driver; the runtime then commits
+	// the corrected record to the capsule chain.
+	rtCfg.ReviseRecord = func(capsuleDir, bundleName, sessionHandle, wi string, spawnN int64, stepID string, corrections []capsule.BindingCorrection, by, reason string) error {
+		drv, err := driver.OpenRecord(driver.Config{
+			WI:     driver.WIInfo{ID: wi, CapsuleDir: capsuleDir, BundleName: bundleName, SessionHandle: sessionHandle},
+			SpawnN: spawnN,
+			Log:    d.driverLog(),
+		})
+		if err != nil {
+			return err
+		}
+		return drv.ReviseBinding(stepID, driver.BindingRevisionRequest{Corrections: corrections, By: by, Reason: reason})
+	}
 	rtCfg.EventTap = d.tapRuntimeEvent
+	// The reserved cancel answer's last leg: once the hub took the blocked
+	// close, the hub's existing blocked→canceled door ends the work item.
+	rtCfg.CancelRequested = d.cancelAnsweredWorkItem
 	// a close stops the WI's monitor (drained) before
 	// its seal push and SessionEnd; d.obs is read at call time.
 	rtCfg.ReleaseMonitor = func(wi string) {
@@ -1311,4 +1336,33 @@ func acquireDataDirLock(dataDir string) (*os.File, error) {
 	_ = f.Truncate(0)
 	_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
 	return f, nil
+}
+
+// cancelDoorPath is the hub's cancel door for one work item — the same
+// door `pf cancel` uses.
+func cancelDoorPath(wi string) string {
+	return "/api/v1/work-items/" + url.PathEscape(wi) + "/cancel"
+}
+
+// authorizeCancelAnswer probes the hub's cancel door (dry_run) for a
+// reserved cancel answer before any state is written: the hub applies
+// its reporter/maintainer/admin gate to the daemon's own authenticated
+// caller (never the self-asserted --by). A refusal is returned verbatim;
+// the question stays pending.
+func (d *Daemon) authorizeCancelAnswer(wi, questionID, answer string) error {
+	return d.hub.Do("POST", cancelDoorPath(wi), api.CancelRequest{Reason: answer, QuestionID: questionID, DryRun: true}, nil)
+}
+
+// cancelAnsweredWorkItem calls the hub's cancel door for a work item whose
+// capsule records an owner's cancel answer, after its blocked close: the
+// verbatim answer and the answered question ride the work_item_canceled
+// event, and the hub records the authenticated caller as its actor. An
+// already-terminal work item is done (the replay after a restart).
+func (d *Daemon) cancelAnsweredWorkItem(wi string, intent capsule.CancelIntent) {
+	err := d.hub.Do("POST", cancelDoorPath(wi), api.CancelRequest{Reason: intent.Answer, QuestionID: intent.QuestionID}, nil)
+	var ae *api.Error
+	if err == nil || (errors.As(err, &ae) && ae.Code == api.ErrCoreGone) {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "daemon: %s: the owner's cancel answer could not cancel the work item at the hub (it stays blocked; pf cancel finishes it): %v\n", wi, err)
 }

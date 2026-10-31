@@ -139,53 +139,118 @@ func forgetSub(td *testDaemon, chat, wi string) {
 	}
 }
 
-// An explicit unsubscribe from an owned WI sticks across watcher cycles
-// (each calls subscribe-owned) and across a daemon restart; an explicit
-// subscribe lifts it.
-func TestUnsubscribedOwnedWIStaysUnsubscribed(t *testing.T) {
-	td := newTestDaemon(t, nil)
-	td.client.Origin = &cli.SubmitOrigin{ChatID: "chat_a", Owner: "alice"}
-	td.submitClaim(t, "wi_own")
-	td.waitMonitored(t, "wi_own")
-	td.client.Origin = nil
-	if _, err := td.client.ChatSubscribeOwned("chat_b", "alice"); err != nil {
-		t.Fatal(err)
-	}
-	for _, chat := range []string{"chat_a", "chat_b"} {
-		if len(mustSubs(t, td, chat)) != 1 {
-			t.Fatalf("%s must start subscribed", chat)
+// The sticky-unsubscribe contract of pf watch: a manual unsubscribe is a
+// persistent, per-chat opt-out that outranks both per-poll automatic
+// subscriptions a running watcher makes (subscribe-owned: the WI the chat
+// submitted, the WI its owner owns). Each state runs on its own daemon:
+//   - an unsubscribed owner-owned WI of another chat never returns over
+//     several polls, nor after a daemon restart;
+//   - an unsubscribed WI this chat submitted never returns either;
+//   - an explicit subscribe restores it, held exactly once.
+func TestWatchUnsubscribeStickyContract(t *testing.T) {
+	const polls = 5
+	// setup: chat_a submits wi_own for alice (auto-subscribed as origin);
+	// chat_b, another chat of alice, picks it up through the owner routing.
+	setup := func(t *testing.T) *testDaemon {
+		t.Helper()
+		td := newTestDaemon(t, nil)
+		td.client.Origin = &cli.SubmitOrigin{ChatID: "chat_a", Owner: "alice"}
+		td.submitClaim(t, "wi_own")
+		td.waitMonitored(t, "wi_own")
+		td.client.Origin = nil
+		if _, err := td.client.ChatSubscribeOwned("chat_b", "alice"); err != nil {
+			t.Fatal(err)
 		}
+		for _, chat := range []string{"chat_a", "chat_b"} {
+			if subs := mustSubs(t, td, chat); len(subs) != 1 || subs[0].WI != "wi_own" {
+				t.Fatalf("%s must start subscribed: %+v", chat, subs)
+			}
+		}
+		return td
+	}
+	// unsubscribeStaysOut mutes wi_own in chat and polls subscribe-owned
+	// the way a running watcher does: nothing comes back.
+	unsubscribeStaysOut := func(t *testing.T, td *testDaemon, chat string) {
+		t.Helper()
 		if _, err := td.client.ChatSubscribe(chat, "wi_own", false); err != nil {
 			t.Fatal(err)
 		}
-		for i := 0; i < 3; i++ {
+		for i := 0; i < polls; i++ {
 			if added, err := td.client.ChatSubscribeOwned(chat, "alice"); err != nil || len(added) != 0 {
-				t.Fatalf("%s cycle %d re-added %+v (err %v)", chat, i, added, err)
+				t.Fatalf("%s poll %d re-added %+v (err %v)", chat, i, added, err)
 			}
 		}
 		if subs := mustSubs(t, td, chat); len(subs) != 0 {
 			t.Fatalf("%s after unsubscribe: %+v", chat, subs)
 		}
 	}
-	reloaded, err := newSubStore(td.subs.path)
-	if err != nil || reloaded.Settled("chat_b", "wi_own") != true || len(reloaded.List("chat_b")) != 0 {
-		t.Fatalf("the unsubscribe must persist: err %v", err)
-	}
-	if _, err := td.client.ChatSubscribe("chat_b", "wi_own", true); err != nil {
-		t.Fatal(err)
-	}
-	if subs := mustSubs(t, td, "chat_b"); len(subs) != 1 || subs[0].WI != "wi_own" {
-		t.Fatalf("an explicit subscribe must lift the unsubscribe: %+v", subs)
-	}
-	if _, err := td.client.ChatSubscribe("chat_b", "wi_own", false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := td.client.ChatSubscribe("chat_b", "wi_own", true); err != nil {
-		t.Fatal(err)
-	}
-	if added, _ := td.client.ChatSubscribeOwned("chat_b", "alice"); len(added) != 0 || len(mustSubs(t, td, "chat_b")) != 1 {
-		t.Fatalf("re-subscribed WI must be held once: %+v", added)
-	}
+
+	t.Run("owner_owned_wi_of_another_chat", func(t *testing.T) {
+		td := setup(t)
+		unsubscribeStaysOut(t, td, "chat_b")
+		// per chat, not per owner: the submitting chat keeps its own
+		if subs := mustSubs(t, td, "chat_a"); len(subs) != 1 || subs[0].WI != "wi_own" {
+			t.Fatalf("another chat of the owner must keep its subscription: %+v", subs)
+		}
+		// daemon restart: a brand-new store over the same file
+		reloaded, err := newSubStore(td.subs.path)
+		if err != nil || !reloaded.Settled("chat_b", "wi_own") || len(reloaded.List("chat_b")) != 0 {
+			t.Fatalf("the unsubscribe must persist: err %v", err)
+		}
+	})
+
+	t.Run("wi_submitted_by_this_chat", func(t *testing.T) {
+		td := setup(t)
+		unsubscribeStaysOut(t, td, "chat_a")
+		reloaded, err := newSubStore(td.subs.path)
+		if err != nil || !reloaded.Settled("chat_a", "wi_own") || len(reloaded.List("chat_a")) != 0 {
+			t.Fatalf("the unsubscribe must persist: err %v", err)
+		}
+	})
+
+	// The mute is per chat, never per owner: a new chat of the same owner
+	// is still routed by subscribe-owned to a WI another chat muted.
+	t.Run("same_owner_new_chat_still_routed", func(t *testing.T) {
+		td := setup(t)
+		unsubscribeStaysOut(t, td, "chat_b")
+		added, err := td.client.ChatSubscribeOwned("chat_c", "alice")
+		if err != nil || len(added) != 1 || added[0].WI != "wi_own" {
+			t.Fatalf("a new chat of the owner must be routed the WI muted in chat_b: %+v (err %v)", added, err)
+		}
+		if subs := mustSubs(t, td, "chat_c"); len(subs) != 1 || subs[0].WI != "wi_own" {
+			t.Fatalf("chat_c must hold exactly the routed WI: %+v", subs)
+		}
+		if added, err := td.client.ChatSubscribeOwned("chat_c", "alice"); err != nil || len(added) != 0 {
+			t.Fatalf("a second poll of chat_c added %+v (err %v)", added, err)
+		}
+		if subs := mustSubs(t, td, "chat_b"); len(subs) != 0 {
+			t.Fatalf("chat_b must stay muted: %+v", subs)
+		}
+		if subs := mustSubs(t, td, "chat_a"); len(subs) != 1 || subs[0].WI != "wi_own" {
+			t.Fatalf("chat_a must keep its own subscription: %+v", subs)
+		}
+	})
+
+	t.Run("explicit_subscribe_restores", func(t *testing.T) {
+		td := setup(t)
+		for _, chat := range []string{"chat_a", "chat_b"} {
+			unsubscribeStaysOut(t, td, chat)
+			if _, err := td.client.ChatSubscribe(chat, "wi_own", true); err != nil {
+				t.Fatal(err)
+			}
+			if subs := mustSubs(t, td, chat); len(subs) != 1 || subs[0].WI != "wi_own" {
+				t.Fatalf("%s: an explicit subscribe must lift the unsubscribe: %+v", chat, subs)
+			}
+			for i := 0; i < polls; i++ {
+				if added, err := td.client.ChatSubscribeOwned(chat, "alice"); err != nil || len(added) != 0 {
+					t.Fatalf("%s poll %d after re-subscribe added %+v (err %v)", chat, i, added, err)
+				}
+			}
+			if subs := mustSubs(t, td, chat); len(subs) != 1 {
+				t.Fatalf("%s: a re-subscribed WI must be held once: %+v", chat, subs)
+			}
+		}
+	})
 }
 
 func TestWatchSnapshotRoute(t *testing.T) {

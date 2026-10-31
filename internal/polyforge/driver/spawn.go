@@ -5,7 +5,7 @@ package driver
 //
 //   - PROMPT ASSEMBLY: the step definition (workflows/<bundle>/steps/<id>.md)
 //     plus the round's gate-FAIL rewind verdict (persisted until the step
-//     is accepted), the step's archived Q&A,
+//     is accepted), the step's current attempt-chain Q&A,
 //     the producing step's handoff (inherit steps only) and the
 //     result-delivery contract;
 //   - PROCESS DERIVATION through spawn.Params -> spawn.Spawner: the model
@@ -617,7 +617,7 @@ type handoffSection struct {
 
 // assembleStepPrompt builds the step process's one instruction of
 // record: identity, the context-policy contract, the step definition,
-// the round's rewind verdict, the Q&A history a resumed step
+// the round's rewind verdict, the current attempt-chain Q&A a resumed step
 // continues from, the handoff (inherit only), the declared inputs and
 // the result-delivery contract. A first ended_without_result retry that
 // resumes the same harness session carries only the short reminder

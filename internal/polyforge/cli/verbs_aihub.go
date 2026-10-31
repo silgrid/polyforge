@@ -651,28 +651,46 @@ var cmdCancel = &Command{
 var cmdRecall = &Command{
 	Name:    "recall",
 	Group:   GroupData,
-	Summary: "Search project memories",
-	Usage:   "pf recall --project P <query> [--any] [--type T] [--tags a,b] [--limit N]",
+	Summary: "Search project memories (or browse them, with no query)",
+	Usage:   "pf recall --project P <query> [--any] [--type T] [--tags a,b] [--limit N]\n       pf recall --project P [--after CURSOR] [--sort updated|created] [--type T] [--tags a,b] [--limit N]",
 	Setup: func(fs *flag.FlagSet) {
 		fs.String("project", "", "project name (required; validated against the [workspace] mapping)")
-		fs.String("q", "", "query text (alternative to the positional argument)")
+		fs.String("q", "", "query text (alternative to the positional argument); none = browse mode")
 		fs.String("type", "", "memory type filter: exact (experience.debug), prefix (experience.*), or * (all types)")
 		fs.String("tags", "", "comma-separated tags")
-		fs.Int("limit", 20, "max results (1..200; default 20)")
+		fs.Int("limit", 20, "max results / browse page size (1..200; default 20)")
 		fs.Bool("any", false, "ranked any-term match (memories sharing ANY of the query's words, best first) instead of the default every-word match; for long queries")
+		// No default for --sort: aihub refuses sort on a keyword search
+		// (MEM-400), so a default would break every keyword recall; browse
+		// without --sort is aihub's own default, updated.
+		fs.String("after", "", "browse mode: continue after a previous page's next cursor")
+		fs.String("sort", "", "browse mode: updated (aihub's default) or created, both descending")
 	},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		q := stringFlag(fs, "q")
 		if q == "" {
 			q = strings.Join(args, " ")
 		}
-		if strings.TrimSpace(q) == "" {
-			return fmt.Errorf("recall: a query is required (positional or --q)")
-		}
+		browse := strings.TrimSpace(q) == ""
+		after, sort := stringFlag(fs, "after"), stringFlag(fs, "sort")
 		// Local flag validation, ahead of any config resolution or wire
-		// call: a typo fails loudly here and no request is sent. The
-		// default-20 limit is the CLI's product choice; the endpoint's
-		// own 50 default stays a wire backstop for other callers.
+		// call: a refusal fails loudly here and no request is sent.
+		if browse && boolFlag(fs, "any") {
+			return fmt.Errorf("recall: --any ranks a keyword search and needs a query; browse mode (no query, the human direct-aihub path) lists by --sort instead")
+		}
+		if ctx.Step != "" || ctx.Task != "" {
+			// Browse is the human direct-aihub shape: the
+			// daemon's step/task memory proxy is search-only.
+			if browse {
+				return fmt.Errorf("recall: a query is required inside a workflow step or task — browse mode (no query, --after, --sort) is the human direct-aihub path; step and task agents search only")
+			}
+			if after != "" || sort != "" {
+				return fmt.Errorf("recall: --after and --sort are browse flags of the human direct-aihub path; a step or task agent searches only")
+			}
+		}
+		// The default-20 limit is the CLI's product choice (aihub's
+		// browse default is 20 too; its keyword default 50 stays a wire
+		// backstop for other callers).
 		limit := intFlag(fs, "limit")
 		if limit < 1 || limit > 200 {
 			return fmt.Errorf("recall: --limit must be 1..200")
@@ -696,9 +714,18 @@ var cmdRecall = &Command{
 		if boolFlag(fs, "any") {
 			match = "any"
 		}
-		raw, err := ctx.searchMemories(proj, q, memType, tagList, limit, match)
+		if browse {
+			q = ""
+		}
+		// A keyword search forwards an explicitly given --after/--sort
+		// too: aihub answers the mixed shape with MEM-400 itself.
+		raw, err := ctx.searchMemories(proj, q, memType, tagList, limit, match, sort, after)
 		if err != nil {
 			return err
+		}
+		if browse {
+			finishAs(ctx, raw, func(p *memoryPage) { renderMemoryPage(ctx.Stdout, p) })
+			return nil
 		}
 		finishAs(ctx, raw, func(l *itemList[memorySearchHit]) {
 			fmt.Fprintf(ctx.Stdout, "%d hit(s)\n", len(l.Items))

@@ -315,8 +315,15 @@ func copyTree(src, dst string) error {
 	})
 }
 
-// sealReadOnly makes the preserved scene read-only (files 0444, dirs 0555;
-// symlinks untouched — chmod never follows a link out of the scene).
+// sealReadOnly makes the preserved scene read-only. A regular file keeps its
+// permission bits with only the write bits cleared (Perm() &^ 0o222): 0644
+// seals as 0444 and 0755 as 0555, and other modes follow the same rule (0600
+// as 0400, 0700 as 0500, 0640 as 0440). A file without read bits stays so: 0200
+// seals as 0000 and is then unreadable. A directory is set to 0555 whatever
+// its mode was. Execute bits survive, so a sealed tree's executables
+// (an npm-installed bin target included) remain runnable even when a hard link
+// shares their inode with another tree. Symlinks are untouched — chmod never
+// follows a link out of the scene.
 // Best-effort per entry: the walk reports the first hard error.
 func sealReadOnly(root string) error {
 	return filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
@@ -330,7 +337,7 @@ func sealReadOnly(root string) error {
 			return os.Chmod(p, 0o555)
 		}
 		if info.Mode().IsRegular() {
-			return os.Chmod(p, 0o444)
+			return os.Chmod(p, info.Mode().Perm()&^0o222)
 		}
 		return nil
 	})

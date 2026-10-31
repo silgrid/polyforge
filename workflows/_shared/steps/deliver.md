@@ -122,6 +122,12 @@ Prevention is these rules and the machine's local pre-push hook - follow them.
   baseline: judge nothing to deliver against `origin/<default>` (below), never against it.
 - `artifacts/verification-report.md`: the full test bar (the exact build/lint/test
   commands verification ran).
+- The owner-review declaration: every line that begins with `owner-review:` and names
+  real paths, of the form
+  `owner-review: <capsule-relative path>[, <path>...] — <one-line description>`, in
+  `artifacts/plan.md` (its deliverables-and-carriers section) or in a completed step's
+  `summary` in `execution.json`. No such line anywhere means the work item declared no
+  owner-review artifact.
 
 ## 2. Per declared repo (one pass for each `repos/<name>/`)
 
@@ -149,7 +155,7 @@ in the delivery note. Work inside `repos/<name>/`.
    with the pushed branch instead of a PR link; record `merged: false` with the reason
    (or what the human did by hand). This is not `incomplete`.
 2. **Mechanical pre-flight (the delivery checklist).** Any hit is a reason for the human
-   question (section 3) - not yours to fix:
+   question (section 4) - not yours to fix:
    - `git status --porcelain --untracked-files=all` must be empty: an untracked or
      uncommitted test file (or any other file) would not be delivered.
    - No release residue: no tag points at a commit this WI made
@@ -245,6 +251,9 @@ in the delivery note. Work inside `repos/<name>/`.
 5. **Open or reuse the PR (idempotent).**
    `gh pr list --head <branch> --state all --json number,url,state,mergeCommit`:
    - an OPEN PR: reuse it (never a second PR);
+   - a MERGED PR whose branch carries new commits since its merge commit (a "back to
+     code" answer after the merge): open exactly one follow-up PR for those commits on
+     the same branch - the only case a second PR is allowed;
    - none (or only CLOSED unmerged ones - mention them in the note): create one,
      `gh pr create --base <default> --head <branch> --title "<WI slug>: <one-line summary>" --body-file artifacts/deliver-pr-<name>.md`,
      the body naming the WI slug, a change summary, the review verdict and the test
@@ -262,7 +271,9 @@ in the delivery note. Work inside `repos/<name>/`.
      exists, and every commit between it and the delivered HEAD is a merge git itself
      reproduces (the driver checks the first-parent history). A plain commit after the
      review pass - by the build step's re-entry, by verification or by you - invalidates
-     the pass: a re-verification that does not move HEAD keeps it covered;
+     the pass: a re-verification that does not move HEAD keeps it covered. In a workflow
+     without a `review` step (autopilot) there is no review head: verification's
+     `verified_heads.<name>` stands in for this coverage, exactly as the driver judges it;
    - when verification ran **scoped** (`steps.verification.output.scope`), review answered
      `scope_adequate: true` and recorded the same scope
      (`steps.review.output.scope.declared_paths` equals verification's effective declared
@@ -279,6 +290,9 @@ in the delivery note. Work inside `repos/<name>/`.
      holds for the pushed head) and `tests_passed` is true;
    - no merge since the verified commit was hand-resolved (`llm_resolved_conflict` is
      not true);
+   - the owner-review gate (section 3) is settled: the work item declared no
+     `owner-review:` artifact, or this round carries the owner's `deliver-owner-review`
+     answer 「过目通过」;
    - the pre-flight found nothing.
    Then: `gh pr merge <pr_url> --merge`, and read the merge commit with
    `gh pr view <pr_url> --json mergeCommit -q .mergeCommit.oid`. If `gh pr merge` itself
@@ -289,7 +303,47 @@ in the delivery note. Work inside `repos/<name>/`.
    local HEAD you pushed and tested; fast-forwarding it onto the PR merge commit makes
    that the "last merge" and voids the re-run that licensed the PR merge.
 
-## 3. The human-only question
+## 3. The owner-review gate (declared artifacts)
+
+Settle this gate once for the whole delivery, after every repo's PR is open and pushed
+(section 2, steps 1-5) and **before any `gh pr merge`** of this dispatch.
+
+- **No declaration -> no question.** When no `owner-review:` line exists in
+  `artifacts/plan.md` or in any completed step's `summary` in `execution.json`, skip this
+  section entirely: the gate is settled and the delivery has zero new interruptions.
+- **A declaration -> show the material, once per delivery round.** Return outcome
+  `needs_input` with `question_id` `deliver-owner-review` (add a suffix such as `-2` when
+  you ask again after an answer) and a `question` that carries, per repo, the PR link;
+  each declared `owner-review:` line verbatim; and, per declared path, whether it exists
+  (`test -e <path>` from the capsule root) with its description. State that nothing
+  merges until the owner answers.
+- **The answers - exactly two:**
+  - **过目通过** - continue: the merge rule's owner-review condition now holds, and
+    nothing more;
+  - **不通过: <what to change>** - you return outcome `gate_failed` with `verdict: fail`
+    and a `fail_reason` carrying the owner's instruction verbatim and the PR links; the
+    workflow rewinds to its build step, and the next deliver run reuses the same branch
+    and PR.
+  Anything else is a new question.
+- **过目通过 is not a merge decision.** Every other merge-rule condition (section 2,
+  step 6) must still hold on its own; when one fails, ask `deliver-merge` per section 4,
+  even though a human has already answered in this round. The driver's human-answer check
+  counts any answer in the round, so it no longer catches a merge outside the rule after an
+  owner-review answer: this rule is the only fence.
+- **Silence is a wait, never an approval.** The parked `needs_input` is the wait: never
+  answer it yourself, never merge around it, never treat an unanswered question as
+  passed.
+- **The material is read-only.** Never edit, regenerate or move a declared artifact, and
+  never commit one into `repos/<name>/` to show it.
+- **Already merged on a re-dispatch** (section 2, step 1): report it merged, never
+  "owner-reviewed". When a declaration exists and this dispatch carries no
+  `deliver-owner-review` answer, say so and route the delivery through section 4's
+  "already merged; acknowledge" question.
+- **The answer is this round's.** A `deliver-owner-review` answer under "Answered
+  questions" covers the tree it was shown; a rewind to the build step starts a new round
+  that carries no such answer, so the gate asks again.
+
+## 4. The human-only question
 
 If the merge rule does not hold for any repo (or a merge failed), push and open/reuse the
 PRs first (so the human can look), then return outcome `needs_input` with
@@ -303,7 +357,17 @@ not hold, and offers exactly three answers:
 - **back to code: <what to change>** - you return outcome `gate_failed` with
   `verdict: fail` and a `fail_reason` carrying the human's instruction verbatim and the PR
   links; the workflow rewinds to its code step, and the next deliver run reuses the same
-  branch and PR.
+  branch and PR (after a MERGED PR: one follow-up PR, step 5).
+
+For a repo that is **already merged** (section 2, step 1: "already merged;
+acknowledge") the question offers, instead of merge / don't merge:
+
+- **acknowledge** - the human accepts the merge that happened: check that the merge
+  contains the verified head (`git merge-base --is-ancestor <verified_heads.<name>>
+  <merge_commit>`) and that the owed `test_bar` re-run passed, then complete with
+  `merged: true` for that repo. This round's `acknowledge` answer settles it: never ask
+  again;
+- **back to code: <what to change>** - as above.
 
 Only when this delivery is scoped (`steps.verification.output.scope` is present) the
 question additionally offers a fourth answer:
@@ -316,16 +380,21 @@ question additionally offers a fourth answer:
   Offer this answer only on a scoped delivery: on a full-tier ticket the merge rule has no
   scoped condition, and the driver ignores `rewind_to`.
 
+Both rewinds are owner-routed: a deliver FAIL a human answered in this attempt charges
+neither the edge slot nor `max_total` (only a FAIL no human answered is charged).
+
 Your next dispatch sees the answer under "Answered questions". Act on it exactly; anything
 else is a new question.
 
-## 4. Result
+## 5. Result
 
 Write `artifacts/delivery.md` (the delivery note) and emit `verdict: pass` with one
 `repos` entry per declared repo (`branch`, `pr_url`, `merged` and `merge_commit` or
 `not_merged_reason`, `llm_resolved_conflict`, `tests_passed`; or `skipped_reason`), the
 `ci_evidence` entries of any repo whose tests its CI evidence covered, and the same note in
-`delivery_note`. The delivery note (and the PR body, which already goes
+`delivery_note`. The delivery note records the owner-review gate: when it asked, the
+question, the artifacts shown and the owner's answer verbatim; otherwise "no
+owner-review declared". It (and the PR body, which already goes
 through `--body-file`) also summarizes every `non-blocking` finding of
 `steps.review.output.findings` — the follow-ups the review recorded but did not block
 on — so the owner can decide which become tickets; no step ever files them
@@ -333,6 +402,12 @@ automatically. A repo left unmerged without a PR (non-GitHub origin) has
 `pr_url` empty. An infrastructure failure (no push identity, origin unreachable) is
 outcome `incomplete` with the exact error - the
 work item blocks and a human fixes the machine and resumes; never work around it.
+
+## Principles
+
+Merge, push, PR and check-run waits are each one foreground command with an explicit timeout; a wait on CI or a merge is a condition loop inside that same call.
+
+{{principles}}
 
 ## Output
 

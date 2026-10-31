@@ -99,10 +99,16 @@ Example:
    couplings there. A new file has no incoming references, so a grep for its name cannot
    find its obligations — ask what documents, lists or rules would have to name it.
 
+{{deliverable_carrier}}
+
+{{owner_review}}
+
 ## e2e-author mode
 
-Read the mode the owner approved in `artifacts/grill-qa.md` and state it in
-`artifacts/plan.md`. The default is `required`; the per-work-item value is the
+Read the mode the owner approved in `artifacts/grill-qa.md` and restate it in
+`artifacts/plan.md`. The audit anchor is `artifacts/grill-qa.md` alone: your statement
+decides nothing, and a proposal you make without an owner record resolves to
+`required`. The default is `required`; the per-work-item value is the
 owner-approved one, and with no approved record the default `required` applies. A
 skip is honoured only when `grill-qa.md` records the owner's explicit approval of
 `skipped-with-rationale` (fail-closed to `required` otherwise);

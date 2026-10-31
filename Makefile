@@ -9,17 +9,18 @@ GO_LDFLAGS := -X github.com/silgrid/polyforge/internal/version.Version=$(VERSION
 
 # The console SPA build: every binary-producing target
 # builds the locked frontend FIRST, so the go:embed dist tree exists
-# before any go build. Node is checked with an explicit message (the
-# exact .nvmrc version — the repo-root pin nvm itself reads), and the
-# build is `npm ci` + `npm run build` from the one committed lockfile —
-# no node_modules shortcut, no version drift. A host without the
-# pinned node fails loudly, never skips.
+# before any go build. Node is checked with an explicit message against
+# the repo-root .nvmrc, which pins the node MAJOR version (the pin nvm
+# itself reads): any node of that major passes, whatever its patch
+# level; any other major fails. The build is `npm ci` + `npm run build`
+# from the one committed lockfile — no node_modules shortcut. A host
+# without a node of the pinned major fails loudly, never skips.
 WEBUI_NODE := $(shell cat .nvmrc 2>/dev/null)
 
 webui-build:
-	@command -v node >/dev/null 2>&1 || { echo "webui-build: node $(WEBUI_NODE) is required (pinned by .nvmrc); install node $(WEBUI_NODE) first"; exit 1; }
-	@if [ "$$(node --version)" != "v$(WEBUI_NODE)" ]; then \
-		echo "webui-build: node $$(node --version) does not match .nvmrc ($(WEBUI_NODE)); install node $(WEBUI_NODE) first"; exit 1; \
+	@command -v node >/dev/null 2>&1 || { echo "webui-build: node $(WEBUI_NODE).x is required (major version pinned by .nvmrc); install node $(WEBUI_NODE).x first"; exit 1; }
+	@if [ "$$(node --version | cut -d. -f1)" != "v$(WEBUI_NODE)" ]; then \
+		echo "webui-build: node $$(node --version) is not major $(WEBUI_NODE) (pinned by .nvmrc); install node $(WEBUI_NODE).x first"; exit 1; \
 	fi
 	cd webui && npm ci && npm run build
 

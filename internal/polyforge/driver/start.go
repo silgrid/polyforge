@@ -30,6 +30,14 @@ func (h *Handle) Answer(questionID, answer, answeredBy string) error {
 	return h.drv.Answer(questionID, answer, answeredBy)
 }
 
+// ReviseBinding applies owner corrections of done step binding commands
+// through the live driver's single write entry point. One
+// call carries the whole batch, so a result whose bindings all carry the
+// same malformed quote is corrected before the output is validated again.
+func (h *Handle) ReviseBinding(stepID string, corrections []capsule.BindingCorrection, by, reason string) error {
+	return h.drv.ReviseBinding(stepID, BindingRevisionRequest{Corrections: corrections, By: by, Reason: reason})
+}
+
 // Exit is closed once Run has returned (the confirmed exit).
 func (h *Handle) Exit() <-chan struct{} { return h.done }
 

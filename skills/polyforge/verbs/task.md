@@ -30,10 +30,13 @@ pf task cancel <id>
 - `--project` is required and is the only selector: a project **name** mapped
   on this daemon, never a filesystem path.
 - Budgets: `--max-duration` defaults to `20m` (ceiling `60m`) and
-  `--max-tokens` to `300000` (ceiling `1000000`). Both are hard caps — a value
-  above its ceiling, or one that is not a duration / not a positive integer
-  (`0` and negatives included), is refused locally, exit 1, before any wire
-  call, and no config key raises the ceilings.
+  `--max-tokens` to `300000` (ceiling `1000000`). The token budget counts
+  **fresh tokens** per model call: uncached input + cache creation/write +
+  output. Context re-sent from the prompt cache (a cache read) is not charged
+  again. Both are hard caps — a value above its ceiling, or one that is not a
+  duration / not a positive integer (`0` and negatives included), is refused
+  locally, exit 1, before any wire call, and no config key raises the
+  ceilings.
 - `--models`, `--wait` and `--type` are refused, never swallowed: the lane has
   no spawn-level model override, no blocking mode and one task kind.
 - Model candidates come from the workspace yaml: `steps.<project>.task.models`
@@ -79,8 +82,22 @@ no deliverable.
 
 ## Lifecycle and retention
 
-- `list` shows the retained tasks (id, project, state, age); `show <id>`
-  prints the budget usage and the report; `cancel <id>` asks the daemon to
+- `list` shows the retained tasks (id, project, state, age); its `--json`
+  rows also carry `prompt_summary` (the prompt's first non-empty line, at
+  most 120 code points; empty for an empty prompt), `reporter` and
+  `report_tail`, and never the full prompt or the full report — those stay
+  on `pf task show`.
+  - `reporter` is the spawner's display name as a human member of the
+    task's project, else `machine`. Its trust is self-asserted: the id comes
+    from `PF_USER_ID` (else `cli.toml` `user_id`), the same trust as a work
+    item's `origin.owner`, not an authenticated identity. It is a spawn-time
+    snapshot: a later rename or an aihub outage does not change it.
+  - `report_tail` is the report's last non-empty line (at most 200 code
+    points, `…` + the last 199 when longer), unmasked, `""` while running or
+    for an empty report — never the error. Read the full report with
+    `pf task show <id>`.
+- `show <id>` prints the budget usage and the report (its
+  `--json` also carries the full prompt); `cancel <id>` asks the daemon to
   stop a running task.
 - States: `running`, then exactly one of `completed`, `capped` (a budget was
   hit — the partial report is kept and marked truncated), `failed` (every

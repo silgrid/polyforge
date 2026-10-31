@@ -34,7 +34,12 @@ difference would users/callers perceive that the existing scenarios can't
 detect?" — if you can answer, new scenarios are required. Edge case: a small
 ticket discovered mid-flight to touch the behavior face (at the grill/spec
 stage) declares it in needs_input, and the owner decides between re-filing
-on the e2e graph and human-authored scenarios.
+on the e2e graph (answering that question with the reserved `cancel`,
+which ends the work item, then filing anew) and human-authored scenarios. Named exception — behaviour
+already on main: when every authored scenario passes at baseline, the owner
+may answer `skip: <rationale>`; `e2e-author` records that rationale verbatim
+in `artifacts/grill-qa.md` (the anchor; never `plan`'s restatement) and the
+work item proceeds without authored scenarios.
 
 **Discipline ② — bug fixes → the repro must land as a regression test.** The
 bug-fix graph's `fix` step carries a **mandatory** `regression_test` field:

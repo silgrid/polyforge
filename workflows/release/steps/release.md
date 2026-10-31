@@ -87,16 +87,27 @@ The release must build exactly the freshly fetched origin default-branch head.
 5. **Already released?** This step can be dispatched again after an earlier attempt
    already published (the harness died before its result landed), and someone may have
    released this head by hand. Run `git ls-remote --tags origin` once now (the current
-   list) and refuse in either case below - do NOT run the procedure; finish with
+   list). **Adopt** a published tag only when ALL THREE hold: a release tag is on
+   `origin_head` (below); this capsule's `artifacts/pre-release-tags.txt` exists (an
+   earlier attempt of THIS work item captured it); and that tag is absent from the file
+   (the earlier attempt published it, then died before its result landed). Adopting runs
+   no procedure: write `artifacts/release-record.json` for that tag (section 5) with
+   `notes` = its published release page URL, `https://<host>/<owner>/<repo>/releases/tag/<V>`
+   (a location `verify` checks mechanically), commit it with the capsule, and pass with
+   that tag's `version`, `commit` (= `origin_head`), `notes` and the artifacts
+   `gh release view <V>` lists, so `verify` audits it under its existing checks.
+   Otherwise refuse in either case below - do NOT run the procedure; finish with
    `verdict: fail` and a `fail_reason` that begins with `PF-RELEASE-ALREADY_RELEASED`
-   and names the tag(s), so a human decides the next move:
-   - **The head is already tagged** (checked whether or not any file from an earlier
-     attempt exists): a release tag - a tag whose name starts with `v`, for example
+   and names the tag(s), so a human decides the next move (no capsule list - a hand
+   release -, the tag already in the list, or the tag not on `origin_head` never adopt):
+   - **The head is already tagged and the tag is not adoptable** (checked
+     whether or not any file from an earlier attempt exists): a release tag - a tag whose name starts with `v`, for example
      `v1.2.3` - whose sha, or peeled `^{}` sha, equals `origin_head`.
    - **An earlier attempt recorded a list**: `<capsule>/artifacts/pre-release-tags.txt`
      already exists (never overwrite it) and the current list has any line that file
      lacks - any tag, on any commit, added or moved since that attempt (for example
-     `comm -13` over the two sorted lists prints something).
+     `comm -13` over the two sorted lists prints something) - other than the one adopted
+     tag above.
    A normal first run passes both: origin's head carries no release tag yet and there is
    no earlier list.
 6. Only when the file does not exist yet: record the pre-release remote tag list, which

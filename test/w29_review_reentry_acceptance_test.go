@@ -120,7 +120,7 @@ func TestW29ReviewReentryTwoRound(t *testing.T) {
 			"verdict":     "fail",
 			"fail_reason": "the new branch has no test",
 			"findings": []map[string]any{
-				{"severity": "blocking", "detail": "the new branch has no test"},
+				{"severity": "blocking", "repair_target": "code", "detail": "the new branch has no test"},
 				{"severity": "non-blocking", "detail": "nit: the helper name is terse"},
 			},
 		}},

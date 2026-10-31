@@ -155,7 +155,18 @@ This section explains the choices:
   The analysis could not
   determine the cause from the evidence at hand. `repro` re-runs with the `fail_reason`
   (what was missing: intermittent behavior, missing logs, wrong environment) attached as
-  its `pending_rewind_input`, and sharpens the reproduction accordingly.
+  its `pending_rewind_input`, and sharpens the reproduction accordingly. Only the first
+  inconclusive diagnosis rewinds: a second one on this edge does not spend a charged
+  rewind — the driver asks the owner (`needs_input`) instead: `re-run-repro: <evidence>` (supplement the
+  reproduction and re-run `repro`, an owner-routed rewind), `continue: <guidance>` or
+  `cancel`. Likewise a `repro` that honestly reports `reproduces: false`
+  is not handed to `root-cause`: the driver asks the owner the same three answers
+  (`continue` accepts the report and moves on with the guidance: `root-cause`'s next
+  dispatch carries it verbatim as its `pending_rewind_input`).
+- **Pre-fix base.** The driver records the task-repo heads the first accepted `repro`
+  ran on (`execution.json` `pre_fix_heads`). After a `fix → root-cause` rewind, a
+  `repro` re-run reproduces against that pre-fix base (its rewind input names the
+  heads), never against the tree that already carries the fix's mitigation.
 - **`review` FAILs -> rewind to `fix`.** Review found the fix wanting (wrong cause
   addressed, incomplete fix, or a fix that breaks something adjacent). `fix` re-runs
   with the blocking findings attached. If the verdict says the diagnosis itself was
@@ -163,16 +174,30 @@ This section explains the choices:
   the cause mid-flow.
 - **`fix` completes with `root_cause_addressed: false` -> the driver rewinds to
   `root-cause`, once.** Before `review` or `verification` runs, the driver archives and
-  re-runs `root-cause` with the fix's `summary` as its rewind input, charged on the
+  re-runs `root-cause` with the fix's `summary` as its rewind input (a false report that
+  changed nothing completes with an empty `commits` list — the one legal empty list; a
+  true fix with no commit is rejected), charged on the
   `fix → root-cause` edge; `fix` then re-runs against the new diagnosis. A re-run
   `root-cause` that cannot prove a cause still FAILs to `repro` as above. A second false
   does not rewind again: the driver asks the owner (`needs_input`) whether to continue
-  with corrective guidance or cancel and re-file — so an honestly reported
+  with corrective guidance or answer the reserved `cancel` (which ends the work item)
+  and re-file — so an honestly reported
   misdiagnosis never ends in `failed_rewind_exhausted`.
   An all-text-only review FAIL (every blocking finding marked `text_only: true`) takes
   the light path: `fix`'s previous session resumes with the verdict, applies only
   text-only fixes, and the gate tail (a fresh `review`, then `verification`) re-runs
   unchanged.
+  A review FAIL whose blocking findings are ALL off-graph (each finding's
+  `repair_target` names the authored suite, the spec, a declared obligation that is itself
+  wrong or an un-IDed instruction — never `code`, which covers every repair the
+  build step can make in its own round: updating a declared obligation the diff
+  left unchanged, withdrawing a moot one, citing an undeclared file) is not rewound: the driver asks the owner (the
+  review owner exit), who answers `amend-upstream: <words>` (recorded verbatim in
+  `artifacts/grill-qa.md` `## Owner rulings`; a suite gap re-runs `repro` append-only,
+  anything else is executed by `fix`; spec and plan are never re-run), `waive <refs> —
+  <words>` (clears exactly the named findings; review re-runs) or `cancel`. That
+  rewind is owner-routed. A mixed FAIL rewinds `fix` as above, the off-graph
+  findings riding along.
 - **`verification` FAILs -> rewind to `fix`.** Build/lint/tests — including the original
   repro case — did not pass; only `fix` can change the tree. The judgment already
   passed on the earlier tree; the re-entered round re-runs it after the fix.
@@ -183,7 +208,7 @@ Workflow-level rewind bounds: `max_total: 9`, `max_per_step: 3`. The per-step bo
 is charged per gate→target edge (the three gates that rewind to `fix` carry three
 charged slots each; light and converging rewinds charge none, until a light re-entry
 self-reports `needs_code_change: true` — that turns its light rewind into a fresh round,
-which charges the edge once), and `max_total` counts every rewind, light ones included. A diagnosis-fix loop that cannot converge in three
+which charges the edge once), and `max_total` counts every automatic rewind, light ones and `fix → root-cause` included. Owner-routed rewinds charge neither the edge slot nor `max_total`: a `deliver` FAIL a human answered ("back to code", and on a scoped work item 「全量重验」, which is owner-routed too), the review owner exit's rewind and the bug-fix dead-end owner answers. A diagnosis-fix loop that cannot converge in three
 charged rewinds per gate is telling you the WI is mis-scoped — surface that honestly
 instead of burning the budget on repeat attempts.
 

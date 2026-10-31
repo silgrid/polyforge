@@ -5,14 +5,17 @@ import type { WorkItemList } from '../types'
 import NotFound from '../components/NotFound'
 import StatusPill from '../components/StatusPill'
 import RelativeTime from '../components/RelativeTime'
+import { ArrowRightIcon } from '../icons'
+import { buttonClass, Chip, DataTable, EmptyState, inputClass, Muted, PageHeader } from '../components/ui'
 
 // The status filter row: All plus each api status.
 const STATUSES = ['queued', 'running', 'paused', 'blocked', 'wrapped', 'failed', 'canceled']
 
 // WorkItemsPage is the project's work-item list: the status filter and
 // substring search ride the URL query (a filter change is navigation),
-// the table is compact (number, title, status, priority, age), and
-// Next pages through the opaque cursor.
+// the table is dense (number, title, status, priority, age — the last
+// two hide at the narrow width), and Next pages through the opaque
+// cursor.
 export default function WorkItemsPage({ project }: { project: string }) {
   const params = new URLSearchParams(window.location.search)
   const status = params.get('status') ?? ''
@@ -41,20 +44,16 @@ export default function WorkItemsPage({ project }: { project: string }) {
 
   return (
     <div data-testid="work-items">
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        <h1 className="text-xl font-semibold mr-2">Work items · {project}</h1>
-        {['', ...STATUSES].map((s) => (
-          <a
-            key={s || 'all'}
-            href={listUrl(s ? { status: s } : { status: '' })}
-            className={`no-underline text-xs border rounded-full px-2 py-0.5 ${
-              status === s ? 'bg-tint text-fg border-fg' : 'text-muted border-line hover:text-fg'
-            }`}
-          >
-            {s || 'all'}
-          </a>
-        ))}
-        <form action={href(project, 'work-items')} method="get" className="flex gap-2 ml-2">
+      <PageHeader title={`Work items · ${project}`} />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {['', ...STATUSES].map((s) => (
+            <Chip key={s || 'all'} to={listUrl(s ? { status: s } : { status: '' })} active={status === s}>
+              {s || 'all'}
+            </Chip>
+          ))}
+        </div>
+        <form action={href(project, 'work-items')} method="get" className="flex w-full min-w-0 gap-2 sm:w-auto">
           <input type="hidden" name="status" value={status} />
           <input
             data-testid="work-items-search"
@@ -62,57 +61,53 @@ export default function WorkItemsPage({ project }: { project: string }) {
             name="q"
             defaultValue={q}
             placeholder="Search goal or content…"
-            className="bg-bg text-fg border border-line rounded px-2 py-1 w-64"
+            className={`${inputClass} w-full sm:w-64`}
           />
-          <button type="submit" className="border border-line rounded px-2 py-1 text-sm bg-tint">
+          <button type="submit" className={buttonClass}>
             Filter
           </button>
         </form>
       </div>
       {page === null ? (
-        <p className="text-muted">Loading…</p>
+        <Muted>Loading…</Muted>
       ) : page.items.length === 0 ? (
-        <p className="text-muted">No work items.</p>
+        <EmptyState>No work items.</EmptyState>
       ) : (
-        <table className="zebra w-full max-w-prose text-sm border-collapse">
-          <thead>
-            <tr className="text-left text-muted">
-              <th className="py-1 pr-2">#</th>
-              <th className="py-1 pr-2">Title</th>
-              <th className="py-1 pr-2">Status</th>
-              <th className="py-1 pr-2">Priority</th>
-              <th className="py-1">Age</th>
+        <DataTable
+          head={
+            <tr>
+              <th className="w-px">#</th>
+              <th>Title</th>
+              <th className="w-px">Status</th>
+              <th className="narrow-hidden w-px">Priority</th>
+              <th className="narrow-hidden w-px">Age</th>
             </tr>
-          </thead>
-          <tbody>
-            {page.items.map((it) => (
-              <tr key={it.id} data-testid="work-item-row">
-                <td className="py-1 pr-2 text-muted">{it.seq}</td>
-                <td className="py-1 pr-2">
-                  <a className="text-accent" href={href(project, 'work-items', it.id)}>
-                    {it.goal}
-                  </a>
-                </td>
-                <td className="py-1 pr-2">
-                  <StatusPill status={it.status} />
-                </td>
-                <td className="py-1 pr-2 text-muted">{it.priority}</td>
-                <td className="py-1 text-muted">
-                  <RelativeTime at={it.created_at} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          }
+        >
+          {page.items.map((it) => (
+            <tr key={it.id} data-testid="work-item-row">
+              <td className="text-muted">{it.seq}</td>
+              <td className="[overflow-wrap:anywhere]">
+                <a className="font-medium text-fg hover:text-accent-fg" href={href(project, 'work-items', it.id)}>
+                  {it.goal}
+                </a>
+              </td>
+              <td>
+                <StatusPill status={it.status} />
+              </td>
+              <td className="narrow-hidden text-muted">{it.priority}</td>
+              <td className="narrow-hidden whitespace-nowrap text-muted">
+                <RelativeTime at={it.created_at} />
+              </td>
+            </tr>
+          ))}
+        </DataTable>
       )}
       {page?.next_cursor ? (
         <p className="mt-4">
-          <a
-            data-testid="next-page"
-            className="text-accent"
-            href={listUrl({ after: page.next_cursor })}
-          >
+          <a data-testid="next-page" className="inline-flex items-center gap-1" href={listUrl({ after: page.next_cursor })}>
             Next page
+            <ArrowRightIcon />
           </a>
         </p>
       ) : null}

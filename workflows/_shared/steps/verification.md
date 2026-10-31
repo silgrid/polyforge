@@ -88,7 +88,7 @@ output:
           type: array
           minItems: 1
           items: { type: string, minLength: 1 }
-          description: This run's agent-declared coverage - opaque strings, never classified by the driver.
+          description: "declared_paths as review's `scope` defines it (one meaning): `steps.review.output.scope.declared_paths`, verbatim."
         rationale: { type: string, minLength: 1 }
         fast_gates_ref: { type: string, minLength: 1, description: "The release-shipped engine invocation this run used (`<data-dir>/release/current/tools/verify-scope`, default `~/.local/share/polyforge/release/current/tools/verify-scope`) and whether a repo `.polyforge/verify-scope.conf` applied - `pf verify-run`'s `result.json` `scope.fast_gates_ref`, verbatim." }
         prior:
@@ -150,17 +150,22 @@ test-file checks, the test bar — is ONE command, `pf verify-run`. Your half is
 ## Run `pf verify-run` exactly once
 
 From the capsule root, in the foreground:
-`pf verify-run --tier <full|scoped> --engine <data-dir>/release/current/tools/verify-scope --deadline <D>`
+`pf verify-run --tier <full|scoped> --engine <data-dir>/release/current/tools/verify-scope`
 
 - `--tier` is what the `# Verification tier` section names (FULL → `full`, SCOPED →
   `scoped`); never guess it. `<data-dir>` is `$POLYFORGE_DATA_DIR` when set, else
   `~/.local/share/polyforge` — the release-shipped scope engine, which a repo may steer
   with a `.polyforge/verify-scope.conf`.
-- One blocking call: give it an explicit timeout as long as your shell tool allows, pass
-  `--deadline` about 2 minutes under that timeout, and wait for it. Nothing runs past the
-  deadline (a command that can no longer start is recorded `fail`) and the result is
-  written before it. Never background it, never poll for its completion, never split its
-  work into calls of your own. A re-dispatch calls it once again (a new `runtime-state/verify/<n>/`).
+- One blocking call: give the call an explicit shell timeout of at least the tool window in
+  your step environment (`$PF_TOOL_WINDOW_MS` milliseconds), and run it without `--deadline`.
+  The runner derives the whole-run deadline from that same tool-window bound (and clamps any
+  explicit `--deadline` above it), so it stops in time to write `result.json` before the
+  daemon's tool rule; pass a shorter `--deadline` only when you want a tighter bound, never
+  a longer one. Your shell tool may cap the timeout at its own maximum, which still sits
+  above the runner's deadline. Wait for it. Nothing runs past the deadline (a command that
+  can no longer start is recorded `fail`) and the result is written before it. Never
+  background it, never poll for its completion, never split its work into calls of your
+  own. A re-dispatch calls it once again (a new `runtime-state/verify/<n>/`).
 - Read the `result.json` it names: the whole mechanical record (command logs stay local
   under `runtime-state/verify/<n>/`, never in `artifacts/`).
 - Exit 0 means a result was produced — a red bar is data, read it. Exit 1 with

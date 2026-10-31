@@ -3,14 +3,23 @@ package task
 // usage.go: the token-usage accumulator and text capture for the two
 // harness streams.
 //
+// The budget counts FRESH tokens only: the tokens a call newly adds to the
+// conversation. An agent loop resends the whole conversation on every call,
+// and the provider serves most of that re-sent prefix from its prompt cache
+// and reports it as a cache read. That prefix was already paid for once, so
+// charging it again at full weight would make the total grow with
+// turns x context (quadratic) instead of with the work done.
+//
 //   - claude: `--output-format stream-json` records. An `assistant` record
 //     carries message.usage (input_tokens + output_tokens +
-//     cache_creation_input_tokens + cache_read_input_tokens); the final
-//     `result` record carries an aggregate usage that is counted only
-//     when no assistant usage was seen (so the total is never doubled).
-//   - pi: `--mode json` records. A `message_update` record's top-level
-//     usage.totalTokens is cumulative PER TURN; the max seen in a turn is
-//     added to the running total at the turn boundary.
+//     cache_creation_input_tokens + cache_read_input_tokens); the fresh part
+//     is everything but the cache read. The final `result` record carries an
+//     aggregate usage that is counted only when no assistant usage was seen
+//     (so the total is never doubled), by the same unit.
+//   - pi: `--mode json` records. A `message_update` record's top-level usage
+//     carries the call's input/output/cacheRead/cacheWrite components; the
+//     fresh part is everything but cacheRead, and the max seen in a message
+//     is added to the running total at the message/turn boundary.
 //
 // A harness that emits no usage record leaves Tokens at 0; the manager
 // refuses such a candidate before it starts (SupportsUsage), so a task
@@ -37,17 +46,34 @@ const (
 	harnessClaude = "claude"
 )
 
-// usageCounts is the shared usage object of claude and pi records.
-type usageCounts struct {
+// piUsage is the usage object of a pi `--mode json` record. pi reports the
+// per-call components; its totalTokens is their sum, cache reads included.
+type piUsage struct {
+	Input      int64 `json:"input"`
+	Output     int64 `json:"output"`
+	CacheRead  int64 `json:"cacheRead"`
+	CacheWrite int64 `json:"cacheWrite"`
+}
+
+// fresh answers the fresh tokens of one pi call: uncached input, output and
+// newly written cache. CacheRead is the re-sent prefix of earlier calls.
+func (u piUsage) fresh() int64 {
+	return u.Input + u.Output + u.CacheWrite
+}
+
+// claudeUsage is the usage object of a claude `stream-json` record, per
+// message and in the final result aggregate. cache_creation is fresh work;
+// cache_read is the re-sent prefix of earlier calls.
+type claudeUsage struct {
 	Input       int64 `json:"input_tokens"`
 	Output      int64 `json:"output_tokens"`
 	CacheCreate int64 `json:"cache_creation_input_tokens"`
 	CacheRead   int64 `json:"cache_read_input_tokens"`
-	TotalTokens int64 `json:"totalTokens"`
 }
 
-func (u usageCounts) claudeSum() int64 {
-	return u.Input + u.Output + u.CacheCreate + u.CacheRead
+// fresh answers the fresh tokens of one claude call.
+func (u claudeUsage) fresh() int64 {
+	return u.Input + u.Output + u.CacheCreate
 }
 
 // StreamParser feeds on one harness stdout record at a time. It is not
@@ -56,7 +82,7 @@ type StreamParser struct {
 	harness string
 
 	total       int64           // flushed turns (pi) / accumulated messages (claude)
-	turnMax     int64           // pi's current turn's cumulative totalTokens
+	turnMax     int64           // pi's current message's largest fresh per-call count
 	claudeUsage bool            // an assistant usage was seen (the result aggregate is then skipped)
 	claudeSeen  map[string]bool // claude assistant message ids whose usage was already counted
 
@@ -110,7 +136,7 @@ func (p *StreamParser) Feed(line []byte) {
 type piTaskRecord struct {
 	Type string `json:"type"`
 	// message_update top-level usage
-	Usage *usageCounts `json:"usage"`
+	Usage *piUsage `json:"usage"`
 	// message_update
 	AssistantMessageEvent struct {
 		Type  string `json:"type"`
@@ -129,8 +155,10 @@ func (p *StreamParser) feedPi(line []byte) {
 	case "turn_start":
 		p.flushPiTurn()
 	case "message_update":
-		if rec.Usage != nil && rec.Usage.TotalTokens > p.turnMax {
-			p.turnMax = rec.Usage.TotalTokens
+		if rec.Usage != nil {
+			if n := rec.Usage.fresh(); n > p.turnMax {
+				p.turnMax = n
+			}
 		}
 		if rec.AssistantMessageEvent.Type == "text_delta" {
 			p.piDeltas.WriteString(rec.AssistantMessageEvent.Delta)
@@ -154,7 +182,7 @@ func (p *StreamParser) flushPiTurn() {
 
 type claudeTaskRecord struct {
 	Type    string          `json:"type"`
-	Usage   *usageCounts    `json:"usage"`
+	Usage   *claudeUsage    `json:"usage"`
 	Message json.RawMessage `json:"message"`
 	Result  string          `json:"result"`
 }
@@ -171,14 +199,14 @@ func (p *StreamParser) feedClaude(line []byte) {
 				ID      string          `json:"id"`
 				Role    string          `json:"role"`
 				Content json.RawMessage `json:"content"`
-				Usage   *usageCounts    `json:"usage"`
+				Usage   *claudeUsage    `json:"usage"`
 			}
 			if json.Unmarshal(rec.Message, &msg) == nil {
 				// One API message is emitted as several content-block
 				// records, each repeating the SAME usage; count it once per
 				// message id (polyforge#40 code review).
 				if msg.Usage != nil && (msg.ID == "" || !p.claudeSeen[msg.ID]) {
-					p.total += msg.Usage.claudeSum()
+					p.total += msg.Usage.fresh()
 					p.claudeUsage = true
 					if msg.ID != "" {
 						p.claudeSeen[msg.ID] = true
@@ -194,7 +222,7 @@ func (p *StreamParser) feedClaude(line []byte) {
 			p.claudeResult = rec.Result
 		}
 		if rec.Usage != nil && !p.claudeUsage {
-			p.total += rec.Usage.claudeSum()
+			p.total += rec.Usage.fresh()
 			p.claudeUsage = true
 		}
 	}

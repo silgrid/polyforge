@@ -205,6 +205,9 @@ func (s *piSpawner) buildCmd(p SpawnParams) *exec.Cmd {
 		// second marker half: the sweep needs BOTH, so a daemon never
 		// reaps another daemon's step process for the same WI id.
 		"PF_DAEMON_ID=" + s.cfg.MachineID,
+		// the daemon's tool rule, so verify-run can bound its whole run
+		// without a pi-specific shell setting
+		toolWindowEnv(s.cfg.ToolWindow),
 	}
 	if s.cfg.DaemonSocket != "" {
 		additions = append(additions, "PF_DAEMON_SOCKET="+s.cfg.DaemonSocket)

@@ -24,13 +24,24 @@ output:
       description: Optional (polyforge#222). Absent on every normal completion. Set only when this attempt is a light rewind's re-entry (the rewind input's light-rewind section instructs it) and the verdict's fix needs a change OUTSIDE the text-only boundary - code, tests or assertions, user-facing string literals, workflows/** .md files, skills/** prompt material - deliver true instead of applying it, and the driver rewinds fresh with the same verdict - that escalation charges the edge's rewind slot once (the light rewind itself was uncharged), never twice, and when the edge is already spent the workflow ends failed_rewind_exhausted. Never set it on a normal completion, and never to dodge the chore.
     declared_extensions:
       type: array
-      description: "Optional (only after a review FAIL). Every file you changed outside the plan's declared set because a review finding requires it, cumulative across the rounds since the plan, each citing that finding's positional reference `s<n>#<k>` (n = the failing review's spawn ordinal, k = the finding's 1-based position in its findings list). The driver counts a cited file as declared in the plan-conformance facts; an uncited change stays undeclared (blocking). The plan is never edited or re-run."
+      description: "Optional (after a gate FAIL or human deliver answer rewound you): each file changed outside the plan's declared set, cumulative since the plan, with its citation - `review` + `s<n>#<k>` (n = the review's spawn ordinal, k = the finding's 1-based position), `verification` + `s<n>` (its FAIL's ordinal), or `deliver` + the question id (the answer declares the file outright). Cited = declared; uncited = undeclared (blocking). The plan is never edited or re-run."
       items:
         type: object
-        required: [path, finding_id]
+        required: [path, source, ref]
         properties:
           path: { type: string, description: "repo-relative path of the added file" }
-          finding_id: { type: string, description: "the review finding reference, e.g. s5#2" }
+          source: { type: string, enum: [review, verification, deliver] }
+          ref: { type: string }
+    withdrawn_obligations:
+      type: array
+      description: "Optional mirror: a declared coupled obligation a citation made moot, same {path, source, ref}. One whose declaring writes are all absent from the diff lapses by itself; an uncited withdrawal stays blocking."
+      items:
+        type: object
+        required: [path, source, ref]
+        properties:
+          path: { type: string }
+          source: { type: string, enum: [review, verification, deliver] }
+          ref: { type: string }
     summary:
       type: string
       description: Short prose summary of what was done, for verification and rewind context.
@@ -61,9 +72,10 @@ verdict) and address every point it raises before proceeding with the rest of th
   plan's declared set in both directions and hands the differences to `review` and
   `verification`: an undeclared change is a blocking finding, and so is a declared
   coupled obligation you left unchanged — record any genuinely necessary deviation in
-  `summary`. After a review FAIL whose finding requires a file outside the declared
-  set, change it and cite the finding in `declared_extensions`; never edit or re-run
-  the plan.
+  `summary`. After a review or verification FAIL, or a human deliver answer, that
+  requires a file outside the declared set, change it and cite it in
+  `declared_extensions` (withdraw a moot obligation in `withdrawn_obligations`); never
+  edit or re-run the plan.
 
 ## If you cannot finish
 
@@ -72,6 +84,8 @@ reasonable effort, do not fabricate a passing `build_status: green`. Report hone
 leave `build_status: red` and explain the blocker in `summary`. On this lane a red hand
 off is doubly important — `review` and `verification` are what stand between your
 tree and merge.
+
+{{owner_review}}
 
 ## Principles
 

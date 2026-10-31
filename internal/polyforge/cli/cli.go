@@ -78,7 +78,7 @@ type Command struct {
 // and `result` (a workflow step's result delivery, #214, also GroupExec)
 // after watch, followed by `verify-run` (a verification step's one
 // mechanical run, local: no daemon, no aihub; also GroupExec, so the help
-// face shows 10 exec verbs), then the management face M1–M5, then the
+// face shows 11 exec verbs), then the management face M1–M5, then the
 // machine health face (doctor, #113), the build version (version, #196:
 // the verb form of the `--version` flag) and the workspace layout (init,
 // #177), then the daemon
@@ -92,6 +92,7 @@ var commands = []*Command{
 	cmdMemory,
 	cmdSubmit,
 	cmdAnswer,
+	cmdReviseBinding,
 	cmdPause,
 	cmdResume,
 	cmdWrap,

@@ -118,7 +118,13 @@ driver spawning step processes, the watch surface — reached over its
 unix-domain socket. The routing skill's verb table follows the split:
 `file`, `queue`, `cancel`, `recall`, `remember`, `memory` are data-plane
 verbs; `submit`, `watch`, `answer`, `pause`, `resume`, `wrap`, `ops` are
-execution-plane.
+execution-plane. One answer is reserved at every open question: `cancel`
+(the whole answer, any case). The driver states it in every question; the
+daemon first has the hub's cancel gate (reporter, maintainer or admin —
+the `pf cancel` rule) authorize it, then the workflow parks blocked with
+a durable cancel intent, the session ends blocked, and the hub's existing
+blocked→canceled door ends the work item `canceled` — no new status, no
+running→canceled transition, no memory wrap.
 
 ### Bundle
 
@@ -160,7 +166,20 @@ carries no scoped chain). Rewinds are bounded per bundle
 (`max_total`, `max_per_step` in the frontmatter): `max_per_step` is
 charged per gate→target edge — two gates rewinding to the same target
 carry their own slots and never eat each other's — while `max_total` is
-the global hard cap that counts every rewind. A light rewind (an
+the global hard cap that counts every automatic rewind. A rewind an
+owner's explicit answer routed — deliver's "back to code" and
+「全量重验」, the review owner exit, the e2e-author and bug-fix owner
+answers — counts toward neither bound. A review FAIL whose blocking
+findings are all off-graph (each one's `repair_target` names the
+authored suite, the spec, a declared obligation that is itself wrong
+or an un-IDed instruction, never `code`, which covers every repair the
+build step can make in its own round: updating a declared obligation
+the diff left unchanged, withdrawing a moot one, citing an undeclared
+file) is not rewound at all: the driver asks the
+owner — the review owner exit — who answers `amend-upstream` (recorded
+verbatim in `artifacts/grill-qa.md`'s `## Owner rulings` and executed by
+the authoring or build step; spec and plan never re-run), `waive` (the
+named findings only) or `cancel`. A light rewind (an
 all-text-only review FAIL, a classified mechanical verification FAIL)
 or a converging review round (every blocking finding a residual of the
 last verdict round, strictly fewer) charges no edge slot but still
@@ -176,7 +195,9 @@ routed by the driver back to `root-cause` before review or verification
 runs, with the fix's summary as the rewind input, charged on the
 `fix → root-cause` edge — once. A second false does not rewind again:
 the driver asks the owner (`needs_input`) whether to continue with
-corrective guidance or cancel and re-file, so an honest misdiagnosis
+corrective guidance or answer the reserved `cancel` and re-file (every
+"cancel and re-file" in a lane is reached this way: the open question's
+`cancel` answer ends the work item, then the owner files anew), so an honest misdiagnosis
 never ends in `failed_rewind_exhausted`.
 
 `plan` is never a rewind target. In the chore and feature-full lanes the
@@ -187,7 +208,17 @@ driver hands review (and chore's verification) the two-way scope check as
 computed facts: changed-but-undeclared files, and declared obligations or
 writes the diff left unchanged. A review-driven fix that needs a file
 outside the declared set cites the review finding for it instead of
-re-planning.
+re-planning. The plan also maps every deliverable it demands from a later
+step (a report, a proof, an owner presentation) to the step contract that
+carries it; a deliverable no step contract carries is excluded with a
+stated reason, or raised to the owner (`needs_input`), never promised.
+An owner presentation (a screenshot matrix, a proof set, a demo) is
+carried by deliver's owner-review gate: the plan, or a build step's
+`summary`, declares it with one `owner-review: <path(s)> — <description>`
+line, and deliver shows it to the owner in a `deliver-owner-review`
+question before any PR merge and merges only after the answer
+「过目通过」 (「不通过: …」 rewinds to the build step). A work item that
+declares none is asked nothing.
 
 A review pass covers the tree it judged: the driver records each task
 repo's HEAD at the pass (`reviewed_heads`), and the automatic merge
@@ -207,7 +238,9 @@ marker line `verification: scoped`, and only on a scoped-capable lane
 (`feature-full`, `bug-fix`, `chore`; autopilot always verifies full and
 the release lane has no verification step). Review — which runs first —
 declares the scope it judged the diff against (`scope`:
-`mode`/`declared_paths`) and answers `scope_adequate`; the following
+`mode`/`declared_paths` — `declared_paths` has one meaning: the path set
+review judged in the round and verification verifies for that round)
+and answers `scope_adequate`; the following
 verification must use exactly that scope (its `declared_paths` equal to
 review's, an incremental re-verification's prior union included), and a
 missing judgment or any disagreement blocks the automatic merge and
@@ -288,8 +321,10 @@ setting:
   ask a question — and then a human answers it). Bug-fix and chore have
   no declared checkpoint, but any step may still ask a human when it
   needs one: deliver asks `deliver-merge` when the merge rule does not
-  hold, and in bug-fix a change to the authored repro or regression
-  test must be asked of a human. A run that asks no question and
+  hold and `deliver-owner-review` (exactly one human check before the
+  merge) when the work item declared an `owner-review:` artifact — one
+  that declares none merges as before — and in bug-fix a change to the
+  authored repro or regression test must be asked of a human. A run that asks no question and
   passes their gates ends merged with no human ever looking at it. In
   autopilot there is no review step at all — verification's pass
   stands in for the independent review at the merge rule.
@@ -309,7 +344,9 @@ should NEVER merge unattended:
 - release/deploy work;
 - schema or data migration;
 - credentials and permission surface;
-- removing features or weakening guarantees;
+- removing features or weakening guarantees the work item does not name
+  (filing a removal the work item names on `chore` is the owner's ruling
+  for that removal);
 - security-related changes;
 - large cross-repo changes.
 

@@ -112,6 +112,19 @@ type ProjectMember struct {
 	Role   string `json:"role"` // maintainer|writer|viewer
 }
 
+// ProjectMemberContact is one row of the project member face (GET
+// /api/v1/projects/{id}/members): a human co-member's id and display
+// name, nothing else — no type, role or count.
+type ProjectMemberContact struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
+// ProjectMemberContacts is the project member face's answer.
+type ProjectMemberContacts struct {
+	Contacts []ProjectMemberContact `json:"contacts"`
+}
+
 // ProjectDeleteResult is the hard-delete answer (DELETE
 // /api/v1/projects/{id}, plain or ?dry_run=1): the deleted (or
 // to-be-deleted) project's id and name, its work-item count, and whether
@@ -327,6 +340,17 @@ type ResumeBlockedRequest struct {
 // WrapRequest is the hub wrap door's body (a work item with no bundle):
 // Fail records the failed verdict instead of wrapped; Note lands in the
 // work_item_closed event.
+// CancelRequest is the optional body of POST /work-items/{id}/cancel:
+// the owner's verbatim reason and the question it answered ride the
+// work_item_canceled event; DryRun answers the authorization gate alone
+// and writes nothing (the daemon's probe before it acts on a reserved
+// cancel answer). An empty body is the plain cancel.
+type CancelRequest struct {
+	Reason     string `json:"reason,omitempty"`
+	QuestionID string `json:"question_id,omitempty"`
+	DryRun     bool   `json:"dry_run,omitempty"`
+}
+
 type WrapRequest struct {
 	Fail bool   `json:"fail,omitempty"`
 	Note string `json:"note,omitempty"`

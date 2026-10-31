@@ -633,6 +633,80 @@ func TestVerbRecallLimitContract(t *testing.T) {
 	}
 }
 
+// TestVerbRecallBrowseMode: with no query the human
+// direct path browses — one request with no q, the default limit 20, no
+// sort unless given, the cursor passed through unchanged — and prints
+// the page with "N of TOTAL" and the next cursor; --json is aihub's
+// answer verbatim. A keyword search forwards an explicit --after/--sort
+// (aihub answers the mixed shape MEM-400, surfaced as-is); --any with no
+// query and an out-of-range --limit are refused with no request sent.
+func TestVerbRecallBrowseMode(t *testing.T) {
+	var rec reqRecorder
+	const page = `{"items":[{"id":"mem_b1","type":"doc.note","title":"browse row","updated_at":"t1","tags":[]}],"total":41,"next_cursor":"cur-2"}`
+	srv := newFakeAihub(t, &rec, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("q") != "" && (q.Has("after") || q.Has("sort")) {
+			w.WriteHeader(400)
+			io.WriteString(w, `{"code":"MEM-400","detail":"after and sort are browse parameters and cannot be combined with q"}`)
+			return
+		}
+		io.WriteString(w, page)
+	})
+	env := withMappingConfig(t)
+	env["PF_SERVER"] = srv.URL
+
+	code, stdout, stderr := runPf(t, env, "recall", "--project", "polyforge")
+	if code != 0 {
+		t.Fatalf("browse: code=%d stderr=%s", code, stderr)
+	}
+	got := rec.last().Path
+	if strings.Contains(got, "q=") || strings.Contains(got, "sort=") || strings.Contains(got, "after=") ||
+		strings.Contains(got, "match=") || !strings.Contains(got, "limit=20") || !strings.Contains(got, "project=polyforge") {
+		t.Fatalf("first browse request = %s", got)
+	}
+	for _, want := range []string{"mem_b1", "browse row", "1 of 41", "next: cur-2"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("browse output lacks %q:\n%s", want, stdout)
+		}
+	}
+
+	code, stdout, stderr = runPf(t, env, "--json", "recall", "--project", "polyforge", "--after", "cur-2", "--sort", "created", "--limit", "5")
+	if code != 0 {
+		t.Fatalf("browse --after: code=%d stderr=%s", code, stderr)
+	}
+	got = rec.last().Path
+	for _, want := range []string{"after=cur-2", "sort=created", "limit=5"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("cursor browse request lacks %s: %s", want, got)
+		}
+	}
+	if strings.TrimSpace(stdout) != page {
+		t.Fatalf("--json browse = %s, want aihub's answer verbatim", stdout)
+	}
+
+	for _, extra := range [][]string{{"--after", "cur-2"}, {"--sort", "updated"}} {
+		args := append([]string{"recall", "--project", "polyforge", "needle"}, extra...)
+		code, _, stderr = runPf(t, env, args...)
+		if code == 0 || !strings.Contains(stderr, "MEM-400") {
+			t.Fatalf("keyword + %v: code=%d stderr=%s, want aihub's MEM-400", extra, code, stderr)
+		}
+		if got := rec.last().Path; !strings.Contains(got, "q=needle") {
+			t.Fatalf("keyword + %v request = %s", extra, got)
+		}
+	}
+
+	before := len(rec.all())
+	if code, _, stderr = runPf(t, env, "recall", "--project", "polyforge", "--any"); code == 0 || !strings.Contains(stderr, "--any") {
+		t.Fatalf("--any browse: code=%d stderr=%s", code, stderr)
+	}
+	if code, _, stderr = runPf(t, env, "recall", "--project", "polyforge", "--limit", "201"); code == 0 || !strings.Contains(stderr, "1..200") {
+		t.Fatalf("browse --limit 201: code=%d stderr=%s", code, stderr)
+	}
+	if n := len(rec.all()); n != before {
+		t.Fatalf("a locally refused browse sent %d request(s)", n-before)
+	}
+}
+
 // TestVerbRecallTypeForms: --type accepts exactly three forms — a
 // trailing .* prefix (passed through for the store's prefix
 // interpretation), a lone * (all types: no type filter sent at all),

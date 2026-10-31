@@ -50,6 +50,8 @@ func TestW46E2eAuthorOnDemandContract(t *testing.T) {
 				"per-work-item value",
 				"the owner's explicit approval",
 				"fail-closed",
+				// the audit anchor is grill-qa.md alone; plan only restates.
+				"the audit anchor is `artifacts/grill-qa.md` alone",
 			},
 		},
 		{
@@ -78,6 +80,7 @@ func TestW46E2eAuthorOnDemandContract(t *testing.T) {
 				// the owner's explicit approval (fail-closed to `required`).
 				"with no approved record",
 				"the owner's explicit approval",
+				"your statement\ndecides nothing",
 			},
 		},
 		{
@@ -95,6 +98,8 @@ func TestW46E2eAuthorOnDemandContract(t *testing.T) {
 				// the mode's fail-closed resolution.
 				"lane default",
 				"the owner's explicit approval",
+				// an all-green baseline is completable: the owner's answers
+				"completed (all green)",
 			},
 		},
 	}

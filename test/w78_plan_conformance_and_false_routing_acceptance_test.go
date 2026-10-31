@@ -188,7 +188,7 @@ func TestW78CitedExtensionCountsAsDeclared(t *testing.T) {
 		`git add -A; git -c user.name=w78 -c user.email=w78@invalid commit -q -m 'w78 review fix'`
 	reviewFail := map[string]any{"do": "envelope", "id": "review", "outcome": "gate_failed",
 		"output": map[string]any{"verdict": "fail", "fail_reason": "w78: the fixture files are missing",
-			"findings": []map[string]any{{"severity": "blocking", "detail": "add the reviewed fixture files"}}}}
+			"findings": []map[string]any{{"severity": "blocking", "repair_target": "code", "detail": "add the reviewed fixture files"}}}}
 	plan := []map[string]any{
 		{"do": "envelope", "id": "plan", "outcome": "completed", "handoff": true,
 			"output": w78PlanOutput(w78Write("w78_base.txt", map[string]any{"none": true, "reason": "fixture"}))},
@@ -199,7 +199,7 @@ func TestW78CitedExtensionCountsAsDeclared(t *testing.T) {
 			"run": []string{second}, "output": map[string]any{
 				"build_status": "green",
 				"declared_extensions": []map[string]any{{
-					"path": "w78_cited.txt", "finding_id": "s3#1",
+					"path": "w78_cited.txt", "source": "review", "ref": "s3#1",
 				}},
 			}},
 		w78GatePass(), w78GatePass(),
@@ -251,7 +251,7 @@ func TestW78FirstFalseRewindsToRootCause(t *testing.T) {
 		t.Fatalf("SYMPTOM: root-cause attempts %v, want the root_cause_unaddressed rewind archive (rewind_gate fix)", rcAttempts)
 	}
 	recs := w69qRewinds(x)
-	if len(recs) != 1 || recs[0]["gate"] != "fix" || recs[0]["to_step"] != "root-cause" || recs[0]["charged"] != true {
+	if len(recs) != 1 || recs[0]["gate"] != "fix" || recs[0]["to_step"] != "root-cause" || recs[0]["class"] != "charged" {
 		t.Fatalf("SYMPTOM: rewind ledger %v, want one charged fix→root-cause record", x.RewindStats)
 	}
 	if prompt := w78WaitPrompt(t, capDir, 4); !strings.Contains(prompt, summary) {

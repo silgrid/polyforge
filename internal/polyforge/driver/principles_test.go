@@ -1,9 +1,12 @@
 package driver
 
 // principles_test.go: workflows/_shared/principles.md is rendered once
-// into the grill/spec/plan/code-like steps of every shipped bundle and
-// into the shared review step; polyforge-only rules live in the repo's
-// AGENTS.md, never in the project-neutral workflows.
+// into the grill/spec/plan/code-like steps of every shipped bundle, into
+// the shared review step and, since, into the long-running
+// steps that need the waiting rule (bug-fix repro, feature-full
+// e2e-author, the shared deliver in every delivery lane, release verify);
+// polyforge-only rules live in the repo's AGENTS.md, never in the
+// project-neutral workflows.
 
 import (
 	"io/fs"
@@ -18,10 +21,11 @@ import (
 // principledSteps is every shipped (bundle, step) that carries the
 // principles; every other shipped step carries none.
 var principledSteps = map[string][]string{
-	"feature-full": {"grill", "spec", "plan", "code", "review"},
-	"autopilot":    {"grill", "fix"},
-	"bug-fix":      {"root-cause", "fix", "review"},
-	"chore":        {"plan", "code", "review"},
+	"feature-full": {"grill", "spec", "plan", "e2e-author", "code", "review", "deliver"},
+	"autopilot":    {"grill", "fix", "deliver"},
+	"bug-fix":      {"repro", "root-cause", "fix", "review", "deliver"},
+	"chore":        {"plan", "code", "review", "deliver"},
+	"release":      {"verify"},
 }
 
 func TestShippedPrinciplesRenderedOnce(t *testing.T) {
@@ -60,13 +64,15 @@ func TestShippedPrinciplesRenderedOnce(t *testing.T) {
 		if i < 0 || len(strings.TrimSpace(usage[:i])) < 40 {
 			t.Errorf("%s: no step-specific usage paragraph before the principles", key)
 		}
-		// the prompt budget: the whole section stays within 2050 bytes.
+		// the prompt budget: the whole section stays within 2728 bytes.
 		// Raised from 1500 (the old text left 4 bytes of headroom) by the
-		// waiting principle (~510 bytes): it must reach
-		// every principled step, so the budget grows by that much and no
-		// more — it still stops any other growth of the shared text.
-		if n := len("\n## Principles\n") + i + len(text); n > 2050 {
-			t.Errorf("%s: `## Principles` section is %d bytes, budget 2050", key, n)
+		// waiting principle (~510 bytes) to 2050, then by
+		// its background-work sentences (2050 + 678): each
+		// must reach every principled step, so the budget grows by that
+		// much and no more — it still stops any other growth of the
+		// shared text.
+		if n := len("\n## Principles\n") + i + len(text); n > 2728 {
+			t.Errorf("%s: `## Principles` section is %d bytes, budget 2728", key, n)
 		}
 	}
 	if seen != len(want) {

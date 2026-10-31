@@ -12,12 +12,17 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 )
+
+// hangingAccepted counts, per hanging remote URL, the connections it
+// accepted: a clone of it is under way once the count is non-zero.
+var hangingAccepted sync.Map // url → *atomic.Int32
 
 // hangingRemote answers the URL of an http git remote that accepts every
 // connection and never says a word: a clone of it hangs until killed.
@@ -27,6 +32,9 @@ func hangingRemote(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	url := "http://" + ln.Addr().String() + "/app.git"
+	accepted := &atomic.Int32{}
+	hangingAccepted.Store(url, accepted)
 	var mu sync.Mutex
 	var conns []net.Conn
 	go func() {
@@ -38,6 +46,7 @@ func hangingRemote(t *testing.T) string {
 			mu.Lock()
 			conns = append(conns, c)
 			mu.Unlock()
+			accepted.Add(1)
 		}
 	}()
 	t.Cleanup(func() {
@@ -48,7 +57,23 @@ func hangingRemote(t *testing.T) string {
 		}
 		mu.Unlock()
 	})
-	return "http://" + ln.Addr().String() + "/app.git"
+	return url
+}
+
+// waitRemoteAccepted blocks until the clone pointed at url reaches it: the
+// remote's accepted connection is the precondition that makes the clone
+// really hang, which CLAIMING alone does not (the restart inserts its
+// placeholder synchronously, before the replay runs —).
+func waitRemoteAccepted(t *testing.T, url string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if n, ok := hangingAccepted.Load(url); ok && n.(*atomic.Int32).Load() > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the clone of %s never reached the hanging remote", url)
 }
 
 // waitClaiming blocks until wi sits CLAIMING (its clone under way).

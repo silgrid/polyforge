@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -275,4 +276,88 @@ func TestDoctorGitDirsWalksOnlyPruneCandidates(t *testing.T) {
 	}
 	assertExist(t, false, f.reclaim, f.retiredGit, f.retiredCap)
 	assertExist(t, true, f.fresh, f.active, f.job, f.ghost, f.activeCap, f.askpass)
+}
+
+// TestDoctorGitDirsKeepsSceneWithUncommittedChange: the guard's second
+// face — a set-aside capsule whose task-repo clone is dirty but holds no
+// commit is kept just like one with unpushed commits, and its scene's
+// external git dir is kept with it. The clone is unborn (no commit, no
+// remote), so only `git status` can see this work.
+func TestDoctorGitDirsKeepsSceneWithUncommittedChange(t *testing.T) {
+	f := newGitDirsFixture(t, true)
+	repo := filepath.Join(f.retiredCap, "repos", "demo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+t.TempDir())
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	if err := os.WriteFile(filepath.Join(repo, "wip.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	err := filepath.Walk(f.retiredCap, func(p string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(p, old, old)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-git-dirs")
+	st, detail := doctorFind(t, doc, docChGitDirs)
+	if st != "pass" || !strings.Contains(detail, "uncommitted changes") {
+		t.Fatalf("status = %s (%s), want pass naming the uncommitted changes", st, detail)
+	}
+	assertExist(t, true, f.retiredCap, repo, f.retiredGit, f.reclaim)
+}
+
+// TestDoctorGitDirsPrunesSceneWhoseWorkTheWorkspaceCarried: the fresher
+// view face of the guard. A set-aside scene's own refs stop updating at
+// quarantine time, so its clone can call a commit unpushed that the
+// mapped workspace's .repo/<name> clone already reaches through its
+// remote-tracking ref. Such a scene holds no unmerged work and is pruned
+// with its paired git dir.
+func TestDoctorGitDirsPrunesSceneWhoseWorkTheWorkspaceCarried(t *testing.T) {
+	f := newGitDirsFixture(t, true)
+	ws := filepath.Dir(filepath.Dir(f.retiredCap))
+	upstream := reposClone(t, ws, "demo", "main")
+	repo := filepath.Join(f.retiredCap, "repos", "demo")
+	if err := os.MkdirAll(filepath.Dir(repo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reposGit(t, ws, "clone", "-q", upstream, repo)
+	// The quarantine-time state: the scene's own remote-tracking refs are
+	// gone, while .repo/demo still reaches the commit through origin/main.
+	reposGit(t, repo, "remote", "remove", "origin")
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	err := filepath.Walk(f.retiredCap, func(p string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(p, old, old)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-git-dirs")
+	st, detail := doctorFind(t, doc, docChGitDirs)
+	if st != "pass" || !strings.Contains(detail, "pruned 3: ") {
+		t.Fatalf("status = %s (%s), want pass with 3 pruned", st, detail)
+	}
+	if strings.Contains(detail, "kept for unmerged work") {
+		t.Fatalf("the scene whose work .repo/demo carries is reported as unmerged: %s", detail)
+	}
+	assertExist(t, false, f.reclaim, f.retiredGit, f.retiredCap)
+	assertExist(t, true, upstream)
 }

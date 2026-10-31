@@ -155,7 +155,7 @@ func TestSpawnStartedEnvHygiene(t *testing.T) {
 	p := SpawnParams{
 		WorkItemID: "wi-eq", CapsuleDir: dir, InitialPrompt: "p", HarnessSession: testSession,
 	}
-	ownPF := []string{"PF_WI_ID", "PF_DAEMON_ID"}
+	ownPF := []string{"PF_WI_ID", "PF_DAEMON_ID", "PF_TOOL_WINDOW_MS"}
 	ownClaude := []string{
 		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "CLAUDE_CODE_STARTUP_FAILURE_RESULTS",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CONFIG_DIR",

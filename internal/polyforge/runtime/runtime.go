@@ -84,9 +84,11 @@ type Config struct {
 	// claude_bin / --claude-bin), used by steps whose harness is claude.
 	ClaudeBin string
 	// ToolWindow is the daemon's supervision tool window Y (one tool
-	// running longer than it is judged hung). A claude step's Bash tool
-	// timeouts derive from it (claudeBashTimeouts: max = Y - 1m, default
-	// 10m clamped to the max); <= 0 is the supervision default, 30m.
+	// running longer than it is judged hung). Every step environment
+	// carries it as PF_TOOL_WINDOW_MS (toolWindowEnv), so `pf verify-run`
+	// can bound its whole run below the rule; a claude step's Bash tool
+	// timeouts also derive from it (claudeBashTimeouts: max = Y - 1m,
+	// default 10m clamped to the max); <= 0 is the supervision default, 30m.
 	ToolWindow time.Duration
 	// HarnessRoot is the parent root of the three harness state dirs
 	// (polyforge#171): <harness-root>/step-agent (the dedicated step
@@ -123,12 +125,26 @@ type Config struct {
 	// observe uses for running jobs; <= 0 (the unit-test default)
 	// disables it.
 	SessionRevalidateEvery time.Duration
+	// ReviseRecord applies one owner binding-command revision batch to a
+	// PAUSED capsule. The daemon binds it to a record-only
+	// driver's single transition (driver.OpenRecord); the runtime package
+	// cannot import driver directly because the driver's internal tests
+	// import runtime — the test-only import cycle. nil refuses a paused
+	// record's revision (a running record uses its live driver handle).
+	ReviseRecord func(capsuleDir, bundleName, sessionHandle, wi string, spawnN int64, stepID string, corrections []capsule.BindingCorrection, by, reason string) error
 	// EventTap, when non-nil, receives runtime-sourced diagnostic events
 	// (kind "push_failed" on a seal push that failed after its retries)
 	// so they land in the daemon's durable events log next to the
 	// observe lane's own entries. The daemon binds it to the observe
 	// EventLog; nil (tests) disables it.
 	EventTap func(wi, kind string, body map[string]any)
+	// CancelRequested, when non-nil, is called after a blocked close the
+	// hub took for a work item whose capsule records an owner's reserved
+	// cancel answer (capsule.Execution.CancelRequested): the daemon binds
+	// it to the hub's existing blocked→canceled door, carrying the
+	// verbatim answer. Idempotent by the door (an already-canceled work
+	// item is done); nil (tests) cancels nothing.
+	CancelRequested func(wi string, intent capsule.CancelIntent)
 	// ReleaseMonitor, when non-nil, stops the work item's observe monitor
 	// and returns once it is gone — its in-flight capsule push drained,
 	// its queued ones dropped. A terminal close calls it before its seal

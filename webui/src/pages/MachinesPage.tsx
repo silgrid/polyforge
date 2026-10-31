@@ -4,10 +4,12 @@ import { href } from '../router'
 import type { MachinesSnapshot, Machine } from '../types'
 import NotFound from '../components/NotFound'
 import RelativeTime from '../components/RelativeTime'
+import { BandIcon, ClockIcon } from '../icons'
+import { EmptyState, Muted, PageHeader } from '../components/ui'
 
 // MachinesPage is the admin-only health snapshot: one card per machine
 // — id, operator, role, mode, runtime, launcher, heartbeat age with
-// its colour band (green fresh, yellow stale within an hour, red
+// its colour band (green fresh, amber stale within an hour, red
 // older), the stale and superseded marks, and the live work-item
 // links. No public key, no capability, and no refresh: the page is a
 // snapshot; nothing updates until the human reloads.
@@ -26,16 +28,16 @@ export default function MachinesPage() {
   }, [])
 
   if (missing) return <NotFound />
-  if (snap === null) return <p className="text-muted">Loading…</p>
+  if (snap === null) return <Muted>Loading…</Muted>
 
   return (
-    <div data-testid="machines" className="max-w-prose">
-      <h1 className="text-xl font-semibold mb-1">Machines</h1>
-      <p className="text-muted text-sm mb-4">
-        Stale after {snap.stale_after_seconds}s without a heartbeat · snapshot, reload to refresh
-      </p>
+    <div data-testid="machines" className="max-w-3xl">
+      <PageHeader
+        title="Machines"
+        caption={`Stale after ${snap.stale_after_seconds}s without a heartbeat · snapshot, reload to refresh`}
+      />
       {snap.machines.length === 0 ? (
-        <p className="text-muted">No machines registered.</p>
+        <EmptyState>No machines registered.</EmptyState>
       ) : (
         <div className="flex flex-col gap-3">
           {snap.machines.map((m) => (
@@ -47,51 +49,52 @@ export default function MachinesPage() {
   )
 }
 
-// MachineCard renders one machine with its heartbeat band. The band is
-// a CSS class, never an inline style: green = not stale; yellow =
-// stale within an hour; red = stale for more than an hour.
+// MachineCard renders one machine card with its heartbeat band. The
+// band is a CSS class, never an inline style: green = not stale; amber
+// = stale within an hour; red = stale for more than an hour.
 function MachineCard({ machine }: { machine: Machine }) {
   const band = machine.stale
     ? (machine.heartbeat_age_seconds ?? 0) > 3600
-      ? 'border-red text-red'
-      : 'border-amber text-amber'
-    : 'border-green text-green'
+      ? 'band-red'
+      : 'band-amber'
+    : 'band-green'
   return (
-    <section
-      data-testid="machine-card"
-      data-machine-id={machine.id}
-      className={`border rounded p-3 bg-tint ${band}`}
-    >
-      <h2 className="text-base font-semibold mb-1 font-mono">
-        <span data-testid="machine-band" className={band}>
-          ●
-        </span>{' '}
-        {machine.id}
-        {machine.stale ? <span className="ml-2 text-xs border border-line rounded px-1">stale</span> : null}
+    <section data-testid="machine-card" data-machine-id={machine.id} className="card px-4 py-3">
+      <h2 className="mb-1 flex flex-wrap items-center gap-2 text-section font-semibold">
+        <span data-testid="machine-band" className={`inline-flex ${band}`}>
+          <BandIcon />
+        </span>
+        <span className="min-w-0 break-all font-mono">{machine.id}</span>
+        {machine.stale ? <span className={`pill ${band}`}>stale</span> : null}
         {machine.superseded ? (
-          <span className="ml-2 text-xs border border-line rounded px-1" data-testid="superseded-mark">
+          <span className="pill text-muted" data-testid="superseded-mark">
             superseded
           </span>
         ) : null}
       </h2>
-      <p className="text-sm text-muted">
+      <p className="text-muted [overflow-wrap:anywhere]">
         operator {machine.operator_id || '—'} · {machine.role} · mode {machine.mode || '—'} ·{' '}
         {machine.runtime_version || '—'} · launcher {machine.launcher || '—'}
       </p>
-      <p className="text-sm text-muted">
-        last heartbeat <RelativeTime at={machine.last_heartbeat_at} />
-        {machine.heartbeat_age_seconds !== undefined ? ` (${machine.heartbeat_age_seconds}s)` : ''}
+      <p className="tabular flex items-center gap-1.5 text-muted">
+        <ClockIcon />
+        <span>
+          last heartbeat <RelativeTime at={machine.last_heartbeat_at} />
+          {machine.heartbeat_age_seconds !== undefined ? (
+            <span className="font-mono"> ({machine.heartbeat_age_seconds}s)</span>
+          ) : null}
+        </span>
       </p>
       {machine.live_wis.length > 0 ? (
-        <p className="text-sm mt-1">
+        <p className="mt-1 [overflow-wrap:anywhere]">
           <span className="text-muted">live: </span>
           {machine.live_wis.map((wi) =>
             wi.slug ? (
-              <a key={wi.id} className="text-accent mr-2" href={href(slugProject(wi.slug), 'work-items', wi.id)}>
+              <a key={wi.id} className="mr-2" href={href(slugProject(wi.slug), 'work-items', wi.id)}>
                 {wi.slug}
               </a>
             ) : (
-              <span key={wi.id} className="text-muted font-mono mr-2">
+              <span key={wi.id} className="mr-2 break-all font-mono text-muted">
                 {wi.id}
               </span>
             ),

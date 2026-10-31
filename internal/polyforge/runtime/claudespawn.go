@@ -246,6 +246,9 @@ func (s *claudeSpawner) buildCmd(p SpawnParams) (*exec.Cmd, error) {
 	// the Bash tool's timeouts follow the supervision tool window, unless
 	// the settings.json env block carries the key (claudeBashTimeoutEnv)
 	additions = append(additions, claudeBashTimeoutEnv(settings, s.cfg.ToolWindow)...)
+	// the harness-neutral tool window binding every step carries; the Bash
+	// max is one minute lower, so verify-run's min() sees the same bound
+	additions = append(additions, toolWindowEnv(s.cfg.ToolWindow))
 	// Zero credential injection (polyforge#171, closing out #159's three-layer blind spot):
 	// the adapter NEVER injects ANTHROPIC_AUTH_TOKEN or any other
 	// credential — the settings.json env block under claude-config is

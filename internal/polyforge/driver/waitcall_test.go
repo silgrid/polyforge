@@ -1,12 +1,16 @@
 package driver
 
-// waitcall_test.go: the driver's wait_call relay: one
-// durable event per wait call the dispatch's tracker folds — recorded
-// while the dispatch runs, recorded once, and never a verdict.
+// waitcall_test.go: the driver's wait_call relay (
+//): one durable event per wait call the dispatch's tracker
+// folds — recorded while the dispatch runs, recorded once, carrying its
+// form, and never a verdict. `pf watch --json` re-emits these bodies
+// verbatim, so this is where its wait_call contract is pinned.
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 )
@@ -43,9 +47,9 @@ func TestWaitCallEventEmittedOncePerCall(t *testing.T) {
 		t.Fatalf("wait_call events %d, want one per wait call (2): %+v", len(evs), evs)
 	}
 	want := []map[string]any{
-		{"step": "s", "spawn_n": int64(1), "seconds": int64(120), "argv": "sleep 120 && gh pr checks 7",
+		{"step": "s", "spawn_n": int64(1), "form": "sleep", "seconds": int64(120), "argv": "sleep 120 && gh pr checks 7",
 			"tool_call_id": "c1", "wait_calls": 1, "wait_seconds": int64(120)},
-		{"step": "s", "spawn_n": int64(1), "seconds": int64(60), "argv": "sleep 1m",
+		{"step": "s", "spawn_n": int64(1), "form": "sleep", "seconds": int64(60), "argv": "sleep 1m",
 			"tool_call_id": "c4", "wait_calls": 2, "wait_seconds": int64(180)},
 	}
 	for i, w := range want {
@@ -65,6 +69,67 @@ func TestWaitCallEventEmittedOncePerCall(t *testing.T) {
 	st := env.exec(t).Steps["s"]
 	if st.Status != capsule.StepDone || st.Supervision != nil {
 		t.Fatalf("a dispatch with wait calls must deliver like any other: %+v", st)
+	}
+}
+
+// TestWaitCallEventCarriesWaitForm: a call blocked in the `wait` builtin
+// is recorded with form "wait" and its measured time when it ends, and
+// one still blocked when the dispatch delivers (a dispatch that ends, or
+// is killed, while the call is blocked in `wait`: no ToolEnd ever
+// arrives) is recorded once with the time it ran — news only, never a
+// verdict.
+func TestWaitCallEventCarriesWaitForm(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Unix(1_000_000, 0)
+	advance := func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		now = now.Add(d)
+	}
+	env := newSupEnv(t, nil, spec("s"))
+	env.link.Now = func() time.Time { // before the dispatch's tracker exists
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	held := done(`{}`)
+	held.hold = true
+	env.sp.script = []fakeEntry{held}
+	runDone := make(chan error, 1)
+	go func() { runDone <- env.d.Run(context.Background()) }()
+	waitForSpawns(env, 1)
+	tr := env.link.Tracker(1)
+
+	tr.ToolStart("w1", "bash", `{"command":"(while :; do :; done) & wait"}`)
+	advance(25 * time.Second)
+	tr.ToolEnd("w1", "bash")
+	waitUntil(t, "the measured wait_call event", func() bool { return len(env.log.byKind(EvWaitCall)) == 1 })
+	tr.ToolStart("w2", "bash", `{"command":"kill $pids; wait 2>/dev/null; echo cleaned"}`)
+	advance(29 * time.Minute)
+	_ = env.sp.runs[0].Terminate(0) // delivers while w2 is still blocked
+	if err := <-runDone; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	evs := env.log.byKind(EvWaitCall)
+	if len(evs) != 2 {
+		t.Fatalf("wait_call events %d, want 2: %+v", len(evs), evs)
+	}
+	want := []map[string]any{
+		{"form": "wait", "seconds": int64(25), "argv": "(while :; do :; done) & wait",
+			"tool_call_id": "w1", "wait_calls": 1, "wait_seconds": int64(25)},
+		{"form": "wait", "seconds": int64(29 * 60), "argv": "kill $pids; wait 2>/dev/null; echo cleaned",
+			"tool_call_id": "w2", "wait_calls": 2, "wait_seconds": int64(25 + 29*60)},
+	}
+	for i, w := range want {
+		for k, v := range w {
+			if got := evs[i].body[k]; got != v {
+				t.Fatalf("wait_call %d field %s = %#v, want %#v (body %+v)", i, k, got, v, evs[i].body)
+			}
+		}
+	}
+	if n := len(env.log.byKind("step_dead")); n != 0 {
+		t.Fatalf("a wait call produced %d step_dead events", n)
 	}
 }
 

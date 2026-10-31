@@ -288,3 +288,39 @@ func TestHeartbeatIsSigned(t *testing.T) {
 		t.Fatalf("a client without an identity reached the server (%d new call(s))", calls-plainCalls)
 	}
 }
+
+// TestSearchMemoriesBrowseShape pins the one memory-search call's wire
+// shape in both modes: an empty q sends no q (aihub's
+// browse mode) and forwards sort/after; a keyword search sends neither
+// paging parameter unless the caller supplied it (aihub refuses the
+// mixed shape as MEM-400). The answer passes through byte-for-byte.
+func TestSearchMemoriesBrowseShape(t *testing.T) {
+	const body = `{"items":[{"id":"mem_1"}],"total":7,"next_cursor":"cur-2"}`
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.Path+"?"+r.URL.RawQuery)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "k")
+
+	raw, err := c.SearchMemories("p", "", "", nil, 20, "", "created", "cur-1")
+	if err != nil {
+		t.Fatalf("browse: %v", err)
+	}
+	if string(raw) != body {
+		t.Fatalf("browse answer = %s, want the server body unchanged", raw)
+	}
+	browse := got[0]
+	if !strings.HasPrefix(browse, "/api/v1/memories/search?") || strings.Contains(browse, "q=") ||
+		!strings.Contains(browse, "sort=created") || !strings.Contains(browse, "after=cur-1") ||
+		!strings.Contains(browse, "limit=20") || !strings.Contains(browse, "project=p") {
+		t.Fatalf("browse request = %s", browse)
+	}
+	if _, err := c.SearchMemories("p", "needle", "", nil, 20, "", "", ""); err != nil {
+		t.Fatalf("keyword: %v", err)
+	}
+	if kw := got[1]; !strings.Contains(kw, "q=needle") || strings.Contains(kw, "sort=") || strings.Contains(kw, "after=") {
+		t.Fatalf("keyword request = %s", kw)
+	}
+}

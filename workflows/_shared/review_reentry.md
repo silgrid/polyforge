@@ -29,7 +29,8 @@ On a re-entry, run two additive faces over the current tree:
   finding #k") **without re-deriving** it as a new finding — it is the same finding,
   still open, not a fresh one — and carry that reference in the finding's `residual_of`
   field (the schema above), so the driver's rewind-quota accounting can tell a residual
-  from a new discovery. A prior **non-blocking** finding that is still present
+  from a new discovery. A residual re-emits the original's `repair_target` class
+  unless the current tree shows its fix belongs elsewhere. A prior **non-blocking** finding that is still present
   is recorded `non-blocking` and never fails the gate.
 - **fresh face** — the step definition's full judgment still runs, from the fresh context.
   The fix surface is the branch's own commits since the last verdict round's recorded
@@ -85,8 +86,8 @@ judge the light round's changes against the text-only boundary (the step definit
 classification bullet), on top of
 your normal full-change judgment (which is unchanged and stays the
 adjacent-issue catcher). Anchor the light round to that record, not to
-`steps.{{build_step}}.output.commits` (a resumed session may list its earlier
-commits again): the `gate_fail_rewind_text_only` attempt's
+`steps.{{build_step}}.output.commits` (it lists only the resumed attempt's own new
+commits — an earlier attempt's are never re-listed): the `gate_fail_rewind_text_only` attempt's
 archived `result` holds the pre-light output and its `commits`, and the light
 round is what changed after the last sha that list names, per task repo
 (`git diff <that sha>..HEAD`). Any structural change in the light round is a
@@ -94,3 +95,14 @@ BLOCKING mis-marking finding: record it WITHOUT `text_only` (it is structural),
 so the resulting FAIL rewinds fresh with its own rewind slot. A light round
 that stayed text-only records no mis-marking finding — a pass is possible if
 nothing else is wrong.
+
+## Owner rulings
+
+Before judging, read `artifacts/grill-qa.md`'s `## Owner rulings` section (the driver
+appends the owner's answers to the review owner exit there, verbatim;
+`steps.review.owner_rulings` is the machine copy). A **waive** ruling clears exactly the
+findings it names by reference: do not re-raise those as residuals. Every prior blocking
+finding it does not name stays a residual, whatever the ruling's wording. An
+**amend-upstream** ruling is the owner-approved upstream correction: judge the round
+against the spec as the ruling amends it, and judge whether the build step (or, for a
+suite gap, the authoring step) executed the ruling. No other location records a ruling.

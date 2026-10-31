@@ -4,8 +4,8 @@ package git
 // v1 capsule-chain invariants (reference.md §8; secret scanning is NOT
 // among them — dropped by v1 ruling C1 (archive/v1-architecture-spec.md)):
 //
-//   - FF-only: a pushed ref must move fast-forward (refs/pf-wip/*
-//     excepted, see below);
+//   - FF-only: a pushed ref must move fast-forward (refs/pf-wip/* and
+//     refs/pf-task/* excepted, see below);
 //   - no ref deletion (refs/pf-wip/* excepted);
 //   - no gitlink (mode 160000) anywhere in a pushed commit's tree;
 //   - blob size ≤ MaxBlobBytes (via the GIT_PF_MAX_BLOB env the proxy
@@ -21,9 +21,14 @@ package git
 // repo's LOCAL head there so a bounded-fail re-claim on a fresh session
 // can restore it. The history under these refs is the TASK repo's own —
 // it may legitimately contain submodules — so the chain-only gitlink
-// invariant does not apply to it. Deletion, fast-forward and the blob limit stay enforced
-// for every ref; the carrier refs get the larger task-repo blob limit
-// (polyforge#158). The daemon normally pushes the carrier as a shallow
+// invariant does not apply to it. A rewind that re-executes a step can
+// rewrite a commit the carrier already published, leaving
+// the hub tip a sibling of the new head; the hub therefore accepts a
+// non-fast-forward update of refs/pf-task/*, and the daemon reconciles
+// only when the stale tip's content is contained in the new head (its
+// lease-guarded replace is the gate, not this hook). Deletion and the blob
+// limit stay enforced for every ref; the carrier refs get the larger
+// task-repo blob limit (polyforge#158). The daemon normally pushes the carrier as a shallow
 // push rooted at the WI line's upstream boundary, which cuts a foreign
 // upstream asset (even one above the limit) out of the carrier's
 // reachable history so it cannot block the push. The cut
@@ -89,8 +94,13 @@ while read -r old new ref; do
   [ "$new" = "$zero" ] && reject "ref deletion is not allowed ($ref)"
 
   if [ "$old" != "$zero" ]; then
-    git merge-base --is-ancestor "$old" "$new" \
-      || reject "non-fast-forward push to $ref is not allowed"
+    # Carrier refs may move non-fast-forward: a same-line rewind rewrites a
+    # carried commit, and the daemon replaces only content-contained rewinds
+    # under a lease. Deletion above still applies.
+    case "$ref" in refs/pf-task/*) ;;
+      *) git merge-base --is-ancestor "$old" "$new" \
+        || reject "non-fast-forward push to $ref is not allowed" ;;
+    esac
     range="$old..$new"
   else
     range="$new"
@@ -107,8 +117,9 @@ while read -r old new ref; do
   [ -z "$badblob" ] || reject "blob exceeds the ${limit}-byte limit: $badblob"
 
   # Task-repo carrier namespace: foreign (task-repo) history — the
-  # chain-only gitlink invariant stops here. Deletion,
-  # fast-forward and the blob limit above stay for every ref.
+  # chain-only gitlink invariant stops here. Deletion and the blob limit
+  # above stay for every ref; fast-forward is relaxed above for this
+  # namespace only.
   case "$ref" in refs/pf-task/*) continue ;; esac
 
   # gitlink: mode 160000 entries are submodule commits; the capsule chain

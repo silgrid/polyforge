@@ -24,7 +24,11 @@ func bugFixLane() []StepSpec {
 }
 
 func fixDone(addressed bool, summary string) fakeEntry {
-	return done(fmt.Sprintf(`{"build_status":"green","root_cause_addressed":%v,"summary":%q}`, addressed, summary))
+	commits := `[]` // a false report that changed nothing: the one legal empty list
+	if addressed {
+		commits = `[{"sha":"f1x","message":"fix"}]` // a true fix lists its commit
+	}
+	return done(fmt.Sprintf(`{"build_status":"green","commits":%s,"root_cause_addressed":%v,"summary":%q}`, commits, addressed, summary))
 }
 
 func dispatchedSteps(sp *fakeSpawner) string {
@@ -58,7 +62,7 @@ func TestRootCauseFalseFirstRewindsToRootCause(t *testing.T) {
 	if x.WorkflowStatus != StatusCompleted {
 		t.Fatalf("status %q", x.WorkflowStatus)
 	}
-	want := []capsule.RewindRecord{{Gate: "fix", ToStep: "root-cause", Charged: true}}
+	want := []capsule.RewindRecord{{Gate: "fix", ToStep: "root-cause", Class: capsule.RewindCharged}}
 	if x.RewindStats.Count != 1 || fmt.Sprint(x.RewindStats.Rewinds) != fmt.Sprint(want) {
 		t.Fatalf("rewind ledger %+v, want one charged fix→root-cause record", x.RewindStats)
 	}
@@ -128,7 +132,7 @@ func TestRootCauseFailAfterFalseStillRewindsToRepro(t *testing.T) {
 		t.Fatalf("dispatch order %s: root-cause's fail must still rewind to repro", got)
 	}
 	x := readExec(t, execPath)
-	want := []capsule.RewindRecord{{Gate: "fix", ToStep: "root-cause", Charged: true}, {Gate: "root-cause", ToStep: "repro", Charged: true}}
+	want := []capsule.RewindRecord{{Gate: "fix", ToStep: "root-cause", Class: capsule.RewindCharged}, {Gate: "root-cause", ToStep: "repro", Class: capsule.RewindCharged}}
 	if x.WorkflowStatus != StatusCompleted || fmt.Sprint(x.RewindStats.Rewinds) != fmt.Sprint(want) {
 		t.Fatalf("status %q ledger %+v", x.WorkflowStatus, x.RewindStats)
 	}

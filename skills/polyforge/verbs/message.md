@@ -1,6 +1,6 @@
 # message — user-to-user messages (`pf msg`)
 
-Split-plane verb: `pf msg send` / `list` / `ack` / `show` are data-plane
+Split-plane verb: `pf msg send` / `list` / `ack` / `show` / `contacts` are data-plane
 (the `pf` CLI talks HTTP direct to AIHub with the human's own key); `pf msg analyze`
 is execution-plane (the local daemon runs an explicit, read-only,
 budget-capped analyzer one-shot, and its conclusion stays on the caller's
@@ -12,9 +12,10 @@ not an address.
 ## Triggers
 
 - EN: send X a message / send a DM / reach someone / check my messages / my
-  inbox / any messages for me / read that message / analyze that message
+  inbox / any messages for me / read that message / analyze that message /
+  who can I message / list my contacts
 - 中文: 给 X 发消息 / 发私信 / 联系某人 / 收信 / 看看有没有消息 / 有哪些消息 /
-  看那条消息 / 分析这条消息
+  看那条消息 / 分析这条消息 / 我能联系谁 / 联系人列表
 
 ## Command
 
@@ -24,6 +25,7 @@ pf msg list [--conversation <id>] [--after <seq>] [--before <seq>] [--limit N]
 pf msg ack <conversation> [--seq N]
 pf msg show <id>
 pf msg analyze <id>
+pf msg contacts
 ```
 
 - `send`: `--to` names an existing human user id, `--text` is the body
@@ -44,10 +46,20 @@ pf msg analyze <id>
   forward. Machine delivery is separate — delivery never clears unread.
 - `show <id>`: one message.
 - `analyze <id>`: the daemon's read-only, budget-capped analyzer run.
+- `contacts`: the people the caller can message — the union, deduplicated
+  by user id, of the human co-members (id + display name; never the caller,
+  never a machine) of every project the `cli.toml` `[workspace.*]` mapping
+  names. The mapping is read at call time, so an edited workspace entry
+  shows on the next call without a daemon restart. One read per project, at
+  most 4 at once, 15 s each, no retry; a project the caller cannot read
+  contributes nothing and is not an error, and no mapping is an empty
+  answer. Human output is one `<id>  <name>` line per contact; `--json` is
+  the assembled `{"contacts":[{"id","display_name"}]}`.
 
 `--about-wi` is an **anchor, never a route**: it ties the message to a work
 item for presentation and recall; it decides nothing about the recipient.
-`--json` is the server/daemon payload passthrough.
+`--json` is the server/daemon payload passthrough (for `contacts`, the
+answer pf assembles from the per-project reads).
 
 ## Drafting (起草): the four-section template
 
@@ -100,7 +112,8 @@ missing or extra message id (`show` / `analyze` take exactly one).
 
 ## Notes
 
-- `send` / `list` / `ack` / `show` are refused inside a workflow step;
-  `analyze` is too. This fragment is for the interactive session, not a step
-  agent: a step holds no aihub credential, so neither the ack nor the
-  delivery-cursor entry point is reachable from it.
+- `send` / `list` / `ack` / `show` / `contacts` are refused inside a
+  workflow step; `analyze` is too. This fragment is for the interactive
+  session, not a step agent: a step holds no aihub credential, so neither
+  the ack, the delivery-cursor nor the project member entry point is
+  reachable from it.

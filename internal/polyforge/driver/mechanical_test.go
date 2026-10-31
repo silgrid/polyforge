@@ -90,7 +90,7 @@ func TestTransitionMechanicalRewindChargesSlotAndSetsMarker(t *testing.T) {
 	}
 	if exec.RewindStats.Count != 1 || len(exec.RewindStats.Rewinds) != 1 ||
 		exec.RewindStats.Rewinds[0].Gate != "verification" || exec.RewindStats.Rewinds[0].ToStep != "code" ||
-		exec.RewindStats.Rewinds[0].Charged {
+		exec.RewindStats.Rewinds[0].Class == capsule.RewindCharged {
 		t.Fatalf("exactly one slot, logged to code (a mechanical rewind charges no edge slot): %+v", exec.RewindStats)
 	}
 	if pri := code.PendingRewindInput; pri == nil || pri.ToStep != "code" ||
@@ -247,7 +247,7 @@ func TestTransitionMechanicalRewindBoundsHold(t *testing.T) {
 	if mech != 1 || exec.RewindStats.Count != 1 {
 		t.Fatalf("the bound fired before any mutation: mechanical archives %d, count %d", mech, exec.RewindStats.Count)
 	}
-	if len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0].Charged {
+	if len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0].Class == capsule.RewindCharged {
 		t.Fatalf("the mechanical rewind must charge no edge slot: %+v", exec.RewindStats.Rewinds)
 	}
 	if code := exec.Steps["code"]; code.PendingRewindInput != nil || code.Status != capsule.StepDone {
@@ -304,7 +304,7 @@ func TestTransitionMechanicalSelfReportRewindsFreshSameSlot(t *testing.T) {
 		t.Fatalf("the self-report archive must mirror the range rewind's shape (the light gate named): %+v", att)
 	}
 	if exec.RewindStats.Count != 1 || len(exec.RewindStats.Rewinds) != 1 ||
-		exec.RewindStats.Rewinds[0] != (capsule.RewindRecord{Gate: verificationStepID, ToStep: "code", Charged: true}) {
+		exec.RewindStats.Rewinds[0] != (capsule.RewindRecord{Gate: verificationStepID, ToStep: "code", Class: capsule.RewindCharged}) {
 		t.Fatalf("the self-report reuses the mechanical rewind's slot and charges its edge once: %+v", exec.RewindStats)
 	}
 	if pri := st.PendingRewindInput; pri == nil || pri.ToStep != "code" || pri.Note != "" ||

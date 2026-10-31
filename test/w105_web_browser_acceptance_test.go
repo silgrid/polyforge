@@ -156,6 +156,10 @@ func TestW105BrowserConsoleAcceptance(t *testing.T) {
 			t.Fatalf("the browser suite output misses scenario %s:\n%s", name, out)
 		}
 	}
+	// Log the runner's PASS lines: the authored scenarios bind their
+	// result to one marker line each, and -v surfaces them to the
+	// verification harness.
+	t.Logf("browser suite output:\n%s", out)
 }
 
 // browserFixtures carries the ids the driver seeded to the suite.
@@ -216,6 +220,19 @@ func seedBrowserFixtures(t *testing.T, inst *v1Install) browserFixtures {
 			"visibility": "project",
 		}, nil); err != nil {
 			t.Fatalf("search memory: %v", err)
+		}
+	}
+	// One memory per remaining kind hook (fact is seeded above): the
+	// four kinds, the three named doc.* types and a plain doc, so the
+	// colour scenario measures every hook side by side.
+	for _, typ := range []string{"experience.wrap", "rule.guard", "methodology.flow", "doc.decision", "doc.design", "doc.review", "doc"} {
+		if err := inst.client.Do("POST", "/api/v1/memories", map[string]any{
+			"project": v1Project, "type": typ,
+			"title":   "browser kind memory " + typ,
+			"content": "kind body", "tags": []string{"kind"},
+			"visibility": "project",
+		}, nil); err != nil {
+			t.Fatalf("kind memory %s: %v", typ, err)
 		}
 	}
 

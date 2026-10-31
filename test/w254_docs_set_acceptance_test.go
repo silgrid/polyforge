@@ -433,15 +433,23 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // the tool window) and the appended entry (the first
 // model_error resumes, the paced retries and the status face's RETRY
 // column) and the appended/#115 entry (the conf-first
-// engine and `pf verify-run`), and nothing else) and is only
-// routed to, from the install ops page and the README landing page. The
+// engine and `pf verify-run`), and the appended entry (the
+// step tool window bounds verify-run's deadline), plus the appended
+// TMPDIR-reclamation entry, and the appended
+// v2.20.12 section (aihub's browse total, `pf recall` browse mode, the
+// task-list prompt summary and pi-web's 2.20.12 floor), and the appended
+// v2.20.12 section (the project member face, `pf msg
+// contacts` and pi-web's Messages 2.20.12 floor), and the appended
+// section (owner exits, the reserved cancel answer and
+// owner-routed rewinds), and nothing else) and is only routed to, from the install ops page and the README
+// landing page. The
 // pin moves in the same commit as each append (the append-only rule,
 // spec R14: docs change with the code, and the pin with the
 // docs).
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "c65b0452bfee7f7a3dd7897c501920e7ab99c308779ed0f639c780179b830ce8" {
+	if got := hex.EncodeToString(sum[:]); got != "6d45f32b87da66dbbc14635f8dd99d21958ff288d9e2ca2577854ebcd74af15b" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	install := w254Norm(w254Page(t, "docs/install.md"))

@@ -70,7 +70,7 @@ func w78Line(s, needle string) string {
 }
 
 func TestPlanConformanceCitedExtension(t *testing.T) {
-	build := jsonMap(t, `{"declared_extensions":[{"path":"x.go","finding_id":"s3#1"},{"path":"y.go","finding_id":"finding 2"},{"path":"z.go"}]}`)
+	build := jsonMap(t, `{"declared_extensions":[{"path":"x.go","source":"review","ref":"s3#1"},{"path":"y.go","source":"review","ref":"finding 2"},{"path":"z.go"}]}`)
 	changed := map[string][]string{"app": {"a.go", "docs/a.md", "x.go", "y.go", "z.go"}}
 
 	// no review→build rewind: no finding exists to cite.
@@ -80,11 +80,11 @@ func TestPlanConformanceCitedExtension(t *testing.T) {
 	}
 
 	// after a review FAIL rewound to build: only the well-formed citation counts.
-	pc = foldPlanConformance(planConformanceInputs{plan: jsonMap(t, conformancePlan), build: build, reviewRound: true}, changed, "")
+	pc = foldPlanConformance(planConformanceInputs{plan: jsonMap(t, conformancePlan), build: build, rewound: map[string]bool{reviewStepID: true}}, changed, "")
 	if want := []string{"y.go", "z.go"}; !reflect.DeepEqual(pc.Undeclared, want) {
 		t.Fatalf("undeclared = %v, want %v (malformed and missing finding ids never count)", pc.Undeclared, want)
 	}
-	if want := []declaredExtension{{Path: "x.go", FindingID: "s3#1"}}; !reflect.DeepEqual(pc.Cited, want) {
+	if want := []declaredExtension{{Path: "x.go", Source: "review", Ref: "s3#1"}}; !reflect.DeepEqual(pc.Cited, want) {
 		t.Fatalf("cited = %v, want %v", pc.Cited, want)
 	}
 	s := renderPlanConformance(pc)
@@ -220,7 +220,7 @@ func TestPlanConformanceCitationSurvivesALaterFreshRound(t *testing.T) {
 		done(conformancePlan), // s1 plan
 		done(`{}`),            // s2 code
 		gateFAIL(),            // s3 review FAIL -> code
-		done(`{"declared_extensions":[{"path":"x.go","finding_id":"s3#1"}]}`), // s4 code cites
+		done(`{"declared_extensions":[{"path":"x.go","source":"review","ref":"s3#1"}]}`), // s4 code cites
 		gateFAIL(),                 // s5 review FAIL -> code (fresh again)
 		done(`{}`),                 // s6 code: does not re-cite
 		done(`{"verdict":"pass"}`), // s7 review
@@ -231,7 +231,7 @@ func TestPlanConformanceCitationSurvivesALaterFreshRound(t *testing.T) {
 	if got := dispatchedSteps(sp); got != "plan,code,review,code,review,code,review" {
 		t.Fatalf("dispatch order %s", got)
 	}
-	want := []declaredExtension{{Path: "x.go", FindingID: "s3#1", Carried: true}}
+	want := []declaredExtension{{Path: "x.go", Source: "review", Ref: "s3#1", Carried: true}}
 	if pc := sp.spawnAt(6).PlanConformance; pc == nil || !reflect.DeepEqual(pc.Cited, want) {
 		t.Fatalf("the third review's facts must still count the round-2 citation as carried: %+v", pc)
 	}
@@ -261,18 +261,18 @@ func TestPlanConformanceInputsUnionBuildRoundsSinceThePlan(t *testing.T) {
 		workflow: &Workflow{Steps: []StepSpec{{ID: planStepID}, {ID: "code"}, {ID: reviewStepID, Gate: true, OnFail: &OnFail{Target: "code"}}}},
 		exec: &capsule.Execution{
 			RewindStats: capsule.RewindStats{Count: 2, Rewinds: []capsule.RewindRecord{
-				{Gate: reviewStepID, ToStep: "code", Charged: true}, {Gate: reviewStepID, ToStep: "code", Charged: true}}},
+				{Gate: reviewStepID, ToStep: "code", Class: capsule.RewindCharged}, {Gate: reviewStepID, ToStep: "code", Class: capsule.RewindCharged}}},
 			Steps: map[string]*capsule.Step{
 				planStepID: {Status: capsule.StepDone, Output: jsonMap(t, conformancePlan),
 					Attempts: []capsule.Attempt{{Cause: "accepted", AttemptSeq: 1, ArchivedAt: stamp(10)}}},
 				"code": {Status: capsule.StepDone,
-					Output: jsonMap(t, `{"declared_extensions":[{"path":"w.go","finding_id":"s9#2"}]}`),
+					Output: jsonMap(t, `{"declared_extensions":[{"path":"w.go","source":"review","ref":"s9#2"}]}`),
 					Attempts: []capsule.Attempt{
 						{Cause: CauseSupersededByRewind, AttemptSeq: 1, ArchivedAt: stamp(5),
-							Result: json.RawMessage(`{"declared_extensions":[{"path":"old.go","finding_id":"s2#1"}]}`)},
+							Result: json.RawMessage(`{"declared_extensions":[{"path":"old.go","source":"review","ref":"s2#1"}]}`)},
 						{Cause: "accepted", AttemptSeq: 2, ArchivedAt: stamp(20)},
 						{Cause: CauseGateFailRewind, AttemptSeq: 3, ArchivedAt: stamp(30), RewindGate: reviewStepID,
-							Result: json.RawMessage(`{"declared_extensions":[{"path":"x.go","finding_id":"s3#1"},{"path":"w.go","finding_id":"s3#2"},{"path":"z.go","finding_id":"later"}]}`)},
+							Result: json.RawMessage(`{"declared_extensions":[{"path":"x.go","source":"review","ref":"s3#1"},{"path":"w.go","source":"review","ref":"s3#2"},{"path":"z.go","source":"review","ref":"later"}]}`)},
 						{Cause: CauseGateFailRewind, AttemptSeq: 4, ArchivedAt: stamp(40), RewindGate: reviewStepID,
 							Result: json.RawMessage(`null`)},
 					}},
@@ -285,11 +285,50 @@ func TestPlanConformanceInputsUnionBuildRoundsSinceThePlan(t *testing.T) {
 	if want := []string{"old.go", "z.go"}; !reflect.DeepEqual(pc.Undeclared, want) {
 		t.Fatalf("undeclared = %v, want %v (a pre-plan round never counts; a malformed id never counts)", pc.Undeclared, want)
 	}
-	want := []declaredExtension{{Path: "x.go", FindingID: "s3#1", Carried: true}, {Path: "w.go", FindingID: "s9#2"}}
+	want := []declaredExtension{{Path: "x.go", Source: "review", Ref: "s3#1", Carried: true}, {Path: "w.go", Source: "review", Ref: "s9#2"}}
 	if !reflect.DeepEqual(pc.Cited, want) {
 		t.Fatalf("cited = %+v, want %+v (the live citation of w.go wins over the archived one)", pc.Cited, want)
 	}
 	if len(pc.Ignored) != 1 || !strings.Contains(pc.Ignored[0], "`z.go`") || !strings.Contains(pc.Ignored[0], "earlier build round") {
 		t.Fatalf("ignored = %v, want only z.go's malformed entry, marked as an earlier round's", pc.Ignored)
+	}
+}
+
+// TestConformanceRepairedOnlyOnANewDeclaration pins the
+// unchanged-tree guard's conformance exemption: an identical tree may re-run
+// the gate only when the facts the gate last judged carried a blocking entry
+// and the current facts carry none. A live citation is not the key — the
+// build step's declared_extensions is cumulative, so a later no-change round
+// re-emits the same citation and must still park.
+func TestConformanceRepairedOnlyOnANewDeclaration(t *testing.T) {
+	blocked := func() *PlanConformance {
+		return &PlanConformance{Undeclared: []string{"y.go"}}
+	}
+	clean := func() *PlanConformance {
+		return &PlanConformance{Cited: []declaredExtension{{Path: "y.go", Source: "review", Ref: "s1#1"}}}
+	}
+	cleanCarried := func() *PlanConformance {
+		return &PlanConformance{Cited: []declaredExtension{{Path: "y.go", Source: "review", Ref: "s1#1", Carried: true}}}
+	}
+	for _, tc := range []struct {
+		name            string
+		judged, current *PlanConformance
+		want            bool
+	}{
+		{"no facts at all (a lane without a done plan)", nil, nil, false},
+		{"the judged facts are unreadable", &PlanConformance{Unavailable: "repo app: no base"}, clean(), false},
+		{"the current facts are unreadable", blocked(), &PlanConformance{Unavailable: "repo app: no base"}, false},
+		{"a changed file is still undeclared", blocked(), &PlanConformance{Undeclared: []string{"z.go"}}, false},
+		{"a blocking coupled obligation is still unchanged", blocked(),
+			&PlanConformance{UnchangedObligations: []string{"docs/a.md"}}, false},
+		{"the gate already judged the facts clean", clean(), clean(), false},
+		{"a later round carries the same cumulative citation", cleanCarried(), clean(), false},
+		{"the gate judged a blocking fact and the current facts are clean", blocked(), clean(), true},
+		{"current clean beside a non-blocking unchanged write",
+			blocked(), &PlanConformance{UnchangedWrites: []string{"b.go"}, Cited: clean().Cited}, true},
+	} {
+		if got := conformanceRepaired(tc.judged, tc.current); got != tc.want {
+			t.Errorf("%s: conformanceRepaired = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

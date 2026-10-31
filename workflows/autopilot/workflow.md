@@ -52,7 +52,8 @@ The flow collapses the feature-full clarification trio (`grill` -> `spec` ->
 single fix pass and one machine-checkable gate, then delivers (`deliver`, below). It is for work whose
 scope is already small and well understood: a bounded bug fix, a small config or
 dependency change, a tiny feature. If a WI routed here turns out to need a real spec or a
-separate review pass, that is a signal it was misrouted — cancel and re-file against
+separate review pass, that is a signal it was misrouted — `grill` asks the owner, who
+answers the open question with the reserved `cancel` (it ends this WI) and re-files against
 `feature-full` or `bug-fix` rather than stretching this lane.
 
 ## The human checkpoint (`requires_human_answer: if_asked`)
@@ -97,8 +98,10 @@ earlier than the failing step:
 Workflow-level rewind bounds for this bundle are declared once in the frontmatter:
 `max_total: 6`, `max_per_step: 3`. The per-step bound is charged per gate→target edge —
 `verification` and `deliver` each carry three charged slots for their `fix` edge — and
-`max_total` is the global hard cap that counts every rewind (this lane has no review,
-so no light or converging exemption applies). A quick fix that cannot land within three
+`max_total` is the global hard cap that counts every automatic rewind (this lane has no review,
+so no light or converging exemption applies). An owner-routed rewind — a `deliver` FAIL a
+human answered ("back to code", and on a scoped work item 「全量重验」, which is owner-routed
+too) — charges neither the edge slot nor `max_total`. A quick fix that cannot land within three
 charged rewinds per gate is not a quick fix; past those bounds the workflow ends in
 `failed_rewind_exhausted` and the honest response is a re-filed WI on a heavier lane,
 not more loops.
@@ -116,6 +119,7 @@ human) is the shared step definition `workflows/_shared/steps/deliver.md`. Lane 
 its "back to code" answer rewinds to `fix`, and this workflow has no `review` step, so
 verification's pass stands in for the independent review — an autopilot delivery
 auto-merges when its tests are covered on the pushed head, no conflict was hand-resolved
-and the pre-flight is clean, and asks otherwise. There is no release slot: releases and
+and the pre-flight is clean, and asks otherwise. A declared `owner-review:` artifact makes
+deliver ask the human-only `deliver-owner-review` question first, before any merge. There is no release slot: releases and
 deploys happen only through the separate `release` bundle (a separate WI), cut from the
 merged origin head.

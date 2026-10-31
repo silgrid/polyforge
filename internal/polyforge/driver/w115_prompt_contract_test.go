@@ -26,9 +26,11 @@ func TestW115VerificationCallsVerifyRunOnce(t *testing.T) {
 		prompt := spawnStepPrompt(t, lane, verificationStepID)
 		flat := w109Flat(prompt)
 		for _, want := range []string{
-			"`pf verify-run --tier <full|scoped> --engine <data-dir>/release/current/tools/verify-scope --deadline <D>`",
+			"`pf verify-run --tier <full|scoped> --engine <data-dir>/release/current/tools/verify-scope`",
 			"## Run `pf verify-run` exactly once",
-			"One blocking call: give it an explicit timeout as long as your shell tool allows, pass `--deadline` about 2 minutes under that timeout, and wait for it.",
+			"One blocking call: give the call an explicit shell timeout of at least the tool window in your step environment (`$PF_TOOL_WINDOW_MS` milliseconds), and run it without `--deadline`.",
+			"The runner derives the whole-run deadline from that same tool-window bound (and clamps any explicit `--deadline` above it)",
+			"Your shell tool may cap the timeout at its own maximum, which still sits above the runner's deadline.",
 			"Never background it, never poll for its completion, never split its work into calls of your own.",
 			"a command that can no longer start is recorded `fail`",
 			"`--tier` is what the `# Verification tier` section names",

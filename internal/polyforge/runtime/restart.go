@@ -670,6 +670,11 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 		switch rec.State {
 		case string(StateEndPending):
 			r.settleEndPending(j) // our close landed with its answer lost, or another session took over
+			if v.Status == api.StatusBlocked {
+				// the lost-answer close settled: an owner's reserved cancel
+				// answer completes here too (review s8#1)
+				r.cancelIfRequested(j.wi, j.capsuleDir)
+			}
 			return "", nil
 		case string(StateSealing):
 			reason := rec.StopReason
@@ -696,6 +701,7 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 		switch r.closeBlocked(j, true) {
 		case closeSettled:
 			r.settleEndPending(j)
+			r.cancelIfRequested(j.wi, j.capsuleDir)
 			return ResumeClosed, nil
 		case closeRefused:
 			// parked: the record keeps end_pending and nothing retries it

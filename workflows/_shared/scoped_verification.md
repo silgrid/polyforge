@@ -10,8 +10,8 @@ call; never run the bar or the engine by hand). Declare the optional `scope` obj
 when `result.json`'s `tier.effective` is `scoped`: `mode: scoped`, at least one non-empty
 `declared_paths` entry, a `rationale`, and `fast_gates_ref` copied from `result.json`'s
 `scope.fast_gates_ref`. The scope you declare MUST be the scope `review` recorded
-(`steps.review.output.scope` — the step before you judged the diff against exactly
-these `declared_paths`); the driver blocks the automatic merge when the two
+(`steps.review.output.scope` — `declared_paths` means exactly what review's `scope`
+defines); the driver blocks the automatic merge when the two
 declarations disagree, and the delivery goes to a human. The driver rejects a
 scoped result whose declaration is incomplete and any scoped claim on a work item that did
 not opt in.

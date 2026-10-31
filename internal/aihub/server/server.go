@@ -151,6 +151,10 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/projects", s.authAdmin(s.hListProjects))
 	m.HandleFunc("GET /api/v1/projects/{id}", s.auth(s.hGetProject))
 	m.HandleFunc("PATCH /api/v1/projects/{id}", s.auth(s.hPatchProject))
+	// The project member face (read-only): the caller's human
+	// co-members as id + display name; contacts.go states its gate and
+	// step-agent reachability.
+	m.HandleFunc("GET /api/v1/projects/{id}/members", s.auth(s.hProjectMemberContacts))
 	// The project hard delete: admin role (authAdmin)
 	// plus the same api-key project-scope check as PATCH, inside the
 	// handler. Reachability: a step agent cannot reach this route — the
@@ -662,7 +666,17 @@ func (s *Server) hCancelWI(w http.ResponseWriter, r *http.Request, idn *identity
 	if !g.ownerDecision() {
 		return core.Fail(api.ErrAuthForbidden, "", "cancel requires reporter, maintainer or admin")
 	}
-	wi, err := s.WIs.Cancel(g.id, idn.UserID)
+	// Optional body: the owner's verbatim reason and answered question
+	// ride the event; dry_run answers this authorization gate alone and
+	// writes nothing (the daemon's probe of a reserved cancel answer).
+	var req api.CancelRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		return core.Fail(api.ErrCoreBadInput, "", "invalid JSON body: %v", err)
+	}
+	if req.DryRun {
+		return reply(w, http.StatusOK, map[string]any{"id": g.id, "dry_run": true, "authorized": true})
+	}
+	wi, err := s.WIs.Cancel(g.id, idn.UserID, req)
 	if err != nil {
 		return err
 	}
@@ -1394,7 +1408,8 @@ const (
 	maxBrowseLimit     = 200
 )
 
-// browseResponse is the browse-mode answer: the readable page plus the
+// browseResponse is the browse-mode answer: the readable page, the total
+// number of visible entries the whole walk covers and the
 // next page's opaque cursor, omitted on the last page.
 type browseResponse struct {
 	Items      []memory.Entry `json:"items"`
@@ -1427,11 +1442,18 @@ func (s *Server) hBrowseMemory(w http.ResponseWriter, r *http.Request, tags []st
 		// it, so it subsumes the readable set.
 		projects = []string{project}
 	}
-	items, next, err := s.Mems.Browse(projects, q.Get("sort"), q.Get("after"), q.Get("type"), tags, limit, s.memVisible(idn))
+	visible := s.memVisible(idn)
+	items, next, err := s.Mems.Browse(projects, q.Get("sort"), q.Get("after"), q.Get("type"), tags, limit, visible)
 	if err != nil {
 		return err
 	}
-	return reply(w, http.StatusOK, browseResponse{Items: items, Total: len(items), NextCursor: next})
+	// total is the whole walk's size under the same narrowing and
+	// visibility, not the page length.
+	total, err := s.Mems.BrowseTotal(projects, q.Get("type"), tags, visible)
+	if err != nil {
+		return err
+	}
+	return reply(w, http.StatusOK, browseResponse{Items: items, Total: total, NextCursor: next})
 }
 
 // maxMemoryExcerptRunes bounds the content excerpt a search answer may

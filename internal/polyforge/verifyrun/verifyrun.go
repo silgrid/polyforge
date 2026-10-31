@@ -38,6 +38,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/common/spawn"
 )
 
 // Defaults of the knobs Options leaves zero.
@@ -93,11 +95,12 @@ type Options struct {
 	// E2E_JOBS / GOMAXPROCS (resource governance); 0 = inherited.
 	E2EJobs    int
 	GoMaxProcs int
-	// Deadline bounds the WHOLE run (0 = DefaultDeadlineFor(Env)): every
-	// command's timeout is cut to what is left of it, a command that can
-	// no longer start is recorded failed, and result.json and the report
-	// are written before it passes — the call that runs verify-run must
-	// never outlive the harness's own shell-call bound.
+	// Deadline bounds the WHOLE run (0 = DefaultDeadlineFor(Env), and a
+	// value above that bound is clamped to it): every command's timeout is
+	// cut to what is left of it, a command that can no longer start is
+	// recorded failed, and result.json and the report are written before it
+	// passes — the call that runs verify-run must never outlive the daemon's
+	// tool rule. Result.DeadlineClampedFrom records a clamped request.
 	Deadline time.Duration
 	// Reruns / BaseRuns are the flaky re-run count at HEAD and the
 	// pre-existing run count on the base (0 = the defaults).
@@ -129,31 +132,55 @@ func (o Options) withDefaults() Options {
 	if o.Env == nil {
 		o.Env = os.Environ()
 	}
-	if o.Deadline <= 0 {
-		o.Deadline = DefaultDeadlineFor(o.Env)
+	bound := DefaultDeadlineFor(o.Env)
+	if o.Deadline <= 0 || o.Deadline > bound {
+		o.Deadline = bound
 	}
 	return o
 }
 
-// DefaultDeadlineFor derives the whole-run deadline from the harness's
-// shell-call maximum when the environment names it
-// (BASH_MAX_TIMEOUT_MS, minus deadlineMargin), else DefaultDeadline.
+// DefaultDeadlineFor derives the whole-run deadline from the tightest bound
+// the step environment declares: BASH_MAX_TIMEOUT_MS (a claude step's
+// shell-call maximum) and PF_TOOL_WINDOW_MS (the daemon's supervision tool
+// window, carried by every harness). It leaves deadlineMargin below that
+// bound, or half the bound when that is smaller, so the run always finishes
+// before the daemon judges the call hung; without either value it falls back
+// to DefaultDeadline.
 func DefaultDeadlineFor(env []string) time.Duration {
-	for i := len(env) - 1; i >= 0; i-- {
-		k, v, ok := strings.Cut(env[i], "=")
-		if !ok || k != "BASH_MAX_TIMEOUT_MS" {
-			continue
+	bound := time.Duration(0)
+	consider := func(name string) {
+		raw, ok := envLast(env, name)
+		if !ok {
+			return
 		}
-		ms, err := strconv.Atoi(strings.TrimSpace(v))
+		ms, err := strconv.Atoi(strings.TrimSpace(raw))
 		if err != nil || ms <= 0 {
-			break
+			return
 		}
-		if d := time.Duration(ms)*time.Millisecond - deadlineMargin; d >= time.Minute {
-			return d
+		if d := time.Duration(ms) * time.Millisecond; bound == 0 || d < bound {
+			bound = d
 		}
-		return time.Minute
 	}
-	return DefaultDeadline
+	consider("BASH_MAX_TIMEOUT_MS")
+	consider(spawn.EnvToolWindow)
+	if bound <= 0 {
+		return DefaultDeadline
+	}
+	if d := bound - min(deadlineMargin, bound/2); d > 0 {
+		return d
+	}
+	return time.Millisecond
+}
+
+// envLast answers the last value a variable carries in env, as the process
+// environment resolves duplicates.
+func envLast(env []string, name string) (string, bool) {
+	for i := len(env) - 1; i >= 0; i-- {
+		if k, v, ok := strings.Cut(env[i], "="); ok && k == name {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // Validate rejects an unusable invocation before anything runs.
@@ -187,6 +214,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err := opts.Validate(); err != nil {
 		return nil, err
 	}
+	requested := opts.Deadline
+	sweepStaleTmp()
 	o := opts.withDefaults()
 	abs, err := filepath.Abs(o.CapsuleDir)
 	if err != nil {
@@ -221,6 +250,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	res := r.run(ctx)
 	res.Run = n
 	res.Deadline = o.Deadline.String()
+	if requested > o.Deadline {
+		res.DeadlineClampedFrom = requested.String()
+	}
 	res.OutDir = r.rel(outDir)
 	res.LogDir = r.rel(runDir)
 	if err := writeOutputs(outDir, res); err != nil {

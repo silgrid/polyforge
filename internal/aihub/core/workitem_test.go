@@ -127,7 +127,7 @@ func TestPatchBundleWindowRefusals(t *testing.T) {
 
 	// canceled (terminal, never claimed) → TERMINAL_STATE.
 	canceled := mustCreateBound(t, env, "w140 canceled refusal", "w140-w-c")
-	if _, err := env.WIs.Cancel(canceled, env.UserID); err != nil {
+	if _, err := env.WIs.Cancel(canceled, env.UserID, api.CancelRequest{}); err != nil {
 		t.Fatalf("cancel %s: %v", canceled, err)
 	}
 	if _, err := patchBundle(t, env, canceled, strPtrTest("w140-w-c2")); !IsCode(err, api.ErrCoreGone) || ErrorReason(err) != "TERMINAL_STATE" {
@@ -236,7 +236,7 @@ func TestPatchBundleWithChildrenRefused(t *testing.T) {
 		t.Fatalf("bind on parent with children: want CORE-400/HAS_CHILDREN_NO_BUNDLE, got %v", err)
 	}
 	// ... and a terminal child still counts as a child.
-	if _, err := env2.WIs.Cancel(c2.ID, env2.UserID); err != nil {
+	if _, err := env2.WIs.Cancel(c2.ID, env2.UserID, api.CancelRequest{}); err != nil {
 		t.Fatalf("cancel child: %v", err)
 	}
 	if _, err := patchBundle(t, env2, p2.ID, strPtrTest("w140-sym-p")); !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "HAS_CHILDREN_NO_BUNDLE" {

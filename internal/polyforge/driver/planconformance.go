@@ -10,12 +10,21 @@
 //   - a declared coupled obligation left unchanged: blocking;
 //   - a declared plain write left unchanged: non-blocking.
 //
-// A review-driven code round may extend the declared set by citing the
-// review finding that requires the file: the build step's
-// `declared_extensions` [{path, finding_id}] output, finding_id being the
-// verdict's positional `s<n>#<k>` reference. A citation counts only
-// after a review→build rewind exists in the ledger and only when it is
-// well formed; anything else stays undeclared. The plan is never re-run
+// A gate-driven code round may extend the declared set by citing what
+// requires the file: the build step's `declared_extensions`
+// [{path, source, ref}] output. source names the citation's origin —
+// `review` (ref = the verdict's positional `s<n>#<k>` finding
+// reference), `verification` (ref = the FAIL verdict's dispatch `s<n>`,
+// its un-IDed fail_reason) or `deliver` (ref = the human deliver
+// answer's question id; the human's instruction declares the file
+// outright). A citation counts only after a rewind from that source's
+// gate to the build step exists in the ledger and only when its ref is
+// well formed; anything else stays undeclared. The mirror,
+// `withdrawn_obligations` [{path, source, ref}], withdraws a declared
+// coupled obligation a cited finding made moot; an obligation whose
+// every parent write is absent from the diff lapses by itself. An
+// uncited withdrawal of an obligation whose parent write is present
+// stays blocking. The plan is never re-run
 // and is not a rewind target. The citations are cumulative over the build
 // rounds since the plan: a fresh rewind resets the build
 // step's live output, so the fold reads every build round archived since
@@ -55,6 +64,21 @@ import (
 // files it added to the declared set, each citing a review finding.
 const declaredExtensionsKey = "declared_extensions"
 
+// withdrawnObligationsKey is the build step's output field withdrawing
+// declared coupled obligations, each citing what made it moot.
+const withdrawnObligationsKey = "withdrawn_obligations"
+
+// The citation sources (declared_extensions / withdrawn_obligations
+// `source`) and the ref shape each one takes.
+const (
+	citeReview       = "review"
+	citeVerification = "verification"
+	citeDeliver      = "deliver"
+)
+
+// verificationRefRe is a verification FAIL verdict's reference: s<round>.
+var verificationRefRe = regexp.MustCompile(`^s[1-9][0-9]*$`)
+
 // findingRefRe is the positional review-finding reference: s<round>#<k>.
 var findingRefRe = regexp.MustCompile(`^s[1-9][0-9]*#[1-9][0-9]*$`)
 
@@ -81,6 +105,10 @@ type PlanConformance struct {
 	Cited []declaredExtension
 	// Ignored lists the extensions not counted, each with the reason.
 	Ignored []string
+	// Released lists the declared coupled obligations no longer owed: a
+	// cited withdrawal, or a lapse (no parent write changed), each with
+	// its reason (not blocking).
+	Released []string
 }
 
 // declaredWrite is one plan write and its coupled obligations.
@@ -96,8 +124,9 @@ type obligation struct {
 }
 
 type declaredExtension struct {
-	Path      string
-	FindingID string
+	Path   string
+	Source string
+	Ref    string
 	// Carried marks a citation read from an archived build round since
 	// the plan, not from the live output.
 	Carried bool
@@ -110,14 +139,26 @@ type planConformanceInputs struct {
 	// buildRounds are the build step's outputs archived since the plan's
 	// acceptance, oldest first: their citations stay counted.
 	buildRounds []map[string]any
-	reviewRound bool     // a review→build rewind exists in the ledger
-	authored    []string // test_files an earlier authoring step declared and committed
+	// rewound names the gates a rewind to the build step exists from in
+	// the ledger: a citation of that source can count.
+	rewound  map[string]bool
+	authored []string // test_files an earlier authoring step declared and committed
 }
 
 // planConformanceInputsLocked snapshots, under d.mu, what stepID's
 // dispatch needs for its facts; ok=false when stepID receives none:
 // neither review nor a plan_conformance verification, or no done plan.
 func (d *Driver) planConformanceInputsLocked(stepID string) (planConformanceInputs, bool) {
+	return d.planConformanceInputsAtLocked(stepID, -1)
+}
+
+// planConformanceInputsAtLocked is planConformanceInputsLocked for the
+// input one gate judged: judgedRound >= 0 names the build step's rewind
+// archive whose result was live at that verdict (buildRewindSinceLocked),
+// so the fold takes that round as the live output and only the archives
+// older than it as carried. -1 selects the current dispatch's input (the
+// live output plus every archive since the plan). The caller holds d.mu.
+func (d *Driver) planConformanceInputsAtLocked(stepID string, judgedRound int) (planConformanceInputs, bool) {
 	if d.workflow == nil || d.exec == nil {
 		return planConformanceInputs{}, false
 	}
@@ -132,12 +173,27 @@ func (d *Driver) planConformanceInputsLocked(stepID string) (planConformanceInpu
 	in := planConformanceInputs{plan: pst.Output}
 	build := d.workflow.buildStep()
 	if bst := d.exec.Steps[build]; bst != nil {
-		in.build = bst.Output
-		in.buildRounds = archivedOutputsSince(bst.Attempts, acceptedAt(pst.Attempts))
+		since := acceptedAt(pst.Attempts)
+		if judgedRound >= 0 && judgedRound < len(bst.Attempts) {
+			a := bst.Attempts[judgedRound]
+			in.buildRounds = archivedOutputsSince(bst.Attempts[:judgedRound], since)
+			if len(a.Result) > 0 {
+				var m map[string]any
+				if json.Unmarshal(a.Result, &m) == nil {
+					in.build = m
+				}
+			}
+		} else {
+			in.build = bst.Output
+			in.buildRounds = archivedOutputsSince(bst.Attempts, since)
+		}
 	}
 	for _, r := range d.exec.RewindStats.Rewinds {
-		if r.Gate == reviewStepID && r.ToStep == build {
-			in.reviewRound = true
+		if r.ToStep == build {
+			if in.rewound == nil {
+				in.rewound = map[string]bool{}
+			}
+			in.rewound[r.Gate] = true
 		}
 	}
 	// The authored test files count as declared: an authoring step
@@ -195,6 +251,62 @@ func archivedOutputsSince(attempts []capsule.Attempt, since time.Time) []map[str
 		out = append(out, m)
 	}
 	return out
+}
+
+// gateConformanceRepaired answers whether stepID's gate would judge
+// plan-conformance facts that changed from blocking to clean since its last
+// verdict, even though the task-repo tree is byte-identical to the one that
+// verdict judged. judgedRound names the build step's rewind archive the
+// FAIL's ledger wrote: its result was the live output when the gate
+// delivered that verdict (buildRewindSinceLocked), so folding the same diff
+// with it as live and the older archives as carried reproduces the facts
+// the gate judged. The tree is unchanged, so the only way the current
+// facts can differ is a `declared_extensions` entry in the rounds since —
+// the metadata-only repair (the FAIL was the driver's
+// undeclared-file fact, and the rewound build step declared the file
+// without touching the tree).
+//
+// The exemption is exactly "the judged facts carried a blocking entry and
+// the current facts carry none". It deliberately does not key on a live
+// citation: the build step's `declared_extensions` is cumulative, so every
+// later no-change round re-emits the same citation and a live-citation
+// test would bypass the guard forever (a review round 2 FAIL, or a
+// verification FAIL, followed by a no-change build round). An unreadable
+// diff, a gate that receives no facts (no done plan), or a still-blocking
+// fact keeps the guard's park.
+func (d *Driver) gateConformanceRepaired(stepID string, judgedRound int) bool {
+	if judgedRound < 0 {
+		return false
+	}
+	d.mu.Lock()
+	current, ok := d.planConformanceInputsLocked(stepID)
+	judged, judgedOK := d.planConformanceInputsAtLocked(stepID, judgedRound)
+	d.mu.Unlock()
+	if !ok || !judgedOK {
+		return false
+	}
+	reposDir := ""
+	if d.wi.CapsuleDir != "" {
+		reposDir = filepath.Join(d.wi.CapsuleDir, capsule.DirRepos)
+	}
+	changed, reason := changedFiles(reposDir)
+	return conformanceRepaired(
+		foldPlanConformance(judged, changed, reason),
+		foldPlanConformance(current, changed, reason),
+	)
+}
+
+// conformanceRepaired is gateConformanceRepaired's pure predicate: the
+// facts the gate last judged had a blocking entry and its current facts
+// have none. Both folds must be readable (no unavailable diff).
+func conformanceRepaired(judged, current *PlanConformance) bool {
+	if judged == nil || current == nil || judged.Unavailable != "" || current.Unavailable != "" {
+		return false
+	}
+	blocking := func(pc *PlanConformance) bool {
+		return len(pc.Undeclared) > 0 || len(pc.UnchangedObligations) > 0
+	}
+	return blocking(judged) && !blocking(current)
 }
 
 // planConformance computes stepID's facts: the snapshot under d.mu,
@@ -257,6 +369,7 @@ func foldPlanConformance(in planConformanceInputs, changed map[string][]string, 
 	declared := map[string]bool{}
 	var writes []string
 	var obligations []string
+	parents := map[string][]string{} // obligation → the writes declaring it
 	files, _ := in.plan["touched_files"].([]any)
 	for _, it := range files {
 		f, _ := it.(map[string]any)
@@ -276,6 +389,7 @@ func foldPlanConformance(in planConformanceInputs, changed map[string][]string, 
 				continue
 			}
 			if op := cleanRepoPath(om["path"]); op != "" {
+				parents[op] = append(parents[op], p)
 				note, _ := om["note"].(string)
 				dw.Obligations = append(dw.Obligations, obligation{Path: op, Note: note})
 				if !declared[op] {
@@ -301,6 +415,7 @@ func foldPlanConformance(in planConformanceInputs, changed map[string][]string, 
 		}
 	}
 	foldExtensions(pc, in, declared)
+	withdrawn := foldWithdrawals(pc, in)
 	if unavailable != "" {
 		return pc
 	}
@@ -324,7 +439,19 @@ func foldPlanConformance(in planConformanceInputs, changed map[string][]string, 
 		}
 	}
 	for _, p := range obligations {
-		if !touched[p] {
+		if touched[p] {
+			continue
+		}
+		parentChanged := false
+		for _, w := range parents[p] {
+			parentChanged = parentChanged || touched[w]
+		}
+		switch {
+		case !parentChanged:
+			pc.Released = append(pc.Released, fmt.Sprintf("`%s` — lapsed: no write that declares it is in the diff", p))
+		case withdrawn[p] != "":
+			pc.Released = append(pc.Released, fmt.Sprintf("`%s` — withdrawn, citing %s", p, withdrawn[p]))
+		default:
 			pc.UnchangedObligations = append(pc.UnchangedObligations, p)
 		}
 	}
@@ -344,16 +471,14 @@ func foldPlanConformance(in planConformanceInputs, changed map[string][]string, 
 // path, its latest reason), marked when it comes from an archived round.
 func foldExtensions(pc *PlanConformance, in planConformanceInputs, declared map[string]bool) {
 	type entry struct {
-		path, fid string
-		carried   bool
+		path    string
+		cite    citation
+		carried bool
 	}
 	var entries []entry
 	collect := func(out map[string]any, carried bool) {
-		exts, _ := out[declaredExtensionsKey].([]any)
-		for _, it := range exts {
-			e, _ := it.(map[string]any)
-			fid, _ := e["finding_id"].(string)
-			entries = append(entries, entry{cleanRepoPath(e["path"]), strings.TrimSpace(fid), carried})
+		for _, it := range citationsOf(out, declaredExtensionsKey) {
+			entries = append(entries, entry{it.path, it.cite, carried})
 		}
 	}
 	for _, out := range in.buildRounds {
@@ -367,11 +492,11 @@ func foldExtensions(pc *PlanConformance, in planConformanceInputs, declared map[
 		reason := ""
 		switch {
 		case e.path == "":
-			reason = fmt.Sprintf("an entry without a path (finding_id %q)", e.fid)
-		case !in.reviewRound:
-			reason = fmt.Sprintf("`%s` (finding_id %q): no review FAIL has rewound to the build step, so there is no finding to cite", e.path, e.fid)
-		case !findingRefRe.MatchString(e.fid):
-			reason = fmt.Sprintf("`%s` (finding_id %q): not a well-formed review finding reference s<n>#<k>", e.path, e.fid)
+			reason = fmt.Sprintf("an entry without a path (%s)", e.cite)
+		default:
+			if why := e.cite.invalid(in); why != "" {
+				reason = fmt.Sprintf("`%s` (%s): %s", e.path, e.cite, why)
+			}
 		}
 		if reason != "" {
 			if _, ok := cited[e.path]; ok && e.path != "" {
@@ -390,7 +515,7 @@ func foldExtensions(pc *PlanConformance, in planConformanceInputs, declared map[
 			ignored[key] = reason
 			continue
 		}
-		ext := declaredExtension{Path: e.path, FindingID: e.fid, Carried: e.carried}
+		ext := declaredExtension{Path: e.path, Source: e.cite.source, Ref: e.cite.ref, Carried: e.carried}
 		if i, ok := cited[e.path]; ok {
 			pc.Cited[i] = ext
 		} else {
@@ -405,6 +530,87 @@ func foldExtensions(pc *PlanConformance, in planConformanceInputs, declared map[
 			pc.Ignored = append(pc.Ignored, r)
 		}
 	}
+}
+
+// citation is one declared_extensions / withdrawn_obligations source.
+type citation struct{ source, ref string }
+
+func (c citation) String() string { return fmt.Sprintf("source %q, ref %q", c.source, c.ref) }
+
+// describe renders a counted citation for the facts section.
+func (c citation) describe() string {
+	switch c.source {
+	case citeVerification:
+		return "the verification FAIL " + c.ref
+	case citeDeliver:
+		return "the human deliver answer to `" + c.ref + "`"
+	}
+	return "review finding " + c.ref
+}
+
+// invalid answers why a citation cannot count ("" = it counts): its
+// source is known, a rewind from that source's gate to the build step
+// exists in the ledger, and its ref is well formed for the source.
+func (c citation) invalid(in planConformanceInputs) string {
+	var gate, shape string
+	var ok bool
+	switch c.source {
+	case citeReview:
+		gate, shape, ok = reviewStepID, "a review finding reference s<n>#<k>", findingRefRe.MatchString(c.ref)
+	case citeVerification:
+		gate, shape, ok = verificationStepID, "a verification FAIL reference s<n>", verificationRefRe.MatchString(c.ref)
+	case citeDeliver:
+		gate, shape, ok = deliverStepID, "a deliver question id", questionIDShape.MatchString(c.ref)
+	default:
+		return "not a citation source (review, verification or deliver)"
+	}
+	if !in.rewound[gate] {
+		return "no " + gate + " FAIL has rewound to the build step, so there is nothing to cite"
+	}
+	if !ok {
+		return "not a well-formed ref: " + shape
+	}
+	return ""
+}
+
+type citedPath struct {
+	path string
+	cite citation
+}
+
+// citationsOf reads one build output's {path, source, ref} list.
+func citationsOf(out map[string]any, key string) []citedPath {
+	list, _ := out[key].([]any)
+	var cs []citedPath
+	for _, it := range list {
+		e, _ := it.(map[string]any)
+		src, _ := e["source"].(string)
+		ref, _ := e["ref"].(string)
+		cs = append(cs, citedPath{cleanRepoPath(e["path"]), citation{strings.TrimSpace(src), strings.TrimSpace(ref)}})
+	}
+	return cs
+}
+
+// foldWithdrawals answers the obligations a counted citation withdraws
+// (path → the citation's description), cumulative over the build rounds
+// since the plan like the extensions; a withdrawal that does not count
+// is listed in Ignored and withdraws nothing.
+func foldWithdrawals(pc *PlanConformance, in planConformanceInputs) map[string]string {
+	withdrawn := map[string]string{}
+	rounds := append(append([]map[string]any{}, in.buildRounds...), in.build)
+	for _, out := range rounds {
+		for _, w := range citationsOf(out, withdrawnObligationsKey) {
+			if w.path == "" {
+				continue
+			}
+			if why := w.cite.invalid(in); why != "" {
+				pc.Ignored = append(pc.Ignored, fmt.Sprintf("withdrawal of `%s` (%s): %s", w.path, w.cite, why))
+				continue
+			}
+			withdrawn[w.path] = w.cite.describe()
+		}
+	}
+	return withdrawn
 }
 
 // cleanRepoPath normalizes a declared path to the repo-relative form the
@@ -432,7 +638,7 @@ func renderPlanConformance(pc *PlanConformance) string {
 	}
 	var b strings.Builder
 	b.WriteString("\n" + planConformanceHeading + "\n\n")
-	b.WriteString("The driver compared the plan's declared set (its `touched_files` writes, their `coupled_obligations`, the build step's finding-cited `declared_extensions`, cumulative over its rounds since the plan, and the test files an earlier authoring step declared and committed) with the delivered diff (each task repo's `git diff --name-only $(git merge-base HEAD <origin default>)..HEAD`). These are facts, not suggestions; the severities are the owner's rule and hold in every round. Whether the listed obligations are the RIGHT ones, and whether a citation really requires its file, stays your judgment.\n")
+	b.WriteString("The driver compared the plan's declared set (its `touched_files` writes, their `coupled_obligations`, the build step's cited `declared_extensions` (a review finding, a verification FAIL or a human deliver answer) and cited `withdrawn_obligations`, cumulative over its rounds since the plan, and the test files an earlier authoring step declared and committed) with the delivered diff (each task repo's `git diff --name-only $(git merge-base HEAD <origin default>)..HEAD`). These are facts, not suggestions; the severities are the owner's rule and hold in every round. Whether the listed obligations are the RIGHT ones, and whether a citation really requires its file, stays your judgment.\n")
 	if pc.Unavailable != "" {
 		fmt.Fprintf(&b, "\nThe diff could not be read, so no set difference was computed: %s. Judge conformance from the diff yourself and say so in your verdict.\n", pc.Unavailable)
 	} else {
@@ -452,11 +658,17 @@ func renderPlanConformance(pc *PlanConformance) string {
 		if e.Carried {
 			carried = " (carried over: cited in an earlier build round since the plan, not re-cited in this one)"
 		}
-		fmt.Fprintf(&b, "- `%s` — cites review finding %s%s\n", e.Path, e.FindingID, carried)
+		fmt.Fprintf(&b, "- `%s` — cites %s%s\n", e.Path, citation{e.Source, e.Ref}.describe(), carried)
 	}
 	if len(pc.Ignored) > 0 {
 		b.WriteString("\nExtensions NOT counted (treated as not declared):\n\n")
 		for _, s := range pc.Ignored {
+			fmt.Fprintf(&b, "- %s\n", s)
+		}
+	}
+	if len(pc.Released) > 0 {
+		b.WriteString("\n## Coupled obligations no longer owed (not blocking)\n\n")
+		for _, s := range pc.Released {
 			fmt.Fprintf(&b, "- %s\n", s)
 		}
 	}

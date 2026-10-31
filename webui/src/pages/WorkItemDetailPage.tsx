@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { apiGet, ApiError } from '../api'
 import type { WorkItemDetail } from '../types'
 import NotFound from '../components/NotFound'
@@ -6,10 +7,11 @@ import StatusPill from '../components/StatusPill'
 import SanitizedHtml from '../components/SanitizedHtml'
 import DepList from '../components/DepList'
 import RelativeTime from '../components/RelativeTime'
+import { Card, Muted, SectionHeading } from '../components/ui'
 
-// WorkItemDetailPage renders one work item: the goal as the page's one
-// h1, the server-sanitized content, the metadata line, both dependency
-// directions and the aihub event timeline (labels and payloads render
+// WorkItemDetailPage renders one work item: the slug over the goal as
+// the page's one h1, the metadata card, the server-sanitized content
+// card, both dependency directions and the aihub event timeline card (labels and payloads render
 // as text — React escapes them).
 export default function WorkItemDetailPage({ project, id }: { project: string; id: string }) {
   const [detail, setDetail] = useState<WorkItemDetail | null>(null)
@@ -26,92 +28,88 @@ export default function WorkItemDetailPage({ project, id }: { project: string; i
   }, [project, id])
 
   if (missing) return <NotFound />
-  if (detail === null) return <p className="text-muted">Loading…</p>
+  if (detail === null) return <Muted>Loading…</Muted>
 
   return (
-    <article className="max-w-prose" data-testid="work-item-detail">
-      <p className="text-muted text-sm mb-1 font-mono">{detail.slug}</p>
-      <h1 className="text-2xl font-semibold mb-2">{detail.goal}</h1>
-      <p className="mb-4">
-        <StatusPill status={detail.status} />
-        <span className="text-muted text-sm ml-2">{detail.priority} priority</span>
-      </p>
-      <dl className="text-sm mb-6">
-        <Meta label="Reporter" value={detail.reporter} />
-        {detail.assignee ? <Meta label="Assignee" value={detail.assignee} /> : null}
-        {detail.milestone ? <Meta label="Milestone" value={detail.milestone} /> : null}
-        {detail.bundle ? <Meta label="Bundle" value={detail.bundle} /> : null}
-        {detail.labels.length > 0 ? (
-          <div className="mb-1">
-            <dt className="inline text-muted mr-2">Labels:</dt>
-            <dd className="inline">
+    <article className="flex max-w-3xl flex-col gap-5" data-testid="work-item-detail">
+      <div>
+        <p className="mb-1 font-mono text-caption text-muted">{detail.slug}</p>
+        <h1 className="mb-2 text-title font-semibold tracking-tight [overflow-wrap:anywhere]">{detail.goal}</h1>
+        <p className="flex flex-wrap items-center gap-2">
+          <StatusPill status={detail.status} />
+          <span className="text-caption text-muted">{detail.priority} priority</span>
+        </p>
+      </div>
+
+      <Card className="px-5 py-4">
+        <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-1.5">
+          <Meta label="Reporter">{detail.reporter}</Meta>
+          {detail.assignee ? <Meta label="Assignee">{detail.assignee}</Meta> : null}
+          {detail.milestone ? <Meta label="Milestone">{detail.milestone}</Meta> : null}
+          {detail.bundle ? <Meta label="Bundle">{detail.bundle}</Meta> : null}
+          {detail.labels.length > 0 ? (
+            <Meta label="Labels">
               {detail.labels.map((label) => (
-                <span key={label} className="inline-block border border-line rounded-full px-2 text-xs mr-1 bg-tint">
+                <span key={label} className="tag-chip">
                   {label}
                 </span>
               ))}
-            </dd>
-          </div>
-        ) : null}
-        <div className="mb-1">
-          <dt className="inline text-muted mr-2">Filed:</dt>
-          <dd className="inline text-muted">
+            </Meta>
+          ) : null}
+          <Meta label="Filed" muted>
             <RelativeTime at={detail.created_at} />
-          </dd>
-        </div>
-        <div className="mb-1">
-          <dt className="inline text-muted mr-2">Updated:</dt>
-          <dd className="inline text-muted">
+          </Meta>
+          <Meta label="Updated" muted>
             <RelativeTime at={detail.updated_at} />
-          </dd>
-        </div>
-        {detail.closed_at ? (
-          <div className="mb-1">
-            <dt className="inline text-muted mr-2">Closed:</dt>
-            <dd className="inline text-muted">
+          </Meta>
+          {detail.closed_at ? (
+            <Meta label="Closed" muted>
               <RelativeTime at={detail.closed_at} />
-            </dd>
-          </div>
-        ) : null}
-      </dl>
+            </Meta>
+          ) : null}
+        </dl>
+      </Card>
 
-      {detail.html ? <SanitizedHtml html={detail.html} /> : null}
+      {detail.html ? (
+        <Card className="px-5 py-4">
+          <SanitizedHtml html={detail.html} />
+        </Card>
+      ) : null}
 
       <DepList title="Blocked by" edges={detail.blocked_by} />
       <DepList title="Blocks" edges={detail.blocking} />
 
-      <section className="mt-6">
-        <h2 className="text-base font-semibold mb-2">Timeline</h2>
-        <ol className="list-none p-0 m-0">
-          {detail.events.map((event, i) => (
-            <li key={i} className="py-2 border-b border-line text-sm" data-testid="timeline-event">
-              <span className="text-muted font-mono text-xs">
-                <RelativeTime at={event.created_at} />
-              </span>
-              <span className="mx-2 text-muted">·</span>
-              <span className="font-medium">{event.type}</span>
-              {event.actor ? (
-                <>
-                  <span className="mx-2 text-muted">·</span>
-                  <span className="text-muted">{event.actor}</span>
-                </>
-              ) : null}
-              <pre className="whitespace-pre-wrap font-mono text-xs text-muted mt-1 mb-0" data-testid="event-payload">
-                {JSON.stringify(event.payload)}
-              </pre>
-            </li>
-          ))}
-        </ol>
+      <section>
+        <SectionHeading className="mb-2">Timeline</SectionHeading>
+        <Card>
+          <ol className="m-0 list-none p-0">
+            {detail.events.map((event, i) => (
+              <li key={i} className="border-b border-line px-4 py-2.5 last:border-b-0" data-testid="timeline-event">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="tabular font-mono text-caption text-muted">
+                    <RelativeTime at={event.created_at} />
+                  </span>
+                  <span className="font-medium">{event.type}</span>
+                  {event.actor ? <span className="text-muted">· {event.actor}</span> : null}
+                </div>
+                <pre className="mb-0 mt-1 whitespace-pre-wrap break-all font-mono text-caption text-muted" data-testid="event-payload">
+                  {JSON.stringify(event.payload)}
+                </pre>
+              </li>
+            ))}
+          </ol>
+        </Card>
       </section>
     </article>
   )
 }
 
-function Meta({ label, value }: { label: string; value: string }) {
+// Meta is one metadata row: the muted label column and its value.
+function Meta({ label, muted = false, children }: { label: string; muted?: boolean; children: ReactNode }) {
   return (
-    <div className="mb-1">
-      <dt className="inline text-muted mr-2">{label}:</dt>
-      <dd className="inline">{value}</dd>
-    </div>
+    <>
+      <dt className="text-muted">{label}</dt>
+      <dd className={`m-0 min-w-0 [overflow-wrap:anywhere] ${muted ? 'text-muted' : ''}`}>{children}</dd>
+    </>
   )
 }

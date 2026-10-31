@@ -62,7 +62,9 @@ rewinding `verify` or `deploy` back into `release` would try to publish a second
 release for the same intent, either colliding with the claimed version or silently
 burning a new one. A failed release lane therefore stops, with the failing step's
 `fail_reason` and command evidence as the record, and a human decides: re-file a new
-release WI (a new version) for NEW code, or repair the procedure first. In particular:
+release WI (a new version) for NEW code, or repair the procedure first. (A release
+step that asks the owner instead — `needs_input` — also accepts the reserved `cancel`
+answer, which ends this work item without a failure verdict.) In particular:
 
 - `release` FAIL: nothing, or only part of a release, was published. The reason says
   exactly what exists; nothing is ever deleted or overwritten automatically.

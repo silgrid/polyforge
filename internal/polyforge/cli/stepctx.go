@@ -93,9 +93,13 @@ func (ctx *Context) memoryFace() string {
 }
 
 // searchMemories is `pf recall`'s search (via the daemon in a step).
-func (ctx *Context) searchMemories(proj, q, memType string, tags []string, limit int, match string) (json.RawMessage, error) {
+// sort and after (browse paging,) reach aihub on the human
+// direct path only: the daemon's step/task memory proxy is search-only
+// and cmdRecall refuses browse and its flags there before calling this,
+// so they are never put on a daemon request.
+func (ctx *Context) searchMemories(proj, q, memType string, tags []string, limit int, match, sort, after string) (json.RawMessage, error) {
 	if ctx.Step == "" && ctx.Task == "" {
-		return ctx.aihub().SearchMemories(proj, q, memType, tags, limit, match)
+		return ctx.aihub().SearchMemories(proj, q, memType, tags, limit, match, sort, after)
 	}
 	v := url.Values{"q": {q}, "project": {proj}, "type": {memType}, "tags": {strings.Join(tags, ",")},
 		"limit": {strconv.Itoa(limit)}, "match": {match}}

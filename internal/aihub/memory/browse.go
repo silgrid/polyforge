@@ -86,16 +86,7 @@ func (s *Store) Browse(projects []string, sort, after, memType string, tags []st
 	// tie-break; rows stream through the visibility predicate (pure,
 	// no I/O) until limit+1 survived — the probe row proves whether a
 	// next page exists.
-	where := " WHERE m.status='active' AND m.content IS NOT NULL"
-	args := []any{}
-	if len(projects) > 0 {
-		ph := make([]string, len(projects))
-		for i, p := range projects {
-			ph[i] = "?" + strconv.Itoa(len(args)+i+1)
-			args = append(args, p)
-		}
-		where += " AND m.project_id IN (" + strings.Join(ph, ",") + ")"
-	}
+	where, args := browseFilter(projects, memType, tags)
 	if after != "" {
 		n := len(args)
 		where += " AND (julianday(m." + column + ") < julianday(?" + strconv.Itoa(n+1) + ")" +
@@ -103,24 +94,7 @@ func (s *Store) Browse(projects []string, sort, after, memType string, tags []st
 			" AND m.id < ?" + strconv.Itoa(n+2) + "))"
 		args = append(args, key, afterID)
 	}
-	if memType != "" {
-		if prefix, ok := strings.CutSuffix(memType, ".*"); ok {
-			n := len(args)
-			where += " AND substr(m.type,1,?" + strconv.Itoa(n+1) + ")=?" + strconv.Itoa(n+2)
-			args = append(args, len(prefix)+1, prefix+".")
-		} else {
-			where += " AND m.type=?" + strconv.Itoa(len(args)+1)
-			args = append(args, memType)
-		}
-	}
-	for _, tag := range tags {
-		where += " AND EXISTS (SELECT 1 FROM json_each(m.tags) je WHERE je.value=?" +
-			strconv.Itoa(len(args)+1) + ")"
-		args = append(args, tag)
-	}
-	rows, err := s.db.Query(`SELECT m.id, m.project_id, m.owner_user_id, m.work_item_id, m.type, m.title,
-		m.visibility, m.content_sha, m.content_len, m.tags, m.related, m.status, m.created_at, m.updated_at
-		FROM memories m`+where+" ORDER BY julianday(m."+column+") DESC, m.id DESC", args...)
+	rows, err := s.db.Query(browseSelect+where+" ORDER BY julianday(m."+column+") DESC, m.id DESC", args...)
 	if err != nil {
 		return nil, "", err
 	}
@@ -153,6 +127,77 @@ func (s *Store) Browse(projects []string, sort, after, memType string, tags []st
 		out = out[:limit]
 	}
 	return out, next, nil
+}
+
+// browseSelect is the candidate row's column set (scanBrowseRow's order).
+const browseSelect = `SELECT m.id, m.project_id, m.owner_user_id, m.work_item_id, m.type, m.title,
+		m.visibility, m.content_sha, m.content_len, m.tags, m.related, m.status, m.created_at, m.updated_at
+		FROM memories m`
+
+// browseFilter is the browse narrowing shared by the page and the total:
+// active entries with content, the readable projects (nil = every
+// project), the type (exact or "X.*" prefix, "" = any) and every listed
+// tag. Placeholders are numbered from ?1; callers append after them.
+func browseFilter(projects []string, memType string, tags []string) (string, []any) {
+	where := " WHERE m.status='active' AND m.content IS NOT NULL"
+	args := []any{}
+	if len(projects) > 0 {
+		ph := make([]string, len(projects))
+		for i, p := range projects {
+			ph[i] = "?" + strconv.Itoa(len(args)+i+1)
+			args = append(args, p)
+		}
+		where += " AND m.project_id IN (" + strings.Join(ph, ",") + ")"
+	}
+	if memType != "" {
+		if prefix, ok := strings.CutSuffix(memType, ".*"); ok {
+			n := len(args)
+			where += " AND substr(m.type,1,?" + strconv.Itoa(n+1) + ")=?" + strconv.Itoa(n+2)
+			args = append(args, len(prefix)+1, prefix+".")
+		} else {
+			where += " AND m.type=?" + strconv.Itoa(len(args)+1)
+			args = append(args, memType)
+		}
+	}
+	for _, tag := range tags {
+		where += " AND EXISTS (SELECT 1 FROM json_each(m.tags) je WHERE je.value=?" +
+			strconv.Itoa(len(args)+1) + ")"
+		args = append(args, tag)
+	}
+	return where, args
+}
+
+// BrowseTotal answers how many entries a whole browse walk visits
+// the same narrowing as Browse (projects, type, tags)
+// with the visibility tiers applied, so an entry the caller cannot read
+// is never counted (the #103 rule: no leak through a count). It is one
+// statement over the narrowed candidates — O(matching rows), not
+// constant per page; owner ruling 2026-10-29 (memory volumes are in the
+// hundreds).
+func (s *Store) BrowseTotal(projects []string, memType string, tags []string, allowed func(*Entry) bool) (int, error) {
+	if memType == "*" {
+		memType = ""
+	}
+	if projects != nil && len(projects) == 0 {
+		return 0, nil
+	}
+	where, args := browseFilter(projects, memType, tags)
+	rows, err := s.db.Query(browseSelect+where, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	total := 0
+	for rows.Next() {
+		e, err := scanBrowseRow(rows)
+		if err != nil {
+			return 0, err
+		}
+		if allowed == nil || allowed(e) {
+			total++
+		}
+	}
+	return total, rows.Err()
 }
 
 // browseScanner is the row-scan interface *sql.Rows and *sql.Row share.

@@ -46,7 +46,7 @@ func containsSeq(args []string, seq ...string) bool {
 func TestExecRunnerCompletes(t *testing.T) {
 	r := fakePi(t, `cat >/dev/null
 echo '{"type":"turn_start"}'
-echo '{"type":"message_update","usage":{"totalTokens":12}}'
+echo '{"type":"message_update","usage":{"input":10,"output":2,"cacheRead":900,"cacheWrite":0}}'
 echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
 `)
 	res, err := r.Run(context.Background(), piSpec(t, 1000), nil)
@@ -57,7 +57,7 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
 
 func TestExecRunnerTokenKill(t *testing.T) {
 	r := fakePi(t, `cat >/dev/null
-echo '{"type":"message_update","usage":{"totalTokens":500}}'
+echo '{"type":"message_update","usage":{"input":400,"output":100,"cacheRead":9000,"cacheWrite":0}}'
 sleep 30
 `)
 	start := time.Now()

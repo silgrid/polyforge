@@ -323,7 +323,8 @@ func TestB8RestartReplayCloneOutsideOpMu(t *testing.T) {
 	hub := newFakeHub()
 	r, _, _ := newTestRuntime(t, hub, &scriptedSpawner{})
 	const slow, other = "wi_b8j_slow", "wi_b8j_other"
-	hub.reposFor = map[string][]api.ProjectRepo{slow: {{Name: "app", URL: hangingRemote(t)}}}
+	url := hangingRemote(t)
+	hub.reposFor = map[string][]api.ProjectRepo{slow: {{Name: "app", URL: url}}}
 	// a claim that landed before a crash: journaled, never registered
 	sess := fakeSession(slow)
 	if err := r.noteClaiming(slow, sess, nil); err != nil {
@@ -338,6 +339,7 @@ func TestB8RestartReplayCloneOutsideOpMu(t *testing.T) {
 		}
 	})
 	waitClaiming(t, r, slow)
+	waitRemoteAccepted(t, url) // the replay clone is in flight, not merely journaled
 	within(t, 20*time.Second, "Start of another work item", func() {
 		startRunning(t, r, other)
 	})
