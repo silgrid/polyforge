@@ -27,8 +27,9 @@ below as a blocking finding.
 - **doctor and workspace layout.** `pf doctor`'s checks and the `pf init` /
   workspace conventions stay; a simplification changes only their
   implementation.
-- **Release and deploy.** aihub ships before `tools/install.sh`;
-  `.polyforge/release.sh` and `.polyforge/deploy.sh` are the only entry points.
+- **Release and deploy.** The aihub server (`pf aihub`) ships before
+  `tools/install.sh`; `.polyforge/release.sh` and `.polyforge/deploy.sh`
+  are the only entry points.
 - **Coupled obligations.** A plan names, for every file it writes, the
   documents, tables and projection rules that must change with it (or an
   explicit none with a reason). A new file has no incoming references, so a
@@ -42,5 +43,10 @@ below as a blocking finding.
 
   Review treats a coupled obligation named here that the plan omits, or that
   the delivered diff leaves unchanged, as a blocking finding.
+
+An e2e suite in a repository the verification-scope engine reports on
+declares the paths it covers in its opening comment block, for example
+`// carries: components/Panel*, lib/panel*`; the syntax and its fail-closed
+rules are in docs/contributing.md, "Carries".
 
 Contributor guide (filing work items, change coverage): docs/contributing.md.

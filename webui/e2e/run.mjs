@@ -194,6 +194,18 @@ const KIND_HOOKS = ['experience', 'fact', 'rule', 'methodology', 'decision', 'de
 // two kind colours must sit to count as distinct, not just unequal.
 const KIND_MIN_DISTANCE = 32
 
+// KIND_MIN_CHROMA is the least colourfulness ((max−min)/255 of the
+// rendered rgb, the same scale S21b reads) a kind colour may carry in
+// either theme, so a recolour can never collapse a kind into a neutral
+// gray. The plain doc hook is exempt: it is the palette's deliberately
+// neutral kind (warm stone gray, chroma ~0.04 in both themes).
+const KIND_MIN_CHROMA = 0.05
+const KIND_NEUTRAL = 'doc'
+
+function rgbChroma(c) {
+  return (Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b)) / 255
+}
+
 function rgbDistance(a, b) {
   return Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b)
 }
@@ -482,8 +494,10 @@ async function scenarioSearch(page) {
 // ---------------------------------------------------------------------------
 // S20a (new behaviour): every foreground colour meets the
 // WCAG ratio in BOTH themes, measured from computed styles — text at
-// least 4.5:1, every memory kind colour at least 3:1 and distinct from
-// every other kind — and the three
+// least 4.5:1, every memory kind colour at least 3:1, distinct from
+// every other kind and from the rendered --accent and --accent-fg (a
+// kind never wears the link/accent family,) and (doc
+// aside) no neutral gray — and the three
 // heartbeat bands resolve to distinguishable green / amber / red hues
 // that each clear the non-text 3:1 floor. The band check is the
 // red-at-baseline one: v1 renders all three bands in the same
@@ -513,8 +527,23 @@ async function scenarioContrast(page) {
     }
 
     // Every kind hook renders its own colour: each of the eight hooks
-    // clears 3:1 against its surface, all marks of one kind agree, and
-    // two kinds never resolve to the same colour.
+    // clears 3:1 against its surface, all marks of one kind agree, every
+    // kind but the neutral doc carries KIND_MIN_CHROMA, two kinds never
+    // resolve to the same colour, and no kind sits within
+    // KIND_MIN_DISTANCE of the rendered --accent or --accent-fg.
+    const accents = await page.evaluate(() => {
+      const out = {}
+      for (const token of ['--accent', '--accent-fg']) {
+        const probe = document.createElement('span')
+        probe.style.color = `var(${token})`
+        document.body.appendChild(probe)
+        const m = getComputedStyle(probe).color.match(/rgba?\(([^)]+)\)/)
+        probe.remove()
+        const p = m ? m[1].split(',').map(Number) : null
+        out[token] = p ? { r: p[0], g: p[1], b: p[2] } : null
+      }
+      return out
+    })
     const kinds = {}
     for (const k of KIND_HOOKS) {
       await waitForContent(list.locator(`.t-${k}`), `the ${scheme} memory list carries no .t-${k} hook`)
@@ -523,8 +552,16 @@ async function scenarioContrast(page) {
         assert(m.rgb, `the ${scheme} .t-${k} hook changes no rendered colour (the colour does not come from the hook)`)
         assert(m.ratio >= 3, `the ${scheme} .t-${k} kind colour contrast is ${m.ratio.toFixed(2)}:1 (want >= 3:1)`)
         assert(rgbDistance(m.rgb, marks[0].rgb) === 0, `the ${scheme} .t-${k} marks resolve different colours: ${JSON.stringify(marks)}`)
+        assert(k === KIND_NEUTRAL || rgbChroma(m.rgb) >= KIND_MIN_CHROMA,
+          `the ${scheme} .t-${k} kind colour is a neutral gray (chroma ${rgbChroma(m.rgb).toFixed(3)}, want >= ${KIND_MIN_CHROMA}): ${JSON.stringify(m.rgb)}`)
       }
       kinds[k] = marks[0].rgb
+      for (const [token, rgb] of Object.entries(accents)) {
+        assert(rgb, `the ${scheme} ${token} token renders no colour`)
+        const d = rgbDistance(kinds[k], rgb)
+        assert(d >= KIND_MIN_DISTANCE,
+          `the ${scheme} .t-${k} kind colour wears the accent family: ${JSON.stringify(kinds[k])} vs ${token} ${JSON.stringify(rgb)}, distance ${d.toFixed(1)} (want >= ${KIND_MIN_DISTANCE})`)
+      }
     }
     for (const [i, a] of KIND_HOOKS.entries()) {
       for (const b of KIND_HOOKS.slice(i + 1)) {

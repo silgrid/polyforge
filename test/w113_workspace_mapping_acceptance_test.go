@@ -39,7 +39,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -359,29 +358,22 @@ func (d *w113Daemon) boot(bound time.Duration) (served bool, output string, code
 	d.waitExit = make(chan error, 1)
 	go func() { d.waitExit <- cmd.Wait() }()
 
-	deadline := time.Now().Add(bound)
-	for {
-		conn, derr := net.Dial("unix", d.sock)
-		if derr == nil {
-			conn.Close()
-			return true, d.logTail(), 0
+	// Readiness is an answered request, not a bare dial (awaitAnsweredFace).
+	answered, exited, werr := awaitAnsweredFace(d.sock, time.Now().Add(bound), d.waitExit)
+	switch {
+	case answered:
+		return true, d.logTail(), 0
+	case exited:
+		d.cmd = nil
+		c := -1
+		if ee, ok := werr.(*exec.ExitError); ok {
+			c = ee.ExitCode()
 		}
-		select {
-		case werr := <-d.waitExit:
-			d.cmd = nil
-			c := -1
-			if ee, ok := werr.(*exec.ExitError); ok {
-				c = ee.ExitCode()
-			}
-			return false, d.logTail(), c
-		default:
-		}
-		if time.Now().After(deadline) {
-			d.stop()
-			d.t.Fatalf("w113 daemon neither served nor exited within %v (log tail: %s)", bound, d.logTail())
-		}
-		time.Sleep(25 * time.Millisecond)
+		return false, d.logTail(), c
 	}
+	d.stop()
+	d.t.Fatalf("w113 daemon neither served nor exited within %v (log tail: %s)", bound, d.logTail())
+	return false, "", 0
 }
 
 // logTail returns the last ~4KB of the daemon log.

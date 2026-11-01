@@ -297,7 +297,19 @@ type StatusResponse struct {
 	// outside the job slots, so queue.running never counts them. Absent on
 	// an older daemon.
 	Tasks *task.Summary `json:"tasks,omitempty"`
+	// Capabilities names the schema features this daemon's loaders accept
+	// (additive; an older daemon omits it): CapabilityStepsAttrs = the
+	// workspace yaml's steps.<project>.<step-id>.attrs. `pf config
+	// set|unset steps.*` and `pf workflows` read it (stepsWriteCapability).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
+
+// CapabilityStepsAttrs is the /status capability of a daemon whose
+// workspace loader accepts step attrs.
+const CapabilityStepsAttrs = "steps_attrs"
+
+// DaemonCapabilities is what this build's daemon reports on GET /status.
+var DaemonCapabilities = []string{CapabilityStepsAttrs}
 
 // SupervisionStatus is the live supervision bounds GET /status carries
 // (; 0 = unset, the documented default applies).

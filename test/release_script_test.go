@@ -99,7 +99,9 @@ exec %s "$@"
 `, realGit), 0o755)
 	relWrite(t, filepath.Join(w.bin, "docker"), `#!/bin/sh
 case "$1" in
-  build) echo "docker $*" >> "$CALLLOG" ;;
+  build) echo "docker $*" >> "$CALLLOG"
+    # the image build context: its file list (the last argument is the dir)
+    for ctx; do :; done; echo "docker build context: $(ls "$ctx" | tr '\n' ' ')" >> "$CALLLOG" ;;
   push) echo "docker $*" >> "$CALLLOG"; [ -n "$FAKE_PUSH_FAIL" ] && exit 1 ;;
   inspect) echo "docker inspect" >> "$CALLLOG"; echo "ghcr.io/silgrid/aihub@$FAKE_PUSH_DIGEST" ;;
   login) echo "docker login" >> "$CALLLOG"; cat >/dev/null ;;
@@ -212,9 +214,9 @@ func (w *relWorld) env(extra ...string) []string {
 		"RELEASE_TEST_CMD=echo tests >> \"$CALLLOG\"",
 		"RELEASE_AUDIT_CMD=echo audit >> \"$CALLLOG\"",
 		"RELEASE_GH_REPO=silgrid/polyforge",
-		"RELEASE_BUILD_CMD=echo build >> \"$CALLLOG\"; mkdir -p artifacts/release-$TAG; echo aihub-bin > artifacts/release-$TAG/aihub; echo pf-bin > artifacts/release-$TAG/pf; "+
-			"echo aihub-arm64-bin > artifacts/release-$TAG/aihub-darwin-arm64; echo pf-arm64-bin > artifacts/release-$TAG/pf-darwin-arm64; "+
-			"echo aihub-amd64-bin > artifacts/release-$TAG/aihub-darwin-amd64; echo pf-amd64-bin > artifacts/release-$TAG/pf-darwin-amd64",
+		"RELEASE_BUILD_CMD=echo build >> \"$CALLLOG\"; mkdir -p artifacts/release-$TAG; echo pf-bin > artifacts/release-$TAG/pf; "+
+			"echo pf-arm64-bin > artifacts/release-$TAG/pf-darwin-arm64; "+
+			"echo pf-amd64-bin > artifacts/release-$TAG/pf-darwin-amd64",
 	)
 	return append(env, extra...)
 }
@@ -275,16 +277,25 @@ func TestReleaseScriptHappyPathOrderAndAssets(t *testing.T) {
 	if !strings.Contains(strings.Join(calls, "\n"), "docker build -f deploy/Dockerfile -t ghcr.io/silgrid/aihub:v1.2.1") {
 		t.Fatalf("image build line wrong: %v", calls)
 	}
+	// the image is built from the linux pf binary alone
+	// (deploy/Dockerfile copies pf and runs `pf aihub`)
+	if relIndex(calls, "docker build context: pf ") < 0 {
+		t.Fatalf("image build context must carry exactly the linux pf binary: %v", calls)
+	}
 	if got := w.originTags(); !strings.Contains(got, "v1.2.1") {
 		t.Fatalf("v1.2.1 not on origin: %q", got)
 	}
 	rel := filepath.Join(w.fakeRel, "v1.2.1")
-	for _, f := range []string{"aihub-linux-amd64", "pf-linux-amd64", "aihub-darwin-arm64", "pf-darwin-arm64", "aihub-darwin-amd64", "pf-darwin-amd64", "aihub-image.digest", "SHA256SUMS", ".body"} {
+	relFiles := []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest", "SHA256SUMS", ".body"}
+	for _, f := range relFiles {
 		if _, err := os.Stat(filepath.Join(rel, f)); err != nil {
 			t.Fatalf("release missing %s: %v", f, err)
 		}
 	}
-	for n, want := range map[string]string{"aihub-darwin-arm64": "aihub-arm64-bin", "pf-darwin-arm64": "pf-arm64-bin", "aihub-darwin-amd64": "aihub-amd64-bin", "pf-darwin-amd64": "pf-amd64-bin"} {
+	if ents, _ := os.ReadDir(rel); len(ents) != len(relFiles) {
+		t.Fatalf("release has %d files, want exactly %v (no aihub binary asset,)", len(ents), relFiles)
+	}
+	for n, want := range map[string]string{"pf-linux-amd64": "pf-bin", "pf-darwin-arm64": "pf-arm64-bin", "pf-darwin-amd64": "pf-amd64-bin"} {
 		if got, _ := os.ReadFile(filepath.Join(rel, n)); strings.TrimSpace(string(got)) != want {
 			t.Fatalf("%s content = %q, want %q (the staged darwin binary, copied under its asset name)", n, got, want)
 		}
@@ -294,10 +305,10 @@ func TestReleaseScriptHappyPathOrderAndAssets(t *testing.T) {
 		t.Fatalf("digest file = %q", dg)
 	}
 	sums, _ := os.ReadFile(filepath.Join(rel, "SHA256SUMS"))
-	if n := strings.Count(string(sums), "\n"); n != 7 || strings.Contains(string(sums), "SHA256SUMS") {
-		t.Fatalf("SHA256SUMS should cover exactly 7 files: %q", sums)
+	if n := strings.Count(string(sums), "\n"); n != 4 || strings.Contains(string(sums), "SHA256SUMS") {
+		t.Fatalf("SHA256SUMS should cover exactly 4 files: %q", sums)
 	}
-	for _, n := range []string{"aihub-linux-amd64", "pf-linux-amd64", "aihub-darwin-arm64", "pf-darwin-arm64", "aihub-darwin-amd64", "pf-darwin-amd64", "aihub-image.digest"} {
+	for _, n := range []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest"} {
 		if !strings.Contains(string(sums), "  "+n+"\n") {
 			t.Fatalf("SHA256SUMS lacks %s: %q", n, sums)
 		}
@@ -432,7 +443,7 @@ func TestReleaseScriptVersionFloorAndBump(t *testing.T) {
 func TestReleaseScriptTagTakenOnOriginStopsBeforePublish(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
 	// a parallel release claims the computed version while we build
-	build := "echo build >> \"$CALLLOG\"; mkdir -p artifacts/release-$TAG; for n in aihub pf aihub-darwin-arm64 pf-darwin-arm64 aihub-darwin-amd64 pf-darwin-amd64; do echo bin > artifacts/release-$TAG/$n; done; " +
+	build := "echo build >> \"$CALLLOG\"; mkdir -p artifacts/release-$TAG; for n in pf pf-darwin-arm64 pf-darwin-amd64; do echo bin > artifacts/release-$TAG/$n; done; " +
 		"git tag -a -m other \"$TAG\" HEAD~1 && git push -q origin \"$TAG\" && git tag -d \"$TAG\" >/dev/null"
 	out, err := w.run([]string{"RELEASE_BUILD_CMD=" + build})
 	if err == nil {
@@ -498,7 +509,7 @@ func TestReleaseScriptPostFailTextIsAccurate(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected failure\n%s", out)
 	}
-	for _, want := range []string{"BURNED", "immutable", "artifacts/release-v1.2.1/aihub", "staging directory"} {
+	for _, want := range []string{"BURNED", "immutable", "artifacts/release-v1.2.1/pf and the two darwin", "artifacts/release-v1.2.1/pf-darwin-{arm64,amd64}", "staging directory"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("post-fail text lacks %q\n%s", want, out)
 		}
@@ -598,13 +609,11 @@ func (w *relWorld) publishFake(tag string, files map[string]string) {
 
 func goodRelease() map[string]string {
 	f := map[string]string{
-		"aihub-linux-amd64": "A", "pf-linux-amd64": "P",
-		"aihub-darwin-arm64": "Aa", "pf-darwin-arm64": "Pa",
-		"aihub-darwin-amd64": "Ax", "pf-darwin-amd64": "Px",
+		"pf-linux-amd64": "P", "pf-darwin-arm64": "Pa", "pf-darwin-amd64": "Px",
 		"aihub-image.digest": relFakeDigest + "\n",
 	}
 	var sums strings.Builder
-	for _, n := range []string{"aihub-linux-amd64", "pf-linux-amd64", "aihub-darwin-arm64", "pf-darwin-arm64", "aihub-darwin-amd64", "pf-darwin-amd64", "aihub-image.digest"} {
+	for _, n := range []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest"} {
 		fmt.Fprintf(&sums, "%x  %s\n", sha256.Sum256([]byte(f[n])), n)
 	}
 	f["SHA256SUMS"] = sums.String()
@@ -628,6 +637,8 @@ func TestReleaseScriptVerify(t *testing.T) {
 			mut: func(f map[string]string) { f["pf-darwin-arm64"] = "tampered" }, fail: "sha256sum"},
 		{name: "wrong asset set", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
 			mut: func(f map[string]string) { f["extra.txt"] = "x" }, fail: "asset set"},
+		{name: "aihub binary asset (pre-consolidation matrix)", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
+			mut: func(f map[string]string) { f["aihub-linux-amd64"] = "A" }, fail: "asset set"},
 		{name: "missing asset", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
 			mut: func(f map[string]string) { delete(f, "pf-linux-amd64") }, fail: "asset set"},
 		{name: "digest mismatch", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},

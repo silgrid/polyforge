@@ -59,6 +59,9 @@ ask the owner first — "this ticket will land in X", the machine id and
 the workspace — and submit only after the owner agrees. The owner
 declines → no `pf submit` (nothing is submitted on the owner's behalf).
 
+When the ticket's goal or content restates a repo's current state, sync that clone
+before submitting: SKILL.md session rule 8.
+
 ## Success
 
 `submitted <slug> (accepted by the local daemon)` — acceptance means the daemon

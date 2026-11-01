@@ -114,3 +114,114 @@ func TestConfigSetNotifiesDaemonAfterReleasingTheWriterFlock(t *testing.T) {
 		t.Fatalf("the daemon's reload outcome was not reported: %q", out.String())
 	}
 }
+
+// stepsWriteFixture is newWfFixture with a dense yaml and its sha.
+func stepsWriteFixture(t *testing.T, caps []string) (wfFixture, string) {
+	t.Helper()
+	f := newWfFixture(t, "# keep me\nsteps:\n  alpha:\n    grill:\n      models: [\"pi:before\"]\n    code: { models: [\"pi:c\"] }\n", caps)
+	return f, filepath.Join(f.ws, ".polyforge.yaml")
+}
+
+func fileHash(t *testing.T, path string) (string, []byte) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sha256Hex(raw), raw
+}
+
+// TestStepsChainWriteRefusesStaleSha pins the CAS: a stale --expect-hash
+// is CORE-409 and the file stays byte-identical; the matching hash lands.
+func TestStepsChainWriteRefusesStaleSha(t *testing.T) {
+	f, path := stepsWriteFixture(t, []string{CapabilityStepsAttrs})
+	sha, raw := fileHash(t, path)
+	code, _, stderr := runPf(t, f.env, "config", "set", "steps.alpha.grill.models", `["pi:x"]`, "--cwd", f.ws, "--expect-hash", strings.Repeat("0", 64))
+	if code == 0 || !strings.Contains(stderr, "CORE-409") {
+		t.Fatalf("a stale sha must be refused with CORE-409: %d %s", code, stderr)
+	}
+	if _, now := fileHash(t, path); string(now) != string(raw) {
+		t.Fatal("a refused write changed the file")
+	}
+	code, _, stderr = runPf(t, f.env, "config", "set", "steps.alpha.grill.models", `["pi:x"]`, "--cwd", f.ws, "--expect-hash", sha)
+	if code != 0 {
+		t.Fatalf("the matching write failed: %s", stderr)
+	}
+	if _, now := fileHash(t, path); !strings.Contains(string(now), "      models: [\"pi:x\"]\n") || !strings.Contains(string(now), "# keep me") {
+		t.Fatalf("write did not land in place:\n%s", now)
+	}
+}
+
+// TestStepsCandidateRefusedByLoader pins that a malformed candidate is
+// refused by the strict loader (no other validator) with the file intact.
+func TestStepsCandidateRefusedByLoader(t *testing.T) {
+	f, path := stepsWriteFixture(t, []string{CapabilityStepsAttrs})
+	sha, raw := fileHash(t, path)
+	code, _, stderr := runPf(t, f.env, "config", "set", "steps.alpha.grill.models", `["not-a-candidate"]`, "--cwd", f.ws, "--expect-hash", sha)
+	if code == 0 || !strings.Contains(stderr, "steps.alpha.grill.models[0]") {
+		t.Fatalf("a malformed candidate must be the loader's refusal: %d %s", code, stderr)
+	}
+	if _, now := fileHash(t, path); string(now) != string(raw) {
+		t.Fatal("a refused candidate changed the file")
+	}
+	for key, want := range map[string]string{
+		"steps.alpha.grill.attrs.mystery_knob":          "undeclared attr",
+		"steps.alpha.default.attrs.question_batch_size": "`default` takes no attrs",
+		"steps.alpha.grill.attrs.question_batch_size":   "",
+	} {
+		value := "1"
+		if want == "" {
+			value = "many"
+			want = "must be an integer"
+		}
+		code, _, stderr := runPf(t, f.env, "config", "set", key, value, "--cwd", f.ws, "--expect-hash", sha)
+		if code == 0 || !strings.Contains(stderr, want) {
+			t.Fatalf("%s: want a refusal naming %q, got %d %s", key, want, code, stderr)
+		}
+		if _, now := fileHash(t, path); string(now) != string(raw) {
+			t.Fatalf("%s: a refused attr changed the file", key)
+		}
+	}
+	if code, _, stderr := runPf(t, f.env, "config", "set", "steps.alpha.grill.attrs.question_batch_size", "2", "--cwd", f.ws, "--expect-hash", sha); code != 0 {
+		t.Fatalf("a declared attr write failed: %s", stderr)
+	}
+	doc := readWorkspaceDoc(t, f)
+	if v := stepRead(t, doc, "alpha", "grill")["attrs"].(map[string]any)["question_batch_size"].(map[string]any)["value"]; v != 2.0 {
+		t.Fatalf("the written attr reads back as %v", v)
+	}
+}
+
+// TestStepsAttrWriteRefusedBelowCapability pins the capability gate: a
+// daemon without steps_attrs refuses the write with CORE-501 naming the
+// floor, before the file is touched.
+func TestStepsAttrWriteRefusedBelowCapability(t *testing.T) {
+	f, path := stepsWriteFixture(t, nil)
+	sha, raw := fileHash(t, path)
+	code, _, stderr := runPf(t, f.env, "config", "set", "steps.alpha.grill.attrs.question_batch_size", "3", "--cwd", f.ws, "--expect-hash", sha)
+	if code == 0 || !strings.Contains(stderr, "CORE-501") || !strings.Contains(stderr, StepsAttrsMinimumVersion) {
+		t.Fatalf("want CORE-501 naming %s: %d %s", StepsAttrsMinimumVersion, code, stderr)
+	}
+	if _, now := fileHash(t, path); string(now) != string(raw) {
+		t.Fatal("the capability refusal changed the file")
+	}
+	code, _, stderr = runPf(t, f.env, "config", "unset", "steps.alpha.code.models", "--cwd", f.ws)
+	if code == 0 || !strings.Contains(stderr, "CORE-501") {
+		t.Fatalf("an unset is gated too: %d %s", code, stderr)
+	}
+}
+
+// TestStepsChainUnsetFallsBack pins the CLI clear: the chain-only entry is
+// gone and the read reports it undeclared.
+func TestStepsChainUnsetFallsBack(t *testing.T) {
+	f, path := stepsWriteFixture(t, []string{CapabilityStepsAttrs})
+	sha, _ := fileHash(t, path)
+	if code, _, stderr := runPf(t, f.env, "config", "unset", "steps.alpha.code.models", "--cwd", f.ws, "--expect-hash", sha); code != 0 {
+		t.Fatalf("unset failed: %s", stderr)
+	}
+	if _, now := fileHash(t, path); strings.Contains(string(now), "code:") {
+		t.Fatalf("the chain-only entry must be gone:\n%s", now)
+	}
+	if e := stepRead(t, readWorkspaceDoc(t, f), "alpha", "code"); e["declared"] != false {
+		t.Fatalf("a cleared chain must read undeclared: %v", e)
+	}
+}

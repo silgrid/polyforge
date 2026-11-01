@@ -154,8 +154,11 @@ func (d *Driver) planConformanceInputsLocked(stepID string) (planConformanceInpu
 
 // planConformanceInputsAtLocked is planConformanceInputsLocked for the
 // input one gate judged: judgedRound >= 0 names the build step's rewind
-// archive whose result was live at that verdict (buildRewindSinceLocked),
-// so the fold takes that round as the live output and only the archives
+// archive whose result was live at that verdict (buildRewindSinceLocked —
+// the earliest rewind archive at/after the verdict time, which skips a
+// light self-report archive; that archive is the resumed attempt's, never
+// a judged round), so
+// the fold takes that round as the live output and only the archives
 // older than it as carried. -1 selects the current dispatch's input (the
 // live output plus every archive since the plan). The caller holds d.mu.
 func (d *Driver) planConformanceInputsAtLocked(stepID string, judgedRound int) (planConformanceInputs, bool) {
@@ -231,7 +234,12 @@ func acceptedAt(attempts []capsule.Attempt) time.Time {
 // archivedOutputsSince answers, oldest first, the outputs a step's attempt
 // ledger archived at or after since: every attempt whose Result holds an
 // output object (a rewind archive — the round a gate FAIL sent back, a
-// superseded round, a light re-entry's self-report). An archive stamped
+// superseded round, a light re-entry's self-report). These are the carried
+// rounds of a fold, not the round a gate judged: a light self-report
+// archive is a rewind archive of the resumed attempt and never names the
+// judged round (gateLastVerdictAtLocked stamps no verdict at it, and
+// buildRewindSinceLocked takes the earliest archive at/after the verdict).
+// An archive stamped
 // before since belongs to an earlier era, and one whose stamp cannot be
 // read proves no era, so neither counts.
 func archivedOutputsSince(attempts []capsule.Attempt, since time.Time) []map[string]any {

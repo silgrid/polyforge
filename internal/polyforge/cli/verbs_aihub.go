@@ -13,6 +13,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/scopetier"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // ---------------------------------------------------------------------------
@@ -239,6 +240,7 @@ func fileCreate(ctx *Context, args []string) error {
 	}
 
 	warnScopeMarkerPlacement(ctx, req)
+	warnAcceptanceCarrier(ctx, req)
 	raw, err := ctx.aihub().CreateWorkItem(req)
 	if err != nil {
 		return err
@@ -265,6 +267,46 @@ func warnScopeMarkerPlacement(ctx *Context, req aihubclient.CreateWorkItemReques
 		return
 	}
 	fmt.Fprintf(ctx.Stderr, "file create: warning: the goal mentions %q but the content has no matching line; write the marker as its own line in the content — a marker in the goal has no effect and this work item will run at the full verification tier\n", scopetier.Marker)
+}
+
+// warnAcceptanceCarrier puts the chosen bundle's step table in front of
+// the filer of an execution ticket: every acceptance criterion must name
+// the step that carries it. When the content mentions e2e and no step of
+// that bundle declares the e2e_author_mode var, nothing in the lane
+// authors e2e scenarios, so it warns specifically. The table is read the
+// way the CLI already reads it — the daemon's workflows dir, then the
+// bundle's frontmatter; an unreachable daemon, no workflows dir or an
+// unknown or torn bundle is a silent skip. Warn only — the request, the
+// created work item, the exit code and stdout are untouched. The text
+// carries no braces: acceptance helpers slice JSON from the first one in
+// merged output.
+func warnAcceptanceCarrier(ctx *Context, req aihubclient.CreateWorkItemRequest) {
+	if req.BundleName == nil || *req.BundleName == "" {
+		return
+	}
+	bundle := *req.BundleName
+	dir, ok, _ := workspaceCandidateScope(ctx)
+	if !ok {
+		return
+	}
+	fms, _, err := workspace.Bundles(dir, bundle)
+	if err != nil || fms[bundle] == nil || len(fms[bundle].Steps) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(fms[bundle].Steps))
+	authorsE2E := false
+	for _, st := range fms[bundle].Steps {
+		ids = append(ids, st.ID)
+		if _, ok := st.Vars["e2e_author_mode"]; ok {
+			authorsE2E = true
+		}
+	}
+	seq := strings.Join(ids, " -> ")
+	fmt.Fprintf(ctx.Stderr, "file create: bundle steps: %s = %s; every acceptance criterion must name the step that carries it, written as <criterion> — carried by <step id>\n", bundle, seq)
+	if authorsE2E || req.Content == nil || !strings.Contains(strings.ToLower(*req.Content), "e2e") {
+		return
+	}
+	fmt.Fprintf(ctx.Stderr, "file create: acceptance-carrier warning: the content mentions e2e but no step of bundle %q (%s) declares e2e_author_mode, so this lane authors no e2e scenario; name the step that carries each e2e criterion, record an explicit waiver, or re-route with `pf file edit --bundle` before a daemon claims the work item\n", bundle, seq)
 }
 
 // depErr renders a dependency write failure with the server's reason

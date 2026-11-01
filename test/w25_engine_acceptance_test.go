@@ -200,17 +200,17 @@ func w25e2eGoModule(mod string) map[string]string {
 	}
 }
 
-// w25e2eNpmFixture is a minimal npm tree: a referenced source file, one helper
-// module imported by another suite, a Playwright suite, and a plain suite that
-// names the changed path.
+// w25e2eNpmFixture is a minimal npm tree: a declared source file, one helper
+// module imported by another suite, a Playwright suite, and a plain suite whose
+// carries: header declares the changed path.
 func w25e2eNpmFixture() map[string]string {
 	return map[string]string{
 		"package.json":    "{\n  \"name\": \"w25e2e-fixture\",\n  \"scripts\": {\"lint\": \"eslint .\", \"test\": \"node e2e/run.mjs\"}\n}\n",
 		"src/app.ts":      "export const app = 1;\n",
-		"e2e/run.mjs":     "import './helper.mjs';\nconsole.log('run');\n",
+		"e2e/run.mjs":     "// carries: lib/*\nimport './helper.mjs';\nconsole.log('run');\n",
 		"e2e/helper.mjs":  "export const helper = 1;\n",
-		"e2e/plain.mjs":   "// selects on src/app.ts\nconsole.log('plain');\n",
-		"e2e/browser.mjs": "import { chromium } from 'playwright';\nconsole.log('browser');\n",
+		"e2e/plain.mjs":   "// carries: src/app*\nconsole.log('plain');\n",
+		"e2e/browser.mjs": "// carries: components/*\nimport { chromium } from 'playwright';\nconsole.log('browser');\n",
 	}
 }
 
@@ -323,14 +323,26 @@ func TestW25E2EStackDetection(t *testing.T) {
 		t.Fatalf("a package.json-only repo must use the npm analyzer, got:\n%s", npmReport.joined())
 	}
 
-	cargoDir, _ := w25e2eFixture(t, map[string]string{"Cargo.toml": "[package]\nname = \"w25e2e\"\nversion = \"0.1.0\"\n"})
-	out, errb, code := w25e2eRun(t, cargoDir, nil)
+	for _, manifest := range []string{"pyproject.toml", "requirements.txt"} {
+		pyDir, _ := w25e2eFixture(t, map[string]string{manifest: "\n", "app/mod.py": "X = 1\n"})
+		if py := w25e2eScope(t, pyDir); !strings.Contains(py.joined(), "python -m compileall -q") || strings.Contains(py.joined(), "npm run lint") {
+			t.Fatalf("a %s-only repo must use the python analyzer, got:\n%s", manifest, py.joined())
+		}
+	}
+
+	rsDir, _ := w25e2eFixture(t, map[string]string{"Cargo.toml": "[package]\nname = \"w25e2e\"\nversion = \"0.1.0\"\n"})
+	if rs := w25e2eScope(t, rsDir); !strings.Contains(rs.joined(), "cargo build --all-targets") || strings.Contains(rs.joined(), "npm run lint") {
+		t.Fatalf("a Cargo.toml-only repo must use the rust analyzer, got:\n%s", rs.joined())
+	}
+
+	mixDir, _ := w25e2eFixture(t, map[string]string{"mix.exs": "defmodule W25e2e.MixProject do\nend\n"})
+	out, errb, code := w25e2eRun(t, mixDir, nil)
 	if code != 0 {
 		t.Fatalf("an unsupported stack must exit 0 with a report, got %d (%s)", code, errb)
 	}
-	cargo := w25e2eParse(t, out)
-	if cargo.mode != "full" || len(cargo.commands) != 0 {
-		t.Fatalf("an unsupported stack must be mode full with zero commands, got mode %q commands %v", cargo.mode, cargo.commands)
+	mix := w25e2eParse(t, out)
+	if mix.mode != "full" || len(mix.commands) != 0 {
+		t.Fatalf("an unsupported stack must be mode full with zero commands, got mode %q commands %v", mix.mode, mix.commands)
 	}
 	if strings.TrimSpace(errb) == "" {
 		t.Fatalf("an unsupported stack must explain itself on stderr")
@@ -403,8 +415,8 @@ func TestW25E2EGoScopedSelection(t *testing.T) {
 }
 
 // TestW25E2ENpmScopedSelection is scenario
-// "The npm analyzer selects referenced non-browser e2e suites and excludes
-// imported helpers".
+// "The npm analyzer selects the e2e suites whose carries: header declares the
+// changed path and excludes imported helpers".
 func TestW25E2ENpmScopedSelection(t *testing.T) {
 	dir, base := w25e2eFixture(t, w25e2eNpmFixture())
 	w25e2eWrite(t, dir, "src/app.ts", "export const app = 2;\n")
@@ -416,7 +428,7 @@ func TestW25E2ENpmScopedSelection(t *testing.T) {
 	}
 	joined := r.joined()
 	if !strings.Contains(joined, "node e2e/plain.mjs") {
-		t.Fatalf("the suite referencing the changed file must be selected:\n%s", joined)
+		t.Fatalf("the suite declaring the changed file must be selected:\n%s", joined)
 	}
 	for _, bad := range []string{"node e2e/browser.mjs", "node e2e/helper.mjs", "node e2e/run.mjs"} {
 		if strings.Contains(joined, bad) {

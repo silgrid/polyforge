@@ -39,7 +39,7 @@ type Server struct {
 	// StaleAfter is the machines liveness threshold used by the machines
 	// read face: a machine whose last_heartbeat_at is older than this is
 	// reported stale. Zero keeps the default (5× the 60s heartbeat
-	// default = 5m); cmd/aihub wires it to -machines-stale-after.
+	// default = 5m); aihub.Main (pf aihub) wires it to -machines-stale-after.
 	StaleAfter time.Duration
 
 	// pending is the in-memory progress/artifact relay registry, relay its

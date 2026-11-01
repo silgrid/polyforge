@@ -23,9 +23,10 @@ committed to a git revision chain, so any interruption is recoverable —
 a crash behaves exactly like a shutdown, and the run resumes where it
 stopped.
 
-The system splits in two: a server (**aihub**) that stores the work
-items, the projects, the memories and the git revision chain, and a
-work-machine binary (`pf`) — CLI plus daemon — that executes the work on
+The system splits in two roles, both served by the one `pf` binary: a
+server (**aihub**, run as `pf aihub` on the service host) that stores the
+work items, the projects, the memories and the git revision chain, and
+the work machine (`pf` CLI plus `pf daemon`) that executes the work on
 your own machine.
 
 ## Core concepts
@@ -75,7 +76,11 @@ The three pillars, in features:
   stopped.
 - **Tiered verification** — a run verifies against the project's full
   bar by default; a work item may opt into the narrower scoped tier,
-  whose declared scope the review step must judge adequate.
+  whose declared scope the review step must judge adequate. An e2e
+  suite declares what it covers in a header comment
+  (`// carries: components/Panel*`), and the scoped tier runs the suites
+  whose declaration the change hits
+  ([carries](docs/contributing.md#carries--declaring-what-an-e2e-suite-covers)).
 - **A release lane** — cutting a release is itself a work item on the
   release bundle: build, verify and deploy run as gate steps
   ([release](docs/reference/release.md)).

@@ -9,8 +9,10 @@
 //	steps:                               # optional section
 //	  <project-name>:                    # one entry per project of this workspace
 //	    default: { models: [...] }       # optional: every step of this project
-//	    <step-id>: { models: [...] }     # optional: the steps with this id,
-//	                                     # in every bundle (fix, code, review, ...)
+//	    <step-id>:                       # optional: the steps with this id,
+//	      models: [...]                  # in every bundle (fix, code, review, ...)
+//	      attrs: { <name>: <scalar> }    # optional: overrides of the attrs the
+//	                                     # bundles declare for this step id
 //	summarize:                           # optional: the summarize lane, one
 //	  models: [...]                      # entry for every project of this
 //	                                     # workspace: its model candidates
@@ -22,10 +24,16 @@
 //	                                     # 10-3600, absent = 60)
 //	memory_policy: ...                   # optional section (memorypolicy.go)
 //
-// A step entry has one key, `models`: a list of model candidates, each
+// A step entry has two keys, `models` and `attrs`, at least one of them.
+// `models` is a list of model candidates, each
 // `<harness>:<model>` (polyforge#175 — harness ∈ pi | claude, split on
 // the first `:`; the prefix is mandatory and is the whole truth of where
-// the candidate runs). The root `summarize` entry has the same `models`
+// the candidate runs). `attrs` maps an attr name to a scalar (a YAML
+// integer or a plain string): every name must be an attr some installed
+// bundle declares for that step id (workflow.StepAttrs) and the value must
+// have the declared type; `default` and `task` take no attrs. An
+// attrs-only entry is a present entry that declares no `models` level (the
+// chain falls through as if the entry were absent). The root `summarize` entry has the same `models`
 // plus the optional `language`: a plain string, trimmed, non-empty and
 // single-line, passed verbatim into the summarize prompt (no allowlist,
 // no length cap), and the optional `interval_sec`: a YAML integer in
@@ -95,8 +103,12 @@ const SummarizeKey = "summarize"
 type Config struct {
 	// Models is project name → (DefaultKey or a step id → candidate
 	// list): steps.<project>.<key>.models, flattened for the compose.
-	// Every candidate is in canonical `<harness>:<model>` form.
+	// Every candidate is in canonical `<harness>:<model>` form. A step
+	// entry that declares only attrs has no key here.
 	Models map[string]map[string][]string
+	// Attrs is project name → step id → attr name → value (an int or a
+	// string): steps.<project>.<step-id>.attrs, nil when none is declared.
+	Attrs map[string]map[string]map[string]any
 	// MemoryPolicy is the declared memory_policy section (nil = absent).
 	MemoryPolicy map[string]PolicyEntry
 	// Summarize is the root summarize.models list in canonical form
@@ -130,7 +142,9 @@ func PathFor(workspaceRoot string) string {
 // answers (nil, nil) too (absent-equivalent). Anything else parses
 // strictly or returns a typed *Error naming the file and the reason.
 // Every per-step key must be a step id of the bundles under workflowsDir
-// (workflow.StepIDs; "" skips that one check), and every project key one
+// (workflow.StepIDs) and every attr override an attr those bundles
+// declare for the step id, of the declared type (workflow.StepAttrs);
+// workflowsDir "" skips those two checks. Every project key must be one
 // of projects — the projects cli.toml maps to this workspace (nil skips
 // that check).
 func Load(workspaceRoot, workflowsDir string, projects []string) (*Config, error) {
@@ -155,6 +169,15 @@ func Load(workspaceRoot, workflowsDir string, projects []string) (*Config, error
 	}
 	if reason := checkStepIDs(cfg, steps, workflowsDir); reason != "" {
 		return nil, &Error{Path: path, Reason: reason}
+	}
+	if len(cfg.Attrs) > 0 {
+		decls, err := workflow.StepAttrs(workflowsDir)
+		if err != nil {
+			return nil, &Error{Path: path, Reason: fmt.Sprintf("the installed workflows are unreadable, so the attr overrides cannot be checked: %v", err)}
+		}
+		if reason := checkAttrs(cfg, decls); reason != "" {
+			return nil, &Error{Path: path, Reason: reason}
+		}
 	}
 	return cfg, nil
 }
@@ -242,11 +265,22 @@ func parse(raw []byte, projects []string) (*Config, string) {
 		}
 		cfg.Models[project] = make(map[string][]string, len(entries))
 		for _, ekv := range entries {
-			list, reason := stepEntry(ekv.val, where+"."+ekv.key)
+			list, attrs, reason := stepEntry(ekv.val, ekv.key, where+"."+ekv.key)
 			if reason != "" {
 				return nil, reason
 			}
-			cfg.Models[project][ekv.key] = list
+			if list != nil {
+				cfg.Models[project][ekv.key] = list
+			}
+			if attrs != nil {
+				if cfg.Attrs == nil {
+					cfg.Attrs = map[string]map[string]map[string]any{}
+				}
+				if cfg.Attrs[project] == nil {
+					cfg.Attrs[project] = map[string]map[string]any{}
+				}
+				cfg.Attrs[project][ekv.key] = attrs
+			}
 		}
 	}
 	if len(unmapped) > 0 {
@@ -255,29 +289,91 @@ func parse(raw []byte, projects []string) (*Config, string) {
 	return cfg, ""
 }
 
-// stepEntry reads one `{ models: [...] }` step entry at path where:
-// `models` is the only key. The retired `harness` key refuses with the
-// rewrite hint.
-func stepEntry(en *yaml.Node, where string) ([]string, string) {
+// stepEntry reads one `{ models: [...], attrs: {...} }` step entry of key
+// (DefaultKey, TaskKey or a step id) at path where: `models` and `attrs`
+// are its only keys and at least one is declared; `default` and `task`
+// take no attrs. The models list is nil when the entry declares none (an
+// attrs-only entry); attrs is nil when it declares none. The retired
+// `harness` key refuses with the rewrite hint.
+func stepEntry(en *yaml.Node, key, where string) ([]string, map[string]any, string) {
 	if en.Kind != yaml.MappingNode {
-		return nil, where + ": must be `{ models: [...] }`"
+		return nil, nil, where + ": must be `{ models: [...] }`"
 	}
 	keys, reason := mapping(en, where)
 	if reason != "" {
-		return nil, reason
+		return nil, nil, reason
 	}
-	var mn *yaml.Node
+	var mn, an *yaml.Node
 	for _, kv := range keys {
 		switch kv.key {
 		case "models":
 			mn = kv.val
+		case "attrs":
+			an = kv.val
 		case "harness":
-			return nil, where + ".harness: " + workflow.RetiredHarnessHint
+			return nil, nil, where + ".harness: " + workflow.RetiredHarnessHint
 		default:
-			return nil, fmt.Sprintf("%s.%s: not allowed (a step entry's only key is `models`)", where, kv.key)
+			return nil, nil, fmt.Sprintf("%s.%s: not allowed (a step entry's keys are `models` and `attrs`)", where, kv.key)
 		}
 	}
-	return modelsList(mn, where)
+	var attrs map[string]any
+	if an != nil {
+		if key == DefaultKey || key == TaskKey {
+			return nil, nil, AttrsNotAllowedReason(where, key)
+		}
+		if attrs, reason = attrsMap(an, where+".attrs"); reason != "" {
+			return nil, nil, reason
+		}
+		if mn == nil {
+			return nil, attrs, ""
+		}
+	}
+	list, reason := modelsList(mn, where)
+	if reason != "" {
+		return nil, nil, reason
+	}
+	return list, attrs, ""
+}
+
+// AttrsNotAllowedReason is the refusal of an attrs override under the
+// project-level `default` or the bundle-less `task` entry (where is the
+// entry's yaml path): an attr belongs to a step id that declares it.
+func AttrsNotAllowedReason(where, key string) string {
+	return fmt.Sprintf("%s.attrs: `%s` takes no attrs (an attr override belongs under a step id whose bundle step declares it)", where, key)
+}
+
+// attrsMap reads one `attrs:` mapping at path where: a non-empty mapping
+// of attr name → scalar, each a YAML integer (answered as int) or a plain
+// string. Whether the name is declared and the type matches is checked
+// against the installed bundles afterwards (checkAttrs).
+func attrsMap(an *yaml.Node, where string) (map[string]any, string) {
+	if isNull(an) || (an.Kind == yaml.MappingNode && len(an.Content) == 0) {
+		return nil, where + ": is empty — declare an attr override, or remove the key"
+	}
+	if an.Kind != yaml.MappingNode {
+		return nil, where + ": must be a mapping of attr name → value"
+	}
+	kvs, reason := mapping(an, where)
+	if reason != "" {
+		return nil, reason
+	}
+	out := make(map[string]any, len(kvs))
+	for _, kv := range kvs {
+		v := kv.val
+		switch {
+		case v.Kind == yaml.ScalarNode && v.Tag == "!!int":
+			var n int
+			if err := v.Decode(&n); err != nil {
+				return nil, fmt.Sprintf("%s.%s: %v", where, kv.key, err)
+			}
+			out[kv.key] = n
+		case v.Kind == yaml.ScalarNode && v.Tag == "!!str":
+			out[kv.key] = v.Value
+		default:
+			return nil, fmt.Sprintf("%s.%s: must be an integer or a plain string", where, kv.key)
+		}
+	}
+	return out, ""
 }
 
 // summarizeEntry reads the root `{ models: [...], language: <text>,
@@ -463,6 +559,11 @@ func checkStepIDs(cfg *Config, steps map[string]bool, workflowsDir string) strin
 			note(project, key)
 		}
 	}
+	for project, keys := range cfg.Attrs {
+		for key := range keys {
+			note(project, key)
+		}
+	}
 	if len(unknown) == 0 {
 		return ""
 	}
@@ -471,4 +572,47 @@ func checkStepIDs(cfg *Config, steps map[string]bool, workflowsDir string) strin
 	}
 	sort.Strings(unknown)
 	return fmt.Sprintf("unknown key(s) %s: a key is %q, %q or a step id of the installed workflows", strings.Join(unknown, ", "), DefaultKey, TaskKey)
+}
+
+// checkAttrs refuses an attr override that no installed bundle declares
+// for its step id, or whose value has not the declared type (the first
+// defect in sorted key order, so the refusal is deterministic).
+func checkAttrs(cfg *Config, decls map[string]map[string]workflow.AttrDecl) string {
+	var keys []string
+	for project, steps := range cfg.Attrs {
+		for step, attrs := range steps {
+			for name := range attrs {
+				keys = append(keys, project+"\x00"+step+"\x00"+name)
+			}
+		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts := strings.SplitN(k, "\x00", 3)
+		project, step, name := parts[0], parts[1], parts[2]
+		where := fmt.Sprintf("steps.%s.%s.attrs.%s", project, step, name)
+		decl, ok := decls[step][name]
+		if !ok {
+			return UndeclaredAttrReason(where, step, decls[step])
+		}
+		if why := workflow.CheckAttrValue(decl, cfg.Attrs[project][step][name]); why != "" {
+			return where + ": " + why
+		}
+	}
+	return ""
+}
+
+// UndeclaredAttrReason is the refusal of an attr override at where that
+// no installed bundle declares for step; declared is what the step does
+// declare (named in the refusal).
+func UndeclaredAttrReason(where, step string, declared map[string]workflow.AttrDecl) string {
+	if len(declared) == 0 {
+		return fmt.Sprintf("%s: undeclared attr — step %s declares no attrs in the installed workflows", where, step)
+	}
+	names := make([]string, 0, len(declared))
+	for n := range declared {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return fmt.Sprintf("%s: undeclared attr — step %s declares only %s", where, step, strings.Join(names, ", "))
 }

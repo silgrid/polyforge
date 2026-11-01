@@ -10,8 +10,9 @@ its answer; the daily-use walkthrough is the
 
 Polyforge is a work-item orchestration platform: a server (**aihub**)
 that stores the work, the memories and the git revision chain, and a
-work-machine binary (`pf`) whose **daemon** executes the work. The two
-sides split cleanly: everything a human files, reads or decides is
+work machine whose **daemon** executes the work. One `pf` binary plays
+both roles — `pf aihub` on the service host, the `pf` CLI plus
+`pf daemon` on a work machine. The two sides split cleanly: everything a human files, reads or decides is
 **data plane**; everything a machine executes is **execution plane**.
 
 ## The sixteen terms

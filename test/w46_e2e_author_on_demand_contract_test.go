@@ -153,3 +153,40 @@ func TestW46E2eAuthorModeDefaultOnlyFeatureFull(t *testing.T) {
 		t.Fatal("workflows/feature-full/workflow.md was not found")
 	}
 }
+
+// TestW46E2eAuthorCarriesHeaderContract pins the carries-header obligation the
+// e2e-author step carries (a later work item added it to this contract): every
+// authored suite declares its covered paths in its opening comment block,
+// derived mechanically from the plan's declared changed paths, and the step
+// text stays project-neutral (no repository, path or ticket family of any one
+// project).
+func TestW46E2eAuthorCarriesHeaderContract(t *testing.T) {
+	root := v1Root(t)
+	b, err := os.ReadFile(filepath.Join(root, "workflows", "feature-full", "steps", "e2e-author.md"))
+	if err != nil {
+		t.Fatalf("the e2e-author step text must be readable: %v", err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"## Carries header (every authored suite)",
+		"// carries: <glob>, <glob>",
+		"`# carries:`",
+		"opening\ncomment block",
+		"Derive the globs mechanically from `artifacts/plan.md`'s declared changed\npaths",
+		"never typed freehand",
+		"A\n`carries:` line after the first line of code is not a declaration",
+		"an imported\nhelper module carries no header",
+		"sends every scoped ticket of its repository to the\nfull tier",
+		"same dedicated\ncommit",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("e2e-author.md must carry the carries-header marker %q", want)
+		}
+	}
+	// Concatenated so this test does not itself spell the identifiers.
+	for _, id := range []string{"pi-" + "web", "ieops" + "-", "GMIS" + "WE", "work" + "bench#", "silgrid" + "/"} {
+		if strings.Contains(s, id) {
+			t.Errorf("e2e-author.md is project-neutral step text and must not name %q", id)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package workspace
 
-// compose.go: the model-candidate precedence chain as a PURE function
+// compose.go: the model-candidate precedence chain (and the step attr
+// overrides, ComposeAttrs) as a PURE function
 // over the bundle frontmatter, the parsed workspace yaml and the claimed
 // project — no I/O, no state, fully table-testable. The runtime computes
 // it at EVERY dispatch (polyforge#33: the driver's compose closure re-reads
@@ -308,4 +309,38 @@ func NormalizeModels(in []string) ([]string, error) {
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+// ComposeAttrs answers the attr overrides of one claim of project that
+// change a step's behaviour, keyed by step id then attr name, each value
+// as the text its {{<name>}} renders: a steps.<project>.<step-id>.attrs
+// override of an attr the bundle step declares, kept only when it differs
+// from the declaration's default — so an explicit override equal to the
+// default and an absent one both yield nothing (the step's prompt stays
+// byte-identical to an undeclared step). PURE over the bundle frontmatter
+// and the parsed yaml; the runtime calls it at EVERY dispatch (the
+// driver's Attrs closure re-reads both), so an edit governs the next
+// dispatch and nothing is snapshotted. nil when no override applies.
+func ComposeAttrs(fm *workflow.Frontmatter, cfg *Config, project string) map[string]map[string]string {
+	if fm == nil || cfg == nil {
+		return nil
+	}
+	overrides := cfg.Attrs[project]
+	var out map[string]map[string]string
+	for _, s := range fm.Steps {
+		for name, decl := range s.Attrs {
+			v, ok := overrides[s.ID][name]
+			if !ok || fmt.Sprint(v) == fmt.Sprint(decl.Default) {
+				continue
+			}
+			if out == nil {
+				out = map[string]map[string]string{}
+			}
+			if out[s.ID] == nil {
+				out[s.ID] = map[string]string{}
+			}
+			out[s.ID][name] = fmt.Sprint(v)
+		}
+	}
+	return out
 }

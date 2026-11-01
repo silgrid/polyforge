@@ -887,7 +887,7 @@ ws-c (`<yf-workspace>/.polyforge.yaml`):
 
 ```yaml
 steps:
-  yingfang:
+  demo:
     default:
       models: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
     smoke:
@@ -2141,3 +2141,104 @@ changes:
   follow-up PR after a MERGED PR's "back to code"; a re-dispatched release
   adopts a published tag only when it is on `origin_head`, this capsule's
   `artifacts/pre-release-tags.txt` exists and the tag is absent from it.
+
+## A rewind record without a class fails closed
+
+No data migration. What changes:
+
+- **A `rewind_stats.rewinds[]` record whose `class` is not `charged`,
+  `uncharged` or `owner` now fails the next rewind closed.** A record
+  written before the class ledger (`charged: true|false`, no `class`) used to
+  be read as class `""` and silently occupied no edge slot; the next gate
+  FAIL of such a work item now ends `failed_rewind_exhausted` with the
+  `rewind_ledger_unattributable` event, exactly like the count-only ledger
+  shape. Finish or re-file any work item still in flight from before the
+  class ledger; the `charged` field is never read.
+
+## Step attrs in `.polyforge.yaml`
+
+No data migration. What changes:
+
+- **A step entry may carry `attrs`.** `steps.<project>.<step-id>.attrs.<name>`
+  overrides an attr the bundle step declares (`attrs:` in its `workflow.md`
+  entry). The loader refuses an undeclared name, a value of the wrong type
+  and any `attrs` under `default` or `task`; an attrs-only entry declares no
+  `models` level. An older daemon refuses a yaml that carries `attrs`
+  (`not allowed`) and the work items of that workspace stay queued with that
+  refusal: upgrade pf, then restart the daemon (`pf daemon ensure`) before
+  writing an attr.
+
+## The aihub server is `pf aihub`; one pf binary ships
+
+No data migration, no wire-contract change. What changes:
+
+- **The server runs as `pf aihub`.** `cmd/aihub` and the separate `aihub`
+  binary are gone; the `pf` binary intercepts `pf aihub` before the CLI
+  dispatch (like `pf daemon`) and runs the same server with the same flags
+  and defaults (`-data-dir`, `-listen`, `-git-janitor-period`,
+  `-machines-stale-after`, `-version`), the same single-active data-dir
+  lock, bootstrap admin key file, memory content migration and graceful
+  drain. `pf aihub -version` prints exactly what `aihub -version` printed
+  (the build tag). A hand-run server (the macOS and developer quickstarts)
+  starts `pf aihub ...` instead of `aihub ...`.
+- **A release publishes four payload assets plus `SHA256SUMS`:**
+  `pf-linux-amd64`, `pf-darwin-arm64`, `pf-darwin-amd64` and
+  `aihub-image.digest`, with `SHA256SUMS` covering the four. No
+  `aihub-linux-*` or `aihub-darwin-*` asset is published any more, and
+  `release.sh --verify` refuses a release that carries one.
+- **The image is built from the linux `pf` binary** and its entrypoint is
+  `/pf aihub -data-dir /data -listen :8080`; the image name, the `/data`
+  volume, the port and the compose service are unchanged.
+- **`deploy.sh` reads the new server with `/pf aihub -version`.** For the
+  old side of a deploy — the running container before the swap, the saved
+  old binary, the rollback image and the rollback container — it tries that
+  first and falls back to `/aihub -version` for a pre-consolidation image,
+  saving the old binary from whichever path answered; a legacy rollback
+  build uses the old release's own `deploy/Dockerfile`. This fallback is
+  transition code for a safe rollback and is deleted once no
+  pre-consolidation release remains a deploy or rollback target.
+- **Deploy timing does not change.** The same tag is the same build for the
+  server and the work machines, but promoting the server stays a manual
+  decision: a tag that changes only the daemon does not require the server
+  to follow, and an upgrade order is needed only for a tag that changes the
+  daemon↔aihub wire contract. `tools/install.sh` is unchanged (it always
+  installed only `pf`).
+
+## verify-scope selects e2e suites by `carries:` declarations; python and rust analyzers
+
+No data migration, no wire-contract change; the engine travels in the
+release tree as before. What changes for a repository the engine reports on:
+
+- **npm suites are selected by declaration, not by text.** A suite declares
+  the paths it covers in its opening comment block (`// carries: <glob>,
+  <glob>`; `# carries:` in python). The old selection of an `e2e/*.mjs` suite
+  that merely mentions a changed path is gone. Once a repository holds at
+  least one suite, an undeclared or malformed suite, an unresolvable import,
+  or a changed path no declaration covers (documentation, `exclude=` matches,
+  suites and their imported helpers aside) makes every report `mode: full`,
+  naming the reason. A repository with no suite file reports exactly as
+  before. Before relying on scoped tiers, add a header to every suite;
+  `pf doctor`'s `scoped-gates readiness` row now names a repository's
+  undeclared suites.
+- **Three conf keys.** `e2e_runner=` (the selected suites are appended to it
+  as one command), `suite_glob=` (replaces suite discovery) and
+  `e2e_map=<glob>=<suite>` (replaces one suite's header). An empty or
+  malformed value forces the full tier. An older engine diagnoses the keys as
+  unknown and ignores them, so a conf may declare them before this release is
+  installed. The JSON report echoes them as `e2e_runner`, `suite_glob` and
+  `e2e_map`.
+- **Python and rust repositories get an analyzer.** `pyproject.toml` or
+  `requirements.txt` selects the python analyzer (`python -m compileall -q`,
+  the unit tests importing a changed module plus carries suites, `pytest`)
+  and `Cargo.toml` the rust analyzer (`cargo build --all-targets`, the unit
+  tests of the modules containing or using a changed module plus carries
+  suites, `cargo test`); either falls back to full when a change's affected
+  tests cannot be resolved. A repository that relied on "no analyzer" for
+  such a manifest and declared its bar in the conf keeps its conf commands
+  (they replace the analyzer's defaults per phase) but now gets a scoped
+  tier; pin `stack=none` to keep the conf-only full tier. Two or more of
+  `go.mod`, `package.json`, a python manifest and `Cargo.toml` without a
+  `stack=` pin stay `ambiguous` and full.
+- **Authored suites carry the header.** The feature lane's `e2e-author` step
+  now derives each authored suite's `carries:` header from the plan's
+  declared changed paths.

@@ -10,11 +10,12 @@ use is the [user guide](user-guide.md). The terms this page uses
 
 ## Platform support (polyforge#218)
 
-- **Linux x86_64 is the reference platform** — the aihub docker image stays
-  linux/amd64-only and production deploys through `deploy.sh` on Linux hosts.
+- **Linux x86_64 is the reference platform** — the aihub docker image (the
+  linux `pf` binary, started as `pf aihub`) stays linux/amd64-only and production deploys through `deploy.sh` on Linux hosts.
 - **macOS (Darwin) arm64 and amd64 are supported as work machines and as a
   single machine — hardware-verified**: releases
-  ship `pf` and `aihub` darwin binaries, the daemon is supervised by tmux on
+  ship the `pf` darwin binaries (the same binary runs a local server as
+  `pf aihub`), the daemon is supervised by tmux on
   the same single code path as on Linux, and `pf doctor`'s check set runs
   unchanged, plus one additive warn-only `prerequisites` row that reports
   missing tools. The hardware verification — install, upgrade, daemon,

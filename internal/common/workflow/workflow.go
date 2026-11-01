@@ -1,6 +1,8 @@
 // Package workflow is the minimal workflow-bundle frontmatter read surface
 // shared by pf: the model-candidate fields that drive model (and, through
-// each candidate's `<harness>:` prefix, harness) selection.
+// each candidate's `<harness>:` prefix, harness) selection, each step's
+// declared vars (read by `pf file create`'s acceptance-carrier advisory)
+// and each step's configurable attrs (the workspace yaml overrides them).
 //
 // Design authority: docs/design/polyforge-vnext/01-workflow-skills.md.
 package workflow
@@ -152,9 +154,11 @@ func RenderStepVars(raw []byte, vars map[string]string) ([]byte, error) {
 // Minimal frontmatter read surface (the F4 lane: candidate-chain
 // consumption): the fields that drive model selection — workflow-level
 // defaults.model_candidates and the per-step model_candidates override,
-// keyed by step id. The one thing judged here is the candidate format
+// keyed by step id — plus each step's declared vars and attrs, read
+// leniently. Two things are judged here: the candidate format
 // (polyforge#175, CheckCandidates): every candidate is `<harness>:<model>`
-// and the retired `harness` key is refused; the driver's LoadWorkflow is
+// and the retired `harness` key is refused; and each attrs declaration
+// (CheckAttrs: a known type and a default of it). The driver's LoadWorkflow is
 // the structural check of a bundle. Other unknown keys are ignored (a
 // retired `kind:` in an old bundle snapshot included).
 
@@ -165,10 +169,92 @@ type Defaults struct {
 
 // FrontmatterStep is one frontmatter step entry, reduced to the fields
 // the read surface needs: the id (the workspace yaml's per-step model
-// lists are keyed by it) and the per-step candidate override.
+// lists are keyed by it), the per-step candidate override, the step's
+// vars (the same map[string]string shape the driver's own load enforces,
+// so this read refuses nothing a driver load accepts) and the step's
+// configurable attributes (attrs: name → declaration).
 type FrontmatterStep struct {
-	ID              string   `yaml:"id"`
-	ModelCandidates []string `yaml:"model_candidates"`
+	ID              string              `yaml:"id"`
+	ModelCandidates []string            `yaml:"model_candidates"`
+	Vars            map[string]string   `yaml:"vars"`
+	Attrs           map[string]AttrDecl `yaml:"attrs"`
+}
+
+// Attribute types a step entry's attrs declaration may name.
+const (
+	AttrTypeInt    = "int"
+	AttrTypeString = "string"
+)
+
+// AttrDecl is one configurable step attribute a bundle step declares
+// (`attrs: { <name>: { type: int|string, default: <scalar> } }`): the
+// workspace yaml may override it per project and step id
+// (steps.<project>.<step-id>.attrs.<name>), and an override whose value
+// differs from Default renders the shared material
+// workflows/_shared/attr_<name>.md into the step's prompt. The map key is
+// the name; there is no separate name field.
+type AttrDecl struct {
+	Type    string `yaml:"type" json:"type"`
+	Default any    `yaml:"default" json:"default"`
+}
+
+// attrName is the grammar of an attr name: the step-var name grammar,
+// since the value renders through the same {{<name>}} substitution.
+var attrName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// CheckAttrValue answers why v is not a legal value of decl ("" when it
+// is): an int attr takes a YAML integer, a string attr a plain string.
+func CheckAttrValue(decl AttrDecl, v any) string {
+	switch decl.Type {
+	case AttrTypeInt:
+		if _, ok := v.(int); !ok {
+			return "must be an integer (declared type int)"
+		}
+	case AttrTypeString:
+		if _, ok := v.(string); !ok {
+			return "must be a string (declared type string)"
+		}
+	default:
+		return fmt.Sprintf("has an unknown declared type %q", decl.Type)
+	}
+	return ""
+}
+
+// checkAttrDecl answers why one attrs declaration is malformed ("" when
+// it is well-formed): a name in the step-var grammar, a known type and a
+// default of that type.
+func checkAttrDecl(name string, decl AttrDecl) string {
+	if !attrName.MatchString(name) {
+		return fmt.Sprintf("attrs.%s: an attr name is lower-case letters, digits and _ (starting with a letter)", name)
+	}
+	if decl.Type != AttrTypeInt && decl.Type != AttrTypeString {
+		return fmt.Sprintf("attrs.%s.type: want %q or %q, got %q", name, AttrTypeInt, AttrTypeString, decl.Type)
+	}
+	if decl.Default == nil {
+		return fmt.Sprintf("attrs.%s.default: is required (a %s)", name, decl.Type)
+	}
+	if why := CheckAttrValue(decl, decl.Default); why != "" {
+		return fmt.Sprintf("attrs.%s.default: %s", name, why)
+	}
+	return ""
+}
+
+// CheckAttrs is the bundle-side check of every step's attrs
+// declarations (checkAttrDecl); the error names the step and the attr.
+func CheckAttrs(fm *Frontmatter) error {
+	for _, s := range fm.Steps {
+		names := make([]string, 0, len(s.Attrs))
+		for name := range s.Attrs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if why := checkAttrDecl(name, s.Attrs[name]); why != "" {
+				return fmt.Errorf("step %s: %s", s.ID, why)
+			}
+		}
+	}
+	return nil
 }
 
 // Frontmatter is the parsed workflow.md frontmatter (structure reduced to
@@ -230,6 +316,9 @@ func ReadFrontmatter(path string) (*Frontmatter, error) {
 		return nil, err
 	}
 	if err := CheckCandidates(front, fm); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := CheckAttrs(fm); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return fm, nil
@@ -310,11 +399,60 @@ func CheckCandidates(front []byte, fm *Frontmatter) error {
 // refuses still contributes its ids (that defect is the bundle's, never
 // the yaml's — polyforge#175); an unreadable directory is an error.
 func StepIDs(workflowsDir string) (map[string]bool, error) {
-	ents, err := os.ReadDir(workflowsDir)
+	ids := map[string]bool{}
+	err := eachFrontmatter(workflowsDir, func(fm *Frontmatter) {
+		for _, s := range fm.Steps {
+			if s.ID != "" {
+				ids[s.ID] = true
+			}
+		}
+	})
 	if err != nil {
 		return nil, err
 	}
-	ids := map[string]bool{}
+	return ids, nil
+}
+
+// StepAttrs answers the configurable attrs the installed bundles under
+// workflowsDir declare, keyed by step id then attr name: the union over
+// every bundle that has the step id (a step id names the same step in
+// every bundle, so identical declarations are assumed; when two bundles
+// disagree the bundle read first in directory order wins and the other
+// bundle's own load surfaces nothing — the declarations are the bundle
+// author's to keep identical). A torn bundle and a malformed declaration
+// contribute nothing (their own load surfaces the defect); an unreadable
+// directory is an error.
+func StepAttrs(workflowsDir string) (map[string]map[string]AttrDecl, error) {
+	out := map[string]map[string]AttrDecl{}
+	err := eachFrontmatter(workflowsDir, func(fm *Frontmatter) {
+		for _, s := range fm.Steps {
+			for name, decl := range s.Attrs {
+				if s.ID == "" || checkAttrDecl(name, decl) != "" {
+					continue
+				}
+				if out[s.ID] == nil {
+					out[s.ID] = map[string]AttrDecl{}
+				}
+				if _, ok := out[s.ID][name]; !ok {
+					out[s.ID][name] = decl
+				}
+			}
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// eachFrontmatter calls fn with the leniently parsed frontmatter of every
+// bundle under workflowsDir (directory order; a bundle whose workflow.md
+// is absent or torn is skipped).
+func eachFrontmatter(workflowsDir string, fn func(*Frontmatter)) error {
+	ents, err := os.ReadDir(workflowsDir)
+	if err != nil {
+		return err
+	}
 	for _, e := range ents {
 		if !e.IsDir() {
 			continue
@@ -324,14 +462,9 @@ func StepIDs(workflowsDir string) (map[string]bool, error) {
 			continue
 		}
 		fm, _, _ := parseFrontmatter(raw)
-		if fm == nil {
-			continue
-		}
-		for _, s := range fm.Steps {
-			if s.ID != "" {
-				ids[s.ID] = true
-			}
+		if fm != nil {
+			fn(fm)
 		}
 	}
-	return ids, nil
+	return nil
 }

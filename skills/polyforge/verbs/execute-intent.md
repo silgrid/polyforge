@@ -21,14 +21,16 @@ it" of an existing work item → `verbs/submit.md`.
 
 ## The routing action
 
-1. Pick the lane with the owner. The filing proposal fills three mandatory
-   slots before `pf file create` — `Lane + reason`, `Tier + reason` and, when
-   the tier is `scoped`, `Entry confirmation`. Answer all three; do not file on
-   prose alone.
+1. Pick the lane with the owner. The filing proposal fills four mandatory
+   slots before `pf file create` — `Lane + reason`, `Tier + reason`, when
+   the tier is `scoped`, `Entry confirmation`, and `Acceptance carrier`.
+   Answer all four; do not file on prose alone.
    - **Lane + reason** — the chosen `--bundle` and one line why; the owner may
      veto or re-route. Apply the filing skill's `Down-lane check` first — judge
      `expected diff size` and `lane risk surface`; a small, low-risk ticket
-     prefers `chore`/`autopilot` over `feature-full`. Shipped lanes:
+     prefers `chore`/`autopilot` over `feature-full`, but it
+     never down-lanes onto a lane whose step table carries no step for the
+     acceptance criteria. Shipped lanes:
      `bug-fix` (fix a failure: repro →
      root-cause → fix → review → verification → deliver), `feature-full` (new
      user-visible behavior: grill → spec → grill-review → plan → e2e-author →
@@ -47,6 +49,9 @@ it" of an existing work item → `verbs/submit.md`.
    - **Tier + reason** — `scoped` or `full` and one line why, by the same
      heuristic as the filing skill: propose `scoped` for a text/docs change
      confined to one repository and a small surface; propose `full` when the
+     acceptance is e2e-carried — a criterion an `e2e-author` step would author,
+     or behaviour an existing e2e suite pins — because a scoped run deliberately
+     skips the e2e suites; propose `full` when the
      change crosses modules or repos, touches the driver/daemon core, or is
      gate-type (a `gate: true` step definition — `verification`, `review`,
      `deliver` — or the driver/daemon logic behind it); when you
@@ -64,6 +69,13 @@ it" of an existing work item → `verbs/submit.md`.
      manifests/conf; if it is not ready the marker is inert and the ticket
      **falls back to full** — the contract is
      docs/contributing.md『Verification tiers』.
+   - **Acceptance carrier** — every acceptance criterion is written
+     `<criterion> — carried by <step id>`, the step id taken from the chosen
+     lane's step table (the `steps:` list of its `workflow.md`; the lane
+     table in `verbs/file.md` names the lanes). A criterion that names no
+     step either drops to the evidence that graph actually runs, recorded as
+     an explicit waiver proposed to the owner, or the ticket moves to a lane
+     whose step table carries it.
 2. **Deepening check** — for an execution ticket, deepen the ask before
    filing it: a prompt becomes a question a top practitioner would answer.
    Deeper, not bigger — sharpen the existing ask, add no scope. Put the four
@@ -74,12 +86,15 @@ it" of an existing work item → `verbs/submit.md`.
    - **raw material** — the rawest starting material (log paths, commit ids,
      command output, source files), never a paraphrase or a second-hand
      summary. Lands in the `content` repro pointers.
+     Any read of `<workspace>/.repo/<repo>` that feeds this proposal is preceded by
+     the session clone sync: SKILL.md session rule 8.
    - **methods and tools** — the deterministic methods and tools verification
      will use.
    - **external oracle** (外部神谕) — what fact *other than the executor or the
      requester* shows the result is right; it must map to a `falsifiable`
-     `verification` check, never a self-certifying "it looks consistent"
-     statement. Points ③ and ④ land in the `content` acceptance.
+     `verification` check and be carried by a step of the chosen lane's step table
+     (the `Acceptance carrier` slot), never a self-certifying "it looks
+     consistent" statement. Points ③ and ④ land in the `content` acceptance.
    An execution ticket's deepening is present when its `content` carries the
    two sections **gap and oracle** — the gap rides the background, the oracle
    the acceptance. A pure registry / design / tracking

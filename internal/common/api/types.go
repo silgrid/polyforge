@@ -340,6 +340,11 @@ type ResumeBlockedRequest struct {
 // WrapRequest is the hub wrap door's body (a work item with no bundle):
 // Fail records the failed verdict instead of wrapped; Note lands in the
 // work_item_closed event.
+type WrapRequest struct {
+	Fail bool   `json:"fail,omitempty"`
+	Note string `json:"note,omitempty"`
+}
+
 // CancelRequest is the optional body of POST /work-items/{id}/cancel:
 // the owner's verbatim reason and the question it answered ride the
 // work_item_canceled event; DryRun answers the authorization gate alone
@@ -349,11 +354,6 @@ type CancelRequest struct {
 	Reason     string `json:"reason,omitempty"`
 	QuestionID string `json:"question_id,omitempty"`
 	DryRun     bool   `json:"dry_run,omitempty"`
-}
-
-type WrapRequest struct {
-	Fail bool   `json:"fail,omitempty"`
-	Note string `json:"note,omitempty"`
 }
 
 // SessionAttachRequest resumes a paused WI under the SAME session (M3:

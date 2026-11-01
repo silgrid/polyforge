@@ -8,7 +8,7 @@ package server
 // or write deadline, which would cut a large git transfer mid-body and
 // the 25s inbox long-poll (machineinbox.go). They are constants: no
 // flag, config key or environment variable can change them
-// (cmd/aihub/main.go registers no knob for them).
+// (aihub.DefineFlags in internal/aihub/main.go registers no knob for them).
 
 import (
 	"net/http"

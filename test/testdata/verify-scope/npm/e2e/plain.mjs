@@ -1,2 +1,2 @@
-// selects on src/app.ts
+// carries: src/app*
 console.log("plain");

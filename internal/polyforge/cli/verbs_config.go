@@ -402,11 +402,11 @@ func runConfigSet(ctx *Context, args []string) error {
 	if len(pos) < 1 {
 		return fmt.Errorf("config set: expected <key> <value>")
 	}
-	if isSummarizeKey(pos[0]) {
+	if isWorkspaceKey(pos[0]) {
 		return runWorkspaceWrite(ctx, true, pos, exp, wsFlag, cwdFlag)
 	}
 	if wsFlag != "" || cwdFlag != "" {
-		return fmt.Errorf("config set %s: --workspace/--cwd apply only to summarize.* keys", pos[0])
+		return fmt.Errorf("config set %s: --workspace/--cwd apply only to the workspace .polyforge.yaml keys (summarize.*, steps.<project>.<step-id>.models|attrs.<name>)", pos[0])
 	}
 	k, err := parseConfigKey(pos[0])
 	if err != nil {
@@ -439,11 +439,11 @@ func runConfigUnset(ctx *Context, args []string) error {
 	if len(pos) != 1 {
 		return fmt.Errorf("config unset: expected exactly one key")
 	}
-	if isSummarizeKey(pos[0]) {
+	if isWorkspaceKey(pos[0]) {
 		return runWorkspaceWrite(ctx, false, pos, exp, wsFlag, cwdFlag)
 	}
 	if wsFlag != "" || cwdFlag != "" {
-		return fmt.Errorf("config unset %s: --workspace/--cwd apply only to summarize.* keys", pos[0])
+		return fmt.Errorf("config unset %s: --workspace/--cwd apply only to the workspace .polyforge.yaml keys (summarize.*, steps.<project>.<step-id>.models|attrs.<name>)", pos[0])
 	}
 	k, err := parseConfigKey(pos[0])
 	if err != nil {

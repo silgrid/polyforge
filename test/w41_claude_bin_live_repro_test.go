@@ -23,7 +23,6 @@ package test
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -140,23 +139,15 @@ func w41StartDaemon(t *testing.T, cfg string) *w41Daemon {
 	go func() { d.waitExit <- cmd.Wait() }()
 	t.Cleanup(d.stop)
 
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		conn, derr := net.Dial("unix", d.sock)
-		if derr == nil {
-			conn.Close()
-			return d
-		}
-		select {
-		case werr := <-d.waitExit:
-			t.Fatalf("daemon exited during startup: %v (log: %s)", werr, d.logTail())
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("daemon never served %s (log: %s)", d.sock, d.logTail())
-		}
-		time.Sleep(25 * time.Millisecond)
+	// Readiness is an answered request, not a bare dial (awaitAnsweredFace).
+	answered, exited, werr := awaitAnsweredFace(d.sock, time.Now().Add(30*time.Second), d.waitExit)
+	switch {
+	case exited:
+		t.Fatalf("daemon exited during startup: %v (log: %s)", werr, d.logTail())
+	case !answered:
+		t.Fatalf("daemon never served %s (log: %s)", d.sock, d.logTail())
 	}
+	return d
 }
 
 func (d *w41Daemon) logTail() string {

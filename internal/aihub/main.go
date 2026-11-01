@@ -1,9 +1,17 @@
-// Command aihub is the v1 server binary: single-active, SQLite-backed,
-// one HTTP port for the business face, the admin face and the git proxy.
+// Package aihub is the v1 server assembly behind `pf aihub`:
+// single-active, SQLite-backed, one HTTP port for the business face, the
+// admin face and the git proxy. cmd/pf/main.go intercepts `pf aihub`
+// before the CLI dispatch and calls Main, exactly as it does for
+// `pf daemon` (internal/polyforge/daemon.Main).
+//
+// Entry-point reach: Main is the service host's server entry, run by a
+// human operator (or the deployed container's entrypoint). It holds no
+// aihub client credential and adds no path by which a step agent reaches
+// aihub; a step agent still reaches memory only through its daemon.
 //
 // Architecture: docs/design/polyforge-vnext/reference.md §4.
 // Modules: internal/aihub/{core,memory,git,server}.
-package main
+package aihub
 
 import (
 	"context"
@@ -11,6 +19,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -50,8 +59,8 @@ func lockDataDir(dataDir string) (func(), error) {
 	}, nil
 }
 
-// aihubFlags carries the command-line configuration registerFlags fills.
-type aihubFlags struct {
+// Flags carries the command-line configuration DefineFlags fills.
+type Flags struct {
 	dataDir     string
 	listen      string
 	janitorFreq time.Duration
@@ -65,12 +74,13 @@ type aihubFlags struct {
 	showVersion bool
 }
 
-// registerFlags registers the aihub command-line flags on fs. These are
-// the ONLY knobs the binary has: the HTTP pressure bounds (header
+// DefineFlags registers the `pf aihub` command-line flags on fs (Main
+// and the help-only CLI verb share it). These are the ONLY knobs the
+// server has: the HTTP pressure bounds (header
 // deadline, idle timeout, header size — internal/aihub/server) are
 // constants and are deliberately NOT registered here.
-func registerFlags(fs *flag.FlagSet) *aihubFlags {
-	f := &aihubFlags{
+func DefineFlags(fs *flag.FlagSet) *Flags {
+	f := &Flags{
 		dataDir:     "/var/lib/polyforge/aihub",
 		listen:      ":8420",
 		janitorFreq: time.Hour,
@@ -84,13 +94,22 @@ func registerFlags(fs *flag.FlagSet) *aihubFlags {
 	return f
 }
 
-func main() {
-	fl := registerFlags(flag.CommandLine)
-	flag.Parse()
+// Main executes `pf aihub <flags>` and returns the process exit code.
+// Fatal start-up errors exit through log.Fatalf as before.
+func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pf aihub", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fl := DefineFlags(fs)
+	if err := fs.Parse(argv); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
 
 	if fl.showVersion {
-		fmt.Println(version.Version)
-		return
+		fmt.Fprintln(stdout, version.Version)
+		return 0
 	}
 
 	// Single-active guard: exclusive lock on the data dir (CORE-508).
@@ -161,6 +180,7 @@ func main() {
 	if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("aihub: %v", err)
 	}
+	return 0
 }
 
 // logMigration logs one content migration pass: the counts always, the

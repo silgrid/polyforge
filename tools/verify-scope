@@ -19,8 +19,8 @@
 # stack,
 # the analyzer, whether the conf is present and whether the diff changed it,
 # the resolved base/head shas and default branch, the conf's test_glob,
-# base_setup, runner and ci_evidence declarations, and every stderr
-# diagnostic. The JSON is emitted by python3 (a documented `pf doctor`
+# base_setup, runner, ci_evidence, e2e_runner, suite_glob and e2e_map
+# declarations, and every stderr diagnostic. The JSON is emitted by python3 (a documented `pf doctor`
 # prerequisite); without python3 `--json` exits 1.
 #
 # `--base <rev>` overrides the default base. The default base is
@@ -41,18 +41,21 @@
 #
 # Conf first: the repository's declared commands are reported for every
 # stack. Stack detection: go.mod selects the Go analyzer, package.json the
-# npm analyzer, and a `stack=` pin overrides detection; `stack=none` pins "no
-# analyzer". With no analyzer — `stack=none`, an unsupported stack (neither
-# manifest), an ambiguous one (both manifests without a pin) or an npm
-# manifest whose scripts cannot be read — the report is `mode: full` with the
-# conf's commands only (none without a conf). A scope that cannot be computed
+# npm analyzer, pyproject.toml or requirements.txt the python analyzer and
+# Cargo.toml the rust analyzer; a `stack=` pin overrides detection and
+# `stack=none` pins "no analyzer". With no analyzer — `stack=none`, an
+# unsupported stack (no supported manifest), an ambiguous one (two or more
+# supported manifests without a pin) or an npm manifest whose scripts cannot
+# be read — the report is `mode: full` with the conf's commands only (none
+# without a conf). A scope that cannot be computed
 # always falls back to `full`, never to a wrong `scoped`.
 #
 # A repository may declare a declarative `.polyforge/verify-scope.conf`
 # (line-oriented; `#` comments and blank lines ignored; a value runs to the
 # end of its line, so there is no trailing comment on a value line):
 #
-#   stack=go|npm|none      pin the analyzer; none = conf commands, always full
+#   stack=go|npm|python|rust|none
+#                          pin the analyzer; none = conf commands, always full
 #   go_harness=<path>      a Go acceptance harness that owns its directory
 #   fast_gate=<command>    repeatable, ordered; anonymous, named fast-<i>
 #   full_command=<command> repeatable, ordered; anonymous, named full-<i>
@@ -75,6 +78,14 @@
 #   runner=complete        the conf declares the complete bar (reported only)
 #   ci_evidence=<workflow>/<job>  repeatable; a CI job the deliver step may
 #                          accept as test evidence (reported only)
+#   e2e_runner=<command>   the command that runs selected suites: they are
+#                          appended to it as one command, in stable order
+#                          (its target file is a runner, never a suite)
+#   suite_glob=<glob>      repeatable; replaces the analyzer's suite discovery
+#   e2e_map=<glob>=<suite> repeatable; replaces that suite's carries: header
+#
+# An empty or malformed e2e_runner=, suite_glob= or e2e_map= value (e2e_map=
+# split by exactly one `=`) is diagnosed and forces the full tier.
 #
 # Any fast-phase line (fast_gate= or check=<name>|fast|…) replaces the
 # analyzer's default fast gates, and any full-phase line replaces the default
@@ -98,11 +109,18 @@
 # is an ordinary package unless the conf declares `go_harness=<path>` (for
 # example `go_harness=test/e2e-parallel.sh`): the engine then keeps the
 # harness's directory out of the Go package graph and runs the harness for the
-# tests whose source references a changed path. The npm fast gates come from
-# the scripts package.json actually declares (lint, test, and a TypeScript
-# typecheck only when TypeScript is configured); the full tier reports every
-# declared script that runs an e2e/*.mjs suite and every remaining standalone
-# suite. Repository-specific commands belong in the conf.
+# tests whose source references a changed path; the Go analyzer never reads
+# carries: headers. The npm, python and rust analyzers select e2e suites by
+# their carries: declarations (the carries layer, described below). The npm
+# fast gates come from the scripts package.json actually declares (lint, test,
+# and a TypeScript typecheck only when TypeScript is configured); the full tier
+# reports every declared script that runs an e2e/*.mjs suite and every
+# remaining suite. The python analyzer reports `python -m compileall -q`, the
+# unit tests that import a changed module, and `pytest` in full; the rust
+# analyzer reports `cargo build --all-targets`, the unit tests of the modules
+# that contain or use a changed module, and `cargo test` in full. Either falls
+# back to full when a changed module's tests cannot be resolved.
+# Repository-specific commands belong in the conf.
 #
 # This is a verification reporter, not a release or deploy entry point.
 
@@ -224,15 +242,6 @@ add_conf_cmds() {
 	done <"$2"
 }
 
-# strip_ext removes one trailing JS/TS module extension (an extensionless
-# import names a changed file through its stem).
-strip_ext() {
-	case "$1" in
-	*.ts | *.tsx | *.mjs | *.js | *.jsx) printf '%s' "${1%.*}" ;;
-	*) printf '%s' "$1" ;;
-	esac
-}
-
 # ---------------------------------------------------------------------------
 # Declarative conf. Every key is read without shell evaluation; a rejected
 # line is diagnosed on stderr and contributes nothing.
@@ -251,6 +260,8 @@ conf_timeout="$tmp/conf_timeout"
 conf_globs="$tmp/conf_globs"
 conf_base_setup="$tmp/conf_base_setup"
 conf_ci="$tmp/conf_ci"
+conf_suite_glob="$tmp/conf_suite_glob"
+conf_e2e_map="$tmp/conf_e2e_map"
 : >"$conf_fast"
 : >"$conf_full"
 : >"$conf_forced"
@@ -265,7 +276,14 @@ conf_ci="$tmp/conf_ci"
 : >"$conf_globs"
 : >"$conf_base_setup"
 : >"$conf_ci"
+: >"$conf_suite_glob"
+: >"$conf_e2e_map"
 conf_runner=""
+conf_e2e_runner=""
+# conf_closed is set when a carries key (e2e_runner=, suite_glob=, e2e_map=)
+# is empty or malformed: the report then falls back to the full tier, never
+# to a narrower scope computed as if the key were absent.
+conf_closed=0
 anon_fast=0
 anon_full=0
 
@@ -332,9 +350,9 @@ if [ -f "$conf" ]; then
 		stack)
 			val="$(printf '%s' "$val" | sed 's/[[:space:]]*$//')"
 			case "$val" in
-			go | npm | none) printf '%s\n' "$val" >>"$conf_stack" ;;
+			go | npm | python | rust | none) printf '%s\n' "$val" >>"$conf_stack" ;;
 			*)
-				diag "conf rejects stack '$val' (expected go, npm or none)"
+				diag "conf rejects stack '$val' (expected go, npm, python, rust or none)"
 				;;
 			esac
 			;;
@@ -477,6 +495,52 @@ if [ -f "$conf" ]; then
 			[ -n "$val" ] || continue
 			printf '%s\n' "$val" >>"$conf_excl"
 			;;
+		e2e_runner)
+			val="$(printf '%s' "$val" | sed 's/[[:space:]]*$//')"
+			case "$val" in
+			'')
+				diag "conf rejects an empty e2e_runner; falling back to the full tier: $line"
+				conf_closed=1
+				;;
+			'$('* | '`'*)
+				diag "conf rejects an e2e_runner value that begins with a command substitution; falling back to the full tier: $line"
+				conf_closed=1
+				;;
+			*)
+				if [ -n "$conf_e2e_runner" ]; then
+					diag "conf rejects a second e2e_runner; falling back to the full tier: $line"
+					conf_closed=1
+				else
+					conf_e2e_runner="$val"
+				fi
+				;;
+			esac
+			;;
+		suite_glob)
+			val="$(printf '%s' "$val" | sed 's/[[:space:]]*$//')"
+			if [ -z "$val" ]; then
+				diag "conf rejects an empty suite_glob; falling back to the full tier: $line"
+				conf_closed=1
+				continue
+			fi
+			printf '%s\n' "$val" >>"$conf_suite_glob"
+			;;
+		e2e_map)
+			val="$(printf '%s' "$val" | sed 's/[[:space:]]*$//')"
+			mglob="${val%%=*}"
+			msuite="${val#*=}"
+			case "$val" in
+			*=*=* | =* | *=) mglob="" ;;
+			*=*) ;;
+			*) mglob="" ;;
+			esac
+			if [ -z "$mglob" ] || [ -z "$msuite" ]; then
+				diag "conf rejects e2e_map value (expected <glob>=<suite>, split by exactly one '='); falling back to the full tier: $line"
+				conf_closed=1
+				continue
+			fi
+			printf '%s\n' "$val" >>"$conf_e2e_map"
+			;;
 		go_harness)
 			[ -n "$val" ] || {
 				diag "conf ignores an empty go_harness"
@@ -611,6 +675,8 @@ fi
 
 # --full forces the full tier; it never narrows anything.
 [ "$force_full" -eq 1 ] && full=1
+# An empty or malformed carries key fails closed whatever the diff.
+[ "$conf_closed" -eq 1 ] && full=1
 
 # ---------------------------------------------------------------------------
 # Stack detection.
@@ -631,18 +697,34 @@ if [ -s "$conf_stack" ]; then
 	else
 		analyzer="$stack"
 	fi
-elif [ -f "$root/go.mod" ] && [ -f "$root/package.json" ]; then
-	stack="ambiguous"
-	diag "both go.mod and package.json are present without a stack= pin; falling back to $conf_only"
-elif [ -f "$root/go.mod" ]; then
-	stack="go"
-	analyzer="go"
-elif [ -f "$root/package.json" ]; then
-	stack="npm"
-	analyzer="npm"
 else
-	stack="unsupported"
-	diag "no supported stack manifest (go.mod or package.json); falling back to $conf_only"
+	# One supported manifest selects its analyzer; two or more without a
+	# stack= pin are ambiguous.
+	found=""
+	found_names=""
+	[ -f "$root/go.mod" ] && found="$found go" && found_names="$found_names, go.mod"
+	[ -f "$root/package.json" ] && found="$found npm" && found_names="$found_names, package.json"
+	if [ -f "$root/pyproject.toml" ] || [ -f "$root/requirements.txt" ]; then
+		found="$found python"
+		found_names="$found_names, pyproject.toml/requirements.txt"
+	fi
+	[ -f "$root/Cargo.toml" ] && found="$found rust" && found_names="$found_names, Cargo.toml"
+	found="${found# }"
+	found_names="${found_names#, }"
+	case "$found" in
+	'')
+		stack="unsupported"
+		diag "no supported stack manifest (go.mod, package.json, pyproject.toml, requirements.txt or Cargo.toml); falling back to $conf_only"
+		;;
+	*' '*)
+		stack="ambiguous"
+		diag "several stack manifests ($found_names) are present without a stack= pin; falling back to $conf_only"
+		;;
+	*)
+		stack="$found"
+		analyzer="$found"
+		;;
+	esac
 fi
 
 # The npm analyzer reads the scripts package.json actually declares. Node is
@@ -710,6 +792,13 @@ path_forced() {
 	npm)
 		case "$p" in package.json | package-lock.json | npm-shrinkwrap.json | tsconfig.json) return 0 ;; esac
 		case "$base" in tsconfig.* | eslint.config.* | .eslintrc | .eslintrc.*) return 0 ;; esac
+		;;
+	python)
+		case "$p" in pyproject.toml | requirements*.txt | setup.py | setup.cfg | pytest.ini | tox.ini) return 0 ;; esac
+		case "$base" in conftest.py) return 0 ;; esac
+		;;
+	rust)
+		case "$p" in Cargo.toml | Cargo.lock | build.rs | rust-toolchain | rust-toolchain.toml | .cargo/*) return 0 ;; esac
 		;;
 	esac
 	while IFS= read -r g; do
@@ -955,43 +1044,681 @@ EOF
 	return 0
 }
 
-# Helper modules imported by another e2e/*.mjs through a relative specifier
-# are not standalone suites: `node e2e/<helper>.mjs` does nothing. They are
-# excluded from the scoped selection and the full standalone pass alike.
-e2e_helpers="$tmp/e2e_helpers"
-: >"$e2e_helpers"
-compute_e2e_helpers() {
-	: >"$e2e_helpers"
-	if [ -d "$root/e2e" ]; then
-		grep -ho 'from "\./[^"]*\.mjs"' "$root"/e2e/*.mjs 2>/dev/null |
-			sed -e 's#^from "\./##' -e 's#"$##' | sort -u >"$e2e_helpers"
+# ---------------------------------------------------------------------------
+# Carries layer (stack-neutral). A suite declares the repository paths it
+# covers in its opening comment block — the leading blank and comment lines
+# (`//` or `#`) before the first line of code:
+#
+#   // carries: components/Panel*, lib/panel*
+#
+# Several carries: lines union; globs are separated by commas or blanks and
+# use the shell-case syntax forced_full= and exclude= use (`*` crosses `/`).
+# A carries: line after the first code line is not a declaration. Suites are
+# the analyzer's default discovery — npm e2e/*.mjs, python test_*.py and
+# *_test.py under e2e/ or tests/e2e/, rust top-level tests/*.rs — or the conf's
+# suite_glob= globs, minus exclude= matches and the e2e_runner= target; a
+# discovered file that another module imports and that declares nothing is a
+# helper, not a suite. Selected suites run as one e2e_runner= command, else
+# one `node <suite>`, `pytest <suite>` or `cargo test --test <name>` each.
+# e2e_map=<glob>=<suite> replaces that suite's declaration outright. The layer
+# is on only when at least one suite exists. Selection: every suite whose
+# globs match a changed path, a changed suite itself, and every suite that
+# (transitively) imports a changed helper. Any undeclared or malformed suite,
+# an unresolvable import, an e2e_map= naming no suite, or a changed path that
+# is neither documentation, an exclude= match, a suite, a helper nor covered
+# by a declaration falls back to the full tier.
+# ---------------------------------------------------------------------------
+cr_files="$tmp/cr_files"
+cr_cand="$tmp/cr_cand"
+cr_runner="$tmp/cr_runner"
+cr_status="$tmp/cr_status"
+cr_decl="$tmp/cr_decl"
+cr_nodes="$tmp/cr_nodes"
+cr_edges="$tmp/cr_edges"
+cr_unres="$tmp/cr_unres"
+cr_suites="$tmp/cr_suites"
+cr_maperr="$tmp/cr_maperr"
+for f in "$cr_files" "$cr_cand" "$cr_runner" "$cr_status" "$cr_decl" "$cr_nodes" \
+	"$cr_edges" "$cr_unres" "$cr_suites" "$cr_maperr"; do
+	: >"$f"
+done
+
+# cr_list_files lists the repository's files (tracked and untracked, ignored
+# files left out), repo-relative and sorted.
+cr_list_files() {
+	if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		git -C "$root" -c core.quotePath=off ls-files -co --exclude-standard 2>/dev/null
+	else
+		(cd "$root" && find . -type f ! -path './.git/*' | sed 's#^\./##')
+	fi | sort -u >"$tmp/cr_listed"
+	: >"$cr_files"
+	while IFS= read -r f; do
+		[ -f "$root/$f" ] && printf '%s\n' "$f" >>"$cr_files"
+	done <"$tmp/cr_listed"
+}
+
+# cr_default_discover prints the analyzer's default suite candidates.
+cr_default_discover() {
+	case "$analyzer" in
+	npm) awk '/^e2e\/[^\/]*\.mjs$/' "$cr_files" ;;
+	python)
+		# pytest collection: test_*.py / *_test.py under e2e/ or tests/e2e/;
+		# conftest.py, __init__.py and other modules there are not suites.
+		awk '/^(tests\/)?e2e\// && /(^|\/)(test_[^\/]*|[^\/]*_test)\.py$/' "$cr_files"
+		;;
+	rust)
+		# Integration-test crates: top-level tests/*.rs only (tests/common/
+		# and other subdirectories hold helper modules).
+		awk '/^tests\/[^\/]*\.rs$/' "$cr_files"
+		;;
+	esac
+}
+
+# cr_is_module answers 0 for a file whose imports the analyzer follows.
+cr_is_module() {
+	case "$analyzer" in
+	npm)
+		case "$1" in
+		*.mjs | *.js | *.cjs | *.ts | *.tsx | *.mts | *.cts | *.jsx) return 0 ;;
+		esac
+		;;
+	python)
+		case "$1" in *.py) return 0 ;; esac
+		;;
+	rust)
+		case "$1" in *.rs) return 0 ;; esac
+		;;
+	esac
+	return 1
+}
+
+# cr_norm joins a repo-relative directory and a relative specifier, folding
+# `.` and `..`; it prints nothing when the result leaves the repository.
+cr_norm() {
+	printf '%s/%s\n' "$1" "$2" | awk -F/ '{
+		n = 0
+		for (i = 1; i <= NF; i++) {
+			if ($i == "" || $i == ".") continue
+			if ($i == "..") { if (n == 0) exit; n--; continue }
+			s[++n] = $i
+		}
+		if (n == 0) exit
+		out = s[1]
+		for (i = 2; i <= n; i++) out = out "/" s[i]
+		print out
+	}'
+}
+
+# cr_imports prints "<importer><US><target>" for every relative import of a
+# module, or "<importer><US>?<specifier>" for one that does not resolve.
+cr_imports() {
+	f="$1"
+	d="$(path_dir "$f")"
+	case "$analyzer" in
+	npm)
+		grep -oE "(from|import|require)[[:space:]]*\(?[[:space:]]*['\"]\.\.?/[^'\"]+['\"]" "$root/$f" 2>/dev/null |
+			sed -E "s/^.*['\"](\.\.?\/[^'\"]+)['\"]$/\1/" | sort -u |
+			while IFS= read -r spec; do
+				[ -n "$spec" ] || continue
+				t="$(cr_norm "$d" "$spec")"
+				hit=""
+				if [ -n "$t" ]; then
+					for c in "$t" "$t.mjs" "$t.js" "$t.cjs" "$t.ts" "$t.tsx" "$t.mts" "$t.jsx" \
+						"$t/index.mjs" "$t/index.js" "$t/index.ts" "$t/index.tsx"; do
+						if [ -f "$root/$c" ]; then
+							hit="$c"
+							break
+						fi
+					done
+				fi
+				if [ -n "$hit" ]; then
+					printf '%s%s%s\n' "$f" "$us" "$hit"
+				else
+					printf '%s%s?%s\n' "$f" "$us" "$spec"
+				fi
+			done
+		;;
+	python)
+		awk -F "$us" -v f="$f" '$1 == f' "$py_edges"
+		;;
+	rust)
+		awk -F "$us" -v f="$f" '$1 == f' "$rs_edges"
+		;;
+	esac
+}
+
+# cr_header parses a suite's opening comment block: "declared" then one glob
+# per line, "undeclared", or "malformed" (an empty carries: value, or a
+# carries line without its colon).
+cr_header() {
+	awk '
+		function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+		{
+			t = trim($0)
+			if (t == "") next
+			if (t !~ /^(\/\/|#)/) exit
+			c = t
+			sub(/^(\/\/+|#+)!?[ \t]*/, "", c)
+			if (c ~ /^carries[ \t]*:/) {
+				v = c
+				sub(/^carries[ \t]*:/, "", v)
+				v = trim(v)
+				if (v == "") { bad = 1; next }
+				n = split(v, a, /[ \t,]+/)
+				for (i = 1; i <= n; i++) if (a[i] != "") g[++ng] = a[i]
+				next
+			}
+			if (c ~ /^carries([^A-Za-z0-9_-]|$)/) bad = 1
+		}
+		END {
+			if (bad) { print "malformed"; exit }
+			if (ng == 0) { print "undeclared"; exit }
+			print "declared"
+			for (i = 1; i <= ng; i++) print g[i]
+		}
+	' "$root/$1"
+}
+
+# cr_runner_targets lists the files the declared e2e_runner= runs (through the
+# npm script when the value is `npm run <script> ...`): runners, not suites.
+cr_runner_targets() {
+	: >"$cr_runner"
+	[ -n "$conf_e2e_runner" ] || return 0
+	set -f
+	# shellcheck disable=SC2086
+	set -- $conf_e2e_runner
+	words="$*"
+	if [ "${1:-}" = "npm" ] && [ "${2:-}" = "run" ] && [ -n "${3:-}" ]; then
+		words="$words $(awk -F'\t' -v n="$3" '$1 == n { print $2; exit }' "$npm_scripts")"
 	fi
+	# shellcheck disable=SC2086
+	for w in $words; do
+		w="${w#./}"
+		[ -n "$w" ] && [ -f "$root/$w" ] && printf '%s\n' "$w" >>"$cr_runner"
+	done
+	set +f
+	sort -u "$cr_runner" -o "$cr_runner"
+}
+
+# carries_discover enumerates the candidates, follows their imports, parses
+# every declaration and answers the suite set in $cr_suites. It writes no
+# diagnostic: the scoped computation reports what it finds.
+carries_discover() {
+	cr_runner_targets
+	if [ -s "$conf_suite_glob" ]; then
+		while IFS= read -r f; do
+			while IFS= read -r g; do
+				case "$f" in
+				$g)
+					printf '%s\n' "$f"
+					break
+					;;
+				esac
+			done <"$conf_suite_glob"
+		done <"$cr_files"
+	else
+		cr_default_discover
+	fi | while IFS= read -r f; do
+		path_excluded "$f" && continue
+		grep -Fxq -- "$f" "$cr_runner" && continue
+		printf '%s\n' "$f"
+	done | sort -u >"$cr_cand"
+
+	# The import graph: every module reachable from a candidate.
+	cp "$cr_cand" "$cr_nodes"
+	cp "$cr_cand" "$tmp/cr_frontier"
+	while [ -s "$tmp/cr_frontier" ]; do
+		: >"$tmp/cr_next"
+		while IFS= read -r f; do
+			cr_is_module "$f" || continue
+			cr_imports "$f" >"$tmp/cr_imp"
+			while IFS="$us" read -r imp tgt; do
+				case "$tgt" in
+				'?'*) printf '%s%s%s\n' "$imp" "$us" "${tgt#?}" >>"$cr_unres" ;;
+				*)
+					printf '%s%s%s\n' "$imp" "$us" "$tgt" >>"$cr_edges"
+					printf '%s\n' "$tgt" >>"$tmp/cr_next"
+					;;
+				esac
+			done <"$tmp/cr_imp"
+		done <"$tmp/cr_frontier"
+		sort -u "$tmp/cr_next" | comm -23 - "$cr_nodes" >"$tmp/cr_frontier"
+		cat "$tmp/cr_frontier" >>"$cr_nodes"
+		sort -u "$cr_nodes" -o "$cr_nodes"
+	done
+	cut -d "$us" -f2 "$cr_edges" | sort -u >"$tmp/cr_imported"
+
+	# Declarations: the header, or the conf's e2e_map= lines, which replace it.
+	while IFS= read -r f; do
+		if cut -d= -f2- "$conf_e2e_map" | grep -Fxq -- "$f"; then
+			printf '%s%s%s\n' "$f" "$us" "declared" >>"$cr_status"
+			while IFS= read -r m; do
+				[ "${m#*=}" = "$f" ] && printf '%s%s%s\n' "$f" "$us" "${m%%=*}" >>"$cr_decl"
+			done <"$conf_e2e_map"
+			continue
+		fi
+		cr_header "$f" >"$tmp/cr_hdr"
+		st="$(head -n 1 "$tmp/cr_hdr")"
+		printf '%s%s%s\n' "$f" "$us" "$st" >>"$cr_status"
+		tail -n +2 "$tmp/cr_hdr" | while IFS= read -r g; do
+			printf '%s%s%s\n' "$f" "$us" "$g"
+		done >>"$cr_decl"
+	done <"$cr_cand"
+	while IFS= read -r m; do
+		grep -Fxq -- "${m#*=}" "$cr_cand" || printf '%s\n' "${m#*=}" >>"$cr_maperr"
+	done <"$conf_e2e_map"
+
+	# Suites: every candidate except an undeclared one another module imports.
+	while IFS="$us" read -r f st; do
+		if [ "$st" = "undeclared" ] && grep -Fxq -- "$f" "$tmp/cr_imported"; then
+			continue
+		fi
+		printf '%s\n' "$f"
+	done <"$cr_status" | sort -u >"$cr_suites"
+}
+
+# cr_importer_suites prints every suite that (transitively) imports a module.
+cr_importer_suites() {
+	printf '%s\n' "$1" >"$tmp/cr_rfront"
+	printf '%s\n' "$1" >"$tmp/cr_rseen"
+	while [ -s "$tmp/cr_rfront" ]; do
+		awk -F "$us" 'FNR == NR { want[$0] = 1; next } ($2 in want) { print $1 }' \
+			"$tmp/cr_rfront" "$cr_edges" | sort -u | comm -23 - "$tmp/cr_rseen" >"$tmp/cr_rnext"
+		cat "$tmp/cr_rnext" >>"$tmp/cr_rseen"
+		sort -u "$tmp/cr_rseen" -o "$tmp/cr_rseen"
+		mv "$tmp/cr_rnext" "$tmp/cr_rfront"
+	done
+	grep -Fxv -- "$1" "$tmp/cr_rseen" | grep -Fx -f "$cr_suites" 2>/dev/null || true
+}
+
+# cr_suite_cmd prints the analyzer's default command for one suite.
+cr_suite_cmd() {
+	case "$analyzer" in
+	npm) printf 'node %s\n' "$1" ;;
+	python) printf 'pytest %s\n' "$1" ;;
+	rust)
+		n="${1##*/}"
+		printf 'cargo test --test %s\n' "${n%.rs}"
+		;;
+	esac
+}
+
+# carries_scoped adds the selected suites to the scoped commands; it answers
+# non-zero (after diagnosing every reason) when the declarations cannot
+# account for the diff.
+carries_scoped() {
+	bad=0
+	while IFS= read -r s; do
+		diag "carries: e2e_map names $s, which is not a discovered suite; falling back to the full tier"
+		bad=1
+	done <"$cr_maperr"
+	[ -s "$cr_suites" ] || return "$bad"
+	while IFS="$us" read -r f st; do
+		grep -Fxq -- "$f" "$cr_suites" || continue
+		case "$st" in
+		undeclared)
+			diag "carries: suite $f declares no carries: header in its opening comment block; falling back to the full tier"
+			bad=1
+			;;
+		malformed)
+			diag "carries: suite $f has a malformed carries: declaration (an empty value or a carries line without its colon); falling back to the full tier"
+			bad=1
+			;;
+		esac
+	done <"$cr_status"
+	while IFS="$us" read -r imp spec; do
+		diag "carries: $imp imports $spec, which does not resolve; the import graph is unresolvable, falling back to the full tier"
+		bad=1
+	done <"$cr_unres"
+	: >"$tmp/cr_selected"
+	while IFS= read -r p; do
+		[ -n "$p" ] || continue
+		hit=0
+		if grep -Fxq -- "$p" "$cr_suites"; then
+			printf '%s\n' "$p" >>"$tmp/cr_selected"
+			hit=1
+		fi
+		if grep -Fxq -- "$p" "$cr_nodes"; then
+			cr_importer_suites "$p" >"$tmp/cr_imps"
+			if [ -s "$tmp/cr_imps" ]; then
+				cat "$tmp/cr_imps" >>"$tmp/cr_selected"
+				hit=1
+			fi
+		fi
+		while IFS="$us" read -r s g; do
+			case "$p" in
+			$g)
+				printf '%s\n' "$s" >>"$tmp/cr_selected"
+				hit=1
+				;;
+			esac
+		done <"$cr_decl"
+		[ "$hit" -eq 1 ] && continue
+		is_doc_path "$p" && continue
+		path_excluded "$p" && continue
+		diag "carries: changed path $p is covered by no carries: declaration; falling back to the full tier"
+		bad=1
+	done <"$changed"
+	[ "$bad" -eq 0 ] || return 1
+	sort -u "$tmp/cr_selected" | grep -Fx -f "$cr_suites" >"$tmp/cr_sel" 2>/dev/null || true
+	[ -s "$tmp/cr_sel" ] || return 0
+	if [ -n "$conf_e2e_runner" ]; then
+		add_scoped "$conf_e2e_runner $(tr '\n' ' ' <"$tmp/cr_sel" | sed 's/ $//')"
+	else
+		while IFS= read -r s; do
+			add_scoped "$(cr_suite_cmd "$s")"
+		done <"$tmp/cr_sel"
+	fi
+	return 0
 }
 
 compute_scoped_npm() {
-	compute_e2e_helpers
-	for script in "$root"/e2e/*.mjs; do
-		[ -f "$script" ] || continue
-		grep -qi 'playwright' "$script" && continue
-		base="${script##*/}"
-		grep -Fxq -- "$base" "$e2e_helpers" && continue
-		matched=0
-		while IFS= read -r p; do
-			[ -n "$p" ] || continue
-			if grep -qF -- "$p" "$script"; then
-				matched=1
-				break
-			fi
-			stem="$(strip_ext "$p")"
-			if [ "$stem" != "$p" ] && grep -qF -- "$stem" "$script"; then
-				matched=1
-				break
-			fi
-		done <"$changed"
-		[ "$matched" -eq 1 ] && add_scoped "node e2e/$base"
-	done
-	return 0
+	carries_scoped
 }
+
+# ---------------------------------------------------------------------------
+# Python analyzer. Imports are scanned statically (`import a.b`, `from a
+# import b`, relative `from .x import y`) and resolved to repository modules
+# (from the root, from src/, or beside the importer, as pytest's rootdir
+# insertion does); an absolute import that names no repository module is a
+# third-party import, while a relative one that resolves nowhere is an
+# unresolvable import.
+# ---------------------------------------------------------------------------
+py_edges="$tmp/py_edges"
+: >"$py_edges"
+
+# is_py_test answers 0 for a pytest-collected file name.
+is_py_test() {
+	case "${1##*/}" in
+	test_*.py | *_test.py) return 0 ;;
+	esac
+	return 1
+}
+
+# py_scan writes "<importer><US><module file>" (or "<importer><US>?<spec>")
+# for every .py file of the repository.
+py_scan() {
+	: >"$py_edges"
+	grep '\.py$' "$cr_files" >"$tmp/py_files" || return 0
+	(cd "$root" && tr '\n' '\0' <"$tmp/py_files" |
+		xargs -0 awk -v US="$us" '
+		function res(p) {
+			if ((p ".py") in exists) return p ".py"
+			if ((p "/__init__.py") in exists) return p "/__init__.py"
+			return ""
+		}
+		function emit(r) { if (r != "" && r != f) print f US r }
+		function absimp(m,   p, r) {
+			p = m
+			gsub(/\./, "/", p)
+			r = res(p)
+			if (r == "") r = res("src/" p)
+			if (r == "" && dir != "") r = res(dir "/" p)
+			emit(r)
+		}
+		FNR == NR { exists[$0] = 1; next }
+		FNR == 1 {
+			f = FILENAME
+			dir = f
+			if (sub(/\/[^\/]*$/, "", dir) == 0) dir = ""
+		}
+		{
+			line = $0
+			sub(/#.*/, "", line)
+			if (match(line, /^[ \t]*import[ \t]+/)) {
+				n = split(substr(line, RLENGTH + 1), parts, ",")
+				for (i = 1; i <= n; i++) {
+					m = parts[i]
+					gsub(/^[ \t]+/, "", m)
+					sub(/[ \t].*$/, "", m)
+					if (m ~ /^[A-Za-z_][A-Za-z0-9_.]*$/) absimp(m)
+				}
+				next
+			}
+			if (!match(line, /^[ \t]*from[ \t]+[.A-Za-z0-9_]+[ \t]+import[ \t]+/)) next
+			hdr = substr(line, RSTART, RLENGTH)
+			rest = substr(line, RLENGTH + 1)
+			base = hdr
+			sub(/^[ \t]*from[ \t]+/, "", base)
+			sub(/[ \t]+import[ \t]+$/, "", base)
+			gsub(/[()\\]/, " ", rest)
+			n = split(rest, parts, ",")
+			for (i = 1; i <= n; i++) {
+				nm = parts[i]
+				gsub(/^[ \t]+/, "", nm)
+				sub(/[ \t].*$/, "", nm)
+				names[i] = nm
+			}
+			if (base !~ /^\./) {
+				absimp(base)
+				for (i = 1; i <= n; i++) if (names[i] ~ /^[A-Za-z_][A-Za-z0-9_]*$/) absimp(base "." names[i])
+				next
+			}
+			match(base, /^\.+/)
+			dots = RLENGTH
+			mod = substr(base, dots + 1)
+			pdir = dir
+			for (k = 1; k < dots; k++) {
+				if (pdir == "") { print f US "?" base; next }
+				if (sub(/\/[^\/]*$/, "", pdir) == 0) pdir = ""
+			}
+			prefix = (pdir == "") ? "" : pdir "/"
+			gsub(/\./, "/", mod)
+			if (mod != "") {
+				r = res(prefix mod)
+				if (r == "") { print f US "?" base; next }
+				emit(r)
+				for (i = 1; i <= n; i++) if (names[i] ~ /^[A-Za-z_][A-Za-z0-9_]*$/) emit(res(prefix mod "/" names[i]))
+				next
+			}
+			hit = 0
+			for (i = 1; i <= n; i++) {
+				if (names[i] !~ /^[A-Za-z_][A-Za-z0-9_]*$/) continue
+				r = res(prefix names[i])
+				if (r != "") { emit(r); hit = 1 }
+			}
+			r = res(prefix "__init__")
+			if (r != "") { emit(r); hit = 1 }
+			if (!hit) print f US "?" base
+		}
+	' "$cr_files") | sort -u >"$py_edges"
+}
+
+# rev_closure prints every node of an edges file that (transitively) reaches
+# the start node, the start excluded.
+rev_closure() {
+	printf '%s\n' "$2" >"$tmp/rc_front"
+	printf '%s\n' "$2" >"$tmp/rc_seen"
+	while [ -s "$tmp/rc_front" ]; do
+		awk -F "$us" 'FNR == NR { want[$0] = 1; next } ($2 in want) { print $1 }' \
+			"$tmp/rc_front" "$1" | sort -u | comm -23 - "$tmp/rc_seen" >"$tmp/rc_next"
+		cat "$tmp/rc_next" >>"$tmp/rc_seen"
+		sort -u "$tmp/rc_seen" -o "$tmp/rc_seen"
+		mv "$tmp/rc_next" "$tmp/rc_front"
+	done
+	grep -Fxv -- "$2" "$tmp/rc_seen" || true
+}
+
+# compute_scoped_python selects the unit tests (pytest-collected files outside
+# the suite set) that import a changed module, directly or through other
+# repository modules, then the carries suites. A changed module no test
+# reaches is a low-confidence scope: the full tier.
+compute_scoped_python() {
+	py_bad=0
+	: >"$tmp/py_units"
+	while IFS= read -r p; do
+		case "$p" in *.py) ;; *) continue ;; esac
+		{
+			printf '%s\n' "$p"
+			rev_closure "$py_edges" "$p"
+		} >"$tmp/py_reach"
+		found=0
+		while IFS= read -r r; do
+			is_py_test "$r" || continue
+			found=1
+			grep -Fxq -- "$r" "$cr_cand" && continue
+			[ -f "$root/$r" ] && printf '%s\n' "$r" >>"$tmp/py_units"
+		done <"$tmp/py_reach"
+		if [ "$found" -eq 0 ]; then
+			diag "python: no test imports the changed module $p (directly or through another module); its affected tests cannot be resolved, falling back to the full tier"
+			py_bad=1
+		fi
+	done <"$changed"
+	if [ -s "$tmp/py_units" ]; then
+		add_scoped "pytest $(sort -u "$tmp/py_units" | tr '\n' ' ' | sed 's/ $//')"
+	fi
+	carries_scoped || py_bad=1
+	[ "$py_bad" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Rust analyzer. The module tree is scanned from `mod <name>;` declarations
+# (a crate root — src/lib.rs, src/main.rs, a mod.rs or a top-level tests/*.rs —
+# keeps its children beside it, any other module in its own directory); a
+# declaration that names no file is unresolvable. A changed module selects the
+# unit tests of the modules that contain it or `use` it (`crate::<path>`),
+# filtered by module path, plus the carries suites.
+# ---------------------------------------------------------------------------
+rs_edges="$tmp/rs_edges"
+: >"$rs_edges"
+
+# rs_scan writes "<module><US><child module file>" (or "<module><US>?mod
+# <name>") for every .rs file of the repository.
+rs_scan() {
+	: >"$rs_edges"
+	grep '\.rs$' "$cr_files" >"$tmp/rs_files" || return 0
+	(cd "$root" && tr '\n' '\0' <"$tmp/rs_files" |
+		xargs -0 awk -v US="$us" '
+		FNR == NR { exists[$0] = 1; next }
+		FNR == 1 {
+			f = FILENAME
+			dir = f
+			if (sub(/\/[^\/]*$/, "", dir) == 0) dir = ""
+			b = f
+			sub(/^.*\//, "", b)
+			if (b == "lib.rs" || b == "main.rs" || b == "mod.rs" || f ~ /^tests\/[^\/]*\.rs$/) cdir = dir
+			else { cdir = f; sub(/\.rs$/, "", cdir) }
+			prefix = (cdir == "") ? "" : cdir "/"
+		}
+		/^[ \t]*(pub(\([^)]*\))?[ \t]+)?mod[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*;/ {
+			name = $0
+			sub(/^[ \t]*(pub(\([^)]*\))?[ \t]+)?mod[ \t]+/, "", name)
+			sub(/[ \t]*;.*$/, "", name)
+			if ((prefix name ".rs") in exists) print f US prefix name ".rs"
+			else if ((prefix name "/mod.rs") in exists) print f US prefix name "/mod.rs"
+			else print f US "?mod " name
+		}
+	' "$cr_files") | sort -u >"$rs_edges"
+}
+
+# fwd_closure prints every node an edges file reaches from the start node,
+# the start included.
+fwd_closure() {
+	printf '%s\n' "$2" >"$tmp/fc_front"
+	printf '%s\n' "$2" >"$tmp/fc_seen"
+	while [ -s "$tmp/fc_front" ]; do
+		awk -F "$us" 'FNR == NR { want[$0] = 1; next } ($1 in want) && $2 !~ /^\?/ { print $2 }' \
+			"$tmp/fc_front" "$1" | sort -u | comm -23 - "$tmp/fc_seen" >"$tmp/fc_next"
+		cat "$tmp/fc_next" >>"$tmp/fc_seen"
+		sort -u "$tmp/fc_seen" -o "$tmp/fc_seen"
+		mv "$tmp/fc_next" "$tmp/fc_front"
+	done
+	cat "$tmp/fc_seen"
+}
+
+# rs_modpath maps a src/ module file to its module path (src/a/b.rs and
+# src/a/b/mod.rs are a::b).
+rs_modpath() {
+	m="${1#src/}"
+	m="${m%.rs}"
+	m="${m%/mod}"
+	printf '%s' "$m" | sed 's#/#::#g'
+}
+
+compute_scoped_rust() {
+	rs_bad=0
+	crate="$(awk '
+		/^[ \t]*\[/ { pkg = ($0 ~ /^[ \t]*\[package\][ \t]*$/); next }
+		pkg && /^[ \t]*name[ \t]*=/ { v = $0; sub(/^[^=]*=[ \t]*"/, "", v); sub(/".*$/, "", v); print v; exit }
+	' "$root/Cargo.toml" 2>/dev/null | tr '-' '_')"
+	: >"$tmp/rs_lib"
+	: >"$tmp/rs_bin"
+	[ -f "$root/src/lib.rs" ] && fwd_closure "$rs_edges" src/lib.rs >"$tmp/rs_lib"
+	[ -f "$root/src/main.rs" ] && fwd_closure "$rs_edges" src/main.rs >"$tmp/rs_bin"
+	: >"$tmp/rs_lib_filters"
+	: >"$tmp/rs_bin_filters"
+	while IFS= read -r p; do
+		case "$p" in
+		*.rs) ;;
+		*) continue ;;
+		esac
+		case "$p" in
+		tests/*) continue ;;
+		src/lib.rs | src/main.rs)
+			diag "rust: the crate root $p changed; its affected tests cannot be narrowed, falling back to the full tier"
+			rs_bad=1
+			continue
+			;;
+		esac
+		if grep -Fxq -- "$p" "$tmp/rs_lib"; then
+			kind="lib"
+		elif grep -Fxq -- "$p" "$tmp/rs_bin"; then
+			kind="bin"
+		else
+			diag "rust: the changed file $p is in no crate's module tree (no mod declaration reaches it); its affected tests cannot be resolved, falling back to the full tier"
+			rs_bad=1
+			continue
+		fi
+		# The changed module and every module of the same crate that uses it,
+		# transitively.
+		printf '%s\n' "$p" >"$tmp/rs_set"
+		printf '%s\n' "$p" >"$tmp/rs_front"
+		while [ -s "$tmp/rs_front" ]; do
+			: >"$tmp/rs_next"
+			while IFS= read -r q; do
+				mp="$(rs_modpath "$q")"
+				(cd "$root" && tr '\n' '\0' <"$tmp/rs_$kind" |
+					xargs -0 grep -lE "crate::$mp([^A-Za-z0-9_]|\$)" 2>/dev/null) >>"$tmp/rs_next" || true
+			done <"$tmp/rs_front"
+			sort -u "$tmp/rs_next" | comm -23 - "$tmp/rs_set" >"$tmp/rs_front"
+			cat "$tmp/rs_front" >>"$tmp/rs_set"
+			sort -u "$tmp/rs_set" -o "$tmp/rs_set"
+		done
+		found=0
+		while IFS= read -r q; do
+			mp="$(rs_modpath "$q")"
+			if grep -Eq '#\[(test|cfg\(test\))\]' "$root/$q" 2>/dev/null; then
+				printf '%s::\n' "$mp" >>"$tmp/rs_${kind}_filters"
+				found=1
+			fi
+			if [ -n "$crate" ] && (cd "$root" && grep '^tests/.*\.rs$' "$cr_files" | tr '\n' '\0' |
+				xargs -0 grep -lE "$crate::$mp([^A-Za-z0-9_]|\$)" 2>/dev/null) | grep -q .; then
+				found=1
+			fi
+		done <"$tmp/rs_set"
+		if [ "$found" -eq 0 ]; then
+			diag "rust: no unit test module or integration test reaches the changed module $p; its affected tests cannot be resolved, falling back to the full tier"
+			rs_bad=1
+		fi
+	done <"$changed"
+	if [ -s "$tmp/rs_lib_filters" ]; then
+		add_scoped "cargo test --lib -- $(sort -u "$tmp/rs_lib_filters" | tr '\n' ' ' | sed 's/ $//')"
+	fi
+	if [ -s "$tmp/rs_bin_filters" ]; then
+		add_scoped "cargo test --bins -- $(sort -u "$tmp/rs_bin_filters" | tr '\n' ' ' | sed 's/ $//')"
+	fi
+	carries_scoped || rs_bad=1
+	[ "$rs_bad" -eq 0 ]
+}
+
+case "$analyzer" in
+npm | python | rust)
+	cr_list_files
+	[ "$analyzer" = "python" ] && py_scan
+	[ "$analyzer" = "rust" ] && rs_scan
+	carries_discover
+	;;
+esac
 
 mode="full"
 if [ "$full" -eq 0 ]; then
@@ -1005,6 +1732,12 @@ if [ "$full" -eq 0 ]; then
 			;;
 		npm)
 			if compute_scoped_npm; then mode="scoped"; else full=1; fi
+			;;
+		python)
+			if compute_scoped_python; then mode="scoped"; else full=1; fi
+			;;
+		rust)
+			if compute_scoped_rust; then mode="scoped"; else full=1; fi
 			;;
 		esac
 	fi
@@ -1037,6 +1770,10 @@ elif [ "$analyzer" = "npm" ]; then
 		add_cmd fast "npm test"
 		printf 'test\n' >>"$fast_scripts"
 	fi
+elif [ "$analyzer" = "python" ]; then
+	add_cmd fast "python -m compileall -q"
+elif [ "$analyzer" = "rust" ]; then
+	add_cmd fast "cargo build --all-targets"
 fi
 
 if [ "$mode" = "full" ]; then
@@ -1045,7 +1782,6 @@ if [ "$mode" = "full" ]; then
 	elif [ "$analyzer" = "go" ]; then
 		add_cmd full "GOWORK=off go test -count=1 ./..."
 	elif [ "$analyzer" = "npm" ]; then
-		compute_e2e_helpers
 		suite_refs="$tmp/suite_refs"
 		npm_script_suites >"$tmp/script_suites"
 		cut -f2 "$tmp/script_suites" | sed 's#^e2e/##' | sort -u >"$suite_refs"
@@ -1056,16 +1792,19 @@ if [ "$mode" = "full" ]; then
 			grep -Fxq -- "$name" "$fast_scripts" && continue
 			add_cmd full "npm run $name"
 		done
-		# Remaining standalone suites: not already run by a script, not an
-		# imported helper, and not suppressed by an exclude= glob.
-		for script in "$root"/e2e/*.mjs; do
-			[ -f "$script" ] || continue
-			base="${script##*/}"
-			grep -Fxq -- "$base" "$suite_refs" && continue
-			grep -Fxq -- "$base" "$e2e_helpers" && continue
-			path_excluded "e2e/$base" && continue
-			add_cmd full "node e2e/$base"
-		done
+		# Remaining suites (the carries layer's suite set: no imported helper,
+		# no exclude= match, no e2e_runner= target), not already run by a
+		# script.
+		while IFS= read -r s; do
+			case "$s" in
+			e2e/*) grep -Fxq -- "${s#e2e/}" "$suite_refs" && continue ;;
+			esac
+			add_cmd full "$(cr_suite_cmd "$s")"
+		done <"$cr_suites"
+	elif [ "$analyzer" = "python" ]; then
+		add_cmd full "pytest"
+	elif [ "$analyzer" = "rust" ]; then
+		add_cmd full "cargo test"
 	fi
 else
 	while IFS= read -r c; do
@@ -1083,12 +1822,12 @@ mv "$tmp/commands.named" "$tmp/commands"
 # runs isolated (-I), so nothing in the target repository is imported.
 emit_json() {
 	python3 -I - "$tmp" "$root" "$stack" "$analyzer" "$conf_state" "$conf_changed" \
-		"$base_sha" "$head_sha" "$default" "$mode" "$conf_runner" <<'PY'
+		"$base_sha" "$head_sha" "$default" "$mode" "$conf_runner" "$conf_e2e_runner" <<'PY'
 import json
 import sys
 
 (tmp, root, stack, analyzer, conf, conf_changed, base, head, default,
- mode, runner) = sys.argv[1:12]
+ mode, runner, e2e_runner) = sys.argv[1:13]
 US = "\x1f"
 
 
@@ -1144,6 +1883,9 @@ report = {
     "base_setup": lines("conf_base_setup"),
     "runner": runner or None,
     "ci_evidence": lines("conf_ci"),
+    "e2e_runner": e2e_runner or None,
+    "suite_glob": lines("conf_suite_glob"),
+    "e2e_map": lines("conf_e2e_map"),
     "diagnostics": lines("diag"),
 }
 sys.stdout.write(json.dumps(report, indent=2, ensure_ascii=True) + "\n")

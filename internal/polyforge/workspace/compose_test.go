@@ -271,3 +271,29 @@ func TestSummarizeIntervalSecPick(t *testing.T) {
 		t.Fatalf("no yaml at all: %d, want 60", got)
 	}
 }
+
+// TestComposeAttrs pins the attr-override composition: a declared override
+// that differs from the declaration's default is answered as text; one
+// equal to the default, an absent one and an undeclared step's are not.
+func TestComposeAttrs(t *testing.T) {
+	fm := &workflow.Frontmatter{Steps: []workflow.FrontmatterStep{
+		{ID: "grill", Attrs: map[string]workflow.AttrDecl{"question_batch_size": {Type: workflow.AttrTypeInt, Default: 0}}},
+		{ID: "grill-review"},
+	}}
+	cfg := &Config{Attrs: map[string]map[string]map[string]any{
+		"p":    {"grill": {"question_batch_size": 2}},
+		"zero": {"grill": {"question_batch_size": 0}},
+	}}
+	got := ComposeAttrs(fm, cfg, "p")
+	if len(got) != 1 || got["grill"]["question_batch_size"] != "2" {
+		t.Fatalf("ComposeAttrs = %v, want grill.question_batch_size = 2 only", got)
+	}
+	for _, project := range []string{"zero", "absent"} {
+		if got := ComposeAttrs(fm, cfg, project); got != nil {
+			t.Fatalf("%s: a value equal to the default (or none) must compose nothing: %v", project, got)
+		}
+	}
+	if ComposeAttrs(fm, nil, "p") != nil || ComposeAttrs(nil, cfg, "p") != nil {
+		t.Fatal("no yaml or no bundle composes nothing")
+	}
+}

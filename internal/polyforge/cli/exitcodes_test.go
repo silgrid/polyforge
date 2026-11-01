@@ -292,6 +292,26 @@ func TestDaemonFaceVerbExitCodeGoldens(t *testing.T) {
 	}
 }
 
+// TestAihubServerVerbHelpOnlyExitGoldens: the `aihub` registration is
+// help-only like `daemon` (cmd/pf/main.go intercepts `pf aihub` and calls
+// aihub.Main), so through Run() it can only succeed or fail to parse;
+// its flags are the server's own (aihub.DefineFlags).
+func TestAihubServerVerbHelpOnlyExitGoldens(t *testing.T) {
+	code, stdout, _ := runPf(t, nil, "aihub")
+	if code != 0 {
+		t.Errorf("help-only run: exit = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "pf aihub") || !strings.Contains(stdout, "-data-dir") {
+		t.Errorf("stdout = %q, want the aihub server help text with its flags", stdout)
+	}
+	if code, _, _ := runPf(t, nil, "aihub", "--no-such-flag"); code != 2 {
+		t.Errorf("flag parse: exit = %d, want 2", code)
+	}
+	if code, stdout, _ := runPf(t, nil, "help", "aihub"); code != 0 || !strings.Contains(stdout, "internal/aihub.Main") {
+		t.Errorf("pf help aihub: exit = %d, stdout = %q", code, stdout)
+	}
+}
+
 func recOrZero(r *reqRecorder) []capturedRequest {
 	if r == nil {
 		return nil
@@ -316,7 +336,8 @@ func TestDaemonVerbHelpOnlyExitGoldens(t *testing.T) {
 		t.Errorf("flag parse: exit = %d, want 2", code)
 	}
 	// Sanity: the registry really is the full verb set (12 routing +
-	// 5 admin + doctor + version + init + daemon + chat + watch + result
+	// 5 admin + doctor + version + init + daemon + aihub (the server
+	// entry, help-only like daemon,) + chat + watch + result
 	// (the step's result delivery, #214) + verify-run (a verification
 	// step's mechanical run); watch replaced the
 	// retired watch-probe; doctor is the #113 machine health face; version
@@ -327,7 +348,7 @@ func TestDaemonVerbHelpOnlyExitGoldens(t *testing.T) {
 		"submit", "answer", "revise-binding", "pause", "resume",
 		"wrap", "ops", "chat", "watch", "task", "result", "verify-run", "msg", "users", "api-keys", "machines", "projects",
 		"backup",
-		"doctor", "version", "init", "config", "daemon",
+		"doctor", "version", "init", "config", "workflows", "daemon", "aihub",
 	}
 	if len(commands) != len(want) {
 		t.Fatalf("registry has %d commands, want %d", len(commands), len(want))

@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -182,6 +183,13 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 				parts.EscalatedRecheck = mechanicalFixSection(a.BundleDir, "Escalated full re-run (the mechanical fast lane)")
 			}
 		}
+	}
+	// each attr override this dispatch composed (a value
+	// that differs from its declaration's default) renders its shared
+	// material as its own section; none = the prompt is byte-identical to
+	// a step that declares no attr.
+	if parts.AttrSections, err = attrSections(a.BundleDir, sp.Attrs); err != nil {
+		return nil, fmt.Errorf("driver: %s/%s: %w", a.WI.BundleName, sp.StepID, err)
 	}
 	// the scoped tier's rules ride only a scoped
 	// verification dispatch (the full tier's one-liner is its whole
@@ -541,6 +549,10 @@ type promptParts struct {
 	// rendered as its own section on a review dispatch with a prior
 	// verdict-bearing round on record; "" = a first round (or absent).
 	ReviewReentry string
+	// AttrSections is the rendered step-attribute material (attrSections:
+	// one section per attr override that differs from its declaration's
+	// default,); "" = none.
+	AttrSections string
 	// PriorRejection is the verbatim validation error from the previous
 	// dispatch's rejected envelope (the in-process retry lane): the
 	// author sees exactly what to fix instead of blindly re-authoring.
@@ -658,6 +670,9 @@ func assembleStepPrompt(p promptParts) string {
 	b.WriteString("# Step definition\n\n")
 	b.WriteString(p.Definition)
 	b.WriteString("\n")
+	if p.AttrSections != "" {
+		b.WriteString(p.AttrSections)
+	}
 	// The verification tier: rendered on the verification
 	// step only. The recorded tier rides every re-dispatch, so the agent
 	// never recomputes it and never asks the owner which tier to run.
@@ -686,8 +701,8 @@ func assembleStepPrompt(p promptParts) string {
 		b.WriteString("\n")
 	}
 	if p.Rewind != nil && strings.TrimSpace(p.Rewind.Reason) != "" {
-		b.WriteString("\n# Gate FAIL verdict carried for the whole round (rewind input)\n\n")
-		b.WriteString("A downstream gate failed and the workflow rewound to this step. The verdict in full:\n\n")
+		b.WriteString("\n# Rewind input carried for the whole round\n\n")
+		b.WriteString("A gate FAIL or an owner's answer routed this rewind input here. In full:\n\n")
 		b.WriteString(p.Rewind.Reason)
 		b.WriteString("\n")
 	}
@@ -1094,6 +1109,37 @@ func sharedSectionVars(bundleDir, name string, vars map[string]string) (string, 
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// AttrMaterial is the shared material file of one step attr:
+// workflows/_shared/attr_<name>.md beside the bundles.
+func AttrMaterial(name string) string { return "attr_" + name }
+
+// attrSections renders every attr override of a dispatch (name → value
+// as text) as its own prompt section, in name order: the shared material
+// workflows/_shared/attr_<name>.md rendered with {{<name>}} = the value —
+// the same step-var substitution a step definition's vars use. Fail-closed:
+// a declared override whose material is missing or does not render is a
+// dispatch error, never a silently stored-only attr.
+func attrSections(bundleDir string, attrs map[string]string) (string, error) {
+	names := make([]string, 0, len(attrs))
+	for name := range attrs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		raw, err := os.ReadFile(workflow.SharedFragment(bundleDir, AttrMaterial(name)))
+		if err != nil {
+			return "", fmt.Errorf("step attr %s: its material %s/%s.md: %w", name, workflow.SharedDir, AttrMaterial(name), err)
+		}
+		out, err := workflow.RenderStepVars([]byte(strings.TrimSpace(string(raw))), map[string]string{name: attrs[name]})
+		if err != nil {
+			return "", fmt.Errorf("step attr %s: %w", name, err)
+		}
+		fmt.Fprintf(&b, "\n# Step attribute: %s = %s\n\n%s\n", name, attrs[name], strings.TrimSpace(string(out)))
+	}
+	return b.String(), nil
 }
 
 // sharedPart renders one driver-rendered shared section for a dispatch

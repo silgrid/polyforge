@@ -32,9 +32,9 @@ One row per group, exactly as `pf help` prints it:
 | --- | --- |
 | Data-plane verbs (direct to aihub) | `file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg` (`send`, `list`, `ack`, `show`, `analyze`, `contacts`) |
 | Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, resident watcher, `subscribe`/`unsubscribe`/`adopt`/`list`), `answer` (the reserved answer `cancel` abandons the work item, authorized like `pf cancel`), `revise-binding` (the owner's one-pass correction of done `e2e-author` binding commands, `--correction <index>=<command>` repeatable; appended to the capsule chain), `pause`, `resume`, `wrap`, `ops` (`status`, `models`, `auto`, `max`, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `chat init`, `task` (`spawn`, `list`, `show`, `cancel`), `result submit` (inside a workflow step only: its one result-delivery path), `verify-run` (a verification step's one mechanical run; local, below) |
-| Management face (M1–M5) | `users`, `api-keys`, `projects`, `machines` (`list`, `rekey`), `backup` (database snapshot, see below), `config` (the one `cli.toml` writer and the daemon reload entry) |
+| Management face (M1–M5) | `users`, `api-keys`, `projects`, `machines` (`list`, `rekey`), `backup` (database snapshot, see below), `config` (the one `cli.toml` writer and the daemon reload entry), `workflows` (the read-only workflow face, below) |
 | Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries; `--prune-git-dirs` removes terminal work items' external git dirs and set-aside scenes past the 14-day retention that hold no uncommitted or unpushed task-repo work — a commit counts as pushed when either the task clone's own or the mapped workspace's `.repo/<name>` clone's remote-tracking refs reach it; a scene holding such work, and the work item's git dirs, are kept and named), `version` (the verb form of `pf --version`), `init` (a workspace's local layout) |
-| Process | `daemon` (run the work machine; `pf daemon ensure` starts it) |
+| Process | `daemon` (run the work machine; `pf daemon ensure` starts it), `aihub` (run the aihub server on the service host; `main.go` intercepts `pf aihub`, this verb serves `pf help aihub` only) |
 
 ## `pf msg` — user-to-user messages
 
@@ -288,11 +288,41 @@ an explicit daemon flag. The exact keys, classes and outputs are on the
 [config page](config.md); the reload route and its refused caller class
 are on the [UDS routes page](uds-routes.md).
 
-`pf config workspace --cwd <dir>` reads the mapped workspace's yaml and its
-declared step candidates (one JSON document; see the [config page](config.md)).
+`pf config workspace --cwd <dir>` reads the mapped workspace's yaml, its
+declared step candidates with each entry's `source`/`class`/`attrs`, the
+`default` and `task` rows of every mapped project and the `memory_policy`
+block (one JSON document; see the [config page](config.md)).
 `set`/`unset` also accept `--expect-hash`, `--expect-state` and, for the
-`summarize.*` keys, `--workspace`/`--cwd`; the CAS comparison runs inside the
-writer flock.
+workspace `.polyforge.yaml` keys — `summarize.*`,
+`steps.<project>.<step-id>.models` and `steps.<project>.<step-id>.attrs.<name>`
+— `--workspace`/`--cwd`; the CAS comparison runs inside the writer flock, and
+a step-key write needs the running daemon's `steps_attrs` capability
+(`CORE-501` otherwise; see the [config page](config.md)).
+
+## `pf workflows` — the installed bundles, read-only
+
+`pf workflows [--cwd <dir>]` prints one JSON document (with or without
+`--json`) read fresh from the installed bundle files on every call: the
+daemon-reported `workflows_dir`, `daemon_reachable`, `reason`, and per
+bundle (sorted; `_shared` is no bundle) its `defaults.model_candidates`
+and its steps in declared order, each with its `model_candidates` (absent
+when it declares none) and its declared `attrs` (`name`, `type`,
+`default`). A bundle whose `workflow.md` does not parse is listed only in
+`bundle_errors` (`bundle`, `reason`); the rest still render. With `--cwd`
+inside a mapped workspace it adds `workspace`, `projects` (the mapping's
+projects, in order) and, per step, `effective.<project>` — the effective
+chain (`models`) and the level it came from (`from`), resolved by the same
+precedence chain a dispatch uses (absent when no level governs, so the
+harness default runs); `defaults.effective.<project>` is the bundle's
+project-level fallback and `task.<project>` the task lane's list.
+`write_capable` / `write_reason` state whether the running daemon accepts
+step-key writes (it reports the `steps_attrs` capability on `GET /status`;
+an older daemon is named with the 2.20.15 floor). Every degradation is a
+field and the verb exits 0: an unreachable daemon answers
+`daemon_reachable: false`, a reason and no bundles; an invalid
+`.polyforge.yaml` keeps the bundles and puts the loader's refusal in
+`reason`. The step-key grammar is the [config page](config.md)'s. It is a
+management verb: a step agent is refused, and it adds no daemon route.
 
 ## The daemon (`pf daemon`)
 

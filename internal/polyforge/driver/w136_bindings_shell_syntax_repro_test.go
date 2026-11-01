@@ -4,10 +4,10 @@ package driver
 // first reported failure — the driver's accept gate takes an e2e-author
 // binding whose `command` is not a parseable shell command.
 //
-// The field shape (yingfang#37): the command opens a double quote before
+// The field shape: the command opens a double quote before
 // `$(...)` and closes it with a SINGLE quote after the closing paren:
 //
-//	YINGFANG_TEST_DSN="$(grep ... 'regex' tests/e2e_s37/main_test.go)' go test ...
+//	DEMO_TEST_DSN="$(grep ... 'regex' tests/e2e_s37/main_test.go)' go test ...
 //
 // `bash -n` on that string exits 2 ("unexpected EOF while looking for
 // matching `\"'"), so the canonical record's binding can never pass
@@ -30,12 +30,12 @@ import (
 const (
 	w136Titles = `"scenario_titles":["S1 lists","S2 captures"]`
 
-	// the exact malformed command from yingfang#37 (code-report.md, round 2/3)
-	w136BadCommand = `YINGFANG_TEST_DSN="$(grep -m1 -o 'postgres://[a-zA-Z0-9_:@./?=-]*' tests/e2e_s37/main_test.go)' go test ./tests/e2e_cp37/ -count=1 -v`
+	// the exact malformed command from (code-report.md, round 2/3)
+	w136BadCommand = `DEMO_TEST_DSN="$(grep -m1 -o 'postgres://[a-zA-Z0-9_:@./?=-]*' tests/e2e_s37/main_test.go)' go test ./tests/e2e_cp37/ -count=1 -v`
 
 	// the same command with the trailing quote made matching — the only
 	// byte that differs in the WI's one-time correction
-	w136GoodCommand = `YINGFANG_TEST_DSN="$(grep -m1 -o 'postgres://[a-zA-Z0-9_:@./?=-]*' tests/e2e_s37/main_test.go)" go test ./tests/e2e_cp37/ -count=1 -v`
+	w136GoodCommand = `DEMO_TEST_DSN="$(grep -m1 -o 'postgres://[a-zA-Z0-9_:@./?=-]*' tests/e2e_s37/main_test.go)" go test ./tests/e2e_cp37/ -count=1 -v`
 )
 
 // w136AuthorResult builds a completed e2e-author envelope with two
@@ -45,8 +45,8 @@ func w136AuthorResult(t *testing.T, second string) (*StepResult, ResultSpec) {
 	t.Helper()
 	q := func(s string) string { b, _ := json.Marshal(s); return string(b) }
 	out := `{` + w136Titles + `,"bindings":[` +
-		`{"title":"S1 lists","repo":"yingfang","command":"go test ./tests/e2e_cp37/ -count=1 -v","unit":"TestE2EList","marker":"^PASS S1$"},` +
-		`{"title":"S2 captures","repo":"yingfang","command":` + q(second) + `,"unit":"TestE2ECapture","marker":"^PASS S2$"}]}`
+		`{"title":"S1 lists","repo":"demo","command":"go test ./tests/e2e_cp37/ -count=1 -v","unit":"TestE2EList","marker":"^PASS S1$"},` +
+		`{"title":"S2 captures","repo":"demo","command":` + q(second) + `,"unit":"TestE2ECapture","marker":"^PASS S2$"}]}`
 	if !json.Valid([]byte(out)) {
 		t.Fatalf("fixture output is not JSON: %s", out)
 	}

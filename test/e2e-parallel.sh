@@ -47,7 +47,7 @@ cache=${XDG_CACHE_HOME:-${HOME:-$work}/.cache}/polyforge/e2e-durations
 
 export GOWORK=off
 go test -c -o "$work/e2e.test" ./test
-go build -o "$work/bin/" ./cmd/aihub ./cmd/pf ./test/fakepi
+go build -o "$work/bin/" ./cmd/pf ./test/fakepi
 mkdir -p "$work/logs"
 : >"$work/rc"
 

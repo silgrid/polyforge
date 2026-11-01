@@ -154,7 +154,7 @@ func TestLoadRefusals(t *testing.T) {
 		{"duplicate steps key", "steps:\n  e2e:\n    code: { models: [pi:a] }\nsteps:\n  x:\n    code: { models: [pi:b] }\n", []string{"steps"}},
 		{"legacy top-level models", "models:\n  e2e:\n    default: [a]\n", []string{`unknown top-level key "models" (only ` + "`steps`, `summarize` and `memory_policy`)"}},
 		{"legacy models beside steps", "steps:\n  e2e:\n    default: { models: [pi:a] }\nmodels:\n  e2e:\n    code: [b]\n", []string{`unknown top-level key "models"`}},
-		{"unknown sub-key", "steps:\n  e2e:\n    fix: { models: [pi:a], modles: [b] }\n", []string{"steps.e2e.fix.modles", "a step entry's only key is `models`"}},
+		{"unknown sub-key", "steps:\n  e2e:\n    fix: { models: [pi:a], modles: [b] }\n", []string{"steps.e2e.fix.modles", "a step entry's keys are `models` and `attrs`"}},
 		// polyforge#175: the retired harness key and the candidate format
 		{"retired harness key", "steps:\n  e2e:\n    fix: { models: [claude:claude-opus-5-5], harness: claude }\n", []string{"steps.e2e.fix.harness: the `harness` key was removed (polyforge#175) — move it into each model candidate's prefix"}},
 		{"retired harness key alone", "steps:\n  e2e:\n    fix: { harness: pi }\n", []string{"steps.e2e.fix.harness: the `harness` key was removed"}},
@@ -377,5 +377,74 @@ func TestLoadStepIDsOfARefusedBundleStillCount(t *testing.T) {
 	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    smoke: { models: [claude:claude-opus-5-5] }\n"), dir, nil)
 	if err != nil || cfg == nil {
 		t.Fatalf("a yaml key of a refused bundle's step id: %+v, %v", cfg, err)
+	}
+}
+
+// attrsDir writes an installed-workflows dir whose bundle declares the
+// step ids grill (with the int attr question_batch_size, default 0), code
+// and fix, and answers it.
+func attrsDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fm := "---\nsteps:\n  - id: grill\n    attrs:\n      question_batch_size: { type: int, default: 0 }\n  - { id: code }\n  - { id: fix }\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "b", "workflow.md"), []byte(fm), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestWorkspaceLoadAcceptsDeclaredAttrs pins a declared attr override: it
+// loads with its typed value, beside or without a models list, and an
+// attrs-only entry declares no models level.
+func TestWorkspaceLoadAcceptsDeclaredAttrs(t *testing.T) {
+	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    grill:\n      models: [pi:a]\n      attrs:\n        question_batch_size: 2\n  other:\n    grill:\n      attrs: { question_batch_size: 1 }\n"), attrsDir(t), nil)
+	if err != nil || cfg == nil {
+		t.Fatalf("declared attr refused: %v", err)
+	}
+	if got := cfg.Attrs["e2e"]["grill"]["question_batch_size"]; got != 2 {
+		t.Fatalf("e2e grill attr = %#v, want 2", got)
+	}
+	if got := cfg.Models["e2e"]["grill"]; len(got) != 1 || got[0] != "pi:a" {
+		t.Fatalf("e2e grill models = %v, want [pi:a]", got)
+	}
+	if got := cfg.Attrs["other"]["grill"]["question_batch_size"]; got != 1 {
+		t.Fatalf("other grill attr = %#v, want 1", got)
+	}
+	if _, ok := cfg.Models["other"]["grill"]; ok {
+		t.Fatal("an attrs-only entry must not create a present models level")
+	}
+}
+
+// TestWorkspaceLoadRefusesUndeclaredAttr pins the attr refusals: an
+// undeclared name, a value of the wrong type, an attr under an unknown
+// step id, a non-scalar and an empty attrs map.
+func TestWorkspaceLoadRefusesUndeclaredAttr(t *testing.T) {
+	for name, tc := range map[string]struct{ yaml, want string }{
+		"undeclared name":    {"steps:\n  e2e:\n    grill:\n      attrs: { mystery_knob: 1 }\n", "steps.e2e.grill.attrs.mystery_knob: undeclared attr — step grill declares only question_batch_size"},
+		"step declares none": {"steps:\n  e2e:\n    code:\n      attrs: { question_batch_size: 1 }\n", "steps.e2e.code.attrs.question_batch_size: undeclared attr — step code declares no attrs"},
+		"wrong type":         {"steps:\n  e2e:\n    grill:\n      attrs: { question_batch_size: two }\n", "steps.e2e.grill.attrs.question_batch_size: must be an integer"},
+		"unknown step id":    {"steps:\n  e2e:\n    grilll:\n      attrs: { question_batch_size: 1 }\n", "steps.e2e.grilll"},
+		"non-scalar":         {"steps:\n  e2e:\n    grill:\n      attrs: { question_batch_size: [1] }\n", "steps.e2e.grill.attrs.question_batch_size: must be an integer or a plain string"},
+		"empty attrs":        {"steps:\n  e2e:\n    grill:\n      attrs: {}\n", "steps.e2e.grill.attrs: is empty"},
+	} {
+		_, err := Load(writeYaml(t, tc.yaml), attrsDir(t), nil)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: err %v, want it to name %q", name, err, tc.want)
+		}
+	}
+}
+
+// TestWorkspaceLoadRefusesAttrsUnderDefault pins that the project-level
+// `default` and the bundle-less `task` entries take no attrs.
+func TestWorkspaceLoadRefusesAttrsUnderDefault(t *testing.T) {
+	for _, key := range []string{DefaultKey, TaskKey} {
+		_, err := Load(writeYaml(t, "steps:\n  e2e:\n    "+key+":\n      models: [pi:a]\n      attrs: { question_batch_size: 1 }\n"), attrsDir(t), nil)
+		want := "steps.e2e." + key + ".attrs: `" + key + "` takes no attrs"
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: err %v, want %q", key, err, want)
+		}
 	}
 }

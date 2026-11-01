@@ -18,11 +18,13 @@
 #
 # What it does: promote an already-released version onto the aihub docker
 # service. The release (release.sh) publishes the aihub image to the PRIVATE
-# GHCR repo ghcr.io/silgrid/aihub:<tag> plus the 8-asset release matrix
-# (polyforge#218: aihub/pf × linux-amd64, darwin-arm64, darwin-amd64,
-# aihub-image.digest, SHA256SUMS covering them all). The deployer consumes the
-# linux pair and the digest file; its checksum check verifies exactly those
-# (the darwin assets belong to work machines, tools/install.sh). This
+# GHCR repo ghcr.io/silgrid/aihub:<tag> plus the release assets
+# (the one pf binary for linux-amd64, darwin-arm64,
+# darwin-amd64, aihub-image.digest, and SHA256SUMS covering those four; the
+# image is built from the linux pf and its entrypoint runs `pf aihub`). The
+# deployer consumes the linux pf and the digest file; its checksum check
+# verifies exactly those (the darwin assets belong to work machines,
+# tools/install.sh). This
 # script runs on the DEPLOYER machine (which holds the GitHub / GHCR
 # credentials), pulls that image, verifies it, and ships it to the server with
 # `docker save | ssh docker load`: the server never holds GitHub credentials
@@ -41,17 +43,21 @@
 #
 #   0 preflight   tag, release assets + SHA256SUMS (covers the binaries and
 #                 aihub-image.digest), docker pull ghcr.io/silgrid/aihub:<tag> on
-#                 this machine, repo digest == aihub-image.digest, /aihub -version,
-#                 ssh, container, compose file, versions, disk space; the
+#                 this machine, repo digest == aihub-image.digest, /pf aihub -version,
+#                 ssh, container, running version (/pf aihub -version, else
+#                 /aihub -version; must print a release tag), compose file,
+#                 versions, disk space; the
 #                 upgrade-SQL plan: server python3 SQLite >= 3.35 gate, then the
 #                 structural probe per version in (old, tag] with a deploy/sql dir
 #                 (read-only; the probes decide what the window will apply)
 #   1 baseline    read-only: integrity_check, table row counts, file counts, sizes
-#   2 save old binary   docker cp <container>:/aihub -> <root>/aihub-bin-<old>-<TS>;
+#   2 save old binary   docker cp <container>:/pf (a pre-consolidation image:
+#                       /aihub) -> <root>/aihub-bin-<old>-<TS>;
 #                       rollback image polyforge/aihub:<old>: if the old release has
 #                       a GHCR image, ship it like the new one; otherwise (releases
 #                       before the GHCR image existed, e.g. v2.2.0) build it on the
-#                       server from the saved old binary
+#                       server from the saved old binary and the old release's
+#                       deploy/Dockerfile
 #   3 online backup     rsync memory/ git/ (pass 1) -> sqlite backup-API snapshot
 #                       of aihub.db -> rsync catch-up; snapshot integrity + counts
 #   4 consistency       every active memories row in the snapshot carries its content or
@@ -97,6 +103,25 @@
 #     re-run: if it reports the version applied, its rollback.sql runs too.
 #   * The SQL plan reads the LOCAL git tags: the target tag must exist locally
 #     (refused in step 0 otherwise - `git fetch --tags`).
+#   * Server version probes: the consolidated
+#     image answers `/pf aihub -version`. A probe has read a version only when
+#     the last word it printed has the release-tag shape (tagshape); anything
+#     else - nothing, or a usage error such as the dual-binary image's old /pf
+#     printing `... directory` - is "not read". TRANSITION (the safe-rollback
+#     exception of AGENTS.md's no-compat rule): a pre-consolidation image (only
+#     /aihub, or an old /pf without the aihub subcommand) can still be met on
+#     the old side - the running container before the swap, the saved old
+#     binary, the rollback image, the rollback container - so EVERY probe
+#     (probe_ctr/probe_img, whoever calls it) tries `/pf aihub -version` first
+#     and, only when that did not yield a release tag, `/aihub -version`; the
+#     step-2 save copies the path that answered. The new image may therefore
+#     also pass its version check through /aihub; its identity is pinned by
+#     aihub-image.digest and the repo-digest check, not by the layout. When no
+#     attempt yields a release tag, the error quotes every attempt's raw
+#     stdout (PROBE_RAW). Delete the /aihub attempt (probe_read's second
+#     call in probe_ctr/probe_img, OLD_LAYOUT=aihub and the legacy build's
+#     `aihub` context name) once no pre-consolidation release remains a deploy
+#     or rollback target.
 #
 # Usage:
 #   .polyforge/deploy.sh <version> --confirm <version> [--dry-run] [--force]
@@ -243,7 +268,6 @@ case "$AIHUB_DATA$BACKUP_ROOT" in
   *[!A-Za-z0-9._/+@:,%=-]*) echo "deploy: AIHUB_DATA ($AIHUB_DATA) and BACKUP_ROOT ($BACKUP_ROOT) must be plain paths (letters, digits, . _ / + - @ : , % =)" >&2; exit 2 ;;
 esac
 KEY_TABLES="work_items memories projects users api_keys machines"
-ASSET_AIHUB="aihub-linux-amd64"
 ASSET_PF="pf-linux-amd64"
 ASSET_DIGEST="aihub-image.digest"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -256,6 +280,8 @@ LOCK_PID=""
 STEP="0"
 OLDVER=""; OLDIMG=""; NEWIMG=""; COMPOSE_BAK=""; DOCKERFILE=""; BIN_SAVED=""; SRV_BACKUP=""; LOCAL_BACKUP=""
 NEW_LOCAL_ID=""; OLD_LOCAL_ID=""; OLD_HAS_GHCR=""
+OLD_LAYOUT=""; OLD_VCMD=""   # the running (old) container's layout: pf | aihub (TRANSITION), and its -version command
+GOT=""; GOT_LAYOUT=""        # probe_ctr / probe_img results
 SQLVERS=""        # release tags in (OLDVER, TAG] carrying deploy/sql/<tag>/, ascending
 SQLTODO=""        # the subset whose probe reports not-yet-applied (applied in the window)
 APPLIED_VERS=""   # versions whose upgrade.sql was applied THIS run (rollback.sql targets)
@@ -346,7 +372,7 @@ rollback_text() {
   # (seconds of downtime):
   ssh $AIHUB_HOST "sed -i 's|image: $NEWIMG|image: $OLDIMG|' $COMPOSE_FILE"
   ssh $AIHUB_HOST docker compose -f $COMPOSE_FILE -p $COMPOSE_PROJECT up -d --no-deps $AIHUB_SERVICE
-  ssh $AIHUB_HOST docker exec $AIHUB_CONTAINER /aihub -version   # must print $OLDVER
+  ssh $AIHUB_HOST docker exec $AIHUB_CONTAINER $OLD_VCMD   # must print $OLDVER
   # (the pre-deploy compose file is kept as $COMPOSE_BAK, but its image/build keys
   #  point at the stale v1.0.0 image - do NOT use it to roll back the binary)
   # the schema: if upgrade SQL was applied this run, deploy.sh already ran the
@@ -840,12 +866,52 @@ counts_deltas() {
 
 show_counts() { sed 's/^\(.*\) \([0-9]*\)$/   \1 = \2/' "$1"; }
 
+# lastw: the last word of the -version output (the version string).
+lastw() { awk 'NF{v=$NF} END{print v}'; }
+
+# tagshape <word>: 0 when <word> has the release-tag shape - the one judge of
+# whether a -version probe read a version at all.
+tagshape() { case "$1" in v[0-9]*.[0-9]*.[0-9]*) return 0 ;; esac; return 1; }
+
+# probe_read <layout> <command...>: run one -version command (stdout only),
+# append `[<layout>] <command> -> "<stdout on one line>"` to PROBE_RAW, and set
+# GOT/GOT_LAYOUT only when the last word printed is a release tag.
+# 0 = read; 1 = not a release tag (nothing, or e.g. a usage error).
+probe_read() {
+  prl="$1"; shift
+  pro="$("$@" 2>/dev/null || true)"
+  PROBE_RAW="${PROBE_RAW:+$PROBE_RAW; }[$prl] $* -> \"$(printf '%s' "$pro" | tr '\n' ' ')\""
+  prw="$(printf '%s\n' "$pro" | lastw)"
+  tagshape "$prw" || return 1
+  GOT="$prw"; GOT_LAYOUT="$prl"
+}
+
+# probe_ctr: read the running container's version into GOT and the layout
+# that answered into GOT_LAYOUT (pf | aihub; both "" when no attempt printed a
+# release tag - PROBE_RAW then says what each attempt printed). Tries
+# `/pf aihub -version`, then - only when that did not yield a release tag -
+# the TRANSITION `/aihub -version` of a pre-consolidation image (see the
+# header), for every caller. Always returns 0.
+probe_ctr() {
+  GOT=""; GOT_LAYOUT=""; PROBE_RAW=""
+  probe_read pf dk exec "$AIHUB_CONTAINER" /pf aihub -version \
+    || probe_read aihub dk exec "$AIHUB_CONTAINER" /aihub -version || true
+}
+
+# probe_img <docker|dk> <image>: probe_ctr for an image (docker = this
+# machine, dk = the server).
+probe_img() {
+  GOT=""; GOT_LAYOUT=""; PROBE_RAW=""
+  probe_read pf "$1" run --rm --entrypoint /pf "$2" aihub -version \
+    || probe_read aihub "$1" run --rm --entrypoint /aihub "$2" -version || true
+}
+
 wait_version() { # wait_version <want>  -> 0 when running and version==want
   want="$1"; waited=0; got=""
   while :; do
     run="$(dk inspect -f '{{.State.Running}}' "$AIHUB_CONTAINER" 2>/dev/null || true)"
     if [ "$run" = "true" ]; then
-      got="$(dk exec "$AIHUB_CONTAINER" /aihub -version 2>/dev/null | awk 'NF{v=$NF} END{print v}' || true)"
+      probe_ctr; got="$GOT"
       if [ "$got" = "$want" ]; then return 0; fi
     fi
     if [ "$waited" -ge "$WAIT_SECS" ]; then
@@ -859,6 +925,9 @@ wait_version() { # wait_version <want>  -> 0 when running and version==want
 # build_image <image> <binary-on-server> <expected-version>: LEGACY rollback
 # path only - builds on the server in a fresh temp context (service keeps
 # running), then verifies. The release image itself is never built here.
+# Only a release older than the GHCR image takes this path, and every such
+# release predates the consolidation: its deploy/Dockerfile (DOCKERFILE, read
+# from the OLD tag) copies the binary named `aihub` (TRANSITION, see header).
 build_image() {
   img="$1"; bin="$2"; want="$3"
   [ -n "$DOCKERFILE" ] || die "no deploy/Dockerfile available for the legacy rollback image build"
@@ -870,11 +939,11 @@ build_image() {
     die "docker build $img failed: $(tail -8 "$WORK/build.log")"
   fi
   rssh "rm -rf '$ctx'" || true
-  got="$(dk run --rm --entrypoint /aihub "$img" -version 2>/dev/null | awk 'NF{v=$NF} END{print v}' || true)"
-  [ "$got" = "$want" ] || die "image $img: /aihub -version prints \"$got\", expected $want (service untouched)"
+  probe_img dk "$img"
+  [ "$GOT" = "$want" ] || die "image $img: -version (/pf aihub, else /aihub) prints \"$GOT\", expected $want (service untouched); probe output: $PROBE_RAW"
   dk run --rm --entrypoint git "$img" --version >/dev/null 2>&1 || die "image $img: git --version does not work"
   dk run --rm --entrypoint curl "$img" --version >/dev/null 2>&1 || die "image $img: curl --version does not work"
-  note "image $img built; /aihub -version = $want; git and curl work"
+  note "image $img built; -version ($GOT_LAYOUT layout) = $want; git and curl work"
 }
 
 # ghcr_login: log in to ghcr.io from the gh credentials unless already logged in.
@@ -890,27 +959,30 @@ ghcr_login() {
 fetch_release() {
   ft="$1"; fd="$2"; need="$3"
   mkdir -p "$fd"
-  gh release download "$ft" -R "$GH_REPO" -D "$fd" -p "$ASSET_AIHUB" -p "$ASSET_PF" -p "$ASSET_DIGEST" -p SHA256SUMS >"$WORK/gh.log" 2>&1 \
+  gh release download "$ft" -R "$GH_REPO" -D "$fd" -p "$ASSET_PF" -p "$ASSET_DIGEST" -p SHA256SUMS >"$WORK/gh.log" 2>&1 \
     || die "gh release download $ft failed: $(cat "$WORK/gh.log")"
-  for f in "$ASSET_AIHUB" "$ASSET_PF" SHA256SUMS; do
+  for f in "$ASSET_PF" SHA256SUMS; do
     [ -s "$fd/$f" ] || die "release $ft has no asset $f"
   done
   if [ "$need" = 1 ] && [ ! -s "$fd/$ASSET_DIGEST" ]; then
     die "release $ft has no asset $ASSET_DIGEST - it was not published with a GHCR image; nothing to deploy"
   fi
-  # SHA256SUMS covers the full 8-asset matrix (the darwin binaries the
-  # deployer does not consume); verify exactly the downloaded set.
-  grep -E "[[:space:]]($ASSET_AIHUB|$ASSET_PF|$ASSET_DIGEST)\$" "$fd/SHA256SUMS" >"$fd/SHA256SUMS.deploy" \
-    || die "release $ft: SHA256SUMS does not cover $ASSET_AIHUB/$ASSET_PF/$ASSET_DIGEST"
+  # SHA256SUMS covers every payload asset (the darwin binaries the deployer
+  # does not consume, and a pre-consolidation release's aihub binaries);
+  # verify exactly the downloaded set.
+  grep -E "[[:space:]]($ASSET_PF|$ASSET_DIGEST)\$" "$fd/SHA256SUMS" >"$fd/SHA256SUMS.deploy" \
+    || die "release $ft: SHA256SUMS does not cover $ASSET_PF/$ASSET_DIGEST"
   (cd "$fd" && sha256sum -c SHA256SUMS.deploy) >"$WORK/sha.log" 2>&1 || die "sha256sum -c of release $ft failed: $(cat "$WORK/sha.log")"
   if [ -s "$fd/$ASSET_DIGEST" ]; then
     grep -q "[[:space:]]$ASSET_DIGEST\$" "$fd/SHA256SUMS" || die "release $ft: $ASSET_DIGEST is not covered by SHA256SUMS"
   fi
 }
 
-# pull_verified <tag> <release-dir> <want-version>: pull the GHCR image on THIS
-# machine, require its repo digest == the release's aihub-image.digest and
-# /aihub -version == <want-version>. Sets PULLED_ID to the local image ID.
+# pull_verified <tag> <release-dir> <want-version>: pull the GHCR image on
+# THIS machine, require its repo digest == the release's aihub-image.digest
+# and its -version == <want-version> (probe_img: /pf aihub, else the
+# TRANSITION /aihub of a pre-consolidation rollback image). Sets PULLED_ID to
+# the local image ID.
 pull_verified() {
   pt="$1"; pd="$2"; pv="$3"
   pref="$GHCR_IMAGE:$pt"
@@ -923,8 +995,8 @@ pull_verified() {
   if ! docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$pref" 2>/dev/null | grep -qxF "$wantref"; then
     die "pulled $pref has repo digests [$(docker image inspect -f '{{.RepoDigests}}' "$pref" 2>/dev/null)] but the release says $wantref - refusing (nothing on the server was touched)"
   fi
-  got="$(docker run --rm --entrypoint /aihub "$pref" -version 2>/dev/null | awk 'NF{v=$NF} END{print v}' || true)"
-  [ "$got" = "$pv" ] || die "image $pref: /aihub -version prints \"$got\", expected $pv (nothing on the server was touched)"
+  probe_img docker "$pref"
+  [ "$GOT" = "$pv" ] || die "image $pref: -version prints \"$GOT\", expected $pv (nothing on the server was touched); probe output: $PROBE_RAW"
   PULLED_ID="$(docker image inspect -f '{{.Id}}' "$pref")"
   # the `docker save` tar is written under $WORK: it needs room there (L9).
   isz="$(docker image inspect -f '{{.Size}}' "$pref" 2>/dev/null || true)"
@@ -933,7 +1005,7 @@ pull_verified() {
   case "$tfree" in ''|*[!0-9]*) die "could not read the free space of $WORK" ;; esac
   need_kb=$((isz / 1024 + isz / 10240 + 1))
   [ "$tfree" -ge "$need_kb" ] || die "not enough free space in $WORK for the docker save tar of $pref: ${tfree} KiB free, need ~${need_kb} KiB (set TMPDIR to a bigger disk)"
-  note "pulled $pref: digest $want verified; /aihub -version = $pv; image $PULLED_ID"
+  note "pulled $pref: digest $want verified; -version ($GOT_LAYOUT layout) = $pv; image $PULLED_ID"
 }
 
 # ship_image <tag> <local-image-id> <polyforge-image>: docker save | ssh docker load,
@@ -1057,16 +1129,6 @@ note "assets verified locally (SHA256SUMS covers $(awk '{print $2}' "$REL/SHA256
 ghcr_login
 pull_verified "$TAG" "$REL" "$TAG"
 NEW_LOCAL_ID="$PULLED_ID"
-# deploy/Dockerfile is needed ONLY for the legacy rollback-image path (an old
-# release without a GHCR image); the new image is never built here.
-DOCKERFILE="$WORK/Dockerfile"
-if git -C "$SCRIPT_DIR" show "$TAG:deploy/Dockerfile" >"$DOCKERFILE" 2>/dev/null && [ -s "$DOCKERFILE" ]; then
-  :
-elif [ -s "$SCRIPT_DIR/../deploy/Dockerfile" ]; then
-  cp "$SCRIPT_DIR/../deploy/Dockerfile" "$DOCKERFILE"
-else
-  DOCKERFILE=""
-fi
 
 rssh true >/dev/null 2>&1 || die "ssh to $AIHUB_HOST failed (BatchMode)"
 note "ssh $AIHUB_HOST: reachable"
@@ -1080,10 +1142,11 @@ note "server tools present: docker (+compose) python3 rsync flock curl"
 state="$(dk inspect -f '{{.State.Status}}' "$AIHUB_CONTAINER" 2>/dev/null || true)"
 [ -n "$state" ] || die "container $AIHUB_CONTAINER does not exist on $AIHUB_HOST"
 [ "$state" = "running" ] || die "container $AIHUB_CONTAINER is $state, not running - fix the service first, then deploy"
-OLDVER="$(dk exec "$AIHUB_CONTAINER" /aihub -version 2>/dev/null | awk 'NF{v=$NF} END{print v}' || true)"
-[ -n "$OLDVER" ] || die "could not read the running version (docker exec $AIHUB_CONTAINER /aihub -version)"
-note "container: running, version $OLDVER -> $TAG"
-case "$OLDVER" in v[0-9]*.[0-9]*.[0-9]*) ;; *) die "running version \"$OLDVER\" is not a release tag" ;; esac
+probe_ctr
+OLDVER="$GOT"; OLD_LAYOUT="$GOT_LAYOUT"
+[ -n "$OLDVER" ] || die "could not read the running version: neither docker exec $AIHUB_CONTAINER /pf aihub -version nor /aihub -version (a pre-consolidation image) printed a release tag; probe output: $PROBE_RAW"
+if [ "$OLD_LAYOUT" = pf ]; then OLD_VCMD="/pf aihub -version"; else OLD_VCMD="/aihub -version"; fi
+note "container: running, version $OLDVER ($OLD_VCMD) -> $TAG"
 cmp="$(vcmp "$TAG" "$OLDVER")"
 if [ "$TAG" = "$OLDVER" ] || [ "$cmp" = "0" ]; then
   [ -n "$FORCE" ] || die "$OLDVER is already running (use --force to redeploy it)"
@@ -1113,6 +1176,18 @@ git -C "$SCRIPT_DIR" rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null 
 # Read-only on the db; nothing of the service is touched.
 sql_plan
 
+# deploy/Dockerfile is needed ONLY for the legacy rollback-image path (an old
+# release without a GHCR image); the new image is never built here. It is the
+# OLD release's file: it names the binary that release shipped.
+DOCKERFILE="$WORK/Dockerfile"
+if git -C "$SCRIPT_DIR" show "$OLDVER:deploy/Dockerfile" >"$DOCKERFILE" 2>/dev/null && [ -s "$DOCKERFILE" ]; then
+  :
+elif [ -s "$SCRIPT_DIR/../deploy/Dockerfile" ]; then
+  cp "$SCRIPT_DIR/../deploy/Dockerfile" "$DOCKERFILE"
+else
+  DOCKERFILE=""
+fi
+
 # The rollback image: the old release's GHCR image when it has one (a release
 # that published aihub-image.digest), else the legacy build from the saved old
 # binary (releases before the GHCR image existed, e.g. v2.2.0).
@@ -1131,7 +1206,7 @@ elif [ "$OLD_HAS_GHCR" = 1 ]; then
   note "rollback image: same version as the target (--force); reusing the verified pull"
 else
   note "rollback image: $OLDVER has no GHCR image - will build it from the saved old binary on the server (legacy path)"
-  [ -n "$DOCKERFILE" ] || die "no deploy/Dockerfile found (neither at tag $TAG nor in the working tree) - needed for the legacy rollback image of $OLDVER"
+  [ -n "$DOCKERFILE" ] || die "no deploy/Dockerfile found (neither at tag $OLDVER nor in the working tree) - needed for the legacy rollback image of $OLDVER"
 fi
 
 rssh "test -f '$COMPOSE_FILE'" || die "compose file $COMPOSE_FILE not found on $AIHUB_HOST"
@@ -1217,7 +1292,7 @@ COMPOSE_BAK="$COMPOSE_FILE.bak-$TS"
 if [ -n "$OLD_HAS_GHCR" ]; then
   OLD_PLAN="docker save $GHCR_IMAGE:$OLDVER | ssh docker load, verify image ID, tag $OLDIMG"
 else
-  OLD_PLAN="legacy: docker build from the saved old binary + deploy/Dockerfile (no GHCR image for $OLDVER)"
+  OLD_PLAN="legacy: docker build from the saved old binary + $OLDVER's deploy/Dockerfile (no GHCR image for $OLDVER)"
 fi
 
 echo
@@ -1230,7 +1305,7 @@ else
   SQL_LINE=": none (no pending deploy/sql in ($OLDVER, $TAG])"
 fi
 cat <<EOF
-2. save old binary   ssh $AIHUB_HOST docker cp $AIHUB_CONTAINER:/aihub $BIN_SAVED
+2. save old binary   ssh $AIHUB_HOST docker cp $AIHUB_CONTAINER:/$OLD_LAYOUT $BIN_SAVED
                      rollback image $OLDIMG (if absent on the server): $OLD_PLAN; verify -version == $OLDVER
 3. online backup     (service keeps running; NO docker stop anywhere)
                      rsync -a $AIHUB_DATA/ -> $SRV_BACKUP/   (pass 1, excluding aihub.db, -wal, -shm, service.lock, bootstrap-admin.key, .verified)
@@ -1244,14 +1319,14 @@ cat <<EOF
                      server $SRV_ROOT: $(words "$PLAN_SRV_PRUNE")
                      local $BACKUP_ROOT: $(words "$PLAN_LOCAL_PRUNE")
                      unverified, kept (remove by hand): server: $(words "$PLAN_SRV_UNVER") ; local: $(words "$PLAN_LOCAL_UNVER")
-6. load + swap       (already verified in step 0 on this machine: $GHCR_IMAGE:$TAG repo digest == $ASSET_DIGEST, -version == $TAG)
+6. load + swap       (already verified in step 0 on this machine: $GHCR_IMAGE:$TAG repo digest == $ASSET_DIGEST, /pf aihub -version == $TAG)
                      docker save $GHCR_IMAGE:$TAG | ssh $AIHUB_HOST docker load  (service keeps running); server image ID == $NEW_LOCAL_ID
                      docker tag on the server -> $NEWIMG ; verify git, curl in it
                      back up $COMPOSE_FILE -> $COMPOSE_BAK ; edit ONLY service $AIHUB_SERVICE (planned diff below) ; docker compose config -q (failure -> backup restored, stop)
    switch window     docker compose stop $AIHUB_SERVICE (graceful drain <= ${DRAIN_SECS}s) -> when an applied version declares expected_deltas, a read-only count of just those tables -> upgrade SQL${SQL_LINE} -> count the declared tables again -> docker compose -f $COMPOSE_FILE -p $COMPOSE_PROJECT up -d --no-deps $AIHUB_SERVICE ; poll http://127.0.0.1:$AIHUB_PORT/ every 0.2s ; downtime = stop until HTTP answers (warn > ${MAX_DOWNTIME_SECS}s, fail if not up in ${UP_WAIT_SECS}s)
    (a failure from the window on AUTO-ROLLS BACK: the rollback SQL of every version applied this run runs FIRST (descending, one transaction each), then the swap back to $OLDIMG; exits 10; rollback failure exits 11)
    lock               flock -n $DEPLOY_LOCK_FILE on $AIHUB_HOST held from step 2 to exit (not taken in dry-run)
-7. verify            container image == $NEWIMG ; wait <= ${WAIT_SECS}s for 'docker exec $AIHUB_CONTAINER /aihub -version' == $TAG ; docker logs --since <start>: print error lines, FAIL on Go runtime panic/fatal error
+7. verify            container image == $NEWIMG ; wait <= ${WAIT_SECS}s for 'docker exec $AIHUB_CONTAINER /pf aihub -version' == $TAG ; docker logs --since <start>: print error lines, FAIL on Go runtime panic/fatal error
                      integrity + row counts >= frozen baseline (read-only; a declared table is rebased to its post-SQL count, so it is still checked across the swap); local 'pf queue --limit 1'
 8. rollback + summary; rollback commands for this run:
 EOF
@@ -1279,25 +1354,31 @@ take_lock
 note "lock $DEPLOY_LOCK_FILE held on $AIHUB_HOST until this script exits"
 # Re-read the running version under the lock: a deploy that finished between our
 # preflight and the lock would make OLDVER (and the rollback target) stale.
-nowv="$(dk exec "$AIHUB_CONTAINER" /aihub -version 2>/dev/null | awk 'NF{v=$NF} END{print v}' || true)"
-[ "$nowv" = "$OLDVER" ] || die "the running version changed to \"$nowv\" (was $OLDVER at preflight) - another deploy ran meanwhile; re-run"
+probe_ctr; nowv="$GOT"
+[ "$nowv" = "$OLDVER" ] || die "the running version changed to \"$nowv\" (was $OLDVER at preflight) - another deploy ran meanwhile; re-run (probe output: $PROBE_RAW)"
 
 # ---------------------------------------------------------------- step 2
 step 2 "save the old binary"
 check_lock
-dk cp "$AIHUB_CONTAINER:/aihub" "$BIN_SAVED" >"$WORK/cp.log" 2>&1 || die "docker cp of the old binary failed: $(cat "$WORK/cp.log")"
+# the binary the running container answered with (TRANSITION: /aihub on a
+# pre-consolidation image), read with its own -version invocation
+dk cp "$AIHUB_CONTAINER:/$OLD_LAYOUT" "$BIN_SAVED" >"$WORK/cp.log" 2>&1 || die "docker cp of the old binary failed: $(cat "$WORK/cp.log")"
 rssh "test -s '$BIN_SAVED' && chmod +x '$BIN_SAVED'" || die "saved binary $BIN_SAVED is missing or empty"
-saved_v="$(rssh "'$BIN_SAVED' -version" 2>/dev/null | awk 'NF{v=$NF} END{print v}' || true)"
+if [ "$OLD_LAYOUT" = pf ]; then
+  saved_v="$(rssh "'$BIN_SAVED' aihub -version" 2>/dev/null | lastw || true)"
+else
+  saved_v="$(rssh "'$BIN_SAVED' -version" 2>/dev/null | lastw || true)"
+fi
 [ "$saved_v" = "$OLDVER" ] || die "saved binary reports version \"$saved_v\", expected $OLDVER"
 note "old binary saved: $BIN_SAVED ($OLDVER)"
 if rssh docker image inspect "$OLDIMG" >/dev/null 2>&1; then
-  got="$(dk run --rm --entrypoint /aihub "$OLDIMG" -version 2>/dev/null | awk 'NF{v=$NF} END{print v}' || true)"
-  [ "$got" = "$OLDVER" ] || die "image $OLDIMG already exists but its /aihub reports \"$got\", not $OLDVER - a rollback to it would be wrong; remove/retag it by hand"
+  probe_img dk "$OLDIMG"
+  [ "$GOT" = "$OLDVER" ] || die "image $OLDIMG already exists but it reports \"$GOT\", not $OLDVER - a rollback to it would be wrong; remove/retag it by hand (probe output: $PROBE_RAW)"
   note "rollback image $OLDIMG already exists and reports $OLDVER"
 elif [ -n "$OLD_HAS_GHCR" ]; then
   ship_image "$OLDVER" "$OLD_LOCAL_ID" "$OLDIMG"
-  got="$(dk run --rm --entrypoint /aihub "$OLDIMG" -version 2>/dev/null | awk 'NF{v=$NF} END{print v}' || true)"
-  [ "$got" = "$OLDVER" ] || die "rollback image $OLDIMG reports \"$got\", expected $OLDVER"
+  probe_img dk "$OLDIMG"
+  [ "$GOT" = "$OLDVER" ] || die "rollback image $OLDIMG reports \"$GOT\", expected $OLDVER; probe output: $PROBE_RAW"
 else
   build_image "$OLDIMG" "$BIN_SAVED" "$OLDVER"
 fi
@@ -1453,7 +1534,8 @@ LOCAL_UNVER="$(printf '%s\n' "$LOCAL_LIST" | unverified_backups)"
 step 6 "load image, edit compose, run the switch window (stop -> upgrade SQL -> up)"
 check_lock
 ship_image "$TAG" "$NEW_LOCAL_ID" "$NEWIMG"
-dk run --rm --entrypoint /aihub "$NEWIMG" -version 2>/dev/null | awk 'NF{v=$NF} END{print v}' | grep -qx "$TAG" || die "image $NEWIMG on the server does not report $TAG (service untouched)"
+probe_img dk "$NEWIMG"
+[ "$GOT" = "$TAG" ] || die "image $NEWIMG on the server does not report $TAG on /pf aihub -version, else /aihub -version (service untouched); probe output: $PROBE_RAW"
 # (b) compose: back up, edit ONLY the aihub service, validate, show the diff.
 check_lock
 rssh "cp -p '$COMPOSE_FILE' '$COMPOSE_BAK'" || die "cannot back up $COMPOSE_FILE"
