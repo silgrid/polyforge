@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -640,5 +641,16 @@ func TestWrapSessionEndBlipRetriesToDone(t *testing.T) {
 	}
 	if cr.Outcome != "already_terminal" || cr.Status != api.StatusWrapped {
 		t.Fatalf("wrap after the retried close = %+v, want already_terminal/wrapped", cr)
+	}
+}
+
+// /status reports the schema capabilities this daemon's
+// loaders accept (additive) — the steps_attrs fact `pf config set
+// steps.*` and `pf workflows` gate writes on.
+func TestStatusReportsCapabilities(t *testing.T) {
+	td := newTestDaemon(t, nil)
+	st := td.statusOf(t)
+	if !reflect.DeepEqual(st.Capabilities, []string{cli.CapabilityStepsAttrs}) {
+		t.Fatalf("capabilities = %v, want [%s]", st.Capabilities, cli.CapabilityStepsAttrs)
 	}
 }

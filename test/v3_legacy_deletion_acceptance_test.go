@@ -26,7 +26,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -159,24 +158,16 @@ func v3StartDaemon(t *testing.T, inst *v1Install, sock, dataDir, workspace, mach
 	go func() { d.waitExit <- cmd.Wait() }()
 	t.Cleanup(func() { d.stop() })
 
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		conn, err := net.Dial("unix", d.sock)
-		if err == nil {
-			conn.Close()
-			return d
-		}
-		select {
-		case werr := <-d.waitExit:
-			d.cmd = nil
-			t.Fatalf("v3 daemon exited during startup: %v (log tail: %s)", werr, d.logTail())
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("v3 daemon UDS never came up on %s (log tail: %s)", d.sock, d.logTail())
-		}
-		time.Sleep(25 * time.Millisecond)
+	// Readiness is an answered request, not a bare dial (awaitAnsweredFace).
+	answered, exited, werr := awaitAnsweredFace(d.sock, time.Now().Add(30*time.Second), d.waitExit)
+	switch {
+	case exited:
+		d.cmd = nil
+		t.Fatalf("v3 daemon exited during startup: %v (log tail: %s)", werr, d.logTail())
+	case !answered:
+		t.Fatalf("v3 daemon UDS never came up on %s (log tail: %s)", d.sock, d.logTail())
 	}
+	return d
 }
 
 // logTail returns the last ~4KB of the daemon log.

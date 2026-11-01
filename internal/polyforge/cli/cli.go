@@ -81,8 +81,8 @@ type Command struct {
 // face shows 11 exec verbs), then the management face M1–M5, then the
 // machine health face (doctor, #113), the build version (version, #196:
 // the verb form of the `--version` flag) and the workspace layout (init,
-// #177), then the daemon
-// placeholder (help-only: cmd/pf/main.go intercepts the real launch).
+// #177), then the daemon and aihub server placeholders (help-only:
+// cmd/pf/main.go intercepts both real launches).
 var commands = []*Command{
 	cmdFile,
 	cmdQueue,
@@ -112,7 +112,9 @@ var commands = []*Command{
 	cmdVersion,
 	cmdInit,
 	cmdConfig,
+	cmdWorkflows,
 	cmdDaemon,
+	cmdAihubServer,
 }
 
 // Run executes the CLI with argv (without the program name) and returns
@@ -392,6 +394,7 @@ var extensionPoints = []struct{ what, section string }{
 	{"repos/<repo>/AGENTS.md (else CLAUDE.md)", "Per-repo rules"},
 	{"docs/agents/ area notes", "Area notes"},
 	{".polyforge.yaml steps.<project>.<step|default>.models", "Model candidates"},
+	{".polyforge.yaml steps.<project>.<step>.attrs.<name>", "Step attributes"},
 	{".polyforge.yaml summarize.models, summarize.language, summarize.interval_sec", "Summarize models"},
 	{".polyforge.yaml memory_policy", "Memory policy"},
 	{"cli.toml [workspace.\"<path>\"]", "Workspace mapping"},

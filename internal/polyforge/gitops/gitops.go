@@ -1181,7 +1181,12 @@ func carrierTip(o Opts, env []string, tmp, ref string, credAdditions []string) s
 // the work itself keeps the old carrier rather than losing it. The stale
 // commit must be readable from tmp's borrowed object store; when it is not
 // (a fresh clone lacks the carried commits), containment cannot be proven
-// and the carrier is kept.
+// and the carrier is kept. Known limit: containment is literal whole-tree
+// byte identity of the carried paths, so a rewrite that changes a carried
+// path's content (a content-changing amend) or a rebase onto a new
+// upstream that changes one keeps the old refusal — the reconcile never
+// force-pushes a non-containing head, and an unreadable or moved tip is
+// never clobbered.
 func carrierContainsTip(o Opts, env []string, tmp, tip, head string) bool {
 	tipEntries, ok := carrierTreeEntries(o, env, tmp, tip)
 	if !ok {

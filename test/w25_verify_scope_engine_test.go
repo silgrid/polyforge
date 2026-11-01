@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -567,7 +568,7 @@ func TestW25EngineUnexpectedShapeFallsBackFull(t *testing.T) {
 // TestW25EngineUnsupportedStackFallsBackFull pins the unsupported-stack full
 // report: zero commands, exit 0, a stderr reason.
 func TestW25EngineUnsupportedStackFallsBackFull(t *testing.T) {
-	dir, _ := w25engClone(t, map[string]string{"Cargo.toml": "[package]\nname = \"w25eng\"\nversion = \"0.1.0\"\n"}, "", "")
+	dir, _ := w25engClone(t, map[string]string{"mix.exs": "defmodule W25eng.MixProject do\nend\n"}, "", "")
 	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil)
 	if code != 0 {
 		t.Fatalf("an unsupported stack must exit 0, got %d (%s)", code, errb)
@@ -578,6 +579,147 @@ func TestW25EngineUnsupportedStackFallsBackFull(t *testing.T) {
 	}
 	if strings.TrimSpace(errb) == "" {
 		t.Fatalf("an unsupported stack must explain itself on stderr")
+	}
+}
+
+// w25engPyFiles is a python stub: a src-layout package whose unit test
+// reaches the changed module through another module, and an e2e suite that
+// imports a helper relatively.
+func w25engPyFiles() map[string]string {
+	return map[string]string{
+		"pyproject.toml":            "[project]\nname = \"w25eng-py\"\nversion = \"0.0.0\"\n",
+		"src/pkg/__init__.py":       "",
+		"src/pkg/core.py":           "def core():\n    return 1\n",
+		"src/pkg/api.py":            "from pkg.core import core\n\n\ndef api():\n    return core()\n",
+		"tests/unit/test_api.py":    "from pkg import api\n\n\ndef test_api():\n    assert api.api() == 1\n",
+		"tests/unit/test_other.py":  "def test_other():\n    assert True\n",
+		"tests/e2e/__init__.py":     "",
+		"tests/e2e/conftest.py":     "import pytest\n",
+		"tests/e2e/helpers.py":      "def setup():\n    return 1\n",
+		"tests/e2e/test_journey.py": "# carries: src/pkg/*\nfrom .helpers import setup\n\n\ndef test_journey():\n    assert setup()\n",
+	}
+}
+
+// TestW25EnginePythonAnalyzer pins the python analyzer's three tiers on a stub:
+// the unit test reached through another module is selected, a changed helper
+// selects its importing suite, a changed conftest.py or manifest forces full,
+// an unresolvable relative import forces full, and pytest collection files are
+// never suites.
+func TestW25EnginePythonAnalyzer(t *testing.T) {
+	dir, base := w25engClone(t, w25engPyFiles(), "", "")
+	w25engWrite(t, dir, "src/pkg/core.py", "def core():\n    return 2\n")
+	w25engCommit(t, dir, "change the core module")
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+	if code != 0 {
+		t.Fatalf("engine exited %d: %s", code, errb)
+	}
+	r := w25engParse(t, out)
+	want := []string{"python -m compileall -q", "pytest tests/unit/test_api.py", "pytest tests/e2e/test_journey.py"}
+	if r.mode != "scoped" || !reflect.DeepEqual(r.commands, want) {
+		t.Fatalf("python scoped report = mode %q commands %q, want scoped %q (stderr %s)", r.mode, r.commands, want, errb)
+	}
+	if strings.Contains(errb, "conftest.py") || strings.Contains(errb, "__init__.py") || strings.Contains(errb, "helpers.py") {
+		t.Fatalf("collection files and helpers are not suites: %s", errb)
+	}
+	if f := w25engScope(t, dir, "--base", base, "--full"); !reflect.DeepEqual(f.commands, []string{"python -m compileall -q", "pytest"}) {
+		t.Fatalf("python --full commands = %q, want the fast gate then pytest", f.commands)
+	}
+
+	helperDir, helperBase := w25engClone(t, w25engPyFiles(), "", "")
+	w25engWrite(t, helperDir, "tests/e2e/helpers.py", "def setup():\n    return 2\n")
+	w25engCommit(t, helperDir, "change the e2e helper")
+	if h := w25engScope(t, helperDir, "--base", helperBase); h.mode != "scoped" || !strings.Contains(h.joined(), "pytest tests/e2e/test_journey.py") {
+		t.Fatalf("a changed helper must select its importing suite, got %q:\n%s", h.mode, h.joined())
+	}
+
+	for _, rel := range []string{"tests/e2e/conftest.py", "pyproject.toml"} {
+		fDir, fBase := w25engClone(t, w25engPyFiles(), "", "")
+		w25engWrite(t, fDir, rel, "# changed\n")
+		w25engCommit(t, fDir, "change "+rel)
+		if f := w25engScope(t, fDir, "--base", fBase); f.mode != "full" {
+			t.Fatalf("a changed %s must force full, got %q", rel, f.mode)
+		}
+	}
+
+	broken := w25engPyFiles()
+	broken["tests/e2e/test_broken.py"] = "# carries: src/pkg/*\nfrom .missing import thing\n"
+	bDir, bBase := w25engClone(t, broken, "", "")
+	w25engWrite(t, bDir, "src/pkg/core.py", "def core():\n    return 3\n")
+	w25engCommit(t, bDir, "change the core module")
+	out, errb, _ = w25engRun(t, bDir, filepath.Join(bDir, "tools", "verify-scope"), nil, "--base", bBase)
+	if b := w25engParse(t, out); b.mode != "full" || !strings.Contains(errb, ".missing") {
+		t.Fatalf("an unresolvable relative import must force full and be named, got %q (%s)", b.mode, errb)
+	}
+
+	// A python manifest beside package.json without a stack= pin is ambiguous.
+	amb := w25engPyFiles()
+	amb["package.json"] = "{\n  \"name\": \"w25eng-amb\"\n}\n"
+	aDir, _ := w25engClone(t, amb, "", "")
+	out, errb, _ = w25engRun(t, aDir, filepath.Join(aDir, "tools", "verify-scope"), nil)
+	if a := w25engParse(t, out); a.mode != "full" || len(a.commands) != 0 || !strings.Contains(errb, "without a stack= pin") {
+		t.Fatalf("pyproject.toml + package.json without a pin must be ambiguous and full, got %q %q (%s)", a.mode, a.commands, errb)
+	}
+}
+
+// w25engRsFiles is a rust stub: a library whose `user` module uses the
+// `store` module and carries unit tests, an acceptance suite that shares a
+// tests/common helper, and an undeclared-by-mod orphan file.
+func w25engRsFiles() map[string]string {
+	return map[string]string{
+		"Cargo.toml":          "[package]\nname = \"w25-eng\"\nversion = \"0.1.0\"\n",
+		"src/lib.rs":          "pub mod store;\npub mod user;\n",
+		"src/store.rs":        "pub fn get() -> u32 {\n    1\n}\n",
+		"src/user.rs":         "use crate::store;\n\npub fn name() -> u32 {\n    store::get()\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn named() {\n        assert_eq!(super::name(), 1);\n    }\n}\n",
+		"tests/accept.rs":     "// carries: src/*\nmod common;\n\n#[test]\nfn accepts() {\n    common::helper();\n}\n",
+		"tests/common/mod.rs": "pub fn helper() {}\n",
+	}
+}
+
+// TestW25EngineRustAnalyzer pins the rust analyzer's three tiers on a stub:
+// a changed module selects the unit tests of the modules that use it, a
+// changed tests/common helper selects its importing suite, a changed crate
+// root or manifest forces full, and an unresolvable `mod` forces full.
+func TestW25EngineRustAnalyzer(t *testing.T) {
+	dir, base := w25engClone(t, w25engRsFiles(), "", "")
+	w25engWrite(t, dir, "src/store.rs", "pub fn get() -> u32 {\n    2\n}\n")
+	w25engCommit(t, dir, "change the store module")
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+	if code != 0 {
+		t.Fatalf("engine exited %d: %s", code, errb)
+	}
+	r := w25engParse(t, out)
+	want := []string{"cargo build --all-targets", "cargo test --lib -- user::", "cargo test --test accept"}
+	if r.mode != "scoped" || !reflect.DeepEqual(r.commands, want) {
+		t.Fatalf("rust scoped report = mode %q commands %q, want scoped %q (stderr %s)", r.mode, r.commands, want, errb)
+	}
+	if f := w25engScope(t, dir, "--base", base, "--full"); !reflect.DeepEqual(f.commands, []string{"cargo build --all-targets", "cargo test"}) {
+		t.Fatalf("rust --full commands = %q, want the fast gate then cargo test", f.commands)
+	}
+
+	hDir, hBase := w25engClone(t, w25engRsFiles(), "", "")
+	w25engWrite(t, hDir, "tests/common/mod.rs", "pub fn helper() {\n    let _ = 1;\n}\n")
+	w25engCommit(t, hDir, "change the shared helper")
+	if h := w25engScope(t, hDir, "--base", hBase); h.mode != "scoped" || !strings.Contains(h.joined(), "cargo test --test accept") {
+		t.Fatalf("a changed tests/common helper must select its importing suite, got %q:\n%s", h.mode, h.joined())
+	}
+
+	for _, rel := range []string{"src/lib.rs", "Cargo.toml"} {
+		fDir, fBase := w25engClone(t, w25engRsFiles(), "", "")
+		w25engWrite(t, fDir, rel, "// changed\n")
+		w25engCommit(t, fDir, "change "+rel)
+		if f := w25engScope(t, fDir, "--base", fBase); f.mode != "full" {
+			t.Fatalf("a changed %s must force full, got %q", rel, f.mode)
+		}
+	}
+
+	broken := w25engRsFiles()
+	broken["tests/broken.rs"] = "// carries: src/*\nmod missing;\n"
+	bDir, bBase := w25engClone(t, broken, "", "")
+	w25engWrite(t, bDir, "src/store.rs", "pub fn get() -> u32 {\n    3\n}\n")
+	w25engCommit(t, bDir, "change the store module")
+	out, errb, _ = w25engRun(t, bDir, filepath.Join(bDir, "tools", "verify-scope"), nil, "--base", bBase)
+	if b := w25engParse(t, out); b.mode != "full" || !strings.Contains(errb, "mod missing") {
+		t.Fatalf("an unresolvable mod declaration must force full and be named, got %q (%s)", b.mode, errb)
 	}
 }
 
@@ -794,7 +936,8 @@ func w25engRangeFiles(t *testing.T, dir string) map[string]string {
 	return files
 }
 
-// w25engNpmRangeFixture rebuilds a recorded range as a git fixture: the base
+// w25engNpmRangeFixture rebuilds a recorded range, without its e2e suites, as
+// a git fixture: the base
 // commit carries the pre-image, HEAD carries the materialised range tree plus a
 // placeholder for every changed path the selection does not read.
 func w25engNpmRangeFixture(t *testing.T, name string) (dir, base string) {
@@ -803,8 +946,20 @@ func w25engNpmRangeFixture(t *testing.T, name string) (dir, base string) {
 		t.Skip("git not installed")
 	}
 	root := filepath.Join(w25engNpmData(t), "ranges", name)
-	changes := w25engRangeChanges(t, root)
+	// The contrast is suite-less: every e2e/ path is dropped from the recorded
+	// change list and the materialised tree.
+	var changes []w25engRangeChange
+	for _, c := range w25engRangeChanges(t, root) {
+		if !strings.HasPrefix(c.path, "e2e/") && !strings.HasPrefix(c.old, "e2e/") {
+			changes = append(changes, c)
+		}
+	}
 	files := w25engRangeFiles(t, root)
+	for rel := range files {
+		if strings.HasPrefix(rel, "e2e/") {
+			delete(files, rel)
+		}
+	}
 	statuses := map[string]string{}
 	for _, c := range changes {
 		statuses[c.path] = c.status
@@ -871,26 +1026,46 @@ func w25engNpmRangeFixture(t *testing.T, name string) (dir, base string) {
 	return dir, base
 }
 
-// TestW25NpmAnalyzerSelectsReferencedSuites pins the npm scoped selection on
-// the committed fixture.
-func TestW25NpmAnalyzerSelectsReferencedSuites(t *testing.T) {
-	frozen := filepath.Join(w25engRoot(t), "test", "testdata", "verify-scope", "verify-scope-npm.sh")
-	dir, base := w25engClone(t, w25engNpmFiles(t), w25engNpmConf(t), frozen)
+// TestW25NpmAnalyzerSelectsDeclaredSuites pins the npm scoped selection on
+// the committed fixture: a suite is selected by its carries: declaration, an
+// imported helper and an exclude= match are never suites, and a changed path
+// no declaration covers falls back to full, named on stderr.
+func TestW25NpmAnalyzerSelectsDeclaredSuites(t *testing.T) {
+	dir, base := w25engClone(t, w25engNpmFiles(t), w25engNpmConf(t), "")
 	w25engWrite(t, dir, "src/app.ts", "export const app = 2;\n")
-	w25engCommit(t, dir, "change the referenced source")
+	w25engCommit(t, dir, "change the declared source")
 	r := w25engScope(t, dir, "--base", base)
 	if r.mode != "scoped" {
-		t.Fatalf("a source-only npm change must stay scoped, got %q", r.mode)
+		t.Fatalf("a declared source-only npm change must stay scoped, got %q", r.mode)
 	}
 	joined := r.joined()
 	if !strings.Contains(joined, "node e2e/plain.mjs") {
-		t.Fatalf("the suite referencing the changed file must be selected:\n%s", joined)
+		t.Fatalf("the suite declaring the changed file must be selected:\n%s", joined)
 	}
-	for _, bad := range []string{"node e2e/browser.mjs", "node e2e/helper.mjs", "node e2e/run.mjs", "node e2e/themes.mjs"} {
+	for _, bad := range []string{"node e2e/browser.mjs", "node e2e/helper.mjs", "node e2e/run.mjs", "node e2e/terminal.mjs", "node e2e/themes.mjs"} {
 		if strings.Contains(joined, bad) {
 			t.Fatalf("scoped npm selection must not select %q:\n%s", bad, joined)
 		}
 	}
+
+	// A changed helper selects the suite that imports it.
+	w25engWrite(t, dir, "e2e/helper.mjs", "export const helper = 2;\n")
+	w25engCommit(t, dir, "change the helper")
+	if h := w25engScope(t, dir, "--base", base); h.mode != "scoped" || !strings.Contains(h.joined(), "node e2e/run.mjs") {
+		t.Fatalf("a changed helper must select its importer and stay scoped, got %q:\n%s", h.mode, h.joined())
+	}
+
+	// A path no declaration covers falls back to full, named.
+	w25engWrite(t, dir, "scripts/tool.sh", "#!/bin/sh\n")
+	w25engCommit(t, dir, "add an uncovered path")
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+	if code != 0 {
+		t.Fatalf("engine exited %d: %s", code, errb)
+	}
+	if u := w25engParse(t, out); u.mode != "full" || !strings.Contains(errb, "scripts/tool.sh") {
+		t.Fatalf("an uncovered path must be full and named, got %q (%s)", u.mode, errb)
+	}
+
 	w25engWrite(t, dir, "package.json", "{\n  \"name\": \"w25-npm-fixture\",\n  \"version\": \"2.0.0\"\n}\n")
 	w25engCommit(t, dir, "change package.json")
 	if full := w25engScope(t, dir, "--base", base); full.mode != "full" {
@@ -898,33 +1073,34 @@ func TestW25NpmAnalyzerSelectsReferencedSuites(t *testing.T) {
 	}
 }
 
-// TestW25NpmChangedSuiteMatchesFrozenSeed pins the exclude= boundary: a
-// changed standalone suite that references its own path is selected in the
-// scoped tier by both the engine and the frozen seed (exclude= suppresses the
-// full standalone pass only), so the old seed/engine divergence is closed.
-func TestW25NpmChangedSuiteMatchesFrozenSeed(t *testing.T) {
-	frozen := filepath.Join(w25engRoot(t), "test", "testdata", "verify-scope", "verify-scope-npm.sh")
-	dir, base := w25engClone(t, w25engNpmFiles(t), w25engNpmConf(t), frozen)
+// TestW25NpmChangedSuitesAndExclusions pins the carries exemptions: a changed
+// suite selects itself, while a changed exclude= match is neither a suite nor
+// an uncovered path — it keeps the tier scoped and is not run.
+func TestW25NpmChangedSuitesAndExclusions(t *testing.T) {
+	dir, base := w25engClone(t, w25engNpmFiles(t), w25engNpmConf(t), "")
 	w25engWrite(t, dir, "e2e/themes.mjs", "// changed e2e/themes.mjs\nconsole.log('themes');\n")
-	w25engCommit(t, dir, "change a standalone suite")
-	frozenOut, frozenErr, frozenCode := w25engRun(t, dir, filepath.Join(dir, ".polyforge", "verify-scope.sh"), nil, "--base", base)
-	if frozenCode != 0 {
-		t.Fatalf("frozen seed exited %d: %s", frozenCode, frozenErr)
+	w25engCommit(t, dir, "change an excluded suite")
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+	if code != 0 {
+		t.Fatalf("engine exited %d: %s", code, errb)
 	}
-	engineOut, engineErr, engineCode := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
-	if engineCode != 0 {
-		t.Fatalf("engine exited %d: %s", engineCode, engineErr)
+	r := w25engParse(t, out)
+	if r.mode != "scoped" || strings.Contains(r.joined(), "themes.mjs") || strings.Contains(errb, "themes.mjs") {
+		t.Fatalf("an exclude= match must stay scoped, unrun and undiagnosed, got %q:\n%s\n%s", r.mode, r.joined(), errb)
 	}
-	if frozenOut != engineOut {
-		t.Fatalf("engine stdout differs from the frozen seed on a changed suite\n--- frozen ---\n%s--- engine ---\n%s", frozenOut, engineOut)
-	}
-	if !strings.Contains(engineOut, "node e2e/themes.mjs") {
-		t.Fatalf("the changed standalone suite must be selected:\n%s", engineOut)
+
+	w25engWrite(t, dir, "e2e/terminal.mjs", "// carries: components/Terminal*\nconsole.log('terminal 2');\n")
+	w25engCommit(t, dir, "change a declared suite")
+	s := w25engScope(t, dir, "--base", base)
+	if s.mode != "scoped" || !strings.Contains(s.joined(), "node e2e/terminal.mjs") {
+		t.Fatalf("a changed suite must select itself and stay scoped, got %q:\n%s", s.mode, s.joined())
 	}
 }
 
-// TestW25NpmByteContrast replays the ten recorded merge ranges against the
-// frozen seed script and requires byte-identical stdout.
+// TestW25NpmByteContrast replays the ten recorded merge ranges, with their
+// e2e suites removed, against the frozen seed script and requires
+// byte-identical stdout: a suite-less repository never enters the carries
+// layer, so its report is the pre-carries report for the same diff.
 func TestW25NpmByteContrast(t *testing.T) {
 	frozen := filepath.Join(w25engRoot(t), "test", "testdata", "verify-scope", "verify-scope-npm.sh")
 	if _, err := os.Stat(frozen); err != nil {
@@ -948,6 +1124,9 @@ func TestW25NpmByteContrast(t *testing.T) {
 			}
 			if frozenOut != engineOut {
 				t.Fatalf("engine stdout differs from the frozen seed\n--- frozen ---\n%s--- engine ---\n%s", frozenOut, engineOut)
+			}
+			if strings.Contains(engineErr, "carries") {
+				t.Fatalf("a suite-less repository must not print a carries diagnostic: %s", engineErr)
 			}
 			r := w25engParse(t, engineOut)
 			scopedSeen = scopedSeen || r.mode == "scoped"

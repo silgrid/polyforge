@@ -12,7 +12,7 @@ package driver
 // nothing else in the output changes, the corrected bytes survive a fresh
 // load (the materialization re-claim performs), and a batch that would
 // reintroduce a malformed command is refused without touching the record.
-// The all-malformed fixture is the yingfang#37 shape: validating the whole
+// The all-malformed fixture is the shape: validating the whole
 // output after each single-index revision would make every call refuse
 // while any sibling is still malformed, so the batch must apply together.
 
@@ -35,7 +35,7 @@ func w136RevisionOutput(t *testing.T, commands ...string) map[string]any {
 		titles[i] = fmt.Sprintf("S%d", i+1)
 		bindings[i] = map[string]any{
 			"title":   titles[i],
-			"repo":    "yingfang",
+			"repo":    "demo",
 			"command": commands[i],
 			"unit":    fmt.Sprintf("TestS%d", i+1),
 			"marker":  fmt.Sprintf("^PASS S%d$", i+1),
@@ -59,7 +59,7 @@ func stringSliceAny(in []string) []any {
 }
 
 // w136RevisionEnv writes a canonical record shaped like a paused
-// yingfang#37 capsule (done e2e-author, the given binding commands) and
+// capsule (done e2e-author, the given binding commands) and
 // opens a driver over it. No Run loop is started: the revision is a
 // record-only write, like a paused record's owner move.
 func w136RevisionEnv(t *testing.T, commands ...string) (*Driver, *eventLog, string) {
@@ -122,7 +122,7 @@ func TestW136OwnerRevisionCorrectsCanonicalBinding(t *testing.T) {
 	d, log, execPath := w136RevisionEnv(t, "go test ./tests/e2e_cp37/ -count=1 -v", w136BadCommand)
 	if err := d.ReviseBinding(e2eAuthorStepID, BindingRevisionRequest{
 		Corrections: []capsule.BindingCorrection{{Index: 1, Command: w136GoodCommand}},
-		By:          "usr_owner", Reason: "yingfang#37: pair the quote",
+		By:          "usr_owner", Reason: "pair the quote",
 	}); err != nil {
 		t.Fatalf("ReviseBinding: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestW136OwnerRevisionCorrectsCanonicalBinding(t *testing.T) {
 	}
 }
 
-// TestW136OwnerRevisionCorrectsEveryMalformedBinding is the yingfang#37
+// TestW136OwnerRevisionCorrectsEveryMalformedBinding is the
 // shape that broke the single-index revision: every binding carries the
 // same unpaired quote. One batch must correct all of them, because a
 // whole-output validation after the first correction would still see the
@@ -183,7 +183,7 @@ func TestW136OwnerRevisionCorrectsEveryMalformedBinding(t *testing.T) {
 	}
 	d, log, execPath := w136RevisionEnv(t, bad...)
 	if err := d.ReviseBinding(e2eAuthorStepID, BindingRevisionRequest{
-		Corrections: corrections, By: "usr_owner", Reason: "yingfang#37: pair every quote in one pass",
+		Corrections: corrections, By: "usr_owner", Reason: "pair every quote in one pass",
 	}); err != nil {
 		t.Fatalf("a batch correcting every malformed binding must succeed: %v", err)
 	}

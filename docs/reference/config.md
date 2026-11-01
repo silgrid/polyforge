@@ -193,6 +193,12 @@ Reload classes (one class per key):
 | restart-only | `server`, `api_key`, `daemon_socket`, `harness_root`, `operator_agent_dir` | reported pending; the running daemon keeps its value and a restart applies it |
 | CLI-only | `user_id` | never read by the daemon |
 
+The workspace `.polyforge.yaml` keys report the same classes on the
+workspace read (`pf config workspace`): every `summarize.*` key and every
+`steps.<project>.<step-id>.models` / `.attrs.<name>` key is `live` (read
+fresh at the next request or step dispatch; a running step keeps what its
+dispatch read), and `memory_policy` is `next-claim`.
+
 ### Machine-readable list, schema and CAS
 
 `pf --json config list` is additive: every item carries `class` (the same
@@ -225,9 +231,24 @@ always answers one JSON document: `mapped`, the workspace label, the yaml
 `path`/`sha256`/`exists`, the effective `summarize.models` (ordered),
 `summarize.language` and `summarize.interval_sec` each with its `source`
 (`file` or `default`) and `class` (the summarize lane reads the yaml live, so
-all three are `live`), the per-project `steps` map (`declared` + `models`, or
-`declared:false` with no list), and `steps_complete`. An unmapped cwd answers
-`mapped:false` with exit 0.
+all three are `live`), the per-project `steps` map, `steps_complete`, and
+`memory_policy`. An unmapped cwd answers `mapped:false` with exit 0.
+
+Each `steps.<project>.<id>` entry carries `declared` + `models` (a
+declared-empty list stays `declared:true` with `models: []`, never absent;
+an undeclared one is `declared:false` with no list), `source` (`file` or
+`default`), `class` (`live`: the driver composes the chain at every
+dispatch), and `attrs` — every attr an installed bundle declares for that
+step id plus every override the file declares, each `{value, declared,
+source, class, default, schema:{kind}}` (an attr the file does not
+override shows the declaration's `default` as its value). Every mapped
+project always has a `default` and a `task` row besides the installed step
+ids and the file's own keys. `memory_policy` is
+`{source, class:"next-claim", append_to_default:true, default:{record,
+skip, declared}, projects:{<project>:{record, skip, declared}}}`: the
+default entry's effective lists (declared, else built-in) and each mapped
+project's OWN declared lists, never pre-merged (the append rule is the
+`append_to_default` fact).
 
 `pf config set|unset summarize.models|summarize.language|summarize.interval_sec`
 takes exactly one of `--workspace <path>` or `--cwd <dir>` plus the same CAS
@@ -241,6 +262,46 @@ the validator's own error and the file is left byte-identical. An absent file
 is created only when the expectation says `absent`; an unset with no file to
 edit is a no-op and creates nothing. `unset summarize.models` removes the
 whole entry.
+
+`pf config set|unset steps.<project>.<step-id>.models` and
+`steps.<project>.<step-id>.attrs.<name>` write the
+[`steps:`](#steps--model-candidates-per-project-and-step) and
+[step attributes](#stepsprojectstep-idattrs--step-attributes) keys with the
+same `--workspace`/`--cwd`, CAS options, flock, atomic write and strict
+`workspace.Load` preflight (before and under the flock) as the summarize keys.
+`models` takes a list (`'["pi:a","claude:b"]'` or `pi:a,claude:b`; an empty
+list is a declared-empty level); an attr takes a scalar written by its
+declared type (an `int` bare, a `string` quoted). The write is a
+byte-preserving line edit: only the addressed line changes; a missing
+`steps:` section, project or step entry is created in block style, and a
+flow-style entry on the path is expanded once into block style keeping every
+value it declares. A stale `--expect-hash` / `--expect-state` is refused with
+`CORE-409`, and a malformed candidate, an undeclared attr, a value of the
+wrong type or an attr under `default`/`task` is refused by the loader — the
+file stays byte-identical. `unset …models` removes the chain line, then the
+step entry when it declares nothing else (so the chain falls back one
+level; an entry carrying attrs keeps them), then a project or `steps:`
+section the removal left empty; `unset …attrs.<name>` removes the override
+the same way (the declaration's default governs again). Before reading the
+file, a step write asks the running daemon's `GET /status`: unless it
+reports the `steps_attrs` capability (2.20.15 or newer) the write is refused
+with `CORE-501` naming the floor (restart the daemon after upgrading), and
+an unreachable daemon refuses it too (its workflows dir is what the step ids
+and attrs are checked against).
+
+### The workflow read face — `pf workflows`
+
+`pf workflows [--cwd <dir>]` is the read-only companion of the workspace
+read: the installed bundles (from the daemon-reported `workflows_dir`,
+parsed on every call), each step's `model_candidates` and declared
+`attrs`, and — with `--cwd` — every mapped project's effective chain per
+step with the level it came from, resolved by the precedence chain of
+[`steps:`](#steps--model-candidates-per-project-and-step) (the
+[commands page](commands.md) has the document shape and its
+degradations). Its `write_capable` is the running daemon's own fact: a
+daemon that does not report the `steps_attrs` capability on `GET /status`
+(older than 2.20.15) makes it `false` with `write_reason` naming the
+floor, and the step-key writes below are refused the same way.
 
 After a successful write `pf config` notifies the running daemon; there
 is no file watcher, so a hand edit needs the explicit `pf config reload`.
@@ -326,7 +387,8 @@ keeps `:8b` in the model id; pi gets it as `--thinking <effort>` (all
 seven), claude as `--effort <effort>` (`low`…`max`; `off`/`minimal`
 refuse); no effort, no flag.
 
-A step entry's only key is `models`. For a step of the claimed project
+A step entry's keys are `models` and `attrs` (at least one; see
+[step attributes](#stepsprojectstep-idattrs--step-attributes) below). For a step of the claimed project
 the list is, highest first: the work item's manual `pf submit <id>
 --models pi:a,claude:b` list (every step; kept by this daemon only —
 across its restarts and `pf resume` — and a re-claim on another machine
@@ -337,6 +399,45 @@ governs: no switchable chain). A project not listed keeps the bundle's.
 `pf doctor` reports the same refusal (an unknown per-step key and a
 leftover `models:` section included) before any claim. Repo lists and
 clone URLs always come from the aihub project registry.
+
+### `steps.<project>.<step-id>.attrs` — step attributes
+
+```yaml
+steps:
+  polyforge:
+    grill:
+      models: ["claude:claude-opus-5-5"]   # optional, as above
+      attrs:
+        question_batch_size: 2             # an attr the grill bundle step declares
+```
+
+A bundle step may declare configurable attributes in its `workflow.md`
+entry — `attrs: { <name>: { type: int|string, default: <scalar> } }`
+([bundle authoring](../bundles.md)) — and a project overrides one under
+the step id: `steps.<project>.<step-id>.attrs.<name>: <scalar>`. The
+loader refuses an attr name no installed bundle declares for that step id
+(`undeclared attr — step <id> declares only …`), a value of the wrong type
+(an `int` attr takes a YAML integer, a `string` attr a plain string), an
+empty `attrs:` map, and any `attrs` under `default` or `task` (`default`
+and `task` take no attrs). An attrs-only entry is a present entry that
+declares no `models` level: the step's chain falls through exactly as if
+the entry were absent. Clearing a step's chain never deletes its attr
+overrides.
+
+Like the chain, the overrides are read fresh at every step dispatch
+(nothing is snapshotted at claim; a running step keeps what its dispatch
+read): the driver composes the claimed project's overrides of the bundle
+step's declared attrs, and an override whose value differs from the
+declaration's `default` renders the attr's shared material
+(`workflows/_shared/attr_<name>.md`, [bundle authoring](../bundles.md))
+into that step's prompt; a value equal to the default renders nothing. An
+invalid yaml blocks the dispatch like a chain composition failure. The
+shipped `grill` steps of `feature-full` and `autopilot` declare
+`question_batch_size` (`int`, default `0`): `0` asks every question in one
+round (today's grill), `N ≥ 1` at most N rows per round ordered by
+重点关注程度 with the mandatory proposal rows in the first round, `1` the
+one-question-at-a-time grill. It applies to the `grill` step id only
+(`grill-review` declares no attr).
 
 ### `steps.<project>.task` — the one-shot task agent
 
@@ -479,7 +580,7 @@ stderr and contributes nothing.
 
 | Key | Value | Meaning |
 |---|---|---|
-| `stack` | `go`, `npm` or `none` | Pins the analyzer (the first valid pin wins). `none` pins no analyzer: always the full tier, the conf's commands only. |
+| `stack` | `go`, `npm`, `python`, `rust` or `none` | Pins the analyzer (the first valid pin wins); it also resolves a repository holding two or more supported manifests. `none` pins no analyzer: always the full tier, the conf's commands only. |
 | `go_harness` | path | The Go acceptance harness that owns its directory; the scoped selection runs it for the tests that reference a changed path. |
 | `fast_gate` | command | Repeatable, ordered: an anonymous fast-phase command, named `fast-<i>` (the i-th `fast_gate` line). |
 | `full_command` | command | Repeatable, ordered: an anonymous full-phase command, named `full-<i>`. |
@@ -489,11 +590,14 @@ stderr and contributes nothing.
 | `check_timeout` | `<name>\|<duration>` | The named command's timeout, a positive Go duration (`90s`, `20m`, `1h30m`); the first one per name wins. Without one the JSON report's `timeout` is `null` and the consumer's own default applies. |
 | `forced_full` | glob | Repeatable: a changed path matching it forces the full tier. |
 | `module_root` | path | Repeatable: the Go spanning roots. |
-| `exclude` | glob | Repeatable: a path the full-tier triggers and the npm full standalone pass ignore. |
+| `exclude` | glob | Repeatable: a path the full-tier triggers ignore; a matching file is never a carries suite, and a changed matching path never forces full. |
 | `test_glob` | glob | Repeatable: a test-file pattern of the repository (echoed in the JSON report). |
 | `base_setup` | command | Repeatable, ordered: the setup a rerun on a base tree needs first (echoed). |
 | `runner` | `complete` | Declares that the conf's commands are the complete bar (echoed). |
 | `ci_evidence` | `<workflow>/<job>` | Repeatable: a CI job the deliver step may accept as test evidence (echoed). |
+| `e2e_runner` | command | The command that runs the carries-selected suites: the engine appends them to it, repository-relative and in stable order, as one scoped command (`e2e_runner=npm run test:e2e:all --`). The file it runs — through the npm script when the value is `npm run <script> …` — is a runner, never a suite. Without the key each suite gets the analyzer's default command (`node <suite>`, `pytest <suite>`, `cargo test --test <name>`). Echoed as `e2e_runner` (`null` when undeclared). |
+| `suite_glob` | glob | Repeatable: replaces the analyzer's suite discovery for the repository (the undeclared-suite and selection rules then apply to the files it matches). Echoed as `suite_glob`. |
+| `e2e_map` | `<glob>=<suite>` | Repeatable: declares `<glob>` as the coverage of the repository-relative `<suite>`, replacing that suite's `carries:` header outright (not merged); several lines for one suite union. A `<suite>` that is not a discovered suite forces the full tier. Echoed as `e2e_map`. |
 
 Command values — `fast_gate`, `full_command`, the command of a `check`, and
 `base_setup` — are bash: `--run` executes them with `bash -c` from the
@@ -504,8 +608,17 @@ analyzer's default commands of that phase. A `<name>` is letters, digits,
 never of the form `fast-<n>`, `full-<n>` or `scoped-<n>` (the anonymous and
 analyzer commands' names). A `check_*` line names a declared command — a
 `check` name or an anonymous `fast-<i>` / `full-<i>` — and may precede it;
-one naming no declared command is diagnosed and ignored. `pf doctor`'s
-`scoped-gates readiness` row reads this file (never executes it).
+one naming no declared command is diagnosed and ignored. The three carries
+keys fail closed instead: an empty `e2e_runner=` (or a second one, or one that
+begins with a command substitution), an empty `suite_glob=`, and an `e2e_map=`
+value that is not split by exactly one `=` into two non-empty sides are
+diagnosed, naming the line, and force the full tier for every diff — never a
+scoped tier computed as if the key were absent. An engine that predates the
+keys diagnoses them as unknown and ignores them, so a conf may declare them
+before the release ships the engine. Glob values (`forced_full`, `exclude`,
+`suite_glob`, `e2e_map`, `carries:`) are shell-case patterns: `*` crosses
+`/`. `pf doctor`'s `scoped-gates readiness` row reads this file (never
+executes it).
 
 ### `ci_evidence` — what the deliver step reads
 

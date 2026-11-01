@@ -1,16 +1,17 @@
 # Architecture — the system and the design docs' entry page
 
-Polyforge is a work-item orchestration platform with two halves: an
-**aihub** server (the work-item store, the memory store and the git
-revision chain behind them) and a **pf** work-machine binary (the CLI
-plus the daemon with the Go execution driver). The split between the
+Polyforge is a work-item orchestration platform with two halves, both
+shipped as the one **pf** binary: an **aihub** server (`pf aihub`: the
+work-item store, the memory store and the git revision chain behind
+them) and the **pf** work machine (the CLI plus `pf daemon` with the Go
+execution driver). The split between the
 halves is the [data plane vs execution plane
 split](concepts.md#data-plane-vs-execution-plane-aihub-vs-daemon) —
 the one concept this page assumes; every term a newcomer meets is
 defined on the [concepts page](concepts.md).
 
 The aihub server's only HTML face is the **read-only web console** on
-`/web/…` — a React single-page app embedded in the one aihub binary
+`/web/…` — a React single-page app embedded in the server (`pf aihub`)
 : work items, memories, machines and project-scoped
 search, all behind HTTP Basic authentication (an api key as the
 password). Everything else the server answers is the JSON API or the
@@ -47,7 +48,8 @@ code is the authority; design-doc references are for traceability:
 | `internal/common/secretpat` | The one secret-shape scanner aihub runs before storing a message (`CORE-422`). |
 | `internal/common/harness` | The closed step-harness set (`pi` \| `claude`) and the one model-candidate format `<harness>:<model>`. |
 | `internal/common/spawn` | Process-derivation contract shared by the runtime (daemon assembly) and the driver (step-process spawning). |
-| `internal/common/workflow` | The minimal workflow-bundle frontmatter read surface (defaults + per-step `model_candidates`) that drives model and harness selection, and the step-definition lookup: a bundle's own `steps/<id>.md` wins, else the shared `workflows/_shared/steps/<id>.md` (`_shared` is not a bundle; it is materialized beside the bundle). No digest contract: the bundle digest chain was deleted (polyforge#149). |
+| `internal/common/workflow` | The minimal workflow-bundle frontmatter read surface (defaults + per-step `model_candidates`, which drive model and harness selection, and per-step `vars`, which `pf file create`'s acceptance-carrier advisory reads), and the step-definition lookup: a bundle's own `steps/<id>.md` wins, else the shared `workflows/_shared/steps/<id>.md` (`_shared` is not a bundle; it is materialized beside the bundle). No digest contract: the bundle digest chain was deleted (polyforge#149). |
+| `internal/aihub` | The server assembly behind `pf aihub` (`aihub.Main`): flags, the single-active data-dir lock, the fresh-install bootstrap admin, the one-time memory content migration, the deleted-repo replay and the SIGINT/SIGTERM drain. `cmd/pf/main.go` intercepts `pf aihub` before the CLI dispatch, as it does `pf daemon`; the entry is the service host's (an operator or the container entrypoint runs it) and gives a step agent no path to aihub. |
 | `internal/aihub/core` | aihub persistent layer: SQLite store (single writer, WAL), the work-item state machine, claim/session arbitration (one live session per work item, its hashed push secret and public fingerprint), the ready queue and the admin face. |
 | `internal/aihub/git` | aihub git surface: per-work-item bare-repo lifecycle, the git-http-backend smart-protocol proxy, session-secret auth (only the work item's live session secret pushes) and the pre-receive hook enforcing the capsule-chain invariants. |
 | `internal/aihub/memory` | Core-side memory store: memories kept in the database (`memories.content`), FTS5-trigram full-text search, and the one-time content migration from the former `memory.md` files. |
@@ -66,8 +68,12 @@ code is the authority; design-doc references are for traceability:
 | `internal/polyforge/watcher` | The `pf watch` engine: decision classification (fixed-template wake-up lines) and the resident per-chat watcher with its progress file. |
 | `internal/polyforge/runtime` | Runtime lane: the work-item lifecycle manager (one actor per work item: Start/Stop/Recover/Restart), the pi-harness agent spawner, the layered (L1–L5) process cleanup and the recovery engine. |
 
-Binaries: `cmd/aihub` (server binary) and `cmd/pf` (work-machine binary:
-CLI verbs + `pf daemon`).
+Binary: `cmd/pf`, the one shipped binary — the CLI verbs, `pf daemon`
+(the work machine) and `pf aihub` (the server; the release image runs it
+as its entrypoint). The same tag is the same build for both roles, but a
+deploy of the server and an upgrade of the work machines stay separate
+decisions: a tag that changes only the daemon does not require the server
+to follow.
 
 ## The design docs — a recommended reading order
 

@@ -269,6 +269,10 @@ type AgentStartInput struct {
 	// governs the next dispatch (the manual `pf submit --models` list stays
 	// frozen). Every candidate is `<harness>:<model>` (polyforge#175).
 	Compose func() (map[string][]string, error)
+	// Attrs is the dispatch-time step attr-override composition
+	// (workspace.ComposeAttrs): called at every dispatch
+	// beside Compose, so an attr edit governs the next dispatch.
+	Attrs func() (map[string]map[string]string, error)
 	// InterruptedCause is the recovery lane's cause string when THIS
 	// derivation is a recovery re-derivation ("" on a fresh claim): the
 	// driver archives the interrupted dispatch's infra attempt from it.

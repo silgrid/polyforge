@@ -12,21 +12,21 @@ import (
 )
 
 // w157: a work item that declares a repo inventory clones ONLY the
-// declared repos. The project carries two task repos (yingfang and
+// declared repos. The project carries two task repos (demo and
 // skypilot, the production shape that motivated polyforge#157); the
-// ticket declares yingfang by name only. A real aihub, a real daemon, a
-// real submit: the capsule's repos/ holds yingfang and no skypilot.
+// ticket declares demo by name only. A real aihub, a real daemon, a
+// real submit: the capsule's repos/ holds demo and no skypilot.
 func TestW157ClaimClonesOnlyDeclaredRepos(t *testing.T) {
-	yingfang, skypilot := newTaskRemote(t), newTaskRemote(t)
+	demo, skypilot := newTaskRemote(t), newTaskRemote(t)
 	inst := newV1InstallRepos(t, []api.ProjectRepo{
-		{Name: "yingfang", URL: yingfang.url},
+		{Name: "demo", URL: demo.url},
 		{Name: "skypilot", URL: skypilot.url},
 	})
 	raw, err := inst.client.CreateWorkItem(aihubclient.CreateWorkItemRequest{
 		Project:       v1Project,
 		Goal:          "w157: only the declared repo is cloned",
 		BundleName:    strPtr("autopilot"),
-		RepoInventory: json.RawMessage(`[{"name":"yingfang"}]`),
+		RepoInventory: json.RawMessage(`[{"name":"demo"}]`),
 	})
 	if err != nil {
 		t.Fatalf("create work item: %v", err)
@@ -51,7 +51,7 @@ func TestW157ClaimClonesOnlyDeclaredRepos(t *testing.T) {
 	inst.waitWIStatus(t, wi, "wrapped", 180*time.Second)
 
 	repos := filepath.Join(d.capsuleDir(wi), "repos")
-	if _, err := os.Stat(filepath.Join(repos, "yingfang", ".git")); err != nil {
+	if _, err := os.Stat(filepath.Join(repos, "demo", ".git")); err != nil {
 		t.Fatalf("the declared repo was not cloned: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(repos, "skypilot")); !os.IsNotExist(err) {

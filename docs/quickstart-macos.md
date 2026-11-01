@@ -1,19 +1,21 @@
 # Quickstart (macOS — one Mac as one machine: local aihub + pf + daemon + lane)
 
-Everything below uses existing commands only — the macOS-native aihub
-asset from the release, the same CLI verbs, and `tools/install.sh` (a
+Everything below uses existing commands only — the macOS-native `pf`
+asset from the release (it is the CLI, the daemon and, as `pf aihub`, the
+server), the same CLI verbs, and `tools/install.sh` (a
 port conflict beware: aihub here keeps the standard port 8080 so the
 installer's config matches; use another port only if 8080 is taken —
 both sides, consistently). The terms this walkthrough uses (work item,
 project, machine, workspace, daemon, lane) are defined on the
 [concepts page](concepts.md).
 
-**1. Download both native darwin assets from the current release** —
-`aihub-darwin-arm64` (or `-amd64` on an Intel Mac) and `pf-darwin-*`:
+**1. Download the native darwin asset from the current release** —
+`pf-darwin-arm64` (or `pf-darwin-amd64` on an Intel Mac); the same binary
+runs the local server as `pf aihub`:
 
 ```
 VER=$(gh release view --repo silgrid/polyforge --json tagName -q .tagName)
-gh release download "$VER" --repo silgrid/polyforge --pattern 'aihub-darwin-*' --pattern 'pf-darwin-*' \
+gh release download "$VER" --repo silgrid/polyforge --pattern 'pf-darwin-*' \
   --dir /tmp/pf-quickstart/bin
 chmod +x /tmp/pf-quickstart/bin/*
 xattr -c /tmp/pf-quickstart/bin/*
@@ -31,7 +33,7 @@ by hand; nothing in pf starts, restarts or supervises aihub:
 
 ```
 tmux new-session -d -s aihub 'while :; do \
-  /tmp/pf-quickstart/bin/aihub-darwin-arm64 --data-dir /tmp/pf-quickstart/aihub-data \
+  /tmp/pf-quickstart/bin/pf-darwin-arm64 aihub --data-dir /tmp/pf-quickstart/aihub-data \
   --listen 127.0.0.1:8080 >> /tmp/pf-quickstart/aihub.log 2>&1; sleep 5; done'
 ```
 

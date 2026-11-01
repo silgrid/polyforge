@@ -106,12 +106,14 @@ defaults. The report of a diff and the commands to run:
   object); python3 emits it (a `pf doctor` prerequisite), and without
   python3 `--json` exits 1. Schema 1:
   `schema` (`1`), `root` (the repository's absolute path), `stack`
-  (`go|npm|none|unsupported|ambiguous`), `analyzer` (`go|npm|null`), `conf`
+  (`go|npm|python|rust|none|unsupported|ambiguous`), `analyzer`
+  (`go|npm|python|rust|null`), `conf`
   (`present|absent`), `conf_changed_in_diff` (the conf is among the changed
   paths or differs between base and HEAD), `base` and `head` (resolved shas,
   `null` when unresolved), `default_branch`, `mode`, `paths`, `commands`,
-  `test_glob`, `base_setup`, `runner` (`complete|null`), `ci_evidence` and
-  `diagnostics`. Each `commands` entry is `{name, phase, cmd, requires_env,
+  `test_glob`, `base_setup`, `runner` (`complete|null`), `ci_evidence`,
+  `e2e_runner` (the declared runner command or `null`), `suite_glob`,
+  `e2e_map` and `diagnostics`. Each `commands` entry is `{name, phase, cmd, requires_env,
   requires_cmd, timeout, source}`: `phase` is `fast`, `full` or `scoped` (the
   analyzer's selection), `cmd` is the `bash -c` string run from the
   repository root (no leading `cd` to the repository), `timeout` is the
@@ -121,14 +123,16 @@ defaults. The report of a diff and the commands to run:
   the line report of one invocation carry the same mode, paths and commands
   in the same order.
 - **Stack detection, conf first.** `go.mod` selects the Go analyzer,
-  `package.json` the npm analyzer. A `stack=` pin in the conf overrides
-  detection (it resolves a repo that carries both), and `stack=none` pins "no
-  analyzer". The conf's commands are reported for every stack: with no
-  analyzer — `stack=none`, an unsupported stack (neither manifest), an
-  unpinned multi-manifest repo, or an npm manifest whose scripts cannot be
-  read — the report is always `mode: full` with the conf's commands only
-  (none at all without a conf), exits 0 and names the reason on stderr. A
-  Python, Helm or Rust repository therefore declares its bar in the conf. A
+  `package.json` the npm analyzer, `pyproject.toml` or `requirements.txt` the
+  python analyzer and `Cargo.toml` the rust analyzer. A `stack=` pin in the
+  conf overrides detection (it resolves a repo that carries two or more of
+  them), and `stack=none` pins "no analyzer". The conf's commands are reported
+  for every stack: with no analyzer — `stack=none`, an unsupported stack (no
+  supported manifest), an unpinned multi-manifest repo (two or more supported
+  manifests), or an npm manifest whose scripts cannot be read — the report is
+  always `mode: full` with the conf's commands only (none at all without a
+  conf), exits 0 and names the reason on stderr. A Helm or other-stack
+  repository therefore declares its bar in the conf. A
   repository whose manifest's analyzer does not cover its whole bar (a Go
   module that also ships Python or shell CI) adds the missing commands to the
   conf — a phase's conf lines replace that phase's defaults, so it restates
@@ -140,12 +144,13 @@ defaults. The report of a diff and the commands to run:
   so there is no trailing comment on a value line) and is never
   shell-evaluated. Its keys, each with its exact form, are listed once in
   [the config reference](reference/config.md#polyforgeverify-scopeconf--the-verification-bar):
-  the analyzer pin `stack=go|npm|none`, `go_harness=`, the commands
+  the analyzer pin `stack=go|npm|python|rust|none`, `go_harness=`, the commands
   (anonymous `fast_gate=` / `full_command=` lines, named
   `check=<name>|<fast|full>|<command>` lines, and their
   `check_requires_env=` / `check_requires_cmd=` / `check_timeout=`
   declarations), the tier triggers `forced_full=`, `module_root=`,
-  `exclude=`, and the keys the engine only echoes in its JSON report
+  `exclude=`, the carries keys `e2e_runner=`, `suite_glob=` and `e2e_map=`
+  (below), and the keys the engine only echoes in its JSON report
   (`test_glob=`, `base_setup=`, `runner=complete`, `ci_evidence=`). Any
   fast-phase line replaces the analyzer's default fast gates and any
   full-phase line its default full tail; a phase's lines keep file order. The
@@ -195,19 +200,41 @@ defaults. The report of a diff and the commands to run:
   and the engine adds `E2E_RUN='^(...)$' sh <path>` with the test names whose
   source references a changed path. The filename is never assumed: a
   repository that ships a `test/e2e-parallel.sh` without declaring it still
-  gets the ordinary-package behavior.
+  gets the ordinary-package behavior. The Go analyzer never reads `carries:`
+  headers: its harness selection stays the source-reference one above.
 - **npm scoped selection and full tier.** The npm analyzer reads the scripts
   `package.json` actually declares: it reports `npm run lint` and `npm test`
   only when those scripts exist, and `tsc --noEmit` only when TypeScript is
   configured (`tsconfig.json` or a TypeScript dependency). It installs with
-  `npm ci` only when `node_modules/` is absent and selects non-browser
-  `e2e/*.mjs` suites that reference a changed path; imported helper modules
-  are excluded from both the selection and the standalone pass. The full tier
-  reports every declared script whose command runs an `e2e/*.mjs` suite and
-  then the remaining standalone suites, so it stays a superset of the scoped
-  tier. `package.json`, its lockfile, `tsconfig*` and lint configs force
-  `full`, augmented by the conf's `forced_full=` globs; an `exclude=` glob is
-  a repo-specific full-pass omission.
+  `npm ci` only when `node_modules/` is absent and selects its `e2e/*.mjs`
+  suites through the carries layer (below) — never by a textual reference to
+  a changed path. The full tier reports every declared script whose command
+  runs an `e2e/*.mjs` suite and then the remaining suites (the carries
+  layer's suite set: no imported helper, no `exclude=` match, no
+  `e2e_runner=` target), so it stays a superset of the scoped tier.
+  `package.json`, its lockfile, `tsconfig*` and lint configs force `full`,
+  augmented by the conf's `forced_full=` globs; an `exclude=` glob is a
+  repo-specific omission.
+- **python scoped selection and full tier.** The python analyzer's fast gate
+  is `python -m compileall -q`. Its scoped tier adds `pytest <files>` for the
+  unit tests (pytest-collected `test_*.py` / `*_test.py` files outside the
+  suite set) that import a changed module — directly, or through other
+  repository modules; imports are scanned statically and resolved from the
+  repository root, `src/`, or beside the importer — and then the carries
+  suites. A changed module no test reaches is a low-confidence scope and
+  falls back to `full` with a diagnostic, never a guessed narrow set. The
+  full tier is `pytest`. `pyproject.toml`, `requirements*.txt`, `setup.py`,
+  `setup.cfg`, `pytest.ini`, `tox.ini` and any `conftest.py` force `full`.
+- **rust scoped selection and full tier.** The rust analyzer's fast gate is
+  `cargo build --all-targets`. It reads the module tree from `mod <name>;`
+  declarations and adds `cargo test --lib -- <path>::…` (or `--bins` for a
+  binary crate) for the modules that contain unit tests and contain or `use`
+  (`crate::<path>`) a changed module, then the carries suites. A changed
+  file no crate's module tree reaches, a changed crate root
+  (`src/lib.rs`, `src/main.rs`), or a changed module no unit test or
+  integration test reaches falls back to `full` with a diagnostic. The full
+  tier is `cargo test`. `Cargo.toml`, `Cargo.lock`, `build.rs`, the
+  toolchain file and `.cargo/` force `full`.
 - **Zero-config defaults.** With no conf the Go analyzer runs the three
   generic fast gates and a generic `go test` full tail; a Go change spanning
   two or more first-level directories forces `full`, while pure markdown/docs
@@ -233,10 +260,6 @@ defaults. The report of a diff and the commands to run:
   of every declared job for exactly the pushed head then stands in for the
   re-run of the carried test bar, while a repository without the key — this
   one has no CI — keeps the re-run ([config reference](reference/config.md)).
-- **Extension point.** A new stack analyzer (Cargo, pyproject, …) is a future
-  engine addition documented here; there is no stub analyzer today. A
-  Cargo-only repository has no analyzer: it verifies on the full tier with
-  the commands its conf declares, and with none when it has no conf.
 - **The mechanical/judgment split.** The `verification` step runs the bar
   through one call, `pf verify-run`: the merge of the latest default branch,
   the engine's plan per touched repo, the whole plan (never stopping at the
@@ -246,3 +269,77 @@ defaults. The report of a diff and the commands to run:
   binding decides, the scope declaration and the verdict. A touched repo the
   engine plans nothing for is listed unplanned and its bar stays the agent's
   to derive — declaring the bar in the repo's conf removes that case.
+
+### Carries — declaring what an e2e suite covers
+
+The npm, python and rust analyzers select e2e/acceptance suites by
+declaration, not by guessing. A suite declares the repository paths it covers
+in its **opening comment block** — the leading blank and comment lines before
+its first line of code:
+
+```js
+// carries: components/FilePanel*, lib/file-panel*
+```
+
+(`# carries:` in a python suite; several `carries:` lines union; globs are
+separated by commas or blanks and use the conf's shell-case syntax, `*`
+crossing `/`.) A `carries:` line after the first line of code is not a
+declaration.
+
+- **Suites.** The analyzer's default discovery — npm `e2e/*.mjs`, python
+  `test_*.py` / `*_test.py` under `e2e/` or `tests/e2e/` (pytest's collection
+  rule: `conftest.py` and `__init__.py` are not suites), rust top-level
+  `tests/*.rs` (`tests/common/mod.rs` is a helper) — or the conf's
+  `suite_glob=` globs, minus `exclude=` matches and the `e2e_runner=` target.
+  A discovered file that another module imports (relative JS imports, python
+  imports, rust `mod` declarations, followed transitively) and that declares
+  nothing is a helper, not a suite. The layer is on only in a repository that
+  holds at least one suite; a suite-less repository's report is unchanged.
+- **Selection.** A changed path selects every suite whose globs match it; a
+  changed suite selects itself; a changed helper selects every suite that
+  imports it, transitively. The selected suites run as one `e2e_runner=`
+  command (the suites appended in stable order) or, without the key, as one
+  `node <suite>`, `pytest <suite>` or `cargo test --test <name>` each — after
+  the analyzer's own scoped commands.
+- **Exemptions.** Only documentation paths (`*.md`, `*.txt`, `docs/`, …),
+  `exclude=` matches, a changed suite itself and the helpers suites import are
+  exempt from coverage. A unit test changed beside its source is not: a glob
+  must cover it.
+- **Fail closed.** Any one of these makes the report `mode: full`, each named
+  on stderr and in the JSON `diagnostics`: an undeclared suite anywhere in the
+  repository; a malformed declaration (an empty `carries:` value, or a
+  `carries` line without its colon); an unresolvable import of the graph; an
+  `e2e_map=` naming no discovered suite; a changed path that is neither
+  documentation, an `exclude=` match, a suite, a helper nor covered by a
+  declaration; and an empty or malformed carries key in the conf.
+- **The conf keys.** `e2e_runner=` (the runner the selected suites are
+  appended to), `suite_glob=` (replaces discovery) and `e2e_map=<glob>=<suite>`
+  (replaces one suite's header outright), each with its exact form in [the
+  config reference](reference/config.md#polyforgeverify-scopeconf--the-verification-bar).
+- **Authored suites.** A suite the feature lane's `e2e-author` step authors
+  carries a header derived mechanically from the plan's declared changed
+  paths ([its step contract](../workflows/feature-full/steps/e2e-author.md),
+  "Carries header"); `pf doctor`'s `scoped-gates readiness` row names a
+  repository's undeclared suites.
+
+### Analyzer contract
+
+Every analyzer has the same three-tier shape, and a future stack joins by
+following it in the engine itself (there is no plugin loader or hook):
+
+1. **Detection.** One manifest selects it; two or more supported manifests
+   without a `stack=` pin are `ambiguous` and full with the conf's commands
+   only. The manifest and the stack's build configuration force `full`.
+2. **Fast.** Cheap static gates that need no test run (`go build`/`vet`/
+   `gofmt`, npm lint/typecheck/unit, `python -m compileall -q`,
+   `cargo build --all-targets`), replaced wholesale by any conf fast line.
+3. **Scoped.** The unit tests a static scan resolves for the diff, then the
+   carries-selected suites (the Go analyzer keeps its own harness selection).
+   When the scan cannot resolve a changed path's affected tests with
+   confidence it reports `full` with a diagnostic, never a guessed narrow
+   set.
+4. **Full.** The stack's whole test command (`go test ./...`, the npm scripts
+   and suites, `pytest`, `cargo test`), replaced wholesale by any conf full
+   line.
+5. **Suites.** A default discovery rule, an import scan that resolves helpers
+   (an unresolvable import is full), and a default per-suite command.

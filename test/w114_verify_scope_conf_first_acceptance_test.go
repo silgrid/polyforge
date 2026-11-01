@@ -75,15 +75,19 @@ type w114vsReport struct {
 	BaseSetup         []string        `json:"base_setup"`
 	Runner            *string         `json:"runner"`
 	CIEvidence        []string        `json:"ci_evidence"`
+	E2ERunner         *string         `json:"e2e_runner"`
+	SuiteGlob         []string        `json:"suite_glob"`
+	E2EMap            []string        `json:"e2e_map"`
 	Diagnostics       []string        `json:"diagnostics"`
 }
 
 // w114vsTopKeys is the contract's key set (plus ci_evidence, the echo the
-// deliver step's conf key gets).
+// deliver step's conf key gets, and the carries keys' echoes e2e_runner,
+// suite_glob and e2e_map).
 var w114vsTopKeys = []string{
 	"analyzer", "base", "base_setup", "ci_evidence", "commands", "conf",
-	"conf_changed_in_diff", "default_branch", "diagnostics", "head", "mode",
-	"paths", "root", "runner", "schema", "stack", "test_glob",
+	"conf_changed_in_diff", "default_branch", "diagnostics", "e2e_map", "e2e_runner", "head", "mode",
+	"paths", "root", "runner", "schema", "stack", "suite_glob", "test_glob",
 }
 
 var w114vsCommandKeys = []string{"cmd", "name", "phase", "requires_cmd", "requires_env", "source", "timeout"}
@@ -100,7 +104,7 @@ func w114vsKeys(t *testing.T, raw json.RawMessage) []string {
 		keys = append(keys, k)
 		// every array field must be an array (never null)
 		switch k {
-		case "paths", "commands", "test_glob", "base_setup", "ci_evidence", "diagnostics", "requires_env", "requires_cmd":
+		case "paths", "commands", "test_glob", "base_setup", "ci_evidence", "suite_glob", "e2e_map", "diagnostics", "requires_env", "requires_cmd":
 			if strings.TrimSpace(string(v)) == "null" || !strings.HasPrefix(strings.TrimSpace(string(v)), "[") {
 				t.Fatalf("%q must be an array, got %s", k, v)
 			}
@@ -159,12 +163,12 @@ func w114vsJSON(t *testing.T, dir string, env []string, args ...string) w114vsRe
 		t.Fatalf("root = %q, want the target repository %q", r.Root, dir)
 	}
 	switch r.Stack {
-	case "go", "npm", "none", "unsupported", "ambiguous":
+	case "go", "npm", "python", "rust", "none", "unsupported", "ambiguous":
 	default:
-		t.Fatalf("stack %q is outside go|npm|none|unsupported|ambiguous", r.Stack)
+		t.Fatalf("stack %q is outside go|npm|python|rust|none|unsupported|ambiguous", r.Stack)
 	}
-	if r.Analyzer != nil && *r.Analyzer != "go" && *r.Analyzer != "npm" {
-		t.Fatalf("analyzer %q is outside go|npm|null", *r.Analyzer)
+	if r.Analyzer != nil && *r.Analyzer != "go" && *r.Analyzer != "npm" && *r.Analyzer != "python" && *r.Analyzer != "rust" {
+		t.Fatalf("analyzer %q is outside go|npm|python|rust|null", *r.Analyzer)
 	}
 	if r.Conf != "present" && r.Conf != "absent" {
 		t.Fatalf("conf %q is neither present nor absent", r.Conf)
@@ -254,26 +258,26 @@ func w114vsPlan(r w114vsReport) []string {
 // diff included; an unpinned multi-manifest repository likewise gets its
 // conf's commands and no analyzer default; with no conf there are none.
 func TestW114VerifyScopeStacklessConfEmitsCommands(t *testing.T) {
-	conf := "fast_gate=cargo fmt --check\n" +
-		"full_command=cargo test --workspace\n" +
-		"check=clippy|fast|cargo clippy -- -D warnings\n" +
+	conf := "fast_gate=mix format --check-formatted\n" +
+		"full_command=mix test\n" +
+		"check=credo|fast|mix credo --strict\n" +
 		"check=py|full|python3 -m pytest -q\n"
 	dir, base := w25e2eFixture(t, map[string]string{
-		"Cargo.toml":                   "[package]\nname = \"w114\"\nversion = \"0.1.0\"\n",
-		"src/lib.rs":                   "pub fn one() -> u32 { 1 }\n",
+		"mix.exs":                      "defmodule W114.MixProject do\nend\n",
+		"lib/one.ex":                   "defmodule One do\nend\n",
 		".polyforge/verify-scope.conf": conf,
 	})
-	w25e2eWrite(t, dir, "src/lib.rs", "pub fn one() -> u32 { 2 }\n")
-	w25e2eCommit(t, dir, "change src/lib.rs")
-	want := []string{"cargo fmt --check", "cargo clippy -- -D warnings", "cargo test --workspace", "python3 -m pytest -q"}
+	w25e2eWrite(t, dir, "lib/one.ex", "defmodule One do\n  def one, do: 2\nend\n")
+	w25e2eCommit(t, dir, "change lib/one.ex")
+	want := []string{"mix format --check-formatted", "mix credo --strict", "mix test", "python3 -m pytest -q"}
 
 	out, errb, code := w25e2eRun(t, dir, nil)
 	if code != 0 {
 		t.Fatalf("a stackless repo with a conf must exit 0, got %d (%s)", code, errb)
 	}
 	r := w25e2eParse(t, out)
-	if r.mode != "full" || strings.Join(r.paths, ",") != "src/lib.rs" || !reflect.DeepEqual(r.commands, want) {
-		t.Fatalf("stackless conf report = mode %q paths %v commands %q, want full [src/lib.rs] %q", r.mode, r.paths, r.commands, want)
+	if r.mode != "full" || strings.Join(r.paths, ",") != "lib/one.ex" || !reflect.DeepEqual(r.commands, want) {
+		t.Fatalf("stackless conf report = mode %q paths %v commands %q, want full [lib/one.ex] %q", r.mode, r.paths, r.commands, want)
 	}
 	if !strings.Contains(errb, "no supported stack manifest") || !strings.Contains(errb, "conf's commands only") {
 		t.Fatalf("the stackless fallback must say it reports the conf's commands only: %q", errb)
@@ -289,9 +293,9 @@ func TestW114VerifyScopeStacklessConfEmitsCommands(t *testing.T) {
 		t.Fatalf("stackless JSON = stack %q analyzer %v conf %q, want unsupported/null/present", j.Stack, j.Analyzer, j.Conf)
 	}
 	wantPlan := []string{
-		"fast-1:fast:conf:cargo fmt --check",
-		"clippy:fast:conf:cargo clippy -- -D warnings",
-		"full-1:full:conf:cargo test --workspace",
+		"fast-1:fast:conf:mix format --check-formatted",
+		"credo:fast:conf:mix credo --strict",
+		"full-1:full:conf:mix test",
 		"py:full:conf:python3 -m pytest -q",
 	}
 	if got := w114vsPlan(j); !reflect.DeepEqual(got, wantPlan) {
@@ -313,7 +317,7 @@ func TestW114VerifyScopeStacklessConfEmitsCommands(t *testing.T) {
 	}
 
 	// No conf: still no commands, and the diagnostic says so.
-	bare, _ := w25e2eFixture(t, map[string]string{"Cargo.toml": "[package]\nname = \"w114\"\n"})
+	bare, _ := w25e2eFixture(t, map[string]string{"mix.exs": "defmodule W114.MixProject do\nend\n"})
 	out, errb, code = w25e2eRun(t, bare, nil)
 	if code != 0 {
 		t.Fatalf("a stackless repo without a conf must exit 0, got %d", code)
@@ -386,6 +390,9 @@ func TestW114VerifyScopeJSONContract(t *testing.T) {
 		"runner=complete",
 		"ci_evidence=ci.yml/test",
 		"ci_evidence=ci.yml/e2e",
+		"e2e_runner=sh run-e2e.sh --",
+		"suite_glob=checks/*.sh",
+		"e2e_map=lib/*=checks/a.sh",
 		"mystery=1",
 	}, "\n") + "\n"
 	files := w25e2eGoModule("fixture.test/w114")
@@ -425,6 +432,10 @@ func TestW114VerifyScopeJSONContract(t *testing.T) {
 		!reflect.DeepEqual(s.CIEvidence, []string{"ci.yml/test", "ci.yml/e2e"}) {
 		t.Fatalf("conf echoes = test_glob %q base_setup %q runner %v ci_evidence %q", s.TestGlob, s.BaseSetup, s.Runner, s.CIEvidence)
 	}
+	if s.E2ERunner == nil || *s.E2ERunner != "sh run-e2e.sh --" ||
+		!reflect.DeepEqual(s.SuiteGlob, []string{"checks/*.sh"}) || !reflect.DeepEqual(s.E2EMap, []string{"lib/*=checks/a.sh"}) {
+		t.Fatalf("carries echoes = e2e_runner %v suite_glob %q e2e_map %q", s.E2ERunner, s.SuiteGlob, s.E2EMap)
+	}
 	if len(s.Diagnostics) == 0 || !strings.Contains(strings.Join(s.Diagnostics, "\n"), "unknown key 'mystery'") {
 		t.Fatalf("the unknown-key diagnostic must be collected: %q", s.Diagnostics)
 	}
@@ -448,8 +459,10 @@ func TestW114VerifyScopeJSONContract(t *testing.T) {
 	w25e2eWrite(t, zDir, "leaf/leaf.go", "package leaf\n\nfunc Leaf() int { return 3 }\n")
 	w25e2eCommit(t, zDir, "change leaf")
 	z := w114vsJSON(t, zDir, nil)
-	if z.Conf != "absent" || z.Runner != nil || len(z.TestGlob) != 0 || len(z.BaseSetup) != 0 || len(z.CIEvidence) != 0 {
-		t.Fatalf("zero-config JSON = conf %q runner %v test_glob %q base_setup %q ci_evidence %q", z.Conf, z.Runner, z.TestGlob, z.BaseSetup, z.CIEvidence)
+	if z.Conf != "absent" || z.Runner != nil || len(z.TestGlob) != 0 || len(z.BaseSetup) != 0 || len(z.CIEvidence) != 0 ||
+		z.E2ERunner != nil || len(z.SuiteGlob) != 0 || len(z.E2EMap) != 0 {
+		t.Fatalf("zero-config JSON = conf %q runner %v test_glob %q base_setup %q ci_evidence %q e2e_runner %v suite_glob %q e2e_map %q",
+			z.Conf, z.Runner, z.TestGlob, z.BaseSetup, z.CIEvidence, z.E2ERunner, z.SuiteGlob, z.E2EMap)
 	}
 	for _, c := range z.Commands {
 		if c.Timeout != nil {

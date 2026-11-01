@@ -12,14 +12,14 @@ harness on `PATH` with a model configured — the daemon's execution driver
 spawns the real step processes through it. All commands below run from the repo root; everything
 local lands under `/tmp/pf-quickstart` (substitute your own paths).
 
-**1. Build the two binaries:**
+**1. Build pf** (the one binary: the CLI, the daemon and, as `pf aihub`,
+the server):
 
 ```
-go build -o bin/aihub ./cmd/aihub
 go build -o bin/pf ./cmd/pf
 ```
 
-**2. Start aihub on a scratch data dir and port.** On first start over an
+**2. Start aihub (`pf aihub`) on a scratch data dir and port.** On first start over an
 empty data dir, aihub seeds a bootstrap admin (`usr_root`) and writes its
 API key to `<data-dir>/bootstrap-admin.key` (mode 0600; the log names the
 file, never the key). Copy the key, then delete the file — the key is not
@@ -27,7 +27,7 @@ stored anywhere else:
 
 ```
 mkdir -p /tmp/pf-quickstart/aihub-data
-bin/aihub --data-dir /tmp/pf-quickstart/aihub-data --listen 127.0.0.1:18420 \
+bin/pf aihub --data-dir /tmp/pf-quickstart/aihub-data --listen 127.0.0.1:18420 \
   > /tmp/pf-quickstart/aihub.log 2>&1 &
 cat /tmp/pf-quickstart/aihub-data/bootstrap-admin.key
 ```

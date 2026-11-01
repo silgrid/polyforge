@@ -4,6 +4,9 @@ Execution-plane verb: routed to the local daemon (the wrap route). `wrap`
 is a terminal outcome: the session ends for good, the capsule is
 sealed read-only and pushed, and no re-claim happens automatically.
 
+Before wrapping a work item whose close restates a repo's state, sync that clone first:
+SKILL.md session rule 8.
+
 **A work item with no bundle** (a design, decision or tracking ticket
 that never runs a workflow) has no daemon job. When the daemon is not
 running or has no local job for it, the CLI reads it at AIHub; if it has no bundle and is

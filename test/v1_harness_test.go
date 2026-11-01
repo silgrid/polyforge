@@ -1,9 +1,9 @@
 package test
 
 // v1_harness_test.go: the v1 end-to-end dogfood harness. Mirrors the v0
-// usage_* discipline: build the REAL binaries (aihub, pf, fakepi) once,
+// usage_* discipline: build the REAL binaries (pf, fakepi) once,
 // exec them as real OS processes, and assert against real wire/git/
-// process state only — aihub as a process on a free loopback port, the
+// process state only — aihub as a `pf aihub` process on a free loopback port, the
 // daemon as a `pf daemon` process on its own UDS, the pf CLI as the real
 // binary, fakepi as the WI-agent stand-in the daemon derives via
 // --pi-bin, and the capsule git chain verified with real git against
@@ -60,15 +60,15 @@ func v1Root(t *testing.T) string {
 	return root
 }
 
-// v1Bins builds aihub, pf and fakepi into a shared temp dir. When
-// PFV1_COVER_BINS is set, the binaries are built INSTRUMENTED
-// (-cover -coverpkg=./internal/...) and GOCOVERDIR is pointed at
-// <dir>/covdata so every spawned aihub/daemon/CLI/agent process emits
-// its coverage there — the manual instrumented round for the e2e
-// coverage report (merge with `go tool covdata textfmt`).
+// v1Bins builds pf (which also serves `pf aihub`) and fakepi into a
+// shared temp dir. When PFV1_COVER_BINS is set, the binaries are built
+// INSTRUMENTED (-cover -coverpkg=./internal/...) and GOCOVERDIR is
+// pointed at <dir>/covdata so every spawned pf aihub/daemon/CLI/agent
+// process emits its coverage there — the manual instrumented round for
+// the e2e coverage report (merge with `go tool covdata textfmt`).
 //
 // PFV1_PREBUILT_BINS=<dir> (test/e2e-parallel.sh) skips the build: the
-// three binaries are hard-linked (copied across filesystems) into this
+// two binaries are hard-linked (copied across filesystems) into this
 // run's own dir, so the bin sweep's exe-path match still sees only the
 // processes this test binary started.
 func v1Bins(t *testing.T) string {
@@ -86,7 +86,7 @@ func v1Bins(t *testing.T) string {
 			return
 		}
 		if pre := os.Getenv("PFV1_PREBUILT_BINS"); pre != "" && os.Getenv("PFV1_COVER_BINS") == "" {
-			for _, name := range []string{"aihub", "pf", "fakepi"} {
+			for _, name := range []string{"pf", "fakepi"} {
 				if v1BinErr = linkOrCopy(filepath.Join(pre, name), filepath.Join(dir, name)); v1BinErr != nil {
 					return
 				}
@@ -95,10 +95,10 @@ func v1Bins(t *testing.T) string {
 			return
 		}
 		build := exec.Command("go", "build", "-o", dir+"/",
-			"./cmd/aihub", "./cmd/pf", "./test/fakepi")
+			"./cmd/pf", "./test/fakepi")
 		if os.Getenv("PFV1_COVER_BINS") != "" {
 			build = exec.Command("go", "build", "-cover", "-coverpkg=./...",
-				"-o", dir+"/", "./cmd/aihub", "./cmd/pf", "./test/fakepi")
+				"-o", dir+"/", "./cmd/pf", "./test/fakepi")
 			covDir := filepath.Join(dir, "covdata")
 			if err := os.MkdirAll(covDir, 0o755); err != nil {
 				v1BinErr = err
@@ -276,7 +276,7 @@ func newV1InstallRepos(t *testing.T, repos []api.ProjectRepo) *v1Install {
 		inst.port = ln.Addr().(*net.TCPAddr).Port
 		ln.Close()
 		inst.url = "http://127.0.0.1:" + strconv.Itoa(inst.port)
-		cmd := exec.Command(filepath.Join(bins, "aihub"),
+		cmd := exec.Command(filepath.Join(bins, "pf"), "aihub",
 			"--data-dir", inst.dataDir, "--listen", "127.0.0.1:"+strconv.Itoa(inst.port))
 		cmd.Stdout, cmd.Stderr = logf, logf
 		inst.startAihubProc(t, cmd, logf)
@@ -303,7 +303,7 @@ func newV1InstallRepos(t *testing.T, repos []api.ProjectRepo) *v1Install {
 	return inst
 }
 
-// startAihubProc starts one aihub process in its own process group and
+// startAihubProc starts one `pf aihub` process in its own process group and
 // registers its teardown (also on every t.Fatal path after this point):
 // SIGTERM first — the server's own graceful path, which also flushes any
 // instrumented-coverage data at exit — then a group SIGKILL fallback.
@@ -417,7 +417,7 @@ func v1ReadString(p string) string {
 	return string(raw)
 }
 
-// stopAihub terminates the REAL aihub process: SIGTERM (the server's
+// stopAihub terminates the REAL `pf aihub` process: SIGTERM (the server's
 // own graceful shutdown path) with a hard-kill fallback. Idempotent.
 // The data dir survives, so the bare repos and the whole hub state are
 // exactly what the restart re-opens.
@@ -429,7 +429,7 @@ func (u *v1Install) stopAihub() {
 	u.aihubCmd, u.aihubExited = nil, nil
 }
 
-// restartAihub re-execs the aihub on the SAME data dir and port (the
+// restartAihub re-execs `pf aihub` on the SAME data dir and port (the
 // outage-scenario recovery lever) and waits for its HTTP face. The data
 // dir persists across stopAihub, so the bare repos the agents push to
 // keep their history and their pre-receive seq bookkeeping.
@@ -442,7 +442,7 @@ func (u *v1Install) restartAihub() {
 	if err != nil {
 		u.t.Fatal(err)
 	}
-	cmd := exec.Command(filepath.Join(u.binDir, "aihub"),
+	cmd := exec.Command(filepath.Join(u.binDir, "pf"), "aihub",
 		"--data-dir", u.dataDir, "--listen", "127.0.0.1:"+strconv.Itoa(u.port))
 	cmd.Stdout, cmd.Stderr = logf, logf
 	u.startAihubProc(u.t, cmd, logf)
@@ -891,25 +891,43 @@ func (d *v1Daemon) launch() {
 // the face is serving, which happens only after recovery finished.
 func (d *v1Daemon) waitUp() {
 	d.t.Helper()
-	probe := cli.NewDaemonClient(d.sock)
+	answered, exited, werr := awaitAnsweredFace(d.sock, time.Now().Add(20*time.Second), d.waitedExit)
+	switch {
+	case exited:
+		d.cmd = nil // self-exited: the cleanup stop() must no-op
+		d.t.Fatalf("daemon exited during startup: %v (log tail: %s)", werr, d.logTail())
+	case !answered:
+		d.t.Fatalf("daemon UDS never answered on %s (log tail: %s)", d.sock, d.logTail())
+	}
+	// A fresh client, deliberately not the probe: the probe's short
+	// per-request timeout must never constrain the test's later requests.
+	d.client = cli.NewDaemonClient(d.sock)
+}
+
+// awaitAnsweredFace is the one readiness probe every daemon harness
+// shares (see waitUp for why a bare dial is not readiness): it polls one
+// GET /status on sock every 25ms until a request is answered, the process
+// exit signal fires (exited, with its Wait error) or deadline passes
+// (neither). The probe client's 1s timeout bounds ONE probe request,
+// never readiness — deadline is the readiness bound. The probe is never
+// handed to the caller: a caller that needs a client builds its own.
+func awaitAnsweredFace(sock string, deadline time.Time, exit <-chan error) (answered, exited bool, werr error) {
+	probe := cli.NewDaemonClient(sock)
 	probe.HTTP.Timeout = time.Second
-	deadline := time.Now().Add(20 * time.Second)
 	for {
 		if _, err := probe.Status(); err == nil {
-			break
+			return true, false, nil
 		}
 		select {
-		case werr := <-d.waitedExit:
-			d.cmd = nil // self-exited: the cleanup stop() must no-op
-			d.t.Fatalf("daemon exited during startup: %v (log tail: %s)", werr, d.logTail())
+		case werr := <-exit:
+			return false, true, werr
 		default:
 		}
 		if time.Now().After(deadline) {
-			d.t.Fatalf("daemon UDS never answered on %s (log tail: %s)", d.sock, d.logTail())
+			return false, false, nil
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	d.client = cli.NewDaemonClient(d.sock)
 }
 
 // logTail returns the last ~4KB of the daemon log for failure messages.

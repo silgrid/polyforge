@@ -1,10 +1,10 @@
 package server
 
 // web_shell.go: the console's document and asset serving. The SPA
-// builds into webui/dist and is embedded in the aihub binary; every
-// authenticated document path answers the ONE shell (dist/index.html,
-// 200 — the client router resolves deep links), and /web/assets/...
-// answers the embedded assets by their exact name. A missing asset is
+// builds into webui/dist and is embedded in the pf binary (served by
+// `pf aihub`); every authenticated document path answers the ONE shell
+// (dist/index.html, 200 — the client router resolves deep links), and
+// /web/assets/... answers the embedded assets by their exact name. A missing asset is
 // 404 bytes, never the shell; no redirect is ever emitted.
 
 import (

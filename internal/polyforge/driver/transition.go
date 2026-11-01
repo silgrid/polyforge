@@ -785,6 +785,16 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 		if d.rootCauseFalseLocked(req.StepID, out) {
 			return d.applyRootCauseFalseLocked(req.StepID, st, res, out, info)
 		}
+		// The first repro result records the task-repo heads it ran on
+		// (pre-read outside the lock) as the pre-fix base — before the
+		// not-reproduced park below, because the owner's `continue` there
+		// accepts that held report as the repro. A re-run-repro answer
+		// discards that report, and routeDeadEndLocked clears these heads
+		// with it (before any fix), so the recorded heads are always the
+		// first ACCEPTED repro's.
+		if req.StepID == reproStepID && d.exec.PreFixHeads == nil && len(req.ReproHeads) > 0 {
+			d.exec.PreFixHeads = req.ReproHeads
+		}
 		// A repro that honestly reports the bug does not reproduce is not
 		// accepted into the diagnosis: the owner is asked (bug-fix dead
 		// end) — re-run repro with more evidence, continue, or cancel.
@@ -805,9 +815,6 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 			}
 			info.question = true
 			return nil
-		}
-		if req.StepID == reproStepID && d.exec.PreFixHeads == nil && len(req.ReproHeads) > 0 {
-			d.exec.PreFixHeads = req.ReproHeads
 		}
 		// The needs_code_change self-report rewind (polyforge#222): a
 		// completed result of a LIGHT re-entry carrying
@@ -1148,6 +1155,20 @@ func (d *Driver) applyRootCauseFalseLocked(stepID string, st *capsule.Step, res 
 		rootCauseStepID+"` for a new diagnosis and a fresh fix", info)
 }
 
+// unclassedRewind reports whether any ledger record carries a class
+// outside the accounting vocabulary (applyGateFailLocked's fail-closed
+// transition check; deleted with it).
+func unclassedRewind(recs []capsule.RewindRecord) bool {
+	for _, r := range recs {
+		switch r.Class {
+		case capsule.RewindCharged, capsule.RewindUncharged, capsule.RewindOwner:
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 // applyGateFailLocked consumes one gate FAIL policy (01 §6.2): a gate
 // without on_fail ends the workflow failed_gate (WF-102); a gate with
 // on_fail: rewind first checks BOTH bounds — a hit ends
@@ -1196,22 +1217,26 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 	// gate→target edge over the CHARGED records alone — two gates sharing
 	// one target no longer eat each other's slots. A ledger that cannot
 	// attribute its own count (a pre-w69 shape with no per-record
-	// history) proves no per-edge quota, so this rewind fails closed — no
-	// compat path, no guess at the attribution.
+	// history) or a record's class (a record written with `charged: bool`
+	// before the class ledger, read here as class "") proves no per-edge
+	// quota, so this rewind fails closed — no compat path, no guess at
+	// the attribution.
 	//
 	// Transition code (AGENTS.md): only an execution.json written before
-	// the per-edge ledger shipped can carry that shape. Delete this check,
-	// its rewind_ledger_unattributable event and
-	// TestRewindOldLedgerShapeFailsClosed once no capsule claimed before
+	// the per-edge ledger or the class ledger
+	// shipped can carry those shapes. Delete this check,
+	// its rewind_ledger_unattributable event,
+	// TestRewindOldLedgerShapeFailsClosed and
+	// TestRewindUnclassedRecordFailsClosed once no capsule claimed before
 	// the first release carrying is still in flight (every
 	// such work item wrapped, cancelled or re-filed) — and with them the
 	// no-record note in applySelfReportRewindLocked, whose case is then
 	// unreachable.
-	if d.exec.RewindStats.Count > int64(len(d.exec.RewindStats.Rewinds)) {
+	if d.exec.RewindStats.Count > int64(len(d.exec.RewindStats.Rewinds)) || unclassedRewind(d.exec.RewindStats.Rewinds) {
 		d.exec.WorkflowStatus = StatusFailedRewindExhausted
 		info.extra = append(info.extra, appliedEvent{"rewind_ledger_unattributable", map[string]any{
 			"spawn_n": d.spawnN, "gate": gate, "target": target, "count": d.exec.RewindStats.Count,
-			"detail": "the rewind ledger predates per-edge accounting and cannot attribute its count, so no per-edge quota can be proven; the workflow fails closed",
+			"detail": "the rewind ledger predates per-edge class accounting and cannot attribute its count or a record's class, so no per-edge quota can be proven; the workflow fails closed",
 		}})
 		return nil
 	}
@@ -2729,8 +2754,10 @@ func (d *Driver) parkDeadEndLocked(st *capsule.Step, stepID, qid string, ctx jso
 //     question sits on repro; an owner-routed rewind root-cause → repro
 //     otherwise), told to reproduce against the pre-fix base;
 //   - continue: on repro the held report is accepted and the lane moves
-//     on to root-cause, the guidance in repro's answers; on root-cause
-//     the gate re-runs in place with the guidance;
+//     on to root-cause, the guidance in repro's answers and riding
+//     root-cause's next dispatch as its pending_rewind_input (cleared
+//     when that round ends); on root-cause the gate re-runs in place with
+//     the guidance;
 //   - anything else (cancel is the reserved answer) is asked again.
 func (d *Driver) routeDeadEndLocked(cur string, st *capsule.Step, q *capsule.PendingQuestion, answer string, info *appliedInfo) error {
 	switch answerVerb(answer) {
@@ -2739,6 +2766,14 @@ func (d *Driver) routeDeadEndLocked(cur string, st *capsule.Step, q *capsule.Pen
 		if cur == reproStepID {
 			st.Output = nil
 			st.PendingRewindInput = &capsule.RewindInput{ToStep: reproStepID, Reason: reason, Note: d.preFixBaseNoteLocked()}
+			// The held not-reproduced report is discarded here, and with
+			// it the pre-fix heads it recorded: the re-run commits its own
+			// authored tests, so its accepted report reads other heads.
+			// Once a fix→root-cause rewind exists the heads are the
+			// pre-fix base the re-run is pointed at, and they stay.
+			if countToEdge(d.exec.RewindStats.Rewinds, fixStepID, rootCauseStepID) == 0 {
+				d.exec.PreFixHeads = nil
+			}
 			if st.Supervision == nil {
 				st.Supervision = &capsule.StepSupervision{}
 			}

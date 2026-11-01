@@ -64,14 +64,20 @@ comments of [.polyforge/release.sh](../../.polyforge/release.sh) and
 [.polyforge/deploy.sh](../../.polyforge/deploy.sh). In short:
 `release.sh` (vX.Y.Z, patch bumps only — no argument means `patch`;
 `minor`/`major` are refused, a middle-number jump needs an explicit
-owner ruling) publishes the 8-asset matrix —
-`aihub-linux-amd64`, `pf-linux-amd64`, `aihub-darwin-arm64`,
-`pf-darwin-arm64`, `aihub-darwin-amd64`, `pf-darwin-amd64`,
-`aihub-image.digest`, `SHA256SUMS` (covering all seven files) — and
-`ghcr.io/silgrid/aihub:<tag>` (the image stays linux/amd64-only);
-`deploy.sh` promotes that image onto the aihub service host with
-seconds of downtime (no startup auto-migration, see
-[upgrade.md](../upgrade.md)). Deploying a work machine is re-running
+owner ruling) publishes the four payload assets plus `SHA256SUMS` —
+`pf-linux-amd64`, `pf-darwin-arm64`, `pf-darwin-amd64`,
+`aihub-image.digest`, and `SHA256SUMS` covering those four — and
+`ghcr.io/silgrid/aihub:<tag>`, built from the linux `pf` binary with the
+entrypoint `pf aihub` (the image stays linux/amd64-only). There is one
+binary, `pf`: the server runs as `pf aihub`, the work machine as the CLI
+plus `pf daemon`. The same tag is the same build for both roles, but
+promoting the server and upgrading work machines stay separate, manual
+decisions — a tag that changes only the daemon does not require the
+server to follow; an upgrade order is needed only for a tag that changes
+the daemon↔aihub wire contract. `deploy.sh` promotes that image onto the
+aihub service host with seconds of downtime (no startup auto-migration,
+see [upgrade.md](../upgrade.md)), reading the new server's version with
+`pf aihub -version`. Deploying a work machine is re-running
 `tools/install.sh` ([install](../install.md)).
 
 ```
@@ -85,9 +91,10 @@ seconds of downtime (no startup auto-migration, see
                mono-repo git tag (single semver per tag)
                               |
                               v
-     GitHub release: the linux and darwin binaries (aihub, pf),
-     aihub-image.digest, SHA256SUMS
-                              |  +  ghcr.io image <tag> (linux/amd64)
+     GitHub release: pf-linux-amd64, pf-darwin-arm64,
+     pf-darwin-amd64, aihub-image.digest, SHA256SUMS
+                              |  +  ghcr.io image <tag> (linux/amd64,
+                              |     pf, entrypoint `pf aihub`)
                               v
  DEPLOYMENT: `deploy.sh` for the aihub host; re-run `tools/install.sh` on work machines
  +-----------------------------------------------------------+

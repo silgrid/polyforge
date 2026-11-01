@@ -67,8 +67,8 @@ func TestHelpExtensionsIndexesTheExtendingSubsections(t *testing.T) {
 	if !strings.Contains(stdout, ".polyforge.yaml summarize.models, summarize.language, summarize.interval_sec") {
 		t.Fatalf("the index does not name summarize.language and summarize.interval_sec:\n%s", stdout)
 	}
-	if len(want) != 9 {
-		t.Fatalf("docs/extending.md has %d subsections %q, want the 9 inventory items", len(want), want)
+	if len(want) != 10 {
+		t.Fatalf("docs/extending.md has %d subsections %q, want the 10 inventory items", len(want), want)
 	}
 }
 

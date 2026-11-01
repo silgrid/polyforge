@@ -250,7 +250,7 @@ the turn arrives.
 
 ## Session rules
 
-Seven standing rules, binding on every polyforge session:
+Eight standing rules, binding on every polyforge session:
 
 1. **Surface discipline — the `pf` CLI is the only client.** All AIHub
    data-plane interaction goes through the `pf` CLI; never issue a raw
@@ -286,7 +286,9 @@ Seven standing rules, binding on every polyforge session:
    execution path.
 5. **Per-step models live in `.polyforge.yaml`; each candidate names its harness.** A
    workspace root may carry a `.polyforge.yaml` (`steps.<project>.<default|step-id>:
-   { models: [...] }`, `models` the only key) whose candidates are
+   { models: [...] }`, `models` and the declared `attrs` its keys — an
+   attr override `attrs: { <name>: <scalar> }` only for an attr the
+   bundle step declares, never under `default`/`task`) whose candidates are
    `<harness>:<model>[:<effort>]` (`pi:` or `claude:`, the prefix mandatory
    — the same format as the bundles' `model_candidates` and `pf submit
    --models`). The daemon reads it fresh at every dispatch (so an edit governs the
@@ -340,6 +342,26 @@ Seven standing rules, binding on every polyforge session:
    any branch / commit / push / PR, ask which execution ticket this change hangs on; no
    answer → file one first and route the work through it. Hand-executing bypasses every
    gate — no root-cause, no verification, no review, no deliver record.
+8. **Sync the session clone before reading it as fact (session-layer clone sync).**
+   Nothing keeps `<workspace>/.repo/<repo>` current: a claim clones fresh into the
+   capsule, but the session's reading copy can sit hundreds of commits behind origin's
+   default branch, and a conclusion drawn from it is simply wrong. Sync it with one
+   command — `git fetch origin && git pull --ff-only` — at these three triggers only, and
+   once per repo per burst of work, never before every command:
+   - **analysis** — before relying on a clone: reading files under `.repo/<repo>`,
+     grepping it, or answering an owner question about what that repo does;
+   - **wrap** — before `pf wrap` of a work item whose close restates that repo's state;
+   - **filing or submitting** — before `pf file create` / `pf submit` whose goal, content
+     or repro pointers describe a repo's current state.
+   The semantic is read-only: fetch plus a fast-forward pull. Uncommitted local changes
+   or a diverged branch mean STOP and report what diverged — never `merge`, `rebase`,
+   `stash` or `reset` on your own (rule 6 still governs writes under `.repo/`: fetch and
+   pull are the read operations it already allows, an Edit/Write still needs a ticket).
+   It never substitutes for a memory read (rule 2), and it does not duplicate
+   `pf doctor`'s "workspace repo clones" row — doctor reports uncovered local work in a
+   clone, this rule makes the session's reading copy current. When a sync shows earlier
+   analysis ran on an old head, say so: restate the conclusion against the synced head
+   and name the baseline, or withdraw it.
 
 ## The `pf` CLI: shared invocation contract
 

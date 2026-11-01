@@ -178,3 +178,73 @@ func TestReadFrontmatterRefusesCandidateFormat(t *testing.T) {
 		}
 	}
 }
+
+// TestReadFrontmatterReadsAttrDecls pins the attrs declaration surface: a
+// step's `attrs: { <name>: { type, default } }` is read with its typed
+// default, and a malformed declaration is the bundle's own load error.
+func TestReadFrontmatterReadsAttrDecls(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "workflow.md")
+	write := func(front string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("---\n"+front+"---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("steps:\n  - id: grill\n    attrs:\n      question_batch_size: { type: int, default: 0 }\n      tone: { type: string, default: plain }\n  - id: spec\n")
+	fm, err := ReadFrontmatter(path)
+	if err != nil || fm == nil {
+		t.Fatalf("valid attrs refused: %v", err)
+	}
+	got := fm.Steps[0].Attrs
+	if got["question_batch_size"].Type != AttrTypeInt || got["question_batch_size"].Default != 0 {
+		t.Fatalf("int attr decoded wrong: %+v", got)
+	}
+	if got["tone"].Type != AttrTypeString || got["tone"].Default != "plain" {
+		t.Fatalf("string attr decoded wrong: %+v", got)
+	}
+	if fm.Steps[1].Attrs != nil {
+		t.Fatalf("a step declaring no attrs must carry none: %+v", fm.Steps[1].Attrs)
+	}
+	for name, tc := range map[string]struct{ front, want string }{
+		"unknown type":       {"steps:\n  - id: grill\n    attrs:\n      n: { type: float, default: 0 }\n", "attrs.n.type"},
+		"missing default":    {"steps:\n  - id: grill\n    attrs:\n      n: { type: int }\n", "attrs.n.default: is required"},
+		"default type":       {"steps:\n  - id: grill\n    attrs:\n      n: { type: int, default: two }\n", "attrs.n.default: must be an integer"},
+		"string default int": {"steps:\n  - id: grill\n    attrs:\n      n: { type: string, default: 2 }\n", "attrs.n.default: must be a string"},
+		"bad name":           {"steps:\n  - id: grill\n    attrs:\n      Bad-Name: { type: int, default: 0 }\n", "attrs.Bad-Name"},
+	} {
+		write(tc.front)
+		_, err := ReadFrontmatter(path)
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "step grill") {
+			t.Fatalf("%s: err %v, want a refusal naming step grill and %q", name, err, tc.want)
+		}
+	}
+}
+
+// TestStepAttrs pins the union of the installed bundles' attr
+// declarations keyed by step id; a malformed declaration contributes
+// nothing.
+func TestStepAttrs(t *testing.T) {
+	dir := t.TempDir()
+	for name, front := range map[string]string{
+		"a": "steps:\n  - id: grill\n    attrs:\n      question_batch_size: { type: int, default: 0 }\n  - id: code\n",
+		"b": "steps:\n  - id: grill\n    attrs:\n      question_batch_size: { type: int, default: 0 }\n  - id: fix\n    attrs:\n      broken: { type: float, default: 1 }\n",
+	} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name, "workflow.md"), []byte("---\n"+front+"---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := StepAttrs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got["grill"]["question_batch_size"].Type != AttrTypeInt {
+		t.Fatalf("StepAttrs = %+v, want only grill.question_batch_size (int)", got)
+	}
+	if _, err := StepAttrs(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("an unreadable workflows dir must be an error")
+	}
+}

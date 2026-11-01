@@ -94,7 +94,7 @@ func TestScopedGatesStackFirstValidPin(t *testing.T) {
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := scopedGatesReadConf(p); got != "npm" {
+	if got := scopedGatesReadConf(p).pin; got != "npm" {
 		t.Fatalf("scopedGatesReadConf pin = %q, want the first valid pin npm", got)
 	}
 }
@@ -169,7 +169,7 @@ func TestScopedGatesUnsupportedWarns(t *testing.T) {
 	home := t.TempDir()
 	installReleaseEngine(t, home)
 	ws := t.TempDir()
-	writeScopedManifest(t, reposClone(t, ws, "pi-web", "main"), "Cargo.toml", "[package]\nname = \"x\"\n")
+	writeScopedManifest(t, reposClone(t, ws, "pi-web", "main"), "mix.exs", "defmodule X.MixProject do\nend\n")
 	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
 	_, detail := scopedGatesRow(t, doc, "warn")
 	if !strings.Contains(detail, "no supported stack manifest") || !strings.Contains(detail, "falls back to full") {
@@ -335,16 +335,16 @@ func TestScopedGatesReadConfPinsAndCountsCommands(t *testing.T) {
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pin, n := scopedGatesReadConf(p)
-	if pin != "none" || n != 3 {
-		t.Fatalf("scopedGatesReadConf = (%q, %d), want the first valid pin none and 3 commands", pin, n)
+	c := scopedGatesReadConf(p)
+	if c.pin != "none" || c.commands != 3 {
+		t.Fatalf("scopedGatesReadConf = (%q, %d), want the first valid pin none and 3 commands", c.pin, c.commands)
 	}
-	if pin, n := scopedGatesReadConf(filepath.Join(t.TempDir(), "absent.conf")); pin != "" || n != 0 {
-		t.Fatalf("a missing conf = (%q, %d), want no pin and no command", pin, n)
+	if c := scopedGatesReadConf(filepath.Join(t.TempDir(), "absent.conf")); c.pin != "" || c.commands != 0 {
+		t.Fatalf("a missing conf = (%q, %d), want no pin and no command", c.pin, c.commands)
 	}
 }
 
-// Another stack (no go.mod / package.json) whose conf declares its bar: the
+// Another stack (no supported manifest) whose conf declares its bar: the
 // engine reports the conf's commands on the full tier, so the repo conf is
 // effective — pass, saying it is full tier only.
 func TestScopedGatesOtherStackConfPass(t *testing.T) {
@@ -353,7 +353,7 @@ func TestScopedGatesOtherStackConfPass(t *testing.T) {
 	installReleaseEngine(t, home)
 	ws := t.TempDir()
 	clone := reposClone(t, ws, "pi-web", "main")
-	writeScopedManifest(t, clone, "Cargo.toml", "[package]\nname = \"x\"\n")
+	writeScopedManifest(t, clone, "mix.exs", "defmodule X.MixProject do\nend\n")
 	writeScopedConf(t, clone, "fast_gate=cargo fmt --check\ncheck=test|full|cargo test\n")
 	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
 	_, detail := scopedGatesRow(t, doc, "pass")
@@ -372,7 +372,7 @@ func TestScopedGatesOtherStackNoConfWarnsWithConsequence(t *testing.T) {
 	home := t.TempDir()
 	installReleaseEngine(t, home)
 	ws := t.TempDir()
-	writeScopedManifest(t, reposClone(t, ws, "pi-web", "main"), "pyproject.toml", "[project]\nname = \"x\"\n")
+	writeScopedManifest(t, reposClone(t, ws, "pi-web", "main"), "mix.exs", "defmodule X.MixProject do\nend\n")
 	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
 	_, detail := scopedGatesRow(t, doc, "warn")
 	for _, tok := range []string{"pi-web", "no supported stack manifest", "ad hoc on every run", "no scoped tier", "falls back to full", "runner dispatch fails closed", scopedGatesConf, scopedGatesPointer} {
@@ -390,7 +390,7 @@ func TestScopedGatesOtherStackConfWithoutCommandWarns(t *testing.T) {
 	installReleaseEngine(t, home)
 	ws := t.TempDir()
 	clone := reposClone(t, ws, "pi-web", "main")
-	writeScopedManifest(t, clone, "Cargo.toml", "[package]\nname = \"x\"\n")
+	writeScopedManifest(t, clone, "mix.exs", "defmodule X.MixProject do\nend\n")
 	writeScopedConf(t, clone, "exclude=docs/*\nfast_gate=$(touch pwned)\n")
 	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
 	_, detail := scopedGatesRow(t, doc, "warn")
@@ -430,7 +430,7 @@ func TestScopedGatesOtherStackConfWithoutEngineWarns(t *testing.T) {
 	srv := reposAihubDefault(t)
 	ws := t.TempDir()
 	clone := reposClone(t, ws, "pi-web", "main")
-	writeScopedManifest(t, clone, "Cargo.toml", "[package]\nname = \"x\"\n")
+	writeScopedManifest(t, clone, "mix.exs", "defmodule X.MixProject do\nend\n")
 	writeScopedConf(t, clone, "full_command=cargo test\n")
 	doc := scopedGatesDoctorWithHome(t, srv, ws, t.TempDir())
 	_, detail := scopedGatesRow(t, doc, "warn")
@@ -464,5 +464,129 @@ func TestScopedGatesMixedScopedReadyAndConfOnlyPass(t *testing.T) {
 	}
 	if strings.Contains(detail, "e2e/pi-web") {
 		t.Fatalf("the scoped-ready repo must not be listed as conf-only: %q", detail)
+	}
+}
+
+// writeScopedFile installs one file (any depth) in the clone.
+func writeScopedFile(t *testing.T, clone, rel, body string) {
+	t.Helper()
+	p := filepath.Join(clone, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The carries layer: a repo with undeclared suites warns, naming them; the
+// e2e_runner= target, an imported helper and an exclude= match are never
+// suites; a clean repo is named clean; the row stays warn at most.
+func TestScopedGatesCarriesUndeclaredSuites(t *testing.T) {
+	srv := (&reposAihub{
+		known: map[string][]api.ProjectRepo{"e2e": {
+			{Name: "pi-web", URL: "file:///nonexistent/pi-web.git"},
+			{Name: "charts", URL: "file:///nonexistent/charts.git"},
+		}},
+		items: map[string]string{},
+	}).server(t)
+	home := t.TempDir()
+	installReleaseEngine(t, home)
+	ws := t.TempDir()
+	web := reposClone(t, ws, "pi-web", "main")
+	writeScopedManifest(t, web, "package.json", "{\n  \"name\": \"x\",\n  \"scripts\": {\"test:e2e:all\": \"node e2e/all.mjs\"}\n}\n")
+	writeScopedConf(t, web, "stack=npm\ne2e_runner=npm run test:e2e:all --\nexclude=themes.mjs\n")
+	writeScopedFile(t, web, "e2e/all.mjs", "console.log('runner');\n")
+	writeScopedFile(t, web, "e2e/themes.mjs", "console.log('themes');\n")
+	writeScopedFile(t, web, "e2e/timeouts.mjs", "export const t = 1;\n")
+	writeScopedFile(t, web, "e2e/declared.mjs", "// carries: components/*\nimport { t } from './timeouts.mjs';\n")
+	for _, n := range []string{"one", "two", "three"} {
+		writeScopedFile(t, web, "e2e/"+n+".mjs", "console.log('"+n+"');\n")
+	}
+	charts := reposClone(t, ws, "charts", "main")
+	writeScopedManifest(t, charts, "Cargo.toml", "[package]\nname = \"charts\"\n")
+	writeScopedFile(t, charts, "tests/accept.rs", "// carries: src/*\nmod common;\n")
+	writeScopedFile(t, charts, "tests/common/mod.rs", "pub fn helper() {}\n")
+
+	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
+	_, detail := scopedGatesRow(t, doc, "warn")
+	for _, tok := range []string{"e2e/pi-web: 3 undeclared suite(s)", "e2e/one.mjs", "e2e/two.mjs", "e2e/three.mjs", "falls back to full",
+		"carries clean (no undeclared suite): e2e/charts (1 suite(s))"} {
+		if !strings.Contains(detail, tok) {
+			t.Fatalf("carries detail lacks %q: %q", tok, detail)
+		}
+	}
+	for _, bad := range []string{"all.mjs", "themes.mjs", "timeouts.mjs", "declared.mjs", "common/mod.rs"} {
+		if strings.Contains(detail, bad) {
+			t.Fatalf("%s is not an undeclared suite: %q", bad, detail)
+		}
+	}
+
+	// Declaring the three suites makes both repos clean: a pass.
+	for _, n := range []string{"one", "two", "three"} {
+		writeScopedFile(t, web, "e2e/"+n+".mjs", "// carries: lib/"+n+"*\nconsole.log('"+n+"');\n")
+	}
+	doc = scopedGatesDoctorWithHome(t, srv, ws, home)
+	_, detail = scopedGatesRow(t, doc, "pass")
+	if !strings.Contains(detail, "2 of 2") || !strings.Contains(detail, "e2e/pi-web (4 suite(s))") || !strings.Contains(detail, "e2e/charts (1 suite(s))") {
+		t.Fatalf("a fully declared repo must be named clean: %q", detail)
+	}
+
+	// A malformed carries key makes every report full: warn.
+	writeScopedConf(t, web, "stack=npm\ne2e_map=components/*\n")
+	doc = scopedGatesDoctorWithHome(t, srv, ws, home)
+	if _, detail = scopedGatesRow(t, doc, "warn"); !strings.Contains(detail, "e2e_map=components/*") {
+		t.Fatalf("a malformed carries key must warn naming the line: %q", detail)
+	}
+}
+
+// Python and rust manifests select their analyzers (scoped-ready), and a
+// python suite without a header, beside pytest collection files, is the only
+// undeclared one.
+func TestScopedGatesPythonRustManifests(t *testing.T) {
+	srv := reposAihubDefault(t)
+	home := t.TempDir()
+	installReleaseEngine(t, home)
+	ws := t.TempDir()
+	clone := reposClone(t, ws, "pi-web", "main")
+	writeScopedManifest(t, clone, "pyproject.toml", "[project]\nname = \"x\"\n")
+	writeScopedFile(t, clone, "tests/e2e/conftest.py", "import pytest\n")
+	writeScopedFile(t, clone, "tests/e2e/__init__.py", "")
+	writeScopedFile(t, clone, "tests/e2e/test_flow.py", "import pytest\n")
+	doc := scopedGatesDoctorWithHome(t, srv, ws, home)
+	_, detail := scopedGatesRow(t, doc, "warn")
+	if !strings.Contains(detail, "1 undeclared suite(s)") || !strings.Contains(detail, "tests/e2e/test_flow.py") || strings.Contains(detail, "conftest.py") {
+		t.Fatalf("python undeclared detail: %q", detail)
+	}
+	writeScopedFile(t, clone, "tests/e2e/test_flow.py", "# carries: app/*\nimport pytest\n")
+	doc = scopedGatesDoctorWithHome(t, srv, ws, home)
+	if _, detail = scopedGatesRow(t, doc, "pass"); !strings.Contains(detail, "1 of 1") {
+		t.Fatalf("a declared python repo must be scoped-ready: %q", detail)
+	}
+
+	writeScopedManifest(t, clone, "Cargo.toml", "[package]\nname = \"x\"\n")
+	doc = scopedGatesDoctorWithHome(t, srv, ws, home)
+	_, detail = scopedGatesRow(t, doc, "warn")
+	if !strings.Contains(detail, "unpinned multi-manifest") || !strings.Contains(detail, "Cargo.toml") {
+		t.Fatalf("pyproject.toml + Cargo.toml without a pin must warn as multi-manifest: %q", detail)
+	}
+}
+
+// The glob matcher follows the engine's shell-case syntax: `*` crosses `/`.
+func TestScopedGatesGlobShellCase(t *testing.T) {
+	for _, c := range []struct {
+		glob, path string
+		want       bool
+	}{
+		{"components/Polyforge*", "components/PolyforgePanel.tsx", true},
+		{"app/*", "app/unused/thing.py", true},
+		{"themes.mjs", "e2e/themes.mjs", false},
+		{"e2e/[!a]*.mjs", "e2e/b.mjs", true},
+		{"e2e/[!a]*.mjs", "e2e/a.mjs", false},
+		{"lib/?.ts", "lib/x.ts", true},
+	} {
+		if got := scopedGatesGlob(c.glob, c.path); got != c.want {
+			t.Fatalf("scopedGatesGlob(%q, %q) = %t, want %t", c.glob, c.path, got, c.want)
+		}
 	}
 }

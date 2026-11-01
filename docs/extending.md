@@ -42,6 +42,15 @@ precedence chain are the config reference's one authority
 the routing skill's fragments, `pf submit --models` and
 [upgrade.md](upgrade.md) point there.
 
+### Step attributes
+
+`steps.<project>.<step-id>.attrs` in `.polyforge.yaml` — per-project
+overrides of the configurable attributes a bundle step declares
+(`attrs:` in its `workflow.md` entry): the config reference's
+[step attributes section](reference/config.md#stepsprojectstep-idattrs--step-attributes)
+owns the override grammar, the [bundle-authoring chapter](bundles.md) the
+declaration and its prompt material.
+
 ### Summarize models
 
 `summarize:` in `.polyforge.yaml` — the summarize lane's model candidates,

@@ -7,6 +7,16 @@ package test
 // stub on PATH (gh, docker, ssh, scp, curl): the "server" is a local temp
 // tree reached through the ssh stub, the registry is a directory. Nothing
 // touches a real host, registry or GitHub.
+//
+// A fake image file is: line 1 image ID, line 2 version, line 3 repo
+// digest, line 4 layout - "pf" (the consolidated image, only
+// /pf, answering `/pf aihub -version`), "aihub" (a pre-consolidation
+// image: only /aihub, answering `/aihub -version`), "dual" (the dual-binary
+// image, /aihub answers `-version`, while its old /pf has no
+// aihub subcommand and prints a usage error to stdout whose last word is
+// "directory") or "junk" (both /pf and /aihub print only a usage error -
+// nothing readable). Each fake docker verb answers only on the paths its
+// image layout really has.
 
 import (
 	"bytes"
@@ -25,6 +35,18 @@ S="$FAKE_W/dk-$side"; mkdir -p "$S/img"
 echo "$side docker $*" >> "$FAKE_W/log-docker"
 key() { printf '%s' "$1" | tr '/:@' '___'; }
 fmt=""
+# ver <image-file> <path> <args...>: the layout's -version answer, or a
+# missing-path failure (exit 127) when the image has no such binary.
+ver() {
+  v=$(sed -n 2p "$1"); lay=$(sed -n 4p "$1"); p="$2"; shift 2
+  case "$lay:$p:$*" in
+    pf:/pf:"aihub -version") echo "$v" ;;
+    aihub:/aihub:-version|dual:/aihub:-version) echo "aihub $v" ;;
+    dual:/pf:*|junk:/pf:*) printf 'Usage of pf:\n  -data-dir directory\n'; return 2 ;;
+    junk:/aihub:*) printf 'Usage of aihub:\n  -data-dir directory\n'; return 2 ;;
+    *) echo "exec: \"$p\": stat $p: no such file or directory" >&2; return 127 ;;
+  esac
+}
 case "$1" in
   login) cat >/dev/null; echo "docker login $*" >> "$FAKE_W/log-login"; exit 0 ;;
   pull)
@@ -47,7 +69,7 @@ case "$1" in
     shift; ep=""; img=""
     while [ $# -gt 0 ]; do case "$1" in --rm) shift ;; --entrypoint) ep="$2"; shift 2 ;; *) img="$1"; shift; break ;; esac; done
     f="$S/img/$(key "$img")"; [ -f "$f" ] || exit 1
-    case "$ep" in /aihub) echo "aihub $(sed -n 2p "$f")" ;; git|curl) echo "$ep version 1" ;; esac
+    case "$ep" in /pf|/aihub) ver "$f" "$ep" "$@"; exit $? ;; git|curl) echo "$ep version 1" ;; esac
     exit 0 ;;
   save) shift; [ "$1" = -o ] && { cp "$S/img/$(key "$3")" "$2.body"; { echo "$3"; cat "$2.body"; } > "$2"; rm -f "$2.body"; }; exit 0 ;;
   load) ref=$(head -1 /dev/stdin >/dev/null 2>&1; true); in="$(cat)"; ref=$(printf '%s\n' "$in" | sed -n 1p)
@@ -68,18 +90,28 @@ case "$1" in
     esac; exit 0 ;;
   exec)
     c="$S/container"; [ -n "$FAKE_BAD_IMG" ] && [ "$(cat "$c")" = "$FAKE_BAD_IMG" ] && exit 1
-    f="$S/img/$(key "$(cat "$c")")"; echo "aihub $(sed -n 2p "$f")"; exit 0 ;;
+    shift 2; f="$S/img/$(key "$(cat "$c")")"; ver "$f" "$@"; exit $? ;;
   cp)
-    c="$S/container"; v=$(sed -n 2p "$S/img/$(key "$(cat "$c")")")
-    dest="${3}"; printf '#!/bin/sh\necho "aihub %s"\n' "$v" > "$dest"; exit 0 ;;
+    c="$S/container"; f="$S/img/$(key "$(cat "$c")")"; v=$(sed -n 2p "$f"); lay=$(sed -n 4p "$f")
+    # the copied binary answers like the path it came from (a dual image
+    # has both /pf and /aihub)
+    case "$lay:${2#*:}" in
+      pf:/pf) printf '#!/bin/sh\n[ "$*" = "aihub -version" ] && echo "%s"\n' "$v" > "$3" ;;
+      dual:/pf) printf '#!/bin/sh\nprintf "Usage of pf:\\n  -data-dir directory\\n"\n' > "$3" ;;
+      aihub:/aihub|dual:/aihub) printf '#!/bin/sh\n[ "$*" = "-version" ] && echo "aihub %s"\n' "$v" > "$3" ;;
+      *) echo "Error: Could not find the file ${2#*:} in container" >&2; exit 1 ;;
+    esac; exit 0 ;;
   logs) [ -n "$FAKE_LOGS_FILE" ] && cat "$FAKE_LOGS_FILE"
         # simulate a TERM signal reaching the deploy script right after the swap
         if [ -n "$FAKE_TERM_ON_LOGS" ]; then kill -TERM "$(cat "$FAKE_W/deploypid")"; sleep 1; fi
         exit 0 ;;
   build)
     shift; t=""; while [ $# -gt 0 ]; do case "$1" in -t) t="$2"; shift 2 ;; *) ctx="$1"; shift ;; esac; done
-    v=$(sh "$ctx/aihub" -version | awk '{print $NF}')
-    printf 'sha256:built%s\n%s\n\n' "$v" "$v" > "$S/img/$(key "$t")"; exit 0 ;;
+    # the Dockerfile in the context decides the layout: COPY <src> /<src>
+    src=$(sed -n 's|^COPY \([^ ]*\) /.*|\1|p' "$ctx/Dockerfile")
+    [ -f "$ctx/$src" ] || { echo "COPY failed: file not found in build context: $src" >&2; exit 1; }
+    case "$src" in pf) v=$(sh "$ctx/pf" aihub -version | awk '{print $NF}') ;; *) v=$(sh "$ctx/$src" -version | awk '{print $NF}') ;; esac
+    printf 'sha256:built%s\n%s\n\n%s\n' "$v" "$v" "$src" > "$S/img/$(key "$t")"; exit 0 ;;
   compose)
     shift; f=""; verb=""
     while [ $# -gt 0 ]; do case "$1" in
@@ -184,6 +216,10 @@ type deployWorld struct {
 	repo   string // the deployer's throwaway git repo: the real deploy.sh + deploy/Dockerfile; release() tags it
 	script string // the deploy.sh under test (inside repo)
 	env    []string
+	// legacy marks a release tag as pre-consolidation: its
+	// assets carry aihub-linux-amd64 and its GHCR image has only /aihub.
+	// Every other release is consolidated: pf assets only, image /pf aihub.
+	legacy map[string]bool
 }
 
 func wf(t *testing.T, path, body string, mode os.FileMode) {
@@ -198,18 +234,24 @@ func wf(t *testing.T, path, body string, mode os.FileMode) {
 
 // release lays one fake GitHub release (+ optional GHCR image) into the world.
 // digestInRelease is what aihub-image.digest says; registryDigest is what the
-// registry's image really carries (differ to simulate tampering).
+// registry's image really carries (differ to simulate tampering). A tag in
+// d.legacy is laid out pre-consolidation (aihub asset, /aihub image).
 func (d *deployWorld) release(tag string, withImage bool, digestInRelease, registryDigest string) {
 	t := d.t
 	rel := filepath.Join(d.w, "ghrel", tag)
-	wf(t, filepath.Join(rel, "aihub-linux-amd64"), "bin-aihub-"+tag+"\n", 0o644)
 	wf(t, filepath.Join(rel, "pf-linux-amd64"), "bin-pf-"+tag+"\n", 0o644)
-	files := []string{"aihub-linux-amd64", "pf-linux-amd64"}
+	files := []string{"pf-linux-amd64"}
+	layout := "pf"
+	if d.legacy[tag] {
+		layout = "aihub"
+		wf(t, filepath.Join(rel, "aihub-linux-amd64"), "bin-aihub-"+tag+"\n", 0o644)
+		files = append(files, "aihub-linux-amd64")
+	}
 	if withImage {
 		wf(t, filepath.Join(rel, "aihub-image.digest"), digestInRelease+"\n", 0o644)
 		files = append(files, "aihub-image.digest")
 		wf(t, filepath.Join(d.w, "registry", "ghcr.io_silgrid_aihub_"+tag),
-			fmt.Sprintf("sha256:id%s\n%s\n%s\n", tag, tag, repoDigestOf(registryDigest)), 0o644)
+			fmt.Sprintf("sha256:id%s\n%s\n%s\n%s\n", tag, tag, repoDigestOf(registryDigest), layout), 0o644)
 	}
 	cmd := exec.Command("sha256sum", files...)
 	cmd.Dir = rel
@@ -245,16 +287,19 @@ func newDeployWorld(t *testing.T, oldVer string) *deployWorld {
 		}
 	}
 	w := t.TempDir()
-	d := &deployWorld{t: t, w: w}
+	d := &deployWorld{t: t, w: w, legacy: map[string]bool{}}
 	bin := filepath.Join(w, "bin")
 	wf(t, filepath.Join(bin, "docker"), fakeDocker, 0o755)
 	wf(t, filepath.Join(bin, "ssh"), fakeSSH, 0o755)
 	wf(t, filepath.Join(bin, "scp"), fakeSCP, 0o755)
 	wf(t, filepath.Join(bin, "gh"), fakeGH, 0o755)
 	wf(t, filepath.Join(bin, "curl"), fakeCurl, 0o755)
-	// the "server": running container on the old image, a compose file, a real sqlite db
+	// the "server": running container on the old image, a compose file, a
+	// real sqlite db. The running image is pre-consolidation (only /aihub):
+	// the first deploy after meets exactly that server
+	// (setRunningLayout switches it).
 	sdk := filepath.Join(w, "dk-server")
-	wf(t, filepath.Join(sdk, "img", "aihub-app_aihub"), fmt.Sprintf("sha256:old%s\n%s\n\n", oldVer, oldVer), 0o644)
+	wf(t, filepath.Join(sdk, "img", "aihub-app_aihub"), fmt.Sprintf("sha256:old%s\n%s\n\naihub\n", oldVer, oldVer), 0o644)
 	wf(t, filepath.Join(sdk, "container"), "aihub-app_aihub\n", 0o644)
 	data := filepath.Join(w, "srv", "data", "aihub")
 	if err := os.MkdirAll(filepath.Join(data, "memory"), 0o755); err != nil {
@@ -295,6 +340,38 @@ c.commit()`
 		"COMPOSE_PROJECT=aihub-app",
 		"WAIT_SECS=4", "POLL_SECS=1", "UP_WAIT_SECS=5")
 	return d
+}
+
+// setRunningLayout rewrites the running container's image layout ("pf",
+// "aihub", "dual" or "junk"; see the file header), keeping its ID and version.
+func (d *deployWorld) setRunningLayout(layout string) {
+	f := filepath.Join(d.w, "dk-server", "img", "aihub-app_aihub")
+	b, err := os.ReadFile(f)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	lines := strings.Split(string(b), "\n")
+	wf(d.t, f, strings.Join(append(lines[:3], layout, ""), "\n"), 0o644)
+}
+
+// legacyDockerfile is the pre-consolidation deploy/Dockerfile shape: it
+// copies the binary named aihub and runs it directly.
+const legacyDockerfile = "FROM debian:bookworm-slim\nCOPY aihub /aihub\nENTRYPOINT [\"/aihub\", \"-data-dir\", \"/data\", \"-listen\", \":8080\"]\n"
+
+// tagLegacy tags tag in the deployer repo on a commit whose deploy/Dockerfile
+// is the pre-consolidation one, then restores the current file on main: the
+// legacy rollback build must read the OLD release's Dockerfile.
+func (d *deployWorld) tagLegacy(tag string) {
+	df := filepath.Join(d.repo, "deploy", "Dockerfile")
+	cur, err := os.ReadFile(df)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	wf(d.t, df, legacyDockerfile, 0o644)
+	d.git("commit", "-q", "-am", "legacy "+tag)
+	d.git("tag", tag)
+	wf(d.t, df, string(cur), 0o644)
+	d.git("commit", "-q", "-am", "consolidated")
 }
 
 func (d *deployWorld) run(stdin string, args ...string) (string, error) {
@@ -346,6 +423,7 @@ func repoDigestOf(d string) string {
 
 func TestReleaseDeployImagePullSwap(t *testing.T) {
 	d := newDeployWorld(t, "v2.2.1")
+	d.legacy["v2.2.1"] = true                 // the running release predates the consolidation
 	d.release("v2.2.1", true, digOld, digOld) // rollback target has a GHCR image too
 	d.release("v2.3.0", true, digNew, digNew)
 	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
@@ -386,10 +464,78 @@ func TestReleaseDeployImagePullSwap(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(d.w, "dk-server", "img", "polyforge_aihub_v2.2.1")); err != nil {
 		t.Errorf("rollback image polyforge/aihub:v2.2.1 missing on the server: %v", err)
 	}
+	// the new image and the new container are read with
+	// `/pf aihub -version` only; the pre-consolidation old side (running
+	// container, saved binary, rollback image) answers through the
+	// TRANSITION /aihub fallback.
+	for _, want := range []string{
+		"local docker run --rm --entrypoint /pf ghcr.io/silgrid/aihub:v2.3.0 aihub -version",
+		"server docker run --rm --entrypoint /pf polyforge/aihub:v2.3.0 aihub -version",
+		"server docker exec aihub /aihub -version",
+		"server docker cp aihub:/aihub ",
+		"local docker run --rm --entrypoint /aihub ghcr.io/silgrid/aihub:v2.2.1 -version",
+	} {
+		if !strings.Contains(dl, want) {
+			t.Errorf("docker log lacks %q\n%s", want, dl)
+		}
+	}
+	for _, bad := range []string{
+		"--entrypoint /aihub ghcr.io/silgrid/aihub:v2.3.0", "--entrypoint /aihub polyforge/aihub:v2.3.0",
+	} {
+		if strings.Contains(dl, bad) {
+			t.Errorf("the consolidated new image was probed with the legacy command %q\n%s", bad, dl)
+		}
+	}
+	for _, want := range []string{
+		"version v2.2.1 (/aihub -version) -> v2.3.0", "-version (aihub layout) = v2.2.1", "-version (pf layout) = v2.3.0",
+		"docker exec aihub /aihub -version   # must print v2.2.1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(d.logOf("log-gh"), "aihub-linux-amd64") {
+		t.Errorf("deploy must not download the aihub binary asset any more:\n%s", d.logOf("log-gh"))
+	}
+}
+
+// TestReleaseDeployConsolidatedRunningServer: once the running server is a
+// consolidated image, every probe is `/pf aihub -version`, the step-2 save
+// copies /pf and the printed rollback command is the consolidated one.
+func TestReleaseDeployConsolidatedRunningServer(t *testing.T) {
+	d := newDeployWorld(t, "v2.2.1")
+	d.setRunningLayout("pf")
+	d.release("v2.2.1", true, digOld, digOld)
+	d.release("v2.3.0", true, digNew, digNew)
+	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
+	if err != nil {
+		t.Fatalf("deploy failed: %v\n%s", err, out)
+	}
+	dl := d.logOf("log-docker")
+	for _, want := range []string{
+		"server docker exec aihub /pf aihub -version", "server docker cp aihub:/pf ",
+		"server docker run --rm --entrypoint /pf polyforge/aihub:v2.2.1 aihub -version",
+	} {
+		if !strings.Contains(dl, want) {
+			t.Errorf("docker log lacks %q\n%s", want, dl)
+		}
+	}
+	if strings.Contains(dl, "/aihub -version") || strings.Contains(dl, "--entrypoint /aihub") {
+		t.Errorf("a consolidated world needs no /aihub fallback probe:\n%s", dl)
+	}
+	for _, want := range []string{
+		"old binary saved:", "docker exec aihub /pf aihub -version   # must print v2.2.1", "deployed=v2.3.0 previous=v2.2.1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q\n%s", want, out)
+		}
+	}
 }
 
 func TestReleaseDeployLegacyRollbackBuild(t *testing.T) {
 	d := newDeployWorld(t, "v2.2.0")
+	d.legacy["v2.2.0"] = true
+	d.tagLegacy("v2.2.0")              // its deploy/Dockerfile copies the binary named aihub
 	d.release("v2.2.0", false, "", "") // first time: no GHCR image for the running version
 	d.release("v2.3.0", true, digNew, digNew)
 	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
@@ -404,6 +550,14 @@ func TestReleaseDeployLegacyRollbackBuild(t *testing.T) {
 	}
 	if strings.Contains(d.logOf("log-docker"), "server docker build -t polyforge/aihub:v2.3.0") {
 		t.Errorf("the NEW image must never be built on the server")
+	}
+	// the legacy image is built from the OLD release's Dockerfile and the
+	// saved /aihub binary, and verified through the /aihub fallback
+	if b, _ := os.ReadFile(filepath.Join(d.w, "dk-server", "img", "polyforge_aihub_v2.2.0")); !strings.HasSuffix(string(b), "\naihub\n") {
+		t.Errorf("legacy rollback image is not the pre-consolidation layout: %q", b)
+	}
+	if !strings.Contains(out, "image polyforge/aihub:v2.2.0 built; -version (aihub layout) = v2.2.0") {
+		t.Errorf("legacy rollback image not verified through /aihub -version\n%s", out)
 	}
 }
 
@@ -471,8 +625,7 @@ func TestReleaseScriptDigestFileFeedsDeployPreflight(t *testing.T) {
 	d := newDeployWorld(t, "v1.2.0")
 	d.release("v1.2.0", true, digOld, digOld)
 	for _, f := range []string{
-		"aihub-linux-amd64", "pf-linux-amd64",
-		"aihub-darwin-arm64", "pf-darwin-arm64", "aihub-darwin-amd64", "pf-darwin-amd64",
+		"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64",
 		"aihub-image.digest", "SHA256SUMS",
 	} {
 		b, err := os.ReadFile(filepath.Join(produced, f))
@@ -483,7 +636,7 @@ func TestReleaseScriptDigestFileFeedsDeployPreflight(t *testing.T) {
 	}
 	// the registry's image carries the repo digest the release's push produced
 	wf(t, filepath.Join(d.w, "registry", "ghcr.io_silgrid_aihub_v1.2.1"),
-		fmt.Sprintf("sha256:idv1.2.1\nv1.2.1\n%s\n", imageRepoDigest(relFakeDigest)), 0o644)
+		fmt.Sprintf("sha256:idv1.2.1\nv1.2.1\n%s\npf\n", imageRepoDigest(relFakeDigest)), 0o644)
 	d.git("tag", "v1.2.1") // the deployer has fetched the release's tag
 	out, err := d.run("", "v1.2.1", "--dry-run")
 	if err != nil {

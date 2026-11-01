@@ -87,6 +87,13 @@ type Config struct {
 	// candidate's dispatch runs on (a malformed one blocks like a compose
 	// failure).
 	Compose func() (map[string][]string, error)
+	// Attrs answers the per-step attr overrides that differ from their
+	// declaration's default (workspace.ComposeAttrs: step id → attr name →
+	// value as text), called at EVERY dispatch beside Compose, outside the
+	// mutex — so a yaml edit governs the next dispatch and a running step
+	// keeps what its dispatch read. A failure blocks the workflow like a
+	// compose failure. Nil means no override (tests).
+	Attrs func() (map[string]map[string]string, error)
 	// Interrupted, when set, archives ONE infra_failure attempt on the
 	// current in_progress step before the loop re-dispatches (the
 	// recovery integration's write, performed by the single
@@ -179,6 +186,9 @@ type Driver struct {
 	// start): composed at that dispatch, read by its failure decision,
 	// replaced by the next one (polyforge#33; guarded by mu).
 	cands map[string][]string
+	// attrs is the attr-override map of the dispatch in flight (or about
+	// to start), composed with cands (guarded by mu).
+	attrs map[string]map[string]string
 	// failed is set when a transition's persist failed: memory may be
 	// ahead of execution.json. Every further transition answers it and
 	// Run returns it; the restart reloads the file (transition.go).
@@ -814,9 +824,12 @@ func (d *Driver) blockUnchangedGateTree(stepID string) (bool, error) {
 // gateLastVerdictAtLocked answers when gate last delivered a verdict, from
 // the attempts ledger alone: its newest accepted attempt (a PASS) or its
 // newest rewind archive naming it in rewind_gate (a FAIL, archived by the
-// same write that routed the verdict). Deriving it here keeps the fact in
-// one place and makes the unchanged-tree comparison inclusive of a verdict
-// archived in the same write as the rewind. The caller holds d.mu.
+// same write that routed the verdict). A light re-entry's needs_code_change
+// self-report archive also names the light gate in rewind_gate, but the
+// gate delivered nothing then — the build step re-routed the gate's earlier
+// verdict — so it is skipped (selfReportArchive). Deriving it here keeps the
+// fact in one place and makes the unchanged-tree comparison inclusive of a
+// verdict archived in the same write as the rewind. The caller holds d.mu.
 func (d *Driver) gateLastVerdictAtLocked(gate string) (time.Time, bool) {
 	var at time.Time
 	var ok bool
@@ -835,7 +848,7 @@ func (d *Driver) gateLastVerdictAtLocked(gate string) (time.Time, bool) {
 	for _, other := range d.exec.Steps {
 		for i := range other.Attempts {
 			a := &other.Attempts[i]
-			if a.RewindGate != gate || !rewindTargetCause(a.Cause) {
+			if a.RewindGate != gate || !rewindTargetCause(a.Cause) || selfReportArchive(a) {
 				continue
 			}
 			if t, err := time.Parse(time.RFC3339Nano, a.ArchivedAt); err == nil && (!ok || t.After(at)) {
@@ -848,13 +861,19 @@ func (d *Driver) gateLastVerdictAtLocked(gate string) (time.Time, bool) {
 
 // buildRewindSinceLocked answers the lane's build step when a rewind of it
 // archived at/after the gate's last verdict has this gate in its range,
-// together with the gate that rewound it (the newest such rewind), the
-// index of that rewind's archive on the build step (its result is the
-// output the gate judged), and a copy of the build step's newest
-// infra_failure attempt after that rewind (nil when the round did not
-// crash — the reason names a crash only when there was one). Everything is
-// in the execution ledger; the caller holds d.mu. ok=false: no rewind of
-// the build step re-entered this gate.
+// together with the gate that rewound it, the index of that rewind's
+// archive on the build step (its result is the output the gate judged),
+// and a copy of the build step's newest infra_failure attempt after that
+// rewind (nil when the round did not crash — the reason names a crash only
+// when there was one). since is the gate's verdict time
+// (gateLastVerdictAtLocked), which never stamps a verdict at a light
+// re-entry's needs_code_change self-report archive; the rewind taken is the
+// EARLIEST archive at/after it — the one the verdict's own settlement
+// wrote. The self-report archive that follows it (same gate, the resumed
+// attempt's result, never a round a gate judged) is therefore never the
+// judged round. Everything is in the execution
+// ledger; the caller holds d.mu. ok=false: no rewind of the build step
+// re-entered this gate.
 func (d *Driver) buildRewindSinceLocked(gateIdx int, buildStep string, since time.Time) (target, rewindGate string, judgedRound int, crash *capsule.Attempt, ok bool) {
 	tIdx, known := d.workflow.indexOf(buildStep)
 	if !known || tIdx >= gateIdx {
@@ -878,7 +897,7 @@ func (d *Driver) buildRewindSinceLocked(gateIdx int, buildStep string, since tim
 		if err != nil || at.Before(since) {
 			continue
 		}
-		if !ok || at.After(rewindAt) {
+		if !ok || at.Before(rewindAt) {
 			rewindAt, rewindGate, judgedRound, ok = at, a.RewindGate, i, true
 		}
 	}
@@ -898,6 +917,24 @@ func (d *Driver) buildRewindSinceLocked(gateIdx int, buildStep string, since tim
 		break
 	}
 	return buildStep, rewindGate, judgedRound, crash, true
+}
+
+// selfReportArchive reports whether a rewind archive is the one
+// applySelfReportRewindLocked writes for a light re-entry's needs_code_change
+// self-report (polyforge#222): cause gate_fail_rewind with the delivered
+// result carrying needs_code_change: true. A gate FAIL's own rewind archive
+// never carries it — the field is legal only on a light re-entry's result,
+// and that result is archived by this write alone.
+func selfReportArchive(a *capsule.Attempt) bool {
+	if a.Cause != CauseGateFailRewind || len(a.Result) == 0 {
+		return false
+	}
+	var out map[string]any
+	if json.Unmarshal(a.Result, &out) != nil {
+		return false
+	}
+	_, value, _ := needsCodeChangeOf(out)
+	return value
 }
 
 // rewindTargetCause reports whether an attempt is a rewind archive's target
@@ -1234,6 +1271,7 @@ func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
 		StepID: stepID,
 		WIID:   d.wi.ID,
 		Resume: st != nil && st.Status == capsule.StepInProgress,
+		Attrs:  d.attrs[stepID],
 	}
 	if st != nil {
 		sp.RewindInput = st.PendingRewindInput
@@ -1399,22 +1437,32 @@ func attemptAfterAnswer(last capsule.Attempt, answers []capsule.ArchivedAnswer) 
 // the owner fixes the config and `pf resume` re-dispatches from the
 // checkpoint. It answers blocked=true when it parked the workflow.
 func (d *Driver) composeDispatch(stepID string) (blocked bool, err error) {
-	if d.cfg.Compose == nil {
-		return false, nil
+	var m map[string][]string
+	var cerr error
+	if d.cfg.Compose != nil {
+		m, cerr = d.cfg.Compose()
+		if cerr == nil {
+			cerr = validateCandidates(m)
+		}
+		if cerr != nil {
+			cerr = fmt.Errorf("the candidate composition failed at dispatch time: %w", cerr)
+		}
 	}
-	m, cerr := d.cfg.Compose()
-	if cerr == nil {
-		cerr = validateCandidates(m)
+	var attrs map[string]map[string]string
+	if cerr == nil && d.cfg.Attrs != nil {
+		if attrs, cerr = d.cfg.Attrs(); cerr != nil {
+			cerr = fmt.Errorf("the step attr composition failed at dispatch time: %w", cerr)
+		}
 	}
 	if cerr != nil {
-		reason := fmt.Sprintf("step %s: the candidate composition failed at dispatch time: %v", stepID, cerr)
+		reason := fmt.Sprintf("step %s: %v", stepID, cerr)
 		if err := d.transition(TransitionRequest{Kind: TransBlocked, StepID: stepID, Reason: reason, SpawnN: d.currentSpawnN()}); err != nil {
 			return false, fmt.Errorf("driver: step %s blocked write failed: %w", stepID, err)
 		}
 		return true, nil
 	}
 	d.mu.Lock()
-	d.cands = m
+	d.cands, d.attrs = m, attrs
 	d.mu.Unlock()
 	return false, nil
 }
@@ -1611,6 +1659,11 @@ type StepSpawn struct {
 	// answers before that boundary stay in the durable archive for audit
 	// but are not handed to a new dispatch of the round.
 	Answers []capsule.ArchivedAnswer
+	// Attrs is this step's attr overrides composed at this dispatch
+	// (Config.Attrs; name → value as text, only values that differ from
+	// the declaration's default). Each renders its shared material
+	// workflows/_shared/attr_<name>.md into the prompt; nil = none.
+	Attrs map[string]string
 	// RewindInput is the round's gate FAIL verdict (set from the rewind
 	// write until the step is accepted; every dispatch of the round — the
 	// first, a retry after an infra death, a restart — carries it).

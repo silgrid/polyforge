@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	w136RuntimeBad  = `YINGFANG_TEST_DSN="$(grep -m1 -o 'postgres://[a-zA-Z0-9_:@./?=-]*' tests/e2e_s37/main_test.go)' go test ./tests/e2e_cp37/ -count=1 -v`
-	w136RuntimeGood = `YINGFANG_TEST_DSN="$(grep -m1 -o 'postgres://[a-zA-Z0-9_:@./?=-]*' tests/e2e_s37/main_test.go)" go test ./tests/e2e_cp37/ -count=1 -v`
+	w136RuntimeBad  = `DEMO_TEST_DSN="$(grep -m1 -o 'postgres://[a-zA-Z0-9_:@./?=-]*' tests/e2e_s37/main_test.go)' go test ./tests/e2e_cp37/ -count=1 -v`
+	w136RuntimeGood = `DEMO_TEST_DSN="$(grep -m1 -o 'postgres://[a-zA-Z0-9_:@./?=-]*' tests/e2e_s37/main_test.go)" go test ./tests/e2e_cp37/ -count=1 -v`
 )
 
 func TestW136PausedRecordRevisionPersistsToTheChain(t *testing.T) {
@@ -53,7 +53,7 @@ func TestW136PausedRecordRevisionPersistsToTheChain(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(j.capsuleDir, "workflows", "demo-bundle", "workflow.md"), []byte(wf), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// The yingfang#37 shape: every binding carries the same unpaired quote,
+	// The shape: every binding carries the same unpaired quote,
 	// so one single-index revision could never correct the record.
 	bad := make([]string, 3)
 	good := make([]string, 3)
@@ -66,7 +66,7 @@ func TestW136PausedRecordRevisionPersistsToTheChain(t *testing.T) {
 		corrections[i] = capsule.BindingCorrection{Index: i, Command: good[i]}
 		titles[i] = fmt.Sprintf("S%d", i+1)
 		bindings[i] = map[string]any{
-			"title": titles[i], "repo": "yingfang", "command": bad[i],
+			"title": titles[i], "repo": "demo", "command": bad[i],
 			"unit": fmt.Sprintf("TestS%d", i+1), "marker": fmt.Sprintf("^PASS S%d$", i+1),
 		}
 	}
@@ -99,7 +99,7 @@ func TestW136PausedRecordRevisionPersistsToTheChain(t *testing.T) {
 	// The paused path verifies the session before it pushes under it.
 	hub.hold(j.wi, j.sessionID, api.StatusPaused)
 
-	if err := r.ReviseBinding(context.Background(), j.wi, "e2e-author", corrections, "usr_owner", "yingfang#37 pair every quote in one pass"); err != nil {
+	if err := r.ReviseBinding(context.Background(), j.wi, "e2e-author", corrections, "usr_owner", " pair every quote in one pass"); err != nil {
 		t.Fatalf("ReviseBinding on a paused record: %v", err)
 	}
 

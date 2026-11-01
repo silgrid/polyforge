@@ -295,6 +295,7 @@ func (r *Runtime) startEngine(ctx context.Context, j *job, interruptedCause stri
 		Spawner:          r.spawner,
 		StepEnded:        r.stepEnded(j.wi),
 		Compose:          r.composeFor(project, bundle, manual),
+		Attrs:            r.composeAttrsFor(project, bundle),
 		InterruptedCause: interruptedCause,
 	})
 	if err != nil {
@@ -338,6 +339,28 @@ func (r *Runtime) composeFor(project, bundle string, manual []string) func() (ma
 			return nil, err
 		}
 		return workspace.ComposeCandidates(fm, wcfg, project, manual), nil
+	}
+}
+
+// composeAttrsFor builds the dispatch-time attr-override composition of
+// one job: the bundle's frontmatter and the workspace yaml
+// (fresh, mapping-aware, DAEMON-414 when invalid) read again at every
+// call, composed through workspace.ComposeAttrs — the same reads as
+// composeFor, so nothing is snapshotted. A WI without a bundle has none.
+func (r *Runtime) composeAttrsFor(project, bundle string) func() (map[string]map[string]string, error) {
+	return func() (map[string]map[string]string, error) {
+		if bundle == "" {
+			return nil, nil
+		}
+		fm, err := r.readBundleFrontmatter(bundle)
+		if err != nil {
+			return nil, err
+		}
+		wcfg, err := r.LoadWorkspace(project)
+		if err != nil {
+			return nil, err
+		}
+		return workspace.ComposeAttrs(fm, wcfg, project), nil
 	}
 }
 

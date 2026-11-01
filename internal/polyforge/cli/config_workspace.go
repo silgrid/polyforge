@@ -11,7 +11,6 @@ package cli
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -108,6 +107,7 @@ func readWorkspaceConfig(ctx *Context, v *configView, ws string) (map[string]any
 		"summarize":      summarize,
 		"steps":          steps,
 		"steps_complete": stepsComplete,
+		"memory_policy":  memoryPolicyRead(cfg, projects),
 	}
 	if reason != "" {
 		out["steps_reason"] = reason
@@ -131,48 +131,124 @@ func sha256Hex(data []byte) string {
 // the daemon (the one machine fact the CLI cannot reconstruct locally) and
 // whether the candidate list is complete.
 func workspaceCandidateScope(ctx *Context) (dir string, complete bool, reason string) {
-	raw, err := ctx.configDaemon().Status()
-	if err != nil {
+	f := readDaemonFacts(ctx)
+	if !f.reachable {
 		return "", false, "the daemon is not reachable, so the installed bundle step ids are unknown; only the steps the file declares are listed"
 	}
-	var st struct {
-		WorkflowsDir string `json:"workflows_dir"`
-	}
-	if json.Unmarshal(raw, &st) != nil || st.WorkflowsDir == "" {
+	if f.workflowsDir == "" {
 		return "", false, "the daemon reports no workflows dir, so the installed bundle step ids are unknown; only the steps the file declares are listed"
 	}
-	return st.WorkflowsDir, true, ""
+	return f.workflowsDir, true, ""
 }
 
+// declaredStepCandidates answers the per-project step map of the read
+// face: every installed step id (when the daemon named the workflows
+// dir), every key the file declares, and always the project-level
+// `default` and the bundle-less `task` rows. Each entry carries
+// `declared` + `models` (a declared-empty list stays declared, never
+// absent), its `source` (`file` | `default`) and `class` (`live`), and
+// its `attrs`: every attr an installed bundle declares for the step id
+// (the declaration's default when the file does not override it) plus
+// every override the file declares.
 func declaredStepCandidates(cfg *workspace.Config, projects []string, workflowsDir string, complete bool) map[string]any {
 	steps := map[string]any{}
+	var ids map[string]bool
+	var decls map[string]map[string]workflow.AttrDecl
+	if complete && workflowsDir != "" {
+		ids, _ = workflow.StepIDs(workflowsDir)
+		decls, _ = workflow.StepAttrs(workflowsDir)
+	}
 	for _, project := range projects {
-		declared := map[string][]string(nil)
+		var declared map[string][]string
+		var overrides map[string]map[string]any
 		if cfg != nil {
-			declared = cfg.Models[project]
+			declared, overrides = cfg.Models[project], cfg.Attrs[project]
+		}
+		keys := map[string]bool{workspace.DefaultKey: true, workspace.TaskKey: true}
+		for id := range ids {
+			keys[id] = true
+		}
+		for id := range declared {
+			keys[id] = true
+		}
+		for id := range overrides {
+			keys[id] = true
 		}
 		entry := map[string]any{}
-		if complete && workflowsDir != "" {
-			ids, err := workflow.StepIDs(workflowsDir)
-			if err == nil {
-				for id := range ids {
-					entry[id] = candidateEntry(declared, id)
-				}
-			}
-		}
-		for id, models := range declared {
-			if _, ok := entry[id]; !ok {
-				entry[id] = map[string]any{"declared": true, "models": models}
-			}
+		for id := range keys {
+			entry[id] = stepEntryRead(project, id, declared, overrides[id], decls[id])
 		}
 		steps[project] = entry
 	}
 	return steps
 }
 
-func candidateEntry(declared map[string][]string, id string) map[string]any {
-	if models, ok := declared[id]; ok {
-		return map[string]any{"declared": true, "models": models}
+func stepEntryRead(project, id string, declared map[string][]string, overrides map[string]any, decls map[string]workflow.AttrDecl) map[string]any {
+	models, ok := declared[id]
+	e := map[string]any{"declared": ok, "models": nil, "source": sourceIf(ok), "class": WorkspaceConfigClass("steps." + project + "." + id + ".models")}
+	if ok {
+		e["models"] = models
 	}
-	return map[string]any{"declared": false, "models": nil}
+	attrs := map[string]any{}
+	for name, d := range decls {
+		attrs[name] = attrRead(project, id, name, overrides, &d)
+	}
+	for name := range overrides {
+		if _, ok := decls[name]; !ok {
+			attrs[name] = attrRead(project, id, name, overrides, nil)
+		}
+	}
+	if len(attrs) > 0 {
+		e["attrs"] = attrs
+	}
+	return e
+}
+
+func attrRead(project, id, name string, overrides map[string]any, d *workflow.AttrDecl) map[string]any {
+	v, ok := overrides[name]
+	a := map[string]any{"declared": ok, "source": sourceIf(ok), "class": WorkspaceConfigClass("steps." + project + "." + id + ".attrs." + name)}
+	switch {
+	case ok:
+		a["value"] = v
+	case d != nil:
+		a["value"] = d.Default
+	}
+	if d != nil {
+		a["default"] = d.Default
+		a["schema"] = map[string]any{"kind": d.Type}
+	}
+	return a
+}
+
+// memoryPolicyRead answers the read face's memory_policy block: the
+// default entry's effective lists (declared, else the built-in ones) and
+// every mapped project's OWN declared lists (never pre-merged: the append
+// rule is the append_to_default fact), each with whether it is declared.
+func memoryPolicyRead(cfg *workspace.Config, projects []string) map[string]any {
+	var declared map[string]workspace.PolicyEntry
+	if cfg != nil {
+		declared = cfg.MemoryPolicy
+	}
+	builtin := workspace.DefaultMemoryPolicy()
+	d, dok := declared[workspace.DefaultKey]
+	base := map[string]any{"record": orList(d.Record, builtin.Record), "skip": orList(d.Skip, builtin.Skip), "declared": dok}
+	perProject := map[string]any{}
+	for _, p := range projects {
+		e, ok := declared[p]
+		perProject[p] = map[string]any{"record": orList(e.Record, []string{}), "skip": orList(e.Skip, []string{}), "declared": ok}
+	}
+	return map[string]any{
+		"source":            sourceIf(declared != nil),
+		"class":             WorkspaceConfigClass(workspace.MemoryPolicyKey),
+		"append_to_default": true,
+		"default":           base,
+		"projects":          perProject,
+	}
+}
+
+func orList(declared, fallback []string) []string {
+	if declared != nil {
+		return declared
+	}
+	return fallback
 }

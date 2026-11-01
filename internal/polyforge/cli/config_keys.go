@@ -92,13 +92,21 @@ func WorkspaceConfigSchema(name string) map[string]any {
 	return nil
 }
 
-// WorkspaceConfigClass answers a workspace summarize key's reload class. The
-// summarize lane reads the yaml live at every request, so every summarize key
-// is live — the same class table the cli.toml keys use, never a UI copy.
+// WorkspaceConfigClass answers a workspace `.polyforge.yaml` key's reload
+// class — the same class table the cli.toml keys use, never a UI copy. The
+// summarize lane reads the yaml live at every request, and the driver
+// composes every step's chain and attrs fresh at every dispatch, so every
+// summarize key and every steps.<project>.<step>.models / .attrs.<name>
+// key is live (a running step keeps what its dispatch read); the
+// memory_policy section governs from the next claim.
 func WorkspaceConfigClass(name string) ConfigClass {
-	switch name {
-	case "summarize.models", "summarize.language", "summarize.interval_sec":
+	switch {
+	case name == "summarize.models", name == "summarize.language", name == "summarize.interval_sec":
 		return ConfigLive
+	case strings.HasPrefix(name, "steps."):
+		return ConfigLive
+	case name == workspace.MemoryPolicyKey:
+		return ConfigNextClaim
 	}
 	return ""
 }

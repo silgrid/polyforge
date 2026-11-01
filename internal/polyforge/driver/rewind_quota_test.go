@@ -155,6 +155,68 @@ func TestRewindOldLedgerShapeFailsClosed(t *testing.T) {
 	}
 }
 
+// TestRewindUnclassedRecordFailsClosed ( 12b): a ledger
+// record written before the class ledger carried `charged: bool`, which
+// this release reads as class "" — a record that occupies no edge slot
+// while still counting toward max_total. Its class is unattributable, so
+// the next gate FAIL fails closed with the same durable event as the
+// count-only shape — no compat read of `charged`, no guess.
+func TestRewindUnclassedRecordFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, capsule.ExecutionJSON)
+	if err := os.MkdirAll(filepath.Dir(execPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wf := &Workflow{Steps: []StepSpec{spec("build"), gateSpec("check", "build")}}
+	exec := skeletonExecution(WIInfo{ID: "wi_t1", CapsuleDir: dir, BundleName: "b"}, wf)
+	exec.WorkflowStatus = StatusRunning
+	blob, _ := json.MarshalIndent(exec, "", "  ")
+	// The legacy record shape, as the intermediate release wrote it.
+	var raw map[string]any
+	if err := json.Unmarshal(blob, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["rewind_stats"] = map[string]any{"count": 2, "rewinds": []any{
+		map[string]any{"gate": "check", "to_step": "build", "charged": true},
+		map[string]any{"gate": "check", "to_step": "build", "charged": true},
+	}}
+	blob, _ = json.MarshalIndent(raw, "", "  ")
+	if err := os.WriteFile(execPath, blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	log := &eventLog{}
+	d, err := New(Config{
+		WI:       WIInfo{ID: "wi_t1", CapsuleDir: dir, BundleName: "b"},
+		ExecPath: execPath,
+		Workflow: &Workflow{Steps: []StepSpec{spec("build"), gateSpec("check", "build")}, MaxTotal: 6, MaxPerStep: 2},
+		Spawner:  &fakeSpawner{script: []fakeEntry{done(`{}`), gateFAIL()}},
+		Log:      log,
+		SpawnN:   0,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	x := readExec(t, execPath)
+	if x.WorkflowStatus != StatusFailedRewindExhausted || x.RewindStats.Count != 2 || len(x.RewindStats.Rewinds) != 2 {
+		t.Fatalf("an unclassed ledger record must fail closed without a new rewind: %q %+v", x.WorkflowStatus, x.RewindStats)
+	}
+	var named bool
+	for _, e := range log.entries {
+		if e.kind == "rewind_ledger_unattributable" {
+			named = true
+			if e.body["gate"] != "check" {
+				t.Fatalf("the event must name the gate: %+v", e.body)
+			}
+		}
+	}
+	if !named {
+		t.Fatalf("the fail-close must emit its durable event: %v", log.kinds())
+	}
+}
+
 // TestRewindDefaultsLoadOnEveryLaneShape (code review): the
 // driver's own defaults must never fail the load. A one-edge workflow
 // with no rewind block loads (the omitted total derives the reachable

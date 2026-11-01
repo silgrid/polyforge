@@ -1,12 +1,12 @@
-// Package version carries the build-injected version string shared by the
-// pf and aihub binaries.
+// Package version carries the build-injected version string of the one pf
+// binary (the client, `pf daemon` and the `pf aihub` server).
 //
 // Un-injected (plain `go build`) builds report "dev". Release builds stamp
 // the git tag at link time — see the Makefile's GO_LDFLAGS and `make release`:
 //
-//	go build -ldflags "-X github.com/silgrid/polyforge/internal/version.Version=<tag>" ./cmd/aihub ./cmd/pf
+//	go build -ldflags "-X github.com/silgrid/polyforge/internal/version.Version=<tag>" ./cmd/pf
 //
-// Both binaries print it via `pf --version` / `aihub --version`.
+// pf prints it via `pf --version` and the server via `pf aihub --version`.
 package version
 
 // Version is the version string of the build. It defaults to "dev" and is

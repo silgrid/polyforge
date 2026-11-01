@@ -66,7 +66,11 @@ The rule lives in the routing skill (`SKILL.md` §Project routing).
 | cut a release / deploy a published version | `release` | `full` (no verification step) |
 | no execution at all — a design, decision or tracking ticket | omit `--bundle`: a registration ticket runs nothing (it is not claimable, `CORE-409`) | not applicable |
 
-Pick the lane with the owner. Every filing proposal fills the three mandatory
+The lane's step table is the `steps:` list in its `workflows/<lane>/workflow.md`
+frontmatter: every acceptance criterion of an execution ticket must name the
+step of that table that carries it.
+
+Pick the lane with the owner. Every filing proposal fills the four mandatory
 slots below **before** `pf file create` — they are slots the agent answers, not
 prose it may skip:
 
@@ -78,7 +82,10 @@ prose it may skip:
   authority of `docs/bundles.md` (do not restate it).
 - **Tier + reason** — the verification tier (`scoped` or `full`) and one line
   why, by the same heuristic everywhere: propose `scoped` for a text/docs change
-  confined to one repository and a small surface; propose `full` when the change
+  confined to one repository and a small surface; propose `full` when the
+  acceptance is e2e-carried — a criterion an `e2e-author` step would author, or
+  behaviour an existing e2e suite pins — because a scoped run deliberately skips
+  the e2e suites; propose `full` when the change
   crosses modules or repos, touches the driver/daemon core, or is gate-type (a
   `gate: true` step definition — `verification`, `review`, `deliver` — or the
   driver/daemon logic behind it). When you cannot determine the tier, propose
@@ -95,6 +102,17 @@ prose it may skip:
   ticket **falls back to full**. This slot reuses the readiness contract in
   "### Scoped verification (`verification: scoped`)" below and
   docs/contributing.md『Verification tiers』; it does not restate either.
+- **Acceptance carrier** — every acceptance criterion is written
+  `<criterion> — carried by <step id>`, the step id taken from the chosen
+  lane's step table (the table is the authority; do not copy a step list into
+  the proposal from memory). A criterion that names no step either drops to
+  the evidence that graph actually runs, recorded in the `content` as an
+  explicit waiver proposed to the owner, or the ticket moves to a lane whose
+  step table carries it. A registration ticket (no bundle) has no step table
+  and skips this slot.
+
+Any read of `<workspace>/.repo/<name>` behind these slots (manifests, conf, code) happens
+after the session clone sync: SKILL.md session rule 8.
 
 **Down-lane check.** Judge the ticket on two axes before you settle the lane,
 and name the result in the `Lane + reason` slot above:
@@ -109,7 +127,10 @@ exactly what such a ticket does not need. Work on `docs/concepts.md`'s "never
 unattended" list counts as a high `lane risk surface` by definition and is
 **never down-laned** off `feature-full`, whatever its `expected diff size`:
 that list's only safeguard is the filer picking the lane that always keeps a
-human in the loop, so the check never proposes a lighter lane for it. When the
+human in the loop, so the check never proposes a lighter lane for it. The
+check also never down-lanes onto a lane whose step table carries no step for
+the acceptance criteria: a carrier-less lane is not a cheaper lane, it is the
+wrong one (see the `Acceptance carrier` slot). When the
 two axes disagree, or the estimate is genuinely unclear, fail closed to the
 heavier lane. The check only
 routes between the lanes the table above defines — the lane definitions and the
@@ -215,6 +236,13 @@ view: `slug (id)`, status, project, goal, milestone, labels, bundle,
 assignee, waiting, waiting-for, created (and closed when terminal); `show`
 adds the dependency block. `dep add|rm|list` print the dependency view
 (`--json`: the server's `{blocking, blocked_by}` raw).
+
+`create` of an execution ticket also prints, on stderr only, an advisory
+when the daemon is reachable: the chosen bundle's step sequence with a
+reminder that every acceptance criterion names the step that carries it,
+plus a specific warning when the content mentions e2e and no step of that
+bundle declares `e2e_author_mode` — it never changes the request, the exit
+code or the `--json` stdout.
 
 ## Failure branches
 

@@ -1,4 +1,4 @@
-package main
+package aihub
 
 import (
 	"crypto/sha256"
@@ -23,7 +23,7 @@ func TestMain(m *testing.M) { testenv.Main(m) }
 // constants in internal/aihub/server.
 func TestRegisteredFlagsCarryNoHTTPBoundKnobs(t *testing.T) {
 	fs := flag.NewFlagSet("aihub", flag.ContinueOnError)
-	registerFlags(fs)
+	DefineFlags(fs)
 	var names []string
 	fs.VisitAll(func(f *flag.Flag) { names = append(names, f.Name) })
 	sort.Strings(names)

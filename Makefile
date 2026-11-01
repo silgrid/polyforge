@@ -1,5 +1,5 @@
-# Version stamped into both binaries at link time: internal/version.Version,
-# printed by `pf --version` / `aihub --version`. Defaults to the git tag when
+# Version stamped into the pf binary at link time: internal/version.Version,
+# printed by `pf --version` / `pf aihub --version`. Defaults to the git tag when
 # HEAD is exactly tagged, else "dev". The documented release procedure tags
 # AFTER the build, so it passes VERSION=<tag> explicitly to `make release`.
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || echo dev)
@@ -31,8 +31,9 @@ vet:
 	go vet ./...
 
 # crossbuild is the darwin cross-build gate (polyforge#218): the tree must
-# build for both darwin architectures, so pf and aihub binaries can exist on
-# macOS. This is part of `check`, ahead of the test gate.
+# build for both darwin architectures, so the pf binary (client, daemon and
+# the `pf aihub` server) can exist on macOS. This is part of `check`, ahead
+# of the test gate.
 crossbuild: webui-build
 	GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./...
 	GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./...
@@ -71,11 +72,12 @@ xrefs:
 
 check: build vet fmt xrefs crossbuild test
 
-# release builds the six shipped binaries with the git tag injected into
-# internal/version.Version via -ldflags -X, into artifacts/release-<tag>/
-# (polyforge#218: the matrix is aihub/pf × linux-amd64, darwin-arm64,
-# darwin-amd64; release.sh consumes the linux pair under the un-suffixed
-# names and the darwin ones under their asset names).
+# release builds the three shipped pf binaries with the git tag injected
+# into internal/version.Version via -ldflags -X, into artifacts/release-<tag>/
+# (one pf binary — the server runs as `pf aihub` — for
+# linux-amd64, darwin-arm64, darwin-amd64; release.sh consumes the linux
+# one under the un-suffixed name pf and the darwin ones under their asset
+# names).
 # Pass VERSION=<tag> (the release procedure builds before tagging) or run
 # it on the tagged commit itself. Refuses to stamp the un-injected "dev".
 release: webui-build
@@ -83,9 +85,7 @@ release: webui-build
 		echo "make release: no git tag on HEAD and no VERSION=<tag> given; refusing to stamp 'dev'"; \
 		exit 1; \
 	fi
-	GOWORK=off go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/ ./cmd/aihub ./cmd/pf
-	GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/aihub-darwin-arm64 ./cmd/aihub
+	GOWORK=off go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/pf ./cmd/pf
 	GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/pf-darwin-arm64 ./cmd/pf
-	GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/aihub-darwin-amd64 ./cmd/aihub
 	GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/pf-darwin-amd64 ./cmd/pf
-	@echo "release: injected internal/version.Version=$(VERSION) (ldflags -X) into the 6 binaries: aihub/pf linux-amd64 + darwin-arm64 + darwin-amd64"
+	@echo "release: injected internal/version.Version=$(VERSION) (ldflags -X) into the 3 pf binaries: linux-amd64 + darwin-arm64 + darwin-amd64"

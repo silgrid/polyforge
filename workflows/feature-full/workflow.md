@@ -4,7 +4,12 @@ rewind:
   max_total: 9
   max_per_step: 3
 steps:
-  - { id: grill, context_policy: fresh, handoff: true, recall: true }
+  - id: grill
+    context_policy: fresh
+    handoff: true
+    recall: true
+    attrs:
+      question_batch_size: { type: int, default: 0 }
   - { id: spec, context_policy: inherit, recall: true }
   - { id: grill-review, context_policy: fresh, handoff: true, requires_human_answer: true, gate: true, on_fail: { target: spec } }
   - { id: plan, context_policy: inherit, recall: true }
@@ -180,9 +185,10 @@ behaviour face MUST stay `required`, with one named exception: when every author
 scenario passes at baseline (the behaviour is already on main), the driver asks the
 owner — `rewind-to-spec: <words>` (an owner-routed rewind to `spec`), `skip:
 <rationale>` (`e2e-author` records the rationale verbatim in `artifacts/grill-qa.md`
-and completes skipped) or `cancel`. On a skip, `e2e-author` commits nothing, reporting empty
-`scenario_titles`/`baseline`; `verification` and `review` honour the skip only on
-the recorded owner's explicit approval.
+and completes skipped) or `cancel`. On a skip, `e2e-author` authors and commits no scenario,
+reporting empty `scenario_titles`/`baseline` — after an all-green run it first reverts that
+run's own authoring commit, so no authored file stays in the merge-base diff; `verification`
+and `review` honour the skip only on the recorded owner's explicit approval.
 
 ## Artifact flow between steps
 

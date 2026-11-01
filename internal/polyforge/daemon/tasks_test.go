@@ -331,11 +331,14 @@ func TestTaskSpawnResolvesTheReporterOnce(t *testing.T) {
 }
 
 // TestTaskSpawnReporterResolutionIsBounded: the spawn-time member read
-// runs under its own reporterResolveTimeout deadline and honours the
+// runs under its own documented 3s deadline and honours the
 // caller's context, so a hung hub ends as the documented fallback — the
 // empty snapshot, read as machine — instead of holding the spawn for the
 // client's global timeout.
 func TestTaskSpawnReporterResolutionIsBounded(t *testing.T) {
+	// The documented bound, pinned as a literal rather than read from the
+	// production constant, so changing the constant turns this test red.
+	const bound = 3 * time.Second
 	td := taskDaemon(t, quickRunner{}, taskYaml)
 	td.hub.mu.Lock()
 	td.hub.contacts = map[string][]api.ProjectMemberContact{"proj": {{ID: "usr_carol", DisplayName: "Carol C"}}}
@@ -350,8 +353,8 @@ func TestTaskSpawnReporterResolutionIsBounded(t *testing.T) {
 	deadline := td.hub.contactsDeadline
 	td.hub.contactsHang = true
 	td.hub.mu.Unlock()
-	if deadline.IsZero() || deadline.Before(before) || deadline.After(time.Now().Add(reporterResolveTimeout)) {
-		t.Fatalf("member read deadline = %v, want within %v of the call", deadline, reporterResolveTimeout)
+	if deadline.IsZero() || deadline.Before(before.Add(bound)) || deadline.After(time.Now().Add(bound)) {
+		t.Fatalf("member read deadline = %v, want %v after the call", deadline, bound)
 	}
 
 	// A hung hub answers only when the context ends; the caller's shorter
@@ -362,7 +365,7 @@ func TestTaskSpawnReporterResolutionIsBounded(t *testing.T) {
 	if got := td.Daemon.resolveReporter(ctx, "proj", "usr_carol"); got != "" {
 		t.Fatalf("resolveReporter on a hung hub = %q, want the empty snapshot", got)
 	}
-	if took := time.Since(start); took >= reporterResolveTimeout {
+	if took := time.Since(start); took >= bound {
 		t.Fatalf("resolveReporter on a hung hub took %v, want the caller's 50ms deadline", took)
 	}
 }

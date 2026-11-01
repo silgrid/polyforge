@@ -745,6 +745,8 @@ func (d *Daemon) statusRoute(w http.ResponseWriter, r *http.Request) {
 		Reload:      d.reloadStatusSnapshot(),
 		MachineFace: d.faceStatus(),
 		Tasks:       d.taskSummary(),
+		// additive: the schema features this daemon's loaders accept
+		Capabilities: cli.DaemonCapabilities,
 	})
 }
 

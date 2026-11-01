@@ -541,3 +541,43 @@ func TestInPlaceEscalationContextKeysOnTheAbandonedFlag(t *testing.T) {
 		}
 	}
 }
+
+// TestJudgedRoundIsTheFailArchiveNotTheSelfReport ( leftover):
+// a light review FAIL archives the build step (the round the verdict
+// judged); the light re-entry's needs_code_change self-report then archives
+// the resumed attempt as a later rewind archive of the same gate. Through
+// the production path — the verdict time from gateLastVerdictAtLocked, then
+// buildRewindSinceLocked from it, as blockUnchangedGateTree does — the
+// verdict time is the FAIL's archive (the self-report delivers no verdict)
+// and the judged round is the FAIL's own archive, never the self-report's.
+func TestJudgedRoundIsTheFailArchiveNotTheSelfReport(t *testing.T) {
+	at := func(s int) time.Time { return time.Date(2026, 10, 30, 12, 0, s, 0, time.UTC) }
+	stamp := func(s int) string { return at(s).Format(time.RFC3339Nano) }
+	d := &Driver{wi: WIInfo{ID: "wi_1"},
+		workflow: &Workflow{Steps: []StepSpec{{ID: planStepID}, {ID: "code"}, {ID: reviewStepID, Gate: true, OnFail: &OnFail{Target: "code"}}}},
+		exec: &capsule.Execution{Steps: map[string]*capsule.Step{
+			"code": {Status: capsule.StepPending, Attempts: []capsule.Attempt{
+				{Cause: "accepted", AttemptSeq: 1, ArchivedAt: stamp(10)},
+				{Cause: CauseGateFailRewindTextOnly, AttemptSeq: 2, ArchivedAt: stamp(30), RewindGate: reviewStepID,
+					Result: json.RawMessage(`{"summary":"the judged round"}`)},
+				{Cause: CauseGateFailRewind, AttemptSeq: 3, ArchivedAt: stamp(40), RewindGate: reviewStepID,
+					Result: json.RawMessage(`{"summary":"the self-report","needs_code_change":true}`)},
+			}},
+			reviewStepID: {Status: capsule.StepInProgress, Attempts: []capsule.Attempt{
+				{Cause: CauseGateFailVerdict, AttemptSeq: 1, ArchivedAt: stamp(30),
+					Result: json.RawMessage(`{"verdict":"fail"}`)},
+			}},
+		}}}
+	since, ok := d.gateLastVerdictAtLocked(reviewStepID)
+	if !ok || !since.Equal(at(30)) {
+		t.Fatalf("review's verdict time = %v (ok %v), want %v: the self-report archive at %v is no verdict of the gate", since, ok, at(30), at(40))
+	}
+	gateIdx, _ := d.workflow.indexOf(reviewStepID)
+	target, gate, judged, _, ok := d.buildRewindSinceLocked(gateIdx, "code", since)
+	if !ok || target != "code" || gate != reviewStepID {
+		t.Fatalf("the rewind of code since the review verdict must be found: %q %q %v", target, gate, ok)
+	}
+	if judged != 1 {
+		t.Fatalf("judged round = attempt index %d, want 1 (the FAIL's own archive; index 2 is the light self-report)", judged)
+	}
+}

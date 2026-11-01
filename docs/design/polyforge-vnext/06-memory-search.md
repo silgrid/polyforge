@@ -35,7 +35,7 @@ with leading markdown markers removed (`#`, `>`, `-`/`*`/`+`, `[ ]`, `1.`/`1)`),
 
 Earlier versions stored documents as `<data-dir>/memory/<project_id>/<mem_id>/memory.md` (after redact, under
 `<project_id>/_redacted/<mem_id>/`), and rows had no `content`. When aihub starts, before it begins serving, it runs
-`Store.MigrateContent` (`cmd/aihub/main.go`; listen first, serve only after the migration completes, connections wait in the backlog): when the table lacks the
+`Store.MigrateContent` (`internal/aihub/main.go`, `pf aihub`; listen first, serve only after the migration completes, connections wait in the backlog): when the table lacks the
 `content` column, `ALTER TABLE ADD COLUMN`; for each row with `content IS NULL`, the file is read by `authority_path` (first the active / `_redacted` location matching the row's status,
 then the other one), the file bytes are written into `content` verbatim, committed in small transactions of 16 MiB per batch. File sha equals
 `content_sha` → copy; mismatch → the file wins (the old versions' rule), `content_sha`/`content_len` are recomputed, and an active row's

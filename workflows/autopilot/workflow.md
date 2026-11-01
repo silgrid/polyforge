@@ -7,7 +7,7 @@ rewind:
 defaults:
   model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
 steps:
-  - { id: grill, context_policy: fresh, handoff: true, requires_human_answer: if_asked, recall: true }
+  - { id: grill, context_policy: fresh, handoff: true, requires_human_answer: if_asked, recall: true, attrs: { question_batch_size: { type: int, default: 0 } } }
   - { id: fix, context_policy: inherit, recall: true }
   - id: verification
     context_policy: fresh

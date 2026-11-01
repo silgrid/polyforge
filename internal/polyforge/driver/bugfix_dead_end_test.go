@@ -70,14 +70,18 @@ func TestNotReproducedParksOwnerQuestion(t *testing.T) {
 // Review s8#2: the owner's continue guidance at the repro dead end reaches
 // the next root-cause dispatch verbatim (root-cause reads only repro's
 // artifacts, written before the answer), and the round's acceptance
-// clears it.
+// clears it. The held report `continue` accepts is the accepted repro,
+// so its heads are the recorded pre-fix base.
 func TestNotReproducedContinueGuidanceReachesRootCause(t *testing.T) {
 	d, execPath := bugfixLane(t)
 	mustStart(t, d, reproStepID, 1)
-	resultAt(t, d, reproStepID, 1, OutcomeCompleted, `{"reproduces":false}`, nil)
+	resultAt(t, d, reproStepID, 1, OutcomeCompleted, `{"reproduces":false}`, map[string]string{"app": "aaa111"})
 	const answer = "continue: diagnose from the stack trace in the report"
 	if err := d.Answer(ReproNotReproducedQuestionID, answer, "owner"); err != nil {
 		t.Fatal(err)
+	}
+	if got := readExec(t, execPath).PreFixHeads["app"]; got != "aaa111" {
+		t.Fatalf("continue accepts the held repro report: its heads are the pre-fix base, got pre_fix_heads[app]=%q", got)
 	}
 	sp, _, err := d.prepareDispatch(rootCauseStepID)
 	if err != nil {
@@ -90,6 +94,28 @@ func TestNotReproducedContinueGuidanceReachesRootCause(t *testing.T) {
 	resultAt(t, d, rootCauseStepID, 2, OutcomeCompleted, `{"verdict":"pass","root_cause":"x","evidence":[{"kind":"code","ref":"a.go","detail":"d"}]}`, nil)
 	if pri := readExec(t, execPath).Steps[rootCauseStepID].PendingRewindInput; pri != nil {
 		t.Fatalf("the guidance is consumed by the round that carried it: %+v", pri)
+	}
+}
+
+// TestNotReproducedRerunReproRecordsAcceptedHeads ( 12a):
+// the parked not-reproduced report records its heads, but a re-run-repro
+// answer discards that report — and with it those heads — so the pre-fix
+// base is the heads of the repro report actually accepted (the re-run
+// commits its authored tests, so they differ).
+func TestNotReproducedRerunReproRecordsAcceptedHeads(t *testing.T) {
+	d, execPath := bugfixLane(t)
+	mustStart(t, d, reproStepID, 1)
+	resultAt(t, d, reproStepID, 1, OutcomeCompleted, `{"reproduces":false}`, map[string]string{"app": "aaa111"})
+	if err := d.Answer(ReproNotReproducedQuestionID, "re-run-repro: use the production config", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readExec(t, execPath).PreFixHeads; len(got) != 0 {
+		t.Fatalf("re-run-repro discards the held report and its heads: pre_fix_heads=%+v", got)
+	}
+	mustStart(t, d, reproStepID, 2)
+	resultAt(t, d, reproStepID, 2, OutcomeCompleted, `{"reproduces":true}`, map[string]string{"app": "bbb222"})
+	if got := readExec(t, execPath).PreFixHeads["app"]; got != "bbb222" {
+		t.Fatalf("the pre-fix base is the accepted re-run's heads: got pre_fix_heads[app]=%q, want bbb222", got)
 	}
 }
 

@@ -1,8 +1,8 @@
 // Package webui embeds the console's built frontend: the Vite build
 // writes the SPA into dist/, and the aihub server serves that tree —
-// and only that tree — under /web/. The single aihub binary is the one
-// shipped artifact: no webui/ directory needs to exist next to it at
-// runtime (the acceptance bar starts the binary from elsewhere).
+// and only that tree — under /web/. The pf binary (the server runs as
+// `pf aihub`) is the one shipped artifact: no webui/ directory needs to
+// exist next to it at runtime (the acceptance bar starts the binary from elsewhere).
 //
 // Nothing under dist is tracked: the frontend build (which every
 // binary-producing make target runs first) creates the directory, so

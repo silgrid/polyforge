@@ -30,16 +30,18 @@
 #      the aihub trust surface, so a release refuses on a known vulnerable
 #      production dependency; the test bar never runs it);
 #   3. build the binaries (GOWORK=off make release VERSION=<tag>) -> the
-#      six-binary matrix aihub/pf × linux-amd64, darwin-arm64,
-#      darwin-amd64 (polyforge#218); build the image from the LINUX aihub
-#      (aihub stays linux/amd64-only) tagged ghcr.io/silgrid/aihub:<tag>;
+#      one pf binary for linux-amd64, darwin-arm64, darwin-amd64
+#      (the server runs as `pf aihub`); build the image from
+#      the LINUX pf (the image stays linux/amd64-only, entrypoint
+#      `pf aihub`) tagged ghcr.io/silgrid/aihub:<tag>;
 #   4. git tag <tag> + git push origin <tag> (NO force): the atomic claim of the
 #      version. If the tag exists on origin the run stops, nothing published;
 #   5. docker push; write aihub-image.digest (the bare image digest
 #      sha256:<64 hex>, known only after the push; the canonical format that
-#      deploy.sh consumes); SHA256SUMS over the six binaries and the digest file
-#      (7 lines);
-#   6. gh release create <tag> with the 8 assets (6 binaries + digest + SUMS),
+#      deploy.sh consumes); SHA256SUMS over the three pf binaries and the
+#      digest file (4 lines);
+#   6. gh release create <tag> with the 4 payload assets (3 pf binaries +
+#      digest) + SHA256SUMS,
 #      notes from docs/release-notes/<tag>.md (generated from git log when
 #      absent).
 # Last lines on stdout: version=<tag>, commit=<sha>, notes=<release url>.
@@ -48,7 +50,7 @@
 # monotonicity (the tag must be strictly greater than EVERY other release tag on
 # origin); the PR-only check over previous-tag..tag, owner-direct allowlist
 # included (needs the commits locally: git fetch origin first); release exists
-# with EXACTLY the 8 assets;
+# with EXACTLY the 4 payload assets + SHA256SUMS;
 # sha256sum -c SHA256SUMS on the downloaded assets; aihub-image.digest is
 # exactly sha256:<64 hex> and the registry digest of ghcr.io/silgrid/aihub:<tag>
 # equals it. Exit 0 iff all pass.
@@ -98,9 +100,8 @@
 #                       --audit-level=high'); runs AFTER the test gate and
 #                       BEFORE the build, like the other gates
 #   RELEASE_BUILD_CMD   build command; sees TAG; must leave
-#                       artifacts/release-$TAG/aihub, .../pf and the four
-#                       darwin binaries .../aihub-darwin-arm64, .../pf-darwin-arm64,
-#                       .../aihub-darwin-amd64, .../pf-darwin-amd64
+#                       artifacts/release-$TAG/pf and the two darwin
+#                       binaries .../pf-darwin-arm64, .../pf-darwin-amd64
 #                                                 (default: GOWORK=off make release VERSION=$TAG)
 #   RELEASE_IMAGE       image repository          (default: ghcr.io/silgrid/aihub)
 #   RELEASE_GH_REPO     gh -R repo                (REQUIRED; no default - an
@@ -267,12 +268,9 @@ if [ "${1:-}" = "--verify" ]; then
   VWORK=$(mktemp -d "${TMPDIR:-/tmp}/release-verify.XXXXXX")
   trap 'rm -rf "$VWORK"' EXIT INT TERM
 
-  # 2. release exists with exactly the 8 assets.
+  # 2. release exists with exactly the 4 payload assets + SHA256SUMS.
   WANT="SHA256SUMS
-aihub-darwin-amd64
-aihub-darwin-arm64
 aihub-image.digest
-aihub-linux-amd64
 pf-darwin-amd64
 pf-darwin-arm64
 pf-linux-amd64"
@@ -280,7 +278,7 @@ pf-linux-amd64"
     pass "release $VTAG exists"
     sort "$VWORK/assets.raw" >"$VWORK/assets.txt"
     if [ "$(cat "$VWORK/assets.txt")" = "$WANT" ]; then
-      pass "exactly the 8 assets: $(tr '\n' ' ' <"$VWORK/assets.txt")"
+      pass "exactly the 4 payload assets + SHA256SUMS: $(tr '\n' ' ' <"$VWORK/assets.txt")"
     else
       fail "asset set differs; want [$(echo "$WANT" | tr '\n' ' ')] got [$(tr '\n' ' ' <"$VWORK/assets.txt")]"
     fi
@@ -401,26 +399,25 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/release.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT INT TERM
 OUT="$WORK/out"; mkdir "$OUT"
 
-# build binaries: the full matrix (linux-amd64 pair consumed by the
-# image build and the deploy path, the darwin pairs shipped as assets).
+# build binaries: the full matrix (linux-amd64 pf consumed by the image
+# build and the deploy path, the darwin pf binaries shipped as assets).
 export TAG
 if [ -n "${RELEASE_BUILD_CMD:-}" ]; then sh -c "$RELEASE_BUILD_CMD"; else GOWORK=off make release VERSION="$TAG"; fi
 ART="artifacts/release-$TAG"
 MISSING=""
-for n in aihub pf aihub-darwin-arm64 pf-darwin-arm64 aihub-darwin-amd64 pf-darwin-amd64; do
+for n in pf pf-darwin-arm64 pf-darwin-amd64; do
   [ -f "$ART/$n" ] || MISSING="$MISSING $ART/$n"
 done
-[ -z "$MISSING" ] || die "build did not produce the 6-binary matrix, missing:$MISSING"
-cp "$ART/aihub" "$OUT/aihub-linux-amd64"
+[ -z "$MISSING" ] || die "build did not produce the 3-binary pf matrix, missing:$MISSING"
 cp "$ART/pf" "$OUT/pf-linux-amd64"
 for a in darwin-arm64 darwin-amd64; do
-  cp "$ART/aihub-$a" "$OUT/aihub-$a"
   cp "$ART/pf-$a" "$OUT/pf-$a"
 done
 
-# build image (context: temp dir with the binary as `aihub`).
+# build image (context: temp dir with the linux binary as `pf`; the
+# entrypoint runs `pf aihub`).
 mkdir "$WORK/ctx"
-cp "$ART/aihub" "$WORK/ctx/aihub"
+cp "$ART/pf" "$WORK/ctx/pf"
 docker build -f deploy/Dockerfile -t "$IMAGE:$TAG" "$WORK/ctx"
 
 # release notes (never committed).
@@ -469,9 +466,8 @@ Nothing has been deleted or rolled back automatically. Decide by hand:
     (note: a new run refuses to release a commit that already carries a tag, so
     the next version needs a new commit on $BRANCH);
   - the image $IMAGE:$TAG and/or the GitHub release may be missing or partial;
-  - local files that survive: artifacts/release-$TAG/aihub and
-    artifacts/release-$TAG/pf and the four darwin binaries
-    artifacts/release-$TAG/{aihub,pf}-darwin-{arm64,amd64} (the built
+  - local files that survive: artifacts/release-$TAG/pf and the two darwin
+    binaries artifacts/release-$TAG/pf-darwin-{arm64,amd64} (the built
     binaries) and the local docker image
     $IMAGE:$TAG. The staging directory (checksums, aihub-image.digest, notes)
     is removed when this script exits;
@@ -488,15 +484,12 @@ docker push "$IMAGE:$TAG" || POSTFAIL "docker push"
 DIGEST=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:$TAG" | grep "^$IMAGE@" | head -1 | sed 's/^.*@//') || DIGEST=""
 printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || POSTFAIL "reading the pushed image digest (got \"$DIGEST\")"
 printf '%s\n' "$DIGEST" >"$OUT/aihub-image.digest"
-( cd "$OUT" && sha256sum aihub-linux-amd64 pf-linux-amd64 \
-  aihub-darwin-arm64 pf-darwin-arm64 aihub-darwin-amd64 pf-darwin-amd64 \
+( cd "$OUT" && sha256sum pf-linux-amd64 pf-darwin-arm64 pf-darwin-amd64 \
   aihub-image.digest >SHA256SUMS ) || POSTFAIL "SHA256SUMS"
 
-# 6. GitHub release: the 8-asset matrix (6 binaries + digest + SUMS).
+# 6. GitHub release: the 4 payload assets (3 pf binaries + digest) + SUMS.
 URL=$(gh_ release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES" \
-  "$OUT/aihub-linux-amd64" "$OUT/pf-linux-amd64" \
-  "$OUT/aihub-darwin-arm64" "$OUT/pf-darwin-arm64" \
-  "$OUT/aihub-darwin-amd64" "$OUT/pf-darwin-amd64" \
+  "$OUT/pf-linux-amd64" "$OUT/pf-darwin-arm64" "$OUT/pf-darwin-amd64" \
   "$OUT/aihub-image.digest" "$OUT/SHA256SUMS") || POSTFAIL "gh release create"
 
 echo "version=$TAG"

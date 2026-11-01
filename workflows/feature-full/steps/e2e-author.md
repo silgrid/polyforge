@@ -133,6 +133,26 @@ The lane default is `{{e2e_author_mode}}`; this run's mode is the owner-approved
 7. Record the run in `artifacts/e2e-scenarios.md` under a `## Baseline run` section,
    one entry per kept scenario in document order, with the evidence; fill `baseline`.
 
+## Carries header (every authored suite)
+
+Every suite file you author declares the repository paths it covers in its opening
+comment block — the leading blank and comment lines before the first line of code:
+
+    // carries: <glob>, <glob>
+
+(`# carries:` in a language whose comments start with `#`; several `carries:` lines
+union.) Derive the globs mechanically from `artifacts/plan.md`'s declared changed
+paths — the files the plan steps whose behaviour the suite exercises declare as
+written — never typed freehand: each declared path becomes one glob, the path itself
+or its directory followed by `*` when those steps declare several files there. A
+`carries:` line after the first line of code is not a declaration, and an imported
+helper module carries no header. The release-shipped verification-scope engine
+(`tools/verify-scope`, whose header documents the syntax) selects suites from these
+headers alone: a suite without one sends every scoped ticket of its repository to the
+full tier, and a header that leaves out a path the suite covers lets a scoped ticket
+skip the suite. The header is part of the suite, so it goes into the same dedicated
+commit.
+
 ## Bindings (how verification reads each scenario's result)
 
 `verification` runs the whole bar in one mechanical command and then judges only what that
@@ -223,7 +243,7 @@ new ones) — the driver takes that list as the new baseline. Spec and plan are 
   <words>` (an owner-routed rewind to `spec`), `skip: <rationale>` or `cancel`.
 - **completed (skipped on the owner's `skip` answer)** — your answers carry the owner's
   `skip`: first revert the all-green run's own authoring commit (see "No orphan from an
-  all-green run" below), so the merge-base diff carries no authored file; then append the
+  all-green run" above), so the merge-base diff carries no authored file; then append the
   owner's rationale verbatim to `artifacts/grill-qa.md` (a `## e2e-author
   skip` block naming the answer), record it in the scenario document, and complete with
   `e2e_author_mode: "skipped-with-rationale"`, that `skip_rationale`, empty

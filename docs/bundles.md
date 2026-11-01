@@ -19,6 +19,8 @@ A bundle is a directory under the daemon's workflows dir:
         principles.md       # the engineering principles every step renders
         <name>.md           # shared fragments: blocks several step files
                             # repeat, included by {{<name>}} (no vars entry)
+        attr_<name>.md      # a step attr's material, rendered when a project
+                            # overrides the attr away from its default
         steps/<id>.md        # shared step definitions
       autopilot/             # a shipped bundle
         workflow.md          # frontmatter: the steps, their order, budgets, candidates
@@ -116,6 +118,22 @@ schema. The keys:
     carries each bundle's own facts.
   - `budget: { wall_minutes: N }` — the step's wall-budget estimate;
     the step-timeout bound T becomes `max(3 x wall_minutes, T)`.
+  - `attrs: { <name>: { type: int|string, default: <scalar> } }` — the
+    step's configurable attributes: each name (the step-var grammar) a
+    project may override under `steps.<project>.<step-id>.attrs.<name>`
+    in its `.polyforge.yaml` ([config reference](reference/config.md#stepsprojectstep-idattrs--step-attributes)).
+    The type is `int` or `string` and the default is a scalar of it; a
+    malformed declaration is the bundle's own load error. An attr's
+    material is `_shared/attr_<name>.md`: at every dispatch the driver
+    composes the project's override, and only when it differs from the
+    default renders that file with `{{<name>}}` = the value (the same
+    step-var substitution) as its own prompt section after the step
+    definition — the default leaves the prompt byte-identical, and a
+    declared override whose material file is missing fails the dispatch.
+    The shipped `feature-full` and `autopilot` `grill` steps declare
+    `question_batch_size` (`int`, default `0` = ask every question in one
+    round; `N` = at most N rows per round, ordered by 重点关注程度, the
+    mandatory proposal rows first — `_shared/attr_question_batch_size.md`).
 
 ## steps/&lt;id&gt;.md — the step definition
 
@@ -157,8 +175,11 @@ The `e2e-author` step entry's `e2e_author_mode` var is the lane default
 and a proposal without an owner record resolves to `required`). When every
 authored scenario passes at baseline the driver parks the owner question
 `e2e_all_green` instead of advancing: `rewind-to-spec: <words>` (an
-owner-routed rewind to `spec`), `skip: <rationale>` (recorded verbatim in
-`artifacts/grill-qa.md`; `e2e-author` completes skipped) or `cancel`.
+owner-routed rewind to `spec`), `skip: <rationale>` (`e2e-author` first
+reverts the all-green run's own authoring commit, then records the
+rationale verbatim in `artifacts/grill-qa.md` and completes skipped) or
+`cancel`. The fresh run after `rewind-to-spec` likewise starts by
+reverting that commit, so no orphan authored file stays in the diff.
 
 Some shared files are section material the driver renders itself, only
 on the dispatch shape that needs it, never through a placeholder:
