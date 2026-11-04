@@ -63,7 +63,7 @@ func TestDoctorModelHealthRowIsRegisteredAndOutOfHarness(t *testing.T) {
 		t.Fatalf("the model health row must be registered in doctorChecks: %+v", doctorChecks)
 	}
 	// --harness runs harnessDisplayChecks only; none of them is the row.
-	for _, c := range harnessDisplayChecks() {
+	for _, c := range harnessDisplayChecks(false) {
 		if strings.Contains(strings.ToLower(c.Name), "model health") {
 			t.Fatalf("--harness must not run the model health row: %+v", c)
 		}

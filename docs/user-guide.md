@@ -101,7 +101,10 @@ forms.
   shape is the [bundle-authoring chapter](bundles.md).
 - **Lane** -- informal for one bundle's flow: the [autopilot
   lane](../workflows/autopilot/workflow.md), the [feature-full
-  lane](../workflows/feature-full/workflow.md). The shipped bundles are
+  lane](../workflows/feature-full/workflow.md), the [micro
+  lane](../workflows/micro/workflow.md) (pure text: fix → review → deliver,
+  no verification step, open only to the paths a repository declares with
+  `micro_path=` in its `.polyforge/verify-scope.conf`). The shipped bundles are
   listed in the design docs' [system
   reference](design/polyforge-vnext/reference.md#71-bundles-and-materialization-);
   a lane's own narrative is its `workflows/<bundle>/workflow.md`.
@@ -232,7 +235,9 @@ The lane runs grill (if asked), then fix, then verification, then deliver:
   the run to fix. The full bar is the default: a work item opts into the narrower
   scoped tier only when its content carries the explicit marker line
   `verification: scoped`, and only on a scoped-capable lane (feature-full,
-  bug-fix, chore); autopilot always verifies full.
+  bug-fix, chore); autopilot always verifies full, and micro has no
+  verification step (its delivery re-runs the repository's fast evidence
+  instead).
 - **deliver** pushes the branch and merges the PR under the repo's merge rule,
   or asks a human.
 
@@ -318,8 +323,10 @@ The human moves, when a run is not simply going:
   submit it again on a healthy machine ([pf ops](../skills/polyforge/verbs/ops.md)
   owns the move).
 - **A suspicious machine**: `pf doctor` is the diagnostic first stop: config,
-  mapping, connectivity, daemon supervision, the harness progress display. It
-  reports and never auto-fixes.
+  mapping, connectivity, daemon supervision, the harness progress display and
+  diagram guidance. It reports; it writes only on an explicit flag
+  (`--prune-scratch`, `--prune-capsules`, `--fix-harness-prompts`,
+  `--fix-install-layout`).
 
 [pause](../skills/polyforge/verbs/pause.md),
 [resume](../skills/polyforge/verbs/resume.md),

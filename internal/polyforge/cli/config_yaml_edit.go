@@ -1,8 +1,7 @@
 package cli
 
 // config_yaml_edit.go: the byte-preserving `.polyforge.yaml` editor
-//. A summarize write touches only the target
-// child line inside the root `summarize:` block; a step write
+//. A step write
 // (steps.<project>.<step-id>.models / .attrs.<name>) touches only the
 // addressed line inside the `steps:` block, creating a missing section,
 // project or step entry in block style and expanding a flow-style entry
@@ -26,20 +25,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func isSummarizeKey(key string) bool {
-	switch key {
-	case "summarize.models", "summarize.language", "summarize.interval_sec":
-		return true
-	}
-	return false
-}
-
 // isWorkspaceKey answers whether key is written to the workspace
-// `.polyforge.yaml` (a summarize key or a step key) rather than cli.toml.
+// `.polyforge.yaml` (a step key) rather than cli.toml.
 func isWorkspaceKey(key string) bool {
-	if isSummarizeKey(key) {
-		return true
-	}
 	_, ok := parseStepKey(key)
 	return ok || strings.HasPrefix(key, "steps.")
 }
@@ -78,44 +66,31 @@ func runWorkspaceWrite(ctx *Context, set bool, pos []string, exp configExpectati
 		return fmt.Errorf("config unset %s: expected no value", key)
 	}
 	sk, isStep := parseStepKey(key)
-	if !isStep && !isSummarizeKey(key) {
-		return fmt.Errorf("config: unknown workspace key %q (steps.<project>.<step-id>.models, steps.<project>.<step-id>.attrs.<name> or summarize.*)", key)
+	if !isStep {
+		return fmt.Errorf("config: unknown workspace key %q (steps.<project>.<step-id>.models or steps.<project>.<step-id>.attrs.<name>)", key)
 	}
 	ws, err := resolveWorkspaceTarget(ctx, key, wsFlag, cwdFlag)
 	if err != nil {
 		return err
 	}
-	var workflowsDir string
-	if isStep {
-		// The capability gate comes before anything reads or touches the
-		// file: an older daemon would refuse the schema the write produces.
-		facts := readDaemonFacts(ctx)
-		if ok, reason := stepsWriteCapability(facts); !ok {
-			return &api.Error{Code: api.ErrCoreUnsupported, Detail: "config " + map[bool]string{true: "set", false: "unset"}[set] + " " + key + ": " + reason}
-		}
-		workflowsDir = facts.workflowsDir
-		if sk.attr != "" && (sk.step == workspace.DefaultKey || sk.step == workspace.TaskKey) {
-			return fmt.Errorf("config: %s", workspace.AttrsNotAllowedReason("steps."+sk.project+"."+sk.step, sk.step))
-		}
-	} else {
-		workflowsDir, _, _ = workspaceCandidateScope(ctx)
+	// The capability gate comes before anything reads or touches the
+	// file: an older daemon would refuse the schema the write produces.
+	facts := readDaemonFacts(ctx)
+	if ok, reason := stepsWriteCapability(facts); !ok {
+		return &api.Error{Code: api.ErrCoreUnsupported, Detail: "config " + map[bool]string{true: "set", false: "unset"}[set] + " " + key + ": " + reason}
+	}
+	workflowsDir := facts.workflowsDir
+	if sk.attr != "" && (sk.step == workspace.DefaultKey || sk.step == workspace.TaskKey) {
+		return fmt.Errorf("config: %s", workspace.AttrsNotAllowedReason("steps."+sk.project+"."+sk.step, sk.step))
 	}
 	value := ""
 	if set {
-		if isStep {
-			value, err = stepValue(sk, pos[1], workflowsDir)
-		} else {
-			value, err = summarizeValue(key, pos[1])
-		}
-		if err != nil {
+		if value, err = stepValue(sk, pos[1], workflowsDir); err != nil {
 			return err
 		}
 	}
 	edit := func(text string) string {
-		if isStep {
-			return editStepsYAML(text, sk, value, set)
-		}
-		return editSummarizeYAML(text, key, value, set)
+		return editStepsYAML(text, sk, value, set)
 	}
 	v, err := loadConfigView(ctx)
 	if err != nil {
@@ -157,13 +132,7 @@ func runWorkspaceWrite(ctx *Context, set bool, pos []string, exp configExpectati
 	if !curExists && set && !expectsAbsent(exp) {
 		return &api.Error{Code: api.ErrCoreConflict, Detail: "the workspace yaml is absent; creating it needs --expect-hash absent (or an --expect-state whose file_sha256 is null)"}
 	}
-	curValues := map[string]any{}
-	if curExists {
-		if curCfg, lerr := loadWorkspaceBytes(string(curRaw), workflowsDir, projects); lerr == nil {
-			curValues = workspaceSnapshotValues(curCfg)
-		}
-	}
-	if err := checkExpectation(exp, sha256Hex(curRaw), curExists, curValues); err != nil {
+	if err := checkExpectation(exp, sha256Hex(curRaw), curExists, map[string]any{}); err != nil {
 		return err
 	}
 	final := edit(string(curRaw))
@@ -214,29 +183,6 @@ func resolveWorkspaceTarget(ctx *Context, key, wsFlag, cwdFlag string) (string, 
 		return "", fmt.Errorf("config set %s: %s is not mapped to a workspace in cli.toml", key, abs)
 	}
 	return ws, nil
-}
-
-func summarizeValue(key, raw string) (string, error) {
-	switch key {
-	case "summarize.models":
-		items, err := parseModelList(raw)
-		if err != nil {
-			return "", err
-		}
-		return quotedList(items), nil
-	case "summarize.language":
-		if strings.ContainsAny(raw, "\r\n") {
-			return "", fmt.Errorf("summarize.language: must be a single line")
-		}
-		return strconv.Quote(strings.TrimSpace(raw)), nil
-	case "summarize.interval_sec":
-		n, err := strconv.Atoi(strings.TrimSpace(raw))
-		if err != nil {
-			return "", fmt.Errorf("summarize.interval_sec: must be an integer in %d-%d (seconds)", workspace.MinSummarizeIntervalSec, workspace.MaxSummarizeIntervalSec)
-		}
-		return strconv.Itoa(n), nil
-	}
-	return "", fmt.Errorf("config: unknown summarize key %q", key)
 }
 
 // stepValue renders the yaml text of one step-key value: a models list
@@ -317,165 +263,6 @@ func loadWorkspaceBytes(text, workflowsDir string, projects []string) (*workspac
 		return nil, err
 	}
 	return workspace.Load(dir, workflowsDir, projects)
-}
-
-// workspaceSnapshotValues renders the yaml's effective summarize values for the
-// shared CAS comparison, keyed by the same `summarize.*` names the read (and
-// so the panel's snapshot) uses.
-func workspaceSnapshotValues(cfg *workspace.Config) map[string]any {
-	out := map[string]any{}
-	if cfg == nil {
-		return out
-	}
-	out["summarize.models"] = workspace.SummarizeModels(cfg)
-	out["summarize.language"] = workspace.SummarizeLanguage(cfg)
-	out["summarize.interval_sec"] = workspace.SummarizeIntervalSec(cfg)
-	return out
-}
-
-// editSummarizeYAML rewrites only the requested summarize child (or removes
-// the whole entry for models). The line structure outside the summarize block
-// is preserved verbatim.
-func editSummarizeYAML(text, key, value string, set bool) string {
-	child := strings.TrimPrefix(key, "summarize.")
-	lines := strings.Split(text, "\n")
-	idx, flow := -1, ""
-	for i, line := range lines {
-		if strings.HasPrefix(line, "summarize:") {
-			idx = i
-			flow = strings.TrimSpace(strings.TrimPrefix(line, "summarize:"))
-			break
-		}
-	}
-	if idx < 0 {
-		if !set {
-			return text
-		}
-		base := text
-		if base != "" && !strings.HasSuffix(base, "\n") {
-			base += "\n"
-		}
-		if base != "" && !strings.HasSuffix(base, "\n\n") {
-			base += "\n"
-		}
-		return base + "summarize:\n  " + child + ": " + value + "\n"
-	}
-	if flow != "" && flow != "{}" {
-		// A flow-style entry is rewritten as a block, preserving the values
-		// it declares and then applying the requested change.
-		var m map[string]any
-		_ = yaml.Unmarshal([]byte(flow), &m)
-		block := []string{"summarize:"}
-		for _, name := range []string{"models", "language", "interval_sec"} {
-			if v, ok := m[name]; ok {
-				block = append(block, "  "+name+": "+renderFlowValue(name, v))
-			}
-		}
-		lines = append(append(append([]string{}, lines[:idx]...), block...), lines[idx+1:]...)
-		return editSummarizeYAML(strings.Join(lines, "\n"), key, value, set)
-	}
-	end := blockEnd(lines, idx)
-	insertAt := idx + 1
-	for i := idx + 1; i < end; i++ {
-		t := strings.TrimSpace(lines[i])
-		if t != "" && !strings.HasPrefix(t, "#") {
-			insertAt = i + 1
-		}
-	}
-	target := -1
-	indent := "  "
-	for i := idx + 1; i < end; i++ {
-		t := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(t, child+":") {
-			target = i
-			indent = lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
-			break
-		}
-	}
-	if target >= 0 {
-		if !set {
-			if child == "models" {
-				return removeLineRange(lines, idx, end)
-			}
-			lines = append(lines[:target], lines[target+1:]...)
-			return removeEmptySummarize(strings.Join(lines, "\n"))
-		}
-		lines[target] = indent + child + ": " + value
-		return strings.Join(lines, "\n")
-	}
-	if !set {
-		return text
-	}
-	if child == "models" {
-		insertAt = idx + 1
-	}
-	newLine := indent + child + ": " + value
-	lines = append(lines[:insertAt], append([]string{newLine}, lines[insertAt:]...)...)
-	return strings.Join(lines, "\n")
-}
-
-func blockEnd(lines []string, idx int) int {
-	end := idx + 1
-	for end < len(lines) {
-		line := lines[end]
-		if strings.TrimSpace(line) == "" {
-			end++
-			continue
-		}
-		if line[0] != ' ' && line[0] != '\t' {
-			break
-		}
-		end++
-	}
-	for end > idx+1 && strings.TrimSpace(lines[end-1]) == "" {
-		end--
-	}
-	return end
-}
-
-func removeLineRange(lines []string, start, end int) string {
-	return strings.Join(append(append([]string{}, lines[:start]...), lines[end:]...), "\n")
-}
-
-func removeEmptySummarize(text string) string {
-	lines := strings.Split(text, "\n")
-	idx := -1
-	for i, line := range lines {
-		if strings.HasPrefix(line, "summarize:") {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		return text
-	}
-	end := blockEnd(lines, idx)
-	for i := idx + 1; i < end; i++ {
-		t := strings.TrimSpace(lines[i])
-		if t != "" && !strings.HasPrefix(t, "#") {
-			return text
-		}
-	}
-	return removeLineRange(lines, idx, end)
-}
-
-func renderFlowValue(name string, v any) string {
-	switch name {
-	case "models":
-		list, ok := v.([]any)
-		if !ok {
-			return "[]"
-		}
-		parts := make([]string, len(list))
-		for i, item := range list {
-			parts[i] = strconv.Quote(fmt.Sprint(item))
-		}
-		return "[" + strings.Join(parts, ", ") + "]"
-	case "language":
-		return strconv.Quote(fmt.Sprint(v))
-	default:
-		return fmt.Sprint(v)
-	}
 }
 
 // ---------------------------------------------------------------------------

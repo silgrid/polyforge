@@ -77,8 +77,10 @@ type Command struct {
 // `chat` (the harness chat identity, also GroupExec) between ops and watch
 // and `result` (a workflow step's result delivery, #214, also GroupExec)
 // after watch, followed by `verify-run` (a verification step's one
-// mechanical run, local: no daemon, no aihub; also GroupExec, so the help
-// face shows 11 exec verbs), then the management face M1–M5, then the
+// mechanical run, local: no daemon, no aihub; also GroupExec) and `bar-run`
+// (a deliver step's recorded re-run of one carried test_bar command,
+// the daemon's /step/bar-run; also GroupExec, so the help
+// face shows 12 exec verbs), then the management face M1–M5, then the
 // machine health face (doctor, #113), the build version (version, #196:
 // the verb form of the `--version` flag) and the workspace layout (init,
 // #177), then the daemon and aihub server placeholders (help-only:
@@ -102,6 +104,7 @@ var commands = []*Command{
 	cmdTask,
 	cmdResult,
 	cmdVerifyRun,
+	cmdBarRun,
 	cmdMsg,
 	cmdUsers,
 	cmdApiKeys,
@@ -264,6 +267,10 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // status: 4xx → 1, 5xx → 2. Transport failures and local validation
 // carry no code and stay 1.
 func exitCode(err error) int {
+	var es *exitStatusError
+	if errors.As(err, &es) {
+		return es.code
+	}
 	var ae *api.Error
 	if errors.As(err, &ae) && ae.HTTPStatus() >= 500 {
 		return 2
@@ -395,8 +402,8 @@ var extensionPoints = []struct{ what, section string }{
 	{"docs/agents/ area notes", "Area notes"},
 	{".polyforge.yaml steps.<project>.<step|default>.models", "Model candidates"},
 	{".polyforge.yaml steps.<project>.<step>.attrs.<name>", "Step attributes"},
-	{".polyforge.yaml summarize.models, summarize.language, summarize.interval_sec", "Summarize models"},
-	{".polyforge.yaml memory_policy", "Memory policy"},
+	{"cli.toml [summarize] models, language, interval_sec", "Summarize models"},
+	{"cli.toml [memory_policy.\"<path>\".<entry>]", "Memory policy"},
 	{"cli.toml [workspace.\"<path>\"]", "Workspace mapping"},
 	{"cli.toml [daemon]", "Daemon knobs"},
 	{"cli.toml claude_bin", "Claude binary"},

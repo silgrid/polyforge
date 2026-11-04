@@ -8,6 +8,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -87,6 +88,7 @@ type scopedGatesConfFacts struct {
 	suiteGlob []string // suite_glob=
 	maps      []string // e2e_map=<glob>=<suite>
 	excludes  []string // exclude=
+	smoke     []string // smoke_suite= (the full-tier e2e selection opt-in), unique, file order
 	rejected  []string // carries key lines the engine rejects (it then always reports full)
 }
 
@@ -95,8 +97,8 @@ type scopedGatesConfFacts struct {
 // the commands it declares — fast_gate=, full_command= and well-formed check=
 // lines, as the engine accepts them: a value that is empty or begins with a
 // command substitution is no command — and reads the carries keys
-// (e2e_runner=, suite_glob=, e2e_map=) and exclude= with the engine's
-// fail-closed rules. The file is only read, never evaluated; a missing or
+// (e2e_runner=, suite_glob=, e2e_map=, smoke_suite=) and exclude= with the
+// engine's fail-closed rules. The file is only read, never evaluated; a missing or
 // unreadable file answers no pin and no command.
 func scopedGatesReadConf(path string) scopedGatesConfFacts {
 	var c scopedGatesConfFacts
@@ -161,9 +163,39 @@ func scopedGatesReadConf(path string) scopedGatesConfFacts {
 				continue
 			}
 			c.maps = append(c.maps, v)
+		case "smoke_suite":
+			v := strings.TrimRight(val, " \t\r\v\f")
+			if !scopedGatesSmokePath(v) {
+				c.rejected = append(c.rejected, line)
+				continue
+			}
+			if !slices.Contains(c.smoke, v) {
+				c.smoke = append(c.smoke, v)
+			}
 		}
 	}
 	return c
+}
+
+// scopedGatesSmokePath reports whether a smoke_suite= value is one
+// repository-relative path, as the engine accepts it: non-empty, no blank,
+// not absolute, no leading ./ or ../ and no /../ segment.
+func scopedGatesSmokePath(v string) bool {
+	return v != "" && !strings.ContainsAny(v, " \t\r\n\v\f") && !strings.HasPrefix(v, "/") &&
+		!strings.HasPrefix(v, "./") && !strings.HasPrefix(v, "../") && !strings.Contains(v, "/../")
+}
+
+// scopedGatesSmokeMissing answers the declared smoke suites that are not
+// discovered suites: the engine's full-tier e2e selection then falls back
+// to the full tail (the scoped tier ignores smoke_suite=).
+func scopedGatesSmokeMissing(suites []string, conf scopedGatesConfFacts) []string {
+	var missing []string
+	for _, s := range conf.smoke {
+		if !slices.Contains(suites, s) {
+			missing = append(missing, s)
+		}
+	}
+	return missing
 }
 
 // scopedGatesNoAnalyzer is the consequence a repo with no analyzer and no
@@ -264,7 +296,15 @@ func scopedGatesCheck(r *doctorRun) (string, string) {
 					problems = append(problems, fmt.Sprintf("%s/%s: %d undeclared suite(s) without a carries: header in the opening comment block — a scoped ticket falls back to full: %s (%s)", project, repo.Name, len(undeclared), strings.Join(capRows(undeclared), ", "), scopedGatesPointer))
 					continue
 				}
-				carriesClean = append(carriesClean, fmt.Sprintf("%s/%s (%d suite(s))", project, repo.Name, len(suites)))
+				if missing := scopedGatesSmokeMissing(suites, conf); len(missing) > 0 {
+					problems = append(problems, fmt.Sprintf("%s/%s: %s declares smoke_suite= naming no discovered suite (%s) — the full-tier e2e selection falls back to the full e2e command (%s)", project, repo.Name, scopedGatesConf, strings.Join(capRows(missing), ", "), scopedGatesPointer))
+					continue
+				}
+				clean := fmt.Sprintf("%s/%s (%d suite(s))", project, repo.Name, len(suites))
+				if len(conf.smoke) > 0 {
+					clean = fmt.Sprintf("%s/%s (%d suite(s); full-tier e2e selection opted in, smoke: %s)", project, repo.Name, len(suites), strings.Join(capRows(conf.smoke), ", "))
+				}
+				carriesClean = append(carriesClean, clean)
 			}
 			ready++
 		}
@@ -378,7 +418,8 @@ var (
 // exclude= matches and the e2e_runner= target, minus the undeclared modules
 // another module imports (helpers) — and answers the suites and those whose
 // opening comment block holds no valid carries: declaration (an e2e_map=
-// line declares its suite outright). It reads files only.
+// line declares its suite outright; one naming no discovered suite is
+// named too, as the engine refuses it). It reads files only.
 func scopedGatesCarries(clone, analyzer string, conf scopedGatesConfFacts) ([]string, []string) {
 	exists := func(rel string) bool {
 		st, err := os.Stat(filepath.Join(clone, filepath.FromSlash(rel)))
@@ -496,11 +537,16 @@ func scopedGatesCarries(clone, analyzer string, conf scopedGatesConfFacts) ([]st
 	}
 
 	mapped := map[string]bool{}
+	var suites, undeclared []string
 	for _, m := range conf.maps {
 		_, suite, _ := strings.Cut(m, "=")
 		mapped[suite] = true
+		if !isCand[suite] {
+			// the engine refuses a map naming no discovered suite: every
+			// report falls back to full
+			undeclared = append(undeclared, suite+" (e2e_map names no discovered suite)")
+		}
 	}
-	var suites, undeclared []string
 	for _, f := range cands {
 		status := "declared"
 		if !mapped[f] {

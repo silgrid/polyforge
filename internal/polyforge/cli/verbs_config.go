@@ -1,8 +1,8 @@
 package cli
 
 // verbs_config.go: `pf config` — the single shipped writer/validator of
-// cli.toml. Verbs: get, set, unset, list, validate and
-// reload. The command is NoConfigLoad: it loads the file itself because
+// cli.toml. Verbs: get, set, unset, list, workspace,
+// validate, reload and migrate (verbs_config_migrate.go). The command is NoConfigLoad: it loads the file itself because
 // an unloadable file is the subject, and the step-origin guard runs
 // before any of that.
 
@@ -19,13 +19,14 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 var cmdConfig = &Command{
 	Name:         "config",
 	Group:        GroupMgmt,
 	Summary:      "Read and write cli.toml (the one supported writer) and reload the daemon",
-	Usage:        "pf config get <key> | set <key> <value> | unset <key> | list | workspace --cwd <dir> | validate | reload",
+	Usage:        "pf config get <key> | set <key> <value> [--workspace <path>|--cwd <dir>] | unset <key> [--workspace <path>|--cwd <dir>] | list | workspace --cwd <dir> | validate | reload | migrate",
 	NoConfigLoad: true,
 	Setup:        func(fs *flag.FlagSet) {},
 	Run:          runConfig,
@@ -33,7 +34,7 @@ var cmdConfig = &Command{
 
 func runConfig(ctx *Context, fs *flag.FlagSet, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("config: expected a subcommand (get, set, unset, list, validate, reload); see `pf help config`")
+		return fmt.Errorf("config: expected a subcommand (get, set, unset, list, workspace, validate, reload, migrate); see `pf help config`")
 	}
 	switch args[0] {
 	case "get":
@@ -50,8 +51,10 @@ func runConfig(ctx *Context, fs *flag.FlagSet, args []string) error {
 		return runConfigValidate(ctx)
 	case "reload":
 		return runConfigReload(ctx)
+	case "migrate":
+		return runConfigMigrate(ctx, args[1:])
 	}
-	return fmt.Errorf("config: unknown subcommand %q (get, set, unset, list, workspace, validate, reload)", args[0])
+	return fmt.Errorf("config: unknown subcommand %q (get, set, unset, list, workspace, validate, reload, migrate)", args[0])
 }
 
 func configPath(ctx *Context) string {
@@ -89,9 +92,11 @@ func loadConfigView(ctx *Context) (*configView, error) {
 	var sections []workspaceSection
 	var dkvs []daemonKV
 	if exists {
-		if flat, sections, dkvs, err = parseConfigTOML(path, string(raw)); err != nil {
+		p, err := parseConfigTOML(path, string(raw))
+		if err != nil {
 			return nil, err
 		}
+		flat, sections, dkvs = p.flat, p.sections, p.daemon
 	}
 	eff := fileCfg
 	applyEnv(&eff)
@@ -237,6 +242,9 @@ func runConfigGet(ctx *Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if k.kind == keySummarize || k.kind == keyPolicy {
+		return fmt.Errorf("config get %s: read it via `pf config list` (the one read face of the [summarize] table and the memory_policy family)", k.raw)
+	}
 	v, err := loadConfigView(ctx)
 	if err != nil {
 		return err
@@ -301,28 +309,38 @@ func (v *configView) fileFact() configFileFact {
 	return f
 }
 
+// configListItem is one row of `pf config list`. Value is the effective
+// value: a string for the flat/[daemon] keys (omitted when unset), a list
+// or an integer for the summarize keys.
+type configListItem struct {
+	Key     string         `json:"key"`
+	Value   any            `json:"value,omitempty"`
+	Set     bool           `json:"set,omitempty"`
+	Source  string         `json:"source"`
+	Section bool           `json:"section,omitempty"`
+	Class   ConfigClass    `json:"class"`
+	Schema  map[string]any `json:"schema,omitempty"`
+}
+
 func runConfigList(ctx *Context) error {
 	v, err := loadConfigView(ctx)
 	if err != nil {
 		return err
 	}
-	type item struct {
-		Key     string         `json:"key"`
-		Value   string         `json:"value,omitempty"`
-		Set     bool           `json:"set,omitempty"`
-		Source  string         `json:"source"`
-		Section bool           `json:"section,omitempty"`
-		Class   ConfigClass    `json:"class"`
-		Schema  map[string]any `json:"schema,omitempty"`
+	strValue := func(s string) any {
+		if s == "" {
+			return nil
+		}
+		return s
 	}
-	var items []item
+	var items []configListItem
 	for _, key := range knownFlatKeyNames() {
 		val, src := v.flatValue(ctx, key)
-		it := item{Key: key, Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)}
+		it := configListItem{Key: key, Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)}
 		if key == "api_key" {
 			it.Set = val != ""
 		} else {
-			it.Value = val
+			it.Value = strValue(val)
 		}
 		items = append(items, it)
 	}
@@ -332,31 +350,108 @@ func runConfigList(ctx *Context) error {
 		if v.hasDaemonKey(key) {
 			src = "file"
 		}
-		items = append(items, item{Key: key, Value: val, Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)})
+		items = append(items, configListItem{Key: key, Value: strValue(val), Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)})
 	}
-	wsItems := make([]item, 0, len(v.eff.Mapping.Workspaces()))
+	for _, key := range knownSummarizeKeyNames() {
+		val, src := summarizeValueOf(v.file.Summarize, key)
+		items = append(items, configListItem{Key: key, Value: val, Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)})
+	}
+	wsItems := make([]configListItem, 0, len(v.eff.Mapping.Workspaces()))
 	for _, ws := range v.eff.Mapping.Workspaces() {
-		wsItems = append(wsItems, item{Key: `[workspace."` + ws + `"]`, Value: strings.Join(v.eff.Mapping.ProjectsOf(ws), ","), Source: "file", Section: true, Class: ConfigSectionClass})
+		wsItems = append(wsItems, configListItem{Key: `[workspace."` + ws + `"]`, Value: strings.Join(v.eff.Mapping.ProjectsOf(ws), ","), Source: "file", Section: true, Class: ConfigSectionClass})
 	}
+	policy := memoryPolicyList(v.file)
 	if ctx.JSON {
-		return emitJSON(ctx, map[string]any{"file": v.fileFact(), "items": append(items, wsItems...)})
+		return emitJSON(ctx, map[string]any{"file": v.fileFact(), "items": append(items, wsItems...), "memory_policy": policy})
 	}
 	for _, it := range items {
-		val := it.Value
-		if it.Key == "api_key" {
-			val = "<unset>"
+		val := "<unset>"
+		switch {
+		case it.Key == "api_key":
 			if it.Set {
 				val = "<set>"
 			}
-		} else if val == "" {
-			val = "<unset>"
+		case it.Value == nil:
+		default:
+			if list, ok := it.Value.([]string); ok {
+				val = "[" + quoteList(list) + "]"
+			} else {
+				val = fmt.Sprint(it.Value)
+			}
 		}
 		fmt.Fprintf(ctx.Stdout, "%s = %s (source: %s, class: %s)\n", it.Key, val, it.Source, it.Class)
 	}
 	for _, it := range wsItems {
 		fmt.Fprintf(ctx.Stdout, "%s projects = [%s] (source: file, class: %s)\n", it.Key, it.Value, it.Class)
 	}
+	for _, ws := range v.eff.Mapping.Workspaces() {
+		entries := policy[ws]
+		names := append([]string{workspace.DefaultKey}, v.eff.Mapping.ProjectsOf(ws)...)
+		for _, name := range names {
+			e := entries[name]
+			src := "default"
+			if e.Declared {
+				src = "file"
+			}
+			fmt.Fprintf(ctx.Stdout, "[memory_policy.%q.%s] record = [%s] skip = [%s] (source: %s, class: %s)\n", ws, name, quoteList(e.Record), quoteList(e.Skip), src, MemoryPolicyClass)
+		}
+	}
 	return nil
+}
+
+// summarizeValueOf answers one summarize key's effective value and
+// source: the table's value, else the documented default (models: none —
+// the lane is off without the table).
+func summarizeValueOf(s *workspace.SummarizeSettings, key string) (any, string) {
+	switch key {
+	case "summarize.models":
+		if s == nil {
+			return nil, "default"
+		}
+		return append([]string{}, s.Models...), "file"
+	case "summarize.language":
+		if s == nil || s.Language == "" {
+			return workspace.DefaultSummarizeLanguage, "default"
+		}
+		return s.Language, "file"
+	case "summarize.interval_sec":
+		if s == nil || s.IntervalSec == 0 {
+			return workspace.DefaultSummarizeIntervalSec, "default"
+		}
+		return s.IntervalSec, "file"
+	}
+	return nil, "default"
+}
+
+// policyListEntry is one entry of the memory_policy read: its lists and
+// whether cli.toml declares it.
+type policyListEntry struct {
+	Record   []string `json:"record"`
+	Skip     []string `json:"skip"`
+	Declared bool     `json:"declared"`
+}
+
+// memoryPolicyList answers the `config list` memory_policy object: one
+// block per mapped workspace path, carrying its `default` entry (the
+// declared lists, else the built-in ones) and every mapped project's OWN
+// declared lists (never pre-merged: a project's lists append to
+// default's), each with whether it is declared.
+func memoryPolicyList(cfg Config) map[string]map[string]policyListEntry {
+	builtin := workspace.DefaultMemoryPolicy()
+	out := map[string]map[string]policyListEntry{}
+	for _, ws := range cfg.Mapping.Workspaces() {
+		declared := cfg.MemoryPolicy[ws]
+		d, dok := declared[workspace.DefaultKey]
+		block := map[string]policyListEntry{
+			workspace.DefaultKey: {Record: orList(d.Record, builtin.Record), Skip: orList(d.Skip, builtin.Skip), Declared: dok},
+		}
+		for _, p := range cfg.Mapping.ProjectsOf(ws) {
+			e, ok := declared[p]
+			block[p] = policyListEntry{Record: orList(e.Record, []string{}), Skip: orList(e.Skip, []string{}), Declared: ok}
+		}
+		out[ws] = block
+	}
+	return out
 }
 
 func emitJSON(ctx *Context, v any) error {
@@ -405,10 +500,11 @@ func runConfigSet(ctx *Context, args []string) error {
 	if isWorkspaceKey(pos[0]) {
 		return runWorkspaceWrite(ctx, true, pos, exp, wsFlag, cwdFlag)
 	}
-	if wsFlag != "" || cwdFlag != "" {
-		return fmt.Errorf("config set %s: --workspace/--cwd apply only to the workspace .polyforge.yaml keys (summarize.*, steps.<project>.<step-id>.models|attrs.<name>)", pos[0])
-	}
 	k, err := parseConfigKey(pos[0])
+	if err != nil {
+		return err
+	}
+	ws, err := configWritePath(ctx, "set", k, wsFlag, cwdFlag)
 	if err != nil {
 		return err
 	}
@@ -423,6 +519,10 @@ func runConfigSet(ctx *Context, args []string) error {
 			c.setWorkspace(k.name, projects)
 		case k.kind == keyDaemon:
 			c.setDaemon(k.name, rawValue)
+		case k.kind == keySummarize:
+			c.setSummarize(strings.TrimPrefix(k.name, "summarize."), rawValue)
+		case k.kind == keyPolicy:
+			c.setPolicyList(ws, k.name, k.list, projects)
 		default:
 			c.setFlat(k.name, rawValue)
 		}
@@ -442,10 +542,11 @@ func runConfigUnset(ctx *Context, args []string) error {
 	if isWorkspaceKey(pos[0]) {
 		return runWorkspaceWrite(ctx, false, pos, exp, wsFlag, cwdFlag)
 	}
-	if wsFlag != "" || cwdFlag != "" {
-		return fmt.Errorf("config unset %s: --workspace/--cwd apply only to the workspace .polyforge.yaml keys (summarize.*, steps.<project>.<step-id>.models|attrs.<name>)", pos[0])
-	}
 	k, err := parseConfigKey(pos[0])
+	if err != nil {
+		return err
+	}
+	ws, err := configWritePath(ctx, "unset", k, wsFlag, cwdFlag)
 	if err != nil {
 		return err
 	}
@@ -456,12 +557,33 @@ func runConfigUnset(ctx *Context, args []string) error {
 			c.unsetWorkspace(k.name)
 		case k.kind == keyDaemon:
 			c.unsetDaemon(k.name)
+		case k.kind == keySummarize:
+			c.unsetSummarize(strings.TrimPrefix(k.name, "summarize."))
+		case k.kind == keyPolicy:
+			c.unsetPolicyList(ws, k.name, k.list)
 		default:
 			c.unsetFlat(k.name)
 		}
 		return []byte(c.String())
 	}
 	return applyConfigEdit(ctx, k, apply, exp)
+}
+
+// configWritePath applies the path selection of a cli.toml write: a
+// memory_policy key needs --workspace <mapped path> or --cwd <dir> (the
+// one path whose entry it writes); every other cli.toml key — the flat
+// [summarize] keys included — refuses either flag.
+func configWritePath(ctx *Context, verb string, k configKey, wsFlag, cwdFlag string) (string, error) {
+	if k.kind == keyPolicy {
+		if wsFlag == "" && cwdFlag == "" {
+			return "", fmt.Errorf("config %s %s: --workspace <path> or --cwd <dir> is required (a memory_policy entry belongs to one mapped workspace path)", verb, k.raw)
+		}
+		return resolveWorkspaceTarget(ctx, k.raw, wsFlag, cwdFlag)
+	}
+	if wsFlag != "" || cwdFlag != "" {
+		return "", fmt.Errorf("config %s %s: --workspace/--cwd apply only to memory_policy.<entry>.record|skip and the workspace .polyforge.yaml keys (steps.<project>.<step-id>.models|attrs.<name>); %s is one machine-level cli.toml key", verb, k.raw, k.raw)
+	}
+	return "", nil
 }
 
 // configSetValue answers the text the editor writes for a key and, for a
@@ -494,6 +616,20 @@ func configSetValue(ctx *Context, k configKey, args []string) (string, []string,
 		return "", nil, fmt.Errorf("config set %s: expected exactly one value", k.raw)
 	}
 	val := args[0]
+	switch k.kind {
+	case keySummarize:
+		v, err := summarizeTOMLValue(k.name, val)
+		return v, nil, err
+	case keyPolicy:
+		var items []string
+		if err := json.Unmarshal([]byte(val), &items); err != nil {
+			return "", nil, fmt.Errorf("config set %s: the value is a JSON list of strings, e.g. '[\"a note\", \"another\"]': %v", k.raw, err)
+		}
+		if items == nil {
+			items = []string{}
+		}
+		return "", items, nil
+	}
 	if k.kind == keyDaemon {
 		switch k.name {
 		case "max_concurrent_jobs":
@@ -503,6 +639,29 @@ func configSetValue(ctx *Context, k configKey, args []string) (string, []string,
 		}
 	}
 	return val, nil, nil
+}
+
+// summarizeTOMLValue renders the cli.toml text of one [summarize] value:
+// models (a JSON/flow list or a comma list) as a quoted array, language
+// quoted, interval_sec a bare integer. The values themselves are judged by
+// the one table validator when the edited file is re-parsed.
+func summarizeTOMLValue(key, raw string) (string, error) {
+	switch key {
+	case "summarize.models":
+		items, err := parseModelList(raw)
+		if err != nil {
+			return "", err
+		}
+		return "[" + quoteList(items) + "]", nil
+	case "summarize.language":
+		if strings.ContainsAny(raw, "\r\n") {
+			return "", fmt.Errorf("summarize.language: must be a single line")
+		}
+		return strconv.Quote(strings.TrimSpace(raw)), nil
+	case "summarize.interval_sec":
+		return strings.TrimSpace(raw), nil
+	}
+	return "", unknownConfigKey(key)
 }
 
 // readAPIKey reads the api_key from stdin only: a no-echo prompt on a
@@ -703,7 +862,7 @@ func renderConfigOutcomes(ctx *Context, k configKey, resp *ConfigReloadResponse)
 	}
 	if found == nil {
 		found = &ConfigKeyOutcome{Key: key, Class: string(classOfKey(k)), Status: "saved"}
-		if k.isWorkspace() {
+		if k.isWorkspace() || k.kind == keyPolicy {
 			found.Status = "next-claim"
 		}
 	}
@@ -712,8 +871,11 @@ func renderConfigOutcomes(ctx *Context, k configKey, resp *ConfigReloadResponse)
 }
 
 func configKeyLabel(k configKey) string {
-	if k.isWorkspace() {
+	switch {
+	case k.isWorkspace():
 		return "[workspace]"
+	case k.kind == keyPolicy:
+		return MemoryPolicyLabel
 	}
 	return k.name
 }

@@ -111,6 +111,11 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/work-items/{id}/dependencies", s.auth(s.hAddDep))
 	m.HandleFunc("GET /api/v1/work-items/{id}/dependencies", s.auth(s.hDeps))
 	m.HandleFunc("DELETE /api/v1/work-items/{id}/dependencies/{blocking}/{kind}", s.auth(s.hDelDep))
+	// append-only work-item comments, written by the same
+	// principals as PATCH (a project writer). Reachability: the CLI's step
+	// guard refuses `pf file` before any wire call and a step process
+	// holds no aihub key, so this door is not step-reachable.
+	m.HandleFunc("POST /api/v1/work-items/{id}/comments", s.auth(s.hAddWIComment))
 	m.HandleFunc("GET /api/v1/projects/{project}/ready-queue", s.auth(s.hReadyQueue))
 	m.HandleFunc("POST /api/v1/machines/heartbeat", s.auth(s.hHeartbeat))
 	m.HandleFunc("GET /api/v1/machines", s.authAdmin(s.hListMachines))

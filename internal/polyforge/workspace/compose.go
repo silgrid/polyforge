@@ -76,41 +76,13 @@ func MissingTaskModelsError(project string) error {
 		project, project, TaskKey, project, DefaultKey)
 }
 
-// SummarizeModels answers the summarize-lane candidate list of a claim
-// of ANY project of the workspace — the root summarize.models key
-// (polyforge#224, polyforge#242): the parsed list when the yaml declares
-// one (a declared-empty list answers empty, non-nil — present-empty
-// governs, and an empty candidate list dispatches nothing, so an empty
-// list is the lane off), nil when the key or the whole yaml is absent
-// (the lane is silently off — "off" is a legitimate state in the
-// demand-gate era, never a typed failure). It is NOT part of the
-// per-step precedence chain; the daemon reads it live at every lane
-// request (an edit governs the next request).
-func SummarizeModels(cfg *Config) []string {
-	if cfg == nil {
-		return nil
-	}
-	return cfg.Summarize
-}
-
 // DefaultSummarizeLanguage is the summarize lane's narration language
-// when the root summarize entry declares no `language` (polyforge#243),
-// and the reading of a yaml that cannot be read.
+// when cli.toml's [summarize] table declares no `language` (polyforge#243,
+//).
 const DefaultSummarizeLanguage = "中文"
 
-// SummarizeLanguage answers the summarize lane's narration language of a
-// request: the declared root summarize.language (trimmed), or
-// DefaultSummarizeLanguage when the key or the whole yaml is absent. It is
-// read live beside SummarizeModels (an edit governs the next request).
-func SummarizeLanguage(cfg *Config) string {
-	if cfg == nil || cfg.SummarizeLanguage == "" {
-		return DefaultSummarizeLanguage
-	}
-	return cfg.SummarizeLanguage
-}
-
 // The summarize lane's per-WI call-start spacing bounds and default, in
-// seconds (polyforge#250): a declared summarize.interval_sec must lie in
+// seconds (polyforge#250): a declared [summarize] interval_sec must lie in
 // MinSummarizeIntervalSec..MaxSummarizeIntervalSec inclusive;
 // DefaultSummarizeIntervalSec governs when the key is absent and is the
 // reading of a job record written without one.
@@ -120,16 +92,32 @@ const (
 	DefaultSummarizeIntervalSec = 60
 )
 
-// SummarizeIntervalSec answers the summarize lane's per-WI call-start
-// spacing of a claim, in seconds: the declared root
-// summarize.interval_sec, or DefaultSummarizeIntervalSec when the key or
-// the whole yaml is absent. The lane reads it live beside
-// SummarizeModels (an edit governs the next request).
-func SummarizeIntervalSec(cfg *Config) int {
-	if cfg == nil || cfg.SummarizeIntervalSec == 0 {
-		return DefaultSummarizeIntervalSec
+// SummarizeSettings is the machine-level summarize lane configuration —
+// cli.toml's [summarize] table: Models is mandatory in a
+// declared table (canonical `<harness>:<model>` candidates); an empty
+// Language or a zero IntervalSec is an absent optional key (Lane resolves
+// the documented defaults).
+type SummarizeSettings struct {
+	Models      []string
+	Language    string
+	IntervalSec int
+}
+
+// Lane answers the lane's effective configuration: nil models when the
+// table is absent (the lane is off), else the declared models and the
+// language/interval with the documented defaults for an absent key.
+func (s *SummarizeSettings) Lane() (models []string, language string, intervalSec int) {
+	if s == nil {
+		return nil, DefaultSummarizeLanguage, DefaultSummarizeIntervalSec
 	}
-	return cfg.SummarizeIntervalSec
+	language, intervalSec = s.Language, s.IntervalSec
+	if language == "" {
+		language = DefaultSummarizeLanguage
+	}
+	if intervalSec == 0 {
+		intervalSec = DefaultSummarizeIntervalSec
+	}
+	return append([]string{}, s.Models...), language, intervalSec
 }
 
 // ComposeCandidates answers the per-step effective candidate lists of

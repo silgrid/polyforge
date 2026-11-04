@@ -18,8 +18,9 @@ package daemon
 // cursor or a sort value a caller may send is dropped on the floor and
 // the empty-q browse shape is refused before anything is forwarded.
 //
-// The POST is one of the step-origin guard's two step-allowed writes
-// (routes.go); the other is the result submit (stepresult.go).
+// The POST is one of the step-origin guard's three step-allowed writes
+// (routes.go); the others are the result submit (stepresult.go) and the
+// deliver step's bar-run record (stepbarrun.go).
 
 import (
 	"encoding/json"

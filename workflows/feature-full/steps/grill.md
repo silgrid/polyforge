@@ -38,10 +38,16 @@ every ambiguity you can find as a question, not an assumption.
    **re-file** (the owner answers this batch with the reserved `cancel`, which ends
    this run, and re-files), never by a runtime switch. Every round — including a zero-question
    pass — states a `Lane proposal`: keep `feature-full`, or down-lane to
-   `chore`/`autopilot`, with a one-line reason on two axes: `expected diff size`
+   `chore`/`autopilot`/`micro`, with a one-line reason on two axes: `expected diff size`
    (how much a competent implementation touches) and `lane risk surface` (what the
    change can break or newly expose). A small expected diff on a low risk surface
-   proposes the lighter lane. Work on the never unattended list counts
+   proposes the lighter lane. `micro` (fix → review → deliver, no verification
+   step) is proposed only for a pure text ticket — docs or locale message text, no
+   code, config, generated file, test or behavior change — whose every touched
+   repository declares `micro_path=` covering the paths it changes in its own
+   `.polyforge/verify-scope.conf`, and whose acceptance needs no full bar, e2e
+   scenario or verification step; any other ticket is not eligible and gets no
+   `micro` proposal. Work on the never unattended list counts
    as a high `lane risk surface` and gets no down-lane proposal: such a ticket
    keeps `feature-full`, whatever its `expected diff size`. The never unattended
    list is: release/deploy work, schema or data migration, credentials and
@@ -54,7 +60,7 @@ every ambiguity you can find as a question, not an assumption.
    feature to spec) belongs on the `chore` lane, so it is a down-lane proposal too
    — `feature-full` is NOT trimmed by change type. A proposed down-lane is one row
    of the single batch table (step 5): ask the owner to answer `cancel` and re-file
-   on `chore`/`autopilot`, or to waive the proposal and keep this run on
+   on `chore`/`autopilot`/`micro`, or to waive the proposal and keep this run on
    `feature-full`. Never silently proceed. Record the proposal and the owner's
    answer in `artifacts/grill-qa.md`.
 3. **External-oracle probe.** When you review the owner's proposal and

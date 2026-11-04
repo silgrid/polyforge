@@ -434,6 +434,9 @@ func (m *WIManager) load(id string) (*WIView, error) {
 		return nil, err
 	}
 	v.WaitingFor = waiting[id]
+	if v.Comments, err = m.Comments(id); err != nil {
+		return nil, err
+	}
 	return v, nil
 }
 

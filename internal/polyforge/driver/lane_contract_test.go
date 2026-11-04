@@ -75,6 +75,47 @@ func TestShippedLaneRewindBounds(t *testing.T) {
 	}
 }
 
+// TestShippedMicroLaneShape: micro is exactly fix →
+// review → deliver — no grill, plan, spec, e2e-author or verification —
+// both gates rewind to fix, the bounds are 2/1, the build step is fix and
+// the lane is the verification-less delivery shape the fast-lane guard and
+// merge rule key on.
+func TestShippedMicroLaneShape(t *testing.T) {
+	wf, err := LoadWorkflow(filepath.Join(shippedWorkflowsDir, "micro"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := laneOrder(t, "micro"); len(got) != 3 || got[0] != "fix" || got[1] != reviewStepID || got[2] != deliverStepID {
+		t.Fatalf("micro's order must be fix → review → deliver, got %v", got)
+	}
+	if wf.MaxTotal != 2 || wf.MaxPerStep != 1 {
+		t.Fatalf("micro: bounds %d/%d, want 2/1", wf.MaxTotal, wf.MaxPerStep)
+	}
+	for _, id := range []string{reviewStepID, deliverStepID} {
+		s := wf.step(id)
+		if !s.Gate || s.OnFail == nil || s.OnFail.Target != "fix" {
+			t.Fatalf("micro/%s must be a gate with on_fail fix: %+v", id, s)
+		}
+	}
+	if s := wf.step(reviewStepID); s.ContextPolicy != ContextFresh {
+		t.Fatalf("micro/review must run fresh, got %q", s.ContextPolicy)
+	}
+	if s := wf.step("fix"); s.ContextPolicy != ContextInherit || !s.Recall {
+		t.Fatalf("micro/fix must inherit with recall: %+v", s)
+	}
+	if !wf.step(deliverStepID).RequiresCommandEvidence {
+		t.Fatal("micro/deliver must require command evidence")
+	}
+	for _, s := range wf.Steps {
+		if s.RequiresHumanAnswer || s.HumanAnswerIfAsked {
+			t.Fatalf("micro/%s declares requires_human_answer; the lane has no human checkpoint", s.ID)
+		}
+	}
+	if wf.buildStep() != "fix" || !verificationLess(wf) {
+		t.Fatalf("micro: build step %q, verification-less %v", wf.buildStep(), verificationLess(wf))
+	}
+}
+
 // driveGateRound walks the lane to one gate FAIL: every step in
 // [target, gate) completes (gates with a pass verdict), then the gate
 // FAILs — one charged rewind of that gate→target edge. It answers the
@@ -117,7 +158,7 @@ func driveGateRound(t *testing.T, d *Driver, wf *Workflow, gate string, n int64)
 // lane-wide invariant (#edges × max_per_step ≥ max_total) holds, so
 // max_total is reachable through charged rewinds alone.
 func TestShippedLaneExhaustionIsConstructive(t *testing.T) {
-	for _, bundle := range []string{"feature-full", "chore", "bug-fix", "autopilot"} {
+	for _, bundle := range []string{"feature-full", "chore", "bug-fix", "autopilot", "micro"} {
 		wf, err := LoadWorkflow(filepath.Join(shippedWorkflowsDir, bundle))
 		if err != nil {
 			t.Fatalf("%s: %v", bundle, err)

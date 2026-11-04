@@ -662,8 +662,40 @@ func (d *DaemonClient) WatchArtifact(wi, relpath string) (json.RawMessage, error
 	return d.do("GET", "/jobs/"+url.PathEscape(wi)+"/artifact", "path="+url.QueryEscape(relpath), nil, nil)
 }
 
-// AnalyzeMessage asks the local daemon for the read-only analyzer run of
-// one message (human-triggered only; never automatic).
-func (d *DaemonClient) AnalyzeMessage(id string) (json.RawMessage, error) {
-	return d.do("POST", "/messages/"+url.PathEscape(id)+"/analyze", "", map[string]any{}, nil)
+// analyzeClientTimeout bounds the one analyze (and prompt) call: the
+// daemon blocks until the task is terminal (its wait bound is 6 minutes), so
+// this call outlasts the client's global 120 s bound — every other verb
+// keeps that one.
+const analyzeClientTimeout = 6*time.Minute + 30*time.Second
+
+// AnalyzeMessage asks the local daemon for the read-only analysis of one
+// message (human-triggered only; never automatic) and blocks until the
+// analysis task ends. callerID is the CLI's own user id (the task's
+// reporter); empty when it has none.
+func (d *DaemonClient) AnalyzeMessage(id, callerID string) (json.RawMessage, error) {
+	return d.messageTask(id, "analyze", callerID)
+}
+
+// PromptMessage asks the local daemon to turn one message into an
+// execution prompt (human-triggered only; one read-only task, the same
+// wait bound as analyze) and blocks until that task ends. callerID is the
+// CLI's own user id (the task's reporter); empty when it has none.
+func (d *DaemonClient) PromptMessage(id, callerID string) (json.RawMessage, error) {
+	return d.messageTask(id, "prompt", callerID)
+}
+
+// messageTask is the one blocking POST /messages/{id}/<action> call, under
+// analyzeClientTimeout instead of the global bound.
+func (d *DaemonClient) messageTask(id, action, callerID string) (json.RawMessage, error) {
+	c := *d
+	hc := http.Client{Timeout: analyzeClientTimeout}
+	if d.HTTP != nil {
+		hc.Transport = d.HTTP.Transport
+	}
+	c.HTTP = &hc
+	body := map[string]any{}
+	if callerID != "" {
+		body["caller_id"] = callerID
+	}
+	return c.do("POST", "/messages/"+url.PathEscape(id)+"/"+action, "", body, nil)
 }

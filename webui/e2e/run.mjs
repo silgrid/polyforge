@@ -11,7 +11,9 @@
 //
 // The authored new-behaviour scenarios are S18 (visual hierarchy),
 // S20a (WCAG contrast and band colours), S21a (system typography and
-// tabular figures) and S22a (no horizontal overflow, narrow icon rail).
+// tabular figures), S22a (no horizontal overflow, narrow icon rail) and
+// S23 (the ticket detail shows its comments and anchored messages,
+//).
 // S17/S19/S20b/S21b/S22b keep the v1 semantic coverage. Every
 // data-derived assertion is preceded by the bounded waitForContent on
 // the same element; there is no fixed sleep anywhere in this file.
@@ -186,9 +188,9 @@ async function colourAudit(page, selectors, mode, labelPattern) {
 
 
 
-// KIND_HOOKS are the eight memory kind hooks the driver seeds one memory
-// for: the four kinds, the three named doc.* types and a plain doc.
-const KIND_HOOKS = ['experience', 'fact', 'rule', 'methodology', 'decision', 'design', 'review', 'doc']
+// KIND_HOOKS are the nine memory kind hooks the driver seeds one memory
+// for: the four kinds, the four named doc.* types and a plain doc.
+const KIND_HOOKS = ['experience', 'fact', 'rule', 'methodology', 'decision', 'design', 'review', 'module-map', 'doc']
 
 // KIND_MIN_DISTANCE is how far apart (RGB euclidean distance, 0–441)
 // two kind colours must sit to count as distinct, not just unequal.
@@ -311,6 +313,7 @@ const scenarios = [
   ['S21b memory module carries the #103 visual spec', scenarioMemoryVisual],
   ['S22a no horizontal overflow and a functional narrow rail', scenarioOverflow],
   ['S22b links from escaping names resolve to the exact object', scenarioEscapedLinks],
+  ['S23 ticket discussion shows comments and anchored messages', scenarioDiscussion],
 ]
 
 const browser = await chromium.launch()
@@ -526,7 +529,7 @@ async function scenarioContrast(page) {
       assert(m.ratio >= 4.5, `the ${scheme} ${m.name} text contrast is ${m.ratio.toFixed(2)}:1 (want >= 4.5:1)`)
     }
 
-    // Every kind hook renders its own colour: each of the eight hooks
+    // Every kind hook renders its own colour: each of the nine hooks
     // clears 3:1 against its surface, all marks of one kind agree, every
     // kind but the neutral doc carries KIND_MIN_CHROMA, two kinds never
     // resolve to the same colour, and no kind sits within
@@ -847,6 +850,30 @@ async function scenarioEscapedLinks(page) {
     'the odd memory link did not open the exact memory (title mismatch)')
   assert((await memDetail.getByTestId('memory-id-footer').textContent()) === fixtures.odd_mem,
     'the odd memory link did not open the exact memory (id mismatch)')
+}
+
+// ---------------------------------------------------------------------------
+// S23 (new behaviour,): the work-item detail carries the
+// ticket's append-only comment thread and every message anchored to it
+// (about_wi, matched by slug or id — the seeded message uses the slug, the
+// shape the pre-change send face stored).
+async function scenarioDiscussion(page) {
+  await page.goto(`/web/${enc(fixtures.project)}/work-items/${enc(fixtures.discussion_wi)}`)
+  const detail = page.getByTestId('work-item-detail')
+  await waitForContent(detail.locator('h1'), 'S23: the discussion work-item detail never rendered')
+
+  const comment = detail.getByTestId('wi-comment').first()
+  await waitForContent(comment, 'S23: the ticket detail shows no comment')
+  assert((await comment.textContent()).includes(fixtures.comment_body),
+    'S23: the comment body is not shown on the ticket detail')
+
+  const message = detail.getByTestId('about-wi-message').first()
+  await waitForContent(message, 'S23: the ticket detail shows no about_wi message')
+  const text = await message.textContent()
+  assert(text.includes(fixtures.message_text),
+    'S23: the anchored message body is not shown on the ticket detail')
+  assert(text.includes(fixtures.discussion_slug),
+    'S23: the anchored message does not name the work item it is anchored to')
 }
 
 function enc(segment) {

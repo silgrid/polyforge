@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -130,6 +131,10 @@ type Config struct {
 	MaxStepFailures int
 	// Now overrides the clock (tests).
 	Now func() time.Time
+	// DataDir is the daemon data dir: the deliver step's bar-run record
+	// lives under it (barruns.go,). Empty disables the
+	// record (unit fixtures): no recorded run is read or cleared.
+	DataDir string
 	// Sleep overrides the driver's waits (the D7 rate-limit backoff);
 	// nil = a real timer cut short by the context. Tests inject a
 	// recorder so the backoff curve is asserted without the wall time.
@@ -440,6 +445,16 @@ func (d *Driver) Run(ctx context.Context) error {
 			continue
 		}
 
+		// a verification-less delivery lane's machine
+		// boundary — the build step's diff is judged against each
+		// repository's own base declaration before the next step runs; a
+		// refusal ends the workflow (plan stops the loop).
+		if stopped, err := d.guardFastLane(stepID); err != nil {
+			return err
+		} else if stopped {
+			continue
+		}
+
 		if blocked, err := d.composeDispatch(stepID); err != nil {
 			return err
 		} else if blocked {
@@ -461,6 +476,15 @@ func (d *Driver) Run(ctx context.Context) error {
 		// this spawn.
 		if d.rewindReentryOrder(stepID) {
 			spawn.Resume = false
+			// a new round starts here, and with it a new
+			// deliver run — the daemon-recorded bar runs of the previous
+			// one never carry over. The record is cleared exactly at this
+			// boundary (a needs_input answer or a plain resume keeps it).
+			// Outside every lock; a crash before the journal line clears
+			// again (idempotent).
+			if err := ClearBarRuns(d.cfg.DataDir, d.wi.ID); err != nil {
+				fmt.Fprintf(os.Stderr, "driver: %s: bar-run record not cleared at the rewind boundary: %v\n", d.wi.ID, err)
+			}
 		}
 		// the gate's plan-conformance facts — git reads, so
 		// computed here, outside d.mu (the verifiedHeads pattern).
@@ -819,6 +843,48 @@ func (d *Driver) blockUnchangedGateTree(stepID string) (bool, error) {
 		return false, fmt.Errorf("driver: step %s unchanged-tree block failed: %w", stepID, err)
 	}
 	return true, nil
+}
+
+// guardFastLane is the verification-less delivery lane's pre-dispatch
+// boundary (fast_lane.go). It fires only on that shape
+// (verificationLess), only for the step declared right after the lane's
+// build step, and only once the build step is done: the facts (git and the
+// base conf, outside d.mu) are recorded on the build step's output by one
+// TransFastLane write — skipped when the identical verdict is already
+// recorded, so a re-dispatch writes nothing new. A refused diff ends the
+// workflow in that write and answers true; nothing is dispatched.
+func (d *Driver) guardFastLane(stepID string) (bool, error) {
+	d.mu.Lock()
+	if !verificationLess(d.workflow) {
+		d.mu.Unlock()
+		return false, nil
+	}
+	build := d.workflow.buildStep()
+	bIdx, okB := d.workflow.indexOf(build)
+	sIdx, okS := d.workflow.indexOf(stepID)
+	bst := d.exec.Steps[build]
+	if build == "" || !okB || !okS || sIdx != bIdx+1 || bst == nil || bst.Status != capsule.StepDone {
+		d.mu.Unlock()
+		return false, nil
+	}
+	evidence := fastLaneEvidence(bst.Output)
+	prior := fastLaneOf(bst.Output)
+	d.mu.Unlock()
+
+	reposDir := ""
+	if d.wi.CapsuleDir != "" {
+		reposDir = filepath.Join(d.wi.CapsuleDir, capsule.DirRepos)
+	}
+	verdict := fastLaneVerdict(reposDir, evidence)
+	if prior != nil && reflect.DeepEqual(*prior, verdict) {
+		return false, nil
+	}
+	if err := d.transition(TransitionRequest{
+		Kind: TransFastLane, StepID: build, FastLane: &verdict, SpawnN: d.currentSpawnN(),
+	}); err != nil {
+		return false, fmt.Errorf("driver: step %s fast-lane verdict failed: %w", build, err)
+	}
+	return !verdict.InBounds, nil
 }
 
 // gateLastVerdictAtLocked answers when gate last delivered a verdict, from
@@ -1831,6 +1897,13 @@ func (d *Driver) buildResultSpec(stepID string, n int64) ResultSpec {
 		if ver := d.exec.Steps[verificationStepID]; ver != nil {
 			spec.VerificationScope, _ = parseScope(ver.Output["scope"])
 		}
+		// the verification-less shape and the recorded
+		// in-bounds credential plan of its build step.
+		if spec.NoVerification = verificationLess(d.workflow); spec.NoVerification {
+			if bst := d.exec.Steps[d.workflow.buildStep()]; bst != nil && bst.Status == capsule.StepDone {
+				spec.FastEvidence = fastLanePlanCommands(fastLaneOf(bst.Output))
+			}
+		}
 	}
 	// polyforge#260: a pending light recheck marker mode-selects the LIGHT
 	// output schema for this step's completed results — the light
@@ -1843,6 +1916,15 @@ func (d *Driver) buildResultSpec(stepID string, n int64) ResultSpec {
 		lightMode = true
 	}
 	d.mu.Unlock()
+	if stepID == deliverStepID {
+		// the daemon-recorded bar runs, read outside d.mu.
+		// An unreadable record is no record: fewer runs count, never more.
+		if runs, err := ReadBarRuns(d.cfg.DataDir, d.wi.ID); err == nil {
+			spec.BarRuns = runs
+		} else {
+			fmt.Fprintf(os.Stderr, "driver: %s: bar-run record unreadable (no recorded run counts): %v\n", d.wi.ID, err)
+		}
+	}
 	spec.OutputSchema = d.outputSchema(stepID)
 	if lightMode {
 		if s := d.lightOutputSchema(); s != nil {

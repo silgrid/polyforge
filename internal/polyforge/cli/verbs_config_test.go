@@ -182,6 +182,13 @@ func TestStepsCandidateRefusedByLoader(t *testing.T) {
 			t.Fatalf("%s: a refused attr changed the file", key)
 		}
 	}
+	code, _, stderr = runPf(t, f.env, "config", "set", "steps.alpha.grill.attrs.question_batch_size", "-1", "--cwd", f.ws, "--expect-hash", sha)
+	if code == 0 || !strings.Contains(stderr, "steps.alpha.grill.attrs.question_batch_size: must be a non-negative integer") {
+		t.Fatalf("a negative int attr must be the loader's refusal: %d %s", code, stderr)
+	}
+	if _, now := fileHash(t, path); string(now) != string(raw) {
+		t.Fatal("a refused negative attr changed the file")
+	}
 	if code, _, stderr := runPf(t, f.env, "config", "set", "steps.alpha.grill.attrs.question_batch_size", "2", "--cwd", f.ws, "--expect-hash", sha); code != 0 {
 		t.Fatalf("a declared attr write failed: %s", stderr)
 	}
@@ -223,5 +230,66 @@ func TestStepsChainUnsetFallsBack(t *testing.T) {
 	}
 	if e := stepRead(t, readWorkspaceDoc(t, f), "alpha", "code"); e["declared"] != false {
 		t.Fatalf("a cleared chain must read undeclared: %v", e)
+	}
+}
+
+// TestConfigSetWritesSummarizeAndPolicyTables pins the cli.toml write face
+// of the two moved families: summarize.* are flat keys that
+// refuse a path flag, memory_policy.<entry>.<list> needs one, and unset
+// removes exactly the addressed list — every write landing in cli.toml.
+func TestConfigSetWritesSummarizeAndPolicyTables(t *testing.T) {
+	ctx, ws := w22WorkspaceCtx(t)
+	read := func() string {
+		raw, err := os.ReadFile(ctx.ConfigPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if err := runConfigSet(ctx, []string{"summarize.models", "pi:a,claude:b"}); err != nil {
+		t.Fatalf("summarize.models set: %v", err)
+	}
+	if err := runConfigSet(ctx, []string{"summarize.language", "Japanese"}); err != nil {
+		t.Fatalf("summarize.language set: %v", err)
+	}
+	if err := runConfigSet(ctx, []string{"summarize.interval_sec", "9"}); err == nil || !strings.Contains(err.Error(), "interval_sec") {
+		t.Fatalf("an out-of-range interval must be the validator's refusal, got %v", err)
+	}
+	if err := runConfigSet(ctx, []string{"summarize.language", "x", "--cwd", ws}); err == nil || !strings.Contains(err.Error(), "summarize.language") {
+		t.Fatalf("summarize.* with --cwd must refuse naming the key, got %v", err)
+	}
+	text := read()
+	if !strings.Contains(text, "[summarize]\nmodels = [\"pi:a\", \"claude:b\"]\nlanguage = \"Japanese\"\n") {
+		t.Fatalf("summarize table not written:\n%s", text)
+	}
+	if err := runConfigSet(ctx, []string{"memory_policy.alpha.record", `["a, b"]`}); err == nil || !strings.Contains(err.Error(), "--workspace") {
+		t.Fatalf("a memory_policy write without a path must refuse, got %v", err)
+	}
+	if err := runConfigSet(ctx, []string{"memory_policy.gamma.record", `["x"]`, "--workspace", ws}); err == nil || !strings.Contains(err.Error(), "gamma") {
+		t.Fatalf("a foreign project entry must be the validator's refusal, got %v", err)
+	}
+	if err := runConfigSet(ctx, []string{"memory_policy.alpha.record", `["a, b"]`, "--workspace", ws}); err != nil {
+		t.Fatalf("memory_policy set: %v", err)
+	}
+	if err := runConfigSet(ctx, []string{"memory_policy.default.skip", `[]`, "--cwd", ws}); err != nil {
+		t.Fatalf("memory_policy set via --cwd: %v", err)
+	}
+	cfg, err := LoadFileConfig(ctx.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.MemoryPolicy[ws]["alpha"].Record; len(got) != 1 || got[0] != "a, b" {
+		t.Fatalf("alpha record = %#v", got)
+	}
+	before := read()
+	if err := runConfigUnset(ctx, []string{"memory_policy.alpha.record", "--workspace", ws}); err != nil {
+		t.Fatalf("memory_policy unset: %v", err)
+	}
+	after := read()
+	if strings.Contains(after, "a, b") || !strings.Contains(after, "language = \"Japanese\"") || !strings.Contains(after, ".default]\nskip = []") {
+		t.Fatalf("unset must remove exactly the alpha entry:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".polyforge.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("a cli.toml write touched the workspace yaml (stat err %v)", err)
 	}
 }

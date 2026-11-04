@@ -99,6 +99,9 @@ type StartConfig struct {
 	// LimitsFunc, when set, is consulted at every judgement so a live
 	// daemon reload changes the bounds without a restart.
 	LimitsFunc func() supervise.Defaults
+	// DataDir is the daemon data dir (the deliver step's bar-run record,
+	//); empty disables the record.
+	DataDir string
 }
 
 // Start instantiates the driver over the capsule and runs it.
@@ -139,6 +142,7 @@ func Start(ctx context.Context, cfg StartConfig) (*Handle, error) {
 		Attrs:       cfg.Attrs,
 		Interrupted: cfg.Interrupted,
 		StepEnded:   cfg.StepEnded,
+		DataDir:     cfg.DataDir,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("driver: %w", err)

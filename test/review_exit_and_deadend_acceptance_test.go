@@ -20,6 +20,14 @@ import (
 	"time"
 )
 
+// acceptancePreflight is a baseline row's four-key executability preflight
+// (the driver rejects a completed e2e-author row without one); this fake
+// lane has no render chain, so every check is n/a with that reason.
+func acceptancePreflight() map[string]any {
+	na := map[string]any{"verdict": "n/a", "evidence": "fake agent lane, no suite runs"}
+	return map[string]any{"data_source": na, "async_settle": na, "timing_window": na, "selector_unique": na}
+}
+
 // featureFullHeadThroughE2E is the feature-full lane up to (excluding)
 // review. The e2e-author result carries a red authored baseline so the
 // review scenarios are not the all-green case; S6 replaces that baseline.
@@ -30,6 +38,7 @@ func featureFullHeadThroughE2E(e2eOutput map[string]any) []map[string]any {
 			"scenario_titles": []string{"the new behaviour is observable"},
 			"baseline": []map[string]any{{
 				"title": "the new behaviour is observable", "status": "fail", "evidence": "observed old behaviour",
+				"preflight": acceptancePreflight(),
 			}},
 		}
 	}
@@ -304,6 +313,7 @@ func TestE2EAuthorAllGreenAsksOwner(t *testing.T) {
 		"scenario_titles": []string{"the existing behaviour is observable"},
 		"baseline": []map[string]any{{
 			"title": "the existing behaviour is observable", "status": "pass", "evidence": "already green on the pre-change tree",
+			"preflight": acceptancePreflight(),
 		}},
 	}
 	plan := featureFullHeadThroughE2E(green)

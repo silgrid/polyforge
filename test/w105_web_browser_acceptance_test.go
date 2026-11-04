@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 	_ "modernc.org/sqlite"
 )
@@ -150,7 +151,7 @@ func TestW105BrowserConsoleAcceptance(t *testing.T) {
 		t.Fatalf("the console browser suite failed (%v):\n%s", err, out)
 	}
 	for _, name := range []string{
-		"S17", "S18", "S19", "S20", "S21", "S22",
+		"S17", "S18", "S19", "S20", "S21", "S22", "S23",
 	} {
 		if !strings.Contains(string(out), "PASS "+name) {
 			t.Fatalf("the browser suite output misses scenario %s:\n%s", name, out)
@@ -171,6 +172,12 @@ type browserFixtures struct {
 	OddGoal     string `json:"odd_goal"`
 	OddMem      string `json:"odd_mem"`
 	OddMemTitle string `json:"odd_mem_title"`
+	// one ticket whose detail carries an append-only
+	// comment and a message anchored to it by slug.
+	DiscussionWI   string `json:"discussion_wi"`
+	DiscussionSlug string `json:"discussion_slug"`
+	CommentBody    string `json:"comment_body"`
+	MessageText    string `json:"message_text"`
 }
 
 // seedBrowserFixtures seeds the suite's data through the real API
@@ -223,8 +230,10 @@ func seedBrowserFixtures(t *testing.T, inst *v1Install) browserFixtures {
 		}
 	}
 	// One memory per remaining kind hook (fact is seeded above): the
-	// four kinds, the three named doc.* types and a plain doc, so the
-	// colour scenario measures every hook side by side.
+	// four kinds, the four named doc.* types and a plain doc, so the
+	// colour scenario measures every hook side by side. doc.module-map
+	// is seeded conforming to its Create convention (title, tags,
+	// baseline line), which Create enforces.
 	for _, typ := range []string{"experience.wrap", "rule.guard", "methodology.flow", "doc.decision", "doc.design", "doc.review", "doc"} {
 		if err := inst.client.Do("POST", "/api/v1/memories", map[string]any{
 			"project": v1Project, "type": typ,
@@ -234,6 +243,14 @@ func seedBrowserFixtures(t *testing.T, inst *v1Install) browserFixtures {
 		}, nil); err != nil {
 			t.Fatalf("kind memory %s: %v", typ, err)
 		}
+	}
+	if err := inst.client.Do("POST", "/api/v1/memories", map[string]any{
+		"project": v1Project, "type": "doc.module-map",
+		"title":   "demo/console rev1",
+		"content": "baseline @abc1234 2026-11-03\n\nkind body", "tags": []string{"kind", "demo", "console"},
+		"visibility": "project",
+	}, nil); err != nil {
+		t.Fatalf("kind memory doc.module-map: %v", err)
 	}
 
 	// Machine rows (SQL: the heartbeat face is not reachable from the
@@ -251,6 +268,38 @@ func seedBrowserFixtures(t *testing.T, inst *v1Install) browserFixtures {
 	}
 	if err := json.Unmarshal(operator, &opUser); err != nil || opUser.ID == "" {
 		t.Fatalf("operator answer: %v (%s)", err, operator)
+	}
+
+	// a ticket with one append-only comment and one message
+	// anchored to it by SLUG (the pre-existing send face stores the raw
+	// string, the shape msg_cMrbYNmICUxI had). The console detail must
+	// show both beside the ticket body.
+	f.CommentBody = "console comment body: note this ticket"
+	f.MessageText = "console anchored message body: an addendum on this ticket"
+	discussionRaw, err := inst.client.CreateWorkItem(aihubclient.CreateWorkItemRequest{
+		Project: v1Project, Goal: "console ticket discussion",
+	})
+	if err != nil {
+		t.Fatalf("discussion work item: %v", err)
+	}
+	var discussion struct {
+		ID   string `json:"id"`
+		Slug string `json:"slug"`
+	}
+	if err := json.Unmarshal(discussionRaw, &discussion); err != nil || discussion.ID == "" || discussion.Slug == "" {
+		t.Fatalf("discussion work item answer: %v (%s)", err, discussionRaw)
+	}
+	f.DiscussionWI = discussion.ID
+	f.DiscussionSlug = discussion.Slug
+	inst.trackWI(discussion.ID)
+	if err := inst.client.Do("POST", "/api/v1/work-items/"+discussion.ID+"/comments",
+		map[string]any{"body": f.CommentBody}, nil); err != nil {
+		t.Fatalf("discussion comment: %v", err)
+	}
+	if _, err := inst.client.SendMessage(api.SendMessage{
+		To: opUser.ID, Text: f.MessageText, AboutWI: discussion.Slug,
+	}); err != nil {
+		t.Fatalf("anchored message: %v", err)
 	}
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(inst.dataDir, "aihub.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {

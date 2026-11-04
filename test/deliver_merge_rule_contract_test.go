@@ -17,6 +17,10 @@ func TestDeliverMergeRuleContract(t *testing.T) {
 		"This round's `acknowledge` answer settles it: never ask again",
 		"open exactly one follow-up PR for those commits on the same branch - the only case a second PR is allowed",
 		"an OPEN PR: reuse it (never a second PR)",
+		// the verification-less lane's credential is this
+		// dispatch's own in-window re-run of the recorded fast_lane plan
+		"never through `pf bar-run`: a run of the build step or of an earlier dispatch never counts, only this dispatch's recorded run inside that window",
+		"on a lane without a `verification` step the only cover is this dispatch's recorded re-run of every `fast_lane` command of the repo inside the window (step 3), each with exit 0",
 	} {
 		if n := strings.Count(text, want); n != 1 {
 			t.Errorf("the deliver contract must state %q exactly once, found %d", want, n)

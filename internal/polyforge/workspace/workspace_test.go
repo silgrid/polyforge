@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,7 +54,7 @@ func TestLoadAbsentAndEmptyAreNil(t *testing.T) {
 
 // TestLoadValidGrammars pins the valid shapes and the decoded content.
 func TestLoadValidGrammars(t *testing.T) {
-	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    default: { models: [pi:a, pi:b] }\n    code: { models: [pi:c] }\n    review: { models: [] }\n  other:\n    spec: { models: [pi:d] }\nsummarize: { models: [pi:s, claude:s2] }\n"), stepsDir(t), nil)
+	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    default: { models: [pi:a, pi:b] }\n    code: { models: [pi:c] }\n    review: { models: [] }\n  other:\n    spec: { models: [pi:d] }\n"), stepsDir(t), nil)
 	if err != nil || cfg == nil {
 		t.Fatalf("valid yaml refused: %v", err)
 	}
@@ -65,14 +64,6 @@ func TestLoadValidGrammars(t *testing.T) {
 	}
 	if got, ok := e2e["review"]; !ok || got == nil || len(got) != 0 {
 		t.Fatalf("declared-empty list must be present and non-nil: %#v", got)
-	}
-	// polyforge#242: the root summarize key decodes like a step entry's
-	// list and lands in Config.Summarize, never under a project.
-	if got := cfg.Summarize; len(got) != 2 || got[0] != "pi:s" || got[1] != "claude:s2" {
-		t.Fatalf("summarize decoded wrong: %#v", got)
-	}
-	if _, ok := e2e[SummarizeKey]; ok {
-		t.Fatalf("the root summarize list leaked into a project's entries: %+v", e2e)
 	}
 	if cfg.Models["other"]["spec"][0] != "pi:d" {
 		t.Fatalf("other decoded wrong: %+v", cfg.Models["other"])
@@ -99,42 +90,14 @@ func TestLoadRefusals(t *testing.T) {
 		// reserved — it refuses like any other non-step-id key, with the
 		// generic message (no "moved to root" hint).
 		{"old per-project summarize key", "steps:\n  e2e:\n    summarize: { models: [pi:a] }\n", []string{"unknown key(s) steps.e2e.summarize: a key is \"default\", \"task\" or a step id of the installed workflows"}},
-		{"old per-project summarize beside root", "summarize: { models: [pi:a] }\nsteps:\n  e2e:\n    summarize: { models: [pi:a] }\n", []string{"steps.e2e.summarize"}},
-		// polyforge#242: the root summarize entry is as strict as a step entry.
-		{"root summarize extra key", "summarize: { models: [pi:a], modles: [pi:b] }\n", []string{"summarize.modles: not allowed"}},
-		{"root summarize retired harness", "summarize: { models: [pi:a], harness: pi }\n", []string{"summarize.harness: the `harness` key was removed"}},
-		{"root summarize unprefixed candidate", "summarize: { models: [glm-5.3] }\n", []string{`summarize.models[0]: "glm-5.3" needs a harness prefix`}},
-		{"root summarize duplicate candidate", "summarize: { models: [pi:a, pi:a] }\n", []string{`summarize.models[1]: repeats "pi:a"`}},
-		{"root summarize without models", "summarize: {}\n", []string{"summarize: entry is empty"}},
-		{"root summarize a bare list", "summarize: [pi:a]\n", []string{"summarize: must be `{ models: [...] }`"}},
-		{"root summarize null", "summarize:\n", []string{"summarize: must be `{ models: [...] }`"}},
-		{"root summarize models a scalar", "summarize: { models: pi:a }\n", []string{"summarize.models: must be a list"}},
-		// polyforge#243: summarize.language is a trimmed, non-empty,
-		// single-line plain string, and never stands without models.
-		{"root summarize language empty", "summarize: { models: [pi:a], language: \"\" }\n", []string{"summarize.language: is empty"}},
-		{"root summarize language whitespace-only", "summarize: { models: [pi:a], language: \"  \\t \" }\n", []string{"summarize.language: is empty"}},
-		{"root summarize language multi-line", "summarize:\n  models: [pi:a]\n  language: |\n    English\n    French\n", []string{"summarize.language: must be a single line"}},
-		{"root summarize language a number", "summarize: { models: [pi:a], language: 42 }\n", []string{"summarize.language: must be a plain string"}},
-		{"root summarize language a list", "summarize: { models: [pi:a], language: [English] }\n", []string{"summarize.language: must be a plain string"}},
-		{"root summarize language a map", "summarize: { models: [pi:a], language: { name: English } }\n", []string{"summarize.language: must be a plain string"}},
-		{"root summarize language null", "summarize: { models: [pi:a], language: ~ }\n", []string{"summarize.language: must be a plain string"}},
-		{"root summarize language without models", "summarize: { language: English }\n", []string{"summarize: entry is empty — declare `models`"}},
-		// polyforge#250: summarize.interval_sec is a YAML integer in
-		// 10-3600 inclusive (never clamped, no 0-means-default), and never
-		// stands without models.
-		{"root summarize interval_sec too small", "summarize: { models: [pi:a], interval_sec: 9 }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec too large", "summarize: { models: [pi:a], interval_sec: 3601 }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec zero", "summarize: { models: [pi:a], interval_sec: 0 }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec negative", "summarize: { models: [pi:a], interval_sec: -30 }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec quoted", "summarize: { models: [pi:a], interval_sec: \"60\" }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec a float", "summarize: { models: [pi:a], interval_sec: 60.5 }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec a duration", "summarize: { models: [pi:a], interval_sec: 1m }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec a bool", "summarize: { models: [pi:a], interval_sec: true }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec null", "summarize: { models: [pi:a], interval_sec: ~ }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec a list", "summarize: { models: [pi:a], interval_sec: [60] }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec a map", "summarize: { models: [pi:a], interval_sec: { sec: 60 } }\n", []string{"summarize.interval_sec: must be an integer in 10-3600"}},
-		{"root summarize interval_sec without models", "summarize: { interval_sec: 30 }\n", []string{"summarize: entry is empty — declare `models`"}},
-		{"root summarize unknown key names interval_sec", "summarize: { models: [pi:a], every: 30 }\n", []string{"summarize.every: not allowed", "`interval_sec`"}},
+		// the root summarize and memory_policy sections
+		// moved to cli.toml — either refuses the whole file, naming the
+		// line and the migrate command.
+		{"retired summarize section", "summarize: { models: [pi:a] }\n", []string{"line 1: `summarize:` moved to cli.toml", "pf config migrate"}},
+		{"retired memory_policy section", "steps:\n  e2e:\n    fix: { models: [pi:a] }\nmemory_policy:\n  default: { record: [a] }\n", []string{"line 4: `memory_policy:` moved to cli.toml", "pf config migrate"}},
+		{"both retired sections", "summarize: { models: [pi:a] }\nmemory_policy:\n  e2e: { record: [a] }\n", []string{"line 1: `summarize:`", "line 2: `memory_policy:`", "pf config migrate"}},
+		{"retired section even malformed", "summarize: [\n", nil},
+		{"retired section null", "memory_policy:\n", []string{"`memory_policy:` moved to cli.toml", "pf config migrate"}},
 		{"misspelled default", "steps:\n  e2e:\n    defaults: { models: [pi:a] }\n", []string{"defaults"}},
 		{"empty model id in default", "steps:\n  e2e:\n    default: { models: [\"\"] }\n", []string{"e2e", "default"}},
 		{"blank model id in step list", "steps:\n  e2e:\n    code: { models: [pi:a, \"  \"] }\n", []string{"e2e", "code"}},
@@ -152,7 +115,7 @@ func TestLoadRefusals(t *testing.T) {
 		{"duplicate project key", "steps:\n  e2e:\n    code: { models: [pi:a] }\n  e2e:\n    code: { models: [pi:b] }\n", []string{"e2e"}},
 		{"duplicate step key", "steps:\n  e2e:\n    code: { models: [pi:a] }\n    code: { models: [pi:b] }\n", []string{"code"}},
 		{"duplicate steps key", "steps:\n  e2e:\n    code: { models: [pi:a] }\nsteps:\n  x:\n    code: { models: [pi:b] }\n", []string{"steps"}},
-		{"legacy top-level models", "models:\n  e2e:\n    default: [a]\n", []string{`unknown top-level key "models" (only ` + "`steps`, `summarize` and `memory_policy`)"}},
+		{"legacy top-level models", "models:\n  e2e:\n    default: [a]\n", []string{`unknown top-level key "models" (only ` + "`steps`)"}},
 		{"legacy models beside steps", "steps:\n  e2e:\n    default: { models: [pi:a] }\nmodels:\n  e2e:\n    code: [b]\n", []string{`unknown top-level key "models"`}},
 		{"unknown sub-key", "steps:\n  e2e:\n    fix: { models: [pi:a], modles: [b] }\n", []string{"steps.e2e.fix.modles", "a step entry's keys are `models` and `attrs`"}},
 		// polyforge#175: the retired harness key and the candidate format
@@ -199,68 +162,6 @@ func TestLoadRefusals(t *testing.T) {
 				t.Fatalf("refusal path %q, want the workspace yaml path", wsErr.Path)
 			}
 		})
-	}
-}
-
-// TestLoadRootSummarize pins the root summarize key's presence
-// semantics (polyforge#242): a file declaring only `summarize:` is a
-// present config, a declared-empty list is present and empty (the lane
-// off), and a file without the key answers a nil list.
-func TestLoadRootSummarize(t *testing.T) {
-	cfg, err := Load(writeYaml(t, "summarize: { models: [pi:a, claude:b] }\n"), stepsDir(t), nil)
-	if err != nil || cfg == nil {
-		t.Fatalf("summarize-only yaml: %+v, %v; want a present config", cfg, err)
-	}
-	if len(cfg.Summarize) != 2 || cfg.Summarize[0] != "pi:a" || cfg.Summarize[1] != "claude:b" || cfg.Models != nil {
-		t.Fatalf("summarize-only yaml decoded wrong: %+v", cfg)
-	}
-	cfg, err = Load(writeYaml(t, "summarize: { models: [] }\n"), stepsDir(t), nil)
-	if err != nil || cfg == nil || cfg.Summarize == nil || len(cfg.Summarize) != 0 {
-		t.Fatalf("declared-empty summarize: %+v, %v; want present and empty", cfg, err)
-	}
-	cfg, err = Load(writeYaml(t, "steps:\n  e2e:\n    fix: { models: [pi:a] }\n"), stepsDir(t), nil)
-	if err != nil || cfg == nil || cfg.Summarize != nil {
-		t.Fatalf("keyless yaml: %+v, %v; want a nil summarize list", cfg, err)
-	}
-}
-
-// TestLoadRootSummarizeLanguage pins summarize.language (polyforge#243):
-// a declared value is accepted verbatim after the trim (free text, no
-// allowlist), and an absent key decodes "" (the claim resolves the
-// default).
-func TestLoadRootSummarizeLanguage(t *testing.T) {
-	cfg, err := Load(writeYaml(t, "summarize: { models: [pi:a], language: \"  English (US)  \" }\n"), stepsDir(t), nil)
-	if err != nil || cfg == nil || cfg.SummarizeLanguage != "English (US)" || len(cfg.Summarize) != 1 {
-		t.Fatalf("declared language: %+v, %v; want \"English (US)\"", cfg, err)
-	}
-	cfg, err = Load(writeYaml(t, "summarize:\n  models: [pi:a]\n  language: 日本語\n"), stepsDir(t), nil)
-	if err != nil || cfg == nil || cfg.SummarizeLanguage != "日本語" {
-		t.Fatalf("block-style language: %+v, %v; want 日本語", cfg, err)
-	}
-	cfg, err = Load(writeYaml(t, "summarize: { models: [pi:a] }\n"), stepsDir(t), nil)
-	if err != nil || cfg == nil || cfg.SummarizeLanguage != "" {
-		t.Fatalf("absent language: %+v, %v; want \"\"", cfg, err)
-	}
-}
-
-// TestLoadRootSummarizeInterval pins summarize.interval_sec
-// (polyforge#250): both inclusive bounds and a middle value are accepted
-// as declared, and an absent key decodes 0 (the claim resolves the
-// default 60).
-func TestLoadRootSummarizeInterval(t *testing.T) {
-	for _, sec := range []int{10, 120, 3600} {
-		cfg, err := Load(writeYaml(t, fmt.Sprintf("summarize: { models: [pi:a], interval_sec: %d }\n", sec)), stepsDir(t), nil)
-		if err != nil || cfg == nil || cfg.SummarizeIntervalSec != sec || len(cfg.Summarize) != 1 {
-			t.Fatalf("declared interval_sec %d: %+v, %v", sec, cfg, err)
-		}
-	}
-	cfg, err := Load(writeYaml(t, "summarize:\n  models: [pi:a]\n  language: English\n  interval_sec: 300\n"), stepsDir(t), nil)
-	if err != nil || cfg == nil || cfg.SummarizeIntervalSec != 300 || cfg.SummarizeLanguage != "English" {
-		t.Fatalf("block-style interval_sec beside language: %+v, %v", cfg, err)
-	}
-	cfg, err = Load(writeYaml(t, "summarize: { models: [pi:a] }\n"), stepsDir(t), nil)
-	if err != nil || cfg == nil || cfg.SummarizeIntervalSec != 0 {
-		t.Fatalf("absent interval_sec: %+v, %v; want 0", cfg, err)
 	}
 }
 
@@ -397,10 +298,10 @@ func attrsDir(t *testing.T) string {
 }
 
 // TestWorkspaceLoadAcceptsDeclaredAttrs pins a declared attr override: it
-// loads with its typed value, beside or without a models list, and an
+// loads with its typed value (0 included), beside or without a models list, and an
 // attrs-only entry declares no models level.
 func TestWorkspaceLoadAcceptsDeclaredAttrs(t *testing.T) {
-	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    grill:\n      models: [pi:a]\n      attrs:\n        question_batch_size: 2\n  other:\n    grill:\n      attrs: { question_batch_size: 1 }\n"), attrsDir(t), nil)
+	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    grill:\n      models: [pi:a]\n      attrs:\n        question_batch_size: 2\n  other:\n    grill:\n      attrs: { question_batch_size: 1 }\n  zero:\n    grill:\n      attrs: { question_batch_size: 0 }\n"), attrsDir(t), nil)
 	if err != nil || cfg == nil {
 		t.Fatalf("declared attr refused: %v", err)
 	}
@@ -413,19 +314,23 @@ func TestWorkspaceLoadAcceptsDeclaredAttrs(t *testing.T) {
 	if got := cfg.Attrs["other"]["grill"]["question_batch_size"]; got != 1 {
 		t.Fatalf("other grill attr = %#v, want 1", got)
 	}
+	if got := cfg.Attrs["zero"]["grill"]["question_batch_size"]; got != 0 {
+		t.Fatalf("zero grill attr = %#v, want 0 (0 is a legal int attr)", got)
+	}
 	if _, ok := cfg.Models["other"]["grill"]; ok {
 		t.Fatal("an attrs-only entry must not create a present models level")
 	}
 }
 
 // TestWorkspaceLoadRefusesUndeclaredAttr pins the attr refusals: an
-// undeclared name, a value of the wrong type, an attr under an unknown
+// undeclared name, a value of the wrong type, a negative int, an attr under an unknown
 // step id, a non-scalar and an empty attrs map.
 func TestWorkspaceLoadRefusesUndeclaredAttr(t *testing.T) {
 	for name, tc := range map[string]struct{ yaml, want string }{
 		"undeclared name":    {"steps:\n  e2e:\n    grill:\n      attrs: { mystery_knob: 1 }\n", "steps.e2e.grill.attrs.mystery_knob: undeclared attr — step grill declares only question_batch_size"},
 		"step declares none": {"steps:\n  e2e:\n    code:\n      attrs: { question_batch_size: 1 }\n", "steps.e2e.code.attrs.question_batch_size: undeclared attr — step code declares no attrs"},
 		"wrong type":         {"steps:\n  e2e:\n    grill:\n      attrs: { question_batch_size: two }\n", "steps.e2e.grill.attrs.question_batch_size: must be an integer"},
+		"negative int":       {"steps:\n  e2e:\n    grill:\n      attrs: { question_batch_size: -1 }\n", "steps.e2e.grill.attrs.question_batch_size: must be a non-negative integer"},
 		"unknown step id":    {"steps:\n  e2e:\n    grilll:\n      attrs: { question_batch_size: 1 }\n", "steps.e2e.grilll"},
 		"non-scalar":         {"steps:\n  e2e:\n    grill:\n      attrs: { question_batch_size: [1] }\n", "steps.e2e.grill.attrs.question_batch_size: must be an integer or a plain string"},
 		"empty attrs":        {"steps:\n  e2e:\n    grill:\n      attrs: {}\n", "steps.e2e.grill.attrs: is empty"},

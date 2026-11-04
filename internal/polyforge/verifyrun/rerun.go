@@ -143,3 +143,37 @@ func flagNames(flags []string) []string {
 	}
 	return out
 }
+
+// suiteRerun is the targeted re-run of one suite of an aggregate e2e
+// runner — the test's own parallelism lever: the suite runs alone, never
+// under artificial host load. The runner's printed `re-run:` command is
+// used verbatim (it names the exact single-suite invocation), behind the
+// planned command's leading assignments, when the planned command is one
+// simple command carrying no flag the printed one could drop. Without a
+// printed line, only the simple `npm run <script> [--]` form a conf's
+// e2e_runner= echoes is derived, as `<planned> -- <suite>`. Anything else
+// is not re-runnable (fail closed: the suite stays a failure).
+func suiteRerun(cmd, printed, suite string) (string, string) {
+	words, simple := shellWords(cmd)
+	w, i := commandWord(words)
+	if !simple || i < 0 {
+		return "", "not re-runnable: the planned aggregate e2e command is not one simple command"
+	}
+	for _, x := range words[i+1:] {
+		if strings.HasPrefix(x, "-") && x != "--" {
+			return "", fmt.Sprintf("not re-runnable: the planned aggregate e2e command carries %s, which a single-suite re-run could drop", x)
+		}
+	}
+	if printed != "" {
+		return strings.Join(append(leadingAssignments(cmd), printed), " "), ""
+	}
+	rest := words[i+1:]
+	if w != "npm" || len(rest) < 2 || rest[0] != "run" || len(rest) > 3 || (len(rest) == 3 && rest[2] != "--") {
+		return "", "not re-runnable: the runner printed no `re-run:` line and the planned command is not a simple `npm run <script>`"
+	}
+	sep := " -- "
+	if len(rest) == 3 {
+		sep = " "
+	}
+	return strings.TrimRight(cmd, " \t") + sep + shellQuote(suite), ""
+}

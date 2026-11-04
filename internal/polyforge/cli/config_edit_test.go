@@ -77,3 +77,81 @@ func TestParseProjectsValue(t *testing.T) {
 		t.Fatal("a non-projects section key must refuse")
 	}
 }
+
+// tableEditBase is a cli.toml whose tables the summarize/memory_policy
+// editor must keep byte-identical outside the addressed statement.
+const tableEditBase = `# keep this comment
+server = "http://x"
+
+[workspace."/ws/a"]
+projects = ["alpha"]
+
+[summarize]
+models = [
+  "pi:m-a",
+  "claude:m-b",
+]
+# summarize comment
+
+[memory_policy."/ws/a".default]
+record = ["base"]
+skip = []
+`
+
+func TestConfigEditSummarizeTable(t *testing.T) {
+	c := newConfigLines(tableEditBase)
+	c.setSummarize("language", `"Japanese"`)
+	got := c.String()
+	if !strings.Contains(got, "# summarize comment\nlanguage = \"Japanese\"\n\n[memory_policy") {
+		t.Fatalf("language not inserted at the end of the table body:\n%s", got)
+	}
+	if !strings.HasPrefix(got, tableEditBase[:strings.Index(tableEditBase, "# summarize comment")]) {
+		t.Fatalf("an insert rewrote earlier bytes:\n%s", got)
+	}
+	c.setSummarize("models", `["pi:m-c"]`)
+	got = c.String()
+	if strings.Contains(got, "claude:m-b") || !strings.Contains(got, "[summarize]\nmodels = [\"pi:m-c\"]\n# summarize comment") {
+		t.Fatalf("a multi-line models statement was not replaced whole:\n%s", got)
+	}
+	if _, err := ParseConfigBytes("/tmp/cli.toml", []byte(got)); err != nil {
+		t.Fatalf("the edited file does not parse: %v\n%s", err, got)
+	}
+	c.unsetSummarize("language")
+	c.unsetSummarize("models")
+	got = c.String()
+	if strings.Contains(got, "[summarize]") || !strings.Contains(got, "[memory_policy.\"/ws/a\".default]") || !strings.Contains(got, "# keep this comment") {
+		t.Fatalf("an emptied table must go with its header, nothing else:\n%s", got)
+	}
+	fresh := newConfigLines("server = \"http://x\"\n")
+	fresh.setSummarize("models", `["pi:a"]`)
+	if fresh.String() != "server = \"http://x\"\n\n[summarize]\nmodels = [\"pi:a\"]\n" {
+		t.Fatalf("an absent table must be appended, got %q", fresh.String())
+	}
+}
+
+func TestConfigEditPolicyEntry(t *testing.T) {
+	c := newConfigLines(tableEditBase)
+	c.setPolicyList("/ws/a", "alpha", "record", []string{"alpha note, with comma"})
+	got := c.String()
+	if !strings.HasPrefix(got, tableEditBase) || !strings.HasSuffix(got, "\n[memory_policy.\"/ws/a\".alpha]\nrecord = [\"alpha note, with comma\"]\n") {
+		t.Fatalf("a new entry must be appended keeping every byte:\n%s", got)
+	}
+	cfg, err := ParseConfigBytes("/tmp/cli.toml", []byte(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := cfg.MemoryPolicy["/ws/a"]["alpha"].Record; len(r) != 1 || r[0] != "alpha note, with comma" {
+		t.Fatalf("round trip = %#v", r)
+	}
+	c.setPolicyList("/ws/a", "default", "skip", []string{"secret"})
+	if got := c.String(); !strings.Contains(got, "record = [\"base\"]\nskip = [\"secret\"]\n") {
+		t.Fatalf("a list set must replace exactly its line:\n%s", got)
+	}
+	c.unsetPolicyList("/ws/a", "alpha", "record")
+	if got := c.String(); strings.Contains(got, ".alpha]") || strings.Contains(got, "alpha note") {
+		t.Fatalf("an emptied entry must go with its header:\n%s", got)
+	}
+	if policyHeader("/ws/a", "odd.name") != `[memory_policy."/ws/a"."odd.name"]` {
+		t.Fatalf("a non-bare entry name must be quoted: %s", policyHeader("/ws/a", "odd.name"))
+	}
+}

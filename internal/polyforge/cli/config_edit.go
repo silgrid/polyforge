@@ -248,3 +248,151 @@ func quoteList(items []string) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// ---------------------------------------------------------------------------
+// The [summarize] table and the [memory_policy."<path>".<entry>] family
+// a set replaces exactly the addressed key's statement
+// (one line, or every line of a multi-line array) or inserts it at the end
+// of the table, creating the table when absent; an unset removes exactly
+// that statement, and a table left without any key goes with its header.
+
+// summarizeHeader is the [summarize] table's header line.
+const summarizeHeader = "[summarize]"
+
+// policyHeader renders one memory_policy entry table's header: the path
+// always quoted, the entry bare when it is a bare name, else quoted.
+func policyHeader(path, entry string) string {
+	bare := entry != ""
+	for _, c := range entry {
+		if !(c == '_' || c == '-' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+			bare = false
+		}
+	}
+	if !bare {
+		entry = strconv.Quote(entry)
+	}
+	return "[memory_policy." + strconv.Quote(path) + "." + entry + "]"
+}
+
+// findSummarizeHeader locates the [summarize] header (-1 = absent).
+func (c *configLines) findSummarizeHeader() int {
+	for i := range c.lines {
+		if c.isHeader(i) {
+			if kind, _, _, err := parseTableHeader(c.trimmed(i), i+1); err == nil && kind == tableSummarize {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// findPolicyHeader locates the header of path's entry table (-1 = absent).
+func (c *configLines) findPolicyHeader(path, entry string) int {
+	for i := range c.lines {
+		if c.isHeader(i) {
+			if kind, p, e, err := parseTableHeader(c.trimmed(i), i+1); err == nil && kind == tablePolicy && p == path && e == entry {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// tableEnd answers the index after the table body that starts below
+// header h: the next section header, or EOF.
+func (c *configLines) tableEnd(h int) int {
+	for i := h + 1; i < len(c.lines); i++ {
+		if c.isHeader(i) {
+			return i
+		}
+	}
+	return len(c.lines)
+}
+
+// statementEnd answers the index after the statement starting at line i:
+// i+1, or past the closing `]` of an array value that spans lines.
+func (c *configLines) statementEnd(i int) int {
+	t := strings.TrimSpace(stripTOMLComment(c.lines[i]))
+	eq := strings.IndexByte(t, '=')
+	if eq < 0 {
+		return i + 1
+	}
+	val := strings.TrimSpace(t[eq+1:])
+	j := i + 1
+	for strings.HasPrefix(val, "[") && !arrayClosed(val) && j < len(c.lines) {
+		val += " " + strings.TrimSpace(stripTOMLComment(c.lines[j]))
+		j++
+	}
+	return j
+}
+
+// setTableKey sets key = value inside the table headed at h (h < 0: the
+// table is absent and is appended with header).
+func (c *configLines) setTableKey(h int, header, key, value string) {
+	line := key + " = " + value
+	if h < 0 {
+		c.appendBlock(header, line)
+		return
+	}
+	end := c.tableEnd(h)
+	for i := h + 1; i < end; i++ {
+		if c.lineKey(i) == key {
+			stop := c.statementEnd(i)
+			c.lines = append(c.lines[:i:i], append([]string{line}, c.lines[stop:]...)...)
+			return
+		}
+	}
+	insert := end
+	for insert > h+1 && c.trimmed(insert-1) == "" {
+		insert--
+	}
+	c.insertAt(insert, line)
+}
+
+// unsetTableKey removes key's statement from the table headed at h, and
+// the whole table (with one preceding blank line) when no key is left.
+func (c *configLines) unsetTableKey(h int, key string) {
+	if h < 0 {
+		return
+	}
+	end := c.tableEnd(h)
+	for i := h + 1; i < end; i++ {
+		if c.lineKey(i) == key {
+			c.remove(i, c.statementEnd(i))
+			break
+		}
+	}
+	end = c.tableEnd(h)
+	for i := h + 1; i < end; i++ {
+		if c.lineKey(i) != "" {
+			return
+		}
+	}
+	for end > h+1 && c.trimmed(end-1) == "" {
+		end--
+	}
+	if h > 0 && c.trimmed(h-1) == "" {
+		h--
+	}
+	c.remove(h, end)
+}
+
+// setSummarize sets one [summarize] key (name without the prefix).
+func (c *configLines) setSummarize(name, value string) {
+	c.setTableKey(c.findSummarizeHeader(), summarizeHeader, name, value)
+}
+
+// unsetSummarize removes one [summarize] key.
+func (c *configLines) unsetSummarize(name string) {
+	c.unsetTableKey(c.findSummarizeHeader(), name)
+}
+
+// setPolicyList sets one list of path's entry table.
+func (c *configLines) setPolicyList(path, entry, list string, items []string) {
+	c.setTableKey(c.findPolicyHeader(path, entry), policyHeader(path, entry), list, "["+quoteList(items)+"]")
+}
+
+// unsetPolicyList removes one list of path's entry table.
+func (c *configLines) unsetPolicyList(path, entry, list string) {
+	c.unsetTableKey(c.findPolicyHeader(path, entry), list)
+}

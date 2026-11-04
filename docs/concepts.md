@@ -44,7 +44,10 @@ bundle's `workflow.md` frontmatter. "Lane" is the informal word for one
 bundle's flow — people say "the autopilot lane" the way they say "the
 autopilot workflow". Each lane's own narrative is its
 `workflows/<bundle>/workflow.md`; the shipped lanes are autopilot,
-bug-fix, chore, feature-full and release.
+bug-fix, chore, feature-full, micro and release. micro is the pure-text
+lane — fix → review → deliver, no grill, plan or verification step, the
+ticket body as its spec — open only to the paths a repository declares
+text-only (`micro_path=` in its own `.polyforge/verify-scope.conf`).
 
 ### Memory
 
@@ -143,7 +146,7 @@ A step that can FAIL the whole run: the delivery lanes' gates rewind it
 to an earlier step, the release lane's gates end it (published
 releases are immutable — no `on_fail`, no rewind into a re-release).
 Which steps are gates is the lane's own choice — the autopilot lane
-gates verification and deliver; bug-fix gates root-cause, verification,
+gates verification and deliver; micro gates review and deliver; bug-fix gates root-cause, verification,
 review and deliver; chore gates verification, review and deliver;
 feature-full gates grill-review, verification, review and deliver; the
 release lane's release, verify and deploy steps are all gates. A
@@ -157,7 +160,7 @@ review FAIL rewinds to the build step (fix/code) of its lane, running
 before verification so a quality failure never costs a full machine
 bar; verification FAIL rewinds to the build step too — `fix` in the
 autopilot and bug-fix lanes, `code` in the chore and feature-full
-lanes;
+lanes; micro's review and deliver FAILs rewind to its `fix`;
 grill-review FAIL rewinds to spec; root-cause FAIL rewinds to repro.
 The target is the gate's own `on_fail` declaration — never a later
 step — with one exception: a scoped `deliver` whose human answer is
@@ -236,8 +239,8 @@ deliver; autopilot keeps grill → fix → verification → deliver). A work
 item opts into the narrower **scoped** tier only when its content
 carries the explicit
 marker line `verification: scoped`, and only on a scoped-capable lane
-(`feature-full`, `bug-fix`, `chore`; autopilot always verifies full and
-the release lane has no verification step). Review — which runs first —
+(`feature-full`, `bug-fix`, `chore`; autopilot always verifies full, and
+the micro and release lanes have no verification step, so no tier). Review — which runs first —
 declares the scope it judged the diff against (`scope`:
 `mode`/`declared_paths` — `declared_paths` has one meaning: the path set
 review judged in the round and verification verifies for that round)
@@ -329,13 +332,26 @@ setting:
   passes their gates ends merged with no human ever looking at it. In
   autopilot there is no review step at all — verification's pass
   stands in for the independent review at the merge rule.
+- The **micro** lane merges unattended too, and declares no human
+  checkpoint at all. It has no verification step, so its merge
+  credential is narrower by the owner's ruling, and only for paths a
+  repository declared text-only: the review pass covering the delivered
+  HEAD plus the deliver dispatch's own green re-run of the repository's
+  fast-phase commands and declared micro checks on that HEAD, after its
+  last merge and before `gh pr merge`. A diff the driver finds outside a
+  repository's base declaration (or touching a repository that declares
+  none, or one it cannot read) never reaches review: the run ends
+  `failed_gate` with no rewind and no merge, and the reason names a
+  re-file on the `autopilot` lane. `deliver-owner-review` and
+  `deliver-merge` still ask when their conditions hold.
 - The **feature-full** lane never merges unattended: its grill-review
   gate requires a human answer, so a human is always in the loop before
   deliver can merge. That is the lane's shape, not a preference.
 
 This is NOT "choose autopilot to enable unattended" — unattended
 merging is the default behavior of every lane except feature-full, and
-nothing a user configures changes it.
+nothing a user configures changes it. Not every unattended lane has a
+verification step: micro's fast-evidence credential replaces it.
 
 ### The "never unattended" list — settled, docs-only policy
 
@@ -354,7 +370,8 @@ should NEVER merge unattended:
 This list is settled policy — not a draft awaiting confirmation — but it
 is **docs-only policy: the code does not enforce it**. A bug-fix or
 chore work item of any of these kinds still merges unattended whenever
-no question is asked and the gates pass; nothing in the lanes, the
+no question is asked and the gates pass (the filing guidance never
+proposes micro for them); nothing in the lanes, the
 driver or the merge rule checks the list. The way to avoid an unattended
 merge is on the filer: choose the **feature-full** bundle, whose
 grill-review always requires a human answer, for any work item in these

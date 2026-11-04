@@ -188,6 +188,9 @@ func (r *runner) existsAtBase(ctx context.Context, dir, base string, u *unitRun)
 		args = []string{"grep", "-q", "-E", `def\s+` + regexp.QuoteMeta(fn) + `\(`, base, "--", u.File}
 	case KindMjs:
 		args = []string{"grep", "-q", "-F", "-e", u.Name, base, "--", u.File}
+	case KindE2ESuite:
+		// the unit is the suite file itself, which exists at the base
+		return true, ""
 	default:
 		return false, "its kind has no existence proof"
 	}

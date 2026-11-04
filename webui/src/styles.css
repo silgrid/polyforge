@@ -26,7 +26,7 @@
   --ok: #15803d;
   --warn: #b45309;
   --bad: #b91c1c;
-  /* Memory kind hues: eight, mutually distinct. */
+  /* Memory kind hues: nine, mutually distinct. */
   --k-experience: #0891b2;
   --k-fact: #15803d;
   --k-rule: #b91c1c;
@@ -35,6 +35,7 @@
   --k-design: #7e22ce;
   --k-review: #0f766e;
   --k-doc: #57534e;
+  --k-module-map: #4d7c0f;
   /* Type scale: title > section > body > caption. */
   --fs-title: 1.375rem;
   --fs-section: 1rem;
@@ -67,6 +68,7 @@
     --k-design: #c084fc;
     --k-review: #2dd4bf;
     --k-doc: #a8a29e;
+    --k-module-map: #a3e635;
   }
 }
 
@@ -134,7 +136,8 @@ table,
 }
 
 /* The memory kind hooks: the kind (experience, fact, rule,
-   methodology) or the doc.* name (decision, design, review) picks the
+   methodology) or the doc.* name (decision, design, review,
+   module-map) picks the
    colour token; the element carrying the hook renders it. */
 .t-experience {
   --c: var(--k-experience);
@@ -159,6 +162,9 @@ table,
 }
 .t-doc {
   --c: var(--k-doc);
+}
+.t-module-map {
+  --c: var(--k-module-map);
 }
 .kind-mark {
   display: inline-block;

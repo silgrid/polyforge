@@ -238,3 +238,100 @@ func TestManagerNoticesFetchThenAck(t *testing.T) {
 		t.Fatal("ack must persist Delivered")
 	}
 }
+
+func TestManagerWaitAnswersTheTerminalRecord(t *testing.T) {
+	release := make(chan struct{})
+	var seen RunSpec
+	var mu sync.Mutex
+	m, _ := newTestManager(t, fakeRunner{func(_ context.Context, s RunSpec) (RunResult, error) {
+		mu.Lock()
+		seen = s
+		mu.Unlock()
+		<-release
+		return RunResult{Report: "the report", Tokens: 4}, nil
+	}}, []string{"pi:a/b"})
+	tk, err := m.Spawn(Spec{Project: "p", Prompt: "hi", ReadOnlyTools: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan Task, 1)
+	errs := make(chan error, 1)
+	go func() {
+		done, err := m.Wait(context.Background(), tk.ID)
+		errs <- err
+		got <- done
+	}()
+	// The waiter is registered on the live entry before the run ends.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.mu.Lock()
+		n := len(m.waiters[tk.ID])
+		m.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Wait did not register a waiter on the running task")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	done := <-got
+	if done.State != StateCompleted || done.Report != "the report" || !done.ReadOnlyTools {
+		t.Fatalf("wait answered %+v", done)
+	}
+	mu.Lock()
+	ro := seen.ReadOnlyTools
+	mu.Unlock()
+	if !ro {
+		t.Fatal("the runner must receive the spawn's read-only profile")
+	}
+	m.mu.Lock()
+	left := len(m.waiters)
+	m.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("waiters left after the terminal transition: %d", left)
+	}
+	// A finished task is read from the store.
+	again, err := m.Wait(context.Background(), tk.ID)
+	if err != nil || again.State != StateCompleted || again.Report != "the report" {
+		t.Fatalf("wait on a finished task = %+v %v", again, err)
+	}
+}
+
+func TestManagerWaitContextAndUnknownID(t *testing.T) {
+	release := make(chan struct{})
+	m, _ := newTestManager(t, fakeRunner{func(ctx context.Context, s RunSpec) (RunResult, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return RunResult{Report: "late", Tokens: 1}, nil
+	}}, []string{"pi:a/b"})
+	defer close(release)
+	if _, err := m.Wait(context.Background(), "task_00000000000000ff"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown id: %v", err)
+	}
+	tk, err := m.Spawn(Spec{Project: "p", Prompt: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := m.Wait(ctx, tk.ID); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a bounded wait must end with ctx: %v", err)
+	}
+	// The wait's end never touches the task: it is still running.
+	if cur, _ := m.Show(tk.ID); cur.State != StateRunning {
+		t.Fatalf("task state after the wait ended = %s", cur.State)
+	}
+	m.mu.Lock()
+	left := len(m.waiters)
+	m.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("an abandoned waiter must be dropped: %d left", left)
+	}
+}

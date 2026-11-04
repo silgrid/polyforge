@@ -11,8 +11,10 @@ import { Card, Muted, SectionHeading } from '../components/ui'
 
 // WorkItemDetailPage renders one work item: the slug over the goal as
 // the page's one h1, the metadata card, the server-sanitized content
-// card, both dependency directions and the aihub event timeline card (labels and payloads render
-// as text — React escapes them).
+// card, the append-only comment thread, the messages anchored to this
+// ticket (about_wi by slug or id —), both dependency
+// directions and the aihub event timeline card (labels, comments,
+// messages and payloads render as text — React escapes them).
 export default function WorkItemDetailPage({ project, id }: { project: string; id: string }) {
   const [detail, setDetail] = useState<WorkItemDetail | null>(null)
   const [missing, setMissing] = useState(false)
@@ -75,6 +77,66 @@ export default function WorkItemDetailPage({ project, id }: { project: string; i
           <SanitizedHtml html={detail.html} />
         </Card>
       ) : null}
+
+      <section>
+        <SectionHeading className="mb-2">Comments</SectionHeading>
+        {detail.comments.length === 0 ? (
+          <Muted>No comments yet.</Muted>
+        ) : (
+          <Card>
+            <ol className="m-0 list-none p-0">
+              {detail.comments.map((comment) => (
+                <li
+                  key={comment.id}
+                  className="border-b border-line px-4 py-2.5 last:border-b-0"
+                  data-testid="wi-comment"
+                >
+                  <div className="flex flex-wrap items-baseline gap-x-2">
+                    <span className="tabular font-mono text-caption text-muted">
+                      <RelativeTime at={comment.created_at} />
+                    </span>
+                    <span className="font-medium">{comment.author}</span>
+                    {comment.reply_to ? (
+                      <span className="font-mono text-caption text-muted" data-testid="comment-reply">
+                        reply to {comment.reply_to}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mb-0 mt-1 whitespace-pre-wrap break-words">{comment.body}</p>
+                </li>
+              ))}
+            </ol>
+          </Card>
+        )}
+      </section>
+
+      <section>
+        <SectionHeading className="mb-2">Anchored messages</SectionHeading>
+        {detail.messages.length === 0 ? (
+          <Muted>No messages anchored to this ticket.</Muted>
+        ) : (
+          <Card>
+            <ol className="m-0 list-none p-0">
+              {detail.messages.map((message) => (
+                <li
+                  key={message.id}
+                  className="border-b border-line px-4 py-2.5 last:border-b-0"
+                  data-testid="about-wi-message"
+                >
+                  <div className="flex flex-wrap items-baseline gap-x-2">
+                    <span className="tabular font-mono text-caption text-muted">
+                      <RelativeTime at={message.created_at} />
+                    </span>
+                    <span className="font-medium">{message.sender_id}</span>
+                    <span className="font-mono text-caption text-muted">{message.about_wi}</span>
+                  </div>
+                  <p className="mb-0 mt-1 whitespace-pre-wrap break-words">{message.text}</p>
+                </li>
+              ))}
+            </ol>
+          </Card>
+        )}
+      </section>
 
       <DepList title="Blocked by" edges={detail.blocked_by} />
       <DepList title="Blocks" edges={detail.blocking} />

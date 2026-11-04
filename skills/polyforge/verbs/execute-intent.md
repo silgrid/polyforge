@@ -28,7 +28,9 @@ it" of an existing work item → `verbs/submit.md`.
    - **Lane + reason** — the chosen `--bundle` and one line why; the owner may
      veto or re-route. Apply the filing skill's `Down-lane check` first — judge
      `expected diff size` and `lane risk surface`; a small, low-risk ticket
-     prefers `chore`/`autopilot` over `feature-full`, but it
+     prefers `chore`/`autopilot` over `feature-full` (a pure text ticket whose
+     every touched repository declares `micro_path=` covering its paths may go
+     to `micro`), but it
      never down-lanes onto a lane whose step table carries no step for the
      acceptance criteria. Shipped lanes:
      `bug-fix` (fix a failure: repro →
@@ -37,15 +39,23 @@ it" of an existing work item → `verbs/submit.md`.
      code → review → verification → deliver), `chore` (internal maintenance
      with no new user-visible behavior — tools, docs, config, cleanup,
      deletion: plan → code → review → verification → deliver), `autopilot`
-     (small well-understood changes: grill → fix → verification → deliver).
+     (small well-understood changes: grill → fix → verification → deliver),
+     `micro` (a pure text change — docs or locale message text, no code,
+     config, generated file, test or behavior change — inside the paths every
+     touched repository declares with `micro_path=` in its own
+     `.polyforge/verify-scope.conf`: fix → review → deliver, no verification
+     step, the ticket body as its spec; never for a repository without that
+     declaration nor for work on the "never unattended" list, and a criterion
+     only a full bar, an e2e scenario or a verification step carries makes the
+     ticket ineligible for it).
      `release` is the separate release lane — see the lane table in
      `verbs/file.md`. Every lane except `feature-full` can merge unattended, so
      work on `docs/concepts.md`'s "never unattended" list is filed
      `feature-full`. A project may carry its own bundles — ask when unsure.
      Verification tier capability: `bug-fix`, `feature-full` and `chore` are
      `scoped-capable`; `autopilot` always verifies `full` (it has no review, so
-     no `scope_adequate`) and is not scoped-capable; `release` has no
-     verification step.
+     no `scope_adequate`) and is not scoped-capable; `micro` and `release` have
+     no verification step.
    - **Tier + reason** — `scoped` or `full` and one line why, by the same
      heuristic as the filing skill: propose `scoped` for a text/docs change
      confined to one repository and a small surface; propose `full` when the

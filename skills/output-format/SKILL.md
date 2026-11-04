@@ -67,6 +67,22 @@ Every rule below is derived from one of these. They describe the reader, not the
 - **Don't dump large files.** Give paths; a path is navigation, a pasted file is noise.
 - **Match length to the question.** A yes/no question gets a yes/no and the reason.
 
+## 图形输出（原生 SVG）
+
+Structure is easier to hold on one screen as a picture (fact 1). When a reply analyses a
+system, an architecture, a flow or a data structure, draw it.
+
+- **Native SVG only for new diagrams.** Draw in a ```svg code block (pi-web renders the SVG
+  DOM directly; styles follow the panel theme) and add a short prose caption. Old mermaid
+  diagrams still render — historical compatibility only; never draw a new one in mermaid.
+- **Draw proactively.** When the discussion involves ≥3 subjects/components, a multi-stage
+  flow, a responsibility or data handoff, or a state transition, add the diagram unasked.
+  Being asked "why no diagram?" counts as a miss.
+- **Keep it compact.** Element text ≤2 lines, at most 8 elements, one structure per diagram;
+  details go in prose.
+- **Quality baseline.** Size it with a viewBox, keep text inside its element box, use neutral
+  or panel-theme colours (no hard-coded bright colours), space elements evenly.
+
 ## Session face (session agent → owner)
 
 The interactive conversation: every reply, including status answers and error reports.

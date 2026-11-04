@@ -36,6 +36,34 @@ type EngineReport struct {
 	Runner            *string         `json:"runner"`
 	CIEvidence        []string        `json:"ci_evidence"`
 	Diagnostics       []string        `json:"diagnostics"`
+	// SmokeSuite and E2ESelection are reported only for a repository
+	// that declares smoke_suite= (the full-tier e2e selection opt-in);
+	// E2ESelection is nil unless the engine attempted a selection.
+	SmokeSuite   []string         `json:"smoke_suite,omitempty"`
+	E2ESelection *EngineSelection `json:"e2e_selection,omitempty"`
+}
+
+// EngineSelection is the engine's full-tier e2e selection: its mode
+// (carries|smoke|full), the suites it runs, the changed paths no
+// declaration covers, and the full tail it carries for delivery.
+type EngineSelection struct {
+	Mode           string   `json:"mode"`
+	Suites         []string `json:"suites"`
+	UncoveredPaths []string `json:"uncovered_paths"`
+	FullCommands   []string `json:"full_commands"`
+}
+
+// The selection modes; carries and smoke run a subset of the full tail.
+const (
+	SelectionCarries = "carries"
+	SelectionSmoke   = "smoke"
+	SelectionFull    = "full"
+)
+
+// subset reports whether the selection ran a subset of the full tail, so
+// the full tail is the bar carried to delivery instead.
+func (s *EngineSelection) subset() bool {
+	return s != nil && (s.Mode == SelectionCarries || s.Mode == SelectionSmoke) && len(s.FullCommands) > 0
 }
 
 // EngineCommand is one planned command.
@@ -154,6 +182,13 @@ func decodeReport(raw []byte) (*EngineReport, error) {
 	}
 	if rep.Mode != TierFull && rep.Mode != TierScoped {
 		return nil, fmt.Errorf("mode %q, want full or scoped", rep.Mode)
+	}
+	if s := rep.E2ESelection; s != nil {
+		switch s.Mode {
+		case SelectionCarries, SelectionSmoke, SelectionFull:
+		default:
+			return nil, fmt.Errorf("e2e_selection mode %q, want carries, smoke or full", s.Mode)
+		}
 	}
 	for i, c := range rep.Commands {
 		if strings.TrimSpace(c.Name) == "" || strings.TrimSpace(c.Cmd) == "" {

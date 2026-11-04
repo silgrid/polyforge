@@ -181,6 +181,9 @@ type WIView struct {
 	// WaitingFor is the server-derived list of unfinished `blocks`
 	// blockers of a queued work item (polyforge#161).
 	WaitingFor []waitingBlocker `json:"waiting_for,omitempty"`
+	// Comments is the work item's append-only comment thread in time
+	// order.
+	Comments []api.Comment `json:"comments"`
 }
 
 type waitingBlocker struct {
@@ -329,6 +332,33 @@ func renderWIDetail(w io.Writer, wi *WIView) {
 	fmt.Fprintf(w, "  created:  %s\n", wi.CreatedAt)
 	if wi.ClosedAt != nil {
 		fmt.Fprintf(w, "  closed:   %s\n", *wi.ClosedAt)
+	}
+	if len(wi.Comments) > 0 {
+		fmt.Fprintf(w, "  comments: %d\n", len(wi.Comments))
+		for _, c := range wi.Comments {
+			reply := ""
+			if c.ReplyTo != "" {
+				reply = "  reply-to " + c.ReplyTo
+			}
+			fmt.Fprintf(w, "    %s  %s  %s%s\n", c.ID, c.CreatedAt, c.Author, reply)
+			for _, line := range strings.Split(c.Body, "\n") {
+				fmt.Fprintf(w, "      %s\n", line)
+			}
+		}
+	}
+}
+
+// renderComment renders one stored comment (the append's answer).
+func renderComment(w io.Writer, c api.Comment) {
+	fmt.Fprintf(w, "comment %s\n", c.ID)
+	fmt.Fprintf(w, "  author:   %s\n", c.Author)
+	fmt.Fprintf(w, "  created:  %s\n", c.CreatedAt)
+	if c.ReplyTo != "" {
+		fmt.Fprintf(w, "  reply-to: %s\n", c.ReplyTo)
+	}
+	fmt.Fprintln(w, "  body:")
+	for _, line := range strings.Split(c.Body, "\n") {
+		fmt.Fprintf(w, "    %s\n", line)
 	}
 }
 

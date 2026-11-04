@@ -339,14 +339,15 @@ func TestDaemonVerbHelpOnlyExitGoldens(t *testing.T) {
 	// 5 admin + doctor + version + init + daemon + aihub (the server
 	// entry, help-only like daemon,) + chat + watch + result
 	// (the step's result delivery, #214) + verify-run (a verification
-	// step's mechanical run); watch replaced the
+	// step's mechanical run) + bar-run (a deliver step's recorded test_bar
+	// re-run,); watch replaced the
 	// retired watch-probe; doctor is the #113 machine health face; version
 	// the #196 build string (the `--version` flag's verb form); init
 	// the #177 workspace layout).
 	want := []string{
 		"file", "queue", "cancel", "recall", "remember", "memory",
 		"submit", "answer", "revise-binding", "pause", "resume",
-		"wrap", "ops", "chat", "watch", "task", "result", "verify-run", "msg", "users", "api-keys", "machines", "projects",
+		"wrap", "ops", "chat", "watch", "task", "result", "verify-run", "bar-run", "msg", "users", "api-keys", "machines", "projects",
 		"backup",
 		"doctor", "version", "init", "config", "workflows", "daemon", "aihub",
 	}

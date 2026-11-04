@@ -196,6 +196,21 @@ CREATE TABLE IF NOT EXISTS wi_events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_wi ON wi_events(work_item_id, id);
 
+-- append-only work-item comments. seq is the insertion
+-- order (the thread reads in seq order); reply_to may only name a
+-- comment on the same work item (validated in the append path). Nothing
+-- UPDATEs or DELETEs this table: there is no edit and no delete.
+CREATE TABLE IF NOT EXISTS wi_comments (
+  seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+  id           TEXT NOT NULL UNIQUE,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id),
+  author       TEXT NOT NULL REFERENCES users(id),
+  body         TEXT NOT NULL,
+  reply_to     TEXT REFERENCES wi_comments(id),
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wi_comments_wi ON wi_comments(work_item_id, seq);
+
 CREATE TABLE IF NOT EXISTS memories (
   id           TEXT PRIMARY KEY,
   project_id   TEXT NOT NULL REFERENCES projects(id),

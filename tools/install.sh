@@ -41,9 +41,10 @@
 # agent trees are terminated and recover at the next daemon start):
 #   curl ... | PF_INSTALL_FORCE=1 bash -s -- "$PF_KEY" [server-host]
 # The release channel is PF_INSTALL_REPO (owner/name; unset or empty =
-# silgrid/polyforge): the latest release, the pf asset + SHA256SUMS, the
-# release checkout and the pi entry match all come from that repo. Pass it
-# on every run — it is not remembered:
+# silgrid/polyforge, the release repo every asset is published to):
+# the latest release, the pf asset + SHA256SUMS, the release checkout and
+# the pi entry match all come from that repo, and step 1 prints the channel
+# it uses. Pass it on every run — it is not remembered:
 #   curl ... | PF_INSTALL_REPO=<owner>/<name> bash -s -- "$PF_KEY" [server-host]
 #
 # Requires: gh authenticated (gh needs a login, even for a public repo);
@@ -123,6 +124,7 @@ else:
 # replaced. A failure in this phase leaves pf, release/current and the
 # running daemon exactly as they were.
 echo "== 1/5 prepare (pf binary + release checkout; nothing is changed yet)"
+echo "   release channel: $REPO"
 
 STAGED=""   # the new binary, staged next to $BIN (same filesystem)
 TMP=""
@@ -178,8 +180,8 @@ if [ -n "$MISSING" ]; then
 fi
 
 # The one per-OS branch: which pf asset this machine runs. The release
-# publishes aihub/pf for linux-amd64, darwin-arm64 and darwin-amd64
-# (polyforge#218); native Windows and other platforms are out of scope
+# publishes ONE pf binary per platform — linux-amd64, darwin-arm64 and
+# darwin-amd64 — and the server runs it as `pf aihub` (polyforge#218); native Windows and other platforms are out of scope
 # (WSL2 is treated as Linux, and uname reports exactly that).
 case "$(uname -s):$(uname -m)" in
   "Linux:x86_64")  PF_ASSET="pf-linux-amd64" ;;

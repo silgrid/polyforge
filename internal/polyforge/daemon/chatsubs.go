@@ -855,8 +855,9 @@ func (d *Daemon) summarizeDemand(wi string) {
 	if !ok || ji.CapsuleDir == "" {
 		return
 	}
-	// the lane config is read live (polyforge#33), never from a claim-time snapshot
-	models, language, intervalSec := d.rt.SummarizeLane(ji.Project)
+	// the lane config is the daemon's live cli.toml snapshot,
+	// never a claim-time copy
+	models, language, intervalSec := d.rt.SummarizeLane()
 	d.lane.Marked(wi, models, language, time.Duration(intervalSec)*time.Second, d.resolveDispatch(ji))
 }
 

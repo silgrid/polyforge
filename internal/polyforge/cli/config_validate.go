@@ -41,9 +41,11 @@ func LoadFileConfig(path string) (Config, error) {
 }
 
 // applyConfigBytes parses file bytes into cfg (flat keys + [workspace]
-// mapping + [daemon] table), sharing the exact parser LoadConfig uses.
+// mapping + [daemon], [summarize] and [memory_policy...] tables), sharing
+// the exact parser LoadConfig uses. The memory_policy family is validated
+// against the mapping the same bytes build.
 func applyConfigBytes(cfg *Config, path string, data []byte) error {
-	flat, sections, dkvs, perr := parseConfigTOML(path, string(data))
+	p, perr := parseConfigTOML(path, string(data))
 	if perr != nil {
 		var uk *unknownKeyError
 		if errors.As(perr, &uk) {
@@ -51,13 +53,16 @@ func applyConfigBytes(cfg *Config, path string, data []byte) error {
 		}
 		return fmt.Errorf("config %s: %w", path, perr)
 	}
-	applyConfigFile(cfg, flat)
+	applyConfigFile(cfg, p.flat)
 	var err error
-	if cfg.Daemon, err = parseDaemonTable(path, dkvs); err != nil {
+	if cfg.Daemon, err = parseDaemonTable(path, p.daemon); err != nil {
 		return err
 	}
-	entries := make([]mapping.Entry, 0, len(sections))
-	for _, s := range sections {
+	if cfg.Summarize, err = parseSummarizeTable(path, p.summarize); err != nil {
+		return err
+	}
+	entries := make([]mapping.Entry, 0, len(p.sections))
+	for _, s := range p.sections {
 		entries = append(entries, mapping.Entry{Workspace: s.key, Projects: s.projects})
 	}
 	plan, berr := mapping.Build(entries)
@@ -65,6 +70,9 @@ func applyConfigBytes(cfg *Config, path string, data []byte) error {
 		return fmt.Errorf("config %s: %w", path, berr)
 	}
 	cfg.Mapping = plan
+	if cfg.MemoryPolicy, err = parsePolicyTables(path, p.policy, p.sections, plan); err != nil {
+		return err
+	}
 	return nil
 }
 

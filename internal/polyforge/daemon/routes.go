@@ -248,11 +248,19 @@ func (d *Daemon) routes() *http.ServeMux {
 	mux.HandleFunc("POST /config/check", d.configCheckRoute)
 	mux.HandleFunc("POST /shutdown", d.shutdownRoute)
 	mux.HandleFunc("POST /chat/init", d.chatInitRoute)
-	// The explicit, read-only message analyzer. A POST
+	// The explicit, read-only message analyzer (; one task in
+	// the task lane since body {caller_id}, it blocks until
+	// the task is terminal and answers the structured result). A POST
 	// outside the step-write allowlist: the whole UDS face sits behind
-	// refuseStepOrigin, so a step process is refused DAEMON-403 before
-	// this handler; no loop ever starts it.
+	// refuseStepOrigin, so a step or task process is refused DAEMON-403
+	// before this handler; no loop ever starts it.
 	mux.HandleFunc("POST /messages/{id}/analyze", d.analyzeRoute)
+	// The explicit, read-only message-to-prompt task: body
+	// {caller_id}, one task in the task lane like analyze, blocking until it
+	// is terminal and answering {prompt, task_id, model, duration}. Same
+	// reach as analyze: local UDS only, behind refuseStepOrigin (a step or
+	// task process is refused DAEMON-403 before this handler).
+	mux.HandleFunc("POST /messages/{id}/prompt", d.promptRoute)
 	// pf watch: the per-WI snapshot and the daemon-held chat subscriptions.
 	mux.HandleFunc("GET /jobs/{wi}/watch", d.watchSnapshotRoute)
 	mux.HandleFunc("GET /jobs/{wi}/artifact", d.artifactRoute)
@@ -275,6 +283,9 @@ func (d *Daemon) routes() *http.ServeMux {
 	// the step agent's result delivery (stepresult.go), stamped with
 	// and landed at the calling step's own dispatch identity
 	mux.HandleFunc("POST "+stepResultPath, d.stepResultRoute)
+	// the deliver step's bar-run record (stepbarrun.go,):
+	// the calling work item's live deliver step only
+	mux.HandleFunc("POST "+stepBarRunPath, d.stepBarRunRoute)
 	// the one-shot task agent (tasks.go,): the spawn/cancel
 	// POSTs sit behind refuseStepOrigin, so a step OR task process tree is
 	// refused DAEMON-403; the two /task/memories GETs serve a task agent
@@ -1032,7 +1043,7 @@ func (d *Daemon) adopt(id, wi string) (protocol.ChatAdoptAnswer, error) {
 // a one-shot task agent's process tree (PF_TASK_ID +
 // PF_DAEMON_ID) is refused EVERY non-GET/HEAD request — before the step
 // allowlist is consulted and with none of its own, so a task cannot send
-// /step/result, /step/memories or spawn another task. Its read face is GET
+// /step/result, /step/memories, /step/bar-run or spawn another task. Its read face is GET
 // only (/task/memories/*, watch snapshots, status).
 func (d *Daemon) refuseStepOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1041,10 +1052,12 @@ func (d *Daemon) refuseStepOrigin(next http.Handler) http.Handler {
 				writeErr(w, api.ErrDaemonForbidden, reason)
 				return
 			}
-			// the two writes a step may send: its memory and its result,
-			// which the routes themselves scope to the caller's own step
-			// (stepmem.go, stepresult.go)
-			stepWrite := r.Method == http.MethodPost && (r.URL.Path == stepMemoriesPath || r.URL.Path == stepResultPath)
+			// the three writes a step may send: its memory, its result and
+			// (the deliver step only) a bar run, which the routes themselves
+			// scope to the caller's own step (stepmem.go, stepresult.go,
+			// stepbarrun.go)
+			stepWrite := r.Method == http.MethodPost &&
+				(r.URL.Path == stepMemoriesPath || r.URL.Path == stepResultPath || r.URL.Path == stepBarRunPath)
 			if !stepWrite {
 				if reason := d.stepOriginRefusal(r); reason != "" {
 					writeErr(w, api.ErrDaemonForbidden, reason)

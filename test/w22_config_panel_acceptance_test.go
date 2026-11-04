@@ -297,8 +297,8 @@ func TestW22KeySchemaComesFromTheValidator(t *testing.T) {
 	ws := t.TempDir()
 	home := t.TempDir()
 	cfg := w22ConfigWithDaemon(t, home, "5", []w113WS{{key: ws, projects: []string{"e2e"}}})
-	w22WriteFile(t, filepath.Join(ws, ".polyforge.yaml"),
-		"# operator comment\nsummarize:\n  models: [\"pi:b-model\", \"pi:a-model\"]\n  language: \"English\"\n  interval_sec: 30\n")
+	w22WriteFile(t, cfg, string(w22Read(t, cfg))+
+		"\n# operator comment\n[summarize]\nmodels = [\"pi:b-model\", \"pi:a-model\"]\nlanguage = \"English\"\ninterval_sec = 30\n")
 
 	schemas := map[string]map[string]any{}
 	listOut, listCode := w3PF(t, nil, w113Env{home: home, config: cfg, json: true}, "", "config", "list")
@@ -503,50 +503,56 @@ func TestW22FirstWriterWinsInsideTheLock(t *testing.T) {
 // Scenario 6 — the summarize read (values, order, sources).
 // ---------------------------------------------------------------------------
 
-// TestW22WorkspaceSummarizeRead pins the spec's "Read the three keys" and the
-// unmapped half of "Unmapped cwd": models come back ordered, language is free
-// text, interval_sec carries its effective value and whether it came from the
-// file or a default, and an unmapped directory answers mapped=false without an
-// error.
+// TestW22WorkspaceSummarizeRead pins the spec's "Read the three keys" (since
+// a cli.toml [summarize] table read through `pf config list`)
+// and the unmapped half of "Unmapped cwd": models come back ordered, language
+// is free text, interval_sec carries its effective value and whether it came
+// from the file or a default, `config workspace` carries no summarize, and an
+// unmapped directory answers mapped=false without an error.
 func TestW22WorkspaceSummarizeRead(t *testing.T) {
-	wsMapped, wsPlain := t.TempDir(), t.TempDir()
+	wsMapped := t.TempDir()
 	home := t.TempDir()
+	base := "server = \"http://127.0.0.1:1\"\nuser_id = \"usr_root\"\n" +
+		"\n[workspace.\"" + wsMapped + "\"]\nprojects = [\"e2e\"]\n"
 	cfg := w22WriteFile(t, filepath.Join(home, "cli.toml"),
-		"server = \"http://127.0.0.1:1\"\nuser_id = \"usr_root\"\n"+
-			"\n[workspace.\""+wsMapped+"\"]\nprojects = [\"e2e\"]\n")
-	env := w113Env{home: home, config: cfg}
-	w22WriteFile(t, filepath.Join(wsMapped, ".polyforge.yaml"),
-		"# keep me\nsummarize:\n  models: [\"pi:zeta\", \"pi:alpha\"]\n  language: \"English free text\"\n  interval_sec: 30\n")
+		base+"\n# keep me\n[summarize]\nmodels = [\"pi:zeta\", \"pi:alpha\"]\nlanguage = \"English free text\"\ninterval_sec = 30\n")
+	env := w113Env{home: home, config: cfg, json: true}
 
-	out, code := w3PF(t, nil, env, "", "config", "workspace", "--cwd", wsMapped)
+	out, code := w3PF(t, nil, env, "", "config", "list")
 	if code != 0 {
-		t.Fatalf("pf config workspace --cwd <mapped>: exit %d (%q)", code, out)
+		t.Fatalf("pf --json config list: exit %d (%q)", code, out)
 	}
-	doc := w22JSON(t, "config workspace", out)
-	if mapped, _ := w22Field(doc, "mapped"); mapped != true {
-		t.Fatalf("a mapped cwd must answer mapped=true; got %v", doc)
+	items := w22Items(t, w22JSON(t, "config list", out))
+	check := func(key, want, src string) {
+		t.Helper()
+		it, ok := items[key]
+		if !ok || w22Str(it["value"]) != want || w22Str(it["source"]) != src {
+			t.Fatalf("%s must report %q with source %s; got %v", key, want, src, it)
+		}
 	}
-	values := w22ValueSources(doc)
-	if got, ok := values["models"]; !ok || w22Str(got[0]) != "pi:zeta,pi:alpha" || w22Str(got[1]) != "file" {
-		t.Fatalf("summarize.models must report the file's order (pi:zeta,pi:alpha) with source file; got %v", values)
+	check("summarize.models", "pi:zeta,pi:alpha", "file")
+	check("summarize.language", "English free text", "file")
+	check("summarize.interval_sec", "30", "file")
+
+	wsOut, wsCode := w3PF(t, nil, env, "", "config", "workspace", "--cwd", wsMapped)
+	if wsCode != 0 {
+		t.Fatalf("pf config workspace --cwd <mapped>: exit %d (%q)", wsCode, wsOut)
 	}
-	if got, ok := values["language"]; !ok || w22Str(got[0]) != "English free text" || w22Str(got[1]) != "file" {
-		t.Fatalf("summarize.language must report the free text with source file; got %v", values)
+	if mapped, _ := w22Field(w22JSON(t, "config workspace", wsOut), "mapped"); mapped != true {
+		t.Fatalf("a mapped cwd must answer mapped=true; got %v", wsOut)
 	}
-	if got, ok := values["interval_sec"]; !ok || w22Str(got[0]) != "30" || w22Str(got[1]) != "file" {
-		t.Fatalf("summarize.interval_sec must report 30 with source file; got %v", values)
+	if strings.Contains(wsOut, `"summarize"`) {
+		t.Fatalf("config workspace still carries summarize: %s", wsOut)
 	}
 
-	cfg2 := w22WriteFile(t, filepath.Join(home, "cli.toml"),
-		"server = \"http://127.0.0.1:1\"\nuser_id = \"usr_root\"\n"+
-			"\n[workspace.\""+wsPlain+"\"]\nprojects = [\"e2e\"]\n")
-	defOut, defCode := w3PF(t, nil, w113Env{home: home, config: cfg2}, "", "config", "workspace", "--cwd", wsPlain)
+	cfg2 := w22WriteFile(t, filepath.Join(home, "cli.toml"), base+"\n[summarize]\nmodels = [\"pi:zeta\"]\n")
+	defOut, defCode := w3PF(t, nil, w113Env{home: home, config: cfg2, json: true}, "", "config", "list")
 	if defCode != 0 {
-		t.Fatalf("pf config workspace --cwd <no summarize>: exit %d (%q)", defCode, defOut)
+		t.Fatalf("pf config list (defaults): exit %d (%q)", defCode, defOut)
 	}
-	if got, ok := w22ValueSources(w22JSON(t, "config workspace (defaults)", defOut))["interval_sec"]; !ok || w22Str(got[0]) != "60" || w22Str(got[1]) != "default" {
-		t.Fatalf("an absent interval_sec must report the effective 60 with source default; got %v", got)
-	}
+	items = w22Items(t, w22JSON(t, "config list (defaults)", defOut))
+	check("summarize.interval_sec", "60", "default")
+	check("summarize.language", "中文", "default")
 
 	unmappedOut, unmappedCode := w3PF(t, nil, env, "", "config", "workspace", "--cwd", t.TempDir())
 	if unmappedCode != 0 {
@@ -561,86 +567,84 @@ func TestW22WorkspaceSummarizeRead(t *testing.T) {
 // Scenario 7 — the validated, byte-preserving summarize write.
 // ---------------------------------------------------------------------------
 
-// TestW22WorkspaceSummarizeWritePinned pins the spec's "Validated write": a
-// valid summarize write is atomic, keeps every other byte, is judged by the
-// same validator the daemon and `pf doctor` apply, an invalid value is refused
-// with the file byte-identical, and a language-only write cannot create an
-// entry without `models`.
+// TestW22WorkspaceSummarizeWritePinned pins the spec's "Validated write"
+// (since into cli.toml's [summarize] table): a valid summarize
+// write is atomic, keeps every other byte, is judged by the same validator
+// the daemon applies, needs no path flag (and refuses one), an invalid value
+// is refused with the file byte-identical, and a language-only write cannot
+// create a table without `models`.
 func TestW22WorkspaceSummarizeWritePinned(t *testing.T) {
 	ws := t.TempDir()
 	home := t.TempDir()
 	cfg := w22WriteFile(t, filepath.Join(home, "cli.toml"),
 		"server = \"http://127.0.0.1:1\"\nuser_id = \"usr_root\"\n"+
-			"\n[workspace.\""+ws+"\"]\nprojects = [\"e2e\"]\n")
+			"\n[workspace.\""+ws+"\"]\nprojects = [\"e2e\"]\n"+
+			"\n# operator comment\n[summarize]\nmodels = [\"pi:zeta\", \"pi:alpha\"]\ninterval_sec = 30\n")
 	env := w113Env{home: home, config: cfg}
-	yamlPath := w22WriteFile(t, filepath.Join(ws, ".polyforge.yaml"),
-		"# operator comment\nsummarize:\n  models: [\"pi:zeta\", \"pi:alpha\"]\n  interval_sec: 30\n\nsteps:\n  e2e:\n    default: { models: [\"pi:zeta\"] }\n")
-	before := string(w22Read(t, yamlPath))
-	beforeSHA := w3SHA(t, yamlPath)
+	yamlPath := w22WriteFile(t, filepath.Join(ws, ".polyforge.yaml"), "steps:\n  e2e:\n    default: { models: [\"pi:zeta\"] }\n")
+	yamlBefore := string(w22Read(t, yamlPath))
+	before := string(w22Read(t, cfg))
+	beforeSHA := w3SHA(t, cfg)
 
-	out, code := w3PF(t, nil, env, "", "config", "set", "summarize.interval_sec", "10", "--workspace", ws, "--expect-hash", beforeSHA)
+	out, code := w3PF(t, nil, env, "", "config", "set", "summarize.interval_sec", "10", "--expect-hash", beforeSHA)
 	if code != 0 {
 		t.Fatalf("a valid summarize write was refused: exit %d (%q)", code, out)
 	}
-	after := string(w22Read(t, yamlPath))
-	if after == before {
-		t.Fatal("the valid summarize write did not land")
-	}
-	if !strings.Contains(after, "interval_sec: 10") {
+	after := string(w22Read(t, cfg))
+	if !strings.Contains(after, "interval_sec = 10") {
 		t.Fatalf("the written value is not in the file:\n%s", after)
 	}
 	if n := w3DiffLines(t, before, after); n != 1 {
 		t.Fatalf("the write changed %d lines, want exactly the target one:\n%s", n, after)
 	}
-	for _, keep := range []string{"# operator comment", "models: [\"pi:zeta\", \"pi:alpha\"]",
-		"steps:", "default: { models: [\"pi:zeta\"] }"} {
+	for _, keep := range []string{"# operator comment", "models = [\"pi:zeta\", \"pi:alpha\"]", "[workspace."} {
 		if !strings.Contains(after, keep) {
 			t.Fatalf("the write dropped %q:\n%s", keep, after)
 		}
 	}
+	if string(w22Read(t, yamlPath)) != yamlBefore {
+		t.Fatal("a summarize write touched the workspace yaml")
+	}
 
 	// An independent read (no daemon) shows the value.
-	readOut, readCode := w3PF(t, nil, env, "", "config", "workspace", "--cwd", ws)
+	readOut, readCode := w3PF(t, nil, w113Env{home: home, config: cfg, json: true}, "", "config", "list")
 	if readCode != 0 {
 		t.Fatalf("an independent read after the write: exit %d (%q)", readCode, readOut)
 	}
-	if v, ok := w22ValueSources(w22JSON(t, "config workspace", readOut))["interval_sec"]; !ok || w22Str(v[0]) != "10" {
-		t.Fatalf("an independent read after the write must show interval_sec 10; got %v", v)
+	if it := w22Items(t, w22JSON(t, "config list", readOut))["summarize.interval_sec"]; w22Str(it["value"]) != "10" {
+		t.Fatalf("an independent read after the write must show interval_sec 10; got %v", it)
 	}
-	// `pf doctor` refuses nothing about this workspace's yaml. The fixture
-	// runs no daemon (and points at an unreachable server), so the doctor
-	// exit code reflects those unrelated environment checks; the assertion
-	// is only that no failing check names the written yaml.
-	docOut, _ := w3PF(t, nil, w113Env{home: home, config: cfg, json: true}, "", "doctor")
-	if bad := w113FailingCheck(w113DoctorJSON(t, docOut), "workspace yaml"); bad != nil {
-		t.Fatalf("pf doctor refuses the written yaml: %s: %s", bad.Name, bad.Detail)
+
+	// A path flag is refused naming the key.
+	flagOut, flagCode := w3PF(t, nil, env, "", "config", "set", "summarize.interval_sec", "20", "--workspace", ws)
+	if flagCode == 0 || !strings.Contains(flagOut, "summarize.interval_sec") {
+		t.Fatalf("summarize.* with --workspace must refuse naming the key: exit %d (%q)", flagCode, flagOut)
 	}
 
 	// An invalid value is refused with the validator's own error, file intact.
-	invalidSHA := w3SHA(t, yamlPath)
-	badOut, badCode := w3PF(t, nil, env, "", "config", "set", "summarize.interval_sec", "9", "--workspace", ws, "--expect-hash", invalidSHA)
+	invalidSHA := w3SHA(t, cfg)
+	badOut, badCode := w3PF(t, nil, env, "", "config", "set", "summarize.interval_sec", "9", "--expect-hash", invalidSHA)
 	if badCode == 0 {
 		t.Fatalf("a summarize.interval_sec of 9 was accepted: %q", badOut)
 	}
-	if got := w3SHA(t, yamlPath); got != invalidSHA {
+	if got := w3SHA(t, cfg); got != invalidSHA {
 		t.Fatalf("the refused write touched the file: %s != %s", got, invalidSHA)
 	}
 	if !strings.Contains(badOut, "interval_sec") {
 		t.Fatalf("the refusal must be the validator's own error naming the key; got %q", badOut)
 	}
 
-	// A language-only write cannot create an entry without `models`.
-	cold := t.TempDir()
+	// A language-only write cannot create a table without `models`.
 	cfg2 := w22WriteFile(t, filepath.Join(home, "cli.toml"),
 		"server = \"http://127.0.0.1:1\"\nuser_id = \"usr_root\"\n"+
-			"\n[workspace.\""+cold+"\"]\nprojects = [\"e2e\"]\n")
-	coldOut, coldCode := w3PF(t, nil, w113Env{home: home, config: cfg2}, "",
-		"config", "set", "summarize.language", "English", "--workspace", cold, "--expect-hash", "absent")
-	if coldCode == 0 {
+			"\n[workspace.\""+ws+"\"]\nprojects = [\"e2e\"]\n")
+	coldBefore := w3SHA(t, cfg2)
+	coldOut, coldCode := w3PF(t, nil, w113Env{home: home, config: cfg2}, "", "config", "set", "summarize.language", "English")
+	if coldCode == 0 || !strings.Contains(coldOut, "models") {
 		t.Fatalf("a summarize.language write without models was accepted: %q", coldOut)
 	}
-	if _, err := os.Stat(filepath.Join(cold, ".polyforge.yaml")); err == nil {
-		t.Fatalf("a refused write created %s", filepath.Join(cold, ".polyforge.yaml"))
+	if w3SHA(t, cfg2) != coldBefore {
+		t.Fatal("a refused write changed cli.toml")
 	}
 }
 
@@ -656,7 +660,7 @@ func TestW22DeclaredStepCandidates(t *testing.T) {
 	ws := t.TempDir()
 	cfg := w22ConfigWithDaemon(t, t.TempDir(), "4", []w113WS{{key: ws, projects: []string{"e2e"}}})
 	w22WriteFile(t, filepath.Join(ws, ".polyforge.yaml"),
-		"summarize:\n  models: [\"pi:zeta\"]\nsteps:\n  e2e:\n    fix: { models: [\"pi:zeta\", \"pi:alpha\"] }\n")
+		"steps:\n  e2e:\n    fix: { models: [\"pi:zeta\", \"pi:alpha\"] }\n")
 	d := w113NewDaemon(t, nil, w113DOptConfig(cfg))
 	d.start()
 

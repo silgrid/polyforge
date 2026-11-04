@@ -244,22 +244,19 @@ func TestDoctorScratchSymlinkNeverPruned(t *testing.T) {
 }
 
 // TestDoctorMemoryPolicyWarnsUntilInit pins the read-only memory policy
-// row: no .polyforge.yaml passes on the built-in default; a file without
-// the section warns with the `pf init` fix and doctor writes nothing;
-// after `pf init` the row passes.
+// row: it reads cli.toml — a path without a block warns
+// with the `pf init` fix whatever the yaml holds, doctor writes nothing;
+// after `pf init` (which writes the cli.toml block and never the yaml)
+// the row passes.
 func TestDoctorMemoryPolicyWarnsUntilInit(t *testing.T) {
 	env, ws := doctorWorkspace(t)
-	_, _, doc := doctorStatus(t, env, "--json", "doctor")
-	if st, detail := doctorFind(t, doc, docChMemPolicy); st != "pass" || !strings.Contains(detail, "built-in default") || !strings.Contains(detail, "editable copy") {
-		t.Fatalf("no yaml: memory policy = %s (%s), want pass on the built-in default", st, detail)
-	}
 	steps := "# mine\nsteps:\n  polyforge:\n    default: { models: [pi:a] }\n"
 	if err := os.WriteFile(workspace.PathFor(ws), []byte(steps), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, _, doc = doctorStatus(t, env, "--json", "doctor")
+	_, _, doc := doctorStatus(t, env, "--json", "doctor")
 	st, detail := doctorFind(t, doc, docChMemPolicy)
-	if st != "warn" || !strings.Contains(detail, "declares no memory_policy") || !strings.Contains(detail, "run `pf init "+ws+"`") {
+	if st != "warn" || !strings.Contains(detail, "built-in default") || !strings.Contains(detail, "run `pf init "+ws+"`") {
 		t.Fatalf("memory policy = %s (%s), want warn with the pf init fix", st, detail)
 	}
 	if raw, _ := os.ReadFile(workspace.PathFor(ws)); string(raw) != steps {
@@ -267,6 +264,9 @@ func TestDoctorMemoryPolicyWarnsUntilInit(t *testing.T) {
 	}
 	if code, _, stderr := runPf(t, env, "init", ws); code != 0 {
 		t.Fatalf("pf init: exit %d (%s)", code, stderr)
+	}
+	if raw, _ := os.ReadFile(workspace.PathFor(ws)); string(raw) != steps {
+		t.Fatalf("pf init rewrote %s:\n%s", workspace.PathFor(ws), raw)
 	}
 	_, _, doc = doctorStatus(t, env, "--json", "doctor")
 	if st, detail := doctorFind(t, doc, docChMemPolicy); st != "pass" {
@@ -295,19 +295,22 @@ func TestInitVerb(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("pf init: exit %d (%s)", code, stderr)
 	}
-	var res struct{ Workspace, Scratch, Notes_file, Notes_path, Polyforge_yaml string }
-	if err := json.Unmarshal([]byte(stdout), &res); err != nil || res.Workspace != ws || res.Scratch != "created" || res.Notes_file != "inserted" || res.Notes_path != "CLAUDE.md" || res.Polyforge_yaml != "created" {
+	var res struct{ Workspace, Scratch, Notes_file, Notes_path, Memory_policy, Hint string }
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil || res.Workspace != ws || res.Scratch != "created" || res.Notes_file != "inserted" || res.Notes_path != "CLAUDE.md" || res.Memory_policy != "unmapped" || !strings.Contains(res.Hint, "[workspace.") {
 		t.Fatalf("pf --json init = %s (%v)", stdout, err)
 	}
-	if strings.Contains(stdout, "claude_md") {
-		t.Fatalf("pf --json init still carries claude_md: %s", stdout)
+	if strings.Contains(stdout, "claude_md") || strings.Contains(stdout, "polyforge_yaml") {
+		t.Fatalf("pf --json init still carries a retired field: %s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(ws, workspace.FileName)); !os.IsNotExist(err) {
+		t.Fatalf("pf init created %s (stat err %v)", workspace.FileName, err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(ws, "CLAUDE.md"))
 	if !strings.HasSuffix(string(raw), human) || !strings.Contains(string(raw), "doc.design") {
 		t.Fatalf("CLAUDE.md after init:\n%s", raw)
 	}
 	code, stdout, _ = runPf(t, nil, "init", ws)
-	if code != 0 || !strings.Contains(stdout, "scratch/  exists") || !strings.Contains(stdout, "CLAUDE.md  layout section unchanged") || !strings.Contains(stdout, "memory_policy section unchanged") {
+	if code != 0 || !strings.Contains(stdout, "scratch/  exists") || !strings.Contains(stdout, "CLAUDE.md  layout section unchanged") || !strings.Contains(stdout, ".default] unmapped") {
 		t.Fatalf("second pf init: exit %d output %s", code, stdout)
 	}
 	bad := t.TempDir()
@@ -315,9 +318,11 @@ func TestInitVerb(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, stdout, stderr = runPf(t, nil, "init", bad)
-	if code != 0 || !strings.Contains(stdout, "AGENTS.md  layout section created") || !strings.Contains(stdout, "memory_policy section skipped") ||
-		!strings.Contains(stdout, "warning: .polyforge.yaml left untouched:") {
+	if code != 0 || !strings.Contains(stdout, "AGENTS.md  layout section created") {
 		t.Fatalf("pf init over a broken yaml: exit %d output %s (%s)", code, stdout, stderr)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(bad, workspace.FileName)); string(raw) != "steps: [\n" {
+		t.Fatalf("pf init touched the yaml: %q", raw)
 	}
 	if code, _, stderr := runPf(t, nil, "init", filepath.Join(ws, "nope")); code != 1 || !strings.Contains(stderr, "does not exist") {
 		t.Fatalf("pf init on a missing dir: exit %d (%s)", code, stderr)

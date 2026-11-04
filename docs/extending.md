@@ -53,16 +53,23 @@ declaration and its prompt material.
 
 ### Summarize models
 
-`summarize:` in `.polyforge.yaml` — the summarize lane's model candidates,
+The one machine-level `[summarize]` table of `cli.toml` (`summarize.models`,
+`summarize.language`, `summarize.interval_sec`; written with `pf config set`,
+read with `pf config list`) — the summarize lane's model candidates,
 narration language and interval: the config reference's
-[`summarize:` section](reference/config.md#summarize--the-summarize-lane).
+[`[summarize]` section](reference/config.md#summarize--the-summarize-lane).
 
 ### Memory policy
 
-`memory_policy:` in `.polyforge.yaml` — what the workflow's last step puts
+The path-keyed `[memory_policy."<workspace path>".<default|project>]`
+tables of `cli.toml` (`record` / `skip`; written with
+`pf config set memory_policy.<entry>.record|skip --workspace <path>` or by
+`pf init`, read with `pf config list`) — what the workflow's last step puts
 into the work item's wrap-summary memory, and the step agents' memory
 rules inside a step: the config reference's
-[`memory_policy:` section](reference/config.md#memory_policy--the-wrap-summary-policy).
+[`[memory_policy]` section](reference/config.md#memory_policy--the-wrap-summary-policy).
+A `.polyforge.yaml` still carrying `summarize:` or `memory_policy:` is
+refused whole; `pf config migrate` moves them.
 
 ### Workspace mapping
 

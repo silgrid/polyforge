@@ -10,7 +10,7 @@ merge unattended is there too.
 The platform ships with zero release-specific code in its engine: a
 release is a work item filed against the project-agnostic `release`
 workflow bundle (`workflows/release/`), and the delivery lanes
-(`feature-full`, `bug-fix`, `autopilot`, `chore`) never release or
+(`feature-full`, `bug-fix`, `autopilot`, `chore`, `micro`) never release or
 deploy. Trigger it by filing a release work item (`pf file --bundle
 release ...`, or ask the routing skill: "release" / "deploy" /
 "发版" files that work item). If the goal names a bump (`major`, `minor`,

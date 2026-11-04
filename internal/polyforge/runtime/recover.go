@@ -90,7 +90,7 @@ func (r *Runtime) recoverCore(ctx context.Context, j *job, cause, detail string)
 		return
 	case capsule.WorkflowStatusFailedGate, capsule.WorkflowStatusFailedRewindExhausted:
 		fmt.Fprintf(os.Stderr, "runtime: %s: driver workflow failed (%s) — closing failed (recovery cause %q)\n", j.wi, capsuleWorkflowStatus(j.capsuleDir), cause)
-		if err := r.stopOp(ctx, j, protocol.FinishFailed, false, ""); err != nil {
+		if err := r.stopOp(ctx, j, protocol.FinishFailed, false, failedWorkflowNote(j.capsuleDir)); err != nil {
 			logTerminalClose(j, "fail close", err)
 		}
 		return
@@ -423,7 +423,8 @@ func capsuleWorkflowStatus(capsuleDir string) string {
 }
 
 // blockedReasonNoteMax bounds the driver's blocked_reason inside the
-// blocked close's note (runes): the note rides the SessionEnd, the
+// blocked close's note — and its termination_reason inside the failed
+// close's (runes): the note rides the SessionEnd, the
 // persisted record and RTFinished, and a reason the driver copied from a
 // step's output must not balloon them.
 const blockedReasonNoteMax = 500
@@ -443,6 +444,23 @@ func blockedWorkflowNote(capsuleDir string) string {
 		reason = string(rs[:blockedReasonNoteMax]) + "…"
 	}
 	return note + "; blocked reason: " + reason
+}
+
+// failedWorkflowNote is the hub note of a workflow that ended failed: the
+// driver's own termination_reason when it recorded one (a
+// verification-less lane's out-of-bounds diff, the reason naming the lane
+// to re-file on), bounded like the blocked reason — the owner reads why
+// from the hub without opening the capsule. Every other failure records no
+// reason and keeps today's empty note.
+func failedWorkflowNote(capsuleDir string) string {
+	reason := strings.TrimSpace(capsuleExecution(capsuleDir).TerminationReason)
+	if reason == "" {
+		return ""
+	}
+	if rs := []rune(reason); len(rs) > blockedReasonNoteMax {
+		reason = string(rs[:blockedReasonNoteMax]) + "…"
+	}
+	return "workflow failed: " + reason
 }
 
 // boundedFail terminates the WI without a relaunch: SessionEnd(blocked)

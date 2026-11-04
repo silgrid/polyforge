@@ -120,3 +120,28 @@ func TestScopedWithNothingTouchedIsNotScoped(t *testing.T) {
 		t.Errorf("tier = %+v", res.Tier)
 	}
 }
+
+// TestSuiteRerunFromTheAggregateRunner: a failing aggregate e2e suite
+// re-runs through the runner's printed `re-run:` command verbatim (behind
+// the planned assignments); without one, only the simple `npm run
+// <script> [--]` form derives `-- <suite>`; anything else, or a planned
+// flag the single-suite re-run could drop, is not re-runnable.
+func TestSuiteRerunFromTheAggregateRunner(t *testing.T) {
+	cases := []struct{ cmd, printed, want, why string }{
+		{"npm run test:e2e:all", "npm run test:e2e:all -- b.mjs", "npm run test:e2e:all -- b.mjs", ""},
+		{"E2E_JOBS=2 npm run test:e2e:all", "npm run test:e2e:all -- b.mjs", "E2E_JOBS=2 npm run test:e2e:all -- b.mjs", ""},
+		{"node e2e/all.mjs", "npm run test:e2e:all -- b.mjs", "npm run test:e2e:all -- b.mjs", ""},
+		{"npm run test:e2e:all", "", "npm run test:e2e:all -- e2e/b.mjs", ""},
+		{"E2E_JOBS=2 npm run test:e2e:all --", "", "E2E_JOBS=2 npm run test:e2e:all -- e2e/b.mjs", ""},
+		{"npm run test:e2e:all -- a.mjs b.mjs", "", "", "no `re-run:` line"},
+		{"make e2e", "", "", "no `re-run:` line"},
+		{"npm run --silent test:e2e:all", "npm run test:e2e:all -- b.mjs", "", "--silent"},
+		{"cd web && npm run test:e2e:all", "npm run test:e2e:all -- b.mjs", "", "not one simple command"},
+	}
+	for _, c := range cases {
+		got, why := suiteRerun(c.cmd, c.printed, "e2e/b.mjs")
+		if got != c.want || (c.why != "" && !strings.Contains(why, c.why)) || (c.why == "" && why != "") {
+			t.Errorf("suiteRerun(%q, %q) = %q, %q; want %q (%q)", c.cmd, c.printed, got, why, c.want, c.why)
+		}
+	}
+}

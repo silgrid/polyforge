@@ -28,9 +28,12 @@ import (
 // .polyforge.yaml a claim would load), the workspace layout
 // (doctor_workspace.go), connectivity (server reach, daemon socket,
 // auth), daemon supervision and environment hygiene, the claude step
-// harness, and the harness family (doctor_display.go, doctor_layout.go:
+// harness, the harness context files' diagram guidance
+// (doctor_harness_prompts.go; --fix-harness-prompts appends it), and
+// the harness family (doctor_display.go, doctor_layout.go:
 // progress display and install layout; never fail, and `--harness` runs
-// them alone for tools/install.sh). A check whose prerequisite is
+// them alone for tools/install.sh; --fix-install-layout links the claude
+// skill). A check whose prerequisite is
 // missing — an unloadable config, an absent mapping, an unreachable
 // aihub — is reported skip, never a faked pass. Credential values are
 // never shown: set/unset and names only.
@@ -83,7 +86,8 @@ type doctorRun struct {
 	cfg               Config
 	present, missing  []string // mapped workspaces that exist as directories / do not
 	prune             bool     // --prune-scratch
-	pruneGitDirs      bool     // --prune-git-dirs
+	pruneCapsules     bool     // --prune-capsules
+	fixPrompts        bool     // --fix-harness-prompts
 	reachOK, sockOK   bool
 	reachMsg, sockMsg string
 	status            StatusResponse
@@ -116,13 +120,14 @@ var doctorChecks = []struct {
 	}},
 	{docChLayout, needMapping, func(r *doctorRun) (string, string) { return workspaceLayoutCheck(r.present).row() }},
 	{docChScratch, needMapping, func(r *doctorRun) (string, string) { return scratchCheck(r.present, time.Now(), r.prune).row() }},
-	{docChGitDirs, needConfig, func(r *doctorRun) (string, string) {
+	{docChCapsuleRetention, needConfig, func(r *doctorRun) (string, string) {
 		home, _ := os.UserHomeDir()
-		return gitDirsCheck(r, DataDir(home), time.Now())
+		return capsuleRetentionCheck(r, DataDir(home), time.Now())
 	}},
+	{docChDisk, needMapping, func(r *doctorRun) (string, string) { return diskCheck(r.present).row() }},
 	{docChRepoClones, needMapping, func(r *doctorRun) (string, string) { return repoClonesCheck(r) }},
 	{docChScopedGates, needMapping, func(r *doctorRun) (string, string) { return scopedGatesCheck(r) }},
-	{docChMemPolicy, needMapping, func(r *doctorRun) (string, string) { return memoryPolicyCheck(r.present).row() }},
+	{docChMemPolicy, needMapping, func(r *doctorRun) (string, string) { return memoryPolicyCheck(r.cfg, r.present).row() }},
 	{docChPrereqs, needConfig, func(r *doctorRun) (string, string) { return prerequisitesCheck(exec.LookPath).row() }},
 	{docChServer, needConfig, func(r *doctorRun) (string, string) { return passOrFail(r.reachOK), r.reachMsg }},
 	{docChSocket, needConfig, func(r *doctorRun) (string, string) { return passOrFail(r.sockOK), r.sockMsg }},
@@ -146,6 +151,15 @@ var doctorChecks = []struct {
 			hs = probeDaemonHarnesses(r.cfg.DaemonSocket)
 		}
 		return claudeHarnessCheck(r.claudeSteps, r.status.WorkflowsDir, r.sockOK, hs)
+	}},
+	{docChHarnessPrompts, needConfig, func(r *doctorRun) (string, string) {
+		home, _ := os.UserHomeDir()
+		piDir := piAgentDir(home)
+		root := r.cfg.Daemon.HarnessRoot
+		if root == "" {
+			root = DataDir(home)
+		}
+		return harnessPromptCheck(home, piDir, root, r.fixPrompts).row()
 	}},
 	{docChProjects, needAihub, projectsCheck},
 	{docChAuth, needAihub, func(r *doctorRun) (string, string) { return r.auth.row() }},
@@ -249,20 +263,28 @@ var cmdDoctor = &Command{
 	Name:         "doctor",
 	Group:        GroupDiag,
 	Summary:      "Check this daemon's health: config, workspace mapping and layout, connectivity, progress display",
-	Usage:        "pf doctor [--harness] [--prune-scratch] [--prune-git-dirs] [--json]",
+	Usage:        "pf doctor [--harness] [--prune-scratch] [--prune-capsules] [--fix-harness-prompts] [--fix-install-layout] [--json]",
 	NoConfigLoad: true,
 	Setup: func(fs *flag.FlagSet) {
 		fs.Bool("harness", false, "run only the harness progress-display checks")
 		fs.Bool("prune-scratch", false, "remove the mapped workspaces' scratch/ entries older than 14 days (default: report them only)")
-		fs.Bool("prune-git-dirs", false, "remove the external git dirs and set-aside scenes of wrapped/failed/canceled work items untouched for more than 14 days (default: report them only; never while the daemon is down)")
+		fs.Bool("prune-capsules", false, "slim wrapped work items' capsules (live or set aside) to artifacts/ + capsule.json, and remove the external git dirs and set-aside scenes of failed/canceled ones, untouched for more than 14 days (default: report them only; never while the daemon is down)")
+		fs.Bool("fix-harness-prompts", false, "append the native-SVG diagram-guidance block to each installed harness's existing context file that lacks that block — legacy mermaid-only guidance included, left as it is (append-only, idempotent; never creates a file; default: report only)")
+		fs.Bool("fix-install-layout", false, "link ~/.claude/skills/polyforge to the installed release's skill when it is missing or links elsewhere — only that one entry; idempotent, a no-op when the link is already correct; never removes a copied directory and never installs pf or a release (no release: re-run tools/install.sh); default: report only")
 	},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if len(args) != 0 {
 			return fmt.Errorf("doctor: unexpected arguments %v", args)
 		}
-		checks := harnessDisplayChecks()
+		if boolFlag(fs, "harness") && boolFlag(fs, "fix-harness-prompts") {
+			return fmt.Errorf("doctor: --fix-harness-prompts cannot be combined with --harness (the harness diagram guidance row runs only in the full report)")
+		}
+		if boolFlag(fs, "harness") && boolFlag(fs, "fix-install-layout") {
+			return fmt.Errorf("doctor: --fix-install-layout cannot be combined with --harness (the --harness projection tools/install.sh runs is read-only)")
+		}
+		checks := harnessDisplayChecks(boolFlag(fs, "fix-install-layout"))
 		if !boolFlag(fs, "harness") {
-			checks = append(runDoctorChecks(ctx, boolFlag(fs, "prune-scratch"), boolFlag(fs, "prune-git-dirs")), checks...)
+			checks = append(runDoctorChecks(ctx, boolFlag(fs, "prune-scratch"), boolFlag(fs, "prune-capsules"), boolFlag(fs, "fix-harness-prompts")), checks...)
 		}
 		rep := doctorReport{Checks: checks}
 		fails := countFails(rep)
@@ -302,8 +324,9 @@ func countFails(rep doctorReport) int {
 // runDoctorChecks runs the config check and then doctorChecks, skipping
 // each check whose prerequisite is missing. pruneScratch lets the
 // scratch check remove the stale entries it would otherwise report;
-// pruneGitDirs does the same for the git dir retention check.
-func runDoctorChecks(ctx *Context, pruneScratch, pruneGitDirs bool) []doctorCheck {
+// pruneCapsules does the same for the capsule retention check;
+// fixPrompts lets the harness diagram guidance check append its block.
+func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool) []doctorCheck {
 	cfg, err := LoadConfig(ctx.ConfigPath)
 	if err != nil {
 		checks := []doctorCheck{{docChConfig, "fail", err.Error() + " — see the install docs for the migration steps"}}
@@ -318,7 +341,7 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneGitDirs bool) []doctorChec
 	}
 	checks := []doctorCheck{{docChConfig, "pass", "loaded from " + where}}
 
-	r := &doctorRun{cfg: cfg, prune: pruneScratch, pruneGitDirs: pruneGitDirs}
+	r := &doctorRun{cfg: cfg, prune: pruneScratch, pruneCapsules: pruneCapsules, fixPrompts: fixPrompts}
 	for _, ws := range cfg.Mapping.Workspaces() {
 		if st, err := os.Stat(ws); err == nil && st.IsDir() {
 			r.present = append(r.present, ws)

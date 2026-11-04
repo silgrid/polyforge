@@ -25,6 +25,7 @@ var principledSteps = map[string][]string{
 	"autopilot":    {"grill", "fix", "deliver"},
 	"bug-fix":      {"repro", "root-cause", "fix", "review", "deliver"},
 	"chore":        {"plan", "code", "review", "deliver"},
+	"micro":        {"fix", "review", "deliver"},
 	"release":      {"verify"},
 }
 

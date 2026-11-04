@@ -82,6 +82,12 @@ func mergeBlocker(spec ResultSpec, r deliverRepo, branch string, ev []CommandEvi
 	if spec.HasReview && !spec.ReviewPassed {
 		return "no independent review passed with no blocking finding"
 	}
+	// a lane with no verification step has its own
+	// credential (fastLaneMergeBlocker); every verification-bearing lane
+	// keeps the rule below unchanged.
+	if spec.NoVerification {
+		return fastLaneMergeBlocker(spec, r, branch, ev)
+	}
 	// + #69: a scoped verification pass is a merging credential
 	// only when review judged that scope adequate AND declared it — and the
 	// verification used exactly the scope review declared (the path sets
@@ -134,14 +140,8 @@ func mergeBlocker(spec ResultSpec, r deliverRepo, branch string, ev []CommandEvi
 	// autopilot (no review step) is untouched. A re-verification that does
 	// not move HEAD keeps the pass covered — reviewed == head.
 	if spec.HasReview {
-		reviewed := spec.ReviewedHeads[r.Name]
-		switch {
-		case reviewed == "":
-			return "no review covers the delivered diff (the review pass recorded no reviewed head for this repo)"
-		case reviewed != head:
-			if why := handMadeHistory(dir, reviewed, head); why != "" {
-				return "the review's pass does not cover the delivered HEAD (" + why + ")"
-			}
+		if why := reviewCoverageBlocker(spec, r.Name, dir, head); why != "" {
+			return why
 		}
 	}
 	if verified == "" && light == "" {
@@ -180,14 +180,23 @@ func mergeBlocker(spec ResultSpec, r deliverRepo, branch string, ev []CommandEvi
 	// a repo that declares ci_evidence may show it with check-runs of the
 	// pushed head instead (ciEvidenceCovers); a repo that declares none
 	// answers (false, "") and keeps the reason text unchanged.
-	events := evidenceEvents(ev, filepath.Dir(spec.ReposDir))
+	capsuleRoot := filepath.Dir(spec.ReposDir)
 	prURL := strings.TrimSpace(r.PRURL)
+	events := withBarRuns(evidenceEvents(ev, capsuleRoot), r.Name, prURL, head, spec.SpawnN, spec.BarRuns, capsuleRoot)
+	// an opted-in repository (its delivered head's conf
+	// declares smoke_suite=) verified on the full tier ran only a selection
+	// of its e2e suites and carried the full e2e command: its delivery has
+	// no HEAD-equality shortcut. A scoped delivery keeps its rule.
+	optedFull := !spec.VerificationScoped && smokeOptIn(dir)
 	switch {
 	case r.TestsPassed != nil && !*r.TestsPassed:
 		return "the step reports failing tests"
 	case verified != "":
-		if head != verified && !testBarRerun(r.Name, prURL, spec.VerifiedTestBar, events) {
+		if (head != verified || optedFull) && !testBarRerun(r.Name, prURL, spec.VerifiedTestBar, events) {
 			if ok, note := ciEvidenceCovers(dir, r, head, spec.VerifiedTestBar, events); !ok {
+				if head == verified {
+					return "the tests are not shown to pass on the pushed head (the repo opted into the full-tier e2e selection, so verification ran a selection and carried the full test_bar: a full-tier delivery re-runs it even at the verified head, and this deliver run did not re-run it in that repo after its last merge and before its gh pr merge)" + note
+				}
 				return "the tests are not shown to pass on the pushed head (it differs from the commit verification passed on and this dispatch did not re-run verification's test_bar in that repo after its last merge and before its gh pr merge)" + note
 			}
 		}
@@ -203,6 +212,76 @@ func mergeBlocker(spec ResultSpec, r deliverRepo, branch string, ev []CommandEvi
 				return "the tests are not shown to pass on the pushed head (the last verification pass was a light recheck, which never ran the full bar: only this dispatch's recorded re-run of the carried test_bar, after its last merge and before its gh pr merge, covers them)" + note
 			}
 		}
+	}
+	return ""
+}
+
+// reviewCoverageBlocker answers "" when the review pass covers the
+// delivered HEAD: a reviewed head recorded for the repo,
+// with only git-reproducible merges between it and head.
+func reviewCoverageBlocker(spec ResultSpec, repo, dir, head string) string {
+	reviewed := spec.ReviewedHeads[repo]
+	switch {
+	case reviewed == "":
+		return "no review covers the delivered diff (the review pass recorded no reviewed head for this repo)"
+	case reviewed != head:
+		if why := handMadeHistory(dir, reviewed, head); why != "" {
+			return "the review's pass does not cover the delivered HEAD (" + why + ")"
+		}
+	}
+	return ""
+}
+
+// fastLaneMergeBlocker is the merge rule of a delivery lane with no
+// verification step (; the shipped `micro` lane): an
+// independent review whose pass covers the delivered HEAD, the delivered
+// head tied to the local HEAD on the latest default branch, no
+// LLM-resolved conflict, no reported test failure — and, in place of a
+// verification record, this deliver dispatch's own re-run of every
+// command of the build step's recorded fast-lane plan for the repo, in
+// that repo, exit 0, after the dispatch's last merge there and before its
+// gh pr merge (testBarRerun's window and one-use matching). Only this
+// dispatch's recorded evidence counts: never a daemon-recorded bar run of
+// an earlier spawn, never verified_heads, a test bar, a scope or a
+// scenario record. A refused diff never gets here (the run already ended,
+// fast_lane.go), and a repo with no in-bounds plan has no credential.
+func fastLaneMergeBlocker(spec ResultSpec, r deliverRepo, branch string, ev []CommandEvidence) string {
+	if !spec.HasReview {
+		return "a lane without a verification step merges automatically only on an independent review pass, and this workflow declares no review step"
+	}
+	if spec.ReposDir == "" {
+		return "the task repos are unknown, so the delivered head cannot be judged"
+	}
+	dir := filepath.Join(spec.ReposDir, r.Name)
+	headOut, err := repoGit(dir, "rev-parse", "HEAD")
+	if err != nil {
+		return "the delivered history has a hand-resolved or hand-made change (HEAD unreadable)"
+	}
+	head := strings.TrimSpace(headOut)
+	if why := reviewCoverageBlocker(spec, r.Name, dir, head); why != "" {
+		return why
+	}
+	if why := deliveredHeadMismatch(dir, head, branch, strings.TrimSpace(r.MergeCommit)); why != "" {
+		return "the delivered head cannot be tied to the local HEAD (" + why + ")"
+	}
+	if r.LLMResolvedConflict {
+		return "the step reports an LLM-resolved conflict"
+	}
+	if r.TestsPassed != nil && !*r.TestsPassed {
+		return "the step reports failing tests"
+	}
+	var plan []testBarCmd
+	for _, c := range spec.FastEvidence {
+		if c.Repo == r.Name {
+			plan = append(plan, c)
+		}
+	}
+	if len(plan) == 0 {
+		return "no in-bounds fast-lane credential plan is recorded for this repo (the build step's fast_lane), so no fast evidence can stand in for a verification record"
+	}
+	prURL := strings.TrimSpace(r.PRURL)
+	if !testBarRerun(r.Name, prURL, plan, evidenceEvents(ev, filepath.Dir(spec.ReposDir))) {
+		return "the fast evidence is not shown green on the pushed head (this deliver dispatch did not re-run every fast_lane command of the repo in that repo with exit 0 after its last merge and before its gh pr merge)"
 	}
 	return ""
 }
@@ -554,6 +633,129 @@ func testBarRerun(repo, prURL string, bar []testBarCmd, events []evEvent) bool {
 		}
 	}
 	return true
+}
+
+// withBarRuns merges the work item's daemon-recorded bar runs
+// (barruns.go,) into one deliver dispatch's evidence events
+// for repo, so testBarRerun judges them under its unchanged window, exit
+// and one-use rules:
+//
+//   - a `pf bar-run [--] <line>` command of this dispatch is read as the
+//     line itself, with the recorded exit of this spawn's matching entry
+//     (same repo, same bar keys, first unused) — the record attests the
+//     run, the evidence places it in the window; without a matching entry,
+//     or with one recorded at another HEAD than the pushed one, it is no
+//     credit;
+//   - an earlier spawn's entry (a dispatch of the same deliver run that
+//     died, was refused or asked a human; the record is cleared at every
+//     rewind/re-entry, so no other deliver run's entry exists) recorded at
+//     the pushed head is placed at the window's start, after this
+//     dispatch's last merge in repo: the HEAD equality is the guard — a
+//     merge that moved HEAD leaves it at another head, never reused. By
+//     the owner's ruling (review s10#1) the HEAD binding is
+//     the reuse condition across spawns: a re-dispatch without a new
+//     merge, or with a no-op merge (no commit made), keeps the entry; only
+//     a merge that makes a new commit voids it, through the HEAD.
+//
+// Every other entry (another repo, another head) is ignored.
+func withBarRuns(events []evEvent, repo, prURL, head string, spawnN int64, runs []BarRun, capsuleRoot string) []evEvent {
+	if len(runs) == 0 {
+		return events
+	}
+	dir := capsule.DirRepos + "/" + repo
+	used := make([]bool, len(runs))
+	var out []evEvent
+	for _, e := range events {
+		line, ok := barRunLine(e)
+		if !ok || e.repo != repo {
+			out = append(out, e)
+			continue
+		}
+		want := barLineKeys(line)
+		hit := -1
+		for i, r := range runs {
+			if !used[i] && r.SpawnN == spawnN && r.Repo == repo && barLineKeys(r.Argv[0]) == want {
+				hit = i
+				break
+			}
+		}
+		if hit < 0 {
+			e.key = "" // an unrecorded bar-run claim is no credit
+			out = append(out, e)
+			continue
+		}
+		used[hit] = true
+		exit := runs[hit].Exit
+		if runs[hit].Head != head {
+			exit = -1 // run at another head: no credit at the pushed one
+		}
+		segs, bodies := barSegmentsFacts(runs[hit].Argv[0])
+		out = appendSegments(out, dir, segs, bodies, exit, capsuleRoot)
+	}
+	var prior []evEvent
+	for _, r := range runs {
+		if r.SpawnN >= spawnN || r.Repo != repo || r.Head != head {
+			continue
+		}
+		segs, bodies := barSegmentsFacts(r.Argv[0])
+		prior = appendSegments(prior, dir, segs, bodies, r.Exit, capsuleRoot)
+	}
+	if len(prior) == 0 {
+		return out
+	}
+	start, _ := rerunWindow(repo, prURL, out)
+	merged := make([]evEvent, 0, len(out)+len(prior))
+	merged = append(merged, out[:start]...)
+	merged = append(merged, prior...)
+	return append(merged, out[start:]...)
+}
+
+// barRunLine answers the command line a `pf bar-run [--] <line>` event
+// runs (the words after the verb, joined), ok=false for any other event.
+func barRunLine(e evEvent) (string, bool) {
+	w := e.words
+	if len(w) < 3 || filepath.Base(w[0]) != "pf" || w[1] != "bar-run" {
+		return "", false
+	}
+	rest := w[2:]
+	if rest[0] == "--" {
+		rest = rest[1:]
+	}
+	if len(rest) == 0 {
+		return "", false
+	}
+	return strings.Join(rest, " "), true
+}
+
+// barLineKeys is a command line's bar keys (its simple commands but cd,
+// as testBarRerun keys the test bar), joined: two lines match when they
+// are the same bar command(s).
+func barLineKeys(line string) string {
+	var keys []string
+	for _, seg := range barSegments(line) {
+		words := commandWords(seg)
+		if words == nil || words[0] == "cd" {
+			continue
+		}
+		keys = append(keys, barKey(seg))
+	}
+	return strings.Join(keys, "\x00")
+}
+
+// smokeOptIn reports whether the delivered head's verification conf
+// declares smoke_suite= (the full-tier e2e selection opt-in; any such
+// line, as the engine reads it).
+func smokeOptIn(dir string) bool {
+	out, err := repoGit(dir, "show", "HEAD:"+verifyScopeConf)
+	if err != nil {
+		return false
+	}
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimLeft(ln, " \t"), "smoke_suite=") {
+			return true
+		}
+	}
+	return false
 }
 
 // rerunWindow answers the events [start, end) a re-run of repo's tests

@@ -2242,3 +2242,305 @@ release tree as before. What changes for a repository the engine reports on:
 - **Authored suites carry the header.** The feature lane's `e2e-author` step
   now derives each authored suite's `carries:` header from the plan's
   declared changed paths.
+
+## The legacy rollback image needs the running version's tag
+
+No data migration, no wire-contract change. What changes for an operator:
+
+- **`deploy.sh` refuses at step 0 when a legacy rollback image cannot be
+  built from the running release's own files.** When the running version
+  has no GHCR image (a release before the image existed), the rollback image
+  is built on the server from the saved old binary and the old release's
+  `deploy/Dockerfile`, read from the tag `refs/tags/<running version>` and
+  nowhere else. A deployer clone that has not fetched that tag now stops in
+  preflight — `tag <old> (the running version) not in the local repo - git
+  fetch --tags` — before anything on the server changes; the old fallback to
+  the working tree's Dockerfile (which copies a different binary) is gone.
+  Run `git fetch --tags` in the deployer clone and deploy again. A running
+  version with a GHCR image is unaffected.
+- **The dry-run plan names both probe layouts.** Its step 2 (rollback
+  image), step 6 (the pulled image) and step 7 (the new container) lines
+  now say `/pf aihub -version, else /aihub -version`, which is what the
+  probes already did.
+
+## v2.20.18 (message analysis runs as a task and answers a structured result)
+
+- **`pf msg analyze` runs one task.** The analysis no longer uses the
+  summarize dispatcher or `summarize.models`: the daemon spawns one task in
+  the task lane — the message's work-item project, else the first mapped
+  project — with models from `steps.<project>.task.models` (else
+  `steps.<project>.default.models`). A project with neither now refuses the
+  analysis with `DAEMON-400`; configure a task chain before relying on it.
+  The task shows in `pf task list` with the caller as reporter, and its
+  `prompt_summary` is only `Analyze message <id>`; the whole prompt (message
+  body included) is readable through `pf task show` under the task store's
+  unchanged retention.
+- **Read-only tool profile, fixed budget.** The analysis task is offered only
+  read/search tools (claude `Read,Glob,Grep`, pi `read,grep,find,ls`) and a
+  fixed 5-minute / 100000 fresh-token budget; neither is configurable, and a
+  normal `pf task spawn` keeps the standard surface. The profile narrows the
+  tool surface; it is not a sandbox.
+- **Blocking, structured answer.** The call blocks until the task ends and
+  answers `message_id`, `task_id`, `project`, `type` (`requirement`, `bug`,
+  `ruling`, `discussion`, `clarification`, `outreach`, `other`), `summary`,
+  `suggested_actions` (`file_ticket`, `reply`, `note_only`), `model`,
+  `duration` and, beside a reply suggestion, `reply_draft`. The `conclusion`
+  field is gone, with no compatibility path; pi-web's analysis floor is
+  therefore `2.20.18` (its Messages floor stays `2.20.12`).
+- **No analyzer lock.** Two analyses may run at once; with both task slots
+  busy the call is the retryable `DAEMON-409` and nothing is queued. A task
+  that ends `failed`, `capped` or `interrupted` answers `DAEMON-500` naming
+  the state and the task id.
+
+## Full-tier e2e selection by smoke suites; the deliver step's recorded bar runs
+
+No data migration. What changes:
+
+- **`smoke_suite=` opts a repository into the full-tier e2e selection.** A
+  repository whose `.polyforge/verify-scope.conf` declares at least one
+  `smoke_suite=<suite>` line gets, on the full tier of a non-empty diff, its
+  fast gates plus the carries-selected e2e suites union its smoke suites
+  (the smoke suites alone for a documentation-only diff); an uncovered
+  non-documentation path is listed, not a reason for the full e2e command,
+  and a forced-full path, a change to the conf itself or a structural
+  diagnostic runs the full e2e command. `--json` reports `smoke_suite` and
+  `e2e_selection` for such a repository only (the key set of every other
+  repository is unchanged). A repository without the key, the scoped tier
+  and the release lane behave exactly as before. The key takes effect once
+  the release that ships this engine is installed: an older engine
+  diagnoses it as unknown and runs the full e2e command.
+- **The carried bar stays the full command.** For an opted-in repository
+  `pf verify-run` carries the full e2e command in `test_bar` in place of the
+  selection it ran, and `deliver` re-runs it on every full-tier delivery —
+  the HEAD-equality shortcut no longer applies to such a repository. A
+  scoped delivery keeps its carried scoped bar.
+- **`pf bar-run` and the bar-run record.** The deliver step re-runs carried
+  `test_bar` commands as `cd repos/<name> && pf bar-run -- '<command>'`. The
+  daemon (`POST /step/bar-run`, reachable only by the calling work item's
+  live deliver step) records each run with the repo HEAD it reads itself in
+  `<data-dir>/bar-runs/<work-item-id>.jsonl`. A re-dispatch of the same
+  deliver run reuses a recorded run with exit 0 at the pushed head and runs
+  only the missing commands; the record is cleared at the rewind/re-entry
+  boundary. A deliver re-dispatch no longer merges the default branch when
+  it has not advanced. `pf doctor`'s scoped-gates readiness row reads and
+  validates `smoke_suite=`.
+
+## Capsule retention slims wrapped capsules; `--prune-capsules`
+
+- **The doctor row is `capsule retention`, the flag `--prune-capsules`.**
+  The `git dir retention` row is renamed and its scan now covers every
+  mapped workspace's live capsules as well as the set-aside scenes and the
+  external git dirs. `--prune-git-dirs` is gone with no alias: `pf doctor
+  --prune-git-dirs` is a usage error (exit 2); scripts and runbooks that
+  call it switch to `pf doctor --prune-capsules`.
+- **A wrapped work item's capsule is slimmed, not kept whole.** Past the
+  14-day retention, with no daemon job naming it and no uncommitted or
+  unpushed task-repo work in it, a `wrapped` work item's capsule — live or
+  set aside — is reported reclaimable (live) or retired (set aside), and
+  `--prune-capsules` reduces it to `artifacts/` + `capsule.json` (its
+  `repos/`, `runtime-state/`, `logs/`, `session/`, `workflows/`, `sync/`
+  and `.git` pointer go). `pf watch` then shows the hub record's status
+  without step detail, and the artifacts stay readable. A failed or
+  canceled work item's set-aside scene and the external git dirs are still
+  removed as before; a live capsule of a work item that is not `wrapped` is
+  never touched. The default run still only reports.
+- **A new `disk watermark` doctor row.** `pf doctor` now reports, for every
+  mapped workspace, the filesystem holding it (used, total, percentage) and
+  the bytes under its `capsules/`, and warns when a filesystem is used above
+  70%. It never fails and never moves the exit code; the walk of a large
+  `capsules/` tree makes the full report take longer on a crowded disk.
+
+## e2e-author records an executability preflight per scenario
+
+- **Every kept baseline row carries a four-key `preflight`.** A completed
+  `e2e-author` result's `baseline` rows each record `data_source` (the source
+  path plus its grep hit count), `async_settle` (the bounded wait primitive
+  plus its bound), `timing_window` (the window duration versus the assertion
+  point) and `selector_unique` (a runtime count of zero pre-existing hits),
+  each `{verdict: ok | n/a, evidence}`. A check the stack does not have is
+  `n/a` with the reason as its evidence; no browser, DOM or runner is
+  assumed.
+- **One run serves both.** The preflight is read from the existing targeted
+  baseline run; no second run is added.
+- **Structural failures do not complete.** A baseline red no correct
+  implementation could pass (a failed self-check, or a build/wiring error)
+  is fixed in place and amended into the author commit, or returned as
+  `needs_input` naming the scenario, the self-check and its evidence when
+  the spec itself demands it.
+- **The driver rejects a bad preflight.** A completed `e2e-author` result
+  whose row lacks the preflight, a fixed key or a non-empty evidence, carries
+  an unknown key, or has a verdict other than `ok`/`n/a` (`structural` is not
+  a verdict) is an envelope rejection and the step is re-dispatched.
+- **Per mode.** All-green rows carry the preflight too; an append-only
+  re-entry preflights only its newly appended rows; a
+  `skipped-with-rationale` run has no baseline and owes none.
+- **No workspace change.** No `.polyforge.yaml` key is added. The contract
+  takes effect with the release that ships the workflows tree; an
+  `e2e-author` result accepted before it is not re-judged. One in-flight
+  edge: on a work item whose baseline rows were recorded before the
+  release (so they carry no preflight), an append-only `e2e-author`
+  re-entry after the release is rejected for those rows.
+
+## v2.20.20 (`pf msg prompt` turns a message into an execution prompt)
+
+- **New verb, new daemon route.** `pf msg prompt <id>` (daemon UDS route
+  `POST /messages/{id}/prompt`, body `{caller_id}`) runs one read-only task
+  that restates the message as a self-contained execution prompt for
+  another agent, in the message's language. The task prompt carries the
+  clicked message, at most the 10 most recent earlier messages of its
+  conversation (oldest first), the replied-to message when there is one
+  and the anchored work item (slug, status, goal) when it is readable —
+  nothing later and nothing from another conversation. A conversation read
+  the daemon is refused is the caller's typed refusal; no prompt is built
+  from part of a conversation.
+- **Same lane, budget and reach as `pf msg analyze`.** One task in the task
+  lane — the anchored work item's project, else the first mapped project —
+  with the read/search-only tool profile, the fixed 5-minute / 100000
+  fresh-token budget and the caller as reporter; no config key or flag
+  changes it. Its `prompt_summary` is only `Turn message <id> into an
+  execution prompt`. Local UDS only, refused to step and task processes
+  (`DAEMON-403`); the CLI verb is refused inside a workflow step like every
+  `pf msg` verb.
+- **Four-field answer, typed failures.** The call blocks until the task
+  ends and answers exactly `prompt`, `task_id`, `model` and `duration`.
+  A task that ends `failed`, `capped` or `interrupted`, or completes with a
+  blank report, is `DAEMON-500` naming the state and the task id, with no
+  prompt text; both task slots busy is the retryable `DAEMON-409`; no task
+  chain is `DAEMON-400`; no mapped project is `DAEMON-412`. The task record
+  is the only stored copy.
+- **pi-web's message 「@」 action needs this version.** Its prompt route
+  answers `400 {error, upgrade}` below `2.20.20` before any spawn; nothing
+  else in pi-web changes floor.
+
+## v2.20.21 (summarize and memory_policy move into cli.toml; `pf config migrate`)
+
+A data migration of each machine's configuration: the summarize lane and
+the wrap-summary memory policy stop being workspace `.polyforge.yaml`
+sections and become cli.toml tables.
+
+- **The new home.** cli.toml carries one machine-level `[summarize]` table
+  (`models`, `language`, `interval_sec`) and the path-keyed
+  `[memory_policy."<workspace path>".<default|project>]` family (`record`,
+  `skip`). The daemon serves both from its loaded cli.toml (summarize live,
+  memory_policy at the next claim); `pf config list` is their one read face,
+  `pf config set|unset` writes them (`summarize.*` flat,
+  `memory_policy.<entry>.record|skip` with `--workspace`/`--cwd`), `pf init`
+  writes a mapped workspace's default policy block into cli.toml, and
+  `pf config workspace` no longer carries either. A `.polyforge.yaml` still
+  carrying `summarize:` or `memory_policy:` is refused whole — claims and
+  dispatches fail with DAEMON-414 naming the file, the line and
+  `pf config migrate` (the work item stays queued), and `pf doctor` fails
+  its `workspace yaml` row the same way. There is no dual read.
+- **Deploy order, per machine.** (1) Install the new pf. (2) Align each
+  workspace's summarize values in its `.polyforge.yaml` — `models`,
+  `language` and `interval_sec` must agree across the workspaces of the
+  machine (one machine-level table; set the `language` you want). (3) Run
+  `pf config migrate`. (4) Restart the daemon. Ordering hazard: never run
+  `pf config migrate`, `pf config set summarize.*|memory_policy.*` or
+  `pf init` — any write of the new tables — while the old pf is still
+  installed: the old parser refuses the unknown tables and every `pf`
+  command on the machine (the daemon included) would fail to load cli.toml.
+- **Refusal and list.** `pf config migrate` writes nothing and exits 1 with
+  an itemized list when the summarize values disagree (between workspaces,
+  or with an existing `[summarize]`), when a path's existing cli.toml
+  memory_policy block differs from its yaml section, or when a section is
+  invalid; it never picks a side. Fix the listed sources and re-run. An
+  interrupted run converges on the next one; an already migrated machine
+  prints `nothing to migrate`, changes no byte and exits 0.
+- **Backups.** Before changing a file the command writes a sibling
+  `<file>.bak-<UTC timestamp>` holding the pre-change bytes — cli.toml and
+  each changed `.polyforge.yaml`; an unchanged file gets none and an
+  existing backup is never overwritten. `pf doctor`'s workspace layout row
+  lists a `.polyforge.yaml.bak-*` as an entry to move to `scratch/` once
+  the migration is confirmed.
+- **Rollback.** There is no reverse-migration command: stop the daemon,
+  restore the backups over cli.toml and each `.polyforge.yaml`, then
+  install the older pf.
+- **One-batch deploy with the pi-web follow-up.** pi-web's configuration
+  panel still reads these keys from `pf config workspace` and writes
+  `summarize.* --cwd`; this release refuses both. Do not install it on a
+  production machine before the pi-web follow-up that moves the panel onto
+  `pf config list` / `pf config set` ships: the two are deployed as one
+  batch, and no compatibility path exists as an alternative.
+- **Post-deploy checks.** `pf --json config list` shows the three
+  `summarize.*` items with the intended values (and the `memory_policy`
+  blocks per workspace path); no mapped workspace's `.polyforge.yaml`
+  carries `summarize:` or `memory_policy:`; `pf doctor` reports no failing
+  row; and the next claimed work item's `runtime-state/memory-policy.json`
+  equals the one a claim of the same project wrote before the migration.
+
+## The micro lane: pure text changes deliver on fast evidence
+
+- **New shipped bundle `micro`.** `fix` (inherit, recall) → `review`
+  (fresh, gate) → `deliver` (gate, the shared definition), both gates
+  rewinding to `fix`, `rewind: {max_total: 2, max_per_step: 1}`; no
+  grill, spec, plan, e2e-author or verification step — the ticket body is
+  the spec. File a ticket on it with `--bundle micro`; no queued or
+  in-flight work item changes lane.
+- **Opt-in per repository, fail-closed.** A repository opts in only by
+  declaring `micro_path=<glob>` lines (and, optionally,
+  `micro_check=<command>` extra evidence commands) in its own
+  `.polyforge/verify-scope.conf`: `*` matches within one path segment,
+  `**` crosses `/`, a pattern without a wildcard is that exact path.
+  `AGENTS.md` and `CLAUDE.md` are never in bounds. A repository that
+  declares nothing is refused by the lane and sees no other change; its
+  JSON report keeps its key set. No repository is opted in by this
+  release.
+- **The base declaration governs.** The driver and
+  `tools/verify-scope --micro` read the conf at the diff base (the fetched
+  origin default branch), never the change's own, so a micro change cannot
+  widen its whitelist.
+- **Machine termination.** Before `review` the driver judges every
+  touched repository's diff (both sides of a rename or deletion) against
+  that declaration. A path outside it, an undeclared repository or an
+  unreadable diff/conf ends the run `failed_gate` — no rewind, no merge,
+  no human question — with `termination_reason` (new, top level in
+  `execution.json`), the `fast_lane_out_of_bounds` event and the failed
+  close's hub note naming the paths and the `autopilot` re-file. In
+  bounds, the driver records `fast_lane` (the verdict and the credential
+  plan) on `fix`'s output.
+- **The narrowed delivery credential.** A lane with a `deliver` step and
+  no `verification` step merges unattended on the review pass covering the
+  delivered HEAD plus the deliver dispatch's own re-run of every
+  `fast_lane` command (the repository's fast phase, then its micro
+  checks), each exit 0 after its last merge and before `gh pr merge` —
+  never a `pf bar-run` reuse. This is the owner's ruling, limited to
+  declared text paths. Every lane with a verification step (`autopilot`,
+  `bug-fix`, `chore`, `feature-full`) keeps its merge credential
+  unchanged; `release` is untouched.
+- **Engine.** `tools/verify-scope` learns the two keys (echoed as
+  `micro_paths` / `micro_checks` when declared) and `--micro`
+  (`--json` / `--run`): the fast phase plus the micro checks of the base
+  conf, phase `micro`; `micro-<n>` becomes a reserved check name. The
+  default report is otherwise unchanged.
+- **Discipline-③ observation window.** This release changes
+  `workflows/feature-full/steps/grill.md` (the Lane proposal names
+  `micro`), the shared `deliver` step and adds `workflows/micro/steps/`:
+  per docs/contributing.md discipline ③ it opens the observation window —
+  a clean rig, at least 10 real tickets of mixed bundle types (at least
+  one of them a `micro` run, which exercises the changed surface),
+  owner-answered needs_input and the discipline's readings compared
+  against the previous window — which blocks the next cutover-grade
+  release, not this merge. The owner files the window ticket at merge.
+
+## `doc.module-map`: a revisioned memory type
+
+- **Create enforces the convention.** `POST /api/v1/memories` with type
+  `doc.module-map` now needs the title `<repo>/<module> rev<N>` (N a
+  decimal ≥ 1), tags containing that repo and module, and a body line
+  `baseline @<commit> <YYYY-MM-DD>`; otherwise it answers one `MEM-400`
+  naming every missing piece and stores nothing. `supersedes` stays
+  optional and is never read. Every other type validates as before.
+  Existing rows are not touched or re-validated.
+- **Recall ranks the current revision first.** In both keyword modes
+  (`pf recall`, `--any`) and the short-term scan, the revisions of one
+  module key (from the row title) rank at the place of the newest one
+  (latest `updated_at`), newest first, whatever their bm25. Older
+  revisions stay returned and readable; other types, other keys and
+  unparseable titles keep the previous order. Browse's default
+  `sort=updated` already listed the newest first and is unchanged.
+- **Console.** The `/web/` memories module gives `doc.module-map` a
+  ninth kind hue (`--k-module-map`, both themes).
+- **No action needed.** No configuration, migration or deploy-order
+  change; a `doc.module-map` written by an older client that misses the
+  convention is refused and has to be re-sent conforming.

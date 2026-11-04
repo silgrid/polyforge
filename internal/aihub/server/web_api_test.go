@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/aihub/core"
+	"github.com/silgrid/polyforge/internal/common/api"
 )
 
 // webJSONReq issues one authenticated console JSON request and decodes
@@ -418,5 +419,79 @@ func TestWebAPIMachinesAdminOnlySnapshot(t *testing.T) {
 	c2, b2 := webJSONReq(t, e, "/web/api/work-items/wi_web_missing?project=alpha", member, nil)
 	if c1 != http.StatusNotFound || c2 != http.StatusNotFound || b1 != webBodyNotFound || b1 != b2 {
 		t.Fatalf("non-admin machines = %d %q; want the identical static 404 (%d %q)", c1, b1, c2, b2)
+	}
+}
+
+// TestWebAPIWorkItemDetailCommentsAndAnchoredMessages: the
+// console detail carries the work item's append-only comments and every
+// message whose about_wi matches the ticket by SLUG or by ID — historical
+// rows included, because those are written through the pre-existing send
+// path. A message anchored to another work item stays out.
+func TestWebAPIWorkItemDetailCommentsAndAnchoredMessages(t *testing.T) {
+	e := newSrvEnv(t)
+	wis := core.NewWIManager(e.db)
+	wi, err := wis.Create(core.CreateRequest{Project: "alpha", Goal: "web comment thread", Reporter: e.adminID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := wis.Create(core.CreateRequest{Project: "alpha", Goal: "another ticket", Reporter: e.adminID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientID, _ := memberUser(t, e, "web-comment-recipient", "viewer")
+	_, reader := memberUser(t, e, "web-comment-reader", "viewer")
+
+	first, err := wis.AddComment(wi.ID, e.adminID, api.AddCommentRequest{Body: "first console note"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wis.AddComment(wi.ID, recipientID, api.AddCommentRequest{
+		Body: "second console note", ReplyTo: first.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Anchored messages go through the pre-existing send face (so these
+	// are exactly the rows an older aihub wrote): one by slug, one by id,
+	// and one anchored to another ticket that must not appear.
+	for _, msg := range []api.SendMessage{
+		{To: recipientID, Text: "anchored by slug", AboutWI: wi.Slug},
+		{To: recipientID, Text: "anchored by id", AboutWI: wi.ID},
+		{To: recipientID, Text: "anchored elsewhere", AboutWI: other.ID},
+	} {
+		if _, err := e.admin.Send(e.adminID, msg); err != nil {
+			t.Fatalf("send %q: %v", msg.Text, err)
+		}
+	}
+
+	code, body := webJSONReq(t, e, "/web/api/work-items/"+wi.ID+"?project=alpha", reader, nil)
+	if code != http.StatusOK {
+		t.Fatalf("detail = %d: %s", code, body)
+	}
+	var d webWIDetail
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		t.Fatalf("detail JSON: %v (%s)", err, body)
+	}
+	if len(d.Comments) != 2 {
+		t.Fatalf("comments = %#v, want both rows", d.Comments)
+	}
+	if d.Comments[0].Body != "first console note" || d.Comments[0].Author != e.adminID || d.Comments[0].CreatedAt == "" {
+		t.Fatalf("first comment lost a field: %#v", d.Comments[0])
+	}
+	if d.Comments[1].ReplyTo != first.ID {
+		t.Fatalf("second comment reply_to = %q, want %q", d.Comments[1].ReplyTo, first.ID)
+	}
+	if len(d.Messages) != 2 {
+		t.Fatalf("messages = %#v, want the slug and the id anchor", d.Messages)
+	}
+	seen := map[string]bool{}
+	for _, m := range d.Messages {
+		seen[m.Text] = true
+		if m.SenderID != e.adminID || m.CreatedAt == "" || m.AboutWI == "" {
+			t.Fatalf("anchored message lost a field: %#v", m)
+		}
+	}
+	if !seen["anchored by slug"] || !seen["anchored by id"] || seen["anchored elsewhere"] {
+		t.Fatalf("anchored message selection wrong: %#v", d.Messages)
 	}
 }

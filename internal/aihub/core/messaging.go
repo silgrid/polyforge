@@ -387,6 +387,32 @@ func (m *AdminManager) MarkDelivered(callerID string, req api.AckMessage) error 
 	return err
 }
 
+// MessagesAboutWI answers every message anchored to one work item
+// the stored about_wi string is compared against the
+// work item's slug AND its id, because the sender wrote it raw (a slug
+// such as `ieops#1476` or a `wi_` id). Historical rows match too — the
+// anchor is never migrated. Anchoring makes the message visible to
+// anyone who can see the ticket; the console detail is the only reader.
+func (m *AdminManager) MessagesAboutWI(wiID, slug string) ([]api.Message, error) {
+	rows, err := m.db.Query(`SELECT id, seq, conversation_id, sender_id, text,
+		COALESCE(about_wi,''), COALESCE(reply_to,''), created_at
+		FROM messages WHERE about_wi=?1 OR about_wi=?2 ORDER BY seq`, slug, wiID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []api.Message{}
+	for rows.Next() {
+		var msg api.Message
+		if err := rows.Scan(&msg.ID, &msg.Seq, &msg.ConversationID, &msg.SenderID, &msg.Text,
+			&msg.AboutWI, &msg.ReplyTo, &msg.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, msg)
+	}
+	return out, rows.Err()
+}
+
 // PendingDelivery answers the messages for operatorID's machines that sit
 // above the operator's delivery cursor (the live inbox feed). A restart
 // replays nothing at or below delivered_seq.

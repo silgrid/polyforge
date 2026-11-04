@@ -166,8 +166,11 @@ in the same step), a build step that implements against that executable acceptan
 (`code` inherits `e2e-author`'s handoff: test locations, the targeted run command, the
 red bar to turn green), the judgment gate
 (`review` reads the full diff, tests included, and judges design fit, scope and
-quality), the machine gate (`verification` runs the full bar and reports each authored
-scenario, rewinding to `code` on red) and `deliver`. Every delivery bundle runs
+quality), the machine gate (`verification` runs the full bar — for a repository that
+opts in with `smoke_suite=`, its fast gates plus the carries-selected e2e suites union
+its smoke suites, the full e2e command carried to delivery — and reports each authored
+scenario, rewinding to `code` on red) and `deliver` (which re-runs the carried bar
+through `pf bar-run`, the daemon-recorded entry point whose runs outlive a re-dispatch). Every delivery bundle runs
 `review` before `verification`: a quality failure never costs a full machine bar, and
 the machine gate verifies the tree the judgment already passed merged with the latest
 origin default branch.
@@ -243,8 +246,8 @@ flow" above and explained in `docs/concepts.md` §Rewind. This section only expl
   a malformed classification, a repair outside the bound, a recheck that does not
   pass — escalates in place, in the same step, to this same full verification
   (no new rewind slot); a light pass writes no `verified_heads`, and `deliver` covers
-  the tests only by re-running the carried `test_bar` in the merge dispatch,
-  unconditionally. The re-entered round re-runs a fresh `review` over the repaired
+  the tests only by re-running the carried `test_bar` in its deliver run (through
+  `pf bar-run`, after its last merge), unconditionally. The re-entered round re-runs a fresh `review` over the repaired
   diff before this verification re-runs — the mechanical lane never skips the
   judgment.
 - **`review` FAILs -> rewind to `code`.** Review found the change wanting; `code`

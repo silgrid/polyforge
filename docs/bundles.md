@@ -38,14 +38,24 @@ installed version is its own directory, so a bundle added there by hand
 does not survive the next install; ship a bundle by adding it under
 `workflows/` here and releasing.
 
-The shipped bundles: `autopilot`, `bug-fix`, `chore`, `feature-full`
-(the delivery lanes) and `release` (the project-agnostic release flow).
+The shipped bundles: `autopilot`, `bug-fix`, `chore`, `feature-full`,
+`micro` (the delivery lanes) and `release` (the project-agnostic release flow).
+`micro` is the pure-text lane: `fix` → `review` → `deliver`, no grill, plan,
+spec, e2e-author or verification step, the ticket body as its spec. A
+repository opts in by declaring `micro_path=` lines (and optional
+`micro_check=` commands) in its own `.polyforge/verify-scope.conf`
+([config reference](reference/config.md#polyforgeverify-scopeconf--the-verification-bar));
+the driver judges every changed path against the declaration at the diff
+base (`AGENTS.md`/`CLAUDE.md` never in bounds) and ends a run whose diff
+leaves it, or touches an undeclared repository, `failed_gate` without a
+rewind or a merge, the reason naming the `autopilot` re-file.
 Their own `workflow.md` bodies carry each lane's narrative. The shared
 `verification` step definition describes the two verification tiers:
 the full bar is the default, and a work item opts into the narrower
 scoped tier only with the explicit marker line `verification: scoped` in
 its content and only on a scoped-capable lane (`feature-full`, `bug-fix`,
-`chore`; autopilot always verifies full).
+`chore`; autopilot always verifies full; micro has no verification step
+and is not scoped-capable).
 
 ## workflow.md — the frontmatter
 
@@ -87,7 +97,13 @@ schema. The keys:
     (`verified_heads`, the merged head verification proved: deliver
     re-runs the carried bar only when its own merge moves HEAD past it);
     a lane without a review step (autopilot) has no review head, and its
-    verification's `verified_heads` stands in for the review coverage.
+    verification's `verified_heads` stands in for the review coverage. A
+    lane with a `deliver` step and no `verification` step (micro) has no
+    verified head at all: its merge credential is the review pass covering
+    the delivered HEAD plus the deliver dispatch's own in-window, exit-0
+    re-run of every command of the build step's driver-written `fast_lane`
+    plan (the repository's fast phase and declared micro checks) — never a
+    bar-run reuse; every lane with a verification step keeps its rule.
     One deliver
     result can override the target: a scoped `deliver` whose human answer is
     「全量重验」 names `rewind_to: verification` and the driver rewinds
@@ -108,7 +124,7 @@ schema. The keys:
     duty (`_shared/memory.md`: `pf recall` from three angles, read the
     relevant bodies, a `## Prior experience` section). The shipped lanes
     declare it on their decision and authoring steps (grill, spec, plan,
-    repro, root-cause, e2e-author, code, fix), never on review,
+    repro, root-cause, e2e-author, code, fix — micro's `fix` included), never on review,
     verification, deliver or the release steps. The workflow's last step
     carries the one wrap-summary duty (`_shared/memory-wrap.md`) whether
     or not it declares `recall`.
@@ -122,8 +138,9 @@ schema. The keys:
     step's configurable attributes: each name (the step-var grammar) a
     project may override under `steps.<project>.<step-id>.attrs.<name>`
     in its `.polyforge.yaml` ([config reference](reference/config.md#stepsprojectstep-idattrs--step-attributes)).
-    The type is `int` or `string` and the default is a scalar of it; a
-    malformed declaration is the bundle's own load error. An attr's
+    The type is `int` or `string` and the default is a scalar of it (an
+    `int` default, like every `int` override, is a non-negative integer;
+    `0` is legal); a malformed declaration is the bundle's own load error. An attr's
     material is `_shared/attr_<name>.md`: at every dispatch the driver
     composes the project's override, and only when it differs from the
     default renders that file with `{{<name>}}` = the value (the same

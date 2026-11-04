@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,8 +22,11 @@ import (
 //     `pf doctor --prune-scratch` removes them and lists them. Deletion
 //     stays an explicit operator act so doctor remains a probe anyone may
 //     run at any time.
-//   - "workspace memory policy": a .polyforge.yaml without a
-//     memory_policy section (`pf init <ws>` appends the default).
+//   - "workspace memory policy": a mapped workspace path whose cli.toml
+//     declares no [memory_policy."<path>".<entry>] block (the built-in
+//     default applies; `pf init <ws>` writes an editable copy). A yaml
+//     still carrying the retired `memory_policy:`/`summarize:` section is
+//     the "workspace yaml" row's fail (the loader refuses it whole).
 
 const (
 	docChLayout    = "workspace layout"
@@ -88,34 +90,26 @@ func workspaceLayoutCheck(wss []string) doctorCheck {
 	return c
 }
 
-// memoryPolicyCheck warns about a mapped workspace whose .polyforge.yaml
-// declares no memory_policy section. A file that is no readable YAML
-// mapping is the "workspace yaml" check's fail, not this row's.
-func memoryPolicyCheck(wss []string) doctorCheck {
+// memoryPolicyCheck warns about a mapped workspace path whose cli.toml
+// declares no memory_policy block: the step prompts carry
+// the built-in default, and `pf init <ws>` writes an editable copy. It
+// reads cli.toml only — a workspace yaml is no source of the policy.
+func memoryPolicyCheck(cfg Config, wss []string) doctorCheck {
 	c := doctorCheck{Name: docChMemPolicy, Status: "pass"}
 	var missing []string
-	builtin := 0
 	for _, ws := range wss {
-		_, serr := os.Stat(workspace.PathFor(ws))
-		cfg, err := workspace.Load(ws, "", nil)
-		switch {
-		case os.IsNotExist(serr):
-			builtin++
-		case err == nil && (cfg == nil || cfg.MemoryPolicy == nil):
+		if len(cfg.MemoryPolicy[ws]) == 0 {
 			missing = append(missing, ws)
 		}
 	}
 	if len(missing) == 0 {
-		c.Detail = "every mapped workspace's " + workspace.FileName + " declares " + workspace.MemoryPolicyKey
-		if builtin > 0 {
-			c.Detail = fmt.Sprintf("%s; %d workspace(s) without a %s use the built-in default (`pf init <ws>` writes an editable copy)", c.Detail, builtin, workspace.FileName)
-		}
+		c.Detail = fmt.Sprintf("every mapped workspace path declares a [memory_policy.\"<path>\".<entry>] block in cli.toml (%d)", len(wss))
 		return c
 	}
 	c.Status = "warn"
 	var parts []string
 	for _, ws := range capRows(missing) {
-		parts = append(parts, fmt.Sprintf("%s declares no %s — the step prompts carry the built-in default policy; run `pf init %s` to append the default section, then edit it", workspace.PathFor(ws), workspace.MemoryPolicyKey, ws))
+		parts = append(parts, fmt.Sprintf("cli.toml declares no [memory_policy.%q.default] block — the step prompts carry the built-in default policy; run `pf init %s` to write an editable copy, then edit it", ws, ws))
 	}
 	c.Detail = strings.Join(parts, "; ")
 	return c

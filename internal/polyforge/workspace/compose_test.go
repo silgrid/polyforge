@@ -216,59 +216,26 @@ func TestResolveStepsHarnessPerCandidate(t *testing.T) {
 	}
 }
 
-// The summarize pick (polyforge#224, polyforge#242): the root
-// summarize.models key, one list for a claim of ANY project — present
-// answers the parsed list, a declared-empty list answers present-empty,
-// an absent key (or no yaml at all) answers nil (the lane is silently
-// off). Never a precedence level: the pick ignores the step chain and
-// the per-project entries entirely.
-func TestSummarizeModelsPick(t *testing.T) {
-	present := models("p", map[string][]string{"fix": {"y/c"}})
-	present.Summarize = []string{"pi:s1", "claude:s2"}
-	if got := SummarizeModels(present); !reflect.DeepEqual(got, []string{"pi:s1", "claude:s2"}) {
-		t.Fatalf("present key: %v", got)
+// The summarize lane settings (cli.toml's [summarize]
+// table): an absent table is the lane off with the documented defaults,
+// a declared table answers its models with the defaults for an absent
+// optional key, and the answer is a copy.
+func TestSummarizeSettingsLane(t *testing.T) {
+	var absent *SummarizeSettings
+	if m, l, i := absent.Lane(); m != nil || l != "中文" || i != 60 {
+		t.Fatalf("absent table: %v %q %d", m, l, i)
 	}
-	if got := SummarizeModels(nil); got != nil {
-		t.Fatalf("no yaml at all: %v", got)
+	s := &SummarizeSettings{Models: []string{"pi:s1", "claude:s2"}}
+	m, l, i := s.Lane()
+	if !reflect.DeepEqual(m, []string{"pi:s1", "claude:s2"}) || l != "中文" || i != 60 {
+		t.Fatalf("models only: %v %q %d", m, l, i)
 	}
-	// a declared-empty list is present and non-nil (present-empty
-	// governs; an empty candidate list dispatches nothing — the lane off)
-	empty := &Config{Summarize: []string{}}
-	if got := SummarizeModels(empty); got == nil || len(got) != 0 {
-		t.Fatalf("declared-empty key: %#v, want present-empty", got)
+	m[0] = "x"
+	if s.Models[0] != "pi:s1" {
+		t.Fatal("Lane must answer a copy")
 	}
-	// a yaml without the key answers nil even beside step lists
-	absent := models("p", map[string][]string{"fix": {"y/c"}, DefaultKey: {"y/d"}})
-	if got := SummarizeModels(absent); got != nil {
-		t.Fatalf("absent key: %v", got)
-	}
-}
-
-// The summarize language pick (polyforge#243): the declared root
-// summarize.language, or 中文 when the key or the whole yaml is absent.
-func TestSummarizeLanguagePick(t *testing.T) {
-	if got := SummarizeLanguage(&Config{Summarize: []string{"pi:s"}, SummarizeLanguage: "English"}); got != "English" {
-		t.Fatalf("declared language: %q", got)
-	}
-	if got := SummarizeLanguage(&Config{Summarize: []string{"pi:s"}}); got != "中文" {
-		t.Fatalf("absent language: %q, want 中文", got)
-	}
-	if got := SummarizeLanguage(nil); got != "中文" {
-		t.Fatalf("no yaml at all: %q, want 中文", got)
-	}
-}
-
-// The summarize interval pick (polyforge#250): the declared root
-// summarize.interval_sec, or 60 when the key or the whole yaml is absent.
-func TestSummarizeIntervalSecPick(t *testing.T) {
-	if got := SummarizeIntervalSec(&Config{Summarize: []string{"pi:s"}, SummarizeIntervalSec: 10}); got != 10 {
-		t.Fatalf("declared interval: %d", got)
-	}
-	if got := SummarizeIntervalSec(&Config{Summarize: []string{"pi:s"}}); got != 60 {
-		t.Fatalf("absent interval: %d, want 60", got)
-	}
-	if got := SummarizeIntervalSec(nil); got != 60 {
-		t.Fatalf("no yaml at all: %d, want 60", got)
+	if _, l, i := (&SummarizeSettings{Models: []string{"pi:s"}, Language: "English", IntervalSec: 10}).Lane(); l != "English" || i != 10 {
+		t.Fatalf("declared: %q %d", l, i)
 	}
 }
 

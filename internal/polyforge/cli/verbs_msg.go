@@ -7,11 +7,13 @@ package cli
 //	pf msg ack <conversation> [--seq N]
 //	pf msg show <id>
 //	pf msg analyze <id>
+//	pf msg prompt <id>
 //	pf msg contacts
 //
 // send/list/ack/show/contacts are data-plane (direct to aihub with the
-// human's key); analyze is execution-plane (the recipient's daemon runs a
-// read-only, budget-capped one-shot). All support --json: passthrough of
+// human's key); analyze and prompt are execution-plane (the local daemon
+// runs one read-only, budget-capped task and answers its structured
+// analysis, or the execution prompt it wrote). All support --json: passthrough of
 // the server body, except contacts, whose answer pf assembles from one
 // read per mapped project. Every msg verb is refused inside a workflow
 // step (stepctx.go) before any request leaves.
@@ -20,6 +22,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -38,11 +41,12 @@ var cmdMsg = &Command{
 		"       pf msg ack <conversation> [--seq N]\n" +
 		"       pf msg show <id>\n" +
 		"       pf msg analyze <id>\n" +
+		"       pf msg prompt <id>\n" +
 		"       pf msg contacts",
 	Setup: func(fs *flag.FlagSet) {},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if len(args) == 0 {
-			return fmt.Errorf("msg: expected send|list|ack|show|analyze|contacts")
+			return fmt.Errorf("msg: expected send|list|ack|show|analyze|prompt|contacts")
 		}
 		sub, rest := args[0], args[1:]
 		switch sub {
@@ -149,17 +153,21 @@ var cmdMsg = &Command{
 			if len(rest) != 1 {
 				return fmt.Errorf("msg analyze: expected exactly one message id")
 			}
-			raw, err := ctx.daemon().AnalyzeMessage(rest[0])
+			raw, err := ctx.daemon().AnalyzeMessage(rest[0], ctx.Cfg.UserID)
 			if err != nil {
 				return err
 			}
-			finishAs(ctx, raw, func(r *api.AnalyzeResult) {
-				fmt.Fprintf(ctx.Stdout, "analysis of %s", r.MessageID)
-				if r.Model != "" {
-					fmt.Fprintf(ctx.Stdout, " (model %s)", r.Model)
-				}
-				fmt.Fprintf(ctx.Stdout, ":\n%s\n", r.Conclusion)
-			})
+			finishAs(ctx, raw, func(r *api.AnalyzeResult) { renderAnalysis(ctx.Stdout, r) })
+			return nil
+		case "prompt":
+			if len(rest) != 1 {
+				return fmt.Errorf("msg prompt: expected exactly one message id")
+			}
+			raw, err := ctx.daemon().PromptMessage(rest[0], ctx.Cfg.UserID)
+			if err != nil {
+				return err
+			}
+			finishAs(ctx, raw, func(r *api.MessagePromptResult) { renderPrompt(ctx.Stdout, r) })
 			return nil
 		case "contacts":
 			if len(rest) != 0 {
@@ -179,7 +187,7 @@ var cmdMsg = &Command{
 			// The refusal never echoes the typed action: an unknown word must
 			// not read back as if pf offered it (w93 pins that no
 			// name-resolution surface is advertised).
-			return fmt.Errorf("msg: unknown action (expected send|list|ack|show|analyze|contacts)")
+			return fmt.Errorf("msg: unknown action (expected send|list|ack|show|analyze|prompt|contacts)")
 		}
 	},
 }
@@ -265,4 +273,29 @@ func readContacts(ctx *Context) api.ProjectMemberContacts {
 		}
 	}
 	return out
+}
+
+// renderAnalysis prints the structured analysis: type, summary, suggested
+// actions, model, duration, the task id and where to read the task.
+func renderAnalysis(w io.Writer, r *api.AnalyzeResult) {
+	fmt.Fprintf(w, "analysis of %s: %s\n", r.MessageID, r.Type)
+	fmt.Fprintf(w, "summary: %s\n", r.Summary)
+	actions := "none"
+	if len(r.SuggestedActions) > 0 {
+		actions = strings.Join(r.SuggestedActions, ", ")
+	}
+	fmt.Fprintf(w, "suggested actions: %s\n", actions)
+	if r.ReplyDraft != "" {
+		fmt.Fprintf(w, "reply draft: %s\n", r.ReplyDraft)
+	}
+	fmt.Fprintf(w, "model: %s  duration: %s\n", r.Model, r.Duration)
+	fmt.Fprintf(w, "task: %s (pf task show %s)\n", r.TaskID, r.TaskID)
+}
+
+// renderPrompt prints the execution prompt as written, then its task's
+// model, duration and id.
+func renderPrompt(w io.Writer, r *api.MessagePromptResult) {
+	fmt.Fprintf(w, "%s\n\n", r.Prompt)
+	fmt.Fprintf(w, "model: %s  duration: %s\n", r.Model, r.Duration)
+	fmt.Fprintf(w, "task: %s (pf task show %s)\n", r.TaskID, r.TaskID)
 }

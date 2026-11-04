@@ -19,6 +19,30 @@ func TestLaneRuleTextsContract(t *testing.T) {
 			t.Errorf("feature-full grill must state %q", want)
 		}
 	}
+	// micro is a down-lane target only for an eligible,
+	// opted-in pure text ticket, and the never-unattended clause is unchanged
+	for _, want := range []string{
+		"down-lane to `chore`/`autopilot`/`micro`",
+		"`micro` (fix → review → deliver, no verification step) is proposed only for a pure text ticket",
+		"whose every touched repository declares `micro_path=` covering the paths it changes",
+		"any other ticket is not eligible and gets no `micro` proposal",
+		"Work on the never unattended list counts as a high `lane risk surface` and gets no down-lane proposal",
+	} {
+		if !strings.Contains(grill, want) {
+			t.Errorf("feature-full grill must state %q", want)
+		}
+	}
+	file := w68Flat(t, "skills/polyforge/verbs/file.md")
+	for _, want := range []string{
+		"| `micro` | none (no verification step",
+		"may go further down, to `micro`; a ticket touching any repository without that declaration, or any path outside it, is never proposed `micro`",
+		"the check never proposes a lighter lane for it — `micro` included",
+		"makes the ticket ineligible for `micro`",
+	} {
+		if !strings.Contains(file, want) {
+			t.Errorf("the filing skill must state %q", want)
+		}
+	}
 	if !strings.Contains(w68Flat(t, "docs/concepts.md"), narrowed) {
 		t.Error("the concepts page must narrow the never-unattended removal item the same way")
 	}

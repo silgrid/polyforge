@@ -16,29 +16,38 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
-// doctor_gitdirs.go: the "git dir retention" row of `pf doctor`. The
-// runtime never deletes a work item's external git dir
-// (<data-dir>/git/<wi>.git) nor a quarantined scene
+// doctor_gitdirs.go: the "capsule retention" row of `pf doctor`. The
+// runtime never deletes a work item's capsule (capsules/<name>), its
+// external git dir (<data-dir>/git/<wi>.git) nor a quarantined scene
 // (<wi>.git.quarantined.<ts>, capsules/<name>.quarantined.<ts>):
 // quarantine only renames, so the bytes always survive. This row
-// reports them — count and size — and `pf doctor --prune-git-dirs`
-// removes exactly the ones it calls reclaimable or retired. Deletion
+// reports them — count and size — and `pf doctor --prune-capsules`
+// acts on exactly the ones it calls reclaimable or retired. Deletion
 // stays an explicit operator act; the default run never writes.
 //
-// An entry is deletable only when ALL hold: its work item's aihub state
+// The act depends on the entry: a wrapped work item's
+// capsule — live or set aside — is slimmed to artifacts/ + capsule.json
+// (every other top-level entry goes: repos/, runtime-state/, logs/,
+// session/, workflows/, sync/, the .git pointer); every other prunable
+// entry — an external git dir, a failed or canceled work item's set-aside
+// capsule — is deleted. A live capsule of a work item that is not
+// wrapped is never touched, and a capsule already reduced to artifacts/ +
+// capsule.json is retained as it is.
+//
+// An entry is prunable only when ALL hold: its work item's aihub state
 // is terminal (wrapped, failed, canceled); its newest change is older
 // than gitDirRetention; the daemon answers GET /status and names no job
-// for that work item; and, for a set-aside capsule, no task-repo clone
-// under its repos/ carries an uncommitted change or a commit that neither
-// its own nor the mapped workspace's .repo/<name> clone's remote-tracking
-// refs carry (a scene's own refs stop updating at quarantine time; the
-// .repo clone keeps fetched). Such a scene is retained, together with the
-// work item's git dirs (the scene's pair was moved aside together by
-// quarantine), because a prune must never delete work no remote carries. A
-// clone that cannot be read keeps the scene too: nothing is deleted on an
-// unproven clean. aihub unreachable, an unknown work item or an unreadable
-// entry is "unknown": counted, never deleted. The daemon down prunes
-// nothing.
+// for that work item; and, for a capsule, no task-repo clone under its
+// repos/ carries an uncommitted change or a commit that neither its own
+// nor the mapped workspace's .repo/<name> clone's remote-tracking refs
+// carry (a set-aside scene's own refs stop updating at quarantine time;
+// the .repo clone keeps fetched). Such a capsule is retained whole,
+// together with the work item's git dirs (a scene's pair was moved aside
+// together by quarantine), because a prune must never delete work no
+// remote carries. A clone that cannot be read keeps the capsule too:
+// nothing is deleted on an unproven clean. aihub unreachable, an unknown
+// work item or an unreadable entry is "unknown": counted, never deleted.
+// The daemon down prunes nothing.
 //
 // The run stays cheap however many entries there are, because it reads
 // only what a verdict needs. Local facts come first: an entry whose own
@@ -48,12 +57,13 @@ import (
 // an owner no list names (and per id outright when they number no more
 // than the projects). Only an entry of a terminal work item — the one
 // kind a prune may remove — is walked, for its newest change and its
-// size, so the sizes reported are what a prune frees.
+// size (a capsule to be slimmed counts only what the slim removes), so
+// the sizes reported are what a prune frees.
 
-const docChGitDirs = "git dir retention"
+const docChCapsuleRetention = "capsule retention"
 
-// gitDirRetention is the age past which a terminal work item's git dir or
-// quarantined scene is reclaimable (the scratch/ default).
+// gitDirRetention is the age past which a terminal work item's git dir,
+// quarantined scene or wrapped capsule is prunable (the scratch/ default).
 const gitDirRetention = 14 * 24 * time.Hour
 
 // gitDirListLimit is the page a project list asks for: aihub's list cap
@@ -65,6 +75,9 @@ type retainedDir struct {
 	Path        string
 	WI          string // "" when the owning work item could not be read
 	Quarantined bool
+	Capsule     bool      // a capsule dir (live or set aside), not an external git dir
+	Slimmed     bool      // a capsule holding nothing but artifacts/ and capsule.json
+	Slim        bool      // the prune slims it (a wrapped work item's capsule) instead of deleting it
 	Size        int64     // measureDir's sum; 0 for an entry never walked
 	Newest      time.Time // the entry's own mtime; measureDir raises it to the newest under it
 	Err         string    // non-empty: the entry could not be read
@@ -72,14 +85,15 @@ type retainedDir struct {
 
 // retention classes.
 const (
-	retReclaimable = "reclaimable" // a terminal work item's live git dir past the retention
+	retReclaimable = "reclaimable" // a terminal work item's live git dir, or a wrapped one's live capsule, past the retention
 	retRetired     = "retired"     // a terminal work item's quarantined scene past the retention
 	retRetained    = "retained"    // everything a prune must keep
 	retUnknown     = "unknown"     // the owner or the entry could not be read
 )
 
 // scanRetainedDirs lists the external git dirs and quarantined git dirs
-// under <dataDir>/git and the quarantined capsules of every workspace.
+// under <dataDir>/git and the capsules, live and quarantined, of every
+// workspace.
 func scanRetainedDirs(dataDir string, wss []string) ([]retainedDir, []string) {
 	var out []retainedDir
 	var errs []string
@@ -113,10 +127,12 @@ func scanRetainedDirs(dataDir string, wss []string) ([]retainedDir, []string) {
 			continue
 		}
 		for _, e := range entries {
-			if !e.IsDir() || !strings.Contains(e.Name(), ".quarantined.") {
+			if !e.IsDir() {
 				continue
 			}
-			d := retainedDir{Path: filepath.Join(capRoot, e.Name()), Quarantined: true}
+			d := retainedDir{Path: filepath.Join(capRoot, e.Name()), Capsule: true,
+				Quarantined: strings.Contains(e.Name(), ".quarantined.")}
+			d.Slimmed = slimmedCapsule(d.Path)
 			if raw, err := os.ReadFile(filepath.Join(d.Path, capsule.CapsuleJSON)); err == nil {
 				var id capsule.Identity
 				if json.Unmarshal(raw, &id) == nil {
@@ -127,6 +143,43 @@ func scanRetainedDirs(dataDir string, wss []string) ([]retainedDir, []string) {
 		}
 	}
 	return out, errs
+}
+
+// slimKeeps are the only top-level entries a slimmed capsule keeps.
+var slimKeeps = map[string]bool{capsule.DirArtifacts: true, capsule.CapsuleJSON: true}
+
+// slimmedCapsule reports a capsule that already holds nothing but
+// artifacts/ and capsule.json (an unreadable one is not: statDir names it).
+func slimmedCapsule(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !slimKeeps[e.Name()] {
+			return false
+		}
+	}
+	return true
+}
+
+// slimCapsule removes every top-level entry of a capsule but artifacts/
+// and capsule.json. A slim cut short leaves a capsule the next prune
+// slims again.
+func slimCapsule(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if slimKeeps[e.Name()] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // statDir fills an entry's own mtime, the floor of its newest change.
@@ -145,9 +198,9 @@ func statDir(d retainedDir) retainedDir {
 var measureEntry = measureDir
 
 // measureDir walks an entry for its size and newest change (symlinks are
-// not followed).
+// not followed). An entry to be slimmed sizes only what the slim removes.
 func measureDir(d retainedDir) retainedDir {
-	err := filepath.WalkDir(d.Path, func(_ string, e fs.DirEntry, err error) error {
+	err := filepath.WalkDir(d.Path, func(p string, e fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -155,7 +208,8 @@ func measureDir(d retainedDir) retainedDir {
 		if err != nil {
 			return err
 		}
-		if info.Mode().IsRegular() {
+		kept := d.Slim && slimKeeps[strings.SplitN(strings.TrimPrefix(p, d.Path+string(filepath.Separator)), string(filepath.Separator), 2)[0]]
+		if info.Mode().IsRegular() && !kept {
 			d.Size += info.Size()
 		}
 		if info.ModTime().After(d.Newest) {
@@ -176,14 +230,14 @@ func terminalState(state string) bool {
 
 // keepLocally judges an entry from local facts alone, before any aihub
 // read or walk: an unreadable entry or one with no known owner is
-// unknown; one a daemon job names, or whose own mtime is inside the
-// retention, is retained whatever its owner's state. ok=false: the
-// owner's state decides (classifyRetained).
+// unknown; an already slimmed capsule, one a daemon job names, or one
+// whose own mtime is inside the retention, is retained whatever its
+// owner's state. ok=false: the owner's state decides (classifyRetained).
 func keepLocally(d retainedDir, live map[string]bool, now time.Time) (class string, ok bool) {
 	switch {
 	case d.Err != "" || d.WI == "":
 		return retUnknown, true
-	case live[d.WI], now.Sub(d.Newest) <= gitDirRetention:
+	case d.Slimmed, live[d.WI], now.Sub(d.Newest) <= gitDirRetention:
 		return retRetained, true
 	}
 	return "", false
@@ -191,18 +245,29 @@ func keepLocally(d retainedDir, live map[string]bool, now time.Time) (class stri
 
 // classifyRetained judges one entry. state is the owning work item's
 // aihub status ("" = not read); live names the daemon's jobs. d.Newest
-// must be the walked newest change when state is terminal.
+// must be the walked newest change when the entry is prunable
+// (prunableOwner).
 func classifyRetained(d retainedDir, state string, live map[string]bool, now time.Time) string {
 	switch {
 	case d.Err != "" || d.WI == "" || state == "":
 		return retUnknown
-	case !terminalState(state), live[d.WI], now.Sub(d.Newest) <= gitDirRetention:
+	case !prunableOwner(d, state), live[d.WI], now.Sub(d.Newest) <= gitDirRetention:
 		return retRetained
 	case d.Quarantined:
 		return retRetired
 	default:
 		return retReclaimable
 	}
+}
+
+// prunableOwner reports an owner state under which the entry may be
+// pruned: any terminal state, except that a live capsule is pruned (slimmed)
+// only for a wrapped work item.
+func prunableOwner(d retainedDir, state string) bool {
+	if d.Capsule && !d.Quarantined {
+		return state == api.StatusWrapped
+	}
+	return terminalState(state)
 }
 
 // workItemStates answers each owner's aihub status ("" = not read). More
@@ -253,8 +318,8 @@ func workItemStates(client *aihubclient.Client, projects, owners []string) map[s
 	return states
 }
 
-// sceneHoldsUnmergedWork answers why a set-aside capsule must not be
-// pruned: one of its task-repo clones (repos/<name>) carries an
+// sceneHoldsUnmergedWork answers why a capsule, live or set aside, must
+// not be pruned: one of its task-repo clones (repos/<name>) carries an
 // uncommitted change or a commit no fresh remote-tracking ref carries.
 // Only a capsule has repos/, so an external git dir answers "no". keep
 // also covers a clone or a repos/ that cannot be read: a prune deletes
@@ -318,9 +383,10 @@ func cloneHoldsUnmergedWork(clone, upstream string) (reason string, keep bool) {
 	return "", false
 }
 
-// gitDirsCheck is the row: it reports every class's count, the size of
-// the reclaimable and retired ones and, with prune, removes those.
-func gitDirsCheck(r *doctorRun, dataDir string, now time.Time) (string, string) {
+// capsuleRetentionCheck is the row: it reports every class's count, the
+// size of the reclaimable and retired ones and, with prune, slims or
+// removes those.
+func capsuleRetentionCheck(r *doctorRun, dataDir string, now time.Time) (string, string) {
 	dirs, errs := scanRetainedDirs(dataDir, r.present)
 	live := map[string]bool{}
 	for _, j := range r.status.Jobs {
@@ -349,15 +415,16 @@ func gitDirsCheck(r *doctorRun, dataDir string, now time.Time) (string, string) 
 		class := classes[i]
 		if class == "" {
 			state := states[d.WI]
-			if terminalState(state) {
-				d = measureEntry(d) // only a terminal owner's entry may be pruned: walk it
+			if prunableOwner(d, state) {
+				d.Slim = d.Capsule && state == api.StatusWrapped
+				d = measureEntry(d) // only an entry a prune may act on is walked
 				dirs[i] = d
 			}
 			classes[i] = classifyRetained(d, state, live, now)
 		}
 	}
-	// A prune must not delete work no remote carries: a set-aside capsule
-	// whose task-repo clone is dirty or holds commits no fresh
+	// A prune must not delete work no remote carries: a capsule whose
+	// task-repo clone is dirty or holds commits no fresh
 	// remote-tracking ref carries is retained, and so are the work item's
 	// git dirs (quarantine moved the scene's pair aside together).
 	var kept []string
@@ -406,7 +473,7 @@ func gitDirsCheck(r *doctorRun, dataDir string, now time.Time) (string, string) 
 			parts = append(parts, fmt.Sprintf("%s %d", class, t.n))
 		}
 	}
-	detail := fmt.Sprintf("external git dirs under %s and set-aside scenes: %s — reclaimable/retired = a wrapped, failed or canceled work item's git dir / set-aside dir untouched for more than %d days and not a daemon job (sized: what a prune frees)",
+	detail := fmt.Sprintf("capsules, set-aside scenes and external git dirs under %s: %s — reclaimable/retired = a wrapped, failed or canceled work item's git dir / set-aside dir, or a wrapped work item's capsule, untouched for more than %d days and not a daemon job; a wrapped work item's capsule is slimmed to artifacts/ + capsule.json, the others are deleted (sized: what a prune frees)",
 		filepath.Join(dataDir, "git"), strings.Join(parts, ", "), int(gitDirRetention/(24*time.Hour)))
 	if !r.reachOK {
 		detail += "; aihub unreachable: every entry not retained by its age or a daemon job is unknown"
@@ -416,23 +483,36 @@ func gitDirsCheck(r *doctorRun, dataDir string, now time.Time) (string, string) 
 	}
 	status := "pass"
 	switch {
-	case len(doomed) > 0 && !r.pruneGitDirs:
+	case len(doomed) > 0 && !r.pruneCapsules:
 		status = "warn"
-		detail += "; `pf doctor --prune-git-dirs` removes the reclaimable and retired ones (nothing was deleted)"
+		detail += "; `pf doctor --prune-capsules` slims or removes the reclaimable and retired ones (nothing was deleted)"
 	case len(doomed) > 0 && !r.sockOK:
 		status = "warn"
 		detail += "; nothing pruned: the daemon does not answer GET /status, so its live jobs are unknown — start it with `pf daemon ensure` and re-run"
 	case len(doomed) > 0:
-		var removed []string
+		var removed, slimmed []string
 		for _, d := range doomed {
+			if d.Slim {
+				if err := slimCapsule(d.Path); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: %v", d.Path, err))
+					continue
+				}
+				slimmed = append(slimmed, d.Path)
+				continue
+			}
 			if err := os.RemoveAll(d.Path); err != nil {
 				errs = append(errs, fmt.Sprintf("%s: %v", d.Path, err))
 				continue
 			}
 			removed = append(removed, d.Path)
 		}
-		detail += fmt.Sprintf("; pruned %d: %s", len(removed), strings.Join(removed, "; "))
-	case r.pruneGitDirs:
+		if len(removed) > 0 || len(slimmed) == 0 {
+			detail += fmt.Sprintf("; pruned %d: %s", len(removed), strings.Join(removed, "; "))
+		}
+		if len(slimmed) > 0 {
+			detail += fmt.Sprintf("; slimmed %d to artifacts/ + capsule.json: %s", len(slimmed), strings.Join(slimmed, "; "))
+		}
+	case r.pruneCapsules:
 		detail += "; nothing to prune"
 	}
 	var unread []string

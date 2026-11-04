@@ -182,6 +182,14 @@ type Spec struct {
 	// human member of Project; empty when it did not resolve (read as
 	// ReporterMachine). It is never refreshed after spawn.
 	Reporter string `json:"reporter,omitempty"`
+	// ReadOnlyTools narrows ONE spawn to the read/search-only tool
+	// profile (ReadOnlyClaudeTools / ReadOnlyPiTools) instead of the
+	// standard surface. The standard surface is the default; only the
+	// daemon's message analyzer sets it, in process — it is not a wire
+	// field of POST /task/spawn, so no caller can ask for it. It is
+	// least-privilege narrowing, never a sandbox: the write-verb guard
+	// (PF_TASK_ID) stays the one capability gate.
+	ReadOnlyTools bool `json:"read_only_tools,omitempty"`
 }
 
 // ReporterMachine is the task list's reporter for every task whose caller

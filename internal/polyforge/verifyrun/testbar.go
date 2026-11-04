@@ -10,6 +10,13 @@ package verifyrun
 // form and is named in the notes (a deliver re-run of it exits
 // non-zero, so a moved default branch goes to a human). Fetch, merge,
 // engine, re-run and base-run commands are auxiliary: never in the bar.
+//
+// One exception to "as run": an opted-in repository (smoke_suite=) whose
+// full-tier plan ran an e2e selection (carries|smoke) carries the engine's
+// full tail (e2e_selection.full_commands) in place of its full-phase
+// commands — delivery re-runs the full bar, never the subset — and a note
+// says so. A scoped plan, a non-opted repo and a selection that already
+// fell back to the full tail keep the commands as run.
 
 import (
 	"fmt"
@@ -21,18 +28,56 @@ func deriveTestBar(repos []*repoRun) ([]TestBarEntry, []string) {
 	bar := []TestBarEntry{}
 	var notes []string
 	for _, rr := range repos {
-		for _, cr := range append(append([]*cmdRun(nil), rr.runs...), rr.authored...) {
+		sel := carriedSelection(rr)
+		seen := map[string]bool{}
+		add := func(cmd string) {
+			seen[cmd] = true
+			bar = append(bar, TestBarEntry{Repo: rr.name, Command: cmd})
+		}
+		for _, cr := range rr.runs {
+			if sel != nil && cr.phase == TierFull {
+				continue // the selection ran; the full tail is carried below
+			}
 			if cr.skipped != "" || cr.notStarted != "" {
 				continue
 			}
 			cmd, note := skipForm(cr)
-			bar = append(bar, TestBarEntry{Repo: rr.name, Command: cmd})
+			add(cmd)
+			if note != "" {
+				notes = append(notes, note)
+			}
+		}
+		if sel != nil {
+			for _, c := range sel.FullCommands {
+				if !seen[c] { // a full command that already ran is not repeated
+					add(c)
+				}
+			}
+			notes = append(notes, fmt.Sprintf("repos/%s ran the full-tier e2e selection (mode %s: %s); its full e2e command(s) %s are carried for delivery to re-run, not run here",
+				rr.name, sel.Mode, strings.Join(sel.Suites, " "), strings.Join(sel.FullCommands, "; ")))
+		}
+		for _, cr := range rr.authored {
+			if cr.skipped != "" || cr.notStarted != "" {
+				continue
+			}
+			cmd, note := skipForm(cr)
+			add(cmd)
 			if note != "" {
 				notes = append(notes, note)
 			}
 		}
 	}
 	return bar, notes
+}
+
+// carriedSelection answers rr's engine selection when its full-tier plan
+// ran a subset of the full tail (nil otherwise).
+func carriedSelection(rr *repoRun) *EngineSelection {
+	p := rr.plan
+	if p == nil || !p.planned() || p.Mode != TierFull || p.report == nil || !p.report.E2ESelection.subset() {
+		return nil
+	}
+	return p.report.E2ESelection
 }
 
 // skipForm answers cr's bar form: the command with its pre-existing
