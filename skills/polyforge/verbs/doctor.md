@@ -8,12 +8,17 @@ the daemon runs under supervision, whether the five setup tools
 harness will display polyforge progress, whether it references the release
 the way `tools/install.sh` sets it up, and whether v1 polyforge artifacts are
 still installed — and whether each mapped workspace keeps the runtime-artifact
-layout (polyforge#177). It is a read face: nothing is mutated, nothing is
-auto-fixed (there is no `--fix`; remediation is always manual, the check
-detail names it) — the two exceptions are `--prune-scratch`, which removes
-stale `scratch/` entries and lists them, and `--prune-git-dirs`, which removes
-the git dirs the `git dir retention` row calls reclaimable or retired and
-lists them. The one remediation the agent runs itself is the
+layout (polyforge#177), and whether each installed harness's context file
+carries the native-SVG diagram guidance block. It is a read face: nothing is
+mutated, nothing is auto-fixed (remediation is manual, the check detail
+names it) — the only writes are four explicit flags: `--prune-scratch`,
+which removes stale `scratch/` entries and lists them, `--prune-capsules`,
+which slims or removes the entries the `capsule retention` row calls
+reclaimable or retired and lists them, and `--fix-harness-prompts`, which appends the
+SVG diagram-guidance block to the existing context files the `harness diagram
+guidance` row reports `missing` or `legacy` (see below), and `--fix-install-layout`,
+which links the Claude Code polyforge skill the `claude install layout` row
+reports missing or linked elsewhere (see below). The one remediation the agent runs itself is the
 daemon-down case: `pf daemon ensure`, then `pf doctor` again.
 
 ## Triggers
@@ -27,12 +32,16 @@ daemon-down case: `pf daemon ensure`, then `pf doctor` again.
 ## Command
 
 ```
-pf doctor [--harness] [--prune-scratch] [--prune-git-dirs] [--json]
+pf doctor [--harness] [--prune-scratch] [--prune-capsules] [--fix-harness-prompts] [--fix-install-layout] [--json]
 ```
 
 `--harness` runs only the harness family (progress display, install
 layout, v1 leftovers — no config, no network); `tools/install.sh` prints
-its rows.
+its rows. `--fix-harness-prompts` needs the full report (its row is
+config-dependent): combined with `--harness` it is refused before any
+check runs (exit 1). `--fix-install-layout` is refused with `--harness` the
+same way (exit 1): the `--harness` projection `tools/install.sh` prints is
+read-only.
 
 Exit codes follow the repo convention: 0 every check passes, 1 any check
 fails, 2 usage errors. `--json` emits one machine document:
@@ -50,10 +59,12 @@ fails, 2 usage errors. `--json` emits one machine document:
 | `workspace dirs` | every mapped workspace pre-exists as a directory | the missing path(s), named |
 | `workspace yaml` | every mapped `.polyforge.yaml` loads and every candidate (yaml and installed bundles) is `<harness>:<model>` (see below) | the refusal a claim would meet (DAEMON-414), file and key named, plus the pointer to docs/extending.md (`pf help extensions`) |
 | `harness claude` | when some resolved candidate is `claude:…`: the daemon finds the claude binary (see below) | the binary the daemon could not resolve |
+| `harness diagram guidance` | every installed harness's context file carries the native-SVG diagram guidance block (see below); `warn` at most — never `fail`, never moves the exit code; `skip` when no harness is installed | — (`warn` lists each file as `pass` / `legacy` / `missing` / `no file` / `unreadable` and carries the SVG block to add; `legacy` = mermaid-only guidance, which no longer passes) |
 | `aihub projects` | every mapped project is known to aihub and readable with the api key (its ready-queue read — the project-member face the daemon uses; no admin role needed) | the project AND its workspace, named (an ambiguous inverse or duplicate surfaces through the config check, both workspaces named) |
 | `workspace repo clones` | no uncovered uncommitted change or unpushed local commit in the `.repo/` git clones of every existing mapped workspace and their linked worktrees (see below); `warn` at most — never `fail`, never moves the exit code; `skip` naming the unit and its reason when the covering WI state could not be read | the clone AND its owning workspace, named, with the remediation (see below) |
-| `scoped-gates readiness` | for every mapped project's aihub-registered repos (read from the member-readable project record, `GET /api/v1/projects/{id}`), whether the release tree carries the verification engine `tools/verify-scope` and whether the clone's manifests and `.polyforge/verify-scope.conf` make it scoped-ready (reads only — the engine and the conf are never executed); `pass` when the engine default or the repo conf is effective — a repo with no analyzer (another stack, or a `stack=none` pin) passes as "repo conf effective" when its conf declares at least one command, verified on the full tier only; for an npm, python or rust repo the row also reads the carries layer (suite discovery with the same exclusions as the engine — the `e2e_runner=` target, imported helpers and `exclude=` matches — plus `suite_glob=` and `e2e_map=`): it names each repo's undeclared suites (no `carries:` header in the opening comment block) and an empty or malformed carries key, both `warn` because every scoped ticket of that repo falls back to full, and names a repo whose suites all declare as carries clean; `warn` for another stack whose conf declares no command (the verification step derives the bar ad hoc on every run, there is no scoped tier, and a future runner dispatch fails closed) and for an unpinned multi-manifest repo (two or more of go.mod, package.json, pyproject.toml/requirements.txt, Cargo.toml without a `stack=` pin); a repo with no local clone is `unknown`, counted in the detail and never faked green; `warn` at most — never `fail`, never moves the exit code; `skip` when the registered-repo set could not be read; out of `--harness` | the clone, named, plus the fall-back-to-full fact and the pointer to docs/contributing.md『Verification tiers』 — a repo that is not scoped-ready runs every `verification: scoped` ticket on the full tier (the filing skill carries the same precondition) |
-| `git dir retention` | reports, never fails: the external git dirs under `<data-dir>/git/` (`<wi>.git`, `<wi>.git.quarantined.<ts>`) and every mapped workspace's set-aside capsules (`capsules/<name>.quarantined.<ts>`), counted as reclaimable (a live git dir), retired (a set-aside dir), retained and unknown, with the size of the reclaimable and retired ones — what a prune frees. The row's own words call these renamed-aside dirs "set-aside scenes" (a Linux install's report carries no darwin Gatekeeper vocabulary; the on-disk names are unchanged). An entry is reclaimable or retired only when its work item's aihub state is `wrapped`, `failed` or `canceled`, its newest change is older than the 14-day retention, the daemon's `GET /status` names no job for it, and — for a set-aside capsule — none of its `repos/*` task clones holds an uncommitted change or a commit neither the clone's own nor the mapped workspace's `.repo/<name>` clone's remote-tracking refs carry (a scene's own refs stop updating at quarantine time; the `.repo` clone keeps fetched). Such a scene, and the work item's git dirs, are `retained` and the detail names each kept path and why (an unreadable clone, or an unreadable `.repo` view, keeps it too — never a delete on an unproven clean); aihub unreachable, an unknown work item or an unreadable entry is `unknown` — counted, never deleted. The run reads only what a verdict needs, so its cost does not grow with the entries: an entry whose own mtime is inside the retention, or that a daemon job names, is `retained` with no aihub read; the remaining work items are read with one list per mapped project, per id only for one no list names (and per id outright when they number no more than the mapped projects); and only an entry of a `wrapped`, `failed` or `canceled` work item is walked, for its newest change and its size. The default run deletes nothing; `pf doctor --prune-git-dirs` removes exactly the reclaimable and retired entries and lists each path, and prunes nothing while the daemon is down. `warn` at most — never `fail`, never moves the exit code; out of `--harness` | `warn` with the counts, the reclaimable and retired sizes and the `--prune-git-dirs` pointer; after a prune the detail lists every removed path and every scene kept for unmerged work |
+| `scoped-gates readiness` | for every mapped project's aihub-registered repos (read from the member-readable project record, `GET /api/v1/projects/{id}`), whether the release tree carries the verification engine `tools/verify-scope` and whether the clone's manifests and `.polyforge/verify-scope.conf` make it scoped-ready (reads only — the engine and the conf are never executed); `pass` when the engine default or the repo conf is effective — a repo with no analyzer (another stack, or a `stack=none` pin) passes as "repo conf effective" when its conf declares at least one command, verified on the full tier only; for an npm, python or rust repo the row also reads the carries layer (suite discovery with the same exclusions as the engine — the `e2e_runner=` target, imported helpers and `exclude=` matches — plus `suite_glob=` and `e2e_map=`): it names each repo's undeclared suites (no `carries:` header in the opening comment block), an `e2e_map=` line naming no discovered suite and an empty or malformed carries key, all `warn` because every scoped ticket of that repo falls back to full, and names a repo whose suites all declare as carries clean; the same row reads and validates the conf's `smoke_suite=` declarations (the full-tier e2e selection opt-in) with the same parser — an empty or malformed `smoke_suite=` line is an empty or malformed carries key (`warn`, every report falls back to full), a `smoke_suite=` naming no discovered suite is `warn` (the full-tier e2e selection falls back to the full e2e command), and a carries-clean repo that opted in lists its smoke suites; `warn` for another stack whose conf declares no command (the verification step derives the bar ad hoc on every run, there is no scoped tier, and a future runner dispatch fails closed) and for an unpinned multi-manifest repo (two or more of go.mod, package.json, pyproject.toml/requirements.txt, Cargo.toml without a `stack=` pin); a repo with no local clone is `unknown`, counted in the detail and never faked green; `warn` at most — never `fail`, never moves the exit code; `skip` when the registered-repo set could not be read; out of `--harness` | the clone, named, plus the fall-back-to-full fact and the pointer to docs/contributing.md『Verification tiers』 — a repo that is not scoped-ready runs every `verification: scoped` ticket on the full tier (the filing skill carries the same precondition) |
+| `capsule retention` | reports, never fails: the external git dirs under `<data-dir>/git/` (`<wi>.git`, `<wi>.git.quarantined.<ts>`) and every mapped workspace's capsules, live (`capsules/<name>`) and set aside (`capsules/<name>.quarantined.<ts>`), counted as reclaimable (a live git dir or live capsule), retired (a set-aside dir), retained and unknown, with the size of the reclaimable and retired ones — what a prune frees. The row's own words call these renamed-aside dirs "set-aside scenes" (a Linux install's report carries no darwin Gatekeeper vocabulary; the on-disk names are unchanged). An entry is reclaimable or retired only when its work item's aihub state is `wrapped`, `failed` or `canceled` (a live capsule: `wrapped` only — a live capsule of any other work item is never touched), its newest change is older than the 14-day retention, the daemon's `GET /status` names no job for it, and — for a capsule, live or set aside — none of its `repos/*` task clones holds an uncommitted change or a commit neither the clone's own nor the mapped workspace's `.repo/<name>` clone's remote-tracking refs carry (a scene's own refs stop updating at quarantine time; the `.repo` clone keeps fetched). Such a capsule, whole, and the work item's git dirs, are `retained` and the detail names each kept path and why (an unreadable clone, or an unreadable `.repo` view, keeps it too — never a delete on an unproven clean); aihub unreachable, an unknown work item or an unreadable entry is `unknown` — counted, never deleted. The run reads only what a verdict needs, so its cost does not grow with the entries: a capsule already reduced to `artifacts/` + `capsule.json`, an entry whose own mtime is inside the retention, or one a daemon job names, is `retained` with no aihub read; the remaining work items are read with one list per mapped project, per id only for one no list names (and per id outright when they number no more than the mapped projects); and only an entry a prune may act on is walked, for its newest change and its size (a capsule to be slimmed counts only what the slim removes). The prune's act: a `wrapped` work item's capsule, live or set aside, is slimmed to `artifacts/` + `capsule.json` (`repos/`, `runtime-state/`, `logs/`, `session/`, `workflows/`, `sync/`, the `.git` pointer and every other top-level entry go; `pf watch` then answers from the hub record and the artifacts stay readable); every other reclaimable or retired entry — an external git dir, a `failed` or `canceled` work item's set-aside capsule — is deleted. The default run deletes nothing; `pf doctor --prune-capsules` slims or removes exactly the reclaimable and retired entries and lists each path, and prunes nothing while the daemon is down. `warn` at most — never `fail`, never moves the exit code; out of `--harness` | `warn` with the counts, the reclaimable and retired sizes and the `--prune-capsules` pointer; after a prune the detail lists every removed and every slimmed path and every capsule kept for unmerged work |
+| `disk watermark` | for every existing mapped workspace, the filesystem holding it — used, total and the used percentage (`df`'s formula: used over used + available) — and the bytes under its `capsules/` (one walk that follows no symlink); a filesystem shared by several workspaces is reported once. Read-only. `warn` at most — never `fail`, never moves the exit code; `skip` when no mapped workspace directory exists | `warn` when a filesystem is used above 70% (free space before steps fail on a full disk: the `capsule retention` and `workspace scratch` rows name what `--prune-capsules` and `--prune-scratch` reclaim), or naming a workspace whose filesystem or `capsules/` entries could not be read — never a faked green |
 | `model health` | the daemon's additive `GET /status` `model_health` summary over the events-retention window: each current warning (model+effort, step, the rule that fired and its numbers); `warn` at most — never `fail`, never moves `ok` or the exit code, and never blocks or reorders a dispatch; `skip` when the daemon is down (`pf daemon ensure`) or answers without the field (an older daemon — never a faked pass); out of `--harness` | the warning line names the model(s), step, rule and numbers with the advisory-only note and the pointer to `pf ops models`; nothing is auto-fixed |
 | `prerequisites` | the five setup tools — `gh`, `curl`, `python3`, `tmux`, `git` — are each found on `PATH` (LookPath); `warn` at most — never `fail`, never moves the exit code — the doctor never installs anything; `skip` when the config does not load, like every config-dependent row; out of `--harness` | each missing tool named with its obtain hint (macOS: `brew install gh`, `brew install tmux`, `xcode-select --install`; Linux: `apt install …`) — install the named tools by hand; a missing `tmux` means the daemon runs unsupervised (see the daemon supervision row) |
 | `server reach` | aihub answers at all (any HTTP answer counts) | the dial failure |
@@ -93,9 +104,26 @@ no user file is ever written — the user pastes the snippet.
 
 | Check | `pass` | `warn` (detail carries the fix) | `skip` |
 |---|---|---|---|
-| `claude install layout` | `~/.claude/skills/polyforge` is a symlink to `<data-dir>/release/current/skills/polyforge` | a copied directory (the pre-#174 layout), a link elsewhere, no skill, or a link with no release behind it → re-run `tools/install.sh` | no `~/.claude` |
+| `claude install layout` | `~/.claude/skills/polyforge` is a symlink to `<data-dir>/release/current/skills/polyforge` | a copied directory (the pre-#174 layout), a link elsewhere, no skill, or a link with no release behind it → re-run `tools/install.sh`; no skill or a link elsewhere, with a release skill behind the target, is also fixed by `pf doctor --fix-install-layout` (a copied directory and a missing release are not) | no `~/.claude` |
 | `pi install layout` | pi's settings `packages` hold the local release `<data-dir>/release/current` | a `git:…silgrid/polyforge.git@<ver>` entry (the old clone), another polyforge checkout, no entry, or no release behind it → re-run `tools/install.sh` | no pi agent dir |
 | `v1 harness leftovers` | no v1 artifact | any of: a pi `packages` entry whose source pins to a known v1 source (sha256 of its lower-cased owner/repo — the literal is not in the tree) or whose source names polyforge (other than the release `<data-dir>/release/current` entry `tools/install.sh` manages and the `silgrid/polyforge.git` v2 clone the `pi install layout` row already reports); a pi settings `extensions` entry that pins to a known v1 source or names the v1 bridge file `…/polyforge/index.(js|ts)` (the v2 `…/skills/polyforge/extensions/pf-chat.ts` entry is not a v1 leftover — the `pi progress display` row passes it); the v1 auto-loaded extension at `~/.pi/agent/extensions/polyforge`; a v1 Claude skill (`using-polyforge`, `pf-*`); a v1 Claude plugin named `polyforge` (`polyforge@…`, from any marketplace) — the detail lists each and one copy-paste command line that first backs everything up into `~/polyforge-v1-backup-<timestamp>/`, then removes them (`pi remove`, `mv`, `claude plugin uninstall`) | — |
+
+`pf doctor --fix-install-layout` repairs the `claude install layout` row's
+one entry, `~/.claude/skills/polyforge`, and nothing else under `~/.claude`
+(settings, projects and other skills are never touched):
+
+- no skill → it creates the link to `<data-dir>/release/current/skills/polyforge`
+  (creating `~/.claude/skills` if needed), and the row reports `pass … (created
+  by --fix-install-layout)`;
+- a link elsewhere, dangling or not → it replaces only that link (a temp link
+  renamed over it, so an interrupted run leaves the old or the new link), and
+  the row reports `pass … (repaired …)`; the old target is not touched;
+- the correct link → `pass`, a no-op: the link is not rewritten, and a second
+  run changes nothing;
+- no release skill behind the target, a copied directory (the pre-#174
+  layout), or no `~/.claude` → it creates and removes nothing and the row keeps
+  its `warn` (re-run `tools/install.sh`) or `skip`. It never installs `pf` or a
+  release; a failed link is a `warn` naming the error.
 
 The `v1 harness leftovers` check is migration hygiene and is removed at
 v3.0.
@@ -113,7 +141,7 @@ fail):
 | Check | `pass` | `warn` | `skip` |
 |---|---|---|---|
 | `workspace layout` | the root holds only `.repo/`, `capsules/`, `scratch/`, `.polyforge/`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `go.work` / `go.work.sum` (a Go workspace tying the `.repo/` clones together) and dot-entries (`.polyforge.yaml`, `.gitignore`, `.pi`, `.claude`, `.mcp.json`, … — harness/tool owned), and `.polyforge/` only `repo-map/` and `watchers/` (legacy v1 artifacts nothing generates any more — tolerated, safe to delete) | each other entry, with its destination: a document (`.md`, `.txt`, `.pdf`, `.html`, …) → aihub (`pf file edit <wi> --content @f` while the work item is open, else `pf remember --type doc.design\|doc.review\|doc.decision\|doc.audit`); a `.polyforge.yaml.*` backup or other file → `scratch/`; a directory holding `.git` → `.repo/`; another directory → `scratch/`. Also the notes file (`AGENTS.md` when it exists, else `CLAUDE.md`) whose `polyforge:managed` block has no `<!-- polyforge:layout -->` section — run `pf init <ws>` (a workspace with neither file is not flagged); and a `CLAUDE.md` beside a separate `AGENTS.md` that carries a duplicate `polyforge:managed` block — `AGENTS.md` is canonical, remove the block from `CLAUDE.md` by hand (a block-less `CLAUDE.md`, e.g. an `@AGENTS.md` import, is not flagged). Nothing is moved or deleted | no mapping |
-| `workspace memory policy` | every mapped workspace's `.polyforge.yaml` declares a `memory_policy` section, or the workspace has no `.polyforge.yaml` at all (the built-in default applies; `pf init <ws>` writes an editable copy) | a workspace whose `.polyforge.yaml` declares no `memory_policy` — the step prompts then carry the built-in default policy; run `pf init <ws>` to append the default section (doctor itself never writes it). A file that does not load is the `workspace yaml` check's fail, not this row's | no mapping |
+| `workspace memory policy` | every mapped workspace path declares a `[memory_policy."<path>".<entry>]` block in cli.toml (the yaml is no source) | a path without a block — the step prompts then carry the built-in default policy; run `pf init <ws>` to write an editable copy into cli.toml (doctor itself never writes it). A `.polyforge.yaml` still carrying `memory_policy:` or `summarize:` is the `workspace yaml` check's fail (file, line and `pf config migrate`), not this row's | no mapping |
 | `workspace scratch` | no `scratch/` entry older than 14 days (or `--prune-scratch` removed them — the detail lists each path) | entries whose newest change — the later of mtime and ctime, of the entry and everything under it, so a download keeping old mtimes is not stale on arrival — is older than 14 days, listed; run `pf doctor --prune-scratch` to remove them. Also a `scratch` that is a symlink or a file (never scanned or pruned), and an entry that could not be read (skipped, the rest still judged) | no mapping |
 
 Stale scratch is reported, not removed, by default: the doctor is a probe
@@ -167,9 +195,10 @@ with the daemon's own loader, so it fails exactly where a claim would be
 refused (DAEMON-414): a malformed shape (each entry is
 `steps.<project>.<default|step-id>: { models: [...] }`, a step id's entry
 may also carry `attrs: { <name>: <scalar> }` — only an attr the installed
-bundles declare for that step, of its type, never under `default`/`task`; a `memory_policy`
-entry is `<default|project>: { record: [...], skip: [...] }`, lists of
-non-empty unique strings), a candidate that
+bundles declare for that step, of its type, never under `default`/`task`), a
+retired root `summarize:` or `memory_policy:` section (both moved to cli.toml;
+the fail names the file, the line and `pf config migrate`,
+which moves the values and deletes the section), a candidate that
 is not `<harness>:<model>` (`pi:` or `claude:`; the detail names the
 entry and index), a leftover `harness` key (with the rewrite hint), a
 leftover pre-#169 top-level `models:` section (with the migration
@@ -206,6 +235,53 @@ as facts in the detail but neither count as a credential nor reach a step.
 `pf daemon ensure` gives the daemon no `ANTHROPIC_*` anyway (an allow-listed
 environment, see `daemon env`).
 
+## Harness diagram guidance (`warn` at most, out of `--harness`)
+
+For every installed harness — one whose directory exists; an absent one is
+left out, never warned — the row reads the context file that harness loads:
+
+| Harness | Context file |
+|---|---|
+| pi | `$PI_CODING_AGENT_DIR/AGENTS.md`, else `~/.pi/agent/AGENTS.md` |
+| claude | `~/.claude/CLAUDE.md` |
+| step-agent | `<harness-root>/step-agent/AGENTS.md` (`[daemon] harness_root`, else the data dir) |
+
+A file passes only when it carries the SVG block: its begin marker
+`<!-- polyforge:diagram-guidance:svg:begin -->`. A file without it that
+holds legacy mermaid-only guidance — the old begin marker
+`<!-- polyforge:diagram-guidance:begin -->`, or a markdown heading naming
+图形优先 / 图形输出 / diagram / graphic with `mermaid` in the file — is
+reported `legacy`, a `warn`, never a pass; a file with neither is `missing`.
+`pass` = every installed harness's file carries the SVG block; `warn` = a
+file is legacy, missing, absent or unreadable — the detail carries the
+canonical SVG block to add by hand. The block (`svg:begin` / `svg:end`
+markers around `## 输出规范：图形优先（原生 SVG）`) is SVG-first with mermaid
+as history: diagrams are native SVG in ```svg blocks (pi-web renders the SVG
+DOM directly, styles follow the panel theme) and every new diagram is SVG;
+old mermaid diagrams still render, for historical compatibility only; draw
+proactively, unasked, when the discussion has ≥3 subjects/components, a
+multi-stage flow, a responsibility or data handoff or a state transition;
+keep it compact (element text ≤2 lines, ≤8 elements, one structure per
+diagram); and meet the quality baseline (viewBox sizing, no text overflow,
+neutral/theme colours, even spacing).
+
+`pf doctor --fix-harness-prompts` appends the SVG block to every **existing,
+readable** context file of an installed harness that lacks it — `legacy` and
+`missing` alike — and the row reports `legacy; appended` / `missing; appended`.
+It never creates a missing file, never rewrites or removes a byte already
+there (a legacy section stays: delete it by hand after reading it), keeps the
+file's mode (a symlinked file is written at its target), and writes
+atomically; a second run changes nothing. A failed append is a `warn` naming
+the error. To roll back, delete only the SVG block: the lines from
+`<!-- polyforge:diagram-guidance:svg:begin -->` to
+`<!-- polyforge:diagram-guidance:svg:end -->`.
+
+The step-agent caveat: the daemon's step-agent dir deliberately carries no
+`AGENTS.md` and prunes every top-level entry outside its minimal set at
+daemon start, so that file is normally absent (`warn`, with this caveat in
+the detail), the fix does not create it, and a file made by hand there does
+not survive a daemon restart.
+
 ## Success
 
 `ok: true` and every check `pass` (exit 0). Human mode prints one line
@@ -223,6 +299,8 @@ per check with its status and detail; `--json` prints the document only.
 | exit 1, `daemon socket` fail | no live daemon | Run `pf daemon ensure` (it refuses, naming the reason, while the config has no real `[workspace]` mapping or the release workflows are missing), then re-run `pf doctor`. |
 | exit 1, `auth` fail | the credential is rejected | Fix the api key (config `api_key` / `PF_API_KEY`). |
 | exit 1, `harness claude` fail | a candidate is `claude:…` but the daemon cannot find the claude binary | Install/log in Claude Code on the machine or set `claude_bin` in cli.toml (docs/extending.md › Claude binary; `pf help extensions`); or drop the `claude:` candidates. |
+| exit 1, `--fix-harness-prompts cannot be combined with --harness` | both flags given | Drop `--harness`: the fix runs only in the full report. |
+| exit 1, `--fix-install-layout cannot be combined with --harness` | both flags given | Drop `--harness`: the fix runs only in the full report. |
 | exit 2 | usage error (unknown flag) | Fix the invocation. |
 
 A `dial unix …` inside the daemon-socket check's detail means the daemon

@@ -211,12 +211,33 @@ func w224Yaml(t *testing.T, ws, content string) {
 	}
 }
 
-// w224RemoveYaml deletes the workspace's `.polyforge.yaml` (the
-// absent-equivalent unconfigured state).
-func w224RemoveYaml(t *testing.T, ws string) {
+// w224Summarize writes the daemon's own cli.toml — the harness mapping
+// plus a [summarize] table naming models (none = no table: the lane is
+// off) — the summarize lane's only source since. Before the
+// daemon starts it points the daemon at that file (a later --config flag
+// wins); on a running daemon it runs `pf config reload`, the step a hand
+// edit needs before the daemon serves it.
+func w224Summarize(t *testing.T, d *v1Daemon, models ...string) {
 	t.Helper()
-	if err := os.Remove(filepath.Join(ws, ".polyforge.yaml")); err != nil && !os.IsNotExist(err) {
+	path := filepath.Join(filepath.Dir(d.logPath), "w224-cli.toml")
+	body := "# w224: the daemon's cli.toml under test\n\n[workspace.\"" + d.workspace + "\"]\nprojects = [\"" + v1Project + "\"]\n"
+	if len(models) > 0 {
+		body += "\n[summarize]\nmodels = [\"" + strings.Join(models, "\", \"") + "\"]\n"
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	pinned := false
+	for i := 0; i+1 < len(d.extraArgs); i++ {
+		if d.extraArgs[i] == "--config" && d.extraArgs[i+1] == path {
+			pinned = true
+		}
+	}
+	if !pinned {
+		d.extraArgs = append(d.extraArgs, "--config", path)
+	}
+	if d.cmd != nil {
+		d.pf(t, "config", "reload")
 	}
 }
 
@@ -362,7 +383,7 @@ func w224GrepTree(t *testing.T, root, needle string) string {
 func TestW224MarkedPollArmsTheLane(t *testing.T) {
 	inst := newV1Install(t)
 	d := newV1Daemon(t, inst)
-	w224Yaml(t, d.workspace, "summarize:\n  models: [pi:e2e-w224-good]\n")
+	w224Summarize(t, d, "pi:e2e-w224-good")
 	d.start()
 
 	// fix's action first runs the step-peer's own marked snapshot request
@@ -458,7 +479,7 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	inst := newV1Install(t)
 	root := w224HarnessRoot(t)
 	d := newV1Daemon(t, inst, w224OptArgs("--claude-bin", inst.fakepiPath, "--harness-root", root))
-	w224Yaml(t, d.workspace, "summarize:\n  models: [pi:e2e-w224-fail, claude:e2e-w224-claude]\n")
+	w224Summarize(t, d, "pi:e2e-w224-fail", "claude:e2e-w224-claude")
 	d.start()
 
 	wi := w224NewWI(t, inst, "w224: a failed call walks to the next candidate", func(wi string) []map[string]any {
@@ -524,7 +545,7 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestW224SummarizeKeyValidates pins the model source: a claim under a
-// yaml carrying the root `summarize.models` key (polyforge#242) validates
+// cli.toml carrying the [summarize] models validates
 // (the WI runs), a WI claimed with no such key has the lane silently off
 // (a marked request makes zero calls, no error in any face), `pf doctor` reports no refusal and no new row for the
 // summarize key, and any other unknown id still refuses DAEMON-414
@@ -532,7 +553,7 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 func TestW224SummarizeKeyValidates(t *testing.T) {
 	inst := newV1Install(t)
 	d := newV1Daemon(t, inst)
-	w224Yaml(t, d.workspace, "summarize:\n  models: [pi:e2e-w224-good]\n")
+	w224Summarize(t, d, "pi:e2e-w224-good")
 	d.start()
 
 	// The summarize key validates: the submit and the claim pass, the
@@ -548,10 +569,10 @@ func TestW224SummarizeKeyValidates(t *testing.T) {
 	waitStepStatus(t, d, wi1, "fix", "in_progress", 30*time.Second)
 	t.Cleanup(func() { killOrphans(wi1) })
 
-	// Unconfigured is silently off: the yaml loses the key (the
-	// absent-equivalent state), the next claim runs fine, and the marked
-	// request on that WI makes zero calls and no error anywhere.
-	w224RemoveYaml(t, d.workspace)
+	// Unconfigured is silently off: cli.toml loses the [summarize] table
+	// (reloaded), the next claim runs fine, and the marked request on that
+	// WI makes zero calls and no error anywhere.
+	w224Summarize(t, d)
 	wi2 := w224NewWI(t, inst, "w224: unconfigured is silently off", func(wi string) []map[string]any {
 		return []map[string]any{
 			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
@@ -572,10 +593,10 @@ func TestW224SummarizeKeyValidates(t *testing.T) {
 	}
 
 	// The list is read live (polyforge#33 superseded the claim-time
-	// freeze this scenario once pinned): the yaml gaining the key back is
-	// the lane's source from the next request on —
+	// freeze this scenario once pinned): cli.toml gaining the table back
+	// (reloaded) is the lane's source from the next request on —
 	// TestW33SummarizeLaneReadsLive pins that with real calls.
-	w224Yaml(t, d.workspace, "summarize:\n  models: [pi:e2e-w224-good]\n")
+	w224Summarize(t, d, "pi:e2e-w224-good")
 
 	// `pf doctor` gains no row and no refusal for the summarize key: with
 	// the key present and valid, the doctor output mentions no summarize
@@ -615,7 +636,7 @@ func TestW224SummarizeKeyValidates(t *testing.T) {
 func TestW224RestartReArmsFresh(t *testing.T) {
 	inst := newV1Install(t)
 	d := newV1Daemon(t, inst)
-	w224Yaml(t, d.workspace, "summarize:\n  models: [pi:e2e-w224-good]\n")
+	w224Summarize(t, d, "pi:e2e-w224-good")
 	d.start()
 
 	wi := w224NewWI(t, inst, "w224: a restart re-arms fresh", func(wi string) []map[string]any {
@@ -641,6 +662,7 @@ func TestW224RestartReArmsFresh(t *testing.T) {
 	d2 := &v1Daemon{
 		t: t, inst: inst, sock: d.sock, dataDir: d.dataDir, workspace: d.workspace,
 		machineID: d.machineID, logPath: filepath.Join(t.TempDir(), "w224d2.log"),
+		extraArgs: d.extraArgs, // the same cli.toml (its [summarize] table)
 	}
 	t.Cleanup(d2.stop)
 	d2.start()
@@ -693,7 +715,7 @@ func w224GlobState(t *testing.T, root string) string {
 func TestW224InFlightCallDoesNotStallTheSnapshot(t *testing.T) {
 	inst := newV1Install(t)
 	d := newV1Daemon(t, inst)
-	w224Yaml(t, d.workspace, "summarize:\n  models: [pi:e2e-w224-slow]\n")
+	w224Summarize(t, d, "pi:e2e-w224-slow")
 	d.start()
 
 	wi := w224NewWI(t, inst, "w224: an in-flight call does not stall the snapshot", func(wi string) []map[string]any {
@@ -706,6 +728,11 @@ func TestW224InFlightCallDoesNotStallTheSnapshot(t *testing.T) {
 	d.pf(t, "submit", wi)
 	waitStepStatus(t, d, wi, "fix", "in_progress", 30*time.Second)
 	t.Cleanup(func() { killOrphans(wi) })
+	// The step turns in_progress before its agent child writes the
+	// transcript; a marked request inside that gap has no dispatch source
+	// and arms nothing (the growth gate), so wait for fix's (the second
+	// spawn's) transcript first.
+	waitSpawnTranscript(t, d, wi, 2, 30*time.Second)
 
 	// The marked request itself answers immediately with the pre-call
 	// state: the route never waits on the 12 s model call it just armed.

@@ -2,7 +2,7 @@
 
 There is no `pf ship` verb (removed by polyforge#166) and the daemon never
 pushes a delivery. Delivery is the last step of the delivery lanes:
-`feature-full`, `bug-fix`, `autopilot` and `chore` each end with a
+`feature-full`, `bug-fix`, `autopilot`, `chore` and `micro` each end with a
 `deliver` step that:
 
 1. merges the latest origin default branch into the work,
@@ -14,7 +14,10 @@ pushes a delivery. Delivery is the last step of the delivery lanes:
    resolved by the LLM, and its pre-flight (nothing uncommitted, no release
    residue) found nothing, and the work item declared no owner-review
    artifact or the owner answered 过目通过. autopilot has no review step:
-   there verification's pass stands in for the review.
+   there verification's pass stands in for the review. micro has no
+   verification step: there the tests-passed condition is the deliver step's
+   own re-run of the repository's fast evidence on the pushed head (see
+   `docs/concepts.md`, unattended mode).
 
 **The owner-review gate.** When the plan or a build step's summary declared
 an owner-review artifact (an `owner-review: <path(s)> — <description>`

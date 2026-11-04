@@ -9,8 +9,8 @@ Two levels, never mixed:
   script defers to the operator is reproduced below (adding the workspace's
   projects with `pf config`).
 - **Workspace init** is the agent-driven flow that maps a workspace's
-  projects on this machine (and gives it a `.polyforge.yaml` memory
-  policy, plus optionally model candidates) — this fragment's core, and the part a polyforge
+  projects on this machine (and gives it a cli.toml memory policy block,
+  plus optionally `.polyforge.yaml` model candidates) — this fragment's core, and the part a polyforge
   session performs with the operator.
 
 ## Machine install — the pointer
@@ -67,23 +67,29 @@ the user saying "init workspace".
    involved. An invalid file refuses the claim (DAEMON-414) before it is
    made: the work item stays queued, so fix the file and resubmit.
 
-   The file's second optional section, `memory_policy:`, guides the
-   work item's `experience.wrap` summary the workflow's last step writes
-   (`record`: worth remembering; `skip`: never in it). `pf init` (step 5) appends the
-   default section when the file has none; tune it per project:
+   The memory policy is no part of this file: it is the cli.toml
+   `[memory_policy."<this-root>".<default|project>]` family,
+   which guides the work item's `experience.wrap` summary the workflow's
+   last step writes (`record`: worth remembering; `skip`: never in it).
+   `pf init` (step 5) writes the default block when the path has none;
+   tune it per project with `pf config set` (`--workspace <this-root>` or
+   `--cwd <dir>` selects the path):
 
-   ```yaml
-   memory_policy:
-     default:                       # every project; an undeclared list is the built-in one
-       record: [踩坑和根因（现象→原因→解法）, 所有者的裁决和约定]
-       skip: [临时状态, 密钥和凭据的值]
-     polyforge:                     # optional: appended to default's lists
-       record: [daemon 上线前后的环境差异]
+   ```toml
+   [memory_policy."/path/to/workspace".default]   # every project of this path; an undeclared list is the built-in one
+   record = ["踩坑和根因（现象→原因→解法）", "所有者的裁决和约定"]
+   skip = ["临时状态", "密钥和凭据的值"]
+
+   [memory_policy."/path/to/workspace".polyforge] # optional: appended to default's lists
+   record = ["daemon 上线前后的环境差异"]
    ```
 
-   Lists are non-empty, unique strings; `record` and `skip` are the only
-   keys. A missing section means the built-in default (never a refusal);
-   a malformed one refuses the claim like any other defect of the file.
+   Lists are unique non-empty quoted strings (an array may span lines;
+   a comma inside quotes is data); `record` and `skip` are the only keys.
+   A path without a block means the built-in default (never a refusal);
+   a malformed block refuses the cli.toml load with the file and line
+   named. A `.polyforge.yaml` that still carries a `memory_policy:` (or
+   `summarize:`) section is refused whole — `pf config migrate` moves it.
 
 5. **Lay out the workspace**: `pf init <workspace-root>` (default: the
    current directory) creates `scratch/` and writes the runtime-artifact
@@ -104,20 +110,21 @@ the user saying "init workspace".
    `doc.decision` / `doc.audit` memories; experience → `experience.*` /
    `fact.*`); locally only `.repo/`, `capsules/`, `.polyforge/`
    (polyforge-generated only) and `scratch/` (disposable, reported by
-   `pf doctor` after 14 days). It also appends the default
-   `memory_policy:` section to `.polyforge.yaml` when the file declares
-   none — as text after the existing bytes (comments and layout are kept
-   exactly, never re-marshalled) — or creates the file holding only it.
-   A file that already declares `memory_policy` is left alone; one that
-   does not load is left untouched too and reported as a `warning:` line
-   (exit 0 — scratch/ and the notes file are still laid out; fix the file —
-   `pf doctor` names the defect — and re-run `pf init`).
+   `pf doctor` after 14 days). For a workspace cli.toml maps, it also
+   writes the default `[memory_policy."<root>".default]` block (with its
+   comment) into cli.toml once — byte-preserving and atomic, through the
+   same validator `pf config` uses; a re-run, or a path that already
+   declares any entry, leaves cli.toml byte-identical (`--json`:
+   `memory_policy` = inserted / unchanged / unmapped). An unmapped
+   workspace writes nothing to cli.toml and the output hints to map it
+   first (step 3). `pf init` never writes `.polyforge.yaml`.
 
 ## Verify
 
 ```
 pf doctor           # machine face: config + [workspace] mapping + workspace layout + connectivity + supervision + harness layout
-cat <workspace>/.polyforge.yaml   # the memory policy and model pins the daemon reads
+pf config list      # the cli.toml memory policy per workspace path (and the summarize lane)
+cat <workspace>/.polyforge.yaml   # the model pins the daemon reads
 ```
 
 The daemon-side check is a claim: the next submitted WI in this workspace

@@ -225,6 +225,30 @@ type webEvent struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+// webComment is one comment row of the console detail, in time order: the
+// stored fields only (the author is the user id — display names are not
+// part of this change).
+type webComment struct {
+	ID        string `json:"id"`
+	Author    string `json:"author"`
+	Body      string `json:"body"`
+	ReplyTo   string `json:"reply_to,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+// webMessage is one message anchored to the detail's work item (about_wi
+// matched by slug or id, historical rows included). Anchoring makes the
+// message visible to anyone who can see the ticket, so the console shows
+// it beside the comments.
+type webMessage struct {
+	ID        string `json:"id"`
+	SenderID  string `json:"sender_id"`
+	Text      string `json:"text"`
+	AboutWI   string `json:"about_wi,omitempty"`
+	ReplyTo   string `json:"reply_to,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
 // webWIDetail is the console detail DTO: the whitelisted fields only —
 // never attrs, never the session block, never session_hash, never the
 // repo inventory or any daemon step data. WIView is never serialized
@@ -245,6 +269,8 @@ type webWIDetail struct {
 	UpdatedAt string       `json:"updated_at"`
 	ClosedAt  string       `json:"closed_at,omitempty"`
 	HTML      string       `json:"html"`
+	Comments  []webComment `json:"comments"`
+	Messages  []webMessage `json:"messages"`
 	BlockedBy []webDepEdge `json:"blocked_by"`
 	Blocking  []webDepEdge `json:"blocking"`
 	Events    []webEvent   `json:"events"`
@@ -318,6 +344,20 @@ func (s *Server) webAPIWorkItemDetail(w http.ResponseWriter, r *http.Request, id
 		writeWebError(w, r, err)
 		return
 	}
+	// the ticket's append-only comments in time order, and
+	// every message anchored to it (about_wi matched by slug OR id, so
+	// historical rows count too). The console is the only reader of the
+	// anchored messages.
+	comments, err := s.WIs.Comments(g.id)
+	if err != nil {
+		writeWebError(w, r, err)
+		return
+	}
+	messages, err := s.Admin.MessagesAboutWI(g.id, wi.Slug)
+	if err != nil {
+		writeWebError(w, r, err)
+		return
+	}
 	// The one server-side sanitizer renders the content (raw HTML off,
 	// links as text, images as alt text); the console inserts that
 	// already-inert HTML and renders everything else as text.
@@ -335,7 +375,19 @@ func (s *Server) webAPIWorkItemDetail(w http.ResponseWriter, r *http.Request, id
 		Status: wi.Status, Priority: wi.Priority,
 		Labels: wi.Labels, Reporter: wi.Reporter,
 		CreatedAt: wi.CreatedAt, UpdatedAt: wi.UpdatedAt,
-		HTML: body, BlockedBy: []webDepEdge{}, Blocking: []webDepEdge{}, Events: []webEvent{},
+		HTML: body, Comments: []webComment{}, Messages: []webMessage{},
+		BlockedBy: []webDepEdge{}, Blocking: []webDepEdge{}, Events: []webEvent{},
+	}
+	for _, c := range comments {
+		detail.Comments = append(detail.Comments, webComment{
+			ID: c.ID, Author: c.Author, Body: c.Body, ReplyTo: c.ReplyTo, CreatedAt: c.CreatedAt,
+		})
+	}
+	for _, m := range messages {
+		detail.Messages = append(detail.Messages, webMessage{
+			ID: m.ID, SenderID: m.SenderID, Text: m.Text, AboutWI: m.AboutWI,
+			ReplyTo: m.ReplyTo, CreatedAt: m.CreatedAt,
+		})
 	}
 	if wi.Milestone != nil {
 		detail.Milestone = *wi.Milestone

@@ -114,12 +114,27 @@ func TestDoctorHealthyMachineAllPassExit0(t *testing.T) {
 	srv := aiSever(t, &reqRecorder{}, map[string]bool{"polyforge": true}, 0, "")
 	sock := liveDaemonSocket(t, "m-h")
 	env := doctorServerConfig(t, srv.URL, "k_ok", sock, "polyforge")
+	// a healthy machine declares the workspace path's memory policy in
+	// cli.toml (no block is the `pf init` warn)
+	cfgPath := filepath.Join(env["XDG_CONFIG_HOME"], "polyforge", "cli.toml")
+	ws := filepath.Join(filepath.Dir(env["XDG_CONFIG_HOME"]), "ws-polyforge")
+	if raw, err := os.ReadFile(cfgPath); err != nil {
+		t.Fatal(err)
+	} else if err := os.WriteFile(cfgPath, append(raw, "\n[memory_policy.\""+ws+"\".default]\nrecord = [\"r\"]\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	env["HOME"] = displayHome(t, `{"statusLine":{"type":"command","command":"pf watch --statusline --harness-session -"}}`,
 		`{"packages":["~/.local/share/polyforge/release/current"]}`)
 	env["PI_CODING_AGENT_DIR"] = ""
 	env["POLYFORGE_DATA_DIR"] = ""
 	layoutRelease(t, env["HOME"])
 	layoutClaudeLink(t, env["HOME"])
+	// both installed harnesses carry the diagram guidance
+	for _, p := range []string{".claude/CLAUDE.md", ".pi/agent/AGENTS.md"} {
+		if err := os.WriteFile(filepath.Join(env["HOME"], p), []byte(diagramGuidanceBlock), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	env["PATH"] = fakeTmuxPath(t, 0) // the restart loop is up (polyforge#174)
 	code, stdout, doc := doctorStatus(t, env, "--json", "doctor")
 	if code != 0 {
@@ -129,6 +144,11 @@ func TestDoctorHealthyMachineAllPassExit0(t *testing.T) {
 		t.Fatalf("healthy machine: ok = false (%+v)", doc.Checks)
 	}
 	for _, c := range doc.Checks {
+		// the disk watermark row reads the real host's
+		// filesystem; it warns only when the host is above the watermark.
+		if c.Name == docChDisk && c.Status == "warn" && strings.Contains(c.Detail, "above the 70% watermark") {
+			continue
+		}
 		if c.Status != "pass" {
 			t.Fatalf("check %q = %q (%s), want pass", c.Name, c.Status, c.Detail)
 		}
@@ -280,6 +300,11 @@ func TestDoctorUsageErrorExit2(t *testing.T) {
 	code, _, _ := runPf(t, map[string]string{}, "doctor", "--bogus")
 	if code != 2 {
 		t.Fatalf("doctor --bogus: exit %d, want 2", code)
+	}
+	// the retention prune flag is --prune-capsules; the old
+	// name has no alias.
+	if code, _, _ := runPf(t, map[string]string{}, "doctor", "--prune-git-dirs"); code != 2 {
+		t.Fatalf("doctor --prune-git-dirs: exit %d, want 2 (renamed to --prune-capsules, no alias)", code)
 	}
 }
 

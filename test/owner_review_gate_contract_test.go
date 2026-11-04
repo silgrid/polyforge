@@ -7,7 +7,7 @@ package test
 //
 // The declaration duty lives once, in the shared fragment
 // workflows/_shared/owner_review.md, included by the two plan steps and the
-// four build steps; the gate itself is a section of the shared deliver step,
+// five build steps; the gate itself is a section of the shared deliver step,
 // which keeps its deliver-merge question untouched. Red on the pre-change
 // tree: the fragment, the gate section and the includes do not exist there.
 
@@ -20,11 +20,13 @@ import (
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
-// the six (bundle, step) pairs that may declare an owner-review artifact
+// the seven (bundle, step) pairs that may declare an owner-review artifact
+// (micro's fix, the lane has no plan, so its build step's
+// summary is the only place to declare one)
 var ownerReviewAuthoringSteps = [][2]string{
 	{"chore", "plan"}, {"feature-full", "plan"},
 	{"chore", "code"}, {"feature-full", "code"},
-	{"bug-fix", "fix"}, {"autopilot", "fix"},
+	{"bug-fix", "fix"}, {"autopilot", "fix"}, {"micro", "fix"},
 }
 
 // the fragment's operative lines (compared whitespace-flattened); each
@@ -151,7 +153,7 @@ func TestOwnerReviewFragmentIsSingleSourceAndLaneNeutral(t *testing.T) {
 	}
 	for _, rel := range w80StepFiles(t) {
 		if strings.Contains(w149CarrierRead(t, rel), "{{owner_review}}") && !allowed[rel] {
-			t.Errorf("%s includes {{owner_review}} but is not one of the six authoring steps", rel)
+			t.Errorf("%s includes {{owner_review}} but is not one of the seven authoring steps", rel)
 		}
 	}
 }

@@ -12,7 +12,7 @@ package daemon
 //
 // Reachability: step processes of this daemon only (stepCaller refuses
 // every other caller); the step-origin guard lets this POST through
-// beside /step/memories (routes.go). The route checks identity and shape
+// beside /step/memories and /step/bar-run (routes.go). The route checks identity and shape
 // only (driver.CheckEnvelopeShape); the deep checks stay in the driver's
 // accept gate.
 

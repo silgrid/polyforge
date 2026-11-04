@@ -163,17 +163,27 @@ concurrent writers serialize on a file lock.
 
 ```
 pf config get <key>              # effective value + source (flag|env|file|default)
-pf config set <key> <value>      # set a flat key, a [daemon] key or a whole [workspace] section
+pf config set <key> <value>      # set a flat key, a [daemon] key, a [summarize] key or a whole [workspace] section
 pf config set '[workspace."/path"]' projects=a,b,c
+pf config set summarize.language English
+pf config set memory_policy.<default|project>.record|skip '["a", "b"]' --workspace /path   # or --cwd <dir>
 pf config unset <key>            # remove the line (or the whole section)
 pf config list                   # every key with its effective value, source, reload class and schema
 pf config validate               # validate without writing
 pf config reload                 # apply a hand edit to the running daemon
+pf config migrate                # move retired .polyforge.yaml summarize:/memory_policy: sections into this file
 ```
 
 Keys are addressed by their flat name (`server`), their `[daemon]` key
-name (`max_concurrent_jobs`) or as a whole `[workspace."<path>"]`
-section. `api_key` is write-only: pass it on stdin
+name (`max_concurrent_jobs`), their `[summarize]` key name
+(`summarize.models`, `summarize.language`, `summarize.interval_sec`), a
+memory_policy list (`memory_policy.<default|project>.record|skip`) or as a
+whole `[workspace."<path>"]` section. The `summarize.*` keys are flat
+machine-level keys and refuse `--workspace`/`--cwd`; a memory_policy key
+needs exactly one of them (`--workspace` a mapped path, `--cwd` resolved
+through the mapping) and writes only that path's entry, taking its value as
+a JSON list of strings. `pf config get` refuses both families and points at
+`pf config list`, their one read face. `api_key` is write-only: pass it on stdin
 (`printf '%s\n' "$KEY" | pf config set api_key`; a tty prompts with echo
 off), never on argv, and no `get`/`list`/error/event ever emits the
 value. A write whose result the shared validator refuses (an unusable
@@ -188,16 +198,16 @@ Reload classes (one class per key):
 
 | Class | Keys | What a reload does |
 | --- | --- | --- |
-| live | `max_concurrent_jobs`, `step_timeout`, `stall_window`, `claude_bin` | applied in the running daemon |
-| next-claim | the `[workspace]` mapping | additions usable at the next dispatch; a removal/re-route with an in-flight job is refused and the work items are listed |
+| live | `max_concurrent_jobs`, `step_timeout`, `stall_window`, `claude_bin`, `summarize.models`, `summarize.language`, `summarize.interval_sec` | applied in the running daemon (the summarize lane's next call uses the new table) |
+| next-claim | the `[workspace]` mapping; the whole `[memory_policy]` family | mapping additions usable at the next dispatch (a removal/re-route with an in-flight job is refused and the work items are listed); the claim that follows writes the new effective memory policy into its capsule, a running job keeps the one its claim wrote |
 | restart-only | `server`, `api_key`, `daemon_socket`, `harness_root`, `operator_agent_dir` | reported pending; the running daemon keeps its value and a restart applies it |
 | CLI-only | `user_id` | never read by the daemon |
 
 The workspace `.polyforge.yaml` keys report the same classes on the
-workspace read (`pf config workspace`): every `summarize.*` key and every
+workspace read (`pf config workspace`): every
 `steps.<project>.<step-id>.models` / `.attrs.<name>` key is `live` (read
-fresh at the next request or step dispatch; a running step keeps what its
-dispatch read), and `memory_policy` is `next-claim`.
+fresh at the next step dispatch; a running step keeps what its dispatch
+read).
 
 ### Machine-readable list, schema and CAS
 
@@ -207,10 +217,19 @@ class table the reload path uses, including `next-claim` for a whole
 constraints the shared validator actually enforces — `max_concurrent_jobs`
 `{kind:"int",min:1}`, `step_timeout` `{kind:"duration",min_exclusive:0}`,
 `stall_window` `{kind:"duration",nonzero:true,allow_negative:true}`;
-`language` has no enum). The document also carries
-`file:{path,sha256,exists}` for the CAS precondition. Existing
-`value`/`source`/`set`/`section` fields are unchanged and `api_key` stays
-masked.
+`language` has no enum). The three `summarize.*` items carry their
+effective value — `summarize.models` a list (absent with no `[summarize]`
+table: the lane is off), `summarize.language` / `summarize.interval_sec` the
+declared value or the documented default (`中文` / `60`, `source:
+"default"`) — with schemas `{kind:"model-list"}`, `{kind:"string"}` and
+`{kind:"int",min:10,max:3600}`. The document also carries
+`file:{path,sha256,exists}` for the CAS precondition and one top-level
+`memory_policy` object keyed by mapped workspace path: per path the
+`default` entry's effective lists (declared, else built-in) and every
+mapped project's OWN declared lists (never pre-merged — a project's lists
+append to `default`'s), each `{record, skip, declared}`; the family's
+class is `next-claim`. Existing `value`/`source`/`set`/`section` fields are
+unchanged and `api_key` stays masked.
 
 `pf config set|unset` accepts `--expect-hash <sha256|absent>` and
 `--expect-state <json>` for the read snapshot
@@ -223,16 +242,16 @@ says the target file is absent. With no `--expect-hash`/`--expect-state` the
 write is unconditional; `--expect-hash` alone refuses on a moved hash and
 lists the file's current values.
 
-### Workspace `.polyforge.yaml` summarize keys
+### Workspace `.polyforge.yaml` read
 
 `pf --json config workspace --cwd <dir>` resolves the cwd through the same
 `MatchWorkspace` longest-prefix rule as every other workspace consumer and
 always answers one JSON document: `mapped`, the workspace label, the yaml
-`path`/`sha256`/`exists`, the effective `summarize.models` (ordered),
-`summarize.language` and `summarize.interval_sec` each with its `source`
-(`file` or `default`) and `class` (the summarize lane reads the yaml live, so
-all three are `live`), the per-project `steps` map, `steps_complete`, and
-`memory_policy`. An unmapped cwd answers `mapped:false` with exit 0.
+`path`/`sha256`/`exists`, the per-project `steps` map and `steps_complete`.
+It carries no `summarize` and no `memory_policy` (cli.toml facts since
+, read through `pf config list`); a yaml still carrying either
+retired section makes it error with the file, the line and
+`pf config migrate`. An unmapped cwd answers `mapped:false` with exit 0.
 
 Each `steps.<project>.<id>` entry carries `declared` + `models` (a
 declared-empty list stays `declared:true` with `models: []`, never absent;
@@ -243,32 +262,17 @@ step id plus every override the file declares, each `{value, declared,
 source, class, default, schema:{kind}}` (an attr the file does not
 override shows the declaration's `default` as its value). Every mapped
 project always has a `default` and a `task` row besides the installed step
-ids and the file's own keys. `memory_policy` is
-`{source, class:"next-claim", append_to_default:true, default:{record,
-skip, declared}, projects:{<project>:{record, skip, declared}}}`: the
-default entry's effective lists (declared, else built-in) and each mapped
-project's OWN declared lists, never pre-merged (the append rule is the
-`append_to_default` fact).
-
-`pf config set|unset summarize.models|summarize.language|summarize.interval_sec`
-takes exactly one of `--workspace <path>` or `--cwd <dir>` plus the same CAS
-options; `--workspace` must name a `[workspace."<path>"]` already mapped in
-cli.toml (direct-CLI only; pi-web always resolves through `--cwd`). The write
-is a byte-preserving line edit inside the root `summarize:` block, validated
-by the one strict `workspace.Load` validator before and under the flock, and
-landed through the shared atomic writer. A valid write changes only its target
-line; an invalid value or a `summarize` entry without `models` is refused with
-the validator's own error and the file is left byte-identical. An absent file
-is created only when the expectation says `absent`; an unset with no file to
-edit is a no-op and creates nothing. `unset summarize.models` removes the
-whole entry.
+ids and the file's own keys.
 
 `pf config set|unset steps.<project>.<step-id>.models` and
 `steps.<project>.<step-id>.attrs.<name>` write the
 [`steps:`](#steps--model-candidates-per-project-and-step) and
 [step attributes](#stepsprojectstep-idattrs--step-attributes) keys with the
-same `--workspace`/`--cwd`, CAS options, flock, atomic write and strict
-`workspace.Load` preflight (before and under the flock) as the summarize keys.
+`--workspace <path>` or `--cwd <dir>` (exactly one; `--workspace` must name a
+`[workspace."<path>"]` already mapped in cli.toml), the CAS options, the
+writer flock, the shared atomic writer and the strict `workspace.Load`
+preflight (before and under the flock). An absent file is created only when
+the expectation says `absent`; an unset with no file to edit is a no-op.
 `models` takes a list (`'["pi:a","claude:b"]'` or `pi:a,claude:b`; an empty
 list is a declared-empty level); an attr takes a scalar written by its
 declared type (an `int` bare, a `string` quoted). The write is a
@@ -309,6 +313,154 @@ A bad reload applies nothing, names the offending key, emits one redacted
 event (key names only) and never stops the daemon. The reload entry point
 is local-UDS only and refuses step agents (`docs/reference/uds-routes.md`).
 
+### `[summarize]` — the summarize lane
+
+The model candidates of the demand-gated summarize lane — the one-line
+narration of a running step's live transcript that a watched work
+item's snapshot carries (polyforge#224). One machine-level table
+: every mapped workspace's work items use it; there is no
+per-workspace or per-project summarize setting (a
+`steps.<project>.summarize` key in a `.polyforge.yaml` is an unknown step
+id and refuses):
+
+```toml
+[summarize]
+models = [
+  "pi:prov/flash-model",        # tried in order on failure
+  "claude:claude-sonnet-5-5",
+]
+language = "English"            # optional; absent = 中文
+interval_sec = 120              # optional; absent = 60
+```
+
+`models` is mandatory in the table and as strict as a step entry's list in
+`steps:`: a non-empty array of unique `<harness>:<model>[:<effort>]`
+candidates. A table without `models`, with an empty list or with an
+unprefixed candidate refuses the whole cli.toml load (every `pf` command
+and the daemon; the error names the file and the line) — a claim never
+meets a silently-off lane. Any key other than `models`, `language` and
+`interval_sec` refuses with an error listing the three.
+
+`language` (polyforge#243) is the narration language: the prompt asks
+the model to "Answer in <language>." with the value inserted verbatim,
+and to keep code identifiers, file paths and commands as written.
+Absent, the narration is in 中文. The value is free text — no allowlist,
+no language codes, no length cap — but must be a quoted string that is
+non-empty and single-line after trimming.
+
+`interval_sec` (polyforge#250) is the minimum number of seconds between
+two summarize call starts for one work item (the clock is per work item
+and does not reset on a new step dispatch). Absent, it is 60. The value
+must be an unquoted integer from 10 to 3600, inclusive; anything else — a
+quoted `"60"`, a float, a duration such as `1m`, `0`, a negative or an
+out-of-range number — refuses with an error naming the range `10-3600`.
+It is never clamped. The per-attempt cap stays fixed at 20 calls per step
+dispatch, and no call starts while the previous one is still running,
+whatever the interval.
+
+The daemon serves the table from its loaded cli.toml snapshot (class
+`live`): `pf config set summarize.*` notifies the daemon and the next call
+uses the new value; a hand edit needs `pf config reload`. No per-request
+file read happens. No table leaves the lane silently off — no call, no
+error, no doctor row.
+
+### `[memory_policy]` — the wrap-summary policy
+
+What the workflow's last step puts into the work item's one
+`experience.wrap` summary memory (no other step writes memories):
+`record` lists what is worth remembering, `skip` what never is. A
+path-keyed table family: one block per mapped workspace
+path, each entry `default` or a project that path maps, with optional
+`record` / `skip` arrays of non-empty, unique quoted strings (no other
+key; at least one of the two):
+
+```toml
+[memory_policy."/path/to/workspace".default]   # every project of this path; an undeclared list is the built-in default's
+record = [
+  "pitfalls and their root cause",
+  "the owner's rulings and agreements",
+]
+skip = ["transient state", "credential values"]
+
+[memory_policy."/path/to/workspace".polyforge] # a project of this path: lists APPENDED to default's
+record = ["environment differences around the daemon's rollout"]
+```
+
+The path is quoted and must be a mapped `[workspace."<path>"]` key; the
+entry is a bare name (`[A-Za-z0-9_-]`) or quoted. An unmapped path, an
+entry that is neither `default` nor a project of that path, an entry with
+no list or another key, an empty, duplicated or unquoted item all refuse
+the cli.toml load with the file, the line and the table named. Each
+path's block applies only to claims of that path's projects; two paths'
+blocks are never compared or merged. A path without a block means the
+built-in default policy and never refuses a claim. The built-in default
+(the block `pf init <ws>` writes into cli.toml for a mapped workspace
+that has none — once, with its comment; an existing entry is never
+rewritten): record the pitfalls and root causes (symptom, cause, fix), the
+environment and external-system facts not visible in code or git, and the
+owner's rulings and agreements; skip the process log, step output and full
+spec/plan (they live in the work item and the capsule), what code or git
+shows directly, transient state, and credential values (the block carries
+these lists written in Chinese; this is an English paraphrase).
+`pf doctor` warns about a mapped path without a block and points at
+`pf init`. The daemon serves the family from its loaded cli.toml snapshot
+(class `next-claim`): at a claim it writes the project's effective policy
+to the capsule (`runtime-state/memory-policy.json`) and the driver renders
+it into the last step's wrap duty; a running job keeps the policy its
+claim wrote, and a hand edit needs `pf config reload`. A step whose
+workflow entry declares `recall: true` (the decision and authoring steps,
+never a gate like review, verification or deliver) is asked to recall
+first.
+
+Step agents hold no aihub credential path: inside a step `pf recall` /
+`pf memory show` read through the daemon (scoped to the step's own
+project); `pf remember` sends the wrap summary synchronously to the
+daemon (`POST /step/memories`), which validates it (type
+`experience.wrap`, a title, ≤ 2 KB, no credential value), attributes it
+to the step's own work item and project and stores it with an
+idempotency key of the step dispatch (a retry returns the same memory);
+a failure is reported and never fails the step. Every other aihub verb,
+`pf doctor` and `pf daemon` are refused there (DAEMON-403).
+
+### Array values
+
+An array value (`projects`, `models`, `record`, `skip`) may span several
+lines until its closing `]`; every item is a quoted string, a comma inside
+quotes is data (the item stays whole) and one trailing comma is allowed.
+The parsed list is the same as the one-line form. The rest of the grammar
+stays strict: escape sequences, inline tables, duplicate keys or tables,
+unquoted section keys and any table outside `[workspace."<path>"]`,
+`[daemon]`, `[summarize]` and `[memory_policy."<path>".<entry>]` refuse
+with a line-named error.
+
+### Moving retired yaml sections — `pf config migrate`
+
+`summarize:` and `memory_policy:` used to be root sections of each
+workspace's `.polyforge.yaml`; a yaml still carrying either is refused
+whole (see [.polyforge.yaml](#polyforgeyaml)). `pf config migrate` (local
+CLI, no daemon) moves them once: it reads every workspace the cli.toml
+mapping names (a workspace without a yaml is skipped), plans the whole move
+without writing, and then writes cli.toml first (the one `[summarize]`
+table and one `[memory_policy."<path>".<entry>]` block per path, values
+verbatim — the command hardcodes no value) and then each yaml with exactly
+the two sections removed (the `pf init` comment block above an old
+`memory_policy:` goes with it; every other byte stays). Before changing a
+file it writes a sibling backup `<file>.bak-<UTC timestamp>` of the
+pre-change bytes (never overwriting an existing backup; an unchanged file
+gets none).
+
+It refuses rather than picks a side, with one itemized error and no write:
+summarize values that differ between workspaces or from an existing
+`[summarize]` (compared as effective values — an absent `language` is
+`中文`, an absent `interval_sec` 60), a path whose existing cli.toml block
+differs from its yaml block (identical values are fine), an invalid
+section value, or a yaml that would not load without the sections. An
+interruption after the cli.toml write converges: the re-run finds cli.toml
+already holding equal values and only removes the yaml sections. A run with
+nothing to move prints `nothing to migrate`, changes no byte and exits 0.
+There is no reverse command; rollback and the deploy order are in
+[upgrade.md](../upgrade.md).
+
 ## .polyforge.yaml
 
 The workspace-level per-step settings file at a workspace root. One
@@ -345,7 +497,12 @@ route to this workspace, and duplicate model ids in one list are all
 load errors. The retired top-level `models:` section (the pre-#169
 shape) refuses with a migration message; `projects:` /
 `workflow_defaults:` are unknown keys like any other (upgrading from
-the pre-#169 shape: [upgrade.md](../upgrade.md)). YAML merge keys
+the pre-#169 shape: [upgrade.md](../upgrade.md)). The retired root
+`summarize:` and `memory_policy:` sections (now the cli.toml
+[`[summarize]`](#summarize--the-summarize-lane) table and
+[`[memory_policy]`](#memory_policy--the-wrap-summary-policy) family) refuse
+the whole file with an error naming the file, the line and
+`pf config migrate`; nothing reads either value from the yaml. YAML merge keys
 (`<<`) are refused — share a list with anchors,
 `models: &x [...]` / `{ models: *x }`.
 
@@ -417,8 +574,9 @@ entry — `attrs: { <name>: { type: int|string, default: <scalar> } }`
 the step id: `steps.<project>.<step-id>.attrs.<name>: <scalar>`. The
 loader refuses an attr name no installed bundle declares for that step id
 (`undeclared attr — step <id> declares only …`), a value of the wrong type
-(an `int` attr takes a YAML integer, a `string` attr a plain string), an
-empty `attrs:` map, and any `attrs` under `default` or `task` (`default`
+(an `int` attr takes a non-negative YAML integer — a negative value such
+as `-1` is refused with `must be a non-negative integer`, `0` is legal —
+a `string` attr a plain string), an empty `attrs:` map, and any `attrs` under `default` or `task` (`default`
 and `task` take no attrs). An attrs-only entry is a present entry that
 declares no `models` level: the step's chain falls through exactly as if
 the entry were absent. Clearing a step's chain never deletes its attr
@@ -434,7 +592,8 @@ into that step's prompt; a value equal to the default renders nothing. An
 invalid yaml blocks the dispatch like a chain composition failure. The
 shipped `grill` steps of `feature-full` and `autopilot` declare
 `question_batch_size` (`int`, default `0`): `0` asks every question in one
-round (today's grill), `N ≥ 1` at most N rows per round ordered by
+round (today's grill, and `0` keeps that meaning; a negative value is
+refused at load, by `pf config validate` and by `pf config set`), `N ≥ 1` at most N rows per round ordered by
 重点关注程度 with the mandatory proposal rows in the first round, `1` the
 one-question-at-a-time grill. It applies to the `grill` step id only
 (`grill-review` declares no attr).
@@ -469,102 +628,6 @@ no `task` block and never spawns a task is unaffected. The lane carries no
 sandbox key either: a task agent's filesystem/network trust equals a
 session agent's ([commands](commands.md)).
 
-### `summarize:` — the summarize lane
-
-The model candidates of the demand-gated summarize lane — the one-line
-narration of a running step's live transcript that a watched work
-item's snapshot carries (polyforge#224). One list for the whole
-workspace: a claim of any of its projects uses it (there is no
-per-project list; a `steps.<project>.summarize` key is an unknown step
-id and refuses):
-
-```yaml
-summarize:
-  models: ["pi:prov/flash-model", "claude:claude-sonnet-5-5"]  # tried in order on failure
-  language: English   # optional; absent = 中文
-  interval_sec: 120   # optional; absent = 60
-```
-
-`models` has the shape and strictness of a step entry in `steps:` above
-and is mandatory in the entry: a `language` or an `interval_sec`
-without `models` refuses like an empty entry. Any key other than
-`models`, `language` and `interval_sec` refuses (DAEMON-414 before the
-claim; `pf doctor` the same).
-
-`language` (polyforge#243) is the narration language: the prompt asks
-the model to "Answer in <language>." with the value inserted verbatim,
-and to keep code identifiers, file paths and commands as written.
-Absent, the narration is in 中文. The value is free text — no allowlist,
-no language codes, no length cap — but must be a plain YAML string that
-is non-empty and single-line after trimming; a number, list, map or
-null, an empty or whitespace-only value and a multi-line value all
-refuse.
-
-`interval_sec` (polyforge#250) is the minimum number of seconds between
-two summarize call starts for one work item (the clock is per work item
-and does not reset on a new step dispatch). Absent, it is 60. The value
-must be a YAML integer from 10 to 3600, inclusive; anything else — a
-quoted `"60"`, a float, a duration such as `1m`, a bool, null, a list or
-a map, `0`, a negative or an out-of-range number — refuses with an
-error naming the range `10-3600`. It is never clamped, and `0` does not
-mean "default". The per-attempt cap stays fixed at 20 calls per step
-dispatch, and no call starts while the previous one is still running,
-whatever the interval.
-
-The models list, the language and the interval are read from the file
-live at every lane request (nothing is snapshotted at claim): an edit
-governs the next call. No key (or no file) leaves the lane
-silently off — no call, no error, no doctor row; a declared-empty list
-is off too.
-
-### `memory_policy:` — the wrap-summary policy
-
-What the workflow's last step puts into the work item's one
-`experience.wrap` summary memory (no other step writes memories):
-`record` lists what is worth remembering, `skip` what never is. Shape —
-`default` and per-project entries, each with optional `record` / `skip`
-lists of non-empty, unique strings (no other key):
-
-```yaml
-memory_policy:
-  default:                       # every project; an undeclared list is the built-in default's
-    record: [pitfalls and their root cause, the owner's rulings and agreements]
-    skip: [transient state, credential values]
-  polyforge:                     # a project of this workspace: lists APPENDED to default's
-    record: [environment differences around the daemon's rollout]
-```
-
-A missing section means the built-in default policy and never refuses a
-claim; a malformed section refuses it like any other defect of the file
-(DAEMON-414). The built-in default (the section `pf init` appends as
-text when the file has none, existing bytes kept exactly): record the
-pitfalls and root causes (symptom, cause, fix), the environment and
-external-system facts not visible in code or git, and the owner's
-rulings and agreements; skip the process log, step output and full
-spec/plan (they live in the work item and the capsule), what code or
-git shows directly, transient state, and credential values. The daemon
-writes the claimed project's effective policy to the capsule
-(`runtime-state/memory-policy.json`) and renders it into the last
-step's wrap duty; a step whose workflow entry declares `recall: true`
-(the decision and authoring steps, never a gate like review,
-verification or deliver) is asked to recall first. The
-built-in default described above is an English paraphrase: the section
-`pf init` appends carries the same lists written in Chinese, and the
-built-in policy the daemon parses from it is the one described here.
-`pf init <ws>` appends the default section as text when the file has
-none and `pf doctor` warns about a `.polyforge.yaml` without one (no
-file at all passes on the built-in default).
-
-Step agents hold no aihub credential path: inside a step `pf recall` /
-`pf memory show` read through the daemon (scoped to the step's own
-project); `pf remember` sends the wrap summary synchronously to the
-daemon (`POST /step/memories`), which validates it (type
-`experience.wrap`, a title, ≤ 2 KB, no credential value), attributes it
-to the step's own work item and project and stores it with an
-idempotency key of the step dispatch (a retry returns the same memory);
-a failure is reported and never fails the step. Every other aihub verb,
-`pf doctor` and `pf daemon` are refused there (DAEMON-403).
-
 ## `.polyforge/verify-scope.conf` — the verification bar
 
 A repository's declarative verification bar, committed in the repository and
@@ -595,9 +658,12 @@ stderr and contributes nothing.
 | `base_setup` | command | Repeatable, ordered: the setup a rerun on a base tree needs first (echoed). |
 | `runner` | `complete` | Declares that the conf's commands are the complete bar (echoed). |
 | `ci_evidence` | `<workflow>/<job>` | Repeatable: a CI job the deliver step may accept as test evidence (echoed). |
-| `e2e_runner` | command | The command that runs the carries-selected suites: the engine appends them to it, repository-relative and in stable order, as one scoped command (`e2e_runner=npm run test:e2e:all --`). The file it runs — through the npm script when the value is `npm run <script> …` — is a runner, never a suite. Without the key each suite gets the analyzer's default command (`node <suite>`, `pytest <suite>`, `cargo test --test <name>`). Echoed as `e2e_runner` (`null` when undeclared). |
+| `e2e_runner` | command | The command that runs the carries-selected suites: the engine appends them to it, repository-relative and in stable order, as one scoped command (`e2e_runner=npm run test:e2e:all --`). The file it runs — through the npm script when the value is `npm run <script> …` — is a runner, never a suite; it is not exempt from coverage: a change to it that no `carries:` declaration (or `e2e_map=` glob) covers forces the full tier like any other uncovered path. Without the key each suite gets the analyzer's default command (`node <suite>`, `pytest <suite>`, `cargo test --test <name>`). Echoed as `e2e_runner` (`null` when undeclared). |
 | `suite_glob` | glob | Repeatable: replaces the analyzer's suite discovery for the repository (the undeclared-suite and selection rules then apply to the files it matches). Echoed as `suite_glob`. |
 | `e2e_map` | `<glob>=<suite>` | Repeatable: declares `<glob>` as the coverage of the repository-relative `<suite>`, replacing that suite's `carries:` header outright (not merged); several lines for one suite union. A `<suite>` that is not a discovered suite forces the full tier. Echoed as `e2e_map`. |
+| `smoke_suite` | suite path | Repeatable: a repository-relative suite the full-tier e2e selection always runs. Declaring at least one is the repository's opt-in: full-tier verification (`--full`) of a non-empty diff then runs the fast gates plus the carries-selected suites union the smoke suites (only the smoke suites for a documentation-only diff), lists an uncovered non-documentation path instead of forcing the full tail, and runs the full tail on a forced-full match, a change to this conf or a structural diagnostic ([contributing's Carries](../contributing.md#carries--declaring-what-an-e2e-suite-covers)). The full-phase commands stay the carried full bar delivery re-runs. The scoped tier ignores the key. Echoed as `smoke_suite`; the selection as `e2e_selection`. |
+| `micro_path` | path pattern | Repeatable: a repository-relative path the `micro` lane may change. Declaring at least one is the repository's micro opt-in; a repository that declares none is refused by that lane. An absolute, `./`-prefixed, blank or `..`-escaping value is diagnosed and contributes nothing. Echoed as `micro_paths` (see the micro paragraph below). |
+| `micro_check` | command | Repeatable, ordered: an extra micro-lane evidence command, named `micro-<i>`, run after the fast phase only under `--micro`. Echoed as `micro_checks`. |
 
 Command values — `fast_gate`, `full_command`, the command of a `check`, and
 `base_setup` — are bash: `--run` executes them with `bash -c` from the
@@ -605,20 +671,34 @@ repository root, and a value that begins with `$(` or a backtick is skipped
 with a lint diagnostic. A phase's conf lines, anonymous or named, replace the
 analyzer's default commands of that phase. A `<name>` is letters, digits,
 `.`, `_` and `-`, starts with a letter or digit, is declared once, and is
-never of the form `fast-<n>`, `full-<n>` or `scoped-<n>` (the anonymous and
-analyzer commands' names). A `check_*` line names a declared command — a
-`check` name or an anonymous `fast-<i>` / `full-<i>` — and may precede it;
-one naming no declared command is diagnosed and ignored. The three carries
+never of the form `fast-<n>`, `full-<n>`, `scoped-<n>` or `micro-<n>` (the
+anonymous and analyzer commands' names). A `check_*` line names a declared
+command — a `check` name or an anonymous `fast-<i>` / `full-<i>` / `micro-<i>`
+— and may precede it;
+one naming no declared command is diagnosed and ignored. The four carries
 keys fail closed instead: an empty `e2e_runner=` (or a second one, or one that
-begins with a command substitution), an empty `suite_glob=`, and an `e2e_map=`
-value that is not split by exactly one `=` into two non-empty sides are
+begins with a command substitution), an empty `suite_glob=`, an `e2e_map=`
+value that is not split by exactly one `=` into two non-empty sides, and a
+`smoke_suite=` value that is empty or not one relative path without blanks are
 diagnosed, naming the line, and force the full tier for every diff — never a
-scoped tier computed as if the key were absent. An engine that predates the
+scoped tier computed as if the key were absent (for an opted-in repository the
+full-tier e2e selection then falls back to the full tail). An engine that predates the
 keys diagnoses them as unknown and ignores them, so a conf may declare them
 before the release ships the engine. Glob values (`forced_full`, `exclude`,
 `suite_glob`, `e2e_map`, `carries:`) are shell-case patterns: `*` crosses
 `/`. `pf doctor`'s `scoped-gates readiness` row reads this file (never
 executes it).
+
+The two micro keys are the `micro` lane's declaration and its own glob
+grammar: a `micro_path` pattern is case-sensitive and slash-separated, `*`
+matches within one path segment, `**` crosses `/` (zero or more segments), and
+a pattern with no wildcard matches exactly that path. `micro_check` is a
+command value like `fast_gate`. The governing declaration is the one at the
+diff base (the fetched origin default branch), never one the change itself
+introduces — the driver reads it there (`git show`), and `tools/verify-scope
+--micro` does the same. `AGENTS.md` and `CLAUDE.md` (any directory) are out of
+bounds for the lane whatever a pattern matches. A repository that declares
+neither key keeps the JSON report's key set unchanged.
 
 ### `ci_evidence` — what the deliver step reads
 

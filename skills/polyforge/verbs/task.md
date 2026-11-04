@@ -79,6 +79,14 @@ no deliverable.
 - Trust equals a session agent's: there is no OS-level sandbox, so the task
   may read and write what the human's session may on the same filesystem and
   network. Scope its prompt accordingly.
+- Tool surface: a spawned task gets the standard set (claude
+  `Read,Glob,Grep,Bash,WebSearch,WebFetch`; pi `read,grep,find,ls,bash`).
+  The daemon's message analysis (`pf msg analyze`, `verbs/message.md`) is the
+  only user of a narrower **read-only profile** — claude `Read,Glob,Grep`, pi
+  `read,grep,find,ls`: no shell, no web, no write tool. It is set inside the
+  daemon only; `pf task spawn` and the spawn body never carry it. It narrows
+  what one task is offered; it is not a sandbox (the write-verb guard above
+  stays the one capability gate).
 
 ## Lifecycle and retention
 

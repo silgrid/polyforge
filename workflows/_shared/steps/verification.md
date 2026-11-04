@@ -35,7 +35,7 @@ output:
         properties:
           repo: { type: string, description: "The task repo (repos/<repo>) the command runs in." }
           command: { type: string, description: "The command exactly as you ran it inside that repo (no leading cd)." }
-      description: The full test bar - the build/lint/test commands that make this verdict, one entry per command per repo, exactly as run. The deliver step re-runs exactly these commands only when its own merge moves HEAD past the merged head this run proved (and unconditionally after a light pass), and the driver only accepts that re-run as covering the tests when the commands match; without a test_bar a moved default branch always needs a human.
+      description: The full test bar - the build/lint/test commands that make this verdict, one entry per command per repo, exactly as run. The deliver step re-runs exactly these commands only when its own merge moves HEAD past the merged head this run proved (and unconditionally after a light pass), and the driver only accepts that re-run as covering the tests when the commands match; without a test_bar a moved default branch always needs a human. Exception - an opted-in repo (smoke_suite=) carries its FULL e2e command here in place of the selection it ran, and deliver re-runs it even at the verified head.
     mechanical_bound:
       x-prompt-when: armed
       type: array
@@ -138,7 +138,9 @@ output:
 
 You are a machine-checkable gate, not a human-style code review: report whether the
 project's build, lint, and test commands pass against the tree `{{build_step}}` produced
-merged with the latest origin default branch — the full standard set, not a smoke subset.
+merged with the latest origin default branch — the full standard set, not a smoke subset
+(except a repo opted in with `smoke_suite=`: its fast gates plus the carries-selected e2e
+suites union its smoke suites, the full e2e command carried to delivery).
 No subjective judgment about design quality belongs here.
 {{position}}
 The tier this dispatch runs at rides the driver's `# Verification tier` section below; on a
@@ -267,7 +269,8 @@ exactly as run inside `repos/<repo>/`, no leading `cd`; no inspection commands).
 carrying a pre-existing failure is listed with exactly those tests excluded (e.g.
 `go test ./... -skip '^(TestA|TestB)$'`): a test-bar command that exits non-zero always
 routes a delivery onto a moved default branch to a human. `test_bar_notes` name a command
-with no such switch; say so in the report.
+with no such switch; say so in the report. An opted-in repo's `test_bar` already carries
+its full e2e command in place of the selection: carry it verbatim.
 
 ## Honesty
 
@@ -279,9 +282,12 @@ purpose of the machine gate: every step after you trusts your report.
 
 Write `artifacts/verification-report.md` (read by `deliver`): `report-mechanical.md` in
 whole (merges, plans, every check, pre-existing failures with the base sha, flaky re-runs,
-the `test_bar`), then the lane checks' results (per-scenario results on a lane with an
+the `test_bar`, an opted-in repo's e2e selection), then the lane checks' results (per-scenario results on a lane with an
 authored acceptance suite), any bar you ran yourself, and the verdict. An authored scenario
 you skip is legal for this gate (an honest `skipped` with a non-empty `detail`) but it
 blocks the automatic merge — `deliver` routes the delivery to a human naming the skipped
-title. Then emit the final JSON object per the schema above, `command_evidence` being
+title. A work item that changes the full-tier e2e selection adds a read-only selection replay:
+per opted-in repo it names, its five latest merged PRs through this change's engine
+(`--base <first parent> --full --json`, a throwaway worktree outside the capsule), one row
+each - PR, mode, suites, uncovered paths. Then emit the final JSON object per the schema above, `command_evidence` being
 `result.json`'s plus your own commands'.

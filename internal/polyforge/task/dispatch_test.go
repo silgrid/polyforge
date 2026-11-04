@@ -84,7 +84,7 @@ func TestExecRunnerNoUsageAndFailure(t *testing.T) {
 func TestExecRunnerHarnessToolAllowlist(t *testing.T) {
 	r := &ExecRunner{}
 	pc, _ := harness.ParseCandidate("pi:m")
-	pia, err := r.innerArgv(pc)
+	pia, err := r.innerArgv(pc, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestExecRunnerHarnessToolAllowlist(t *testing.T) {
 		t.Fatalf("pi argv misses the tool allowlist: %v", pia)
 	}
 	cc, _ := harness.ParseCandidate("claude:m")
-	ca, err := r.innerArgv(cc)
+	ca, err := r.innerArgv(cc, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +105,48 @@ func TestExecRunnerHarnessToolAllowlist(t *testing.T) {
 				t.Fatalf("claude argv carries banned %q: %v", banned, ca)
 			}
 		}
+	}
+}
+
+func TestExecRunnerReadOnlyToolProfile(t *testing.T) {
+	if TaskClaudeTools != "Read,Glob,Grep,Bash,WebSearch,WebFetch" || TaskPiTools != "read,grep,find,ls,bash" {
+		t.Fatalf("the standard surface changed: %q / %q", TaskClaudeTools, TaskPiTools)
+	}
+	r := &ExecRunner{}
+	pc, _ := harness.ParseCandidate("pi:m")
+	pia, err := r.innerArgv(pc, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSeq(pia, "--tools", "read,grep,find,ls") {
+		t.Fatalf("pi read-only argv: %v", pia)
+	}
+	cc, _ := harness.ParseCandidate("claude:m")
+	ca, err := r.innerArgv(cc, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSeq(ca, "--tools", "Read,Glob,Grep") || !containsSeq(ca, "--allowedTools", "Read,Glob,Grep") {
+		t.Fatalf("claude read-only argv: %v", ca)
+	}
+	for _, banned := range []string{"Bash", "bash", "WebSearch", "WebFetch", "Edit", "Write", "bypassPermissions"} {
+		for _, list := range []string{ReadOnlyClaudeTools, ReadOnlyPiTools} {
+			for _, tool := range strings.Split(list, ",") {
+				if tool == banned {
+					t.Fatalf("read-only profile carries %q", banned)
+				}
+			}
+		}
+		for _, a := range append(append([]string{}, ca...), pia...) {
+			if strings.Contains(a, banned) {
+				t.Fatalf("read-only argv carries %q: %v %v", banned, ca, pia)
+			}
+		}
+	}
+	// The standard profile keeps its bytes when the flag is off.
+	std, _ := r.innerArgv(cc, false)
+	if !containsSeq(std, "--tools", TaskClaudeTools) {
+		t.Fatalf("standard claude argv: %v", std)
 	}
 }
 

@@ -1317,3 +1317,46 @@ func TestSubStoreScopedWakeAudience(t *testing.T) {
 		t.Fatalf("a re-pointed cross-workspace subscriber is Passive to the adopter: %+v", u)
 	}
 }
+
+// TestSubStoreFreshChatGetsWIMutedElsewhere — #154 guard (carried by the
+// #224 ledger): mute is per chat. A WI one chat of the owner muted
+// (unsubscribed from) still reaches a fresh chat of the same owner
+// through the subscribe-owned path (SubscribeNew): the fresh chat holds an
+// unmuted subscription and lists the WI, while the muting chat keeps only
+// its own mute and is not re-subscribed by the same path.
+func TestSubStoreFreshChatGetsWIMutedElsewhere(t *testing.T) {
+	t.Run("fresh chat of the same owner", func(t *testing.T) {
+		s, err := newSubStore(filepath.Join(t.TempDir(), chatSubsFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.SubscribeNew("chat_b", "wi_1", "proj#1", "", 0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Unsubscribe("chat_b", "wi_1"); err != nil { // chat_b mutes the WI
+			t.Fatal(err)
+		}
+		added, err := s.SubscribeNew("chat_fresh", "wi_1", "proj#1", "", 0)
+		if err != nil || !added {
+			t.Fatalf("a fresh chat must get the WI through subscribe-owned while only chat_b muted it: added=%v err=%v", added, err)
+		}
+		if !s.HoldsSubscription("chat_fresh", "wi_1") {
+			t.Fatal("the fresh chat must hold the subscription")
+		}
+		if got := s.List("chat_fresh"); len(got) != 1 || got[0].WI != "wi_1" {
+			t.Fatalf("the fresh chat must list the WI: %+v", got)
+		}
+		s.mu.Lock()
+		freshMuted, bMuted := s.doc.Chats["chat_fresh"].Muted["wi_1"], s.doc.Chats["chat_b"].Muted["wi_1"]
+		s.mu.Unlock()
+		if freshMuted {
+			t.Fatal("another chat's mute must not reach the fresh chat")
+		}
+		if !bMuted || s.HoldsSubscription("chat_b", "wi_1") || len(s.List("chat_b")) != 0 {
+			t.Fatal("chat_b must stay muted with no subscription")
+		}
+		if again, err := s.SubscribeNew("chat_b", "wi_1", "proj#1", "", 0); err != nil || again {
+			t.Fatalf("subscribe-owned must not re-add the WI to the chat that muted it: added=%v err=%v", again, err)
+		}
+	})
+}

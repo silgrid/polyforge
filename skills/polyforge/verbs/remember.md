@@ -54,7 +54,19 @@ A design, review, decision sheet or audit meant for others is a memory
 | a review report | `doc.review` |
 | a decision sheet | `doc.decision` |
 | an audit | `doc.audit` |
+| a module map (one repository module's structure, revisioned) | `doc.module-map` |
 | a lesson / a fact | `experience.*` / `fact.*` |
+
+A `doc.module-map` follows a convention the server enforces on create
+(a non-conforming one is refused with `MEM-400` naming every missing
+piece): the title is `<repo>/<module> rev<N>` (N a decimal ≥ 1), the
+tags include `<repo>` and `<module>`, and the body carries a line
+`baseline @<commit> <YYYY-MM-DD>` (the commit and date the map describes).
+Each revision is a new memory — the older ones stay readable, and recall
+ranks the module's newest revision (latest update) before them; naming
+the replaced memory in a `supersedes` line is for human readers, the
+server never reads it. Drafts live in `scratch/`; the stored memory is
+the authoritative map.
 
 Pass the body as `@file` (≤1 MiB). A memory cannot be edited — store a
 new one (or redact). Local disposable output belongs in the workspace's
@@ -64,8 +76,8 @@ new one (or redact). Local disposable output belongs in the workspace's
 
 Only the workflow's last step writes a memory: the work item's ONE
 `experience.wrap` summary (title `<wi slug>: <what was done>`; body
-≤ 2 KB: 做了什么、关键决定、遗留, guided by the workspace's `memory_policy`
-— `.polyforge.yaml`, `verbs/init.md`; an out-of-policy lesson worth
+≤ 2 KB: 做了什么、关键决定、遗留, guided by the workspace path's memory
+policy — cli.toml `[memory_policy."<path>".<entry>]`, `verbs/init.md`; an out-of-policy lesson worth
 keeping carries a "建议新增条目：…" line and the `policy-proposal` tag). A
 step agent holds no aihub credential path: inside a step (`PF_WI_ID` and
 `PF_DAEMON_ID` set) the same `pf remember` command goes synchronously to

@@ -446,7 +446,24 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // section (step attrs in .polyforge.yaml), and the appended
 // section (the aihub server is `pf aihub`; one pf binary ships), and the
 // appended section (verify-scope selects e2e suites by
-// `carries:` declarations; python and rust analyzers), and nothing else) and is only routed to, from the install ops page and the README
+// `carries:` declarations; python and rust analyzers), and the appended
+// section (the legacy rollback image needs the running
+// version's tag; the dry-run plan names both probe layouts), and the
+// appended v2.20.18 section (message analysis runs as a task
+// and answers a structured result), and the appended section
+// (full-tier e2e selection by smoke suites; the deliver step's recorded bar
+// runs), and the appended section (the capsule retention row
+// slims wrapped capsules; `--prune-capsules`; the disk watermark row),
+// and the appended section (e2e-author's four-key
+// executability preflight and its driver rejection), and the appended
+// v2.20.20 section (`pf msg prompt` turns a message into an
+// execution prompt), and the appended v2.20.21 section
+// (summarize and memory_policy move into cli.toml; `pf config migrate`,
+// its deploy order and rollback), and the appended section (the
+// micro lane: pure text changes deliver on fast evidence), and the appended
+// section (doc.module-map: the Create convention and
+// current-revision-first recall), and nothing else)
+// and is only routed to, from the install ops page and the README
 // landing page. The
 // pin moves in the same commit as each append (the append-only rule,
 // spec R14: docs change with the code, and the pin with the
@@ -454,7 +471,7 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "7080cc80333e4f01554246e5d32e5e5098c0f16cf5608a56cf615bcaca05ece1" {
+	if got := hex.EncodeToString(sum[:]); got != "a811e00c83dfa95001ed1ed804bf980792aea5fc603b4e2e03fa01fda171eaf8" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	install := w254Norm(w254Page(t, "docs/install.md"))

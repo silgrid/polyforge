@@ -1,0 +1,25 @@
+# Workspace polyforge configuration (fixture gamma).
+# Every candidate is <harness>:<model>.
+steps:
+  gamma:
+    default: { models: ["pi:step-model"] }
+summarize:
+  models: [pi:example-gateway/deepseek-v4.1-flash-1017,claude:claude-haiku-5-5]
+  language: Chinese   # 可选，缺省中文
+  interval_sec: 120    # 可选，缺省 60：两次摘要调用的最小间隔（10-3600）
+
+# memory_policy: what the workflow's last step puts into the work item's
+# experience.wrap summary memory. record = worth remembering, skip = never
+# in it. A project entry's lists are appended to default's:
+#   <project>: { record: [...], skip: [...] }
+memory_policy:
+  default:
+    record:
+      - Pitfalls and root causes (symptom -> cause -> fix)
+      - Environment and external-system facts not visible in code/git
+      - Owner's verdicts and conventions
+    skip:
+      - Step-by-step process logs, step outputs, full specs/plans (already in the ticket and capsule)
+      - Anything directly visible from code/git
+      - Transient state
+      - Secret and credential values

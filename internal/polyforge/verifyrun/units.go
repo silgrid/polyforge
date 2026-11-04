@@ -4,8 +4,11 @@ package verifyrun
 // can be parsed is parsed — Go (`--- FAIL: X`, `FAIL\t<pkg>`,
 // `ok\t<pkg>`), the e2e harness's `FAIL <Test>` lines, pytest node ids,
 // unittest's `FAIL: test_x (mod.Class)`, Rust libtest's
-// `test x ... FAILED` and the `PASS: <title>` / `FAIL: <title>` marker
-// lines of a node `.mjs` suite. A failed command none of whose failures
+// `test x ... FAILED`, the `PASS: <title>` / `FAIL: <title>` marker
+// lines of a node `.mjs` suite and an aggregate e2e runner's per-suite
+// blocks (`===== PASS|FAIL <suite> (<n>s) =====`), failure lines
+// (`FAIL e2e/<suite>: <scenario> — <message>`) and the `re-run: <cmd>`
+// line it prints after them. A failed command none of whose failures
 // can be located is ONE unit — the whole command — and that unit is
 // never pre-existing (fail closed). A Go package whose binary did not
 // finish normally (a panic, a timeout, an os.Exit, -failfast) is a
@@ -30,7 +33,8 @@ const (
 	KindUnittest = "unittest"
 	KindLibtest  = "libtest"
 	KindMjs      = "mjs"
-	KindCommand  = "command" // an unlocatable failure: the whole command
+	KindE2ESuite = "e2e-suite" // one suite of an aggregate e2e runner (`FAIL e2e/<suite>: …`)
+	KindCommand  = "command"   // an unlocatable failure: the whole command
 )
 
 // unit is one parsed result.
@@ -42,6 +46,9 @@ type unit struct {
 	BuildFailed bool   // a Go package that did not build (never flaky)
 	Marker      string // the output line that identified it
 	Signature   string // the failure's normalized assertion lines (failures)
+	// PrintedRerun is the aggregate e2e runner's own `re-run:` command
+	// for this suite (KindE2ESuite only; "" = none printed).
+	PrintedRerun string
 }
 
 // parseOpts are what a parse needs to know of the command it reads.
@@ -77,6 +84,14 @@ var (
 	reLibtestStdout = regexp.MustCompile(`^---- (\S+) stdout ----$`)
 
 	reMjs = regexp.MustCompile(`^(PASS|FAIL): (.+)$`)
+
+	// the aggregate e2e runner: a suite's output block header, its
+	// failure line in the failures section, the suite's re-run after
+	// them, and the section headers that end a suite block
+	reSuiteBlock   = regexp.MustCompile(`^===== (PASS|FAIL) (\S+) \(\S+\) =====$`)
+	reSuiteFail    = regexp.MustCompile(`^FAIL (e2e/[^\s:]+): (.+)$`)
+	reSuiteRerun   = regexp.MustCompile(`^re-run: (.+)$`)
+	reSuiteSection = regexp.MustCompile(`^===== (?:failures|summary) =====$`)
 )
 
 // maxTextBytes caps a signature or a detail string: both travel into the
@@ -205,7 +220,41 @@ func parseUnitsOpts(lines []string, o parseOpts) []*unit {
 		}
 		bareFail, panicLine = false, ""
 	}
+	// the aggregate e2e runner: inSuiteBlock = inside one suite's echoed
+	// output, whose own markers the suite unit stands for; failSuite = the
+	// suite whose failure lines a following `re-run:` line belongs to
+	inSuiteBlock, failSuite := false, ""
 	for i, line := range lines {
+		switch {
+		case reSuiteBlock.MatchString(line):
+			m := reSuiteBlock.FindStringSubmatch(line)
+			inSuiteBlock, failSuite = true, ""
+			if m[1] == "PASS" {
+				add(&unit{Kind: KindE2ESuite, Name: "e2e/" + strings.TrimPrefix(m[2], "e2e/"), Marker: line})
+			}
+			continue
+		case reSuiteSection.MatchString(line):
+			inSuiteBlock, failSuite = false, ""
+			continue
+		case inSuiteBlock:
+			continue
+		case reSuiteFail.MatchString(line):
+			m := reSuiteFail.FindStringSubmatch(line)
+			u := add(&unit{Kind: KindE2ESuite, Name: m[1], Failed: true, Marker: line})
+			sig := normSig(m[2])
+			if u.Signature != "" {
+				sig = u.Signature + " | " + sig
+			}
+			u.Signature, failSuite = capText(sig), m[1]
+			continue
+		case failSuite != "" && reSuiteRerun.MatchString(line):
+			if u := index[KindE2ESuite+"\x00\x00"+failSuite]; u != nil && namesSuite(reSuiteRerun.FindStringSubmatch(line)[1], failSuite) {
+				u.PrintedRerun = reSuiteRerun.FindStringSubmatch(line)[1]
+			}
+			failSuite = ""
+			continue
+		}
+		failSuite = ""
 		if line == "FAIL" {
 			bareFail = true
 		}
@@ -420,6 +469,18 @@ func mjsSignature(lines []string, at int) string {
 		return normSig(t)
 	}
 	return ""
+}
+
+// namesSuite reports whether a printed re-run command is one simple
+// command whose last word is the suite (`x.mjs` or `e2e/x.mjs`): a
+// re-run line that names anything else is not this suite's.
+func namesSuite(cmd, suite string) bool {
+	words, simple := shellWords(cmd)
+	if !simple || len(words) == 0 {
+		return false
+	}
+	last := words[len(words)-1]
+	return last == suite || "e2e/"+last == suite
 }
 
 // findUnit answers the parsed unit of the given kind and name (nil = absent).

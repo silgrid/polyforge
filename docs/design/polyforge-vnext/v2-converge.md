@@ -765,7 +765,7 @@ Events are "news", not state: the execution-state authority is always the capsul
 | `runtime-state/spawn-journal.jsonl` | one line per step spawn (harness, session, transcript path) |
 | `runtime-state/pending-results/<spawn_n>.json` | the sole landing spot of result envelopes: the step agent delivers through `pf result submit`, and the daemon (`POST /step/result`) stamps the dispatch identity and writes atomically |
 | `runtime-state/recalled-memories.json` | the claim-time memory snapshot (any-term ranked retrieval, see `06-memory-search.md#§8`); the driver injects it into the step prompt as "non-binding history" (G3), one line `[type] title` per entry, at most 10 lines |
-| `runtime-state/memory-policy.json` | the memory policy in effect for that project at claim (`memory_policy` of `.polyforge.yaml`, the built-in default when the section is missing); the driver renders it into the last step's wrap-summary duty section |
+| `runtime-state/memory-policy.json` | the memory policy in effect for that project at claim (the cli.toml `[memory_policy."<path>".<entry>]` block of its workspace path, from the daemon's loaded snapshot —; the built-in default when the path has none); the driver renders it into the last step's wrap-summary duty section |
 | `artifacts/steps/<step>/s<spawn_n>/result.json` | the archive of accepted envelopes |
 | `artifacts/handoff-<step>.md` | written by a step declaring `handoff` by path convention, read by later inherit steps |
 | `session/session-<token>.jsonl` | the harness session file, synced in at commit boundaries |

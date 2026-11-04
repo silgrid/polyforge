@@ -163,17 +163,13 @@ func (r *Runtime) TaskModels(project string) ([]string, string, error) {
 	return list, from, nil
 }
 
-// SummarizeLane answers the summarize lane's configuration of a project
-// read LIVE from its workspace yaml (polyforge#33 supersedes the
-// claim-time snapshot of #224/#243/#250): the root summarize.models list
-// (nil = the lane is off), the narration language and the per-WI minimum
-// call spacing in seconds. A yaml that cannot be read turns the lane off
-// for this request — the work item is dispatch-blocked on the same config
-// anyway, and the lane is best-effort narration.
-func (r *Runtime) SummarizeLane(project string) (models []string, language string, intervalSec int) {
-	wcfg, err := r.LoadWorkspace(project)
-	if err != nil {
-		return nil, workspace.DefaultSummarizeLanguage, workspace.DefaultSummarizeIntervalSec
-	}
-	return workspace.SummarizeModels(wcfg), workspace.SummarizeLanguage(wcfg), workspace.SummarizeIntervalSec(wcfg)
+// SummarizeLane answers the summarize lane's configuration from the
+// daemon's loaded cli.toml snapshot: the [summarize]
+// table's models (nil = the table is absent: the lane is off), the
+// narration language and the per-WI minimum call spacing in seconds, the
+// two optional keys at their documented defaults when absent. It is one
+// machine-level table for every project; no file is read per request — a
+// `pf config set` or `pf config reload` swaps the snapshot (class live).
+func (r *Runtime) SummarizeLane() (models []string, language string, intervalSec int) {
+	return r.cfg.Live.Summarize()
 }

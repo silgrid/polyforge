@@ -39,7 +39,8 @@ type configKeyDef struct {
 }
 
 // configKeyDefs is the one ordered key model: the flat keys first, then
-// the [daemon] table keys in the docs' order. Everything else (the CLI's
+// the [daemon] table keys in the docs' order, then the [summarize] table
+// keys. Everything else (the CLI's
 // argument parser, its rendered lists and the daemon's reload) derives
 // from this list.
 var configKeyDefs = []configKeyDef{
@@ -53,7 +54,19 @@ var configKeyDefs = []configKeyDef{
 	{"harness_root", keyDaemon, ConfigRestartOnly},
 	{"operator_agent_dir", keyDaemon, ConfigRestartOnly},
 	{"max_concurrent_jobs", keyDaemon, ConfigLive},
+	{"summarize.models", keySummarize, ConfigLive},
+	{"summarize.language", keySummarize, ConfigLive},
+	{"summarize.interval_sec", keySummarize, ConfigLive},
 }
+
+// MemoryPolicyClass is the reload class of the whole
+// [memory_policy."<path>".<entry>] family: a reload swaps it and the next
+// claim writes the new effective policy into its capsule (a running job
+// keeps the policy its claim wrote).
+const MemoryPolicyClass = ConfigNextClaim
+
+// MemoryPolicyLabel is the family's name in reload outcomes.
+const MemoryPolicyLabel = "[memory_policy]"
 
 // ConfigSchema answers one key's machine-readable value schema: its kind
 // plus ONLY the constraints the shared validator actually enforces. It is
@@ -73,15 +86,6 @@ func ConfigSchema(name string) map[string]any {
 		return map[string]any{"kind": "duration", "nonzero": true, "allow_negative": true}
 	case "max_concurrent_jobs":
 		return map[string]any{"kind": "int", "min": 1}
-	}
-	return nil
-}
-
-// WorkspaceConfigSchema answers the value schema of one workspace
-// `.polyforge.yaml` summarize key. The bounds are the workspace package's
-// existing validator constants (never a UI copy).
-func WorkspaceConfigSchema(name string) map[string]any {
-	switch name {
 	case "summarize.models":
 		return map[string]any{"kind": "model-list"}
 	case "summarize.language":
@@ -94,19 +98,12 @@ func WorkspaceConfigSchema(name string) map[string]any {
 
 // WorkspaceConfigClass answers a workspace `.polyforge.yaml` key's reload
 // class — the same class table the cli.toml keys use, never a UI copy. The
-// summarize lane reads the yaml live at every request, and the driver
-// composes every step's chain and attrs fresh at every dispatch, so every
-// summarize key and every steps.<project>.<step>.models / .attrs.<name>
-// key is live (a running step keeps what its dispatch read); the
-// memory_policy section governs from the next claim.
+// driver composes every step's chain and attrs fresh at every dispatch, so
+// every steps.<project>.<step>.models / .attrs.<name> key is live (a
+// running step keeps what its dispatch read).
 func WorkspaceConfigClass(name string) ConfigClass {
-	switch {
-	case name == "summarize.models", name == "summarize.language", name == "summarize.interval_sec":
+	if strings.HasPrefix(name, "steps.") {
 		return ConfigLive
-	case strings.HasPrefix(name, "steps."):
-		return ConfigLive
-	case name == workspace.MemoryPolicyKey:
-		return ConfigNextClaim
 	}
 	return ""
 }
@@ -148,12 +145,15 @@ const (
 	keyFlat configKeyKind = iota
 	keyDaemon
 	keyWorkspace
+	keySummarize // a [summarize] table key (summarize.<name>)
+	keyPolicy    // one memory_policy.<entry>.record|skip list
 )
 
 // configKey is one parsed key argument.
 type configKey struct {
 	kind configKeyKind
-	name string      // flat/daemon key name, or the workspace path as spelled
+	name string      // flat/daemon/summarize key name, the workspace path as spelled, or the policy entry
+	list string      // keyPolicy: the list name (record | skip)
 	raw  string      // the argument as given (for error messages)
 	cls  ConfigClass // zero for a workspace section
 }
@@ -192,6 +192,13 @@ func parseConfigKey(arg string) (configKey, error) {
 		}
 		return configKey{kind: keyDaemon, name: target, raw: raw, cls: cls}, nil
 	}
+	if strings.HasPrefix(arg, workspace.MemoryPolicyKey+".") {
+		parts := strings.Split(arg, ".")
+		if len(parts) != 3 || parts[1] == "" || (parts[2] != "record" && parts[2] != "skip") {
+			return configKey{}, fmt.Errorf("config: malformed memory_policy key %q (want memory_policy.<default|project>.record|skip)", raw)
+		}
+		return configKey{kind: keyPolicy, name: parts[1], list: parts[2], raw: raw, cls: MemoryPolicyClass}, nil
+	}
 	if kind, cls, ok := lookupConfigKey(arg); ok {
 		return configKey{kind: kind, name: arg, raw: raw, cls: cls}, nil
 	}
@@ -199,8 +206,12 @@ func parseConfigKey(arg string) (configKey, error) {
 }
 
 func unknownConfigKey(name string) error {
-	return fmt.Errorf("config: unknown key %q — the known keys are the flat keys (%s), the [daemon] keys (%s) and whole [workspace.\"<path>\"] sections",
-		name, strings.Join(knownFlatKeyNames(), ", "), strings.Join(knownDaemonKeyNames(), ", "))
+	return fmt.Errorf("config: unknown key %q — the known keys are the flat keys (%s), the [daemon] keys (%s), the [summarize] keys (%s), memory_policy.<default|project>.record|skip and whole [workspace.\"<path>\"] sections",
+		name, strings.Join(knownFlatKeyNames(), ", "), strings.Join(knownDaemonKeyNames(), ", "), strings.Join(knownSummarizeKeyNames(), ", "))
+}
+
+func knownSummarizeKeyNames() []string {
+	return configKeyNamesOfKind(keySummarize)
 }
 
 func knownFlatKeyNames() []string {
@@ -226,8 +237,8 @@ func mustConfigClass(name string) ConfigClass {
 	return class
 }
 
-// classOfKey answers a key argument's class (workspace sections are
-// next-claim).
+// classOfKey answers a key argument's class (workspace sections and the
+// memory_policy family are next-claim).
 func classOfKey(k configKey) ConfigClass {
 	if k.isWorkspace() {
 		return ConfigSectionClass

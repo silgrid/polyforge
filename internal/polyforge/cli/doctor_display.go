@@ -43,18 +43,25 @@ var polyforgePkgRe = regexp.MustCompile(`github\.com[:/]silgrid/polyforge(\.git)
 // command line is not a script).
 const maxScriptBytes = 1 << 20
 
-// harnessDisplayChecks answers both harness checks for this user.
-func harnessDisplayChecks() []doctorCheck {
+// harnessDisplayChecks answers both harness checks for this user;
+// fixLayout lets the claude install layout check link its skill.
+func harnessDisplayChecks(fixLayout bool) []doctorCheck {
 	home, _ := os.UserHomeDir()
-	piDir := os.Getenv("PI_CODING_AGENT_DIR")
-	if piDir == "" {
-		piDir = filepath.Join(home, ".pi", "agent")
-	}
+	piDir := piAgentDir(home)
 	return []doctorCheck{
 		claudeDisplayCheck(home), piDisplayCheck(piDir, home),
-		claudeLayoutCheck(home), piLayoutCheck(piDir, home),
+		claudeLayoutCheck(home, fixLayout), piLayoutCheck(piDir, home),
 		v1LeftoversCheck(home, piDir),
 	}
+}
+
+// piAgentDir is pi's agent dir for this user: $PI_CODING_AGENT_DIR,
+// else ~/.pi/agent.
+func piAgentDir(home string) string {
+	if d := os.Getenv("PI_CODING_AGENT_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(home, ".pi", "agent")
 }
 
 // runsPfStatusline reports whether shell text invokes the progress face

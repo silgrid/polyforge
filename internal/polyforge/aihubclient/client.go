@@ -185,6 +185,12 @@ func (c *Client) PatchWorkItem(id string, body map[string]any) (json.RawMessage,
 	return c.raw("PATCH", "/api/v1/work-items/"+url.PathEscape(id), body)
 }
 
+// AddComment appends one comment to a work item. There is
+// no edit and no delete: the only write is this append.
+func (c *Client) AddComment(id string, req api.AddCommentRequest) (json.RawMessage, error) {
+	return c.raw("POST", "/api/v1/work-items/"+url.PathEscape(id)+"/comments", req)
+}
+
 // CancelWorkItem terminates a queued/paused/blocked WI (no active
 // generation).
 func (c *Client) CancelWorkItem(id string) (json.RawMessage, error) {

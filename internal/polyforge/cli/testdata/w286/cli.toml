@@ -1,0 +1,12 @@
+# w286 fixture: the machine config the three workspaces below are mapped by.
+# @ROOT@ is replaced with the test's temp copy of this tree.
+server = "http://127.0.0.1:1"
+
+[workspace."@ROOT@/ws-alpha"]
+projects = ["alpha"]
+
+[workspace."@ROOT@/ws-beta"]
+projects = ["beta", "beta-two"]
+
+[workspace."@ROOT@/ws-gamma"]
+projects = ["gamma"]

@@ -63,8 +63,9 @@ func TestHelpExtensionsIndexesTheExtendingSubsections(t *testing.T) {
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("help index subsections %q, want exactly the docs/extending.md subsections %q (one line each, same order)", got, want)
 	}
-	// polyforge#243/#250: the summarize line names all of its keys
-	if !strings.Contains(stdout, ".polyforge.yaml summarize.models, summarize.language, summarize.interval_sec") {
+	// polyforge#243/#250, the summarize line names the
+	// cli.toml table and all of its keys
+	if !strings.Contains(stdout, "cli.toml [summarize] models, language, interval_sec") || !strings.Contains(stdout, `cli.toml [memory_policy."<path>".<entry>]`) {
 		t.Fatalf("the index does not name summarize.language and summarize.interval_sec:\n%s", stdout)
 	}
 	if len(want) != 10 {

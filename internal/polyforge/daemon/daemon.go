@@ -382,13 +382,6 @@ type Daemon struct {
 	publicKeyB64 string
 	mfaceMu      sync.Mutex
 	face         machineFaceState
-
-	// analyzerDispatch is the one-shot dispatcher the explicit message
-	// analyzer reuses (the same harness binaries/summarize-cwd as the
-	// narration lane); analyzerMu enforces one analyzer run at a time.
-	analyzerDispatch summarize.Dispatcher
-	analyzerMu       sync.Mutex
-	analyzerBusy     bool
 }
 
 // New validates and assembles the daemon. Restart reconciliation is NOT
@@ -418,6 +411,10 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	cfg.fill()
 	live := liveconfig.New(cfg.Mapping, cfg.ClaudeBin, cfg.Supervision.StepTimeout, cfg.Supervision.StallWindow)
+	// The [summarize] table and the memory_policy family come from the
+	// file-only startup baseline; a reload swaps them.
+	live.SetSummarize(cfg.StartupFile.Summarize)
+	live.SetMemoryPolicy(cfg.StartupFile.MemoryPolicy)
 
 	// liveLimits answers the current supervision defaults (a live reload's
 	// step_timeout / stall_window folded in). A zero duration means unset
@@ -510,6 +507,9 @@ func New(cfg Config) (*Daemon, error) {
 				// the next threshold judgement, including in-flight steps
 				//
 				LimitsFunc: func() supervise.Defaults { return liveLimits() },
+				// the deliver step's bar-run record lives
+				// under the data dir; /step/bar-run appends to it
+				DataDir: cfg.DataDir,
 			})
 		}
 	}
@@ -576,19 +576,18 @@ func New(cfg Config) (*Daemon, error) {
 		}
 	}
 	d = &Daemon{
-		chats:            &chatStore{path: filepath.Join(cfg.DataDir, chatsFile)},
-		subs:             subs,
-		cfg:              cfg,
-		hub:              cfg.Hub,
-		live:             live,
-		modes:            NewModeCtl(),
-		q:                NewJobQueue(cfg.MaxConcurrent, func() map[string]bool { return d.occupiedSlots() }),
-		shutDone:         make(chan struct{}),
-		sup:              supervise.NewRegistry(),
-		lane:             summarize.New(laneDispatcher),
-		remoteSnaps:      newRemoteSnapCache(remoteSnapTTL, remoteSnapCap),
-		face:             machineFaceState{desiredRole: roleFromLauncher(cfg.Launcher)},
-		analyzerDispatch: laneDispatcher,
+		chats:       &chatStore{path: filepath.Join(cfg.DataDir, chatsFile)},
+		subs:        subs,
+		cfg:         cfg,
+		hub:         cfg.Hub,
+		live:        live,
+		modes:       NewModeCtl(),
+		q:           NewJobQueue(cfg.MaxConcurrent, func() map[string]bool { return d.occupiedSlots() }),
+		shutDone:    make(chan struct{}),
+		sup:         supervise.NewRegistry(),
+		lane:        summarize.New(laneDispatcher),
+		remoteSnaps: newRemoteSnapCache(remoteSnapTTL, remoteSnapCap),
+		face:        machineFaceState{desiredRole: roleFromLauncher(cfg.Launcher)},
 		// the file-only baseline the reload compares against until the
 		// first successful reload moves it
 		lastAppliedFile: cfg.StartupFile,

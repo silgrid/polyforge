@@ -245,6 +245,9 @@ func (r *runner) locate(ctx context.Context, rr *repoRun, cr *cmdRun, u *unitRun
 			}
 			u.Rerun = cr.cmd + sep + "--exact " + shellQuote(u.Name)
 		}
+	case KindE2ESuite:
+		u.File = u.Name
+		u.Rerun, why = suiteRerun(cr.cmd, u.PrintedRerun, u.Name)
 	case KindMjs:
 		if w, _ := commandWord(words); simple && w == "node" {
 			var files []string
@@ -373,9 +376,10 @@ func unitPassed(u *unit, exit int, us []*unit, lines []string) bool {
 			ok = ok || strings.HasPrefix(l, "OK")
 		}
 		return exit == 0 && ran && ok
-	case KindMjs:
+	case KindMjs, KindE2ESuite:
 		// the whole suite re-ran: it passes only as a whole (a crash
-		// after the title's PASS line is no pass)
+		// after the title's PASS line is no pass; an aggregate suite
+		// passes on its own `===== PASS <suite>` block)
 		return exit == 0 && got != nil
 	}
 	return false

@@ -4,8 +4,10 @@ package cli
 //. Reads are live (no cache): the cwd→workspace resolution is
 // mapping.Plan.MatchWorkspace, the file is parsed by the one strict
 // workspace loader, and the declared step candidates come from the installed
-// bundles the daemon reports. Writes are byte-preserving line edits of the
-// summarize block, serialized by the same sibling flock discipline as the
+// bundles the daemon reports. The read carries the mapping, the projects and
+// the step chains/attrs only — summarize and memory_policy are cli.toml
+// facts read through `pf config list`. Writes are
+// byte-preserving line edits of the steps block, serialized by the same sibling flock discipline as the
 // cli.toml writer and validated by workspace.Load before anything lands.
 
 import (
@@ -46,7 +48,7 @@ func runConfigWorkspace(ctx *Context, args []string) error {
 	}
 	ws := v.eff.Mapping.MatchWorkspace(abs)
 	if ws == "" {
-		return emitJSON(ctx, map[string]any{"mapped": false, "workspace": nil, "yaml": nil, "summarize": nil, "steps": nil, "steps_complete": false})
+		return emitJSON(ctx, map[string]any{"mapped": false, "workspace": nil, "yaml": nil, "steps": nil, "steps_complete": false})
 	}
 	out, err := readWorkspaceConfig(ctx, v, ws)
 	if err != nil {
@@ -84,30 +86,13 @@ func readWorkspaceConfig(ctx *Context, v *configView, ws string) (map[string]any
 		yamlFact["sha256"] = sha256Hex(raw)
 	}
 
-	summarize := map[string]any{
-		"models": workspaceValue{
-			Key: "summarize.models", Value: workspace.SummarizeModels(cfg),
-			Source: sourceIf(cfg != nil && cfg.Summarize != nil), Class: WorkspaceConfigClass("summarize.models"), Schema: WorkspaceConfigSchema("summarize.models"),
-		},
-		"language": workspaceValue{
-			Key: "summarize.language", Value: workspace.SummarizeLanguage(cfg),
-			Source: sourceIf(cfg != nil && cfg.SummarizeLanguage != ""), Class: WorkspaceConfigClass("summarize.language"), Schema: WorkspaceConfigSchema("summarize.language"),
-		},
-		"interval_sec": workspaceValue{
-			Key: "summarize.interval_sec", Value: workspace.SummarizeIntervalSec(cfg),
-			Source: sourceIf(cfg != nil && cfg.SummarizeIntervalSec != 0), Class: WorkspaceConfigClass("summarize.interval_sec"), Schema: WorkspaceConfigSchema("summarize.interval_sec"),
-		},
-	}
-
 	steps := declaredStepCandidates(cfg, projects, workflowsDir, stepsComplete)
 	out := map[string]any{
 		"mapped":         true,
 		"workspace":      ws,
 		"yaml":           yamlFact,
-		"summarize":      summarize,
 		"steps":          steps,
 		"steps_complete": stepsComplete,
-		"memory_policy":  memoryPolicyRead(cfg, projects),
 	}
 	if reason != "" {
 		out["steps_reason"] = reason
@@ -218,32 +203,6 @@ func attrRead(project, id, name string, overrides map[string]any, d *workflow.At
 		a["schema"] = map[string]any{"kind": d.Type}
 	}
 	return a
-}
-
-// memoryPolicyRead answers the read face's memory_policy block: the
-// default entry's effective lists (declared, else the built-in ones) and
-// every mapped project's OWN declared lists (never pre-merged: the append
-// rule is the append_to_default fact), each with whether it is declared.
-func memoryPolicyRead(cfg *workspace.Config, projects []string) map[string]any {
-	var declared map[string]workspace.PolicyEntry
-	if cfg != nil {
-		declared = cfg.MemoryPolicy
-	}
-	builtin := workspace.DefaultMemoryPolicy()
-	d, dok := declared[workspace.DefaultKey]
-	base := map[string]any{"record": orList(d.Record, builtin.Record), "skip": orList(d.Skip, builtin.Skip), "declared": dok}
-	perProject := map[string]any{}
-	for _, p := range projects {
-		e, ok := declared[p]
-		perProject[p] = map[string]any{"record": orList(e.Record, []string{}), "skip": orList(e.Skip, []string{}), "declared": ok}
-	}
-	return map[string]any{
-		"source":            sourceIf(declared != nil),
-		"class":             WorkspaceConfigClass(workspace.MemoryPolicyKey),
-		"append_to_default": true,
-		"default":           base,
-		"projects":          perProject,
-	}
 }
 
 func orList(declared, fallback []string) []string {

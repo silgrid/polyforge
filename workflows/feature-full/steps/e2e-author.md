@@ -21,12 +21,42 @@ output:
       type: array
       items:
         type: object
-        required: [title, status, evidence]
+        required: [title, status, evidence, preflight]
         properties:
           title: { type: string }
           status: { type: string, enum: [fail] }
           evidence: { type: string, minLength: 1 }
-      description: "The baseline run against the pre-implementation tree - one entry per scenario_titles entry, same order. Empty only when the approved mode is `skipped-with-rationale`; otherwise at least one. Every kept scenario is an assertion-level red (`fail`); a scenario that passed at baseline was deleted (already_satisfied) or rewritten before completing. The one exception is the all-green report: EVERY scenario passed, every row then says `pass` (outside the enum on purpose - the driver never accepts it as a completion and asks the owner instead, see Outcomes). evidence carries the failure proof - a runner output excerpt or an observed-vs-expected contrast."
+          preflight:
+            type: object
+            required: [data_source, async_settle, timing_window, selector_unique]
+            additionalProperties: false
+            properties:
+              data_source:
+                type: object
+                required: [verdict, evidence]
+                properties:
+                  verdict: { type: string, enum: [ok, n/a] }
+                  evidence: { type: string, minLength: 1 }
+              async_settle:
+                type: object
+                required: [verdict, evidence]
+                properties:
+                  verdict: { type: string, enum: [ok, n/a] }
+                  evidence: { type: string, minLength: 1 }
+              timing_window:
+                type: object
+                required: [verdict, evidence]
+                properties:
+                  verdict: { type: string, enum: [ok, n/a] }
+                  evidence: { type: string, minLength: 1 }
+              selector_unique:
+                type: object
+                required: [verdict, evidence]
+                properties:
+                  verdict: { type: string, enum: [ok, n/a] }
+                  evidence: { type: string, minLength: 1 }
+            description: The executability preflight of this scenario (see "Executability preflight (the four self-checks)") - exactly the four fixed keys, each a verdict (`ok`, or `n/a` with the reason as its evidence) and a non-empty evidence taken from the same targeted baseline run. `structural` is never a verdict - a structural failure is fixed before completing, or asked about.
+      description: "The baseline run against the pre-implementation tree - one entry per scenario_titles entry, same order. Empty only when the approved mode is `skipped-with-rationale`; otherwise at least one. Every kept scenario is an assertion-level red (`fail`); a scenario that passed at baseline was deleted (already_satisfied) or rewritten before completing. The one exception is the all-green report: EVERY scenario passed, every row then says `pass` (outside the enum on purpose - the driver never accepts it as a completion and asks the owner instead, see Outcomes). evidence carries the failure proof - a runner output excerpt or an observed-vs-expected contrast. Every kept row carries its four-key preflight from the same run - all-green rows too; an append-only run preflights only its newly appended rows (the frozen rows stay byte-identical); a skipped-with-rationale run has no baseline and therefore no preflight. The driver rejects a completed result whose row lacks the preflight, a fixed key, a non-empty evidence or a verdict of ok or n/a."
     bindings:
       type: array
       items:
@@ -122,16 +152,25 @@ The lane default is `{{e2e_author_mode}}`; this run's mode is the owner-approved
    project's full suite (`go test ./...`, `make test`, the full `./test`, `npm test`):
    the full bar runs once, in `verification`. A document-only scenario is driven by
    hand through the project's actual interfaces (CLI, API, config) and judged against
-   its THEN clause.
+   its THEN clause. This run is also the preflight's dry-run: the four self-checks
+   below are read from the existing targeted baseline run and its output, never from a
+   second run.
 6. Classify every scenario and act on it in this same step:
-   - **Assertion-level red** — keep it: this is the legal baseline.
-   - **Build, wiring or environment error in the test** — fix the test, fold the fix
-     into the same commit (`git commit --amend`, test files only), and go back to 5.
+   - **Assertion-level red** whose four self-checks hold — keep it: this is the legal
+     baseline.
+   - **Structural failure** — an assertion no correct implementation could pass: one of
+     the four self-checks fails (see "Executability preflight"), or a build, wiring or
+     environment error in the test. Fix the test in place, fold the fix into the same
+     commit (`git commit --amend`, test files only), and go back to 5. When the spec
+     itself demands the impossible assertion, return `needs_input` naming the scenario,
+     the self-check and its evidence instead. Never complete while a structural failure
+     remains.
    - **Passes at baseline** — the scenario does not test new behaviour. If the
      behaviour already exists, delete the scenario and list its title in
      `already_satisfied`; if the assertion is vacuous, rewrite it. Amend, go back to 5.
 7. Record the run in `artifacts/e2e-scenarios.md` under a `## Baseline run` section,
-   one entry per kept scenario in document order, with the evidence; fill `baseline`.
+   one entry per kept scenario in document order, with the evidence and its four
+   preflight records (mirroring the envelope's `preflight`); fill `baseline`.
 
 ## Carries header (every authored suite)
 
@@ -178,6 +217,39 @@ baseline red is assertion-level, not build-level. A scenario that genuinely cann
 expressed without not-yet-existing surface is flagged in `artifacts/e2e-scenarios.md`
 as a spec under-specification (do not fake it) or authored as a document-only scenario
 driven through the project's actual interfaces. Never write an unrunnable file.
+
+## Executability preflight (the four self-checks)
+
+A red baseline proves a scenario fails today; it does not prove a correct
+implementation could make it pass. Every kept `baseline` row therefore carries a
+`preflight` object with exactly four fixed keys, each `{verdict, evidence}` where the
+verdict is `ok` or `n/a` and the evidence is a non-empty string taken from the existing
+targeted baseline run (its output, plus reads of the files it ran) — no additional run:
+
+- **`data_source`** — the source the assertion reads exists and carries the data: its
+  path plus its grep hit count (e.g. `grep -c '<key>' <path>` = 3). Zero hits is a
+  structural failure.
+- **`async_settle`** — a state that arrives asynchronously is awaited by a bounded wait:
+  the wait primitive plus its bound (e.g. a poll with a 10 s deadline). A bare read of
+  a not-yet-settled state is a structural failure.
+- **`timing_window`** — a transient state is asserted inside its window: the window
+  duration versus the point the assertion runs. An assertion after the state settled
+  is a structural failure.
+- **`selector_unique`** — the target (a selector, a text, an id) is unique to the new
+  behaviour: a runtime count of zero pre-existing hits for it on the
+  pre-implementation tree. A non-zero count is a structural failure; the
+  not-yet-existing element is never required to exist.
+
+A check the project's stack does not have is `verdict: n/a` with the reason as its
+evidence (e.g. "CLI output, no render chain"); all four keys are still present. The
+checks assume no browser, DOM or particular runner. `structural` is never a verdict:
+a structural failure is fixed and rerun, or asked about, before completing.
+
+Per mode: in `required` every kept row carries its preflight, all-green rows too; an
+append-only re-entry preflights only its newly appended rows and leaves the frozen
+rows byte-identical; a skipped-with-rationale run has an empty baseline and carries
+no preflight. The driver rejects a completed result whose row lacks the preflight, a
+fixed key, a non-empty evidence or an `ok`/`n/a` verdict, and re-dispatches the step.
 
 ## Commit duty for generated test files (hard rule)
 
@@ -226,20 +298,24 @@ the authored suite (its note says append-only), you re-run in append-only mode: 
 existing scenario, test file line and title stays byte-identical; append and title only
 the new scenarios the ruling names, prove each new one red, commit only the additions,
 and complete with the full `scenario_titles` list (the existing titles first, then the
-new ones) — the driver takes that list as the new baseline. Spec and plan are not re-run.
+new ones) — the driver takes that list as the new baseline. In append-only mode only the
+newly appended rows get a new preflight; the frozen rows keep the preflight their earlier
+run recorded, byte-identical. Spec and plan are not re-run.
 
 ## Outcomes
 
 - **completed** — at least one scenario, every kept scenario an assertion-level red
-  with evidence in `baseline`.
+  with evidence and its four-key `preflight` in `baseline`, and no structural failure
+  left.
 - **completed (skipped)** — the owner explicitly approved `skipped-with-rationale`
   in `artifacts/grill-qa.md`: the scenario document records the mode and rationale,
   `scenario_titles` and `baseline` are empty, no test file was authored or committed,
   and `command_evidence` carries the one command that read the approval (see
-  "Command evidence" below).
+  "Command evidence" below). A skipped-with-rationale run carries no preflight.
 - **completed (all green)** — EVERY scenario passes at baseline: the behaviour the spec
   claims is new is already in the tree. Complete with every `baseline` row `status:
-  pass`; the driver does not advance to `code` but asks the owner: `rewind-to-spec:
+  pass` and its four-key preflight (an all-green row is preflighted like any other);
+  the driver does not advance to `code` but asks the owner: `rewind-to-spec:
   <words>` (an owner-routed rewind to `spec`), `skip: <rationale>` or `cancel`.
 - **completed (skipped on the owner's `skip` answer)** — your answers carry the owner's
   `skip`: first revert the all-green run's own authoring commit (see "No orphan from an
@@ -249,10 +325,12 @@ new ones) — the driver takes that list as the new baseline. Spec and plan are 
   `e2e_author_mode: "skipped-with-rationale"`, that `skip_rationale`, empty
   `scenario_titles`/`baseline`/`test_files` — the named discipline-① exception for
   behaviour already on main; `review` and `verification` honour it from that record.
-- **needs_input** — only when the authored tests cannot run in this environment at all
-  (e.g. a missing browser dependency) — name what is missing.
-- Never report `completed` with a mix of passing and failing rows, or an un-runnable
-  scenario, in `baseline`.
+- **needs_input** — when the authored tests cannot run in this environment at all
+  (e.g. a missing browser dependency) — name what is missing; or when the spec itself
+  demands an assertion no correct implementation could pass (a structural failure no
+  fix in place removes) — name the scenario, the self-check and its evidence.
+- Never report `completed` with a mix of passing and failing rows, an un-runnable
+  scenario, or a structural failure in `baseline`.
 
 ## Command evidence (hard gate)
 
@@ -276,7 +354,8 @@ entry.
 This step declares `handoff: true`: `code` (the next step, `context_policy: inherit`)
 continues from your handoff file. Write `artifacts/handoff-e2e-author.md` with the
 test locations, the targeted command that runs them, the red bar `code` must turn
-green, and the marker each bound scenario prints when it passes.
+green, the marker each bound scenario prints when it passes, and every preflight check
+recorded `n/a` with its reason.
 
 ## Principles
 
@@ -288,6 +367,6 @@ Run the baseline in the foreground with an explicit timeout as long as it needs;
 
 Emit the final JSON object per the schema above: the scenario document path, the
 ordered scenario titles, any generated test file paths, the `baseline` (one `fail`
-entry per title, same order, with evidence), the `bindings` of every mechanically
+entry per title, same order, with evidence and its four-key preflight), the `bindings` of every mechanically
 observable scenario, `already_satisfied` if you deleted any scenario, `added_test_lines`,
 and `size_justification` when above the soft cap.

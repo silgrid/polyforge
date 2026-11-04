@@ -90,8 +90,11 @@ type RepoReport struct {
 	EngineRef  string   `json:"engine_ref,omitempty"`
 	Paths      []string `json:"paths,omitempty"`
 	// Diagnostics are the engine's own diagnostics for this repo.
-	Diagnostics []string        `json:"diagnostics,omitempty"`
-	Commands    []CommandReport `json:"commands"`
+	Diagnostics []string `json:"diagnostics,omitempty"`
+	// E2ESelection is the engine's full-tier e2e selection for an
+	// opted-in repository (absent otherwise): which suites ran and why.
+	E2ESelection *EngineSelection `json:"e2e_selection,omitempty"`
+	Commands     []CommandReport  `json:"commands"`
 }
 
 // CommandReport is one bar command's run.
@@ -168,6 +171,9 @@ func (r *runner) assemble(res *Result, repos []*repoRun) {
 			rep.Plan, rep.PlanReason, rep.Mode, rep.EngineRef = p.Status, p.Reason, p.Mode, p.EngineRef
 			if p.report != nil {
 				rep.Stack, rep.Conf, rep.Paths, rep.Diagnostics = p.report.Stack, p.report.Conf, p.report.Paths, p.report.Diagnostics
+				if p.Mode == TierFull {
+					rep.E2ESelection = p.report.E2ESelection
+				}
 				res.ConfChanged[rr.name] = p.report.ConfChangedInDiff
 				paths[rr.name] = p.report.Paths
 				refs = append(refs, fmt.Sprintf("repos/%s: --base %s, conf %s, mode %s", rr.name, short(rr.merge.Base), p.report.Conf, p.report.Mode))

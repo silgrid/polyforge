@@ -79,7 +79,12 @@ rewrite history.
 `code` commits run the fast gates of the packages they touch, and each build
 step (`code`, `fix`) also runs the `fast`- and `scoped`-phase commands of the
 engine's `--json` report below before it calls a unit green (never its
-`full`-phase ones); the full bar belongs to the `verification` step. The
+`full`-phase ones); the full bar belongs to the `verification` step. A work
+item's tier is proposed when it is filed: the filing side proposes `full`
+whenever the acceptance is e2e-carried (a criterion an `e2e-author` step would
+author, or behaviour an existing e2e suite pins), since a scoped run skips the
+e2e suites — the wording's authority is the Tier slot of
+`skills/polyforge/verbs/file.md`, not restated here. The
 scope comes from the
 release-shipped engine, `tools/verify-scope`, which travels in the same
 release tree as the lane that names it. The lane invokes it from the release
@@ -90,7 +95,7 @@ repository without that file gets the engine's conservative zero-config
 defaults. The report of a diff and the commands to run:
 
 ```sh
-<data-dir>/release/current/tools/verify-scope [--base <rev>] [--full] [--json] [--run]
+<data-dir>/release/current/tools/verify-scope [--base <rev>] [--full] [--micro] [--json] [--run]
 ```
 
 - **Report.** stdout carries exactly one `mode: full|scoped` line, then one
@@ -113,9 +118,16 @@ defaults. The report of a diff and the commands to run:
   `null` when unresolved), `default_branch`, `mode`, `paths`, `commands`,
   `test_glob`, `base_setup`, `runner` (`complete|null`), `ci_evidence`,
   `e2e_runner` (the declared runner command or `null`), `suite_glob`,
-  `e2e_map` and `diagnostics`. Each `commands` entry is `{name, phase, cmd, requires_env,
+  `e2e_map` and `diagnostics`; a repository that declares `smoke_suite=` also
+  gets `smoke_suite` (the declared smoke suites) and `e2e_selection`
+  (`{mode, suites, uncovered_paths, full_commands}` when a full-tier e2e
+  selection was attempted, else `null`; see "Full-tier e2e selection" below),
+  so a repository that declares none keeps the key set; likewise a
+  repository that declares `micro_path=` or `micro_check=` (and every
+  `--micro` report) also gets `micro_paths` (the declared patterns) and
+  `micro_checks` (the declared extra commands). Each `commands` entry is `{name, phase, cmd, requires_env,
   requires_cmd, timeout, source}`: `phase` is `fast`, `full` or `scoped` (the
-  analyzer's selection), `cmd` is the `bash -c` string run from the
+  analyzer's selection), or `micro` under `--micro`, `cmd` is the `bash -c` string run from the
   repository root (no leading `cd` to the repository), `timeout` is the
   command's declared `check_timeout` (a Go duration) or `null` when none is
   declared — the engine sets no default, so the consumer's own default
@@ -149,8 +161,9 @@ defaults. The report of a diff and the commands to run:
   `check=<name>|<fast|full>|<command>` lines, and their
   `check_requires_env=` / `check_requires_cmd=` / `check_timeout=`
   declarations), the tier triggers `forced_full=`, `module_root=`,
-  `exclude=`, the carries keys `e2e_runner=`, `suite_glob=` and `e2e_map=`
-  (below), and the keys the engine only echoes in its JSON report
+  `exclude=`, the carries keys `e2e_runner=`, `suite_glob=`, `e2e_map=` and
+  `smoke_suite=` (below), the micro lane's `micro_path=` / `micro_check=`
+  (the `--micro` bullet below), and the keys the engine only echoes in its JSON report
   (`test_glob=`, `base_setup=`, `runner=complete`, `ci_evidence=`). Any
   fast-phase line replaces the analyzer's default fast gates and any
   full-phase line its default full tail; a phase's lines keep file order. The
@@ -253,6 +266,18 @@ defaults. The report of a diff and the commands to run:
   stderr notice naming them, and `check_timeout` is reported, not enforced.
   The commands' output goes to stderr so stdout stays the report. That is
   for humans; `pf verify-run` never uses it.
+- **`--micro` (the micro lane's evidence).** `--micro` reads the conf as it
+  is at the diff base (`git show <base>:.polyforge/verify-scope.conf`; absent
+  or unreadable there declares nothing, never a working-tree fallback, so a
+  change cannot widen its own declaration), reports `mode: micro`, and
+  restricts `commands` to the fast phase followed by the `micro_check=`
+  commands (phase `micro`, named `micro-<i>` in file order) — never a scoped
+  or full command. `--micro --run` executes exactly those in order from the
+  repository root and stops at the first non-zero; under `--micro` a missing
+  declared prerequisite, a repository that declares no `micro_path=` at the
+  base, or an empty command list fails instead of being skipped. It is the
+  micro `fix` step's self-check; the delivery re-runs the same commands one
+  by one. Without `--micro` the report is unchanged.
 - **CI evidence at delivery.** A repository whose PR CI runs its test bar
   may declare `ci_evidence=<workflow-file>/<job-name>` (repeatable) in the
   same conf, which the `deliver` step reads directly from the default branch
@@ -265,6 +290,12 @@ defaults. The report of a diff and the commands to run:
   the engine's plan per touched repo, the whole plan (never stopping at the
   first failure), flaky re-runs, the pre-existing proof on the base, the test
   bar and the test-file checks are mechanical and land in its `result.json`.
+  A failing suite of an aggregate e2e runner (its `FAIL e2e/<suite>:
+  <scenario> — <message>` lines) is one unit re-run on its own, so flaky
+  re-runs and the pre-existing proof work per suite: the runner's printed
+  `re-run:` command is used verbatim, a `-- <suite>` re-run is derived only
+  for the conf's simple `npm run <script>` aggregate, and anything else
+  stays not re-runnable (a failure).
   The agent keeps only judgment: the lane checks, the authored scenarios no
   binding decides, the scope declaration and the verdict. A touched repo the
   engine plans nothing for is listed unplanned and its bar stays the agent's
@@ -301,6 +332,32 @@ declaration.
   command (the suites appended in stable order) or, without the key, as one
   `node <suite>`, `pytest <suite>` or `cargo test --test <name>` each — after
   the analyzer's own scoped commands.
+- **Full-tier e2e selection (opt-in).** A repository opts in by declaring
+  its smoke suites, one repeatable `smoke_suite=<suite>` line each; no
+  `carries:` header alone opts a repository in. Only then, only when the
+  caller asked for the full tier (`--full`, which full-tier verification
+  passes) and only for a non-empty diff, the full tier's e2e phase is a
+  selection instead of the full tail; its fast gates are unchanged. The
+  selected suites are the carries selection above union the smoke suites,
+  sorted, run as one `e2e_runner=` command (else one default command each),
+  and the JSON `e2e_selection` records why, in one of three classes:
+  `carries` — the carries-selected suites union the smoke suites; a changed
+  non-documentation path no declaration covers is listed in
+  `uncovered_paths` and does **not** force the full tail; `smoke` — every
+  changed path is documentation or an `exclude=` match, so only the smoke
+  suites run; `full` — a forced-full match (the analyzer's config files or a
+  `forced_full=` glob), a change to `.polyforge/verify-scope.conf` itself, or
+  a structural diagnostic (any reason of "Fail closed" below except the
+  uncovered path, an analyzer without the carries layer, a `smoke_suite=`
+  naming no discovered suite, an empty full tail) runs the full tail and each
+  reason is diagnosed. `mode:` stays the tier fact (`full`), and
+  `e2e_selection.full_commands` always carries the full tail: it is the bar
+  `pf verify-run` carries to delivery for such a repository, which `deliver`
+  re-runs even when HEAD equals the verified head. The scoped tier is
+  unchanged whatever the opt-in — it adds no smoke suite and an uncovered path
+  still sends it to `full` — and the release lane never runs this engine
+  through `pf verify-run` (it runs the repository's own release
+  verification), so it is unchanged too.
 - **Exemptions.** Only documentation paths (`*.md`, `*.txt`, `docs/`, …),
   `exclude=` matches, a changed suite itself and the helpers suites import are
   exempt from coverage. A unit test changed beside its source is not: a glob
@@ -311,16 +368,25 @@ declaration.
   `carries` line without its colon); an unresolvable import of the graph; an
   `e2e_map=` naming no discovered suite; a changed path that is neither
   documentation, an `exclude=` match, a suite, a helper nor covered by a
-  declaration; and an empty or malformed carries key in the conf.
+  declaration; and an empty or malformed carries key (`e2e_runner=`,
+  `suite_glob=`, `e2e_map=`, `smoke_suite=`) in the conf. In the opted-in
+  full-tier selection above an uncovered path is listed instead, and every
+  other reason here selects the full tail.
 - **The conf keys.** `e2e_runner=` (the runner the selected suites are
-  appended to), `suite_glob=` (replaces discovery) and `e2e_map=<glob>=<suite>`
-  (replaces one suite's header outright), each with its exact form in [the
+  appended to), `suite_glob=` (replaces discovery), `e2e_map=<glob>=<suite>`
+  (replaces one suite's header outright) and `smoke_suite=<suite>` (the
+  full-tier opt-in above), each with its exact form in [the
   config reference](reference/config.md#polyforgeverify-scopeconf--the-verification-bar).
 - **Authored suites.** A suite the feature lane's `e2e-author` step authors
   carries a header derived mechanically from the plan's declared changed
   paths ([its step contract](../workflows/feature-full/steps/e2e-author.md),
   "Carries header"); `pf doctor`'s `scoped-gates readiness` row names a
-  repository's undeclared suites.
+  repository's undeclared suites. Every kept scenario's baseline row also
+  carries the four-key executability preflight (`data_source`,
+  `async_settle`, `timing_window`, `selector_unique`; each `ok` or `n/a` with
+  its evidence) read from the same targeted baseline run, and a structural
+  failure is fixed or asked about before the step completes (the step
+  contract, "Executability preflight (the four self-checks)").
 
 ### Analyzer contract
 

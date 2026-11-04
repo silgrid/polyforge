@@ -145,7 +145,7 @@ func TestPiLayoutCheck(t *testing.T) {
 func TestClaudeLayoutCheck(t *testing.T) {
 	t.Setenv("POLYFORGE_DATA_DIR", "")
 	t.Run("no claude", func(t *testing.T) {
-		if c := claudeLayoutCheck(t.TempDir()); c.Status != "skip" {
+		if c := claudeLayoutCheck(t.TempDir(), false); c.Status != "skip" {
 			t.Fatalf("got %s %q", c.Status, c.Detail)
 		}
 	})
@@ -153,7 +153,7 @@ func TestClaudeLayoutCheck(t *testing.T) {
 		home := displayHome(t, "-", "")
 		layoutRelease(t, home)
 		layoutClaudeLink(t, home)
-		if c := claudeLayoutCheck(home); c.Status != "pass" {
+		if c := claudeLayoutCheck(home, false); c.Status != "pass" {
 			t.Fatalf("got %s %q", c.Status, c.Detail)
 		}
 	})
@@ -163,7 +163,7 @@ func TestClaudeLayoutCheck(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(home, ".claude", "skills", "polyforge"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if c := claudeLayoutCheck(home); c.Status != "warn" || !strings.Contains(c.Detail, "copied directory") {
+		if c := claudeLayoutCheck(home, false); c.Status != "warn" || !strings.Contains(c.Detail, "copied directory") {
 			t.Fatalf("got %s %q", c.Status, c.Detail)
 		}
 	})
@@ -175,13 +175,13 @@ func TestClaudeLayoutCheck(t *testing.T) {
 		if err := os.Symlink(t.TempDir(), filepath.Join(home, ".claude", "skills", "polyforge")); err != nil {
 			t.Fatal(err)
 		}
-		if c := claudeLayoutCheck(home); c.Status != "warn" || !strings.Contains(c.Detail, "links to") {
+		if c := claudeLayoutCheck(home, false); c.Status != "warn" || !strings.Contains(c.Detail, "links to") {
 			t.Fatalf("got %s %q", c.Status, c.Detail)
 		}
 	})
 	t.Run("not installed warns", func(t *testing.T) {
 		home := displayHome(t, "-", "")
-		if c := claudeLayoutCheck(home); c.Status != "warn" || !strings.Contains(c.Detail, "not installed") {
+		if c := claudeLayoutCheck(home, false); c.Status != "warn" || !strings.Contains(c.Detail, "not installed") {
 			t.Fatalf("got %s %q", c.Status, c.Detail)
 		}
 	})
@@ -346,4 +346,199 @@ func TestV1LeftoversCheck(t *testing.T) {
 			t.Fatalf("harness removal commands not run: %q", raw)
 		}
 	})
+}
+
+// TestClaudeLayoutFix: `--fix-install-layout` links a
+// missing skill, repoints a link elsewhere, leaves a correct link
+// byte-for-byte alone, and never touches a copied directory, a home
+// without ~/.claude, or a skill with no release behind it.
+func TestClaudeLayoutFix(t *testing.T) {
+	t.Setenv("POLYFORGE_DATA_DIR", "")
+	skillOf := func(home string) string { return filepath.Join(home, ".claude", "skills", "polyforge") }
+	wantOf := func(home string) string {
+		return filepath.Join(home, ".local", "share", "polyforge", "release", "current", "skills", "polyforge")
+	}
+	readlink := func(t *testing.T, p string) string {
+		t.Helper()
+		target, err := os.Readlink(p)
+		if err != nil {
+			t.Fatalf("%s is not a symlink: %v", p, err)
+		}
+		return target
+	}
+	t.Run("missing skill with a release is linked, then a no-op", func(t *testing.T) {
+		home := displayHome(t, "-", "")
+		layoutRelease(t, home)
+		if c := claudeLayoutCheck(home, false); c.Status != "warn" || !strings.Contains(c.Detail, "--fix-install-layout") {
+			t.Fatalf("report run: %s %q, want warn naming the fix flag", c.Status, c.Detail)
+		}
+		if _, err := os.Lstat(skillOf(home)); err == nil {
+			t.Fatal("the report run created the skill")
+		}
+		if c := claudeLayoutCheck(home, true); c.Status != "pass" || !strings.Contains(c.Detail, "created") {
+			t.Fatalf("fix run: %s %q, want pass", c.Status, c.Detail)
+		}
+		if got := readlink(t, skillOf(home)); got != wantOf(home) {
+			t.Fatalf("link target %q, want %q", got, wantOf(home))
+		}
+		if c := claudeLayoutCheck(home, true); c.Status != "pass" || strings.Contains(c.Detail, "--fix-install-layout") {
+			t.Fatalf("second fix run: %s %q, want a plain pass", c.Status, c.Detail)
+		}
+		if got := readlink(t, skillOf(home)); got != wantOf(home) {
+			t.Fatalf("second run moved the link to %q", got)
+		}
+	})
+	t.Run("a link elsewhere is repointed, its old target untouched", func(t *testing.T) {
+		home := displayHome(t, "-", "")
+		layoutRelease(t, home)
+		other := t.TempDir()
+		if err := os.WriteFile(filepath.Join(other, "SKILL.md"), []byte("other\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(home, ".claude", "skills", "mine"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(other, skillOf(home)); err != nil {
+			t.Fatal(err)
+		}
+		if c := claudeLayoutCheck(home, true); c.Status != "pass" || !strings.Contains(c.Detail, "repaired") {
+			t.Fatalf("fix run: %s %q, want pass", c.Status, c.Detail)
+		}
+		if got := readlink(t, skillOf(home)); got != wantOf(home) {
+			t.Fatalf("link target %q, want %q", got, wantOf(home))
+		}
+		if b, err := os.ReadFile(filepath.Join(other, "SKILL.md")); err != nil || string(b) != "other\n" {
+			t.Fatalf("the old target changed: %q %v", b, err)
+		}
+		entries, _ := os.ReadDir(filepath.Join(home, ".claude", "skills"))
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		if strings.Join(names, ",") != "mine,polyforge" {
+			t.Fatalf("skills dir = %v, want only mine and polyforge (no temp link left)", names)
+		}
+	})
+	t.Run("a dangling link with no release keeps the install.sh warning", func(t *testing.T) {
+		home := displayHome(t, "-", "")
+		if err := os.MkdirAll(filepath.Join(home, ".claude", "skills"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gone := filepath.Join(t.TempDir(), "gone")
+		if err := os.Symlink(gone, skillOf(home)); err != nil {
+			t.Fatal(err)
+		}
+		c := claudeLayoutCheck(home, true)
+		if c.Status != "warn" || !strings.Contains(c.Detail, "tools/install.sh") || strings.Contains(c.Detail, "--fix-install-layout") {
+			t.Fatalf("got %s %q, want warn pointing at tools/install.sh only", c.Status, c.Detail)
+		}
+		if got := readlink(t, skillOf(home)); got != gone {
+			t.Fatalf("the link was rewritten to %q without a release", got)
+		}
+	})
+	t.Run("missing skill with no release creates nothing", func(t *testing.T) {
+		home := displayHome(t, "-", "")
+		c := claudeLayoutCheck(home, true)
+		if c.Status != "warn" || !strings.Contains(c.Detail, "tools/install.sh") || strings.Contains(c.Detail, "--fix-install-layout") {
+			t.Fatalf("got %s %q, want warn pointing at tools/install.sh only", c.Status, c.Detail)
+		}
+		for _, p := range []string{skillOf(home), filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".local")} {
+			if _, err := os.Lstat(p); err == nil {
+				t.Fatalf("the fix created %s without a release", p)
+			}
+		}
+	})
+	t.Run("a copied directory is left in place", func(t *testing.T) {
+		home := displayHome(t, "-", "")
+		layoutRelease(t, home)
+		copied := filepath.Join(skillOf(home), "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(copied), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(copied, []byte("copied\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		c := claudeLayoutCheck(home, true)
+		if c.Status != "warn" || !strings.Contains(c.Detail, "copied directory") || !strings.Contains(c.Detail, "tools/install.sh") {
+			t.Fatalf("got %s %q, want the copied-directory warn", c.Status, c.Detail)
+		}
+		if st, err := os.Lstat(skillOf(home)); err != nil || !st.IsDir() {
+			t.Fatalf("the copied directory was replaced: %v", err)
+		}
+		if b, _ := os.ReadFile(copied); string(b) != "copied\n" {
+			t.Fatalf("the copied skill changed: %q", b)
+		}
+	})
+	t.Run("no ~/.claude is skipped and not created", func(t *testing.T) {
+		home := t.TempDir()
+		layoutRelease(t, home)
+		if c := claudeLayoutCheck(home, true); c.Status != "skip" {
+			t.Fatalf("got %s %q, want skip", c.Status, c.Detail)
+		}
+		if _, err := os.Lstat(filepath.Join(home, ".claude")); err == nil {
+			t.Fatal("the fix created ~/.claude")
+		}
+	})
+	t.Run("a correct link is a byte-level no-op", func(t *testing.T) {
+		home := displayHome(t, "-", "")
+		layoutRelease(t, home)
+		layoutClaudeLink(t, home)
+		before := readlink(t, skillOf(home))
+		stBefore, _ := os.Lstat(skillOf(home))
+		for i := 0; i < 2; i++ {
+			if c := claudeLayoutCheck(home, true); c.Status != "pass" || strings.Contains(c.Detail, "--fix-install-layout") {
+				t.Fatalf("run %d: %s %q, want a plain pass", i, c.Status, c.Detail)
+			}
+		}
+		stAfter, _ := os.Lstat(skillOf(home))
+		if after := readlink(t, skillOf(home)); after != before || !stAfter.ModTime().Equal(stBefore.ModTime()) || !os.SameFile(stBefore, stAfter) {
+			t.Fatalf("the correct link was rewritten: %q -> %q", before, after)
+		}
+	})
+}
+
+// TestDoctorFixInstallLayoutFlag: the flag is refused
+// with --harness (exit 1, nothing written), the default report stays
+// read-only, and `pf doctor --fix-install-layout` links the skill.
+func TestDoctorFixInstallLayoutFlag(t *testing.T) {
+	env := withMappingConfig(t)
+	home := t.TempDir()
+	env["HOME"] = home
+	env["PI_CODING_AGENT_DIR"] = ""
+	env["POLYFORGE_DATA_DIR"] = filepath.Join(home, ".local", "share", "polyforge")
+	layoutRelease(t, home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skill := filepath.Join(home, ".claude", "skills", "polyforge")
+	want := filepath.Join(env["POLYFORGE_DATA_DIR"], "release", "current", "skills", "polyforge")
+
+	code, _, stderr := runPf(t, env, "doctor", "--harness", "--fix-install-layout")
+	if code != 1 || !strings.Contains(stderr, "doctor: --fix-install-layout cannot be combined with --harness") {
+		t.Fatalf("--harness --fix-install-layout: exit %d stderr %q, want exit 1 and the refusal", code, stderr)
+	}
+	if _, err := os.Lstat(skill); err == nil {
+		t.Fatal("the refused run created the skill")
+	}
+
+	_, _, doc := doctorStatus(t, env, "--json", "doctor")
+	if st, detail := doctorFind(t, doc, docChClaudeLayout); st != "warn" || !strings.Contains(detail, "--fix-install-layout") {
+		t.Fatalf("report run: %s %q, want warn naming the fix", st, detail)
+	}
+	if _, err := os.Lstat(skill); err == nil {
+		t.Fatal("the default report created the skill")
+	}
+
+	_, _, doc = doctorStatus(t, env, "--json", "doctor", "--fix-install-layout")
+	if st, detail := doctorFind(t, doc, docChClaudeLayout); st != "pass" {
+		t.Fatalf("fix run: %s %q, want pass", st, detail)
+	}
+	if got, err := os.Readlink(skill); err != nil || got != want {
+		t.Fatalf("link = %q %v, want %q", got, err, want)
+	}
+
+	_, _, doc = doctorStatus(t, env, "--json", "doctor")
+	if st, detail := doctorFind(t, doc, docChClaudeLayout); st != "pass" {
+		t.Fatalf("after the fix: %s %q, want pass", st, detail)
+	}
 }

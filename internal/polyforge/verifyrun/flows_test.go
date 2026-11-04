@@ -366,3 +366,91 @@ func TestTempDirPathsSignAlike(t *testing.T) {
 		})
 	}
 }
+
+// fakeAggregateNpm installs an `npm` on a private PATH that behaves like
+// an aggregate e2e runner (`npm run <script> [-- <suite>...]`) over the
+// tree's e2e/*.mjs: a suite whose first line is `// FAIL <msg>` fails
+// with that message, `// FLAKY` fails until $FLAKY_STATE exists
+// (creating it), anything else passes; the output is the runner's suite
+// blocks (each echoing the suite's own markers), the failures section
+// with each failing suite's line and re-run, and the summary.
+func fakeAggregateNpm(t *testing.T) []string {
+	t.Helper()
+	bin := t.TempDir()
+	script := `#!/bin/bash
+[ "$1" = run ] || exit 2
+shift 2
+[ "$1" = -- ] && shift
+sel=" $* "; fail=0; failures=""
+for f in e2e/*.mjs; do
+  s=${f#e2e/}
+  if [ "$sel" != "  " ]; then case "$sel" in *" $s "*|*" e2e/$s "*) ;; *) continue;; esac; fi
+  line=$(head -n 1 "$f"); ok=1; msg=""
+  case "$line" in
+    "// FAIL "*) ok=0; msg=${line#// FAIL };;
+    "// FLAKY"*) if [ -f "$FLAKY_STATE" ]; then ok=1; else : >"$FLAKY_STATE"; ok=0; msg="locator.click: Timeout 8000ms exceeded"; fi;;
+  esac
+  if [ $ok = 1 ]; then
+    printf '\n===== PASS %s (1s) =====\nPASS: S1 works\n' "$s"
+  else
+    printf '\n===== FAIL %s (1s) =====\nFAIL: S1 works\n  %s\n' "$s" "$msg"
+    fail=1; failures="$failures
+FAIL e2e/$s: S1 works — $msg
+re-run: npm run test:e2e:all -- $s"
+  fi
+done
+if [ $fail = 1 ]; then printf '\n===== failures =====%s\n' "$failures"; fi
+printf '\n===== summary =====\n'
+exit $fail
+`
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return setEnv(os.Environ(), "PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestAggregateE2ESuiteFlakyOnItsOwnRerun: a suite of an aggregate e2e
+// runner failing once is located as its suite, re-run alone through the
+// runner's printed `re-run:` command (command evidence), recorded flaky
+// 1/2 when that re-run passes, and the command then confirmed whole.
+func TestAggregateE2ESuiteFlakyOnItsOwnRerun(t *testing.T) {
+	f := newFixture(t, map[string]map[string]string{"app": {"e2e/a.mjs": "// a\n"}})
+	f.commitInRepo(t, "app", map[string]string{"e2e/b.mjs": "// FLAKY\n"}, "feature")
+	eng := fakeEngine(t, map[string]any{"app": report("full", cmdOf("e2e", "full", "npm run test:e2e:all"))})
+	env := setEnv(fakeAggregateNpm(t), "FLAKY_STATE", filepath.Join(t.TempDir(), "flaky"))
+	res := runFixture(t, f, eng, func(o *Options) { o.Env = env })
+	u := unitOf(t, res, "e2e/b.mjs")
+	if u.Kind != KindE2ESuite || u.File != "e2e/b.mjs" || u.Status != "flaky" || !strings.Contains(u.Detail, "flaky 1/2") {
+		t.Errorf("unit = %+v", u)
+	}
+	if c := checkOf(t, res, "app:e2e"); c.Status != "pass" {
+		t.Errorf("check = %+v", c)
+	}
+	var rerun bool
+	for _, e := range res.CommandEvidence {
+		rerun = rerun || strings.Join(e.Argv, " ") == "bash -c npm run test:e2e:all -- b.mjs"
+	}
+	if !rerun {
+		t.Errorf("the suite's own re-run carries no command evidence: %+v", res.CommandEvidence)
+	}
+}
+
+// TestAggregateE2ESuitePreExistingOnBase: a suite failing the same way on
+// the base is classified pre-existing per suite (its siblings unaffected);
+// the aggregate runner has no skip switch, so the command itself stays
+// failed with that note (fail closed).
+func TestAggregateE2ESuitePreExistingOnBase(t *testing.T) {
+	f := newFixture(t, map[string]map[string]string{"app": {"e2e/a.mjs": "// a\n", "e2e/c.mjs": "// FAIL expected 2 rows\n"}})
+	f.commitInRepo(t, "app", map[string]string{"e2e/b.mjs": "// b\n"}, "feature")
+	eng := fakeEngine(t, map[string]any{"app": report("full", cmdOf("e2e", "full", "npm run test:e2e:all"))})
+	res := runFixture(t, f, eng, func(o *Options) { o.Env = fakeAggregateNpm(t) })
+	if u := unitOf(t, res, "e2e/c.mjs"); u.Status != "pre_existing" {
+		t.Errorf("c = %+v", u)
+	}
+	if u := unitOf(t, res, "e2e/b.mjs"); u.Status != "pass" {
+		t.Errorf("b = %+v", u)
+	}
+	if c := checkOf(t, res, "app:e2e"); c.Status != "fail" || !strings.Contains(c.Detail, "no skip switch") {
+		t.Errorf("check = %+v", c)
+	}
+}

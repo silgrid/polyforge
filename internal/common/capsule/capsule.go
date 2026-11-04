@@ -117,6 +117,12 @@ type Execution struct {
 	// its own authority (host-class fault, failure counter at its bound);
 	// empty when blocked on an honest incomplete result or not blocked.
 	BlockedReason string `json:"blocked_reason,omitempty"`
+	// TerminationReason names why the driver ended the workflow on its own
+	// authority before any gate judged it (a
+	// verification-less delivery lane's out-of-bounds diff — the reason
+	// names the lane to re-file on). Empty for every other ending; the
+	// failed close's hub note carries it.
+	TerminationReason string `json:"termination_reason,omitempty"`
 	// PreFixHeads is the bug-fix lane's pre-fix base: the task-repo
 	// HEADs the reproduction ran on, recorded at the first accepted
 	// repro result and never overwritten. A repro re-run after a fix →

@@ -18,7 +18,8 @@
 //
 // Configuration precedence: command-line flags > PF_* environment >
 // ~/.config/polyforge/cli.toml (flat string keys, [workspace."<path>"]
-// sections and the [daemon] table) > defaults. There is NO default project (polyforge#113): the
+// sections, the [daemon] and [summarize] tables and the
+// [memory_policy."<path>".<entry>] family) > defaults. There is NO default project (polyforge#113): the
 // [workspace] mapping decides capsule placement, and project scoping is
 // per-invocation --project.
 package cli
@@ -32,6 +33,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // Default aihub listen address.
@@ -81,6 +83,15 @@ type Config struct {
 	// Validated on load by every pf command and the daemon alike; the
 	// zero value = every daemon default.
 	Daemon DaemonSettings
+	// Summarize is the machine-level [summarize] table, the summarize
+	// lane's only source; nil = the table is absent and
+	// the lane is off.
+	Summarize *workspace.SummarizeSettings
+	// MemoryPolicy is the [memory_policy."<path>".<entry>] family:
+	// mapped workspace path → entry (`default` or a project of that path)
+	// → its declared lists. A path without a block is the built-in
+	// default.
+	MemoryPolicy map[string]map[string]workspace.PolicyEntry
 }
 
 // DaemonSettings is the cli.toml [daemon] table. A zero field is unset
@@ -304,120 +315,325 @@ func (e *unknownKeyError) Error() string {
 	return fmt.Sprintf("unknown key %q in %s", e.key, e.file)
 }
 
+// parsedConfig is one parse of a cli.toml: every documented shape with
+// the file line of each row, before any value validation.
+type parsedConfig struct {
+	flat     map[string]string
+	sections []workspaceSection
+	daemon   []daemonKV
+	// summarize is the [summarize] table (nil = absent).
+	summarize *tableBlock
+	// policy is the [memory_policy."<path>".<entry>] family, file order.
+	policy []tableBlock
+}
+
+// tableBlock is one parsed [summarize] or [memory_policy...] table: its
+// header line and its raw `key = value` rows (validated by
+// config_tables.go). path/entry are set for a memory_policy table only.
+type tableBlock struct {
+	path, entry string
+	line        int
+	rows        []daemonKV
+}
+
+// tableKind names the section a header opens.
+type tableKind int
+
+const (
+	tableWorkspace tableKind = iota
+	tableDaemon
+	tableSummarize
+	tablePolicy
+)
+
 // parseConfigTOML parses the TOML subset documented for cli.toml:
 //
 //   - `key = "value"` flat string keys: the known set (server, api_key,
 //     daemon_socket, user_id, claude_bin) is stored; the known keys are root-level
-//     wherever they appear; any other top-level key is an error — a
-//     residual anthropic_auth_token from a pre-#171 deployment hits the
-//     unknown-key refusal (the credentials now live in
-//     <harness-root>/claude-config/settings.json, ruling 1-2);
+//     wherever they appear outside a table that owns its keys; any other
+//     top-level key is an error — a residual anthropic_auth_token from a
+//     pre-#171 deployment hits the unknown-key refusal (the credentials now
+//     live in <harness-root>/claude-config/settings.json, ruling 1-2);
 //   - one section family: `[workspace."<path>"]` (quoted key mandatory)
 //     — inside, only `projects = ["a", "b"]`;
 //   - one `[daemon]` table (at most once): its raw `key = value` lines
-//     are answered as-is and validated by parseDaemonTable. Every key
-//     after the header belongs to the table (TOML semantics), so the
-//     flat keys must come before it.
+//     are answered as-is and validated by parseDaemonTable;
+//   - one `[summarize]` table (at most once) and the path-keyed
+//     `[memory_policy."<path>".<entry>]` family (quoted path mandatory,
+//     the entry `default` or a project name, bare or quoted): their raw
+//     rows are validated by config_tables.go. Every key after one of these
+//     table headers belongs to the table (TOML semantics), so the flat keys
+//     must come before it.
 //
-// Other tables, unquoted section keys, non-array or wrongly-typed
-// projects values, a bare `projects` key at the top level, and duplicate
-// keys/sections are line-named parse errors, never guesses. Deliberate
-// narrowing: escape sequences are not supported — a double-quoted value
-// containing a backslash is rejected — and values are taken literally
-// between their quotes. A `#` inside a quoted value is data, not a
-// comment.
-func parseConfigTOML(file, text string) (map[string]string, []workspaceSection, []daemonKV, error) {
-	flat := map[string]string{}
-	var sections []workspaceSection
-	var daemon []daemonKV
+// An array value may span several lines until its closing `]`; inside it
+// every item is a quoted string, a comma inside quotes is data, and one
+// trailing comma is allowed. Other tables, unquoted section keys,
+// non-array or wrongly-typed projects values, a bare `projects` key at the
+// top level, inline tables, and duplicate keys/sections are line-named
+// parse errors, never guesses. Deliberate narrowing: escape sequences are
+// not supported — a double-quoted value containing a backslash is
+// rejected — and values are taken literally between their quotes. A `#`
+// inside a quoted value is data, not a comment.
+func parseConfigTOML(file, text string) (*parsedConfig, error) {
+	p := &parsedConfig{flat: map[string]string{}}
 	var (
 		inWS       bool
-		inDaemon   bool
 		daemonSeen bool
 		curWS      = -1 // index into sections while inside a [workspace] section
+		curTable   *[]daemonKV
 	)
-	for ln, line := range strings.Split(text, "\n") {
-		line = stripTOMLComment(line)
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
+	lines, err := logicalTOMLLines(text)
+	if err != nil {
+		return nil, err
+	}
+	for _, ll := range lines {
+		ln, line := ll.line, ll.text
 		if strings.HasPrefix(line, "[") {
-			if strings.HasSuffix(line, "]") && strings.TrimSpace(line[1:len(line)-1]) == "daemon" {
-				if daemonSeen {
-					return nil, nil, nil, fmt.Errorf("line %d: duplicate [daemon] table", ln+1)
-				}
-				daemonSeen, inDaemon, inWS, curWS = true, true, false, -1
-				continue
-			}
-			key, err := parseSectionHeader(line, ln+1)
+			kind, key, entry, err := parseTableHeader(line, ln)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, err
 			}
-			for _, s := range sections {
-				if s.key == key {
-					return nil, nil, nil, fmt.Errorf("line %d: duplicate [workspace] section for %s", ln+1, key)
+			inWS, curWS, curTable = false, -1, nil
+			switch kind {
+			case tableDaemon:
+				if daemonSeen {
+					return nil, fmt.Errorf("line %d: duplicate [daemon] table", ln)
 				}
+				daemonSeen = true
+				curTable = &p.daemon
+			case tableSummarize:
+				if p.summarize != nil {
+					return nil, fmt.Errorf("line %d: duplicate [summarize] table (first at line %d)", ln, p.summarize.line)
+				}
+				p.summarize = &tableBlock{line: ln}
+				curTable = &p.summarize.rows
+			case tablePolicy:
+				for _, t := range p.policy {
+					if t.path == key && t.entry == entry {
+						return nil, fmt.Errorf("line %d: duplicate [memory_policy.%q.%s] table (first at line %d)", ln, key, entry, t.line)
+					}
+				}
+				p.policy = append(p.policy, tableBlock{path: key, entry: entry, line: ln})
+				curTable = &p.policy[len(p.policy)-1].rows
+			default:
+				for _, s := range p.sections {
+					if s.key == key {
+						return nil, fmt.Errorf("line %d: duplicate [workspace] section for %s", ln, key)
+					}
+				}
+				p.sections = append(p.sections, workspaceSection{key: key, line: ln})
+				curWS = len(p.sections) - 1
+				inWS = true
 			}
-			sections = append(sections, workspaceSection{key: key, line: ln + 1})
-			curWS = len(sections) - 1
-			inWS, inDaemon = true, false
 			continue
 		}
 		eq := strings.IndexByte(line, '=')
 		if eq < 0 {
-			return nil, nil, nil, fmt.Errorf("line %d: expected `key = \"value\"`, got %q", ln+1, redactConfigLine(line))
+			return nil, fmt.Errorf("line %d: expected `key = \"value\"`, got %q", ln, redactConfigLine(line))
 		}
 		key := strings.TrimSpace(line[:eq])
 		val := strings.TrimSpace(line[eq+1:])
 		if key == "" {
-			return nil, nil, nil, fmt.Errorf("line %d: empty key", ln+1)
+			return nil, fmt.Errorf("line %d: empty key", ln)
 		}
-		if inDaemon {
-			daemon = append(daemon, daemonKV{key: key, val: val, line: ln + 1})
+		if strings.HasPrefix(val, "{") {
+			return nil, fmt.Errorf("line %d: inline tables are not supported (%s)", ln, key)
+		}
+		if curTable != nil {
+			*curTable = append(*curTable, daemonKV{key: key, val: val, line: ln})
 			continue
 		}
 		if coreFlatKeys[key] {
 			// Known flat key: root-level wherever it appears.
-			inner, err := parseQuotedValue(val, ln+1)
+			inner, err := parseQuotedValue(val, ln)
 			if err != nil {
 				if key == "api_key" {
-					return nil, nil, nil, fmt.Errorf("line %d: api_key value must be a quoted string (value redacted)", ln+1)
+					return nil, fmt.Errorf("line %d: api_key value must be a quoted string (value redacted)", ln)
 				}
-				return nil, nil, nil, err
+				return nil, err
 			}
-			if _, dup := flat[key]; dup {
-				return nil, nil, nil, fmt.Errorf("line %d: duplicate key %q", ln+1, key)
+			if _, dup := p.flat[key]; dup {
+				return nil, fmt.Errorf("line %d: duplicate key %q", ln, key)
 			}
-			flat[key] = inner
+			p.flat[key] = inner
 			continue
 		}
 		if inWS {
 			// Inside a workspace section: only the projects array.
 			if key != "projects" {
-				return nil, nil, nil, fmt.Errorf("line %d: unknown key %q in section [workspace.%q] (a workspace section carries only `projects`)", ln+1, key, sections[curWS].key)
+				return nil, fmt.Errorf("line %d: unknown key %q in section [workspace.%q] (a workspace section carries only `projects`)", ln, key, p.sections[curWS].key)
 			}
-			if len(sections[curWS].projects) > 0 {
-				return nil, nil, nil, fmt.Errorf("line %d: duplicate projects array in the [workspace] section of %s", ln+1, sections[curWS].key)
+			if len(p.sections[curWS].projects) > 0 {
+				return nil, fmt.Errorf("line %d: duplicate projects array in the [workspace] section of %s", ln, p.sections[curWS].key)
 			}
-			list, err := parseStringArray(val, ln+1)
+			list, err := parseStringArray(val, ln)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, err
 			}
-			sections[curWS].projects = append(sections[curWS].projects, list...)
+			p.sections[curWS].projects = append(p.sections[curWS].projects, list...)
 			continue
 		}
 		if key == "projects" {
-			return nil, nil, nil, fmt.Errorf("line %d: `projects` belongs inside a [workspace.\"<path>\"] section, not the top level", ln+1)
+			return nil, fmt.Errorf("line %d: `projects` belongs inside a [workspace.\"<path>\"] section, not the top level", ln)
 		}
-		return nil, nil, nil, &unknownKeyError{key: key, file: file}
+		return nil, &unknownKeyError{key: key, file: file}
 	}
-	return flat, sections, daemon, nil
+	return p, nil
 }
 
-// parseSectionHeader validates one `[...]` line: the only legal section
-// is `[workspace."<key>"]` (quoted key mandatory) — the mapping plan.
-// It answers the workspace key.
+// logicalLine is one comment-stripped, trimmed, non-empty statement of the
+// file, carrying the line number it starts on.
+type logicalLine struct {
+	line int
+	text string
+}
+
+// logicalTOMLLines splits text into statements: one per physical line,
+// except an array value that does not close on its own line, which runs
+// on (each continuation comment-stripped) until its closing `]`.
+func logicalTOMLLines(text string) ([]logicalLine, error) {
+	var out []logicalLine
+	phys := strings.Split(text, "\n")
+	for i := 0; i < len(phys); i++ {
+		line := strings.TrimSpace(stripTOMLComment(phys[i]))
+		if line == "" {
+			continue
+		}
+		start := i + 1
+		if !strings.HasPrefix(line, "[") {
+			if eq := strings.IndexByte(line, '='); eq >= 0 {
+				val := strings.TrimSpace(line[eq+1:])
+				for strings.HasPrefix(val, "[") && !arrayClosed(val) {
+					i++
+					if i >= len(phys) {
+						return nil, fmt.Errorf("line %d: unterminated array (no closing `]`)", start)
+					}
+					more := strings.TrimSpace(stripTOMLComment(phys[i]))
+					if more == "" {
+						continue
+					}
+					val += " " + more
+					line += " " + more
+				}
+			}
+		}
+		out = append(out, logicalLine{line: start, text: line})
+	}
+	return out, nil
+}
+
+// arrayClosed reports whether the bracket opened at val[0] closes,
+// counting brackets outside quoted strings only.
+func arrayClosed(val string) bool {
+	depth := 0
+	var quote byte
+	for i := 0; i < len(val); i++ {
+		c := val[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			quote = c
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// parseTableHeader validates one `[...]` line: `[daemon]`, `[summarize]`,
+// `[workspace."<path>"]` or `[memory_policy."<path>".<entry>]`. It answers
+// the kind, the quoted path key (workspace/memory_policy) and the entry.
+func parseTableHeader(line string, ln int) (tableKind, string, string, error) {
+	if !strings.HasSuffix(line, "]") {
+		return 0, "", "", fmt.Errorf("line %d: malformed section header %q", ln, line)
+	}
+	inner := strings.TrimSpace(line[1 : len(line)-1])
+	switch inner {
+	case "daemon":
+		return tableDaemon, "", "", nil
+	case "summarize":
+		return tableSummarize, "", "", nil
+	}
+	const policyPrefix = "memory_policy."
+	if strings.HasPrefix(inner, policyPrefix) {
+		path, rest, err := scanQuotedKey(strings.TrimSpace(inner[len(policyPrefix):]), ln, `[memory_policy."<path>".<entry>]`)
+		if err != nil {
+			return 0, "", "", err
+		}
+		rest = strings.TrimSpace(rest)
+		if !strings.HasPrefix(rest, ".") {
+			return 0, "", "", fmt.Errorf("line %d: a memory_policy table names the workspace path and the entry: [memory_policy.\"<path>\".<default|project>]", ln)
+		}
+		entry, err := parseTableEntryKey(strings.TrimSpace(rest[1:]), ln)
+		if err != nil {
+			return 0, "", "", err
+		}
+		return tablePolicy, path, entry, nil
+	}
+	key, err := parseSectionHeader(line, ln)
+	if err != nil {
+		return 0, "", "", err
+	}
+	return tableWorkspace, key, "", nil
+}
+
+// scanQuotedKey reads one leading quoted key (no escapes) and answers it
+// and the rest of s. shape names the header form for the refusal.
+func scanQuotedKey(s string, ln int, shape string) (string, string, error) {
+	if len(s) < 2 || (s[0] != '"' && s[0] != '\'') {
+		return "", "", fmt.Errorf("line %d: section key must be a QUOTED path: %s", ln, shape)
+	}
+	end := strings.IndexByte(s[1:], s[0])
+	if end < 0 {
+		return "", "", fmt.Errorf("line %d: unterminated quoted key in %s", ln, shape)
+	}
+	key := s[1 : 1+end]
+	if s[0] == '"' && strings.ContainsAny(key, "\\\n") {
+		return "", "", fmt.Errorf("line %d: escapes are not supported in section keys", ln)
+	}
+	if key == "" {
+		return "", "", fmt.Errorf("line %d: empty workspace key", ln)
+	}
+	return key, s[2+end:], nil
+}
+
+// parseTableEntryKey reads the entry segment of a memory_policy header:
+// a bare name ([A-Za-z0-9_-]+) or one quoted key, and nothing after it.
+func parseTableEntryKey(s string, ln int) (string, error) {
+	if s != "" && (s[0] == '"' || s[0] == '\'') {
+		key, rest, err := scanQuotedKey(s, ln, `[memory_policy."<path>"."<entry>"]`)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(rest) != "" {
+			return "", fmt.Errorf("line %d: a memory_policy table has exactly two key segments: [memory_policy.\"<path>\".<entry>]", ln)
+		}
+		return key, nil
+	}
+	if s == "" {
+		return "", fmt.Errorf("line %d: a memory_policy table names an entry: [memory_policy.\"<path>\".<default|project>]", ln)
+	}
+	for _, c := range s {
+		if !(c == '_' || c == '-' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+			return "", fmt.Errorf("line %d: a memory_policy table has exactly two key segments and a bare entry name is [A-Za-z0-9_-]: [memory_policy.\"<path>\".<entry>] (got %q)", ln, s)
+		}
+	}
+	return s, nil
+}
+
+// parseSectionHeader validates one `[workspace."<key>"]` header (quoted
+// key mandatory) — the mapping plan. It answers the workspace key; any
+// other header is the unknown-section refusal.
 func parseSectionHeader(line string, ln int) (string, error) {
 	if !strings.HasSuffix(line, "]") {
 		return "", fmt.Errorf("line %d: malformed section header %q", ln, line)
@@ -425,7 +641,7 @@ func parseSectionHeader(line string, ln int) (string, error) {
 	inner := strings.TrimSpace(line[1 : len(line)-1])
 	const wsPrefix = `workspace.`
 	if !strings.HasPrefix(inner, wsPrefix) {
-		return "", fmt.Errorf("line %d: unknown section %q — only [workspace.\"<path>\"] sections and the [daemon] table are supported", ln, line)
+		return "", fmt.Errorf("line %d: unknown section %q — only [workspace.\"<path>\"] sections, [memory_policy.\"<path>\".<entry>] tables and the [daemon] and [summarize] tables are supported", ln, line)
 	}
 	keyExpr := strings.TrimSpace(inner[len(wsPrefix):])
 	if len(keyExpr) < 2 {
@@ -445,22 +661,60 @@ func parseSectionHeader(line string, ln int) (string, error) {
 	return key, nil
 }
 
-// parseStringArray parses `["a", "b"]` — an array of quoted strings
-// only (the one value shape a workspace section may carry).
+// parseStringArray parses `["a", "b"]` — the projects array of a
+// workspace section.
 func parseStringArray(val string, ln int) ([]string, error) {
+	out, err := parseQuotedArray(val, ln)
+	if err != nil {
+		return nil, fmt.Errorf("line %d: projects must be an array of quoted strings: projects = [\"a\", \"b\"]: %w", ln, err)
+	}
+	return out, nil
+}
+
+// parseQuotedArray parses one array of quoted strings: items separated by
+// commas outside quotes (a comma inside quotes is data), one trailing
+// comma allowed, no nested arrays. The error carries no line prefix (the
+// caller names the line and the key).
+func parseQuotedArray(val string, ln int) ([]string, error) {
 	if len(val) < 2 || val[0] != '[' || val[len(val)-1] != ']' {
-		return nil, fmt.Errorf("line %d: projects must be an array of quoted strings: projects = [\"a\", \"b\"], got %q", ln, val)
+		return nil, fmt.Errorf("must be an array of quoted strings, got %q", val)
 	}
 	body := strings.TrimSpace(val[1 : len(val)-1])
+	out := []string{}
 	if body == "" {
-		return []string{}, nil
+		return out, nil
 	}
-	var out []string
-	for _, item := range strings.Split(body, ",") {
+	var items []string
+	var quote byte
+	last := 0
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			quote = c
+		case ',':
+			items = append(items, body[last:i])
+			last = i + 1
+		}
+	}
+	tail := strings.TrimSpace(body[last:])
+	if tail != "" || len(items) == 0 {
+		items = append(items, tail)
+	}
+	for _, item := range items {
 		item = strings.TrimSpace(item)
+		if item == "" {
+			return nil, fmt.Errorf("an empty array item (two commas in a row)")
+		}
 		s, err := parseQuotedValue(item, ln)
 		if err != nil {
-			return nil, fmt.Errorf("line %d: projects entries must be quoted strings: %w", ln, err)
+			return nil, fmt.Errorf("items must be quoted strings: %v", err)
 		}
 		out = append(out, s)
 	}
@@ -477,6 +731,9 @@ func parseQuotedValue(val string, ln int) (string, error) {
 		return "", fmt.Errorf("line %d: value must be a quoted string, got %q", ln, val)
 	}
 	inner := val[1 : len(val)-1]
+	if strings.IndexByte(inner, quote) >= 0 {
+		return "", fmt.Errorf("line %d: one quoted string expected, got %q", ln, val)
+	}
 	if quote == '"' && strings.ContainsAny(inner, "\\\n") {
 		return "", fmt.Errorf("line %d: escapes and multi-line strings are not supported", ln)
 	}

@@ -123,6 +123,9 @@ func (s *Store) Create(req CreateRequest, owner string) (*Entry, error) {
 	} else {
 		body = req.Content
 	}
+	if err := checkModuleMap(req.Type, req.Title, req.Tags, body); err != nil {
+		return nil, err
+	}
 	memID, err := core.NewID("mem_")
 	if err != nil {
 		return nil, err
@@ -395,19 +398,20 @@ func (s *Store) collect(match string, short []string, maxCands int, f searchFilt
 //
 // Cost shape: exactly two statements per page, whatever the matches
 // look like. One ranked statement — the FTS MATCH joined to the
-// memories row, answering every match's FTS rowid, bm25 rank, id, type
-// and updated_at (the stored document is never read there) — and one
+// memories row, answering every match's FTS rowid, bm25 rank, id, type,
+// title and updated_at (the stored document is never read there) — and one
 // bodies batch for the page alone. Scoring, ordering and the page cut
 // all happen in Go over the whole (project-narrowed) match set, so
 // the statement count cannot grow with the number of matches, tied or
 // clustered ranks included (query count is bounded on
-// the readable path too). The answer is the exact weighted order.
+// the readable path too). The answer is the exact weighted order, with
+// a module map's older revisions after its current one (sortScored).
 func (s *Store) ftsPage(match string, projects []string, now time.Time, limit, offset int) ([]candRow, error) {
 	// The MATCH LHS keeps the table name: SQLite resolves it to the
 	// aliased FTS table, and the planner scans the FTS virtual table
 	// first, memories by key.
 	clause, pargs := sqlProjectSet(projects, 2)
-	rows, err := s.db.Query(`SELECT f.rowid, f.rank, m.id, m.type, m.updated_at
+	rows, err := s.db.Query(`SELECT f.rowid, f.rank, m.id, m.type, m.title, m.updated_at
 		FROM memory_fts f JOIN memories m ON m.id = f.mem_id
 		WHERE memory_fts MATCH ?1 AND m.status='active'`+clause,
 		append([]any{match}, pargs...)...)
@@ -420,12 +424,13 @@ func (s *Store) ftsPage(match string, projects []string, now time.Time, limit, o
 	for rows.Next() {
 		var c scoredCand
 		var typ, updatedAt string
+		var title sql.NullString
 		var rank float64
-		if err := rows.Scan(&c.rowid, &rank, &c.id, &typ, &updatedAt); err != nil {
+		if err := rows.Scan(&c.rowid, &rank, &c.id, &typ, &title, &updatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		c.typ = typ
+		c.typ, c.title = typ, title.String
 		c.updated = parseUpdatedAt(updatedAt)
 		c.score = rank * (1 + freshnessBoost*freshness(typ, c.updated, now))
 		all = append(all, c)
@@ -513,15 +518,29 @@ type scoredCand struct {
 	candRow
 	rowid   int64 // FTS rowid (ftsPage)
 	typ     string
+	title   string    // the row's title column ("" when NULL)
 	updated time.Time // parseUpdatedAt
 	score   float64
+	// anchor and revRank place a module map's revisions (rankRevisions);
+	// any other candidate has anchor = score and revRank 0.
+	anchor  float64
+	revRank int
 }
 
-// sortScored orders candidates by score, then updated_at DESC (as
-// instants), then id.
+// sortScored orders candidates by anchor, then revRank (a module map's
+// current revision first, its older ones after it, newest first), then
+// score, then updated_at DESC (as instants), then id. A candidate that
+// is no module map revision orders by score, updated_at, id as before.
 func sortScored(all []scoredCand) {
+	rankRevisions(all)
 	sort.Slice(all, func(i, j int) bool {
 		a, b := all[i], all[j]
+		if a.anchor != b.anchor {
+			return a.anchor < b.anchor
+		}
+		if a.revRank != b.revRank {
+			return a.revRank < b.revRank
+		}
 		if a.score != b.score {
 			return a.score < b.score
 		}
@@ -557,7 +576,7 @@ type candRow struct{ id, body string }
 // rows (nil = every project).
 func (s *Store) scanBodies(projects []string, now time.Time) ([]candRow, error) {
 	clause, pargs := sqlProjectSet(projects, 1)
-	rows, err := s.db.Query(`SELECT f.mem_id, f.body, m.updated_at, m.type FROM memories m
+	rows, err := s.db.Query(`SELECT f.mem_id, f.body, m.updated_at, m.type, m.title FROM memories m
 		JOIN memory_fts f ON f.mem_id = m.id WHERE m.status='active'`+clause, pargs...)
 	if err != nil {
 		return nil, errf(api.ErrMemUnavailable, "", "scan: %v", err)
@@ -566,10 +585,12 @@ func (s *Store) scanBodies(projects []string, now time.Time) ([]candRow, error) 
 	for rows.Next() {
 		var c scoredCand
 		var typ, updatedAt string
-		if err := rows.Scan(&c.id, &c.body, &updatedAt, &typ); err != nil {
+		var title sql.NullString
+		if err := rows.Scan(&c.id, &c.body, &updatedAt, &typ, &title); err != nil {
 			rows.Close()
 			return nil, err
 		}
+		c.typ, c.title = typ, title.String
 		c.updated = parseUpdatedAt(updatedAt)
 		c.score = -freshness(typ, c.updated, now)
 		all = append(all, c)

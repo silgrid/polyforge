@@ -210,6 +210,7 @@ func TestReadFrontmatterReadsAttrDecls(t *testing.T) {
 		"unknown type":       {"steps:\n  - id: grill\n    attrs:\n      n: { type: float, default: 0 }\n", "attrs.n.type"},
 		"missing default":    {"steps:\n  - id: grill\n    attrs:\n      n: { type: int }\n", "attrs.n.default: is required"},
 		"default type":       {"steps:\n  - id: grill\n    attrs:\n      n: { type: int, default: two }\n", "attrs.n.default: must be an integer"},
+		"negative default":   {"steps:\n  - id: grill\n    attrs:\n      n: { type: int, default: -1 }\n", "attrs.n.default: must be a non-negative integer"},
 		"string default int": {"steps:\n  - id: grill\n    attrs:\n      n: { type: string, default: 2 }\n", "attrs.n.default: must be a string"},
 		"bad name":           {"steps:\n  - id: grill\n    attrs:\n      Bad-Name: { type: int, default: 0 }\n", "attrs.Bad-Name"},
 	} {
@@ -217,6 +218,32 @@ func TestReadFrontmatterReadsAttrDecls(t *testing.T) {
 		_, err := ReadFrontmatter(path)
 		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "step grill") {
 			t.Fatalf("%s: err %v, want a refusal naming step grill and %q", name, err, tc.want)
+		}
+	}
+}
+
+// TestCheckAttrValue pins the attr value domain: an int attr takes a
+// non-negative integer (0 legal), a string attr a string; the negative
+// refusal does not reach string attrs.
+func TestCheckAttrValue(t *testing.T) {
+	intDecl := AttrDecl{Type: AttrTypeInt, Default: 0}
+	strDecl := AttrDecl{Type: AttrTypeString, Default: "plain"}
+	for _, tc := range []struct {
+		name string
+		decl AttrDecl
+		v    any
+		want string
+	}{
+		{"int zero", intDecl, 0, ""},
+		{"int positive", intDecl, 2, ""},
+		{"int negative", intDecl, -1, "must be a non-negative integer (declared type int), got -1"},
+		{"int as string", intDecl, "2", "must be an integer"},
+		{"string", strDecl, "-1", ""},
+		{"string as int", strDecl, -1, "must be a string"},
+	} {
+		got := CheckAttrValue(tc.decl, tc.v)
+		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+			t.Fatalf("%s: CheckAttrValue = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

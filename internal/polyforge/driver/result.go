@@ -82,6 +82,14 @@ const EvHumanGateUnasked = "human_gate_unasked"
 // archives (cause light_recheck_escalated).
 const EvLightRecheckEscalated = "light_recheck_escalated"
 
+// EvFastLaneOutOfBounds is the durable event kind of a verification-less
+// delivery lane's machine refusal (fast_lane.go): the build
+// step's diff is outside its repositories' declared micro_path, a touched
+// repository is not opted in, or the diff/conf is unreadable. The same
+// write ended the workflow failed_gate; the reason (also the execution
+// record's termination_reason) names the re-file lane.
+const EvFastLaneOutOfBounds = "fast_lane_out_of_bounds"
+
 // releaseStepID and deployStepID are the step ids of the `release`
 // workflow bundle (the only place a release or deploy happens). Their
 // declared output schemas are enforced (outputSchemaEnforced): `release`
@@ -242,6 +250,13 @@ type ResultSpec struct {
 	// it named) — deliver_facts.go.
 	VerifiedHeads   map[string]string
 	VerifiedTestBar []testBarCmd
+	// BarRuns: the work item's daemon-recorded bar runs
+	// (barruns.go), read outside every lock for a deliver dispatch. The
+	// merge rule merges them into this dispatch's evidence: this spawn's
+	// at the position of their `pf bar-run` command, an earlier spawn's of
+	// this deliver run at the window's start — each only at the pushed head
+	// (deliver_facts.go, withBarRuns). Nil when the record is disabled.
+	BarRuns []BarRun
 	// ReviewedHeads: the review step's driver-written
 	// record (task repo -> HEAD when a PASS review completed) — the merge
 	// rule's review-coverage anchor. Nil/empty on a workflow without a
@@ -295,6 +310,15 @@ type ResultSpec struct {
 	// scope_adequate answer (nil when absent); the deliver merge rule
 	// requires true for a scoped pass.
 	ReviewScopeAdequate *bool
+	// NoVerification: the workflow delivers and has no
+	// verification step (verificationLess) — the shape, never a bundle
+	// name, that selects the fast-evidence merge credential.
+	NoVerification bool
+	// FastEvidence: the credential plan of an in-bounds
+	// fast-lane verdict (the build step's driver-written fast_lane), the
+	// commands this deliver dispatch must re-run per repo; nil when no
+	// in-bounds verdict is recorded.
+	FastEvidence []testBarCmd
 }
 
 // ValidateStepResult runs the staging gates over one envelope:
@@ -344,6 +368,13 @@ type ResultSpec struct {
 //     its own scenario_titles and carry a non-empty repo, command, unit
 //     and a marker that compiles — the verification run resolves bound
 //     scenarios by them, so a broken binding is an envelope rejection;
+//     3d3. the executability preflight contract (checkPreflight, w276): every
+//     baseline row of a completed e2e-author result carries a preflight
+//     object with exactly the four fixed keys (data_source, async_settle,
+//     timing_window, selector_unique), each with a verdict of ok or n/a
+//     and a non-empty evidence — a missing, partial, empty or illegal
+//     preflight is an envelope rejection (skipped-with-rationale has no
+//     baseline and owes none);
 //  4. the command-evidence gate: every command_evidence item, on any
 //     step and outcome, must be an object that decodes as a
 //     CommandEvidence (decodeCommandEvidence); on a RequireCommandEvidence
@@ -508,6 +539,10 @@ func ValidateStepResult(res *StepResult, spec ResultSpec) error {
 	if res.Outcome == OutcomeCompleted && spec.StepID == e2eAuthorStepID {
 		if out, perr := parseOutput(res.Output); perr == nil {
 			if err := checkBindings(out); err != nil {
+				return fmt.Errorf("driver: step %q completed with %w", spec.StepID, err)
+			}
+			// 3d3. the executability preflight of every baseline row.
+			if err := checkPreflight(out); err != nil {
 				return fmt.Errorf("driver: step %q completed with %w", spec.StepID, err)
 			}
 		}
@@ -702,6 +737,57 @@ func checkBindings(out map[string]any) error {
 		}
 		if err := checkShellSyntax(field("command")); err != nil {
 			return fmt.Errorf("bindings[%d] whose command does not parse as a shell command: %v — verify-run executes the command literally with bash -c, so a malformed command can never pass", i, err)
+		}
+	}
+	return nil
+}
+
+// preflightKeys is the closed, ordered key list of an e2e-author
+// baseline row's executability preflight (workflows/feature-full/steps/
+// e2e-author.md, "Executability preflight (the four self-checks)").
+var preflightKeys = []string{"data_source", "async_settle", "timing_window", "selector_unique"}
+
+// checkPreflight judges the executability preflight of a completed
+// e2e-author result: a skipped-with-rationale result, or one without
+// baseline rows, owes none; otherwise every baseline row — an all-green
+// `pass` row too — carries a preflight object with exactly the four fixed
+// keys, each an object whose verdict is ok or n/a and whose evidence is a
+// non-empty string. `structural` is a classification of a baseline red the
+// step fixes or asks about before completing, never a verdict.
+func checkPreflight(out map[string]any) error {
+	if mode, _ := out["e2e_author_mode"].(string); mode == "skipped-with-rationale" {
+		return nil
+	}
+	rows, _ := out["baseline"].([]any)
+	for i, item := range rows {
+		row, ok := item.(map[string]any)
+		if !ok {
+			return fmt.Errorf("baseline[%d] that is not an object {title, status, evidence, preflight}", i)
+		}
+		pf, ok := row["preflight"].(map[string]any)
+		if !ok {
+			title, _ := row["title"].(string)
+			return fmt.Errorf("baseline[%d] (%q) without a preflight object — every kept scenario records the four self-checks (%s) from the same baseline run", i, clipAgentText(title), strings.Join(preflightKeys, ", "))
+		}
+		known := map[string]bool{}
+		for _, k := range preflightKeys {
+			known[k] = true
+			check, ok := pf[k].(map[string]any)
+			if !ok {
+				return fmt.Errorf("baseline[%d] preflight without %s — a check that does not apply is {verdict: n/a, evidence: <the reason>}", i, k)
+			}
+			verdict, _ := check["verdict"].(string)
+			if verdict != "ok" && verdict != "n/a" {
+				return fmt.Errorf("baseline[%d] preflight.%s.verdict %q is not ok or n/a — structural is a classification of a baseline red, never a preflight verdict", i, k, clipAgentText(fmt.Sprint(check["verdict"])))
+			}
+			if ev, _ := check["evidence"].(string); strings.TrimSpace(ev) == "" {
+				return fmt.Errorf("baseline[%d] preflight.%s without a non-empty evidence", i, k)
+			}
+		}
+		for k := range pf {
+			if !known[k] {
+				return fmt.Errorf("baseline[%d] preflight has unknown key %q — the four fixed keys are %s", i, clipAgentText(k), strings.Join(preflightKeys, ", "))
+			}
 		}
 	}
 	return nil

@@ -23,9 +23,10 @@ import (
 var cmdFile = &Command{
 	Name:    "file",
 	Group:   GroupData,
-	Summary: "Create, edit or show a work item; manage its dependencies",
+	Summary: "Create, edit, show or comment on a work item; manage its dependencies",
 	Usage: "pf file create --project P --goal G [--repo NAME]... [--after ID]... [flags] | --stdin\n" +
 		"pf file edit <id> [flags] | --stdin\n" +
+		"pf file comment <id> --body TEXT [--reply-to COMMENT]\n" +
 		"pf file show <id>\n" +
 		"pf file dep add <blocking> <blocked>\n" +
 		"pf file dep rm <blocking> <blocked>\n" +
@@ -34,11 +35,13 @@ var cmdFile = &Command{
 		"item is not claimed until every blocker is WRAPPED. A blocker must be\n" +
 		"an execution ticket (bundle bound). A failed or canceled blocker keeps\n" +
 		"it waiting — remove the edge to proceed. --after is atomic: a bad\n" +
-		"blocker creates nothing.",
+		"blocker creates nothing.\n\n" +
+		"Comments are append-only: each carries author, server time, body and an\n" +
+		"optional reply_to on the SAME work item. There is no edit and no delete.",
 	Setup: func(fs *flag.FlagSet) {},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if len(args) == 0 {
-			return fmt.Errorf("file: expected create|edit|show|dep (see `pf help file`)")
+			return fmt.Errorf("file: expected create|edit|comment|show|dep (see `pf help file`)")
 		}
 		sub, rest := args[0], args[1:]
 		switch sub {
@@ -46,6 +49,8 @@ var cmdFile = &Command{
 			return fileCreate(ctx, rest)
 		case "edit":
 			return fileEdit(ctx, rest)
+		case "comment":
+			return fileComment(ctx, rest)
 		case "show":
 			return fileShow(ctx, rest)
 		case "dep":
@@ -466,6 +471,45 @@ func fileEdit(ctx *Context, args []string) error {
 	finishAs(ctx, raw, func(wi *WIView) {
 		fmt.Fprintln(ctx.Stdout)
 		renderWIDetail(ctx.Stdout, wi)
+	})
+	return nil
+}
+
+// fileComment appends one comment to a work item. There is no edit and
+// no delete: this is the only comment write.
+func fileComment(ctx *Context, args []string) error {
+	f := subFlags(ctx, "file comment")
+	var (
+		body    optString
+		replyTo optString
+	)
+	f.Var(&body, "body", "comment text ('-' reads stdin, '@file' reads a file)")
+	f.Var(&replyTo, "reply-to", "id of an earlier comment on the SAME work item")
+	rest, err := parseCommandArgs(f, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return fmt.Errorf("file comment: expected exactly one work item id")
+	}
+	if !body.IsSet() {
+		return fmt.Errorf("file comment: --body is required")
+	}
+	text, err := readValueOrStdin(ctx, body.Val())
+	if err != nil {
+		return err
+	}
+	req := api.AddCommentRequest{Body: text}
+	if replyTo.IsSet() {
+		req.ReplyTo = replyTo.Val()
+	}
+	raw, err := ctx.aihub().AddComment(rest[0], req)
+	if err != nil {
+		return err
+	}
+	finishAs(ctx, raw, func(c *api.Comment) {
+		fmt.Fprintln(ctx.Stdout)
+		renderComment(ctx.Stdout, *c)
 	})
 	return nil
 }

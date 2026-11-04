@@ -25,7 +25,7 @@ output:
           merge_commit: { type: string, description: The PR's merge commit sha (required when merged is true). }
           not_merged_reason: { type: string, description: Why the PR stays open (required when merged is false). }
           llm_resolved_conflict: { type: boolean, description: true when merging the default branch conflicted and you resolved it. }
-          tests_passed: { type: boolean, description: "The full test bar passed on the pushed head - it is the verified commit, or the bar was re-run after any merge that changed the tree, or (only where that re-run is owed and the repo's default branch declares ci_evidence) every declared job's check-run succeeded on it." }
+          tests_passed: { type: boolean, description: "The full test bar passed on the pushed head - it is the verified commit (never enough for an opted-in repo's full-tier delivery, which re-runs its carried full bar at any head), or the bar was re-run (through pf bar-run) after any merge that changed the tree, or (only where that re-run is owed and the repo's default branch declares ci_evidence) every declared job's check-run succeeded on it." }
     ci_evidence:
       type: array
       description: "Only for a repo whose .polyforge/verify-scope.conf declares ci_evidence lines, when its check-runs stand in for the test_bar re-run (section 2, step 3): one entry per declared job, read from the GitHub check-run of the pushed head."
@@ -62,7 +62,8 @@ output:
 
 # deliver
 
-You run after the workflow's review and verification gates have passed. Your job is
+You run after the workflow's gates (its review and, where the lane has one, its
+verification) have passed. Your job is
 mechanical delivery to the repos' git origins. You never change the product code except
 to resolve a merge conflict, and you never touch the default branch of any remote.
 Everything is done with your `bash` tool, and every command you run is recorded as
@@ -101,7 +102,8 @@ Prevention is these rules and the machine's local pre-push hook - follow them.
   it. The driver refuses a completed result that merged outside the rule, or left a PR
   unmerged, without a human answer in this round.
 - `pf` is limited to the commands this prompt names - `pf result submit` (the delivery
-  contract) and what an injected memory section names - on this workflow's last step,
+  contract), `pf bar-run` (the recorded test-bar re-run, section 2 step 3) and what an
+  injected memory section names - on this workflow's last step,
   the one `pf remember` wrap summary; never any other
   `pf` verb (in particular none that changes the work item's state), and never read
   polyforge credentials or configuration; the delivery note goes into your result and
@@ -117,6 +119,11 @@ Prevention is these rules and the machine's local pre-push hook - follow them.
   (the authored acceptance suite's per-scenario outcomes; any `skipped` entry blocks the
   automatic merge below). The review pass's own coverage is `steps.review.output.reviewed_heads`
   (driver-written: each repo's HEAD when review passed). A workflow without a `review` step has no independent review.
+- **A lane without a `verification` step** (micro) has no `steps.verification` at all:
+  its evidence plan is the build step's driver-written `fast_lane`
+  (`steps.<build step>.output.fast_lane.repos[].commands`, `{repo, command}` - each
+  repository's fast-phase commands followed by its declared micro checks). Section 2
+  step 3's verification-less bullet says how you re-run it.
 - `capsule.json`: `repos` records the sha each declared repo was checked out at by the latest
   materialization (a re-claim re-stamps it to the restored HEAD). It is not a delivery
   baseline: judge nothing to deliver against `origin/<default>` (below), never against it.
@@ -141,9 +148,11 @@ in the delivery note. Work inside `repos/<name>/`.
    when `git merge-base --is-ancestor HEAD origin/<default>` holds and
    `gh pr list --head <branch> --state merged --json url,mergeCommit` names a PR, this
    repo is merged - record that PR and its merge commit (`merged: true`) and skip to the
-   result. The merge rule still applies to it: when HEAD is not the verified commit,
-   re-run this repo's `test_bar` commands (as in step 3, but WITHOUT step 3's merge) in
-   this dispatch first; if that fails or the history shows a hand-resolved merge, report
+   result. The merge rule still applies to it: when HEAD is not the verified commit (or
+   the repo is an opted-in full-tier delivery, step 3), re-run this repo's `test_bar`
+   commands through `pf bar-run` (as in step 3, but WITHOUT step 3's merge) first - on a
+   lane without a `verification` step, its `fast_lane` commands directly (step 3's
+   verification-less bullet, without the merge); if that fails or the history shows a hand-resolved merge, report
    it through the human question ("already merged; acknowledge") instead of completing.
    **Nothing to deliver?** Otherwise, when `git rev-list --count origin/<default>..HEAD`
    is 0, skip the repo (record `skipped_reason`) - the driver checks the same count. Never
@@ -167,29 +176,51 @@ in the delivery note. Work inside `repos/<name>/`.
      deliver.
    Judgment items (invented mechanisms, duplicated acceptance tests) belong to the
    review; list any you notice in the delivery note as review points for the human.
-3. **Merge the latest default branch.** Record `pre_merge=$(git rev-parse HEAD)`, then
-   `git merge --no-edit origin/<default>`.
+3. **Merge the latest default branch - only when it advanced.** Record
+   `pre_merge=$(git rev-parse HEAD)`. When `git merge-base --is-ancestor origin/<default> HEAD`
+   holds, the remote default branch has not advanced past HEAD: run NO `git merge` (a no-op
+   merge would only move the re-run window and void the bar runs this deliver run already
+   recorded). Otherwise `git merge --no-edit origin/<default>`.
    - **Verification proved the merged tree.** Verification already fetched and merged the
      latest default branch before its bar, so when, after this step's merge,
      `git rev-parse HEAD` equals `verified_heads.<name>` - the default branch has not
      advanced since verification and no earlier dispatch's merge moved HEAD - this repo
-     records **no** `test_bar` command at all, reporting `tests_passed: true`. Only
-     commands recorded in THIS dispatch count, so verification's own bar run (an earlier
-     dispatch) never covers a delivery whose merge moves HEAD past the verified head.
+     records **no** `test_bar` command at all, reporting `tests_passed: true` - unless it
+     is an opted-in full-tier delivery (below). Verification's own bar run never covers a
+     delivery: only the re-runs THIS deliver run records count - this dispatch's, and the
+     `pf bar-run` runs the daemon recorded for an earlier dispatch of this same deliver run
+     (below) - so verification's own bar run never covers a delivery whose merge moves HEAD
+     past the verified head.
+   - **An opted-in full-tier delivery has no HEAD-equality shortcut.** When the
+     `.polyforge/verify-scope.conf` at the HEAD you deliver declares at least one
+     `smoke_suite=` line (the repository opted into the full-tier e2e selection) and
+     verification ran the full tier (`steps.verification.output.scope` absent),
+     verification ran only a selection of its e2e suites and carried the FULL e2e command
+     in `test_bar`: re-run every carried `test_bar` command of this repo as below even when
+     HEAD equals `verified_heads.<name>`. A scoped delivery keeps its rule below.
    - **Tests are covered only when HEAD equals the commit verification passed on**
      (`verified_heads.<name>`). "Already up to date" is NOT enough: an earlier dispatch of
      this step (before a crash or a daemon restart) may already have merged. Whenever
      HEAD differs - a clean merge now or earlier - re-run every `test_bar` command of this
-     repo exactly as written, inside `repos/<name>/` (as `cd repos/<name> && <command>`, or
-     with that cwd), AFTER your last `git merge`/`git pull` of this repo and BEFORE its
-     `gh pr merge`, in this same dispatch, each with exit 0. The driver checks exactly
-     that: only the window is ordered, not the commands — record the re-run in the order it
-     actually ran (any order inside the window), and how a command was recorded does not
-     change which command it is: one command line, a shell argv, and an argv word holding a
-     `$(...)` substitution compare by the same words (quotes and the substitution's own
-     splitting are normalised, a word is never dropped or re-split). Tests run in an earlier
-     dispatch do not count, and a verification without a `test_bar` for this repo means a
-     human decides.
+     repo exactly as written, inside `repos/<name>/`, through the daemon-recorded entry
+     point: `cd repos/<name> && pf bar-run -- '<command>'` (the command exactly as written,
+     quoted as ONE argument, never wrapped or re-quoted - the bar key is its text), AFTER
+     your last `git merge`/`git pull` of this repo and BEFORE its `gh pr merge`, each with
+     exit 0. The daemon records each run (the command, the exit, the repo HEAD it reads
+     itself, the dispatch) and the record outlives this process: when an earlier dispatch
+     of this same deliver run (a crash, a refused result, an owner answer) already
+     recorded a command with exit 0 at the HEAD you are about to push and no merge has
+     moved HEAD since, it still counts - run only the commands still missing. A recorded
+     run at another HEAD or a failed one never counts, nor a run of this dispatch after its
+     `gh pr merge`. The
+     driver checks exactly that: only the window is ordered, not the commands — record the
+     re-run in the order it actually ran (any order inside the window), and how a command
+     was recorded does not change which command it is: one command line, a shell argv, and
+     an argv word holding a `$(...)` substitution compare by the same words (quotes and the
+     substitution's own splitting are normalised, a word is never dropped or re-split).
+     Verification's own bar run never counts, a rewind back to the build step starts a new
+     deliver run with an empty record, and a verification without a `test_bar` for this
+     repo means a human decides.
      A **scoped** verification's carried `test_bar` is re-run the same way, verbatim - never
      re-derive the affected set and never upgrade to a full bar here.
    - **A light-passed workflow** (no `verified_heads.<name>` for this repo - the last
@@ -197,9 +228,9 @@ in the delivery note. Work inside `repos/<name>/`.
      there is no verified head to equal, so the tests are covered ONLY by this dispatch's
      recorded re-run of the CARRIED `test_bar` (`steps.verification.output.test_bar`) -
      unconditionally, whatever HEAD is. Re-run every carried `test_bar` command of this
-     repo exactly as written, inside `repos/<name>/`, in this same dispatch, after your
-     last `git merge`/`git pull` of this repo and before its `gh pr merge`, each with exit
-     0, and record it. Without a recorded re-run - or without a carried `test_bar` entry
+     repo exactly as written, inside `repos/<name>/` through `pf bar-run` as above, after
+     your last `git merge`/`git pull` of this repo and before its `gh pr merge`, each with
+     exit 0, and record it. Without a recorded re-run - or without a carried `test_bar` entry
      for this repo - a human decides.
    - **CI evidence instead of the re-run** (only for a repo that declares it): when the
      `.polyforge/verify-scope.conf` of the fetched default branch (`origin/<default>`, which
@@ -208,7 +239,8 @@ in the delivery note. Work inside `repos/<name>/`.
      declared job for EXACTLY the pushed head may stand in for the `test_bar` re-run either
      bullet above requires (never for a missing `test_bar`: that still goes to a human).
      The CI path exists only where one of those re-runs would otherwise be owed: when HEAD
-     equals `verified_heads.<name>` nothing is owed, so read no check-runs and record no
+     equals `verified_heads.<name>` nothing is owed (an opted-in full-tier delivery aside,
+     which owes the re-run at any HEAD), so read no check-runs and record no
      `ci_evidence` for this repo. The declaration is read from the default branch, never
      from your change: a change that adds, narrows, removes or breaks those lines gets no CI
      path, nor does a change that edits anything under `.github/` (where the declared jobs
@@ -226,6 +258,17 @@ in the delivery note. Work inside `repos/<name>/`.
      stops at a deadline. A job still pending at the deadline, failed or missing means the
      re-run above applies unchanged, and a repo that declares no `ci_evidence` keeps the
      re-run rule exactly.
+   - **A lane without a `verification` step** (the evidence plan in section 1): there is
+     no verified head, no carried test bar and no bar-run reuse. Re-run every `fast_lane`
+     command of this repo yourself, one command line each, exactly as written, inside
+     `repos/<name>/` (`cd repos/<name> && <command>`), AFTER your last `git merge`/`git pull`
+     of this repo and BEFORE its `gh pr merge`, each with exit 0 - never through
+     `pf bar-run`: a run of the build step or of an earlier dispatch never counts, only
+     this dispatch's recorded run inside that window. `tests_passed` is decided on that
+     re-run alone. A red, missing or skipped command means no merge: return outcome
+     `gate_failed` with `verdict: fail` and a `fail_reason` naming the command and its
+     exit (the workflow rewinds to its build step). No verification record, verified head
+     or test bar exists on such a lane, and you never write one.
    - **A conflict:** resolve it yourself in this worktree, keeping both sides' intent,
      commit the merge, then you MUST (a) re-run the test bar as above and (b) have the
      resolution reviewed in a FRESH context - start a sub-agent (a new agent with no history
@@ -285,9 +328,14 @@ in the delivery note. Work inside `repos/<name>/`.
      the automatic merge - it routes the delivery to the human question naming the
      skipped title (an owner-approved `skipped-with-rationale` e2e-author mode records an
      empty list and triggers nothing);
-   - the tests are covered on the pushed head (HEAD is the verified commit, you re-ran
-     the test bar after the last merge in this dispatch, or the repo's declared CI evidence
-     holds for the pushed head) and `tests_passed` is true;
+   - the tests are covered on the pushed head (HEAD is the verified commit and the repo is
+     no opted-in full-tier delivery, this deliver run's recorded `pf bar-run` re-runs of the
+     test bar lie after the last merge at the pushed head, or the repo's declared CI
+     evidence holds for the pushed head) and `tests_passed` is true; on a lane without a
+     `verification` step the only cover is this dispatch's recorded re-run of every
+     `fast_lane` command of the repo inside the window (step 3), each with exit 0 - the
+     verification, scope and scenario conditions above do not apply there, and nothing
+     else stands in for that re-run;
    - no merge since the verified commit was hand-resolved (`llm_resolved_conflict` is
      not true);
    - the owner-review gate (section 3) is settled: the work item declared no

@@ -296,19 +296,13 @@ type InitResult struct {
 	Scratch   string `json:"scratch"`    // created | exists
 	NotesFile string `json:"notes_file"` // created | inserted | updated | unchanged
 	NotesPath string `json:"notes_path"` // the notes file chosen (Notes): AGENTS.md | CLAUDE.md
-	// Yaml is what happened to .polyforge.yaml's memory_policy section:
-	// created (a new file holding only it) | appended | unchanged |
-	// skipped (the file does not load: YamlWarning says why).
-	Yaml        string `json:"polyforge_yaml"`
-	YamlWarning string `json:"polyforge_yaml_warning,omitempty"`
 }
 
-// Init gives an existing workspace directory its local layout: scratch/,
-// the layout section of the notes file Notes picks (upsertLayout; written
-// atomically with its mode kept, through a symlink to its target) and the
-// default memory_policy of .polyforge.yaml (planMemoryPolicy, planned
-// first; a yaml that does not load is left untouched and reported in
-// YamlWarning). A CLAUDE.md that carries a second polyforge-managed block
+// Init gives an existing workspace directory its local layout: scratch/
+// and the layout section of the notes file Notes picks (upsertLayout;
+// written atomically with its mode kept, through a symlink to its target).
+// It never writes .polyforge.yaml: the default memory policy is a cli.toml
+// block `pf init` writes itself. A CLAUDE.md that carries a second polyforge-managed block
 // beside AGENTS.md is refused before anything is written: pf never edits
 // it, the operator removes that block by hand. Idempotent.
 func Init(root string) (InitResult, error) {
@@ -320,7 +314,6 @@ func Init(root string) (InitResult, error) {
 	if !st.IsDir() {
 		return res, fmt.Errorf("%s is not a directory", root)
 	}
-	ypath, ydata, ymode, yhow, yerr := planMemoryPolicy(root)
 	name, dup, err := Notes(root)
 	if err != nil {
 		return res, err
@@ -373,13 +366,6 @@ func Init(root string) (InitResult, error) {
 		if err := writeLayoutFile(notes, []byte(text), mode); err != nil {
 			return res, err
 		}
-	}
-	if yerr != nil {
-		res.Yaml, res.YamlWarning = "skipped", yerr.Error()
-		return res, nil
-	}
-	if res.Yaml = yhow; ydata != nil {
-		return res, writeLayoutFile(ypath, ydata, ymode)
 	}
 	return res, nil
 }

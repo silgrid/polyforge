@@ -936,23 +936,24 @@ type w224Rig struct {
 	transcript string // the seeded store file (append to grow)
 }
 
-// newW224Rig claims one work item under a workspace yaml whose root
-// summarize key names models (nil = no key: the lane is off), and seeds
-// the current dispatch's live transcript in the harness session store.
+// newW224Rig claims one work item under a daemon whose cli.toml
+// [summarize] table names models (nil = no table: the lane is off), and
+// seeds the current dispatch's live transcript in the harness session
+// store.
 func newW224Rig(t *testing.T, models []string) *w224Rig {
 	t.Helper()
 	disp := &w224Dispatcher{}
-	td := newTestDaemon(t, func(c *Config) { c.SummarizeDispatcher = disp })
+	td := newTestDaemon(t, func(c *Config) {
+		c.SummarizeDispatcher = disp
+		if models != nil {
+			c.StartupFile.Summarize = &workspace.SummarizeSettings{Models: models}
+		}
+	})
 	ws, err := td.cfg.Mapping.WorkspaceFor("proj")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := "# w224 rig yaml\n"
-	if models == nil {
-		body += "steps:\n  proj:\n    default: { models: [pi:prov/weak-a] }\n"
-	} else {
-		body += "summarize: { models: [" + strings.Join(models, ", ") + "] }\n"
-	}
+	body := "# w224 rig yaml\nsteps:\n  proj:\n    default: { models: [pi:prov/weak-a] }\n"
 	if err := os.WriteFile(filepath.Join(ws, workspace.FileName), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

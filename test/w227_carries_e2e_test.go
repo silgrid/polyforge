@@ -477,7 +477,8 @@ func TestW227CarriesS11RunnerTarget(t *testing.T) {
 	fmt.Println("PASS S11")
 }
 
-// TestW227CarriesS12Map: e2e_map= replaces a suite's declaration outright; a
+// TestW227CarriesS12Map: e2e_map= replaces a suite's declaration outright (a
+// path only the replaced header declares forces full: never merged); a
 // mapping to a suite that does not exist forces full.
 func TestW227CarriesS12Map(t *testing.T) {
 	dir, _ := w227Repo(t, map[string]string{
@@ -493,6 +494,24 @@ func TestW227CarriesS12Map(t *testing.T) {
 		t.Fatalf("an e2e_map declaration covers the diff, so the tier stays scoped, got %q", r.mode)
 	}
 	w227RequireCmd(t, r, "node e2e/that.mjs")
+
+	// replaced, not merged: the map replaces the suite's
+	// header, so a path only the replaced header declares is uncovered
+	dirR, _ := w227Repo(t, map[string]string{
+		"package.json":                 "{\n  \"name\": \"w227-map-replaced\",\n  \"scripts\": {\"lint\": \"eslint .\"}\n}\n",
+		"components/a/one.ts":          "export const one = 1;\n",
+		"components/b/two.ts":          "export const two = 1;\n",
+		"e2e/that.mjs":                 "// carries: components/a*\nconsole.log('that');\n",
+		".polyforge/verify-scope.conf": "stack=npm\ne2e_map=components/b*=e2e/that.mjs\n",
+	})
+	w227Change(t, dirR, "components/a/one.ts", "export const one = 2;\n")
+	rR, errbR := w227Run(t, dirR)
+	if rR.mode != "full" {
+		t.Fatalf("e2e_map replaces the suite's header (never merges with it): a path only the replaced header declares must force full, got %q", rR.mode)
+	}
+	if !strings.Contains(errbR, "changed path components/a/one.ts is covered by no carries: declaration") {
+		t.Fatalf("the uncovered path must be named, got %q", errbR)
+	}
 
 	dir2, _ := w227Repo(t, map[string]string{
 		"package.json":                  "{\n  \"name\": \"w227-map2\",\n  \"scripts\": {\"lint\": \"eslint .\"}\n}\n",

@@ -3,7 +3,8 @@ package verifyrun
 // report.go: rendering report-mechanical.md, the mechanical section the
 // step merges into artifacts/verification-report.md — the merges, the
 // plans, every check, the pre-existing failures with their base sha, the
-// flaky units, the test bar as run and the bound scenarios. Excerpts and
+// flaky units, the full-tier e2e selection, the test bar carried to
+// delivery and the bound scenarios. Excerpts and
 // paths only: the full command logs stay local under runtime-state/verify.
 
 import (
@@ -52,6 +53,10 @@ func renderReport(res *Result) string {
 			default:
 				fmt.Fprintf(&b, "- `%s`: stack %s, conf %s, mode %s, %d command(s) — `%s`\n", rp.Name, rp.Stack, rp.Conf, rp.Mode, len(rp.Commands), rp.EngineRef)
 			}
+			if s := rp.E2ESelection; s != nil {
+				fmt.Fprintf(&b, "  - e2e selection (smoke_suite opt-in): mode **%s**; suites %s; uncovered paths %s; carried full command(s) %s\n",
+					s.Mode, codeList(s.Suites), codeList(s.UncoveredPaths), codeList(s.FullCommands))
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -89,7 +94,7 @@ func renderReport(res *Result) string {
 	}
 
 	if len(res.TestBar) > 0 {
-		b.WriteString("### Test bar (as run)\n\n")
+		b.WriteString("### Test bar (carried to delivery)\n\n")
 		for _, t := range res.TestBar {
 			fmt.Fprintf(&b, "- `%s`: `%s`\n", t.Repo, t.Command)
 		}
@@ -113,6 +118,18 @@ func renderReport(res *Result) string {
 		fmt.Fprintf(&b, "Unplanned repos (their bar is the step's own): %s.\n", strings.Join(res.UnplannedRepos, ", "))
 	}
 	return b.String()
+}
+
+// codeList renders a list as inline code items, "none" when empty.
+func codeList(xs []string) string {
+	if len(xs) == 0 {
+		return "none"
+	}
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = "`" + x + "`"
+	}
+	return strings.Join(out, ", ")
 }
 
 // cell keeps a table cell on one line.

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 type configExpectation struct {
@@ -300,10 +301,11 @@ func configSnapshotValues(raw []byte, exists bool) map[string]any {
 	if err != nil {
 		return out
 	}
-	flat, _, dkvs, err := parseConfigTOML("", string(raw))
+	p, err := parseConfigTOML("", string(raw))
 	if err != nil {
 		return out
 	}
+	flat, dkvs := p.flat, p.daemon
 	for _, key := range knownFlatKeyNames() {
 		if key == "api_key" {
 			out[key] = map[string]any{"set": flat[key] != ""}
@@ -324,5 +326,9 @@ func configSnapshotValues(raw []byte, exists bool) map[string]any {
 		}
 		out[key] = val
 	}
+	for _, key := range knownSummarizeKeyNames() {
+		out[key], _ = summarizeValueOf(cfg.Summarize, key)
+	}
+	out[workspace.MemoryPolicyKey] = memoryPolicyList(cfg)
 	return out
 }

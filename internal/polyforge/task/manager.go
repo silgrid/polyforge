@@ -64,6 +64,9 @@ type Manager struct {
 	// pending is chat id -> ids of terminal tasks whose summary the chat
 	// has not acked (bounded to the newest RetentionMaxEntries).
 	pending map[string][]string
+	// waiters is task id -> the Wait calls blocked on that live task; the
+	// terminal transition hands each the finished record and drops them.
+	waiters map[string][]chan Task
 }
 
 // NewManager builds a manager.
@@ -72,7 +75,8 @@ func NewManager(cfg Config) *Manager {
 		cfg.Now = time.Now
 	}
 	base, stop := context.WithCancel(context.Background())
-	return &Manager{cfg: cfg, base: base, stop: stop, tasks: map[string]*entry{}, pending: map[string][]string{}}
+	return &Manager{cfg: cfg, base: base, stop: stop, tasks: map[string]*entry{}, pending: map[string][]string{},
+		waiters: map[string][]chan Task{}}
 }
 
 // Close ends every running task (interrupted) and waits for the runners.
@@ -175,6 +179,7 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 		m.mu.Unlock()
 		res, err := m.cfg.Runner.Run(ctx, RunSpec{
 			Candidate: c, Prompt: t.Prompt, MaxTokens: t.MaxTokens - tokens, WorkDir: dir, TaskID: t.ID,
+			ReadOnlyTools: t.ReadOnlyTools,
 		}, func(n int64) {
 			m.mu.Lock()
 			e.t.TokensConsumed = tokens + n
@@ -248,6 +253,10 @@ func (m *Manager) finish(ctx context.Context, e *entry, report string, tokens in
 	// flat over a long run (polyforge#40 code review). A running task keeps
 	// its entry (Cancel and the progress counter) until this point.
 	delete(m.tasks, t.ID)
+	for _, ch := range m.waiters[t.ID] {
+		ch <- t.Clone() // buffered 1: never blocks
+	}
+	delete(m.waiters, t.ID)
 	m.mu.Unlock()
 	if m.cfg.OnTerminal != nil {
 		m.cfg.OnTerminal(t.Clone())
@@ -333,6 +342,41 @@ func (m *Manager) Show(id string) (Task, error) {
 		return Task{}, ErrNotFound
 	}
 	return t, nil
+}
+
+// Wait blocks until task id reaches a terminal state, or ctx ends, and
+// answers the terminal record. A live task registers a waiter the terminal
+// transition answers (no polling); a task no longer live is read from the
+// store, where its terminal record was saved before the live entry was
+// dropped. An unknown id is ErrNotFound; ctx's end stops only the wait,
+// never the task.
+func (m *Manager) Wait(ctx context.Context, id string) (Task, error) {
+	m.mu.Lock()
+	if _, ok := m.tasks[id]; !ok {
+		m.mu.Unlock()
+		return m.Show(id)
+	}
+	ch := make(chan Task, 1)
+	m.waiters[id] = append(m.waiters[id], ch)
+	m.mu.Unlock()
+	select {
+	case t := <-ch:
+		return t, nil
+	case <-ctx.Done():
+		m.mu.Lock()
+		ws := m.waiters[id]
+		for i, w := range ws {
+			if w == ch {
+				m.waiters[id] = append(ws[:i:i], ws[i+1:]...)
+				break
+			}
+		}
+		if len(m.waiters[id]) == 0 {
+			delete(m.waiters, id)
+		}
+		m.mu.Unlock()
+		return Task{}, fmt.Errorf("task %s was still running when the wait ended: %w", id, ctx.Err())
+	}
 }
 
 // Cancel ends a running task (it ends interrupted).

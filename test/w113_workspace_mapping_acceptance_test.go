@@ -1767,6 +1767,15 @@ func TestW113DoctorHealthyMachine(t *testing.T) {
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfgPath))
 	w113ConfigFile(t, cfgPath, inst.url, inst.adminKey, d.sock,
 		[]w113WS{{key: ws, projects: []string{"e2e"}}})
+	// a healthy machine declares the workspace path's memory policy in
+	// cli.toml (a path without a block is the `pf init` warn)
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, append(raw, "\n[memory_policy.\""+ws+"\".default]\nrecord = [\"r\"]\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	d.start()
 	defer d.stop()
 
@@ -1784,6 +1793,8 @@ func TestW113DoctorHealthyMachine(t *testing.T) {
 		case "claude progress display", "pi progress display",
 			"claude install layout", "pi install layout", "v1 harness leftovers":
 			continue // the harness family (polyforge#142, #174): no harness in the scratch HOME
+		case "harness diagram guidance":
+			continue // skips when no harness is installed, as here
 		case "daemon supervision":
 			// polyforge#174: this test runs its daemon directly, not under
 			// the tmux restart loop — a warn, never a fail
@@ -1791,6 +1802,12 @@ func TestW113DoctorHealthyMachine(t *testing.T) {
 				t.Fatalf("daemon supervision failed: %s", c.Detail)
 			}
 			continue
+		case "disk watermark":
+			// the row reads the real host's filesystem, so a
+			// fuller host warns; only that watermark warn is tolerated
+			if c.Status == "warn" && strings.Contains(c.Detail, "above the 70% watermark") {
+				continue
+			}
 		}
 		if c.Status != "pass" {
 			t.Fatalf("pf doctor --json (healthy): check %q is %q, want pass (output %q)", c.Name, c.Status, jout)

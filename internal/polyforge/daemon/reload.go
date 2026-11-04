@@ -6,9 +6,13 @@ package daemon
 //
 //   - live: max_concurrent_jobs (the queue), step_timeout/stall_window/
 //     claude_bin (the live state the runtime reads);
+//   - live: summarize.models|language|interval_sec (the [summarize] table
+//     the summarize lane reads from the live state);
 //   - next-claim: the [workspace] mapping (additions take effect at the
 //     next claim; a removal/re-route that would strand a held job is
-//     refused and the work items are listed);
+//     refused and the work items are listed) and the whole
+//     [memory_policy] family (the next claim writes the new effective
+//     policy into its capsule; a running job keeps its own);
 //   - restart-only: server, api_key, daemon_socket, harness_root,
 //     operator_agent_dir — recorded as pending against the running
 //     baseline, never applied;
@@ -26,6 +30,7 @@ package daemon
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -139,7 +144,11 @@ func (d *Daemon) reloadConfig() (*cli.ConfigReloadResponse, error) {
 	if !d.plan().Equal(newCfg.Mapping) {
 		add("[workspace]", cli.ConfigSectionClass, "next-claim", "")
 	}
+	if !reflect.DeepEqual(prev.MemoryPolicy, newCfg.MemoryPolicy) {
+		add(cli.MemoryPolicyLabel, cli.MemoryPolicyClass, "next-claim", "")
+	}
 	d.live.SetMapping(newCfg.Mapping)
+	d.live.SetMemoryPolicy(newCfg.MemoryPolicy)
 	d.lastAppliedFile = newCfg
 
 	sort.Strings(pending)
@@ -223,6 +232,9 @@ func (d *Daemon) applyLive(key string, cfg cli.Config) error {
 		d.live.SetStepTimeout(cfg.Daemon.StepTimeout)
 	case "stall_window":
 		d.live.SetStallWindow(cfg.Daemon.StallWindow)
+	case "summarize.models", "summarize.language", "summarize.interval_sec":
+		// the table is one value: any changed key swaps the whole table
+		d.live.SetSummarize(cfg.Summarize)
 	case "max_concurrent_jobs":
 		n := cfg.Daemon.MaxConcurrentJobs
 		if n <= 0 {
@@ -264,8 +276,25 @@ func configValueChanged(newCfg, baseline cli.Config, key string) bool {
 		return newCfg.Daemon.OperatorAgentDir != baseline.Daemon.OperatorAgentDir
 	case "max_concurrent_jobs":
 		return newCfg.Daemon.MaxConcurrentJobs != baseline.Daemon.MaxConcurrentJobs
+	case "summarize.models", "summarize.language", "summarize.interval_sec":
+		a, b := summarizeKeyValue(newCfg, key), summarizeKeyValue(baseline, key)
+		return !reflect.DeepEqual(a, b)
 	}
 	return false
+}
+
+// summarizeKeyValue answers one [summarize] key's effective value (the
+// documented default for an absent optional key; nil models when the
+// table is absent).
+func summarizeKeyValue(cfg cli.Config, key string) any {
+	models, language, interval := cfg.Summarize.Lane()
+	switch key {
+	case "summarize.models":
+		return models
+	case "summarize.language":
+		return language
+	}
+	return interval
 }
 
 // checkMappingRemoval refuses a mapping change that unmaps or re-routes a

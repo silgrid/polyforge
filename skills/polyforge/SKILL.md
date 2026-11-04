@@ -18,7 +18,7 @@ Nothing else. The split between the target faces is fixed (the architecture's ro
   talks HTTP **direct to AIHub** (single port, `Authorization: Bearer
   <api_key>`); the daemon is not involved.
 - **Execution-plane verbs** (`submit`, `task` (spawn/list/show/cancel), `watch`, `answer`,
-  `pause`, `resume`, `wrap`, `ops`, `msg analyze`): semantically bound to this machine's local
+  `pause`, `resume`, `wrap`, `ops`, `msg analyze`, `msg prompt`): semantically bound to this machine's local
   execution scene (one exception: `wrap` of a work item with no bundle,
   which no daemon ever holds, is recorded by AIHub). The `pf` CLI talks to the **local daemon over its unix
   domain socket** (default `daemon.sock` in `$POLYFORGE_DATA_DIR`, else `~/.local/share/polyforge`); the daemon translates each
@@ -66,6 +66,7 @@ EXTENDED_GLOB and starts a comment after whitespace.
 | run it after X / this waits for X / drop that dependency / who is it waiting for / 等 X 做完再做 / 加依赖 / 去掉依赖 / 它在等谁 | `verbs/file.md` (`dep add` / `dep rm` / `dep list`) | AIHub |
 | edit a work item / update goal or content / 改一下目标 / 编辑这个票 / 更新优先级 | `verbs/file.md` (edit) | AIHub |
 | show me this work item / 看看这个票 / 详情 | `verbs/file.md` (show) | AIHub |
+| comment on this ticket / add a note / reply to that comment / 在票上补一条评论 / 回复那条评论 | `verbs/file.md` (comment; append-only, same write gate as edit) | AIHub |
 | what's ready / what can I claim today / show the queue / 今天有什么活 / 就绪队列 | `verbs/queue.md` | AIHub |
 | list work items / filter by status / 列一下所有票 / 按状态筛 | `verbs/queue.md` | AIHub |
 | cancel it / drop it / abandon it / don't want it anymore / 不要了 / 取消这个票 / 作废 / 放弃 | `verbs/cancel.md` | AIHub |
@@ -78,6 +79,7 @@ EXTENDED_GLOB and starts a comment after whitespace.
 | read one message / 看那条消息 | `verbs/message.md` (show) | AIHub |
 | who can I message / list my contacts / 我能联系谁 / 联系人列表 | `verbs/message.md` (contacts; union of the mapped projects' human co-members) | AIHub |
 | analyze a message / 分析这条消息 | `verbs/message.md` (analyze) | daemon |
+| turn a message into a prompt / 把这条消息整理成 prompt | `verbs/message.md` (prompt) | daemon |
 | owner-directed code work on a project repo / upgrade a library / bump the dependency / fix this bug in the repo / change the code / make it do X / refactor X / 升级 X 库 / 升级一下依赖 / 修一下这个 bug / 改一下仓里的 X / 让它支持 X / 重构一下 X | `verbs/execute-intent.md` (execution intent → execution ticket: `file create --bundle <lane>` + `submit`; the session agent never hand-executes) | AIHub + daemon |
 | run it / submit it / start this work item / execute / 跑起来 / 执行这个 WI / 提交执行 | `verbs/submit.md` | daemon |
 | spawn a task / outsource a research errand / have a fresh agent look into X / start a background investigation / 起个任务 / 外包给一个新 agent / 调研一下 X / 派个只读跑腿 | `verbs/task.md` (read-only errand: research / analysis / report / pre-review only — a code change stays on the execution-ticket route above) | daemon |
@@ -118,7 +120,7 @@ verb: delivery is the workflow's own final `deliver` step (`verbs/ship.md`) — 
 `--bundle release` (the project-agnostic release bundle: release, then an independent verify,
 then deploy). Put any bump keyword the user named (`major`/`minor`/`patch`) verbatim in `--goal`;
 otherwise name none and let the repo's procedure default. Never file a release on a delivery
-bundle (`feature-full`, `bug-fix`, `autopilot`, `chore` have no release step), and never run a
+bundle (`feature-full`, `bug-fix`, `autopilot`, `chore`, `micro` have no release step), and never run a
 release or deploy procedure from this skill directly.
 
 When the user repeatedly walks the same flow, read the docs' bundle-authoring chapter ([docs/bundles.md](../../docs/bundles.md)) and propose sedimenting it into a custom workflow bundle.
@@ -298,12 +300,16 @@ Eight standing rules, binding on every polyforge session:
    stays queued for other machines. Schema, syntax and precedence: the
    "Model candidates" subsection of docs/extending.md, routing to
    docs/reference/config.md's `steps:` section (via `verbs/init.md`).
-   Its second optional section, `memory_policy:` (`default` / `<project>`:
-   `{ record: [...], skip: [...] }`, a project's lists appended to
-   `default`'s), says what the last step puts into the work item's
-   `experience.wrap` summary memory; a
-   missing section is the built-in default policy, never a refusal, and
-   `pf init` appends the default section (see `verbs/init.md`). Step
+   The memory policy — what the last step puts into the work item's
+   `experience.wrap` summary memory — is no section of this file: it is
+   cli.toml's `[memory_policy."<workspace path>".<default|project>]` family
+   (`record`/`skip` lists, a project's lists appended to `default`'s),
+   read with `pf config list` and written with `pf config set`
+   or `pf init` (see `verbs/init.md`); a path without a block is the built-in
+   default policy, never a refusal. The summarize lane is cli.toml's one
+   `[summarize]` table likewise. A `.polyforge.yaml` still carrying a
+   `memory_policy:` or `summarize:` section is refused whole (DAEMON-414 naming
+   the file, the line and `pf config migrate`). Step
    agents hold no aihub credential path: inside a workflow step
    (`PF_WI_ID` and `PF_DAEMON_ID` set) `pf recall` / `pf memory show` go through the daemon,
    the last step's `pf remember` sends the work item's one

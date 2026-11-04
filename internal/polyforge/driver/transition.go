@@ -235,6 +235,15 @@ const (
 	// replaces the named commands and appends one audit record per
 	// corrected index to the step.
 	TransStepRevision TransitionKind = "step_revision"
+	// TransFastLane records the machine verdict of a verification-less
+	// delivery lane (fast_lane.go) on the done build step's
+	// output under fast_lane, before the step after it is dispatched: an
+	// idempotent overwrite of driver-computed facts. An out-of-bounds
+	// verdict is terminal in the same write — workflow_status failed_gate
+	// and termination_reason naming the re-file lane; it charges no rewind,
+	// resets no step and dispatches nothing, and emits
+	// fast_lane_out_of_bounds. It consumes no derivation ordinal.
+	TransFastLane TransitionKind = "fast_lane"
 )
 
 // TransitionRequest is one submitted execution.json mutation. SpawnN is
@@ -336,6 +345,10 @@ type TransitionRequest struct {
 	BindingRevision *BindingRevisionRequest
 	RevisionOutput  map[string]any
 	RevisionBefore  []string
+	// FastLane is the verdict TransFastLane records,
+	// computed from git and the base conf before the transition takes the
+	// driver's lock (the verifiedHeads pattern).
+	FastLane *fastLanePlan
 	// JudgedRepoHash ( criterion 6) is the task-repo tree hash
 	// a GATE step judged by delivering this result (PASS or FAIL), read
 	// before the transition takes the driver's lock. It is written to
@@ -520,9 +533,41 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 		return d.applyLightEscalateLocked(req.StepID, req.Reason, req.LightEscalationDiff, nil, info)
 	case TransStepRevision:
 		return d.applyBindingRevisionLocked(req)
+	case TransFastLane:
+		return d.applyFastLaneLocked(req)
 	default:
 		return fmt.Errorf("driver: unknown transition kind %q", req.Kind)
 	}
+}
+
+// applyFastLaneLocked records the fast-lane verdict on the done build
+// step's output and, for an out-of-bounds verdict, ends the workflow
+// failed_gate with the reason (TransFastLane).
+func (d *Driver) applyFastLaneLocked(req TransitionRequest) error {
+	if isTerminalStatus(d.exec.WorkflowStatus) {
+		return fmt.Errorf("driver: workflow is terminal (%s)", d.exec.WorkflowStatus)
+	}
+	st := d.exec.Steps[req.StepID]
+	if st == nil || st.Status != capsule.StepDone || req.FastLane == nil {
+		return fmt.Errorf("driver: the fast-lane verdict needs the done build step %q and a verdict", req.StepID)
+	}
+	raw, err := json.Marshal(req.FastLane)
+	if err != nil {
+		return fmt.Errorf("driver: fast-lane verdict: %w", err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return fmt.Errorf("driver: fast-lane verdict: %w", err)
+	}
+	if st.Output == nil {
+		st.Output = map[string]any{}
+	}
+	st.Output[fastLaneKey] = v
+	if !req.FastLane.InBounds {
+		d.exec.WorkflowStatus = StatusFailedGate
+		d.exec.TerminationReason = req.FastLane.Reason
+	}
+	return nil
 }
 
 // applyInitLocked lands the first execution.json: identity, the closed
@@ -2290,6 +2335,14 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 		kind = EvLightRecheckEscalated
 		body["step"] = req.StepID
 		body["detail"] = req.Reason
+	case TransFastLane:
+		// the in-bounds record is a plain fact write; the refusal is the
+		// owner-facing news (and the run's terminal)
+		if req.FastLane != nil && !req.FastLane.InBounds {
+			kind = EvFastLaneOutOfBounds
+			body["step"] = req.StepID
+			body["reason"] = req.FastLane.Reason
+		}
 	case TransBlocked:
 		kind = "blocked"
 		body["step"] = req.StepID

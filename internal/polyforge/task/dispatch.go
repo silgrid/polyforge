@@ -41,6 +41,8 @@ type RunSpec struct {
 	MaxTokens int64
 	WorkDir   string
 	TaskID    string
+	// ReadOnlyTools selects the read/search-only tool profile.
+	ReadOnlyTools bool
 }
 
 // RunResult is what one run observed. TokenCapped is true when the runner
@@ -115,13 +117,27 @@ const TaskClaudeTools = "Read,Glob,Grep,Bash,WebSearch,WebFetch"
 // carry).
 const TaskPiTools = "read,grep,find,ls,bash"
 
+// ReadOnlyClaudeTools / ReadOnlyPiTools are the read/search-only profile
+// one spawn may be narrowed to (Spec.ReadOnlyTools; the message analyzer
+// is its only user): no Bash, no web tool, no write tool. Like the
+// standard lists, an allowlist is the lane's scope, not a sandbox.
+const (
+	ReadOnlyClaudeTools = "Read,Glob,Grep"
+	ReadOnlyPiTools     = "read,grep,find,ls"
+)
+
 // innerArgv answers the harness argv (binary first). The claude context
 // flag follows the dispatch ruling (--bare in token mode, --safe-mode in
 // OAuth mode), the same functions the summarize dispatch uses. The tool
 // allowlist replaces --permission-mode bypassPermissions: only the listed
-// tools exist (polyforge#40 code review).
-func (r *ExecRunner) innerArgv(c harness.Candidate) ([]string, error) {
+// tools exist (polyforge#40 code review). readOnlyTools picks the
+// read/search-only pair instead of the standard one.
+func (r *ExecRunner) innerArgv(c harness.Candidate, readOnlyTools bool) ([]string, error) {
 	bin := r.bin(harness.Of(c.Harness))
+	claudeTools, piTools := TaskClaudeTools, TaskPiTools
+	if readOnlyTools {
+		claudeTools, piTools = ReadOnlyClaudeTools, ReadOnlyPiTools
+	}
 	var args []string
 	if harness.Of(c.Harness) == harness.Claude {
 		flag := "--safe-mode"
@@ -134,11 +150,11 @@ func (r *ExecRunner) innerArgv(c harness.Candidate) ([]string, error) {
 		}
 		args = []string{bin, "-p", flag, "--output-format", "stream-json", "--verbose",
 			"--no-session-persistence",
-			"--tools", TaskClaudeTools, "--allowedTools", TaskClaudeTools,
+			"--tools", claudeTools, "--allowedTools", claudeTools,
 			"--permission-mode", "dontAsk", "--model", c.Model}
 	} else {
 		args = []string{bin, "-p", "--mode", "json", "--no-session",
-			"--tools", TaskPiTools, "--model", c.Model}
+			"--tools", piTools, "--model", c.Model}
 	}
 	return append(args, c.EffortArgs()...), nil
 }
@@ -179,7 +195,7 @@ func (r *ExecRunner) Run(ctx context.Context, spec RunSpec, progress func(tokens
 	if !SupportsUsage(h) {
 		return RunResult{}, fmt.Errorf("candidate %s cannot report token usage, so a task cannot start on it", spec.Candidate)
 	}
-	argv, err := r.innerArgv(spec.Candidate)
+	argv, err := r.innerArgv(spec.Candidate, spec.ReadOnlyTools)
 	if err != nil {
 		return RunResult{}, err
 	}

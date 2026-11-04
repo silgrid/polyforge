@@ -207,6 +207,68 @@ func TestVerbFileShowAndEditRequestShape(t *testing.T) {
 	}
 }
 
+// TestVerbFileCommentShapeAndShow: `file comment` appends through the
+// one comment route, and `file show` renders the thread with author,
+// server time, body and reply_to. The fake aihub answers
+// the POST with one comment and the show's GET with a two-comment work
+// item.
+func TestVerbFileCommentShapeAndShow(t *testing.T) {
+	const commentedWI = `{"id":"wi_abc","slug":"pf-42","seq":42,"project":"polyforge","goal":"the goal",
+"status":"queued","priority":"normal","labels":[],"reporter":"usr_1","created_at":"2026-10-01T00:00:00Z",
+"updated_at":"2026-10-01T00:00:00Z","comments":[
+{"id":"wic_1","author":"usr_1","body":"first note","created_at":"2026-11-03T01:00:00Z"},
+{"id":"wic_2","author":"usr_2","body":"second note","reply_to":"wic_1","created_at":"2026-11-03T02:00:00Z"}]}`
+	var rec reqRecorder
+	srv := newFakeAihub(t, &rec, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/api/v1/work-items/wi_abc/comments":
+			w.WriteHeader(http.StatusCreated)
+			io.WriteString(w, `{"id":"wic_3","author":"usr_1","body":"a note","reply_to":"wic_1","created_at":"2026-11-03T03:00:00Z"}`)
+		case r.URL.Path == "/api/v1/work-items/wi_abc/dependencies":
+			io.WriteString(w, `{"blocked_by":[],"blocking":[]}`)
+		default:
+			io.WriteString(w, commentedWI)
+		}
+	})
+	env := map[string]string{"PF_SERVER": srv.URL}
+
+	code, stdout, stderr := runPf(t, env, "file", "comment", "wi_abc", "--body", "a note", "--reply-to", "wic_1")
+	if code != 0 {
+		t.Fatalf("comment: code=%d stderr=%s", code, stderr)
+	}
+	got := rec.last()
+	if got.Method != "POST" || got.Path != "/api/v1/work-items/wi_abc/comments" {
+		t.Errorf("comment request = %s %s", got.Method, got.Path)
+	}
+	if got.Body != `{"body":"a note","reply_to":"wic_1"}` {
+		t.Errorf("comment body = %s", got.Body)
+	}
+	for _, want := range []string{"wic_3", "usr_1", "2026-11-03T03:00:00Z", "a note", "reply-to: wic_1"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("comment output misses %q: %s", want, stdout)
+		}
+	}
+
+	// --body is required locally: nothing reaches aihub.
+	before := len(rec.all())
+	if code, _, _ := runPf(t, env, "file", "comment", "wi_abc"); code == 0 {
+		t.Errorf("comment without --body: exit 0, want a usage error")
+	}
+	if n := len(rec.all()); n != before {
+		t.Errorf("comment without --body reached aihub (%d new requests)", n-before)
+	}
+
+	code, stdout, stderr = runPf(t, env, "file", "show", "wi_abc")
+	if code != 0 {
+		t.Fatalf("show: code=%d stderr=%s", code, stderr)
+	}
+	for _, want := range []string{"comments: 2", "wic_1", "wic_2", "2026-11-03T01:00:00Z", "usr_1", "first note", "second note", "reply-to wic_1"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("show output misses %q: %s", want, stdout)
+		}
+	}
+}
+
 func TestVerbQueueRequestShape(t *testing.T) {
 	var rec reqRecorder
 	srv := newFakeAihub(t, &rec, func(w http.ResponseWriter, r *http.Request) {

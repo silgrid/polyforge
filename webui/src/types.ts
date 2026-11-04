@@ -44,6 +44,23 @@ export interface TimelineEvent {
   payload: Record<string, unknown>
 }
 
+export interface WorkItemComment {
+  id: string
+  author: string
+  body: string
+  reply_to?: string
+  created_at: string
+}
+
+export interface AnchoredMessage {
+  id: string
+  sender_id: string
+  text: string
+  about_wi?: string
+  reply_to?: string
+  created_at: string
+}
+
 export interface WorkItemDetail {
   id: string
   slug: string
@@ -60,6 +77,8 @@ export interface WorkItemDetail {
   updated_at: string
   closed_at?: string
   html: string
+  comments: WorkItemComment[]
+  messages: AnchoredMessage[]
   blocked_by: DepEdge[]
   blocking: DepEdge[]
   events: TimelineEvent[]

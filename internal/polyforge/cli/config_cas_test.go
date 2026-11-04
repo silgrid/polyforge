@@ -67,9 +67,9 @@ func TestCheckExpectationAcceptsUnchangedSnapshot(t *testing.T) {
 	}
 }
 
-// TestCheckExpectationWorkspaceKeyDiff pins the shared CAS routine on the
-// workspace yaml: a moved summarize value is named at key level, and an
-// unchanged api_key never refuses a matching file.
+// TestCheckExpectationWorkspaceKeyDiff pins the shared CAS routine on a
+// snapshot of the [summarize] keys: a moved summarize value is named at key
+// level.
 func TestCheckExpectationWorkspaceKeyDiff(t *testing.T) {
 	exp := configExpectation{state: mustExpectState(t, `{"file_sha256":null,"values":{"summarize.interval_sec":30,"summarize.models":["pi:zeta"]}}`)}
 	cur := map[string]any{
@@ -138,30 +138,26 @@ func TestWireNullFileSHA256DrivesAbsentAndStale(t *testing.T) {
 	}
 }
 
-// w22WorkspaceCtx builds a Context whose cli.toml maps one temp workspace and
-// whose daemon socket is unreachable, so the workspace write path runs without
-// a daemon (the candidate scope degrades to declared-only).
+// w22WorkspaceCtx builds a Context whose cli.toml maps one temp workspace
+// (projects alpha, beta) and whose fake daemon reports the steps_attrs
+// capability and the fixture's workflows dir, so the workspace step write
+// path runs end to end.
 func w22WorkspaceCtx(t *testing.T) (ctx *Context, ws string) {
 	t.Helper()
-	ws = t.TempDir()
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "cli.toml")
-	body := "server = \"http://127.0.0.1:1\"\nuser_id = \"usr_root\"\n\n[workspace.\"" + ws + "\"]\nprojects = [\"e2e\"]\n"
-	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PF_DAEMON_SOCKET", filepath.Join(dir, "absent.sock"))
+	f := newWfFixture(t, "", []string{CapabilityStepsAttrs})
+	t.Setenv("PF_DAEMON_SOCKET", f.env["PF_DAEMON_SOCKET"])
 	out := &bytes.Buffer{}
-	return &Context{ConfigPath: cfgPath, FlagSocket: filepath.Join(dir, "absent.sock"), Stdout: out, Stderr: out}, ws
+	cfgPath := filepath.Join(f.env["XDG_CONFIG_HOME"], "polyforge", "cli.toml")
+	return &Context{ConfigPath: cfgPath, FlagSocket: f.env["PF_DAEMON_SOCKET"], Stdout: out, Stderr: out}, f.ws
 }
 
 // TestWorkspaceCreateUnderWireNullExpectation drives the documented creation
 // path from wire JSON through parseConfigWriteArgs: a mapped workspace with no
-// yaml accepts a summarize write when the panel sends file_sha256 null.
+// yaml accepts a step write when the caller sends file_sha256 null.
 func TestWorkspaceCreateUnderWireNullExpectation(t *testing.T) {
 	ctx, ws := w22WorkspaceCtx(t)
 	state := `{"file_sha256":null,"values":{}}`
-	if err := runConfigSet(ctx, []string{"summarize.models", "pi:zeta", "--workspace", ws, "--expect-state", state}); err != nil {
+	if err := runConfigSet(ctx, []string{"steps.alpha.grill.models", "pi:zeta", "--workspace", ws, "--expect-state", state}); err != nil {
 		t.Fatalf("a wire-null expectation on an absent yaml must create it: %v", err)
 	}
 	raw, err := os.ReadFile(workspace.PathFor(ws))
@@ -179,12 +175,12 @@ func TestWorkspaceCreateUnderWireNullExpectation(t *testing.T) {
 func TestWorkspaceWireNullExpectationRefusesExisting(t *testing.T) {
 	ctx, ws := w22WorkspaceCtx(t)
 	yamlPath := workspace.PathFor(ws)
-	orig := "summarize:\n  models: [\"pi:zeta\"]\n"
+	orig := "steps:\n  alpha:\n    grill: { models: [\"pi:zeta\"] }\n"
 	if err := os.WriteFile(yamlPath, []byte(orig), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	state := `{"file_sha256":null,"values":{}}`
-	err := runConfigSet(ctx, []string{"summarize.interval_sec", "10", "--workspace", ws, "--expect-state", state})
+	err := runConfigSet(ctx, []string{"steps.alpha.grill.models", "pi:other", "--workspace", ws, "--expect-state", state})
 	var ae *api.Error
 	if !errors.As(err, &ae) || ae.Code != api.ErrCoreConflict {
 		t.Fatalf("a wire-null expectation on an existing yaml must be CORE-409, got %v", err)
@@ -203,8 +199,8 @@ func TestWorkspaceWireNullExpectationRefusesExisting(t *testing.T) {
 // with a wire-null expectation alike.
 func TestWorkspaceUnsetOnAbsentYamlWritesNothing(t *testing.T) {
 	for name, expect := range map[string][]string{
-		"no-expectation":   {"summarize.models", "--workspace", ""},
-		"null-expectation": {"summarize.models", "--workspace", "", "--expect-state", `{"file_sha256":null,"values":{}}`},
+		"no-expectation":   {"steps.alpha.grill.models", "--workspace", ""},
+		"null-expectation": {"steps.alpha.grill.models", "--workspace", "", "--expect-state", `{"file_sha256":null,"values":{}}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx, ws := w22WorkspaceCtx(t)
@@ -225,13 +221,15 @@ func TestWorkspaceUnsetOnAbsentYamlWritesNothing(t *testing.T) {
 	}
 }
 
-func TestWorkspaceConfigSchemaUsesWorkspaceBounds(t *testing.T) {
-	schema := WorkspaceConfigSchema("summarize.interval_sec")
+func TestSummarizeSchemaUsesWorkspaceBounds(t *testing.T) {
+	schema := ConfigSchema("summarize.interval_sec")
 	if schema["min"] != workspace.MinSummarizeIntervalSec || schema["max"] != workspace.MaxSummarizeIntervalSec {
 		t.Fatalf("the interval schema must carry the workspace package's bounds, got %v", schema)
 	}
-	if WorkspaceConfigClass("summarize.interval_sec") != ConfigLive {
-		t.Fatal("every summarize key is read live")
+	for _, key := range []string{"summarize.models", "summarize.language", "summarize.interval_sec"} {
+		if c, ok := ConfigClassOf(key); !ok || c != ConfigLive {
+			t.Fatalf("%s class = %q (%v), want live", key, c, ok)
+		}
 	}
 }
 

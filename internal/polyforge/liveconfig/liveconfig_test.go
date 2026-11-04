@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 func TestStateDefaultsAndSwaps(t *testing.T) {
@@ -57,4 +58,34 @@ func TestStateConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestSummarizeAndPolicyCopies pins the two cli.toml table families on the
+// live state: nil means absent (lane off / built-in
+// policy), getters hand out copies, a swap is whole.
+func TestSummarizeAndPolicyCopies(t *testing.T) {
+	s := New(nil, "", 0, 0)
+	if models, lang, iv := s.Summarize(); models != nil || lang != workspace.DefaultSummarizeLanguage || iv != workspace.DefaultSummarizeIntervalSec {
+		t.Fatalf("an absent table = %v %q %d", models, lang, iv)
+	}
+	in := &workspace.SummarizeSettings{Models: []string{"pi:a"}, Language: "English", IntervalSec: 30}
+	s.SetSummarize(in)
+	in.Models[0] = "pi:mutated"
+	models, lang, iv := s.Summarize()
+	if models[0] != "pi:a" || lang != "English" || iv != 30 {
+		t.Fatalf("summarize = %v %q %d", models, lang, iv)
+	}
+	models[0] = "pi:mutated"
+	if again, _, _ := s.Summarize(); again[0] != "pi:a" {
+		t.Fatal("Summarize must answer a copy")
+	}
+	s.SetMemoryPolicy(map[string]map[string]workspace.PolicyEntry{"/ws": {"default": {Record: []string{"r"}}}})
+	got := s.MemoryPolicyOf("/ws")
+	got["default"].Record[0] = "mutated"
+	if s.MemoryPolicyOf("/ws")["default"].Record[0] != "r" || s.MemoryPolicyOf("/ws")["default"].Skip != nil {
+		t.Fatal("MemoryPolicyOf must answer a copy keeping undeclared lists nil")
+	}
+	if s.MemoryPolicyOf("/other") != nil {
+		t.Fatal("an undeclared path must answer nil")
+	}
 }

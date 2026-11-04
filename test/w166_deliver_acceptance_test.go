@@ -98,6 +98,11 @@ func newDeliverWorld(t *testing.T) *deliverWorld {
 	if err := os.WriteFile(filepath.Join(w.bin, "gh"), []byte(fakeGHPRs), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// a carried e2e bar command (`npm run test:e2e:all`,) has
+	// no package.json in this world: the shim stands in for a passing run.
+	if err := os.WriteFile(filepath.Join(w.bin, "npm"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return w
 }
 
@@ -118,8 +123,15 @@ func (w *deliverWorld) origin(name string) string {
 	return bare
 }
 
+// daemonEnv is the delivery world's daemon environment. The fake gh comes
+// first on PATH, then the pf under test (v1Bins): a step's own
+// `pf` call (the deliver step's `pf bar-run`) resolves to
+// the build the daemon runs, exactly as an installed daemon's steps resolve
+// to the installed pf — never to whatever release happens to be on the
+// machine's PATH.
 func (w *deliverWorld) daemonEnv() daemonOpt {
-	return optEnv("PATH="+w.bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_GH_STATE="+w.state)
+	sep := string(os.PathListSeparator)
+	return optEnv("PATH="+w.bin+sep+v1BinDir+sep+os.Getenv("PATH"), "FAKE_GH_STATE="+w.state)
 }
 
 // prState answers repo's PR n state ("" when absent).

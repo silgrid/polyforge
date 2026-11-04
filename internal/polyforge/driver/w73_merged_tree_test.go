@@ -138,8 +138,17 @@ func TestW73DeliverPromptStatesMergedTreeConsequence(t *testing.T) {
 			"verification's own bar run",
 			// the re-run rule the new statement qualifies, kept verbatim.
 			"re-run every `test_bar` command of this",
+			// the re-run goes through the daemon-recorded
+			// entry point, a recorded run of the same deliver run at the
+			// pushed head is reused, the no-op merge is skipped, and an
+			// opted-in full-tier delivery has no HEAD-equality shortcut.
+			"`cd repos/<name> && pf bar-run -- '<command>'`",
+			"run only the commands still missing",
+			"When `git merge-base --is-ancestor origin/<default> HEAD` holds, the remote default branch has not advanced past HEAD: run NO `git merge`",
+			"**An opted-in full-tier delivery has no HEAD-equality shortcut.**",
+			"A scoped delivery keeps its rule below.",
 		} {
-			if !strings.Contains(prompt, want) {
+			if !strings.Contains(w73Flat(prompt), want) {
 				t.Errorf("%s: the rendered deliver prompt lost the merged-tree consequence phrase %q", lane, want)
 			}
 		}
@@ -178,6 +187,20 @@ func TestW73RetiredUnmergedTreeWordingIsGone(t *testing.T) {
 	}
 	if strings.Contains(deliver, "reports \"Already up to date\"), HEAD equals the verified head") {
 		t.Errorf("shipped deliver.md still keys the no-re-run on \"Already up to date\"")
+	}
+	// an earlier dispatch of the same deliver run counts
+	// through the daemon record; the retired "only this dispatch" wording
+	// is deleted, verification's own bar run stays no credential.
+	for _, gone := range []string{
+		"Tests run in an earlier dispatch do not count",
+		"Only commands recorded in THIS dispatch count",
+	} {
+		if strings.Contains(deliver, gone) {
+			t.Errorf("shipped deliver.md still carries the retired same-dispatch wording %q", gone)
+		}
+	}
+	if !strings.Contains(deliver, "Verification's own bar run never covers a delivery") {
+		t.Errorf("shipped deliver.md lost the statement that verification's own bar run is never a deliver credential")
 	}
 	if strings.Contains(w73Flat(w73Read(t, "docs/user-guide.md")), "then the machine bar verifies the tree it passed") {
 		t.Errorf("docs/user-guide.md still carries the retired unmerged-tree wording")

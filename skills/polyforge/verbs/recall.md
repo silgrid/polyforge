@@ -38,7 +38,10 @@ to the ranked any-term match (a memory sharing any of the query's words,
 best overlap first), for a long or descriptive query. In both modes a
 fresher memory ranks ahead of a comparable older one (`rule.*`,
 `doc.design` and `doc.decision` never age; reviews and audits do); a
-clearly better old match still ranks first. In `--any` mode
+clearly better old match still ranks first — except among the revisions
+of one module map (`doc.module-map`, title `<repo>/<module> rev<N>`),
+where the newest revision always ranks first and the older ones follow
+it, still returned and readable. In `--any` mode
 stopwords and words under 3 characters are ignored, as are non-CJK words
 over 40 characters (hashes, base64). Chinese/Japanese/Korean text has no word
 boundaries, so it is matched by overlapping 3-character pieces ("重试阶梯" →

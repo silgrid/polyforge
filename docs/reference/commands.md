@@ -31,9 +31,9 @@ One row per group, exactly as `pf help` prints it:
 | `pf help` group | Verbs |
 | --- | --- |
 | Data-plane verbs (direct to aihub) | `file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg` (`send`, `list`, `ack`, `show`, `analyze`, `contacts`) |
-| Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, resident watcher, `subscribe`/`unsubscribe`/`adopt`/`list`), `answer` (the reserved answer `cancel` abandons the work item, authorized like `pf cancel`), `revise-binding` (the owner's one-pass correction of done `e2e-author` binding commands, `--correction <index>=<command>` repeatable; appended to the capsule chain), `pause`, `resume`, `wrap`, `ops` (`status`, `models`, `auto`, `max`, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `chat init`, `task` (`spawn`, `list`, `show`, `cancel`), `result submit` (inside a workflow step only: its one result-delivery path), `verify-run` (a verification step's one mechanical run; local, below) |
+| Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, resident watcher, `subscribe`/`unsubscribe`/`adopt`/`list`), `answer` (the reserved answer `cancel` abandons the work item, authorized like `pf cancel`), `revise-binding` (the owner's one-pass correction of done `e2e-author` binding commands, `--correction <index>=<command>` repeatable; appended to the capsule chain), `pause`, `resume`, `wrap`, `ops` (`status`, `models`, `auto`, `max`, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `chat init`, `task` (`spawn`, `list`, `show`, `cancel`), `result submit` (inside a workflow step only: its one result-delivery path), `verify-run` (a verification step's one mechanical run; local, below), `bar-run` (inside a deliver step only: a daemon-recorded re-run of one carried `test_bar` command, below) |
 | Management face (M1–M5) | `users`, `api-keys`, `projects`, `machines` (`list`, `rekey`), `backup` (database snapshot, see below), `config` (the one `cli.toml` writer and the daemon reload entry), `workflows` (the read-only workflow face, below) |
-| Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries; `--prune-git-dirs` removes terminal work items' external git dirs and set-aside scenes past the 14-day retention that hold no uncommitted or unpushed task-repo work — a commit counts as pushed when either the task clone's own or the mapped workspace's `.repo/<name>` clone's remote-tracking refs reach it; a scene holding such work, and the work item's git dirs, are kept and named), `version` (the verb form of `pf --version`), `init` (a workspace's local layout) |
+| Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries; `--prune-capsules` acts on the entries the `capsule retention` row calls reclaimable or retired — past the 14-day retention, holding no uncommitted or unpushed task-repo work: a wrapped work item's capsule, live or set aside, is slimmed to `artifacts/` + `capsule.json`, and terminal work items' external git dirs and failed or canceled ones' set-aside scenes are removed — a commit counts as pushed when either the task clone's own or the mapped workspace's `.repo/<name>` clone's remote-tracking refs reach it; a capsule holding such work, and the work item's git dirs, are kept and named; its `disk watermark` row reports each mapped workspace's filesystem use and `capsules/` bytes and warns above 70% used; `--fix-harness-prompts` appends the native-SVG diagram-guidance block to each installed harness's existing context file that lacks that block — legacy mermaid-only guidance, which the `harness diagram guidance` row warns as `legacy`, included and left as it is — append-only and idempotent, never creating a file; `--fix-install-layout` links `~/.claude/skills/polyforge` to `<data-dir>/release/current/skills/polyforge` when the `claude install layout` row finds it missing or linked elsewhere — only that entry, idempotent, a no-op on a correct link; a copied directory or a missing release is left to `tools/install.sh`, and it never installs `pf` or a release), `version` (the verb form of `pf --version`), `init` (a workspace's local layout) |
 | Process | `daemon` (run the work machine; `pf daemon ensure` starts it), `aihub` (run the aihub server on the service host; `main.go` intercepts `pf aihub`, this verb serves `pf help aihub` only) |
 
 ## `pf msg` — user-to-user messages
@@ -52,8 +52,11 @@ conversation's members, passed through unchanged from the server. `pf msg ack <c
 the newest sequence first, a repeated/backward ack is a no-op, and `0`/
 negative or past-the-newest is `CORE-400`. `pf msg show <id>` reads one
 message; `pf msg analyze <id>` asks the local daemon for the explicit,
-read-only, budget-capped analyzer run (conclusion stays on the caller's
-machine). `pf msg contacts` lists the people the caller can message: the
+read-only analysis of one message: it runs as one task in the task lane
+(fixed 5 min / 100000-token budget, read-only tools, visible in `pf task
+list`) and the call blocks until it ends, answering a structured result —
+`type`, `summary`, `suggested_actions`, optional `reply_draft`, `model`,
+`duration` and the `task_id` (`pf task show <task_id>` reads the task); this one call has its own 6m30s client bound (every other verb keeps 120 s), outlasting the daemon's 6-minute wait. `pf msg prompt <id>` is built the same way (same task lane, project choice, read-only tools, budget and client bound) and asks the local daemon to restate one message as a self-contained execution prompt for another agent, from the message, at most the 10 most recent earlier messages of its conversation, its replied-to message and its anchored work item; it answers exactly `prompt`, `task_id`, `model` and `duration`, and a task that ends without a usable report is `DAEMON-500` naming the state and the task id, with no prompt text. `pf msg contacts` lists the people the caller can message: the
 union, deduplicated by user id (first display name wins, mapping
 declaration order), of the aihub project member face
 (`GET /api/v1/projects/{id}/members`: human co-members other than the
@@ -256,7 +259,11 @@ was killed too hard to clean up is reclaimed by the next `pf verify-run`.
 
 It writes `result.json` (envelope-ready `checks`, `pre_existing_failures`,
 `test_bar`, `command_evidence`, the merge outcomes, the parsed units and the
-authored scenarios their bindings resolve) and `report-mechanical.md` into
+authored scenarios their bindings resolve; each `repos[]` entry of an
+opted-in repository — one whose conf declares `smoke_suite=` — also carries
+the engine's full-tier `e2e_selection` `{mode, suites, uncovered_paths,
+full_commands}`, which `report-mechanical.md` renders under its plan) and
+`report-mechanical.md` into
 `runtime-state/verify/<n>/` (or `--out`); the command logs stay there too,
 behind a `.gitignore` that keeps the tree out of the capsule chain. Exit 0
 whenever a result was produced — a red bar is data. Exit 1 when it could
@@ -265,21 +272,72 @@ with `incomplete: <reason>` on stderr (and in `result.json`) when no
 merged-tree proof could be made (a failed fetch); the step returns that as
 an incomplete outcome.
 
+The `test_bar` is the bar carried to delivery: every planned (and authored)
+command that ran, as run, with a pre-existing failure excluded in its skip
+form — except for an opted-in repository whose full-tier plan ran an e2e
+selection (`e2e_selection.mode` `carries` or `smoke`): its full-phase
+command(s) are replaced by the engine's `e2e_selection.full_commands` (a
+full command that already ran is not repeated) and a `test_bar_notes` entry
+says the full command is carried for delivery, not run here, so `deliver`
+re-runs the full bar, never the subset. A scoped run, a non-opted repository
+and a selection that fell back to the full tail (`mode` `full`) keep the
+commands as run.
+
+## `pf bar-run` — the deliver step's recorded test-bar re-run
+
+```
+pf bar-run -- '<one carried test_bar command line>'
+```
+
+Inside a `deliver` step only. It runs the one quoted
+command line with `bash -c` in the current directory — which must be the
+task repo the line was carried for, `<capsule>/repos/<name>` — with its
+output on this command's stdout/stderr and stdin closed, then posts
+`{argv: [<line>], cwd, exit, duration_ms}` to the daemon's `POST
+/step/bar-run` ([UDS routes](uds-routes.md)). The daemon reads that repo's
+`HEAD` itself, stamps the calling spawn and appends the entry to the work
+item's bar-run record, `<data-dir>/bar-runs/<work-item-id>.jsonl`. The line
+is recorded byte-identically as one argv element, so the deliver merge rule
+compares exactly the carried `test_bar` text (its bar key); quote it as one
+argument and never wrap it. The exit status is the command's own (a failed
+run is recorded and exits non-zero); a run whose record the daemon refused
+or could not take exits 1 and says it was NOT recorded — the command ran,
+but no credential is stored. Reachability: the daemon serves the calling
+work item's live `deliver` step process only; every other step, a task
+agent and a human session are refused `DAEMON-403`, and outside a step the
+CLI refuses before running anything. The record survives the step process,
+a daemon restart and every re-dispatch of the same deliver run, and is
+cleared only at the rewind/re-entry boundary. The driver reuses an
+earlier dispatch's entry when it exited 0, the HEAD the daemon recorded
+equals the pushed head and its bar key matches: the HEAD binding is the
+reuse condition, so a re-dispatch with no new merge, or with a no-op merge
+(`origin/<default>` already an ancestor, no commit made), keeps it; only a
+merge that makes a new commit moves HEAD and owes the whole bar again. This
+dispatch's own runs keep the unchanged merge-rule window/key rules
+([the deliver step contract](../../workflows/_shared/steps/deliver.md)).
+
 ## `pf config` — cli.toml and hot reload
 
 `pf config` is the one supported writer of `cli.toml`:
 `get <key>` (effective value + source `flag|env|file|default`),
-`set <key> <value>`, `unset <key>`, `list`, `validate` (no write) and
-`reload` (apply a hand edit). A key is a flat name (`server`,
-`claude_bin`, …), a `[daemon]` key (`max_concurrent_jobs`, …) or a whole
-`[workspace."<path>"]` section (`projects=a,b,c`). Writes preserve every
+`set <key> <value>`, `unset <key>`, `list`, `workspace`, `validate` (no
+write), `reload` (apply a hand edit) and `migrate`. A key is a flat name
+(`server`, `claude_bin`, …), a `[daemon]` key (`max_concurrent_jobs`, …), a
+`[summarize]` key (`summarize.models|language|interval_sec` — flat and
+machine-level, refusing `--workspace`/`--cwd`), a memory_policy list
+(`memory_policy.<default|project>.record|skip '<JSON list>'`, which needs
+`--workspace <mapped path>` or `--cwd <dir>` and writes only that path's
+entry) or a whole `[workspace."<path>"]` section (`projects=a,b,c`).
+`pf config list` is the one read face of the summarize keys and of the
+per-path memory_policy blocks; `get` refuses them pointing at it. Writes preserve every
 other byte, are crash-atomic, keep the mode (a new file is `0600`) and
 pass the same validator the loader, daemon and doctor use; a refused
 write leaves the file untouched. `api_key` is write-only: stdin only,
 never argv, never emitted.
 
 The running daemon applies live keys on the write (`max_concurrent_jobs`,
-`step_timeout`, `stall_window`, `claude_bin`), takes a `[workspace]`
+`step_timeout`, `stall_window`, `claude_bin`, `summarize.*`), takes the
+`[memory_policy]` family at the next claim, takes a `[workspace]`
 mapping addition at the next claim (a removal/re-route with an in-flight
 job is refused and the work items are listed) and reports `server`,
 `api_key`, `daemon_socket`, `harness_root` and `operator_agent_dir` as
@@ -289,15 +347,28 @@ an explicit daemon flag. The exact keys, classes and outputs are on the
 are on the [UDS routes page](uds-routes.md).
 
 `pf config workspace --cwd <dir>` reads the mapped workspace's yaml, its
-declared step candidates with each entry's `source`/`class`/`attrs`, the
-`default` and `task` rows of every mapped project and the `memory_policy`
-block (one JSON document; see the [config page](config.md)).
-`set`/`unset` also accept `--expect-hash`, `--expect-state` and, for the
-workspace `.polyforge.yaml` keys — `summarize.*`,
+declared step candidates with each entry's `source`/`class`/`attrs` and the
+`default` and `task` rows of every mapped project (one JSON document, no
+`summarize` and no `memory_policy`; a yaml still carrying either retired
+section errors with the file, the line and `pf config migrate`; see the
+[config page](config.md)). `set`/`unset` also accept `--expect-hash`,
+`--expect-state` and, for the workspace `.polyforge.yaml` keys —
 `steps.<project>.<step-id>.models` and `steps.<project>.<step-id>.attrs.<name>`
-— `--workspace`/`--cwd`; the CAS comparison runs inside the writer flock, and
-a step-key write needs the running daemon's `steps_attrs` capability
-(`CORE-501` otherwise; see the [config page](config.md)).
+— and the memory_policy keys, `--workspace`/`--cwd`; the CAS comparison runs
+inside the writer flock, and a step-key write needs the running daemon's
+`steps_attrs` capability (`CORE-501` otherwise; see the
+[config page](config.md)).
+
+`pf config migrate` (no argument, no daemon) moves every mapped
+workspace's retired `.polyforge.yaml` `summarize:` / `memory_policy:`
+sections into cli.toml — values verbatim, cli.toml first, then the yaml
+sections removed byte-preservingly — leaving a `<file>.bak-<UTC timestamp>`
+backup beside each file it changes. It refuses with an itemized error and
+no write when the values disagree (between workspaces, against an existing
+`[summarize]`, or a path's existing memory_policy block) or a section is
+invalid (exit 1); an interrupted run converges on the next one; with
+nothing to move it prints `nothing to migrate` and exits 0 having changed no
+byte. There is no reverse command (rollback: [upgrade.md](../upgrade.md)).
 
 ## `pf workflows` — the installed bundles, read-only
 

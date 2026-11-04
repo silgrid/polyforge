@@ -508,7 +508,9 @@ func TestDeliverExemptFromAuthoredTestsGate(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_d", CapsuleDir: capsuleDir, BundleName: "b"},
 		ExecPath: filepath.Join(capsuleDir, capsule.ExecutionJSON),
-		Workflow: &Workflow{Steps: []StepSpec{spec("e2e-author"), spec("code"), spec(deliverStepID)}, MaxTotal: 4, MaxPerStep: 2},
+		// a verification-bearing lane (the test judges its verified_heads
+		// rule; a lane without verification has the fast-lane rule)
+		Workflow: &Workflow{Steps: []StepSpec{spec("e2e-author"), spec("code"), spec(verificationStepID), spec(deliverStepID)}, MaxTotal: 4, MaxPerStep: 2},
 		Spawner:  &fakeSpawner{},
 		Log:      &eventLog{},
 	})

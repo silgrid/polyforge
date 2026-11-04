@@ -405,3 +405,89 @@ func TestNormSigDropsTheTempDirSuffix(t *testing.T) {
 		t.Error("the TempDir sequence number is kept")
 	}
 }
+
+// aggregateOut is the aggregate e2e runner's output shape (a passing and
+// a failing suite block, the failures section with the failing suite's
+// lines and its re-run, the summary).
+const aggregateOut = `e2e/all: 2 suite(s), browser pool 2, serial lane 1
+
+===== PASS a.mjs (3s) =====
+PASS: A1 opens
+FAIL: A0 expected-fail note echoed by a passing suite
+
+===== FAIL b.mjs (9s) =====
+PASS: B1 loads
+FAIL: B2 clicks
+  locator.click: Timeout 8000ms exceeded
+
+===== failures =====
+FAIL e2e/b.mjs: B2 clicks — locator.click: Timeout 8000ms exceeded
+FAIL e2e/b.mjs: B3 saves — expected 2 rows at e2e/b.mjs:41
+re-run: npm run test:e2e:all -- b.mjs
+
+===== summary =====
+PASS a.mjs 3s
+FAIL b.mjs 9s
+1/2 passed in 12s`
+
+// TestParseAggregateE2ESuites: an aggregate e2e runner's failing suite is
+// one unit named by its suite file, carrying its scenarios and messages
+// as the signature and the runner's own re-run; a passing suite block is
+// a passing unit, and the markers echoed inside a suite block are the
+// suite's, never units of their own.
+func TestParseAggregateE2ESuites(t *testing.T) {
+	us := parseUnits(lines(aggregateOut))
+	b := mustUnit(t, us, KindE2ESuite, "e2e/b.mjs")
+	if !b.Failed || b.PrintedRerun != "npm run test:e2e:all -- b.mjs" {
+		t.Errorf("failing suite = %+v", b)
+	}
+	if want := "B2 clicks — locator.click: Timeout 8000ms exceeded | B3 saves — expected 2 rows at e2e/b.mjs:N"; b.Signature != want {
+		t.Errorf("signature = %q, want %q", b.Signature, want)
+	}
+	if a := mustUnit(t, us, KindE2ESuite, "e2e/a.mjs"); a.Failed {
+		t.Errorf("passing suite block = %+v", a)
+	}
+	for _, u := range us {
+		if u.Kind != KindE2ESuite {
+			t.Errorf("a marker inside a suite block or the summary became a unit: %+v", u)
+		}
+	}
+}
+
+// TestParseAggregateOutsideTheGrammar: lines outside the runner's grammar
+// locate nothing (the caller's whole-command unit, fail closed): a failed
+// suite block with no failures section, a FAIL line without the
+// `e2e/<suite>: ` shape, and a re-run line naming another suite is not
+// this suite's re-run.
+func TestParseAggregateOutsideTheGrammar(t *testing.T) {
+	cut := "===== FAIL b.mjs (9s) =====\nFAIL: B2 clicks\n  boom\n"
+	for _, u := range parseUnits(lines(cut)) {
+		if u.Failed {
+			t.Errorf("a failed block without its failure line located %+v", u)
+		}
+	}
+	if us := parseUnits(lines("FAIL e2e/b.mjs 9s\nFAIL b.mjs: B2 clicks — boom")); len(us) != 0 {
+		t.Errorf("off-grammar FAIL lines located %+v", us)
+	}
+	us := parseUnits(lines("===== failures =====\nFAIL e2e/b.mjs: B2 — boom\nre-run: npm run test:e2e:all -- c.mjs"))
+	if b := mustUnit(t, us, KindE2ESuite, "e2e/b.mjs"); !b.Failed || b.PrintedRerun != "" {
+		t.Errorf("a re-run naming another suite was taken: %+v", b)
+	}
+}
+
+// TestE2ESuiteRerunPassesOnlyOnItsPassBlock: a suite re-run passes only
+// on an exit 0 whose output shows the suite's own PASS block.
+func TestE2ESuiteRerunPassesOnlyOnItsPassBlock(t *testing.T) {
+	u := &unit{Kind: KindE2ESuite, Name: "e2e/b.mjs"}
+	pass := lines("===== PASS b.mjs (2s) =====\nPASS: B2 clicks\n\n===== summary =====\nPASS b.mjs 2s")
+	if !unitPassed(u, 0, parseUnits(pass), pass) {
+		t.Error("the suite's own PASS block at exit 0 is a pass")
+	}
+	if unitPassed(u, 1, parseUnits(pass), pass) {
+		t.Error("a non-zero exit is no pass")
+	}
+	other := lines("===== PASS a.mjs (2s) =====\n\n===== summary =====")
+	if unitPassed(u, 0, parseUnits(other), other) {
+		t.Error("a run that never showed the suite is no pass")
+	}
+}

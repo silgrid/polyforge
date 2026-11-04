@@ -46,7 +46,11 @@
 #                 this machine, repo digest == aihub-image.digest, /pf aihub -version,
 #                 ssh, container, running version (/pf aihub -version, else
 #                 /aihub -version; must print a release tag), compose file,
-#                 versions, disk space; the
+#                 versions, disk space; for a running version without a
+#                 GHCR image (the legacy rollback image) its tag
+#                 refs/tags/<old> must be in the local repo (else stop:
+#                 git fetch --tags) - its deploy/Dockerfile is read from
+#                 that tag only, never from the working tree; the
 #                 upgrade-SQL plan: server python3 SQLite >= 3.35 gate, then the
 #                 structural probe per version in (old, tag] with a deploy/sql dir
 #                 (read-only; the probes decide what the window will apply)
@@ -282,6 +286,7 @@ OLDVER=""; OLDIMG=""; NEWIMG=""; COMPOSE_BAK=""; DOCKERFILE=""; BIN_SAVED=""; SR
 NEW_LOCAL_ID=""; OLD_LOCAL_ID=""; OLD_HAS_GHCR=""
 OLD_LAYOUT=""; OLD_VCMD=""   # the running (old) container's layout: pf | aihub (TRANSITION), and its -version command
 GOT=""; GOT_LAYOUT=""        # probe_ctr / probe_img results
+PROBE_RAW=""                 # what each probe attempt printed (probe_ctr / probe_img reset it per call)
 SQLVERS=""        # release tags in (OLDVER, TAG] carrying deploy/sql/<tag>/, ascending
 SQLTODO=""        # the subset whose probe reports not-yet-applied (applied in the window)
 APPLIED_VERS=""   # versions whose upgrade.sql was applied THIS run (rollback.sql targets)
@@ -1176,18 +1181,6 @@ git -C "$SCRIPT_DIR" rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null 
 # Read-only on the db; nothing of the service is touched.
 sql_plan
 
-# deploy/Dockerfile is needed ONLY for the legacy rollback-image path (an old
-# release without a GHCR image); the new image is never built here. It is the
-# OLD release's file: it names the binary that release shipped.
-DOCKERFILE="$WORK/Dockerfile"
-if git -C "$SCRIPT_DIR" show "$OLDVER:deploy/Dockerfile" >"$DOCKERFILE" 2>/dev/null && [ -s "$DOCKERFILE" ]; then
-  :
-elif [ -s "$SCRIPT_DIR/../deploy/Dockerfile" ]; then
-  cp "$SCRIPT_DIR/../deploy/Dockerfile" "$DOCKERFILE"
-else
-  DOCKERFILE=""
-fi
-
 # The rollback image: the old release's GHCR image when it has one (a release
 # that published aihub-image.digest), else the legacy build from the saved old
 # binary (releases before the GHCR image existed, e.g. v2.2.0).
@@ -1206,7 +1199,15 @@ elif [ "$OLD_HAS_GHCR" = 1 ]; then
   note "rollback image: same version as the target (--force); reusing the verified pull"
 else
   note "rollback image: $OLDVER has no GHCR image - will build it from the saved old binary on the server (legacy path)"
-  [ -n "$DOCKERFILE" ] || die "no deploy/Dockerfile found (neither at tag $OLDVER nor in the working tree) - needed for the legacy rollback image of $OLDVER"
+  # deploy/Dockerfile is needed ONLY here (the new image is never built). It
+  # is the OLD release's file - it names the binary that release shipped - so
+  # it is read from the running version's tag and nowhere else: the working
+  # tree's file copies a different binary.
+  git -C "$SCRIPT_DIR" rev-parse -q --verify "refs/tags/$OLDVER^{commit}" >/dev/null \
+    || die "tag $OLDVER (the running version) not in the local repo - git fetch --tags; its deploy/Dockerfile builds the legacy rollback image of $OLDVER (nothing on the server was touched)"
+  DOCKERFILE="$WORK/Dockerfile"
+  git -C "$SCRIPT_DIR" show "$OLDVER:deploy/Dockerfile" >"$DOCKERFILE" 2>/dev/null && [ -s "$DOCKERFILE" ] \
+    || die "tag $OLDVER has no deploy/Dockerfile - needed for the legacy rollback image of $OLDVER (nothing on the server was touched)"
 fi
 
 rssh "test -f '$COMPOSE_FILE'" || die "compose file $COMPOSE_FILE not found on $AIHUB_HOST"
@@ -1306,7 +1307,7 @@ else
 fi
 cat <<EOF
 2. save old binary   ssh $AIHUB_HOST docker cp $AIHUB_CONTAINER:/$OLD_LAYOUT $BIN_SAVED
-                     rollback image $OLDIMG (if absent on the server): $OLD_PLAN; verify -version == $OLDVER
+                     rollback image $OLDIMG (if absent on the server): $OLD_PLAN; verify -version (/pf aihub -version, else /aihub -version) == $OLDVER
 3. online backup     (service keeps running; NO docker stop anywhere)
                      rsync -a $AIHUB_DATA/ -> $SRV_BACKUP/   (pass 1, excluding aihub.db, -wal, -shm, service.lock, bootstrap-admin.key, .verified)
                      python3 sqlite3 backup API: $AIHUB_DATA/aihub.db (ro) -> $SRV_BACKUP/aihub.db ; integrity_check + counts >= baseline
@@ -1319,14 +1320,14 @@ cat <<EOF
                      server $SRV_ROOT: $(words "$PLAN_SRV_PRUNE")
                      local $BACKUP_ROOT: $(words "$PLAN_LOCAL_PRUNE")
                      unverified, kept (remove by hand): server: $(words "$PLAN_SRV_UNVER") ; local: $(words "$PLAN_LOCAL_UNVER")
-6. load + swap       (already verified in step 0 on this machine: $GHCR_IMAGE:$TAG repo digest == $ASSET_DIGEST, /pf aihub -version == $TAG)
+6. load + swap       (already verified in step 0 on this machine: $GHCR_IMAGE:$TAG repo digest == $ASSET_DIGEST, /pf aihub -version, else /aihub -version == $TAG)
                      docker save $GHCR_IMAGE:$TAG | ssh $AIHUB_HOST docker load  (service keeps running); server image ID == $NEW_LOCAL_ID
                      docker tag on the server -> $NEWIMG ; verify git, curl in it
                      back up $COMPOSE_FILE -> $COMPOSE_BAK ; edit ONLY service $AIHUB_SERVICE (planned diff below) ; docker compose config -q (failure -> backup restored, stop)
    switch window     docker compose stop $AIHUB_SERVICE (graceful drain <= ${DRAIN_SECS}s) -> when an applied version declares expected_deltas, a read-only count of just those tables -> upgrade SQL${SQL_LINE} -> count the declared tables again -> docker compose -f $COMPOSE_FILE -p $COMPOSE_PROJECT up -d --no-deps $AIHUB_SERVICE ; poll http://127.0.0.1:$AIHUB_PORT/ every 0.2s ; downtime = stop until HTTP answers (warn > ${MAX_DOWNTIME_SECS}s, fail if not up in ${UP_WAIT_SECS}s)
    (a failure from the window on AUTO-ROLLS BACK: the rollback SQL of every version applied this run runs FIRST (descending, one transaction each), then the swap back to $OLDIMG; exits 10; rollback failure exits 11)
    lock               flock -n $DEPLOY_LOCK_FILE on $AIHUB_HOST held from step 2 to exit (not taken in dry-run)
-7. verify            container image == $NEWIMG ; wait <= ${WAIT_SECS}s for 'docker exec $AIHUB_CONTAINER /pf aihub -version' == $TAG ; docker logs --since <start>: print error lines, FAIL on Go runtime panic/fatal error
+7. verify            container image == $NEWIMG ; wait <= ${WAIT_SECS}s for 'docker exec $AIHUB_CONTAINER /pf aihub -version, else /aihub -version' == $TAG ; docker logs --since <start>: print error lines, FAIL on Go runtime panic/fatal error
                      integrity + row counts >= frozen baseline (read-only; a declared table is rebased to its post-SQL count, so it is still checked across the swap); local 'pf queue --limit 1'
 8. rollback + summary; rollback commands for this run:
 EOF

@@ -116,6 +116,10 @@ type WIView struct {
 	// — who it is waiting for. Never persisted, not a state; omitted
 	// when the WI waits on nobody.
 	WaitingFor []WaitingBlocker `json:"waiting_for,omitempty"`
+	// Comments is the append-only comment thread of this
+	// work item in time (insertion) order. It rides every detail read;
+	// no edit or delete path exists.
+	Comments []api.Comment `json:"comments"`
 	// inv is the raw frozen inventory column (the ready queue's gate).
 	inv string
 }

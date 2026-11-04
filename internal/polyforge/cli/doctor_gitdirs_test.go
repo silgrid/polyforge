@@ -1,10 +1,12 @@
 package cli
 
-// doctor_gitdirs_test.go: the "git dir retention" row — the default run
-// reports and deletes nothing; --prune-git-dirs removes only a terminal
-// work item's entries past the retention that no daemon job names, and
-// nothing at all while the daemon is down; the work-item reads it makes
-// are bounded by the mapped projects, not by the entries.
+// doctor_gitdirs_test.go: the "capsule retention" row — the default run
+// reports and deletes nothing; --prune-capsules acts only on a terminal
+// work item's entries past the retention that no daemon job names —
+// slimming a wrapped work item's capsule to artifacts/ + capsule.json,
+// deleting the rest — and on nothing at all while the daemon is down; the
+// work-item reads it makes are bounded by the mapped projects, not by the
+// entries.
 
 import (
 	"io"
@@ -96,6 +98,9 @@ func newGitDirsFixture(t *testing.T, daemonUp bool) gitDirsFixture {
 	}
 	touch(t, filepath.Join(f.retiredCap, "capsule.json"), old)
 	os.WriteFile(filepath.Join(f.retiredCap, "capsule.json"), []byte(`{"work_item_id":"wi_done"}`), 0o644)
+	// the wrapped work item's set-aside capsule: a slim keeps artifacts/
+	touch(t, filepath.Join(f.retiredCap, "artifacts", "plan.md"), old)
+	touch(t, filepath.Join(f.retiredCap, "runtime-state", "execution.json"), old)
 	touch(t, filepath.Join(f.activeCap, "capsule.json"), old)
 	os.WriteFile(filepath.Join(f.activeCap, "capsule.json"), []byte(`{"work_item_id":"wi_active"}`), 0o644)
 	// backdate every path but the fresh dir's
@@ -122,11 +127,11 @@ func assertExist(t *testing.T, want bool, paths ...string) {
 func TestDoctorGitDirsReportOnlyByDefault(t *testing.T) {
 	f := newGitDirsFixture(t, true)
 	_, _, doc := doctorStatus(t, f.env, "--json", "doctor")
-	st, detail := doctorFind(t, doc, docChGitDirs)
+	st, detail := doctorFind(t, doc, docChCapsuleRetention)
 	if st != "warn" {
 		t.Fatalf("status = %s (%s), want warn", st, detail)
 	}
-	for _, want := range []string{"reclaimable 1 (", "retired 2 (", "retained 4, ", "unknown 1 — ", "--prune-git-dirs", "nothing was deleted"} {
+	for _, want := range []string{"reclaimable 1 (", "retired 2 (", "retained 4, ", "unknown 1 — ", "--prune-capsules", "nothing was deleted"} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("detail lacks %q: %s", want, detail)
 		}
@@ -142,24 +147,43 @@ func TestDoctorGitDirsReportOnlyByDefault(t *testing.T) {
 
 func TestDoctorGitDirsPruneRemovesOnlyTerminalPastRetention(t *testing.T) {
 	f := newGitDirsFixture(t, true)
-	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-git-dirs")
-	st, detail := doctorFind(t, doc, docChGitDirs)
-	if st != "pass" || !strings.Contains(detail, "pruned 3: ") {
-		t.Fatalf("status = %s (%s), want pass with 3 pruned", st, detail)
+	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-capsules")
+	st, detail := doctorFind(t, doc, docChCapsuleRetention)
+	if st != "pass" || !strings.Contains(detail, "pruned 2: ") || !strings.Contains(detail, "slimmed 1 to artifacts/ + capsule.json: "+f.retiredCap) {
+		t.Fatalf("status = %s (%s), want pass with 2 pruned and the wrapped scene slimmed", st, detail)
 	}
-	for _, p := range []string{f.reclaim, f.retiredGit, f.retiredCap} {
+	for _, p := range []string{f.reclaim, f.retiredGit} {
 		if !strings.Contains(detail, p) {
 			t.Fatalf("detail does not list removed %s: %s", p, detail)
 		}
 	}
-	assertExist(t, false, f.reclaim, f.retiredGit, f.retiredCap)
+	assertExist(t, false, f.reclaim, f.retiredGit, filepath.Join(f.retiredCap, "runtime-state"))
+	assertSlimmed(t, f.retiredCap)
 	assertExist(t, true, f.fresh, f.active, f.job, f.ghost, f.activeCap, f.askpass)
+}
+
+// assertSlimmed: the capsule holds exactly artifacts/ (its files intact)
+// and capsule.json.
+func assertSlimmed(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if !slices.Equal(names, []string{"artifacts", "capsule.json"}) {
+		t.Fatalf("%s holds %v, want exactly [artifacts capsule.json]", dir, names)
+	}
+	assertExist(t, true, filepath.Join(dir, "artifacts", "plan.md"))
 }
 
 func TestDoctorGitDirsPruneNothingWhileDaemonDown(t *testing.T) {
 	f := newGitDirsFixture(t, false)
-	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-git-dirs")
-	st, detail := doctorFind(t, doc, docChGitDirs)
+	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-capsules")
+	st, detail := doctorFind(t, doc, docChCapsuleRetention)
 	if st != "warn" || !strings.Contains(detail, "nothing pruned") {
 		t.Fatalf("status = %s (%s), want warn naming nothing pruned", st, detail)
 	}
@@ -191,7 +215,7 @@ func TestDoctorGitDirsAihubReadsAreBounded(t *testing.T) {
 	f := newGitDirsFixture(t, true)
 	f.unlisted["wi_active"] = true
 	_, _, doc := doctorStatus(t, f.env, "--json", "doctor")
-	_, detail := doctorFind(t, doc, docChGitDirs)
+	_, detail := doctorFind(t, doc, docChCapsuleRetention)
 	if lists, ids := workItemReads(f.rec); lists != 1 || !slices.Equal(ids, []string{"wi_active", "wi_ghost"}) {
 		t.Fatalf("work-item reads: %d list(s), per-id %v; want 1 list (one mapped project) and per-id [wi_active wi_ghost] (what it did not name)", lists, ids)
 	}
@@ -230,7 +254,7 @@ func TestDoctorGitDirsLocalRetentionReadsNothing(t *testing.T) {
 				}
 			}
 			_, _, doc := doctorStatus(t, f.env, "--json", "doctor")
-			_, detail := doctorFind(t, doc, docChGitDirs)
+			_, detail := doctorFind(t, doc, docChCapsuleRetention)
 			if lists, ids := workItemReads(f.rec); lists != 0 || !slices.Equal(ids, c.wantIDs) {
 				t.Fatalf("work-item reads: %d list(s), per-id %v; want no list and per-id %v", lists, ids, c.wantIDs)
 			}
@@ -264,9 +288,9 @@ func TestDoctorGitDirsWalksOnlyPruneCandidates(t *testing.T) {
 		return orig(d)
 	}
 	defer func() { measureEntry = orig }()
-	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-git-dirs")
-	if st, detail := doctorFind(t, doc, docChGitDirs); st != "pass" || !strings.Contains(detail, "pruned 3: ") {
-		t.Fatalf("status = %s (%s), want pass with 3 pruned", st, detail)
+	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-capsules")
+	if st, detail := doctorFind(t, doc, docChCapsuleRetention); st != "pass" || !strings.Contains(detail, "pruned 2: ") || !strings.Contains(detail, "slimmed 1 ") {
+		t.Fatalf("status = %s (%s), want pass with 2 pruned and 1 slimmed", st, detail)
 	}
 	slices.Sort(walked)
 	want := []string{f.reclaim, f.retiredGit, f.retiredCap, f.fresh}
@@ -274,7 +298,8 @@ func TestDoctorGitDirsWalksOnlyPruneCandidates(t *testing.T) {
 	if !slices.Equal(walked, want) {
 		t.Fatalf("walked %v, want only the terminal owners' entries %v", walked, want)
 	}
-	assertExist(t, false, f.reclaim, f.retiredGit, f.retiredCap)
+	assertExist(t, false, f.reclaim, f.retiredGit)
+	assertSlimmed(t, f.retiredCap)
 	assertExist(t, true, f.fresh, f.active, f.job, f.ghost, f.activeCap, f.askpass)
 }
 
@@ -313,8 +338,8 @@ func TestDoctorGitDirsKeepsSceneWithUncommittedChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-git-dirs")
-	st, detail := doctorFind(t, doc, docChGitDirs)
+	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-capsules")
+	st, detail := doctorFind(t, doc, docChCapsuleRetention)
 	if st != "pass" || !strings.Contains(detail, "uncommitted changes") {
 		t.Fatalf("status = %s (%s), want pass naming the uncommitted changes", st, detail)
 	}
@@ -325,8 +350,8 @@ func TestDoctorGitDirsKeepsSceneWithUncommittedChange(t *testing.T) {
 // view face of the guard. A set-aside scene's own refs stop updating at
 // quarantine time, so its clone can call a commit unpushed that the
 // mapped workspace's .repo/<name> clone already reaches through its
-// remote-tracking ref. Such a scene holds no unmerged work and is pruned
-// with its paired git dir.
+// remote-tracking ref. Such a scene holds no unmerged work: its wrapped
+// work item's capsule is slimmed and its paired git dir pruned.
 func TestDoctorGitDirsPrunesSceneWhoseWorkTheWorkspaceCarried(t *testing.T) {
 	f := newGitDirsFixture(t, true)
 	ws := filepath.Dir(filepath.Dir(f.retiredCap))
@@ -350,14 +375,143 @@ func TestDoctorGitDirsPrunesSceneWhoseWorkTheWorkspaceCarried(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-git-dirs")
-	st, detail := doctorFind(t, doc, docChGitDirs)
-	if st != "pass" || !strings.Contains(detail, "pruned 3: ") {
-		t.Fatalf("status = %s (%s), want pass with 3 pruned", st, detail)
+	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-capsules")
+	st, detail := doctorFind(t, doc, docChCapsuleRetention)
+	if st != "pass" || !strings.Contains(detail, "pruned 2: ") || !strings.Contains(detail, "slimmed 1 ") {
+		t.Fatalf("status = %s (%s), want pass with 2 pruned and 1 slimmed", st, detail)
 	}
 	if strings.Contains(detail, "kept for unmerged work") {
 		t.Fatalf("the scene whose work .repo/demo carries is reported as unmerged: %s", detail)
 	}
-	assertExist(t, false, f.reclaim, f.retiredGit, f.retiredCap)
+	assertExist(t, false, f.reclaim, f.retiredGit, repo)
+	assertSlimmed(t, f.retiredCap)
 	assertExist(t, true, upstream)
+}
+
+// liveCapsule lays out a live capsule (capsules/<name>, no quarantine
+// suffix) of wi with every top-level entry a claim leaves, backdated past
+// the retention.
+func liveCapsule(t *testing.T, f gitDirsFixture, name, wi string, full bool) string {
+	t.Helper()
+	dir := filepath.Join(filepath.Dir(f.retiredCap), name)
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	touch(t, filepath.Join(dir, "artifacts", "plan.md"), old)
+	touch(t, filepath.Join(dir, "capsule.json"), old)
+	if err := os.WriteFile(filepath.Join(dir, "capsule.json"), []byte(`{"work_item_id":"`+wi+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if full {
+		for _, p := range []string{".git", ".gitignore", "repos/demo/README.md", "runtime-state/execution.json",
+			"logs/step.log", "session/transcript.jsonl", "workflows/chore/workflow.md", "sync/state.json"} {
+			touch(t, filepath.Join(dir, p), old)
+		}
+	}
+	err := filepath.Walk(dir, func(p string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(p, old, old)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestDoctorCapsuleRetentionSlimsWrappedLiveCapsule: a
+// wrapped work item's live capsule past the retention is reported
+// reclaimable and a prune slims it to artifacts/ + capsule.json; a failed
+// work item's live capsule is never touched, and a capsule already
+// slimmed is retained without a walk.
+func TestDoctorCapsuleRetentionSlimsWrappedLiveCapsule(t *testing.T) {
+	f := newGitDirsFixture(t, true)
+	wrapped := liveCapsule(t, f, "demo-3", "wi_done", true)
+	failed := liveCapsule(t, f, "demo-4", "wi_fresh", true)
+	slim := liveCapsule(t, f, "demo-5", "wi_done", false)
+
+	_, _, doc := doctorStatus(t, f.env, "--json", "doctor")
+	st, detail := doctorFind(t, doc, docChCapsuleRetention)
+	if st != "warn" {
+		t.Fatalf("status = %s (%s), want warn", st, detail)
+	}
+	for _, want := range []string{"reclaimable 2 (", "retired 2 (", "retained 6, ", "unknown 1 — ", "slimmed to artifacts/ + capsule.json", "nothing was deleted"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("detail lacks %q: %s", want, detail)
+		}
+	}
+	assertExist(t, true, filepath.Join(wrapped, "repos"), filepath.Join(wrapped, ".git"))
+
+	var walked []string
+	orig := measureEntry
+	measureEntry = func(d retainedDir) retainedDir {
+		walked = append(walked, d.Path)
+		return orig(d)
+	}
+	defer func() { measureEntry = orig }()
+	_, _, doc = doctorStatus(t, f.env, "--json", "doctor", "--prune-capsules")
+	st, detail = doctorFind(t, doc, docChCapsuleRetention)
+	if st != "pass" || !strings.Contains(detail, "slimmed 2 to artifacts/ + capsule.json: ") || !strings.Contains(detail, wrapped) {
+		t.Fatalf("status = %s (%s), want pass with the wrapped capsule slimmed", st, detail)
+	}
+	assertSlimmed(t, wrapped)
+	assertSlimmed(t, slim)
+	for _, p := range []string{".git", ".gitignore", "repos", "runtime-state", "logs", "session", "workflows", "sync"} {
+		assertExist(t, true, filepath.Join(failed, p))
+	}
+	if slices.Contains(walked, slim) || slices.Contains(walked, failed) {
+		t.Fatalf("walked %v: neither an already slimmed capsule nor a failed work item's live capsule may be walked", walked)
+	}
+
+	// The slimmed capsule is retained by the next run, not slimmed again.
+	_, _, doc = doctorStatus(t, f.env, "--json", "doctor")
+	if _, detail := doctorFind(t, doc, docChCapsuleRetention); !strings.Contains(detail, "reclaimable 0 (0 B)") {
+		t.Fatalf("a slimmed capsule is still reclaimable: %s", detail)
+	}
+}
+
+// TestDoctorCapsuleRetentionKeepsWrappedCapsuleWithUnmergedWork: the
+// guard covers a live capsule too — a wrapped work item's
+// capsule whose task clone is dirty is retained whole, named with why.
+func TestDoctorCapsuleRetentionKeepsWrappedCapsuleWithUnmergedWork(t *testing.T) {
+	f := newGitDirsFixture(t, true)
+	dir := liveCapsule(t, f, "demo-3", "wi_done", true)
+	repo := filepath.Join(dir, "repos", "demo")
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+t.TempDir())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	if err := filepath.Walk(dir, func(p string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(p, old, old)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-capsules")
+	st, detail := doctorFind(t, doc, docChCapsuleRetention)
+	if st != "pass" || !strings.Contains(detail, dir+" (demo: uncommitted changes)") {
+		t.Fatalf("status = %s (%s), want pass naming the kept capsule", st, detail)
+	}
+	for _, p := range []string{".git", "repos/demo/README.md", "runtime-state", "logs"} {
+		assertExist(t, true, filepath.Join(dir, p))
+	}
+}
+
+// TestDoctorCapsuleRetentionSlimsNothingWhileDaemonDown: the live jobs
+// are unknown without the daemon, so no capsule is slimmed.
+func TestDoctorCapsuleRetentionSlimsNothingWhileDaemonDown(t *testing.T) {
+	f := newGitDirsFixture(t, false)
+	dir := liveCapsule(t, f, "demo-3", "wi_done", true)
+	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-capsules")
+	st, detail := doctorFind(t, doc, docChCapsuleRetention)
+	if st != "warn" || !strings.Contains(detail, "nothing pruned") {
+		t.Fatalf("status = %s (%s), want warn naming nothing pruned", st, detail)
+	}
+	for _, p := range []string{".git", "repos", "runtime-state", "logs", "session", "workflows", "sync"} {
+		assertExist(t, true, filepath.Join(dir, p))
+	}
 }

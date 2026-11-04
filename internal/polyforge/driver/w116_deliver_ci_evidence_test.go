@@ -534,7 +534,7 @@ func TestW116DeliverPromptCIEvidenceBullet(t *testing.T) {
 			// change's own tree, and the CI path exists only where a re-run
 			// is owed.
 			"nor does a change that edits anything under `.github/` (where the declared jobs are defined - the check-runs would run your change's own version)",
-			"The CI path exists only where one of those re-runs would otherwise be owed: when HEAD equals `verified_heads.<name>` nothing is owed, so read no check-runs and record no `ci_evidence` for this repo.",
+			"The CI path exists only where one of those re-runs would otherwise be owed: when HEAD equals `verified_heads.<name>` nothing is owed (an opted-in full-tier delivery aside, which owes the re-run at any HEAD), so read no check-runs and record no `ci_evidence` for this repo.",
 			// review m7: the non-CI path keeps its sentence verbatim; on the
 			// CI path tests_passed is decided only after the check-runs are
 			// read (post-push, pre-merge).

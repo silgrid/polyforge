@@ -203,12 +203,17 @@ type AttrDecl struct {
 var attrName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // CheckAttrValue answers why v is not a legal value of decl ("" when it
-// is): an int attr takes a YAML integer, a string attr a plain string.
+// is): an int attr takes a non-negative YAML integer (0 is legal), a
+// string attr a plain string.
 func CheckAttrValue(decl AttrDecl, v any) string {
 	switch decl.Type {
 	case AttrTypeInt:
-		if _, ok := v.(int); !ok {
+		n, ok := v.(int)
+		if !ok {
 			return "must be an integer (declared type int)"
+		}
+		if n < 0 {
+			return fmt.Sprintf("must be a non-negative integer (declared type int), got %d", n)
 		}
 	case AttrTypeString:
 		if _, ok := v.(string); !ok {

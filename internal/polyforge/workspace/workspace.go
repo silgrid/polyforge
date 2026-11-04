@@ -13,16 +13,12 @@
 //	      models: [...]                  # in every bundle (fix, code, review, ...)
 //	      attrs: { <name>: <scalar> }    # optional: overrides of the attrs the
 //	                                     # bundles declare for this step id
-//	summarize:                           # optional: the summarize lane, one
-//	  models: [...]                      # entry for every project of this
-//	                                     # workspace: its model candidates
-//	                                     # (polyforge#224; mandatory in the entry)
-//	  language: <text>                   # optional: the narration language
-//	                                     # (polyforge#243; absent = 中文)
-//	  interval_sec: <int>                # optional: the minimum seconds between
-//	                                     # call starts per WI (polyforge#250;
-//	                                     # 10-3600, absent = 60)
-//	memory_policy: ...                   # optional section (memorypolicy.go)
+//
+// The summarize lane and the memory policy are no part of this file: they
+// are cli.toml's [summarize] table and [memory_policy."<path>".<entry>]
+// family. A file still carrying a root `summarize:` or
+// `memory_policy:` section is refused whole — the refusal names the line
+// and `pf config migrate` (legacy.go); nothing reads either value here.
 //
 // A step entry has two keys, `models` and `attrs`, at least one of them.
 // `models` is a list of model candidates, each
@@ -33,11 +29,7 @@
 // bundle declares for that step id (workflow.StepAttrs) and the value must
 // have the declared type; `default` and `task` take no attrs. An
 // attrs-only entry is a present entry that declares no `models` level (the
-// chain falls through as if the entry were absent). The root `summarize` entry has the same `models`
-// plus the optional `language`: a plain string, trimmed, non-empty and
-// single-line, passed verbatim into the summarize prompt (no allowlist,
-// no length cap), and the optional `interval_sec`: a YAML integer in
-// 10-3600 inclusive (never clamped; no 0-means-default). Any key not shown
+// chain falls through as if the entry were absent). Any key not shown
 // here — at any level — is a load error, as are duplicate keys, type
 // mismatches, an empty project entry, an unprefixed / unknown-prefix /
 // empty-model candidate, the retired `harness` key (refused with a
@@ -90,14 +82,12 @@ const DefaultKey = "default"
 // naming both keys. It is never part of a bundle's precedence chain.
 const TaskKey = "task"
 
-// SummarizeKey is the top-level key whose `models` list names the
-// demand-gated summarize lane's model candidates (polyforge#224,
-// polyforge#242): summarize.models, one list for every project of the
-// workspace. It is NEVER a per-step precedence level (compose.go
-// SummarizeModels). A file that declares no such key has the lane
-// silently off ("off" is a legitimate state in the demand-gate era,
-// never a typed failure).
-const SummarizeKey = "summarize"
+// SummarizeKey and MemoryPolicyKey are the retired root sections (moved
+// to cli.toml,): a file carrying either is refused whole.
+const (
+	SummarizeKey    = "summarize"
+	MemoryPolicyKey = "memory_policy"
+)
 
 // Config is the parsed `.polyforge.yaml`.
 type Config struct {
@@ -109,17 +99,6 @@ type Config struct {
 	// Attrs is project name → step id → attr name → value (an int or a
 	// string): steps.<project>.<step-id>.attrs, nil when none is declared.
 	Attrs map[string]map[string]map[string]any
-	// MemoryPolicy is the declared memory_policy section (nil = absent).
-	MemoryPolicy map[string]PolicyEntry
-	// Summarize is the root summarize.models list in canonical form
-	// (nil = absent; a declared-empty list is empty, non-nil).
-	Summarize []string
-	// SummarizeLanguage is the root summarize.language value, trimmed
-	// ("" = absent; compose.go SummarizeLanguage resolves the default).
-	SummarizeLanguage string
-	// SummarizeIntervalSec is the root summarize.interval_sec value
-	// (0 = absent; compose.go SummarizeIntervalSec resolves the default).
-	SummarizeIntervalSec int
 }
 
 // Error is the typed load failure: the file that refused and the
@@ -208,7 +187,7 @@ func parse(raw []byte, projects []string) (*Config, string) {
 		return nil, ""
 	}
 	if root.Kind != yaml.MappingNode {
-		return nil, "the file must be a mapping with `steps:`, `summarize:` and/or `memory_policy:` sections"
+		return nil, "the file must be a mapping with a `steps:` section"
 	}
 	top, reason := mapping(root, "")
 	if reason != "" {
@@ -220,22 +199,17 @@ func parse(raw []byte, projects []string) (*Config, string) {
 		switch kv.key {
 		case "steps":
 			stepsNode = kv.val
-		case SummarizeKey:
-			if reason = summarizeEntry(kv.val, cfg); reason != "" {
-				return nil, reason
+		case SummarizeKey, MemoryPolicyKey:
+			secs, err := LegacySections(raw)
+			if err != nil || len(secs) == 0 {
+				return nil, fmt.Sprintf("`%s:` moved to cli.toml and is no longer read from the workspace yaml — %s", kv.key, MigrateHint)
 			}
-		case MemoryPolicyKey:
-			if cfg.MemoryPolicy, reason = parseMemoryPolicy(kv.val, projects); reason != "" {
-				return nil, reason
-			}
+			return nil, LegacyReason(secs)
 		default:
-			return nil, fmt.Sprintf("unknown top-level key %q (only `steps`, `summarize` and `memory_policy`)", kv.key)
+			return nil, fmt.Sprintf("unknown top-level key %q (only `steps`)", kv.key)
 		}
 	}
 	if stepsNode == nil || isNull(stepsNode) {
-		if cfg.MemoryPolicy != nil || cfg.Summarize != nil {
-			return cfg, ""
-		}
 		return nil, "" // a file declaring nothing governs nothing
 	}
 	if stepsNode.Kind != yaml.MappingNode {
@@ -374,72 +348,6 @@ func attrsMap(an *yaml.Node, where string) (map[string]any, string) {
 		}
 	}
 	return out, ""
-}
-
-// summarizeEntry reads the root `{ models: [...], language: <text>,
-// interval_sec: <int> }` summarize entry into cfg: `models` as strict as
-// a step entry's and mandatory (an entry without it governs nothing and
-// refuses like an empty one); `language` optional (polyforge#243) — a
-// plain string, trimmed, non-empty and single-line, no allowlist and no
-// length cap; `interval_sec` optional (polyforge#250) — a YAML integer
-// in MinSummarizeIntervalSec..MaxSummarizeIntervalSec inclusive, never
-// clamped. An absent key leaves its field zero (compose.go resolves the
-// defaults).
-func summarizeEntry(en *yaml.Node, cfg *Config) string {
-	where := SummarizeKey
-	if en.Kind != yaml.MappingNode {
-		return where + ": must be `{ models: [...] }`"
-	}
-	keys, reason := mapping(en, where)
-	if reason != "" {
-		return reason
-	}
-	var mn, ln, in *yaml.Node
-	for _, kv := range keys {
-		switch kv.key {
-		case "models":
-			mn = kv.val
-		case "language":
-			ln = kv.val
-		case "interval_sec":
-			in = kv.val
-		case "harness":
-			return where + ".harness: " + workflow.RetiredHarnessHint
-		default:
-			return fmt.Sprintf("%s.%s: not allowed (the summarize entry's keys are `models`, `language` and `interval_sec`)", where, kv.key)
-		}
-	}
-	list, reason := modelsList(mn, where)
-	if reason != "" {
-		return reason
-	}
-	cfg.Summarize = list
-	if ln != nil {
-		if ln.Kind != yaml.ScalarNode || ln.Tag != "!!str" {
-			return where + ".language: must be a plain string (e.g. `English`)"
-		}
-		lang := strings.TrimSpace(ln.Value)
-		if lang == "" {
-			return where + ".language: is empty — name a language, or remove the key (absent = " + DefaultSummarizeLanguage + ")"
-		}
-		if strings.ContainsAny(lang, "\r\n") {
-			return where + ".language: must be a single line"
-		}
-		cfg.SummarizeLanguage = lang
-	}
-	if in != nil {
-		rangeReason := fmt.Sprintf("%s.interval_sec: must be an integer in %d-%d (seconds; absent = %d)",
-			where, MinSummarizeIntervalSec, MaxSummarizeIntervalSec, DefaultSummarizeIntervalSec)
-		var sec int
-		if in.Kind != yaml.ScalarNode || in.Tag != "!!int" || in.Decode(&sec) != nil {
-			return rangeReason
-		}
-		if sec < MinSummarizeIntervalSec || sec > MaxSummarizeIntervalSec {
-			return rangeReason
-		}
-		cfg.SummarizeIntervalSec = sec
-	}
-	return ""
 }
 
 // modelsList reads an entry's `models` value at path where. The items

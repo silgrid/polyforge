@@ -107,6 +107,27 @@ func TestDeployDryRunNeedsNoConfirmAndTakesNoLock(t *testing.T) {
 	}
 }
 
+// TestDeployDryRunPlanNamesBothProbeLayouts (#243 N1): the
+// dry-run plan describes the version probes as they run — `/pf aihub
+// -version`, else `/aihub -version` — on the rollback image (step 2), the
+// pulled image (step 6) and the new container (step 7).
+func TestDeployDryRunPlanNamesBothProbeLayouts(t *testing.T) {
+	d := newReadyWorld(t)
+	out, err := d.run("", "v2.3.0", "--dry-run", "--confirm", "v2.3.0")
+	if err != nil {
+		t.Fatalf("dry-run failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"; verify -version (/pf aihub -version, else /aihub -version) == v2.2.1\n",
+		", /pf aihub -version, else /aihub -version == v2.3.0)\n",
+		"for 'docker exec aihub /pf aihub -version, else /aihub -version' == v2.3.0 ;",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the dry-run plan lacks %q\n%s", want, out)
+		}
+	}
+}
+
 func TestDeployLockHeldFailsFastNothingMutated(t *testing.T) {
 	d := newReadyWorld(t)
 	lock := filepath.Join(d.w, "srv", "deploy.lock")

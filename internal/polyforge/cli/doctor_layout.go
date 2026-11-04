@@ -288,8 +288,13 @@ func piLayoutCheck(agentDir, home string) doctorCheck {
 }
 
 // claudeLayoutCheck judges whether Claude Code's polyforge skill is the
-// symlink tools/install.sh creates.
-func claudeLayoutCheck(home string) doctorCheck {
+// symlink tools/install.sh creates. With fix (`pf doctor
+// --fix-install-layout`) a missing skill is linked and a link elsewhere
+// is repointed — only ~/.claude/skills/polyforge, and only when a
+// release skill exists behind the wanted target; a correct link is left
+// untouched, a copied directory is never removed, and no release or pf
+// binary is ever installed (that stays tools/install.sh's).
+func claudeLayoutCheck(home string, fix bool) doctorCheck {
 	c := doctorCheck{Name: docChClaudeLayout}
 	dir := filepath.Join(home, ".claude")
 	if skip, ok := notSetUp(dir, "Claude Code"); ok {
@@ -298,28 +303,72 @@ func claudeLayoutCheck(home string) doctorCheck {
 	}
 	want := filepath.Join(releaseCurrent(home), "skills", "polyforge")
 	skill := filepath.Join(dir, "skills", "polyforge")
-	fix := "re-run tools/install.sh (it links " + skill + " -> " + want + ")"
+	_, relErr := os.Stat(filepath.Join(want, "SKILL.md"))
+	install := "re-run tools/install.sh (it links " + skill + " -> " + want + ")"
+	hint := install
+	if relErr == nil {
+		hint += ", or run `pf doctor --fix-install-layout`"
+	}
 	st, err := os.Lstat(skill)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		c.Status, c.Detail = "warn", "the polyforge skill is not installed for Claude Code — "+fix
+		if fix && relErr == nil {
+			return linkClaudeSkill(c, skill, want, "created")
+		}
+		c.Status, c.Detail = "warn", "the polyforge skill is not installed for Claude Code — "+hint
 	case err != nil:
 		c.Status, c.Detail = "warn", "cannot tell: "+err.Error()
 	case st.Mode()&os.ModeSymlink != 0:
-		target, _ := os.Readlink(skill)
+		target, rerr := os.Readlink(skill)
+		if rerr != nil {
+			c.Status, c.Detail = "warn", "cannot tell: "+rerr.Error()
+			return c
+		}
 		if !filepath.IsAbs(target) {
 			target = filepath.Join(filepath.Dir(skill), target)
 		}
-		if filepath.Clean(target) != filepath.Clean(want) {
-			c.Status, c.Detail = "warn", skill+" links to "+target+", not the release tools/install.sh manages — "+fix
-		} else if _, serr := os.Stat(filepath.Join(skill, "SKILL.md")); serr != nil {
+		switch {
+		case filepath.Clean(target) != filepath.Clean(want) && fix && relErr == nil:
+			return linkClaudeSkill(c, skill, want, "repaired (it linked to "+target+")")
+		case filepath.Clean(target) != filepath.Clean(want):
+			c.Status, c.Detail = "warn", skill+" links to "+target+", not the release tools/install.sh manages — "+hint
+		case relErr != nil:
 			c.Status, c.Detail = "warn", skill+" links to "+want+", but no release is checked out there — re-run tools/install.sh"
-		} else {
+		default:
 			c.Status, c.Detail = "pass", skill+" -> "+want
 		}
 	default:
-		c.Status, c.Detail = "warn", skill+" is a copied directory (the layout before polyforge#174), not a link to the release — "+fix
+		c.Status, c.Detail = "warn", skill+" is a copied directory (the layout before polyforge#174), not a link to the release — "+install
 	}
+	return c
+}
+
+// linkClaudeSkill points skill at want: a temp link in the same
+// directory renamed over skill, so an interrupted run leaves the old
+// entry or the new link, never a half-written one (a leftover temp link
+// is replaced by the next run).
+func linkClaudeSkill(c doctorCheck, skill, want, how string) doctorCheck {
+	parent := filepath.Dir(skill)
+	tmp := filepath.Join(parent, ".polyforge.fix-install-layout.tmp")
+	err := os.MkdirAll(parent, 0o755)
+	if err == nil {
+		if rerr := os.Remove(tmp); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			err = rerr
+		}
+	}
+	if err == nil {
+		err = os.Symlink(want, tmp)
+	}
+	if err == nil {
+		if err = os.Rename(tmp, skill); err != nil {
+			os.Remove(tmp)
+		}
+	}
+	if err != nil {
+		c.Status, c.Detail = "warn", "cannot link "+skill+" -> "+want+": "+err.Error()+" — re-run tools/install.sh"
+		return c
+	}
+	c.Status, c.Detail = "pass", skill+" -> "+want+" ("+how+" by --fix-install-layout)"
 	return c
 }
 

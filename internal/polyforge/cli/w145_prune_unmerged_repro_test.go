@@ -8,7 +8,7 @@ package cli
 // The scene below is the #123 shape: the work item is terminal (failed),
 // its capsule sits aside as capsules/<name>.quarantined.<ts>, and its
 // task-repo clone inside carries a commit no remote carries. The cleanup
-// path (`pf doctor --prune-git-dirs`, the only path in this tree that
+// path (`pf doctor --prune-capsules`, the only path in this tree that
 // removes a capsule directory) is expected to REFUSE it — a scene holding
 // unmerged commits is not reclaimable, whatever its work item's state and
 // age. On the old code it is deleted like any other retired scene.
@@ -110,14 +110,14 @@ func TestW145PruneKeepsSetAsideCapsuleWithUnmergedCommits(t *testing.T) {
 	w145Backdate(t, gitDir, old)
 
 	// the cleanup path, run for real
-	_, _, doc := doctorStatus(t, env, "--json", "doctor", "--prune-git-dirs")
-	st, detail := doctorFind(t, doc, docChGitDirs)
-	t.Logf("git dir retention row: %s — %s", st, detail)
+	_, _, doc := doctorStatus(t, env, "--json", "doctor", "--prune-capsules")
+	st, detail := doctorFind(t, doc, docChCapsuleRetention)
+	t.Logf("capsule retention row: %s — %s", st, detail)
 
 	// EXPECTED: the scene holds commits no remote
 	// carries, so the cleanup path refuses it and the capsule survives.
 	if _, err := os.Stat(capsuleDir); err != nil {
-		t.Fatalf("the set-aside capsule of a failed work item holding an unmerged commit was deleted by `pf doctor --prune-git-dirs` (%v): a scene with unmerged commits must be kept; row said %q", err, detail)
+		t.Fatalf("the set-aside capsule of a failed work item holding an unmerged commit was deleted by `pf doctor --prune-capsules` (%v): a scene with unmerged commits must be kept; row said %q", err, detail)
 	}
 	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
 		t.Fatalf("the capsule's task-repo clone (with its unmerged commit) is gone (%v)", err)

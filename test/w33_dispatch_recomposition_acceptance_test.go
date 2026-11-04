@@ -284,8 +284,13 @@ func TestW33ConfigEditGovernsNextDispatch(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
 	const w33AB = "pi:w33-a, pi:w33-b"
-	w33Yaml(t, ws, w33StepYaml(w33AB)+"summarize:\n  models: [pi:w33-s1]\n")
+	w33Yaml(t, ws, w33StepYaml(w33AB))
 	rig := w33RigAt(t, inst, ws)
+	// the summarize lane is configured (its cli.toml table) so the
+	// no-snapshot assertion below covers it
+	if err := os.WriteFile(rig.cfg, append(w22Read(t, rig.cfg), "\n[summarize]\nmodels = [\"pi:w33-s1\"]\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	d := rig.daemon(t)
 	wi := w113NewWI(t, inst, "e2e", "w33: config edit governs the next dispatch", []map[string]any{
 		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
@@ -306,7 +311,7 @@ func TestW33ConfigEditGovernsNextDispatch(t *testing.T) {
 	if models[1] != "w33-a" {
 		t.Fatalf("fix's first dispatch ran on %q, want w33-a (the pre-edit list head)", models[1])
 	}
-	w33Yaml(t, ws, w33StepYaml("pi:w33-c, pi:w33-b")+"summarize:\n  models: [pi:w33-s1]\n")
+	w33Yaml(t, ws, w33StepYaml("pi:w33-c, pi:w33-b"))
 
 	// No claim-time snapshot is persisted (AC3): the daemon's bookkeeping
 	// must carry no step-candidate or summarize snapshot keys.
@@ -708,14 +713,14 @@ func TestW33ManualModelsFrozenWithEwrRotation(t *testing.T) {
 
 // TestW33SummarizeLaneReadsLive: GIVEN a running work item whose
 // summarize lane was composed as [w33-s1] at claim time, WHEN the owner
-// edits the yaml's summarize models to [w33-s2] and the next summarize
-// demand fires (interval passed, transcript grown), THEN the call
-// dispatches w33-s2 — the lane config is read live from the same
-// composition, never from a claim-time snapshot.
+// sets cli.toml's [summarize] models to [w33-s2] (and reloads) and the
+// next summarize demand fires (interval passed, transcript grown), THEN
+// the call dispatches w33-s2 — the lane config is the daemon's live
+// cli.toml snapshot, never a claim-time copy.
 func TestW33SummarizeLaneReadsLive(t *testing.T) {
 	inst := newV1Install(t)
 	d := newV1Daemon(t, inst)
-	w224Yaml(t, d.workspace, "summarize:\n  models: [pi:w33-s1]\n")
+	w224Summarize(t, d, "pi:w33-s1")
 	d.start()
 	wi := w224NewWI(t, inst, "w33: the summarize lane reads live", func(wi string) []map[string]any {
 		return []map[string]any{
@@ -736,7 +741,7 @@ func TestW33SummarizeLaneReadsLive(t *testing.T) {
 	// The owner edits the summarize models mid-flight; the next call
 	// (the 60 s interval has passed and the transcript has grown) must
 	// read the lane config live.
-	w224Yaml(t, d.workspace, "summarize:\n  models: [pi:w33-s2]\n")
+	w224Summarize(t, d, "pi:w33-s2")
 	w224AwaitRun(t, capDir, "PI_CODING_AGENT_SESSION_DIR", 100*time.Second)
 	w224Demand(t, inst, d, wi)
 	w224AssertSummaryLine(t, w224AwaitSummary(t, inst, d, wi, 15*time.Second), "w33-s2", "none")

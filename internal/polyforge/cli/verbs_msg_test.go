@@ -2,7 +2,7 @@ package cli
 
 // verbs_msg_test.go: the user-to-user messaging verbs. send/list/show are
 // data-plane (direct to aihub with the human key) and pass --json through
-// unchanged; analyze is execution-plane (the local daemon). A step
+// unchanged; analyze and prompt are execution-plane (the local daemon). A step
 // process is refused before any request leaves.
 
 import (
@@ -114,20 +114,96 @@ func TestMsgAnalyzeGoesToTheDaemon(t *testing.T) {
 	arec := &reqRecorder{}
 	srv := newFakeAihub(t, arec, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{}`) })
 	drec := &reqRecorder{}
+	answer := `{"message_id":"msg_1","task_id":"task_0123456789abcdef","project":"proj","type":"bug",` +
+		`"summary":"File the crash.","suggested_actions":["file_ticket","reply"],"model":"pi:m","duration":"1m2.3s",` +
+		`"reply_draft":"Thanks, filing it."}`
 	sock := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		drec.record(r)
-		io.WriteString(w, `{"message_id":"msg_1","conclusion":"do the thing","model":"pi:m"}`)
+		io.WriteString(w, answer)
 	}))
-	env := map[string]string{"PF_SERVER": srv.URL, "PF_DAEMON_SOCKET": sock, "PF_API_KEY": "k_msg"}
+	env := map[string]string{"PF_SERVER": srv.URL, "PF_DAEMON_SOCKET": sock, "PF_API_KEY": "k_msg", "PF_USER_ID": "usr_carol"}
 	code, stdout, stderr := runPf(t, env, "msg", "analyze", "msg_1")
-	if code != 0 || !strings.Contains(stdout, "do the thing") || !strings.Contains(stdout, "model pi:m") {
+	if code != 0 {
 		t.Fatalf("analyze: exit %d %s %s", code, stdout, stderr)
 	}
-	if got := drec.last(); got.Method != "POST" || got.Path != "/messages/msg_1/analyze" {
+	for _, want := range []string{"analysis of msg_1: bug", "summary: File the crash.", "suggested actions: file_ticket, reply",
+		"reply draft: Thanks, filing it.", "model: pi:m", "duration: 1m2.3s", "task: task_0123456789abcdef", "pf task show task_0123456789abcdef"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("analyze render lacks %q: %s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "conclusion") {
+		t.Fatalf("the render names the retired conclusion: %s", stdout)
+	}
+	got := drec.last()
+	if got.Method != "POST" || got.Path != "/messages/msg_1/analyze" {
 		t.Fatalf("analyze request: %s %s", got.Method, got.Path)
+	}
+	if !strings.Contains(got.Body, `"caller_id":"usr_carol"`) {
+		t.Fatalf("analyze body %s lacks the caller id", got.Body)
+	}
+	code, stdout, stderr = runPf(t, env, "--json", "msg", "analyze", "msg_1")
+	if code != 0 || strings.TrimSpace(stdout) != answer {
+		t.Fatalf("analyze --json passthrough: exit %d %q %s", code, stdout, stderr)
 	}
 	if n := len(arec.all()); n != 0 {
 		t.Fatalf("the analyzer CLI reached aihub %d time(s)", n)
+	}
+}
+
+// TestMsgPromptGoesToTheDaemon: `pf msg prompt <id>` is one POST to the
+// local daemon's prompt route with the caller id, renders the prompt and
+// its task facts, passes --json through unchanged, takes exactly one id
+// and never reaches aihub.
+func TestMsgPromptGoesToTheDaemon(t *testing.T) {
+	arec := &reqRecorder{}
+	srv := newFakeAihub(t, arec, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{}`) })
+	drec := &reqRecorder{}
+	answer := `{"prompt":"Fix the login timeout in the session store.","task_id":"task_0123456789abcdef","model":"pi:t/m","duration":"1m2.3s"}`
+	sock := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		drec.record(r)
+		io.WriteString(w, answer)
+	}))
+	env := map[string]string{"PF_SERVER": srv.URL, "PF_DAEMON_SOCKET": sock, "PF_API_KEY": "k_msg", "PF_USER_ID": "usr_carol"}
+	code, stdout, stderr := runPf(t, env, "msg", "prompt", "msg_1")
+	if code != 0 {
+		t.Fatalf("prompt: exit %d %s %s", code, stdout, stderr)
+	}
+	for _, want := range []string{"Fix the login timeout in the session store.", "model: pi:t/m", "duration: 1m2.3s",
+		"task: task_0123456789abcdef (pf task show task_0123456789abcdef)"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("prompt render lacks %q: %s", want, stdout)
+		}
+	}
+	got := drec.last()
+	if got.Method != "POST" || got.Path != "/messages/msg_1/prompt" || !strings.Contains(got.Body, `"caller_id":"usr_carol"`) {
+		t.Fatalf("prompt request: %s %s %s", got.Method, got.Path, got.Body)
+	}
+	code, stdout, stderr = runPf(t, env, "--json", "msg", "prompt", "msg_1")
+	if code != 0 || strings.TrimSpace(stdout) != answer {
+		t.Fatalf("prompt --json passthrough: exit %d %q %s", code, stdout, stderr)
+	}
+	before := len(drec.all())
+	for _, args := range [][]string{{"msg", "prompt"}, {"msg", "prompt", "msg_1", "msg_2"}} {
+		if code, _, stderr := runPf(t, env, args...); code == 0 || !strings.Contains(stderr, "expected exactly one message id") {
+			t.Fatalf("%v: exit %d %s, want the one-id refusal", args, code, stderr)
+		}
+	}
+	if n := len(drec.all()); n != before {
+		t.Fatalf("a refused prompt call reached the daemon")
+	}
+	if n := len(arec.all()); n != 0 {
+		t.Fatalf("the prompt CLI reached aihub %d time(s)", n)
+	}
+}
+
+func TestAnalyzeClientTimeoutOutlastsTheDaemonWait(t *testing.T) {
+	if analyzeClientTimeout <= 6*time.Minute {
+		t.Fatalf("analyze client timeout %v must outlast the daemon's 6-minute wait bound", analyzeClientTimeout)
+	}
+	d := NewDaemonClient("/nonexistent.sock")
+	if d.HTTP.Timeout != 120*time.Second {
+		t.Fatalf("the global client bound changed: %v", d.HTTP.Timeout)
 	}
 }
 
@@ -143,6 +219,8 @@ func TestMsgVerbsAreRefusedInsideAStep(t *testing.T) {
 		{"msg", "list"},
 		{"msg", "ack", "conv_1"},
 		{"msg", "show", "msg_1"},
+		{"msg", "analyze", "msg_1"},
+		{"msg", "prompt", "msg_1"},
 		{"msg", "contacts"},
 		{"machines", "rekey", "m-1", "--public-key", "pk"},
 	} {

@@ -1,4 +1,4 @@
-# file — create, edit or show a work item; manage its dependencies
+# file — create, edit, comment on or show a work item; manage its dependencies
 
 Data-plane verb: the `pf` CLI talks HTTP direct to AIHub. The daemon is not
 involved.
@@ -6,10 +6,12 @@ involved.
 ## Triggers
 
 - EN: file a new work item / create a ticket / new task / edit this work item
-  / change the goal or content / update priority or labels / show me this
-  work item / this one must wait for X / run it after X / drop that
+  / change the goal or content / update priority or labels / add a comment /
+  comment on this ticket / put a note on this ticket / reply to that comment /
+  show me this work item / this one must wait for X / run it after X / drop that
   dependency / what is it waiting for
 - 中文: 建票 / 新建任务 / 提个需求 / 改一下目标 / 编辑这个票 / 更新优先级 /
+  在票上补一条评论 / 评论这张票 / 回复那条评论 / 给这张票加个说明 /
   看看这个票 / 详情 / 等 X 做完再做 / 加个依赖 / 去掉依赖 / 它在等谁
 
 ## Command
@@ -17,6 +19,7 @@ involved.
 ```
 pf file create --project P --goal G [flags]        # or --stdin for a full JSON body
 pf file edit <id> [flags]                           # or --stdin
+pf file comment <id> --body TEXT [--reply-to COMMENT]
 pf file show <id>
 pf file dep add <blocking> <blocked>                # "A blocks B" = pf file dep add A B
 pf file dep rm <blocking> <blocked>
@@ -63,6 +66,7 @@ The rule lives in the routing skill (`SKILL.md` §Project routing).
 | new user-visible behavior (spec + acceptance scenarios) | `feature-full` | `scoped-capable` |
 | internal maintenance with no new user-visible behavior — tools, docs, config, cleanup, deletion | `chore` | `scoped-capable` |
 | a small, well-understood change | `autopilot` | `full` (not scoped-capable: no review, so no `scope_adequate`) |
+| a pure text change — docs or locale message text — inside the paths every touched repository declares with `micro_path=` in its own `.polyforge/verify-scope.conf`; the ticket body is the spec (`fix` → `review` → `deliver`) | `micro` | none (no verification step: the delivery re-runs the repository's fast evidence) |
 | cut a release / deploy a published version | `release` | `full` (no verification step) |
 | no execution at all — a design, decision or tracking ticket | omit `--bundle`: a registration ticket runs nothing (it is not claimable, `CORE-409`) | not applicable |
 
@@ -108,8 +112,10 @@ prose it may skip:
   the proposal from memory). A criterion that names no step either drops to
   the evidence that graph actually runs, recorded in the `content` as an
   explicit waiver proposed to the owner, or the ticket moves to a lane whose
-  step table carries it. A registration ticket (no bundle) has no step table
-  and skips this slot.
+  step table carries it. On `micro` the table is `fix`, `review`, `deliver`:
+  a criterion only a full bar, an e2e scenario or a verification step carries
+  makes the ticket ineligible for `micro` — file it on a lane that carries it.
+  A registration ticket (no bundle) has no step table and skips this slot.
 
 Any read of `<workspace>/.repo/<name>` behind these slots (manifests, conf, code) happens
 after the session clone sync: SKILL.md session rule 8.
@@ -123,11 +129,19 @@ user-visible behavior or behavior face, a cross-module change, a gate-type
 change, or the driver/daemon core). A small expected diff on a low risk
 surface prefers `chore` (internal maintenance) or `autopilot` (a small,
 well-understood change) over `feature-full`: the heavier lane's preamble is
-exactly what such a ticket does not need. Work on `docs/concepts.md`'s "never
+exactly what such a ticket does not need. A pure text ticket — docs or locale
+message text and nothing else: no code, config, generated file, test or
+behavior change — whose every touched repository declares `micro_path=` covering
+the paths it changes (read each repository's `.polyforge/verify-scope.conf` on
+its default branch) may go further down, to `micro`; a ticket touching any
+repository without that declaration, or any path outside it, is never proposed
+`micro` (the driver would end the run and ask for a re-file on `autopilot`).
+Work on `docs/concepts.md`'s "never
 unattended" list counts as a high `lane risk surface` by definition and is
 **never down-laned** off `feature-full`, whatever its `expected diff size`:
 that list's only safeguard is the filer picking the lane that always keeps a
-human in the loop, so the check never proposes a lighter lane for it. The
+human in the loop, so the check never proposes a lighter lane for it — `micro`
+included. The
 check also never down-lanes onto a lane whose step table carries no step for
 the acceptance criteria: a carrier-less lane is not a cheaper lane, it is the
 wrong one (see the `Acceptance carrier` slot). When the
@@ -183,8 +197,38 @@ refuses the edit (`CORE-410`): store the design as a memory instead —
 (see `remember.md` for reviews, decisions and audits). Scratch output
 goes to the workspace's `scratch/` only.
 
-`show` takes exactly one id (or slug) and renders the detail record plus
-its dependency block.
+`show` takes exactly one id (or slug) and renders the detail record, its
+comment thread and its dependency block.
+
+## Comments (追加式评论)
+
+`pf file comment <id> --body TEXT [--reply-to COMMENT]` appends one comment
+to a work item. `--body` takes the text, `-` reads stdin and `@file` reads a
+file. A comment carries its author (the caller), a server-assigned time, the
+body and an optional `reply_to`.
+
+- **Append-only.** There is no edit verb and no delete verb and no endpoint
+  for either; the comment list only grows. Two people commenting on the same
+  ticket both persist — neither overwrites the other, unlike `--content`,
+  which replaces the whole body. A threaded discussion with the reply
+  relation is exactly what `reply_to` is for; there is no other thread
+  concept.
+- **`reply_to` stays on the same ticket.** It must name a comment that
+  already exists on the SAME work item. A missing id or an id from another
+  work item is refused (`CORE-404`) and nothing is written.
+- **Who can comment.** The same principals that can run `pf file edit`: an
+  authenticated aihub user with the writer (or maintainer, or admin) role on
+  the work item's project. A caller with no relationship to the project gets
+  the missing-work-item answer; a viewer gets `AUTH-403`. A workflow step
+  agent cannot reach the entry point directly or through the daemon: `file`
+  is a data-plane verb and the CLI's step guard refuses it before any wire
+  call, and step processes hold no aihub key.
+- **Read side.** `pf file show` renders the thread (id, server time, author,
+  body and `reply_to`); `GET /api/v1/work-items/{id}?include=events` carries
+  the same rows as the `comments` field; the web console's work-item detail
+  page shows them too. Messages anchored with `pf msg send --about-wi` are
+  NOT part of this list — they show only in the console (see
+  `message.md`).
 
 ## Dependencies
 
@@ -231,10 +275,12 @@ bypasses inference byte-for-byte.
 
 ## Success
 
-`--json`: the server's record raw. Human mode renders the work item detail
-view: `slug (id)`, status, project, goal, milestone, labels, bundle,
-assignee, waiting, waiting-for, created (and closed when terminal); `show`
-adds the dependency block. `dep add|rm|list` print the dependency view
+`--json`: the server's record raw (`comment` answers the stored comment
+row). Human mode renders the work item detail view: `slug (id)`, status,
+project, goal, milestone, labels, bundle, assignee, waiting, waiting-for,
+created (and closed when terminal); `show` adds the comment thread and the
+dependency block, and `comment` prints the appended comment's id, author,
+server time, `reply_to` and body. `dep add|rm|list` print the dependency view
 (`--json`: the server's `{blocking, blocked_by}` raw).
 
 `create` of an execution ticket also prints, on stderr only, an advisory
@@ -256,7 +302,7 @@ code or the `--json` stdout.
 | `CORE-400` (dependency) | An edge across two projects, or a work item depending on itself | Dependencies stay inside one project; name a work item of the same project. |
 | `CORE-400` `BLOCKER_STILL_BLOCKS` | `pf file edit <id> --bundle ""` (unbind) on a work item that still blocks others (`detail` names them) | Without a bundle it runs nothing, so nothing would release them — remove those edges first (`pf file dep rm`), or rebind to another bundle instead (allowed). |
 | `CORE-400` `BLOCKER_NOT_EXECUTABLE` | The blocker (`--after` / the first `dep add` argument) has no bundle: a registration ticket or an epic | It runs nothing (it closes only by a hand `pf wrap`) — name the execution ticket that does the work, or bind a bundle to it first (`pf file edit <id> --bundle NAME`). |
-| `CORE-404` | Unknown or invisible work item id, unknown project; `dep rm` of an edge that does not exist | No such work item (or you cannot see it) — check the `wi_` id or slug and the project name. |
+| `CORE-404` | Unknown or invisible work item id, unknown project; `dep rm` of an edge that does not exist; `comment --reply-to` naming no comment on THIS work item (missing, or on another ticket) | No such work item (or you cannot see it) — check the `wi_` id or slug and the project name; for `--reply-to`, reply only to a comment on the same ticket (`pf file show` lists the ids). Nothing is written. |
 | `CORE-409` `DEPENDENCY_CYCLE` | The new edge would close a loop (B already waits, directly or not, for the other side) | Refused — the order you asked for contradicts an existing one; `pf file dep list` shows the chain. |
 | `CORE-409` | Create-time conflict (e.g. duplicate) | The state machine refuses this write — read `detail`. |
 | `CORE-410` | PATCH of a terminal work item (wrapped/failed/canceled) | This work item is closed and can no longer be edited — file a new one instead. |
