@@ -5,7 +5,7 @@ package cli
 // mapping.Plan.MatchWorkspace, the file is parsed by the one strict
 // workspace loader, and the declared step candidates come from the installed
 // bundles the daemon reports. The read carries the mapping, the projects and
-// the step chains/attrs only — summarize and memory_policy are cli.toml
+// the step chains only — summarize and memory_policy are cli.toml
 // facts read through `pf config list`. Writes are
 // byte-preserving line edits of the steps block, serialized by the same sibling flock discipline as the
 // cli.toml writer and validated by workspace.Load before anything lands.
@@ -71,7 +71,7 @@ type workspaceValue struct {
 func readWorkspaceConfig(ctx *Context, v *configView, ws string) (map[string]any, error) {
 	projects := v.eff.Mapping.ProjectsOf(ws)
 	workflowsDir, stepsComplete, reason := workspaceCandidateScope(ctx)
-	cfg, err := workspace.Load(ws, workflowsDir, projects)
+	cfg, err := workspace.Load(ws, projects)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func readWorkspaceConfig(ctx *Context, v *configView, ws string) (map[string]any
 		yamlFact["sha256"] = sha256Hex(raw)
 	}
 
-	steps := declaredStepCandidates(cfg, projects, workflowsDir, stepsComplete)
+	steps := declaredStepCandidates(cfg, projects, workflow.ForWorkspace(workflowsDir, ws), stepsComplete)
 	out := map[string]any{
 		"mapped":         true,
 		"workspace":      ws,
@@ -127,27 +127,24 @@ func workspaceCandidateScope(ctx *Context) (dir string, complete bool, reason st
 }
 
 // declaredStepCandidates answers the per-project step map of the read
-// face: every installed step id (when the daemon named the workflows
-// dir), every key the file declares, and always the project-level
+// face: every step id of the workspace's lane set (when the daemon named
+// its workflows dir: the built-in lanes and the workspace's user lanes),
+// every key the file declares, and always the project-level
 // `default` and the bundle-less `task` rows. Each entry carries
 // `declared` + `models` (a declared-empty list stays declared, never
-// absent), its `source` (`file` | `default`) and `class` (`live`), and
-// its `attrs`: every attr an installed bundle declares for the step id
-// (the declaration's default when the file does not override it) plus
-// every override the file declares.
-func declaredStepCandidates(cfg *workspace.Config, projects []string, workflowsDir string, complete bool) map[string]any {
+// absent), `skip` when the file declares one, its `source` (`file` | `default`) and `class` (`live`).
+func declaredStepCandidates(cfg *workspace.Config, projects []string, set workflow.LaneSet, complete bool) map[string]any {
 	steps := map[string]any{}
 	var ids map[string]bool
-	var decls map[string]map[string]workflow.AttrDecl
-	if complete && workflowsDir != "" {
-		ids, _ = workflow.StepIDs(workflowsDir)
-		decls, _ = workflow.StepAttrs(workflowsDir)
+	if complete && set.Builtin != "" {
+		ids, _ = set.StepIDs()
 	}
 	for _, project := range projects {
 		var declared map[string][]string
-		var overrides map[string]map[string]any
+		var skips map[string]bool
 		if cfg != nil {
-			declared, overrides = cfg.Models[project], cfg.Attrs[project]
+			declared = cfg.Models[project]
+			skips = cfg.Skip[project]
 		}
 		keys := map[string]bool{workspace.DefaultKey: true, workspace.TaskKey: true}
 		for id := range ids {
@@ -156,53 +153,29 @@ func declaredStepCandidates(cfg *workspace.Config, projects []string, workflowsD
 		for id := range declared {
 			keys[id] = true
 		}
-		for id := range overrides {
+		for id := range skips {
 			keys[id] = true
 		}
 		entry := map[string]any{}
 		for id := range keys {
-			entry[id] = stepEntryRead(project, id, declared, overrides[id], decls[id])
+			entry[id] = stepEntryRead(project, id, declared, skips)
 		}
 		steps[project] = entry
 	}
 	return steps
 }
 
-func stepEntryRead(project, id string, declared map[string][]string, overrides map[string]any, decls map[string]workflow.AttrDecl) map[string]any {
+func stepEntryRead(project, id string, declared map[string][]string, skips map[string]bool) map[string]any {
 	models, ok := declared[id]
 	e := map[string]any{"declared": ok, "models": nil, "source": sourceIf(ok), "class": WorkspaceConfigClass("steps." + project + "." + id + ".models")}
 	if ok {
 		e["models"] = models
 	}
-	attrs := map[string]any{}
-	for name, d := range decls {
-		attrs[name] = attrRead(project, id, name, overrides, &d)
-	}
-	for name := range overrides {
-		if _, ok := decls[name]; !ok {
-			attrs[name] = attrRead(project, id, name, overrides, nil)
-		}
-	}
-	if len(attrs) > 0 {
-		e["attrs"] = attrs
+	// the entry's `skip`, only when the file declares one.
+	if skip, set := skips[id]; set {
+		e["skip"] = skip
 	}
 	return e
-}
-
-func attrRead(project, id, name string, overrides map[string]any, d *workflow.AttrDecl) map[string]any {
-	v, ok := overrides[name]
-	a := map[string]any{"declared": ok, "source": sourceIf(ok), "class": WorkspaceConfigClass("steps." + project + "." + id + ".attrs." + name)}
-	switch {
-	case ok:
-		a["value"] = v
-	case d != nil:
-		a["value"] = d.Default
-	}
-	if d != nil {
-		a["default"] = d.Default
-		a["schema"] = map[string]any{"kind": d.Type}
-	}
-	return a
 }
 
 func orList(declared, fallback []string) []string {

@@ -1,0 +1,1037 @@
+import "#test-env";
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFile } from "node:fs/promises";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createJiti } from "jiti";
+
+const jiti = createJiti(import.meta.url, {
+  jsx: { runtime: "automatic" },
+  tsconfigPaths: true,
+});
+const {
+  PickerShowHiddenToggle,
+  PickerBrowseRow,
+  PickerDriveRow,
+  PickerManagePanel,
+  ManagedEntryRow,
+  PickerRowCreatePanel,
+  PickerRowManagePanel,
+  createRowPinHandler,
+  createPickerErrorState,
+  createPickerFieldKeyDown,
+  dialogEscapeDismisses,
+  pickerErrorMessage,
+  createCreateFlow,
+  createRowCreateFlow,
+  createRowPathEdit,
+  createBrowseRowManageFlow,
+  FS_MANAGE_REFUSAL_CODES,
+} = await jiti.import("./DirectoryPicker.tsx");
+
+const source = await readFile(new URL("./DirectoryPicker.tsx", import.meta.url), "utf8");
+const browseEngineSource = await readFile(new URL("../lib/directory-picker-browse.ts", import.meta.url), "utf8");
+const { NEW_FILE_NAME_ISSUES } = await jiti.import("../lib/directory-picker-browse.ts");
+
+const t = (key) => key;
+
+function html(element) {
+  return renderToStaticMarkup(element);
+}
+
+test("the browse-area create toolbar is gone; directory rows carry the per-row New button (wi pi#49 R3)", () => {
+  // The toolbar row above the browse list is deleted — its new-folder/
+  // new-file duty moved onto every directory row.
+  assert.doesNotMatch(source, /directory-picker-create-toolbar/);
+  assert.doesNotMatch(source, /PickerCreateToolbar/);
+  // Browse rows: a New button renders beside the pin button when the
+  // callback is present — as a SIBLING of the navigation button.
+  const entry = { name: "project", path: "/work/project" };
+  const withNew = html(React.createElement(PickerBrowseRow, {
+    entry,
+    t,
+    onNavigate: () => {},
+    onNew: () => {},
+  }));
+  assert.match(withNew, /directory-picker-row-new/);
+  assert.match(withNew, /directoryPicker\.rowNew/);
+  const withoutNew = html(React.createElement(PickerBrowseRow, {
+    entry,
+    t,
+    onNavigate: () => {},
+  }));
+  assert.doesNotMatch(withoutNew, /directory-picker-row-new/);
+  // Managed rows (the sidebar directory list): the New button renders
+  // beside rename/remove, only when the callback is provided.
+  const managedWithNew = html(React.createElement(PickerManagePanel, {
+    t,
+    entries: [{ path: "/work/alpha" }],
+    onRename: () => {},
+    onRemove: () => {},
+    onNew: () => {},
+  }));
+  assert.match(managedWithNew, /directory-picker-row-new/);
+  const managedWithoutNew = html(React.createElement(PickerManagePanel, {
+    t,
+    entries: [{ path: "/work/alpha" }],
+    onRename: () => {},
+    onRemove: () => {},
+  }));
+  assert.doesNotMatch(managedWithoutNew, /directory-picker-row-new/);
+  // Directory-only guard: drive rows (the dialog's only non-directory rows)
+  // never render the New button.
+  const drive = html(React.createElement(PickerDriveRow, { entry: { name: "C:", path: "C:\\" }, onNavigate: () => {} }));
+  assert.doesNotMatch(drive, /directory-picker-row-new/);
+  assert.equal((drive.match(/<button/g) ?? []).length, 1);
+});
+
+test("the inline row create panel offers the file-or-folder choice plus the shared create form", () => {
+  const markup = html(React.createElement(PickerRowCreatePanel, {
+    t,
+    kind: "folder",
+    value: "",
+    busy: false,
+    error: null,
+    onKindChange: () => {},
+    onChange: () => {},
+    onSubmit: () => {},
+    onCancel: () => {},
+  }));
+  assert.match(markup, /directoryPicker\.rowNewFolderChoice/);
+  assert.match(markup, /directoryPicker\.rowNewFileChoice/);
+  assert.match(markup, /aria-pressed="true"/);
+  assert.match(markup, /directory-picker-create-form/);
+  assert.match(markup, /directoryPicker\.createFolder/);
+  assert.doesNotMatch(markup, /aria-pressed="false"[^>]*folder|folder[^>]*aria-pressed="false"/);
+});
+
+test("the show-hidden checkbox renders from its checked prop (default unchecked)", () => {
+  const unchecked = html(React.createElement(PickerShowHiddenToggle, { t, checked: false, onChange: () => {} }));
+  assert.match(unchecked, /type="checkbox"/);
+  assert.doesNotMatch(unchecked, /checked/);
+  const checked = html(React.createElement(PickerShowHiddenToggle, { t, checked: true, onChange: () => {} }));
+  assert.match(checked, /checked/);
+  assert.match(checked, /directoryPicker\.showHidden/);
+});
+
+test("directory rows render a sibling pin button only when the callback is present", () => {
+  const entry = { name: "project", path: "/work/project" };
+  const withPin = html(React.createElement(PickerBrowseRow, {
+    entry,
+    t,
+    onNavigate: () => {},
+    onPin: () => {},
+  }));
+  // Pin renders with the callback…
+  assert.match(withPin, /directory-picker-pin/);
+  assert.match(withPin, /directoryPicker\.pinDirectory/);
+  // …as a SIBLING of the navigation button, never nested inside it.
+  const navStart = withPin.indexOf("<button");
+  const navEnd = withPin.indexOf("</button>", navStart);
+  const pinStart = withPin.indexOf("directory-picker-pin");
+  assert.ok(pinStart > navEnd, "the pin button must not be nested in the navigation button");
+
+  const withoutPin = html(React.createElement(PickerBrowseRow, {
+    entry,
+    t,
+    onNavigate: () => {},
+  }));
+  assert.doesNotMatch(withoutPin, /directory-picker-pin/);
+  assert.equal((withoutPin.match(/<button/g) ?? []).length, 1, "no-callback rows stay single navigation buttons");
+});
+
+test("Windows drive rows never render a pin affordance", () => {
+  const drive = { name: "C:", path: "C:\\" };
+  const markup = html(React.createElement(PickerDriveRow, { entry: drive, onNavigate: () => {} }));
+  assert.doesNotMatch(markup, /directory-picker-pin/);
+  assert.equal((markup.match(/<button/g) ?? []).length, 1);
+});
+
+test("the manage panel keeps entries/rename/remove only — no creation form", () => {
+  const entries = [
+    { path: "/work/alpha", displayName: "Alpha" },
+    { path: "/work/beta" },
+  ];
+  const markup = html(React.createElement(PickerManagePanel, {
+    t,
+    entries,
+    onRename: () => {},
+    onRemove: () => {},
+  }));
+  assert.match(markup, /directoryPicker\.entriesTitle/);
+  assert.match(markup, /\/work\/alpha/);
+  assert.match(markup, /\/work\/beta/);
+  assert.match(markup, /directoryPicker\.renameEntry/);
+  assert.match(markup, /directoryPicker\.removeEntry/);
+  // The manage panel's "New folder" button and inline form are deleted.
+  assert.doesNotMatch(markup, /directoryPicker\.newFolder/);
+  assert.doesNotMatch(markup, /<input/);
+});
+
+test("the pin row handler invokes the callback and only the callback", async () => {
+  const errors = [];
+  const pinned = [];
+  // Success: the callback is invoked with the row path and nothing else —
+  // by construction the handler has no navigation, refetch or close inputs.
+  const successHandler = createRowPinHandler({
+    onPin: async (path) => { pinned.push(path); return { ok: true }; },
+    onError: (message) => errors.push(message),
+  });
+  await successHandler("/work/project");
+  assert.deepEqual(pinned, ["/work/project"]);
+  assert.deepEqual(errors, []);
+
+  // Failure: the typed error is surfaced, no success report.
+  const failureHandler = createRowPinHandler({
+    onPin: async () => ({ ok: false, error: "Directory does not exist" }),
+    onError: (message) => errors.push(message),
+  });
+  await failureHandler("/work/missing");
+  assert.deepEqual(errors, ["Directory does not exist"]);
+
+  // A throwing callback is caught and surfaced, never crashing the dialog.
+  const throwingHandler = createRowPinHandler({
+    onPin: async () => { throw new Error("offline"); },
+    onError: (message) => errors.push(message),
+  });
+  await throwingHandler("/work/anywhere");
+  assert.deepEqual(errors, ["Directory does not exist", "offline"]);
+});
+
+test("the dialog wires the engine: persisted toggle, current-directory refetch, local validation", () => {
+  // Show-hidden: initialization and toggle run through the composed
+  // lifecycle seam (its composed behavior — navigate away, toggle targets
+  // the current path, stale responses dropped, reopen restores — is covered
+  // behaviorally in lib/directory-picker-browse.test.mjs).
+  assert.match(source, /createShowHiddenLifecycle\(\{/);
+  assert.match(source, /controllerRef\.current\.refetchCurrent\(\)/);
+  // Storage acquisition rides inside the seam's failure-safe getter, never
+  // a bare `window.localStorage` read.
+  assert.doesNotMatch(source, /loadShowHiddenPreference\(window\.localStorage\)/);
+  assert.doesNotMatch(source, /saveShowHiddenPreference\(window\.localStorage/);
+  // Creation runs through the engine's production seam (its behavior is
+  // covered behaviorally in lib/directory-picker-browse.test.mjs: unsafe
+  // names issue zero requests, 207/409 are typed failures, folder success
+  // enters the created folder).
+  assert.match(source, /runCreateSubmission\(\{/);
+  assert.match(source, /directoryPicker\.validation\.\$\{issue\}/);
+  // File success confirms in-dialog via i18n.
+  assert.match(source, /directoryPicker\.fileCreated/);
+  // The pin callback is optional and only renders rows with pin when set.
+  assert.match(source, /onPinDirectory\?: \(path: string\) => Promise<PinOutcome>/);
+  // The engine itself never formats user-facing English: validation
+  // returns typed codes only.
+  assert.doesNotMatch(browseEngineSource, /File names must not contain a path/);
+  assert.doesNotMatch(browseEngineSource, /File name is required/);
+});
+
+test("the error-lifecycle seam: stale errors never mask a fresh failure", () => {
+  const state = { load: null, pin: null, manage: null };
+  const errors = createPickerErrorState({
+    setLoadError: (message) => { state.load = message; },
+    setPinError: (message) => { state.pin = message; },
+    setManageError: (message) => { state.manage = message; },
+  });
+
+  // Browse failure → successful recovery clears it.
+  errors.onBrowseError("HTTP 404");
+  assert.equal(state.load, "HTTP 404");
+  errors.onBrowseSuccess();
+  assert.equal(state.load, null, "a successful browse clears the browse error");
+
+  // A new browse request resets ALL stale errors.
+  errors.onBrowseError("old browse error");
+  errors.onPinError("old pin error");
+  errors.onManageError("old manage error");
+  errors.onBrowseStart();
+  assert.equal(state.load, null);
+  assert.equal(state.pin, null);
+  assert.equal(state.manage, null);
+
+  // A genuine pin failure stays visible even when a browse error exists —
+  // and the render precedence picks it.
+  errors.onBrowseError("stale browse error");
+  errors.onPinStart();
+  errors.onPinError("pin failed");
+  assert.equal(
+    pickerErrorMessage({ manageError: state.manage, pinError: state.pin, loadError: state.load, external: null }),
+    "pin failed",
+    "the pin failure outranks the stale browse error",
+  );
+
+  // A new pin attempt resets the previous pin error first.
+  errors.onPinStart();
+  assert.equal(state.pin, null);
+
+  // A manage failure (wi pi#52) outranks everything else, and a new manage
+  // attempt resets it first.
+  errors.onManageError("cannot remove the last entry");
+  assert.equal(
+    pickerErrorMessage({ manageError: state.manage, pinError: "pin", loadError: "load", external: "ext" }),
+    "cannot remove the last entry",
+    "the manage failure outranks pin, browse and external errors",
+  );
+  errors.onManageStart();
+  assert.equal(state.manage, null);
+
+  // With no pin/manage error, the browse error renders; the external prop is last.
+  assert.equal(pickerErrorMessage({ manageError: null, pinError: null, loadError: "browse", external: "ext" }), "browse");
+  assert.equal(pickerErrorMessage({ manageError: null, pinError: null, loadError: null, external: "ext" }), "ext");
+  assert.equal(pickerErrorMessage({ manageError: null, pinError: null, loadError: null, external: null }), null);
+
+  // B2 regression (review r1, wi pi#51): a stale manage error (the
+  // last-entry refusal) must NOT outlive a new pin attempt —
+  // delete-refusal → pin-failure shows the PIN error, and
+  // delete-refusal → pin-success shows nothing.
+  errors.onManageError("cannot remove the last entry");
+  assert.equal(state.manage, "cannot remove the last entry");
+  errors.onPinStart();
+  assert.equal(state.manage, null, "a new pin attempt clears the stale manage error");
+  assert.equal(state.pin, null);
+  errors.onPinError("pin failed");
+  assert.equal(
+    pickerErrorMessage({ manageError: state.manage, pinError: state.pin, loadError: state.load, external: null }),
+    "pin failed",
+    "after a last-entry refusal, the PIN failure is what renders",
+  );
+  errors.onPinStart();
+  assert.equal(
+    pickerErrorMessage({ manageError: state.manage, pinError: state.pin, loadError: state.load, external: null }),
+    null,
+    "a successful pin leaves no stale last-entry message behind",
+  );
+});
+
+test("field keydown seam: Escape cancels ONLY the field edit and never reaches the dialog; Enter submits (B1)", () => {
+  const calls = [];
+  let prevented = 0;
+  let stopped = 0;
+  const keydown = createPickerFieldKeyDown({
+    submit: () => calls.push("submit"),
+    cancel: () => calls.push("cancel"),
+  });
+  const event = (key) => ({
+    key,
+    preventDefault() { prevented += 1; },
+    stopPropagation() { stopped += 1; },
+  });
+
+  keydown(event("Escape"));
+  assert.deepEqual(calls, ["cancel"], "Escape cancels and never commits");
+  assert.equal(prevented, 1);
+  assert.equal(stopped, 1, "Escape stops propagation so the dialog-level handler never fires");
+
+  keydown(event("Enter"));
+  assert.deepEqual(calls, ["cancel", "submit"], "Enter submits the field edit");
+  assert.equal(stopped, 1, "Enter does not stop propagation");
+
+  keydown(event("a"));
+  assert.deepEqual(calls, ["cancel", "submit"], "other keys are inert");
+  assert.equal(prevented, 2);
+});
+
+test("dialog Escape seam: a field-consumed (defaultPrevented) Escape keeps the picker open; plain Escape dismisses; busy blocks (B1)", () => {
+  let dismissed = 0;
+  const onCancel = () => { dismissed += 1; };
+
+  dialogEscapeDismisses({ key: "Escape", defaultPrevented: true }, { busy: false, onCancel });
+  assert.equal(dismissed, 0, "the field editor's Escape does NOT dismiss the picker");
+
+  dialogEscapeDismisses({ key: "Escape", defaultPrevented: false }, { busy: false, onCancel });
+  assert.equal(dismissed, 1, "a plain Escape on the dialog dismisses it");
+
+  dialogEscapeDismisses({ key: "Escape", defaultPrevented: false }, { busy: true, onCancel });
+  assert.equal(dismissed, 1, "busy blocks dismissal");
+
+  dialogEscapeDismisses({ key: "Enter", defaultPrevented: false }, { busy: false, onCancel });
+  assert.equal(dismissed, 1, "only Escape dismisses");
+});
+
+// ---------------------------------------------------------------------------
+// wi pi#52: the manage rows' inline PATH editor and its lifecycle seam.
+// ---------------------------------------------------------------------------
+
+test("managed rows render the path plus rename/delete affordances only when their callbacks are present", () => {
+  const entry = { path: "/work/alpha", displayName: "Alpha" };
+  const withCallbacks = html(React.createElement(ManagedEntryRow, {
+    entry,
+    t,
+    onRename: () => ({ ok: true }),
+    onRemove: () => ({ ok: true }),
+  }));
+  // Labels/aria kept: the rename affordance still carries renameEntry, the
+  // delete affordance removeEntry.
+  assert.match(withCallbacks, /directoryPicker\.renameEntry/);
+  assert.match(withCallbacks, /directoryPicker\.removeEntry/);
+  assert.match(withCallbacks, /\/work\/alpha/);
+  assert.doesNotMatch(withCallbacks, /<input/, "the editor is closed until the rename button activates it");
+
+  // Without the callbacks the row is a plain read-only row: no controls.
+  const readOnly = html(React.createElement(ManagedEntryRow, { entry, t }));
+  assert.doesNotMatch(readOnly, /directoryPicker\.renameEntry/);
+  assert.doesNotMatch(readOnly, /directoryPicker\.removeEntry/);
+  assert.equal((readOnly.match(/<button/g) ?? []).length, 0);
+
+  // An empty list renders no rows at all — no controls to reach.
+  const emptyPanel = html(React.createElement(PickerManagePanel, {
+    t,
+    entries: [],
+    onRename: () => ({ ok: true }),
+    onRemove: () => ({ ok: true }),
+  }));
+  assert.match(emptyPanel, /directoryPicker\.noEntries/);
+  assert.doesNotMatch(emptyPanel, /directoryPicker\.renameEntry/);
+  assert.doesNotMatch(emptyPanel, /directoryPicker\.removeEntry/);
+  assert.equal((emptyPanel.match(/<button/g) ?? []).length, 0);
+});
+
+test("the row path-edit seam: begin prefills the path, commit closes on success and stays open on refusal, cancel never commits", () => {
+  const state = { editing: false, value: "", error: null };
+  const commits = [];
+  const edit = createRowPathEdit({
+    entryPath: () => "/work/alpha",
+    onCommit: (currentPath, nextPath) => {
+      commits.push({ currentPath, nextPath });
+      if (nextPath === "") return { ok: false, error: "enter a path" };
+      if (nextPath === "/dup") return { ok: false, error: "already listed" };
+      return { ok: true };
+    },
+    setEditing: (editing) => { state.editing = editing; },
+    setValue: (value) => { state.value = value; },
+    setError: (message) => { state.error = message; },
+  });
+
+  // begin prefills the editor with the entry's CURRENT path and clears errors.
+  state.error = "stale";
+  edit.begin();
+  assert.deepEqual(state, { editing: true, value: "/work/alpha", error: null });
+
+  // A refusal keeps the editor open with the typed message under it.
+  edit.change("/dup");
+  edit.commit(" /dup ");
+  assert.equal(state.editing, true, "the editor stays open on refusal");
+  assert.equal(state.error, "already listed");
+  assert.deepEqual(commits, [{ currentPath: "/work/alpha", nextPath: "/dup" }], "the commit trims and passes the current path");
+
+  // A successful commit closes the editor and clears the error (the input
+  // value is irrelevant once the editor is closed).
+  edit.commit("/work/beta");
+  assert.equal(state.editing, false);
+  assert.equal(state.error, null);
+  assert.deepEqual(commits[1], { currentPath: "/work/alpha", nextPath: "/work/beta" });
+
+  // Cancel closes the editor unchanged and never invokes the callback.
+  const commitsBefore = commits.length;
+  edit.begin();
+  edit.cancel();
+  assert.equal(state.editing, false);
+  assert.equal(state.error, null);
+  assert.equal(commits.length, commitsBefore);
+});
+
+test("every validation issue code has a translated message in all three locales", async () => {
+  for (const [file, marker] of [
+    ["../lib/i18n/messages/en.ts", "File name is required"],
+    ["../lib/i18n/messages/zh-CN.ts", "请输入文件名"],
+    ["../lib/i18n/messages/zh-TW.ts", "請輸入檔案名稱"],
+  ]) {
+    const localeSource = await readFile(new URL(file, import.meta.url), "utf8");
+    for (const issue of NEW_FILE_NAME_ISSUES) {
+      assert.match(
+        localeSource,
+        new RegExp(`directoryPicker\\.validation\\.${issue}"`),
+        `${file} must translate the '${issue}' validation code`,
+      );
+    }
+    assert.ok(localeSource.includes(marker), `${file} carries locale-appropriate copy`);
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// createCreateFlow (code review races): deferred-response interaction tests
+// driving the REAL production flow — cancel/reopen during a pending
+// creation, and navigation during a pending folder creation.
+// ---------------------------------------------------------------------------
+
+function jsonResponse200(body) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Sequenceable fetch: `plan` entries are {response} to answer immediately
+ * or {defer:true} to hang until the returned release() fires. */
+function plannedFetch(plan) {
+  const calls = [];
+  const gates = [];
+  const fetchFn = async (url, init) => {
+    calls.push({ url, init });
+    const step = plan.length > 0 ? plan.shift() : {};
+    if (step.defer) await new Promise((resolve) => gates.push(resolve));
+    return step.response ?? jsonResponse200({ ok: true });
+  };
+  return { fetchFn, calls, release: () => gates.shift()?.() };
+}
+
+function flowHarness(deps = {}) {
+  const state = { kind: null, name: "", error: null, busy: false, notice: null };
+  const navigated = [];
+  const refetched = [];
+  let displayedPath = deps.displayed ?? "/work";
+  const flow = createCreateFlow({
+    t: (key) => key,
+    fetchFn: deps.fetchFn,
+    setKind: (kind) => { state.kind = kind; },
+    setName: (name) => { state.name = name; },
+    setError: (message) => { state.error = message; },
+    setBusy: (busy) => { state.busy = busy; },
+    setNotice: (message) => { state.notice = message; },
+    displayedPath: () => displayedPath,
+    navigateTo: (directory) => navigated.push(directory),
+    refetchCurrent: () => refetched.push(displayedPath),
+  });
+  return {
+    flow, state, navigated, refetched,
+    navigateAway: (to) => { displayedPath = to; },
+  };
+}
+
+test("cancel during a pending file create keeps the operation's busy state and completes cleanly", async () => {
+  const { fetchFn, calls, release } = plannedFetch([
+    { response: jsonResponse200({ cwd: "/work" }) },
+    { defer: true },
+  ]);
+  const h = flowHarness({ fetchFn });
+  h.flow.open("file");
+  assert.equal(h.state.kind, "file");
+
+  const submission = h.flow.submit("file", "notes.md");
+  // Let the request chain advance: validate answers, the create fetch hangs.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.state.busy, true, "the create request owns the busy flag");
+  assert.equal(calls.length, 2, "parent validate + create were issued");
+
+  // Cancel mid-flight is a NO-OP: the form STAYS visible (hiding it would
+  // swallow the operation's eventual in-dialog failure) and the busy state
+  // keeps the in-flight request's ownership.
+  h.flow.cancel();
+  assert.equal(h.state.kind, "file", "the form stays visible while pending");
+  assert.equal(h.state.busy, true, "cancel must not clear the pending operation's busy state");
+
+  // …and no replacement form may open while the creation is pending.
+  h.flow.open("folder");
+  assert.equal(h.state.kind, "file", "no replacement form while pending");
+
+  // The deferred completion lands: busy clears, the notice confirms, the
+  // listing refreshes — never a navigation.
+  release();
+  await submission;
+  assert.equal(h.state.busy, false);
+  assert.equal(h.state.notice, "directoryPicker.fileCreated");
+  assert.equal(h.refetched.length, 1, "the listing refreshed once");
+  assert.deepEqual(h.navigated, [], "a file create never navigates");
+
+  // After completion, opening works again.
+  h.flow.open("folder");
+  assert.equal(h.state.kind, "folder");
+  // And on an idle form, cancel hides it.
+  h.flow.cancel();
+  assert.equal(h.state.kind, null, "an idle form still cancels");
+});
+
+test("a pending creation's FAILURE renders in the still-open form (no swallow)", async () => {
+  const conflict = new Response(JSON.stringify({ error: "exists" }), {
+    status: 409,
+    headers: { "Content-Type": "application/json" },
+  });
+  const { fetchFn, release } = plannedFetch([
+    { response: jsonResponse200({ cwd: "/work" }) },
+    { defer: true, response: conflict },
+  ]);
+  const h = flowHarness({ fetchFn });
+  h.flow.open("file");
+  const submission = h.flow.submit("file", "notes.md");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.state.busy, true);
+
+  // The cancel attempt is refused mid-flight; the 409 conflict then lands in
+  // the STILL-OPEN form, satisfying the in-dialog failure contract.
+  h.flow.cancel();
+  release();
+  await submission;
+  assert.equal(h.state.busy, false);
+  assert.equal(h.state.error, "directoryPicker.createFileConflict");
+  assert.equal(h.state.kind, "file", "the form remains open showing the failure");
+});
+
+test("a folder completion navigates ONLY when the picker still displays the submit-time directory", async () => {
+  // Case 1: the user stayed — navigate into the created folder.
+  {
+    const { fetchFn } = plannedFetch([
+      { response: jsonResponse200({ cwd: "/work" }) },
+      { response: jsonResponse200({ ok: true }) },
+    ]);
+    const h = flowHarness({ fetchFn });
+    await h.flow.submit("folder", "new-dir");
+    assert.deepEqual(h.navigated, ["/work/new-dir"], "folder success enters the created folder");
+    assert.equal(h.refetched.length, 0);
+  }
+  // Case 2: the user navigated away while the creation was in flight — the
+  // completion refreshes what is DISPLAYED, never yanks the picker into
+  // the created folder.
+  {
+    const { fetchFn, release } = plannedFetch([
+      { response: jsonResponse200({ cwd: "/work" }) },
+      { defer: true },
+    ]);
+    const h = flowHarness({ fetchFn });
+    const submission = h.flow.submit("folder", "new-dir");
+    // Advance to the hanging create fetch before navigating away.
+    await new Promise((resolve) => setImmediate(resolve));
+    h.navigateAway("/elsewhere");
+    release();
+    await submission;
+    assert.deepEqual(h.navigated, [], "no navigation away from the user's current directory");
+    assert.deepEqual(h.refetched, ["/elsewhere"], "the displayed listing is refreshed instead");
+  }
+});
+
+test("an unsafe file name is rejected with zero requests and a translated message", async () => {
+  const { fetchFn, calls } = plannedFetch([]);
+  const h = flowHarness({ fetchFn });
+  await h.flow.submit("file", "a/b");
+  assert.equal(calls.length, 0, "no request is issued for an unsafe name");
+  assert.equal(h.state.error, "directoryPicker.validation.pathSeparator");
+  assert.equal(h.state.busy, false);
+  // The local rejection leaves the busy flag untouched and no notice set.
+  assert.equal(h.state.notice, null);
+});
+
+// ---------------------------------------------------------------------------
+// createRowCreateFlow (wi pi#49 R3): the row-scoped create seam — deferred-
+// response and conflict tests driving the REAL production flow the per-row
+// New buttons run. By construction the flow has NO navigateTo input and NO
+// close input: a row create can never navigate the picker nor close it.
+// ---------------------------------------------------------------------------
+
+function rowFlowHarness(deps = {}) {
+  const state = { kind: null, name: "", error: null, busy: false, notice: null };
+  const navigated = [];
+  let scope = deps.scope ?? "browse";
+  let rowPath = deps.rowPath ?? "/work/row";
+  const flow = createRowCreateFlow({
+    t: (key) => key,
+    fetchFn: deps.fetchFn,
+    setKind: (kind) => { state.kind = kind; },
+    setName: (name) => { state.name = name; },
+    setError: (message) => { state.error = message; },
+    setBusy: (busy) => { state.busy = busy; },
+    setNotice: (message) => { state.notice = message; },
+    rowPath: () => rowPath,
+    scope: () => scope,
+    navigateTo: (directory) => navigated.push(directory),
+  });
+  return { flow, state, navigated, setScope: (next) => { scope = next; }, setRowPath: (next) => { rowPath = next; } };
+}
+
+test("a browse-row FOLDER creation enters the row's directory so the result is visible", async () => {
+  const { fetchFn, calls } = plannedFetch([
+    { response: jsonResponse200({ cwd: "/work/row" }) },
+    { response: jsonResponse200({ ok: true }) },
+  ]);
+  const h = rowFlowHarness({ fetchFn, rowPath: "/work/row" });
+  await h.flow.submit("folder", "new-dir");
+  // The creation targeted the ROW's directory (its own currentPath), not the
+  // currently browsed one.
+  assert.match(calls[0].url, /cwd\/validate/);
+  assert.match(calls[1].url, /files\/work\/row\?type=mkdir/);
+  // Success enters the ROW's directory: the created folder is a child of it
+  // and can never appear in the parent listing, so navigation IS the
+  // visibility (code review).
+  assert.deepEqual(h.navigated, ["/work/row"]);
+  assert.equal(h.state.kind, null);
+  assert.equal(h.state.busy, false);
+});
+
+test("a browse-row FILE creation stays put with the confirmation notice (files never render in a dirs-only listing)", async () => {
+  const { fetchFn, calls } = plannedFetch([
+    { response: jsonResponse200({ cwd: "/work/row" }) },
+    { response: jsonResponse200({ ok: true }) },
+  ]);
+  const h = rowFlowHarness({ fetchFn, rowPath: "/work/row" });
+  await h.flow.submit("file", "notes.md");
+  assert.match(calls[1].url, /files\/work\/row\?type=create-file/);
+  assert.deepEqual(h.navigated, [], "no navigation for a file create");
+  assert.equal(h.state.notice, "directoryPicker.fileCreated");
+});
+
+test("a file created from a managed row confirms via i18n with no navigation and no pointless refetch", async () => {
+  const { fetchFn, calls } = plannedFetch([
+    { response: jsonResponse200({ cwd: "/listed/beta" }) },
+    { response: jsonResponse200({ ok: true }) },
+  ]);
+  const h = rowFlowHarness({ fetchFn, rowPath: "/listed/beta", scope: "manage" });
+  await h.flow.submit("file", "notes.md");
+  assert.match(calls[1].url, /files\/listed\/beta\?type=create-file/);
+  assert.equal(h.state.notice, "directoryPicker.fileCreated");
+  assert.equal(h.state.kind, null, "the row form closes on success");
+  assert.deepEqual(h.navigated ?? [], []);
+});
+
+test("a name clash surfaces the typed conflict message in the still-open row form", async () => {
+  const conflict = new Response(JSON.stringify({ error: "exists" }), {
+    status: 409,
+    headers: { "Content-Type": "application/json" },
+  });
+  const { fetchFn, release } = plannedFetch([
+    { response: jsonResponse200({ cwd: "/work/row" }) },
+    { defer: true, response: conflict },
+  ]);
+  const h = rowFlowHarness({ fetchFn });
+  h.flow.open("file");
+  const submission = h.flow.submit("file", "notes.md");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.state.busy, true);
+  // Cancel mid-flight is refused: the 409 must land in the open form.
+  h.flow.cancel();
+  release();
+  await submission;
+  assert.equal(h.state.error, "directoryPicker.createFileConflict");
+  assert.equal(h.state.kind, "file", "the row form stays open showing the failure");
+});
+
+test("an unsafe row-create name is rejected locally with zero requests", async () => {
+  const { fetchFn, calls } = plannedFetch([]);
+  const h = rowFlowHarness({ fetchFn });
+  await h.flow.submit("file", "a/b");
+  assert.equal(calls.length, 0);
+  assert.equal(h.state.error, "directoryPicker.validation.pathSeparator");
+  assert.equal(h.state.busy, false);
+  // No replacement form opens while a creation is in flight, and an idle
+  // cancel hides the form.
+  h.flow.open("folder");
+  assert.equal(h.state.kind, "folder");
+  h.flow.cancel();
+  assert.equal(h.state.kind, null);
+});
+
+// ---------------------------------------------------------------------------
+// Footer layout (wi pi#49 R3): the show-hidden checkbox sits in the footer
+// row, LEFT of cancel and "Select this folder"; the browse-area toolbar row
+// above the list is gone.
+// ---------------------------------------------------------------------------
+
+test("the show-hidden checkbox moved to the footer, left of the select button", () => {
+  const footerStart = source.indexOf('className="directory-picker-footer"');
+  assert.ok(footerStart !== -1, "the picker still has a footer");
+  const footerEnd = source.indexOf("</div>\n      </div>\n    </div>,", footerStart);
+  const footer = source.slice(footerStart, footerEnd);
+  const toggleIndex = footer.indexOf("<PickerShowHiddenToggle");
+  const cancelIndex = footer.indexOf('{t("i18n.cancel")}');
+  const selectIndex = footer.indexOf("directoryPicker.selectThisFolder");
+  assert.ok(toggleIndex !== -1 && cancelIndex !== -1 && selectIndex !== -1);
+  assert.ok(toggleIndex < cancelIndex, "the checkbox renders left of cancel");
+  assert.ok(cancelIndex < selectIndex, "the checkbox renders left of the select button");
+  // The checkbox lives on the footer's LEFT side (the buttons are pushed
+  // right by marginLeft: auto).
+  assert.match(footer, /marginLeft: "auto"/);
+  // No second show-hidden toggle exists anywhere else in the dialog.
+  assert.equal((source.match(/<PickerShowHiddenToggle/g) ?? []).length, 1);
+});
+
+test("no create-toolbar row remains above the browse list and no trigger mounts the top-level form", () => {
+  assert.doesNotMatch(source, /directory-picker-create-toolbar/);
+  // The footer is the only row carrying the toggle: the old toolbar row
+  // (borderBottom above the list) is gone from the source entirely.
+  const toolbarArea = source.slice(
+    source.indexOf("</form>"),
+    source.indexOf("{createKind && ("),
+  );
+  assert.doesNotMatch(toolbarArea, /PickerShowHiddenToggle/);
+  assert.doesNotMatch(toolbarArea, /borderBottom/);
+});
+
+// ---------------------------------------------------------------------------
+// Browse-row manage affordances (wi pi#59): hover-revealed pencil/trash
+// siblings, the inline rename editor (NAME prefill, unchanged-name client
+// close), the typed-name delete confirm, and the i18n surface.
+// ---------------------------------------------------------------------------
+
+test("browse rows render hover-revealed rename/delete affordances as siblings of the navigation button", () => {
+  const entry = { name: "project", path: "/work/project" };
+  const markup = html(React.createElement(PickerBrowseRow, {
+    entry,
+    t,
+    onNavigate: () => {},
+    onRename: () => {},
+    onDelete: () => {},
+  }));
+  assert.match(markup, /directory-picker-row-manage/);
+  assert.match(markup, /directoryPicker\.rowRename/);
+  assert.match(markup, /directoryPicker\.rowDelete/);
+  // SIBLINGS of the navigation button, never nested inside it — clicking
+  // manage can never navigate.
+  const navStart = markup.indexOf("<button");
+  const navEnd = markup.indexOf("</button>", navStart);
+  assert.ok(
+    markup.indexOf("directory-picker-row-manage") > navEnd,
+    "the manage buttons must not be nested in the navigation button",
+  );
+  // The manage buttons carry NO inline display style: the stylesheet alone
+  // owns their hover/focus/coarse-pointer reveal.
+  const manageBlock = markup.slice(markup.indexOf('class="directory-picker-row-manage'));
+  assert.ok(manageBlock.includes('class="directory-picker-row-manage directory-picker-row-rename"'));
+  assert.ok(manageBlock.includes('class="directory-picker-row-manage directory-picker-row-delete"'));
+  assert.doesNotMatch(
+    manageBlock.slice(0, manageBlock.indexOf('class="directory-picker-pin') > -1 ? manageBlock.indexOf('class="directory-picker-pin') : manageBlock.length),
+    /display:/,
+  );
+  // Absent callbacks → absent affordances (a plain row stays a single
+  // navigation button).
+  const plain = html(React.createElement(PickerBrowseRow, { entry, t, onNavigate: () => {} }));
+  assert.doesNotMatch(plain, /directory-picker-row-manage/);
+  assert.equal((plain.match(/<button/g) ?? []).length, 1);
+});
+
+test("row manage buttons are always visible (pi#76: hover-reveal removed)", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const block = css.match(/\.directory-picker-row-manage\s*\{[^}]*\}/);
+  assert.ok(block, ".directory-picker-row-manage rule must exist");
+  assert.match(block[0], /display:\s*inline-flex/);
+  assert.doesNotMatch(block[0], /display:\s*none/);
+  assert.doesNotMatch(
+    css,
+    /\.directory-picker-row:hover \.directory-picker-row-manage[^}]*display/,
+    "the hover-reveal override must be gone",
+  );
+  assert.doesNotMatch(
+    css,
+    /@media \(pointer: coarse\)\s*\{\s*\.directory-picker-row-manage/,
+    "the coarse-pointer override is redundant once buttons are always visible",
+  );
+});
+
+test("the inline manage panel: rename prefills the NAME, delete shows the typed-name prompt, Enter/Escape ride the shared keydown seam", () => {
+  const rename = html(React.createElement(PickerRowManagePanel, {
+    t,
+    mode: "rename",
+    value: "project",
+    busy: false,
+    onChange: () => {},
+    onSubmit: () => {},
+    onCancel: () => {},
+  }));
+  assert.match(rename, /value="project"/);
+  assert.match(rename, /directoryPicker\.rowRenamePrompt/);
+  assert.match(rename, /directoryPicker\.rowRename/);
+  const del = html(React.createElement(PickerRowManagePanel, {
+    t,
+    mode: "delete",
+    value: "",
+    busy: false,
+    onChange: () => {},
+    onSubmit: () => {},
+    onCancel: () => {},
+  }));
+  assert.match(del, /directoryPicker\.rowDeletePrompt/);
+  assert.match(del, /directoryPicker\.rowDelete/);
+  assert.doesNotMatch(del, /value="project"/, "the delete confirm never prefills the name");
+  // The panel's input commits on Enter / cancels on Escape through the SAME
+  // production keydown seam the create form uses.
+  const managePanelSource = source.slice(
+    source.indexOf("export function PickerRowManagePanel"),
+    source.indexOf("export function PickerDriveRow"),
+  );
+  assert.match(managePanelSource, /createPickerFieldKeyDown\(\{ submit: onSubmit, cancel: onCancel \}\)/);
+});
+
+function createManageHarness(options = {}) {
+  const requests = [];
+  const state = { closed: 0, refetched: 0, errors: [] };
+  const row = { path: "/work/project", name: "project" };
+  const flow = createBrowseRowManageFlow({
+    t,
+    fetchFn: async (url, init) => {
+      requests.push({ url, init, body: JSON.parse(init.body) });
+      if (options.reject) throw options.reject;
+      return new Response(JSON.stringify(options.response ?? { ok: true, path: "/work/renamed" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+    rowPath: () => row.path,
+    rowName: () => row.name,
+    close: () => { state.closed += 1; },
+    setBusy: () => {},
+    onManageStart: () => {},
+    onManageError: (message) => state.errors.push(message),
+    refetchCurrent: () => { state.refetched += 1; },
+  });
+  return { flow, requests, state };
+}
+
+test("the rename flow: an unchanged name closes the editor CLIENT-side with zero requests; a whitespace-only rename is a REAL rename now (raw names, r2 B3)", async () => {
+  const h = createManageHarness();
+  await h.flow.submitRename("project"); // unchanged
+  assert.deepEqual(h.requests, []);
+  assert.equal(h.state.closed, 1);
+  assert.equal(h.state.refetched, 0);
+  await h.flow.submitRename(""); // nothing typed: zero requests
+  assert.deepEqual(h.requests, []);
+  assert.equal(h.state.closed, 2);
+  // RAW names (r2 B3, pi#60): a whitespace-only name is a valid POSIX name
+  // and is submitted AS TYPED — no trim, no client-side close.
+  await h.flow.submitRename("   ");
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0].body.nextPath, "/work/   ");
+});
+
+test("the rename flow: a commit posts the sibling nextPath and refreshes the listing on success", async () => {
+  const h = createManageHarness();
+  await h.flow.submitRename("renamed");
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0].url, "/api/fs-manage");
+  assert.deepEqual(h.requests[0].body, {
+    action: "rename",
+    path: "/work/project",
+    nextPath: "/work/renamed",
+  });
+  assert.equal(h.state.closed, 1);
+  assert.equal(h.state.refetched, 1);
+  assert.deepEqual(h.state.errors, []);
+});
+
+test("the rename flow: a typed refusal maps its code to the i18n message in the shared error area and keeps the editor open", async () => {
+  const h = createManageHarness({ response: { ok: false, reason: "targetExists" } });
+  await h.flow.submitRename("renamed");
+  assert.equal(h.state.closed, 0, "the editor stays open on refusal");
+  assert.equal(h.state.refetched, 0);
+  assert.deepEqual(h.state.errors, ["directoryPicker.fsManage.targetExists"]);
+});
+
+test("the delete flow: the request carries the typed confirm name; success refreshes the listing", async () => {
+  const h = createManageHarness();
+  await h.flow.submitDelete();
+  assert.equal(h.requests.length, 1);
+  assert.deepEqual(h.requests[0].body, {
+    action: "delete",
+    path: "/work/project",
+    confirm: "project",
+  });
+  assert.equal(h.state.closed, 1);
+  assert.equal(h.state.refetched, 1);
+});
+
+test("the flows carry RAW names and confirmations — trim never corrupts the payload (r2 B3, pi#60)", async () => {
+  const row = { path: "/work/project ", name: "project " }; // note the trailing space
+  const requests = [];
+  const flow = createBrowseRowManageFlow({
+    t,
+    fetchFn: async (url, init) => {
+      requests.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ ok: true, path: row.path }), { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+    rowPath: () => row.path,
+    rowName: () => row.name,
+    close: () => {},
+    setBusy: () => {},
+    onManageStart: () => {},
+    onManageError: () => {},
+    refetchCurrent: () => {},
+  });
+  // The UNCHANGED check is raw: "project " === rowName, zero requests...
+  await flow.submitRename("project ");
+  assert.deepEqual(requests, []);
+  // ...while a genuinely different raw name submits verbatim (trailing
+  // space preserved in the payload).
+  await flow.submitRename("renamed ");
+  assert.equal(requests[0].nextPath, "/work/renamed ");
+  // The delete confirmation is auto-derived from the entry's EXACT basename
+  // (the dialog is the human confirmation — wi pi#61): a whitespace-named
+  // directory deletes with its raw basename in the payload.
+  await flow.submitDelete();
+  assert.equal(requests[1].confirm, "project ");
+});
+
+test("the delete flow: confirmMismatch renders the mapped message with the confirm step kept open", async () => {
+  const h = createManageHarness({ response: { ok: false, reason: "confirmMismatch" } });
+  await h.flow.submitDelete();
+  assert.deepEqual(h.state.errors, ["directoryPicker.fsManage.confirmMismatch"]);
+  assert.equal(h.state.closed, 0);
+  // The confirm dialog auto-carries the entry's exact basename (wi pi#61):
+  // a second delete attempt sends the CORRECT basename without the operator
+  // typing anything, and the dialog stays open on the canned refusal.
+  await h.flow.submitDelete();
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].body.confirm, "project");
+  assert.deepEqual(h.state.errors, ["directoryPicker.fsManage.confirmMismatch", "directoryPicker.fsManage.confirmMismatch"]);
+});
+
+test("a network failure degrades to the ioFailure message (no prose from the transport)", async () => {
+  const h = createManageHarness({ reject: new Error("offline") });
+  await h.flow.submitDelete();
+  assert.deepEqual(h.state.errors, ["directoryPicker.fsManage.ioFailure"]);
+  assert.equal(h.state.closed, 0);
+});
+
+test("the dialog wires the flow: browse rows carry the affordances, refusals land in the shared ranked error area", async () => {
+  // The full picker wires pencil/trash to the flow for every browse row.
+  assert.match(source, /onRename=\{\(path, name\) => openRowManage\("rename", path, name\)\}/);
+  assert.match(source, /onDelete=\{\(path, name\) => openRowManage\("delete", path, name\)\}/);
+  assert.match(source, /createBrowseRowManageFlow\(\{/);
+  // The rename editor prefills the NAME; the delete confirm starts empty.
+  assert.match(source, /setRowManageValue\(mode === "rename" \? name : ""\)/);
+  // Refusals map their code to the i18n family and ride the shared manage
+  // error slot (pickerErrorMessage precedence).
+  assert.match(source, /directoryPicker\.fsManage\.\$\{outcome\.reason\}/);
+  assert.match(source, /onManageError: \(message\) => pickerErrors\.onManageError\(message\)/);
+  // Success refreshes the CURRENT listing — never a navigation.
+  assert.match(source, /refetchCurrent: \(\) => void controllerRef\.current\.refetchCurrent\(\)/);
+  // The flow component itself is the only fs-manage request issuer, and the
+  // request surface is the typed /api/fs-manage endpoint.
+  assert.match(source, /"\/api\/fs-manage"/);
+});
+
+test("every new manage string and all nine refusal codes are translated in all three locales", async () => {
+  const keys = [
+    "directoryPicker.rowRename",
+    "directoryPicker.rowDelete",
+    "directoryPicker.rowRenamePrompt",
+    "directoryPicker.rowDeletePrompt",
+    ...FS_MANAGE_REFUSAL_CODES.map((code) => `directoryPicker.fsManage.${code}`),
+  ];
+  assert.equal(FS_MANAGE_REFUSAL_CODES.length, 9);
+  for (const file of ["../lib/i18n/messages/en.ts", "../lib/i18n/messages/zh-CN.ts", "../lib/i18n/messages/zh-TW.ts"]) {
+    const localeSource = await readFile(new URL(file, import.meta.url), "utf8");
+    for (const key of keys) {
+      assert.match(localeSource, new RegExp(`"${key}": "[^"]+"`), `${file} must carry ${key}`);
+    }
+  }
+});
+
+test("managed rows and drive rows keep exactly their existing affordances (wi#59 scope discipline)", () => {
+  // Drive rows: navigation only.
+  const drive = html(React.createElement(PickerDriveRow, { entry: { name: "C:", path: "C:\\" }, onNavigate: () => {} }));
+  assert.equal((drive.match(/<button/g) ?? []).length, 1);
+  assert.doesNotMatch(drive, /directory-picker-row-manage/);
+  assert.doesNotMatch(drive, /directoryPicker\.rowRename/);
+  // Managed rows: the existing path-rename/remove/new affordances only — no
+  // hover-reveal class, no browse-row manage affordances, no fs-manage flow.
+  const managed = html(React.createElement(ManagedEntryRow, {
+    entry: { path: "/work/alpha" },
+    t,
+    onRename: () => ({ ok: true }),
+    onRemove: () => ({ ok: true }),
+    onNew: () => {},
+  }));
+  assert.match(managed, /directoryPicker\.renameEntry/);
+  assert.match(managed, /directoryPicker\.removeEntry/);
+  assert.match(managed, /directoryPicker\.rowNew/);
+  assert.doesNotMatch(managed, /directory-picker-row-manage/);
+  assert.doesNotMatch(managed, /directoryPicker\.rowRename"/);
+  assert.doesNotMatch(managed, /directoryPicker\.rowDelete"/);
+  assert.doesNotMatch(managed, /fsManage/);
+});

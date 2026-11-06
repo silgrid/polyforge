@@ -96,6 +96,13 @@ func TestRestartReconciliationMatrix(t *testing.T) {
 					if sp.callCount() != 0 {
 						t.Fatal("wrapped must never revive")
 					}
+					// PR #860 review 2: a dropped record announces the hub's
+					// state (observe's job_finished feeds the decision feed)
+					if local {
+						if m := recvRT(t, toOB); m.Kind != protocol.RTFinished || m.Reason != api.StatusWrapped {
+							t.Fatalf("release = %+v", m)
+						}
+					}
 					assertNoRT(t, toOB)
 				case v.status == api.StatusBlocked:
 					// M2: nothing revived; crash orphans (and only they) are
@@ -113,6 +120,11 @@ func TestRestartReconciliationMatrix(t *testing.T) {
 					}
 					if sp.callCount() != 0 {
 						t.Fatal("blocked must not spawn")
+					}
+					if local {
+						if m := recvRT(t, toOB); m.Kind != protocol.RTFinished || m.Reason != api.StatusBlocked {
+							t.Fatalf("release = %+v", m)
+						}
 					}
 					assertNoRT(t, toOB)
 					if local {
@@ -562,6 +574,10 @@ func TestRestartBlockedReapsJournaledOrphansOnly(t *testing.T) {
 	}
 	if sp.callCount() != 0 {
 		t.Fatal("blocked must not spawn")
+	}
+	// the dropped record announces the hub's blocked
+	if m := recvRT(t, toOB); m.Kind != protocol.RTFinished || m.Reason != api.StatusBlocked {
+		t.Fatalf("release = %+v", m)
 	}
 	assertNoRT(t, toOB)
 }

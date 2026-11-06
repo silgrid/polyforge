@@ -17,7 +17,10 @@
 // `git config --global`, WRITES) the operator's real ~/.gitconfig, and no
 // operator setting (core.hooksPath, url.insteadOf, ...) changes what a
 // test observes. Main also guards the real file: its content is hashed
-// before and after the run and a change fails the package.
+// before and after the run and a change fails the package. It guards the
+// null device the same way: /dev/null must still be a character device
+// after the run, because a regular file there breaks every `2>/dev/null`
+// and any git that reads it as config.
 //
 // TMPDIR is private to the run (GOTMPDIR is unset, so t.TempDir() uses it
 // too) and must be empty again at its end: temp files and dirs the tests —
@@ -178,6 +181,10 @@ func run(m *testing.M, atExit []func() error) (int, error) {
 		fmt.Fprintf(os.Stderr, "testenv: FAIL: the operator's real global git config changed during the test run (%v): a test wrote past the hermetic GIT_CONFIG_GLOBAL\n", guarded)
 		code = 1
 	}
+	if nerr := nullDeviceErr(os.DevNull); nerr != nil {
+		fmt.Fprintf(os.Stderr, "testenv: FAIL: %s is no longer a character device after the test run (%v): a test or a process it started replaced it\n", os.DevNull, nerr)
+		code = 1
+	}
 	if left, lerr := leftovers(tmp, 20); lerr != nil {
 		fmt.Fprintf(os.Stderr, "testenv: FAIL: the private TMPDIR %s cannot be checked (a test removed or locked it?): %v\n", tmp, lerr)
 		code = 1
@@ -186,6 +193,25 @@ func run(m *testing.M, atExit []func() error) (int, error) {
 		code = 1
 	}
 	return code, nil
+}
+
+// nullDeviceErr answers nil when path is a character device, and an error
+// naming what it is instead (missing, a regular file of N bytes, ...)
+// otherwise. It only stats the path.
+func nullDeviceErr(path string) error {
+	st, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	mode := st.Mode()
+	switch {
+	case mode&fs.ModeDevice != 0 && mode&fs.ModeCharDevice != 0:
+		return nil
+	case mode.IsRegular():
+		return fmt.Errorf("%s is a regular file of %d bytes", path, st.Size())
+	default:
+		return fmt.Errorf("%s is not a character device (mode %v)", path, mode)
+	}
 }
 
 // shortTmpDir makes the run's private TMPDIR as /tmp/pfXXXX (4 random

@@ -26,7 +26,6 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
-	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
@@ -726,37 +725,53 @@ func newTestDaemon(t *testing.T, mutate func(*Config)) *testDaemon {
 		runDone: make(chan error, 1),
 	}
 	go func() { td.runDone <- d.Run(context.Background()) }()
-	// wait for the socket to be live
+	// A socket inode can appear before the HTTP listener is usable. Probe
+	// the actual read-only endpoint within the existing startup bound.
+	td.client = cli.NewDaemonClient(td.sock)
+	probe := cli.NewDaemonClient(td.sock)
+	probe.HTTP.Timeout = 100 * time.Millisecond
+	defer probe.HTTP.CloseIdleConnections()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if _, err := os.Stat(td.sock); err == nil {
+		if _, err := probe.Status(); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("daemon socket never appeared")
+			t.Fatal("daemon status endpoint never became ready")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	td.client = cli.NewDaemonClient(td.sock)
 	t.Cleanup(func() {
 		_ = d.Shutdown(context.Background(), DirectShutdownCause())
 		select {
 		case <-td.runDone:
 		case <-time.After(5 * time.Second):
 		}
-		// the shutdown waits for no claim: let one still under way (its
-		// durable tail, its queue settle) finish before the temp dir goes
-		settled := func() bool {
-			d.q.mu.Lock()
-			n := len(d.q.inflight)
-			d.q.mu.Unlock()
-			return n == 0 && d.rt.Idle()
-		}
-		for deadline := time.Now().Add(5 * time.Second); !settled() && time.Now().Before(deadline); {
-			time.Sleep(5 * time.Millisecond)
-		}
+		settleAfterShutdown(t, d)
 	})
 	return td
+}
+
+// settleAfterShutdown waits, after d's Shutdown returned, for the writers
+// the shutdown deliberately does not wait for (a hung hub call must not
+// delay it, TestB8ShutdownNotDelayedByClaimQueuedOnLock): a claim still
+// under way (its durable tail, its queue settle) and every work item's
+// last actor operation (a close's state persist, its event). Each of them
+// writes the daemon's data dir and capsules; a test that removes its temp
+// dirs, or starts the next daemon on them, calls this first. (A claim the
+// shutdown deferred keeps its queue entry in flight on disk by design:
+// the claim goroutine, not the entry, is what is waited for.)
+func settleAfterShutdown(t testing.TB, d *Daemon) {
+	t.Helper()
+	settled := func() bool { return d.claiming.Load() == 0 && d.rt.Idle() }
+	deadline := time.Now().Add(30 * time.Second)
+	for !settled() {
+		if time.Now().After(deadline) {
+			t.Errorf("the daemon's claims and work-item operations never settled after its shutdown")
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // submitClaim submits one work item and waits for its job to go live.
@@ -775,53 +790,6 @@ func (td *testDaemon) submitClaim(t *testing.T, wi string) {
 		t.Fatalf("submit answer = %+v, want accepted for %s", sr, wi)
 	}
 	td.waitLive(t, wi)
-}
-
-// seedPendingQuestion plays the driver's needs_input park: it writes an
-// open pending_question for the step into the capsule's execution.json
-// (Version bumped, atomic tmp+rename) and sends the exec_committed fact
-// so the supervisor projects it.
-func (td *testDaemon) seedPendingQuestion(t *testing.T, wi, qid, step, question string) {
-	t.Helper()
-	td.hub.mu.Lock()
-	name := api.PathName(td.hub.slugs[wi], wi)
-	td.hub.mu.Unlock()
-	path := filepath.Join(td.cfg.Mapping.Workspaces()[0], "capsules", name, filepath.FromSlash(capsule.ExecutionJSON))
-	exec := capsule.Execution{WorkItemID: wi, Steps: map[string]*capsule.Step{}}
-	if raw, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(raw, &exec)
-		if exec.Steps == nil {
-			exec.Steps = map[string]*capsule.Step{}
-		}
-	}
-	st := exec.Steps[step]
-	if st == nil {
-		st = &capsule.Step{Status: capsule.StepInProgress}
-		exec.Steps[step] = st
-	}
-	st.PendingQuestion = &capsule.PendingQuestion{
-		ID: qid, Step: step, Question: question,
-		AskedAt: time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	exec.CurrentStep = step
-	exec.Version++
-	blob, err := json.Marshal(exec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, blob, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		t.Fatal(err)
-	}
-	// the driver's commit-boundary notice: the supervisor projects the
-	// pending question when the fact arrives (it no longer polls)
-	td.sup.Link(wi).Fact(supervise.ExecCommitted{Version: exec.Version, Step: step})
 }
 
 // waitLive blocks until the work item holds a runtime job past its
@@ -873,7 +841,11 @@ func DirectShutdownCause() string { return "direct: in-process Shutdown call" }
 // w224Dispatcher is the summarize lane's fake dispatch seam for the
 // in-process daemon tests: it records every call and answers per
 // candidate (nil answer = a plain line). block, when non-nil, keeps a
-// call in flight until the test closes it.
+// call in flight until the test closes it. mu guards every field: the
+// lane calls Dispatch on its own goroutine, and the test reaches the
+// daemon through a child process and a socket, which the race detector
+// does not count as synchronisation so a test sets
+// answer/block only through setAnswer/setBlock.
 type w224Dispatcher struct {
 	mu     sync.Mutex
 	calls  []string
@@ -881,25 +853,45 @@ type w224Dispatcher struct {
 	block  chan struct{}
 }
 
+func (f *w224Dispatcher) setAnswer(answer func(candidate string) (string, error)) {
+	f.mu.Lock()
+	f.answer = answer
+	f.mu.Unlock()
+}
+
+func (f *w224Dispatcher) setBlock(block chan struct{}) {
+	f.mu.Lock()
+	f.block = block
+	f.mu.Unlock()
+}
+
 func (f *w224Dispatcher) Dispatch(candidate, _ string) (string, error) {
 	// the call is recorded BEFORE the optional block: a blocked call is
 	// started, not yet landed — the tests count starts.
 	f.mu.Lock()
 	f.calls = append(f.calls, candidate)
+	answer, block := f.answer, f.block
 	f.mu.Unlock()
-	if f.block != nil {
-		<-f.block
+	if block != nil {
+		<-block
 	}
-	if f.answer == nil {
+	if answer == nil {
 		return "w224: the agent is working", nil
 	}
-	return f.answer(candidate)
+	return answer(candidate)
 }
 
 func (f *w224Dispatcher) n() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.calls)
+}
+
+// started answers a copy of the recorded calls (for failure messages).
+func (f *w224Dispatcher) started() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
 }
 
 // w224SessionDir answers the capsule's own pi session directory under
@@ -993,10 +985,8 @@ func newW224Rig(t *testing.T, models []string) *w224Rig {
 	// the execution record the A11 gate reads (the driver's own
 	// single-writer authority on step state; the fake engine writes none —
 	// the rig scripts it as it scripts the journal): the current step
-	// in_progress, not parked on a question — a LIVE RUNNING STEP
-	// DISPATCH's attempt half. w224WriteExecution mutates it into the
-	// parked and other shapes.
-	w224WriteExecution(t, ji.CapsuleDir, capsule.StepInProgress, "")
+	// in_progress — a LIVE RUNNING STEP DISPATCH's attempt half.
+	w224WriteExecution(t, ji.CapsuleDir, capsule.StepInProgress)
 	// the current dispatch's live transcript, seeded in the harness
 	// session store — the store the shared per-dispatch rule scans for a
 	// fresh dispatch
@@ -1026,19 +1016,11 @@ func (r *w224Rig) grow(t *testing.T, text string) {
 }
 
 // w224WriteExecution writes the capsule's execution record: the current
-// step "fix" in the given status, optionally parked on a question (the
-// needs_input shape — the driver parks the step with a pending question
-// in the same write that records it). The rig's default shape is
-// in_progress with no question (a live running step attempt).
-func w224WriteExecution(t *testing.T, capDir, stepStatus, questionID string) {
+// step "fix" in the given status. The rig's shape is in_progress (a live
+// running step attempt).
+func w224WriteExecution(t *testing.T, capDir, stepStatus string) {
 	t.Helper()
 	step := &capsule.Step{Status: stepStatus}
-	if questionID != "" {
-		step.PendingQuestion = &capsule.PendingQuestion{
-			ID: questionID, Step: "fix", Question: "w224: parked",
-			AskedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		}
-	}
 	ex := capsule.Execution{
 		WorkflowStatus: capsule.WorkflowStatusRunning, CurrentStep: "fix",
 		Steps:     map[string]*capsule.Step{"fix": step},

@@ -1001,11 +1001,19 @@ func TestChainPushIgnoresGlobalGitConfig(t *testing.T) {
 // hub transfers abort on a stalled HTTP transfer (review nit on V-5).
 func TestHubEnvBoundsStalledTransfers(t *testing.T) {
 	t.Setenv("GIT_HTTP_LOW_SPEED_LIMIT", "1")
-	env := strings.Join(hubEnv(Opts{}, false, nil), "\n") + "\n"
-	for _, want := range []string{"GIT_HTTP_LOW_SPEED_LIMIT=1000\n", "GIT_HTTP_LOW_SPEED_TIME=60\n", "GIT_CONFIG_GLOBAL=/dev/null\n"} {
+	gitRoot := filepath.Join(t.TempDir(), "git")
+	list, err := hubEnv(Opts{GitDir: filepath.Join(gitRoot, "wi_env.git")}, false, nil)
+	if err != nil {
+		t.Fatalf("hubEnv: %v", err)
+	}
+	env := "\n" + strings.Join(list, "\n") + "\n"
+	for _, want := range []string{"\nGIT_HTTP_LOW_SPEED_LIMIT=1000\n", "\nGIT_HTTP_LOW_SPEED_TIME=60\n", "\nGIT_CONFIG_GLOBAL=" + filepath.Join(gitRoot, "empty.config") + "\n"} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("hubEnv lacks %q", want)
 		}
+	}
+	if strings.Contains(env, "\nGIT_CONFIG_GLOBAL=/dev/null\n") {
+		t.Fatal("hubEnv must not point the global config at /dev/null")
 	}
 	if strings.Contains(env, "GIT_HTTP_LOW_SPEED_LIMIT=1\n") {
 		t.Fatal("an inherited GIT_* value must not survive")

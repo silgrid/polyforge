@@ -532,15 +532,80 @@ func TestHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stderr, "fatal: "+die)
 		os.Exit(7)
 	}
+	// GO_BE_RPC=1: answer every stdin command the way pi 1.4.0 does
+	// (helperRPC) — the resident-session tests' harness.
+	rpc := os.Getenv("GO_BE_RPC") == "1"
 	br := bufio.NewReader(os.Stdin)
 	for {
 		line, rerr := br.ReadString('\n')
 		if line != "" {
 			fmt.Fprintln(f, strings.TrimRight(line, "\n"))
+			if rpc {
+				helperRPC(line)
+			}
 		}
 		if rerr != nil {
 			os.Exit(0) // stdin EOF: graceful shutdown
 		}
+	}
+}
+
+// helperStreaming is the scripted harness's run-active state: pi's
+// isStreaming (set by its own agent_start, cleared by its agent_settled).
+var helperStreaming bool
+
+// helperRPC answers one stdin command with the response record pi 1.4.0
+// emits (verified live, see spawn.go SendMessage), then plays the run
+// GO_BE_TURN scripts for an accepted prompt: "settle" — a whole run that
+// settles at once (agent_start … agent_settled); "open" — a run that
+// starts and never ends (agent_start, turn_start); "" — no run records.
+// GO_BE_REFUSE=1 refuses every prompt after the initial one with pi's
+// mid-run error text, whatever the state.
+func helperRPC(line string) {
+	var cmd struct {
+		ID                string `json:"id"`
+		Type              string `json:"type"`
+		StreamingBehavior string `json:"streamingBehavior"`
+	}
+	if json.Unmarshal([]byte(line), &cmd) != nil {
+		return
+	}
+	emit := func(rec map[string]any) {
+		raw, _ := json.Marshal(rec)
+		os.Stdout.WriteString(string(raw) + "\n")
+	}
+	switch cmd.Type {
+	case "prompt":
+		refused := helperStreaming && cmd.StreamingBehavior == "" ||
+			os.Getenv("GO_BE_REFUSE") == "1" && cmd.ID != "pf-init"
+		if refused {
+			emit(map[string]any{"id": cmd.ID, "type": "response", "command": "prompt", "success": false,
+				"error": "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."})
+			return
+		}
+		if helperStreaming {
+			emit(map[string]any{"id": cmd.ID, "type": "response", "command": "prompt", "success": true,
+				"data": map[string]any{"disposition": "queued"}})
+			emit(map[string]any{"type": "queue_update", "steering": []any{"…"}, "followUp": []any{}})
+			return
+		}
+		emit(map[string]any{"id": cmd.ID, "type": "response", "command": "prompt", "success": true,
+			"data": map[string]any{"disposition": "started"}})
+		switch os.Getenv("GO_BE_TURN") {
+		case "settle":
+			emit(map[string]any{"type": "agent_start"})
+			emit(map[string]any{"type": "turn_start"})
+			emit(map[string]any{"type": "turn_end", "message": map[string]any{"role": "assistant"}, "toolResults": []any{}})
+			emit(map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
+			emit(map[string]any{"type": "agent_settled", "aborted": false})
+		case "open":
+			helperStreaming = true
+			emit(map[string]any{"type": "agent_start"})
+			emit(map[string]any{"type": "turn_start"})
+		}
+	case "steer", "follow_up":
+		emit(map[string]any{"id": cmd.ID, "type": "response", "command": cmd.Type, "success": true,
+			"data": map[string]any{"disposition": "queued"}})
 	}
 }
 

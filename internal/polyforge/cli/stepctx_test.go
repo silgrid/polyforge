@@ -1,73 +1,43 @@
 package cli
 
-// stepctx_test.go: `pf` inside a workflow step (PF_WI_ID set) — recall
-// and memory show go to the daemon socket, remember posts the wrap
-// summary to it, every other aihub verb is refused, and nothing ever reaches
-// aihub (even with an api key in the environment).
+// stepctx_test.go: `pf` inside a workflow step (PF_WI_ID set) — `pf
+// step recall | memory show | remember` are the step's memory face (one
+// /step/call each), every data-plane verb — recall, memory and remember
+// included — is refused, contract 3's `pf result` and `pf ask` are gone,
+// and nothing ever reaches aihub (even with an api key in the
+// environment).
 
 import (
-	"io"
-	"net/http"
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// stepEnv answers a fake daemon serving /step/*, the env of a step
-// invocation pointed at it (plus a live fake aihub that must stay
-// untouched), the daemon's request log and the aihub's.
+// stepEnv answers stepCallEnv's fake daemon (/step/call), a step
+// invocation's env pointed at it, the daemon's request log and the
+// untouched aihub's.
 func stepEnv(t *testing.T) (map[string]string, *reqRecorder, *reqRecorder) {
 	t.Helper()
-	drec := &reqRecorder{}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /step/memories/search", func(w http.ResponseWriter, r *http.Request) {
-		drec.record(r)
-		io.WriteString(w, `{"items":[{"id":"mem_1","type":"experience.debug","title":"sqlite busy","content_excerpt":"x"}],"total":1}`)
-	})
-	mux.HandleFunc("GET /step/memories/{id}", func(w http.ResponseWriter, r *http.Request) {
-		drec.record(r)
-		io.WriteString(w, `{"meta":{"id":"`+r.PathValue("id")+`","type":"experience.debug","title":"sqlite busy","visibility":"project"},"content":"the body\n"}`)
-	})
-	mux.HandleFunc("POST /step/memories", func(w http.ResponseWriter, r *http.Request) {
-		drec.record(r)
-		if strings.Contains(drec.last().Body, "second summary") {
-			w.WriteHeader(409)
-			io.WriteString(w, `{"code":"DAEMON-409","detail":"this step already stored its summary mem_9; summaries are not edited — put corrections into the one call"}`)
-			return
-		}
-		io.WriteString(w, `{"id":"mem_9","type":"experience.wrap","visibility":"project"}`)
-	})
-	mux.HandleFunc("POST /step/result", func(w http.ResponseWriter, r *http.Request) {
-		drec.record(r)
-		if strings.Contains(drec.last().Body, `"wi_id":"wi_other"`) {
-			w.WriteHeader(403)
-			io.WriteString(w, `{"code":"DAEMON-403","detail":"the calling step belongs to work item wi_st (the result names \"wi_other\")"}`)
-			return
-		}
-		io.WriteString(w, `{"wi_id":"wi_st","step_id":"fix","spawn_n":3,"outcome":"completed"}`)
-	})
-	sock := newFakeDaemon(t, mux)
-	arec := &reqRecorder{}
-	srv := newFakeAihub(t, arec, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{}`) })
-	env := map[string]string{"PF_WI_ID": "wi_st", "PF_DAEMON_ID": "m-test", "PF_DAEMON_SOCKET": sock, "PF_SERVER": srv.URL, "PF_API_KEY": "k_should_never_leave"}
-	return env, drec, arec
+	return stepCallEnv(t)
 }
 
 func TestStepRecallAndShowGoThroughTheDaemon(t *testing.T) {
 	env, drec, arec := stepEnv(t)
-	// no cli.toml mapping is needed inside a step
-	code, stdout, stderr := runPf(t, env, "recall", "--project", "polyforge", "--any", "--type", "experience.*", "sqlite busy")
+	code, stdout, stderr := runPf(t, env, "step", "recall", "--any", "--type", "experience.*", "sqlite", "busy")
 	if code != 0 || !strings.Contains(stdout, "1 hit(s)") || !strings.Contains(stdout, "mem_1") {
-		t.Fatalf("recall: exit %d %s %s", code, stdout, stderr)
+		t.Fatalf("step recall: exit %d %s %s", code, stdout, stderr)
 	}
-	q := drec.last()
-	if !strings.Contains(q.Path, "match=any") || !strings.Contains(q.Path, "project=polyforge") || !strings.Contains(q.Path, "q=sqlite+busy") {
-		t.Fatalf("daemon query = %s", q.Path)
+	if verb, args := lastCall(t, drec); verb != "recall" || args["q"] != "sqlite busy" || args["match"] != "any" || args["type"] != "experience.*" {
+		t.Fatalf("the recall call = %s %v", verb, args)
 	}
-	code, stdout, stderr = runPf(t, env, "memory", "show", "mem_1")
+	code, stdout, stderr = runPf(t, env, "step", "memory", "show", "mem_1")
 	if code != 0 || !strings.Contains(stdout, "id: mem_1") || !strings.Contains(stdout, "the body") {
-		t.Fatalf("memory show: exit %d %s %s", code, stdout, stderr)
+		t.Fatalf("step memory show: exit %d %s %s", code, stdout, stderr)
+	}
+	if verb, args := lastCall(t, drec); verb != "memory.show" || args["id"] != "mem_1" {
+		t.Fatalf("the memory show call = %s %v", verb, args)
 	}
 	if n := len(arec.all()); n != 0 {
 		t.Fatalf("a step invocation reached aihub %d time(s)", n)
@@ -75,20 +45,23 @@ func TestStepRecallAndShowGoThroughTheDaemon(t *testing.T) {
 }
 
 // TestStepRecallCannotBrowse: browse is the human
-// direct-aihub shape. Inside a step an empty query, --after and --sort
-// are refused locally — no daemon request, no aihub request.
+// direct-aihub shape. Inside a step `pf recall` is refused altogether and
+// `pf step recall` without a query is refused locally — no daemon
+// request, no aihub request; a task agent's browse is refused the same way.
 func TestStepRecallCannotBrowse(t *testing.T) {
 	env, drec, arec := stepEnv(t)
 	for _, args := range [][]string{
 		{"recall", "--project", "polyforge"},
-		{"recall", "--project", "polyforge", "--sort", "created"},
 		{"recall", "--project", "polyforge", "x", "--after", "cur-1"},
-		{"recall", "--project", "polyforge", "x", "--sort", "updated"},
+		{"memory", "show", "mem_1"},
 	} {
 		code, _, stderr := runPf(t, env, args...)
-		if code != 1 || !strings.Contains(stderr, "human direct-aihub") {
-			t.Fatalf("%v: exit %d %s, want the local human-direct refusal", args, code, stderr)
+		if code != 1 || !strings.Contains(stderr, "refused inside a workflow step") || !strings.Contains(stderr, "pf step recall") {
+			t.Fatalf("%v: exit %d %s, want the step-mode refusal naming pf step", args, code, stderr)
 		}
+	}
+	if code, _, stderr := runPf(t, env, "step", "recall"); code != 1 || !strings.Contains(stderr, "a query is required") {
+		t.Fatalf("step recall without a query: exit %d %s", code, stderr)
 	}
 	if n := len(drec.all()); n != 0 {
 		t.Fatalf("a refused browse reached the daemon %d time(s)", n)
@@ -96,7 +69,7 @@ func TestStepRecallCannotBrowse(t *testing.T) {
 	if n := len(arec.all()); n != 0 {
 		t.Fatalf("a step invocation reached aihub %d time(s)", n)
 	}
-	// Task mode refuses the same way.
+	// Task mode refuses browse locally.
 	env["PF_TASK_ID"] = "task_0123456789abcdef"
 	delete(env, "PF_WI_ID")
 	if code, _, stderr := runPf(t, env, "recall", "--project", "polyforge"); code != 1 || !strings.Contains(stderr, "human direct-aihub") {
@@ -113,16 +86,14 @@ func TestStepRememberGoesToTheDaemon(t *testing.T) {
 	if err := os.WriteFile(body, []byte("做了什么\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	code, stdout, stderr := runPf(t, env, "remember", "--project", "polyforge", "--type", "experience.wrap", "--work-item", "polyforge#7",
+	code, stdout, stderr := runPf(t, env, "step", "remember", "--type", "experience.wrap",
 		"--title", "polyforge#7: did it", "--tags", "policy-proposal", "@"+body)
 	if code != 0 || !strings.Contains(stdout, "stored mem_9") {
-		t.Fatalf("remember: exit %d %s %s", code, stdout, stderr)
+		t.Fatalf("step remember: exit %d %s %s", code, stdout, stderr)
 	}
-	sent := drec.last()
-	for _, want := range []string{`"type":"experience.wrap"`, `"title":"polyforge#7: did it"`, `"tags":["policy-proposal"]`, `"content":"做了什么\n"`, `"project":"polyforge"`, `"work_item":"polyforge#7"`} {
-		if sent.Method != "POST" || !strings.Contains(sent.Body, want) {
-			t.Fatalf("daemon request %s %s lacks %s", sent.Method, sent.Body, want)
-		}
+	if verb, args := lastCall(t, drec); verb != "remember" || args["type"] != "experience.wrap" || args["title"] != "polyforge#7: did it" ||
+		args["content"] != "做了什么\n" || len(args["tags"].([]any)) != 1 {
+		t.Fatalf("the remember call = %s %v", verb, args)
 	}
 	for _, tc := range []struct {
 		args []string
@@ -131,10 +102,9 @@ func TestStepRememberGoesToTheDaemon(t *testing.T) {
 		{[]string{"--type", "experience.debug", "--title", "t", "b"}, "writes only its experience.wrap summary"},
 		{[]string{"--type", "experience.wrap", "b"}, "a title is required"},
 		{[]string{"--type", "experience.wrap", "--title", "t", "token ghp_abcdefghijklmnopqrstuvwxyz0123"}, "never the value"},
-		{[]string{"--type", "experience.wrap", "--title", "t", "--visibility", "public", "b"}, "project-visible"},
 	} {
 		n := len(drec.all())
-		args := append([]string{"remember", "--project", "polyforge"}, tc.args...)
+		args := append([]string{"step", "remember"}, tc.args...)
 		if code, _, stderr := runPf(t, env, args...); code != 1 || !strings.Contains(stderr, tc.want) {
 			t.Fatalf("%v: exit %d %s, want %q", tc.args, code, stderr, tc.want)
 		}
@@ -143,13 +113,12 @@ func TestStepRememberGoesToTheDaemon(t *testing.T) {
 		}
 	}
 	// a second, different summary: the daemon's refusal is printed
-	if code, _, stderr := runPf(t, env, "remember", "--project", "polyforge", "--type", "experience.wrap", "--title", "t", "second summary"); code != 1 || !strings.Contains(stderr, "already stored its summary mem_9") {
+	if code, _, stderr := runPf(t, env, "step", "remember", "--type", "experience.wrap", "--title", "t", "second summary"); code != 1 || !strings.Contains(stderr, "already stored its summary mem_9") {
 		t.Fatalf("second summary: exit %d %s", code, stderr)
 	}
-	// the daemon unreachable: a clear error, nothing else
-	env["PF_DAEMON_SOCKET"] = filepath.Join(t.TempDir(), "gone.sock")
-	if code, _, stderr := runPf(t, env, "remember", "--project", "polyforge", "--type", "experience.wrap", "--title", "t", "b"); code != 1 || !strings.Contains(stderr, "not stored (the step goes on)") {
-		t.Fatalf("daemon down: exit %d %s", code, stderr)
+	// `pf remember` itself is refused inside a step, naming `pf step remember`
+	if code, _, stderr := runPf(t, env, "remember", "--project", "polyforge", "--type", "experience.wrap", "--title", "t", "b"); code != 1 || !strings.Contains(stderr, "pf step remember") {
+		t.Fatalf("pf remember in a step: exit %d %s", code, stderr)
 	}
 	if n := len(arec.all()); n != 0 {
 		t.Fatalf("a step remember reached aihub %d time(s)", n)
@@ -164,6 +133,9 @@ func TestStepRefusesOtherAihubVerbs(t *testing.T) {
 		{"cancel", "wi_x"},
 		{"projects", "list"},
 		{"users", "list"},
+		{"recall", "--project", "polyforge", "x"},
+		{"memory", "show", "mem_1"},
+		{"remember", "--project", "polyforge", "--type", "experience.wrap", "--title", "t", "b"},
 	} {
 		code, _, stderr := runPf(t, env, argv...)
 		if code != 1 || !strings.Contains(stderr, "DAEMON-403") || !strings.Contains(stderr, "refused inside a workflow step") {
@@ -200,37 +172,36 @@ func TestStepModeNeedsBothMarkersAndRefusesDoctor(t *testing.T) {
 	}
 }
 
-// TestStepResultSubmitGoesToTheDaemon: `pf result submit` posts the
-// payload verbatim to the daemon's /step/result (inline or @file), a
-// daemon refusal and an invalid JSON payload exit non-zero, and nothing
-// reaches aihub.
-func TestStepResultSubmitGoesToTheDaemon(t *testing.T) {
+// TestRemovedStepVerbsAreUnknownCommands: contract 3's `pf result submit`
+// and `pf ask` are gone inside a step each is an unknown
+// command, and nothing is sent to the daemon or aihub.
+func TestRemovedStepVerbsAreUnknownCommands(t *testing.T) {
 	env, drec, arec := stepEnv(t)
-	code, stdout, stderr := runPf(t, env, "result", "submit", `{"outcome":"completed","output":{"a":1}}`)
-	if code != 0 || !strings.Contains(stdout, "delivered completed result of wi_st step fix (spawn 3)") {
-		t.Fatalf("submit: exit %d %s %s", code, stdout, stderr)
+	for _, argv := range [][]string{{"result", "submit", `{"outcome":"completed","output":{"a":1}}`}, {"ask", "which?"}} {
+		code, stdout, stderr := runPf(t, env, argv...)
+		if code != 2 || !strings.Contains(stderr, "unknown command") {
+			t.Fatalf("%v: exit %d %s %s", argv, code, stdout, stderr)
+		}
 	}
-	if got := drec.last(); got.Method != "POST" || got.Path != "/step/result" || got.Body != `{"outcome":"completed","output":{"a":1}}` {
-		t.Fatalf("daemon request = %+v", got)
-	}
-	file := filepath.Join(t.TempDir(), "r.json")
-	if err := os.WriteFile(file, []byte(`{"outcome":"needs_input","output":{},"question_id":"q1","question":"?"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if code, stdout, stderr := runPf(t, env, "result", "submit", "@"+file); code != 0 || !strings.Contains(drec.last().Body, `"question_id":"q1"`) {
-		t.Fatalf("@file submit: exit %d %s %s", code, stdout, stderr)
-	}
-	n := len(drec.all())
-	if code, _, stderr := runPf(t, env, "result", "submit", `{"outcome":`); code == 0 || !strings.Contains(stderr, "not valid JSON") || len(drec.all()) != n {
-		t.Fatalf("invalid JSON: exit %d %s", code, stderr)
-	}
-	if code, _, stderr := runPf(t, env, "result", "submit", `{"wi_id":"wi_other","outcome":"completed","output":{}}`); code != 1 || !strings.Contains(stderr, "DAEMON-403") || !strings.Contains(stderr, "belongs to work item wi_st") {
-		t.Fatalf("refused submit: exit %d %s", code, stderr)
-	}
-	if code, _, stderr := runPf(t, env, "result"); code == 0 || !strings.Contains(stderr, "expected submit") {
-		t.Fatalf("bare result: exit %d %s", code, stderr)
+	if got := drec.all(); len(got) != 0 {
+		t.Fatalf("a removed verb reached the daemon: %+v", got)
 	}
 	if n := len(arec.all()); n != 0 {
 		t.Fatalf("a step invocation reached aihub %d time(s)", n)
+	}
+}
+
+// TestStepRefusesProfileFlag: inside a step or task --profile is refused —
+// the Host routes an agent by its own ownership record.
+func TestStepRefusesProfileFlag(t *testing.T) {
+	for _, env := range [][2]string{{"PF_WI_ID", "wi_x"}, {"PF_TASK_ID", "task_x"}} {
+		t.Run(env[0], func(t *testing.T) {
+			t.Setenv(env[0], env[1])
+			t.Setenv("PF_DAEMON_ID", "m-x")
+			var stdout, stderr bytes.Buffer
+			if code := Run([]string{"--profile", "alpha", "watch", "wi_x", "--once"}, nil, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "DAEMON-403") {
+				t.Fatalf("exit %d (%s)", code, stderr.String())
+			}
+		})
 	}
 }

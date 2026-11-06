@@ -1,0 +1,17 @@
+✖ v is 2 (1.3ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 2
+
+      at TestContext.<anonymous> (file:///work/app/web2/t.test.mjs:5:10)
+      at Test.runInAsyncScope (node:async_hooks:206:9) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: 'strictEqual'
+  }
+
+ℹ tests 1
+ℹ pass 0
+ℹ fail 1

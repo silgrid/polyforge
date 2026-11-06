@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 
+	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/version"
 )
 
@@ -13,7 +15,8 @@ import (
 // source (internal/version, link-time injection) and prints the same
 // bytes as the flag path in Run(): the human line, or under the global
 // --json flag the machine line {"version":"<v>"} (`pf --json version`,
-// the chat usage-form convention), exit 0. NoConfigLoad: the verb must
+// the chat usage-form convention) plus the protocol capabilities this
+// build speaks ({"version":"<v>","capabilities":[...]}), exit 0. NoConfigLoad: the verb must
 // answer with no or broken config, the same reachability the
 // pre-dispatch flag has. No flags, no Setup; extra positionals are an
 // arity error (the doctor convention, exit 1). It touches no face —
@@ -30,10 +33,21 @@ var cmdVersion = &Command{
 			return fmt.Errorf("version: unexpected arguments %v", args)
 		}
 		if ctx.JSON {
-			fmt.Fprintf(ctx.Stdout, "{\"version\":%q}\n", version.Version)
+			fmt.Fprintln(ctx.Stdout, versionJSON())
 			return nil
 		}
 		fmt.Fprintln(ctx.Stdout, version.Version)
 		return nil
 	},
+}
+
+// versionJSON is the machine line of `pf --json version` and of the
+// `--version` flag under --json: the build string and the protocol
+// capability list (protocol.Capabilities) — local facts, no face touched.
+func versionJSON() string {
+	b, _ := json.Marshal(struct {
+		Version      string   `json:"version"`
+		Capabilities []string `json:"capabilities"`
+	}{version.Version, protocol.Capabilities})
+	return string(b)
 }

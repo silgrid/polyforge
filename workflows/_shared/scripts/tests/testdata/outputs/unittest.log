@@ -1,0 +1,24 @@
+test_add (pkg.test_calc.CalcTest.test_add) ... FAIL
+test_error (pkg.test_calc.CalcTest.test_error) ... ERROR
+test_fine (pkg.test_calc.CalcTest.test_fine) ... ok
+
+======================================================================
+ERROR: test_error (pkg.test_calc.CalcTest.test_error)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/calc/pkg/test_calc.py", line 16, in test_error
+    raise KeyError("missing")
+KeyError: 'missing'
+
+======================================================================
+FAIL: test_add (pkg.test_calc.CalcTest.test_add)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/calc/pkg/test_calc.py", line 10, in test_add
+    self.assertEqual(add(1, 2), 3)
+AssertionError: 4 != 3
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+FAILED (failures=1, errors=1)

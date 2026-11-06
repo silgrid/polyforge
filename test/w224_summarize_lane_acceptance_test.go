@@ -34,7 +34,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -87,6 +86,7 @@ func w224Pf(t *testing.T, inst *v1Install, sock string, args ...string) (string,
 		"PF_DAEMON_SOCKET="+sock,
 	)
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := 0
 	if err := cmd.Run(); err != nil {
@@ -241,13 +241,13 @@ func w224Summarize(t *testing.T, d *v1Daemon, models ...string) {
 	}
 }
 
-// w224NewWI files one autopilot execution ticket and scripts its agent
+// w224NewWI files one vehicle-lane (micro) execution ticket and scripts its agent
 // with the plan function's actions (the plan may name the WI — the Run
 // commands do).
 func w224NewWI(t *testing.T, inst *v1Install, goal string, plan func(wi string) []map[string]any) string {
 	t.Helper()
 	raw, err := inst.client.CreateWorkItem(aihubclient.CreateWorkItemRequest{
-		Project: v1Project, Goal: goal, BundleName: strPtr("autopilot"),
+		Project: v1Project, Goal: goal, BundleName: strPtr(vehicleLane),
 	})
 	if err != nil {
 		t.Fatalf("create work item: %v", err)
@@ -295,7 +295,7 @@ func w224AwaitRun(t *testing.T, capDir, needle string, bound time.Duration) map[
 func w224HarnessRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	ccDir := filepath.Join(root, "claude-config")
+	ccDir := filepath.Join(root, "cells", "default", "claude-config")
 	if err := os.MkdirAll(ccDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -309,40 +309,6 @@ func w224HarnessRoot(t *testing.T) string {
 // w224OptArgs adds daemon argv flags to a v1Daemon.
 func w224OptArgs(a ...string) daemonOpt {
 	return func(d *v1Daemon) { d.extraArgs = append(d.extraArgs, a...) }
-}
-
-// w224ChatWatcherPolls runs the resident per-chat watcher (`pf watch
-// --chat`, a 300ms poll) against the daemon for dur — its snapshot
-// fetches are the resident watcher's polls the demand gate must never
-// count — and answers its combined output.
-func w224ChatWatcherPolls(t *testing.T, inst *v1Install, d *v1Daemon, wi, chat string, dur time.Duration) string {
-	t.Helper()
-	if out, code, _ := w224Pf(t, inst, d.sock, "watch", "subscribe", wi, "--chat", chat); code != 0 {
-		t.Fatalf("pf watch subscribe %s --chat %s: exit %d (%s)", wi, chat, code, out)
-	}
-	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, ".config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(inst.pfPath, "--config", hermeticConfigPath(t), "watch", "--chat", chat, "--poll", "300ms")
-	cmd.Env = append(os.Environ(), "HOME="+home,
-		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "PF_DAEMON_SOCKET="+d.sock)
-	var out strings.Builder
-	cmd.Stdout, cmd.Stderr = &out, &out
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(done) }()
-	time.Sleep(dur)
-	_ = cmd.Process.Signal(syscall.SIGTERM)
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		_ = cmd.Process.Kill()
-		<-done
-	}
-	return out.String()
 }
 
 // w224GrepTree answers the first file under root whose content contains
@@ -371,8 +337,8 @@ func w224GrepTree(t *testing.T, root, needle string) string {
 // ---------------------------------------------------------------------------
 
 // TestW224MarkedPollArmsTheLane pins the demand gate's core and the wire
-// shape: with the lane configured and a step running, unmarked polls and
-// the resident chat watcher's polls never start a call, a step-peer's
+// shape: with the lane configured and a step running, unmarked polls
+// never start a call, a step-peer's
 // demand=1 authorizes nothing (the route stays a read), and the human
 // side's `--once --demand` starts exactly one background call whose
 // plain line lands in the snapshot with its age. The 60 s interval and
@@ -390,12 +356,11 @@ func TestW224MarkedPollArmsTheLane(t *testing.T) {
 	// (a step-tree child of the agent), then grows the transcript 75 s in.
 	wi := w224NewWI(t, inst, "w224: the marked poll arms the summarize lane", func(wi string) []map[string]any {
 		return []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 			{"do": "envelope", "id": "fix", "run": []string{
 				inst.pfPath + " watch " + wi + " --once --demand --json",
 				w224GrowCmd(75),
 			}, "ms": 30000},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}
 	})
 	d.pf(t, "submit", wi)
@@ -409,13 +374,6 @@ func TestW224MarkedPollArmsTheLane(t *testing.T) {
 		if s := w224SnapOf(t, inst, d, wi); s.Summary != nil || s.SummaryError != nil || s.SummaryCapped != nil {
 			t.Fatalf("an unmarked poll armed the summarize lane: %+v", s)
 		}
-	}
-
-	// The resident chat watcher's polls never count as demand either: a
-	// few seconds of its 300 ms polling loop, then still nothing.
-	w224ChatWatcherPolls(t, inst, d, wi, "w224chat", 4*time.Second)
-	if s := w224SnapOf(t, inst, d, wi); s.Summary != nil || s.SummaryError != nil {
-		t.Fatalf("the resident chat watcher's polls armed the summarize lane: %+v", s)
 	}
 
 	// A step agent's demand flag authorizes nothing: the agent's own Run
@@ -484,9 +442,8 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 
 	wi := w224NewWI(t, inst, "w224: a failed call walks to the next candidate", func(wi string) []map[string]any {
 		return []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 			{"do": "envelope", "id": "fix", "run": []string{w224GrowCmd(75)}, "ms": 30000},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}
 	})
 	d.pf(t, "submit", wi)
@@ -548,8 +505,9 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 // cli.toml carrying the [summarize] models validates
 // (the WI runs), a WI claimed with no such key has the lane silently off
 // (a marked request makes zero calls, no error in any face), `pf doctor` reports no refusal and no new row for the
-// summarize key, and any other unknown id still refuses DAEMON-414
-// before the claim exactly as today.
+// summarize key, and any other unknown per-step id is stale
+// it refuses nothing, and the doctor's workspace yaml row
+// warns naming it.
 func TestW224SummarizeKeyValidates(t *testing.T) {
 	inst := newV1Install(t)
 	d := newV1Daemon(t, inst)
@@ -560,9 +518,8 @@ func TestW224SummarizeKeyValidates(t *testing.T) {
 	// step runs.
 	wi1 := w224NewWI(t, inst, "w224: the summarize key validates", func(wi string) []map[string]any {
 		return []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 			{"do": "envelope", "id": "fix", "ms": 45000},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}
 	})
 	d.pf(t, "submit", wi1)
@@ -575,9 +532,8 @@ func TestW224SummarizeKeyValidates(t *testing.T) {
 	w224Summarize(t, d)
 	wi2 := w224NewWI(t, inst, "w224: unconfigured is silently off", func(wi string) []map[string]any {
 		return []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 			{"do": "envelope", "id": "fix", "ms": 45000},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}
 	})
 	d.pf(t, "submit", wi2)
@@ -608,18 +564,12 @@ func TestW224SummarizeKeyValidates(t *testing.T) {
 		t.Fatalf("pf doctor reports the summarize key (a refusal or a new row): %s", docOut)
 	}
 
-	// Any other unknown id still refuses exactly as today: DAEMON-414
-	// before the claim, the work item stays queued.
+	// Any other unknown id is stale: no refusal, the
+	// doctor's workspace yaml row warns naming it.
 	w224Yaml(t, d.workspace, "steps:\n  e2e:\n    w224nope:\n      models: [pi:e2e-w224-good]\n")
-	wi3 := w224NewWI(t, inst, "w224: an unknown id still refuses", func(wi string) []map[string]any {
-		return nil
-	})
-	refusal, code, _ := w224Pf(t, inst, d.sock, "submit", wi3)
-	if code != 1 {
-		t.Fatalf("pf submit %s under an unknown per-step id: exit %d, want 1 (output %q)", wi3, code, refusal)
-	}
-	if !strings.Contains(refusal, "steps.e2e.w224nope") || !strings.Contains(refusal, "DAEMON-414") {
-		t.Fatalf("the unknown per-step id did not refuse DAEMON-414 naming the key: %q", refusal)
+	docOut, _ = w113Pf(t, inst, w113Env{config: cfgPath}, "doctor")
+	if !strings.Contains(docOut, "steps.e2e.w224nope") || !strings.Contains(docOut, "stale key") {
+		t.Fatalf("the doctor does not warn about the stale per-step id: %s", docOut)
 	}
 }
 
@@ -641,10 +591,9 @@ func TestW224RestartReArmsFresh(t *testing.T) {
 
 	wi := w224NewWI(t, inst, "w224: a restart re-arms fresh", func(wi string) []map[string]any {
 		return []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "ms": 25000},                                          // spawn 2: the pre-crash window
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 25000}, // spawn 3: the resumed window
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "ms": 25000},                         // spawn 1: the pre-crash window
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 25000}, // spawn 2: the resumed window
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}
 	})
 	d.pf(t, "submit", wi)
@@ -666,7 +615,7 @@ func TestW224RestartReArmsFresh(t *testing.T) {
 	}
 	t.Cleanup(d2.stop)
 	d2.start()
-	waitSpawnCount(t, d2, wi, 3, 60*time.Second)
+	waitSpawnCount(t, d2, wi, 2, 60*time.Second)
 
 	// The next watched growth re-summarizes from scratch: a marked request
 	// on the restarted daemon fires a NEW call (the fresh lane's zero
@@ -720,9 +669,8 @@ func TestW224InFlightCallDoesNotStallTheSnapshot(t *testing.T) {
 
 	wi := w224NewWI(t, inst, "w224: an in-flight call does not stall the snapshot", func(wi string) []map[string]any {
 		return []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 			{"do": "envelope", "id": "fix", "ms": 60000},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}
 	})
 	d.pf(t, "submit", wi)
@@ -730,9 +678,9 @@ func TestW224InFlightCallDoesNotStallTheSnapshot(t *testing.T) {
 	t.Cleanup(func() { killOrphans(wi) })
 	// The step turns in_progress before its agent child writes the
 	// transcript; a marked request inside that gap has no dispatch source
-	// and arms nothing (the growth gate), so wait for fix's (the second
+	// and arms nothing (the growth gate), so wait for fix's (the first
 	// spawn's) transcript first.
-	waitSpawnTranscript(t, d, wi, 2, 30*time.Second)
+	waitSpawnTranscript(t, d, wi, 1, 30*time.Second)
 
 	// The marked request itself answers immediately with the pre-call
 	// state: the route never waits on the 12 s model call it just armed.

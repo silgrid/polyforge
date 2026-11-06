@@ -1,0 +1,5 @@
+contract: 5
+name: wfc-122
+description: fixture user lane for WFC-122 (named like a built-in lane of its set)
+steps:
+  - id: work

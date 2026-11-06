@@ -15,7 +15,9 @@ import (
 //	2xx → 0 | typed 4xx and envelope-less 4xx (HTTP-4xx synthesis) → 1
 //	typed 5xx and envelope-less 5xx (HTTP-5xx synthesis) → 2
 //	local validation / arity → 1 | top-level flag-parse → 2
-//	transport failure (daemon socket down, aihub unreachable) → 1
+//	transport failure (daemon socket down) → 1
+//	the Cell's aihub unreachable (the daemon's DAEMON-503 through the
+//	data-plane proxy: the CLI never dials a Hub itself) → 2
 //
 // Classes a verb cannot produce (backup has no local validation;
 // the daemon verb is
@@ -23,14 +25,16 @@ import (
 // summary as semantic blanks, never silently skipped.
 
 // TestAihubUnreachableExits1: the aihub-face transport-failure golden —
-// connection-refused to PF_SERVER is a client-class failure, the twin of
-// TestDaemonUnreachableExits1 (the daemon-face pin).
+// an unreachable Cell Hub is answered by the daemon's data-plane proxy as
+// DAEMON-503 (server class, exit 2; the CLI never dials a Hub itself); the
+// daemon socket being down stays the client-class transport failure
+// (TestDaemonUnreachableExits1).
 func TestAihubUnreachableExits1(t *testing.T) {
 	code, _, stderr := runPf(t, map[string]string{
 		"PF_SERVER": deadAihubURL(t),
 	}, "cancel", "wi_x")
-	if code != 1 {
-		t.Errorf("exit = %d, want 1", code)
+	if code != 2 || !strings.Contains(stderr, "DAEMON-503") {
+		t.Errorf("exit = %d, want 2 (stderr %q)", code, stderr)
 	}
 	if !strings.Contains(stderr, "pf:") {
 		t.Errorf("stderr = %q", stderr)
@@ -121,10 +125,10 @@ func TestAihubFaceVerbExitCodeGoldens(t *testing.T) {
 					}
 				})
 			}
-			// Transport failure (aihub unreachable) → 1.
+			// The Cell's aihub unreachable → the proxy's DAEMON-503 → 2.
 			code, _, _ = runPf(t, mapEnv(map[string]string{"PF_SERVER": deadAihubURL(t), "PF_API_KEY": "k_cli"}), s.args(t)...)
-			if code != 1 {
-				t.Errorf("transport: exit = %d, want 1", code)
+			if code != 2 {
+				t.Errorf("transport: exit = %d, want 2", code)
 			}
 			// Local validation → 1, no wire contact.
 			if s.localBad != nil {
@@ -179,12 +183,9 @@ func TestDaemonFaceVerbExitCodeGoldens(t *testing.T) {
 			[]string{"submit"}, []string{"submit", "--no-such-flag"}},
 		{"watch", []string{"watch", "wi_x", "--once"}, "GET /jobs/wi_x/watch",
 			watchBody, false, []string{"watch", "--once"}, []string{"watch", "--no-such-flag"}},
-		{"answer", []string{"answer", "wi_x", "--question", "q_1", "--text", "yes", "--by", "usr_1"},
+		{"answer", []string{"answer", "wi_x", "--text", "yes", "--by", "usr_1"},
 			"POST /jobs/wi_x/answer", `{"applied":true,"delivered":true}`, false,
 			[]string{"answer", "wi_x"}, []string{"answer", "--no-such-flag"}},
-		{"revise-binding", []string{"revise-binding", "wi_x", "--step", "e2e-author", "--correction", "1=go test ./...", "--correction", "2=go test ./... -run TestCapture", "--by", "usr_1"},
-			"POST /jobs/wi_x/revise-binding", `{"status":"revised"}`, false,
-			[]string{"revise-binding", "wi_x"}, []string{"revise-binding", "--no-such-flag"}},
 		{"pause", []string{"pause", "wi_x"}, "POST /jobs/wi_x/pause", `{}`, false,
 			[]string{"pause"}, []string{"pause", "--no-such-flag"}},
 		{"wrap", []string{"wrap", "wi_x"}, "POST /jobs/wi_x/wrap", `{}`, false,
@@ -335,21 +336,20 @@ func TestDaemonVerbHelpOnlyExitGoldens(t *testing.T) {
 	if code, _, _ := runPf(t, nil, "daemon", "--no-such-flag"); code != 2 {
 		t.Errorf("flag parse: exit = %d, want 2", code)
 	}
-	// Sanity: the registry really is the full verb set (12 routing +
+	// Sanity: the registry really is the full verb set (12 routing, +
 	// 5 admin + doctor + version + init + daemon + aihub (the server
-	// entry, help-only like daemon,) + chat + watch + result
-	// (the step's result delivery, #214) + verify-run (a verification
-	// step's mechanical run) + bar-run (a deliver step's recorded test_bar
-	// re-run,); watch replaced the
+	// entry, help-only like daemon,) + watch + step (a
+	// step's one entry point, workflow contract 4,, which
+	// replaced contract 3's result and ask,); watch replaced the
 	// retired watch-probe; doctor is the #113 machine health face; version
 	// the #196 build string (the `--version` flag's verb form); init
-	// the #177 workspace layout).
+	// the #177 workspace layout; chat was retired by).
 	want := []string{
 		"file", "queue", "cancel", "recall", "remember", "memory",
-		"submit", "answer", "revise-binding", "pause", "resume",
-		"wrap", "ops", "chat", "watch", "task", "result", "verify-run", "bar-run", "msg", "users", "api-keys", "machines", "projects",
-		"backup",
-		"doctor", "version", "init", "config", "workflows", "daemon", "aihub",
+		"submit", "answer", "pause", "resume",
+		"wrap", "ops", "watch", "task", "step", "msg", "users", "api-keys", "machines", "projects",
+		"backup", "cell", "migrate",
+		"doctor", "version", "profile", "init", "config", "workflows", "daemon", "aihub",
 	}
 	if len(commands) != len(want) {
 		t.Fatalf("registry has %d commands, want %d", len(commands), len(want))

@@ -26,6 +26,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/gitops"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
@@ -67,6 +68,13 @@ func (r *Runtime) recoverCore(ctx context.Context, j *job, cause, detail string)
 		r.boundedFail(ctx, j, err.Error())
 		return
 	}
+	// The capsule .gitignore is the current one before any commit below
+	// (the terminal closes' seals and commit-dirty alike): a resumed
+	// capsule whose chain predates a rule gets it here.
+	// Best-effort: a failed write leaves the old rules, never the job.
+	if err := writeCapsuleGitignore(j.capsuleDir); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: %s: capsule .gitignore rewrite failed: %v\n", j.wi, err)
+	}
 	// v2 terminal wiring (the #99 finale): Run returning nil IS the
 	// driver's completion signal, and the
 	// monitor's onExit rightly reports "agent process exited" without
@@ -88,9 +96,9 @@ func (r *Runtime) recoverCore(ctx context.Context, j *job, cause, detail string)
 			logTerminalClose(j, "wrap", err)
 		}
 		return
-	case capsule.WorkflowStatusFailedGate, capsule.WorkflowStatusFailedRewindExhausted:
+	case capsule.WorkflowStatusFailedGate:
 		fmt.Fprintf(os.Stderr, "runtime: %s: driver workflow failed (%s) — closing failed (recovery cause %q)\n", j.wi, capsuleWorkflowStatus(j.capsuleDir), cause)
-		if err := r.stopOp(ctx, j, protocol.FinishFailed, false, failedWorkflowNote(j.capsuleDir)); err != nil {
+		if err := r.stopOp(ctx, j, protocol.FinishFailed, false, ""); err != nil {
 			logTerminalClose(j, "fail close", err)
 		}
 		return
@@ -294,9 +302,13 @@ func (r *Runtime) startEngine(ctx context.Context, j *job, interruptedCause stri
 		SpawnN:           int64(spawnN),
 		Spawner:          r.spawner,
 		StepEnded:        r.stepEnded(j.wi),
-		Compose:          r.composeFor(project, bundle, manual),
-		Attrs:            r.composeAttrsFor(project, bundle),
+		Compose:          r.composeFor(j.capsuleDir, project, bundle, manual),
 		InterruptedCause: interruptedCause,
+		OwnerWait: func(waiting bool) {
+			j.mu.Lock()
+			j.ownerWait = waiting
+			j.mu.Unlock()
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -311,6 +323,7 @@ func (r *Runtime) startEngine(ctx context.Context, j *job, interruptedCause stri
 	}
 	j.mu.Lock()
 	j.agent, j.agentPID, j.agentStartedAt = h, pid, h.StartedAt()
+	j.ownerWait = false // a fresh derivation holds its slot until its driver says otherwise
 	j.mu.Unlock()
 	if r.stopped(ctx) {
 		r.killAgentTree(j)
@@ -320,21 +333,25 @@ func (r *Runtime) startEngine(ctx context.Context, j *job, interruptedCause stri
 }
 
 // composeFor builds the dispatch-time candidate composition of one job
-// (polyforge#33): the exact claim-time chain — the workspace yaml (fresh,
-// mapping-aware, DAEMON-414 when invalid) and the bundle's frontmatter read
-// again at every call, composed through workspace.ComposeCandidates with
-// the work item's frozen manual list. File reads only; the driver calls it
-// outside its own lock. A WI without a bundle has no list.
-func (r *Runtime) composeFor(project, bundle string, manual []string) func() (map[string][]string, error) {
+// (polyforge#33): the workspace yaml (dispatchWorkspace: fresh,
+// mapping-aware, DAEMON-414 when it does not parse) read again at every
+// call and the lane's candidates read from the capsule's lane snapshot —
+// the lane the claim pinned, so an edit of the lane in its lane set (a
+// release, a workspace's user lane) never reaches a work item in flight
+// (workflow contract, "User lanes") — composed through
+// workspace.ComposeCandidates with the work item's frozen manual list.
+// File reads only; the driver calls it outside its own lock. A WI without
+// a bundle has no list.
+func (r *Runtime) composeFor(capsuleDir, project, bundle string, manual []string) func() (map[string][]string, error) {
 	return func() (map[string][]string, error) {
 		if bundle == "" {
 			return nil, nil
 		}
-		fm, err := r.readBundleFrontmatter(bundle)
+		fm, err := snapshotLane(capsuleDir, bundle)
 		if err != nil {
 			return nil, err
 		}
-		wcfg, err := r.LoadWorkspace(project)
+		wcfg, err := r.dispatchWorkspace(project)
 		if err != nil {
 			return nil, err
 		}
@@ -342,26 +359,46 @@ func (r *Runtime) composeFor(project, bundle string, manual []string) func() (ma
 	}
 }
 
-// composeAttrsFor builds the dispatch-time attr-override composition of
-// one job: the bundle's frontmatter and the workspace yaml
-// (fresh, mapping-aware, DAEMON-414 when invalid) read again at every
-// call, composed through workspace.ComposeAttrs — the same reads as
-// composeFor, so nothing is snapshotted. A WI without a bundle has none.
-func (r *Runtime) composeAttrsFor(project, bundle string) func() (map[string]map[string]string, error) {
-	return func() (map[string]map[string]string, error) {
-		if bundle == "" {
-			return nil, nil
-		}
-		fm, err := r.readBundleFrontmatter(bundle)
-		if err != nil {
-			return nil, err
-		}
-		wcfg, err := r.LoadWorkspace(project)
-		if err != nil {
-			return nil, err
-		}
-		return workspace.ComposeAttrs(fm, wcfg, project), nil
+// dispatchWorkspace is the dispatch-time read of project's workspace
+// yaml: fresh at every call (an edit governs the next dispatch), resolved
+// through the mapping (DAEMON-412 when unmapped) and parsed strictly —
+// DAEMON-414 when it does not parse.
+func (r *Runtime) dispatchWorkspace(project string) (*workspace.Config, error) {
+	ws, err := r.plan().WorkspaceFor(project)
+	if err != nil {
+		return nil, unmappedProjectError(project)
 	}
+	wcfg, err := workspace.Load(ws, r.plan().ProjectsOf(ws))
+	if err != nil {
+		return nil, &api.Error{
+			Code:   api.ErrDaemonWorkspaceYaml,
+			Detail: fmt.Sprintf("the workspace yaml of project %q does not load, so the dispatch cannot compose its step (fix it, then pf resume): %v", project, err),
+		}
+	}
+	return wcfg, nil
+}
+
+// snapshotLane reads the capsule's lane snapshot of bundle through the
+// one lane loader, answering the lane as far as the loader read it: the
+// claim judged the snapshot, and a defect that appears in it later (a
+// definition file broken in the capsule) is the failing dispatch's own to
+// report and bound — the composition needs only the workflow.yaml's
+// candidates and attrs. (nil, nil) when the capsule carries no snapshot
+// (no workflows dir is configured, so nothing was materialized); an error
+// when its workflow.yaml cannot be read at all. A snapshot that is a
+// workflow.md alone (contract 4) counts as no snapshot here: the driver
+// parks such a capsule first (blocked, kind contract), before anything
+// composes from it.
+func snapshotLane(capsuleDir, bundle string) (*workflow.Lane, error) {
+	dir := filepath.Join(capsuleDir, capsule.DirWorkflows, bundle)
+	if _, err := os.Stat(filepath.Join(dir, workflow.WorkflowFile)); os.IsNotExist(err) {
+		return nil, nil
+	}
+	lane, errs := workflow.Load(dir)
+	if lane == nil {
+		return nil, fmt.Errorf("the capsule's lane snapshot of %s does not read: %w", bundle, workflow.AsLoadError(dir, errs))
+	}
+	return lane, nil
 }
 
 // recovered finishes a successful re-derivation. A successful recovery
@@ -423,10 +460,9 @@ func capsuleWorkflowStatus(capsuleDir string) string {
 }
 
 // blockedReasonNoteMax bounds the driver's blocked_reason inside the
-// blocked close's note — and its termination_reason inside the failed
-// close's (runes): the note rides the SessionEnd, the
+// blocked close's note (runes): the note rides the SessionEnd, the
 // persisted record and RTFinished, and a reason the driver copied from a
-// step's output must not balloon them.
+// step's hand-off must not balloon them.
 const blockedReasonNoteMax = 500
 
 // blockedWorkflowNote is the hub note of a workflow the driver parked
@@ -444,23 +480,6 @@ func blockedWorkflowNote(capsuleDir string) string {
 		reason = string(rs[:blockedReasonNoteMax]) + "…"
 	}
 	return note + "; blocked reason: " + reason
-}
-
-// failedWorkflowNote is the hub note of a workflow that ended failed: the
-// driver's own termination_reason when it recorded one (a
-// verification-less lane's out-of-bounds diff, the reason naming the lane
-// to re-file on), bounded like the blocked reason — the owner reads why
-// from the hub without opening the capsule. Every other failure records no
-// reason and keeps today's empty note.
-func failedWorkflowNote(capsuleDir string) string {
-	reason := strings.TrimSpace(capsuleExecution(capsuleDir).TerminationReason)
-	if reason == "" {
-		return ""
-	}
-	if rs := []rune(reason); len(rs) > blockedReasonNoteMax {
-		reason = string(rs[:blockedReasonNoteMax]) + "…"
-	}
-	return "workflow failed: " + reason
 }
 
 // boundedFail terminates the WI without a relaunch: SessionEnd(blocked)
@@ -515,13 +534,14 @@ func (r *Runtime) boundedFail(ctx context.Context, j *job, detail string) {
 	}
 }
 
-// cancelIfRequested completes an owner's reserved cancel answer once the
-// hub took the blocked close: the capsule's durable cancel intent is
-// handed to the daemon's cancel door (Config.CancelRequested). This
-// blocked branch is the single orchestration point — the answer itself
-// only wrote the intent and parked the workflow blocked — and a close
-// replayed after a restart reaches it again (the door is idempotent), as
-// does reconcile's settle of a close whose answer was lost. A cancel that
+// cancelIfRequested completes an owner's cancel (an `intent: cancel` on an
+// owner message) once the hub took the blocked close: the capsule's
+// durable cancel intent is handed to the daemon's cancel door
+// (Config.CancelRequested). This blocked branch is the single
+// orchestration point — the intent's write only recorded it and parked
+// the workflow blocked — and a close replayed after a restart reaches it
+// again (the door is idempotent), as does reconcile's settle of a close
+// whose answer was lost. A cancel that
 // does not land leaves the work item blocked for `pf cancel`.
 func (r *Runtime) cancelIfRequested(wi, capsuleDir string) {
 	if r.cfg.CancelRequested == nil || capsuleDir == "" {

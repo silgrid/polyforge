@@ -1,0 +1,8 @@
+contract: 5
+name: wfc-113-max-rewinds
+description: fixture lane for WFC-113
+steps:
+  - id: work
+  - id: check
+    gate: true
+    on_fail: { target: work }

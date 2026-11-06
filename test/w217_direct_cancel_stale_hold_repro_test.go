@@ -9,7 +9,7 @@ package test
 // dogfood harness):
 //
 //   - a live daemon holds a work item as a RETAINED PAUSED record
-//     (pf pause parked the driver on a needs_input question; the hub
+//     (pf pause parked the driver on an open `pf ask`; the hub
 //     keeps the session row, clean_pause set);
 //   - the operator cancels it with `pf cancel` — the verb's own wire,
 //     DIRECT to aihub, no daemon involvement. The hub takes the cancel
@@ -51,22 +51,19 @@ import (
 // releases it — automatically or through the exercised doors.
 func TestW217DirectCancelStaleDaemonHold(t *testing.T) {
 	inst := newV1Install(t)
-	const qid = "q_w217"
 	wi := inst.newWI(t, "w217: direct cancel vs the daemon hold (retained paused record)",
 		[]map[string]any{
-			// The grill envelope parks the driver on an open question:
-			// the designed-still shape the operator pause lands on (the
+			// The fix step asks the owner and parks on the open ask: the
+			// designed-still shape the operator pause lands on (the
 			// retention retains the record, the session row stays).
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": qid,
-				"question": "w217: park here so the pause retention holds."},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			askAction("fix", "w217: park here so the pause retention holds.", nil),
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
 	d.pf(t, "submit", wi)
-	waitQuestion(t, d, wi, qid, 30*time.Second)
+	waitAsk(t, d, wi, 30*time.Second)
 
 	// The operator pause: the daemon RETAINS the record paused — the
 	// reported held shape. The hub keeps the session row (clean_pause).
@@ -138,6 +135,7 @@ func w217CLI(d *v1Daemon, args ...string) (int, string, string) {
 	cmd.Env = append(os.Environ(), "PF_SERVER="+d.inst.url, "PF_API_KEY="+d.inst.adminKey,
 		"PF_USER_ID=usr_root", "PF_DAEMON_SOCKET="+d.sock)
 	var stdout, stderr strings.Builder
+	v1BusinessCmd(d.t, cmd)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	code := 0
 	if err := cmd.Run(); err != nil {

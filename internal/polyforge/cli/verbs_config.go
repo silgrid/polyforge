@@ -14,25 +14,32 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 var cmdConfig = &Command{
 	Name:         "config",
 	Group:        GroupMgmt,
-	Summary:      "Read and write cli.toml (the one supported writer) and reload the daemon",
-	Usage:        "pf config get <key> | set <key> <value> [--workspace <path>|--cwd <dir>] | unset <key> [--workspace <path>|--cwd <dir>] | list | workspace --cwd <dir> | validate | reload | migrate",
+	Summary:      "Read and write the Host and Cell config files (the one supported writer) and reload the daemon",
+	Usage:        "pf [--profile NAME] config get <key> | set <key> <value> [--workspace <path>|--cwd <dir>] | unset <key> [--workspace <path>|--cwd <dir>] | list | workspace --cwd <dir> | validate | reload | migrate   [--host: the Host scope, cli.toml's Host-only keys]",
 	NoConfigLoad: true,
 	Setup:        func(fs *flag.FlagSet) {},
 	Run:          runConfig,
 }
 
 func runConfig(ctx *Context, fs *flag.FlagSet, args []string) error {
+	args, err := selectConfigScope(ctx, args)
+	if err != nil {
+		return err
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("config: expected a subcommand (get, set, unset, list, workspace, validate, reload, migrate); see `pf help config`")
 	}
@@ -58,10 +65,104 @@ func runConfig(ctx *Context, fs *flag.FlagSet, args []string) error {
 }
 
 func configPath(ctx *Context) string {
+	if ctx.cfgScope.path != "" {
+		return ctx.cfgScope.path
+	}
 	if ctx.ConfigPath != "" {
 		return ctx.ConfigPath
 	}
 	return DefaultConfigPath()
+}
+
+// configScope is the file one `pf config` invocation addresses: the Host
+// scope (--host: cli.toml's Host-only keys), or one Cell's file chosen by
+// the profile resolver — cli.toml for default, cli-<profile>.toml for a
+// named Cell. --config PATH addresses exactly that one file (its role comes
+// from its name) and never selects a Cell.
+type configScope struct {
+	path    string
+	host    bool
+	profile string // the Cell of a Cell scope ("" with --host or --config)
+}
+
+// selectConfigScope strips the --host flag from the subcommand's argv and
+// fixes ctx.cfgScope. --host together with an explicit --profile is a
+// contradictory scope.
+func selectConfigScope(ctx *Context, args []string) ([]string, error) {
+	var rest []string
+	host := false
+	for _, a := range args {
+		if a == "--host" || a == "-host" {
+			host = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	switch {
+	case host && ctx.FlagProfile != "":
+		return nil, fmt.Errorf("config: --host and --profile select contradictory scopes — the Host scope is cli.toml's Host-only keys, a profile selects one Cell's file")
+	case ctx.ConfigPath != "":
+		ctx.cfgScope = configScope{path: ctx.ConfigPath, host: host}
+	case host:
+		ctx.cfgScope = configScope{path: DefaultConfigPath(), host: true}
+	default:
+		res, err := ctx.resolveProfile(true)
+		if err != nil {
+			return nil, err
+		}
+		ctx.cfgScope = configScope{
+			path:    filepath.Join(filepath.Dir(DefaultConfigPath()), cellcfg.CellFileName(res.Profile)),
+			profile: res.Profile,
+		}
+	}
+	return rest, nil
+}
+
+// checkKeyScope refuses a key the selected scope does not own: a Cell key
+// under --host, a Host-only key while a named Cell is selected. Nothing is
+// written on a refusal.
+func checkKeyScope(ctx *Context, verb string, k configKey) error {
+	section, name := keySection(k)
+	hostOnly := cellcfg.HostOnly(section, name)
+	sc := ctx.cfgScope
+	switch {
+	case sc.host && !hostOnly:
+		return fmt.Errorf("config %s %s: a Cell key, not a Host key — drop --host to write the default Cell (cli.toml) or select a Cell with --profile (the Host-only keys are %s)",
+			verb, k.raw, strings.Join(cellcfg.HostOnlyKeyNames(), ", "))
+	case hostOnly && sc.profile != "" && sc.profile != cellcfg.DefaultProfile:
+		return fmt.Errorf("config %s %s: %s is a Host-only key and Cell %q is selected (file %s) — Host keys live in %s only: use `pf config %s %s --host`",
+			verb, k.raw, name, sc.profile, configPath(ctx), cellcfg.HostFileName, verb, k.raw)
+	}
+	return nil
+}
+
+// keySection maps a parsed key onto the cellcfg partition's (section, name).
+func keySection(k configKey) (string, string) {
+	switch k.kind {
+	case keyDaemon:
+		return "daemon", k.name
+	case keyWorkspace:
+		return "workspace", k.name
+	case keySummarize:
+		return "summarize", strings.TrimPrefix(k.name, "summarize.")
+	case keyPolicy:
+		return "memory_policy", k.name
+	case keyModel:
+		return "model", strings.TrimPrefix(k.name, "model.")
+	}
+	return "", k.name
+}
+
+// listedInScope reports whether a key belongs in the selected scope's list.
+func listedInScope(ctx *Context, section, name string) bool {
+	hostOnly := cellcfg.HostOnly(section, name)
+	if ctx.cfgScope.host {
+		return hostOnly
+	}
+	if ctx.cfgScope.profile != "" && ctx.cfgScope.profile != cellcfg.DefaultProfile {
+		return !hostOnly
+	}
+	return section != "model" // the default Cell's credentials come from operator_agent_dir
 }
 
 // configView is one load of the file plus the effective (file+env+flag)
@@ -105,12 +206,6 @@ func loadConfigView(ctx *Context) (*configView, error) {
 }
 
 func applyConfigFlags(cfg *Config, ctx *Context) {
-	if ctx.FlagServer != "" {
-		cfg.Server = ctx.FlagServer
-	}
-	if ctx.FlagAPIKey != "" {
-		cfg.APIKey = ctx.FlagAPIKey
-	}
 	if ctx.FlagSocket != "" {
 		cfg.DaemonSocket = ctx.FlagSocket
 	}
@@ -122,19 +217,11 @@ func applyConfigFlags(cfg *Config, ctx *Context) {
 // configDaemon answers the daemon client the config verbs use: flag >
 // PF_DAEMON_SOCKET > the file's daemon_socket > the documented default.
 func (ctx *Context) configDaemon() *DaemonClient {
-	sock := ctx.FlagSocket
-	if sock == "" {
-		sock = os.Getenv("PF_DAEMON_SOCKET")
+	d := NewDaemonClient(ctx.hostSocket())
+	if !ctx.cfgScope.host {
+		d.Profile = ctx.cfgScope.profile
 	}
-	if sock == "" {
-		if cfg, err := LoadFileConfig(configPath(ctx)); err == nil {
-			sock = cfg.DaemonSocket
-		}
-	}
-	if sock == "" {
-		sock = defaultDaemonSocket()
-	}
-	return NewDaemonClient(sock)
+	return d
 }
 
 // ---------------------------------------------------------------------------
@@ -147,20 +234,6 @@ func (v *configView) flatValue(ctx *Context, key string) (string, string) {
 		return x, x != ""
 	}
 	switch key {
-	case "server":
-		if ctx.FlagServer != "" {
-			return ctx.FlagServer, "flag"
-		}
-		if x, ok := env("PF_SERVER"); ok {
-			return x, "env"
-		}
-	case "api_key":
-		if ctx.FlagAPIKey != "" {
-			return ctx.FlagAPIKey, "flag"
-		}
-		if x, ok := env("PF_API_KEY"); ok {
-			return x, "env"
-		}
 	case "daemon_socket":
 		if ctx.FlagSocket != "" {
 			return ctx.FlagSocket, "flag"
@@ -212,10 +285,49 @@ func daemonValue(d DaemonSettings, key string) string {
 		return d.HarnessRoot
 	case "operator_agent_dir":
 		return d.OperatorAgentDir
+	case "python":
+		return d.Python
 	case "max_concurrent_jobs":
 		if d.MaxConcurrentJobs > 0 {
 			return strconv.Itoa(d.MaxConcurrentJobs)
 		}
+	case "max_concurrent_bars":
+		if d.MaxConcurrentBars > 0 {
+			return strconv.Itoa(d.MaxConcurrentBars)
+		}
+	case "bar_load_threshold":
+		if d.BarLoadThreshold > 0 {
+			return strconv.FormatFloat(d.BarLoadThreshold, 'g', -1, 64)
+		}
+	case "command_path":
+		return d.CommandPath
+	case "cell_max_concurrent_jobs":
+		if d.CellMaxConcurrentJobs > 0 {
+			return strconv.Itoa(d.CellMaxConcurrentJobs)
+		}
+	case "machine_id":
+		return d.MachineID
+	case "heartbeat_every":
+		if d.HeartbeatEvery != 0 {
+			return d.HeartbeatEvery.String()
+		}
+	case "agent_language":
+		return d.AgentLanguage
+	}
+	return ""
+}
+
+// daemonDefault renders the value a [daemon] key takes when the file
+// leaves it unset, for the keys whose default `pf config` shows ("" =
+// shown as <unset>).
+func daemonDefault(key string) string {
+	switch key {
+	case "max_concurrent_bars":
+		return strconv.Itoa(DefaultMaxConcurrentBars)
+	case "bar_load_threshold":
+		return strconv.FormatFloat(DefaultBarLoadThreshold(), 'g', -1, 64)
+	case "agent_language":
+		return stepcall.DefaultLanguage
 	}
 	return ""
 }
@@ -245,6 +357,24 @@ func runConfigGet(ctx *Context, args []string) error {
 	if k.kind == keySummarize || k.kind == keyPolicy {
 		return fmt.Errorf("config get %s: read it via `pf config list` (the one read face of the [summarize] table and the memory_policy family)", k.raw)
 	}
+	if err := checkKeyScope(ctx, "get", k); err != nil {
+		return err
+	}
+	if k.kind == keyModel {
+		v, err := loadConfigView(ctx)
+		if err != nil {
+			return err
+		}
+		src := "default"
+		if v.file.ModelSource != "" {
+			src = "file"
+		}
+		if ctx.JSON {
+			return emitJSON(ctx, map[string]any{"key": k.name, "value": v.file.ModelSource, "source": src})
+		}
+		fmt.Fprintf(ctx.Stdout, "%s = %s (source: %s)\n", k.name, orUnset(v.file.ModelSource), src)
+		return nil
+	}
 	v, err := loadConfigView(ctx)
 	if err != nil {
 		return err
@@ -269,6 +399,9 @@ func runConfigGet(ctx *Context, args []string) error {
 		src := "default"
 		if v.hasDaemonKey(k.name) {
 			src = "file"
+		}
+		if val == "" {
+			val = daemonDefault(k.name)
 		}
 		if val == "" {
 			val = "<unset>"
@@ -335,6 +468,9 @@ func runConfigList(ctx *Context) error {
 	}
 	var items []configListItem
 	for _, key := range knownFlatKeyNames() {
+		if !listedInScope(ctx, "", key) {
+			continue
+		}
 		val, src := v.flatValue(ctx, key)
 		it := configListItem{Key: key, Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)}
 		if key == "api_key" {
@@ -345,19 +481,43 @@ func runConfigList(ctx *Context) error {
 		items = append(items, it)
 	}
 	for _, key := range knownDaemonKeyNames() {
+		if !listedInScope(ctx, "daemon", key) {
+			continue
+		}
 		val := daemonValue(v.eff.Daemon, key)
 		src := "default"
 		if v.hasDaemonKey(key) {
 			src = "file"
 		}
-		items = append(items, configListItem{Key: key, Value: strValue(val), Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)})
+		value := strValue(val)
+		if n, err := strconv.Atoi(val); err == nil && ConfigSchema(key)["kind"] == "int" {
+			value = n // an integer key's value is a JSON number (like summarize.interval_sec)
+		}
+		items = append(items, configListItem{Key: key, Value: value, Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)})
 	}
 	for _, key := range knownSummarizeKeyNames() {
+		if !listedInScope(ctx, "summarize", key) {
+			continue
+		}
 		val, src := summarizeValueOf(v.file.Summarize, key)
 		items = append(items, configListItem{Key: key, Value: val, Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)})
 	}
+	if listedInScope(ctx, "model", "source") {
+		src := "default"
+		if v.file.ModelSource != "" {
+			src = "file"
+		}
+		var val any
+		if v.file.ModelSource != "" {
+			val = v.file.ModelSource
+		}
+		items = append(items, configListItem{Key: "model.source", Value: val, Source: src, Class: mustConfigClass("model.source"), Schema: ConfigSchema("model.source")})
+	}
 	wsItems := make([]configListItem, 0, len(v.eff.Mapping.Workspaces()))
 	for _, ws := range v.eff.Mapping.Workspaces() {
+		if ctx.cfgScope.host {
+			break
+		}
 		wsItems = append(wsItems, configListItem{Key: `[workspace."` + ws + `"]`, Value: strings.Join(v.eff.Mapping.ProjectsOf(ws), ","), Source: "file", Section: true, Class: ConfigSectionClass})
 	}
 	policy := memoryPolicyList(v.file)
@@ -464,6 +624,9 @@ func emitJSON(ctx *Context, v any) error {
 // validate.
 
 func runConfigValidate(ctx *Context) error {
+	if ctx.ConfigPath == "" {
+		return runConfigValidateSet(ctx)
+	}
 	path := configPath(ctx)
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -504,6 +667,9 @@ func runConfigSet(ctx *Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkKeyScope(ctx, "set", k); err != nil {
+		return err
+	}
 	ws, err := configWritePath(ctx, "set", k, wsFlag, cwdFlag)
 	if err != nil {
 		return err
@@ -521,6 +687,8 @@ func runConfigSet(ctx *Context, args []string) error {
 			c.setDaemon(k.name, rawValue)
 		case k.kind == keySummarize:
 			c.setSummarize(strings.TrimPrefix(k.name, "summarize."), rawValue)
+		case k.kind == keyModel:
+			c.setModel(strings.TrimPrefix(k.name, "model."), rawValue)
 		case k.kind == keyPolicy:
 			c.setPolicyList(ws, k.name, k.list, projects)
 		default:
@@ -546,6 +714,9 @@ func runConfigUnset(ctx *Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkKeyScope(ctx, "unset", k); err != nil {
+		return err
+	}
 	ws, err := configWritePath(ctx, "unset", k, wsFlag, cwdFlag)
 	if err != nil {
 		return err
@@ -559,6 +730,8 @@ func runConfigUnset(ctx *Context, args []string) error {
 			c.unsetDaemon(k.name)
 		case k.kind == keySummarize:
 			c.unsetSummarize(strings.TrimPrefix(k.name, "summarize."))
+		case k.kind == keyModel:
+			c.unsetModel(strings.TrimPrefix(k.name, "model."))
 		case k.kind == keyPolicy:
 			c.unsetPolicyList(ws, k.name, k.list)
 		default:
@@ -581,7 +754,7 @@ func configWritePath(ctx *Context, verb string, k configKey, wsFlag, cwdFlag str
 		return resolveWorkspaceTarget(ctx, k.raw, wsFlag, cwdFlag)
 	}
 	if wsFlag != "" || cwdFlag != "" {
-		return "", fmt.Errorf("config %s %s: --workspace/--cwd apply only to memory_policy.<entry>.record|skip and the workspace .polyforge.yaml keys (steps.<project>.<step-id>.models|attrs.<name>); %s is one machine-level cli.toml key", verb, k.raw, k.raw)
+		return "", fmt.Errorf("config %s %s: --workspace/--cwd apply only to memory_policy.<entry>.record|skip and the workspace .polyforge.yaml keys (steps.<project>.<step-id>.models|skip); %s is one machine-level cli.toml key", verb, k.raw, k.raw)
 	}
 	return "", nil
 }
@@ -630,9 +803,12 @@ func configSetValue(ctx *Context, k configKey, args []string) (string, []string,
 		}
 		return "", items, nil
 	}
+	if k.kind == keyModel {
+		return strconv.Quote(val), nil, nil
+	}
 	if k.kind == keyDaemon {
 		switch k.name {
-		case "max_concurrent_jobs":
+		case "max_concurrent_jobs", "max_concurrent_bars", "bar_load_threshold", "cell_max_concurrent_jobs":
 			return strings.TrimSpace(val), nil, nil
 		default:
 			return strconv.Quote(val), nil, nil
@@ -928,4 +1104,65 @@ func runConfigReload(ctx *Context) error {
 		fmt.Fprintln(ctx.Stdout, renderConfigOutcome(o))
 	}
 	return nil
+}
+
+// runConfigValidateSet validates the whole Host set: the Host file (it must
+// be daemon-acceptable — an invalid one blocks the Host start) and every
+// named Cell file, each on its own (an invalid Cell is reported, never
+// hidden behind another). Exit 1 when any file is invalid.
+func runConfigValidateSet(ctx *Context) error {
+	set, err := LoadHostSet("")
+	if err != nil {
+		return fmt.Errorf("config validate: %w", err)
+	}
+	type row struct {
+		Profile string `json:"profile"`
+		Path    string `json:"path"`
+		Valid   bool   `json:"valid"`
+		Reason  string `json:"reason,omitempty"`
+	}
+	hostReason := ""
+	if _, statErr := os.Stat(set.HostPath); statErr != nil {
+		hostReason = set.HostPath + " does not exist"
+	} else if !set.Host.Mapping.Empty() {
+		if verr := ValidateConfigForDaemon(set.Host); verr != nil {
+			hostReason = verr.Error()
+		}
+	} else if verr := validateOperatorAgentDir(set.Host); verr != nil {
+		hostReason = verr.Error()
+	}
+	rows := []row{{Profile: cellcfg.DefaultProfile, Path: set.HostPath, Valid: hostReason == "", Reason: hostReason}}
+	for _, c := range set.Cells {
+		rows = append(rows, row{Profile: c.Profile, Path: c.Path, Valid: c.Invalid == "", Reason: c.Invalid})
+	}
+	bad := 0
+	for _, r := range rows {
+		if !r.Valid {
+			bad++
+		}
+	}
+	if ctx.JSON {
+		if err := emitJSON(ctx, map[string]any{"valid": bad == 0, "path": set.HostPath, "cells": rows}); err != nil {
+			return err
+		}
+	} else {
+		for _, r := range rows {
+			if r.Valid {
+				fmt.Fprintf(ctx.Stdout, "config ok: %s (Cell %s)\n", r.Path, r.Profile)
+			} else {
+				fmt.Fprintf(ctx.Stdout, "config INVALID: %s (Cell %s): %s\n", r.Path, r.Profile, r.Reason)
+			}
+		}
+	}
+	if bad > 0 {
+		return fmt.Errorf("config validate: %d of %d files invalid", bad, len(rows))
+	}
+	return nil
+}
+
+func orUnset(s string) string {
+	if s == "" {
+		return "<unset>"
+	}
+	return s
 }

@@ -3,47 +3,37 @@ package driver
 // spawn.go: the production StepSpawner adapter. It bridges the driver's
 // StepSpawn order onto the runtime derivation mechanism and owns:
 //
-//   - PROMPT ASSEMBLY: the step definition (workflows/<bundle>/steps/<id>.md)
-//     plus the round's gate-FAIL rewind verdict (persisted until the step
-//     is accepted), the step's current attempt-chain Q&A,
-//     the producing step's handoff (inherit steps only) and the
-//     result-delivery contract;
+//   - PROMPT ASSEMBLY: the six fixed parts of workflow contract 4
+//     (assembleStepPrompt) — the dispatch, the prohibited actions, the
+//     step header, the step definition, the skill and the continuation;
 //   - PROCESS DERIVATION through spawn.Params -> spawn.Spawner: the model
 //     pin rides argv, the resume session the spawn journal's latest
 //     transcript; isolation and env sanitizing stay in runtime/spawn.go;
-//   - RESULT COLLECTION: the step submits its envelope with `pf result
-//     submit` and the daemon lands it at
-//     runtime-state/pending-results/<spawn_n>.json; the run collects it,
-//     stamps it to artifacts/steps/<step>/s<spawn_n>/result.json, consumes
-//     the drop and tears the process down. The drop path is keyed by the
-//     spawn ordinal and every re-dispatch takes a fresh one (B2), so a
-//     stale drop is never mistaken for a live derivation's result.
+//   - RESULT COLLECTION (workflow contract 4): the step ends with `pf step
+//     handoff`, which the daemon checks and records on the capsule's call
+//     ledger (runtime-state/step-calls.jsonl); the run polls the ledger
+//     for the dispatch's accepted hand-off and tears the process down. The
+//     record is keyed by the spawn ordinal and every re-dispatch takes a
+//     fresh one (B2), so another dispatch's hand-off is never this one's.
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/silgrid/polyforge/internal/common/atomicfile"
-
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/harness"
-	"github.com/silgrid/polyforge/internal/common/scopetier"
 	"github.com/silgrid/polyforge/internal/common/spawn"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/sessionjsonl"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
-	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 const (
@@ -51,14 +41,10 @@ const (
 	// materialized bundle: workflows/<bundle>/steps/<id>.md (the R9
 	// path convention).
 	dirStepDefs = "steps"
-	// dirPendingResults is the runtime-state subdirectory a step's R13
-	// envelope is delivered into (by the daemon's /step/result, one file per spawn
-	// ordinal — the ordinal IS the fence, so a superseded derivation's
-	// leftover file is never collected).
-	dirPendingResults = "pending-results"
-	// defaultEnvelopePoll is the default envelope-collection cadence.
+	// defaultEnvelopePoll is the default hand-off collection cadence (the
+	// call ledger's poll).
 	defaultEnvelopePoll = 200 * time.Millisecond
-	// teardownBound bounds the post-envelope process teardown.
+	// teardownBound bounds the post-hand-off process teardown.
 	teardownBound = 5 * time.Second
 )
 
@@ -67,10 +53,10 @@ const (
 // driver serializes, so the adapter itself keeps no locks.
 type StepSpawnAdapter struct {
 	WI WIInfo
-	// BundleDir is the materialized workflow bundle root (workflow.md
+	// BundleDir is the materialized workflow bundle root (workflow.yaml
 	// + steps/). Default: <CapsuleDir>/workflows/<BundleName>.
 	BundleDir string
-	// Workflow is the parsed workflow.md (workflow.go), shared with the
+	// Workflow is the parsed workflow.yaml (workflow.go), shared with the
 	// driver; nil → loaded from BundleDir at construction.
 	Workflow *Workflow
 	// Spawner derives the step processes. Required; production binds
@@ -91,6 +77,10 @@ type StepSpawnAdapter struct {
 	PollInterval time.Duration
 	// Now overrides the clock for journal stamps (tests).
 	Now func() time.Time
+	// Language answers the live agent language (`[daemon] agent_language`,
+	//) at dispatch time; nil = the default. A new
+	// conversation takes it; a resumed one keeps its own (SpawnStep).
+	Language func() string
 }
 
 // NewStepSpawnAdapter validates the configuration, resolves the bundle
@@ -126,134 +116,66 @@ func NewStepSpawnAdapter(a StepSpawnAdapter) (*StepSpawnAdapter, error) {
 }
 
 // SpawnStep derives one step process for the driver's dispatch order.
-// The context policy comes from the shared workflow parse.
+// The context policy comes from the shared workflow parse. The dispatch's
+// agent language is fixed here: a dispatch that resumes
+// the previous conversation keeps the language that conversation was told
+// (its journal line); every new conversation takes the live value.
 func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun, error) {
 	spec := a.Workflow.step(sp.StepID)
 	if spec == nil {
 		return nil, fmt.Errorf("driver: step %q is not in the workflow bundle", sp.StepID)
 	}
-	policy := spec.ContextPolicy
-	switch policy {
-	case ContextInherit, ContextFresh: // parseWorkflow defaults inherit
-	default:
-		return nil, fmt.Errorf("driver: step %q has unknown context_policy %q", sp.StepID, policy)
-	}
 	def, err := readStepDefinition(a.BundleDir, sp.StepID, spec.Vars)
 	if err != nil {
 		return nil, err
+	}
+	header, err := stepHeader(a.BundleDir)
+	if err != nil {
+		return nil, fmt.Errorf("driver: %s/%s: %w", a.WI.ID, sp.StepID, err)
 	}
 	parts := promptParts{
 		WIID:                    a.WI.ID,
 		StepID:                  sp.StepID,
 		SpawnN:                  sp.SpawnN,
+		Round:                   sp.Round,
 		CapsuleRoot:             a.WI.CapsuleDir,
-		ContextMode:             policy,
+		StepHeader:              header,
 		Definition:              def,
-		Rewind:                  sp.RewindInput,
-		Answers:                 sp.Answers,
-		HandoffDue:              spec.Handoff,
-		Gate:                    spec.Gate,
-		ScopeTier:               sp.ScopeTier,
-		PriorRejection:          sp.PriorRejection,
 		PriorEndedWithoutResult: sp.PriorEndedWithoutResult,
-		RequireCommandEvidence:  spec.RequiresCommandEvidence,
-		RequiresHumanAnswer:     spec.RequiresHumanAnswer,
-		HumanAnswerIfAsked:      spec.HumanAnswerIfAsked,
-		Memories:                recalledMemoriesSection(a.WI.CapsuleDir),
-		MemoryDuty:              memoryDutySection(a.BundleDir, a.WI.CapsuleDir, spec.Recall, a.Workflow.lastStep(sp.StepID)),
-		PlanConformance:         renderPlanConformance(sp.PlanConformance),
+		Language:                a.liveLanguage(),
 	}
-	// polyforge#260: the armed verification prompt carries the shared
-	// classification duty as its own section (an unarmed lane carries
-	// none - its FAIL rewinds exactly as today, so the agent is never
-	// told to classify); the LIGHT recheck dispatch carries the light
-	// section instead (the recheck does not classify).
-	if spec.MechanicalFix && sp.StepID == verificationStepID {
-		if sp.LightRecheck != nil {
-			parts.LightRecheck = lightRecheckSection(a.BundleDir, sp.LightRecheck)
-		} else {
-			parts.MechanicalClassify = mechanicalFixSection(a.BundleDir, "Classification duty (an armed full verification FAIL)")
-			// polyforge#261 NB5: the ESCALATED full re-run's escalation note
-			// renders from the shared fast-lane material (fail-closed: an
-			// absent section renders an empty prompt section) beside the
-			// classification duty (an escalated full FAIL may be classified
-			// mechanical again) — never beside the light section (no marker,
-			// no light dispatch).
-			if sp.EscalatedRecheck {
-				parts.EscalatedRecheck = mechanicalFixSection(a.BundleDir, "Escalated full re-run (the mechanical fast lane)")
-			}
-		}
-	}
-	// each attr override this dispatch composed (a value
-	// that differs from its declaration's default) renders its shared
-	// material as its own section; none = the prompt is byte-identical to
-	// a step that declares no attr.
-	if parts.AttrSections, err = attrSections(a.BundleDir, sp.Attrs); err != nil {
-		return nil, fmt.Errorf("driver: %s/%s: %w", a.WI.BundleName, sp.StepID, err)
-	}
-	// the scoped tier's rules ride only a scoped
-	// verification dispatch (the full tier's one-liner is its whole
-	// contract), read from the shared material beside the bundle.
-	if sp.StepID == verificationStepID && sp.ScopeTier == tierScoped {
-		if parts.ScopedRules, err = a.sharedPart(sp.StepID, "scoped_verification", nil); err != nil {
-			return nil, err
-		}
-	}
-	// H3 (polyforge#164): the declared output schema rides the prompt —
-	// the same schema the driver validates the completed output against.
-	// the schema shown is the PRUNED text (an x-prompt-when
-	// entry whose condition does not hold is dropped, the markers never
-	// shown); validation still compiles the full schema.
-	cond := map[string]bool{
-		"armed":    spec.MechanicalFix,
-		"scoped":   sp.ScopeTier == tierScoped,
-		"authored": a.Workflow.step(e2eAuthorStepID) != nil,
-		"reentry":  sp.ReviewReentry,
-	}
-	// review's rare-path material - the scoped obligation
-	// and the re-entry contract - rides only the dispatch that needs it.
-	if sp.StepID == reviewStepID {
-		if sp.ScopeTier == tierScoped {
-			if parts.ScopedReview, err = a.sharedPart(sp.StepID, "scoped_review", spec.Vars); err != nil {
-				return nil, err
-			}
-		}
-		if sp.ReviewReentry {
-			if parts.ReviewReentry, err = a.sharedPart(sp.StepID, "review_reentry", spec.Vars); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if schema, err := loadStepOutputSchema(a.BundleDir, sp.StepID, spec.Vars); err != nil {
-		fmt.Fprintf(os.Stderr, "driver: %s/%s: %v\n", a.WI.ID, sp.StepID, err)
-	} else if schema != nil {
-		parts.OutputSchema = schema.PromptText(cond)
-	}
-	// polyforge#260: the light recheck's output schema is the LIGHT one
-	// (the shared fast-lane material's frontmatter) instead of the full
-	// step schema — the light recheck's result carries only the light
-	// fields (verdict + checks), never the full bar's.
-	if sp.LightRecheck != nil {
-		if schema, err := loadLightOutputSchema(a.BundleDir); err == nil && schema != nil {
-			parts.OutputSchema = schema.Text
-		}
-	}
-	if policy == ContextInherit {
-		h, err := a.resolveHandoff(sp.StepID, sp.Done)
+	// the step's skill (the lane snapshot's markdown, the loader judged it)
+	if spec.Skill != "" {
+		sk, err := workflow.ReadSkill(a.BundleDir, spec.Skill)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("driver: %s/%s: skill %s: %w", a.WI.ID, sp.StepID, spec.Skill, err)
 		}
-		parts.Handoff = h
+		parts.Skill = renderSkill(sk)
 	}
-
-	handle := a.WI.SessionHandle
 	h := harness.Of(sp.Harness)
+	parts.NoSubagents = subagentsFact(a.BundleDir, sp.StepID, h)
 	var transcript, hsession string
 	resume := sp.Resume
+	// degraded names why a resume the driver ordered became a new
+	// conversation ("" = it resumed, or none was ordered).
+	degraded := ""
 	if resume {
 		// Same-step continuation (an answered question, the first retry
-		// after a crash) resumes the previous dispatch's conversation only
-		// on the SAME harness: another harness's session cannot be resumed.
+		// after a crash, a rewind re-entry —) resumes the
+		// previous dispatch's conversation only when it can. The
+		// degradation conditions, each a new conversation with the previous
+		// transcript as read-only reference when one is readable (a rewind
+		// re-entry's round is in artifacts/handoff.md):
+		//   1. another harness: the candidate in effect runs on a harness
+		//      other than the previous dispatch's (an owner list edit, a
+		//      failover) — a session never crosses harnesses;
+		//   2. the session is gone: no journal line for the step, a claude
+		//      native session that is not on disk under the adapter's
+		//      claude-config dir, or an unreadable pi transcript;
+		//   3. (rewind re-entry only) the previous dispatch never handed
+		//      off: the call ledger records no hand-off of it, so its
+		//      conversation ended in an infra failure rather than in the
+		//      round the verdict judged.
 		prev, err := a.latestJournalEntry(sp.StepID)
 		if err != nil {
 			return nil, err
@@ -261,6 +183,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		switch {
 		case harness.Of(prev.Harness) != h:
 			resume = false
+			degraded = "the candidate in effect runs on another harness than the previous dispatch"
 		case h == harness.Claude:
 			// claude resumes its NATIVE session (outside the capsule) by
 			// the uuid the daemon minted; a session that never reached
@@ -272,6 +195,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 				hsession = prev.HarnessSession
 			} else {
 				resume = false
+				degraded = "the previous dispatch's session is gone"
 			}
 		case !usableTranscript(prev.Transcript):
 			// (also the no-journal-line-for-this-step shape: "" is unusable)
@@ -279,10 +203,20 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 			// the harness wrote its session): start the conversation fresh
 			// rather than hand the harness a path that cannot resume
 			resume = false
+			degraded = "the previous dispatch's session is gone"
 		default:
 			transcript = prev.Transcript
 		}
-		if !resume {
+		if resume && sp.RewindResume && !a.deliveredResult(sp.StepID, int64(prev.SpawnN)) {
+			resume = false
+			degraded = "the previous dispatch delivered no result"
+			transcript, hsession = "", ""
+		}
+		if resume {
+			// the resumed conversation already holds its prompt: it keeps
+			// the language it was told
+			parts.Language = dispatchLanguage(prev.Language)
+		} else {
 			// the continuation cannot resume (another harness, or the
 			// native session is gone): the fresh conversation gets the
 			// previous capsule transcript as read-only reference (§2.4)
@@ -295,10 +229,12 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 	// agent treat the retry as a new task, re-reading artifacts and
 	// re-running recall (observed on the internal project-32: a 32-minute
 	// dispatch). On that one dispatch send only the short reminder.
-	// RetryTriggered excludes a needs_input answer continuation whose
-	// ledger still names an earlier EWR attempt (a non-goal: that resume
-	// keeps the full prompt).
 	parts.ShortEwrResume = resume && sp.PriorEndedWithoutResult && sp.RetryTriggered
+	// the owner messages this dispatch carries (relay.go): alone when it
+	// resumes the conversation that ended awaiting the owner, as a section
+	// of the full prompt otherwise (a degraded resume, a retry)
+	parts.OwnerMessages = sp.OwnerMessages
+	parts.ShortMessageResume = resume && sp.MessageResume && len(sp.OwnerMessages) > 0
 	if sp.Fresh && parts.Reference == "" {
 		// a retry starts a NEW conversation; the previous transcript, when
 		// readable, rides the prompt as a read-only reference (it may be
@@ -306,6 +242,9 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		if prev, perr := a.latestJournalEntry(sp.StepID); perr == nil {
 			parts.Reference = a.referenceTranscript(prev)
 		}
+	}
+	if sp.RewindResume && !resume {
+		fmt.Fprintf(os.Stderr, "driver: %s/%s: the rewind re-entry starts a new conversation: %s\n", a.WI.ID, sp.StepID, degraded)
 	}
 	// the fast path. A new-conversation re-dispatch (a
 	// 2nd+ failure, a candidate switch, or a resume that degraded to a
@@ -318,24 +257,70 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 	// re-claim (a fresh capsule materialization after that attempt) is
 	// excluded as well: its ignored build directories did not survive,
 	// so the fast path's environment claim would be false.
-	//
-	// criterion 5: a retry inside a REWOUND round whose
-	// task-repo tree is still the one the rewinding gate judged made no
-	// code progress at all. "Continue the previous attempt's work from
-	// where it stopped" is then false (there is nothing to continue), so
-	// the wording stays from-scratch beside the verdict.
 	if (sp.Fresh || (sp.Resume && !resume)) && sp.RetryTriggered && parts.Reference != "" && sp.RecordedTreeHash != "" &&
 		!capsuleReclaimed(a.WI.CapsuleDir, sp.RecordedAttemptAt) {
 		if cur, herr := treeHashFn(a.WI.CapsuleDir); herr == nil && cur == sp.RecordedTreeHash {
-			progress := true
-			if sp.RewindInput != nil && sp.RewindRepoHash != "" {
-				if repos, rerr := reposTreeHashFn(a.WI.CapsuleDir); rerr == nil && repos == sp.RewindRepoHash {
-					progress = false
-				}
-			}
-			parts.ContinueInPlace = progress
+			parts.ContinueInPlace = true
 		}
 	}
+	return a.launch(ctx, sp, parts, h, transcript, hsession, resume)
+}
+
+// liveLanguage answers the live agent language a new conversation takes
+// (the default without a source or for a value outside the vocabulary).
+func (a *StepSpawnAdapter) liveLanguage() string {
+	if a.Language == nil {
+		return stepcall.DefaultLanguage
+	}
+	return dispatchLanguage(a.Language())
+}
+
+// dispatchLanguage normalizes a recorded or live language: anything
+// outside the vocabulary (a journal line that predates)
+// reads as the default.
+func dispatchLanguage(v string) string {
+	if stepcall.IsLanguage(v) {
+		return v
+	}
+	return stepcall.DefaultLanguage
+}
+
+// subagentsRulesVar is the shared fragment carrying the sub-agent rules a
+// step definition may include ({{build_subagents}},).
+const subagentsRulesVar = "build_subagents"
+
+// piNoSubagents is the fact a pi dispatch of such a step carries (PR #869
+// review, blocking 2): pi's subagent extension starts its worker as
+// `pi --mode json -p --no-session …` without the step's isolation flags
+// (spawn.go piIsolationFlags), and pi offers no environment or settings
+// switch for context files, so the worker would load the operator's
+// AGENTS.md/CLAUDE.md, skills and prompt templates the step runs
+// without. Until a worker can run isolated, a pi step does the work
+// itself.
+const piNoSubagents = "This dispatch runs on pi, whose sub-agents do not run with this step's isolation: " +
+	"a worker the `subagent` tool starts loads the context files, skills and prompt templates this " +
+	"step was started without. Dispatch no sub-agent: do the analysis and build every unit yourself, " +
+	"record each unit's `implemented_by` in `artifacts/build/units.json` as `main`, and say in your hand-off that this harness offers no isolated sub-agent."
+
+// subagentsFact answers the sub-agent fact of one dispatch: piNoSubagents
+// on a pi dispatch of a step whose definition includes the sub-agent
+// rules, else "".
+func subagentsFact(bundleDir, stepID, h string) string {
+	if h != harness.Pi {
+		return ""
+	}
+	raw, err := os.ReadFile(workflow.StepDefinitionPath(bundleDir, stepID))
+	if err != nil || !strings.Contains(string(raw), "{{"+subagentsRulesVar+"}}") {
+		return ""
+	}
+	return piNoSubagents
+}
+
+// launch derives the step process for an assembled prompt: the dispatch's
+// transcript and native session, the harness translator, the spawn
+// journal line, the process and the run handle.
+func (a *StepSpawnAdapter) launch(ctx context.Context, sp StepSpawn, parts promptParts, h, transcript, hsession string, resume bool) (StepRun, error) {
+	handle := a.WI.SessionHandle
 	if transcript == "" {
 		// every claude dispatch — a resume included — copies its native
 		// session onto its OWN capsule file (the native file holds the
@@ -353,6 +338,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 	p := spawn.Params{
 		WorkItemID:     a.WI.ID,
 		CapsuleDir:     a.WI.CapsuleDir,
+		LaneDir:        a.BundleDir,
 		SessionHandle:  handle,
 		SpawnN:         int(sp.SpawnN),
 		TranscriptPath: transcript,
@@ -362,16 +348,39 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		InitialPrompt:  assembleStepPrompt(parts),
 		Model:          sp.Model,
 		Effort:         sp.Effort,
+		Round:          sp.Round,
+		StepID:         sp.StepID,
+		ToolWindow:     sp.ToolWindow,
+	}
+	var taps []func(string)
+	if translator != nil {
+		taps = append(taps, func(line string) { translator.Feed([]byte(line)) })
+	}
+	// the owner-message relay's delivery proof rides the same stream
+	// (relay.go: the marker in a user message, claude's started
+	// lifecycle, the first turn start)
+	watch := newDeliveryWatch(h)
+	taps = append(taps, watch.feed)
+	if h == harness.Pi {
+		// the subagent conversations ride the same stdout
+		// into the capsule, beside the conversation's transcript
+		taps = append(taps, newPiSubagentRecorder(a.WI.CapsuleDir, transcript).Feed)
+	}
+	if len(taps) > 0 {
+		p.OnRecord = func(line string) {
+			for _, tap := range taps {
+				tap(line)
+			}
+		}
 	}
 	if translator != nil {
-		p.OnRecord = func(line string) { translator.Feed([]byte(line)) }
 		p.OnExit = func(info spawn.ExitInfo) {
 			translator.Exit(supervise.ExitInfo{Code: info.Code, Signal: info.Signal, LastError: tailLine(info.StderrTail)})
 		}
 	}
 	token := spawnToken(handle, sp.SpawnN)
 	p.Journal = func(pid int, startedAt string) error {
-		return a.appendSpawnJournal(p, sp.StepID, token, pid, startedAt)
+		return a.appendSpawnJournal(p, sp.StepID, token, parts.Language, pid, startedAt)
 	}
 	proc, err := a.Spawner.Spawn(ctx, p)
 	if err != nil {
@@ -390,10 +399,10 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		wiID:        a.WI.ID,
 		sp:          sp,
 		handle:      proc,
-		dropPath:    PendingResultPath(a.WI.CapsuleDir, sp.SpawnN),
 		poll:        a.PollInterval,
 		meta:        meta,
 		sink:        sink,
+		watch:       watch,
 	}, nil
 }
 
@@ -503,535 +512,276 @@ func tailLine(tail string) string {
 // ---------------------------------------------------------------------------
 // Prompt assembly (pure — table-tested below).
 
-// promptParts is the assembled prompt's material.
+// promptParts is the assembled prompt's material: the six fixed parts of
+// workflow contract 4 (design #483 §8) — the dispatch (WIID, StepID,
+// Round, SpawnN, CapsuleRoot and this dispatch's facts: NoSubagents),
+// the prohibited actions, the step header (StepHeader), the step
+// definition (Definition), the skill (Skill) and the continuation
+// (OwnerMessages, PriorEndedWithoutResult, Reference, ContinueInPlace).
 type promptParts struct {
 	WIID   string
 	StepID string
 	SpawnN int64
+	// Round is the step round the dispatch belongs to (PF_ROUND).
+	Round int64
 	// CapsuleRoot is the capsule's absolute root: every capsule-relative
 	// path the prompt names resolves against it (polyforge#244).
 	CapsuleRoot string
-	ContextMode string // ContextInherit | ContextFresh
-	Definition  string
-	Rewind      *capsule.RewindInput
-	Answers     []capsule.ArchivedAnswer
-	Handoff     *handoffSection
-	// HandoffDue marks a step that must produce a handoff artifact at
-	// the conventional path (the delivery contract states the duty only
-	// then).
-	HandoffDue bool
-	// Gate marks a workflow-declared gate step (gate: true): the
-	// delivery contract states the verdict binding for it — a fail
-	// verdict in the output REQUIRES outcome gate_failed (the driver's
-	// only rewind trigger), and a fail verdict delivered under
-	// completed is re-bound to gate_failed fail-closed.
-	Gate bool
-	// ScopeTier is the verification tier this dispatch runs at
-	// ("scoped" or "full"): rendered as its own section on
-	// the verification step so a fresh re-dispatch restores the recorded
-	// tier without recomputation or re-asking. Inert elsewhere.
-	ScopeTier string
-	// ScopedRules is the shared scoped-tier material
-	// (workflows/_shared/scoped_verification.md,) rendered
-	// under the verification tier section only on a SCOPED verification
-	// dispatch; "" = a full dispatch (or the material is absent: the
-	// tier one-liner stays the contract, fail-closed, never an error).
-	ScopedRules string
-	// ScopedReview is the shared scoped-review material
-	// (workflows/_shared/scoped_review.md,): the review's
-	// scope_adequate/scope obligation, rendered as its own section on a
-	// review dispatch of a work item that opted into the scoped tier;
-	// "" = otherwise (or the material is absent).
-	ScopedReview string
-	// ReviewReentry is the shared review re-entry material
-	// (workflows/_shared/review_reentry.md,): the round
-	// contract, the two faces and the light-round mis-marking duty,
-	// rendered as its own section on a review dispatch with a prior
-	// verdict-bearing round on record; "" = a first round (or absent).
-	ReviewReentry string
-	// AttrSections is the rendered step-attribute material (attrSections:
-	// one section per attr override that differs from its declaration's
-	// default,); "" = none.
-	AttrSections string
-	// PriorRejection is the verbatim validation error from the previous
-	// dispatch's rejected envelope (the in-process retry lane): the
-	// author sees exactly what to fix instead of blindly re-authoring.
-	PriorRejection string
+	// StepHeader is the lane snapshot's _shared/step-header.md followed by
+	// its _shared/handoff.md (the hand-off body template), verbatim
+	// (stepHeader).
+	StepHeader string
+	Definition string
+	// NoSubagents is the driver's fact that this dispatch dispatches no
+	// sub-agent (subagentsFact); "" = none.
+	NoSubagents string
 	// PriorEndedWithoutResult: the previous dispatch's turn ended without
-	// the result envelope being written (retry feedback).
+	// `pf step handoff` (retry feedback).
 	PriorEndedWithoutResult bool
+	// Skill is the rendered `# Skill` section of a step declaring `skill`
+	// (renderSkill); "" = none.
+	Skill string
 	// ShortEwrResume: this dispatch resumes the SAME harness
 	// session and follows an ended_without_result, so it sends only the
-	// short reminder (finish the remaining work, submit with `pf result
-	// submit`) instead of the assembled step prompt the resumed
-	// conversation already holds. False = the full prompt (every other
-	// resume, a fresh retry, or a resume that degraded to fresh).
+	// short reminder (finish the remaining work, then `pf step handoff`)
+	// instead of the assembled step prompt the resumed conversation
+	// already holds. False = the full prompt (every other resume, a fresh
+	// retry, or a resume that degraded to fresh).
 	ShortEwrResume bool
-	// RequireCommandEvidence marks a step whose completed result must
-	// carry command_evidence (verification / requires_command_evidence):
-	// the contract states the entry shape and the rule.
-	RequireCommandEvidence bool
-	// RequiresHumanAnswer marks a requires_human_answer step: the
-	// contract states that a human answer must precede completion.
-	RequiresHumanAnswer bool
-	// HumanAnswerIfAsked marks a requires_human_answer: if_asked step:
-	// the contract states that its questions are a human's to answer and
-	// that a zero-question completion is recorded and notified.
-	HumanAnswerIfAsked bool
-	// OutputSchema is the step definition's declared output schema
-	// (YAML), shown ahead of the definition body; "" = none declared.
-	OutputSchema string
-	// MechanicalClassify is the shared fast-lane material's
-	// classification duty (workflows/_shared/mechanical-fix.md), rendered
-	// into an ARMED verification dispatch's prompt as its own section
-	// (polyforge#260); "" = the lane is unarmed (or this is not the
-	// verification step, or this is the light recheck itself) and no
-	// classification duty rides.
-	MechanicalClassify string
-	// LightRecheck is the rendered light-recheck section (the bound
-	// commands per repo plus the shared light contract), an own section
-	// beside the untouched step definition (polyforge#260); "" = an
-	// ordinary (full) dispatch.
-	LightRecheck string
-	// EscalatedRecheck is the escalation note the ESCALATED full
-	// verification re-run's prompt carries as its own section
-	// (polyforge#260: the light path failed and fell back to this full
-	// verification in place; it owes the report's fast-lane section);
-	// "" = an ordinary dispatch.
-	EscalatedRecheck string
-	// PlanConformance is the rendered driver-computed plan-conformance
-	// section (renderPlanConformance); "" = none.
-	PlanConformance string
+	// OwnerMessages are the undelivered owner messages this dispatch's
+	// first message carries (StepSpawn.OwnerMessages, relay.go);
+	// ShortMessageResume sends them ALONE — the dispatch resumes the
+	// conversation that ended awaiting the owner, which holds the prompt
+	// and the question already — while every other dispatch renders them
+	// as the `## Owner messages` section of part 6.
+	OwnerMessages      []capsule.AskLine
+	ShortMessageResume bool
 	// Reference is the previous attempt's transcript path (a fresh retry
 	// carries it as read-only reference material; "" = none).
 	Reference string
+	// Language is the dispatch's agent language: part 1
+	// carries its instruction (languageInstruction); "" reads as the
+	// default.
+	Language string
 	// ContinueInPlace selects the fast-path reference
 	// instruction: the tree is byte-identical to the previous attempt's
 	// death, so the new conversation continues in place instead of
 	// starting from scratch. False = today's start-from-scratch wording.
 	ContinueInPlace bool
-	// Memories is the rendered claim-time recalled-memories section
-	// ("" = no snapshot / no hits: no section).
-	Memories string
-	// MemoryDuty is the rendered recall/remember duty of the step (the
-	// shared memory.md on a step entry declaring `recall: true`, and
-	// memory-wrap.md on the workflow's last step); "" = no section.
-	MemoryDuty string
 }
 
-// handoffSection is one producing step's handoff artifact, injected
-// into an inherit step's prompt.
-type handoffSection struct {
-	FromStep string
-	Path     string
-	Content  []byte
-}
+// The six parts' headings (the step header and the prohibited actions
+// carry their own).
+const (
+	dispatchHeading     = "# This dispatch"
+	definitionHeading   = "# Step definition"
+	continuationHeading = "# Continuing this step"
+)
 
-// assembleStepPrompt builds the step process's one instruction of
-// record: identity, the context-policy contract, the step definition,
-// the round's rewind verdict, the current attempt-chain Q&A a resumed step
-// continues from, the handoff (inherit only), the declared inputs and
-// the result-delivery contract. A first ended_without_result retry that
-// resumes the same harness session carries only the short reminder
-// its resumed conversation already holds the full prompt.
+// assembleStepPrompt builds the step process's one instruction of record
+// from the six fixed parts of workflow contract 4 (design #483 §8), in
+// order: (1) the dispatch — its identity, the language it works in, the
+// capsule root and this dispatch's facts (a pi dispatch runs no sub-agent;
+// where raw downloads go); (2) the prohibited actions (harness.StepProhibitedActions);
+// (3) the step header and the hand-off body template
+// (_shared/step-header.md, _shared/handoff.md); (4) the step definition;
+// (5) the skill; (6) on a continuation, what it continues from — the owner
+// messages no dispatch delivered, that the previous turn ended without
+// `pf step handoff`, the previous attempt's transcript. A resume of the
+// same conversation sends only part 6 (the conversation holds the rest):
+// the owner's messages alone (relay.go), or the short ended-without-
+// hand-off reminder.
 func assembleStepPrompt(p promptParts) string {
+	if p.ShortMessageResume {
+		// the owner's words continue the conversation they were written
+		// to (relay.go): exactly what a live delivery sends
+		return renderOwnerMessages(p.OwnerMessages)
+	}
 	if p.ShortEwrResume {
-		return ewrResumeReminder(p)
+		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages})
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are executing step %q of polyforge work item %q (derivation %d).\n\n", p.StepID, p.WIID, p.SpawnN)
-	switch p.ContextMode {
-	case ContextInherit:
-		b.WriteString("Context policy: INHERIT — this step continues the previous step's work; the handoff below (when present) is the upstream continuation.\n\n")
-	case ContextFresh:
-		b.WriteString("Context policy: FRESH — this step starts from a clean context; nothing from previous steps is carried in: read whatever upstream artifacts your instructions name, by their path.\n\n")
+	// 1. the dispatch
+	b.WriteString(dispatchPart(p))
+	// 2. the prohibited actions, beside the capsule-root
+	// binding they scope
+	b.WriteString("\n")
+	b.WriteString(harness.StepProhibitedActions(p.CapsuleRoot))
+	// 3. how a step runs, and the hand-off body
+	b.WriteString("\n")
+	b.WriteString(strings.TrimSpace(p.StepHeader))
+	b.WriteString("\n")
+	// 4. the step definition
+	b.WriteString("\n" + definitionHeading + "\n\n")
+	b.WriteString(strings.TrimSpace(p.Definition))
+	b.WriteString("\n")
+	// 5. the skill
+	b.WriteString(p.Skill)
+	// 6. the continuation
+	b.WriteString(continuationPart(p))
+	return b.String()
+}
+
+// The one instruction sentence per agent language part 1 carries.
+const (
+	languageInstructionEN = "Language: English. Work in English throughout this step: your replies and narration, every question to the owner, " +
+		"the prose of the files you write, and your hand-off body under the English headings of the hand-off body template below."
+	languageInstructionZhCN = "Language: Simplified Chinese (zh-CN). Work in Simplified Chinese (简体中文) throughout this step: your replies and narration, " +
+		"every question to the owner, the prose of the files you write, and your hand-off body under the Chinese headings of the hand-off body template below. " +
+		"Code, commands, identifiers and commit messages follow the project's conventions."
+)
+
+// languageInstruction answers part 1's sentence for a dispatch language.
+func languageInstruction(lang string) string {
+	if dispatchLanguage(lang) == stepcall.LangZhCN {
+		return languageInstructionZhCN
 	}
+	return languageInstructionEN
+}
+
+// dispatchPart is part 1: the dispatch's identity, the language it works
+// in, the capsule root and the facts of this dispatch the step cannot read
+// anywhere else.
+func dispatchPart(p promptParts) string {
+	var b strings.Builder
+	b.WriteString(dispatchHeading + "\n\n")
+	fmt.Fprintf(&b, "You are step `%s` of polyforge work item `%s`: round %d, dispatch %d (`PF_STEP`, `PF_ROUND`, `PF_SPAWN` in your environment).\n\n", p.StepID, p.WIID, p.Round, p.SpawnN)
+	b.WriteString(languageInstruction(p.Language) + "\n\n")
 	// The capsule-root anchor (polyforge#244): the step is born at the
 	// capsule root, but a `cd repos/<name>` can persist across its shell
 	// calls (Claude Code keeps one shell cwd), so a bare `artifacts/<x>`
-	// write would land in the repo worktree. Binding every
-	// capsule-relative path to the absolute root removes that ambiguity.
-	fmt.Fprintf(&b, "Capsule root: `%[1]s`. Every capsule-relative path in this prompt (`artifacts/…`, `runtime-state/…`, `workflows/…`, `repos/…`) "+
+	// write would land in the repo worktree.
+	fmt.Fprintf(&b, "Capsule root: `%[1]s`. Every capsule-relative path (`artifacts/…`, `runtime-state/…`, `workflows/…`, `repos/…`) "+
 		"resolves against this root, NEVER against your current working directory — a `cd` can persist across your shell calls. "+
 		"Read and write them by absolute path: `artifacts/<name>` means `%[1]s/artifacts/<name>`.\n\n", p.CapsuleRoot)
-	if p.OutputSchema != "" {
-		b.WriteString("# Output schema\n\n")
-		b.WriteString("The `output` object of a `completed` result envelope must validate against this JSON Schema (draft-07, written as YAML; omit an optional property rather than writing null). ")
-		if outputSchemaEnforced(p.StepID) {
-			b.WriteString("The driver validates it and rejects a non-conforming envelope:\n\n```yaml\n")
-		} else if p.StepID == planStepID {
-			b.WriteString("The driver validates it and records every violation for the owner, with one exception it rejects: a `write` entry of `touched_files` without a `coupled_obligations` entry (a non-empty list of `{path, note}`, or exactly one `{none: true, reason}`):\n\n```yaml\n")
-		} else {
-			b.WriteString("The driver validates it and records every violation for the owner:\n\n```yaml\n")
-		}
-		b.WriteString(p.OutputSchema)
-		b.WriteString("\n```\n\n")
-	}
-	b.WriteString("# Step definition\n\n")
-	b.WriteString(p.Definition)
-	b.WriteString("\n")
-	if p.AttrSections != "" {
-		b.WriteString(p.AttrSections)
-	}
-	// The verification tier: rendered on the verification
-	// step only. The recorded tier rides every re-dispatch, so the agent
-	// never recomputes it and never asks the owner which tier to run.
-	if p.StepID == verificationStepID && p.ScopeTier != "" {
-		b.WriteString("\n# Verification tier\n\n")
-		switch p.ScopeTier {
-		case tierScoped:
-			fmt.Fprintf(&b, "This work item opted into the SCOPED tier — its content carries the `%s` marker and the lane is scoped-capable. Declare a complete `scope` object in your output: `mode: scoped`, non-empty `declared_paths`, a `rationale` and a `fast_gates_ref` naming the repo's declaration. Run the repo's declared fast gates plus every lane check; never shed the contract-linked tests, the lane's own checks or the fail-closed fallback to full. On an incremental re-verification after a review FAIL, carry the original scope in `scope.prior` as `{tier: scoped, declared_paths}`.\n", scopetier.Marker)
-			if p.ScopedRules != "" {
-				b.WriteString("\n" + p.ScopedRules + "\n")
-			}
-		default:
-			b.WriteString("This work item runs the FULL tier: run the full bar. Carry no `scope` object — an absent scope is the single canonical shape of a full result.\n")
-		}
-	}
-	// the review's rare-path sections, each rendered only on
-	// the dispatch shape that needs it (the adapter reads the material).
-	if p.ScopedReview != "" {
-		b.WriteString("\n# Scoped tier (this work item opted in)\n\n")
-		b.WriteString(p.ScopedReview)
+	// where raw downloads go. The capsule IS the chain, and
+	// the hub refuses a blob over capsule.MaxBlobBytes; the downloads
+	// directory is capsule-gitignored, and the commit guard leaves any
+	// other file over the limit out (gitops/oversize.go).
+	fmt.Fprintf(&b, "Raw downloads (CI artifacts, traces, screenshots and video bundles) go under `%s/`, which the capsule chain never commits; "+
+		"`%s/` keeps conclusions and small excerpts. A file over %d MiB elsewhere is left out of the chain too and listed in `%s`.\n",
+		capsule.DirDownloads, capsule.DirArtifacts, capsule.MaxBlobBytes>>20, capsule.OversizeManifest)
+	if p.NoSubagents != "" {
+		// the harness this dispatch runs on (PR #869 review, blocking 2)
+		b.WriteString("\n")
+		b.WriteString(p.NoSubagents)
 		b.WriteString("\n")
 	}
-	if p.ReviewReentry != "" {
-		b.WriteString("\n# Review re-entry (a prior verdict-bearing round is on record)\n\n")
-		b.WriteString(p.ReviewReentry)
+	return b.String()
+}
+
+// continuationPart is part 6: what a dispatch that continues the step
+// continues from ("" for a first dispatch) — the owner messages no
+// dispatch delivered (relay.go), that the previous turn ended without
+// `pf step handoff`, and the previous attempt's transcript when this is a
+// new conversation.
+func continuationPart(p promptParts) string {
+	var b strings.Builder
+	if len(p.OwnerMessages) > 0 {
+		b.WriteString("## Owner messages\n\n")
+		b.WriteString("The owner wrote these to this step while it ran, in order; a reply names the question it answers by that question's stamp. ")
+		b.WriteString("Each is verbatim; the bracketed `[pf-msg:…]` line after a message is the daemon's delivery marker, not the owner's words. ")
+		b.WriteString("Act on them; one that decides more than this step's own work is carried out by the matching hand-off status citing it (`--per-owner <at>`).\n\n")
+		b.WriteString(renderOwnerMessages(p.OwnerMessages))
 		b.WriteString("\n")
-	}
-	if p.Rewind != nil && strings.TrimSpace(p.Rewind.Reason) != "" {
-		b.WriteString("\n# Rewind input carried for the whole round\n\n")
-		b.WriteString("A gate FAIL or an owner's answer routed this rewind input here. In full:\n\n")
-		b.WriteString(p.Rewind.Reason)
-		b.WriteString("\n")
-	}
-	// The light re-entry instruction (polyforge#222): a rewind input whose
-	// Note is set rides beside the verdict as its own section - the resumed
-	// session sees the re-entry boundary duty and the needs_code_change
-	// self-report channel without re-deriving them from the verdict (the
-	// note itself states which kind of light rewind this is).
-	if p.Rewind != nil && strings.TrimSpace(p.Rewind.Note) != "" {
-		b.WriteString("\n# Light rewind re-entry\n\n")
-		b.WriteString(p.Rewind.Note)
-		b.WriteString("\n")
-	}
-	// The mechanical classification duty (polyforge#260): an armed
-	// verification dispatch's own section, the rewind-note pattern - the
-	// agent sees the static-only boundary, the all-or-nothing rule and the
-	// bound contract without re-deriving them from the workflow.
-	if p.MechanicalClassify != "" {
-		b.WriteString("\n# Mechanical classification (this lane is armed)\n\n")
-		b.WriteString(p.MechanicalClassify)
-		b.WriteString("\n")
-	}
-	// The light recheck section (polyforge#260): the light dispatch's own
-	// order - the bound commands per repo plus the shared light contract
-	// - beside the untouched step definition. The bound is the fix's
-	// boundary; the recheck re-runs exactly the bound commands.
-	if p.LightRecheck != "" {
-		b.WriteString("\n# Light recheck (the mechanical fast lane)\n\n")
-		b.WriteString(p.LightRecheck)
-		b.WriteString("\n")
-	}
-	// The escalation note (polyforge#260): the ESCALATED full re-run's
-	// own section - the light path failed and fell back to this full
-	// verification in place, and it owes the report's fast-lane section
-	// the light recheck that would have written it never settled to write.
-	if p.EscalatedRecheck != "" {
-		b.WriteString("\n# Escalated full verification (the mechanical fast lane)\n\n")
-		b.WriteString(p.EscalatedRecheck)
-		b.WriteString("\n")
-	}
-	// The plan-conformance facts: the gate receives both
-	// set differences computed, never reconstructs them.
-	b.WriteString(p.PlanConformance)
-	if p.PriorRejection != "" {
-		b.WriteString("\n# Previous result envelope REJECTED — fix and rewrite\n\n")
-		b.WriteString("Your previous envelope for this step was rejected by the driver's validation:\n\n")
-		b.WriteString(p.PriorRejection)
-		b.WriteString("\n\nFix the defect and write a corrected envelope. Compute artifact digests programmatically (e.g. sha256sum + jq into the JSON) — never hand-transcribe them; re-check every required field the error names.\n")
 	}
 	if p.PriorEndedWithoutResult {
-		b.WriteString("\n# Previous turn ended WITHOUT a result envelope\n\n")
-		b.WriteString("Your previous turn on this step ended without submitting a result. Finishing your reply is not delivering: the step only completes when you submit the result envelope with `pf result submit` (see the delivery contract below). Do the remaining work, then submit before you stop.\n")
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("## Your previous turn ended without `pf step handoff`\n\n")
+		b.WriteString("The previous turn on this step ended without handing off. Finishing your reply is not handing off: the step only completes with one `pf step handoff`. Do the remaining work, then hand off before you stop.\n")
 	}
 	if p.Reference != "" {
-		b.WriteString("\n# Previous attempt (read-only reference)\n\n")
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("## Previous attempt (read-only reference)\n\n")
 		if p.ContinueInPlace {
 			// the tree matched the failed attempt's hash, so
 			// the environment is intact — continue instead of re-laying it.
-			fmt.Fprintf(&b, "A previous attempt of this step ended without delivering a result. Its conversation transcript is at `%s` (JSONL, capsule path). "+
+			fmt.Fprintf(&b, "A previous attempt of this step ended without handing off. Its conversation transcript is at `%s` (JSONL, capsule path). "+
 				"The capsule tree is byte-identical to the moment that attempt died, so its environment is intact (dependencies installed, half-run work preserved). "+
 				"Read the transcript (start from the transcript tail to verify the resume point: the last unfinished action), then continue the previous attempt's work from where it stopped instead of starting over. "+
 				"Do not redo environment setup that is already completed (for example `npm ci`). Do not modify the transcript.\n", p.Reference)
 		} else {
-			fmt.Fprintf(&b, "A previous attempt of this step ended without delivering a result. Its conversation transcript is at `%s` (JSONL, capsule path). "+
+			fmt.Fprintf(&b, "A previous attempt of this step ended without handing off. Its conversation transcript is at `%s` (JSONL, capsule path). "+
 				"Read it ONLY for context about what was already tried; do not modify it, and start this attempt's work from scratch rather than replaying it.\n", p.Reference)
 		}
 	}
-	if len(p.Answers) > 0 {
-		b.WriteString("\n# Answered questions (this step's history — continue from it)\n\n")
-		for _, a := range p.Answers {
-			fmt.Fprintf(&b, "- %s (answered by %s): %s\n", a.QuestionID, a.AnsweredBy, a.Answer)
-		}
+	if b.Len() == 0 {
+		return ""
 	}
-	b.WriteString(p.Memories)
-	if p.Handoff != nil {
-		fmt.Fprintf(&b, "\n# Handoff from step %q (%s)\n\n", p.Handoff.FromStep, p.Handoff.Path)
-		b.Write(p.Handoff.Content)
-		b.WriteString("\n")
-	}
-	b.WriteString(p.MemoryDuty)
-	b.WriteString(deliveryContract(p))
-	return b.String()
+	return "\n" + continuationHeading + "\n\n" + b.String()
 }
 
-// ewrResumeReminder is the whole instruction of the first
-// ended_without_result retry that resumes the same harness session
-//. The resumed conversation already holds the step
-// definition, the output schema, the context-policy line and the
-// recalled memories from its original dispatch, so re-sending the
-// assembled prompt would restart the work. The reminder carries only
-// the delivery duty: submit with `pf result submit`, finish just the
-// remaining work, do not start over.
+// ewrResumeReminder is the whole instruction of the first retry after a
+// turn that ended without `pf step handoff`, when it resumes the same
+// harness session: the resumed conversation already holds
+// every part of the prompt, so re-sending it would restart the work. The
+// reminder carries only the hand-off duty.
 func ewrResumeReminder(p promptParts) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are resuming step %q of polyforge work item %q (derivation %d).\n\n", p.StepID, p.WIID, p.SpawnN)
-	b.WriteString("Your previous turn on this step ended without submitting a result. Submitting is the only way the step completes:\n\n")
-	b.WriteString("- If the work is already done, submit your result now with `pf result submit` and end your turn.\n")
-	b.WriteString("- Otherwise finish only the remaining work, then submit with `pf result submit`.\n")
+	fmt.Fprintf(&b, "You are resuming step `%s` of polyforge work item `%s` (round %d, dispatch %d).\n\n", p.StepID, p.WIID, p.Round, p.SpawnN)
+	b.WriteString("Your previous turn on this step ended without `pf step handoff`. Handing off is the only way the step completes:\n\n")
+	b.WriteString("- If the work is already done, hand off now with `pf step handoff` and end your turn.\n")
+	b.WriteString("- Otherwise finish only the remaining work, then hand off.\n")
 	b.WriteString("- Do not start over and do not redo work you already completed.\n\n")
 	b.WriteString("The instructions you already have still apply.\n")
 	return b.String()
 }
 
-// Bounds of the recalled-memories section: at most memoryListMax lines,
-// each title cut to memoryTitleRunes (ids and excerpts stay in the
-// snapshot file).
-const (
-	memoryListMax    = 10
-	memoryTitleRunes = 120
-	memoryTypeRunes  = 80
-)
+// skillHeading is part 5's heading.
+const skillHeading = "# Skill"
 
-// memoryNoise matches the titles of id-only memories a step cannot use.
-var memoryNoise = regexp.MustCompile(`^(Verification Report — \S+$|Controller-sink artifact)`)
-
-// oneLine collapses every whitespace run (newlines included) to one space
-// and caps the result at max runes, so a recalled field cannot break out
-// of its bullet (no new line, no heading).
-func oneLine(s string, max int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > max {
-		s = string(r[:max]) + "…"
-	}
-	return s
-}
-
-// memoryTitle answers a recalled memory's display title: its title, else
-// the first non-empty line of its excerpt, else its id.
-func memoryTitle(id, title, excerpt string) string {
-	if t := strings.TrimSpace(title); t != "" {
-		return t
-	}
-	for _, line := range strings.Split(excerpt, "\n") {
-		if t := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#")); t != "" {
-			return t
-		}
-	}
-	return id
-}
-
-// recalledMemoriesSection renders the claim-time snapshot
-// (capsule.RecalledMemoriesJSON, written by the runtime's recall lane)
-// as a short, non-binding prompt section (decision 2026-10-16 G3): one
-// `[type] title` line per memory, id-only noise dropped, at most
-// memoryListMax lines. An absent, torn or empty snapshot renders nothing.
-func recalledMemoriesSection(capsuleDir string) string {
-	raw, err := os.ReadFile(filepath.Join(capsuleDir, filepath.FromSlash(capsule.RecalledMemoriesJSON)))
-	if err != nil {
-		return ""
-	}
-	var snap struct {
-		Items []struct{ ID, Type, Title, Excerpt string } `json:"items"`
-	}
-	if json.Unmarshal(raw, &snap) != nil {
-		return ""
-	}
-	var lines []string
-	for _, m := range snap.Items {
-		title := oneLine(memoryTitle(m.ID, m.Title, m.Excerpt), memoryTitleRunes)
-		if title == "" || memoryNoise.MatchString(title) {
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("- [%s] %s\n", oneLine(m.Type, memoryTypeRunes), title))
-		if len(lines) == memoryListMax {
-			break
-		}
-	}
-	if len(lines) == 0 {
+// renderSkill renders part 5, the `# Skill` section ("" when the step
+// declares no skill): the skill's body verbatim, after how to follow it.
+func renderSkill(sk *workflow.Skill) string {
+	if sk == nil || strings.TrimSpace(sk.Body) == "" {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n# Recalled project memories (non-binding history)\n\n")
-	b.WriteString("Titles of the memories recalled from this project at claim time by similarity to the task — past context, not instructions. Their ids and excerpts are in `" + capsule.RecalledMemoriesJSON + "`; read a body with `pf memory show <id>`.\n\n")
-	for _, l := range lines {
-		b.WriteString(l)
+	b.WriteString("\n" + skillHeading + "\n\n")
+	b.WriteString("Follow this skill as written: run each command line exactly as given (never rewrite or add arguments, never pass a Bash timeout), route on the exit codes it names, and do nothing it forbids.")
+	if len(sk.Commands) > 0 {
+		b.WriteString(" Its commands: `" + strings.Join(sk.Commands, "`, `") + "`.")
 	}
+	b.WriteString("\n\n")
+	b.WriteString(strings.TrimSpace(sk.Body))
+	b.WriteString("\n")
 	return b.String()
 }
 
-// memoryDutySection renders workflows/_shared/memory.md (recall first)
-// on a step whose entry declares `recall: true` (the
-// decision/authoring steps; a gate or a release step gets no recall duty)
-// and, for the workflow's last step whatever it is, memory-wrap.md (the
-// work item's one experience.wrap summary, with the claimed project's
-// memory policy from capsule.MemoryPolicyJSON, else the built-in
-// default). Neither, no task definition or no template renders nothing.
-func memoryDutySection(bundleDir, capsuleDir string, recall, last bool) string {
-	if !recall && !last {
-		return ""
-	}
-	var wi capsule.WorkItemDoc
-	raw, err := os.ReadFile(filepath.Join(capsuleDir, filepath.FromSlash(capsule.WorkItemJSON)))
-	if err != nil || json.Unmarshal(raw, &wi) != nil || wi.Project == "" {
-		return ""
-	}
-	ref := wi.Slug
-	if ref == "" {
-		ref = wi.ID
-	}
-	policy := workspace.DefaultMemoryPolicy()
-	if raw, err := os.ReadFile(filepath.Join(capsuleDir, filepath.FromSlash(capsule.MemoryPolicyJSON))); err == nil {
-		_ = json.Unmarshal(raw, &policy)
-	}
-	vars := map[string]string{"project": wi.Project, "work_item": ref}
-	var names []string
-	if recall {
-		names = append(names, "memory.md")
-	}
-	if last {
-		names = append(names, "memory-wrap.md")
-	}
-	var b strings.Builder
-	for _, name := range names {
-		if name == "memory-wrap.md" {
-			vars["record"], vars["skip"] = policyBullets(policy.Record), policyBullets(policy.Skip)
-		}
-		path := filepath.Join(filepath.Dir(bundleDir), workflow.SharedDir, name)
-		tmpl, err := os.ReadFile(path)
-		if err == nil {
-			tmpl, err = workflow.RenderStepVars(tmpl, vars)
-		}
+// stepHeaderFiles are part 3 of every prompt: the shared step header and
+// the hand-off body template, beside the bundle in the capsule snapshot.
+var stepHeaderFiles = []string{"step-header", "handoff"}
+
+// stepHeader answers part 3 of the prompt: the lane snapshot's
+// _shared/step-header.md followed by its _shared/handoff.md, verbatim. A
+// missing or unreadable file is an error: a step without them cannot know
+// how it hands off, so the dispatch fails closed.
+func stepHeader(bundleDir string) (string, error) {
+	var parts []string
+	for _, name := range stepHeaderFiles {
+		raw, err := os.ReadFile(workflow.SharedFragment(bundleDir, name))
 		if err != nil {
-			if !os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "driver: memory duty %s: %v\n", path, err)
-			}
-			break
+			return "", fmt.Errorf("the step header %s/%s.md: %w", workflow.SharedDir, name, err)
 		}
-		b.WriteString("\n" + strings.TrimSpace(string(tmpl)) + "\n")
+		parts = append(parts, strings.TrimSpace(string(raw)))
 	}
-	return b.String()
-}
-
-// policyBullets renders one policy list as markdown bullets.
-func policyBullets(list []string) string {
-	if len(list) == 0 {
-		return "- (none)"
-	}
-	var b strings.Builder
-	for _, s := range list {
-		b.WriteString("- " + oneLine(s, 300) + "\n")
-	}
-	return b.String()
-}
-
-// deliveryContract states the envelope delivery channel and shape: the
-// step submits its envelope with `pf result submit` — the ONE delivery
-// path (polyforge#214) — and the daemon stamps the dispatch identity and
-// lands it at the drop path the driver collects from, so the prompt
-// names no path and no identity field. The MINIMAL CONTRACT
-// (polyforge#147): the envelope is the outcome + output pair (needs_input
-// adds the question pair) — no protocol version stamp, no envelope id,
-// no artifact manifest, no handoff digest reference; downstream and
-// handoff readers work by path convention. A helper that cannot deliver
-// ends the turn without a result (the exited-without-result recovery
-// lane), never a hand-written file. For a gate step it also states the
-// verdict binding (the #106 lesson): the output's top-level fail verdict
-// and the envelope outcome must agree — a fail verdict requires
-// gate_failed, and the driver re-binds a completed envelope carrying one
-// fail-closed.
-func deliveryContract(p promptParts) string {
-	evidenceLine := ""
-	if p.RequireCommandEvidence {
-		evidenceLine = ",\n  \"command_evidence\": []"
-	}
-	var b strings.Builder
-	b.WriteString("\n# Result delivery\n\n" +
-		"When this step reaches an outcome, deliver exactly ONE JSON object — the polyforge result envelope — " +
-		"with `pf result submit`, then end your turn. This command is the ONLY way to deliver a result: " +
-		"the daemon recognizes this step from your process, stamps the work item, step and spawn itself " +
-		"and lands the envelope where the execution driver collects it; nothing else you print is read as a result. " +
-		"Pass the envelope inline, on stdin (`pf result submit - <<'EOF'` … `EOF`) or from a file (`pf result submit @<path>`):\n\n")
-	fmt.Fprintf(&b, "```json\n{\n"+
-		"  \"outcome\": \"completed\" | \"gate_failed\" | \"needs_input\" | \"incomplete\",\n"+
-		"  \"output\": { }%s\n"+
-		"}\n```\n\n", evidenceLine)
-	b.WriteString("If `pf result submit` refuses the envelope it exits non-zero and names the defect: correct the envelope and submit it again. " +
-		"If it cannot deliver at all (the daemon unreachable or refusing this process), report that and end your turn — " +
-		"never write a result file yourself.\n\n")
-	b.WriteString("Rules: `output` is a JSON object; every file this step produced that downstream steps or the owner consume is written under `artifacts/` (that is, `" + p.CapsuleRoot + "/artifacts/`) and named by its path in the step's own instructions — the driver and downstream readers work by path convention, never by manifest")
-	if p.HandoffDue {
-		// Self-sufficient for every handoff-declaring step: not every one
-		// includes workflows/_shared/handoff_duty.md (bug-fix/root-cause,
-		// feature-full/grill-review and custom bundles carry no handoff
-		// text), so this line states the path and the path convention.
-		b.WriteString("; this step DECLARES handoff, so write the handoff file at `" + p.CapsuleRoot + "/artifacts/handoff-" + p.StepID + ".md` — the next inherit step reads it by that path convention")
-	}
-	b.WriteString("; a `needs_input` result carries `question_id` (1–64 chars of `A-Za-z0-9._-`) and `question` instead. End your turn once the submit succeeds.\n")
-	if p.RequireCommandEvidence {
-		b.WriteString("\nCommand evidence: this step requires `command_evidence` — a list of OBJECTS " +
-			"`{\"argv\": [\"go\", \"test\", \"./...\"], \"cwd\": \"repos/<name>\", \"exit_code\": 0, \"duration_ms\": 1200}`, never strings. " +
-			"`cwd` is the directory the command ran in, capsule-relative: record each command where it ran — with that `cwd`, " +
-			"or with the `cd` you ran it after (`[\"bash\", \"-c\", \"cd repos/<name> && go test ./...\"]`); " +
-			"a command recorded with neither counts as run at the capsule root, not in a repo. " +
-			"Run at least one real check command and report every command you ran, in the order you ran it, with its real `exit_code` and its measured `duration_ms` (> 0); " +
-			"an empty list, an entry without `argv`, or one without a positive `duration_ms` is rejected and the step is re-dispatched. " +
-			"This step never completes on reading code alone. Never fabricate an entry, an argv or a duration, and never claim a check ran without its command having run; " +
-			"if no check command can be run at all, do not complete: return the problem to the owner instead.\n")
-	}
-	if p.RequiresHumanAnswer {
-		b.WriteString("\nHuman answer: this step requires a human answer before completion: return `needs_input` first; " +
-			"a `completed` or `gate_failed` envelope without an answer in this round is rejected.\n")
-	}
-	if p.HumanAnswerIfAsked {
-		b.WriteString("\nHuman questions: every question this step raises is answered by a human only — " +
-			"ask through `needs_input` and never answer it yourself (the daemon refuses `pf answer` from a step process). " +
-			"Completing with zero questions is allowed, but it is recorded and the owner is notified.\n")
-	}
-	if p.Gate {
-		b.WriteString("\nGate verdict binding: this step is a GATE (the workflow declares it `gate: true`), " +
-			"and the top-level `verdict` field of your `output` is the business verdict. " +
-			"A fail verdict REQUIRES `outcome: \"gate_failed\"` — that outcome is the driver's only rewind trigger, " +
-			"and the fail verdict rides `output` verbatim as the rewind input. " +
-			"A fail verdict delivered under `outcome: \"completed\"` is a mislabeled gate report: " +
-			"the driver re-binds it to `gate_failed` fail-closed (the gate is never archived done on it). " +
-			"Deliver `outcome: \"completed\"` only for a pass verdict (or when the step owes no verdict).\n")
-	}
-	return b.String()
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // ---------------------------------------------------------------------------
 // Step definition + capsule file reads.
 
-// readStepDefinition loads workflows/<bundle>/steps/<id>.md (the R9
-// path convention; falling back to workflows/_shared/steps/<id>.md when
-// the bundle carries no own file), renders its {{name}} placeholders
-// from the step entry's vars and strips any leading frontmatter block:
-// the body is the step's instruction of record.
+// readStepDefinition reads the step's definition through the one
+// definition read (workflow.ReadDefinition: the lane's own
+// steps/<id>.md, else workflows/_shared/steps/<id>.md, rendered with the
+// step entry's vars) and answers its body: the step's instruction of
+// record.
 func readStepDefinition(bundleDir, stepID string, vars map[string]string) (string, error) {
-	raw, err := workflow.ReadStepDefinition(bundleDir, stepID, vars)
+	def, err := workflow.ReadDefinition(bundleDir, stepID, vars)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", fmt.Errorf("driver: step definition for %q unreadable (expected %s under the bundle, or %s beside it): %w",
@@ -1039,248 +789,21 @@ func readStepDefinition(bundleDir, stepID string, vars map[string]string) (strin
 		}
 		return "", fmt.Errorf("driver: step definition for %q: %w", stepID, err)
 	}
-	body := stepDefBody(raw)
-	if body == "" {
+	if def.Body == "" {
 		return "", fmt.Errorf("driver: step definition for %q is empty", stepID)
 	}
-	return body, nil
+	return def.Body, nil
 }
-
-// stepDefBody strips a leading YAML frontmatter block (the same fence
-// shape workflow.md uses) via the shared splitter. A file without a
-// closed frontmatter block is body in full.
-func stepDefBody(raw []byte) string {
-	if _, body, ok := workflow.SplitFrontmatter(raw); ok {
-		raw = body
-	}
-	return strings.TrimSpace(string(raw))
-}
-
-// mechanicalFixFile is the shared fast-lane material's conventional path
-// beside the bundle (workflows/_shared/mechanical-fix.md).
-func mechanicalFixFile(bundleDir string) string {
-	return filepath.Join(filepath.Dir(bundleDir), workflow.SharedDir, "mechanical-fix.md")
-}
-
-// mechanicalFixSection answers one H2 section of the shared fast-lane
-// material's body (the text under "## <heading>" up to the next H2),
-// trimmed; "" when the file, its frontmatter or the section is absent -
-// an armed lane without the material classifies nothing (fail-closed,
-// never a dispatch error).
-func mechanicalFixSection(bundleDir, heading string) string {
-	raw, err := os.ReadFile(mechanicalFixFile(bundleDir))
-	if err != nil {
-		return ""
-	}
-	_, body, ok := workflow.SplitFrontmatter(raw)
-	if !ok {
-		return ""
-	}
-	return h2Section(body, heading)
-}
-
-// e2eAuthorStepID is the conventional id of the lane's authored
-// acceptance-suite step (feature-full's e2e-author): its presence in a
-// bundle marks the lane authored - the x-prompt-when "authored"
-// condition of the output-schema prompt visibility.
-const e2eAuthorStepID = "e2e-author"
-
-// sharedSectionVars answers the trimmed text of one shared section file
-// (workflows/_shared/<name>.md, beside the bundle) that the driver
-// renders on the dispatch shape that needs it, rendered
-// with the step entry's vars the material uses (a shared section names
-// the lane's facts - e.g. {{build_step}} - like the step body does). Any
-// failure is an error, a missing file included (fs.ErrNotExist); the
-// dispatch decides what each costs (sharedPart).
-func sharedSectionVars(bundleDir, name string, vars map[string]string) (string, error) {
-	raw, err := os.ReadFile(workflow.SharedFragment(bundleDir, name))
-	if err != nil {
-		return "", err
-	}
-	text := strings.TrimSpace(string(raw))
-	used := map[string]string{}
-	for k, v := range vars {
-		if strings.Contains(text, "{{"+k+"}}") {
-			used[k] = v
-		}
-	}
-	out, err := workflow.RenderStepVars([]byte(text), used)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// AttrMaterial is the shared material file of one step attr:
-// workflows/_shared/attr_<name>.md beside the bundles.
-func AttrMaterial(name string) string { return "attr_" + name }
-
-// attrSections renders every attr override of a dispatch (name → value
-// as text) as its own prompt section, in name order: the shared material
-// workflows/_shared/attr_<name>.md rendered with {{<name>}} = the value —
-// the same step-var substitution a step definition's vars use. Fail-closed:
-// a declared override whose material is missing or does not render is a
-// dispatch error, never a silently stored-only attr.
-func attrSections(bundleDir string, attrs map[string]string) (string, error) {
-	names := make([]string, 0, len(attrs))
-	for name := range attrs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var b strings.Builder
-	for _, name := range names {
-		raw, err := os.ReadFile(workflow.SharedFragment(bundleDir, AttrMaterial(name)))
-		if err != nil {
-			return "", fmt.Errorf("step attr %s: its material %s/%s.md: %w", name, workflow.SharedDir, AttrMaterial(name), err)
-		}
-		out, err := workflow.RenderStepVars([]byte(strings.TrimSpace(string(raw))), map[string]string{name: attrs[name]})
-		if err != nil {
-			return "", fmt.Errorf("step attr %s: %w", name, err)
-		}
-		fmt.Fprintf(&b, "\n# Step attribute: %s = %s\n\n%s\n", name, attrs[name], strings.TrimSpace(string(out)))
-	}
-	return b.String(), nil
-}
-
-// sharedPart renders one driver-rendered shared section for a dispatch
-// of stepID ( W3: never silently dropped). A section that
-// cannot render - unreadable, or a placeholder with no var - fails the
-// dispatch closed, like a step definition's missing fragment: no
-// half-rendered or silently absent contract. A MISSING file renders no
-// section and says so on stderr: that is transition code for a capsule
-// claimed before's release, whose snapshot carries the old
-// static step text (the section inline) and no section file. It is
-// deleted - a missing file becomes a dispatch error too - once no capsule
-// claimed before that release is still in flight.
-func (a *StepSpawnAdapter) sharedPart(stepID, name string, vars map[string]string) (string, error) {
-	text, err := sharedSectionVars(a.BundleDir, name, vars)
-	switch {
-	case err == nil:
-		return text, nil
-	case errors.Is(err, fs.ErrNotExist):
-		fmt.Fprintf(os.Stderr, "driver: %s/%s: shared section %s: %v (no section rendered)\n", a.WI.BundleName, stepID, name, err)
-		return "", nil
-	default:
-		return "", fmt.Errorf("driver: %s/%s: shared section %s: %w", a.WI.BundleName, stepID, name, err)
-	}
-}
-
-// h2Section answers the text under one "## <heading>" line up to the
-// next H2 heading ("" when the heading is absent).
-func h2Section(body []byte, heading string) string {
-	var b strings.Builder
-	in := false
-	for _, line := range strings.Split(string(body), "\n") {
-		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "## ") {
-			if in {
-				break // the next H2 ends the section
-			}
-			in = t == "## "+heading
-			continue
-		}
-		if in {
-			b.WriteString(line)
-			b.WriteByte('\n')
-		}
-	}
-	return strings.TrimSpace(b.String())
-}
-
-// lightRecheckSection renders the light recheck's own prompt section
-// (polyforge#260): the bound commands per repo (byte-faithful, inside
-// the repo it names) plus the shared light contract
-// (workflows/_shared/mechanical-fix.md) — the light dispatch's complete
-// order, beside the untouched step definition.
-func lightRecheckSection(bundleDir string, order *LightRecheckOrder) string {
-	var b strings.Builder
-	b.WriteString("The failed verification verdict was classified mechanical; this dispatch is the LIGHT recheck, bounded to its failed checks. Re-run exactly each bound command below, byte-faithful, inside the repo it names; record command evidence for every command you run; do not modify any file.\n\n")
-	b.WriteString("The bound (per failed check - its repo, its exact command, the files it named):\n\n")
-	for _, e := range order.Bound {
-		var files []string
-		for _, f := range e.Files {
-			files = append(files, "`"+f+"`")
-		}
-		fmt.Fprintf(&b, "- check %q - repo `repos/%s`, command `%s`, files: %s\n", e.Check, e.Repo, e.Command, strings.Join(files, ", "))
-	}
-	if contract := mechanicalFixSection(bundleDir, "Light recheck contract"); contract != "" {
-		b.WriteString("\n" + contract + "\n")
-	}
-	return strings.TrimSpace(b.String())
-}
-
-// checkRelPath asserts one capsule-relative path: non-empty, not
-// absolute, no parent escape (the capsule jail of every file the
-// prompt assembler reads).
-func checkRelPath(rel string) error {
-	rel = strings.TrimSpace(rel)
-	if rel == "" {
-		return fmt.Errorf("empty artifact path")
-	}
-	if filepath.IsAbs(rel) || strings.HasPrefix(rel, "/") {
-		return fmt.Errorf("path %q must be capsule-relative", rel)
-	}
-	for _, seg := range strings.Split(rel, "/") {
-		if seg == ".." {
-			return fmt.Errorf("parent escape in path %q", rel)
-		}
-	}
-	return nil
-}
-
-// readCapsuleFile reads one capsule-relative artifact, jailed to the
-// capsule root by the same path rules the artifact verifier applies.
-func readCapsuleFile(root, rel string) ([]byte, error) {
-	if err := checkRelPath(rel); err != nil {
-		return nil, err
-	}
-	return os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
-}
-
-// ---------------------------------------------------------------------------
-// Handoff resolution.
-
-// resolveHandoff finds the handoff an inherit step continues from: the
-// NEAREST earlier step declaring handoff whose execution record is
-// done — its handoff artifact is read from the CONVENTION PATH
-// artifacts/handoff-<step>.md (polyforge#147: path convention, no
-// manifest, no digest verification). No earlier handoff-declaring step
-// at all answers (nil, nil) (a first step may legitimately inherit
-// nothing), and so does a done producer that left no file at the
-// convention path: the handoff section is simply omitted, never a
-// dispatch failure (01-workflow-skills.md §4.4a).
-func (a *StepSpawnAdapter) resolveHandoff(stepID string, done map[string]bool) (*handoffSection, error) {
-	idx, _ := a.Workflow.indexOf(stepID) // -1 when absent
-	if idx <= 0 {
-		return nil, nil // no earlier step declares anything
-	}
-	for i := idx - 1; i >= 0; i-- {
-		prod := &a.Workflow.Steps[i]
-		if !prod.Handoff {
-			continue
-		}
-		if !done[prod.ID] {
-			return nil, fmt.Errorf("driver: step %q declares handoff but is not done (execution.json), needed by inherit step %q",
-				prod.ID, stepID)
-		}
-		rel := capsule.DirArtifacts + "/handoff-" + prod.ID + ".md"
-		content, err := readCapsuleFile(a.WI.CapsuleDir, rel)
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("driver: handoff artifact of step %q unreadable at %s (path convention): %w", prod.ID, rel, err)
-		}
-		return &handoffSection{FromStep: prod.ID, Path: rel, Content: content}, nil
-	}
-	return nil, nil
-}
-
-// spawnTokenDir is the archive token directory for spawn ordinal n.
-func spawnTokenDir(n int64) string { return "s" + strconv.FormatInt(n, 10) }
 
 // ---------------------------------------------------------------------------
 // Session identity + spawn journal.
+
+// deliveredResult answers whether the step's dispatch n handed off (the
+// call ledger records its accepted `pf step handoff`): the rewind re-entry
+// resumes only a conversation that ended in the round a gate judged.
+func (a *StepSpawnAdapter) deliveredResult(stepID string, n int64) bool {
+	return ledgerHandoff(a.WI.CapsuleDir, a.WI.ID, stepID, n) != nil
+}
 
 // latestJournalEntry answers the step's highest-ordinal spawn-journal
 // line declaring a transcript (the zero entry when none): the previous
@@ -1306,10 +829,12 @@ func (a *StepSpawnAdapter) latestJournalEntry(stepID string) (capsule.SpawnJourn
 // appendSpawnJournal appends one spawn identity line through
 // SpawnParams.Journal — the same document shape the runtime lane
 // writes (at, work_item, step_id, spawn_token, pid, started_at,
-// session_handle, spawn_n, resume, transcript), so the B2 counter
+// session_handle, spawn_n, resume, transcript), plus the dispatch's
+// harness, harness_session and language (the agent
+// language its prompt named), so the B2 counter
 // stays continuous across both spawners and every reader (loose by
 // contract) keeps parsing.
-func (a *StepSpawnAdapter) appendSpawnJournal(p spawn.Params, stepID, token string, pid int, startedAt string) error {
+func (a *StepSpawnAdapter) appendSpawnJournal(p spawn.Params, stepID, token, language string, pid int, startedAt string) error {
 	now := time.Now()
 	if a.Now != nil {
 		now = a.Now()
@@ -1327,6 +852,7 @@ func (a *StepSpawnAdapter) appendSpawnJournal(p spawn.Params, stepID, token stri
 		Transcript:     p.TranscriptPath,
 		Harness:        harness.Of(p.Harness),
 		HarnessSession: p.HarnessSession,
+		Language:       language,
 	}
 	blob, err := json.Marshal(entry)
 	if err != nil {
@@ -1380,40 +906,52 @@ func spawnToken(handle string, n int64) string {
 	return handle
 }
 
-// PendingResultPath is the absolute drop path of one derivation's
-// envelope.
-func PendingResultPath(capsuleDir string, n int64) string {
-	return filepath.Join(capsuleDir, capsule.DirRuntimeState, dirPendingResults, strconv.FormatInt(n, 10)+".json")
-}
-
 // ---------------------------------------------------------------------------
 // stepRun: the StepRun face over one derived step process.
 
-// stepRun awaits one step process's result envelope. Wait polls the
-// drop path until a well-formed, fence-correct envelope lands (then
-// archives it and tears the process down), the process exits without
-// one (an infrastructure-class error — the recovery lane owns what
-// follows), or ctx ends. A present-but-torn drop file is treated as a
-// write still in flight and re-read on later polls; once the process
-// is gone the defect is surfaced, not swallowed.
+// stepRun awaits one step process's hand-off. Wait polls the capsule's
+// call ledger until the dispatch's accepted `pf step handoff` is there
+// (then tears the process down), the process exits without one (an
+// infrastructure-class error — the recovery lane owns what follows), or
+// ctx ends. The ledger is the daemon's record: a hand-off it refused is
+// not on it, so nothing half-written is ever collected.
 type stepRun struct {
 	capsuleRoot string
 	wiID        string
 	sp          StepSpawn
 	handle      spawn.Handle
-	dropPath    string
 	poll        time.Duration
 	meta        RunMeta
 	sink        *supervise.Tracker
+	// watch is the dispatch's delivery watch over its stdout stream
+	// (relay.go), fed by launch's record tap.
+	watch *deliveryWatch
 }
 
 // Meta implements MetaRun.
 func (r *stepRun) Meta() RunMeta { return r.meta }
 
+// SendMessage implements relayRun: one owner message into the resident
+// step process through the harness's own channel (spawn.Messenger).
+func (r *stepRun) SendMessage(ctx context.Context, m spawn.Message) (spawn.Delivery, error) {
+	ms, ok := r.handle.(spawn.Messenger)
+	if !ok {
+		return spawn.Delivery{}, fmt.Errorf("driver: step %s spawn %d: the harness process takes no later message", r.sp.StepID, r.sp.SpawnN)
+	}
+	return ms.SendMessage(ctx, m)
+}
+
+// deliveryWatch implements relayRun.
+func (r *stepRun) deliveryWatch() *deliveryWatch { return r.watch }
+
+// carriedMessages implements relayRun: the owner messages the dispatch's
+// first message carried (StepSpawn.OwnerMessages).
+func (r *stepRun) carriedMessages() []capsule.AskLine { return r.sp.OwnerMessages }
+
 // exited builds the ExitedError of a process that is gone without a
-// usable envelope: exit status, stderr tail and the harness's last
-// signal (whether it ended on an error turn).
-func (r *stepRun) exited(defect error) error {
+// hand-off: exit status, stderr tail and the harness's last signal
+// (whether it ended on an error turn).
+func (r *stepRun) exited() error {
 	ee := &ExitedError{Step: r.sp.StepID, SpawnN: r.sp.SpawnN, ExitCode: -1}
 	var parts []string
 	add := func(t string) {
@@ -1431,6 +969,8 @@ func (r *stepRun) exited(defect error) error {
 	if er, ok := r.handle.(spawn.ExitReporter); ok {
 		info := er.ExitInfo()
 		ee.ExitCode, ee.Signal = info.Code, info.Signal
+		ee.StderrIncomplete = info.StderrIncomplete
+		ee.StdoutIncomplete = info.StdoutIncomplete
 		add(tailLine(info.StderrTail))
 	}
 	if r.sink != nil {
@@ -1446,55 +986,24 @@ func (r *stepRun) exited(defect error) error {
 		add(snap.LastError)
 	}
 	ee.LastError = strings.Join(parts, " | ")
-	if defect != nil {
-		ee.Detail = "unusable result envelope: " + defect.Error()
-	}
 	return ee
 }
 
 func (r *stepRun) Wait(ctx context.Context) (*StepResult, error) {
-	var lastDefect error
 	for {
-		res, defect := r.collect()
-		if res == nil {
-			// the CURRENT drop's defect (nil once it was removed or is
-			// mid-rewrite): a stale defect is never reported
-			lastDefect = defect
-		}
-		if res != nil {
-			if err := r.archive(res); err != nil {
-				_ = r.handle.Terminate(teardownBound)
-				return nil, fmt.Errorf("driver: step %s spawn %d result staging failed: %w", r.sp.StepID, r.sp.SpawnN, err)
-			}
-			// Consume the drop (the #97 lesson): collection is single-shot,
-			// the archived copy is the durable record — a drop left in place
-			// would be re-collected by the next dispatch on this ordinal. A
-			// failed remove is logged, never fatal (the fence still guards).
-			if rerr := os.Remove(r.dropPath); rerr != nil && !os.IsNotExist(rerr) {
-				fmt.Fprintf(os.Stderr, "driver: step %s spawn %d drop removal failed (stale re-read still fenced): %v\n",
-					r.sp.StepID, r.sp.SpawnN, rerr)
-			}
-			if terr := r.handle.Terminate(teardownBound); terr != nil {
-				fmt.Fprintf(os.Stderr, "driver: step %s spawn %d teardown after result failed (envelope already collected): %v\n",
-					r.sp.StepID, r.sp.SpawnN, terr)
-			}
-			return res, nil
+		if res := r.collect(); res != nil {
+			return r.deliver(res)
 		}
 		if r.handle.Done() {
-			// one last look: the envelope may have landed between the
+			// one last look: the hand-off may have landed between the
 			// collect above and the exit
-			if res2, defect2 := r.collect(); res2 != nil {
-				continue // collected on the next pass
-			} else if defect2 != nil {
-				defect = defect2
+			if res := r.collect(); res != nil {
+				return r.deliver(res)
 			}
-			return nil, r.exited(defect)
+			return nil, r.exited()
 		}
 		select {
 		case <-ctx.Done():
-			if lastDefect != nil {
-				return nil, &EnvelopeDefectError{Defect: lastDefect, Cause: ctx.Err()}
-			}
 			return nil, ctx.Err()
 		case <-time.After(r.poll):
 		}
@@ -1505,83 +1014,47 @@ func (r *stepRun) Terminate(bound time.Duration) error {
 	return r.handle.Terminate(bound)
 }
 
-// collect reads the drop path once: a non-nil envelope passed the
-// light shape/fence checks; (nil, nil) means nothing usable yet
-// (absent, or a write in flight); (nil, err) is the last observed
-// defect, surfaced by Wait once the process is gone.
-func (r *stepRun) collect() (*StepResult, error) {
-	raw, err := os.ReadFile(r.dropPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
+// deliver is the one delivery path of a collected hand-off: tear the
+// process down (the step was told to stop once its hand-off is accepted).
+// Wait's normal return and the verdict path's final look
+// both end here.
+func (r *stepRun) deliver(res *StepResult) (*StepResult, error) {
+	if terr := r.handle.Terminate(teardownBound); terr != nil {
+		fmt.Fprintf(os.Stderr, "driver: step %s spawn %d teardown after its hand-off failed (the hand-off is recorded): %v\n",
+			r.sp.StepID, r.sp.SpawnN, terr)
 	}
-	var res StepResult
-	if err := json.Unmarshal(raw, &res); err != nil {
-		return nil, fmt.Errorf("envelope at %s is not valid JSON: %w", r.dropPath, err)
-	}
-	// Light completion checks — the identity fields a minimal-contract
-	// envelope may leave to the dispatch are filled from the dispatch
-	// identity; the fence and the closed sets are enforced (full
-	// validation is the driver core's accept gate).
-	if res.StepID == "" {
-		res.StepID = r.sp.StepID
-	}
-	if res.StepID != r.sp.StepID {
-		return nil, fmt.Errorf("%w: envelope names step %q, dispatch is %q",
-			ErrIdentityMismatch, clipAgentText(res.StepID), r.sp.StepID)
-	}
-	if res.WIID == "" {
-		res.WIID = r.wiID
-	}
-	if res.WIID != r.wiID {
-		return nil, fmt.Errorf("%w: envelope names work item %q, dispatch is %q",
-			ErrIdentityMismatch, clipAgentText(res.WIID), r.wiID)
-	}
-	if res.SpawnN == 0 {
-		res.SpawnN = r.sp.SpawnN
-	}
-	if res.SpawnN != r.sp.SpawnN {
-		return nil, fmt.Errorf("%w: envelope spawn %d, dispatch %d",
-			ErrStaleSpawn, res.SpawnN, r.sp.SpawnN)
-	}
-	if !res.Outcome.Valid() {
-		return nil, fmt.Errorf("driver: envelope outcome %q is not in the closed set", clipAgentText(string(res.Outcome)))
-	}
-	return &res, nil
+	return res, nil
 }
 
-// archive lands the collected envelope at the R14 staging path —
-// artifacts/steps/<step-id>/s<spawn_n>/result.json — atomically. The
-// handoff chain reads the next inherit step's injection from exactly
-// here, and a later accept-time re-validation lane finds the bytes in
-// place.
-func (r *stepRun) archive(res *StepResult) error {
-	blob, err := json.MarshalIndent(res, "", "  ")
-	if err != nil {
-		return err
+// finalLook is the verdict path's one last look at the ledger after a
+// supervisor verdict cancelled Wait: a hand-off already
+// recorded at verdict time is a delivery, not a death, so it takes the
+// same path as Wait's normal return. (nil, nil) when there is none.
+func (r *stepRun) finalLook() (*StepResult, error) {
+	res := r.collect()
+	if res == nil {
+		return nil, nil
 	}
-	return atomicfile.Write(r.archivePath(), blob, 0o644)
+	return r.deliver(res)
 }
 
-// archivePath is the dispatch's R14 staging path.
-func (r *stepRun) archivePath() string {
-	return filepath.Join(r.capsuleRoot, capsule.DirArtifacts, "steps", r.sp.StepID, spawnTokenDir(r.sp.SpawnN), "result.json")
+// collect reads the ledger once for the dispatch's accepted hand-off
+// (nil when there is none yet).
+func (r *stepRun) collect() *StepResult {
+	return ledgerHandoff(r.capsuleRoot, r.wiID, r.sp.StepID, r.sp.SpawnN)
 }
 
-// maxQuotedAgentText bounds agent-written text quoted into a defect: the
-// defect travels into step_dead evidence, the events log and the retry
-// prompt.
-const maxQuotedAgentText = 256
+// maxQuotedText bounds agent-written text quoted into a defect (a commit
+// name, a path, a command a unit reported): bytes.
+const maxQuotedText = 256
 
-// clipAgentText cuts agent-written text to maxQuotedAgentText bytes (on
-// a rune boundary), marking the cut.
+// clipAgentText cuts agent-written text quoted into a defect to
+// maxQuotedText bytes (on a rune boundary), marking the cut.
 func clipAgentText(s string) string {
-	if len(s) <= maxQuotedAgentText {
+	if len(s) <= maxQuotedText {
 		return s
 	}
-	cut := maxQuotedAgentText
+	cut := maxQuotedText
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}

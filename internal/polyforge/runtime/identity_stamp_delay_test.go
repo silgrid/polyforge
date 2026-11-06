@@ -23,14 +23,14 @@ func TestStepIdentityStampSurvivesASlowStamp(t *testing.T) {
 	var journaled string
 	// the leader forks a member of its own group, then becomes the step
 	cmd := exec.Command("sh", "-c", "sleep 300 & exec sleep 300")
-	h, stdin, err := startHarness(cmd, SpawnParams{
+	h, err := startHarness(cmd, SpawnParams{
 		WorkItemID: "wi_stamp_delay",
 		Journal:    func(_ int, startedAt string) error { journaled = startedAt; return nil },
-	}, false)
+	})
 	if err != nil {
 		t.Fatalf("start the step process: %v", err)
 	}
-	stdin.Close()
+	h.closeStdin()
 	pid := h.cmd.Process.Pid
 	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
 

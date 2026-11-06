@@ -145,6 +145,8 @@ echo "fake docker: unhandled: $*" >&2; exit 99
 
 const fakeSSH = `#!/bin/sh
 while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; *) break ;; esac; done
+# FAKE_SSH_DENY: the host refuses non-interactive auth (#283).
+[ -n "$FAKE_SSH_DENY" ] && { echo "$1: Permission denied (publickey)." >&2; exit 255; }
 shift   # host
 export FAKE_SIDE=server
 echo "ssh $*" >> "$FAKE_W/log-ssh"
@@ -202,6 +204,7 @@ case "$1 $2" in
     [ -d "$FAKE_W/ghrel/$3" ] || { echo "release not found" >&2; exit 1; }
     ls "$FAKE_W/ghrel/$3"; exit 0 ;;
   "auth token") echo faketoken; exit 0 ;;
+  "auth status") [ -z "$FAKE_GH_LOGGED_OUT" ] || { echo "You are not logged into any GitHub hosts." >&2; exit 1; }; exit 0 ;;
   "api user") echo fakeuser; exit 0 ;;
 esac
 echo "fake gh: unhandled: $*" >&2; exit 99
@@ -338,6 +341,9 @@ c.commit()`
 		"AIHUB_HOST=fakehost", "AIHUB_DATA="+data,
 		"BACKUP_ROOT="+filepath.Join(w, "backups"), "DEPLOY_LOCK_FILE="+filepath.Join(w, "srv", "deploy.lock"), "COMPOSE_FILE="+compose,
 		"COMPOSE_PROJECT=aihub-app",
+		// the deployer repo has no origin: state which GitHub repo it stands
+		// for (deploy.sh refuses a GH_REPO it cannot match,)
+		"DEPLOY_REMOTE_IS=silgrid/polyforge",
 		"WAIT_SECS=4", "POLL_SECS=1", "UP_WAIT_SECS=5")
 	return d
 }

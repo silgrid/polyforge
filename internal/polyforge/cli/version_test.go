@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -70,7 +69,7 @@ func TestRunVersionVerb(t *testing.T) {
 	if code := Run([]string{"--json", "version"}, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("pf --json version exited %d, want 0; stderr:\n%s", code, stderr.String())
 	}
-	if got := strings.TrimSpace(stdout.String()); got != fmt.Sprintf("{\"version\":%q}", version.Version) {
+	if got := strings.TrimSpace(stdout.String()); got != versionJSON() {
 		t.Fatalf("pf --json version printed %q, want the flag path's JSON shape", got)
 	}
 

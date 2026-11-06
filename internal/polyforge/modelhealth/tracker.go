@@ -255,7 +255,7 @@ func (t *Tracker) fire(a Alert) {
 // the real volume and change nothing here.
 func retainedKind(kind string) bool {
 	switch kind {
-	case kindStepStarted, kindStepFailed, kindStepDone, kindGateVerdict, kindNeedsInput, kindIncomplete, kindUnhealthy:
+	case kindStepStarted, kindStepFailed, kindStepDone, kindGateVerdict, kindIncomplete, kindUnhealthy:
 		return true
 	default:
 		return false

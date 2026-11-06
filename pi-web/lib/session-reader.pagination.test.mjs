@@ -1,0 +1,367 @@
+// Pagination at the data boundary: a linear session (no branching) degrades into
+// a single chain whose depth equals its entry count. The old full-forest read
+// transferred the full history and was the trigger for #509 (Maximum call stack
+// size exceeded) and #555. Slicing bounds conversion and transfer to O(tail).
+import "#test-env";
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createJiti } from "jiti";
+
+const jiti = createJiti(import.meta.url);
+const { sliceActiveBranch, buildSessionContext } = await jiti.import("./session-reader.ts");
+const { computeSessionStats } = await jiti.import("./session-stats.ts");
+
+// Build a linear chain of n entries: e0 -> e1 -> ... -> e(n-1).
+function linearChain(n) {
+  const entries = [];
+  for (let i = 0; i < n; i++) {
+    entries.push({
+      id: `e${i}`,
+      parentId: i === 0 ? null : `e${i - 1}`,
+      type: "message",
+      timestamp: new Date(1000 + i * 1000).toISOString(),
+      message: { role: i % 2 === 0 ? "user" : "assistant", content: `msg ${i}` },
+    });
+  }
+  return entries;
+}
+
+test("sliceActiveBranch returns the most-recent `tail` ancestors, in time order", () => {
+  const entries = linearChain(100);
+  const sliced = sliceActiveBranch(entries, "e99", 50);
+  assert.equal(sliced.length, 50);
+  assert.equal(sliced[0].id, "e50");
+  assert.equal(sliced[sliced.length - 1].id, "e99");
+});
+
+test("sliceActiveBranch walks from leaf back toward root, not forward", () => {
+  const entries = linearChain(10);
+  const sliced = sliceActiveBranch(entries, "e5", 3);
+  assert.deepEqual(sliced.map((e) => e.id), ["e3", "e4", "e5"]);
+});
+
+test("sliceActiveBranch defaults to the last entry when leafId is null", () => {
+  const entries = linearChain(7);
+  const sliced = sliceActiveBranch(entries, null, 3);
+  assert.deepEqual(sliced.map((e) => e.id), ["e4", "e5", "e6"]);
+});
+
+test("deep linear chain (5000 entries) slices without overflowing the stack", () => {
+  const entries = linearChain(5000);
+  // The recursion that #509 hit lived in any path-walk over the full chain.
+  // An iterative slice over 5000 entries must not throw Maximum call stack size.
+  const sliced = sliceActiveBranch(entries, "e4999", 50);
+  assert.equal(sliced.length, 50);
+  assert.equal(sliced[sliced.length - 1].id, "e4999");
+});
+
+test("buildSessionContext with tail returns only the tail window", () => {
+  const entries = linearChain(300);
+  const ctx = buildSessionContext(entries, "e299", { tail: 50 });
+  assert.equal(ctx.messages.length, 50);
+  assert.equal(ctx.entryIds.length, 50);
+  assert.equal(ctx.entryIds[0], "e250");
+  assert.equal(ctx.entryIds[ctx.entryIds.length - 1], "e299");
+  assert.equal(ctx.hasMore, true);
+});
+
+test("buildSessionContext without tail still returns the full chain", () => {
+  const entries = linearChain(20);
+  const ctx = buildSessionContext(entries, "e19");
+  assert.equal(ctx.messages.length, 20);
+});
+
+test("buildSessionContext excludeLeaf pages upward without duplicating `before`", () => {
+  // User path: client has [e48..e52], requests the page before e48 (older).
+  // excludeLeaf must start from e47's parent so e48 is NOT re-fetched.
+  const entries = linearChain(100);
+  const page1 = buildSessionContext(entries, "e52", { tail: 5 }).entryIds;
+  assert.deepEqual(page1, ["e48", "e49", "e50", "e51", "e52"]);
+  const oldest = page1[0]; // e48
+  const page2 = buildSessionContext(entries, oldest, { tail: 5, excludeLeaf: true }).entryIds;
+  assert.equal(page2[page2.length - 1], "e47");
+  assert.ok(!page2.includes(oldest), "page2 must not duplicate the `before` boundary");
+  // Adjacent pages share no id -> prepending never double-renders.
+  assert.ok(page1.every((id) => !page2.includes(id)));
+});
+
+test("pagination stops before the root instead of returning it again", () => {
+  const entries = linearChain(3);
+  const page = buildSessionContext(entries, "e0", { tail: 5, excludeLeaf: true });
+  assert.deepEqual(page.entryIds, []);
+  assert.equal(page.hasMore, false);
+});
+
+test("pagination preserves chronological order across compaction", () => {
+  const entries = [
+    { id: "u1", parentId: null, type: "message", timestamp: "t1", message: { role: "user", content: "old" } },
+    { id: "a1", parentId: "u1", type: "message", timestamp: "t2", message: { role: "assistant", content: "answer" } },
+    { id: "u2", parentId: "a1", type: "message", timestamp: "t3", message: { role: "user", content: "kept" } },
+    { id: "compact", parentId: "u2", type: "compaction", timestamp: "t4", summary: "summary", firstKeptEntryId: "u2", tokensBefore: 10 },
+    { id: "u3", parentId: "compact", type: "message", timestamp: "t5", message: { role: "user", content: "new" } },
+  ];
+  const page1 = buildSessionContext(entries, "u3", { tail: 3 });
+  assert.deepEqual(page1.entryIds, ["u2", "compact", "u3"]);
+  assert.equal(page1.oldestEntryId, "u2");
+  const page2 = buildSessionContext(entries, page1.oldestEntryId, { tail: 3, excludeLeaf: true });
+  assert.deepEqual(page2.entryIds, ["u1", "a1"]);
+  assert.ok(page2.entryIds.every((id) => !page1.entryIds.includes(id)));
+});
+
+test("pagination loses no history when compaction kept entries fall outside the page", () => {
+  const entries = linearChain(20);
+  entries[8].parentId = "compact1";
+  entries[18].parentId = "compact2";
+  for (const [id, parentId, firstKeptEntryId] of [
+    ["compact1", "e7", "e2"],
+    ["compact2", "e17", "e12"],
+  ]) {
+    entries.splice(entries.findIndex((entry) => entry.id === parentId) + 1, 0, {
+      id, parentId, firstKeptEntryId, type: "compaction",
+      timestamp: new Date(30000).toISOString(), summary: id, tokensBefore: 100,
+    });
+  }
+
+  for (const tail of [1, 3, 5, 50]) {
+    let page = buildSessionContext(entries, "e19", { tail });
+    let ids = [...page.entryIds];
+    while (page.hasMore) {
+      const cursor = page.oldestEntryId;
+      page = buildSessionContext(entries, cursor, { tail, excludeLeaf: true });
+      assert.notEqual(page.oldestEntryId, cursor);
+      assert.ok(page.entryIds.length <= tail);
+      assert.equal(page.messages.length, page.entryIds.length);
+      ids = [...page.entryIds, ...ids];
+    }
+    assert.deepEqual(ids, entries.map((entry) => entry.id), `tail=${tail}`);
+  }
+});
+
+test("tail pagination preserves settings from earlier entries", () => {
+  const entries = linearChain(60);
+  entries[0].parentId = "model";
+  entries.unshift(
+    { id: "thinking", parentId: null, type: "thinking_level_change", timestamp: new Date(0).toISOString(), thinkingLevel: "high" },
+    { id: "model", parentId: "thinking", type: "model_change", timestamp: new Date(1).toISOString(), provider: "test", modelId: "full-context-model" },
+  );
+  const context = buildSessionContext(entries, "e59", { tail: 50 });
+  assert.equal(context.thinkingLevel, "high");
+  assert.deepEqual(context.model, { provider: "test", modelId: "full-context-model" });
+});
+
+test("buildSessionContext accepts a large tail and returns the whole chain", () => {
+  const entries = linearChain(5000);
+  const ctx = buildSessionContext(entries, "e4999", { tail: 5000 });
+  assert.equal(ctx.messages.length, 5000);
+  // The 1000 cap is the routes' (Math.min(rawTail, 1000)), not buildSessionContext's.
+});
+
+test("real sessions may store assistant content as a string (deferThinking guard)", () => {
+  // Regression for the long-session 500: entryToUiMessage calls content.map in
+  // the deferThinking branch, but real assistant content can be a plain string.
+  const entries = [
+    { id: "u1", parentId: null, type: "message", timestamp: new Date(1).toISOString(),
+      message: { role: "user", content: "hi" } },
+    { id: "a1", parentId: "u1", type: "message", timestamp: new Date(2).toISOString(),
+      message: { role: "assistant", content: "a string reply, not a block array" } },
+  ];
+  const ctx = buildSessionContext(entries, "a1", { deferThinking: true, tail: 50 });
+  assert.equal(ctx.messages.length, 2);
+  assert.deepEqual(ctx.messages[1].content, [{ type: "text", text: "a string reply, not a block array" }]);
+});
+
+test("session stats cover the full file independently of the displayed tail", () => {
+  const entries = linearChain(100);
+  entries[1].message.content = [{ type: "toolCall" }];
+  entries[1].message.usage = {
+    input: 1,
+    output: 2,
+    cacheRead: 3,
+    cacheWrite: 4,
+    cost: { total: 0.5 },
+  };
+  entries.push({
+    id: "compact",
+    parentId: "e99",
+    type: "compaction",
+    timestamp: new Date(200000).toISOString(),
+    summary: "summary",
+    firstKeptEntryId: "e90",
+    tokensBefore: 10,
+    usage: {
+      input: 10,
+      output: 20,
+      cacheRead: 30,
+      cacheWrite: 40,
+      cost: { total: 1.5 },
+    },
+  });
+
+  assert.deepEqual(computeSessionStats(entries), {
+    userMessages: 50,
+    assistantMessages: 50,
+    toolCalls: 1,
+    toolResults: 0,
+    totalMessages: 100,
+    tokens: { input: 11, output: 22, cacheRead: 33, cacheWrite: 44, total: 110 },
+    cost: 2,
+  });
+});
+
+// ── 2026-09-03: tail counts VISIBLE messages, not raw entries ──────────────
+// Agent-heavy sessions: 1 user question → dozens of assistant+toolResult
+// entries. Old raw-entry counting pushed user questions out of the window
+// (real case: 15 user / 562 entries, only 1 user visible in a 50-entry page).
+
+function agentHeavyChain(turns) {
+  // Per turn: user → assistant(tool_call) → toolResult → assistant(final)
+  const entries = [];
+  let i = 0;
+  const push = (type, message) => {
+    entries.push({
+      id: `e${i}`,
+      parentId: i === 0 ? null : `e${i - 1}`,
+      type,
+      timestamp: new Date(1000 + i * 1000).toISOString(),
+      ...(message !== undefined ? { message } : {}),
+    });
+    i++;
+  };
+  for (let t = 0; t < turns; t++) {
+    push("message", { role: "user", content: `q${t}` });
+    push("message", { role: "assistant", content: [{ type: "tool_call", id: `tc${t}`, name: "bash", arguments: {} }] });
+    push("message", { role: "toolResult", content: [{ type: "tool_result", toolUseId: `tc${t}`, output: "ok" }] });
+    push("message", { role: "assistant", content: `a${t}` });
+  }
+  return entries;
+}
+
+test("sliceActiveBranch: tail counts visible messages — toolResults ride along free", () => {
+  const entries = agentHeavyChain(30); // 120 raw entries, 30 user + 60 assistant visible
+  const sliced = sliceActiveBranch(entries, entries[entries.length - 1].id, 10);
+  const visible = sliced.filter(
+    (e) => e.type === "message" && (e.message.role === "user" || e.message.role === "assistant"),
+  );
+  assert.equal(visible.length, 10);
+  // Window must end at the newest entry and include the newest user question…
+  assert.equal(sliced[sliced.length - 1].id, entries[entries.length - 1].id);
+  const users = sliced.filter((e) => e.type === "message" && e.message.role === "user");
+  assert.equal(users.length, 3); // 10 visible = 2.5 turns → 3 user questions in window
+  // …while raw-entry counting would have shown 50 entries ≈ 1 user question.
+});
+
+test("sliceActiveBranch: compaction divider counts as visible, custom/meta do not", () => {
+  const entries = [
+    { id: "e0", parentId: null, type: "session", timestamp: new Date(0).toISOString() },
+    { id: "e1", parentId: "e0", type: "compaction", timestamp: new Date(1).toISOString() },
+    { id: "e2", parentId: "e1", type: "custom", timestamp: new Date(2).toISOString() },
+    { id: "e3", parentId: "e2", type: "message", timestamp: new Date(3).toISOString(), message: { role: "user", content: "q" } },
+    { id: "e4", parentId: "e3", type: "message", timestamp: new Date(4).toISOString(), message: { role: "assistant", content: "a" } },
+    { id: "e5", parentId: "e4", type: "message", timestamp: new Date(5).toISOString(), message: { role: "toolResult", content: [] } },
+    { id: "e6", parentId: "e5", type: "message", timestamp: new Date(6).toISOString(), message: { role: "assistant", content: "a2" } },
+  ];
+  const sliced = sliceActiveBranch(entries, "e6", 3);
+  // 3 visible = assistant(a2) + assistant(a) + user(q); toolResult e5 rides free.
+  assert.deepEqual(sliced.map((e) => e.id), ["e3", "e4", "e5", "e6"]);
+  // tail=2 reaches back across the compaction divider instead of stopping at raw count.
+  const sliced2 = sliceActiveBranch(entries, "e6", 4);
+  assert.deepEqual(sliced2.map((e) => e.id), ["e1", "e2", "e3", "e4", "e5", "e6"]);
+});
+
+test("sliceActiveBranch: a span of tool traffic with no visible anchors hits the raw cap", () => {
+  // One visible assistant message at the leaf, preceded by 1000 toolResult-only entries.
+  const entries = [];
+  for (let i = 0; i < 1001; i++) {
+    entries.push({
+      id: `e${i}`,
+      parentId: i === 0 ? null : `e${i - 1}`,
+      type: "message",
+      timestamp: new Date(1000 + i).toISOString(),
+      message: i === 1000 ? { role: "assistant", content: "done" } : { role: "toolResult", content: [] },
+    });
+  }
+  const sliced = sliceActiveBranch(entries, "e1000", 50);
+  // tail=50 → raw cap max(200, 300) = 300; the page must not return all 1001 entries.
+  assert.equal(sliced.length, 300);
+  assert.equal(sliced[sliced.length - 1].id, "e1000");
+});
+
+test("buildSessionContext hasMore stays true when the visible window truncates", () => {
+  const entries = agentHeavyChain(30);
+  const ctx = buildSessionContext(entries, entries[entries.length - 1].id, { tail: 10 });
+  assert.equal(ctx.hasMore, true);
+  // Second page from the oldest loaded entry (excludeLeaf semantics) must not
+  // duplicate it and must surface the next-older user question.
+  const oldest = ctx.entryIds[0];
+  const page2 = buildSessionContext(entries, oldest, { tail: 10, excludeLeaf: true });
+  assert.ok(!page2.entryIds.includes(oldest));
+  const users2 = page2.messages.filter((m) => m.role === "user");
+  assert.ok(users2.length >= 2);
+});
+
+test("buildSessionContext turnsBefore numbers each page's turns from the session's first (#791)", () => {
+  const entries = agentHeavyChain(30);
+  let ctx = buildSessionContext(entries, entries[entries.length - 1].id, { tail: 10 });
+  const countUsers = (page) => page.messages.filter((m) => m.role === "user").length;
+  let loadedTurns = countUsers(ctx);
+  assert.equal(ctx.turnsBefore + loadedTurns, 30);
+  while (ctx.hasMore) {
+    ctx = buildSessionContext(entries, ctx.oldestEntryId, { tail: 10, excludeLeaf: true });
+    loadedTurns += countUsers(ctx);
+    assert.equal(ctx.turnsBefore + loadedTurns, 30);
+  }
+  assert.equal(ctx.turnsBefore, 0);
+  const whole = buildSessionContext(entries, entries[entries.length - 1].id);
+  assert.equal(whole.turnsBefore, 0);
+});
+
+test("buildSessionContext turnsBefore counts the chat's turn anchors on the active branch only", () => {
+  const at = (n) => new Date(1000 + n).toISOString();
+  const entry = (id, parentId, fields) => ({ id, parentId, timestamp: at(Number(id.slice(1))), ...fields });
+  const msg = (role, content = "x") => ({ type: "message", message: { role, content } });
+  const entries = [
+    entry("e0", null, msg("system")),
+    entry("e1", "e0", msg("user")), // 1
+    entry("e2", "e1", msg("assistant")),
+    entry("e3", "e2", { type: "compaction", summary: "s", firstKeptEntryId: "e2", tokensBefore: 10 }), // 2
+    entry("e4", "e3", { type: "custom_message", customType: "pi-web:subagent-notification", content: "done", display: true }), // 3
+    entry("e5", "e4", { type: "custom_message", customType: "pi-web:subagent-notification", content: "hidden", display: false }),
+    entry("e6", "e5", { type: "custom_message", customType: "note", content: "shown", display: true }),
+    entry("e7", "e6", { type: "branch_summary", summary: "elsewhere", fromId: "e6" }), // 4
+    entry("e8", "e7", { type: "branch_summary", summary: "", fromId: "e7" }),
+    entry("e9", "e8", msg("toolResult", [])),
+    // Another branch off e9: its user message is not on the active branch.
+    entry("e10", "e9", msg("user")),
+    entry("e11", "e9", msg("assistant")),
+    entry("e12", "e11", msg("user")),
+    entry("e13", "e12", msg("assistant")),
+  ];
+  const ctx = buildSessionContext(entries, "e13", { tail: 2 });
+  assert.deepEqual(ctx.entryIds, ["e12", "e13"]);
+  assert.equal(ctx.hasMore, true);
+  assert.equal(ctx.turnsBefore, 4);
+});
+
+test("history and older pages omit signatures independently of thinking deferral", () => {
+  const reasoning = "Full reasoning with multiple details. ".repeat(20);
+  const signature = JSON.stringify({ type: "reasoning", id: "rs_1", encrypted_content: "opaque-state" });
+  const entries = linearChain(4);
+  entries[1].message.content = [
+    { type: "thinking", thinking: reasoning, thinkingSignature: signature },
+    { type: "text", text: "answer", textSignature: "msg_1" },
+  ];
+  entries[3].message.content = [{ type: "thinking", thinking: "", thinkingSignature: signature }];
+  const original = JSON.stringify(entries);
+  for (const deferThinking of [false, true]) {
+    const recent = buildSessionContext(entries, "e3", { tail: 2, deferThinking });
+    const older = buildSessionContext(entries, recent.oldestEntryId, { tail: 2, excludeLeaf: true, deferThinking });
+    assert.deepEqual(recent.entryIds, ["e2", "e3"]);
+    assert.deepEqual(older.entryIds, ["e0", "e1"]);
+    assert.deepEqual(recent.messages[1].content, [{ type: "thinking", thinking: "" }]);
+    assert.equal(Object.hasOwn(older.messages[1].content[0], "thinkingSignature"), false);
+    assert.deepEqual(older.messages[1].content[1], { type: "text", text: "answer" });
+    assert.equal(Boolean(older.messages[1].content[0].deferred), deferThinking);
+    if (!deferThinking) assert.equal(older.messages[1].content[0].thinking, reasoning);
+  }
+  assert.equal(JSON.stringify(entries), original);
+});

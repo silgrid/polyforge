@@ -1,0 +1,5 @@
+contract: 5
+name: wfc-110-both
+description: fixture lane for WFC-110 - a workflow.md beside its workflow.yaml
+steps:
+  - id: work

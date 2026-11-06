@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":"Reply with exactly the word: one"}}
+{"type":"control_request","request_id":"req_switch_bogus","request":{"subtype":"set_model","model":"claude-bogus-0-0"}}
+{"type":"control_request","request_id":"req_switch_sonnet","request":{"subtype":"set_model","model":"claude-sonnet-5-5"}}
+{"type":"user","message":{"role":"user","content":"Reply with exactly the word: two"}}

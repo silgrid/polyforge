@@ -1,0 +1,6 @@
+contract: 5
+name: wfc-198
+description: fixture lane for WFC-198
+steps:
+  - id: work
+    model_candidates: [model-without-harness]

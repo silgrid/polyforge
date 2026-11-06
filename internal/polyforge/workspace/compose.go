@@ -1,17 +1,18 @@
 package workspace
 
-// compose.go: the model-candidate precedence chain (and the step attr
-// overrides, ComposeAttrs) as a PURE function
-// over the bundle frontmatter, the parsed workspace yaml and the claimed
+// compose.go: the model-candidate precedence chain as a PURE function
+// over the bundle's workflow.yaml, the parsed workspace yaml and the claimed
 // project — no I/O, no state, fully table-testable. The runtime computes
 // it at EVERY dispatch (polyforge#33: the driver's compose closure re-reads
 // the yaml and bundle each time), so an edit governs the next dispatch;
 // nothing is snapshotted at claim or persisted in the daemon's record.
 //
-// The chain, outermost first (five levels):
+// The chain, outermost first (six levels):
 //
 //	manual `pf submit --models` > yaml steps.<project>.<step-id>.models >
-//	bundle step-level model_candidates > yaml steps.<project>.default.models >
+//	yaml tiers.<project>.<tier>.models (a step naming model_tier <tier>) >
+//	bundle step-level model_candidates, or the bundle's defaults.tiers list
+//	of the step's model_tier > yaml steps.<project>.default.models >
 //	bundle defaults.model_candidates
 //
 // A step's own list outranks the project yaml `default` (polyforge#164,
@@ -25,7 +26,9 @@ package workspace
 // candidate chain of EVERY step of that work item.
 //
 // The key is the step id: a `fix` list governs the `fix` step of every
-// bundle that has one. Resolution is non-merge: the first
+// bundle that has one (no key is a sub-definition's own —
+// the daemon actions that dispatched them left with workflow contract v2
+// change 16). Resolution is non-merge: the first
 // PRESENT level wholly replaces the others. Presence is "declared": a
 // declared-but-empty list is a PRESENT level that governs — it yields no
 // switchable chain (the harness adapter's default model stays in
@@ -34,8 +37,6 @@ package workspace
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/harness"
@@ -77,8 +78,7 @@ func MissingTaskModelsError(project string) error {
 }
 
 // DefaultSummarizeLanguage is the summarize lane's narration language
-// when cli.toml's [summarize] table declares no `language` (polyforge#243,
-//).
+// when cli.toml's [summarize] table declares no `language` (polyforge#243).
 const DefaultSummarizeLanguage = "中文"
 
 // The summarize lane's per-WI call-start spacing bounds and default, in
@@ -124,22 +124,19 @@ func (s *SummarizeSettings) Lane() (models []string, language string, intervalSe
 // one claim of project, keyed by step id. An entry exists for every step
 // whose composed list is non-nil (including present-empty lists); a step
 // absent from the map (or a nil map) means no list applies anywhere. fm
-// may be nil (no bundle frontmatter — no steps to key on); cfg may be
+// may be nil (no bundle workflow.yaml — no steps to key on); cfg may be
 // nil (no yaml — the bundle alone).
 // manual is the work item's `pf submit --models` list (nil/empty = none).
-func ComposeCandidates(fm *workflow.Frontmatter, cfg *Config, project string, manual []string) map[string][]string {
+func ComposeCandidates(fm *workflow.Lane, cfg *Config, project string, manual []string) map[string][]string {
 	if fm == nil || len(fm.Steps) == 0 {
 		return nil
 	}
-	var pm map[string][]string
-	if cfg != nil {
-		pm = cfg.Models[project]
-	}
+	pm, pt := projectLists(cfg, project)
 	out := make(map[string][]string, len(fm.Steps))
 	for _, s := range fm.Steps {
 		if len(manual) > 0 {
 			out[s.ID] = append([]string(nil), manual...)
-		} else if list := composeStep(fm, pm, s); list != nil {
+		} else if list := composeStep(fm, pm, pt, s); list != nil {
 			out[s.ID] = list
 		}
 	}
@@ -149,20 +146,46 @@ func ComposeCandidates(fm *workflow.Frontmatter, cfg *Config, project string, ma
 	return out
 }
 
+// projectLists answers the claimed project's yaml lists: its step entries
+// (steps.<project>) and its tier lists (tiers.<project>); nil when the
+// yaml declares none.
+func projectLists(cfg *Config, project string) (pm, pt map[string][]string) {
+	if cfg == nil {
+		return nil, nil
+	}
+	return cfg.Models[project], cfg.Tiers[project]
+}
+
 // composeStep resolves one step's effective list through the chain; pm
-// is the claimed project's yaml entry (nil when it has none).
-func composeStep(fm *workflow.Frontmatter, pm map[string][]string, s workflow.FrontmatterStep) []string {
-	list, _ := composeStepFrom(fm, pm, s, "", "")
+// is the claimed project's yaml step entries and pt its yaml tier lists
+// (nil when it has none).
+func composeStep(fm *workflow.Lane, pm, pt map[string][]string, s workflow.Step) []string {
+	list, _ := composeStepFrom(fm, pm, pt, s, "", "")
 	return list
 }
 
 // composeStepFrom is composeStep that also names the level the list came
-// from ("" when none applies); project/bundle only label the source.
-func composeStepFrom(fm *workflow.Frontmatter, pm map[string][]string, s workflow.FrontmatterStep, project, bundle string) ([]string, string) {
+// from ("" when none applies); project/bundle only label the source. A
+// step naming a `model_tier` takes, below its own yaml key, the project's
+// yaml list of that tier (tiers.<project>.<tier>.models: the workspace's
+// tier→model table), then the lane's own (`defaults.tiers`); the yaml
+// project default ranks below both. The bundle step level is the step's
+// own `model_candidates`, or that lane tier list. A bundle list that is
+// placeholders only (every candidate `<harness>:example-…`,)
+// is undeclared: a shipped placeholder never outranks the project default.
+func composeStepFrom(fm *workflow.Lane, pm, pt map[string][]string, s workflow.Step, project, bundle string) ([]string, string) {
 	if list, ok := pm[s.ID]; ok {
 		return list, fmt.Sprintf("steps.%s.%s.models", project, s.ID)
 	}
-	if s.ModelCandidates != nil {
+	if s.ModelTier != "" {
+		if list, ok := pt[s.ModelTier]; ok {
+			return list, fmt.Sprintf("%s.%s.%s.models", TiersKey, project, s.ModelTier)
+		}
+	}
+	if list := fm.TierCandidates(&s); list != nil && !placeholdersOnly(list) {
+		return list, fmt.Sprintf("bundle %s step %s model_tier %s (defaults.tiers)", bundle, s.ID, s.ModelTier)
+	}
+	if s.ModelCandidates != nil && !placeholdersOnly(s.ModelCandidates) {
 		return s.ModelCandidates, fmt.Sprintf("bundle %s step %s model_candidates", bundle, s.ID)
 	}
 	if list, ok := pm[DefaultKey]; ok {
@@ -172,6 +195,34 @@ func composeStepFrom(fm *workflow.Frontmatter, pm map[string][]string, s workflo
 		return fm.Defaults.ModelCandidates, fmt.Sprintf("bundle %s defaults.model_candidates", bundle)
 	}
 	return nil, ""
+}
+
+// PlaceholderPrefix opens a placeholder model name: `example-` after the
+// harness prefix (the shipped lanes' `pi:example-gateway/model-a`), a name
+// no gateway serves.
+const PlaceholderPrefix = "example-"
+
+// IsPlaceholder reports whether a candidate names a placeholder model
+// (`<harness>:example-…`).
+func IsPlaceholder(candidate string) bool {
+	c, err := harness.ParseCandidate(candidate)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(c.Model, PlaceholderPrefix)
+}
+
+// placeholdersOnly reports whether a non-empty list is placeholders only.
+func placeholdersOnly(list []string) bool {
+	if len(list) == 0 {
+		return false
+	}
+	for _, c := range list {
+		if !IsPlaceholder(c) {
+			return false
+		}
+	}
+	return true
 }
 
 // StepResolution is one step's resolved candidate list with the level
@@ -212,62 +263,58 @@ func (r StepResolution) Harnesses() ([]string, error) {
 
 // ResolveSteps answers the resolution of every step of one bundle for
 // one project (manual = the work item's `pf submit --models` list).
-func ResolveSteps(bundle string, fm *workflow.Frontmatter, cfg *Config, project string, manual []string) []StepResolution {
+func ResolveSteps(bundle string, fm *workflow.Lane, cfg *Config, project string, manual []string) []StepResolution {
 	if fm == nil {
 		return nil
 	}
-	var pm map[string][]string
-	if cfg != nil {
-		pm = cfg.Models[project]
-	}
+	pm, pt := projectLists(cfg, project)
 	out := make([]StepResolution, 0, len(fm.Steps))
 	for _, s := range fm.Steps {
 		r := StepResolution{Project: project, Bundle: bundle, Step: s.ID}
 		if len(manual) > 0 {
 			r.Models, r.ModelsFrom = append([]string(nil), manual...), "pf submit --models"
 		} else {
-			r.Models, r.ModelsFrom = composeStepFrom(fm, pm, s, project, bundle)
+			r.Models, r.ModelsFrom = composeStepFrom(fm, pm, pt, s, project, bundle)
 		}
 		out = append(out, r)
 	}
 	return out
 }
 
-// Bundles answers the installed bundles under workflowsDir (name →
-// frontmatter, nil frontmatter skipped) — or only the named one when
-// bundle is non-empty. A torn or refused frontmatter (an unprefixed
-// candidate, a retired `harness` key — polyforge#175) is the bundle's
-// own defect: it is skipped from the map and its error is answered in
-// bad (name → load error) for the doctor to report; its claim surfaces
-// it too.
-func Bundles(workflowsDir, bundle string) (map[string]*workflow.Frontmatter, map[string]error, error) {
-	out := map[string]*workflow.Frontmatter{}
+// Bundles answers the lanes of the lane set (name → loaded lane) — or
+// only the named one when bundle is non-empty — each read by the one lane
+// loader. A lane the loader refuses is skipped from the map and its
+// *workflow.LoadError is answered in bad (keyed by its name; a user lane a
+// built-in lane shadows, WFC-122, by its directory) for the doctor and
+// the listing to report; its claim refuses it too. A name the set does
+// not carry is in neither map.
+func Bundles(set workflow.LaneSet, bundle string) (map[string]*workflow.Lane, map[string]error, error) {
+	out := map[string]*workflow.Lane{}
 	bad := map[string]error{}
-	if workflowsDir == "" {
+	if bundle != "" {
+		lane, _, err := set.Load(bundle)
+		switch {
+		case err != nil:
+			bad[bundle] = err
+		case lane != nil:
+			out[bundle] = lane
+		}
 		return out, bad, nil
 	}
-	names := []string{bundle}
-	if bundle == "" {
-		ents, err := os.ReadDir(workflowsDir)
-		if err != nil {
-			return nil, nil, err
-		}
-		names = names[:0]
-		for _, e := range ents {
-			if e.IsDir() {
-				names = append(names, e.Name())
-			}
-		}
+	lanes, err := set.Lanes()
+	if err != nil {
+		return nil, nil, err
 	}
-	for _, n := range names {
-		fm, err := workflow.ReadFrontmatter(filepath.Join(workflowsDir, n, "workflow.md"))
-		if err != nil {
-			bad[n] = err
+	for _, sl := range lanes {
+		key := sl.Name
+		if sl.Shadowed {
+			key = sl.Dir
+		}
+		if err := workflow.AsLoadError(sl.Dir, sl.Errors); err != nil {
+			bad[key] = err
 			continue
 		}
-		if fm != nil {
-			out[n] = fm
-		}
+		out[key] = sl.Lane
 	}
 	return out, bad, nil
 }
@@ -297,38 +344,4 @@ func NormalizeModels(in []string) ([]string, error) {
 		out = append(out, c)
 	}
 	return out, nil
-}
-
-// ComposeAttrs answers the attr overrides of one claim of project that
-// change a step's behaviour, keyed by step id then attr name, each value
-// as the text its {{<name>}} renders: a steps.<project>.<step-id>.attrs
-// override of an attr the bundle step declares, kept only when it differs
-// from the declaration's default — so an explicit override equal to the
-// default and an absent one both yield nothing (the step's prompt stays
-// byte-identical to an undeclared step). PURE over the bundle frontmatter
-// and the parsed yaml; the runtime calls it at EVERY dispatch (the
-// driver's Attrs closure re-reads both), so an edit governs the next
-// dispatch and nothing is snapshotted. nil when no override applies.
-func ComposeAttrs(fm *workflow.Frontmatter, cfg *Config, project string) map[string]map[string]string {
-	if fm == nil || cfg == nil {
-		return nil
-	}
-	overrides := cfg.Attrs[project]
-	var out map[string]map[string]string
-	for _, s := range fm.Steps {
-		for name, decl := range s.Attrs {
-			v, ok := overrides[s.ID][name]
-			if !ok || fmt.Sprint(v) == fmt.Sprint(decl.Default) {
-				continue
-			}
-			if out == nil {
-				out = map[string]map[string]string{}
-			}
-			if out[s.ID] == nil {
-				out[s.ID] = map[string]string{}
-			}
-			out[s.ID][name] = fmt.Sprint(v)
-		}
-	}
-	return out
 }

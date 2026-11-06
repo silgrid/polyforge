@@ -224,6 +224,7 @@ func TestW74NonMemberRouteMatrixConcealsWorkItem(t *testing.T) {
 		{"dependencies-delete", "DELETE", "/dependencies/wi_w74_blocker/blocks", nil, false},
 		{"progress-query", "POST", "/progress-query", body(map[string]any{}), true},
 		{"artifact-query", "POST", "/artifact-query", body(map[string]any{}), true},
+		{"attrs", "PATCH", "/attrs", body(map[string]any{"key": "integration", "value": map[string]any{"state": "landed"}}), true},
 	}
 	for _, r := range routes {
 		var s *w74Signer

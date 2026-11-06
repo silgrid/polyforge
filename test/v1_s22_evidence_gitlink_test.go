@@ -6,7 +6,7 @@ package test
 // driver track re-adds the evidence gate.)
 //
 //   - S22b (V8): an embedded git repository laid in the capsule (the
-//     #48 poison shape, the grill envelope action) is refused by the
+//     #48 poison shape, the fix envelope action) is refused by the
 //     LOCAL precheck — classified push_poisoned_local, never
 //     push_failed — and its retries back off exponentially (no #48
 //     storm); the documented cleanup (the unpoison envelope action) plus
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 func TestV1S22LocalGitlinkPrecheckAndRetryBackoff(t *testing.T) {
@@ -25,37 +26,33 @@ func TestV1S22LocalGitlinkPrecheckAndRetryBackoff(t *testing.T) {
 	wi := inst.newWI(t, "s22: local gitlink precheck, poisoned-local classification, retry backoff",
 		[]map[string]any{
 			// The #48 poison shape: an embedded repository OUTSIDE
-			// repos/ (which is gitignored), laid by the grill envelope
-			// action; the needs_input transition bumps the Version and
-			// parks the workflow, so the push round runs against the
-			// poisoned worktree while the WI stays live.
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": "q_s22b",
-				"question":       "s22b: parked while the poisoned push round runs.",
-				"poison_gitlink": true},
-			// The documented cleanup, scripted as the continuation: the
-			// unpoison envelope action deletes the nested .git and bumps
-			// the Version — a fresh Version is pushed at once.
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true,
-				"unpoison_gitlink": true},
-			// The fix step burns 15s before its envelope: the push of the
-			// cleanup's Version lands on the CLEAN tree and recovers the
-			// chain while the workflow is still live — the wrap must
-			// never outrun the recovery push.
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 15000},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			// repos/ (which is gitignored), laid by the fix envelope
+			// action; fix's acceptance bumps the Version, so the push
+			// round runs against the poisoned worktree while the WI stays
+			// live.
+			{"do": "envelope", "id": "fix", "outcome": "completed", "poison_gitlink": true},
+			// review then asks the owner (`pf ask`) and parks: no further
+			// Version until the reply, so the refusals back off. The
+			// documented cleanup is its answer to the owner's reply: the
+			// unpoison action deletes the nested .git, and review burns
+			// 15s before its envelope — the pushes of the clean tree land
+			// while the workflow is still live; the wrap must never
+			// outrun the recovery push.
+			askAction("review", "s22b: parked while the poisoned push rounds run.",
+				map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "unpoison_gitlink": true, "ms": 15000}),
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pf(t, "submit", wi)
-	waitQuestion(t, d, wi, "q_s22b", 30*time.Second)
+	waitAsk(t, d, wi, 30*time.Second)
 
 	// The first local refusal lands within one poll+push round.
 	waitForEvent(t, d, wi, "push_poisoned_local", 30*time.Second)
 
-	// The retries back off: the parked question keeps the Version stable,
-	// so the refusals come at the production delays (10s, then 20s, ...),
-	// never at a fixed cadence.
+	// The retries back off: the open ask keeps the Version stable, so the
+	// refusals come at the production delays (10s, then 20s, ...), never
+	// at a fixed cadence.
 	var refusals []protocol.EventEntry
 	waitUntil(t, 90*time.Second, "three poisoned-local refusals", func() bool {
 		refusals = refusals[:0]
@@ -82,15 +79,14 @@ func TestV1S22LocalGitlinkPrecheckAndRetryBackoff(t *testing.T) {
 		}
 	}
 
-	// The cleanup recovers the chain: the owner's answer re-dispatches
-	// grill, whose envelope action unpoisons and bumps the Version — the
-	// fresh Version's push succeeds, and the workflow runs to its
-	// terminal wrap.
-	answerQuestion(t, d, wi, "q_s22b", "Cleaned up; resume.")
+	// The cleanup recovers the chain: the owner's reply reaches review's
+	// resident process, whose action unpoisons and then lands its
+	// envelope — the clean tree's pushes succeed, and the workflow runs to
+	// its terminal wrap.
+	replyOwner(t, d, wi, "Cleaned up; resume.")
 	inst.waitWIStatus(t, wi, "wrapped", 180*time.Second)
 
-	// The recovery push: the cleanup's fresh Version is pushed at once on
-	// the CLEAN tree and the recovered chain lands while fix holds its
+	// The recovery push: the clean tree is pushed while review holds its
 	// 15s window, BEFORE the wrap stops the monitor.
 	waitUntil(t, 60*time.Second, "the cleanup never recovered the chain", func() bool {
 		return countOf(d.eventKinds(t, wi), "published") >= 1
@@ -110,16 +106,15 @@ func TestV1S22LocalGitlinkPrecheckAndRetryBackoff(t *testing.T) {
 	if !inst.bareHasPath(t, wi, "poison/inner.txt") {
 		t.Fatalf("the cleaned-up embedded file must ride the chain as a plain file")
 	}
-	// The driver faces: the whole chain done, the poisoned ordinal's
-	// envelope archived.
+	// The driver faces: the whole chain done, the cleanup's envelope
+	// (review's, its dispatch after fix's) archived.
 	x := readExecution(t, d.capsuleDir(wi))
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		if st := x.Steps[step]; st == nil || st.Status != "done" {
 			t.Fatalf("step %s: %+v, want done", step, st)
 		}
 	}
-	env2 := archivedEnvelope(t, d.capsuleDir(wi), "grill", 2)
-	if env2["outcome"] != "completed" {
-		t.Fatalf("the cleanup continuation envelope wrong: %v", env2["outcome"])
+	if h := acceptedHandoff(t, d.capsuleDir(wi), "review", 2); h.Handoff.Status != stepcall.StatusDone {
+		t.Fatalf("the cleanup continuation handed off %s, want done", h.Handoff.Status)
 	}
 }

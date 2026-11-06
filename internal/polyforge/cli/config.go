@@ -8,7 +8,7 @@
 //
 //	Local daemon UDS HTTP face (the client surface is pinned in
 //	internal/common/protocol and verbs_daemon.go):
-//	  submit, answer, pause, resume, wrap, ops, watch, chat, daemon.
+//	  submit, answer, pause, resume, wrap, ops, watch, daemon.
 //
 // Output: human-readable tables by default; --json emits the server's
 // JSON response as-is. Errors are decoded from the typed errStatus
@@ -26,13 +26,17 @@ package cli
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
@@ -43,6 +47,21 @@ const defaultServer = "http://localhost:8420"
 // when [daemon] max_concurrent_jobs is unset (also what unsetting the key
 // restores on a reload).
 const DefaultMaxConcurrentJobs = 4
+
+// DefaultMaxConcurrentBars is the daemon-wide heavy-run slot count when
+// [daemon] max_concurrent_bars is unset: how many heavy
+// runs (a dispatch declaring `admission: heavy`) run at
+// once across every repo and work item; a further one queues.
+const DefaultMaxConcurrentBars = 2
+
+// DefaultBarLoadThreshold answers the load threshold when [daemon]
+// bar_load_threshold is unset: the machine's cores less 4,
+// at least 1. A heavy run is admitted only while the 1-minute load
+// average is below it (and, so the queue always moves, whenever no
+// admitted bar runs).
+func DefaultBarLoadThreshold() float64 {
+	return float64(max(goruntime.NumCPU()-4, 1))
+}
 
 // DataDir is the daemon data dir for the given home: $POLYFORGE_DATA_DIR,
 // else <home>/.local/share/polyforge (tools/install.sh's).
@@ -68,7 +87,6 @@ type Config struct {
 	APIKey       string        // aihub api key (Bearer)
 	DaemonSocket string        // daemon unix socket path
 	UserID       string        // caller identity for answer.answered_by
-	ChatID       string        // PF_CHAT_ID: the harness chat this process runs in (label, not a credential)
 	Mapping      *mapping.Plan // the workspace→projects plan of record (non-nil; possibly empty)
 	// ClaudeBin is the daemon-side Claude Code harness setting
 	// (polyforge#159): the claude binary of claude steps. The token
@@ -92,6 +110,12 @@ type Config struct {
 	// → its declared lists. A path without a block is the built-in
 	// default.
 	MemoryPolicy map[string]map[string]workspace.PolicyEntry
+	// ModelSource is a named Cell's [model] source: the model-credential
+	// declaration ("shared-default" or an absolute directory; "" = none,
+	// which disables that Cell's execution plane with a visible reason).
+	// The default Cell takes its credentials from [daemon]
+	// operator_agent_dir and carries no [model] table.
+	ModelSource string
 }
 
 // DaemonSettings is the cli.toml [daemon] table. A zero field is unset
@@ -105,6 +129,11 @@ type DaemonSettings struct {
 	// duration, non-zero; negative disables; daemon default 10m); flag
 	// --stall-window.
 	StallWindow time.Duration
+	// AskWarmWindow is how long a step process that asked the owner (`pf
+	// ask`) stays resident for the reply before the daemon ends it (Go
+	// duration > 0; 0 = unset, daemon default 15m); flag --ask-warm-window.
+	// Restart-only.
+	AskWarmWindow time.Duration
 	// HarnessRoot is the parent of the step harness dirs (absolute path;
 	// daemon default <data-dir>); flag --harness-root.
 	HarnessRoot string
@@ -113,11 +142,43 @@ type DaemonSettings struct {
 	// value without a readable auth.json refuses the daemon start); flag
 	// --operator-agent-dir.
 	OperatorAgentDir string
+	// Python is the interpreter the workflow step scripts run under
+	// (absolute path; "" = unset, python3 on the daemon's PATH): the
+	// daemon resolves it once at its start, refuses to start when it is
+	// missing or older than MinPython, and hands it to every step as
+	// PF_PYTHON (python.go). Host-only, restart-only.
+	Python string
 	// MaxConcurrentJobs is the configured job cap (>= 1; 0 = unset,
 	// daemon default 4); flag --max-concurrent-jobs. `pf ops max N`
 	// overrides it, and a reload that changes max_concurrent_jobs overrides
 	// `pf ops max` (last action wins).
 	MaxConcurrentJobs int
+	// MaxConcurrentBars is the daemon-wide heavy-run slot count (>= 1;
+	// 0 = unset, DefaultMaxConcurrentBars): how many heavy runs run at
+	// once. Host-only, live.
+	MaxConcurrentBars int
+	// BarLoadThreshold is the 1-minute load average at or above which no
+	// further heavy run is admitted (> 0; 0 = unset,
+	// DefaultBarLoadThreshold). Host-only, live.
+	BarLoadThreshold float64
+	// CommandPath is the PATH every step process (and so every command a
+	// step runs: a verify.py bar's commands and its scope engine) and the
+	// commands the daemon runs in-process start with: every entry an
+	// absolute directory; "" = unset, the daemon process's own PATH. Live.
+	CommandPath string
+	// CellMaxConcurrentJobs is the Cell's optional ceiling under the Host
+	// ceiling (>= 1; 0 = unset: no extra limit).
+	CellMaxConcurrentJobs int
+	// MachineID seeds the Cell's cells/<profile>/daemon-id before the file
+	// exists ("" = m-<short hostname>); the file wins once written.
+	MachineID string
+	// HeartbeatEvery is the Cell's heartbeat cadence (Go duration, > 0;
+	// 0 = unset: the daemon default).
+	HeartbeatEvery time.Duration
+	// AgentLanguage is the language of the daemon's step agents ("en" |
+	// "zh-CN"; "" = unset, "en"). Live; a dispatch keeps the language it
+	// started with.
+	AgentLanguage string
 }
 
 // DaemonKeyError is the typed refusal of one [daemon] entry: it names
@@ -152,6 +213,22 @@ func parseDaemonTable(file string, kvs []daemonKV) (DaemonSettings, error) {
 		}
 		seen[kv.key] = true
 		switch kv.key {
+		case "heartbeat_every":
+			v, err := parseQuotedValue(kv.val, kv.line)
+			if err != nil {
+				return s, refuse(`must be a quoted Go duration, e.g. "60s"`)
+			}
+			d, err := time.ParseDuration(v)
+			if err != nil || d <= 0 {
+				return s, refuse(fmt.Sprintf(`%q is not a positive Go duration (e.g. "60s")`, v))
+			}
+			s.HeartbeatEvery = d
+		case "machine_id":
+			v, err := parseQuotedValue(kv.val, kv.line)
+			if err != nil || strings.TrimSpace(v) == "" {
+				return s, refuse("must be a non-empty quoted string")
+			}
+			s.MachineID = v
 		case "step_timeout", "stall_window":
 			v, err := parseQuotedValue(kv.val, kv.line)
 			if err != nil {
@@ -185,7 +262,16 @@ func parseDaemonTable(file string, kvs []daemonKV) (DaemonSettings, error) {
 			} else {
 				s.OperatorAgentDir = v
 			}
-		case "max_concurrent_jobs":
+		case "python":
+			v, err := parseQuotedValue(kv.val, kv.line)
+			if err != nil {
+				return s, refuse("must be a quoted absolute path to a Python >= " + MinPythonString() + " interpreter")
+			}
+			if !filepath.IsAbs(v) {
+				return s, refuse(fmt.Sprintf("%q is not an absolute path (no ~ or $HOME expansion; remove the key for python3 on the daemon's PATH)", v))
+			}
+			s.Python = v
+		case "max_concurrent_jobs", "max_concurrent_bars", "cell_max_concurrent_jobs":
 			n, err := strconv.Atoi(kv.val)
 			if err != nil {
 				return s, refuse(fmt.Sprintf("must be an unquoted integer >= 1, got %s", kv.val))
@@ -193,7 +279,50 @@ func parseDaemonTable(file string, kvs []daemonKV) (DaemonSettings, error) {
 			if n < 1 {
 				return s, refuse("must be >= 1")
 			}
-			s.MaxConcurrentJobs = n
+			switch kv.key {
+			case "max_concurrent_jobs":
+				s.MaxConcurrentJobs = n
+			case "cell_max_concurrent_jobs":
+				s.CellMaxConcurrentJobs = n
+			default:
+				s.MaxConcurrentBars = n
+			}
+		case "bar_load_threshold":
+			f, err := strconv.ParseFloat(kv.val, 64)
+			if err != nil || f <= 0 || math.IsInf(f, 0) || math.IsNaN(f) {
+				return s, refuse(fmt.Sprintf("must be an unquoted number > 0 (a 1-minute load average, e.g. 12 or 7.5), got %s", kv.val))
+			}
+			s.BarLoadThreshold = f
+		case "ask_warm_window":
+			v, err := parseQuotedValue(kv.val, kv.line)
+			if err != nil {
+				return s, refuse(`must be a quoted Go duration, e.g. "15m"`)
+			}
+			d, err := time.ParseDuration(v)
+			if err != nil || d <= 0 {
+				return s, refuse(fmt.Sprintf(`%q is not a positive Go duration (e.g. "15m", "1h")`, v))
+			}
+			s.AskWarmWindow = d
+		case "command_path":
+			v, err := parseQuotedValue(kv.val, kv.line)
+			if err != nil {
+				return s, refuse(`must be a quoted PATH value, e.g. "/usr/local/go/bin:/usr/bin:/bin"`)
+			}
+			if v == "" {
+				return s, refuse("must be non-empty (remove the key for the daemon process's own PATH)")
+			}
+			for _, dir := range filepath.SplitList(v) {
+				if !filepath.IsAbs(dir) {
+					return s, refuse(fmt.Sprintf("entry %q is not an absolute directory (every entry is absolute; no empty entry, no ~ or $HOME expansion)", dir))
+				}
+			}
+			s.CommandPath = v
+		case "agent_language":
+			v, err := parseQuotedValue(kv.val, kv.line)
+			if err != nil || !stepcall.IsLanguage(v) {
+				return s, refuse(fmt.Sprintf(`must be "%s" or "%s" (quoted), got %s`, stepcall.LangEN, stepcall.LangZhCN, kv.val))
+			}
+			s.AgentLanguage = v
 		default:
 			if coreFlatKeys[kv.key] {
 				return s, refuse("a top-level key: move it above the [daemon] header (every key below the header belongs to the table)")
@@ -232,13 +361,11 @@ func DefaultConfigPath() string {
 // LoadConfig reads the config file (a missing file is not an error: the
 // defaults apply, with an EMPTY mapping) and applies environment
 // overrides on top. An empty path means the documented default location,
-// not "no file".
+// not "no file". PF_SERVER/PF_API_KEY are never applied: a Cell's
+// connection comes only from its file (cli.go refuseConnectionOverride).
 //
-//	PF_SERVER         -> Server
-//	PF_API_KEY        -> APIKey
 //	PF_DAEMON_SOCKET  -> DaemonSocket
 //	PF_USER_ID        -> UserID
-//	PF_CHAT_ID        -> ChatID
 //
 // A malformed file IS an error: silent misconfiguration is worse than a
 // loud failure. So is a mapping that fails validation — it refuses with
@@ -276,20 +403,11 @@ func applyConfigFile(cfg *Config, kv map[string]string) {
 // selection is retired (polyforge#113) — the mapping in cli.toml is the
 // only placement source and --project is per-invocation.
 func applyEnv(cfg *Config) {
-	if v := os.Getenv("PF_SERVER"); v != "" {
-		cfg.Server = v
-	}
-	if v := os.Getenv("PF_API_KEY"); v != "" {
-		cfg.APIKey = v
-	}
 	if v := os.Getenv("PF_DAEMON_SOCKET"); v != "" {
 		cfg.DaemonSocket = v
 	}
 	if v := os.Getenv("PF_USER_ID"); v != "" {
 		cfg.UserID = v
-	}
-	if v := os.Getenv("PF_CHAT_ID"); v != "" {
-		cfg.ChatID = v
 	}
 }
 
@@ -319,12 +437,15 @@ func (e *unknownKeyError) Error() string {
 // the file line of each row, before any value validation.
 type parsedConfig struct {
 	flat     map[string]string
+	flatLine map[string]int // the line of each flat key
 	sections []workspaceSection
 	daemon   []daemonKV
 	// summarize is the [summarize] table (nil = absent).
 	summarize *tableBlock
 	// policy is the [memory_policy."<path>".<entry>] family, file order.
 	policy []tableBlock
+	// model is the [model] table (nil = absent).
+	model *tableBlock
 }
 
 // tableBlock is one parsed [summarize] or [memory_policy...] table: its
@@ -344,6 +465,7 @@ const (
 	tableDaemon
 	tableSummarize
 	tablePolicy
+	tableModel
 )
 
 // parseConfigTOML parses the TOML subset documented for cli.toml:
@@ -375,7 +497,7 @@ const (
 // rejected — and values are taken literally between their quotes. A `#`
 // inside a quoted value is data, not a comment.
 func parseConfigTOML(file, text string) (*parsedConfig, error) {
-	p := &parsedConfig{flat: map[string]string{}}
+	p := &parsedConfig{flat: map[string]string{}, flatLine: map[string]int{}}
 	var (
 		inWS       bool
 		daemonSeen bool
@@ -407,6 +529,12 @@ func parseConfigTOML(file, text string) (*parsedConfig, error) {
 				}
 				p.summarize = &tableBlock{line: ln}
 				curTable = &p.summarize.rows
+			case tableModel:
+				if p.model != nil {
+					return nil, fmt.Errorf("line %d: duplicate [model] table (first at line %d)", ln, p.model.line)
+				}
+				p.model = &tableBlock{line: ln}
+				curTable = &p.model.rows
 			case tablePolicy:
 				for _, t := range p.policy {
 					if t.path == key && t.entry == entry {
@@ -456,6 +584,7 @@ func parseConfigTOML(file, text string) (*parsedConfig, error) {
 				return nil, fmt.Errorf("line %d: duplicate key %q", ln, key)
 			}
 			p.flat[key] = inner
+			p.flatLine[key] = ln
 			continue
 		}
 		if inWS {
@@ -563,6 +692,8 @@ func parseTableHeader(line string, ln int) (tableKind, string, string, error) {
 		return tableDaemon, "", "", nil
 	case "summarize":
 		return tableSummarize, "", "", nil
+	case "model":
+		return tableModel, "", "", nil
 	}
 	const policyPrefix = "memory_policy."
 	if strings.HasPrefix(inner, policyPrefix) {
@@ -641,7 +772,7 @@ func parseSectionHeader(line string, ln int) (string, error) {
 	inner := strings.TrimSpace(line[1 : len(line)-1])
 	const wsPrefix = `workspace.`
 	if !strings.HasPrefix(inner, wsPrefix) {
-		return "", fmt.Errorf("line %d: unknown section %q — only [workspace.\"<path>\"] sections, [memory_policy.\"<path>\".<entry>] tables and the [daemon] and [summarize] tables are supported", ln, line)
+		return "", fmt.Errorf("line %d: unknown section %q — only [workspace.\"<path>\"] sections, [memory_policy.\"<path>\".<entry>] tables and the [daemon], [summarize] and [model] tables are supported", ln, line)
 	}
 	keyExpr := strings.TrimSpace(inner[len(wsPrefix):])
 	if len(keyExpr) < 2 {
@@ -775,4 +906,177 @@ func stripTOMLComment(line string) string {
 		}
 	}
 	return line
+}
+
+// ---------------------------------------------------------------------------
+// The Host set: cli.toml (Host + default Cell) and every cli-<profile>.toml.
+// ---------------------------------------------------------------------------
+
+// HostSet is one configuration directory's Host file and named Cell files,
+// loaded file by file: a bad named file isolates that Cell only, while a bad
+// Host file is the loader's error (it blocks the Host start).
+type HostSet struct {
+	// HostPath is the Host file (cli.toml); Dir is its directory, where the
+	// named Cell files live.
+	HostPath, Dir string
+	// Host is the Host file's config: the Host keys and the default Cell's.
+	Host Config
+	// Cells are the named Cells in profile order.
+	Cells []CellConfig
+}
+
+// CellConfig is one named Cell as loaded from its file.
+type CellConfig struct {
+	Profile string
+	Path    string
+	// Cfg is the Cell's resolved config: its own file's Cell keys over the
+	// Host keys inherited from the Host file. Zero when Invalid is set by a
+	// parse failure.
+	Cfg Config
+	// Invalid is the reason the Cell cannot be served ("" = valid): a name
+	// or parse refusal, an incomplete connection, an unusable workspace, or
+	// a conflict with the default Cell or another named Cell.
+	Invalid string
+}
+
+// LoadHostSet loads the Host file at hostPath ("" = the documented default)
+// and every named Cell file next to it. Only file contents are read: no
+// environment override applies (a Cell's connection lives in its file).
+func LoadHostSet(hostPath string) (*HostSet, error) {
+	if hostPath == "" {
+		hostPath = DefaultConfigPath()
+	}
+	host, err := LoadFileConfig(hostPath)
+	if err != nil {
+		return nil, err
+	}
+	set := &HostSet{HostPath: hostPath, Dir: filepath.Dir(hostPath), Host: host}
+	files, err := cellcfg.Discover(set.Dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range files {
+		c := CellConfig{Profile: f.Profile, Path: f.Path}
+		switch {
+		case f.NameErr != nil:
+			c.Invalid = fmt.Sprintf("%s: %v", f.Path, f.NameErr)
+		default:
+			cfg, err := LoadCellFile(host, f.Path)
+			if err != nil {
+				c.Invalid = err.Error()
+			} else {
+				c.Cfg = cfg
+				c.Invalid = cellCompleteness(cfg, f.Path)
+			}
+		}
+		set.Cells = append(set.Cells, c)
+	}
+	set.applyConflicts()
+	return set, nil
+}
+
+// LoadCellFile reads one named Cell file over the Host file's Host keys:
+// the Cell inherits the Host-only values (socket, [daemon] Host knobs) and
+// takes every Cell key from its own file only — nothing of the default
+// Cell's connection, workspaces or execution settings leaks into it.
+func LoadCellFile(host Config, path string) (Config, error) {
+	cfg := Config{
+		Server:       "",
+		DaemonSocket: host.DaemonSocket,
+		Mapping:      &mapping.Plan{},
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := applyConfigBytes(&cfg, path, data); err != nil {
+		return cfg, err
+	}
+	cfg.DaemonSocket = host.DaemonSocket
+	cfg.Daemon.MaxConcurrentJobs = host.Daemon.MaxConcurrentJobs
+	cfg.Daemon.MaxConcurrentBars = host.Daemon.MaxConcurrentBars
+	cfg.Daemon.BarLoadThreshold = host.Daemon.BarLoadThreshold
+	cfg.Daemon.HarnessRoot = host.Daemon.HarnessRoot
+	cfg.Daemon.OperatorAgentDir = host.Daemon.OperatorAgentDir
+	return cfg, nil
+}
+
+// cellCompleteness answers why a parsed named Cell cannot load ("" = it
+// can): its connection must be complete, and a mapped workspace must be
+// usable. An empty mapping is valid (the Cell serves the data plane and its
+// execution plane is disabled until a mapping exists).
+func cellCompleteness(cfg Config, path string) string {
+	if strings.TrimSpace(cfg.Server) == "" {
+		return fmt.Sprintf("config %s: server is not set (a Cell's connection needs server and api_key)", path)
+	}
+	if _, err := cellcfg.NormalizeServer(cfg.Server); err != nil {
+		return fmt.Sprintf("config %s: %v", path, err)
+	}
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return fmt.Sprintf("config %s: api_key is not set (a Cell's connection needs server and api_key)", path)
+	}
+	if cfg.Mapping != nil && !cfg.Mapping.Empty() {
+		if err := ValidateMappingForDaemon(cfg); err != nil {
+			return fmt.Sprintf("config %s: %v", path, err)
+		}
+	}
+	return ""
+}
+
+// applyConflicts marks every named Cell that conflicts with the default
+// Cell or with another named Cell invalid (cellcfg.Conflicts: load-order
+// independent, every party of a named/named conflict).
+func (s *HostSet) applyConflicts() {
+	def := &cellcfg.Party{Profile: cellcfg.DefaultProfile, Server: s.Host.Server, Workspaces: s.Host.Mapping.Workspaces()}
+	var named []cellcfg.Party
+	for _, c := range s.Cells {
+		if c.Invalid != "" {
+			continue
+		}
+		named = append(named, cellcfg.Party{Profile: c.Profile, Server: c.Cfg.Server, Workspaces: c.Cfg.Mapping.Workspaces()})
+	}
+	bad := cellcfg.Conflicts(def, named)
+	for i := range s.Cells {
+		if why, ok := bad[s.Cells[i].Profile]; ok {
+			s.Cells[i].Invalid = why
+		}
+	}
+}
+
+// Cell answers a profile's config from the set: the Host file's for
+// default, the named file's otherwise. ok=false: no such Cell file;
+// invalid carries a configured Cell's refusal reason.
+func (s *HostSet) Cell(profile string) (cfg Config, invalid string, ok bool) {
+	if profile == cellcfg.DefaultProfile {
+		return s.Host, "", true
+	}
+	for _, c := range s.Cells {
+		if c.Profile == profile {
+			return c.Cfg, c.Invalid, true
+		}
+	}
+	return Config{}, "", false
+}
+
+// CellPath answers the file a profile's keys live in.
+func (s *HostSet) CellPath(profile string) string {
+	return filepath.Join(s.Dir, cellcfg.CellFileName(profile))
+}
+
+// DiskIndex is the workspace index built from the files on disk (the local
+// verbs' fallback when no Host answers; business never routes from it).
+func (s *HostSet) DiskIndex() []cellcfg.IndexEntry {
+	var out []cellcfg.IndexEntry
+	for _, ws := range s.Host.Mapping.Workspaces() {
+		out = append(out, cellcfg.IndexEntry{Profile: cellcfg.DefaultProfile, Workspace: ws})
+	}
+	for _, c := range s.Cells {
+		if c.Invalid != "" {
+			continue
+		}
+		for _, ws := range c.Cfg.Mapping.Workspaces() {
+			out = append(out, cellcfg.IndexEntry{Profile: c.Profile, Workspace: ws})
+		}
+	}
+	return out
 }

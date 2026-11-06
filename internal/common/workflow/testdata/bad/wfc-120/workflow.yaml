@@ -1,0 +1,5 @@
+contract: 5
+name: another-lane
+description: a lane whose name is not its directory
+steps:
+  - id: work

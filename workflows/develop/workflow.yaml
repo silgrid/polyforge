@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=../_schema/workflow-5.schema.json
+contract: 5
+name: develop
+description: The default development lane - build → review → sync → verification → publish → merge. One build session plans against the work item's acceptance criteria, writes each unit's test red before its implementation turns it green, records each unit's run in artifacts/build/units.json and reviews itself; review judges the change in a fresh context against five blocking classes on the facts the workflow's facts.py computes (the units' red runs replayed at their test commits); sync, verification, publish and merge are mechanical agent steps on the cheap tier, each following a shared skill that runs one pre-written command (sync.py, verify.py, merge.py) and checking what the step before it handed off first - sync merges the default branch in and resolves a real conflict in place, verification runs the light tier, publish pushes the branch and opens the PR, merge merges it into the default branch and registers the landing record, and the integration lane runs the full gate over what landed. No release slot.
+max_rewinds: 3
+defaults:
+  model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
+  tiers: { cheap: [pi:example-gateway/model-cheap], mid: [pi:example-gateway/model-mid] }
+steps:
+  - id: build
+    skill: build
+    budget: { wall_minutes: 60 }
+  - id: review
+    gate: true
+    on_fail: { target: build }
+    skill: review
+    resources: { admission: heavy }
+    budget: { wall_minutes: 30, tool_minutes: 20 }
+    vars:
+      rework_step: build
+      scope_source: the work item's acceptance criteria (or the plan's owner-confirmed `## Acceptance` list)
+    vars_files:
+      intro: fragments/review-intro.md
+      judge: fragments/review-judge.md
+  - id: sync
+    skill: sync
+    model_tier: cheap
+    budget: { tool_minutes: 20 }
+    vars: { verifying_gate: verification, change_step: build }
+  - id: verification
+    gate: true
+    on_fail: { target: build }
+    waivable: true
+    skill: verify
+    model_tier: cheap
+    resources: { admission: heavy }
+    budget: { wall_minutes: 45, tool_minutes: 35 }
+  - id: publish
+    gate: true
+    on_fail: { target: build }
+    skill: publish
+    model_tier: cheap
+    budget: { wall_minutes: 15 }
+  - id: merge
+    gate: true
+    skippable: true
+    on_fail: { target: sync }
+    skill: merge
+    model_tier: cheap
+    resources: { locks: [merge] }
+    budget: { tool_minutes: 10 }
+    wrap_attrs: [integration]
+    vars: { verifying_gate: verification }

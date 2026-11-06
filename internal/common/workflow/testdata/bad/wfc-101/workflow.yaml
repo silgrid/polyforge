@@ -1,0 +1,5 @@
+contract: 99
+name: wfc-101
+description: a lane targeting a contract this daemon does not implement
+steps:
+  - id: work

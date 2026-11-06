@@ -15,6 +15,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/modelhealth"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
 )
@@ -27,7 +28,7 @@ import (
 //	POST /jobs/{id}/claim                   body {"priority":"normal"} or {"resume":true}
 //	POST /jobs/{id}/resume-paused
 //	POST /jobs/{id}/answer                  body = AnswerPayload
-//	                                        {question_id, answer_text, answered_by}
+//	                                        {answer_text, answered_by}
 //	POST /jobs/{id}/pause  {}               POST /jobs/{id}/wrap {"reason"}
 //	GET  /status
 //	POST /ops/config {"auto":bool,"max":N}
@@ -46,38 +47,38 @@ type DaemonClient struct {
 	Sock string
 	HTTP *http.Client
 	// Origin, when set, rides on the submit-family bodies so the daemon
-	// can record where the job came from (chat id + owner).
+	// can record who submitted the job (the owner).
 	Origin *SubmitOrigin
+	// Profile, when set, is stamped as the X-PF-Profile header on every
+	// request: the Cell the Host routes it to ("" = no header — the
+	// default Cell, or a Host-scope request).
+	Profile string
+	// ProfileErr is the resolver's fail-closed answer (the Host's
+	// effective index could not be read): while Profile is still
+	// unresolvedProfile every request answers it before any dial. A
+	// caller that routes explicitly assigns Profile and so replaces both.
+	ProfileErr error
 }
+
+// unresolvedProfile marks a client whose Cell the resolver could not
+// decide (never a valid profile name: cellcfg.ValidName refuses it).
+const unresolvedProfile = "\x00unresolved"
 
 // SubmitOrigin is the optional "origin" of a submit-family request body.
 type SubmitOrigin struct {
-	ChatID string `json:"chat_id,omitempty"`
-	Owner  string `json:"owner,omitempty"`
+	Owner string `json:"owner,omitempty"`
 }
 
-// ChatRecord is the POST /chat/init answer.
-type ChatRecord struct {
-	ChatID         string `json:"chat_id"`
-	Harness        string `json:"harness"`
-	HarnessSession string `json:"harness_session"`
-	Created        bool   `json:"created"`
-	// Force records the operator's explicit supersession move.
-	Force bool `json:"force,omitempty"`
-}
-
-// ChatInit asks the daemon for the chat id of a harness session
-// (created on first use). workspace is the workspace root the CLI
-// resolved the session cwd to against its own [workspace] mapping
-// ("" = unmapped): the daemon records it as the chat's workspace tag
-// adopt eligibility and the scoped decision broadcast read
-// it there.
-func (d *DaemonClient) ChatInit(harness, session, workspace string, force ...bool) (json.RawMessage, error) {
-	body := map[string]any{"harness": harness, "harness_session": session, "workspace": workspace}
-	if len(force) > 0 && force[0] {
-		body["force"] = true
+// MachineRole asks the daemon for a machine role (POST /machine/role):
+// interactive, or runner; force takes the interactive role over from the
+// machine that holds it (the move `pf chat init --force`
+// used to make); ifUnset applies only while no operator chose a role.
+func (d *DaemonClient) MachineRole(role string, force, ifUnset bool) (json.RawMessage, error) {
+	body := map[string]any{"role": role, "force": force}
+	if ifUnset {
+		body["if_unset"] = true
 	}
-	return d.do("POST", "/chat/init", "", body, nil)
+	return d.do("POST", "/machine/role", "", body, nil)
 }
 
 // withOrigin adds the origin to a request body when one is configured.
@@ -107,6 +108,14 @@ func NewDaemonClient(sock string) *DaemonClient {
 // degrades to a synthesized "HTTP-<status>" code rather than masking
 // the real status.
 func (d *DaemonClient) do(method, path, query string, body any, header map[string]string) (json.RawMessage, error) {
+	return d.doCtx(context.Background(), method, path, query, body, header)
+}
+
+// doCtx is do under the caller's context: the request ends when ctx does.
+func (d *DaemonClient) doCtx(ctx context.Context, method, path, query string, body any, header map[string]string) (json.RawMessage, error) {
+	if d.ProfileErr != nil && d.Profile == unresolvedProfile {
+		return nil, d.ProfileErr
+	}
 	u := "http://daemon" + path // host is decorative; transport dials the socket
 	if query != "" {
 		u += "?" + query
@@ -122,15 +131,18 @@ func (d *DaemonClient) do(method, path, query string, body any, header map[strin
 	var req *http.Request
 	var err error
 	if payload != nil {
-		req, err = http.NewRequest(method, u, bytes.NewReader(payload))
+		req, err = http.NewRequestWithContext(ctx, method, u, bytes.NewReader(payload))
 	} else {
-		req, err = http.NewRequest(method, u, nil)
+		req, err = http.NewRequestWithContext(ctx, method, u, nil)
 	}
 	if err != nil {
 		return nil, err
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if d.Profile != "" {
+		req.Header.Set(protocol.ProfileHeader, d.Profile)
 	}
 	for k, v := range header {
 		req.Header.Set(k, v)
@@ -162,30 +174,15 @@ func parseWireError(status int, body []byte) *api.Error {
 	}
 }
 
-// ReviseBindingPayload is the POST /jobs/{id}/revise-binding body
-// one owner-authorized revision batch of done e2e-author
-// binding commands. Each correction is carried verbatim; the route turns
-// the list into one transition.
-type ReviseBindingPayload struct {
-	StepID      string                     `json:"step_id"`
-	Corrections []BindingCorrectionPayload `json:"corrections"`
-	By          string                     `json:"by,omitempty"`
-	Reason      string                     `json:"reason,omitempty"`
-}
-
-// BindingCorrectionPayload is one {index, command} correction in a revision
-// request.
-type BindingCorrectionPayload struct {
-	Index   int    `json:"index"`
-	Command string `json:"command"`
-}
-
-// AnswerPayload is the POST /jobs/{id}/answer body. An empty QuestionID
-// lets the daemon resolve the work item's pending question.
+// AnswerPayload is the POST /jobs/{id}/answer body: the owner's words to
+// the work item's current step agent.
 type AnswerPayload struct {
-	QuestionID string `json:"question_id"`
 	AnswerText string `json:"answer_text"`
 	AnsweredBy string `json:"answered_by"`
+	// Wake names the park whose door the caller opened (workflow contract
+	// 4): the daemon records the message and wakes the parked work item.
+	Wake   string        `json:"wake,omitempty"`
+	Origin *SubmitOrigin `json:"origin,omitempty"`
 }
 
 // OpsConfigRequest is the POST /ops/config body: the auto switch and/or
@@ -223,27 +220,44 @@ type ConfigCheckResponse struct {
 	OK bool `json:"ok"`
 }
 
-// SubmitResponse is the claim-family answer. The placement fields ride
-// the answer: machine_id / capsule_path state the
+// SubmitResponse is the claim-family answer (the claim's
+// verdict). A refusal is the error envelope, never this answer; accepted
+// is always true here. state says where the claim stands when the answer
+// is written: "claimed" — aihub answered the claim (the capsule clone
+// may still be under way) — or "queued" — nothing is claimed yet, the
+// entry waits on the daemon's queue for queued_reason. The placement
+// fields ride a claimed answer only: machine_id / capsule_path state the
 // claim's landing (absent when the placement is unknown — a probe that
 // did not resolve), missing_repos names every repo the claim will clone
 // whose clone is missing from the mapped workspace, sorted (absent when
-// every clone is present or the check was skipped). The old
-// {accepted, work_item_id}-only shape is replaced in place — no dual
-// shape (docs/upgrade.md notes the change for external parsers).
+// every clone is present or the check was skipped). The shape is
+// replaced in place — no dual shape (docs/upgrade.md notes the change
+// for external parsers).
 type SubmitResponse struct {
 	Accepted     bool     `json:"accepted"`
 	WorkItemID   string   `json:"work_item_id"`
+	State        string   `json:"state,omitempty"`
+	QueuedReason string   `json:"queued_reason,omitempty"`
 	MachineID    string   `json:"machine_id,omitempty"`
 	CapsulePath  string   `json:"capsule_path,omitempty"`
 	MissingRepos []string `json:"missing_repos,omitempty"`
 }
+
+// The SubmitResponse states.
+const (
+	SubmitStateClaimed = "claimed"
+	SubmitStateQueued  = "queued"
+)
 
 // StatusResponse is the GET /status answer: local bookkeeping + auto switch +
 // queue counters. It is NOT workflow execution state (INV-1) — just
 // "what this machine is managing". The daemon serves this very type.
 type StatusResponse struct {
 	MachineID string `json:"machine_id"`
+	// Version is the running daemon's own build version:
+	// after an install swapped the binary, a daemon still on the old one
+	// answers its old version here. Absent on an older daemon.
+	Version string `json:"version,omitempty"`
 	// DisplayName is the display-only daemon name (default: hostname).
 	DisplayName string `json:"display_name,omitempty"`
 	// Auto is the auto-pull switch (v2-converge §5); the max-jobs number
@@ -273,9 +287,18 @@ type StatusResponse struct {
 	// PiModelsEnvRefs: the variable NAMES the step agent dir's
 	// models.json interpolates (`$NAME` / `${NAME}`); pf doctor warns on
 	// those no ensure-started daemon carries.
-	PiModelsEnvRefs []string    `json:"pi_models_env_refs,omitempty"`
-	Jobs            []StatusJob `json:"jobs"`
-	Queue           QueueStats  `json:"queue"`
+	PiModelsEnvRefs []string `json:"pi_models_env_refs,omitempty"`
+	// CommandPath is the PATH the daemon's in-process commands (its git
+	// and gh) run under: the live [daemon] command_path, else the daemon
+	// process's own PATH. A PATH is not a credential.
+	CommandPath string `json:"command_path,omitempty"`
+	// StepPath is the PATH a step process starts with, before its harness
+	// binary's directory: with command_path set, the daemon's pf directory
+	// and then command_path (each entry once); unset, the daemon process's
+	// own PATH.
+	StepPath string      `json:"step_path,omitempty"`
+	Jobs     []StatusJob `json:"jobs"`
+	Queue    QueueStats  `json:"queue"`
 	// ModelHealth is the additive model-health summary:
 	// the window and the currently firing warnings, never the full table
 	// (that stays `pf ops models`). Absent on an older daemon.
@@ -297,19 +320,18 @@ type StatusResponse struct {
 	// outside the job slots, so queue.running never counts them. Absent on
 	// an older daemon.
 	Tasks *task.Summary `json:"tasks,omitempty"`
-	// Capabilities names the schema features this daemon's loaders accept
-	// (additive; an older daemon omits it): CapabilityStepsAttrs = the
-	// workspace yaml's steps.<project>.<step-id>.attrs. `pf config
-	// set|unset steps.*` and `pf workflows` read it (stepsWriteCapability).
-	Capabilities []string `json:"capabilities,omitempty"`
+	// BackgroundModelCalls is the Host's one bound over background model
+	// calls (every Cell's task lane): {bound, running}. Host aggregate
+	// only; absent on an older daemon.
+	BackgroundModelCalls *BackgroundCalls `json:"background_model_calls,omitempty"`
+	// ExecutionDisabled names why this Cell's execution plane is closed
+	// ("" = open): no workspace configured, no model-credential source.
+	ExecutionDisabled string `json:"execution_disabled,omitempty"`
+	// Cells is the Host aggregate's per-Cell block (GET /status without a
+	// profile): one GET /profiles row per Cell. Absent on a Cell's own
+	// status.
+	Cells []ProfileInfo `json:"cells,omitempty"`
 }
-
-// CapabilityStepsAttrs is the /status capability of a daemon whose
-// workspace loader accepts step attrs.
-const CapabilityStepsAttrs = "steps_attrs"
-
-// DaemonCapabilities is what this build's daemon reports on GET /status.
-var DaemonCapabilities = []string{CapabilityStepsAttrs}
 
 // SupervisionStatus is the live supervision bounds GET /status carries
 // (; 0 = unset, the documented default applies).
@@ -350,6 +372,10 @@ type HarnessDir struct {
 // StatusJob is one jobs[] bookkeeping entry.
 type StatusJob struct {
 	WorkItemID string `json:"work_item_id"`
+	// Profile is the Cell holding the job (the Host aggregate's rows; a
+	// work reference is (profile, work_item_id) — equal ids on two Cells
+	// are two jobs).
+	Profile string `json:"profile,omitempty"`
 	// Slug is the "<project>#<seq>" display name (absent on a job record
 	// that predates it: the WORK ITEM column then shows the id).
 	Slug   string `json:"slug,omitempty"`
@@ -383,12 +409,19 @@ type StatusJob struct {
 	// surfaced, never judged; nil = none.
 	WaitCalls   *int64 `json:"wait_calls,omitempty"`
 	WaitSeconds *int64 `json:"wait_seconds,omitempty"`
+	// Context is the in-flight step session's context-window usage
+	//; absent outside a dispatch or when unknown.
+	Context *protocol.ContextUsage `json:"context,omitempty"`
 	// RetryInSec / RetryCause: the current step waits a decided retry
 	// backoff before its next dispatch — whole seconds left (rounded up)
 	// and the death cause that owes it (absent = no wait owed). Rendered
 	// "retry in 3m: upstream_transient" in the RETRY column.
 	RetryInSec *int64 `json:"retry_in_sec,omitempty"`
 	RetryCause string `json:"retry_cause,omitempty"`
+	// VerifyQueue: the job's daemon-run verification waits in the
+	// heavy-run admission queue position, the holding
+	// gate, since. Rendered "queued #2: <reason>" in the VERIFY column.
+	VerifyQueue *protocol.WatchVerifyQueue `json:"verify_queue,omitempty"`
 	// Origin is how the job was submitted (may be absent).
 	Origin *protocol.Origin `json:"origin,omitempty"`
 }
@@ -462,20 +495,16 @@ func (d *DaemonClient) ResumePaused(wiID string) (*ResumePausedResponse, error) 
 	return &out, nil
 }
 
-// Answer relays an answer to a needs_input step. The relay message is
-// the request body itself; the caller identity travels in the X-PF-User
-// header (the daemon only uses it to fill an empty answered_by; it does
-// not cross-check the two).
+// Answer relays the owner's words to the work item's current step agent.
+// The relay message is the request body itself; the caller identity
+// travels in the X-PF-User header (the daemon only uses it to fill an
+// empty answered_by; it does not cross-check the two).
 func (d *DaemonClient) Answer(wiID string, payload AnswerPayload) (json.RawMessage, error) {
+	if payload.Wake != "" && payload.Origin == nil {
+		payload.Origin = d.Origin // the wake claims the work item, as a resume does
+	}
 	return d.do("POST", "/jobs/"+url.PathEscape(wiID)+"/answer", "", payload,
 		map[string]string{"X-PF-User": payload.AnsweredBy})
-}
-
-// ReviseBinding relays one owner binding-command revision to the daemon.
-// The caller identity travels in the X-PF-User header, like answer.
-func (d *DaemonClient) ReviseBinding(wiID string, payload ReviseBindingPayload) (json.RawMessage, error) {
-	return d.do("POST", "/jobs/"+url.PathEscape(wiID)+"/revise-binding", "", payload,
-		map[string]string{"X-PF-User": payload.By})
 }
 
 // Pause asks the daemon to pause a running WI (no body: the daemon's close
@@ -575,85 +604,15 @@ func (d *DaemonClient) WatchSnapshot(wiID string, after int64, demand bool) (*pr
 	return &s, nil
 }
 
-func chatPath(chat, tail string) string { return "/chats/" + url.PathEscape(chat) + "/" + tail }
-
-// ChatSubscriptions lists a chat's daemon-held subscriptions.
-func (d *DaemonClient) ChatSubscriptions(chat string) (protocol.ChatSubscriptions, error) {
-	var out protocol.ChatSubscriptions
-	raw, err := d.do("GET", chatPath(chat, "subscriptions"), "", nil, nil)
-	if err != nil {
-		return out, err
-	}
-	return out, json.Unmarshal(raw, &out)
+// Decisions reads the machine's decision feed (GET /decisions).
+func (d *DaemonClient) Decisions() (json.RawMessage, error) {
+	return d.do("GET", "/decisions", "", nil, nil)
 }
 
-// ChatSubscribe subscribes (or unsubscribes) a chat to a WI.
-func (d *DaemonClient) ChatSubscribe(chat, wi string, subscribe bool) (protocol.ChatSubscribeAnswer, error) {
-	var out protocol.ChatSubscribeAnswer
-	tail := "subscribe"
-	if !subscribe {
-		tail = "unsubscribe"
-	}
-	raw, err := d.do("POST", chatPath(chat, tail), "", map[string]any{"wi": wi}, nil)
-	if err != nil {
-		return out, err
-	}
-	return out, json.Unmarshal(raw, &out)
-}
-
-// ChatAck records a watcher's cursor/notified state for one subscription.
-func (d *DaemonClient) ChatAck(chat string, a protocol.ChatAck) error {
-	_, err := d.do("POST", chatPath(chat, "ack"), "", a, nil)
-	return err
-}
-
-// ChatTaskNotices fetches the chat's unacked task terminal summaries.
-func (d *DaemonClient) ChatTaskNotices(chat string) ([]protocol.TaskNotice, error) {
-	raw, err := d.do("GET", chatPath(chat, "task-notices"), "", nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	var out protocol.TaskNotices
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, err
-	}
-	return out.Notices, nil
-}
-
-// ChatTaskNoticesAck acks delivered task summaries.
-func (d *DaemonClient) ChatTaskNoticesAck(chat string, ids []string) error {
-	_, err := d.do("POST", chatPath(chat, "task-notices/ack"), "", protocol.TaskNoticeAck{IDs: ids}, nil)
-	return err
-}
-
-// ChatSubscribeOwned subscribes the chat to every work item the daemon
-// holds that the chat submitted or owner owns; answers the added
-// subscriptions.
-func (d *DaemonClient) ChatSubscribeOwned(chat, owner string) ([]protocol.ChatSub, error) {
-	raw, err := d.do("POST", chatPath(chat, "subscribe-owned"), "", map[string]string{"owner": owner}, nil)
-	if err != nil {
-		return nil, err
-	}
-	var out protocol.ChatSubscriptions
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, err
-	}
-	return out.Subscriptions, nil
-}
-
-// ChatAdopt transfers the WI's wake-target role to the chat (`pf
-// watch adopt <wi>`): the chat becomes the WI's origin chat in every
-// sense and inherits the delivery record — nothing replays. A refusal
-// answers the typed api.Error envelope (DAEMON-400 naming the WI's
-// workspace for an ineligible chat, DAEMON-409 naming the live target's
-// chat id, DAEMON-403 to a step process tree).
-func (d *DaemonClient) ChatAdopt(chat, wi string) (protocol.ChatAdoptAnswer, error) {
-	var out protocol.ChatAdoptAnswer
-	raw, err := d.do("POST", chatPath(chat, "adopt"), "", map[string]any{"wi": wi}, nil)
-	if err != nil {
-		return out, err
-	}
-	return out, json.Unmarshal(raw, &out)
+// DismissDecisions marks feed entries dismissed (the ids, or every open
+// one).
+func (d *DaemonClient) DismissDecisions(ids []int64, all bool) (json.RawMessage, error) {
+	return d.do("POST", "/decisions/dismiss", "", protocol.DecisionDismiss{IDs: ids, All: all}, nil)
 }
 
 // WatchArtifact reads one capsule artifact through the daemon's fixed
@@ -698,4 +657,68 @@ func (d *DaemonClient) messageTask(id, action, callerID string) (json.RawMessage
 		body["caller_id"] = callerID
 	}
 	return c.do("POST", "/messages/"+url.PathEscape(id)+"/"+action, "", body, nil)
+}
+
+// ProfilesResponse is the GET /profiles answer: the Host's Cell registry
+// and its EFFECTIVE workspace index (what the Host actually serves — a
+// pending change's newer disk mapping is not in it). The CLI resolver's cwd
+// match reads Index; a file on disk never pre-routes business.
+type ProfilesResponse struct {
+	// Dir is the configuration directory the Host loaded its files from.
+	Dir      string               `json:"dir"`
+	Profiles []ProfileInfo        `json:"profiles"`
+	Index    []cellcfg.IndexEntry `json:"index"`
+}
+
+// ProfileInfo is one Cell of the Host registry. Credentials are never
+// carried; the server is the normalized spelling.
+type ProfileInfo struct {
+	Profile string `json:"profile"`
+	File    string `json:"file"`
+	// State: serving | degraded | invalid | removed | pending.
+	State string `json:"state"`
+	Valid bool   `json:"valid"`
+	// Reason names why the Cell is invalid or degraded ("" otherwise).
+	Reason     string   `json:"reason,omitempty"`
+	Server     string   `json:"server,omitempty"`
+	Workspaces []string `json:"workspaces"`
+	DataDir    string   `json:"data_dir,omitempty"`
+	MachineID  string   `json:"machine_id,omitempty"`
+	// Heartbeat is the Cell's last heartbeat outcome ("ok", an error, or ""
+	// before the first beat).
+	Heartbeat string `json:"heartbeat,omitempty"`
+	// ExecutionDisabled names why the Cell's execution plane is closed
+	// ("" = open): no workspace configured, no model-credential source.
+	ExecutionDisabled string `json:"execution_disabled,omitempty"`
+	// CellMaxConcurrentJobs is the persisted optional Cell ceiling (0 =
+	// none); MaxConcurrent the effective one (0 = only the Host ceiling).
+	CellMaxConcurrentJobs int `json:"cell_max_concurrent_jobs,omitempty"`
+	MaxConcurrent         int `json:"max_concurrent,omitempty"`
+	Running               int `json:"running"`
+	Pending               int `json:"pending"`
+	// Draining: a connection change waits for the Cell to go idle;
+	// PendingChange names it — always present on the row, "" once no
+	// change is pending (the documented row shape), so a reader can watch
+	// the switch complete.
+	Draining      bool   `json:"draining,omitempty"`
+	PendingChange string `json:"pending_change"`
+}
+
+// BackgroundCalls is the Host's background-model-call bound and use.
+type BackgroundCalls struct {
+	Bound   int `json:"bound"`
+	Running int `json:"running"`
+}
+
+// Profiles reads the Host's Cell registry (GET /profiles).
+func (d *DaemonClient) Profiles() (*ProfilesResponse, error) {
+	raw, err := d.do("GET", "/profiles", "", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out ProfilesResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("GET /profiles: unreadable answer: %w", err)
+	}
+	return &out, nil
 }

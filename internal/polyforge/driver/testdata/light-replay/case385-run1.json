@@ -1,0 +1,94 @@
+{
+ "schema": 1,
+ "run": 1,
+ "out_dir": "runtime-state/verify/1",
+ "mechanical_verdict": "fail",
+ "fail_reason": "polyforge:full-7: `cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all` exit 1; new failures: e2e/polyforge-config-viewport.mjs: no scenario marker — 0/0 viewport checks passed [not re-runnable: the planned aggregate e2e command is not one simple command]; e2e/w385-named-cell-parity.mjs: N2 a named Cell's mapping is added, edited and removed from the page; it lands in cli-public.toml and the Cell reloads — Expected values to be strictly equal: | + actual - expected | | + 'pub2,docs' | N3 an overlapping or nested path is refused with the Host's message on the row — the Host applied an overlapping mapping | + actual - expected | | [ [not re-runnable: the planned aggregate e2e command is not one simple command] (log polyforge/18.log)",
+ "tier": {
+  "requested": "full",
+  "effective": "full"
+ },
+ "checks": [
+  {
+   "name": "polyforge:full-7",
+   "status": "fail",
+   "detail": "`cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all` exit 1; new failures: e2e/polyforge-config-viewport.mjs: no scenario marker — 0/0 viewport checks passed [not re-runnable: the planned aggregate e2e command is not one simple command]; e2e/w385-named-cell-parity.mjs: N2 a named Cell's mapping is added, edited and removed from the page; it lands in cli-public.toml and the Cell reloads — Expected values to be strictly equal: | + actual - expected | | + 'pub2,docs' | N3 an overlapping or nested path is refused with the Host's message on the row — the Host applied an overlapping mapping | + actual - expected | | [ [not re-runnable: the planned aggregate e2e command is not one simple command] (log polyforge/18.log)"
+  }
+ ],
+ "pre_existing_failures": [],
+ "units": [
+  {
+   "repo": "polyforge",
+   "check": "polyforge:full-7",
+   "kind": "e2e-suite",
+   "name": "e2e/polyforge-config-viewport.mjs",
+   "file": "e2e/polyforge-config-viewport.mjs",
+   "status": "fail",
+   "marker": "FAIL e2e/polyforge-config-viewport.mjs: no scenario marker — 0/0 viewport checks passed",
+   "signature": "no scenario marker — 0/0 viewport checks passed",
+   "detail": "not re-runnable: the planned aggregate e2e command is not one simple command"
+  },
+  {
+   "repo": "polyforge",
+   "check": "polyforge:full-7",
+   "kind": "e2e-suite",
+   "name": "e2e/w385-named-cell-parity.mjs",
+   "file": "e2e/w385-named-cell-parity.mjs",
+   "status": "fail",
+   "marker": "FAIL e2e/w385-named-cell-parity.mjs: N2 a named Cell's mapping is added, edited and removed from the page; it lands in cli-public.toml and the Cell reloads — Expected values to be strictly equal: | + actual - expected | | + 'pub2,docs'",
+   "signature": "N2 a named Cell's mapping is added, edited and removed from the page; it lands in cli-public.toml and the Cell reloads — Expected values to be strictly equal: | + actual - expected | | + 'pub2,docs' | N3 an overlapping or nested path is refused with the Host's message on the row — the Host applied an overlapping mapping | + actual - expected | | [",
+   "detail": "not re-runnable: the planned aggregate e2e command is not one simple command"
+  }
+ ],
+ "repos": [
+  {
+   "name": "polyforge",
+   "touched": true,
+   "plan": "planned",
+   "mode": "full",
+   "paths": [
+    "pi-web/AGENTS.md",
+    "pi-web/app/api/polyforge/workflows/route.ts",
+    "pi-web/app/settings.css",
+    "pi-web/components/PolyforgeConfig.test.mjs",
+    "pi-web/components/PolyforgeConfig.tsx",
+    "pi-web/components/polyforge-config-helpers.test.mjs",
+    "pi-web/components/polyforge-config-helpers.ts",
+    "pi-web/docs/agents/polyforge-panel.md",
+    "pi-web/docs/agents/settings-ui.md",
+    "pi-web/e2e/polyforge-config-255.mjs",
+    "pi-web/e2e/polyforge-config-simplify-212.mjs",
+    "pi-web/e2e/w348-cell-page.mjs",
+    "pi-web/e2e/w364-cell-master-detail.mjs",
+    "pi-web/e2e/w385-named-cell-parity.mjs",
+    "pi-web/lib/i18n/messages/en.ts",
+    "pi-web/lib/i18n/messages/zh-CN.ts",
+    "pi-web/lib/i18n/messages/zh-TW.ts",
+    "pi-web/lib/polyforge-cell-parity.test.mjs",
+    "pi-web/lib/polyforge-cells-pure.ts",
+    "pi-web/lib/polyforge-config-schema.test.mjs",
+    "pi-web/lib/polyforge-config-schema.ts",
+    "pi-web/lib/polyforge-config-scope.test.mjs",
+    "pi-web/lib/polyforge-config-scope.ts",
+    "pi-web/lib/polyforge-config-write.test.mjs",
+    "pi-web/lib/polyforge-config-write.ts",
+    "pi-web/lib/polyforge-workflows.test.mjs",
+    "pi-web/lib/polyforge-workflows.ts"
+   ],
+   "commands": [
+    {
+     "check": "polyforge:full-7",
+     "name": "full-7",
+     "phase": "full",
+     "origin": "plan",
+     "command": "cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all",
+     "status": "fail",
+     "exit_code": 1,
+     "log_path": "runtime-state/verify/1/polyforge/18.log"
+    }
+   ]
+  }
+ ],
+ "unplanned_repos": [],
+ "source": "replay fixture case385-run1: the failing checks, units and touched paths of a real 2026-11-08 verify-run result.json, trimmed (repo renamed)"
+}

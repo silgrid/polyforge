@@ -405,7 +405,7 @@ func capsuleRetentionCheck(r *doctorRun, dataDir string, now time.Time) (string,
 	}
 	states := map[string]string{}
 	if r.reachOK && len(owners) > 0 {
-		states = workItemStates(aihubclient.New(r.cfg.Server, r.cfg.APIKey), r.cfg.Mapping.Projects(), owners)
+		states = workItemStates(newProxyClient(r.cfg.DaemonSocket, ""), r.cfg.Mapping.Projects(), owners)
 	}
 	type tally struct {
 		n    int

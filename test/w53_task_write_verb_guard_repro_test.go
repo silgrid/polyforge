@@ -81,8 +81,8 @@ func w53DaemonProbes() []w53DaemonProbe {
 		{"POST", "/jobs/wi_0000000000000000/resume-paused", ""},
 		{"POST", "/jobs/wi_0000000000000000/wrap", ""},
 		{"POST", "/jobs/wi_0000000000000000/answer", `{"question_id":"q_x","answer":"yes","answered_by":"usr_x"}`},
-		{"POST", "/chats/chat_0000000000000000/subscribe", `{"wi":"wi_0000000000000000"}`},
-		{"POST", "/chats/chat_0000000000000000/unsubscribe", `{"wi":"wi_0000000000000000"}`},
+		{"POST", "/decisions/dismiss", `{"all":true}`},
+		{"POST", "/machine/role", `{"role":"interactive","force":true}`},
 		{"POST", "/messages/msg_0000000000000000/analyze", ""},
 		{"POST", "/task/spawn", `{"project":"e2e","prompt":"x"}`},
 		// last: the pre-guard daemon accepts it and stops serving, which
@@ -195,7 +195,7 @@ func TestW53TaskProcessWriteVerbsRefusedByCLI(t *testing.T) {
 		{"wrap", "wi_x"},
 		{"remember", "--project", "e2e", "--type", "fact.note", "--title", "t", "body"},
 		{"msg", "send", "--to", "usr_x", "--text", "hi"},
-		{"result", "submit", "-"},
+		{"step", "handoff", "--status", "done", "--body", "-"},
 		{"task", "spawn", "e2e", "x"},
 	}
 	for _, args := range verbs {

@@ -5,7 +5,8 @@ Session procedure, not a `pf` verb: it composes `pf recall`, `pf remember`,
 one source of the follow-up rules; `verbs/watch.md` and `verbs/wrap.md` only
 point here. Only the interactive session runs it: step agents run with skills
 disabled and never write ledger records — inside a step `pf remember` is
-daemon-mediated and accepts only `experience.wrap` (`verbs/remember.md`).
+refused, and `pf step remember` accepts only `experience.wrap`
+(`verbs/remember.md`).
 
 A follow-up is an item a delivered work item leaves for later (its PR body's
 follow-up section, or its capsule's `artifacts/delivery.md`). The ledger keeps
@@ -112,7 +113,10 @@ automatically.
    second ticket: skip step 2 and store the claim with that slug in step 3.
 2. File the ticket the owner asked for through `verbs/file.md` (`pf file create
    --project P --goal G --bundle <lane>`; ask the lane if the owner named
-   none). Nothing is written to the ledger before the ticket exists.
+   none). Nothing is written to the ledger before the ticket exists. When the
+   item's completion standard can be settled from the wrap's evidence, write
+   the ticket's `## Acceptance` at creation (`verbs/file.md`, "Acceptance at
+   creation"), so it can be submitted directly; otherwise file it without one.
 3. Store a superseding record of the owning ledger (the record that holds the
    row's state, never a pointer record) with the row at `state=claimed`,
    `claim=<new slug>`. The slug is the back-link; tell the owner both.

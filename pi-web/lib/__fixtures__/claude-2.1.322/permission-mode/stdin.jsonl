@@ -1,0 +1,4 @@
+{"type":"control_request","request_id":"pm-1","request":{"subtype":"set_permission_mode","mode":"acceptEdits"}}
+{"type":"control_request","request_id":"pm-2","request":{"subtype":"set_permission_mode","mode":"plan"}}
+{"type":"control_request","request_id":"pm-3","request":{"subtype":"set_permission_mode","mode":"bogus"}}
+{"type":"control_request","request_id":"pm-4","request":{"subtype":"set_permission_mode","mode":"default"}}

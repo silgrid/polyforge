@@ -1,0 +1,3005 @@
+@import "@xterm/xterm/css/xterm.css";
+@import "tailwindcss";
+/* demo/ is a separate project; keep its sources out of this app's class scan. */
+@source not "../demo";
+/* Agent worktrees: scanning them makes webpack snapshot their symlinked
+   node_modules, which crashes `next build` with "reading 'length'". */
+@source not "../.claude";
+
+@theme {
+  --color-bg: var(--bg);
+  --color-bg-panel: var(--bg-panel);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-selected: var(--bg-selected);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-dim: var(--text-dim);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-user-bg: var(--user-bg);
+  --color-assistant-bg: var(--assistant-bg);
+  --color-tool-bg: var(--tool-bg);
+  --color-bg-subtle: var(--bg-subtle);
+  --font-mono-font: var(--font-mono);
+}
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-panel: #f5f5f5;
+  --bg-hover: #eeeeee;
+  --bg-selected: #e8e8e8;
+  --border: #e0e0e0;
+  --text: #1a1a1a;
+  --text-muted: #515c6b;
+  --text-dim: #5e6673;
+  --accent: #245bce;
+  --accent-hover: #1d4ed8;
+  --accent-contrast: #ffffff;
+  --user-bg: #eff6ff;
+  --assistant-bg: #ffffff;
+  --tool-bg: #f9fafb;
+  --bg-subtle: rgba(0,0,0,0.03);
+  --chat-content-max-width: 820px;
+  --chat-content-font-size: 14px;
+}
+
+html.dark,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1a1a1a;
+  --bg-panel: #242424;
+  --bg-hover: #2e2e2e;
+  --bg-selected: #383838;
+  --border: #454545;
+  --text: #e8e8e8;
+  --text-muted: #b7b7b7;
+  --text-dim: #a4a4a4;
+  --accent: #a4c2f4;
+  --accent-hover: #c3d8fa;
+  --accent-contrast: #182234;
+  --user-bg: #292929;
+  --assistant-bg: #1a1a1a;
+  --tool-bg: #222222;
+  --bg-subtle: rgba(255,255,255,0.04);
+}
+
+[data-theme="mist"] {
+  color-scheme: light;
+  --bg: #f4f8f7;
+  --bg-panel: #e9f0ee;
+  --bg-hover: #e0eae7;
+  --bg-selected: #d7e4df;
+  --border: #afc4ba;
+  --text: #202e2b;
+  --text-muted: #455f56;
+  --text-dim: #52685f;
+  --accent: #1e6559;
+  --accent-hover: #174f46;
+  --accent-contrast: #ffffff;
+  --user-bg: #e0efeb;
+  --assistant-bg: #f4f8f7;
+  --tool-bg: #ecf3f0;
+  --bg-subtle: rgba(24,65,50,0.04);
+}
+
+[data-theme="rose"] {
+  color-scheme: light;
+  --bg: #fcf7f8;
+  --bg-panel: #f3edef;
+  --bg-hover: #eee3e7;
+  --bg-selected: #e8dce1;
+  --border: #cdb5bf;
+  --text: #34282e;
+  --text-muted: #65505a;
+  --text-dim: #705b65;
+  --accent: #914360;
+  --accent-hover: #76324d;
+  --accent-contrast: #ffffff;
+  --user-bg: #f3e4eb;
+  --assistant-bg: #fcf7f8;
+  --tool-bg: #f7eef2;
+  --bg-subtle: rgba(89,39,62,0.04);
+}
+
+html[data-theme="pine"],
+[data-theme="pine"] {
+  color-scheme: dark;
+  --bg: #19201f;
+  --bg-panel: #212b28;
+  --bg-hover: #2b3632;
+  --bg-selected: #35433c;
+  --border: #4a5f52;
+  --text: #e6ede8;
+  --text-muted: #c3d0c6;
+  --text-dim: #afc2b5;
+  --accent: #acccb7;
+  --accent-hover: #d0e2d3;
+  --accent-contrast: #182b20;
+  --user-bg: #25382f;
+  --assistant-bg: #19201f;
+  --tool-bg: #222d29;
+  --bg-subtle: rgba(210,236,219,0.04);
+}
+
+[data-theme="sand"] {
+  color-scheme: light;
+  --bg: #faf6ee;
+  --bg-panel: #f1ebdf;
+  --bg-hover: #ebe3d4;
+  --bg-selected: #e4dac8;
+  --border: #cdbfa6;
+  --text: #2e2a22;
+  --text-muted: #5c5243;
+  --text-dim: #665b4b;
+  --accent: #7a4f10;
+  --accent-hover: #613f0b;
+  --accent-contrast: #ffffff;
+  --user-bg: #f2e8d5;
+  --assistant-bg: #faf6ee;
+  --tool-bg: #f5efe4;
+  --bg-subtle: rgba(92,70,30,0.04);
+}
+
+html[data-theme="slate"],
+[data-theme="slate"] {
+  color-scheme: dark;
+  --bg: #161b26;
+  --bg-panel: #1d2331;
+  --bg-hover: #262d3d;
+  --bg-selected: #2f3749;
+  --border: #435069;
+  --text: #e3e8f2;
+  --text-muted: #bcc5d6;
+  --text-dim: #a7b1c5;
+  --accent: #8ccfe0;
+  --accent-hover: #b3e2ec;
+  --accent-contrast: #0f2229;
+  --user-bg: #232c3f;
+  --assistant-bg: #161b26;
+  --tool-bg: #1b2130;
+  --bg-subtle: rgba(200,215,245,0.04);
+}
+
+html[data-theme="dusk"],
+[data-theme="dusk"] {
+  color-scheme: dark;
+  --bg: #1e1a24;
+  --bg-panel: #26212e;
+  --bg-hover: #302a39;
+  --bg-selected: #3a3345;
+  --border: #54496a;
+  --text: #ebe6f0;
+  --text-muted: #c9c0d4;
+  --text-dim: #b5abc3;
+  --accent: #cdb4f0;
+  --accent-hover: #e0d0f7;
+  --accent-contrast: #261a38;
+  --user-bg: #2e2638;
+  --assistant-bg: #1e1a24;
+  --tool-bg: #241f2b;
+  --bg-subtle: rgba(225,210,245,0.04);
+}
+
+[data-theme="lilac"] {
+  color-scheme: light;
+  --bg: #f8f6fc;
+  --bg-panel: #efebf6;
+  --bg-hover: #e8e2f2;
+  --bg-selected: #e0d8ed;
+  --border: #c4b8d8;
+  --text: #2b2635;
+  --text-muted: #574d68;
+  --text-dim: #625873;
+  --accent: #6a43a8;
+  --accent-hover: #56348c;
+  --accent-contrast: #ffffff;
+  --user-bg: #ece4f7;
+  --assistant-bg: #f8f6fc;
+  --tool-bg: #f3eff9;
+  --bg-subtle: rgba(60,30,110,0.04);
+}
+
+html[data-theme="ember"],
+[data-theme="ember"] {
+  color-scheme: dark;
+  --bg: #1f1a16;
+  --bg-panel: #28211c;
+  --bg-hover: #322a23;
+  --bg-selected: #3d332b;
+  --border: #5a4a3d;
+  --text: #ede4da;
+  --text-muted: #cfc0b0;
+  --text-dim: #bba996;
+  --accent: #e8b27a;
+  --accent-hover: #f2cba0;
+  --accent-contrast: #2b1a0c;
+  --user-bg: #33291f;
+  --assistant-bg: #1f1a16;
+  --tool-bg: #251f1a;
+  --bg-subtle: rgba(245,220,190,0.04);
+}
+
+/* High contrast: every text token reaches WCAG AAA (7:1) on every surface. */
+[data-theme="contrast-light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-panel: #f3f3f3;
+  --bg-hover: #e6e6e6;
+  --bg-selected: #d9d9d9;
+  --border: #5c5c5c;
+  --text: #000000;
+  --text-muted: #1f1f1f;
+  --text-dim: #2e2e2e;
+  --accent: #0034a0;
+  --accent-hover: #002678;
+  --accent-contrast: #ffffff;
+  --user-bg: #eaf0ff;
+  --assistant-bg: #ffffff;
+  --tool-bg: #f7f7f7;
+  --bg-subtle: rgba(0,0,0,0.05);
+}
+
+html[data-theme="contrast-dark"],
+[data-theme="contrast-dark"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-panel: #0f0f0f;
+  --bg-hover: #1f1f1f;
+  --bg-selected: #2e2e2e;
+  --border: #a3a3a3;
+  --text: #ffffff;
+  --text-muted: #ebebeb;
+  --text-dim: #d6d6d6;
+  --accent: #ffd60a;
+  --accent-hover: #ffe566;
+  --accent-contrast: #000000;
+  --user-bg: #1a1a1a;
+  --assistant-bg: #000000;
+  --tool-bg: #0d0d0d;
+  --bg-subtle: rgba(255,255,255,0.06);
+}
+
+/* Zenburn's own colors (Jani Nurminen's low-contrast scheme); dim text lifted for WCAG AA. */
+html[data-theme="zenburn"],
+[data-theme="zenburn"] {
+  color-scheme: dark;
+  --bg: #3f3f3f;
+  --bg-panel: #383838;
+  --bg-hover: #474747;
+  --bg-selected: #4f4f4f;
+  --border: #6f6f6f;
+  --text: #dcdccc;
+  --text-muted: #cfcfbf;
+  --text-dim: #c6c6b6;
+  --accent: #f0dfaf;
+  --accent-hover: #f8eccb;
+  --accent-contrast: #3f3f3f;
+  --user-bg: #4a4a42;
+  --assistant-bg: #3f3f3f;
+  --tool-bg: #3a3a3a;
+  --bg-subtle: rgba(220,220,204,0.04);
+}
+
+/* WebKit reports dvh/innerHeight without the status-bar strip for installed
+   home-screen apps even though the layout still starts at the screen's top.
+   In standalone mode there is no browser toolbar to make vh unstable, and vh
+   includes that missing strip. The keyboard hook temporarily overrides this
+   custom property with visualViewport.height while an editor is focused. */
+/* Safe-area reservations are scenario-scoped (pi#1): mobile browsers already
+   lay the page out below the browser chrome, so reserving env(safe-area-inset-*)
+   there double-books the status bar; installed standalone PWAs draw under the
+   system bars and must keep the insets. Inline styles reserve through these
+   variables instead of env() directly. */
+:root {
+  --safe-area-top: 0px;
+  --safe-area-bottom: 0px;
+}
+
+@media (display-mode: standalone) {
+  :root {
+    --app-viewport-height: 100vh;
+    --safe-area-top: env(safe-area-inset-top);
+    --safe-area-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+.catppuccin-file-icon {
+  display: block;
+  flex-shrink: 0;
+  background: center / contain no-repeat var(--catppuccin-icon-light);
+}
+html.dark .catppuccin-file-icon {
+  background-image: var(--catppuccin-icon-dark);
+}
+
+/* Use the SVG alpha channel as a mask so file icons follow the app's
+   restrained text palette instead of Catppuccin's language-specific colors. */
+@supports (mask-image: url("mask.svg")) or (-webkit-mask-image: url("mask.svg")) {
+  .catppuccin-file-icon {
+    background: var(--text-dim);
+    mask: center / contain no-repeat var(--catppuccin-icon-light);
+    -webkit-mask: center / contain no-repeat var(--catppuccin-icon-light);
+  }
+  html.dark .catppuccin-file-icon {
+    background: var(--text-dim);
+    mask-image: var(--catppuccin-icon-dark);
+    -webkit-mask-image: var(--catppuccin-icon-dark);
+  }
+}
+
+/* Theme toggle: circular wipe via View Transitions API.
+   Disable the UA cross-fade; the actual clip-path animation is driven by
+   Element.animate() in hooks/useTheme.ts after transition.ready resolves. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) {
+  z-index: 1;
+}
+::view-transition-new(root) {
+  z-index: 2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  height: var(--app-viewport-height, 100dvh);
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-weight: var(--font-ui-weight);
+  font-size: 14px;
+  overscroll-behavior: none;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Light text on a dark background renders heavier with subpixel smoothing
+   (macOS); grayscale smoothing keeps it at the light theme's weight. */
+html.dark {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scroll-edge fades: a scroller with more content past an edge fades its last
+   pixels there, so a cut row or column reads as "more this way". A
+   scroll-driven animation sizes each side's fade from the scroll position:
+   none while the scroller rests on that edge, full once it is
+   --scroll-fade-size away, and none at all when nothing overflows (the
+   timeline is inactive and the properties keep their initial 0px). No script
+   and no re-render on scroll. Browsers without scroll-driven animations
+   (Firefox, Safari before 26) show no fade. */
+@property --scroll-fade-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@keyframes scroll-fade-start {
+  from { --scroll-fade-start: 0px; }
+  to { --scroll-fade-start: var(--scroll-fade-size); }
+}
+@keyframes scroll-fade-end {
+  from { --scroll-fade-end: var(--scroll-fade-size); }
+  to { --scroll-fade-end: 0px; }
+}
+@supports (animation-timeline: scroll()) {
+  .markdown-table-wrap {
+    animation-name: scroll-fade-start, scroll-fade-end;
+    animation-duration: auto;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-range: 0px var(--scroll-fade-size), calc(100% - var(--scroll-fade-size)) 100%;
+    mask-repeat: no-repeat;
+  }
+
+  /* Tables that scroll sideways (code fences wrap instead). */
+  .markdown-table-wrap {
+    --scroll-fade-size: 28px;
+    animation-timeline: scroll(self inline);
+    mask-image: linear-gradient(to right, transparent, #000 var(--scroll-fade-start), #000 calc(100% - var(--scroll-fade-end)), transparent);
+  }
+}
+
+.web-login-page {
+  display: grid;
+  min-height: 100%;
+  padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  place-items: center;
+  background: var(--bg);
+}
+
+.web-login-shell {
+  width: min(100%, 360px);
+}
+
+.web-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.web-login-brand img {
+  flex-shrink: 0;
+  border-radius: 8px;
+}
+
+.web-login-brand h1 {
+  margin: 0 0 3px;
+  color: var(--text);
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.web-login-brand p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.web-login-form {
+  width: 100%;
+}
+
+.web-login-composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 10px 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px -12px rgba(15, 23, 42, 0.10);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.web-login-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 8px 24px -12px rgba(15, 23, 42, 0.10);
+}
+
+.web-login-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.web-login-form input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+}
+
+.web-login-form input::placeholder {
+  color: var(--text-dim);
+}
+
+.web-login-error {
+  min-height: 17px;
+  margin: 7px 4px 0;
+  color: #dc2626;
+  font-size: 11px;
+  line-height: 17px;
+}
+
+html.dark .web-login-error {
+  color: #f87171;
+}
+
+.web-login-form button {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 7px 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.web-login-form button:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+
+.web-login-form button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.web-login-form button:disabled {
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
+
+/* The terminal has its own light/dark choice (lib/terminal-theme.ts), apart
+   from the app theme. Its backgrounds match the xterm palettes there. */
+.terminal-panel {
+  --terminal-bg: #111318;
+  --terminal-header-bg: #181b21;
+  --terminal-border: #2f3540;
+  --terminal-button-border: #343a46;
+  --terminal-hover-bg: #242932;
+  --terminal-muted: #9ca3af;
+  --terminal-strong: #e5e7eb;
+  --terminal-key: #d7dce5;
+  --terminal-accent: #60a5fa;
+  --terminal-error-border: #5f2424;
+  --terminal-error-bg: #321b1b;
+  --terminal-error-text: #fca5a5;
+  --terminal-scrollbar: 156, 163, 175;
+  display: grid;
+  grid-template-rows: 38px auto minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--terminal-bg);
+  color-scheme: dark;
+}
+
+.terminal-panel[data-terminal-theme="light"] {
+  --terminal-bg: #fbfbfc;
+  --terminal-header-bg: #f3f4f6;
+  --terminal-border: #e5e7eb;
+  --terminal-button-border: #d1d5db;
+  --terminal-hover-bg: #e5e7eb;
+  --terminal-muted: #6b7280;
+  --terminal-strong: #111827;
+  --terminal-key: #1f2937;
+  --terminal-accent: #2563eb;
+  --terminal-error-border: #fecaca;
+  --terminal-error-bg: #fef2f2;
+  --terminal-error-text: #b91c1c;
+  --terminal-scrollbar: 107, 114, 128;
+  color-scheme: light;
+}
+
+.terminal-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0 10px 0 13px;
+  border-bottom: 1px solid var(--terminal-border);
+  background: var(--terminal-header-bg);
+  color: var(--terminal-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.terminal-panel-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.terminal-panel-path {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.terminal-panel-path span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #facc15;
+}
+
+.terminal-status-dot.is-ready { background: #4ade80; }
+.terminal-status-dot.is-exited,
+.terminal-status-dot.is-error { background: #f87171; }
+
+.terminal-panel-header button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 27px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  border: 1px solid var(--terminal-button-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--terminal-muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.terminal-panel-exit {
+  padding: 7px 12px;
+  color: var(--terminal-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.terminal-panel-header button:hover {
+  background: var(--terminal-hover-bg);
+  color: var(--terminal-strong);
+}
+
+.terminal-panel-error {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--terminal-error-border);
+  background: var(--terminal-error-bg);
+  color: var(--terminal-error-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.terminal-xterm {
+  grid-row: -2 / -1;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px 8px 22px 12px;
+  overflow: hidden;
+}
+
+.terminal-xterm .xterm {
+  height: 100%;
+}
+
+.terminal-extra-keys {
+  grid-row: 4;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: 36px;
+  padding-bottom: env(safe-area-inset-bottom);
+  border-top: 1px solid var(--terminal-border);
+  background: var(--terminal-header-bg);
+}
+
+.terminal-xterm:has(+ .terminal-extra-keys) {
+  padding-bottom: 6px;
+}
+
+html[data-keyboard-open] .terminal-extra-keys {
+  padding-bottom: 0;
+}
+
+.terminal-extra-keys button {
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--terminal-key);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.terminal-extra-keys button:active {
+  background: var(--terminal-hover-bg);
+}
+
+.terminal-extra-keys .is-rotated {
+  display: inline-block;
+  transform: rotate(90deg);
+}
+
+.terminal-extra-keys button.is-active {
+  color: var(--terminal-accent);
+}
+
+.terminal-xterm-host {
+  width: 100%;
+  height: 100%;
+}
+
+.terminal-xterm .xterm-viewport {
+  background-color: var(--terminal-bg);
+}
+
+/*
+ * Chromium-only scrollbars. Firefox renders its native ones, which the standard
+ * `scrollbar-width` / `scrollbar-color` properties would only make thinner and
+ * flatter, so this block stays webkit-prefixed on purpose.
+ * The 10px box remains the grab target, but subtle scrollbars stay transparent
+ * until their scroll container is active. This keeps long panels usable without
+ * leaving a permanent rule down the side of every panel.
+ */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--text-dim) 45%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 5px;
+}
+/* Only ever set background-color here: the `background` shorthand resets
+   background-clip and would snap the thumb to the full 10px on hover. */
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--text-dim) 72%, transparent);
+}
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--text-dim);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+.scrollbar-subtle.scrollbar-visible::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--text-dim) 45%, transparent);
+}
+.scrollbar-subtle.scrollbar-visible::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--text-dim) 72%, transparent);
+}
+.scrollbar-subtle.scrollbar-visible::-webkit-scrollbar-thumb:active {
+  background-color: var(--text-dim);
+}
+
+/* A touch screen scrolls by dragging the content, so the extra width buys
+   nothing there and a phone has none to spare. */
+@media (pointer: coarse) {
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-thumb {
+    border-width: 1px;
+    border-radius: 3px;
+  }
+}
+
+/* The file panel's tab strip hides its scrollbar: a scrollbar takes its height
+   out of the 36px bar and squeezes the tabs (#1225). A wheel, a swipe or the
+   arrow keys scroll it, and TabBar keeps the active tab in view. */
+.tabbar-scroll {
+  scrollbar-width: none;
+}
+.tabbar-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* The terminal picks its surface apart from the app theme, so --text-dim
+   could disappear against it. */
+.terminal-xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background-color: rgba(var(--terminal-scrollbar), 0.45);
+}
+.terminal-xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(var(--terminal-scrollbar), 0.72);
+}
+.terminal-xterm .xterm-viewport::-webkit-scrollbar-thumb:active {
+  background-color: rgb(var(--terminal-scrollbar));
+}
+
+.extension-status-shelf {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: stretch;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+}
+
+.extension-widget-panels {
+  display: flex;
+  flex: 0 0 100%;
+  flex-direction: column;
+  max-height: min(144px, 18dvh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background: var(--bg-panel);
+}
+
+.extension-widget-panel {
+  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.extension-widget-panel-heading {
+  height: 26px;
+  padding: 5px 12px 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The widget triggers and the status line are one row that scrolls sideways as a
+   whole. The expanded panel sits above it and stays put. */
+.extension-status-row {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.extension-widget-triggers {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  height: 35px;
+}
+
+.extension-status-shelf.has-widgets.has-status .extension-widget-triggers {
+  border-right: 1px solid var(--border);
+}
+
+.extension-status-row > .extension-status-line {
+  flex: 0 0 auto;
+}
+
+.extension-widget-trigger {
+  position: relative;
+  display: flex;
+  flex: 0 0 108px;
+  align-items: center;
+  width: 108px;
+  height: 35px;
+  gap: 5px;
+  padding: 0 7px;
+  overflow: hidden;
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: left;
+}
+
+.extension-widget-update-pulse {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease-out;
+}
+
+.extension-widget-update-pulse::before {
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  content: "";
+  opacity: 0.12;
+}
+
+.extension-widget-trigger.is-updating .extension-widget-update-pulse {
+  opacity: 1;
+}
+
+.extension-widget-trigger.is-updating .extension-widget-update-pulse::before {
+  animation: extension-widget-update-pulse 900ms ease-in-out infinite alternate;
+}
+
+@keyframes extension-widget-update-pulse {
+  from { opacity: 0.18; }
+  to { opacity: 0.06; }
+}
+
+button.extension-widget-trigger {
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+button.extension-widget-trigger:hover,
+.extension-widget-trigger.is-expanded {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+button.extension-widget-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.extension-widget-placement {
+  display: flex;
+  position: relative;
+  z-index: 1;
+  width: 10px;
+  flex: 0 0 10px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+
+.extension-widget-placement-icon {
+  display: block;
+  width: 8px;
+  height: 6px;
+  flex: 0 0 8px;
+  fill: currentColor;
+}
+
+.extension-widget-key {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .extension-widget-update-pulse {
+    transition: none;
+  }
+
+  .extension-widget-trigger.is-updating .extension-widget-update-pulse::before {
+    animation: none;
+    opacity: 0.12;
+  }
+}
+
+.extension-widget-content {
+  margin: 0;
+  padding: 3px 12px 8px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: calc(14px + var(--chat-font-size-offset, 0px));
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.extension-status-line {
+  display: flex;
+  flex: 1 1 0;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 35px;
+  max-height: min(144px, 18dvh);
+  padding: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.extension-status-text {
+  display: flex;
+  flex: 1;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 35px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+/* Every status is a cell of the status line, told apart from its neighbours by a
+   vertical rule like the widget triggers. A `command:` status is a button cell, as
+   tall as the line, so the whole cell can be clicked. */
+.extension-status-item {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 8px 12px;
+  border-right: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+}
+
+.extension-status-item:last-child {
+  border-right: 0;
+}
+
+.extension-status-command {
+  border-top: 0;
+  border-bottom: 0;
+  border-left: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.45;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.extension-status-command:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.extension-status-command:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.extension-status-command:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Touch screens get taller cells when there is something to tap, widget triggers
+   included, so the row stays level. */
+@media (pointer: coarse) {
+  .extension-status-shelf.has-commands .extension-status-text {
+    min-height: 44px;
+  }
+
+  .extension-status-shelf.has-commands .extension-widget-triggers,
+  .extension-status-shelf.has-commands .extension-widget-trigger {
+    height: 44px;
+  }
+}
+
+/* The chat's top bar, the sidebar's toolbar row and the file panel's tab bar
+   share one height, so they read as one bar. A phone or touch screen gets a
+   finger's 44px; its icon buttons stay square. The file tree's rows
+   (FileExplorer) grow to 36px there, their row buttons with them. */
+:root {
+  --top-bar-height: 36px;
+  --file-row-height: 24px;
+}
+@media (max-width: 640px), (pointer: coarse) {
+  :root {
+    --top-bar-height: 44px;
+    --file-row-height: 36px;
+  }
+}
+/* A 360px-or-narrower phone keeps the 36px bar: its toolbar also holds the
+   Polyforge button, and at 44px the session-stats strip gets too narrow to
+   show each item whole at one end of its scroll;
+   an owner ruling. */
+@media (max-width: 360px) {
+  :root { --top-bar-height: 36px; }
+}
+
+:root {
+  --font-ui-default: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono-default: var(--font-noto-mono), 'JetBrains Mono', 'Fira Code', 'Consolas', ui-monospace, 'PingFang SC', 'Microsoft YaHei', monospace;
+  --font-ui: var(--font-ui-default);
+  --font-mono: var(--font-mono-default);
+  --font-ui-weight: 400;
+  --font-mono-weight: 400;
+}
+
+pre, code {
+  font-family: var(--font-mono);
+  font-weight: var(--font-mono-weight);
+}
+
+/* Inline code inside a heading or emphasis keeps that surrounding emphasis. */
+.markdown-body :is(h1, h2, h3, h4, h5, h6, strong, b) code {
+  font-weight: inherit;
+}
+
+/* react-markdown output styles */
+.chat-content {
+  --chat-font-size-offset: calc(var(--chat-content-font-size, 14px) - 14px);
+}
+
+.markdown-body {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  font-size: calc(14px + var(--chat-font-size-offset, 0px));
+  line-height: 1.7;
+  color: var(--text);
+  word-break: break-word;
+}
+.markdown-body p { margin: 0 0 8px; }
+.markdown-body p:last-child { margin-bottom: 0; }
+/* A reply ending in a list, code block or table kept that block's bottom
+   margin, so its stats line sat further down than under a paragraph. */
+.markdown-body > :last-child,
+.markdown-body > :is(ul, ol):last-child > li:last-child { margin-bottom: 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  font-weight: 600;
+  margin: 10px 0 5px;
+  color: var(--text);
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+.markdown-body h1 { font-size: 1.16em; }
+.markdown-body h2 { font-size: 1.08em; }
+.markdown-body h3 { font-size: 0.98em; color: color-mix(in srgb, var(--text) 88%, var(--text-muted)); }
+.markdown-body ul, .markdown-body ol {
+  padding-left: 22px;
+  margin: 5px 0 8px;
+  list-style-position: outside;
+}
+/* Room for the widest bold "N. " marker; MarkdownBody sets the digit count. */
+.markdown-body ol { padding-left: calc(0.8em + var(--ol-marker-digits, 2) * 0.62em); }
+.markdown-body li { margin: 3px 0; padding-left: 2px; }
+.markdown-body ul > li { list-style-type: disc; }
+.markdown-body ol > li { list-style-type: decimal; }
+.markdown-body li > p { margin: 0; }
+.markdown-body li::marker {
+  color: color-mix(in srgb, var(--accent) 72%, var(--text-muted));
+  font-weight: 600;
+}
+.markdown-body strong {
+  color: color-mix(in srgb, var(--text) 88%, var(--accent));
+  font-weight: 700;
+}
+.markdown-body em { color: var(--text-muted); }
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.markdown-body a:hover { text-decoration-color: var(--accent); }
+.markdown-body a[role="link"] { cursor: pointer; }
+.markdown-body img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 8px 0;
+  border-radius: 6px;
+}
+/* Firefox draws its audio controls without a background (bare buttons on the
+   page), Chrome inside a grey pill: both get the same frame from the theme. */
+.markdown-body audio {
+  display: block;
+  width: min(360px, 100%);
+  height: 36px;
+  margin: 8px 0;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  clip-path: inset(0 round 18px);
+}
+.markdown-body audio::-webkit-media-controls-enclosure {
+  background: transparent;
+}
+.markdown-body video {
+  display: block;
+  max-width: min(640px, 100%);
+  max-height: 360px;
+  margin: 8px 0;
+  border-radius: 6px;
+}
+.markdown-body .markdown-inline-code {
+  background: var(--bg-subtle);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent);
+}
+.markdown-body .contains-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+.markdown-body .task-list-item {
+  display: block;
+  position: relative;
+  padding-left: 25px;
+}
+.markdown-body .task-list-item::marker { content: ""; }
+.markdown-body .task-list-item > input[type="checkbox"],
+.markdown-body .task-list-item > p:first-child > input[type="checkbox"]:first-child {
+  appearance: none;
+  position: absolute;
+  left: 0;
+  top: 0.35em;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  display: inline-grid;
+  place-content: center;
+}
+.markdown-body .task-list-item > input[type="checkbox"]:checked,
+.markdown-body .task-list-item > p:first-child > input[type="checkbox"]:first-child:checked {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+.markdown-body .task-list-item > input[type="checkbox"]:checked::before,
+.markdown-body .task-list-item > p:first-child > input[type="checkbox"]:first-child:checked::before {
+  content: "";
+  width: 4px;
+  height: 8px;
+  border: solid var(--accent);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg) translateY(-1px);
+}
+.markdown-body blockquote {
+  border-left: 3px solid color-mix(in srgb, var(--border) 75%, var(--text-muted));
+  border-radius: 0 6px 6px 0;
+  margin: 6px 0;
+  padding: 6px 11px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+.markdown-table-frame {
+  width: 100%;
+  margin: 8px 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.markdown-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.markdown-body table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 100%;
+  font-size: calc(13px + var(--chat-font-size-offset, 0px));
+}
+.markdown-table-wrap > table { width: max-content; }
+.markdown-body th, .markdown-body td {
+  max-width: 240px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-body tr:last-child td { border-bottom: 0; }
+.markdown-body th {
+  background: var(--bg-panel);
+  color: color-mix(in srgb, var(--text) 88%, var(--text-muted));
+  font-weight: 650;
+}
+.markdown-body tbody tr:nth-child(even) td { background: var(--bg-subtle); }
+.markdown-body hr {
+  border: none;
+  height: 1px;
+  margin: 12px 0;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
+}
+.markdown-body .katex-display {
+  margin: 0.6em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+.markdown-body .katex {
+  font-size: 1.05em;
+}
+/* A display formula's Copy button (MarkdownBody's MathDisplay): on hover or
+   keyboard focus where the pointer can hover, always shown on touch screens. */
+.markdown-math-display {
+  position: relative;
+}
+.markdown-math-copy {
+  position: absolute;
+  top: 2px;
+  right: 0;
+}
+@media (hover: hover) {
+  .markdown-math-copy {
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .markdown-math-display:hover .markdown-math-copy,
+  .markdown-math-copy:focus-visible {
+    opacity: 1;
+  }
+}
+.markdown-user-message p {
+  white-space: pre-wrap;
+}
+
+/* The page's mono font ships Latin and Cyrillic only, so arrows, box drawing and
+   blocks fell back to glyphs 12-17px wide in a 7.8px column. These faces take
+   those characters from a system mono font, sized to the 0.6em column. */
+@font-face {
+  font-family: "Terminal Drawing";
+  src: local("Menlo Regular"), local("Menlo-Regular"), local("DejaVu Sans Mono");
+  unicode-range: U+2190-21FF, U+2500-259F;
+  size-adjust: 99.67%;
+}
+@font-face {
+  font-family: "Terminal Drawing Windows";
+  src: local("Consolas");
+  unicode-range: U+2190-21FF, U+2500-259F;
+  size-adjust: 109.09%;
+}
+
+/* Monospace with kept spaces, as an extension's text is laid out for pi's TUI:
+   a status box and its bars only line up in columns. */
+.markdown-custom-message {
+  font-family: "Terminal Drawing", "Terminal Drawing Windows", var(--font-mono);
+  font-size: calc(13px + var(--chat-font-size-offset, 0px));
+  line-height: 1.32;
+}
+.markdown-custom-message p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.markdown-custom-message p + p { margin-top: 1.32em; }
+.markdown-custom-message h1,
+.markdown-custom-message h2,
+.markdown-custom-message h3,
+.markdown-custom-message h4,
+.markdown-custom-message h5,
+.markdown-custom-message h6 {
+  margin: 4px 0 2px;
+  line-height: 1.18;
+}
+.markdown-custom-message ul,
+.markdown-custom-message ol {
+  margin: 2px 0 3px;
+}
+.markdown-custom-message li { margin: 0; }
+.markdown-custom-message blockquote {
+  margin: 3px 0;
+  padding: 4px 8px;
+}
+.markdown-custom-message .markdown-table-frame,
+.markdown-custom-message .markdown-code-block {
+  margin: 4px 0;
+}
+
+.markdown-compaction-message {
+  line-height: 1.5;
+}
+.markdown-compaction-message p { margin: 0 0 7px; }
+.markdown-compaction-message h1,
+.markdown-compaction-message h2,
+.markdown-compaction-message h3,
+.markdown-compaction-message h4,
+.markdown-compaction-message h5,
+.markdown-compaction-message h6 {
+  margin: 8px 0 3px;
+  line-height: 1.25;
+}
+.markdown-compaction-message ul,
+.markdown-compaction-message ol {
+  margin: 4px 0 8px;
+}
+.markdown-compaction-message li { margin: 2px 0; }
+.markdown-compaction-message .markdown-table-frame,
+.markdown-compaction-message .markdown-code-block {
+  margin: 6px 0;
+}
+
+.compaction-file-details {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.compaction-file-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.compaction-file-section {
+  margin-top: 8px;
+}
+.compaction-file-title {
+  margin-bottom: 4px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+}
+.compaction-file-list {
+  max-height: 180px;
+  margin: 0;
+  padding: 7px 8px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  list-style: none;
+}
+.compaction-file-list li {
+  overflow-wrap: anywhere;
+}
+.compaction-file-list li + li {
+  margin-top: 3px;
+}
+
+.markdown-code-block {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 42%, transparent);
+}
+/* Code fences wrap long lines, as pi's TUI does: a line is a row of its number
+   and its text (CodeBlock's renderer), so a wrapped line goes on under its
+   text, and `anywhere` breaks a URL or path that has no space to break at. */
+.markdown-code-line {
+  display: flex;
+}
+/* A zero basis: an `auto` one measures every line's unwrapped width first,
+   which nearly doubled the layout of a reply's fences. */
+.markdown-code-line-text {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* An extension dialog measures its fences unwrapped (ChatWindow), so it still
+   grows to show them whole where the screen allows. */
+.extension-dialog-measuring .markdown-code-line-text {
+  white-space: pre;
+}
+.markdown-code-header {
+  padding: 5px 10px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.markdown-code-lang {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-weight: 650;
+}
+.markdown-code-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.markdown-code-action {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 7px;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.25;
+}
+.markdown-code-action:hover:not(:disabled) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 70%, var(--text-muted));
+}
+.markdown-code-action:disabled {
+  color: var(--text-dim);
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+.markdown-code-action.is-active {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.mermaid-block {
+  padding: 12px;
+  overflow-x: auto;
+  background: color-mix(in srgb, var(--bg) 92%, var(--bg-panel));
+}
+.mermaid-block svg {
+  display: block;
+  max-width: none;
+}
+.mermaid-block-loading {
+  min-height: 120px;
+}
+.mermaid-block-error {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mermaid-preview-button {
+  width: 100%;
+  max-height: min(600px, 60dvh);
+  overflow: auto;
+  border: 0;
+  color: inherit;
+  cursor: zoom-in;
+  text-align: left;
+}
+.mermaid-preview-button:hover {
+  opacity: 0.85;
+}
+.mermaid-preview-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* A ```svg fence's <img> (components/SvgBlock.tsx). An SVG with neither a
+   viewBox nor a width and height has no size of its own: is-unsized gives it one. */
+.svg-block-image,
+.svg-zoom-image {
+  display: block;
+  height: auto;
+}
+/* An SVG with only a viewBox has a ratio but no size, so it would fill the
+   column: cap its height like a diagram's. */
+.svg-block-image {
+  width: auto;
+  max-width: 100%;
+  max-height: min(360px, 50dvh);
+}
+.svg-block-image.is-unsized {
+  width: 100%;
+  height: 240px;
+}
+.svg-zoom-image {
+  width: 100%;
+}
+.svg-zoom-image.is-unsized {
+  aspect-ratio: 2 / 1;
+}
+
+.image-preview-dialog {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding-top: max(16px, env(safe-area-inset-top));
+  padding-right: max(16px, env(safe-area-inset-right));
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  padding-left: max(16px, env(safe-area-inset-left));
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.image-preview-dialog[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-preview-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.image-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.image-preview-close {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 0.12s, color 0.12s;
+}
+
+.image-preview-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.image-preview-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .image-preview-close {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+.mermaid-zoom-dialog {
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+.mermaid-zoom-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+.mermaid-zoom-layout {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+}
+.mermaid-zoom-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 7px 10px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+.mermaid-zoom-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mermaid-zoom-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.mermaid-zoom-stepper {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+}
+.mermaid-zoom-stepper button,
+.mermaid-zoom-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.mermaid-zoom-stepper button {
+  height: 22px;
+}
+.mermaid-zoom-stepper button + .mermaid-zoom-value,
+.mermaid-zoom-value + button {
+  border-left: 1px solid var(--border);
+}
+.mermaid-zoom-icon-button {
+  flex: 0 0 24px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.mermaid-zoom-stepper button:hover:not(:disabled),
+.mermaid-zoom-icon-button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.mermaid-zoom-stepper button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.mermaid-zoom-stepper button:focus-visible,
+.mermaid-zoom-icon-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.mermaid-zoom-value {
+  min-width: 48px;
+  height: 22px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+  user-select: none;
+}
+.mermaid-zoom-viewport {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+  background: var(--bg);
+  -webkit-overflow-scrolling: touch;
+}
+.mermaid-zoom-canvas {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  margin: 0 auto;
+  transition: width 0.15s ease;
+}
+.mermaid-zoom-canvas svg {
+  display: block;
+  width: 100% !important;
+  height: auto;
+  max-width: none !important;
+}
+
+@media (max-width: 480px) {
+  .mermaid-zoom-toolbar {
+    padding-inline: 8px;
+  }
+
+  .mermaid-zoom-title {
+    font-size: 10px;
+  }
+
+  .mermaid-zoom-viewport {
+    padding: 12px;
+  }
+}
+
+/* File viewer toolbar */
+.file-viewer-toolbar {
+  min-width: 0;
+  min-height: 35px;
+}
+
+.file-viewer-path {
+  flex: 1 1 auto;
+  min-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-viewer-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-viewer-live-indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 7px;
+}
+
+.file-viewer-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.file-viewer-actions {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  gap: 4px;
+  flex-shrink: 0;
+  order: -1;
+}
+
+.file-viewer-mode-switch {
+  display: flex;
+  height: 24px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.file-viewer-mode-button {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.file-viewer-mode-button:first-child {
+  border-left: 0;
+}
+
+.file-viewer-mode-button:hover {
+  filter: brightness(1.08);
+}
+
+.file-viewer-load-more {
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  bottom: 12px;
+  max-width: calc(100% - 24px);
+  background: var(--bg-panel);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--text) 18%, transparent);
+  pointer-events: auto;
+}
+
+/* The chat's floating button (ChatWindow): ↓ (scroll to the latest)
+   while the reader is scrolled up, the manual fetch's ↻ at the tail of a saved
+   session; hidden (no is-visible) only with neither form. One 32px control
+   either way. */
+/* Below about 370px the labels of a message's actions push its timestamp onto a
+   second line, and its Copy button past the left edge. Every button keeps its title. */
+@media (max-width: 380px) {
+  .message-action-label {
+    display: none;
+  }
+}
+
+.chat-scroll-to-bottom {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 16%, transparent);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px) scale(0.96);
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease,
+    background 0.12s,
+    color 0.12s,
+    visibility 0s linear 0.16s;
+}
+
+.chat-scroll-to-bottom.is-visible {
+  opacity: 0.28;
+  visibility: visible;
+  pointer-events: auto;
+  transform: none;
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease,
+    background 0.12s,
+    color 0.12s,
+    visibility 0s;
+}
+
+.chat-scroll-to-bottom.is-visible:hover,
+.chat-scroll-to-bottom.is-visible:focus-visible,
+.chat-scroll-to-bottom.is-visible[aria-busy="true"] {
+  opacity: 1;
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-scroll-to-bottom:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-scroll-to-bottom,
+  .chat-scroll-to-bottom.is-visible {
+    transform: none;
+    transition:
+      opacity 0.16s ease,
+      background 0.12s,
+      color 0.12s,
+      visibility 0s linear 0.16s;
+  }
+
+  .chat-scroll-to-bottom.is-visible {
+    transition:
+      opacity 0.16s ease,
+      background 0.12s,
+      color 0.12s,
+      visibility 0s;
+  }
+}
+
+/* The empty new-session page's header above the composer (ChatWindow), on
+   the composer's left edge: the brand (the logo, "Pi Web" and its update
+   link). Nothing on the right. */
+
+.new-session-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 20px;
+}
+
+.new-session-brand-name {
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .new-session-brand {
+    margin-bottom: 16px;
+  }
+
+  .new-session-brand-name {
+    font-size: 20px;
+  }
+}
+
+.file-viewer-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  box-sizing: border-box;
+  flex: 0 0 24px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.file-viewer-icon-button:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text);
+}
+
+.file-viewer-icon-button:disabled {
+  color: var(--text-dim);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.file-viewer-icon-button:disabled:hover {
+  background: transparent !important;
+  color: var(--text-dim);
+}
+
+.file-viewer-mode-button:focus-visible,
+.file-viewer-icon-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.directory-picker-path:focus-visible {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Directory-picker row manage buttons (rename/delete): always visible —
+   pi#76 dropped the hover-reveal; hover only adjusts their color. */
+.directory-picker-row-manage {
+  display: inline-flex;
+}
+
+@media (max-width: 640px) {
+  .file-viewer-meta {
+    display: none;
+  }
+}
+
+@media (max-width: 380px) {
+  .file-viewer-toolbar {
+    gap: 6px !important;
+    padding-inline: 8px !important;
+  }
+
+  .file-viewer-mode-button {
+    padding-inline: 6px;
+  }
+}
+
+/* File viewer markdown preview — larger headings */
+.markdown-file-preview h1 { font-size: 1.8em; }
+.markdown-file-preview h2 { font-size: 1.4em; }
+.markdown-file-preview h3 { font-size: 1.15em; }
+.markdown-file-preview p { margin: 0 0 12px; }
+.markdown-file-preview pre {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  margin: 12px 0;
+}
+.markdown-file-preview code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--bg-panel);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.markdown-file-preview pre code {
+  background: none;
+  padding: 0;
+}
+
+/* YAML frontmatter metadata card (file preview) */
+.markdown-frontmatter {
+  margin-bottom: 20px;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+.markdown-frontmatter-title {
+  font-size: 1.3em;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+}
+.markdown-frontmatter-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.markdown-frontmatter-tag {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 10px;
+}
+.markdown-frontmatter-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 14px;
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.markdown-frontmatter-row {
+  display: contents;
+}
+.markdown-frontmatter-row dt {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  white-space: nowrap;
+}
+.markdown-frontmatter-row dd {
+  margin: 0;
+  color: var(--text);
+  min-width: 0;
+  word-break: break-word;
+}
+.markdown-frontmatter-row dd a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* syntax highlighter line numbers */
+.markdown-body span.linenumber,
+span.linenumber {
+  color: var(--text-dim) !important;
+  font-style: normal !important;
+}
+
+/* Prism's markdown table tokens collide with Tailwind's display utility. */
+span.token.table {
+  display: inline;
+}
+
+@keyframes drop-zone-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes drop-icon-float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-6px); }
+}
+
+@keyframes drop-ring-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%       { opacity: 1;   transform: scale(1.06); }
+}
+
+@keyframes drop-ripple {
+  0%   { transform: scale(0); opacity: 0.6; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* The running spinner (components/SidebarIcons.tsx SpinnerIcon). */
+.sidebar-spin {
+  flex-shrink: 0;
+  transform-origin: 50% 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+/* A run parked on an extension's dialog (the Debug panel's session rows):
+   a dot in warning amber with a breathing ring, because what it wants is
+   the person, not time. */
+.session-tree-awaiting {
+  position: relative;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d97706;
+}
+
+.session-tree-awaiting::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border: 1.4px solid #d97706;
+  border-radius: 50%;
+  opacity: 0.35;
+  animation: session-tree-status-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes session-tree-status-pulse {
+  50% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-spin,
+  .session-tree-awaiting::after {
+    animation: none;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes notice-shelf-in {
+  from {
+    opacity: 0;
+    height: 0;
+    max-height: 0;
+    min-height: 0;
+    margin-bottom: 0;
+    transform: translateY(-6px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    height: 60px;
+    max-height: 60px;
+    min-height: 60px;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes notice-shelf-out {
+  from {
+    opacity: 1;
+    height: 60px;
+    max-height: 60px;
+    min-height: 60px;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    height: 0;
+    max-height: 0;
+    min-height: 0;
+    margin-bottom: 0;
+    transform: translateY(-5px) scale(0.995);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notice-shelf-item {
+    animation-duration: 0.001ms !important;
+  }
+}
+
+/* Keep the panel border as the idle separator; this element only expands the hit target. */
+.panel-resize-handle {
+  position: relative;
+  z-index: 220;
+  width: 12px;
+  margin: 0 -6px;
+  flex: 0 0 12px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.panel-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 2px;
+  pointer-events: none;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.panel-resize-handle:hover::after,
+.panel-resize-handle:focus-visible::after,
+.panel-resize-handle.is-resizing::after {
+  background: color-mix(in srgb, var(--text-muted) 70%, var(--border));
+}
+/* Polyforge dock resize handle (pi#117): the dock is an overlay anchored
+   right, so the handle straddles its left edge instead of sitting in the
+   flex flow — but it stays a DOM child of the dock so the pi#113 outside-
+   pointerdown dismissal counts it as part of the dock. The Messages list's
+   divider reuses the same look. Same idle-separator
+   language as .panel-resize-handle (the panel's own border). */
+.pf-dock-resize-handle,
+.pf-messages-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  width: 12px;
+  z-index: 1;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.pf-dock-resize-handle::after,
+.pf-messages-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 2px;
+  pointer-events: none;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.pf-dock-resize-handle:hover::after,
+.pf-dock-resize-handle:focus-visible::after,
+.pf-dock-resize-handle.is-resizing::after,
+.pf-messages-resize-handle:hover::after,
+.pf-messages-resize-handle:focus-visible::after,
+.pf-messages-resize-handle.is-resizing::after {
+  background: color-mix(in srgb, var(--text-muted) 70%, var(--border));
+}
+/* Mobile sheet resize handle (pi#120): the bottom sheets (Polyforge,
+   bg-tasks) resize vertically by their top edge. Like the dock handle it
+   straddles the edge (half outside, half inside) but stays a DOM child of
+   the sheet, so it sits above the backdrop — dragging never taps the
+   backdrop (the tap stays the only dismiss gesture). touch-action: none
+   keeps the page from scrolling or pull-to-refresh while the handle is
+   dragged (touch drags are pointer drags here, pi#31). */
+.pf-sheet-resize-handle {
+  position: absolute;
+  top: -7px;
+  left: 0;
+  right: 0;
+  height: 14px;
+  z-index: 1;
+  cursor: row-resize;
+  touch-action: none;
+  outline: none;
+}
+.pf-sheet-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  pointer-events: none;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.pf-sheet-resize-handle:hover::after,
+.pf-sheet-resize-handle:focus-visible::after,
+.pf-sheet-resize-handle.is-resizing::after {
+  background: color-mix(in srgb, var(--text-muted) 70%, var(--border));
+}
+.sidebar-section-resize-handle {
+  outline: none;
+}
+.sidebar-section-resize-handle::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 5px;
+  height: 1px;
+  pointer-events: none;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.sidebar-section-resize-handle:hover::after,
+.sidebar-section-resize-handle:focus-visible::after,
+.sidebar-section-resize-handle.is-resizing::after {
+  background: color-mix(in srgb, var(--text-muted) 70%, var(--border));
+}
+.right-panel-overlay-backdrop {
+  display: none;
+}
+
+/* Desktop sidebar: animate width */
+@media (min-width: 641px) {
+  .sidebar-overlay-backdrop {
+    display: none !important;
+  }
+  .sidebar-container {
+    position: relative;
+    overflow: hidden;
+    transition: width 0.2s ease, min-width 0.2s ease;
+  }
+  .sidebar-container.sidebar-open {
+    width: var(--sidebar-width, 260px);
+    min-width: var(--sidebar-width, 260px);
+  }
+  .sidebar-container.sidebar-closed {
+    width: 0;
+    min-width: 0;
+    border-right: none !important;
+  }
+  /* keep inner content at fixed width so it doesn't reflow during animation */
+  .sidebar-container > * {
+    width: var(--sidebar-width, 260px);
+    min-width: var(--sidebar-width, 260px);
+  }
+  .sidebar-container.sidebar-resizing,
+  .sidebar-container.sidebar-resizing > * {
+    transition: none !important;
+  }
+}
+
+/* Wide desktop file panel: participate in the split layout. */
+@media (min-width: 960px) {
+  .right-panel-container {
+    overflow: hidden;
+    transition: width 0.2s ease, min-width 0.2s ease;
+    flex-shrink: 0;
+  }
+  .right-panel-container.right-panel-open {
+    width: var(--right-panel-width, clamp(360px, 42vw, 640px));
+    min-width: 300px;
+  }
+  .right-panel-container.right-panel-closed {
+    width: 0;
+    min-width: 0;
+    border-left: none !important;
+  }
+  /* keep inner content at fixed width so it doesn't reflow during animation */
+  .right-panel-container > * {
+    width: var(--right-panel-width, clamp(360px, 42vw, 640px));
+    min-width: 300px;
+  }
+  .right-panel-container.right-panel-resizing,
+  .right-panel-container.right-panel-resizing > * {
+    transition: none !important;
+  }
+}
+
+/* Compact desktop file panel: overlay the chat instead of collapsing it. */
+@media (min-width: 641px) and (max-width: 959px) {
+  .right-panel-resize-handle {
+    display: none;
+  }
+  .right-panel-overlay-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 240;
+    display: block;
+    background: rgba(0, 0, 0, 0.24);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  .right-panel-overlay-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .right-panel-container {
+    position: fixed;
+    top: 0;
+    right: env(safe-area-inset-right);
+    bottom: 0;
+    z-index: 250;
+    width: min(560px, calc(100vw - 48px));
+    min-width: 300px;
+    overflow: hidden;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.18);
+    transition: transform 0.2s ease;
+  }
+  .right-panel-container.right-panel-open {
+    transform: translateX(0);
+  }
+  .right-panel-container.right-panel-closed {
+    transform: translateX(100%);
+    pointer-events: none;
+  }
+  .right-panel-container > * {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* Full-width mode keeps the mounted viewer and saved split width intact. */
+@media (min-width: 641px) {
+  .right-panel-container.right-panel-open.right-panel-full-width {
+    position: fixed;
+    inset: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
+    z-index: 250;
+    width: auto;
+    min-width: 0;
+    height: var(--app-viewport-height, 100dvh);
+    border-left: none !important;
+    box-shadow: none;
+    transform: none;
+    transition: none;
+  }
+  .right-panel-container.right-panel-full-width > * {
+    width: 100%;
+    min-width: 0;
+  }
+}
+.file-panel-expand-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--top-bar-height);
+  height: var(--top-bar-height);
+  padding: 0;
+  background: var(--bg-selected);
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+}
+.file-panel-expand-button:hover,
+.file-panel-expand-button[aria-pressed="true"] {
+  color: var(--accent);
+}
+.file-panel-expand-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+/* Mobile sidebar: slide in/out as overlay */
+@media (max-width: 640px) {
+  .chat-stats-center {
+    display: none !important;
+  }
+  .sidebar-container {
+    position: fixed !important;
+    top: 0;
+    left: env(safe-area-inset-left);
+    bottom: 0;
+    width: 280px;
+    max-width: 85vw;
+    height: var(--app-viewport-height, 100dvh);
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+  }
+  .sidebar-container.sidebar-open {
+    transform: translateX(0);
+    box-shadow: 4px 0 20px rgba(0,0,0,0.15);
+  }
+  .sidebar-container.sidebar-closed {
+    transform: translateX(calc(-100% - env(safe-area-inset-left)));
+    box-shadow: none;
+  }
+
+  .right-panel-container {
+    position: fixed;
+    inset: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
+    height: var(--app-viewport-height, 100dvh);
+    z-index: 250;
+    overflow: hidden;
+    transition: transform 0.2s ease;
+  }
+  .right-panel-container.right-panel-open {
+    width: auto;
+    min-width: 0;
+  }
+  .right-panel-container.right-panel-closed {
+    width: 0 !important;
+    min-width: 0 !important;
+    border-left: none !important;
+    display: none !important;
+  }
+  .right-panel-container > * {
+    width: 100%;
+    min-width: 0;
+  }
+  .file-panel-expand-button,
+  .panel-resize-handle,
+  .right-panel-overlay-backdrop {
+    display: none;
+  }
+  .directory-picker-back,
+  .directory-picker-entry,
+  .directory-picker-action {
+    min-height: 44px !important;
+  }
+  .directory-picker-back {
+    min-width: 44px !important;
+  }
+  .directory-picker-footer {
+    flex-wrap: wrap;
+    padding-bottom: max(10px, env(safe-area-inset-bottom)) !important;
+  }
+  textarea,
+  input,
+  select {
+    font-size: 16px !important;
+  }
+  .chat-input-textarea {
+    font-size: max(16px, var(--chat-content-font-size, 14px)) !important;
+  }
+
+  /* Compact one-line extension status shelf on phones; tap to expand (pi#1).
+     Never hidden: MCP disconnect diagnostics live here. */
+  .extension-status-line {
+    min-height: 28px;
+    max-height: 28px;
+    padding: 5px 10px;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .extension-status-line .extension-status-text {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .extension-status-line.extension-status-expanded {
+    max-height: min(144px, 18dvh);
+    padding: 8px 12px;
+    overflow: auto;
+    cursor: auto;
+  }
+  .extension-status-line.extension-status-expanded .extension-status-text {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: pre;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* In-tab search (pi#80): floating bar + CSS Custom Highlight painting */
+/* ------------------------------------------------------------------ */
+
+.tab-search-bar {
+  position: absolute;
+  top: 10px;
+  right: 18px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+}
+
+.tab-search-input {
+  width: 180px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+.tab-search-input:focus {
+  border-color: var(--accent);
+}
+
+.tab-search-counter {
+  min-width: 44px;
+  text-align: center;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tab-search-toggle,
+.tab-search-nav,
+.tab-search-close,
+.tab-search-extra {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+}
+.tab-search-toggle:hover,
+.tab-search-nav:hover:not(:disabled),
+.tab-search-close:hover,
+.tab-search-extra:hover:not(:disabled) {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+.tab-search-toggle-active {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+.tab-search-nav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tab-search-earlier-note {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--bg-selected);
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.tab-search-earlier-note:empty {
+  display: none;
+}
+
+/* CSS Custom Highlight API painting (lib/tab-search registers the
+   ranges; browsers without the API degrade to navigation-only). */
+::highlight(pi-tab-search-all) {
+  background-color: rgba(250, 204, 21, 0.35);
+}
+::highlight(pi-tab-search-current) {
+  background-color: rgba(249, 115, 22, 0.75);
+}
+
+/* Session age filter (pi#82): compact numeric field in the session section */
+.settings-age-filter-input {
+  width: 72px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  text-align: right;
+}
+.settings-age-filter-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* Scroll-up history loading (pi#83): sentinel spinner affordance and the
+   fade-in of freshly prepended rows. The fade class is removed by timeout,
+   so removal never re-triggers the animation. */
+.chat-load-earlier-spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+@keyframes chat-row-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.chat-row-prepended {
+  animation: chat-row-fade-in 160ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-row-prepended {
+    animation: none;
+  }
+}
+
+/* A composer too narrow for the run's button labels, with a panel open beside
+   it: icons only, so the draft keeps the width. A stacked composer has its own
+   row for them and is not a container. */
+.chat-composer-row {
+  container-type: inline-size;
+}
+@container (max-width: 480px) {
+  .chat-composer-run-label {
+    display: none;
+  }
+}
+
+/* While the software keyboard is up (set by useViewportHeight), only a few
+   hundred pixels remain above it. Hand them to the conversation: collapse the
+   model/controls row and the extension status shelf, and drop the home
+   indicator inset the keyboard already covers. They come back when the
+   keyboard closes. Phone landscape is wider than the mobile breakpoint but
+   leaves the least room of all, so short touch screens opt in too; tablets
+   keep their controls because the keyboard leaves them enough height. */
+@media (max-width: 640px), (pointer: coarse) and (max-height: 500px) {
+  html[data-keyboard-open] .extension-status-shelf {
+    display: none !important;
+  }
+  /* Except while its model picker is open: the picker's filter is the field
+     the keyboard is for, and hiding its row would hide the picker (#1271).
+     Its own rule, so a browser without :has() drops only this one. */
+  html[data-keyboard-open] .chat-input-controls:not(:has(.model-selector [role="listbox"])) {
+    display: none !important;
+  }
+  html[data-keyboard-open] .chat-content {
+    padding-bottom: 0 !important;
+  }
+  html[data-keyboard-open] .chat-input-shell {
+    padding-bottom: 6px !important;
+  }
+}
+
+/* Polyforge step flow graph (pi#114): only the in_progress node's status dot
+   pulses; everything is static under prefers-reduced-motion. */
+.pf-step-node-pulse {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-step-node-pulse {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* The one Polyforge search bar: Work › 工单列表, Memory
+   and Tasks. Row 1 = search input + square icon action; row 2 = filters.
+   Desktop geometry is the 26px control Tasks used; ≤640px keeps row 1 on
+   one line, turns the filters into a two-column grid and gives every
+   control a 40px touch target. Existing CSS variables only. */
+
+.pf-searchbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The Memory form owns its surface padding/border; the Work sub-tabs
+   already sit inside their padded header row. */
+.pf-searchbar--padded {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.pf-searchbar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.pf-searchbar-input {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 100%;
+  height: 26px;
+  box-sizing: border-box;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.pf-searchbar-action {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pf-searchbar-action:disabled {
+  cursor: default;
+  color: var(--text-dim);
+}
+
+.pf-searchbar-action:focus-visible,
+.pf-searchbar-control:focus-visible,
+.pf-searchbar-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.pf-searchbar-filters {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pf-searchbar-control {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 100%;
+  height: 26px;
+  box-sizing: border-box;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+/* The any-word checkbox keeps its visible text; its whole label cell is
+   the click target, so the phone layout can give it the same height. */
+.pf-searchbar-check {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 26px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+@media (max-width: 640px) {
+  .pf-searchbar-input,
+  .pf-searchbar-control,
+  .pf-searchbar-action {
+    height: 40px;
+  }
+
+  .pf-searchbar-action {
+    width: 40px;
+    flex-basis: 40px;
+  }
+
+  .pf-searchbar-filters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .pf-searchbar-filters > * {
+    min-width: 0;
+    min-height: 40px;
+    height: 40px;
+  }
+
+  /* An odd last control spans the full filter row. */
+  .pf-searchbar-filters > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}

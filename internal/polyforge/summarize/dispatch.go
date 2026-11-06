@@ -1,8 +1,10 @@
 package summarize
 
 // dispatch.go: the one-shot harness dispatch seam (polyforge#224). One
-// summarize call is ONE one-shot harness dispatch: `pi -p --model <m>`
-// / `claude -p <ctx> --model <m>`, the prompt on STDIN, never argv
+// summarize call is ONE one-shot harness dispatch: `pi -p --no-session
+// --model <m>` / `claude -p <ctx> --setting-sources user --settings <…>
+// --tools "" --no-session-persistence --model <m>`, the prompt on STDIN,
+// never argv
 // (polyforge#117: a transcript tail routinely exceeds the kernel's
 // per-argument limit — caught live, "argument list too long"). The
 // binary is the daemon's configured harness binary (--pi-bin /
@@ -12,7 +14,16 @@ package summarize
 // config's settings.json env block exactly the way the step spawn
 // picks it (runtime.ReadClaudeSettingsEnv + runtime.ClaudeTokenMode —
 // the same functions, no second implementation; the official URL is
-// never contacted, never tested). One call is bounded by the 5-minute
+// never contacted, never tested). A claude dispatch has NO tools
+// (owner ruling 2026-11-10): its prompt carries an
+// agent-written transcript tail, which may carry an injection, and the
+// lane needs none — `--tools ""` empties the surface (without it 2.1.319
+// under --bare offers Bash, Edit and Read). It reads only the harness's
+// settings.json with the built-in AGENTS.md loader off
+// (runtime.ClaudeSettingsArgs) and carries runtime.ClaudeIsolationEnv
+// (no cross-session inbox). Neither harness writes a session record
+// a one-shot call is never resumed, and a recorded one
+// would pile up as a hidden session per call. One call is bounded by the 5-minute
 // timeout (the old bound): a hung call times out into summary_error
 // like any other failure; nothing waits on it. No credential value
 // ever appears in the dispatch argv, the daemon's logs or any artifact:
@@ -119,15 +130,18 @@ func claudeContextFlag(ccDir string) (string, error) {
 }
 
 // dispatchArgs answers the one-shot argv for one parsed candidate:
-// print mode first, then the claude context flag (per the auth-mode
-// ruling), then exactly the candidate's model id. The PROMPT rides
-// stdin, never argv. Exposed for the tests — the argv shape is the
-// contract (the acceptance suite's persona discriminates on it).
+// print mode first, then for pi the no-session switch; for claude the
+// context flag (per the auth-mode ruling; argv[2] stays the context flag),
+// the settings flags, the empty tool surface and the no-session-persistence
+// switch; then exactly the candidate's model id. The PROMPT rides stdin, never argv. Exposed
+// for the tests — the argv shape is the contract (the acceptance suite's
+// persona discriminates on it).
 func dispatchArgs(c harness.Candidate, claudeCtx string) []string {
 	if harness.Of(c.Harness) == harness.Claude {
-		return []string{"-p", claudeCtx, "--model", c.Model}
+		args := append([]string{"-p", claudeCtx}, runtime.ClaudeSettingsArgs()...)
+		return append(args, "--tools", "", "--no-session-persistence", "--model", c.Model)
 	}
-	return []string{"-p", "--model", c.Model}
+	return []string{"-p", "--no-session", "--model", c.Model}
 }
 
 // Dispatch runs one one-shot harness dispatch: the configured binary,
@@ -147,30 +161,54 @@ func (d *ExecDispatcher) DispatchContext(parent context.Context, candidate, prom
 	if err != nil {
 		return "", err
 	}
-	claude := harness.Of(c.Harness) == harness.Claude
-	bin := d.piBin()
-	args := dispatchArgs(c, "")
-	if claude {
-		bin = d.claudeBin()
-		ctx, cerr := claudeContextFlag(d.ClaudeConfigDir)
-		if cerr != nil {
-			return "", cerr
-		}
-		args = dispatchArgs(c, ctx)
-	}
 	timeout := d.Timeout
 	if timeout <= 0 {
 		timeout = dispatchTimeout
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
+	cmd, err := d.command(ctx, c, prompt)
+	if err != nil {
+		return "", err
+	}
+	bin := cmd.Args[0]
 	dir, release, err := d.workDir()
 	if err != nil {
 		return "", fmt.Errorf("%s -p dispatch: working directory: %w", bin, err)
 	}
 	defer release()
-	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(errb.String())
+		if detail == "" {
+			detail = strings.TrimSpace(out.String())
+		}
+		if detail != "" {
+			return "", fmt.Errorf("%s -p dispatch failed: %v: %s", bin, err, detail)
+		}
+		return "", fmt.Errorf("%s -p dispatch failed: %v", bin, err)
+	}
+	return out.String(), nil
+}
+
+// command builds (without starting, and without its working directory)
+// one dispatch's harness process: the configured binary, the spec'd argv,
+// the environment and the prompt on stdin.
+func (d *ExecDispatcher) command(ctx context.Context, c harness.Candidate, prompt string) (*exec.Cmd, error) {
+	claude := harness.Of(c.Harness) == harness.Claude
+	bin := d.piBin()
+	args := dispatchArgs(c, "")
+	if claude {
+		bin = d.claudeBin()
+		flag, err := claudeContextFlag(d.ClaudeConfigDir)
+		if err != nil {
+			return nil, err
+		}
+		args = dispatchArgs(c, flag)
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	// The dispatch is a DAEMON-side one-shot, never a step process: the
 	// inherited daemon env is stripped of every step-identity and
@@ -185,22 +223,13 @@ func (d *ExecDispatcher) DispatchContext(parent context.Context, candidate, prom
 	// source (the 2026-10-19 ruling). No credential value ever rides the
 	// env, the argv or any log.
 	cmd.Env = dispatchEnv(os.Environ())
-	if claude && d.ClaudeConfigDir != "" {
-		cmd.Env = append(cmd.Env, "CLAUDE_CONFIG_DIR="+d.ClaudeConfigDir)
-	}
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(errb.String())
-		if detail == "" {
-			detail = strings.TrimSpace(out.String())
+	if claude {
+		cmd.Env = runtime.WithEnv(cmd.Env, runtime.ClaudeIsolationEnv()...)
+		if d.ClaudeConfigDir != "" {
+			cmd.Env = append(cmd.Env, "CLAUDE_CONFIG_DIR="+d.ClaudeConfigDir)
 		}
-		if detail != "" {
-			return "", fmt.Errorf("%s -p dispatch failed: %v: %s", bin, err, detail)
-		}
-		return "", fmt.Errorf("%s -p dispatch failed: %v", bin, err)
 	}
-	return out.String(), nil
+	return cmd, nil
 }
 
 // workDir answers the dispatch's working directory (see Dir) and its

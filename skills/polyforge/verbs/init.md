@@ -109,7 +109,8 @@ the user saying "init workspace".
    `doc.design` memory; reviews / decisions / audits → `doc.review` /
    `doc.decision` / `doc.audit` memories; experience → `experience.*` /
    `fact.*`); locally only `.repo/`, `capsules/`, `.polyforge/`
-   (polyforge-generated only) and `scratch/` (disposable, reported by
+   (polyforge-generated only, plus `.polyforge/workflows/<lane>/`, the
+   workspace's own workflow lanes) and `scratch/` (disposable, reported by
    `pf doctor` after 14 days). For a workspace cli.toml maps, it also
    writes the default `[memory_policy."<root>".default]` block (with its
    comment) into cli.toml once — byte-preserving and atomic, through the
@@ -125,6 +126,15 @@ the user saying "init workspace".
 pf doctor           # machine face: config + [workspace] mapping + workspace layout + connectivity + supervision + harness layout
 pf config list      # the cli.toml memory policy per workspace path (and the summarize lane)
 cat <workspace>/.polyforge.yaml   # the model pins the daemon reads
+```
+
+and, for each repository the workspace maps, whether its light verification
+gets a narrowed selection (the workflow's scoped-gates readiness check; the
+doctor verb's fragment, "Scoped-gates readiness", says what it reads and
+its exit codes):
+
+```
+python3 "${POLYFORGE_DATA_DIR:-$HOME/.local/share/polyforge}/release/current/workflows/_shared/scripts/scope_ready.py" --repo <workspace>/.repo/<repo>
 ```
 
 The daemon-side check is a claim: the next submitted WI in this workspace

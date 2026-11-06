@@ -1,7 +1,7 @@
 package test
 
 // w20_verify_scope_acceptance_test.go: the acceptance suite for
-// the release-shipped verification-tier engine, `tools/verify-scope`, and the
+// the release-shipped verification-tier engine, `workflows/_shared/scripts/verify-scope`, and the
 // repository's declarative `.polyforge/verify-scope.conf`.
 // Authored from artifacts/spec.md's Acceptance criteria and Scenario blocks
 // BEFORE the implementation exists (e2e-author), driving the entry point only
@@ -23,12 +23,6 @@ import (
 	"strings"
 	"testing"
 )
-
-// w20InternalMarkers are the identifiers the public projection must never
-// carry. They are concatenated so this test file does not itself spell them.
-func w20InternalMarkers() []string {
-	return []string{"GMIS" + "WE", "ieops" + "-", "polyforge" + "-gmi#", "gmi" + "#"}
-}
 
 // w20Git runs one git command in dir with a fixed identity.
 func w20Git(t *testing.T, dir string, args ...string) string {
@@ -74,12 +68,12 @@ func w20Fixture(t *testing.T, initial map[string]string) (dir, base string) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	src, err := filepath.Abs(filepath.Join("..", "tools", "verify-scope"))
+	src, err := filepath.Abs(filepath.Join("..", "workflows", "_shared", "scripts", "verify-scope"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(src); err != nil {
-		t.Fatalf("repos/"+"ieops"+"-polyforge/tools/verify-scope must exist: %v", err)
+		t.Fatalf("workflows/_shared/scripts/verify-scope must exist: %v", err)
 	}
 	raw, err := os.ReadFile(src)
 	if err != nil {
@@ -91,7 +85,7 @@ func w20Fixture(t *testing.T, initial map[string]string) (dir, base string) {
 	}
 	confRaw, err := os.ReadFile(confSrc)
 	if err != nil {
-		t.Fatalf("repos/"+"ieops"+"-polyforge/.polyforge/verify-scope.conf must exist: %v", err)
+		t.Fatalf(".polyforge/verify-scope.conf must exist: %v", err)
 	}
 	root := t.TempDir()
 	origin, dir := filepath.Join(root, "origin.git"), filepath.Join(root, "work")
@@ -101,8 +95,8 @@ func w20Fixture(t *testing.T, initial map[string]string) (dir, base string) {
 	for rel, body := range initial {
 		w20Write(t, dir, rel, body)
 	}
-	w20Write(t, dir, "tools/verify-scope", string(raw))
-	if err := os.Chmod(filepath.Join(dir, "tools", "verify-scope"), 0o755); err != nil {
+	w20Write(t, dir, "workflows/_shared/scripts/verify-scope", string(raw))
+	if err := os.Chmod(filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	w20Write(t, dir, ".polyforge/verify-scope.conf", string(confRaw))
@@ -116,7 +110,7 @@ func w20Fixture(t *testing.T, initial map[string]string) (dir, base string) {
 // a controlled environment, answering stdout, stderr and the exit code.
 func w20Run(t *testing.T, dir string, extraEnv []string, args ...string) (string, string, int) {
 	t.Helper()
-	cmd := exec.Command(filepath.Join(dir, "tools", "verify-scope"), args...)
+	cmd := exec.Command(filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), extraEnv...)
 	var out, errb strings.Builder
@@ -125,7 +119,7 @@ func w20Run(t *testing.T, dir string, extraEnv []string, args ...string) (string
 	if err := cmd.Run(); err != nil {
 		ee, ok := err.(*exec.ExitError)
 		if !ok {
-			t.Fatalf("run tools/verify-scope %v: %v", args, err)
+			t.Fatalf("run workflows/_shared/scripts/verify-scope %v: %v", args, err)
 		}
 		code = ee.ExitCode()
 	}
@@ -149,7 +143,7 @@ func w20Parse(t *testing.T, out string) w20Report {
 	t.Helper()
 	trimmed := strings.TrimRight(out, "\n")
 	if trimmed == "" {
-		t.Fatalf("tools/verify-scope printed no report on stdout")
+		t.Fatalf("workflows/_shared/scripts/verify-scope printed no report on stdout")
 	}
 	lines := strings.Split(trimmed, "\n")
 	var r w20Report
@@ -191,7 +185,7 @@ func w20Scope(t *testing.T, dir string, args ...string) w20Report {
 	t.Helper()
 	out, errb, code := w20Run(t, dir, nil, args...)
 	if code != 0 {
-		t.Fatalf("tools/verify-scope %v: exit %d (stdout %q, stderr %q)", args, code, out, errb)
+		t.Fatalf("workflows/_shared/scripts/verify-scope %v: exit %d (stdout %q, stderr %q)", args, code, out, errb)
 	}
 	return w20Parse(t, out)
 }
@@ -218,19 +212,19 @@ func TestW20PolyforgeEntryPointStandalone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := filepath.Join(root, "tools", "verify-scope")
+	script := filepath.Join(root, "workflows", "_shared", "scripts", "verify-scope")
 	info, err := os.Stat(script)
 	if err != nil {
-		t.Fatalf("repos/"+"ieops"+"-polyforge/tools/verify-scope must exist: %v", err)
+		t.Fatalf("workflows/_shared/scripts/verify-scope must exist: %v", err)
 	}
 	if info.Mode()&0o111 == 0 {
-		t.Fatalf("tools/verify-scope is not executable: mode %v", info.Mode())
+		t.Fatalf("workflows/_shared/scripts/verify-scope is not executable: mode %v", info.Mode())
 	}
 	cmd := exec.Command(script, "--base", "HEAD")
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("tools/verify-scope must run standalone (`--base HEAD`): %v", err)
+		t.Fatalf("workflows/_shared/scripts/verify-scope must run standalone (`--base HEAD`): %v", err)
 	}
 	r := w20Parse(t, string(out))
 	if r.mode != "scoped" {
@@ -350,7 +344,7 @@ func TestW20PolyforgeFastGatesAndPythonRequired(t *testing.T) {
 		}
 		gateJoin := r.w20Joined()
 		for _, want := range []string{
-			"go build ./...", "go vet ./...", "gofmt -l .", "python3", "check-xrefs.py",
+			"go build ./...", "go vet ./...", "gofmt -l $(git ls-files '*.go')", "python3", "check-xrefs.py",
 			"GOOS=darwin", "GOARCH=arm64", "GOARCH=amd64",
 		} {
 			if !strings.Contains(gateJoin, want) {
@@ -546,35 +540,18 @@ func TestW20PolyforgeTierDocsAndProjection(t *testing.T) {
 	}
 	text := string(doc)
 	for _, want := range []string{
-		"verification tiers", "tools/verify-scope", "verify-scope.conf", "--base",
-		"go build ./...", "go vet ./...", "gofmt -l .", "check-xrefs.py",
+		"verification tiers", "workflows/_shared/scripts/verify-scope", "verify-scope.conf", "--base",
+		"go build ./...", "go vet ./...", "gofmt -l $(git ls-files '*.go')", "check-xrefs.py",
 		"go.mod", "Makefile", "internal/polyforge/driver", "internal/polyforge/daemon",
 	} {
 		if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
 			t.Fatalf("docs/contributing.md must document %q in its Verification tiers section", want)
 		}
 	}
-	contrib, err := os.ReadFile(filepath.Join(root, "CONTRIBUTING.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(contrib), "docs/contributing.md") ||
-		!strings.Contains(strings.ToLower(string(contrib)), "verification tiers") {
-		t.Fatalf("root CONTRIBUTING.md must carry a one-line pointer to the Verification tiers section:\n%s", contrib)
-	}
-	engine, err := os.ReadFile(filepath.Join(root, "tools", "verify-scope"))
-	if err != nil {
-		t.Fatalf("the engine must exist to check the projection invariant: %v", err)
-	}
-	conf, err := os.ReadFile(filepath.Join(root, ".polyforge", "verify-scope.conf"))
-	if err != nil {
-		t.Fatalf("the repo conf must exist to check the projection invariant: %v", err)
-	}
-	for _, file := range []struct{ name, body string }{{"docs/contributing.md", text}, {"tools/verify-scope", string(engine)}, {".polyforge/verify-scope.conf", string(conf)}} {
-		for _, marker := range w20InternalMarkers() {
-			if strings.Contains(file.body, marker) {
-				t.Fatalf("%s carries the internal identifier %q — the public projection forbids it", file.name, marker)
-			}
-		}
-	}
+	// The root CONTRIBUTING.md pointer is pinned in the EXCLUDE'd
+	// fork_agents_rules_contract_test.go: that file is internal-only (an
+	// EXCLUDE row), so a projected pin on it would go red in the mirror.
+	// The identifier-family scan lives in the EXCLUDE'd
+	// fork_projection_markers_contract_test.go: a projected
+	// file cannot carry the markers the projection now refuses.
 }

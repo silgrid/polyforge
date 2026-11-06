@@ -1,0 +1,16 @@
+#!/bin/sh
+# Stub npm for the audit-deps unit tests: records its arguments and replays a
+# recorded `npm audit --json` report. W320_NPM_OUT names the stdout file,
+# W320_NPM_ERR an optional stderr file, W320_NPM_RC the exit status. A run
+# that drops dev dependencies (--omit=dev) answers an empty report, so a
+# helper that narrowed the tree would turn a dev-only finding green.
+printf '%s\n' "$*" >>"${W320_STUB_ARGS:-/dev/null}"
+case " $* " in
+*" --omit=dev "* | *" --omit dev "* | *" --production "*)
+	printf '{"auditReportVersion":2,"vulnerabilities":{},"metadata":{}}\n'
+	exit 0
+	;;
+esac
+cat "$W320_NPM_OUT"
+[ -n "${W320_NPM_ERR:-}" ] && cat "$W320_NPM_ERR" >&2
+exit "${W320_NPM_RC:-0}"

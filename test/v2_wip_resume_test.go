@@ -22,21 +22,20 @@ func TestV2BlockedResumeKeepsUncommittedTaskWork(t *testing.T) {
 	const authored = "package demo // authored by the fix step, never committed\n"
 	wi := inst.newWI(t, "wip: uncommitted task work survives blocked -> resume",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 			// the code step: a commit (work.txt), then uncommitted work on
 			// top — a tracked edit and an untracked file
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true,
+			{"do": "envelope", "id": "fix", "outcome": "completed",
 				"name": "demo-src", "origin": remote.url,
 				"files": map[string]string{
 					"repos/demo-src/work.txt":        "edited after the commit\n",
 					"repos/demo-src/e2e_wip_test.go": authored,
 				}},
 			// three rapid deaths: the bounded-fail verdict (blocked)
-			{"do": "envelope", "id": "verification", "outcome": "completed", "crash": "before"},
-			{"do": "envelope", "id": "verification", "outcome": "completed", "crash": "before"},
-			{"do": "envelope", "id": "verification", "outcome": "completed", "crash": "before"},
+			{"do": "envelope", "id": "review", "outcome": "completed", "crash": "before"},
+			{"do": "envelope", "id": "review", "outcome": "completed", "crash": "before"},
+			{"do": "envelope", "id": "review", "outcome": "completed", "crash": "before"},
 			// the post-resume dispatch stays in flight while the test looks
-			{"do": "envelope", "id": "verification", "outcome": "completed", "ms": 120000},
+			{"do": "envelope", "id": "review", "outcome": "completed", "ms": 120000},
 		}, nil)
 	t.Cleanup(func() { killOrphans(wi) })
 

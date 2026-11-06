@@ -65,17 +65,17 @@ func (d *v1Daemon) pfAnyExit(args ...string) {
 	cmd := exec.Command(d.inst.pfPath, append([]string{"--config", hermeticConfigPath(d.t)}, args...)...)
 	cmd.Env = append(os.Environ(), "PF_SERVER="+d.inst.url, "PF_API_KEY="+d.inst.adminKey,
 		"PF_USER_ID=usr_root", "PF_DAEMON_SOCKET="+d.sock)
+	v1BusinessCmd(d.t, cmd)
 	_ = cmd.Run()
 }
 
 func gateFailPlan() []map[string]any {
-	verdict := map[string]any{"verdict": "FAIL", "error": "chaos: injected verification failure"}
+	verdict := map[string]any{"verdict": "fail", "fail_reason": "chaos: injected review failure"}
 	return []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "gate_failed", "output": verdict},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "gate_failed", "output": verdict},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	}
 }
 
@@ -89,7 +89,7 @@ func assertConverged(t *testing.T, inst *v1Install, d *v1Daemon, wi string, spaw
 		t.Fatalf("spawn journal has %d dispatches, want %d (a completed step ran again): %+v", len(got), spawns, got)
 	}
 	x := readExecution(t, capDir)
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		if st := x.Steps[step]; st == nil || st.Status != "done" {
 			t.Fatalf("step %s: %+v, want done", step, st)
 		}
@@ -115,28 +115,28 @@ func TestV5Kill9ChaosMatrix(t *testing.T) {
 		plan        []map[string]any
 		check       func(t *testing.T, inst *v1Install, d *v1Daemon, wi string)
 	}{
-		{"claim before the answer", "claim.before-answer", envelopeAutopilot(),
-			func(t *testing.T, inst *v1Install, d *v1Daemon, wi string) { assertConverged(t, inst, d, wi, 3) }},
-		{"claim after the answer", "claim.after-answer", envelopeAutopilot(),
-			func(t *testing.T, inst *v1Install, d *v1Daemon, wi string) { assertConverged(t, inst, d, wi, 3) }},
-		{"step result collected", "driver.collected:fix", envelopeAutopilot(),
+		{"claim before the answer", "claim.before-answer", envelopeMicro(),
+			func(t *testing.T, inst *v1Install, d *v1Daemon, wi string) { assertConverged(t, inst, d, wi, 2) }},
+		{"claim after the answer", "claim.after-answer", envelopeMicro(),
+			func(t *testing.T, inst *v1Install, d *v1Daemon, wi string) { assertConverged(t, inst, d, wi, 2) }},
+		{"step result collected", "driver.collected:fix", envelopeMicro(),
 			func(t *testing.T, inst *v1Install, d *v1Daemon, wi string) {
-				x := assertConverged(t, inst, d, wi, 3)
+				x := assertConverged(t, inst, d, wi, 2)
 				if n := acceptedAttempts(x.Steps["fix"]); n != 1 {
 					t.Fatalf("fix accepted %d times, want once", n)
 				}
 			}},
-		{"gate verdict", "driver.settled:verification", gateFailPlan(),
+		{"gate verdict", "driver.settled:review", gateFailPlan(),
 			func(t *testing.T, inst *v1Install, d *v1Daemon, wi string) {
-				x := assertConverged(t, inst, d, wi, 5)
+				x := assertConverged(t, inst, d, wi, 4)
 				if n, _ := x.RewindStats["count"].(float64); n != 1 {
 					t.Fatalf("the FAIL verdict must rewind exactly once: %+v", x.RewindStats)
 				}
 			}},
-		{"seal pushed", "seal.pushed", envelopeAutopilot(),
-			func(t *testing.T, inst *v1Install, d *v1Daemon, wi string) { assertConverged(t, inst, d, wi, 3) }},
-		{"session ended", "seal.ended", envelopeAutopilot(),
-			func(t *testing.T, inst *v1Install, d *v1Daemon, wi string) { assertConverged(t, inst, d, wi, 3) }},
+		{"seal pushed", "seal.pushed", envelopeMicro(),
+			func(t *testing.T, inst *v1Install, d *v1Daemon, wi string) { assertConverged(t, inst, d, wi, 2) }},
+		{"session ended", "seal.ended", envelopeMicro(),
+			func(t *testing.T, inst *v1Install, d *v1Daemon, wi string) { assertConverged(t, inst, d, wi, 2) }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -156,15 +156,14 @@ func TestV5Kill9ChaosMatrix(t *testing.T) {
 
 	t.Run("pause", func(t *testing.T) {
 		inst := newV1Install(t)
-		const qid = "q_v5_pause"
 		wi := inst.newWI(t, "v5 chaos: pause", []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": qid, "question": "v5: park here"},
+			askAction("fix", "v5: park here", nil),
 		}, nil)
 		t.Cleanup(func() { killOrphans(wi) })
 		d := armed(newV1Daemon(t, inst), "pause.persisted")
 		d.start()
 		d.pf(t, "submit", wi)
-		waitQuestion(t, d, wi, qid, 30*time.Second)
+		waitAsk(t, d, wi, 30*time.Second)
 		d.pfAnyExit("pause", wi)
 		d.waitCrashed(60 * time.Second)
 
@@ -185,13 +184,14 @@ func TestV5Kill9ChaosMatrix(t *testing.T) {
 
 	t.Run("submit queue replay", func(t *testing.T) {
 		inst := newV1Install(t)
-		const qid = "q_v5_slot"
+		// the slot holder runs (a live wedge: no envelope, no exit) — an
+		// ask would release its slot
 		holder := inst.newWI(t, "v5 chaos: slot holder", []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": qid, "question": "v5: hold the slot"},
+			{"do": "envelope", "id": "fix", "park": true},
 		}, nil)
 		queued := []string{
-			inst.newWI(t, "v5 chaos: queued one", envelopeAutopilot(), nil),
-			inst.newWI(t, "v5 chaos: queued two", envelopeAutopilot(), nil),
+			inst.newWI(t, "v5 chaos: queued one", envelopeMicro(), nil),
+			inst.newWI(t, "v5 chaos: queued two", envelopeMicro(), nil),
 		}
 		t.Cleanup(func() {
 			for _, wi := range append([]string{holder}, queued...) {
@@ -203,7 +203,7 @@ func TestV5Kill9ChaosMatrix(t *testing.T) {
 		d.extraArgs = one
 		d.start()
 		d.pf(t, "submit", holder)
-		waitQuestion(t, d, holder, qid, 30*time.Second)
+		waitSpawnCount(t, d, holder, 1, 30*time.Second)
 		for _, wi := range queued {
 			if out := d.pf(t, "submit", wi); !strings.Contains(out, "accepted") {
 				t.Fatalf("submit %s: %q", wi, out)
@@ -227,7 +227,7 @@ func TestV5Kill9ChaosMatrix(t *testing.T) {
 	// stays behind next to unflushed capsule state
 	t.Run("git commit killed", func(t *testing.T) {
 		inst := newV1Install(t)
-		wi := inst.newWI(t, "v5 chaos: commit killed", envelopeAutopilot(), nil)
+		wi := inst.newWI(t, "v5 chaos: commit killed", envelopeMicro(), nil)
 		t.Cleanup(func() { killOrphans(wi) })
 		d := armed(newV1Daemon(t, inst), "seal.committing")
 		d.start()
@@ -236,14 +236,14 @@ func TestV5Kill9ChaosMatrix(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(d.capsuleDir(wi), "chaos-marker.txt"), []byte("unflushed\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		lock := filepath.Join(d.dataDir, "git", wi+".git", "index.lock")
+		lock := filepath.Join(d.dataDir, "cells", "default", "git", wi+".git", "index.lock")
 		if err := os.WriteFile(lock, []byte("torn"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
 		d2 := d.restarted()
 		d2.start()
-		assertConverged(t, inst, d2, wi, 3)
+		assertConverged(t, inst, d2, wi, 2)
 		if !inst.bareHasPath(t, wi, "chaos-marker.txt") {
 			t.Fatal("the seal must commit the capsule's last state despite the dead commit's lock")
 		}
@@ -252,11 +252,19 @@ func TestV5Kill9ChaosMatrix(t *testing.T) {
 	// kill -9 between the two renames of a re-claim's quarantine
 	t.Run("quarantine split", func(t *testing.T) {
 		inst := newV1Install(t)
+		// The scripted incomplete must carry the contract's top-level blocker
+		// (reason, evidence, required_action; all non-empty). An invalid one
+		// is rejected as an authoring error and the step is re-dispatched;
+		// the retry then consumes the next scripted envelope, so the work
+		// item silently wraps instead of blocking and the crash below never runs.
 		wi := inst.newWI(t, "v5 chaos: quarantine split", []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "incomplete", "output": map[string]any{"partial": true}},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "incomplete", "blocker": map[string]any{
+				"reason":          "synthetic test fixture: the blocked state is scripted input, not a real obstacle",
+				"evidence":        "scripted by the quarantine split chaos subcase",
+				"required_action": "the harness resumes the work item with pf resume",
+			}},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 		t.Cleanup(func() { killOrphans(wi) })
 		d := armed(newV1Daemon(t, inst), "quarantine.between")
@@ -271,7 +279,7 @@ func TestV5Kill9ChaosMatrix(t *testing.T) {
 		inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 		capDir := d2.capsuleDir(wi)
 		trees, _ := filepath.Glob(capDir + ".quarantined.*")
-		live, _ := filepath.EvalSymlinks(filepath.Join(d2.dataDir, "git", wi+".git"))
+		live, _ := filepath.EvalSymlinks(filepath.Join(d2.dataDir, "cells", "default", "git", wi+".git"))
 		if len(trees) == 0 {
 			t.Fatal("the re-claim quarantined no capsule")
 		}
@@ -290,10 +298,9 @@ func TestV5Kill9ChaosMatrix(t *testing.T) {
 	// kill -9 inside a bounded-fail's blocked close
 	t.Run("bounded-fail close", func(t *testing.T) {
 		inst := newV1Install(t)
-		crash := map[string]any{"do": "envelope", "id": "verification", "outcome": "completed", "crash": "before"}
+		crash := map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "crash": "before"}
 		wi := inst.newWI(t, "v5 chaos: bounded-fail close", []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
 			crash, crash, crash, crash, crash, crash,
 		}, nil)
 		t.Cleanup(func() { killOrphans(wi) })

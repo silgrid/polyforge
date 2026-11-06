@@ -14,11 +14,11 @@ import (
 // the group — never answer "pid reuse; not signaled" for a live step.
 func TestTerminateKillsLiveProcessDespiteSkewedStartStamp(t *testing.T) {
 	cmd := exec.Command("sleep", "300")
-	h, stdin, err := startHarness(cmd, SpawnParams{WorkItemID: "wi_stamp_skew"}, false)
+	h, err := startHarness(cmd, SpawnParams{WorkItemID: "wi_stamp_skew"})
 	if err != nil {
 		t.Fatalf("start the step process: %v", err)
 	}
-	stdin.Close()
+	h.closeStdin()
 	pid := h.cmd.Process.Pid
 	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
 	mustBeAlive(t, pid)

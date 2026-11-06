@@ -1,0 +1,5 @@
+contract: 5
+name: wfc-191
+description: fixture lane for WFC-191
+steps:
+  - id: lonely

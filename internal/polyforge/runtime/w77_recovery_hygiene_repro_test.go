@@ -13,11 +13,11 @@ package runtime
 // reproducer, not the fix.
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -147,21 +147,29 @@ func TestStepHandleTerminateReapsSetsidChild(t *testing.T) {
 	r, _, _ := newTestRuntime(t, newFakeHub(), &scriptedSpawner{})
 	r.cfg.MachineID = daemon
 	j := seedJob(r, wi)
-	pidFile := filepath.Join(t.TempDir(), "escapee.pid")
-	// the step process is its own group leader (startHarness's Setpgid);
+	// the escapee's pid arrives on a pipe (fd 3 in the step process): the
+	// test reads it the moment it is written, so the precondition below
+	// checks the group exactly when the step process claims the child is out
+	pidR, pidW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pidR.Close()
+	// the step process is its own group leader (startHarness's Setsid: a new session's leader leads its group);
 	// the background child starts a NEW session (setsid) — outside the group
-	script := `setsid sleep 300 & echo $! > "$ESCAPEE_PID"; exec sleep 300`
-	cmd := exec.Command("sh", "-c", script)
+	cmd := exec.Command("sh", "-c", setsidEscapeeScript)
+	cmd.ExtraFiles = []*os.File{pidW}
 	cmd.Env = append(os.Environ(),
-		"ESCAPEE_PID="+pidFile,
+		"ESCAPEE_PID=/dev/fd/3",
 		"PF_WI_ID="+wi,
 		"PF_DAEMON_ID="+daemon,
 	)
-	h, stdin, err := startHarness(cmd, SpawnParams{WorkItemID: wi}, false)
+	h, err := startHarness(cmd, SpawnParams{WorkItemID: wi})
+	pidW.Close()
 	if err != nil {
 		t.Fatalf("start the step process: %v", err)
 	}
-	stdin.Close()
+	h.closeStdin()
 	leader := h.cmd.Process.Pid
 	escapee := 0
 	t.Cleanup(func() {
@@ -171,18 +179,15 @@ func TestStepHandleTerminateReapsSetsidChild(t *testing.T) {
 		}
 	})
 
-	deadline := time.Now().Add(5 * time.Second)
-	for escapee == 0 && time.Now().Before(deadline) {
-		raw, rerr := os.ReadFile(pidFile)
-		if rerr == nil {
-			if pid, perr := strconv.Atoi(strings.TrimSpace(string(raw))); perr == nil {
-				escapee = pid
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
+	if derr := pidR.SetReadDeadline(time.Now().Add(5 * time.Second)); derr != nil {
+		t.Fatal(derr)
+	}
+	line, rerr := bufio.NewReader(pidR).ReadString('\n')
+	if pid, perr := strconv.Atoi(strings.TrimSpace(line)); perr == nil {
+		escapee = pid
 	}
 	if escapee <= 0 {
-		t.Fatal("the step process never reported its setsid child")
+		t.Fatalf("the step process never reported its setsid child (read %q: %v)", line, rerr)
 	}
 	// the repro's precondition: the child really is outside the step group
 	if _, _, pgrp, _, ok := procStat(escapee); !ok || int(pgrp) == leader {

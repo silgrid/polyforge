@@ -1,10 +1,9 @@
 package driver
 
-// wall_accounting_repro_test.go: B4 — three wall-time holes
-// in the D6 cumulative-T ledger:
+// wall_accounting_repro_test.go: B4 — wall-time holes in the
+// D6 cumulative-T ledger (the result_invalid block's left with the
+// envelope, workflow contract 4):
 //
-//  1. settle's result_invalid block writes StepFailure without WallMs, so
-//     the rejected dispatches' runtime never reaches BudgetConsumed;
 //  2. an envelope a dead predecessor collected (archived, never settled)
 //     is settled without booking the dead dispatch's runtime at all;
 //  3. effectiveThresholdsLocked derives PriorRuntime from the persisted
@@ -18,50 +17,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
-
-// 1. The result_invalid block must fold the rejected dispatches' wall
-// into the step's T before it parks.
-func TestResultInvalidBlockBooksTheRejectedDispatchesWall(t *testing.T) {
-	dir := t.TempDir()
-	execPath := filepath.Join(dir, capsule.ExecutionJSON)
-	clk := &clock{t: time.Date(2026, 9, 20, 8, 0, 0, 0, time.UTC)}
-	// Enough rejected envelopes for either side of the off-by-one bound:
-	// the wall accounting is the subject here, not the bound itself.
-	var script []fakeEntry
-	for i := 0; i <= maxEnvelopeRejects; i++ {
-		script = append(script, badQuestion())
-	}
-	sp := &fakeSpawner{script: script}
-	d, err := New(Config{
-		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
-		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{spec("fix")}, MaxTotal: 4, MaxPerStep: 2},
-		Spawner:  sp,
-		Log:      &eventLog{},
-		Now:      clk.now,
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if err := d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	x := readExec(t, execPath)
-	if x.WorkflowStatus != StatusBlocked {
-		t.Fatalf("setup: the rejection bound must block, got %q", x.WorkflowStatus)
-	}
-	if got := x.Steps["fix"].BudgetConsumed.WallMs; got <= 0 {
-		t.Fatalf("the rejected dispatches' runtime must be booked into T before the result_invalid block, got %dms", got)
-	}
-}
 
 // 2. Settling an envelope collected by the dead predecessor must book the
 // dead dispatch's runtime (the time since its step_start) into T.

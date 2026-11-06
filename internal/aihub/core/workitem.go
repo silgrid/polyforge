@@ -57,6 +57,38 @@ type CreateRequest struct {
 	// must be an execution ticket). Any bad entry refuses the whole
 	// create — nothing is written.
 	After []string `json:"after"`
+	// Exclusive refuses the create CORE-409
+	// OPEN_ON_BUNDLE while another work item of the same project on the
+	// same bundle is not wrapped, failed or canceled. It needs a
+	// bundle_name. The check runs inside the create transaction on the
+	// single writer connection, so two racing creators never both commit:
+	// a lane's `exclusive: true`, stated by the caller because only the
+	// work machine's daemon knows the lane set (its proxy sets it).
+	Exclusive bool `json:"exclusive"`
+}
+
+// checkExclusiveTx refuses an exclusive create while another work item of
+// the project on bundle is unfinished, naming it and its
+// status.
+func checkExclusiveTx(tx *sql.Tx, projectID, bundle string) error {
+	var id, name, status string
+	var seq sql.NullInt64
+	err := tx.QueryRow(`SELECT w.id, p.name, w.seq, w.status FROM work_items w JOIN projects p ON p.id = w.project_id
+		WHERE w.project_id=?1 AND w.bundle_name=?2 AND w.status NOT IN (?3, ?4, ?5)
+		ORDER BY w.seq LIMIT 1`, projectID, bundle, api.StatusWrapped, api.StatusFailed, api.StatusCanceled).
+		Scan(&id, &name, &seq, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	slug := ""
+	if seq.Valid {
+		slug = name + "#" + strconv.FormatInt(seq.Int64, 10)
+	}
+	return Fail(api.ErrCoreConflict, "OPEN_ON_BUNDLE", "%s (%s) of project %s is still open on bundle %s: one at a time",
+		api.DisplayName(slug, id), status, name, bundle)
 }
 
 // maxAfter caps the create-time blockers of one work item.
@@ -224,6 +256,14 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 	// chain (polyforge#149): the reference is the name, and the bundle's
 	// truth is the materialized checkout.
 	bundleName := bundleRef(req.BundleName)
+	if req.Exclusive {
+		if bundleName == nil {
+			return nil, Fail(api.ErrCoreBadInput, "", "exclusive needs a bundle_name")
+		}
+		if err := checkExclusiveTx(tx, projectID, *req.BundleName); err != nil {
+			return nil, err
+		}
+	}
 
 	id, err := NewID("wi_")
 	if err != nil {
@@ -801,9 +841,8 @@ func validWaitingOn(wo string) bool {
 
 // Cancel terminates a non-active WI (queued/paused/blocked); a running WI
 // must first end its session. A non-empty req.Reason / req.QuestionID
-// rides the work_item_canceled event body verbatim (an owner's cancel
-// answer); the dry-run probe never reaches here (the server answers it
-// after the authorization gate).
+// rides the work_item_canceled event body verbatim (the owner's words and
+// message stamp a daemon carrying out an `intent: cancel` sends).
 func (m *WIManager) Cancel(idOrSlug string, actor string, req api.CancelRequest) (*WIView, error) {
 	id, err := m.Resolve(idOrSlug)
 	if err != nil {
@@ -827,6 +866,17 @@ func (m *WIManager) Cancel(idOrSlug string, actor string, req api.CancelRequest)
 	if status == api.StatusRunning {
 		return nil, Fail(api.ErrCoreConflict, "", "running work item: end its session (pause/block/force-end) before cancelling")
 	}
+	// The holder operator's right is blocked-only: the server admitted it on
+	// a status read outside this transaction, so a WI that left blocked
+	// since (a concurrent resume) is refused here, and the guarded UPDATE
+	// below accepts only blocked for that basis.
+	cancelable := []any{api.StatusQueued, api.StatusPaused, api.StatusBlocked}
+	if req.Basis == api.BasisHolderOperator {
+		if status != api.StatusBlocked {
+			return nil, Fail(api.ErrCoreConflict, "", "state changed concurrently")
+		}
+		cancelable = []any{api.StatusBlocked, api.StatusBlocked, api.StatusBlocked}
+	}
 	now := Now()
 	// Guarded: only a cancelable row flips; 0 rows = concurrent transition.
 	// The session row is cleared with the status: a terminal WI must never
@@ -835,7 +885,7 @@ func (m *WIManager) Cancel(idOrSlug string, actor string, req api.CancelRequest)
 		waiting_on=NULL, session_hash=NULL, session_fingerprint=NULL, session_machine=NULL,
 		session_started_at=NULL, clean_pause=0
 		WHERE id=? AND status IN (?,?,?)`,
-		api.StatusCanceled, now, now, id, api.StatusQueued, api.StatusPaused, api.StatusBlocked)
+		append([]any{api.StatusCanceled, now, now, id}, cancelable...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -846,6 +896,7 @@ func (m *WIManager) Cancel(idOrSlug string, actor string, req api.CancelRequest)
 	if req.Reason != "" || req.QuestionID != "" {
 		body = map[string]any{"reason": req.Reason, "question_id": req.QuestionID}
 	}
+	body = withHolderBasis(body, req.Basis, req.MachineID)
 	if err := appendEventTx(tx, id, now, actor, "work_item_canceled", body); err != nil {
 		return nil, err
 	}
@@ -863,7 +914,8 @@ func (m *WIManager) Cancel(idOrSlug string, actor string, req api.CancelRequest)
 // terminal WI (CORE-410 TERMINAL_STATE), a WI a session holds (CORE-409),
 // a WI with a bundle (CORE-409: an execution ticket is wrapped by its
 // daemon), an epic whose children are not all terminal (CORE-409
-// OPEN_CHILDREN). Authorization (server layer): the same gate as cancel.
+// OPEN_CHILDREN). Authorization (server layer): the reporter/maintainer/admin
+// gate — cancel's base gate, without its blocked-only holder operator.
 func (m *WIManager) Wrap(idOrSlug, actor string, opts api.WrapRequest) (*WIView, error) {
 	id, err := m.Resolve(idOrSlug)
 	if err != nil {
@@ -933,6 +985,51 @@ func (m *WIManager) Wrap(idOrSlug, actor string, opts api.WrapRequest) (*WIView,
 	return m.load(id)
 }
 
+// HolderMachine resolves the machine that most recently held the work
+// item and that machine's CURRENT operator: the
+// machine_id on the latest session_claimed/session_attached event, then
+// machines.operator_id of that row. No liveness test applies — a blocked
+// work item carries no session by construction, an offline machine's
+// operator keeps the right, and a handover of the machine row moves it.
+// Both answers are empty ("no holder") when there is no such event, that
+// latest event recorded no machine, the machine row is gone, or the row
+// names no operator.
+func (m *WIManager) HolderMachine(wiID string) (machineID, operatorID string, err error) {
+	err = m.db.QueryRow(`SELECT COALESCE(json_extract(payload,'$.machine_id'),'') FROM wi_events
+		WHERE work_item_id=?1 AND event_type IN ('session_claimed','session_attached')
+		ORDER BY id DESC LIMIT 1`, wiID).Scan(&machineID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && machineID == "") {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	err = m.db.QueryRow(`SELECT COALESCE(operator_id,'') FROM machines WHERE id=?1`, machineID).Scan(&operatorID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && operatorID == "") {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return machineID, operatorID, nil
+}
+
+// withHolderBasis adds the sole-basis audit to a decision
+// event's payload: basis + machine_id only when the server admitted the
+// caller solely as the holder machine's operator; any other call keeps
+// today's payload unchanged.
+func withHolderBasis(body map[string]any, basis, machineID string) map[string]any {
+	if basis != api.BasisHolderOperator || machineID == "" {
+		return body
+	}
+	if body == nil {
+		body = map[string]any{}
+	}
+	body["basis"] = basis
+	body["machine_id"] = machineID
+	return body
+}
+
 // ResumeBlocked is the §6.4 owner resume verdict's hub door (polyforge#116):
 // the door the owner's `pf resume` exercises on a workflow parked blocked on
 // an honest incomplete result. It is NOT a pool return for a
@@ -943,9 +1040,11 @@ func (m *WIManager) Wrap(idOrSlug, actor string, opts api.WrapRequest) (*WIView,
 // (a blocked WI still carrying a session would orphan a
 // holder). Effect: status→queued, waiting_on=NULL, event wi_resumed; the
 // claim gate (unchanged: queued only) then admits the WI like any queued
-// ticket. Authorization (server layer, v2-converge §7): the WI's reporter,
-// a project maintainer, or an admin — the same gate as cancel. This is the
-// plain door: ResumeBlockedWith takes the door's options.
+// ticket. Authorization (server layer, v2-converge §7,): the
+// WI's reporter, a project maintainer, an admin, or — only while the WI is
+// blocked — the holder operator (the current operator of the machine on the
+// latest claim/attach, a project writer or maintainer); the same gate as
+// cancel. This is the plain door: ResumeBlockedWith takes the door's options.
 func (m *WIManager) ResumeBlocked(idOrSlug string, actor string) (*WIView, error) {
 	return m.ResumeBlockedWith(idOrSlug, actor, api.ResumeBlockedRequest{})
 }
@@ -1012,8 +1111,8 @@ func (m *WIManager) ResumeBlockedWith(idOrSlug string, actor string, opts api.Re
 			}
 		}
 	}
-	if err := appendEventTx(tx, id, now, actor, "wi_resumed",
-		map[string]any{"from": api.StatusBlocked, "to": api.StatusQueued}); err != nil {
+	if err := appendEventTx(tx, id, now, actor, "wi_resumed", withHolderBasis(
+		map[string]any{"from": api.StatusBlocked, "to": api.StatusQueued}, opts.Basis, opts.MachineID)); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1029,6 +1128,11 @@ type ListFilters struct {
 	Assignee  string
 	Priority  string
 	Milestone string
+	// Bundle narrows to one bundle ("" = any); Attrs to the work items
+	// whose attr at each path is that string (workflow contract 5: GET
+	// /work-items?attr=<path>:<value>).
+	Bundle string
+	Attrs  []AttrMatch
 	// Limit caps the page. 0 = the production default (500, the queue
 	// views). Explicit values are clamped to maxListLimit.
 	Limit int
@@ -1074,6 +1178,14 @@ func (m *WIManager) List(f ListFilters) ([]WIView, error) {
 	if f.Milestone != "" {
 		q += ` AND w.milestone=?`
 		args = append(args, f.Milestone)
+	}
+	if f.Bundle != "" {
+		q += ` AND w.bundle_name=?`
+		args = append(args, f.Bundle)
+	}
+	for _, a := range f.Attrs {
+		q += ` AND json_extract(w.attrs, ?)=?`
+		args = append(args, jsonPath(a.Path), a.Value)
 	}
 	if f.ReadableProjects != nil {
 		q += ` AND w.project_id IN (`

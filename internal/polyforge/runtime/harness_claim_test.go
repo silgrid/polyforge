@@ -21,7 +21,7 @@ import (
 func TestClaimMixedHarnessChainRidesTheJob(t *testing.T) {
 	hub := newFakeHub()
 	r, ws, _ := newWorkspaceTestRuntime(t, hub, "proj")
-	r.cfg.WorkflowsDir = frontmatterBundle(t, w079Frontmatter)
+	r.cfg.WorkflowsDir = laneBundle(t, w079Lane)
 	writeWorkspaceYaml(t, ws, "steps:\n  proj:\n    fix: { models: [claude:claude-opus-5-5, pi:prov/flash] }\n")
 	if err := r.Start(context.Background(), "wi_h175comp", StartOpts{}); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -57,7 +57,7 @@ func TestCandidateFormatRefusesBeforeClaim(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			hub := newFakeHub()
 			r, ws, sp := newWorkspaceTestRuntime(t, hub, "proj")
-			r.cfg.WorkflowsDir = frontmatterBundle(t, w079Frontmatter)
+			r.cfg.WorkflowsDir = laneBundle(t, w079Lane)
 			writeWorkspaceYaml(t, ws, c.yaml)
 			err := r.Start(context.Background(), "wi_h175bad", StartOpts{})
 			ae, ok := err.(*api.Error)
@@ -80,12 +80,12 @@ func TestCandidateFormatRefusesBeforeClaim(t *testing.T) {
 func TestBundleUnprefixedCandidateRefusesBeforeClaim(t *testing.T) {
 	hub := newFakeHub()
 	r, _, sp := newWorkspaceTestRuntime(t, hub, "proj")
-	r.cfg.WorkflowsDir = frontmatterBundle(t, strings.Replace(w079Frontmatter, "[pi:prov/flash, pi:prov/glm]", "[pi:prov/flash, prov/glm]", 1))
+	r.cfg.WorkflowsDir = laneBundle(t, strings.Replace(w079Lane, "[pi:prov/flash, pi:prov/glm]", "[pi:prov/flash, prov/glm]", 1))
 	bundle := "demo-bundle"
 	hub.items = map[string]*api.WorkItem{"wi_h175pre": {ID: "wi_h175pre", ProjectName: "proj", BundleName: &bundle}}
 	err := r.Start(context.Background(), "wi_h175pre", StartOpts{})
 	ae, ok := err.(*api.Error)
-	if !ok || ae.Code != api.ErrDaemonWorkspaceYaml || !strings.Contains(ae.Detail, `step fix: model_candidates[1]: "prov/glm" needs a harness prefix`) || !strings.Contains(ae.Detail, "stays queued") {
+	if !ok || ae.Code != api.ErrDaemonWorkspaceYaml || !strings.Contains(ae.Detail, `steps[1](fix).model_candidates[1]: "prov/glm" needs a harness prefix`) || !strings.Contains(ae.Detail, "stays queued") {
 		t.Fatalf("expected a pre-claim refusal naming the bundle step, got %v", err)
 	}
 	if n := hub.claimCount(); n != 0 || sp.callCount() != 0 {
@@ -98,12 +98,12 @@ func TestBundleUnprefixedCandidateRefusesBeforeClaim(t *testing.T) {
 func TestBundleUnprefixedCandidateBlocksClaim(t *testing.T) {
 	hub := newFakeHub()
 	r, _, sp := newWorkspaceTestRuntime(t, hub, "proj")
-	r.cfg.WorkflowsDir = frontmatterBundle(t, strings.Replace(w079Frontmatter, "[pi:prov/flash, pi:prov/glm]", "[pi:prov/flash, prov/glm]", 1))
+	r.cfg.WorkflowsDir = laneBundle(t, strings.Replace(w079Lane, "[pi:prov/flash, pi:prov/glm]", "[pi:prov/flash, prov/glm]", 1))
 	if err := r.Start(context.Background(), "wi_h175bundle", StartOpts{}); err == nil {
 		t.Fatal("a bundle with an unprefixed candidate was claimed and started")
 	}
 	note := hub.lastEnd().Note
-	for _, want := range []string{"demo-bundle/workflow.md", `step fix: model_candidates[1]: "prov/glm" needs a harness prefix (pi:… or claude:…)`} {
+	for _, want := range []string{"demo-bundle/workflow.yaml", `steps[1](fix).model_candidates[1]: "prov/glm" needs a harness prefix (pi:… or claude:…)`} {
 		if !strings.Contains(note, want) {
 			t.Fatalf("blocked note %q does not name %q", note, want)
 		}
@@ -123,7 +123,7 @@ func TestBundleUnprefixedCandidateBlocksClaim(t *testing.T) {
 func TestClaimEffortChainRidesTheJob(t *testing.T) {
 	hub := newFakeHub()
 	r, ws, _ := newWorkspaceTestRuntime(t, hub, "proj")
-	r.cfg.WorkflowsDir = frontmatterBundle(t, w079Frontmatter)
+	r.cfg.WorkflowsDir = laneBundle(t, w079Lane)
 	writeWorkspaceYaml(t, ws, "steps:\n  proj:\n    fix: { models: [\"claude:claude-opus-5-5 : high\", pi:ollama/llama3:8b, pi:ollama/llama3:8b:low] }\n")
 	if err := r.Start(context.Background(), "wi_h176comp", StartOpts{}); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -146,20 +146,20 @@ func TestEffortRefusesBeforeClaim(t *testing.T) {
 		"yaml claude off": {yaml: "steps:\n  proj:\n    fix: { models: [pi:prov/flash, claude:claude-opus-5-5:off] }\n",
 			want: `steps.proj.fix.models[1]: "claude:claude-opus-5-5:off": effort "off" is not accepted by claude (it accepts low|medium|high|xhigh|max)`},
 		"yaml two efforts": {yaml: "steps:\n  proj:\n    default: { models: [pi:prov/flash:high:low] }\n", want: "names two efforts"},
-		"bundle claude minimal": {bundle: strings.Replace(w079Frontmatter, "[pi:prov/flash, pi:prov/glm]", "[pi:prov/flash, claude:claude-opus-5-5:minimal]", 1),
-			want: `step fix: model_candidates[1]: "claude:claude-opus-5-5:minimal": effort "minimal" is not accepted by claude`},
+		"bundle claude minimal": {bundle: strings.Replace(w079Lane, "[pi:prov/flash, pi:prov/glm]", "[pi:prov/flash, claude:claude-opus-5-5:minimal]", 1),
+			want: `steps[1](fix).model_candidates[1]: "claude:claude-opus-5-5:minimal": effort "minimal" is not accepted by claude`},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			hub := newFakeHub()
 			r, ws, sp := newWorkspaceTestRuntime(t, hub, "proj")
-			fm := w079Frontmatter
+			fm := w079Lane
 			if c.bundle != "" {
 				fm = c.bundle
 				bundle := "demo-bundle"
 				hub.items = map[string]*api.WorkItem{"wi_h176bad": {ID: "wi_h176bad", ProjectName: "proj", BundleName: &bundle}}
 			}
-			r.cfg.WorkflowsDir = frontmatterBundle(t, fm)
+			r.cfg.WorkflowsDir = laneBundle(t, fm)
 			if c.yaml != "" {
 				writeWorkspaceYaml(t, ws, c.yaml)
 			}
@@ -202,5 +202,58 @@ func TestPre175ShapesReachTheDriverVerbatim(t *testing.T) {
 	}
 	if got := r.loadManualModels("wi_bare"); !reflect.DeepEqual(got, []string{"m/one"}) {
 		t.Fatalf("the recorded manual list was dropped: %v", got)
+	}
+}
+
+// A bundle the daemon's workflows dir does not carry — one a release
+// removed or one it never shipped — refuses BEFORE the
+// claim like any other unloadable bundle, naming it: the work item stays
+// queued, never claimed into a capsule its driver cannot load. Nothing is
+// special-cased by name.
+func TestUninstalledBundleRefusesBeforeClaim(t *testing.T) {
+	for _, bundle := range []string{"feature-full", "never-installed-lane"} {
+		t.Run(bundle, func(t *testing.T) {
+			hub := newFakeHub()
+			r, _, sp := newWorkspaceTestRuntime(t, hub, "proj")
+			r.cfg.WorkflowsDir = laneBundle(t, w079Lane)
+			name := bundle
+			hub.items = map[string]*api.WorkItem{"wi_w426": {ID: "wi_w426", ProjectName: "proj", BundleName: &name}}
+			err := r.Start(context.Background(), "wi_w426", StartOpts{})
+			ae, ok := err.(*api.Error)
+			if !ok || ae.Code != api.ErrDaemonWorkspaceYaml || !strings.Contains(ae.Detail, "WFC-123 the work item's lane "+bundle+" is not in this daemon's lane set") || !strings.Contains(ae.Detail, "stays queued") {
+				t.Fatalf("expected a pre-claim refusal naming the uninstalled bundle, got %v", err)
+			}
+			if n := hub.claimCount(); n != 0 || sp.callCount() != 0 {
+				t.Fatalf("refused AFTER a claim (%d claim calls, %d agents)", n, sp.callCount())
+			}
+		})
+	}
+	// the installed bundle still passes, and no workflows dir judges nothing
+	hub := newFakeHub()
+	r, _, _ := newWorkspaceTestRuntime(t, hub, "proj")
+	r.cfg.WorkflowsDir = laneBundle(t, w079Lane)
+	if err := r.CheckBundle("wi_ok", "proj", "demo-bundle"); err != nil {
+		t.Fatalf("the installed bundle must pass: %v", err)
+	}
+	r.cfg.WorkflowsDir = ""
+	if err := r.CheckBundle("wi_ok", "proj", "feature-full"); err != nil {
+		t.Fatalf("with no workflows dir nothing is judged: %v", err)
+	}
+}
+
+// The auto-pull wave skips a work item whose bundle is not installed the
+// same way it skips an unloadable one: RefusedBundles names it.
+func TestRefusedBundlesNamesUninstalled(t *testing.T) {
+	r, _, _ := newWorkspaceTestRuntime(t, newFakeHub(), "proj")
+	r.cfg.WorkflowsDir = laneBundle(t, w079Lane)
+	bad := r.RefusedBundles([][2]string{{"proj", "demo-bundle"}, {"proj", "chore"}, {"proj", ""}})
+	if _, ok := bad["proj demo-bundle"]; ok {
+		t.Fatalf("the installed bundle is refused: %v", bad)
+	}
+	if err, ok := bad["proj chore"]; !ok || !strings.Contains(err.Error(), "WFC-123") {
+		t.Fatalf("an uninstalled bundle is not refused: %v", bad)
+	}
+	if len(bad) != 1 {
+		t.Fatalf("only the uninstalled name is refused: %v", bad)
 	}
 }

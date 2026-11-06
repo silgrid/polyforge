@@ -1,0 +1,154 @@
+{
+  "config": {
+    "protocol_version": "v1.0.0",
+    "scanner_name": "govulncheck",
+    "scanner_version": "v1.9.0",
+    "db": "https://vuln.go.dev",
+    "db_last_modified": "2026-11-11T02:51:11Z",
+    "go_version": "go1.26.11",
+    "scan_level": "symbol",
+    "scan_mode": "source"
+  }
+}
+{
+  "finding": {
+    "osv": "GO-2026-5320",
+    "fixed_version": "v1.7.17",
+    "trace": [
+      {
+        "module": "github.com/yuin/goldmark",
+        "version": "v1.7.13",
+        "package": "github.com/yuin/goldmark/renderer/html",
+        "function": "renderAutoLink",
+        "receiver": "*Renderer",
+        "position": {
+          "filename": "renderer/html/html.go",
+          "offset": 14731,
+          "line": 502,
+          "column": 20
+        }
+      },
+      {
+        "module": "github.com/yuin/goldmark",
+        "version": "v1.7.13",
+        "package": "github.com/yuin/goldmark/renderer",
+        "function": "Render$2",
+        "position": {
+          "filename": "renderer/renderer.go",
+          "offset": 4491,
+          "line": 166,
+          "column": 14
+        }
+      },
+      {
+        "module": "github.com/yuin/goldmark",
+        "version": "v1.7.13",
+        "package": "github.com/yuin/goldmark/ast",
+        "function": "walkHelper",
+        "position": {
+          "filename": "ast/ast.go",
+          "offset": 13290,
+          "line": 505,
+          "column": 23
+        }
+      },
+      {
+        "module": "github.com/yuin/goldmark",
+        "version": "v1.7.13",
+        "package": "github.com/yuin/goldmark/ast",
+        "function": "Walk",
+        "position": {
+          "filename": "ast/ast.go",
+          "offset": 13180,
+          "line": 500,
+          "column": 22
+        }
+      },
+      {
+        "module": "github.com/yuin/goldmark",
+        "version": "v1.7.13",
+        "package": "github.com/yuin/goldmark/renderer",
+        "function": "Render",
+        "receiver": "*renderer",
+        "position": {
+          "filename": "renderer/renderer.go",
+          "offset": 4307,
+          "line": 161,
+          "column": 17
+        }
+      },
+      {
+        "module": "github.com/yuin/goldmark",
+        "version": "v1.7.13",
+        "package": "github.com/yuin/goldmark",
+        "function": "Convert",
+        "receiver": "*markdown",
+        "position": {
+          "filename": "markdown.go",
+          "offset": 3294,
+          "line": 118,
+          "column": 26
+        }
+      },
+      {
+        "module": "github.com/silgrid/polyforge",
+        "package": "github.com/silgrid/polyforge/internal/aihub/server",
+        "function": "renderMarkdownBody",
+        "position": {
+          "filename": "internal/aihub/server/markdown.go",
+          "offset": 1508,
+          "line": 40,
+          "column": 35
+        }
+      },
+      {
+        "module": "github.com/silgrid/polyforge",
+        "package": "github.com/silgrid/polyforge/internal/aihub/server",
+        "function": "webAPIWorkItemDetail",
+        "receiver": "*Server",
+        "position": {
+          "filename": "internal/aihub/server/web_api.go",
+          "offset": 11780,
+          "line": 366,
+          "column": 38
+        }
+      },
+      {
+        "module": "github.com/silgrid/polyforge",
+        "package": "github.com/silgrid/polyforge/internal/aihub/server",
+        "function": "webAPI",
+        "receiver": "*Server",
+        "position": {
+          "filename": "internal/aihub/server/web_api.go",
+          "offset": 3085,
+          "line": 90,
+          "column": 26
+        }
+      },
+      {
+        "module": "github.com/silgrid/polyforge",
+        "package": "github.com/silgrid/polyforge/internal/aihub/server",
+        "function": "web",
+        "receiver": "*Server",
+        "position": {
+          "filename": "internal/aihub/server/web.go",
+          "offset": 5358,
+          "line": 130,
+          "column": 11
+        }
+      },
+      {
+        "module": "github.com/silgrid/polyforge",
+        "package": "github.com/silgrid/polyforge/internal/aihub/server",
+        "function": "ServeHTTP",
+        "receiver": "*Server",
+        "position": {
+          "filename": "internal/aihub/server/server.go",
+          "offset": 10176,
+          "line": 204,
+          "column": 8
+        }
+      }
+    ]
+  }
+}

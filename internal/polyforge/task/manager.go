@@ -42,6 +42,51 @@ type Config struct {
 	WorkDir    func(project string) (string, error)
 	OnTerminal func(Task)
 	Now        func() time.Time
+	// Slots is the bound several managers share (the Host's one
+	// background-model-call bound over all its Cells); nil = this
+	// manager's own Limit only.
+	Slots *Slots
+	// Admit (optional) reserves one execution slot for a spawn — the
+	// Host's two-level ceiling counts one-off tasks with work-item jobs —
+	// or refuses it; Done returns the reservation when the task ends.
+	// Both are called with no manager lock held.
+	Admit func() error
+	Done  func()
+}
+
+// Slots is a concurrency bound of Limit shared by several managers.
+type Slots struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (s *Slots) acquire() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.n >= Limit {
+		return false
+	}
+	s.n++
+	return true
+}
+
+func (s *Slots) release() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.n--
+	s.mu.Unlock()
+}
+
+// Running answers how many slots are taken.
+func (s *Slots) Running() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.n
 }
 
 type entry struct {
@@ -61,9 +106,6 @@ type Manager struct {
 	mu      sync.Mutex
 	tasks   map[string]*entry
 	running int
-	// pending is chat id -> ids of terminal tasks whose summary the chat
-	// has not acked (bounded to the newest RetentionMaxEntries).
-	pending map[string][]string
 	// waiters is task id -> the Wait calls blocked on that live task; the
 	// terminal transition hands each the finished record and drops them.
 	waiters map[string][]chan Task
@@ -75,7 +117,7 @@ func NewManager(cfg Config) *Manager {
 		cfg.Now = time.Now
 	}
 	base, stop := context.WithCancel(context.Background())
-	return &Manager{cfg: cfg, base: base, stop: stop, tasks: map[string]*entry{}, pending: map[string][]string{},
+	return &Manager{cfg: cfg, base: base, stop: stop, tasks: map[string]*entry{},
 		waiters: map[string][]chan Task{}}
 }
 
@@ -129,9 +171,15 @@ func (m *Manager) Spawn(spec Spec) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
+	if m.cfg.Admit != nil {
+		if err := m.cfg.Admit(); err != nil {
+			return Task{}, err
+		}
+	}
 	m.mu.Lock()
-	if m.running >= Limit {
+	if m.running >= Limit || !m.cfg.Slots.acquire() {
 		m.mu.Unlock()
+		m.done()
 		return Task{}, ErrLimit
 	}
 	m.running++
@@ -140,6 +188,8 @@ func (m *Manager) Spawn(spec Spec) (Task, error) {
 		m.mu.Lock()
 		m.running--
 		m.mu.Unlock()
+		m.cfg.Slots.release()
+		m.done()
 	}
 	now := m.cfg.Now()
 	t := Task{ID: id, Spec: spec, State: StateRunning, CreatedAt: now, StartedAt: now}
@@ -161,6 +211,13 @@ func (m *Manager) Spawn(spec Spec) (Task, error) {
 	return t.Clone(), nil
 }
 
+// done returns an Admit reservation.
+func (m *Manager) done() {
+	if m.cfg.Done != nil {
+		m.cfg.Done()
+	}
+}
+
 // run walks the candidates in order inside the one shared budget and
 // finishes the task in exactly one terminal state.
 func (m *Manager) run(ctx context.Context, e *entry, dir string) {
@@ -169,6 +226,7 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 	var tokens int64
 	var lastErr error
 	capped, completed := false, false
+	prompt := dispatchedPrompt(t.Prompt, dir)
 	for _, cand := range t.Candidates {
 		if ctx.Err() != nil {
 			break
@@ -178,7 +236,7 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 		e.t.Candidate = cand
 		m.mu.Unlock()
 		res, err := m.cfg.Runner.Run(ctx, RunSpec{
-			Candidate: c, Prompt: t.Prompt, MaxTokens: t.MaxTokens - tokens, WorkDir: dir, TaskID: t.ID,
+			Candidate: c, Prompt: prompt, MaxTokens: t.MaxTokens - tokens, WorkDir: dir, TaskID: t.ID,
 			ReadOnlyTools: t.ReadOnlyTools,
 		}, func(n int64) {
 			m.mu.Lock()
@@ -200,6 +258,16 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 		break
 	}
 	m.finish(ctx, e, report.String(), tokens, capped, completed, lastErr)
+}
+
+// dispatchedPrompt answers what one run's harness reads: the shared
+// prohibited-actions section (harness.TaskProhibitedActions,
+// — the list every step carries, scoped to the task's
+// working directory, its exception naming the task alone) ahead of the
+// task's own prompt. The record keeps the prompt as given: list, show and
+// the prompt summary never carry the section.
+func dispatchedPrompt(prompt, dir string) string {
+	return harness.TaskProhibitedActions(dir) + "\n# Task\n\n" + prompt
 }
 
 func (m *Manager) finish(ctx context.Context, e *entry, report string, tokens int64, capped, completed bool, lastErr error) {
@@ -243,10 +311,11 @@ func (m *Manager) finish(ctx context.Context, e *entry, report string, tokens in
 		t.Error = "report store: " + err.Error()
 	}
 	_, _ = m.cfg.Store.Prune(now)
+	m.cfg.Slots.release()
+	m.done()
 	m.mu.Lock()
 	e.t = t
 	m.running--
-	m.addPending(t)
 	// The store is the ONLY home of a finished task: dropping the
 	// in-memory entry here is what keeps pf task list/show/summary inside
 	// the store's 50-entry / 7-day retention bound and the daemon's memory
@@ -274,11 +343,6 @@ func (m *Manager) Recover() error {
 	now := m.cfg.Now()
 	for _, t := range all {
 		if t.State.Terminal() {
-			if !t.Delivered {
-				m.mu.Lock()
-				m.addPending(t)
-				m.mu.Unlock()
-			}
 			continue
 		}
 		t.State = StateInterrupted
@@ -287,9 +351,6 @@ func (m *Manager) Recover() error {
 		if err := m.cfg.Store.Save(t); err != nil {
 			return err
 		}
-		m.mu.Lock()
-		m.addPending(t)
-		m.mu.Unlock()
 		if m.cfg.OnTerminal != nil {
 			m.cfg.OnTerminal(t.Clone())
 		}
@@ -437,73 +498,4 @@ func sortNewestFirst(ts []Task) {
 			ts[j], ts[j-1] = ts[j-1], ts[j]
 		}
 	}
-}
-
-// addPending queues a terminal task's summary for its origin chat (none
-// without one). The caller holds mu.
-func (m *Manager) addPending(t Task) {
-	if t.OriginChat == "" {
-		return
-	}
-	ids := append(m.pending[t.OriginChat], t.ID)
-	if len(ids) > RetentionMaxEntries {
-		ids = ids[len(ids)-RetentionMaxEntries:]
-	}
-	m.pending[t.OriginChat] = ids
-}
-
-// Notice is one terminal summary awaiting its chat's ack.
-type Notice struct {
-	TaskID string `json:"task_id"`
-	Text   string `json:"text"`
-}
-
-// Notices answers the chat's unacked terminal summaries, oldest first
-// (fetch-then-ack: nothing counts as delivered until AckNotices).
-func (m *Manager) Notices(chat string) []Notice {
-	m.mu.Lock()
-	ids := append([]string(nil), m.pending[chat]...)
-	m.mu.Unlock()
-	var out []Notice
-	for _, id := range ids {
-		if t, err := m.Show(id); err == nil && t.State.Terminal() {
-			out = append(out, Notice{TaskID: id, Text: t.Summary()})
-		}
-	}
-	return out
-}
-
-// AckNotices marks the chat's summaries delivered (persisted, so a
-// restart does not replay them).
-func (m *Manager) AckNotices(chat string, ids []string) error {
-	acked := map[string]bool{}
-	for _, id := range ids {
-		acked[id] = true
-	}
-	m.mu.Lock()
-	var keep []string
-	for _, id := range m.pending[chat] {
-		if !acked[id] {
-			keep = append(keep, id)
-		}
-	}
-	m.pending[chat] = keep
-	m.mu.Unlock()
-	var first error
-	for id := range acked {
-		t, ok, err := m.cfg.Store.Load(id)
-		if err != nil || !ok || t.OriginChat != chat || t.Delivered {
-			continue
-		}
-		t.Delivered = true
-		if err := m.cfg.Store.Save(t); err != nil && first == nil {
-			first = err
-		}
-		m.mu.Lock()
-		if e, ok := m.tasks[id]; ok {
-			e.t.Delivered = true
-		}
-		m.mu.Unlock()
-	}
-	return first
 }

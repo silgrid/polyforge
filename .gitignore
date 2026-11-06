@@ -9,3 +9,8 @@
 # is never tracked either.
 webui/dist/
 webui/node_modules/
+
+# Python bytecode: the step scripts' tests leave none in a
+# clean run (entry scripts set sys.dont_write_bytecode), but a hand run of
+# the shared library may; nothing under __pycache__ is ever tracked.
+__pycache__/

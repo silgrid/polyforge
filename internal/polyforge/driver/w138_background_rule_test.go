@@ -58,8 +58,8 @@ func TestW138BackgroundProcessRule(t *testing.T) {
 			prompt := w111Flat(assembleStepPrompt(promptParts{
 				WIID: "wi_w138", StepID: step, SpawnN: 1,
 				CapsuleRoot: "/ws/capsules/w138",
-				ContextMode: ContextFresh,
-				Definition:  rendered,
+
+				Definition: rendered,
 			}))
 			for _, p := range w138BackgroundPhrases {
 				if !strings.Contains(prompt, p) {

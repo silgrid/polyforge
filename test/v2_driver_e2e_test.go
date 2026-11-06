@@ -17,14 +17,10 @@ import (
 func TestV2DriverEndToEnd(t *testing.T) {
 	inst, _ := newV1InstallTaskRepo(t)
 	// Script: each step writes a result envelope (v2 mode).
-	// grill: handoff (needs to produce handoff for fix)
-	// fix: handoff
-	// verification: completed
-	wi := inst.newWI(t, "v2 driver e2e: envelope-driven autopilot",
+	wi := inst.newWI(t, "v2 driver e2e: envelope-driven micro",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
@@ -46,7 +42,7 @@ func TestV2DriverEndToEnd(t *testing.T) {
 		return strings.Contains(string(raw), `"completed"`)
 	})
 
-	// Verify: all 4 steps done.
+	// Verify: every step done.
 	raw, err := os.ReadFile(execPath)
 	if err != nil {
 		t.Fatalf("execution.json: %v", err)
@@ -56,7 +52,7 @@ func TestV2DriverEndToEnd(t *testing.T) {
 		t.Fatalf("execution.json unparsable: %v", err)
 	}
 	steps, _ := exec["steps"].(map[string]any)
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		st, ok := steps[step].(map[string]any)
 		if !ok {
 			t.Fatalf("step %s missing from execution.json", step)
@@ -67,18 +63,11 @@ func TestV2DriverEndToEnd(t *testing.T) {
 	}
 
 	// Verify: result envelopes were archived.
-	for _, n := range []string{"1", "2", "3", "4"} {
+	for _, n := range []string{"1", "2"} {
 		p := filepath.Join(capDir, "artifacts", "steps", "*", "s"+n, "result.json")
 		if matches, _ := filepath.Glob(p); len(matches) == 0 {
 			t.Logf("WARN: no archived envelope for spawn %s (path %s)", n, p)
 		}
 	}
 
-	// Verify: handoff files produced.
-	for _, step := range []string{"grill", "fix"} {
-		p := filepath.Join(capDir, "artifacts", "handoff-"+step+".md")
-		if _, err := os.Stat(p); err != nil {
-			t.Logf("WARN: handoff file for %s not at %v (agent may have used a different name)", step, err)
-		}
-	}
 }

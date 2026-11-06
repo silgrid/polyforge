@@ -1,0 +1,334 @@
+# The repository's GitHub CI outside the pi-web package's own per-change
+# checks (pi-web/ has its own path-filtered pi-web-ci.yml). Read-only token.
+#
+# fast-gates: the Go/console fast gates (console SPA build,
+# go build, go vet, gofmt over tracked files, the design-doc xref check) for
+# every pull request outside pi-web/ and every push to main.
+#
+# python-unit, python-types, python-macos: the workflow step
+# scripts and their shared library — unittest under 3.12 and 3.9, mypy --strict for
+# 3.9, unittest on macOS — for the same events.
+#
+# loc-report: every pull request outside pi-web/ gets
+# tools/locreport's per-package code-line table (Go and the workflow step
+# scripts' Python, non-test and test code apart) in its job summary, the
+# pull request's test-merge commit against its first parent. A repository
+# non-test net change beyond the tool's threshold (defaultThreshold in
+# tools/locreport/main.go) is a ::warning annotation; the job stays green.
+#
+# full-bar, full-e2e, full-audit: the repository's full
+# verification bar after a merge — every full_command= line of
+# .polyforge/verify-scope.conf, verbatim and in the conf's order, plus the
+# dependency-audit gate workflows/_shared/scripts/verify-scope appends to every full-tier
+# report — on every push to main and on a manual dispatch, never on a pull
+# request. Three jobs, three runners, three check-runs: full-bar (the Go
+# unit packages, the daemon package under -race, the Go acceptance
+# harness, pi-web install/lint/tsc/unit),
+# full-e2e (every pi-web e2e suite, Chromium) and full-audit (the audit
+# gate, whose red is usually a newly published advisory or an expired
+# exemption rather than the merge itself). full-bar and full-e2e run their
+# steps as root, as the hosts that run verification do. A red full-bar or
+# full-e2e on main is filed as a bug work item for that merge; nothing
+# reverts automatically. The job ids are the check-run names
+# test/w375_main_full_bar_ci_test.go names: keep them stable, and keep the
+# run: lines equal to the conf's commands (that test fails when they
+# drift).
+name: pf CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "**"
+      - "!pi-web/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A pull request's newer push supersedes its older run. A push to main
+  # or a dispatch is grouped by its commit, so a later merge never cancels
+  # the full bar of an earlier one: each merge keeps its own verdict.
+  group: pf-ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fast-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: make build vet fmt xrefs
+
+  # python-unit, python-types, python-macos: the workflow
+  # step scripts' shared library (workflows/_shared/scripts: pfstep and its
+  # unittest suite) on every pull request outside pi-web/ and every push to
+  # main. The scripts are Python 3.9+ and the standard library only, so the
+  # suite runs on 3.12 (the hosts' and the verification image's) and on
+  # 3.9 (the floor: a 3.10-only construct turns that run red), each in the
+  # official python image (setup-python ships no 3.9 for the current
+  # ubuntu-latest); mypy checks the code against 3.9's typing rules
+  # (installed here only: mypy 2 dropped 3.9 as a target, so it is pinned
+  # below 2); macOS runs the suite on the runner's own /usr/bin/python3
+  # (3.9.6, the interpreter a Mac without Homebrew has).
+  python-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.9"]
+    container: python:${{ matrix.python }}-slim
+    steps:
+      - name: git (the hardened-git tests drive a real one)
+        run: apt-get update -q && apt-get install -y -q git
+      - uses: actions/checkout@v4
+      - name: The step scripts' unit tests
+        run: |
+          python3 --version
+          python3 -B -m unittest discover -s workflows/_shared/scripts -t workflows/_shared/scripts -v
+
+  python-types:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: mypy --strict against Python 3.9
+        run: |
+          python3 -m pip install --quiet "mypy>=1.20,<2"
+          cd workflows/_shared/scripts && python3 -m mypy --strict --python-version 3.9 pfstep tests *.py
+
+  python-macos:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: The step scripts' unit tests on macOS's own python3
+        run: |
+          /usr/bin/python3 --version
+          /usr/bin/python3 -B -m unittest discover -s workflows/_shared/scripts -t workflows/_shared/scripts -v
+
+  # loc-report: see the header. On a pull_request event
+  # the checkout is the test merge, whose first parent is the base branch
+  # tip, so the table is the change this pull request brings.
+  loc-report:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Code lines per package into the job summary
+        run: GOWORK=off go run ./tools/locreport HEAD^1 HEAD >> "$GITHUB_STEP_SUMMARY"
+
+  full-bar:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    # The bar runs as root with root's HOME, as on the hosts verification
+    # runs it on: as the runner user ~90 Go tests fail only because capsule
+    # directories they leave read-only cannot be cleaned up, and tests that
+    # look up the account's real home (user.Current) must find $HOME
+    # ('s dispatch runs). Hence no npm/Go cache restore into
+    # the runner's home, and a full clone (tests read history and tags).
+    defaults:
+      run:
+        shell: pf-as-root {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # One node for the whole bar: the repository pin (.nvmrc), as on the
+      # hosts verification runs the bar on; pi-web-ci.yml keeps testing the
+      # package's own floor (22.19.0) per change.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Run the bar's steps as root (the pf-as-root shell)
+        shell: bash
+        run: |
+          # The image's sudo (sudo-rs) ignores -E, so the step's whole
+          # environment travels through a file; HOME and the identity are
+          # root's.
+          sudo tee /usr/local/bin/pf-as-root >/dev/null <<'EOF'
+          #!/bin/sh
+          env_file=$(mktemp)
+          export -p >"$env_file"
+          exec sudo /bin/bash --noprofile --norc -c '. "$1"; rm -f "$1"; export HOME=/root USER=root LOGNAME=root; exec /bin/bash --noprofile --norc -eo pipefail "$2"' pf-as-root "$env_file" "$1"
+          EOF
+          sudo chmod 0755 /usr/local/bin/pf-as-root
+      # pf doctor's healthy machine has the audit tool (a cli unit test
+      # asserts its doctor passes).
+      - name: govulncheck, at the version pf doctor and docs/install.md pin
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Host tools the tests drive (tmux, a git identity) and the runner's size
+        run: |
+          command -v tmux >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q tmux; }
+          git config --global user.name "pf CI"
+          git config --global user.email "pf-ci@users.noreply.github.com"
+          echo "uid=$(id -u) cpus=$(nproc) $(free -g | awk '/^Mem:/ { print "mem_gib=" $2 }')"
+          tmux -V; git --version; go version; node --version; python3 --version
+      - name: Console SPA build (the go:embed tree every Go build below needs)
+        run: cd webui && npm ci && npm run build
+      # The Go harness's console browser suite (w105/w135) drives webui's
+      # own playwright, whose Chromium build differs from pi-web's.
+      - name: Playwright Chromium for the console browser suite
+        run: cd webui && npx playwright install --with-deps chromium
+      - name: Go unit packages
+        run: |
+          # The package list is split into arguments on purpose.
+          # shellcheck disable=SC2046
+          GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/test$') -count=1
+      # the daemon package under the race detector (210-226 s
+      # on a 32-core host; the 2-core runner takes longer, hence -timeout).
+      - name: Go daemon package under the race detector
+        run: GOWORK=off go test -race -count=1 -timeout 30m ./internal/polyforge/daemon/
+      - name: Go acceptance harness
+        run: GOWORK=off sh test/e2e-parallel.sh
+      - name: pi-web install
+        run: cd pi-web && npm ci
+      - name: pi-web lint
+        run: cd pi-web && npm run lint
+      - name: pi-web typecheck
+        run: cd pi-web && node_modules/.bin/tsc --noEmit
+      - name: pi-web unit tests
+        run: cd pi-web && npm test
+
+  full-e2e:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    # Root with root's HOME and a full clone, as full-bar (see there).
+    defaults:
+      run:
+        shell: pf-as-root {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # The w216 suite builds this repository's ./cmd/pf.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run the bar's steps as root (the pf-as-root shell)
+        shell: bash
+        run: |
+          # The image's sudo (sudo-rs) ignores -E, so the step's whole
+          # environment travels through a file; HOME and the identity are
+          # root's.
+          sudo tee /usr/local/bin/pf-as-root >/dev/null <<'EOF'
+          #!/bin/sh
+          env_file=$(mktemp)
+          export -p >"$env_file"
+          exec sudo /bin/bash --noprofile --norc -c '. "$1"; rm -f "$1"; export HOME=/root USER=root LOGNAME=root; exec /bin/bash --noprofile --norc -eo pipefail "$2"' pf-as-root "$env_file" "$1"
+          EOF
+          sudo chmod 0755 /usr/local/bin/pf-as-root
+      - name: Host tools the suites drive (tmux, a git identity) and the runner's size
+        run: |
+          command -v tmux >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q tmux; }
+          git config --global user.name "pf CI"
+          git config --global user.email "pf-ci@users.noreply.github.com"
+          echo "uid=$(id -u) cpus=$(nproc) $(free -g | awk '/^Mem:/ { print "mem_gib=" $2 }')"
+          tmux -V; git --version; go version; node --version
+      # Each suite's `next dev` output (~360 MB) stays until every suite has
+      # settled, which outgrows the runner's free disk (the first two
+      # dispatches died of ENOSPC ~45 min in): drop toolchains the bar
+      # never uses.
+      - name: Free the runner's disk for the suites' build output
+        run: |
+          df -h / /mnt || true
+          rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell \
+            /usr/lib/jvm /opt/az /opt/microsoft
+          docker image prune -af >/dev/null 2>&1 || true
+          df -h / /mnt || true
+      - name: Console SPA build (the go:embed tree of the pf the w216 suite builds)
+        run: cd webui && npm ci && npm run build
+      - name: pi-web install
+        run: cd pi-web && npm ci
+      - name: Playwright Chromium (as pi-web-ci.yml's e2e job installs it)
+        run: cd pi-web && npx playwright install --with-deps chromium
+      # Build-once mode (the conf's command;): one `next build`,
+      # then `next start` per suite, so the 2-core runner carries no
+      # per-suite compile (in `next dev` mode its load reached 10-14 and 17
+      # of 53 suites timed out, run 42402768050).
+      - name: Every pi-web e2e suite
+        run: cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all
+        env:
+          # e2e/runner/jobs.mjs: min(6, max(2, floor(cpus / 2))) — already 2
+          # on this 2-core runner, where a wider browser pool has pushed suites
+          # over their page-load timeouts. Pinned so the
+          # runner's size never widens it silently.
+          E2E_JOBS: "2"
+          # The ceilings pi-web/e2e/README.md recommends for a loaded host;
+          # E2E_COLD_MS stays below the per-suite hang guard below.
+          E2E_COLD_MS: "540000"
+          E2E_NAV_MS: "240000"
+          E2E_ACTION_MS: "45000"
+          # The per-suite hang guard (default 10 min, sized for a 32-core
+          # host): a small runner gets twice the room before a slow suite
+          # counts as hung.
+          E2E_SUITE_TIMEOUT_MS: "1200000"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: full-e2e-failure
+          path: pi-web/test-results/
+          retention-days: 7
+
+  full-audit:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # govulncheck loads every package, so the go:embed tree must exist.
+      - name: Console SPA build (the go:embed tree govulncheck loads)
+        run: cd webui && npm ci && npm run build
+      - name: govulncheck, at the version pf doctor and docs/install.md pin
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Dependency-audit gate (the engine's full-tier audit command)
+        run: sh workflows/_shared/scripts/audit-deps --go --npm 'pi-web' --npm 'pi-web/demo' --npm 'webui'

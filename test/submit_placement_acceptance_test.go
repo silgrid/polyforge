@@ -1,3 +1,5 @@
+// carries: test/submit_placement_acceptance_test.go
+
 package test
 
 // submit_placement_acceptance_test.go: the e2e
@@ -27,6 +29,7 @@ package test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,6 +38,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 )
 
@@ -58,7 +62,7 @@ func placementInstall(t *testing.T) *v1Install {
 	})
 }
 
-// placementNewWI files one autopilot execution ticket in the e2e project and
+// placementNewWI files one vehicle-lane (micro) execution ticket in the e2e project and
 // scripts its agent with the canonical envelope plan; inventory, when
 // non-nil, is the work item's frozen repo_inventory.
 func placementNewWI(t *testing.T, inst *v1Install, goal string, inventory json.RawMessage) string {
@@ -66,7 +70,8 @@ func placementNewWI(t *testing.T, inst *v1Install, goal string, inventory json.R
 	raw, err := inst.client.CreateWorkItem(aihubclient.CreateWorkItemRequest{
 		Project:       v1Project,
 		Goal:          goal,
-		BundleName:    strPtr("autopilot"),
+		Content:       strPtr(v1AcceptanceContent),
+		BundleName:    strPtr(vehicleLane),
 		RepoInventory: inventory,
 	})
 	if err != nil {
@@ -78,7 +83,7 @@ func placementNewWI(t *testing.T, inst *v1Install, goal string, inventory json.R
 	if err := json.Unmarshal(raw, &wi); err != nil {
 		t.Fatalf("placement: create work item answer: %v (%s)", err, raw)
 	}
-	inst.setPlan(t, wi.ID, envelopeAutopilot())
+	inst.setPlan(t, wi.ID, envelopeMicro())
 	inst.trackWI(wi.ID)
 	return wi.ID
 }
@@ -267,6 +272,71 @@ func TestSubmitPlacementCrossMachineClaimWithoutLocalClonesAccepted(t *testing.T
 // blocking and without a new event type.
 // ---------------------------------------------------------------------------
 
+// placementFinalEventKinds is d's ordered event-kind list for wi once d has
+// recorded the work item's terminal job_finished. The hub-side wrap lands
+// before the daemon appends job_finished locally (and waitWIStatus's
+// settleClose stops at job_stopped), so kinds read right after the work
+// item turns wrapped may lack it; two runs compared without this wait are
+// read at different stages. It polls with a bound, never a fixed sleep.
+func placementFinalEventKinds(t *testing.T, d *v1Daemon, wi string, bound time.Duration) []string {
+	t.Helper()
+	var kinds []string
+	waitDeadline(t, bound,
+		func() string {
+			return fmt.Sprintf("daemon never recorded job_finished for %s (kinds %v)\nevents tail:\n%s", wi, kinds, eventsTail(v1CellStateDir(d.dataDir)))
+		},
+		func() bool {
+			kinds = d.eventKinds(t, wi)
+			return contains(kinds, "job_finished")
+		})
+	return kinds
+}
+
+// TestPlacementFinalEventKindsWaitsForJobFinished pins the read the
+// missing-clone scenario compares at: the daemon appends job_finished
+// locally only after the hub-side wrap, so the kinds read right after the
+// work item turns wrapped may still lack it. The helper must wait until
+// job_finished is there, not return the kinds as they stand.
+func TestPlacementFinalEventKindsWaitsForJobFinished(t *testing.T) {
+	d := &v1Daemon{t: t, dataDir: t.TempDir()}
+	dir := filepath.Join(v1CellStateDir(d.dataDir), "events")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const wi = "wi_final_kinds"
+	path := filepath.Join(dir, wi+".jsonl")
+	line := func(seq int64, kind string) []byte {
+		raw, err := json.Marshal(protocol.EventEntry{At: time.Now().UTC().Format(time.RFC3339Nano), Kind: kind, WI: wi, Seq: seq})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return append(raw, '\n')
+	}
+	if err := os.WriteFile(path, append(line(1, "job_started"), line(2, "job_stopped")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the terminal event lands later, as the daemon appends it after the wrap
+	late := line(3, "job_finished")
+	appended := make(chan error, 1)
+	time.AfterFunc(300*time.Millisecond, func() {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err == nil {
+			_, err = f.Write(late)
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+		}
+		appended <- err
+	})
+	kinds := placementFinalEventKinds(t, d, wi, 10*time.Second)
+	if err := <-appended; err != nil {
+		t.Fatalf("appending the late job_finished: %v", err)
+	}
+	if got, want := strings.Join(kinds, " "), "job_started job_stopped job_finished"; got != want {
+		t.Fatalf("placementFinalEventKinds must wait for the terminal job_finished: got kinds [%s], want [%s]", got, want)
+	}
+}
+
 // TestSubmitPlacementAutoPullMissingClonesOneWarningNoNewEvent: with `pf ops auto`
 // on, an auto-pulled claim whose mapped workspace lacks the clones logs
 // exactly one warning naming each missing repo, is not blocked (the run
@@ -286,7 +356,7 @@ func TestSubmitPlacementAutoPullMissingClonesOneWarningNoNewEvent(t *testing.T) 
 	if log := placementLog(t, dA); strings.Contains(log, placementRepos[0]) || strings.Contains(log, placementRepos[1]) {
 		t.Fatalf("clones present: the daemon log must carry no clone warning (log %q)", log)
 	}
-	happy := dA.eventKinds(t, wiA)
+	happy := placementFinalEventKinds(t, dA, wiA, 30*time.Second)
 	dA.stop() // its auto wave must not race the second daemon's claim
 
 	// missing clones: the auto claim logs one warning per missing repo,
@@ -309,7 +379,7 @@ func TestSubmitPlacementAutoPullMissingClonesOneWarningNoNewEvent(t *testing.T) 
 			t.Fatalf("auto claim with missing clones: the daemon log must carry exactly one clone warning naming %s (found %d; filtered %q)", name, n, cloneWarn)
 		}
 	}
-	for _, k := range dB.eventKinds(t, wiB) {
+	for _, k := range placementFinalEventKinds(t, dB, wiB, 30*time.Second) {
 		if !contains(happy, k) {
 			t.Fatalf("auto claim with missing clones emitted NEW event kind %q (clones-present kinds %v) — no new event type is allowed", k, happy)
 		}

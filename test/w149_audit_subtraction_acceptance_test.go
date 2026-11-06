@@ -202,6 +202,7 @@ func w149Pf(t *testing.T, inst *v1Install, args ...string) (string, int) {
 		"PF_USER_ID=usr_root",
 	)
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := 0
 	if err := cmd.Run(); err != nil {

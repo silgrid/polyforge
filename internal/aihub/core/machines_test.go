@@ -676,9 +676,44 @@ func TestParseMachineVersion(t *testing.T) {
 	if !belowSigningRelease("v2.20.7") || !belowSigningRelease("2.20.6") || !belowSigningRelease("v1.9.9") {
 		t.Error("pre-signing versions must pass the gate")
 	}
-	for _, v := range []string{"v2.20.8", "v2.20.9", "v3.0.0", "dev", "", "garbage"} {
+	for _, v := range []string{"v2.20.8", "v2.20.9", "v3.0.0", "v0.2.0", "v0.2.7", "dev", "", "garbage"} {
 		if belowSigningRelease(v) {
 			t.Errorf("belowSigningRelease(%q) = true, want false (fail closed)", v)
+		}
+	}
+}
+
+// TestMachineVersionSuffixOrder pins the signing gate on suffixed release
+// versions vX.Y.Z-<name>.N (AC1): SemVer 2.0 precedence puts
+// a pre-release below its core release, the unified v0.2.x line stays at or
+// after the signing release, and every malformed shape still fails closed.
+func TestMachineVersionSuffixOrder(t *testing.T) {
+	for _, c := range []struct {
+		in    string
+		below bool
+	}{
+		// A pre-release precedes its core release: v2.20.8-fork.1 < v2.20.8.
+		{"v2.20.8-fork.1", true},
+		{"v2.20.7-fork.1", true},
+		{"2.20.6-fork.3", true},
+		{"v2.20.8-rc-1.2", true},
+		// At or after the signing release.
+		{"v2.20.9-fork.1", false},
+		{"v3.0.0-fork.1", false},
+		// The unified line (the cutover) is after it.
+		{"v0.2.0-fork.1", false},
+		{"v0.2.0-fork.10", false},
+		// Malformed: fail closed.
+		{"dev", false},
+		{"v2.20.8.1", false},
+		{"v2.20.7-", false},
+		{"v2.20.7-fork..1", false},
+		{"v2.20.7-fork.1.", false},
+		{"v2.20.7-fork_1", false},
+		{"v2.20.7+build.1", false},
+	} {
+		if got := belowSigningRelease(c.in); got != c.below {
+			t.Errorf("belowSigningRelease(%q) = %v, want %v", c.in, got, c.below)
 		}
 	}
 }
@@ -745,6 +780,40 @@ func TestHeartbeatUnsignedVersionGateAndRatchet(t *testing.T) {
 	for col, want := range ratcheted {
 		if got := machineField(t, env, "m-gate", col); got != want {
 			t.Fatalf("ratcheted-refused beat wrote %s: %q, want %q", col, got, want)
+		}
+	}
+}
+
+// TestHeartbeatUnsignedRefusedOnTheUnifiedLine pins the named version-line
+// cutover on the signing gate: a v0.2.x daemon is at or
+// after the signing release, so an unsigned beat claiming v0.2.x, or one on
+// a row a v0.2.x beat stored, is refused (AUTH-401) and writes nothing —
+// a leaked operator API key alone never refreshes a unified-line machine.
+func TestHeartbeatUnsignedRefusedOnTheUnifiedLine(t *testing.T) {
+	env := newEnv(t)
+	registerMachine(t, env, "m-line", env.UserID, "pk-l")
+	for _, c := range []struct{ stored, claimed string }{
+		{"v2.20.6", "v0.2.0"}, // claims the unified line
+		{"v0.2.0", "v2.20.6"}, // stored at the unified line
+		{"v0.2.1", "v0.2.1"},
+	} {
+		if _, err := env.DB.Exec(`UPDATE machines SET runtime_version=? WHERE id='m-line'`, c.stored); err != nil {
+			t.Fatalf("seed version: %v", err)
+		}
+		before := map[string]string{}
+		for _, col := range []string{"last_heartbeat_at", "runtime_version", "mode", "live_wi_ids"} {
+			before[col] = machineField(t, env, "m-line", col)
+		}
+		_, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{
+			MachineID: "m-line", RuntimeVersion: c.claimed, Mode: "bad", LiveWIIDs: []string{"wi-bad"},
+		}, unsignedProof(env.UserID), nil)
+		if !IsCode(err, api.ErrAuthUnauthorized) {
+			t.Fatalf("unsigned beat claiming %q on a row stored at %q = %v, want %s", c.claimed, c.stored, err, api.ErrAuthUnauthorized)
+		}
+		for col, want := range before {
+			if got := machineField(t, env, "m-line", col); got != want {
+				t.Fatalf("refused beat (claimed %q, stored %q) wrote %s: %q, want %q", c.claimed, c.stored, col, got, want)
+			}
 		}
 	}
 }

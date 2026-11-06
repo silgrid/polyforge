@@ -1,0 +1,2 @@
+{"type":"user","uuid":"39500000-0000-4000-8000-001000000004","message":{"role":"user","content":"Use the Bash tool in the foreground to run: sleep 12; echo FG_DONE_395 . After it finishes, reply with one short sentence."}}
+{"type":"user","uuid":"453fdfb6-ea71-455b-9c9d-c2e93903cd38","message":{"role":"user","content":"Also, end your reply with the word: STEERED"}}

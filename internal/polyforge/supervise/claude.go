@@ -1,7 +1,7 @@
 package supervise
 
 // claude.go: the translator of Claude Code's headless stream
-// (`claude -p --bare|--safe-mode --output-format stream-json --verbose
+// (`claude -p --safe-mode … --output-format stream-json --verbose
 // --include-partial-messages`, polyforge#159). One JSON record per line:
 //
 //	{"type":"system","subtype":"init",...}            session ready, first model call
@@ -11,12 +11,30 @@ package supervise
 //	{"type":"assistant","message":{"content":[...tool_use...]},"error":"<category>"?}
 //	{"type":"user","message":{"content":[...tool_result...]}}
 //	{"type":"system","subtype":"api_retry","attempt","max_retries","retry_delay_ms","error_status","error"}
-//	{"type":"result","subtype":"success"|...,"is_error","result","api_error_status","terminal_reason","errors":[...]}
+//	{"type":"result","subtype":"success"|...,"is_error","result","api_error_status","terminal_reason","errors":[...],
+//	 "modelUsage":{"<model>":{"contextWindow":N,...}}}
+//	    modelUsage[<model>].contextWindow (> 0) is claude's own context window
+//	    for each model it used: Sink.ContextWindow, the status and watch
+//	    faces' context window and percent
+//	{"type":"command_lifecycle","command_uuid","state":"queued"|"started"|"completed"}
+//	    the harness's acknowledgement of a stdin user message (the runtime's
+//	    proc reads it for spawn.Messenger.MessageState; noise here)
 //
-// Any record carrying a non-empty parent_tool_use_id belongs to a
-// sub-agent running inside the outer `Agent` tool: it proves life only
-// (the outer tool call is the one tool execution, the pi sub-agent
-// parity), so inner tools never move the tool_hung bookkeeping.
+// One `result` per turn: a user message written mid-turn is absorbed
+// into the running turn (Claude Code 2.1.322), so the merged turn still
+// ends with ONE result record — the turn boundary the daemon reads.
+//
+// Any record carrying a non-empty parent_tool_use_id belongs to the
+// running call it names. A sub-agent's own records (inside the outer
+// `Agent` call; inner tools are never tools of the step) are that call's
+// inner activity (Sink.ToolActive): life, and the restart of the call's
+// rule-3 clock, so a sub-agent still working is never tool_hung
+// (; the pi subagent parity). A tool_progress record is the
+// harness's own heartbeat for a running call (every 30s, its
+// parent_tool_use_id the call's own id, `"heartbeat":true`) — it shows
+// the call is still running, never that anything inside it works, so it
+// is life only; the tracker also moves the clock of sub-agent calls
+// only (Tracker.ToolActive).
 //
 // D7 (design §3): Claude reports failures STRUCTURALLY (an error
 // category, an HTTP status, a terminal reason). The translator rewrites
@@ -85,6 +103,8 @@ type claudeRecord struct {
 	APIErrorStatus *int     `json:"api_error_status"`
 	TerminalReason string   `json:"terminal_reason"`
 	Errors         []string `json:"errors"`
+	// result: claude's per-model usage, of which only contextWindow is read
+	ModelUsage map[string]json.RawMessage `json:"modelUsage"`
 }
 
 // Feed implements Translator.
@@ -99,10 +119,13 @@ func (c *ClaudeTranslator) Feed(line []byte) {
 		return
 	}
 	if rec.ParentToolUseID != nil && *rec.ParentToolUseID != "" {
-		if rec.Type == "system" || rec.Type == "rate_limit_event" {
+		switch rec.Type {
+		case "system", "rate_limit_event":
 			c.sink.Noise()
-		} else {
-			c.sink.Alive() // sub-agent internals: life only
+		case "tool_progress":
+			c.sink.Alive() // the harness's heartbeat for a running call
+		default:
+			c.sink.ToolActive(*rec.ParentToolUseID) // sub-agent internals
 		}
 		return
 	}
@@ -178,6 +201,14 @@ func (c *ClaudeTranslator) Feed(line []byte) {
 			c.sink.Alive()
 		}
 	case "result":
+		for model, raw := range rec.ModelUsage {
+			var u struct {
+				ContextWindow float64 `json:"contextWindow"`
+			}
+			if json.Unmarshal(raw, &u) == nil && u.ContextWindow >= 1 && u.ContextWindow < 1<<53 {
+				c.sink.ContextWindow(model, int64(u.ContextWindow))
+			}
+		}
 		if rec.Subtype == "success" && !rec.IsError {
 			c.sink.TurnEnded(true, "")
 			return

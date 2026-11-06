@@ -962,8 +962,10 @@ func writeSpawnJournal(p SpawnParams, pid int, startedAt string, spawnToken stri
 	return err
 }
 
+// newProc wraps a process started with cmd.StdoutPipe (an os.Pipe read
+// end, as newProcOpts needs).
 func newProc(cmd *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser, taps ...func(string)) *proc {
-	return newProcOpts(cmd, stdin, stdout, procOpts{taps: taps})
+	return newProcOpts(cmd, stdin, stdout.(*os.File), procOpts{taps: taps})
 }
 
 // underLock runs fn as a message of wi's actor, as the runtime's own

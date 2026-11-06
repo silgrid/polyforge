@@ -92,7 +92,7 @@ func TestMigrateRealDataFixtureKeepsMeaning(t *testing.T) {
 	// Every fixture yaml is refused whole by the loader, naming the file,
 	// the line and the migrate command.
 	for name, dir := range ws {
-		_, err := workspace.Load(dir, "", projects[name])
+		_, err := workspace.Load(dir, projects[name])
 		if err == nil {
 			t.Fatalf("%s: a yaml carrying the retired sections loaded", name)
 		}
@@ -170,7 +170,7 @@ func TestMigrateRealDataFixtureKeepsMeaning(t *testing.T) {
 		if got != want {
 			t.Fatalf("%s after migrate:\n%q\nwant\n%q", name, got, want)
 		}
-		if _, err := workspace.Load(dir, "", projects[name]); err != nil {
+		if _, err := workspace.Load(dir, projects[name]); err != nil {
 			t.Fatalf("%s: the migrated yaml does not load: %v", name, err)
 		}
 	}

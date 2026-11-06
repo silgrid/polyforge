@@ -12,8 +12,8 @@ import (
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
-func bundleWith(defaults []string, steps []workflow.FrontmatterStep) *workflow.Frontmatter {
-	fm := &workflow.Frontmatter{Steps: steps}
+func bundleWith(defaults []string, steps []workflow.Step) *workflow.Lane {
+	fm := &workflow.Lane{Steps: steps}
 	if defaults != nil {
 		fm.Defaults = &workflow.Defaults{ModelCandidates: defaults}
 	}
@@ -24,8 +24,8 @@ func models(project string, entry map[string][]string) *Config {
 	return &Config{Models: map[string]map[string][]string{project: entry}}
 }
 
-var testBundle = func() *workflow.Frontmatter {
-	return bundleWith([]string{"prov/weak-a"}, []workflow.FrontmatterStep{
+var testBundle = func() *workflow.Lane {
+	return bundleWith([]string{"prov/weak-a"}, []workflow.Step{
 		{ID: "grill"},
 		{ID: "fix", ModelCandidates: []string{"prov/flash"}},
 		{ID: "release"},
@@ -109,7 +109,7 @@ func TestComposeUnlistedNilAndBundleOnly(t *testing.T) {
 	if got := ComposeCandidates(nil, cfg, "p", nil); got != nil {
 		t.Fatalf("nil bundle = %v, want nil", got)
 	}
-	if got := ComposeCandidates(bundleWith(nil, []workflow.FrontmatterStep{{ID: "a"}}), nil, "p", nil); got != nil {
+	if got := ComposeCandidates(bundleWith(nil, []workflow.Step{{ID: "a"}}), nil, "p", nil); got != nil {
 		t.Fatalf("no list anywhere = %v, want nil", got)
 	}
 }
@@ -180,7 +180,7 @@ func TestNormalizeModels(t *testing.T) {
 // ResolveSteps names each step's level; the harness of each candidate is
 // its prefix (polyforge#175), a list-less step runs on pi.
 func TestResolveStepsHarnessPerCandidate(t *testing.T) {
-	fm := bundleWith([]string{"pi:g/glm"}, []workflow.FrontmatterStep{{ID: "fix"}, {ID: "review"}, {ID: "spec", ModelCandidates: []string{}}})
+	fm := bundleWith([]string{"pi:g/glm"}, []workflow.Step{{ID: "fix"}, {ID: "review"}, {ID: "spec", ModelCandidates: []string{}}})
 	cfg := models("p", map[string][]string{"review": {"claude:claude-opus-5-5", "pi:g/glm"}})
 	rs := ResolveSteps("bug-fix", fm, cfg, "p", nil)
 	if len(rs) != 3 {
@@ -236,31 +236,5 @@ func TestSummarizeSettingsLane(t *testing.T) {
 	}
 	if _, l, i := (&SummarizeSettings{Models: []string{"pi:s"}, Language: "English", IntervalSec: 10}).Lane(); l != "English" || i != 10 {
 		t.Fatalf("declared: %q %d", l, i)
-	}
-}
-
-// TestComposeAttrs pins the attr-override composition: a declared override
-// that differs from the declaration's default is answered as text; one
-// equal to the default, an absent one and an undeclared step's are not.
-func TestComposeAttrs(t *testing.T) {
-	fm := &workflow.Frontmatter{Steps: []workflow.FrontmatterStep{
-		{ID: "grill", Attrs: map[string]workflow.AttrDecl{"question_batch_size": {Type: workflow.AttrTypeInt, Default: 0}}},
-		{ID: "grill-review"},
-	}}
-	cfg := &Config{Attrs: map[string]map[string]map[string]any{
-		"p":    {"grill": {"question_batch_size": 2}},
-		"zero": {"grill": {"question_batch_size": 0}},
-	}}
-	got := ComposeAttrs(fm, cfg, "p")
-	if len(got) != 1 || got["grill"]["question_batch_size"] != "2" {
-		t.Fatalf("ComposeAttrs = %v, want grill.question_batch_size = 2 only", got)
-	}
-	for _, project := range []string{"zero", "absent"} {
-		if got := ComposeAttrs(fm, cfg, project); got != nil {
-			t.Fatalf("%s: a value equal to the default (or none) must compose nothing: %v", project, got)
-		}
-	}
-	if ComposeAttrs(fm, nil, "p") != nil || ComposeAttrs(nil, cfg, "p") != nil {
-		t.Fatal("no yaml or no bundle composes nothing")
 	}
 }

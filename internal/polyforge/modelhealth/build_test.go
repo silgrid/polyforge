@@ -90,7 +90,7 @@ func TestAttributionTableIsClosedAndTotal(t *testing.T) {
 	for _, c := range []string{driver.FailModelError, driver.FailModelHung, driver.FailStepTimeoutSlowModel, driver.FailExitModel, driver.FailEndedWithoutResult} {
 		check(c, TierModel)
 	}
-	for _, c := range []string{driver.FailToolHung, driver.FailHarnessSilent, driver.FailStepTimeoutLongTask, driver.FailExitOther, driver.FailResultInvalid} {
+	for _, c := range []string{driver.FailToolHung, driver.FailHarnessSilent, driver.FailStepTimeoutLongTask, driver.FailExitOther} {
 		check(c, TierNonModel)
 	}
 	for _, c := range []string{driver.FailRateLimited, driver.FailUpstreamTransient, driver.FailExitHost, driver.FailDaemonRestart, driver.FailDriverRelaunch} {
@@ -139,7 +139,7 @@ func TestResumesAreDispatchesAndSuccessEnvelopesCount(t *testing.T) {
 		entry("wi", kindStepStarted, 1, at(-3*time.Hour), map[string]any{"step": "code", "model": "m1", "spawn_n": 1, "resume": false}),
 		closeEvent("wi", 2, at(-3*time.Hour+time.Minute), kindStepDone, "code", 1),
 		entry("wi", kindStepStarted, 3, at(-2*time.Hour), map[string]any{"step": "code", "model": "m1", "spawn_n": 2, "resume": true}),
-		closeEvent("wi", 4, at(-2*time.Hour+time.Minute), kindNeedsInput, "code", 2),
+		closeEvent("wi", 4, at(-2*time.Hour+time.Minute), kindStepDone, "code", 2),
 		entry("wi", kindStepStarted, 5, at(-time.Hour), map[string]any{"step": "code", "model": "m1", "spawn_n": 3, "resume": true}),
 		closeEvent("wi", 6, at(-time.Hour+time.Minute), kindGateVerdict, "code", 3),
 	}

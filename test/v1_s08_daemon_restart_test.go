@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 // v1_s08: daemon crash with a running driver workflow. The daemon process
@@ -19,18 +21,17 @@ func TestV1S08DaemonRestart(t *testing.T) {
 	inst := newV1Install(t)
 	wi := inst.newWI(t, "s08: daemon crash mid-run",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			// Ordinal 2 (fix) burns a 3s delay — the deterministic crash window.
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 3000},
-			// Ordinal 3: the post-restart resume dispatch of fix.
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			// Ordinal 2 (review) burns a 3s delay — the deterministic crash window.
+			{"do": "envelope", "id": "review", "outcome": "completed", "ms": 3000},
+			// Ordinal 3: the post-restart resume dispatch of review.
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
 	d.pf(t, "submit", wi)
 	waitSpawnCount(t, d, wi, 2, 30*time.Second)
-	waitStepStatus(t, d, wi, "fix", "in_progress", 30*time.Second)
+	waitStepStatus(t, d, wi, "review", "in_progress", 30*time.Second)
 	capDir := d.capsuleDir(wi)
 	t.Cleanup(func() { killOrphans(wi) })
 
@@ -108,14 +109,13 @@ func TestV1S08DaemonRestart(t *testing.T) {
 	// place, and the reattached monitor watched the new derivation to its
 	// end (job_started on the restarted daemon's watch).
 	x := readExecution(t, capDir)
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		if st := x.Steps[step]; st == nil || st.Status != "done" {
 			t.Fatalf("step %s: %+v, want done", step, st)
 		}
 	}
-	env3 := archivedEnvelope(t, capDir, "fix", 3)
-	if env3["outcome"] != "completed" {
-		t.Fatalf("fix's resume envelope wrong: %v", env3["outcome"])
+	if h := acceptedHandoff(t, capDir, "review", 3); h.Handoff.Status != stepcall.StatusDone {
+		t.Fatalf("review's resumed dispatch handed off %s, want done", h.Handoff.Status)
 	}
 	kinds := d2.eventKinds(t, wi)
 	if !contains(kinds, "job_started") || !contains(kinds, "job_stopped") {

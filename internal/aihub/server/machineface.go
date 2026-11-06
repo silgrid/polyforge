@@ -53,6 +53,7 @@ const (
 	laneInbox     replayLane = "inbox"     // GET /machines/inbox
 	laneAnswer    replayLane = "answer"    // POST /queries/{qid}/answer
 	laneQuery     replayLane = "query"     // POST /work-items/{id}/progress-query, /artifact-query
+	laneAttrs     replayLane = "attrs"     // PATCH /work-items/{id}/attrs
 )
 
 // replayBucket is the cache key of one machine's lane. Lanes carry no

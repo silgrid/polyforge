@@ -2,16 +2,17 @@ package cli
 
 // file_create_acceptance_carrier_test.go: the file-create acceptance-carrier
 // advisory. For an execution ticket the verb prints the
-// chosen bundle's step table on stderr (resident hint), and warns
-// specifically when the content mentions e2e but no step of that bundle
-// declares the e2e_author_mode var. Warn only: the request, the exit code
-// and stdout (including --json) stay unchanged; a registration ticket or an
-// unreachable daemon gets no advisory at all.
+// chosen bundle's step table on stderr (resident hint). Warn only: the
+// request, the exit code and stdout (including --json) stay unchanged; a
+// registration ticket or an unreachable daemon gets no advisory at all.
+// The e2e-specific warning keyed on an e2e_author_mode var went with the
+// lane that declared it: it fired on every develop ticket
+// mentioning e2e, though develop's build writes e2e tests.
 
 import (
+	"bytes"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,23 +23,16 @@ const (
 	carrierWarning = "file create: acceptance-carrier warning:"
 )
 
-// carrierDaemon serves GET /status with a workflows dir holding a chore
-// bundle (no step authors e2e) and a feature-full bundle whose e2e-author
-// step declares e2e_author_mode; it answers the daemon socket path.
+// carrierDaemon serves GET /status with a workflows dir holding a develop
+// bundle; it answers the daemon socket path.
 func carrierDaemon(t *testing.T) string {
 	t.Helper()
 	wf := t.TempDir()
 	bundles := map[string]string{
-		"chore":        "---\nsteps:\n  - { id: plan }\n  - { id: code }\n  - { id: review }\n  - { id: verification }\n  - { id: deliver }\n---\n",
-		"feature-full": "---\nsteps:\n  - { id: plan }\n  - { id: e2e-author, vars: { e2e_author_mode: required } }\n  - { id: code }\n  - { id: verification }\n---\n",
+		"develop": "steps:\n  - { id: build }\n  - { id: review }\n  - { id: sync }\n  - { id: verification }\n  - { id: publish }\n  - { id: merge }\n",
 	}
 	for name, body := range bundles {
-		if err := os.MkdirAll(filepath.Join(wf, name), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(wf, name, "workflow.md"), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeLane(t, wf, name, body)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
@@ -70,21 +64,15 @@ func TestFileCreateAcceptanceCarrierAdvisory(t *testing.T) {
 		wantWarn bool
 	}{
 		{
-			"chore + e2e content: hint and narrow warning",
-			[]string{"--bundle", "chore", "--content", e2eContent},
-			carrierHint + " chore = plan -> code -> review -> verification -> deliver",
-			true,
-		},
-		{
-			"feature-full + e2e content: hint, no narrow warning",
-			[]string{"--bundle", "feature-full", "--content", e2eContent},
-			carrierHint + " feature-full = plan -> e2e-author -> code -> verification",
+			"develop + e2e content: hint, no e2e warning",
+			[]string{"--bundle", "develop", "--content", e2eContent},
+			carrierHint + " develop = build -> review -> sync -> verification -> publish -> merge",
 			false,
 		},
 		{
-			"chore without e2e content: hint only",
-			[]string{"--bundle", "chore", "--content", "unit tests carried by code"},
-			carrierHint + " chore = plan -> code -> review -> verification -> deliver",
+			"develop without e2e content: hint only",
+			[]string{"--bundle", "develop", "--content", "unit tests carried by build"},
+			carrierHint + " develop = build -> review -> sync -> verification -> publish -> merge",
 			false,
 		},
 		{
@@ -121,14 +109,7 @@ func TestFileCreateAcceptanceCarrierAdvisory(t *testing.T) {
 				}
 			}
 			if got := strings.Contains(stderr, carrierWarning); got != tc.wantWarn {
-				t.Fatalf("narrow warning present=%v, want %v; stderr=%q", got, tc.wantWarn, stderr)
-			}
-			if tc.wantWarn {
-				for _, tok := range []string{`"chore"`, "e2e_author_mode", "pf file edit --bundle", "explicit waiver"} {
-					if !strings.Contains(stderr, tok) {
-						t.Errorf("warning misses %q: %q", tok, stderr)
-					}
-				}
+				t.Fatalf("e2e warning present=%v, want %v; stderr=%q", got, tc.wantWarn, stderr)
 			}
 			if strings.ContainsAny(stderr, "{}") {
 				t.Errorf("advisory carries a brace (merged-output JSON slicing): %q", stderr)
@@ -143,56 +124,71 @@ func TestFileCreateAcceptanceCarrierAdvisory(t *testing.T) {
 	}
 }
 
-// TestFileCreateAcceptanceCarrierDaemonUnreachable: no daemon, no advisory,
-// and the create still succeeds.
+// TestFileCreateAcceptanceCarrierDaemonUnreachable: no daemon — AIHub
+// business goes through the daemon, so the create is refused explicitly
+// (DAEMON-410) and nothing reaches the hub.
 func TestFileCreateAcceptanceCarrierDaemonUnreachable(t *testing.T) {
 	env, rec := carrierEnv(t, filepath.Join(t.TempDir(), "absent.sock"))
 	code, _, stderr := runPf(t, env, "file", "create", "--project", "polyforge", "--goal", "ship it",
-		"--bundle", "chore", "--content", "the new e2e scenario passes")
-	if code != 0 {
+		"--bundle", "develop", "--content", "the new e2e scenario passes")
+	if code == 0 || !strings.Contains(stderr, "DAEMON-410") {
 		t.Fatalf("code=%d stderr=%s", code, stderr)
 	}
-	if strings.Contains(stderr, carrierHint) || strings.Contains(stderr, carrierWarning) {
-		t.Fatalf("advisory without a daemon: %q", stderr)
-	}
-	if body := rec.last().Body; !strings.Contains(body, `"bundle_name":"chore"`) {
-		t.Fatalf("create not sent: %s", body)
+	if n := len(rec.all()); n != 0 {
+		t.Fatalf("the create reached the hub with the daemon down (%d requests)", n)
 	}
 }
 
 // TestFileCreateAcceptanceCarrierJSONOutputUnchanged: --json stdout is
-// byte-identical when both advisory lines fire; only stderr changes.
+// byte-identical when the advisory fires; only stderr changes.
 func TestFileCreateAcceptanceCarrierJSONOutputUnchanged(t *testing.T) {
 	env, rec := carrierEnv(t, carrierDaemon(t))
 	code, stdout, stderr := runPf(t, env, "--json", "file", "create", "--project", "polyforge",
-		"--goal", "ship it", "--bundle", "chore", "--content", "the new e2e scenario passes")
+		"--goal", "ship it", "--bundle", "develop", "--content", "the new e2e scenario passes")
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, stderr)
 	}
-	if !strings.Contains(stderr, carrierHint) || !strings.Contains(stderr, carrierWarning) {
-		t.Fatalf("expected both advisory lines; stderr=%q", stderr)
+	if !strings.Contains(stderr, carrierHint) || strings.Contains(stderr, carrierWarning) {
+		t.Fatalf("expected the step-table advisory alone; stderr=%q", stderr)
 	}
 	if strings.TrimSpace(stdout) != cannedWI {
 		t.Fatalf("--json stdout changed: %q", stdout)
 	}
-	if body := rec.last().Body; !strings.Contains(body, `"bundle_name":"chore"`) {
+	if body := rec.last().Body; !strings.Contains(body, `"bundle_name":"develop"`) {
 		t.Fatalf("request altered: %s", body)
 	}
 }
 
 // TestFileCreateAcceptanceCarrierStdin: the check runs on the final
-// request, so a --stdin body carrying bundle and content warns the same.
+// request, so a --stdin body carrying the bundle gets the same advisory.
 func TestFileCreateAcceptanceCarrierStdin(t *testing.T) {
 	env, _ := carrierEnv(t, carrierDaemon(t))
-	body := `{"project":"polyforge","goal":"ship it","bundle_name":"chore","content":"acceptance: a new e2e scenario"}`
+	body := `{"project":"polyforge","goal":"ship it","bundle_name":"develop","content":"acceptance: a new e2e scenario"}`
 	code, stdout, stderr := runFileCreateStdin(t, env, body, "file", "create", "--stdin")
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, stderr)
 	}
-	if !strings.Contains(stderr, carrierHint+" chore =") || !strings.Contains(stderr, carrierWarning) {
+	if !strings.Contains(stderr, carrierHint+" develop =") || strings.Contains(stderr, carrierWarning) {
 		t.Fatalf("stdin path misses the advisory; stderr=%q", stderr)
 	}
 	if strings.Contains(stdout, carrierWarning) {
 		t.Errorf("advisory leaked to stdout: %q", stdout)
 	}
+}
+
+// runFileCreateStdin drives the full CLI with a stdin body (runPf always
+// passes empty stdin); the env handling matches runPf.
+func runFileCreateStdin(t *testing.T, env map[string]string, stdin string, args ...string) (int, string, string) {
+	t.Helper()
+	clearEnv(t)
+	if _, ok := env["XDG_CONFIG_HOME"]; !ok {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	}
+	env = viaCellProxy(t, env)
+	for k, v := range env {
+		t.Setenv(k, v)
+	}
+	var stdout, stderr bytes.Buffer
+	code := Run(args, strings.NewReader(stdin), &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
 }

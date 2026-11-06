@@ -1,0 +1,6 @@
+contract: 5
+name: wfc-200
+description: fixture lane for WFC-200 (a skill resolving to no file)
+steps:
+  - id: work
+    skill: nowhere

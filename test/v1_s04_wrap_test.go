@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 // v1_s04: wrap, driver/envelope edition. The driver completes the
@@ -22,12 +24,11 @@ func TestV1S04Wrap(t *testing.T) {
 
 	wi := inst.newWI(t, "s04: wrap the sealed capsule",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 			// The fix step's envelope action lays the inventory repo (a
 			// real worktree with its own origin) before reporting done.
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true,
+			{"do": "envelope", "id": "fix", "outcome": "completed",
 				"name": "demo", "origin": origin},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
@@ -36,9 +37,8 @@ func TestV1S04Wrap(t *testing.T) {
 
 	// The driver-era completion face: every step done, envelopes archived.
 	waitWorkflowStatus(t, d, wi, "completed", 30*time.Second)
-	env := archivedEnvelope(t, d.capsuleDir(wi), "fix", 2)
-	if env["outcome"] != "completed" {
-		t.Fatalf("fix envelope wrong: %v", env["outcome"])
+	if h := acceptedHandoff(t, d.capsuleDir(wi), "fix", 1); h.Handoff.Status != stepcall.StatusDone {
+		t.Fatalf("fix handed off %s, want done", h.Handoff.Status)
 	}
 
 	// The sealed worktree carries the inventory repo and its head.

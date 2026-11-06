@@ -7,9 +7,11 @@ one (that is `pause` or `wrap --fail`). This is also the "abandon" of a
 owner moves on a parked workflow are exactly `pf resume` and this verb —
 `pf wrap --fail` on a blocked work item is refused (`DAEMON-409`, naming
 those two moves) and changes nothing. Allowed to the task's reporter, a project
-maintainer or an admin. The same door ends a running work item whose owner answered
-an open question with the reserved `cancel` (see answer): the daemon checks this
-same authorization first, then cancels it once its session has ended blocked.
+maintainer or an admin; on a **blocked** work item also to the current operator
+of the machine that last held it, as a project writer or maintainer (never on a
+queued, paused or running one). The same door ends a running work item whose step's
+agent delivered `intent: cancel` on the owner's words (see answer): the daemon
+cancels it once its session has ended blocked.
 
 ## Triggers
 
@@ -35,8 +37,8 @@ The argument is the work item id (`wi_` + random chars) or its slug.
 |---|---|---|
 | `CORE-404` | Unknown or invisible id | No such work item — check the id. |
 | `CORE-409` | The work item is running (an active execution) | It is being executed — use `pause`/`wrap` on the machine that runs it, not cancel. |
-| `AUTH-403` | The caller is not the reporter, a project maintainer or an admin | Ask the task owner or a maintainer. |
-| `AUTH-401` | api key missing or invalid | Credential rejected — check `--api-key` / `PF_API_KEY` / config. |
+| `AUTH-403` | The caller is not the reporter, a project maintainer or an admin (nor, on a blocked work item, the holding machine's current operator — the detail names that machine when one is recorded) | Ask the task owner, a maintainer or the named machine's operator. |
+| `AUTH-401` | api key missing or invalid | Credential rejected — check the Cell's `api_key` (`pf [--profile NAME] config set api_key`). |
 
 Canceling a **paused** work item needs nothing from the machine that paused
 it: its daemon notices the cancel at its next session check (within ~30s) and
@@ -45,3 +47,9 @@ end-session`.
 
 A canceled work item is terminal; only a brand-new work item can carry the
 work forward.
+
+Transport: like every data-plane verb this one goes through the local daemon
+to the resolved Cell's AIHub connection (`--profile NAME` / `PF_PROFILE` /
+the cwd's mapped Cell / `default`); `--server`, `--api-key`, `PF_SERVER` and
+`PF_API_KEY` are refused, and with the daemon down it fails with
+`DAEMON-410` (`pf daemon ensure`, then retry once).

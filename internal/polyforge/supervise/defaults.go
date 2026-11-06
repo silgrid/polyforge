@@ -3,7 +3,7 @@ package supervise
 import "time"
 
 // Defaults are the global supervision bounds (daemon config / flags,
-// v2-converge 2.4). The only per-step override is workflow.md
+// v2-converge 2.4). The only per-step override is workflow.yaml
 // budget.wall_minutes (an estimate: T = max(3 x wall_minutes, StepTimeout));
 // X and Y are global (polyforge#147 deleted silence_minutes/tool_minutes).
 // Zero fields take the documented default in Fill.
@@ -23,17 +23,17 @@ type Defaults struct {
 	// ModelErrorGrace is rule 1's grace after an error-ended turn
 	// (default 1m).
 	ModelErrorGrace time.Duration
-	// RetryBackoffBase is the driver's first retry-pacing wait after an
-	// outage-shaped death (model_error, upstream_transient,
-	// ended_without_result); consecutive ones on the same candidate wait
-	// 3x, then 9x it
-	// (default DefaultRetryBackoffBase; test/dev-only override).
-	RetryBackoffBase time.Duration
+	// AskWarmWindow is how long a step process that asked the owner (`pf
+	// ask`) is kept resident for the reply before the daemon ends it; the
+	// step stays awaiting the owner and a later reply resumes the session
+	// (workflow contract v2 §5.2; default DefaultAskWarmWindow; [daemon]
+	// ask_warm_window).
+	AskWarmWindow time.Duration
 }
 
-// DefaultRetryBackoffBase is the documented first retry-pacing wait:
-// 1m, then 3m, then 9m for every further consecutive death.
-const DefaultRetryBackoffBase = time.Minute
+// DefaultAskWarmWindow is the documented warm window of a step awaiting
+// the owner: ~15 minutes, then the idle process exits (owner ruling Q9).
+const DefaultAskWarmWindow = 15 * time.Minute
 
 // Fill answers the defaults with every zero field replaced (Silence
 // stays zero: it is resolved per harness by SilenceFor).
@@ -50,8 +50,8 @@ func (d Defaults) Fill() Defaults {
 	if d.ModelErrorGrace <= 0 {
 		d.ModelErrorGrace = DefaultModelErrorGrace
 	}
-	if d.RetryBackoffBase <= 0 {
-		d.RetryBackoffBase = DefaultRetryBackoffBase
+	if d.AskWarmWindow <= 0 {
+		d.AskWarmWindow = DefaultAskWarmWindow
 	}
 	return d
 }

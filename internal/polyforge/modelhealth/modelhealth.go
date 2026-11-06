@@ -122,7 +122,7 @@ func TierOf(cause string) Tier {
 		return TierModel
 	case "rate_limited", "upstream_transient", "exit_host_class", "driver_stalled", "daemon_restart", "driver_relaunch":
 		return TierExcluded
-	case "tool_hung", "harness_silent", "step_timeout_long_task", "exit_other", "result_invalid":
+	case "tool_hung", "harness_silent", "step_timeout_long_task", "exit_other":
 		return TierNonModel
 	default:
 		return TierNonModel

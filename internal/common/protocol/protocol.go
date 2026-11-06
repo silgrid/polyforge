@@ -25,8 +25,12 @@ type RTMsg struct {
 	SpawnN   int    `json:"spawn_n"`
 	WorkItem string `json:"work_item"`
 	AgentPID int    `json:"agent_pid,omitempty"`
-	Reason   string `json:"reason,omitempty"` // WIFinished: wrapped|failed
+	Reason   string `json:"reason,omitempty"` // WIFinished: wrapped|failed|blocked|paused|superseded, or the hub's status of a dropped record (wrapped|failed|canceled|blocked|queued)
 	Detail   string `json:"detail,omitempty"`
+	// Unconfirmed (WIFinished,): the hub no longer held the
+	// session when this daemon finished its close locally — Reason is what
+	// this daemon asked, not necessarily the work item's state.
+	Unconfirmed bool `json:"unconfirmed,omitempty"`
 	// SessionID (v1.5): the WI session secret, passed runtime→observe
 	// IN-PROCESS so the monitor can run the periodic session-verify (M4).
 	// It never leaves the daemon: not in logs, not in capsule, not in
@@ -139,3 +143,27 @@ const (
 	HeartbeatModeAuto   = "auto"   // the daemon pulls from the ready queue itself
 	HeartbeatModeManual = "manual" // only explicit pf submit
 )
+
+// ---------------------------------------------------------------------------
+// 3. DaemonHost / ProfileCell (single-host multi-AIHub)
+// ---------------------------------------------------------------------------
+
+// ProfileHeader routes one UDS request to a Cell of the Host. The CLI
+// stamps it on every Cell-scoped request outside a step or task; a request
+// without it is served by the default Cell (a permanent protocol default,
+// not a transition path). The header only routes: it never authorizes, and
+// a step or task request is routed by the Host's own ownership record.
+const ProfileHeader = "X-PF-Profile"
+
+// Protocol capabilities `pf --json version` reports (local, answerable with
+// the daemon down): a consumer gates every multi-Cell operation on them
+// instead of comparing version strings.
+const (
+	CapCells          = "cells-v1"
+	CapConfigHostCell = "config-host-cell-v1"
+	CapCellLifecycle  = "cell-lifecycle-v1"
+	CapCellMigration  = "cell-migration-v1"
+)
+
+// Capabilities is this build's capability list, in a stable order.
+var Capabilities = []string{CapCells, CapConfigHostCell, CapCellLifecycle, CapCellMigration}

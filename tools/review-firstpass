@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""review-firstpass — first-pass review rate by plan write-set size and by implementer.
+
+Usage:
+  python3 -I tools/review-firstpass <capsules-dir> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--csv <file>]
+
+Read-only over <capsules-dir> (a workspace's capsules/, one directory per work
+item run). It prints two tables and, with --csv, writes one row per run.
+
+The measure is the 2026-11-09 rework baseline's (aihub doc.audit
+mem_2wmAvnsWFWmw, filed on), kept byte-for-byte where it decides
+a number:
+
+  run set      every capsule directory except `*.quarantined.*`; --since/--until
+               filter on capsule.json created_at (UTC date, both ends inclusive).
+  first pass   the verdict of the lowest-numbered artifacts/steps/review/s<n>/
+               result.json (output.verdict, else the outcome); a run with no
+               review result is not reviewed and counts nowhere.
+  write set    the distinct paths artifacts/plan.md declares `(write)` in its
+               `Touched files` blocks, counted before any code: on the develop
+               lane only the units of the lowest-numbered build result (its
+               initial plan; every unit when that result lists none). A run
+               without a parseable plan has no write set and stays out of the
+               size table (the baseline's plan-declared, ex-ante size).
+  buckets      <=7, 8-22, >22 written files.
+
+The implementer grouping reads the build result the first
+review judged — the highest-numbered artifacts/steps/build/s<m>/result.json
+with m below the first review's n — and its units' implemented_by: `subagent`
+when every unit says subagent, `main` when every unit says main, `mixed` for
+both, `unrecorded` when no unit records one (runs before the field, and lanes
+whose build reports no units).
+"""
+import argparse
+import csv
+import glob
+import json
+import os
+import re
+import statistics
+import sys
+
+BUCKETS = (('<=7', 0, 7), ('8-22', 8, 22), ('>22', 23, None))
+IMPLEMENTERS = ('main', 'subagent', 'mixed', 'unrecorded')
+
+
+def jload(p):
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def runs_of(cap, step):
+    """[(n, result)] of artifacts/steps/<step>/s<n>/result.json, by n."""
+    out = []
+    for f in glob.glob(os.path.join(cap, 'artifacts', 'steps', step, 's*', 'result.json')):
+        m = re.search(r'/s(\d+)/result\.json$', f)
+        if m:
+            out.append((int(m.group(1)), jload(f) or {}))
+    return sorted(out, key=lambda x: x[0])
+
+
+# ---------------------------------------------------------------- plan.md write set
+# The baseline's parser, unchanged: one entry per `Touched files` block, keyed by
+# the nearest preceding `###` unit heading.
+UNIT_HEAD = re.compile(r'^###\s+(\S+?)\s*(?:—|-|:|$)')
+TOUCH = re.compile(r'touched files', re.I)
+PATHRX = re.compile(r'`?([A-Za-z0-9_.@\-/\[\]{}*,]+?)`?\s*\((write|read)\b')
+BLOCK_END = re.compile(r'^\s*$|^\s*- |^\s*#|^\s*\*\*|^\s*\d+\.\s')
+
+
+def parse_plan(path):
+    """-> [[unit_id, [(path, mode)]]], one entry per Touched-files block."""
+    with open(path, errors='replace') as f:
+        lines = f.read().split('\n')
+    units, head, i = [], None, 0
+    while i < len(lines):
+        ln = lines[i]
+        m = UNIT_HEAD.match(ln)
+        if m:
+            head = m.group(1)
+        elif ln.startswith('## '):
+            head = None
+        t = TOUCH.search(ln)
+        if t:
+            buf = [ln[t.end():]]
+            j = i + 1
+            while j < len(lines) and not BLOCK_END.match(lines[j]):
+                buf.append(lines[j])
+                j += 1
+            ps = []
+            for p, mode in PATHRX.findall(' '.join(buf)):
+                p = p.strip('`,')
+                if p.startswith('./'):
+                    p = p[2:]
+                if '/' in p or '.' in p:
+                    ps.append((p, mode))
+            if ps:
+                units.append([head or f'blk{len(units) + 1}', ps])
+            i = j
+            continue
+        i += 1
+    return units
+
+
+def written_files(cap, lane, builds):
+    plan = os.path.join(cap, 'artifacts', 'plan.md')
+    if not os.path.exists(plan):
+        return None
+    units = [u for u in parse_plan(plan) if u[1]]
+    if lane == 'develop' and builds:
+        first = (builds[0][1].get('output') or {}).get('units') or []
+        init_ids = {u.get('id') for u in first if isinstance(u, dict)}
+        if init_ids:
+            units = [u for u in units if u[0] in init_ids] or units
+    if not units:
+        return None
+    return len({p for _, ps in units for p, mode in ps if mode == 'write'})
+
+
+def implementer(builds, first_review):
+    judged = [r for n, r in builds if n < first_review]
+    if not judged:
+        return 'unrecorded'
+    units = (judged[-1].get('output') or {}).get('units') or []
+    by = {u.get('implemented_by') for u in units if isinstance(u, dict)} & {'main', 'subagent'}
+    if not by:
+        return 'unrecorded'
+    return by.pop() if len(by) == 1 else 'mixed'
+
+
+def bucket(n):
+    for name, lo, hi in BUCKETS:
+        if n >= lo and (hi is None or n <= hi):
+            return name
+    return None
+
+
+def collect(caps_dir, since, until):
+    rows, quarantined = [], 0
+    for name in sorted(os.listdir(caps_dir)):
+        cap = os.path.join(caps_dir, name)
+        if not os.path.isdir(cap):
+            continue
+        if '.quarantined.' in name:
+            quarantined += 1
+            continue
+        cj = jload(os.path.join(cap, 'capsule.json')) or {}
+        created = (cj.get('created_at') or '')[:10]
+        if (since and (not created or created < since)) or (until and (not created or created > until)):
+            continue
+        lane = cj.get('bundle_name') or '?'
+        reviews = runs_of(cap, 'review')
+        row = {'capsule': name, 'lane': lane, 'created': created, 'review_runs': len(reviews),
+               'first_review': '', 'written_files': '', 'bucket': '', 'implementer': ''}
+        if reviews:
+            n, r = reviews[0]
+            row['first_review'] = ((r.get('output') or {}).get('verdict') or r.get('outcome') or '?').upper()
+            builds = runs_of(cap, 'build')
+            row['implementer'] = implementer(builds, n)
+            w = written_files(cap, lane, builds)
+            if w is not None:
+                row['written_files'] = w
+                row['bucket'] = bucket(w)
+        rows.append(row)
+    return rows, quarantined
+
+
+def first_pass(rs):
+    judged = [r for r in rs if r['first_review'] in ('PASS', 'FAIL')]
+    return sum(1 for r in judged if r['first_review'] == 'PASS'), len(judged)
+
+
+def line(label, rs):
+    ok, n = first_pass(rs)
+    rate = f'{100 * ok / n:.0f}%' if n else '-'
+    med = f"{statistics.median([r['review_runs'] for r in rs]):g}" if rs else '-'
+    return f'{label:<24} {len(rs):>4}  {f"{ok}/{n}":>10}  {rate:>5}  {med:>7}'
+
+
+def report(rows, quarantined, out=sys.stdout):
+    reviewed = [r for r in rows if r['review_runs']]
+    sized = [r for r in reviewed if r['bucket']]
+    p = lambda s='': print(s, file=out)
+    p(f'runs={len(rows)} quarantined(skipped)={quarantined} reviewed={len(reviewed)} '
+      f'sized(plan-declared write set)={len(sized)}')
+    head = f'{"":<24} {"N":>4}  {"first-pass":>10}  {"rate":>5}  {"med_rev":>7}'
+    p()
+    p('== first-pass review by plan write set (written files)')
+    p(head)
+    for name, _, _ in BUCKETS:
+        p(line(name, [r for r in sized if r['bucket'] == name]))
+    p()
+    p('== by implementer (implemented_by of the build the first review judged) x write set')
+    p(head)
+    for who in IMPLEMENTERS:
+        group = [r for r in sized if r['implementer'] == who]
+        if not group:
+            continue
+        p(line(who, group))
+        for name, _, _ in BUCKETS:
+            g = [r for r in group if r['bucket'] == name]
+            if g:
+                p(line(f'  {name}', g))
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog='review-firstpass', description=__doc__.split('\n')[0])
+    ap.add_argument('capsules_dir')
+    ap.add_argument('--since', help='first capsule.json created_at date (YYYY-MM-DD), inclusive')
+    ap.add_argument('--until', help='last capsule.json created_at date (YYYY-MM-DD), inclusive')
+    ap.add_argument('--csv', help='write one row per run to this file')
+    a = ap.parse_args(argv)
+    if not os.path.isdir(a.capsules_dir):
+        print(f'review-firstpass: {a.capsules_dir} is not a directory', file=sys.stderr)
+        return 2
+    rows, quarantined = collect(a.capsules_dir, a.since, a.until)
+    if a.csv:
+        with open(a.csv, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ['capsule'])
+            w.writeheader()
+            w.writerows(rows)
+    report(rows, quarantined)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

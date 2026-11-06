@@ -1,0 +1,52 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.2.0, pluggy-1.7.0
+rootdir: /work/calc
+collected 6 items
+
+tests/test_calc.py F.F.FF                                                [100%]
+
+=================================== FAILURES ===================================
+___________________________________ test_add ___________________________________
+
+    def test_add():
+>       assert add(1, 2) == 3
+E       assert 4 == 3
+E        +  where 4 = add(1, 2)
+
+tests/test_calc.py:9: AssertionError
+______________________________ test_param[1-1-2] _______________________________
+
+a = 1, b = 1, want = 2
+
+    @pytest.mark.parametrize("a,b,want", [(1, 1, 2), (0, 0, 1)])
+    def test_param(a, b, want):
+>       assert add(a, b) == want
+E       assert 3 == 2
+E        +  where 3 = add(1, 1)
+
+tests/test_calc.py:18: AssertionError
+__________________________________ test_error __________________________________
+
+    def test_error():
+>       raise RuntimeError("boom")
+E       RuntimeError: boom
+
+tests/test_calc.py:22: RuntimeError
+____________________________ TestGroup.test_method _____________________________
+
+self = <test_calc.TestGroup object at 0x73ec5247b440>
+
+    def test_method(self):
+>       assert [1, 2] == [1, 3]
+E       assert [1, 2] == [1, 3]
+E         
+E         At index 1 diff: 2 != 3
+E         Use -v to get more diff
+
+tests/test_calc.py:27: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_calc.py::test_add - assert 4 == 3
+FAILED tests/test_calc.py::test_param[1-1-2] - assert 3 == 2
+FAILED tests/test_calc.py::test_error - RuntimeError: boom
+FAILED tests/test_calc.py::TestGroup::test_method - assert [1, 2] == [1, 3]
+========================= 4 failed, 2 passed in 0.05s ==========================

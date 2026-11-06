@@ -11,11 +11,15 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
+	"sync"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 	"github.com/silgrid/polyforge/internal/version"
@@ -49,6 +53,7 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 			return
 		case <-timer.C:
 			if err := d.sendHeartbeat(); err != nil {
+				d.noteHeartbeat("", err)
 				failStreak++
 				delay = nextHeartbeatDelay(base, failStreak)
 				fmt.Fprintf(os.Stderr, "daemon: heartbeat failed (%d consecutive): %v; retry in %s\n",
@@ -87,8 +92,69 @@ func (d *Daemon) sendHeartbeat() error {
 	if res.Registered {
 		fmt.Fprintf(os.Stderr, "daemon: heartbeat registered machine %s (operator %s)\n", res.MachineID, res.OperatorID)
 	}
+	if why := d.recordIdentity(res.OperatorID); why != "" {
+		d.noteIdentityConflict(why)
+		return errors.New(why)
+	}
+	d.noteHeartbeat(res.OperatorID, nil)
 	d.applyHeartbeat(res)
 	return nil
+}
+
+// heartbeatState is the Cell's last heartbeat outcome, reported on
+// GET /profiles: "ok" after a success, the error after a failure, "" before
+// the first beat (or with the heartbeat disabled). operator is the user the
+// hub answered for this Cell's credential (the identity domain's user).
+type heartbeatState struct {
+	mu       sync.Mutex
+	last     string
+	operator string
+	// degraded is the last Hub failure (proxy transport error or a failed
+	// heartbeat), "" after the next success.
+	degraded string
+	// identity is a Hub-user mismatch a heartbeat revealed: sticky (no
+	// later success clears it), it degrades the Cell and the data-plane
+	// proxy refuses business on it.
+	identity string
+}
+
+// noteIdentityConflict isolates the Cell for a Hub-user mismatch.
+func (d *Daemon) noteIdentityConflict(why string) {
+	d.hb.mu.Lock()
+	defer d.hb.mu.Unlock()
+	d.hb.identity = why
+}
+
+// identityConflict answers the Cell's Hub-user mismatch ("" = none).
+func (d *Daemon) identityConflict() string {
+	d.hb.mu.Lock()
+	defer d.hb.mu.Unlock()
+	return d.hb.identity
+}
+
+// noteHeartbeat records one heartbeat outcome (memory only, no I/O).
+func (d *Daemon) noteHeartbeat(operator string, err error) {
+	d.hb.mu.Lock()
+	defer d.hb.mu.Unlock()
+	if err != nil {
+		d.hb.last = "error: " + err.Error()
+		if hubFailure(err) {
+			d.hb.degraded = err.Error()
+		}
+		return
+	}
+	d.hb.last = "ok"
+	d.hb.degraded = ""
+	if operator != "" {
+		d.hb.operator = operator
+	}
+}
+
+// heartbeatSnapshot answers the last outcome and the hub-answered operator.
+func (d *Daemon) heartbeatSnapshot() (last, operator string) {
+	d.hb.mu.Lock()
+	defer d.hb.mu.Unlock()
+	return d.hb.last, d.hb.operator
 }
 
 // nextHeartbeatDelay is the pure backoff kernel: delay after a tick that
@@ -129,4 +195,44 @@ func liveWIIDs(jobs []runtime.JobInfo) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// noteHubFailure records a failed Hub round trip on this Cell (the proxy's
+// transport error): the Cell reads degraded until the next success.
+func (d *Daemon) noteHubFailure(err error) {
+	d.hb.mu.Lock()
+	defer d.hb.mu.Unlock()
+	d.hb.degraded = err.Error()
+}
+
+// noteHubOK clears the degraded mark after a successful Hub round trip.
+func (d *Daemon) noteHubOK() {
+	d.hb.mu.Lock()
+	defer d.hb.mu.Unlock()
+	d.hb.degraded = ""
+}
+
+// degradedReason answers why the Cell reads degraded ("" = healthy).
+func (d *Daemon) degradedReason() string {
+	if why := d.missingCredential(); why != "" {
+		return why
+	}
+	d.hb.mu.Lock()
+	defer d.hb.mu.Unlock()
+	if d.hb.identity != "" {
+		return d.hb.identity
+	}
+	return d.hb.degraded
+}
+
+// hubFailure reports whether a Hub round trip's error degrades the Cell:
+// the Hub unreachable (a transport error, a 5xx) or the Cell's credential
+// refused (401). A typed refusal of one request (a machine-binding 403, a
+// 409) says nothing about the Cell's connection and degrades nothing.
+func hubFailure(err error) bool {
+	var ae *api.Error
+	if !errors.As(err, &ae) {
+		return true
+	}
+	return ae.HTTPStatus() == http.StatusUnauthorized || ae.HTTPStatus() >= 500
 }

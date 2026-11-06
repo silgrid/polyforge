@@ -1,3 +1,5 @@
+// carries: internal/aihub/memory/browse.go, internal/aihub/memory/browse_test.go, docs/design/polyforge-vnext/06-memory-search.md
+
 package memory
 
 // browse_test.go: the store's browse mode — descending
@@ -333,6 +335,54 @@ func TestBrowseTotalCountsTheVisibleWalk(t *testing.T) {
 		got, err := e.store.BrowseTotal(tc.projects, tc.memType, tc.tags, tc.allowed)
 		if err != nil || got != tc.want {
 			t.Fatalf("%s: total = %d (err %v), want %d", tc.name, got, err, tc.want)
+		}
+	}
+}
+
+// TestBrowseTiedTimestampsKeepCreationOrder: entries
+// whose sort key is identical — the same instant, the shape a slow
+// machine produces when several creates land in one millisecond — list
+// in a deterministic order, the most recently created first, under both
+// sorts and across a keyset walk whose page boundaries fall inside the
+// tie. Ten tied entries make a pass by luck (ids are random) a
+// one-in-10! event.
+func TestBrowseTiedTimestampsKeepCreationOrder(t *testing.T) {
+	e := newEnv(t)
+	const tied = "2026-11-08T00:00:00.123456789Z"
+	created := make([]string, 10)
+	for i := range created {
+		created[i] = e.browseEntry(t, "fact.note", "tied", "tied body", nil, "project").ID
+	}
+	if _, err := e.db.Exec(`UPDATE memories SET created_at=?1, updated_at=?1`, tied); err != nil {
+		t.Fatalf("tie the timestamps: %v", err)
+	}
+	want := make([]string, len(created))
+	for i, id := range created {
+		want[len(created)-1-i] = id
+	}
+	for _, sort := range []string{"", "created"} {
+		items, _, err := e.store.Browse(nil, sort, "", "", nil, 20, browseAll)
+		if err != nil {
+			t.Fatalf("browse sort=%q: %v", sort, err)
+		}
+		if got := browseIDs(items); got != strings.Join(want, ",") {
+			t.Fatalf("sort=%q tied order = %s, want newest-created first %s", sort, got, strings.Join(want, ","))
+		}
+		walked := []string{}
+		after := ""
+		for {
+			page, next, err := e.store.Browse(nil, sort, after, "", nil, 3, browseAll)
+			if err != nil {
+				t.Fatalf("walk sort=%q after %q: %v", sort, after, err)
+			}
+			walked = append(walked, strings.Split(browseIDs(page), ",")...)
+			if next == "" {
+				break
+			}
+			after = next
+		}
+		if got := strings.Join(walked, ","); got != strings.Join(want, ",") {
+			t.Fatalf("sort=%q tied walk in pages of 3 = %s, want %s", sort, got, strings.Join(want, ","))
 		}
 	}
 }

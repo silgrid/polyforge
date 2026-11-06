@@ -1,0 +1,6 @@
+contract: 5
+name: wfc-130
+description: fixture lane for WFC-130
+steps:
+  - id: work
+  - id: work

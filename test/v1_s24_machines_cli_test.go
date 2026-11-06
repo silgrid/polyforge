@@ -304,6 +304,7 @@ func s24PfAs(t *testing.T, inst *v1Install, apiKey string, args ...string) strin
 		"PF_USER_ID=usr_root",
 	)
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {
 		if _, ok := err.(*exec.ExitError); !ok {

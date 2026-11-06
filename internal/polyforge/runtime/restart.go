@@ -321,7 +321,7 @@ func (r *Runtime) finishSeal(j *job) {
 		r.persistLog(j.wi)
 	}
 	if err := r.stopOp(r.ctx, j, reason, true, note); err != nil && isStaleSession(err) {
-		r.finishSealLocally(j, reason, err)
+		r.finishSealLocally(j, reason, "", err)
 	}
 }
 
@@ -344,8 +344,12 @@ func isStaleSession(err error) bool {
 // finishSealLocally ends a SEALING job whose session the hub no longer
 // holds: the hub's state stands, the scene is sealed read-only, the job
 // is DONE and dropped, observe is released, and an event records that the
-// local close never reached the hub under this session.
-func (r *Runtime) finishSealLocally(j *job, reason string, cause error) {
+// local close never reached the hub under this session. hubStatus is the
+// work item's aihub status when the caller read it (a session verify), ""
+// when unknown (a STALE_SESSION refusal): the release names aihub's status
+// when known, else the requested end marked unconfirmed (:
+// the decision feed keeps an unconfirmed block open and re-reads aihub).
+func (r *Runtime) finishSealLocally(j *job, reason, hubStatus string, cause error) {
 	if err := sealReadOnly(j.capsuleDir); err != nil {
 		fmt.Fprintf(os.Stderr, "runtime: %s: read-only seal incomplete: %v\n", j.wi, err)
 	}
@@ -363,7 +367,11 @@ func (r *Runtime) finishSealLocally(j *job, reason string, cause error) {
 		"note":   "the hub no longer holds this session (an earlier close landed with its answer lost, or an admin ended it): the work item's hub state is whatever was set there, not necessarily " + reason,
 		"error":  cause.Error(),
 	})
-	r.send(protocol.RTMsg{Kind: protocol.RTFinished, WorkItem: j.wi, Reason: reason})
+	if hubStatus != "" {
+		r.send(protocol.RTMsg{Kind: protocol.RTFinished, WorkItem: j.wi, Reason: hubStatus})
+		return
+	}
+	r.send(protocol.RTMsg{Kind: protocol.RTFinished, WorkItem: j.wi, Reason: reason, Unconfirmed: true})
 }
 
 // endBlockedAtHub sends SessionEnd(blocked) fenced on the secret and
@@ -451,19 +459,23 @@ func (r *Runtime) closeBlocked(j *job, push bool) closeOutcome {
 				fmt.Fprintf(os.Stderr, "runtime: %s: blocked-close chain push failed (will retry before the close): %v\n", j.wi, perr)
 				return closeRetry
 			}
+			// a size refusal's paths and range join the close's note, kept
+			// with the record so a retried close carries them too
+			note = refusedPushNote(perr, note)
 			j.mu.Lock()
 			j.endPushGaveUp = true
+			j.endNote = note
 			j.mu.Unlock()
 			r.persistLog(j.wi) // durable: a restart's retry must not push again either
 			local, _ := gitops.Head(chain)
 			fmt.Fprintf(os.Stderr, "runtime: %s: blocked-close chain push permanently rejected — closing without it (local head %s stays in the capsule): %v\n", j.wi, local, perr)
-			r.tap(j.wi, "push_failed", map[string]any{
+			r.tap(j.wi, "push_failed", pushFailedBody(map[string]any{
 				"phase":      "blocked-close",
 				"permanent":  true,
 				"local_head": local,
 				"error":      perr.Error(),
 				"note":       "the hub permanently refused the chain push; the blocked close goes out without it and the unpushed commits stay in the local capsule",
-			})
+			}, perr))
 		}
 	}
 	crashpoint.At("bounded.closing")
@@ -564,6 +576,9 @@ func (r *Runtime) notOurs(j *job, v *api.SessionVerifyResponse) error {
 		fmt.Fprintf(os.Stderr, "runtime: %s: the session no longer holds the work item (hub says %s) — record dropped\n", j.wi, v.Status)
 		r.dropJob(j)
 		r.persistLog(j.wi)
+		// the release names the hub's state (the decision
+		// feed records a hub cancel or block learned here)
+		r.send(protocol.RTMsg{Kind: protocol.RTFinished, WorkItem: j.wi, Reason: v.Status})
 		return nil
 	default:
 		fmt.Fprintf(os.Stderr, "runtime: %s: held by session %q — local tree killed, capsule quarantined, record dropped (no hub transition)\n", j.wi, v.CurrentFingerprint)
@@ -620,6 +635,14 @@ func conflict(format string, a ...any) error {
 	return &api.Error{Code: api.ErrDaemonConflict, Detail: fmt.Sprintf(format, a...)}
 }
 
+// executionDisabled is the Cell's closed-execution reason ("" = open).
+func (r *Runtime) executionDisabled() string {
+	if r.cfg.ExecutionDisabled == nil {
+		return ""
+	}
+	return r.cfg.ExecutionDisabled()
+}
+
 // reconcileRecord reconciles one recorded job against the hub's session
 // verify — the per-work-item fence every restart step passes before it
 // relaunches an agent, pushes under the session or sends a SessionEnd: a
@@ -643,7 +666,8 @@ func conflict(format string, a ...any) error {
 //	  finishes its close; anything else recovers in place.
 //	paused + clean → the operator pause stands: nothing resumes.
 //	paused + clean_pause cleared (the operator's pf resume) → attach and
-//	  resume in place (M3).
+//	  resume in place (M3) — an operator-paused record of an
+//	  execution-disabled Cell stays paused instead.
 //	terminal / anything else under our session → the record is dropped.
 func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 	rec := j.record()
@@ -671,8 +695,8 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 		case string(StateEndPending):
 			r.settleEndPending(j) // our close landed with its answer lost, or another session took over
 			if v.Status == api.StatusBlocked {
-				// the lost-answer close settled: an owner's reserved cancel
-				// answer completes here too (review s8#1)
+				// the lost-answer close settled: an owner's cancel completes
+				// here too (review s8#1)
 				r.cancelIfRequested(j.wi, j.capsuleDir)
 			}
 			return "", nil
@@ -681,7 +705,7 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 			if !isTerminalStopReason(reason) {
 				reason = protocol.FinishBlocked
 			}
-			r.finishSealLocally(j, reason, fmt.Errorf("session verify: the session no longer holds the work item (hub says %s)", v.Status))
+			r.finishSealLocally(j, reason, v.Status, fmt.Errorf("session verify: the session no longer holds the work item (hub says %s)", v.Status))
 			return "", nil
 		}
 		if perr := r.notOurs(j, v); perr != nil {
@@ -767,6 +791,13 @@ func (r *Runtime) reconcileRecord(j *job, attachCause string) (string, error) {
 		j.mu.Unlock()
 		return "", conflict("clean_pause is still set at the hub — the operator's resume (the clean_pause=false PATCH) has not landed; nothing was resumed")
 	case v.Status == api.StatusPaused:
+		if why := r.executionDisabled(); why != "" && rec.State == string(StatePaused) {
+			// an operator-paused record whose clean_pause was cleared
+			// without this Cell's admission (pf resume while the Host was
+			// down, or from another machine): a disabled Cell keeps it
+			// paused — no attach, no run
+			return "", conflict("%s: execution is disabled on this Cell: %s — the paused session stays paused (nothing was attached or started); run pf resume again once this Cell admits it", rec.WorkItemID, why)
+		}
 		if err := r.requireMidflightCapsule(rec.WorkItemID, rec.Project, rec.CapsuleDir); err != nil {
 			r.blockUnrecoverable(j, err)
 			return "", conflict("%s", err.Error())

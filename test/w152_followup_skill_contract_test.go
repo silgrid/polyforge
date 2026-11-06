@@ -228,25 +228,12 @@ func w152Fingerprint(item string) string {
 	return strings.Join(words, "-") // 7
 }
 
-// TestW152FollowUpSkillStaysProjectionClean: the new fragment and this
-// test are projected to the public mirror, so neither may carry the
-// internal identifier families the projection's invariant refuses, and the
-// fragment routes no repo path without the registry rule. The patterns are
-// assembled from pieces so this file does not match itself.
+// TestW152FollowUpSkillStaysProjectionClean: the new fragment routes no
+// repo path without the registry rule. The identifier-family scan lives in
+// the EXCLUDE'd fork_projection_markers_contract_test.go (the projection
+// marker check): a
+// projected file cannot carry the markers the projection now refuses.
 func TestW152FollowUpSkillStaysProjectionClean(t *testing.T) {
-	inv := regexp.MustCompile(strings.Join([]string{
-		"GMI" + "SWE", "ieops" + "-", "the internal project" + "#", "gmi#[0-9]",
-		"work" + "bench#[0-9]", "work" + "bench-[0-9]", "[wW][bB][0-9]+",
-	}, "|"))
-	for _, rel := range []string{w152Fragment, "test/w152_followup_skill_contract_test.go"} {
-		b, err := os.ReadFile(filepath.Join(v1Root(t), rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if m := inv.FindString(string(b)); m != "" {
-			t.Errorf("%s carries the internal identifier %q the projection refuses", rel, m)
-		}
-	}
 	frag := w152Read(t, w152Fragment)
 	if strings.Contains(frag, "repos/") && !strings.Contains(frag, "registry") {
 		t.Errorf("%s routes repo paths without naming the aihub registry", w152Fragment)

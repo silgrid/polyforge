@@ -9,12 +9,16 @@ package core
 // unreadable row costs a per-row membership lookup and none can appear
 // on a page.
 //
-// Ordering is julianday(created_at) DESC, id DESC — never a string
+// Ordering is julianday(created_at) DESC, seq DESC — never a string
 // comparison of created_at: RFC3339Nano strings of different precision
-// (".138Z" vs ".138881157Z") order wrong lexicographically, and the
-// id tiebreak keeps a same-millisecond group deterministic. The opaque
-// cursor is the last row's created_at + id, so the walk covers the list
-// exactly once even across a concurrent change.
+// (".138Z" vs ".138881157Z") order wrong lexicographically. julianday()
+// rounds to the nearest millisecond, so creations less than a
+// millisecond apart tie on it; the seq tiebreak (the per-project number,
+// allocated in the create transaction: the project's insertion order)
+// keeps such a group newest first (a random id tiebreak
+// put it in random order). The read is always one project, where seq is
+// unique. The opaque cursor is the last row's created_at + seq, so the
+// walk covers the list exactly once even across a concurrent change.
 
 import (
 	"encoding/base64"
@@ -29,7 +33,7 @@ const (
 	webListLimit = 20
 	// webCursorVersion tags the cursor encoding so a value this code
 	// did not issue is refused instead of misread.
-	webCursorVersion = "1"
+	webCursorVersion = "2"
 )
 
 // WebListFilters is the console list read's input.
@@ -67,10 +71,11 @@ func (m *WIManager) ListWeb(f WebListFilters) ([]WebWorkItem, string, error) {
 	if f.Status != "" && !webValidStatus(f.Status) {
 		return nil, "", Fail(api.ErrCoreBadInput, "", "unknown status %q", f.Status)
 	}
-	var afterTS, afterID string
+	var afterTS string
+	var afterSeq int64
 	if f.After != "" {
 		var err error
-		afterTS, afterID, err = decodeWebCursor(f.After)
+		afterTS, afterSeq, err = decodeWebCursor(f.After)
 		if err != nil {
 			return nil, "", Fail(api.ErrCoreBadInput, "", "invalid cursor")
 		}
@@ -104,11 +109,11 @@ func (m *WIManager) ListWeb(f WebListFilters) ([]WebWorkItem, string, error) {
 	}
 	if f.After != "" {
 		q += ` AND (julianday(w.created_at) < julianday(?)` +
-			` OR (julianday(w.created_at) = julianday(?) AND w.id < ?))`
-		args = append(args, afterTS, afterTS, afterID)
+			` OR (julianday(w.created_at) = julianday(?) AND w.seq < ?))`
+		args = append(args, afterTS, afterTS, afterSeq)
 	}
 	// 20 + one probe row: the probe proves whether a next page exists.
-	q += ` ORDER BY julianday(w.created_at) DESC, w.id DESC LIMIT ?`
+	q += ` ORDER BY julianday(w.created_at) DESC, w.seq DESC LIMIT ?`
 	args = append(args, webListLimit+1)
 	rows, err := m.db.Query(q, args...)
 	if err != nil {
@@ -134,7 +139,7 @@ func (m *WIManager) ListWeb(f WebListFilters) ([]WebWorkItem, string, error) {
 	if len(out) > webListLimit {
 		last := out[webListLimit-1]
 		var err error
-		if next, err = encodeWebCursor(last.CreatedAt, last.ID); err != nil {
+		if next, err = encodeWebCursor(last.CreatedAt, last.Seq); err != nil {
 			return nil, "", err
 		}
 		out = out[:webListLimit]
@@ -154,21 +159,26 @@ func webValidStatus(s string) bool {
 }
 
 // encodeWebCursor answers the opaque cursor of one page's last row:
-// base64url of "<version>|<created_at>|<id>", unpadded.
-func encodeWebCursor(createdAt, id string) (string, error) {
-	raw := webCursorVersion + "|" + createdAt + "|" + id
+// base64url of "<version>|<created_at>|<seq>", unpadded.
+func encodeWebCursor(createdAt string, seq int64) (string, error) {
+	raw := webCursorVersion + "|" + createdAt + "|" + strconv.FormatInt(seq, 10)
 	return base64.RawURLEncoding.EncodeToString([]byte(raw)), nil
 }
 
-// decodeWebCursor parses a cursor this code issued.
-func decodeWebCursor(cursor string) (createdAt, id string, err error) {
+// decodeWebCursor parses a cursor this code issued; any other version
+// (an earlier encoding included) is refused, never misread.
+func decodeWebCursor(cursor string) (createdAt string, seq int64, err error) {
 	raw, derr := base64.RawURLEncoding.DecodeString(cursor)
 	if derr != nil {
-		return "", "", derr
+		return "", 0, derr
 	}
 	parts := strings.Split(string(raw), "|")
-	if len(parts) != 3 || parts[0] != webCursorVersion || parts[1] == "" || parts[2] == "" {
-		return "", "", Fail(api.ErrCoreBadInput, "", "malformed cursor")
+	if len(parts) != 3 || parts[0] != webCursorVersion || parts[1] == "" {
+		return "", 0, Fail(api.ErrCoreBadInput, "", "malformed cursor")
 	}
-	return parts[1], parts[2], nil
+	seq, perr := strconv.ParseInt(parts[2], 10, 64)
+	if perr != nil || seq <= 0 {
+		return "", 0, Fail(api.ErrCoreBadInput, "", "malformed cursor")
+	}
+	return parts[1], seq, nil
 }

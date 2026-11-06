@@ -83,6 +83,7 @@ func w3PF(t *testing.T, inst *v1Install, e w113Env, stdin string, args ...string
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := 0
 	if err := cmd.Run(); err != nil {
@@ -218,15 +219,11 @@ func TestW3ConfigCommandFamilyAndSource(t *testing.T) {
 		t.Fatalf("config list emitted the api_key value:\n%s", list)
 	}
 
-	// env beats the file; the flag beats the env.
-	envOut, _ := w3PF(t, nil, w113Env{home: home, config: cfg, extra: []string{"PF_SERVER=http://fromenv"}},
-		"", "config", "get", "server")
-	if !strings.Contains(envOut, "http://fromenv") || !strings.Contains(strings.ToLower(envOut), "env") {
-		t.Fatalf("config get must report the env source; got %q", envOut)
-	}
-	flagOut, _ := w3PF(t, nil, env, "", "--server", "http://fromflag", "config", "get", "server")
-	if !strings.Contains(flagOut, "http://fromflag") || !strings.Contains(strings.ToLower(flagOut), "flag") {
-		t.Fatalf("config get must report the flag source; got %q", flagOut)
+	// a Cell's connection has no flag or env source any more: the file is
+	// the one source, and --server is refused naming the configuration route
+	flagOut, flagCode := w3PF(t, nil, env, "", "--server", "http://fromflag", "config", "get", "server")
+	if flagCode == 0 || !strings.Contains(flagOut, "refused") || !strings.Contains(flagOut, "config set server") {
+		t.Fatalf("--server must be refused; got exit %d %q", flagCode, flagOut)
 	}
 
 	// unset removes the line so the built-in default applies.
@@ -569,7 +566,7 @@ func TestW3ConfigAPIKeyWriteOnly(t *testing.T) {
 	if p := w3TreeContains(t, d.logPath, sentinel); p != "" {
 		t.Fatalf("the api_key sentinel reached the daemon log at %s", p)
 	}
-	if p := w3TreeContains(t, filepath.Join(d.dataDir, "events"), sentinel); p != "" {
+	if p := w3TreeContains(t, filepath.Join(d.dataDir, "cells", "default", "events"), sentinel); p != "" {
 		t.Fatalf("the api_key sentinel reached the events log at %s", p)
 	}
 	if p := w3TreeContains(t, ws, sentinel, cfg); p != "" {
@@ -649,15 +646,18 @@ func TestW3ConfigReloadLiveCapAndOutcomes(t *testing.T) {
 		t.Fatalf("--json must carry the per-key outcome document; got %q", jout)
 	}
 
-	// Classes: restart-only for server, next-claim for a [workspace] edit.
+	// Classes: server is a connection-change key — a Cell never changes
+	// its AIHub in place (the Cell identity rule), so the reload refuses it naming
+	// the new-profile route and applies nothing; next-claim for a
+	// [workspace] edit.
 	sout, scode := w3PF(t, nil, w113Env{config: cfg, socket: d.sock}, "",
 		"config", "set", "server", "http://127.0.0.1:2")
-	if scode != 0 {
-		t.Fatalf("config set server: exit %d (%q)", scode, sout)
+	if scode == 0 || !strings.Contains(sout, "DAEMON-409") || !strings.Contains(sout, "new profile") {
+		t.Fatalf("a server change must be refused naming the new-profile route; exit %d (%q)", scode, sout)
 	}
-	slow := strings.ToLower(sout)
-	if !strings.Contains(slow, "restart") && !strings.Contains(slow, "pending") {
-		t.Fatalf("server is restart-only and must be reported so; got %q", sout)
+	if rout, rcode := w3PF(t, nil, w113Env{config: cfg, socket: d.sock}, "",
+		"config", "set", "server", "http://127.0.0.1:1"); rcode != 0 {
+		t.Fatalf("restoring the Cell's own server: exit %d (%q)", rcode, rout)
 	}
 	wout, wcode := w3PF(t, nil, w113Env{config: cfg, socket: d.sock}, "",
 		"config", "set", `[workspace."`+ws+`"]`, "projects=e2e")
@@ -667,9 +667,9 @@ func TestW3ConfigReloadLiveCapAndOutcomes(t *testing.T) {
 	if !strings.Contains(strings.ToLower(wout), "next") {
 		t.Fatalf("[workspace] is next-claim and must be reported so; got %q", wout)
 	}
-	// The restart-only change must not have taken the cap with it.
+	// The refused server change must not have taken the cap with it.
 	if got := w3Status(t, d.sock).Queue.MaxConcurrent; got != 2 {
-		t.Fatalf("cap moved after a restart-only reload: %d, want 2", got)
+		t.Fatalf("cap moved after a refused server reload: %d, want 2", got)
 	}
 }
 
@@ -699,7 +699,7 @@ func TestW3ConfigReloadMappingAdditionWithoutRestart(t *testing.T) {
 	pid := d.cmd.Process.Pid
 
 	// Pre-reload: the yaml declares w3new, the startup mapping lacks it.
-	pre := w113NewWI(t, inst, "e2e", "w3 o4b pre-reload", envelopeAutopilot())
+	pre := w113NewWI(t, inst, "e2e", "w3 o4b pre-reload", envelopeMicro())
 	preOut, preCode := w3PF(t, inst, w113Env{config: cfg, socket: d.sock}, "", "submit", pre)
 	if preCode == 0 {
 		t.Fatalf("a claim over a yaml-declared-but-unmapped project was accepted: %q", preOut)
@@ -714,13 +714,13 @@ func TestW3ConfigReloadMappingAdditionWithoutRestart(t *testing.T) {
 		t.Fatalf("config set mapping: exit %d (%q)", code, out)
 	}
 
-	wiA := w113NewWI(t, inst, "e2e", "w3 o4b e2e claim", envelopeAutopilot())
+	wiA := w113NewWI(t, inst, "e2e", "w3 o4b e2e claim", envelopeMicro())
 	d.pfWant(inst, -1, "submit", wiA)
 	capA := w113Capsule(t, inst, ws, wiA)
 	w113WaitCapsule(t, capA, 90*time.Second)
 	w113WaitCompleted(t, capA, 120*time.Second)
 
-	wiB := w113NewWI(t, inst, "w3new", "w3 o4b added-project claim", envelopeAutopilot())
+	wiB := w113NewWI(t, inst, "w3new", "w3 o4b added-project claim", envelopeMicro())
 	d.pfWant(inst, -1, "submit", wiB)
 	capB := w113Capsule(t, inst, ws, wiB)
 	w113WaitCapsule(t, capB, 90*time.Second)
@@ -745,14 +745,10 @@ func TestW3ConfigReloadRemovalInFlightRefused(t *testing.T) {
 	d.start()
 
 	wi := w113NewWI(t, inst, "e2e", "w3 r12 held job", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": "q12",
-			"question": "hold this job open"},
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		askAction("fix", "hold this job open", nil),
 	})
 	d.pfWant(inst, -1, "submit", wi)
-	waitUntil(t, 90*time.Second, "the r12 job never became held (needs_input)", func() bool {
+	waitUntil(t, 90*time.Second, "the r12 job never became held (awaiting the owner)", func() bool {
 		for _, j := range w3Status(t, d.sock).Jobs {
 			if j.WorkItemID == wi && j.NeedsInput {
 				return true
@@ -816,7 +812,7 @@ func TestW3ConfigReloadRemovalWithoutInFlight(t *testing.T) {
 	// The removal took effect at the next claim: w3new is still declared
 	// by the workspace yaml but no longer mapped, so the claim is refused
 	// DAEMON-414 (the same check the pre-reload addition scenario uses).
-	wi := w113NewWI(t, inst, "w3new", "w3 r12 removal took effect", envelopeAutopilot())
+	wi := w113NewWI(t, inst, "w3new", "w3 r12 removal took effect", envelopeMicro())
 	out, code := w3PF(t, inst, w113Env{config: cfg, socket: d.sock}, "", "submit", wi)
 	if code == 0 {
 		t.Fatalf("a claim for the removed project was accepted: %q", out)
@@ -833,10 +829,11 @@ func TestW3ConfigReloadRemovalWithoutInFlight(t *testing.T) {
 // R13/O4c — restart-only keys are pending, then apply after a restart.
 // ---------------------------------------------------------------------------
 
-// TestW3ConfigReloadRestartOnlyPending pins O4c: a server reload leaves the
-// running daemon (PID and effective value) unchanged and is reported as
-// pending restart in the per-key outcome and `pf ops status`; a fresh daemon
-// on the same file carries the new baseline (not pending).
+// TestW3ConfigReloadRestartOnlyPending pins O4c: a restart-only reload
+// (harness_root — server became a connection-change key with the Cells)
+// leaves the running daemon (PID and effective value) unchanged and is
+// reported as pending restart in the per-key outcome and `pf ops status`; a
+// fresh daemon on the same file carries the new baseline (not pending).
 func TestW3ConfigReloadRestartOnlyPending(t *testing.T) {
 	ws := t.TempDir()
 	d, cfg := w3NewDaemon(t, nil, []w113WS{{key: ws, projects: []string{"e2e"}}})
@@ -844,9 +841,9 @@ func TestW3ConfigReloadRestartOnlyPending(t *testing.T) {
 	pid := d.cmd.Process.Pid
 
 	out, code := w3PF(t, nil, w113Env{config: cfg, socket: d.sock}, "",
-		"config", "set", "server", "http://127.0.0.1:2")
+		"config", "set", "harness_root", t.TempDir())
 	if code != 0 {
-		t.Fatalf("config set server: exit %d (%q)", code, out)
+		t.Fatalf("config set harness_root: exit %d (%q)", code, out)
 	}
 	low := strings.ToLower(out)
 	if !strings.Contains(low, "pending") && !strings.Contains(low, "restart") {
@@ -856,13 +853,13 @@ func TestW3ConfigReloadRestartOnlyPending(t *testing.T) {
 		t.Fatalf("the daemon PID changed across a restart-only reload (%d -> %d)", pid, d.cmd.Process.Pid)
 	}
 	opsOut, _ := w3PF(t, nil, w113Env{config: cfg, socket: d.sock}, "", "ops", "status")
-	if !strings.Contains(opsOut, "server") ||
+	if !strings.Contains(opsOut, "harness_root") ||
 		(!strings.Contains(strings.ToLower(opsOut), "pending") && !strings.Contains(strings.ToLower(opsOut), "restart")) {
-		t.Fatalf("pf ops status must show server as pending restart; got %q", opsOut)
+		t.Fatalf("pf ops status must show harness_root as pending restart; got %q", opsOut)
 	}
-	// The pending set lists ONLY the changed key: a flat server change must
-	// not report harness_root/operator_agent_dir pending.
-	if strings.Contains(opsOut, "harness_root") || strings.Contains(opsOut, "operator_agent_dir") {
+	// The pending set lists ONLY the changed key: a harness_root change must
+	// not report operator_agent_dir/daemon_socket pending.
+	if strings.Contains(opsOut, "operator_agent_dir") || strings.Contains(opsOut, "daemon_socket") {
 		t.Fatalf("the pending set must list only the changed key; got %q", opsOut)
 	}
 
@@ -911,7 +908,7 @@ func TestW3ConfigReloadBadFileInert(t *testing.T) {
 	}
 	// R14: exactly one config_reload_failed event, carrying the key names
 	// only (never a value).
-	eventsPath := filepath.Join(d.dataDir, "events", "daemon.jsonl")
+	eventsPath := filepath.Join(d.dataDir, "cells", "default", "events", "daemon.jsonl")
 	rawEvents, err := os.ReadFile(eventsPath)
 	if err != nil {
 		t.Fatalf("the daemon events log is unreadable: %v", err)
@@ -989,8 +986,8 @@ func TestW3ConfigReloadFlagOverrideAndOpsMax(t *testing.T) {
 	}
 	// R16 / finding 6c: an unrelated reload must not undo pf ops max.
 	if out, code := w3PF(t, nil, w113Env{config: cfg2, socket: d2.sock}, "",
-		"config", "set", "server", "http://127.0.0.1:3"); code != 0 {
-		t.Fatalf("config set server: exit %d (%q)", code, out)
+		"config", "set", "stall_window", "12m"); code != 0 {
+		t.Fatalf("config set stall_window: exit %d (%q)", code, out)
 	}
 	if got := w3Status(t, d2.sock).Queue.MaxConcurrent; got != 5 {
 		t.Fatalf("an unrelated reload undid pf ops max: cap %d, want 5", got)

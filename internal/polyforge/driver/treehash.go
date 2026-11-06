@@ -1,5 +1,4 @@
-// treehash.go: the capsule tree hash and the task-repo
-// tree hash (the gate re-judgment guard).
+// treehash.go: the capsule tree hash.
 //
 // A step re-dispatched as a NEW conversation after a step_failed takes
 // the fast path (continue in place, not from scratch) only when the
@@ -7,28 +6,27 @@
 // defines that equality: a SHA-256 over a deterministic, length-prefixed
 // byte stream of the capsule's task worktrees and artifacts/.
 //
-// The reposTreeHash subset covers, for every repos/<name>:
+// For every repos/<name> the hash covers:
 //
 //   - the HEAD commit,
 //   - the tracked working-tree content (uncommitted and staged edits
 //     included: the bytes on disk are read, never a diff), and
 //   - non-ignored untracked files;
 //
-// and NOTHING else. It is the tree a gate judges (the code the build step
-// produced), so driver-owned artifacts/steps result archives cannot move
-// it between rounds ( criterion 6). capsuleTreeHash adds
-// artifacts/ at the capsule root. runtime-state/, session/ and every
-// .gitignore'd path (notably node_modules/) are never enumerated, so
-// driver-owned churn cannot move either hash. A symlink is identified by
+// and then artifacts/ at the capsule root. runtime-state/, session/ and
+// every .gitignore'd path (notably node_modules/) are never enumerated,
+// so driver-owned churn cannot move the hash. A symlink is identified by
 // its target string (Git's own identity for a link) and any other
 // non-regular path is skipped, so a link to /dev/zero or a FIFO cannot
-// hang hashing.
+// hang hashing. (The task-repo-only subset the unchanged-tree guard
+// compared,, was deleted with the guard: workflow contract
+// v2 change 19.)
 //
-// Every git call goes through repoGit (testfiles.go): its own git-dir,
+// Every git call goes through repoGit (gitfacts.go): its own git-dir,
 // system config ignored, fsmonitor and hooks disabled, inherited GIT_*
 // stripped, no optional locks, a hard timeout — so an untrusted task repo
 // cannot make hashing run a hook, filter or lock. Any git error makes the
-// hash functions return an error; every caller treats an error as "no
+// hash function return an error; every caller treats an error as "no
 // hash" (the mismatch path, i.e. today's behavior). There is no fallback
 // walk and no second hashing path.
 package driver
@@ -53,10 +51,6 @@ import (
 // key selects it.
 var treeHashFn = capsuleTreeHash
 
-// reposTreeHashFn is the same seam for the task-repo-only tree hash a
-// gate records as its last-judged tree ( criterion 6).
-var reposTreeHashFn = reposTreeHash
-
 // capsuleTreeHash answers the capsule's tree hash: a hex-encoded SHA-256
 // over every task worktree's HEAD, tracked working-tree bytes (committed
 // or not) and non-ignored untracked files, plus the capsule's artifacts/.
@@ -80,22 +74,8 @@ func capsuleTreeHash(capsuleRoot string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// reposTreeHash answers the task-repo tree hash: the capsule hash without
-// artifacts/. A capsule with no task repos has no code tree to judge, so
-// it answers "no hash" rather than a misleading empty-tree digest.
-func reposTreeHash(capsuleRoot string) (string, error) {
-	if len(taskRepoNames(filepath.Join(capsuleRoot, capsule.DirRepos))) == 0 {
-		return "", os.ErrNotExist
-	}
-	h := sha256.New()
-	if err := hashRepos(h, capsuleRoot); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 // hashRepos appends every task worktree's HEAD + tracked + non-ignored
-// untracked content to h (the repos half shared by both hashes).
+// untracked content to h (the repos half of the hash).
 func hashRepos(h hash.Hash, capsuleRoot string) error {
 	reposDir := filepath.Join(capsuleRoot, capsule.DirRepos)
 	for _, name := range taskRepoNames(reposDir) {

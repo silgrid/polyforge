@@ -1,0 +1,66 @@
+# The pi-web package's CI (moved from the package's own
+# repository to the root, path-filtered). Reach: every push to main and every
+# pull request of this repository that touches pi-web/ (or this file); the
+# jobs run in pi-web/ with the package's own scripts. Read-only token.
+name: pi-web CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pi-web/**"
+      - ".github/workflows/pi-web-ci.yml"
+  pull_request:
+    paths:
+      - "pi-web/**"
+      - ".github/workflows/pi-web-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-web-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: pi-web
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: pi-web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: pi-web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run test:e2e
+        env:
+          E2E_SERVER_MODE: start
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-failure
+          path: pi-web/test-results/e2e/
+          retention-days: 7

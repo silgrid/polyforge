@@ -32,7 +32,7 @@ func TestTaskSpawnRefusesUnsupportedArgsAndPaths(t *testing.T) {
 	}
 }
 
-func TestTaskSpawnPrintsTheIDAndSendsOrigin(t *testing.T) {
+func TestTaskSpawnPrintsTheIDAndSendsNoChat(t *testing.T) {
 	rec := &reqRecorder{}
 	sock := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.record(r)
@@ -44,10 +44,15 @@ func TestTaskSpawnPrintsTheIDAndSendsOrigin(t *testing.T) {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	b := rec.last().Body
-	for _, want := range []string{`"project":"p"`, `"prompt":"look around"`, `"max_tokens":1000`, `"origin_chat":"chat_0123456789abcdef"`} {
+	for _, want := range []string{`"project":"p"`, `"prompt":"look around"`, `"max_tokens":1000`} {
 		if !strings.Contains(b, want) {
 			t.Fatalf("body %s lacks %s", b, want)
 		}
+	}
+	// a leftover PF_CHAT_ID is not read — no origin chat
+	// rides the spawn (the summary goes to the decision feed).
+	if strings.Contains(b, "origin_chat") || strings.Contains(b, "chat_0123456789abcdef") {
+		t.Fatalf("body %s still carries a chat", b)
 	}
 	// No caller id available: the body carries no caller_id at all.
 	if strings.Contains(b, "caller_id") {

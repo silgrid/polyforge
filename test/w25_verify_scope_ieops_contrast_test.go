@@ -6,8 +6,14 @@ package test
 // print the same report for the same range, including the last ten real
 // first-parent merge ranges of this repository.
 //
-// Both sides fall back to `full` identically when `go list` cannot run in a
-// throwaway worktree; the stdout comparison is the oracle either way.
+// A throwaway worktree has no front-end build, so the console's
+// `//go:embed all:dist` matches no file there. The engine tolerates that (an
+// embed pattern changes no package's dependencies) while the frozen seed's
+// plain `go list` fails on it and falls back to `full`, so each worktree gets
+// a placeholder dist file first — what the front-end build every bar run
+// starts with gives — and both sides list the same package graph. Both still
+// fall back to `full` identically when `go list` cannot run for any other
+// reason; the stdout comparison is the oracle either way.
 //
 // Run (targeted): GOWORK=off go test ./test/ -run '^TestW25Ieops' -count=1
 
@@ -79,19 +85,32 @@ func TestW25IeopsFrozenContrastOnRealRanges(t *testing.T) {
 			base := strings.TrimSpace(w25engGit(t, root, "rev-parse", merge+"^1"))
 			dir, cleanup := w25ioWorktree(t, root, merge)
 			defer cleanup()
+			// The placeholder front-end build (see the header); dist is ignored,
+			// so it is in no diff either side reads.
+			if fi, err := os.Stat(filepath.Join(dir, "webui")); err == nil && fi.IsDir() {
+				if err := os.MkdirAll(filepath.Join(dir, "webui", "dist"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "webui", "dist", "index.html"), []byte("<!doctype html>\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
 			w25engCopy(t, frozen, filepath.Join(dir, ".polyforge", "verify-scope.sh"), 0o755)
 			w25engCopy(t, conf, filepath.Join(dir, ".polyforge", "verify-scope.conf"), 0o644)
 			// The engine is new in this change, so an older range's worktree does
 			// not carry it; install the current release tree's engine there.
-			w25engCopy(t, filepath.Join(root, "tools", "verify-scope"), filepath.Join(dir, "tools", "verify-scope"), 0o755)
+			w25engCopy(t, filepath.Join(root, "workflows", "_shared", "scripts", "verify-scope"), filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), 0o755)
 			frozenOut, frozenErr, frozenCode := w25engRun(t, dir, filepath.Join(dir, ".polyforge", "verify-scope.sh"), nil, "--base", base)
 			if frozenCode != 0 {
 				t.Fatalf("frozen seed exited %d: %s", frozenCode, frozenErr)
 			}
-			engineOut, engineErr, engineCode := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+			engineOut, engineErr, engineCode := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", base)
 			if engineCode != 0 {
 				t.Fatalf("engine exited %d: %s", engineCode, engineErr)
 			}
+			// The frozen seed predates the dependency-audit gate: the engine's
+			// full report is the seed's plus exactly the appended audit line.
+			frozenOut = w320AuditAppended(t, frozenOut, dir, filepath.Join(dir, "workflows", "_shared", "scripts"))
 			if frozenOut != engineOut {
 				t.Fatalf("engine stdout differs from the frozen seed\n--- frozen ---\n%s--- engine ---\n%s", frozenOut, engineOut)
 			}

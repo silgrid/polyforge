@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=../_schema/workflow-5.schema.json
+contract: 5
+name: release
+description: Release lane - cut a release from the verified origin head via the repo's own procedure, independently verify what was published, then deploy exactly that verified version if the project has a deploy procedure.
+acceptance: none
+defaults:
+  model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
+  tiers: { cheap: [pi:example-gateway/model-cheap], mid: [pi:example-gateway/model-mid] }
+steps:
+  - id: release
+    gate: true
+    waivable: false
+    model_tier: mid
+    budget: { wall_minutes: 135, tool_minutes: 120 }
+    resources: { admission: heavy }
+  - id: verify
+    gate: true
+    waivable: false
+    budget: { wall_minutes: 30 }
+  - id: deploy
+    gate: true
+    waivable: false
+    model_tier: mid
+    budget: { tool_minutes: 30 }
+    resources: { admission: heavy }

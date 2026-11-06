@@ -1,0 +1,63 @@
+===== failures =====
+FAIL e2e/polyforge-messages.mjs: PM19 inline @project#number binding, links and own-message quote — one send expected for "BIND-ONE @acme#272 now"
+FAIL e2e/polyforge-messages.mjs: PM19 — @project#number in the text binds about_wi (known project, quote lines excluded, first wins), every bubble token links to the watch read, own bubbles quote, and no anchor field remains
+host loadavg 1m/5m/15m: 7.29 / 9.77 / 7.97
+re-run: npm run test:e2e:all -- polyforge-messages.mjs
+
+===== summary =====
+PASS agent-language-293.mjs 17s
+PASS chat-minimap-heading-334.mjs 4s
+PASS claude-250.mjs 15s
+PASS claude-composer-272.mjs 70s
+PASS claude-context-363.mjs 7s
+PASS claude-fork-370.mjs 23s
+PASS claude-image-270.mjs 18s
+PASS claude-session-219.mjs 21s
+PASS claude-subagent-253.mjs 35s
+PASS context-after-compact-368.mjs 8s
+PASS deploy-install-channel.mjs 7s
+PASS deploy-pf-bin.mjs 1s
+PASS deploy-served-installed.mjs 5s
+PASS deploy-service-shape.mjs 82s
+PASS deploy-tunnel-dead-connector.mjs 6s
+PASS deploy-tunnel-variants.mjs 21s
+PASS deploy-tunnel.mjs 5s
+PASS machine-load.mjs 10s
+PASS manual-fetch.mjs 73s
+PASS pdf-page-fragment.mjs 8s
+PASS polyforge-210.mjs 9s
+PASS polyforge-238.mjs 21s
+PASS polyforge-271.mjs 8s
+PASS polyforge-cards.mjs 85s
+PASS polyforge-config-255.mjs 23s
+PASS polyforge-config-290.mjs 8s
+PASS polyforge-config-layout.mjs 5s
+PASS polyforge-config-panel.mjs 33s
+PASS polyforge-config-simplify-212.mjs 8s
+PASS polyforge-config-viewport.mjs 2s
+PASS polyforge-graph.mjs 14s
+PASS polyforge-memory-panel.mjs 45s
+PASS polyforge-messages-analysis-v2.mjs 16s
+PASS polyforge-messages-contacts.mjs 12s
+PASS polyforge-messages-groups-223.mjs 18s
+PASS polyforge-messages-prompt-281.mjs 23s
+FAIL polyforge-messages.mjs 70s
+PASS polyforge-panel-213.mjs 9s
+PASS polyforge-panels-123.mjs 13s
+PASS polyforge-settings.mjs 83s
+PASS polyforge-task-report-194.mjs 26s
+PASS polyforge-widget.mjs 3s
+PASS polyforge-work-items-203.mjs 31s
+PASS polyforge-work-tab-163.mjs 71s
+PASS polyforge-workflow-216.mjs 18s
+PASS polyforge.mjs 115s
+PASS run.mjs 71s
+PASS session-stall-recovery.mjs 30s
+PASS terminal.mjs 13s
+PASS ui-polish-198.mjs 16s
+PASS verify-scope-acceptance.mjs 0s
+PASS w348-cell-page.mjs 3s
+PASS w364-cell-master-detail.mjs 6s
+PASS w367-default-cell-pinned.mjs 3s
+53/54 passed in 405s
+e2e/all: removed 53 passing suite dist dir(s) under .next/e2e, kept 1 failed for re-run

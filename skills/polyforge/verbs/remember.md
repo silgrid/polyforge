@@ -80,8 +80,9 @@ Only the workflow's last step writes a memory: the work item's ONE
 policy — cli.toml `[memory_policy."<path>".<entry>]`, `verbs/init.md`; an out-of-policy lesson worth
 keeping carries a "建议新增条目：…" line and the `policy-proposal` tag). A
 step agent holds no aihub credential path: inside a step (`PF_WI_ID` and
-`PF_DAEMON_ID` set) the same `pf remember` command goes synchronously to
-the daemon (`POST /step/memories`). The daemon accepts type
+`PF_DAEMON_ID` set) `pf remember` is refused (DAEMON-403): the step stores
+it with `pf step remember --type experience.wrap --title <t> <content>`,
+one call to the daemon. The daemon accepts type
 `experience.wrap` only, requires `--title`, refuses a body over 2 KB or a
 credential value (the CLI checks the same first), attributes the memory
 to the step's own work item and project, and stores it with an
@@ -100,7 +101,7 @@ visibility V)`.
 
 | Code | When | What to tell the user |
 |---|---|---|
-| `AUTH-401` | api key missing or invalid | Credential rejected — check `--api-key` / `PF_API_KEY` / the config's `api_key`. |
+| `AUTH-401` | api key missing or invalid | Credential rejected — check the Cell's `api_key` (`pf [--profile NAME] config set api_key`). |
 | `MEM-400` | Blank content, missing `--type`, a type whose kind is not one of the server's kinds, or an invalid visibility | Give real content, a `kind.name` type with a kind the error names, and a valid visibility — read `detail` for the exact field. |
 | `CORE-404` | Unknown project (the server's project lookup) | The project does not exist — check `--project` (there is no default project; it must also be listed in a cli.toml `[workspace]` section). |
 | `MEM-403` | You lack the writer (or maintainer) role on the project | Ask a project maintainer for the writer role; nothing was saved. |
@@ -111,3 +112,9 @@ refusal before any wire call — missing `--type`, missing content, a
 missing `--project`, or a `--project` that is not listed under a
 `[workspace."<path>"]` section of cli.toml (the message names the mapped
 projects; `pf doctor` checks the mapping).
+
+Transport: like every data-plane verb this one goes through the local daemon
+to the resolved Cell's AIHub connection (`--profile NAME` / `PF_PROFILE` /
+the cwd's mapped Cell / `default`); `--server`, `--api-key`, `PF_SERVER` and
+`PF_API_KEY` are refused, and with the daemon down it fails with
+`DAEMON-410` (`pf daemon ensure`, then retry once).

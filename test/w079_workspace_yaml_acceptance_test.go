@@ -35,13 +35,17 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 )
 
-// The autopilot bundle's pinned heads (frontmatter at HEAD): the
-// defaults head and the verification step's step-level head (fix has no
-// list of its own). Kept-face guards assert these stay in effect
-// wherever the yaml layer is silent.
+// The vehicle lane's pinned heads: the micro bundle's defaults head and the
+// review step's step-level head in the w079 daemons' copy
+// (reviewStepListWorkflowsDir; fix has no list of its own). Kept-face
+// guards assert these stay in effect wherever the yaml layer is silent.
+// The step-level list names no placeholder (`example-…`): a placeholder
+// step list is undeclared since and would fall through to
+// the project default.
 const (
-	w079DefaultsHead         = "example-gateway/model-a"
-	w079VerificationStepHead = "example-gateway/model-a"
+	w079DefaultsHead   = "example-gateway/model-a"
+	w079DefaultsSecond = "example-claude/claude-opus-5"
+	w079ReviewStepHead = "lane-step/model-a"
 )
 
 // ---------------------------------------------------------------------------
@@ -133,6 +137,7 @@ func w079Pf(t *testing.T, inst *v1Install, e w079Env, args ...string) (string, i
 	}
 	cmd.Env = env
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := 0
 	if err := cmd.Run(); err != nil {
@@ -319,7 +324,9 @@ func w079Run(t *testing.T, d *w113Daemon, inst *v1Install, ws, wi string) string
 func w079Setup(t *testing.T, inst *v1Install, wss ...w113WS) *w113Daemon {
 	t.Helper()
 	cfg := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"), inst.url, inst.adminKey, "", wss)
-	d := w113NewDaemon(t, inst, w113DOptConfig(cfg))
+	// micro's review keeps a bundle step list of its own in this copy
+	// (reviewStepListWorkflowsDir): the precedence chain needs one
+	d := w113NewDaemon(t, inst, w113DOptConfig(cfg), w113DOptArgs("--workflows-dir", reviewStepListWorkflowsDir(t)))
 	d.start()
 	t.Cleanup(d.stop)
 	return d
@@ -342,15 +349,15 @@ func TestW079AbsentAndEmptyYamlRunExactlyAsHead(t *testing.T) {
 	ws := t.TempDir()
 	d := w079Setup(t, inst, w113WS{key: ws, projects: []string{"e2e", "w079other"}})
 
-	wiA := w113NewWI(t, inst, "e2e", "w079 absent-yaml run exactly as head", envelopeAutopilot())
+	wiA := w113NewWI(t, inst, "e2e", "w079 absent-yaml run exactly as head", envelopeMicro())
 	capA := w079Run(t, d, inst, ws, wiA)
 
 	w079Yaml(t, ws, "# w079: comments only — no sections at all.\n# a second comment line.\n")
-	wiB := w113NewWI(t, inst, "e2e", "w079 comments-only yaml is a no-op", envelopeAutopilot())
+	wiB := w113NewWI(t, inst, "e2e", "w079 comments-only yaml is a no-op", envelopeMicro())
 	capB := w079Run(t, d, inst, ws, wiB)
 
 	w079Yaml(t, ws, "steps:\n  w079other:\n    default: { models: [pi:w079-other-model] }\n")
-	wiC := w113NewWI(t, inst, "e2e", "w079 unlisted project keeps bundle models", envelopeAutopilot())
+	wiC := w113NewWI(t, inst, "e2e", "w079 unlisted project keeps bundle models", envelopeMicro())
 	capC := w079Run(t, d, inst, ws, wiC)
 
 	for name, capDir := range map[string]string{"absent yaml": capA, "comments-only yaml": capB, "project not listed": capC} {
@@ -366,14 +373,11 @@ func TestW079AbsentAndEmptyYamlRunExactlyAsHead(t *testing.T) {
 		if err != nil || string(marker) != "registry marker\n" {
 			t.Fatalf("%s: the registry clone did not land: %q, %v", name, marker, err)
 		}
-		if got := w079Model(t, capDir, "verification"); got != w079VerificationStepHead {
-			t.Fatalf("%s: verification model %q, want the bundle step-level head %q", name, got, w079VerificationStepHead)
+		if got := w079Model(t, capDir, "review"); got != w079ReviewStepHead {
+			t.Fatalf("%s: review model %q, want the bundle step-level head %q", name, got, w079ReviewStepHead)
 		}
 		if got := w079Model(t, capDir, "fix"); got != w079DefaultsHead {
 			t.Fatalf("%s: fix model %q, want the bundle defaults head %q", name, got, w079DefaultsHead)
-		}
-		if got := w079Model(t, capDir, "grill"); got != w079DefaultsHead {
-			t.Fatalf("%s: grill model %q, want the bundle defaults head %q", name, got, w079DefaultsHead)
 		}
 	}
 }
@@ -381,9 +385,9 @@ func TestW079AbsentAndEmptyYamlRunExactlyAsHead(t *testing.T) {
 // TestW079PerProjectModelPrecedence pins the chain inside ONE workspace
 // serving three projects: project step-id list > bundle step list > project
 // default > bundle defaults. e2e declares default + fix (the fix step
-// gets the fix list, verification keeps its own step list, the rest get
-// the default), acme-ops declares only a default (it governs every step
-// without a list of its own, never a step's own list — polyforge#164),
+// gets the fix list, review keeps its own step list), acme-ops declares
+// only a default (it governs every step without a list of its own — fix —,
+// never a step's own list — polyforge#164),
 // and a third project the yaml does not list stays bundle-only — no
 // cross-project leak.
 func TestW079PerProjectModelPrecedence(t *testing.T) {
@@ -400,34 +404,32 @@ func TestW079PerProjectModelPrecedence(t *testing.T) {
 `)
 	d := w079Setup(t, inst, w113WS{key: ws, projects: []string{"e2e", "acme-ops", "w079third"}})
 
-	wiE := w113NewWI(t, inst, "e2e", "w079 e2e models", envelopeAutopilot())
-	wiI := w113NewWI(t, inst, "acme-ops", "w079 acme-ops models", envelopeAutopilot())
-	wiT := w113NewWI(t, inst, "w079third", "w079 unlisted project models", envelopeAutopilot())
+	wiE := w113NewWI(t, inst, "e2e", "w079 e2e models", envelopeMicro())
+	wiI := w113NewWI(t, inst, "acme-ops", "w079 acme-ops models", envelopeMicro())
+	wiT := w113NewWI(t, inst, "w079third", "w079 unlisted project models", envelopeMicro())
 	capE := w079Run(t, d, inst, ws, wiE)
 	capI := w079Run(t, d, inst, ws, wiI)
 	capT := w079Run(t, d, inst, ws, wiT)
 
 	for step, want := range map[string]string{
-		"grill": "w079-e2e-def", "verification": w079VerificationStepHead,
-		"fix": "w079-e2e-code-a",
+		"review": w079ReviewStepHead,
+		"fix":    "w079-e2e-code-a",
 	} {
 		if got := w079Model(t, capE, step); got != want {
 			t.Fatalf("e2e %s model %q, want %q (project step id > bundle step > project default)", step, got, want)
 		}
 	}
-	for _, step := range []string{"grill", "fix"} {
-		if got := w079Model(t, capI, step); got != "w079-acme-ops-def" {
-			t.Fatalf("acme-ops %s model %q, want its project default w079-acme-ops-def", step, got)
-		}
+	if got := w079Model(t, capI, "fix"); got != "w079-acme-ops-def" {
+		t.Fatalf("acme-ops fix model %q, want its project default w079-acme-ops-def", got)
 	}
-	if got := w079Model(t, capI, "verification"); got != w079VerificationStepHead {
-		t.Fatalf("acme-ops verification model %q, want its own step-level head %q (a step list outranks the project default)", got, w079VerificationStepHead)
+	if got := w079Model(t, capI, "review"); got != w079ReviewStepHead {
+		t.Fatalf("acme-ops review model %q, want its own step-level head %q (a step list outranks the project default)", got, w079ReviewStepHead)
 	}
-	if got := w079Model(t, capT, "verification"); got != w079VerificationStepHead {
-		t.Fatalf("unlisted project verification model %q, want the bundle step-level head %q", got, w079VerificationStepHead)
+	if got := w079Model(t, capT, "review"); got != w079ReviewStepHead {
+		t.Fatalf("unlisted project review model %q, want the bundle step-level head %q", got, w079ReviewStepHead)
 	}
-	if got := w079Model(t, capT, "grill"); got != w079DefaultsHead {
-		t.Fatalf("unlisted project grill model %q, want the bundle defaults head %q", got, w079DefaultsHead)
+	if got := w079Model(t, capT, "fix"); got != w079DefaultsHead {
+		t.Fatalf("unlisted project fix model %q, want the bundle defaults head %q", got, w079DefaultsHead)
 	}
 	if raw := w079CapsuleRaw(t, capT); strings.Contains(raw, "w079-e2e") || strings.Contains(raw, "w079-acme-ops") {
 		t.Fatalf("the unlisted project's capsule leaks another project's models: %s", raw)
@@ -442,22 +444,20 @@ func TestW079PerProjectModelPrecedence(t *testing.T) {
 }
 
 // TestW079ProjectStepOnlyFallsThroughToBundle pins the scoping of a
-// step-id-only entry: a `grill` list hits the grill step only, while the
-// other steps keep the bundle's own resolution.
+// step-id-only entry: a `review` list hits the review step only (it
+// outranks review's own bundle step list), while fix — unlisted, with no
+// bundle list of its own — keeps the bundle defaults head.
 func TestW079ProjectStepOnlyFallsThroughToBundle(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
-	w079Yaml(t, ws, "steps:\n  e2e:\n    grill: { models: [pi:w079-spec-x] }\n")
+	w079Yaml(t, ws, "steps:\n  e2e:\n    review: { models: [pi:w079-spec-x] }\n")
 	d := w079Setup(t, inst, w113WS{key: ws, projects: []string{"e2e"}})
-	capDir := w079Run(t, d, inst, ws, w113NewWI(t, inst, "e2e", "w079 step-only list", envelopeAutopilot()))
-	if got := w079Model(t, capDir, "grill"); got != "w079-spec-x" {
-		t.Fatalf("grill model %q, want w079-spec-x", got)
+	capDir := w079Run(t, d, inst, ws, w113NewWI(t, inst, "e2e", "w079 step-only list", envelopeMicro()))
+	if got := w079Model(t, capDir, "review"); got != "w079-spec-x" {
+		t.Fatalf("review model %q, want w079-spec-x (the project step-id list outranks the bundle step list)", got)
 	}
 	if got := w079Model(t, capDir, "fix"); got != w079DefaultsHead {
 		t.Fatalf("fix model %q, want the bundle defaults head %q", got, w079DefaultsHead)
-	}
-	if got := w079Model(t, capDir, "verification"); got != w079VerificationStepHead {
-		t.Fatalf("verification model %q, want its bundle step-level head %q", got, w079VerificationStepHead)
 	}
 }
 
@@ -478,19 +478,19 @@ func TestW079OneDaemonTwoWorkspacesTwoYamls(t *testing.T) {
 	w079Yaml(t, wsB, "steps:\n  acme-ops:\n    fix: { models: [pi:w079b-code] }\n")
 	d := w079Setup(t, inst, w113WS{key: wsA, projects: []string{"e2e"}}, w113WS{key: wsB, projects: []string{"acme-ops"}})
 
-	wiA := w113NewWI(t, inst, "e2e", "w079 two-workspace claim A", envelopeAutopilot())
-	wiB := w113NewWI(t, inst, "acme-ops", "w079 two-workspace claim B", envelopeAutopilot())
+	wiA := w113NewWI(t, inst, "e2e", "w079 two-workspace claim A", envelopeMicro())
+	wiB := w113NewWI(t, inst, "acme-ops", "w079 two-workspace claim B", envelopeMicro())
 	capA := w079Run(t, d, inst, wsA, wiA)
 	capB := w079Run(t, d, inst, wsB, wiB)
 
-	if got := w079Model(t, capA, "grill"); got != "w079a-flow" {
-		t.Fatalf("A grill model %q, want w079a-flow", got)
+	if got := w079Model(t, capA, "fix"); got != "w079a-flow" {
+		t.Fatalf("A fix model %q, want w079a-flow", got)
 	}
 	if got := w079Model(t, capB, "fix"); got != "w079b-code" {
 		t.Fatalf("B fix model %q, want w079b-code", got)
 	}
-	if got := w079Model(t, capB, "grill"); got != w079DefaultsHead {
-		t.Fatalf("B grill model %q, want the bundle defaults head %q", got, w079DefaultsHead)
+	if got := w079Model(t, capB, "review"); got != w079ReviewStepHead {
+		t.Fatalf("B review model %q, want the bundle step-level head %q", got, w079ReviewStepHead)
 	}
 	// Neither capsule carries a candidate audit (the effective-candidates
 	// field was deleted with the audit's dead-code sweep — the yaml
@@ -514,14 +514,14 @@ func TestW079YamlEditGovernsNextClaimNoRestart(t *testing.T) {
 	d := w079Setup(t, inst, w113WS{key: ws, projects: []string{"e2e"}})
 	pid := d.cmd.Process.Pid
 
-	capA := w079Run(t, d, inst, ws, w113NewWI(t, inst, "e2e", "w079 edit first claim", envelopeAutopilot()))
-	if got := w079Model(t, capA, "grill"); got != "w079-edit-v1" {
-		t.Fatalf("claim 1 grill model %q, want w079-edit-v1", got)
+	capA := w079Run(t, d, inst, ws, w113NewWI(t, inst, "e2e", "w079 edit first claim", envelopeMicro()))
+	if got := w079Model(t, capA, "fix"); got != "w079-edit-v1" {
+		t.Fatalf("claim 1 fix model %q, want w079-edit-v1", got)
 	}
 	w079Yaml(t, ws, "steps:\n  e2e:\n    default: { models: [pi:w079-edit-v2] }\n")
-	capB := w079Run(t, d, inst, ws, w113NewWI(t, inst, "e2e", "w079 edit second claim", envelopeAutopilot()))
-	if got := w079Model(t, capB, "grill"); got != "w079-edit-v2" {
-		t.Fatalf("claim 2 grill model %q, want w079-edit-v2 — the edit must govern the next claim", got)
+	capB := w079Run(t, d, inst, ws, w113NewWI(t, inst, "e2e", "w079 edit second claim", envelopeMicro()))
+	if got := w079Model(t, capB, "fix"); got != "w079-edit-v2" {
+		t.Fatalf("claim 2 fix model %q, want w079-edit-v2 — the edit must govern the next claim", got)
 	}
 	if raw := w079CapsuleRaw(t, capB); strings.Contains(raw, "w079-edit-v1") {
 		t.Fatalf("claim 2's audit carries the pre-edit token (raw %s)", raw)
@@ -536,7 +536,9 @@ func TestW079YamlEditGovernsNextClaimNoRestart(t *testing.T) {
 // included) refuses the work item BEFORE the aihub claim — `pf submit`
 // surfaces the typed DAEMON-414 naming .polyforge.yaml, the WI stays
 // queued (never even transiently running), no capsule exists, and the
-// daemon keeps serving.
+// daemon keeps serving. (A per-step key naming no installed step is
+// stale, not invalid, since it refuses nothing and
+// `pf doctor` warns — TestW224SummarizeKeyValidates.)
 func TestW079InvalidYamlRefusesWithoutClaim(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
@@ -551,8 +553,6 @@ func TestW079InvalidYamlRefusesWithoutClaim(t *testing.T) {
 		{"old shape projects", "projects:\n  e2e:\n    repos: []\n", []string{"projects"}},
 		{"old shape workflow_defaults", "workflow_defaults:\n  model_candidates: [pi:a]\n", []string{"workflow_defaults"}},
 		{"unknown top-level key", "model:\n  e2e:\n    default: { models: [pi:a] }\n", []string{"model"}},
-		{"unknown step id", "steps:\n  e2e:\n    w079bogusstep: { models: [pi:a] }\n", []string{"steps.e2e.w079bogusstep"}},
-		{"retired kind key", "steps:\n  e2e:\n    gate: { models: [pi:a] }\n", []string{"steps.e2e.gate"}},
 		{"legacy top-level models", "models:\n  e2e:\n    default: [a]\n", []string{`unknown top-level key "models"`}},
 		{"retired harness key", "steps:\n  e2e:\n    fix: { models: [pi:a], harness: claude }\n", []string{"steps.e2e.fix.harness: the `harness` key was removed (polyforge#175)"}},
 		{"unprefixed candidate", "steps:\n  e2e:\n    fix: { models: [pi:a, example-gateway/model-a] }\n", []string{`steps.e2e.fix.models[1]: "example-gateway/model-a" needs a harness prefix (pi:… or claude:…)`}},
@@ -576,7 +576,7 @@ func TestW079InvalidYamlRefusesWithoutClaim(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w079Yaml(t, ws, c.yaml)
-			wi := w113NewWI(t, inst, "e2e", "w079 invalid yaml: "+c.name, envelopeAutopilot())
+			wi := w113NewWI(t, inst, "e2e", "w079 invalid yaml: "+c.name, envelopeMicro())
 			out, code := d.pf(inst, "submit", wi)
 			w079RefusalOutput(t, wi, out, code, append([]string{".polyforge.yaml"}, c.needles...)...)
 			refused = append(refused, w079RefusedWI{name: c.name, wi: wi, capDir: w079Capsule(t, inst, ws, wi)})
@@ -596,7 +596,7 @@ func TestW079FixYamlAndResubmitIsClean(t *testing.T) {
 	w079Yaml(t, ws, "steps:\n  e2e:\n    default: { models: [pi:w079-ok] }\n   BAD KEY\n")
 	d := w079Setup(t, inst, w113WS{key: ws, projects: []string{"e2e"}})
 
-	wi := w113NewWI(t, inst, "e2e", "w079 fix-and-resubmit cycle", envelopeAutopilot())
+	wi := w113NewWI(t, inst, "e2e", "w079 fix-and-resubmit cycle", envelopeMicro())
 	out, code := d.pf(inst, "submit", wi)
 	w079Refused(t, d, inst, ws, wi, out, code, ".polyforge.yaml")
 	if ents, err := os.ReadDir(filepath.Join(ws, "capsules")); err == nil && len(ents) != 0 {
@@ -608,8 +608,8 @@ func TestW079FixYamlAndResubmitIsClean(t *testing.T) {
 	if got := w113TopLevel(t, filepath.Join(ws, "capsules")); len(got) != 1 || got[0] != wiPathName(t, inst, wi) {
 		t.Fatalf("capsules dir holds %v, want exactly [%s]", got, wi)
 	}
-	if got := w079Model(t, capDir, "grill"); got != "w079-reclaimed" {
-		t.Fatalf("post-fix grill model %q, want w079-reclaimed", got)
+	if got := w079Model(t, capDir, "fix"); got != "w079-reclaimed" {
+		t.Fatalf("post-fix fix model %q, want w079-reclaimed", got)
 	}
 }
 
@@ -627,10 +627,10 @@ func TestW079InvalidYamlOfOneWorkspaceDoesNotBlockAnother(t *testing.T) {
 	}
 	w079Yaml(t, wsA, "projects: {}\n")
 	d := w079Setup(t, inst, w113WS{key: wsA, projects: []string{"e2e"}}, w113WS{key: wsB, projects: []string{"acme-ops"}})
-	wiA := w113NewWI(t, inst, "e2e", "w079 bad workspace", envelopeAutopilot())
+	wiA := w113NewWI(t, inst, "e2e", "w079 bad workspace", envelopeMicro())
 	out, code := d.pf(inst, "submit", wiA)
 	w079Refused(t, d, inst, wsA, wiA, out, code, ".polyforge.yaml")
-	w079Run(t, d, inst, wsB, w113NewWI(t, inst, "acme-ops", "w079 good workspace", envelopeAutopilot()))
+	w079Run(t, d, inst, wsB, w113NewWI(t, inst, "acme-ops", "w079 good workspace", envelopeMicro()))
 }
 
 // w079ProviderErr is the stderr text a crashing fake harness leaves behind:
@@ -644,18 +644,26 @@ const w079ProviderErr = `upstream provider error: model "fake/w079-missing" not 
 
 // TestW079RotationAdvancesAndCapsOnEffectiveList pins the rotation
 // composition on the post-precedence list: two provider-class infra
-// failures advance the pointer along the yaml per-project step-id list (two
-// crashes are inside the recovery budget; a third would trip the storm
-// guard), and the pin is capped at the list end — never beyond, never
-// wrapping. RED pre-implementation (the effective list is the bundle's).
+// failures advance the pointer along the yaml per-project step-id list,
+// and the pin is capped at the list end — never beyond, never wrapping.
+// Under workflow contract 4 (design #483 §7) a model-class death switches
+// to the next candidate at once and, with no candidate left, BLOCKS the
+// step (no same-model retry): on a two-entry list the second failure lands
+// on the last entry and parks the work item with a "no usable model"
+// reason naming it; the owner's `pf resume` re-dispatches the step on that
+// same last entry (the cap holds across the resume). RED
+// pre-implementation (the effective list is the bundle's).
 func TestW079RotationAdvancesAndCapsOnEffectiveList(t *testing.T) {
 	cases := []struct {
 		name      string
 		yamlEntry string
 		want      string
+		// capped: the second failure spends the list, so the step blocks
+		// on its last entry and the scenario resumes it
+		capped bool
 	}{
-		{"two failures pin the third entry", "fix: { models: [pi:w079r-a, pi:w079r-b, pi:w079r-c] }", "w079r-c"},
-		{"two failures on a two-entry list cap at the end", "fix: { models: [pi:w079r-a, pi:w079r-b] }", "w079r-b"},
+		{"two failures pin the third entry", "fix: { models: [pi:w079r-a, pi:w079r-b, pi:w079r-c] }", "w079r-c", false},
+		{"two failures on a two-entry list cap at the end", "fix: { models: [pi:w079r-a, pi:w079r-b] }", "w079r-b", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -671,15 +679,19 @@ func TestW079RotationAdvancesAndCapsOnEffectiveList(t *testing.T) {
 
 			wi := w113NewWI(t, inst, "e2e", "w079 rotation on the effective list: "+c.name,
 				[]map[string]any{
-					{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-					{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "crash": "before", "crash_stderr": w079ProviderErr},
-					{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "crash": "before", "crash_stderr": w079ProviderErr},
-					{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-					{"do": "envelope", "id": "verification", "outcome": "completed"},
+					{"do": "envelope", "id": "fix", "outcome": "completed", "crash": "before", "crash_stderr": w079ProviderErr},
+					{"do": "envelope", "id": "fix", "outcome": "completed", "crash": "before", "crash_stderr": w079ProviderErr},
+					{"do": "envelope", "id": "fix", "outcome": "completed"},
+					{"do": "envelope", "id": "review", "outcome": "completed"},
 				})
 			d.pfWant(inst, -1, "submit", wi)
 			capDir := w079Capsule(t, inst, ws, wi)
 			w113WaitCapsule(t, capDir, 90*time.Second)
+			if c.capped {
+				w079RequireCappedBlock(t, capDir, c.want)
+				inst.waitWIStatus(t, wi, "blocked", 60*time.Second)
+				d.pfWant(inst, -1, "resume", wi)
+			}
 			w113WaitCompleted(t, capDir, 300*time.Second)
 			inst.waitWIStatus(t, wi, "wrapped", 90*time.Second)
 
@@ -694,12 +706,41 @@ func TestW079RotationAdvancesAndCapsOnEffectiveList(t *testing.T) {
 	}
 }
 
-// TestW079GateFailRewindResetsEffectiveHead pins INV-1g's composition
-// with the yaml-derived list: one provider failure advances the pin to
-// the list's second entry, then a gate FAIL on verification rewinds to
-// fix and RESETS the pin to the effective list's head. RED
-// pre-implementation.
-func TestW079GateFailRewindResetsEffectiveHead(t *testing.T) {
+// w079RequireCappedBlock asserts the cap of contract 4's rotation on the
+// effective list: the model-class death on its last entry blocked the
+// work item at once (no candidate left, design #483 §7) with a "no usable
+// model" reason naming that entry, the step still pins it — never beyond
+// the list, never wrapped back to its head — and fix was dispatched only
+// twice (no same-model retry of the model error).
+func w079RequireCappedBlock(t *testing.T, capDir, last string) {
+	t.Helper()
+	waitExecution(t, capDir, 180*time.Second, "the model-class death on the list's last entry never blocked", func(x *executionView) bool {
+		return x.WorkflowStatus == "blocked"
+	})
+	reason := readExecution(t, capDir).BlockedReason
+	for _, needle := range []string{"no usable model", last} {
+		if !strings.Contains(reason, needle) {
+			t.Fatalf("the capped block reason %q does not name %q", reason, needle)
+		}
+	}
+	if got := w079Model(t, capDir, "fix"); got != last {
+		t.Fatalf("fix model at the block %q, want the list's last entry %q — the pin must cap at the end, never wrap", got, last)
+	}
+	if n := len(w222Steps(t, capDir, "fix")); n != 2 {
+		t.Fatalf("fix was dispatched %d times before the block, want 2 (a model-class death with no candidate left blocks: no same-model retry)", n)
+	}
+}
+
+// TestW079GateFailRewindKeepsTheEffectiveCandidate pins the rewind's
+// composition with the yaml-derived list: one provider failure advances
+// the pin along the EFFECTIVE (yaml) list to its second entry, then a gate
+// FAIL on review rewinds to fix. Since the rewound
+// target resumes its round and keeps its candidate (the pointer is no
+// longer reset to the head, which would move the re-entry off the session
+// it resumes), so the guarantee is: the re-entry stays on the effective
+// list's entry the round ran on — never the bundle's list, never past the
+// list — and it resumes that round's session.
+func TestW079GateFailRewindKeepsTheEffectiveCandidate(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
 	w079Yaml(t, ws, "steps:\n  e2e:\n    fix: { models: [pi:w079g-a, pi:w079g-b] }\n")
@@ -711,17 +752,16 @@ func TestW079GateFailRewindResetsEffectiveHead(t *testing.T) {
 	defer d.stop()
 
 	verdict := map[string]any{
-		"error":   "w079 injected gate verdict (fake harness)",
-		"verdict": "FAIL",
+		"fail_reason": "w079 injected gate verdict (fake harness)",
+		"verdict":     "fail",
 	}
-	wi := w113NewWI(t, inst, "e2e", "w079 gate-fail rewind resets the effective head",
+	wi := w113NewWI(t, inst, "e2e", "w079 gate-fail rewind keeps the effective candidate",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "crash": "before", "crash_stderr": w079ProviderErr},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "gate_failed", "output": verdict},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "crash": "before", "crash_stderr": w079ProviderErr},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "gate_failed", "output": verdict},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		})
 	d.pfWant(inst, -1, "submit", wi)
 	capDir := w079Capsule(t, inst, ws, wi)
@@ -733,16 +773,33 @@ func TestW079GateFailRewindResetsEffectiveHead(t *testing.T) {
 	if providerInfra != 1 || gateRewind != 1 {
 		t.Fatalf("fix attempts: %d provider infra, %d gate-fail rewinds; want 1/1 — the archived history the recomputation indexes", providerInfra, gateRewind)
 	}
-	if got := w079Model(t, capDir, "fix"); got != "w079g-a" {
-		t.Fatalf("fix model after the rewind %q, want the effective list head w079g-a (a gate FAIL rewind resets the pointer)", got)
+	if got := w079Model(t, capDir, "fix"); got != "w079g-b" {
+		t.Fatalf("fix model after the rewind %q, want w079g-b — the effective list's entry the rewound round ran on (a resuming target keeps its candidate)", got)
+	}
+	w079RequireResumedRound(t, capDir)
+}
+
+// w079RequireResumedRound asserts the rewind re-entry of fix (its last
+// journaled dispatch) resumed the session of the round the gate judged
+// (the dispatch before it) — the reason the candidate is kept.
+func w079RequireResumedRound(t *testing.T, capDir string) {
+	t.Helper()
+	fix := w222Steps(t, capDir, "fix")
+	if len(fix) < 2 {
+		t.Fatalf("fix dispatches %d, want the judged round and its re-entry: %v", len(fix), fix)
+	}
+	re, judged := fix[len(fix)-1], fix[len(fix)-2]
+	if re["resume"] != true || re["transcript"] != judged["transcript"] {
+		t.Fatalf("the rewind re-entry must resume the judged round's session: re-entry %v, judged round %v", re, judged)
 	}
 }
 
 // TestW079RotationUntouchedWithoutYaml pins the kept face of the
 // rotation criterion: with NO yaml, the exact same crash + gate-fail
-// rewind ladder behaves exactly as at HEAD — the pointer advances on
-// the provider failure, the rewind resets to the bundle step-level
-// list's head. Green before AND after the change.
+// rewind ladder runs on the bundle's list — the pointer advances on the
+// provider failure to the bundle list's second entry, and the rewind
+// re-entry resumes that round on the same candidate
+// instead of resetting to the head. The yaml layer changes nothing here.
 func TestW079RotationUntouchedWithoutYaml(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
@@ -754,17 +811,16 @@ func TestW079RotationUntouchedWithoutYaml(t *testing.T) {
 	defer d.stop()
 
 	verdict := map[string]any{
-		"error":   "w079 injected gate verdict (fake harness)",
-		"verdict": "FAIL",
+		"fail_reason": "w079 injected gate verdict (fake harness)",
+		"verdict":     "fail",
 	}
 	wi := w113NewWI(t, inst, "e2e", "w079 rotation untouched without a yaml",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "crash": "before", "crash_stderr": w079ProviderErr},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "gate_failed", "output": verdict},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "crash": "before", "crash_stderr": w079ProviderErr},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "gate_failed", "output": verdict},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		})
 	d.pfWant(inst, -1, "submit", wi)
 	capDir := w079Capsule(t, inst, ws, wi)
@@ -776,9 +832,10 @@ func TestW079RotationUntouchedWithoutYaml(t *testing.T) {
 	if providerInfra != 1 || gateRewind != 1 {
 		t.Fatalf("fix attempts: %d provider infra, %d gate-fail rewinds; want 1/1", providerInfra, gateRewind)
 	}
-	if got := w079Model(t, capDir, "fix"); got != w079DefaultsHead {
-		t.Fatalf("fix model after the rewind %q, want the bundle list head %q — rotation semantics must stay exactly as today", got, w079DefaultsHead)
+	if got := w079Model(t, capDir, "fix"); got != w079DefaultsSecond {
+		t.Fatalf("fix model after the rewind %q, want the bundle list's second entry %q — the advanced pointer on the bundle's own list, kept by the resuming rewind", got, w079DefaultsSecond)
 	}
+	w079RequireResumedRound(t, capDir)
 }
 
 // TestW079RestartReadsLiveYaml: since polyforge#33 there is no claim-time
@@ -796,10 +853,9 @@ func TestW079RestartReadsLiveYaml(t *testing.T) {
 
 	wi := w113NewWI(t, inst, "e2e", "w079 restart keeps the snapshot",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 8000},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 8000},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		})
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfg), w113DOptSock(sock), w113DOptDataDir(dataDir))
 	d.start()
@@ -1123,7 +1179,7 @@ func TestW079PlacementFollowsCliTomlOnly(t *testing.T) {
 	d.start()
 	defer d.stop()
 
-	wi := w113NewWI(t, inst, "e2e", "w079 placement follows cli.toml only", envelopeAutopilot())
+	wi := w113NewWI(t, inst, "e2e", "w079 placement follows cli.toml only", envelopeMicro())
 	d.pfWant(inst, -1, "submit", wi)
 	capDir := w079Capsule(t, inst, wsY, wi)
 	w113WaitCapsule(t, capDir, 90*time.Second)
@@ -1136,7 +1192,7 @@ func TestW079PlacementFollowsCliTomlOnly(t *testing.T) {
 	}
 	// The read yaml is the MAPPED workspace's (wsY's, absent): the
 	// models stay bundle-only, wsX's flow default governs nothing.
-	if got := w079Model(t, capDir, "grill"); got != w079DefaultsHead {
-		t.Fatalf("grill model %q, want the bundle defaults head %q (wsX's yaml must not govern wsY's claim)", got, w079DefaultsHead)
+	if got := w079Model(t, capDir, "fix"); got != w079DefaultsHead {
+		t.Fatalf("fix model %q, want the bundle defaults head %q (wsX's yaml must not govern wsY's claim)", got, w079DefaultsHead)
 	}
 }

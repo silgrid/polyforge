@@ -120,7 +120,7 @@ func w14Seed(t *testing.T, dataDir string) {
 		"model": "forged-orphan-model", "effort": "high",
 	})
 
-	dir := filepath.Join(dataDir, "events")
+	dir := filepath.Join(dataDir, "cells", "default", "events")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +168,7 @@ func w14PF(t *testing.T, inst *v1Install, sock string, args ...string) (string, 
 		"PF_SERVER="+inst.url, "PF_API_KEY="+inst.adminKey,
 		"PF_USER_ID=usr_root", "PF_DAEMON_SOCKET="+sock)
 	var stdout, stderr strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	if err == nil {
@@ -295,7 +296,7 @@ func TestW14ModelHealthFileRebuild(t *testing.T) {
 	d := newV1Daemon(t, inst)
 	w14Seed(t, d.dataDir)
 	d.start()
-	path := filepath.Join(d.dataDir, "model-health.json")
+	path := filepath.Join(d.dataDir, "cells", "default", "model-health.json")
 	first := w14WaitFile(t, path, 20*time.Second)
 	if !strings.Contains(string(first), "glm-5.3-flash") || !strings.Contains(string(first), "window") {
 		t.Fatalf("model-health.json must carry the profile cells and its window; content: %s", first)
@@ -371,7 +372,7 @@ func TestW14ModelUnhealthyEdgeTriggered(t *testing.T) {
 			addTiny("step_done", map[string]any{"step": "code", "spawn_n": i + 1}, at)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(d.dataDir, "events", "wi-wi_w14_tiny.jsonl"),
+	if err := os.WriteFile(filepath.Join(d.dataDir, "cells", "default", "events", "wi-wi_w14_tiny.jsonl"),
 		[]byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -489,8 +490,8 @@ func TestW14EventCandidateIdentity(t *testing.T) {
 	inst := newV1Install(t)
 	wi := inst.newWI(t, "w14: candidate identity on start and failure",
 		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "error_turn": "provider error: 400 invalid_request_error: messages must alternate"},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
+			{"do": "envelope", "id": "fix", "error_turn": "provider error: 400 invalid_request_error: messages must alternate"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
 		}), nil)
 	d := newV1Daemon(t, inst, optSupervision(supBounds{modelErrorGrace: 2 * time.Second}))
 	d.start()
@@ -503,11 +504,11 @@ func TestW14EventCandidateIdentity(t *testing.T) {
 		var body map[string]any
 		_ = json.Unmarshal(e.Body, &body)
 		switch {
-		case e.Kind == "step_started" && startBody == nil && body["step"] == "grill":
+		case e.Kind == "step_started" && startBody == nil && body["step"] == "fix":
 			startBody = body
-		case e.Kind == "step_failed" && failBody == nil && body["step"] == "grill":
+		case e.Kind == "step_failed" && failBody == nil && body["step"] == "fix":
 			failBody = body
-		case e.Kind == "step_dead" && deadBody == nil && body["step"] == "grill":
+		case e.Kind == "step_dead" && deadBody == nil && body["step"] == "fix":
 			deadBody = body
 		}
 	}
@@ -535,16 +536,15 @@ func TestW14WarningDoesNotReorderDispatch(t *testing.T) {
 	w14Seed(t, d.dataDir)
 	if err := os.WriteFile(filepath.Join(d.workspace, ".polyforge.yaml"), []byte(
 		"steps:\n  e2e:\n"+
-			"    grill: { models: [pi:glm-5.3-flash, pi:claude-opus-5-5:high] }\n"+
 			"    fix: { models: [pi:glm-5.3-flash, pi:claude-opus-5-5:high] }\n"+
-			"    verification: { models: [pi:glm-5.3-flash, pi:claude-opus-5-5:high] }\n"), 0o600); err != nil {
+			"    review: { models: [pi:glm-5.3-flash, pi:claude-opus-5-5:high] }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	d.start()
 	if out := d.pf(t, "ops", "models"); !strings.Contains(out, "glm-5.3-flash") {
 		t.Fatalf("the warning profile must be live before the dispatch; output:\n%s", out)
 	}
-	wi := inst.newWI(t, "w14: warning does not reorder dispatch", envelopeAutopilot(), nil)
+	wi := inst.newWI(t, "w14: warning does not reorder dispatch", envelopeMicro(), nil)
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pf(t, "submit", wi)
 	capDir := d.capsuleDir(wi)

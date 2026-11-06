@@ -169,17 +169,16 @@ func TestGateFailStraightToTerminalRidesPushAndTranscriptSync(t *testing.T) {
 
 	// writeExecVersion lands one execution.json the way the driver's
 	// transition does (atomic tmp+rename, Version bumped).
-	writeExecVersion := func(version int64, status string, out map[string]any) {
+	writeExecVersion := func(version int64, status string) {
 		t.Helper()
 		exec := capsule.Execution{
 			CapsuleID: "cap_wi_test", WorkItemID: "wi_test",
 			CurrentStep: "review", WorkflowStatus: status,
 			Steps: map[string]*capsule.Step{
-				"review": {Status: capsule.StepInProgress, Output: out},
+				"review": {Status: capsule.StepInProgress},
 			},
-			ReviewRounds: map[string]int64{"review": 1},
-			UpdatedAt:    time.Now().UTC().Format(time.RFC3339Nano),
-			Version:      version,
+			UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Version:   version,
 		}
 		blob, err := json.Marshal(exec)
 		if err != nil {
@@ -200,7 +199,7 @@ func TestGateFailStraightToTerminalRidesPushAndTranscriptSync(t *testing.T) {
 
 	// 1. the step_start transition (v1: running, review in_progress) —
 	// the driver commits it BEFORE the dispatch is spawned.
-	writeExecVersion(1, capsule.WorkflowStatusRunning, nil)
+	writeExecVersion(1, capsule.WorkflowStatusRunning)
 	m.link.Fact(supervise.ExecCommitted{Version: 1, Step: "review"})
 
 	// 2. the final gate step's one long dispatch starts.
@@ -235,12 +234,10 @@ func TestGateFailStraightToTerminalRidesPushAndTranscriptSync(t *testing.T) {
 	})
 
 	// 5. the gate FAIL verdict straight to terminal (no on_fail rewind
-	// edge): the ONE transition that carries workflow_status
-	// failed_gate and the verdict output on the gate step.
-	writeExecVersion(2, capsule.WorkflowStatusFailedGate, map[string]any{
-		"verdict":     "FAIL: the fix does not remove the cause",
-		"fail_reason": "the defect is still reachable through a second call site",
-	})
+	// edge): the ONE transition that carries workflow_status failed_gate
+	// (the verdict itself is the gate's section of artifacts/handoff.md,
+	// workflow contract 4).
+	writeExecVersion(2, capsule.WorkflowStatusFailedGate)
 	m.link.Fact(supervise.ExecCommitted{Version: 2, Step: "review"})
 
 	// 6. the driver's Run returns at the terminal status: the handle
@@ -261,10 +258,6 @@ func TestGateFailStraightToTerminalRidesPushAndTranscriptSync(t *testing.T) {
 	})
 	if chain == nil || chain.Steps["review"] == nil {
 		t.Fatalf("the terminal chain state carries no review step: %+v", chain)
-	}
-	if v, _ := chain.Steps["review"].Output["verdict"].(string); v != "FAIL: the fix does not remove the cause" {
-		t.Fatalf("SYMPTOM (#204): the FAIL verdict is not on the chain: review output %v",
-			chain.Steps["review"].Output)
 	}
 	// (b) the transcript rode the terminal boundary: session/ carries
 	// the dispatch's transcript bytes (the #204 audit found it empty).

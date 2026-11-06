@@ -70,7 +70,10 @@ func w174NewEnv(t *testing.T, withMapping bool) *w174Env {
 	// m-<short host>, the real daemon's id, and when this suite runs under a
 	// step agent that daemon's step-origin guard refuses every mutation from
 	// the test (the step's PF_WI_ID/PF_DAEMON_ID sit on our ancestors)
-	if err := os.WriteFile(filepath.Join(e.data, "daemon-id"), []byte("m-w174-scratch\n"), 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Join(e.data, "cells", "default"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.data, "cells", "default", "daemon-id"), []byte("m-w174-scratch\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	body := "server = \"http://127.0.0.1:1\"\napi_key = \"w174key\"\ndaemon_socket = \"" + e.sock + "\"\n"
@@ -372,7 +375,7 @@ func TestW174DaemonHonoursDaemonTable(t *testing.T) {
 			t.Fatalf("ensure argv %q carries %q: the daemon reads the table itself", argv, banned)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "step-agent", "auth.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "cells", "default", "step-agent", "auth.json")); err != nil {
 		t.Fatalf("the step agent dir was not built under harness_root from operator_agent_dir: %v", err)
 	}
 	if got := opsMax(); got != "max: 6" {
@@ -566,9 +569,10 @@ func TestW174EnsureRefusesWithoutMapping(t *testing.T) {
 
 func TestW174EnsureWithoutTmuxStartsOneUnsupervisedDaemon(t *testing.T) {
 	e := w174NewEnv(t, true)
-	// a PATH carrying the daemon's tools but no tmux
+	// a PATH carrying the daemon's tools but no tmux (python3: the daemon
+	// refuses to start without the step scripts' interpreter,)
 	bin := t.TempDir()
-	for _, tool := range []string{"git", "sh"} {
+	for _, tool := range []string{"git", "sh", "python3"} {
 		if p, err := exec.LookPath(tool); err == nil {
 			if err := os.Symlink(p, filepath.Join(bin, tool)); err != nil {
 				t.Fatal(err)

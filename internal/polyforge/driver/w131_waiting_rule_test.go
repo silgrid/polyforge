@@ -17,12 +17,11 @@ import (
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
-// w131LongRunSteps are the four steps, as (bundle, step); the shared
-// deliver is rendered through one delivery lane.
+// w131LongRunSteps are the shipped ones, as (bundle, step). (bug-fix
+// repro and feature-full e2e-author went with the lanes
+// removed; micro's deliver with — its fast evidence
+// is the daemon's run step.)
 var w131LongRunSteps = [][2]string{
-	{"bug-fix", "repro"},
-	{"feature-full", "e2e-author"},
-	{"feature-full", "deliver"},
 	{"release", "verify"},
 }
 

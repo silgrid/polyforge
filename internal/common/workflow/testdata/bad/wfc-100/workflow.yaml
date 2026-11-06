@@ -1,0 +1,4 @@
+name: wfc-100
+description: fixture lane for WFC-100
+steps:
+  - id: work

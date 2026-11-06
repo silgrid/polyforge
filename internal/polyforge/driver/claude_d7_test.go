@@ -80,7 +80,7 @@ func TestClaudeD7Table(t *testing.T) {
 			}
 			tl.Exit(supervise.ExitInfo{Code: c.code})
 			run := &stepRun{sp: StepSpawn{StepID: "fix", SpawnN: 1}, handle: exitedHandle{spawn.ExitInfo{Code: c.code}}, sink: tr}
-			cause, _, detail := classifyWaitFailure(run.exited(nil))
+			cause, _, detail := classifyWaitFailure(run.exited())
 			if cause != c.want {
 				t.Fatalf("cause %q, want %q (detail %s)", cause, c.want, detail)
 			}

@@ -1,7 +1,19 @@
-# ops — daemon operations: status, auto-pull, max jobs, graceful shutdown; end-session recovery
+# ops — daemon operations: status, auto-pull, max jobs, machine role, graceful shutdown; end-session recovery
 
 Execution-plane verb: routed to the local daemon (status / ops-config /
-shutdown routes). Machine-local operations only: what this daemon is
+shutdown routes). The daemon is one Host serving one or more Cells (one
+per AIHub profile): `status`, `auto` and `max` address the Host aggregate
+— the Host ceiling, every Cell's jobs and a block per Cell — unless an
+explicit `pf --profile <name> ops …` targets one Cell (`PF_PROFILE` and
+the cwd never change their scope); `shutdown` always stops the whole Host
+and refuses `--profile`. Each Cell has its own machine id and heartbeat:
+the aggregate's `cells[]` rows carry `machine_id` and `heartbeat`. `max`
+is the Host ceiling over the SUM of every Cell's running jobs and one-off
+tasks (a Cell's optional `cell_max_concurrent_jobs` lowers its own share,
+tasks included; a task spawn at a taken ceiling is refused, nothing queued; Cells with
+queued work start round-robin); the aggregate also reports
+`background_model_calls: {bound: 2, running}` — every Cell's one-off tasks
+share that one bound (summarize calls take none of it). Machine-local operations only: what this daemon is
 managing, whether it also pulls work by itself, and how it stops. The
 daemon has ONE switch and ONE number: `auto` (off = only explicit
 `pf submit`; on = the daemon additionally pulls the aihub ready queue by
@@ -16,9 +28,10 @@ the daemon lives.
 - EN: daemon status / what's this machine running / how many jobs / turn
   auto-pull on / turn auto-pull off / let the machine pick up ready work
   itself / raise the concurrency / shut the daemon down gracefully /
-  pre-upgrade check / start the daemon / the daemon is down
+  pre-upgrade check / start the daemon / the daemon is down / make this the
+  interactive machine / take the interactive role over
 - 中文: 升级前自检 / 启停 / 拉起 daemon / daemon 挂了 / 守护进程状态 / 本机在跑什么 / 开启自动领取 /
-  关闭自动领取 / 优雅停机 / 调大并发
+  关闭自动领取 / 优雅停机 / 调大并发 / 设为交互机器 / 抢交互角色
 - EN (recovery): take over a stuck work item / its daemon is dead / the
   machine holding it is gone / force-end the session
 - 中文 (恢复): 接管卡住的 WI / 持有它的机器挂了 / 强制结束会话
@@ -26,10 +39,11 @@ the daemon lives.
 ## Command
 
 ```
-pf ops status                                        # local jobs + auto/max + queue counters + the model-health summary
+pf ops status                                        # local jobs + auto/max + queue counters + the model-health summary (never reads aihub)
 pf ops models                                        # the model+effort x step profile over the events-retention window (read-only; --json re-emits GET /models)
 pf ops auto [on|off]                                 # bare: show; on: pull the ready queue itself; off: explicit pf submit only
 pf ops max [N]                                       # bare: show; N >= 1: the cap until the daemon restarts or a pf config set/reload changes [daemon] max_concurrent_jobs (last action wins)
+pf ops role [interactive|runner] [--force|--if-unset] # bare: show this machine's role; interactive|runner: ask the heartbeat for it; --force: take interactive over from the machine holding it; --if-unset: only while no operator chose a role
 pf ops shutdown                                      # graceful shutdown
 pf ops end-session <wi> --reason <text>              # force-end a stuck holder's session (aihub-direct)
 pf daemon ensure                                     # START: the daemon under its tmux restart loop (no-op when it answers)
@@ -53,31 +67,62 @@ exit ends the restart loop as well; `pf daemon ensure` starts it again.
 
 The daemon's other production knobs are not ops verbs: they live in the
 `[daemon]` table of `cli.toml` (`step_timeout`, `stall_window`,
-`harness_root`, `operator_agent_dir`, `max_concurrent_jobs`), which the
-daemon reads itself. Change one with `pf config set <key> <value>`; a
-hand edit needs `pf config reload`. The running daemon applies the live
-keys (`step_timeout`, `stall_window`, `max_concurrent_jobs`) without a
-restart, takes the `[workspace]` mapping at the next claim, and reports
-the restart-only keys (`harness_root`, `operator_agent_dir`, and the flat
+`harness_root`, `operator_agent_dir`, `max_concurrent_jobs`,
+`max_concurrent_bars` — how many heavy runs run at once, default 2), which
+the daemon reads itself. Change one with `pf
+config set <key> <value>`; a hand edit needs `pf config reload`. The running daemon applies the live
+keys (`step_timeout`, `stall_window`, `max_concurrent_jobs`,
+`cell_max_concurrent_jobs`, `max_concurrent_bars`, `agent_language`) without a restart, takes the `[workspace]`
+mapping at the next claim, and reports the restart-only keys (`harness_root`, `operator_agent_dir`, and the flat
 `server`/`api_key`/`daemon_socket`) as pending until the next daemon
 start (`pf ops shutdown`, then `pf daemon ensure`). Job cap: `pf ops max
 N` changes the cap at once; a reload that **changes**
 `max_concurrent_jobs` also overrides a temporary `pf ops max` (last
 action wins), while an unrelated reload leaves it in force; every start
 takes the table's `max_concurrent_jobs` (else 4). Bare `pf ops max` shows
-the cap in force.
+the cap in force. A Cell's `cell_max_concurrent_jobs` is applied on its
+reload at once, clamped to the Host ceiling (unset = the Host ceiling); a
+Host-wide `pf ops max` never lifts a Cell above it.
 
 `pf ops auto off` is more than the switch: the queue's not-yet-started
 `origin=auto` entries are REMOVED at the same time (from memory and from
 the persisted `submit-queue.json` a restart replays — auto off = only
 explicit `pf submit`, v2-converge §5), each with a `submit_dropped` event
-in `pf watch`; explicit `pf submit` / chat entries ride untouched, and so
+in `pf watch`; explicit `pf submit` entries ride untouched, and so
 do entries already being claimed. A restart with auto off replays the
 same rule: the previous process's auto entries are dropped, never
 re-admitted.
 
+On a lane that requires acceptance (its `workflow.yaml` key `acceptance`,
+default `required`; a lane that cannot be read counts as requiring it), auto
+pull claims only ready execution tickets whose content lists an acceptance
+criterion (under `## Acceptance` or `## 验收` — the check `pf submit`
+applies); a lane declaring `acceptance: none` is pulled without one. Others
+stay queued, and `pf queue` marks them
+需要交互：缺验收: settle the acceptance with the owner and write it in
+(`pf file edit <id> --content @file`), or submit by hand
+(`verbs/submit.md`).
+
 To see what is ready before turning auto on (or to submit by hand), use
 `pf queue --ready`.
+
+`pf ops role` is the machine-role request. Each Cell's machine registers
+with its aihub as `interactive` (a human works here) or `runner`; exactly
+one interactive machine exists per user, and a second request is refused
+(`interactive_refused`) while another machine holds the role. Bare `pf ops
+role` shows the current role; `pf ops role interactive|runner` asks the
+heartbeat for that role; `--force` takes the interactive role over from the
+machine that holds it (supersession, without interrupting its execution).
+It addresses one Cell, resolved like every Cell-scoped command:
+`--profile`, else `PF_PROFILE`, else the cwd's workspace, else the default
+Cell. The harness adapters already run `pf ops role interactive --if-unset`
+(never `--force`) when a session starts: `--if-unset` applies only while no
+operator ever chose a role on this machine (the choice is kept in the
+data dir across restarts), so an explicit `pf ops role
+runner` is not undone by the next start, compact or clear. Run `--force`
+only on the human's explicit request — it moves the role away from their
+other machine. A step or task process tree
+is refused (`DAEMON-403`).
 
 `pf ops models` is advisory telemetry, never a control: it aggregates the daemon's own `events/` stream into one row per model+effort × step (dispatches, successes, model deaths, rate, mean wall time, non-model deaths and the most recent death cause), states the rolling events-retention window above the table, and prints the current threshold warnings. It is read-only through a `GET /models` route at the same local-peer reachability as `GET /status`; `--json` re-emits that route's document unchanged. It never reorders, pins, skips or blocks a dispatch, and it has no config knob (the thresholds are compiled constants). The same summary appears in `pf ops status` (current warnings, or an explicit no-warnings line, with the pointer back to `pf ops models`).
 
@@ -104,10 +149,8 @@ end), `CORE-410` (terminal).
   jobs table (WORK
   ITEM — the slug, e.g. `polyforge#140`, or the id for a job claimed before
   slugs were recorded —, STATUS, SESSION, SPAWN, AGENT PID, QUESTION, STEP-AGE, LAST-WORK;
-  plus ORIGIN when some job has one — the ORIGIN cell is `chat:<full id>`
-  for a chat submit (the full chat id, never truncated or compacted, so it
-  stays pasteable into `pf watch --chat <id>`), `chat:none` for a chat-kind
-  submit with no chat id, `auto` for an auto-claim, and `-` when the job has
+  plus ORIGIN when some job has one — the ORIGIN cell is `chat` for an
+  interactive submit, `auto` for an auto-claim, and `-` when the job has
   no origin; plus RETRY while some job waits a retry backoff before its
   step's next dispatch — `retry in 3m: upstream_transient`, the death cause
   that owes it; the driver paces consecutive model_error /

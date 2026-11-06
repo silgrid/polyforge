@@ -5,13 +5,14 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/common/capsule"
 )
 
 // v1_s03: operator pause → unpause under the v1.5 session model,
-// driver/envelope edition — the parked envelope agent is the live
-// proof (a driver parked on an open needs_input question is designed
-// stillness, and the pause/resume machinery around it is the thing
-// under test).
+// driver/envelope edition — the parked step is the live proof (a step
+// awaiting the owner on its open `pf ask` is designed stillness, and the
+// pause/resume machinery around it is the thing under test).
 //
 //   - pf pause = the daemon close path carrying session-end(paused,
 //     clean_pause=true): the hub keeps the session row (M3 — paused is
@@ -30,26 +31,23 @@ import (
 //     then a second pause + holder-down resume exercises the restart
 //     reconciliation fallback — the holder daemon restarts (graceful
 //     stop + fresh start on the same data dir/workspace), the attach
-//     fires, the resumed driver parks on the SAME persisted question,
-//     and the owner's answer completes the workflow — the terminal
-//     wiring wraps it.
+//     fires, the resumed driver parks on the SAME open ask, and the
+//     owner's reply (resuming the session) completes the workflow — the
+//     terminal wiring wraps it.
 func TestV1S03PauseResume(t *testing.T) {
 	inst := newV1Install(t)
-	const qid = "q_v1s03"
 	wi := inst.newWI(t, "s03: pause then resume (retained record)",
 		[]map[string]any{
-			// The grill envelope parks the driver on an open question: the
-			// paused-envelope-agent shape the pause close interrupts.
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": qid,
-				"question": "s03: park here until the operator is ready."},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			// The fix step asks the owner and parks: the awaiting shape the
+			// pause close interrupts.
+			askAction("fix", "s03: park here until the operator is ready.", nil),
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
 	d.pf(t, "submit", wi)
-	waitQuestion(t, d, wi, qid, 30*time.Second)
+	askAt := waitAsk(t, d, wi, 30*time.Second)
 	sessBefore := inst.sessionOf(t, wi)
 	if sessBefore.Fingerprint == "" {
 		t.Fatal("running work item carries no session")
@@ -96,10 +94,10 @@ func TestV1S03PauseResume(t *testing.T) {
 	if pausedCommits == 0 {
 		t.Fatal("paused chain never reached the server")
 	}
-	// The pause committed the parked workflow state: the pending question
-	// is durable in the retained capsule.
-	if x := readExecution(t, d.capsuleDir(wi)); x.Steps["grill"].PendingQuestion == nil {
-		t.Fatal("the parked question did not survive into the retained capsule state")
+	// The pause committed the parked workflow state: the open ask is
+	// durable in the retained capsule.
+	if ask := openAskOn(t, d.capsuleDir(wi), "fix", 1); ask.At != askAt {
+		t.Fatalf("the open ask did not survive into the retained capsule state: %+v", ask)
 	}
 
 	// A plain claim of the paused work item is refused typed ALREADY_HELD
@@ -122,30 +120,31 @@ func TestV1S03PauseResume(t *testing.T) {
 	}
 	// The online holder picked the resume up: the work item is RUNNING
 	// again under the SAME session — no daemon restart involved — and the
-	// resumed driver re-poses the SAME persisted question on this
-	// daemon.
+	// resumed driver parks on the SAME open ask on this daemon.
 	inst.waitWIStatus(t, wi, "running", 30*time.Second)
 	if sess = inst.sessionOf(t, wi); sess.Fingerprint != sessBefore.Fingerprint {
 		t.Fatalf("the in-place attach changed the session: %q, want %q", sess.Fingerprint, sessBefore.Fingerprint)
 	}
-	waitQuestion(t, d, wi, qid, 30*time.Second)
-	// No dispatch while the question is open (acceptance 1): the resumed
-	// driver re-poses the SAME persisted question and waits for the
-	// human answer — the spawn journal still carries exactly the one
-	// pre-pause derivation.
+	waitQuestion(t, d, wi, askAt, 30*time.Second)
+	// No dispatch while the ask is open (acceptance 1): the resumed driver
+	// parks on the SAME open ask and waits for the owner's reply — the
+	// spawn journal still carries exactly the one pre-pause derivation.
 	if n := len(spawnJournal(t, d.capsuleDir(wi))); n != 1 {
 		t.Fatalf("the in-place resume must re-pose the question without dispatching; spawn journal = %d entries", n)
 	}
 
 	// The holder-DOWN fallback: a second operator pause re-parks the
-	// work item, the holder daemon stops, and the resume lands with no
-	// daemon reachable (the flag clear alone — the CLI's guidance path).
+	// work item, the holder daemon stops, and the flag clear lands at the
+	// hub with no holder daemon reachable (the CLI's business goes through
+	// a daemon, so the clear comes from another face — here the hub API).
 	// The fresh daemon's restart reconciliation then attaches: the same
 	// continuation, one daemon start later.
 	d.pf(t, "pause", wi)
 	inst.waitWIStatus(t, wi, "paused", 30*time.Second)
 	d.stop()
-	d.pf(t, "resume", wi)
+	if _, err := inst.client.PatchWorkItem(wi, map[string]any{"clean_pause": false}); err != nil {
+		t.Fatalf("holder-down flag clear at the hub: %v", err)
+	}
 	if sess = inst.sessionOf(t, wi); sess.CleanPause {
 		t.Fatalf("holder-down resume did not clear clean_pause: %+v", sess)
 	}
@@ -164,14 +163,14 @@ func TestV1S03PauseResume(t *testing.T) {
 	if sess.Fingerprint != sessBefore.Fingerprint {
 		t.Fatalf("the attach changed the session: %q, want %q", sess.Fingerprint, sessBefore.Fingerprint)
 	}
-	// The resumed driver re-presents the SAME persisted question (the
-	// pending question is durable; the awaiting face is total).
-	waitQuestion(t, d2, wi, qid, 30*time.Second)
+	// The resumed driver re-presents the SAME open ask (the ask record is
+	// durable; the awaiting face is total).
+	waitQuestion(t, d2, wi, askAt, 30*time.Second)
 
-	// The owner's answer completes the parked step (the in-place
-	// re-dispatch continues the SAME session), the workflow runs to its
-	// terminal state and the terminal wiring wraps it.
-	answerQuestion(t, d2, wi, qid, "Ready now: take the lean variant.")
+	// The owner's reply completes the parked step (no process is alive, so
+	// the session is resumed under the next dispatch), the workflow runs to
+	// its terminal state and the terminal wiring wraps it.
+	replyOwner(t, d2, wi, "Ready now: take the lean variant.")
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 	sess = inst.sessionOf(t, wi)
 	if sess.Fingerprint != "" {
@@ -184,36 +183,44 @@ func TestV1S03PauseResume(t *testing.T) {
 		t.Fatalf("chain did not grow past the pause (%d <= %d)", n, pausedCommits)
 	}
 
-	// The continuation's faces: grill done with its archived answer, the
-	// whole autopilot chain done, the spawn journal carrying the pause
-	// interruption (derivation 1 pre-pause, the answer's resume
-	// dispatch of the re-posed question after the whole cycle, then the
-	// fresh dispatches of fix and verification — neither the in-place
-	// resume nor the restart attach dispatched while the question was
-	// open).
+	// The continuation's faces: fix done with the owner's reply on its
+	// ask record, the whole chain done, the spawn journal carrying the
+	// pause interruption (derivation 1 pre-pause, the reply's resume
+	// dispatch after the whole cycle, then the fresh dispatch of review —
+	// neither the in-place resume nor the restart attach dispatched while
+	// the ask was open).
 	x := readExecution(t, d2.capsuleDir(wi))
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		if st := x.Steps[step]; st == nil || st.Status != "done" {
 			t.Fatalf("step %s: %+v, want done", step, st)
 		}
 	}
-	if len(x.Steps["grill"].Answers) != 1 {
-		t.Fatalf("grill's archived answers: %+v", x.Steps["grill"].Answers)
+	if lines, err := capsule.ReadAsks(d2.capsuleDir(wi)); err != nil || capsule.OpenAsk(lines, "fix", 1) != nil || !hasReply(lines, askAt) {
+		t.Fatalf("fix's ask record: the owner's reply must close the ask: %+v %v", lines, err)
 	}
 	spawns := spawnJournal(t, d2.capsuleDir(wi))
-	// The whole post-resume workflow rode the SAME session: the answer's
-	// completion dispatch of the parked grill step (a resume, ordinal 2)
-	// plus the fresh dispatches of fix and verification — neither the
-	// in-place resume nor the restart attach dispatched anything while
-	// the question was open.
-	if len(spawns) != 4 || spawns[1]["resume"] != true || spawns[2]["resume"] != false {
-		t.Fatalf("spawn journal after the cycle: %d entries (want 4, second a resume then fresh dispatches): %v", len(spawns), spawns)
+	// The whole post-resume workflow rode the SAME session: the reply's
+	// completion dispatch of the parked fix step (a resume, ordinal 2)
+	// plus the fresh dispatch of review — neither the in-place resume nor
+	// the restart attach dispatched anything while the ask was open.
+	if len(spawns) != 3 || spawns[1]["resume"] != true || spawns[2]["resume"] != false {
+		t.Fatalf("spawn journal after the cycle: %d entries (want 3, second a resume then a fresh dispatch): %v", len(spawns), spawns)
 	}
 
 	// And no orphan of the paused close survived the whole cycle.
 	waitUntil(t, 10*time.Second, "orphan step processes survived the pause/resume cycle", func() bool {
 		return len(orphanPIDs(wi)) == 0
 	})
+}
+
+// hasReply reports whether the ask record holds a reply to the ask at.
+func hasReply(lines []capsule.AskLine, at string) bool {
+	for _, l := range lines {
+		if l.Kind == capsule.AskKindReply && l.AskAt == at {
+			return true
+		}
+	}
+	return false
 }
 
 // statPerm is os.Stat returning just the permission bits (0 on error).

@@ -128,6 +128,7 @@ func projDelPf(t *testing.T, inst *v1Install, args ...string) (string, string, i
 		"PF_USER_ID=usr_root",
 	)
 	var so, se strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &so, &se
 	code := 0
 	if err := cmd.Run(); err != nil {

@@ -2,15 +2,26 @@
 // (polyforge#159). The daemon runs it as a claude step process
 // (--claude-bin pointing at this same binary): argv[1] == "-p" selects
 // the persona, `--version` answers a version line. It speaks the
-// headless Claude Code surface the runtime's claude spawner pins:
+// headless, interactive Claude Code surface the runtime's claude spawner
+// pins (`--input-format stream-json`, workflow contract v2 §5.2):
 //
-//   - stdin: the whole step prompt, read to EOF;
+//   - stdin: one stream-json user message per line — the first is the
+//     whole step prompt (`{"type":"user","uuid":..,"message":{"role":
+//     "user","content":<prompt>}}`), every later one an owner message;
+//     the pipe stays open for the dispatch;
 //   - stdout: stream-json records (system/init, stream_event deltas,
-//     assistant tool_use, user tool_result, system/api_retry, result);
+//     assistant tool_use, user tool_result, system/api_retry, result;
+//     command_lifecycle acknowledgements naming a message's uuid);
 //   - the native session file $CLAUDE_CONFIG_DIR|$HOME/.claude/projects/
 //     <dashed cwd>/<uuid>.jsonl (--session-id fresh, --resume continues
 //     the same file) — the daemon copies it into the capsule;
-//   - after the result record the process EXITS (unlike pi).
+//   - after a result record (ok or error) the process does NOT exit: it
+//     idles on stdin, answers each further message with one turn of its
+//     own (an assistant text naming the message, its own result), and
+//     exits 0 on stdin EOF — Claude Code 2.1.322 measured by the v2 PR
+//     6a probe. A SIGTERM (the daemon's teardown) exits 143. Both ends
+//     journal an `exit` line with their reason, so a scenario can show
+//     the DAEMON ended the process.
 //
 // The scripted behavior is the SAME plan file and envelope-action
 // indexing as the pi persona (the Nth envelope action fires for spawn
@@ -22,13 +33,17 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -160,8 +175,38 @@ func runClaude() {
 	if resume != "" {
 		session = resume
 	}
-	prompt, _ := io.ReadAll(os.Stdin) // the whole prompt, then EOF
 	wi := os.Getenv("PF_WI_ID")
+	// the daemon's teardown: journal the reason, then exit as claude does
+	term := make(chan os.Signal, 1)
+	signal.Notify(term, syscall.SIGTERM)
+	go func() {
+		<-term
+		claudeExit(wi, "sigterm", 143)
+	}()
+	// stdin: the prompt is the first stream-json user message; later
+	// lines are further messages, read by their own goroutine
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	var first string
+	if sc.Scan() {
+		first = sc.Text()
+	}
+	prompt, initUUID, streamJSON := parseClaudeUserMessage(first)
+	msgs := make(chan claudeUserMessage, 64)
+	go func() {
+		defer close(msgs)
+		for sc.Scan() {
+			if text, id, ok := parseClaudeUserMessage(sc.Text()); ok {
+				// claude acknowledges a message `queued` the moment it reads
+				// it, turn running or not (2.1.322); `started` follows when
+				// the model gets it — absorbed into the running turn after
+				// its current tool call (absorbQueued), or as a turn of its
+				// own when idle (claudeMessageLoop)
+				claudeLifecycle(id, "queued")
+				msgs <- claudeUserMessage{uuid: id, text: text}
+			}
+		}
+	}()
 	entry, ok := spawnJournalSelf(wi)
 	settingsTokenSet, settingsBaseURLSet, settingsCfgDirSet := claudeSettingsEnvFacts()
 	argv := append([]string(nil), os.Args[1:]...)
@@ -178,7 +223,10 @@ func runClaude() {
 		"background_off":  os.Getenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS") == "1",
 		"autoupdater_off": os.Getenv("DISABLE_AUTOUPDATER") == "1",
 		"startup_results": os.Getenv("CLAUDE_CODE_STARTUP_FAILURE_RESULTS") == "1",
-		"pi_agent_dir":    os.Getenv("PI_CODING_AGENT_DIR"),
+		// TodoWrite exists only while Claude Code's Tasks
+		// family is off
+		"tasks_off":    os.Getenv("CLAUDE_CODE_ENABLE_TASKS") == "false",
+		"pi_agent_dir": os.Getenv("PI_CODING_AGENT_DIR"),
 		// the Bash tool timeouts the adapter derived (raw values)
 		"bash_default_timeout_ms": os.Getenv("BASH_DEFAULT_TIMEOUT_MS"),
 		"bash_max_timeout_ms":     os.Getenv("BASH_MAX_TIMEOUT_MS"),
@@ -194,12 +242,16 @@ func runClaude() {
 		"settings_base_url_set":       settingsBaseURLSet,
 		"settings_cfg_dir_set":        settingsCfgDirSet,
 		"prompt_bytes":                len(prompt),
-		"prompt_has_handoff":          strings.Contains(string(prompt), "# Handoff from step"),
-		"prompt_has_reference":        strings.Contains(string(prompt), "Previous attempt (read-only reference)"),
-		"wi":                          wi,
+		"prompt_has_handoff":          strings.Contains(prompt, "# Handoff from step"),
+		"prompt_has_reference":        strings.Contains(prompt, "Previous attempt (read-only reference)"),
+		// v2 PR 6a: the prompt arrived as a stream-json user message (its
+		// uuid the dispatch's pf-init-<spawn_n>), never as raw stdin text
+		"stdin_stream_json": streamJSON,
+		"init_uuid":         initUUID,
+		"wi":                wi,
 	})
 	if ok && entry.SpawnN > 0 {
-		_ = os.WriteFile(filepath.Join("logs", "fakeclaude-prompt-"+strconv.Itoa(entry.SpawnN)+".txt"), prompt, 0o644)
+		_ = os.WriteFile(filepath.Join("logs", "fakeclaude-prompt-"+strconv.Itoa(entry.SpawnN)+".txt"), []byte(prompt), 0o644)
 	}
 	if !ok || entry.SpawnN <= 0 || session == "" {
 		fmt.Fprintln(os.Stderr, "fakeclaude: no spawn-journal identity or session id; exiting")
@@ -222,6 +274,7 @@ func runClaude() {
 		resumed:    resume != "",
 		transcript: native, // the native session; the daemon copies it into the capsule
 		plan:       pl,
+		msgs:       msgs,
 	}
 	d.appendTranscript(map[string]any{"type": "user", "sessionId": session, "spawn_n": d.spawnN, "at": nowStamp(), "message": map[string]any{"role": "user", "content": "(step prompt)"}})
 
@@ -229,17 +282,118 @@ func runClaude() {
 		"tools": []string{"Bash", "Read", "Edit", "Write", "Glob", "Grep", "TodoWrite", "Agent"},
 		"model": claudeArg("--model"), "permissionMode": "dontAsk", "mcp_servers": []any{}})
 
-	if bad := d.badModel(); bad != "" {
-		// an unknown pinned model: the first request 404s
+	switch act := d.currentAction(); {
+	case d.badModel() != "":
+		// an unknown pinned model: the first request 404s (the error turn;
+		// the process idles on afterwards, as claude does)
+		bad := d.badModel()
 		claudeJournal("model_fail", map[string]any{"model": bad, "spawn_n": d.spawnN})
 		claudeFail("model_not_found", 404, "", fmt.Sprintf("There's an issue with the selected model (%s). It may not exist or you may not have access to it.", bad))
-	}
-	act := d.currentAction()
-	if act == nil {
+	case act == nil:
 		claudeAssistantText("fakeclaude: no envelope action for this spawn")
 		claudeResultOK(d)
+	default:
+		d.runClaudeAction(*act)
 	}
-	d.runClaudeAction(*act)
+	// the turn is over: idle on stdin until the daemon ends the dispatch
+	claudeMessageLoop(d, msgs)
+}
+
+// claudeUserMessage is one further stdin message (uuid, text).
+type claudeUserMessage struct{ uuid, text string }
+
+// parseClaudeUserMessage reads one stream-json user message line: its
+// text, its uuid and whether the line was one (a raw-text line is not).
+func parseClaudeUserMessage(line string) (text, uuid string, ok bool) {
+	var m struct {
+		Type    string `json:"type"`
+		UUID    string `json:"uuid"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal([]byte(line), &m) != nil || m.Type != "user" || m.Message.Role != "user" {
+		return line, "", false
+	}
+	return m.Message.Content, m.UUID, true
+}
+
+// claudeMessageLoop answers each further stdin message that arrives
+// while the process idles with one turn of its own (the `started`
+// acknowledgement — `queued` was emitted on arrival —, the native
+// session's user record carrying the uuid and the text, then the
+// scripted on_message action in this same dispatch, or a plain
+// assistant text naming the message, and a result); stdin EOF exits 0.
+func claudeMessageLoop(d *driveEnv, msgs <-chan claudeUserMessage) {
+	for m := range msgs {
+		claudeLifecycle(m.uuid, "started")
+		claudeJournal("message", map[string]any{"spawn_n": d.spawnN, "uuid": m.uuid, "text": m.text})
+		d.appendTranscript(map[string]any{"type": "user", "uuid": m.uuid, "sessionId": d.sessionArg, "spawn_n": d.spawnN, "at": nowStamp(),
+			"message": map[string]any{"role": "user", "content": m.text}})
+		emitClaude(map[string]any{"type": "system", "subtype": "init", "session_id": d.sessionArg})
+		if act := d.currentAction(); act != nil && act.OnMessage != nil {
+			// the owner-message relay (PR 6d): the scripted turn answers
+			// the message in this dispatch
+			claudeJournal("on_message", map[string]any{"spawn_n": d.spawnN, "uuid": m.uuid, "text": m.text})
+			d.runClaudeAction(*act.OnMessage)
+		} else {
+			claudeAssistantText("fakeclaude: message " + m.uuid + " received: " + m.text)
+			claudeResultOK(d)
+		}
+		claudeLifecycle(m.uuid, "completed")
+	}
+	claudeExit(d.wi, "stdin_eof", 0)
+}
+
+// absorbQueued hands every message queued while the turn ran to the
+// model, as claude does right after the current tool call returns: the
+// `started` acknowledgement, the native session's queue-operation record
+// (operation remove, reason absorbed_mid_turn, the uuid) with the text,
+// and the journal line; the running turn goes on and its one result
+// closes the merged turn (`completed` follows it there).
+func (d *driveEnv) absorbQueued() {
+	for {
+		select {
+		case m, ok := <-d.msgs:
+			if !ok {
+				return
+			}
+			claudeLifecycle(m.uuid, "started")
+			claudeJournal("message_absorbed", map[string]any{"spawn_n": d.spawnN, "uuid": m.uuid, "text": m.text})
+			d.appendTranscript(map[string]any{"type": "queue-operation", "operation": "remove", "reason": "absorbed_mid_turn",
+				"commandUuid": m.uuid, "sessionId": d.sessionArg, "spawn_n": d.spawnN, "at": nowStamp(), "content": m.text})
+			d.absorbed = append(d.absorbed, m.uuid)
+		default:
+			return
+		}
+	}
+}
+
+// completeAbsorbed closes the absorbed messages' lives at the turn's end.
+func (d *driveEnv) completeAbsorbed() {
+	for _, id := range d.absorbed {
+		claudeLifecycle(id, "completed")
+	}
+	d.absorbed = nil
+}
+
+// claudeLifecycle emits claude's acknowledgement of a stdin message.
+func claudeLifecycle(uuid, state string) {
+	emitRecord(map[string]any{"type": "command_lifecycle", "command_uuid": uuid, "state": state})
+}
+
+// claudeExitOnce: the daemon's teardown closes stdin and signals the
+// group at once, so the EOF path and the SIGTERM handler race here; the
+// first reason is the one journaled, exactly one line per process.
+var claudeExitOnce sync.Once
+
+// claudeExit journals why the persona exits and exits with code.
+func claudeExit(wi, reason string, code int) {
+	claudeExitOnce.Do(func() {
+		claudeJournal("exit", map[string]any{"pid": os.Getpid(), "reason": reason, "wi": wi})
+		os.Exit(code)
+	})
 }
 
 // runClaudeAction plays one envelope action as a Claude Code turn.
@@ -257,25 +411,36 @@ func (d *driveEnv) runClaudeAction(act planAction) {
 	if act.ClaudeError != "" || act.ClaudeTerminal != "" {
 		claudeJournal("error_result", map[string]any{"step": act.ID, "spawn_n": d.spawnN, "error": act.ClaudeError, "status": act.ClaudeStatus})
 		claudeFail(act.ClaudeError, act.ClaudeStatus, act.ClaudeTerminal, act.ClaudeMessage)
+		return
 	}
 	emitClaude(map[string]any{"type": "stream_event", "event": map[string]any{"type": "message_start", "message": map[string]any{"role": "assistant"}}})
 	emitClaude(map[string]any{"type": "stream_event", "event": map[string]any{"type": "content_block_delta", "index": 0,
 		"delta": map[string]any{"type": "text_delta", "text": "Working on " + act.ID}}})
 	emitClaude(map[string]any{"type": "stream_event", "event": map[string]any{"type": "message_stop"}})
+	// Scripted commands run first, whatever the action does afterwards
+	// (the pi persona's order): an end_turn action's `run` is the tool
+	// call the turn makes before it ends — `pf step ask "<question>"` then the
+	// turn's end is the v2 ask shape (PR 6c).
+	d.runCommands(act.Run)
+	d.runWorld(act.World)
 	if act.EndTurn {
-		// the turn ends normally WITHOUT the envelope: result + exit 0
+		// the turn ends normally WITHOUT the envelope: a result record,
+		// then the process idles (rule 1b's shape; the ask shape with an
+		// open `pf step ask`)
 		claudeJournal("end_turn", map[string]any{"step": act.ID, "spawn_n": d.spawnN})
 		claudeAssistantText("I have finished my reply.")
 		claudeResultOK(d)
+		return
 	}
-	runEvidence := d.runCommands(act.Run, act.NoStartedAt)
 	if act.ToolMS > 0 || act.ToolHang {
 		claudeToolUse("toolu_wait", "Bash", map[string]any{"command": "sleep"})
+		claudeJournal("tool_start", map[string]any{"step": act.ID, "spawn_n": d.spawnN, "ms": act.ToolMS, "hang": act.ToolHang})
 		if act.ToolHang {
 			parkForever()
 		}
 		sleepMS(act.ToolMS)
 		claudeToolResult("toolu_wait")
+		d.absorbQueued() // a message queued during the tool call joins the turn here
 	}
 	sleepMS(act.MS)
 	for p, content := range act.Files {
@@ -293,7 +458,7 @@ func (d *driveEnv) runClaudeAction(act planAction) {
 	}
 	drop := filepath.Join("runtime-state", "pending-results", strconv.Itoa(d.spawnN)+".json")
 	claudeToolUse("toolu_env", "Write", map[string]any{"file_path": drop, "content": "{...}"})
-	d.writeEnvelope(act, runEvidence)
+	d.writeEnvelope(act)
 	claudeToolResult("toolu_env")
 	claudeJournal("envelope", map[string]any{"step": act.ID, "outcome": act.Outcome, "spawn_n": d.spawnN})
 	if act.Crash == "after" {
@@ -301,6 +466,7 @@ func (d *driveEnv) runClaudeAction(act planAction) {
 	}
 	claudeAssistantText("Result envelope written.")
 	claudeResultOK(d)
+	d.completeAbsorbed()
 }
 
 // runOneShotSummarize is the daemon's one-shot summarize dispatch
@@ -361,15 +527,17 @@ func claudeAssistantText(text string) {
 		"content": []any{map[string]any{"type": "text", "text": text}}}})
 }
 
-// claudeResultOK closes a successful turn and exits 0 (claude -p does).
+// claudeResultOK closes a successful turn: the result record; the
+// process stays (interactive mode idles on stdin).
 func claudeResultOK(d *driveEnv) {
 	d.appendTranscript(map[string]any{"type": "assistant", "spawn_n": d.spawnN, "at": nowStamp(), "message": map[string]any{"role": "assistant", "content": "done"}})
 	emitRecord(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "done", "session_id": d.sessionArg})
-	os.Exit(0)
 }
 
-// claudeFail emits an API-error assistant message and the error result,
-// then exits 1 — the shape Claude Code ends a turn it gave up on.
+// claudeFail emits an API-error assistant message and the error result
+// — the shape Claude Code ends a turn it gave up on; the process stays
+// alive and idles (measured: an interactive session survives its error
+// turn, so the dispatch ends by the supervisor's rule-1 verdict).
 func claudeFail(category string, status int, terminal, message string) {
 	if message == "" {
 		message = "API Error: " + category
@@ -386,5 +554,4 @@ func claudeFail(category string, status int, terminal, message string) {
 		res["terminal_reason"] = terminal
 	}
 	emitRecord(res)
-	os.Exit(1)
 }

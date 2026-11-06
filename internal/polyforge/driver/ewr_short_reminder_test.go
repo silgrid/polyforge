@@ -17,7 +17,9 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
@@ -54,16 +56,17 @@ const ewrDefBody = "ewr-probe: implement the micro-spec, run the fast checks, th
 
 // TestEwrResumeSendsShortReminderNotTheStepPrompt is the external oracle
 // (verification check ①): spawn 1 ends with an EWR verdict, spawn 2 is a
-// same-session pi resume, and spawn 2's prompt contains `pf result
-// submit` and neither the step definition nor the "Context policy" line.
+// same-session pi resume, and spawn 2's prompt contains `pf step
+// handoff` and neither the step definition nor the dispatch part.
 // It fails on the pre-fix code (which re-sends the whole assembled
 // prompt into the resumed session).
 func TestEwrResumeSendsShortReminderNotTheStepPrompt(t *testing.T) {
 	capDir := t.TempDir()
 	// A materialized bundle the production adapter can read (the driver
 	// under test uses the in-memory Workflow below).
-	writeCapsuleFile(t, capDir, "workflows/b/workflow.md", "---\nname: b\nsteps:\n  - { id: s, context_policy: fresh }\n---\n")
-	writeCapsuleFile(t, capDir, "workflows/b/steps/s.md", ewrDefBody)
+	writeCapsuleFile(t, capDir, "workflows/b/steps/s.md", extDef("s", ewrDefBody))
+	workflowtest.WriteLane(t, filepath.Join(capDir, "workflows"), "b", "steps:\n  - { id: s }\n")
+	writeStepHeader(t, filepath.Join(capDir, "workflows"))
 	writeCapsuleFile(t, capDir, capsule.RecalledMemoriesJSON,
 		`{"items":[{"id":"mem_ewr","type":"doc","title":"a recalled memory","excerpt":"prior context"}]}`)
 
@@ -81,7 +84,7 @@ func TestEwrResumeSendsShortReminderNotTheStepPrompt(t *testing.T) {
 	d, err := New(Config{
 		WI:       wi,
 		ExecPath: filepath.Join(capDir, capsule.ExecutionJSON),
-		Workflow: &Workflow{Steps: []StepSpec{spec("s")}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{spec("s")}...),
 		Compose:  composeOf(map[string][]string{"s": {"pi:a", "pi:b"}}),
 		Spawner:  ad,
 		Log:      &safeLog{},
@@ -100,15 +103,15 @@ func TestEwrResumeSendsShortReminderNotTheStepPrompt(t *testing.T) {
 	waitForCaptures(t, cap, 1)
 	p1 := captureParamsAt(cap, 0)
 	writeCapsuleFile(t, capDir, strings.TrimPrefix(p1.TranscriptPath, capDir+"/"), "{\"type\":\"user\"}\n")
-	if err := ad.appendSpawnJournal(p1, "s", "tok1", 1, "2026-10-25T00:00:00Z"); err != nil {
+	if err := ad.appendSpawnJournal(p1, "s", "tok1", "", 1, "2026-10-25T00:00:00Z"); err != nil {
 		t.Fatalf("appendSpawnJournal: %v", err)
 	}
 	link.Verdict(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseEndedWithoutResult, Evidence: "turn ended ok"})
 
 	// Spawn 2: collect the prompt the adapter assembled, then complete
-	// the step through the drop path.
+	// the step with its hand-off on the call ledger.
 	waitForCaptures(t, cap, 2)
-	writeCapsuleFile(t, capDir, "runtime-state/pending-results/2.json", `{"outcome":"completed","output":{"ok":true}}`)
+	appendLedgerHandoff(t, capDir, "s", 2, stepcall.StatusDone)
 	if err := <-done; err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -119,8 +122,8 @@ func TestEwrResumeSendsShortReminderNotTheStepPrompt(t *testing.T) {
 	}
 	prompt := p2.InitialPrompt
 	for _, want := range []string{
-		"pf result submit",
-		"ended without submitting a result",
+		"hand off now with `pf step handoff`",
+		"ended without `pf step handoff`",
 		"Do not start over",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -128,7 +131,7 @@ func TestEwrResumeSendsShortReminderNotTheStepPrompt(t *testing.T) {
 		}
 	}
 	for _, noise := range []string{
-		"Context policy",
+		dispatchHeading,
 		ewrDefBody,
 		"# Output schema",
 		"a recalled memory",
@@ -153,7 +156,7 @@ func TestEwrRetryAfterAnAnswerKeepsTheFullPrompt(t *testing.T) {
 	}
 	p1, _ := sp.last()
 	writeCapsuleFile(t, capDir, strings.TrimPrefix(p1.TranscriptPath, capDir+"/"), "{\"type\":\"user\"}\n")
-	if err := ad.appendSpawnJournal(p1, "grill", "tok1", 1, "2026-10-25T00:00:00Z"); err != nil {
+	if err := ad.appendSpawnJournal(p1, "grill", "tok1", "", 1, "2026-10-25T00:00:00Z"); err != nil {
 		t.Fatalf("appendSpawnJournal: %v", err)
 	}
 	if _, err := ad.SpawnStep(context.Background(), StepSpawn{
@@ -166,7 +169,7 @@ func TestEwrRetryAfterAnAnswerKeepsTheFullPrompt(t *testing.T) {
 	if !p2.Resume {
 		t.Fatalf("the answer continuation must resume the same session: %+v", p2)
 	}
-	if !strings.Contains(p2.InitialPrompt, "Context policy") {
+	if !strings.Contains(p2.InitialPrompt, dispatchHeading) {
 		t.Fatalf("an answer continuation keeps the full prompt:\n%s", p2.InitialPrompt)
 	}
 	if strings.Contains(p2.InitialPrompt, "You are resuming step") {
@@ -192,11 +195,11 @@ func TestEwrResumeThatDegradesKeepsTheFullPrompt(t *testing.T) {
 	if p.Resume {
 		t.Fatalf("no usable transcript must degrade to fresh: %+v", p)
 	}
-	if !strings.Contains(p.InitialPrompt, "Context policy") {
+	if !strings.Contains(p.InitialPrompt, dispatchHeading) {
 		t.Fatalf("the degraded dispatch keeps the full prompt:\n%s", p.InitialPrompt)
 	}
-	if !strings.Contains(p.InitialPrompt, "ended without submitting a result") ||
-		!strings.Contains(p.InitialPrompt, "pf result submit") {
-		t.Fatalf("the degraded dispatch's EWR notice must name `pf result submit`:\n%s", p.InitialPrompt)
+	if !strings.Contains(p.InitialPrompt, "ended without `pf step handoff`") ||
+		!strings.Contains(p.InitialPrompt, "only completes with one `pf step handoff`") {
+		t.Fatalf("the degraded dispatch's EWR notice must name `pf step handoff`:\n%s", p.InitialPrompt)
 	}
 }

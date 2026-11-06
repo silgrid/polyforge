@@ -13,7 +13,8 @@ package workspace
 //	                    a workspace without AGENTS.md keeps them in CLAUDE.md (Notes)
 //	  .repo/<repo>/     clones for humans and interactive agents
 //	  capsules/<wi>/    work item workspaces (daemon-managed)
-//	  .polyforge/       polyforge-generated files only (no documents)
+//	  .polyforge/       polyforge-generated files only (no documents) —
+//	                    and workflows/<lane>/, the workspace's user lanes
 //	  scratch/          disposable output; entries older than 14 days are stale
 //
 // `pf init` applies it (Init); `pf doctor` lints it (StrayEntries,
@@ -83,12 +84,14 @@ var rootAllowed = map[string]bool{
 	"go.work.sum": true,
 }
 
-// generatedAllowed are the entries tolerated under .polyforge/: legacy v1
-// artifacts nothing generates any more, allowed so existing workspaces do
-// not warn; they may be removed by hand.
+// generatedAllowed are the entries tolerated under .polyforge/: the
+// workspace's user lanes (workflows/, workflow contract "User lanes"),
+// and legacy v1 artifacts nothing generates any more, allowed so existing
+// workspaces do not warn (those may be removed by hand).
 var generatedAllowed = map[string]bool{
-	"repo-map": true,
-	"watchers": true,
+	"workflows": true,
+	"repo-map":  true,
+	"watchers":  true,
 }
 
 // Stray is one entry outside the convention and where it should go.
@@ -283,7 +286,8 @@ Locally only:
 - ` + "`capsules/<wi>/`" + ` — work item workspaces (the daemon manages them);
 - ` + "`scratch/`" + ` — disposable output (logs, briefs, e2e output, downloads);
   ` + "`pf doctor`" + ` reports entries older than 14 days, ` + "`pf doctor --prune-scratch`" + ` removes them;
-- ` + "`.polyforge/`" + ` — polyforge-generated files only.
+- ` + "`.polyforge/`" + ` — polyforge-generated files only, and
+  ` + "`.polyforge/workflows/<lane>/`" + ` — this workspace's own workflow lanes (user lanes).
 
 Never write documents into the workspace root or ` + "`.polyforge/`" + `;
 ` + "`pf doctor`" + ` warns about anything else found there.

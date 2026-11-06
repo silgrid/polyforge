@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="e2e" tests="3" failures="1" errors="0" skipped="1">
+  <testsuite name="panel.spec.ts" file="e2e/panel.spec.ts" tests="3" failures="1" skipped="1">
+    <testcase name="panel opens" classname="e2e/panel.spec.ts" time="1.2"/>
+    <testcase name="panel saves a draft" classname="e2e/panel.spec.ts" time="3.4">
+      <failure message="expected 200, got 500" type="AssertionError">AssertionError: expected 200, got 500
+    at e2e/panel.spec.ts:42:7</failure>
+    </testcase>
+    <testcase name="panel closes" classname="e2e/panel.spec.ts" time="0">
+      <skipped/>
+    </testcase>
+  </testsuite>
+</testsuites>

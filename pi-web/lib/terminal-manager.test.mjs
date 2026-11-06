@@ -1,0 +1,322 @@
+import "#test-env";
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createJiti } from "jiti";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
+
+const jiti = createJiti(import.meta.url, { alias: { "@": fileURLToPath(new URL("../", import.meta.url)) } });
+const { createTerminal, getTerminalCwd, hasTerminal, killTerminal, subscribeTerminal, TERMINAL_RECONNECT_MS } = await jiti.import("./terminal-manager.ts");
+const { GET } = await jiti.import("../app/api/terminal/[id]/events/route.ts");
+// The vm harnesses below require() terminal-manager's imports; the SDK is ESM-only, so they get this stub.
+const piSdkStub = { getPowerShellConfig() { throw new Error("No PowerShell executable found."); } };
+
+test("native module load failures are deferred until creation and include repair instructions", async () => {
+  const require = createRequire(import.meta.url);
+  const paths = await jiti.import("./paths.ts");
+  const source = readFileSync(new URL("./terminal-manager.ts", import.meta.url), "utf8");
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } });
+  const exports = {};
+  runInNewContext(outputText, { exports, process, require(id) {
+    if (id === "node-pty") throw new Error("Cannot find module pty.node");
+    if (id === "@earendil-works/pi-coding-agent") return piSdkStub;
+    return id === "./paths" ? paths : require(id);
+  } });
+  assert.equal(exports.hasTerminal("missing"), false);
+  assert.throws(() => exports.createTerminal(process.cwd(), 80, 24), (error) => {
+    assert.match(error.message, /native terminal module/);
+    assert.match(error.message, /npm rebuild node-pty --build-from-source --ignore-scripts=false --foreground-scripts/);
+    assert.match(error.message, /Cannot find module pty.node/);
+    return true;
+  });
+});
+
+test("shell environment defaults to UTF-8 locale when the host has none", async () => {
+  const require = createRequire(import.meta.url);
+  const paths = await jiti.import("./paths.ts");
+  const source = readFileSync(new URL("./terminal-manager.ts", import.meta.url), "utf8");
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } });
+  const spawnCalls = [];
+  const fakePty = { onData() {}, onExit() {}, write() {}, resize() {}, kill() {} };
+  const fakeRequire = (id) => {
+    if (id === "node-pty") return { spawn: (...args) => { spawnCalls.push(args); return fakePty; } };
+    if (id === "@earendil-works/pi-coding-agent") return piSdkStub;
+    if (id === "./paths") return paths;
+    return require(id);
+  };
+  const envWithoutLocale = Object.fromEntries(Object.entries(process.env).filter(([k]) => !["LANG", "LC_ALL", "LC_CTYPE"].includes(k)));
+  const exports = {};
+  runInNewContext(outputText, { exports, process: { ...process, env: envWithoutLocale, once() {}, platform: process.platform }, require: fakeRequire, setTimeout, clearTimeout, console });
+  exports.createTerminal(process.cwd(), 80, 24);
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(spawnCalls[0][2].env.LANG, "C.UTF-8");
+});
+
+test("shell environment preserves a case-insensitive Windows locale", async () => {
+  const require = createRequire(import.meta.url);
+  const paths = await jiti.import("./paths.ts");
+  const source = readFileSync(new URL("./terminal-manager.ts", import.meta.url), "utf8");
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } });
+  const spawnCalls = [];
+  const fakePty = { onData() {}, onExit() {}, write() {}, resize() {}, kill() {} };
+  const fakeRequire = (id) => {
+    if (id === "node-pty") return { spawn: (...args) => { spawnCalls.push(args); return fakePty; } };
+    if (id === "@earendil-works/pi-coding-agent") return piSdkStub;
+    if (id === "./paths") return paths;
+    return require(id);
+  };
+  const rawEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !["lang", "lc_all", "lc_ctype"].includes(key.toLowerCase())));
+  rawEnv.lang = "zh_CN.UTF-8";
+  const envWithLocale = new Proxy(rawEnv, {
+    get(target, key) {
+      if (typeof key !== "string") return Reflect.get(target, key);
+      const match = Object.keys(target).find((candidate) => candidate.toLowerCase() === key.toLowerCase());
+      return match ? target[match] : undefined;
+    },
+  });
+  const exports = {};
+  runInNewContext(outputText, { exports, process: { ...process, env: envWithLocale, once() {}, platform: process.platform }, require: fakeRequire, setTimeout, clearTimeout, console });
+  exports.createTerminal(process.cwd(), 80, 24);
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(spawnCalls[0][2].env.lang, "zh_CN.UTF-8");
+  assert.equal("LANG" in spawnCalls[0][2].env, false);
+});
+
+test("shell environment omits the web login password", async () => {
+  const require = createRequire(import.meta.url);
+  const paths = await jiti.import("./paths.ts");
+  const source = readFileSync(new URL("./terminal-manager.ts", import.meta.url), "utf8");
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } });
+  const spawnCalls = [];
+  const fakePty = { onData() {}, onExit() {}, write() {}, resize() {}, kill() {} };
+  const fakeRequire = (id) => {
+    if (id === "node-pty") return { spawn: (...args) => { spawnCalls.push(args); return fakePty; } };
+    if (id === "@earendil-works/pi-coding-agent") return piSdkStub;
+    if (id === "./paths") return paths;
+    return require(id);
+  };
+  const env = { ...process.env, PI_WEB_PASSWORD: "web-login-password", PI_USER_SETTING: "preserved" };
+  const exports = {};
+  runInNewContext(outputText, { exports, process: { ...process, env, once() {}, platform: process.platform }, require: fakeRequire, setTimeout, clearTimeout, console });
+  exports.createTerminal(process.cwd(), 80, 24);
+  assert.equal(spawnCalls.length, 1);
+  assert.equal("PI_WEB_PASSWORD" in spawnCalls[0][2].env, false);
+  assert.equal(spawnCalls[0][2].env.PI_USER_SETTING, "preserved");
+});
+
+/** The file and args createTerminal() spawns, on a given platform, with pi's PowerShell resolution faked. */
+async function spawnedShell({ platform, env, powerShell }) {
+  const require = createRequire(import.meta.url);
+  const paths = await jiti.import("./paths.ts");
+  const source = readFileSync(new URL("./terminal-manager.ts", import.meta.url), "utf8");
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } });
+  const spawnCalls = [];
+  let powerShellLookups = 0;
+  const fakePty = { onData() {}, onExit() {}, write() {}, resize() {}, kill() {} };
+  const fakeRequire = (id) => {
+    if (id === "node-pty") return { spawn: (...args) => { spawnCalls.push(args); return fakePty; } };
+    if (id === "@earendil-works/pi-coding-agent") {
+      return { getPowerShellConfig: () => {
+        powerShellLookups++;
+        if (!powerShell) throw new Error("No PowerShell executable found.");
+        return { shell: powerShell, args: ["-NoProfile", "-Command"] };
+      } };
+    }
+    if (id === "./paths") return paths;
+    return require(id);
+  };
+  const exports = {};
+  runInNewContext(outputText, { exports, process: { ...process, env, once() {}, platform }, require: fakeRequire, setTimeout, clearTimeout, console });
+  exports.createTerminal(process.cwd(), 80, 24);
+  assert.equal(spawnCalls.length, 1);
+  // Copied out of the sandbox's realm, so deepEqual compares plain arrays.
+  return { file: spawnCalls[0][0], args: [...spawnCalls[0][1]], powerShellLookups };
+}
+
+test("a Windows terminal starts PowerShell as pi resolves it, then ComSpec, then cmd.exe", async () => {
+  const comSpec = "C:\\Windows\\system32\\cmd.exe";
+  // pi's getPowerShellConfig() prefers PowerShell 7 and returns where's WindowsApps alias as is.
+  const pwsh = "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe";
+  assert.deepEqual(
+    await spawnedShell({ platform: "win32", env: { ComSpec: comSpec }, powerShell: pwsh }),
+    { file: pwsh, args: [], powerShellLookups: 1 },
+    "interactive: none of the powershell tool's -Command arguments",
+  );
+  assert.deepEqual(
+    await spawnedShell({ platform: "win32", env: { ComSpec: comSpec }, powerShell: null }),
+    { file: comSpec, args: [], powerShellLookups: 1 },
+  );
+  assert.deepEqual(
+    await spawnedShell({ platform: "win32", env: {}, powerShell: null }),
+    { file: "cmd.exe", args: [], powerShellLookups: 1 },
+  );
+});
+
+test("a non-Windows terminal starts $SHELL as a login shell and never looks for PowerShell", async () => {
+  assert.deepEqual(
+    await spawnedShell({ platform: "linux", env: { SHELL: "/usr/bin/zsh" }, powerShell: "pwsh" }),
+    { file: "/usr/bin/zsh", args: ["-l"], powerShellLookups: 0 },
+  );
+  assert.deepEqual(
+    await spawnedShell({ platform: "darwin", env: {}, powerShell: "pwsh" }),
+    { file: "/bin/sh", args: ["-l"], powerShellLookups: 0 },
+  );
+});
+
+test("native PTY starts after install and repeated creation reuses the same workspace process", (t) => {
+  const id = createTerminal(process.cwd(), 80, 24);
+  t.after(() => killTerminal(id));
+  const record = globalThis.__piWebTerminals.get(id);
+  assert.ok(record.pty.pid > 0);
+  assert.equal(getTerminalCwd(id), process.cwd());
+  assert.equal(createTerminal(process.cwd(), 100, 30, id), id);
+  assert.strictEqual(globalThis.__piWebTerminals.get(id), record);
+  assert.throws(() => createTerminal(process.cwd() + "/other", 80, 24, id), /different workspace/);
+  assert.ok(record.cleanupTimer, "unclaimed creations have a lease");
+});
+
+test("connected terminals outlive the grace period; only the last disconnect starts expiry", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const id = createTerminal(process.cwd(), 80, 24);
+  t.after(() => killTerminal(id));
+  const first = subscribeTerminal(id, () => {});
+  const second = subscribeTerminal(id, () => {});
+  first.unsubscribe();
+  t.mock.timers.tick(TERMINAL_RECONNECT_MS * 2);
+  assert.ok(hasTerminal(id));
+  second.unsubscribe();
+  t.mock.timers.tick(TERMINAL_RECONNECT_MS - 1);
+  assert.ok(hasTerminal(id));
+  const resumed = subscribeTerminal(id, () => {});
+  t.mock.timers.tick(TERMINAL_RECONNECT_MS);
+  assert.ok(hasTerminal(id));
+  resumed.unsubscribe();
+  t.mock.timers.tick(TERMINAL_RECONNECT_MS);
+  assert.equal(hasTerminal(id), false);
+});
+
+test("unclaimed creations expire without requiring a browser cleanup request", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const id = createTerminal(process.cwd(), 80, 24);
+  t.after(() => killTerminal(id));
+  t.mock.timers.tick(TERMINAL_RECONNECT_MS);
+  assert.equal(hasTerminal(id), false);
+});
+
+test("SSE resumes from Last-Event-ID and cancellation releases the connection lease", async (t) => {
+  const id = createTerminal(process.cwd(), 80, 24);
+  t.after(() => killTerminal(id));
+  const record = globalThis.__piWebTerminals.get(id);
+  record.backlog = "old\r\nnew\r\n";
+  record.offset = record.backlog.length;
+  const request = new Request("http://localhost/events?after=0", { headers: { "Last-Event-ID": "5" } });
+  const response = await GET(request, { params: Promise.resolve({ id }) });
+  const reader = response.body.getReader();
+  await reader.read();
+  const replay = new TextDecoder().decode((await reader.read()).value);
+  assert.match(replay, /id: 10\n/);
+  assert.deepEqual(JSON.parse(replay.split("data: ")[1]), { type: "output", data: "new\r\n", offset: 10, reset: false });
+  await reader.cancel();
+  assert.equal(record.listeners.size, 0);
+  assert.ok(record.cleanupTimer);
+});
+
+test("expired output cursors reset bounded history, while explicit close ends connected streams", async (t) => {
+  const id = createTerminal(process.cwd(), 80, 24);
+  t.after(() => killTerminal(id));
+  const record = globalThis.__piWebTerminals.get(id);
+  record.backlog = "tail";
+  record.offset = 100;
+  const subscription = subscribeTerminal(id, () => {}, 10);
+  assert.deepEqual(subscription.output, { type: "output", data: "tail", offset: 100, reset: true });
+  subscription.unsubscribe();
+  const response = await GET(new Request("http://localhost/events"), { params: Promise.resolve({ id }) });
+  const reader = response.body.getReader();
+  await reader.read();
+  await reader.read();
+  killTerminal(id);
+  assert.match(new TextDecoder().decode((await reader.read()).value), /"type":"closed"/);
+  assert.equal((await reader.read()).done, true);
+  assert.equal(record.listeners.size, 0);
+  assert.equal(hasTerminal(id), false);
+});
+
+/** terminal-manager.ts in a context of its own, with a fake node-pty and the timers and clock the test drives. */
+async function sandboxedTerminalManager() {
+  const require = createRequire(import.meta.url);
+  const paths = await jiti.import("./paths.ts");
+  const source = readFileSync(new URL("./terminal-manager.ts", import.meta.url), "utf8");
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } });
+  const clock = { now: 1_000 };
+  const timers = new Set();
+  const processHandlers = [];
+  const exits = [];
+  const fakePty = () => ({ onData() {}, onExit(handler) { exits.push(handler); }, write() {}, resize() {}, kill() {} });
+  const sandbox = {
+    exports: {},
+    process: { ...process, env: process.env, platform: process.platform, once: (event) => processHandlers.push(event) },
+    require(id) {
+      if (id === "node-pty") return { spawn: fakePty };
+      if (id === "@earendil-works/pi-coding-agent") return piSdkStub;
+      return id === "./paths" ? paths : require(id);
+    },
+    setTimeout: (callback, ms) => {
+      const timer = { callback, ms, unref() {} };
+      timers.add(timer);
+      return timer;
+    },
+    clearTimeout: (timer) => timers.delete(timer),
+    Date: { now: () => clock.now },
+    console,
+  };
+  runInNewContext(outputText, sandbox);
+  // Copied out of the sandbox's realm, so deepEqual compares plain objects.
+  const stats = (now) => ({ ...sandbox.exports.getTerminalStats(now) });
+  return { exports: sandbox.exports, sandbox, stats, clock, timers, processHandlers, exits };
+}
+
+test("terminal stats read a missing registry as empty without creating it or its process handlers", async () => {
+  const { sandbox, stats, processHandlers } = await sandboxedTerminalManager();
+  assert.deepEqual(stats(), { count: 0, listeners: 0, detached: 0, exited: 0, nextCleanupAt: null });
+  assert.equal(sandbox.__piWebTerminals, undefined);
+  assert.deepEqual(processHandlers, []);
+});
+
+test("terminal stats follow the cleanup deadline, which a reattached stream clears, and touch no timer", async () => {
+  const { exports, sandbox, stats, clock, timers, exits } = await sandboxedTerminalManager();
+  const id = exports.createTerminal(process.cwd(), 80, 24);
+  const record = sandbox.__piWebTerminals.get(id);
+  assert.deepEqual(stats(), { count: 1, listeners: 0, detached: 1, exited: 0, nextCleanupAt: 1_000 + TERMINAL_RECONNECT_MS });
+  const [unclaimed] = timers;
+  assert.deepEqual([...timers], [unclaimed], "reading armed nothing");
+
+  clock.now = 5_000;
+  const first = exports.subscribeTerminal(id, () => {});
+  assert.equal(record.cleanupAt, null);
+  assert.equal(timers.size, 0);
+  assert.deepEqual(stats(), { count: 1, listeners: 1, detached: 0, exited: 0, nextCleanupAt: null });
+  first.unsubscribe();
+  assert.equal(stats().nextCleanupAt, 5_000 + TERMINAL_RECONNECT_MS);
+
+  clock.now = 6_000;
+  const second = exports.subscribeTerminal(id, () => {});
+  assert.equal(stats().nextCleanupAt, null, "a reattach cancels the cleanup");
+  exits[0]({ exitCode: 0 });
+  assert.deepEqual(stats(), { count: 1, listeners: 1, detached: 0, exited: 1, nextCleanupAt: null });
+  second.unsubscribe();
+  assert.equal(stats().nextCleanupAt, 6_000 + TERMINAL_RECONNECT_MS);
+  // An overdue deadline reads as now: the timer fires on the next turn of the loop.
+  assert.equal(stats(6_000 + TERMINAL_RECONNECT_MS + 500).nextCleanupAt, 6_000 + TERMINAL_RECONNECT_MS + 500);
+
+  // A record created before a hot reload has no cleanupAt.
+  sandbox.__piWebTerminals.set("older", { listeners: new Set([() => {}]), exited: false, exitCode: null, cleanupTimer: null });
+  assert.deepEqual(stats(), { count: 2, listeners: 1, detached: 1, exited: 1, nextCleanupAt: 6_000 + TERMINAL_RECONNECT_MS });
+  assert.equal(timers.size, 1);
+
+  exports.killTerminal(id);
+  assert.equal(record.cleanupAt, null);
+  assert.deepEqual(stats(), { count: 1, listeners: 1, detached: 0, exited: 0, nextCleanupAt: null });
+});

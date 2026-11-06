@@ -83,6 +83,7 @@ package runtime
 // they did under the pre-#171 data-dir map.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -407,3 +408,43 @@ func (c *Config) refreshStepAgentDir() error {
 // the harness-root map the Dir() derivations sell (and so a locator
 // consults the same claude-config dir the spawner sets).
 func (c *Config) FillDefaults() { c.fill() }
+
+// ShareClaudeEnv copies ONLY the `env` block of the claude settings file
+// src into dstDir/settings.json (a Cell sharing the default Cell's model
+// credentials): every other key of src — permissions, hooks, plugins,
+// private settings — stays out, and the other keys already in the
+// destination are kept. A missing src or one without an env block shares
+// nothing (nothing is written). Atomic write, 0600.
+func ShareClaudeEnv(src, dstDir string) error {
+	raw, err := os.ReadFile(src)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var in map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return fmt.Errorf("%s: %w", src, err)
+	}
+	env, ok := in["env"]
+	if !ok {
+		return nil
+	}
+	dst := filepath.Join(dstDir, "settings.json")
+	out := map[string]json.RawMessage{}
+	if cur, err := os.ReadFile(dst); err == nil {
+		if err := json.Unmarshal(cur, &out); err != nil {
+			return fmt.Errorf("%s: %w", dst, err)
+		}
+	}
+	out["env"] = env
+	blob, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dstDir, 0o700); err != nil {
+		return err
+	}
+	return atomicfile.Write(dst, append(blob, '\n'), 0o600)
+}

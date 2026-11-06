@@ -40,7 +40,7 @@ func TestW177ClaimRecallHitsRelevantMemory(t *testing.T) {
 		Project:    v1Project,
 		Goal:       "w177: fix the flaky provider retry ladder in the daemon",
 		Content:    &content,
-		BundleName: strPtr("autopilot"),
+		BundleName: strPtr(vehicleLane),
 	})
 	if err != nil {
 		t.Fatalf("create work item: %v", err)
@@ -53,9 +53,8 @@ func TestW177ClaimRecallHitsRelevantMemory(t *testing.T) {
 	}
 	wi := item.ID
 	inst.setPlanFull(t, wi, []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	}, nil)
 	inst.trackWI(wi)
 

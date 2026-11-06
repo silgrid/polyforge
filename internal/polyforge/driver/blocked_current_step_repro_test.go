@@ -40,7 +40,7 @@ func TestCompositionFailureBlocksWithThePositionOnTheFailingStep(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{spec("build"), spec("fix")}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{spec("build"), spec("fix")}...),
 		Spawner:  sp,
 		Log:      &eventLog{},
 		Compose:  compose,

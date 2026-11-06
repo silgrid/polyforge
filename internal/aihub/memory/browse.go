@@ -9,9 +9,15 @@ package memory
 // candidates exist (the guarantee: no per-candidate
 // membership query). Paging is a strict keyset walk behind an opaque
 // cursor: the cursor carries the sort name, the sort-key timestamp and
-// the id of the last returned entry; the next page continues strictly
-// after that (sort key, id) position, so a write between pages can
+// the rowid of the last returned entry; the next page continues strictly
+// after that (sort key, rowid) position, so a write between pages can
 // neither duplicate nor skip an unmodified entry.
+//
+// The tie-break is the rowid — the row's insertion order, assigned at
+// INSERT and never moved by an UPDATE — so entries whose sort keys
+// compare equal list newest-created first: julianday()
+// keeps only milliseconds, so creates landing in one millisecond tie,
+// and the random id would order them by chance.
 
 import (
 	"database/sql"
@@ -30,7 +36,7 @@ const browseSortKeys = `"updated" or "created"`
 // browseCursorVersion tags the opaque cursor's encoding so a value this
 // store did not issue (or one from a changed encoding) is refused
 // instead of misread.
-const browseCursorVersion = "1"
+const browseCursorVersion = "2"
 
 // defaultBrowseLimit is the page size when the caller sends none.
 const defaultBrowseLimit = 20
@@ -61,10 +67,10 @@ func (s *Store) Browse(projects []string, sort, after, memType string, tags []st
 	if limit <= 0 {
 		limit = defaultBrowseLimit
 	}
-	cursorSort, key, afterID := sort, "", ""
+	cursorSort, key, afterRow := sort, "", int64(0)
 	if after != "" {
 		var err error
-		cursorSort, key, afterID, err = decodeBrowseCursor(after)
+		cursorSort, key, afterRow, err = decodeBrowseCursor(after)
 		if err != nil {
 			return nil, "", err
 		}
@@ -82,26 +88,27 @@ func (s *Store) Browse(projects []string, sort, after, memType string, tags []st
 		column = "created_at"
 	}
 	// The narrowing happens in one candidate statement, ordered
-	// descending by the sort key with the id as the deterministic
-	// tie-break; rows stream through the visibility predicate (pure,
-	// no I/O) until limit+1 survived — the probe row proves whether a
-	// next page exists.
+	// descending by the sort key with the rowid (insertion order) as
+	// the deterministic tie-break; rows stream through the visibility
+	// predicate (pure, no I/O) until limit+1 survived — the probe row
+	// proves whether a next page exists.
 	where, args := browseFilter(projects, memType, tags)
 	if after != "" {
 		n := len(args)
 		where += " AND (julianday(m." + column + ") < julianday(?" + strconv.Itoa(n+1) + ")" +
 			" OR (julianday(m." + column + ") = julianday(?" + strconv.Itoa(n+1) + ")" +
-			" AND m.id < ?" + strconv.Itoa(n+2) + "))"
-		args = append(args, key, afterID)
+			" AND m.rowid < ?" + strconv.Itoa(n+2) + "))"
+		args = append(args, key, afterRow)
 	}
-	rows, err := s.db.Query(browseSelect+where+" ORDER BY julianday(m."+column+") DESC, m.id DESC", args...)
+	rows, err := s.db.Query(browseSelect+where+" ORDER BY julianday(m."+column+") DESC, m.rowid DESC", args...)
 	if err != nil {
 		return nil, "", err
 	}
 	defer rows.Close()
 	out := []Entry{}
+	rowids := []int64{}
 	for rows.Next() {
-		e, err := scanBrowseRow(rows)
+		e, rowid, err := scanBrowseRow(rows)
 		if err != nil {
 			return nil, "", err
 		}
@@ -109,6 +116,7 @@ func (s *Store) Browse(projects []string, sort, after, memType string, tags []st
 			continue
 		}
 		out = append(out, *e)
+		rowids = append(rowids, rowid)
 		if len(out) > limit {
 			break // the limit+1 probe row: a next page exists
 		}
@@ -123,14 +131,14 @@ func (s *Store) Browse(projects []string, sort, after, memType string, tags []st
 		if sort == "created" {
 			key = last.CreatedAt
 		}
-		next = encodeBrowseCursor(sort, key, last.ID)
+		next = encodeBrowseCursor(sort, key, rowids[limit-1])
 		out = out[:limit]
 	}
 	return out, next, nil
 }
 
 // browseSelect is the candidate row's column set (scanBrowseRow's order).
-const browseSelect = `SELECT m.id, m.project_id, m.owner_user_id, m.work_item_id, m.type, m.title,
+const browseSelect = `SELECT m.rowid, m.id, m.project_id, m.owner_user_id, m.work_item_id, m.type, m.title,
 		m.visibility, m.content_sha, m.content_len, m.tags, m.related, m.status, m.created_at, m.updated_at
 		FROM memories m`
 
@@ -189,7 +197,7 @@ func (s *Store) BrowseTotal(projects []string, memType string, tags []string, al
 	defer rows.Close()
 	total := 0
 	for rows.Next() {
-		e, err := scanBrowseRow(rows)
+		e, _, err := scanBrowseRow(rows)
 		if err != nil {
 			return 0, err
 		}
@@ -204,14 +212,16 @@ func (s *Store) BrowseTotal(projects []string, memType string, tags []string, al
 type browseScanner interface{ Scan(dest ...any) error }
 
 // scanBrowseRow fills one Entry from a candidate row (load's column
-// set over the browse candidate statement).
-func scanBrowseRow(scan browseScanner) (*Entry, error) {
+// set over the browse candidate statement) and answers the row's rowid,
+// the keyset tie-break.
+func scanBrowseRow(scan browseScanner) (*Entry, int64, error) {
 	var e Entry
+	var rowid int64
 	var wi, title sql.NullString
 	var tags, related string
-	if err := scan.Scan(&e.ID, &e.ProjectID, &e.OwnerUserID, &wi, &e.Type, &title, &e.Visibility,
+	if err := scan.Scan(&rowid, &e.ID, &e.ProjectID, &e.OwnerUserID, &wi, &e.Type, &title, &e.Visibility,
 		&e.ContentSHA, &e.ContentLen, &tags, &related, &e.Status, &e.CreatedAt, &e.UpdatedAt); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if wi.Valid {
 		e.WorkItemID = &wi.String
@@ -221,7 +231,7 @@ func scanBrowseRow(scan browseScanner) (*Entry, error) {
 	}
 	_ = jsonUnmarshalStrings(tags, &e.Tags)
 	_ = jsonUnmarshalStrings(related, &e.Related)
-	return &e, nil
+	return &e, rowid, nil
 }
 
 // jsonUnmarshalStrings decodes a stored JSON string array, never
@@ -239,32 +249,34 @@ func jsonUnmarshalStrings(raw string, out *[]string) error {
 }
 
 // encodeBrowseCursor renders the opaque cursor: base64url over a
-// version tag, the sort name, the sort-key timestamp and the id of the
-// last returned entry. The encoding stays unspecified in the docs; only
-// the round-trip behaviour is contract.
-func encodeBrowseCursor(sort, key, id string) string {
+// version tag, the sort name, the sort-key timestamp and the rowid of
+// the last returned entry. The encoding stays unspecified in the docs;
+// only the round-trip behaviour is contract.
+func encodeBrowseCursor(sort, key string, rowid int64) string {
 	return base64.RawURLEncoding.EncodeToString(
-		[]byte(browseCursorVersion + "|" + sort + "|" + key + "|" + id))
+		[]byte(browseCursorVersion + "|" + sort + "|" + key + "|" + strconv.FormatInt(rowid, 10)))
 }
 
 // decodeBrowseCursor parses a cursor this store issued (see
-// encodeBrowseCursor). Anything else — undecodable, unversioned, a
-// non-timestamp key or a missing id — is MEM-400.
-func decodeBrowseCursor(cursor string) (sort, key, id string, err error) {
+// encodeBrowseCursor). Anything else — undecodable, unversioned or
+// another version, a non-timestamp key or a non-integer rowid — is
+// MEM-400.
+func decodeBrowseCursor(cursor string) (sort, key string, rowid int64, err error) {
 	raw, derr := base64.RawURLEncoding.DecodeString(cursor)
 	if derr != nil {
-		return "", "", "", errf(api.ErrMemBadInput, "", "invalid cursor")
+		return "", "", 0, errf(api.ErrMemBadInput, "", "invalid cursor")
 	}
 	parts := strings.Split(string(raw), "|")
 	if len(parts) != 4 || parts[0] != browseCursorVersion {
-		return "", "", "", errf(api.ErrMemBadInput, "", "invalid cursor")
+		return "", "", 0, errf(api.ErrMemBadInput, "", "invalid cursor")
 	}
-	sort, key, id = parts[1], parts[2], parts[3]
-	if id == "" {
-		return "", "", "", errf(api.ErrMemBadInput, "", "invalid cursor")
+	sort, key = parts[1], parts[2]
+	rowid, perr := strconv.ParseInt(parts[3], 10, 64)
+	if perr != nil {
+		return "", "", 0, errf(api.ErrMemBadInput, "", "invalid cursor")
 	}
 	if _, perr := time.Parse(time.RFC3339Nano, key); perr != nil {
-		return "", "", "", errf(api.ErrMemBadInput, "", "invalid cursor")
+		return "", "", 0, errf(api.ErrMemBadInput, "", "invalid cursor")
 	}
-	return sort, key, id, nil
+	return sort, key, rowid, nil
 }

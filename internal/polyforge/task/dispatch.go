@@ -36,7 +36,9 @@ import (
 // token budget of the task and the directory the harness runs in.
 type RunSpec struct {
 	Candidate harness.Candidate
-	Prompt    string
+	// Prompt is the harness's whole stdin: the task's prompt behind the
+	// prohibited-actions section (Manager's dispatchedPrompt).
+	Prompt string
 	// MaxTokens is the task's REMAINING token budget for this attempt.
 	MaxTokens int64
 	WorkDir   string
@@ -126,36 +128,34 @@ const (
 	ReadOnlyPiTools     = "read,grep,find,ls"
 )
 
-// innerArgv answers the harness argv (binary first). The claude context
-// flag follows the dispatch ruling (--bare in token mode, --safe-mode in
-// OAuth mode), the same functions the summarize dispatch uses. The tool
-// allowlist replaces --permission-mode bypassPermissions: only the listed
-// tools exist (polyforge#40 code review). readOnlyTools picks the
-// read/search-only pair instead of the standard one.
+// innerArgv answers the harness argv (binary first). A claude task runs
+// the step's profile in every auth mode, as the step does:
+// runtime.ClaudeIsolationArgs (--safe-mode, only the
+// harness's settings.json read, the built-in AGENTS.md loader off) and
+// runtime.ClaudeToolArgs, under which Claude Code's `system/init.tools`
+// equal the declared list (under --bare, 2.1.319 offered Bash and Read of
+// the standard list and Read of the read-only one). The tool allowlist
+// replaces --permission-mode bypassPermissions: only the listed tools
+// exist (polyforge#40 code review). readOnlyTools picks the read/search-only
+// pair instead of the standard one. The claude-config settings.json is
+// still read: one that exists but is unusable refuses the run.
 func (r *ExecRunner) innerArgv(c harness.Candidate, readOnlyTools bool) ([]string, error) {
 	bin := r.bin(harness.Of(c.Harness))
 	claudeTools, piTools := TaskClaudeTools, TaskPiTools
 	if readOnlyTools {
 		claudeTools, piTools = ReadOnlyClaudeTools, ReadOnlyPiTools
 	}
-	var args []string
 	if harness.Of(c.Harness) == harness.Claude {
-		flag := "--safe-mode"
-		env, err := runtime.ReadClaudeSettingsEnv(r.ClaudeConfigDir)
-		if err != nil {
+		if _, err := runtime.ReadClaudeSettingsEnv(r.ClaudeConfigDir); err != nil {
 			return nil, err
 		}
-		if runtime.ClaudeTokenMode(env) {
-			flag = "--bare"
-		}
-		args = []string{bin, "-p", flag, "--output-format", "stream-json", "--verbose",
-			"--no-session-persistence",
-			"--tools", claudeTools, "--allowedTools", claudeTools,
-			"--permission-mode", "dontAsk", "--model", c.Model}
-	} else {
-		args = []string{bin, "-p", "--mode", "json", "--no-session",
-			"--tools", piTools, "--model", c.Model}
+		args := append([]string{bin, "-p"}, runtime.ClaudeIsolationArgs()...)
+		args = append(args, "--output-format", "stream-json", "--verbose", "--no-session-persistence",
+			"--model", c.Model)
+		args = append(args, c.EffortArgs()...)
+		return append(args, runtime.ClaudeToolArgs(claudeTools)...), nil
 	}
+	args := []string{bin, "-p", "--mode", "json", "--no-session", "--tools", piTools, "--model", c.Model}
 	return append(args, c.EffortArgs()...), nil
 }
 
@@ -163,7 +163,9 @@ func (r *ExecRunner) innerArgv(c harness.Candidate, readOnlyTools bool) ([]strin
 // marker, aihub credential and harness-context variable, plus the task's
 // own identity and the daemon-owned harness config dirs. No credential
 // value is ever added: the harness reads its own from the config dir the
-// daemon owns.
+// daemon owns. A claude task also carries runtime.ClaudeIsolationEnv (the
+// command adds it with runtime.WithEnv, so an inherited copy of one of its
+// names never doubles it).
 func taskEnv(inherited []string, taskID, daemonID, socket, claudeCfg, piAgentDir string) []string {
 	out := make([]string, 0, len(inherited)+6)
 	for _, kv := range inherited {
@@ -189,25 +191,39 @@ func taskEnv(inherited []string, taskID, daemonID, socket, claudeCfg, piAgentDir
 	return out
 }
 
+// command builds (without starting) one run's harness process: its argv,
+// environment, working directory and the prompt on stdin.
+func (r *ExecRunner) command(ctx context.Context, spec RunSpec) (*exec.Cmd, error) {
+	argv, err := r.innerArgv(spec.Candidate, spec.ReadOnlyTools)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = spec.WorkDir
+	cmd.Env = taskEnv(os.Environ(), spec.TaskID, r.DaemonID, r.SocketPath, r.ClaudeConfigDir, r.PiAgentDir)
+	if harness.Of(spec.Candidate.Harness) == harness.Claude {
+		cmd.Env = runtime.WithEnv(cmd.Env, runtime.ClaudeIsolationEnv()...)
+	}
+	cmd.Stdin = strings.NewReader(spec.Prompt)
+	return cmd, nil
+}
+
 // Run runs one candidate to completion, a token cap, or ctx's end.
 func (r *ExecRunner) Run(ctx context.Context, spec RunSpec, progress func(tokens int64)) (RunResult, error) {
 	h := harness.Of(spec.Candidate.Harness)
 	if !SupportsUsage(h) {
 		return RunResult{}, fmt.Errorf("candidate %s cannot report token usage, so a task cannot start on it", spec.Candidate)
 	}
-	argv, err := r.innerArgv(spec.Candidate, spec.ReadOnlyTools)
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd, err := r.command(cctx, spec)
 	if err != nil {
 		return RunResult{}, err
 	}
-	cctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...)
-	cmd.Dir = spec.WorkDir
-	cmd.Env = taskEnv(os.Environ(), spec.TaskID, r.DaemonID, r.SocketPath, r.ClaudeConfigDir, r.PiAgentDir)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	argv := cmd.Args
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 5 * time.Second
-	cmd.Stdin = strings.NewReader(spec.Prompt)
 	stderr := &boundedBuf{max: 8 << 10}
 	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()

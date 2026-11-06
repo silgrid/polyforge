@@ -29,6 +29,7 @@ func runDelete(t *testing.T, env map[string]string, stdin io.Reader, args ...str
 	if _, ok := env["XDG_CONFIG_HOME"]; !ok {
 		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	}
+	env = viaCellProxy(t, env)
 	for k, v := range env {
 		t.Setenv(k, v)
 	}

@@ -1,7 +1,7 @@
 package test
 
 // v1_s27: the polyforge#106 near-miss end-to-end. A gate-flagged step
-// (the bug-fix lane's review) whose result envelope carries verdict
+// (the vehicle lane's review) whose result envelope carries verdict
 // "fail" in its OUTPUT JSON but outcome "completed" — the exact shape
 // the #106 review step delivered. The driver never reads a verdict
 // inside output, so the FAIL verdict advanced the workflow to completion
@@ -26,35 +26,30 @@ import (
 )
 
 // TestV1S27GateFailVerdictInsideCompletedEnvelopeMustRewind runs the
-// full bug-fix lane through the real daemon + driver with fakepi step
-// agents scripted to deliver envelopes.
+// vehicle lane (micro: fix → review) through the real daemon + driver
+// with fakepi step agents scripted to deliver envelopes.
 func TestV1S27GateFailVerdictInsideCompletedEnvelopeMustRewind(t *testing.T) {
 	inst, _ := newV1InstallTaskRepo(t)
 
-	// The bug-fix lane, scripted per spawn ordinal (the Nth envelope
+	// The vehicle lane, scripted per spawn ordinal (the Nth envelope
 	// action fires for spawn N — across fresh and re-dispatched spawns
-	// alike, so the entries after #4 only ever fire when the rewind
-	// machinery works; on the buggy driver the lane completes at #4).
+	// alike, so the entries after #2 only ever fire when the rewind
+	// machinery works; on the buggy driver the lane completes at #2).
 	plan := []map[string]any{
-		{"do": "envelope", "id": "repro", "outcome": "completed", "handoff": true,
-			"files": map[string]string{"artifacts/repro.md": "# repro\n\nfake agent reproduction record\n"}},
-		{"do": "envelope", "id": "root-cause", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
 		// #106's exact shape: the review gate's FAIL verdict (with the
 		// fail_reason and blocking finding the review output schema
 		// demands) rides the output JSON of a COMPLETED envelope.
-		// (review is the first gate behind fix, so the shape
-		// fires at spawn 4; the entries after it only ever run when the
-		// rewind machinery works.)
 		{"do": "envelope", "id": "review", "outcome": "completed", "output": map[string]any{
 			"verdict":     "fail",
 			"fail_reason": "the fix suppresses the symptom at one call site; the cause is still reachable",
-			"findings":    []map[string]any{{"severity": "blocking", "repair_target": "code", "detail": "root cause not removed"}},
+			"findings":    []map[string]any{{"severity": "blocking", "class": "code", "detail": "root cause not removed"}},
 		}},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	}
 
-	wi := newWIWithBundle(t, inst, "s27: review fail verdict rides a completed envelope (#106 shape)", "bug-fix", plan)
+	wi := newWIWithBundle(t, inst, "s27: review fail verdict rides a completed envelope (#106 shape)", vehicleLane, plan)
 	d := newV1Daemon(t, inst)
 	d.start()
 
@@ -160,7 +155,7 @@ func stepAttempts(x *execSnapshot, id string) string {
 }
 
 // newWIWithBundle files one execution ticket on an arbitrary bundle
-// (newWI hardcodes autopilot) and scripts its agent with the plan.
+// (newWI files on vehicleLane) and scripts its agent with the plan.
 func newWIWithBundle(t *testing.T, inst *v1Install, goal, bundle string, actions []map[string]any) string {
 	t.Helper()
 	raw, err := inst.client.CreateWorkItem(aihubclient.CreateWorkItemRequest{

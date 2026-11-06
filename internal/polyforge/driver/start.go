@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/common/spawn"
+	"github.com/silgrid/polyforge/internal/polyforge/pendingwrites"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
@@ -25,17 +28,18 @@ type Handle struct {
 	drv     *Driver
 }
 
-// Answer delivers an owner answer to the driver's pending question.
-func (h *Handle) Answer(questionID, answer, answeredBy string) error {
-	return h.drv.Answer(questionID, answer, answeredBy)
-}
+// errNoDriver is a handle's answer when no driver runs behind it (a
+// capsule parked on its lane snapshot's contract version).
+var errNoDriver = errors.New("driver: no driver runs this work item: its lane snapshot targets another workflow contract version (blocked, kind contract)")
 
-// ReviseBinding applies owner corrections of done step binding commands
-// through the live driver's single write entry point. One
-// call carries the whole batch, so a result whose bindings all carry the
-// same malformed quote is corrected before the output is validated again.
-func (h *Handle) ReviseBinding(stepID string, corrections []capsule.BindingCorrection, by, reason string) error {
-	return h.drv.ReviseBinding(stepID, BindingRevisionRequest{Corrections: corrections, By: by, Reason: reason})
+// OwnerMessage relays one owner message to the current step's agent
+// (relay.go, workflow contract v2 §5.2): recorded first, then delivered
+// into the live process or carried by the resumed session.
+func (h *Handle) OwnerMessage(ctx context.Context, text, by string) (protocol.OwnerMessageAck, error) {
+	if h.drv == nil {
+		return protocol.OwnerMessageAck{}, errNoDriver
+	}
+	return h.drv.OwnerMessage(ctx, text, by)
 }
 
 // Exit is closed once Run has returned (the confirmed exit).
@@ -83,9 +87,6 @@ type StartConfig struct {
 	// (polyforge#33; `<harness>:<model>` each): the driver's only
 	// candidate source, called at every dispatch.
 	Compose func() (map[string][]string, error)
-	// Attrs is the runtime's dispatch-time attr-override composition
-	// (Config.Attrs), called at every dispatch beside Compose.
-	Attrs func() (map[string]map[string]string, error)
 	// Interrupted archives the dispatch the previous derivation left
 	// without a result (nil on a fresh claim or a deliberate stop).
 	Interrupted *InterruptedDispatch
@@ -99,9 +100,24 @@ type StartConfig struct {
 	// LimitsFunc, when set, is consulted at every judgement so a live
 	// daemon reload changes the bounds without a restart.
 	LimitsFunc func() supervise.Defaults
-	// DataDir is the daemon data dir (the deliver step's bar-run record,
-	//); empty disables the record.
-	DataDir string
+	// Admission is the daemon's heavy-run admission queue
+	// (Config.Admission).
+	Admission VerifyAdmission
+	// Forge is the forge binding (Config.Forge): the command environment
+	// and the per-repo merge lock a step declaring it holds.
+	Forge Forge
+	// HubWrites makes a step round's pending `pf step hub` writes when it
+	// hands off done (Config.HubWrites, workflow contract 4).
+	HubWrites pendingwrites.Sink
+	// OwnerWait is the runtime's owner-wait flag of the job (Config.OwnerWait,
+	// ask.go): set while the step's `pf ask` is open, so the daemon counts
+	// no running slot for it.
+	OwnerWait func(waiting bool)
+	// Language answers the live agent language (`[daemon] agent_language`,
+	//), read at every dispatch (StepSpawnAdapter.Language)
+	// and whenever the daemon writes the opening or an event section of
+	// artifacts/handoff.md (Config.Language).
+	Language func() string
 }
 
 // Start instantiates the driver over the capsule and runs it.
@@ -110,8 +126,20 @@ func Start(ctx context.Context, cfg StartConfig) (*Handle, error) {
 		return nil, fmt.Errorf("driver: capsule dir or bundle name empty")
 	}
 	wi := WIInfo{ID: cfg.WI, CapsuleDir: cfg.CapsuleDir, BundleName: cfg.BundleName, SessionHandle: cfg.SessionHandle}
+	// A lane snapshot of another workflow contract version cannot run
+	// here (a capsule the drain left in flight): park it blocked, kind
+	// contract, and run nothing — a resume parks it again.
+	if reason := snapshotContractMismatch(filepath.Join(cfg.CapsuleDir, capsule.DirWorkflows, cfg.BundleName)); reason != "" {
+		if err := blockOnContract(filepath.Join(cfg.CapsuleDir, capsule.ExecutionJSON), cfg.WI, reason); err != nil {
+			return nil, fmt.Errorf("driver: contract block: %w", err)
+		}
+		h := &Handle{done: make(chan struct{}), cancel: func() {}, started: fmt.Sprintf("driver-%d", cfg.SpawnN+1)}
+		close(h.done)
+		return h, nil
+	}
 	adapter, err := NewStepSpawnAdapter(StepSpawnAdapter{
 		WI: wi, Spawner: cfg.Spawner, Link: cfg.Link, ClaudeConfigDir: cfg.ClaudeConfigDir,
+		Language: cfg.Language,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("driver: adapter: %w", err)
@@ -139,10 +167,13 @@ func Start(ctx context.Context, cfg StartConfig) (*Handle, error) {
 		Limits:      cfg.Limits,
 		LimitsFunc:  cfg.LimitsFunc,
 		Compose:     cfg.Compose,
-		Attrs:       cfg.Attrs,
 		Interrupted: cfg.Interrupted,
 		StepEnded:   cfg.StepEnded,
-		DataDir:     cfg.DataDir,
+		Admission:   cfg.Admission,
+		Forge:       cfg.Forge,
+		OwnerWait:   cfg.OwnerWait,
+		HubWrites:   cfg.HubWrites,
+		Language:    cfg.Language,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("driver: %w", err)
@@ -159,10 +190,30 @@ func Start(ctx context.Context, cfg StartConfig) (*Handle, error) {
 	h := &Handle{done: make(chan struct{}), cancel: cancel, started: fmt.Sprintf("driver-%d", cfg.SpawnN+1), drv: drv}
 	go func() {
 		h.err = drv.Run(dctx)
+		// a returned Run writes nothing more — the runtime may hand the
+		// capsule to another writer now (a relaunch)
+		drv.stopWrites()
 		close(h.done)
 		if h.err != nil {
 			fmt.Fprintf(os.Stderr, "driver: %s: Run: %v\n", cfg.WI, h.err)
 		}
 	}()
 	return h, nil
+}
+
+// ErrDriverStopped is every write's answer once Run has returned: the
+// runtime may already have handed the capsule to another writer (a
+// relaunch), so a late write — an answer that reached the old handle —
+// must fail loudly, never land or vanish.
+var ErrDriverStopped = errors.New("driver: this driver's Run has returned; it writes nothing more — retry once the work item's next derivation is live")
+
+// stopWrites fences the driver once Run has returned: every later
+// transition answers ErrDriverStopped (a failed persist's error stays the
+// answer when it came first).
+func (d *Driver) stopWrites() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.failed == nil {
+		d.failed = ErrDriverStopped
+	}
 }

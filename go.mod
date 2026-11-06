@@ -2,6 +2,8 @@ module github.com/silgrid/polyforge
 
 go 1.26
 
+toolchain go1.26.11
+
 require (
 	github.com/klauspost/compress v1.20.1
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1

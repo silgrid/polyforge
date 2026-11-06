@@ -139,12 +139,11 @@ func TestWireNullFileSHA256DrivesAbsentAndStale(t *testing.T) {
 }
 
 // w22WorkspaceCtx builds a Context whose cli.toml maps one temp workspace
-// (projects alpha, beta) and whose fake daemon reports the steps_attrs
-// capability and the fixture's workflows dir, so the workspace step write
-// path runs end to end.
+// (projects alpha, beta) and whose fake daemon reports the fixture's
+// workflows dir, so the workspace step write path runs end to end.
 func w22WorkspaceCtx(t *testing.T) (ctx *Context, ws string) {
 	t.Helper()
-	f := newWfFixture(t, "", []string{CapabilityStepsAttrs})
+	f := newWfFixture(t, "")
 	t.Setenv("PF_DAEMON_SOCKET", f.env["PF_DAEMON_SOCKET"])
 	out := &bytes.Buffer{}
 	cfgPath := filepath.Join(f.env["XDG_CONFIG_HOME"], "polyforge", "cli.toml")

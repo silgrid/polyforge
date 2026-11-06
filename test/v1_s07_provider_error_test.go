@@ -4,63 +4,66 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 // v1_s07: repeated gate failures are bounded, driver/envelope edition.
 // The legacy storm watched the record stream for consecutive provider
 // errors; the driver-era equivalent storm window is the workflow's OWN
-// gate-fail ladder: the verification gate FAILs with a populated error
-// verdict four times, the on_fail rewind-to-fix policy fires three times (the
-// autopilot bundle's rewind bounds: max_total 6, max_per_step 3), and the
-// fourth FAIL hits the bound — failed_rewind_exhausted. The daemon's v2
-// terminal wiring translates the driver's exit into the failed close:
-// the recovery cause is the failure signal, not a death. Every archived
-// attempt, verdict and rewind is on the execution.json / envelope faces.
+// gate-fail ladder: the review gate of the vehicle lane FAILs with a
+// populated error verdict four times, the on_fail rewind-to-fix policy
+// fires three times (a test-local micro copy with max_rewinds: 3 — micro
+// ships 2, which reaches no ladder), and the fourth FAIL hits the bound:
+// under workflow contract 4 `pf step handoff` refuses that fail at the
+// call (it cites no owner message; design #483 §5.1), nothing is recorded,
+// the gate's turn ends and its resumed session hands off blocked (the
+// scripted stand-in for asking the owner); the owner cancels it. Every
+// hand-off is on the call ledger, every rewind and archived attempt on
+// execution.json.
 func TestV1S07ProviderErrorStorm(t *testing.T) {
 	inst := newV1Install(t)
+	inst.microMaxRewinds = 3 // test-local: three rewinds on review→fix
 	verdict := map[string]any{
-		"error":   "upstream connection reset after 2 retries (fake harness injected)",
-		"verdict": "FAIL",
+		"fail_reason": "upstream connection reset after 2 retries (fake harness injected)",
+		"verdict":     "fail",
 	}
 	wi := inst.newWI(t, "s07: consecutive gate failures, bounded",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			// FAIL #1 → rewind [fix, verification) → fix.
-			{"do": "envelope", "id": "verification", "outcome": "gate_failed", "output": verdict},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			// FAIL #1 → rewind [fix, review) → fix.
+			{"do": "envelope", "id": "review", "outcome": "gate_failed", "output": verdict},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
 			// FAIL #2 → rewind #2.
-			{"do": "envelope", "id": "verification", "outcome": "gate_failed", "output": verdict},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
+			{"do": "envelope", "id": "review", "outcome": "gate_failed", "output": verdict},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
 			// FAIL #3 → rewind #3 (the last the bounds allow).
-			{"do": "envelope", "id": "verification", "outcome": "gate_failed", "output": verdict},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			// FAIL #4 → the bounds are spent: failed_rewind_exhausted.
-			{"do": "envelope", "id": "verification", "outcome": "gate_failed", "output": verdict},
+			{"do": "envelope", "id": "review", "outcome": "gate_failed", "output": verdict},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			// FAIL #4 → the bounds are spent: the fail is refused at the
+			// call; the gate's turn ends without a hand-off.
+			{"do": "envelope", "id": "review", "outcome": "gate_failed", "output": verdict},
+			// the resumed review cannot fail again without the owner: it
+			// parks the work item; the owner cancels it.
+			{"do": "envelope", "id": "review", "outcome": "incomplete",
+				"blocker": map[string]any{"reason": "the rewind budget is spent: the owner decides"}},
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pf(t, "submit", wi)
 
-	// The bounded terminal state on the execution.json face: the workflow
-	// failed_rewind_exhausted after exactly three executed rewinds, and the
-	// gate itself is NEVER done — it holds the fourth FAIL verdict.
-	waitWorkflowStatus(t, d, wi, "failed_rewind_exhausted", 120*time.Second)
+	// The bounded park: exactly three executed rewinds, the fourth fail
+	// refused at the call (exhaustThenPark checks the refusal), the gate
+	// NEVER done — its resumed session parked the work item blocked.
+	exhaustThenPark(t, d, wi, "review", 240*time.Second)
 	capDir := d.capsuleDir(wi)
 	x := readExecution(t, capDir)
-	if x.ReviewRounds["verification"] != 4 {
-		t.Fatalf("review rounds %v, want 4 verdicts recorded", x.ReviewRounds)
-	}
 	if n := int(x.RewindStats["count"].(float64)); n != 3 {
 		t.Fatalf("rewind count %v, want exactly 3 (the fourth hit the bound)", x.RewindStats["count"])
 	}
-	ver := x.Steps["verification"]
-	if ver == nil || ver.Status != "in_progress" {
-		t.Fatalf("the gate step must hold the verdict in_progress, got %+v", ver)
-	}
-	if ver.Output["error"] == nil || !strings.Contains(ver.Output["error"].(string), "connection reset") {
-		t.Fatalf("the FAIL verdict output is not on the gate: %+v", ver.Output)
+	if ver := x.Steps["review"]; ver == nil || ver.Status == "done" {
+		t.Fatalf("the gate step must never be done, got %+v", ver)
 	}
 	// The three executed rewinds archived fix's superseded outputs as
 	// gate_fail_rewind attempts — the preference order's archive face.
@@ -73,31 +76,36 @@ func TestV1S07ProviderErrorStorm(t *testing.T) {
 	if fixArchives != 3 {
 		t.Fatalf("fix archived %d gate_fail_rewind attempts, want 3: %+v", fixArchives, x.Steps["fix"].Attempts)
 	}
-	// Every ordinal's envelope is on the archive face, in plan order —
-	// including both error envelopes with their populated verdicts.
-	for i, want := range []struct {
-		step    string
-		outcome string
-	}{
-		{"grill", "completed"}, {"fix", "completed"}, {"verification", "gate_failed"},
-		{"fix", "completed"}, {"verification", "gate_failed"}, {"fix", "completed"},
-		{"verification", "gate_failed"}, {"fix", "completed"}, {"verification", "gate_failed"},
+	// Every dispatch's hand-off is on the call ledger, in plan order — the
+	// three accepted fails carrying their reason; the fourth refused (no
+	// accepted hand-off of dispatch 8); the resumed review's blocked.
+	for i, want := range []string{
+		stepcall.StatusDone, stepcall.StatusFail,
+		stepcall.StatusDone, stepcall.StatusFail,
+		stepcall.StatusDone, stepcall.StatusFail,
+		stepcall.StatusDone,
 	} {
-		env := archivedEnvelope(t, capDir, want.step, i+1)
-		if env["outcome"] != want.outcome {
-			t.Fatalf("archived envelope s%d (%s): outcome %v, want %s", i+1, want.step, env["outcome"], want.outcome)
+		step := "fix"
+		if i%2 == 1 {
+			step = "review"
 		}
-		if want.outcome == "gate_failed" && env["output"] == nil {
-			t.Fatalf("error envelope s%d carries no verdict output", i+1)
+		h := acceptedHandoff(t, capDir, step, i+1)
+		if h.Handoff.Status != want {
+			t.Fatalf("dispatch %d (%s) handed off %s, want %s", i+1, step, h.Handoff.Status, want)
+		}
+		if want == stepcall.StatusFail && !strings.Contains(h.Handoff.Reason, "connection reset") {
+			t.Fatalf("the fail of dispatch %d carries no reason: %+v", i+1, h.Handoff)
 		}
 	}
+	if l := stepcall.HandoffOf(ledgerLines(t, capDir), "review", 8); l != nil {
+		t.Fatalf("the fourth fail was accepted: %+v", l)
+	}
+	if h := acceptedHandoff(t, capDir, "review", 9); h.Handoff.Status != stepcall.StatusBlocked {
+		t.Fatalf("the resumed review handed off %s, want blocked", h.Handoff.Status)
+	}
 
-	// The daemon's v2 terminal wiring closed the WI as FAILED (the
-	// recovery cause was the failure signal), and the log says so.
-	inst.waitWIStatus(t, wi, "failed", 60*time.Second)
-	waitUntil(t, 30*time.Second, "the daemon log never recorded the failed close", func() bool {
-		return strings.Contains(d.logTail(), "driver workflow failed (failed_rewind_exhausted)")
-	})
+	// The park closed the WI blocked and the owner's cancel ended it
+	// canceled (exhaustThenPark); the ladder itself was no death.
 
 	// No needs_recovery for the whole ladder: the failed exit is no death.
 	// The rewind cycles never left the driver (no re-derivation, no
@@ -122,6 +130,6 @@ func TestV1S07ProviderErrorStorm(t *testing.T) {
 			strings.Contains(inst.bareFileAtMain(t, wi, "runtime-state/execution.json"), "gate_fail_rewind")
 	})
 	if n := len(spawnJournal(t, capDir)); n != 9 {
-		t.Fatalf("spawn journal has %d entries, want 9 (nine step processes, zero re-derivations)", n)
+		t.Fatalf("spawn journal has %d entries, want 9 (eight step processes, then the resumed review that parks; nothing more is dispatched)", n)
 	}
 }

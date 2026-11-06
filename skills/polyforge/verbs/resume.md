@@ -3,8 +3,10 @@
 Execution-plane verb with two doors; the hub status of the work item picks
 the door. This is the human "continue" (the "abandon" of a blocked or paused
 work item is `cancel`). The
-blocked door is open to the task's reporter, a project maintainer or an
-admin.
+blocked door is open to the task's reporter, a project maintainer, an
+admin, or the current operator of the machine that last held the work item
+(its latest claim or attach), as a project writer or maintainer. The paused
+door stays a writer-level PATCH.
 
 ## Door 1 — a paused work item (hub status `paused`)
 
@@ -35,9 +37,12 @@ work item continues by itself once it exits (`recovery_parked` /
 
 Two steps: the CLI first lands aihub's resume-blocked door with the HUMAN's
 own api key (data plane, like `cancel`; the check is reporter / project
-maintainer / admin against the person typing, never the daemon's machine
-key), then asks the local daemon to claim and start the WI. A refused door
-(`AUTH-403`) stops there and the daemon is never contacted.
+maintainer / admin / holder operator against the person typing, never the
+daemon's machine key), then asks the local daemon to claim and start the
+WI. A refused door (`AUTH-403`) stops there and the daemon is never
+contacted. "Resume is a human verb" is a code convention: only this CLI
+calls the resume-blocked door and the daemon never does; the hub adds no
+check that tells a human operator from that operator's own daemon.
 
 The §6.4 owner move (polyforge#116): the workflow parked on an honest
 `incomplete` step result — `workflow_status=blocked` in the capsule, the
@@ -48,6 +53,16 @@ and the claim/start path's owner move unblocks the workflow — the frozen
 current step re-dispatches IN PLACE as a fresh derivation (the spawn
 journal and the step's prior output survive; the resumed lane continues
 the parked capsule, never a pre-blocked re-derivation).
+
+A step that cannot run its bar on this machine delivers `incomplete` with
+why and the log tail (`pf watch --once` shows `blocked: incomplete`): fix the
+machine, then resume. A spent rewind budget parks nothing: `pf step handoff`
+refuses a gate's FAIL that does not cite the owner once the budget is spent, so
+the gate asks the owner first (`pf step ask`) and hands off as the reply says.
+A `blocked: contract` work item is no resume: its lane snapshot targets another
+workflow contract version than the daemon runs (a work item a contract
+upgrade's drain left in flight), and resuming only parks it again — tell the
+human to `pf cancel` it and file it anew (docs/upgrade.md names the section).
 
 Success: `resumed <slug>: the workflow was parked blocked (incomplete
 result) — the §6.4 owner move re-established execution over the parked
@@ -73,7 +88,7 @@ pf resume <id> --accept-lost-work
 
 The human states that the work the sealing machine committed but never
 pushed is lost. Same door and same permission as a plain resume (reporter,
-project maintainer or admin); in the same aihub transaction the seal is
+project maintainer, admin or holder operator); in the same aihub transaction the seal is
 cleared and a `blocked_seal_abandoned` event records who, when, the
 abandoned capsule head and the machine. The claim that follows (on any
 machine) continues from the chain aihub holds; the CLI prints the
@@ -151,7 +166,7 @@ refused before anything else happens.
 | (no code) `submit: <slug> is terminal (<status>)` | The work item is wrapped/failed/canceled | A finished work item cannot be resumed — file a new one. |
 | `DAEMON-409` | The work item is already active or queued on this daemon, the `clean_pause` flag was not yet cleared at the hub, the paused resume was blocked by a typed mid-flight failure (missing capsule / unmapped project — the detail names the remediation), or the pause is still parked on a driver Run that outlived its teardown (`the close is parked …`) | `pf watch <id> --once` shows the state; for a blocked one, fix the named cause, then `pf resume` again; a parked pause finishes by itself once that Run exits (`close_parked`), then resume. |
 | `DAEMON-410` (`SHUTTING_DOWN`) | The daemon is shutting down | Wait for restart, then resume. |
-| `AUTH-403` (from the resume door) | The caller is not the work item's reporter, a project maintainer or an admin | Ask the task owner or a maintainer to continue it. |
+| `AUTH-403` (from the resume door) | The caller is not the work item's reporter, a project maintainer, an admin or the holding machine's current operator (the detail names that machine when one is recorded) | Ask the task owner, a maintainer or the named machine's operator to continue it. |
 | `DAEMON-503` (paused door) | The hub was unreachable while the holder daemon re-validated or re-attached the paused session | Nothing was resumed (`clean_pause` is already cleared, so the holder also attaches on its next start); retry `pf resume` once aihub answers. |
 | (200, `deferred: true`) | The hub was unreachable when the daemon went to claim after the resume door | Not an error and no error code: the claim is queued in the daemon (persisted, retried with backoff) and `pf resume` answers `resumed ...: the hub is unreachable right now; the claim is queued`. Do not run `pf resume` again — it would only find the work item already queued (`DAEMON-409`). |
 | `DAEMON-412` | The project has no `[workspace]` mapping on this machine (a claim/submit cannot place its capsule) | Re-add the project to a `[workspace."<path>"]` section (`pf doctor` checks it), then `pf resume`. |
@@ -163,12 +178,15 @@ refused before anything else happens.
 | `dial unix …` | Daemon not running | The blocked-door resume re-establishes execution, so a daemon must be involved — run `pf daemon ensure`, then retry once (or check `--socket`). The paused-door resume still cleared `clean_pause` at the hub; once the holder daemon starts, its restart reconciliation attaches the paused session (to continue without it, `pf ops end-session` + `pf submit`). |
 
 Do not route "continue / go on" of a **running** work item here — that is
-`watch`. A blocked work item has exactly two owner moves: continue it here,
-or abandon it with `pf cancel <id>`. There is no rewind-to-a-step move, and
-`pf wrap --fail` on a blocked work item only prints that hint.
+`watch`. A blocked work item is woken by your message (`pf answer`,
+`verbs/answer.md`): tell its step to go on, to go back to an earlier step,
+or to accept a waivable gate's FAIL, and it hands off accordingly. Continue
+it as it stands here, or abandon it with `pf cancel <id>` — the two moves
+for a park no agent can start; `pf wrap --fail` on a blocked work item only
+prints that hint.
 
 ## Watching after a resume
 
-`pf resume` subscribes the resuming chat to the work item like `pf submit`
-does; nothing to re-arm. If the chat's watcher is not running, start it (see
-the `pf watch` section of `SKILL.md`).
+Nothing to re-arm: like a submitted one, the resumed work item's decisions
+land in the daemon's decision feed (Pi Web's Polyforge panel; `pf watch
+decisions`), and progress is one `pf watch <id> --once`.

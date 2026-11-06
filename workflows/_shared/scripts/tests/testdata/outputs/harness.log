@@ -1,0 +1,21 @@
+FAIL TestBeta
+FAIL TestGamma
+slowest:
+      0.0s  TestAlpha
+      0.0s  TestBeta
+      0.0s  TestGamma
+=== output of TestBeta
+=== RUN   TestBeta
+=== RUN   TestBeta/sub
+    e2e_test.go:9: beta broke:
+          want: 1
+          got:  2
+--- FAIL: TestBeta (0.00s)
+    --- FAIL: TestBeta/sub (0.00s)
+FAIL
+=== output of TestGamma
+=== RUN   TestGamma
+    e2e_test.go:14: gamma: no answer
+--- FAIL: TestGamma (0.00s)
+FAIL
+FAIL	e2e	3/3 tests ran, failed: TestBeta TestGamma 	3s (E2E_JOBS=2)

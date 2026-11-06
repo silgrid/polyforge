@@ -44,6 +44,25 @@ func TestValidateConfigForDaemon(t *testing.T) {
 	_ = daemonBad
 }
 
+// TestRemovedBarLimitKeyIsRefused: the per-repo bar limit left with the
+// bar lock; a cli.toml still carrying it is refused at its
+// line as an unknown [daemon] key, whatever its value — never silently
+// ignored (docs/upgrade.md, the workflow contract 4 section).
+func TestRemovedBarLimitKeyIsRefused(t *testing.T) {
+	clearEnv(t)
+	ws := t.TempDir()
+	base := "[workspace.\"" + ws + "\"]\nprojects = [\"e2e\"]\n\n[daemon]\n"
+	for _, v := range []string{"1", "2", "0"} {
+		_, err := ParseConfigBytes("/tmp/cli.toml", []byte(base+"max_concurrent_bars = 2\nmax_concurrent_bars_per_repo = "+v+"\n"))
+		if err == nil || !strings.Contains(err.Error(), "line 6: [daemon] max_concurrent_bars_per_repo: unknown key") {
+			t.Fatalf("value %s: want the removal's refusal at line 6, got %v", v, err)
+		}
+	}
+	if _, err := parseConfigKey("max_concurrent_bars_per_repo"); err == nil {
+		t.Fatal("`pf config get|set max_concurrent_bars_per_repo` must refuse an unknown key")
+	}
+}
+
 func TestParseConfigBytesRoundTripsDurations(t *testing.T) {
 	clearEnv(t)
 	ws := t.TempDir()

@@ -24,10 +24,9 @@ func TestV1S09GracefulShutdown(t *testing.T) {
 		[]map[string]any{
 			// Ordinal 1 holds mid-step (delayed envelope write) so the
 			// shutdown interrupts a live driver with a live step process.
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true, "ms": 60000},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 60000},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
@@ -70,10 +69,10 @@ func TestV1S09GracefulShutdown(t *testing.T) {
 	if sessShutdown.CleanPause {
 		t.Fatalf("shutdown must not set the operator-pause flag: %+v", sessShutdown)
 	}
-	// The interrupted step is durable: grill in_progress on the retained
+	// The interrupted step is durable: fix in_progress on the retained
 	// capsule face (the recovery engine's re-dispatch input).
-	if x := readExecution(t, capDir); x.Steps["grill"].Status != "in_progress" {
-		t.Fatalf("the interrupted step is not in_progress on the retained face: %+v", x.Steps["grill"])
+	if x := readExecution(t, capDir); x.Steps["fix"].Status != "in_progress" {
+		t.Fatalf("the interrupted step is not in_progress on the retained face: %+v", x.Steps["fix"])
 	}
 
 	// A restarted daemon reconciles + resumes, and the workflow finishes.
@@ -92,14 +91,14 @@ func TestV1S09GracefulShutdown(t *testing.T) {
 		t.Fatalf("wrapped work item still names session %q", sess.Fingerprint)
 	}
 
-	// The resume re-dispatched grill in place (a RESUME under the next
+	// The resume re-dispatched fix in place (a RESUME under the next
 	// ordinal), then the tail ran fresh.
-	spawns := waitSpawnCount(t, d2, wi, 4, 60*time.Second)
+	spawns := waitSpawnCount(t, d2, wi, 3, 60*time.Second)
 	if spawns[1]["resume"] != true {
 		t.Fatalf("post-shutdown restart did not resume: %+v", spawns[1])
 	}
 	x := readExecution(t, capDir)
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		if st := x.Steps[step]; st == nil || st.Status != "done" {
 			t.Fatalf("step %s: %+v, want done", step, st)
 		}

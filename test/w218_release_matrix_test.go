@@ -67,7 +67,9 @@ func w218Publish(t *testing.T) (*relWorld, string) {
 // test pins).
 func TestW218ReleaseCarriesFullDarwinMatrix(t *testing.T) {
 	_, rel := w218Publish(t)
-	want := append(append([]string{}, w218BinAssets...), "aihub-image.digest", "SHA256SUMS")
+	// the same release also carries the pi-web tarball and
+	// release-manifest.json.
+	want := append(append([]string{}, w218BinAssets...), "aihub-image.digest", "silgrid-pi-web-v1.2.1.tgz", "SHA256SUMS", "release-manifest.json")
 	entries, err := os.ReadDir(rel)
 	if err != nil {
 		t.Fatalf("read published release dir: %v", err)
@@ -106,13 +108,13 @@ func TestW218ReleaseCarriesFullDarwinMatrix(t *testing.T) {
 			covered[fields[1]] = true
 		}
 	}
-	for _, f := range append(append([]string{}, w218BinAssets...), "aihub-image.digest") {
+	for _, f := range append(append([]string{}, w218BinAssets...), "aihub-image.digest", "silgrid-pi-web-v1.2.1.tgz") {
 		if !covered[f] {
 			t.Fatalf("SHA256SUMS does not cover %s: it MUST cover every asset of the matrix; observed SHA256SUMS:\n%s", f, sums)
 		}
 	}
-	if len(covered) != len(w218BinAssets)+1 {
-		t.Fatalf("SHA256SUMS covers %d files, want exactly the %d assets of the matrix; observed SHA256SUMS:\n%s", len(covered), len(w218BinAssets)+1, sums)
+	if len(covered) != len(w218BinAssets)+2 {
+		t.Fatalf("SHA256SUMS covers %d files, want exactly the %d payload assets of the release; observed SHA256SUMS:\n%s", len(covered), len(w218BinAssets)+2, sums)
 	}
 }
 
@@ -141,7 +143,7 @@ func TestW218ReleaseVerifyChecksFullMatrix(t *testing.T) {
 	if !strings.Contains(vout, "PASS sha256sum -c SHA256SUMS") {
 		t.Fatalf("verify output does not show the checksum check passing:\n%s", vout)
 	}
-	if !strings.Contains(vout, "PASS exactly the 4 payload assets + SHA256SUMS") {
+	if !strings.Contains(vout, "PASS exactly the 5 payload assets + SHA256SUMS + release-manifest.json") {
 		t.Fatalf("verify output does not show the exact asset-set check passing:\n%s", vout)
 	}
 	// a pre-consolidation aihub binary asset next to the matrix fails the

@@ -86,6 +86,7 @@ func shutdownAndWait(t *testing.T, td *testDaemon) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("daemon did not stop")
 	}
+	settleAfterShutdown(t, td.Daemon)
 }
 
 // An accepted-but-undispatched submit is on disk (submitted_at + origin),
@@ -97,20 +98,26 @@ func TestSubmitQueueSurvivesRestartAndReplays(t *testing.T) {
 	const wi = "wi_q_replay"
 	td1 := newTestDaemon(t, func(c *Config) {
 		c.Hub = hub
-		c.DispatchTick = time.Hour // the submit stays pending
+		c.MaxConcurrent = 1
+		c.DispatchTick = time.Hour
 		data, hubBase = c.DataDir, c.GitRemoteBase
 	})
+	// The submit stays pending: — a free-slot submit claims
+	// before it answers, so td1's only slot is held (no hub claim, so the
+	// claim count below is the replay's alone) and the submit is answered
+	// queued, never claimed before the restart.
+	occupySlots(td1, "wi_q_slot_holder")
 	mkBare(t, hubBase, wi)
 	hub.status[wi] = api.StatusQueued
-	if code := postSubmit(t, td1.sock, "/jobs/"+wi+"/claim", `{"priority":"high","origin":{"chat_id":"chat-9","owner":"usr_1"}}`); code != 200 {
+	if code := postSubmit(t, td1.sock, "/jobs/"+wi+"/claim", `{"priority":"high","origin":{"owner":"usr_1"}}`); code != 200 {
 		t.Fatalf("submit status %d", code)
 	}
 	ents := readQueueFile(t, data)
 	if len(ents) != 1 || ents[0].WorkItemID != wi || ents[0].SubmittedAt.IsZero() {
 		t.Fatalf("persisted queue = %+v", ents)
 	}
-	if ents[0].Origin != (runtime.Origin{Kind: runtime.OriginChat, ChatID: "chat-9", Owner: "usr_1"}) {
-		t.Fatalf("origin/chat not carried: %+v", ents[0].Origin)
+	if ents[0].Origin != (runtime.Origin{Kind: runtime.OriginChat, Owner: "usr_1"}) {
+		t.Fatalf("origin not carried: %+v", ents[0].Origin)
 	}
 	shutdownAndWait(t, td1)
 
@@ -123,7 +130,7 @@ func TestSubmitQueueSurvivesRestartAndReplays(t *testing.T) {
 	if hub.claimCount() != 1 {
 		t.Fatalf("replayed submit must claim exactly once, got %d", hub.claimCount())
 	}
-	if ji, ok := td2.rt.Info(wi); !ok || ji.Origin == nil || *ji.Origin != (runtime.Origin{Kind: runtime.OriginChat, ChatID: "chat-9", Owner: "usr_1"}) {
+	if ji, ok := td2.rt.Info(wi); !ok || ji.Origin == nil || *ji.Origin != (runtime.Origin{Kind: runtime.OriginChat, Owner: "usr_1"}) {
 		t.Fatalf("replayed claim must hand the persisted origin to the job record, got %+v", ji.Origin)
 	}
 	// the dequeue is persisted too
@@ -139,9 +146,13 @@ func TestSubmitModelsPersistedAndValidated(t *testing.T) {
 	const wi = "wi_q_models"
 	td1 := newTestDaemon(t, func(c *Config) {
 		c.Hub = hub
+		c.MaxConcurrent = 1
 		c.DispatchTick = time.Hour
 		data, hubBase = c.DataDir, c.GitRemoteBase
 	})
+	// The submit stays pending until the restart: — a
+	// free-slot submit claims before it answers, so td1's only slot is held.
+	occupySlots(td1, "wi_q_slot_holder")
 	mkBare(t, hubBase, wi)
 	hub.status[wi] = api.StatusQueued
 	for _, bad := range []string{`[]`, `["pi:a",""]`, `["pi:a","pi:a"]`, `["pi:a"," pi:a "]`, `["p/a"]`, `["codex:a"]`, `["claude:"]`} {
@@ -356,6 +367,8 @@ func TestRestartMissingCapsuleBlocksOnlyThatWI(t *testing.T) {
 		case <-runErr:
 		case <-time.After(15 * time.Second):
 		}
+		// the bad WI's close persists the job set after the hub saw it
+		settleAfterShutdown(t, d)
 	})
 	client := cli.NewDaemonClient(sock)
 	var st cli.StatusResponse
@@ -390,6 +403,30 @@ func TestRestartMissingCapsuleBlocksOnlyThatWI(t *testing.T) {
 	}
 	if !hasKind(eventKinds(d, good), observe.EvDaemonRestarted) {
 		t.Errorf("want daemon_restarted on %s, got %v", good, eventKinds(d, good))
+	}
+}
+
+// occupySlots makes the queue count the given work items as running jobs
+// holding concurrency slots (no runtime job, no hub claim): a test whose
+// submit must stay pending fills the slots with it (a
+// submit that finds a free slot claims before it answers).
+func occupySlots(td *testDaemon, wis ...string) {
+	held := map[string]bool{}
+	for _, wi := range wis {
+		held[wi] = true
+	}
+	td.q.mu.Lock()
+	defer td.q.mu.Unlock()
+	live := td.q.occupied
+	td.q.occupied = func() map[string]bool {
+		m := map[string]bool{}
+		for wi := range live() {
+			m[wi] = true
+		}
+		for wi := range held {
+			m[wi] = true
+		}
+		return m
 	}
 }
 

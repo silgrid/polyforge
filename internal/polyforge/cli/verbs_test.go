@@ -827,7 +827,11 @@ func TestVerbSubmitPrecheckRefusesTerminal(t *testing.T) {
 	srv := newFakeAihub(t, &rec, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, strings.Replace(cannedWI, `"queued"`, `"wrapped"`, 1))
 	})
-	code, _, stderr := runPf(t, map[string]string{"PF_SERVER": srv.URL, "PF_DAEMON_SOCKET": "/nonexistent/x.sock"},
+	// a daemon that would refuse every claim (none may be attempted)
+	sock := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	code, _, stderr := runPf(t, map[string]string{"PF_SERVER": srv.URL, "PF_DAEMON_SOCKET": sock},
 		"submit", "wi_abc")
 	if code != 1 {
 		t.Fatalf("terminal precheck must exit 1, got %d", code)
@@ -957,22 +961,31 @@ func TestAdminVerbsRequestShapes(t *testing.T) {
 	}
 }
 
-// TestFlagBeatsEnvEndToEnd: --server on the command line wins over the
+// TestConnectionOverridesAreRefused: --server on the command line wins over the
 // PF_SERVER environment value on a real verb call (level 3 of the
 // config chain; levels 0-2 are pinned in config_test.go).
-func TestFlagBeatsEnvEndToEnd(t *testing.T) {
+func TestConnectionOverridesAreRefused(t *testing.T) {
 	var rec reqRecorder
 	srv := newFakeAihub(t, &rec, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, cannedWI)
 	})
-	env := map[string]string{"PF_SERVER": "http://env-loses.invalid:1", "PF_API_KEY": "k_env"}
-	code, _, stderr := runPf(t, env, "--server", srv.URL, "--api-key", "k_flag", "file", "show", "wi_abc")
-	if code != 0 {
-		t.Fatalf("code=%d stderr=%s", code, stderr)
+	// the flags: refused naming them and the Cell configuration route
+	code, _, stderr := runPf(t, map[string]string{"PF_SERVER": srv.URL, "PF_API_KEY": "k"}, "--server", srv.URL, "--api-key", "k_flag", "file", "show", "wi_abc")
+	if code != 1 || !strings.Contains(stderr, "--server") || !strings.Contains(stderr, "config set server") {
+		t.Fatalf("flags: code=%d stderr=%s", code, stderr)
 	}
-	// The flag server received the request; the env server never could.
-	if got := rec.last(); got.Header.Get("Authorization") != "Bearer k_flag" {
-		t.Errorf("auth = %q, want the flag api key", got.Header.Get("Authorization"))
+	// the environment: refused too (set directly, not through the proxy
+	// stand-in), and nothing reached the Hub
+	clearEnv(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PF_SERVER", srv.URL)
+	t.Setenv("PF_API_KEY", "k_env")
+	var stdout, errb bytes.Buffer
+	if code := Run([]string{"file", "show", "wi_abc"}, nil, &stdout, &errb); code != 1 || !strings.Contains(errb.String(), "PF_SERVER") {
+		t.Fatalf("env: code=%d stderr=%s", code, errb.String())
+	}
+	if n := len(rec.all()); n != 0 {
+		t.Fatalf("a refused override still reached the Hub (%d requests)", n)
 	}
 }
 

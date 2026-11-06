@@ -3,7 +3,7 @@ package daemon
 // tasks.go: the one-shot task agent's daemon face (carried
 // from #40).
 //
-//	POST /task/spawn          {project, prompt, max_duration?, max_tokens?, origin_chat?, caller_id?}
+//	POST /task/spawn          {project, prompt, max_duration?, max_tokens?, caller_id?}
 //	GET  /task/list
 //	GET  /task/show/{id}
 //	POST /task/cancel/{id}
@@ -91,7 +91,55 @@ func (d *Daemon) newTaskManager(rtCfg *runtime.Config) *task.Manager {
 		Runner:  runner,
 		Resolve: func(project string) ([]string, string, error) { return d.rt.TaskModels(project) },
 		WorkDir: d.taskWorkDir,
+		Slots:   d.taskSlots(),
+		Admit:   d.admitTask,
+		Done:    d.taskDone,
+		// a finished task's summary goes to the decision feed
+		OnTerminal: d.recordTask,
 	})
+}
+
+// taskSlots answers the Host's shared background-model-call bound (nil
+// unhosted: the manager's own limit).
+func (d *Daemon) taskSlots() *task.Slots {
+	if d.cfg.HostSlots == nil {
+		return nil
+	}
+	return d.cfg.HostSlots.tasks
+}
+
+// admitTask is the one admission of every one-off task (task.Manager's
+// Admit hook: the spawn route, the analyze/prompt spawns, every path that
+// creates a task): refused while the Cell's execution is disabled or a
+// connection rotation is pending (drain.go), else it reserves an
+// execution slot at both ceilings (hostslots.go; unhosted, the manager's
+// own limit only) and counts the task as held work of the Cell. The
+// pending check and the reservation are one step under drainGate. A
+// refusal leaves no record, slot or run.
+func (d *Daemon) admitTask() error {
+	if err := d.execDisabledRefusal(); err != nil {
+		return err
+	}
+	d.drainGate.Lock()
+	defer d.drainGate.Unlock()
+	if err := d.drainRefusal(); err != nil {
+		return err
+	}
+	if d.cfg.HostSlots != nil {
+		if err := d.cfg.HostSlots.admitTask(d); err != nil {
+			return err
+		}
+	}
+	d.tasksHeld.Add(1)
+	return nil
+}
+
+// taskDone returns the reservation admitTask took.
+func (d *Daemon) taskDone() {
+	d.tasksHeld.Add(-1)
+	if d.cfg.HostSlots != nil {
+		d.cfg.HostSlots.taskDone(d)
+	}
 }
 
 // taskWorkDir answers the directory one task's harness runs in: the
@@ -130,13 +178,12 @@ func (d *Daemon) taskSpawnRoute(w http.ResponseWriter, r *http.Request) {
 		Prompt      string `json:"prompt"`
 		MaxDuration string `json:"max_duration"`
 		MaxTokens   int64  `json:"max_tokens"`
-		OriginChat  string `json:"origin_chat"`
 		CallerID    string `json:"caller_id"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	spec := task.Spec{Project: req.Project, Prompt: req.Prompt, OriginChat: req.OriginChat, MaxTokens: req.MaxTokens,
+	spec := task.Spec{Project: req.Project, Prompt: req.Prompt, MaxTokens: req.MaxTokens,
 		CallerID: req.CallerID}
 	if req.MaxDuration != "" {
 		dur, err := task.ParseDuration(req.MaxDuration)

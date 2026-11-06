@@ -1,0 +1,1353 @@
+"use client";
+
+import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from "react";
+import { getFileIcon, FolderIcon } from "./FileIcons";
+import { DismissButton } from "./DismissButton";
+import {
+  encodeFilePathForApi,
+  getFileDirectory,
+  getFileName,
+  getRelativeFilePath,
+  joinFilePath,
+  normalizeFilePathSlashes,
+} from "@/lib/file-paths";
+import type { GitFileStatus, GitFileStatusKind, GitStatusResponse } from "@/lib/git-types";
+import type { FileIndexEntry } from "@/lib/file-fuzzy";
+import { uploadFiles, type UploadConflictStrategy, type UploadError, type UploadResponse } from "@/lib/file-upload-client";
+import { buildSearchTree, type SearchTreeNode } from "@/lib/search-tree";
+import {
+  getShowBuildOutputs,
+  subscribeShowBuildOutputs,
+} from "@/lib/build-outputs-preference";
+import { useI18n } from "@/hooks/useI18n";
+type Translate = ReturnType<typeof useI18n>["t"];
+
+interface FileEntry {
+  name: string;
+  isDir: boolean;
+  size: number;
+  modified: string;
+  /** Surfaces only under the listing's `showIgnored` opt-in: git ignores
+   *  this entry, so the row renders dimmed with the reason in its tooltip. */
+  ignored?: boolean;
+  /** Where a directory link leads when that is outside the browsable roots. */
+  outsideLinkTarget?: string;
+  /** That target contains the project or the home folder. */
+  outsideLinkEncloses?: boolean;
+}
+
+interface FileNode {
+  name: string;
+  fullPath: string;
+  isDir: boolean;
+  size: number;
+  children?: FileNode[];
+  loaded?: boolean;
+  ignored?: boolean;
+  outsideLinkTarget?: string;
+  outsideLinkEncloses?: boolean;
+}
+
+interface Props {
+  cwd: string;
+  onOpenFile: (filePath: string, fileName: string, options?: OpenFileOptions) => void;
+  refreshKey?: number;
+  onAtMention?: (relativePath: string, isDir: boolean) => void;
+  onAtMentions?: (relativePaths: string[]) => void;
+  onUploadBusyChange?: (busy: boolean) => void;
+  changesCollapsed: boolean;
+  onChangesCountChange?: (count: number) => void;
+  fileSearchOpen?: boolean;
+  onFileSearchOpenChange?: (open: boolean) => void;
+  /** Full path of the file currently shown in the editor/preview pane (the
+   *  real active file-tab identity from AppShell), for the "currently
+   *  open" row highlight. This root's tree only highlights a row when one
+   *  of its own nodes matches; a path belonging to another root highlights
+   *  nothing here. */
+  activeFilePath?: string | null;
+  /** The explorer-level "show git-ignored files" opt-in (wi pi#101): driven
+   *  by the single toolbar toggle in MultiRootFileExplorer. Component state
+   *  only — never persisted; each root's listing runs git against its own
+   *  cwd, which is the multi-root semantics. */
+  showIgnoredFiles?: boolean;
+}
+
+export interface FileExplorerHandle {
+  openUploadPicker: () => void;
+}
+
+type UploadPhase = "idle" | "checking" | "uploading";
+
+interface UploadSummary {
+  uploaded: string[];
+  skipped: string[];
+  errors: UploadError[];
+}
+
+interface PendingConflict {
+  files: File[];
+  conflicts: string[];
+  nonReplaceable: string[];
+}
+
+async function responseError(res: Response, fallback: string): Promise<Error> {
+  let message = `${fallback} (HTTP ${res.status})`;
+  try {
+    const data = await res.json() as { error?: string };
+    if (data.error) message = data.error;
+  } catch {
+    // ignore non-JSON error bodies
+  }
+  return new Error(message);
+}
+
+async function fetchEntries(
+  dirPath: string,
+  opts?: { showBuildOutputs?: boolean; showIgnored?: boolean },
+): Promise<FileNode[]> {
+  const encoded = encodeFilePathForApi(dirPath);
+  // showBuildOutputs is the per-workspace opt-in that surfaces build/dist
+  // directories in the tree listing (see lib/build-outputs-preference.ts).
+  // showIgnored is the explorer's opt-in that surfaces git-ignored entries,
+  // each marked `ignored` by the server so the row can render dimmed.
+  const query = new URLSearchParams({ type: "list" });
+  if (opts?.showBuildOutputs) query.set("showBuildOutputs", "1");
+  if (opts?.showIgnored) query.set("showIgnored", "1");
+  const res = await fetch(`/api/files/${encoded}?${query.toString()}`);
+  if (!res.ok) throw await responseError(res, "Failed to load files");
+  const data = await res.json() as { entries?: FileEntry[] };
+  return (data.entries ?? []).map((e) => ({
+    name: e.name,
+    fullPath: joinFilePath(dirPath, e.name),
+    isDir: e.isDir,
+    size: e.size,
+    children: e.isDir ? [] : undefined,
+    loaded: !e.isDir,
+    outsideLinkTarget: e.outsideLinkTarget,
+    outsideLinkEncloses: e.outsideLinkEncloses,
+    ignored: e.ignored,
+  }));
+}
+
+// Sends the target the operator was shown, so a link pointed elsewhere since
+// the listing is refused instead of granting a directory nobody looked at.
+async function allowOutsideLink(linkPath: string, target: string): Promise<void> {
+  const res = await fetch(`/api/files/${encodeFilePathForApi(linkPath)}?type=allow-link`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target }),
+  });
+  if (!res.ok) throw await responseError(res, "Failed to allow the linked folder");
+}
+
+async function fetchGitStatus(cwd: string): Promise<GitStatusResponse> {
+  const params = new URLSearchParams({ cwd });
+  const res = await fetch(`/api/git/status?${params.toString()}`);
+  if (!res.ok) throw new Error(`Failed to load Git status (HTTP ${res.status})`);
+  return res.json() as Promise<GitStatusResponse>;
+}
+
+const GIT_STATUS_KEYS: Record<GitFileStatusKind, string> = {
+  modified: "files.modified",
+  added: "files.added",
+  deleted: "files.deleted",
+  renamed: "files.renamed",
+  untracked: "files.untracked",
+  conflict: "files.conflict",
+};
+
+const GIT_STATUS_COLORS: Record<GitFileStatusKind, string> = {
+  modified: "#d6a84b",
+  added: "#4ade80",
+  deleted: "#f87171",
+  renamed: "#60a5fa",
+  untracked: "#4ade80",
+  conflict: "#f87171",
+};
+
+function GitStatusBadge({ status, t }: { status: GitFileStatus; t: Translate }) {
+  return (
+    <span
+      title={t(GIT_STATUS_KEYS[status.status])}
+      aria-label={t(GIT_STATUS_KEYS[status.status])}
+      style={{
+        width: 14,
+        height: 14,
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: GIT_STATUS_COLORS[status.status],
+        fontFamily: "var(--font-mono)",
+        fontSize: 11,
+        fontWeight: 600,
+      }}
+    >
+      {status.code}
+    </span>
+  );
+}
+
+function MentionIcon({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" />
+    </svg>
+  );
+}
+
+function OutsideLinkIcon({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    </svg>
+  );
+}
+
+// Indentation guides (VSCode-style): one thin vertical line per ancestor
+// level, positioned to line up with that ancestor's own chevron column.
+// Every row deeper than a given ancestor draws that ancestor's segment
+// (exactly matching the row's own 24px height), so stacked sibling rows
+// with no gaps assemble into one continuous line for as long as the
+// ancestor's subtree stays visible — no separate "last child" bookkeeping
+// needed. Rendered as absolutely positioned children of the row box
+// (which is already `position: relative`), so this never affects layout,
+// row height, or the marginLeft-based indent geometry those are measured
+// against (wi pi#57).
+const INDENT_STEP = 14;
+const GUIDE_INSET = 13; // row paddingLeft (8) + half the chevron width (5)
+
+function IndentGuides({ depth }: { depth: number }) {
+  if (depth <= 0) return null;
+  return (
+    <>
+      {Array.from({ length: depth }, (_, i) => (
+        <span
+          key={i}
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: GUIDE_INSET - INDENT_STEP * (i + 1),
+            width: 1,
+            background: "var(--border)",
+            pointerEvents: "none",
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+export function TreeNode({
+  node,
+  depth,
+  cwd,
+  onOpenFile,
+  onAtMention,
+  expandedPaths,
+  onToggleExpanded,
+  refreshToken,
+  highlightedPaths,
+  gitStatusByPath,
+  changedDirectoryPaths,
+  activeFilePath,
+  showIgnoredFiles,
+  t,
+}: {
+  node: FileNode;
+  depth: number;
+  cwd: string;
+  onOpenFile: (filePath: string, fileName: string, options?: OpenFileOptions) => void;
+  onAtMention?: (relativePath: string, isDir: boolean) => void;
+  expandedPaths: Set<string>;
+  onToggleExpanded: (fullPath: string, open: boolean) => void;
+  refreshToken?: string;
+  highlightedPaths: Set<string>;
+  gitStatusByPath: Map<string, GitFileStatus>;
+  changedDirectoryPaths: Set<string>;
+  /** Full path of the file currently shown in the editor/preview pane (the
+   *  real active file-tab identity threaded down from AppShell), for the
+   *  "currently open" row highlight (distinct from hover). Compared through
+   *  normalizeFilePathSlashes, same as the git-status lookup below, since
+   *  git emits POSIX separators even on Windows. */
+  activeFilePath?: string | null;
+  /** The explorer's "show git-ignored files" opt-in, threaded down so every
+   *  lazily-loaded child listing asks for ignored entries the same way the
+   *  root listing did. Ignored rows are marked by the server (`node.ignored`)
+   *  and render dimmed with the reason in their tooltip. */
+  showIgnoredFiles?: boolean;
+  t: Translate;
+}) {
+  const open = expandedPaths.has(node.fullPath);
+  const highlighted = highlightedPaths.has(node.fullPath);
+  const normalizedPath = normalizeFilePathSlashes(node.fullPath);
+  const active = !node.isDir && activeFilePath != null
+    && normalizeFilePathSlashes(activeFilePath) === normalizedPath;
+  const gitStatus = gitStatusByPath.get(normalizedPath);
+  const containsGitChanges = node.isDir && (
+    gitStatus !== undefined || changedDirectoryPaths.has(normalizedPath)
+  );
+  const [children, setChildren] = useState<FileNode[]>(node.children ?? []);
+  const [loaded, setLoaded] = useState(node.loaded ?? false);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [hovered, setHovered] = useState(false);
+  const [allowedLinkTarget, setAllowedLinkTarget] = useState<string | null>(null);
+  const [allowingLink, setAllowingLink] = useState(false);
+  const [allowLinkError, setAllowLinkError] = useState<string | null>(null);
+  // A link leading outside the project is refused until the operator allows
+  // its target, so it asks for that instead of listing (#748).
+  const pendingLinkTarget = node.outsideLinkTarget && node.outsideLinkTarget !== allowedLinkTarget
+    ? node.outsideLinkTarget
+    : null;
+
+  // A listing that reports the link again (a server restart forgets allowed
+  // targets, or the link was pointed elsewhere) needs a new decision.
+  useEffect(() => {
+    setAllowedLinkTarget(null);
+    setAllowLinkError(null);
+  }, [node.outsideLinkTarget]);
+
+  const loadChildren = useCallback(async (force = false) => {
+    if (loaded && !force) return;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      // Read the global preference at fetch time so a toggle (which
+      // bumps the tree refresh token and re-fetches expanded nodes) is honored
+      // without threading a prop through every TreeNode.
+      const entries = await fetchEntries(node.fullPath, {
+        showBuildOutputs: getShowBuildOutputs(),
+        showIgnored: showIgnoredFiles,
+      });
+      setChildren(entries);
+      setLoaded(true);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }, [loaded, node.fullPath, showIgnoredFiles]);
+
+  // Re-fetch children when the tree refreshes and the directory is open.
+  useEffect(() => {
+    if (refreshToken !== undefined && open && loaded && !pendingLinkTarget) {
+      loadChildren(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken]);
+
+  const handleClick = useCallback(() => {
+    if (node.isDir) {
+      const next = !open;
+      onToggleExpanded(node.fullPath, next);
+      if (next && !loaded && !pendingLinkTarget) loadChildren();
+    } else {
+      onOpenFile(node.fullPath, node.name);
+    }
+  }, [node.isDir, node.fullPath, node.name, loaded, open, pendingLinkTarget, loadChildren, onOpenFile, onToggleExpanded]);
+
+  const handleAllowLink = useCallback(async (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (!pendingLinkTarget) return;
+    // A link to `/`, `~` or a parent of the project opens far more than a
+    // sibling folder, and a cloned repository can contain one.
+    if (node.outsideLinkEncloses && !window.confirm(t("files.allowEnclosingLinkConfirm", { target: pendingLinkTarget }))) {
+      return;
+    }
+    setAllowingLink(true);
+    setAllowLinkError(null);
+    try {
+      await allowOutsideLink(node.fullPath, pendingLinkTarget);
+      setAllowedLinkTarget(pendingLinkTarget);
+      await loadChildren(true);
+    } catch (error) {
+      setAllowLinkError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAllowingLink(false);
+    }
+  }, [node.fullPath, node.outsideLinkEncloses, pendingLinkTarget, loadChildren, t]);
+
+  return (
+    <div>
+      <div
+        onClick={handleClick}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          // Indent the ROW BOX itself (not just its inner content) so the
+          // box left edge — and with it the hover-highlight strip — visibly
+          // shifts per nesting level (fix for the "no visible indent"
+          // defect: content padding inside a full-width row leaves the row
+          // flush with its parent).
+          // (depth + 1): depth-0 children must nest one level INSIDE their
+          // section header, which stays flush at margin 0 (wi pi#57).
+          marginLeft: (depth + 1) * 14,
+          paddingLeft: 8,
+          paddingRight: 8,
+          height: 24,
+          cursor: "pointer",
+          // Three distinct, theme-token-only states: plain / hovered /
+          // active (selected — the currently open file). Active wins over
+          // hover so mousing over the open file does not read as merely
+          // hovered.
+          background: active ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
+          boxShadow: active ? "inset 2px 0 0 var(--accent)" : "none",
+          borderRadius: 4,
+          userSelect: "none",
+          // A git-ignored entry (surfaced only under the showIgnored opt-in)
+          // renders dimmed — fork's visual language for surfaced-but-muted
+          // rows, same opacity the build-output precedent uses elsewhere.
+          opacity: node.ignored ? 0.55 : 1,
+        }}
+      >
+        <IndentGuides depth={depth} />
+        {node.isDir && (
+          <svg
+            width="10" height="10" viewBox="0 0 10 10" fill="none"
+            stroke={hovered || open ? "var(--text-muted)" : "var(--text-dim)"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : "none", transition: "transform 0.12s ease" }}
+          >
+            <polyline points="3 2 7 5 3 8" />
+          </svg>
+        )}
+        {!node.isDir && <span style={{ width: 10, flexShrink: 0 }} />}
+        <span style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>
+          {node.isDir ? <FolderIcon size={14} open={open} /> : getFileIcon(node.name, 14)}
+        </span>
+        <span
+          style={{
+            fontSize: 12,
+            color: "var(--text)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            // The name's box ends with its text: a flex:1 name
+            // ran under the absolutely placed hover controls below, so a click
+            // on the name's middle could land on "Insert path into chat".
+            flex: "0 1 auto",
+            minWidth: 0,
+          }}
+          title={node.ignored ? `${node.fullPath} (${t("files.ignoredByGit")})` : node.fullPath}
+        >
+          {node.name}
+        </span>
+        {/* Keeps the trailing badges right-aligned; part of the row's click target. */}
+        <span style={{ flex: 1 }} />
+        {!hovered && pendingLinkTarget && (
+          <span
+            title={t("files.outsideLink", { target: pendingLinkTarget })}
+            aria-label={t("files.outsideLink", { target: pendingLinkTarget })}
+            style={{ width: 14, height: 14, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)" }}
+          >
+            <OutsideLinkIcon />
+          </span>
+        )}
+        {highlighted && (
+          <span
+            title={t("files.newlyUploaded")}
+            aria-label={t("files.newlyUploaded")}
+            style={{ width: 14, height: 14, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#3b82f6" }} />
+          </span>
+        )}
+        {!hovered && !node.isDir && gitStatus && (
+          <GitStatusBadge status={gitStatus} t={t} />
+        )}
+        {!hovered && containsGitChanges && (
+          <span
+            title={t("files.containsChangedFiles")}
+            aria-label={t("files.containsChangedFiles")}
+            style={{
+              width: 14,
+              height: 14,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#d6a84b" }} />
+          </span>
+        )}
+        {loading && (
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round">
+            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4" />
+          </svg>
+        )}
+        {onAtMention && hovered && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onAtMention(getRelativeFilePath(node.fullPath, cwd), node.isDir);
+            }}
+            title={t("files.insertPath")}
+            style={{
+              position: "absolute",
+              right: !node.isDir ? 28 : 4,
+              top: "50%",
+              transform: "translateY(-50%)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 4,
+              padding: "0 8px",
+              height: 20,
+              background: "var(--bg-panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              color: "var(--accent)",
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+            }}
+          >
+            <MentionIcon />
+            {t("files.mention")}
+          </button>
+        )}
+        {hovered && !node.isDir && (
+          <a
+            href={`/api/files/${encodeFilePathForApi(node.fullPath)}?type=download`}
+            download
+            onClick={(e) => e.stopPropagation()}
+            title={t("files.download")}
+            style={{
+              position: "absolute",
+              right: 4,
+              top: "50%",
+              transform: "translateY(-50%)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 4,
+              padding: "0 5px",
+              height: 20,
+              background: "var(--bg-panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+              textDecoration: "none",
+            }}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+          </a>
+        )}
+      </div>
+      {node.isDir && open && pendingLinkTarget && (
+        <div
+          style={{
+            paddingLeft: 8 + (depth + 1) * 14,
+            paddingRight: 8,
+            paddingTop: 3,
+            paddingBottom: 5,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            gap: 4,
+            fontSize: 11,
+            color: "var(--text-dim)",
+          }}
+        >
+          <span style={{ wordBreak: "break-all" }}>{t("files.outsideLink", { target: pendingLinkTarget })}</span>
+          {node.outsideLinkEncloses && (
+            <span style={{ color: "#f59e0b" }}>{t("files.outsideLinkEncloses")}</span>
+          )}
+          <button
+            type="button"
+            onClick={handleAllowLink}
+            disabled={allowingLink}
+            title={t("files.allowOutsideLinkTitle", { target: pendingLinkTarget })}
+            style={{
+              height: 20,
+              padding: "0 8px",
+              background: "var(--bg-panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              color: "var(--accent)",
+              cursor: allowingLink ? "default" : "pointer",
+              opacity: allowingLink ? 0.6 : 1,
+              fontSize: 11,
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {t("files.allowOutsideLink")}
+          </button>
+          {allowLinkError && (
+            <span role="alert" style={{ color: "#f87171", wordBreak: "break-word" }}>{allowLinkError}</span>
+          )}
+        </div>
+      )}
+      {node.isDir && open && !pendingLinkTarget && (
+        <div>
+          {children.map((child) => (
+            <TreeNode
+              key={child.fullPath}
+              node={child}
+              depth={depth + 1}
+              cwd={cwd}
+              onOpenFile={onOpenFile}
+              onAtMention={onAtMention}
+              expandedPaths={expandedPaths}
+              onToggleExpanded={onToggleExpanded}
+              refreshToken={refreshToken}
+              highlightedPaths={highlightedPaths}
+              gitStatusByPath={gitStatusByPath}
+              changedDirectoryPaths={changedDirectoryPaths}
+              activeFilePath={activeFilePath}
+              showIgnoredFiles={showIgnoredFiles}
+              t={t}
+            />
+          ))}
+          {children.length === 0 && loaded && !loadError && (
+            <div style={{ position: "relative", marginLeft: (depth + 2) * 14, paddingLeft: 8, fontSize: 11, color: "var(--text-dim)", height: 22, display: "flex", alignItems: "center" }}>
+              <IndentGuides depth={depth + 1} />
+              empty
+            </div>
+          )}
+          {loadError && (
+            <div role="alert" style={{ paddingLeft: 8 + (depth + 1) * 14, paddingRight: 8, paddingTop: 3, paddingBottom: 3, fontSize: 11, color: "#f87171", wordBreak: "break-word" }}>
+              {loadError}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type OpenFileOptions = { sourceSessionId?: string | null; modeHint?: "diff" };
+
+type OpenFileHandler = (filePath: string, fileName: string, options?: OpenFileOptions) => void;
+
+function ChangeRow({
+  status,
+  cwd,
+  onOpenFile,
+  onAtMention,
+  active,
+  t,
+}: {
+  status: GitFileStatus;
+  cwd: string;
+  onOpenFile: OpenFileHandler;
+  onAtMention?: (relativePath: string, isDir: boolean) => void;
+  active?: boolean;
+  t: Translate;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const name = getFileName(status.filePath);
+  const rel = getRelativeFilePath(status.filePath, cwd);
+  // Split the path so the directory part ellipsizes while the file name stays fully visible
+  const lastSlash = rel.lastIndexOf("/");
+  const dirPart = lastSlash >= 0 ? rel.slice(0, lastSlash + 1) : "";
+  const baseName = lastSlash >= 0 ? rel.slice(lastSlash + 1) : rel;
+  return (
+    <div
+      onClick={() => onOpenFile(status.filePath, name, { modeHint: "diff" })}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      title={status.filePath}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        paddingLeft: 10,
+        paddingRight: 8,
+        height: 24,
+        cursor: "pointer",
+        background: active ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
+        boxShadow: active ? "inset 2px 0 0 var(--accent)" : "none",
+        borderRadius: 4,
+        userSelect: "none",
+        position: "relative",
+      }}
+    >
+      <GitStatusBadge status={status} t={t} />
+      <span style={{ flexShrink: 0, display: "flex", alignItems: "center", opacity: 0.85 }}>
+        {getFileIcon(name, 13)}
+      </span>
+      <span
+        title={status.filePath}
+        style={{
+          fontSize: 12,
+          color: "var(--text)",
+          display: "flex",
+          alignItems: "center",
+          minWidth: 0,
+          flex: 1,
+        }}
+      >
+        {dirPart && (
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              flex: "0 1 auto",
+              minWidth: 0,
+              color: "var(--text-dim)",
+            }}
+          >
+            {dirPart}
+          </span>
+        )}
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+            maxWidth: "100%",
+          }}
+        >
+          {baseName}
+        </span>
+      </span>
+      {onAtMention && hovered && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onAtMention(rel, false);
+          }}
+          title={t("files.insertPath")}
+          style={{
+            position: "absolute",
+            right: 4,
+            top: "50%",
+            transform: "translateY(-50%)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 4,
+            padding: "0 8px",
+            height: 20,
+            background: "var(--bg-panel)",
+            border: "1px solid var(--border)",
+            borderRadius: 4,
+            color: "var(--accent)",
+            cursor: "pointer",
+            fontSize: 11,
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+          }}
+        >
+          <MentionIcon />
+          {t("files.mention")}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileExplorer({
+  cwd,
+  onOpenFile,
+  refreshKey,
+  onAtMention,
+  onAtMentions,
+  onUploadBusyChange,
+  changesCollapsed,
+  onChangesCountChange,
+  fileSearchOpen = false,
+  onFileSearchOpenChange,
+  activeFilePath = null,
+  showIgnoredFiles = false,
+}, ref) {
+  const { t } = useI18n();
+  const [roots, setRoots] = useState<FileNode[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [treeRefreshKey, setTreeRefreshKey] = useState(0);
+  const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(new Set());
+  const [gitFiles, setGitFiles] = useState<GitFileStatus[]>([]);
+  const [gitLineStats, setGitLineStats] = useState({ additions: 0, deletions: 0 });
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>("idle");
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSummary, setUploadSummary] = useState<UploadSummary | null>(null);
+  const [pendingConflict, setPendingConflict] = useState<PendingConflict | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchPaths, setSearchPaths] = useState<string[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState(false);
+  const [searchExpanded, setSearchExpanded] = useState<Set<string>>(new Set());
+  const [showBuildOutputs, setShowBuildOutputsState] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const prevCwdRef = useRef<string | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const refreshToken = `${refreshKey ?? 0}:${treeRefreshKey}`;
+  const uploadBusy = uploadPhase !== "idle";
+  const hasSearchQuery = searchQuery.trim().length > 0;
+
+  // Reuse the cached, bounded file index used by @ mentions.
+  useEffect(() => {
+    if (!fileSearchOpen) return;
+    const query = searchQuery.trim();
+    if (!query) {
+      setSearchPaths([]);
+      setSearchLoading(false);
+      setSearchError(false);
+      return;
+    }
+    const controller = new AbortController();
+    setSearchLoading(true);
+    setSearchError(false);
+    const timer = setTimeout(() => {
+      fetch(`/api/file-index?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(query)}`, { signal: controller.signal })
+        .then((response) => response.ok ? response.json() as Promise<{ matches?: FileIndexEntry[] }> : Promise.reject(new Error("Search failed")))
+        .then((data) => setSearchPaths((data.matches ?? []).filter((entry) => !entry.isDir).map((entry) => entry.path)))
+        .catch(() => {
+          if (!controller.signal.aborted) {
+            setSearchPaths([]);
+            setSearchError(true);
+          }
+        })
+        .finally(() => { if (!controller.signal.aborted) setSearchLoading(false); });
+    }, 150);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [cwd, fileSearchOpen, searchQuery]);
+
+  // Focus the search input whenever the search panel opens.
+  useEffect(() => {
+    if (fileSearchOpen) searchInputRef.current?.focus();
+  }, [fileSearchOpen]);
+
+  // Results render as a tree; keep every directory that contains a match
+  // expanded, while preserving the user's manual collapses as they type.
+  useEffect(() => {
+    if (searchPaths.length === 0) return;
+    const dirs = new Set<string>();
+    for (const relative of searchPaths) {
+      const parts = relative.split("/");
+      let path = "";
+      for (let i = 0; i < parts.length - 1; i++) {
+        path = path ? `${path}/${parts[i]}` : parts[i];
+        dirs.add(joinFilePath(cwd, path));
+      }
+    }
+    setSearchExpanded((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const dir of dirs) {
+        if (!next.has(dir)) { next.add(dir); changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [cwd, searchPaths]);
+
+  const searchRoots = useMemo(() => {
+    const toFileNode = (node: SearchTreeNode): FileNode => ({
+      name: node.name,
+      fullPath: joinFilePath(cwd, node.path),
+      isDir: node.isDir,
+      size: 0,
+      children: node.children.map(toFileNode),
+      loaded: true,
+    });
+    return buildSearchTree(searchPaths).map(toFileNode);
+  }, [cwd, searchPaths]);
+
+  const gitStatusByPath = useMemo(() => new Map(
+    gitFiles.map((status) => [normalizeFilePathSlashes(status.filePath), status]),
+  ), [gitFiles]);
+
+  const changedDirectoryPaths = useMemo(() => {
+    const directories = new Set<string>();
+    const normalizedCwd = normalizeFilePathSlashes(cwd).replace(/\/$/, "");
+    for (const status of gitFiles) {
+      let directory = getFileDirectory(normalizeFilePathSlashes(status.filePath));
+      while (directory === normalizedCwd || directory.startsWith(`${normalizedCwd}/`)) {
+        directories.add(directory);
+        if (directory === normalizedCwd) break;
+        const parent = getFileDirectory(directory);
+        if (parent === directory) break;
+        directory = parent;
+      }
+    }
+    return directories;
+  }, [cwd, gitFiles]);
+
+  const handleToggleExpanded = useCallback((fullPath: string, open: boolean) => {
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(fullPath); else next.delete(fullPath);
+      return next;
+    });
+  }, []);
+
+  // Global "Show build outputs" toggle: default off, hydrated from
+  // localStorage in an effect (not the initial state) so the server
+  // prerender and first client render agree on "off". The toggle itself
+  // is rendered once by MultiRootFileExplorer at the bottom of the block.
+  useEffect(() => {
+    setShowBuildOutputsState(getShowBuildOutputs());
+  }, []);
+
+  // Follow global preference changes broadcast by the single bottom toggle
+  // (or any other setter): apply every broadcast — the preference is one
+  // global value — and bump the shared refresh token so the root effect and
+  // every expanded TreeNode re-fetch in place, no page reload.
+  useEffect(() => {
+    return subscribeShowBuildOutputs(({ value }) => {
+      setShowBuildOutputsState(value);
+      setTreeRefreshKey((key) => key + 1);
+    });
+  }, []);
+
+  const applyUploadResult = useCallback((data: UploadResponse) => {
+    const uploaded = data.uploaded ?? [];
+    const skipped = data.skipped ?? [];
+    const errors = data.errors ?? [];
+    setUploadSummary({ uploaded, skipped, errors });
+
+    if (uploaded.length > 0) {
+      setHighlightedPaths(new Set(uploaded.map((name) => joinFilePath(cwd, name))));
+      setTreeRefreshKey((key) => key + 1);
+    }
+  }, [cwd]);
+
+  const performUpload = useCallback(async (
+    files: File[],
+    strategy: UploadConflictStrategy,
+  ) => {
+    setPendingConflict(null);
+    setUploadError(null);
+    setUploadProgress(0);
+    setUploadPhase("uploading");
+
+    try {
+      const { status, data } = await uploadFiles(cwd, files, strategy, setUploadProgress);
+      if (status === 409 && data.conflicts?.length) {
+        setPendingConflict({
+          files,
+          conflicts: data.conflicts,
+          nonReplaceable: data.nonReplaceable ?? [],
+        });
+        return;
+      }
+      if (status < 200 || status >= 300) {
+        throw new Error(data.error ?? `Upload failed (HTTP ${status})`);
+      }
+      setUploadProgress(100);
+      applyUploadResult(data);
+    } catch (uploadFailure) {
+      setUploadError(uploadFailure instanceof Error ? uploadFailure.message : String(uploadFailure));
+    } finally {
+      setUploadPhase("idle");
+    }
+  }, [applyUploadResult, cwd]);
+
+  const prepareUpload = useCallback(async (files: File[]) => {
+    if (files.length === 0 || uploadBusy) return;
+    setUploadSummary(null);
+    setHighlightedPaths(new Set());
+    setPendingConflict(null);
+    setUploadError(null);
+    setUploadProgress(0);
+    setUploadPhase("checking");
+
+    try {
+      const res = await fetch(
+        `/api/files/${encodeFilePathForApi(cwd)}?type=upload-check`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileNames: files.map((file) => file.name) }),
+        },
+      );
+      const data = await res.json().catch(() => ({})) as UploadResponse;
+      if (!res.ok) throw new Error(data.error ?? `Upload check failed (HTTP ${res.status})`);
+
+      if (data.conflicts?.length) {
+        setPendingConflict({
+          files,
+          conflicts: data.conflicts,
+          nonReplaceable: data.nonReplaceable ?? [],
+        });
+        return;
+      }
+
+      await performUpload(files, "error");
+    } catch (uploadFailure) {
+      setUploadError(uploadFailure instanceof Error ? uploadFailure.message : String(uploadFailure));
+    } finally {
+      setUploadPhase("idle");
+    }
+  }, [cwd, performUpload, uploadBusy]);
+
+  const handleUploadInput = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    void prepareUpload(files);
+  }, [prepareUpload]);
+
+  useImperativeHandle(ref, () => ({
+    openUploadPicker() {
+      if (!uploadBusy) uploadInputRef.current?.click();
+    },
+  }), [uploadBusy]);
+
+  useEffect(() => {
+    onUploadBusyChange?.(uploadBusy);
+  }, [onUploadBusyChange, uploadBusy]);
+
+  useEffect(() => () => onUploadBusyChange?.(false), [onUploadBusyChange]);
+
+  useEffect(() => {
+    const cwdChanged = prevCwdRef.current !== cwd;
+    prevCwdRef.current = cwd;
+
+    // Reset expanded state only when cwd changes, not on refreshKey bumps
+    if (cwdChanged) {
+      setExpandedPaths(new Set());
+      setHighlightedPaths(new Set());
+      setUploadSummary(null);
+      setPendingConflict(null);
+      setUploadError(null);
+    }
+
+    setLoading(cwdChanged);
+    setError(null);
+    let cancelled = false;
+    fetchEntries(cwd, { showBuildOutputs, showIgnored: showIgnoredFiles })
+      .then((entries) => { if (!cancelled) setRoots(entries); })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [cwd, refreshKey, treeRefreshKey, showBuildOutputs, showIgnoredFiles]);
+
+  // The parent's toggle re-fetches expanded nodes in place (same pattern the
+  // build-outputs broadcast uses): the root effect re-runs via the dependency
+  // above, every expanded TreeNode re-fetches via the shared refresh token.
+  const prevShowIgnoredFilesRef = useRef(showIgnoredFiles);
+  useEffect(() => {
+    if (prevShowIgnoredFilesRef.current === showIgnoredFiles) return;
+    prevShowIgnoredFilesRef.current = showIgnoredFiles;
+    setTreeRefreshKey((key) => key + 1);
+  }, [showIgnoredFiles]);
+
+  // Files changed outside pi-web (an editor, a terminal) show up once the
+  // window is back in front (#1144).
+  useEffect(() => {
+    const refresh = () => setTreeRefreshKey((key) => key + 1);
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchGitStatus(cwd)
+      .then((status) => {
+        if (!cancelled) {
+          setGitFiles(status.isGitRepository ? status.files : []);
+          setGitLineStats(status.isGitRepository
+            ? { additions: status.additions, deletions: status.deletions }
+            : { additions: 0, deletions: 0 });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGitFiles([]);
+          setGitLineStats({ additions: 0, deletions: 0 });
+        }
+      });
+    return () => { cancelled = true; };
+  }, [cwd, refreshKey, treeRefreshKey]);
+
+  useEffect(() => {
+    onChangesCountChange?.(gitFiles.length);
+  }, [gitFiles, onChangesCountChange]);
+
+  const showUploadFeedback = uploadBusy || pendingConflict !== null || uploadError !== null || uploadSummary !== null;
+
+  const addUploadedFilesToChat = useCallback(() => {
+    if (!uploadSummary || uploadSummary.uploaded.length === 0) return;
+    onAtMentions?.(
+      uploadSummary.uploaded.map((name) => getRelativeFilePath(joinFilePath(cwd, name), cwd)),
+    );
+  }, [cwd, onAtMentions, uploadSummary]);
+
+  return (
+    <div style={{ minHeight: "100%" }}>
+      <input ref={uploadInputRef} type="file" multiple hidden onChange={handleUploadInput} />
+      {showUploadFeedback && (
+        <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
+        {uploadBusy && (
+          <div role="status" aria-live="polite" aria-label={uploadPhase === "checking" ? t("files.checking") : t("files.uploading", { progress: uploadProgress })}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, minHeight: 14, color: "var(--text-muted)" }}>
+              {uploadPhase === "checking" ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite" }} aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-5.7-8.4" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 16V4" />
+                  <path d="m7 9 5-5 5 5" />
+                  <path d="M5 20h14" />
+                </svg>
+              )}
+              {uploadPhase === "uploading" && <span style={{ fontSize: 10 }}>{uploadProgress}%</span>}
+            </div>
+            {uploadPhase === "uploading" && (
+              <div style={{ height: 3, marginTop: 4, overflow: "hidden", borderRadius: 2, background: "var(--border)" }}>
+                <div style={{ width: `${uploadProgress}%`, height: "100%", background: "var(--text-muted)", transition: "width 120ms ease" }} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {pendingConflict && (
+          <div role="alert" style={{ padding: 7, border: "1px solid color-mix(in srgb, #f59e0b 55%, var(--border))", borderRadius: 4, background: "color-mix(in srgb, #f59e0b 9%, var(--bg-panel))" }}>
+            <div style={{ fontSize: 11, color: "var(--text)", lineHeight: 1.35, overflowWrap: "anywhere" }}>
+              {t("files.conflictSummary", { count: pendingConflict.conflicts.length, countSuffix: pendingConflict.conflicts.length === 1 ? "" : "s", files: pendingConflict.conflicts.join(", ") })}
+            </div>
+            {pendingConflict.nonReplaceable.length > 0 && (
+              <div style={{ marginTop: 3, fontSize: 10, color: "#f59e0b", lineHeight: 1.35, overflowWrap: "anywhere" }}>
+                {t("files.cannotReplace", { files: pendingConflict.nonReplaceable.join(", ") })}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 5, marginTop: 7 }}>
+              <button type="button" onClick={() => void performUpload(pendingConflict.files, "overwrite")} style={{ height: 22, padding: "0 7px", border: "1px solid #ef4444", borderRadius: 4, background: "transparent", color: "#ef4444", cursor: "pointer", fontSize: 10 }}>
+                {t("files.replace")}
+              </button>
+              <button type="button" onClick={() => void performUpload(pendingConflict.files, "skip")} style={{ height: 22, padding: "0 7px", border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer", fontSize: 10 }}>
+                {t("files.skipExisting")}
+              </button>
+              <button type="button" onClick={() => setPendingConflict(null)} style={{ height: 22, padding: "0 7px", border: "none", borderRadius: 4, background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 10 }}>
+                {t("files.cancel")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {uploadError && (
+          <div role="alert" style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 11, lineHeight: 1.35, color: "#f87171" }}>
+            <span style={{ minWidth: 0, flex: 1, overflowWrap: "anywhere" }}>{uploadError}</span>
+            <DismissButton onClick={() => setUploadError(null)} title={t("files.dismissError")} />
+          </div>
+        )}
+
+        {uploadSummary && (
+          <div aria-live="polite">
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 22, fontSize: 11 }}>
+              <div style={{ minWidth: 0, flex: 1, display: "flex", alignItems: "center", gap: 8 }}>
+                {uploadSummary.uploaded.length > 0 && (
+                  <span title={t("files.uploadedCount", { count: uploadSummary.uploaded.length })} aria-label={t("files.uploadedCount", { count: uploadSummary.uploaded.length })} style={{ display: "flex", alignItems: "center", gap: 3, color: "#22c55e" }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="m5 12 4 4L19 6" />
+                    </svg>
+                    <span>{uploadSummary.uploaded.length}</span>
+                  </span>
+                )}
+                {uploadSummary.skipped.length > 0 && (
+                  <span title={t("files.skippedCount", { count: uploadSummary.skipped.length })} aria-label={t("files.skippedCount", { count: uploadSummary.skipped.length })} style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--text-dim)" }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M8 12h8" />
+                    </svg>
+                    <span>{uploadSummary.skipped.length}</span>
+                  </span>
+                )}
+                {uploadSummary.errors.length > 0 && (
+                  <span title={t("files.failedCount", { count: uploadSummary.errors.length })} aria-label={t("files.failedCount", { count: uploadSummary.errors.length })} style={{ display: "flex", alignItems: "center", gap: 3, color: "#f87171" }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M12 3 2.5 20h19L12 3Z" />
+                      <path d="M12 9v4" />
+                      <path d="M12 17h.01" />
+                    </svg>
+                    <span>{uploadSummary.errors.length}</span>
+                  </span>
+                )}
+              </div>
+              {uploadSummary.uploaded.length > 0 && onAtMentions && (
+                <button
+                  type="button"
+                  onClick={addUploadedFilesToChat}
+                  title={uploadSummary.uploaded.length === 1 ? t("files.addUploadedFile") : t("files.addAllUploadedFiles")}
+                  aria-label={uploadSummary.uploaded.length === 1 ? t("files.addUploadedFile") : t("files.addAllUploadedFiles")}
+                  style={{ height: 22, padding: "0 7px", display: "flex", alignItems: "center", justifyContent: "center", gap: 4, flexShrink: 0, border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg-panel)", color: "var(--accent)", cursor: "pointer", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}
+                >
+                  <MentionIcon />
+                  {t("files.mention")}
+                </button>
+              )}
+              <DismissButton onClick={() => setUploadSummary(null)} title={t("files.dismissUploadResults")} />
+            </div>
+            {uploadSummary.errors.map((item) => (
+              <div key={item.name} title={item.error} style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, minWidth: 0, fontSize: 10, color: "#f87171" }}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 8v5" />
+                  <path d="M12 17h.01" />
+                </svg>
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        </div>
+      )}
+
+      {fileSearchOpen && (
+      <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ position: "relative" }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "var(--text-dim)", pointerEvents: "none" }}>
+            <circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" />
+          </svg>
+          <input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              // Handled here: the debug panel and other document listeners leave this Escape alone.
+              event.preventDefault();
+              onFileSearchOpenChange?.(false);
+            }}
+            placeholder={t("sidebar.searchFilesPlaceholder")}
+            aria-label={t("sidebar.searchFiles")}
+            style={{ width: "100%", boxSizing: "border-box", padding: "6px 24px", border: "1px solid var(--border)", borderRadius: 5, outline: "none", background: "var(--bg)", color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 11 }}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              title={t("sidebar.clearSearch")}
+              aria-label={t("sidebar.clearSearch")}
+              style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", display: "flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, padding: 0, border: "none", borderRadius: 4, background: "none", color: "var(--text-dim)", cursor: "pointer" }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-dim)"; }}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M18 6 6 18" /><path d="m6 6 12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+        {hasSearchQuery && (
+          <div style={{ paddingTop: 3 }}>
+            {searchLoading && <div role="status" style={{ padding: "6px 2px", fontSize: 10, color: "var(--text-dim)" }}>{t("sidebar.searchingFiles")}</div>}
+            {!searchLoading && searchError && <div role="alert" style={{ padding: "6px 2px", fontSize: 10, color: "#f87171" }}>{t("i18n.networkError")}</div>}
+            {!searchLoading && !searchError && searchPaths.length === 0 && <div style={{ padding: "6px 2px", fontSize: 10, color: "var(--text-dim)" }}>{t("sidebar.noMatchingFiles")}</div>}
+            {!searchLoading && !searchError && searchPaths.length > 0 && (
+              <div>
+                {searchRoots.map((node) => (
+                  <TreeNode
+                    key={`${searchQuery}:${node.fullPath}`}
+                    node={node}
+                    depth={0}
+                    cwd={cwd}
+                    onOpenFile={onOpenFile}
+                    onAtMention={onAtMention}
+                    expandedPaths={searchExpanded}
+                    onToggleExpanded={(fullPath, open) => {
+                      setSearchExpanded((prev) => {
+                        const next = new Set(prev);
+                        if (open) next.add(fullPath); else next.delete(fullPath);
+                        return next;
+                      });
+                    }}
+                    highlightedPaths={highlightedPaths}
+                    gitStatusByPath={gitStatusByPath}
+                    changedDirectoryPaths={changedDirectoryPaths}
+                    activeFilePath={activeFilePath}
+                    t={t}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      )}
+
+      {!changesCollapsed && gitFiles.length > 0 && (
+        <div style={{ padding: "0 4px 2px" }}>
+          <div
+            aria-label={t("files.changeStats", {
+              count: gitFiles.length,
+              additions: gitLineStats.additions,
+              deletions: gitLineStats.deletions,
+            })}
+            style={{ display: "flex", alignItems: "center", gap: 6, height: 24, padding: "0 10px", fontSize: 12 }}
+          >
+            <span style={{ color: "var(--text-dim)" }}>
+              {t("files.changedCount", { count: gitFiles.length })}
+            </span>
+            <span style={{ color: GIT_STATUS_COLORS.added, fontFamily: "var(--font-mono)" }}>+{gitLineStats.additions}</span>
+            <span style={{ color: GIT_STATUS_COLORS.deleted, fontFamily: "var(--font-mono)" }}>-{gitLineStats.deletions}</span>
+          </div>
+          {gitFiles.map((status) => (
+            <ChangeRow
+              key={status.filePath}
+              status={status}
+              cwd={cwd}
+              onOpenFile={onOpenFile}
+              onAtMention={onAtMention}
+              active={activeFilePath != null
+                && normalizeFilePathSlashes(activeFilePath) === normalizeFilePathSlashes(status.filePath)}
+              t={t}
+            />
+          ))}
+        </div>
+      )}
+
+      {(changesCollapsed || gitFiles.length === 0) && (!fileSearchOpen || !hasSearchQuery) && (
+        <div style={{ padding: "2px 4px" }}>
+          {loading ? (
+            <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>{t("files.loading")}</div>
+          ) : error ? (
+            <div style={{ padding: "8px 12px", fontSize: 11, color: "#f87171" }}>{error}</div>
+          ) : (
+            roots.map((node) => (
+              <TreeNode
+                key={node.fullPath}
+                node={node}
+                depth={0}
+                cwd={cwd}
+                onOpenFile={onOpenFile}
+                onAtMention={onAtMention}
+                expandedPaths={expandedPaths}
+                onToggleExpanded={handleToggleExpanded}
+                refreshToken={refreshToken}
+                highlightedPaths={highlightedPaths}
+                gitStatusByPath={gitStatusByPath}
+                changedDirectoryPaths={changedDirectoryPaths}
+                activeFilePath={activeFilePath}
+                showIgnoredFiles={showIgnoredFiles}
+                t={t}
+              />
+            ))
+          )}
+          {!loading && !error && roots.length === 0 && (
+            <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>
+              {t("files.noFiles")}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});

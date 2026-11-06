@@ -17,6 +17,9 @@
 // Both `pf daemon` and `pf aihub` are intercepted here before the CLI
 // dispatch, so each process's flag chain stays its own package's concern
 // (the daemon config chain: flags + POLYFORGE_* + the shared PF_* config).
+// The binary answers the same whatever name it is started under: the
+// commands a workflow step runs are the workflow's own scripts
+// (workflows/_shared/scripts), never pf.
 package main
 
 import (

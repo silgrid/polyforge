@@ -24,7 +24,18 @@ import (
 )
 
 // TestMain isolates HOME/XDG/POLYFORGE_* so no test can touch the real install.
-func TestMain(m *testing.M) { testenv.Main(m) }
+// Run with PF_DAEMON_TEST_AS_PF=1 the test binary is the `pf` CLI itself
+// (cli.Run): what a step script started inside a test step runs as pf
+// (c4_integrate_bridge_test.go's pfShim).
+func TestMain(m *testing.M) {
+	if os.Getenv(testAsPF) == "1" {
+		os.Exit(cli.Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	}
+	testenv.Main(m)
+}
+
+// testAsPF makes the test binary run as the pf CLI (TestMain).
+const testAsPF = "PF_DAEMON_TEST_AS_PF"
 
 // TestOldSessionsRootFlagRefuses: the pre-#171 flag name is not parsed —
 // an old deployment fails loudly at flag parsing (exit 2), never silently
@@ -100,7 +111,7 @@ func TestBareStartMachineID(t *testing.T) {
 	if code != ExitNeedsOperator {
 		t.Fatalf("exit = %d, want %d; stderr %q", code, ExitNeedsOperator, stderr.String())
 	}
-	raw, err := os.ReadFile(filepath.Join(data, daemonIDFile))
+	raw, err := os.ReadFile(filepath.Join(data, "cells", "default", daemonIDFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,10 +133,11 @@ func TestApplyDaemonTablePrecedence(t *testing.T) {
 		hr := fs.String("harness-root", "", "")
 		op := fs.String("operator-agent-dir", "", "")
 		mx := fs.Int("max-concurrent-jobs", 0, "")
+		aw := fs.Duration("ask-warm-window", 0, "")
 		if err := fs.Parse(args); err != nil {
 			t.Fatal(err)
 		}
-		applyDaemonTable(fs, table, st, sw, hr, op, mx)
+		applyDaemonTable(fs, table, st, sw, aw, hr, op, mx)
 		return *st, *sw, *hr, *op, *mx
 	}
 	st, sw, hr, op, mx := parse()
@@ -140,8 +152,9 @@ func TestApplyDaemonTablePrecedence(t *testing.T) {
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	st0, sw0 := fs.Duration("step-timeout", 0, ""), fs.Duration("stall-window", 0, "")
 	hr0, op0, mx0 := fs.String("harness-root", "", ""), fs.String("operator-agent-dir", "", ""), fs.Int("max-concurrent-jobs", 0, "")
-	applyDaemonTable(fs, cli.DaemonSettings{}, st0, sw0, hr0, op0, mx0)
-	if *st0 != 0 || *sw0 != 0 || *hr0 != "" || *op0 != "" || *mx0 != 0 {
+	aw0 := fs.Duration("ask-warm-window", 0, "")
+	applyDaemonTable(fs, cli.DaemonSettings{}, st0, sw0, aw0, hr0, op0, mx0)
+	if *st0 != 0 || *sw0 != 0 || *aw0 != 0 || *hr0 != "" || *op0 != "" || *mx0 != 0 {
 		t.Fatal("an empty table must leave the built-in defaults")
 	}
 }

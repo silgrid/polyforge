@@ -1,10 +1,12 @@
 package daemon
 
-// stepmem_test.go: the step agent's daemon-mediated memory read face —
-// the caller's work item comes from its peer (never the request), every
-// search is scoped to that work item's project, another project's memory
-// is not found, and the routes pass the step-origin guard as reads while
-// refusing callers that are no step process.
+// stepmem_test.go: the step agent's daemon-mediated memory face, `pf step
+// recall | memory show | remember` (the /step/call verbs recall,
+// memory.show and remember; the /step/memories routes left with workflow
+// contract 4's stage C3,) — the caller's work item comes from
+// its peer (never the request), every search is scoped to that work item's
+// project, another project's memory is not found, and callers that are no
+// step process are refused.
 
 import (
 	"context"
@@ -54,7 +56,7 @@ func stepDo(t *testing.T, sock, method, path, body string) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// stepDaemon is a test daemon whose /step/* callers all resolve to wi.
+// stepDaemon is a test daemon whose /step/call callers all resolve to wi.
 func stepDaemon(t *testing.T, wi string) *testDaemon {
 	t.Helper()
 	td := newTestDaemon(t, nil)
@@ -76,7 +78,7 @@ func TestStepMemorySearchScopedToTheJobsProject(t *testing.T) {
 	}
 	td.hub.mu.Unlock()
 
-	code, body := stepGet(t, td.sock, "/step/memories/search?q=sqlite+busy&match=any&type=experience.*&limit=5")
+	code, body := c4Call(t, td, "recall", map[string]any{"q": "sqlite busy", "match": "any", "type": "experience.*", "limit": 5})
 	if code != 200 || !strings.Contains(body, `"mem_1"`) {
 		t.Fatalf("search = %d %s", code, body)
 	}
@@ -88,20 +90,18 @@ func TestStepMemorySearchScopedToTheJobsProject(t *testing.T) {
 	if u.Path != "/api/v1/memories/search" || q.Get("project") != "proj" || q.Get("q") != "sqlite busy" || q.Get("match") != "any" || q.Get("type") != "experience.*" || q.Get("limit") != "5" {
 		t.Fatalf("forwarded %s", got)
 	}
-	// a caller naming another project is refused, nothing forwarded
+	// a caller naming a project at all is refused (the call takes none),
+	// as is one without a query: nothing forwarded
 	n := len(paths)
-	if code, body := stepGet(t, td.sock, "/step/memories/search?q=x&project=other"); code != 403 || !strings.Contains(body, "DAEMON-403") {
-		t.Fatalf("other project = %d %s", code, body)
+	if code, body := c4Call(t, td, "recall", map[string]any{"q": "x", "project": "other"}); code != 400 || !strings.Contains(body, "DAEMON-400") {
+		t.Fatalf("a project named = %d %s", code, body)
 	}
-	if code, _ := stepGet(t, td.sock, "/step/memories/search?q=x&project=proj"); code != 200 {
-		t.Fatalf("own project named = %d", code)
-	}
-	if code, _ := stepGet(t, td.sock, "/step/memories/search"); code != 400 {
+	if code, _ := c4Call(t, td, "recall", map[string]any{}); code != 400 {
 		t.Fatalf("no query = %d", code)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(paths) != n+1 {
+	if len(paths) != n {
 		t.Fatalf("refused searches were forwarded: %v", paths[n:])
 	}
 }
@@ -122,7 +122,7 @@ func TestStepMemoryShowOwnProjectOnly(t *testing.T) {
 	}
 	td.hub.memContent = func(id string) ([]byte, error) { return []byte("body of " + id), nil }
 	td.hub.mu.Unlock()
-	code, body := stepGet(t, td.sock, "/step/memories/mem_own")
+	code, body := c4Call(t, td, "memory.show", map[string]any{"id": "mem_own"})
 	var doc struct {
 		Meta    map[string]any `json:"meta"`
 		Content string         `json:"content"`
@@ -130,7 +130,7 @@ func TestStepMemoryShowOwnProjectOnly(t *testing.T) {
 	if code != 200 || json.Unmarshal([]byte(body), &doc) != nil || doc.Meta["id"] != "mem_own" || doc.Content != "body of mem_own" {
 		t.Fatalf("own memory = %d %s", code, body)
 	}
-	if code, body := stepGet(t, td.sock, "/step/memories/mem_other"); code != 404 || !strings.Contains(body, "MEM-404") {
+	if code, body := c4Call(t, td, "memory.show", map[string]any{"id": "mem_other"}); code != 404 || !strings.Contains(body, "MEM-404") {
 		t.Fatalf("other project's memory = %d %s", code, body)
 	}
 }
@@ -182,6 +182,12 @@ func (m *memHub) do(method, path string, body, out any) error {
 	return json.Unmarshal([]byte(`{"id":"`+id+`","type":"`+b["type"].(string)+`","visibility":"project"}`), out)
 }
 
+// rememberCall is `pf step remember` with the JSON args body.
+func rememberCall(t *testing.T, td *testDaemon, body string) (int, string) {
+	t.Helper()
+	return stepDo(t, td.sock, "POST", "/step/call", `{"verb":"remember","args":`+body+`}`)
+}
+
 func wrapBody(extra string) string {
 	return `{"type":"experience.wrap","title":"proj#1: did it","tags":["policy-proposal"],"content":"做了什么\n建议新增条目：x\n"` + extra + `}`
 }
@@ -193,7 +199,7 @@ func TestStepRememberStoresAttributedAndIdempotent(t *testing.T) {
 	td.hub.memDo = mh.do
 	td.hub.memContent = mh.content
 	td.hub.mu.Unlock()
-	code, body := stepDo(t, td.sock, "POST", "/step/memories", wrapBody(`,"project":"proj","work_item":"wi_sr1"`))
+	code, body := rememberCall(t, td, wrapBody(`,"project":"proj","work_item":"wi_sr1"`))
 	if code != 200 || !strings.Contains(body, `"id":"mem_1"`) {
 		t.Fatalf("store = %d %s", code, body)
 	}
@@ -203,7 +209,7 @@ func TestStepRememberStoresAttributedAndIdempotent(t *testing.T) {
 		t.Fatalf("forwarded %+v", p)
 	}
 	// a retry after a lost answer: same key, the same memory comes back
-	if code, body := stepDo(t, td.sock, "POST", "/step/memories", wrapBody("")); code != 200 || !strings.Contains(body, `"id":"mem_1"`) {
+	if code, body := rememberCall(t, td, wrapBody("")); code != 200 || !strings.Contains(body, `"id":"mem_1"`) {
 		t.Fatalf("retry = %d %s", code, body)
 	}
 	if len(mh.byKey) != 1 {
@@ -212,7 +218,7 @@ func TestStepRememberStoresAttributedAndIdempotent(t *testing.T) {
 	// a second, different summary in the same attempt is refused, not
 	// silently answered with the first
 	other := `{"type":"experience.wrap","title":"proj#1: another","content":"something else"}`
-	if code, body := stepDo(t, td.sock, "POST", "/step/memories", other); code != 409 || !strings.Contains(body, "already stored its summary mem_1") {
+	if code, body := rememberCall(t, td, other); code != 409 || !strings.Contains(body, "already stored its summary mem_1") {
 		t.Fatalf("different body = %d %s", code, body)
 	}
 }
@@ -231,7 +237,7 @@ func TestStepRememberRefusalsAndOutage(t *testing.T) {
 		{wrapBody(`,"project":"other"`), `writes to project`},
 		{wrapBody(`,"work_item":"wi_other"`), "attributed to its own work item wi_sr2"},
 	} {
-		if code, body := stepDo(t, td.sock, "POST", "/step/memories", tc.body); code < 400 || code >= 500 || !strings.Contains(body, tc.want) {
+		if code, body := rememberCall(t, td, tc.body); code < 400 || code >= 500 || !strings.Contains(body, tc.want) {
 			t.Fatalf("%s: %d %s, want %q", tc.body, code, body, tc.want)
 		}
 	}
@@ -239,17 +245,17 @@ func TestStepRememberRefusalsAndOutage(t *testing.T) {
 		t.Fatalf("refused memories were forwarded: %+v", mh.posts)
 	}
 	// a where-it-lives line is fine
-	if code, body := stepDo(t, td.sock, "POST", "/step/memories", `{"type":"experience.wrap","title":"t","content":"the key lives in ~/.config/polyforge/cli.toml (api_key=${PF_API_KEY})"}`); code != 200 {
+	if code, body := rememberCall(t, td, `{"type":"experience.wrap","title":"t","content":"the key lives in ~/.config/polyforge/cli.toml (api_key=${PF_API_KEY})"}`); code != 200 {
 		t.Fatalf("where-it-lives: %d %s", code, body)
 	}
 	mh.mu.Lock()
 	mh.fail = errors.New("dial tcp: connection refused")
 	mh.mu.Unlock()
-	if code, body := stepDo(t, td.sock, "POST", "/step/memories", wrapBody("")); code != 503 || !strings.Contains(body, "aihub unreachable, the memory was not stored") {
+	if code, body := rememberCall(t, td, wrapBody("")); code != 503 || !strings.Contains(body, "aihub unreachable, the memory was not stored") {
 		t.Fatalf("aihub down: %d %s", code, body)
 	}
 	td.stepOriginOf = nil // the real resolver: this test process is no step
-	if code, body := stepDo(t, td.sock, "POST", "/step/memories", wrapBody("")); code != 403 || !strings.Contains(body, "serves step agents only") {
+	if code, body := rememberCall(t, td, wrapBody("")); code != 403 || !strings.Contains(body, "serves step agents only") {
 		t.Fatalf("non-step POST: %d %s", code, body)
 	}
 }
@@ -298,7 +304,7 @@ func TestStepMemoryHelperProcess(t *testing.T) {
 	default:
 		// STEPMEM_PATH/STEPMEM_BODY pick another step write (default: a
 		// wrap memory); STEPMEM_CWD moves the caller elsewhere first
-		path, body := "/step/memories", wrapBody("")
+		path, body := "/step/call", `{"verb":"remember","args":`+wrapBody("")+`}`
 		if p := os.Getenv("STEPMEM_PATH"); p != "" {
 			path, body = p, os.Getenv("STEPMEM_BODY")
 		}
@@ -480,10 +486,10 @@ func writeJournal(t *testing.T, capDir string, entries []capsule.SpawnJournalEnt
 }
 
 // TestStepMemorySearchForwardsNoBrowseParameters: the
-// step proxy's forwarded shape is fixed — a browse-shaped request (a
-// paging cursor, a sort value) forwards no such parameter and answers
-// the keyword page; the empty-q browse shape is refused before
-// anything is forwarded. No step agent reaches aihub's browse mode.
+// step proxy's forwarded shape is fixed — a browse-shaped call (a paging
+// cursor, a sort value) is refused and forwards nothing, a search answers
+// the keyword page; the empty-q browse shape is refused before anything is
+// forwarded. No step agent reaches aihub's browse mode.
 func TestStepMemorySearchForwardsNoBrowseParameters(t *testing.T) {
 	td := stepDaemon(t, "wi_sm3")
 	var mu sync.Mutex
@@ -497,9 +503,19 @@ func TestStepMemorySearchForwardsNoBrowseParameters(t *testing.T) {
 	}
 	td.hub.mu.Unlock()
 
-	code, body := stepGet(t, td.sock, "/step/memories/search?q=needle&after=not-a-cursor&sort=created&limit=5")
+	for _, browse := range []map[string]any{{"q": "needle", "after": "not-a-cursor"}, {"q": "needle", "sort": "created"}} {
+		if code, body := c4Call(t, td, "recall", browse); code != 400 {
+			t.Fatalf("browse-shaped search %v = %d %s, want refused", browse, code, body)
+		}
+	}
+	mu.Lock()
+	if len(paths) != 0 {
+		t.Fatalf("a browse-shaped call was forwarded: %v", paths)
+	}
+	mu.Unlock()
+	code, body := c4Call(t, td, "recall", map[string]any{"q": "needle", "limit": 5})
 	if code != 200 || !strings.Contains(body, `"mem_1"`) {
-		t.Fatalf("browse-shaped search = %d %s, want the keyword answer", code, body)
+		t.Fatalf("search = %d %s, want the keyword answer", code, body)
 	}
 	mu.Lock()
 	got := paths[len(paths)-1]
@@ -514,7 +530,7 @@ func TestStepMemorySearchForwardsNoBrowseParameters(t *testing.T) {
 	}
 	// The empty-q browse shape is refused before forwarding.
 	n := len(paths)
-	if code, _ := stepGet(t, td.sock, "/step/memories/search"); code != 400 {
+	if code, _ := c4Call(t, td, "recall", map[string]any{"q": ""}); code != 400 {
 		t.Fatalf("empty q = %d, want 400 (no browse from a step)", code)
 	}
 	mu.Lock()
@@ -524,8 +540,8 @@ func TestStepMemorySearchForwardsNoBrowseParameters(t *testing.T) {
 	}
 }
 
-// TestDaemonRouteSetHasNoWebRoute (extended by
-//): the daemon proxies no web face — neither the deleted
+// TestDaemonRouteSetHasNoWebRoute:
+// the daemon proxies no web face — neither the deleted
 // /view/ prefix nor the /web/ console — a web request on the daemon
 // socket answers the daemon's own 404, so no step or task process
 // reaches the console through the daemon.

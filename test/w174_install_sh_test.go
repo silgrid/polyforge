@@ -52,6 +52,7 @@ type w174Install struct {
 	journal  string
 	tagFile  string
 	extraEnv []string
+	stdin    string // fed to install.sh's stdin when set (the `-` key form)
 }
 
 func w174NewInstall(t *testing.T) *w174Install {
@@ -187,6 +188,9 @@ func (in *w174Install) runArgs(t *testing.T, args ...string) (string, int) {
 	cmd.Env = append(in.env(), "PF_BIN="+in.bin, "W174_REL="+in.rel, "W174_SRC="+in.src,
 		"W174_JOURNAL="+in.journal, "W174_TAG_FILE="+in.tagFile, "W174_SOCK="+in.sock, "W174_CFG="+in.cfg)
 	cmd.Env = append(cmd.Env, in.extraEnv...)
+	if in.stdin != "" {
+		cmd.Stdin = strings.NewReader(in.stdin)
+	}
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if err != nil {
@@ -526,7 +530,7 @@ func TestW174InstallUpgradeFromUnsupervisedNohupDaemon(t *testing.T) {
 		t.Fatalf("ops shutdown: %v %s", err, out)
 	}
 	waitUntil(t, 30*time.Second, "the loop's daemon did not end", func() bool { return len(in.daemons()) == 0 && in.loops() == 0 })
-	id := strings.TrimSpace(w174ReadFile(t, filepath.Join(in.data, "daemon-id")))
+	id := strings.TrimSpace(w174ReadFile(t, filepath.Join(in.data, "cells", "default", "daemon-id")))
 	nohup := exec.Command("sh", "-c", "nohup \"$0\" daemon --config \"$1\" -machine-id \"$2\" -data-dir \"$3\" -socket \"$4\" -workflows-dir \"$3/release/current/workflows\" >/dev/null 2>&1 &",
 		in.pf, in.cfg, id, in.data, in.sock)
 	nohup.Env = in.env()
@@ -809,8 +813,10 @@ func TestW174InstallRefusesWhileJobsRunThenForceProceeds(t *testing.T) {
 	in.release(t, "v0.0.2-w174")
 	in.resetJournal(t)
 	out, code := in.run(t)
-	if code == 0 {
-		t.Fatalf("an upgrade with a running job must be refused:\n%s", out)
+	if code != 3 {
+		// an overridable refusal (PF_INSTALL_FORCE=1 lifts
+		// it) exits 3, so a caller tells it from a failure without parsing
+		t.Fatalf("an upgrade with a running job must be refused with exit 3, got %d:\n%s", code, out)
 	}
 	for _, want := range []string{"Upgrade refused", "e2e#7 (running)", "e2e#10 (recovering)", "PF_INSTALL_FORCE=1", "pf pause", "nothing on this machine was changed"} {
 		if !strings.Contains(out, want) {
@@ -858,8 +864,8 @@ func TestW174InstallJobCheckFailsClosed(t *testing.T) {
 	in.release(t, "v0.0.2-w174")
 	in.resetJournal(t)
 	out, code := in.run(t)
-	if code == 0 || !strings.Contains(out, "job list could not be read") || !strings.Contains(out, "PF_INSTALL_FORCE=1") {
-		t.Fatalf("an unreadable job list must refuse the upgrade (exit %d):\n%s", code, out)
+	if code != 3 || !strings.Contains(out, "job list could not be read") || !strings.Contains(out, "PF_INSTALL_FORCE=1") {
+		t.Fatalf("an unreadable job list must refuse the upgrade with exit 3 (exit %d):\n%s", code, out)
 	}
 	if fake.shutdownRequested() {
 		t.Fatal("the daemon was asked to shut down although its jobs are unknown")

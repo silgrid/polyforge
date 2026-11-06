@@ -81,13 +81,11 @@ func TestV1S17AutoPullKeyRevokedQueueFetchDenied(t *testing.T) {
 		t.Fatalf("api-keys create incomplete: %q", raw)
 	}
 
-	// The wave member: claimed by the drain wave; its driver parks on the
-	// open question and stays there for the rest of the test.
-	const qid = "q_v1s17"
-	wiA := inst.newWI(t, "s17: drain wave member parks on needs_input",
+	// The wave member: claimed by the drain wave; its step asks the owner
+	// and stays parked on the open ask for the rest of the test.
+	wiA := inst.newWI(t, "s17: drain wave member parks on an ask",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": qid,
-				"question": "s17: park here (the test never answers)."},
+			askAction("fix", "s17: park here (the test never replies).", nil),
 		}, nil)
 
 	d := newV1Daemon(t, inst, optAuto(), optAPIKey(issued.Plain))
@@ -96,10 +94,13 @@ func TestV1S17AutoPullKeyRevokedQueueFetchDenied(t *testing.T) {
 	// The wave claims A on its own (5s wave period) and A parks. The
 	// poll tolerates "not monitored yet": until the wave claims the
 	// ticket the watch snapshot is not Known by design.
-	waitUntil(t, 60*time.Second, "wave member never parked on needs_input", func() bool {
+	var askAt string
+	waitUntil(t, 60*time.Second, "wave member never parked on its ask", func() bool {
 		s := watchSoft(d, wiA)
-		return s != nil && s.Execution != nil && s.Execution.PendingQuestion != nil &&
-			s.Execution.PendingQuestion.ID == qid
+		if s != nil && s.Execution != nil && s.Execution.PendingQuestion != nil {
+			askAt = s.Execution.PendingQuestion.ID
+		}
+		return askAt != ""
 	})
 
 	// Determinism guard: the key is still valid, so no denial signal
@@ -155,11 +156,10 @@ func TestV1S17AutoPullKeyRevokedQueueFetchDenied(t *testing.T) {
 		t.Fatalf("daemon exited after key revocation (log tail: %s)", d.logTail())
 	}
 
-	// The parked member is undisturbed: same question on the QUESTION
-	// column, still parked on the durable face.
-	waitQuestion(t, d, wiA, qid, 10*time.Second)
-	x := readExecution(t, d.capsuleDir(wiA))
-	if x.Steps["grill"].PendingQuestion == nil || (*x.Steps["grill"].PendingQuestion)["id"] != qid {
-		t.Fatalf("parked member disturbed by the revocation: %+v", x.Steps["grill"])
+	// The parked member is undisturbed: same ask on the QUESTION column,
+	// still open on the durable face.
+	waitQuestion(t, d, wiA, askAt, 10*time.Second)
+	if ask := openAskOn(t, d.capsuleDir(wiA), "fix", 1); ask.At != askAt {
+		t.Fatalf("parked member disturbed by the revocation: %+v", ask)
 	}
 }

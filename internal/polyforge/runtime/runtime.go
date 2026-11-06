@@ -34,6 +34,8 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/gitops"
 	"github.com/silgrid/polyforge/internal/polyforge/liveconfig"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
+	"github.com/silgrid/polyforge/internal/polyforge/pendingwrites"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
@@ -85,11 +87,18 @@ type Config struct {
 	ClaudeBin string
 	// ToolWindow is the daemon's supervision tool window Y (one tool
 	// running longer than it is judged hung). Every step environment
-	// carries it as PF_TOOL_WINDOW_MS (toolWindowEnv), so `pf verify-run`
-	// can bound its whole run below the rule; a claude step's Bash tool
+	// carries it as PF_TOOL_WINDOW_MS (toolWindowEnv), so a step command
+	// can bound its run below the rule; a claude step's Bash tool
 	// timeouts also derive from it (claudeBashTimeouts: max = Y - 1m,
 	// default 10m clamped to the max); <= 0 is the supervision default, 30m.
+	// A step whose lane declares its own window (SpawnParams.ToolWindow)
+	// runs under that one instead (stepToolWindow).
 	ToolWindow time.Duration
+	// StepEnv, when non-nil, answers the daemon-owned step environment at
+	// spawn time (stepenv.go: the live command PATH and the container
+	// labels), added to every step process; nil (a bare Config, unit
+	// tests) adds none.
+	StepEnv func() StepEnv
 	// HarnessRoot is the parent root of the three harness state dirs
 	// (polyforge#171): <harness-root>/step-agent (the dedicated step
 	// agent dir), <harness-root>/step-agent-sessions (the pi steps'
@@ -125,13 +134,6 @@ type Config struct {
 	// observe uses for running jobs; <= 0 (the unit-test default)
 	// disables it.
 	SessionRevalidateEvery time.Duration
-	// ReviseRecord applies one owner binding-command revision batch to a
-	// PAUSED capsule. The daemon binds it to a record-only
-	// driver's single transition (driver.OpenRecord); the runtime package
-	// cannot import driver directly because the driver's internal tests
-	// import runtime — the test-only import cycle. nil refuses a paused
-	// record's revision (a running record uses its live driver handle).
-	ReviseRecord func(capsuleDir, bundleName, sessionHandle, wi string, spawnN int64, stepID string, corrections []capsule.BindingCorrection, by, reason string) error
 	// EventTap, when non-nil, receives runtime-sourced diagnostic events
 	// (kind "push_failed" on a seal push that failed after its retries)
 	// so they land in the daemon's durable events log next to the
@@ -139,10 +141,10 @@ type Config struct {
 	// EventLog; nil (tests) disables it.
 	EventTap func(wi, kind string, body map[string]any)
 	// CancelRequested, when non-nil, is called after a blocked close the
-	// hub took for a work item whose capsule records an owner's reserved
-	// cancel answer (capsule.Execution.CancelRequested): the daemon binds
-	// it to the hub's existing blocked→canceled door, carrying the
-	// verbatim answer. Idempotent by the door (an already-canceled work
+	// hub took for a work item whose capsule records an owner's cancel
+	// (capsule.Execution.CancelRequested, an `intent: cancel`): the daemon
+	// binds it to the hub's existing blocked→canceled door, carrying the
+	// owner's words. Idempotent by the door (an already-canceled work
 	// item is done); nil (tests) cancels nothing.
 	CancelRequested func(wi string, intent capsule.CancelIntent)
 	// ReleaseMonitor, when non-nil, stops the work item's observe monitor
@@ -153,6 +155,15 @@ type Config struct {
 	// "Authentication failed" GIT-500); the seal push is the final
 	// carrier. The daemon binds Observe.Release; nil (tests) = no monitor.
 	ReleaseMonitor func(wi string)
+	// ExecutionDisabled, when non-nil, names why the Cell's execution
+	// plane is closed ("" = open; read at use time — the daemon binds its
+	// executionDisabled). While it is set, reconciliation keeps an
+	// operator-paused record (StatePaused) paused even once the hub's
+	// clean_pause was cleared: no attach, no run — held work never starts
+	// behind the disabled state; the operator's pf resume after the Cell
+	// reopens continues it. Running and crashed mid-run work is not
+	// affected. nil (tests) = open.
+	ExecutionDisabled func() string
 	// EnvSecrets are configured secret values (machine api key, push
 	// credential) the spawned agents' environment must never carry, even
 	// under a renamed variable.
@@ -226,14 +237,6 @@ type Runtime struct {
 	// Resolve's unknown-input answer is "", and the daemon's resolver
 	// falls back to aihub for those.
 	aliases map[string]string
-	// dropped (under mu) retains the scope facts — the origin chat id
-	// and the project — of every job record the table dropped (dropJob):
-	// a terminal close moves the job to DONE and drops it, and the scoped
-	// decision wake (the daemon's wakeScope resolvers through
-	// ScopeOf) must still resolve both facts after it — the terminal
-	// decision is exactly the one that fires it. In-memory only; the
-	// facts are the dropped record's own point-in-time view.
-	dropped map[string]wiScope
 	// manualMu guards the daemon-local manual-models.json (manualmodels.go).
 	manualMu sync.Mutex
 	// claimMu serializes the claiming journal's read-modify-writes: its
@@ -269,10 +272,6 @@ type AgentStartInput struct {
 	// governs the next dispatch (the manual `pf submit --models` list stays
 	// frozen). Every candidate is `<harness>:<model>` (polyforge#175).
 	Compose func() (map[string][]string, error)
-	// Attrs is the dispatch-time step attr-override composition
-	// (workspace.ComposeAttrs): called at every dispatch
-	// beside Compose, so an attr edit governs the next dispatch.
-	Attrs func() (map[string]map[string]string, error)
 	// InterruptedCause is the recovery lane's cause string when THIS
 	// derivation is a recovery re-derivation ("" on a fresh claim): the
 	// driver archives the interrupted dispatch's infra attempt from it.
@@ -282,6 +281,11 @@ type AgentStartInput struct {
 	// StepEnded is the driver's step-end hook: the task-repo WIP push of
 	// the step that just ended (SaveTaskWIP, bounded by stepWIPBound).
 	StepEnded func(context.Context)
+	// OwnerWait flips the job's owner-wait flag (job.ownerWait): the driver
+	// sets it while its step's `pf ask` is open (the step awaits the
+	// owner, workflow contract v2 §5.2) and clears it before the next
+	// dispatch; the daemon's slot accounting reads it (JobInfo.AwaitingOwner).
+	OwnerWait func(waiting bool)
 }
 
 // AgentStartFunc starts the execution engine for a claimed work item
@@ -315,6 +319,11 @@ type job struct {
 	git        gitops.Opts // Username=wi, Secret=session_id (reference.md §3.4)
 	transcript string
 	bundleName string
+	// lane is the lane the pre-claim check judged, read into memory then
+	// (laneStage): the claim materializes exactly those bytes, so a lane
+	// changed or removed after the check cannot reach the capsule. nil
+	// on a journal replay (materialize reads the daemon's tree).
+	lane *laneStage
 	// origin is how the job was submitted (nil = unknown).
 	origin *Origin
 	// item is the claim answer's work-item snapshot (the F1 materializer
@@ -335,6 +344,11 @@ type job struct {
 	agent          AgentHandle
 	agentPID       int
 	agentStartedAt string
+	// ownerWait: the live driver reports its step waits on the owner (`pf
+	// ask`, AgentStartInput.OwnerWait): the daemon's slot accounting counts
+	// no running slot for the job while it is set. Reset when a derivation
+	// starts; moot without a live agent (JobInfo.AwaitingOwner).
+	ownerWait bool
 
 	spawnN       int
 	recoverFails int // consecutive recovery failures; reset on an accepted step result (C7)
@@ -421,7 +435,6 @@ func New(cfg Config, hub Aihub, spawner Spawner, toOB *supervise.Queue[protocol.
 		jobs:      map[string]*job{},
 		boxes:     map[string]*mailbox{},
 		aliases:   map[string]string{},
-		dropped:   map[string]wiScope{},
 		statePath: filepath.Join(cfg.DataDir, "runtime-state.json"),
 	}
 }
@@ -562,35 +575,6 @@ func (r *Runtime) persistLog(wi string) bool {
 	return true
 }
 
-// AdoptOrigin rewrites the persisted job record's origin chat to the
-// adopting chat — the same field a resume rewrites — so the adopter is
-// the WI's origin chat in every sense (`pf watch adopt <wi>`;
-// the daemon's adopt route calls it after the chat-subs surgery). The
-// rewrite mutates under the job's own mutex and persists after it is
-// released (the existing record()/info() pattern: no I/O under the job
-// mutex, none under the job-table lock beyond the snapshot); the record
-// pointer is replaced, not mutated in place, so a reader that already
-// took it keeps its point-in-time view. Origin.Owner is untouched —
-// owner routing keys on the owner, never the chat. A record with no
-// origin gains one (kind chat). The chat id is a notification label,
-// never a credential.
-func (r *Runtime) AdoptOrigin(wi, chatID string) error {
-	j := r.resolveJob(wi)
-	if j == nil {
-		return fmt.Errorf("runtime: %s: no local job to adopt", wi)
-	}
-	j.mu.Lock()
-	if j.origin == nil {
-		j.origin = &Origin{Kind: OriginChat, ChatID: chatID}
-	} else {
-		o := *j.origin
-		o.Kind, o.ChatID = OriginChat, chatID
-		j.origin = &o
-	}
-	j.mu.Unlock()
-	return r.persist()
-}
-
 // writeStateFn is persist's file write; persistSnapped, when set, runs
 // between a snapshot and its write (seams for the write-ordering tests).
 var (
@@ -606,24 +590,13 @@ func (r *Runtime) putJob(j *job) {
 }
 
 // dropJob removes j (only if it is still its work item's job) and the
-// aliases naming it, retaining the record's scope facts (dropped): the
-// wake-target scope survives the drop.
+// aliases naming it.
 func (r *Runtime) dropJob(j *job) {
-	// the record's scope facts first, under the job's own mutex alone
-	// (persist's r.mu → j.mu order never nests the other way): origin
-	// chat id and project, the dropped record's point-in-time view.
-	j.mu.Lock()
-	sc := wiScope{project: j.project}
-	if j.origin != nil {
-		sc.origin = j.origin.ChatID
-	}
-	j.mu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.jobs[j.wi] != j {
 		return
 	}
-	r.dropped[j.wi] = sc
 	delete(r.jobs, j.wi)
 	for a, id := range r.aliases {
 		if id == j.wi {
@@ -745,6 +718,22 @@ func mintSessionID() (string, error) {
 type StartOpts struct {
 	Origin *Origin
 	Models []string
+	// OwnerMessage is the owner message that wakes a parked work item
+	// (workflow contract 4,): appended to the claimed
+	// scene's asks.jsonl once the scene is ready and before the engine
+	// starts, so the woken step's first dispatch carries it. A claim
+	// always starts from a fresh clone (prepareCapsule), so a line written
+	// into the parked scene beforehand would be quarantined with it. nil =
+	// none.
+	OwnerMessage *capsule.AskLine
+	// OnClaimed, when non-nil, is called once aihub has answered the claim
+	// and the job sits in the table as CLAIMING (counted against a slot),
+	// before the capsule clone (the submit face answers
+	// the claim's verdict without waiting for the clone). It runs on the
+	// work item's actor and must not block.
+	OnClaimed func()
+	// lane is the pre-claim check's staged lane (Start sets it).
+	lane *laneStage
 }
 
 // Start claims wi and runs it to a live agent, returning once the claim
@@ -781,9 +770,11 @@ func (r *Runtime) Start(ctx context.Context, wi string, opts StartOpts) error {
 		return err
 	}
 	if probe.BundleName != nil {
-		if err := r.CheckBundle(wi, *probe.BundleName); err != nil {
+		stage, err := r.stageCheckedLane(wi, probe.ProjectName, *probe.BundleName)
+		if err != nil {
 			return err
 		}
+		opts.lane = stage
 	}
 	err = r.call(ctx, probe.ID, func() error { return r.claim(ctx, wi, probe.ID, opts) })
 	if errors.Is(err, errAbandoned) {
@@ -874,7 +865,15 @@ func (r *Runtime) claim(ctx context.Context, spelling, id string, opts StartOpts
 	if err != nil {
 		return err
 	}
+	if opts.OnClaimed != nil {
+		opts.OnClaimed()
+	}
 	note, sceneErr := r.claimScene(cctx, j, resp.Claim)
+	if sceneErr == nil && opts.OwnerMessage != nil {
+		if err := capsule.AppendAsk(j.capsuleDir, *opts.OwnerMessage); err != nil {
+			note, sceneErr = "the owner message that woke the work item was not recorded: "+err.Error(), err
+		}
+	}
 	return r.finishClaim(ctx, j, sceneErr, note)
 }
 
@@ -1005,10 +1004,15 @@ func (r *Runtime) claimPlaceholder(ctx context.Context, spelling, sessionID stri
 	j.capsuleDir = capDir
 	j.git.CapsuleDir = capDir
 	j.transcript = sessionPathFor(j.capsuleDir, fp)
-	// polyforge#79/#175: a claim over an unreadable or non-`<harness>:<model>`
-	// bundle ends blocked; the candidates themselves are composed at every
-	// dispatch (polyforge#33), never snapshotted here.
-	if _, ferr := r.readBundleFrontmatter(j.bundleName); ferr != nil {
+	// The claim materializes the lane the pre-claim check judged (staged:
+	// a lane changed or removed since cannot reach it). Without a staged
+	// lane — a journal replay, or a claim answer naming another lane than
+	// the probe did — the daemon's tree is judged now, and a refusal ends
+	// the open claim blocked. The candidates themselves are composed at
+	// every dispatch (polyforge#33), never snapshotted here.
+	if opts.lane != nil && opts.lane.bundle == j.bundleName {
+		j.lane = opts.lane
+	} else if ferr := r.CheckBundle(j.wi, j.project, j.bundleName); ferr != nil {
 		return nil, nil, r.abandonClaim(j, ferr, ferr.Error())
 	}
 	cctx, cancel := context.WithCancel(ctx)
@@ -1129,7 +1133,7 @@ func (r *Runtime) LoadWorkspace(project string) (*workspace.Config, error) {
 	if err != nil {
 		return nil, unmappedProjectError(project)
 	}
-	wcfg, err := workspace.Load(ws, r.cfg.WorkflowsDir, r.plan().ProjectsOf(ws))
+	wcfg, err := workspace.Load(ws, r.plan().ProjectsOf(ws))
 	if err != nil {
 		return nil, &api.Error{
 			Code:   api.ErrDaemonWorkspaceYaml,
@@ -1145,12 +1149,15 @@ func (r *Runtime) LoadWorkspace(project string) (*workspace.Config, error) {
 // `pf resume` re-claims the work item.
 const EvClaimPausedEndedBlocked = "claim_paused_ended_blocked"
 
-// CheckBundle is the polyforge#175 pre-claim bundle read: the installed
-// bundle's candidates must all be `<harness>:<model>` (and it may carry
-// no `harness` key). A refusal is the typed DAEMON-414 naming the file
-// and step — nothing is claimed, the work item stays queued. An empty
-// bundle name (not bound yet) passes.
-func (r *Runtime) CheckBundle(wi, bundle string) error {
+// CheckBundle is the pre-claim lane read: the work item's lane must be in
+// the lane set of its project's workspace (laneSet) — a name neither the
+// daemon's built-in lanes nor that workspace's user lanes carry (one a
+// release removed, one it never shipped, one the workspace does not
+// define) is refused with WFC-123 (docs/reference/workflow-contract.md) —
+// and must load through the one lane loader without a defect (every WFC-*
+// defect named). A refusal is the typed DAEMON-414: nothing is claimed,
+// the work item stays queued. An empty bundle name (not bound yet) passes.
+func (r *Runtime) CheckBundle(wi, project, bundle string) error {
 	if bundle == "" {
 		return nil
 	}
@@ -1160,7 +1167,11 @@ func (r *Runtime) CheckBundle(wi, bundle string) error {
 			Detail: fmt.Sprintf("the workflow bundle of %s refused the claim before it was made (the work item stays queued): %q holds the shared step definitions and is not a workflow bundle", wi, workflow.SharedDir),
 		}
 	}
-	if _, ferr := r.readBundleFrontmatter(bundle); ferr != nil {
+	lane, ferr := r.readLane(project, bundle)
+	if ferr == nil && lane == nil {
+		ferr = r.bundleNotInstalled(project, bundle)
+	}
+	if ferr != nil {
 		return &api.Error{
 			Code:   api.ErrDaemonWorkspaceYaml,
 			Detail: fmt.Sprintf("the workflow bundle of %s refused the claim before it was made (the work item stays queued): %v", wi, ferr),
@@ -1169,28 +1180,81 @@ func (r *Runtime) CheckBundle(wi, bundle string) error {
 	return nil
 }
 
-// RefusedBundles answers the installed bundles whose frontmatter fails to
-// load (polyforge#175: an unprefixed candidate, a retired `harness`
-// key, or torn yaml), name → load error — the auto-pull wave skips work
+// LaneMissingDetail is the WFC-123 refusal of a lane the lane set does
+// not carry: nothing is claimed; a queued work item is re-bound to a lane
+// of the set (`pf file edit <wi> --bundle <lane>`), any other is cancelled
+// and filed again.
+func LaneMissingDetail(bundle string, set workflow.LaneSet) string {
+	where := fmt.Sprintf("%s has no %s/%s", set.Builtin, bundle, workflow.WorkflowFile)
+	if set.User != "" {
+		where += fmt.Sprintf(", and neither has the workspace's user lanes %s", set.User)
+	}
+	return fmt.Sprintf("%s the work item's lane %s is not in this daemon's lane set (%s); nothing is claimed — re-bind a queued work item to an installed lane (pf file edit <wi> --bundle <lane>), cancel any other and file it again",
+		workflow.CodeLaneMissing, bundle, where)
+}
+
+// laneSet answers the lane set project's work items resolve their lane in
+// (docs/reference/workflow-contract.md, "User lanes"): the daemon's
+// built-in lanes and the user lanes of the workspace the project maps to
+// — resolved per work item, so one daemon serving several workspaces
+// answers each its own. An unmapped project sees the built-in lanes alone.
+func (r *Runtime) laneSet(project string) workflow.LaneSet {
+	ws, err := r.plan().WorkspaceFor(project)
+	if err != nil {
+		ws = ""
+	}
+	return workflow.ForWorkspace(r.cfg.WorkflowsDir, ws)
+}
+
+// bundleNotInstalled answers the WFC-123 refusal of a lane name the lane
+// set of project does not carry; nil when no workflows dir is configured
+// (nothing is installed to judge against).
+func (r *Runtime) bundleNotInstalled(project, bundle string) error {
+	if r.cfg.WorkflowsDir == "" {
+		return nil
+	}
+	return fmt.Errorf("%s", LaneMissingDetail(bundle, r.laneSet(project)))
+}
+
+// RefusedBundles answers, keyed by `<project> <lane>`, every pair (each
+// {project, lane}) whose claim CheckBundle would refuse: a lane the
+// project's lane set carries but the one lane loader refuses, and a name
+// the set does not carry at all (WFC-123) — the auto-pull wave skips work
 // items on them instead of enqueueing a claim that is bound to refuse.
-func (r *Runtime) RefusedBundles() map[string]error {
-	_, bad, _ := workspace.Bundles(r.cfg.WorkflowsDir, "")
+func (r *Runtime) RefusedBundles(pairs [][2]string) map[string]error {
+	bad := map[string]error{}
+	seen := map[string]bool{}
+	for _, pr := range pairs {
+		project, bundle := pr[0], pr[1]
+		key := project + " " + bundle
+		if bundle == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		lane, err := r.readLane(project, bundle)
+		if err == nil && lane == nil {
+			err = r.bundleNotInstalled(project, bundle)
+		}
+		if err != nil {
+			bad[key] = err
+		}
+	}
 	return bad
 }
 
-// readBundleFrontmatter reads the pinned bundle's workflow.md
-// frontmatter from the daemon checkout. A torn frontmatter, or one whose
-// candidate format is refused (polyforge#175), answers the load error
-// naming the file and the step; a missing one answers (nil, nil).
-func (r *Runtime) readBundleFrontmatter(bundleName string) (*workflow.Frontmatter, error) {
+// readLane reads the lane bundleName of project's lane set (laneSet)
+// through the one lane loader: (nil, nil) when the set does not carry it
+// or no workflows dir is configured, the *workflow.LoadError naming every
+// defect when the loader refuses it.
+func (r *Runtime) readLane(project, bundleName string) (*workflow.Lane, error) {
 	if bundleName == "" || r.cfg.WorkflowsDir == "" {
 		return nil, nil
 	}
-	fm, err := workflow.ReadFrontmatter(filepath.Join(r.cfg.WorkflowsDir, bundleName, "workflow.md"))
+	lane, _, err := r.laneSet(project).Load(bundleName)
 	if err != nil {
 		return nil, fmt.Errorf("workflow bundle %s refused: %w", bundleName, err)
 	}
-	return fm, nil
+	return lane, nil
 }
 
 // abandonClaim is the D5 compensation carried into the session model:
@@ -1572,15 +1636,31 @@ func (r *Runtime) sealNetwork(j *job, reason, note string, alreadyPushed bool) (
 			j.sealPushFailNoted = true
 			j.mu.Unlock()
 			if !noted {
-				r.tap(j.wi, "push_failed", map[string]any{"phase": "seal", "reason": reason, "error": perr.Error()})
+				r.tap(j.wi, "push_failed", pushFailedBody(map[string]any{"phase": "seal", "reason": reason, "error": perr.Error()}, perr))
 			}
 			finalReason = protocol.FinishBlocked
+			note = refusedPushNote(perr, note)
 			chainOK = false
 		} else {
 			j.mu.Lock()
 			j.sealedPush = true
 			j.mu.Unlock()
 			crashpoint.At("seal.pushed")
+		}
+	}
+	// the wrap attrs the lane's steps registered (develop's
+	// landing record among them) ride the wrap (a replayed close sends them
+	// again: the merge is idempotent). A record that cannot be read never
+	// wraps without it: the close fails closed to blocked, its note naming
+	// why — the owner's door (the hub's blocked verdict), the scene and its
+	// WIP kept for the repair and the re-claim.
+	var attrs map[string]any
+	if finalReason == protocol.FinishWrapped {
+		var aerr error
+		if attrs, aerr = wrapAttrs(j.capsuleDir); aerr != nil {
+			fmt.Fprintf(os.Stderr, "runtime: %s: %v — closing blocked instead of wrapping without it\n", j.wi, aerr)
+			finalReason = protocol.FinishBlocked
+			note = handOffUnreadableNote(aerr)
 		}
 	}
 	// Task-repo uncommitted work (polyforge#167): every close but wrapped
@@ -1590,11 +1670,68 @@ func (r *Runtime) sealNetwork(j *job, reason, note string, alreadyPushed bool) (
 	// v1.5: the terminal close is SessionEnd, fenced on the session hash.
 	// A STALE_SESSION refusal surfaces as the error and leaves the job
 	// SEALING; its retry finishes it locally (finishSeal).
-	req := api.SessionEndRequest{SessionID: j.sessionID, Status: finalReason, Note: note}
+	req := api.SessionEndRequest{SessionID: j.sessionID, Status: finalReason, Note: note, Attrs: attrs}
 	if finalReason == protocol.FinishBlocked {
 		req.HeadSHA, _ = gitops.Head(j.git)
 	}
 	return finalReason, r.hub.SessionEnd(j.wi, req)
+}
+
+// wrapAttrs answers the attrs a wrapped close carries to aihub (workflow
+// contract 4, design #483 §5.2/§5.3,):
+//
+//   - every `wrap-attrs` write a step recorded and the pending-writes
+//     executor made (the call ledger, pendingwrites.WrapAttrs): its name →
+//     its JSON value, a later write of a name replacing an earlier one (a
+//     lane's records: develop's and micro's landing record among them);
+//   - `waivers`: every owner waiver of the run (stepcall.Waivers: the
+//     owner's words verbatim from the ask record, the agent's reading, the
+//     times), written by the daemon for every lane — a step's own
+//     `waivers` write is dropped.
+//
+// execution.json is not read: it is the daemon's progress record alone.
+// nil when there is nothing to carry. A record that exists but cannot be
+// read — the ledger, the ask record, a waiver whose cited message is gone
+// — is an error: the hand-off exists or cannot be ruled out, and the
+// caller must not wrap without it.
+func wrapAttrs(capsuleDir string) (map[string]any, error) {
+	lines, err := stepcall.Read(capsuleDir)
+	if err != nil {
+		return nil, fmt.Errorf("the call ledger (%s) could not be read: %w", capsule.StepCallsJSONL, err)
+	}
+	attrs := map[string]any{}
+	for name, value := range pendingwrites.WrapAttrs(lines) {
+		if name == attrWaivers {
+			fmt.Fprintf(os.Stderr, "runtime: %s: a step's wrap-attrs %q is dropped: the daemon writes the waivers\n", capsuleDir, attrWaivers)
+			continue
+		}
+		attrs[name] = value
+	}
+	asks, err := capsule.ReadAsks(capsuleDir)
+	if err != nil {
+		return nil, fmt.Errorf("the ask record (%s) could not be read: %w", capsule.AsksJSONL, err)
+	}
+	waivers, err := stepcall.Waivers(lines, asks)
+	if err != nil {
+		return nil, err
+	}
+	if len(waivers) > 0 {
+		attrs[attrWaivers] = waivers
+	}
+	if len(attrs) == 0 {
+		return nil, nil
+	}
+	return attrs, nil
+}
+
+// attrWaivers is the attrs key of the run's owner waivers.
+const attrWaivers = "waivers"
+
+// handOffUnreadableNote is the blocked close's note when the hand-off
+// could not be read (wrapAttrs): what happened and the owner's repair.
+func handOffUnreadableNote(err error) string {
+	return "workflow completed, but the work item is blocked instead of wrapped: " + err.Error() +
+		" — wrapping without it would lose the hand-off attrs (the wrap-attrs and the waivers). Repair the named record in the capsule, then resume the work item so its close wraps with them"
 }
 
 // pauseOp is the operator pause close (v1.5 review Finding 2): the M3
@@ -1661,10 +1798,35 @@ func (r *Runtime) pauseNetwork(j *job) error {
 	perr := sealPush(j, protocol.FinishPaused)
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "runtime: %s: pause seal push failed after retries (local commit stands): %v\n", j.wi, perr)
-		r.tap(j.wi, "push_failed", map[string]any{"phase": "pause-seal", "reason": protocol.FinishPaused, "error": perr.Error()})
+		r.tap(j.wi, "push_failed", pushFailedBody(map[string]any{"phase": "pause-seal", "reason": protocol.FinishPaused, "error": perr.Error()}, perr))
 	}
 	r.saveTaskWIP(j, true, perr == nil)
 	return r.hub.SessionEnd(j.wi, api.SessionEndRequest{SessionID: j.sessionID, Status: api.StatusPaused, CleanPause: true})
+}
+
+// pushFailedBody answers a push_failed event body: base plus the push
+// error's structured facts (a size refusal's unpushed range and refused
+// paths, gitops.PushFailureFacts).
+func pushFailedBody(base map[string]any, perr error) map[string]any {
+	for k, v := range gitops.PushFailureFacts(perr) {
+		base[k] = v
+	}
+	return base
+}
+
+// refusedPushNote answers the note of a blocked close whose chain push
+// the hub refused for its blob size: the refusal's paths and unpushed
+// range ahead of the close's own note; note unchanged
+// for any other push failure.
+func refusedPushNote(perr error, note string) string {
+	var ref *gitops.OversizeRefusal
+	if !errors.As(perr, &ref) {
+		return note
+	}
+	if note == "" {
+		return ref.Summary()
+	}
+	return ref.Summary() + "; " + note
 }
 
 // sealPush commits the capsule and pushes it, retrying the push twice.
@@ -1676,12 +1838,17 @@ func sealPush(j *job, reason string) error {
 	return err
 }
 
+// DriverAnswerFace is the owner's way to speak to a driver-driven work
+// item's step: the owner-message relay into the step's conversation
+// (driver.Handle.OwnerMessage, workflow contract v2 §5.2).
+type DriverAnswerFace interface {
+	OwnerMessage(ctx context.Context, text, by string) (protocol.OwnerMessageAck, error)
+}
+
 // DriverAnswerHandle returns the bridge Handle for a driver-driven WI
 // (nil when the job's agent is not a bridge handle — the WI-Agent path
 // answers through the observe lane instead).
-func (r *Runtime) DriverAnswerHandle(wi string) interface {
-	Answer(questionID, answer, answeredBy string) error
-} {
+func (r *Runtime) DriverAnswerHandle(wi string) DriverAnswerFace {
 	j := r.jobOf(r.CanonicalID(wi))
 	if j == nil {
 		return nil
@@ -1689,9 +1856,7 @@ func (r *Runtime) DriverAnswerHandle(wi string) interface {
 	j.mu.Lock()
 	h := j.agent
 	j.mu.Unlock()
-	if bh, ok := h.(interface {
-		Answer(questionID, answer, answeredBy string) error
-	}); ok {
+	if bh, ok := h.(DriverAnswerFace); ok {
 		return bh
 	}
 	return nil

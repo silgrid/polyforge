@@ -19,6 +19,10 @@
 //     created (the pilot's #48 poison chain made every later push of the
 //     standing HEAD unfetchable; the precheck keeps the poison out of
 //     history entirely).
+//   - NO blob over capsule.MaxBlobBytes enters local history either
+//     (oversize.go,): such a file is left out of the commit
+//     and listed in capsule.OversizeManifest, and a push the hub still
+//     refuses for size names the paths and the unpushed range.
 //   - task-repo durability lane (polyforge#108): every publish also
 //     mirrors each repos/<name> worktree's HEAD into the WI's own bare
 //     repo as refs/pf-task/<name> (pushTaskRefsLocked) — the capsule
@@ -43,7 +47,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -54,6 +57,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/polyforge/taskrepo"
 )
 
 // wiLock is one work item's git mutex and the count of its holders and
@@ -167,27 +171,61 @@ func (o Opts) Env() []string {
 // hubEnv is the environment of every chain-lane git call that talks to
 // the hub with the session credential (the chain push, the capsule
 // clone, the carrier ls-remote/fetch): the daemon's environment minus
-// every inherited GIT_* variable and with no system or global config —
-// the carrier lane's rule (carrierEnv). An operator's ~/.gitconfig must
+// every inherited GIT_* variable, no system config, and the global config
+// read from the daemon-owned empty file (emptyGlobalConfig) — the carrier
+// lane's rule (carrierEnv). An operator's ~/.gitconfig must
 // not reroute the credentialed push (url.*.insteadOf) nor hand the
 // session secret to a credential helper that stores it. bindRepo
 // adds the capsule's external git-dir binding; additions (the askpass
-// pair) come last.
-func hubEnv(o Opts, bindRepo bool, additions []string) []string {
+// pair) come last. An error (no external git-dir, the empty config
+// cannot be rebuilt) fails the caller's git call.
+func hubEnv(o Opts, bindRepo bool, additions []string) ([]string, error) {
+	global, err := emptyGlobalConfig(o)
+	if err != nil {
+		return nil, err
+	}
 	env := make([]string, 0, len(os.Environ())+4+len(additions))
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "GIT_") {
 			env = append(env, kv)
 		}
 	}
-	env = append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+	env = append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+global,
 		// a stalled HTTP transfer (below 1 KB/s for 60 s) aborts long
 		// before chainRemoteTimeout — the task-repo lane's values
 		"GIT_HTTP_LOW_SPEED_LIMIT=1000", "GIT_HTTP_LOW_SPEED_TIME=60")
 	if bindRepo {
 		env = append(env, "GIT_DIR="+o.GitDir, "GIT_WORK_TREE="+o.CapsuleDir)
 	}
-	return append(env, additions...)
+	return append(env, additions...), nil
+}
+
+// emptyConfigName is the daemon-owned empty git config next to the
+// external git-dirs (<data-dir>/git/empty.config).
+const emptyConfigName = "empty.config"
+
+// emptyGlobalConfig answers the path of the daemon-owned empty git config
+// that hubEnv and carrierEnv hand git as GIT_CONFIG_GLOBAL: the global
+// config must read as empty, and the null device cannot be trusted for
+// that (once replaced by a regular file, every shell redirect writes text
+// into it and git refuses it as config). Before each use the file is
+// checked: a regular file of size 0 is used as it is; anything else
+// (missing, holding text, a symlink, another type) is rebuilt atomically,
+// empty and mode 0444. No external git-dir is an error, as in
+// credentialEnv.
+func emptyGlobalConfig(o Opts) (string, error) {
+	base := filepath.Dir(o.GitDir)
+	if o.GitDir == "" || base == "." {
+		return "", fmt.Errorf("gitops: the empty git config for %s needs the external git-dir (Opts.GitDir is %q)", o.WorkItemID, o.GitDir)
+	}
+	path := filepath.Join(base, emptyConfigName)
+	if st, err := os.Lstat(path); err == nil && st.Mode().IsRegular() && st.Size() == 0 {
+		return path, nil
+	}
+	if err := atomicfile.Write(path, nil, 0o444); err != nil {
+		return "", fmt.Errorf("gitops: rebuilding the empty git config %s: %w", path, err)
+	}
+	return path, nil
 }
 
 // CEnv returns env (nil = inherited environ) pinned to the C locale:
@@ -267,9 +305,7 @@ func runGitCtx(ctx context.Context, timeout time.Duration, env []string, dir str
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = CEnv(env)
-	cmd.Dir = dir
+	cmd := taskrepo.Command(ctx, CEnv(env), dir, args...)
 	if timeout > 0 || ctx.Done() != nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
@@ -476,6 +512,15 @@ func CommitPush(ctx context.Context, o Opts, message string) (string, bool, Push
 		return "", false, timings, err
 	}
 	env := o.Env()
+	// The blob-size guard (oversize.go,): files over the
+	// hub's blob limit — and tracked files under the downloads directory —
+	// leave the index before anything is staged, and the manifest that
+	// lists them is part of this commit.
+	fresh, err := leaveOutOversize(o, env, nil)
+	if err != nil {
+		return "", false, timings, err
+	}
+	o.announceOversize(fresh)
 	// Clean-tree check BEFORE committing: git reports "nothing to commit"
 	// on stdout, so the failure cannot be told apart from a real commit
 	// error by the error string. The porcelain listing is the honest
@@ -497,6 +542,13 @@ func CommitPush(ctx context.Context, o Opts, message string) (string, bool, Push
 		// `add -A`, so it catches both a standing poisoned index and the
 		// fresh nested .git the add just staged.
 		if err := checkLocalGitlink(env, o.CapsuleDir); err != nil {
+			return "", false, timings, err
+		}
+		// The staged tree, checked again: a file that grew over the limit
+		// after the working-tree pass (a download still being written)
+		// leaves the index here, and a tree still holding such a blob is
+		// never committed.
+		if err := guardStagedTree(o, env); err != nil {
 			return "", false, timings, err
 		}
 		commitStart := time.Now()
@@ -562,11 +614,18 @@ func pushLocked(ctx context.Context, o Opts) (bool, int64, error) {
 		return false, 0, err
 	}
 	defer cleanup()
+	env, err := hubEnv(o, true, additions)
+	if err != nil {
+		return false, 0, &api.Error{Code: api.ErrGitInternal, Detail: err.Error()}
+	}
 	pushStart := time.Now()
-	out, perr := gitTimedCtx(ctx, chainRemoteTimeout, hubEnv(o, true, additions), o.CapsuleDir, args...)
+	out, perr := gitTimedCtx(ctx, chainRemoteTimeout, env, o.CapsuleDir, args...)
 	pushMS := time.Since(pushStart).Milliseconds()
 	if perr != nil {
 		perr = &api.Error{Code: api.ErrGitInternal, Detail: strings.TrimSpace(out) + ": " + perr.Error()}
+		// a size refusal names the paths and the unpushed range, not only
+		// the blob shas the hook prints (oversize.go)
+		perr = diagnoseOversize(o, perr)
 	} else {
 		// the hub now holds HEAD: the next gitlink scan starts above it
 		_, _ = git(o.Env(), o.CapsuleDir, "update-ref", pushedRef, "HEAD")
@@ -725,11 +784,18 @@ type carrierSrc struct{ name, objects, sha string }
 
 // carrierEnv is the ONE environment of every git call on the carrier
 // lane (the task-repo reads and the push alike): the daemon's environment
-// minus every GIT_* variable, no system or global config (nothing an
+// minus every GIT_* variable, no system config, the global config read
+// from the daemon-owned empty file (emptyGlobalConfig: nothing an
 // operator's ~/.gitconfig says can reroute a credentialed push), and
 // repository discovery fenced at reposDir so a task repo without its own
-// .git can never resolve to the capsule or anything above it.
-func carrierEnv(reposDir string) []string {
+// .git can never resolve to the capsule or anything above it. An error
+// (no external git-dir, the empty config cannot be rebuilt) fails the
+// caller's lane.
+func carrierEnv(o Opts, reposDir string) ([]string, error) {
+	global, err := emptyGlobalConfig(o)
+	if err != nil {
+		return nil, err
+	}
 	env := make([]string, 0, len(os.Environ())+3)
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "GIT_") {
@@ -738,9 +804,9 @@ func carrierEnv(reposDir string) []string {
 	}
 	return append(env,
 		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_GLOBAL="+global,
 		"GIT_CEILING_DIRECTORIES="+reposDir,
-	)
+	), nil
 }
 
 // Carrier-lane git timeouts: the read-only checks and the temp-repo
@@ -759,12 +825,11 @@ var (
 // killed, like the carrier lane's calls.
 var chainRemoteTimeout = 10 * time.Minute
 
-// carrierFlags lead every git call on the carrier lane: no hooks, no
-// fsmonitor (both would run programs), no credential helper (an empty
-// value resets the helper list), no http proxy.
+// carrierFlags lead every git call on the carrier lane, after the
+// hardening every git gets from taskrepo.Command (no program the repo's
+// config names): no credential helper (an empty value resets the helper
+// list), no http proxy.
 var carrierFlags = []string{
-	"-c", "core.hooksPath=/dev/null",
-	"-c", "core.fsmonitor=false",
 	"-c", "credential.helper=",
 	"-c", "http.proxy=",
 }
@@ -784,7 +849,10 @@ var carrierFlags = []string{
 func carrierSourceT(o Opts, reposDir, name string) (objects, sha, reason string) {
 	dir := filepath.Join(reposDir, name)
 	gitDir := filepath.Join(dir, ".git")
-	env := carrierEnv(reposDir)
+	env, err := carrierEnv(o, reposDir)
+	if err != nil {
+		return "", "", "repos/" + name + ": " + err.Error()
+	}
 	// safe.directory: the repo may be owned by another uid (#135).
 	flags := append(append([]string{}, carrierFlags...), "-c", "safe.directory="+dir)
 	reason = carrierLayoutRefusal(gitDir)
@@ -1015,7 +1083,10 @@ func carrierLayoutRefusal(gitDir string) string {
 // Foreign, unrelated or content-dropping heads keep the old refusal; an
 // unreadable or moved tip is never clobbered.
 func pushCarrier(o Opts, reposDir, objects, sha, name string, credAdditions []string) (out string, behind bool, err error) {
-	env := carrierEnv(reposDir)
+	env, err := carrierEnv(o, reposDir)
+	if err != nil {
+		return "", false, err
+	}
 	tmp, out, err := carrierTempRepo(o, env, objects)
 	if tmp != "" {
 		defer os.RemoveAll(tmp)
@@ -1104,7 +1175,10 @@ func carrierBoundary(o Opts, env []string, tmp, reposDir, name, sha string, cred
 func carrierUpstreamBoundary(o Opts, reposDir, name, head string) (roots string, usable bool) {
 	dir := filepath.Join(reposDir, name)
 	flags := append(append([]string{}, carrierFlags...), "-c", "safe.directory="+dir)
-	env := carrierEnv(reposDir)
+	env, err := carrierEnv(o, reposDir)
+	if err != nil {
+		return "", false
+	}
 	refs, err := o.gitT(carrierCheckTimeout, env, dir, append(flags, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin")...)
 	if err != nil || strings.TrimSpace(refs) == "" {
 		return "", false
@@ -1364,7 +1438,10 @@ func fetchCarrierRef(ctx context.Context, o Opts, dir, ref string) (string, erro
 		return "", err
 	}
 	defer cleanup()
-	env := hubEnv(o, false, additions)
+	env, err := hubEnv(o, false, additions)
+	if err != nil {
+		return "", err
+	}
 	// ls-remote --exit-code answers 2 when no ref matches: the
 	// language-independent "no carrier yet" signal (never git's message).
 	if _, err := gitTimedCtx(ctx, o.bound(chainRemoteTimeout), env, dir, "ls-remote", "--exit-code", o.RemoteURL, ref); err != nil {
@@ -1433,7 +1510,10 @@ func Clone(ctx context.Context, o Opts) error {
 		return err
 	}
 	defer cleanup()
-	env := hubEnv(o, false, additions)
+	env, err := hubEnv(o, false, additions)
+	if err != nil {
+		return err
+	}
 	if _, err := runGitCtx(ctx, chainRemoteTimeout, env, "", "clone", "--separate-git-dir="+o.GitDir, o.RemoteURL, o.CapsuleDir); err != nil {
 		return err
 	}
@@ -1448,7 +1528,11 @@ func Clone(ctx context.Context, o Opts) error {
 // HasCommit reports whether the git-dir gitDir holds sha as a commit
 // (read-only).
 func HasCommit(o Opts, gitDir, sha string) bool {
-	_, err := git(append(hubEnv(o, false, nil), "GIT_DIR="+gitDir), "", "cat-file", "-e", sha+"^{commit}")
+	env, err := hubEnv(o, false, nil)
+	if err != nil {
+		return false
+	}
+	_, err = git(append(env, "GIT_DIR="+gitDir), "", "cat-file", "-e", sha+"^{commit}")
 	return err == nil
 }
 
@@ -1460,7 +1544,10 @@ func HasCommit(o Opts, gitDir, sha string) bool {
 func AdoptCommit(ctx context.Context, o Opts, sha, src string) error {
 	release := Lock(o.WorkItemID)
 	defer release()
-	env := hubEnv(o, true, nil)
+	env, err := hubEnv(o, true, nil)
+	if err != nil {
+		return fmt.Errorf("gitops: fetching %s from %s: %w", sha, src, err)
+	}
 	if _, err := runGitCtx(ctx, chainRemoteTimeout, env, o.CapsuleDir, "fetch", "--no-tags", "--quiet", src, sha); err != nil {
 		return fmt.Errorf("gitops: fetching %s from %s: %w", sha, src, err)
 	}
@@ -1629,14 +1716,10 @@ const tempFilePattern = ".*.tmp"
 // none is ever capsule content. It lives in the capsule git-dir's
 // info/exclude, never in the tracked .gitignore.
 func excludeTempFiles(o Opts) error {
-	gitDir := o.GitDir
-	if gitDir == "" {
-		gitDir = filepath.Join(o.CapsuleDir, ".git")
-	}
-	if st, err := os.Stat(gitDir); err != nil || !st.IsDir() {
+	path := infoExcludePath(o)
+	if st, err := os.Stat(filepath.Dir(filepath.Dir(path))); err != nil || !st.IsDir() {
 		return nil // no git-dir: the git call itself reports it
 	}
-	path := filepath.Join(gitDir, "info", "exclude")
 	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err

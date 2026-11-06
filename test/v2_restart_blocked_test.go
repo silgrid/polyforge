@@ -32,20 +32,18 @@ func TestV2RestartCapsuleMissingBlocksThenResumeFromCheckpoint(t *testing.T) {
 	inst, remote := newV1InstallTaskRepo(t)
 	wi := inst.newWI(t, "restart: capsule missing -> blocked -> resume",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true,
+			{"do": "envelope", "id": "fix", "outcome": "completed",
 				"name": "demo-src", "origin": remote.url},
-			// the crash window: verification is in flight when the daemon dies
-			{"do": "envelope", "id": "verification", "outcome": "completed", "ms": 120000},
-			// the post-resume dispatch of verification
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			// the crash window: review is in flight when the daemon dies
+			{"do": "envelope", "id": "review", "outcome": "completed", "ms": 120000},
+			// the post-resume dispatch of review
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	other := inst.newWI(t, "restart: bystander recovers normally",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 120000},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 120000},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	t.Cleanup(func() { killOrphans(wi); killOrphans(other) })
 
@@ -53,7 +51,7 @@ func TestV2RestartCapsuleMissingBlocksThenResumeFromCheckpoint(t *testing.T) {
 	d.start()
 	d.pf(t, "submit", wi)
 	d.pf(t, "submit", other)
-	waitStepStatus(t, d, wi, "verification", "in_progress", 90*time.Second)
+	waitStepStatus(t, d, wi, "review", "in_progress", 90*time.Second)
 	waitStepStatus(t, d, other, "fix", "in_progress", 90*time.Second)
 
 	capA := d.capsuleDir(wi)
@@ -73,12 +71,12 @@ func TestV2RestartCapsuleMissingBlocksThenResumeFromCheckpoint(t *testing.T) {
 		return perr == nil && strings.Contains(string(packed), "refs/pf-task/demo-src")
 	})
 	// ...and the hub chain's execution.json must already record the fix
-	// step done and verification's step_start (work published after the
+	// step done and review's step_start (work published after the
 	// last push is the only thing a capsule loss may cost; the step_start
 	// reaches the hub by its own async push, so crashing on "fix done"
 	// alone sometimes re-derives the dead ordinal and replays its 120s
 	// action into the 60s model-error grace)
-	waitUntil(t, 60*time.Second, "the hub chain never recorded the fix step done and verification running", func() bool {
+	waitUntil(t, 60*time.Second, "the hub chain never recorded the fix step done and review running", func() bool {
 		if !inst.bareHasPath(t, wi, "runtime-state/execution.json") {
 			return false
 		}
@@ -86,7 +84,7 @@ func TestV2RestartCapsuleMissingBlocksThenResumeFromCheckpoint(t *testing.T) {
 		if json.Unmarshal([]byte(inst.bareFileAtMain(t, wi, "runtime-state/execution.json")), &x) != nil {
 			return false
 		}
-		fix, ver := x.Steps["fix"], x.Steps["verification"]
+		fix, ver := x.Steps["fix"], x.Steps["review"]
 		return fix != nil && fix.Status == "done" && ver != nil && ver.Status == "in_progress"
 	})
 	preMax := 0.0 // the highest ordinal dispatched before the loss
@@ -146,7 +144,7 @@ func TestV2RestartCapsuleMissingBlocksThenResumeFromCheckpoint(t *testing.T) {
 	// completed steps were NOT re-run: every dispatch after the loss —
 	// an ordinal past the dead session's (the chain may lack the dead
 	// dispatch's journal line, not its step_start: waited for above) — is
-	// verification
+	// review
 	spawns := spawnJournal(t, d2.capsuleDir(wi))
 	resumed := 0
 	for _, s := range spawns {
@@ -154,7 +152,7 @@ func TestV2RestartCapsuleMissingBlocksThenResumeFromCheckpoint(t *testing.T) {
 			continue
 		}
 		resumed++
-		if id, _ := s["step_id"].(string); id != "verification" {
+		if id, _ := s["step_id"].(string); id != "review" {
 			t.Fatalf("a completed step was re-run after the resume: %v (spawns %v)", s["step_id"], spawns)
 		}
 	}
@@ -162,7 +160,7 @@ func TestV2RestartCapsuleMissingBlocksThenResumeFromCheckpoint(t *testing.T) {
 		t.Fatalf("the resume dispatched nothing past ordinal %v (spawns %v)", preMax, spawns)
 	}
 	x := readExecution(t, d2.capsuleDir(wi))
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		if st := x.Steps[step]; st == nil || st.Status != "done" {
 			t.Fatalf("step %s: %+v, want done", step, st)
 		}
@@ -179,10 +177,9 @@ func TestV2RestartSnapshotMissingBlocksThenResumeRematerializes(t *testing.T) {
 	inst := newV1Install(t)
 	wi := inst.newWI(t, "restart: snapshot missing -> blocked -> resume",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 120000},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 120000},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	t.Cleanup(func() { killOrphans(wi) })
 	d := newV1Daemon(t, inst)

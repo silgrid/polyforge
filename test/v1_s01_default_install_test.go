@@ -7,13 +7,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 // v1_s01: default-install smoke, driver/envelope edition. A real aihub,
 // a real `pf daemon` (the driver is the engine; polyforge#106 removed
 // the selection flag), a real `pf submit`, a scripted
-// envelope-action plan that walks the autopilot workflow (grill → fix →
-// verification), and the completed workflow's faces: every
+// envelope-action plan that walks the vehicle lane (micro without its
+// deliver step: fix → review), and the completed workflow's faces: every
 // step done in execution.json, every result envelope archived under
 // artifacts/steps/<step>/s<n>/, the task-repo clone, the capsule git
 // chain visible on the server side, the terminal wrapped state (the
@@ -26,9 +29,8 @@ func TestV1S01DefaultInstallSmoke(t *testing.T) {
 	inst, remote := newV1InstallTaskRepo(t)
 	wi := inst.newWI(t, "s01: smoke the default install end to end",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
@@ -69,7 +71,7 @@ func TestV1S01DefaultInstallSmoke(t *testing.T) {
 			t.Fatalf("capsule.json still carries the deleted v1 lineage key %q: %v", gone, idnMap)
 		}
 	}
-	if idnMap["work_item_id"] != wi || idnMap["bundle_name"] != "autopilot" {
+	if idnMap["work_item_id"] != wi || idnMap["bundle_name"] != vehicleLane {
 		t.Fatalf("capsule identity wrong: %v", idnMap)
 	}
 	// T1 session trail, first half: the claim set the hub's session row
@@ -99,7 +101,7 @@ func TestV1S01DefaultInstallSmoke(t *testing.T) {
 		t.Fatal("capsule chain must not carry repos/ (gitignored, own .git)")
 	}
 	// The materialized bundle rides the capsule.
-	if _, err := os.Stat(filepath.Join(capDir, "workflows", "autopilot", "workflow.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(capDir, "workflows", vehicleLane, workflow.WorkflowFile)); err != nil {
 		t.Fatalf("materialized bundle missing: %v", err)
 	}
 
@@ -114,7 +116,7 @@ func TestV1S01DefaultInstallSmoke(t *testing.T) {
 	if x.BudgetConsumed == nil {
 		t.Fatal("execution.json carries no budget_consumed face")
 	}
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		st := x.Steps[step]
 		if st == nil || st.Status != "done" {
 			t.Fatalf("step %s: %+v, want done", step, st)
@@ -122,20 +124,13 @@ func TestV1S01DefaultInstallSmoke(t *testing.T) {
 	}
 	// The envelope face: every step's collected result envelope is
 	// archived in the R14 staging location, in spawn order.
-	for i, step := range []string{"grill", "fix", "verification"} {
-		env := archivedEnvelope(t, capDir, step, i+1)
-		if env["step_id"] != step || env["outcome"] != "completed" {
-			t.Fatalf("archived envelope of %s wrong: %v", step, env)
+	for i, step := range []string{"fix", "review"} {
+		h := acceptedHandoff(t, capDir, step, i+1)
+		if h.Step != step || h.Handoff.Status != stepcall.StatusDone {
+			t.Fatalf("the hand-off of %s wrong: %+v", step, h)
 		}
-		if int(env["spawn_n"].(float64)) != i+1 {
-			t.Fatalf("archived envelope of %s carries spawn_n %v", step, env["spawn_n"])
-		}
-	}
-	// The handoff chain: grill and fix declare handoff — their envelopes
-	// carry verified handoff refs, and the handoff files exist.
-	for _, step := range []string{"grill", "fix"} {
-		if _, err := os.Stat(filepath.Join(capDir, "artifacts", "handoff-"+step+".md")); err != nil {
-			t.Fatalf("handoff file of %s missing: %v", step, err)
+		if h.Spawn != int64(i+1) {
+			t.Fatalf("the hand-off of %s names dispatch %d", step, h.Spawn)
 		}
 	}
 

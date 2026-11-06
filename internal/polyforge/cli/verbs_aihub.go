@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
-	"github.com/silgrid/polyforge/internal/common/scopetier"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
@@ -244,11 +244,10 @@ func fileCreate(ctx *Context, args []string) error {
 		}
 	}
 
-	warnScopeMarkerPlacement(ctx, req)
 	warnAcceptanceCarrier(ctx, req)
 	raw, err := ctx.aihub().CreateWorkItem(req)
 	if err != nil {
-		return err
+		return openOnBundleRefusal(ctx, req, err)
 	}
 	finishAs(ctx, raw, func(wi *WIView) {
 		fmt.Fprintln(ctx.Stdout)
@@ -257,34 +256,16 @@ func fileCreate(ctx *Context, args []string) error {
 	return nil
 }
 
-// warnScopeMarkerPlacement warns on stderr when the final create
-// request's goal mentions the scoped-tier marker but its content carries
-// no exact marker line: verification reads the tier from the content, so
-// a marker in the goal has no effect and the work item runs at the full
-// tier (; the failure: goal marker, content
-// null). Warn only — the request, the created work item, the exit code
-// and stdout are untouched.
-func warnScopeMarkerPlacement(ctx *Context, req aihubclient.CreateWorkItemRequest) {
-	if !strings.Contains(strings.ToLower(req.Goal), strings.ToLower(scopetier.Marker)) {
-		return
-	}
-	if req.Content != nil && scopetier.OptedIn(*req.Content) {
-		return
-	}
-	fmt.Fprintf(ctx.Stderr, "file create: warning: the goal mentions %q but the content has no matching line; write the marker as its own line in the content — a marker in the goal has no effect and this work item will run at the full verification tier\n", scopetier.Marker)
-}
-
 // warnAcceptanceCarrier puts the chosen bundle's step table in front of
 // the filer of an execution ticket: every acceptance criterion must name
-// the step that carries it. When the content mentions e2e and no step of
-// that bundle declares the e2e_author_mode var, nothing in the lane
-// authors e2e scenarios, so it warns specifically. The table is read the
-// way the CLI already reads it — the daemon's workflows dir, then the
-// bundle's frontmatter; an unreachable daemon, no workflows dir or an
-// unknown or torn bundle is a silent skip. Warn only — the request, the
-// created work item, the exit code and stdout are untouched. The text
-// carries no braces: acceptance helpers slice JSON from the first one in
-// merged output.
+// the step that carries it. The table is read the way the CLI already
+// reads it — the lane set of the project's workspace over the daemon's
+// workflows dir, then the bundle's workflow.yaml; an
+// unreachable daemon, no workflows dir or an unknown or torn bundle is a
+// silent skip, and so is a lane declaring it requires no acceptance (its
+// `acceptance` declaration: no criterion to carry). Warn only — the request, the created work item, the exit
+// code and stdout are untouched. The text carries no braces: acceptance
+// helpers slice JSON from the first one in merged output.
 func warnAcceptanceCarrier(ctx *Context, req aihubclient.CreateWorkItemRequest) {
 	if req.BundleName == nil || *req.BundleName == "" {
 		return
@@ -294,24 +275,67 @@ func warnAcceptanceCarrier(ctx *Context, req aihubclient.CreateWorkItemRequest) 
 	if !ok {
 		return
 	}
-	fms, _, err := workspace.Bundles(dir, bundle)
-	if err != nil || fms[bundle] == nil || len(fms[bundle].Steps) == 0 {
+	ws, _ := ctx.Cfg.Mapping.WorkspaceFor(req.Project)
+	fms, _, err := workspace.Bundles(workflow.ForWorkspace(dir, ws), bundle)
+	if err != nil || fms[bundle] == nil || len(fms[bundle].Steps) == 0 || !fms[bundle].RequiresAcceptance() {
 		return
 	}
 	ids := make([]string, 0, len(fms[bundle].Steps))
-	authorsE2E := false
 	for _, st := range fms[bundle].Steps {
 		ids = append(ids, st.ID)
-		if _, ok := st.Vars["e2e_author_mode"]; ok {
-			authorsE2E = true
+	}
+	fmt.Fprintf(ctx.Stderr, "file create: bundle steps: %s = %s; every acceptance criterion must name the step that carries it, written as <criterion> — carried by <step id>\n", bundle, strings.Join(ids, " -> "))
+}
+
+// openOnBundleRefusal answers err, the create's failure, except aihub's
+// CORE-409 OPEN_ON_BUNDLE: the work item was filed exclusive — the daemon
+// sets that for a lane declaring `exclusive: true` — and another work item
+// of the project on the lane is unfinished. That refusal keeps its typed
+// code and names the open work item and its status; one still queued that
+// no machine ever claimed (no assignee: aihub sets it at the first claim)
+// was filed but not submitted — its filer stopped in between, or is
+// submitting it right now — so the refusal says when it was filed and how
+// to run or drop it. When the open work item cannot be read back, aihub's
+// own refusal (it names the work item and its status) is answered.
+func openOnBundleRefusal(ctx *Context, req aihubclient.CreateWorkItemRequest, err error) error {
+	var ae *api.Error
+	if !errors.As(err, &ae) || ae.Code != api.ErrCoreConflict || errorReason(ae) != "OPEN_ON_BUNDLE" || req.BundleName == nil {
+		return err
+	}
+	items, lerr := ctx.aihub().ListWorkItems(aihubclient.WorkItemFilter{Project: req.Project, Bundle: *req.BundleName, Limit: 200})
+	if lerr != nil {
+		return err
+	}
+	var open *api.WorkItem // the one aihub names: the unfinished one first filed
+	for i := range items {
+		switch items[i].Status {
+		case api.StatusWrapped, api.StatusFailed, api.StatusCanceled:
+			continue
+		}
+		if open == nil || items[i].Seq < open.Seq {
+			open = &items[i]
 		}
 	}
-	seq := strings.Join(ids, " -> ")
-	fmt.Fprintf(ctx.Stderr, "file create: bundle steps: %s = %s; every acceptance criterion must name the step that carries it, written as <criterion> — carried by <step id>\n", bundle, seq)
-	if authorsE2E || req.Content == nil || !strings.Contains(strings.ToLower(*req.Content), "e2e") {
-		return
+	if open == nil {
+		return err
 	}
-	fmt.Fprintf(ctx.Stderr, "file create: acceptance-carrier warning: the content mentions e2e but no step of bundle %q (%s) declares e2e_author_mode, so this lane authors no e2e scenario; name the step that carries each e2e criterion, record an explicit waiver, or re-route with `pf file edit --bundle` before a daemon claims the work item\n", bundle, seq)
+	name := api.DisplayName(open.Slug, open.ID)
+	msg := fmt.Sprintf("file create: %s of %s is %s on the lane %s, which declares exclusive: true — one unfinished work item at a time, nothing was filed", name, req.Project, open.Status, *req.BundleName)
+	if open.Status == api.StatusQueued && open.Assignee == nil {
+		msg += fmt.Sprintf("; it was filed at %s and no machine has claimed it: unless its filer is submitting it right now, run it with `pf submit %s` or drop it with `pf cancel %s`", open.CreatedAt, name, name)
+	}
+	return &api.Error{Code: ae.Code, Detail: msg, Extra: ae.Extra}
+}
+
+// errorReason reads a typed error's machine-readable sub-reason.
+func errorReason(ae *api.Error) string {
+	var m struct {
+		Reason string `json:"reason"`
+	}
+	if len(ae.Extra) == 0 || json.Unmarshal(ae.Extra, &m) != nil {
+		return ""
+	}
+	return m.Reason
 }
 
 // depErr renders a dependency write failure with the server's reason
@@ -588,15 +612,22 @@ var cmdQueue = &Command{
 	Name:    "queue",
 	Group:   GroupData,
 	Summary: "List work items / show the ready queue",
-	Usage: "pf queue [--project P] [--status S] [--limit N]\n" +
+	Usage: "pf queue [--project P] [--status S] [--bundle L] [--attr <path>=<value>]... [--limit N]\n" +
 		"pf queue --ready [--project P]\n\n" +
 		"Without --project: one merged list over ALL mapped projects (the\n" +
 		"[workspace] mapping in cli.toml); --project P is passed to aihub\n" +
-		"unvalidated (read-only: the mapping governs placement, not knowledge).",
+		"unvalidated (read-only: the mapping governs placement, not knowledge).\n" +
+		"--bundle and --attr pass straight through as aihub's list filters\n" +
+		"(?bundle=L, ?attr=<path>:<value>; each --attr is split at its first\n" +
+		"'=', the rest is the value verbatim, aihub checks the path), e.g.\n" +
+		"pf queue --bundle <lane> --attr x.y=z.",
 	Setup: func(fs *flag.FlagSet) {
 		fs.String("project", "", "project name (optional: absent = all mapped projects, merged; present = passed to aihub unvalidated)")
 		fs.Bool("ready", false, "show the ready queue instead of the list")
 		fs.String("status", "", "filter: queued|running|paused|blocked|wrapped|failed|canceled")
+		fs.String("bundle", "", "filter: the lane (bundle) name, passed to aihub as ?bundle= (list mode only)")
+		fs.Var(&stringList{}, "attr", "filter <path>=<value>: the attr at the dot path is that string, passed to aihub as "+
+			"?attr=<path>:<value> (repeatable, all must hold; split at the first '='; list mode only)")
 		fs.Int("limit", 0, "cap the list at N items (1..200; default list mode only — "+
 			"cannot be combined with --ready; omitted = the server's default cap)")
 	},
@@ -629,6 +660,18 @@ var cmdQueue = &Command{
 				return fmt.Errorf("queue: --limit must be 1..200")
 			}
 		}
+		filter := aihubclient.WorkItemFilter{Status: stringFlag(fs, "status"), Bundle: stringFlag(fs, "bundle"), Limit: limit}
+		for _, a := range *fs.Lookup("attr").Value.(*stringList) {
+			path, value, ok := strings.Cut(a, "=")
+			if !ok || path == "" {
+				return fmt.Errorf("queue: --attr %q is not <path>=<value>", a)
+			}
+			filter.Attrs = append(filter.Attrs, path+":"+value)
+		}
+		if boolFlag(fs, "ready") && (filter.Bundle != "" || len(filter.Attrs) > 0) {
+			return fmt.Errorf("queue: --bundle/--attr cannot be combined with --ready " +
+				"(they filter the default list mode only)")
+		}
 		proj := stringFlag(fs, "project")
 		if proj == "" {
 			// polyforge#113: no ambient default project exists. Without
@@ -638,7 +681,7 @@ var cmdQueue = &Command{
 			if ctx.Cfg.Mapping.Empty() {
 				return fmt.Errorf("queue: --project is required — no [workspace] mapping is configured in cli.toml; add a [workspace.\"<path>\"] section (`pf doctor` checks the mapping) or pass --project P")
 			}
-			return queueMerged(ctx, boolFlag(fs, "ready"), stringFlag(fs, "status"), limit)
+			return queueMerged(ctx, boolFlag(fs, "ready"), filter)
 		}
 		// An explicit --project passes through to aihub UNVALIDATED
 		// (mapped or not — exactly one query; the mapping governs
@@ -650,15 +693,19 @@ var cmdQueue = &Command{
 		if boolFlag(fs, "ready") {
 			raw, err = ctx.aihub().ReadyQueueRaw(proj)
 		} else {
-			raw, err = ctx.aihub().ListWorkItemsRaw(proj, stringFlag(fs, "status"), limit)
+			filter.Project = proj
+			raw, err = ctx.aihub().ListWorkItemsFilteredRaw(filter)
 		}
 		if err != nil {
 			return err
 		}
-		// Both faces render the items segment; --json is the raw server body.
+		// Both faces render the items segment; --json is the raw server
+		// body (no acceptance_missing: that is the merged document's).
 		finishAs(ctx, raw, func(l *itemList[WIView]) {
+			markAcceptanceMissing(l.Items, laneResolver(readDaemonFacts(ctx), ctx.Cfg.Mapping))
 			fmt.Fprintf(ctx.Stdout, "%d work item(s)\n", len(l.Items))
 			renderWITable(ctx.Stdout, l.Items)
+			renderMissingLanes(ctx, l.Items)
 		})
 		return nil
 	},
@@ -668,17 +715,24 @@ var cmdQueue = &Command{
 // merged presentation of every mapped project's list (or ready queue),
 // each row's project identifiable (PROJECT column; --json emits ONE
 // merged items array — records already carry their project server-side).
-// --limit applies per-project (each query is one server call); a
+// --limit and the other filters apply per-project (each query is one
+// server call); a
 // per-project fetch failure fails the verb naming the project — fake
 // coverage is worse than none. Determinism: mapping declaration order,
 // then the server's own order within each project.
-func queueMerged(ctx *Context, ready bool, status string, limit int) error {
+func queueMerged(ctx *Context, ready bool, filter aihubclient.WorkItemFilter) error {
 	projects := ctx.Cfg.Mapping.Projects()
 	var items []WIView
 	for _, p := range projects {
-		raw, err := ctx.aihub().ListWorkItemsRaw(p, status, limit)
+		var (
+			raw json.RawMessage
+			err error
+		)
 		if ready {
 			raw, err = ctx.aihub().ReadyQueueRaw(p)
+		} else {
+			filter.Project = p
+			raw, err = ctx.aihub().ListWorkItemsFilteredRaw(filter)
 		}
 		if err != nil {
 			return fmt.Errorf("queue: project %s: %w", p, err)
@@ -689,12 +743,19 @@ func queueMerged(ctx *Context, ready bool, status string, limit int) error {
 		}
 		items = append(items, l.Items...)
 	}
+	// a queued execution ticket without acceptance on a lane requiring
+	// it is marked (the auto-pull wave skips it): the STATUS cell and
+	// acceptance_missing
+	markAcceptanceMissing(items, laneResolver(readDaemonFacts(ctx), ctx.Cfg.Mapping))
 	if ctx.JSON {
-		// ONE merged document.
+		// ONE merged document; lanes_missing lists the queued items a
+		// claim refuses because their lane is not in the daemon's lane
+		// set (WFC-123; absent when there is none or the daemon is down).
 		doc := struct {
-			Items []WIView `json:"items"`
-			Total int      `json:"total"`
-		}{Items: items, Total: len(items)}
+			Items        []WIView      `json:"items"`
+			Total        int           `json:"total"`
+			LanesMissing []laneMissing `json:"lanes_missing,omitempty"`
+		}{Items: items, Total: len(items), LanesMissing: queueMissingLanes(ctx, items)}
 		if b, err := json.Marshal(doc); err == nil {
 			ctx.Out(b)
 		}
@@ -702,7 +763,27 @@ func queueMerged(ctx *Context, ready bool, status string, limit int) error {
 	}
 	fmt.Fprintf(ctx.Stdout, "%d work item(s)\n", len(items))
 	renderWITable(ctx.Stdout, items)
+	renderMissingLanes(ctx, items)
 	return nil
+}
+
+// queueMissingLanes answers the queued items of items bound to a lane
+// their workspace's lane set does not carry (WFC-123): a claim refuses
+// each and it stays queued. nil when the daemon does not answer (its lane
+// set is unknown) or none is.
+func queueMissingLanes(ctx *Context, items []WIView) []laneMissing {
+	f := readDaemonFacts(ctx)
+	if !f.reachable || f.workflowsDir == "" {
+		return nil
+	}
+	return missingLanes(projectLaneSets(f.workflowsDir, ctx.Cfg.Mapping), items)
+}
+
+// renderMissingLanes prints the WFC-123 line under the human queue table.
+func renderMissingLanes(ctx *Context, items []WIView) {
+	if rows := queueMissingLanes(ctx, items); len(rows) > 0 {
+		fmt.Fprintf(ctx.Stdout, "\n%s\n", missingLanesText(rows))
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -764,14 +845,14 @@ var cmdRecall = &Command{
 		if browse && boolFlag(fs, "any") {
 			return fmt.Errorf("recall: --any ranks a keyword search and needs a query; browse mode (no query, the human direct-aihub path) lists by --sort instead")
 		}
-		if ctx.Step != "" || ctx.Task != "" {
+		if ctx.Task != "" {
 			// Browse is the human direct-aihub shape: the
-			// daemon's step/task memory proxy is search-only.
+			// daemon's task memory proxy is search-only.
 			if browse {
-				return fmt.Errorf("recall: a query is required inside a workflow step or task — browse mode (no query, --after, --sort) is the human direct-aihub path; step and task agents search only")
+				return fmt.Errorf("recall: a query is required inside a task — browse mode (no query, --after, --sort) is the human direct-aihub path; task agents search only")
 			}
 			if after != "" || sort != "" {
-				return fmt.Errorf("recall: --after and --sort are browse flags of the human direct-aihub path; a step or task agent searches only")
+				return fmt.Errorf("recall: --after and --sort are browse flags of the human direct-aihub path; a task agent searches only")
 			}
 		}
 		// The default-20 limit is the CLI's product choice (aihub's
@@ -789,7 +870,7 @@ var cmdRecall = &Command{
 		if proj == "" {
 			return fmt.Errorf("recall: --project is required — there is no default project (polyforge#113); the routing skill derives it from the WI under discussion")
 		}
-		if err := requireMappedProject(ctx, "recall", proj); err != nil && ctx.Step == "" && ctx.Task == "" {
+		if err := requireMappedProject(ctx, "recall", proj); err != nil && ctx.Task == "" {
 			return err
 		}
 		var tagList []string
@@ -875,7 +956,7 @@ var cmdRemember = &Command{
 		if proj == "" {
 			return fmt.Errorf("remember: --project is required — there is no default project (polyforge#113)")
 		}
-		if err := requireMappedProject(ctx, "remember", proj); err != nil && ctx.Step == "" {
+		if err := requireMappedProject(ctx, "remember", proj); err != nil {
 			return err
 		}
 		// The content: positional text, '-' for stdin, '@file' for a file.
@@ -900,9 +981,6 @@ var cmdRemember = &Command{
 		}
 		if strings.TrimSpace(content) == "" {
 			return fmt.Errorf("remember: content is required")
-		}
-		if ctx.Step != "" {
-			return stepRemember(ctx, fs, memType, proj, content)
 		}
 		body := map[string]any{
 			"project":    proj,
@@ -987,7 +1065,13 @@ type memoryMetaView struct {
 // server-side, so an unknown or invisible id answers the server's 404 as
 // the typed CLI error (no probing, no special-casing).
 func memoryShow(ctx *Context, args []string) error {
-	f := subFlags(ctx, "memory show")
+	return memoryShowWith(ctx, "memory show", args, ctx.readMemory)
+}
+
+// memoryShowWith is memoryShow reading through read (`pf step memory
+// show` reads through the step's call, verbs_step.go).
+func memoryShowWith(ctx *Context, name string, args []string, read func(id string) (json.RawMessage, []byte, error)) error {
+	f := subFlags(ctx, name)
 	maxBytes := f.Int("max-bytes", defaultMemoryShowCap,
 		"human-mode body cap in bytes (default 262144; 0 = unlimited)")
 	rest, err := parseCommandArgs(f, args)
@@ -995,14 +1079,14 @@ func memoryShow(ctx *Context, args []string) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return fmt.Errorf("memory show: expected exactly one memory id")
+		return fmt.Errorf("%s: expected exactly one memory id", name)
 	}
 	capBytes := *maxBytes
 	if capBytes < 0 {
-		return fmt.Errorf("memory show: --max-bytes must be >= 0 (0 = unlimited)")
+		return fmt.Errorf("%s: --max-bytes must be >= 0 (0 = unlimited)", name)
 	}
 	id := rest[0]
-	metaRaw, body, err := ctx.readMemory(id)
+	metaRaw, body, err := read(id)
 	if err != nil {
 		return err
 	}

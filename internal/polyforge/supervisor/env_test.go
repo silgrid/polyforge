@@ -35,6 +35,18 @@ func TestDaemonEnvAllowList(t *testing.T) {
 	}
 }
 
+// The daemon's docker client (a daemon-run verification container) must
+// reach the engine the operator's shell — and `pf doctor` — reaches.
+func TestDaemonEnvCarriesTheDockerEngineSelection(t *testing.T) {
+	in := []string{"DOCKER_HOST=tcp://10.0.0.5:2376", "DOCKER_CONTEXT=remote", "DOCKER_CONFIG=/h/.docker",
+		"DOCKER_CERT_PATH=/h/.docker/tls", "DOCKER_TLS_VERIFY=1", "DOCKER_AUTH_TOKEN=junk", "DOCKER_BUILDKIT=1"}
+	got := DaemonEnv(in)
+	want := []string{"DOCKER_CERT_PATH=/h/.docker/tls", "DOCKER_CONFIG=/h/.docker", "DOCKER_CONTEXT=remote", "DOCKER_HOST=tcp://10.0.0.5:2376", "DOCKER_TLS_VERIFY=1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("DaemonEnv = %v, want %v (only the five engine-selection names)", got, want)
+	}
+}
+
 func TestSuspectDaemonEnv(t *testing.T) {
 	got := SuspectDaemonEnv([]string{"PATH", "HOME", "ANTHROPIC_MODEL", "anthropic_x", "FOO_TOKEN", "API_KEY", "MY_SECRET",
 		"DB_PASSWORD", "KEYBOARD", "TOKENIZER_DIR", "POLYFORGE_SUPERVISOR", "FOO_TOKEN"})
@@ -44,5 +56,14 @@ func TestSuspectDaemonEnv(t *testing.T) {
 	}
 	if got := EnvNames([]string{"B=1", "A=2", "B=3"}); !slices.Equal(got, []string{"A", "B"}) {
 		t.Fatalf("EnvNames = %v", got)
+	}
+}
+
+// A machine's npm mirror reaches the daemon (and so a daemon-run
+// verification container); npm's credential variables do not.
+func TestDaemonEnvCarriesTheNpmRegistryOnly(t *testing.T) {
+	got := DaemonEnv([]string{"npm_config_registry=https://npm.corp/", "npm_config__authToken=junk", "NPM_TOKEN=junk", "npm_config_cache=/h/.npm"})
+	if !slices.Equal(got, []string{"npm_config_registry=https://npm.corp/"}) {
+		t.Fatalf("DaemonEnv = %v, want only npm_config_registry", got)
 	}
 }

@@ -1,0 +1,64 @@
+===== failures =====
+FAIL e2e/run.mjs: no scenario marker — }
+host loadavg 1m/5m/15m: 27.45 / 25.00 / 20.38
+re-run: npm run test:e2e:all -- run.mjs
+
+===== summary =====
+PASS agent-language-293.mjs 19s
+PASS chat-minimap-heading-334.mjs 6s
+PASS claude-250.mjs 18s
+PASS claude-composer-272.mjs 72s
+PASS claude-context-363.mjs 9s
+PASS claude-fork-370.mjs 23s
+PASS claude-image-270.mjs 19s
+PASS claude-session-219.mjs 22s
+PASS claude-subagent-253.mjs 37s
+PASS context-after-compact-368.mjs 12s
+PASS deploy-install-channel.mjs 6s
+PASS deploy-pf-bin.mjs 0s
+PASS deploy-served-installed.mjs 5s
+PASS deploy-service-shape.mjs 83s
+PASS deploy-tunnel-dead-connector.mjs 6s
+PASS deploy-tunnel-variants.mjs 21s
+PASS deploy-tunnel.mjs 5s
+PASS machine-load.mjs 12s
+PASS manual-fetch.mjs 75s
+PASS pdf-page-fragment.mjs 10s
+PASS polyforge-210.mjs 9s
+PASS polyforge-238.mjs 23s
+PASS polyforge-271.mjs 10s
+PASS polyforge-388.mjs 3s
+PASS polyforge-cards.mjs 88s
+PASS polyforge-config-255.mjs 25s
+PASS polyforge-config-290.mjs 9s
+PASS polyforge-config-layout.mjs 6s
+PASS polyforge-config-panel.mjs 37s
+PASS polyforge-config-simplify-212.mjs 9s
+PASS polyforge-config-viewport.mjs 2s
+PASS polyforge-graph.mjs 15s
+PASS polyforge-memory-panel.mjs 49s
+PASS polyforge-messages-analysis-v2.mjs 20s
+PASS polyforge-messages-contacts.mjs 13s
+PASS polyforge-messages-groups-223.mjs 23s
+PASS polyforge-messages-prompt-281.mjs 28s
+PASS polyforge-messages.mjs 68s
+PASS polyforge-panel-213.mjs 12s
+PASS polyforge-panels-123.mjs 16s
+PASS polyforge-settings.mjs 84s
+PASS polyforge-task-report-194.mjs 28s
+PASS polyforge-verify-queue-392.mjs 10s
+PASS polyforge-widget.mjs 4s
+PASS polyforge-work-items-203.mjs 36s
+PASS polyforge-work-tab-163.mjs 76s
+PASS polyforge-workflow-216.mjs 6s
+PASS polyforge.mjs 120s
+FAIL run.mjs 44s
+PASS session-stall-recovery.mjs 30s
+PASS terminal.mjs 14s
+PASS ui-polish-198.mjs 17s
+PASS verify-scope-acceptance.mjs 0s
+PASS w348-cell-page.mjs 3s
+PASS w364-cell-master-detail.mjs 6s
+PASS w367-default-cell-pinned.mjs 5s
+55/56 passed in 443s
+e2e/all: removed 55 passing suite dist dir(s) under .next/e2e, kept 1 failed for re-run

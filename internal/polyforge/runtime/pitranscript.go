@@ -249,6 +249,8 @@ func trustedResumeTranscript(capsuleDir string, entries []capsule.SpawnJournalEn
 // run it after the agent tree is killed and BEFORE the commit and the
 // read-only seal.
 func (r *Runtime) syncLiveTranscript(capsuleDir string) {
+	// the claude subagent sidecars ride the same sync
+	SyncSubagentTranscripts(r.cfg.ClaudeConfigDir(), capsuleDir)
 	entries, _ := capsule.ReadSpawnJournal(capsuleDir)
 	if len(entries) == 0 {
 		return

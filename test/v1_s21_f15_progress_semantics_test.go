@@ -18,19 +18,31 @@ import (
 //     (UI noise — never work) is silence: rule 0 judges it harness_silent
 //     within the silence window although records keep flowing, the ops
 //     status shows a step age with NO last-work age meanwhile, and the
-//     driver's same-model retry then proceeds to a parked question;
+//     driver's same-model retry then proceeds to an open ask;
 //   - shape B (legal slow work): an open turn whose model keeps
 //     streaming deltas stays alive past many silence windows — LAST-WORK
 //     stays fresh, no verdict fires.
 //
-// Both shapes then park on a question for several windows with the
+// Both shapes then park on an open `pf ask` for several windows with the
 // supervision bounds shrunk to seconds: NO dispatch timer and NO stall
-// clock may run while a human is asked (#99 — there is no step process),
-// and the answer completes the run.
+// clock may run while the owner is asked (#99; the awaiting dispatch is
+// not judged), and the owner's reply completes the run.
+//
+// s21Window is that shrunk silence and stall bound. Besides firing where
+// the scenario wants a verdict, it must NOT fire on the legitimate work in
+// between: the driver's step-end → next step-start path (a few ms idle, a
+// handful of fsynced writes) and a fresh dispatch's first output (~0.4s
+// idle). At 2s a loaded gate exceeded it once: the stall rule judged the
+// driver stalled between dispatch 1's verdict and dispatch 2's start, the
+// recovery relaunch cancelled dispatch 2 (the asking dispatch) and the
+// plan's next ordinal completed the workflow, so the ask never showed.
+// Every wait and park below is expressed in windows of it.
+const s21Window = 5 * time.Second
+
 func TestV1S21F15ProgressSemantics(t *testing.T) {
 	inst := newV1Install(t)
 	d := newV1Daemon(t, inst, optSupervision(supBounds{
-		silence: 2 * time.Second, stall: 2 * time.Second, tool: 30 * time.Second,
+		silence: s21Window, stall: s21Window, tool: 30 * time.Second,
 	}))
 	d.start()
 
@@ -40,13 +52,11 @@ func TestV1S21F15ProgressSemantics(t *testing.T) {
 	wiA := inst.newWI(t, "s21-A: UI noise never proves progress (rule 0)",
 		[]map[string]any{
 			// Ordinal 1: the zero-work harness streaming UI chatter.
-			{"do": "envelope", "id": "grill", "silent": true, "noise": "ui", "noise_ms": 50},
-			// Ordinal 2: the same-model retry parks on a question.
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": "q_s21a",
-				"question": "s21-A: park here (the test answers after the stillness pin)."},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "silent": true, "noise": "ui", "noise_ms": 50},
+			// Ordinal 2: the same-model retry asks the owner and parks.
+			askAction("fix", "s21-A: park here (the test replies after the stillness pin).",
+				map[string]any{"do": "envelope", "id": "fix", "outcome": "completed"}),
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d.pf(t, "submit", wiA)
 	// While the chattering dispatch is alive its step age grows and its
@@ -69,13 +79,14 @@ func TestV1S21F15ProgressSemantics(t *testing.T) {
 	if v.Cause != "harness_silent" {
 		t.Fatalf("shape A: verdict %+v, want step_dead harness_silent (UI noise is silence)", v)
 	}
-	waitQuestion(t, d, wiA, "q_s21a", 30*time.Second)
+	waitAsk(t, d, wiA, 30*time.Second)
 
-	// #99: parked on a human for several windows of every bound — nothing
-	// may fire (no step process exists; the stall clock is exempt).
-	time.Sleep(6 * time.Second)
+	// #99: parked on the owner for several windows of every bound —
+	// nothing may fire (the awaiting dispatch is not judged; the stall
+	// clock is exempt).
+	time.Sleep(2*s21Window + time.Second)
 	assertQuietWhileParked(t, d, wiA, 1)
-	answerQuestion(t, d, wiA, "q_s21a", "Shape A done.")
+	replyOwner(t, d, wiA, "Shape A done.")
 	waitWorkflowStatus(t, d, wiA, "completed", 120*time.Second)
 	inst.waitWIStatus(t, wiA, "wrapped", 60*time.Second)
 	killOrphans(wiA)
@@ -85,12 +96,9 @@ func TestV1S21F15ProgressSemantics(t *testing.T) {
 
 	wiB := inst.newWI(t, "s21-B: model deltas prove progress (alive stays alive)",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": "q_s21b",
-				"question":  "s21-B: park here.",
-				"open_turn": true, "noise": "progress", "noise_ms": 50, "ms": 6000},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed",
+				"open_turn": true, "noise": "progress", "noise_ms": 50, "ms": int((3*s21Window + time.Second) / time.Millisecond)},
+			askAction("review", "s21-B: park here.", map[string]any{"do": "envelope", "id": "review", "outcome": "completed"}),
 		}, nil)
 	capB := d.capsuleDir(wiB)
 	d.pf(t, "submit", wiB)
@@ -106,10 +114,10 @@ func TestV1S21F15ProgressSemantics(t *testing.T) {
 	})
 	// Three silence windows of streaming: LAST-WORK stays fresh, nothing
 	// fires.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(3 * s21Window)
 	for time.Now().Before(deadline) {
 		for _, j := range d.status(t).Jobs {
-			if j.WorkItemID == wiB && j.LastWorkAgoSec != nil && *j.LastWorkAgoSec > 2 {
+			if j.WorkItemID == wiB && j.LastWorkAgoSec != nil && float64(*j.LastWorkAgoSec) >= s21Window.Seconds() {
 				t.Fatalf("shape B: LAST-WORK stale (%vs) while the model streams deltas", *j.LastWorkAgoSec)
 			}
 		}
@@ -118,14 +126,14 @@ func TestV1S21F15ProgressSemantics(t *testing.T) {
 	if n := countOf(d.eventKinds(t, wiB), "step_dead"); n != 0 {
 		t.Fatalf("shape B: the supervisor judged a streaming model dead: %v", d.eventKinds(t, wiB))
 	}
-	waitQuestion(t, d, wiB, "q_s21b", 30*time.Second)
-	time.Sleep(6 * time.Second)
+	waitAsk(t, d, wiB, 30*time.Second)
+	time.Sleep(2*s21Window + time.Second)
 	assertQuietWhileParked(t, d, wiB, 0)
-	answerQuestion(t, d, wiB, "q_s21b", "Shape B done.")
+	replyOwner(t, d, wiB, "Shape B done.")
 	waitWorkflowStatus(t, d, wiB, "completed", 120*time.Second)
 }
 
-// assertQuietWhileParked pins the #99 stillness: with a question open for
+// assertQuietWhileParked pins the #99 stillness: with an ask open for
 // several windows of every bound, the supervisor issued no more than the
 // expected number of verdicts (wantVerdicts: the earlier legitimate
 // ones), and neither a driver stall nor a recovery fired.

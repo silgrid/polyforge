@@ -1,0 +1,209 @@
+import { existsSync, mkdirSync, readFileSync } from "fs";
+import { dirname, join } from "path";
+import webpush from "web-push";
+import { writePrivateFileAtomicSync } from "./atomic-file";
+import { interpolateMessage } from "./i18n/format";
+import { enLocale } from "./i18n/messages/en";
+import { zhCNLocale } from "./i18n/messages/zh-CN";
+import { getAgentDir } from "./session-reader";
+
+export interface PushSubscriptionRecord {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  locale: string;
+}
+
+interface PushStateFile {
+  vapidKeys: { publicKey: string; privateKey: string };
+  subscriptions: PushSubscriptionRecord[];
+}
+
+interface WebPushEnvironment {
+  send: (
+    subscription: PushSubscriptionRecord,
+    payload: string,
+    vapidKeys: PushStateFile["vapidKeys"],
+  ) => Promise<void>;
+  loadState: () => PushStateFile | null;
+  saveState: (state: PushStateFile) => void;
+  generateVapidKeys: () => PushStateFile["vapidKeys"];
+}
+
+export interface WebPushNotifier {
+  getVapidPublicKey: () => string;
+  addSubscription: (subscription: PushSubscriptionRecord) => void;
+  /** `sessionName` titles the notification; without one it reads "Session complete". */
+  notifySessionComplete: (sessionId: string, sessionName?: string) => Promise<void>;
+  /** A claude session waits for the user's permission to use `toolName`. */
+  notifyClaudePermissionPending: (sessionId: string, sessionName: string | undefined, toolName: string) => Promise<void>;
+}
+
+function stateFilePath(): string {
+  return join(getAgentDir(), "web-push.json");
+}
+
+/**
+ * VAPID subject must be a valid `mailto:` or `https:` URL. Apple's push
+ * service rejects requests whose subject is not a syntactically valid URL
+ * (e.g. the previously used `mailto:pi-web@localhost`, which Apple answers
+ * with 403 BadJwtToken), so default to the project homepage and let operators
+ * override it via PI_WEB_PUSH_SUBJECT.
+ */
+export function vapidSubject(): string {
+  const configured = process.env.PI_WEB_PUSH_SUBJECT?.trim();
+  if (configured) return configured;
+  return "https://github.com/silgrid/pi-web";
+}
+
+// Ask the push service to deliver immediately. Lower urgencies let idle
+// devices (especially iOS) defer delivery to an arbitrary later window.
+export const PUSH_OPTIONS = { TTL: 2419200, urgency: "high" as const };
+
+function getDefaultEnvironment(): WebPushEnvironment {
+  return {
+    async send(subscription, payload, vapidKeys) {
+      await webpush.sendNotification(
+        { endpoint: subscription.endpoint, keys: subscription.keys },
+        payload,
+        {
+          vapidDetails: {
+            subject: vapidSubject(),
+            publicKey: vapidKeys.publicKey,
+            privateKey: vapidKeys.privateKey,
+          },
+          TTL: PUSH_OPTIONS.TTL,
+          urgency: PUSH_OPTIONS.urgency,
+        },
+      );
+    },
+    loadState() {
+      const path = stateFilePath();
+      if (!existsSync(path)) return null;
+      try {
+        return JSON.parse(readFileSync(path, "utf8")) as PushStateFile;
+      } catch {
+        return null;
+      }
+    },
+    saveState(state) {
+      const path = stateFilePath();
+      mkdirSync(dirname(path), { recursive: true });
+      writePrivateFileAtomicSync(path, JSON.stringify(state));
+    },
+    generateVapidKeys: () => webpush.generateVAPIDKeys(),
+  };
+}
+
+function pushStatusCode(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null || !("statusCode" in error)) return undefined;
+  const statusCode = (error as { statusCode?: unknown }).statusCode;
+  return typeof statusCode === "number" ? statusCode : undefined;
+}
+
+type PushTextKey = "sessionComplete" | "taskFinished" | "permissionPending";
+
+const PUSH_TEXT_FALLBACK: Record<PushTextKey, string> = {
+  sessionComplete: "Session complete",
+  taskFinished: "Task finished.",
+  permissionPending: "claude is waiting for your permission to use {tool}.",
+};
+
+/**
+ * Locale lookup for push payloads. The browser reports its UI locale when it
+ * subscribes; unknown locales fall back to English.
+ */
+export function localeText(locale: string, key: PushTextKey): string {
+  const messageKey = `i18n.${key}`;
+  if (locale === "zh-CN") {
+    const message = zhCNLocale.messages[messageKey];
+    if (message) return message;
+  }
+  return enLocale.messages[messageKey] ?? PUSH_TEXT_FALLBACK[key];
+}
+
+export function createWebPushNotifier(environment: WebPushEnvironment): WebPushNotifier {
+  const state: PushStateFile = (() => {
+    const loaded = environment.loadState();
+    if (loaded?.vapidKeys?.publicKey && loaded.vapidKeys.privateKey) return loaded;
+    return { vapidKeys: environment.generateVapidKeys(), subscriptions: [] };
+  })();
+  const saveState = () => {
+    environment.saveState(state);
+  };
+  /** Sends each subscription its locale's payload; drops those the push service says are gone. */
+  const sendToAll = async (payloadFor: (locale: string) => Record<string, string>) => {
+    if (state.subscriptions.length === 0) return;
+    let pruned = false;
+    for (const subscription of [...state.subscriptions]) {
+      try {
+        await environment.send(subscription, JSON.stringify(payloadFor(subscription.locale)), state.vapidKeys);
+      } catch (error) {
+        const statusCode = pushStatusCode(error);
+        if (statusCode === 404 || statusCode === 410) {
+          state.subscriptions = state.subscriptions.filter((s) => s.endpoint !== subscription.endpoint);
+          pruned = true;
+        }
+      }
+    }
+    if (pruned) saveState();
+  };
+
+  return {
+    getVapidPublicKey() {
+      saveState();
+      return state.vapidKeys.publicKey;
+    },
+    addSubscription(subscription) {
+      state.subscriptions = [
+        ...state.subscriptions.filter((s) => s.endpoint !== subscription.endpoint),
+        subscription,
+      ];
+      saveState();
+    },
+    async notifySessionComplete(sessionId, sessionName) {
+      await sendToAll((locale) => ({
+        title: sessionName ?? localeText(locale, "sessionComplete"),
+        body: localeText(locale, "taskFinished"),
+        url: `/?session=${encodeURIComponent(sessionId)}`,
+        tag: `pi-session-complete:${sessionId}`,
+      }));
+    },
+    async notifyClaudePermissionPending(sessionId, sessionName, toolName) {
+      await sendToAll((locale) => ({
+        title: sessionName || "claude",
+        body: interpolateMessage(localeText(locale, "permissionPending"), { tool: toolName }),
+        url: `/?session=${encodeURIComponent(sessionId)}`,
+        tag: `pi-claude-permission:${sessionId}`,
+      }));
+    },
+  };
+}
+
+declare global {
+  var __piWebPushNotifier: Promise<WebPushNotifier> | undefined;
+}
+
+function getNotifier(): Promise<WebPushNotifier> {
+  if (!globalThis.__piWebPushNotifier) {
+    globalThis.__piWebPushNotifier = Promise.resolve().then(() => createWebPushNotifier(getDefaultEnvironment()));
+  }
+  return globalThis.__piWebPushNotifier;
+}
+
+export function getVapidPublicKey(): Promise<string> {
+  return getNotifier().then((notifier) => notifier.getVapidPublicKey());
+}
+
+export function addSubscription(subscription: PushSubscriptionRecord): Promise<void> {
+  return getNotifier().then((notifier) => notifier.addSubscription(subscription));
+}
+
+export async function notifySessionComplete(sessionId: string, sessionName?: string): Promise<void> {
+  const notifier = await getNotifier();
+  await notifier.notifySessionComplete(sessionId, sessionName);
+}
+
+export async function notifyClaudePermissionPending(sessionId: string, sessionName: string | undefined, toolName: string): Promise<void> {
+  const notifier = await getNotifier();
+  await notifier.notifyClaudePermissionPending(sessionId, sessionName, toolName);
+}

@@ -119,18 +119,15 @@ no deliverable.
 
 ## Presentation (回投呈现)
 
-A task spawned from a chat delivers one terminal summary line through the
-resident watcher:
+A finished task (whoever spawned it) records one entry in the daemon's
+decision feed — `completed`, or `failed` / `capped` / `interrupted`, which
+count as needing the owner — carrying the report's tail as its text. Pi
+Web's Polyforge panel shows it; `pf watch decisions` lists it on the CLI.
 
-```
-task <task_…> <state>: <trailing report text> — see `pf task show <task_…>`
-```
-
-- It is NOT a `[polyforge]` decision line: it **does not trigger an agent turn**.
-  Present it to the owner like a message line and let the owner decide;
-  never answer, retry or re-spawn on your own.
-- The line is a tail (at most 2000 characters, newlines flattened); the full
-  report is `pf task show <id>`.
+- It is a feed entry, not a wake-up: it **does not trigger an agent turn**. When the owner brings it to you,
+  present it like a message and let the owner decide; never answer, retry or
+  re-spawn on your own.
+- The text is a tail; the full report is `pf task show <id>`.
 
 ## Failure branches
 
@@ -145,6 +142,8 @@ task <task_…> <state>: <trailing report text> — see `pf task show <task_…>
 | `pf: task spawn: --max-duration … is above the 60m ceiling` / `--max-tokens … is above the 1000000 ceiling` (local, exit 1) | a budget above its ceiling | Lower the budget: the ceilings are code constants, not config. |
 | `pf: task spawn: --max-duration … is not a duration` / `--max-tokens … is not an integer` / `--max-duration … must be positive (got …)` / `--max-tokens … must be positive (got …)` (local, exit 1) | a malformed budget value, or a zero/negative one | Give a Go duration (`20m`, `1h30m`) or a positive integer; nothing was sent. |
 | `DAEMON-409` `task spawn refused: 2 tasks already running` | third concurrent spawn | Wait for a running task to reach a terminal state (nothing is queued) or `pf task cancel <id>` one. |
+| `DAEMON-409` `… draining for a pending connection rotation …` | the Cell's same-identity `api_key` rotation waits for it to go idle | Nothing was spawned or queued. Retry once `pf cell list` no longer shows the Cell `draining` (it switches by itself when its work, running tasks included, has ended). |
+| `DAEMON-409` `execution is disabled on this Cell: <reason>` | the Cell's execution plane is closed (no workspace, or no model-credential source) | Nothing was spawned. Relay the reason: it names the fix (a `[workspace]` mapping + `pf config reload`, or `[model] source` + a Host restart). |
 | `pf: task spawn: --models is not supported (…)` (local, exit 1) | asked for a spawn-level model override | Drop the flag: candidates come from `steps.<project>.task.models`, else `steps.<project>.default.models`. |
 | `pf: task spawn: --wait is not supported (…)` (local, exit 1) | asked for a blocking wait | Drop the flag: `spawn` returns the id immediately; poll `pf task show <id>`. |
 | `pf: task spawn: --type is not supported (…)` (local, exit 1) | asked for a task type | Drop the flag: there is one task kind. |

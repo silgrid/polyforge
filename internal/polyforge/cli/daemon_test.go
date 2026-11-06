@@ -114,7 +114,6 @@ func TestDaemonClientAnswerRoundtrip(t *testing.T) {
 	c := NewDaemonClient(d.sock)
 
 	payload := AnswerPayload{
-		QuestionID: "q_1",
 		AnswerText: "yes, proceed",
 		AnsweredBy: "usr_9",
 	}
@@ -125,7 +124,7 @@ func TestDaemonClientAnswerRoundtrip(t *testing.T) {
 	if got.Method != "POST" || got.Path != "/jobs/wi_abc/answer" {
 		t.Errorf("request = %s %s", got.Method, got.Path)
 	}
-	// The payload IS the body (three fields, verbatim), and the
+	// The payload IS the body (two fields, verbatim), and the
 	// caller identity travels in X-PF-User.
 	if got.Header.Get("X-PF-User") != "usr_9" {
 		t.Errorf("X-PF-User = %q, want usr_9", got.Header.Get("X-PF-User"))
@@ -295,12 +294,11 @@ wi_old     needs_input  -                 -      43         -         -         
 	golden(t, "OpsStatusSessionColumns", stdout, b.String())
 }
 
-// TestAnswerWithoutQuestionLeavesResolutionToDaemon: without --question the
-// answer verb posts an empty question_id (the daemon resolves the unique
-// pending question) and prints the id the daemon names in its reply.
-func TestAnswerWithoutQuestionLeavesResolutionToDaemon(t *testing.T) {
+// TestAnswerRelaysTheWords: the answer verb posts the owner's words and
+// identity only (no question id, no option) and prints the relay's ack.
+func TestAnswerRelaysTheWords(t *testing.T) {
 	d := newDaemonFixture(t)
-	d.answer("POST", "/jobs/wi_abc/answer", `{"status":"accepted","question_id":"q_9"}`)
+	d.answer("POST", "/jobs/wi_abc/answer", `{"status":"accepted","at":"2026-11-11T00:00:00Z","kind":"reply","ask_at":"2026-11-10T23:59:00Z","step":"fix","spawn_n":2,"delivered":true}`)
 
 	code, stdout, stderr := runPf(t, map[string]string{"PF_DAEMON_SOCKET": d.sock, "PF_USER_ID": "usr_9"},
 		"answer", "wi_abc", "--text", "yes")
@@ -311,11 +309,11 @@ func TestAnswerWithoutQuestionLeavesResolutionToDaemon(t *testing.T) {
 	if got.Path != "/jobs/wi_abc/answer" {
 		t.Fatalf("request path = %s", got.Path)
 	}
-	if !strings.Contains(got.Body, `"question_id":""`) || !strings.Contains(got.Body, `"answered_by":"usr_9"`) {
+	if strings.Contains(got.Body, "question_id") || strings.Contains(got.Body, "option") || !strings.Contains(got.Body, `"answered_by":"usr_9"`) {
 		t.Errorf("answer body = %s", got.Body)
 	}
-	if !strings.Contains(stdout, "question q_9") {
-		t.Errorf("stdout = %q, want the daemon-resolved question id", stdout)
+	if want := "reply to ask 2026-11-10T23:59:00Z recorded for step fix (dispatch 2, at 2026-11-11T00:00:00Z): delivered to the step's agent"; !strings.Contains(stdout, want) {
+		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 }
 
@@ -361,4 +359,28 @@ func TestOpsAutoAndMaxVerbs(t *testing.T) {
 	if _, _, stderr := runPf(t, env, "ops", "max", "--reset"); !strings.Contains(stderr, "--reset was removed") || !strings.Contains(stderr, "max_concurrent_jobs on daemon restart") {
 		t.Fatalf("ops max --reset refusal = %q, want the removal explained", stderr)
 	}
+}
+
+// TestDaemonRequestsCarryTheResolvedProfile: a Cell-scoped verb stamps the
+// resolved profile as X-PF-Profile.
+func TestDaemonRequestsCarryTheResolvedProfile(t *testing.T) {
+	rec := &reqRecorder{}
+	sock := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"accepted":true,"work_item_id":"wi_abc"}`))
+	}))
+	code, _, stderr := runPf(t, map[string]string{"PF_DAEMON_SOCKET": sock}, "--profile", "alpha", "submit", "wi_abc")
+	if code != 0 {
+		t.Fatalf("submit: exit %d (%s)", code, stderr)
+	}
+	for _, r := range rec.all() {
+		if r.Method == "POST" && strings.HasSuffix(r.Path, "/claim") {
+			if got := r.Header.Get("X-PF-Profile"); got != "alpha" {
+				t.Fatalf("the claim carried X-PF-Profile %q, want alpha", got)
+			}
+			return
+		}
+	}
+	t.Fatalf("no claim reached the daemon: %+v", rec.all())
 }

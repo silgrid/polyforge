@@ -67,9 +67,8 @@ func TestResumePausedHolderElsewhereGuidance(t *testing.T) {
 }
 
 // TestResumePausedDaemonUnreachableGuidance: no daemon on the socket —
-// the flag clear stands and the guidance points at the holder daemon's
-// next start (the restart reconciliation fallback that has always
-// worked), exit 0.
+// AIHub business goes through the daemon, so nothing is cleared at the hub
+// and the refusal names the daemon (DAEMON-410), never a direct Hub call.
 func TestResumePausedDaemonUnreachableGuidance(t *testing.T) {
 	var aihubRec reqRecorder
 	aihub := newFakeAihub(t, &aihubRec, func(w http.ResponseWriter, r *http.Request) {
@@ -77,25 +76,14 @@ func TestResumePausedDaemonUnreachableGuidance(t *testing.T) {
 	})
 	sock := filepathInTemp(t, "dead.sock") // nothing listens here
 
-	code, stdout, stderr := runPf(t, map[string]string{
+	code, _, stderr := runPf(t, map[string]string{
 		"PF_SERVER": aihub.URL, "PF_DAEMON_SOCKET": sock,
 	}, "resume", "wi_abc")
-	if code != 0 {
-		t.Fatalf("an unreachable daemon is guidance, not an error: code=%d stderr=%s", code, stderr)
+	if code != 1 || !strings.Contains(stderr, "DAEMON-410") || !strings.Contains(stderr, "pf daemon ensure") {
+		t.Fatalf("a down daemon must refuse the business explicitly: code=%d stderr=%s", code, stderr)
 	}
-	if !strings.Contains(stdout, "clean_pause cleared") {
-		t.Errorf("stdout must say the flag was cleared: %s", stdout)
-	}
-	if !strings.Contains(stdout, "daemon socket is unreachable") {
-		t.Errorf("stdout must say the daemon could not be reached: %s", stdout)
-	}
-	if !strings.Contains(stdout, "restart reconciliation attaches the paused session") {
-		t.Errorf("stdout must name the next-start fallback: %s", stdout)
-	}
-	// the hub-side effect landed exactly as before: precheck GET + PATCH.
-	last := aihubRec.last()
-	if last.Method != "PATCH" || !strings.Contains(last.Body, `"clean_pause":false`) {
-		t.Errorf("resume must PATCH clean_pause=false; last aihub call = %s %s %q", last.Method, last.Path, last.Body)
+	if n := len(aihubRec.all()); n != 0 {
+		t.Fatalf("the hub was reached with the daemon down (%d requests)", n)
 	}
 }
 

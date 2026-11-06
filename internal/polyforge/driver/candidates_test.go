@@ -19,11 +19,13 @@ func att(cause, m string) capsule.Attempt {
 
 // persistedAnchor emulates Step.Candidate for a fixture archive: the model
 // the step's last dispatch ran (the newest stamped attempt), reset to ""
-// by a rewind archive (the era reset).
+// by a rewind archive (the era reset — the driver writes it for a gate or
+// a superseded step; a resuming rewind target keeps its anchor,
+// TestRewindResumeKeepsTheCandidate).
 func persistedAnchor(attempts []capsule.Attempt) string {
 	for i := len(attempts) - 1; i >= 0; i-- {
 		switch attempts[i].Cause {
-		case CauseGateFailRewind, CauseGateFailRewindTextOnly, CauseGateFailRewindMechanical, CauseSupersededByRewind:
+		case CauseGateFailRewind, CauseSupersededByRewind:
 			return ""
 		}
 		if attempts[i].Candidate != "" {
@@ -66,10 +68,6 @@ func TestCandidatePointer(t *testing.T) {
 			[]capsule.Attempt{{Cause: "something_new"}, att(FailExitModel, "m1")}, list2, 1},
 		{"superseded_by_rewind resets like gate_fail_rewind",
 			[]capsule.Attempt{att(FailExitModel, "m1"), {Cause: CauseSupersededByRewind}}, list2, 0},
-		{"light rewind resets (a light rewind never burns a candidate)",
-			[]capsule.Attempt{att(FailExitModel, "m1"), {Cause: CauseGateFailRewindTextOnly, RewindGate: "review"}}, list2, 0},
-		{"mechanical light rewind resets",
-			[]capsule.Attempt{att(FailExitModel, "m1"), {Cause: CauseGateFailRewindMechanical}}, list2, 0},
 		// polyforge#33: identity, not index
 		{"the list reshaped around the current model keeps it",
 			[]capsule.Attempt{att(FailToolHung, "m2")}, []string{"x", "m2", "m1"}, 1},
@@ -81,83 +79,78 @@ func TestCandidatePointer(t *testing.T) {
 			[]capsule.Attempt{att(FailExitModel, "m2")}, []string{"x", "y"}, 0},
 		{"pre-upgrade attempts carry no candidate: the head",
 			[]capsule.Attempt{{Cause: CauseInfraFailure, FailureCause: FailExitModel}}, list3, 0},
-		// polyforge#33: the ended_without_result rotation
+		// contract 4 (design #483 §7): an EWR never rotates
 		{"one EWR does not advance", []capsule.Attempt{att(FailEndedWithoutResult, "m1")}, list2, 0},
-		{"two EWRs on one model advance",
-			[]capsule.Attempt{att(FailEndedWithoutResult, "m1"), att(FailEndedWithoutResult, "m1")}, list2, 1},
-		{"two EWRs at the chain end stay on the end model",
-			[]capsule.Attempt{att(FailEndedWithoutResult, "m2"), att(FailEndedWithoutResult, "m2")}, list2, 1},
-		{"the owner appended a candidate after the chain-end EWRs: the pointer moves on",
-			[]capsule.Attempt{att(FailEndedWithoutResult, "m2"), att(FailEndedWithoutResult, "m2")}, list3, 2},
+		{"two EWRs on one model do not advance either",
+			[]capsule.Attempt{att(FailEndedWithoutResult, "m1"), att(FailEndedWithoutResult, "m1")}, list2, 0},
 		// polyforge#33 B1: the crash window — neutral attempts archived
 		// after a switching failure keep its pending advancement
 		{"switch window: daemon_restart on the dead model",
-			[]capsule.Attempt{att(FailModelError, "m1"), att(FailModelError, "m1"), att(FailDaemonRestart, "m1")}, list2, 1},
-		{"switch window: EWR streak then daemon_restart",
-			[]capsule.Attempt{att(FailEndedWithoutResult, "m1"), att(FailEndedWithoutResult, "m1"), att(FailDaemonRestart, "m1")}, list2, 1},
+			[]capsule.Attempt{att(FailModelError, "m1"), att(FailDaemonRestart, "m1")}, list2, 1},
 		{"switch window: daemon_restart then driver_relaunch",
-			[]capsule.Attempt{att(FailModelError, "m1"), att(FailModelError, "m1"), att(FailDaemonRestart, "m1"), att(FailDriverRelaunch, "m1")}, list2, 1},
+			[]capsule.Attempt{att(FailModelError, "m1"), att(FailDaemonRestart, "m1"), att(FailDriverRelaunch, "m1")}, list2, 1},
 		{"a neutral failure on the new model: the switch was made",
-			[]capsule.Attempt{att(FailModelError, "m1"), att(FailModelError, "m1"), att(FailRateLimited, "m2")}, list2, 1},
-		// the 5xx resume: the first model_error on a candidate stays on it,
-		// the second consecutive model-class death on it moves on
-		{"one model_error does not advance", []capsule.Attempt{att(FailModelError, "m1")}, list2, 0},
-		{"one model_error then a restart still does not advance",
-			[]capsule.Attempt{att(FailModelError, "m1"), att(FailDaemonRestart, "m1"), att(FailDriverRelaunch, "m1")}, list2, 0},
-		{"two model_errors on one model advance", []capsule.Attempt{att(FailModelError, "m1"), att(FailModelError, "m1")}, list2, 1},
-		{"a neutral transient between them neither counts nor breaks",
-			[]capsule.Attempt{att(FailModelError, "m1"), att(FailUpstreamTransient, "m1"), att(FailModelError, "m1")}, list2, 1},
-		{"model_error after another model-class death advances",
-			[]capsule.Attempt{att(FailModelHung, "m1"), att(FailModelError, "m1")}, list3, 1},
-		{"a counted non-model failure breaks the streak",
-			[]capsule.Attempt{att(FailModelError, "m1"), att(FailExitOther, "m1"), att(FailModelError, "m1")}, list2, 0},
-		{"an EWR breaks the streak",
-			[]capsule.Attempt{att(FailModelError, "m1"), att(FailEndedWithoutResult, "m1"), att(FailModelError, "m1")}, list2, 0},
-		{"the first model_error on the switched-to model stays on it",
-			[]capsule.Attempt{att(FailModelError, "m1"), att(FailModelError, "m1"), att(FailModelError, "m2")}, list3, 1},
-		{"every other model-class cause still advances at once",
+			[]capsule.Attempt{att(FailModelError, "m1"), att(FailRateLimited, "m2")}, list2, 1},
+		// contract 4: every model-class death advances at once, model_error
+		// included (no same-candidate resume of a 5xx)
+		{"one model_error advances", []capsule.Attempt{att(FailModelError, "m1")}, list2, 1},
+		{"a model_error on the switched-to model advances again",
+			[]capsule.Attempt{att(FailModelError, "m1"), att(FailModelError, "m2")}, list3, 2},
+		{"every other model-class cause advances at once",
 			[]capsule.Attempt{att(FailModelHung, "m1")}, list2, 1},
-		{"two model_errors at the chain end stay on the end model",
-			[]capsule.Attempt{att(FailModelError, "m2"), att(FailModelError, "m2")}, list2, 1},
+		{"a model_error at the chain end stays on the end model",
+			[]capsule.Attempt{att(FailModelError, "m2")}, list2, 1},
+		{"the owner appended a candidate after the chain-end death: the pointer moves on",
+			[]capsule.Attempt{att(FailModelError, "m2")}, list3, 2},
+		{"a counted non-model failure after the death: the switch was made",
+			[]capsule.Attempt{att(FailModelError, "m1"), att(FailExitOther, "m2")}, list3, 1},
 	}
 	for _, tc := range cases {
-		got := CandidatePointer(persistedAnchor(tc.attempts), tc.attempts, time.Time{}, tc.candidates)
+		got := CandidatePointer(persistedAnchor(tc.attempts), tc.attempts, tc.candidates)
 		if got != tc.want {
 			t.Errorf("%s: CandidatePointer = %d, want %d", tc.name, got, tc.want)
 		}
 	}
 }
 
-func TestSameCandidateEwrStreak(t *testing.T) {
+// TestClassStreak pins the supervision streaks' ledger (classStreak,
+// design #483 §7): the trailing consecutive deaths of one class within the
+// streak era — across candidates (a contract 4 streak is the step's, not
+// a model's) — with the transient and audit-only entries skipped.
+func TestClassStreak(t *testing.T) {
 	ewr := func(m string) capsule.Attempt { return att(FailEndedWithoutResult, m) }
+	isEwr := func(c string) bool { return c == FailEndedWithoutResult }
 	cases := []struct {
 		name     string
 		attempts []capsule.Attempt
-		cand     string
-		answers  []capsule.ArchivedAnswer
+		in       func(string) bool
+		era      time.Time
 		want     int
 	}{
-		{"none", nil, "a", nil, 0},
-		{"two plain", []capsule.Attempt{ewr("a"), ewr("a")}, "a", nil, 2},
-		{"the pi-web- interleaving: neutral causes neither count nor break",
+		{"none", nil, isEwr, time.Time{}, 0},
+		{"two plain", []capsule.Attempt{ewr("a"), ewr("a")}, isEwr, time.Time{}, 2},
+		{"the pi-web- interleaving: transient and audit-only entries neither count nor break",
 			[]capsule.Attempt{ewr("a"), att(FailRateLimited, "a"), att(FailUpstreamTransient, "a"),
-				att(FailDaemonRestart, "a"), att(FailDriverRelaunch, "a"), ewr("a")}, "a", nil, 2},
-		{"another counted failure breaks", []capsule.Attempt{ewr("a"), att(FailExitOther, "a"), ewr("a")}, "a", nil, 1},
-		{"a model-class failure breaks", []capsule.Attempt{ewr("a"), att(FailExitModel, "a"), ewr("a")}, "a", nil, 1},
-		{"a different candidate ends the streak (a switch happened)",
-			[]capsule.Attempt{ewr("a"), ewr("a"), ewr("b")}, "b", nil, 1},
+				att(FailDaemonRestart, "a"), att(FailDriverRelaunch, "a"), ewr("a")}, isEwr, time.Time{}, 2},
+		{"another class breaks", []capsule.Attempt{ewr("a"), att(FailExitOther, "a"), ewr("a")}, isEwr, time.Time{}, 1},
+		{"a model-class failure breaks", []capsule.Attempt{ewr("a"), att(FailExitModel, "a"), ewr("a")}, isEwr, time.Time{}, 1},
+		{"a different candidate does not end it", []capsule.Attempt{ewr("a"), ewr("a"), ewr("b")}, isEwr, time.Time{}, 3},
 		{"an accepted result breaks",
-			[]capsule.Attempt{ewr("a"), {Cause: "accepted"}, ewr("a")}, "a", nil, 1},
+			[]capsule.Attempt{ewr("a"), {Cause: "accepted"}, ewr("a")}, isEwr, time.Time{}, 1},
 		{"a rewind breaks",
-			[]capsule.Attempt{ewr("a"), {Cause: CauseGateFailRewind}, ewr("a")}, "a", nil, 1},
-		{"an answered question breaks (an earlier answer era)",
+			[]capsule.Attempt{ewr("a"), {Cause: CauseGateFailRewind}, ewr("a")}, isEwr, time.Time{}, 1},
+		{"the owner's continue breaks (an earlier era)",
 			[]capsule.Attempt{
 				{Cause: CauseInfraFailure, FailureCause: FailEndedWithoutResult, Candidate: "a", StartedAt: "2026-01-01T00:00:00Z"},
 				{Cause: CauseInfraFailure, FailureCause: FailEndedWithoutResult, Candidate: "a", StartedAt: "2026-01-01T00:10:00Z"}},
-			"a", []capsule.ArchivedAnswer{{AnsweredAt: "2026-01-01T00:05:00Z"}}, 1},
+			isEwr, time.Date(2026, 1, 1, 0, 5, 0, 0, time.UTC), 1},
+		{"the other class counts every other cause together",
+			[]capsule.Attempt{att(FailExitHost, "a"), att(FailHarnessSilent, "a"), att(FailExitOther, "a")}, otherCause, time.Time{}, 3},
+		{"the other class excludes an EWR, a timeout and a model-class death",
+			[]capsule.Attempt{att(FailExitOther, "a"), att(FailToolHung, "a")}, otherCause, time.Time{}, 0},
 	}
 	for _, tc := range cases {
-		if got := SameCandidateEwrStreak(tc.attempts, tc.cand, answerEraStart(tc.answers)); got != tc.want {
+		if got := classStreak(tc.attempts, tc.era, tc.in); got != tc.want {
 			t.Errorf("%s: streak = %d, want %d", tc.name, got, tc.want)
 		}
 	}
@@ -169,26 +162,26 @@ func TestModelClassStreak(t *testing.T) {
 		name     string
 		attempts []capsule.Attempt
 		cand     string
-		answers  []capsule.ArchivedAnswer
+		era      time.Time
 		want     int
 	}{
-		{"none", nil, "a", nil, 0},
-		{"one", []capsule.Attempt{me("a")}, "a", nil, 1},
-		{"any model-class causes count together", []capsule.Attempt{att(FailExitModel, "a"), me("a")}, "a", nil, 2},
+		{"none", nil, "a", time.Time{}, 0},
+		{"one", []capsule.Attempt{me("a")}, "a", time.Time{}, 1},
+		{"any model-class causes count together", []capsule.Attempt{att(FailExitModel, "a"), me("a")}, "a", time.Time{}, 2},
 		{"neutral causes neither count nor break",
 			[]capsule.Attempt{me("a"), att(FailRateLimited, "a"), att(FailUpstreamTransient, "a"),
-				att(FailDaemonRestart, "a"), att(FailDriverRelaunch, "a"), me("a")}, "a", nil, 2},
-		{"an EWR breaks", []capsule.Attempt{me("a"), att(FailEndedWithoutResult, "a"), me("a")}, "a", nil, 1},
-		{"another candidate ends the streak", []capsule.Attempt{me("a"), me("b")}, "b", nil, 1},
-		{"an accepted result breaks", []capsule.Attempt{me("a"), {Cause: "accepted"}, me("a")}, "a", nil, 1},
-		{"an answered question breaks (an earlier answer era)",
+				att(FailDaemonRestart, "a"), att(FailDriverRelaunch, "a"), me("a")}, "a", time.Time{}, 2},
+		{"an EWR breaks", []capsule.Attempt{me("a"), att(FailEndedWithoutResult, "a"), me("a")}, "a", time.Time{}, 1},
+		{"another candidate ends the streak", []capsule.Attempt{me("a"), me("b")}, "b", time.Time{}, 1},
+		{"an accepted result breaks", []capsule.Attempt{me("a"), {Cause: "accepted"}, me("a")}, "a", time.Time{}, 1},
+		{"the owner's continue breaks (an earlier era)",
 			[]capsule.Attempt{
 				{Cause: CauseInfraFailure, FailureCause: FailModelError, Candidate: "a", StartedAt: "2026-01-01T00:00:00Z"},
 				{Cause: CauseInfraFailure, FailureCause: FailModelError, Candidate: "a", StartedAt: "2026-01-01T00:10:00Z"}},
-			"a", []capsule.ArchivedAnswer{{AnsweredAt: "2026-01-01T00:05:00Z"}}, 1},
+			"a", time.Date(2026, 1, 1, 0, 5, 0, 0, time.UTC), 1},
 	}
 	for _, tc := range cases {
-		if got := ModelClassStreak(tc.attempts, tc.cand, answerEraStart(tc.answers)); got != tc.want {
+		if got := ModelClassStreak(tc.attempts, tc.cand, tc.era); got != tc.want {
 			t.Errorf("%s: streak = %d, want %d", tc.name, got, tc.want)
 		}
 	}
@@ -203,8 +196,8 @@ func TestCandidatePointerIsPure(t *testing.T) {
 		{Cause: CauseInfraFailure, FailureCause: FailExitModel},
 	}
 	candidates := []string{"m1", "m2", "m3"}
-	first := CandidatePointer(persistedAnchor(attempts), attempts, time.Time{}, candidates)
-	second := CandidatePointer(persistedAnchor(attempts), attempts, time.Time{}, candidates)
+	first := CandidatePointer(persistedAnchor(attempts), attempts, candidates)
+	second := CandidatePointer(persistedAnchor(attempts), attempts, candidates)
 	if first != second {
 		t.Fatalf("recomputation drifted: %d then %d", first, second)
 	}

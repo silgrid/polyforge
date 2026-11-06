@@ -53,12 +53,23 @@ type Sink interface {
 	// ToolStart / ToolEnd bracket one tool execution.
 	ToolStart(id, name, args string)
 	ToolEnd(id, name string)
+	// ToolActive: the running tool call id reported inner activity — a
+	// sub-agent working inside it (Claude: a record whose
+	// parent_tool_use_id names the Agent call; pi: the subagent tool's
+	// tool_execution_update). It is life, and it restarts that call's
+	// rule-3 clock: a sub-agent call is judged on its silence, not on its
+	// whole run.
+	ToolActive(id string)
 	// TurnEnded: the agent turn ended, ok or with an error text.
 	TurnEnded(ok bool, errText string)
 	// ErrorSeen records the latest error text without ending the turn.
 	ErrorSeen(text string)
 	// ProcessExit: the process is gone.
 	ProcessExit(info ExitInfo)
+	// ContextWindow: the harness reported the context window of a model
+	// it used (claude's `result.modelUsage[<model>].contextWindow`,
+	//); window > 0.
+	ContextWindow(model string, window int64)
 }
 
 // Translator folds one harness's native records into Sink signals.

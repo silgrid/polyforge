@@ -53,12 +53,14 @@ every-word match.
 ## Inside a workflow step
 
 A step agent holds no aihub credential path. Inside a step (`PF_WI_ID` and
-`PF_DAEMON_ID` set) the same `pf recall` (and `pf memory show <id>`) goes to the local
-daemon (`GET /step/memories/...`), which searches with its own
-credential, scoped to the step's own work item's project: `--project`
-must be that project (another one is refused, DAEMON-403), and no
-cli.toml mapping is needed. The same holds inside a task agent (`PF_TASK_ID`,
-`GET /task/memories/...`). Step and task agents search only: browse mode — an
+`PF_DAEMON_ID` set) `pf recall` and `pf memory show` are refused
+(DAEMON-403): the step searches with `pf step recall <query>` (and reads a
+body with `pf step memory show <id>`), one call to the local daemon, which
+searches with its own credential, scoped to the step's own work item's
+project — the call names no project, and no cli.toml mapping is needed.
+Inside a task agent (`PF_TASK_ID`) `pf recall` and `pf memory show` go to
+the daemon the same way (`GET /task/memories/...`, `--project` that of the
+task's). Step and task agents search only: browse mode — an
 empty query, `--after` or `--sort` — is refused locally before any daemon
 request, and the daemon's memory proxy itself refuses an empty query and never
 forwards a cursor or sort.
@@ -77,7 +79,7 @@ remain, `next: <cursor>` (the value for `--after`).
 
 | Code | When | What to tell the user |
 |---|---|---|
-| `AUTH-401` | api key missing or invalid | Credential rejected — check `--api-key` / `PF_API_KEY` / config. |
+| `AUTH-401` | api key missing or invalid | Credential rejected — check the Cell's `api_key` (`pf [--profile NAME] config set api_key`). |
 | `MEM-400` | Browse: an unknown `--sort`, a malformed or other-sort cursor; a query mixed with `--after`/`--sort` | Drop `--after`/`--sort` for a search, or drop the query to browse; pass `next_cursor` unchanged with the same `--sort`. |
 | (no code) `recall: a query is required inside a workflow step or task …` | Browse attempted by a step or task agent — local refusal, nothing sent | Give search words: browse is the human direct-aihub path. |
 | `CORE-404` | Unknown project, or one you cannot read (same answer, by design) | The project does not exist or you are not a member — check `--project`, or ask a maintainer for membership. |
@@ -85,3 +87,9 @@ remain, `next: <cursor>` (the value for `--after`).
 
 Zero hits are **not** an error: the table simply says `0 hit(s)`. Try
 different wording or drop a tag filter before concluding nothing is stored.
+
+Transport: like every data-plane verb this one goes through the local daemon
+to the resolved Cell's AIHub connection (`--profile NAME` / `PF_PROFILE` /
+the cwd's mapped Cell / `default`); `--server`, `--api-key`, `PF_SERVER` and
+`PF_API_KEY` are refused, and with the daemon down it fails with
+`DAEMON-410` (`pf daemon ensure`, then retry once).

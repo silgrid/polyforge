@@ -22,7 +22,6 @@ const (
 	kindStepFailed  = "step_failed"
 	kindStepDone    = "step_done"
 	kindGateVerdict = "gate_verdict"
-	kindNeedsInput  = "needs_input"
 	kindIncomplete  = "incomplete"
 	kindUnhealthy   = "model_unhealthy"
 )
@@ -145,7 +144,7 @@ func build(entries []protocol.EventEntry, now time.Time, retention time.Duration
 						start.wallMs = wall
 					}
 				}
-			case kindStepDone, kindGateVerdict, kindNeedsInput, kindIncomplete:
+			case kindStepDone, kindGateVerdict, kindIncomplete:
 				if d := dispatches[key]; d != nil && !d.closed {
 					d.closed = true
 					d.success = e.entry.Kind != kindIncomplete

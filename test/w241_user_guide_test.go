@@ -173,7 +173,8 @@ func TestW241GuideWrapHumanCloseVerb(t *testing.T) {
 }
 
 // TestW241GuideCoreConceptsNamed: every core concept — work item,
-// bundle, lane, gate, rewind, capsule, chat identity — is defined in the
+// bundle, lane, gate, rewind, capsule, decision feed (it replaced the
+// retired chat identity) — is defined in the
 // guide (exactly one plain-words definition plus a pointer to the
 // mechanism authority; the once-and-linked half is review's against the
 // same spec).
@@ -187,7 +188,7 @@ func TestW241GuideCoreConceptsNamed(t *testing.T) {
 		{"gate", `(?i)\bgate`},
 		{"rewind", `(?i)\brewind`},
 		{"capsule", `(?i)\bcapsule`},
-		{"chat identity", `(?i)chat\s+identity`},
+		{"decision feed", `(?i)decision\s+feed`},
 	} {
 		if !regexp.MustCompile(c.re).MatchString(norm) {
 			missing = append(missing, c.concept)
@@ -200,8 +201,10 @@ func TestW241GuideCoreConceptsNamed(t *testing.T) {
 
 // TestW241GuideChatPathPrimary: the chat-agent path is the guide's
 // primary path — ask in natural language in the harness (pi or Claude
-// Code, progress display included) and let the routing skill map the
-// words to the verb; the terminal pf verbs are the reference form.
+// Code) and let the routing skill map the words to the verb, with human
+// decisions handled in pi-web's Polyforge panel (the statusline progress
+// face it replaced was retired); the terminal pf verbs are
+// the reference form.
 func TestW241GuideChatPathPrimary(t *testing.T) {
 	norm := w241Norm(w241ReadGuide(t))
 	for _, c := range []struct{ what, re string }{
@@ -209,27 +212,27 @@ func TestW241GuideChatPathPrimary(t *testing.T) {
 		{"the pi harness", `(?i)\bpi\b`},
 		{"the Claude Code harness", `(?i)claude\s+code`},
 		{"the routing skill", `(?i)\bskill`},
-		{"progress display (pf watch --statusline / the pf-chat extension)", `(?i)statusline`},
+		{"where decisions are handled (the Polyforge panel)", `(?i)polyforge\s+panel`},
 	} {
 		if !regexp.MustCompile(c.re).MatchString(norm) {
-			t.Fatalf("the chat-agent path is the guide's primary instruction — ask in natural language in the harness and let the routing skill route, covering both harnesses the skill installs into and the progress display; the guide never shows %s", c.what)
+			t.Fatalf("the chat-agent path is the guide's primary instruction — ask in natural language in the harness and let the routing skill route, covering both harnesses the skill installs into and the panel that handles decisions; the guide never shows %s", c.what)
 		}
 	}
 }
 
-// TestW241GuideWorkedExampleAutopilot: one worked example, zero to
+// TestW241GuideWorkedExampleDevelop: one worked example, zero to
 // delivered, explicitly labeled composed/illustrative (never a
-// transcript of a real run), walking the autopilot lane end to end
-// (grill if asked → fix → verification → deliver) with real command
-// shapes, plus a sidebar naming what the feature-full bundle adds
-// around the fix.
-func TestW241GuideWorkedExampleAutopilot(t *testing.T) {
+// transcript of a real run), walking the develop lane end to end
+// (build → review → verification → publish → merge) with real command
+// shapes, plus a sidebar naming what the micro lane trims. (It walked the
+// autopilot lane until removed it.)
+func TestW241GuideWorkedExampleDevelop(t *testing.T) {
 	norm := w241Norm(w241ReadGuide(t))
 	if !regexp.MustCompile(`(?i)\b(composed|illustrative)\b`).MatchString(norm) {
 		t.Fatalf("the worked example must be explicitly labeled composed/illustrative — never a transcript of a real run (step agents must not drive the daemon)")
 	}
-	if !regexp.MustCompile(`(?i)\bautopilot\b`).MatchString(norm) {
-		t.Fatalf("the worked example walks the autopilot lane end to end (grill if asked → fix → verification → deliver); the guide never names the lane")
+	if !regexp.MustCompile(`(?i)\bdevelop\b`).MatchString(norm) {
+		t.Fatalf("the worked example walks the develop lane end to end (build → review → verification → publish → merge); the guide never names the lane")
 	}
 	// the lane order runs inside the worked example's own slice
 	// (w241Section): a whole-body scan passed on the same words landing
@@ -239,21 +242,20 @@ func TestW241GuideWorkedExampleAutopilot(t *testing.T) {
 	sec := w241Section(t, w241ReadGuide(t), "worked example")
 	at := 0
 	for _, step := range []struct{ label, re string }{
-		{"the fix step", `(?i)\bfix`},
+		{"the build step", `(?i)\bbuild`},
+		{"review", `(?i)\breview`},
 		{"verification", `(?i)\bverification`},
-		{"deliver (PR/merge)", `(?i)\bdeliver`},
+		{"publish (PR)", `(?i)\bpublish`},
+		{"merge", `(?i)\bmerge`},
 	} {
 		m := regexp.MustCompile(step.re).FindStringIndex(sec[at:])
 		if m == nil {
-			t.Fatalf("the worked example follows the autopilot lane end to end — grill (if asked) → fix → verification → deliver; no %s after byte %d of the worked example section", step.label, at)
+			t.Fatalf("the worked example follows the develop lane end to end — build → review → verification → publish → merge; no %s after byte %d of the worked example section", step.label, at)
 		}
 		at += m[1]
 	}
-	if !regexp.MustCompile(`(?i)feature[\s-]?full`).MatchString(norm) {
-		t.Fatalf("the worked example's sidebar names what the feature-full bundle adds around the fix (the clarification pass — grill/spec — plus e2e-author and review); the guide never names the feature-full bundle")
-	}
-	if !regexp.MustCompile(`(?i)\breview\b`).MatchString(norm) {
-		t.Fatalf("the worked example's sidebar names the added steps (grill as a full clarification pass with spec, e2e-author, review); the guide never names review")
+	if !regexp.MustCompile(`(?i)\bmicro\b`).MatchString(sec) {
+		t.Fatalf("the worked example's sidebar names what the micro lane trims (no verification step); the worked example never names micro")
 	}
 }
 

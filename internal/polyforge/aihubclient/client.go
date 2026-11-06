@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -24,12 +25,18 @@ import (
 // Client talks to one aihub server.
 type Client struct {
 	BaseURL string
-	APIKey  string
-	HTTP    *http.Client
+	// APIKey is the credential at construction; SetAPIKey swaps it under
+	// keyMu (a same-identity key rotation of a running Cell).
+	APIKey string
+	keyMu  sync.RWMutex
+	HTTP   *http.Client
 	// MachineID/MachineKey are the daemon's cross-machine identity; nil key
 	// = SignedDo refuses (no machine face).
 	MachineID  string
 	MachineKey ed25519.PrivateKey
+	// Header carries extra request headers stamped on every call (the CLI's
+	// daemon-mediated client routes with X-PF-Profile).
+	Header http.Header
 }
 
 func New(baseURL, apiKey string) *Client {
@@ -71,7 +78,7 @@ func (c *Client) send(ctx context.Context, method, path string, body any) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	c.stamp(req)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -88,6 +95,52 @@ func (c *Client) send(ctx context.Context, method, path string, body any) ([]byt
 		return nil, typedError(resp.StatusCode, data)
 	}
 	return data, nil
+}
+
+// stamp sets the credential (when the client holds one) and the extra
+// headers on one request.
+func (c *Client) stamp(req *http.Request) {
+	c.keyMu.RLock()
+	key := c.APIKey
+	c.keyMu.RUnlock()
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	for k, vs := range c.Header {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+}
+
+// Forward relays one raw request (method, path with query, body, content
+// type) to aihub with this client's credential and answers the response
+// status, content type and body unchanged (bounded to 32 MiB). It is the
+// daemon's data-plane proxy primitive (daemon/proxy.go): a transport
+// failure is the error, every HTTP answer — 4xx/5xx included — is a result.
+func (c *Client) Forward(ctx context.Context, method, pathQuery string, body []byte, contentType string) (int, string, []byte, error) {
+	var rdr io.Reader
+	if len(body) > 0 {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+pathQuery, rdr)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	c.stamp(req)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return 0, "", nil, err
+	}
+	return resp.StatusCode, resp.Header.Get("Content-Type"), data, nil
 }
 
 // raw performs one CLI-facing passthrough call: out is the undecoded
@@ -114,9 +167,23 @@ func typedError(status int, data []byte) error {
 	}
 }
 
+// escapeWorkItemRef escapes one work-item reference (an id or a
+// "<project>#<seq>" slug) into a single URL path segment. A pre-encoded
+// spelling is decoded once first: the data-plane proxy forwards the escaped
+// path byte for byte, so the CLI's own escaping is the only
+// encoding on the wire and "workbench%231" must resolve to the same item as
+// "task#1" instead of reaching the Hub double-escaped. A malformed
+// escape stays literal and is escaped normally.
+func escapeWorkItemRef(ref string) string {
+	if decoded, err := url.PathUnescape(ref); err == nil {
+		ref = decoded
+	}
+	return url.PathEscape(ref)
+}
+
 func (c *Client) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
 	var wi api.WorkItem
-	if err := c.Do("GET", "/api/v1/work-items/"+url.PathEscape(idOrSlug), nil, &wi); err != nil {
+	if err := c.Do("GET", "/api/v1/work-items/"+escapeWorkItemRef(idOrSlug), nil, &wi); err != nil {
 		return nil, err
 	}
 	return &wi, nil
@@ -165,6 +232,10 @@ type CreateWorkItemRequest struct {
 	// writes one `blocks` edge per entry inside the create transaction,
 	// or refuses the whole create (polyforge#161).
 	After []string `json:"after,omitempty"`
+	// Exclusive (needs BundleName) asks aihub to refuse the create CORE-409
+	// OPEN_ON_BUNDLE while another work item of the project on the same
+	// bundle is unfinished (; a lane's `exclusive: true`).
+	Exclusive bool `json:"exclusive,omitempty"`
 }
 
 // CreateWorkItem creates a work item and returns the raw detail record.
@@ -174,7 +245,7 @@ func (c *Client) CreateWorkItem(req CreateWorkItemRequest) (json.RawMessage, err
 
 // GetWorkItemRaw reads the detail record undecoded (--json passthrough).
 func (c *Client) GetWorkItemRaw(idOrSlug string) (json.RawMessage, error) {
-	return c.raw("GET", "/api/v1/work-items/"+url.PathEscape(idOrSlug), nil)
+	return c.raw("GET", "/api/v1/work-items/"+escapeWorkItemRef(idOrSlug), nil)
 }
 
 // PatchWorkItem updates the PATCHable field set. body must contain only
@@ -182,41 +253,88 @@ func (c *Client) GetWorkItemRaw(idOrSlug string) (json.RawMessage, error) {
 // milestone, waiting_on, clean_pause, bundle_name} — any other key
 // (attrs included) answers CORE-400 IMMUTABLE server-side.
 func (c *Client) PatchWorkItem(id string, body map[string]any) (json.RawMessage, error) {
-	return c.raw("PATCH", "/api/v1/work-items/"+url.PathEscape(id), body)
+	return c.raw("PATCH", "/api/v1/work-items/"+escapeWorkItemRef(id), body)
 }
 
 // AddComment appends one comment to a work item. There is
 // no edit and no delete: the only write is this append.
 func (c *Client) AddComment(id string, req api.AddCommentRequest) (json.RawMessage, error) {
-	return c.raw("POST", "/api/v1/work-items/"+url.PathEscape(id)+"/comments", req)
+	return c.raw("POST", "/api/v1/work-items/"+escapeWorkItemRef(id)+"/comments", req)
 }
 
 // CancelWorkItem terminates a queued/paused/blocked WI (no active
 // generation).
 func (c *Client) CancelWorkItem(id string) (json.RawMessage, error) {
-	return c.raw("POST", "/api/v1/work-items/"+url.PathEscape(id)+"/cancel", map[string]any{})
+	return c.raw("POST", "/api/v1/work-items/"+escapeWorkItemRef(id)+"/cancel", map[string]any{})
 }
 
 // WrapWorkItem is the hub's terminal verdict on a work item with no
 // bundle (queued/paused/blocked -> wrapped, or failed with req.Fail).
 func (c *Client) WrapWorkItem(id string, req api.WrapRequest) (json.RawMessage, error) {
-	return c.raw("POST", "/api/v1/work-items/"+url.PathEscape(id)+"/wrap", req)
+	return c.raw("POST", "/api/v1/work-items/"+escapeWorkItemRef(id)+"/wrap", req)
 }
 
 // ListWorkItemsRaw lists work items undecoded (0 limit = the server
 // default cap).
 func (c *Client) ListWorkItemsRaw(project, status string, limit int) (json.RawMessage, error) {
+	return c.ListWorkItemsFilteredRaw(WorkItemFilter{Project: project, Status: status, Limit: limit})
+}
+
+// WorkItemFilter is a list query beyond project and status. Attrs are
+// aihub's attrs filters, each `<path>:<value>` (the attr at the dot path
+// is that string; GET /work-items?attr=…, repeatable).
+type WorkItemFilter struct {
+	Project, Status, Bundle string
+	Attrs                   []string
+	Limit                   int
+}
+
+// path is the list request a filter selects (empty fields are left off;
+// Attrs keep their order).
+func (f WorkItemFilter) path() string {
 	q := url.Values{}
-	if project != "" {
-		q.Set("project", project)
+	for k, v := range map[string]string{"project": f.Project, "status": f.Status, "bundle": f.Bundle} {
+		if v != "" {
+			q.Set(k, v)
+		}
 	}
-	if status != "" {
-		q.Set("status", status)
+	for _, a := range f.Attrs {
+		q.Add("attr", a)
 	}
-	if limit > 0 {
-		q.Set("limit", strconv.Itoa(limit))
+	if f.Limit > 0 {
+		q.Set("limit", strconv.Itoa(f.Limit))
 	}
-	return c.raw("GET", "/api/v1/work-items?"+q.Encode(), nil)
+	return "/api/v1/work-items?" + q.Encode()
+}
+
+// ListWorkItems lists the work items a filter selects, newest first.
+func (c *Client) ListWorkItems(f WorkItemFilter) ([]api.WorkItem, error) {
+	var out struct {
+		Items []api.WorkItem `json:"items"`
+	}
+	if err := c.Do("GET", f.path(), nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
+}
+
+// ListWorkItemsFilteredRaw is ListWorkItems undecoded (the raw server
+// body).
+func (c *Client) ListWorkItemsFilteredRaw(f WorkItemFilter) (json.RawMessage, error) {
+	return c.raw("GET", f.path(), nil)
+}
+
+// WriteAttrs writes one top-level attrs key of a work item (PATCH
+// /work-items/{id}/attrs, workflow contract 5): a signed machine request,
+// fenced by req.If (CORE-409 ATTRS_IF_MISMATCH when a condition does not
+// hold). The daemon's pending-writes sink is its only caller; a step
+// reaches it only through that sink.
+func (c *Client) WriteAttrs(id string, req api.AttrsWriteRequest) (*api.WorkItem, error) {
+	var out api.WorkItem
+	if err := c.SignedDo("PATCH", "/api/v1/work-items/"+escapeWorkItemRef(id)+"/attrs", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // ReadyQueueRaw is the raw-body variant of Queue (same endpoint).
@@ -229,20 +347,20 @@ func (c *Client) ReadyQueueRaw(project string) (json.RawMessage, error) {
 // an id or a slug). Only the `blocks` kind is exposed (polyforge#161).
 // Answers the raw two-sided dependency view of blocked.
 func (c *Client) AddBlocksDependency(blocking, blocked string) (json.RawMessage, error) {
-	return c.raw("POST", "/api/v1/work-items/"+url.PathEscape(blocked)+"/dependencies",
+	return c.raw("POST", "/api/v1/work-items/"+escapeWorkItemRef(blocked)+"/dependencies",
 		map[string]string{"blocking_wi_id": blocking, "kind": "blocks"})
 }
 
 // RemoveBlocksDependency deletes the `blocks` edge "blocking blocks
 // blocked". Answers the raw dependency view of blocked.
 func (c *Client) RemoveBlocksDependency(blocking, blocked string) (json.RawMessage, error) {
-	return c.raw("DELETE", "/api/v1/work-items/"+url.PathEscape(blocked)+"/dependencies/"+
-		url.PathEscape(blocking)+"/blocks", nil)
+	return c.raw("DELETE", "/api/v1/work-items/"+escapeWorkItemRef(blocked)+"/dependencies/"+
+		escapeWorkItemRef(blocking)+"/blocks", nil)
 }
 
 // DependenciesRaw reads a work item's two-sided dependency view.
 func (c *Client) DependenciesRaw(idOrSlug string) (json.RawMessage, error) {
-	return c.raw("GET", "/api/v1/work-items/"+url.PathEscape(idOrSlug)+"/dependencies", nil)
+	return c.raw("GET", "/api/v1/work-items/"+escapeWorkItemRef(idOrSlug)+"/dependencies", nil)
 }
 
 // SearchExcerptRunes is the content excerpt length SearchMemories asks
@@ -428,7 +546,7 @@ func (c *Client) ListMachinesRaw() (json.RawMessage, error) {
 // secret answers the same claim while that session holds the WI (D4).
 func (c *Client) SessionClaim(req api.SessionClaimRequest) (*api.SessionClaimResponse, error) {
 	var out api.SessionClaimResponse
-	if err := c.Do("POST", "/api/v1/work-items/"+url.PathEscape(req.WorkItemID)+"/claim", req, &out); err != nil {
+	if err := c.Do("POST", "/api/v1/work-items/"+escapeWorkItemRef(req.WorkItemID)+"/claim", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -437,7 +555,7 @@ func (c *Client) SessionClaim(req api.SessionClaimRequest) (*api.SessionClaimRes
 // SessionAttach resumes a paused WI under the same session (M3).
 func (c *Client) SessionAttach(wi string, req api.SessionAttachRequest) (*api.SessionClaimResponse, error) {
 	var out api.SessionClaimResponse
-	if err := c.Do("POST", "/api/v1/work-items/"+url.PathEscape(wi)+"/session-attach", req, &out); err != nil {
+	if err := c.Do("POST", "/api/v1/work-items/"+escapeWorkItemRef(wi)+"/session-attach", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -448,7 +566,7 @@ func (c *Client) SessionAttach(wi string, req api.SessionAttachRequest) (*api.Se
 // claims the WI normally. Authorization is server-side (admin or project
 // maintainer).
 func (c *Client) ForceEndSession(wi, reason string) error {
-	return c.Do("POST", "/api/v1/work-items/"+url.PathEscape(wi)+"/force-end-session",
+	return c.Do("POST", "/api/v1/work-items/"+escapeWorkItemRef(wi)+"/force-end-session",
 		api.ForceEndSessionRequest{Reason: reason}, nil)
 }
 
@@ -456,7 +574,7 @@ func (c *Client) ForceEndSession(wi, reason string) error {
 func (c *Client) SessionVerify(wi, sessionID string) (*api.SessionVerifyResponse, error) {
 	var out api.SessionVerifyResponse
 	req := api.SessionVerifyRequest{SessionID: sessionID}
-	if err := c.Do("POST", "/api/v1/work-items/"+url.PathEscape(wi)+"/session-verify", req, &out); err != nil {
+	if err := c.Do("POST", "/api/v1/work-items/"+escapeWorkItemRef(wi)+"/session-verify", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -465,14 +583,16 @@ func (c *Client) SessionVerify(wi, sessionID string) (*api.SessionVerifyResponse
 // SessionEnd is the session-fenced terminal verdict (and the paused
 // transition — the merge amend).
 func (c *Client) SessionEnd(wi string, req api.SessionEndRequest) error {
-	return c.Do("POST", "/api/v1/work-items/"+url.PathEscape(wi)+"/session-end", req, nil)
+	return c.Do("POST", "/api/v1/work-items/"+escapeWorkItemRef(wi)+"/session-end", req, nil)
 }
 
 // ResumeBlockedWorkItem is the §6.4 owner resume verdict's hub door
 // (polyforge#116): `pf resume` on a workflow parked blocked — status
 // blocked → queued for the owner's immediate re-claim; the daemon then
 // re-establishes execution over the parked capsule. Authorization is
-// server-side (the reporter, a project maintainer or an admin).
+// server-side (the reporter, a project maintainer, an admin, or the
+// current operator of the machine that last held the work item as a
+// project writer or maintainer —).
 func (c *Client) ResumeBlockedWorkItem(idOrSlug string) (json.RawMessage, error) {
 	return c.ResumeBlockedWorkItemWith(idOrSlug, api.ResumeBlockedRequest{})
 }
@@ -480,7 +600,7 @@ func (c *Client) ResumeBlockedWorkItem(idOrSlug string) (json.RawMessage, error)
 // ResumeBlockedWorkItemWith is ResumeBlockedWorkItem with the door's
 // options (AcceptLostWork also clears the blocked seal).
 func (c *Client) ResumeBlockedWorkItemWith(idOrSlug string, req api.ResumeBlockedRequest) (json.RawMessage, error) {
-	return c.raw("POST", "/api/v1/work-items/"+url.PathEscape(idOrSlug)+"/resume-blocked", req)
+	return c.raw("POST", "/api/v1/work-items/"+escapeWorkItemRef(idOrSlug)+"/resume-blocked", req)
 }
 
 // ---------------------------------------------------------------------------
@@ -520,15 +640,21 @@ func (c *Client) signedSend(method, path string, body any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	c.stamp(req)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set(machinesign.HeaderMachineID, c.MachineID)
 	req.Header.Set(machinesign.HeaderTimestamp, strconv.FormatInt(ts, 10))
+	// The server verifies the decoded request path (r.URL.Path): a work
+	// item's slug escapes its '#' on the wire, so the signature covers the
+	// unescaped path.
 	signPath := path
 	if i := strings.IndexByte(signPath, '?'); i >= 0 {
 		signPath = signPath[:i]
+	}
+	if p, err := url.PathUnescape(signPath); err == nil {
+		signPath = p
 	}
 	req.Header.Set(machinesign.HeaderSignature, machinesign.Sign(c.MachineKey, method, signPath, raw, ts, c.MachineID))
 	resp, err := c.HTTP.Do(req)
@@ -566,7 +692,7 @@ func (c *Client) AnswerQuery(qid string, body api.QueryAnswerBody) error {
 
 // ProgressQuery asks aihub to relay a progress (or artifact) query.
 func (c *Client) ProgressQuery(wi, artifactPath string) (*api.QueryAnswerBody, error) {
-	path := "/api/v1/work-items/" + url.PathEscape(wi)
+	path := "/api/v1/work-items/" + escapeWorkItemRef(wi)
 	if artifactPath != "" {
 		path += "/artifact-query"
 	} else {
@@ -649,4 +775,12 @@ func (c *Client) Acknowledge(convID string, seq int64) (json.RawMessage, error) 
 // DeliverMessage advances the caller's machine delivery cursor only.
 func (c *Client) DeliverMessage(convID string, seq int64) error {
 	return c.Do("POST", "/api/v1/messages/delivered", api.AckMessage{ConversationID: convID, Seq: seq}, nil)
+}
+
+// SetAPIKey swaps the credential every later request carries (a running
+// Cell's same-identity key rotation, applied once the Cell is idle).
+func (c *Client) SetAPIKey(key string) {
+	c.keyMu.Lock()
+	c.APIKey = key
+	c.keyMu.Unlock()
 }

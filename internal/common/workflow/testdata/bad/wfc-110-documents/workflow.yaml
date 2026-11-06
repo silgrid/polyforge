@@ -1,0 +1,8 @@
+contract: 5
+name: wfc-110-documents
+description: fixture lane for WFC-110 - two YAML documents
+steps:
+  - id: work
+---
+steps:
+  - id: other

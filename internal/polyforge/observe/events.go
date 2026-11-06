@@ -31,8 +31,7 @@ import (
 
 // Event kinds emitted by the supervisor. Driver events (step_started,
 // step_done, needs_input, answered, interrupted, rewind, terminal,
-// step_dead, step_failed, blocked, light_recheck_escalated (the
-// mechanical fast lane's in-place escalation, polyforge#260), ...)
+// step_dead, step_failed, blocked, ...)
 // land in the same log through the
 // daemon binding — a supervisor verdict is recorded there, by the driver
 // that consumes it. A closed set per emitter: job lifecycle, recovery
@@ -63,6 +62,16 @@ const (
 	// one event per attempt, never a spam loop.
 	EvTranscriptMissing = "transcript_missing"
 	EvJobStopped        = "job_stopped"
+	// EvJobFinished is the runtime's release of a work item (RTFinished)
+	// with the reason it actually ended with (code review):
+	// wrapped / failed / blocked / paused / superseded — a wrap whose
+	// final push failed or whose hand-off record is unreadable ends
+	// blocked, a bounded-fail ends blocked, a supersede releases it — or,
+	// for a record dropped at restart because the session is no longer
+	// ours, the hub's status (wrapped / failed / canceled / blocked /
+	// queued); `unconfirmed: true` marks a local seal the hub never
+	// confirmed. The daemon's decision feed records from it.
+	EvJobFinished = "job_finished"
 	// EvSupervisorPaused is the supervisor's own observation gap:
 	// no tick for far longer than the poll interval — a host or daemon
 	// freeze. The unobserved span is removed from every judged duration
@@ -97,11 +106,12 @@ const (
 	// session-verify could not reach aihub. Log-only by contract — no
 	// action is ever taken on a transport error; the retry is bounded.
 	EvSessionVerifyFailed = "session_verify_failed"
-	// EvSubmitRejected (v2 §5): an accepted submit's runtime Start failed at
-	// dispatch (live or replayed after a restart); body carries the error,
-	// intent and the entry's submitted_at/origin. The submit was answered
-	// `accepted` earlier, so this durable event is how watchers learn it
-	// did not start.
+	// EvSubmitRejected (v2 §5): a submit's runtime Start failed at
+	// dispatch — every dispatch refusal is recorded, written before a
+	// waiting submit hears it (the caller may also have
+	// heard it on the spot); body carries the error, intent and the
+	// entry's submitted_at/origin. This durable event is how watchers
+	// and the decision feed learn the work item did not start.
 	EvSubmitRejected = "submit_rejected"
 	// EvSubmitDropped (v2 §5): a persisted submit was NOT replayed after a
 	// restart (resume intent, or aihub no longer shows the WI
@@ -123,6 +133,14 @@ const (
 	// applied nothing and stays up; the body carries the affected key
 	// names only.
 	EvConfigReloadFailed = "config_reload_failed"
+	// EvUserLaneRefused is a workspace's user lane the one lane loader
+	// refuses (workflow contract, "User lanes"), judged at the daemon's
+	// start and at every change of the workspace mapping: daemon-scope
+	// (wi=""), one per lane and distinct defect set; body = workspace,
+	// lane, dir and errors (each WFC-* defect rendered). Only that lane is
+	// unavailable — a claim of a work item on it is refused — and the
+	// daemon runs on.
+	EvUserLaneRefused = "user_lane_refused"
 )
 
 // EventsDir is the per-WI events directory inside the daemon data dir.

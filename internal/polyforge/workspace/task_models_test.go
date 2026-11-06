@@ -13,7 +13,7 @@ import (
 // The task id is a recognized step id even though no installed bundle
 // declares it, and its only key is models.
 func TestLoadTaskKeyIsRecognized(t *testing.T) {
-	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    task: { models: [pi:a, claude:b] }\n"), stepsDir(t), nil)
+	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    task: { models: [pi:a, claude:b] }\n"), nil)
 	if err != nil || cfg == nil {
 		t.Fatalf("steps.<p>.task must load: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestLoadTaskKeyRefusesNonModelKeys(t *testing.T) {
 		"max_tokens":   "task: { models: [pi:a], max_tokens: 5 }",
 		"max_duration": "task: { models: [pi:a], max_duration: 2h }",
 	} {
-		_, err := Load(writeYaml(t, "steps:\n  e2e:\n    "+entry+"\n"), stepsDir(t), nil)
+		_, err := Load(writeYaml(t, "steps:\n  e2e:\n    "+entry+"\n"), nil)
 		if err == nil {
 			t.Fatalf("%s: a non-models key under steps.e2e.task must be refused", name)
 		}

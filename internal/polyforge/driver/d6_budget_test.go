@@ -23,91 +23,6 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
-// timeoutOnce drives one timeout-class death of the given cause,
-// followed by one healthy dispatch, over a step with the given chain.
-func timeoutOnce(t *testing.T, cause supervise.Cause, wall time.Duration, models ...string) *supEnv {
-	t.Helper()
-	env := newChainEnv(t, func(c *Config) {
-		c.Limits = supervise.Defaults{StepTimeout: wall}
-	}, "s", models...)
-	env.sp.script = []fakeEntry{{hold: true}, done(`{"ok":true}`)}
-	go func() {
-		waitForSpawns(env, 1)
-		env.link.Verdict(supervise.StepDead{Step: "s", SpawnN: 1, Cause: cause, Evidence: "T exhausted"})
-	}()
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	return env
-}
-
-// TestD6SlowModelTimeoutRelaxesWallAndSwitches: a slow-model timeout
-// switches to the next candidate AND doubles the step's wall budget,
-// persisting it in execution.json.
-func TestD6SlowModelTimeoutRelaxesWallAndSwitches(t *testing.T) {
-	env := timeoutOnce(t, supervise.CauseStepTimeoutSlowModel, 6*time.Second, "a", "b")
-	if m := env.models(); len(m) != 2 || m[0] != "a" || m[1] != "b" {
-		t.Fatalf("a slow-model timeout switches candidates: %v", m)
-	}
-	sup := env.exec(t).Steps["s"].Supervision
-	if sup == nil || sup.RelaxedWallMs != (12*time.Second).Milliseconds() {
-		t.Fatalf("the slow-model disposal must relax T to 12000ms: %+v", sup)
-	}
-}
-
-// TestD6SlowModelRelaxationDoublesEachTime: every consecutive
-// slow-model timeout doubles the previous bound (6s -> 12s -> 24s).
-func TestD6SlowModelRelaxationDoublesEachTime(t *testing.T) {
-	env := newChainEnv(t, func(c *Config) {
-		c.Limits = supervise.Defaults{StepTimeout: 6 * time.Second}
-	}, "s", "a", "b", "c")
-	env.sp.script = []fakeEntry{{hold: true}, {hold: true}, done(`{"ok":true}`)}
-	go func() {
-		for n := int64(1); n <= 2; n++ {
-			waitForSpawns(env, int(n))
-			env.link.Verdict(supervise.StepDead{Step: "s", SpawnN: n, Cause: supervise.CauseStepTimeoutSlowModel, Evidence: "T exhausted"})
-		}
-	}()
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	sup := env.exec(t).Steps["s"].Supervision
-	if sup == nil || sup.RelaxedWallMs != (24*time.Second).Milliseconds() {
-		t.Fatalf("two relaxations must land 24000ms (6s doubled twice): %+v", sup)
-	}
-}
-
-// TestD6LongTaskRelaxesSameModelThenBlocks: a long-task timeout relaxes
-// T x2 and retries the SAME model; the second one doubles T again and
-// blocks the step.
-func TestD6LongTaskRelaxesSameModelThenBlocks(t *testing.T) {
-	env := newChainEnv(t, func(c *Config) {
-		c.Limits = supervise.Defaults{StepTimeout: 3 * time.Second}
-	}, "s", "a", "b")
-	env.sp.script = []fakeEntry{{hold: true}, {hold: true}}
-	go func() {
-		for n := int64(1); n <= 2; n++ {
-			waitForSpawns(env, int(n))
-			env.link.Verdict(supervise.StepDead{Step: "s", SpawnN: n, Cause: supervise.CauseStepTimeoutLongTask, Evidence: "long tool run"})
-		}
-	}()
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if m := env.models(); len(m) != 2 || m[0] != m[1] {
-		t.Fatalf("a long-task timeout retries the SAME model: %v", m)
-	}
-	x := env.exec(t)
-	if x.WorkflowStatus != StatusBlocked {
-		t.Fatalf("the second long-task timeout blocks: %q", x.WorkflowStatus)
-	}
-	// the blocking (second) timeout doubles T again before it parks, so
-	// a human continue runs under a fresh window: 3s -> 6s -> 12s
-	if sup := x.Steps["s"].Supervision; sup == nil || sup.RelaxedWallMs != (12*time.Second).Milliseconds() {
-		t.Fatalf("the relaxed bound must persist (3s doubled twice): %+v", x.Steps["s"].Supervision)
-	}
-}
-
 // TestD6NonTimeoutDeathsNeverRelax: only timeout-class deaths relax the
 // wall budget — a model-class or plain death must leave T alone.
 func TestD6NonTimeoutDeathsNeverRelax(t *testing.T) {
@@ -308,7 +223,7 @@ func interruptionCycles(t *testing.T, stepTimeout, hold, gap time.Duration, inte
 		d, err := New(Config{
 			WI:          WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 			ExecPath:    execPath,
-			Workflow:    &Workflow{Steps: []StepSpec{spec("s")}, MaxTotal: 4, MaxPerStep: 2},
+			Workflow:    testLane(4, []StepSpec{spec("s")}...),
 			Spawner:     sp,
 			Log:         &safeLog{},
 			Link:        link,
@@ -419,7 +334,7 @@ func TestD6PausedDispatchNeverBookedByALaterRelaunch(t *testing.T) {
 		d, err := New(Config{
 			WI:          WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 			ExecPath:    execPath,
-			Workflow:    &Workflow{Steps: []StepSpec{spec("s")}, MaxTotal: 4, MaxPerStep: 2},
+			Workflow:    testLane(4, []StepSpec{spec("s")}...),
 			Spawner:     sp,
 			Log:         &safeLog{},
 			Link:        link,
@@ -564,8 +479,9 @@ func TestD6SlowModelRotatesAtMostOncePerTimeoutLedger(t *testing.T) {
 	if !strings.Contains(st.Attempts[len(st.Attempts)-2].Detail, "already rotated") {
 		t.Fatalf("the archived detail must say why it was not a second rotation: %q", st.Attempts[len(st.Attempts)-2].Detail)
 	}
-	// the rule reads the persisted counters: pin the shape it depends on
-	if sup := st.Supervision; sup == nil || sup.SlowModelTimeouts != 1 || sup.LongTaskTimeouts != 1 {
-		t.Fatalf("persisted supervision after one rotation and one re-classified timeout: want slow_model_timeouts=1 long_task_timeouts=1, got %+v", sup)
+	// the rule reads the persisted counters: pin the shape it depends on;
+	// every timeout doubled the bound (6s -> 12s -> 24s), persisted
+	if sup := st.Supervision; sup == nil || sup.SlowModelTimeouts != 1 || sup.LongTaskTimeouts != 1 || sup.RelaxedWallMs != (24*time.Second).Milliseconds() {
+		t.Fatalf("persisted supervision after one rotation and one re-classified timeout: want slow_model_timeouts=1 long_task_timeouts=1 relaxed_wall_ms=24000, got %+v", sup)
 	}
 }

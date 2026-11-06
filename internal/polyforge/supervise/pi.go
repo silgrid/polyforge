@@ -10,7 +10,9 @@ package supervise
 //	{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta"|"text_delta"|...}}
 //	{"type":"message_end","message":{...}}
 //	{"type":"tool_execution_start","toolCallId","toolName","args"}
-//	{"type":"tool_execution_update",...}
+//	{"type":"tool_execution_update","toolCallId","toolName","partialResult"}
+//	    a tool's streamed progress; for the subagent tool it arrives at
+//	    every message and tool result of the sub-agent (piSubagentTool)
 //	{"type":"tool_execution_end","toolCallId","toolName",...}
 //	{"type":"turn_end","message":{...},"toolResults":[...]}
 //	{"type":"agent_end","messages":[...],"willRetry":false}
@@ -29,6 +31,12 @@ import (
 	"encoding/json"
 	"strings"
 )
+
+// piSubagentTool is the subagent extension's tool name: its progress
+// updates are the sub-agent's inner activity (Sink.ToolActive);
+// every other tool's updates are life only, so a plain
+// tool streaming output is still judged on its whole run.
+const piSubagentTool = "subagent"
 
 // PiTranslator is the pi --mode rpc translator.
 type PiTranslator struct {
@@ -111,7 +119,11 @@ func (p *PiTranslator) Feed(line []byte) {
 	case "tool_execution_start":
 		p.sink.ToolStart(rec.ToolCallID, rec.ToolName, boundedArgs(rec.Args))
 	case "tool_execution_update":
-		p.sink.Alive()
+		if rec.ToolName == piSubagentTool {
+			p.sink.ToolActive(rec.ToolCallID) // the sub-agent works
+		} else {
+			p.sink.Alive() // a tool's own output: life only
+		}
 	case "tool_execution_end":
 		p.sink.ToolEnd(rec.ToolCallID, rec.ToolName)
 	case "agent_end":

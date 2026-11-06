@@ -16,10 +16,13 @@ package test
 // Scenario map (artifacts/e2e-scenarios.md carries the GIVEN/WHEN/THEN
 // forms, the criteria each scenario pins, and the baseline evidence):
 //
-//   - TestW21SecondFailureUnchangedTreeContinuesInPlace: the 2nd+
-//     failure trigger, the fast-path prompt (keep the transcript path +
-//     continue in place, no start-from-scratch wording) and the live
-//     step_failed archive tree_hash.
+//   - TestW21SecondFailureUnchangedTreeContinuesInPlace: the second
+//     consecutive model-class death's candidate switch (workflow
+//     contract 4: a model-class death switches to the next candidate in
+//     a new conversation; the contract 3 same-model fresh re-dispatch of
+//     a 2nd+ failure is gone), the fast-path prompt (keep the transcript
+//     path + continue in place, no start-from-scratch wording) and the
+//     live step_failed archive tree_hash.
 //   - TestW21CandidateSwitchUnchangedTreeContinuesInPlace: the
 //     candidate-switch trigger on an unchanged tree takes the fast path.
 //   - TestW21DaemonRestartRecoveryArchivesTreeHash: the daemon-restart
@@ -104,22 +107,24 @@ func w21Test2InfraAttemptHashes(t *testing.T, capDir, step string) []string {
 }
 
 // TestW21SecondFailureUnchangedTreeContinuesInPlace: GIVEN the fix step
-// dies twice in a row with the capsule tree untouched, WHEN the driver
-// re-dispatches it as a new conversation (the 2nd+ failure fresh
-// threshold), THEN the previous-attempt reference keeps the transcript
+// dies model-class twice in a row with the capsule tree untouched, WHEN
+// the driver re-dispatches it after the second death as a new
+// conversation — under workflow contract 4 (design #483 §7) that is the
+// switch to the next candidate (a model-class death is never retried on
+// the same model; with no candidate left it blocks, so the list carries a
+// third entry) — THEN the previous-attempt reference keeps the transcript
 // path but orders the new conversation to continue in place, AND both
 // live failures archived the capsule tree hash.
 func TestW21SecondFailureUnchangedTreeContinuesInPlace(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
-	w079Yaml(t, ws, "steps:\n  e2e:\n    fix: { models: [pi:w21-a] }\n")
+	w079Yaml(t, ws, "steps:\n  e2e:\n    fix: { models: [pi:w21-a, pi:w21-b, pi:w21-c] }\n")
 	d, _, _ := w159HarnessRoot(t, inst, ws, "")
 	wi := w113NewWI(t, inst, "e2e", "w21: second failure on an unchanged tree", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 		{"do": "envelope", "id": "fix", "crash": "before", "crash_stderr": w079ProviderErr},
 		{"do": "envelope", "id": "fix", "crash": "before", "crash_stderr": w079ProviderErr},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	})
 	t.Cleanup(func() { killOrphans(wi) })
 	capDir := w079Run(t, d, inst, ws, wi)
@@ -134,9 +139,17 @@ func TestW21SecondFailureUnchangedTreeContinuesInPlace(t *testing.T) {
 			t.Errorf("live failure attempt #%d records no tree_hash (the fast-path guard is absent)", i+1)
 		}
 	}
-	// requirement 3 sc. 1 + requirement 4 sc. 1: the fresh retry (spawn 4)
-	// continues in place on the matching hash.
-	w21AssertContinueInPlace(t, w21Prompt(t, capDir, 4))
+	// the second death switched to the third candidate, in a new
+	// conversation (spawn 3 does not resume the dead one's session)
+	if got := w079Model(t, capDir, "fix"); got != "w21-c" {
+		t.Fatalf("the second model-class death never switched to the third candidate (fix model %q)", got)
+	}
+	if fix := w222Steps(t, capDir, "fix"); len(fix) != 3 || fix[2]["resume"] == true {
+		t.Fatalf("fix dispatches %v: want three, the third a new conversation (the candidate switch)", fix)
+	}
+	// requirement 3 sc. 1 + requirement 4 sc. 1: the new conversation after
+	// the second death (spawn 3) continues in place on the matching hash.
+	w21AssertContinueInPlace(t, w21Prompt(t, capDir, 3))
 }
 
 // TestW21CandidateSwitchUnchangedTreeContinuesInPlace: GIVEN a step whose
@@ -149,10 +162,9 @@ func TestW21CandidateSwitchUnchangedTreeContinuesInPlace(t *testing.T) {
 	w079Yaml(t, ws, "steps:\n  e2e:\n    fix: { models: [pi:w21-a, pi:w21-b] }\n")
 	d, _, _ := w159HarnessRoot(t, inst, ws, "")
 	wi := w113NewWI(t, inst, "e2e", "w21: candidate switch on an unchanged tree", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 		{"do": "envelope", "id": "fix", "crash": "before", "crash_stderr": w079ProviderErr},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	})
 	t.Cleanup(func() { killOrphans(wi) })
 	capDir := w079Run(t, d, inst, ws, wi)
@@ -160,9 +172,9 @@ func TestW21CandidateSwitchUnchangedTreeContinuesInPlace(t *testing.T) {
 	if got := w079Model(t, capDir, "fix"); got != "w21-b" {
 		t.Fatalf("the switch never reached the second candidate (fix model %q)", got)
 	}
-	// the cross-candidate dispatch (spawn 3) is a new conversation with the
+	// the cross-candidate dispatch (spawn 2) is a new conversation with the
 	// previous transcript as reference; it must take the fast path.
-	w21AssertContinueInPlace(t, w21Prompt(t, capDir, 3))
+	w21AssertContinueInPlace(t, w21Prompt(t, capDir, 2))
 }
 
 // TestW21DaemonRestartRecoveryArchivesTreeHash: GIVEN a step in flight
@@ -176,10 +188,9 @@ func TestW21DaemonRestartRecoveryArchivesTreeHash(t *testing.T) {
 	rig := w33RigAt(t, inst, ws)
 	d := rig.daemon(t)
 	wi := w113NewWI(t, inst, "e2e", "w21: daemon restart records the tree hash", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 		{"do": "envelope", "id": "fix", "park": true}, // alive while the daemon dies hard
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	})
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pfWant(inst, -1, "submit", wi)
@@ -187,7 +198,7 @@ func TestW21DaemonRestartRecoveryArchivesTreeHash(t *testing.T) {
 	w113WaitCapsule(t, capDir, 90*time.Second)
 
 	// the fix dispatch is in flight when the daemon is SIGKILLed
-	w33WaitModels(t, capDir, 2, 60*time.Second)
+	w33WaitModels(t, capDir, 1, 60*time.Second)
 	d.crash()
 	d = rig.daemon(t)
 

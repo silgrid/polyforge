@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
 // stepsDir writes an installed-workflows dir whose bundles declare the
@@ -15,8 +17,8 @@ func stepsDir(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Join(dir, "b"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fm := "---\nsteps:\n  - { id: code }\n  - { id: fix }\n  - { id: review }\n  - { id: spec }\n---\n"
-	if err := os.WriteFile(filepath.Join(dir, "b", "workflow.md"), []byte(fm), 0o644); err != nil {
+	fm := "steps:\n  - { id: code }\n  - { id: fix }\n  - { id: review }\n  - { id: spec }\n"
+	if err := os.WriteFile(filepath.Join(dir, "b", workflow.WorkflowFile), []byte(fm), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -34,7 +36,7 @@ func writeYaml(t *testing.T, content string) string {
 // TestLoadAbsentAndEmptyAreNil pins the absent-equivalence rule: a
 // missing file and an empty/comments-only file both answer (nil, nil).
 func TestLoadAbsentAndEmptyAreNil(t *testing.T) {
-	cfg, err := Load(t.TempDir(), stepsDir(t), nil)
+	cfg, err := Load(t.TempDir(), nil)
 	if err != nil || cfg != nil {
 		t.Fatalf("absent yaml: %+v, %v; want nil, nil", cfg, err)
 	}
@@ -45,7 +47,7 @@ func TestLoadAbsentAndEmptyAreNil(t *testing.T) {
 		"empty document": "---\n",
 		"null steps":     "steps:\n",
 	} {
-		cfg, err := Load(writeYaml(t, content), stepsDir(t), nil)
+		cfg, err := Load(writeYaml(t, content), nil)
 		if err != nil || cfg != nil {
 			t.Fatalf("%s: %+v, %v; want nil, nil (absent-equivalent)", name, cfg, err)
 		}
@@ -54,7 +56,7 @@ func TestLoadAbsentAndEmptyAreNil(t *testing.T) {
 
 // TestLoadValidGrammars pins the valid shapes and the decoded content.
 func TestLoadValidGrammars(t *testing.T) {
-	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    default: { models: [pi:a, pi:b] }\n    code: { models: [pi:c] }\n    review: { models: [] }\n  other:\n    spec: { models: [pi:d] }\n"), stepsDir(t), nil)
+	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    default: { models: [pi:a, pi:b] }\n    code: { models: [pi:c] }\n    review: { models: [] }\n  other:\n    spec: { models: [pi:d] }\n"), nil)
 	if err != nil || cfg == nil {
 		t.Fatalf("valid yaml refused: %v", err)
 	}
@@ -84,12 +86,6 @@ func TestLoadRefusals(t *testing.T) {
 		{"old shape: step_kinds", "workflow_defaults:\n  step_kinds:\n    code: [a]\n", []string{"workflow_defaults"}},
 		{"retired release section", "release:\n  cadence: weekly\n", []string{"release"}},
 		{"unknown top-level key beside steps", "steps:\n  e2e:\n    code: { models: [pi:a] }\nmodel: x\n", []string{"model"}},
-		{"unknown step id", "steps:\n  e2e:\n    build: { models: [pi:a] }\n", []string{"steps.e2e.build"}},
-		{"every unknown step id named", "steps:\n  e2e:\n    zz: { models: [pi:a] }\n    fix: { models: [pi:a] }\n  b:\n    gate: { models: [pi:a] }\n", []string{"steps.b.gate, steps.e2e.zz"}},
-		// polyforge#242: the old per-project summarize key is no longer
-		// reserved — it refuses like any other non-step-id key, with the
-		// generic message (no "moved to root" hint).
-		{"old per-project summarize key", "steps:\n  e2e:\n    summarize: { models: [pi:a] }\n", []string{"unknown key(s) steps.e2e.summarize: a key is \"default\", \"task\" or a step id of the installed workflows"}},
 		// the root summarize and memory_policy sections
 		// moved to cli.toml — either refuses the whole file, naming the
 		// line and the migrate command.
@@ -98,7 +94,6 @@ func TestLoadRefusals(t *testing.T) {
 		{"both retired sections", "summarize: { models: [pi:a] }\nmemory_policy:\n  e2e: { record: [a] }\n", []string{"line 1: `summarize:`", "line 2: `memory_policy:`", "pf config migrate"}},
 		{"retired section even malformed", "summarize: [\n", nil},
 		{"retired section null", "memory_policy:\n", []string{"`memory_policy:` moved to cli.toml", "pf config migrate"}},
-		{"misspelled default", "steps:\n  e2e:\n    defaults: { models: [pi:a] }\n", []string{"defaults"}},
 		{"empty model id in default", "steps:\n  e2e:\n    default: { models: [\"\"] }\n", []string{"e2e", "default"}},
 		{"blank model id in step list", "steps:\n  e2e:\n    code: { models: [pi:a, \"  \"] }\n", []string{"e2e", "code"}},
 		{"null project entry", "steps:\n  e2e:\n", []string{"e2e"}},
@@ -115,9 +110,9 @@ func TestLoadRefusals(t *testing.T) {
 		{"duplicate project key", "steps:\n  e2e:\n    code: { models: [pi:a] }\n  e2e:\n    code: { models: [pi:b] }\n", []string{"e2e"}},
 		{"duplicate step key", "steps:\n  e2e:\n    code: { models: [pi:a] }\n    code: { models: [pi:b] }\n", []string{"code"}},
 		{"duplicate steps key", "steps:\n  e2e:\n    code: { models: [pi:a] }\nsteps:\n  x:\n    code: { models: [pi:b] }\n", []string{"steps"}},
-		{"legacy top-level models", "models:\n  e2e:\n    default: [a]\n", []string{`unknown top-level key "models" (only ` + "`steps`)"}},
+		{"legacy top-level models", "models:\n  e2e:\n    default: [a]\n", []string{`unknown top-level key "models" (only ` + "`steps` and `tiers`)"}},
 		{"legacy models beside steps", "steps:\n  e2e:\n    default: { models: [pi:a] }\nmodels:\n  e2e:\n    code: [b]\n", []string{`unknown top-level key "models"`}},
-		{"unknown sub-key", "steps:\n  e2e:\n    fix: { models: [pi:a], modles: [b] }\n", []string{"steps.e2e.fix.modles", "a step entry's keys are `models` and `attrs`"}},
+		{"unknown sub-key", "steps:\n  e2e:\n    fix: { models: [pi:a], modles: [b] }\n", []string{"steps.e2e.fix.modles", "a step entry's one key is `models`"}},
 		// polyforge#175: the retired harness key and the candidate format
 		{"retired harness key", "steps:\n  e2e:\n    fix: { models: [claude:claude-opus-5-5], harness: claude }\n", []string{"steps.e2e.fix.harness: the `harness` key was removed (polyforge#175) — move it into each model candidate's prefix"}},
 		{"retired harness key alone", "steps:\n  e2e:\n    fix: { harness: pi }\n", []string{"steps.e2e.fix.harness: the `harness` key was removed"}},
@@ -142,7 +137,7 @@ func TestLoadRefusals(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			ws := writeYaml(t, c.yaml)
-			cfg, err := Load(ws, stepsDir(t), nil)
+			cfg, err := Load(ws, nil)
 			if err == nil {
 				t.Fatalf("invalid yaml accepted: %+v", cfg)
 			}
@@ -172,39 +167,39 @@ func TestUnreadableYamlIsTyped(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(ws, FileName), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(ws, stepsDir(t), nil); err == nil {
+	if _, err := Load(ws, nil); err == nil {
 		t.Fatal("a directory at the yaml path must refuse")
 	}
 }
 
 // TestLoadStepKeysNeedTheInstalledSet: no workflows dir skips only the
-// step-id check, an unreadable one refuses; yaml anchors let one list
-// serve several step ids.
+// step-id judgement (StaleKeys), an unreadable one fails it; yaml
+// anchors let one list serve several step ids.
 func TestLoadStepKeysNeedTheInstalledSet(t *testing.T) {
 	ws := writeYaml(t, "steps:\n  e2e:\n    code: { models: &c [pi:a, pi:b] }\n    fix: { models: *c }\n    bogus: { models: *c }\n")
-	if _, err := Load(ws, stepsDir(t), nil); err == nil || !strings.Contains(err.Error(), "steps.e2e.bogus") {
-		t.Fatalf("an unknown step id must refuse, got %v", err)
-	}
-	cfg, err := Load(ws, "", nil)
+	cfg, err := Load(ws, nil)
 	if err != nil || len(cfg.Models["e2e"]["fix"]) != 2 {
-		t.Fatalf("no workflows dir: %+v, %v; want the anchored lists loaded", cfg, err)
+		t.Fatalf("the anchored lists: %+v, %v", cfg, err)
 	}
-	if _, err := Load(ws, filepath.Join(t.TempDir(), "missing"), nil); err == nil || !strings.Contains(err.Error(), "unreadable") {
-		t.Fatalf("an unreadable workflows dir must refuse, got %v", err)
+	if stale, err := StaleKeys(cfg, workflow.LaneSet{Builtin: stepsDir(t)}); err != nil || strings.Join(stale, ",") != "steps.e2e.bogus" {
+		t.Fatalf("the stale key: %v, %v", stale, err)
+	}
+	if _, err := StaleKeys(cfg, workflow.LaneSet{Builtin: filepath.Join(t.TempDir(), "missing")}); err == nil {
+		t.Fatal("an unreadable workflows dir cannot judge the keys")
 	}
 }
 
-// TestLoadEmptyWorkflowsDirSaysSo: an existing workflows dir with no
-// readable bundle refuses a per-step key with that fact, not by calling
-// every key unknown; a default-only yaml still loads.
-func TestLoadEmptyWorkflowsDirSaysSo(t *testing.T) {
+// TestStaleKeysOverAnEmptyWorkflowsDir: an existing workflows dir with no
+// readable bundle makes every step key stale; `default` and `task` never
+// are.
+func TestStaleKeysOverAnEmptyWorkflowsDir(t *testing.T) {
 	empty := t.TempDir()
-	_, err := Load(writeYaml(t, "steps:\n  e2e:\n    fix: { models: [pi:a] }\n    code: { models: [pi:b] }\n"), empty, nil)
-	if err == nil || !strings.Contains(err.Error(), "no workflows found in "+empty) || strings.Contains(err.Error(), "unknown key") {
-		t.Fatalf("empty workflows dir: %v", err)
+	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    default: { models: [pi:a] }\n    task: { models: [pi:a] }\n    fix: { models: [pi:a] }\n    code: { models: [pi:b] }\n"), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    default: { models: [pi:a] }\n"), empty, nil); err != nil || cfg == nil {
-		t.Fatalf("default-only yaml over an empty workflows dir: %+v, %v", cfg, err)
+	if stale, err := StaleKeys(cfg, workflow.LaneSet{Builtin: empty}); err != nil || strings.Join(stale, ",") != "steps.e2e.code,steps.e2e.fix" {
+		t.Fatalf("over an empty workflows dir: %v, %v", stale, err)
 	}
 }
 
@@ -213,11 +208,11 @@ func TestLoadEmptyWorkflowsDirSaysSo(t *testing.T) {
 // nil skips the check. Model ids are trimmed on load.
 func TestLoadProjectsMustBeMapped(t *testing.T) {
 	ws := writeYaml(t, "steps:\n  e2e:\n    fix: { models: [\" pi:a \"] }\n  ghost:\n    default: { models: [pi:b] }\n")
-	_, err := Load(ws, stepsDir(t), []string{"e2e", "other"})
+	_, err := Load(ws, []string{"e2e", "other"})
 	if err == nil || !strings.Contains(err.Error(), "project(s) ghost are not mapped to this workspace in cli.toml (it maps: e2e, other)") {
 		t.Fatalf("unmapped project: %v", err)
 	}
-	cfg, err := Load(ws, stepsDir(t), nil)
+	cfg, err := Load(ws, nil)
 	if err != nil || cfg.Models["e2e"]["fix"][0] != "pi:a" {
 		t.Fatalf("nil project set: %+v, %v; want loaded with trimmed ids", cfg, err)
 	}
@@ -229,13 +224,13 @@ func TestLoadProjectsMustBeMapped(t *testing.T) {
 func TestLoadRefusesFirstDefectInFileOrder(t *testing.T) {
 	yaml := "steps:\n  a:\n    fix: { models: [pi:x] }\n  b:\n    fix: [x]\n  c:\n    fix: { bogus: [x] }\n  d:\n    fix: { models: [~] }\n"
 	for i := 0; i < 20; i++ {
-		_, err := Load(writeYaml(t, yaml), stepsDir(t), nil)
+		_, err := Load(writeYaml(t, yaml), nil)
 		if err == nil || !strings.Contains(err.Error(), "steps.b.fix: must be `{ models: [...] }`") {
 			t.Fatalf("run %d: %v, want the first defect in file order (steps.b.fix)", i, err)
 		}
 	}
 	yaml = "steps:\n  e2e:\n    zz: { models: [pi:x] }\n    fix: { models: [~] }\n    aa: { models: [pi:y, pi:y] }\n"
-	if _, err := Load(writeYaml(t, yaml), stepsDir(t), nil); err == nil || !strings.Contains(err.Error(), "steps.e2e.fix.models[0]") {
+	if _, err := Load(writeYaml(t, yaml), nil); err == nil || !strings.Contains(err.Error(), "steps.e2e.fix.models[0]") {
 		t.Fatalf("within one project: %v, want steps.e2e.fix.models[0] first", err)
 	}
 }
@@ -243,7 +238,7 @@ func TestLoadRefusesFirstDefectInFileOrder(t *testing.T) {
 // TestLoadZeroProjectWorkspaceRefusesProjectKeys: a mapped workspace with
 // no projects answers a non-nil empty set, so every project key refuses.
 func TestLoadZeroProjectWorkspaceRefusesProjectKeys(t *testing.T) {
-	_, err := Load(writeYaml(t, "steps:\n  e2e:\n    fix: { models: [pi:a] }\n"), stepsDir(t), []string{})
+	_, err := Load(writeYaml(t, "steps:\n  e2e:\n    fix: { models: [pi:a] }\n"), []string{})
 	if err == nil || !strings.Contains(err.Error(), "project(s) e2e are not mapped") {
 		t.Fatalf("zero-project workspace: %v", err)
 	}
@@ -253,7 +248,7 @@ func TestLoadZeroProjectWorkspaceRefusesProjectKeys(t *testing.T) {
 // mix harnesses, the first `:` splits (the model keeps its own), and the
 // list comes back canonical.
 func TestLoadMixedHarnessChain(t *testing.T) {
-	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    review: { models: [claude:claude-opus-5-5, \" pi : example-gateway/model-a\", \"pi:ollama/llama3:8b\"] }\n"), stepsDir(t), nil)
+	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    review: { models: [claude:claude-opus-5-5, \" pi : example-gateway/model-a\", \"pi:ollama/llama3:8b\"] }\n"), nil)
 	if err != nil || cfg == nil {
 		t.Fatalf("valid yaml refused: %v", err)
 	}
@@ -271,85 +266,39 @@ func TestLoadStepIDsOfARefusedBundleStillCount(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "smoke"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fm := "---\nsteps:\n  - { id: smoke, harness: claude, model_candidates: [claude-opus-5-5] }\n---\n"
-	if err := os.WriteFile(filepath.Join(dir, "smoke", "workflow.md"), []byte(fm), 0o644); err != nil {
+	fm := "steps:\n  - { id: smoke, harness: claude, model_candidates: [claude-opus-5-5] }\n"
+	if err := os.WriteFile(filepath.Join(dir, "smoke", workflow.WorkflowFile), []byte(fm), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    smoke: { models: [claude:claude-opus-5-5] }\n"), dir, nil)
+	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    smoke: { models: [claude:claude-opus-5-5] }\n"), nil)
 	if err != nil || cfg == nil {
 		t.Fatalf("a yaml key of a refused bundle's step id: %+v, %v", cfg, err)
 	}
-}
-
-// attrsDir writes an installed-workflows dir whose bundle declares the
-// step ids grill (with the int attr question_batch_size, default 0), code
-// and fix, and answers it.
-func attrsDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "b"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	fm := "---\nsteps:\n  - id: grill\n    attrs:\n      question_batch_size: { type: int, default: 0 }\n  - { id: code }\n  - { id: fix }\n---\n"
-	if err := os.WriteFile(filepath.Join(dir, "b", "workflow.md"), []byte(fm), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
-// TestWorkspaceLoadAcceptsDeclaredAttrs pins a declared attr override: it
-// loads with its typed value (0 included), beside or without a models list, and an
-// attrs-only entry declares no models level.
-func TestWorkspaceLoadAcceptsDeclaredAttrs(t *testing.T) {
-	cfg, err := Load(writeYaml(t, "steps:\n  e2e:\n    grill:\n      models: [pi:a]\n      attrs:\n        question_batch_size: 2\n  other:\n    grill:\n      attrs: { question_batch_size: 1 }\n  zero:\n    grill:\n      attrs: { question_batch_size: 0 }\n"), attrsDir(t), nil)
-	if err != nil || cfg == nil {
-		t.Fatalf("declared attr refused: %v", err)
-	}
-	if got := cfg.Attrs["e2e"]["grill"]["question_batch_size"]; got != 2 {
-		t.Fatalf("e2e grill attr = %#v, want 2", got)
-	}
-	if got := cfg.Models["e2e"]["grill"]; len(got) != 1 || got[0] != "pi:a" {
-		t.Fatalf("e2e grill models = %v, want [pi:a]", got)
-	}
-	if got := cfg.Attrs["other"]["grill"]["question_batch_size"]; got != 1 {
-		t.Fatalf("other grill attr = %#v, want 1", got)
-	}
-	if got := cfg.Attrs["zero"]["grill"]["question_batch_size"]; got != 0 {
-		t.Fatalf("zero grill attr = %#v, want 0 (0 is a legal int attr)", got)
-	}
-	if _, ok := cfg.Models["other"]["grill"]; ok {
-		t.Fatal("an attrs-only entry must not create a present models level")
+	if stale, err := StaleKeys(cfg, workflow.LaneSet{Builtin: dir}); err != nil || len(stale) != 0 {
+		t.Fatalf("the refused bundle's step id is no stale key: %v, %v", stale, err)
 	}
 }
 
-// TestWorkspaceLoadRefusesUndeclaredAttr pins the attr refusals: an
-// undeclared name, a value of the wrong type, a negative int, an attr under an unknown
-// step id, a non-scalar and an empty attrs map.
-func TestWorkspaceLoadRefusesUndeclaredAttr(t *testing.T) {
-	for name, tc := range map[string]struct{ yaml, want string }{
-		"undeclared name":    {"steps:\n  e2e:\n    grill:\n      attrs: { mystery_knob: 1 }\n", "steps.e2e.grill.attrs.mystery_knob: undeclared attr — step grill declares only question_batch_size"},
-		"step declares none": {"steps:\n  e2e:\n    code:\n      attrs: { question_batch_size: 1 }\n", "steps.e2e.code.attrs.question_batch_size: undeclared attr — step code declares no attrs"},
-		"wrong type":         {"steps:\n  e2e:\n    grill:\n      attrs: { question_batch_size: two }\n", "steps.e2e.grill.attrs.question_batch_size: must be an integer"},
-		"negative int":       {"steps:\n  e2e:\n    grill:\n      attrs: { question_batch_size: -1 }\n", "steps.e2e.grill.attrs.question_batch_size: must be a non-negative integer"},
-		"unknown step id":    {"steps:\n  e2e:\n    grilll:\n      attrs: { question_batch_size: 1 }\n", "steps.e2e.grilll"},
-		"non-scalar":         {"steps:\n  e2e:\n    grill:\n      attrs: { question_batch_size: [1] }\n", "steps.e2e.grill.attrs.question_batch_size: must be an integer or a plain string"},
-		"empty attrs":        {"steps:\n  e2e:\n    grill:\n      attrs: {}\n", "steps.e2e.grill.attrs: is empty"},
+// TestWorkspaceLoadRefusesStepAttrs pins the removal of the step attrs
+// (workflow contract 4,): an `attrs` key under any step
+// entry — a step id, `default` or `task`; beside `models`, alone, or
+// empty — refuses the whole file at its yaml path with the rewrite.
+func TestWorkspaceLoadRefusesStepAttrs(t *testing.T) {
+	for name, yaml := range map[string]string{
+		"beside models": "steps:\n  e2e:\n    fix: { models: [pi:a], attrs: { question_batch_size: 1 } }\n",
+		"alone":         "steps:\n  e2e:\n    fix:\n      attrs: { question_batch_size: 1 }\n",
+		"empty":         "steps:\n  e2e:\n    fix:\n      attrs: {}\n",
+		"under default": "steps:\n  e2e:\n    default:\n      models: [pi:a]\n      attrs: { question_batch_size: 1 }\n",
+		"under task":    "steps:\n  e2e:\n    task:\n      attrs: { x: y }\n",
 	} {
-		_, err := Load(writeYaml(t, tc.yaml), attrsDir(t), nil)
-		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Fatalf("%s: err %v, want it to name %q", name, err, tc.want)
+		_, err := Load(writeYaml(t, yaml), nil)
+		key := map[string]string{"under default": DefaultKey, "under task": TaskKey}[name]
+		if key == "" {
+			key = "fix"
 		}
-	}
-}
-
-// TestWorkspaceLoadRefusesAttrsUnderDefault pins that the project-level
-// `default` and the bundle-less `task` entries take no attrs.
-func TestWorkspaceLoadRefusesAttrsUnderDefault(t *testing.T) {
-	for _, key := range []string{DefaultKey, TaskKey} {
-		_, err := Load(writeYaml(t, "steps:\n  e2e:\n    "+key+":\n      models: [pi:a]\n      attrs: { question_batch_size: 1 }\n"), attrsDir(t), nil)
-		want := "steps.e2e." + key + ".attrs: `" + key + "` takes no attrs"
+		want := "steps.e2e." + key + ".attrs: " + AttrsRemovedHint
 		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("%s: err %v, want %q", key, err, want)
+			t.Fatalf("%s: err %v, want it to name %q", name, err, want)
 		}
 	}
 }

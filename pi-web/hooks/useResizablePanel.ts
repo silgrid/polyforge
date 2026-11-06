@@ -1,0 +1,341 @@
+"use client";
+
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MutableRefObject,
+  type PointerEvent,
+} from "react";
+import { clampPanelWidth } from "@/lib/panel-layout";
+
+interface DragState {
+  pointerId: number;
+  startPosition: number;
+  startWidth: number;
+  target: HTMLDivElement;
+  previousCursor: string;
+  previousUserSelect: string;
+}
+
+interface UseResizablePanelOptions {
+  ariaLabel: string;
+  axis?: "horizontal" | "vertical";
+  cssVariable: `--${string}`;
+  defaultWidth: number;
+  getDefaultWidth?: () => number;
+  getMaxWidth: () => number;
+  growthDirection: "left" | "right" | "up" | "down";
+  maxWidth: number;
+  minWidth: number;
+  /**
+   * False keeps the size the user chose (the stored one, or the last a drag, a
+   * key or a reset committed) apart from the one shown: a window too small for
+   * it shows less without saving that, and the panel grows back with the window.
+   * Until such a choice exists, the panel keeps following `getDefaultWidth` as
+   * the window (or the caller's container) resizes.
+   */
+  persistClamp?: boolean;
+  storageKey: string;
+  widthRef: MutableRefObject<number>;
+}
+
+interface CommitOptions {
+  forcePersist?: boolean;
+  persist?: boolean;
+}
+
+function readStoredWidth(storageKey: string): number | null {
+  try {
+    const stored = window.localStorage.getItem(storageKey);
+    if (stored === null) return null;
+    const parsed = Number.parseInt(stored, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredWidth(storageKey: string, width: number): void {
+  try {
+    window.localStorage.setItem(storageKey, String(width));
+  } catch {
+    // Resizing remains available when storage is unavailable.
+  }
+}
+
+export function useResizablePanel(options: UseResizablePanelOptions) {
+  const {
+    ariaLabel,
+    axis = "horizontal",
+    cssVariable,
+    defaultWidth,
+    getDefaultWidth,
+    getMaxWidth,
+    growthDirection,
+    maxWidth,
+    minWidth,
+    persistClamp = true,
+    storageKey,
+    widthRef,
+  } = options;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const restoredRef = useRef(false);
+  // With persistClamp off: the user's size, which only their own commits change.
+  const preferredRef = useRef(defaultWidth);
+  // ...unless they have not chosen one yet: then fitWidth recomputes the default.
+  const preferredCommittedRef = useRef(false);
+  const [width, setWidth] = useState(defaultWidth);
+  const [isResizing, setIsResizing] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
+  const effectiveMaxWidth = useCallback(
+    () => Math.min(maxWidth, Math.max(minWidth, getMaxWidth())),
+    [getMaxWidth, maxWidth, minWidth],
+  );
+
+  const clampWidth = useCallback(
+    (candidate: number) => clampPanelWidth(candidate, minWidth, effectiveMaxWidth()),
+    [effectiveMaxWidth, minWidth],
+  );
+
+  const applyLiveWidth = useCallback((nextWidth: number) => {
+    widthRef.current = nextWidth;
+    panelRef.current?.style.setProperty(cssVariable, `${nextWidth}px`);
+  }, [cssVariable, widthRef]);
+
+  const commitWidth = useCallback((candidate: number, commitOptions: CommitOptions = {}) => {
+    const { forcePersist = false, persist = true } = commitOptions;
+    const nextWidth = clampWidth(candidate);
+    const changed = nextWidth !== widthRef.current;
+    applyLiveWidth(nextWidth);
+    setWidth(nextWidth);
+    if (!persistClamp) {
+      // Only a drag, a key or a reset forces a write: the user's own choice,
+      // kept within the panel's fixed limits rather than this window's.
+      if (forcePersist) {
+        preferredCommittedRef.current = true;
+        preferredRef.current = clampPanelWidth(candidate, minWidth, maxWidth);
+        writeStoredWidth(storageKey, preferredRef.current);
+      }
+    } else if (persist && (changed || forcePersist)) {
+      writeStoredWidth(storageKey, nextWidth);
+    }
+    return nextWidth;
+  }, [applyLiveWidth, clampWidth, maxWidth, minWidth, persistClamp, storageKey, widthRef]);
+
+  // Fits the panel to the window again: as it is now, or the user's size
+  // (a drag under way keeps the size under the pointer).
+  const fitWidth = useCallback(() => {
+    if (persistClamp || dragRef.current) {
+      commitWidth(widthRef.current);
+      return;
+    }
+    // A stored size or a user commit keeps its value; without either, the
+    // default follows the space the panel has now.
+    if (!preferredCommittedRef.current && readStoredWidth(storageKey) === null) {
+      const nextDefault = getDefaultWidth?.() ?? defaultWidth;
+      preferredRef.current = clampPanelWidth(nextDefault, minWidth, maxWidth);
+      commitWidth(nextDefault);
+      return;
+    }
+    commitWidth(preferredRef.current);
+  }, [commitWidth, defaultWidth, getDefaultWidth, maxWidth, minWidth, persistClamp, storageKey, widthRef]);
+
+  const restoreBodyState = useCallback((drag: DragState) => {
+    document.body.style.cursor = drag.previousCursor;
+    document.body.style.userSelect = drag.previousUserSelect;
+  }, []);
+
+  const finishResize = useCallback((pointerId: number) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== pointerId) return;
+    dragRef.current = null;
+    restoreBodyState(drag);
+    setIsResizing(false);
+    // Kept apart from the size shown, the user's size changes only when the
+    // drag moved: a plain click would save what a short window clamped it to.
+    commitWidth(widthRef.current, { forcePersist: persistClamp || widthRef.current !== drag.startWidth });
+
+    try {
+      if (drag.target.hasPointerCapture(pointerId)) {
+        drag.target.releasePointerCapture(pointerId);
+      }
+    } catch {
+      // The browser may have already released capture after pointer cancellation.
+    }
+  }, [commitWidth, persistClamp, restoreBodyState, widthRef]);
+
+  const onPointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const activeDrag = dragRef.current;
+    if (activeDrag) finishResize(activeDrag.pointerId);
+
+    const target = event.currentTarget;
+    target.focus({ preventScroll: true });
+    target.setPointerCapture(event.pointerId);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startPosition: axis === "vertical" ? event.clientY : event.clientX,
+      startWidth: widthRef.current,
+      target,
+      previousCursor: document.body.style.cursor,
+      previousUserSelect: document.body.style.userSelect,
+    };
+    document.body.style.cursor = axis === "vertical" ? "row-resize" : "col-resize";
+    document.body.style.userSelect = "none";
+    setIsResizing(true);
+  }, [axis, finishResize, widthRef]);
+
+  const onPointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.pointerType === "mouse" && event.buttons === 0) {
+      finishResize(event.pointerId);
+      return;
+    }
+    event.preventDefault();
+
+    const direction = growthDirection === "right" || growthDirection === "down" ? 1 : -1;
+    const position = axis === "vertical" ? event.clientY : event.clientX;
+    const nextWidth = clampWidth(drag.startWidth + ((position - drag.startPosition) * direction));
+    applyLiveWidth(nextWidth);
+    event.currentTarget.setAttribute("aria-valuenow", String(nextWidth));
+    event.currentTarget.setAttribute("aria-valuetext", `${nextWidth} px`);
+  }, [applyLiveWidth, axis, clampWidth, finishResize, growthDirection]);
+
+  const onPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    finishResize(event.pointerId);
+  }, [finishResize]);
+
+  const onPointerCancel = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    finishResize(event.pointerId);
+  }, [finishResize]);
+
+  const onLostPointerCapture = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    finishResize(event.pointerId);
+  }, [finishResize]);
+
+  const resetWidth = useCallback(() => {
+    const nextDefault = getDefaultWidth?.() ?? defaultWidth;
+    commitWidth(nextDefault, { forcePersist: true });
+  }, [commitWidth, defaultWidth, getDefaultWidth]);
+
+  const reclampWidth = fitWidth;
+
+  const onKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 32 : 12;
+    const positiveDirection = growthDirection === "right" || growthDirection === "down";
+    const positiveKey = axis === "vertical" ? "ArrowDown" : "ArrowRight";
+    const negativeKey = axis === "vertical" ? "ArrowUp" : "ArrowLeft";
+    const growKey = positiveDirection ? positiveKey : negativeKey;
+    const shrinkKey = positiveDirection ? negativeKey : positiveKey;
+    // Growing never lowers the user's size: while the window caps the panel
+    // below it, grow and End start from that size, not the one shown.
+    const growFrom = persistClamp ? widthRef.current : Math.max(widthRef.current, preferredRef.current);
+
+    if (event.key === growKey) {
+      event.preventDefault();
+      commitWidth(growFrom + step, { forcePersist: true });
+    } else if (event.key === shrinkKey) {
+      event.preventDefault();
+      commitWidth(widthRef.current - step, { forcePersist: true });
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      commitWidth(minWidth, { forcePersist: true });
+    } else if (event.key === "End") {
+      event.preventDefault();
+      commitWidth(Math.max(growFrom, effectiveMaxWidth()), { forcePersist: true });
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      resetWidth();
+    }
+  }, [axis, commitWidth, effectiveMaxWidth, growthDirection, minWidth, persistClamp, resetWidth, widthRef]);
+
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+
+    const storedWidth = readStoredWidth(storageKey);
+    const candidate = storedWidth ?? getDefaultWidth?.() ?? defaultWidth;
+    if (!persistClamp) {
+      preferredCommittedRef.current = storedWidth !== null;
+      preferredRef.current = clampPanelWidth(candidate, minWidth, maxWidth);
+      commitWidth(preferredRef.current, { persist: false });
+      return;
+    }
+    const restoredWidth = commitWidth(candidate, { persist: false });
+    if (storedWidth !== null && storedWidth !== restoredWidth) {
+      writeStoredWidth(storageKey, restoredWidth);
+    }
+  }, [commitWidth, defaultWidth, getDefaultWidth, maxWidth, minWidth, persistClamp, storageKey]);
+
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    fitWidth();
+
+    const onResize = () => {
+      fitWidth();
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [fitWidth]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const cancelResize = () => {
+      const drag = dragRef.current;
+      if (drag) finishResize(drag.pointerId);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") cancelResize();
+    };
+    window.addEventListener("blur", cancelResize);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("blur", cancelResize);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [finishResize, isResizing]);
+
+  useEffect(() => {
+    return () => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      dragRef.current = null;
+      restoreBodyState(drag);
+    };
+  }, [restoreBodyState]);
+
+  return {
+    isResizing,
+    panelRef,
+    reclampWidth,
+    resetWidth,
+    separatorProps: {
+      "aria-label": ariaLabel,
+      "aria-orientation": axis === "vertical" ? "horizontal" as const : "vertical" as const,
+      "aria-valuemax": mounted ? effectiveMaxWidth() : maxWidth,
+      "aria-valuemin": minWidth,
+      "aria-valuenow": width,
+      "aria-valuetext": `${width} px`,
+      onDoubleClick: resetWidth,
+      onKeyDown,
+      onLostPointerCapture,
+      onPointerCancel,
+      onPointerDown,
+      onPointerMove,
+      onPointerUp,
+      role: "separator" as const,
+      tabIndex: 0,
+    },
+    width,
+  };
+}

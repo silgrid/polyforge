@@ -35,6 +35,7 @@ func autoClaimWithClones(t *testing.T, names []string, cloned bool) (string, []s
 	bundle := "demo-bundle"
 	td.hub.queues = append(td.hub.queues, api.WorkItem{
 		ID: wi, ProjectName: "proj", Priority: api.PriorityNormal, BundleName: &bundle,
+		Content: strp(w461AcceptanceContent),
 	})
 	td.hub.mu.Unlock()
 	if cloned {

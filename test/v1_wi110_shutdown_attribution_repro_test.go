@@ -79,9 +79,8 @@ func TestV1WI110ShutdownAttributionRepro(t *testing.T) {
 	bootWithLiveWI := func(label string) (*v1Daemon, string) {
 		t.Helper()
 		wi := inst.newWI(t, label, []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true, "ms": 60000},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 60000},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 		d := newV1Daemon(t, inst)
 		d.start()

@@ -1,7 +1,8 @@
 // Package liveconfig holds the daemon's reloadable settings behind one
 // mutex so a running daemon can adopt a validated cli.toml change without
 // a restart. It is deliberately tiny: a leaf that imports
-// only mapping, the workspace value types and stdlib, read by the daemon,
+// only mapping, the workspace value types, the agent-language vocabulary
+// (stepcall) and stdlib, read by the daemon,
 // the runtime and the step spawners.
 //
 // Every getter is safe for concurrent use; the daemon writes the whole
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
@@ -30,6 +32,8 @@ type State struct {
 	//. Both are swapped whole, never mutated in place.
 	summarize    *workspace.SummarizeSettings
 	memoryPolicy map[string]map[string]workspace.PolicyEntry
+	// agentLanguage is [daemon] agent_language ("" = unset: "en").
+	agentLanguage string
 }
 
 // New builds a state from the startup values. A nil mapping is treated as
@@ -198,4 +202,29 @@ func cloneList(l []string) []string {
 		return nil
 	}
 	return append([]string{}, l...)
+}
+
+// AgentLanguage answers the live [daemon] agent_language (unset = the
+// default, "en").
+func (s *State) AgentLanguage() string {
+	if s == nil {
+		return stepcall.DefaultLanguage
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.agentLanguage == "" {
+		return stepcall.DefaultLanguage
+	}
+	return s.agentLanguage
+}
+
+// SetAgentLanguage swaps the live [daemon] agent_language ("" = unset:
+// the default applies).
+func (s *State) SetAgentLanguage(v string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.agentLanguage = v
+	s.mu.Unlock()
 }

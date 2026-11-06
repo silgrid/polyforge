@@ -76,24 +76,24 @@ projects = ["polyforge", "acme-ops"]
 		t.Fatalf("toml mapping projects = %v", got)
 	}
 
-	// Level 2: env beats toml.
+	// Level 2: PF_SERVER / PF_API_KEY are no longer a configuration
+	// source (a Cell's connection lives in its file; the CLI refuses them
+	// on every verb): the loaded config ignores them, the file stands.
 	t.Setenv("PF_SERVER", "http://env:8420")
 	t.Setenv("PF_API_KEY", "k_env")
 	cfg, err = LoadConfig(path)
 	if err != nil {
 		t.Fatalf("LoadConfig(env): %v", err)
 	}
-	if cfg.Server != "http://env:8420" || cfg.APIKey != "k_env" {
-		t.Errorf("env must beat toml: got %+v", cfg)
+	if cfg.Server != "http://aihub.internal:8420" || cfg.APIKey != "k_toml" {
+		t.Errorf("the connection must stay the file's: got %+v", cfg)
 	}
-	// Untouched keys still come from the file.
 	if cfg.DaemonSocket != "/tmp/pfd.sock" {
 		t.Errorf("non-overridden keys must stay from toml: got %+v", cfg)
 	}
 
-	// Level 3: flag beats env — applied by Run; verified end-to-end in
-	// TestFlagBeatsEnvEndToEnd (verbs_test.go) since only a verb call
-	// proves the resolved value reached the wire.
+	// Level 3: the --server/--api-key flags are refused by Run (pinned in
+	// TestConnectionOverridesAreRefused, verbs_test.go).
 }
 
 // TestConfigMappingTildeAndAbsoluteKeys: the mapping loads with ~
@@ -409,5 +409,51 @@ func TestConfigAPIKeyParseErrorsRedacted(t *testing.T) {
 		if !strings.Contains(err.Error(), "redacted") {
 			t.Fatalf("the parse error must say the value is redacted: %v", err)
 		}
+	}
+}
+
+// TestLoadHostSetIsolatesNamedCells: the Host file is the default Cell; a
+// named Cell file carrying a Host-only key, an incomplete connection or a
+// conflict is isolated (invalid, visibly) while the others load.
+func TestLoadHostSetIsolatesNamedCells(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("cli.toml", "server = \"http://hub-d:1\"\napi_key = \"kd\"\ndaemon_socket = \"/tmp/x.sock\"\n\n[daemon]\nmax_concurrent_jobs = 3\n")
+	write("cli-alpha.toml", "server = \"http://hub-a:1\"\napi_key = \"ka\"\n\n[daemon]\ncell_max_concurrent_jobs = 1\n\n[model]\nsource = \"shared-default\"\n")
+	write("cli-hostkey.toml", "server = \"http://hub-h:1\"\napi_key = \"kh\"\n\n[daemon]\nmax_concurrent_jobs = 9\n")
+	write("cli-nokey.toml", "server = \"http://hub-n:1\"\n")
+	write("cli-same.toml", "server = \"http://HUB-D:1/\"\napi_key = \"ks\"\n")
+	write("cli-default.toml", "server = \"http://hub-x:1\"\napi_key = \"kx\"\n")
+	set, err := LoadHostSet(filepath.Join(dir, "cli.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, c := range set.Cells {
+		got[c.Profile] = c.Invalid
+	}
+	if got["alpha"] != "" {
+		t.Fatalf("alpha must load: %q", got["alpha"])
+	}
+	alpha, _, _ := set.Cell("alpha")
+	if alpha.Daemon.CellMaxConcurrentJobs != 1 || alpha.ModelSource != "shared-default" || alpha.DaemonSocket != "/tmp/x.sock" || alpha.Daemon.MaxConcurrentJobs != 3 {
+		t.Fatalf("alpha's config: %+v", alpha)
+	}
+	for name, want := range map[string]string{"hostkey": "Host-only", "nokey": "api_key", "same": "default Cell", "default": "reserved"} {
+		if !strings.Contains(got[name], want) {
+			t.Fatalf("Cell %s: invalid reason %q, want it to mention %q", name, got[name], want)
+		}
+	}
+	if !strings.Contains(got["hostkey"], "cli-hostkey.toml") || !strings.Contains(got["hostkey"], "line 5") {
+		t.Fatalf("the Host-only refusal must name the file and line: %q", got["hostkey"])
+	}
+	write("cli.toml", "server = \n")
+	if _, err := LoadHostSet(filepath.Join(dir, "cli.toml")); err == nil || !strings.Contains(err.Error(), "cli.toml") {
+		t.Fatalf("an invalid Host file must be the loader's error naming cli.toml: %v", err)
 	}
 }

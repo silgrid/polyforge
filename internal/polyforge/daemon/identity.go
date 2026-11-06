@@ -7,33 +7,26 @@ package daemon
 //     records it; a later flag value that disagrees refuses to start
 //     rather than silently switching identity (aihub refuses to register
 //     a new id from a daemon key, so the string must never drift).
-//   - chat ids: <data-dir>/chats.json maps (harness, harness-session) to
-//     a chat id so a resumed conversation keeps the same chat. A chat id
-//     is a notification label, never a credential.
+//   - the machine role request (POST /machine/role, `pf ops role`): the
+//     operator's interactive / runner move the heartbeat negotiates — the
+//     role that used to ride `pf chat init` before the chat identity was
+//     retired.
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
-	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
 
-const (
-	daemonIDFile = "daemon-id"
-	chatsFile    = "chats.json"
-)
+const daemonIDFile = "daemon-id"
 
 // ResolveDaemonID returns the daemon id for dataDir. requested is the
 // already-resolved flag/env/default value; explicit reports whether the
@@ -61,149 +54,54 @@ func ResolveDaemonID(dataDir, requested string, explicit bool) (string, error) {
 	return requested, nil
 }
 
-// chatStore persists the (harness, harness-session) -> chat id mapping.
-type chatStore struct {
-	mu   sync.Mutex
-	path string
-}
-
-type chatsDoc struct {
-	Version int               `json:"version"`
-	Chats   map[string]string `json:"chats"` // "<harness>:<session>" -> chat id
-}
-
-// chatRecord is the POST /chat/init answer (the CLI's wire type).
-type chatRecord = cli.ChatRecord
-
-func newChatID() (string, error) {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return "chat_" + hex.EncodeToString(b), nil
-}
-
-// Init returns the chat id for the harness session, minting it on first use.
-func (s *chatStore) Init(harness, session string) (chatRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	doc := chatsDoc{Version: 1, Chats: map[string]string{}}
-	raw, err := os.ReadFile(s.path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			return chatRecord{}, fmt.Errorf("%s unparsable: %w", chatsFile, err)
-		}
-		if doc.Chats == nil {
-			doc.Chats = map[string]string{}
-		}
-	case !os.IsNotExist(err):
-		return chatRecord{}, err
-	}
-	key := harness + ":" + session
-	rec := chatRecord{Harness: harness, HarnessSession: session}
-	if id, ok := doc.Chats[key]; ok {
-		rec.ChatID = id
-		return rec, nil
-	}
-	id, err := newChatID()
-	if err != nil {
-		return chatRecord{}, err
-	}
-	doc.Chats[key] = id
-	blob, err := json.MarshalIndent(&doc, "", "  ")
-	if err != nil {
-		return chatRecord{}, err
-	}
-	if err := atomicfile.Write(s.path, blob, 0o600); err != nil {
-		return chatRecord{}, err
-	}
-	rec.ChatID, rec.Created = id, true
-	return rec, nil
-}
-
-// chatInitRoute serves POST /chat/init
-// {"harness","harness_session","workspace"}.
-func (d *Daemon) chatInitRoute(w http.ResponseWriter, r *http.Request) {
+// machineRoleRoute serves POST /machine/role {"role","force"}: the
+// operator's explicit role move — interactive asks the heartbeat for the
+// interactive role, force supersedes the machine that holds it. The
+// heartbeat negotiates it; the answer is the request and whether it was
+// applied (if_unset — the session-start adapters' request — leaves an
+// operator's explicit choice alone).
+// Reachability: the UDS face behind the write guard (a step or task
+// process tree is refused DAEMON-403); it reaches aihub only through the
+// next heartbeat.
+func (d *Daemon) machineRoleRoute(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Harness        string `json:"harness"`
-		HarnessSession string `json:"harness_session"`
-		Workspace      string `json:"workspace"`
-		Force          bool   `json:"force"`
+		Role    string `json:"role"`
+		Force   bool   `json:"force"`
+		IfUnset bool   `json:"if_unset"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	if body.Harness != "claude" && body.Harness != "pi" {
-		writeErr(w, api.ErrDaemonBadInput, "harness must be claude or pi")
+	if body.Role != api.MachineRoleInteractive && body.Role != api.MachineRoleRunner {
+		writeErr(w, api.ErrDaemonBadInput, "role must be interactive or runner")
 		return
 	}
-	if strings.TrimSpace(body.HarnessSession) == "" {
-		writeErr(w, api.ErrDaemonBadInput, "harness_session is required")
+	if body.Force && body.Role != api.MachineRoleInteractive {
+		writeErr(w, api.ErrDaemonBadInput, "--force takes the interactive role over; it does not apply to runner")
 		return
 	}
-	// the chat's workspace tag — the root the CLI resolved the
-	// session cwd to. Validated against the daemon's own [workspace]
-	// mapping: a config drift between the CLI's and the daemon's
-	// cli.toml surfaces as a DAEMON-400 refusal, never a silently useless
-	// tag. "" = unmapped: the chat is recorded untagged (neither
-	// adopt-eligible nor in a scoped broadcast). Absent field = untagged
-	// too — no backfill for chats minted before the tag existed; their
-	// sessions record one on the next init (a re-init refreshes).
-	if body.Workspace != "" && !workspaceMapped(d.plan(), body.Workspace) {
-		writeErr(w, api.ErrDaemonBadInput,
-			fmt.Sprintf("workspace %q is not in the [workspace] mapping of this daemon — the chat cannot be tagged with it (fix the cli.toml drift between the CLI and the daemon; `pf doctor` checks the mapping)", body.Workspace))
+	if body.Force && body.IfUnset {
+		writeErr(w, api.ErrDaemonBadInput, "--if-unset never takes the role over: drop --force or --if-unset")
 		return
 	}
-	rec, err := d.chats.Init(body.Harness, body.HarnessSession)
+	applied, err := d.requestDesiredRole(body.Role, body.Force, body.IfUnset)
 	if err != nil {
 		writeErr(w, api.ErrDaemonInternal, err.Error())
 		return
 	}
-	// the tag is recorded beside the identity: the chat exists in the
-	// tag store even untagged, and the refresh overwrites any earlier
-	// cwd's tag. chats.json — the (harness, session)→id identity map, the
-	// pi-web readback contract — keeps its exact shape.
-	if err := d.subs.TagWorkspace(rec.ChatID, body.Workspace); err != nil {
-		writeErr(w, api.ErrDaemonInternal, err.Error())
-		return
-	}
-	// chat init is the operator's explicit interactive move: the heartbeat
-	// negotiates the role (force supersedes the current holder).
-	if err := d.requestDesiredRole(api.MachineRoleInteractive, body.Force); err != nil {
-		writeErr(w, api.ErrDaemonInternal, err.Error())
-		return
-	}
-	rec.Force = body.Force
-	writeJSON(w, http.StatusOK, rec)
-}
-
-// workspaceMapped reports whether root is one of the plan's mapped
-// workspace roots (the daemon's own cli.toml [workspace] mapping).
-func workspaceMapped(p *mapping.Plan, root string) bool {
-	if p == nil {
-		return false
-	}
-	for _, ws := range p.Workspaces() {
-		if ws == root {
-			return true
-		}
-	}
-	return false
+	writeJSON(w, http.StatusOK, map[string]any{"role": body.Role, "force": body.Force, "applied": applied, "profile": d.profile()})
 }
 
 // reqOrigin is the optional "origin" a submit-family body carries: the
-// caller's chat id (PF_CHAT_ID) and owner (PF_USER_ID / config user) —
-// the CLI's wire type.
+// caller's owner (PF_USER_ID / config user) — the CLI's wire type.
 type reqOrigin cli.SubmitOrigin
 
 // origin maps the request to the recorded origin: every interactive
-// submit is a chat origin — the ChatID labels the harness chat when
-// one is present, and an empty ChatID marks a chat-less manual submit.
-// A nil receiver is the plain chat-less shape.
+// submit is an origin of kind chat (an interactive submit; the kind's name
+// predates). A nil receiver carries no owner.
 func (o *reqOrigin) origin() runtime.Origin {
 	if o == nil {
 		return runtime.Origin{Kind: runtime.OriginChat}
 	}
-	return runtime.Origin{Kind: runtime.OriginChat, ChatID: o.ChatID, Owner: o.Owner}
+	return runtime.Origin{Kind: runtime.OriginChat, Owner: o.Owner}
 }

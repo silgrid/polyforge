@@ -15,15 +15,12 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
-	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
-	"github.com/silgrid/polyforge/internal/polyforge/driver"
 	"github.com/silgrid/polyforge/internal/polyforge/liveconfig"
 	"github.com/silgrid/polyforge/internal/polyforge/modelhealth"
 	"github.com/silgrid/polyforge/internal/polyforge/observe"
@@ -32,6 +29,7 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
+	"github.com/silgrid/polyforge/internal/version"
 )
 
 // The wire answer shapes the CLI decodes are the CLI's own types: one
@@ -110,120 +108,9 @@ func (d *Daemon) handler() http.Handler {
 // routes is the bare route table.
 func (d *Daemon) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	// answer is delivered to the WI's live driver; with no live driver it
-	// refuses. A step process never gets here (refuseStepOrigin).
-	mux.HandleFunc("POST /jobs/{wi}/answer", func(w http.ResponseWriter, r *http.Request) {
-		// Canonicalize once (slug → id via the runtime aliases, else aihub)
-		// so the handle lookup, the pending-question lookup and the
-		// liveness check all address the same job (polyforge#249).
-		wi := d.canonWI(r.PathValue("wi"))
-		if h := d.rt.DriverAnswerHandle(wi); h != nil {
-			// driver path: decode the same wire shape, deliver to bridge
-			var payload struct {
-				QuestionID string `json:"question_id"`
-				AnswerText string `json:"answer_text"`
-				AnsweredBy string `json:"answered_by"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				writeErr(w, api.ErrDaemonBadInput, "decode: "+err.Error())
-				return
-			}
-			if payload.AnsweredBy == "" {
-				payload.AnsweredBy = r.Header.Get("X-PF-User")
-			}
-			// No question named: the daemon resolves the pending one from
-			// the capsule's execution.json — accepted ONLY when exactly one
-			// question is pending (audit B10). Zero or several is a typed
-			// refusal pointing at --question: a guess across several open
-			// questions would deliver the answer to an arbitrary one (the
-			// steps map's iteration order) and is never honest.
-			if payload.QuestionID == "" {
-				ids := d.pendingQuestionIDs(wi)
-				switch len(ids) {
-				case 0:
-					writeErr(w, api.ErrDaemonBadInput, "no pending question found for this work item")
-					return
-				case 1:
-					payload.QuestionID = ids[0]
-				default:
-					writeErr(w, api.ErrDaemonBadInput,
-						fmt.Sprintf("this work item has %d pending questions (%s) — answer a specific one with --question",
-							len(ids), strings.Join(ids, ", ")))
-					return
-				}
-			}
-			// The reserved cancel answer ends the work item: the hub's
-			// cancel gate decides it (probed with the daemon's own
-			// credential, never the self-asserted answered_by) before
-			// anything is written; a refusal leaves the question pending.
-			if driver.IsCancelAnswer(payload.AnswerText) {
-				if err := d.authorizeCancelAnswer(wi, payload.QuestionID, payload.AnswerText); err != nil {
-					writeErrOf(w, err)
-					return
-				}
-			}
-			if err := h.Answer(payload.QuestionID, payload.AnswerText, payload.AnsweredBy); err != nil {
-				writeErr(w, api.ErrDaemonConflict, err.Error())
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"status": "accepted", "question_id": payload.QuestionID})
-			return
-		}
-		if _, live := d.rt.Info(wi); !live {
-			writeErr(w, api.ErrDaemonNotFound, "work item is not running on this daemon")
-			return
-		}
-		writeErr(w, api.ErrDaemonConflict,
-			"no live driver for work item "+wi+": the workflow is between derivations — retry after the daemon re-derives it")
-	})
-	// revise-binding is the owner's correction of done e2e-author binding
-	// commands. The route sits behind
-	// refuseStepOrigin: a step (or task) process tree is refused
-	// DAEMON-403 before this handler, so only a human session reaches the
-	// driver's revision transition. One request carries the whole batch of
-	// {index, command} corrections, applied in one step_revision write. A
-	// running driver revises through its live handle; a retained paused
-	// record revises through a record-only driver and the runtime commits
-	// the corrected record to the chain.
-	mux.HandleFunc("POST /jobs/{wi}/revise-binding", func(w http.ResponseWriter, r *http.Request) {
-		wi := d.canonWI(r.PathValue("wi"))
-		var payload cli.ReviseBindingPayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			writeErr(w, api.ErrDaemonBadInput, "decode: "+err.Error())
-			return
-		}
-		if payload.By == "" {
-			payload.By = r.Header.Get("X-PF-User")
-		}
-		if payload.StepID == "" {
-			writeErr(w, api.ErrDaemonBadInput, "revise-binding: step_id is required")
-			return
-		}
-		if len(payload.Corrections) == 0 {
-			writeErr(w, api.ErrDaemonBadInput, "revise-binding: corrections must name at least one binding")
-			return
-		}
-		corrections := make([]capsule.BindingCorrection, 0, len(payload.Corrections))
-		for _, c := range payload.Corrections {
-			if c.Index < 0 {
-				writeErr(w, api.ErrDaemonBadInput, "revise-binding: binding index must be zero or greater")
-				return
-			}
-			if strings.TrimSpace(c.Command) == "" {
-				writeErr(w, api.ErrDaemonBadInput, "revise-binding: command is required for every correction")
-				return
-			}
-			corrections = append(corrections, capsule.BindingCorrection{Index: c.Index, Command: c.Command})
-		}
-		if err := d.rt.ReviseBinding(d.runCtx, wi, payload.StepID, corrections, payload.By, payload.Reason); err != nil {
-			writeErrOf(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status": "revised", "work_item_id": wi, "step": payload.StepID, "corrections": len(corrections),
-		})
-	})
+	// answer: the owner's words to the WI's live step, or the wake of its
+	// park (answer.go). A step process never gets here (refuseStepOrigin).
+	mux.HandleFunc("POST /jobs/{wi}/answer", d.answerRoute)
 	mux.HandleFunc("POST /jobs/{wi}/claim", d.submitRoute())
 	// wi_seWTgHeKtaa8 (v2-converge §7): the live-holder half of the
 	// operator's `pf resume` on a PAUSED work item — the CLI has already
@@ -234,6 +121,7 @@ func (d *Daemon) routes() *http.ServeMux {
 	mux.HandleFunc("POST /jobs/{wi}/pause", d.pauseRoute)
 	mux.HandleFunc("POST /jobs/{wi}/wrap", d.wrapRoute)
 	mux.HandleFunc("GET /status", d.statusRoute)
+	mux.HandleFunc("GET /profiles", d.profilesRoute)
 	// GET /models: the read-only model+effort × step
 	// profile beside GET /status. The method pattern makes every non-GET
 	// method on this path a 405; there is no write face, no config, no
@@ -247,7 +135,10 @@ func (d *Daemon) routes() *http.ServeMux {
 	mux.HandleFunc("POST /config/reload", d.configReloadRoute)
 	mux.HandleFunc("POST /config/check", d.configCheckRoute)
 	mux.HandleFunc("POST /shutdown", d.shutdownRoute)
-	mux.HandleFunc("POST /chat/init", d.chatInitRoute)
+	// the operator's machine-role move (identity.go): behind
+	// refuseStepOrigin like every POST here, so a step or task process
+	// tree is refused DAEMON-403.
+	mux.HandleFunc("POST /machine/role", d.machineRoleRoute)
 	// The explicit, read-only message analyzer (; one task in
 	// the task lane since body {caller_id}, it blocks until
 	// the task is terminal and answers the structured result). A POST
@@ -261,31 +152,17 @@ func (d *Daemon) routes() *http.ServeMux {
 	// reach as analyze: local UDS only, behind refuseStepOrigin (a step or
 	// task process is refused DAEMON-403 before this handler).
 	mux.HandleFunc("POST /messages/{id}/prompt", d.promptRoute)
-	// pf watch: the per-WI snapshot and the daemon-held chat subscriptions.
+	// pf watch: the per-WI snapshot and the machine's decision feed
+	// (decisions.go,). GET /decisions is a read any local
+	// peer may make; the dismiss POST sits behind refuseStepOrigin, so a
+	// step or task process tree is refused DAEMON-403.
 	mux.HandleFunc("GET /jobs/{wi}/watch", d.watchSnapshotRoute)
 	mux.HandleFunc("GET /jobs/{wi}/artifact", d.artifactRoute)
-	mux.HandleFunc("GET /chats/{id}/subscriptions", d.subscriptionsRoute)
-	mux.HandleFunc("POST /chats/{id}/subscribe", d.subscribeRoute(true))
-	mux.HandleFunc("POST /chats/{id}/unsubscribe", d.subscribeRoute(false))
-	// `pf watch adopt <wi>`: an eligible same-workspace chat
-	// takes over the WI's wake-target role. A POST outside the step-write
-	// allowlist: the whole UDS face sits behind refuseStepOrigin, so a
-	// step process tree is refused DAEMON-403 by construction — adopt
-	// runs only on an explicit human request, never automatic.
-	mux.HandleFunc("POST /chats/{id}/adopt", d.adoptRoute)
-	mux.HandleFunc("POST /chats/{id}/ack", d.ackRoute)
-	mux.HandleFunc("POST /chats/{id}/subscribe-owned", d.subscribeOwnedRoute)
-	// the step agent's memory face (stepmem.go), scoped to the calling
-	// step's own work item and project
-	mux.HandleFunc("GET /step/memories/search", d.stepSearchRoute)
-	mux.HandleFunc("GET /step/memories/{id}", d.stepMemoryRoute)
-	mux.HandleFunc("POST "+stepMemoriesPath, d.stepRememberRoute)
-	// the step agent's result delivery (stepresult.go), stamped with
-	// and landed at the calling step's own dispatch identity
-	mux.HandleFunc("POST "+stepResultPath, d.stepResultRoute)
-	// the deliver step's bar-run record (stepbarrun.go,):
-	// the calling work item's live deliver step only
-	mux.HandleFunc("POST "+stepBarRunPath, d.stepBarRunRoute)
+	mux.HandleFunc("GET /decisions", d.decisionsRoute)
+	mux.HandleFunc("POST /decisions/dismiss", d.decisionsDismissRoute)
+	// `pf step`, the step's one entry point (stepcall.go, workflow
+	// contract 4): every call recorded on the capsule's call ledger first
+	mux.HandleFunc("POST "+stepCallPath, d.stepCallRoute)
 	// the one-shot task agent (tasks.go,): the spawn/cancel
 	// POSTs sit behind refuseStepOrigin, so a step OR task process tree is
 	// refused DAEMON-403; the two /task/memories GETs serve a task agent
@@ -294,8 +171,6 @@ func (d *Daemon) routes() *http.ServeMux {
 	mux.HandleFunc("GET /task/list", d.taskListRoute)
 	mux.HandleFunc("GET /task/show/{id}", d.taskShowRoute)
 	mux.HandleFunc("POST /task/cancel/{id}", d.taskCancelRoute)
-	mux.HandleFunc("GET /chats/{id}/task-notices", d.taskNoticesRoute)
-	mux.HandleFunc("POST /chats/{id}/task-notices/ack", d.taskNoticesAckRoute)
 	mux.HandleFunc("GET "+taskMemSearchPath, d.taskSearchRoute)
 	mux.HandleFunc("GET "+taskMemPrefix+"{id}", d.taskMemoryRoute)
 	return mux
@@ -323,9 +198,14 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 // claim: the one start route — `pf submit` (queued) and `pf resume` of a
 // work item parked blocked (started now).
 
-// submitRoute serves POST /jobs/{wi}/claim. A submit is accepted once
-// its entry is on disk; the dispatcher claims it within one tick,
-// priority-desc against the concurrency cap.
+// submitRoute serves POST /jobs/{wi}/claim. A submit's entry lands on
+// disk, then the dispatcher is run at once (priority-desc against the
+// concurrency cap, as on its tick): an entry it takes is answered with
+// its claim's verdict state "claimed" once aihub
+// answered the claim (never after the capsule clone), or aihub's own
+// typed refusal with nothing left queued; an entry left waiting for a
+// slot is answered state "queued" with the reason, and a later refusal
+// is the submit_rejected event.
 //
 // "resume": true is the claim half of `pf resume` on a workflow parked
 // blocked (polyforge#116). The CLI has already landed the hub's
@@ -359,6 +239,14 @@ func (d *Daemon) submitRoute() http.HandlerFunc {
 		}
 		if err := d.modes.AdmitSubmit(); err != nil {
 			writeAdmissionErr(w, err)
+			return
+		}
+		if err := d.drainRefusal(); err != nil && !body.Resume {
+			writeErrOf(w, err)
+			return
+		}
+		if err := d.execDisabledRefusal(); err != nil {
+			writeErrOf(w, err)
 			return
 		}
 		// Canonical id (F2): the queue, the dispatcher and the runtime
@@ -419,7 +307,7 @@ func (d *Daemon) submitRoute() http.HandlerFunc {
 			// (every candidate `<harness>:<model>`) — refused here so
 			// `pf submit` sees it directly
 			if probe.BundleName != nil {
-				if berr := d.rt.CheckBundle(canonical, *probe.BundleName); berr != nil {
+				if berr := d.rt.CheckBundle(canonical, probe.ProjectName, *probe.BundleName); berr != nil {
 					writeErrOf(w, berr)
 					return
 				}
@@ -434,7 +322,6 @@ func (d *Daemon) submitRoute() http.HandlerFunc {
 		if probe != nil {
 			placement = d.placementFor(probe)
 		}
-		cursor := d.lastSeq(canonical)
 		if body.Resume {
 			// The daemon's run context, NOT the HTTP request's: the claim's
 			// ctx is the driver's parent (bridge.Start derives from it) — a
@@ -443,7 +330,6 @@ func (d *Daemon) submitRoute() http.HandlerFunc {
 			origin := body.Origin.origin()
 			err := d.rt.Start(d.runCtx, canonical, runtime.StartOpts{Origin: &origin})
 			if err == nil {
-				d.autoSubscribe(body.Origin, canonical, cursor)
 				writeJSON(w, http.StatusOK, resumeBlockedResponse{Resumed: true, WorkItemID: canonical})
 				return
 			}
@@ -460,25 +346,86 @@ func (d *Daemon) submitRoute() http.HandlerFunc {
 			fmt.Fprintf(os.Stderr, "daemon: resume %s deferred, queued for the claim: %v\n", canonical, err)
 		}
 		// `accepted` (or a deferred resume) is answered only once the
-		// entry is on disk (v2 §5).
-		if err := d.q.Enqueue(qEntry{WorkItemID: canonical, Priority: body.Priority, Models: body.Models, Origin: body.Origin.origin()}); err != nil {
+		// entry is on disk (v2 §5). A new submit re-checks the drain under
+		// drainGate together with its enqueue: a rotation that became
+		// pending during the checks above refuses it, or the switch sees
+		// the admitting reservation (then the entry) and waits. The
+		// persist runs outside the gate.
+		// The submit's waiter is armed before its entry can be taken.
+		var sw *submitWait
+		if !body.Resume {
+			if sw = d.armSubmitWait(canonical); sw == nil {
+				writeErr(w, api.ErrDaemonConflict, "work item is already queued on this daemon")
+				return
+			}
+		}
+		d.drainGate.Lock()
+		if !body.Resume {
+			if err := d.drainRefusal(); err != nil {
+				d.drainGate.Unlock()
+				d.dropSubmitWait(canonical, sw)
+				writeErrOf(w, err)
+				return
+			}
+		}
+		d.admitting.Add(1)
+		d.drainGate.Unlock()
+		err := d.q.Enqueue(qEntry{WorkItemID: canonical, Priority: body.Priority, Models: body.Models, Origin: body.Origin.origin()})
+		d.admitting.Add(-1)
+		if err != nil {
+			d.dropSubmitWait(canonical, sw)
 			writeErr(w, api.ErrDaemonInternal, "submit queue could not be persisted: "+err.Error())
 			return
 		}
-		// pf watch: the submitting chat is subscribed (subscription =
-		// adoption); events from here on are its to consume.
-		d.autoSubscribe(body.Origin, canonical, cursor)
 		if body.Resume {
 			writeJSON(w, http.StatusOK, resumeBlockedResponse{Resumed: true, WorkItemID: canonical, Deferred: true})
 			return
 		}
-		ans := submitResponse{Accepted: true, WorkItemID: canonical}
-		if placement != nil {
-			ans.MachineID, ans.CapsulePath = placement.MachineID, placement.CapsulePath
-			ans.MissingRepos = placement.MissingRepos
+		d.dispatch()
+		if d.q.IsPending(canonical) && d.dropSubmitWait(canonical, sw) {
+			writeJSON(w, http.StatusOK, queuedSubmit(canonical, placement, "waiting for a free execution slot"))
+			return
 		}
-		writeJSON(w, http.StatusOK, ans)
+		var outcome error
+		select {
+		case outcome = <-sw.ch:
+		case <-r.Context().Done():
+			// a later refusal is the submit_rejected event
+			d.dropSubmitWait(canonical, sw)
+			sw.abandon()
+			return
+		}
+		var ae *api.Error
+		switch {
+		case outcome == nil:
+			ans := submitResponse{Accepted: true, WorkItemID: canonical, State: cli.SubmitStateClaimed}
+			if placement != nil {
+				ans.MachineID, ans.CapsulePath = placement.MachineID, placement.CapsulePath
+				ans.MissingRepos = placement.MissingRepos
+			}
+			writeJSON(w, http.StatusOK, ans)
+		case errors.As(outcome, &ae) && ae.Code == api.ErrDaemonHubUnavailable:
+			writeJSON(w, http.StatusOK, queuedSubmit(canonical, placement, "aihub could not be reached; the claim is retried with backoff"))
+		case runtime.IsClaimDeferred(outcome):
+			writeJSON(w, http.StatusOK, queuedSubmit(canonical, placement, "the daemon is shutting down; the claim replays at its next start"))
+		case errors.Is(outcome, runtime.ErrClaimClosed):
+			// a pf wrap/pause landed while this claim was materializing
+			writeErr(w, api.ErrDaemonConflict, outcome.Error())
+		default:
+			writeErrOf(w, outcome)
+		}
 	}
+}
+
+// queuedSubmit is the answer of a submit whose entry waits on the queue:
+// nothing is claimed, so no placement is stated; the missing-clone
+// warning still rides it.
+func queuedSubmit(wi string, placement *submitPlacement, reason string) submitResponse {
+	ans := submitResponse{Accepted: true, WorkItemID: wi, State: cli.SubmitStateQueued, QueuedReason: reason}
+	if placement != nil {
+		ans.MissingRepos = placement.MissingRepos
+	}
+	return ans
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +458,10 @@ func (d *Daemon) resumePausedRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := d.modes.AdmitSubmit(); err != nil {
 		writeAdmissionErr(w, err)
+		return
+	}
+	if err := d.execDisabledRefusal(); err != nil {
+		writeErrOf(w, err) // a resume continues a run: refused before any re-attach
 		return
 	}
 	canonical := d.canonWI(wi)
@@ -672,7 +623,9 @@ func (d *Daemon) statusJobs() ([]statusJob, int) {
 	// no queue slot — the ops face must not count it as running work.
 	running := 0
 	for _, ji := range d.rt.List() {
-		if ji.State != runtime.StatePaused {
+		// a queued daemon-run verification holds no slot (occupiedSlots),
+		// nor does a step waiting on the owner's reply to its `pf ask`
+		if ji.State != runtime.StatePaused && (d.verifyQ == nil || !d.verifyQ.queuedFor(ji.WorkItem)) && !ji.AwaitingOwner {
 			running++
 		}
 		sj := statusJob{
@@ -703,6 +656,9 @@ func (d *Daemon) statusJobs() ([]statusJob, int) {
 				sj.NeedsInput = true
 			}
 		}
+		if d.verifyQ != nil {
+			sj.VerifyQueue = d.verifyQ.statusFace(ji.WorkItem)
+		}
 		if act, ok := activity[ji.WorkItem]; ok && act.InDispatch {
 			sj.Candidate = act.Candidate
 			if !act.StepStartedAt.IsZero() {
@@ -717,6 +673,7 @@ func (d *Daemon) statusJobs() ([]statusJob, int) {
 				calls, secs := int64(act.WaitCalls), act.WaitSeconds
 				sj.WaitCalls, sj.WaitSeconds = &calls, &secs
 			}
+			sj.Context = act.Context
 		}
 		jobs = append(jobs, sj)
 	}
@@ -724,18 +681,25 @@ func (d *Daemon) statusJobs() ([]statusJob, int) {
 }
 
 func (d *Daemon) statusRoute(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, d.statusSnapshot(r.URL.Query().Get("harnesses") == "1"))
+}
+
+// statusSnapshot assembles this Cell's GET /status answer (the Host's
+// aggregate starts from the default Cell's).
+func (d *Daemon) statusSnapshot(withHarnesses bool) statusResponse {
 	// D6: the per-job needs_input projection, derived from the observe
 	// lane's monitors (keyed by the canonical id — the same key
 	// rt.List() reports). F15c rides the same loop: the per-job progress
 	// staleness for the LAST-PROGRESS column.
 	jobs, running := d.statusJobs()
 	var harnesses map[string]harnessStatus
-	if r.URL.Query().Get("harnesses") == "1" {
+	if withHarnesses {
 		harnesses = d.harnessStatuses()
 	}
-	writeJSON(w, http.StatusOK, statusResponse{
+	return statusResponse{
 		Harnesses:       harnesses,
 		MachineID:       d.cfg.MachineID,
+		Version:         version.Version,
 		DisplayName:     d.cfg.DisplayName,
 		Auto:            d.modes.Auto(),
 		Workspaces:      d.plan().Workspaces(),
@@ -744,6 +708,8 @@ func (d *Daemon) statusRoute(w http.ResponseWriter, r *http.Request) {
 		EnvWarnings:     d.cfg.EnvWarnings,
 		EnvNames:        supervisor.EnvNames(os.Environ()),
 		PiModelsEnvRefs: d.piModelsEnvRefs(),
+		CommandPath:     d.commandPathNow(),
+		StepPath:        d.stepPathNow(),
 		Jobs:            jobs,
 		Queue: queueStats{
 			Pending:       d.q.LenPending(),
@@ -751,14 +717,13 @@ func (d *Daemon) statusRoute(w http.ResponseWriter, r *http.Request) {
 			MaxConcurrent: d.q.MaxConcurrent(),
 			MaxConfigured: d.maxConfiguredSnapshot(),
 		},
-		ModelHealth: d.modelHealthSummary(),
-		Supervision: supervisionStatus(d.live),
-		Reload:      d.reloadStatusSnapshot(),
-		MachineFace: d.faceStatus(),
-		Tasks:       d.taskSummary(),
-		// additive: the schema features this daemon's loaders accept
-		Capabilities: cli.DaemonCapabilities,
-	})
+		ModelHealth:       d.modelHealthSummary(),
+		Supervision:       supervisionStatus(d.live),
+		Reload:            d.reloadStatusSnapshot(),
+		MachineFace:       d.faceStatus(),
+		Tasks:             d.taskSummary(),
+		ExecutionDisabled: d.executionDisabled(),
+	}
 }
 
 // configReloadRoute is POST /config/reload: re-read the daemon's own
@@ -858,42 +823,58 @@ func supervisionStatus(live *liveconfig.State) *cli.SupervisionStatus {
 // the cap lasts until the daemon restarts or a reload that changes
 // max_concurrent_jobs takes over (last action wins).
 func (d *Daemon) opsConfigRoute(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeErr(w, api.ErrDaemonBadInput, "read body: "+err.Error())
+		return
+	}
+	resp, err := d.applyOpsConfig(body)
+	if err != nil {
+		if errors.Is(err, errShuttingDown) {
+			writeAdmissionErr(w, err)
+			return
+		}
+		writeErrOf(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// applyOpsConfig applies one POST /ops/config body {"auto","max"} to this
+// Cell (the Host applies a profile-less one to every Cell).
+func (d *Daemon) applyOpsConfig(body []byte) (opsConfigResponse, error) {
 	var req struct {
 		Auto *bool `json:"auto"`
 		Max  *int  `json:"max"`
 	}
-	if !decodeBody(w, r, &req) {
-		return
+	if err := json.Unmarshal(body, &req); err != nil {
+		return opsConfigResponse{}, &api.Error{Code: api.ErrDaemonBadInput, Detail: "decode: " + err.Error()}
 	}
 	if req.Auto == nil && req.Max == nil {
-		writeErr(w, api.ErrDaemonBadInput, "ops config requires auto and/or max")
-		return
+		return opsConfigResponse{}, &api.Error{Code: api.ErrDaemonBadInput, Detail: "ops config requires auto and/or max"}
 	}
 	if req.Max != nil && *req.Max < 1 {
-		writeErr(w, api.ErrDaemonBadInput, "max must be >= 1 (DAEMON-400)")
-		return
+		return opsConfigResponse{}, &api.Error{Code: api.ErrDaemonBadInput, Detail: "max must be >= 1 (DAEMON-400)"}
 	}
 	if req.Auto != nil {
 		if err := d.modes.SetAuto(*req.Auto); err != nil {
-			writeAdmissionErr(w, err)
-			return
+			return opsConfigResponse{}, err
 		}
 		if !*req.Auto {
 			// v2-converge §5 (audit B3b): auto off = only explicit pf
 			// submit — the not-yet-started origin=auto entries leave the
 			// queue (and the persisted file a restart replays); explicit
-			// (cli/chat) entries ride untouched.
+			// (interactive) entries ride untouched.
 			d.autoOffPurge()
 		}
 		d.persistModeQuietly()
 	}
 	if req.Max != nil {
 		if err := d.q.SetMaxConcurrent(*req.Max); err != nil {
-			writeErr(w, api.ErrDaemonBadInput, err.Error())
-			return
+			return opsConfigResponse{}, &api.Error{Code: api.ErrDaemonBadInput, Detail: err.Error()}
 		}
 	}
-	writeJSON(w, http.StatusOK, opsConfigResponse{Auto: d.modes.Auto(), Max: d.q.MaxConcurrent()})
+	return opsConfigResponse{Auto: d.modes.Auto(), Max: d.q.MaxConcurrent()}, nil
 }
 
 func (d *Daemon) shutdownRoute(w http.ResponseWriter, r *http.Request) {
@@ -912,122 +893,6 @@ func (d *Daemon) shutdownRoute(w http.ResponseWriter, r *http.Request) {
 	go func() { _ = d.Shutdown(context.Background(), cause) }()
 }
 
-// adoptRoute serves POST /chats/{id}/adopt {"wi"} — `pf watch adopt
-// <wi>`: an eligible same-workspace chat takes over the WI's
-// wake-target role. Eligibility, in order:
-//
-//  1. a locally held job record (every state whose decisions can still
-//     fire — running / paused / needs_input): DAEMON-404 otherwise (a
-//     sealed-and-dropped WI has no wake-target role left to take over);
-//  2. the WI's project-mapping workspace (job record Project → the
-//     [workspace] inverse): DAEMON-412 when unmapped;
-//  3. the adopting chat's workspace tag (the tag store): untagged or
-//     another workspace's tag is a DAEMON-400 refusal naming the WI's
-//     workspace — never a silent subscribe degradation, no mutation;
-//  4. the current wake target (the job record's origin chat, the same
-//     field a resume rewrites): the adopter itself, while it still
-//     holds its subscription to the WI, is an idempotent success with
-//     no state change — a self re-adopt after the chat unsubscribed is
-//     NOT one (a bare success answer would leave the chat unsubscribed
-//     and muted, its retained record unconsumed and the scoped
-//     broadcast firing): it runs the full surgery, which with
-//     target == chat inherits the chat's own retained record,
-//     re-creates the subscription and clears the mute; a target that
-//     still holds a subscription to the WI is a DAEMON-409 refusal
-//     naming its chat id; an absent origin ("" — a chat-less submit, a
-//     missing origin record) is eligible — nothing to inherit but the
-//     adopter's own record.
-//
-// The surgery runs chat-subs FIRST (one atomic write: the record union,
-// the owner-routed re-route) and the job record's origin rewrite SECOND
-// (decision 7's order): a crash between them leaves the pre-adopt
-// scoped broadcast firing — every recipient is still an eligible
-// same-workspace live subscribed chat, nothing is lost and nothing
-// reaches an ineligible chat; a re-run of the adopt by the adopter
-// completes the rewrite idempotently. The reverse order would leave
-// the old owner-wide fanout permanently resurrected — strictly worse.
-// Origin.Owner is untouched: owner routing keys on the owner, never
-// the chat.
-//
-// The whole eligibility-and-surgery sequence runs serialized under
-// adoptMu (see adopt): two concurrent adopts can never interleave their
-// read-check-act sequences — the origin field would otherwise name one
-// adopter while the re-pointed subscriptions name the other.
-//
-// Step reachability: a POST outside the step-write allowlist — the
-// step-origin guard (refuseStepOrigin) refuses a step process tree with
-// DAEMON-403 by construction, so a step agent can never adopt; only a
-// human session's chat may (docs/reference/uds-routes.md).
-func (d *Daemon) adoptRoute(w http.ResponseWriter, r *http.Request) {
-	id, ok := chatID(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		WI string `json:"wi"`
-	}
-	if !decodeBody(w, r, &body) {
-		return
-	}
-	if strings.TrimSpace(body.WI) == "" {
-		writeErr(w, api.ErrDaemonBadInput, "wi is required")
-		return
-	}
-	ans, err := d.adopt(id, d.canonWI(strings.TrimSpace(body.WI)))
-	if err != nil {
-		writeErrOf(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, ans)
-}
-
-// adopt is the adopt route's serialized half: the eligibility
-// reads and both writes run under adoptMu, start to finish, so two
-// concurrent adopts can never interleave (the route answers outside
-// the lock — no I/O under it). The refusals are typed api errors the
-// route surfaces verbatim (writeErrOf); the surgery's order and crash
-// window are adoptRoute's (decision 7).
-func (d *Daemon) adopt(id, wi string) (protocol.ChatAdoptAnswer, error) {
-	d.adoptMu.Lock()
-	defer d.adoptMu.Unlock()
-	ji, live := d.rt.Info(wi)
-	if !live {
-		return protocol.ChatAdoptAnswer{}, &api.Error{Code: api.ErrDaemonNotFound,
-			Detail: "work item is not running on this daemon"}
-	}
-	ws, err := d.plan().WorkspaceFor(ji.Project)
-	if err != nil {
-		return protocol.ChatAdoptAnswer{}, &api.Error{Code: api.ErrDaemonUnmappedProject, Detail: err.Error()}
-	}
-	if tag := d.subs.WorkspaceOf(id); tag != ws {
-		return protocol.ChatAdoptAnswer{}, &api.Error{Code: api.ErrDaemonBadInput, Detail: fmt.Sprintf(
-			"chat %s is tagged with workspace %q, not the work item's workspace %s — only a chat of the work item's workspace may adopt it (a chat is tagged by `pf chat init` from its session cwd; re-init the chat from that workspace)",
-			id, tag, ws)}
-	}
-	target := ""
-	if ji.Origin != nil {
-		target = ji.Origin.ChatID
-	}
-	slug := d.slugOf(wi)
-	if id == target && d.subs.HoldsSubscription(id, wi) {
-		// a self re-adopt while the chat still holds its subscription:
-		// idempotent success, no state change
-		return protocol.ChatAdoptAnswer{ChatID: id, WI: wi, Slug: slug, Adopted: true}, nil
-	}
-	if target != "" && d.subs.HoldsSubscription(target, wi) {
-		return protocol.ChatAdoptAnswer{}, &api.Error{Code: api.ErrDaemonConflict, Detail: fmt.Sprintf(
-			"the work item's wake target chat %s still holds a subscription to %s — it must unsubscribe before another chat may adopt",
-			target, api.DisplayName(slug, wi))}
-	}
-	if err := d.subs.Adopt(id, wi, slug, target); err != nil {
-		return protocol.ChatAdoptAnswer{}, err
-	}
-	if err := d.rt.AdoptOrigin(wi, id); err != nil {
-		return protocol.ChatAdoptAnswer{}, err
-	}
-	return protocol.ChatAdoptAnswer{ChatID: id, WI: wi, Slug: slug, Adopted: true}, nil
-}
-
 // refuseStepOrigin is the step-origin guard on the whole UDS face
 // (v2-converge.md Appendix C(b)): the agent executing a work item
 // must never drive the daemon. Every request that is not a read (GET/HEAD —
@@ -1043,8 +908,8 @@ func (d *Daemon) adopt(id, wi string) (protocol.ChatAdoptAnswer, error) {
 // a one-shot task agent's process tree (PF_TASK_ID +
 // PF_DAEMON_ID) is refused EVERY non-GET/HEAD request — before the step
 // allowlist is consulted and with none of its own, so a task cannot send
-// /step/result, /step/memories, /step/bar-run or spawn another task. Its read face is GET
-// only (/task/memories/*, watch snapshots, status).
+// /step/call or spawn another task. Its read face is GET only
+// (/task/memories/*, watch snapshots, status).
 func (d *Daemon) refuseStepOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -1052,12 +917,9 @@ func (d *Daemon) refuseStepOrigin(next http.Handler) http.Handler {
 				writeErr(w, api.ErrDaemonForbidden, reason)
 				return
 			}
-			// the three writes a step may send: its memory, its result and
-			// (the deliver step only) a bar run, which the routes themselves
-			// scope to the caller's own step (stepmem.go, stepresult.go,
-			// stepbarrun.go)
-			stepWrite := r.Method == http.MethodPost &&
-				(r.URL.Path == stepMemoriesPath || r.URL.Path == stepResultPath || r.URL.Path == stepBarRunPath)
+			// the one write a step may send: its `pf step` call, which the
+			// route itself scopes to the caller's own step (stepcall.go)
+			stepWrite := r.Method == http.MethodPost && r.URL.Path == stepCallPath
 			if !stepWrite {
 				if reason := d.stepOriginRefusal(r); reason != "" {
 					writeErr(w, api.ErrDaemonForbidden, reason)
@@ -1113,29 +975,6 @@ func (d *Daemon) answerFromStepProcess(r *http.Request) string {
 		return fmt.Sprintf("answer refused: the caller (pid %d) belongs to the step process tree of work item %s — a step agent must never answer a question; only a human session may (polyforge#122)", cred.pid, stepWI)
 	}
 	return ""
-}
-
-// pendingQuestionIDs answers the ids of ALL currently open pending
-// questions in the capsule's execution.json (empty when none), sorted.
-// The answer route accepts a no-id answer only when exactly one id comes
-// back (audit B10).
-func (d *Daemon) pendingQuestionIDs(wi string) []string {
-	wid := d.rt.CanonicalID(wi)
-	if wid == "" {
-		wid = wi
-	}
-	ex, _ := d.loadExecution(wid, nil)
-	if ex == nil {
-		return nil
-	}
-	var ids []string
-	for _, st := range ex.Steps {
-		if st != nil && st.PendingQuestion != nil && st.PendingQuestion.ID != "" {
-			ids = append(ids, st.PendingQuestion.ID)
-		}
-	}
-	sort.Strings(ids)
-	return ids
 }
 
 // taskSummary is the additive tasks block of GET /status.

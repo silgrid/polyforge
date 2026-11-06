@@ -12,13 +12,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/common/spawn"
 	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
@@ -36,6 +38,10 @@ type fakeEntry struct {
 	// act runs inside Wait before the result is returned: the step's
 	// work on the tree (e.g. a commit in a task repo).
 	act func()
+	// disposition is the run's answer to an owner message (relay_test.go;
+	// "" = started), refuse the error it refuses one with.
+	disposition string
+	refuse      error
 }
 
 type fakeRun struct {
@@ -44,6 +50,11 @@ type fakeRun struct {
 	mu   sync.Mutex
 	term bool
 	rel  chan struct{}
+	// the relay face (relay_test.go): the dispatch's delivery watch the
+	// test feeds, the owner messages the run accepted, and how it
+	// answers them (fakeEntry.disposition, fakeEntry.refuse).
+	watch *deliveryWatch
+	sent  []spawn.Message
 }
 
 func (r *fakeRun) Wait(ctx context.Context) (*StepResult, error) {
@@ -115,7 +126,7 @@ func (s *fakeSpawner) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun, err
 		s.spawns = append(s.spawns, sp)
 		return nil, e.spawnErr
 	}
-	run := &fakeRun{sp: sp, e: e}
+	run := &fakeRun{sp: sp, e: e, watch: newDeliveryWatch(sp.Harness)}
 	if e.hold {
 		run.rel = make(chan struct{})
 	}
@@ -140,26 +151,24 @@ func (s *fakeSpawner) spawnAt(i int) StepSpawn {
 	return s.spawns[i]
 }
 
-// entry builders.
-func done(out string) fakeEntry {
-	return fakeEntry{res: &StepResult{Outcome: OutcomeCompleted, Output: json.RawMessage(out)}}
-}
-func asks(qid, q string) fakeEntry {
-	return fakeEntry{res: &StepResult{Outcome: OutcomeNeedsInput, QuestionID: qid, Question: q}}
-}
-func gateFAIL() fakeEntry {
-	return fakeEntry{res: &StepResult{Outcome: OutcomeGateFailed, Output: json.RawMessage(`{"verdict":"FAIL: tests red"}`)}}
+// entry builders: each a dispatch ending with its `pf step handoff`
+// (workflow contract 4) — the accepted hand-off the daemon records on the
+// call ledger, as the run's Wait answers it (ledgerHandoff's shape).
+func handoffOf(status, reason string) *stepcall.Handoff {
+	return &stepcall.Handoff{Status: status, Reason: reason}
 }
 
-// lightReviewFAIL is a review-gate FAIL verdict whose every blocking
-// finding is marked text_only — polyforge#222's light-path trigger (the
-// unmarked twin is gateFAIL's shape plus an unmarked blocking finding).
-func lightReviewFAIL() fakeEntry {
-	return fakeEntry{res: &StepResult{Outcome: OutcomeGateFailed, Output: json.RawMessage(
-		`{"verdict":"fail","fail_reason":"comment wording only","findings":[{"severity":"blocking","repair_target":"code","detail":"the doc comment names the old flag","text_only":true}]}`)}}
+// done's argument is what the step built (it reaches no record: the
+// hand-off is the step's whole result); the others route a gate's fail
+// and a step's blocked.
+func done(string) fakeEntry {
+	return fakeEntry{res: &StepResult{Handoff: handoffOf(stepcall.StatusDone, "")}}
+}
+func gateFAIL() fakeEntry {
+	return fakeEntry{res: &StepResult{Handoff: handoffOf(stepcall.StatusFail, "tests red")}}
 }
 func incomplete() fakeEntry {
-	return fakeEntry{res: &StepResult{Outcome: OutcomeIncomplete, Output: json.RawMessage(`{"partial":true}`)}}
+	return fakeEntry{res: &StepResult{Handoff: handoffOf(stepcall.StatusBlocked, "build dependency unavailable")}}
 }
 
 // runEnv builds a fresh capsule + driver over a scripted spawner.
@@ -171,7 +180,7 @@ func runEnv(t *testing.T, steps ...StepSpec) (*Driver, *fakeSpawner, string) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: steps, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, steps...),
 		Spawner:  sp,
 		Log:      &eventLog{},
 	})
@@ -220,10 +229,6 @@ func TestRunHappyPathSequencesAndCompletes(t *testing.T) {
 	if d.SpawnN() != 2 {
 		t.Fatalf("spawn counter: %d", d.SpawnN())
 	}
-	// the spawn carries the done set the handoff producer check reads
-	if d0, d1 := sp.spawnAt(0).Done, sp.spawnAt(1).Done; len(d0) != 0 || len(d1) != 1 || !d1["a"] {
-		t.Fatalf("done sets: first %v, second %v", d0, d1)
-	}
 }
 
 func TestRunTerminalFileStopsImmediately(t *testing.T) {
@@ -233,7 +238,7 @@ func TestRunTerminalFileStopsImmediately(t *testing.T) {
 	// Pre-write a completed execution.json; Run must not dispatch.
 	// (The driver is constructed AFTER the file exists — its in-memory
 	// state is the load-time snapshot.)
-	exec := skeletonExecution(WIInfo{ID: "wi_run"}, &Workflow{Steps: []StepSpec{spec("a")}})
+	exec := skeletonExecution(WIInfo{ID: "wi_run"}, testLane(0, []StepSpec{spec("a")}...))
 	exec.WorkflowStatus = StatusCompleted
 	exec.Steps["a"].Status = capsule.StepDone
 	exec.Version = 7
@@ -247,7 +252,7 @@ func TestRunTerminalFileStopsImmediately(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{spec("a")}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{spec("a")}...),
 		Spawner:  sp,
 	})
 	if err != nil {
@@ -269,7 +274,7 @@ func TestRunResumeOfCrashedInProgressStep(t *testing.T) {
 	// leaves the step in_progress on disk; the next Run re-dispatches it.
 	dir := t.TempDir()
 	execPath := filepath.Join(dir, capsule.ExecutionJSON)
-	exec := skeletonExecution(WIInfo{ID: "wi_run"}, &Workflow{Steps: []StepSpec{spec("a")}})
+	exec := skeletonExecution(WIInfo{ID: "wi_run"}, testLane(0, []StepSpec{spec("a")}...))
 	exec.Steps["a"].Status = capsule.StepInProgress
 	exec.CurrentStep = "a"
 	exec.Version = 2 // init + the crashed start write
@@ -281,7 +286,7 @@ func TestRunResumeOfCrashedInProgressStep(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{spec("a")}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{spec("a")}...),
 		Spawner:  sp,
 	})
 	if err != nil {
@@ -303,124 +308,32 @@ func TestRunResumeOfCrashedInProgressStep(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// needs_input
-
-func TestRunNeedsInputAnswerResumesInPlace(t *testing.T) {
-	d, sp, execPath := runEnv(t, spec("grill"))
-	sp.script = []fakeEntry{asks("q_1", "lean or compatible?"), done(`{"verdict":"lean"}`)}
-	doneCh := make(chan error, 1)
-	go func() { doneCh <- d.Run(context.Background()) }()
-
-	waitUntil(t, "the open question on disk", func() bool {
-		exec := tryReadExec(execPath)
-		return exec != nil && exec.Steps["grill"].PendingQuestion != nil
-	})
-	// While waiting, the workflow is RUNNING (a driven ask is not
-	// blocked) and no second dispatch happened.
-	if s := readExec(t, execPath).WorkflowStatus; s != StatusRunning {
-		t.Fatalf("a driven ask keeps the workflow running: %q", s)
-	}
-	if n := len(sp.dispatched()); n != 1 {
-		t.Fatalf("the loop must park on the question, dispatches: %v", sp.dispatched())
-	}
-	if err := d.Answer("q_1", "the lean one", "alice"); err != nil {
-		t.Fatalf("answer: %v", err)
-	}
-	if err := <-doneCh; err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	// The resume dispatch carried the archived answer and Resume=true.
-	if got := sp.dispatched(); len(got) != 2 || !sp.spawnAt(1).Resume {
-		t.Fatalf("the answered step continues in place: %v", got)
-	}
-	if a := sp.spawnAt(1).Answers; len(a) != 1 || a[0].Answer != "the lean one" {
-		t.Fatalf("the resume spawn carries the answer: %+v", a)
-	}
-	exec := readExec(t, execPath)
-	if exec.WorkflowStatus != StatusCompleted || exec.Steps["grill"].Status != capsule.StepDone {
-		t.Fatalf("final: %+v", exec)
-	}
-	if ans := exec.Steps["grill"].Answers; len(ans) != 1 || ans[0].QuestionID != "q_1" {
-		t.Fatalf("the pair must stay archived: %+v", ans)
-	}
-}
-
-func TestRunNeedsInputSurvivesRestart(t *testing.T) {
-	dir := t.TempDir()
-	execPath := filepath.Join(dir, capsule.ExecutionJSON)
-	sp := &fakeSpawner{script: []fakeEntry{asks("q_9", "shape?")}}
-	mk := func(sp *fakeSpawner) *Driver {
-		d, err := New(Config{
-			WI:       WIInfo{ID: "wi_r2", CapsuleDir: dir, BundleName: "b"},
-			ExecPath: execPath,
-			Workflow: &Workflow{Steps: []StepSpec{spec("s")}, MaxTotal: 4, MaxPerStep: 2},
-			Spawner:  sp,
-		})
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
-		return d
-	}
-	d1 := mk(sp)
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = d1.Run(ctx) }()
-	waitUntil(t, "the question", func() bool {
-		exec := tryReadExec(execPath)
-		return exec != nil && exec.Steps["s"].PendingQuestion != nil
-	})
-	cancel() // daemon dies while the question is open
-	time.Sleep(10 * time.Millisecond)
-
-	// The restarted driver re-parks on the SAME durable question.
-	sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
-	d2 := mk(sp2)
-	doneCh := make(chan error, 1)
-	go func() { doneCh <- d2.Run(context.Background()) }()
-	q := readExec(t, execPath).Steps["s"].PendingQuestion
-	if q == nil || q.ID != "q_9" {
-		t.Fatalf("the question must survive the restart: %+v", q)
-	}
-	if len(sp2.dispatched()) != 0 {
-		t.Fatal("the restarted loop must park, not dispatch")
-	}
-	if err := d2.Answer("q_9", "compatible", "bob"); err != nil {
-		t.Fatalf("answer across restart: %v", err)
-	}
-	if err := <-doneCh; err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if s := readExec(t, execPath).WorkflowStatus; s != StatusCompleted {
-		t.Fatalf("completed after restart, got %q", s)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // gate fail / rewind
 
 func TestRunGateFailRewindRecovers(t *testing.T) {
 	d, sp, execPath := runEnv(t, spec("build"), spec("polish"), gateSpec("check", "build"))
 	sp.script = []fakeEntry{
 		done(`{"b":1}`), done(`{"p":1}`), gateFAIL(),
-		done(`{"b":2}`), done(`{"p":2}`), done(`{"verdict":"PASS"}`),
+		done(`{"b":2}`), done(`{"p":2}`), done(`{"verdict":"pass"}`),
 	}
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	// The dispatch ledger: the full recovery, exactly the s12 shape.
-	// The gate's re-dispatch is FRESH (resume=false): its prior
-	// conversation judged the version the rewind just discarded. The
-	// rewind still never resets the gate itself (INV-1g — its candidate
-	// pointer is preserved).
+	// The rewound target RESUMES its previous round (every
+	// gate→target rewind, structural findings included); the step between
+	// target and gate and the gate's own re-dispatch are FRESH
+	// (resume=false): the gate's prior conversation judged the version
+	// being redone. The rewind still never resets the gate itself (INV-1g
+	// — its candidate pointer is preserved).
 	got := sp.dispatched()
 	want := []string{"build@1(resume=false)", "polish@2(resume=false)", "check@3(resume=false)",
-		"build@4(resume=false)", "polish@5(resume=false)", "check@6(resume=false)"}
+		"build@4(resume=true)", "polish@5(resume=false)", "check@6(resume=false)"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("dispatch ledger:\n got  %v\n want %v", got, want)
 	}
-	// The re-dispatched target consumed the routed verdict — the
-	// result's full output payload, verbatim (the judgment in full).
-	if ri := sp.spawnAt(3).RewindInput; ri == nil || string(ri.Reason) != `{"verdict":"FAIL: tests red"}` || ri.ToStep != "build" {
-		t.Fatalf("the rewind verdict must ride the target's dispatch: %+v", ri)
+	if re := sp.spawnAt(3); !re.RewindResume {
+		t.Fatalf("the rewind re-entry is a rewind resume: %+v", re)
 	}
 	if g := sp.spawnAt(5); g.Resume || !g.Fresh {
 		t.Fatalf("a gate re-entered after its own gate-fail rewind must dispatch Fresh, not Resume: %+v", g)
@@ -446,165 +359,15 @@ func TestRunGateFailRewindRecovers(t *testing.T) {
 			t.Fatalf("%s missing %s archive: %+v", tc.id, tc.cause, exec.Steps[tc.id].Attempts)
 		}
 	}
-	if exec.RewindStats.Count != 1 || exec.ReviewRounds["check"] != 1 {
-		t.Fatalf("stats: rewind=%+v review=%+v", exec.RewindStats, exec.ReviewRounds)
-	}
-	// The round ended at acceptance: no pending_rewind_input remains
-	// (the verdict persists across every dispatch of the
-	// round and only the acceptance write clears it).
-	if pri := exec.Steps["build"].PendingRewindInput; pri != nil {
-		t.Fatalf("the verdict is cleared at acceptance: %+v", pri)
-	}
-}
-
-// TestRunLightRewindResumesBuildSession (polyforge#222): a review FAIL
-// whose blocking findings are all text_only rewinds the build step LIGHT —
-// the re-dispatch is a RESUME of its previous conversation (the resume
-// order is the ledger cause the same write archived, and the started
-// event records the shape), carrying the verdict and the light
-// re-entry instruction as its rewind input; the review gate's own
-// re-entry stays fresh; one slot.
-func TestRunLightRewindResumesBuildSession(t *testing.T) {
-	d, sp, execPath := runEnv(t, spec("build"), gateSpec("review", "build"))
-	sp.script = []fakeEntry{
-		done(`{"b":1}`),
-		lightReviewFAIL(),
-		done(`{"b":2}`), // the light re-entry (a resume)
-		done(`{"verdict":"PASS"}`),
-	}
-	if err := d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	got := sp.dispatched()
-	want := []string{"build@1(resume=false)", "review@2(resume=false)", "build@3(resume=true)", "review@4(resume=false)"}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("dispatch ledger:\n got  %v\n want %v", got, want)
-	}
-	re := sp.spawnAt(2)
-	if !re.Resume || re.Fresh {
-		t.Fatalf("the light re-entry must resume the previous conversation: %+v", re)
-	}
-	if ri := re.RewindInput; ri == nil || ri.ToStep != "build" || ri.Note != LightRewindNote ||
-		!strings.Contains(ri.Reason, `"verdict":"fail"`) {
-		t.Fatalf("the light re-entry carries the verdict + the light instruction: %+v", ri)
-	}
-	if g := sp.spawnAt(3); g.Resume || !g.Fresh {
-		t.Fatalf("the review gate's own re-entry must stay fresh: %+v", g)
-	}
-	exec := readExec(t, execPath)
-	if exec.WorkflowStatus != StatusCompleted || exec.RewindStats.Count != 1 {
-		t.Fatalf("one light slot, completed: %q %+v", exec.WorkflowStatus, exec.RewindStats)
-	}
-	var light bool
-	for _, a := range exec.Steps["build"].Attempts {
-		if a.Cause == CauseGateFailRewindTextOnly && a.RewindGate == "review" {
-			light = true
-		}
-	}
-	if !light {
-		t.Fatalf("build must carry the light archive: %+v", exec.Steps["build"].Attempts)
-	}
-	// the started event does not lie about the light re-entry's shape
-	var resumed bool
-	for _, e := range d.log.(*eventLog).entries {
-		if e.kind == "step_started" && e.body["step"] == "build" && e.body["spawn_n"] == int64(3) {
-			resumed = e.body["resume"] == true
-		}
-	}
-	if !resumed {
-		t.Fatal("the light re-entry's step_started event must record resume: true")
-	}
-}
-
-// TestRunSelfReportedStructuralFixRewindsFresh (polyforge#222, the
-// scenario-2 shape): a light re-entry whose completed result carries
-// needs_code_change: true is NOT archived done — the very next dispatch
-// is a FRESH re-entry of the same step (not the gate tail), no new rewind
-// slot is charged, and the lane then proceeds normally.
-func TestRunSelfReportedStructuralFixRewindsFresh(t *testing.T) {
-	d, sp, execPath := runEnv(t, spec("build"), gateSpec("review", "build"))
-	sp.script = []fakeEntry{
-		done(`{"b":1}`),
-		lightReviewFAIL(),
-		{res: &StepResult{Outcome: OutcomeCompleted, Output: json.RawMessage(`{"b":2,"needs_code_change":true}`)}}, // the resumed session self-reports
-		done(`{"b":3}`), // the FRESH re-entry
-		done(`{"verdict":"PASS"}`),
-	}
-	if err := d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	got := sp.dispatched()
-	want := []string{"build@1(resume=false)", "review@2(resume=false)", "build@3(resume=true)", "build@4(resume=false)", "review@5(resume=false)"}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("dispatch ledger:\n got  %v\n want %v", got, want)
-	}
-	if re := sp.spawnAt(3); re.Resume || re.Fresh {
-		t.Fatalf("the self-report fallback re-entry must be fresh (no resume order): %+v", re)
-	}
-	if ri := sp.spawnAt(3).RewindInput; ri == nil || ri.Note != "" || !strings.Contains(ri.Reason, `"verdict":"fail"`) {
-		t.Fatalf("the fresh re-entry carries the same verdict, no light Note: %+v", ri)
-	}
-	exec := readExec(t, execPath)
-	if exec.WorkflowStatus != StatusCompleted || exec.RewindStats.Count != 1 {
-		t.Fatalf("the self-report reuses the light rewind's one slot: %q %+v", exec.WorkflowStatus, exec.RewindStats)
-	}
-	var causes []string
-	for _, a := range exec.Steps["build"].Attempts {
-		if a.Cause != "accepted" {
-			causes = append(causes, a.Cause)
-		}
-	}
-	if fmt.Sprint(causes) != fmt.Sprint([]string{CauseGateFailRewindTextOnly, CauseGateFailRewind}) {
-		t.Fatalf("build rewind archives: %v", causes)
-	}
-}
-
-// TestBuildResultSpecAssemblesLightRewindFact (polyforge#222): the
-// validation snapshot's light-rewind context is the same ledger-cause
-// fact the transition's self-report rewind reads — the latest
-// non-infra_failure archived attempt being the light rewind — and a
-// crash attempt interleaved after it changes nothing (audit-only), while
-// a fresh rewind archive or a plain accepted round answer false.
-func TestBuildResultSpecAssemblesLightRewindFact(t *testing.T) {
-	d, _, _ := runEnv(t, spec("build"), spec("polish"), gateSpec("review", "build"))
-	mustInit(t, d)
-	seed := func(attempts ...capsule.Attempt) *Driver {
-		d.mu.Lock()
-		st := d.exec.Steps["build"]
-		if st == nil {
-			st = &capsule.Step{Status: capsule.StepInProgress}
-			d.exec.Steps["build"] = st
-		}
-		st.Attempts = attempts
-		d.mu.Unlock()
-		return d
-	}
-	light := capsule.Attempt{Cause: CauseGateFailRewindTextOnly, RewindGate: "review"}
-	seed(light)
-	if !d.buildResultSpec("build", 3).LightRewind {
-		t.Fatal("the light rewind archive is the light context")
-	}
-	// a crash attempt interleaved after the light rewind: still light
-	seed(append([]capsule.Attempt{light}, capsule.Attempt{Cause: CauseInfraFailure, FailureCause: FailDaemonRestart})...)
-	if !d.buildResultSpec("build", 3).LightRewind {
-		t.Fatal("an audit-only crash attempt must not change the re-entry's nature")
-	}
-	// the fresh rewind archive (a self-report already happened): not light
-	seed(light, capsule.Attempt{Cause: CauseGateFailRewind, RewindGate: "review"})
-	if d.buildResultSpec("build", 3).LightRewind {
-		t.Fatal("a fresh rewind archive ends the light context")
-	}
-	// a plain accepted round: not light
-	seed(capsule.Attempt{Cause: "accepted"})
-	if d.buildResultSpec("build", 3).LightRewind {
-		t.Fatal("an accepted round is no light context")
+	if exec.RewindStats.Count != 1 {
+		t.Fatalf("stats: rewind=%+v", exec.RewindStats)
 	}
 }
 
 func TestRunGateFailTerminate(t *testing.T) {
 	// A gate with no on_fail rewind target has no rewind edge: its FAIL
 	// verdict ends the workflow failed_gate (WF-102).
-	d, sp, execPath := runEnv(t, spec("a"), StepSpec{ID: "check", Gate: true, ContextPolicy: "fresh"})
+	d, sp, execPath := runEnv(t, spec("a"), StepSpec{ID: "check", Gate: true})
 	sp.script = []fakeEntry{done(`{}`), gateFAIL()}
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -615,25 +378,6 @@ func TestRunGateFailTerminate(t *testing.T) {
 	exec := readExec(t, execPath)
 	if exec.WorkflowStatus != StatusFailedGate || exec.Steps["check"].Status != capsule.StepInProgress {
 		t.Fatalf("terminate shape: status=%q check=%+v", exec.WorkflowStatus, exec.Steps["check"])
-	}
-}
-
-func TestRunGateFailRewindExhausted(t *testing.T) {
-	d, sp, execPath := runEnv(t, spec("a"), gateSpec("check", "a"))
-	d.workflow.MaxTotal = 1
-	sp.script = []fakeEntry{
-		done(`{}`), gateFAIL(), // rewind #1 (the only one allowed)
-		done(`{}`), gateFAIL(), // bound hits → failed_rewind_exhausted
-	}
-	if err := d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	exec := readExec(t, execPath)
-	if exec.WorkflowStatus != StatusFailedRewindExhausted {
-		t.Fatalf("bound must terminate: %q", exec.WorkflowStatus)
-	}
-	if exec.RewindStats.Count != 1 {
-		t.Fatalf("exactly one rewind may land: %+v / attempts=%d (accepted extra)", exec.RewindStats, len(exec.Steps["a"].Attempts))
 	}
 }
 
@@ -734,21 +478,12 @@ func TestRunContextCancelDuringDispatch(t *testing.T) {
 
 func TestRunStaleResultFenceRejected(t *testing.T) {
 	d, sp, _ := runEnv(t, spec("a"))
-	// the in-process retry lane re-dispatches on rejection; a stale fence
-	// stays stale, so the bound blocks the step with the result_invalid
-	// cause code (the fence error rides the blocked reason detail).
-	stale := fakeEntry{res: &StepResult{Outcome: OutcomeCompleted, SpawnN: 99}}
-	script := make([]fakeEntry, 0, maxEnvelopeRejects+1)
-	for i := 0; i <= maxEnvelopeRejects; i++ {
-		script = append(script, stale)
-	}
-	sp.script = script
-	if err := d.Run(context.Background()); err != nil {
-		t.Fatalf("a spent rejection bound must BLOCK, not error: %v", err)
-	}
-	x := d.Snapshot()
-	if x.WorkflowStatus != StatusBlocked || !strings.Contains(x.BlockedReason, "result_invalid") {
-		t.Fatalf("status %q reason %q, want blocked with result_invalid", x.WorkflowStatus, x.BlockedReason)
+	// a hand-off naming another dispatch than the one settled is fenced
+	// out: Run stops on the stale fence and the record is untouched
+	stale := fakeEntry{res: &StepResult{SpawnN: 99, Handoff: handoffOf(stepcall.StatusDone, "")}}
+	sp.script = []fakeEntry{stale}
+	if err := d.Run(context.Background()); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("a stale hand-off stops Run on the fence: %v", err)
 	}
 	// The start write landed; the result did not mutate anything.
 	if st := d.Snapshot().Steps["a"]; st.Status != capsule.StepInProgress {
@@ -756,98 +491,32 @@ func TestRunStaleResultFenceRejected(t *testing.T) {
 	}
 }
 
-func TestRunMinimalContractAccepted(t *testing.T) {
-	// The MINIMAL CONTRACT (polyforge#147): a completed envelope with ONLY
-	// the outcome + output pair and the identity/fence fields is accepted;
-	// there is no artifact manifest, no protocol stamp and no handoff
-	// digest reference — a handoff-declaring step's completed result owes
-	// none of them (the handoff is a path-convention read).
-	dir := t.TempDir()
-	execPath := filepath.Join(dir, capsule.ExecutionJSON)
-
-	mkDriver := func(sp *fakeSpawner) *Driver {
-		d, err := New(Config{
-			WI:       WIInfo{ID: "wi_v", CapsuleDir: dir, BundleName: "b"},
-			ExecPath: execPath,
-			Workflow: &Workflow{Steps: []StepSpec{{ID: "a", ContextPolicy: "fresh", Handoff: true}}, MaxTotal: 4, MaxPerStep: 2},
-			Spawner:  sp,
-		})
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
-		return d
-	}
-
-	// A handoff-declaring step's minimal completed result is accepted.
-	sp := &fakeSpawner{script: []fakeEntry{done(`{"summary":"ok"}`)}}
-	if err := mkDriver(sp).Run(context.Background()); err != nil {
-		t.Fatalf("a handoff-declaring step's minimal result must be accepted: %v", err)
-	}
-	if s := readExec(t, execPath).WorkflowStatus; s != StatusCompleted {
-		t.Fatalf("completed: %q", s)
-	}
-
-	// A structurally invalid envelope (a needs_input without its question
-	// pair — invalid under the old AND the new contract) is rejected —
-	// the retry lane re-dispatches, and the spent bound blocks the step
-	// with the result_invalid cause code (no relaunch, no error return).
-	os.Remove(execPath)
-	badScript := []fakeEntry{}
-	for i := 0; i <= maxEnvelopeRejects; i++ {
-		badScript = append(badScript, badQuestion())
-	}
-	sp = &fakeSpawner{script: badScript}
-	if err := mkDriver(sp).Run(context.Background()); err != nil {
-		t.Fatalf("the spent bound must block cleanly, not error: %v", err)
-	}
-	x := readExec(t, execPath)
-	if x.WorkflowStatus != StatusBlocked || !strings.Contains(x.BlockedReason, "result_invalid") {
-		t.Fatalf("status %q reason %q, want blocked with result_invalid", x.WorkflowStatus, x.BlockedReason)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // workflow loading from a real bundle directory
 
 func TestLoadWorkflowFromBundle(t *testing.T) {
-	dir := t.TempDir()
-	fm := `---
+	const front = `max_rewinds: 3
 defaults:
   model_candidates: [pi:prov/a, pi:prov/b]
-rewind:
-  max_total: 3
 steps:
   - id: spec
   - id: code
-    context_policy: inherit
     model_candidates: [pi:prov/c]
   - id: check
     gate: true
-    context_policy: fresh
     on_fail:
       target: code
----
-# body is never parsed
 `
-	os.MkdirAll(dir, 0o755)
-	if err := os.WriteFile(filepath.Join(dir, "workflow.md"), []byte(fm), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	dir := workflowtest.WriteLane(t, t.TempDir(), "mybundle", front)
 	wf, err := LoadWorkflow(dir)
 	if err != nil {
 		t.Fatalf("loadWorkflow: %v", err)
 	}
-	if wf.MaxTotal != 3 || wf.MaxPerStep != defaultMaxRewindPerStep {
-		t.Fatalf("bounds: %+v", wf)
+	if wf.MaxRewinds != 3 {
+		t.Fatalf("budget (workflow contract 3): %+v", wf)
 	}
 	if len(wf.Steps) != 3 || wf.Steps[0].ID != "spec" || wf.Steps[2].ID != "check" {
 		t.Fatalf("order is the declaration order: %+v", wf.Steps)
-	}
-	if wf.Steps[0].ContextPolicy != ContextInherit {
-		t.Fatalf("spec step: %+v", wf.Steps[0])
-	}
-	if wf.Steps[1].ContextPolicy != "inherit" {
-		t.Fatalf("code step: %+v", wf.Steps[1])
 	}
 	of := wf.Steps[2].OnFail
 	if of == nil || of.Target != "code" {
@@ -856,23 +525,19 @@ steps:
 
 	// The driver built over the bundle directory resolves paths by
 	// default and picks candidates on dispatch.
-	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{}`), done(`{"verdict":"PASS"}`)}}
+	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{}`), done(`{"verdict":"pass"}`)}}
 	caps := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(caps, capsule.DirWorkflows, "mybundle"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	bundleMD := filepath.Join(caps, capsule.DirWorkflows, "mybundle", "workflow.md")
-	os.WriteFile(bundleMD, []byte(fm), 0o644)
+	workflowtest.WriteLane(t, filepath.Join(caps, capsule.DirWorkflows), "mybundle", front)
 	// the bundle's lists reach the dispatch through the claim-time
 	// composition, exactly as the runtime builds StepCandidates
-	front, err := workflow.ReadFrontmatter(bundleMD)
+	lane, err := workflow.LoadStrict(filepath.Join(caps, capsule.DirWorkflows, "mybundle"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	d, err := New(Config{
 		WI:      WIInfo{ID: "wi_l", CapsuleDir: caps, BundleName: "mybundle"},
 		Spawner: sp,
-		Compose: composeOf(workspace.ComposeCandidates(front, nil, "p", nil)),
+		Compose: composeOf(workspace.ComposeCandidates(lane, nil, "p", nil)),
 	})
 	if err != nil {
 		t.Fatalf("New over the default bundle path: %v", err)
@@ -894,65 +559,6 @@ steps:
 // ---------------------------------------------------------------------------
 // In-process envelope-rejection retry lane (the #97/#107 lessons).
 
-// badQuestion builds a needs_input result without its question pair —
-// deterministic substance-gate rejection (invalid under the old AND the
-// new contract).
-func badQuestion() fakeEntry {
-	return fakeEntry{res: &StepResult{Outcome: OutcomeNeedsInput}}
-}
-
-func TestRunRejectedEnvelopeRetriesInProcess(t *testing.T) {
-	d, sp, execPath := runEnv(t, StepSpec{ID: "fix"})
-	sp.script = []fakeEntry{badQuestion(), done(`{}`)}
-
-	if err := d.Run(context.Background()); err != nil {
-		t.Fatalf("a recoverable envelope rejection must NOT fail the run: %v", err)
-	}
-	if n := len(sp.spawns); n != 2 {
-		t.Fatalf("the rejected envelope must trigger an in-process re-dispatch, got %d spawns", n)
-	}
-	// the re-dispatch carries the rejection as visible prompt feedback
-	second := sp.spawnAt(1)
-	if second.PriorRejection == "" || !strings.Contains(second.PriorRejection, "question") {
-		t.Fatalf("the re-dispatch must carry the validation error verbatim, got %q", second.PriorRejection)
-	}
-	// and the step is done with the second envelope
-	exec := loadExecFile(t, execPath)
-	if exec.Steps["fix"].Status != capsule.StepDone {
-		t.Fatalf("the step must be done after the successful retry, got %v", exec.Steps["fix"].Status)
-	}
-	// the rejection ledger cleared on success
-	if _, ok := d.priorRejection["fix"]; ok {
-		t.Fatal("the rejection ledger must clear when the step completes")
-	}
-}
-
-func TestRunRejectedEnvelopeBlocksResultInvalidAfterBound(t *testing.T) {
-	d, sp, execPath := runEnv(t, StepSpec{ID: "fix"})
-	// maxEnvelopeRejects rejections then the bound blocks the step
-	sp.script = []fakeEntry{badQuestion(), badQuestion(), badQuestion(), badQuestion()}
-
-	if err := d.Run(context.Background()); err != nil {
-		t.Fatalf("a spent in-process retry bound must BLOCK cleanly, not error (no relaunch): %v", err)
-	}
-	if n := len(sp.spawns); n != maxEnvelopeRejects {
-		t.Fatalf("exactly the bound (%d) dispatches before the block, got %d", maxEnvelopeRejects, n)
-	}
-	// every re-dispatch carried the feedback
-	for i := 1; i < maxEnvelopeRejects; i++ {
-		if sp.spawnAt(i).PriorRejection == "" {
-			t.Fatalf("re-dispatch %d must carry the rejection feedback", i)
-		}
-	}
-	exec := loadExecFile(t, execPath)
-	if exec.WorkflowStatus != StatusBlocked || !strings.Contains(exec.BlockedReason, "result_invalid") {
-		t.Fatalf("status %q reason %q, want blocked with the result_invalid cause code", exec.WorkflowStatus, exec.BlockedReason)
-	}
-	if exec.RewindStats.Count != 0 {
-		t.Fatalf("a result-invalid block must not route on_fail (fire a rewind): rewind_stats=%+v", exec.RewindStats)
-	}
-}
-
 func loadExecFile(t *testing.T, path string) *capsule.Execution {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -964,45 +570,6 @@ func loadExecFile(t *testing.T, path string) *capsule.Execution {
 		t.Fatal(err)
 	}
 	return &exec
-}
-
-func TestRejectionBoundBlocksOnceWithoutRelaunch(t *testing.T) {
-	dir := t.TempDir()
-	execPath := filepath.Join(dir, capsule.ExecutionJSON)
-	log := &eventLog{}
-	sp := &fakeSpawner{script: []fakeEntry{badQuestion(), badQuestion(), badQuestion(), badQuestion()}}
-	d, err := New(Config{
-		WI:       WIInfo{ID: "wi_rej", CapsuleDir: dir, BundleName: "b"},
-		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{{ID: "fix"}}, MaxTotal: 4, MaxPerStep: 2},
-		Spawner:  sp,
-		Log:      log,
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	// ONE driver run carries the whole retry lane; a clean nil return is
-	// the contract (an error return is what the recovery/relaunch lane
-	// feeds on -- it must not fire for a result-invalid block).
-	if err := d.Run(context.Background()); err != nil {
-		t.Fatalf("the bound must block cleanly, not error: %v", err)
-	}
-	if n := len(sp.spawns); n != maxEnvelopeRejects {
-		t.Fatalf("exactly the bound (%d) dispatches before the block, got %d", maxEnvelopeRejects, n)
-	}
-	x := readExec(t, execPath)
-	if x.WorkflowStatus != StatusBlocked || !strings.Contains(x.BlockedReason, "result_invalid") {
-		t.Fatalf("status %q reason %q, want blocked with result_invalid", x.WorkflowStatus, x.BlockedReason)
-	}
-	if n := log.count("blocked"); n != 1 {
-		t.Fatalf("one blocked event expected, got %d", n)
-	}
-	if n := log.count("step_failed"); n != 1 {
-		t.Fatalf("one step_failed (result_invalid) event expected, got %d", n)
-	}
-	if x.RewindStats.Count != 0 {
-		t.Fatalf("a result-invalid block must not fire a rewind: rewind_stats=%+v", x.RewindStats)
-	}
 }
 
 func (l *eventLog) count(kind string) int {
@@ -1033,7 +600,7 @@ func TestRunInterruptedArchiveComputesTreeHash(t *testing.T) {
 	d, err := New(Config{
 		WI:          WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath:    execPath,
-		Workflow:    &Workflow{Steps: []StepSpec{spec("s")}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow:    testLane(4, []StepSpec{spec("s")}...),
 		Spawner:     sp,
 		Log:         &eventLog{},
 		Interrupted: &InterruptedDispatch{Detail: FailDaemonRestart},
@@ -1053,36 +620,9 @@ func TestRunInterruptedArchiveComputesTreeHash(t *testing.T) {
 // ---------------------------------------------------------------------------
 // The re-dispatch fast-path decision inputs.
 
-func TestAttemptAfterAnswer(t *testing.T) {
-	at := "2026-09-20T08:00:02Z"
-	attempt := capsule.Attempt{Cause: CauseInfraFailure, InterruptedAt: at}
-	cases := []struct {
-		name    string
-		last    capsule.Attempt
-		answers []capsule.ArchivedAnswer
-		want    bool
-	}{
-		{"no attempt", capsule.Attempt{}, nil, false},
-		{"no answer", attempt, nil, true},
-		{"older answer", attempt, []capsule.ArchivedAnswer{{AnsweredAt: "2026-09-20T08:00:01Z"}}, true},
-		{"same stamp", attempt, []capsule.ArchivedAnswer{{AnsweredAt: at}}, true},
-		{"newer answer", attempt, []capsule.ArchivedAnswer{{AnsweredAt: "2026-09-20T08:00:03Z"}}, false},
-		{"archived fallback", capsule.Attempt{Cause: CauseInfraFailure, ArchivedAt: at},
-			[]capsule.ArchivedAnswer{{AnsweredAt: "2026-09-20T08:00:01Z"}}, true},
-		{"unparsable answer falls back to lexicographic", attempt,
-			[]capsule.ArchivedAnswer{{AnsweredAt: "zzz"}}, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := attemptAfterAnswer(c.last, c.answers); got != c.want {
-				t.Fatalf("attemptAfterAnswer(%+v, %+v) = %v, want %v", c.last, c.answers, got, c.want)
-			}
-		})
-	}
-}
-
 // prepareDispatch carries the latest attempt's tree hash and the
-// death-trigger flag; a newer archived answer flips the flag off.
+// death-trigger flag. (A newer archived answer that flipped the flag off
+// left with the run request's answers, workflow contract v2 change 18.)
 func TestPrepareDispatchCarriesTreeHashAndTrigger(t *testing.T) {
 	dir := t.TempDir()
 	execPath := filepath.Join(dir, capsule.ExecutionJSON)
@@ -1117,7 +657,7 @@ func TestPrepareDispatchCarriesTreeHashAndTrigger(t *testing.T) {
 		d, err := New(Config{
 			WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 			ExecPath: execPath,
-			Workflow: &Workflow{Steps: []StepSpec{spec("s")}, MaxTotal: 4, MaxPerStep: 2},
+			Workflow: testLane(4, []StepSpec{spec("s")}...),
 			Spawner:  &fakeSpawner{},
 			Log:      &eventLog{},
 		})
@@ -1133,15 +673,5 @@ func TestPrepareDispatchCarriesTreeHashAndTrigger(t *testing.T) {
 	}
 	if !sp.Fresh || !sp.RetryTriggered || sp.RecordedTreeHash != "abc" || sp.RecordedAttemptAt != "2026-09-20T08:00:02Z" {
 		t.Fatalf("death-triggered fresh dispatch: fresh=%v trigger=%v hash=%q attemptAt=%q", sp.Fresh, sp.RetryTriggered, sp.RecordedTreeHash, sp.RecordedAttemptAt)
-	}
-
-	exec.Steps["s"].Answers = []capsule.ArchivedAnswer{{QuestionID: "q", Answer: "go", AnsweredAt: "2026-09-20T08:00:03Z"}}
-	writeExec()
-	sp2, _, err := newDriver().prepareDispatch("s")
-	if err != nil {
-		t.Fatalf("prepareDispatch: %v", err)
-	}
-	if !sp2.Fresh || sp2.RetryTriggered || sp2.RecordedTreeHash != "abc" {
-		t.Fatalf("answer continuation: fresh=%v trigger=%v hash=%q", sp2.Fresh, sp2.RetryTriggered, sp2.RecordedTreeHash)
 	}
 }

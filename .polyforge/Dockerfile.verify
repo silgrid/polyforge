@@ -1,0 +1,87 @@
+# The environment the daemon runs this repository's verification bar in
+# (docs/concepts.md, "The verification gate run by the daemon": a repository
+# whose merged tree carries this file runs its scope engine and every bar
+# command inside a container started from this image, one per run).
+#
+# The image is built from this file alone, with an empty build context, and
+# tagged with the hash of its bytes: it must be self-contained — FROM public
+# images, every tool installed by an exact pinned version, nothing to COPY.
+# A change to this file is the only thing that rebuilds it.
+#
+# Go is pinned to an exact patch release. go.mod states only the language
+# version (`go 1.26`), while the dependency-audit gate (workflows/_shared/scripts/audit-deps,
+# govulncheck) reports the standard-library vulnerabilities of the toolchain
+# that runs it: a stale patch pin turns the audit gate red (a 1.26.4 image
+# failed it on a fixed stdlib advisory, a 1.26.10 one on GO-2026-6859). Bump
+# the golang tag below when a new 1.26.x ships; the audit gate is what flags a
+# stale one. go.mod's `toolchain` line names the same release, so a host build
+# (the release binaries, built by `make release` on the release host) switches
+# to it too: bump both together (test/toolchain_pin_test.go checks they agree).
+FROM golang:1.26.11-bookworm AS go
+FROM node:24.22.2-bookworm AS node
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash binutils build-essential ca-certificates curl file git gh jq make \
+      procps psmisc python3 python3-pip rsync tmux unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=go /usr/local/go/ /usr/local/go/
+COPY --from=node /usr/local/ /usr/local/
+# The deploy e2e suites run node with PATH=/usr/bin:/bin (a hostile shell).
+RUN ln -sf /usr/local/bin/node /usr/bin/node \
+ && ln -sf /usr/local/bin/npm /usr/bin/npm \
+ && ln -sf /usr/local/bin/npx /usr/bin/npx
+# The container's PATH is this one: the daemon's [daemon] command_path only
+# applies to a bar that runs on the host.
+ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The audit gate's Go surface: govulncheck, built with the pinned toolchain
+# (the version workflows/_shared/scripts/audit-deps names in its install hint).
+RUN GOBIN=/usr/local/bin GOPATH=/tmp/gopath GOCACHE=/tmp/gocache \
+      go install golang.org/x/vuln/cmd/govulncheck@v1.9.0 \
+ && rm -rf /tmp/gopath /tmp/gocache
+
+# mypy for the step scripts' type-check fast gate (.polyforge/verify-scope.conf,
+#): pf CI's python-types job installs "mypy>=1.20,<2" (mypy 2
+# dropped 3.9 as a target); this pin lies in that range. The system python3 is
+# externally managed (PEP 668), and this image is single-purpose.
+RUN python3 -m pip install --break-system-packages --no-cache-dir mypy==1.20.2
+
+# gitleaks for the public-baseline scanner test (it reads $GITLEAKS).
+ARG GITLEAKS_VERSION=8.30.1
+RUN set -e; arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) asset=linux_x64;   sum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;; \
+      arm64) asset=linux_arm64; sum=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 ;; \
+      *) echo "no gitleaks build pinned for $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_${asset}.tar.gz"; \
+    echo "$sum  /tmp/gitleaks.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks; \
+    rm /tmp/gitleaks.tgz
+
+# Chromium for both playwright pins: pi-web/package-lock.json resolves
+# playwright 1.63.0, webui/package-lock.json 1.64.1, and each needs its own
+# chromium build. Bump these with the lock files.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN npx --yes --package=playwright@1.63.0 playwright install --with-deps chromium \
+ && npx --yes --package=playwright@1.64.1 playwright install --with-deps chromium \
+ && rm -rf /root/.npm /var/lib/apt/lists/*
+
+# The repository is bind-mounted at its host path and owned by the host's
+# user: git must not refuse it as a dubious owner.
+RUN git config --system --add safe.directory '*'
+
+# The caches live on the named volume mounted at /cache, one per repository
+# and image generation (this file's hash): changing any byte of this file
+# starts them empty.
+ENV GOPATH=/cache/go \
+    GOCACHE=/cache/go-build \
+    npm_config_cache=/cache/npm \
+    GITLEAKS=/usr/local/bin/gitleaks
+RUN mkdir -p /cache && chmod 1777 /cache \
+ && go version && node --version && npm --version && python3 --version \
+ && git --version && tmux -V && govulncheck -version && gitleaks version \
+ && python3 -m mypy --version

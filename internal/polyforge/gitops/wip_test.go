@@ -186,7 +186,7 @@ func TestPushTaskWIPRunsFromATempRepo(t *testing.T) {
 		t.Fatalf("the temp repo %q must be removed after the push", tmp)
 	}
 	wantPush := []string{
-		"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "http.proxy=",
+		"-c", "credential.helper=", "-c", "http.proxy=",
 		"-c", "protocol.allow=never", "-c", "protocol.file.allow=always",
 		"push", "--no-recurse-submodules", o.RemoteURL, "+" + wip + ":" + TaskWIPRefName("demo-src"),
 	}
@@ -194,7 +194,7 @@ func TestPushTaskWIPRunsFromATempRepo(t *testing.T) {
 		t.Fatalf("WIP push argv = %q\nwant --git-dir=<tmp> %q", push, wantPush)
 	}
 	wantAdd := []string{"--git-dir=" + tmp,
-		"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "http.proxy=",
+		"-c", "credential.helper=", "-c", "http.proxy=",
 		"--work-tree=" + repo, "add", "-A", "--ignore-errors"}
 	if strings.Join(add, " ") != strings.Join(wantAdd, " ") {
 		t.Fatalf("WIP add argv = %q\nwant %q", add, wantAdd)
@@ -388,6 +388,51 @@ func TestPushTaskWIPFailureKeepsOlderRef(t *testing.T) {
 	}
 	if !failed {
 		t.Fatalf("no carrier_push_failed for the WIP ref: %v", events())
+	}
+}
+
+// A task repo with a merge in progress (the sync step's resolver at work,
+// an agent's own merge) takes no WIP snapshot: a re-claim would restore the
+// merge as plain edits with no MERGE_HEAD. HEAD is unmoved, so the hub's
+// older WIP ref stands and the carrier still mirrors HEAD; once the merge
+// is committed the next close snapshots again.
+func TestPushTaskWIPSkipsAMergeInProgress(t *testing.T) {
+	o, repo, head := wipEnv(t, "wi_wip_merge")
+	events := captureEvents(&o)
+	writeT(t, filepath.Join(repo, "new.txt"), "v1\n")
+	PushTaskWIP(o, true, true)
+	first, ok := bareRefSHA(t, o.RemoteURL, TaskWIPRefName("demo-src"))
+	if !ok {
+		t.Fatal("setup: no first WIP")
+	}
+	mustRun(t, "git", "-C", repo, "checkout", "-q", "-b", "side")
+	writeT(t, filepath.Join(repo, "side.txt"), "side\n")
+	mustRun(t, "git", "-C", repo, "add", "side.txt")
+	mustRun(t, "git", "-C", repo, "commit", "-q", "-m", "side")
+	mustRun(t, "git", "-C", repo, "checkout", "-q", "-")
+	mustRun(t, "git", "-C", repo, "merge", "-q", "--no-commit", "--no-ff", "side")
+	if _, err := os.Stat(filepath.Join(repo, ".git", "MERGE_HEAD")); err != nil {
+		t.Fatalf("setup: no merge in progress: %v", err)
+	}
+	PushTaskWIP(o, true, true)
+	if wip, ok := bareRefSHA(t, o.RemoteURL, TaskWIPRefName("demo-src")); !ok || wip != first {
+		t.Fatalf("a merge in progress must leave the older snapshot %s alone, got %q (%v)", first, wip, ok)
+	}
+	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("demo-src")); !ok || got != head {
+		t.Fatalf("carrier = %q (%v), want HEAD %s", got, ok, head)
+	}
+	if text := skippedText(events()); !strings.Contains(text, "a merge is in progress (MERGE_HEAD)") {
+		t.Fatalf("task_wip_skipped names the merge in progress: %q", text)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git", "MERGE_HEAD")); err != nil {
+		t.Fatalf("the merge in progress is left as it was: %v", err)
+	}
+	mustRun(t, "git", "-C", repo, "commit", "-q", "--no-edit")
+	merged := strings.TrimSpace(mustRun(t, "git", "-C", repo, "rev-parse", "HEAD"))
+	PushTaskWIP(o, true, true)
+	wip, ok := bareRefSHA(t, o.RemoteURL, TaskWIPRefName("demo-src"))
+	if parents := strings.Fields(mustRun(t, "git", "--git-dir", o.RemoteURL, "rev-list", "--parents", "-n", "1", wip)); !ok || len(parents) != 2 || parents[1] != merged {
+		t.Fatalf("after the merge commit the next close snapshots on it: %q %v (merge %s)", wip, parents, merged)
 	}
 }
 

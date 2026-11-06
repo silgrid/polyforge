@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 	"github.com/silgrid/polyforge/internal/polyforge/modelhealth"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
@@ -184,6 +186,35 @@ type WIView struct {
 	// Comments is the work item's append-only comment thread in time
 	// order.
 	Comments []api.Comment `json:"comments"`
+	// AcceptanceMissing is set by pf queue (never by the server) on a
+	// queued execution ticket whose content lists no acceptance criterion
+	// while its lane requires one (the lane's `acceptance` declaration,
+	//): the auto-pull wave skips it and it needs interaction
+	// first (; markAcceptanceMissing).
+	AcceptanceMissing bool `json:"acceptance_missing,omitempty"`
+}
+
+// acceptanceMissingLabel is the STATUS-cell mark of an AcceptanceMissing
+// row.
+const acceptanceMissingLabel = "需要交互：缺验收"
+
+// markAcceptanceMissing sets AcceptanceMissing on each queued execution
+// ticket (one with a bundle) of items whose content lists no acceptance
+// criterion — workflow.HasAcceptance — while the lane laneOf answers for
+// its project and bundle requires one (a nil lane, one that cannot be
+// read, does): the check pf submit and the auto-pull wave apply.
+func markAcceptanceMissing(items []WIView, laneOf func(project, bundle string) *workflow.Lane) {
+	for i := range items {
+		it := &items[i]
+		content := ""
+		if it.Content != nil {
+			content = *it.Content
+		}
+		it.AcceptanceMissing = it.Status == api.StatusQueued &&
+			it.BundleName != nil && strings.TrimSpace(*it.BundleName) != "" &&
+			!workflow.HasAcceptance(content) &&
+			laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance()
+	}
 }
 
 type waitingBlocker struct {
@@ -256,8 +287,12 @@ func wiRow(it WIView) []string {
 	if it.SessionFingerprint != "" {
 		sess = it.SessionFingerprint
 	}
+	status := it.Status
+	if it.AcceptanceMissing {
+		status += " (" + acceptanceMissingLabel + ")"
+	}
 	return []string{
-		slug, orDash(it.ProjectName), it.Status, sess, it.Priority, nullable(it.BundleName), truncate(it.Goal, 60),
+		slug, orDash(it.ProjectName), status, sess, it.Priority, nullable(it.BundleName), truncate(it.Goal, 60),
 	}
 }
 
@@ -478,11 +513,12 @@ func renderStatus(w io.Writer, s *StatusResponse) {
 	wsSet := append([]string(nil), s.Workspaces...)
 	sort.Strings(wsSet)
 	fmt.Fprintf(w, "workspaces: %s\n\n", strings.Join(wsSet, ", "))
-	showOrigin, showCandidate, showRetry := false, false, false
+	showOrigin, showCandidate, showRetry, showVerify := false, false, false, false
 	for _, j := range s.Jobs {
 		showOrigin = showOrigin || j.Origin != nil
 		showCandidate = showCandidate || j.Candidate != ""
 		showRetry = showRetry || j.RetryInSec != nil
+		showVerify = showVerify || j.VerifyQueue != nil
 	}
 	rows := make([][]string, 0, len(s.Jobs))
 	for _, j := range s.Jobs {
@@ -512,11 +548,6 @@ func renderStatus(w io.Writer, s *StatusResponse) {
 		origin := "-"
 		if j.Origin != nil {
 			origin = j.Origin.Kind
-			if j.Origin.ChatID != "" {
-				origin += ":" + j.Origin.ChatID
-			} else if j.Origin.Kind == "chat" { // polyforge#208: chat-less chat origin (runtime.OriginChat with no id)
-				origin += ":none"
-			}
 		}
 		row := []string{api.DisplayName(j.Slug, j.WorkItemID), j.Status, sess, spawn, pid, question, stepAge, lastWork}
 		if showCandidate {
@@ -524,6 +555,9 @@ func renderStatus(w io.Writer, s *StatusResponse) {
 		}
 		if showRetry {
 			row = append(row, retryFace(j.RetryInSec, j.RetryCause))
+		}
+		if showVerify {
+			row = append(row, verifyQueueFace(j.VerifyQueue))
 		}
 		if showOrigin {
 			row = append(row, origin)
@@ -537,10 +571,29 @@ func renderStatus(w io.Writer, s *StatusResponse) {
 	if showRetry { // the column appears only while some job waits a retry backoff
 		head = append(head, "RETRY")
 	}
+	if showVerify { // only while some verification waits for admission
+		head = append(head, "VERIFY")
+	}
 	if showOrigin { // the column appears only when some job has one
 		head = append(head, "ORIGIN")
 	}
 	printTable(w, head, rows)
+}
+
+func wiName(slug, id string) string {
+	if slug != "" {
+		return slug
+	}
+	return id
+}
+
+// verifyQueueFace renders a queued daemon-run verification as
+// "queued #2: <reason>"; "-" when none waits.
+func verifyQueueFace(q *protocol.WatchVerifyQueue) string {
+	if q == nil {
+		return "-"
+	}
+	return fmt.Sprintf("queued #%d: %s", q.Position, q.Reason)
 }
 
 // retryFace renders a pending retry backoff as "retry in 3m: <cause>"
@@ -699,8 +752,8 @@ func renderModels(w io.Writer, p *modelhealth.Profile) {
 	printTable(w, []string{"MODEL", "STEP", "DISPATCHES", "SUCCESSES", "MODEL-DEATHS", "RATE", "MEAN-WALL", "NON-MODEL", "LAST-CAUSE"}, rows)
 }
 
-// renderTasksSummary prints the one-line task summary of `pf ops status`
-//; nothing for an older daemon that carries none.
+// renderTasksSummary prints the one-line task summary of `pf ops status`;
+// nothing for an older daemon that carries none.
 func renderTasksSummary(w io.Writer, t *task.Summary) {
 	if t == nil {
 		return

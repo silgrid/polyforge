@@ -423,9 +423,10 @@ func TestReadyQueueCarriesSessionBlock(t *testing.T) {
 
 // TestBlockedExitsUnifiedAuthorization (v2-converge §7, §11 item 7): the
 // blocked exits — resume-blocked (continue) — and cancel (abandon) are
-// open to exactly the work item's reporter, a project maintainer, or an
-// admin. A plain project member (writer) who is none of those is refused
-// on EVERY door — resume-blocked used to check the key scope only.
+// open to the work item's reporter, a project maintainer, an admin, or
+// the current operator of the machine that holds it. A
+// plain project member (writer) who is none of those is refused on EVERY
+// door — resume-blocked used to check the key scope only.
 func TestBlockedExitsUnifiedAuthorization(t *testing.T) {
 	e := newSrvEnv(t)
 	mk := func(name, role string) (string, string) {

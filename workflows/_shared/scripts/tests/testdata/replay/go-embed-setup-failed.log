@@ -1,0 +1,5 @@
+# example.com/app/server
+web/embed.go:19:12: pattern all:dist: no matching files found
+ok  	example.com/app/store	0.012s
+FAIL	example.com/app/server [setup failed]
+FAIL

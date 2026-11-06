@@ -672,11 +672,44 @@ func parseMachineVersion(v string) ([3]int, bool) {
 	return out, true
 }
 
-// belowSigningRelease answers whether v parses (see parseMachineVersion) and
-// predates the signing release v2.20.8.
+// validPreRelease answers whether pre is a SemVer 2.0 pre-release: dot-
+// separated, non-empty identifiers of [0-9A-Za-z-].
+func validPreRelease(pre string) bool {
+	for _, id := range strings.Split(pre, ".") {
+		if id == "" {
+			return false
+		}
+		for _, c := range id {
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// belowSigningRelease answers whether v parses and predates the signing
+// release v2.20.8. v is "vX.Y.Z" (see parseMachineVersion) or a suffixed
+// release version "vX.Y.Z-<pre>", ordered by SemVer 2.0
+// precedence: the core numerically, then a pre-release below its core
+// release (v2.20.8-<name>.N predates v2.20.8). Any other shape fails closed.
+//
+// The named version-line cutover: the unified product line
+// v0.2.x follows the retired internal v2.20.x line, so a v0.2.x daemon is at
+// or after the signing release although it compares numerically lower.
+// Delete this branch together with .polyforge/release.sh's CUTOVER_*
+// branches, once no v2.20.x release is the current line anywhere (every
+// deployed aihub and installed pf runs v0.2.x).
 func belowSigningRelease(v string) bool {
-	got, ok := parseMachineVersion(v)
+	core, pre, hasPre := strings.Cut(strings.TrimSpace(v), "-")
+	if hasPre && !validPreRelease(pre) {
+		return false
+	}
+	got, ok := parseMachineVersion(core)
 	if !ok {
+		return false
+	}
+	if got[0] == 0 && got[1] == 2 {
 		return false
 	}
 	for i := range got {
@@ -684,7 +717,8 @@ func belowSigningRelease(v string) bool {
 			return got[i] < heartbeatSigningVersion[i]
 		}
 	}
-	return false // exactly the signing release: its daemon signs
+	// The signing release's core: its daemon signs, its pre-releases predate it.
+	return hasPre
 }
 
 // refreshLivenessOnly is the bounded unsigned transition (see refreshMachine

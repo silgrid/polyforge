@@ -1,6 +1,6 @@
 ---
 name: polyforge
-description: "The harness's single install face — a pure intent-routing skill. Maps natural language to the 15 routing verbs (file, queue, cancel, recall, remember, memory, submit, task, watch, answer, pause, resume, wrap, ops, msg), the machine verbs doctor, version, help, the fragments extensions (`pf help extensions`), init (machine setup; `pf init`) and follow-up ledger (`followup.md`), each under verbs/; data-plane verbs go to AIHub, execution-plane ones to the daemon. Owner-directed code work on a repo (change / upgrade a library / fix a bug) is an execution intent: route it to an execution ticket (`pf file create --bundle <lane>` + `pf submit`); the daemon's claimed capsule does the work — the session agent never hand-executes (no git branch/commit/push/PR, no Edit/Write under .repo/; ask which ticket a change hangs on — no answer, file one first). It never parses a workflow, never touches the execution scene (routing it to a ticket is routing, not execution), never saves state, and never executes a workflow."
+description: "The harness's single install face — a pure intent-routing skill. Maps natural language to the 15 routing verbs (file, queue, cancel, recall, remember, memory, submit, task, watch, answer, pause, resume, wrap, ops, msg), the machine verbs doctor, version, help, the fragments extensions (`pf help extensions`), init (machine setup; `pf init`) and follow-up ledger (`followup.md`), each under verbs/; data-plane verbs go to AIHub, execution-plane ones to the daemon. Owner-directed code work on a repo (change / upgrade a library / fix a bug) is an execution intent: route it to an execution ticket (`pf file create --bundle <lane>` + `pf submit`); the daemon's claimed capsule does the work — the session agent never hand-executes (no git branch/commit/push/PR, no Edit/Write under .repo/; ask which ticket a change hangs on, else file one). It never parses a workflow, never touches the execution scene (routing it to a ticket is routing, not execution), never saves state, and never executes a workflow."
 license: PolyForm-Noncommercial-1.0.0
 compatibility:
   harnesses: [pi, claude]
@@ -15,18 +15,26 @@ Nothing else. The split between the target faces is fixed (the architecture's ro
 
 - **Data-plane verbs** (`file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg send`/`list`/`ack`/`show`/`contacts`): pure
   Core data reads/writes that do not touch any execution scene. The `pf` CLI
-  talks HTTP **direct to AIHub** (single port, `Authorization: Bearer
-  <api_key>`); the daemon is not involved.
+  sends them to the local daemon, which forwards each one through the
+  resolved Cell's configured AIHub connection (`ANY /aihub/…`, the Cell's
+  `Authorization: Bearer <api_key>`); the CLI never dials AIHub itself and
+  takes no `--server`/`--api-key`/`PF_SERVER`/`PF_API_KEY` override (refused;
+  only the local repair verbs `config`, `profile`, `doctor`, `init`,
+  `migrate` and `version` run under an inherited `PF_SERVER`/`PF_API_KEY`,
+  ignoring it with one stderr notice).
+  With the daemon down a data-plane verb fails explicitly (`DAEMON-410`) —
+  run `pf daemon ensure`, then retry once.
 - **Execution-plane verbs** (`submit`, `task` (spawn/list/show/cancel), `watch`, `answer`,
   `pause`, `resume`, `wrap`, `ops`, `msg analyze`, `msg prompt`): semantically bound to this machine's local
   execution scene (one exception: `wrap` of a work item with no bundle,
   which no daemon ever holds, is recorded by AIHub). The `pf` CLI talks to the **local daemon over its unix
   domain socket** (default `daemon.sock` in `$POLYFORGE_DATA_DIR`, else `~/.local/share/polyforge`); the daemon translates each
   route into its Runtime (lifecycle) and Observe (supervision) modules.
-- **Delivery** is not a verb — the workflow's own `deliver` step (`verbs/ship.md`).
+- **Delivery** is not a verb — the workflow's own `publish` and `merge` steps (`verbs/ship.md`).
 
-Direct connection does not bypass any permission boundary: the `pf` CLI passes
-through the same AIHub authentication as any other HTTP client, and daemon
+Daemon mediation does not bypass any permission boundary: the request carries
+the Cell's AIHub credential through the same AIHub authentication as any other
+HTTP client, and daemon
 mediation does not loosen Core-side validation. If no intent fits or the
 intent is ambiguous, **ask rather than guess**.
 
@@ -54,7 +62,7 @@ Map the user's words to a fragment; the fragment owns the real command shape,
 success rendering and error branches. Work items carry server-minted ids
 (`wi_` + random chars); slugs (`<project>#<seq>`, e.g. `polyforge#140`) exist
 for humans and resolve wherever the CLI accepts an id. Human-facing output —
-status line, wake-up lines, `pf watch`, `pf ops status`, verb confirmations —
+the decision feed, `pf watch`, `pf ops status`, verb confirmations —
 names a work item by its slug (the id only when no slug is known); `--json`
 keeps the id as the machine identifier. Quote a slug in shell commands
 (`pf watch 'polyforge#140' --once`): `#` is a glob character under zsh
@@ -81,46 +89,59 @@ EXTENDED_GLOB and starts a comment after whitespace.
 | analyze a message / 分析这条消息 | `verbs/message.md` (analyze) | daemon |
 | turn a message into a prompt / 把这条消息整理成 prompt | `verbs/message.md` (prompt) | daemon |
 | owner-directed code work on a project repo / upgrade a library / bump the dependency / fix this bug in the repo / change the code / make it do X / refactor X / 升级 X 库 / 升级一下依赖 / 修一下这个 bug / 改一下仓里的 X / 让它支持 X / 重构一下 X | `verbs/execute-intent.md` (execution intent → execution ticket: `file create --bundle <lane>` + `submit`; the session agent never hand-executes) | AIHub + daemon |
-| run it / submit it / start this work item / execute / 跑起来 / 执行这个 WI / 提交执行 | `verbs/submit.md` | daemon |
+| run it / submit it / start this work item / execute / 跑起来 / 执行这个 WI / 提交执行 | `verbs/submit.md` (its acceptance check first) | daemon |
 | spawn a task / outsource a research errand / have a fresh agent look into X / start a background investigation / 起个任务 / 外包给一个新 agent / 调研一下 X / 派个只读跑腿 | `verbs/task.md` (read-only errand: research / analysis / report / pre-review only — a code change stays on the execution-ticket route above) | daemon |
 | take over a stuck work item / its machine is dead / force takeover / 接管 / 强制接管 | `verbs/ops.md` (`pf ops end-session`, then `verbs/submit.md`) | AIHub + daemon |
 | how's it going / show progress / what step is it on / watch this one / follow it / 看看进度 / 跑到哪了 / 观察一下 / 盯着 | `verbs/watch.md` (`pf watch`) | daemon |
+| what needs me / any decisions waiting / 有什么要我处理的 / 有哪些决策 | `verbs/watch.md` (`pf watch decisions`; `pf watch dismiss` only on the human's request) | daemon |
 | answer the question / reply to needs_input / 回答问题 / 它在问我 / 答一下 | `verbs/answer.md` | daemon |
 | pause it / stop for now / hold on / 暂停 / 先停一下 / 挂起 | `verbs/pause.md` | daemon |
 | resume it / continue the paused or blocked one / 恢复执行 / 接着跑（已暂停或已阻塞的）/ 继续 | `verbs/resume.md` | daemon |
+| send it back to <step> with my reason / redo it from <step> / 打回重做 / 带说明打回到 <step> / 退回到某一步重来 | `verbs/answer.md` (tell the step in the human's own words, verbatim: its agent hands off `rewind --to <step>` citing the message; a parked work item is woken by it) | daemon |
+| let it through / waive the gate / accept the fail and continue / 放行 / 豁免这道闸 / 这个红是已知的，继续 | `verbs/answer.md` (tell the gate's step in the human's own words, verbatim: its agent hands off `waive` citing the message, a waivable gate only) | daemon |
 | wrap it up / we're done / mark it done / close this ticket / mark it failed / 收尾 / 完事了 / 判完成 / 关掉这张票 / 标记完成 / 判失败 | `verbs/wrap.md` (a running work item, or a ticket with no bundle — design, decision, tracking; "don't want it" stays `cancel`) | daemon; AIHub for a ticket with no bundle |
 | all unclaimed follow-ups / any follow-ups left / claim or dismiss a follow-up / 全部未认领 follow-up / 有没有遗留 / 处理这条 / 不修这个 | `verbs/followup.md` (the follow-up ledger in AIHub `doc.track` memories: ingest / present / claim / dismiss / dedupe; never auto-file) | AIHub (memories) + session |
-| ship it / deliver / push the branch / open the PR / merge it / 推上去 / 交付 | `verbs/ship.md` (deliver-step note: no verb; point at the workflow's `deliver` step and `pf watch`) | — |
+| ship it / deliver / push the branch / open the PR / merge it / 推上去 / 交付 | `verbs/ship.md` (delivery note: no verb; point at the workflow's `publish` and `merge` steps and `pf watch`) | — |
 | cut a release / publish a version / deploy it / 发版 / 发布新版本 / 部署上线 | `verbs/file.md` (create, `--bundle release`) | AIHub |
+| make this the interactive machine / take the interactive role over / 设为交互机器 / 抢交互角色 | `verbs/ops.md` (`pf ops role interactive`; `--force` only when the human asks for the takeover) | daemon |
 | daemon status / what's this machine running / what's happening / global state / 看看什么情况 / 全局状态 / auto-pull on/off / max concurrent jobs / shutdown / start the daemon / the daemon is down / 升级前自检 / 启停 / 拉起 daemon / 自动领取开关 / 调并发 / 优雅停机 | `verbs/ops.md` (start = `pf daemon ensure`) | daemon |
 | is this machine healthy / diagnose / check the mapping / why won't the daemon start / 连不上 / 诊断 / 体检 / 检查映射 | `verbs/doctor.md` | CLI (config + aihub + daemon reads) |
+| validate a workflow lane / is this bundle valid / check the lanes / 校验车道 / 检查 bundle / 车道能不能加载 | `verbs/doctor.md` (`pf workflows validate`) | CLI (the daemon's own loader) |
 | init / install / upgrade / machine setup / 装机 / 升级 | `verbs/init.md` (machine pointer) | CLI |
 | init this workspace / initialize the workspace / write the workspace yaml / 初始化工作区 / 生成工作区配置 | `verbs/init.md` (workspace init) | CLI |
 | help / what skills / usage / 速查 / 怎么用 | `verbs/help.md` | CLI |
 | how do I customize / extend / configure polyforge / where are the config keys / 怎么扩展 / 自定义 / 配置 polyforge | `verbs/extensions.md` (`pf help extensions`) | CLI |
 | what version / which build / what's this binary / 什么版本 / 查版本 | `verbs/version.md` | CLI |
 
+Owner-only machine verbs, **not routable**: `pf cell` (the Host's Cells —
+one per AIHub profile; `verbs/cell.md`) and `pf migrate cell-layout` (the
+one-time per-Cell data layout of a stopped Host; `verbs/migrate.md`) are
+never run by the agent on its own and are refused inside a step or task; on
+an explicit owner request, show the command.
+
 Disambiguation: "continue / go on" **mid-run** routes to `watch` (`pf watch <wi> --once`), not
 `resume` — `resume` is "continue": it reactivates a **paused** WI (a hub
 PATCH only — the kept session is re-attached by its holder daemon) or a
-**blocked** one (the daemon re-claims it and resumes from the checkpoint). A blocked WI has exactly two human
-moves: continue = `resume`, abandon = `cancel` (both are allowed to the task's reporter, a project maintainer or an admin).
+**blocked** one (the daemon re-claims it and resumes from the checkpoint). A blocked WI is woken by the
+human's message (`answer`: its step reads the words — go on, go back to an earlier step, accept a waivable
+gate's FAIL — and hands off accordingly); `resume` (continue as it stands) and `cancel` (abandon) are for a park
+no agent can start (all are allowed to the task's reporter, a project maintainer, an admin, or the current operator of the machine that last held it as a project writer or maintainer; that holder basis applies to a blocked WI only).
 A WI whose capsule directory went missing, or whose project lost its
 `[workspace]` mapping, across a daemon restart is simply set `blocked` (the
 reason note names the cause): fix the cause if any, then `resume`, or `cancel`.
 "Stop" of a running work item routes to `pause` (reversible) or
 `wrap --fail` (the owner's failed verdict), never to `cancel` (which only
 applies to WIs with no active execution — queued, paused or blocked). "Ship / deliver / push it / open the PR" has no
-verb: delivery is the workflow's own final `deliver` step (`verbs/ship.md`) — never route it to
-`submit` (which starts execution), and never answer either deliver question yourself: the merge question (`deliver-merge`) and the owner-review question (`deliver-owner-review`) are both human-only.
+verb: delivery is the workflow's own final `publish` and `merge` steps (`verbs/ship.md`) — never route it to
+`submit` (which starts execution), and never answer the publish step's owner-review question (its `pf step ask`) yourself: it is human-only, as are a develop build's stops (its `pf step ask` after the plan: the owner answers in free text that the build reads).
 
 "Change / upgrade / fix" of a project repo's code is an execution intent (`verbs/execute-intent.md`): file the execution ticket — the bundle is required, a registration ticket runs nothing (CORE-409) — and submit it; never hand-execute the work in the session. "Run it / submit it" of an existing work item stays `submit`; "release / deploy a version" stays the release-bundle route (`file create --bundle release`).
 
-"Release / deploy / 发版 / 部署" is neither the `deliver` step nor a delivery lane: it routes to `file` with
+"Release / deploy / 发版 / 部署" is neither the `publish` step nor a delivery lane: it routes to `file` with
 `--bundle release` (the project-agnostic release bundle: release, then an independent verify,
 then deploy). Put any bump keyword the user named (`major`/`minor`/`patch`) verbatim in `--goal`;
 otherwise name none and let the repo's procedure default. Never file a release on a delivery
-bundle (`feature-full`, `bug-fix`, `autopilot`, `chore`, `micro` have no release step), and never run a
+bundle (`develop` and `micro` have no release step), and never run a
 release or deploy procedure from this skill directly.
 
 When the user repeatedly walks the same flow, read the docs' bundle-authoring chapter ([docs/bundles.md](../../docs/bundles.md)) and propose sedimenting it into a custom workflow bundle.
@@ -133,122 +154,36 @@ carries it to the public repo at the next release. The public project
 (`polyforge`) takes **external contributions** only — an outside contributor's
 PR — and is never a filing target for team work.
 
-## Human coordination: `pf watch` (subscription = adoption)
+## Human decisions: Pi Web's Polyforge panel
 
-The execution plane never notifies a session by itself. `pf watch` is the
-proactive face, and it carries exactly two kinds of signal:
-
-- **Progress** — current step and its age, the running command, recent files,
-  tool-call count. Mechanical, no model involved. It is shown DIRECTLY to the
-  human (a Claude Code `statusLine`, a pi widget) and never enters your
-  context.
-- **Decisions** — a question to answer or gate to pass, a failed / blocked /
-  completed workflow, a step judged dead, candidates exhausted, a rejected or
-  dropped submit, a blocked work item (including a missing capsule or an
-  unmapped project), a daemon restart, a task repo whose carrier ref could
-  not be saved (`carrier_push_failed <repo>`: a resume may lose that repo's
-  commits).
-  These wake you with ONE fixed-template line:
-  `[polyforge] <slug> <kind> — <short fixed phrase>; this is a human decision,
-  the agent must not answer it` (e.g. `[polyforge] polyforge#140 needs_input
-  q-1 — ...`).
-
-**Subscription is the whole ownership model.** A chat (`PF_CHAT_ID`) is
-subscribed to the work items it submits (`pf submit` does it); it subscribes to
-others with `pf watch subscribe <wi>` and drops them with `pf watch
-unsubscribe <wi>` (`pf watch list` shows them; an unsubscribed work item stays
-out until you subscribe it again). The subscriptions and the
-per-chat read cursors live in the daemon, not in any file you can write. There
-is no arming, no script copying and no adoption prompt: a new session simply
-subscribes to the work items it wants. A running watcher also subscribes its
-chat, every poll, to every work item the daemon holds that the chat submitted
-or its owner (`PF_USER_ID`; the reporter when the job has no owner) owns.
-A manual unsubscribe outranks both of those automatic subscriptions: it is a
-persistent opt-out of THIS chat (it survives a daemon restart), so the work
-item never comes back on a poll; the owner's other chats keep their own
-subscriptions. Only an explicit `pf watch subscribe <wi>` (or `pf watch adopt
-<wi>`, or submitting/resuming it from this chat) brings it back — the rule and
-its paths are in `verbs/watch.md`.
-A work item's decisions wake ONE chat: the chat that submitted it. Your
-other chats (another tab, another session) show its progress only; if the
-submitting chat's watcher has been silent for a minute, one of them is woken
-instead, but only for decisions the submitting chat has not received — a
-decision is delivered once, in whichever chat printed it. A work item with
-no submitting chat (auto-pulled, a CLI submit without a chat, or one the
-submitting chat unsubscribed) scopes its decision wake to the work item's
-own workspace: the live, subscribed, non-muted chats tagged with that
-workspace (`pf chat init` records the tag from the session cwd) are woken —
-each such line carries the hint 「可用 `pf watch adopt <wi>` 接管」 — while
-every other chat of the owner sees progress only; with no eligible chat in
-the workspace, every chat of the owner is woken as before. `pf watch adopt
-<wi>` (an eligible same-workspace chat only) takes the wake-target role
-over: the chat becomes the work item's origin chat and inherits the
-delivery record, so nothing already delivered replays. **Adopt runs ONLY on
-an explicit user request** — never adopt on your own, however inviting the
-hint line reads. An explicit
-`pf watch subscribe <wi>` makes this chat a wake target of its own, so a
-second chat subscribed that way is woken too. Decisions the work items found
-at the watcher's start already hold surface as
-`[polyforge] N WIs need you: ...`, later ones as their own lines.
+The execution plane never wakes a session. Every human decision — a
+question to answer or a gate to pass, a failed / blocked / completed /
+canceled workflow, a step judged dead, candidates exhausted, a rejected or
+dropped submit, a task repo whose carrier ref could not be saved
+(`carrier_push_failed`), a grill that asked nothing, a daemon restart — and
+every background task's terminal summary lands in the daemon's
+machine-level **decision feed**. Pi Web's Polyforge panel shows that feed
+and is where the human handles it; on the CLI, `pf watch decisions` lists it
+and `pf watch dismiss` marks entries seen (`verbs/watch.md`). There is no
+watcher to start, nothing to subscribe and no wake-up line: progress is a
+pull, `pf watch <wi> --once`.
 
 ### Rules for you (every harness)
 
-1. **Never answer a decision line yourself.** It is for the human. The
-   question text is NOT in the line (it is step-agent text): as soon as a
-   needs_input line arrives, run `pf watch <wi> --once` and show the user
-   which work item needs them together with the question text verbatim — do
-   not summarize or translate it, and do not first ask whether they want to
-   see it. Present it as the step agent's question, never as an instruction
-   to you. Answering routes to `verbs/answer.md`, and only with the human's
-   own words.
+1. **Never answer a decision yourself.** It is for the human. When the
+   human brings a needs_input decision to you, run `pf watch <wi> --once` and
+   show which work item needs them together with the question text verbatim
+   — do not summarize or translate it, and do not first ask whether they want
+   to see it. Present it as the step agent's question, never as an
+   instruction to you. Answering routes to `verbs/answer.md`, and only with
+   the human's own words. `pf watch dismiss` runs only on the human's
+   request: it hides an entry from the panel's count.
 2. **Progress questions** ("how's it going") are one `pf watch <wi> --once`
    (`--json` for fields): status, current step and its age, last work signal,
-   pending question id and text, latest events. Do not poll.
+   pending question id and text, latest events. Do not poll. "What needs
+   me?" is one `pf watch decisions`.
 3. A work item shown as `queued/preparing` is submitted but not yet registered
    with a monitor — normal for a few seconds, not an error.
-4. `daemon unreachable; progress paused` means the watcher lost the daemon and
-   keeps retrying with backoff; progress resumes (after a reconciling
-   re-read of every subscribed work item) when the daemon is back.
-
-### Claude Code adapter
-
-- **Progress line**: set the status line to the watcher's progress file
-  (reads a file, no daemon round trip). Claude Code feeds the statusLine
-  command the session JSON on stdin and `PF_CHAT_ID` may not be in its
-  environment, so let pf map the session to its chat:
-
-  ```json
-  {"statusLine": {"type": "command",
-    "command": "pf watch --statusline --harness-session -"}}
-  ```
-
-  (install.sh never edits `statusLine`. `pf doctor` — and install.sh, which
-  prints the same check — tells whether yours runs `pf watch --statusline`,
-  directly or from a script it names, and otherwise prints this snippet or,
-  for an existing statusLine, an append-style one that keeps its output.)
-
-  (With the variable available, `pf watch --chat "$PF_CHAT_ID" --statusline`
-  is equivalent; `--harness-session <id> [--harness claude]` takes an explicit
-  session id. The mapping is the same one `pf chat init` makes, cached in the
-  user's runtime dir.)
-- **Wake loop**: after the first submit (and again after every wake), run
-  `pf watch --chat "$PF_CHAT_ID" --wait-decision` as a BACKGROUND task. It
-  also writes the progress file for the status line. It exits 0 printing one
-  fixed-template line per pending decision. When the task finishes: handle
-  the line(s) with the user per rule 1 (a needs_input line: run
-  `pf watch <wi> --once` and show the question text verbatim right away),
-  then START THE COMMAND AGAIN. One watcher per chat (a second start is refused while one
-  runs); it exits by itself when the session that started it is gone.
-- Do not use the Monitor tool for this: it has a time cap and every line costs
-  tokens.
-
-### pi adapter
-
-`extensions/pf-chat.ts` spawns the resident `pf watch --chat <id>` on session
-start, renders the progress file as a widget (refreshed every 2 s) and turns
-every decision line on its stdout into an agent turn
-(`sendMessage(..., {triggerTurn: true})`). Nothing to arm: rule 1 applies when
-the turn arrives.
 
 ## Session rules
 
@@ -277,7 +212,8 @@ Eight standing rules, binding on every polyforge session:
    `doc.review` / `doc.decision` / `doc.audit` memory; experience into
    `experience.*` / `fact.*`. Locally a workspace holds only `.repo/`
    (clones), `capsules/` (daemon-managed), `.polyforge/`
-   (polyforge-generated only) and `scratch/` (disposable output; `pf
+   (polyforge-generated only, plus `.polyforge/workflows/<lane>/`: the
+   workspace's own workflow lanes) and `scratch/` (disposable output; `pf
    doctor` reports entries older than 14 days, `--prune-scratch` removes
    them). Never write documents into the workspace root or `.polyforge/`.
 3. **Blockers become work items.** Root-cause obstacles instead of
@@ -288,16 +224,22 @@ Eight standing rules, binding on every polyforge session:
    execution path.
 5. **Per-step models live in `.polyforge.yaml`; each candidate names its harness.** A
    workspace root may carry a `.polyforge.yaml` (`steps.<project>.<default|step-id>:
-   { models: [...] }`, `models` and the declared `attrs` its keys — an
-   attr override `attrs: { <name>: <scalar> }` only for an attr the
-   bundle step declares, never under `default`/`task`) whose candidates are
+   { models: [...] }`, `models` the step's candidate list, beside which a
+   step's entry may carry `skip: true` — a leftover `attrs` is
+   refused, step attrs were removed in workflow contract 4) whose candidates are
    `<harness>:<model>[:<effort>]` (`pi:` or `claude:`, the prefix mandatory
    — the same format as the bundles' `model_candidates` and `pf submit
    --models`). The daemon reads it fresh at every dispatch (so an edit governs the
    next dispatch of a running work item; an unreadable one blocks it and
    `pf resume` continues) and before every claim; an invalid
    file refuses the claim (DAEMON-414) WITHOUT claiming — the work item
-   stays queued for other machines. Schema, syntax and precedence: the
+   stays queued for other machines. A step's `skip: true` switches the step
+   off for the project only where its lane declares it `skippable` (develop's
+   `merge`: the work item then ends after `publish`, its PRs awaiting a human
+   review); it is fixed when a work item is first claimed, so it reaches the
+   work items claimed after the change, never a running one — set it with
+   `pf config set steps.<project>.<step-id>.skip true`, which refuses a step
+   no lane declares skippable. Schema, syntax and precedence: the
    "Model candidates" subsection of docs/extending.md, routing to
    docs/reference/config.md's `steps:` section (via `verbs/init.md`).
    The memory policy — what the last step puts into the work item's
@@ -311,15 +253,16 @@ Eight standing rules, binding on every polyforge session:
    `memory_policy:` or `summarize:` section is refused whole (DAEMON-414 naming
    the file, the line and `pf config migrate`). Step
    agents hold no aihub credential path: inside a workflow step
-   (`PF_WI_ID` and `PF_DAEMON_ID` set) `pf recall` / `pf memory show` go through the daemon,
-   the last step's `pf remember` sends the work item's one
+   (`PF_WI_ID` and `PF_DAEMON_ID` set) `pf step recall` / `pf step memory show` go through the daemon,
+   the last step's `pf step remember` sends the work item's one
    `experience.wrap` summary to the daemon, which stores it, and every
-   other data-plane verb is refused (DAEMON-403).
+   data-plane verb — `pf recall`, `pf memory`, `pf remember` included — is
+   refused (DAEMON-403).
    The repo inventory and clone URLs always come from the aihub project
    registry; the cli.toml `[workspace]` mapping is the only placement source.
 6. **No unticketed writes into `.repo/` clones (polyforge#198).** This rule binds
    interactive chat sessions only — step agents never load this skill (pi steps run
-   against the daemon's own agent dir, claude steps run `--bare` or `--safe-mode` — and they work
+   against the daemon's own agent dir, claude steps run `--safe-mode` — and they work
    inside a capsule whose work item is the ticket). Before your FIRST write into a
    mapped workspace's `.repo/<repo>` clone — any change to a tracked or untracked
    non-ignored file, or creating a commit (NOT read-only ops, fetch/pull, checkout of
@@ -347,7 +290,10 @@ Eight standing rules, binding on every polyforge session:
    write operations happen only inside the daemon's claimed work-item capsule. Before
    any branch / commit / push / PR, ask which execution ticket this change hangs on; no
    answer → file one first and route the work through it. Hand-executing bypasses every
-   gate — no root-cause, no verification, no review, no deliver record.
+   gate — no root-cause, no verification, no review, no delivery record.
+   Filing does not grill: a ticket may be filed as a bare idea. Before `pf submit`, run
+   the acceptance check of `verbs/submit.md` — no criterion under `## Acceptance` /
+   `## 验收` means stop, tell the user and grill the acceptance in the session first.
 8. **Sync the session clone before reading it as fact (session-layer clone sync).**
    Nothing keeps `<workspace>/.repo/<repo>` current: a claim clones fresh into the
    capsule, but the session's reading copy can sit hundreds of commits behind origin's
@@ -378,13 +324,18 @@ pf [global flags] <verb> [verb flags] [positional args]
 ```
 
 - **Global flags come before the verb**: `--json`, `--config PATH`,
-  `--server URL`, `--api-key KEY`, `--socket PATH`, `--user ID`, and
+  `--socket PATH`, `--user ID`, `--profile NAME` (the Cell — one per AIHub
+  profile — a Cell-scoped command targets; else `PF_PROFILE`, else the
+  cwd's mapped Cell, else `default`; never inferred by you), and
   `--version` (print the build version and exit). Verb flags come after
-  the verb word.
+  the verb word. `--server`/`--api-key` (and `PF_SERVER`/`PF_API_KEY`) are
+  refused: a Cell's connection is configured (`pf config`, `pf cell`) —
+  the explicit flags on every verb, the inherited variables on every verb
+  but the local repair verbs, which ignore them with one stderr notice.
 - **Config precedence**, strictest wins: command-line flag > environment
-  (`PF_SERVER`, `PF_API_KEY`, `PF_DAEMON_SOCKET`, `PF_USER_ID`)
-  > config file > built-in defaults (`http://localhost:8420`,
-  `daemon.sock` in `$POLYFORGE_DATA_DIR`, else `~/.local/share/polyforge`).
+  (`PF_DAEMON_SOCKET`, `PF_USER_ID`, `PF_PROFILE`)
+  > config file > built-in defaults (`daemon.sock` in `$POLYFORGE_DATA_DIR`,
+  else `~/.local/share/polyforge`).
   The config file default path is
   `~/.config/polyforge/cli.toml`: the five flat string keys `server`,
   `api_key`, `daemon_socket`, `user_id`, `claude_bin` (the daemon's Claude
@@ -430,23 +381,18 @@ pf [global flags] <verb> [verb flags] [positional args]
   or does nothing when one already answers), then retry the verb ONCE; if
   ensure fails, relay its message and suggest `pf doctor` (or check
   `--socket`). This is the fallback: normally the harness adapter already
-  ran ensure when the session started (see below).
+  ran ensure when the session started (see Session start below).
 - A `DAEMON-403 ... belongs to the step process tree` answer on any
   daemon-face verb that changes state (submit/claim, answer, pause,
-  resume, wrap, ops, chat init, watch subscribe/ack) means the
+  resume, wrap, ops, watch dismiss) means the
   caller is a step agent of that daemon: a step never drives the daemon.
   Reads (status, watch snapshot) stay open. Do not retry; the human
   session runs the verb.
 
-## Chat identity (PF_CHAT_ID)
+## Session start (harness adapters)
 
-A chat is one interactive harness conversation. `pf chat init --harness
-claude|pi --harness-session <id>` asks the local daemon for that
-conversation's chat id (`chat_` + random; created on first use, the same id
-on resume) and prints it. `PF_CHAT_ID` is a notification label, not a
-credential; `pf submit` sends it (plus the `PF_USER_ID` owner) so the daemon
-records the job's origin. Step agents never see it. The model does not handle
-it: a harness adapter sets it.
+A harness adapter keeps the daemon up for the human's session; the model
+does not run it.
 
 - **Claude Code**: `tools/install.sh` registers `hooks/claude-session-start.sh`
   as a SessionStart hook in `~/.claude/settings.json` (once; absolute path
@@ -459,22 +405,21 @@ it: a harness adapter sets it.
   ]}]}}
   ```
 
-  It first runs `pf daemon ensure` (bounded: 15s, killed at 20s) so a
-  daemon that is down — e.g. after a container or machine restart — comes
-  back; then it appends `export PF_CHAT_ID=<id>` to `$CLAUDE_ENV_FILE` and
-  prints one JSON object: `systemMessage` shows `polyforge chat id: <id>` to
-  the human, `additionalContext` gives the model the same id. It is silent
-  when pf or the daemon is unavailable, and never blocks the session.
-  SessionStart fires on startup, resume, clear and compact.
-- **pi**: the `extensions/pf-chat.ts` extension is listed in this package's
-  `pi.extensions` manifest; it runs `pf chat init` on session start (pi-web
-  replays session start when it resumes its sessions) — when that fails it
-  runs `pf daemon ensure` once in the background and retries — and
-  prefixes every bash tool call with `PF_CHAT_ID=<id> export PF_CHAT_ID; `,
-  so every command of a compound string (`cmd1; pf submit`) sees the id.
+  It runs `pf daemon ensure` (bounded: 15s, killed at 20s) so a daemon that
+  is down — e.g. after a container or machine restart — comes back, then
+  asks for the interactive machine role with `pf ops role interactive
+  --if-unset` (never `--force`; bounded; an operator's explicit `pf ops role
+  runner` stands). It prints nothing, sets no environment
+  variable and never blocks the session. SessionStart fires on startup,
+  resume, clear and compact.
+- **pi**: the `extensions/pf-chat.ts` extension (the name is historical) is
+  listed in this package's `pi.extensions` manifest; on session start it
+  runs the same `pf daemon ensure`, then `pf ops role interactive
+  --if-unset`, in the
+  background — the session never waits on either.
 - **Step agents never run either adapter**: pi steps run against the
   daemon's own agent dir (no user packages, no pf-chat), claude steps run
-  with `--bare` or `--safe-mode` (either skips hooks); both carry `PF_WI_ID`, on which the adapters
+  with `--safe-mode` (which skips hooks); both carry `PF_WI_ID`, on which the adapters
   exit as a second fence. Only a human's session starts the daemon.
 
 ## Routing boundaries this skill never crosses

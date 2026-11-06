@@ -1,0 +1,21 @@
+e2e/all: 2 suite(s), browser pool 1, serial lane 1
+
+===== PASS greeting.mjs (0s) =====
+PASS: GR1 the greeting renders
+PASS: GR2 the greeting persists
+
+===== FAIL minimap.mjs (0s) =====
+PASS: MM1 the minimap opens
+FAIL: MM2 the minimap follows the scroll — expected top 4, got 3
+
+
+===== failures =====
+FAIL e2e/minimap.mjs: MM2 the minimap follows the scroll — expected top 4, got 3
+host loadavg 1m/5m/15m: 6.91 / 10.78 / 19.64
+re-run: npm run test:e2e:all -- minimap.mjs
+
+===== summary =====
+PASS greeting.mjs 0s
+FAIL minimap.mjs 0s
+1/2 passed in 0s
+e2e/all: removed 1 passing suite dist dir(s) under .next/e2e, kept 1 failed for re-run

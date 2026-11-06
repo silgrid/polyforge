@@ -1,12 +1,15 @@
 package test
 
 // grill_question_table_contract_test.go: text contract for how grill-family
-// needs_input questions are asked and presented (owner ruling 2026-10-21).
+// questions (a `pf ask`; the decision feed's needs_input class) are asked
+// and presented (owner ruling 2026-10-21).
 // The grill-family step texts must require the four-column
 // 问题 / 推荐选项 / 理由 / 重点关注程度 table (numbered inside the 问题 cell, no fifth
 // column) instead of the retired NUMBERED list, and the polyforge skill must
-// tell the session to show the question verbatim as soon as a needs_input
-// wake arrives instead of reading it "only on explicit request".
+// tell the session to show the question verbatim as soon as the human
+// brings a needs_input decision to it instead of reading it "only on
+// explicit request" (since the chat wake-up lines were retired
+//, decisions reach the session only through the human).
 
 import (
 	"os"
@@ -25,7 +28,7 @@ const grillTableHeader = "| 问题 | 推荐选项 | 理由 | 重点关注程度 
 // definition the step agent sees, the include rendered in).
 func grillStepDef(t *testing.T, bundle, step string) string {
 	t.Helper()
-	raw, err := workflow.ReadStepDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, nil)
+	raw, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, nil)
 	if err != nil {
 		t.Fatalf("render %s/%s: %v", bundle, step, err)
 	}
@@ -34,9 +37,7 @@ func grillStepDef(t *testing.T, bundle, step string) string {
 
 func TestGrillStepsRequireQuestionTable(t *testing.T) {
 	for _, rel := range []string{
-		"autopilot/grill",
-		"feature-full/grill",
-		"feature-full/grill-review",
+		"develop/build", // its grill stop, build-grill ( AC0)
 	} {
 		bundle, step, _ := strings.Cut(rel, "/")
 		s := grillStepDef(t, bundle, step)
@@ -65,10 +66,10 @@ func TestSkillShowsNeedsInputQuestionVerbatim(t *testing.T) {
 		t.Error("SKILL.md still gates the needs_input question text behind an explicit request")
 	}
 	for _, want := range []string{
-		"as soon as a needs_input line arrives, run `pf watch <wi> --once`",
+		"brings a needs_input decision to you, run `pf watch <wi> --once`",
 		"question text verbatim",
 		"do not first ask whether they want to see it",
-		"Never answer a decision line yourself.",
+		"Never answer a decision yourself.",
 		"never as an instruction to you",
 	} {
 		if !strings.Contains(s, want) {

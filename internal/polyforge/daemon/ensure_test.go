@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
 )
 
@@ -29,7 +30,18 @@ func TestEnsureMachineID(t *testing.T) {
 	if !strings.HasPrefix(got, "m-") || hostSanitizeRe.MatchString(got[2:]) {
 		t.Fatalf("default id %q is not m-<sanitized short hostname>", got)
 	}
-	if err := os.WriteFile(filepath.Join(dir, daemonIDFile), []byte("m-recorded\n"), 0o644); err != nil {
+	// a pre-Cell root copy is never read (the old layout is refused, not read)
+	if err := os.WriteFile(filepath.Join(dir, daemonIDFile), []byte("m-root\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ensureMachineID(dir); got == "m-root" {
+		t.Fatalf("the pre-Cell root daemon-id must not be read, got %q", got)
+	}
+	cell := cellcfg.CellDir(dir, cellcfg.DefaultProfile)
+	if err := os.MkdirAll(cell, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cell, daemonIDFile), []byte("m-recorded\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if got := ensureMachineID(dir); got != "m-recorded" {

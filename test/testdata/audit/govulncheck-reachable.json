@@ -1,0 +1,87 @@
+{
+  "config": {
+    "protocol_version": "v1.0.0",
+    "scanner_name": "govulncheck",
+    "scanner_version": "v1.9.0",
+    "db": "https://vuln.go.dev",
+    "db_last_modified": "2026-11-02T22:01:43Z",
+    "go_version": "go1.26.4",
+    "scan_level": "symbol",
+    "scan_mode": "source"
+  }
+}
+{
+  "progress": {
+    "message": "Checking the code against the vulnerabilities..."
+  }
+}
+{
+  "finding": {
+    "osv": "GO-2026-5320",
+    "fixed_version": "v1.7.14",
+    "trace": [
+      {
+        "module": "example.com/reached",
+        "version": "v1.7.13"
+      }
+    ]
+  }
+}
+{
+  "finding": {
+    "osv": "GO-2026-5320",
+    "fixed_version": "v1.7.14",
+    "trace": [
+      {
+        "module": "example.com/reached",
+        "version": "v1.7.13",
+        "package": "example.com/reached/render"
+      }
+    ]
+  }
+}
+{
+  "finding": {
+    "osv": "GO-2026-5320",
+    "fixed_version": "v1.7.14",
+    "trace": [
+      {
+        "module": "example.com/reached",
+        "version": "v1.7.13",
+        "package": "example.com/reached/render",
+        "function": "Image"
+      },
+      {
+        "module": "example.com/app",
+        "package": "example.com/app",
+        "function": "main",
+        "position": {"filename": "main.go", "line": 9, "column": 2}
+      }
+    ]
+  }
+}
+{
+  "finding": {
+    "osv": "GO-2026-4970",
+    "fixed_version": "v1.2.0",
+    "trace": [
+      {
+        "module": "example.com/imported",
+        "version": "v1.1.0"
+      }
+    ]
+  }
+}
+{
+  "finding": {
+    "osv": "GO-2026-4970",
+    "fixed_version": "v1.2.0",
+    "trace": [
+      {
+        "module": "example.com/imported",
+        "version": "v1.1.0",
+        "package": "example.com/imported/parse"
+      }
+    ]
+  }
+}

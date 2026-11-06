@@ -33,6 +33,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/common/capsule"
 )
 
 // ---------------------------------------------------------------------------
@@ -230,6 +232,7 @@ func v3PfCode(t *testing.T, inst *v1Install, sock string, args ...string) (strin
 		"PF_DAEMON_SOCKET="+sock,
 	)
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := 0
 	if err := cmd.Run(); err != nil {
@@ -275,14 +278,22 @@ func v3StepStatus(exec map[string]any, step string) string {
 	return s
 }
 
-// v3PendingQID answers a step's pending question id ("" when none).
-func v3PendingQID(exec map[string]any, step string) string {
-	pq, _ := v3StepField(exec, step, "pending_question").(map[string]any)
-	if pq == nil {
+// v3OpenAsk answers the stamp of a step's open ask in the capsule's
+// asks.jsonl ("" when none or unreadable).
+func v3OpenAsk(capDir, step string) string {
+	lines, err := capsule.ReadAsks(capDir)
+	if err != nil {
 		return ""
 	}
-	id, _ := pq["id"].(string)
-	return id
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := lines[i]; l.Kind == capsule.AskKindAsk && l.Step == step {
+			if open := capsule.OpenAsk(lines, step, l.Spawn); open != nil {
+				return open.At
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
@@ -292,25 +303,21 @@ func v3PendingQID(exec map[string]any, step string) string {
 // TestV3DriverLifecycleProductionArgv pins the kept face end-to-end: a
 // daemon booted exactly the way production boots it (no engine-selection
 // flag, no executor prompt flag) claims a WI, clones the task repo,
-// drives the whole autopilot workflow through the Go driver and the
+// drives the whole vehicle-lane (micro) workflow through the Go driver and the
 // fakepi envelope mode, survives a kill -9 mid-step and completes after
 // restart. Pre-change this passes via the engine flag's default; the
 // deletion makes the driver unconditional and must keep it green — the
 // spawner core, the claim lane and the recovery window are all exercised.
 func TestV3DriverLifecycleProductionArgv(t *testing.T) {
 	inst, _ := newV1InstallTaskRepo(t)
-	const qid = "q_v3life"
-	// Ordinals: 1 grill asks; 2 grill completes with the answer; 3 fix
-	// (delayed envelope — the kill window); 4 fix again (the post-restart
-	// re-dispatch); 5-6 the tail.
+	// Ordinals: 1 fix asks the owner and completes on the reply in the
+	// same dispatch; 2 review (delayed envelope — the kill window); 3
+	// review again (the post-restart re-dispatch).
 	wi := inst.newWI(t, "v3: driver-only lifecycle on a production argv",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": qid,
-				"question": "Which variant should the lifecycle take?"},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 4000},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			askAction("fix", "Which variant should the lifecycle take?", map[string]any{"do": "envelope", "id": "fix", "outcome": "completed"}),
+			{"do": "envelope", "id": "review", "outcome": "completed", "ms": 4000},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 
 	sockBase := filepath.Join(t.TempDir(), "sock")
@@ -335,21 +342,21 @@ func TestV3DriverLifecycleProductionArgv(t *testing.T) {
 		return err == nil
 	})
 
-	// The driver drives: grill parks in needs_input with the question
-	// persisted (the F9 face), the owner answers through the real CLI,
-	// and the step consumes it.
-	waitUntil(t, 60*time.Second, "grill never parked in needs_input", func() bool {
-		return v3PendingQID(v3ReadExec(t, capDir), "grill") == qid
+	// The driver drives: fix asks the owner and parks on the open ask
+	// (asks.jsonl), the owner replies through the real CLI, and the step
+	// takes the reply.
+	waitUntil(t, 60*time.Second, "fix never parked on its ask", func() bool {
+		return v3OpenAsk(capDir, "fix") != ""
 	})
-	aout, acode := v3PfCode(t, inst, d.sock, "answer", wi, "--question", qid,
+	aout, acode := v3PfCode(t, inst, d.sock, "answer", wi,
 		"--text", "Take the driver-only variant.", "--by", "usr_root")
-	if acode != 0 || !strings.Contains(aout, "delivered") {
+	if acode != 0 || !strings.Contains(aout, "recorded for step") {
 		t.Fatalf("pf answer through the live bridge: exit %d, output %q", acode, aout)
 	}
 
-	// The kill window: crash the daemon hard while fix is mid-step.
-	waitUntil(t, 60*time.Second, "fix never started", func() bool {
-		return v3StepStatus(v3ReadExec(t, capDir), "fix") == "in_progress"
+	// The kill window: crash the daemon hard while review is mid-step.
+	waitUntil(t, 60*time.Second, "review never started", func() bool {
+		return v3StepStatus(v3ReadExec(t, capDir), "review") == "in_progress"
 	})
 	d.crash()
 
@@ -366,7 +373,7 @@ func TestV3DriverLifecycleProductionArgv(t *testing.T) {
 		return ws == "completed"
 	})
 	exec := v3ReadExec(t, capDir)
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		if got := v3StepStatus(exec, step); got != "done" {
 			t.Fatalf("step %s: expected done, got %q", step, got)
 		}
@@ -399,20 +406,15 @@ func nonEmptyLines(s string) []string {
 // TestV3AnswerWithoutLiveBridgeFailsFast pins the answer criterion's
 // posture: `pf answer` against a daemon that holds NO live bridge handle
 // for the WI fails fast — non-zero exit, a surfaced error, no success
-// marker — and the pending question is untouched on the daemon that holds
-// the job. The construction is deterministic instead of racing the
+// marker — and the open ask is untouched on the daemon that holds the
+// job. The construction is deterministic instead of racing the
 // recovery window: daemon-1 owns the parked WI (live bridge), and the
 // answer is pointed at a second, idle daemon that has no job for it.
 func TestV3AnswerWithoutLiveBridgeFailsFast(t *testing.T) {
 	inst := newV1Install(t)
-	const qid = "q_v3ans"
 	wi := inst.newWI(t, "v3: answer fail-fast with no live bridge handle",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": qid,
-				"question": "Which lane takes the fail-fast check?"},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			askAction("fix", "Which lane takes the fail-fast check?", nil),
 		}, nil)
 
 	sock1 := filepath.Join(t.TempDir(), "s1", "d.sock")
@@ -423,8 +425,10 @@ func TestV3AnswerWithoutLiveBridgeFailsFast(t *testing.T) {
 		t.Fatalf("submit: exit %d, output %q", code, out)
 	}
 	capDir := d1.capsuleDir(inst, wi)
-	waitUntil(t, 60*time.Second, "grill never parked in needs_input", func() bool {
-		return v3PendingQID(v3ReadExec(t, capDir), "grill") == qid
+	var askAt string
+	waitUntil(t, 60*time.Second, "fix never parked on its ask", func() bool {
+		askAt = v3OpenAsk(capDir, "fix")
+		return askAt != ""
 	})
 
 	// A second daemon on its own socket/data/workspace: it holds no job
@@ -434,7 +438,7 @@ func TestV3AnswerWithoutLiveBridgeFailsFast(t *testing.T) {
 	d2 := v3StartDaemon(t, inst, sock2, t.TempDir(), t.TempDir(), "m-v3a2")
 	defer d2.stop()
 
-	aout, acode := v3PfCode(t, inst, d2.sock, "answer", wi, "--question", qid,
+	aout, acode := v3PfCode(t, inst, d2.sock, "answer", wi,
 		"--text", "This must not be relayed.", "--by", "usr_root")
 	if acode == 0 {
 		t.Fatalf("pf answer with no live bridge handle was accepted: exit 0, output %q", aout)
@@ -442,12 +446,12 @@ func TestV3AnswerWithoutLiveBridgeFailsFast(t *testing.T) {
 	if strings.TrimSpace(aout) == "" {
 		t.Fatalf("pf answer failed silently: exit %d with no output", acode)
 	}
-	if strings.Contains(aout, "delivered") {
-		t.Fatalf("pf answer reported delivery with no live bridge handle: %q", aout)
+	if strings.Contains(aout, "recorded for step") {
+		t.Fatalf("pf answer reported a relay with no live bridge handle: %q", aout)
 	}
-	// The parked question is untouched.
-	if got := v3PendingQID(v3ReadExec(t, capDir), "grill"); got != qid {
-		t.Fatalf("the pending question changed under the failed answer: got %q, want %q", got, qid)
+	// The open ask is untouched.
+	if got := v3OpenAsk(capDir, "fix"); got != askAt {
+		t.Fatalf("the open ask changed under the failed answer: got %q, want %q", got, askAt)
 	}
 }
 
@@ -460,15 +464,20 @@ func TestV3AnswerWithoutLiveBridgeFailsFast(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestV3GrepCleanDeletedFaces scans every non-markdown code/build file
-// in the repo (Go source and tests, scripts, configs, Makefile; .git/
-// and the frozen v0/ archive excluded; binary files sniffed out) for the
+// in the repo (Go source and tests, scripts, configs, Makefile; .git/,
+// the frozen v0/ archive and git-ignored paths excluded; binary files
+// sniffed out) for the
 // spec-floor term list and requires zero hits. RED before the deletion
 // (the faces are still present by design), GREEN after.
 func TestV3GrepCleanDeletedFaces(t *testing.T) {
 	root := v1Root(t)
 	terms := v3SpecFloorTerms()
 	var hits []string
-	err := v3WalkTextFiles(root, func(path string, raw []byte) {
+	ignored, err := v3GitIgnored(root)
+	if err != nil {
+		t.Fatalf("git ls-files --ignored: %v", err)
+	}
+	err = v3WalkTextFiles(root, ignored, func(path string, raw []byte) {
 		for _, term := range terms {
 			if bytes.Contains(raw, []byte(term)) {
 				rel, _ := filepath.Rel(root, path)
@@ -488,8 +497,29 @@ func TestV3GrepCleanDeletedFaces(t *testing.T) {
 // v3D15ReplayFixture is the one collected data file the scan skips.
 const v3D15ReplayFixture = "internal/polyforge/supervise/testdata/pi-session-replay.jsonl"
 
+// v3GitIgnored lists the paths git ignores under root (a directory entry
+// ends in "/"): installed dependency trees such as webui/ and pi-web/
+// node_modules and build output such as webui/dist or pi-web/.next. They
+// are third-party or generated bytes, never an authored code/build
+// surface — e.g. mermaid's dist bundle carries one of the floor terms.
+func v3GitIgnored(root string) (map[string]bool, error) {
+	cmd := exec.Command("git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	set := map[string]bool{}
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel != "" {
+			set[strings.TrimSuffix(rel, "/")] = true
+		}
+	}
+	return set, nil
+}
+
 // v3WalkTextFiles walks root's regular files, skipping .git/, the frozen
-// v0/ archive, the D15 replay fixture (v3D15ReplayFixture: captured pi
+// v0/ archive, every git-ignored path (ignored, from v3GitIgnored), the D15 replay fixture (v3D15ReplayFixture: captured pi
 // session records whose content legitimately discusses the retired
 // faces it replays — collected data, not an authored code/build
 // surface; every other testdata file is still scanned), markdown
@@ -497,10 +527,16 @@ const v3D15ReplayFixture = "internal/polyforge/supervise/testdata/pi-session-rep
 // (symlinks — e.g. the shared-checkout links the capsule materialization
 // creates — and binary-looking files, sniffed by a NUL byte in the first
 // 512 bytes).
-func v3WalkTextFiles(root string, fn func(path string, raw []byte)) error {
+func v3WalkTextFiles(root string, ignored map[string]bool, fn func(path string, raw []byte)) error {
 	return filepath.WalkDir(root, func(path string, de os.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if rel, rerr := filepath.Rel(root, path); rerr == nil && ignored[filepath.ToSlash(rel)] {
+			if de.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if de.IsDir() {
 			name := de.Name()

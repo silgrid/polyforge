@@ -56,10 +56,9 @@ func TestW175MixedChainClaudeToPi(t *testing.T) {
 	w159Plan(t, inst, wi, map[string]any{
 		"bad_models": []string{"claude-opus-5-5"},
 		"actions": []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true}, // the claude dispatch: 404 first
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"}, // the claude dispatch: 404 first
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}})
 	capDir := w079Run(t, d, inst, ws, wi)
 
@@ -104,10 +103,9 @@ func TestW175MixedChainPiToClaude(t *testing.T) {
 	ws := t.TempDir()
 	d, _, _ := w159HarnessRoot(t, inst, ws, "")
 	wi := w113NewWI(t, inst, "e2e", "w175 pi to claude", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "crash": "before", "crash_stderr": w079ProviderErr},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed", "crash": "before", "crash_stderr": w079ProviderErr},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	})
 	d.pfWant(inst, -1, "submit", wi, "--models", "pi:w175/pi-a, claude:claude-opus-5-5")
 	capDir := w079Capsule(t, inst, ws, wi)
@@ -129,7 +127,7 @@ func TestW175MixedChainPiToClaude(t *testing.T) {
 		t.Fatalf("fix dispatches %v / %v, want pi then claude on a new transcript", hs, trs)
 	}
 	// the manual chain's head governs the other steps (on pi)
-	for _, step := range []string{"grill", "verification"} {
+	for _, step := range []string{"review"} {
 		if got := w079Model(t, capDir, step); got != "w175/pi-a" {
 			t.Fatalf("step %s model %q, want the manual head", step, got)
 		}

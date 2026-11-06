@@ -3,8 +3,8 @@ package cli
 // config_workflows.go: `pf workflows [--cwd <dir>]` — the read-only
 // workflow face. It parses the installed bundle files the
 // daemon runs from on every call (no cache) and answers one JSON document:
-// each bundle's steps in declared order with their candidates and declared
-// attrs, a broken bundle in bundle_errors (never failing the verb), and —
+// each bundle's steps in declared order with their candidates, a broken
+// bundle in bundle_errors (never failing the verb), and —
 // when --cwd resolves a mapped workspace — every mapped project's effective
 // chain per step through workspace.ResolveSteps (the precedence chain's one
 // place). Every degradation is a field: an unreachable daemon or an invalid
@@ -24,30 +24,40 @@ import (
 )
 
 var cmdWorkflows = &Command{
-	Name:         "workflows",
-	Group:        GroupMgmt,
-	Summary:      "List the installed workflow bundles: steps, candidates, declared attrs and each mapped project's effective chain (read-only JSON)",
-	Usage:        "pf workflows [--cwd <dir>]",
+	Name:    "workflows",
+	Group:   GroupMgmt,
+	Summary: "List the installed workflow lanes (read-only JSON), or validate lanes against the workflow contract",
+	Usage: "pf workflows [--cwd <dir>]\n" +
+		"pf [--json] workflows validate [--workspace <dir>] [<lane-dir>…]\n\n" +
+		"The listing: every installed lane's steps, candidates and each mapped project's\n" +
+		"effective chain (with --cwd, the workspace's user lanes too).\n" +
+		"validate: the daemon's own lane loader judges each lane (its workflow.yaml; a lane\n" +
+		"still a workflow.md is refused with its rewrite) — with no lane directory,\n" +
+		"the lane set of the workspace (--workspace, else the mapped workspace holding the\n" +
+		"working directory): the built-in lanes the daemon runs (its workflows dir; the\n" +
+		"installed release's when the daemon does not answer) and the workspace's user\n" +
+		"lanes (.polyforge/workflows/<lane>/). Every defect prints with its WFC code,\n" +
+		"file:line and YAML path; any defect exits 1.",
 	NoConfigLoad: true,
 	Setup: func(fs *flag.FlagSet) {
 		fs.String("cwd", "", "a directory inside a mapped workspace: adds its projects' effective chains")
+		fs.String("workspace", "", "validate: the workspace whose lane set (built-in + its user lanes) is judged (a directory)")
 	},
-	Run: runWorkflows,
+	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
+		if len(args) > 0 && args[0] == "validate" {
+			return runWorkflowsValidate(ctx, fs, args[1:])
+		}
+		if stringFlag(fs, "workspace") != "" {
+			return fmt.Errorf("workflows: --workspace belongs to `pf workflows validate`")
+		}
+		return runWorkflows(ctx, fs, args)
+	},
 }
-
-// StepsAttrsMinimumVersion is the pf/daemon release whose loaders accept
-// step attrs (the floor a refusal names).
-const StepsAttrsMinimumVersion = "2.20.15"
-
-// stepsAttrsCapabilityReason is the refusal of a step-key write (and the
-// read face's write_reason) while the running daemon lacks the capability.
-const stepsAttrsCapabilityReason = "the running daemon does not accept step attrs in .polyforge.yaml; this schema needs pf/daemon " + StepsAttrsMinimumVersion + " or newer — restart the daemon after upgrading"
 
 // daemonFacts is the part of one GET /status read the workspace faces use.
 type daemonFacts struct {
 	reachable    bool
 	workflowsDir string
-	capabilities []string
 }
 
 // readDaemonFacts reads the daemon's status once (a failed read answers
@@ -58,30 +68,23 @@ func readDaemonFacts(ctx *Context) daemonFacts {
 		return daemonFacts{}
 	}
 	var st struct {
-		WorkflowsDir string   `json:"workflows_dir"`
-		Capabilities []string `json:"capabilities"`
+		WorkflowsDir string `json:"workflows_dir"`
 	}
 	_ = json.Unmarshal(raw, &st)
-	return daemonFacts{reachable: true, workflowsDir: st.WorkflowsDir, capabilities: st.Capabilities}
+	return daemonFacts{reachable: true, workflowsDir: st.WorkflowsDir}
 }
 
-// stepsWriteCapability answers whether a steps.* write may land: the
-// running daemon must be reachable (its workflows dir is what the strict
-// loader checks step ids and attrs against) and report
-// CapabilityStepsAttrs. reason names the mismatch when it may not.
-func stepsWriteCapability(f daemonFacts) (bool, string) {
+// stepsWritable answers whether a steps.* write may land: the running
+// daemon must be reachable and name its workflows dir (the lanes a
+// written step id is checked against). reason names why not.
+func stepsWritable(f daemonFacts) (bool, string) {
 	if !f.reachable {
 		return false, "the daemon is not reachable, so the step keys cannot be checked against its installed workflows; start it (pf daemon ensure) and retry"
 	}
-	for _, c := range f.capabilities {
-		if c == CapabilityStepsAttrs {
-			if f.workflowsDir == "" {
-				return false, "the daemon reports no workflows dir, so the step keys cannot be checked"
-			}
-			return true, ""
-		}
+	if f.workflowsDir == "" {
+		return false, "the daemon reports no workflows dir, so the step keys cannot be checked"
 	}
-	return false, stepsAttrsCapabilityReason
+	return true, ""
 }
 
 type workflowsDoc struct {
@@ -98,7 +101,10 @@ type workflowsDoc struct {
 }
 
 type workflowBundle struct {
-	Name     string           `json:"name"`
+	Name string `json:"name"`
+	// Source is where the lane comes from: builtin (the daemon's release)
+	// or workspace (a user lane of the --cwd workspace).
+	Source   string           `json:"source"`
 	Defaults workflowDefaults `json:"defaults"`
 	Steps    []workflowStep   `json:"steps"`
 }
@@ -113,14 +119,14 @@ type workflowDefaults struct {
 type workflowStep struct {
 	ID              string                    `json:"id"`
 	ModelCandidates []string                  `json:"model_candidates,omitempty"`
-	Attrs           []workflowAttr            `json:"attrs,omitempty"`
 	Effective       map[string]effectiveChain `json:"effective,omitempty"`
-}
-
-type workflowAttr struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Default any    `json:"default"`
+	// Skippable: the lane declares the step `skippable: true`
+	//; Skip names each mapped project whose yaml
+	// switches it off — through workspace.SkippedSteps, so a skip the
+	// yaml writes for a step its lane does not declare skippable never
+	// shows. Skip is set only when --cwd maps a workspace.
+	Skippable bool            `json:"skippable,omitempty"`
+	Skip      map[string]bool `json:"skip,omitempty"`
 }
 
 type effectiveChain struct {
@@ -135,7 +141,7 @@ type workflowBundleError struct {
 
 func runWorkflows(ctx *Context, fs *flag.FlagSet, args []string) error {
 	if len(args) != 0 {
-		return fmt.Errorf("workflows: unexpected arguments %v (only --cwd <dir>)", args)
+		return fmt.Errorf("workflows: unexpected arguments %v (only --cwd <dir>, or `validate`)", args)
 	}
 	doc := workflowsDoc{Projects: []string{}, Bundles: []workflowBundle{}, BundleErrors: []workflowBundleError{}}
 	if cwd := stringFlag(fs, "cwd"); cwd != "" {
@@ -152,9 +158,13 @@ func runWorkflows(ctx *Context, fs *flag.FlagSet, args []string) error {
 			doc.Projects = append(doc.Projects, v.eff.Mapping.ProjectsOf(ws)...)
 		}
 	}
-	fms := fillWorkflows(&doc, readDaemonFacts(ctx))
+	ws := ""
+	if doc.Workspace != nil {
+		ws = *doc.Workspace
+	}
+	fms := fillWorkflows(&doc, readDaemonFacts(ctx), ws)
 	if doc.Workspace != nil && doc.WorkflowsDir != "" {
-		cfg, err := workspace.Load(*doc.Workspace, doc.WorkflowsDir, doc.Projects)
+		cfg, err := workspace.Load(*doc.Workspace, doc.Projects)
 		if err != nil {
 			doc.Reason = err.Error()
 		} else {
@@ -164,11 +174,12 @@ func runWorkflows(ctx *Context, fs *flag.FlagSet, args []string) error {
 	return emitJSON(ctx, doc)
 }
 
-// fillWorkflows sets the daemon facts and the parsed bundles of doc and
+// fillWorkflows sets the daemon facts and the parsed bundles of doc — the
+// lane set of the workspace ws (the built-in lanes alone for "") — and
 // answers the parsed frontmatter by bundle name.
-func fillWorkflows(doc *workflowsDoc, facts daemonFacts) map[string]*workflow.Frontmatter {
+func fillWorkflows(doc *workflowsDoc, facts daemonFacts, ws string) map[string]*workflow.Lane {
 	doc.DaemonReachable = facts.reachable
-	doc.WriteCapable, doc.WriteReason = stepsWriteCapability(facts)
+	doc.WriteCapable, doc.WriteReason = stepsWritable(facts)
 	switch {
 	case !facts.reachable:
 		doc.Reason = "the daemon is not reachable, so its installed workflows dir is unknown; start it (pf daemon ensure)"
@@ -178,23 +189,21 @@ func fillWorkflows(doc *workflowsDoc, facts daemonFacts) map[string]*workflow.Fr
 		return nil
 	}
 	doc.WorkflowsDir = facts.workflowsDir
-	fms, bad, err := workspace.Bundles(facts.workflowsDir, "")
+	set := workflow.ForWorkspace(facts.workflowsDir, ws)
+	fms, bad, err := workspace.Bundles(set, "")
 	if err != nil {
 		doc.Reason = fmt.Sprintf("the workflows dir %s is unreadable: %v", facts.workflowsDir, err)
 		return nil
 	}
 	for _, name := range sortedKeys(fms) {
 		fm := fms[name]
-		b := workflowBundle{Name: name, Steps: []workflowStep{}}
+		_, source, _ := set.Resolve(name)
+		b := workflowBundle{Name: name, Source: source, Steps: []workflowStep{}}
 		if fm.Defaults != nil {
 			b.Defaults.ModelCandidates = fm.Defaults.ModelCandidates
 		}
 		for _, s := range fm.Steps {
-			st := workflowStep{ID: s.ID, ModelCandidates: s.ModelCandidates}
-			for _, n := range sortedKeys(s.Attrs) {
-				st.Attrs = append(st.Attrs, workflowAttr{Name: n, Type: s.Attrs[n].Type, Default: s.Attrs[n].Default})
-			}
-			b.Steps = append(b.Steps, st)
+			b.Steps = append(b.Steps, workflowStep{ID: s.ID, ModelCandidates: s.ModelCandidates, Skippable: s.Skippable})
 		}
 		doc.Bundles = append(doc.Bundles, b)
 	}
@@ -209,7 +218,9 @@ func fillWorkflows(doc *workflowsDoc, facts daemonFacts) map[string]*workflow.Fr
 // step, the bundle's project-level fallback (`default` — resolved as a
 // step that declares no list of its own) and the bundle-less task lane.
 // An entry is absent when no level governs (the harness default runs).
-func fillEffective(doc *workflowsDoc, fms map[string]*workflow.Frontmatter, cfg *workspace.Config) {
+// It also marks the steps each project skips through
+// workspace.SkippedSteps, the judgment the claim fixes.
+func fillEffective(doc *workflowsDoc, fms map[string]*workflow.Lane, cfg *workspace.Config) {
 	set := func(m *map[string]effectiveChain, project string, list []string, from string) {
 		if from == "" {
 			return
@@ -222,13 +233,25 @@ func fillEffective(doc *workflowsDoc, fms map[string]*workflow.Frontmatter, cfg 
 	for i := range doc.Bundles {
 		b := &doc.Bundles[i]
 		fm := fms[b.Name]
-		fallback := &workflow.Frontmatter{Defaults: fm.Defaults, Steps: []workflow.FrontmatterStep{{ID: workspace.DefaultKey}}}
+		fallback := &workflow.Lane{Defaults: fm.Defaults, Steps: []workflow.Step{{ID: workspace.DefaultKey}}}
 		for _, project := range doc.Projects {
 			for j, r := range workspace.ResolveSteps(b.Name, fm, cfg, project, nil) {
 				set(&b.Steps[j].Effective, project, r.Models, r.ModelsFrom)
 			}
 			r := workspace.ResolveSteps(b.Name, fallback, cfg, project, nil)[0]
 			set(&b.Defaults.Effective, project, r.Models, r.ModelsFrom)
+			skipped := map[string]bool{}
+			for _, id := range workspace.SkippedSteps(cfg, fm, project) {
+				skipped[id] = true
+			}
+			for j := range b.Steps {
+				if skipped[b.Steps[j].ID] {
+					if b.Steps[j].Skip == nil {
+						b.Steps[j].Skip = map[string]bool{}
+					}
+					b.Steps[j].Skip[project] = true
+				}
+			}
 		}
 	}
 	for _, project := range doc.Projects {

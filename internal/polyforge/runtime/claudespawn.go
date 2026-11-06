@@ -1,18 +1,56 @@
 package runtime
 
 // claudespawn.go: the step spawner for the Claude Code harness
-// (polyforge#159). One step = one headless `claude -p` process:
+// (polyforge#159). One dispatch = one headless `claude -p` process in
+// interactive mode (workflow contract v2 §5.2), alive across many turns:
 //
-//	<claude_bin> -p --bare | --safe-mode
+//	<claude_bin> -p --safe-mode --setting-sources user
+//	  --settings {"enabledPlugins":{"cc-plugin-agents-md@builtin":false}}
 //	  --output-format stream-json --verbose --include-partial-messages
+//	  --input-format stream-json
 //	  --session-id <uuid> | --resume <uuid>
-//	  [--model <claude id>]
+//	  [--model <claude id>] [--effort <level>]
 //	  --tools <ClaudeStepTools> --allowedTools <ClaudeStepTools>
 //	  --permission-mode dontAsk --permission-prompts none
 //	  --strict-mcp-config --disable-slash-commands
 //
-// cwd = the capsule root, own process group (as pi); stdin = the
-// assembled step prompt (the SAME text pi gets), closed once written.
+// cwd = the capsule root, own process group (as pi); stdin = a stream of
+// user messages (claudeUserMessage), the assembled step prompt (the SAME
+// text pi gets) first, and it stays OPEN for the whole dispatch: a later
+// message (spawn.Messenger — the owner relay's) starts the next turn, and
+// the daemon ends the dispatch by closing it / terminating the process
+// (proc.Terminate) once the result envelope is accepted or refused for
+// good, or a supervision verdict retries the step. Turn boundaries are
+// the stream's `result` records (supervise/claude.go).
+//
+// Measured on Claude Code 2.1.322 (the v2 PR 6a probe, 2026-11-10):
+//   - a user message written while a turn is running is NOT lost and NOT
+//     deferred to the next turn: Claude queues it (`command_lifecycle`
+//     state queued, keyed by the message's uuid) and injects it into the
+//     running turn right after the current tool call returns (state
+//     started); the merged turn ends with ONE `result` record
+//     (num_turns counts both). A message written while idle starts its
+//     own turn (a fresh `system/init`, its own `result`).
+//   - between turns the process idles alive with stdin open; EOF on
+//     stdin while idle exits it at once (status 0); EOF mid-turn lets the
+//     turn finish (`result`) and exits then — today's `-p` lifecycle.
+//   - the `uuid` the daemon sets on a user message is echoed in
+//     `command_lifecycle` (`command_uuid`) and kept in Claude's native
+//     session record: a message that started a turn is a `user` record
+//     carrying it; one absorbed mid-turn is a `queue-operation` record
+//     (operation remove, reason absorbed_mid_turn) whose `commandUuid`
+//     carries it, its text then inside the next `api-request-blob` — a
+//     delivery proof that reads the transcript accepts either shape, or
+//     keys on a marker in the text. A non-uuid shape (pf-init-<n>, an
+//     `at` stamp) is accepted, and `--resume` of such a session works.
+//   - a uuid the session ALREADY holds is refused silently (the PR 6a
+//     review, on `--resume`): claude emits a lone `command_lifecycle`
+//     `completed` for it — no `queued`, no `started`, no turn, no reply —
+//     while a fresh uuid on the same stdin runs normally. So every id the
+//     daemon writes is unique within the session, not the process: the
+//     prompt's `pf-init-<spawn_n>` and each message's
+//     `pf-msg-<spawn_n>-<n>` (messageCommandID), and sendClaudeMessage
+//     reads a lone `completed` as "not delivered".
 //
 // The step's Claude Code context is daemon-owned: <harness-root>/
 // claude-config is the config dir (its settings.json env block is the
@@ -26,22 +64,50 @@ package runtime
 // The daemon never injects a credential: none ride the environment or
 // argv — the harness's own settings.json provides them.
 //
-// Context flag by auth mode (polyforge#223), decided at every spawn
-// (fresh and --resume) from that settings.json env block:
-//   - token mode — a non-empty ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY:
-//     --bare only. --bare skips hooks, plugins, LSP, auto-memory,
-//     CLAUDE.md discovery and the keychain.
-//   - OAuth mode — no non-empty token key, a missing settings.json or no
-//     harness root: --safe-mode only. --bare would skip the keychain the
-//     OAuth login lives in; --safe-mode starts with every customization
-//     off (CLAUDE.md, skills, plugins, hooks, MCP servers, custom
-//     commands and agents, output styles, workflows, …).
-// A settings.json that exists but is unreadable, is not JSON or has no
-// `env` string map refuses the spawn. Either flag skips hooks.
+// One profile in every auth mode (replacing polyforge#223's
+// --bare in token mode): the tools the session really has — Claude
+// Code's `system/init.tools` — are exactly ClaudeStepTools, in a clean
+// context.
+//   - --safe-mode starts with every customization off: CLAUDE.md, skills,
+//     installed plugins, hooks, MCP servers, custom commands and agents,
+//     output styles, workflows, and auto-memory with them; it reads the
+//     credential of either auth mode (a token in the settings.json env
+//     block, or the OAuth login in the config dir). Never --bare: Claude
+//     Code 2.1.319 under --bare offers Bash, Edit and Read whatever
+//     --tools names.
+//   - --setting-sources user: <claude-config>/settings.json is the only
+//     settings file read, so a capsule's .claude/settings.json or
+//     settings.local.json can neither redirect the endpoint the credential
+//     is sent to nor add env, permission rules or hooks.
+//   - --settings (claudeIsolationSettings) turns off Claude Code's built-in
+//     cc-plugin-agents-md, which loads AGENTS.md as project instructions
+//     wherever no CLAUDE.md is found up the path — a capsule's case. Built-in
+//     plugins stay on under --safe-mode; the others add nothing to a step's
+//     requests.
+//   - CLAUDE_CODE_ENABLE_TASKS=false: Claude Code's Tasks family supersedes
+//     TodoWrite, which exists only while the family is off.
+//   - CLAUDE_CODE_HARBOR_KITE=0 (ClaudeNoInbox,): no
+//     cross-session messaging inbox. Without it Claude Code 2.1.319 opens a
+//     socket (<TMPDIR>/cc-socks/<pid>.sock, or the hidden
+//     --messaging-socket-path) and exports CLAUDE_CODE_MESSAGING_SOCKET and
+//     _TOKEN to every Bash child; a user message sent there reaches the
+//     step's model and never shows in its stream, and on Linux the token is
+//     optional, so any process of the daemon's uid that finds the path can
+//     inject. Moving the socket into a private directory does not change
+//     that (same uid, and the path rides argv and the Bash env); with the
+//     switch no socket is opened and no variable is exported.
+// The task lane runs the same profile (ClaudeIsolationArgs,
+// ClaudeToolArgs, ClaudeIsolationEnv); the summarize lane shares the
+// settings flags and the environment but keeps its own context flag and
+// has no tools (internal/polyforge/summarize).
+// The settings.json is still read at every spawn (fresh and --resume): one
+// that exists but is unreadable, is not JSON or has no `env` string map
+// refuses the spawn. The real init per profile is recorded and replayed by
+// w427_claude_step_tools_test.go, whose opt-in live probe re-records it.
 //
 // Clean step context (a functional requirement, not isolation): the
-// mode's flag above; --strict-mcp-config with no --mcp-config loads no
-// MCP server; --disable-slash-commands keeps the human's skills out. The
+// profile above; --strict-mcp-config with no --mcp-config loads no MCP
+// server; --disable-slash-commands keeps the human's skills out. The
 // --tools allowlist is the whole tool surface: no background, scheduling
 // or messaging tool exists in the step (background tasks are also off
 // through CLAUDE_CODE_DISABLE_BACKGROUND_TASKS). No --fallback-model:
@@ -67,6 +133,65 @@ import (
 // nothing else exists. The built-in Agent tool is the fresh-context
 // sub-agent (foreground only); WebFetch/WebSearch stay out (pi parity).
 const ClaudeStepTools = "Bash,Read,Edit,Write,Glob,Grep,TodoWrite,Agent"
+
+// claudeIsolationSettings is the flag-level settings of every Claude Code
+// process the daemon spawns: Claude Code's built-in AGENTS.md loader off
+// (see the header).
+const claudeIsolationSettings = `{"enabledPlugins":{"cc-plugin-agents-md@builtin":false}}`
+
+// ClaudeSettingsArgs answers the flags that make
+// <claude-config>/settings.json the only settings file a Claude Code
+// process the daemon spawns reads, with the built-in AGENTS.md loader off.
+func ClaudeSettingsArgs() []string {
+	return []string{"--setting-sources", "user", "--settings", claudeIsolationSettings}
+}
+
+// ClaudeIsolationArgs answers the context flags of a Claude Code process
+// the daemon spawns with tools (a step, a claude task): --safe-mode, then
+// ClaudeSettingsArgs (see the header).
+func ClaudeIsolationArgs() []string {
+	return append([]string{"--safe-mode"}, ClaudeSettingsArgs()...)
+}
+
+// ClaudeToolArgs answers the flags that make tools (a --tools list) the
+// process's whole tool surface, pre-approved: nothing prompts, no MCP
+// server loads, no skill or slash command exists.
+func ClaudeToolArgs(tools string) []string {
+	return []string{"--tools", tools, "--allowedTools", tools,
+		"--permission-mode", "dontAsk", "--permission-prompts", "none",
+		"--strict-mcp-config", "--disable-slash-commands"}
+}
+
+// ClaudeNoInbox is the environment switch that keeps Claude Code from
+// opening its cross-session messaging inbox (see the header).
+const ClaudeNoInbox = "CLAUDE_CODE_HARBOR_KITE=0"
+
+// ClaudeIsolationEnv answers the environment switches every Claude Code
+// process the daemon spawns carries: no cross-session inbox, no background
+// tasks, no autoupdater, and no nonessential traffic (the "0" value is OFF
+// for everything CLAUDE_CONFIG_DIR-side, so the existence is the semantic —
+// see the WI ruling 5).
+func ClaudeIsolationEnv() []string {
+	return []string{ClaudeNoInbox, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "DISABLE_AUTOUPDATER=1",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"}
+}
+
+// WithEnv answers env with every entry of a name adds sets dropped and adds
+// appended, so each added name appears once, with the added value.
+func WithEnv(env []string, adds ...string) []string {
+	own := make(map[string]bool, len(adds))
+	for _, kv := range adds {
+		name, _, _ := strings.Cut(kv, "=")
+		own[name] = true
+	}
+	out := make([]string, 0, len(env)+len(adds))
+	for _, kv := range env {
+		if name, _, _ := strings.Cut(kv, "="); !own[name] {
+			out = append(out, kv)
+		}
+	}
+	return append(out, adds...)
+}
 
 // ClaudeBackgroundTools are tools a step must never have (asserted by
 // the argv regression): background shells, monitors, schedulers,
@@ -143,10 +268,16 @@ const (
 // supervisor uses): max = Y - 1m, default = 10m clamped to max (so a
 // window of 11m or less gives default = max). A window of 2m or less
 // (test/dev-only) keeps half of itself as the margin instead of 1m, and
-// the max never drops below 1ms.
-func claudeBashTimeouts(toolWindow time.Duration) (defTimeout, maxTimeout time.Duration) {
+// the max never drops below 1ms. A step whose lane declares its own
+// window (declared: budget.tool_minutes) gets default = max: the window
+// is sized for the step's commands, and a command the model runs without
+// naming a timeout must not be killed at 10m under a 2-hour window.
+func claudeBashTimeouts(toolWindow time.Duration, declared bool) (defTimeout, maxTimeout time.Duration) {
 	window := supervise.Defaults{Tool: toolWindow}.Fill().Tool
 	maxTimeout = max(window-min(claudeBashToolMargin, window/2), time.Millisecond)
+	if declared {
+		return maxTimeout, maxTimeout
+	}
 	return min(claudeBashDefaultTimeout, maxTimeout), maxTimeout
 }
 
@@ -158,8 +289,8 @@ func claudeBashTimeouts(toolWindow time.Duration) (defTimeout, maxTimeout time.D
 // when the default is larger, so a default injected next to an
 // operator's own max is clamped to that max (when it is a positive
 // integer) — the operator's max stays the max.
-func claudeBashTimeoutEnv(settings map[string]string, toolWindow time.Duration) []string {
-	defTimeout, maxTimeout := claudeBashTimeouts(toolWindow)
+func claudeBashTimeoutEnv(settings map[string]string, toolWindow time.Duration, declared bool) []string {
+	defTimeout, maxTimeout := claudeBashTimeouts(toolWindow, declared)
 	var out []string
 	if v, ok := settings[envBashMaxTimeout]; ok {
 		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && n > 0 {
@@ -196,12 +327,9 @@ func (s *claudeSpawner) buildCmd(p SpawnParams) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runtime: claude spawn refused: %w", err)
 	}
-	contextFlag := "--safe-mode"
-	if ClaudeTokenMode(settings) {
-		contextFlag = "--bare"
-	}
-	args := []string{"-p", contextFlag,
-		"--output-format", "stream-json", "--verbose", "--include-partial-messages"}
+	args := append([]string{"-p"}, ClaudeIsolationArgs()...)
+	args = append(args, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+		"--input-format", "stream-json")
 	if p.Resume {
 		args = append(args, "--resume", p.HarnessSession)
 	} else {
@@ -212,23 +340,12 @@ func (s *claudeSpawner) buildCmd(p SpawnParams) (*exec.Cmd, error) {
 	}
 	// polyforge#176: the candidate's effort rides --effort
 	args = append(args, harness.Candidate{Harness: harness.Claude, Effort: p.Effort}.EffortArgs()...)
-	args = append(args,
-		"--tools", ClaudeStepTools,
-		"--allowedTools", ClaudeStepTools,
-		"--permission-mode", "dontAsk",
-		"--permission-prompts", "none",
-		"--strict-mcp-config",
-		"--disable-slash-commands",
-	)
+	args = append(args, ClaudeToolArgs(ClaudeStepTools)...)
 	cmd := exec.Command(s.bin(), args...)
 	cmd.Dir = p.CapsuleDir
-	additions := []string{
-		"PF_WI_ID=" + p.WorkItemID,
-		"PF_DAEMON_ID=" + s.cfg.MachineID,
-		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
-		"DISABLE_AUTOUPDATER=1",
-		"CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1",
-	}
+	additions := append([]string{"PF_WI_ID=" + p.WorkItemID, "PF_DAEMON_ID=" + s.cfg.MachineID},
+		ClaudeIsolationEnv()...)
+	additions = append(additions, "CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1", "CLAUDE_CODE_ENABLE_TASKS=false")
 	if s.cfg.DaemonSocket != "" {
 		additions = append(additions, "PF_DAEMON_SOCKET="+s.cfg.DaemonSocket)
 	}
@@ -240,15 +357,16 @@ func (s *claudeSpawner) buildCmd(p SpawnParams) (*exec.Cmd, error) {
 	if ccDir := s.cfg.ClaudeConfigDir(); ccDir != "" {
 		additions = append(additions, "CLAUDE_CONFIG_DIR="+ccDir)
 	}
-	// the "0" value is OFF for everything CLAUDE_CONFIG_DIR-side, so the
-	// existence is the semantic (see the WI ruling 5)
-	additions = append(additions, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
-	// the Bash tool's timeouts follow the supervision tool window, unless
+	// the Bash tool's timeouts follow the supervision tool window — the
+	// step's own when its lane declares one, then default = max — unless
 	// the settings.json env block carries the key (claudeBashTimeoutEnv)
-	additions = append(additions, claudeBashTimeoutEnv(settings, s.cfg.ToolWindow)...)
+	window := stepToolWindow(s.cfg, p)
+	additions = append(additions, claudeBashTimeoutEnv(settings, window, p.ToolWindow > 0)...)
 	// the harness-neutral tool window binding every step carries; the Bash
 	// max is one minute lower, so verify-run's min() sees the same bound
-	additions = append(additions, toolWindowEnv(s.cfg.ToolWindow))
+	additions = append(additions, toolWindowEnv(window))
+	// the daemon-owned step environment and the round (stepenv.go)
+	additions = append(additions, stepEnvAdditions(s.cfg, p, s.bin())...)
 	// Zero credential injection (polyforge#171, closing out #159's three-layer blind spot):
 	// the adapter NEVER injects ANTHROPIC_AUTH_TOKEN or any other
 	// credential — the settings.json env block under claude-config is
@@ -304,8 +422,41 @@ func (s *claudeSpawner) buildCmd(p SpawnParams) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
+// claudeUserMessage frames one stream-json user message for claude's
+// stdin (`--input-format stream-json`): the daemon's id rides the
+// record's `uuid`, which Claude keeps in its session record and echoes
+// in its `command_lifecycle` acknowledgements (see the header).
+func claudeUserMessage(id, text string) ([]byte, error) {
+	blob, err := json.Marshal(struct {
+		Type    string `json:"type"`
+		UUID    string `json:"uuid"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	}{Type: "user", UUID: id, Message: struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}{Role: "user", Content: text}})
+	if err != nil {
+		return nil, err
+	}
+	return append(blob, '\n'), nil
+}
+
+// claudeInitMessageID is the id of a dispatch's initial prompt message:
+// unique per dispatch within the session (a resumed session holds every
+// dispatch's prompt, and claude drops a message whose uuid it already
+// holds — see the header). The dispatch's later messages carry the same
+// spawn number (messageCommandID).
+func claudeInitMessageID(spawnN int) string {
+	return "pf-init-" + strconv.Itoa(spawnN)
+}
+
 // Spawn derives one Claude Code step process: process group, identity
-// journal before the prompt, then the prompt on stdin and stdin closed.
+// journal before the prompt, then the prompt as the first stream-json
+// user message on stdin, which stays open for the dispatch's later
+// messages (spawn.Messenger).
 func (s *claudeSpawner) Spawn(ctx context.Context, p SpawnParams) (AgentHandle, error) {
 	if p.InitialPrompt == "" {
 		return nil, fmt.Errorf("runtime: spawn without an initial prompt")
@@ -314,17 +465,12 @@ func (s *claudeSpawner) Spawn(ctx context.Context, p SpawnParams) (AgentHandle, 
 	if err != nil {
 		return nil, err
 	}
-	proc, stdin, err := startHarness(cmd, p, false)
+	proc, err := startHarness(cmd, p)
 	if err != nil {
 		return nil, err
 	}
-	_, werr := stdin.Write([]byte(p.InitialPrompt))
-	cerr := stdin.Close()
-	if werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		return nil, injectionFailed(proc, werr)
+	if err := proc.writeClaudeUser(claudeInitMessageID(p.SpawnN), p.InitialPrompt); err != nil {
+		return nil, injectionFailed(proc, err)
 	}
 	return proc, nil
 }

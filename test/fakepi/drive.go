@@ -1,12 +1,11 @@
-// drive.go: the v1 fake agent's scripted executor, envelope edition
-// (polyforge#106: the WI-Agent RPC lane is deleted — the Go driver
-// spawns one process per step and this executor performs the matching
-// envelope action). The plan file is a JSON document describing what
-// each derivation does on the capsule side — write execution.json
-// (Version monotonically increasing, atomic tmp+rename), emit record
-// bursts, park or die. Every action is
-// journaled to logs/fakepi.jsonl inside the capsule, which the
-// scenarios assert on.
+// drive.go: the fake agent's scripted executor (polyforge#106: the Go
+// driver spawns one process per step and this executor performs the
+// matching "envelope" action — under workflow contract 4 the step's wrap
+// attrs and its one `pf step handoff`, writeEnvelope). The plan file is a
+// JSON document describing what each derivation does on the capsule side —
+// run commands, emit record bursts, hand off, park or die. Every action is
+// journaled to logs/fakepi.jsonl inside the capsule, which the scenarios
+// assert on.
 package main
 
 import (
@@ -14,9 +13,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -28,14 +30,9 @@ type planAction struct {
 	MS       int    `json:"ms"`       // sleep / ui_noise: milliseconds
 	Name     string `json:"name"`     // repo: the repos/ subdirectory
 	Origin   string `json:"origin"`   // repo: the origin remote URL
-	// Envelope mode (v2 Driver): the outcome and handoff flags for the
-	// result-envelope action.
-	Outcome string `json:"outcome,omitempty"` // envelope: completed|needs_input|gate_failed|incomplete
-	Handoff bool   `json:"handoff,omitempty"` // envelope: write the handoff artifact
-	// NoEvidence suppresses the step's structured command evidence (the
-	// wrap-evidence-gate scenario scripts a verification step whose
-	// output carries no commands record, then repairs it).
-	NoEvidence bool `json:"no_evidence,omitempty"`
+	// Envelope mode (v2 Driver): the outcome the envelope action hands
+	// off (writeEnvelope translates it into `pf step handoff`).
+	Outcome string `json:"outcome,omitempty"` // envelope: completed|needs_input|gate_failed|incomplete|intent
 
 	// --- envelope-mode extensions (polyforge#105, confined to fakepi) ---
 
@@ -47,6 +44,16 @@ type planAction struct {
 	// malformed envelope exactly. The question TEXT rides the existing
 	// Question field above (shared with the ask action).
 	QuestionID string `json:"question_id,omitempty"`
+	// Blocker is an incomplete's obstacle ({reason, evidence,
+	// required_action}), copied onto the envelope's top level verbatim
+	// (the driver reads it nowhere else).
+	Blocker map[string]any `json:"blocker,omitempty"`
+	// IntentFile names the capsule-relative file holding the owner's move
+	// a hand-off citing the owner carries ({kind, reply_at, reason, to?}),
+	// written by the Run commands (a reply_at a real agent reads off
+	// runtime-state/asks.jsonl while running); writeEnvelope translates it
+	// into the hand-off's status, --to and --per-owner.
+	IntentFile string `json:"intent_file,omitempty"`
 	// Park is the #113 wedge shape: open a turn, emit nothing further,
 	// never write the envelope, never exit — the process sits alive at
 	// zero activity while the driver's stepRun.Wait watches a drop path
@@ -67,10 +74,6 @@ type planAction struct {
 	// provider error makes the driver advance the candidate chain; the
 	// bare crash stays an unclassified exit).
 	CrashStderr string `json:"crash_stderr,omitempty"`
-	// Dup writes the IDENTICAL envelope to the same drop path N times
-	// back-to-back (the duplicate drop-path shape: the driver must
-	// consume it exactly once).
-	Dup int `json:"dup,omitempty"`
 	// Output replaces the default output payload verbatim (populated
 	// error outputs for gate_failed envelopes, schema-shaped payloads,
 	// refusal probes).
@@ -85,23 +88,18 @@ type planAction struct {
 	// Run executes shell commands (sh -c, capsule root as cwd, in order)
 	// FIRST, before any other part of the action (park, crash, envelope) — the scripted stand-in for the commands a
 	// real step agent runs (the deliver step's git/gh calls). Each one is
-	// journaled and recorded as a real command_evidence entry (argv
-	// sh -c <cmd>, its exit code and measured duration); a failing command
-	// does not stop the rest.
+	// journaled with its exit code and output; a failing command does not
+	// stop the rest.
 	Run []string `json:"run,omitempty"`
+	// World runs shell commands right after Run (sh -c, capsule root as
+	// cwd) that stand for the world acting while the step runs — another
+	// PR landing on origin — never the step's own: they are never recorded
+	// as a tool call of the step.
+	World []string `json:"world,omitempty"`
 	// OutputFile, when set, replaces the output payload with the JSON
 	// object in this capsule-relative file (written by the Run commands:
 	// the values a real agent learns while running, e.g. a merge commit).
 	OutputFile string `json:"output_file,omitempty"`
-	// NoStartedAt leaves started_at out of the Run commands' evidence
-	// entries (real agents report only argv, exit_code and duration_ms).
-	NoStartedAt bool `json:"no_started_at,omitempty"`
-
-	// Evidence carries extra structured command-evidence entries
-	// (merged with the synthetic one; suppressed entirely by
-	// NoEvidence). The driver copies command_evidence onto
-	// execution.json's steps.<id>.output.commands.
-	Evidence []map[string]any `json:"evidence,omitempty"`
 	// OpenTurn opens a stdout turn and leaves it open before the
 	// envelope write (the F15 record-stream shapes on driver step
 	// processes).
@@ -160,6 +158,18 @@ type planAction struct {
 	// ClaudeRetries emits that many system/api_retry records first
 	// (Claude's own bounded retry), with ClaudeStatus / ClaudeError.
 	ClaudeRetries int `json:"claude_retries,omitempty"`
+
+	// --- the owner-message relay (workflow contract v2 §5.2, PR 6d) ---
+
+	// OnMessage is the turn this process answers a LATER owner message
+	// with — a message the daemon relays into the resident process while
+	// it idles after its scripted turn (pi: a later `prompt`; claude: a
+	// later stream-json user message): an envelope action played in the
+	// SAME dispatch, so its envelope carries this process's spawn ordinal.
+	// Absent, a later message gets a plain acknowledgement turn. A message
+	// that arrives mid-turn (queued by the harness) is delivered at the
+	// turn's next boundary and answered by nothing (the turn goes on).
+	OnMessage *planAction `json:"on_message,omitempty"`
 }
 
 // plan is the whole scripted behavior of one derivation.
@@ -229,6 +239,19 @@ type driveEnv struct {
 	// promptTurnDone: the scripted error_turn / end_turn was emitted as a
 	// prompt's own turn (the stdin loop's goroutine only).
 	promptTurnDone bool
+	// promptsSeen counts the prompts this process answered (the stdin
+	// loop's goroutine only): 1 is the dispatch's initial prompt, later
+	// ones are messages into the resident session.
+	promptsSeen int
+	// steers are the messages queued while a run is active, delivered at
+	// the next turn boundary (drainSteers; guarded by mu).
+	steers []queuedMessage
+	// msgs is the claude persona's later stdin messages (claude.go): read
+	// by the idle message loop, or absorbed into a running turn after its
+	// tool call (absorbQueued); absorbed holds the uuids whose `completed`
+	// the turn's result is followed by.
+	msgs     <-chan claudeUserMessage
+	absorbed []string
 }
 
 // newDriveEnv assembles the executor from the spawn identity (the capsule
@@ -354,12 +377,17 @@ func sleepMS(n int) {
 
 // runEnvelopeAction performs one envelope action in full: the optional
 // pre-write side effects (turn/noise records, repo, poison shapes, the
-// ms delay), the crash shapes, and the envelope write itself (question
-// text, output payload, command evidence, duplicates).
+// ms delay), the crash shapes, and the envelope write itself (the wrap
+// attrs and the one `pf step handoff`, writeEnvelope).
 func (d *driveEnv) runEnvelopeAction(act planAction) {
 	// Scripted commands run first, whatever the action does afterwards
-	// (park, crash, envelope).
-	runEvidence := d.runCommands(act.Run, act.NoStartedAt)
+	// (park, crash, envelope) — except for a scripted turn (end_turn /
+	// error_turn), whose commands the prompt handler ran inside that
+	// turn (emitScriptedTurn).
+	if act.ErrorTurn == "" && !act.EndTurn {
+		d.runCommands(act.Run)
+	}
+	d.runWorld(act.World)
 	if act.Silent {
 		// The zero-signal harness: no record at all (UI noise optionally),
 		// no envelope, no exit.
@@ -414,6 +442,16 @@ func (d *driveEnv) runEnvelopeAction(act planAction) {
 	// Extra capsule-relative files, verbatim content (the declared-input
 	// producer: a downstream step's declared inputs must exist at its
 	// dispatch).
+	// The step's own report artifact, artifacts/<step>.md: written unless
+	// a plan wrote it.
+	if act.ID != "" {
+		own := filepath.Join(d.capsuleRoot(), "artifacts", act.ID+".md")
+		if _, err := os.Stat(own); os.IsNotExist(err) {
+			if os.MkdirAll(filepath.Dir(own), 0o755) == nil {
+				_ = os.WriteFile(own, []byte("# "+act.ID+"\n\nfakepi report\n"), 0o644)
+			}
+		}
+	}
 	for p, content := range act.Files {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(d.capsuleRoot(), p)), 0o755); err == nil {
 			if err := os.WriteFile(filepath.Join(d.capsuleRoot(), p), []byte(content), 0o644); err != nil {
@@ -432,11 +470,28 @@ func (d *driveEnv) runEnvelopeAction(act planAction) {
 		}
 		os.Exit(101) // die before the envelope write: the envelope never lands
 	}
-	d.writeEnvelope(act, runEvidence)
+	if act.Crash == "after" {
+		// The crash lands on cue, never pre-empted by the teardown: the
+		// driver tears the process down (stdin closed, then SIGTERM to its
+		// group) the moment its ledger poll finds the recorded hand-off,
+		// which can come before this process is back from `pf step
+		// handoff` to journal and die by itself (the v0.2.9 release
+		// gate's red S17). Caught, the SIGTERM waits for the exit below.
+		signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
+	}
+	d.writeEnvelope(act)
 	if act.Crash == "after" {
 		d.journal("crash_after", map[string]any{"step": act.ID, "outcome": act.Outcome})
 		os.Exit(101) // die after the write: the envelope is on the drop path
 	}
+	// The agent's run ends after its hand-off attempt, as a real agent's
+	// does: the scripted commands opened a run (agent_start … turn_end,
+	// runCommands) that only an agent_end closes. Under contract 3 the
+	// collected envelope ended the dispatch whatever the stream said;
+	// under contract 4 a refused hand-off leaves the dispatch to the
+	// supervision, whose ended-without-hand-off rule keys on the turn's end.
+	emitRecord(map[string]any{"type": "agent_end", "willRetry": false,
+		"messages": []any{map[string]any{"role": "assistant", "stopReason": "stop", "content": []any{}}}})
 }
 
 // pinnedModelOf reads the --model argv the runtime pinned this derivation
@@ -550,6 +605,10 @@ func (d *driveEnv) emitScriptedTurn(act planAction) {
 		}
 		return
 	}
+	// an end_turn action's scripted commands are the tool calls the turn
+	// makes before it ends (`pf step ask "<question>"` then the turn's end is
+	// the v2 ask shape, PR 6c); the drive loop skips them for this action
+	d.runCommands(act.Run)
 	d.journal("end_turn", map[string]any{"step": act.ID, "spawn_n": d.spawnN})
 	emitAssistantTurn(d, "I have finished my reply.", "")
 }
@@ -585,6 +644,9 @@ func (d *driveEnv) emitToolRun(name string, ms int, hang bool) {
 	emitRecord(map[string]any{"type": "tool_execution_end", "toolCallId": "call_1", "toolName": name, "result": map[string]any{}})
 	emitRecord(map[string]any{"type": "turn_end", "message": msg, "toolResults": []any{}})
 	d.journal("tool_end", map[string]any{"name": name})
+	// the assistant turn's tool calls are done: a steering message queued
+	// meanwhile is handed to the model here, before the next model call
+	d.drainSteers()
 }
 
 // appendTranscript lands one JSONL line on the harness transcript — the
@@ -765,121 +827,180 @@ func (d *driveEnv) makeRepo(name, origin string) {
 	d.journal("repo", map[string]any{"name": name, "origin": origin})
 }
 
-// writeEnvelope writes the result envelope to the pending-results drop
-// path for the current spawn. The drop path is derived from the
-// PF_SPAWN_N environment variable and the capsule root (PF_WI_ID env
-// carries the WI; the capsule root is the process cwd).
+// writeEnvelope performs the action's result the way a workflow
+// contract 4 step does: the wrap attrs it registers (`pf step hub
+// wrap-attrs`), then one `pf step handoff` — the daemon checks and records
+// it on the call ledger, which is the only result the driver reads. The
+// action keeps its envelope-era script (the plan files' `outcome`,
+// `intent_file`, `blocker`, `output`, `output_file`), translated:
 //
-// The MINIMAL CONTRACT (polyforge#147): the envelope is the outcome +
-// output pair plus the dispatch identity — no protocol version stamp,
-// no envelope id, no artifact manifest, no handoff digest reference;
-// the handoff FILE is written to the convention path the next step
-// reads (artifacts/handoff-<step>.md). The needs_input question text
-// rides the ENVELOPE level (question_id/question — the driver's
-// delivery contract); an EMPTY question_id is emitted verbatim on
-// purpose (the driver refuses a needs_input result without question
-// text — the scripted refusal shape). The output payload defaults to a
-// summary object and is replaced verbatim by the action's own when
-// present. Structured command evidence rides command_evidence (the V4
-// gate; the driver copies it onto execution.json's output.commands)
-// unless the action suppressed it.
-func (d *driveEnv) writeEnvelope(act planAction, runEvidence []map[string]any) {
+//   - outcome completed (or none) → done, except that a gate whose output
+//     carries `verdict: fail` hands off fail (the scripted agent routes on
+//     the verdict its own check computed, as a real gate agent does; under
+//     contract 3 the driver bound such an envelope to gate_failed);
+//     gate_failed → fail (an intent
+//     waive → waive, one_more_round → fail citing the owner); incomplete
+//     → blocked (the blocker's reason as --reason); intent cancel →
+//     cancel, rewind → rewind --to, retry → rewind --to the step itself,
+//     each citing the intent's reply_at (--per-owner); needs_input (the
+//     v1 question) is a status the command refuses — the scripted
+//     refusal shape;
+//   - an output's landing / integration_batch → `pf step hub wrap-attrs
+//     integration` / `integration_batch`;
+//   - the body carries every section the command checks for (the seven,
+//     and 回应上一轮 for a re-run) in both agent languages, the output's
+//     summary in its Conclusion and 结论.
+//
+// Every command is journaled with its exit code and output.
+func (d *driveEnv) writeEnvelope(act planAction) {
 	outcome := act.Outcome
 	if outcome == "" {
 		outcome = "completed"
 	}
 	stepID := act.ID
-	capsuleRoot := d.capsuleRoot()
-	spawnN := strconv.Itoa(d.spawnN)
-	dropPath := filepath.Join(capsuleRoot, "runtime-state", "pending-results", spawnN+".json")
-
 	output := act.Output
-	if act.OutputFile != "" {
-		var fromFile map[string]any
-		raw, err := os.ReadFile(filepath.Join(capsuleRoot, act.OutputFile))
-		if err == nil {
-			err = json.Unmarshal(raw, &fromFile)
-		}
-		if err != nil {
-			d.journal("output_file_error", map[string]any{"path": act.OutputFile, "err": err.Error()})
-		} else {
-			output = fromFile
+	if fromFile := d.scriptedFile(act.OutputFile, "output"); fromFile != nil {
+		output = fromFile
+	}
+	for field, name := range map[string]string{"landing": "integration", "integration_batch": "integration_batch"} {
+		if v, ok := output[field]; ok {
+			raw, _ := json.Marshal(v)
+			d.pfStep("hub_wrap_attrs", "hub", "wrap-attrs", name, string(raw))
 		}
 	}
-	if output == nil {
-		output = map[string]interface{}{"summary": "envelope action"}
+	args := []string{"handoff"}
+	reason := ""
+	if outcome == "completed" && str(output, "verdict") == "fail" && d.gate(stepID) {
+		outcome = "gate_failed"
 	}
-	var evidence []interface{}
-	if !act.NoEvidence && len(runEvidence) == 0 {
-		// the synthetic entry stands in for "a command ran" only when
-		// the action scripted none
-		evidence = append(evidence, map[string]any{
-			"argv":        []any{"fakepi", "envelope", stepID},
-			"cwd":         capsuleRoot,
-			"exit_code":   0,
-			"duration_ms": 40,
-			"started_at":  nowStamp(),
-		})
-	}
-	if !act.NoEvidence {
-		for _, e := range act.Evidence {
-			evidence = append(evidence, e)
+	switch outcome {
+	case "completed":
+		args = append(args, "--status", "done")
+	case "gate_failed":
+		in := d.scriptedFile(act.IntentFile, "intent")
+		switch str(in, "kind") {
+		case "waive":
+			args = append(args, "--status", "waive", "--per-owner", str(in, "reply_at"))
+		case "one_more_round":
+			args = append(args, "--status", "fail", "--per-owner", str(in, "reply_at"))
+		default:
+			args = append(args, "--status", "fail")
 		}
-		for _, e := range runEvidence {
-			evidence = append(evidence, e)
+		reason = str(output, "fail_reason")
+		if reason == "" {
+			reason = "scripted gate failure (fakepi)"
 		}
-	}
-
-	envelope := map[string]interface{}{
-		"wi_id":            os.Getenv("PF_WI_ID"),
-		"step_id":          stepID,
-		"spawn_n":          parseIntDefault(spawnN, 1),
-		"outcome":          outcome,
-		"output":           output,
-		"command_evidence": evidence,
-		"submitted_at":     time.Now().UTC().Format(time.RFC3339),
-	}
-	if outcome == "needs_input" {
-		// Verbatim, empty included: the empty question_id is the scripted
-		// refusal shape (the driver must refuse it, never mint a pending).
-		envelope["question_id"] = act.QuestionID
-		envelope["question"] = act.Question
-	}
-
-	// Handoff duty: write the handoff file to the convention path (the
-	// next inherit step reads it by path convention — no digest).
-	if act.Handoff {
-		hoPath := filepath.Join(capsuleRoot, "artifacts", "handoff-"+stepID+".md")
-		hoContent := "# Handoff from " + stepID + "\n\nSummary for next step.\n"
-		if err := os.MkdirAll(filepath.Dir(hoPath), 0o755); err == nil {
-			os.WriteFile(hoPath, []byte(hoContent), 0o644)
+	case "incomplete":
+		args = append(args, "--status", "blocked")
+		reason = str(act.Blocker, "reason")
+	case "intent":
+		in := d.scriptedFile(act.IntentFile, "intent")
+		switch str(in, "kind") {
+		case "cancel":
+			args = append(args, "--status", "cancel")
+		case "retry":
+			args = append(args, "--status", "rewind", "--to", stepID)
+		default:
+			args = append(args, "--status", "rewind", "--to", str(in, "to"))
 		}
+		args = append(args, "--per-owner", str(in, "reply_at"))
+		reason = str(in, "reason")
+	default:
+		args = append(args, "--status", outcome)
 	}
-
-	blob, _ := json.MarshalIndent(envelope, "", "  ")
-	if err := os.MkdirAll(filepath.Dir(dropPath), 0o755); err != nil {
-		d.journal("envelope_error", map[string]any{"err": err.Error()})
-		return
+	if reason = oneLineText(reason); reason != "" {
+		args = append(args, "--reason", reason)
 	}
-	dupes := act.Dup
-	if dupes < 1 {
-		dupes = 1
+	summary := str(output, "summary")
+	if summary == "" {
+		summary = "envelope action"
 	}
-	for i := 0; i < dupes; i++ {
-		if err := os.WriteFile(dropPath, blob, 0o644); err != nil {
-			d.journal("envelope_error", map[string]any{"err": err.Error()})
-			return
-		}
-	}
-	d.journal("envelope", map[string]any{"step": stepID, "outcome": outcome,
-		"path": dropPath, "question_id": act.QuestionID, "dup": dupes,
-		"evidence": !act.NoEvidence, "crash": act.Crash})
+	// every heading in both agent languages, so the body passes the check
+	// whichever language the dispatch was told
+	body := "### Reply to the previous round\n\n(fakepi) every point answered in place.\n\n" +
+		"### Conclusion\n\n" + summary + "\n\n" +
+		"### The question this step answers\n\n(fakepi) step " + stepID + ".\n\n" +
+		"### What was done\n\n(fakepi) the scripted action.\n\n" +
+		"### Decisions and why\n\nnone\n\n" +
+		"### Verification\n\nnone\n\n" +
+		"### Problems and risks found\n\nnone\n\n" +
+		"### For downstream, and what is open\n\nnone\n\n" +
+		"### 回应上一轮\n\n(fakepi) every point answered in place.\n\n" +
+		"### 结论\n\n" + summary + "\n\n" +
+		"### 这一步要回答什么\n\n(fakepi) step " + stepID + ".\n\n" +
+		"### 做了什么\n\n(fakepi) the scripted action.\n\n" +
+		"### 关键决定和理由\n\nnone\n\n" +
+		"### 验证\n\nnone\n\n" +
+		"### 发现的问题和风险\n\nnone\n\n" +
+		"### 给下游与未决\n\nnone\n"
+	// the body rides stdin (`--body -`): the daemon may end this process
+	// the moment it records the hand-off, so a temp file's cleanup could
+	// never run
+	args = append(args, "--body", "-")
+	d.pfStepIn("handoff", body, args...)
+	d.journal("envelope", map[string]any{"step": stepID, "outcome": outcome, "args": args, "crash": act.Crash})
 }
 
-// runCommands executes an action's Run commands (see planAction.Run) and
-// answers their command_evidence entries.
-func (d *driveEnv) runCommands(cmds []string, noStartedAt bool) []map[string]any {
-	var ev []map[string]any
+// pfStep runs one `pf step <args>` from the capsule root and journals it
+// (kind "step_<what>"). The binary is the harness's own pf (harnessPf):
+// exec.Command resolves a bare name on this process's PATH when it is
+// built, not on cmd.Env's, so a bare "pf" would run the machine's
+// installed CLI (or none).
+func (d *driveEnv) pfStep(what string, args ...string) {
+	d.pfStepIn(what, "", args...)
+}
+
+// pfStepIn is pfStep with stdin (a `-` argument's content).
+func (d *driveEnv) pfStepIn(what, stdin string, args ...string) {
+	cmd := exec.Command(harnessPf(), append([]string{"step"}, args...)...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	cmd.Dir = d.capsuleRoot()
+	cmd.Env = harnessEnv() // a bare pf is the binary under test
+	out, err := cmd.CombinedOutput()
+	d.journal("step_"+what, map[string]any{"args": args, "exit_code": exitOf(err), "output": string(out)})
+}
+
+// str answers m[k] as a string ("" when absent or not one).
+func str(m map[string]any, k string) string {
+	s, _ := m[k].(string)
+	return s
+}
+
+// oneLineText collapses s to one line (the hand-off's --reason is one).
+func oneLineText(s string) string {
+	out := []rune{}
+	for _, r := range s {
+		if r == '\n' || r == '\r' {
+			r = ' '
+		}
+		out = append(out, r)
+	}
+	return string(out)
+}
+
+// scriptedFile answers the JSON object in the capsule-relative file an
+// action names for field (written by its Run commands); nil when none is
+// named, or when the file cannot be read (journaled <field>_file_error).
+func (d *driveEnv) scriptedFile(file, field string) map[string]any {
+	if file == "" {
+		return nil
+	}
+	var fromFile map[string]any
+	raw, err := os.ReadFile(filepath.Join(d.capsuleRoot(), file))
+	if err == nil {
+		err = json.Unmarshal(raw, &fromFile)
+	}
+	if err != nil {
+		d.journal(field+"_file_error", map[string]any{"path": file, "err": err.Error()})
+		return nil
+	}
+	return fromFile
+}
+
+// runCommands executes an action's Run commands (see planAction.Run).
+func (d *driveEnv) runCommands(cmds []string) {
 	for i, c := range cmds {
 		// polyforge#224 (the fixture-fidelity fix, the owner ruling (a)
 		// chain): each scripted command is a TOOL EXECUTION in the record
@@ -901,36 +1022,14 @@ func (d *driveEnv) runCommands(cmds []string, noStartedAt bool) []map[string]any
 		emitRecord(map[string]any{"type": "message_end", "message": map[string]any{"role": "assistant", "stopReason": "toolUse", "content": []any{}}})
 		emitRecord(map[string]any{"type": "tool_execution_start", "toolCallId": callID, "toolName": "bash",
 			"args": map[string]any{"command": c}})
-		started := time.Now()
 		cmd := exec.Command("sh", "-c", c)
 		cmd.Dir = d.capsuleRoot()
+		cmd.Env = harnessEnv() // a bare pf is the binary under test
 		out, err := cmd.CombinedOutput()
-		code := 0
-		if err != nil {
-			code = -1
-			if ee, ok := err.(*exec.ExitError); ok {
-				code = ee.ExitCode()
-			}
-		}
 		emitRecord(map[string]any{"type": "tool_execution_end", "toolCallId": callID, "toolName": "bash", "result": map[string]any{}})
 		emitRecord(map[string]any{"type": "turn_end", "message": map[string]any{"role": "assistant", "stopReason": "toolUse", "content": []any{}}, "toolResults": []any{}})
-		ms := time.Since(started).Milliseconds()
-		if ms < 1 {
-			ms = 1
-		}
-		d.journal("run", map[string]any{"cmd": c, "exit_code": code, "output": string(out)})
-		entry := map[string]any{
-			"argv":        []any{"sh", "-c", c},
-			"cwd":         d.capsuleRoot(),
-			"exit_code":   code,
-			"duration_ms": ms,
-		}
-		if !noStartedAt {
-			entry["started_at"] = started.UTC().Format(time.RFC3339Nano)
-		}
-		ev = append(ev, entry)
+		d.journal("run", map[string]any{"cmd": c, "exit_code": exitOf(err), "output": string(out)})
 	}
-	return ev
 }
 
 // capsuleRoot answers the capsule directory: the fakepi runs with the
@@ -957,4 +1056,15 @@ func (d *driveEnv) spawnNumber() int64 {
 		return int64(d.spawnN)
 	}
 	return 1
+}
+
+// runWorld runs an action's World commands (planAction.World): unrecorded.
+func (d *driveEnv) runWorld(cmds []string) {
+	for _, c := range cmds {
+		cmd := exec.Command("sh", "-c", c)
+		cmd.Dir = d.capsuleRoot()
+		cmd.Env = harnessEnv() // a bare pf is the binary under test
+		out, err := cmd.CombinedOutput()
+		d.journal("world", map[string]any{"cmd": c, "exit_code": exitOf(err), "output": string(out)})
+	}
 }

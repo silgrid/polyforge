@@ -74,18 +74,18 @@ func TestReadStepDefinitionPrinciples(t *testing.T) {
 		}
 	}
 	write(filepath.Join(bundle, "steps", "plain.md"), "no principles {{x}}")
-	if got, err := ReadStepDefinition(bundle, "plain", map[string]string{"x": "1"}); err != nil || string(got) != "no principles 1" {
+	if got, err := ReadDefinitionBody(bundle, "plain", map[string]string{"x": "1"}); err != nil || string(got) != "no principles 1" {
 		t.Fatalf("plain = %q, %v", got, err)
 	}
 	write(filepath.Join(bundle, "steps", "code.md"), "use them:\n{{principles}}\n{{x}}")
-	if _, err := ReadStepDefinition(bundle, "code", map[string]string{"x": "1"}); err == nil || !strings.Contains(err.Error(), PrinciplesFile) {
+	if _, err := ReadDefinitionBody(bundle, "code", map[string]string{"x": "1"}); err == nil || !strings.Contains(err.Error(), PrinciplesFile) {
 		t.Fatalf("missing principles file: %v", err)
 	}
 	write(filepath.Join(root, SharedDir, PrinciplesFile), "1. Simple.\n")
-	if got, err := ReadStepDefinition(bundle, "code", map[string]string{"x": "1"}); err != nil || string(got) != "use them:\n1. Simple.\n1" {
+	if got, err := ReadDefinitionBody(bundle, "code", map[string]string{"x": "1"}); err != nil || string(got) != "use them:\n1. Simple.\n1" {
 		t.Fatalf("code = %q, %v", got, err)
 	}
-	if _, err := ReadStepDefinition(bundle, "plain", map[string]string{"x": "1", PrinciplesVar: "mine"}); err == nil || !strings.Contains(err.Error(), "reserved") {
+	if _, err := ReadDefinitionBody(bundle, "plain", map[string]string{"x": "1", PrinciplesVar: "mine"}); err == nil || !strings.Contains(err.Error(), "shadows the fragment") {
 		t.Fatalf("declared principles var: %v", err)
 	}
 }
@@ -110,29 +110,39 @@ func TestReadStepDefinitionSharedFragments(t *testing.T) {
 	}
 	write(filepath.Join(root, SharedDir, "fast_checks.md"), "run the fast checks.\n")
 	write(filepath.Join(bundle, "steps", "one.md"), "## Fast checks\n\n{{fast_checks}}\n\nthen {{x}}")
-	got, err := ReadStepDefinition(bundle, "one", map[string]string{"x": "1"})
+	got, err := ReadDefinitionBody(bundle, "one", map[string]string{"x": "1"})
 	if err != nil || string(got) != "## Fast checks\n\nrun the fast checks.\n\nthen 1" {
 		t.Fatalf("fragment render = %q, %v", got, err)
 	}
 	// A fragment is never re-scanned: its own {{y}} is inserted verbatim.
 	write(filepath.Join(root, SharedDir, "fast_checks.md"), "literal {{y}} inside\n")
-	got, err = ReadStepDefinition(bundle, "one", map[string]string{"x": "1"})
+	got, err = ReadDefinitionBody(bundle, "one", map[string]string{"x": "1"})
 	if err != nil || string(got) != "## Fast checks\n\nliteral {{y}} inside\n\nthen 1" {
 		t.Fatalf("verbatim fragment = %q, %v", got, err)
 	}
 	// A declared var may not shadow a fragment file.
-	if _, err := ReadStepDefinition(bundle, "one", map[string]string{"x": "1", "fast_checks": "mine"}); err == nil || !strings.Contains(err.Error(), "reserved") {
+	if _, err := ReadDefinitionBody(bundle, "one", map[string]string{"x": "1", "fast_checks": "mine"}); err == nil || !strings.Contains(err.Error(), "shadows the fragment") {
 		t.Fatalf("declared fragment-shadowing var: %v", err)
 	}
 	// A placeholder with neither a var nor a fragment file fails closed.
 	write(filepath.Join(bundle, "steps", "two.md"), "{{missing_frag}}\n{{x}}")
-	if _, err := ReadStepDefinition(bundle, "two", map[string]string{"x": "1"}); err == nil || !strings.Contains(err.Error(), "missing_frag.md") {
+	if _, err := ReadDefinitionBody(bundle, "two", map[string]string{"x": "1"}); err == nil || !strings.Contains(err.Error(), "missing_frag.md") {
 		t.Fatalf("missing fragment file: %v", err)
 	}
 	// A definition that includes no fragment never reads one: the
 	// bundle beside an empty _shared/steps only renders its own vars.
 	write(filepath.Join(bundle, "steps", "three.md"), "plain {{x}}")
-	if got, err := ReadStepDefinition(bundle, "three", map[string]string{"x": "1"}); err != nil || string(got) != "plain 1" {
+	if got, err := ReadDefinitionBody(bundle, "three", map[string]string{"x": "1"}); err != nil || string(got) != "plain 1" {
 		t.Fatalf("no-fragment definition = %q, %v", got, err)
 	}
+}
+
+// ReadDefinitionBody is the rendered body of one definition (the test
+// face of ReadDefinition).
+func ReadDefinitionBody(dir, id string, vars map[string]string) (string, error) {
+	d, err := ReadDefinition(dir, id, vars)
+	if err != nil {
+		return "", err
+	}
+	return d.Body, nil
 }

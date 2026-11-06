@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""clean-summarize-sessions — find (and with --delete, remove) the agent
+sessions the summarize dispatches left behind.
+
+Usage:
+  python3 -I tools/clean-summarize-sessions [--pi-sessions DIR] [--data-dir DIR]
+                                            [--harness-root DIR]... [--delete]
+
+Run it as the user that runs the polyforge daemon. A session is a summarize
+session when its first user message starts with the summarize prompt's
+opening (internal/polyforge/summarize/prompt.go):
+
+  Summarize in ONE short line what this coding-agent
+
+The directory a session sits in decides nothing: one-off sessions sharing a
+summarize-cwd directory, and a user's own directory whose name ends in
+summarize-cwd, are left alone; early summarize sessions mixed into other
+session directories are found.
+
+Scanned (a missing root is skipped; symlinks are not followed; only regular
+*.jsonl files are read):
+
+  pi       <pi-sessions>/*/*.jsonl
+           default: $HOME/.pi/agent/sessions
+  claude   <data-dir>/cells/*/claude-config/projects/*/*.jsonl
+           default: $POLYFORGE_DATA_DIR, else $HOME/.local/share/polyforge
+           <harness-root>/cells/*/claude-config/projects/*/*.jsonl
+           for every --harness-root (a configured harness_root)
+
+Output: one line `summarize session: <absolute path>` per match, then
+  `<N> summarize session(s) found; nothing deleted (re-run with --delete to delete them)`
+or, with --delete, the same listing, the files are removed (no directory
+is), then `deleted <N> summarize session(s)`.
+
+Exit status: 0; 2 on a bad argument.
+"""
+
+import argparse
+import json
+import os
+import sys
+
+PREFIX = "Summarize in ONE short line what this coding-agent"
+
+
+def message_text(content):
+    """The text of a message's content: a string, or the text parts of a
+    [{type: "text", text}] array joined."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
+        )
+    return ""
+
+
+def first_user_text(path):
+    """The first user message's text of a pi or claude session file; None
+    when the file has none. Unparsable lines are skipped."""
+    try:
+        f = open(path, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    with f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            msg = rec.get("message")
+            if not isinstance(msg, dict) or msg.get("role") != "user":
+                continue
+            kind = rec.get("type")
+            if kind == "message":  # pi
+                return message_text(msg.get("content"))
+            if kind == "user" and rec.get("isMeta") is not True:  # claude
+                return message_text(msg.get("content"))
+    return None
+
+
+def subdirs(path):
+    try:
+        entries = sorted(os.scandir(path), key=lambda e: e.name)
+    except OSError:
+        return []
+    return [e.path for e in entries if e.is_dir(follow_symlinks=False)]
+
+
+def session_files(dirs):
+    for d in dirs:
+        try:
+            entries = sorted(os.scandir(d), key=lambda e: e.name)
+        except OSError:
+            continue
+        for e in entries:
+            if e.name.endswith(".jsonl") and e.is_file(follow_symlinks=False):
+                yield e.path
+
+
+def claude_project_dirs(root):
+    dirs = []
+    for cell in subdirs(os.path.join(root, "cells")):
+        dirs.extend(subdirs(os.path.join(cell, "claude-config", "projects")))
+    return dirs
+
+
+def main(argv):
+    home = os.path.expanduser("~")
+    ap = argparse.ArgumentParser(prog="clean-summarize-sessions")
+    ap.add_argument("--pi-sessions", default=os.path.join(home, ".pi", "agent", "sessions"))
+    ap.add_argument(
+        "--data-dir",
+        default=os.environ.get("POLYFORGE_DATA_DIR") or os.path.join(home, ".local", "share", "polyforge"),
+    )
+    ap.add_argument("--harness-root", action="append", default=[])
+    ap.add_argument("--delete", action="store_true")
+    args = ap.parse_args(argv)
+
+    dirs = subdirs(os.path.abspath(args.pi_sessions))
+    for root in [args.data_dir] + args.harness_root:
+        dirs.extend(claude_project_dirs(os.path.abspath(root)))
+
+    found = []
+    seen = set()
+    for path in session_files(dirs):
+        if path in seen:
+            continue
+        seen.add(path)
+        text = first_user_text(path)
+        if text is not None and text.startswith(PREFIX):
+            found.append(path)
+
+    for path in found:
+        print("summarize session: " + path)
+    if not args.delete:
+        print("%d summarize session(s) found; nothing deleted (re-run with --delete to delete them)" % len(found))
+        return 0
+    for path in found:
+        os.remove(path)
+    print("deleted %d summarize session(s)" % len(found))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

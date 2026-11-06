@@ -213,32 +213,6 @@ func TestManagerRecoverMarksInterrupted(t *testing.T) {
 	}
 }
 
-func TestManagerNoticesFetchThenAck(t *testing.T) {
-	m, terms := newTestManager(t, fakeRunner{func(context.Context, RunSpec) (RunResult, error) {
-		return RunResult{Report: "line one\nline two", Tokens: 3}, nil
-	}}, []string{"pi:a/b"})
-	tk, _ := m.Spawn(Spec{Project: "p", Prompt: "hi", OriginChat: "chat_0123456789abcdef"})
-	waitState(t, m, tk.ID, StateCompleted)
-	terms()
-	ns := m.Notices("chat_0123456789abcdef")
-	if len(ns) != 1 || !strings.Contains(ns[0].Text, "pf task show "+tk.ID) || strings.Contains(ns[0].Text, "\n") {
-		t.Fatalf("notices = %+v", ns)
-	}
-	if len(m.Notices("chat_other")) != 0 {
-		t.Fatal("another chat must see nothing")
-	}
-	if err := m.AckNotices("chat_0123456789abcdef", []string{tk.ID}); err != nil {
-		t.Fatal(err)
-	}
-	if len(m.Notices("chat_0123456789abcdef")) != 0 {
-		t.Fatal("acked notice must not be re-delivered")
-	}
-	got, _ := m.Show(tk.ID)
-	if !got.Delivered {
-		t.Fatal("ack must persist Delivered")
-	}
-}
-
 func TestManagerWaitAnswersTheTerminalRecord(t *testing.T) {
 	release := make(chan struct{})
 	var seen RunSpec

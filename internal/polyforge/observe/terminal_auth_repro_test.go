@@ -275,9 +275,8 @@ func TestTerminalFlushAfterSessionEndIsNotAnAuthFailure(t *testing.T) {
 			Steps: map[string]*capsule.Step{
 				"review": {Status: capsule.StepInProgress},
 			},
-			ReviewRounds: map[string]int64{"review": 1},
-			UpdatedAt:    time.Now().UTC().Format(time.RFC3339Nano),
-			Version:      version,
+			UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Version:   version,
 		}
 		blob, err := json.Marshal(exec)
 		if err != nil {

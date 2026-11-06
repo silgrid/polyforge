@@ -42,7 +42,7 @@ func TestExitWatcherReportsExitWhileGrandchildHoldsPipes(t *testing.T) {
 			t.Fatalf("exit class = %+v, want code 3", e)
 		}
 		if took := time.Since(start); took > 2*time.Second {
-			t.Fatalf("exit reported after %s, want within the 500ms drain bound", took)
+			t.Fatalf("exit reported after %s, want it at once: a grandchild merely holding the pipes must not hold it toward the drain bounds", took)
 		}
 	case <-time.After(4 * time.Second):
 		t.Fatal("the exit was never reported while a grandchild held the pipes")

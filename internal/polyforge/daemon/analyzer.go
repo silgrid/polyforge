@@ -80,6 +80,7 @@ func (d *Daemon) analyzeRoute(w http.ResponseWriter, r *http.Request) {
 		Project:       project,
 		Prompt:        analyzerPrompt(msg, wi, reply),
 		ReadOnlyTools: true,
+		Synchronous:   true, // the caller's answer, not a background decision
 		MaxDuration:   analyzeTaskDuration,
 		MaxTokens:     analyzeTaskTokens,
 		CallerID:      req.CallerID,

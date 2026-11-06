@@ -1,0 +1,2 @@
+{"type":"user","uuid":"39500000-0000-4000-8000-001000000001","message":{"role":"user","content":"Do these steps in order. Step 1: use the Bash tool with run_in_background set to true to run: sleep 4; echo BG_DONE_395 . Step 2: immediately after, use the Bash tool in the foreground (not background) to run: sleep 15; echo FG_DONE_395 . Step 3: reply with exactly: first done"}}
+{"type":"user","uuid":"39500000-0000-4000-8000-001000000002","message":{"role":"user","content":"Reply with exactly: second done"}}

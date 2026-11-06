@@ -683,12 +683,12 @@ func TestW22DeclaredStepCandidates(t *testing.T) {
 	if got := w22Str(fix["models"]); got != "pi:zeta,pi:alpha" {
 		t.Fatalf("`fix` candidates must keep the file order (pi:zeta,pi:alpha); got %q", got)
 	}
-	undeclared, ok := declared["code"]
+	undeclared, ok := declared["review"]
 	if !ok {
 		t.Fatalf("a step the file does not declare must still be reported (as undeclared); got %v", declared)
 	}
 	if v, _ := undeclared["declared"].(bool); v {
-		t.Fatalf("`code` is not declared in the file but reported declared=true: %v", undeclared)
+		t.Fatalf("`review` is not declared in the file but reported declared=true: %v", undeclared)
 	}
 	if models, ok := undeclared["models"]; ok && models != nil && w22Str(models) != "" {
 		t.Fatalf("an undeclared step must carry no composed list (never a bundle default); got %v", models)

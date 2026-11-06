@@ -1,0 +1,8 @@
+--- FAIL: TestStore (0.00s)
+    store_test.go:9: got 1, want 2
+FAIL
+FAIL	example.com/app/store	0.009s
+# example.com/app/server
+web/embed.go:19:12: pattern all:dist: no matching files found
+FAIL	example.com/app/server [setup failed]
+FAIL

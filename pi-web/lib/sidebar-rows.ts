@@ -1,0 +1,289 @@
+import type { SessionFamily } from "./session-family";
+
+/**
+ * Pure row model for the session sidebar's virtualized list.
+ *
+ * The list mixes three row kinds — pinned-project group headers, session
+ * rows and empty-group hint rows — in ONE flat array with cumulative
+ * offsets, so a single windowing pass can mount just the visible slice
+ * regardless of row type. Keeps all layout math framework-free and
+ * unit-testable in isolation from the React component.
+ */
+
+/** Fixed height of one session row (SessionItem renders at exactly this). */
+export const SESSION_LIST_ITEM_HEIGHT = 54;
+
+/** Height of a pinned-group header row and of the empty-group hint row. */
+export const GROUP_HEADER_HEIGHT = 40;
+
+/** Height of a pinned-group's show-more / show-less footer row (wi pi#101). */
+export const GROUP_MORE_HEIGHT = 32;
+
+/** A pinned project as the row model needs it: stable key + display root. */
+export interface SidebarProject {
+  key: string;
+  root: string;
+}
+
+export interface GroupHeaderRow {
+  kind: "groupHeader";
+  /** React key and pinned project key. */
+  key: string;
+  project: SidebarProject;
+  offset: number;
+  height: number;
+}
+
+export interface SessionRow {
+  kind: "session";
+  /** Session family root id — unique across the whole list. */
+  key: string;
+  family: SessionFamily;
+  /** Owning pinned project key; null for main-list rows. */
+  groupKey: string | null;
+  offset: number;
+  height: number;
+}
+
+export interface GroupEmptyRow {
+  kind: "groupEmpty";
+  key: string;
+  groupKey: string;
+  offset: number;
+  height: number;
+}
+
+/** A pinned group's pagination footer (wi pi#101): rendered when the group's
+ *  session rows are cut at a shown count. Carries how many rows remain
+ *  hidden so the label can say "show more · N", or 0 when everything is
+ *  shown and the footer reads "show less" (reset to the limit). */
+export interface GroupMoreRow {
+  kind: "groupMore";
+  key: string;
+  groupKey: string;
+  hiddenCount: number;
+  offset: number;
+  height: number;
+}
+
+export type SidebarRow = GroupHeaderRow | SessionRow | GroupEmptyRow | GroupMoreRow;
+
+export interface BuildSidebarRowsInput {
+  /** Pinned projects, most-recently-pinned first. */
+  pinnedProjects: readonly SidebarProject[];
+  /** Session families per pinned project key (all worktrees included). */
+  familiesByProject: ReadonlyMap<string, readonly SessionFamily[]>;
+  /** Expanded group keys — collapsed groups contribute only their header. */
+  expandedKeys: ReadonlySet<string>;
+  /** Main-list families rendered below the pinned groups. */
+  mainFamilies: readonly SessionFamily[];
+  /** Per-pinned-group shown row counts (wi pi#101 pagination). An absent
+   *  key means no limit: every session row renders and no footer row is
+   *  emitted — the default behavior is byte-identical to before. The caller
+   *  only sets entries for groups over their base limit; that rule lives in
+   *  the component, which owns the limit. */
+  groupVisibleCounts?: ReadonlyMap<string, number>;
+}
+
+/**
+ * Assemble the unified sidebar row array: each pinned project in pin order
+ * contributes a header row and, when expanded, its session rows or one
+ * empty-group hint row; the main-list families follow below. Rows carry
+ * cumulative offsets; every row is exactly `height` tall, so the container
+ * height equals the last row's bottom edge (`sidebarRowsHeight`).
+ */
+export function buildSidebarRows({
+  pinnedProjects,
+  familiesByProject,
+  expandedKeys,
+  mainFamilies,
+  groupVisibleCounts,
+}: BuildSidebarRowsInput): SidebarRow[] {
+  const rows: SidebarRow[] = [];
+  let offset = 0;
+  // Per-kind argument type: `Omit<SidebarRow, "offset">` would collapse
+  // the union to its common keys and reject the per-kind literals below.
+  type PushableRow =
+    | Omit<GroupHeaderRow, "offset">
+    | Omit<SessionRow, "offset">
+    | Omit<GroupEmptyRow, "offset">
+    | Omit<GroupMoreRow, "offset">;
+  const push = (row: PushableRow): void => {
+    const height = row.height;
+    rows.push({ ...row, offset } as SidebarRow);
+    offset += height;
+  };
+
+  for (const project of pinnedProjects) {
+    push({
+      kind: "groupHeader",
+      key: `group:${project.key}`,
+      project,
+      height: GROUP_HEADER_HEIGHT,
+    });
+    if (!expandedKeys.has(project.key)) continue;
+    const families = familiesByProject.get(project.key) ?? [];
+    if (families.length === 0) {
+      push({
+        kind: "groupEmpty",
+        key: `group-empty:${project.key}`,
+        groupKey: project.key,
+        height: GROUP_HEADER_HEIGHT,
+      });
+      continue;
+    }
+    for (const family of families.slice(0, groupVisibleCounts?.get(project.key) ?? families.length)) {
+      push({
+        kind: "session",
+        key: family.root.id,
+        family,
+        groupKey: project.key,
+        height: SESSION_LIST_ITEM_HEIGHT,
+      });
+    }
+    const shownCount = groupVisibleCounts?.get(project.key);
+    if (shownCount !== undefined && (families.length > shownCount || shownCount > families.length)) {
+      push({
+        kind: "groupMore",
+        key: `group-more:${project.key}`,
+        groupKey: project.key,
+        hiddenCount: Math.max(0, families.length - shownCount),
+        height: GROUP_MORE_HEIGHT,
+      });
+    }
+  }
+
+  for (const family of mainFamilies) {
+    push({
+      kind: "session",
+      key: family.root.id,
+      family,
+      groupKey: null,
+      height: SESSION_LIST_ITEM_HEIGHT,
+    });
+  }
+
+  return rows;
+}
+
+/** Total scroll height of the row list — the positioning container's height. */
+export function sidebarRowsHeight(rows: readonly SidebarRow[]): number {
+  if (rows.length === 0) return 0;
+  const last = rows[rows.length - 1];
+  return last.offset + last.height;
+}
+
+interface WindowedResult {
+  start: number;
+  end: number;
+}
+
+/**
+ * Row-index window that covers the viewport plus an overscan margin, for
+ * mixed-height rows. `start` is the first row overlapping or after the top
+ * edge minus overscan rows; `end` is one past the last row overlapping the
+ * bottom edge plus overscan rows.
+ */
+function rowWindow(
+  rows: readonly SidebarRow[],
+  scrollTop: number,
+  viewportHeight: number,
+): WindowedResult {
+  const viewHeight = viewportHeight || 600;
+  const bottom = scrollTop + viewHeight;
+
+  // First index whose row bottom edge is past the top of the viewport.
+  let lo = 0;
+  let hi = rows.length - 1;
+  let first = rows.length;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (rows[mid].offset + rows[mid].height > scrollTop) {
+      first = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
+  }
+
+  // First index at or beyond the bottom edge of the viewport.
+  lo = 0;
+  hi = rows.length - 1;
+  let afterLast = rows.length;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (rows[mid].offset >= bottom) {
+      afterLast = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
+  }
+
+  const overscan = 8;
+  return {
+    start: Math.max(0, first - overscan),
+    end: Math.min(rows.length, afterLast + overscan),
+  };
+}
+
+/**
+ * Windowed slice of the unified row list: the rows covering the viewport
+ * plus an overscan margin, with the focused session row kept mounted even
+ * when it falls outside the window (so scrolling cannot discard an inline
+ * rename). Mirrors the old fixed-height `getSessionListIndices` semantics
+ * over mixed row heights.
+ */
+export function getWindowedRows(
+  rows: readonly SidebarRow[],
+  scrollTop: number,
+  viewportHeight: number,
+  focusedSessionId: string | null = null,
+): SidebarRow[] {
+  if (rows.length === 0) return [];
+  const { start, end } = rowWindow(rows, scrollTop, viewportHeight);
+  const windowRows = rows.slice(start, end);
+  if (!focusedSessionId) return windowRows;
+  const focusedIndex = rows.findIndex(
+    (row) => row.kind === "session" && row.family.root.id === focusedSessionId,
+  );
+  if (focusedIndex < 0 || (focusedIndex >= start && focusedIndex < end)) return windowRows;
+  return focusedIndex < start
+    ? [rows[focusedIndex], ...windowRows]
+    : [...windowRows, rows[focusedIndex]];
+}
+
+/**
+ * Scroll-into-view target for one session's row on the windowed list —
+ * offset-based, so it needs no rendered DOM node. Returns the nearest
+ * scrollTop that reveals the row fully: top-aligned when the row sits
+ * above the viewport, bottom-aligned when it sits below (minimal scroll
+ * distance either way, so the list never jumps further than needed). Null
+ * when the row is already fully visible, the session has no row in the
+ * given array (e.g. its pinned group is collapsed), or the viewport height
+ * is unknown — callers treat null as "nothing to do".
+ */
+export function scrollTargetForSession(
+  rows: readonly SidebarRow[],
+  sessionId: string,
+  viewportHeight: number,
+  currentScrollTop: number,
+): number | null {
+  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return null;
+  if (!Number.isFinite(currentScrollTop)) return null;
+  const row = rows.find(
+    (r) => r.kind === "session" && r.family.root.id === sessionId,
+  );
+  if (!row || row.kind !== "session") return null;
+  const top = row.offset;
+  const bottom = row.offset + row.height;
+  if (top >= currentScrollTop && bottom <= currentScrollTop + viewportHeight) {
+    return null; // already fully visible
+  }
+  if (top < currentScrollTop || row.height >= viewportHeight) {
+    // Above the viewport (or taller than it): top-align.
+    return Math.max(0, top);
+  }
+  // Below the viewport: bottom-align.
+  return Math.max(0, bottom - viewportHeight);
+}

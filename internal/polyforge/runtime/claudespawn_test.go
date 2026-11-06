@@ -3,19 +3,25 @@ package runtime
 // claudespawn_test.go: the polyforge#159 Claude Code step spawner — the
 // argv/env golden (clean context flags, the tool allowlist, background
 // off, the zero credential injection (polyforge#171): the token never rides env or argv from the adapter) and the stdin contract
-// (the prompt is written, then stdin is closed). No real `claude` runs:
-// the binary is a shell stand-in.
+// (the prompt is the first stream-json user message, stdin stays open
+// for the dispatch's later messages, and the daemon's teardown closes
+// it). No real `claude` runs: the binary is a shell stand-in; the live
+// contract is claude_interactive_test.go's opt-in probe.
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/common/spawn"
 )
 
 const testSession = "0b9f6a52-3c1d-4e8f-9a7b-1c2d3e4f5a6b"
@@ -28,9 +34,12 @@ func TestClaudeBuildCmdArgvEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// a bare Config has no harness root: tokenless, so OAuth mode
-	want := []string{"/opt/claude", "-p", "--safe-mode",
+	// one profile in every auth mode: --safe-mode, only the
+	// harness's own settings.json, the AGENTS.md plugin off
+	want := []string{"/opt/claude", "-p", "--safe-mode", "--setting-sources", "user",
+		"--settings", `{"enabledPlugins":{"cc-plugin-agents-md@builtin":false}}`,
 		"--output-format", "stream-json", "--verbose", "--include-partial-messages",
+		"--input-format", "stream-json",
 		"--session-id", testSession,
 		"--model", "claude-opus-5-5",
 		"--tools", ClaudeStepTools, "--allowedTools", ClaudeStepTools,
@@ -43,7 +52,7 @@ func TestClaudeBuildCmdArgvEnv(t *testing.T) {
 		t.Fatalf("cwd %q", cmd.Dir)
 	}
 	argv := strings.Join(cmd.Args, " ")
-	for _, banned := range []string{"tok-SENTINEL-159", "--setting-sources", "--fallback-model", "--mcp-config", "--dangerously", "bypassPermissions", "--agents", "--system-prompt", "--add-dir", "--plugin-dir"} {
+	for _, banned := range []string{"tok-SENTINEL-159", "--bare", "--fallback-model", "--mcp-config", "--dangerously", "bypassPermissions", "--agents", "--system-prompt", "--add-dir", "--plugin-dir"} {
 		if strings.Contains(argv, banned) {
 			t.Fatalf("argv carries %q: %s", banned, argv)
 		}
@@ -58,7 +67,7 @@ func TestClaudeBuildCmdArgvEnv(t *testing.T) {
 		}
 	}
 	env := strings.Join(cmd.Env, "\n")
-	for _, kv := range []string{"PF_WI_ID=wi_1", "PF_DAEMON_ID=m-1", "PF_DAEMON_SOCKET=/d/daemon.sock", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"} {
+	for _, kv := range []string{"PF_WI_ID=wi_1", "PF_DAEMON_ID=m-1", "PF_DAEMON_SOCKET=/d/daemon.sock", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_ENABLE_TASKS=false", "CLAUDE_CODE_HARBOR_KITE=0"} {
 		if !strings.Contains(env, kv) {
 			t.Fatalf("env lacks %s", kv)
 		}
@@ -85,8 +94,8 @@ func TestClaudeBuildCmdArgvEnv(t *testing.T) {
 	if !strings.Contains(argv, "--resume "+testSession) || strings.Contains(argv, "--session-id") || strings.Contains(argv, "--model") {
 		t.Fatalf("resume argv %s", argv)
 	}
-	if n := strings.Count(argv, "--safe-mode"); n != 1 {
-		t.Fatalf("resume argv carries --safe-mode %d times, want 1: %s", n, argv)
+	if n := strings.Count(argv, "--safe-mode"); n != 1 || !strings.Contains(argv, "--safe-mode --setting-sources user --settings ") {
+		t.Fatalf("resume argv carries --safe-mode %d times, want 1, followed by the step's settings: %s", n, argv)
 	}
 
 	// an invalid session id is refused (the id may come from the journal)
@@ -95,12 +104,13 @@ func TestClaudeBuildCmdArgvEnv(t *testing.T) {
 	}
 }
 
-// polyforge#223: the context flag follows the auth mode of the
-// claude-config settings.json env block, read at every spawn (fresh and
-// resume): token mode → --bare only; tokenless (empty value, missing
-// file, no harness root) → --safe-mode only; an unusable file refuses
-// the spawn. No value from the file reaches the argv, env or error.
-func TestClaudeContextFlagByAuthMode(t *testing.T) {
+// (was polyforge#223's per-auth-mode flag): every auth mode
+// runs --safe-mode, never --bare — Claude Code 2.1.319 under --bare
+// offers Bash, Edit and Read whatever --tools names. The claude-config
+// settings.json is still read at every spawn (fresh and resume): an
+// unusable file refuses the spawn. No value from the file reaches the
+// argv, env or error.
+func TestClaudeStepProfileIgnoresAuthMode(t *testing.T) {
 	const secret = "tok-SENTINEL-223"
 	root := t.TempDir()
 	cfg := &Config{HarnessRoot: root}
@@ -137,9 +147,9 @@ func TestClaudeContextFlagByAuthMode(t *testing.T) {
 
 	check("missing settings.json", "--safe-mode", "--bare")
 	write(`{"env":{"ANTHROPIC_AUTH_TOKEN":"` + secret + `","ANTHROPIC_BASE_URL":"https://gw.example"}}`)
-	check("auth token", "--bare", "--safe-mode")
+	check("auth token", "--safe-mode", "--bare")
 	write(`{"env":{"ANTHROPIC_API_KEY":"` + secret + `"}}`)
-	check("api key", "--bare", "--safe-mode")
+	check("api key", "--safe-mode", "--bare")
 	write(`{"env":{"ANTHROPIC_AUTH_TOKEN":"","ANTHROPIC_API_KEY":"","ANTHROPIC_BASE_URL":"https://x"}}`)
 	check("empty token values", "--safe-mode", "--bare")
 	write(`{"env":{}}`)
@@ -203,44 +213,306 @@ func TestPiStepEnvKeepsInheritedAnthropic(t *testing.T) {
 	}
 }
 
-// The prompt rides stdin and stdin is closed afterwards (the stand-in's
-// `cat` only finishes on EOF); the spawn journal is written first.
-func TestClaudeSpawnWritesPromptAndClosesStdin(t *testing.T) {
-	dir := t.TempDir()
-	out := filepath.Join(dir, "stdin.txt")
+// waitFile polls until path exists (or the deadline passes) and answers
+// its content.
+func waitFile(t *testing.T, path string, within time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		if b, err := os.ReadFile(path); err == nil {
+			return string(b)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never appeared", path)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// claudeStandIn writes a shell stand-in for claude in interactive mode:
+// it reads stream-json user messages line by line. The first line (the
+// prompt) lands in <dir>/first.txt; every later line lands in
+// <dir>/msg-<n>.txt and is acknowledged with command_lifecycle records
+// for its uuid. Idle shape: the prompt is answered with a result record
+// and each message gets `queued` then `started`. Running shape: the
+// stand-in announces a turn first (system/init), never ends it, and
+// acknowledges a message with `queued` only (one absorbed into the
+// running turn). Mute shape: messages are read but never acknowledged.
+// Dedup shape: every message is answered with a lone `completed` — what
+// Claude Code 2.1.322 emits for a uuid its session already holds (no
+// queued, no started, no turn). Every shape parks on stdin until EOF and
+// exits 0, as claude does.
+func claudeStandIn(t *testing.T, dir, shape string) string {
+	t.Helper()
+	first := filepath.Join(dir, "first.txt")
+	msg := filepath.Join(dir, "msg-$n.txt")
+	script := "#!/bin/sh\n"
+	if shape == "running" {
+		script += "echo '{\"type\":\"system\",\"subtype\":\"init\"}'\n"
+	}
+	script += "IFS= read -r l1; printf '%s' \"$l1\" > " + first + ".tmp && mv " + first + ".tmp " + first + "\n"
+	if shape == "idle" {
+		script += "echo '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}'\n"
+	}
+	script += "n=0\nwhile IFS= read -r l; do n=$((n+1)); printf '%s' \"$l\" > " + msg + ".tmp && mv " + msg + ".tmp " + msg + "\n" +
+		"id=$(printf '%s' \"$l\" | sed 's/.*\"uuid\":\"\\([^\"]*\\)\".*/\\1/')\n"
+	if shape != "mute" && shape != "dedup" {
+		script += "echo \"{\\\"type\\\":\\\"command_lifecycle\\\",\\\"command_uuid\\\":\\\"$id\\\",\\\"state\\\":\\\"queued\\\"}\"\n"
+	}
+	if shape == "idle" {
+		script += "echo \"{\\\"type\\\":\\\"command_lifecycle\\\",\\\"command_uuid\\\":\\\"$id\\\",\\\"state\\\":\\\"started\\\"}\"\n"
+	}
+	if shape == "dedup" {
+		script += "echo \"{\\\"type\\\":\\\"command_lifecycle\\\",\\\"command_uuid\\\":\\\"$id\\\",\\\"state\\\":\\\"completed\\\"}\"\n"
+	}
+	script += "done\nexit 0\n"
 	bin := filepath.Join(dir, "claude")
-	script := "#!/bin/sh\ncat > " + out + ".tmp && mv " + out + ".tmp " + out + "\necho '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}'\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return bin
+}
+
+// claudeUserLine decodes one stream-json user message line.
+func claudeUserLine(t *testing.T, raw string) (typ, uuid, role, content string) {
+	t.Helper()
+	var m struct {
+		Type    string `json:"type"`
+		UUID    string `json:"uuid"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatalf("not a stream-json line: %v: %s", err, raw)
+	}
+	return m.Type, m.UUID, m.Message.Role, m.Message.Content
+}
+
+// The interactive stdin contract (workflow contract v2 §5.2): the prompt
+// is the FIRST stream-json user message (its `uuid` the dispatch's
+// pf-init-<spawn_n>); stdin stays open after it — the stand-in's result
+// record ends the turn and the process does not exit; a later
+// SendMessage (spawn.Messenger, the owner relay's face) reaches the
+// process as another user message whose uuid is the message's command id
+// and whose text carries the delivery marker, and the stand-in's
+// command_lifecycle acknowledgement answers the wait (idle: started);
+// Terminate closes stdin (the idle stand-in exits on the EOF, as Claude
+// Code does) and the process is gone; no message can follow. The spawn
+// journal is written before the prompt.
+func TestClaudeSpawnStreamJSONPromptKeepsStdinOpen(t *testing.T) {
+	dir := t.TempDir()
+	bin := claudeStandIn(t, dir, "idle")
 	var journaled bool
+	var mu sync.Mutex
 	var lines []string
-	sp := DefaultSpawner(&Config{ClaudeBin: bin})
-	h, err := sp.Spawn(context.Background(), SpawnParams{
-		CapsuleDir: dir, InitialPrompt: "do the step", Harness: harness.Claude, HarnessSession: testSession,
+	h, err := DefaultSpawner(&Config{ClaudeBin: bin}).Spawn(context.Background(), SpawnParams{
+		CapsuleDir: dir, SpawnN: 3, InitialPrompt: "do the step\nline two", Harness: harness.Claude, HarnessSession: testSession,
 		Journal:  func(int, string) error { journaled = true; return nil },
-		OnRecord: func(l string) { lines = append(lines, l) },
+		OnRecord: func(l string) { mu.Lock(); lines = append(lines, l); mu.Unlock() },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for !h.Done() && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !h.Done() {
-		_ = h.Terminate(time.Second)
-		t.Fatal("the stand-in never saw stdin EOF")
-	}
-	got, err := os.ReadFile(out)
-	if err != nil || string(got) != "do the step" {
-		t.Fatalf("stdin %q (%v)", got, err)
-	}
+	t.Cleanup(func() { _ = h.Terminate(time.Second) })
 	if !journaled {
 		t.Fatal("spawn journal not written")
 	}
-	if len(lines) != 1 || !strings.Contains(lines[0], `"result"`) {
-		t.Fatalf("stdout records %q", lines)
+	if typ, uuid, role, content := claudeUserLine(t, waitFile(t, filepath.Join(dir, "first.txt"), 10*time.Second)); typ != "user" ||
+		uuid != "pf-init-3" || role != "user" || content != "do the step\nline two" {
+		t.Fatalf("the first stdin line is not the prompt as user message pf-init-3: %s %s %s %q", typ, uuid, role, content)
+	}
+	// the turn ended (the result record reached the taps) and the process is still there
+	waitUntil(t, 5*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(lines) >= 1 && strings.Contains(lines[0], `"result"`)
+	}, "the stand-in's result record never reached the taps")
+	time.Sleep(100 * time.Millisecond)
+	if h.Done() || !h.Alive() {
+		t.Fatal("the process exited after its first turn: stdin was not kept open")
+	}
+	m, ok := h.(spawn.Messenger)
+	if !ok {
+		t.Fatal("the claude handle is no spawn.Messenger")
+	}
+	if tr, ok := h.(spawn.TurnReporter); !ok || tr.TurnRunning() {
+		t.Fatalf("after the result the handle must report no running turn (TurnReporter %v)", ok)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	msg := spawn.Message{Key: "2026-11-10T09:00:01Z", Text: "owner says: go on"}
+	d, err := m.SendMessage(ctx, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.CommandID != "pf-msg-3-1" || d.Disposition != spawn.DispositionStarted {
+		t.Fatalf("delivery %+v, want command pf-msg-3-1 started", d)
+	}
+	if typ, uuid, _, content := claudeUserLine(t, waitFile(t, filepath.Join(dir, "msg-1.txt"), 10*time.Second)); typ != "user" ||
+		uuid != d.CommandID || content != spawn.MessageText(msg) || !strings.Contains(content, spawn.MessageMarker(msg.Key)) {
+		t.Fatalf("the second stdin line is not the sent message with its marker: %s %s %q", typ, uuid, content)
+	}
+	if d2, err := m.SendMessage(ctx, spawn.Message{Text: "again"}); err != nil || d2.CommandID != "pf-msg-3-2" {
+		t.Fatalf("second message: %+v %v, want its own command id pf-msg-3-2", d2, err)
+	}
+	// the daemon's teardown: stdin closed first, so the idle stand-in
+	// exits on EOF, and nothing of it stays
+	if err := h.Terminate(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, 5*time.Second, h.Done, "the process is still there after Terminate")
+	if h.Alive() {
+		t.Fatal("the process is alive after Terminate")
+	}
+	if _, err := m.SendMessage(ctx, spawn.Message{Text: "late"}); err == nil {
+		t.Fatal("a message after the teardown was accepted")
+	}
+}
+
+// A message while a turn is running: claude acknowledges it `queued` and
+// absorbs it into the running turn (no `started` until the current tool
+// call returns), so SendMessage answers DispositionQueued at once — the
+// transcript marker, not this word, proves delivery.
+func TestClaudeSendMessageMidTurnIsQueued(t *testing.T) {
+	dir := t.TempDir()
+	h, err := DefaultSpawner(&Config{ClaudeBin: claudeStandIn(t, dir, "running")}).Spawn(context.Background(), SpawnParams{
+		CapsuleDir: dir, SpawnN: 1, InitialPrompt: "p", Harness: harness.Claude, HarnessSession: testSession, OnRecord: func(string) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Terminate(time.Second) })
+	tr := h.(spawn.TurnReporter)
+	waitUntil(t, 5*time.Second, tr.TurnRunning, "the stand-in's system/init never opened a turn on the handle")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	began := time.Now()
+	d, err := h.(spawn.Messenger).SendMessage(ctx, spawn.Message{Key: "k1", Text: "while you work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Disposition != spawn.DispositionQueued || d.CommandID != "pf-msg-1-1" {
+		t.Fatalf("delivery %+v, want pf-msg-1-1 queued", d)
+	}
+	if time.Since(began) > 3*time.Second {
+		t.Fatalf("a queued message took %s to answer: it waited for a `started` that never comes mid-turn", time.Since(began))
+	}
+	if _, _, _, content := claudeUserLine(t, waitFile(t, filepath.Join(dir, "msg-1.txt"), 10*time.Second)); !strings.Contains(content, spawn.MessageMarker("k1")) {
+		t.Fatalf("the delivered text carries no marker: %q", content)
+	}
+}
+
+// No acknowledgement within ctx: the wait ends with ctx's error, the
+// message is reported as not delivered and its waiter is dropped.
+func TestClaudeSendMessageUnacknowledgedIsBoundedByCtx(t *testing.T) {
+	dir := t.TempDir()
+	h, err := DefaultSpawner(&Config{ClaudeBin: claudeStandIn(t, dir, "mute")}).Spawn(context.Background(), SpawnParams{
+		CapsuleDir: dir, SpawnN: 1, InitialPrompt: "p", Harness: harness.Claude, HarnessSession: testSession,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Terminate(time.Second) })
+	waitFile(t, filepath.Join(dir, "first.txt"), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := h.(spawn.Messenger).SendMessage(ctx, spawn.Message{Text: "anyone?"}); err == nil || !strings.Contains(err.Error(), "unacknowledged") {
+		t.Fatalf("an unacknowledged message answered %v, want the bounded wait's error", err)
+	}
+	pr := h.(*proc)
+	pr.pend.Lock()
+	_, pending := pr.pending["pf-msg-1-1"]
+	pr.pend.Unlock()
+	if pending {
+		t.Fatal("the unanswered message's waiter was not dropped")
+	}
+}
+
+// A message id is unique within the harness SESSION, not the process:
+// claude keeps every uuid in its native session record and silently
+// drops a later message that reuses one (Claude Code 2.1.322, measured on
+// `--resume` by the PR 6a review). Two dispatches of the same session
+// (spawn 1, then its resume as spawn 2) must therefore give their first
+// message different uuids — `pf-msg-<spawn_n>-<n>`, the spawn number
+// claudeInitMessageID stamps on the prompt — on the wire and in the
+// Delivery.
+func TestClaudeMessageIDsAreSpawnScoped(t *testing.T) {
+	ids := map[int]string{}
+	for _, spawnN := range []int{1, 2} {
+		dir := t.TempDir()
+		h, err := DefaultSpawner(&Config{ClaudeBin: claudeStandIn(t, dir, "idle")}).Spawn(context.Background(), SpawnParams{
+			CapsuleDir: dir, SpawnN: spawnN, InitialPrompt: "p", Harness: harness.Claude, HarnessSession: testSession, OnRecord: func(string) {},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = h.Terminate(time.Second) })
+		waitFile(t, filepath.Join(dir, "first.txt"), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		d, err := h.(spawn.Messenger).SendMessage(ctx, spawn.Message{Key: "k", Text: "after the resume"})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "pf-msg-" + strconv.Itoa(spawnN) + "-1"
+		if d.CommandID != want {
+			t.Fatalf("spawn %d: delivery %+v, want command id %s", spawnN, d, want)
+		}
+		if _, uuid, _, _ := claudeUserLine(t, waitFile(t, filepath.Join(dir, "msg-1.txt"), 10*time.Second)); uuid != want {
+			t.Fatalf("spawn %d: the uuid on stdin is %q, want %s", spawnN, uuid, want)
+		}
+		ids[spawnN] = d.CommandID
+	}
+	if ids[1] == ids[2] {
+		t.Fatalf("both dispatches of the session gave their first message the uuid %q: the resumed session already holds it and claude drops the message", ids[1])
+	}
+}
+
+// A lone `completed` acknowledgement — no `queued`, no `started` for the
+// uuid — is what claude emits for a message it dropped (a uuid its
+// session already holds): SendMessage reports it as NOT delivered (an
+// error, by the Messenger contract), never as "started", and drops the
+// waiter.
+func TestClaudeLoneCompletedIsNotDelivered(t *testing.T) {
+	dir := t.TempDir()
+	h, err := DefaultSpawner(&Config{ClaudeBin: claudeStandIn(t, dir, "dedup")}).Spawn(context.Background(), SpawnParams{
+		CapsuleDir: dir, SpawnN: 2, InitialPrompt: "p", Harness: harness.Claude, HarnessSession: testSession, OnRecord: func(string) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Terminate(time.Second) })
+	waitFile(t, filepath.Join(dir, "first.txt"), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d, err := h.(spawn.Messenger).SendMessage(ctx, spawn.Message{Key: "k", Text: "did you get this?"})
+	if err == nil {
+		t.Fatalf("a message claude completed without queuing or starting it was reported delivered: %+v", d)
+	}
+	if !strings.Contains(err.Error(), "dropped") || !strings.Contains(err.Error(), "pf-msg-2-1") {
+		t.Fatalf("error %v, want the dropped-message error naming pf-msg-2-1", err)
+	}
+	waitFile(t, filepath.Join(dir, "msg-1.txt"), 10*time.Second) // it was written; claude just did not take it
+	pr := h.(*proc)
+	pr.pend.Lock()
+	_, pending := pr.pending["pf-msg-2-1"]
+	pr.pend.Unlock()
+	if pending {
+		t.Fatal("the dropped message's waiter was not dropped")
+	}
+}
+
+// waitUntil polls cond until it holds or within passes.
+func waitUntil(t *testing.T, within time.Duration, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal(msg)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

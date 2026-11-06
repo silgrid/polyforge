@@ -1,0 +1,207 @@
+[
+  {
+    "file": "components/AgentSessionPanel.tsx",
+    "argument": "`agentSwitcher.status.${status}`",
+    "reason": "the session status (running, idle, …) is known only at run time; the keys are agentSwitcher.status.<value>"
+  },
+  {
+    "file": "components/AgentsConfig.tsx",
+    "argument": "`agents.scope.${displayedScope}`",
+    "reason": "the agent scope (user or project) is the selected definition's, known only at run time; the keys are agents.scope.<value>"
+  },
+  {
+    "file": "components/AgentsConfig.tsx",
+    "argument": "`agents.scope.${scope}`",
+    "reason": "the agent scope (user or project) is the selected definition's, known only at run time; the keys are agents.scope.<value>"
+  },
+  {
+    "file": "components/AppShell.tsx",
+    "argument": "`bgTasks.status.${task.status}`",
+    "reason": "the background task status comes from the pi-background-tasks API at run time; the keys are bgTasks.status.<value>"
+  },
+  {
+    "file": "components/BackgroundTasksPanel.tsx",
+    "argument": "`bgTasks.status.${task.status}`",
+    "reason": "the background task status comes from the pi-background-tasks API at run time; the keys are bgTasks.status.<value>"
+  },
+  {
+    "file": "components/ClaudeSubagentPanel.tsx",
+    "argument": "`claudeSubagent.${run.status}`",
+    "reason": "the claude subagent run status comes from its sidecar at run time; the keys are claudeSubagent.<value>"
+  },
+  {
+    "file": "components/ClaudeSubagentRow.tsx",
+    "argument": "`claudeSubagent.${run.status}`",
+    "reason": "the claude subagent run status comes from its sidecar at run time; the keys are claudeSubagent.<value>"
+  },
+  {
+    "file": "components/CodemodeToolView.tsx",
+    "argument": "`codemode.status.${call.status}`",
+    "reason": "the code-mode call status comes from the tool event at run time; the keys are codemode.status.<value>"
+  },
+  {
+    "file": "components/DirectoryPicker.tsx",
+    "argument": "`directoryPicker.fsManage.${outcome.reason}`",
+    "reason": "the rename/delete refusal reason comes from the fs-manage API at run time; the keys are directoryPicker.fsManage.<value>"
+  },
+  {
+    "file": "components/DirectoryPicker.tsx",
+    "argument": "`directoryPicker.validation.${issue}`",
+    "reason": "the cwd validation issue comes from the validate API at run time; the keys are directoryPicker.validation.<value>"
+  },
+  {
+    "file": "components/McpAddServer.tsx",
+    "argument": "`mcp.reason.${failure.reason}`",
+    "reason": "the MCP failure reason comes from the MCP API response at run time; the keys are mcp.reason.<value>"
+  },
+  {
+    "file": "components/McpAddServer.tsx",
+    "argument": "`mcp.transport.${preview.transport}`",
+    "reason": "the MCP server transport comes from the server's config entry at run time; the keys are mcp.transport.<value>"
+  },
+  {
+    "file": "components/McpConfig.tsx",
+    "argument": "`mcp.fileProblem.${problem.reason}`",
+    "reason": "the MCP config file problem comes from parsing the file at run time; the keys are mcp.fileProblem.<value>"
+  },
+  {
+    "file": "components/McpConfig.tsx",
+    "argument": "`mcp.reason.${block}`",
+    "reason": "the MCP failure reason comes from the MCP API response at run time; the keys are mcp.reason.<value>"
+  },
+  {
+    "file": "components/McpConfig.tsx",
+    "argument": "`mcp.reason.${error.reason}`",
+    "reason": "the MCP failure reason comes from the MCP API response at run time; the keys are mcp.reason.<value>"
+  },
+  {
+    "file": "components/McpConfig.tsx",
+    "argument": "`mcp.reason.${failure.reason}`",
+    "reason": "the MCP failure reason comes from the MCP API response at run time; the keys are mcp.reason.<value>"
+  },
+  {
+    "file": "components/McpConfig.tsx",
+    "argument": "`mcp.transport.${server.transport}`",
+    "reason": "the MCP server transport comes from the server's config entry at run time; the keys are mcp.transport.<value>"
+  },
+  {
+    "file": "components/McpSignIn.tsx",
+    "argument": "`mcp.reason.${failure.reason}`",
+    "reason": "the MCP failure reason comes from the MCP API response at run time; the keys are mcp.reason.<value>"
+  },
+  {
+    "file": "components/PluginsConfig.tsx",
+    "argument": "`plugins.status.${status}`",
+    "reason": "the plugin package status comes from the plugins API at run time; the keys are plugins.status.<value>"
+  },
+  {
+    "file": "components/PolyforgeAnalysisCard.tsx",
+    "argument": "`polyforge.messages.analysisType.${analysis.type}`",
+    "reason": "the analysis type comes from pf msg analyze at run time (closed set); the keys are polyforge.messages.analysisType.<value>"
+  },
+  {
+    "file": "components/PolyforgeConfig.tsx",
+    "argument": "`polyforge.cells.state.${state}`",
+    "reason": "the Cell state comes from pf cell list at run time; the keys are polyforge.cells.state.<value>"
+  },
+  {
+    "file": "components/PolyforgeDecisionEntry.tsx",
+    "argument": "`polyforge.decisions.class.${decision.class}`",
+    "reason": "the decision class comes from pf watch decisions at run time; the keys are polyforge.decisions.class.<value>"
+  },
+  {
+    "file": "components/PolyforgeDecisionEntry.tsx",
+    "argument": "`polyforge.decisions.state.${state}`",
+    "reason": "the decision state comes from pf watch decisions at run time; the keys are polyforge.decisions.state.<value>"
+  },
+  {
+    "file": "components/PolyforgeJobComposer.tsx",
+    "argument": "`polyforge.blocked.kind.${blocked.kind}`",
+    "reason": "the blocked kind comes from the pf watch blocked field at run time; the keys are polyforge.blocked.kind.<value>"
+  },
+  {
+    "file": "components/PolyforgeJobComposer.tsx",
+    "argument": "`polyforge.chat.closed.${state.reason}`",
+    "reason": "the composer close reason comes from the job's watch state at run time; the keys are polyforge.chat.closed.<value>"
+  },
+  {
+    "file": "components/PolyforgeJobComposer.tsx",
+    "argument": "`polyforge.chat.parked.${state.park}`",
+    "reason": "the park reason comes from the job's watch state at run time; the keys are polyforge.chat.parked.<value>"
+  },
+  {
+    "file": "components/PolyforgePanel.tsx",
+    "argument": "`polyforge.decisions.class.${decision.class}`",
+    "reason": "the decision class comes from pf watch decisions at run time; the keys are polyforge.decisions.class.<value>"
+  },
+  {
+    "file": "components/PolyforgePanel.tsx",
+    "argument": "`polyforge.jobStatus.${status}`",
+    "reason": "the job status comes from the daemon's job files at run time; the keys are polyforge.jobStatus.<value>"
+  },
+  {
+    "file": "components/PolyforgePanel.tsx",
+    "argument": "`polyforge.stepStatus.${status}`",
+    "reason": "the step status comes from pf watch at run time; the keys are polyforge.stepStatus.<value>"
+  },
+  {
+    "file": "components/PolyforgePanel.tsx",
+    "argument": "`polyforge.workflowStatus.${status}`",
+    "reason": "the workflow status comes from pf watch at run time; the keys are polyforge.workflowStatus.<value>"
+  },
+  {
+    "file": "components/PolyforgeProgressSubagent.tsx",
+    "argument": "`polyforge.progress.subagentStatus.${header.state}`",
+    "reason": "the subagent state comes from the progress stream at run time; the keys are polyforge.progress.subagentStatus.<value>"
+  },
+  {
+    "file": "components/PolyforgeProgressToolCard.tsx",
+    "argument": "`polyforge.progress.toolStatus.${header.status}`",
+    "reason": "the tool call status comes from the progress stream at run time; the keys are polyforge.progress.toolStatus.<value>"
+  },
+  {
+    "file": "components/PolyforgeTasks.tsx",
+    "argument": "`polyforge.tasks.state.${state}`",
+    "reason": "the task state comes from pf task list at run time; the keys are polyforge.tasks.state.<value>"
+  },
+  {
+    "file": "components/PolyforgeWorkItems.tsx",
+    "argument": "`polyforge.workItems.status.${status}`",
+    "reason": "the work item status comes from pf queue at run time; the keys are polyforge.workItems.status.<value>"
+  },
+  {
+    "file": "components/ProjectTrustDialog.tsx",
+    "argument": "`mcp.fileProblem.${problem.reason}`",
+    "reason": "the MCP config file problem comes from parsing the file at run time; the keys are mcp.fileProblem.<value>"
+  },
+  {
+    "file": "components/ProjectTrustDialog.tsx",
+    "argument": "`mcp.reason.${error.reason}`",
+    "reason": "the MCP failure reason comes from the MCP API response at run time; the keys are mcp.reason.<value>"
+  },
+  {
+    "file": "components/ProjectTrustDialog.tsx",
+    "argument": "`mcp.reason.${listing.reason}`",
+    "reason": "the MCP failure reason comes from the MCP API response at run time; the keys are mcp.reason.<value>"
+  },
+  {
+    "file": "components/ProjectTrustDialog.tsx",
+    "argument": "`mcp.transport.${server.transport}`",
+    "reason": "the MCP server transport comes from the server's config entry at run time; the keys are mcp.transport.<value>"
+  },
+  {
+    "file": "components/TerminalPanel.tsx",
+    "argument": "`terminal.${status}`",
+    "reason": "the terminal connection status is the panel's run-time state; the keys are terminal.<value>"
+  },
+  {
+    "file": "components/mcp-add-helpers.ts",
+    "argument": "`mcp.fileProblem.${block.reason}`",
+    "reason": "the MCP config file problem comes from parsing the file at run time; the keys are mcp.fileProblem.<value>"
+  },
+  {
+    "file": "components/mcp-add-helpers.ts",
+    "argument": "`mcp.transport.${raw.transport}`",
+    "reason": "the MCP server transport comes from the server's config entry at run time; the keys are mcp.transport.<value>"
+  }
+]

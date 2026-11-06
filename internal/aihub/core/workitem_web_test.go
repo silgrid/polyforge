@@ -4,9 +4,11 @@ package core
 // fixed 20-row page with the keyset walk, the readable-set narrowing
 // inside the SQL (before the page cut), the status filter, the
 // case-insensitive goal/content substring search, equal-timestamp
-// cursor edges and the typed refusals.
+// cursor edges, the same-millisecond insertion order
+// and the typed refusals.
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -155,7 +157,7 @@ func TestWebListStatusFilterAndSearch(t *testing.T) {
 
 func TestWebListCursorEdgesAndEqualTimestamps(t *testing.T) {
 	env := newEnv(t)
-	// Seed rows with EXACTLY equal created_at values: the id tiebreak
+	// Seed rows with EXACTLY equal created_at values: the seq tiebreak
 	// keeps the walk exact (the string-ordering hazard this read is
 	// built against).
 	const same = "2026-01-02T03:04:05.000000000Z"
@@ -204,5 +206,91 @@ func TestWebListCursorEdgesAndEqualTimestamps(t *testing.T) {
 	// An unknown status is refused.
 	if _, _, err := env.WIs.ListWeb(WebListFilters{ProjectID: env.Project, Status: "nope", ReadableProjects: []string{env.Project}}); err == nil {
 		t.Fatal("an unknown status filter was accepted")
+	}
+}
+
+// TestWebListSameMillisecondNewestCreatedFirst: "newest
+// first" holds inside one millisecond too. julianday() rounds a
+// created_at to the nearest millisecond, so two creations less than a
+// millisecond apart tie on the primary key; the tiebreak must be the
+// project's insertion order (seq), never the random id — the random id
+// made TestWebListPagesExactlyOnce's "first row is the newest" flaky on
+// a 2-core runner.
+func TestWebListSameMillisecondNewestCreatedFirst(t *testing.T) {
+	env := newEnv(t)
+	const same = "2026-01-02T03:04:05.000000000Z"
+	ids := []string{}
+	for i := 0; i < 25; i++ {
+		id := webCreate(t, env, "same-ms ordered item", "")
+		ids = append(ids, id)
+		if _, err := env.DB.Exec(`UPDATE work_items SET created_at=?1 WHERE id=?2`, same, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The walk (20 + 5 across the cursor) is exactly the reverse
+	// creation order: no duplicate, no gap, the newest first.
+	walk := []string{}
+	sizes := []int{}
+	cursor := ""
+	for page := 1; page <= 4; page++ {
+		items, next, err := env.WIs.ListWeb(WebListFilters{ProjectID: env.Project, After: cursor, ReadableProjects: []string{env.Project}})
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		sizes = append(sizes, len(items))
+		for _, it := range items {
+			walk = append(walk, it.ID)
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	if len(sizes) != 2 || sizes[0] != 20 || sizes[1] != 5 {
+		t.Fatalf("page sizes = %v, want [20 5]", sizes)
+	}
+	for i, id := range walk {
+		if want := ids[len(ids)-1-i]; id != want {
+			t.Fatalf("walk[%d] = %s, want %s (reverse creation order)", i, id, want)
+		}
+	}
+
+	// Two distinct timestamps that julianday() rounds into one
+	// millisecond (a pair a reproduction run produced): the later
+	// creation still comes first.
+	older := webCreate(t, env, "sub-ms older", "")
+	newer := webCreate(t, env, "sub-ms newer", "")
+	for id, ts := range map[string]string{
+		older: "2026-11-12T16:25:09.311538009Z",
+		newer: "2026-11-12T16:25:09.312489656Z",
+	} {
+		if _, err := env.DB.Exec(`UPDATE work_items SET created_at=?1 WHERE id=?2`, ts, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, _, err := env.WIs.ListWeb(WebListFilters{ProjectID: env.Project, ReadableProjects: []string{env.Project}})
+	if err != nil || len(items) < 2 {
+		t.Fatalf("list: %v (%d rows)", err, len(items))
+	}
+	if items[0].ID != newer || items[1].ID != older {
+		t.Fatalf("first rows = %s, %s; want the newer %s then the older %s", items[0].ID, items[1].ID, newer, older)
+	}
+}
+
+// TestWebListRefusesVersion1Cursor: the cursor moved to
+// version 2 (it carries seq, not the id); a version-1 cursor is refused
+// as bad input, never misread (no compatibility path).
+func TestWebListRefusesVersion1Cursor(t *testing.T) {
+	env := newEnv(t)
+	id := webCreate(t, env, "v1 cursor item", "")
+	webCreate(t, env, "v1 cursor older item", "")
+	var createdAt string
+	if err := env.DB.QueryRow(`SELECT created_at FROM work_items WHERE id=?1`, id).Scan(&createdAt); err != nil {
+		t.Fatal(err)
+	}
+	v1 := base64.RawURLEncoding.EncodeToString([]byte("1|" + createdAt + "|" + id))
+	_, _, err := env.WIs.ListWeb(WebListFilters{ProjectID: env.Project, After: v1, ReadableProjects: []string{env.Project}})
+	if !IsCode(err, api.ErrCoreBadInput) {
+		t.Fatalf("a version-1 cursor answered err %v, want %s", err, api.ErrCoreBadInput)
 	}
 }

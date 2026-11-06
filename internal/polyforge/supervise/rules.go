@@ -10,7 +10,7 @@ import (
 )
 
 // DefaultModelErrorGrace is rule 1's grace after an ended turn (error or
-// ok) with no result file.
+// ok) with no hand-off (`pf step handoff`).
 const DefaultModelErrorGrace = time.Minute
 
 // Judge applies the rules in priority order and answers the verdict of
@@ -38,7 +38,7 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 	// 1: model_error — the turn ended on an error and no result followed.
 	if s.TurnError && now.Sub(s.TurnErrAt) >= grace {
 		v := dead(CauseModelError, fmt.Sprintf(
-			"turn ended with an error %s ago and no result file followed within the %s grace: %s",
+			"turn ended with an error %s ago and no `pf step handoff` followed within the %s grace: %s",
 			now.Sub(s.TurnErrAt).Round(time.Second), grace.Round(time.Second), s.TurnErrText))
 		v.TurnError = s.TurnErrText
 		return v
@@ -48,7 +48,7 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 	// delivering. Same-model retry (the retry prompt says so).
 	if s.TurnEnded && !s.TurnError && !s.TurnEndedAt.IsZero() && now.Sub(s.TurnEndedAt) >= grace {
 		return dead(CauseEndedWithoutResult, fmt.Sprintf(
-			"turn ended normally %s ago and no result file followed within the %s grace",
+			"turn ended normally %s ago and no `pf step handoff` followed within the %s grace",
 			now.Sub(s.TurnEndedAt).Round(time.Second), grace.Round(time.Second)))
 	}
 	// 2: model_hung — waiting for the model, no output for X.
@@ -63,13 +63,19 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 				now.Sub(since).Round(time.Second), th.Silence.Round(time.Second)))
 		}
 	}
-	// 3: tool_hung — one tool running longer than Y.
-	if th.Tool > 0 && len(s.Tools) > 0 {
-		oldest := s.Tools[0]
-		if run := now.Sub(oldest.Since); run >= th.Tool {
+	// 3: tool_hung — one tool running longer than Y; a sub-agent call
+	// (one reporting inner activity) silent for longer than Y since its
+	// newest inner record, however long it ran in total.
+	if tool, ok := s.StalestTool(); th.Tool > 0 && ok {
+		if run := now.Sub(tool.ClockStart()); run >= th.Tool {
+			if tool.LastActive.IsZero() {
+				return dead(CauseToolHung, fmt.Sprintf(
+					"tool %q still running after %s (bound %s); args: %s",
+					tool.Name, run.Round(time.Second), th.Tool.Round(time.Second), tool.Args))
+			}
 			return dead(CauseToolHung, fmt.Sprintf(
-				"tool %q still running after %s (bound %s); args: %s",
-				oldest.Name, run.Round(time.Second), th.Tool.Round(time.Second), oldest.Args))
+				"sub-agent call %q silent for %s since its last inner activity, running %s in total (bound %s); args: %s",
+				tool.Name, run.Round(time.Second), now.Sub(tool.Since).Round(time.Second), th.Tool.Round(time.Second), tool.Args))
 		}
 	}
 	// 4: step_timeout — CUMULATIVE step runtime over T.

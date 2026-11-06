@@ -127,8 +127,6 @@ func TestWorkspaceYamlRefusalFamilies(t *testing.T) {
 		{"unknown top-level key", "model: x\nsteps:\n  proj:\n    default: { models: [pi:a] }\n"},
 		{"retired projects section", "projects:\n  proj:\n    repos: { models: [] }\n"},
 		{"retired workflow_defaults section", "workflow_defaults:\n  model_candidates: [pi:a]\n"},
-		{"key that is no installed step id", "steps:\n  proj:\n    build: { models: [pi:a] }\n"},
-		{"retired kind key", "steps:\n  proj:\n    gate: { models: [pi:a] }\n"},
 		{"legacy top-level models (pre-#169 shape)", "models:\n  proj:\n    default: [a]\n"},
 		{"unknown harness", "steps:\n  proj:\n    default: { models: [pi:a], harness: codex }\n"},
 		{"project not mapped to this workspace", "steps:\n  proj:\n    default: { models: [pi:a] }\n  ghost:\n    default: { models: [pi:b] }\n"},
@@ -154,6 +152,24 @@ func TestWorkspaceYamlRefusalFamilies(t *testing.T) {
 				t.Fatalf("%s: the refused claim materialized a capsule", c.name)
 			}
 		})
+	}
+}
+
+// A stale key — no step id of an installed lane (:
+// the retired verify-judge key, a typo) — refuses nothing: it governs
+// nothing, and `pf doctor` warns about it.
+func TestWorkspaceYamlStaleKeyClaims(t *testing.T) {
+	hub := newFakeHub()
+	r, ws, _ := newWorkspaceTestRuntime(t, hub, "proj")
+	writeWorkspaceYaml(t, ws, "steps:\n  proj:\n    verify-judge: { models: [pi:a] }\n    bogus: { models: [pi:b] }\n")
+	if err := r.Start(context.Background(), "wi_w432stale", StartOpts{}); err != nil {
+		t.Fatalf("a stale key must not refuse the claim: %v", err)
+	}
+	if r.jobOf("wi_w432stale") == nil {
+		t.Fatal("the claim must run to a live agent")
+	}
+	if err := r.Stop(context.Background(), "wi_w432stale", protocol.FinishWrapped); err != nil {
+		t.Fatalf("Stop: %v", err)
 	}
 }
 
@@ -229,7 +245,7 @@ func TestWorkspaceYamlReadOnFreshClaimAndReclaim(t *testing.T) {
 	}
 	hub.forceEnd("wi_w079lane")
 	claims := hub.claimCount()
-	writeWorkspaceYaml(t, ws, "steps:\n  proj:\n    bogus: { models: [pi:a] }\n")
+	writeWorkspaceYaml(t, ws, "steps:\n  proj:\n    default: { models: [\"\"] }\n")
 	terr := r.Start(context.Background(), "wi_w079lane", StartOpts{})
 	if ae, ok := terr.(*api.Error); !ok || ae.Code != api.ErrDaemonWorkspaceYaml {
 		t.Fatalf("expected DAEMON-414 on the re-claim, got %v", terr)

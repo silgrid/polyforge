@@ -61,12 +61,13 @@ func TestWrapNoBundleClosesAtHub(t *testing.T) {
 		t.Errorf("json stdout = %q", stdout)
 	}
 
-	// no daemon running here: a no-bundle work item still closes
+	// no daemon running here: AIHub business goes through the daemon, so
+	// nothing reaches the hub and the refusal names the daemon
 	var nrec reqRecorder
 	env = map[string]string{"PF_SERVER": noBundleHub(t, &nrec, "wrapped"),
 		"PF_DAEMON_SOCKET": filepath.Join(t.TempDir(), "gone.sock")}
-	if code, _, stderr := runPf(t, env, "wrap", "wi_abc"); code != 0 || nrec.last().Path != "/api/v1/work-items/wi_abc/wrap" {
-		t.Fatalf("daemon down: code=%d stderr=%s reqs=%+v", code, stderr, nrec.all())
+	if code, _, _ := runPf(t, env, "wrap", "wi_abc"); code == 0 || len(nrec.all()) != 0 {
+		t.Fatalf("daemon down: code=%d reqs=%+v", code, nrec.all())
 	}
 }
 

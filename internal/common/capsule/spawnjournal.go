@@ -30,6 +30,10 @@ type SpawnJournalEntry struct {
 	// for pi). An entry without a harness predates #159: a pi derivation.
 	Harness        string `json:"harness,omitempty"`
 	HarnessSession string `json:"harness_session,omitempty"`
+	// Language is the agent language the dispatch was
+	// told in its prompt (`en`, `zh-CN`); an entry without one predates
+	// #501.
+	Language string `json:"language,omitempty"`
 }
 
 // ReadSpawnJournal is the one reader of the capsule spawn journal. It is
@@ -69,4 +73,37 @@ func SpawnJournalMaxN(capsuleDir string) (int, error) {
 		}
 	}
 	return max, err
+}
+
+// The agent languages (`[daemon] agent_language`): the
+// language a dispatch is told in its prompt and its journal line records
+// (SpawnJournalEntry.Language). DefaultLanguage is what an absent key, or
+// a line without a language, means. stepcall names them for the daemon.
+const (
+	LangEN          = "en"
+	LangZhCN        = "zh-CN"
+	DefaultLanguage = LangEN
+)
+
+// IsLanguage reports whether v is one of the agent languages (exact
+// spelling).
+func IsLanguage(v string) bool { return v == LangEN || v == LangZhCN }
+
+// DispatchLanguage answers the agent language the journal records for the
+// dispatch (step, spawnN): the language its hand-off is stamped in. A
+// dispatch without a line, a line without a language (it predates #501)
+// or with an unknown one, and an unreadable journal answer
+// DefaultLanguage. The last line of the dispatch wins.
+func DispatchLanguage(capsuleDir, step string, spawnN int64) string {
+	entries, _ := ReadSpawnJournal(capsuleDir)
+	lang := ""
+	for _, e := range entries {
+		if e.StepID == step && int64(e.SpawnN) == spawnN {
+			lang = e.Language
+		}
+	}
+	if IsLanguage(lang) {
+		return lang
+	}
+	return DefaultLanguage
 }

@@ -39,7 +39,12 @@ below as a blocking finding.
   - `docs/upgrade.md` is append-only: a change adds a section at its end and
     rewrites no existing byte, and every append moves the file's sha256 pin in
     `test/w254_docs_set_acceptance_test.go` in the same commit (a pin left on
-    the old bytes is a red full bar).
+    the old bytes is a red full bar). Each upgrade.md append adds one line at
+    the end of the list in that pin's comment, between its
+    `upgrade-sections:begin` and `upgrade-sections:end` lines — one whole
+    line per section, never words spliced into an existing line (the
+    daemon's mechanical merge — develop's sync and merge steps — unions two
+    lines appended at once, and nothing else).
 
   Review treats a coupled obligation named here that the plan omits, or that
   the delivered diff leaves unchanged, as a blocking finding.

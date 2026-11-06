@@ -1,11 +1,8 @@
 package test
 
-// w68_build_step_rules_contract_test.go: pins the build-step rule this
-// chore surfaced, so it cannot silently drift back: the chore `code` step
-// names both rewind verdict sources, in feature-full's exact wording, and
-// the old verification-only form is gone. (The chore's second rule, the
-// projection hygiene bullet, holds only in the internal tree: its pin lives
-// in an internal-only test, since the public projection drops the bullet.)
+// w68_build_step_rules_contract_test.go: the flattened repo-file reader the
+// text contracts share. Its own pin (the chore `code` step naming both
+// rewind verdict sources) went with the lanes removed.
 
 import (
 	"os"
@@ -23,19 +20,4 @@ func w68Flat(t *testing.T, rel string) string {
 		t.Fatal(err)
 	}
 	return strings.Join(strings.Fields(string(b)), " ")
-}
-
-func TestW68ChoreCodeStepNamesReviewRewind(t *testing.T) {
-	const bothSources = "(a `verification` or `review` FAIL verdict)"
-	chore := w68Flat(t, "workflows/chore/steps/code.md")
-	if !strings.Contains(chore, bothSources) {
-		t.Errorf("the chore code step must name both rewind verdict sources, missing %q", bothSources)
-	}
-	if strings.Contains(chore, "(a `verification` FAIL") {
-		t.Error("the chore code step still carries the old verification-only rewind wording")
-	}
-	full := w68Flat(t, "workflows/feature-full/steps/code.md")
-	if !strings.Contains(full, bothSources) {
-		t.Errorf("the feature-full code step must keep naming both rewind verdict sources (anti-drift pin), missing %q", bothSources)
-	}
 }

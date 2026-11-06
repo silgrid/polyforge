@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
@@ -51,12 +52,22 @@ var configKeyDefs = []configKeyDef{
 	{"claude_bin", keyFlat, ConfigLive},
 	{"step_timeout", keyDaemon, ConfigLive},
 	{"stall_window", keyDaemon, ConfigLive},
+	{"ask_warm_window", keyDaemon, ConfigRestartOnly},
 	{"harness_root", keyDaemon, ConfigRestartOnly},
 	{"operator_agent_dir", keyDaemon, ConfigRestartOnly},
+	{"python", keyDaemon, ConfigRestartOnly},
 	{"max_concurrent_jobs", keyDaemon, ConfigLive},
+	{"max_concurrent_bars", keyDaemon, ConfigLive},
+	{"bar_load_threshold", keyDaemon, ConfigLive},
+	{"command_path", keyDaemon, ConfigLive},
+	{"cell_max_concurrent_jobs", keyDaemon, ConfigLive},
+	{"machine_id", keyDaemon, ConfigRestartOnly},
+	{"heartbeat_every", keyDaemon, ConfigLive},
+	{"agent_language", keyDaemon, ConfigLive},
 	{"summarize.models", keySummarize, ConfigLive},
 	{"summarize.language", keySummarize, ConfigLive},
 	{"summarize.interval_sec", keySummarize, ConfigLive},
+	{"model.source", keyModel, ConfigRestartOnly},
 }
 
 // MemoryPolicyClass is the reload class of the whole
@@ -78,14 +89,24 @@ func ConfigSchema(name string) map[string]any {
 		return map[string]any{"kind": "string"}
 	case "api_key":
 		return map[string]any{"kind": "secret"}
-	case "daemon_socket", "harness_root", "operator_agent_dir":
+	case "daemon_socket", "harness_root", "operator_agent_dir", "python":
 		return map[string]any{"kind": "path"}
-	case "step_timeout":
+	case "step_timeout", "ask_warm_window":
 		return map[string]any{"kind": "duration", "min_exclusive": 0}
 	case "stall_window":
 		return map[string]any{"kind": "duration", "nonzero": true, "allow_negative": true}
-	case "max_concurrent_jobs":
+	case "max_concurrent_jobs", "max_concurrent_bars", "cell_max_concurrent_jobs":
 		return map[string]any{"kind": "int", "min": 1}
+	case "bar_load_threshold":
+		return map[string]any{"kind": "number", "min_exclusive": 0}
+	case "machine_id", "command_path":
+		return map[string]any{"kind": "string"}
+	case "heartbeat_every":
+		return map[string]any{"kind": "duration", "min_exclusive": 0}
+	case "agent_language":
+		return map[string]any{"kind": "enum", "values": []string{stepcall.LangEN, stepcall.LangZhCN}}
+	case "model.source":
+		return map[string]any{"kind": "model-source"}
 	case "summarize.models":
 		return map[string]any{"kind": "model-list"}
 	case "summarize.language":
@@ -98,10 +119,15 @@ func ConfigSchema(name string) map[string]any {
 
 // WorkspaceConfigClass answers a workspace `.polyforge.yaml` key's reload
 // class — the same class table the cli.toml keys use, never a UI copy. The
-// driver composes every step's chain and attrs fresh at every dispatch, so
-// every steps.<project>.<step>.models / .attrs.<name> key is live (a
-// running step keeps what its dispatch read).
+// driver composes every step's chain fresh at every dispatch, so every
+// steps.<project>.<step>.models key is live (a running step keeps what its
+// dispatch read); a steps.<project>.<step>.skip key is next-claim: the
+// claim fixes the work item's skipped steps into its capsule, which a
+// running work item keeps.
 func WorkspaceConfigClass(name string) ConfigClass {
+	if sk, ok := parseStepKey(name); ok && sk.leaf == stepLeafSkip {
+		return ConfigNextClaim
+	}
 	if strings.HasPrefix(name, "steps.") {
 		return ConfigLive
 	}
@@ -147,6 +173,7 @@ const (
 	keyWorkspace
 	keySummarize // a [summarize] table key (summarize.<name>)
 	keyPolicy    // one memory_policy.<entry>.record|skip list
+	keyModel     // the [model] table's source key (model.source)
 )
 
 // configKey is one parsed key argument.

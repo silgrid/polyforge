@@ -25,13 +25,54 @@
 #   4. daemon — `pf daemon ensure` (also run by the harness adapters at
 #      session start, e.g. after a reboot).
 #   5. verify — pf doctor.
+#   Opt-in --with-pi-web (; the default installs pf only): the
+#      Pi Web package of the SAME release — silgrid-pi-web-<VER>.tgz and its
+#      SHA256SUMS line from $REPO at $VER — is downloaded and checksum-
+#      verified in step 1 (a missing asset or a mismatch refuses there, with
+#      nothing changed), then installed with `npm install -g <tgz>` after
+#      step 5 — unless the installed @silgrid/pi-web already has the
+#      tarball's package version: then npm is not run (it
+#      would delete the package directory a running pi-web serves) and the
+#      run prints `Pi Web <ver> is already installed (<dir>); npm install -g
+#      skipped`; --reinstall-pi-web (only together with --with-pi-web)
+#      reinstalls it anyway, e.g. to repair a broken install, and a pi-web
+#      running over that reinstall is judged stale like any other (below).
+#      npm may skip the package's install scripts and still exit 0
+#      (e.g. npm 11 under ignore-scripts or an explicit allowScripts denial), so
+#      the installer then runs the install check the package ships,
+#      `node "$(npm root -g)/@silgrid/pi-web/bin/pi-web-install-check.js"`:
+#      it confirms the scripts' effects (patches applied, terminal prepared,
+#      node-pty starts a pty; it rebuilds node-pty with its scripts allowed
+#      when needed) and prints `ERROR: Pi Web install check failed at <step>:
+#      <reason>` when it cannot. A failing npm install or install check is
+#      reported and exits non-zero, and pf, the release checkout and the
+#      daemon stay as installed. The equivalent standalone path is
+#      `npm install -g @silgrid/pi-web` followed by that check command.
+#      A pi-web already running under the deploy's restart loop (tmux session
+#      PIWEB_TMUX_SESSION, default piweb, window piweb) keeps serving the old
+#      tree npm just deleted: blank pages, /_next/static/* answering 5xx.
+#      The installer samples what it serves before `npm install -g` and,
+#      when that is not the package now installed (served == installed as
+#      pi-web/deploy-piweb.sh defines it: bin/pi-web-served.js of the
+#      verified tarball), prints an ACTION line with both versions and the
+#      restart command; it never restarts pi-web by default:
+#      a restart ends any agent turn in progress in it. With
+#      --restart-pi-web (only together with --with-pi-web) it sends that
+#      process SIGTERM instead and waits up to 60 s until the loop serves the
+#      installed package (a timeout is reported and exits 1). The served
+#      package is the working directory of pi-web's Next.js server
+#, which npm deletes on every install, so a pi-web left
+#      stale by an earlier run (an ignored ACTION line) or by a manual
+#      `npm i -g` is detected on any later --with-pi-web run too: the ACTION
+#      line, or a restart with --restart-pi-web. Its version can no longer
+#      be read then and prints as `unknown`, from the deleted directory.
 #
 # Usage (new machine, or update — same command) — read the key with echo
 # off first, so it never lands in your shell history:
 #   read -rs PF_KEY
 #   curl -s -H "Authorization: token $(gh auth token)" \
 #     https://raw.githubusercontent.com/silgrid/polyforge/main/tools/install.sh \
-#     | bash -s -- "$PF_KEY" [server-host]
+#     | bash -s -- [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] "$PF_KEY" [server-host]
 # The aihub server host (argument 2, else PF_HOST; no built-in default) is
 # REQUIRED for a first install — the run that writes cli.toml — and refused
 # before anything changes when absent; an upgrade (cli.toml with an api_key
@@ -40,6 +81,15 @@
 # nothing changes: wait, pause them (`pf pause <wi>`), or override (their
 # agent trees are terminated and recover at the next daemon start):
 #   curl ... | PF_INSTALL_FORCE=1 bash -s -- "$PF_KEY" [server-host]
+# A caller that runs a downloaded copy of this file (never `bash -s`, whose
+# stdin is the script itself) may pass `-` as the key: the key is then read
+# from stdin (one line), so it rides no process's argv — Pi Web's install
+# entry does this. An upgrade needs no key, so its stdin may
+# be empty; a first install refuses an empty one before anything changes.
+#   bash install.sh - [server-host] <<< "$PF_KEY"
+# Exit status: 0 done; 3 refused before any change, and re-running with
+# PF_INSTALL_FORCE=1 lifts the refusal (running jobs, or a job list that
+# could not be read); any other non-zero status is a failure.
 # The release channel is PF_INSTALL_REPO (owner/name; unset or empty =
 # silgrid/polyforge, the release repo every asset is published to):
 # the latest release, the pf asset + SHA256SUMS, the release checkout and
@@ -54,7 +104,32 @@
 # degrades with a WARN. On macOS also xattr and codesign (shipped with the
 # OS / Command Line Tools), to clear quarantine and ad-hoc sign the pf.
 set -e
-KEY="${1:?usage: install.sh <api-key> [server-host]}"
+WITH_PIWEB=""
+RESTART_PIWEB=""
+REINSTALL_PIWEB=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --with-pi-web) WITH_PIWEB=1; shift ;;
+    --restart-pi-web) RESTART_PIWEB=1; shift ;;
+    --reinstall-pi-web) REINSTALL_PIWEB=1; shift ;;
+    *) break ;;
+  esac
+done
+if [ -n "$RESTART_PIWEB" ] && [ -z "$WITH_PIWEB" ]; then
+  echo "usage: install.sh [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> [server-host]"
+  echo "ERROR: --restart-pi-web restarts the pi-web a --with-pi-web run left serving the old install; it needs --with-pi-web. Nothing on this machine was changed."
+  exit 2
+fi
+if [ -n "$REINSTALL_PIWEB" ] && [ -z "$WITH_PIWEB" ]; then
+  echo "usage: install.sh [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> [server-host]"
+  echo "ERROR: --reinstall-pi-web reinstalls the Pi Web a --with-pi-web run would keep as already installed; it needs --with-pi-web. Nothing on this machine was changed."
+  exit 2
+fi
+KEY="${1:?usage: install.sh [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> [server-host]}"
+if [ "$KEY" = - ]; then
+  KEY=""
+  IFS= read -r KEY || true
+fi
 HOST="${2:-${PF_HOST:-}}"
 API="http://$HOST:8080"
 REPO="${PF_INSTALL_REPO:-silgrid/polyforge}"
@@ -63,8 +138,12 @@ CFG="$HOME/.config/polyforge/cli.toml"
 # has_config: this machine already has its config (kept, never rewritten)
 has_config() { [ -f "$CFG" ] && grep -q "api_key" "$CFG"; }
 if [ -z "$HOST" ] && ! has_config; then
-  echo "usage: install.sh <api-key> <server-host>  (or PF_HOST=<server-host>)"
+  echo "usage: install.sh [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> <server-host>  (or PF_HOST=<server-host>)"
   echo "ERROR: a first install writes $CFG and needs the aihub <server-host> (argument 2 or PF_HOST); nothing on this machine was changed."
+  exit 2
+fi
+if [ -z "$KEY" ] && ! has_config; then
+  echo "ERROR: a first install writes $CFG and needs the api key (argument 1, or \`-\` with the key on stdin, which was empty); nothing on this machine was changed."
   exit 2
 fi
 DAEMON_DATA="$HOME/.local/share/polyforge"
@@ -128,11 +207,13 @@ echo "   release channel: $REPO"
 
 STAGED=""   # the new binary, staged next to $BIN (same filesystem)
 TMP=""
+PIWEB_DIR=""  # --with-pi-web: the verified Pi Web tarball until it is installed
 CLONE=""
 STOPPED=0   # 1 from the shutdown request until step 4 starts the daemon
 cleanup() {
   rc=$?
   [ -z "$TMP" ] || rm -rf "$TMP"
+  [ -z "$PIWEB_DIR" ] || rm -rf "$PIWEB_DIR"
   [ -z "$STAGED" ] || rm -f "$STAGED"
   [ -z "$CLONE" ] || rm -rf "$CLONE"
   if [ "$rc" -ne 0 ] && [ "$STOPPED" = 1 ]; then
@@ -149,11 +230,12 @@ trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 UNCHANGED="nothing on this machine was changed: pf, release/current and the running daemon are as they were"
 prep_fail() { echo "ERROR: $1; $UNCHANGED"; exit 1; }
-# refuse <why> <details> <next>: an upgrade stopped before any shutdown
+# refuse <why> <details> <next> [status]: an upgrade stopped before any
+# shutdown; status 3 marks a refusal PF_INSTALL_FORCE=1 lifts (default 1)
 refuse() {
   echo "ERROR: $1; $UNCHANGED (the fetched release/$VER checkout is kept for the next run)."
   [ -z "$2" ] || printf '%s\n' "$2" | sed 's/^/     /'
-  echo "   $3"; exit 1
+  echo "   $3"; exit "${4:-1}"
 }
 
 # Check-and-report the prerequisites (polyforge#218): the installer NEVER
@@ -163,7 +245,9 @@ refuse() {
 # falls back to unsupervised-with-WARNING (reported in this installer's step
 # 4 output and by pf doctor's "daemon supervision" row).
 MISSING=""
-for t in gh curl python3 git; do
+REQUIRED="gh curl python3 git"
+[ -z "$WITH_PIWEB" ] || REQUIRED="$REQUIRED npm tar"
+for t in $REQUIRED; do
   command -v "$t" >/dev/null 2>&1 || MISSING="$MISSING $t"
 done
 if [ -n "$MISSING" ]; then
@@ -174,6 +258,8 @@ if [ -n "$MISSING" ]; then
       curl)    echo "   curl    - macOS: xcode-select --install  |  Linux: apt install curl" ;;
       python3) echo "   python3 - macOS: xcode-select --install  |  Linux: apt install python3" ;;
       git)     echo "   git     - macOS: xcode-select --install  |  Linux: apt install git" ;;
+      npm)     echo "   npm     - (--with-pi-web) install Node.js >= 22.19, which ships npm" ;;
+      tar)     echo "   tar     - (--with-pi-web) Linux: apt install tar  |  macOS: ships with the OS" ;;
     esac
   done
   prep_fail "install the missing tool(s) above, then re-run this installer"
@@ -195,6 +281,54 @@ VER=$(gh release list --repo "$REPO" --limit 1 --json tagName --jq '.[0].tagName
 
 RUNNING="none"
 [ ! -x "$BIN" ] || RUNNING=$("$BIN" --version 2>/dev/null || echo "unknown")
+
+# version_transition_allowed <installed> <target>: succeeds unless the target
+# release is older than the installed pf. Every downgrade is refused but one:
+# the named version-line cutover from the retired internal
+# v2.20.x line to any release of the unified product line v0.2.x (the
+# installer installs the latest release, so the exception covers the whole
+# line, not only v0.2.0). A release version is vX.Y.Z or vX.Y.Z-<pre>
+# (<pre>: dot-separated [0-9A-Za-z-] identifiers), ordered by SemVer 2.0
+# precedence: the core numerically, a pre-release below its core release,
+# pre-release identifiers one by one (numeric ones as numbers and below
+# alphanumeric ones, alphanumeric ones in ASCII order, a shorter prefix
+# first) — so v0.2.0-<name>.9 < v0.2.0-<name>.10 < v0.2.1-<name>.1 <
+# v0.2.1. A non-release installed version (none, unknown, dev) has nothing
+# to compare.
+# The cutover case is rollback-safe transition code: delete it once no
+# machine runs a v2.20.x pf, together with .polyforge/release.sh's
+# CUTOVER_* branches and their matching exceptions in .polyforge/deploy.sh,
+# internal/aihub/core/admin.go and pi-web/lib/polyforge-detect.ts.
+version_transition_allowed() {
+  for _v in "$1" "$2"; do
+    printf '%s\n' "$_v" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || return 0
+  done
+  LC_ALL=C awk -v a="${1#v}" -v b="${2#v}" '
+    function idcmp(x, y,  xn, yn) {
+      xn = x ~ /^[0-9]+$/; yn = y ~ /^[0-9]+$/
+      if (xn && yn) return (x + 0 < y + 0) ? -1 : (x + 0 > y + 0)
+      if (xn) return -1
+      if (yn) return 1
+      return ((x "") < (y "")) ? -1 : ((x "") > (y ""))
+    }
+    function vcmp(a, b,  i, ca, cb, pa, pb, x, y, na, nb, r) {
+      ca = a; pa = ""; i = index(a, "-"); if (i) { ca = substr(a, 1, i - 1); pa = substr(a, i + 1) }
+      cb = b; pb = ""; i = index(b, "-"); if (i) { cb = substr(b, 1, i - 1); pb = substr(b, i + 1) }
+      split(ca, x, "."); split(cb, y, ".")
+      for (i = 1; i <= 3; i++) { if (x[i] + 0 < y[i] + 0) return -1; if (x[i] + 0 > y[i] + 0) return 1 }
+      if (pa == pb) return 0
+      if (pa == "") return 1
+      if (pb == "") return -1
+      na = split(pa, x, "."); nb = split(pb, y, ".")
+      for (i = 1; i <= na && i <= nb; i++) { r = idcmp(x[i], y[i]); if (r) return r }
+      return (na < nb) ? -1 : (na > nb)
+    }
+    BEGIN { exit (vcmp(b, a) < 0) }' && return 0
+  case "$1:$2" in v2.20.*:v0.2.*) return 0 ;; esac
+  return 1
+}
+version_transition_allowed "$RUNNING" "$VER" \
+  || prep_fail "the latest release $VER of $REPO is older than the installed pf $RUNNING, and a downgrade is refused (the one accepted older target is a v0.2.x release over a v2.20.x pf, the named version-line cutover); this machine still runs pf $RUNNING"
 
 if [ "$RUNNING" = "$VER" ]; then
   echo "   pf $VER already current, skipping"
@@ -239,6 +373,38 @@ else
   esac
   rm -rf "$TMP"; TMP=""
   echo "   pf $VER downloaded, SHA-verified, staged"
+fi
+
+# --with-pi-web: the Pi Web tarball of the same release, verified now so a
+# missing asset or a bad checksum refuses before anything is installed.
+if [ -n "$WITH_PIWEB" ]; then
+  PIWEB_TGZ="silgrid-pi-web-$VER.tgz"
+  PIWEB_DIR=$(mktemp -d)
+  gh release download "$VER" --repo "$REPO" --pattern "$PIWEB_TGZ" --dir "$PIWEB_DIR" 2>/dev/null \
+    || prep_fail "$PIWEB_TGZ not on release $VER (--with-pi-web)"
+  gh release download "$VER" --repo "$REPO" --pattern "SHA256SUMS" --dir "$PIWEB_DIR" 2>/dev/null \
+    || prep_fail "SHA256SUMS not on release $VER (--with-pi-web)"
+  PEXP=$(awk -v n="$PIWEB_TGZ" '$2 == n || $2 == "*" n {print $1}' "$PIWEB_DIR/SHA256SUMS")
+  if command -v sha256sum >/dev/null 2>&1; then
+    PGOT=$(sha256sum "$PIWEB_DIR/$PIWEB_TGZ" | awk '{print $1}')
+  else
+    PGOT=$(shasum -a 256 "$PIWEB_DIR/$PIWEB_TGZ" 2>/dev/null | awk '{print $1}')
+  fi
+  [ -n "$PEXP" ] || prep_fail "SHA256SUMS of $VER has no line for $PIWEB_TGZ (--with-pi-web)"
+  [ "$PGOT" = "$PEXP" ] || prep_fail "SHA mismatch on $PIWEB_TGZ of $VER (--with-pi-web)"
+  # the served == installed definition (bin/pi-web-served.js, shared with
+  # pi-web/deploy-piweb.sh) comes from this verified tarball: the install
+  # being replaced may predate it
+  tar -xzf "$PIWEB_DIR/$PIWEB_TGZ" -C "$PIWEB_DIR" package/bin/pi-web-served.js 2>/dev/null \
+    || prep_fail "$PIWEB_TGZ of $VER carries no package/bin/pi-web-served.js (--with-pi-web)"
+  PIWEB_SERVED="$PIWEB_DIR/package/bin/pi-web-served.js"
+  # the package version this tarball installs: an installed Pi Web of the
+  # same version is kept
+  tar -xzf "$PIWEB_DIR/$PIWEB_TGZ" -C "$PIWEB_DIR" package/package.json 2>/dev/null \
+    || prep_fail "$PIWEB_TGZ of $VER carries no package/package.json (--with-pi-web)"
+  PIWEB_WANT=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$PIWEB_DIR/package/package.json" 2>/dev/null) || PIWEB_WANT=""
+  [ -n "$PIWEB_WANT" ] || prep_fail "$PIWEB_TGZ of $VER: package/package.json names no version (--with-pi-web)"
+  echo "   Pi Web $PIWEB_TGZ downloaded, SHA-verified (installed after pf)"
 fi
 
 # The installer owns a checkout of the release tag, independent of any
@@ -302,10 +468,10 @@ if [ -n "$STAGED" ]; then
       [ -z "$BUSY" ] || printf '   PF_INSTALL_FORCE=1: shutting down despite running jobs:\n%s\n' "$(printf '%s\n' "$BUSY" | sed 's/^/     /')"
     elif [ "$BRC" -ne 0 ]; then
       refuse "the daemon's job list could not be read (GET /status on $DAEMON_SOCKET failed, timed out or was unreadable), so whether jobs run is unknown and the upgrade to $VER is refused" "" \
-        "check: pf ops status. To shut it down anyway (its live agent trees are terminated), re-run with PF_INSTALL_FORCE=1."
+        "check: pf ops status. To shut it down anyway (its live agent trees are terminated), re-run with PF_INSTALL_FORCE=1." 3
     elif [ -n "$BUSY" ]; then
       refuse "the daemon is running jobs; upgrading to $VER needs a graceful shutdown, which terminates their agent trees. Upgrade refused" "$BUSY" \
-        "proceed by one of: wait until they finish (pf ops status), pause them (pf pause <wi>), or re-run with PF_INSTALL_FORCE=1 to shut them down anyway (they recover at the next daemon start)."
+        "proceed by one of: wait until they finish (pf ops status), pause them (pf pause <wi>), or re-run with PF_INSTALL_FORCE=1 to shut them down anyway (they recover at the next daemon start)." 3
     fi
     # A job claimed between this check and the shutdown request (auto-pull,
     # a pf submit) is interrupted like a forced one and recovers at the
@@ -335,6 +501,27 @@ if [ -n "$STAGED" ]; then
   STAGED=""
   echo "   pf $RUNNING → $VER installed"
 fi
+
+# Retired step-command links: an earlier install linked pf-run, pf-verify,
+# pf-gate, pf-sync, pf-merge, pf-revert, pf-facts and pf-integrate beside pf
+# (`pf-<name> -> pf`), which pf dispatched on argv[0]; the workflow's own
+# scripts took their place and pf answers to no such name any more. A link
+# of that name pointing at pf is removed; anything else of that name is
+# the user's own and left alone. Transition code: delete this loop once
+# every machine has installed a release that carries it.
+BIN_DIR=$(dirname "$BIN")
+BIN_NAME=$(basename "$BIN")
+for SC in pf-run pf-verify pf-gate pf-sync pf-merge pf-revert pf-facts pf-integrate; do
+  LINK="$BIN_DIR/$SC"
+  [ -L "$LINK" ] || continue
+  TARGET=$(readlink "$LINK")
+  [ "$TARGET" = "$BIN_NAME" ] || [ "$TARGET" = "$BIN" ] || continue
+  if rm -f "$LINK"; then
+    echo "   removed the retired link $SC -> $TARGET"
+  else
+    echo "   WARN: cannot remove the retired link $LINK (it runs pf itself; remove it by hand)"
+  fi
+done
 
 # stable symlink, swapped atomically (relative target: the tree is relocatable)
 PREV=$(readlink "$RELEASE_DIR/current" 2>/dev/null || true)
@@ -524,9 +711,11 @@ fi
 if command -v pi >/dev/null 2>&1 || [ -d "$(dirname "$PI_SETTINGS")" ]; then
   python3 -c "$SETTINGS_PY" pi "$PI_SETTINGS" "$REPO" "$RELEASE_DIR/current" || echo "   WARN: could not set the pi package entry in $PI_SETTINGS"
 fi
-# Progress display: the same judgement as `pf doctor` (reads only; a
-# warn row carries the copyable snippet, a skip row names an absent
-# harness — user files are never edited).
+# Harness checks: the same judgement as `pf doctor --harness` (reads only;
+# a warn row says what to do — a statusLine still running the retired
+# `pf watch --statusline`, retired chat state `pf doctor --prune-chat-state`
+# removes — a skip row names an absent harness; user files are never
+# edited).
 "$BIN" doctor --harness 2>/dev/null | sed -e '/^ok:/d' -e '/^$/d' -e 's/^/   /'
 
 # ─── 4. daemon: started only through `pf daemon ensure` ────────────
@@ -589,6 +778,101 @@ echo "== 5/5 verify"
 # pf doctor is the one health judgement (aihub key and projects, daemon
 # socket, mapping, harnesses); a fail is reported, never fatal here.
 "$BIN" doctor 2>&1 | sed 's/^/   /' || true
+if [ -n "$WITH_PIWEB" ]; then
+  echo "== Pi Web (--with-pi-web)"
+  # What the deploy's restart loop (tmux session PIWEB_TMUX_SESSION, default
+  # piweb, window piweb) serves, sampled BEFORE npm replaces the package
+  # directory: afterwards the server's working directory is deleted and the
+  # version it serves can no longer be read. "<version>|<dir>|<pid>",
+  # "unknown|<dir> (deleted)|<pid>" for one already stale, "unidentified" or
+  # empty.
+  PIWEB_SESSION="${PIWEB_TMUX_SESSION:-piweb}"
+  PIWEB_BEFORE="$(node "$PIWEB_SERVED" served "$PIWEB_SESSION" 2>/dev/null || true)"
+  # The installed package, "<version>|<dir>" (empty when none): one of the
+  # version this tarball installs is kept npm would delete
+  # the directory a running pi-web serves — unless --reinstall-pi-web.
+  PIWEB_ROOT="$(npm root -g 2>/dev/null || true)"
+  PIWEB_HAVE=""
+  [ -z "$PIWEB_ROOT" ] || PIWEB_HAVE="$(node "$PIWEB_SERVED" installed "$PIWEB_ROOT" 2>/dev/null || true)"
+  PIWEB_INSTALLED=""
+  if [ -n "$PIWEB_HAVE" ] && [ "${PIWEB_HAVE%%|*}" = "$PIWEB_WANT" ] && [ -z "$REINSTALL_PIWEB" ]; then
+    echo "   Pi Web $PIWEB_WANT is already installed (${PIWEB_HAVE#*|}); npm install -g skipped (--reinstall-pi-web reinstalls it)"
+  else
+    if ! npm install -g "$PIWEB_DIR/$PIWEB_TGZ"; then
+      echo "ERROR: npm install -g $PIWEB_TGZ failed; pf $VER, release/current and the daemon are installed and unchanged by this failure. Retry: npm install -g @silgrid/pi-web, or re-run with --with-pi-web."
+      exit 1
+    fi
+    PIWEB_INSTALLED=1
+  fi
+  # The install check runs over a kept install too: it replaces nothing,
+  # and a re-run after a failed check never passes a broken install.
+  # npm may have skipped the package's install scripts and still exited 0
+  # (e.g. npm 11 under ignore-scripts or an explicit allowScripts denial): the
+  # checker the package ships confirms their effects or names the step.
+  piweb_check_failed() {
+    echo "ERROR: the Pi Web install check failed; pf $VER, release/current and the daemon are installed and unchanged by this failure. Fix the named step, then re-run with --with-pi-web."
+    exit 1
+  }
+  if [ -z "$PIWEB_ROOT" ]; then
+    echo "ERROR: Pi Web install check failed at npm root -g: npm reported no global root" >&2
+    piweb_check_failed
+  fi
+  PIWEB_CHECKER="$PIWEB_ROOT/@silgrid/pi-web/bin/pi-web-install-check.js"
+  if [ ! -f "$PIWEB_CHECKER" ]; then
+    echo "ERROR: Pi Web install check failed at pi-web-install-check.js: $PIWEB_CHECKER is missing (the installed package predates the install check)" >&2
+    piweb_check_failed
+  fi
+  node "$PIWEB_CHECKER" || piweb_check_failed
+  [ -z "$PIWEB_INSTALLED" ] || echo "   Pi Web installed from $PIWEB_TGZ (release $VER)"
+  # Served == installed (the deploy's definition): a running pi-web serving
+  # another package keeps rendering pages whose /_next/static/* files npm
+  # just deleted. Never restarted here: a restart ends its agent turns.
+  case "$PIWEB_BEFORE" in
+    "" | unidentified) ;;
+    *)
+      PIWEB_NOW="$(node "$PIWEB_SERVED" installed "$PIWEB_ROOT" 2>/dev/null || true)"
+      # npm reinstalled the very package it served (--reinstall-pi-web) and
+      # deleted its directory: judged again on what it serves now
+      if [ -n "$PIWEB_INSTALLED" ] && [ "${PIWEB_BEFORE%|*}" = "$PIWEB_NOW" ]; then
+        PIWEB_BEFORE="$(node "$PIWEB_SERVED" served "$PIWEB_SESSION" 2>/dev/null || true)"
+      fi
+      PIWEB_PKG="${PIWEB_BEFORE%|*}"
+      PIWEB_PID="${PIWEB_BEFORE##*|}"
+      # a process the loop replaced during the install already runs the new tree
+      if [ "$PIWEB_PKG" != "$PIWEB_NOW" ] && kill -0 "$PIWEB_PID" 2>/dev/null; then
+        PIWEB_NEW="${PIWEB_NOW%%|*}"
+        [ -n "$PIWEB_NEW" ] || PIWEB_NEW=unknown
+        if [ -z "$RESTART_PIWEB" ]; then
+          echo "   ACTION: the running pi-web (tmux session $PIWEB_SESSION, pid $PIWEB_PID) serves ${PIWEB_PKG%%|*} from ${PIWEB_PKG#*|}, not the installed $PIWEB_NEW (${PIWEB_NOW#*|}): until it restarts, its pages load blank and every /_next/static/* request answers 5xx. Restarting ends any agent turn in progress in it; when none is running, restart it (its restart loop starts the installed $PIWEB_NEW within seconds): kill -TERM $PIWEB_PID   (next time, pass --restart-pi-web with --with-pi-web to restart during the upgrade)"
+        else
+          echo "   Pi Web: restarting pid $PIWEB_PID of tmux session $PIWEB_SESSION (serving ${PIWEB_PKG%%|*}) onto the installed $PIWEB_NEW (--restart-pi-web)"
+          PIWEB_AFTER=""
+          PIWEB_DEADLINE=$(( $(date +%s) + 60 ))
+          if kill -TERM "$PIWEB_PID" 2>/dev/null; then
+            while [ "$(date +%s)" -lt "$PIWEB_DEADLINE" ]; do
+              PIWEB_AFTER="$(node "$PIWEB_SERVED" served "$PIWEB_SESSION" 2>/dev/null || true)"
+              case "$PIWEB_AFTER" in
+                "$PIWEB_NOW|"*) [ "${PIWEB_AFTER##*|}" = "$PIWEB_PID" ] || break ;;
+              esac
+              PIWEB_AFTER=""
+              sleep 1
+            done
+          fi
+          if [ -z "$PIWEB_AFTER" ]; then
+            echo "ERROR: --restart-pi-web: tmux session $PIWEB_SESSION did not come back serving the installed $PIWEB_NEW (${PIWEB_NOW#*|}) within 60 s of kill -TERM $PIWEB_PID; pf $VER, release/current, the daemon and Pi Web $PIWEB_NEW are installed. Check the loop: tmux attach -t $PIWEB_SESSION"
+            exit 1
+          fi
+          echo "   Pi Web restarted: serving $PIWEB_NEW (${PIWEB_NOW#*|}), pid ${PIWEB_AFTER##*|}"
+        fi
+      fi
+      ;;
+  esac
+fi
 echo ""
 echo "Done. Daily use: 'pf queue' / 'pf submit <wi>' / 'pf watch <wi> --once'"
 echo "From a pi session: just ask naturally (polyforge skill routes)."
+[ -n "$WITH_PIWEB" ] || {
+  echo "Optional web workbench (Pi Web, developed in this repository under pi-web/): re-run with --with-pi-web"
+  echo "  (same release as pf), or npm install -g @silgrid/pi-web@latest;"
+  echo "  see docs/install.md#optional-the-web-workbench-pi-web; pf works without it."
+}
