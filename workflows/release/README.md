@@ -1,6 +1,6 @@
 # release - release lane
 
-This is the flow-level narrative for the workflow (workflow contract 5). It explains how
+This is the flow-level narrative for the workflow (workflow contract 1). It explains how
 the three steps compose; it is not itself a structural schema - the `steps` array of its
 `workflow.yaml` is the *only* execution order. Nothing here overrides it.
 

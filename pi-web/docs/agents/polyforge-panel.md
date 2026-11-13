@@ -1966,7 +1966,7 @@ that carries `file show`), checked through the one presence-cached
 ## Integration sub-tab
 
 Work › 待集成 shows, per `[workspace]`-mapped project of the default Cell,
-the contract-5 integration state: the work items develop landed and no
+the contract-1 integration state: the work items develop landed and no
 green integrate batch has closed yet, and the integrate batches (each batch
 is itself an `integrate` work item). It reads no daemon status face — no
 `/status?integration=1`, no `pf ops integrate status` (both removed).

@@ -1,4 +1,4 @@
-contract: 5
+contract: 1
 name: wfc-112-vars-files-outside
 description: fixture lane for WFC-112 - a vars_files path that leaves the lane
 steps:

@@ -1,4 +1,4 @@
-"""revert.py's record writes (workflow contract 5): each landed revert's
+"""revert.py's record writes (workflow contract 1): each landed revert's
 item moves to reverted as its whole record read through the step's hub,
 under the lane's rules — the develop lane's keys kept, fenced on the record as read;
 none for a record an earlier round already moved, a refusal for one the

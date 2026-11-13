@@ -359,7 +359,7 @@ type WrapRequest struct {
 }
 
 // AttrsWriteRequest is the body of PATCH /work-items/{id}/attrs (workflow
-// contract 5): one top-level attrs key written whole (Value, one JSON
+// contract 1): one top-level attrs key written whole (Value, one JSON
 // document; null deletes the key), on a work item of any status. If
 // fences it: each attrs path (dot-separated, ^[a-z0-9_]+(\.[a-z0-9_]+)*$)
 // must hold the JSON value it names (an absent path reads as null), else

@@ -1,5 +1,5 @@
-# yaml-language-server: $schema=../_schema/workflow-5.schema.json
-contract: 5
+# yaml-language-server: $schema=../_schema/workflow-1.schema.json
+contract: 1
 name: develop
 description: The default development lane - build → review → sync → verification → publish → merge. One build session plans against the work item's acceptance criteria, writes each unit's test red before its implementation turns it green, records each unit's run in artifacts/build/units.json and reviews itself; review judges the change in a fresh context against five blocking classes on the facts the workflow's facts.py computes (the units' red runs replayed at their test commits); sync, verification, publish and merge are mechanical agent steps on the cheap tier, each following a shared skill that runs one pre-written command (sync.py, verify.py, merge.py) and checking what the step before it handed off first - sync merges the default branch in and resolves a real conflict in place, verification runs the light tier, publish pushes the branch and opens the PR, merge merges it into the default branch and registers the landing record, and the integration lane runs the full gate over what landed. No release slot.
 max_rewinds: 3

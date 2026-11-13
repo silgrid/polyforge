@@ -1,6 +1,6 @@
 package test
 
-// c5_lane_neutral_go_contract_test.go (workflow contract 5): integrate is a
+// c5_lane_neutral_go_contract_test.go (workflow contract 1): integrate is a
 // lane like any other, so the code that runs lanes and stores work items
 // names it nowhere. No non-test Go file under the daemon, the driver, the
 // runtime, the CLI, the daemon's aihub client, the step call ledger, the
@@ -57,7 +57,6 @@ var c5IntegratAllowed = map[string][]c5Allowed{
 	},
 	"internal/polyforge/workspace/workspace.go": {
 		{"IntegrateKey|IntegrateRemovedHint|`integrate:`", "the removed root `integrate:` section of .polyforge.yaml: refused whole with its rewrite hint, which names the section and how a batch is filed now"},
-		{`^const KeyRenameSection = `, "the title of the contract 4 upgrade section the stale-key hint cites: docs/upgrade.md is append-only, so the title stands"},
 	},
 }
 

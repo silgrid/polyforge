@@ -197,11 +197,11 @@ func TestEveryCodeHasABadLane(t *testing.T) {
 	}
 }
 
-// internalStages are the contract numbers internal builds carried before
-// the public freeze renumbered the final shape to contract 1 (docs/
+// internalStages are the contract numbers pre-release builds carried
+// before the first public release started the numbering at 1 (docs/
 // upgrade.md, workflow.UpgradeSection): a lane or a snapshot of such a
 // build must meet WFC-101, never run.
-var internalStages = []int{2, 3, 4}
+var internalStages = []int{2, 3, 4, 5}
 
 // TestOtherContractVersionsRefused (⑤): a lane rewritten to target
 // another contract version — the previous one, and each number an

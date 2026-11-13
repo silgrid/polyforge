@@ -307,7 +307,7 @@ class CloseShapesTest(GitCase):
 
     def test_close_writes_its_moves_as_hub_writes(self) -> None:
         # the ops file's shape (what `pf step hub batch` registers: attrs
-        # writes, workflow contract 5), on a batch a green tag of an
+        # writes, workflow contract 1), on a batch a green tag of an
         # earlier batch covers
         r = MRepo(os.path.join(self.tmp, "capsule", "repos", "app"), {"base.txt": "b\n"})
         origin = os.path.join(self.tmp, "origin.git")

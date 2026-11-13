@@ -1129,7 +1129,7 @@ type ListFilters struct {
 	Priority  string
 	Milestone string
 	// Bundle narrows to one bundle ("" = any); Attrs to the work items
-	// whose attr at each path is that string (workflow contract 5: GET
+	// whose attr at each path is that string (workflow contract 1: GET
 	// /work-items?attr=<path>:<value>).
 	Bundle string
 	Attrs  []AttrMatch

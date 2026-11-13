@@ -148,8 +148,9 @@ are refused downgrades. An installed pf whose version is not a release
 (`dev`, unreadable, or none installed) has nothing to compare and installs
 the latest release. The release that introduces one Host with many
 Cells refuses a pre-Cell data dir until you migrate it once with the daemon
-stopped — `pf migrate cell-layout`, then `--apply` (see the upgrade note
-"One Host, many Cells: the per-Cell data layout").
+stopped — `pf migrate cell-layout`, then `--apply` (see the
+[upgrade guide](upgrade.md), section "v0.2.0, the first public release:
+workflow contract 1").
 
 ## Optional: the web workbench (pi-web)
 

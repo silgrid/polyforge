@@ -4,7 +4,7 @@ package workflow_test
 // a bool, absent = false — says a project may switch the step off
 // (`steps.<project>.<step>.skip`); any other value is WFC-112 at the
 // step's path. The registry dump and the generated lane Schema carry it,
-// the Schema as a boolean. Contract 5 is extended in place (owner ruling
+// the Schema as a boolean. Contract 1 is extended in place (owner ruling
 // 2026-11-12, as for): an optional key whose default is the
 // present behaviour does not bump the contract version.
 

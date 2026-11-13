@@ -32,7 +32,7 @@ import (
 // never reads.
 const WorkflowFile = "workflow.yaml"
 
-// Contract4File is the lane file of workflow contract 4 and earlier: a
+// Contract4File is the lane file of the earlier releases: a
 // Markdown file whose YAML frontmatter held the lane keys. The loader
 // refuses it with its rewrite (Contract4Hint) — WFC-101 when it is the
 // lane's only lane file, reading nothing of it but its `contract` for the
@@ -41,7 +41,7 @@ const WorkflowFile = "workflow.yaml"
 const Contract4File = "workflow.md"
 
 // Contract4Hint is the rewrite of a lane that carries a workflow.md.
-const Contract4Hint = "contract 5 reads workflow.yaml: move workflow.md's frontmatter (the YAML between its --- fences) into workflow.yaml with `contract: 5`, its Markdown body into README.md, and delete workflow.md"
+const Contract4Hint = "workflow contract 1 reads workflow.yaml: move workflow.md's frontmatter (the YAML between its --- fences) into workflow.yaml with `contract: 1`, its Markdown body into README.md, and delete workflow.md"
 
 // Lane is one loaded lane.
 type Lane struct {
@@ -225,7 +225,7 @@ func (l *loader) load() *Lane {
 		l.at(CodeLaneFile, file, 0, nil, "", "%s unreadable: %v", WorkflowFile, err)
 		return nil
 	case oldErr == nil:
-		l.at(CodeLaneFile, old, 0, nil, "", "the lane carries %s, the lane file of workflow contract 4 and earlier, beside its %s — %s", Contract4File, WorkflowFile, Contract4Hint)
+		l.at(CodeLaneFile, old, 0, nil, "", "the lane carries %s, the lane file of the earlier releases, beside its %s — %s", Contract4File, WorkflowFile, Contract4Hint)
 	}
 	root := l.laneFile(file, raw)
 	if root == nil {
@@ -361,7 +361,7 @@ func (l *loader) contract4(file string) *Lane {
 			}
 		}
 	}
-	l.at(CodeContractVersion, file, 0, nil, "contract", "the lane is a %s, the lane file of workflow contract 4 and earlier (it declares contract %d); this daemon implements contract %d (see docs/upgrade.md, section %q) — %s",
+	l.at(CodeContractVersion, file, 0, nil, "contract", "the lane is a %s, the lane file of the earlier releases (it declares contract %d); this daemon implements contract %d (see docs/upgrade.md, section %q) — %s",
 		Contract4File, lane.Contract, ContractVersion, UpgradeSection, Contract4Hint)
 	return lane
 }

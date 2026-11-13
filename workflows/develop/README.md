@@ -1,6 +1,6 @@
 # develop — the default development lane
 
-The flow-level contract of this lane (workflow contract 5); the `steps` array of its
+The flow-level contract of this lane (workflow contract 1); the `steps` array of its
 `workflow.yaml` is the only execution order. It replaced the four lanes listed in
 `workflows/_archive/README.md`.
 

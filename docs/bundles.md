@@ -25,7 +25,7 @@ A bundle is a directory under the daemon's workflows dir:
         steps/<id>.md        # shared step definitions
         skills/<name>.md     # shared skills
       _schema/               # not a bundle: the lane file's JSON Schema
-        workflow-5.schema.json
+        workflow-1.schema.json
       develop/               # a shipped bundle
         workflow.yaml        # the lane: the steps, their order, budgets, candidates
         README.md            # the lane's narrative (the daemon never reads it)
@@ -104,7 +104,7 @@ The steps, their order, their budgets and their candidates are declared
 in the lane's `workflow.yaml`, one YAML mapping — its `steps` array is the
 ONLY execution order; the lane's `README.md` is narrative the daemon
 never reads. A lane's `workflow.yaml` may open with the line
-`# yaml-language-server: $schema=../_schema/workflow-5.schema.json`, so
+`# yaml-language-server: $schema=../_schema/workflow-1.schema.json`, so
 an editor completes and checks its keys against the JSON Schema the
 release generates from the contract registry (`workflows/_schema/`;
 a user lane points at the installed release's copy); the loader stays
@@ -117,14 +117,14 @@ removed key at any level is refused, and `pf workflows validate
 <lane-dir>` prints every defect a lane has, each with its code, file:line
 and YAML path, before a claim ever meets it. The keys:
 
-- `contract: 5` — the workflow contract version the lane targets; a lane
+- `contract: 1` — the workflow contract version the lane targets; a lane
   of another version is refused (`WFC-101`) — a lane that is still a
-  `workflow.md` (contract 4 and earlier) among them, with its rewrite:
-  the frontmatter becomes `workflow.yaml`, the body `README.md` — and
-  each key contract 4 removed — `inputs`, `verifies`, `outputs`,
-  `verdicts`, `effects`, `handoff`, `attrs`, `on_fail.charge` — is
-  `WFC-111` naming its rewrite; contract 5's removed `integration` marker
-  is an unknown key, `WFC-111`.
+  `workflow.md` (the lane file of the earlier releases) among them, with
+  its rewrite: the frontmatter becomes `workflow.yaml`, the body
+  `README.md` — and each key removed before contract 1 — `inputs`,
+  `verifies`, `outputs`, `verdicts`, `effects`, `handoff`, `attrs`,
+  `on_fail.charge` — is `WFC-111` naming its rewrite; the removed
+  `integration` marker is an unknown key, `WFC-111`.
 - `name`, `description` — the lane's identity: `name` is the lane's
   directory name.
 - `max_rewinds:` — ONE total rewind budget across every gate→target edge
@@ -245,7 +245,7 @@ Three steps: scan the surface, regenerate the reference, verify the
 build. The `workflow.yaml` (its `steps` array is the execution order):
 
 ```
-contract: 5
+contract: 1
 name: apidocs
 description: Regenerate a repo's API reference docs from its code - scan the surface, regenerate the reference, verify the build. A small custom lane for a repeated docs flow.
 max_rewinds: 2

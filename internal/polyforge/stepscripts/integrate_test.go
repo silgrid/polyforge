@@ -559,7 +559,7 @@ func TestIntegrateCloseRecordsTicketsRulingsAndReverts(t *testing.T) {
 	}
 	// the files the skill registers: the moves as hub writes — each the
 	// item's whole record as the pool read it, the move's set over it,
-	// fenced on the whole record as read (workflow contract 5) — the record alone
+	// fenced on the whole record as read (workflow contract 1) — the record alone
 	var ops []map[string]any
 	if raw, err := os.ReadFile(f.art("close-ops.json")); err != nil || json.Unmarshal(raw, &ops) != nil {
 		t.Fatalf("close-ops.json: %v", err)

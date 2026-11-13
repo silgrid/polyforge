@@ -4,7 +4,7 @@ package workflow_test
 // `acceptance` — `required` or `none`, absent = required — on a built-in
 // lane and a user lane alike; any other value is WFC-112. The registry
 // dump and the generated lane Schema carry it, the Schema as the enum
-// none|required. Contract 5 is extended in place (owner ruling
+// none|required. Contract 1 is extended in place (owner ruling
 // 2026-11-12): an optional key whose default is the present behaviour
 // does not bump the contract version.
 

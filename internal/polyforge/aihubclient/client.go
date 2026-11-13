@@ -325,7 +325,7 @@ func (c *Client) ListWorkItemsFilteredRaw(f WorkItemFilter) (json.RawMessage, er
 }
 
 // WriteAttrs writes one top-level attrs key of a work item (PATCH
-// /work-items/{id}/attrs, workflow contract 5): a signed machine request,
+// /work-items/{id}/attrs, workflow contract 1): a signed machine request,
 // fenced by req.If (CORE-409 ATTRS_IF_MISMATCH when a condition does not
 // hold). The daemon's pending-writes sink is its only caller; a step
 // reaches it only through that sink.

@@ -1,4 +1,4 @@
-"""integrate.py records (workflow contract 5): a step's decisions on the
+"""integrate.py records (workflow contract 1): a step's decisions on the
 integration records — collect's fix and clear rulings, full-gate's
 attributions — become the hub writes it registers, each the whole record
 built under the lane's rules from the record the step's hub reads now; a

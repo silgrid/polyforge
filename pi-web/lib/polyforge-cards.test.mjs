@@ -103,7 +103,7 @@ test("the declared order is the steps list of the capsule's workflow.yaml; a tor
   const dir = f.capsule("wi_lane01", { steps: ["build", "review", "merge"] });
   assert.deepEqual(await lib.readDeclaredSteps(dir), ["build", "review", "merge"]);
   const lane = join(dir, "workflows", "feature-full");
-  writeFileSync(join(lane, "workflow.yaml"), "# yaml-language-server: $schema=../_schema/workflow-5.schema.json\ncontract: 5\nsteps:\n  - id: b\n  - id: a\n  - id: b\n");
+  writeFileSync(join(lane, "workflow.yaml"), "# yaml-language-server: $schema=../_schema/workflow-1.schema.json\ncontract: 1\nsteps:\n  - id: b\n  - id: a\n  - id: b\n");
   assert.deepEqual(await lib.readDeclaredSteps(dir), ["b", "a"], "a leading comment is no defect; a repeated id counts once");
   writeFileSync(join(lane, "workflow.yaml"), "steps: [\n");
   assert.equal(await lib.readDeclaredSteps(dir), undefined, "a torn workflow.yaml declares no order");

@@ -62,7 +62,7 @@ func TestW404AFiledTicketIsFoundUnderItsKey(t *testing.T) {
 
 // TestW404ARepeatedAttrsWriteIsNoFailure (v1
 // TestW404LostRoundMoveIsNotCountedTwice, ported to the generic attrs
-// write of workflow contract 5): a write whose answer was lost is made
+// write of workflow contract 1): a write whose answer was lost is made
 // again on the replay; aihub's fence refuses it (the record moved
 // already), and the key holding the value written makes the refusal no
 // failure — while a write whose value the key does not hold stays

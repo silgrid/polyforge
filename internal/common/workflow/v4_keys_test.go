@@ -4,7 +4,7 @@ package workflow_test
 // contract 4 removed — a step's inputs, verifies, outputs, verdicts,
 // effects, handoff and attrs, on_fail.charge, a definition's output schema
 // and the bar lock — is refused at the key (the integration property's
-// fix_lane went with the property in contract 5: c5_exclusive_test.go), its message carrying the rewrite (what to write instead); and
+// fix_lane went with the property before contract 1: c5_exclusive_test.go), its message carrying the rewrite (what to write instead); and
 // the keys it added — a step's hub list and its wrap_attrs — load in
 // their shape and are refused outside it. One test per removed key.
 
@@ -35,7 +35,7 @@ func refusedOnce(t *testing.T, front, code, path string, rewrite ...string) work
 	return errs[0]
 }
 
-const removedIn4 = "removed in workflow contract 4"
+const removedIn4 = "removed before workflow contract 1"
 
 func TestV4RefusesInputs(t *testing.T) {
 	refusedOnce(t, "steps:\n  - id: work\n    inputs: [ { memory: recall } ]\n", workflow.CodeUnknownKey, "steps[0](work).inputs", removedIn4, "artifacts/handoff.md")
@@ -62,7 +62,7 @@ func TestV4RefusesHandoff(t *testing.T) {
 }
 
 func TestV4RefusesAttrs(t *testing.T) {
-	refusedOnce(t, "steps:\n  - id: work\n    attrs:\n      depth: { type: int, default: 0 }\n", workflow.CodeUnknownKey, "steps[0](work).attrs", removedIn4, "attrs overrides", "docs/upgrade.md")
+	refusedOnce(t, "steps:\n  - id: work\n    attrs:\n      depth: { type: int, default: 0 }\n", workflow.CodeUnknownKey, "steps[0](work).attrs", removedIn4, "attrs overrides")
 }
 
 func TestV4RefusesOnFailCharge(t *testing.T) {
@@ -96,7 +96,7 @@ func TestV4RefusesADefinitionOutputSchema(t *testing.T) {
 
 // TestV4HubAndWrapAttrs: `hub` takes `verbs` — the hub verbs, each once —
 // and `attrs` — attrs keys, each once, which let the step call attrs
-// (workflow contract 5); `wrap_attrs` attr names, each once; anything else
+// (workflow contract 1); `wrap_attrs` attr names, each once; anything else
 // is WFC-112 at the entry (an unknown key under `hub` WFC-111).
 func TestV4HubAndWrapAttrs(t *testing.T) {
 	dir := workflowtest.WriteLane(t, t.TempDir(), "demo", "steps:\n  - id: work\n    hub: { verbs: [get, list, file, wrap-attrs, batch], attrs: [integration, note_2] }\n    wrap_attrs: [integration, integration_batch]\n")

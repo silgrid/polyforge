@@ -1,6 +1,6 @@
 package workflow_test
 
-// c5_exclusive_test.go (workflow contract 5): the lane key `exclusive` —
+// c5_exclusive_test.go (workflow contract 1): the lane key `exclusive` —
 // a boolean, absent = false, on a built-in lane and a user lane alike; any
 // other value is WFC-112. Of the shipped lanes integrate alone declares it
 // (one unfinished batch per project). The `integration: true` marker it

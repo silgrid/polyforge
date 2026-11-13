@@ -4,7 +4,7 @@
 > and the release-slot / dispatcher / deploy-face historical rulings — moved out; the original is in git history and in the contemporaneous documents under [archive/](archive/)).
 > The one-page summary is `reference.md#§7`; the decision record is [v2-converge.md](v2-converge.md); wherever it conflicts with the code, the code wins
 > (`internal/polyforge/driver/workflow.go`, `driver/transition.go`, `driver/result.go`, `internal/common/workflow`).
-> Workflow contract 5: a lane is `workflow.yaml` — the YAML mapping that through contract 4 was a `workflow.md`'s frontmatter — and `README.md`, its prose, which the daemon never reads;
+> Workflow contract 1: a lane is `workflow.yaml` — the YAML mapping the earlier releases kept as a `workflow.md`'s frontmatter — and `README.md`, its prose, which the daemon never reads;
 > the keys and rules in force are [the workflow contract reference](../../reference/workflow-contract.md).
 
 ## 1. Scope and non-goals <!-- §1 -->

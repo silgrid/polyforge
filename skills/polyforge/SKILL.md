@@ -226,7 +226,7 @@ Eight standing rules, binding on every polyforge session:
    workspace root may carry a `.polyforge.yaml` (`steps.<project>.<default|step-id>:
    { models: [...] }`, `models` the step's candidate list, beside which a
    step's entry may carry `skip: true` — a leftover `attrs` is
-   refused, step attrs were removed in workflow contract 4) whose candidates are
+   refused, step attrs were removed) whose candidates are
    `<harness>:<model>[:<effort>]` (`pi:` or `claude:`, the prefix mandatory
    — the same format as the bundles' `model_candidates` and `pf submit
    --models`). The daemon reads it fresh at every dispatch (so an edit governs the

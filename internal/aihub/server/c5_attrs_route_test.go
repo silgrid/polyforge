@@ -1,6 +1,6 @@
 package server
 
-// c5_attrs_route_test.go (workflow contract 5, design §3.4):
+// c5_attrs_route_test.go (workflow contract 1, design §3.4):
 // PATCH /work-items/{id}/attrs is a signed machine route for a project
 // writer — an unsigned request, or one signed for a viewer, is refused
 // before anything is written; a write whose `if` does not hold answers

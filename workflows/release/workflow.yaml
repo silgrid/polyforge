@@ -1,5 +1,5 @@
-# yaml-language-server: $schema=../_schema/workflow-5.schema.json
-contract: 5
+# yaml-language-server: $schema=../_schema/workflow-1.schema.json
+contract: 1
 name: release
 description: Release lane - cut a release from the verified origin head via the repo's own procedure, independently verify what was published, then deploy exactly that verified version if the project has a deploy procedure.
 acceptance: none

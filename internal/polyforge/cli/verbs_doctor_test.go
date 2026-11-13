@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/silgrid/polyforge/internal/polyforge/workspace"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
 // verbs_doctor_test.go: the `pf doctor` unit pins — the report shape,
@@ -367,7 +367,7 @@ func TestDoctorWorkspaceYamlReportsUnknownStepKeys(t *testing.T) {
 	}
 	_, _, doc := doctorStatus(t, env, "--json", "doctor")
 	if st, detail := doctorFind(t, doc, "workspace yaml"); st != "warn" || !strings.Contains(detail, "steps.polyforge.gate, ") || !strings.Contains(detail, "steps.polyforge.verify-judge") ||
-		strings.Contains(detail, "steps.polyforge.fix") || strings.Contains(detail, "steps.polyforge.default") || !strings.Contains(detail, "docs/upgrade.md") || !strings.Contains(detail, workspace.KeyRenameSection) {
+		strings.Contains(detail, "steps.polyforge.fix") || strings.Contains(detail, "steps.polyforge.default") || !strings.Contains(detail, "docs/upgrade.md") || !strings.Contains(detail, workflow.UpgradeSection) {
 		t.Fatalf("stale step keys: %s %q, want warn naming only steps.polyforge.gate and steps.polyforge.verify-judge, with the upgrade section", st, detail)
 	}
 

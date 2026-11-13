@@ -1,7 +1,7 @@
 package daemon
 
 // c5_exclusive_create_test.go: a lane's `exclusive: true` (workflow
-// contract 5). A work-item create the proxy forwards on a lane of the
+// contract 1). A work-item create the proxy forwards on a lane of the
 // project's lane set declaring it reaches aihub with `"exclusive": true`;
 // every other request — another lane, no lane, a lane the set does not
 // carry, a body that is no JSON object, another path or method — reaches it

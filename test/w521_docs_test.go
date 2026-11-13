@@ -1,4 +1,4 @@
-// carries: docs/reference/workflow-contract.md, docs/reference/config.md, docs/reference/commands.md, docs/bundles.md, docs/upgrade.md, skills/polyforge/SKILL.md, skills/polyforge/verbs/doctor.md, workflows/develop/README.md
+// carries: docs/reference/workflow-contract.md, docs/reference/config.md, docs/reference/commands.md, docs/bundles.md, skills/polyforge/SKILL.md, skills/polyforge/verbs/doctor.md, workflows/develop/README.md
 
 package test
 
@@ -6,8 +6,7 @@ package test
 // skip of a step its lane declares skippable — the lane key, the
 // workspace yaml switch and its write, the claim fixing the skipped set,
 // the skipped execution status and its event, the wrap attrs a skipped
-// tail hands to the last running step, published.py, and the upgrade
-// section that ships it.
+// tail hands to the last running step and published.py.
 //
 // Run (targeted): GOWORK=off go test ./test/ -run '^TestW521DocsTeachTheProjectSkip$' -count=1 -v
 
@@ -114,24 +113,4 @@ func TestW521DocsTeachTheProjectSkip(t *testing.T) {
 		t.Errorf("skills/polyforge/SKILL.md says \"next claim\"")
 	}
 
-	// The upgrade note carries this change's section (a later change appends
-	// its own section after it, so find it by its heading, not by position).
-	// The heading's own words are the anchor: a ticket reference in the
-	// heading is not part of every copy of this file.
-	const title = "A project may skip develop's `merge`"
-	up := w254Read(t, "docs/upgrade.md")
-	var tail string
-	for _, sec := range strings.Split(up, "\n## ")[1:] {
-		if strings.HasPrefix(sec, title) {
-			tail = sec
-		}
-	}
-	if tail == "" {
-		t.Fatalf("docs/upgrade.md has no section headed %q", title)
-	}
-	need("docs/upgrade.md", tail,
-		"**Behavior", "**Action", "**Rollback",
-		"`skippable`", "steps.<project>.merge.skip", "`skipped`", "`step_skipped`",
-		"`published.py`", "`WFC-111`",
-	)
 }

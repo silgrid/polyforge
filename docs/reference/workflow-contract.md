@@ -1,4 +1,4 @@
-# Workflow contract — reference (contract 5)
+# Workflow contract — reference (contract 1)
 
 The normative contract between a workflow lane and the daemon that runs
 it: what a lane may declare, how the one loader judges it, how a step
@@ -7,30 +7,31 @@ deployed. The bundle-authoring chapter, [bundles.md](../bundles.md),
 teaches the format with a worked example; this page is the rule. The
 registry behind every table here is `internal/common/workflow`
 (`registry.go`, `contract.go`), pinned by
-`internal/common/workflow/testdata/contract.v5.golden`; the tables below
+`internal/common/workflow/testdata/contract.v1.golden`; the tables below
 are held equal to it by `internal/common/workflow/contract_doc_test.go`.
-The lane file's JSON Schema, `workflows/_schema/workflow-5.schema.json`,
+The lane file's JSON Schema, `workflows/_schema/workflow-1.schema.json`,
 is generated from the same registry ([The lane](#the-lane)).
 
-This is contract **5**. The daemon does four things: it claims a work
+This is contract **1**. The daemon does four things: it claims a work
 item, dispatches the lane's steps in order (holding their admission and
 locks), reacts to the status each dispatch hands off, and wraps the work
 item. It never judges a step's content and never reads the owner's words
 for a meaning. A step and the daemon meet in exactly two places: one
 command, `pf step` ([The step interface](#the-step-interface)), and one
-document, `artifacts/handoff.md` ([handoff.md](#handoffmd)). Contract 5
-moved the lane's structure out of `workflow.md`'s frontmatter into a YAML
-file of its own, `workflow.yaml` (the prose into `README.md`), and lets a
-step read a long var from a file of the lane (`vars_files`). Contract 4
-removed the step's declared I/O (`inputs`, `verifies`, `outputs`,
+document, `artifacts/handoff.md` ([handoff.md](#handoffmd)). A lane's
+structure is a YAML file of its own, `workflow.yaml` (the prose in
+`README.md`; the earlier releases kept it as a `workflow.md`'s
+frontmatter), and a step may read a long var from a file of the lane
+(`vars_files`). The step's declared I/O (`inputs`, `verifies`, `outputs`,
 `verdicts`), the aihub writes the daemon applied for a step (`effects`,
 `handoff`), step `attrs`, `on_fail.charge`, the integration lane's
 `fix_lane`, the output schema of a step definition and the result
-envelope `pf result submit` delivered. What a step reads and verifies
+envelope `pf result submit` delivered were removed before contract 1.
+What a step reads and verifies
 first, and what it hands off, its step definition and skill now say in
 prose; what the daemon and other programs read stays structured (the
 status, the evidence paths, the hub writes). A lane declares the version
-it targets (`contract: 5`); the daemon implements exactly one version
+it targets (`contract: 1`); the daemon implements exactly one version
 ([Versions and the drain](#versions-and-the-drain)).
 
 ## The lane
@@ -48,21 +49,21 @@ in a file of the lane a step's `vars_files` names (by convention
 `fragments/<name>.md`). A directory whose name begins with `_` (`_shared`,
 `_schema`, `_archive`) is not a lane.
 
-A lane that is still a `workflow.md` — contract 4's lane file, its
-frontmatter the lane keys — is refused: alone it is `WFC-101` (the
+A lane that is still a `workflow.md` — the lane file of the earlier
+releases, its frontmatter the lane keys — is refused: alone it is `WFC-101` (the
 version it declares, this daemon's and the rewrite), beside a
 `workflow.yaml` it is `WFC-110`. The rewrite: the frontmatter (the YAML
-between the `---` fences) becomes `workflow.yaml` with `contract: 5`, the
+between the `---` fences) becomes `workflow.yaml` with `contract: 1`, the
 body becomes `README.md`, and `workflow.md` is deleted.
 
-**The schema.** `workflows/_schema/workflow-5.schema.json` (JSON Schema
+**The schema.** `workflows/_schema/workflow-1.schema.json` (JSON Schema
 draft-07) is generated from the registry (`go generate
 ./internal/common/workflow`; a test regenerates it and fails on any
 difference, and validates the shipped lanes against it). It states each
 key's own value; the rules across keys, the definitions, the skills and
 the placeholders are the loader's alone. A shipped lane points an editor
 at it with its first line, a YAML comment the loader ignores:
-`# yaml-language-server: $schema=../_schema/workflow-5.schema.json` (a
+`# yaml-language-server: $schema=../_schema/workflow-1.schema.json` (a
 user lane names the installed release's copy).
 
 **One loader.** Every reader of a lane — the driver, the claim check,
@@ -170,21 +171,21 @@ its rewrite ([Removed keys](#removed-keys)).
 
 ### Removed keys
 
-Contract 4 removed these; each is still `WFC-111` — a definition's `output` is `WFC-191` — with its rewrite in the message:
+These were removed before contract 1; each is still `WFC-111` — a definition's `output` is `WFC-191` — with its rewrite in the message:
 
 | Removed key | Rewrite |
 |---|---|
-| `step.inputs` | (contract 4) delete it: the step reads `artifacts/handoff.md` and the files its definition or skill names |
-| `step.verifies` | (contract 4) delete it: write the check into the skill's read-and-verify-first section |
-| `step.outputs` | (contract 4) delete it: the skill names the files it writes; evidence paths ride `pf step handoff --evidence` |
-| `step.verdicts` | (contract 4) delete it: a gate passes with `--status done` and fails with `--status fail`; a `defer` becomes `done` with the reason in the body |
-| `step.effects` | (contract 4) delete it: the skill runs `pf step hub file`, `attrs` or `batch`; list the verbs in `hub.verbs` and the attrs keys in `hub.attrs` |
-| `step.handoff` | (contract 4) delete it: the skill runs `pf step hub wrap-attrs <name> @<file>`; declare `wrap_attrs: [<name>]` |
-| `step.attrs` | (contract 4) delete it: write the behaviour into the step definition, or a `vars` entry |
-| `on_fail.charge` | (contract 4) delete it: an automatic FAIL is charged; one handed off with `--per-owner` is not |
-| `definition.output` | (contract 4, `WFC-191`) delete the schema: the definition's body says what the hand-off carries |
+| `step.inputs` | delete it: the step reads `artifacts/handoff.md` and the files its definition or skill names |
+| `step.verifies` | delete it: write the check into the skill's read-and-verify-first section |
+| `step.outputs` | delete it: the skill names the files it writes; evidence paths ride `pf step handoff --evidence` |
+| `step.verdicts` | delete it: a gate passes with `--status done` and fails with `--status fail`; a `defer` becomes `done` with the reason in the body |
+| `step.effects` | delete it: the skill runs `pf step hub file`, `attrs` or `batch`; list the verbs in `hub.verbs` and the attrs keys in `hub.attrs` |
+| `step.handoff` | delete it: the skill runs `pf step hub wrap-attrs <name> @<file>`; declare `wrap_attrs: [<name>]` |
+| `step.attrs` | delete it: write the behaviour into the step definition, or a `vars` entry |
+| `on_fail.charge` | delete it: an automatic FAIL is charged; one handed off with `--per-owner` is not |
+| `definition.output` | (`WFC-191`) delete the schema: the definition's body says what the hand-off carries |
 
-A key a contract before 4 removed is an unknown key (`WFC-111`, no
+Any other key of an earlier release is an unknown key (`WFC-111`, no
 rewrite): a lane still carrying one targets an earlier contract and is
 refused for its version (`WFC-101`).
 
@@ -197,8 +198,8 @@ refused for its version (`WFC-101`).
 | `exclusive` | one unfinished work item per project on the lane: the daemon's data-plane proxy reads it in the lane set of the project's workspace and forwards a work-item create on the lane (`pf file create --bundle <lane>`) to aihub exclusive, refused CORE-409 OPEN_ON_BUNDLE while another work item of the project on the lane is not wrapped, failed or canceled; nothing else reads it |
 
 A property is a declaration the code reads, never a lane's name: nothing
-finds a lane by its name. Contract 5 removed the `integration: true`
-marker with its last readers (`pf ops integrate`, the daemon's integrate
+finds a lane by its name. The `integration: true` marker was removed
+before contract 1, with its last readers (`pf ops integrate`, the daemon's integrate
 status face and trigger); a `workflow.yaml` still carrying it is `WFC-111`.
 Which lane a batch's fix tickets go to is the integrate skill's `--lane`,
 and the pool and the hub writes are `pf step hub` verbs any step may be
@@ -692,7 +693,7 @@ is granted `wrap-attrs` and its `done` is refused until it registered them
 | Code | Meaning |
 |---|---|
 | `WFC-100` | `contract` missing |
-| `WFC-101` | `contract` is not the version this daemon implements, or the lane is a workflow.md (contract 4 and earlier) |
+| `WFC-101` | `contract` is not the version this daemon implements, or the lane is a workflow.md (the lane file of the earlier releases) |
 | `WFC-110` | workflow.yaml missing, unparsable or not one mapping, a duplicate key, or a workflow.md beside it |
 | `WFC-111` | unknown or removed key (at any level) |
 | `WFC-112` | a value of the wrong type or outside its range |
@@ -711,13 +712,11 @@ is granted `wrap-attrs` and its `done` is refused until it registered them
 
 Every code but `WFC-123` comes from the loader, and each has a lane that
 produces exactly it under `internal/common/workflow/testdata/bad/` (or,
-for the user-lane rules, `testdata/user/`). Contract 4 retired `WFC-141`
-(verdicts, re-entry fragments), `WFC-172` (the integration lane's rules),
-`WFC-180`–`WFC-182` (inputs and records), `WFC-192`–`WFC-193` (output
-schemas), `WFC-197` (attrs), `WFC-204` (verifies) and `WFC-205` (effects,
-hand-off fields): their keys are `WFC-111`. Earlier contracts retired
-`WFC-131`–`WFC-133`, `WFC-150`–`WFC-152`, `WFC-160`–`WFC-162`, `WFC-171`,
-`WFC-185` and `WFC-196`.
+for the user-lane rules, `testdata/user/`). Codes retired before
+contract 1 are not reused: `WFC-131`–`WFC-133`, `WFC-141`,
+`WFC-150`–`WFC-152`, `WFC-160`–`WFC-162`, `WFC-171`, `WFC-172`,
+`WFC-180`–`WFC-182`, `WFC-185`, `WFC-192`, `WFC-193`, `WFC-196`, `WFC-197`,
+`WFC-204` and `WFC-205`; the keys they judged are `WFC-111`.
 
 ## User lanes
 
@@ -745,7 +744,7 @@ A two-step lane a workspace keeps for its notes. `workflow.yaml`, at
 the execution order; a `README.md` beside it would be narrative):
 
 ```
-contract: 5
+contract: 1
 name: notes
 description: Draft a short note from the ticket, then check it - a workspace's own lane.
 steps:
@@ -802,11 +801,11 @@ runs these three files.
 
 ## Versions and the drain
 
-Version 1 was the public freeze; 2 was workflow v2's additive contract; 3
-removed the v1 keys; 4 made `pf step` the one entry and `handoff.md` the
-one hand-off; this is 5, the lane as `workflow.yaml` (only the current
-version's golden file and schema are kept; the earlier ones are in the git
-history). `ContractVersion` moves by one rule: only an incompatible change
+This is contract 1, the first public one: v0.2.0, the first public
+release, starts the numbering at 1 (pre-release builds numbered their
+stages differently; none of those numbers was released). Only the current
+version's golden file and schema are kept; a later version's predecessors
+stay in the git history. `ContractVersion` moves by one rule: only an incompatible change
 bumps it, at most once per release (owner ruling 2026-11-12). A change is
 compatible when every lane valid under the last release stays valid and
 behaves the same, and the work items that release claimed keep running —
@@ -854,7 +853,7 @@ daemon and the CLI refuses a Go literal equal to a shipped lane's name or
 step id, and renaming a lane, or a step its own directory defines, with
 every reference to it, loads to the same execution graph. The daemon,
 driver and runtime carry no integration-lane identifier either (`pool`,
-`effects`, `landing`, `integration_batch` and the like — the contract 3
-code still naming them, and the static test that pins their absence, go
-with). Renaming `develop` and `integrate` together (and the
+`effects`, `landing`, `integration_batch` and the like — the code that
+still named them before contract 1, and the static test that pins their
+absence, went with it). Renaming `develop` and `integrate` together (and the
 `--lane` the integrate skills pass) changes no behaviour.
