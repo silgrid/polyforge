@@ -582,7 +582,7 @@ func SkippedSteps(cfg *Config, lane *workflow.Lane, project string) []string {
 // KeyRenameSection is the docs/upgrade.md section that explains the
 // per-step key renames a stale key most often needs — the retired
 // `verify-judge` key to `verification`, a `full-gate` key meant for
-// collect's ruling copied to `collect` — the section
+// collect's ruling copied to `collect` the section
 // StaleKeyHint names. It is a section of its own, not the current
 // contract's UpgradeSection: the renames do not move with the contract.
 const KeyRenameSection = "Workflow contract 4: the integration lane is a declaration; a sub-definition takes its step's models"

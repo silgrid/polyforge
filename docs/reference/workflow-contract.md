@@ -856,5 +856,5 @@ every reference to it, loads to the same execution graph. The daemon,
 driver and runtime carry no integration-lane identifier either (`pool`,
 `effects`, `landing`, `integration_batch` and the like — the contract 3
 code still naming them, and the static test that pins their absence, go
-with it). Renaming `develop` and `integrate` together (and the
+with). Renaming `develop` and `integrate` together (and the
 `--lane` the integrate skills pass) changes no behaviour.
