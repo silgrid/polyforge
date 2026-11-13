@@ -182,8 +182,10 @@ class GateRunTest(unittest.TestCase):
         self.assertEqual((po.incomplete, po.passed, po.plan_digest, len(po.commands)), ("", False, res.plan_digest, 0))
         self.assertEqual(boxed_bash(fb2), [])
         self.assertEqual((len(fb2.starts), fb2.removes), (1, ["cid-1"]), "the plan is the engine's, asked in the container")
-        # what the plan is made of moves the digest
-        for name, kw in (("cpus", {"cpus": 4.0}), ("memory", {"memory": "4g"}), ("pids", {"pids": 100}),
+        # what the plan is made of moves the digest; the cpu limit is one
+        # past the default, which follows this machine's cores and so can
+        # equal any fixed value
+        for name, kw in (("cpus", {"cpus": container.default_cpus() + 1}), ("memory", {"memory": "4g"}), ("pids", {"pids": 100}),
                          ("timeout", {"command_timeout": duration.MINUTE})):
             with self.subTest(name):
                 fbx = FakeRuntime(os.path.join(self.root, "t-" + name))

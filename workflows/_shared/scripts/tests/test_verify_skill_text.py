@@ -25,7 +25,7 @@ class VerifySkillTextTest(unittest.TestCase):
         # exit 1's routing carries both fields
         exit1 = skill[skill.index("- **1** —"):skill.index("- **2** —")]
         for want in ("`failure`", "`browser_crash`", "`assertion`", "`Target crashed`", "`Page crashed`",
-                     "task#491"):
+                     "most often the container's memory OOM"):
             self.assertIn(want, exit1)
         self.assertIn("never place a `browser_crash` on the change from its log", exit1)
         self.assertIn("still red, it is a red you cannot place", exit1)
