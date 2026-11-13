@@ -1,7 +1,7 @@
 package runtime
 
-// cancel_intent_test.go (review s8#1): an owner's reserved cancel answer
-// is completed by every settled blocked close — including reconcile's
+// cancel_intent_test.go (review s8#1): an owner's cancel (an `intent:
+// cancel`) is completed by every settled blocked close — including reconcile's
 // settle of a close whose answer was lost — and a capsule without the
 // intent (the owner resumed it, which drops the intent) cancels nothing
 // at its next blocked close.

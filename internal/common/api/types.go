@@ -12,6 +12,7 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"strings"
 )
@@ -333,9 +334,21 @@ type ForceEndSessionRequest struct {
 // never pushed is lost: the door then clears the blocked seal (the
 // recorded head and machine, see SessionClaim.SealedHead) so a claim on
 // any machine continues from the chain aihub holds.
+//
+// Basis and MachineID are server-set, never read from the wire: the hub
+// sets Basis to "holder_operator" and MachineID to the holder machine
+// only when holding that machine is the caller's sole basis,
+// and the wi_resumed event then records both.
 type ResumeBlockedRequest struct {
-	AcceptLostWork bool `json:"accept_lost_work,omitempty"`
+	AcceptLostWork bool   `json:"accept_lost_work,omitempty"`
+	Basis          string `json:"-"`
+	MachineID      string `json:"-"`
 }
+
+// BasisHolderOperator is the decision basis recorded when the holder
+// machine's current operator is the caller's only right on a blocked
+// work item's resume or cancel door.
+const BasisHolderOperator = "holder_operator"
 
 // WrapRequest is the hub wrap door's body (a work item with no bundle):
 // Fail records the failed verdict instead of wrapped; Note lands in the
@@ -345,15 +358,43 @@ type WrapRequest struct {
 	Note string `json:"note,omitempty"`
 }
 
+// AttrsWriteRequest is the body of PATCH /work-items/{id}/attrs (workflow
+// contract 5): one top-level attrs key written whole (Value, one JSON
+// document; null deletes the key), on a work item of any status. If
+// fences it: each attrs path (dot-separated, ^[a-z0-9_]+(\.[a-z0-9_]+)*$)
+// must hold the JSON value it names (an absent path reads as null), else
+// the write is CORE-409 ATTRS_IF_MISMATCH and nothing is written.
+// OwnerMessage, when the write carries out the owner's word, rides the
+// write's attrs_written event verbatim. Reachability: a signed machine
+// request — the daemon's key; a step reaches it only through the daemon
+// (`pf step hub attrs`), never directly.
+type AttrsWriteRequest struct {
+	Key          string                     `json:"key"`
+	Value        json.RawMessage            `json:"value"`
+	If           map[string]json.RawMessage `json:"if,omitempty"`
+	OwnerMessage *OwnerMessage              `json:"owner_message,omitempty"`
+}
+
+// OwnerMessage is the owner message a write carries out: its words
+// verbatim, its writer and its stamp (the daemon copies them from the
+// step's own asks record; nothing reads the words).
+type OwnerMessage struct {
+	Words string `json:"words"`
+	By    string `json:"by"`
+	At    string `json:"at"`
+}
+
 // CancelRequest is the optional body of POST /work-items/{id}/cancel:
-// the owner's verbatim reason and the question it answered ride the
-// work_item_canceled event; DryRun answers the authorization gate alone
-// and writes nothing (the daemon's probe before it acts on a reserved
-// cancel answer). An empty body is the plain cancel.
+// the owner's verbatim reason and the owner message it rests on (its
+// stamp; a daemon carrying out an `intent: cancel`) ride the
+// work_item_canceled event. An empty body is the plain cancel. Basis and
+// MachineID are server-set, never read from the wire (see
+// ResumeBlockedRequest).
 type CancelRequest struct {
 	Reason     string `json:"reason,omitempty"`
 	QuestionID string `json:"question_id,omitempty"`
-	DryRun     bool   `json:"dry_run,omitempty"`
+	Basis      string `json:"-"`
+	MachineID  string `json:"-"`
 }
 
 // SessionAttachRequest resumes a paused WI under the SAME session (M3:
@@ -397,6 +438,16 @@ type SessionEndRequest struct {
 	// this one (the #116 stale-state hazard): the sealing daemon adopts it
 	// from its quarantined scene, any other daemon refuses.
 	HeadSHA string `json:"head_sha,omitempty"`
+	// Attrs rides the wrapped verdict only: business attrs
+	// merged key by key into the work item's attrs in the same fenced
+	// transaction (a null value deletes the key; every other attr stays).
+	// The daemon's wrapped close carries here the wrap attrs the lane's
+	// steps registered (develop's landing record among them) and the
+	// owner's waivers.
+	// Any other verdict with attrs, and the Core-owned
+	// blocked_seal key, are refused (CORE-400). An aihub older than this
+	// field ignores it: it ships before the daemon that sends it.
+	Attrs map[string]any `json:"attrs,omitempty"`
 }
 
 // SessionFingerprint derives the public handle from the secret:

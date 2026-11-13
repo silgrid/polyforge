@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -245,7 +244,9 @@ const (
 func readContacts(ctx *Context) api.ProjectMemberContacts {
 	projects := ctx.Cfg.Mapping.Projects()
 	client := ctx.aihub()
-	client.HTTP = &http.Client{Timeout: contactsTimeout}
+	bounded := *client.HTTP // same daemon transport, the per-read bound
+	bounded.Timeout = contactsTimeout
+	client.HTTP = &bounded
 	answers := make([][]api.ProjectMemberContact, len(projects))
 	slots := make(chan struct{}, contactsInFlight)
 	var wg sync.WaitGroup

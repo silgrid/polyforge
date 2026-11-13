@@ -6,7 +6,7 @@ package runtime
 // materialize turns it into real git clones under the capsule's
 // repos/<name> BEFORE the agent spawns, and capsule.json records each
 // clone's claim-time HEAD SHA as the baseline (name → SHA). The agent
-// works inside repos/<name>; the workflows' deliver step later pushes the
+// works inside repos/<name>; the workflows' publish step later pushes the
 // feature branch back to its origin (polyforge#166) — this file is the
 // "incoming" half only.
 //
@@ -15,7 +15,10 @@ package runtime
 // credential context — the daemon process env, nothing injected — and
 // happens strictly before the agent starts, so the agent's environment
 // never carries any task-repo credential (only the attempt-scoped capsule
-// push credential does, via the gitops choke point).
+// push credential does, via the gitops choke point). Every later git call
+// in a clone runs through taskrepo.Command (the clone is agent-written, so
+// no program its config names runs) with the system config ignored and
+// the inherited GIT_* stripped (taskGitEnv).
 //
 // Durability contract (polyforge#108): every repos/<name> is cloned
 // into a fresh capsule (a re-claim quarantines the previous scene) from
@@ -36,6 +39,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -44,6 +48,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/polyforge/gitops"
+	"github.com/silgrid/polyforge/internal/polyforge/taskrepo"
 )
 
 // cloneTaskRepos materializes the claim's task-repo inventory into
@@ -333,50 +338,51 @@ func checkoutWIPTree(ctx context.Context, dir, head, wip string) error {
 // when the fresh clone has no checked-out branch (detached-HEAD source).
 const carrierFallbackBranch = "pf-carrier"
 
-// gitTask runs one git command inside a task-repo worktree: the
-// worktree's OWN git-dir (never the capsule's external GIT_DIR binding —
-// the capsule history holds none of these objects), the machine's
-// default credential context, ctx-bounded like the other task-repo git
-// calls of this file.
+// gitTask runs one git command inside a task-repo worktree through
+// taskrepo.Command: the worktree's OWN git-dir (never the capsule's
+// external GIT_DIR binding — the capsule history holds none of these
+// objects), the environment taskGitEnv answers, ctx-bounded like the other
+// task-repo git calls of this file.
 func gitTask(ctx context.Context, dir string, args ...string) (string, error) {
 	return gitTaskEnv(ctx, taskGitEnv(), dir, args...)
 }
 
-// taskGitEnv is the environment of every task-repo git call: the daemon's
-// own environ (the machine's default credential context) made
-// non-interactive. The claim lane runs them outside every runtime
-// lock, but a credential prompt on the daemon's tmux tty, or a stalled
-// transfer, would still pin the claim (and its slot) until a stop or a
-// shutdown cancels it. So: git's own credential prompt is off (fail
-// instead), and an HTTP transfer below 1 KB/s for 60 s aborts. An
-// operator's explicit setting of either variable wins.
-func taskGitEnv() []string {
-	env := os.Environ()
-	for _, kv := range []string{
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_HTTP_LOW_SPEED_LIMIT=1000",
-		"GIT_HTTP_LOW_SPEED_TIME=60",
-	} {
-		key := kv[:strings.IndexByte(kv, '=')+1]
-		set := false
-		for _, e := range env {
-			if strings.HasPrefix(e, key) {
-				set = true
-				break
-			}
+// gitLowSpeed is the team default of each HTTP low-speed threshold: a
+// transfer below 1 KB/s for 60 s aborts.
+var gitLowSpeed = []string{"GIT_HTTP_LOW_SPEED_LIMIT=1000", "GIT_HTTP_LOW_SPEED_TIME=60"}
+
+// withLowSpeed answers env plus each low-speed threshold env does not set:
+// the operator's value from the daemon's own environ, else the team
+// default.
+func withLowSpeed(env []string) []string {
+	for _, kv := range gitLowSpeed {
+		key, val, _ := strings.Cut(kv, "=")
+		if slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, key+"=") }) {
+			continue
 		}
-		if !set {
-			env = append(env, kv)
+		if op, ok := os.LookupEnv(key); ok {
+			val = op
 		}
+		env = append(env, key+"="+val)
 	}
 	return env
 }
 
+// taskGitEnv is the environment of every task-repo git call after the
+// clone: the daemon's own environ made a task-repo read by taskrepo.Env
+// (system config ignored, inherited GIT_* stripped, git's own credential
+// prompt off) plus the low-speed abort. The claim lane runs them outside
+// every runtime lock, but a credential prompt on the daemon's tmux tty, or
+// a stalled transfer, would still pin the claim (and its slot) until a
+// stop or a shutdown cancels it. An operator's explicit low-speed setting
+// wins.
+func taskGitEnv() []string {
+	return withLowSpeed(taskrepo.Env(nil))
+}
+
 // gitTaskEnv is gitTask with an explicit environment.
 func gitTaskEnv(ctx context.Context, env []string, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = env
-	cmd.Dir = dir
+	cmd := taskrepo.Command(ctx, env, dir, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -413,14 +419,15 @@ func repoCloneErr(wi string, pr api.ProjectRepo, format string, args ...any) *ap
 
 // gitClone runs a plain full clone with the daemon's own environment:
 // the machine's default git credential context, made non-interactive
-// (taskGitEnv).
+// (cloneGitEnv). It does not go through taskrepo.Command: before it the
+// task repo does not exist, so there is no repo config to plant.
 //
 // A cancelled ctx (a stop or a shutdown during the claim) kills
 // the whole process group — git hands the transfer to a remote helper
 // that would otherwise keep running and keep the output pipe open.
 func gitClone(ctx context.Context, url, dir string) error {
 	cmd := exec.CommandContext(ctx, "git", "clone", "--", url, dir)
-	cmd.Env = taskGitEnv()
+	cmd.Env = cloneGitEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 5 * time.Second
@@ -431,14 +438,24 @@ func gitClone(ctx context.Context, url, dir string) error {
 	return nil
 }
 
+// cloneGitEnv is the clone's environment: the daemon's own environ, git's
+// own credential prompt off and the low-speed abort, each unless the
+// operator set it.
+func cloneGitEnv() []string {
+	env := os.Environ()
+	if _, ok := os.LookupEnv("GIT_TERMINAL_PROMPT"); !ok {
+		env = append(env, "GIT_TERMINAL_PROMPT=0")
+	}
+	return withLowSpeed(env)
+}
+
 // gitHeadSHA answers the worktree's HEAD SHA ("" when it has none).
 func gitHeadSHA(ctx context.Context, dir string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD")
-	out, err := cmd.Output()
+	out, err := gitTask(ctx, dir, "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimSpace(out), nil
 }
 
 // readCapsuleRepos loads the Repos map of the capsule.json currently on

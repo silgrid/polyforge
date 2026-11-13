@@ -13,6 +13,8 @@ func TestConfigKeyParsing(t *testing.T) {
 		{"claude_bin", keyFlat, "claude_bin", ConfigLive},
 		{"user_id", keyFlat, "user_id", ConfigCLIOnly},
 		{"max_concurrent_jobs", keyDaemon, "max_concurrent_jobs", ConfigLive},
+		{"max_concurrent_bars", keyDaemon, "max_concurrent_bars", ConfigLive},
+		{"[daemon] max_concurrent_bars", keyDaemon, "max_concurrent_bars", ConfigLive},
 		{"[daemon] step_timeout", keyDaemon, "step_timeout", ConfigLive},
 		{`[workspace."/srv/ws"]`, keyWorkspace, "/srv/ws", ConfigNextClaim},
 	}

@@ -134,9 +134,9 @@ type qEntry struct {
 	// SubmittedAt is the wall time the submit was accepted (replay
 	// evidence; EnqueuedAt is the FIFO key and equals it for live submits).
 	SubmittedAt time.Time `json:"submitted_at"`
-	// Origin is the typed submit origin (identity model; chat_id lives in
-	// Origin.ChatID). Persisted so a replayed claim hands it to the job
-	// record exactly like a live submit.
+	// Origin is the typed submit origin (identity model: its kind and
+	// owner; no chat is recorded since). Persisted so a
+	// replayed claim hands it to the job record exactly like a live submit.
 	Origin runtime.Origin `json:"origin"`
 	// NotBefore/Deferrals are the DAEMON-503 backoff: a claim the hub
 	// could not be reached for is held back until NotBefore (Take skips
@@ -233,6 +233,13 @@ func (q *jobQueue) persistLocked() error {
 		return nil
 	}
 	return q.persist(q.snapshotLocked())
+}
+
+// Idle reports, from one snapshot, that no entry is pending or in flight.
+func (q *jobQueue) Idle() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.pending) == 0 && len(q.inflight) == 0
 }
 
 // Enqueue appends one entry and persists the queue BEFORE returning: the
@@ -397,6 +404,29 @@ func (q *jobQueue) FreeSlots() int {
 		n = 0
 	}
 	return n
+}
+
+// Busy answers the slots taken (running jobs + claims in flight).
+func (q *jobQueue) Busy() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.busyLocked()
+}
+
+// Startable reports whether Take would answer an entry now.
+func (q *jobQueue) Startable() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.busyLocked() >= q.maxConc {
+		return false
+	}
+	now := q.clock()
+	for _, e := range q.pending {
+		if _, inflight := q.inflight[e.WorkItemID]; !inflight && !e.NotBefore.After(now) {
+			return true
+		}
+	}
+	return false
 }
 
 // Take pops the next DUE pending entry IF a slot is free (reference.md §6.3

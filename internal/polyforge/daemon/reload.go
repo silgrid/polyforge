@@ -4,8 +4,12 @@ package daemon
 // reload re-reads the daemon's own cli.toml, runs the SAME shared
 // validator `pf config` runs, and applies each key by its class:
 //
-//   - live: max_concurrent_jobs (the queue), step_timeout/stall_window/
-//     claude_bin (the live state the runtime reads);
+//   - live: max_concurrent_jobs (the queue), max_concurrent_bars/
+//     bar_load_threshold (the heavy-run admission,),
+//     command_path (the next step process's PATH and the daemon's own
+//     git and gh,),
+//     step_timeout/stall_window/claude_bin/agent_language (the live state
+//     the runtime reads);
 //   - live: summarize.models|language|interval_sec (the [summarize] table
 //     the summarize lane reads from the live state);
 //   - next-claim: the [workspace] mapping (additions take effect at the
@@ -35,6 +39,7 @@ import (
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/observe"
@@ -67,18 +72,30 @@ func (d *Daemon) reloadConfig() (*cli.ConfigReloadResponse, error) {
 	d.reloadApplyMu.Lock()
 	defer d.reloadApplyMu.Unlock()
 
-	path := d.reloadPath()
-	raw, err := os.ReadFile(path)
+	newCfg, err := d.readReloadFile()
 	if err != nil {
-		return nil, d.reloadFailed(api.ErrDaemonBadInput,
-			fmt.Sprintf("config reload: cannot read %s: %v", path, err), nil)
+		return nil, err
 	}
-	newCfg, err := cli.ParseConfigBytes(path, raw)
+	newServer, newKey := newCfg.Server, newCfg.APIKey
+	if d.cfg.FlagPinned["server"] {
+		newServer = d.cfg.Server // an explicit launch flag pins it (reported overridden)
+	}
+	if d.cfg.FlagPinned["api_key"] {
+		d.reloadMu.Lock()
+		newKey = d.effectiveKey
+		d.reloadMu.Unlock()
+	}
+	connOutcome, err := d.checkConnectionChange(newServer, newKey)
 	if err != nil {
-		return nil, d.reloadFailed(api.ErrDaemonBadInput, "config reload: "+err.Error(), nil)
+		return nil, d.reloadFailed(api.ErrDaemonConflict, err.(*api.Error).Detail, []string{"server", "api_key"})
 	}
-	if err := cli.ValidateConfigForDaemon(newCfg); err != nil {
-		return nil, d.reloadFailed(api.ErrDaemonBadInput, "config reload: "+err.Error(), nil)
+	if newCfg.Mapping.Empty() && !d.plan().Empty() {
+		return nil, d.reloadFailed(api.ErrDaemonBadInput, "config reload: the reload would leave this Cell with no [workspace] mapping while it runs with one; restart the Host to close its execution plane", nil)
+	}
+	if !newCfg.Mapping.Empty() {
+		if err := cli.ValidateConfigForDaemon(newCfg); err != nil {
+			return nil, d.reloadFailed(api.ErrDaemonBadInput, "config reload: "+err.Error(), nil)
+		}
 	}
 	// The mapping removal/re-route check runs before anything is applied:
 	// all-or-nothing.
@@ -111,6 +128,9 @@ func (d *Daemon) reloadConfig() (*cli.ConfigReloadResponse, error) {
 		if !ok {
 			continue
 		}
+		if d.cfg.Profile != "" && d.cfg.Profile != cellcfg.DefaultProfile && cellcfg.HostOnly(keySectionOf(key), key) {
+			continue // a Host key: the Host's reload reports it, never a named Cell's
+		}
 		baseline := prev
 		if class == cli.ConfigRestartOnly || class == cli.ConfigCLIOnly {
 			baseline = startup
@@ -121,6 +141,22 @@ func (d *Daemon) reloadConfig() (*cli.ConfigReloadResponse, error) {
 		if d.cfg.FlagPinned[key] {
 			overridden = append(overridden, key)
 			add(key, class, "overridden", pinnedDetail(key))
+			continue
+		}
+		if key == "server" || key == "api_key" {
+			// the connection's own rules (drain.go): an unchanged server, a
+			// same-identity key rotation pending until the Cell is idle
+			switch {
+			case key != "api_key" || connOutcome == "":
+			case connOutcome == keyAppliedOutcome:
+				add(key, cli.ConfigClass(cellcfg.ClassConnection), "applied", connOutcome)
+			case connOutcome == keyRemovedOutcome:
+				pending = append(pending, key)
+				add(key, cli.ConfigClass(cellcfg.ClassConnection), "pending-restart", connOutcome)
+			default:
+				pending = append(pending, key)
+				add(key, cli.ConfigClass(cellcfg.ClassConnection), "pending-drain", connOutcome)
+			}
 			continue
 		}
 		switch class {
@@ -147,9 +183,20 @@ func (d *Daemon) reloadConfig() (*cli.ConfigReloadResponse, error) {
 	if !reflect.DeepEqual(prev.MemoryPolicy, newCfg.MemoryPolicy) {
 		add(cli.MemoryPolicyLabel, cli.MemoryPolicyClass, "next-claim", "")
 	}
+	mappingChanged := !d.plan().Equal(newCfg.Mapping)
 	d.live.SetMapping(newCfg.Mapping)
 	d.live.SetMemoryPolicy(newCfg.MemoryPolicy)
+	if mappingChanged {
+		d.reportUserLanes() // a newly mapped workspace's user lanes are judged now
+	}
 	d.lastAppliedFile = newCfg
+	if !newCfg.Mapping.Empty() {
+		d.reloadMu.Lock()
+		if d.execDisabled == execDisabledNoWorkspace {
+			d.execDisabled = "" // the first valid mapping opens the execution plane
+		}
+		d.reloadMu.Unlock()
+	}
 
 	sort.Strings(pending)
 	sort.Strings(overridden)
@@ -232,6 +279,10 @@ func (d *Daemon) applyLive(key string, cfg cli.Config) error {
 		d.live.SetStepTimeout(cfg.Daemon.StepTimeout)
 	case "stall_window":
 		d.live.SetStallWindow(cfg.Daemon.StallWindow)
+	case "agent_language":
+		// a new conversation dispatched from now on takes it; a running
+		// dispatch keeps the language it started with
+		d.live.SetAgentLanguage(cfg.Daemon.AgentLanguage)
 	case "summarize.models", "summarize.language", "summarize.interval_sec":
 		// the table is one value: any changed key swaps the whole table
 		d.live.SetSummarize(cfg.Summarize)
@@ -240,13 +291,59 @@ func (d *Daemon) applyLive(key string, cfg cli.Config) error {
 		if n <= 0 {
 			n = cli.DefaultMaxConcurrentJobs
 		}
-		if err := d.q.SetMaxConcurrent(n); err != nil {
+		if d.cfg.HostSlots != nil && d.profile() == cellcfg.DefaultProfile {
+			// max_concurrent_jobs is the Host-only ceiling (cli.toml): the
+			// Host gate takes it; this Cell's own share stays below its
+			// optional cell ceiling
+			d.cfg.HostSlots.SetMax(n)
+		}
+		cellN := n
+		if c := d.cellMaxConcurrentJobs(); c > 0 && c < cellN {
+			cellN = c
+		}
+		if err := d.q.SetMaxConcurrent(cellN); err != nil {
 			return err
 		}
 		d.reloadMu.Lock()
 		d.maxConfigured = n
 		d.reloadMu.Unlock()
 		return nil
+	case "cell_max_concurrent_jobs":
+		// the Cell's own ceiling governs its admission at once: the file
+		// value clamped to the Host's current ceiling (unset = that
+		// ceiling; unhosted, the Cell's applied cap). A raise admits
+		// queued work on the next dispatch tick, a lower one only stops
+		// new starts (nothing is killed); other Cells are untouched.
+		c := cfg.Daemon.CellMaxConcurrentJobs
+		if c < 0 {
+			c = 0
+		}
+		limit := d.maxConfiguredSnapshot()
+		if d.cfg.HostSlots != nil {
+			limit = d.cfg.HostSlots.Max()
+		}
+		if c > 0 && c < limit {
+			limit = c
+		}
+		if err := d.q.SetMaxConcurrent(limit); err != nil {
+			return err
+		}
+		d.reloadMu.Lock()
+		d.cfg.CellMaxConcurrentJobs = c
+		d.reloadMu.Unlock()
+		return nil
+	case "max_concurrent_bars", "bar_load_threshold":
+		// Host-only: the heavy-run admission is the Host's,
+		// set by the default Cell's file; the next dispatch tick honours it
+		if d.cfg.SharedAdmission == nil || d.profile() == cellcfg.DefaultProfile {
+			d.verifyQ.SetLimits(cfg.Daemon.MaxConcurrentBars, cfg.Daemon.BarLoadThreshold)
+		}
+	case "command_path":
+		// the next step process and the daemon's own git and gh start
+		// with it as their PATH
+		d.reloadMu.Lock()
+		d.commandPath = cfg.Daemon.CommandPath
+		d.reloadMu.Unlock()
 	}
 	return nil
 }
@@ -274,8 +371,20 @@ func configValueChanged(newCfg, baseline cli.Config, key string) bool {
 		return newCfg.Daemon.HarnessRoot != baseline.Daemon.HarnessRoot
 	case "operator_agent_dir":
 		return newCfg.Daemon.OperatorAgentDir != baseline.Daemon.OperatorAgentDir
+	case "python":
+		return newCfg.Daemon.Python != baseline.Daemon.Python
 	case "max_concurrent_jobs":
 		return newCfg.Daemon.MaxConcurrentJobs != baseline.Daemon.MaxConcurrentJobs
+	case "max_concurrent_bars":
+		return newCfg.Daemon.MaxConcurrentBars != baseline.Daemon.MaxConcurrentBars
+	case "bar_load_threshold":
+		return newCfg.Daemon.BarLoadThreshold != baseline.Daemon.BarLoadThreshold
+	case "command_path":
+		return newCfg.Daemon.CommandPath != baseline.Daemon.CommandPath
+	case "cell_max_concurrent_jobs":
+		return newCfg.Daemon.CellMaxConcurrentJobs != baseline.Daemon.CellMaxConcurrentJobs
+	case "agent_language":
+		return newCfg.Daemon.AgentLanguage != baseline.Daemon.AgentLanguage
 	case "summarize.models", "summarize.language", "summarize.interval_sec":
 		a, b := summarizeKeyValue(newCfg, key), summarizeKeyValue(baseline, key)
 		return !reflect.DeepEqual(a, b)
@@ -332,4 +441,38 @@ func (d *Daemon) checkMappingProposal(entries []cli.ConfigMappingEntry) error {
 		return &api.Error{Code: api.ErrDaemonBadInput, Detail: err.Error()}
 	}
 	return d.checkMappingRemoval(plan)
+}
+
+// readReloadFile reads this Cell's file config (the Host's loader when
+// bound, else ConfigPath parsed on its own).
+func (d *Daemon) readReloadFile() (cli.Config, error) {
+	if d.cfg.LoadFile != nil {
+		cfg, err := d.cfg.LoadFile()
+		if err != nil {
+			return cfg, d.reloadFailed(api.ErrDaemonBadInput, "config reload: "+err.Error(), nil)
+		}
+		return cfg, nil
+	}
+	path := d.reloadPath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return cli.Config{}, d.reloadFailed(api.ErrDaemonBadInput,
+			fmt.Sprintf("config reload: cannot read %s: %v", path, err), nil)
+	}
+	cfg, err := cli.ParseConfigBytes(path, raw)
+	if err != nil {
+		return cfg, d.reloadFailed(api.ErrDaemonBadInput, "config reload: "+err.Error(), nil)
+	}
+	return cfg, nil
+}
+
+// keySectionOf maps a reload key name onto its cellcfg section.
+func keySectionOf(key string) string {
+	switch key {
+	case "step_timeout", "stall_window", "harness_root", "operator_agent_dir", "python",
+		"max_concurrent_jobs", "max_concurrent_bars", "bar_load_threshold",
+		"command_path", "cell_max_concurrent_jobs", "machine_id", "heartbeat_every", "agent_language":
+		return "daemon"
+	}
+	return ""
 }

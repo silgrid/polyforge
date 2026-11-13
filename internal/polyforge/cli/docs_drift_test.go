@@ -117,7 +117,10 @@ var docsConceptsTerms = []struct{ term, re string }{
 	{"gate", `(?i)\bgate\b`},
 	{"rewind", `(?i)\brewind\b`},
 	{"claim", `(?i)\bclaim\b`},
-	{"chat identity", `(?i)\bchat\s+identity\b`},
+	{"decision feed", `(?i)\bdecision\s+feed\b`}, // replaced the retired chat identity
+	{"DaemonHost (Host)", `\bDaemonHost\b`},
+	{"ProfileCell (Cell)", `\bProfileCell\b`},
+	{"effective connection", `(?i)\beffective\s+connection\b`},
 }
 
 // TestDocsConceptsCarriesSixteenTerms: the required-topic check —

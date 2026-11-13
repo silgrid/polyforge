@@ -68,8 +68,10 @@ func TestHelpExtensionsIndexesTheExtendingSubsections(t *testing.T) {
 	if !strings.Contains(stdout, "cli.toml [summarize] models, language, interval_sec") || !strings.Contains(stdout, `cli.toml [memory_policy."<path>".<entry>]`) {
 		t.Fatalf("the index does not name summarize.language and summarize.interval_sec:\n%s", stdout)
 	}
-	if len(want) != 10 {
-		t.Fatalf("docs/extending.md has %d subsections %q, want the 10 inventory items", len(want), want)
+	// workflow contract 4 removed the step attrs configuration (its
+	// docs/extending.md subsection with it,/#488): 9 items
+	if len(want) != 9 {
+		t.Fatalf("docs/extending.md has %d subsections %q, want the 9 inventory items", len(want), want)
 	}
 }
 
@@ -102,12 +104,7 @@ func TestDoctorConfigFailuresPointAtExtending(t *testing.T) {
 	})
 	t.Run("workspace yaml", func(t *testing.T) {
 		wf := t.TempDir()
-		if err := os.MkdirAll(filepath.Join(wf, "autopilot"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(wf, "autopilot", "workflow.md"), []byte("---\nsteps:\n  - { id: fix }\n---\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeLane(t, wf, "autopilot", "steps:\n  - { id: fix }\n")
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -117,7 +114,7 @@ func TestDoctorConfigFailuresPointAtExtending(t *testing.T) {
 		srv := aiSever(t, &reqRecorder{}, map[string]bool{"polyforge": true}, 0, "")
 		env := doctorServerConfig(t, srv.URL, "k", sock, "polyforge")
 		yaml := filepath.Join(filepath.Dir(env["XDG_CONFIG_HOME"]), "ws-polyforge", ".polyforge.yaml")
-		if err := os.WriteFile(yaml, []byte("steps:\n  polyforge:\n    gate: { models: [pi:c] }\n"), 0o600); err != nil {
+		if err := os.WriteFile(yaml, []byte("steps:\n  polyforge:\n    fix: { models: [c] }\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		_, _, doc := doctorStatus(t, env, "--json", "doctor")

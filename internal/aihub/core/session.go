@@ -36,6 +36,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -173,8 +174,8 @@ func (db *DB) waitingForBatch(ids []string) (map[string][]WaitingBlocker, error)
 // ---------------------------------------------------------------------------
 // Claim (reference.md §3.2)
 
-// resolveSessionMachine resolves the machine id a claim/attach records
-//, on the caller's own transaction snapshot: a machines
+// resolveSessionMachine resolves the machine id a claim/attach records,
+// on the caller's own transaction snapshot: a machines
 // row owned by the caller records its id; a row owned by another
 // operator is refused AUTH-403 with nothing written; an absent row, or
 // a row with no operator, records NULL and the claim/attach succeeds.
@@ -652,6 +653,29 @@ func setBlockedSealTx(tx txExecer, wiID, head, machine string, clear bool) error
 	return err
 }
 
+// mergeAttrsTx merges set into the work item's attrs key by key (a nil
+// value deletes the key; every other attr stays) — the wrapped session
+// end's hand-off.
+func mergeAttrsTx(tx txExecer, wiID string, set map[string]any) error {
+	attrs, err := loadAttrsTx(tx, wiID)
+	if err != nil {
+		return err
+	}
+	for k, v := range set {
+		if v == nil {
+			delete(attrs, k)
+			continue
+		}
+		attrs[k] = v
+	}
+	blob, err := json.Marshal(attrs)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`UPDATE work_items SET attrs=?1 WHERE id=?2`, string(blob), wiID)
+	return err
+}
+
 // blockedSealTx reads the recorded seal ("" when none).
 func blockedSealTx(tx txExecer, wiID string) (head, machine string) {
 	attrs, err := loadAttrsTx(tx, wiID)
@@ -679,6 +703,14 @@ func (m *SessionManager) End(wiID string, req api.SessionEndRequest, callerIdent
 		return m.Pause(wiID, req.SessionID, req.CleanPause, req.Note, callerIdentity)
 	default:
 		return Fail(api.ErrCoreBadInput, "", "status must be one of wrapped|failed|blocked|paused")
+	}
+	if len(req.Attrs) > 0 {
+		if req.Status != api.StatusWrapped {
+			return Fail(api.ErrCoreBadInput, "", "attrs ride the wrapped verdict only (got %s)", req.Status)
+		}
+		if err := checkAttrs(req.Attrs); err != nil {
+			return err
+		}
 	}
 	tx, err := m.db.Begin()
 	if err != nil {
@@ -733,6 +765,17 @@ func (m *SessionManager) End(wiID string, req api.SessionEndRequest, callerIdent
 	}
 	if req.HeadSHA != "" && req.Status == api.StatusBlocked {
 		payload["head_sha"] = req.HeadSHA
+	}
+	if len(req.Attrs) > 0 {
+		if err := mergeAttrsTx(tx, wiID, req.Attrs); err != nil {
+			return err
+		}
+		keys := make([]string, 0, len(req.Attrs))
+		for k := range req.Attrs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		payload["attrs"] = keys
 	}
 	if err := appendEventTx(tx, wiID, now, callerIdentity, "session_ended", payload); err != nil {
 		return err

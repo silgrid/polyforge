@@ -2,7 +2,7 @@ package test
 
 // w114_verify_scope_conf_first_acceptance_test.go: the
 // acceptance suite for the conf-first verification-scope engine,
-// `tools/verify-scope`, driven only through its documented surface — the
+// `workflows/_shared/scripts/verify-scope`, driven only through its documented surface — the
 // target clone as working directory, `--base`, `--full`, `--json`, `--run` —
 // over real git fixtures:
 //
@@ -13,8 +13,9 @@ package test
 //     with the line report;
 //   - `conf_changed_in_diff` both ways;
 //   - the new conf keys (check=, check_requires_env=, check_requires_cmd=,
-//     check_timeout=, test_glob=, base_setup=, runner=, ci_evidence=) and
-//     their diagnose-and-ignore rejections;
+//     check_timeout=, test_glob=, base_setup=, runner=) and their
+//     diagnose-and-ignore rejections — the removed ci_evidence= among
+//     them;
 //   - `--run` executes with `bash -c` (stdin closed), skips a command whose
 //     declared prerequisites are missing, and still stops at the first
 //     failure.
@@ -45,7 +46,14 @@ type w114vsCommand struct {
 	RequiresEnv []string `json:"requires_env"`
 	RequiresCmd []string `json:"requires_cmd"`
 	Timeout     *string  `json:"timeout"`
-	Source      string   `json:"source"`
+	// Report is the declared failure report (report=; null = none).
+	Report *struct {
+		Format string `json:"format"`
+		Path   string `json:"path"`
+	} `json:"report"`
+	// Rerun is the declared unit re-run template (rerun=; null = none).
+	Rerun  *string `json:"rerun"`
+	Source string  `json:"source"`
 }
 
 // w114vsTO renders a command's timeout: its declared duration, or "<null>"
@@ -74,23 +82,24 @@ type w114vsReport struct {
 	TestGlob          []string        `json:"test_glob"`
 	BaseSetup         []string        `json:"base_setup"`
 	Runner            *string         `json:"runner"`
-	CIEvidence        []string        `json:"ci_evidence"`
 	E2ERunner         *string         `json:"e2e_runner"`
 	SuiteGlob         []string        `json:"suite_glob"`
 	E2EMap            []string        `json:"e2e_map"`
 	Diagnostics       []string        `json:"diagnostics"`
 }
 
-// w114vsTopKeys is the contract's key set (plus ci_evidence, the echo the
-// deliver step's conf key gets, and the carries keys' echoes e2e_runner,
-// suite_glob and e2e_map).
+// w114vsTopKeys is the contract's key set (plus the carries keys' echoes
+// e2e_runner, suite_glob and e2e_map).
 var w114vsTopKeys = []string{
-	"analyzer", "base", "base_setup", "ci_evidence", "commands", "conf",
+	"analyzer", "base", "base_setup", "commands", "conf",
 	"conf_changed_in_diff", "default_branch", "diagnostics", "e2e_map", "e2e_runner", "head", "mode",
 	"paths", "root", "runner", "schema", "stack", "suite_glob", "test_glob",
 }
 
-var w114vsCommandKeys = []string{"cmd", "name", "phase", "requires_cmd", "requires_env", "source", "timeout"}
+// report is the command's declared failure report ( report=),
+// null when none is declared; rerun is its unit re-run template
+// ( rerun=), null when none is declared.
+var w114vsCommandKeys = []string{"cmd", "name", "phase", "report", "requires_cmd", "requires_env", "rerun", "source", "timeout"}
 
 // w114vsKeys answers the sorted keys of a JSON object, failing on a non-object.
 func w114vsKeys(t *testing.T, raw json.RawMessage) []string {
@@ -104,7 +113,7 @@ func w114vsKeys(t *testing.T, raw json.RawMessage) []string {
 		keys = append(keys, k)
 		// every array field must be an array (never null)
 		switch k {
-		case "paths", "commands", "test_glob", "base_setup", "ci_evidence", "suite_glob", "e2e_map", "diagnostics", "requires_env", "requires_cmd":
+		case "paths", "commands", "test_glob", "base_setup", "suite_glob", "e2e_map", "diagnostics", "requires_env", "requires_cmd":
 			if strings.TrimSpace(string(v)) == "null" || !strings.HasPrefix(strings.TrimSpace(string(v)), "[") {
 				t.Fatalf("%q must be an array, got %s", k, v)
 			}
@@ -121,7 +130,7 @@ func w114vsJSON(t *testing.T, dir string, env []string, args ...string) w114vsRe
 	t.Helper()
 	out, errb, code := w25e2eRun(t, dir, env, append([]string{"--json"}, args...)...)
 	if code != 0 {
-		t.Fatalf("tools/verify-scope --json %v: exit %d (stderr %q)", args, code, errb)
+		t.Fatalf("workflows/_shared/scripts/verify-scope --json %v: exit %d (stderr %q)", args, code, errb)
 	}
 	dec := json.NewDecoder(strings.NewReader(out))
 	var raw json.RawMessage
@@ -389,7 +398,6 @@ func TestW114VerifyScopeJSONContract(t *testing.T) {
 		"base_setup=make deps",
 		"runner=complete",
 		"ci_evidence=ci.yml/test",
-		"ci_evidence=ci.yml/e2e",
 		"e2e_runner=sh run-e2e.sh --",
 		"suite_glob=checks/*.sh",
 		"e2e_map=lib/*=checks/a.sh",
@@ -428,9 +436,13 @@ func TestW114VerifyScopeJSONContract(t *testing.T) {
 	}
 	if !reflect.DeepEqual(s.TestGlob, []string{"e2e/*.mjs", "tests/**/test_*.py"}) ||
 		!reflect.DeepEqual(s.BaseSetup, []string{"cd webui && npm ci", "make deps"}) ||
-		s.Runner == nil || *s.Runner != "complete" ||
-		!reflect.DeepEqual(s.CIEvidence, []string{"ci.yml/test", "ci.yml/e2e"}) {
-		t.Fatalf("conf echoes = test_glob %q base_setup %q runner %v ci_evidence %q", s.TestGlob, s.BaseSetup, s.Runner, s.CIEvidence)
+		s.Runner == nil || *s.Runner != "complete" {
+		t.Fatalf("conf echoes = test_glob %q base_setup %q runner %v", s.TestGlob, s.BaseSetup, s.Runner)
+	}
+	// the removed ci_evidence= is no echo, its line a
+	// diagnosed rejection naming the removal
+	if !strings.Contains(strings.Join(s.Diagnostics, "\n"), "conf rejects the removed key ci_evidence (no step reads it under the workflow contract): delete the line: ci_evidence=ci.yml/test") {
+		t.Fatalf("the removed ci_evidence key must be named: %q", s.Diagnostics)
 	}
 	if s.E2ERunner == nil || *s.E2ERunner != "sh run-e2e.sh --" ||
 		!reflect.DeepEqual(s.SuiteGlob, []string{"checks/*.sh"}) || !reflect.DeepEqual(s.E2EMap, []string{"lib/*=checks/a.sh"}) {
@@ -447,6 +459,8 @@ func TestW114VerifyScopeJSONContract(t *testing.T) {
 		"lint:fast:conf:echo lint",
 		"full-1:full:conf:echo full-anon",
 		"e2e:full:conf:echo e2e",
+		// The engine-appended dependency-audit gate closes every full tier.
+		"audit:full:default:" + w320AuditCmd(filepath.Dir(w25e2eEnginePath(t)), " --go"),
 	}
 	fby := w114vsByName(f)
 	if f.Mode != "full" || !reflect.DeepEqual(w114vsPlan(f), wantFull) || w114vsTO(fby["e2e"]) != "1h30m" || w114vsTO(fby["full-1"]) != "<null>" {
@@ -459,10 +473,10 @@ func TestW114VerifyScopeJSONContract(t *testing.T) {
 	w25e2eWrite(t, zDir, "leaf/leaf.go", "package leaf\n\nfunc Leaf() int { return 3 }\n")
 	w25e2eCommit(t, zDir, "change leaf")
 	z := w114vsJSON(t, zDir, nil)
-	if z.Conf != "absent" || z.Runner != nil || len(z.TestGlob) != 0 || len(z.BaseSetup) != 0 || len(z.CIEvidence) != 0 ||
+	if z.Conf != "absent" || z.Runner != nil || len(z.TestGlob) != 0 || len(z.BaseSetup) != 0 ||
 		z.E2ERunner != nil || len(z.SuiteGlob) != 0 || len(z.E2EMap) != 0 {
-		t.Fatalf("zero-config JSON = conf %q runner %v test_glob %q base_setup %q ci_evidence %q e2e_runner %v suite_glob %q e2e_map %q",
-			z.Conf, z.Runner, z.TestGlob, z.BaseSetup, z.CIEvidence, z.E2ERunner, z.SuiteGlob, z.E2EMap)
+		t.Fatalf("zero-config JSON = conf %q runner %v test_glob %q base_setup %q e2e_runner %v suite_glob %q e2e_map %q",
+			z.Conf, z.Runner, z.TestGlob, z.BaseSetup, z.E2ERunner, z.SuiteGlob, z.E2EMap)
 	}
 	for _, c := range z.Commands {
 		if c.Timeout != nil {
@@ -475,7 +489,8 @@ func TestW114VerifyScopeJSONContract(t *testing.T) {
 		t.Fatalf("zero-config JSON plan = %q", zplan)
 	}
 	zf := w114vsJSON(t, zDir, nil, "--full")
-	if zfp := w114vsPlan(zf); len(zfp) != 4 || zfp[3] != "full-1:full:default:GOWORK=off go test -count=1 ./..." {
+	if zfp := w114vsPlan(zf); len(zfp) != 5 || zfp[3] != "full-1:full:default:GOWORK=off go test -count=1 ./..." ||
+		zfp[4] != "audit:full:default:"+w320AuditCmd(filepath.Dir(w25e2eEnginePath(t)), " --go") {
 		t.Fatalf("zero-config --full JSON plan = %q", zfp)
 	}
 
@@ -565,7 +580,7 @@ func TestW114VerifyScopeNewKeysParsed(t *testing.T) {
 		"check_timeout=e2e|0s",
 		"check_timeout=lint|9m",
 		"runner=partial",
-		"ci_evidence=no-slash",
+		"ci_evidence=pf-ci.yml/full-bar",
 		"base_setup=$(touch " + marker + ")",
 		"test_glob=",
 		"mystery=value",
@@ -593,7 +608,7 @@ func TestW114VerifyScopeNewKeysParsed(t *testing.T) {
 		"check_timeout value (expected <name>|<positive Go duration",
 		"a second check_timeout for 'lint'",
 		"runner 'partial'",
-		"ci_evidence value",
+		"the removed key ci_evidence",
 		"conf lint: base_setup value begins with a command substitution",
 		"an empty test_glob",
 		"unknown key 'mystery'",
@@ -623,8 +638,8 @@ func TestW114VerifyScopeNewKeysParsed(t *testing.T) {
 			t.Fatalf("%s declares no valid timeout, so it carries null (no engine default), got %s", name, got)
 		}
 	}
-	if j.Runner != nil || len(j.CIEvidence) != 0 || len(j.BaseSetup) != 0 || len(j.TestGlob) != 0 {
-		t.Fatalf("rejected echoes must contribute nothing: runner %v ci %q base_setup %q test_glob %q", j.Runner, j.CIEvidence, j.BaseSetup, j.TestGlob)
+	if j.Runner != nil || len(j.BaseSetup) != 0 || len(j.TestGlob) != 0 {
+		t.Fatalf("rejected echoes must contribute nothing: runner %v base_setup %q test_glob %q", j.Runner, j.BaseSetup, j.TestGlob)
 	}
 	if _, _, code := w25e2eRun(t, dir, nil, "--base", "HEAD", "--run"); code != 0 {
 		t.Fatalf("--run over the accepted commands must pass, got %d", code)

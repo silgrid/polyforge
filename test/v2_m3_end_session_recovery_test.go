@@ -26,14 +26,14 @@ import (
 //     from execution.json's current step.
 //
 // This scenario is the acceptance oracle of that claim: daemon A runs the
-// WI through two completed steps (grill, fix — fix commits to a task
-// repo) and is parked on the third; A is then killed hard (SIGKILL, and
+// WI through its first step (fix, which commits to a task repo) and is
+// parked on the second (review); A is then killed hard (SIGKILL, and
 // its step process reaped: the machine is gone); an admin force-ends the
 // session; daemon B (different machine id, data dir and workspace) claims
 // the queued WI with a plain `pf submit`.
 //
-//   - B resumes at the step AFTER the last completed one: neither grill
-//     nor fix is re-dispatched on B;
+//   - B resumes at the step AFTER the last completed one: fix is not
+//     re-dispatched on B;
 //   - A's task-repo commit, which reached aihub through the carrier ref,
 //     is present in B's clone;
 //   - every late write from A's old secret is rejected: the git face
@@ -46,11 +46,10 @@ func TestV2M3EndSessionRecovery(t *testing.T) {
 	inst, remote := newV1InstallTaskRepo(t)
 	wi := inst.newWI(t, "m3: end-session + normal claim resumes from the chain",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true,
+			{"do": "envelope", "id": "fix", "outcome": "completed",
 				"name": "demo-src", "origin": remote.url},
-			// Daemon A parks alive on the third step (the stuck holder).
-			{"do": "envelope", "id": "verification", "park": true},
+			// Daemon A parks alive on the second step (the stuck holder).
+			{"do": "envelope", "id": "review", "park": true},
 		}, nil)
 	t.Cleanup(func() { killOrphans(wi) })
 
@@ -58,12 +57,12 @@ func TestV2M3EndSessionRecovery(t *testing.T) {
 	daemonA.start()
 	daemonA.pf(t, "submit", wi)
 
-	// A: two steps done, the third dispatched and parked.
+	// A: the first step done, the second dispatched and parked.
 	waitStepStatus(t, daemonA, wi, "fix", "done", 90*time.Second)
-	waitStepStatus(t, daemonA, wi, "verification", "in_progress", 60*time.Second)
+	waitStepStatus(t, daemonA, wi, "review", "in_progress", 60*time.Second)
 	waitUntil(t, 30*time.Second, "A's step never parked", func() bool {
 		for _, rec := range fakeJournal(t, daemonA.capsuleDir(wi)) {
-			if rec["type"] == "park" && rec["step"] == "verification" {
+			if rec["type"] == "park" && rec["step"] == "review" {
 				return true
 			}
 		}
@@ -75,12 +74,12 @@ func TestV2M3EndSessionRecovery(t *testing.T) {
 		t.Fatalf("the fix step left no task-repo commit (HEAD %s == origin %s)", codeHead, remote.head)
 	}
 	preSpawns := len(spawnJournal(t, daemonA.capsuleDir(wi)))
-	if preSpawns != 3 {
-		t.Fatalf("daemon A dispatched %d step processes, want 3", preSpawns)
+	if preSpawns != 2 {
+		t.Fatalf("daemon A dispatched %d step processes, want 2", preSpawns)
 	}
 
 	// Everything A did must have REACHED aihub before the crash: the
-	// carrier ref (task-repo commit), the execution state (fix done, third
+	// carrier ref (task-repo commit), the execution state (fix done, second
 	// step in flight) and the spawn journal. This is the premise of the
 	// whole recovery path — recovery restores only what aihub holds.
 	waitUntil(t, 60*time.Second, "A's work never fully reached aihub", func() bool {
@@ -96,11 +95,11 @@ func TestV2M3EndSessionRecovery(t *testing.T) {
 		if json.Unmarshal([]byte(inst.bareFileAtMain(t, wi, "runtime-state/execution.json")), &x) != nil {
 			return false
 		}
-		fix, ver := x.Steps["fix"], x.Steps["verification"]
+		fix, ver := x.Steps["fix"], x.Steps["review"]
 		if fix == nil || fix.Status != "done" || ver == nil || ver.Status != "in_progress" {
 			return false
 		}
-		return strings.Count(inst.bareFileAtMain(t, wi, "runtime-state/spawn-journal.jsonl"), "\n") >= 3
+		return strings.Count(inst.bareFileAtMain(t, wi, "runtime-state/spawn-journal.jsonl"), "\n") >= 2
 	})
 
 	// A's secret (state.json is the one place it lives) and the fencing
@@ -133,14 +132,13 @@ func TestV2M3EndSessionRecovery(t *testing.T) {
 
 	// The plan B follows. Spawn ordinals are chain-wide (B re-seeds its
 	// derivation counter from the cloned spawn journal: its first
-	// dispatch is #4): #4 re-runs the interrupted verification step and
+	// dispatch is #3): #3 re-runs the interrupted review step and
 	// parks on it (the last step) so the WI stays held by B while A
 	// restarts below.
 	inst.setPlan(t, wi, []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "park": true},
-		{"do": "envelope", "id": "verification", "park": true},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "park": true},
+		{"do": "envelope", "id": "review", "park": true},
 	})
 
 	// Daemon B: another machine, another data dir, a PLAIN claim.
@@ -157,9 +155,9 @@ func TestV2M3EndSessionRecovery(t *testing.T) {
 	}
 
 	// B resumed at the interrupted step (the last one) and parks on it.
-	waitStepStatus(t, daemonB, wi, "verification", "in_progress", 60*time.Second)
+	waitStepStatus(t, daemonB, wi, "review", "in_progress", 60*time.Second)
 	capB := daemonB.capsuleDir(wi)
-	waitUntil(t, 30*time.Second, "B's verification never parked", func() bool {
+	waitUntil(t, 30*time.Second, "B's review never parked", func() bool {
 		for _, rec := range fakeJournal(t, capB) {
 			if n, _ := rec["spawn_n"].(float64); rec["type"] == "park" && int(n) > preSpawns {
 				return true
@@ -183,18 +181,18 @@ func TestV2M3EndSessionRecovery(t *testing.T) {
 			stepsRun = append(stepsRun, rec["step"].(string))
 		}
 	}
-	if len(stepsRun) == 0 || contains(stepsRun, "grill") || contains(stepsRun, "fix") {
+	if len(stepsRun) == 0 || contains(stepsRun, "fix") {
 		t.Fatalf("B re-ran a completed step or ran nothing: B's envelope writes %v", stepsRun)
 	}
-	if stepsRun[0] != "verification" {
+	if stepsRun[0] != "review" {
 		t.Fatalf("B did not resume at the interrupted step: %v", stepsRun)
 	}
 	x := readExecution(t, capB)
-	if x.CurrentStep != "verification" || x.Steps["grill"].Status != "done" || x.Steps["fix"].Status != "done" {
+	if x.CurrentStep != "review" || x.Steps["fix"].Status != "done" {
 		t.Fatalf("B's execution state wrong: %s (current %s)", execDigest(x), x.CurrentStep)
 	}
 	if n := len(spawnJournal(t, capB)); n != preSpawns+1 {
-		t.Fatalf("B's spawn journal holds %d dispatches, want %d (A's 3 + the re-run verification)", n, preSpawns+1)
+		t.Fatalf("B's spawn journal holds %d dispatches, want %d (A's 2 + the re-run review)", n, preSpawns+1)
 	}
 
 	// A's task-repo commit, carried through aihub, is in B's clone.
@@ -209,14 +207,14 @@ func TestV2M3EndSessionRecovery(t *testing.T) {
 	// Late writes from A's old secret are rejected, now naming B.
 	assertStaleWritesRejected(t, inst, wi, oldSecret, sessB.Fingerprint)
 
-	// B keeps running with its verification step parked: a LIVE step process
+	// B keeps running with its review step parked: a LIVE step process
 	// for the same WI id on the same kernel. A's restart release sweeps
 	// by PF_WI_ID AND PF_DAEMON_ID, so it must leave B's process alone
 	// (on one host both daemons share the kernel).
 	stBefore := inst.wiStatus(t, wi)
 	stepPIDsBefore := daemonStepPIDs(wi, "m-e2e-b")
 	if len(stepPIDsBefore) == 0 {
-		t.Fatal("B's parked verification step has no live process to protect")
+		t.Fatal("B's parked review step has no live process to protect")
 	}
 	spawnsAtRelease := len(spawnJournal(t, capB))
 
@@ -270,7 +268,7 @@ func persistedSecret(t *testing.T, d *v1Daemon, wi string) string {
 	t.Helper()
 	var secret string
 	waitUntil(t, 15*time.Second, "daemon never persisted its session secret", func() bool {
-		raw, err := os.ReadFile(filepath.Join(d.dataDir, "runtime-state.json"))
+		raw, err := os.ReadFile(filepath.Join(d.dataDir, "cells", "default", "runtime-state.json"))
 		if err != nil {
 			return false
 		}

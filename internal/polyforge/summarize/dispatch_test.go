@@ -2,7 +2,9 @@ package summarize
 
 // dispatch_test.go: the one-shot dispatch seam's contract — the argv
 // shape (print mode first, the claude context flag per the auth-mode
-// ruling, then exactly the model; the PROMPT rides stdin, never argv),
+// ruling, the settings flags and no tools, the no-session switch, then
+// exactly the model; the PROMPT rides stdin, never argv), no session left
+// behind,
 // the claude context flag pick from the harness config's settings.json
 // env block (the same helpers the step spawn uses), the 5-minute bound
 // (a hung call times out into an error, never a stall), the raw failure
@@ -20,26 +22,30 @@ import (
 	"github.com/silgrid/polyforge/internal/common/harness"
 )
 
-// The argv shape: print mode first, then the claude context flag, then
-// exactly the candidate's model id. The prompt never appears in argv —
-// the argv is exactly this shape, nothing else.
+// The argv shape: print mode first, then for pi the no-session switch;
+// for claude the context flag, the settings flags, the empty tool surface
+// and the no-session-persistence switch;
+// then exactly the candidate's model id. The prompt never appears in argv
+// — the argv is exactly this shape, nothing else.
 func TestDispatchArgsShape(t *testing.T) {
 	pi, err := harness.ParseCandidate("pi:example-gateway/model-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := dispatchArgs(pi, ""); strings.Join(got, " ") != "-p --model example-gateway/model-a" {
+	if got := dispatchArgs(pi, ""); strings.Join(got, " ") != "-p --no-session --model example-gateway/model-a" {
 		t.Fatalf("pi argv = %v", got)
 	}
 	cl, err := harness.ParseCandidate("claude:claude-opus-5-5")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := dispatchArgs(cl, "--bare"); strings.Join(got, " ") != "-p --bare --model claude-opus-5-5" {
-		t.Fatalf("claude argv = %v", got)
-	}
-	if got := dispatchArgs(cl, "--safe-mode"); strings.Join(got, " ") != "-p --safe-mode --model claude-opus-5-5" {
-		t.Fatalf("claude safe-mode argv = %v", got)
+	for _, ctx := range []string{"--bare", "--safe-mode"} {
+		want := []string{"-p", ctx, "--setting-sources", "user",
+			"--settings", `{"enabledPlugins":{"cc-plugin-agents-md@builtin":false}}`,
+			"--tools", "", "--no-session-persistence", "--model", "claude-opus-5-5"}
+		if got := dispatchArgs(cl, ctx); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("claude %s argv = %q, want %q", ctx, got, want)
+		}
 	}
 }
 
@@ -93,6 +99,54 @@ func scriptBin(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// A summarize dispatch is a one-shot call and leaves no session behind
+// a harness stand-in that, like the real one, writes a
+// session record unless its no-session switch is on — pi under
+// $HOME/.pi/agent/sessions/--<cwd>--/, claude under
+// $CLAUDE_CONFIG_DIR/projects/<cwd>/ — answers its one line, and no
+// session file exists afterwards.
+func TestDispatchLeavesNoSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := filepath.Join(t.TempDir(), "summarize-cwd")
+	ccDir := t.TempDir() // no settings.json: --safe-mode
+	piBin := scriptBin(t, `cat >/dev/null
+for a in "$@"; do if [ "$a" = --no-session ]; then echo summary-from-pi; exit 0; fi; done
+d="$HOME/.pi/agent/sessions/--$(pwd -P | sed 's|^/||; s|/|-|g')--"
+mkdir -p "$d" && echo '{"type":"session"}' > "$d/$(date +%s%N).jsonl"
+echo summary-from-pi
+`)
+	claudeBin := scriptBin(t, `cat >/dev/null
+for a in "$@"; do if [ "$a" = --no-session-persistence ]; then echo summary-from-claude; exit 0; fi; done
+d="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's|[^A-Za-z0-9]|-|g')"
+mkdir -p "$d" && echo '{"type":"user"}' > "$d/x.jsonl"
+echo summary-from-claude
+`)
+	d := &ExecDispatcher{PiBin: piBin, ClaudeBin: func() string { return claudeBin }, ClaudeConfigDir: ccDir, Dir: cwd}
+	for _, c := range []struct{ candidate, answer, store string }{
+		{"pi:m", "summary-from-pi", filepath.Join(home, ".pi", "agent", "sessions")},
+		{"claude:claude-haiku-5-5", "summary-from-claude", filepath.Join(ccDir, "projects")},
+	} {
+		out, err := d.Dispatch(c.candidate, "prompt")
+		if err != nil {
+			t.Fatalf("%s dispatch: %v", c.candidate, err)
+		}
+		if got := strings.TrimSpace(out); got != c.answer {
+			t.Fatalf("%s dispatch answered %q, want the stand-in's %q", c.candidate, got, c.answer)
+		}
+		var left []string
+		_ = filepath.WalkDir(c.store, func(p string, e os.DirEntry, err error) error {
+			if err == nil && !e.IsDir() {
+				left = append(left, p)
+			}
+			return nil
+		})
+		if len(left) > 0 {
+			t.Errorf("the %s dispatch left session files under %s: %q", c.candidate, c.store, left)
+		}
+	}
 }
 
 // The prompt rides STDIN, never argv: a harness stand-in that answers

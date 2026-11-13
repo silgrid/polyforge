@@ -66,25 +66,3 @@ func TestW30FilingDeepeningContract(t *testing.T) {
 		}
 	}
 }
-
-func TestW30GrillRequiresExternalOracle(t *testing.T) {
-	root := v1Root(t)
-	for _, rel := range []string{
-		filepath.Join("workflows", "feature-full", "steps", "grill.md"),
-		filepath.Join("workflows", "autopilot", "steps", "grill.md"),
-	} {
-		b, err := os.ReadFile(filepath.Join(root, rel))
-		if err != nil {
-			t.Fatalf("%s is a grill-family step text the external-oracle clause must reach: %v", rel, err)
-		}
-		s := string(b)
-		// `reject` is backticked: the base autopilot text already carries the
-		// substring "reject" in prose, so the unbackticked form would pass on
-		// the pre-change tree; only the new clause carries `reject`.
-		for _, want := range []string{"external oracle", "falsifiable", "`reject`"} {
-			if !strings.Contains(s, want) {
-				t.Errorf("%s must carry the external-oracle marker %q — grill reviews the owner proposal / acceptance and may reject an acceptance that is not external oracle-ized (falsifiable)", rel, want)
-			}
-		}
-	}
-}

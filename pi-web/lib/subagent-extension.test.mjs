@@ -1,0 +1,698 @@
+import "#test-env";
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createJiti } from "jiti";
+
+const {
+  createSubagentExtension,
+  preferPiWebSubagentExtension,
+  subagentFinalText,
+  subagentNotificationText,
+  SUBAGENT_NOTIFICATION_PREFIX,
+} = await createJiti(import.meta.url).import("./subagent-extension.ts");
+
+async function loadTools(runtime, getProfiles = () => [], isEnabled = () => true) {
+  const tools = new Map();
+  const sent = [];
+  const extension = createSubagentExtension(runtime, getProfiles, isEnabled);
+  await extension.factory({
+    registerTool(tool) { tools.set(tool.name, tool); },
+    sendMessage(message, options) { sent.push({ message, options }); },
+  });
+  return { tools, sent };
+}
+
+function run(overrides = {}) {
+  return {
+    sessionId: "child-session",
+    sessionPath: "/tmp/child.jsonl",
+    parentSessionId: "parent-session",
+    parentToolCallId: "tool-call",
+    profile: "explore",
+    description: "Find parser",
+    task: "Find the parser",
+    runInBackground: false,
+    status: "running",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+test("integrated extension exposes the legacy-compatible tool names", async () => {
+  const tools = new Map();
+  const extension = createSubagentExtension({
+    async start(request) {
+      const running = {
+        sessionId: "child-session",
+        sessionPath: "/tmp/child.jsonl",
+        parentSessionId: "parent-session",
+        parentToolCallId: request.parentToolCallId,
+        profile: request.profile,
+        description: request.description,
+        task: request.task,
+        runInBackground: true,
+        status: "running",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+      return {
+        run: running,
+        completion: Promise.resolve({
+          ...running,
+          status: "completed",
+          completedAt: "2026-01-01T00:01:00.000Z",
+          result: "Done",
+        }),
+      };
+    },
+    async get() { return null; },
+    async steer() {},
+    async notifyParent() {},
+  }, () => []);
+  await extension.factory({
+    registerTool(tool) { tools.set(tool.name, tool); },
+    sendMessage() {},
+  });
+
+  assert.deepEqual([...tools.keys()], ["Agent", "get_subagent_result", "steer_subagent"]);
+  const result = await tools.get("Agent").execute(
+    "tool-call",
+    {
+      subagent_type: "explore",
+      prompt: "Find the parser",
+      input_files: ["docs/parser.md"],
+      description: "Find parser",
+      run_in_background: true,
+    },
+    undefined,
+    undefined,
+    { sessionManager: { getSessionId: () => "parent-session" } },
+  );
+  assert.equal(result.details.kind, "pi-web-subagent");
+  assert.equal(result.details.sessionId, "child-session");
+});
+
+test("control tools are model-only and activated on registration", async () => {
+  const runtime = {
+    async start() { throw new Error("unused"); },
+    async get() { return null; },
+    async steer() {},
+    async notifyParent() {},
+  };
+  const { tools } = await loadTools(runtime);
+
+  assert.deepEqual(
+    [...tools.values()].map(({ name, exposure, defaultActive }) => ({ name, exposure, defaultActive })),
+    [
+      { name: "Agent", exposure: "model-only", defaultActive: undefined },
+      { name: "get_subagent_result", exposure: "model-only", defaultActive: undefined },
+      { name: "steer_subagent", exposure: "model-only", defaultActive: undefined },
+    ],
+  );
+
+  // A background report arrives by itself, so the description must not read as a status check.
+  assert.match(tools.get("get_subagent_result").description, /arrives on its own/);
+});
+
+test("integrated extension registers no tools while its feature is disabled", async () => {
+  let enabled = false;
+  const runtime = {
+    async start() { throw new Error("unused"); },
+    async get() { return null; },
+    async steer() {},
+    async notifyParent() {},
+  };
+  const extension = createSubagentExtension(runtime, () => [], () => enabled);
+  const disabledTools = new Map();
+  await extension.factory({ registerTool(tool) { disabledTools.set(tool.name, tool); } });
+  assert.deepEqual([...disabledTools], []);
+
+  enabled = true;
+  const enabledTools = new Map();
+  await extension.factory({ registerTool(tool) { enabledTools.set(tool.name, tool); } });
+  assert.deepEqual([...enabledTools.keys()], ["Agent", "get_subagent_result", "steer_subagent"]);
+});
+
+test("Agent tool description lists enabled effective profiles and refreshes when its factory reloads", async () => {
+  const runtime = {
+    async start() { throw new Error("unused"); },
+    async get() { return null; },
+    async steer() {},
+    async notifyParent() {},
+  };
+  let profiles = [
+    {
+      name: "explore",
+      displayName: "Explore",
+      description: "Inspect the codebase",
+      systemPrompt: "Explore",
+      tools: ["read", "grep"],
+      inheritContext: false,
+      runInBackground: false,
+      enabled: true,
+      scope: "builtin",
+    },
+    {
+      name: "disabled-agent",
+      displayName: "Disabled agent",
+      description: "Must stay hidden",
+      systemPrompt: "Disabled",
+      tools: [],
+      model: "provider/hidden",
+      inheritContext: false,
+      runInBackground: false,
+      enabled: false,
+      scope: "project",
+    },
+  ];
+  const extension = createSubagentExtension(runtime, () => profiles);
+
+  const firstTools = new Map();
+  await extension.factory({ registerTool(tool) { firstTools.set(tool.name, tool); }, sendMessage() {} });
+  const first = firstTools.get("Agent");
+  assert.match(first.description, /- explore: Inspect the codebase \(Tools: read, grep\)/);
+  assert.doesNotMatch(first.description, /disabled-agent|Must stay hidden/);
+  assert.match(first.parameters.properties.subagent_type.description, /Available types: explore/);
+
+  profiles = [{
+    name: "reviewer",
+    displayName: "Reviewer",
+    description: "Review a change",
+    systemPrompt: "Review",
+    tools: [],
+    model: "provider/review-model",
+    thinking: "high",
+    inheritContext: false,
+    runInBackground: false,
+    enabled: true,
+    scope: "project",
+  }];
+  const reloadedTools = new Map();
+  await extension.factory({ registerTool(tool) { reloadedTools.set(tool.name, tool); }, sendMessage() {} });
+  const reloaded = reloadedTools.get("Agent");
+  assert.match(reloaded.description, /- reviewer: Review a change \(Tools: none; Model: provider\/review-model; Thinking: high\)/);
+  assert.doesNotMatch(reloaded.description, /explore/);
+  assert.match(reloaded.parameters.properties.subagent_type.description, /Available types: reviewer/);
+});
+
+test("integrated extension removes a legacy extension that owns the same tools", () => {
+  const host = {
+    path: "<inline:pi-web-subagents>",
+    tools: new Map([["Agent", {}], ["get_subagent_result", {}], ["steer_subagent", {}]]),
+  };
+  const legacy = {
+    path: "/tmp/pi-subagents/index.ts",
+    tools: new Map([["Agent", {}], ["get_subagent_result", {}], ["steer_subagent", {}]]),
+  };
+  const other = { path: "/tmp/other.ts", tools: new Map([["search", {}]]) };
+  const lookalike = {
+    path: "/tmp/unrelated/index.ts",
+    tools: new Map([["Agent", {}], ["get_subagent_result", {}], ["steer_subagent", {}], ["custom", {}]]),
+  };
+  const result = preferPiWebSubagentExtension({
+    extensions: [legacy, lookalike, host, other],
+    errors: [{ path: legacy.path, error: "duplicate" }, { path: other.path, error: "other" }],
+  });
+
+  assert.deepEqual(result.extensions.map((extension) => extension.path), [lookalike.path, host.path, other.path]);
+  assert.deepEqual(result.errors.map((error) => error.path), [other.path]);
+});
+
+test("integrated extension removes recognized legacy extensions with any reserved tool", () => {
+  const host = {
+    path: "<inline:pi-web-subagents>",
+    tools: new Map([["Agent", {}], ["get_subagent_result", {}], ["steer_subagent", {}]]),
+  };
+  for (const toolName of ["Agent", "get_subagent_result", "steer_subagent"]) {
+    const legacy = {
+      path: "/tmp/pi-subagents/index.ts",
+      tools: new Map([[toolName, {}], ["other", {}]]),
+    };
+    const result = preferPiWebSubagentExtension({
+      extensions: [legacy, host],
+      errors: [{
+        path: host.path,
+        error: `Tool "${toolName}" conflicts with ${legacy.path}`,
+      }],
+    });
+    assert.deepEqual(result.extensions, [host]);
+    assert.deepEqual(result.errors, []);
+  }
+});
+
+test("foreground Agent streams updates and returns the completed result", async () => {
+  const updates = [];
+  let request;
+  const { tools } = await loadTools({
+    async start(value) {
+      request = value;
+      value.onUpdate(run({ status: "running" }));
+      return {
+        run: run(),
+        completion: Promise.resolve(run({
+          status: "completed",
+          completedAt: "2026-01-01T00:01:00.000Z",
+          result: "Parser is in lib/parser.ts",
+        })),
+      };
+    },
+    async get() { return null; },
+    async steer() {},
+  });
+  const result = await tools.get("Agent").execute(
+    "tool-call",
+    {
+      subagent_type: "explore",
+      prompt: "Find the parser",
+      input_files: ["docs/parser.md"],
+      description: "Find parser",
+    },
+    undefined,
+    (update) => updates.push(update),
+    { sessionManager: { getSessionId: () => "parent-session" } },
+  );
+
+  assert.equal(request.parentToolCallId, "tool-call");
+  assert.equal(request.task, "Find the parser");
+  assert.equal(request.profile, "explore");
+  assert.deepEqual(request.inputFiles, ["docs/parser.md"]);
+  assert.equal("model" in request, false, "A call that names no model leaves the choice to the profile.");
+  assert.equal("thinking" in request, false);
+  assert.equal("maxTurns" in request, false);
+  assert.equal("inheritContext" in request, false);
+  assert.equal(updates[0].details.status, "running");
+  // The session ID must be in the text so the model can pass it back to `resume` / `get_subagent_result`.
+  assert.equal(result.content[0].text, "Subagent child-session completed.\n\nParser is in lib/parser.ts");
+  assert.equal(result.details.status, "completed");
+  assert.equal(result.isError, undefined);
+});
+
+test("a run may name a different model, which the tool forwards as an override", async () => {
+  const started = [];
+  const { tools } = await loadTools({
+    async start(value) {
+      started.push(value);
+      return {
+        run: run(),
+        completion: Promise.resolve(run({
+          status: "completed",
+          completedAt: "2026-01-01T00:01:00.000Z",
+          result: "Parser is in lib/parser.ts",
+        })),
+      };
+    },
+    async get() { return null; },
+    async steer() {},
+  });
+
+  await tools.get("Agent").execute(
+    "tool-call",
+    { subagent_type: "explore", prompt: "Find the parser", description: "Find parser", model: "deepseek/deepseek-chat" },
+    undefined,
+    undefined,
+    { sessionManager: { getSessionId: () => "parent-session" } },
+  );
+
+  // The profile still decides when the call names none (asserted by the foreground test above); this
+  // is the one per-run override the tool keeps, so the runtime must receive it.
+  assert.equal(started[0].model, "deepseek/deepseek-chat");
+});
+
+test("only the background notification text marks itself as not a user message", () => {
+  const completed = run({ status: "completed", completedAt: "2026-01-01T00:01:00.000Z", result: "Parser is in lib/parser.ts" });
+
+  // Background completions land as a `custom` message, which pi replays to the model as a user turn;
+  // without the marker a compaction pass files the report under Goal / Constraints (#875).
+  assert.equal(subagentNotificationText(completed), `${SUBAGENT_NOTIFICATION_PREFIX}${subagentFinalText(completed)}`);
+  assert.ok(SUBAGENT_NOTIFICATION_PREFIX.includes("not a message from the user"));
+  assert.ok(subagentNotificationText(completed).endsWith("Parser is in lib/parser.ts"));
+  // Tool results already carry the `toolResult` role, so they stay unprefixed.
+  assert.ok(!subagentFinalText(completed).startsWith(SUBAGENT_NOTIFICATION_PREFIX));
+});
+
+test("an isolated run's result says where its worktree was as the result was recorded, never in git's words (#1202)", () => {
+  const isolated = (overrides) => run({
+    status: "completed",
+    completedAt: "2026-01-01T00:01:00.000Z",
+    result: "Parser is in lib/parser.ts",
+    worktreePath: "/repo-worktrees/pi-web-agent-1",
+    worktreeBranch: "pi-web-agent-1",
+    worktreeExists: false,
+    ...overrides,
+  });
+  const removed = "Its worktree was removed; branch pi-web-agent-1 keeps any commits it made.";
+  const kept = "Its worktree was kept at /repo-worktrees/pi-web-agent-1 (branch pi-web-agent-1) because it still has uncommitted or untracked files.";
+  const stillThere = "Its worktree is still at /repo-worktrees/pi-web-agent-1 (branch pi-web-agent-1).";
+  const retained = (reason) => `Worktree retained at /repo-worktrees/pi-web-agent-1: ${reason}`;
+  const dirty = retained("fatal: '/repo-worktrees/pi-web-agent-1' contains modified or untracked files, use --force to delete it");
+
+  // The line follows the status, before the subagent's own words.
+  assert.equal(subagentFinalText(isolated()), `Subagent child-session completed.\n\n${removed}\n\nParser is in lib/parser.ts`);
+  assert.equal(
+    subagentFinalText(isolated({ worktreeExists: true, worktreeCleanupError: dirty })),
+    `Subagent child-session completed.\n\n${kept}\n\nParser is in lib/parser.ts`,
+  );
+  // A checkout removed during the run (from the sidebar's worktree picker) is gone, though git's removal then failed.
+  assert.equal(
+    subagentFinalText(isolated({ worktreeCleanupError: retained("Not a worktree of this repository: /repo-worktrees/pi-web-agent-1") })),
+    `Subagent child-session completed.\n\n${removed}\n\nParser is in lib/parser.ts`,
+  );
+  // Still there without this run's refusal for files (a resumed run removes nothing), or for a submodule or a lock.
+  for (const worktreeCleanupError of [
+    undefined,
+    retained("fatal: working trees containing submodules cannot be moved or removed"),
+    retained("fatal: cannot remove a locked working tree;\nuse 'remove -f -f' to override or unlock first"),
+  ]) {
+    assert.equal(
+      subagentFinalText(isolated({ worktreeExists: true, worktreeCleanupError })),
+      `Subagent child-session completed.\n\n${stillThere}\n\nParser is in lib/parser.ts`,
+    );
+  }
+  assert.equal(subagentFinalText(isolated({ result: undefined })), `Subagent child-session completed without text output.\n\n${removed}`);
+  assert.equal(
+    subagentFinalText(isolated({ status: "failed", error: "provider down", result: "half" })),
+    `Subagent child-session failed: provider down\n\n${removed}\n\nPartial output:\n\nhalf`,
+  );
+  assert.equal(
+    subagentFinalText(isolated({ status: "aborted", result: undefined, worktreeExists: true, worktreeCleanupError: dirty })),
+    `Subagent child-session was stopped.\n\n${kept}`,
+  );
+  // The background notification carries the same line.
+  assert.ok(subagentNotificationText(isolated({ worktreeExists: true, worktreeCleanupError: dirty })).includes(kept));
+  for (const status of ["completed", "aborted"]) {
+    assert.doesNotMatch(subagentFinalText(isolated({ status, worktreeExists: true, worktreeCleanupError: dirty })), /--force|fatal:/);
+  }
+  // Nothing is said before the result is recorded, once nothing will record it, or for a result recorded before #1202.
+  for (const status of ["running", "queued", "interrupted", "completed"]) {
+    assert.doesNotMatch(subagentFinalText(isolated({ status, result: undefined, worktreeExists: undefined })), /worktree/i);
+  }
+});
+
+test("a run without isolation says nothing about a worktree", () => {
+  for (const overrides of [
+    { status: "completed", result: "Parser is in lib/parser.ts" },
+    { status: "completed" },
+    { status: "failed", error: "provider down", result: "half" },
+    { status: "aborted" },
+  ]) {
+    assert.doesNotMatch(subagentFinalText(run({ completedAt: "2026-01-01T00:01:00.000Z", ...overrides })), /worktree/i);
+  }
+  assert.equal(
+    subagentFinalText(run({ status: "completed", completedAt: "2026-01-01T00:01:00.000Z", result: "Parser is in lib/parser.ts" })),
+    "Subagent child-session completed.\n\nParser is in lib/parser.ts",
+  );
+});
+
+test("a resumed run's notification says it supersedes the earlier report (#985)", () => {
+  const first = run({ runInBackground: true, status: "completed", completedAt: "2026-01-01T00:01:00.000Z", result: "Parser is in lib/parser.ts" });
+  const resumed = { ...first, completedAt: "2026-01-01T00:20:00.000Z", result: "Parser moved to lib/parse.ts", resumed: true };
+
+  const text = subagentNotificationText(resumed);
+
+  assert.notEqual(text, subagentNotificationText({ ...resumed, resumed: undefined }));
+  assert.ok(text.startsWith(SUBAGENT_NOTIFICATION_PREFIX));
+  assert.match(text, /resumed run of subagent child-session; it supersedes any earlier report/);
+  assert.ok(text.endsWith(subagentFinalText(resumed)));
+  // A first run keeps its wording, and tool results never carry the resumed line.
+  assert.equal(subagentNotificationText(first), `${SUBAGENT_NOTIFICATION_PREFIX}${subagentFinalText(first)}`);
+  assert.doesNotMatch(subagentFinalText(resumed), /resumed run/);
+});
+
+test("foreground Agent reports startup and execution failures as tool errors", async () => {
+  const { tools: startFailureTools } = await loadTools({
+    async start() { throw new Error("profile missing"); },
+    async get() { return null; },
+    async steer() {},
+  });
+  const startup = await startFailureTools.get("Agent").execute(
+    "tool-call",
+    { prompt: "task", description: "desc" },
+    undefined,
+    undefined,
+    { sessionManager: { getSessionId: () => "parent-session" } },
+  );
+  assert.equal(startup.isError, true);
+  assert.equal(startup.content[0].text, "profile missing");
+
+  const { tools: runFailureTools } = await loadTools({
+    async start() {
+      return {
+        run: run(),
+        completion: Promise.resolve(run({ status: "failed", error: "model failed" })),
+      };
+    },
+    async get() { return null; },
+    async steer() {},
+  });
+  const failure = await runFailureTools.get("Agent").execute(
+    "tool-call",
+    { prompt: "task", description: "desc" },
+    undefined,
+    undefined,
+    { sessionManager: { getSessionId: () => "parent-session" } },
+  );
+  assert.equal(failure.isError, true);
+  assert.match(failure.content[0].text, /model failed/);
+});
+
+test("Agent resume routes the prompt to the existing-session runtime", async () => {
+  let resumed;
+  const { tools } = await loadTools({
+    async start() { throw new Error("must use resume"); },
+    async resume(request) {
+      resumed = request;
+      return { run: run({ sessionId: "existing", runInBackground: false }), completion: Promise.resolve(run({ sessionId: "existing", status: "completed", result: "continued" })) };
+    },
+    async get() { return null; },
+    async steer() {},
+  });
+  const result = await tools.get("Agent").execute(
+    "tool-call",
+    { resume: "existing", prompt: "Continue the review", description: "Continue review" },
+    undefined,
+    undefined,
+    { sessionManager: { getSessionId: () => "parent-session" } },
+  );
+  assert.equal(resumed.sessionId, "existing");
+  assert.equal(resumed.task, "Continue the review");
+  assert.equal(result.content[0].text, "Subagent existing completed.\n\ncontinued");
+});
+
+test("background Agent returns immediately and delegates one completion notification", async () => {
+  let finish;
+  const notifications = [];
+  const completion = new Promise((resolve) => { finish = resolve; });
+  const { tools, sent } = await loadTools({
+    async start() {
+      return { run: run({ runInBackground: true }), completion };
+    },
+    async get() { return null; },
+    async steer() {},
+    async notifyParent(completed) { notifications.push(completed); },
+  });
+  const result = await tools.get("Agent").execute(
+    "tool-call",
+    { prompt: "task", description: "desc", run_in_background: true },
+    undefined,
+    undefined,
+    { sessionManager: { getSessionId: () => "parent-session" } },
+  );
+  assert.match(result.content[0].text, /started in background/);
+  // The report arrives by itself, so the answer says it need not be collected with get_subagent_result.
+  assert.match(result.content[0].text, /arrives in this conversation on its own when it completes; you do not need to call get_subagent_result for it/);
+  assert.equal(sent.length, 0);
+
+  finish(run({ runInBackground: true, status: "completed", result: "done" }));
+  await completion;
+  await Promise.resolve();
+  assert.equal(sent.length, 0);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].result, "done");
+});
+
+test("an id that finds nothing is answered with this session's latest subagents", async () => {
+  const toolResult = (sessionId, description) => ({
+    type: "message",
+    message: { role: "toolResult", toolName: "Agent", details: { kind: "pi-web-subagent", sessionId, description } },
+  });
+  const entries = [
+    toolResult("oldest", "Old task"),
+    { type: "message", message: { role: "toolResult", toolName: "read", details: { path: "/tmp/a" } } },
+    toolResult("child-a", "First look"),
+    toolResult("child-b", "Second look"),
+    toolResult("child-a", "First look again"),
+    ...Array.from({ length: 9 }, (_, index) => toolResult(`later-${index}`, "")),
+  ];
+  const ctx = { sessionManager: { getSessionId: () => "parent-session", getEntries: () => entries } };
+  const { tools } = await loadTools({
+    async start() { throw new Error("unused"); },
+    async resume({ sessionId }) { throw new Error(`Subagent not found: ${sessionId}`); },
+    async get() { return null; },
+    async steer() {},
+    markResultConsumed() {},
+  });
+
+  const result = await tools.get("get_subagent_result").execute("call", { agent_id: "mangled" }, undefined, undefined, ctx);
+  assert.equal(result.isError, true);
+  const lines = result.content[0].text.split("\n");
+  assert.equal(lines[0], "Subagent not found: mangled");
+  assert.equal(lines[1], "This session's latest subagents:");
+  // Newest first, ten at most, each id once with its latest description.
+  assert.equal(lines.length, 12);
+  assert.equal(lines[2], "- later-8");
+  assert.equal(lines[10], "- later-0");
+  assert.equal(lines[11], "- child-a: First look again");
+
+  const resumed = await tools.get("Agent").execute(
+    "call",
+    { prompt: "go on", description: "Continue", resume: "mangled" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(resumed.isError, true);
+  assert.match(resumed.content[0].text, /^Subagent not found: mangled\nThis session's latest subagents:\n- later-8/);
+
+  // Nothing to offer: the error stays as it was.
+  const none = await tools.get("get_subagent_result").execute("call", { agent_id: "mangled" }, undefined, undefined, { sessionManager: { getEntries: () => [] } });
+  assert.equal(none.content[0].text, "Subagent not found: mangled");
+});
+
+test("get_subagent_result covers missing, running, completed, failed, and aborted runs", async () => {
+  let current = null;
+  const { tools } = await loadTools({
+    async start() { throw new Error("unused"); },
+    async get() { return current; },
+    async steer() {},
+    markResultConsumed() {},
+  });
+  const tool = tools.get("get_subagent_result");
+
+  let result = await tool.execute("call", { agent_id: "missing" });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /not found/);
+
+  current = run();
+  result = await tool.execute("call", { agent_id: "child-session" });
+  assert.equal(result.details.status, "running");
+  assert.equal(result.content[0].text, "Subagent child-session is running.");
+
+  current = run({ status: "completed", result: "done" });
+  result = await tool.execute("call", { agent_id: "child-session" });
+  assert.equal(result.content[0].text, "Subagent child-session completed.\n\ndone");
+
+  current = run({ status: "completed", result: "" });
+  result = await tool.execute("call", { agent_id: "child-session" });
+  assert.equal(result.content[0].text, "Subagent child-session completed without text output.");
+
+  current = run({ status: "failed", error: "boom" });
+  result = await tool.execute("call", { agent_id: "child-session" });
+  assert.match(result.content[0].text, /boom/);
+  assert.equal(result.isError, true);
+
+  current = run({ status: "aborted" });
+  result = await tool.execute("call", { agent_id: "child-session" });
+  assert.match(result.content[0].text, /was stopped/);
+
+  current = run({ status: "interrupted" });
+  result = await tool.execute("call", { agent_id: "child-session" });
+  assert.match(result.content[0].text, /interrupted before completion/);
+});
+
+test("get_subagent_result wait honors abort signals", async () => {
+  const { tools } = await loadTools({
+    async start() { throw new Error("unused"); },
+    async get() { return run(); },
+    async steer() {},
+  });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    tools.get("get_subagent_result").execute("call", { agent_id: "child-session", wait: true }, controller.signal),
+    /Result wait aborted/,
+  );
+});
+
+test("steer_subagent returns success and runtime failures", async () => {
+  const calls = [];
+  const { tools } = await loadTools({
+    async start() { throw new Error("unused"); },
+    async get() { return null; },
+    async steer(id, message) {
+      calls.push([id, message]);
+      if (message === "fail") throw new Error("not running");
+    },
+  });
+  const tool = tools.get("steer_subagent");
+  const success = await tool.execute("call", { agent_id: "child-session", message: "focus" });
+  assert.deepEqual(calls[0], ["child-session", "focus"]);
+  assert.match(success.content[0].text, /sent/);
+
+  const failure = await tool.execute("call", { agent_id: "child-session", message: "fail" });
+  assert.equal(failure.isError, true);
+  assert.equal(failure.content[0].text, "not running");
+});
+
+test("legacy preference leaves unrelated and partial-overlap extensions intact", () => {
+  const host = { path: "<inline:pi-web-subagents>", tools: new Map() };
+  const partial = { path: "/tmp/partial.ts", tools: new Map([["Agent", {}]]) };
+  const base = { extensions: [host, partial], errors: [] };
+  assert.equal(preferPiWebSubagentExtension(base), base);
+
+  const noHost = { extensions: [partial], errors: [] };
+  assert.equal(preferPiWebSubagentExtension(noHost), noHost);
+});
+
+function consumingRuntime(runInfo, consumed) {
+  return {
+    async start() { throw new Error("unused"); },
+    async resume() { throw new Error("unused"); },
+    async get() { return runInfo; },
+    async steer() {},
+    async notifyParent() {},
+    markResultConsumed(collected) { consumed.push(collected); },
+  };
+}
+
+test("collecting a finished background result marks it consumed so the completion notification is skipped", async () => {
+  const consumed = [];
+  const finished = run({
+    runInBackground: true,
+    status: "completed",
+    completedAt: "2026-01-01T00:01:00.000Z",
+    result: "Parser found",
+  });
+  const { tools } = await loadTools(consumingRuntime(finished, consumed));
+
+  const result = await tools.get("get_subagent_result").execute("call", { agent_id: "child-session" });
+
+  assert.equal(result.content[0].text, "Subagent child-session completed.\n\nParser found");
+  // The mark names the collected run, so a later run of the same session is not affected.
+  assert.deepEqual(consumed.map(({ sessionId, completedAt }) => ({ sessionId, completedAt })), [
+    { sessionId: "child-session", completedAt: "2026-01-01T00:01:00.000Z" },
+  ]);
+});
+
+test("a background result that is still running is not marked consumed", async () => {
+  const consumed = [];
+  const { tools } = await loadTools(consumingRuntime(run({ runInBackground: true, status: "running" }), consumed));
+
+  await tools.get("get_subagent_result").execute("call", { agent_id: "child-session" });
+
+  assert.deepEqual(consumed, []);
+});
+
+test("a foreground result is marked consumed in case its Agent wait expired", async () => {
+  const consumed = [];
+  const finished = run({
+    runInBackground: false,
+    status: "failed",
+    completedAt: "2026-01-01T00:01:00.000Z",
+    error: "stream disconnected",
+  });
+  const { tools } = await loadTools(consumingRuntime(finished, consumed));
+
+  const result = await tools.get("get_subagent_result").execute("call", { agent_id: "child-session" });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(consumed, [finished]);
+});

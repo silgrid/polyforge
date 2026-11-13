@@ -1,0 +1,94 @@
+#!/bin/sh
+# gate-id — the identity of this repository's test gate at a commit.
+#
+# Usage:
+#   tools/gate-id [<rev>]          print the gate id (64 lowercase hex)
+#   tools/gate-id --show [<rev>]   print the exact bytes the id hashes
+#
+# Run from the repository root. <rev> defaults to HEAD; both files are read
+# from that commit's tree (git show <rev>:<path>), never from the working
+# tree, so the id is a property of a commit.
+#
+# The test gate is one definition (docs/reference/release.md, "The test
+# gate"): the full plan of the tree's own scope engine — `workflows/_shared/scripts/verify-scope
+# --json --full --base HEAD`, the fast gates, the full commands and the
+# engine-appended dependency audit — run, every command, inside the
+# container built from .polyforge/Dockerfile.verify. The release runs it
+# (or reuses a green tag carrying this id, tools/green-tag check), and a
+# green tag is written only by that gate after a pass (the integrate
+# workflow's full gate, or a human's gate.py --mark-green).
+#
+# What is hashed: sha256 over this text, every line ending in "\n":
+#
+#   polyforge-gate-id 1
+#   dockerfile <sha256 of .polyforge/Dockerfile.verify, its bytes as committed>
+#   <gate line>
+#   ...
+#
+# A gate line is a line of .polyforge/verify-scope.conf with its leading
+# whitespace removed (as the engine reads it) that is neither blank nor a
+# `#` comment and whose key — the text before its first `=` — is one of
+# stack, fast_gate, full_command, check, check_requires_env,
+# check_requires_cmd or check_timeout: the keys that decide which commands
+# a --full plan on an empty diff runs, in which order, under which
+# prerequisites and timeouts. They are kept in file order, byte for byte
+# otherwise. Every other key (forced_full, module_root, test_glob,
+# base_setup, the selection and micro keys, report=) and every
+# comment is left out: editing them does not change the gate. The engine
+# itself, the tests and the code are not hashed — a green tag names one
+# commit, whose tree pins them.
+#
+# Exit 0 with the id on stdout; exit 2 (a message on stderr) when <rev> or
+# either file cannot be read. No network, no mutation.
+set -eu
+
+CONF=".polyforge/verify-scope.conf"
+DOCKERFILE=".polyforge/Dockerfile.verify"
+
+die() { echo "gate-id: $*" >&2; exit 2; }
+
+sha256_of() {   # stdin -> 64 hex
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -c1-64
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -c1-64
+  else
+    die "neither sha256sum nor shasum is on PATH"
+  fi
+}
+
+SHOW=""
+if [ "${1:-}" = "--show" ]; then SHOW=1; shift; fi
+case "${1:-}" in
+  -h|--help) sed -n '2,/^set -eu$/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+  -*) die "unknown option $1 (usage: tools/gate-id [--show] [<rev>])" ;;
+esac
+[ $# -le 1 ] || die "too many arguments (usage: tools/gate-id [--show] [<rev>])"
+REV="${1:-HEAD}"
+
+commit=$(git rev-parse --verify --quiet "$REV^{commit}" 2>/dev/null) || die "$REV is not a commit of this repository"
+work=$(mktemp -d "${TMPDIR:-/tmp}/gate-id.XXXXXX")
+trap 'rm -rf "$work"' EXIT INT TERM
+git show "$commit:$CONF" >"$work/conf" 2>/dev/null || die "$CONF is not in the tree of $REV ($commit)"
+git show "$commit:$DOCKERFILE" >"$work/dockerfile" 2>/dev/null || die "$DOCKERFILE is not in the tree of $REV ($commit): the gate runs in that container"
+
+{
+  echo "polyforge-gate-id 1"
+  echo "dockerfile $(sha256_of <"$work/dockerfile")"
+  awk '
+    { sub(/^[[:space:]]+/, "") }
+    $0 == "" || substr($0, 1, 1) == "#" { next }
+    {
+      i = index($0, "=")
+      if (i == 0) next
+      k = substr($0, 1, i - 1)
+      if (k == "stack" || k == "fast_gate" || k == "full_command" || k == "check" ||
+          k == "check_requires_env" || k == "check_requires_cmd" || k == "check_timeout") print
+    }' "$work/conf"
+} >"$work/input"
+
+if [ -n "$SHOW" ]; then
+  cat "$work/input"
+else
+  sha256_of <"$work/input"
+fi

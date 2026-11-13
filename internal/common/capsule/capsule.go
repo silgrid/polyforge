@@ -9,8 +9,11 @@
 //   - The capsule IS a git worktree; the revision chain IS git history.
 //   - git-dir is externalized: <data>/git/wi_xxx.git — agents cannot reach
 //     hooks/config/index.
-//   - .gitignore covers only repos/ and artifacts/release-*/ (v1 ruling C1 (archive/v1-architecture-spec.md):
-//     transcripts go INTO git; secret scanning is dropped).
+//   - .gitignore covers only repos/, artifacts/release-*/ and the raw
+//     downloads directory artifacts/downloads/ (v1 ruling C1 (archive/v1-architecture-spec.md):
+//     transcripts go INTO git; secret scanning is dropped). A file over
+//     MaxBlobBytes never enters the chain either: the daemon leaves it out
+//     at commit time and lists it in OversizeManifest.
 //   - session-data/ side upload is deleted; transcripts are committed like
 //     any other capsule file.
 package capsule
@@ -19,13 +22,14 @@ import "encoding/json"
 
 // Capsule directory layout (relative to capsule root).
 const (
-	DirArtifacts    = "artifacts"     // step outputs; release trees under artifacts/release-*/
-	DirLogs         = "logs"          // daemons logs, step journals
-	DirRepos        = "repos"         // task repo checkouts (own git histories)
-	DirRuntimeState = "runtime-state" // execution.json, journal, spawn.log
-	DirSession      = "session"       // harness transcripts synced at boundaries
-	DirWorkflows    = "workflows"     // materialized workflow bundle
-	CapsuleJSON     = "capsule.json"  // capsule identity
+	DirArtifacts    = "artifacts"           // step outputs; release trees under artifacts/release-*/
+	DirDownloads    = "artifacts/downloads" // raw downloads (CI artifacts, traces, screenshots, video bundles); never committed
+	DirLogs         = "logs"                // daemons logs, step journals
+	DirRepos        = "repos"               // task repo checkouts (own git histories)
+	DirRuntimeState = "runtime-state"       // execution.json, journal, spawn.log
+	DirSession      = "session"             // harness transcripts synced at boundaries
+	DirWorkflows    = "workflows"           // materialized workflow bundle
+	CapsuleJSON     = "capsule.json"        // capsule identity
 	WorkItemJSON    = "runtime-state/work-item.json"
 	ExecutionJSON   = "runtime-state/execution.json"
 	// RecalledMemoriesJSON is the claim-time memory snapshot the daemon
@@ -35,10 +39,34 @@ const (
 	// (the workspace yaml's memory_policy, else the built-in default),
 	// written by the daemon at claim and rendered into every step prompt.
 	MemoryPolicyJSON = "runtime-state/memory-policy.json"
+	// SkippedStepsJSON is the work item's skipped-step set:
+	// a JSON list of the step ids its lane snapshot declares skippable that
+	// the project's workspace yaml switches off (`skip: true`), in
+	// declaration order. The daemon writes it at the first claim only — a
+	// re-claim or a resume keeps the one the capsule chain carries — and
+	// the driver reads it, never the yaml.
+	SkippedStepsJSON = "runtime-state/skipped-steps.json"
+	// OversizeManifest lists the files the daemon left out of the chain
+	// because each is over MaxBlobBytes: path, size and sha256 (gitops'
+	// commit guard writes it,).
+	OversizeManifest = "artifacts/oversize.json"
+	// StepCallsJSONL is the `pf step` call ledger (workflow contract 4,
+	//): the daemon appends every call of a step before it
+	// runs and what it came to after — the daemon's record of a step's
+	// hand-off and of the hub writes it left pending (stepcall package).
+	StepCallsJSONL = "runtime-state/step-calls.jsonl"
+	// HandoffMD is the work item's one hand-off document (workflow
+	// contract 4,): append-only, each section a
+	// daemon-stamped header over the body a step handed off with
+	// `pf step handoff`.
+	HandoffMD = "artifacts/handoff.md"
 )
 
-// GitignoreContent is the .gitignore written at capsule init (v1 ruling C1 (archive/v1-architecture-spec.md)).
-const GitignoreContent = "/repos/\n/artifacts/release-*/\n"
+// GitignoreContent is the capsule .gitignore (v1 ruling C1 (archive/v1-architecture-spec.md)), written at
+// every claim and rewritten at every recovery, so an existing capsule gets
+// a new line on its next claim or resume. /artifacts/downloads/ is the raw
+// downloads directory (DirDownloads,).
+const GitignoreContent = "/repos/\n/artifacts/release-*/\n/" + DirDownloads + "/\n"
 
 // Identity is capsule.json (v2-converge.md Appendix E.5). Repos records the SHA each task repo
 // was checked out at by the latest materialization (a re-claim that restores the
@@ -83,10 +111,9 @@ type WorkItemDoc struct {
 // recovery wiring) can read a terminal verdict without importing the
 // driver (import cycle: the driver's tests import the runtime).
 const (
-	WorkflowStatusRunning               = "running"
-	WorkflowStatusCompleted             = "completed"
-	WorkflowStatusFailedGate            = "failed_gate"
-	WorkflowStatusFailedRewindExhausted = "failed_rewind_exhausted"
+	WorkflowStatusRunning    = "running"
+	WorkflowStatusCompleted  = "completed"
+	WorkflowStatusFailedGate = "failed_gate"
 	// WorkflowStatusBlocked is the NON-terminal waiting-on-owner state.
 	WorkflowStatusBlocked = "blocked"
 )
@@ -100,35 +127,14 @@ type Execution struct {
 	CurrentStep    string           `json:"current_step"`
 	WorkflowStatus string           `json:"workflow_status"`
 	Steps          map[string]*Step `json:"steps"`
-	ReviewRounds   map[string]int64 `json:"review_rounds"`
 	RewindStats    RewindStats      `json:"rewind_stats"`
 	BudgetConsumed Budget           `json:"budget_consumed"`
 	UpdatedAt      string           `json:"updated_at"`
 	Version        int64            `json:"version"`
-	// ScopeTier is the verification tier the work item runs at
-	//: "scoped" or "full" once derived, "" before the
-	// first verification dispatch. The driver records it once at that
-	// dispatch (from the work-item marker and the lane) and restores it
-	// unchanged on every later re-dispatch — a fresh retry never recomputes
-	// the tier nor asks again. The deliver 「全量重验」 rewind overwrites it
-	// to "full".
-	ScopeTier string `json:"scope_tier,omitempty"`
-	// BlockedReason names why the driver parked the workflow blocked on
-	// its own authority (host-class fault, failure counter at its bound);
-	// empty when blocked on an honest incomplete result or not blocked.
+	// BlockedReason names why the workflow is parked blocked: a step's
+	// own `blocked` hand-off, or the driver's own authority (a host-class
+	// fault, a failure counter at its bound, ...); empty when not blocked.
 	BlockedReason string `json:"blocked_reason,omitempty"`
-	// TerminationReason names why the driver ended the workflow on its own
-	// authority before any gate judged it (a
-	// verification-less delivery lane's out-of-bounds diff — the reason
-	// names the lane to re-file on). Empty for every other ending; the
-	// failed close's hub note carries it.
-	TerminationReason string `json:"termination_reason,omitempty"`
-	// PreFixHeads is the bug-fix lane's pre-fix base: the task-repo
-	// HEADs the reproduction ran on, recorded at the first accepted
-	// repro result and never overwritten. A repro re-run after a fix →
-	// root-cause rewind is told to reproduce against these heads, never
-	// the tree that already carries the fix's mitigation.
-	PreFixHeads map[string]string `json:"pre_fix_heads,omitempty"`
 	// CancelRequested is the durable intent of an owner's reserved
 	// `cancel` answer: written by the answer's own transition together
 	// with workflow_status blocked (the closed status vocabulary is
@@ -144,8 +150,10 @@ type Execution struct {
 	CancelRequested *CancelIntent `json:"cancel_requested,omitempty"`
 }
 
-// CancelIntent is one owner's reserved cancel answer: the question it
-// answered, the answer verbatim, the relayed identity and the stamp.
+// CancelIntent is one owner's cancel the daemon carries out: an `intent:
+// cancel` the step's agent delivered on an owner message (intent.go) — the
+// message's stamp (QuestionID), the owner's words with the agent's reading
+// (Answer), the owner's identity and the stamp.
 type CancelIntent struct {
 	QuestionID string `json:"question_id"`
 	Answer     string `json:"answer"`
@@ -158,6 +166,10 @@ const (
 	StepPending    = "pending"
 	StepInProgress = "in_progress"
 	StepDone       = "done"
+	// StepSkipped is a step the driver never dispatches: the work item's
+	// skipped-step set (SkippedStepsJSON) names it and its lane snapshot
+	// declares it skippable.
+	StepSkipped = "skipped"
 )
 
 type Step struct {
@@ -171,132 +183,52 @@ type Step struct {
 	// the candidate pointer. Archived attempts are stamped with the
 	// candidate the dying dispatch ran. Cleared by a rewind archive (the
 	// era reset).
-	Candidate      string           `json:"candidate,omitempty"`
-	Output         map[string]any   `json:"output,omitempty"`
-	StepStartedAt  string           `json:"step_started_at,omitempty"`
-	BudgetConsumed Budget           `json:"budget_consumed"`
-	Attempts       []Attempt        `json:"attempts"`
-	Answers        []ArchivedAnswer `json:"answers"`
-	// AnswerBase is len(Answers) when the step's answer chain last closed
-	// (a gate-fail rewind, a rewind-range archive, or a
-	// root_cause_addressed:false report): the answers at index >= AnswerBase
-	// form the step's CURRENT attempt chain — the human-gate guarantee counts
-	// only those, and prepareDispatch hands only those to a new dispatch.
-	// Zero until the first close.
-	AnswerBase int `json:"answer_base,omitempty"`
-	// PendingQuestion is the step's open question (D8/D9): the durable
-	// waiting marker while a human is asked; the answer transition archives
-	// the pair and clears it in one atomic write.
-	PendingQuestion *PendingQuestion `json:"pending_question,omitempty"`
-	// PendingRewindInput is the round's gate FAIL verdict: written by the
-	// rewind (the same atomic write that resets the step to pending) and
-	// read by every dispatch of the round — the first one, a retry after
-	// an infra death, a restart after a daemon death. It is
-	// cleared by the acceptance write that ends the round and replaced by
-	// the next rewind or reset.
-	PendingRewindInput *RewindInput `json:"pending_rewind_input,omitempty"`
-	// LastReviewRound is the review step's last
-	// verdict-bearing round's facts — the convergence baseline the next
-	// review FAIL's residual-of judgment compares against. Survives
-	// rewinds (the record of the round that produced them); cleared by
-	// nothing except the next verdict-bearing round overwriting it.
-	LastReviewRound *ReviewRound `json:"last_review_round,omitempty"`
-	// JudgedRepoHash is the task-repo tree hash a GATE step judged when it
-	// last delivered a verdict (PASS or FAIL), driver-written at that
-	// settlement ( criterion 6). A gate re-entered after a
-	// rewind of the lane's build step whose target resubmitted the same
-	// code tree is not re-run: the driver blocks it with a human-visible
-	// reason naming the crashed build attempt — unless the build round was a
-	// metadata-only plan-conformance repair: the facts the
-	// gate last judged carried a blocking entry and its current recomputed
-	// facts carry none, so the gate's input changed while the tree did not.
-	// It covers repos/ only (not driver-owned artifacts/steps archives, which
-	// move every round).
-	// Empty for non-gates and before the gate's first verdict. When the
-	// last verdict was delivered is derived from the attempts ledger (the
-	// gate's newest accepted attempt, or the rewind archive naming it), not
-	// persisted a second time.
-	JudgedRepoHash string `json:"judged_repo_hash,omitempty"`
-	// PendingLightRecheck is the mechanical fast lane's pending light
-	// recheck marker (polyforge#260): set by the mechanical rewind's own
-	// atomic write, the durable carrier of the fast-lane state after the
-	// FAIL verdict's output is replaced — its presence makes the
-	// verification step's next dispatch the light recheck. Cleared by
-	// whichever write settles the light recheck (light pass or escalation)
-	// and by every rewind-range reset (a reset step never carries a stale
-	// marker).
-	PendingLightRecheck *LightRecheck `json:"pending_light_recheck,omitempty"`
+	Candidate     string `json:"candidate,omitempty"`
+	StepStartedAt string `json:"step_started_at,omitempty"`
+	// Round counts the step's rounds: the step_start of a pending step
+	// opens one (its first entry, and every re-entry a rewind's reset
+	// ordered), and a gate's FAIL verdict that routed a rewind opens the
+	// gate's next (the gate stays in_progress; closeGateRoundLocked); a
+	// resume, a crash re-dispatch and an owner's message stay in the
+	// round. Every dispatch of the round carries it as PF_ROUND, so a
+	// command's result file can say which round wrote it. Never cleared.
+	Round          int64     `json:"round,omitempty"`
+	BudgetConsumed Budget    `json:"budget_consumed"`
+	Attempts       []Attempt `json:"attempts"`
 	// Supervision is the step's failure ledger and relaxed supervision
 	// thresholds (v2-converge 2.3/2.4): execution.json is the single
 	// authority for them, so a restart resumes the same counts.
 	Supervision *StepSupervision `json:"supervision,omitempty"`
-	// BindingRevisions is the owner-authorized revision ledger of the
-	// step's accepted result: one entry per corrected e2e-author binding
-	// command. The output above carries the latest value;
-	// this list is the audit record of each correction, so a later
-	// materialization never resurrects the superseded command and a reader
-	// can see exactly what was changed, by whom and why. Nothing else in
-	// the output is touched by a revision.
-	BindingRevisions []BindingRevision `json:"binding_revisions,omitempty"`
 	// Dispatch is the derivation ordinal whose result the step awaits:
 	// written by the step_start of that dispatch, cleared by the write
 	// that settles it (an accepted result or a failed dispatch). A driver
 	// starting with it equal to the current ordinal settles the envelope
 	// a dead predecessor already collected instead of dispatching again.
 	Dispatch int64 `json:"dispatch,omitempty"`
-	// EnvelopeRejects is the step's consecutive envelope-rejection count
-	// (the in-process retry lane's bound): incremented by the driver's
-	// rejection write, reset by an accepted result, a rewind reset or an
-	// owner continue. EnvelopeRejectSpawnN is the ordinal the last counted
-	// rejection belonged to, so a restart that re-collects the same
-	// archived envelope does not count it twice.
-	EnvelopeRejects      int   `json:"envelope_rejects,omitempty"`
-	EnvelopeRejectSpawnN int64 `json:"envelope_reject_spawn_n,omitempty"`
-	// OwnerRulings is the review step's machine copy of the owner's
-	// answers to the review owner exit (an all-off-graph FAIL): one
-	// entry per amend-upstream or waive ruling, written by the answer's
-	// own transition, read by the routing and by review re-entry. The
-	// verbatim record the later steps read is the `## Owner rulings`
-	// section of artifacts/grill-qa.md, which the driver appends once
-	// per ruling (keyed on QuestionID + AnsweredAt) after this write.
-	OwnerRulings []OwnerRuling `json:"owner_rulings,omitempty"`
+	// StartHeads are the task repos' HEADs when the step's current round
+	// opened (workflow contract 4): written by the round's first
+	// step_start, read by the daemon's `pf step handoff` stamp as each
+	// repo's start commit, so a section's span is its round's own work.
+	// Nil = none recorded.
+	StartHeads *StartHeads `json:"start_heads,omitempty"`
 }
 
-// OwnerRuling is one owner answer to the review owner exit: its kind
-// (amend-upstream or waive), the answer verbatim with the hub-relayed
-// identity and the archive stamp, the answering question id, the
-// review findings it addresses (positional s<n>#<k> references) and the
-// step the ruling routed to ("" for a waive: review re-runs).
-type OwnerRuling struct {
-	Kind       string   `json:"kind"`
-	QuestionID string   `json:"question_id"`
-	Answer     string   `json:"answer"`
-	AnsweredBy string   `json:"answered_by"`
-	AnsweredAt string   `json:"answered_at"`
-	Findings   []string `json:"findings"`
-	RoutedTo   string   `json:"routed_to,omitempty"`
+// StartHeads are the task repos' HEADs (repo name → commit) at the start
+// of the step round Round.
+type StartHeads struct {
+	Round int64             `json:"round"`
+	Heads map[string]string `json:"heads"`
 }
 
-// BindingRevision is one owner-authorized correction of a done
-// e2e-author step's binding command: the same output
-// shape, one command replaced, everything else left byte-identical.
-type BindingRevision struct {
-	Index  int    `json:"index"`
-	Before string `json:"before"`
-	After  string `json:"after"`
-	By     string `json:"by,omitempty"`
-	Reason string `json:"reason,omitempty"`
-	At     string `json:"at"`
-}
-
-// BindingCorrection is one requested correction in an owner revision
-// the binding at Index gets Command, verbatim. One
-// revision carries a list because a malformed quote can affect every
-// binding of the same authored result, and the corrected output is
-// validated as a whole.
-type BindingCorrection struct {
-	Index   int
-	Command string
+// OwnerRewindRequest is a rewind the owner's word orders (a step's
+// hand-off `rewind --to <step> --per-owner`, workflow contract 4): the work
+// item rewinds to To, an agent step before the current one, and Reason —
+// the owner's message and the step's reading of it — is recorded on the
+// rewind ledger. By names the owner.
+type OwnerRewindRequest struct {
+	To     string
+	Reason string
+	By     string
 }
 
 // StepSupervision is one step's driver-owned supervision state.
@@ -304,8 +236,9 @@ type StepSupervision struct {
 	// FailureCount counts failed dispatches since the last reset (gate
 	// rewind into the step, switch to a new candidate, human continue).
 	FailureCount int `json:"failure_count,omitempty"`
-	// LongTaskTimeouts counts step_timeout_long_task verdicts since the
-	// last reset; the second one blocks the step.
+	// LongTaskTimeouts counts the timeout-class verdicts
+	// (step_timeout_long_task and, since workflow contract 4, tool_hung)
+	// since the last reset; the second one blocks the step.
 	LongTaskTimeouts int `json:"long_task_timeouts,omitempty"`
 	// SlowModelTimeouts counts step_timeout_slow_model rotations since the
 	// same resets as LongTaskTimeouts; a later slow-model timeout is
@@ -364,91 +297,35 @@ type Budget struct {
 	WallMs int64 `json:"wall_ms"`
 }
 
-type RepoRef struct {
-	Repo string `json:"repo"`
-	SHA  string `json:"sha"`
-}
-
-type RewindInput struct {
-	ToStep string             `json:"to_step"`
-	Note   string             `json:"note"`
-	Refs   map[string]RepoRef `json:"refs"`
-	Reason string             `json:"reason"`
-}
-
-// LightRecheck is the pending light recheck marker (polyforge#260, the
-// mechanical fast lane): the durable carrier of the fast-lane state after
-// the FAIL verdict's output is replaced. Bound is the FAIL verdict's
-// mechanical classification copied verbatim at the mechanical rewind
-// write (never re-typed by any step agent); DiffBase is each task repo's
-// HEAD at the FAIL verdict's settlement (driver-recorded at the rewind
-// write, never step-supplied) — the light recheck's deterministic
-// repair-diff base.
-type LightRecheck struct {
-	Bound    json.RawMessage   `json:"bound"`
-	DiffBase map[string]string `json:"diff_base"`
-}
-
-type PendingQuestion struct {
-	ID       string          `json:"id"`
-	Step     string          `json:"step"`
-	Question string          `json:"question"`
-	Context  json.RawMessage `json:"context,omitempty"`
-	AskedAt  string          `json:"asked_at"`
-}
-
-type ArchivedAnswer struct {
-	QuestionID string `json:"question_id"`
-	Answer     string `json:"answer"`
-	AnsweredBy string `json:"answered_by"`
-	AnsweredAt string `json:"answered_at"`
-}
-
 // RewindRecord is one rewind's ledger entry: the gate
 // that fired it (the edge attribution), its target and its accounting
 // class. The list is the single rewind ledger — Count is its tally
-// (Count == len(Rewinds)) — and a ledger that cannot attribute its own
-// count (Count > len(Rewinds), the pre-w69 shape with no per-record
-// history) proves no per-edge quota: the next rewind fails closed (no
-// compat path, no guess).
+// (Count == len(Rewinds)).
 //
-// Class decides what the record counts toward: RewindCharged occupies
-// its gate→target edge's max_per_step bound and counts toward
-// max_total; RewindUncharged (the automatic light, mechanical and
-// converging rewinds) counts toward max_total only — the runaway guard;
-// RewindOwner (a rewind an owner's explicit answer routed: deliver's
-// "back to code" and 「全量重验」, the review owner exit, the bug-fix and
-// e2e-author owner answers) counts toward neither.
+// Class decides what the record counts toward: RewindCharged (every
+// automatic rewind) counts toward the lane's max_rewinds — the runaway
+// guard, held when a gate hands off fail (`pf step handoff` refuses a fail
+// not citing the owner once it is spent); RewindOwner (a rewind the
+// owner's word routed: a gate's fail or a rewind --to citing the owner)
+// counts toward nothing.
+//
+// By, At and Reason are set on a rewind --to citing the owner only: who
+// ordered it, when (RFC3339Nano) and the reason verbatim; Gate is then the
+// step it was sent back from.
 type RewindRecord struct {
 	Gate   string `json:"gate"`
 	ToStep string `json:"to_step"`
 	Class  string `json:"class"`
+	By     string `json:"by,omitempty"`
+	At     string `json:"at,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // The rewind accounting classes (RewindRecord.Class).
 const (
-	RewindCharged   = "charged"
-	RewindUncharged = "uncharged"
-	RewindOwner     = "owner"
+	RewindCharged = "charged"
+	RewindOwner   = "owner"
 )
-
-// ReviewRound is the last verdict-bearing review
-// round's facts: the round ordinal (execution.json's review_rounds count),
-// its blocking-findings count, and the task-repo HEADs the round judged
-// (code review: recorded for EVERY verdict-bearing round — a FAIL names
-// the tree it failed, a PASS the tree it covered — so the next
-// re-entry's fix surface always has an anchor that survives rewinds,
-// unlike reviewed_heads which a PASS alone writes). Written only by
-// the settlement of a review round that carried a verdict — a pass
-// completion or a gate FAIL — in that same atomic write; a needs_input
-// or incomplete round records nothing. The converging-round quota
-// judgment compares the next FAIL's residual-marked blocking findings
-// against it.
-type ReviewRound struct {
-	Round    int64             `json:"round"`
-	Blocking int64             `json:"blocking"`
-	Heads    map[string]string `json:"heads,omitempty"`
-}
 
 type RewindStats struct {
 	Count   int64          `json:"count"`

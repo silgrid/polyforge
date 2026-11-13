@@ -108,6 +108,9 @@ type monitorCfg struct {
 	// locateLive resolves the live harness transcript on demand (F3);
 	// nil = the transcript sync is disabled.
 	locateLive func(capsuleDir string, spawnAt time.Time, harness, session string) string
+	// syncSubagents copies the capsule's subagent transcripts into it
+	// beside the main one; nil = not synced.
+	syncSubagents func(capsuleDir string)
 }
 
 // driver phases the supervisor tracks.
@@ -115,6 +118,10 @@ const (
 	phaseBetween = "between_steps"
 	phaseInStep  = "in_step"
 	phaseWaiting = "waiting_human"
+	// phaseQueued: a daemon-run verification waits in the daemon's
+	// heavy-run admission queue no process, no stall
+	// clock (like a human question).
+	phaseQueued = "verify_queued"
 )
 
 // observationGapFactor: a tick arriving later than this many poll
@@ -133,10 +140,23 @@ type dispatchState struct {
 	candidate string // the dispatch's `<harness>:<model>[:<effort>]` ("" = the harness default model)
 	tracker   *supervise.Tracker
 	verdicted bool
+	// awaiting: the dispatch asked the owner (`pf ask`, step_owner_wait)
+	// and waits for the reply with its process resident: no rule judges it
+	// — silence, the tool window and T are not counted while the owner is
+	// asked (workflow contract v2 §5.2, PR 6c). awaitingSince is when the
+	// wait began: the owner's message (step_owner_wait false, PR 6d) ends
+	// it and the whole wait is declared an observation gap of the tracker
+	// (Tracker.ObserveTick), so no stamp the rules judge by — the start T
+	// counts from, the turn's end, a tool's start — carries the wait.
+	awaiting      bool
+	awaitingSince time.Time
 	// waitsBefore is the step's wait-call total over the earlier
 	// dispatches this monitor watched (set before the state is published,
 	// never changed after: readers need no monitor-goroutine access).
 	waitsBefore waitTotal
+	// ctx reads the dispatch's step-session context usage (contextusage.go;
+	// set before the state is published, never replaced).
+	ctx *contextSource
 }
 
 // waitTotal is a step's folded wait-call count and summed seconds
@@ -401,8 +421,12 @@ func (m *Monitor) drainFacts() {
 		case supervise.StepWaitingHuman:
 			m.setPhase(phaseWaiting)
 			m.refreshExec(0)
-		case supervise.StepAnswered:
-			m.setPhase(phaseBetween)
+		case supervise.StepOwnerWait:
+			if m.cur != nil && m.cur.spawnN == v.SpawnN {
+				m.ownerWait(v.Waiting)
+			}
+		case supervise.StepQueued:
+			m.setPhase(phaseQueued)
 			m.refreshExec(0)
 		case supervise.ExecCommitted:
 			m.refreshExec(v.Version)
@@ -436,6 +460,7 @@ func (m *Monitor) onStepStarted(f supervise.StepStarted) {
 	if d.startedAt.IsZero() {
 		d.startedAt = m.now()
 	}
+	d.ctx = newContextSource(m.wi.CapsuleDir, f, m.cfg.locateLive)
 	m.cur = d
 	m.setPhase(phaseInStep)
 	// F3: the transcript sync sources from the latest step_started
@@ -499,7 +524,7 @@ func (m *Monitor) onRetryWait(f supervise.StepRetryWait) {
 
 // refreshExec is the event-triggered read of the authoritative file: the
 // Version to publish (version > 0 is the committed Version the fact
-// named) and the pending_invalid diagnostic.
+// named).
 func (m *Monitor) refreshExec(version int64) {
 	if version > m.dirtyVersion {
 		m.dirtyVersion = version
@@ -515,17 +540,50 @@ func (m *Monitor) refreshExec(version int64) {
 	if exec.Version > m.dirtyVersion {
 		m.dirtyVersion = exec.Version
 	}
-	if st := exec.Steps[exec.CurrentStep]; st != nil && st.PendingQuestion != nil && st.PendingQuestion.ID == "" {
-		// F10: a schema-invalid pending (id missing — e.g. the wire field
-		// name written instead of the schema's `id`) is unanswerable; the
-		// status face ignores it, this event names it.
-		_ = m.log.Append(m.wi.WorkItem, "pending_invalid", map[string]any{
-			"step": st.PendingQuestion.Step, "hint": "execution.json pending_question.id missing; see skill §7.2",
-		})
-	}
 }
 
 func (m *Monitor) execPath() string { return m.execJSONPath() }
+
+// ownerWait moves the current dispatch in or out of the awaiting-owner
+// state. Entering notes when the wait began (once: the driver's fact and
+// the turn-end re-check may both enter it); leaving — the owner's message
+// was accepted by the live process (PR 6d) — declares the whole wait an
+// observation gap of the dispatch's tracker, exactly as observeGap
+// declares the supervisor's own pause: every stamp at or before the
+// wait's START moves forward by the wait (the dispatch's start, the ask
+// turn's end and output, a tool's stamps), so silence, the tool window
+// and T count no owner time, and the driver's declaredPause (the
+// tracker's start against the one it announced) leaves the wait out of
+// the wall booked into T. A stamp the resumed turn wrote after the wait
+// began — the harness answers the message before this fact is drained —
+// stays where it is: a cutoff of now would push it into the future and
+// blind the rules for the wait's length.
+func (m *Monitor) ownerWait(waiting bool) {
+	d := m.cur
+	switch {
+	case waiting && !d.awaiting:
+		d.awaiting, d.awaitingSince = true, m.now()
+	case !waiting && d.awaiting:
+		if gap := m.now().Sub(d.awaitingSince); gap > 0 {
+			d.tracker.ObserveTick(d.awaitingSince, gap)
+		}
+		d.awaiting, d.awaitingSince = false, time.Time{}
+	}
+}
+
+// openAsk reports whether the capsule's asks.jsonl holds an open ask of
+// the dispatch (capsule.OpenAsk: an ask of its step and spawn no reply
+// names). Read only when a rule-1b verdict is about to fire.
+func (m *Monitor) openAsk(d *dispatchState) bool {
+	if m.wi.CapsuleDir == "" {
+		return false
+	}
+	lines, err := capsule.ReadAsks(m.wi.CapsuleDir)
+	if err != nil {
+		return false
+	}
+	return capsule.OpenAsk(lines, d.step, d.spawnN) != nil
+}
 
 // ---------------------------------------------------------------------------
 // judging
@@ -543,8 +601,8 @@ func (m *Monitor) judge() {
 		live = m.cfg.LiveLimits()
 	}
 	if m.cur != nil {
-		if m.cur.verdicted {
-			return
+		if m.cur.verdicted || m.cur.awaiting {
+			return // nothing is judged while the owner is asked
 		}
 		snap := m.cur.tracker.Snapshot(now)
 		if hasLive {
@@ -555,6 +613,15 @@ func (m *Monitor) judge() {
 		}
 		v := supervise.Judge(snap, now, m.cfg.ModelErrorGrace)
 		if v == nil {
+			return
+		}
+		if v.Cause == supervise.CauseEndedWithoutResult && m.openAsk(m.cur) {
+			// The turn-end re-check (workflow contract v2 §2.2): a turn that
+			// ended with an OPEN ask is the step waiting for the owner, never
+			// rule 1b — the driver's own watch of asks.jsonl says so too, but
+			// the verdict must not race it. A turn that ended with neither a
+			// result nor an open ask stays rule 1b.
+			m.ownerWait(true)
 			return
 		}
 		m.cur.verdicted = true
@@ -595,7 +662,8 @@ func (m *Monitor) activity() Activity {
 	now := m.now()
 	snap := d.tracker.Snapshot(now)
 	return Activity{Step: d.step, SpawnN: d.spawnN, StepStartedAt: d.startedAt, LastWorkAt: snap.LastWork, InDispatch: true, Candidate: d.candidate,
-		WaitCalls: d.waitsBefore.calls + snap.WaitCalls, WaitSeconds: d.waitsBefore.secs + snap.WaitSeconds}
+		WaitCalls: d.waitsBefore.calls + snap.WaitCalls, WaitSeconds: d.waitsBefore.secs + snap.WaitSeconds,
+		Context: d.contextUsage(snap)}
 }
 
 // liveProgress answers the watch face's per-dispatch reading (any
@@ -611,7 +679,8 @@ func (m *Monitor) liveProgress() LiveProgress {
 	now := m.now()
 	snap := d.tracker.Snapshot(now)
 	p := LiveProgress{InDispatch: true, Step: d.step, RecentFiles: snap.RecentFiles, ToolCalls: snap.ToolCalls,
-		WaitCalls: d.waitsBefore.calls + snap.WaitCalls, WaitSeconds: d.waitsBefore.secs + snap.WaitSeconds}
+		WaitCalls: d.waitsBefore.calls + snap.WaitCalls, WaitSeconds: d.waitsBefore.secs + snap.WaitSeconds,
+		Context: d.contextUsage(snap)}
 	if n := len(snap.Tools); n > 0 {
 		cur := snap.Tools[n-1] // oldest first: the last is the newest
 		p.Command = cur.Summary
@@ -630,8 +699,8 @@ func (m *Monitor) liveProgress() LiveProgress {
 // capsule itself.
 //
 // A driver that exits over a settled workflow_status — a terminal one
-// (completed, failed_gate, failed_rewind_exhausted) or blocked, the
-// non-terminal owner park its Run loop stops on by design — finished; it
+// (completed, failed_gate) or blocked, the non-terminal owner park its
+// Run loop stops on by design — finished; it
 // did not die. The driver writes that status before it returns, so the
 // read is race-free (and a relaunch over a parked capsule rewrites it to
 // running before its Run starts). The runtime's recovery door is still
@@ -659,8 +728,7 @@ func (m *Monitor) workflowSettled() bool {
 		return false
 	}
 	switch exec.WorkflowStatus {
-	case capsule.WorkflowStatusCompleted, capsule.WorkflowStatusFailedGate,
-		capsule.WorkflowStatusFailedRewindExhausted, capsule.WorkflowStatusBlocked:
+	case capsule.WorkflowStatusCompleted, capsule.WorkflowStatusFailedGate, capsule.WorkflowStatusBlocked:
 		return true
 	}
 	return false
@@ -827,6 +895,9 @@ func (m *Monitor) schedulePush() {
 		// precedes the push in THIS goroutine, so the transcript lands in
 		// the commit it belongs to — and never blocks the select loop.
 		m.syncTranscript(tr)
+		if m.cfg.syncSubagents != nil {
+			m.cfg.syncSubagents(m.wi.CapsuleDir) // the subagent transcripts ride the same commit
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), m.cfg.PushBound)
 		defer cancel()
 		message := fmt.Sprintf("observe: execution v%d", version)
@@ -875,9 +946,13 @@ func (m *Monitor) onPushResult(res pushResult) {
 				"not an occurred boundary-sync failure — excluded from push_failed and the M8 read-through by design",
 		})
 	} else {
-		_ = m.log.Append(m.wi.WorkItem, EvPushFailed, map[string]any{
-			"version": res.version, "error": res.err.Error(),
-		})
+		body := map[string]any{"version": res.version, "error": res.err.Error()}
+		// a size refusal also names the unpushed range and the refused
+		// paths as fields
+		for k, v := range gitops.PushFailureFacts(res.err) {
+			body[k] = v
+		}
+		_ = m.log.Append(m.wi.WorkItem, EvPushFailed, body)
 	}
 	if m.backoff >= m.cfg.PushBackoffMax && !m.backpressured {
 		// §九 degradation: never kills the agent — local commits keep

@@ -8,7 +8,7 @@ import (
 // v1_s06_exit_without_result_test.go: the step process that dies silently without delivering,
 // driver/envelope edition (v2-converge 2.3: an exit WITHOUT a result is
 // the driver's own to classify — it is the one failure the driver sees
-// directly, without any supervisor verdict). The grill dispatch burns an
+// directly, without any supervisor verdict). The fix dispatch burns an
 // injected delay and then dies WITHOUT writing its result envelope. The
 // driver classifies the exit (no model-class sign: same-model retry),
 // records ONE failure (cause exit_other, counter 1) in execution.json,
@@ -25,12 +25,11 @@ func TestV1S06HangRecovery(t *testing.T) {
 	wi := inst.newWI(t, "s06: step process dies without delivering (the delayed envelope never lands)",
 		[]map[string]any{
 			// Ordinal 1: 4s of silence, then die before the envelope write.
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true,
+			{"do": "envelope", "id": "fix", "outcome": "completed",
 				"ms": 4000, "crash": "before"},
 			// Ordinal 2: the driver's in-place retry (resume).
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
@@ -40,7 +39,7 @@ func TestV1S06HangRecovery(t *testing.T) {
 	capDir := d.capsuleDir(wi)
 	waitUntil(t, 30*time.Second, "the before-write crash was never journaled", func() bool {
 		for _, rec := range fakeJournal(t, capDir) {
-			if rec["type"] == "crash_before" && rec["step"] == "grill" {
+			if rec["type"] == "crash_before" && rec["step"] == "fix" {
 				return true
 			}
 		}
@@ -58,20 +57,20 @@ func TestV1S06HangRecovery(t *testing.T) {
 		Next        string `json:"next_dispatch"`
 	}
 	eventBody(t, rec, &body)
-	if body.Step != "grill" || body.Cause != "exit_other" || body.Disposition != "retry_same_model" ||
+	if body.Step != "fix" || body.Cause != "exit_other" || body.Disposition != "retry_same_model" ||
 		body.Count != 1 || body.Next != "resume" {
-		t.Fatalf("step_failed = %+v, want grill/exit_other/retry_same_model/1/resume", body)
+		t.Fatalf("step_failed = %+v, want fix/exit_other/retry_same_model/1/resume", body)
 	}
 
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
-	spawns := waitSpawnCount(t, d, wi, 4, 60*time.Second)
-	if len(spawns) != 4 || spawns[1]["resume"] != true {
+	spawns := waitSpawnCount(t, d, wi, 3, 60*time.Second)
+	if len(spawns) != 3 || spawns[1]["resume"] != true {
 		t.Fatalf("the retry was not an in-place resume: %+v", spawns)
 	}
 	x := readExecution(t, capDir)
-	grill := x.Steps["grill"]
+	fix := x.Steps["fix"]
 	var failures int
-	for _, a := range grill.Attempts {
+	for _, a := range fix.Attempts {
 		if a["cause"] == "infra_failure" {
 			failures++
 			if a["failure_cause"] != "exit_other" {
@@ -80,7 +79,7 @@ func TestV1S06HangRecovery(t *testing.T) {
 		}
 	}
 	if failures != 1 {
-		t.Fatalf("grill carries %d infra_failure attempts, want exactly 1: %+v", failures, grill.Attempts)
+		t.Fatalf("fix carries %d infra_failure attempts, want exactly 1: %+v", failures, fix.Attempts)
 	}
 
 	// The whole episode fired exactly ONE recovery signal: the completion

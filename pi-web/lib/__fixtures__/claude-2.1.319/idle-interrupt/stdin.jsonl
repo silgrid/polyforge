@@ -1,0 +1,2 @@
+{"type":"user","uuid":"39500000-0000-4000-8000-001000000003","message":{"role":"user","content":"Use the Agent tool exactly once, with run_in_background set to true, to start a general-purpose subagent with this prompt: 'Use the Bash tool to run: sleep 20; echo SUBAGENT_DONE_395 . Then reply with exactly: subagent finished'. Do not wait for it. Then reply with exactly: launched"}}
+{"type":"control_request","request_id":"9f175d94-bf38-4863-882d-9c64dc3c9ad0","request":{"subtype":"interrupt"}}

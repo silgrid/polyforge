@@ -26,6 +26,9 @@ const wipLimit = 30 * time.Second
 
 // Shutdown runs the shutdown once; concurrent callers wait for the first
 // run (or their ctx). cause names the trigger for the log.
+// obsDrainLimit bounds the shutdown's wait for the observe lane.
+const obsDrainLimit = 10 * time.Second
+
 func (d *Daemon) Shutdown(ctx context.Context, cause string) error {
 	first := false
 	d.shutOnce.Do(func() { first = true })
@@ -67,6 +70,15 @@ func (d *Daemon) Shutdown(ctx context.Context, cause string) error {
 		}(ji)
 	}
 	wg.Wait()
+	// the observe lane drains (its context is the run context): its last
+	// event and decision-feed writes land before the shutdown returns
+	if d.obsStarted.Load() {
+		select {
+		case <-d.obsDone:
+		case <-time.After(obsDrainLimit):
+			fmt.Fprintf(os.Stderr, "daemon: shutdown: the observe lane did not stop within %s\n", obsDrainLimit)
+		}
+	}
 	if d.ownsDataDir() {
 		if err := d.rt.Persist(); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: state.json persist failed: %v\n", err)

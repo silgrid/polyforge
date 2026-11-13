@@ -1,0 +1,215 @@
+import type {
+  AgentSessionEvent,
+  BashOperations,
+  SessionManager,
+  SettingsManager,
+  SlashCommandInfo,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
+import type { AgentMessage as PiAgentMessage } from "@earendil-works/pi-agent-core";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+
+export interface ContextUsage {
+  percent: number | null;
+  contextWindow: number;
+  tokens: number | null;
+}
+
+export interface ModelLike {
+  id: string;
+  provider: string;
+  /** Dollars per million tokens. */
+  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+}
+
+export interface ToolInfo {
+  name: string;
+  description: string;
+  parameters?: unknown;
+  promptGuidelines?: string[];
+  /** How the model reaches the tool (pi >= 0.99); absent means `direct`. */
+  exposure?: "direct" | "model-only" | "codemode" | "deferred" | "hidden";
+  sourceInfo?: unknown;
+}
+
+export interface NavigateTreeResult {
+  editorText?: string;
+  cancelled: boolean;
+  aborted?: boolean;
+}
+
+export interface SessionStatsInfo {
+  sessionFile?: string;
+  sessionId: string;
+  sessionName?: string;
+  userMessages: number;
+  assistantMessages: number;
+  toolCalls: number;
+  toolResults: number;
+  totalMessages: number;
+  tokens: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+  cost: number;
+  contextUsage?: ContextUsage;
+  /** Estimated active time across all entries in the session file. */
+  totalActiveMs?: number;
+}
+
+interface PromptTemplateLike {
+  name: string;
+  description?: string;
+  sourceInfo: SlashCommandInfo["sourceInfo"];
+}
+
+interface SkillLike {
+  name: string;
+  description?: string;
+  sourceInfo: SlashCommandInfo["sourceInfo"];
+}
+
+interface ResourceLoaderLike {
+  getSkills(): { skills: SkillLike[] };
+  getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
+}
+
+interface ExtensionRunnerLike {
+  getRegisteredCommands(): Array<{
+    invocationName: string;
+    description?: string;
+    sourceInfo: SlashCommandInfo["sourceInfo"];
+  }>;
+  emit?(event: { type: "session_shutdown"; reason: "quit" }): Promise<unknown>;
+  setUIContext?(uiContext?: unknown, mode?: "tui" | "rpc" | "json" | "print"): void;
+}
+
+type DialogOptionsLike = {
+  signal?: AbortSignal;
+  timeout?: number;
+};
+
+type WidgetOptionsLike = {
+  placement?: "aboveEditor" | "belowEditor";
+};
+
+export interface ExtensionUiContextLike {
+  select(title: string, options: string[], opts?: DialogOptionsLike): Promise<string | undefined>;
+  confirm(title: string, message: string, opts?: DialogOptionsLike): Promise<boolean>;
+  input(title: string, placeholder?: string, opts?: DialogOptionsLike): Promise<string | undefined>;
+  editor(title: string, prefill?: string, opts?: DialogOptionsLike): Promise<string | undefined>;
+  notify(message: string, type?: "info" | "warning" | "error"): void;
+  onTerminalInput(): () => void;
+  setStatus(key: string, text: string | undefined): void;
+  setWorkingMessage(message?: string): void;
+  setWorkingVisible(visible: boolean): void;
+  setWorkingIndicator(options?: { frames?: string[]; intervalMs?: number }): void;
+  setHiddenThinkingLabel(label?: string): void;
+  setWidget(key: string, content: string[] | ((...args: never[]) => unknown) | undefined, options?: WidgetOptionsLike): void;
+  setFooter(factory: unknown): void;
+  setHeader(factory: unknown): void;
+  setTitle(title: string): void;
+  custom<T = unknown>(...args: unknown[]): Promise<T>;
+  pasteToEditor(text: string): void;
+  setEditorText(text: string): void;
+  getEditorText(): string;
+  addAutocompleteProvider(): void;
+  setEditorComponent(): void;
+  getEditorComponent(): undefined;
+  readonly theme: Theme;
+  getAllThemes(): unknown[];
+  getTheme(name: string): undefined;
+  setTheme(theme: unknown): { success: boolean; error?: string };
+  getToolsExpanded(): boolean;
+  setToolsExpanded(expanded: boolean): void;
+}
+
+export interface AgentSessionLike {
+  readonly sessionId: string;
+  readonly sessionFile: string | undefined;
+  readonly isStreaming: boolean;
+  readonly isCompacting: boolean;
+  readonly autoCompactionEnabled: boolean;
+  readonly autoRetryEnabled: boolean;
+  readonly model: ModelLike | undefined;
+  readonly modelRuntime: {
+    getModel: (provider: string, modelId: string) => ModelLike | undefined;
+    refresh: (options?: { allowNetwork?: boolean; providers?: string[]; signal?: AbortSignal }) => Promise<unknown>;
+  };
+  readonly sessionManager: SessionManager;
+  readonly settingsManager: SettingsManager;
+  /**
+   * The prompt this session would send right now, rendered from its current options.
+   *
+   * Readable before the first run, unlike `agent.state.systemPrompt`, which replays the
+   * transcript and is empty until a run persists a system message. It does not keep the
+   * sections a `before_agent_start` handler changed for a finished run; the replay does.
+   */
+  readonly systemPrompt: string;
+  readonly agent: {
+    state?: {
+      /** Replayed from the transcript's system messages since Pi 0.86; never assign it. */
+      readonly systemPrompt?: string;
+      thinkingLevel?: string;
+      streamingMessage?: PiAgentMessage;
+      /** The declared tools, with the descriptions `prepareLoadout` hooks set for the model. */
+      readonly tools?: readonly { readonly name: string; readonly description: string }[];
+    };
+  };
+  readonly extensionRunner: ExtensionRunnerLike;
+  readonly promptTemplates: readonly PromptTemplateLike[];
+  readonly resourceLoader: ResourceLoaderLike;
+
+  readonly bindExtensions?: unknown;
+  dispose(): void;
+  reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void>;
+  subscribe(listener: (event: AgentSessionEvent) => void): () => void;
+  prompt(text: string, options?: {
+    images?: Array<{ type: "image"; data: string; mimeType: string }>;
+    streamingBehavior?: "steer" | "followUp";
+    source?: "interactive" | "rpc";
+    /** Called once the SDK accepts the input; a rejected prompt only rejects the returned promise. */
+    preflightResult?: (disposition: "handled" | "queued" | "started") => void;
+  }): Promise<void>;
+  sendCustomMessage<T = unknown>(message: {
+    customType: string;
+    content: string | (TextContent | ImageContent)[];
+    display: boolean;
+    details?: T;
+  }, options?: {
+    triggerTurn?: boolean;
+    deliverAs?: "steer" | "followUp" | "nextTurn";
+  }): Promise<void>;
+  abort(): Promise<void>;
+  executeBash(command: string, onChunk?: (chunk: string) => void, options?: {
+    excludeFromContext?: boolean;
+    operations?: BashOperations;
+  }): Promise<{ output: string; exitCode?: number; cancelled?: boolean; truncated?: boolean; fullOutputPath?: string }>;
+  abortBash(): void;
+  readonly isBashRunning: boolean;
+  /** An auto-retry waiting out its backoff; optional because test sessions leave it out. */
+  readonly isRetrying?: boolean;
+  setModel(model: ModelLike): Promise<void>;
+  navigateTree(targetId: string, options?: { summarize?: boolean }): Promise<NavigateTreeResult>;
+  setThinkingLevel(level: string): void;
+  compact(customInstructions?: string): Promise<unknown>;
+  setSessionName(name: string): void;
+  getSessionStats(): Omit<SessionStatsInfo, "sessionName">;
+  getLastAssistantText(): string | undefined;
+  setAutoCompactionEnabled(enabled: boolean): void;
+  setAutoRetryEnabled(enabled: boolean): void;
+  steer(text: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<"handled" | "queued">;
+  followUp(text: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<"handled" | "queued">;
+  readonly pendingMessageCount: number;
+  getSteeringMessages(): readonly string[];
+  getFollowUpMessages(): readonly string[];
+  clearQueue(): { steering: string[]; followUp: string[] };
+  getAllTools(): ToolInfo[];
+  getActiveToolNames(): string[];
+  setActiveToolsByName(names: string[]): void;
+  abortCompaction(): void;
+  getContextUsage(): ContextUsage | undefined;
+}

@@ -384,7 +384,7 @@ func reposDoctor(t *testing.T, srv, server, ws string, extra ...string) doctorDo
 	if server == "" {
 		server = srv
 	}
-	sock := filepath.Join(dir, "gone.sock")
+	sock := cellFront(t, server, "k", "")
 	var b strings.Builder
 	b.WriteString("server = \"" + server + "\"\napi_key = \"k\"\ndaemon_socket = \"" + sock + "\"\n")
 	b.WriteString("\n[workspace.\"" + ws + "\"]\nprojects = [\"e2e\"]\n")
@@ -552,7 +552,7 @@ func TestRepoClonesWarnOnlyNotInHarness(t *testing.T) {
 	// The healthy machine's fixture (TestDoctorHealthyMachineAllPassExit0's
 	// shape) with the daemon socket: a warn must leave ok true and the
 	// exit code 0.
-	sock := liveDaemonSocket(t, "m-w")
+	sock := cellFront(t, srv, "k", liveDaemonSocket(t, "m-w"))
 	dir := t.TempDir()
 	xdg := filepath.Join(dir, "xdg")
 	if err := os.MkdirAll(filepath.Join(xdg, "polyforge"), 0o755); err != nil {

@@ -1,0 +1,6 @@
+contract: 5
+name: wfc-195-unused
+description: fixture lane for WFC-195
+steps:
+  - id: work
+    vars: { tone: plain }

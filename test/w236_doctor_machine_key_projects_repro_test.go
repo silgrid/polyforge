@@ -118,15 +118,21 @@ func TestW236DoctorProjectsWithTheMachineKey(t *testing.T) {
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Every Hub read of the doctor goes through the daemon's data-plane
+	// proxy over the Cell's connection — here the machine key — so a
+	// daemon runs over this config.
 	cfg := filepath.Join(t.TempDir(), "cli.toml")
+	d := w113NewDaemon(t, inst, w113DOptConfig(cfg), w113DOptArgs("--api-key", key.Plain))
 	body := "server = " + strconv.Quote(inst.url) + "\n" +
 		"api_key = " + strconv.Quote(key.Plain) + "\n" +
-		"daemon_socket = " + strconv.Quote(filepath.Join(t.TempDir(), "pf.sock")) + "\n\n" +
+		"daemon_socket = " + strconv.Quote(d.sock) + "\n\n" +
 		"[workspace." + strconv.Quote(ws) + "]\n" +
 		"projects = [" + strconv.Quote(v1Project) + "]\n"
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	d.start()
+	defer d.stop()
 
 	// The flow's own health judgement: the real pf doctor, --json face,
 	// on a clean machine env (no PF_* overrides — the config file's

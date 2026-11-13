@@ -1,4 +1,4 @@
-// carries: tools/verify-scope
+// carries: workflows/_shared/scripts/verify-scope
 
 package test
 
@@ -98,7 +98,7 @@ func w260SelRun(t *testing.T, dir string) (w260SelReport, string) {
 	t.Helper()
 	out, errb, code := w25e2eRun(t, dir, nil, "--full", "--json")
 	if code != 0 {
-		t.Fatalf("tools/verify-scope --full --json: exit %d (stdout %q, stderr %q)", code, out, errb)
+		t.Fatalf("workflows/_shared/scripts/verify-scope --full --json: exit %d (stdout %q, stderr %q)", code, out, errb)
 	}
 	var r w260SelReport
 	if err := json.Unmarshal([]byte(out), &r); err != nil {

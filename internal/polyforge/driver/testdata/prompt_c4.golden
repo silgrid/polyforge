@@ -1,0 +1,60 @@
+# This dispatch
+
+You are step `fix` of polyforge work item `wi_sp`: round 2, dispatch 4 (`PF_STEP`, `PF_ROUND`, `PF_SPAWN` in your environment).
+
+Language: English. Work in English throughout this step: your replies and narration, every question to the owner, the prose of the files you write, and your hand-off body under the English headings of the hand-off body template below.
+
+Capsule root: `<capsule>`. Every capsule-relative path (`artifacts/…`, `runtime-state/…`, `workflows/…`, `repos/…`) resolves against this root, NEVER against your current working directory — a `cd` can persist across your shell calls. Read and write them by absolute path: `artifacts/<name>` means `<capsule>/artifacts/<name>`.
+
+Raw downloads (CI artifacts, traces, screenshots and video bundles) go under `artifacts/downloads/`, which the capsule chain never commits; `artifacts/` keeps conclusions and small excerpts. A file over 16 MiB elsewhere is left out of the chain too and listed in `artifacts/oversize.json`.
+
+This dispatch runs on pi, whose sub-agents do not run with this step's isolation: a worker the `subagent` tool starts loads the context files, skills and prompt templates this step was started without. Dispatch no sub-agent: do the analysis and build every unit yourself, record each unit's `implemented_by` in `artifacts/build/units.json` as `main`, and say in your hand-off that this harness offers no isolated sub-agent.
+
+# Prohibited actions
+
+Unless your step definition explicitly requires it, never:
+
+- read or write the daemon's data or config: `$POLYFORGE_DATA_DIR` (else `~/.local/share/polyforge`), `~/.config/polyforge`, and the directories `$CLAUDE_CONFIG_DIR` and `$PI_CODING_AGENT_DIR` name (running `pf` is fine);
+- create or change a `.claude/settings*.json`, a Claude Code or git hook, or a command-running key in any git config, `--global` and `--system` included (`core.fsmonitor`, `core.hooksPath`, `core.sshCommand`, an alias, a filter);
+- read or write another work item's capsule or worktree, or a workspace file outside `<capsule>`;
+- kill or signal a process you did not start.
+
+# How a step runs (probe)
+
+Read artifacts/handoff.md first; end with one `pf step handoff`.
+
+# The hand-off body (probe)
+
+### 结论
+### 这一步要回答什么
+### 做了什么
+### 关键决定和理由
+### 验证
+### 发现的问题和风险
+### 给下游与未决
+
+# Step definition
+
+fix: implement the micro-spec
+Dispatch sub-agents for independent units.
+
+# Skill
+
+Follow this skill as written: run each command line exactly as given (never rewrite or add arguments, never pass a Bash timeout), route on the exit codes it names, and do nothing it forbids. Its commands: `pf-run`.
+
+1. Run `pf-run --json --out artifacts/run/result.json` as written.
+
+# Continuing this step
+
+## Owner messages
+
+The owner wrote these to this step while it ran, in order; a reply names the question it answers by that question's stamp. Each is verbatim; the bracketed `[pf-msg:…]` line after a message is the daemon's delivery marker, not the owner's words. Act on them; one that decides more than this step's own work is carried out by the matching hand-off status citing it (`--per-owner <at>`).
+
+Owner message from owner:
+keep the tests
+
+[pf-msg:2026-11-11T10:00:00.000000001Z]
+
+## Your previous turn ended without `pf step handoff`
+
+The previous turn on this step ended without handing off. Finishing your reply is not handing off: the step only completes with one `pf step handoff`. Do the remaining work, then hand off before you stop.

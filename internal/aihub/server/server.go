@@ -128,6 +128,15 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/queries/{qid}/answer", s.signedMachine(laneAnswer, s.hQueryAnswer))
 	m.HandleFunc("POST /api/v1/work-items/{id}/progress-query", s.signedMachine(laneQuery, s.hProgressQuery))
 	m.HandleFunc("POST /api/v1/work-items/{id}/artifact-query", s.signedMachine(laneQuery, s.hArtifactQuery))
+	// Workflow contract 5: the generic write of one top-level attrs key
+	// (core.WriteAttr: fenced by its optional `if`, audited as
+	// attrs_written). A signed machine request — the daemon's key.
+	// Reachability: a step agent cannot reach it directly (a step process
+	// holds no aihub key and no machine key, and the daemon's aihub face
+	// forwards no machine-face route); it reaches it only through the
+	// daemon proxy, as a pending `pf step hub attrs` write the daemon makes
+	// when the step round hands off done.
+	m.HandleFunc("PATCH /api/v1/work-items/{id}/attrs", s.signedMachine(laneAttrs, s.hWriteAttrs))
 	// messaging: Bearer-auth user-to-user conversations with
 	// permanent history. Reachability: a step agent cannot reach them
 	// (`pf msg` is refused inside a step; step processes hold no key).
@@ -398,6 +407,8 @@ type wiGrant struct {
 	id         string // the canonical work-item id
 	ref        string // the reference the caller sent (echoed in refusals)
 	projectID  string
+	status     string // the work item's status when the grant was resolved
+	caller     string // the authenticated caller's user id
 	role       string // the caller's project role ("" = not a member)
 	admin      bool
 	reporter   bool
@@ -417,15 +428,15 @@ func (s *Server) resolveWIGrant(idn *identity, ref string) (*wiGrant, error) {
 		}
 		return nil, err
 	}
-	var projectID, reporter string
-	if err := s.DB.QueryRow(`SELECT project_id, reporter FROM work_items WHERE id=?1`, id).
-		Scan(&projectID, &reporter); err != nil {
+	var projectID, reporter, status string
+	if err := s.DB.QueryRow(`SELECT project_id, reporter, status FROM work_items WHERE id=?1`, id).
+		Scan(&projectID, &reporter, &status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, core.Fail(api.ErrCoreNotFound, "", "work item %s", ref)
 		}
 		return nil, err
 	}
-	g := &wiGrant{id: id, ref: ref, projectID: projectID,
+	g := &wiGrant{id: id, ref: ref, projectID: projectID, status: status, caller: idn.UserID,
 		admin: idn.Role == "admin", reporter: reporter == idn.UserID,
 		scopedAway: idn.KeyScope != nil && *idn.KeyScope != projectID}
 	if !g.admin {
@@ -472,9 +483,10 @@ func (g *wiGrant) requireWrite() error {
 
 // requireOwnerDecision conceals the work item from a caller with no
 // relationship to it. A reporter keeps the retained cancel/wrap/
-// resume-blocked right even after losing project membership
-//; the decision itself stays the reporter/
-// maintainer/admin rule.
+// resume-blocked right even after losing project membership.
+// The decision itself is the reporter/maintainer/admin
+// rule, widened on cancel and resume-blocked by the blocked-only holder
+// operator (a project writer or maintainer;).
 func (g *wiGrant) requireOwnerDecision() error {
 	if g.scopedAway {
 		return g.hidden()
@@ -486,21 +498,60 @@ func (g *wiGrant) requireOwnerDecision() error {
 }
 
 // ownerDecision is the reporter/maintainer/admin verdict on the human
-// decision doors (cancel, wrap, resume-blocked) after concealment.
+// decision doors (cancel, wrap, resume-blocked) after concealment. The
+// two blocked exits widen it through blockedDecision.
 func (g *wiGrant) ownerDecision() bool {
 	return g.admin || g.reporter || g.role == "maintainer"
+}
+
+// blockedDecision is the owner-decision verdict of cancel and
+// resume-blocked after concealment: ownerDecision, or —
+// on a BLOCKED work item only — the current operator of the machine that
+// most recently held it (core.HolderMachine: no liveness test), provided
+// that operator is a current project writer or maintainer. basis and
+// machine are set only when holding the machine is the caller's sole
+// basis, for the decision event's audit. A refused member on a blocked
+// work item with a holder is told the holding machine's id — never its
+// operator's user id; otherwise the door's existing refusal stands.
+func (s *Server) blockedDecision(g *wiGrant, door, verb, refusal string) (basis, machine string, err error) {
+	if g.ownerDecision() {
+		return "", "", nil
+	}
+	if g.status != api.StatusBlocked {
+		return "", "", core.Fail(api.ErrAuthForbidden, "", "%s", refusal)
+	}
+	machine, operator, err := s.WIs.HolderMachine(g.id)
+	if err != nil {
+		return "", "", err
+	}
+	if machine == "" {
+		return "", "", core.Fail(api.ErrAuthForbidden, "", "%s", refusal)
+	}
+	if operator == g.caller && (g.role == "writer" || g.role == "maintainer") {
+		return api.BasisHolderOperator, machine, nil
+	}
+	return "", "", core.Fail(api.ErrAuthForbidden, "",
+		"%s requires the work item's reporter, a project maintainer or admin; machine %s holds this blocked work item and its current operator may %s it as a project writer",
+		door, machine, verb)
 }
 
 // requireForceEnd is the recovery door's gate: concealment, then the
 // existing admin-or-project-maintainer rule (no reporter admission).
 func (g *wiGrant) requireForceEnd() error {
+	return g.requireMaintainer("end-session")
+}
+
+// requireMaintainer is concealment, then the admin-or-project-maintainer
+// rule (no reporter admission); what names the action in the refusal
+// (the recovery door's end-session).
+func (g *wiGrant) requireMaintainer(what string) error {
 	if err := g.requireRead(); err != nil {
 		return err
 	}
 	if g.admin || g.role == "maintainer" {
 		return nil
 	}
-	return core.Fail(api.ErrAuthForbidden, "", "end-session requires admin or project maintainer")
+	return core.Fail(api.ErrAuthForbidden, "", "%s requires admin or project maintainer", what)
 }
 
 // ---------------------------------------------------------------------------
@@ -595,12 +646,20 @@ func (s *Server) hListWIs(w http.ResponseWriter, r *http.Request, idn *identity)
 	if err != nil {
 		return err
 	}
+	// attr=<path>:<value>, repeatable (workflow contract 5): the attr at
+	// path is that string.
+	attrs, err := core.ParseAttrFilters(q["attr"])
+	if err != nil {
+		return err
+	}
 	items, err := s.WIs.List(core.ListFilters{
 		Project:          q.Get("project"),
 		Status:           q.Get("status"),
 		Assignee:         q.Get("assignee"),
 		Priority:         q.Get("priority"),
 		Milestone:        q.Get("milestone"),
+		Bundle:           q.Get("bundle"),
+		Attrs:            attrs,
 		Limit:            limit,
 		ReadableProjects: readable,
 	})
@@ -662,25 +721,24 @@ func (s *Server) hCancelWI(w http.ResponseWriter, r *http.Request, idn *identity
 	if err != nil {
 		return err
 	}
-	// Cancel authorization: reporter, project maintainer, or admin
-	// (reference.md §2.1); a caller with no relationship to the work item
-	// gets the missing-work-item answer.
+	// Cancel authorization: reporter, project maintainer, or admin, and on
+	// a blocked work item also the holder machine's current operator
+	// (reference.md §2.1,); a caller with no relationship to
+	// the work item gets the missing-work-item answer.
 	if err := g.requireOwnerDecision(); err != nil {
 		return err
 	}
-	if !g.ownerDecision() {
-		return core.Fail(api.ErrAuthForbidden, "", "cancel requires reporter, maintainer or admin")
+	basis, machine, err := s.blockedDecision(g, "cancel", "cancel", "cancel requires reporter, maintainer or admin")
+	if err != nil {
+		return err
 	}
-	// Optional body: the owner's verbatim reason and answered question
-	// ride the event; dry_run answers this authorization gate alone and
-	// writes nothing (the daemon's probe of a reserved cancel answer).
+	// Optional body: the owner's verbatim reason and the owner message it
+	// rests on ride the event.
 	var req api.CancelRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		return core.Fail(api.ErrCoreBadInput, "", "invalid JSON body: %v", err)
 	}
-	if req.DryRun {
-		return reply(w, http.StatusOK, map[string]any{"id": g.id, "dry_run": true, "authorized": true})
-	}
+	req.Basis, req.MachineID = basis, machine
 	wi, err := s.WIs.Cancel(g.id, idn.UserID, req)
 	if err != nil {
 		return err
@@ -854,7 +912,10 @@ func (s *Server) hForceEndSession(w http.ResponseWriter, r *http.Request, idn *i
 // ("paused": the session is KEPT, clean_pause rides the same fenced
 // update). Write access is required, like claim; a
 // leaked session secret does not lift the membership gate. It fully
-// replaces the deleted v1 /end-generation endpoint.
+// replaces the deleted v1 /end-generation endpoint. The wrapped verdict's
+// attrs (the wrap attrs the lane's steps registered) ride
+// the same fenced update. Reachability: the daemon's close only — a step
+// process holds no aihub key, so no step agent reaches it.
 func (s *Server) hSessionEnd(w http.ResponseWriter, r *http.Request, idn *identity) error {
 	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
@@ -873,12 +934,40 @@ func (s *Server) hSessionEnd(w http.ResponseWriter, r *http.Request, idn *identi
 	return s.replyWI(w, g.id)
 }
 
+// hWriteAttrs serves PATCH /work-items/{id}/attrs (workflow contract 5):
+// core.WriteAttr writes one top-level attrs key, fenced by the request's
+// `if`, audited as attrs_written with the signing machine and the owner
+// message the write carries out. Write access is required (a project
+// writer). Reachability: signedMachine — the daemon's machine key; a step
+// process holds no aihub key and no machine key, so a step reaches it only
+// through the daemon proxy (a pending `pf step hub attrs` write).
+func (s *Server) hWriteAttrs(w http.ResponseWriter, r *http.Request, idn *identity, m machineAuth) error {
+	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	if err := g.requireWrite(); err != nil {
+		return err
+	}
+	var req api.AttrsWriteRequest
+	if err := decodeBody(r, &req); err != nil {
+		return err
+	}
+	wi, err := s.WIs.WriteAttr(g.id, req, idn.UserID, m.MachineID)
+	if err != nil {
+		return err
+	}
+	return reply(w, http.StatusOK, wi)
+}
+
 // hResumeBlockedWI serves the §6.4 owner resume verdict's hub door
 // (polyforge#116): the door `pf resume` exercises on a workflow parked
 // blocked on an honest incomplete result. Authorization (v2-converge §7):
-// the WI's reporter, a project maintainer, or an admin — the same gate as
-// cancel. accept_lost_work clears the blocked seal (core.ResumeBlockedWith)
-// under the same gate.
+// the WI's reporter, a project maintainer, an admin, or
+// the current operator of the machine that holds it (a project writer or
+// maintainer) — blockedDecision, the same gate as a blocked cancel.
+// accept_lost_work clears the blocked seal (core.ResumeBlockedWith) under
+// the same gate.
 func (s *Server) hResumeBlockedWI(w http.ResponseWriter, r *http.Request, idn *identity) error {
 	g, err := s.resolveWIGrant(idn, r.PathValue("id"))
 	if err != nil {
@@ -887,14 +976,17 @@ func (s *Server) hResumeBlockedWI(w http.ResponseWriter, r *http.Request, idn *i
 	if err := g.requireOwnerDecision(); err != nil {
 		return err
 	}
-	if !g.ownerDecision() {
-		return core.Fail(api.ErrAuthForbidden, "", "resume-blocked requires the work item's reporter, a project maintainer or admin")
+	basis, machine, err := s.blockedDecision(g, "resume-blocked", "resume",
+		"resume-blocked requires the work item's reporter, a project maintainer or admin")
+	if err != nil {
+		return err
 	}
 	// The body is optional: an empty one is a plain resume.
 	var req api.ResumeBlockedRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		return core.Fail(api.ErrCoreBadInput, "", "invalid JSON body: %v", err)
 	}
+	req.Basis, req.MachineID = basis, machine
 	wi, err := s.WIs.ResumeBlockedWith(g.id, idn.UserID, req)
 	if err != nil {
 		return err

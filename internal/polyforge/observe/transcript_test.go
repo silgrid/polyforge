@@ -63,7 +63,7 @@ func stepStarted(t *testing.T, m *Monitor, spawn int64, step, dst string, resume
 // pushOnceRecorded is a PushFunc that records whether the capsule's
 // declared session path existed (with the live bytes) AT PUSH TIME — the
 // ordering pin: the copy must precede the commit. The flag is atomic: the
-// push runs in the monitor's sub-goroutine, the poller in the test.
+// push runs in the monitor's sub-goroutine, the reader in the test.
 func pushOnceRecorded(f liveFixture, sawCopy *atomic.Bool) PushFunc {
 	return func(ctx context.Context, o gitops.Opts, message string) (string, bool, gitops.PushTimings, error) {
 		if raw, err := os.ReadFile(f.dst); err == nil && string(raw) == string(f.body) {
@@ -90,12 +90,20 @@ func TestStepBoundarySyncsTranscriptBeforePush(t *testing.T) {
 	stepStarted(t, m, 1, "code", f.dst, false)
 
 	// one execution.json step-boundary write: the version bump schedules
-	// the async commit pipeline (sync → push).
+	// the async commit pipeline (sync → push → published).
 	m.writeExec(t, 1, "code")
 
-	soon(t, 5*time.Second, "the step-boundary push never ran", func() bool {
-		return sawCopy.Load()
+	// Wait on the published event, never on sawCopy: sawCopy is set INSIDE
+	// the push, while published is appended by the monitor goroutine only
+	// after the push returned and onPushResult received its result, so a
+	// wait that ends on sawCopy races that hand-off. published
+	// happens-after the one push, so sawCopy is final once it is visible.
+	soon(t, 5*time.Second, "the push must have published", func() bool {
+		return len(eventsOf(m, EvPublished)) > 0
 	})
+	if !sawCopy.Load() {
+		t.Fatal("the step-boundary push ran before the transcript copy landed")
+	}
 	// the capsule copy is byte-identical to the live source, and the
 	// source was never modified.
 	raw, err := os.ReadFile(f.dst)
@@ -105,9 +113,6 @@ func TestStepBoundarySyncsTranscriptBeforePush(t *testing.T) {
 	srcRaw, serr := os.ReadFile(f.src)
 	if serr != nil || string(srcRaw) != string(f.body) {
 		t.Fatal("the live source must be untouched by the sync")
-	}
-	if len(eventsOf(m, EvPublished)) == 0 {
-		t.Fatal("the push must have published")
 	}
 	expectNoOB(t, ob, 100*time.Millisecond, "no recovery may fire for a healthy transcript sync")
 }
@@ -334,5 +339,50 @@ func TestSyncTranscriptCopyMissingSource(t *testing.T) {
 	}
 	if _, err := os.Stat(dst); !os.IsNotExist(err) {
 		t.Fatalf("a failed copy must not leave a destination behind: %v", err)
+	}
+}
+
+// the commit-boundary sync carries the step's subagent
+// transcripts too — the monitor's subagent hook runs in the push
+// sub-goroutine BEFORE the push, so they ride the commit of the boundary
+// that synced the main transcript (the daemon binds the hook to
+// runtime.SyncSubagentTranscripts).
+func TestStepBoundarySyncsSubagentsBeforePush(t *testing.T) {
+	dir := t.TempDir()
+	capsuleDir := filepath.Join(dir, "capsule")
+	if err := os.MkdirAll(filepath.Join(capsuleDir, "runtime-state"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := newLiveFixture(t, capsuleDir, filepath.Join(dir, "pi-sessions"))
+	marker := filepath.Join(capsuleDir, "session", "session-ra_wi_test", "subagents", "agent-a.jsonl")
+	var synced, sawSubagents atomic.Bool
+	var syncedFor atomic.Value
+	h := newFakeHandle("ra_wi_test")
+	m, _ := newTestMonitor(t, h, func(c *monitorCfg) {
+		c.locateLive = func(string, time.Time, string, string) string { return f.src }
+		c.syncSubagents = func(capDir string) {
+			syncedFor.Store(capDir)
+			if err := os.MkdirAll(filepath.Dir(marker), 0o755); err == nil {
+				_ = os.WriteFile(marker, []byte("{}\n"), 0o644)
+			}
+			synced.Store(true)
+		}
+		c.push = func(ctx context.Context, o gitops.Opts, message string) (string, bool, gitops.PushTimings, error) {
+			if _, err := os.Stat(marker); err == nil {
+				sawSubagents.Store(true)
+			}
+			return "sha_sync", true, gitops.PushTimings{}, nil
+		}
+	})
+	stepStarted(t, m, 1, "code", f.dst, false)
+	m.writeExec(t, 1, "code")
+	soon(t, 5*time.Second, "the push must have published", func() bool {
+		return len(eventsOf(m, EvPublished)) > 0
+	})
+	if !synced.Load() || !sawSubagents.Load() {
+		t.Fatalf("subagents synced=%v, present at push=%v: the subagent sync must precede the push", synced.Load(), sawSubagents.Load())
+	}
+	if got, _ := syncedFor.Load().(string); got != m.wi.CapsuleDir {
+		t.Fatalf("the subagent sync ran for %q, want the WI's capsule %q", got, m.wi.CapsuleDir)
 	}
 }

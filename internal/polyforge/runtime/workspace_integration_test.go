@@ -28,7 +28,7 @@ import (
 func twoWorkspaceRuntime(t *testing.T) (*Runtime, *fakeHub, string, string) {
 	t.Helper()
 	setGitIdentity(t)
-	wfDir := frontmatterBundle(t, w079Frontmatter)
+	wfDir := laneBundle(t, w079Lane)
 	hub := newFakeHub()
 	hub.items = map[string]*api.WorkItem{
 		"wi_w079intA":  {ID: "wi_w079intA", ProjectName: "proj-a"},
@@ -123,7 +123,7 @@ func TestTwoWorkspacesTwoYamlsOneDaemon(t *testing.T) {
 // models entry, and a broken yaml refuses both before any claim.
 func TestSiblingProjectUnaffectedAndSharedYamlRefusesBoth(t *testing.T) {
 	setGitIdentity(t)
-	wfDir := frontmatterBundle(t, w079Frontmatter)
+	wfDir := laneBundle(t, w079Lane)
 	hub := newFakeHub()
 	hub.items = map[string]*api.WorkItem{
 		"wi_w079s1": {ID: "wi_w079s1", ProjectName: "p1"},

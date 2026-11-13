@@ -42,11 +42,15 @@ func (r *recSink) WaitingModel() {
 func (r *recSink) ModelOutput(k OutputKind)  { r.add("output:" + string(k)) }
 func (r *recSink) ToolStart(id, n, a string) { r.add("tool_start:" + n + ":" + a) }
 func (r *recSink) ToolEnd(id, n string)      { r.add("tool_end:" + n) }
+func (r *recSink) ToolActive(id string)      { r.add("tool_active:" + id) }
 func (r *recSink) TurnEnded(ok bool, e string) {
 	r.add(fmt.Sprintf("turn_end:%v:%s", ok, e))
 }
 func (r *recSink) ErrorSeen(t string)     { r.add("error:" + t) }
 func (r *recSink) ProcessExit(i ExitInfo) { r.add(fmt.Sprintf("exit:%d", i.Code)) }
+func (r *recSink) ContextWindow(model string, window int64) {
+	r.add(fmt.Sprintf("context_window:%s:%d", model, window))
+}
 
 func TestPiTranslatorMapsRecordsToStandardSignals(t *testing.T) {
 	cases := []struct {

@@ -1,0 +1,4 @@
+PASS: chat renders the greeting
+FAIL: minimap heading follows the scroll
+  Expected values to be strictly deep-equal:
+PASS: draft resizes on paste

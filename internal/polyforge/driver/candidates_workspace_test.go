@@ -4,9 +4,11 @@ package driver
 // polyforge#79 claim-time candidate map — the recomputation indexes that
 // list (the only candidate source, present-empty governance), and the
 // recovery integration's interrupted-dispatch archive lands through the
-// single execution.json writer. Rotation semantics themselves are
-// untouched (INV-1g et al. — provider-class infra failures alone
-// advance, bounded, capped at list end; a gate-FAIL rewind resets).
+// single execution.json writer. Rotation semantics themselves (INV-1g et
+// al. — provider-class infra failures alone advance, bounded, capped at
+// list end; a gate-FAIL rewind resets) are candidates_test.go's
+// TestCandidatePointer table; the crash window of a decided switch is
+// candidate_anchor_regression_test.go's.
 
 import (
 	"context"
@@ -19,33 +21,9 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
 )
 
-// seedPendingQuestion patches one step's pending_question into the
-// seeded execution.json (a dispatch that delivered needs_input before
-// the death the recovery cause records).
-func seedPendingQuestion(t *testing.T, execPath, stepID, qid, q string) {
-	t.Helper()
-	raw, err := os.ReadFile(execPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var exec capsule.Execution
-	if err := json.Unmarshal(raw, &exec); err != nil {
-		t.Fatal(err)
-	}
-	exec.Steps[stepID].PendingQuestion = &capsule.PendingQuestion{ID: qid, Step: stepID, Question: q}
-	blob, err := json.MarshalIndent(exec, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(execPath, blob, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// seedExecution writes an execution.json with one step in the given
-// state: status + archived attempts + current_step.
 func seedExecution(t *testing.T, execPath, stepID, status string, attempts []capsule.Attempt) {
 	t.Helper()
 	exec := capsule.Execution{
@@ -105,9 +83,9 @@ func TestClaimListHeadIsDispatched(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{
-			{ID: "fix", ContextPolicy: "fresh"},
-		}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{
+			{ID: "fix"},
+		}...),
 		Spawner: sp,
 		Log:     &eventLog{},
 		Compose: composeOf(map[string][]string{
@@ -127,70 +105,6 @@ func TestClaimListHeadIsDispatched(t *testing.T) {
 	}
 }
 
-// Rotation advances along the EFFECTIVE list and caps at its end.
-func TestRotationAdvancesAndCapsOnEffectiveList(t *testing.T) {
-	cases := []struct {
-		name     string
-		list     []string
-		attempts []capsule.Attempt
-		want     string
-	}{
-		{
-			"two provider failures pin the third entry",
-			[]string{"pi:eff-a", "pi:eff-b", "pi:eff-c"},
-			[]capsule.Attempt{infraAttempt(1, FailExitModel, "pi:eff-a"), infraAttempt(2, FailExitModel, "pi:eff-b")},
-			"eff-c",
-		},
-		{
-			"two failures on a two-entry list cap at the end",
-			[]string{"pi:eff-a", "pi:eff-b"},
-			[]capsule.Attempt{infraAttempt(1, FailExitModel, "pi:eff-a"), infraAttempt(2, FailExitModel, "pi:eff-b")},
-			"eff-b",
-		},
-		{
-			"host-class failures never advance",
-			[]string{"pi:eff-a", "pi:eff-b"},
-			[]capsule.Attempt{infraAttempt(1, FailExitHost, "pi:eff-a"), infraAttempt(2, FailExitHost, "pi:eff-a")},
-			"eff-a",
-		},
-		{
-			"a gate-fail rewind resets to the head",
-			[]string{"pi:eff-a", "pi:eff-b"},
-			[]capsule.Attempt{infraAttempt(1, FailExitModel, "pi:eff-a"), {Cause: CauseGateFailRewind, AttemptSeq: 2}},
-			"eff-a",
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			dir := t.TempDir()
-			execPath := filepath.Join(dir, capsule.ExecutionJSON)
-			seedExecution(t, execPath, "fix", capsule.StepInProgress, c.attempts)
-			sp := &fakeSpawner{}
-			d, err := New(Config{
-				WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
-				ExecPath: execPath,
-				Workflow: &Workflow{Steps: []StepSpec{{ID: "fix", ContextPolicy: "fresh"}}, MaxTotal: 4, MaxPerStep: 2},
-				Spawner:  sp,
-				Log:      &eventLog{},
-				Compose: composeOf(map[string][]string{
-					"fix": c.list,
-				}),
-			})
-			if err != nil {
-				t.Fatalf("New: %v", err)
-			}
-			d.composeDispatch("fix")
-			spawn, _, err := d.prepareDispatch("fix")
-			if err != nil {
-				t.Fatalf("prepareDispatch: %v", err)
-			}
-			if spawn.Model != c.want {
-				t.Fatalf("model %q, want %q", spawn.Model, c.want)
-			}
-		})
-	}
-}
-
 // A present-empty claim-time entry governs: no switchable chain — the
 // harness adapter's default stays in effect.
 func TestPresentEmptyEffectiveEntryGoverns(t *testing.T) {
@@ -201,9 +115,9 @@ func TestPresentEmptyEffectiveEntryGoverns(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{
-			{ID: "fix", ContextPolicy: "fresh"},
-		}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{
+			{ID: "fix"},
+		}...),
 		Spawner: sp,
 		Log:     &eventLog{},
 		Compose: composeOf(map[string][]string{"fix": {}}),
@@ -234,7 +148,7 @@ func TestInterruptedDispatchArchivesOnce(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{{ID: "fix", ContextPolicy: "fresh"}}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{{ID: "fix"}}...),
 		Spawner:  sp,
 		Log:      &eventLog{},
 		Compose: composeOf(map[string][]string{
@@ -275,54 +189,11 @@ func TestInterruptedDispatchArchivesOnce(t *testing.T) {
 	}
 }
 
-// polyforge#33 crash window: the previous driver died after a switching
-// step_failed write and before the next step_start; the recovery archive
-// stamps the dead model (m-a) on a daemon_restart attempt, and the
-// recovered driver must still dispatch the model the failure chose.
-func TestCrashInSwitchWindowStillSwitches(t *testing.T) {
-	dir := t.TempDir()
-	execPath := filepath.Join(dir, capsule.ExecutionJSON)
-	// two consecutive model_errors on eff-a: the second chose the switch
-	// (the first alone resumes eff-a, ModelErrorRotationThreshold)
-	seedExecution(t, execPath, "fix", capsule.StepInProgress, []capsule.Attempt{att(FailModelError, "pi:eff-a"), att(FailModelError, "pi:eff-a")})
-	raw, err := os.ReadFile(execPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ex capsule.Execution
-	if err := json.Unmarshal(raw, &ex); err != nil {
-		t.Fatal(err)
-	}
-	ex.Steps["fix"].Candidate = "pi:eff-a"
-	raw, _ = json.Marshal(&ex)
-	if err := os.WriteFile(execPath, raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	sp := &fakeSpawner{script: []fakeEntry{done(`{"summary":"ok"}`)}}
-	d, err := New(Config{
-		WI:          WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
-		ExecPath:    execPath,
-		Workflow:    &Workflow{Steps: []StepSpec{{ID: "fix", ContextPolicy: "fresh"}}, MaxTotal: 4, MaxPerStep: 2},
-		Spawner:     sp,
-		Log:         &eventLog{},
-		Compose:     composeOf(map[string][]string{"fix": {"pi:eff-a", "pi:eff-b"}}),
-		Interrupted: &InterruptedDispatch{Detail: "daemon_restart"},
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if err := d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if got := sp.spawnAt(0).Model; got != "eff-b" {
-		t.Fatalf("recovered dispatch model %q, want eff-b (the switch the failure chose survives the crash)", got)
-	}
-}
-
 // An operator-shaped interruption archives nothing (the bridge filters
 // it before the driver ever sees it — pinned at the unit boundary here
-// through a nil Interrupted), and a dispatch that ended legitimately (a
-// parked question, a non-in_progress step) archives nothing either.
+// through a nil Interrupted). (A dispatch settled by its open `pf ask`
+// archives nothing either: ask_test.go,
+// TestAskRestartReconciliationParksWithoutDispatch.)
 func TestInterruptedDispatchNoArchiveShapes(t *testing.T) {
 	// No Interrupted at all: a plain claim never archives.
 	dir := t.TempDir()
@@ -332,7 +203,7 @@ func TestInterruptedDispatchNoArchiveShapes(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{{ID: "fix", ContextPolicy: "fresh"}}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{{ID: "fix"}}...),
 		Spawner:  sp,
 		Log:      &eventLog{},
 	})
@@ -346,43 +217,6 @@ func TestInterruptedDispatchNoArchiveShapes(t *testing.T) {
 	if strings.Contains(string(raw), "infra_failure") {
 		t.Fatalf("a claim re-derivation must archive nothing: %s", raw)
 	}
-
-	// An Interrupted signal with the step ALREADY parked on a question
-	// (the previous dispatch delivered needs_input before dying): the
-	// archive guard sees the pending question and archives nothing.
-	dir2 := t.TempDir()
-	execPath2 := filepath.Join(dir2, capsule.ExecutionJSON)
-	seedExecution(t, execPath2, "fix", capsule.StepInProgress, nil)
-	seedPendingQuestion(t, execPath2, "fix", "q1", "what?")
-	d2, err := New(Config{
-		WI:          WIInfo{ID: "wi_run", CapsuleDir: dir2, BundleName: "b"},
-		ExecPath:    execPath2,
-		Workflow:    &Workflow{Steps: []StepSpec{{ID: "fix", ContextPolicy: "fresh"}}, MaxTotal: 4, MaxPerStep: 2},
-		Spawner:     &fakeSpawner{},
-		Log:         &eventLog{},
-		Interrupted: &InterruptedDispatch{Detail: "agent_death"},
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	// Run parks on the open question — drive it with a cancellable
-	// context and observe the durable file once the question persists.
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = d2.Run(ctx)
-	}()
-	waitUntil(t, "the parked question", func() bool {
-		raw, rerr := os.ReadFile(execPath2)
-		return rerr == nil && strings.Contains(string(raw), "pending_question")
-	})
-	cancel()
-	<-done
-	raw2, _ := os.ReadFile(execPath2)
-	if strings.Contains(string(raw2), "infra_failure") {
-		t.Fatalf("a parked question archives nothing: %s", raw2)
-	}
 }
 
 // The bundle's model_candidates reach a dispatch only through the
@@ -391,14 +225,7 @@ func TestInterruptedDispatchNoArchiveShapes(t *testing.T) {
 // gives no entry runs on the harness default.
 func TestBundleListIsNotADriverCandidateSource(t *testing.T) {
 	dir := t.TempDir()
-	bundle := filepath.Join(dir, "bundle")
-	fm := "---\ndefaults:\n  model_candidates: [pi:prov/a]\nsteps:\n  - id: fix\n    context_policy: fresh\n    model_candidates: [pi:prov/b]\n---\n"
-	if err := os.MkdirAll(bundle, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bundle, "workflow.md"), []byte(fm), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	bundle := workflowtest.WriteLane(t, dir, "bundle", "defaults:\n  model_candidates: [pi:prov/a]\nsteps:\n  - id: fix\n    model_candidates: [pi:prov/b]\n")
 	d, err := New(Config{
 		WI:        WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		BundleDir: bundle,
@@ -419,42 +246,6 @@ func TestBundleListIsNotADriverCandidateSource(t *testing.T) {
 	}
 }
 
-// polyforge#33: the second EWR on one candidate rotates like a model-class
-// death; at the chain end it is exhaustion (once) and the bound block names
-// the escape hatch.
-func TestEwrRotationDecision(t *testing.T) {
-	chain := []string{"pi:a", "pi:b"}
-	decide := func(t *testing.T, list []string, cand string, attempts []capsule.Attempt) failureDecision {
-		t.Helper()
-		d := harnessDriver(t, list, attempts)
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		st := d.exec.Steps["review"]
-		st.Candidate = cand
-		st.Supervision = &capsule.StepSupervision{FailureCount: len(attempts)}
-		return d.decideFailureLocked("review", st, &StepFailure{Cause: FailEndedWithoutResult, Detail: "x"})
-	}
-	if dec := decide(t, chain, "pi:a", nil); dec.Switch || dec.Exhausted {
-		t.Fatalf("first EWR: %+v, want a plain same-model retry", dec)
-	}
-	dec := decide(t, chain, "pi:a", []capsule.Attempt{att(FailEndedWithoutResult, "pi:a"), att(FailRateLimited, "pi:a")})
-	if !dec.Switch || dec.From != "pi:a" || dec.To != "pi:b" || dec.Count != 0 || !dec.Fresh {
-		t.Fatalf("second EWR (neutral between): %+v, want a fresh switch pi:a→pi:b with the counter reset", dec)
-	}
-	dec = decide(t, chain, "pi:b", []capsule.Attempt{att(FailEndedWithoutResult, "pi:a"), att(FailEndedWithoutResult, "pi:a"), att(FailEndedWithoutResult, "pi:b")})
-	if !dec.Switch && !dec.Exhausted {
-		t.Fatalf("second EWR on b: %+v, want exhaustion at the chain end", dec)
-	}
-	if dec.Switch {
-		t.Fatalf("second EWR on the end model switched: %+v", dec)
-	}
-	dec = decide(t, chain, "pi:b", []capsule.Attempt{att(FailEndedWithoutResult, "pi:b"), att(FailEndedWithoutResult, "pi:b")})
-	if dec.Switch || dec.Exhausted || !dec.Block ||
-		!strings.Contains(dec.BlockReason, `"pi:b"`) || !strings.Contains(dec.BlockReason, ".polyforge.yaml") || !strings.Contains(dec.BlockReason, "pf resume") {
-		t.Fatalf("third EWR at the end: %+v, want the bound block naming the model and the escape hatch", dec)
-	}
-}
-
 // A composition failure at dispatch blocks the workflow (the owner fixes the
 // config and resumes); a candidate change between two dispatches is one
 // candidate_switched event.
@@ -468,7 +259,7 @@ func TestComposeFailureBlocksAndChangeEmitsSwitch(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{{ID: "fix", ContextPolicy: "fresh"}}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{{ID: "fix"}}...),
 		Spawner:  &fakeSpawner{},
 		Log:      log,
 		Compose: func() (map[string][]string, error) {

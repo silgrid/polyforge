@@ -105,16 +105,15 @@ func TestSmokeEndToEnd(t *testing.T) {
 	}
 
 	// --- Write a minimal v2 workflow (autopilot shape: grill→fix→verification→finalize) ---
-	wfYAML := `---
-name: smoke-bundle
+	wfYAML := `name: smoke-bundle
 description: Phase-1 smoke test bundle
 steps:
   - { id: grill, context_policy: fresh, handoff: true, interactive: true }
   - { id: fix, context_policy: inherit, handoff: true }
   - { id: verification, gate: true, context_policy: fresh }
   - { id: finalize, gate: true, context_policy: inherit }
----`
-	if err := os.WriteFile(filepath.Join(capsuleDir, "workflows/smoke-bundle/workflow.md"), []byte(wfYAML), 0o644); err != nil {
+`
+	if err := os.WriteFile(filepath.Join(capsuleDir, "workflows/smoke-bundle/workflow.yaml"), []byte(wfYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

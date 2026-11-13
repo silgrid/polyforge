@@ -1,0 +1,65 @@
+{
+ "schema": 1,
+ "run": 3,
+ "out_dir": "runtime-state/verify/3",
+ "mechanical_verdict": "fail",
+ "fail_reason": "polyforge:full-8: `cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all` exit 1; new failures: e2e/run.mjs: no scenario marker — } [not re-runnable: the planned aggregate e2e command is not one simple command] (log polyforge/19.log)",
+ "tier": {
+  "requested": "full",
+  "effective": "full"
+ },
+ "checks": [
+  {
+   "name": "polyforge:full-8",
+   "status": "fail",
+   "detail": "`cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all` exit 1; new failures: e2e/run.mjs: no scenario marker — } [not re-runnable: the planned aggregate e2e command is not one simple command] (log polyforge/19.log)"
+  }
+ ],
+ "pre_existing_failures": [],
+ "units": [
+  {
+   "repo": "polyforge",
+   "check": "polyforge:full-8",
+   "kind": "e2e-suite",
+   "name": "e2e/run.mjs",
+   "file": "e2e/run.mjs",
+   "status": "fail",
+   "marker": "FAIL e2e/run.mjs: no scenario marker — }",
+   "signature": "no scenario marker — }",
+   "detail": "not re-runnable: the planned aggregate e2e command is not one simple command"
+  }
+ ],
+ "repos": [
+  {
+   "name": "polyforge",
+   "touched": true,
+   "plan": "planned",
+   "mode": "full",
+   "paths": [
+    ".github/workflows/pf-ci.yml",
+    ".polyforge/verify-scope.conf",
+    "docs/contributing.md",
+    "internal/polyforge/daemon/chatsubs_test.go",
+    "internal/polyforge/daemon/helpers_test.go",
+    "internal/polyforge/daemon/lifecycle_test.go",
+    "internal/polyforge/daemon/models_route_test.go",
+    "test/testdata/verify-scope/verify-scope-go.sh",
+    "test/w380_daemon_race_gate_test.go"
+   ],
+   "commands": [
+    {
+     "check": "polyforge:full-8",
+     "name": "full-8",
+     "phase": "full",
+     "origin": "plan",
+     "command": "cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all",
+     "status": "fail",
+     "exit_code": 1,
+     "log_path": "runtime-state/verify/3/polyforge/19.log"
+    }
+   ]
+  }
+ ],
+ "unplanned_repos": [],
+ "source": "replay fixture case380-run3: the failing checks, units and touched paths of a real 2026-11-08 verify-run result.json, trimmed (repo renamed)"
+}

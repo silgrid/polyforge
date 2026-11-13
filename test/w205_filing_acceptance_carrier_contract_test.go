@@ -38,10 +38,8 @@ func TestW205FilingAcceptanceCarrierContract(t *testing.T) {
 		{
 			filepath.Join("skills", "polyforge", "verbs", "file.md"),
 			[]string{
-				"four mandatory",
+				"two mandatory",
 				"Lane + reason",
-				"Tier + reason",
-				"Entry confirmation",
 				"Acceptance carrier",
 				"carried by <step id>",
 				"step table",
@@ -52,10 +50,8 @@ func TestW205FilingAcceptanceCarrierContract(t *testing.T) {
 		{
 			filepath.Join("skills", "polyforge", "verbs", "execute-intent.md"),
 			[]string{
-				"four mandatory",
+				"two mandatory",
 				"Lane + reason",
-				"Tier + reason",
-				"Entry confirmation",
 				"Acceptance carrier",
 				"carried by <step id>",
 				"step table",

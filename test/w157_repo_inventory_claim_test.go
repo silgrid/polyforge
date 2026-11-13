@@ -25,7 +25,7 @@ func TestW157ClaimClonesOnlyDeclaredRepos(t *testing.T) {
 	raw, err := inst.client.CreateWorkItem(aihubclient.CreateWorkItemRequest{
 		Project:       v1Project,
 		Goal:          "w157: only the declared repo is cloned",
-		BundleName:    strPtr("autopilot"),
+		BundleName:    strPtr(vehicleLane),
 		RepoInventory: json.RawMessage(`[{"name":"demo"}]`),
 	})
 	if err != nil {
@@ -40,9 +40,8 @@ func TestW157ClaimClonesOnlyDeclaredRepos(t *testing.T) {
 	wi := created.ID
 	inst.trackWI(wi)
 	inst.setPlan(t, wi, []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	})
 
 	d := newV1Daemon(t, inst)

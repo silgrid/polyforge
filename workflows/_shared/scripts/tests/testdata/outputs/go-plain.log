@@ -1,0 +1,36 @@
+# example.invalid/calc/broken [example.invalid/calc/broken.test]
+broken/broken_test.go:5:31: undefined: undefined
+--- FAIL: TestPanics (0.00s)
+panic: assignment to entry in nil map [recovered, repanicked]
+
+goroutine 7 [running]:
+testing.tRunner.func1.2({0x55a7a0, 0x6cbe90})
+	/root/.g/versions/1.26.10/src/testing/testing.go:1974 +0x232
+testing.tRunner.func1()
+	/root/.g/versions/1.26.10/src/testing/testing.go:1977 +0x349
+panic({0x55a7a0?, 0x6cbe90?})
+	/root/.g/versions/1.26.10/src/runtime/panic.go:860 +0x13a
+example.invalid/calc/boom.TestPanics(0x32b007dcc488?)
+	/work/calc/boom/boom_test.go:9 +0x28
+testing.tRunner(0x32b007dcc488, 0x592e70)
+	/root/.g/versions/1.26.10/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1
+	/root/.g/versions/1.26.10/src/testing/testing.go:2101 +0x4c5
+FAIL	example.invalid/calc/boom	0.004s
+FAIL	example.invalid/calc/broken [build failed]
+--- FAIL: TestAdd (0.00s)
+    calc_test.go:10: Add(1, 2) = 4, want 3
+--- FAIL: TestTable (0.00s)
+    --- FAIL: TestTable/x (0.00s)
+        calc_test.go:18: diff:
+            	expected: 2
+            	actual  : 3
+    --- FAIL: TestTable/xx (0.00s)
+        calc_test.go:18: diff:
+            	expected: 4
+            	actual  : 5
+--- FAIL: TestTemp (0.00s)
+    calc_test.go:28: wrote nothing under /tmp/TestTemp2285320701/001/file
+FAIL
+FAIL	example.invalid/calc/calc	0.002s
+FAIL

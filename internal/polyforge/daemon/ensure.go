@@ -18,6 +18,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"io"
 	"os"
 	"os/exec"
@@ -144,9 +145,11 @@ func absOr(path string) string {
 
 var hostSanitizeRe = regexp.MustCompile(`[^a-z0-9-]`)
 
-// ensureMachineID answers the recorded daemon id, else hostMachineID.
+// ensureMachineID answers the default Cell's recorded daemon id
+// (cells/default/daemon-id), else hostMachineID.
 func ensureMachineID(dataDir string) string {
-	if raw, err := os.ReadFile(filepath.Join(dataDir, daemonIDFile)); err == nil {
+	path := filepath.Join(cellcfg.CellDir(dataDir, cellcfg.DefaultProfile), daemonIDFile)
+	if raw, err := os.ReadFile(path); err == nil {
 		if id := strings.TrimSpace(string(raw)); id != "" {
 			return id
 		}

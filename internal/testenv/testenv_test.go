@@ -85,4 +85,23 @@ func TestLeftoversListsEntries(t *testing.T) {
 	}
 }
 
+// The exit guard's null-device check: a regular file standing where the
+// null device should be, or nothing at all, is an error; the real null
+// device is not. It only reads (stat), never touches the real device.
+func TestNullDeviceGuard(t *testing.T) {
+	standIn := filepath.Join(t.TempDir(), "null")
+	if err := os.WriteFile(standIn, []byte("bash: line 1: x: command not found\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := nullDeviceErr(standIn); err == nil {
+		t.Error("a regular file holding text passed as the null device")
+	}
+	if err := nullDeviceErr(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Error("a missing path passed as the null device")
+	}
+	if err := nullDeviceErr(os.DevNull); err != nil {
+		t.Errorf("the real null device %s was refused: %v", os.DevNull, err)
+	}
+}
+
 func TestMain(m *testing.M) { Main(m) }

@@ -51,16 +51,16 @@ func TestSpawnStartedCmdMatchesBuilder(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := []struct {
-		name      string
-		p         SpawnParams
-		want      []string // argv after argv[0]
-		wantEnv   []string
-		procStdin bool // the handle keeps stdin (pi RPC) or closed it (claude)
+		name    string
+		p       SpawnParams
+		want    []string // argv after argv[0]
+		wantEnv []string
+		harness string // the harness the handle frames later messages for
 	}{
 		{"pi", piP, []string{"--mode", "rpc", "--no-skills", "--no-context-files",
 			"--no-prompt-templates", "--model", "x/y"},
-			newPiSpawner(cfg).buildCmd(piP).Env, true},
-		{"claude", clP, clWant.Args[1:], clWant.Env, false},
+			newPiSpawner(cfg).buildCmd(piP).Env, harness.Pi},
+		{"claude", clP, clWant.Args[1:], clWant.Env, harness.Claude},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -87,8 +87,8 @@ func TestSpawnStartedCmdMatchesBuilder(t *testing.T) {
 			if !slices.Equal(c.Env, tc.wantEnv) {
 				t.Fatal("env values drifted from the builder")
 			}
-			if c.SysProcAttr == nil || !c.SysProcAttr.Setpgid {
-				t.Fatal("not its own process group")
+			if c.SysProcAttr == nil || !c.SysProcAttr.Setsid {
+				t.Fatal("not its own session (and so its own process group)")
 			}
 			if _, ok := c.Stdout.(*os.File); !ok {
 				t.Fatalf("stdout is %T, want an own *os.File pipe", c.Stdout)
@@ -99,8 +99,11 @@ func TestSpawnStartedCmdMatchesBuilder(t *testing.T) {
 			if c.Stdin == nil {
 				t.Fatal("no stdin pipe")
 			}
-			if (pr.stdin != nil) != tc.procStdin {
-				t.Fatalf("handle stdin kept = %v, want %v", pr.stdin != nil, tc.procStdin)
+			if pr.stdin == nil {
+				t.Fatal("the handle does not hold stdin: the dispatch's message channel is gone")
+			}
+			if pr.harness != tc.harness {
+				t.Fatalf("handle harness %q, want %q", pr.harness, tc.harness)
 			}
 			if len(pr.taps) != 1 {
 				t.Fatalf("taps = %d, want the OnRecord tap", len(pr.taps))
@@ -138,12 +141,16 @@ func spawnedEnv(t *testing.T, cfg *Config, p SpawnParams) []string {
 // "equals buildCmd": a claude step inherits no ANTHROPIC_* / CLAUDECODE /
 // CLAUDE_CODE_* / CLAUDE_CONFIG_DIR (only the adapter's own switches and
 // config dir), a pi step keeps them; both lose POLYFORGE_* / PF_* except
-// the adapter's markers. Only names are reported, never values.
+// the adapter's markers. Only names are reported, never values. A daemon
+// started inside a Claude Code session inherits that session's messaging
+// address: it never reaches a claude step, whose own inbox
+// switch is the adapter's.
 func TestSpawnStartedEnvHygiene(t *testing.T) {
 	inherited := map[string]string{
 		"ANTHROPIC_AUTH_TOKEN": "junk-eq", "ANTHROPIC_BASE_URL": "junk-eq",
 		"CLAUDECODE": "junk-eq", "CLAUDE_CODE_ENTRYPOINT": "junk-eq",
-		"CLAUDE_CONFIG_DIR": "junk-eq", "POLYFORGE_EQ_KEY": "junk-eq",
+		"CLAUDE_CODE_MESSAGING_SOCKET": "junk-eq", "CLAUDE_CODE_MESSAGING_TOKEN": "junk-eq",
+		"CLAUDE_CODE_HARBOR_KITE": "junk-eq", "CLAUDE_CONFIG_DIR": "junk-eq", "POLYFORGE_EQ_KEY": "junk-eq",
 		"PF_CHAT_ID": "junk-eq", "EQ_KEEP_ME": "kept-eq",
 	}
 	for k, v := range inherited {
@@ -155,10 +162,13 @@ func TestSpawnStartedEnvHygiene(t *testing.T) {
 	p := SpawnParams{
 		WorkItemID: "wi-eq", CapsuleDir: dir, InitialPrompt: "p", HarnessSession: testSession,
 	}
-	ownPF := []string{"PF_WI_ID", "PF_DAEMON_ID", "PF_TOOL_WINDOW_MS"}
+	// the adapter's own PF_ names for a derivation naming its capsule (and
+	// no lane, round or step): the markers, the tool window and the
+	// capsule root its scripts run from (PF_CAPSULE,)
+	ownPF := []string{"PF_WI_ID", "PF_DAEMON_ID", "PF_TOOL_WINDOW_MS", "PF_CAPSULE"}
 	ownClaude := []string{
 		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "CLAUDE_CODE_STARTUP_FAILURE_RESULTS",
-		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CONFIG_DIR",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_ENABLE_TASKS", "CLAUDE_CODE_HARBOR_KITE", "CLAUDE_CONFIG_DIR",
 	}
 	check := func(t *testing.T, env []string, claude bool) {
 		t.Helper()

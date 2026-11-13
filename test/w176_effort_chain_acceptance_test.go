@@ -24,10 +24,9 @@ func TestW176MixedEffortChain(t *testing.T) {
 	w159Plan(t, inst, wi, map[string]any{
 		"bad_models": []string{"claude-opus-5-5"},
 		"actions": []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true}, // the claude dispatch: 404 first
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"}, // the claude dispatch: 404 first
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}})
 	capDir := w079Run(t, d, inst, ws, wi)
 
@@ -72,7 +71,7 @@ func TestW176MixedEffortChain(t *testing.T) {
 	if st := x.Steps["fix"]; st == nil || st.model() != "example-gateway/model-a" || st.effort() != "low" {
 		t.Fatalf("fix step record %+v, want model example-gateway/model-a effort low", st)
 	}
-	if st := x.Steps["grill"]; st == nil || st.effort() != "" {
-		t.Fatalf("grill step record %+v, want no effort", st)
+	if st := x.Steps["review"]; st == nil || st.effort() != "" {
+		t.Fatalf("review step record %+v, want no effort", st)
 	}
 }

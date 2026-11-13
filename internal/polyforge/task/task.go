@@ -169,7 +169,6 @@ func ValidID(id string) bool {
 type Spec struct {
 	Project    string   `json:"project"`
 	Prompt     string   `json:"prompt,omitempty"`
-	OriginChat string   `json:"origin_chat,omitempty"`
 	Candidates []string `json:"candidates,omitempty"`
 	// MaxDuration is a time.Duration; the JSON name states the unit
 	// (nanoseconds), which is what encoding/json emits for it.
@@ -190,6 +189,11 @@ type Spec struct {
 	// least-privilege narrowing, never a sandbox: the write-verb guard
 	// (PF_TASK_ID) stays the one capability gate.
 	ReadOnlyTools bool `json:"read_only_tools,omitempty"`
+	// Synchronous marks a task its in-process caller waits on and answers
+	// from (the message analyze and prompt tasks): its end is that caller's
+	// answer, so the daemon's decision feed records no background-task
+	// decision for it. Not a wire field of POST /task/spawn.
+	Synchronous bool `json:"synchronous,omitempty"`
 }
 
 // ReporterMachine is the task list's reporter for every task whose caller
@@ -215,8 +219,6 @@ type Task struct {
 	Report         string        `json:"report,omitempty"`
 	Truncated      bool          `json:"truncated,omitempty"`
 	Error          string        `json:"error,omitempty"`
-	// Delivered is true once the origin chat acked the terminal summary.
-	Delivered bool `json:"delivered,omitempty"`
 }
 
 // Clone answers a copy of t (no shared slices) suitable for handing out

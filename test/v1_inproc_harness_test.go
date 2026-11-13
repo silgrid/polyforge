@@ -7,20 +7,40 @@ package test
 // (the per-WI supervisor), runtime.DefaultSpawner (the real pi-spawner
 // that derives the real fakepi process), the driver with its
 // supervision link — with the observe config injected.
+//
+// There is no daemon in the rig, yet a workflow contract 4 step ends each
+// dispatch with `pf step handoff`, and the driver reacts only to the
+// accepted hand-off on the capsule's call ledger. So the rig serves the
+// daemon's step-call face itself (POST /step/call on its own socket, handed
+// to the step processes as PF_DAEMON_SOCKET): it checks a hand-off's shape
+// and records it the way the daemon's stephandoff.go does — the call and
+// result lines on runtime-state/step-calls.jsonl, the stamped section on
+// artifacts/handoff.md. Only `pf step handoff` is served (a rig scenario
+// needs no ask, memory or hub call); the lane checks and the owner-message
+// statuses stay the daemon's.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/driver"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/observe"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
@@ -39,6 +59,11 @@ type inprocRig struct {
 	done   chan struct{}
 
 	sup *supervise.Registry
+
+	// calls is the rig's step-call face (rigServeStepCalls); callMu
+	// serializes its calls (the daemon's per-capsule step-call lock).
+	calls  *http.Server
+	callMu sync.Mutex
 }
 
 // inprocObsTune is one injected tweak of the rig's observe.Config
@@ -96,6 +121,8 @@ func newInprocRig(t *testing.T, inst *v1Install, obsTune ...inprocObsTune) *inpr
 		WorkflowsDir:  inst.workflowsPath(),
 		PiBin:         inst.fakepiPath,
 		ClaudeBin:     "/nonexistent/claude-test-guard", // never the host claude
+		// the step processes' pf reaches the rig's step-call face
+		DaemonSocket: rig.serveStepCalls(t),
 	}
 	sp := runtime.DefaultSpawner(&rtCfg)
 	// polyforge#106: the driver IS the engine — the rig binds the real
@@ -150,6 +177,9 @@ func newInprocRig(t *testing.T, inst *v1Install, obsTune ...inprocObsTune) *inpr
 	go func() { rig.obs.Run(rig.ctx); close(rig.done) }()
 
 	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("rig events tail (%s):\n%s", rig.dataDir, eventsTail(rig.dataDir))
+		}
 		// Teardown order: cancel the loops, then TERMINATE every live
 		// agent handle the runtime still holds — the in-process runtime
 		// does not kill agents on ctx end (Run just returns; only the
@@ -167,8 +197,165 @@ func newInprocRig(t *testing.T, inst *v1Install, obsTune ...inprocObsTune) *inpr
 		case <-rig.done:
 		case <-time.After(5 * time.Second):
 		}
+		_ = rig.calls.Close()
 	})
 	return rig
+}
+
+// serveStepCalls starts the rig's step-call face on a socket of its own
+// (a short path: the unix socket bound) and answers the path.
+func (r *inprocRig) serveStepCalls(t *testing.T) string {
+	t.Helper()
+	sock := filepath.Join(shortTmp(t, "pfrigsock"), "d.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("inproc rig: step-call socket: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /step/call", r.stepCallRoute)
+	r.calls = &http.Server{Handler: mux}
+	go func() { _ = r.calls.Serve(ln) }()
+	return sock
+}
+
+// stepCallRoute records and serves one `pf step` call as the daemon's
+// stepCallRoute does: the call line BEFORE it runs, then what it came to
+// (an accepted hand-off's record, or the refusal) BEFORE the answer
+// leaves.
+func (r *inprocRig) stepCallRoute(w http.ResponseWriter, req *http.Request) {
+	capDir, step, spawn, why := r.stepCaller()
+	if why != "" {
+		rigStepErr(w, api.ErrDaemonForbidden, "/step/call: "+why)
+		return
+	}
+	var call struct {
+		Verb string          `json:"verb"`
+		Args json.RawMessage `json:"args"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&call); err != nil {
+		rigStepErr(w, api.ErrDaemonBadInput, "the call is not a valid {verb, args} JSON request: "+err.Error())
+		return
+	}
+	r.callMu.Lock()
+	defer r.callMu.Unlock()
+	var ex capsule.Execution
+	if raw, err := os.ReadFile(filepath.Join(capDir, capsule.ExecutionJSON)); err == nil {
+		_ = json.Unmarshal(raw, &ex)
+	}
+	var st *capsule.Step
+	if ex.Steps != nil {
+		st = ex.Steps[step]
+	}
+	var round int64
+	if st != nil {
+		round = st.Round
+	}
+	line, err := stepcall.Append(capDir, stepcall.Line{Kind: stepcall.KindCall, Step: step, Round: round, Spawn: spawn, Verb: call.Verb, Args: call.Args})
+	if err != nil {
+		rigStepErr(w, api.ErrDaemonInternal, "the call could not be recorded in the call ledger: "+err.Error())
+		return
+	}
+	rec, code, detail := rigHandoff(capDir, line, st, call.Verb, call.Args)
+	res := stepcall.Line{Kind: stepcall.KindResult, Step: step, Round: round, Spawn: spawn, Verb: call.Verb, Call: line.Seq}
+	switch ae := (api.Error{Code: code}); {
+	case code == "":
+		res.Outcome, res.Handoff = stepcall.OutcomeOK, rec
+	case ae.HTTPStatus() >= 500:
+		res.Outcome, res.Code, res.Error = stepcall.OutcomeFailed, code, detail
+	default:
+		res.Outcome, res.Code, res.Error = stepcall.OutcomeRefused, code, detail
+	}
+	if _, err := stepcall.Append(capDir, res); err != nil {
+		rigStepErr(w, api.ErrDaemonInternal, fmt.Sprintf("call %d ran, but what it came to could not be recorded: %v", line.Seq, err))
+		return
+	}
+	if code != "" {
+		rigStepErr(w, code, detail)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"call": line.Seq, "step": step, "round": round, "spawn": spawn,
+		"status": rec.Status, "to": rec.To, "path": capsule.HandoffMD,
+	})
+}
+
+// stepCaller resolves the calling dispatch: the newest live step process
+// of the rig's jobs, by the spawn journal (pid + start time). The daemon
+// walks the UDS peer's process tree to it; the rig needs no peer
+// credentials because its scenarios run one work item at a time — more
+// than one job with a live step process is refused, never guessed.
+func (r *inprocRig) stepCaller() (capDir, step string, spawn int64, why string) {
+	n := 0
+	for _, ji := range r.rt.List() {
+		entries, _ := capsule.ReadSpawnJournal(ji.CapsuleDir)
+		for i := len(entries) - 1; i >= 0; i-- {
+			e := entries[i]
+			if e.PID > 1 && runtime.JournaledProcessLive(e.PID, e.StartedAt) {
+				capDir, step, spawn = ji.CapsuleDir, e.StepID, int64(e.SpawnN)
+				n++
+				break
+			}
+		}
+	}
+	switch {
+	case n == 0:
+		return "", "", 0, "serves step agents only (no job of the rig has a live step process)"
+	case n > 1:
+		return "", "", 0, "the in-process rig resolves a caller only while one work item has a live step process"
+	}
+	return capDir, step, spawn, ""
+}
+
+// rigHandoff checks and records one hand-off call of the dispatch (step
+// of st, the call's spawn), answering its ledger record or the refusal's
+// code and detail: the daemon's shape checks (the status, the once-only
+// hand-off, the body's template sections) and its stamped section on
+// artifacts/handoff.md.
+func rigHandoff(capDir string, call stepcall.Line, st *capsule.Step, verb string, raw json.RawMessage) (*stepcall.Handoff, string, string) {
+	if verb != stepcall.VerbHandoff {
+		return nil, api.ErrDaemonBadInput, fmt.Sprintf("the in-process rig serves `pf step handoff` only (asked for %q)", verb)
+	}
+	var a stepcall.HandoffArgs
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&a); err != nil {
+		return nil, api.ErrDaemonBadInput, "the call's args: " + err.Error()
+	}
+	lines, err := stepcall.Read(capDir)
+	if err != nil {
+		return nil, api.ErrDaemonInternal, "handoff: " + err.Error()
+	}
+	switch {
+	case stepcall.HandoffOf(lines, call.Step, call.Spawn) != nil:
+		return nil, api.ErrDaemonConflict, fmt.Sprintf("handoff refused: this dispatch (step %s, spawn %d) already handed off", call.Step, call.Spawn)
+	case !stepcall.IsStatus(a.Status):
+		return nil, api.ErrDaemonBadInput, fmt.Sprintf("handoff refused: --status %q is none of %s", a.Status, strings.Join(stepcall.Statuses, ", "))
+	case stepcall.NeedsOwner(a.Status) || a.PerOwner != "":
+		return nil, api.ErrDaemonBadInput, "handoff refused: the in-process rig carries no owner messages to cite (--per-owner)"
+	}
+	if err := stepcall.CheckBody(a.Body, len(stepcall.StepHandoffs(lines, call.Step)) > 0, capsule.DispatchLanguage(capDir, call.Step, call.Spawn)); err != nil {
+		return nil, api.ErrDaemonBadInput, "handoff refused: " + err.Error()
+	}
+	h := stepcall.Header{
+		Call: call.Seq, Step: call.Step, Round: call.Round, Spawn: call.Spawn,
+		EndedAt: time.Now().UTC().Format(time.RFC3339), Status: a.Status, To: a.To, Reason: a.Reason,
+	}
+	if st != nil {
+		h.StartedAt, h.Model = st.StepStartedAt, st.Candidate
+	}
+	if err := stepcall.AppendHandoff(capDir, stepcall.RenderSection(h, a.Body)); err != nil {
+		return nil, api.ErrDaemonInternal, "handoff: the section could not be appended: " + err.Error()
+	}
+	return &stepcall.Handoff{Status: a.Status, To: a.To, Reason: a.Reason, Candidate: h.Model, StartedAt: h.StartedAt}, "", ""
+}
+
+// rigStepErr answers one typed refusal the way the daemon's writeErr does.
+func rigStepErr(w http.ResponseWriter, code, detail string) {
+	ae := api.Error{Code: code, Detail: detail}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(ae.HTTPStatus())
+	_ = json.NewEncoder(w).Encode(ae)
 }
 
 // start claims and runs one work item through the real Runtime.

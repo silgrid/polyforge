@@ -1,7 +1,7 @@
 package cli
 
 // verify_scope_smoke_test.go: the engine's full-tier e2e selection for a
-// repository that opts in with smoke_suite= (tools/verify-scope). Every case
+// repository that opts in with smoke_suite= (workflows/_shared/scripts/verify-scope). Every case
 // runs the in-tree engine through its documented surface (`--base <base>
 // [--full] --json` in a git fixture), never the release-installed copy. The
 // JSON output needs python3, a documented prerequisite — without it the test
@@ -78,9 +78,9 @@ func smokeRun(t *testing.T, files map[string]string, changes map[string]string, 
 		t.Skip("git is not installed: the engine fixtures are git repositories")
 	}
 	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 is not installed: tools/verify-scope --json needs it (a documented prerequisite)")
+		t.Skip("python3 is not installed: workflows/_shared/scripts/verify-scope --json needs it (a documented prerequisite)")
 	}
-	engine, err := filepath.Abs(filepath.Join("..", "..", "..", "tools", "verify-scope"))
+	engine, err := filepath.Abs(filepath.Join("..", "..", "..", "workflows", "_shared", "scripts", "verify-scope"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func smokeRun(t *testing.T, files map[string]string, changes map[string]string, 
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("tools/verify-scope: %v\nstderr: %s", err, stderr.String())
+		t.Fatalf("workflows/_shared/scripts/verify-scope: %v\nstderr: %s", err, stderr.String())
 	}
 	var r smokeReport
 	if err := json.Unmarshal(out, &r); err != nil {

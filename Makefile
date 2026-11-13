@@ -1,11 +1,13 @@
 # Version stamped into the pf binary at link time: internal/version.Version,
-# printed by `pf --version` / `pf aihub --version`. Defaults to the git tag when
-# HEAD is exactly tagged, else "dev". The documented release procedure tags
-# AFTER the build, so it passes VERSION=<tag> explicitly to `make release`.
-VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || echo dev)
+# printed by `pf --version` / `pf aihub --version`. Defaults to the release tag
+# (vX.Y.Z) when HEAD is exactly tagged with one, else "dev" - never another
+# tag on HEAD, such as a green/<date>-<n> releasable marker (tools/green-tag).
+# The documented release procedure tags AFTER the build, so it passes
+# VERSION=<tag> explicitly to `make release`.
+VERSION ?= $(shell git describe --tags --exact-match --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || echo dev)
 GO_LDFLAGS := -X github.com/silgrid/polyforge/internal/version.Version=$(VERSION)
 
-.PHONY: check build webui-build crossbuild vet fmt test xrefs release
+.PHONY: check build webui-build crossbuild vet fmt test xrefs release pi-web-build pi-web-lint pi-web-test pi-web-e2e
 
 # The console SPA build: every binary-producing target
 # builds the locked frontend FIRST, so the go:embed dist tree exists
@@ -16,13 +18,40 @@ GO_LDFLAGS := -X github.com/silgrid/polyforge/internal/version.Version=$(VERSION
 # from the one committed lockfile — no node_modules shortcut. A host
 # without a node of the pinned major fails loudly, never skips.
 WEBUI_NODE := $(shell cat .nvmrc 2>/dev/null)
+# NODE_CHECK is that check, shared by every target that runs npm (the console
+# SPA and the pi-web package,); $@ names the target.
+NODE_CHECK = command -v node >/dev/null 2>&1 || { echo "$@: node $(WEBUI_NODE).x is required (major version pinned by .nvmrc); install node $(WEBUI_NODE).x first"; exit 1; }; \
+	if [ "$$(node --version | cut -d. -f1)" != "v$(WEBUI_NODE)" ]; then \
+		echo "$@: node $$(node --version) is not major $(WEBUI_NODE) (pinned by .nvmrc); install node $(WEBUI_NODE).x first"; exit 1; \
+	fi
 
 webui-build:
-	@command -v node >/dev/null 2>&1 || { echo "webui-build: node $(WEBUI_NODE).x is required (major version pinned by .nvmrc); install node $(WEBUI_NODE).x first"; exit 1; }
-	@if [ "$$(node --version | cut -d. -f1)" != "v$(WEBUI_NODE)" ]; then \
-		echo "webui-build: node $$(node --version) is not major $(WEBUI_NODE) (pinned by .nvmrc); install node $(WEBUI_NODE).x first"; exit 1; \
-	fi
+	@$(NODE_CHECK)
 	cd webui && npm ci && npm run build
+
+# The pi-web package: its own npm package under pi-web/,
+# built and tested with its own scripts. pi-web-build is a production
+# `next build` (the release path's build; never during `npm run dev`).
+# pi-web-lint and pi-web-test install the locked dependencies only when
+# pi-web/node_modules is absent; pi-web-e2e needs Chromium
+# (npx playwright install chromium, once).
+PIWEB_DEPS = cd pi-web && { [ -d node_modules ] || npm ci; }
+
+pi-web-build:
+	@$(NODE_CHECK)
+	cd pi-web && npm ci && npm run build
+
+pi-web-lint:
+	@$(NODE_CHECK)
+	$(PIWEB_DEPS) && npm run lint && node_modules/.bin/tsc --noEmit
+
+pi-web-test:
+	@$(NODE_CHECK)
+	$(PIWEB_DEPS) && npm test
+
+pi-web-e2e:
+	@$(NODE_CHECK)
+	$(PIWEB_DEPS) && npm run test:e2e:all
 
 build: webui-build
 	go build -trimpath -ldflags "$(GO_LDFLAGS)" ./...
@@ -50,8 +79,11 @@ test: webui-build
 	go test $$(go list ./... | grep -v '/test$$') -count=1
 	sh test/e2e-parallel.sh
 
+# fmt lists tracked .go files only: pi-web/node_modules is
+# untracked and may carry stray .go files, which a `gofmt -l .` walk would
+# read. .polyforge/verify-scope.conf runs the same gate.
 fmt:
-	@out=$$(gofmt -l .); \
+	@out=$$(gofmt -l $$(git ls-files '*.go')); \
 	if [ -n "$$out" ]; then \
 		echo "gofmt needed on:"; echo "$$out"; exit 1; \
 	fi
@@ -70,7 +102,9 @@ xrefs:
 		echo "xrefs: python3 not found; SKIPPING the design-doc cross-reference check"; \
 	fi
 
-check: build vet fmt xrefs crossbuild test
+# check covers both components: the Go gates, then the pi-web package's
+# lint/typecheck and unit tests (its e2e suites are pi-web-e2e).
+check: build vet fmt xrefs crossbuild test pi-web-lint pi-web-test
 
 # release builds the three shipped pf binaries with the git tag injected
 # into internal/version.Version via -ldflags -X, into artifacts/release-<tag>/

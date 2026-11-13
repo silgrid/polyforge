@@ -1,27 +1,37 @@
 package test
 
 // v2_supervision_test.go: the driver <-> supervisor contract end to end
-// (v2-converge 2.2/2.3, appendix B), one historical incident per test,
-// against the REAL `pf daemon` + the fakepi step process. Every scenario
-// injects the supervision bounds through the daemon's own flags and
-// asserts on the durable faces: the events log (step_dead for a
-// supervisor verdict, step_failed / candidate_switched / blocked from the
-// driver), execution.json (the attempts' cause sub-class, the per-step
-// failure ledger, the relaxed bounds) and the fakepi journal (which model
-// each dispatch ran under).
+// (v2-converge 2.2/2.3, appendix B), against the REAL `pf daemon` + the
+// fakepi step process. Every scenario injects the supervision bounds
+// through the daemon's own flags and asserts on the durable faces: the
+// events log (step_dead for a supervisor verdict, step_failed /
+// candidate_switched / blocked from the driver), execution.json (the
+// attempts' cause sub-class, the per-step failure ledger, the relaxed
+// bounds) and the fakepi journal (which model each dispatch ran under).
 //
-//	F5   fatal provider error, then idle          -> TestV2F5...
+// The supervision rules (design #483 §7) keep one detailed test each in
+// internal/polyforge/driver/supervision_rules_test.go and at most one e2e
+// smoke each:
+//
+//	ended without a hand-off -> TestV2OkEndedTurnWithoutResultRetriesSameModel
+//	model class              -> w33's TestW33ChainEndModelDeathBlocksAndResumeKeepsEndModel
+//	transient                -> v2_live_error_turn_d7_test.go
+//	timeout                  -> TestV2StepTimeoutLongTaskRelaxesThenBlocks
+//	other exit               -> v1_s17_recovery_budget_test.go
+//
+// and the facts around them:
+//
+//	#83  long tool within Y                       -> TestV2LongToolWithinYSurvives
 //	F15  UI noise only                            -> v1_s21 shape A
-//	#83  long tool within Y / tool beyond Y       -> TestV2Long..., TestV2ToolHung...
 //	#99  parked question: no timers               -> v1_s21 (both shapes)
-//	#114 provider hang mid-step / zero events     -> w114, TestV2ZeroEvents...
-//	#117 trickle progress past T                  -> TestV2StepTimeoutTrickle...
-//	F4   model-pin failure exit                   -> TestV2ModelPinFailure...
+//	#114 provider hang mid-step                   -> w114
 //	restart: not counted, same model              -> TestV2DaemonRestart...
-//	crash loop: bounded, blocked                  -> TestV2DriverCrashLoop...
 //	two rules at once: one verdict, one failure   -> TestV2TwoRules...
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -91,108 +101,16 @@ func spawnModels(t *testing.T, capDir string) []string {
 	return out
 }
 
+// healthyTail is the vehicle lane's healthy rest after its first step
+// (fix): the review gate passes.
 func healthyTail() []map[string]any {
 	return []map[string]any{
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	}
 }
 
 func plan(first []map[string]any) []map[string]any {
 	return append(first, healthyTail()...)
-}
-
-// TestV2F5FatalProviderErrorThenIdleModelError: F5. A real harness does
-// NOT self-retry after a fatal turn error: the turn ends, nobody sends
-// the next prompt, the session idles forever (35+ minutes observed).
-// Rule 1 judges it one grace after the error — the turn ended with an
-// error and no result file followed — and the death is model_error (a
-// model-class death): the first on the candidate resumes the same
-// candidate after the retry pacing, the second consecutive one advances
-// the candidate. The error text here is a provider error naming no
-// throttle, transient, allowance or auth problem: a throttle or
-// upstream-transient text takes the D7 same-model path instead
-// (v2_live_error_turn_d7_test.go, polyforge#162), an allowance text
-// switches at once.
-func TestV2F5FatalProviderErrorThenIdleModelError(t *testing.T) {
-	inst := newV1Install(t)
-	fatal := "provider error: 400 invalid_request_error: messages must alternate between user and assistant"
-	wi := inst.newWI(t, "f5: fatal provider error then idle",
-		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "error_turn": fatal},
-			{"do": "envelope", "id": "grill", "error_turn": fatal},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		}), nil)
-	grace := 2 * time.Second
-	d := newV1Daemon(t, inst, optSupervision(supBounds{modelErrorGrace: grace}))
-	d.start()
-	t.Cleanup(func() { killOrphans(wi) })
-	d.pf(t, "submit", wi)
-
-	rec := waitForEvent(t, d, wi, "step_dead", 60*time.Second)
-	var v verdictEvent
-	eventBody(t, rec, &v)
-	if v.Cause != "model_error" || !strings.Contains(v.Evidence, "invalid_request_error") {
-		t.Fatalf("verdict %+v, want step_dead model_error naming the provider error", v)
-	}
-	// within the grace (not instantly, not never): the verdict lands
-	// between one grace and a generous bound after the error turn
-	var errAt time.Time
-	for _, j := range fakeJournal(t, d.capsuleDir(wi)) {
-		if j["type"] == "error_turn" {
-			errAt, _ = time.Parse(time.RFC3339Nano, j["at"].(string))
-			break // the first error turn: the one this verdict judged
-		}
-	}
-	vAt, _ := time.Parse(time.RFC3339Nano, rec.At)
-	if errAt.IsZero() || vAt.Sub(errAt) < grace-200*time.Millisecond || vAt.Sub(errAt) > grace+8*time.Second {
-		t.Fatalf("verdict %v after the error turn, want about the %v grace", vAt.Sub(errAt), grace)
-	}
-	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
-	fails := stepFailures(t, d, wi)
-	if len(fails) != 2 || fails[0].Cause != "model_error" || fails[0].Disposition != "retry_same_model" ||
-		fails[1].Cause != "model_error" || fails[1].Disposition != "switch_model" || fails[1].From == fails[1].To {
-		t.Fatalf("failure records %+v, want model_error/retry_same_model then model_error/switch_model", fails)
-	}
-	models := spawnModels(t, d.capsuleDir(wi))
-	if len(models) < 3 || models[0] != models[1] || models[2] == models[1] {
-		t.Fatalf("spawned models %v, want the first model twice (the resume), then the next candidate", models)
-	}
-}
-
-// TestV2ZeroEventsAfterSpawnHarnessSilent: #114 zero events. The harness
-// emits nothing at all after spawn (stuck at startup, stdout held by a
-// grandchild): rule 0 judges it within X, the driver retries the SAME
-// model, resuming the transcript.
-func TestV2ZeroEventsAfterSpawnHarnessSilent(t *testing.T) {
-	inst := newV1Install(t)
-	wi := inst.newWI(t, "#114: zero events after spawn",
-		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "silent": true},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		}), nil)
-	d := newV1Daemon(t, inst, optSupervision(supBounds{silence: 2 * time.Second}))
-	d.start()
-	t.Cleanup(func() { killOrphans(wi) })
-	d.pf(t, "submit", wi)
-
-	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
-	vs := verdicts(t, d, wi)
-	if len(vs) != 1 || vs[0].Cause != "harness_silent" || vs[0].SpawnN != 1 {
-		t.Fatalf("verdicts %+v, want exactly one harness_silent for dispatch 1", vs)
-	}
-	fails := stepFailures(t, d, wi)
-	if len(fails) != 1 || fails[0].Cause != "harness_silent" || fails[0].Disposition != "retry_same_model" || fails[0].Count != 1 || fails[0].Next != "resume" {
-		t.Fatalf("failure records %+v, want one harness_silent/retry_same_model/1/resume", fails)
-	}
-	models := spawnModels(t, d.capsuleDir(wi))
-	if len(models) < 2 || models[0] != models[1] {
-		t.Fatalf("a silent harness is retried on the SAME model: %v", models)
-	}
-	spawns := spawnJournal(t, d.capsuleDir(wi))
-	if len(spawns) < 2 || spawns[1]["resume"] != true {
-		t.Fatalf("the first retry must resume the transcript: %+v", spawns)
-	}
 }
 
 // TestV2LongToolWithinYSurvives: #83. A long build/edit is live work: the
@@ -203,7 +121,7 @@ func TestV2LongToolWithinYSurvives(t *testing.T) {
 	inst := newV1Install(t)
 	wi := inst.newWI(t, "#83: a long tool within Y survives",
 		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true,
+			{"do": "envelope", "id": "fix", "outcome": "completed",
 				"tool_ms": 6000, "tool_name": "bash"},
 		}), nil)
 	d := newV1Daemon(t, inst, optSupervision(supBounds{silence: time.Second, tool: 30 * time.Second}))
@@ -220,76 +138,6 @@ func TestV2LongToolWithinYSurvives(t *testing.T) {
 	}
 }
 
-// TestV2ToolHungBeyondYRelaxedRetry: a tool beyond Y is tool_hung — same-
-// model retry with Y relaxed x2, persisted in execution.json. The retry's
-// tool (longer than the old Y, shorter than the relaxed one) survives.
-func TestV2ToolHungBeyondYRelaxedRetry(t *testing.T) {
-	inst := newV1Install(t)
-	wi := inst.newWI(t, "#83: tool beyond Y is tool_hung, retry relaxes Y",
-		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "tool_hang": true, "tool_name": "bash"},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true,
-				"tool_ms": 3000, "tool_name": "bash"},
-		}), nil)
-	d := newV1Daemon(t, inst, optSupervision(supBounds{silence: 30 * time.Second, tool: 2 * time.Second}))
-	d.start()
-	t.Cleanup(func() { killOrphans(wi) })
-	d.pf(t, "submit", wi)
-
-	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
-	vs := verdicts(t, d, wi)
-	if len(vs) != 1 || vs[0].Cause != "tool_hung" || !strings.Contains(vs[0].Evidence, "bash") {
-		t.Fatalf("verdicts %+v, want exactly one tool_hung naming the tool", vs)
-	}
-	fails := stepFailures(t, d, wi)
-	if len(fails) != 1 || fails[0].Cause != "tool_hung" || fails[0].Disposition != "retry_same_model" ||
-		fails[0].RelaxedTool != 4000 {
-		t.Fatalf("failure records %+v, want tool_hung/retry_same_model with Y relaxed to 4000ms", fails)
-	}
-	x := readExecution(t, d.capsuleDir(wi))
-	sup := x.Steps["grill"].Supervision
-	if sup == nil || sup["relaxed_tool_ms"] != float64(4000) {
-		t.Fatalf("the relaxed Y must persist in execution.json: %+v", sup)
-	}
-	models := spawnModels(t, d.capsuleDir(wi))
-	if len(models) < 2 || models[0] != models[1] {
-		t.Fatalf("tool_hung retries the SAME model: %v", models)
-	}
-}
-
-// TestV2StepTimeoutTrickleWedgeSwitchesCandidate: #117/#124. The step
-// trickles one model delta every 100ms forever — every silence rule stays
-// satisfied — and only the CUMULATIVE bound T can end it. The time went to
-// the model (no tool ran): step_timeout_slow_model, a model-class death.
-func TestV2StepTimeoutTrickleWedgeSwitchesCandidate(t *testing.T) {
-	inst := newV1Install(t)
-	inst.stripWallBudgets = true
-	wi := inst.newWI(t, "#117: trickle progress past T",
-		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true,
-				"open_turn": true, "noise": "progress", "noise_ms": 100, "ms": 600000},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		}), nil)
-	d := newV1Daemon(t, inst, optSupervision(supBounds{
-		silence: 30 * time.Second, tool: 30 * time.Second, stepTimeout: 4 * time.Second,
-	}))
-	d.start()
-	t.Cleanup(func() { killOrphans(wi) })
-	d.pf(t, "submit", wi)
-
-	rec := waitForEvent(t, d, wi, "step_dead", 60*time.Second)
-	var v verdictEvent
-	eventBody(t, rec, &v)
-	if v.Cause != "step_timeout_slow_model" {
-		t.Fatalf("verdict %+v, want step_timeout_slow_model", v)
-	}
-	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
-	fails := stepFailures(t, d, wi)
-	if len(fails) != 1 || fails[0].Disposition != "switch_model" || fails[0].From == fails[0].To {
-		t.Fatalf("failure records %+v, want one switch_model", fails)
-	}
-}
-
 // TestV2StepTimeoutLongTaskRelaxesThenBlocks: step_timeout_long_task (the
 // time went to a tool) retries the same model with T relaxed x2; a SECOND
 // timeout blocks the step. T accumulates across the step's dispatches, the
@@ -300,8 +148,8 @@ func TestV2StepTimeoutLongTaskRelaxesThenBlocks(t *testing.T) {
 	inst.stripWallBudgets = true
 	wi := inst.newWI(t, "T: long task relaxes once, the second timeout blocks",
 		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true, "tool_ms": 600000, "tool_name": "bash"},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true, "tool_ms": 600000, "tool_name": "bash"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "tool_ms": 600000, "tool_name": "bash"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "tool_ms": 600000, "tool_name": "bash"},
 		}), nil)
 	d := newV1Daemon(t, inst, optSupervision(supBounds{
 		silence: 30 * time.Second, tool: 5 * time.Minute, stepTimeout: 3 * time.Second,
@@ -322,10 +170,12 @@ func TestV2StepTimeoutLongTaskRelaxesThenBlocks(t *testing.T) {
 		t.Fatalf("second timeout %+v, want blocked", fails[1])
 	}
 	x := readExecution(t, d.capsuleDir(wi))
-	if x.WorkflowStatus != "blocked" || !strings.Contains(x.BlockedReason, "second step timeout") {
+	// design #483 §7: a timeout resumes once with the bound doubled; a
+	// second one parks, its reason naming the doubled bound it ran out
+	if x.WorkflowStatus != "blocked" || !strings.Contains(x.BlockedReason, "timed out again (step_timeout_long_task) after its bound was already doubled once") {
 		t.Fatalf("execution.json: status %q reason %q", x.WorkflowStatus, x.BlockedReason)
 	}
-	sup := x.Steps["grill"].Supervision
+	sup := x.Steps["fix"].Supervision
 	// the blocking second timeout doubles T again (6s -> 12s) before it
 	// parks, so a human continue runs under a fresh window
 	if sup == nil || sup["relaxed_wall_ms"] != float64(12000) {
@@ -334,62 +184,11 @@ func TestV2StepTimeoutLongTaskRelaxesThenBlocks(t *testing.T) {
 	// T accumulates across dispatches: the second dispatch was judged
 	// against the runtime the first already spent (it was killed well
 	// before a fresh 6s would have elapsed).
-	if wall, _ := x.Steps["grill"].BudgetConsumed["wall_ms"].(float64); wall < 5000 || wall > 15000 {
+	if wall, _ := x.Steps["fix"].BudgetConsumed["wall_ms"].(float64); wall < 5000 || wall > 15000 {
 		t.Fatalf("cumulative step wall %vms, want ~6-7s (3s + the remainder of the relaxed 6s)", wall)
 	}
 	if n := countOf(d.eventKinds(t, wi), "blocked"); n != 1 {
 		t.Fatalf("blocked event count %d, want 1: %v", n, d.eventKinds(t, wi))
-	}
-}
-
-// TestV2ModelPinFailureAdvancesCandidate: F4. A pinned model the harness
-// cannot resolve makes it exit non-zero at startup with the reason on
-// stderr — an exit WITHOUT a result. The driver reads the model-class
-// text and advances the candidate chain (the old same-model retry kept
-// re-pinning the dead model forever).
-func TestV2ModelPinFailureAdvancesCandidate(t *testing.T) {
-	inst := newV1Install(t)
-	// grill and fix run healthy on a project-default candidate; verification
-	// keeps its own bundle step list, whose head this harness cannot resolve,
-	// so ordinal 3 dies at birth and its action is never reached.
-	actions := []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"}, // spawn 3 dies at birth: never reached
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
-	}
-	wi := inst.newWI(t, "f4: model pin failure exit", actions, nil)
-	writePlanExtra(t, inst, wi, actions, nil, map[string]any{"bad_models": []string{"example-gateway/model-a"}})
-	d := newV1Daemon(t, inst)
-	// The project default keeps grill/fix/deliver off the bundle's step-list
-	// head; verification has its own bundle list and ignores the default, so
-	// only verification's head is the one bad_models singles out.
-	w079Yaml(t, d.workspace, "steps:\n  e2e:\n    default: { models: [pi:example-claude/claude-opus-5, pi:example-openai/gpt-x] }\n")
-	d.start()
-	t.Cleanup(func() { killOrphans(wi) })
-	d.pf(t, "submit", wi)
-
-	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
-	fails := stepFailures(t, d, wi)
-	if len(fails) != 1 || fails[0].Step != "verification" || fails[0].Cause != "exit_model_class" || fails[0].Disposition != "switch_model" ||
-		fails[0].From != "pi:example-gateway/model-a" || fails[0].To != "pi:example-claude/claude-opus-5" || fails[0].Count != 0 {
-		t.Fatalf("failure records %+v, want exit_model_class/switch_model example-gateway/model-a -> example-claude/claude-opus-5 on verification", fails)
-	}
-	if vs := verdicts(t, d, wi); len(vs) != 0 {
-		t.Fatalf("an exit is the driver's own judgement, no supervisor verdict: %+v", vs)
-	}
-	x := readExecution(t, d.capsuleDir(wi))
-	var sawClass bool
-	for _, a := range x.Steps["verification"].Attempts {
-		if a["failure_cause"] == "exit_model_class" {
-			sawClass = true
-		}
-	}
-	if !sawClass {
-		t.Fatalf("the attempt must carry the cause sub-class: %+v", x.Steps["verification"].Attempts)
-	}
-	if x.Steps["verification"].model() != "example-claude/claude-opus-5" {
-		t.Fatalf("verification finished on model %q, want the advanced candidate", x.Steps["verification"].model())
 	}
 }
 
@@ -400,8 +199,8 @@ func TestV2DaemonRestartNotCountedSameModel(t *testing.T) {
 	inst := newV1Install(t)
 	wi := inst.newWI(t, "restart: not counted, same model",
 		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true, "ms": 60000},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 60000},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
 		}), nil)
 	d := newV1Daemon(t, inst)
 	d.start()
@@ -429,13 +228,13 @@ func TestV2DaemonRestartNotCountedSameModel(t *testing.T) {
 		t.Fatalf("the restart re-dispatch changed the model: %v (first %v)", models, firstModels)
 	}
 	x := readExecution(t, d2.capsuleDir(wi))
-	sup := x.Steps["grill"].Supervision
+	sup := x.Steps["fix"].Supervision
 	if sup != nil {
 		if c, _ := sup["failure_count"].(float64); c != 0 {
 			t.Fatalf("a daemon restart was counted as a failure: %+v", sup)
 		}
 	}
-	for _, a := range x.Steps["grill"].Attempts {
+	for _, a := range x.Steps["fix"].Attempts {
 		if fc, _ := a["failure_cause"].(string); isModelClassCause(fc) {
 			t.Fatalf("a daemon restart advanced the candidate pointer: %+v", a)
 		}
@@ -445,54 +244,32 @@ func TestV2DaemonRestartNotCountedSameModel(t *testing.T) {
 	}
 }
 
-// TestV2DriverCrashLoopBoundedThenBlocked: #97. A step that keeps dying
-// is retried only a bounded number of times: its failure counter parks
-// the work item blocked instead of looping forever, and the driver's
-// stop on that park is no death (no needs_recovery, no re-derivation).
-// The death here: grill completes but leaves a DIRECTORY at its
-// handoff convention path, so the next inherit step's handoff read fails
-// with a non-absence I/O error (a missing handoff file is merely
-// omitted; an unreadable one is an infrastructure inconsistency).
-func TestV2DriverCrashLoopBoundedThenBlocked(t *testing.T) {
-	inst := newV1Install(t)
-	bad := map[string]any{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": false,
-		"files": map[string]string{"artifacts/handoff-grill.md/not-a-file": "x"}}
-	var actions []map[string]any
-	for i := 0; i < 24; i++ {
-		actions = append(actions, bad)
-	}
-	wi := inst.newWI(t, "#97: crash loop is bounded", actions, nil)
-	d := newV1Daemon(t, inst)
-	d.start()
-	t.Cleanup(func() { killOrphans(wi) })
-	d.pf(t, "submit", wi)
-
-	inst.waitWIStatus(t, wi, "blocked", 180*time.Second)
-	kinds := d.eventKinds(t, wi)
-	fails := stepFailures(t, d, wi)
-	if n := len(fails); n == 0 || n > 4 || fails[n-1].Disposition != "blocked" {
-		t.Fatalf("step_failed records %+v, want a small bounded number, the last one parking the work item blocked", fails)
-	}
-	if n := countOf(kinds, "blocked"); n != 1 {
-		t.Fatalf("blocked events %d, want 1: %v", n, kinds)
-	}
-	if n := countOf(kinds, "needs_recovery") + countOf(kinds, "wi_agent_rederived"); n != 0 {
-		t.Fatalf("recovery fired %d times, want 0 (the failure counter bounded the loop; the blocked exit is no death): %v", n, kinds)
-	}
-}
-
 // TestV2TwoRulesAtOnceOneVerdictOneFailure: with the silence bound and T
 // both tiny, a silent harness trips rule 0 AND rule 4 at once. The lower
 // number wins, exactly ONE verdict is sent, the driver kills the process
 // and records exactly ONE failure — the exit that follows the kill is not
 // counted a second time.
+//
+// The retry must complete under the same tiny T, and D6 makes T cumulative
+// across the step's dispatches while rule 0 (unlike a timeout) does not
+// relax it: dispatch 2 is born with T already spent, so it only used to
+// survive when the harness's envelope landed before the next supervisor
+// tick (a ~500ms tick beat a ~410ms spawn+settle+poll path by ~80ms; a
+// loaded host lost that race and rule 4 killed the retry). The retry's
+// envelope is therefore staged at its drop path before the dispatch starts
+// — collection is the first thing its Wait does, so the outcome no longer
+// depends on tick timing. The retry itself still dispatches (asserted
+// below), and the scripted 150ms delivery delay that lost the old race is
+// kept so a tree that goes back to relying on delivery timing fails here
+// deterministically. Rule 0 outranking rule 4 at one instant is pinned
+// deterministically by TestJudgeRuleTable's priority case.
 func TestV2TwoRulesAtOnceOneVerdictOneFailure(t *testing.T) {
 	inst := newV1Install(t)
 	inst.stripWallBudgets = true
 	wi := inst.newWI(t, "two rules fire at once",
 		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "silent": true},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
+			{"do": "envelope", "id": "fix", "silent": true},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 150},
 		}), nil)
 	d := newV1Daemon(t, inst, optSupervision(supBounds{
 		silence: 2 * time.Second, stepTimeout: 2 * time.Second, tool: 30 * time.Second,
@@ -500,6 +277,26 @@ func TestV2TwoRulesAtOnceOneVerdictOneFailure(t *testing.T) {
 	d.start()
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pf(t, "submit", wi)
+
+	// Stage the retry's result. The capsule is materialized by the claim;
+	// execution.json
+	// is the driver's first write, so its presence means the claim is done
+	// and the seed will not be wiped by materialization.
+	capDir := d.capsuleDir(wi)
+	waitUntil(t, 30*time.Second, "the capsule runtime state never materialized", func() bool {
+		_, err := os.Stat(filepath.Join(capDir, "runtime-state", "execution.json"))
+		return err == nil
+	})
+	if err := os.MkdirAll(filepath.Join(capDir, "runtime-state", "pending-results"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	blob, err := json.Marshal(map[string]any{"outcome": "completed", "output": map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(capDir, "runtime-state", "pending-results", "2.json"), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 	vs := verdicts(t, d, wi)
@@ -509,15 +306,19 @@ func TestV2TwoRulesAtOnceOneVerdictOneFailure(t *testing.T) {
 	if fails := stepFailures(t, d, wi); len(fails) != 1 {
 		t.Fatalf("failure records %+v, want exactly one for the dispatch", fails)
 	}
+	spawns := spawnJournal(t, d.capsuleDir(wi))
+	if len(spawns) < 2 || spawns[1]["spawn_n"] != float64(2) {
+		t.Fatalf("spawn journal %+v, want the retry dispatched as spawn 2", spawns)
+	}
 	x := readExecution(t, d.capsuleDir(wi))
 	infra := 0
-	for _, a := range x.Steps["grill"].Attempts {
+	for _, a := range x.Steps["fix"].Attempts {
 		if a["cause"] == "infra_failure" {
 			infra++
 		}
 	}
 	if infra != 1 {
-		t.Fatalf("grill archived %d infra_failure attempts, want 1: %+v", infra, x.Steps["grill"].Attempts)
+		t.Fatalf("fix archived %d infra_failure attempts, want 1: %+v", infra, x.Steps["fix"].Attempts)
 	}
 }
 
@@ -530,8 +331,8 @@ func TestV2OkEndedTurnWithoutResultRetriesSameModel(t *testing.T) {
 	inst := newV1Install(t)
 	wi := inst.newWI(t, "rule 1b: ok-ended turn without result",
 		plan([]map[string]any{
-			{"do": "envelope", "id": "grill", "end_turn": true},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
+			{"do": "envelope", "id": "fix", "end_turn": true},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
 		}), nil)
 	grace := 2 * time.Second
 	d := newV1Daemon(t, inst, optSupervision(supBounds{modelErrorGrace: grace}))

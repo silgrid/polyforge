@@ -27,20 +27,28 @@
 #       go build, and a webui/ change forces the full tier)
 #   2. GOWORK=off go build ./...
 #   3. GOWORK=off go vet ./...
-#   4. test -z "$(gofmt -l .)"
+#   4. test -z "$(gofmt -l $(git ls-files '*.go'))"
+#      (tracked files only: pi-web/node_modules is never walked,)
 #   5. python3 -I docs/design/polyforge-vnext/tools/check-xrefs.py
 #   6. GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./...
 #   7. GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./...
+#   8. cd workflows/_shared/scripts && python3 -m mypy --strict --python-version 3.9 pfstep tests *.py
+#      (pf CI's python-types job,)
 #   full tier only:
-#   8. GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/test$') -count=1
-#   9. GOWORK=off sh test/e2e-parallel.sh
+#   9. GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/test$') -count=1
+#  10. GOWORK=off go test -race -count=1 -timeout 30m ./internal/polyforge/daemon/
+#      (the daemon package under the race detector,)
+#  11. GOWORK=off sh test/e2e-parallel.sh
+#  12-16. the pi-web package's bar from pi-web/: npm ci,
+#      npm run lint, node_modules/.bin/tsc --noEmit, npm test,
+#      npm run test:e2e:all (a pi-web/ change forces the full tier)
 #   scoped tier (after the fast gates):
-#   8. GOWORK=off go test -count=1 <changed + reverse-dependency packages>
+#   9. GOWORK=off go test -count=1 <changed + reverse-dependency packages>
 #      (reverse dependencies are computed over each package's test binary
 #       closure, so a package reached only through a `_test.go` import is
 #       selected too)
-#   9. GOWORK=off go test -count=1 -run '^(...)$' <pkg>  (text-referenced tests)
-#  10. E2E_RUN='^(...)$' sh test/e2e-parallel.sh          (text-referenced ./test)
+#  10. GOWORK=off go test -count=1 -run '^(...)$' <pkg>  (text-referenced tests)
+#  11. E2E_RUN='^(...)$' sh test/e2e-parallel.sh          (text-referenced ./test)
 #
 # GOWORK=off keeps the commands correct in a workspace whose root carries an
 # unrelated go.work. The xrefs gate runs python3 directly: a missing python3
@@ -186,6 +194,7 @@ forced_full() {
 		go.mod | go.sum | Makefile) return 0 ;;
 		test/main_test.go | test/e2e-parallel.sh | test/fakepi/*) return 0 ;;
 		webui | webui/*) return 0 ;;
+		pi-web | pi-web/*) return 0 ;;
 		esac
 	done <"$changed"
 	while IFS= read -r p; do
@@ -379,13 +388,20 @@ fi
 add_cmd "cd webui && npm ci && npm run build"
 add_cmd "GOWORK=off go build ./..."
 add_cmd "GOWORK=off go vet ./..."
-add_cmd 'test -z "$(gofmt -l .)"'
+add_cmd 'test -z "$(gofmt -l $(git ls-files '"'"'*.go'"'"'))"'
 add_cmd "python3 -I docs/design/polyforge-vnext/tools/check-xrefs.py"
 add_cmd "GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./..."
 add_cmd "GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./..."
+add_cmd "cd workflows/_shared/scripts && python3 -m mypy --strict --python-version 3.9 pfstep tests *.py"
 if [ "$mode" = "full" ]; then
 	add_cmd 'GOWORK=off go test $(GOWORK=off go list ./... | grep -v '"'"'/test$'"'"') -count=1'
+	add_cmd "GOWORK=off go test -race -count=1 -timeout 30m ./internal/polyforge/daemon/"
 	add_cmd "GOWORK=off sh test/e2e-parallel.sh"
+	add_cmd "cd pi-web && npm ci"
+	add_cmd "cd pi-web && npm run lint"
+	add_cmd "cd pi-web && node_modules/.bin/tsc --noEmit"
+	add_cmd "cd pi-web && npm test"
+	add_cmd "cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all"
 else
 	cat "$tmp/scoped_cmds" >>"$tmp/commands"
 fi

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
@@ -40,56 +39,10 @@ func StateLabel(s *protocol.WatchSnapshot) string {
 	return clean(ex.WorkflowStatus)
 }
 
-// ProgressLine is one short line per WI for the progress state file: the
-// step and its age, the last work signal, and the optional command / files /
-// tool-call fields — only what the daemon actually reported. Everything is
-// mechanical; step-agent text (command, files) is sanitized and truncated,
-// and the line goes to a terminal status area, never into an agent context.
-func ProgressLine(s *protocol.WatchSnapshot, now time.Time) string {
-	var b strings.Builder
-	b.WriteString(safeID(api.DisplayName(s.Slug, s.WorkItem)))
-	b.WriteString(" ")
-	b.WriteString(StateLabel(s))
-	if ex := s.Execution; ex != nil && ex.CurrentStep != "" {
-		fmt.Fprintf(&b, " step=%s", clean(ex.CurrentStep))
-		if st, ok := ex.Steps[ex.CurrentStep]; ok {
-			if age, ok := ageSince(st.StartedAt, now); ok {
-				fmt.Fprintf(&b, " %s", FormatAge(age))
-			}
-		}
-	}
-	if j := s.Job; j != nil && j.LastProgressAgoSec != nil {
-		fmt.Fprintf(&b, " signal %s ago", FormatAge(time.Duration(*j.LastProgressAgoSec)*time.Second))
-	}
-	if p := s.Progress; p != nil {
-		if p.Command != "" {
-			fmt.Fprintf(&b, " cmd=%q", clean(p.Command))
-			if p.CommandAgeSec != nil {
-				fmt.Fprintf(&b, " (%s)", FormatAge(time.Duration(*p.CommandAgeSec)*time.Second))
-			}
-		}
-		if len(p.RecentFiles) > 0 {
-			files := make([]string, 0, 3)
-			for i, f := range p.RecentFiles {
-				if i == 3 {
-					break
-				}
-				files = append(files, clean(f))
-			}
-			fmt.Fprintf(&b, " files=%s", strings.Join(files, ","))
-		}
-		if p.ToolCalls != nil {
-			fmt.Fprintf(&b, " tools=%d", *p.ToolCalls)
-		}
-	}
-	return b.String()
-}
-
 // FormatOnce renders the `pf watch <wi> --once` snapshot for a human: the
 // state, current step and age, last work signal, the pending question (id
-// and text — the one place the question text is shown; the session runs it
-// as soon as a needs_input wake line arrives)
-// and the latest events.
+// and text — the one place the question text is shown) and the latest
+// events.
 func FormatOnce(s *protocol.WatchSnapshot, now time.Time, maxEvents int) string {
 	var b strings.Builder
 	if s.Slug != "" {
@@ -120,6 +73,11 @@ func FormatOnce(s *protocol.WatchSnapshot, now time.Time, maxEvents int) string 
 				line += ")"
 			}
 			fmt.Fprintf(&b, "step:       %s\n", line)
+		}
+		// the rewinds the owner's word orders never spend
+		// the agents' budget, so the two counts are shown apart
+		if rw := ex.Rewinds; rw != nil && (rw.Agent > 0 || rw.Owner > 0) {
+			fmt.Fprintf(&b, "rewinds:    agent %d/%d (max_rewinds), owner-initiated %d (charged to no budget)\n", rw.Agent, rw.MaxRewinds, rw.Owner)
 		}
 	}
 	if j := s.Job; j != nil {

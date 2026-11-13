@@ -135,7 +135,7 @@ func TestInitRefusesBrokenMarkersAndScratchFile(t *testing.T) {
 
 func TestStrayEntries(t *testing.T) {
 	ws := t.TempDir()
-	for _, d := range []string{".repo/a", "capsules/x", "scratch", ".polyforge/repo-map", ".polyforge/watchers", ".pi", ".claude", "docs", "clone/.git"} {
+	for _, d := range []string{".repo/a", "capsules/x", "scratch", ".polyforge/repo-map", ".polyforge/watchers", ".polyforge/workflows/notes", ".pi", ".claude", "docs", "clone/.git"} {
 		if err := os.MkdirAll(filepath.Join(ws, d), 0o755); err != nil {
 			t.Fatal(err)
 		}

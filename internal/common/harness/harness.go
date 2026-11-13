@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -241,15 +243,70 @@ func LocateClaudeSession(id, configDir, capsuleDir string) string {
 	if !ValidSessionID(id) || configDir == "" || capsuleDir == "" {
 		return ""
 	}
-	dirs := []string{ClaudeProjectDirName(capsuleDir)}
-	if real, err := filepath.EvalSymlinks(capsuleDir); err == nil && real != capsuleDir {
-		dirs = append(dirs, ClaudeProjectDirName(real))
-	}
-	for _, d := range dirs {
+	for _, d := range claudeProjectDirs(capsuleDir) {
 		p := filepath.Join(configDir, "projects", d, id+".jsonl")
 		if st, err := os.Lstat(p); err == nil && st.Mode().IsRegular() && st.Size() > 0 {
 			return p
 		}
 	}
 	return ""
+}
+
+// claudeProjectDirs answers the project directory names a capsule's
+// claude sessions may live under: the capsule dir as given, and with its
+// symlinks resolved when that differs.
+func claudeProjectDirs(capsuleDir string) []string {
+	dirs := []string{ClaudeProjectDirName(capsuleDir)}
+	if real, err := filepath.EvalSymlinks(capsuleDir); err == nil && real != capsuleDir {
+		dirs = append(dirs, ClaudeProjectDirName(real))
+	}
+	return dirs
+}
+
+// realDir reports whether p is a directory itself, not a symlink to one.
+func realDir(p string) bool {
+	st, err := os.Lstat(p)
+	return err == nil && st.IsDir()
+}
+
+// claudeSidecarName is the name shape of Claude Code's subagent
+// sidecars: agent-<agent id>.jsonl and agent-<agent id>.meta.json.
+var claudeSidecarName = regexp.MustCompile(`^agent-[A-Za-z0-9_-]+\.(jsonl|meta\.json)$`)
+
+// ClaudeSubagentFiles answers the subagent sidecars Claude Code wrote for
+// the native session uuid of a step that ran in capsuleDir:
+// <config dir>/projects/<dir of capsuleDir>/<uuid>/subagents/ holds one
+// agent-<agent id>.jsonl conversation (every nesting depth alike) and its
+// agent-<agent id>.meta.json (description, agent type, the parent's
+// tool_use id) per subagent. Only regular files of those two name shapes
+// are answered, sorted, from the first project directory that has the
+// subagents directory (the <uuid> and subagents directories themselves,
+// never a symlink to one) — the same per-cwd directories LocateClaudeSession
+// consults, so another cwd's sidecars are never copied. nil when id is
+// not a canonical uuid, a dir is unnamed or nothing is there.
+func ClaudeSubagentFiles(id, configDir, capsuleDir string) []string {
+	if !ValidSessionID(id) || configDir == "" || capsuleDir == "" {
+		return nil
+	}
+	for _, d := range claudeProjectDirs(capsuleDir) {
+		session := filepath.Join(configDir, "projects", d, id)
+		sub := filepath.Join(session, "subagents")
+		if !realDir(session) || !realDir(sub) {
+			continue // absent, or a symlink: never followed
+		}
+		ents, err := os.ReadDir(sub)
+		if err != nil {
+			continue
+		}
+		var out []string
+		for _, e := range ents {
+			if !e.Type().IsRegular() || !claudeSidecarName.MatchString(e.Name()) {
+				continue
+			}
+			out = append(out, filepath.Join(sub, e.Name()))
+		}
+		sort.Strings(out)
+		return out
+	}
+	return nil
 }

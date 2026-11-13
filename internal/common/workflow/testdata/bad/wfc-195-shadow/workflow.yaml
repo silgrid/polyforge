@@ -1,0 +1,6 @@
+contract: 5
+name: wfc-195-shadow
+description: fixture lane for WFC-195
+steps:
+  - id: echo
+    vars: { frag: mine }

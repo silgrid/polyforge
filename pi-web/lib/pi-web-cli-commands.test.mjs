@@ -1,0 +1,613 @@
+import "#test-env";
+import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { EventEmitter, once } from "node:events";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
+const { getHelpText, parseCommandLine } = require("../bin/pi-web-options.js");
+const records = require("../bin/run-records.js");
+const {
+  getInstallKind,
+  installRelease,
+  isNewerStableVersion,
+  readReleaseChannel,
+  runUpdate,
+  verifyReleaseAssets,
+  versionFromTag,
+} = require("../bin/pi-web-update.js");
+const { runCommand, stopServer } = require("../bin/pi-web-commands.js");
+const { wireChildProcessLifecycle } = require("../bin/process-lifecycle.js");
+const packageJson = require("../package.json");
+const cliPath = fileURLToPath(new URL("../bin/pi-web.js", import.meta.url));
+
+function tempDir(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-cli-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+function record(port, pid = process.pid, nextPid) {
+  return {
+    pid,
+    nextPid,
+    port,
+    hostname: "127.0.0.1",
+    url: `http://127.0.0.1:${port}`,
+    version: "1.0.0",
+    startedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+test("parses each command, -v and options after the command", () => {
+  for (const command of ["version", "status", "stop", "open", "update"]) {
+    assert.equal(parseCommandLine([command], {}).command, command);
+  }
+  assert.equal(parseCommandLine(["-v"], {}).command, "version");
+  assert.equal(parseCommandLine(["--version"], {}).command, "version");
+  assert.equal(parseCommandLine(["stop", "--port", "8080"], {}).port, "8080");
+  assert.equal(parseCommandLine(["open", "-p", "9000"], {}).port, "9000");
+  assert.equal(parseCommandLine(["stop"], {}).port, undefined);
+  assert.equal(parseCommandLine(["update", "--check"], {}).check, true);
+  assert.deepEqual(parseCommandLine(["status", "--help"], {}), { command: "status", help: true });
+  assert.equal(parseCommandLine([], {}).command, "start");
+  assert.equal(parseCommandLine(["-p", "8080"], {}).port, "8080");
+  assert.match(getHelpText(), /Usage: pi-web \[command\] \[options\]/);
+  assert.match(getHelpText(), /update \[--check\]/);
+});
+
+test("rejects unknown commands, foreign options and bad ports", () => {
+  assert.throws(() => parseCommandLine(["serve"], {}), /Unexpected argument.*\nUse --help/);
+  assert.throws(() => parseCommandLine(["status", "--port", "1"], {}), /Use --help/);
+  assert.throws(() => parseCommandLine(["update", "--force"], {}), /Use --help/);
+  assert.throws(() => parseCommandLine(["stop", "extra"], {}), /Use --help/);
+  assert.throws(() => parseCommandLine(["stop", "-p", "x"], {}), /Port must be/);
+
+  const unknown = spawnSync(process.execPath, [cliPath, "serve"], { encoding: "utf8" });
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /Use --help/);
+});
+
+test("CLI prints the package version", () => {
+  for (const arg of ["version", "-v", "--version"]) {
+    const result = spawnSync(process.execPath, [cliPath, arg], { encoding: "utf8" });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.trim(), packageJson.version);
+  }
+});
+
+test("compares stable versions only", () => {
+  assert.equal(isNewerStableVersion("0.11.1", "0.11.0"), true);
+  assert.equal(isNewerStableVersion("1.0.0", "0.99.99"), true);
+  assert.equal(isNewerStableVersion("0.10.9", "0.11.0"), false);
+  assert.equal(isNewerStableVersion("0.11.0", "0.11.0"), false);
+  assert.equal(isNewerStableVersion("0.12.0-beta.1", "0.11.0"), false);
+  assert.equal(isNewerStableVersion("0.12.0", "dev"), false);
+});
+
+test("writes, reads and removes run records; deletes stale ones", async (t) => {
+  const dir = path.join(tempDir(t), "run");
+  records.writeRunRecord(dir, record(4000, 11));
+  records.writeRunRecord(dir, record(3000, 10));
+  records.writeRunRecord(dir, record(5000, 999_999));
+  fs.writeFileSync(path.join(dir, "6000.json"), "{not json");
+
+  const isAlive = (pid) => pid === 10 || pid === 11;
+  const isOurs = () => true;
+  const isAnswering = async () => true;
+  const listed = await records.listRunRecords(dir, { isAlive, isOurs, isAnswering });
+  assert.deepEqual(listed.map((r) => [r.port, r.stopPid, r.orphaned]), [[3000, 10, false], [4000, 11, false]]);
+  assert.deepEqual(fs.readdirSync(dir).sort(), ["10.json", "11.json"]);
+
+  records.removeRunRecord(dir, 10);
+  assert.deepEqual(fs.readdirSync(dir), ["11.json"]);
+  assert.deepEqual(await records.listRunRecords(path.join(dir, "missing")), []);
+});
+
+test("two servers on one port keep a record each", async (t) => {
+  const dir = path.join(tempDir(t), "run");
+  records.writeRunRecord(dir, { ...record(3000, 10), hostname: "127.0.0.1" });
+  records.writeRunRecord(dir, { ...record(3000, 11), hostname: "192.168.1.5", url: "http://192.168.1.5:3000" });
+  const listed = await records.listRunRecords(dir, { isAlive: () => true, isOurs: () => true, isAnswering: async () => true });
+  assert.equal(listed.length, 2);
+  assert.match(records.selectRunRecord(listed, "3000").error, /Several pi-web servers are running on port 3000/);
+});
+
+test("a live pid whose URL does not answer is skipped but its record kept", async (t) => {
+  const dir = path.join(tempDir(t), "run");
+  records.writeRunRecord(dir, record(3000, 10));
+  records.writeRunRecord(dir, record(4000, 11));
+  const isAnswering = async (url) => url.endsWith(":4000");
+  const listed = await records.listRunRecords(dir, { isAlive: () => true, isOurs: () => true, isAnswering });
+  assert.deepEqual(listed.map((r) => r.port), [4000]);
+  assert.deepEqual(fs.readdirSync(dir).sort(), ["10.json", "11.json"]);
+});
+
+test("a recycled pid that is no longer pi-web is never listed, even when the URL answers", async (t) => {
+  const dir = path.join(tempDir(t), "run");
+  records.writeRunRecord(dir, record(3000, 10, 20));
+  const listed = await records.listRunRecords(dir, { isAlive: () => true, isOurs: () => false, isAnswering: async () => true });
+  assert.deepEqual(listed, []);
+  assert.deepEqual(fs.readdirSync(dir), [], "neither process is ours: the record is stale");
+});
+
+test("a Next.js server left by a killed launcher is listed for stop", async (t) => {
+  const dir = path.join(tempDir(t), "run");
+  records.writeRunRecord(dir, record(3000, 10, 20));
+  const isAlive = (pid) => pid === 20;
+  const isOurs = (pid, role) => pid === 20 && role === "next";
+  const [orphan] = await records.listRunRecords(dir, { isAlive, isOurs, isAnswering: async () => true });
+  assert.equal(orphan.stopPid, 20);
+  assert.equal(orphan.orphaned, true);
+  assert.match(records.formatRunRecord(orphan), /Next\.js pid 20 \(launcher gone\)/);
+});
+
+test("process identity: launcher, Next.js server, Windows image name, unknown", () => {
+  const as = (command, platform = "darwin") => ({ platform, readCommand: () => command });
+  assert.equal(records.isRecordProcess(1, "launcher", as("node /usr/local/bin/pi-web -p 30141")), true);
+  assert.equal(records.isRecordProcess(1, "launcher", as("/usr/bin/sleep 300")), false);
+  assert.equal(records.isRecordProcess(1, "launcher", as("")), false, "no such process");
+  assert.equal(records.isRecordProcess(1, "next", as("next-server (v16.3.8)")), true);
+  assert.equal(records.isRecordProcess(1, "next", as("/usr/bin/vim")), false);
+  assert.equal(records.isRecordProcess(1, "launcher", as("node.exe", "win32")), true);
+  assert.equal(records.isRecordProcess(1, "launcher", as("chrome.exe", "win32")), false);
+  assert.equal(records.isRecordProcess(1, "launcher", as(null)), true, "cannot tell: the URL check decides");
+});
+
+test("reads a process command from /proc, ps or tasklist", () => {
+  const proc = (content) => ({ platform: "linux", readFile: () => content });
+  assert.equal(records.readProcessCommand(1, proc("node\0/x/pi-web\0-p\0" + "30141\0")), "node /x/pi-web -p 30141");
+  const enoent = { platform: "linux", readFile: () => { throw Object.assign(new Error("gone"), { code: "ENOENT" }); } };
+  assert.equal(records.readProcessCommand(1, enoent), "");
+
+  const run = (stdout, error) => () => ({ stdout, error });
+  assert.equal(records.readProcessCommand(7, { platform: "darwin", run: run("next-server (v16.3.8)\n") }), "next-server (v16.3.8)");
+  assert.equal(records.readProcessCommand(7, { platform: "darwin", run: run("") }), "");
+  assert.equal(records.readProcessCommand(7, { platform: "darwin", run: run("", new Error("ENOENT")) }), null);
+  assert.equal(records.readProcessCommand(7, { platform: "win32", run: run('"node.exe","7","Console","1","50,000 K"\r\n') }), "node.exe");
+  assert.equal(records.readProcessCommand(7, { platform: "win32", run: run("INFO: No tasks are running which match the specified criteria.") }), "");
+});
+
+test("run records live in pi's agent directory", () => {
+  const home = path.join(path.sep, "home", "a");
+  assert.equal(records.getRunDir({}, home), path.join(home, ".pi", "agent", "pi-web-run"));
+  assert.equal(records.getRunDir({ PI_CODING_AGENT_DIR: "~/pi-test" }, home), path.join(home, "pi-test", "pi-web-run"));
+  assert.equal(records.getRunDir({ PI_CODING_AGENT_DIR: "/srv/agent" }, home), path.join("/srv/agent", "pi-web-run"));
+});
+
+test("any HTTP answer counts as a running server, and its body is dropped", async () => {
+  const response = new Response("password required", { status: 401 });
+  assert.equal(await records.isServerAnswering("http://x", async () => response), true);
+  assert.equal(response.bodyUsed, true);
+  assert.equal(await records.isServerAnswering("http://x", async () => new Response(null, { status: 204 })), true);
+  assert.equal(await records.isServerAnswering("http://x", async () => { throw new TypeError("fetch failed"); }), false);
+});
+
+test("status with a live server exits on its own with code 0", async (t) => {
+  const dir = tempDir(t);
+  // Its command line names the pi-web-cli- directory, so it passes as a launcher.
+  const serverFile = path.join(dir, "server.js");
+  fs.writeFileSync(serverFile, [
+    'const server = require("http").createServer((req, res) => res.end("ok"));',
+    'server.listen(0, "127.0.0.1", () => console.log(server.address().port));',
+  ].join("\n"));
+  const server = spawn(process.execPath, [serverFile], { stdio: ["ignore", "pipe", "inherit"] });
+  t.after(() => server.kill());
+  const port = Number(String((await once(server.stdout, "data"))[0]).trim());
+  records.writeRunRecord(records.getRunDir({ PI_CODING_AGENT_DIR: dir }), record(port, server.pid));
+
+  const started = Date.now();
+  const cli = spawn(process.execPath, [cliPath, "status"], { env: { ...process.env, PI_CODING_AGENT_DIR: dir } });
+  let stdout = "";
+  cli.stdout.on("data", (data) => { stdout += data; });
+  const [code] = await once(cli, "close");
+  assert.equal(code, 0);
+  assert.match(stdout, new RegExp(`http://127\\.0\\.0\\.1:${port}  pid ${server.pid}`));
+  // The fallback exit fires after 2 s; a drained event loop ends far sooner.
+  assert.ok(Date.now() - started < 1_500, `took ${Date.now() - started} ms`);
+});
+
+test("treats EPERM as alive and ESRCH as dead", () => {
+  const fail = (code) => () => {
+    throw Object.assign(new Error(code), { code });
+  };
+  assert.equal(records.isProcessAlive(1, fail("EPERM")), true);
+  assert.equal(records.isProcessAlive(1, fail("ESRCH")), false);
+  assert.equal(records.isProcessAlive(1, () => true), true);
+});
+
+test("open URLs use loopback for wildcard binds", () => {
+  assert.equal(records.getOpenUrl("0.0.0.0", "8080"), "http://127.0.0.1:8080");
+  assert.equal(records.getOpenUrl("::", "8080"), "http://[::1]:8080");
+  assert.equal(records.getOpenUrl("::1", "8080"), "http://[::1]:8080");
+  assert.equal(records.getOpenUrl("my-host", "8080"), "http://my-host:8080");
+});
+
+test("the tracker writes on ready and cleans up when the child exits", (t) => {
+  const dir = path.join(tempDir(t), "run");
+  const parent = new EventEmitter();
+  parent.exit = (code) => parent.emit("exit", code);
+  const child = new EventEmitter();
+  child.kill = () => true;
+  wireChildProcessLifecycle(child, parent, 10, () => {});
+
+  const tracker = records.createRunRecordTracker({ dir, record: record(4100), parentProcess: parent });
+  assert.ok(!fs.existsSync(dir), "nothing before the server is ready");
+  tracker.markReady();
+  tracker.markReady();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, `${process.pid}.json`), "utf8")).port, 4100);
+
+  child.emit("exit", 0, null);
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
+
+test("a failed record write warns once and does not throw", (t) => {
+  const file = path.join(tempDir(t), "not-a-dir");
+  fs.writeFileSync(file, "");
+  const warnings = [];
+  const parent = new EventEmitter();
+  const tracker = records.createRunRecordTracker({
+    dir: path.join(file, "run"),
+    record: record(4200),
+    parentProcess: parent,
+    warn: (message) => warnings.push(message),
+  });
+  tracker.markReady();
+  tracker.markReady();
+  assert.equal(warnings.length, 1);
+  assert.equal(parent.listenerCount("exit"), 0);
+
+  const throwing = records.createRunRecordTracker({
+    dir: () => {
+      throw new Error("no home");
+    },
+    record: record(4300),
+    parentProcess: parent,
+    warn: (message) => warnings.push(message),
+  });
+  throwing.markReady();
+  assert.equal(warnings.length, 2);
+});
+
+test("--port selection rule", () => {
+  const two = [record(3000), record(4000)];
+  assert.equal(records.selectRunRecord([], undefined).error, "No pi-web server is running.");
+  assert.equal(records.selectRunRecord([record(3000)], undefined).record.port, 3000);
+  assert.match(records.selectRunRecord(two, undefined).error, /Several[\s\S]*:3000[\s\S]*:4000[\s\S]*--port/);
+  assert.equal(records.selectRunRecord(two, "4000").record.port, 4000);
+  assert.match(records.selectRunRecord(two, "5000").error, /port 5000/);
+});
+
+test("status, stop and open use the injected run dir", async (t) => {
+  const dir = tempDir(t);
+  const out = [];
+  const err = [];
+  const deps = { runDir: dir, isAnswering: async () => true, isOurs: () => true, log: (m) => out.push(m), error: (m) => err.push(m), open: (url) => out.push(`open ${url}`) };
+
+  assert.equal(await runCommand({ command: "status" }, deps), 0);
+  assert.equal(out.pop(), "No pi-web server is running.");
+  assert.equal(await runCommand({ command: "open" }, deps), 1);
+  assert.equal(await runCommand({ command: "stop" }, deps), 1);
+
+  records.writeRunRecord(dir, record(3000));
+  assert.equal(await runCommand({ command: "status" }, deps), 0);
+  assert.match(out.pop(), /http:\/\/127\.0\.0\.1:3000/);
+  assert.equal(await runCommand({ command: "open" }, deps), 0);
+  assert.equal(out.pop(), "open http://127.0.0.1:3000");
+});
+
+test("stop sends SIGTERM and waits for the launcher to exit", async () => {
+  const signals = [];
+  let alive = true;
+  const code = await stopServer(record(3000, 42), {
+    platform: "linux",
+    kill: (pid, signal) => {
+      signals.push([pid, signal]);
+    },
+    isAlive: () => alive,
+    wait: async () => {
+      alive = false;
+    },
+    log: () => {},
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(signals, [[42, "SIGTERM"]]);
+
+  const trees = [];
+  alive = true;
+  assert.equal(await stopServer(record(3000, 43), {
+    platform: "win32",
+    kill: () => assert.fail("no signal on Windows"),
+    killTree: (pid) => trees.push(pid),
+    isAlive: () => alive,
+    wait: async () => {
+      alive = false;
+    },
+    log: () => {},
+  }), 0);
+  assert.deepEqual(trees, [43], "the launcher's whole tree, not the launcher alone");
+
+  signals.length = 0;
+  alive = true;
+  assert.equal(await stopServer({ ...record(3000, 42, 77), stopPid: 77, orphaned: true }, {
+    platform: "linux",
+    kill: (pid, signal) => {
+      signals.push([pid, signal]);
+    },
+    isAlive: () => alive,
+    wait: async () => {
+      alive = false;
+    },
+    log: () => {},
+  }), 0);
+  assert.deepEqual(signals, [[77, "SIGTERM"]], "an orphaned Next.js server is signalled directly");
+
+  const stuck = await stopServer(record(3000, 42), {
+    platform: "linux",
+    kill: () => {},
+    isAlive: () => true,
+    wait: async () => {},
+    timeoutMs: 400,
+    error: () => {},
+  });
+  assert.equal(stuck, 1);
+});
+
+test("install kind: global npm, npx cache or anything else", () => {
+  const realpath = (p) => p.replace("/link-root", "/real-root");
+  assert.equal(
+    getInstallKind({ pkgDir: "/usr/lib/node_modules/@silgrid/pi-web", npmRoot: "/usr/lib/node_modules", realpath }),
+    "global",
+  );
+  assert.equal(
+    getInstallKind({ pkgDir: "/real-root/@silgrid/pi-web", npmRoot: "/link-root", realpath }),
+    "global",
+  );
+  assert.equal(
+    getInstallKind({ pkgDir: "/home/a/.npm/_npx/ab12/node_modules/@silgrid/pi-web", npmRoot: "/usr/lib/node_modules", realpath }),
+    "npx",
+  );
+  assert.equal(getInstallKind({ pkgDir: "/src/pi-web", npmRoot: "/usr/lib/node_modules", realpath }), "other");
+  assert.equal(
+    getInstallKind({ pkgDir: "/home/a/.pnpm-global/5/node_modules/@silgrid/pi-web", npmRoot: "/usr/lib/node_modules", realpath }),
+    "other",
+  );
+  assert.equal(getInstallKind({ pkgDir: "/usr/lib/node_modules/@silgrid/pi-web", npmRoot: null, realpath }), "other");
+  // The fork updates itself, never into upstream's package ( s1#3).
+  assert.equal(
+    getInstallKind({ pkgDir: "/usr/lib/node_modules/@agegr/pi-web", npmRoot: "/usr/lib/node_modules", realpath }),
+    "other",
+  );
+});
+
+test("update decisions", async () => {
+  const base = {
+    currentVersion: "0.11.0",
+    pkgDir: "/usr/lib/node_modules/@silgrid/pi-web",
+    listRecords: () => [],
+    formatRecord: (r) => r.url,
+    readChannel: () => ({ kind: "npm", repo: "silgrid/pi-web" }),
+    fetchLatest: async () => "0.12.0",
+    getNpmRoot: () => "/usr/lib/node_modules",
+    realpath: (p) => p,
+    log: () => {},
+    error: () => {},
+  };
+  const installs = [];
+  const install = (version) => {
+    installs.push(version);
+    return 0;
+  };
+
+  assert.equal(await runUpdate({ ...base, fetchLatest: async () => "0.11.0", install }), 0);
+  assert.equal(await runUpdate({ ...base, check: true, install }), 0);
+  assert.equal(await runUpdate({ ...base, fetchLatest: async () => { throw new Error("offline"); }, install }), 1);
+  assert.equal(await runUpdate({ ...base, listRecords: () => [record(3000)], install }), 1);
+  assert.equal(await runUpdate({ ...base, pkgDir: "/home/a/.npm/_npx/x/node_modules/@silgrid/pi-web", install }), 1);
+  assert.equal(await runUpdate({ ...base, pkgDir: "/src/pi-web", install }), 1);
+  assert.deepEqual(installs, []);
+
+  assert.equal(await runUpdate({ ...base, install }), 0);
+  assert.deepEqual(installs, ["0.12.0"]);
+  assert.equal(await runUpdate({ ...base, install: () => 7 }), 7);
+  assert.equal(await runUpdate({ ...base, install: () => null }), 1);
+});
+
+const binDir = fileURLToPath(new URL("../bin/", import.meta.url));
+
+test("the shipped release channel marker names this tree's repository", () => {
+  // Projection-independent: the tree ships the unified Polyforge repository
+  // whose GitHub Releases carry the Pi Web tarball; the public
+  // projection maps it to the public Polyforge repository. The literal below is
+  // rewritten by the same projection row, so it pins the internal tree's update
+  // target without breaking the public tree.
+  const { repo } = JSON.parse(fs.readFileSync(path.join(binDir, "pi-web-release-channel.json"), "utf8"));
+  assert.equal(repo, "silgrid/polyforge");
+  const kind = repo === packageJson.name.replace(/^@/, "") ? "npm" : "github";
+  assert.deepEqual(readReleaseChannel(), { kind, repo });
+  assert.ok(packageJson.files.includes("bin"), "the marker ships with bin/");
+});
+
+test("release channel selection: public slug keeps npm, other repos use GitHub Releases, no marker refuses", () => {
+  const marker = (content) => () => content;
+  // The public projection rewrites the marker to the package's own repository.
+  assert.deepEqual(
+    readReleaseChannel({ packageName: "@silgrid/pi-web", read: marker('{"repo":"silgrid/pi-web"}') }),
+    { kind: "npm", repo: "silgrid/pi-web" },
+  );
+  assert.deepEqual(
+    readReleaseChannel({ packageName: "@silgrid/pi-web", read: marker('{"repo":"example-org/pi-web-fork"}') }),
+    { kind: "github", repo: "example-org/pi-web-fork" },
+  );
+  const missing = () => {
+    throw Object.assign(new Error("no such file"), { code: "ENOENT" });
+  };
+  assert.throws(() => readReleaseChannel({ read: missing }), /missing or unreadable \(ENOENT\)/);
+  assert.throws(() => readReleaseChannel({ read: marker("not json") }), /missing or unreadable/);
+  for (const bad of ['{}', '{"repo":""}', '{"repo":"silgrid"}', '{"repo":"a/b c"}', '{"repo":7}']) {
+    assert.throws(() => readReleaseChannel({ read: marker(bad) }), /OWNER\/REPO/, bad);
+  }
+});
+
+test("update refuses without a release channel before fetching or installing", async () => {
+  const calls = [];
+  const errors = [];
+  const code = await runUpdate({
+    currentVersion: "0.1.0",
+    pkgDir: "/usr/lib/node_modules/@silgrid/pi-web",
+    listRecords: () => [],
+    formatRecord: (r) => r.url,
+    readChannel: () => {
+      throw new Error("marker missing");
+    },
+    fetchLatest: async () => calls.push("fetch"),
+    install: () => calls.push("install"),
+    getNpmRoot: () => "/usr/lib/node_modules",
+    log: () => {},
+    error: (message) => errors.push(message),
+  });
+  assert.equal(code, 1);
+  assert.deepEqual(calls, []);
+  assert.match(errors.join("\n"), /Refusing to update.*marker missing/);
+});
+
+test("update on the internal channel reports the repository and installs the release", async () => {
+  const logs = [];
+  const errors = [];
+  const installs = [];
+  const base = {
+    currentVersion: "0.1.2",
+    pkgDir: "/usr/lib/node_modules/@silgrid/pi-web",
+    listRecords: () => [],
+    formatRecord: (r) => r.url,
+    readChannel: () => ({ kind: "github", repo: "example-org/pi-web-fork" }),
+    fetchLatest: async () => "0.1.3",
+    getNpmRoot: () => "/usr/lib/node_modules",
+    realpath: (p) => p,
+    install: (version) => {
+      installs.push(version);
+      return 0;
+    },
+    log: (message) => logs.push(message),
+    error: (message) => errors.push(message),
+  };
+  assert.equal(await runUpdate({ ...base, check: true }), 0);
+  assert.match(logs.join("\n"), /Update channel: the GitHub Releases of example-org\/pi-web-fork/);
+  assert.deepEqual(installs, []);
+
+  assert.equal(await runUpdate({ ...base, pkgDir: "/src/pi-web" }), 1);
+  assert.match(errors.pop(), /gh release download -R example-org\/pi-web-fork/);
+  assert.doesNotMatch(errors.join("\n"), /npm install -g @silgrid/);
+  assert.equal(await runUpdate({ ...base, install: () => { throw new Error("SHA-256 mismatch for x.tgz"); } }), 1);
+  assert.match(errors.pop(), /Update failed: SHA-256 mismatch/);
+  assert.deepEqual(installs, []);
+
+  assert.equal(await runUpdate(base), 0);
+  assert.deepEqual(installs, ["0.1.3"]);
+});
+
+test("release tags and SHA256SUMS are checked before install", (t) => {
+  assert.equal(versionFromTag("v0.1.3"), "0.1.3");
+  for (const tag of ["0.1.3", "v0.1", "v0.1.3-rc.1", ""]) assert.throws(() => versionFromTag(tag), /vX\.Y\.Z/);
+
+  const dir = tempDir(t);
+  const tarball = path.join(dir, "silgrid-pi-web-0.1.3.tgz");
+  fs.writeFileSync(tarball, "package bytes");
+  const digest = createHash("sha256").update("package bytes").digest("hex");
+  fs.writeFileSync(path.join(dir, "SHA256SUMS"), `${digest}  silgrid-pi-web-0.1.3.tgz\n`);
+  assert.equal(verifyReleaseAssets(dir), tarball);
+  fs.writeFileSync(path.join(dir, "SHA256SUMS"), `${digest} *silgrid-pi-web-0.1.3.tgz\n`);
+  assert.equal(verifyReleaseAssets(dir), tarball);
+
+  fs.writeFileSync(path.join(dir, "SHA256SUMS"), `${"0".repeat(64)}  silgrid-pi-web-0.1.3.tgz\n`);
+  assert.throws(() => verifyReleaseAssets(dir), /SHA-256 mismatch/);
+  fs.writeFileSync(path.join(dir, "SHA256SUMS"), `${digest}  other.tgz\n`);
+  assert.throws(() => verifyReleaseAssets(dir), /no line for silgrid-pi-web-0.1.3.tgz/);
+  fs.writeFileSync(path.join(dir, "second.tgz"), "x");
+  assert.throws(() => verifyReleaseAssets(dir), /expected one .tgz release asset, found 2/);
+});
+
+test("installRelease downloads the tagged assets and never installs on a checksum mismatch", (t) => {
+  const ghCalls = [];
+  const spawns = [];
+  const fakeGh = (content, sum) => (args) => {
+    ghCalls.push(args);
+    const dir = args[args.indexOf("-D") + 1];
+    fs.writeFileSync(path.join(dir, "silgrid-pi-web-0.1.3.tgz"), content);
+    fs.writeFileSync(path.join(dir, "SHA256SUMS"), `${sum}  silgrid-pi-web-0.1.3.tgz\n`);
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    return "";
+  };
+  const spawn = (command, args) => {
+    spawns.push(args);
+    assert.ok(fs.existsSync(args.at(-1)), "the verified tgz exists while npm installs it");
+    return { status: 0 };
+  };
+  const digest = createHash("sha256").update("ok").digest("hex");
+
+  assert.throws(
+    () => installRelease("example-org/pi-web-fork", "0.1.3", { gh: fakeGh("tampered", digest), spawn }),
+    /SHA-256 mismatch/,
+  );
+  assert.deepEqual(spawns, []);
+
+  assert.equal(installRelease("example-org/pi-web-fork", "0.1.3", { gh: fakeGh("ok", digest), spawn }), 0);
+  assert.deepEqual(ghCalls[1].slice(0, 4), ["release", "download", "v0.1.3", "-R"]);
+  assert.equal(ghCalls[1][4], "example-org/pi-web-fork");
+  assert.deepEqual(spawns.at(-1).slice(-3, -1), ["install", "-g"]);
+  assert.match(spawns.at(-1).at(-1), /silgrid-pi-web-0\.1\.3\.tgz$/);
+  // The scratch download dir is removed after the install.
+  assert.equal(fs.existsSync(path.dirname(spawns.at(-1).at(-1))), false);
+});
+
+test("pi-web update --check names the internal repository and downloads nothing", (t) => {
+  // A copy of bin/ with a fixture marker, so the child always takes the GitHub
+  // channel through the fake gh, whatever the shipped marker says.
+  const dir = tempDir(t);
+  fs.cpSync(binDir, path.join(dir, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "bin", "pi-web-release-channel.json"), '{ "repo": "example-org/pi-web-fork" }\n');
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: packageJson.name, version: "0.0.1" }));
+  const ghLog = path.join(dir, "gh.log");
+  const gh = path.join(dir, "gh");
+  fs.writeFileSync(gh, `#!/bin/sh\necho "$*" >> "${ghLog}"\necho v99.0.0\n`, { mode: 0o755 });
+  const result = spawnSync(process.execPath, [path.join(dir, "bin", "pi-web.js"), "update", "--check"], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}` },
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Update channel: the GitHub Releases of example-org\/pi-web-fork\./);
+  assert.match(result.stdout, /pi-web 99\.0\.0 is available/);
+  assert.deepEqual(fs.readFileSync(ghLog, "utf8").trim().split("\n"), [
+    "release view -R example-org/pi-web-fork --json tagName --jq .tagName",
+  ]);
+});
+
+test("pi-web update refuses a fake package tree without the channel marker", (t) => {
+  const dir = tempDir(t);
+  fs.cpSync(binDir, path.join(dir, "bin"), {
+    recursive: true,
+    filter: (source) => path.basename(source) !== "pi-web-release-channel.json",
+  });
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@agegr/pi-web", version: "0.0.1" }));
+  const ghLog = path.join(dir, "gh.log");
+  const gh = path.join(dir, "gh");
+  fs.writeFileSync(gh, `#!/bin/sh\necho "$*" >> "${ghLog}"\nexit 1\n`, { mode: 0o755 });
+  for (const args of [["update", "--check"], ["update"]]) {
+    const result = spawnSync(process.execPath, [path.join(dir, "bin", "pi-web.js"), ...args], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}` },
+      timeout: 30_000,
+    });
+    assert.equal(result.status, 1, args.join(" "));
+    assert.match(result.stderr, /Refusing to update: .*pi-web-release-channel\.json is missing/);
+    assert.doesNotMatch(result.stdout, /Update channel/);
+  }
+  assert.equal(fs.existsSync(ghLog), false, "no gh call on a refused tree");
+});

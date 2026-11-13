@@ -71,26 +71,22 @@ func v4ErrCode(t *testing.T, body string) (code, detail string) {
 // /jobs/{wi}/answer on a LIVE driver bridge answers the standard
 // top-level {code, detail} DAEMON-* envelope with the right HTTP status
 // for the two arms the daemon unit tests cannot reach with a real
-// bridge: an undecodable body (400) and a question id the bridge does
-// not hold pending (409). The not-running (404), no-bridge (409) and
-// no-pending-question (400) arms are pinned by
-// internal/polyforge/daemon/answer_failfast_test.go.
+// bridge: an undecodable body (400) and a body naming the v1 answer's
+// question id, gone with workflow contract v2 change 19 (400). The
+// not-running (404), no-bridge (409) and relay-refusal arms are pinned
+// by internal/polyforge/daemon/answer_failfast_test.go.
 func TestV4AnswerRouteErrorsUseStandardEnvelope(t *testing.T) {
 	inst := newV1Install(t)
-	const qid = "q_v4ans"
 	wi := inst.newWI(t, "v4 d12: answer route standard error envelope",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": qid,
-				"question": "v4: park for the answer-route arms."},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			askAction("fix", "v4: park for the answer-route arms.", map[string]any{"do": "envelope", "id": "fix", "outcome": "completed"}),
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	t.Cleanup(func() { killOrphans(wi) })
 	d := newV1Daemon(t, inst)
 	d.start()
 	d.pf(t, "submit", wi)
-	waitQuestion(t, d, wi, qid, 60*time.Second)
+	waitAsk(t, d, wi, 60*time.Second)
 
 	// arm 1: an undecodable body — 400, DAEMON-* envelope
 	status, body := v4PostDaemon(t, d.sock, "POST", "/jobs/"+wi+"/answer", "{not json")
@@ -101,14 +97,14 @@ func TestV4AnswerRouteErrorsUseStandardEnvelope(t *testing.T) {
 		t.Fatalf("decode-error arm: code %q (detail %q), want a DAEMON-* code — body %q", code, detail, body)
 	}
 
-	// arm 2: a question id that is not pending — 409, DAEMON-* envelope
+	// arm 2: the v1 answer's question id — 400, DAEMON-* envelope
 	status, body = v4PostDaemon(t, d.sock, "POST", "/jobs/"+wi+"/answer",
 		`{"question_id":"q_v4nope","answer_text":"x","answered_by":"usr_root"}`)
-	if status != 409 {
-		t.Fatalf("unknown-question arm: HTTP %d, want 409 (body %q)", status, body)
+	if status != 400 {
+		t.Fatalf("question-id arm: HTTP %d, want 400 (body %q)", status, body)
 	}
 	if code, detail := v4ErrCode(t, body); !strings.HasPrefix(code, "DAEMON-") {
-		t.Fatalf("unknown-question arm: code %q (detail %q), want a DAEMON-* code — body %q", code, detail, body)
+		t.Fatalf("question-id arm: code %q (detail %q), want a DAEMON-* code — body %q", code, detail, body)
 	}
 }
 
@@ -135,21 +131,17 @@ func TestV4StepAgentDedicatedAgentDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const qid = "q_v4iso"
 	wi := inst.newWI(t, "v4 iso: dedicated step agent directory",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "needs_input", "question_id": qid,
-				"question": "v4: park so the spawn ledger is inspectable."},
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			askAction("fix", "v4: park so the spawn ledger is inspectable.", map[string]any{"do": "envelope", "id": "fix", "outcome": "completed"}),
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	t.Cleanup(func() { killOrphans(wi) })
 
 	d := newV1Daemon(t, inst)
 	d.start()
 	d.pf(t, "submit", wi)
-	waitQuestion(t, d, wi, qid, 90*time.Second)
+	waitAsk(t, d, wi, 90*time.Second)
 
 	var agentDir string
 	for _, e := range fakeJournal(t, d.capsuleDir(wi)) {
@@ -174,15 +166,13 @@ func TestV4StepAgentDedicatedAgentDirectory(t *testing.T) {
 	}
 }
 
-// TestV4NeedsInputWaitNotCountedIntoT: the wall time a step spends
-// PARKED on an owner question must not enter the step's cumulative
-// runtime T (T counts agent running time only).
-func TestV4NeedsInputWaitNotCountedIntoT(t *testing.T) {
+// TestV4AskWaitNotCountedIntoT: the wall time a step spends awaiting the
+// owner on its open `pf ask` must not enter the step's cumulative runtime
+// T (T counts agent running time only).
+func TestV4AskWaitNotCountedIntoT(t *testing.T) {
 	inst := newV1Install(t)
-	wi := inst.newWI(t, "v4: the needs_input wait is not agent runtime", plan([]map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "needs_input",
-			"question_id": "q_v4wait", "question": "should the wait count into T?"},
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
+	wi := inst.newWI(t, "v4: the ask wait is not agent runtime", plan([]map[string]any{
+		askAction("fix", "should the wait count into T?", map[string]any{"do": "envelope", "id": "fix", "outcome": "completed"}),
 	}), nil)
 	d := newV1Daemon(t, inst)
 	d.start()
@@ -190,51 +180,16 @@ func TestV4NeedsInputWaitNotCountedIntoT(t *testing.T) {
 	d.pf(t, "submit", wi)
 	capDir := d.capsuleDir(wi)
 
-	waitQuestion(t, d, wi, "q_v4wait", 60*time.Second)
-	// The owner takes their time: a wait far longer than either of the
-	// step's two agent dispatches.
+	waitAsk(t, d, wi, 60*time.Second)
+	// The owner takes their time: a wait far longer than the step's agent
+	// turns.
 	time.Sleep(6 * time.Second)
-	answerQuestion(t, d, wi, "q_v4wait", "No — only agent runtime counts.")
+	replyOwner(t, d, wi, "No — only agent runtime counts.")
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 
 	x := readExecution(t, capDir)
-	wall, _ := x.Steps["grill"].BudgetConsumed["wall_ms"].(float64)
+	wall, _ := x.Steps["fix"].BudgetConsumed["wall_ms"].(float64)
 	if wall >= 5000 {
-		t.Fatalf("SYMPTOM: grill booked %vms of wall — the 6s owner wait leaked into T (agent runtime is ~2s)", wall)
-	}
-}
-
-// TestV4BundleFeatureFullLaneWraps: the shipped feature-full bundle
-// (grill -> spec -> grill-review -> plan -> e2e-author -> code ->
-// review -> verification; the harness strips deliver;'s
-// order) runs end to end through
-// the real daemon and wraps — the only e2e run of that lane.
-func TestV4BundleFeatureFullLaneWraps(t *testing.T) {
-	inst := newV1Install(t)
-	actions := []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "spec", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "grill-review", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "plan", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "e2e-author", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "code", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "review", "outcome": "completed"},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
-	}
-	wi := newWIWithBundle(t, inst, "v4: feature-full lane end to end", "feature-full", actions)
-	d := newV1Daemon(t, inst)
-	d.start()
-	t.Cleanup(func() { killOrphans(wi) })
-	d.pf(t, "submit", wi)
-
-	inst.waitWIStatus(t, wi, "wrapped", 240*time.Second)
-	x := readExecution(t, d.capsuleDir(wi))
-	if x.WorkflowStatus != "completed" {
-		t.Fatalf("workflow status %q, want completed", x.WorkflowStatus)
-	}
-	for _, step := range []string{"grill", "spec", "grill-review", "plan", "e2e-author", "code", "review", "verification"} {
-		if st, ok := x.Steps[step]; !ok || st.Status != "done" {
-			t.Fatalf("step %s not done: %+v", step, st)
-		}
+		t.Fatalf("SYMPTOM: fix booked %vms of wall — the 6s owner wait leaked into T (agent runtime is ~2s)", wall)
 	}
 }

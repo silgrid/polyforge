@@ -36,3 +36,34 @@ func Scan(text string) (string, bool) {
 	}
 	return "", false
 }
+
+// masks are the credential shapes Mask replaces beside Patterns: the
+// userinfo of a URL (`scheme://user:pass@host`, `scheme://token@host`),
+// an assignment whose name says it holds a credential (`*API_KEY=`,
+// `*TOKEN=`, `*SECRET=`, `*PASSWORD=`, `*PASSWD=`) and the `--password
+// <value>` flag form — the shapes Pi Web masks in a command
+// (pi-web/lib/polyforge-status.ts). Over-masking costs only fidelity;
+// under-masking leaks, so the values are greedy.
+var masks = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@`), "${1}***@"},
+	{regexp.MustCompile(`(?i)\b([a-z0-9_]*(?:api_key|token|secret|password|passwd)=)\S+`), "${1}***"},
+	{regexp.MustCompile(`(?i)(--password\s+)\S+`), "${1}***"},
+}
+
+// Mask answers text with every credential-shaped substring replaced: each
+// secret shape Patterns names by `[masked <name>]`, and the masks' shapes
+// (URL userinfo, credential assignments, the password flag) by `***`. A
+// text the daemon keeps or shows from a command's output (a run step's
+// output tail) passes through it.
+func Mask(text string) string {
+	for _, m := range masks {
+		text = m.re.ReplaceAllString(text, m.repl)
+	}
+	for _, p := range Patterns {
+		text = p.Re.ReplaceAllString(text, "[masked "+p.Name+"]")
+	}
+	return text
+}

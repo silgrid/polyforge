@@ -50,6 +50,12 @@ type Config struct {
 	// dispatch's step_started names). nil disables the sync entirely
 	// (unit tests that never exercise it).
 	LocateLive func(capsuleDir string, spawnAt time.Time, harness, session string) string
+	// SyncSubagents, when non-nil, copies the capsule's subagent
+	// transcripts into it (claude's native sidecars beside
+	// the conversation's capsule transcript). The monitor calls it at the
+	// same commit-boundary sync point as LocateLive, before the push;
+	// nil disables it.
+	SyncSubagents func(capsuleDir string)
 	// SessionVerify is the v1.5 M4 revalidation seam: the periodic
 	// per-RUNNING-job session-verify the monitor tick piggybacks
 	// (session.go). The daemon binds the shared aihub client; nil — the
@@ -205,6 +211,11 @@ func (o *Observe) onRT(msg protocol.RTMsg) {
 			m.run()
 		}()
 	case protocol.RTFinished:
+		body := map[string]any{"reason": msg.Reason}
+		if msg.Unconfirmed {
+			body["unconfirmed"] = true
+		}
+		_ = o.log.Append(wi, EvJobFinished, body)
 		if m := o.takeMonitor(wi); m != nil {
 			m.requestStop() // monitor emits its own job_stopped event
 		}
@@ -294,6 +305,7 @@ func (o *Observe) newMonitor(at Attach, info WIInfo) *Monitor {
 			verify:           o.cfg.SessionVerify,
 			push:             o.cfg.PushFunc,
 			locateLive:       o.cfg.LocateLive,
+			syncSubagents:    o.cfg.SyncSubagents,
 		},
 		log:    o.log,
 		ob:     o.cfg.OB,

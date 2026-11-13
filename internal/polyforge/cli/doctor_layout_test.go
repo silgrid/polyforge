@@ -3,6 +3,7 @@ package cli
 import (
 	"crypto/sha256"
 	"fmt"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -540,5 +541,41 @@ func TestDoctorFixInstallLayoutFlag(t *testing.T) {
 	_, _, doc = doctorStatus(t, env, "--json", "doctor")
 	if st, detail := doctorFind(t, doc, docChClaudeLayout); st != "pass" {
 		t.Fatalf("after the fix: %s %q, want pass", st, detail)
+	}
+}
+
+// TestCellLayoutNote: the supervision row warns on a
+// pre-Cell data dir (naming the migration) and on a pre-migration copy kept
+// after the rollback window closed; a fresh dir, a migrated one inside the
+// window and a clean one say nothing.
+func TestCellLayoutNote(t *testing.T) {
+	dir := t.TempDir()
+	if warn, _ := cellLayoutNote(dir); warn {
+		t.Fatal("an empty data dir is fresh, not a warning")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "daemon-id"), []byte("m\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if warn, note := cellLayoutNote(dir); !warn || !strings.Contains(note, "pf migrate cell-layout") {
+		t.Fatalf("a pre-Cell dir must warn naming the migration: %v %q", warn, note)
+	}
+	if _, err := cellcfg.ApplyMigration(dir); err != nil {
+		t.Fatal(err)
+	}
+	if warn, note := cellLayoutNote(dir); warn {
+		t.Fatalf("inside the rollback window the copy is the rollback source: %q", note)
+	}
+	marker := filepath.Join(cellcfg.CellDir(dir, cellcfg.DefaultProfile), cellcfg.AcceptedWorkMarker)
+	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if warn, note := cellLayoutNote(dir); !warn || !strings.Contains(note, "stale") {
+		t.Fatalf("a copy kept after the window must warn: %v %q", warn, note)
+	}
+	if err := os.Remove(filepath.Join(dir, "daemon-id")); err != nil {
+		t.Fatal(err)
+	}
+	if warn, _ := cellLayoutNote(dir); warn {
+		t.Fatal("with the copy removed nothing is left to say")
 	}
 }

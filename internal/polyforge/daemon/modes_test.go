@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/observe"
 
@@ -128,7 +129,7 @@ func seedReady(td *testDaemon, t *testing.T, ids ...string) {
 	for _, id := range ids {
 		mkBare(t, td.cfg.GitRemoteBase, id)
 		items = append(items, api.WorkItem{ID: id, Slug: id, ProjectName: "proj", Status: api.StatusQueued,
-			Priority: api.PriorityNormal, BundleName: strp("demo-bundle")})
+			Priority: api.PriorityNormal, BundleName: strp("demo-bundle"), Content: strp(w461AcceptanceContent)})
 	}
 	td.hub.mu.Lock()
 	td.hub.queues = items
@@ -385,20 +386,30 @@ func TestEnqueueIfAtomicWithAutoOffPurge(t *testing.T) {
 	}
 }
 
-// polyforge#175: an installed bundle whose candidates are not
-// `<harness>:<model>` refuses the manual submit synchronously (DAEMON-414
-// naming file and step) and is skipped by auto-pull — never enqueued,
-// never claimed, no submit_rejected churn every wave; fixing the bundle
-// lets the next wave pull it.
-func TestBundleCandidateFormatRefusedBeforeEnqueue(t *testing.T) {
+// Workflow contract J25: an installed lane the one lane loader refuses is
+// a release defect — the daemon does not start (New refuses), naming the
+// lane, the WFC code and the line; a workflows dir that is absent holds
+// no lane and refuses nothing.
+func TestInstalledLaneDefectRefusesTheStart(t *testing.T) {
 	wf := t.TempDir()
-	bundleMD := filepath.Join(wf, "demo-bundle", "workflow.md")
-	if err := os.MkdirAll(filepath.Dir(bundleMD), 0o755); err != nil {
-		t.Fatal(err)
+	workflowtest.WriteLaneUnchecked(t, wf, "demo-bundle", "steps:\n  - { id: fix, model_candidates: [example-gateway/model-a] }\n")
+	err := checkInstalledLanes(wf)
+	if err == nil || !strings.Contains(err.Error(), "WFC-198") || !strings.Contains(err.Error(), "demo-bundle/workflow.yaml:5") || !strings.Contains(err.Error(), "does not start") {
+		t.Fatalf("a refused installed lane must refuse the start, naming WFC-198 and the line: %v", err)
 	}
-	if err := os.WriteFile(bundleMD, []byte("---\nsteps:\n  - { id: fix, model_candidates: [example-gateway/model-a] }\n---\n"), 0o644); err != nil {
-		t.Fatal(err)
+	if err := checkInstalledLanes(filepath.Join(wf, "absent")); err != nil {
+		t.Fatalf("an absent workflows dir refuses nothing: %v", err)
 	}
+}
+
+// Workflow contract WFC-123: a work item bound to a lane the daemon's lane
+// set does not carry refuses the manual submit synchronously (DAEMON-414
+// naming WFC-123) and is skipped by auto-pull — never enqueued, never
+// claimed, no submit_rejected churn every wave; installing the lane lets
+// the next wave pull it.
+func TestMissingLaneRefusedBeforeEnqueue(t *testing.T) {
+	wf := t.TempDir()
+	workflowtest.WriteLane(t, wf, "other", "steps:\n  - { id: fix }\n")
 	td := newTestDaemon(t, func(c *Config) { c.WorkflowsDir = wf })
 	td.hub.mu.Lock()
 	td.hub.bundles = map[string]string{"wi_manual": "demo-bundle"}
@@ -406,8 +417,8 @@ func TestBundleCandidateFormatRefusedBeforeEnqueue(t *testing.T) {
 	mkBare(t, td.cfg.GitRemoteBase, "wi_manual")
 	_, cerr := td.client.ClaimWithModels("wi_manual", "normal", nil)
 	var ae *api.Error
-	if !errors.As(cerr, &ae) || ae.Code != api.ErrDaemonWorkspaceYaml || !strings.Contains(ae.Detail, `step fix: model_candidates[0]: "example-gateway/model-a" needs a harness prefix`) {
-		t.Fatalf("submit on a bad bundle = %v, want DAEMON-414 naming the step", cerr)
+	if !errors.As(cerr, &ae) || ae.Code != api.ErrDaemonWorkspaceYaml || !strings.Contains(ae.Detail, "WFC-123 the work item's lane demo-bundle is not in this daemon's lane set") {
+		t.Fatalf("submit on a missing lane = %v, want DAEMON-414 naming WFC-123", cerr)
 	}
 	seedReady(td, t, "wi_a1")
 	if err := td.modes.SetAuto(true); err != nil {
@@ -418,16 +429,14 @@ func TestBundleCandidateFormatRefusedBeforeEnqueue(t *testing.T) {
 	claims := len(td.hub.claims)
 	td.hub.mu.Unlock()
 	if claims != 0 || liveCount(td) != 0 || td.q.LenPending() != 0 {
-		t.Fatalf("a bad bundle must claim and enqueue nothing: claims=%d live=%d pending=%d", claims, liveCount(td), td.q.LenPending())
+		t.Fatalf("a missing lane must claim and enqueue nothing: claims=%d live=%d pending=%d", claims, liveCount(td), td.q.LenPending())
 	}
 	for _, e := range td.obs.Events().SinceAfter("wi_a1", 0) {
 		if e.Kind == observe.EvSubmitRejected {
-			t.Fatalf("auto-pull enqueued and rejected a work item on a bad bundle: %+v", e)
+			t.Fatalf("auto-pull enqueued and rejected a work item on a missing lane: %+v", e)
 		}
 	}
-	if err := os.WriteFile(bundleMD, []byte("---\nsteps:\n  - { id: fix, model_candidates: [pi:example-gateway/model-a] }\n---\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	workflowtest.WriteLane(t, wf, "demo-bundle", "steps:\n  - { id: fix }\n")
 	td.waitLive(t, "wi_a1")
 }
 

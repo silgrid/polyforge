@@ -20,7 +20,7 @@ import (
 //
 // The scenario is the acceptance shape of the work item, inverted into
 // the failing oracle: drive a real code commit, drive a real
-// bounded-fail verdict (the storm guard: the verification step dies
+// bounded-fail verdict (the storm guard: the review step dies
 // without an envelope, three rapid recoveries), unblock through the
 // real CLI, re-submit through the real CLI — then the re-claimed
 // capsule's repos/demo-src must stand at the SAME commit the dead
@@ -31,21 +31,20 @@ func TestV1S25ReclaimTaskRepoNotDurable(t *testing.T) {
 	inst, remote := newV1InstallTaskRepo(t)
 	wi := inst.newWI(t, "s25: bounded-fail -> unblock -> re-claim loses the task-repo work",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 			// The code step: a real commit on top of the claim-time clone
 			// of demo-src (makeRepo commits work.txt locally; nothing is
 			// pushed to the task repo's origin — the deliver step is the
 			// only push lane, and this run never delivers).
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true,
+			{"do": "envelope", "id": "fix", "outcome": "completed",
 				"name": "demo-src", "origin": remote.url},
-			// The verification step dies BEFORE its envelope write, three
+			// The review step dies BEFORE its envelope write, three
 			// dispatches running: three rapid recovery re-entries inside
 			// the stability window trip the storm guard — the bounded-fail
 			// verdict (SessionEnd(blocked), WI blocked, the owner holds
 			// the next move).
-			{"do": "envelope", "id": "verification", "outcome": "completed", "crash": "before"},
-			{"do": "envelope", "id": "verification", "outcome": "completed", "crash": "before"},
-			{"do": "envelope", "id": "verification", "outcome": "completed", "crash": "before"},
+			{"do": "envelope", "id": "review", "outcome": "completed", "crash": "before"},
+			{"do": "envelope", "id": "review", "outcome": "completed", "crash": "before"},
+			{"do": "envelope", "id": "review", "outcome": "completed", "crash": "before"},
 		}, nil)
 	t.Cleanup(func() { killOrphans(wi) })
 
@@ -72,11 +71,11 @@ func TestV1S25ReclaimTaskRepoNotDurable(t *testing.T) {
 	if st := x.Steps["fix"]; st == nil || st.Status != "done" {
 		t.Fatalf("dead-session execution.json: fix step %+v, want done", st)
 	}
-	if st := x.Steps["verification"]; st == nil || st.Status != "in_progress" {
-		t.Fatalf("dead-session execution.json: verification step %+v, want in_progress (the bounded-fail mid-flight shape)", st)
+	if st := x.Steps["review"]; st == nil || st.Status != "in_progress" {
+		t.Fatalf("dead-session execution.json: review step %+v, want in_progress (the bounded-fail mid-flight shape)", st)
 	}
 	preSpawns := len(spawnJournal(t, capA))
-	t.Logf("dead session: code head %s (origin main %s), fix done, verification in_progress, %d dispatches",
+	t.Logf("dead session: code head %s (origin main %s), fix done, review in_progress, %d dispatches",
 		codeHead, remote.head, preSpawns)
 
 	// The capsule chain (the recovery commit-dirty pushes) carries the
@@ -112,7 +111,7 @@ func TestV1S25ReclaimTaskRepoNotDurable(t *testing.T) {
 		st, err := os.Stat(filepath.Join(d.capsuleDir(wi), "repos", "demo-src", ".git"))
 		return err == nil && st.IsDir()
 	})
-	// The resumed workflow re-dispatched the verification step on the
+	// The resumed workflow re-dispatched the review step on the
 	// re-claimed tree (the journal rides the chain; the new dispatch
 	// grows past the restored ordinals).
 	waitSpawnCount(t, d, wi, preSpawns+1, 120*time.Second)

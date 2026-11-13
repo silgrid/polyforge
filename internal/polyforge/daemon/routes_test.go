@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -61,8 +60,8 @@ func TestSubmitAndStatus(t *testing.T) {
 }
 
 // TestObserveAnswerPending walks the watch snapshot end to end through the
-// daemon socket: a driver-persisted pending question projected from
-// execution.json, and the answer route's refusal.
+// daemon socket: the current dispatch's open `pf ask` projected as the
+// step's pending question, and the answer route's refusal.
 func TestObserveAnswerPending(t *testing.T) {
 	td := newTestDaemon(t, nil)
 	td.submitClaim(t, "wi_b")
@@ -79,9 +78,10 @@ func TestObserveAnswerPending(t *testing.T) {
 		t.Fatalf("watch snapshot missing events: %+v", snap)
 	}
 
-	// The driver parks on a question: pending_question lands in
-	// execution.json and the snapshot projects it.
-	td.seedPendingQuestion(t, "wi_b", "q_abc123", "spec", "which flavor?")
+	// The step asks the owner: the open ask lands in asks.jsonl and the
+	// snapshot projects it under its stamp.
+	const askAt = "2026-11-10T20:00:00.000000001Z"
+	td.seedOpenAsk(t, "wi_b", "spec", askAt)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		snap, _ = td.client.WatchSnapshot("wi_b", 0, false)
@@ -92,7 +92,7 @@ func TestObserveAnswerPending(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if snap == nil || snap.Execution == nil || snap.Execution.PendingQuestion == nil ||
-		snap.Execution.PendingQuestion.ID != "q_abc123" || snap.Job == nil || snap.Job.Status != protocol.JobNeedsInput {
+		snap.Execution.PendingQuestion.ID != askAt || snap.Job == nil || snap.Job.Status != protocol.JobNeedsInput {
 		t.Fatalf("needs_input projection = %+v", snap)
 	}
 
@@ -100,10 +100,7 @@ func TestObserveAnswerPending(t *testing.T) {
 	// here is the scripted fake (no bridge Handle), so the answer
 	// refuses fast with the typed no-bridge-handle 409 and NO relay
 	// reaches the agent.
-	araw, aerr := td.client.Answer("wi_b", cli.AnswerPayload{
-		QuestionID: "q_abc123",
-		AnswerText: "mint", AnsweredBy: "u_1",
-	})
+	araw, aerr := td.client.Answer("wi_b", cli.AnswerPayload{AnswerText: "mint", AnsweredBy: "u_1"})
 	if aerr == nil {
 		t.Fatalf("answer with no live driver was accepted: %s", araw)
 	}
@@ -288,6 +285,17 @@ func TestPauseResume(t *testing.T) {
 	if !td.hub.lastEnd().CleanPause {
 		t.Fatal("the operator pause must carry clean_pause=true")
 	}
+	// the sealed pause is a decision feed entry (paused) —
+	// the Pi Web panel shows it, and the hub reconcile tracks it.
+	paused := 0
+	for _, e := range td.feed.List().Decisions {
+		if e.WI == "wi_f" && e.Class == "paused" && e.Source == "paused" {
+			paused++
+		}
+	}
+	if paused != 1 {
+		t.Fatalf("paused feed entries = %d, feed = %+v", paused, td.feed.List())
+	}
 	// A repeat pause is the graceful idempotency answer, not a conflict.
 	raw, err := td.client.Pause("wi_f")
 	if err != nil {
@@ -469,8 +477,9 @@ func TestStatusShowsNeedsInput(t *testing.T) {
 		t.Fatalf("pre-question status = %+v", j)
 	}
 
-	// the driver parks on a human question (pending_question persisted)
-	td.seedPendingQuestion(t, "wi_askst", "q_d6001", "spec", "pick one")
+	// the step asks the owner (an open `pf ask` of its current dispatch)
+	const askAt = "2026-11-10T20:00:00.000000002Z"
+	td.seedOpenAsk(t, "wi_askst", "spec", askAt)
 
 	// /status presents needs_input + the question id (the monitor's
 	// projection is applied on the read, so a small poll window is legal)
@@ -478,7 +487,7 @@ func TestStatusShowsNeedsInput(t *testing.T) {
 	for {
 		st := td.statusOf(t)
 		j := statusJobOf(&st, "wi_askst")
-		if j != nil && j.NeedsInput && j.Status == protocol.JobNeedsInput && j.QuestionID == "q_d6001" {
+		if j != nil && j.NeedsInput && j.Status == protocol.JobNeedsInput && j.QuestionID == askAt {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -641,16 +650,5 @@ func TestWrapSessionEndBlipRetriesToDone(t *testing.T) {
 	}
 	if cr.Outcome != "already_terminal" || cr.Status != api.StatusWrapped {
 		t.Fatalf("wrap after the retried close = %+v, want already_terminal/wrapped", cr)
-	}
-}
-
-// /status reports the schema capabilities this daemon's
-// loaders accept (additive) — the steps_attrs fact `pf config set
-// steps.*` and `pf workflows` gate writes on.
-func TestStatusReportsCapabilities(t *testing.T) {
-	td := newTestDaemon(t, nil)
-	st := td.statusOf(t)
-	if !reflect.DeepEqual(st.Capabilities, []string{cli.CapabilityStepsAttrs}) {
-		t.Fatalf("capabilities = %v, want [%s]", st.Capabilities, cli.CapabilityStepsAttrs)
 	}
 }

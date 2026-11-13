@@ -46,6 +46,25 @@ func w14Raw(t *testing.T, sock, method, path string) (int, string) {
 	return resp.StatusCode, string(raw)
 }
 
+// w14AwaitDeaths waits (5 s deadline) until the daemon's model-health
+// tracker has folded the ingested events: its summary warns about model
+// with at least deaths model deaths.
+func w14AwaitDeaths(t *testing.T, td *testDaemon, model string, deaths int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for _, w := range td.modelHealthTracker().Summary(time.Now()).Warnings {
+			if w.Model == model && w.ModelDeaths >= deaths {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the model-health tracker never folded %d deaths of %s: %+v", deaths, model, td.modelHealthTracker().Summary(time.Now()))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestModelsRouteReadOnlyAndStatusSummary(t *testing.T) {
 	td := newTestDaemon(t, nil)
 	now := time.Now().UTC()
@@ -60,6 +79,11 @@ func TestModelsRouteReadOnlyAndStatusSummary(t *testing.T) {
 		td.modelHealthTracker().Ingest(w14Entry(t, when.Add(time.Minute), "wi_m1", "step_failed", seq,
 			map[string]any{"step": "verification", "cause": "model_error", "spawn_n": spawn}))
 	}
+	// Ingest only enqueues: the tracker folds the six events on its own
+	// goroutine (modelhealth/tracker.go), so the routes below would race
+	// that fold. Await the folded state — the warning
+	// counting all three model deaths — before reading any route.
+	w14AwaitDeaths(t, td, "glm-5.3-flash", 3)
 
 	code, body := w14Raw(t, td.sock, "GET", "/models")
 	if code != http.StatusOK {

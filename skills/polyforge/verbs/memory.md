@@ -51,7 +51,7 @@ truncated regardless of `--max-bytes`:
 
 | Code | When | What to tell the user |
 |---|---|---|
-| `AUTH-401` | api key missing or invalid | Credential rejected — check `--api-key` / `PF_API_KEY` / the config's `api_key`. |
+| `AUTH-401` | api key missing or invalid | Credential rejected — check the Cell's `api_key` (`pf [--profile NAME] config set api_key`). |
 | `MEM-404` | Unknown or invisible memory id | No such memory (or it is not visible to you) — the id comes from a `recall` hit (`items[].id`). |
 
 A local `pf: memory show: ...` line (exit 1, no typed code) means a local
@@ -64,3 +64,9 @@ unknown flag (`memory show` deliberately has no `--project`).
   the hit's id and run `pf memory show <id>` when the body is needed.
 - The byte cap is a human-mode presentation bound only: `--json` always
   carries the full body in `content`.
+
+Transport: like every data-plane verb this one goes through the local daemon
+to the resolved Cell's AIHub connection (`--profile NAME` / `PF_PROFILE` /
+the cwd's mapped Cell / `default`); `--server`, `--api-key`, `PF_SERVER` and
+`PF_API_KEY` are refused, and with the daemon down it fails with
+`DAEMON-410` (`pf daemon ensure`, then retry once).

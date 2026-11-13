@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
@@ -133,14 +134,9 @@ func TestDoctorCandidatePrefixAndClaudeTrigger(t *testing.T) {
 	wf := t.TempDir()
 	write := func(bundle, fm string) {
 		t.Helper()
-		if err := os.MkdirAll(filepath.Join(wf, bundle), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(wf, bundle, "workflow.md"), []byte(fm), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeLane(t, wf, bundle, fm)
 	}
-	write("autopilot", "---\ndefaults:\n  model_candidates: [pi:g/glm]\nsteps:\n  - { id: fix }\n---\n")
+	write("autopilot", "defaults:\n  model_candidates: [pi:g/glm]\nsteps:\n  - { id: fix }\n")
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -202,9 +198,9 @@ func TestDoctorCandidatePrefixAndClaudeTrigger(t *testing.T) {
 
 	// a bundle with an unprefixed candidate: fail naming file and step
 	put("steps:\n  polyforge:\n    fix: { models: [pi:g/glm] }\n")
-	write("bug-fix", "---\nsteps:\n  - { id: fix }\n  - { id: review, model_candidates: [claude-opus-5-5] }\n---\n")
+	write("bug-fix", "steps:\n  - { id: fix }\n  - { id: review, model_candidates: [claude-opus-5-5] }\n")
 	_, _, doc = doctorStatus(t, env, "--json", "doctor")
-	if st, detail := doctorFind(t, doc, "workspace yaml"); st != "fail" || !strings.Contains(detail, "bundle bug-fix: "+filepath.Join(wf, "bug-fix", "workflow.md")+`: step review: model_candidates[0]: "claude-opus-5-5" needs a harness prefix`) {
+	if st, detail := doctorFind(t, doc, "workspace yaml"); st != "fail" || !strings.Contains(detail, "bundle bug-fix: ") || !strings.Contains(detail, "WFC-198 "+filepath.Join(wf, "bug-fix", workflow.WorkflowFile)+`:6 steps[1](review).model_candidates[0]: "claude-opus-5-5" needs a harness prefix`) {
 		t.Fatalf("bad bundle: %s %q", st, detail)
 	}
 }

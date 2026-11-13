@@ -1,0 +1,9 @@
+contract: 5
+name: wfc-111-nested
+description: fixture lane for WFC-111
+max_rewinds: 1
+steps:
+  - id: work
+  - id: check
+    gate: true
+    on_fail: { target: work, rewind: always }

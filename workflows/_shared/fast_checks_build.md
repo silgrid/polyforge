@@ -1,7 +1,7 @@
-Before reporting a unit green, also run the release-shipped engine's scoped report in
-each repo the unit touched: `<data-dir>/release/current/tools/verify-scope --json`
-(`<data-dir>` is `$POLYFORGE_DATA_DIR` when set, else `~/.local/share/polyforge`) from
-the repo clone, no other argument: the diff against `merge-base HEAD origin/<default>`.
+Before reporting a unit green, also run the workflow's engine's scoped report in each
+repo the unit touched: `sh "$PF_SHARED_DIR/scripts/verify-scope" --json` (the engine in
+this lane's snapshot) from the repo clone, no other argument: the diff against
+`merge-base HEAD origin/<default>`.
 Of its `commands` (the repo's `.polyforge/verify-scope.conf` or the engine's defaults
 decide them), run in order each whose `phase` is `fast` or `scoped` — its `cmd` via
 `bash -c`, its `timeout` as the explicit timeout — never one whose `phase` is `full`

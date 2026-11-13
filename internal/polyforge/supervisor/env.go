@@ -33,6 +33,11 @@ var daemonEnvNames = []string{
 	"http_proxy", "https_proxy", "no_proxy", "all_proxy",
 	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
 	"SSL_CERT_FILE", "SSL_CERT_DIR",
+	// the npm registry a machine behind a mirror sets (a URL; npm's
+	// credentials live in .npmrc, never here) — a step script's
+	// verification container is given it too (pfstep.container's
+	// CONTAINER_ENV_ALLOW)
+	"npm_config_registry",
 	// XDG base dirs: where cli.toml (XDG_CONFIG_HOME, read by the steps'
 	// own `pf`), the watcher state (XDG_RUNTIME_DIR) and the harnesses'
 	// files are looked up — dropping one would silently move them
@@ -55,6 +60,12 @@ var daemonEnvNames = []string{
 	// 1000 bytes/sec / 60 s defaults only when absent, so an operator's
 	// explicit override must survive this filter (non-credential)
 	"GIT_HTTP_LOW_SPEED_LIMIT", "GIT_HTTP_LOW_SPEED_TIME",
+	// the docker client's engine selection a step script's verification
+	// container uses (workflows/_shared/scripts/pfstep/container.py: a step
+	// process inherits the daemon's environment); locations and a switch,
+	// never a credential (the TLS key is a file under DOCKER_CERT_PATH,
+	// registry auth is DOCKER_CONFIG's config.json)
+	"DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY",
 }
 
 // daemonEnvPrefixes are the variable families the daemon carries.

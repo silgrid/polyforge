@@ -141,6 +141,7 @@ func w11PfAs(t *testing.T, inst *v1Install, apiKey string, args ...string) (stri
 	cmd := exec.Command(inst.pfPath, append([]string{"--config", hermeticConfigPath(t)}, args...)...)
 	cmd.Env = append(os.Environ(), "PF_SERVER="+inst.url, "PF_API_KEY="+apiKey, "PF_USER_ID=usr_root")
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
 	if err == nil {
@@ -378,7 +379,6 @@ func TestW11SignedMachineFaceRejectsReplayAndStale(t *testing.T) {
 func TestW11RemoteProgressQueryRelaysSnapshot(t *testing.T) {
 	inst := newV1Install(t)
 	wi := inst.newWI(t, "w11 remote progress", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 		{"do": "envelope", "id": "fix", "park": true},
 	}, nil)
 
@@ -394,7 +394,7 @@ func TestW11RemoteProgressQueryRelaysSnapshot(t *testing.T) {
 	// The GIVEN is the parked fix step. Hub running/blocked plus a Known
 	// snapshot are already true in the holder's claim window, so sampling
 	// there compares two different moments of a progressing WI (claiming /
-	// no step now vs running / grill a few ms later). Park is a silent live
+	// no step now vs running / fix a few ms later). Park is a silent live
 	// wedge: wait for the fake agent's park record and for the event
 	// sequence to stop moving, then both samples see the same stable step.
 	waitStepStatus(t, holder, wi, "fix", "in_progress", 90*time.Second)

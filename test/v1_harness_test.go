@@ -15,6 +15,7 @@ package test
 // default ports, no shared state, no network beyond loopback.
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -22,9 +23,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,11 +38,14 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/testenv"
+
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 // ---------------------------------------------------------------------------
@@ -171,16 +179,19 @@ type v1Install struct {
 	pfPath      string
 	fakepiPath  string
 
-	// gateAutopilotGrill makes daemons run a copy of the shipped bundles
-	// whose autopilot grill additionally declares requires_human_answer
-	// (no shipped autopilot step carries the flag: its grill allows zero
-	// questions); by default workflowsPath hands out a copy with every
-	// human gate flag stripped so unattended plans run.
-	gateAutopilotGrill bool
+	// microMaxRewinds, when set, replaces micro's max_rewinds in the
+	// daemons' workflows copy: the gate-fail ladder scenario (TestV1S07)
+	// runs a multi-rewind ladder micro's shipped budget (2) cannot reach.
+	microMaxRewinds int
 	// keepDeliver keeps the delivery bundles' `deliver` step in the
 	// daemons' workflows copy (stripped by default: see workflowsPath).
 	keepDeliver bool
 	strippedWF  string
+	// withoutLane makes the next workflows copy the shipped tree with this
+	// one lane left out (the scenario: a daemon whose release
+	// no longer installs a work item's bundle). Reset strippedWF when
+	// setting it mid-scenario.
+	withoutLane string
 	// stripWallBudgets removes every step-level `budget: { wall_minutes }`
 	// override from the daemon's workflow copy, so the daemon-wide
 	// --step-timeout flag (T) governs the scenario (a step's own
@@ -505,6 +516,7 @@ func (u *v1Install) pfExit(t *testing.T, wantExit int, sock string, args ...stri
 	if sock != "" {
 		cmd.Env = append(cmd.Env, "PF_DAEMON_SOCKET="+sock)
 	}
+	v1BusinessCmd(t, cmd)
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	code := 0
@@ -524,7 +536,21 @@ func (u *v1Install) pfExit(t *testing.T, wantExit int, sock string, args ...stri
 	return stdout.String()
 }
 
-// newWI files one execution ticket (bundle autopilot, no human session
+// vehicleLane is the shipped lane the suite's lane-independent scenarios
+// run on: micro, whose deliver step workflowsPath strips by
+// default — `fix` (the first agent step) then the `review` gate, whose FAIL
+// rewinds to fix. Scenarios about delivery or the develop lane name their
+// lane themselves.
+const vehicleLane = "micro"
+
+// v1AcceptanceContent is the content the harness's creators give an
+// execution ticket: an acceptance section with one criterion, so the
+// daemon's auto-pull claims it (it skips a ticket listing none)
+// and `pf queue` shows it without the needs-interaction
+// mark.
+const v1AcceptanceContent = "## Acceptance\n\n- AC1 the scenario's ticket runs — carried by build\n"
+
+// newWI files one execution ticket (bundle vehicleLane, no human session
 // required) and scripts its agent with the given plan actions.
 // resumeActions, when non-nil, script the crash-continuation derivation
 // (the recovery engine's resume spawn).
@@ -533,7 +559,8 @@ func (u *v1Install) newWI(t *testing.T, goal string, actions, resumeActions []ma
 	raw, err := u.client.CreateWorkItem(aihubclient.CreateWorkItemRequest{
 		Project:    v1Project,
 		Goal:       goal,
-		BundleName: strPtr("autopilot"),
+		Content:    strPtr(v1AcceptanceContent),
+		BundleName: strPtr(vehicleLane),
 		Attrs:      nil,
 	})
 	if err != nil {
@@ -679,6 +706,7 @@ type v1Daemon struct {
 	apiKey     string // optional dedicated aihub key (optAPIKey); "" = bootstrap admin key
 	extraEnv   []string
 	extraArgs  []string // extra `pf daemon` flags appended to the argv
+	daemonKeys []string // `key = value` lines of the config's [daemon] table (optDaemonKeys)
 	client     *cli.DaemonClient
 	waitedExit chan error
 	serverURL  string // --server override (optServerURL)
@@ -703,13 +731,15 @@ func optAPIKey(key string) daemonOpt {
 	return func(d *v1Daemon) { d.apiKey = key }
 }
 
+// optDaemonKeys writes `key = value` lines into the daemon config's
+// [daemon] table (e.g. `command_path = "..."`).
+func optDaemonKeys(lines ...string) daemonOpt {
+	return func(d *v1Daemon) { d.daemonKeys = append(d.daemonKeys, lines...) }
+}
+
 // supBounds are the supervision bounds a scenario injects through the
 // real `pf daemon` flags (v2-converge 2.4). A zero duration omits its
 // flag, leaving that bound at the production default.
-// e2eRetryBackoffBase is the retry pacing's first wait every e2e daemon
-// runs under (production: 1m, then 3m, then 9m; here 200ms, 600ms, 1.8s).
-const e2eRetryBackoffBase = 200 * time.Millisecond
-
 type supBounds struct {
 	silence, tool, stepTimeout, stall, modelErrorGrace time.Duration
 }
@@ -749,6 +779,24 @@ func optAuto() daemonOpt {
 // the daemon args are exactly today's.
 func optServerURL(url string) daemonOpt {
 	return func(d *v1Daemon) { d.serverURL = url }
+}
+
+// configPath writes the daemon's cli.toml: the workspace mapping
+// (mappingConfigPath) and the [daemon] keys of optDaemonKeys.
+func (d *v1Daemon) configPath() string {
+	path := mappingConfigPath(d.t, d.workspace, []string{v1Project})
+	if len(d.daemonKeys) == 0 {
+		return path
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("\n[daemon]\n" + strings.Join(d.daemonKeys, "\n") + "\n"); err != nil {
+		d.t.Fatal(err)
+	}
+	return path
 }
 
 // shortTmp makes a short temp path (unix socket paths are bound to 107
@@ -834,13 +882,10 @@ func (d *v1Daemon) launch() {
 		"--pi-bin", d.inst.fakepiPath,
 		// never the host's real claude (a test opts in with its own --claude-bin)
 		"--claude-bin", "/nonexistent/claude-test-guard",
-		// e2e daemons pace retries in milliseconds, not minutes (a test
-		// that pins the pacing passes its own, later flag)
-		"--retry-backoff-base", e2eRetryBackoffBase.String(),
 		// polyforge#113: the [workspace] mapping config is the ONLY
 		// workspace source (and it doubles as the config isolation file —
 		// the daemon never reads an operator config file).
-		"--config", mappingConfigPath(d.t, d.workspace, []string{v1Project}),
+		"--config", d.configPath(),
 	}
 	if gitRemoteBase != "" {
 		args = append(args, "--git-remote-base", gitRemoteBase)
@@ -880,6 +925,7 @@ func (d *v1Daemon) launch() {
 		_ = logf.Close()
 		if t.Failed() {
 			t.Logf("daemon log tail (%s):\n%s", d.logPath, d.logTail())
+			t.Logf("daemon events tail:\n%s", eventsTail(v1CellStateDir(d.dataDir)))
 		}
 	})
 }
@@ -1119,7 +1165,7 @@ func wiSlug(t *testing.T, inst *v1Install, wi string) string {
 // file per work item under <data-dir>/events/); "" before the first.
 func eventsRaw(t *testing.T, dataDir string) string {
 	t.Helper()
-	dir := filepath.Join(dataDir, "events")
+	dir := filepath.Join(v1CellStateDir(dataDir), "events")
 	des, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return ""
@@ -1159,6 +1205,29 @@ func (d *v1Daemon) eventsOf(t *testing.T, wi string) []protocol.EventEntry {
 	return out
 }
 
+// eventsTail is the last 8 KiB of a data dir's durable events (every work
+// item, with bodies), for a failed scenario's log: a timed-out wait names
+// what it waited for, the events name what happened instead (a verdict's
+// cause, a recovery, a block reason). It never fails the test.
+func eventsTail(dataDir string) string {
+	dir := filepath.Join(dataDir, "events")
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Sprintf("(no events: %v)", err)
+	}
+	var b strings.Builder
+	for _, de := range des {
+		if raw, err := os.ReadFile(filepath.Join(dir, de.Name())); err == nil {
+			b.Write(raw)
+		}
+	}
+	out := b.String()
+	if len(out) > 8192 {
+		out = out[len(out)-8192:]
+	}
+	return out
+}
+
 // eventKinds is the ordered kind list of one work item's events.
 func (d *v1Daemon) eventKinds(t *testing.T, wi string) []string {
 	t.Helper()
@@ -1176,13 +1245,22 @@ func (d *v1Daemon) eventKinds(t *testing.T, wi string) []string {
 // the failure message carries desc so a red is diagnosable from the log.
 func waitUntil(t *testing.T, bound time.Duration, desc string, cond func() bool) {
 	t.Helper()
+	waitDeadline(t, bound, func() string { return desc }, cond)
+}
+
+// waitDeadline is waitUntil with the failure text built at the deadline: a
+// description that samples live state must report the state at the timeout,
+// not the one read before the first poll (six tickets read a
+// stale "queued" that way while the work item was already "blocked").
+func waitDeadline(t *testing.T, bound time.Duration, desc func() string, cond func() bool) {
+	t.Helper()
 	deadline := time.Now().Add(bound)
 	for {
 		if cond() {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timeout (%v): %s", bound, desc)
+			t.Fatalf("timeout (%v): %s", bound, desc())
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -1191,7 +1269,10 @@ func waitUntil(t *testing.T, bound time.Duration, desc string, cond func() bool)
 // waitWIStatus polls the aihub-side status of wi.
 func (u *v1Install) waitWIStatus(t *testing.T, wi, status string, bound time.Duration) {
 	t.Helper()
-	waitUntil(t, bound, fmt.Sprintf("work item %s never reached status %q (now %q)", wi, status, u.wiStatus(t, wi)),
+	waitDeadline(t, bound,
+		func() string {
+			return fmt.Sprintf("work item %s never reached status %q (now %q)", wi, status, u.wiStatus(t, wi))
+		},
 		func() bool { return u.wiStatus(t, wi) == status })
 	if status == "wrapped" {
 		// the server-side wrap lands before the daemon's own terminal close
@@ -1347,7 +1428,7 @@ func (u *v1Install) waitBareCommits(t *testing.T, wi string, n int, bound time.D
 // aihub is back).
 func capsuleCommitCount(t *testing.T, dataDir, wi string) int {
 	t.Helper()
-	gitDir := filepath.Join(dataDir, "git", wi+".git")
+	gitDir := filepath.Join(v1CellStateDir(dataDir), "git", wi+".git")
 	if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); err != nil {
 		return 0
 	}
@@ -1577,14 +1658,12 @@ type execStepView struct {
 	Status string `json:"status"`
 	// Candidate is the `<harness>:<model>[:effort]` the step last ran
 	// (or will next run) on — the one model fact of a step record.
-	Candidate          string           `json:"candidate"`
-	StepStartedAt      string           `json:"step_started_at"`
-	Output             map[string]any   `json:"output"`
-	Attempts           []map[string]any `json:"attempts"`
-	Answers            []map[string]any `json:"answers"`
-	PendingQuestion    *map[string]any  `json:"pending_question"`
-	PendingRewindInput *map[string]any  `json:"pending_rewind_input"`
-	BudgetConsumed     map[string]any   `json:"budget_consumed"`
+	Candidate       string           `json:"candidate"`
+	StepStartedAt   string           `json:"step_started_at"`
+	Attempts        []map[string]any `json:"attempts"`
+	Answers         []map[string]any `json:"answers"`
+	PendingQuestion *map[string]any  `json:"pending_question"`
+	BudgetConsumed  map[string]any   `json:"budget_consumed"`
 	// Supervision is the driver-owned failure ledger and relaxed bounds
 	// (v2-converge 2.3/2.4).
 	Supervision map[string]any `json:"supervision"`
@@ -1612,7 +1691,6 @@ type executionView struct {
 	Version        int64                    `json:"version"`
 	BudgetConsumed map[string]any           `json:"budget_consumed"`
 	RewindStats    map[string]any           `json:"rewind_stats"`
-	ReviewRounds   map[string]float64       `json:"review_rounds"`
 	Steps          map[string]*execStepView `json:"steps"`
 }
 
@@ -1736,45 +1814,130 @@ func statusQuiet(d *v1Daemon) *cli.StatusResponse {
 // QUESTION column shows qid (the D6 owner face of a parked question).
 func waitQuestion(t *testing.T, d *v1Daemon, wi, qid string, bound time.Duration) {
 	t.Helper()
-	waitUntil(t, bound, fmt.Sprintf("QUESTION column never showed %s", qid), func() bool {
+	waitDeadline(t, bound, func() string {
+		// the work item's events name what happened instead (a verdict, a
+		// recovery, a workflow that went past the question)
+		return fmt.Sprintf("QUESTION column never showed %s (events: %v)", qid, d.eventKinds(t, wi))
+	}, func() bool {
 		return questionIDOf(statusQuiet(d), wi) == qid
 	})
 }
 
-// waitNoQuestion polls until the work item's QUESTION column is empty
-// (the question closed).
-func waitNoQuestion(t *testing.T, d *v1Daemon, wi string, bound time.Duration) {
-	t.Helper()
-	waitUntil(t, bound, "the open question never closed", func() bool {
-		return questionIDOf(statusQuiet(d), wi) == ""
-	})
+// askAction is a plan action whose step asks the owner (`pf step ask`, workflow
+// contract v2 §5.2) and ends its turn; onMessage (nil = none) is the turn
+// the still-resident process answers the owner's reply with — a reply to a
+// process that is gone resumes the session as the plan's next dispatch.
+func askAction(step, question string, onMessage map[string]any) map[string]any {
+	a := map[string]any{"do": "envelope", "id": step, "end_turn": true, "run": []string{"pf step ask " + shellQuote(question)}}
+	if onMessage != nil {
+		a["on_message"] = onMessage
+	}
+	return a
 }
 
-// answerQuestion answers an open question through the real CLI and
-// asserts the delivered outcome (the pf answer round-trip).
-func answerQuestion(t *testing.T, d *v1Daemon, wi, qid, text string) string {
+// waitAsk polls the daemon status face until the work item's QUESTION
+// column shows an open ask and answers its id (the ask's own stamp).
+func waitAsk(t *testing.T, d *v1Daemon, wi string, bound time.Duration) string {
 	t.Helper()
-	out := d.pf(t, "answer", wi, "--text", text, "--question", qid, "--by", "usr_root")
-	if !strings.Contains(out, "delivered") {
+	var at string
+	waitDeadline(t, bound, func() string {
+		return fmt.Sprintf("QUESTION column never showed an open ask (events: %v)", d.eventKinds(t, wi))
+	}, func() bool {
+		at = questionIDOf(statusQuiet(d), wi)
+		return at != ""
+	})
+	return at
+}
+
+// waitNewAsk is waitAsk for an ask other than prev (a later dispatch's).
+func waitNewAsk(t *testing.T, d *v1Daemon, wi, prev string, bound time.Duration) string {
+	t.Helper()
+	var at string
+	waitDeadline(t, bound, func() string {
+		return fmt.Sprintf("QUESTION column never showed an ask other than %q (events: %v)", prev, d.eventKinds(t, wi))
+	}, func() bool {
+		at = questionIDOf(statusQuiet(d), wi)
+		return at != "" && at != prev
+	})
+	return at
+}
+
+// openAskOn answers the open ask of (step, spawn) in the capsule's
+// asks.jsonl — the durable record behind the QUESTION column waitAsk read.
+func openAskOn(t *testing.T, capDir, step string, spawn int64) capsule.AskLine {
+	t.Helper()
+	lines, err := capsule.ReadAsks(capDir)
+	if err != nil {
+		t.Fatalf("asks.jsonl: %v", err)
+	}
+	open := capsule.OpenAsk(lines, step, spawn)
+	if open == nil {
+		t.Fatalf("no open ask of %s/%d in asks.jsonl: %+v", step, spawn, lines)
+	}
+	return *open
+}
+
+// replyOwner relays the owner's words to the step's agent through the
+// real CLI (`pf answer --text`) and asserts the relay recorded them.
+func replyOwner(t *testing.T, d *v1Daemon, wi, text string) string {
+	t.Helper()
+	out := d.pf(t, "answer", wi, "--text", text, "--by", "usr_root")
+	if !strings.Contains(out, "recorded for step") {
 		t.Fatalf("pf answer: %q", out)
 	}
 	return out
 }
 
-// archivedEnvelope reads one archived result envelope
-// (artifacts/steps/<step>/s<spawn>/result.json) — the R14 staging face.
-func archivedEnvelope(t *testing.T, capDir, step string, spawn int) map[string]any {
+// exhaustThenPark waits for a spent rewind budget to end in a park
+// (workflow contract 4, design #483 §5.1): the gate's fail that cites no
+// owner message is refused at the call (`pf step handoff`, nothing
+// recorded), the gate's resumed session hands off blocked (the scripted
+// stand-in for asking the owner), and the owner cancels it through the
+// real CLI; it waits for the canceled close.
+func exhaustThenPark(t *testing.T, d *v1Daemon, wi, gate string, bound time.Duration) {
 	t.Helper()
-	path := filepath.Join(capDir, "artifacts", "steps", step, fmt.Sprintf("s%d", spawn), "result.json")
-	raw, err := os.ReadFile(path)
+	waitWorkflowStatus(t, d, wi, "blocked", bound)
+	refused := false
+	for _, l := range ledgerLines(t, d.capsuleDir(wi)) {
+		if l.Kind == stepcall.KindResult && l.Verb == stepcall.VerbHandoff && l.Step == gate && l.Outcome == stepcall.OutcomeRefused &&
+			strings.Contains(l.Error, "rewind budget is spent") {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Fatalf("a spent rewind budget must refuse %s's fail at the call (no refused hand-off naming the budget on the ledger)", gate)
+	}
+	inst := d.inst
+	inst.waitWIStatus(t, wi, "blocked", 60*time.Second)
+	out := d.pf(t, "cancel", wi)
+	if !strings.Contains(out, "cancel") {
+		t.Fatalf("pf cancel: %q", out)
+	}
+	inst.waitWIStatus(t, wi, "canceled", 60*time.Second)
+}
+
+// ledgerLines reads the capsule's call ledger
+// (runtime-state/step-calls.jsonl, workflow contract 4).
+func ledgerLines(t *testing.T, capDir string) []stepcall.Line {
+	t.Helper()
+	lines, err := stepcall.Read(capDir)
 	if err != nil {
-		t.Fatalf("archived envelope %s: %v", path, err)
+		t.Fatalf("the call ledger of %s: %v", capDir, err)
 	}
-	var env map[string]any
-	if err := json.Unmarshal(raw, &env); err != nil {
-		t.Fatalf("archived envelope %s unparsable: %v", path, err)
+	return lines
+}
+
+// acceptedHandoff answers the dispatch (step, spawn)'s accepted hand-off
+// on the capsule's call ledger — the record the driver reacts to (workflow
+// contract 4; contract 3's archived envelope,
+// artifacts/steps/<step>/s<spawn>/result.json, is gone).
+func acceptedHandoff(t *testing.T, capDir, step string, spawn int) stepcall.Line {
+	t.Helper()
+	l := stepcall.HandoffOf(ledgerLines(t, capDir), step, int64(spawn))
+	if l == nil || l.Handoff == nil {
+		t.Fatalf("no accepted hand-off of %s dispatch %d on the call ledger", step, spawn)
 	}
-	return env
+	return *l
 }
 
 // waitSpawnCount polls the capsule's spawn journal until it carries n
@@ -1834,15 +1997,13 @@ func latestSpawnPID(t *testing.T, d *v1Daemon, wi string) int {
 	return int(pid)
 }
 
-// envelopeAutopilot is the canonical driver-era autopilot plan: four
-// envelope actions, one per workflow step in declaration order, with the
-// handoff chain (grill, fix) the inherit policy needs. The Nth envelope
-// action fires for spawn ordinal N.
-func envelopeAutopilot() []map[string]any {
+// envelopeMicro is the canonical plan of the vehicle lane (micro, its
+// deliver step stripped): one envelope action per workflow step in
+// declaration order. The Nth envelope action fires for spawn ordinal N.
+func envelopeMicro() []map[string]any {
 	return []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	}
 }
 
@@ -1933,4 +2094,176 @@ func listWorkItems(inst *v1Install, project, status string) ([]api.WorkItem, err
 		return nil, err
 	}
 	return out.Items, nil
+}
+
+// v1BusinessEnv rewrites a pf child's environment for the daemon-mediated
+// data plane: the CLI refuses PF_SERVER/PF_API_KEY (a Cell's connection is
+// configured, and every business call goes through the daemon's
+// ANY /aihub/{path...} proxy), so a harness that names the install's Hub
+// that way gets a unix-socket front standing in for that proxy — /aihub/…
+// forwarded to the Hub with the key as the Cell credential, every other
+// path relayed to the env's PF_DAEMON_SOCKET daemon (when it answers). The
+// last spelling of each variable wins, as for exec. Without PF_SERVER the
+// env is returned unchanged. The real daemon's proxy is pinned by the
+// w348 acceptance suite; this front keeps the per-verb suites on the
+// install's admin identity.
+func v1BusinessEnv(t *testing.T, env []string) []string {
+	t.Helper()
+	return v1BusinessEnvWith(t, env, "")
+}
+
+// v1BusinessCmd applies v1BusinessEnv to a prepared pf command; with no
+// PF_DAEMON_SOCKET in its env, the daemon the front relays to is the one
+// its --config file names (daemon_socket), when it names one.
+func v1BusinessCmd(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	fileSock := ""
+	for i, a := range cmd.Args {
+		if a == "--config" && i+1 < len(cmd.Args) {
+			if raw, err := os.ReadFile(cmd.Args[i+1]); err == nil {
+				if m := regexp.MustCompile(`(?m)^\s*daemon_socket\s*=\s*"([^"]+)"`).FindSubmatch(raw); m != nil {
+					fileSock = string(m[1])
+				}
+			}
+		}
+	}
+	cmd.Env = v1BusinessEnvWith(t, cmd.Env, fileSock)
+	cmd.Args = append(cmd.Args[:1:1], submitAllowNoAcceptance(cmd.Args[1:])...)
+}
+
+// pfGlobalValueFlags are pf's global flags that take a value (cli.Run's
+// global flag set); --json and --version take none.
+var pfGlobalValueFlags = map[string]bool{"config": true, "server": true, "api-key": true, "socket": true, "user": true, "profile": true}
+
+// submitAllowNoAcceptance answers pf's argv (without the program) with
+// `--allow-no-acceptance` appended when its verb — the first positional
+// after the global flags and their values — is `submit` and the switch is
+// absent. The e2e scenarios submit content-less tickets to exercise the
+// daemon, not `pf submit`'s acceptance check (pinned by the cli package's
+// TestW460SubmitAcceptanceCheck).
+func submitAllowNoAcceptance(args []string) []string {
+	i := 0
+	for i < len(args) && strings.HasPrefix(args[i], "-") && args[i] != "--" {
+		if pfGlobalValueFlags[strings.TrimLeft(args[i], "-")] {
+			i++ // the flag's value
+		}
+		i++
+	}
+	if i < len(args) && args[i] == "--" {
+		i++
+	}
+	if i >= len(args) || args[i] != "submit" || slices.Contains(args[i+1:], "--allow-no-acceptance") {
+		return args
+	}
+	return append(slices.Clip(args), "--allow-no-acceptance")
+}
+
+// v1BusinessEnvWith is v1BusinessEnv with the fallback daemon socket to
+// relay to when the env names none.
+func v1BusinessEnvWith(t *testing.T, env []string, fallbackSock string) []string {
+	t.Helper()
+	var hub, key, inner string
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		switch {
+		case strings.HasPrefix(kv, "PF_SERVER="):
+			hub = strings.TrimPrefix(kv, "PF_SERVER=")
+		case strings.HasPrefix(kv, "PF_API_KEY="):
+			key = strings.TrimPrefix(kv, "PF_API_KEY=")
+		case strings.HasPrefix(kv, "PF_DAEMON_SOCKET="):
+			inner = strings.TrimPrefix(kv, "PF_DAEMON_SOCKET=")
+		default:
+			out = append(out, kv)
+		}
+	}
+	if hub == "" {
+		if inner != "" {
+			out = append(out, "PF_DAEMON_SOCKET="+inner)
+		}
+		return out
+	}
+	if inner == "" {
+		inner = fallbackSock
+	}
+	return append(out, "PF_DAEMON_SOCKET="+v1CellFront(t, hub, key, inner))
+}
+
+// v1CellFront serves the stand-in proxy socket (v1BusinessEnv). A daemon
+// socket that does not answer stays as it is: no daemon, no business.
+func v1CellFront(t *testing.T, hub, key, inner string) string {
+	t.Helper()
+	if inner != "" {
+		if conn, err := net.DialTimeout("unix", inner, time.Second); err != nil {
+			return inner
+		} else {
+			conn.Close()
+		}
+	}
+	hubURL, err := url.Parse(hub)
+	if err != nil {
+		t.Fatalf("hub URL %q: %v", hub, err)
+	}
+	toHub := httputil.NewSingleHostReverseProxy(hubURL)
+	base := toHub.Director
+	toHub.Director = func(r *http.Request) {
+		base(r)
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/aihub")
+		r.URL.RawPath = ""
+		r.Header.Del("X-PF-Profile")
+		r.Header.Set("Authorization", "Bearer "+key)
+	}
+	toHub.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		b, _ := json.Marshal(map[string]string{"code": "DAEMON-503", "detail": "Cell \"default\": its AIHub " + hub + " is unreachable: " + err.Error()})
+		_, _ = w.Write(b)
+	}
+	var toDaemon http.Handler = http.NotFoundHandler()
+	if inner != "" {
+		toDaemon = &httputil.ReverseProxy{
+			Director: func(r *http.Request) { r.URL.Scheme, r.URL.Host = "http", "daemon" },
+			// no idle connection outlives a relayed request: the daemon's fd
+			// table (the leak probes) must see only the CLI's own traffic
+			Transport: &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", inner)
+			}},
+		}
+	}
+	sock := filepath.Join(shortTmp(t, "pffront"), "f.sock")
+	lst, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("front listen: %v", err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/aihub/") {
+			toHub.ServeHTTP(w, r)
+			return
+		}
+		if inner == "" && r.Method == http.MethodGet && r.URL.Path == "/profiles" {
+			// a front with no daemon behind it still answers the CLI
+			// resolver like a one-Cell Host (an empty effective index)
+			_, _ = w.Write([]byte(`{"profiles":[],"index":[]}`))
+			return
+		}
+		toDaemon.ServeHTTP(w, r)
+	})}
+	go func() { _ = srv.Serve(lst) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return sock
+}
+
+// v1CellStateDir answers the default Cell's state dir under a daemon data
+// dir: <data-dir>/cells/default for a Host (every Cell writes under
+// cells/<profile>), the data dir itself for the in-process rig, which runs
+// one runtime straight on its dir.
+func v1CellStateDir(dataDir string) string {
+	cell := filepath.Join(dataDir, "cells", "default")
+	if _, err := os.Stat(cell); err == nil {
+		return cell
+	}
+	return dataDir
 }

@@ -87,6 +87,11 @@ func liveErrorVerdict(t *testing.T, link *supervise.Link, step string, n int64, 
 	return *v
 }
 
+// upstreamTransientToolArgs is the polyforge#147 incident's error string,
+// verbatim (code step, dispatch 14, glm-5.3 -> immediately switched to
+// opus-5): an upstream return corruption, an upstream transient.
+const upstreamTransientToolArgs = "Upstream tool call has incomplete or invalid JSON arguments"
+
 // liveCase is one provider error text and its D7 expectation.
 type liveCase struct {
 	name    string
@@ -143,9 +148,9 @@ func runLive(t *testing.T, errs []liveCase) (*supEnv, []time.Duration) {
 
 // TestLiveErrorTurnGoesThroughD7Classification: one live error turn per
 // case, then a delivery. Throttles and upstream transients retry the
-// SAME model after their backoff (D7 for a throttle, the retry pacing for
-// a transient), booked into the step's T, without moving the blocking
-// counter; allowance/auth texts switch candidates with no backoff.
+// SAME model after the transient backoff (design #483 §7), booked into
+// the step's T, without moving the blocking counter; allowance/auth texts
+// switch candidates with no backoff.
 func TestLiveErrorTurnGoesThroughD7Classification(t *testing.T) {
 	for _, c := range liveCases {
 		t.Run(c.name, func(t *testing.T) {
@@ -170,10 +175,7 @@ func TestLiveErrorTurnGoesThroughD7Classification(t *testing.T) {
 				if body["disposition"] != "retry_same_model" {
 					t.Fatalf("disposition %v, want retry_same_model", body["disposition"])
 				}
-				want := RateLimitBackoffBase
-				if c.cause == FailUpstreamTransient {
-					want = supervise.DefaultRetryBackoffBase
-				}
+				want := TransientBackoffBase
 				if len(waits) != 1 || waits[0] != want {
 					t.Fatalf("backoff waits %v, want one %v", waits, want)
 				}
@@ -192,54 +194,5 @@ func TestLiveErrorTurnGoesThroughD7Classification(t *testing.T) {
 				t.Fatalf("a candidate switch must not back off: %v", waits)
 			}
 		})
-	}
-}
-
-// TestLiveRateLimitBackoffDoublesIntoT: three consecutive live 429 turns
-// stay on the first model, wait 1s, 2s, 4s, and the step's T carries all
-// three waits.
-func TestLiveRateLimitBackoffDoublesIntoT(t *testing.T) {
-	c := liveCases[0]
-	env, waits := runLive(t, []liveCase{c, c, c})
-	models := env.models()
-	for i, m := range models {
-		if m != models[0] {
-			t.Fatalf("dispatch %d ran on %q, the first on %q — a live throttle switched models (%v)", i, m, models[0], models)
-		}
-	}
-	want := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
-	if len(waits) != len(want) {
-		t.Fatalf("backoff waits %v, want %v", waits, want)
-	}
-	for i := range want {
-		if waits[i] != want[i] {
-			t.Fatalf("backoff %d is %v, want %v", i, waits[i], want[i])
-		}
-	}
-	if got, min := env.exec(t).Steps["s"].BudgetConsumed.WallMs, (7 * time.Second).Milliseconds(); got < min {
-		t.Fatalf("step T %dms, want the backoff waits (>= %dms) counted in", got, min)
-	}
-}
-
-// TestLiveUpstreamTransientBoundSwitches: the upstream-transient bound
-// holds on the live path too — two same-model retries, the third
-// consecutive malformed tool call switches candidates.
-func TestLiveUpstreamTransientBoundSwitches(t *testing.T) {
-	var c liveCase
-	for _, lc := range liveCases {
-		if lc.cause == FailUpstreamTransient {
-			c = lc
-		}
-	}
-	env, _ := runLive(t, []liveCase{c, c, c})
-	models := env.models()
-	if len(models) != 4 {
-		t.Fatalf("dispatched %v, want four (three transients + the delivery)", models)
-	}
-	if models[1] != models[0] || models[2] != models[0] {
-		t.Fatalf("the first two live transients must retry the same model: %v", models)
-	}
-	if models[3] == models[0] {
-		t.Fatalf("past the bound (%d) the third live transient must switch candidates: %v", UpstreamTransientRetryBound, models)
 	}
 }

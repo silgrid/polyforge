@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,7 @@ func w123Run(t *testing.T, inst *v1Install, cfg string, extraEnv []string, args 
 	env = append(env, extraEnv...)
 	cmd.Env = env
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := 0
 	if err := cmd.Run(); err != nil {
@@ -293,7 +295,7 @@ func w123SeedTask(t *testing.T, d *v1Daemon, tk task.Task) {
 	if tk.CreatedAt.IsZero() {
 		tk.CreatedAt = time.Now().UTC()
 	}
-	if err := task.NewStore(d.dataDir).Save(tk); err != nil {
+	if err := task.NewStore(filepath.Join(d.dataDir, "cells", "default")).Save(tk); err != nil {
 		t.Fatalf("seed task %s: %v", tk.ID, err)
 	}
 }

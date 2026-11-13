@@ -122,7 +122,7 @@ func runConfigMigrate(ctx *Context, args []string) error {
 			continue
 		}
 		rest := workspace.RemoveLegacySections(yraw, secs)
-		if _, lerr := loadWorkspaceBytes(string(rest), "", cfg.Mapping.ProjectsOf(ws)); lerr != nil {
+		if _, lerr := loadWorkspaceBytes(string(rest), ws, cfg.Mapping.ProjectsOf(ws)); lerr != nil {
 			issues = append(issues, fmt.Sprintf("%s: would not load without the moved sections: %s", ypath, lerr.Error()))
 			continue
 		}

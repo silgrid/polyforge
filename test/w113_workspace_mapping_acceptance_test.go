@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+	"github.com/silgrid/polyforge/internal/polyforge/cli"
 )
 
 // ---------------------------------------------------------------------------
@@ -190,6 +191,7 @@ func w113Pf(t *testing.T, inst *v1Install, e w113Env, args ...string) (string, i
 	cmd := exec.Command(pfPath, argv...)
 	cmd.Env = env
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := 0
 	if err := cmd.Run(); err != nil {
@@ -325,7 +327,6 @@ func (d *w113Daemon) boot(bound time.Duration) (served bool, output string, code
 		// (a later --claude-bin wins)
 		"--claude-bin", "/nonexistent/claude-test-guard",
 		// retries paced in milliseconds, not minutes (a later flag wins)
-		"--retry-backoff-base", e2eRetryBackoffBase.String(),
 	}
 	if d.config != "" {
 		args = append(args, "--config", d.config)
@@ -447,14 +448,15 @@ func (d *w113Daemon) pfWant(inst *v1Install, wantExit int, args ...string) strin
 // the e2e project; the mapping scenarios need more).
 // ---------------------------------------------------------------------------
 
-// w113NewWI files one autopilot execution ticket in the given project
+// w113NewWI files one vehicle-lane (micro) execution ticket in the given project
 // and scripts its agent with the given plan actions.
 func w113NewWI(t *testing.T, inst *v1Install, project, goal string, actions []map[string]any) string {
 	t.Helper()
 	raw, err := inst.client.CreateWorkItem(aihubclient.CreateWorkItemRequest{
 		Project:    project,
 		Goal:       goal,
-		BundleName: strPtr("autopilot"),
+		Content:    strPtr(v1AcceptanceContent),
+		BundleName: strPtr(vehicleLane),
 		Attrs:      nil,
 	})
 	if err != nil {
@@ -756,9 +758,9 @@ func w113InstallPrep(t *testing.T) *w113InstallCtx {
 	pkg := filepath.Join(ic.home, ".pi", "agent", "git", "github.com", "silgrid", "polyforge")
 	pkgJSON := "{\n  \"keywords\": [\"pi-package\"],\n  \"pi\": {\"skills\": [\"./skills/polyforge\"]}\n}\n"
 	files := map[string]string{
-		filepath.Join(pkg, "package.json"):                             pkgJSON,
-		filepath.Join(pkg, "skills", "polyforge", "SKILL.md"):          "# polyforge routing skill (w113 stub)\n",
-		filepath.Join(pkg, "workflows", "feature-full", "workflow.md"): "# stub workflow\n",
+		filepath.Join(pkg, "package.json"):                          pkgJSON,
+		filepath.Join(pkg, "skills", "polyforge", "SKILL.md"):       "# polyforge routing skill (w113 stub)\n",
+		filepath.Join(pkg, "workflows", "develop", "workflow.yaml"): "# stub workflow\n",
 	}
 	for dir, content := range files {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
@@ -865,9 +867,9 @@ func TestW113MappingTildeExpansionAndRouting(t *testing.T) {
 	defer d.stop()
 
 	wiA := w113NewWI(t, inst, "e2e", "w113 tilde-keyed workspace claim",
-		envelopeAutopilot())
+		envelopeMicro())
 	wiB := w113NewWI(t, inst, "acme-ops", "w113 absolute-keyed workspace claim",
-		envelopeAutopilot())
+		envelopeMicro())
 	d.pfWant(inst, -1, "submit", wiA)
 	d.pfWant(inst, -1, "submit", wiB)
 
@@ -1136,7 +1138,7 @@ func TestW113DaemonDefaultConfigLocation(t *testing.T) {
 	w113ConfigFile(t, std, inst.url, inst.adminKey, "",
 		[]w113WS{{key: defaultWS, projects: []string{"e2e"}}})
 
-	wiA := w113NewWI(t, inst, "e2e", "w113 default-config-location claim", envelopeAutopilot())
+	wiA := w113NewWI(t, inst, "e2e", "w113 default-config-location claim", envelopeMicro())
 	d := w113NewDaemon(t, inst, w113DOptHome(home)) // NO --config
 	d.start()
 	defer d.stop()
@@ -1151,7 +1153,7 @@ func TestW113DaemonDefaultConfigLocation(t *testing.T) {
 	cfg2 := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"),
 		inst.url, inst.adminKey, "",
 		[]w113WS{{key: otherWS, projects: []string{"e2e"}}})
-	wiB := w113NewWI(t, inst, "e2e", "w113 explicit-config-override claim", envelopeAutopilot())
+	wiB := w113NewWI(t, inst, "e2e", "w113 explicit-config-override claim", envelopeMicro())
 	d2 := w113NewDaemon(t, inst, w113DOptConfig(cfg2))
 	d2.start()
 	defer d2.stop()
@@ -1166,29 +1168,22 @@ func TestW113DaemonDefaultConfigLocation(t *testing.T) {
 // guidance, before listening.
 // ---------------------------------------------------------------------------
 
-// TestW113DaemonNoMappingRefusesStartup pins criterion #7: a config
-// with zero `[workspace]` sections (the fresh-install templated shape)
-// makes the daemon refuse to start with guidance pointing at the
-// `[workspace]` shape and `pf doctor`, BEFORE the socket exists.
+// TestW113DaemonNoMappingRefusesStartup (renamed in meaning by the
+// single-host multi-AIHub work, spec requirement "A Cell with no workspace
+// MUST load"): a config with a complete connection and zero [workspace]
+// sections no longer refuses startup — the Host serves, the default Cell's
+// data plane works, and its execution plane is closed with the reason on
+// GET /status (submits are refused naming it).
 func TestW113DaemonNoMappingRefusesStartup(t *testing.T) {
 	cfg := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"),
 		"http://127.0.0.1:1", "w113key", "", nil)
 	d := w113NewDaemon(t, nil, w113DOptConfig(cfg))
-	served, output, code := d.boot(30 * time.Second)
-	if served {
-		d.stop()
-		t.Fatal("daemon started serving with zero [workspace] sections")
-	}
-	if code != w113ExitNeedsOperator {
-		t.Fatalf("daemon with no mapping: exit %d, want 78 (output %q)", code, output)
-	}
-	for _, tok := range []string{"[workspace", "doctor"} {
-		if !strings.Contains(output, tok) {
-			t.Fatalf("daemon with no mapping: refusal misses the %q guidance token (output %q)", tok, output)
-		}
-	}
-	if d.socketExists() {
-		t.Fatal("daemon with no mapping still created its socket before refusing")
+	d.start()
+	defer d.stop()
+	st := cli.NewDaemonClient(d.sock)
+	raw, err := st.Status()
+	if err != nil || !strings.Contains(string(raw), "no workspace configured") {
+		t.Fatalf("the mapping-less Host must serve with its execution plane closed: %v %s", err, raw)
 	}
 }
 
@@ -1258,8 +1253,8 @@ func TestW113CrossProjectClaimsRoutePerWorkspace(t *testing.T) {
 	d.start()
 	defer d.stop()
 
-	wiA := w113NewWI(t, inst, "e2e", "w113 neighborhood A claim", envelopeAutopilot())
-	wiB := w113NewWI(t, inst, "acme-ops", "w113 neighborhood B claim", envelopeAutopilot())
+	wiA := w113NewWI(t, inst, "e2e", "w113 neighborhood A claim", envelopeMicro())
+	wiB := w113NewWI(t, inst, "acme-ops", "w113 neighborhood B claim", envelopeMicro())
 	d.pfWant(inst, -1, "submit", wiA)
 	d.pfWant(inst, -1, "submit", wiB)
 
@@ -1317,7 +1312,7 @@ func TestW113UnmappedProjectClaimRefused(t *testing.T) {
 	d.start()
 	defer d.stop()
 
-	wi := w113NewWI(t, inst, "ghostproj", "w113 unmapped-project claim refusal", envelopeAutopilot())
+	wi := w113NewWI(t, inst, "ghostproj", "w113 unmapped-project claim refusal", envelopeMicro())
 	before := inst.wiStatus(t, wi)
 	for _, argv := range [][]string{
 		{"submit", wi},
@@ -1366,10 +1361,9 @@ func TestW113InflightCapsulesKeepHomesAcrossRestart(t *testing.T) {
 
 	wi := inst.newWI(t, "w113 in-flight capsule keeps its home",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 4000},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 4000},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d := w113NewDaemon(t, inst,
 		w113DOptConfig(cfg), w113DOptSock(sock), w113DOptDataDir(dataDir))
@@ -1436,10 +1430,9 @@ func TestW113UnmappedMidflightWIBlocksThenResumes(t *testing.T) {
 
 	wi := w113NewWI(t, inst, "acme-ops", "w113 unmapped mid-flight work item",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 4000},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 4000},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		})
 	d := w113NewDaemon(t, inst,
 		w113DOptConfig(fullCfgPath), w113DOptSock(sock), w113DOptDataDir(dataDir))
@@ -1734,8 +1727,8 @@ func TestW113DrainIteratesAllMappedProjects(t *testing.T) {
 			{key: wsA, projects: []string{"e2e"}},
 			{key: wsB, projects: []string{"acme-ops"}},
 		})
-	wiA := w113NewWI(t, inst, "e2e", "w113 drain across workspaces alpha", envelopeAutopilot())
-	wiB := w113NewWI(t, inst, "acme-ops", "w113 drain across workspaces beta", envelopeAutopilot())
+	wiA := w113NewWI(t, inst, "e2e", "w113 drain across workspaces alpha", envelopeMicro())
+	wiB := w113NewWI(t, inst, "acme-ops", "w113 drain across workspaces beta", envelopeMicro())
 
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfg), w113DOptArgs("--auto"))
 	d.start()
@@ -1762,6 +1755,10 @@ func TestW113DrainIteratesAllMappedProjects(t *testing.T) {
 // check).
 func TestW113DoctorHealthyMachine(t *testing.T) {
 	inst := newV1Install(t)
+	// pf is on the PATH the daemon and pf inherit (tools/install.sh's
+	// layout): a step's `pf step …` resolves under the step PATH, which the
+	// `daemon command path` row checks
+	t.Setenv("PATH", filepath.Dir(inst.pfPath)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ws := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "cli.toml")
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfgPath))
@@ -1776,6 +1773,10 @@ func TestW113DoctorHealthyMachine(t *testing.T) {
 	if err := os.WriteFile(cfgPath, append(raw, "\n[memory_policy.\""+ws+"\".default]\nrecord = [\"r\"]\n"...), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// a healthy machine's project default names a real model: the shipped
+	// lanes' candidates are placeholders no gateway serves, which the
+	// workspace yaml row warns about
+	w079Yaml(t, ws, "steps:\n  e2e:\n    default: { models: [pi:prov/model-a] }\n")
 	d.start()
 	defer d.stop()
 
@@ -1790,9 +1791,9 @@ func TestW113DoctorHealthyMachine(t *testing.T) {
 	}
 	for _, c := range doc.Checks {
 		switch c.Name {
-		case "claude progress display", "pi progress display",
-			"claude install layout", "pi install layout", "v1 harness leftovers":
-			continue // the harness family (polyforge#142, #174): no harness in the scratch HOME
+		case "claude statusline", "pi package",
+			"claude install layout", "pi install layout", "v1 harness leftovers", "retired chat state":
+			continue // the harness family (polyforge#142, #174,): no harness in the scratch HOME
 		case "harness diagram guidance":
 			continue // skips when no harness is installed, as here
 		case "daemon supervision":
@@ -1826,11 +1827,16 @@ func TestW113DoctorHealthyMachine(t *testing.T) {
 // inverse (both workspaces named) — and the exit code is non-zero.
 func TestW113DoctorMappingChecks(t *testing.T) {
 	inst := newV1Install(t) // (c) needs a real aihub with its project set
+	unk := filepath.Join(t.TempDir(), "w113unk")
+	if err := os.Mkdir(unk, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
-		name  string
-		ws    []w113WS
-		need  []string // tokens the output must carry
-		loose []string
+		name   string
+		ws     []w113WS
+		daemon bool     // run a daemon over this config (its socket in the file)
+		need   []string // tokens a failing check must carry
+		loose  []string
 	}{
 		{
 			name:  "mapping absent",
@@ -1846,11 +1852,16 @@ func TestW113DoctorMappingChecks(t *testing.T) {
 			need: []string{"w113missing"},
 		},
 		{
+			// the aihub projects check reads through the daemon's
+			// data-plane proxy and is skipped while the daemon is down: a
+			// running daemon over an existing workspace, so that check is
+			// the one that fails
 			name: "project unknown to aihub",
 			ws: []w113WS{
-				{key: filepath.Join(t.TempDir(), "w113unk"), projects: []string{"w113notonhub"}},
+				{key: unk, projects: []string{"w113notonhub"}},
 			},
-			need: []string{"w113notonhub", "w113unk"},
+			daemon: true,
+			need:   []string{"w113notonhub", "w113unk"},
 		},
 		{
 			name: "ambiguous inverse",
@@ -1863,8 +1874,18 @@ func TestW113DoctorMappingChecks(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			cfg := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"),
-				inst.url, inst.adminKey, filepath.Join(t.TempDir(), "dead.sock"), c.ws)
+			cfgPath := filepath.Join(t.TempDir(), "cli.toml")
+			sock := filepath.Join(t.TempDir(), "dead.sock")
+			var d *w113Daemon
+			if c.daemon {
+				d = w113NewDaemon(t, inst, w113DOptConfig(cfgPath))
+				sock = d.sock
+			}
+			cfg := w113ConfigFile(t, cfgPath, inst.url, inst.adminKey, sock, c.ws)
+			if d != nil {
+				d.start()
+				defer d.stop()
+			}
 			jout, code := w113Pf(t, inst, w113Env{config: cfg, json: true}, "doctor")
 			if code != 1 {
 				t.Fatalf("pf doctor (%s): exit %d, want 1 (output %q)", c.name, code, jout)
@@ -1873,12 +1894,13 @@ func TestW113DoctorMappingChecks(t *testing.T) {
 			if doc.OK {
 				t.Fatalf("pf doctor (%s): ok is true with a failing mapping (output %q)", c.name, jout)
 			}
-			// The named tokens ride the checks' name+detail text (the
+			// The named tokens ride a failing check's name+detail text (the
 			// spec pins the shape, not the names — see the doc's
-			// under-specification #3).
+			// under-specification #3); a skipped row that merely echoes a
+			// token does not count.
 			for _, tok := range c.need {
-				if !strings.Contains(jout, tok) {
-					t.Fatalf("pf doctor (%s): output misses the named token %q (output %q)", c.name, tok, jout)
+				if w113FailingCheck(doc, tok) == nil {
+					t.Fatalf("pf doctor (%s): no failing check names the token %q (output %q)", c.name, tok, jout)
 				}
 			}
 			if len(c.loose) > 0 {
@@ -1911,13 +1933,16 @@ func TestW113DoctorConnectivityChecks(t *testing.T) {
 		server string
 		apiKey string
 		socket string
+		daemon bool     // run a daemon over this config (its socket in the file)
 		needle []string // identifies the distinct failing check
 	}{
 		{
+			// the Hub-dependent checks go through the daemon's data-plane
+			// proxy: a running daemon over the unreachable server
 			name:   "server unreachable",
 			server: "http://127.0.0.1:59998",
 			apiKey: inst.adminKey,
-			socket: filepath.Join(t.TempDir(), "dead.sock"),
+			daemon: true,
 			needle: []string{"server", "aihub", "reach", "59998"},
 		},
 		{
@@ -1928,18 +1953,30 @@ func TestW113DoctorConnectivityChecks(t *testing.T) {
 			needle: []string{"sock"},
 		},
 		{
+			// a running daemon whose Cell credential the Hub rejects
 			name:   "api key rejected",
 			server: inst.url,
 			apiKey: "w113badkey",
-			socket: filepath.Join(t.TempDir(), "dead.sock"),
+			daemon: true,
 			needle: []string{"auth", "401", "unauthor", "api"},
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			cfg := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"),
-				c.server, c.apiKey, c.socket,
+			cfgPath := filepath.Join(t.TempDir(), "cli.toml")
+			sock := c.socket
+			var d *w113Daemon
+			if c.daemon {
+				d = w113NewDaemon(t, inst, w113DOptConfig(cfgPath), w113DOptArgs("--api-key", c.apiKey))
+				sock = d.sock
+			}
+			cfg := w113ConfigFile(t, cfgPath,
+				c.server, c.apiKey, sock,
 				[]w113WS{{key: ws, projects: []string{"e2e"}}})
+			if d != nil {
+				d.start()
+				defer d.stop()
+			}
 			// noConn: the config's own server/key are the values under
 			// test (env would override them).
 			jout, code := w113Pf(t, inst, w113Env{config: cfg, json: true, noConn: true}, "doctor")
@@ -2041,9 +2078,11 @@ func TestW113LegacyConfigLocationDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, code := w113Pf(t, inst, w113Env{home: home, noConn: true}, "queue", "--project", "e2e")
-	if code == 0 {
-		t.Fatalf("pf queue against an unreachable-by-design server exited 0 (output %q)", out)
+	// the local config read (business goes through the daemon, which this
+	// scenario does not run) answers the documented default
+	out, code := w113Pf(t, inst, w113Env{home: home, noConn: true}, "config", "get", "server")
+	if code != 0 {
+		t.Fatalf("pf config get server: exit %d (output %q)", code, out)
 	}
 	if strings.Contains(out, "59999") {
 		t.Fatalf("the legacy config location was read: diagnostics name the legacy URL (output %q)", out)

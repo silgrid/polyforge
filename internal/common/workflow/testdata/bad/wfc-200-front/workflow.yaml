@@ -1,0 +1,6 @@
+contract: 5
+name: wfc-200-front
+description: fixture lane for WFC-200 (a skill whose frontmatter lacks commands)
+steps:
+  - id: work
+    skill: tidy

@@ -1,0 +1,188 @@
+{
+  "file": {
+    "path": "/tmp/pi-web-fixture-290/home/.config/polyforge/cli.toml",
+    "sha256": "8eaacffb15c6fbe9588d6292409109a0fa7855037a42a946c84b6559cee7e526",
+    "exists": true
+  },
+  "items": [
+    {
+      "key": "server",
+      "value": "http://127.0.0.1:18080",
+      "source": "file",
+      "class": "restart-only",
+      "schema": {
+        "kind": "string"
+      }
+    },
+    {
+      "key": "api_key",
+      "source": "default",
+      "class": "restart-only",
+      "schema": {
+        "kind": "secret"
+      }
+    },
+    {
+      "key": "daemon_socket",
+      "value": "/tmp/pi-web-fixture-290/home/.local/share/polyforge/daemon.sock",
+      "source": "default",
+      "class": "restart-only",
+      "schema": {
+        "kind": "path"
+      }
+    },
+    {
+      "key": "user_id",
+      "source": "default",
+      "class": "cli-only",
+      "schema": {
+        "kind": "string"
+      }
+    },
+    {
+      "key": "claude_bin",
+      "source": "default",
+      "class": "live",
+      "schema": {
+        "kind": "string"
+      }
+    },
+    {
+      "key": "step_timeout",
+      "source": "default",
+      "class": "live",
+      "schema": {
+        "kind": "duration",
+        "min_exclusive": 0
+      }
+    },
+    {
+      "key": "stall_window",
+      "source": "default",
+      "class": "live",
+      "schema": {
+        "allow_negative": true,
+        "kind": "duration",
+        "nonzero": true
+      }
+    },
+    {
+      "key": "harness_root",
+      "source": "default",
+      "class": "restart-only",
+      "schema": {
+        "kind": "path"
+      }
+    },
+    {
+      "key": "operator_agent_dir",
+      "source": "default",
+      "class": "restart-only",
+      "schema": {
+        "kind": "path"
+      }
+    },
+    {
+      "key": "max_concurrent_jobs",
+      "value": "4",
+      "source": "file",
+      "class": "live",
+      "schema": {
+        "kind": "int",
+        "min": 1
+      }
+    },
+    {
+      "key": "summarize.models",
+      "value": [
+        "pi:fixture/summarize-a",
+        "pi:fixture/summarize-b"
+      ],
+      "source": "file",
+      "class": "live",
+      "schema": {
+        "kind": "model-list"
+      }
+    },
+    {
+      "key": "summarize.language",
+      "value": "Chinese",
+      "source": "file",
+      "class": "live",
+      "schema": {
+        "kind": "string"
+      }
+    },
+    {
+      "key": "summarize.interval_sec",
+      "value": 120,
+      "source": "file",
+      "class": "live",
+      "schema": {
+        "kind": "int",
+        "max": 3600,
+        "min": 10
+      }
+    },
+    {
+      "key": "[workspace.\"/tmp/pi-web-fixture/ws-alpha\"]",
+      "value": "alpha,gamma",
+      "source": "file",
+      "section": true,
+      "class": "next-claim"
+    },
+    {
+      "key": "[workspace.\"/tmp/pi-web-fixture/ws-beta\"]",
+      "value": "beta",
+      "source": "file",
+      "section": true,
+      "class": "next-claim"
+    }
+  ],
+  "memory_policy": {
+    "/tmp/pi-web-fixture/ws-alpha": {
+      "alpha": {
+        "record": [],
+        "skip": [
+          "alpha scratch notes"
+        ],
+        "declared": true
+      },
+      "default": {
+        "record": [
+          "pitfalls and their root cause",
+          "the owner's rulings"
+        ],
+        "skip": [
+          "transient state"
+        ],
+        "declared": true
+      },
+      "gamma": {
+        "record": [
+          "gamma release facts"
+        ],
+        "skip": [],
+        "declared": true
+      }
+    },
+    "/tmp/pi-web-fixture/ws-beta": {
+      "beta": {
+        "record": [],
+        "skip": [],
+        "declared": false
+      },
+      "default": {
+        "record": [
+          "踩坑和根因（现象→原因→解法）",
+          "代码/git 里看不出来的环境与外部系统事实",
+          "所有者的裁决和约定"
+        ],
+        "skip": [
+          "credential values"
+        ],
+        "declared": true
+      }
+    }
+  }
+}

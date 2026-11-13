@@ -1,7 +1,7 @@
 package test
 
 // w25_verify_scope_engine_test.go: engine-level contract tests for the
-// release-shipped verification-scope reporter, `tools/verify-scope`.
+// release-shipped verification-scope reporter, `workflows/_shared/scripts/verify-scope`.
 //
 // These cover the parts the authored acceptance suite delegates to `code`:
 // the frozen Go and npm byte-identical oracles, report grammar edge cases,
@@ -34,7 +34,7 @@ func w25engRoot(t *testing.T) string {
 // w25engEnginePath pins the shipped engine path.
 func w25engEnginePath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(w25engRoot(t), "tools", "verify-scope")
+	return filepath.Join(w25engRoot(t), "workflows", "_shared", "scripts", "verify-scope")
 }
 
 // w25engGit runs one git command in dir with a fixed identity.
@@ -108,7 +108,7 @@ func w25engClone(t *testing.T, files map[string]string, conf string, frozen stri
 	if conf != "" {
 		w25engWrite(t, dir, ".polyforge/verify-scope.conf", conf)
 	}
-	w25engCopy(t, w25engEnginePath(t), filepath.Join(dir, "tools", "verify-scope"), 0o755)
+	w25engCopy(t, w25engEnginePath(t), filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), 0o755)
 	if frozen != "" {
 		w25engCopy(t, frozen, filepath.Join(dir, ".polyforge", "verify-scope.sh"), 0o755)
 	}
@@ -191,9 +191,9 @@ func w25engParse(t *testing.T, out string) w25engReport {
 // w25engScope runs the fixture's engine, requires exit 0, and parses.
 func w25engScope(t *testing.T, dir string, args ...string) w25engReport {
 	t.Helper()
-	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, args...)
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil, args...)
 	if code != 0 {
-		t.Fatalf("tools/verify-scope %v: exit %d (stdout %q, stderr %q)", args, code, out, errb)
+		t.Fatalf("workflows/_shared/scripts/verify-scope %v: exit %d (stdout %q, stderr %q)", args, code, out, errb)
 	}
 	return w25engParse(t, out)
 }
@@ -242,7 +242,7 @@ func TestW25EngineReportGrammarAndBase(t *testing.T) {
 	if empty.mode != "scoped" || len(empty.paths) != 0 {
 		t.Fatalf("empty diff must be scoped with zero paths, got mode %q paths %v", empty.mode, empty.paths)
 	}
-	if _, _, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--bogus"); code != 2 {
+	if _, _, code := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--bogus"); code != 2 {
 		t.Fatalf("an unknown argument must exit 2, got %d", code)
 	}
 }
@@ -258,7 +258,7 @@ func TestW25EngineConfLintAndOpaqueCommands(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "pwned")
 	hook := "stack=go\nfast_gate=echo safe\nfast_gate=$(touch " + marker + ")\n"
 	dir, _ := w25engClone(t, w25engGoModule(), hook, "")
-	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", "HEAD", "--run")
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", "HEAD", "--run")
 	if code != 0 {
 		t.Fatalf("a lint-diagnosed conf line must not fail the report, got exit %d (%s)", code, errb)
 	}
@@ -277,13 +277,13 @@ func TestW25EngineConfLintAndOpaqueCommands(t *testing.T) {
 	ran := filepath.Join(t.TempDir(), "ran")
 	opaque := "stack=go\nfast_gate=touch " + ran + "\n"
 	dir2, _ := w25engClone(t, w25engGoModule(), opaque, "")
-	if _, errb2, code := w25engRun(t, dir2, filepath.Join(dir2, "tools", "verify-scope"), nil, "--base", "HEAD"); code != 0 {
+	if _, errb2, code := w25engRun(t, dir2, filepath.Join(dir2, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", "HEAD"); code != 0 {
 		t.Fatalf("an opaque command must not run without --run: exit %d (%s)", code, errb2)
 	}
 	if _, err := os.Stat(ran); err == nil {
 		t.Fatalf("an opaque command ran without --run")
 	}
-	runOut, runErr, runCode := w25engRun(t, dir2, filepath.Join(dir2, "tools", "verify-scope"), nil, "--base", "HEAD", "--run")
+	runOut, runErr, runCode := w25engRun(t, dir2, filepath.Join(dir2, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", "HEAD", "--run")
 	if runCode != 0 {
 		t.Fatalf("an opaque command must run under --run: exit %d (%s)", runCode, runErr)
 	}
@@ -296,7 +296,7 @@ func TestW25EngineConfLintAndOpaqueCommands(t *testing.T) {
 
 	unknown := "stack=go\nfast_gate=echo ok\nmystery=value\n"
 	dir3, _ := w25engClone(t, w25engGoModule(), unknown, "")
-	_, errb3, _ := w25engRun(t, dir3, filepath.Join(dir3, "tools", "verify-scope"), nil, "--base", "HEAD")
+	_, errb3, _ := w25engRun(t, dir3, filepath.Join(dir3, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", "HEAD")
 	if !strings.Contains(errb3, "unknown key") {
 		t.Fatalf("an unknown conf key must be diagnosed on stderr, got %q", errb3)
 	}
@@ -553,7 +553,7 @@ func TestW25EngineUnexpectedShapeFallsBackFull(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(stub, "go"), []byte(c.stub), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			out, _, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"),
+			out, _, code := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"),
 				[]string{"PATH=" + stub + ":" + os.Getenv("PATH")}, "--base", base)
 			if code != 0 {
 				t.Fatalf("an uncomputable graph must still print a report, got exit %d", code)
@@ -569,7 +569,7 @@ func TestW25EngineUnexpectedShapeFallsBackFull(t *testing.T) {
 // report: zero commands, exit 0, a stderr reason.
 func TestW25EngineUnsupportedStackFallsBackFull(t *testing.T) {
 	dir, _ := w25engClone(t, map[string]string{"mix.exs": "defmodule W25eng.MixProject do\nend\n"}, "", "")
-	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil)
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil)
 	if code != 0 {
 		t.Fatalf("an unsupported stack must exit 0, got %d (%s)", code, errb)
 	}
@@ -609,7 +609,7 @@ func TestW25EnginePythonAnalyzer(t *testing.T) {
 	dir, base := w25engClone(t, w25engPyFiles(), "", "")
 	w25engWrite(t, dir, "src/pkg/core.py", "def core():\n    return 2\n")
 	w25engCommit(t, dir, "change the core module")
-	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", base)
 	if code != 0 {
 		t.Fatalf("engine exited %d: %s", code, errb)
 	}
@@ -646,7 +646,7 @@ func TestW25EnginePythonAnalyzer(t *testing.T) {
 	bDir, bBase := w25engClone(t, broken, "", "")
 	w25engWrite(t, bDir, "src/pkg/core.py", "def core():\n    return 3\n")
 	w25engCommit(t, bDir, "change the core module")
-	out, errb, _ = w25engRun(t, bDir, filepath.Join(bDir, "tools", "verify-scope"), nil, "--base", bBase)
+	out, errb, _ = w25engRun(t, bDir, filepath.Join(bDir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", bBase)
 	if b := w25engParse(t, out); b.mode != "full" || !strings.Contains(errb, ".missing") {
 		t.Fatalf("an unresolvable relative import must force full and be named, got %q (%s)", b.mode, errb)
 	}
@@ -655,7 +655,7 @@ func TestW25EnginePythonAnalyzer(t *testing.T) {
 	amb := w25engPyFiles()
 	amb["package.json"] = "{\n  \"name\": \"w25eng-amb\"\n}\n"
 	aDir, _ := w25engClone(t, amb, "", "")
-	out, errb, _ = w25engRun(t, aDir, filepath.Join(aDir, "tools", "verify-scope"), nil)
+	out, errb, _ = w25engRun(t, aDir, filepath.Join(aDir, "workflows", "_shared", "scripts", "verify-scope"), nil)
 	if a := w25engParse(t, out); a.mode != "full" || len(a.commands) != 0 || !strings.Contains(errb, "without a stack= pin") {
 		t.Fatalf("pyproject.toml + package.json without a pin must be ambiguous and full, got %q %q (%s)", a.mode, a.commands, errb)
 	}
@@ -683,7 +683,7 @@ func TestW25EngineRustAnalyzer(t *testing.T) {
 	dir, base := w25engClone(t, w25engRsFiles(), "", "")
 	w25engWrite(t, dir, "src/store.rs", "pub fn get() -> u32 {\n    2\n}\n")
 	w25engCommit(t, dir, "change the store module")
-	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", base)
 	if code != 0 {
 		t.Fatalf("engine exited %d: %s", code, errb)
 	}
@@ -717,7 +717,7 @@ func TestW25EngineRustAnalyzer(t *testing.T) {
 	bDir, bBase := w25engClone(t, broken, "", "")
 	w25engWrite(t, bDir, "src/store.rs", "pub fn get() -> u32 {\n    3\n}\n")
 	w25engCommit(t, bDir, "change the store module")
-	out, errb, _ = w25engRun(t, bDir, filepath.Join(bDir, "tools", "verify-scope"), nil, "--base", bBase)
+	out, errb, _ = w25engRun(t, bDir, filepath.Join(bDir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", bBase)
 	if b := w25engParse(t, out); b.mode != "full" || !strings.Contains(errb, "mod missing") {
 		t.Fatalf("an unresolvable mod declaration must force full and be named, got %q (%s)", b.mode, errb)
 	}
@@ -775,7 +775,7 @@ func TestW25EngineGoByteContrast(t *testing.T) {
 			if frozenCode != 0 {
 				t.Fatalf("frozen seed exited %d: %s", frozenCode, frozenErr)
 			}
-			engineOut, engineErr, engineCode := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+			engineOut, engineErr, engineCode := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", base)
 			if engineCode != 0 {
 				t.Fatalf("engine exited %d: %s", engineCode, engineErr)
 			}
@@ -1058,7 +1058,7 @@ func TestW25NpmAnalyzerSelectsDeclaredSuites(t *testing.T) {
 	// A path no declaration covers falls back to full, named.
 	w25engWrite(t, dir, "scripts/tool.sh", "#!/bin/sh\n")
 	w25engCommit(t, dir, "add an uncovered path")
-	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", base)
 	if code != 0 {
 		t.Fatalf("engine exited %d: %s", code, errb)
 	}
@@ -1080,7 +1080,7 @@ func TestW25NpmChangedSuitesAndExclusions(t *testing.T) {
 	dir, base := w25engClone(t, w25engNpmFiles(t), w25engNpmConf(t), "")
 	w25engWrite(t, dir, "e2e/themes.mjs", "// changed e2e/themes.mjs\nconsole.log('themes');\n")
 	w25engCommit(t, dir, "change an excluded suite")
-	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+	out, errb, code := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", base)
 	if code != 0 {
 		t.Fatalf("engine exited %d: %s", code, errb)
 	}
@@ -1113,15 +1113,18 @@ func TestW25NpmByteContrast(t *testing.T) {
 			dir, base := w25engNpmRangeFixture(t, rng.name)
 			w25engWrite(t, dir, ".polyforge/verify-scope.conf", conf)
 			w25engCopy(t, frozen, filepath.Join(dir, ".polyforge", "verify-scope.sh"), 0o755)
-			w25engCopy(t, w25engEnginePath(t), filepath.Join(dir, "tools", "verify-scope"), 0o755)
+			w25engCopy(t, w25engEnginePath(t), filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), 0o755)
 			frozenOut, frozenErr, frozenCode := w25engRun(t, dir, filepath.Join(dir, ".polyforge", "verify-scope.sh"), nil, "--base", base)
 			if frozenCode != 0 {
 				t.Fatalf("frozen seed exited %d: %s", frozenCode, frozenErr)
 			}
-			engineOut, engineErr, engineCode := w25engRun(t, dir, filepath.Join(dir, "tools", "verify-scope"), nil, "--base", base)
+			engineOut, engineErr, engineCode := w25engRun(t, dir, filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), nil, "--base", base)
 			if engineCode != 0 {
 				t.Fatalf("engine exited %d: %s", engineCode, engineErr)
 			}
+			// The frozen seed predates the dependency-audit gate: the engine's
+			// full report is the seed's plus exactly the appended audit line.
+			frozenOut = w320AuditAppended(t, frozenOut, dir, filepath.Join(dir, "workflows", "_shared", "scripts"))
 			if frozenOut != engineOut {
 				t.Fatalf("engine stdout differs from the frozen seed\n--- frozen ---\n%s--- engine ---\n%s", frozenOut, engineOut)
 			}
@@ -1135,5 +1138,32 @@ func TestW25NpmByteContrast(t *testing.T) {
 	}
 	if !scopedSeen || !fullSeen {
 		t.Fatalf("the recorded ranges must exercise both scoped (%t) and full (%t)", scopedSeen, fullSeen)
+	}
+}
+
+// TestW344ScopePiWebDiffForcesFull: with this repository's
+// shipped conf, a diff confined to the merged pi-web/ package reports
+// `mode: full` through the shipped engine — the nested npm stack has no
+// scoped tier — and the full tier carries the pi-web package's bar.
+func TestW344ScopePiWebDiffForcesFull(t *testing.T) {
+	files := w25engGoModule()
+	files["pi-web/package.json"] = "{\n  \"name\": \"@silgrid/pi-web\",\n  \"version\": \"0.2.0-dev.0\"\n}\n"
+	files["pi-web/lib/app.ts"] = "export const v = 1;\n"
+	files["pi-web/go.mod"] = "module fixture.test/w25eng/pi-web\n\ngo 1.21\n"
+	dir, base := w25engClone(t, files, w25engIeopsConf(t), "")
+	w25engWrite(t, dir, "pi-web/lib/app.ts", "export const v = 2;\n")
+	w25engCommit(t, dir, "pi-web only")
+	r := w25engScope(t, dir, "--base", base)
+	if r.mode != "full" {
+		t.Fatalf("a pi-web/-only diff must force the full tier, got mode %q:\n%s", r.mode, r.joined())
+	}
+	if len(r.paths) != 1 || r.paths[0] != "pi-web/lib/app.ts" {
+		t.Fatalf("paths = %v, want [pi-web/lib/app.ts]", r.paths)
+	}
+	for _, want := range []string{"cd pi-web && npm ci", "cd pi-web && npm run lint", "cd pi-web && node_modules/.bin/tsc --noEmit",
+		"cd pi-web && npm test", "cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all"} {
+		if !strings.Contains(r.joined(), want) {
+			t.Fatalf("the full tier must run the pi-web bar (%q):\n%s", want, r.joined())
+		}
 	}
 }

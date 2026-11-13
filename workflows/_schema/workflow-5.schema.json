@@ -1,0 +1,235 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "A lane's workflow.yaml under workflow contract 5, generated from the contract registry: each key's own value. The rules across keys, the step definitions, skills and placeholders are the lane loader's (`pf workflows validate`); docs/reference/workflow-contract.md.",
+  "properties": {
+    "acceptance": {
+      "description": "required|none (default required): whether a work item on the lane must list an acceptance criterion before it runs",
+      "enum": [
+        "none",
+        "required"
+      ]
+    },
+    "contract": {
+      "const": 5,
+      "description": "int, required, == ContractVersion"
+    },
+    "defaults": {
+      "additionalProperties": false,
+      "description": "map {model_candidates, tiers}",
+      "properties": {
+        "model_candidates": {
+          "description": "[]<harness>:<model>[:<effort>]",
+          "items": {
+            "pattern": "^\\s*(claude|pi)\\s*:\\s*\\S",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tiers": {
+          "additionalProperties": {
+            "items": {
+              "pattern": "^\\s*(claude|pi)\\s*:\\s*\\S",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "map <tier> -> []<harness>:<model>[:<effort>]; the table a step's model_tier names",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9-]{0,39}$",
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "description": {
+      "description": "string, required, non-empty",
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "exclusive": {
+      "description": "bool (default false): one unfinished work item per project on the lane — a create on it reaches aihub exclusive, refused while another is not wrapped, failed or canceled",
+      "type": "boolean"
+    },
+    "max_rewinds": {
+      "description": "int >= 0; required when any step declares on_fail, refused otherwise",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "name": {
+      "description": "string, required, ^[a-z][a-z0-9-]{0,39}$, == directory name",
+      "pattern": "^[a-z][a-z0-9-]{0,39}$",
+      "type": "string"
+    },
+    "steps": {
+      "description": "[]step, required, non-empty",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "additionalProperties": false,
+            "description": "map {wall_minutes, tool_minutes}",
+            "properties": {
+              "tool_minutes": {
+                "description": "int > 0, <= 180, <= wall_minutes when both are declared: the step's own tool window",
+                "maximum": 180,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "wall_minutes": {
+                "description": "int > 0",
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "gate": {
+            "description": "bool",
+            "type": "boolean"
+          },
+          "hub": {
+            "additionalProperties": false,
+            "description": "map {verbs, attrs} (default none): what the step may call through `pf step hub`",
+            "properties": {
+              "attrs": {
+                "description": "[]attrs key (^[a-z][a-z0-9_]{0,63}$), each at most once (default none): the top-level attrs keys the step may write (`pf step hub attrs <wi> --set <key>`); listing one lets the step call attrs, and the daemon refuses a write of any other key",
+                "items": {
+                  "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "verbs": {
+                "description": "[]get|list|file|wrap-attrs|batch, each at most once (default none): the `pf step hub` verbs the step may call",
+                "items": {
+                  "enum": [
+                    "get",
+                    "list",
+                    "file",
+                    "wrap-attrs",
+                    "batch"
+                  ]
+                },
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "type": "object"
+          },
+          "id": {
+            "description": "string, required, ^[a-z][a-z0-9-]{0,39}$, unique",
+            "pattern": "^[a-z][a-z0-9-]{0,39}$",
+            "type": "string"
+          },
+          "model_candidates": {
+            "description": "[]<harness>:<model>[:<effort>]; exclusive with model_tier",
+            "items": {
+              "pattern": "^\\s*(claude|pi)\\s*:\\s*\\S",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_tier": {
+            "description": "a tier of defaults.tiers; exclusive with model_candidates",
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "on_fail": {
+            "additionalProperties": false,
+            "description": "map {target}, gate only",
+            "properties": {
+              "target": {
+                "description": "an earlier step id, required",
+                "pattern": "^[a-z][a-z0-9-]{0,39}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "target"
+            ],
+            "type": "object"
+          },
+          "resources": {
+            "additionalProperties": false,
+            "description": "map {admission, locks}: what the daemon takes for the step's dispatch",
+            "properties": {
+              "admission": {
+                "description": "none|heavy (default none): a heavy-run admission slot for the dispatch",
+                "enum": [
+                  "none",
+                  "heavy"
+                ]
+              },
+              "locks": {
+                "description": "[]merge: the task repos' per-repo merge locks",
+                "items": {
+                  "enum": [
+                    "merge"
+                  ]
+                },
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "type": "object"
+          },
+          "skill": {
+            "description": "skill name: <lane>/skills/<name>.md, else _shared/skills/<name>.md, rendered into the prompt",
+            "pattern": "^[a-z][a-z0-9-]{0,39}$",
+            "type": "string"
+          },
+          "skippable": {
+            "description": "bool (default false): a project may switch the step off with `steps.<project>.<step>.skip: true` in its workspace yaml, fixed when the work item is first claimed; a switched-off step is never dispatched (its execution status is skipped), and the wrap_attrs of skipped steps at the lane's end pass to the last step that runs",
+            "type": "boolean"
+          },
+          "vars": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "map[string]string",
+            "type": "object"
+          },
+          "vars_files": {
+            "additionalProperties": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "description": "map <var> -> a file of the lane (fragments/<name>.md), relative to the lane directory and inside it: the var's value is the file's text, exactly as if written in vars; a var is declared in vars or in vars_files, not both",
+            "type": "object"
+          },
+          "waivable": {
+            "description": "bool (default false), gate only: the gate may hand off waive on the owner's word",
+            "type": "boolean"
+          },
+          "wrap_attrs": {
+            "description": "[]attr name (^[a-z][a-z0-9_]{0,63}$), each at most once (default none): the wrap attrs the step registers (`pf step hub wrap-attrs <name>`) before its round may hand off done; listing one lets the step call wrap-attrs. When the steps at the lane's end are skipped (a skippable step a project switched off), their wrap_attrs are the last running step's to register",
+            "items": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "contract",
+    "description",
+    "name",
+    "steps"
+  ],
+  "title": "workflow.yaml (workflow contract 5)",
+  "type": "object"
+}

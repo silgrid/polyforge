@@ -165,3 +165,93 @@ func TestEffortArgs(t *testing.T) {
 		}
 	}
 }
+
+// the subagent sidecars Claude Code writes beside a native
+// session — <session dir>/<uuid>/subagents/agent-<id>.jsonl plus its
+// agent-<id>.meta.json — are listed for the capsule copy, from the same
+// per-cwd project directory the session itself is located in; anything
+// else in that directory (another name shape, a directory, a symlink)
+// and another capsule's or a non-uuid session are never listed.
+func TestClaudeSubagentFiles(t *testing.T) {
+	dir := t.TempDir()
+	capDir := "/tmp/ws/capsules/e2e-8"
+	id, _ := NewSessionID()
+	if got := ClaudeSubagentFiles(id, dir, capDir); len(got) != 0 {
+		t.Fatalf("no sidecar dir: %v", got)
+	}
+	sub := filepath.Join(dir, "projects", "-tmp-ws-capsules-e2e-8", id, "subagents")
+	if err := os.MkdirAll(filepath.Join(sub, "agent-nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(sub, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("agent-a0222063905c966f0.jsonl", "{}\n")
+	write("agent-a0222063905c966f0.meta.json", "{}")
+	write("agent-b1.jsonl", "{}\n")
+	write("notes.txt", "x")
+	write("agent-..jsonl", "{}\n")
+	outside := filepath.Join(t.TempDir(), "secret.jsonl")
+	if err := os.WriteFile(outside, []byte("secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(sub, "agent-link.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	got := ClaudeSubagentFiles(id, dir, capDir)
+	want := []string{
+		filepath.Join(sub, "agent-a0222063905c966f0.jsonl"),
+		filepath.Join(sub, "agent-a0222063905c966f0.meta.json"),
+		filepath.Join(sub, "agent-b1.jsonl"),
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("sidecars = %v, want %v", got, want)
+	}
+	if got := ClaudeSubagentFiles(id, dir, "/tmp/ws/capsules/other-1"); len(got) != 0 {
+		t.Fatalf("another capsule's sidecars listed: %v", got)
+	}
+	if got := ClaudeSubagentFiles("../"+id, dir, capDir); len(got) != 0 {
+		t.Fatalf("a non-uuid id listed sidecars: %v", got)
+	}
+	if got := ClaudeSubagentFiles(id, "", capDir); len(got) != 0 {
+		t.Fatalf("no config dir listed sidecars: %v", got)
+	}
+}
+
+// A symlinked <uuid>/subagents (or <uuid>) directory is never followed:
+// the sidecars are listed only from the real directory Claude Code writes.
+func TestClaudeSubagentFilesIgnoresSymlinkedDirs(t *testing.T) {
+	dir := t.TempDir()
+	capDir := "/tmp/ws/capsules/e2e-9"
+	id, _ := NewSessionID()
+	elsewhere := t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, "agent-x1.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	session := filepath.Join(dir, "projects", "-tmp-ws-capsules-e2e-9", id)
+	if err := os.MkdirAll(session, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(session, "subagents")); err != nil {
+		t.Fatal(err)
+	}
+	if got := ClaudeSubagentFiles(id, dir, capDir); len(got) != 0 {
+		t.Fatalf("a symlinked subagents dir was followed: %v", got)
+	}
+	if err := os.RemoveAll(session); err != nil {
+		t.Fatal(err)
+	}
+	linked := t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(linked, "subagents")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(linked, session); err != nil {
+		t.Fatal(err)
+	}
+	if got := ClaudeSubagentFiles(id, dir, capDir); len(got) != 0 {
+		t.Fatalf("a symlinked session dir was followed: %v", got)
+	}
+}

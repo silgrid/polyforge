@@ -16,19 +16,23 @@ import (
 )
 
 // writeFailedStep writes an execution.json whose current step's newest
-// attempt is an infra failure of cause, interrupted at failedAt, with no
-// dispatch since.
-func writeFailedStep(t *testing.T, capDir, cause string, failedAt time.Time) {
+// n attempts are infra failures of cause, the newest interrupted at
+// failedAt, with no dispatch since.
+func writeFailedStep(t *testing.T, capDir, cause string, n int, failedAt time.Time) {
 	t.Helper()
 	started := failedAt.Add(-3 * time.Minute).UTC().Format(time.RFC3339Nano)
+	var attempts []capsule.Attempt
+	for i := range n {
+		attempts = append(attempts, capsule.Attempt{
+			Cause: driver.CauseInfraFailure, FailureCause: cause, AttemptSeq: i + 1,
+			StartedAt: started, InterruptedAt: failedAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
 	ex := capsule.Execution{
 		WorkflowStatus: capsule.WorkflowStatusRunning, CurrentStep: "fix",
 		Steps: map[string]*capsule.Step{"fix": {
 			Status: capsule.StepInProgress, StepStartedAt: started,
-			Attempts: []capsule.Attempt{{
-				Cause: driver.CauseInfraFailure, FailureCause: cause, AttemptSeq: 1,
-				StartedAt: started, InterruptedAt: failedAt.UTC().Format(time.RFC3339Nano),
-			}},
+			Attempts: attempts,
 		}},
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Version:   2,
@@ -60,21 +64,22 @@ func TestStatusJobsProjectPendingRetry(t *testing.T) {
 		return statusJob{}
 	}
 
-	// a model_error 20s ago owes 40s more of its 1m wait
-	writeFailedStep(t, ji.CapsuleDir, driver.FailModelError, time.Now().Add(-20*time.Second))
+	// the seventh throttle in a row, 20s ago, owes 44s more of its 64s
+	// wait (the transient backoff: 1s doubling, design #483 §7)
+	writeFailedStep(t, ji.CapsuleDir, driver.FailRateLimited, 7, time.Now().Add(-20*time.Second))
 	j := job()
-	if j.RetryInSec == nil || *j.RetryInSec < 35 || *j.RetryInSec > 40 || j.RetryCause != driver.FailModelError {
-		t.Fatalf("job %+v, want about 40s left on a model_error retry", j)
+	if j.RetryInSec == nil || *j.RetryInSec < 39 || *j.RetryInSec > 44 || j.RetryCause != driver.FailRateLimited {
+		t.Fatalf("job %+v, want about 44s left on a rate_limited retry", j)
 	}
 
 	// the wait ran out: nothing shown
-	writeFailedStep(t, ji.CapsuleDir, driver.FailModelError, time.Now().Add(-2*time.Minute))
+	writeFailedStep(t, ji.CapsuleDir, driver.FailRateLimited, 7, time.Now().Add(-2*time.Minute))
 	if j := job(); j.RetryInSec != nil || j.RetryCause != "" {
 		t.Fatalf("job %+v, want no pending retry once the wait ran out", j)
 	}
 
 	// a cause that owes no wait: nothing shown
-	writeFailedStep(t, ji.CapsuleDir, driver.FailExitOther, time.Now())
+	writeFailedStep(t, ji.CapsuleDir, driver.FailExitOther, 1, time.Now())
 	if j := job(); j.RetryInSec != nil {
 		t.Fatalf("job %+v, want no pending retry for exit_other", j)
 	}

@@ -1,11 +1,12 @@
 package test
 
 // cancel_promise_contract_test.go: every "cancel and re-file" promise in
-// the shipped workflows names the reachable path — the reserved `cancel`
-// answer at an open question — and no promise depends on a cancel outside
-// the workflow. The only re-file mentions without it follow a terminal
-// end (failed_rewind_exhausted, the release lane's failed gate), where no
-// question is open and nothing needs cancelling.
+// the shipped workflows names the reachable path — (workflow contract 4)
+// the step's own `cancel` hand-off (`pf step handoff --status cancel`,
+// citing the owner's reply to its `pf step ask` with `--per-owner`) — and
+// no promise depends on a cancel outside the workflow. The only re-file
+// mentions without it follow a terminal end (the release lane's failed
+// gate, where a human decides), where nothing needs cancelling.
 
 import (
 	"os"
@@ -15,8 +16,8 @@ import (
 )
 
 // reFileWithoutCancel answers each "re-file" occurrence of text that is
-// neither preceded (within the same promise) by the reserved `cancel`
-// answer nor a post-terminal mention.
+// neither preceded or followed (within the same promise) by a cancel
+// hand-off nor a post-terminal mention.
 func reFileWithoutCancel(text string) []string {
 	var bad []string
 	for i := 0; ; {
@@ -35,17 +36,31 @@ func reFileWithoutCancel(text string) []string {
 		}
 		window := text[lo:at]
 		switch {
-		case strings.Contains(window, "`cancel`"), strings.Contains(text[at:after], "`cancel`"):
-		case strings.Contains(window, "failed_rewind_exhausted"), strings.Contains(window, "a human decides"):
+		case namesCancelHandoff(window), namesCancelHandoff(text[at:after]):
+		case strings.Contains(window, "a human decides"):
 		default:
-			hi := at + 60
+			ctx, hi := at-100, at+60
+			if ctx < 0 {
+				ctx = 0
+			}
 			if hi > len(text) {
 				hi = len(text)
 			}
-			bad = append(bad, text[lo+200:hi])
+			bad = append(bad, text[ctx:hi])
 		}
 		i = at + len("re-file")
 	}
+}
+
+// namesCancelHandoff reports whether s names the cancel hand-off: the
+// `cancel` status, `--status cancel`, or "hand(s) off cancel".
+func namesCancelHandoff(s string) bool {
+	for _, m := range []string{"`cancel`", "--status cancel", "hand off cancel", "hands off cancel"} {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCancelPromiseContract(t *testing.T) {
@@ -61,7 +76,7 @@ func TestCancelPromiseContract(t *testing.T) {
 		text := strings.Join(strings.Fields(string(raw)), " ")
 		for _, ctx := range reFileWithoutCancel(text) {
 			rel, _ := filepath.Rel(root, p)
-			t.Errorf("%s: a re-file promise without the reserved `cancel` answer: …%s…", rel, ctx)
+			t.Errorf("%s: a re-file promise without the `cancel` hand-off: …%s…", rel, ctx)
 		}
 		return nil
 	})
@@ -69,7 +84,7 @@ func TestCancelPromiseContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	// the negative fixture: the pre-change wording is caught
-	if bad := reFileWithoutCancel(strings.Repeat("x ", 200) + "it was misrouted: cancel and re-file on `feature-full`."); len(bad) != 1 {
+	if bad := reFileWithoutCancel(strings.Repeat("x ", 200) + "it was misrouted: cancel and re-file on `develop`."); len(bad) != 1 {
 		t.Fatalf("the check must catch an unreachable cancel promise, got %v", bad)
 	}
 }

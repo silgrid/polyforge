@@ -86,6 +86,7 @@ func (d *Daemon) promptRoute(w http.ResponseWriter, r *http.Request) {
 		Project:       project,
 		Prompt:        prompterPrompt(msg, earlier, reply, wi),
 		ReadOnlyTools: true,
+		Synchronous:   true, // the caller's answer, not a background decision
 		MaxDuration:   analyzeTaskDuration,
 		MaxTokens:     analyzeTaskTokens,
 		CallerID:      req.CallerID,

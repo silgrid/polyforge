@@ -33,7 +33,7 @@ func TestPF122AnswerHelperProcess(t *testing.T) {
 		t.Skip("helper process only")
 	}
 	_, err := cli.NewDaemonClient(sock).Answer(os.Getenv("PF122_WI"),
-		cli.AnswerPayload{QuestionID: os.Getenv("PF122_Q"), AnswerText: "self-answer", AnsweredBy: "agent"})
+		cli.AnswerPayload{AnswerText: "self-answer", AnsweredBy: "agent"})
 	if err != nil {
 		fmt.Printf("PF122-REFUSED %v\n", err)
 		return
@@ -43,7 +43,7 @@ func TestPF122AnswerHelperProcess(t *testing.T) {
 
 func pf122Daemon(t *testing.T) (*testDaemon, *answerAgent) {
 	t.Helper()
-	aa := &answerAgent{answered: make(chan string, 4)}
+	aa := &answerAgent{messages: make(chan string, 4)}
 	td := newTestDaemon(t, func(c *Config) {
 		inner := fakeEngineStarter()
 		c.AgentStarter = func(ctx context.Context, in runtime.AgentStartInput) (Agent, error) {
@@ -57,7 +57,6 @@ func pf122Daemon(t *testing.T) (*testDaemon, *answerAgent) {
 	})
 	td.submitClaim(t, "wi_122")
 	td.waitMonitored(t, "wi_122")
-	td.seedPendingQuestion(t, "wi_122", "q_122", "grill-review", "Is this spec what you want?")
 	return td, aa
 }
 
@@ -66,7 +65,7 @@ func pf122Daemon(t *testing.T) (*testDaemon, *answerAgent) {
 func runAnswerChild(t *testing.T, td *testDaemon, argv []string, env ...string) string {
 	t.Helper()
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Env = append(os.Environ(), append([]string{"PF122_SOCK=" + td.sock, "PF122_WI=wi_122", "PF122_Q=q_122"}, env...)...)
+	cmd.Env = append(os.Environ(), append([]string{"PF122_SOCK=" + td.sock, "PF122_WI=wi_122"}, env...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("answer child: %v\n%s", err, out)
@@ -81,8 +80,8 @@ func helperArgv() []string {
 func assertNotDelivered(t *testing.T, aa *answerAgent) {
 	t.Helper()
 	select {
-	case q := <-aa.answered:
-		t.Fatalf("REPRODUCED #122: the step process's answer reached question %q", q)
+	case text := <-aa.messages:
+		t.Fatalf("REPRODUCED #122: the step process's words reached the step's agent: %q", text)
 	default:
 	}
 }
@@ -123,9 +122,9 @@ func TestAnswerFromHumanSessionIsDelivered(t *testing.T) {
 		t.Fatalf("a human session's answer must be accepted: %s", out)
 	}
 	select {
-	case q := <-aa.answered:
-		if q != "q_122" {
-			t.Fatalf("answer delivered to %q, want q_122", q)
+	case text := <-aa.messages:
+		if text != "self-answer" {
+			t.Fatalf("delivered %q, want the words verbatim", text)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the human answer was never delivered")
@@ -184,10 +183,9 @@ func TestMutatingRoutesFromStepProcessAreRefused(t *testing.T) {
 		"/shutdown",
 		"/ops/config",
 		"/jobs/wi_other/claim",
-		"/jobs/wi_122/revise-binding",
 		"/jobs/wi_122/pause",
-		"/chats/c1/subscribe",
-		"/chats/c1/subscribe-owned",
+		"/decisions/dismiss",
+		"/machine/role",
 	} {
 		out := stepOriginRequest(t, td, "POST", path, marks...)
 		if !strings.Contains(out, "PFSO-STATUS 403") || !strings.Contains(out, "DAEMON-403") || !strings.Contains(out, "step process tree") {
@@ -211,7 +209,7 @@ func TestMutatingRoutesFromStepProcessAreRefused(t *testing.T) {
 // guard (whatever the route itself then answers, it is not the 403).
 func TestMutatingRoutesFromHumanSessionPassTheGuard(t *testing.T) {
 	td, _ := pf122Daemon(t)
-	for _, path := range []string{"/ops/config", "/jobs/wi_none/claim", "/jobs/wi_none/pause", "/chats/c1/subscribe-owned"} {
+	for _, path := range []string{"/ops/config", "/jobs/wi_none/claim", "/jobs/wi_none/pause", "/decisions/dismiss", "/machine/role"} {
 		out := stepOriginRequest(t, td, "POST", path, "PF_WI_ID=wi_other", "PF_DAEMON_ID=another-daemon")
 		if !strings.Contains(out, "PFSO-STATUS") || strings.Contains(out, "PFSO-STATUS 403") {
 			t.Errorf("POST %s from a human session was refused by the guard: %s", path, out)

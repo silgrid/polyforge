@@ -358,12 +358,6 @@ func TestNoTimersWhileWaitingForHuman(t *testing.T) {
 	m.link.Fact(supervise.StepWaitingHuman{Step: "grill", SpawnN: 1, QuestionID: "q1"})
 	expectNoVerdict(t, m, 400*time.Millisecond, "waiting on a human")
 	expectNoOB(t, ob, 10*time.Millisecond, "no stall while a human is asked")
-	// the human answers: the driver is between steps again and the clock
-	// starts from the answer
-	m.link.Fact(supervise.StepAnswered{Step: "grill", SpawnN: 1, QuestionID: "q1"})
-	if _, ok := nextVerdict(t, m, "stall after the answer").(supervise.DriverStalled); !ok {
-		t.Fatal("expected driver_stalled once the driver idles after the answer")
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -490,14 +484,6 @@ func TestActivityCarriesCandidateWithEffort(t *testing.T) {
 	}
 }
 
-// F10: an id-less pending question in execution.json is unanswerable;
-// the commit-boundary read names it with one pending_invalid event.
-func TestIDLessPendingQuestionWritesPendingInvalid(t *testing.T) {
-	m, _ := newTestMonitor(t, newFakeHandle("att_1"), nil)
-	writePendingQuestion(t, m, "", "which?", "grill")
-	soon(t, time.Second, "the pending_invalid event", func() bool { return len(eventsOf(m, "pending_invalid")) >= 1 })
-}
-
 // A daemon-initiated close stays quiet even when a recovery it was queued
 // behind adopts a new derivation: that derivation's expected exit raises
 // nothing either.
@@ -587,8 +573,8 @@ func TestLiveStepTimeoutFloorStillWins(t *testing.T) {
 // A mid-workflow exit still records its agent_death
 // (TestDeathDetectionSendsNeedsRecovery), as does a running one here.
 func TestSettledDriverExitRecordsNoDeath(t *testing.T) {
-	want := map[string]int{"completed": 0, "failed_gate": 0, "failed_rewind_exhausted": 0, "blocked": 0, "running": 1}
-	for _, status := range []string{"completed", "failed_gate", "failed_rewind_exhausted", "blocked", "running"} {
+	want := map[string]int{"completed": 0, "failed_gate": 0, "blocked": 0, "running": 1}
+	for _, status := range []string{"completed", "failed_gate", "blocked", "running"} {
 		h := newFakeHandle("att_1")
 		m, ob := newTestMonitor(t, h, nil)
 		raw, _ := json.Marshal(map[string]any{

@@ -1,0 +1,495 @@
+import "#test-env";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { createJiti } from "jiti";
+
+// Importing the module is a parse smoke test; the windowing semantics moved
+// to the pure row model and are covered by lib/sidebar-rows.test.mjs.
+const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+await jiti.import("./SessionSidebar.tsx");
+
+const source = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
+const pinnedExpansionSource = await readFile(new URL("../lib/pinned-expansion.ts", import.meta.url), "utf8");
+const globalStyles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+const sessionItemSource = source.slice(source.indexOf("function SessionItem("));
+
+test("the session list windows through the unified pinned-group row model", () => {
+  assert.match(source, /import \{[\s\S]*buildSidebarRows[\s\S]*\} from "@\/lib\/sidebar-rows";/);
+  assert.match(source, /buildSidebarRows\(\{[\s\S]*?expandedKeys: expandedGroupKeys,[\s\S]*?mainFamilies,[\s\S]*?\}\)/);
+  assert.match(source, /getWindowedRows\(sidebarRows, listScrollTop, listViewportH, focusedSessionId\)/);
+  assert.match(source, /height: sidebarRowsHeight\(sidebarRows\)/);
+  // The old fixed-height windowing helper is gone.
+  assert.doesNotMatch(source, /getSessionListIndices/);
+  // Sessions of pinned projects render only inside their group.
+  assert.match(source, /filteredSessions\.filter\(\(session\) => !groupedSessionIds\.has\(session\.id\)\)/);
+});
+
+test("pinned groups are expandable buttons with their own new-session affordance", () => {
+  assert.match(source, /aria-expanded=\{expanded\}/);
+  assert.match(source, /aria-controls=\{pinnedGroupContentId\(project\.key\)\}/);
+  assert.match(source, /t\(expanded \? "sidebar\.pinnedGroupCollapse" : "sidebar\.pinnedGroupExpand", \{ path: project\.root \}\)/);
+  assert.match(source, /t\("sidebar\.newSessionTitle", \{ path: project\.root \}\)/);
+  assert.match(source, /t\("sidebar\.pinnedGroupNoSessions"\)/);
+  // Group [+] reuses the temp-id flow and moves the effective cwd.
+  assert.match(source, /const handleNewSessionInProject = useCallback\(\(project: SidebarProject\) => \{[\s\S]*?setSelectedCwd\(project\.root\);[\s\S]*?onNewSession\?\.\(newTempSessionId\(\), project\.root\);/);
+  // Group [+] also expands its group so the new session's row is visible
+  // (spec R2) — accordion-style, through the shared single-key helper.
+  assert.match(
+    source,
+    /const handleNewSessionInProject = useCallback\(\(project: SidebarProject\) => \{[\s\S]*?expandPinnedGroup\(project\.key\);[\s\S]*?onNewSession\?\.\(newTempSessionId\(\), project\.root\);/,
+  );
+  // Stale roots disable [+] instead of auto-unpinning.
+  assert.match(source, /if \(stalePinnedRoots\.has\(project\.root\)\) return;/);
+});
+
+test("pinned-group expansion state persists to localStorage across reloads", () => {
+  // Initial state is hydration-safe (empty) and restored after mount.
+  assert.match(source, /useState<ReadonlySet<string>>\(\(\) => new Set\(\)\)/);
+  assert.match(source, /setSidebarHydrated\(true\);[\s\S]*?setExpandedGroupKeys\(readExpandedGroupKeys\(\)\);/);
+  // Pinned groups render only after hydration so SSR and first client render agree.
+  assert.match(source, /\(sidebarHydrated \? listCustomDirectories\(\) : \[\]\)/);
+  // Toggling writes the full new state back — collapse deletes just the
+  // toggled key; expand goes through the accordion helper below.
+  assert.match(
+    source,
+    /const handleToggleGroup = useCallback\(\(key: string\) => \{[\s\S]*?next\.delete\(key\);[\s\S]*?writeExpandedGroupKeys\(next\);[\s\S]*?expandPinnedGroup\(key\);/,
+  );
+  // The storage key and reader live in the extracted persistence seam
+  // (wi pi#52: lib/pinned-expansion.ts) with the graceful-degradation shape;
+  // the sidebar imports them instead of redefining them.
+  assert.match(source, /import \{[\s\S]*?discardExpandedGroupKey,[\s\S]*?readExpandedGroupKeys,[\s\S]*?writeExpandedGroupKeys,[\s\S]*?\} from "@\/lib\/pinned-expansion";/);
+  assert.match(pinnedExpansionSource, /const PINNED_EXPANDED_STORAGE_KEY = "pi-web:sidebar-pinned-expanded"/);
+  assert.match(pinnedExpansionSource, /export function readExpandedGroupKeys\(/);
+  assert.match(pinnedExpansionSource, /parsed\.filter\(\(key\): key is string => typeof key === "string"\)/);
+  // The accordion helper persists the single-key set through the same
+  // writer, so the stored value always describes the one expanded group.
+  assert.match(
+    source,
+    /const expandPinnedGroup = useCallback\(\(key: string\) => \{[\s\S]*?writeExpandedGroupKeys\(next\);[\s\S]*?\}, \[\]\);/,
+  );
+});
+
+test("expanding a pinned group collapses every other pinned group (accordion)", () => {
+  const toggleBlock = source.slice(
+    source.indexOf("const handleToggleGroup"),
+    source.indexOf("const handleNewSessionInProject"),
+  );
+  // Expand replaces the whole set with the one key — it never merges with the
+  // previous state, so repeated toggles keep at most one group expanded.
+  assert.match(
+    source,
+    /const expandPinnedGroup = useCallback\(\(key: string\) => \{\s*\n\s*const next = new Set\(\[key\]\);/,
+  );
+  assert.match(toggleBlock, /\}\s*\n\s*expandPinnedGroup\(key\);/);
+  assert.doesNotMatch(toggleBlock, /next\.add\(key\)/);
+  assert.doesNotMatch(toggleBlock, /new Set\(\[\.\.\.previous/);
+});
+
+test("collapsing a pinned group is independent", () => {
+  const toggleBlock = source.slice(
+    source.indexOf("const handleToggleGroup"),
+    source.indexOf("const handleNewSessionInProject"),
+  );
+  // The collapse branch removes only the toggled key, persists the result,
+  // and returns before the expand path can touch any other group.
+  assert.match(
+    toggleBlock,
+    /if \(expandedGroupKeys\.has\(key\)\) \{[\s\S]*?next = new Set\(expandedGroupKeys\);[\s\S]*?next\.delete\(key\);[\s\S]*?writeExpandedGroupKeys\(next\);[\s\S]*?return;/,
+  );
+});
+
+test("the group [+] affordance expands its group accordion-style", () => {
+  const newSessionBlock = source.slice(
+    source.indexOf("const handleNewSessionInProject"),
+    source.indexOf("const togglePin = useCallback"),
+  );
+  assert.match(newSessionBlock, /setSelectedCwd\(project\.root\);[\s\S]*?expandPinnedGroup\(project\.key\);[\s\S]*?onNewSession\?\./);
+  // The affordance no longer hand-rolls expansion state.
+  assert.doesNotMatch(newSessionBlock, /setExpandedGroupKeys/);
+});
+
+test("selecting a session in another pinned group switches the expanded group", () => {
+  // Shared helper: resolve the target project, require it to be pinned, then
+  // expand accordion-style.
+  assert.match(
+    source,
+    /const expandPinnedGroupForCwd = useCallback\(\(cwd: string \| null, projectRoot\?: string \| null\) => \{[\s\S]*?const entry = listedEntryForPath\(cwd\) \?\? listedEntryForPath\(projectRoot \?\? null\);[\s\S]*?if \(!entry\) return;[\s\S]*?expandPinnedGroup\(entry\.key\);[\s\S]*?\}, \[listedEntryForPath, expandPinnedGroup\]\);/,
+  );
+  // Session list and session-search selection go through the same handler.
+  const selectBlock = source.slice(
+    source.indexOf("const handleSelectSessionFromList"),
+    source.indexOf("// Toggle one pinned group"),
+  );
+  assert.match(selectBlock, /expandPinnedGroupForCwd\(s\.cwd, s\.projectRoot \?\? null\);/);
+  // Worktree cwds resolve to their listed directory inside the helper
+  // (listedEntryForPath matches by containment — see the helper). The
+  // dropdown's onSelectProject caller is gone with the dropdown itself
+  // (wi pi#49 R2); the session-list click path above is the live consumer.
+  assert.doesNotMatch(source, /expandPinnedGroupForCwd\(project\.root\);/);
+});
+
+test("the selected project's group auto-expands at load, collapsing the persisted group", () => {
+  const autoBlock = source.slice(
+    source.indexOf("const autoExpandedGroupRef"),
+    source.indexOf("const projectActivity"),
+  );
+  // One-shot guard and pinned-membership check stay intact.
+  assert.match(autoBlock, /if \(autoExpandedGroupRef\.current\) return;/);
+  assert.match(source, /const entry = listedEntryForPath\(selectedCwd\)\s*\?\? listedEntryForPath\(selectedProject\?\.root \?\? null\);/);
+  assert.match(autoBlock, /if \(!entry\) return;/);
+  // The auto-expand goes through the accordion helper — the persisted set is
+  // replaced, so a different persisted group collapses to the selected one.
+  assert.match(autoBlock, /autoExpandedGroupRef\.current = true;[\s\S]*?expandPinnedGroup\(entry\.key\);/);
+  assert.doesNotMatch(autoBlock, /setExpandedGroupKeys\(\(previous\)/);
+  // The dependency-exclusion comment (one-shot semantics) stays.
+  assert.match(autoBlock, /expandedGroupKeys is deliberately excluded/);
+});
+
+test("legacy multi-open storage needs no migration: it collapses on the first expand", () => {
+  // The read path is unchanged: storage is read as-is at mount, so a legacy
+  // multi-key array survives load untouched (the reader lives in the
+  // extracted persistence seam, wi pi#52).
+  assert.match(pinnedExpansionSource, /return new Set\(parsed\.filter\(\(key\): key is string => typeof key === "string"\)\);/);
+  assert.match(source, /setExpandedGroupKeys\(readExpandedGroupKeys\(\)\);/);
+  // The accordion helper is the only expand path and it always stores a
+  // single-key set; the design note records the no-migration decision.
+  assert.match(pinnedExpansionSource, /legacy multi-key storage written by the pre-accordion version/);
+});
+
+test("the workspace dropdown is removed entirely; the stale-root sweep and pin affordances survive", () => {
+  // R2 (wi pi#49): the trigger row, the dropdown panel and its extracted
+  // body component are gone from the sidebar — no import, no mount.
+  assert.doesNotMatch(source, /RecentProjectsMenu/);
+  assert.doesNotMatch(source, /data-cwd-picker/);
+  assert.doesNotMatch(source, /AnimatedDropdown/);
+  assert.doesNotMatch(source, /dropdownOpen|dropdownRef/);
+  // The dropdown-only state/handlers died with it.
+  assert.doesNotMatch(source, /recentUnpinnedProjects/);
+  assert.doesNotMatch(source, /handleDefaultCwd|showDefaultCwdShortcut/);
+  assert.doesNotMatch(source, /hasOtherWorkspaceActivity/);
+  assert.doesNotMatch(source, /handleCustomPathClick/);
+  // The stale-root check keeps running at sidebar mount.
+  assert.doesNotMatch(source, /if \(!dropdownOpen \|\| !pinnedRootsKey\) return;/);
+  assert.match(source, /\}, \[pinnedRootsKey\]\);/);
+});
+
+test("the extracted dropdown body component and its render test are deleted", async () => {
+  await assert.rejects(() => readFile(new URL("./RecentProjectsMenu.tsx", import.meta.url), "utf8"));
+  await assert.rejects(() => readFile(new URL("./RecentProjectsMenu.test.mjs", import.meta.url), "utf8"));
+});
+
+test("the state pipeline survives the dropdown removal and restore still selects the cwd", () => {
+  // URL restore keeps selecting the restored session's cwd and explorer
+  // trailing section, and the auto-select still picks the most recent
+  // project from the FULL catalog (worker filtering never touches it).
+  assert.match(
+    source,
+    /if \(target\) \{\s*\n\s*setSelectedCwd\(target\.cwd\);\s*[\s\S]*?setExplorerSelection\(\{ root: target\.projectRoot \?\? target\.cwd, key: workspaceKeyOf\(target\) \}\);/,
+  );
+  assert.match(
+    source,
+    /const projects = getRecentProjects\(allSessions\);\s*[\s\S]*?setSelectedCwd\(projects\[0\]\.root\);/,
+  );
+  // selectedCwd / explorerSelection / the standalone custom-path picker and
+  // the standalone Add-directory button all survive.
+  assert.match(source, /const \[selectedCwd, setSelectedCwd\] = useState<string \| null>\(null\);/);
+  assert.match(source, /const \[explorerSelection, setExplorerSelection\] = useState<ProjectSelection \| null>\(null\);/);
+  assert.match(source, /customPathOpen && \(\s*<DirectoryPicker/);
+  assert.match(source, /addDirectoryOpen && \(\s*<DirectoryPicker/);
+  assert.match(source, /onClick=\{\(\) => setAddDirectoryOpen\(true\)\}/);
+});
+
+test("only Shift+click bypasses session deletion confirmation", () => {
+  assert.match(
+    sessionItemSource,
+    /const handleDeleteClick[\s\S]*?if \(e\.shiftKey\) \{\s*void performDelete\(\);\s*\} else \{\s*setConfirmDelete\(true\);/,
+  );
+});
+
+test("persists and exposes a vertical session/explorer resize handle", () => {
+  assert.match(source, /axis: "vertical"/);
+  assert.match(source, /storageKey: "pi-web:sidebar-session-pane-height"/);
+  assert.match(source, /Math\.round\(\(paneHeight \+ explorerHeight\) \/ 2\)/);
+  assert.match(source, /ref=\{sessionPaneRef\}[\s\S]*?<SessionSearch/);
+  assert.match(source, /data-resize-handle="sidebar-sections"/);
+  assert.match(source, /sidebar-section-resize-handle/);
+  assert.match(globalStyles, /\.sidebar-section-resize-handle:focus-visible::after/);
+  assert.doesNotMatch(globalStyles, /\.sidebar-section-resize-handle:focus-visible \{[^}]*outline: 2px solid var\(--accent\)/);
+  assert.match(globalStyles, /\.sidebar-section-resize-handle::after[\s\S]*?background: transparent/);
+  assert.match(source, /borderTop: "1px solid var\(--border\)"/);
+  assert.match(source, /var\(--sidebar-session-pane-height, 320px\)/);
+  assert.match(source, /minHeight: explorerOpen \? EXPLORER_PANE_MIN_HEIGHT : 0/);
+});
+
+test("does not register row-level session deletion shortcuts", () => {
+  assert.doesNotMatch(sessionItemSource, /const handleKeyDown/);
+  assert.doesNotMatch(sessionItemSource, /onKeyDown=\{handleKeyDown\}/);
+  assert.doesNotMatch(sessionItemSource, /tabIndex=\{0\}/);
+});
+
+test("polls running sessions only while the tab is visible", () => {
+  assert.doesNotMatch(source, /new EventSource\("\/api\/agent\/running\/events"\)/);
+  assert.match(source, /fetch\("\/api\/agent\/running"/);
+  assert.match(source, /document\.visibilityState !== "visible"/);
+  assert.match(source, /document\.addEventListener\("visibilitychange", onVisibilityChange\)/);
+});
+
+test("exposes the polled running-session set to the shell", () => {
+  assert.match(source, /onRunningSessionIdsChange\?: \(ids: Set<string>\) => void/);
+  assert.match(source, /onRunningSessionIdsChange\?\.\(runningSessionIds\)/);
+});
+
+test("exposes the loaded session catalog to the shell", () => {
+  assert.match(source, /onSessionsChange\?: \(sessions: SessionInfo\[\]\) => void/);
+  assert.match(source, /onSessionsChange\?\.\(allSessions\)/);
+});
+
+test("subagent completion stays silent and never becomes unread", () => {
+  assert.match(source, /completionNotificationSuppressedSessionIds\?: string\[\]/);
+  assert.match(
+    source,
+    /completedWithNotifications = completedInBackground\.filter\([\s\S]*?!previousSuppressedCompletionSessionIdsRef\.current\.has\(id\)[\s\S]*?!knownSubagentIds\.has\(id\)/,
+  );
+  assert.match(source, /completedWithNotifications\.forEach\(\(id\) => next\.add\(id\)\)/);
+  assert.match(source, /if \(completedWithNotifications\.length > 0\) \{\s*onBackgroundTaskDone\?\.\(\)/);
+  assert.match(
+    source,
+    /filter\(\(session\) => !isHiddenRelation\(session\.relation\)\)[\s\S]*?unreadEligibleIds\.has\(id\)/,
+  );
+});
+
+test("includes project activity counts in accessible labels", () => {
+  assert.match(
+    source,
+    /aria-label=\{`\$\{t\("sidebar\.agentRunning"\)\} \(\$\{activity\.running\}\)`\}/,
+  );
+  assert.match(
+    source,
+    /aria-label=\{`\$\{t\("sidebar\.newSessionActivity"\)\} \(\$\{activity\.unread\}\)`\}/,
+  );
+});
+
+test("formats session timestamps with the active locale", () => {
+  assert.match(source, /import \{ formatRelativeTime \} from "@\/lib\/i18n\/format"/);
+  assert.match(sessionItemSource, /const \{ locale, t \} = useI18n\(\)/);
+  assert.match(sessionItemSource, /formatRelativeTime\(session\.modified, locale\)/);
+});
+
+test("does not persist an unchanged fallback title ending in whitespace", () => {
+  assert.match(
+    sessionItemSource,
+    /const name = renameValue\.trim\(\);[\s\S]*?if \(renameValue === title \|\| name === \(session\.name \?\? ""\)\) return;/,
+  );
+});
+
+test("offers the downstream context-menu hook only on a normal session row", () => {
+  assert.match(sessionItemSource, /const handleContextMenu[\s\S]*?dispatchSessionRowContextMenu\(\{/);
+  assert.match(
+    sessionItemSource,
+    /onContextMenu=\{confirmDelete \|\| renaming \? undefined : handleContextMenu\}/,
+  );
+});
+
+test("lifecycle refreshes bypass the cache while cross-window polling reuses it", () => {
+  assert.match(source, /function sessionListUrl\(summary: boolean, force: boolean\)/);
+  assert.match(source, /if \(summary\) return "\/api\/sessions\?summary=1"/);
+  assert.match(source, /if \(force\) return "\/api\/sessions\?force=1"/);
+  assert.match(source, /cache: "no-store"/);
+  // First paint uses the cheap summary listing, then hydrates after a delay.
+  assert.match(source, /loadSessions\(true, false, true\)/);
+  assert.match(source, /setTimeout\(\(\) => \{[\s\S]*?void loadSessions\(false, true\)/);
+  assert.match(source, /data\.sessionListVersion !== sessionListVersionRef\.current[\s\S]*?await loadSessions\(\)/);
+  // The old timer-based auto-refresh is still forbidden; the manual refresh
+  // button and the watcher-driven poll are the intended mechanisms.
+  assert.doesNotMatch(source, /sessionRefreshDone|sessionRefreshTimerRef/);
+  assert.match(source, /loadSessions\(false, true\);[\s\S]*?onBackgroundTaskDone/);
+});
+
+test("the sidebar header offers a manual forced refresh and pull-to-refresh fires once", () => {
+  // Refresh button in the header (all form factors) forces a cache-bypassing scan.
+  assert.match(source, /title=\{sidebarRefreshing \? t\("sidebar\.refreshing"\) : t\("sidebar\.refresh"\)\}/);
+  assert.match(source, /aria-label=\{sidebarRefreshing \? t\("sidebar\.refreshing"\) : t\("sidebar\.refresh"\)\}/);
+  // Pull-to-refresh on the touch list: armed at the top, fired exactly once
+  // per gesture past the 64px threshold, disarmed on release.
+  assert.match(source, /if \(!el \|\| el\.scrollTop > 0\) return;[\s\S]*?pullFiredRef\.current = false;/);
+  assert.match(source, /if \(startY == null \|\| pullFiredRef\.current\) return;/);
+  assert.match(source, /if \(deltaY > 64\) \{\s*pullFiredRef\.current = true;\s*void loadSessions\(false, true\);\s*\}/);
+});
+
+test("the manual refresh button shows spinner feedback and guards double-clicks (pi#69)", () => {
+  // A dedicated transient state drives the spinner so the forced rescan's
+  // showLoading=false (kept for the list-replacing loading state) no longer
+  // leaves the click with zero visual feedback when disk content is unchanged.
+  assert.match(source, /const \[sidebarRefreshing, setSidebarRefreshing\] = useState\(false\);/);
+  assert.match(source, /const sidebarRefreshInFlightRef = useRef\(false\);/);
+  const refreshButtonStart = source.indexOf('title={sidebarRefreshing ? t("sidebar.refreshing")');
+  const refreshButtonBlock = source.slice(source.lastIndexOf("<button", refreshButtonStart), refreshButtonStart);
+  // Double-click guard: a second click while a refresh is in flight is a
+  // no-op, checked synchronously against the ref (state updates are async).
+  assert.match(refreshButtonBlock, /if \(sidebarRefreshInFlightRef\.current\) return;/);
+  assert.match(refreshButtonBlock, /sidebarRefreshInFlightRef\.current = true;/);
+  assert.match(refreshButtonBlock, /setSidebarRefreshing\(true\);/);
+  // Force semantics are unchanged — still loadSessions(false, true) — and
+  // the in-flight flag plus the spinner state are always cleared, success or
+  // failure, via `finally`.
+  assert.match(
+    refreshButtonBlock,
+    /void loadSessions\(false, true\)\.finally\(\(\) => \{\s*sidebarRefreshInFlightRef\.current = false;\s*setSidebarRefreshing\(false\);\s*\}\);/,
+  );
+  assert.match(source, /disabled=\{sidebarRefreshing\}/);
+  assert.match(source, /aria-busy=\{sidebarRefreshing\}/);
+  // The icon spins via the same animate-spin convention used elsewhere
+  // (AgentSessionPanel, AppShell) rather than a bespoke animation.
+  assert.match(source, /<svg className=\{sidebarRefreshing \? "animate-spin" : undefined\}/);
+});
+
+test("a rising external-write generation on the selected session notifies the app", () => {
+  // The poll payload is consumed only for the selected session's write entry.
+  assert.match(source, /recentSessionWrites\?: \{ sessionId\?: string; path: string; generation: number \}\[\]/);
+  assert.match(source, /write\.sessionId !== undefined && write\.sessionId === selectedId/);
+  // A session already in the ring when selected is baselined at that
+  // generation; only a strictly rising generation for the same selected
+  // session notifies. A session absent from the ring at selection is baselined
+  // at 0, so its first write notifies instead of being swallowed (#153).
+  assert.match(
+    source,
+    /if \(\s*previous\s*&& previous\.sessionId === selectedId\s*&& selectedWrite\.generation > previous\.generation\s*\) \{[\s\S]*?onExternalSessionChangeRef\.current\?\.\(selectedId\);/,
+  );
+  assert.match(source, /selectedWriteGenerationRef\.current = \{[\s\S]*?sessionId: selectedId,\s*generation: selectedWrite\.generation,/);
+  assert.match(
+    source,
+    /\} else if \(selectedId && selectedWriteGenerationRef\.current\?\.sessionId !== selectedId\) \{\s*selectedWriteGenerationRef\.current = \{ sessionId: selectedId, generation: 0 \};/,
+  );
+});
+
+test("does not expose disk-backed actions for transient sessions", () => {
+  assert.match(sessionItemSource, /if \(session\.transient\) return;/);
+  assert.match(sessionItemSource, /\{hovered && !session\.transient && \(/);
+});
+
+test("hides subagent rows and aggregates their state into the main session row", () => {
+  assert.match(source, /listSessionFamilies\(\s*filteredSessions\.filter\(\(session\) => !groupedSessionIds\.has\(session\.id\)\)/);
+  assert.match(source, /familySessions\.some\(\(session\) => session\.id === effectiveHighlightSessionId\)/);
+  assert.match(source, /familySessions\.some\(\(session\) => runningSessionIds\.has\(session\.id\)\)/);
+  assert.doesNotMatch(source, /function SessionTreeItem/);
+});
+
+// --- Split-view highlight follow (this wi) ---
+
+test("the row highlight reads the focus-derived id with a classic fallback", () => {
+  // A distinct optional prop — selectedSessionId keeps feeding toast
+  // suppression, unread clearing and the search, so the blast radius stays
+  // exactly highlight + expansion + scroll.
+  assert.match(source, /highlightSessionId\?: string \| null;/);
+  assert.match(source, /followHighlightIntoView\?: boolean;/);
+  assert.match(
+    source,
+    /const effectiveHighlightSessionId = highlightSessionId === undefined\n    \? selectedSessionId\n    : highlightSessionId;/,
+  );
+  // The row highlight — and only it — reads the effective id.
+  assert.match(
+    source,
+    /isSelected=\{familySessions\.some\(\(session\) => session\.id === effectiveHighlightSessionId\)\}/,
+  );
+  // selectedSessionId keeps its classic consumers untouched.
+  assert.match(source, /selectedSessionIdRef = useRef\(selectedSessionId\)/);
+  assert.match(source, /id !== selectedSessionId\)/);
+});
+
+test("the follow effect fires only on a highlight change while the gate is on", () => {
+  const followStart = source.indexOf("const lastSeenHighlightIdRef");
+  assert.ok(followStart >= 0, "SessionSidebar must define the follow effect");
+  const followBlock = source.slice(followStart, source.indexOf("// Applies a queued expansion scroll"));
+  // Mount baselines the highlight without scrolling — no scroll on initial
+  // load, and list refreshes that leave the highlight alone never re-fire
+  // (the effect depends only on the id and the gate).
+  assert.match(
+    followBlock,
+    /if \(lastSeenHighlightIdRef\.current === undefined\) \{[\s\S]*?lastSeenHighlightIdRef\.current = effectiveHighlightSessionId;[\s\S]*?return;[\s\S]*?\}/,
+  );
+  assert.match(
+    followBlock,
+    /if \(!followHighlightIntoView \|\| !changed \|\| effectiveHighlightSessionId == null\) return;/,
+  );
+  assert.match(
+    followBlock,
+    /\}, \[effectiveHighlightSessionId, followHighlightIntoView\]\);/,
+  );
+  // A subagent highlight resolves to its family root before scrolling.
+  assert.match(followBlock, /getSessionFamily\(allSessions, effectiveHighlightSessionId\)/);
+});
+
+test("the follow effect expands the owning pinned group accordion-style and scrolls by offset", () => {
+  const followStart = source.indexOf("const lastSeenHighlightIdRef");
+  const followBlock = source.slice(followStart, source.indexOf("// Applies a queued expansion scroll"));
+  // Collapsed pinned group: expand through the shared single-key accordion
+  // helper — the same semantics as click-driven expansion.
+  assert.match(
+    followBlock,
+    /if \(owningProject && !expandedGroupKeys\.has\(owningProject\.key\)\) \{[\s\S]*?expandPinnedGroup\(owningProject\.key\);/,
+  );
+  // The scrollTop write is offset-based against the row model — never a
+  // rendered-DOM scrollIntoView — and rides the existing onScroll → rAF →
+  // setListScrollTop windowing path.
+  assert.match(
+    source,
+    /const target = scrollTargetForSession\(rows, sessionId, el\.clientHeight, el\.scrollTop\);/,
+  );
+  assert.match(source, /if \(target != null\) el\.scrollTop = target;/);
+  assert.doesNotMatch(source, /scrollIntoView/);
+  // The expansion-path scroll is queued and applied only once the rebuilt
+  // row model reflects the expansion (a synchronous write would clamp
+  // against the pre-expansion DOM height).
+  assert.match(followBlock, /pendingFollowScrollSessionIdRef\.current = rootId;/);
+  const pendingBlock = source.slice(source.indexOf("// Applies a queued expansion scroll"));
+  assert.match(
+    pendingBlock,
+    /if \(!sidebarRows\.some\(\(row\) => row\.kind === "session" && row\.family\.root\.id === pendingId\)\) \{[\s\S]*?return;/,
+  );
+});
+
+// --- Open in new tab (upstream d9adb38, hand-ported without SessionTree) ---
+
+test("a saved session's title is a real link to its session, a transient row's is not", () => {
+  // The link: the encoded id in ?session=, never a URL of its own.
+  assert.match(sessionItemSource, /href=\{sessionDeepLink\(session\.id\)\}/);
+  // A plain click (or Enter) stays in the page and selects as before; a
+  // modified click (middle, Ctrl/Cmd) is the browser's, for a new tab.
+  assert.match(
+    sessionItemSource,
+    /event\.stopPropagation\(\);\s*if \(!isPlainActivation\(event\)\) return;\s*event\.preventDefault\(\);\s*onClick\(\);/,
+  );
+  // A transient session has no file yet: no link, so no other tab can try to
+  // load a session that was never saved.
+  assert.match(
+    sessionItemSource,
+    /\{session\.transient \? \(\s*\/\/ No file yet: a link would open a session no other tab can load\./,
+  );
+});
+
+test("Open in new tab opens the row's session link and leaves this tab alone", () => {
+  // The row the button sits on (not the selected session); the same link as
+  // its title. Synchronous inside the click, so the browser takes it as the
+  // user's and does not block it as a popup, and no selection, cwd move or
+  // request of its own happens here.
+  assert.match(sessionItemSource, /title=\{t\("sidebar\.openInNewTab"\)\}/);
+  assert.match(
+    sessionItemSource,
+    /window\.open\(sessionDeepLink\(session\.id\), "_blank", "noopener,noreferrer"\)/,
+  );
+  // Never for a transient session: the hover actions' existing guard covers
+  // the open-new-tab button too.
+  assert.match(sessionItemSource, /\{hovered && !session\.transient && \(/);
+});
+
+test("the favicon counts sessions that finished while the tab was hidden (#1484)", () => {
+  // The rows exclude the selected session ("already looking"), which is false
+  // while hidden: the badge takes those ids as a separate prop instead.
+  assert.match(source, /hiddenFinishedSessionIds\?: Set<string>;/);
+  assert.match(source, /countFaviconUnread\(unreadSessionIds, hiddenFinishedSessionIds\)/);
+  assert.match(
+    source,
+    /\}, \[awaitingSessionIds, unreadSessionIds, hiddenFinishedSessionIds\]\);/,
+  );
+});

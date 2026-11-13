@@ -9,8 +9,8 @@ the problems a team runs into when its work is done by AI agents,
 across three pillars — **coordination** (a durable work-item lifecycle
 with lane gates and recoverable capsules), **memory** (a project
 memory system where experience and rulings settle) and
-**communication** (cross-machine messages, chat identity and wake-ups,
-task agents).
+**communication** (cross-machine messages, a decision feed for every
+human decision, task agents).
 
 The mechanism underneath: AI coding agents are powerful, but their
 work lives in a fragile chat context — close the session and the plan,
@@ -29,6 +29,17 @@ work items, the projects, the memories and the git revision chain, and
 the work machine (`pf` CLI plus `pf daemon`) that executes the work on
 your own machine.
 
+## Web workbench
+
+Polyforge's recommended web UI is **Pi Web** (its own npm package
+`@silgrid/pi-web`, developed in this repository under [`pi-web/`](pi-web/)
+and released with the same tag as `pf`): a local browser UI for the pi
+coding agent with a Polyforge panel — work items, jobs and their step
+graphs, project memory and messages. It is optional; `pf` works from any
+harness without it. Install it with the installer's `--with-pi-web`
+(the same release as `pf`) or `npm install -g @silgrid/pi-web@latest` — see
+[install: the web workbench](docs/install.md#optional-the-web-workbench-pi-web).
+
 ## Core concepts
 
 - **Work item** — the unit of tracked work: a goal, a content body, a
@@ -38,7 +49,7 @@ your own machine.
   (`artifacts/`, `repos/`, `runtime-state/`), committed to the revision
   chain and restored on resume, so no interruption loses work.
 - **Workflow lane** — the ordered steps a claimed work item runs, for
-  example grill → spec → plan → code → review → verification → deliver,
+  example build → review → sync → verification → publish → merge,
   declared by the bundle the work item was filed with.
 - **Memory** — durable, searchable project notes (designs, decisions,
   reviews, pitfalls, experience), written with `pf remember` and
@@ -55,7 +66,7 @@ running local daemon:
 
 ```
 pf daemon ensure
-pf file create --project <project> --bundle feature-full --goal "Add X"
+pf file create --project <project> --bundle develop --goal "Add X"
 pf submit <WI_ID>
 pf watch <WI_ID> --once
 ```
@@ -74,12 +85,11 @@ The three pillars, in features:
   committed to the git revision chain; tmux keeps the daemon alive, a
   crash behaves exactly like a shutdown, and the run resumes where it
   stopped.
-- **Tiered verification** — a run verifies against the project's full
-  bar by default; a work item may opt into the narrower scoped tier,
-  whose declared scope the review step must judge adequate. An e2e
-  suite declares what it covers in a header comment
-  (`// carries: components/Panel*`), and the scoped tier runs the suites
-  whose declaration the change hits
+- **Tiered verification** — a lane's verification step runs the tier it
+  declares (develop: the light tier, in the daemon); the integration
+  lane's full gate runs over what landed. An e2e suite declares what it
+  covers in a header comment (`// carries: components/Panel*`), and the
+  light tier runs the suites whose declaration the change hits
   ([carries](docs/contributing.md#carries--declaring-what-an-e2e-suite-covers)).
 - **A release lane** — cutting a release is itself a work item on the
   release bundle: build, verify and deploy run as gate steps
@@ -101,10 +111,12 @@ The three pillars, in features:
 - **Cross-machine messaging** — `pf msg` carries permanent
   user-to-user 1:1 conversations with read cursors, so the people
   around the work stay in one place.
-- **Wake-ups when a human is needed** — `pf watch` shows each step's
-  status and wakes your chat when a decision is needed; a work item
-  held on another machine is watchable through a signed, relayed
-  progress query.
+- **One place for human decisions** — every question, gate and
+  failed or blocked run lands in the daemon's decision feed, shown and
+  handled in pi-web's Polyforge panel (`pf watch decisions` on the
+  CLI); `pf watch` shows each step's status, and a work item held on
+  another machine is watchable through a signed, relayed progress
+  query.
 - **One-shot task agents** — `pf task spawn` starts a single fresh
   harness agent from a free-text prompt, budget-capped and pollable,
   for small jobs that need no work item.
@@ -136,6 +148,11 @@ Polyforge is licensed under the
 [PolyForm Noncommercial License 1.0.0](LICENSE): personal use, secondary
 development/modification and distribution are allowed for noncommercial
 purposes.
+
+The license is mixed by path ([NOTICE](NOTICE)): `pi-web/` (the Pi Web
+package) is MIT licensed, Copyright (c) 2026 agegr
+([pi-web/LICENSE](pi-web/LICENSE)); the PolyForm Noncommercial license and
+the grant below cover the rest of the repository.
 
 In addition to that license, silgrid grants: personal and team internal use
 is free, including within for-profit organizations for their own internal

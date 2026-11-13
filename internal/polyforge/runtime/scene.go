@@ -188,8 +188,7 @@ func (r *Runtime) materialize(ctx context.Context, j *job) error {
 			return err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(j.capsuleDir, ".gitignore"),
-		[]byte(capsule.GitignoreContent+gitignoreSyncLine), 0o644); err != nil {
+	if err := writeCapsuleGitignore(j.capsuleDir); err != nil {
 		return err
 	}
 	// Task repos land before capsule.json so the identity below can
@@ -233,7 +232,27 @@ func (r *Runtime) materialize(ctx context.Context, j *job) error {
 	r.writeMemoryPolicy(j)
 	// F7: the bundle lands under workflows/<bundle> and
 	// sync/materialized.json is written last (materialize.go).
-	return r.materializeBundle(j)
+	if err := r.materializeBundle(j); err != nil {
+		return err
+	}
+	// the skipped-step set is fixed over the lane snapshot
+	// at the first claim only (skipsteps.go).
+	return r.writeSkippedSteps(j)
+}
+
+// writeCapsuleGitignore writes the capsule .gitignore — the capsule's
+// own lines plus sync/ — unless it already reads so. Claim writes it into
+// every fresh clone and recovery (a resume, a restart, a re-derivation)
+// rewrites it before its first commit, so a capsule whose chain carries
+// an older .gitignore gets the current rules ('s
+// artifacts/downloads/) on its next claim or resume.
+func writeCapsuleGitignore(capsuleDir string) error {
+	path := filepath.Join(capsuleDir, ".gitignore")
+	want := capsule.GitignoreContent + gitignoreSyncLine
+	if raw, err := os.ReadFile(path); err == nil && string(raw) == want {
+		return nil
+	}
+	return atomicfile.Write(path, []byte(want), 0o644)
 }
 
 // ensureWorkItemFile repairs a capsule whose work-item.json is missing
@@ -289,30 +308,6 @@ func (r *Runtime) writeWorkItemDoc(j *job, item *api.WorkItem) error {
 		return err
 	}
 	return atomicfile.Write(filepath.Join(j.capsuleDir, filepath.FromSlash(capsule.WorkItemJSON)), blob, 0o644)
-}
-
-func copyTree(src, dst string) error {
-	return filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, rerr := filepath.Rel(src, p)
-		if rerr != nil {
-			return rerr
-		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		data, ierr := os.ReadFile(p)
-		if ierr != nil {
-			return ierr
-		}
-		return atomicfile.Write(target, data, 0o444)
-	})
 }
 
 // sealReadOnly makes the preserved scene read-only. A regular file keeps its

@@ -10,11 +10,9 @@ literal `|` inside a cell as `\|`. Context or evidence goes in prose above the
 table. After the table ALWAYS (even for a one-row batch; each may be one line)
 add `预期效果` (what happens once the batch is answered) and then `注意事项`
 (inter-row dependencies or conflicts, relation to prior rulings, which rows are
-rubber stamps answerable in bulk). The table rides in one question body with one
-`question_id`, and the combined answer comes back as one text. To ask: mint a
-`question_id`, return a result envelope with `outcome: "needs_input"`, that
-`question_id` and the `question` text, and end your turn. The answer arrives in
-the NEXT dispatch of this step under "# Answered questions" - continue from it;
-never fabricate or guess an answer you did not receive. The driver appends the
-reserved `cancel` answer's one sentence to every question it persists; you never
-restate it, and an answer of exactly `cancel` never reaches you (it ends the work item).
+rubber stamps answerable in bulk). The table rides in one question, and the
+owner's combined answer comes back as one text. To ask: run `pf step ask` with the
+whole question - the prose, the table, 预期效果 and 注意事项 - as its one argument,
+then end your turn. The owner's reply is your next turn - continue from it; never
+fabricate or guess an answer you did not receive. A reply that cancels the work
+is yours to read: hand off `--status cancel --per-owner <its at>`.

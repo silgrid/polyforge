@@ -1,0 +1,1266 @@
+import "#test-env";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { createJiti } from "jiti";
+import ts from "typescript";
+
+const jiti = createJiti(import.meta.url, {
+  jsx: { runtime: "automatic" },
+  tsconfigPaths: true,
+});
+const React = await jiti.import("react");
+const { renderToStaticMarkup } = await jiti.import("react-dom/server");
+const {
+  CompactionSummaryDetails,
+  MessageView,
+  PatchDiffFiles,
+  ThinkingBlock,
+  formatToolDuration,
+  getModelDisplayName,
+  getTokenEstimateText,
+  getToolCallInputText,
+  replaceUserMessageText,
+} = await jiti.import("./MessageView.tsx");
+const { I18nProvider } = await jiti.import("@/hooks/useI18n");
+const { splitFinalAssistantBlocks } = await jiti.import("@/lib/message-display");
+const { clearExpandedToolCalls, setToolCallExpanded } = await jiti.import("@/lib/tool-call-expansion");
+const { parseUnifiedPatch } = await jiti.import("@/lib/patch");
+
+function renderMessage(message, props = {}) {
+  return renderToStaticMarkup(
+    React.createElement(
+      I18nProvider,
+      null,
+      React.createElement(MessageView, { message, ...props }),
+    ),
+  );
+}
+
+test("updates a reused message when its written files change", () => {
+  const props = { message: { role: "assistant", content: [] } };
+  assert.equal(MessageView.compare(props, props), true);
+  assert.equal(MessageView.compare(props, { ...props, writtenFiles: [{ path: "/tmp/result.txt" }] }), false);
+});
+
+test("on a narrow phone a message's actions drop their labels and keep their titles", () => {
+  const html = renderMessage({ role: "user", content: "Hi", timestamp: 1 }, { entryId: "entry", onFork: () => {}, onEditContent: () => {} });
+  assert.equal(html.match(/class="message-action-label"/g)?.length, 3);
+  for (const title of ["Copy message", "Edit from here — branches within this session", "New session — creates an independent copy from here"]) {
+    assert.ok(html.includes(`title="${title}"`), title);
+  }
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /@media \(max-width: 380px\) \{\s*\.message-action-label \{\s*display: none;\s*\}\s*\}/);
+});
+
+// a claude user message carries pi's own two actions — "Edit from here"
+// branches within the session on both harnesses — and only a user message carries either.
+test("a user message's Edit from here branches within the session; assistant and tool messages carry no fork or edit", () => {
+  const actions = { entryId: "entry", onFork: () => {}, onEditContent: () => {} };
+  const html = renderMessage({ role: "user", content: "Hi", timestamp: 1 }, actions);
+  assert.ok(html.includes('title="Edit from here — branches within this session"'));
+  assert.ok(html.includes('title="New session — creates an independent copy from here"'));
+  assert.ok(html.includes(">Edit from here<"));
+  assert.ok(!html.includes("opens a new session"), "an edit promises another session");
+  const assistant = renderMessage({ role: "assistant", content: [{ type: "text", text: "Hello" }], timestamp: 1 }, actions);
+  const tool = renderMessage({ role: "assistant", content: [{ type: "toolCall", toolCallId: "t1", toolName: "Read", input: { file_path: "a" } }], timestamp: 1 }, actions);
+  for (const rendered of [assistant, tool]) {
+    assert.ok(!rendered.includes("Edit from here") && !rendered.includes("New session"), "a non-user message offers fork or edit");
+  }
+});
+
+test("matches response model aliases and otherwise includes the provider", () => {
+  const names = {
+    "gateway:claude-sonnet-5": "Sonnet 5",
+    "custom-api:GLM-5.3": "GLM 5.3",
+  };
+
+  assert.equal(getModelDisplayName("gateway", "anthropic/claude-sonnet-5", names), "Sonnet 5");
+  assert.equal(getModelDisplayName("CUSTOM-API", "glm-5.3", names), "GLM 5.3");
+  assert.equal(getModelDisplayName("gateway", "unknown-model", names), "gateway/unknown-model");
+});
+
+test("previews the first thinking line and reveals the full text with the saved default", () => {
+  const previousWindow = globalThis.window;
+  try {
+    for (const expanded of [false, true]) {
+      globalThis.window = { localStorage: { getItem: () => String(expanded) } };
+      const html = renderToStaticMarkup(React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(ThinkingBlock, {
+          block: { type: "thinking", thinking: "**Independent reasoning**\n\nDetailed second line." },
+          blockIndex: 2,
+          duration: 3,
+        }),
+      ));
+      assert.match(html, new RegExp(`aria-expanded="${expanded}"`));
+      assert.equal((html.match(/>[^<]*Independent reasoning[^<]*</g) ?? []).length, 1);
+      assert.equal(html.includes("Detailed second line."), expanded);
+      assert.match(html, /aria-label="Thinking: /);
+      assert.match(html, /3s/);
+    }
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
+});
+
+test("renders long expanded thinking in pieces and short thinking as one text node (#1196)", () => {
+  const previousWindow = globalThis.window;
+  globalThis.window = { localStorage: { getItem: () => "true" } };
+  const contentOf = (thinking) => {
+    const html = renderToStaticMarkup(React.createElement(
+      I18nProvider,
+      null,
+      React.createElement(ThinkingBlock, { block: { type: "thinking", thinking }, blockIndex: 0 }),
+    ));
+    return html.match(/overflow-wrap:anywhere">([\s\S]*)<\/div><\/div>$/)[1];
+  };
+  const piecesOf = (thinking) => {
+    const content = contentOf(thinking);
+    const pieces = [...content.matchAll(/<div>([^<]*)<\/div>/g)].map((match) => match[1]);
+    assert.equal(pieces.map((piece) => `<div>${piece}</div>`).join(""), content);
+    assert.ok(pieces.length > 1);
+    return pieces;
+  };
+  try {
+    assert.equal(contentOf("First <b>line</b>\n\nSecond line."), "First &lt;b&gt;line&lt;/b&gt;\n\nSecond line.");
+
+    // The block boundary stands in for the line break at a cut; a line with
+    // no break is cut with nothing left out.
+    const thinking = "Wait, let me check settings.json again.\n".repeat(2_000);
+    assert.equal(piecesOf(thinking).join("\n"), thinking);
+    const oneLine = "Wait, let me check settings.json again. ".repeat(2_000);
+    assert.equal(piecesOf(oneLine).join(""), oneLine);
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
+});
+
+test("shows deferred thinking previews without loading the full content", () => {
+  const html = renderMessage({
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "Historical first line", deferred: true }],
+  });
+  assert.match(html, />Historical first line<\/span>/);
+  assert.match(html, /aria-expanded="false"/);
+});
+
+test("keys an assistant message's blocks by their place, not the entry id (#1184)", () => {
+  // A message of the running turn gets its entry id when the file is read again.
+  // A block keyed by it remounted then: open thinking closed, a tool output's
+  // scroll went back to the top. ThinkingBlock drops what it loaded for another id.
+  const source = ts.createSourceFile("MessageView.tsx", readFileSync(new URL("./MessageView.tsx", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const keys = [];
+  (function visit(node) {
+    if ((ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) && node.tagName.getText(source) === "BlockView") {
+      const key = node.attributes.properties.find((attribute) => ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "key");
+      keys.push(key?.initializer?.expression?.getText(source));
+    }
+    ts.forEachChild(node, visit);
+  })(source);
+  assert.deepEqual(keys, ["originalIndex"]);
+});
+
+test("marks only the matched text block after splitting thinking and the final answer", () => {
+  const message = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "" },
+      { type: "thinking", thinking: "Thinking about the result" },
+      { type: "text", text: "Process text" },
+      { type: "toolCall", toolCallId: "read-1", toolName: "read", input: {} },
+      { type: "text", text: "First answer" },
+      { type: "text", text: "Matched pi-cwd-spark answer" },
+    ],
+  };
+  const { processBlocks, answerBlocks } = splitFinalAssistantBlocks(message);
+  for (const index of [2, 4, 5]) {
+    const searchBlock = message.content[index];
+    for (const content of [processBlocks, answerBlocks]) {
+      const html = renderMessage({ ...message, content }, { searchBlock });
+      assert.equal((html.match(/data-search-target="true"/g) ?? []).length, content.includes(searchBlock) ? 1 : 0);
+      if (content.includes(searchBlock)) {
+        assert.match(html, new RegExp(`data-search-target="true">(?:(?!data-message-text)[\\s\\S])*${searchBlock.text}`));
+      }
+    }
+  }
+});
+
+test("keeps streamed tool input out of collapsed markup while counting it", () => {
+  const block = {
+    type: "toolCall",
+    toolCallId: "call-write-1",
+    toolName: "write",
+    input: {},
+    rawInput: '{"path":"/tmp/file","content":"secret-stream-fragment',
+  };
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [block],
+  }, { isStreaming: true });
+
+  assert.match(html, /write/);
+  assert.match(html, /Generating parameters/);
+  assert.doesNotMatch(html, /secret-stream-fragment/);
+  assert.equal(getToolCallInputText(block), block.rawInput);
+  assert.equal(getTokenEstimateText(block), block.rawInput);
+});
+
+test("renders write tool content as readable file text", () => {
+  const block = {
+    type: "toolCall",
+    toolCallId: "call-write-file",
+    toolName: "write",
+    input: { path: "src/example.ts", content: "first line\nsecond line\n" },
+  };
+  clearExpandedToolCalls();
+  setToolCallExpanded(block.toolCallId, true);
+  try {
+    const html = renderMessage({
+      role: "assistant",
+      provider: "anthropic",
+      model: "claude-test",
+      content: [block],
+    });
+
+    assert.ok(html.includes("src/example.ts"));
+    assert.match(html, /first line\nsecond line\n/);
+    assert.ok(!html.includes("<table"));
+    assert.doesNotMatch(textOf(html), /"content":/);
+  } finally {
+    clearExpandedToolCalls();
+  }
+});
+
+test("a write with another argument or an empty file shows every argument as a row", () => {
+  const cases = [
+    { id: "call-write-mode", input: { path: "notes.md", content: "text", mode: "append" }, expect: "append" },
+    { id: "call-write-empty", input: { path: "empty.txt", content: "" }, expect: "(empty)" },
+  ];
+  for (const { id, input, expect } of cases) {
+    const block = { type: "toolCall", toolCallId: id, toolName: "write", input };
+    clearExpandedToolCalls();
+    setToolCallExpanded(id, true);
+    try {
+      const html = renderMessage({ role: "assistant", provider: "anthropic", model: "claude-test", content: [block] });
+      assert.ok(textOf(html).includes(expect), id);
+      assert.doesNotMatch(textOf(html), /"path":/, id);
+    } finally {
+      clearExpandedToolCalls();
+    }
+  }
+});
+
+test("streaming input shows the rows pi's partial parse has so far, else its raw text", () => {
+  const cases = [
+    // A multi-line command cut mid-escape: its lines, not `\n` escapes.
+    { id: "call-bash-streaming", toolName: "bash", rawInput: "{\"command\":\"cd /tmp\\nls -l\\", rows: ["command", "cd /tmp\nls -l"] },
+    { id: "call-bash-timeout", toolName: "bash", rawInput: "{\"command\":\"sleep 5\",\"timeout\":3", rows: ["timeout", "3"] },
+    // Nothing parsed yet, or a nested argument begun: the raw text, as before.
+    { id: "call-bash-empty", toolName: "bash", rawInput: "{\"comm", rows: null },
+    { id: "call-edit-streaming", toolName: "edit", rawInput: "{\"path\":\"a.ts\",\"edits\":[{\"oldText\":\"x", rows: null },
+  ];
+  for (const { id, toolName, rawInput, rows } of cases) {
+    const block = { type: "toolCall", toolCallId: id, toolName, input: {}, rawInput };
+    clearExpandedToolCalls();
+    setToolCallExpanded(id, true);
+    try {
+      const html = renderMessage({ role: "assistant", provider: "anthropic", model: "claude-test", content: [block] });
+      if (rows) {
+        assert.ok(html.includes("<table"), id);
+        for (const text of rows) assert.ok(textOf(html).includes(text), id);
+      } else {
+        assert.ok(!html.includes("<table"), id);
+        assert.ok(textOf(html).includes(getToolCallInputText(block)), id);
+      }
+    } finally {
+      clearExpandedToolCalls();
+    }
+  }
+});
+
+test("a nested argument keeps the JSON body: a row cannot hold a subtree", () => {
+  const block = {
+    type: "toolCall",
+    toolCallId: "call-mcp-nested",
+    toolName: "mcp__issues__search",
+    input: { query: "open bugs", filter: { labels: ["bug"], assignee: "me" }, limit: 10 },
+  };
+  clearExpandedToolCalls();
+  setToolCallExpanded(block.toolCallId, true);
+  try {
+    const html = renderMessage({ role: "assistant", provider: "anthropic", model: "claude-test", content: [block] });
+    assert.ok(!html.includes("<table"));
+    assert.ok(textOf(html).includes('"filter"'));
+    assert.ok(textOf(html).includes('"labels"'));
+  } finally {
+    clearExpandedToolCalls();
+  }
+});
+
+test("an edit call shows no table: its arguments are a list of patches", () => {
+  const input = {
+    path: "src/app/page.tsx",
+    edits: [{ oldText: "const a = 1", newText: "const a = 2" }],
+  };
+  const block = { type: "toolCall", toolCallId: "call-edit-nested", toolName: "edit", input };
+  clearExpandedToolCalls();
+  setToolCallExpanded(block.toolCallId, true);
+  try {
+    const html = renderMessage({ role: "assistant", provider: "anthropic", model: "claude-test", content: [block] });
+    assert.ok(!html.includes("<table"));
+  } finally {
+    clearExpandedToolCalls();
+  }
+});
+
+test("a read, a subagent and a flat MCP call show one row per argument", (t) => {
+  const cases = [
+    { id: "call-read-rows", toolName: "read", input: { path: "lib/tool-fields.ts", offset: 120, limit: 80 }, expect: [">path</td>", "lib/tool-fields.ts", ">120</td>"] },
+    { id: "call-agent-rows", toolName: "Agent", input: { subagent_type: "Explore", prompt: "Find the parser" }, expect: [">subagent_type</td>", "Find the parser"] },
+    { id: "call-mcp-flat-rows", toolName: "mcp__issues__search", input: { query: "open bugs", limit: 10 }, expect: [">query</td>", "open bugs", ">10</td>"] },
+  ];
+  for (const { id, toolName, input, expect } of cases) {
+    const block = { type: "toolCall", toolCallId: id, toolName, input };
+    setToolCallExpanded(id, true);
+    t.after(() => setToolCallExpanded(id, false));
+    const html = renderMessage({ role: "assistant", provider: "anthropic", model: "claude-test", content: [block] });
+    assert.ok(html.includes("<table"), id);
+    for (const needle of expect) assert.ok(html.includes(needle), `${id}: ${needle}`);
+  }
+});
+
+test("a long or multi-line value stays inside the card", (t) => {
+  const content = Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n");
+  const block = {
+    type: "toolCall",
+    toolCallId: "call-agent-long",
+    toolName: "Agent",
+    input: { subagent_type: "a".repeat(200), prompt: content },
+  };
+  setToolCallExpanded(block.toolCallId, true);
+  t.after(() => setToolCallExpanded(block.toolCallId, false));
+  const html = renderMessage({ role: "assistant", provider: "anthropic", model: "claude-test", content: [block] });
+  // A single-line value wraps in its cell; a value with lines of its own scrolls in a block.
+  assert.ok(html.includes("<table"));
+  assert.match(html, /overflow-wrap:anywhere/);
+  assert.match(html, /calc\(12px \+ var\(--chat-font-size-offset, 0px\)\)/);
+  assert.match(html, /max-height:260px/);
+  assert.match(html, /overflow:auto/);
+  assert.ok(textOf(html).includes("line 39"));
+});
+
+test("renders subagents as standard tool calls with only an extra side-panel button", () => {
+  const block = {
+    type: "toolCall",
+    toolCallId: "call-agent-1",
+    toolName: "Agent",
+    input: {
+      subagent_type: "Explore",
+      prompt: "Find the parser",
+      description: "Find parser",
+    },
+  };
+  const result = {
+    role: "toolResult",
+    toolCallId: block.toolCallId,
+    content: [{ type: "text", text: "Parser is in lib/parser.ts" }],
+    details: {
+      kind: "pi-web-subagent",
+      sessionId: "child-session",
+      profile: "Explore",
+      description: "Find parser",
+      status: "completed",
+      runInBackground: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    },
+  };
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [block],
+  }, {
+    toolResults: new Map([[block.toolCallId, result]]),
+    onOpenSubagent() {},
+  });
+
+  assert.match(html, /border:1px solid rgba\(34,197,94,0\.25\)/);
+  assert.match(html, />Agent</);
+  assert.match(html, />Explore</);
+  assert.match(html, /aria-label="View sub-agent work in side panel"/);
+  assert.doesNotMatch(html, />completed</);
+  assert.doesNotMatch(html, />Find parser</);
+
+  const ordinaryHtml = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [{ ...block, toolCallId: "call-extension-1", toolName: "extension_tool" }],
+  }, {
+    toolResults: new Map(),
+    onOpenSubagent() {},
+  });
+  assert.doesNotMatch(ordinaryHtml, /View sub-agent work in side panel/);
+});
+
+test("a tool card shows the run time pi recorded, else the timestamps' difference, never a tiny one", () => {
+  const block = { type: "toolCall", toolCallId: "call-duration-1", toolName: "bash", arguments: { command: "make" } };
+  const message = { role: "assistant", provider: "anthropic", model: "claude-test", content: [block], timestamp: 1_000_000, durationMs: 4_000 };
+  const header = (result) => renderMessage(message, { toolResults: new Map([[block.toolCallId, result]]) });
+  const result = { role: "toolResult", toolCallId: block.toolCallId, toolName: "bash", content: [], isError: false };
+  // pi 1.1 records the execution itself; the timestamps would count the model's 4 s of generation too.
+  assert.match(header({ ...result, timestamp: 1_006_400, durationMs: 2_400 }), />2\.4s</);
+  // A result saved before pi recorded durations falls back to the timestamps.
+  assert.match(header({ ...result, timestamp: 1_006_400 }), />6\.4s</);
+  assert.doesNotMatch(header({ ...result, timestamp: 1_006_400, durationMs: 40 }), />\d+\.\ds</);
+
+  assert.equal(formatToolDuration(400), "0.4s");
+  assert.equal(formatToolDuration(59_940), "59.9s");
+  assert.equal(formatToolDuration(185_000), "3m 5s");
+  assert.equal(formatToolDuration(3_725_000), "1h 2m 5s");
+});
+
+test("the transcript tool card renders through the shared shell — same tone, one aria-expanded header", () => {
+  const block = { type: "toolCall", toolCallId: "call-shell-1", toolName: "bash", input: { command: "echo SHELL" } };
+  const message = { role: "assistant", provider: "anthropic", model: "claude-test", content: [block] };
+  const result = (isError) => ({ role: "toolResult", toolCallId: block.toolCallId, toolName: "bash", content: [{ type: "text", text: "OUT" }], isError });
+  clearExpandedToolCalls();
+  const ok = renderMessage(message, { toolResults: new Map([[block.toolCallId, result(false)]]) });
+  assert.match(ok, /<div style="border-radius:7px;overflow:hidden;font-size:12px;border:1px solid rgba\(34,197,94,0.25\);background:rgba\(34,197,94,0.04\)">/);
+  assert.match(ok, /<button type="button" aria-expanded="false"[^>]*>(?:(?!<\/button>)[\s\S])*echo SHELL/, "the header button names its state and previews the command");
+  assert.doesNotMatch(ok, />OUT</, "collapsed: no result body");
+  const failed = renderMessage(message, { toolResults: new Map([[block.toolCallId, result(true)]]) });
+  assert.match(failed, /border:1px solid rgba\(248,113,113,0.45\);background:rgba\(248,113,113,0.05\)/);
+  setToolCallExpanded(block.toolCallId, true);
+  try {
+    const open = renderMessage(message, { toolResults: new Map([[block.toolCallId, result(false)]]) });
+    assert.match(open, /aria-expanded="true"/);
+    assert.match(open, />OUT</, "expanded: the transcript's own rich body inside the shell");
+  } finally {
+    clearExpandedToolCalls();
+  }
+});
+
+const COMPLETE_SKILL_EXPANSION = `<skill name="review" location="/skills/review/SKILL.md">
+References are relative to /skills/review.
+
+Review the supplied files.
+</skill>
+
+src/main.ts`;
+
+test("a reply's usage line reads like pi's TUI footer, then the turn's time", () => {
+  const usage = { input: 1_234, output: 567, cacheRead: 85_312, cacheWrite: 12, cost: { total: 0.00362 } };
+  const html = renderMessage(
+    { role: "assistant", provider: "anthropic", model: "claude-test", content: [{ type: "text", text: "Done." }], stopReason: "stop", usage },
+    { turnDurationMs: 10_000 },
+  );
+  // The arrows and the clock are drawn as SVG; their characters and words stay
+  // as font-size 0 text, so a copied selection reads like the footer.
+  assert.equal(html.match(/<svg[^>]*aria-hidden="true"/g)?.length, 3);
+  const text = html.replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<span style="font-size:0">([^<]*)<\/span>/g, "$1");
+  // Each count is its own span; the spaces between them stay in the text.
+  assert.match(text, /<span>↑1\.2k<\/span> <span>↓567<\/span> <span>R85k<\/span> <span>W12<\/span> <span>\$0\.0036<\/span> <span>·<\/span> <span>took 10s<\/span>/);
+  // Zero counts are left out, as in the footer.
+  const bare = renderMessage({
+    role: "assistant", provider: "anthropic", model: "claude-test", content: [{ type: "text", text: "Done." }], stopReason: "stop",
+    usage: { input: 12_000_000, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+  });
+  assert.match(bare.replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<span style="font-size:0">([^<]*)<\/span>/g, "$1"), /<span>↑12M<\/span><\/div>/);
+});
+
+test("renders a provider error when the assistant message has no content", () => {
+  const html = renderMessage({
+    role: "assistant",
+    provider: "openai",
+    model: "gpt-test",
+    content: [],
+    stopReason: "error",
+    errorMessage: "OpenAI API error (403): <html>request forbidden</html>",
+  });
+
+  assert.match(html, /role="alert"/);
+  assert.match(html, /Error: OpenAI API error \(403\)/);
+  assert.match(html, /&lt;html&gt;request forbidden&lt;\/html&gt;/);
+});
+
+test("renders a truncation notice for stopReason length", () => {
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [{ type: "thinking", thinking: "Long reasoning chain" }],
+    stopReason: "length",
+  });
+
+  assert.match(html, /role="alert"/);
+  assert.match(html, /output limit was reached before an answer/i);
+  assert.doesNotMatch(html, /follow-up/i);
+});
+
+test("keeps the follow-up hint when a truncated response already has text", () => {
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [{ type: "text", text: "Partial answer" }],
+    stopReason: "length",
+  });
+
+  assert.match(html, /Partial answer/);
+  assert.match(html, /follow-up/i);
+  assert.doesNotMatch(html, /Compact context/);
+});
+
+test("offers compaction on an unanswered truncation and keeps its error with the reply", () => {
+  let compacted = 0;
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [],
+    stopReason: "length",
+  }, {
+    onCompact: () => { compacted += 1; },
+    compactError: "Summarization failed: generation hit the token cap",
+  });
+
+  assert.match(html, /Compact context/);
+  assert.match(html, /generation hit the token cap/);
+  assert.equal(compacted, 0);
+});
+
+test("renders partial assistant content before the provider error", () => {
+  const html = renderMessage({
+    role: "assistant",
+    provider: "openai",
+    model: "gpt-test",
+    content: [{ type: "text", text: "Partial response" }],
+    stopReason: "error",
+    errorMessage: "Connection closed",
+  });
+
+  assert.match(html, /Partial response/);
+  assert.match(html, /Error: Connection closed/);
+});
+
+test("marks persisted assistant messages with their source entry", () => {
+  const html = renderMessage({
+    role: "assistant",
+    provider: "openai",
+    model: "gpt-test",
+    content: [{ type: "text", text: "Select this response" }],
+  }, { entryId: "assistant-entry" });
+
+  assert.match(html, /data-message-role="assistant"/);
+  assert.match(html, /data-entry-id="assistant-entry"/);
+});
+
+test("renders a complete SDK skill expansion as a compact command", () => {
+  const html = renderMessage({
+    role: "user",
+    content: COMPLETE_SKILL_EXPANSION,
+  });
+
+  assert.match(html, /\/skill:review/);
+  assert.match(html, /src\/main\.ts/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.doesNotMatch(html, /Review the supplied files/);
+});
+
+test("does not collapse incomplete skill-looking user text", () => {
+  const html = renderMessage({
+    role: "user",
+    content: '<skill name="review" location="/skills/review/SKILL.md">\nordinary user text',
+  });
+
+  assert.match(html, /ordinary user text/);
+  assert.doesNotMatch(html, /aria-expanded/);
+});
+
+test("shows every line of pasted plain text in a user message (#680)", () => {
+  const lines = [
+    "第1题（看门狗）",
+    "嵌入式系统中，看门狗（WatchDog）的基本工作原理是（ ）",
+    "A. 监控系统温度，过热时自动降频",
+    "B. 计数器自动计数，程序定期将其重置；若程序跑飞计数器溢出，则系统复位重启",
+  ];
+  const expected = `<p>${lines.join("<br/>")}</p>`;
+
+  for (const lineEnding of ["\n", "\r\n", "\r"]) {
+    const html = renderMessage({ role: "user", content: lines.join(lineEnding) });
+    assert.ok(html.includes(expected), JSON.stringify(lineEnding));
+    assert.doesNotMatch(html, /\r/);
+  }
+
+  const listHtml = renderMessage({
+    role: "user",
+    content: [{ type: "text", text: "1. 看门狗的原理是（ ）\nA. 监控温度\nB. 计数器" }],
+  });
+  assert.match(listHtml, /<li>看门狗的原理是（ ）<br\/>A\. 监控温度<br\/>B\. 计数器<\/li>/);
+});
+
+test("keeps assistant soft line breaks as Markdown paragraphs", () => {
+  const html = renderMessage({ role: "assistant", content: [{ type: "text", text: "one\ntwo" }] });
+
+  assert.match(html, /<p>one\ntwo<\/p>/);
+  assert.doesNotMatch(html, /<br/);
+});
+
+test("renders lone carriage returns in compact command arguments as line breaks", () => {
+  const html = renderMessage({
+    role: "user",
+    content: COMPLETE_SKILL_EXPANSION.replace("src/main.ts", "src/main.ts\rsrc/app.ts"),
+  });
+
+  assert.match(html, /\/skill:review/);
+  assert.match(html, /src\/main\.ts\nsrc\/app\.ts/);
+  assert.doesNotMatch(html, /\r/);
+});
+
+test("keeps attached images when restoring a compact command for editing", () => {
+  const image = {
+    type: "image",
+    source: { type: "base64", media_type: "image/png", data: "QUJDRA==" },
+  };
+  const restored = replaceUserMessageText({
+    role: "user",
+    content: [{ type: "text", text: COMPLETE_SKILL_EXPANSION }, image],
+  }, "/skill:review src/main.ts");
+
+  assert.deepEqual(restored.content, [
+    { type: "text", text: "/skill:review src/main.ts" },
+    image,
+  ]);
+});
+
+test("renders user-message images as buttons that open a larger preview", () => {
+  const html = renderMessage({
+    role: "user",
+    content: [
+      { type: "text", text: "inspect this" },
+      { type: "image", data: "YWJj", mimeType: "image/png" },
+    ],
+    timestamp: Date.now(),
+  });
+
+  assert.match(html, /<button[^>]+aria-label="Preview image"[^>]*>/);
+  assert.match(html, /<img[^>]+src="data:image\/png;base64,YWJj"/);
+});
+
+test("marks apply_patch returned failures as errors even when isError is unset", () => {
+  const block = {
+    type: "toolCall",
+    toolCallId: "call-patch-1",
+    toolName: "apply_patch",
+    input: {
+      input: "*** Begin Patch\n*** Update File: src/a.ts\n-old\n+new\n*** End Patch",
+    },
+  };
+  const failed = {
+    role: "toolResult",
+    toolCallId: block.toolCallId,
+    content: [{ type: "text", text: "apply_patch failed.\nRecovery: MUST read src/a.ts before retrying." }],
+    details: {
+      result: { appliedFiles: [], failures: [{ filePath: "src/a.ts", message: "context mismatch" }] },
+    },
+  };
+  const html = renderMessage({
+    role: "assistant",
+    provider: "openai",
+    model: "gpt-test",
+    content: [block],
+  }, { toolResults: new Map([[block.toolCallId, failed]]) });
+
+  assert.match(html, /border:1px solid rgba\(248,113,113,0\.45\)/);
+  assert.match(html, />apply_patch</);
+  assert.doesNotMatch(html, /border:1px solid rgba\(34,197,94,0\.25\)/);
+});
+
+test("collapses a displayed custom message from its header alone", () => {
+  const custom = (props) => renderMessage({
+    role: "custom",
+    customType: "extension",
+    display: true,
+    timestamp: Date.now(),
+    ...props,
+  });
+  // The header is the card's first button and the only one holding the title.
+  const header = (html) => html.slice(0, html.indexOf("</button>"));
+
+  // The header is the toggle, so a message with no `details` can collapse too.
+  const shown = custom({ content: [{ type: "text", text: "a message with no details" }] });
+  assert.match(header(shown), /aria-expanded="true"/);
+  assert.match(header(shown), />extension</);
+  // The footer is for details only; it is not a second way to collapse.
+  assert.doesNotMatch(shown, /Show details|Hide details/);
+
+  // It starts expanded, as pi's TUI draws a displayed custom message in full.
+  assert.match(shown, /a message with no details/);
+  // A message with no text (images only) can collapse too.
+  assert.match(header(custom({ content: [] })), /aria-expanded="true"/);
+
+  // A message that does carry details keeps that button, for its details.
+  assert.match(
+    custom({ content: [{ type: "text", text: "a message with details" }], details: { files: ["a.ts"] } }),
+    /Show details/,
+  );
+});
+
+test("renders custom-message images as buttons that open a larger preview", () => {
+  const html = renderMessage({
+    role: "custom",
+    customType: "extension",
+    content: [{ type: "image", data: "YWJj", mimeType: "image/png" }],
+    timestamp: Date.now(),
+  });
+
+  assert.match(html, /<button[^>]+aria-label="Preview image"[^>]*>/);
+  assert.match(html, /<img[^>]+src="data:image\/png;base64,YWJj"/);
+});
+
+test("shows tool-result images while the tool details stay collapsed", () => {
+  const block = {
+    type: "toolCall",
+    toolCallId: "call-shot-1",
+    toolName: "page_screenshot",
+    input: { tabId: 7 },
+  };
+  const result = {
+    role: "toolResult",
+    toolCallId: block.toolCallId,
+    content: [
+      { type: "text", text: "captured-1280x720" },
+      { type: "image", data: "YWJj", mimeType: "image/png" },
+    ],
+  };
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [block],
+  }, { toolResults: new Map([[block.toolCallId, result]]) });
+
+  assert.match(html, /<button[^>]+aria-label="Preview image"[^>]*>/);
+  assert.match(html, /<img[^>]+src="data:image\/png;base64,YWJj"/);
+  assert.doesNotMatch(html, /captured-1280x720/);
+  assert.doesNotMatch(html, /"tabId"/);
+});
+
+test("uses the unanswered truncation notice for an empty length reply", () => {
+  // A nearly full context can clamp the output so far that nothing, not even
+  // thinking, comes back; the notice must not blame thinking alone.
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [],
+    stopReason: "length",
+  });
+
+  assert.match(html, /output limit was reached before an answer/i);
+  assert.match(html, /nearly full context/i);
+  assert.doesNotMatch(html, /follow-up/i);
+});
+
+function textOf(html) {
+  return html.replace(/<[^>]+>/g, "").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/&#x27;/g, "'");
+}
+
+function codemodeCall(toolCallId, code) {
+  return { type: "toolCall", toolCallId, toolName: "codemode", input: { code } };
+}
+
+function renderCodemode(block, result) {
+  return renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [block],
+  }, { toolResults: new Map(result ? [[block.toolCallId, result]] : []) });
+}
+
+const CODEMODE_SCRIPT = "// @options: {\"timeoutMs\": 5000}\nconst files = await tools.ls({ path: \".\" });\nreturn files.length;";
+
+test("collapses a codemode call to its first script line and call count", (t) => {
+  const block = codemodeCall("call-codemode-collapsed", CODEMODE_SCRIPT);
+  t.after(() => setToolCallExpanded(block.toolCallId, false));
+  const html = renderCodemode(block, {
+    role: "toolResult",
+    toolCallId: block.toolCallId,
+    content: [{ type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" }, { type: "text", text: "3" }],
+    details: {
+      calls: [
+        { id: "call-codemode-collapsed/1", name: "ls", args: "{\"path\":\".\"}", status: "ok", durationMs: 4 },
+        { id: "call-codemode-collapsed/2", name: "read", args: "{\"path\":\"a\"}", status: "ok", durationMs: 2 },
+      ],
+    },
+  });
+  const text = textOf(html);
+  assert.match(text, /codemode/);
+  assert.match(text, /const files = await tools\.ls\(\{ path: "\." \}\);/);
+  assert.match(text, /2 calls/);
+  assert.doesNotMatch(text, /@options/);
+  assert.doesNotMatch(text, /"code"/);
+  assert.doesNotMatch(text, /Tool calls/);
+});
+
+test("expands a codemode call into its script, its calls, and the output without the header", (t) => {
+  const block = codemodeCall("call-codemode-expanded", CODEMODE_SCRIPT);
+  setToolCallExpanded(block.toolCallId, true);
+  t.after(() => setToolCallExpanded(block.toolCallId, false));
+  const calls = Array.from({ length: 23 }, (_, index) => ({
+    id: `call-codemode-expanded/${index + 1}`,
+    name: index === 22 ? "bash" : "read",
+    args: `{"path":"file-${index + 1}"}`,
+    status: index === 22 ? "error" : "ok",
+    durationMs: 1500,
+    ...(index === 22 ? { error: "exit code 2" } : {}),
+  }));
+  calls.push(
+    { id: "call-codemode-expanded/24", name: "models.classify", args: "", status: "ok", cost: 0.004 },
+    { id: "call-codemode-expanded/25", name: "models.classify", args: "", status: "ok", cost: 0.006 },
+  );
+  const html = renderCodemode(block, {
+    role: "toolResult",
+    toolCallId: block.toolCallId,
+    isError: true,
+    content: [
+      { type: "text", text: "Script failed\nWall time 4.2 seconds\nOutput:\n" },
+      { type: "text", text: "Script error:\nError: exit code 2" },
+    ],
+    details: { calls },
+  });
+  const text = textOf(html);
+
+  // The script sits in the plain box any tool's input uses, not a highlighted code block.
+  assert.doesNotMatch(html, /markdown-code-block/);
+  assert.equal(textOf(html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/)[1]), CODEMODE_SCRIPT);
+  assert.match(text, /Tool calls/);
+  assert.match(text, /Show 5 earlier calls/);
+  // The newest 20 of 25 calls are listed; the 5 oldest are folded.
+  assert.doesNotMatch(text, /"file-5"/);
+  assert.match(text, /"file-6"/);
+  assert.match(text, /bash\{"path":"file-23"\}1\.5s/);
+  assert.match(text, /exit code 2/);
+  assert.match(html, /aria-label="Failed"/);
+  assert.match(text, /Model calls: \$0\.01/);
+  assert.match(text, /Script error:\nError: exit code 2/);
+  assert.doesNotMatch(text, /Wall time/);
+  assert.doesNotMatch(text, /"code":/);
+});
+
+test("shows a running script's calls without an empty output", (t) => {
+  const block = codemodeCall("call-codemode-running", "await tools.read({ path: \"a\" })");
+  setToolCallExpanded(block.toolCallId, true);
+  t.after(() => setToolCallExpanded(block.toolCallId, false));
+  const html = renderCodemode(block, {
+    role: "toolResult",
+    toolCallId: block.toolCallId,
+    content: [],
+    details: {
+      calls: [{ id: "call-codemode-running/201", name: "read", args: "{\"path\":\"a\"}", status: "running" }],
+      omittedCalls: 200,
+    },
+  });
+  const text = textOf(html);
+  assert.match(text, /201 calls/);
+  assert.match(text, /200 earlier calls not shown/);
+  assert.match(html, /aria-label="Running"/);
+  assert.doesNotMatch(text, /No output/i);
+});
+
+test("a codemode call with no script or streaming input falls back to a plain body", (t) => {
+  const streaming = { ...codemodeCall("call-codemode-streaming", ""), input: {}, rawInput: "{\"code\":\"const secret" };
+  setToolCallExpanded(streaming.toolCallId, true);
+  t.after(() => setToolCallExpanded(streaming.toolCallId, false));
+  const streamingText = textOf(renderCodemode(streaming));
+  assert.match(streamingText, /Generating parameters/);
+  // The script so far, through the partial parse, rather than its JSON.
+  assert.match(streamingText, /codeconst secret/);
+  assert.doesNotMatch(streamingText, /\{"code"/);
+  assert.doesNotMatch(streamingText, /Tool calls/);
+
+  const other = { type: "toolCall", toolCallId: "call-codemode-other", toolName: "codemode", input: { script: "x" } };
+  setToolCallExpanded(other.toolCallId, true);
+  t.after(() => setToolCallExpanded(other.toolCallId, false));
+  // An argument this view does not understand is still an argument: no script box,
+  // but the flat row shows it.
+  const otherHtml = renderCodemode(other);
+  assert.match(otherHtml, /<table/);
+  assert.match(otherHtml, />x<\/td>/);
+  assert.doesNotMatch(textOf(otherHtml), /"script": "x"/);
+});
+
+test("labels an MCP call server/tool and indents a JSON result", (t) => {
+  const block = {
+    type: "toolCall",
+    toolCallId: "call-mcp-1",
+    toolName: "mcp__docs_v2__search",
+    input: { query: "codemode" },
+  };
+  setToolCallExpanded(block.toolCallId, true);
+  t.after(() => setToolCallExpanded(block.toolCallId, false));
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [block],
+  }, {
+    toolResults: new Map([[block.toolCallId, {
+      role: "toolResult",
+      toolCallId: block.toolCallId,
+      content: [{ type: "text", text: "{\"hits\":[{\"title\":\"Code mode\"}]}" }],
+      details: { server: "docs.v2", tool: "search" },
+    }]]),
+  });
+  const text = textOf(html);
+  assert.match(text, /docs\.v2\/search/);
+  assert.match(html, /title="mcp__docs_v2__search"/);
+  assert.match(text, /\{\n {2}"hits": \[\n {4}\{\n {6}"title": "Code mode"/);
+});
+
+test("keeps the registered name where no result names the server and tool", (t) => {
+  // Sanitizing maps docs.v2/search.pages and docs_v2/search_pages to one name, so it is not split.
+  const block = { type: "toolCall", toolCallId: "call-mcp-running", toolName: "mcp__docs_v2__search_pages", input: {} };
+  const running = textOf(renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [block],
+  }, { toolResults: new Map() }));
+  assert.match(running, /mcp__docs_v2__search_pages/);
+  assert.doesNotMatch(running, /docs_v2\//);
+
+  // A codemode script's calls carry only that name, which is also what the script calls.
+  const script = codemodeCall("call-codemode-mcp", "await tools.mcp__docs_v2__search_pages({})");
+  setToolCallExpanded(script.toolCallId, true);
+  t.after(() => setToolCallExpanded(script.toolCallId, false));
+  const html = renderCodemode(script, {
+    role: "toolResult",
+    toolCallId: script.toolCallId,
+    content: [{ type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" }],
+    details: { calls: [{ id: "call-codemode-mcp/1", name: "mcp__docs_v2__search_pages", args: "{}", status: "ok" }] },
+  });
+  assert.match(textOf(html), /mcp__docs_v2__search_pages\{\}/);
+});
+
+test("collapses the compaction summary to its title and token count, as pi's TUI does (#1026)", () => {
+  const summary = "## Goal\n\nShip the parser fix.\n\n<read-files>\nlib/read.ts\n</read-files>\n\n<modified-files>\nlib/changed.ts\n</modified-files>";
+  const message = {
+    role: "custom",
+    customType: "compaction",
+    content: summary,
+    display: true,
+    details: { tokensBefore: 123456, firstKeptEntryId: "kept0001" },
+  };
+  const html = renderMessage(message);
+
+  assert.match(html, /<button type="button" aria-expanded="false" title="Expand"/);
+  assert.match(html, /Conversation compacted/);
+  assert.ok(html.includes(`Compacted from ${(123456).toLocaleString()} tokens`));
+  assert.doesNotMatch(html, /Ship the parser fix|following summary|File context|lib\/read\.ts|lib\/changed\.ts/);
+  assert.doesNotMatch(renderMessage({ ...message, details: undefined }), /Compacted from/);
+
+  // What the toggle reveals.
+  const details = renderToStaticMarkup(React.createElement(
+    I18nProvider,
+    null,
+    React.createElement(CompactionSummaryDetails, { summary }),
+  ));
+  assert.match(details, /following summary/);
+  assert.match(details, /Ship the parser fix/);
+  assert.match(details, /File context: 1 read, 1 modified/);
+  assert.match(details, /lib\/read\.ts/);
+  assert.match(details, /lib\/changed\.ts/);
+});
+
+// ── A tool card's patch: two columns where there is room, one where there is not ──
+
+const EDIT_PATCH = `--- a/src/demo.ts
++++ b/src/demo.ts
+@@ -10,3 +10,3 @@
+ const keep = true;
+-const value = "old";
++const value = "new";
+done();
+`;
+
+const TWO_COLUMN_GRID = "grid-template-columns:minmax(0, 1fr) minmax(0, 1fr)";
+
+function renderPatchFiles(files, layout) {
+  return renderToStaticMarkup(
+    React.createElement(I18nProvider, null, React.createElement(PatchDiffFiles, { files, layout })),
+  );
+}
+
+function countIn(haystack, needle) {
+  return haystack.split(needle).length - 1;
+}
+
+// pi-hashline-edit-pro's insert/replace address lines by anchor and name no file (#1460).
+test("a call that names no file is labelled with the one file its result's patch changed", () => {
+  const block = { type: "toolCall", toolCallId: "call-insert-path", toolName: "insert", input: { anchor: "kqzmv", direction: "after", text: "x" } };
+  const resultWith = (patch) => ({
+    role: "toolResult",
+    toolCallId: block.toolCallId,
+    toolName: "insert",
+    content: [{ type: "text", text: "Successfully inserted in src/demo.ts." }],
+    details: { patch },
+  });
+  const render = (result) => renderMessage(
+    { role: "assistant", provider: "anthropic", model: "claude-test", content: [block] },
+    { toolResults: result ? new Map([[block.toolCallId, result]]) : new Map() },
+  );
+
+  const html = render(resultWith(EDIT_PATCH.replace("--- a/", "--- ").replace("+++ b/", "+++ ")));
+  assert.match(html, />src\/demo\.ts</);
+  assert.doesNotMatch(html, />kqzmv</);
+
+  // No result yet, or a patch over two files: the first argument, as before.
+  assert.match(render(undefined), />kqzmv</);
+  const onePatch = (file) => `--- ${file}\n+++ ${file}\n@@ -1,1 +1,1 @@\n-old\n+new\n`;
+  const twoFiles = onePatch("src/demo.ts") + onePatch("src/other.ts");
+  assert.match(render(resultWith(twoFiles)), />kqzmv</);
+});
+
+test("a call's own path stays its label over its result's patch", () => {
+  const block = { type: "toolCall", toolCallId: "call-edit-own-path", toolName: "edit", input: { path: "src/given.ts" } };
+  const result = { role: "toolResult", toolCallId: block.toolCallId, toolName: "edit", content: [{ type: "text", text: "ok" }], details: { patch: EDIT_PATCH } };
+  const html = renderMessage(
+    { role: "assistant", provider: "anthropic", model: "claude-test", content: [block] },
+    { toolResults: new Map([[block.toolCallId, result]]) },
+  );
+  assert.match(html, />src\/given\.ts</);
+});
+
+test("an edit card draws the applied patch in two columns while there is room", () => {
+  const block = { type: "toolCall", toolCallId: "call-edit-columns", toolName: "edit", input: { path: "src/demo.ts" } };
+  const result = {
+    role: "toolResult",
+    toolCallId: block.toolCallId,
+    toolName: "edit",
+    content: [{ type: "text", text: "ok" }],
+    details: { patch: EDIT_PATCH },
+  };
+  setToolCallExpanded(block.toolCallId, true);
+  try {
+    const html = renderMessage(
+      { role: "assistant", provider: "anthropic", model: "claude-test", content: [block] },
+      { toolResults: new Map([[block.toolCallId, result]]) },
+    );
+    assert.ok(html.includes(TWO_COLUMN_GRID), "the card reaches the patch view");
+    assert.ok(html.includes("const value = &quot;new&quot;;"));
+  } finally {
+    clearExpandedToolCalls();
+  }
+});
+
+test("the same patch in one column: no line twice, the removed line above what replaces it", () => {
+  const stacked = renderPatchFiles(parseUnifiedPatch(EDIT_PATCH), "stacked");
+
+  assert.ok(!stacked.includes("grid-template-columns"), "nothing stands beside anything");
+  assert.equal(countIn(stacked, "const keep = true;"), 1);
+  assert.equal(countIn(stacked, "const value = &quot;old&quot;;"), 1);
+  assert.equal(countIn(stacked, "const value = &quot;new&quot;;"), 1);
+  assert.ok(stacked.indexOf("&quot;old&quot;;") < stacked.indexOf("&quot;new&quot;;"));
+
+  // The two columns pay for themselves by printing every context line twice.
+  const split = renderPatchFiles(parseUnifiedPatch(EDIT_PATCH), "split");
+  assert.ok(split.includes(TWO_COLUMN_GRID));
+  assert.equal(countIn(split, "const keep = true;"), 2);
+});
+
+test("one column names a file section by the file's own path, not by Before and After", () => {
+  const files = parseUnifiedPatch(`--- a/one.ts
++++ b/one.ts
+@@ -1 +1 @@
+-a
++b
+--- a/two.ts
++++ b/two.ts
+@@ -1 +1 @@
+-c
++d
+`);
+  const html = renderPatchFiles(files, "stacked");
+
+  assert.ok(html.includes("b/one.ts"), "the first file names its section");
+  assert.ok(html.includes("b/two.ts"), "the second file names its section");
+  assert.ok(!html.includes(">Before<") && !html.includes(">After<"), "two labels over one column read as two columns");
+});
+
+test("the layout is the viewport's choice, taken once for both the patch input and the patch result", () => {
+  const source = readFileSync(new URL("./MessageView.tsx", import.meta.url), "utf8");
+
+  // Both the applied-patch card and a result's patch render through SplitFilesView,
+  // so a phone never gets one of each.
+  assert.match(source, /const layout: PatchDiffLayout = useIsMobile\(\) \? "stacked" : "split";/);
+  assert.equal(countIn(source, "<SplitFilesView"), 2);
+});
+
+test("one column numbers a removed line by the old file and every other line by the new one", () => {
+  const stacked = renderPatchFiles(parseUnifiedPatch(`--- a/src/demo.ts
++++ b/src/demo.ts
+@@ -10,3 +10,4 @@
+ const keep = true;
+-const value = "old";
++const value = "new";
++const extra = 1;
+ done();
+@@ -30,1 +31,1 @@
+-late
++LATE
+`), "stacked");
+
+  const gutter = [...stacked.matchAll(/width:42px[^>]*>(\d*)</g)].map((match) => match[1]);
+  // done() is old line 12 but new line 13: the new file's number, as in the file viewer's gutter.
+  assert.deepEqual(gutter, ["10", "11", "11", "12", "13", "30", "31"]);
+  // The lines between the hunks stay marked, as in the two-column view.
+  assert.equal(countIn(stacked, "⋯ 17 unchanged lines"), 1);
+});
+
+test("one column names a deleted file's section by its old path", () => {
+  const html = renderPatchFiles(parseUnifiedPatch(`--- a/gone.ts
++++ /dev/null
+@@ -1 +0,0 @@
+-bye
+--- a/kept.ts
++++ b/kept.ts
+@@ -1 +1 @@
+-a
++b
+`), "stacked");
+
+  assert.ok(html.includes(">a/gone.ts<"));
+  assert.ok(!html.includes("/dev/null"));
+});
+
+// claude's Edit card, from the real 2.1.322 recording through the adapter.
+const claudeAdapter = await jiti.import("@/lib/claude-adapter");
+const { normalizeToolCalls } = await jiti.import("@/lib/normalize");
+
+/** The diff's [lineNo, text] cells of one kind ("removed" / "added"), as drawn. */
+function diffCells(html, kind) {
+  const background = kind === "removed" ? "rgba(248,113,113,0.13)" : "rgba(34,197,94,0.12)";
+  const marker = kind === "removed" ? "-" : "+";
+  const cell = new RegExp(`<div style="display:flex;min-width:0;background:${background.replace(/[().]/g, "\\$&")}[^"]*"><span[^>]*>(\\d*)</span><span[^>]*>\\${marker}</span><span[^>]*>([^<]*)</span>`, "g");
+  return [...html.matchAll(cell)].map((match) => [Number(match[1]), textOf(match[2])]);
+}
+
+test("an expanded claude Edit card shows its input rows above claude's diff; pi's nested edit stays replaced by its diff", (t) => {
+  const recorded = readFileSync(new URL("../lib/__fixtures__/claude-2.1.322/edit/transcript.jsonl", import.meta.url), "utf8");
+  const { messages } = claudeAdapter.claudeTranscriptToMessages(claudeAdapter.parseClaudeTranscript(recorded));
+  const results = new Map(messages.filter((message) => message.role === "toolResult").map((message) => [message.toolCallId, message]));
+  const edits = messages
+    .filter((message) => message.role === "assistant")
+    .map(normalizeToolCalls)
+    .flatMap((message) => message.content.filter((block) => block.type === "toolCall" && block.toolName === "Edit").map((block) => ({ message, block })));
+  assert.equal(edits.length, 2, "the recording holds two Edit calls");
+
+  const expected = [
+    { removed: [[8, "the middle line"]], added: [[8, "the MIDDLE line"]] },
+    { removed: [[1, "apple at the top"], [15, "apple at the bottom"]], added: [[1, "pear at the top"], [15, "pear at the bottom"]] },
+  ];
+  edits.forEach(({ message, block }, index) => {
+    setToolCallExpanded(block.toolCallId, true);
+    t.after(() => setToolCallExpanded(block.toolCallId, false));
+    const html = renderMessage({ ...message, content: [block] }, { toolResults: new Map([[block.toolCallId, results.get(block.toolCallId)]]) });
+    const label = `Edit #${index + 1}`;
+
+    assert.ok(html.includes("<table"), `${label}: no input rows`);
+    for (const key of ["file_path", "old_string", "new_string", "replace_all"]) {
+      assert.ok(html.includes(`>${key}</td>`), `${label}: no ${key} row`);
+    }
+    assert.ok(textOf(html).includes(String(block.input.old_string)), `${label}: old_string's value`);
+    assert.ok(textOf(html).includes(String(block.input.new_string)), `${label}: new_string's value`);
+    const diffStart = html.indexOf("rgba(248,113,113,0.13)");
+    assert.ok(diffStart > html.indexOf("</table>"), `${label}: the input rows stand above the diff`);
+    assert.deepEqual(diffCells(html, "removed"), expected[index].removed, `${label}: the diff's removed cells`);
+    assert.deepEqual(diffCells(html, "added"), expected[index].added, `${label}: the diff's added cells`);
+  });
+
+  // pi's own edit: its arguments are a list of patches, so its diff stands in for them.
+  const piBlock = { type: "toolCall", toolCallId: "call-pi-edit-444", toolName: "edit", input: { path: "src/demo.ts", edits: [{ oldText: "const value = \"old\";", newText: "const value = \"new\";" }] } };
+  const piResult = { role: "toolResult", toolCallId: piBlock.toolCallId, toolName: "edit", content: [{ type: "text", text: "ok" }], details: { diff: EDIT_PATCH } };
+  setToolCallExpanded(piBlock.toolCallId, true);
+  t.after(() => setToolCallExpanded(piBlock.toolCallId, false));
+  const pi = renderMessage({ role: "assistant", provider: "anthropic", model: "claude-test", content: [piBlock] }, { toolResults: new Map([[piBlock.toolCallId, piResult]]) });
+  assert.ok(!pi.includes("<table"), "pi's edit shows no rows");
+  assert.ok(!textOf(pi).includes("\"edits\"") && !textOf(pi).includes("oldText"), "pi's edit shows no input body");
+  assert.deepEqual(diffCells(pi, "removed"), [[11, "const value = \"old\";"]]);
+  assert.deepEqual(diffCells(pi, "added"), [[11, "const value = \"new\";"]]);
+});
+
+// a claude session's Agent call renders as its subagent run's row.
+const { ClaudeSubagentContext } = await jiti.import("./ClaudeSubagentRow.tsx");
+const subagentView = await jiti.import("@/lib/claude-subagent-view");
+
+function renderWithRuns(message, runs) {
+  return renderToStaticMarkup(
+    React.createElement(I18nProvider, null,
+      React.createElement(ClaudeSubagentContext.Provider, { value: runs },
+        React.createElement(MessageView, { message }))),
+  );
+}
+const agentCall = (id, name = "Agent") => ({ role: "assistant", provider: "claude", model: "claude-haiku-5-5", content: [{ type: "toolCall", toolCallId: id, toolName: name, input: { description: "Read note", prompt: "Read the note", subagent_type: "general-purpose" } }] });
+const readStep = (id) => ({ id: `s-${id}`, message: { role: "assistant", provider: "claude", model: "m", content: [{ type: "toolCall", toolCallId: `toolu_${id}`, toolName: "Read", input: { file_path: `/p/${id}.txt` } }] } });
+const textStep = (id, text) => ({ id, message: { role: "assistant", provider: "claude", model: "m", content: [{ type: "text", text }] } });
+const subRun = (id, over = {}) => ({ toolCallId: id, agentType: "general-purpose", description: "Read note", prompt: "Read the note in full", background: true, status: "running", entries: [], ...over });
+
+test("a running Agent row shows the badge, description, progress and live status, and opens on its prompt, timeline and no Result", () => {
+  const html = renderWithRuns(agentCall("toolu_r1"), { toolu_r1: subRun("toolu_r1", { progress: "Reading note.txt", entries: [readStep("a"), textStep("t1", "TOKEN_TEXT")] }) });
+  assert.match(html, />general-purpose</);
+  assert.match(html, />Read note</);
+  assert.match(html, />Reading note\.txt</);
+  assert.match(html, />Running</);
+  assert.match(html, /aria-expanded="true"/, "a running row opens by default");
+  assert.match(html, />Read the note in full</, "the prompt shows above the timeline");
+  assert.match(html, />Read</, "the subagent's Read renders with the chat's tool card");
+  assert.match(html, /TOKEN_TEXT/);
+  assert.doesNotMatch(html, />Result</, "no Result while running");
+  assert.doesNotMatch(html, /rgba\(34,197,94,0\.25\)[^]*>Agent</, "no ordinary Agent tool card");
+});
+
+test("a finished row stays collapsed with its statistics and mounts no body; expanded it shows the Result once", () => {
+  const usage = { totalTokens: 10379, toolUses: 1, durationMs: 1906 };
+  const run = subRun("toolu_r2", { status: "completed", usage, result: "TOKEN_TEXT", progress: "Reading note.txt", entries: [readStep("b"), textStep("t2", "TOKEN_TEXT")] });
+  const collapsed = renderWithRuns(agentCall("toolu_r2"), { toolu_r2: run });
+  assert.match(collapsed, /aria-expanded="false"/);
+  assert.match(collapsed, />1 tool · 1s · 10,379 tokens</);
+  assert.doesNotMatch(collapsed, /Read the note in full|TOKEN_TEXT|Reading note/, "collapsed mounts no prompt, timeline or progress");
+  subagentView.setClaudeSubagentManualExpansion("toolu_r2", true);
+  const open = renderWithRuns(agentCall("toolu_r2"), { toolu_r2: run });
+  assert.match(open, />Result</);
+  assert.equal(open.split("TOKEN_TEXT").length - 1, 1, "the final reply shows once, as the Result");
+  const none = renderWithRuns(agentCall("toolu_r2"), { toolu_r2: { ...run, result: undefined, entries: [] } });
+  assert.match(none, />No result</);
+});
+
+test("the timeline pages at 25 steps with a show-more control, and a nested Agent call renders the same row", () => {
+  const steps = Array.from({ length: 27 }, (_, index) => textStep(`n${index}`, `step-${index}-text`));
+  const html = renderWithRuns(agentCall("toolu_r3"), { toolu_r3: subRun("toolu_r3", { entries: steps }) });
+  assert.match(html, /step-24-text/);
+  assert.doesNotMatch(html, /step-25-text/);
+  assert.match(html, />Show 2 more</);
+  const nested = renderWithRuns(agentCall("toolu_outer", "Task"), {
+    toolu_outer: subRun("toolu_outer", { entries: [{ id: "o1", message: agentCall("toolu_inner") }] }),
+    toolu_inner: subRun("toolu_inner", { agentType: "Explore", description: "Inner look", entries: [textStep("i1", "deep-text")] }),
+  });
+  assert.match(nested, />Explore</);
+  assert.match(nested, />Inner look</);
+  assert.match(nested, /deep-text/);
+  assert.equal(nested.split("data-claude-subagent=").length - 1, 2, "the same row at both depths");
+});
+
+test("without a run (a pi session, or no subagent data) an Agent call stays the ordinary tool card", () => {
+  const html = renderWithRuns(agentCall("toolu_none"), {});
+  assert.match(html, /border:1px solid rgba\(34,197,94,0\.25\)/);
+  assert.doesNotMatch(html, /data-claude-subagent/);
+});

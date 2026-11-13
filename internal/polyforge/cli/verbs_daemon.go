@@ -9,6 +9,9 @@ import (
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/modelhealth"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
@@ -21,8 +24,9 @@ var cmdSubmit = &Command{
 	Name:    "submit",
 	Group:   GroupExec,
 	Summary: "Submit a WI for execution on this machine (claim)",
-	Usage:   "pf submit <id> [--priority low|normal|high|urgent] [--models <harness>:<model>[:<effort>],...]",
+	Usage:   "pf submit <id> [--priority low|normal|high|urgent] [--models <harness>:<model>[:<effort>],...] [--allow-no-acceptance]",
 	Setup: func(fs *flag.FlagSet) {
+		fs.Bool("allow-no-acceptance", false, "submit an execution ticket whose content lists no acceptance criterion (under `## Acceptance` or `## 验收`) on a lane that requires acceptance; without it such a ticket is refused")
 		fs.String("priority", "normal", "queue priority (low|normal|high|urgent)")
 		fs.String("models", "", "manual model candidates for EVERY step of this WI, comma-separated, in order; "+
 			"each is <harness>:<model>[:<effort>] with harness pi or claude, e.g. claude:claude-opus-5-5:high,pi:example-gateway/model-a "+
@@ -43,13 +47,18 @@ var cmdSubmit = &Command{
 				return fmt.Errorf("submit: --models: %w", merr)
 			}
 		}
-		name, err := submitPrecheck(ctx, args[0])
+		name, wi, err := submitPrecheck(ctx, args[0])
 		if err != nil {
 			return err
 		}
+		if wi != nil && !boolFlag(fs, "allow-no-acceptance") {
+			if err := submitAcceptanceCheck(ctx, wi, name); err != nil {
+				return err
+			}
+		}
 		raw, err := ctx.daemon().ClaimWithModels(args[0], stringFlag(fs, "priority"), models)
 		if err != nil {
-			return err
+			return submitRefusal(ctx, name, err)
 		}
 		finishOrRaw(ctx, raw, func(sr *SubmitResponse) bool {
 			if !sr.Accepted {
@@ -62,8 +71,13 @@ var cmdSubmit = &Command{
 			// the mapped workspace — the claim clones fresh, so the submit
 			// stays accepted; no override flag exists. An unknown placement
 			// prints nothing beyond the acceptance line (nothing invented).
+			// The daemon states the placement on a claimed answer only
+			//; a queued one says why it waits instead.
 			if sr.MachineID != "" && sr.CapsulePath != "" {
 				fmt.Fprintf(ctx.Stdout, "placement: claimed by machine %s, capsule %s\n", sr.MachineID, sr.CapsulePath)
+			}
+			if sr.State == SubmitStateQueued {
+				fmt.Fprintf(ctx.Stdout, "queued: %s — nothing is claimed yet; follow it, and any later refusal, with `pf watch %s`\n", sr.QueuedReason, name)
 			}
 			if len(sr.MissingRepos) > 0 {
 				fmt.Fprintf(ctx.Stdout, "warning: no local clone under .repo/ for repo(s) %s — the claim clones fresh\n", strings.Join(sr.MissingRepos, ", "))
@@ -79,22 +93,87 @@ var cmdSubmit = &Command{
 // involved: a typed CORE-404 (unknown or hidden id) and an explicit
 // terminal status refuse early; every other read outcome defers to the
 // daemon's claim, which stays the authority. It answers the work item's
-// display name (its slug; the given spelling when the read failed).
-func submitPrecheck(ctx *Context, wiID string) (string, error) {
+// display name (its slug; the given spelling when the read failed) and
+// the work item it read (nil when the read failed).
+func submitPrecheck(ctx *Context, wiID string) (string, *api.WorkItem, error) {
 	wi, err := ctx.aihub().GetWorkItem(wiID)
 	if err != nil {
 		var ae *api.Error
 		if errors.As(err, &ae) && ae.Code == api.ErrCoreNotFound {
-			return "", err
+			return "", nil, err
 		}
-		return wiID, nil
+		return wiID, nil, nil
 	}
 	name := api.DisplayName(wi.Slug, wiID)
 	switch wi.Status {
 	case api.StatusWrapped, api.StatusFailed, api.StatusCanceled:
-		return "", fmt.Errorf("submit: %s is terminal (%s); no claim or resume can start", name, wi.Status)
+		return "", nil, fmt.Errorf("submit: %s is terminal (%s); no claim or resume can start", name, wi.Status)
 	}
-	return name, nil
+	return name, wi, nil
+}
+
+// submitRefusal states aihub's typed claim refusal (a CORE- code the
+// daemon passed through,) as a failed submit: the same
+// code and extra, a detail that says nothing was submitted or kept
+// queued, and — for an unmerged blocker (DEPENDENCY_BLOCKED) — the
+// blockers and what to do. A new *api.Error rather than a %w wrap:
+// renderError prints the innermost *api.Error only. Any other error is
+// returned as is.
+func submitRefusal(ctx *Context, name string, err error) error {
+	var ae *api.Error
+	if !errors.As(err, &ae) || !strings.HasPrefix(ae.Code, "CORE-") {
+		return err
+	}
+	detail := fmt.Sprintf("%s was not submitted — aihub refused the claim; nothing stays queued: %s", name, ae.Detail)
+	var extra struct {
+		Reason string `json:"reason"`
+	}
+	if len(ae.Extra) > 0 && json.Unmarshal(ae.Extra, &extra) == nil && extra.Reason == "DEPENDENCY_BLOCKED" {
+		detail += "; " + submitBlockedGuidance(ctx, name)
+	}
+	return &api.Error{Code: ae.Code, Detail: detail, Extra: ae.Extra}
+}
+
+// submitBlockedGuidance names the unmerged blockers of name, read with
+// the caller's own key (its waiting_for list), and what to do; the
+// generic guidance alone when the read fails or names none.
+func submitBlockedGuidance(ctx *Context, name string) string {
+	blocker := "<blocker>"
+	waiting := ""
+	if raw, err := ctx.aihub().GetWorkItemRaw(name); err == nil {
+		var v WIView
+		if json.Unmarshal(raw, &v) == nil && len(v.WaitingFor) > 0 {
+			waiting = "waiting for " + waitingText(v.WaitingFor) + " — "
+			if len(v.WaitingFor) == 1 {
+				blocker = v.WaitingFor[0].Slug
+			}
+		}
+	}
+	return fmt.Sprintf("%swait until the blocker is merged (wrapped), then pf submit %s again, or remove the edge: pf file dep rm %s %s",
+		waiting, name, blocker, name)
+}
+
+// submitAcceptanceCheck refuses an execution ticket (one with a bundle)
+// whose content lists no acceptance criterion (workflow.HasAcceptance,
+// the driver's own rule) while its lane requires one (the lane's
+// `acceptance` declaration; a lane that cannot be read requires one): it
+// needs interaction first. A registration ticket is left to the daemon.
+func submitAcceptanceCheck(ctx *Context, wi *api.WorkItem, name string) error {
+	if wi.BundleName == nil || strings.TrimSpace(*wi.BundleName) == "" {
+		return nil
+	}
+	content := ""
+	if wi.Content != nil {
+		content = *wi.Content
+	}
+	if workflow.HasAcceptance(content) || !laneOf(ctx, wi.ProjectName, *wi.BundleName).RequiresAcceptance() {
+		return nil
+	}
+	return fmt.Errorf("submit: %s has no acceptance section (no criterion listed under `## Acceptance` or `## 验收`), "+
+		"and its lane requires one (workflow.yaml `acceptance`, default required), so it was not submitted.\n"+
+		"This ticket needs interaction first: settle its acceptance in the session and write it into the ticket "+
+		"(pf file edit %s --content @file), then submit.\n"+
+		"To submit it without acceptance anyway: pf submit %s --allow-no-acceptance", name, name, name)
 }
 
 // wiDisplayName answers the display name (slug) of a work item for a
@@ -109,18 +188,28 @@ func wiDisplayName(ctx *Context, idOrSlug string) string {
 }
 
 // ---------------------------------------------------------------------------
-// answer — answer the pending needs_input question: --question names
-// it explicitly, or the daemon resolves the unique pending question.
+// answer — speak to the current step's agent (workflow contract v2 §5.2):
+// `pf answer <id> --text "<words>"` at any time — the daemon records the
+// message and relays it into the step's conversation (a reply while the
+// step waits on its `pf ask`, a message while it runs). There is no
+// question id, option or reserved word (the v1 question's answer left
+// with workflow contract v2 change 19; `pf cancel` cancels).
+//
+// A parked work item (blocked or paused) is woken by the message
+// (workflow contract 4, design #483 §7): the daemon names the park, this
+// command opens the door `pf resume` opens with the caller's own key, and
+// the daemon then records the message and wakes the step the park belongs
+// to. A park whose agent cannot start is refused, naming why and `pf
+// resume` / `pf cancel`.
 // ---------------------------------------------------------------------------
 
 var cmdAnswer = &Command{
 	Name:    "answer",
 	Group:   GroupExec,
-	Summary: "Answer the pending needs_input question of a WI",
-	Usage:   "pf answer <id> --text \"...\" [--question q_xxx] [--by user]",
+	Summary: "Speak to a WI's current step agent (reply to its question, interject, or wake a parked WI)",
+	Usage:   "pf answer <id> --text \"...\" [--by user]",
 	Setup: func(fs *flag.FlagSet) {
-		fs.String("question", "", "question id (default: the unique pending question)")
-		fs.String("text", "", "natural-language answer (required)")
+		fs.String("text", "", "your words, verbatim (required)")
 		fs.String("by", "", "answerer user id (default: config user_id / PF_USER_ID)")
 	},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
@@ -138,93 +227,88 @@ var cmdAnswer = &Command{
 		if who == "" {
 			return fmt.Errorf("answer: answered_by identity required (--by or PF_USER_ID / user_id in config)")
 		}
-		d := ctx.daemon()
-		// An empty --question lets the daemon resolve the pending one.
-		question := stringFlag(fs, "question")
-		payload := AnswerPayload{
-			QuestionID: question,
-			AnswerText: text,
-			AnsweredBy: who,
-		}
-		raw, err := d.Answer(args[0], payload)
+		raw, err := ctx.daemon().Answer(args[0], AnswerPayload{AnswerText: text, AnsweredBy: who})
 		if err != nil {
 			return err
 		}
-		var ans struct {
-			QuestionID string `json:"question_id"`
+		var ack protocol.OwnerMessageAck
+		_ = json.Unmarshal(raw, &ack)
+		if ack.Status == ackParked {
+			// the owner's door first, with the caller's key; the daemon
+			// never reopens a parked work item at aihub on its own
+			if err := openParkDoor(ctx, args[0], ack.Park); err != nil {
+				fmt.Fprintf(ctx.Stderr, "answer: %s is parked %s; opening its door was refused, so nothing was recorded:\n", args[0], ack.Park)
+				return err
+			}
+			raw, err = ctx.daemon().Answer(args[0], AnswerPayload{AnswerText: text, AnsweredBy: who, Wake: ack.Park})
+			if err != nil {
+				fmt.Fprintf(ctx.Stderr, "answer: %s's %s door is open, but the wake did not complete:\n", args[0], ack.Park)
+				return err
+			}
+			ack = protocol.OwnerMessageAck{}
+			_ = json.Unmarshal(raw, &ack)
 		}
-		_ = json.Unmarshal(raw, &ans)
-		if ans.QuestionID == "" {
-			ans.QuestionID = payload.QuestionID
-		}
-		ctx.finishLine(raw, "answer delivered for question %s\n", ans.QuestionID)
+		ctx.finishLine(raw, "%s\n", ownerMessageLine(ack))
 		return nil
 	},
 }
 
-// ---------------------------------------------------------------------------
-// revise-binding — the owner's correction of done e2e-author binding
-// commands. One invocation carries the whole batch; it
-// appends to the canonical capsule chain through the driver's single
-// writer; it is not a general step-output editor and never rewrites
-// history.
-// ---------------------------------------------------------------------------
+// ackParked is the answer's status for a parked work item: nothing was
+// recorded; the caller opens the park's door and asks again naming it.
+const ackParked = "parked"
 
-var cmdReviseBinding = &Command{
-	Name:    "revise-binding",
-	Group:   GroupExec,
-	Summary: "Correct done e2e-author binding commands in one batch (owner revision; appended to the capsule chain)",
-	Usage:   "pf revise-binding <id> --step <step-id> --correction <index>=<command> [--correction ...] [--by user] [--reason text]",
-	Setup: func(fs *flag.FlagSet) {
-		fs.String("step", "", "the done step whose bindings are corrected (e2e-author)")
-		corrections := &kvList{}
-		fs.Var(corrections, "correction", "one index=command correction, repeatable (index is the position in steps.<step>.output.bindings; the command is verbatim and must parse under bash -n)")
-		fs.String("by", "", "owner user id (default: config user_id / PF_USER_ID)")
-		fs.String("reason", "", "why the correction is authorized (recorded once per corrected index)")
-	},
-	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
-		if len(args) != 1 {
-			return fmt.Errorf("revise-binding: expected exactly one work item id")
-		}
-		step := stringFlag(fs, "step")
-		if step == "" {
-			return fmt.Errorf("revise-binding: --step is required")
-		}
-		pairs := *fs.Lookup("correction").Value.(*kvList)
-		if len(pairs) == 0 {
-			return fmt.Errorf("revise-binding: at least one --correction <index>=<command> is required")
-		}
-		corrections := make([]BindingCorrectionPayload, 0, len(pairs))
-		for _, pair := range pairs {
-			index, err := strconv.Atoi(pair.Key)
-			if err != nil || index < 0 {
-				return fmt.Errorf("revise-binding: --correction %s=%s: index must be zero or greater", pair.Key, pair.Value)
-			}
-			if strings.TrimSpace(pair.Value) == "" {
-				return fmt.Errorf("revise-binding: --correction for binding %d needs a non-empty command", index)
-			}
-			corrections = append(corrections, BindingCorrectionPayload{Index: index, Command: pair.Value})
-		}
-		who := stringFlag(fs, "by")
-		if who == "" {
-			who = ctx.Cfg.UserID
-		}
-		if who == "" {
-			return fmt.Errorf("revise-binding: owner identity required (--by or PF_USER_ID / user_id in config)")
-		}
-		raw, err := ctx.daemon().ReviseBinding(args[0], ReviseBindingPayload{
-			StepID: step, Corrections: corrections,
-			By: who, Reason: stringFlag(fs, "reason"),
-		})
-		if err != nil {
-			return err
-		}
-		ctx.finish(raw, func() {
-			fmt.Fprintf(ctx.Stdout, "revised %s step %s: %d binding command(s) are the canonical record now\n", args[0], step, len(corrections))
-			fmt.Fprintln(ctx.Stdout, "(the capsule chain carries the appended revision; a later resume/re-claim materializes it)")
-		})
-		return nil
-	},
+// openParkDoor opens, with the caller's own key, the door `pf resume`
+// opens for the park: a blocked work item's resume-blocked door at aihub
+// (its reporter / maintainer / admin check is about the human), a paused
+// one's clean_pause cleared. The daemon's claim follows in the wake
+// request.
+func openParkDoor(ctx *Context, wiID, park string) error {
+	switch park {
+	case "blocked":
+		_, err := ctx.aihub().ResumeBlockedWorkItemWith(wiID, api.ResumeBlockedRequest{})
+		return err
+	case "paused":
+		return patchCleanPause(ctx, wiID, false)
+	}
+	return fmt.Errorf("answer: the daemon named an unknown park %q of %s", park, wiID)
+}
+
+// ownerMessageLine renders the relay's answer: what was recorded, for
+// which step and dispatch, and how far the delivery got.
+func ownerMessageLine(a protocol.OwnerMessageAck) string {
+	what := "message"
+	if a.Kind == "reply" {
+		what = "reply to ask " + a.AskAt
+	}
+	head := fmt.Sprintf("%s recorded for step %s (dispatch %d, at %s): ", what, a.Step, a.SpawnN, a.At)
+	switch {
+	case a.Disposition == "wake":
+		return head + "the parked work item is woken — " + wakeLine(a.Wake)
+	case a.Delivered:
+		return head + "delivered to the step's agent"
+	case a.Disposition == "resume" && a.Note != "":
+		return head + "the step process did not take it (" + a.Note + "); the step's next dispatch carries it"
+	case a.Disposition == "resume":
+		return head + "no step process is alive; the daemon resumes the session to deliver it"
+	case a.Disposition == "queued":
+		return head + "queued by the step process (a turn is running); delivered at the turn's next boundary"
+	default:
+		return head + "accepted by the step process; delivery confirmation pending"
+	}
+}
+
+// wakeLine says how a woken park continues (protocol.OwnerMessageAck.Wake).
+func wakeLine(wake string) string {
+	switch wake {
+	case "step_blocked":
+		return "the step that stopped resumes its session with your message"
+	case "write_failed":
+		return "its failed hub writes are replayed, then it continues"
+	case "paused":
+		return "the paused step continues in place with your message"
+	default:
+		return "the parked step is dispatched again with your message"
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -283,7 +367,9 @@ func patchCleanPause(ctx *Context, wiID string, value bool) error {
 //     step 5: workflow_status=blocked, position frozen, the owner holds
 //     the next move) gets the §6.4 owner move: the CLI lands the hub's
 //     resume-blocked door with the human's own credential (authorization
-//     is reporter / maintainer / admin), then the daemon's route claims
+//     is reporter / maintainer / admin, or the blocked-only holder
+//     operator: the holding machine's current operator, a project writer
+//     or maintainer), then the daemon's route claims
 //     it and re-establishes execution over the parked capsule — the frozen current step
 //     re-dispatches in place as a fresh derivation. It must never answer
 //     the pause copy again (nothing here was ever paused).
@@ -303,10 +389,24 @@ func patchCleanPause(ctx *Context, wiID string, value bool) error {
 //     unmapped-project copy), never "reattaches at next start".
 // ---------------------------------------------------------------------------
 
+// daemonExecutionDisabled reads the addressed Cell's execution_disabled
+// reason from GET /status ("" = open, or the status is unreadable).
+func daemonExecutionDisabled(ctx *Context) string {
+	raw, err := ctx.daemon().Status()
+	if err != nil {
+		return ""
+	}
+	var st StatusResponse
+	if json.Unmarshal(raw, &st) != nil {
+		return ""
+	}
+	return st.ExecutionDisabled
+}
+
 var cmdResume = &Command{
 	Name:    "resume",
 	Group:   GroupExec,
-	Summary: "Continue a paused WI (clean_pause=false) or a blocked one (reporter, maintainer or admin); abandon with pf cancel",
+	Summary: "Continue a paused WI (clean_pause=false) or a blocked one (reporter, maintainer, admin, or the holding machine's operator as a writer); abandon with pf cancel",
 	Usage:   "pf resume <id> [--accept-lost-work]",
 	Setup: func(fs *flag.FlagSet) {
 		fs.Bool("accept-lost-work", false, "blocked WI only: accept losing the work the sealing machine never pushed, so any machine continues from aihub's chain (clears the blocked seal; recorded as a blocked_seal_abandoned event)")
@@ -315,7 +415,7 @@ var cmdResume = &Command{
 		if len(args) != 1 {
 			return fmt.Errorf("resume: expected exactly one work item id")
 		}
-		if _, err := submitPrecheck(ctx, args[0]); err != nil {
+		if _, _, err := submitPrecheck(ctx, args[0]); err != nil {
 			return err
 		}
 		wi, err := ctx.aihub().GetWorkItem(args[0])
@@ -338,6 +438,17 @@ var cmdResume = &Command{
 		// end_pending (D2) is a distinct local state with no door of its own:
 		// the daemon retries its SessionEnd itself.
 		if wi.Status != api.StatusBlocked {
+			// An execution-disabled Cell refuses the resume before the hub
+			// flag is touched: its execution_disabled reason is read from
+			// GET /status (the same routing as the resume itself), so
+			// clean_pause stays set and the work item stays paused. An
+			// unreadable status (an unreachable socket) keeps the flow
+			// below; the disabled Cell's restart reconciliation keeps the
+			// record paused anyway.
+			if why := daemonExecutionDisabled(ctx); why != "" {
+				return &api.Error{Code: api.ErrDaemonConflict, Detail: "execution is disabled on this Cell: " + why +
+					"; nothing was changed — clean_pause stays set at the hub and " + name + " stays paused; run pf resume again once this Cell admits it"}
+			}
 			if err := patchCleanPause(ctx, args[0], false); err != nil {
 				return err
 			}
@@ -358,7 +469,7 @@ var cmdResume = &Command{
 					// typed envelope): the flag clear stands at the hub; the
 					// holder daemon picks the resume up at its next start.
 					fmt.Fprintf(ctx.Stdout, "resumed %s: clean_pause cleared; the daemon socket is unreachable (%v)\n", name, err)
-					fmt.Fprintln(ctx.Stdout, "(once the holder daemon starts, its restart reconciliation attaches the paused session; to continue without it use `pf ops end-session <id> --reason ...` then `pf submit <id>`)")
+					fmt.Fprintln(ctx.Stdout, "(once the holder daemon starts, its restart reconciliation attaches the paused session — unless its Cell's execution is disabled, which keeps it paused until pf resume is run again once the Cell admits it; to continue without it use `pf ops end-session <id> --reason ...` then `pf submit <id>`)")
 					return nil
 				}
 				// typed refusal — including the mid-flight block: a missing
@@ -390,48 +501,53 @@ var cmdResume = &Command{
 			})
 			return nil
 		}
-		// The authorization-bearing step runs with the HUMAN's own api key
-		// (data plane, like `pf cancel`): the hub's resume-blocked door
-		// checks reporter / project maintainer / admin against the caller,
-		// and the daemon's machine key is not that caller. Only then does
-		// the local daemon claim and start the WI.
-		door, err := ctx.aihub().ResumeBlockedWorkItemWith(args[0], api.ResumeBlockedRequest{AcceptLostWork: acceptLostWork})
-		if err != nil {
-			return err
-		}
-		if acceptLostWork {
-			// Judge the override by the hub's answer, not the earlier read:
-			// a hub that ignores accept_lost_work leaves the seal standing.
-			var after struct {
-				Attrs map[string]any `json:"attrs"`
-			}
-			_ = json.Unmarshal(door, &after)
-			if _, still := after.Attrs["blocked_seal"]; still {
-				return fmt.Errorf("resume: aihub did not clear the blocked seal of %s (the hub is too old for --accept-lost-work); the work item is queued again but a continue on another machine is still refused (DAEMON-518) — upgrade aihub, or continue on the sealing machine", name)
-			}
-			seal, _ := wi.Attrs["blocked_seal"].(map[string]any)
-			if head, _ := seal["head"].(string); head != "" {
-				fmt.Fprintf(ctx.Stderr, "accepted lost work on %s: the blocked seal (capsule head %s on machine %v) is cleared; the work it never pushed is abandoned\n", name, head, seal["machine"])
-			}
-		}
-		raw, err := ctx.daemon().ResumeBlocked(args[0])
-		if err != nil {
-			return err
-		}
-		var ans struct {
-			Deferred bool `json:"deferred"`
-		}
-		_ = json.Unmarshal(raw, &ans)
-		ctx.finish(raw, func() {
-			if ans.Deferred {
-				fmt.Fprintf(ctx.Stdout, "resumed %s: the hub is unreachable right now; the claim is queued in the daemon and will run when the hub is reachable (retried with backoff; watch it with `pf watch <id> --once`)\n", name)
-				return
-			}
-			fmt.Fprintf(ctx.Stdout, "resumed %s: the workflow was parked blocked (incomplete result) — the §6.4 owner move re-established execution over the parked capsule\n", name)
-			fmt.Fprintln(ctx.Stdout, "(the frozen current step re-dispatches in place as a fresh derivation; watch it with `pf watch <id> --once`)")
-		})
-		return nil
+		return resumeBlockedWorkItem(ctx, args[0], name, wi, acceptLostWork)
 	},
+}
+
+// resumeBlockedWorkItem is `pf resume` of a blocked work item (hub
+// status blocked). The authorization-bearing step runs with the HUMAN's own api key (data
+// plane, like `pf cancel`): the hub's resume-blocked door checks reporter /
+// project maintainer / admin against the caller, and the daemon's machine
+// key is not that caller. Only then does the local daemon claim and start
+// the WI.
+func resumeBlockedWorkItem(ctx *Context, wiID, name string, wi *api.WorkItem, acceptLostWork bool) error {
+	door, err := ctx.aihub().ResumeBlockedWorkItemWith(wiID, api.ResumeBlockedRequest{AcceptLostWork: acceptLostWork})
+	if err != nil {
+		return err
+	}
+	if acceptLostWork {
+		// Judge the override by the hub's answer, not the earlier read:
+		// a hub that ignores accept_lost_work leaves the seal standing.
+		var after struct {
+			Attrs map[string]any `json:"attrs"`
+		}
+		_ = json.Unmarshal(door, &after)
+		if _, still := after.Attrs["blocked_seal"]; still {
+			return fmt.Errorf("resume: aihub did not clear the blocked seal of %s (the hub is too old for --accept-lost-work); the work item is queued again but a continue on another machine is still refused (DAEMON-518) — upgrade aihub, or continue on the sealing machine", name)
+		}
+		seal, _ := wi.Attrs["blocked_seal"].(map[string]any)
+		if head, _ := seal["head"].(string); head != "" {
+			fmt.Fprintf(ctx.Stderr, "accepted lost work on %s: the blocked seal (capsule head %s on machine %v) is cleared; the work it never pushed is abandoned\n", name, head, seal["machine"])
+		}
+	}
+	raw, err := ctx.daemon().ResumeBlocked(wiID)
+	if err != nil {
+		return err
+	}
+	var ans struct {
+		Deferred bool `json:"deferred"`
+	}
+	_ = json.Unmarshal(raw, &ans)
+	ctx.finish(raw, func() {
+		if ans.Deferred {
+			fmt.Fprintf(ctx.Stdout, "resumed %s: the hub is unreachable right now; the claim is queued in the daemon and will run when the hub is reachable (retried with backoff; watch it with `pf watch <id> --once`)\n", name)
+			return
+		}
+		fmt.Fprintf(ctx.Stdout, "resumed %s: the workflow was parked blocked (incomplete result) — the §6.4 owner move re-established execution over the parked capsule\n", name)
+		fmt.Fprintln(ctx.Stdout, "(the frozen current step re-dispatches in place as a fresh derivation; watch it with `pf watch <id> --once`)")
+	})
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -541,17 +657,26 @@ var cmdOps = &Command{
 		"pf ops models           # read-only model+effort x step profile over the events-retention window; --json re-emits GET /models\n" +
 		"pf ops auto [on|off]    # off = only explicit pf submit; on = the daemon also pulls the ready queue itself (bare = show)\n" +
 		"pf ops max [N]          # max concurrent jobs on this machine, N >= 1; lasts until the daemon restarts, and a `pf config set`/`pf config reload` that changes [daemon] max_concurrent_jobs overrides it (last action wins); bare = show\n" +
+		"pf ops role [interactive|runner] [--force|--if-unset]  # the machine role the heartbeat negotiates: interactive (the operator's machine; --force takes it over from the machine holding it) or runner; --if-unset applies only while no operator chose a role on this Cell (the choice is kept across restarts) (the session-start adapters use it); bare = show; the Cell resolves like every Cell-scoped command (--profile, else PF_PROFILE, else the cwd's workspace, else default)\n" +
 		"pf ops shutdown         # graceful shutdown (quiesce); the restart loop ends with it — start again with `pf daemon ensure`\n" +
 		"pf ops end-session <wi> --reason <text>  # admin/maintainer: force-end a stuck holder's session (WI -> queued; then `pf submit <wi>` anywhere)",
 	Setup: func(fs *flag.FlagSet) {},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if len(args) == 0 {
-			return fmt.Errorf("ops: expected status|models|auto|max|shutdown|end-session")
+			return fmt.Errorf("ops: expected status|models|auto|max|role|shutdown|end-session")
 		}
 		if args[0] == "end-session" {
 			return opsEndSession(ctx, args[1:])
 		}
+		// ops is Host-scoped: status/max/auto address the Host aggregate
+		// unless an explicit --profile targets one Cell (PF_PROFILE and the
+		// cwd never change a Host command's scope); shutdown is always the
+		// whole Host and refuses a profile.
+		if args[0] == "shutdown" && ctx.FlagProfile != "" {
+			return fmt.Errorf("ops shutdown: shutdown is Host-level — it stops every Cell of the Host and takes no --profile (got %q); run `pf ops shutdown` alone", ctx.FlagProfile)
+		}
 		d := ctx.daemon()
+		d.Profile = ctx.FlagProfile
 		switch args[0] {
 		case "status":
 			raw, err := d.Status()
@@ -580,6 +705,10 @@ var cmdOps = &Command{
 			return opsAuto(ctx, d, args[1:])
 		case "max":
 			return opsMax(ctx, d, args[1:])
+		case "role":
+			// the machine role is a Cell's, resolved like every Cell-scoped
+			// command (not the Host aggregate the other ops address)
+			return opsRole(ctx, ctx.daemon(), args[1:])
 		case "shutdown":
 			raw, err := d.Shutdown()
 			if err != nil {
@@ -648,6 +777,75 @@ func opsMax(ctx *Context, d *DaemonClient, args []string) error {
 		return opsApply(ctx, d, OpsConfigRequest{Max: &n})
 	}
 	return fmt.Errorf("ops max: expected a single N")
+}
+
+// opsRole handles `pf ops role [interactive|runner] [--force]`
+// the machine-role move that used to ride `pf chat
+// init`. Cell-scoped: --profile, else PF_PROFILE, else the cwd's
+// workspace, else the default Cell (the resolver every Cell-scoped
+// command uses).
+func opsRole(ctx *Context, d *DaemonClient, args []string) error {
+	if d.Profile == "" {
+		d.Profile = cellcfg.DefaultProfile
+	}
+	force, ifUnset := false, false
+	var rest []string
+	for _, a := range args {
+		switch a {
+		case "--force":
+			force = true
+			continue
+		case "--if-unset":
+			ifUnset = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	if force && ifUnset {
+		return fmt.Errorf("ops role: --if-unset never takes the role over — drop --force or --if-unset")
+	}
+	if len(rest) == 0 {
+		switch {
+		case force:
+			return fmt.Errorf("ops role: --force needs a role (pf ops role interactive --force)")
+		case ifUnset:
+			return fmt.Errorf("ops role: --if-unset needs a role (pf ops role interactive --if-unset)")
+		}
+		return opsShow(ctx, d, func(s *StatusResponse) string {
+			role, _ := s.MachineFace["role"].(string)
+			if role == "" {
+				role = "unknown (the cross-machine face is not available)"
+			}
+			line := "role: " + role
+			if by, _ := s.MachineFace["superseded_by"].(string); by != "" {
+				line += " (superseded by " + by + ")"
+			}
+			return line
+		})
+	}
+	if len(rest) != 1 || (rest[0] != "interactive" && rest[0] != "runner") {
+		return fmt.Errorf("ops role: expected interactive|runner [--force]")
+	}
+	if force && rest[0] != "interactive" {
+		return fmt.Errorf("ops role: --force takes the interactive role over; it does not apply to runner")
+	}
+	raw, err := d.MachineRole(rest[0], force, ifUnset)
+	if err != nil {
+		return err
+	}
+	var ans struct {
+		Applied *bool `json:"applied"`
+	}
+	_ = json.Unmarshal(raw, &ans)
+	msg := fmt.Sprintf("role %s requested for Cell %s; the next heartbeat negotiates it\n", rest[0], d.Profile)
+	if ans.Applied != nil && !*ans.Applied {
+		msg = fmt.Sprintf("Cell %s keeps the role an operator chose; %s not requested (--if-unset)\n", d.Profile, rest[0])
+	}
+	if force {
+		msg = fmt.Sprintf("interactive role takeover requested for Cell %s; the next heartbeat supersedes the current holder\n", d.Profile)
+	}
+	ctx.finishLine(raw, "%s", msg)
+	return nil
 }
 
 func onOff(b bool) string {

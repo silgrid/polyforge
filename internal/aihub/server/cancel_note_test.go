@@ -1,10 +1,10 @@
 package server
 
-// cancel_note_test.go: the cancel door's optional body. dry_run answers
-// the reporter/maintainer/admin gate alone — on a RUNNING work item too
-// (the daemon probes a reserved cancel answer before its session ends) —
-// and writes nothing; an unauthorized caller is refused and the row is
-// untouched; a real cancel carries the verbatim reason and question.
+// cancel_note_test.go: the cancel door's optional body. An unauthorized
+// caller is refused and the row is untouched; a cancel carries the
+// verbatim reason and the owner message it rests on. (The dry_run probe a
+// daemon made before acting on a reserved `cancel` answer left with that
+// answer, workflow contract v2 change 19.)
 
 import (
 	"strings"
@@ -14,7 +14,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 )
 
-func TestCancelDryRunAndNote(t *testing.T) {
+func TestCancelNote(t *testing.T) {
 	e := newSrvEnv(t)
 	mk := func(name string) (string, string) {
 		u, err := e.admin.CreateUser(name, name+"@example.com", "writer", "human")
@@ -55,19 +55,12 @@ func TestCancelDryRunAndNote(t *testing.T) {
 		}
 		return got.Status
 	}
-	// an unauthorized caller is refused, dry run or not, and nothing moves
-	for _, body := range []map[string]any{{"dry_run": true}, {"reason": "cancel"}} {
-		if code, raw := e.do(t, "POST", "/api/v1/work-items/"+wi.ID+"/cancel", otherKey, body, nil); code != 403 {
-			t.Fatalf("plain member %v: %d %s", body, code, raw)
-		}
-	}
-	// the reporter's dry run is authorized on the running item and writes nothing
-	var probe map[string]any
-	if code, raw := e.do(t, "POST", "/api/v1/work-items/"+wi.ID+"/cancel", repKey, map[string]any{"dry_run": true, "reason": "cancel"}, &probe); code != 200 || probe["authorized"] != true {
-		t.Fatalf("reporter dry run: %d %s", code, raw)
+	// an unauthorized caller is refused, and nothing moves
+	if code, raw := e.do(t, "POST", "/api/v1/work-items/"+wi.ID+"/cancel", otherKey, map[string]any{"reason": "cancel"}, nil); code != 403 {
+		t.Fatalf("plain member: %d %s", code, raw)
 	}
 	if s := status(); s != api.StatusRunning {
-		t.Fatalf("a dry run writes nothing, status %q", s)
+		t.Fatalf("a refused cancel writes nothing, status %q", s)
 	}
 	if code, raw := e.do(t, "POST", "/api/v1/work-items/"+wi.ID+"/session-end", e.key,
 		map[string]string{"session_id": secret, "status": "blocked"}, nil); code != 200 {

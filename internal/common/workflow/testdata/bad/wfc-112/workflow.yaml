@@ -1,0 +1,6 @@
+contract: 5
+name: wfc-112
+description: fixture lane for WFC-112
+steps:
+  - id: work
+    gate: "yes"

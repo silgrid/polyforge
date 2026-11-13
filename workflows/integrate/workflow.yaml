@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=../_schema/workflow-5.schema.json
+contract: 5
+name: integrate
+description: The integration lane - one work item per batch. The develop lane merges every work item into the default branch itself and wraps it landed; this lane only gates what landed. Four agent steps, each running one pre-written command and routing on its exit code - collect pins each repo's default branch and takes the landed items those heads carry (it reads the project's pool through the step's hub; a hold nothing can release is put to the owner, whose word alone clears one), revert carries out the reverts the owner ruled under the merge lock, full-gate runs the release's full test gate once on the pinned heads - a pass tags the green head green/<YYYYMMDD>-<n> - and triages a red one down to one fix ticket per root cause (a revert the owner rules is gated again in the same batch), close moves every landed item a green tag covers to merged and registers the batch's record for the wrap. Started only by a person, with `pf file create --bundle integrate` and `pf submit`; the lane is exclusive, so aihub holds every project to one unfinished batch.
+max_rewinds: 3
+exclusive: true
+acceptance: none
+defaults:
+  model_candidates: [pi:example-claude/claude-opus-5, pi:example-gateway/model-a]
+  tiers: { cheap: [pi:example-gateway/model-cheap], mid: [pi:example-gateway/model-mid] }
+steps:
+  - id: collect
+    skill: collect
+    model_tier: mid
+    budget: { wall_minutes: 20, tool_minutes: 10 }
+    hub: { verbs: [get, list, batch, file], attrs: [integration] }
+  - id: revert
+    skill: revert
+    model_tier: cheap
+    budget: { tool_minutes: 20 }
+    resources: { locks: [merge] }
+    hub: { verbs: [get, batch], attrs: [integration] }
+  - id: full-gate
+    gate: true
+    on_fail: { target: revert }
+    skill: full-gate
+    budget: { wall_minutes: 150, tool_minutes: 90 }
+    resources: { admission: heavy }
+    hub: { verbs: [get, list, batch, file], attrs: [integration] }
+  - id: close
+    skill: close
+    model_tier: cheap
+    budget: { wall_minutes: 15, tool_minutes: 10 }
+    hub: { verbs: [get, list, batch], attrs: [integration] }
+    wrap_attrs: [integration_batch]

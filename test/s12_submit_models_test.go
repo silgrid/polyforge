@@ -26,10 +26,9 @@ func TestS12ManualModelsBeatYamlAndAdvanceOnModelFailure(t *testing.T) {
 
 	wi := w113NewWI(t, inst, "e2e", "s12 manual models",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "crash": "before", "crash_stderr": w079ProviderErr},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "crash": "before", "crash_stderr": w079ProviderErr},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		})
 	d.pfWant(inst, -1, "submit", wi, "--models", "pi:s12-m1, pi:s12-m2,pi:s12-m3")
 	capDir := w079Capsule(t, inst, ws, wi)
@@ -37,7 +36,7 @@ func TestS12ManualModelsBeatYamlAndAdvanceOnModelFailure(t *testing.T) {
 	w113WaitCompleted(t, capDir, 300*time.Second)
 	inst.waitWIStatus(t, wi, "wrapped", 90*time.Second)
 
-	for step, want := range map[string]string{"grill": "s12-m1", "verification": "s12-m1", "fix": "s12-m2"} {
+	for step, want := range map[string]string{"review": "s12-m1", "fix": "s12-m2"} {
 		if got := w079Model(t, capDir, step); got != want {
 			t.Fatalf("step %s model %q, want %q (manual list; fix advanced once on the provider failure)", step, got, want)
 		}
@@ -51,10 +50,10 @@ func TestS12ManualModelsBeatYamlAndAdvanceOnModelFailure(t *testing.T) {
 	}
 
 	// an ordinary submit of another WI is unaffected: the yaml chain governs.
-	wi2 := w113NewWI(t, inst, "e2e", "s12 plain submit keeps yaml", envelopeAutopilot())
+	wi2 := w113NewWI(t, inst, "e2e", "s12 plain submit keeps yaml", envelopeMicro())
 	cap2 := w079Run(t, d, inst, ws, wi2)
-	if got := w079Model(t, cap2, "grill"); got != "s12-yaml-def" {
-		t.Fatalf("plain submit grill model %q, want the yaml default", got)
+	if got := w079Model(t, cap2, "fix"); got != "s12-yaml-code" {
+		t.Fatalf("plain submit fix model %q, want the yaml step entry", got)
 	}
 }
 
@@ -64,7 +63,7 @@ func TestS12ManualModelsBadInputRefused(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
 	d := w079Setup(t, inst, w113WS{key: ws, projects: []string{"e2e"}})
-	wi := w113NewWI(t, inst, "e2e", "s12 bad models", envelopeAutopilot())
+	wi := w113NewWI(t, inst, "e2e", "s12 bad models", envelopeMicro())
 	for _, bad := range []string{"pi:a,,pi:b", "pi:a,pi:a", ",", "codex:a", "claude:"} {
 		out := d.pfWant(inst, 1, "submit", wi, "--models", bad)
 		if !strings.Contains(out, "--models") {
@@ -101,10 +100,9 @@ func TestS12ManualModelsSurviveDaemonRestart(t *testing.T) {
 		[]w113WS{{key: ws, projects: []string{"e2e"}}})
 	wi := w113NewWI(t, inst, "e2e", "s12 restart keeps manual models",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 8000},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 8000},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		})
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfg), w113DOptSock(sock), w113DOptDataDir(dataDir))
 	d.start()
@@ -122,7 +120,7 @@ func TestS12ManualModelsSurviveDaemonRestart(t *testing.T) {
 	w113WaitCompleted(t, capDir, 300*time.Second)
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		if got := w079Model(t, capDir, step); got != "s12-m1" {
 			t.Fatalf("step %s model %q after the restart, want the manual head s12-m1", step, got)
 		}
@@ -137,22 +135,21 @@ func TestS12ManualModelsSurviveReclaim(t *testing.T) {
 	inst := newV1Install(t)
 	wi := inst.newWI(t, "s12 reclaim keeps manual models",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed", "ms": 120000},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed", "ms": 120000},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	t.Cleanup(func() { killOrphans(wi) })
 
 	d := newV1Daemon(t, inst)
 	d.start()
 	d.pf(t, "submit", wi, "--models", "pi:s12-r1,pi:s12-r2")
-	waitStepStatus(t, d, wi, "verification", "in_progress", 90*time.Second)
+	waitStepStatus(t, d, wi, "review", "in_progress", 90*time.Second)
 	capA := d.capsuleDir(wi)
-	// The verification step_start (in_progress with its dispatch ordinal)
+	// The review step_start (in_progress with its dispatch ordinal)
 	// reaches the hub by its own push: crashing before it lands would make
 	// the re-claim re-derive that dispatch and replay its 120s action.
-	waitUntil(t, 60*time.Second, "the hub chain never carried capsule.json, the fix step done and the verification step_start", func() bool {
+	waitUntil(t, 60*time.Second, "the hub chain never carried capsule.json, the fix step done and the review step_start", func() bool {
 		if !inst.bareHasPath(t, wi, "capsule.json") || !inst.bareHasPath(t, wi, "runtime-state/execution.json") {
 			return false
 		}
@@ -160,7 +157,7 @@ func TestS12ManualModelsSurviveReclaim(t *testing.T) {
 		if json.Unmarshal([]byte(inst.bareFileAtMain(t, wi, "runtime-state/execution.json")), &x) != nil {
 			return false
 		}
-		fix, ver := x.Steps["fix"], x.Steps["verification"]
+		fix, ver := x.Steps["fix"], x.Steps["review"]
 		return fix != nil && fix.Status == "done" &&
 			ver != nil && ver.Status == "in_progress" && ver.Dispatch > 0
 	})
@@ -168,7 +165,7 @@ func TestS12ManualModelsSurviveReclaim(t *testing.T) {
 	if strings.Contains(inst.bareFileAtMain(t, wi, "capsule.json"), "manual_candidates") {
 		t.Fatal("the published capsule must not carry the manual list")
 	}
-	if raw, err := os.ReadFile(filepath.Join(d.dataDir, "manual-models.json")); err != nil || !strings.Contains(string(raw), "s12-r1") {
+	if raw, err := os.ReadFile(filepath.Join(d.dataDir, "cells", "default", "manual-models.json")); err != nil || !strings.Contains(string(raw), "s12-r1") {
 		t.Fatalf("the daemon-side manual record is missing: %v %s", err, raw)
 	}
 
@@ -182,7 +179,7 @@ func TestS12ManualModelsSurviveReclaim(t *testing.T) {
 	d2.pf(t, "resume", wi)
 	inst.waitWIStatus(t, wi, "wrapped", 180*time.Second)
 	capDir := d2.capsuleDir(wi)
-	for _, step := range []string{"verification"} {
+	for _, step := range []string{"review"} {
 		if got := w079Model(t, capDir, step); got != "s12-r1" {
 			t.Fatalf("step %s model %q after the re-claim, want the manual head s12-r1", step, got)
 		}

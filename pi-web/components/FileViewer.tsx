@@ -1,0 +1,2439 @@
+"use client";
+
+import { useEffect, useState, useRef, useCallback, useMemo, type CSSProperties, type MouseEvent } from "react";
+import {
+  PrismAsyncLight as SyntaxHighlighter,
+  createElement as renderSyntaxNode,
+  type SyntaxHighlighterProps,
+} from "react-syntax-highlighter";
+import { vs } from "react-syntax-highlighter/dist/cjs/styles/prism";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
+import { resolveHighlightLanguage } from "@/lib/prism-language";
+import { EDIT_MAX_BYTES } from "@/lib/file-types";
+import { FileEditorOverlay } from "./FileEditorOverlay";
+import ReactMarkdown from "react-markdown";
+import { useTheme } from "@/hooks/useTheme";
+import {
+  DOCX_PREVIEW_MAX_BYTES,
+  HTML_PREVIEW_MAX_BYTES,
+  getFileExt,
+  isAudioPath,
+  isDocumentPreviewPath,
+  isImagePath,
+  isVideoPath,
+} from "@/lib/file-types";
+import { encodeFilePathForApi, getFileDirectory, getFileName, getRelativeFilePath } from "@/lib/file-paths";
+import { fileVersion, fileVersionChanged } from "@/lib/file-version";
+import { injectSandboxedHtmlPolyfill } from "@/lib/html-sandbox-polyfill";
+import { HIDDEN_PAGE_GRACE_MS, usePageHiddenFor } from "@/hooks/usePageHidden";
+import { pageId, trackEventSource } from "@/lib/page-debug";
+import { parsePdfPageFragment, resolveLocalFileHref, shouldOpenLocalFileInApp } from "@/lib/file-links";
+import { parseFrontmatter } from "@/lib/frontmatter";
+import { isExternalMarkdownHref, jumpToMarkdownFragment, markdownAppUrlTransform, markdownPreviewRehypePlugins, markdownPreviewRemarkPlugins, markdownUrlTransform, normalizeDisplayMath } from "@/lib/markdown";
+import { CodeBlock, MermaidBlock } from "./MermaidBlock";
+import { SvgBlock } from "./SvgBlock";
+import { DelimitedTable } from "./DelimitedTable";
+import { isDelimitedTablePath } from "@/lib/delimited-table";
+import { FrontmatterCard } from "./FrontmatterCard";
+import { diffGapLabel, parseUnifiedPatch, unifiedDiffLines, type SplitDiffGap, type UnifiedDiffLine } from "@/lib/patch";
+import type { GitFileDiffResponse } from "@/lib/git-types";
+import { useI18n } from "@/hooks/useI18n";
+import {
+  buildSearchMatcher,
+  collectTextMatches,
+  paintSearchHighlights,
+  scrollRangeToCenter,
+} from "@/lib/tab-search";
+import type { FileSearchMatch } from "@/lib/file-search";
+import { TabSearchBar } from "./TabSearchBar";
+import {
+  resolveInitialFileDisplayMode,
+  resolveInitialWrapLines,
+  type FileViewerDisplayMode as DisplayMode,
+  type FileViewerState,
+} from "@/lib/file-viewer-state";
+
+export type { FileViewerState } from "@/lib/file-viewer-state";
+
+interface Props {
+  filePath: string;
+  cwd?: string;
+  sourceSessionId?: string | null;
+  onOpenFile?: (filePath: string, page?: number) => void;
+  onMentionLines?: (relativePath: string, startLine: number, endLine: number) => void;
+  /** Insert this file's relative path into the chat input (@ mention). */
+  onAtMention?: (relativePath: string, isDir: boolean) => void;
+  gitRefreshKey?: number;
+  initialDisplayMode?: DisplayMode;
+  /** PDF page to open on first render (`#page=N` from a markdown link). */
+  initialPage?: number;
+  initialState?: FileViewerState;
+  onStateChange?: (state: FileViewerState) => void;
+  watchEnabled?: boolean;
+}
+
+interface FileData {
+  content: string;
+  language: string;
+  size: number;
+  nextOffset: number;
+  truncated: boolean;
+  /** Anchors the edit mode's lost-update guard (pi#81). */
+  mtimeMs?: number;
+  // A NUL in the first bytes (lib/text-preview.ts): no text view, only the download.
+  binary?: boolean;
+}
+
+const SOURCE_HIGHLIGHT_MAX_LINES = 1_000;
+const DISPLAY_MODE_LABELS: Record<DisplayMode, string> = {
+  source: "Source",
+  preview: "Preview",
+  diff: "Diff",
+};
+
+const FILE_CODE_STYLE: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontWeight: "var(--font-mono-weight)",
+  fontSize: 13,
+  lineHeight: 1.6,
+};
+
+// Prism's light theme colors <pre> with backgroundColor, its dark theme with
+// the background shorthand. The source view sets backgroundColor itself and the
+// dark theme's shorthand is dropped, as CodeBlock does: a theme switch then never
+// makes React remove one beside the other (it warned, and the view lost its
+// background).
+const fileViewerDarkTheme = {
+  ...vscDarkPlus,
+  'pre[class*="language-"]': {
+    ...vscDarkPlus['pre[class*="language-"]'],
+  },
+};
+delete fileViewerDarkTheme['pre[class*="language-"]'].background;
+
+// `lineHeight` is FILE_CODE_STYLE's 13px * 1.6, so both columns share one line
+// box; a code-font change must move it with fontSize.
+const FILE_LINE_NUMBER_STYLE: CSSProperties = {
+  width: 48,
+  minWidth: 48,
+  padding: "0 10px",
+  textAlign: "right",
+  color: "var(--text-dim)",
+  background: "var(--bg-panel)",
+  borderRight: "1px solid var(--border)",
+  fontFamily: "var(--font-mono)",
+  fontWeight: "var(--font-mono-weight)",
+  fontSize: 11,
+  fontStyle: "normal",
+  fontVariantNumeric: "tabular-nums",
+  lineHeight: "20.8px",
+  userSelect: "none",
+  flexShrink: 0,
+  verticalAlign: "top",
+};
+
+// The gutter stays put while a wide line scrolls sideways: `position: sticky`
+// against the viewer's own scrolling box (`.file-viewer-content`; the
+// highlighted <pre> sets `overflow: visible`, so it is the nearest scroller in
+// every view). It has room to travel because every row spans the widest line
+// (the <pre> or wrapper is `width: max-content` and a row is `min-width:
+// 100%`), so no line's number scrolls away behind its text.
+// The browser repositions every sticky number on each scroll, vertical too, so
+// only views of at most SOURCE_HIGHLIGHT_MAX_LINES rows pin it: the highlighted
+// Source view and a diff that short. Pinned, a 24,000-line log in the plain
+// fallback scrolled with 50-67 ms frames; it and longer diffs keep the plain
+// gutter.
+const FILE_PINNED_LINE_NUMBER_STYLE: CSSProperties = {
+  ...FILE_LINE_NUMBER_STYLE,
+  position: "sticky",
+  left: 0,
+  zIndex: 1,
+};
+
+type SourceCodeRendererProps = Parameters<NonNullable<SyntaxHighlighterProps["renderer"]>>[0] & {
+  wrapLines: boolean;
+};
+
+interface SelectedLineRange {
+  startLine: number;
+  endLine: number;
+}
+
+function MentionIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" />
+    </svg>
+  );
+}
+
+function closestSourceLine(node: Node): HTMLElement | null {
+  const element = node.nodeType === Node.ELEMENT_NODE
+    ? node as Element
+    : node.parentElement;
+  return element?.closest<HTMLElement>(".file-source-line[data-line-number]") ?? null;
+}
+
+function getSelectedSourceLineRange(root: HTMLElement, selection: Selection | null): SelectedLineRange | null {
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
+
+  let startElement = closestSourceLine(range.startContainer);
+  let endElement = closestSourceLine(range.endContainer);
+  if (!startElement || !endElement || !root.contains(startElement) || !root.contains(endElement)) return null;
+
+  let startLine = Number(startElement.dataset.lineNumber);
+  let endLine = Number(endElement.dataset.lineNumber);
+  if (!Number.isInteger(startLine) || !Number.isInteger(endLine)) return null;
+
+  if (startLine < endLine) {
+    // Browser ranges can start at the end of the preceding line or end at the
+    // start of the following line. Exclude either boundary line when none of
+    // its source text is actually selected.
+    const startContent = startElement.querySelector<HTMLElement>(".file-source-line-content");
+    if (startContent?.contains(range.startContainer)) {
+      const selectedSuffix = document.createRange();
+      selectedSuffix.selectNodeContents(startContent);
+      selectedSuffix.setStart(range.startContainer, range.startOffset);
+      if (selectedSuffix.toString().length === 0) {
+        const nextLine = startElement.nextElementSibling;
+        if (nextLine instanceof HTMLElement && nextLine.matches(".file-source-line[data-line-number]")) {
+          startElement = nextLine;
+          startLine = Number(startElement.dataset.lineNumber);
+        }
+      }
+    }
+
+    const endContent = endElement.querySelector<HTMLElement>(".file-source-line-content");
+    if (endContent?.contains(range.endContainer)) {
+      const selectedPrefix = document.createRange();
+      selectedPrefix.selectNodeContents(endContent);
+      selectedPrefix.setEnd(range.endContainer, range.endOffset);
+      if (selectedPrefix.toString().length === 0) {
+        const previousLine = endElement.previousElementSibling;
+        if (previousLine instanceof HTMLElement && previousLine.matches(".file-source-line[data-line-number]")) {
+          endElement = previousLine;
+          endLine = Number(endElement.dataset.lineNumber);
+        }
+      }
+    }
+  }
+
+  if (startLine > endLine) return null;
+  return { startLine, endLine };
+}
+
+function SourceCodeRenderer({ rows, stylesheet, useInlineStyles, wrapLines }: SourceCodeRendererProps) {
+  return rows.map((row, lineIndex) => {
+    const children = row.children ?? [];
+    const firstChildClasses = children[0]?.properties?.className;
+    const hasLineNumber = Array.isArray(firstChildClasses)
+      && firstChildClasses.includes("react-syntax-highlighter-line-number");
+    const lineNumberNode = hasLineNumber ? children[0] : null;
+    const contentNodes = hasLineNumber ? children.slice(1) : children;
+
+    return (
+      <span
+        className="file-source-line"
+        data-line-number={lineIndex + 1}
+        key={`source-line-${lineIndex}`}
+        style={{ display: "flex", minWidth: "100%" }}
+      >
+        {lineNumberNode && renderSyntaxNode({
+          node: lineNumberNode,
+          stylesheet,
+          useInlineStyles,
+          key: `source-line-number-${lineIndex}`,
+        })}
+        <span
+          className="file-source-line-content"
+          style={{
+            flex: "1 1 auto",
+            minWidth: 0,
+            overflowWrap: wrapLines ? "anywhere" : "normal",
+            whiteSpace: wrapLines ? "pre-wrap" : "pre",
+          }}
+        >
+          {contentNodes.map((node, tokenIndex) => renderSyntaxNode({
+            node,
+            stylesheet,
+            useInlineStyles,
+            key: `source-token-${lineIndex}-${tokenIndex}`,
+          }))}
+        </span>
+      </span>
+    );
+  });
+}
+
+function getFileApiUrl(
+  filePath: string,
+  type: "read" | "download" | "meta" | "preview" | "watch" | "search" | "save",
+  sourceSessionId?: string | null,
+  params: Record<string, string | number | undefined> = {},
+): string {
+  const encoded = encodeFilePathForApi(filePath);
+  const searchParams = new URLSearchParams({ type });
+  if (sourceSessionId) searchParams.set("sessionId", sourceSessionId);
+  // A watch is a stream: the page that holds it, for the Debug panel's connected pages.
+  if (type === "watch") searchParams.set("holder", pageId());
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) searchParams.set(key, String(value));
+  }
+  return `/api/files/${encoded}?${searchParams.toString()}`;
+}
+
+function DownloadLink({ filePath, sourceSessionId }: { filePath: string; sourceSessionId?: string | null }) {
+  const { t } = useI18n();
+  return (
+    <a
+      href={getFileApiUrl(filePath, "download", sourceSessionId)}
+      download={getFileName(filePath)}
+      title={t("i18n.downloadFile")}
+      aria-label={t("i18n.downloadFile")}
+      className="file-viewer-icon-button"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="7 10 12 15 17 10" />
+        <line x1="12" y1="15" x2="12" y2="3" />
+      </svg>
+    </a>
+  );
+}
+
+// The same rows the tool card's split diff parses, in one column; see `unifiedDiffLines()`.
+type DiffLine = UnifiedDiffLine;
+
+// Unchanged lines the patch leaves out between two hunks.
+type DiffGap = SplitDiffGap;
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function diffLines(patch: string): Array<DiffLine | DiffGap> {
+  const files = parseUnifiedPatch(patch);
+  if (!files) return [];
+  return files.flatMap(unifiedDiffLines);
+}
+
+function DiffView({ patch, wrapLines }: { patch: string; wrapLines: boolean }) {
+  const { t } = useI18n();
+  const diff = diffLines(patch);
+
+  const isChange = (l: DiffLine | DiffGap) => l.type === "added" || l.type === "removed";
+  const hasChanges = diff.some(isChange);
+  if (!hasChanges) {
+    return (
+      <div style={{ padding: "12px 16px", fontSize: 12, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+        {t("i18n.noChanges")}
+      </div>
+    );
+  }
+
+  // Render with context: show 3 lines around each change, collapse the rest
+  const CONTEXT = 3;
+  const changed = new Set(diff.flatMap((l, i) => (isChange(l) ? [i] : [])));
+  const visible = new Set<number>();
+  for (const ci of changed) {
+    for (let j = Math.max(0, ci - CONTEXT); j <= Math.min(diff.length - 1, ci + CONTEXT); j++) {
+      visible.add(j);
+    }
+  }
+  const lineNumberStyle = visible.size <= SOURCE_HIGHLIGHT_MAX_LINES
+    ? FILE_PINNED_LINE_NUMBER_STYLE
+    : FILE_LINE_NUMBER_STYLE;
+
+  // Collapsed lines and the lines the patch leaves out between hunks share one
+  // marker; its count is unknown when a gap's is.
+  const isShown = (j: number) => diff[j].type !== "gap" && visible.has(j);
+  const segments: Array<{ hidden: true; count: number | null } | { hidden: false; lines: DiffLine[] }> = [];
+  let i = 0;
+  while (i < diff.length) {
+    if (isShown(i)) {
+      const block: DiffLine[] = [];
+      while (i < diff.length && isShown(i)) {
+        const line = diff[i];
+        if (line.type !== "gap") block.push(line);
+        i++;
+      }
+      segments.push({ hidden: false, lines: block });
+    } else {
+      let count: number | null = 0;
+      while (i < diff.length && !isShown(i)) {
+        const item = diff[i];
+        const skipped = item.type === "gap" ? item.count : 1;
+        count = count === null || skipped === null ? null : count + skipped;
+        i++;
+      }
+      segments.push({ hidden: true, count });
+    }
+  }
+
+  return (
+    <div
+      className="file-diff-view"
+      style={{
+        width: wrapLines ? "100%" : "max-content",
+        minWidth: "100%",
+        ...FILE_CODE_STYLE,
+      }}
+    >
+      {segments.map((seg, si) => {
+        if (seg.hidden) {
+          const result = (
+            <div
+              key={si}
+              style={{
+                padding: "2px 16px",
+                color: "var(--text-dim)",
+                background: "var(--bg-panel)",
+                fontSize: 11,
+                borderTop: "1px solid var(--border)",
+                borderBottom: "1px solid var(--border)",
+              }}
+            >
+              {seg.count === null ? "⋯" : `⋯ ${diffGapLabel(seg.count, t)}`}
+            </div>
+          );
+          return result;
+        }
+        const lines = seg.lines.map((line, li) => {
+          const bg =
+            line.type === "added"
+              ? "rgba(0,200,80,0.12)"
+              : line.type === "removed"
+              ? "rgba(240,60,60,0.14)"
+              : "transparent";
+          const prefix =
+            line.type === "added" ? "+" : line.type === "removed" ? "-" : " ";
+          const prefixColor =
+            line.type === "added" ? "#4ade80" : line.type === "removed" ? "#f87171" : "var(--text-dim)";
+
+          return (
+            <div
+              key={li}
+              className="file-diff-line"
+              style={{
+                display: "flex",
+                minWidth: "100%",
+                background: bg,
+                borderLeft: line.type === "added"
+                  ? "3px solid #4ade80"
+                  : line.type === "removed"
+                  ? "3px solid #f87171"
+                  : "3px solid transparent",
+              }}
+            >
+              <span
+                style={lineNumberStyle}
+              >
+                {line.type === "removed" ? line.oldLineNo : line.newLineNo}
+              </span>
+              <span
+                style={{
+                  minWidth: 16,
+                  padding: "0 6px",
+                  color: prefixColor,
+                  userSelect: "none",
+                  flexShrink: 0,
+                  fontWeight: 600,
+                }}
+              >
+                {prefix}
+              </span>
+              <span
+                className="file-diff-line-content"
+                style={{
+                  flexShrink: wrapLines ? 1 : 0,
+                  minWidth: 0,
+                  padding: "0 8px 0 0",
+                  whiteSpace: wrapLines ? "pre-wrap" : "pre",
+                  overflowWrap: wrapLines ? "anywhere" : "normal",
+                  color: "var(--text)",
+                }}
+              >
+                {line.text || "\u00a0"}
+              </span>
+            </div>
+          );
+        });
+        return <div key={si}>{lines}</div>;
+      })}
+    </div>
+  );
+}
+
+function ImageViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Props) {
+  const { t } = useI18n();
+  const [watching, setWatching] = useState(false);
+  const [bust, setBust] = useState(0);
+  const [size, setSize] = useState<number | null>(null);
+  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const esRef = useRef<EventSource | null>(null);
+  const syncRequestRef = useRef(0);
+  // The version on screen; a reconnect that finds it unchanged loads nothing.
+  const shownVersionRef = useRef<string | null>(null);
+
+  const ext = getFileName(filePath).toLowerCase().split(".").pop() ?? "";
+
+  useEffect(() => {
+    setBust(0);
+    setSize(null);
+    setNaturalSize(null);
+    setError(null);
+    setWatching(false);
+    shownVersionRef.current = null;
+  }, [filePath, sourceSessionId]);
+
+  useEffect(() => {
+    setWatching(false);
+
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+
+    if (!watchEnabled) return;
+
+    let active = true;
+    const synchronize = () => {
+      const requestId = ++syncRequestRef.current;
+      fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
+        .then((response) => response.json())
+        .then((next: { size?: number; mtime?: string; error?: string }) => {
+          if (!active || requestId !== syncRequestRef.current) return;
+          if (next.error) {
+            setError(next.error);
+            return;
+          }
+          if (typeof next.size === "number") setSize(next.size);
+          setError(null);
+          const version = fileVersion(next);
+          if (!fileVersionChanged(shownVersionRef.current, version)) return;
+          shownVersionRef.current = version;
+          setNaturalSize(null);
+          setBust((value) => value + 1);
+        })
+        .catch((nextError) => {
+          if (active && requestId === syncRequestRef.current) setError(String(nextError));
+        });
+    };
+
+    const es = trackEventSource("file-watch", new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId)), filePath);
+    esRef.current = es;
+
+    es.addEventListener("connected", () => {
+      setWatching(true);
+      synchronize();
+    });
+    es.addEventListener("change", (e) => {
+      syncRequestRef.current += 1;
+      shownVersionRef.current = null;
+      try {
+        const d = JSON.parse((e as MessageEvent).data) as { size?: number; mtime?: string };
+        shownVersionRef.current = fileVersion(d);
+        if (typeof d.size === "number") setSize(d.size);
+      } catch { /* ignore */ }
+      setNaturalSize(null);
+      setError(null);
+      setBust((b) => b + 1);
+    });
+    const markDisconnected = () => {
+      setWatching(false);
+    };
+    es.addEventListener("error", markDisconnected);
+    es.onerror = markDisconnected;
+
+    return () => {
+      active = false;
+      es.close();
+      if (esRef.current === es) esRef.current = null;
+    };
+  }, [filePath, sourceSessionId, watchEnabled]);
+
+  const src = getFileApiUrl(filePath, "read", sourceSessionId, bust ? { v: bust } : undefined);
+
+  const formatSizeStr = size != null ? formatSize(size) : null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "4px 16px",
+          borderBottom: "1px solid var(--border)",
+          fontSize: 11,
+          color: "var(--text-dim)",
+          background: "var(--bg)",
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontFamily: "var(--font-mono)" }} title={filePath}>
+          {getRelativeFilePath(filePath, cwd)}
+        </span>
+        <span style={{ marginLeft: "auto" }}>{ext || "image"}</span>
+        {naturalSize && <span>{naturalSize.w} × {naturalSize.h}</span>}
+        {formatSizeStr && <span>{formatSizeStr}</span>}
+        <span
+          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: watching ? "#4ade80" : "var(--border)",
+              display: "inline-block",
+              boxShadow: watching ? "0 0 4px #4ade80" : "none",
+            }}
+          />
+          {watching ? "live" : "static"}
+        </span>
+        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
+      </div>
+      <div
+        style={{
+          flex: 1,
+          overflow: "auto",
+          background: "var(--bg-panel)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 16,
+          backgroundImage:
+            "linear-gradient(45deg, var(--bg) 25%, transparent 25%), linear-gradient(-45deg, var(--bg) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, var(--bg) 75%), linear-gradient(-45deg, transparent 75%, var(--bg) 75%)",
+          backgroundSize: "16px 16px",
+          backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0px",
+        }}
+      >
+        {error ? (
+          <div style={{ color: "#f87171", fontSize: 13 }}>{error}</div>
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={filePath}
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+            }}
+            onError={() => setError(t("files.imageLoadFailed"))}
+            style={{
+              maxWidth: "100%",
+              maxHeight: "100%",
+              objectFit: "contain",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "";
+  const totalSeconds = Math.round(seconds);
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
+function AudioViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Props) {
+  const { t } = useI18n();
+  const [watching, setWatching] = useState(false);
+  const [bust, setBust] = useState(0);
+  const [size, setSize] = useState<number | null>(null);
+  const [duration, setDuration] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const esRef = useRef<EventSource | null>(null);
+  const syncRequestRef = useRef(0);
+  // The version on screen; a reconnect that finds it unchanged loads nothing.
+  const shownVersionRef = useRef<string | null>(null);
+
+  const ext = getFileName(filePath).toLowerCase().split(".").pop() ?? "";
+
+  useEffect(() => {
+    setBust(0);
+    setSize(null);
+    setDuration(null);
+    setError(null);
+    setWatching(false);
+    shownVersionRef.current = null;
+  }, [filePath, sourceSessionId]);
+
+  useEffect(() => {
+    setWatching(false);
+
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+
+    if (!watchEnabled) return;
+
+    let active = true;
+    const synchronize = () => {
+      const requestId = ++syncRequestRef.current;
+      fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
+        .then((response) => response.json())
+        .then((next: { size?: number; mtime?: string; error?: string }) => {
+          if (!active || requestId !== syncRequestRef.current) return;
+          if (next.error) {
+            setError(next.error);
+            return;
+          }
+          if (typeof next.size === "number") setSize(next.size);
+          setError(null);
+          const version = fileVersion(next);
+          if (!fileVersionChanged(shownVersionRef.current, version)) return;
+          shownVersionRef.current = version;
+          setDuration(null);
+          setBust((value) => value + 1);
+        })
+        .catch((nextError) => {
+          if (active && requestId === syncRequestRef.current) setError(String(nextError));
+        });
+    };
+
+    const es = trackEventSource("file-watch", new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId)), filePath);
+    esRef.current = es;
+
+    es.addEventListener("connected", () => {
+      setWatching(true);
+      synchronize();
+    });
+    es.addEventListener("change", (e) => {
+      syncRequestRef.current += 1;
+      shownVersionRef.current = null;
+      try {
+        const d = JSON.parse((e as MessageEvent).data) as { size?: number; mtime?: string };
+        shownVersionRef.current = fileVersion(d);
+        if (typeof d.size === "number") setSize(d.size);
+      } catch { /* ignore */ }
+      setDuration(null);
+      setError(null);
+      setBust((b) => b + 1);
+    });
+    const markDisconnected = () => {
+      setWatching(false);
+    };
+    es.addEventListener("error", markDisconnected);
+    es.onerror = markDisconnected;
+
+    return () => {
+      active = false;
+      es.close();
+      if (esRef.current === es) esRef.current = null;
+    };
+  }, [filePath, sourceSessionId, watchEnabled]);
+
+  const src = getFileApiUrl(filePath, "read", sourceSessionId, bust ? { v: bust } : undefined);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "4px 16px",
+          borderBottom: "1px solid var(--border)",
+          fontSize: 11,
+          color: "var(--text-dim)",
+          background: "var(--bg)",
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontFamily: "var(--font-mono)" }} title={filePath}>
+          {getRelativeFilePath(filePath, cwd)}
+        </span>
+        <span style={{ marginLeft: "auto" }}>{ext || "audio"}</span>
+        {duration != null && <span>{formatDuration(duration)}</span>}
+        {size != null && <span>{formatSize(size)}</span>}
+        <span
+          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: watching ? "#4ade80" : "var(--border)",
+              display: "inline-block",
+              boxShadow: watching ? "0 0 4px #4ade80" : "none",
+            }}
+          />
+          {watching ? "live" : "static"}
+        </span>
+        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
+      </div>
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+          background: "var(--bg-panel)",
+        }}
+      >
+        <div style={{ width: "min(680px, 100%)" }}>
+          {error && (
+            <div style={{ color: "#f87171", fontSize: 13, marginBottom: 12, textAlign: "center" }}>
+              {error}
+            </div>
+          )}
+          <audio
+            key={src}
+            controls
+            preload="metadata"
+            src={src}
+            onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+            onError={() => setError(t("files.audioLoadFailed"))}
+            style={{ width: "100%" }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VideoViewer({ filePath, cwd, sourceSessionId, watchEnabled = true }: Props) {
+  const { t } = useI18n();
+  const [watching, setWatching] = useState(false);
+  const [bust, setBust] = useState(0);
+  const [size, setSize] = useState<number | null>(null);
+  const [duration, setDuration] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const esRef = useRef<EventSource | null>(null);
+  const syncRequestRef = useRef(0);
+  // The version on screen; a reconnect that finds it unchanged loads nothing.
+  const shownVersionRef = useRef<string | null>(null);
+
+  const ext = getFileName(filePath).toLowerCase().split(".").pop() ?? "";
+
+  useEffect(() => {
+    setBust(0);
+    setSize(null);
+    setDuration(null);
+    setError(null);
+    setWatching(false);
+    shownVersionRef.current = null;
+  }, [filePath, sourceSessionId]);
+
+  useEffect(() => {
+    setWatching(false);
+
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+
+    if (!watchEnabled) return;
+
+    let active = true;
+    const synchronize = () => {
+      const requestId = ++syncRequestRef.current;
+      fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
+        .then((response) => response.json())
+        .then((next: { size?: number; mtime?: string; error?: string }) => {
+          if (!active || requestId !== syncRequestRef.current) return;
+          if (next.error) {
+            setError(next.error);
+            return;
+          }
+          if (typeof next.size === "number") setSize(next.size);
+          setError(null);
+          const version = fileVersion(next);
+          if (!fileVersionChanged(shownVersionRef.current, version)) return;
+          shownVersionRef.current = version;
+          setDuration(null);
+          setBust((value) => value + 1);
+        })
+        .catch((nextError) => {
+          if (active && requestId === syncRequestRef.current) setError(String(nextError));
+        });
+    };
+
+    const es = trackEventSource("file-watch", new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId)), filePath);
+    esRef.current = es;
+
+    es.addEventListener("connected", () => {
+      setWatching(true);
+      synchronize();
+    });
+    es.addEventListener("change", (e) => {
+      syncRequestRef.current += 1;
+      shownVersionRef.current = null;
+      try {
+        const d = JSON.parse((e as MessageEvent).data) as { size?: number; mtime?: string };
+        shownVersionRef.current = fileVersion(d);
+        if (typeof d.size === "number") setSize(d.size);
+      } catch { /* ignore */ }
+      setDuration(null);
+      setError(null);
+      setBust((b) => b + 1);
+    });
+    const markDisconnected = () => {
+      setWatching(false);
+    };
+    es.addEventListener("error", markDisconnected);
+    es.onerror = markDisconnected;
+
+    return () => {
+      active = false;
+      es.close();
+      if (esRef.current === es) esRef.current = null;
+    };
+  }, [filePath, sourceSessionId, watchEnabled]);
+
+  const src = getFileApiUrl(filePath, "read", sourceSessionId, bust ? { v: bust } : undefined);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "4px 16px",
+          borderBottom: "1px solid var(--border)",
+          fontSize: 11,
+          color: "var(--text-dim)",
+          background: "var(--bg)",
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontFamily: "var(--font-mono)" }} title={filePath}>
+          {getRelativeFilePath(filePath, cwd)}
+        </span>
+        <span style={{ marginLeft: "auto" }}>{ext || "video"}</span>
+        {duration != null && <span>{formatDuration(duration)}</span>}
+        {size != null && <span>{formatSize(size)}</span>}
+        <span
+          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: watching ? "#4ade80" : "var(--border)",
+              display: "inline-block",
+              boxShadow: watching ? "0 0 4px #4ade80" : "none",
+            }}
+          />
+          {watching ? "live" : "static"}
+        </span>
+        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
+      </div>
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+          background: "var(--bg-panel)",
+          minHeight: 0,
+        }}
+      >
+        <div style={{ width: "min(960px, 100%)", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 0 }}>
+          {error && (
+            <div style={{ color: "#f87171", fontSize: 13, marginBottom: 12, textAlign: "center" }}>
+              {error}
+            </div>
+          )}
+          <video
+            key={src}
+            controls
+            playsInline
+            preload="metadata"
+            src={src}
+            onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+            onError={() => setError(t("files.videoLoadFailed"))}
+            style={{ maxWidth: "100%", maxHeight: "100%" }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnabled = true }: Props) {
+  const { t } = useI18n();
+  const [watching, setWatching] = useState(false);
+  const [bust, setBust] = useState(0);
+  const [size, setSize] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const esRef = useRef<EventSource | null>(null);
+  const syncRequestRef = useRef(0);
+  // The version on screen; a reconnect that finds it unchanged loads nothing.
+  const shownVersionRef = useRef<string | null>(null);
+
+  const ext = getFileExt(filePath);
+  const isPdf = ext === "pdf";
+  const pageFragment = isPdf && initialPage && initialPage > 0 ? `#page=${initialPage}` : "";
+  const previewUrl = isPdf
+    ? `${getFileApiUrl(filePath, "read", sourceSessionId, bust ? { v: bust } : undefined)}${pageFragment}`
+    : getFileApiUrl(filePath, "preview", sourceSessionId, bust ? { v: bust } : undefined);
+
+  useEffect(() => {
+    setBust(0);
+    setSize(null);
+    setError(null);
+    setWatching(false);
+    shownVersionRef.current = null;
+
+    let active = true;
+    const requestId = ++syncRequestRef.current;
+    fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
+      .then((r) => r.json())
+      .then((d: { size?: number; error?: string }) => {
+        if (!active || requestId !== syncRequestRef.current) return;
+        if (d.error) setError(d.error);
+        if (typeof d.size === "number") {
+          setSize(d.size);
+          if (!isPdf && d.size > DOCX_PREVIEW_MAX_BYTES) {
+            setError("DOCX too large for preview (>10MB)");
+          }
+        }
+      })
+      .catch((nextError) => {
+        if (active && requestId === syncRequestRef.current) setError(String(nextError));
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [filePath, isPdf, sourceSessionId]);
+
+  useEffect(() => {
+    setWatching(false);
+
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+
+    if (!watchEnabled) return;
+
+    let active = true;
+    const synchronize = () => {
+      const requestId = ++syncRequestRef.current;
+      fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
+        .then((r) => r.json())
+        .then((d: { size?: number; mtime?: string; error?: string }) => {
+          if (!active || requestId !== syncRequestRef.current) return;
+          if (d.error) {
+            setError(d.error);
+            return;
+          }
+          if (typeof d.size === "number") {
+            setSize(d.size);
+            if (!isPdf && d.size > DOCX_PREVIEW_MAX_BYTES) {
+              setError("DOCX too large for preview (>10MB)");
+              return;
+            }
+          }
+          setError(null);
+          const version = fileVersion(d);
+          if (!fileVersionChanged(shownVersionRef.current, version)) return;
+          shownVersionRef.current = version;
+          setBust((value) => value + 1);
+        })
+        .catch((nextError) => {
+          if (active && requestId === syncRequestRef.current) setError(String(nextError));
+        });
+    };
+
+    const es = trackEventSource("file-watch", new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId)), filePath);
+    esRef.current = es;
+
+    es.addEventListener("connected", () => {
+      setWatching(true);
+      synchronize();
+    });
+    es.addEventListener("change", (e) => {
+      syncRequestRef.current += 1;
+      shownVersionRef.current = null;
+      try {
+        const d = JSON.parse((e as MessageEvent).data) as { size?: number; mtime?: string };
+        shownVersionRef.current = fileVersion(d);
+        if (typeof d.size === "number") {
+          setSize(d.size);
+          if (!isPdf && d.size > DOCX_PREVIEW_MAX_BYTES) {
+            setError("DOCX too large for preview (>10MB)");
+            return;
+          }
+        }
+      } catch { /* ignore */ }
+      setError(null);
+      setBust((b) => b + 1);
+    });
+    const markDisconnected = () => {
+      setWatching(false);
+    };
+    es.addEventListener("error", markDisconnected);
+    es.onerror = markDisconnected;
+
+    return () => {
+      active = false;
+      es.close();
+      if (esRef.current === es) esRef.current = null;
+    };
+  }, [filePath, isPdf, sourceSessionId, watchEnabled]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "4px 16px",
+          borderBottom: "1px solid var(--border)",
+          fontSize: 11,
+          color: "var(--text-dim)",
+          background: "var(--bg)",
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={filePath}>
+          {getRelativeFilePath(filePath, cwd)}
+        </span>
+        <span style={{ marginLeft: "auto" }}>{ext === "docx" ? "docx preview" : "pdf"}</span>
+        {size != null && <span>{formatSize(size)}</span>}
+        <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
+        <span
+          title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)", flexShrink: 0 }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: watching ? "#4ade80" : "var(--border)",
+              display: "inline-block",
+              boxShadow: watching ? "0 0 4px #4ade80" : "none",
+            }}
+          />
+          {watching ? "live" : "static"}
+        </span>
+      </div>
+      <div style={{ flex: 1, minHeight: 0, background: "var(--bg-panel)" }}>
+        {error ? (
+          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, color: "#f87171", fontSize: 13, textAlign: "center" }}>
+            {error}
+          </div>
+        ) : (
+          <iframe
+            key={previewUrl}
+            src={previewUrl}
+            sandbox={isPdf ? undefined : "allow-same-origin"}
+            title={t("i18n.previewFile", { file: getFileName(filePath) })}
+            style={{ width: "100%", height: "100%", border: "none", background: isPdf ? "var(--bg)" : "#eef1f5" }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function FileViewer({
+  filePath,
+  cwd,
+  sourceSessionId,
+  onOpenFile,
+  onMentionLines,
+  onAtMention,
+  gitRefreshKey,
+  initialDisplayMode,
+  initialState,
+  initialPage,
+  onStateChange,
+  watchEnabled: watchRequested = true,
+}: Props) {
+  // A page hidden past the grace lets go of its file watch (#1283: one browser
+  // connection each); the watch's `connected` on return re-reads the file if it
+  // changed meanwhile.
+  const pageHidden = usePageHiddenFor(HIDDEN_PAGE_GRACE_MS);
+  const watchEnabled = watchRequested && !pageHidden;
+  if (isImagePath(filePath)) {
+    return <ImageViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} watchEnabled={watchEnabled} />;
+  }
+  if (isAudioPath(filePath)) {
+    return <AudioViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} watchEnabled={watchEnabled} />;
+  }
+  if (isVideoPath(filePath)) {
+    return <VideoViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} watchEnabled={watchEnabled} />;
+  }
+  if (isDocumentPreviewPath(filePath)) {
+    return <DocumentViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} initialPage={initialPage} watchEnabled={watchEnabled} />;
+  }
+  return (
+    <TextFileViewer
+      filePath={filePath}
+      cwd={cwd}
+      sourceSessionId={sourceSessionId}
+      onOpenFile={onOpenFile}
+      onMentionLines={onMentionLines}
+      onAtMention={onAtMention}
+      gitRefreshKey={gitRefreshKey}
+      initialDisplayMode={initialDisplayMode}
+      initialState={initialState}
+      onStateChange={onStateChange}
+      watchEnabled={watchEnabled}
+    />
+  );
+}
+
+function TextFileViewer({
+  filePath,
+  cwd,
+  sourceSessionId,
+  onOpenFile,
+  onMentionLines,
+  onAtMention,
+  gitRefreshKey,
+  initialDisplayMode,
+  initialState,
+  onStateChange,
+  watchEnabled = true,
+}: Props) {
+  const { isDark } = useTheme();
+  const { t } = useI18n();
+  const [data, setData] = useState<FileData | null>(null);
+  const [binaryInfo, setBinaryInfo] = useState<{ name: string; size: number | null } | null>(null);
+  const [gitDiff, setGitDiff] = useState<GitFileDiffResponse | null>(null);
+  const [gitDiffLoading, setGitDiffLoading] = useState(false);
+  const [gitDiffResolved, setGitDiffResolved] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const requestedInitialDisplayMode = resolveInitialFileDisplayMode(initialState, initialDisplayMode);
+  const initialWrapLines = resolveInitialWrapLines(initialState, filePath);
+  const initialScrollTop = initialState?.scrollTop ?? 0;
+  const initialScrollLeft = initialState?.scrollLeft ?? 0;
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(requestedInitialDisplayMode);
+  const [wrapLines, setWrapLines] = useState(initialWrapLines);
+  const [watching, setWatching] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
+  const contentRequestRef = useRef(0);
+  // The version of the content on screen; a reconnect that finds it unchanged
+  // keeps what is loaded (Load more chunks, scroll, highlighting).
+  const shownVersionRef = useRef<string | null>(null);
+  const gitDiffRequestRef = useRef(0);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const autoDiffAppliedRef = useRef(false);
+  const defaultPreviewEligibleRef = useRef(
+    initialState === undefined && initialDisplayMode === undefined,
+  );
+  const scrollRestorePendingRef = useRef(true);
+  const viewerStateRef = useRef<FileViewerState>({
+    displayMode: requestedInitialDisplayMode,
+    wrapLines: initialWrapLines,
+    scrollTop: initialScrollTop,
+    scrollLeft: initialScrollLeft,
+  });
+  const onStateChangeRef = useRef(onStateChange);
+  const [selectedLineRange, setSelectedLineRange] = useState<SelectedLineRange | null>(null);
+  // Whole file for an HTML preview whose source view is still chunked.
+  const [htmlFull, setHtmlFull] = useState<{ text?: string; error?: string } | null>(null);
+
+  onStateChangeRef.current = onStateChange;
+
+  const updateDisplayMode = useCallback((nextDisplayMode: DisplayMode) => {
+    viewerStateRef.current.displayMode = nextDisplayMode;
+    setDisplayMode(nextDisplayMode);
+  }, []);
+
+  const toggleWrapLines = useCallback(() => {
+    setWrapLines((current) => {
+      const next = !current;
+      viewerStateRef.current.wrapLines = next;
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    const nextState: FileViewerState = {
+      displayMode: requestedInitialDisplayMode,
+      wrapLines: initialWrapLines,
+      scrollTop: initialScrollTop,
+      scrollLeft: initialScrollLeft,
+    };
+
+    viewerStateRef.current = nextState;
+    scrollRestorePendingRef.current = true;
+    autoDiffAppliedRef.current = false;
+    setDisplayMode(requestedInitialDisplayMode);
+    setWrapLines(initialWrapLines);
+
+    return () => {
+      onStateChangeRef.current?.({ ...viewerStateRef.current });
+    };
+  }, [
+    filePath,
+    sourceSessionId,
+    requestedInitialDisplayMode,
+    initialWrapLines,
+    initialScrollTop,
+    initialScrollLeft,
+  ]);
+
+  const fetchContent = useCallback((filePath: string, offset = 0) => {
+    const requestId = ++contentRequestRef.current;
+    return fetch(getFileApiUrl(filePath, "read", sourceSessionId, { offset: offset || undefined }))
+      .then(async (r): Promise<{ binary: { error: "binaryFile"; name: string; size: number } } | { data: FileData & { error?: string } }> => {
+        if (r.status === 415) {
+          // Unrecognized-type binary (server NUL sniff, pi#75): the typed body
+          // carries the download pointer for the panel instead of mojibake text.
+          const binary = await r.json() as { error: "binaryFile"; name: string; size: number };
+          return { binary };
+        }
+        return { data: await r.json() as FileData & { error?: string } };
+      })
+      .then((parsed) => {
+        if (requestId !== contentRequestRef.current) return null;
+        if ("binary" in parsed) {
+          setError(null);
+          setBinaryInfo({ name: parsed.binary.name, size: parsed.binary.size });
+          return null;
+        }
+        const d = parsed.data;
+        if (d.error) {
+          setBinaryInfo(null);
+          setError(d.error);
+          return null;
+        }
+        shownVersionRef.current = fileVersion(d);
+        setError(null);
+        setBinaryInfo(null);
+        setData((current) => offset && current
+          ? { ...d, content: current.content + d.content }
+          : d);
+        return d;
+      })
+      .catch((e) => {
+        if (requestId !== contentRequestRef.current) return null;
+        setError(String(e));
+        return null;
+      });
+  }, [sourceSessionId]);
+
+  const fetchGitDiff = useCallback(async (targetPath: string) => {
+    const requestId = ++gitDiffRequestRef.current;
+    setGitDiffLoading(true);
+    if (!cwd) {
+      setGitDiff(null);
+      setGitDiffLoading(false);
+      setGitDiffResolved(true);
+      return;
+    }
+
+    try {
+      const params = new URLSearchParams({ cwd, path: targetPath });
+      const response = await fetch(`/api/git/diff?${params.toString()}`);
+      const next = await response.json() as GitFileDiffResponse & { error?: string };
+      if (requestId !== gitDiffRequestRef.current) return;
+      setGitDiff(response.ok && next.supported && typeof next.patch === "string" ? next : null);
+    } catch {
+      if (requestId === gitDiffRequestRef.current) setGitDiff(null);
+    } finally {
+      if (requestId === gitDiffRequestRef.current) {
+        setGitDiffLoading(false);
+        setGitDiffResolved(true);
+      }
+    }
+  }, [cwd]);
+
+  // Reset and load the file itself when its identity changes. Live watching is
+  // managed separately so pausing it never clears the displayed content.
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+    setBinaryInfo(null);
+    setData(null);
+    setGitDiff(null);
+    setGitDiffResolved(false);
+    setWatching(false);
+    shownVersionRef.current = null;
+
+    fetchContent(filePath).finally(() => {
+      if (active) setLoading(false);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [filePath, fetchContent, sourceSessionId]);
+
+  useEffect(() => {
+    setWatching(false);
+
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+
+    if (!watchEnabled) return;
+
+    let active = true;
+    const synchronize = () => {
+      void fetchContent(filePath);
+      void fetchGitDiff(filePath);
+    };
+
+    const es = trackEventSource("file-watch", new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId)), filePath);
+    esRef.current = es;
+
+    es.addEventListener("connected", () => {
+      setWatching(true);
+      // The server emits connected only after its watcher exists. Reading now
+      // closes the gap between the last snapshot and live events, unless the
+      // file on screen is still the one on disk (a reconnect). The diff is read
+      // again either way: a commit made meanwhile changes it, not the file.
+      const shown = shownVersionRef.current;
+      if (shown === null) {
+        synchronize();
+        return;
+      }
+      fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
+        .then((response) => response.json())
+        .then((meta: { size?: number; mtime?: string }) => {
+          if (!active) return;
+          if (fileVersionChanged(shownVersionRef.current, fileVersion(meta))) synchronize();
+          else void fetchGitDiff(filePath);
+        })
+        .catch(() => {
+          if (active) synchronize();
+        });
+    });
+
+    es.addEventListener("change", synchronize);
+
+    const markDisconnected = () => {
+      setWatching(false);
+    };
+    es.addEventListener("error", markDisconnected);
+    es.onerror = markDisconnected;
+
+    return () => {
+      active = false;
+      es.close();
+      if (esRef.current === es) esRef.current = null;
+    };
+  }, [filePath, fetchContent, fetchGitDiff, sourceSessionId, watchEnabled]);
+
+  useEffect(() => {
+    void fetchGitDiff(filePath);
+  }, [fetchGitDiff, filePath, gitRefreshKey]);
+
+  const isBinary = data?.binary === true;
+  const isDelimitedTable = !isBinary && isDelimitedTablePath(filePath);
+
+  useEffect(() => {
+    // HTML gets the same rendered-first treatment as markdown: a generated page
+    // is usually more useful viewed than read as source. Both have a preview
+    // mode already; the source tab stays one click away. A restored choice or
+    // explicit mode hint always wins over this default. A CSV/TSV file opens
+    // as its table, even while only its first chunk is loaded.
+    if (
+      defaultPreviewEligibleRef.current
+      && data
+      && !data.binary
+      && (
+        isDelimitedTable
+        || (data.language === "markdown" && !data.truncated)
+        || (data.language === "html" && (!data.truncated || data.size <= HTML_PREVIEW_MAX_BYTES))
+      )
+    ) {
+      defaultPreviewEligibleRef.current = false;
+      updateDisplayMode("preview");
+    }
+  }, [data, isDelimitedTable, updateDisplayMode]);
+
+  // Large HTML: the source view loads 256 KB chunks, but a half document cannot
+  // render, so the preview fetches the whole file once. A new `data` (watch
+  // change, reload) refetches it; the previous page stays up meanwhile, so a
+  // live change does not flash "Loading".
+  const needsHtmlFull = displayMode === "preview"
+    && data?.language === "html"
+    && data.truncated
+    && data.size <= HTML_PREVIEW_MAX_BYTES;
+  useEffect(() => {
+    if (!needsHtmlFull) {
+      setHtmlFull(null);
+      return;
+    }
+    const controller = new AbortController();
+    fetch(getFileApiUrl(filePath, "download", sourceSessionId), { signal: controller.signal })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        setHtmlFull({ text: await r.text() });
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setHtmlFull({ error: String(e) });
+      });
+    return () => controller.abort();
+  }, [needsHtmlFull, data, filePath, sourceSessionId]);
+
+  const hasGitDiff = gitDiff?.supported === true && typeof gitDiff.patch === "string";
+  const isDeletedDiff = hasGitDiff && gitDiff.status === "deleted";
+
+  useEffect(() => {
+    if (gitDiffResolved && !hasGitDiff && displayMode === "diff") updateDisplayMode("source");
+  }, [displayMode, gitDiffResolved, hasGitDiff, updateDisplayMode]);
+
+  // Wait for the git request before restoring diff mode so the unresolved
+  // placeholder cannot immediately demote it back to source.
+  useEffect(() => {
+    if (requestedInitialDisplayMode === "diff" && hasGitDiff && !autoDiffAppliedRef.current) {
+      autoDiffAppliedRef.current = true;
+      updateDisplayMode("diff");
+    }
+  }, [requestedInitialDisplayMode, hasGitDiff, updateDisplayMode]);
+
+  const markdownPreview = useMemo(
+    () => (data?.language === "markdown" ? normalizeDisplayMath(data.content) : ""),
+    [data],
+  );
+
+  const frontmatter = useMemo(
+    () => (data?.language === "markdown" ? parseFrontmatter(data.content) : null),
+    [data],
+  );
+
+  const viewerContent = data?.content ?? "";
+  const sourceLines = useMemo(() => viewerContent.split("\n"), [viewerContent]);
+
+  // Edit mode (pi#81): whole-file overwrite with a lost-update guard.
+  // Only fully-loaded text files within the owner-approved 512KB ceiling
+  // are editable; a truncated preview means only part of the file is in
+  // hand, so entering edit first loads the remaining chunks.
+  const [editMode, setEditMode] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState<
+    | { kind: "conflict"; currentMtimeMs: number; expectedMtimeMs: number }
+    | { kind: "error"; detail: string }
+    | { kind: "saved" }
+    | null
+  >(null);
+  const [confirmExit, setConfirmExit] = useState<null | { redirectTo?: DisplayMode }>(null);
+  const draftCacheRef = useRef(new Map<string, string>());
+  const editable =
+    !isDeletedDiff
+    && !binaryInfo
+    && Boolean(data)
+    && data!.size <= EDIT_MAX_BYTES
+    && (!data!.truncated || data!.size <= EDIT_MAX_BYTES);
+  const editDisabledReason = binaryInfo
+    ? t("fileEdit.binaryBlocked")
+    : data && data.size > EDIT_MAX_BYTES
+      ? t("fileEdit.tooLarge")
+      : null;
+  const dirty = editMode && draft !== viewerContent;
+
+  const enterEdit = useCallback(async () => {
+    if (!editable || !data) return;
+    setSaveState(null);
+    setConfirmExit(null);
+    // A truncated-but-small file: fetch the remaining chunks so the draft
+    // covers the WHOLE file before any save (edits always overwrite whole).
+    let current = data;
+    while (current.truncated && current.size <= EDIT_MAX_BYTES) {
+      const next = await fetchContent(filePath, current.nextOffset);
+      if (!next || !next.truncated || next.nextOffset === current.nextOffset) break;
+      current = next;
+    }
+    setDraft(draftCacheRef.current.get(filePath) ?? current.content);
+    setEditMode(true);
+  }, [editable, data, fetchContent, filePath]);
+
+  const saveDraft = useCallback(async () => {
+    if (!data || saving) return;
+    setSaving(true);
+    setSaveState(null);
+    try {
+      const response = await fetch(getFileApiUrl(filePath, "save", sourceSessionId), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: draft, expectedMtimeMs: data.mtimeMs ?? 0 }),
+      });
+      if (response.ok) {
+        const saved = (await response.json()) as { mtimeMs: number };
+        draftCacheRef.current.delete(filePath);
+        setData((current) => (
+          current ? { ...current, content: draft, truncated: false, nextOffset: current.size, mtimeMs: saved.mtimeMs } : current
+        ));
+        setEditMode(false);
+        setSaveState({ kind: "saved" });
+        setTimeout(() => setSaveState(null), 2000);
+        return;
+      }
+      const body = await response.json().catch(() => ({})) as { error?: string; currentMtimeMs?: number };
+      if (response.status === 409 && typeof body.currentMtimeMs === "number") {
+        // Never blind-overwrite: offer reload-or-stay only (owner-approved).
+        setSaveState({
+          kind: "conflict",
+          currentMtimeMs: body.currentMtimeMs,
+          expectedMtimeMs: data.mtimeMs ?? 0,
+        });
+      } else if (response.status === 413) {
+        setSaveState({ kind: "error", detail: t("fileEdit.tooLarge") });
+      } else if (response.status === 415) {
+        setSaveState({ kind: "error", detail: t("fileEdit.binaryBlocked") });
+      } else {
+        setSaveState({ kind: "error", detail: body.error ?? String(response.status) });
+      }
+    } catch (error) {
+      setSaveState({ kind: "error", detail: String(error) });
+    } finally {
+      setSaving(false);
+    }
+  }, [data, saving, filePath, sourceSessionId, draft, t]);
+
+  const exitEdit = useCallback((redirectTo?: DisplayMode) => {
+    if (dirty) {
+      setConfirmExit({ redirectTo });
+      return;
+    }
+    setEditMode(false);
+    setSaveState(null);
+    if (redirectTo) updateDisplayMode(redirectTo);
+  }, [dirty, updateDisplayMode]);
+
+  // Switching files parks the dirty draft per-path (no data loss) and
+  // leaves edit mode for the new file.
+  const lastFilePathRef = useRef(filePath);
+  useEffect(() => {
+    if (lastFilePathRef.current !== filePath) {
+      if (editMode && dirty) draftCacheRef.current.set(lastFilePathRef.current, draft);
+      setEditMode(false);
+      setConfirmExit(null);
+      setSaveState(null);
+      lastFilePathRef.current = filePath;
+    }
+  }, [filePath, editMode, dirty, draft]);
+
+  const language = data?.language ?? "text";
+  const isHtml = !isBinary && language === "html";
+  const isMarkdown = !isBinary && language === "markdown";
+  // A table shows a loaded prefix too, without its cut last record; an HTML
+  // preview fetches the whole file up to HTML_PREVIEW_MAX_BYTES.
+  const hasPreview = isDelimitedTable || (isHtml
+    ? !!data && (!data.truncated || data.size <= HTML_PREVIEW_MAX_BYTES)
+    : isMarkdown && !data?.truncated);
+  const effectiveDisplayMode = isDeletedDiff ? "diff" : displayMode;
+  const rawHtml = data?.truncated ? htmlFull?.text : viewerContent;
+  const htmlPreview = useMemo(
+    () => isHtml && effectiveDisplayMode === "preview" ? injectSandboxedHtmlPolyfill(rawHtml ?? "") : "",
+    [isHtml, effectiveDisplayMode, rawHtml],
+  );
+  // A partly loaded HTML file previews whole, so Load more belongs to its source view.
+  const showLoadMore = !!data?.truncated && !(isHtml && effectiveDisplayMode === "preview");
+  const useLightweightSource = sourceLines.length > SOURCE_HIGHLIGHT_MAX_LINES
+    && !(effectiveDisplayMode === "diff" && hasGitDiff)
+    && !(effectiveDisplayMode === "preview" && hasPreview);
+  // react-syntax-highlighter rebuilds every token element on each render, which
+  // costs hundreds of milliseconds on large files. Cache the rendered trees so
+  // unrelated re-renders (panel open/close, selection changes) reuse them as-is.
+  const highlightedSource = useMemo(
+    () => (
+      <SyntaxHighlighter
+        className={wrapLines ? "file-source-view is-wrapped" : "file-source-view"}
+        language={language === "text" ? "plaintext" : resolveHighlightLanguage(language)}
+        style={isDark ? fileViewerDarkTheme : vs}
+        showLineNumbers
+        lineNumberStyle={{
+          ...FILE_PINNED_LINE_NUMBER_STYLE,
+        }}
+        customStyle={{
+          margin: 0,
+          padding: 0,
+          border: 0,
+          backgroundColor: "var(--bg)",
+          ...FILE_CODE_STYLE,
+          width: wrapLines ? "100%" : "max-content",
+          minWidth: "100%",
+          minHeight: "100%",
+          overflow: "visible",
+        }}
+        codeTagProps={{
+          style: {
+            fontFamily: "var(--font-mono)",
+            fontWeight: "var(--font-mono-weight)",
+            overflowWrap: wrapLines ? "anywhere" : "normal",
+          },
+        }}
+        renderer={(rendererProps) => (
+          <SourceCodeRenderer {...rendererProps} wrapLines={wrapLines} />
+        )}
+        wrapLongLines={wrapLines}
+      >
+        {viewerContent}
+      </SyntaxHighlighter>
+    ),
+    [isDark, language, viewerContent, wrapLines],
+  );
+  // In-file search (pi#80): local ranges over the loaded preview, plus a
+  // server pass over the file's unloaded tail ("search rest of file").
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchCase, setSearchCase] = useState(false);
+  const [searchRegex, setSearchRegex] = useState(false);
+  const [searchRanges, setSearchRanges] = useState<Range[]>([]);
+  const [searchIndex, setSearchIndex] = useState(-1);
+  const [restMatches, setRestMatches] = useState<FileSearchMatch[] | null>(null);
+  const [restTruncated, setRestTruncated] = useState(false);
+  const [searchingRest, setSearchingRest] = useState(false);
+  const searchMatcher = useMemo(
+    () => buildSearchMatcher(searchQuery, { caseSensitive: searchCase, regex: searchRegex }),
+    [searchQuery, searchCase, searchRegex],
+  );
+  useEffect(() => {
+    if (!searchOpen || !searchMatcher) {
+      setSearchRanges([]);
+      setSearchIndex(-1);
+      setRestMatches(null);
+      return;
+    }
+    const handle = setTimeout(() => {
+      const ranges = collectTextMatches(contentRef.current, searchMatcher);
+      setSearchRanges(ranges);
+      setSearchIndex(ranges.length > 0 ? 0 : -1);
+    }, 200);
+    return () => clearTimeout(handle);
+  }, [searchOpen, searchMatcher, viewerContent, effectiveDisplayMode, wrapLines]);
+  useEffect(() => {
+    if (!searchOpen) {
+      paintSearchHighlights([], null);
+      return;
+    }
+    const current = searchIndex >= 0 && searchIndex < searchRanges.length ? searchRanges[searchIndex] : null;
+    paintSearchHighlights(searchRanges, current);
+    if (current) scrollRangeToCenter(current, contentRef.current);
+  }, [searchOpen, searchRanges, searchIndex]);
+  useEffect(() => () => paintSearchHighlights([], null), []);
+  const searchRestOfFile = useCallback(() => {
+    if (!data?.truncated || !searchQuery.trim()) return;
+    setSearchingRest(true);
+    const params: Record<string, string | undefined> = { q: searchQuery.trim() };
+    if (data.nextOffset) params.offset = String(data.nextOffset);
+    if (searchCase) params.case = "1";
+    if (searchRegex) params.regex = "1";
+    fetch(getFileApiUrl(filePath, "search", sourceSessionId, params))
+      .then(async (response) => {
+        if (response.status === 415) return null; // binary: nothing further to search
+        if (!response.ok) throw new Error(String(response.status));
+        return (await response.json()) as { matches: FileSearchMatch[]; truncated: boolean };
+      })
+      .then((parsed) => {
+        setRestMatches(parsed?.matches ?? []);
+        setRestTruncated(Boolean(parsed?.truncated));
+      })
+      .catch(() => setRestMatches(null))
+      .finally(() => setSearchingRest(false));
+  }, [data, searchQuery, searchCase, searchRegex, filePath, sourceSessionId]);
+
+  const lightweightSourceLines = useMemo(
+    () => useLightweightSource ? sourceLines.map((line, lineIndex) => (
+      <span
+        className="file-source-line"
+        data-line-number={lineIndex + 1}
+        key={`source-line-${lineIndex}`}
+        style={{ display: "flex", minWidth: "100%" }}
+      >
+        <span aria-hidden="true" style={FILE_LINE_NUMBER_STYLE}>
+          {lineIndex + 1}
+        </span>
+        <span
+          className="file-source-line-content"
+          style={{
+            flex: "1 1 auto",
+            minWidth: 0,
+            overflowWrap: wrapLines ? "anywhere" : "normal",
+            whiteSpace: wrapLines ? "pre-wrap" : "pre",
+          }}
+        >
+          {line}
+        </span>
+      </span>
+    )) : null,
+    [sourceLines, useLightweightSource, wrapLines],
+  );
+
+  useEffect(() => {
+    const updateSelectedLineRange = () => {
+      const root = contentRef.current;
+      setSelectedLineRange((current) => {
+        const next = onMentionLines && displayMode === "source" && root
+          ? getSelectedSourceLineRange(root, window.getSelection())
+          : null;
+        // Skip no-op updates: selectionchange fires continuously while dragging,
+        // and a fresh-but-equal range object would re-render the whole viewer.
+        if (current === null && next === null) return current;
+        if (current && next && current.startLine === next.startLine && current.endLine === next.endLine) return current;
+        return next;
+      });
+    };
+
+    updateSelectedLineRange();
+    if (!onMentionLines || displayMode !== "source") return;
+
+    document.addEventListener("selectionchange", updateSelectedLineRange);
+    return () => document.removeEventListener("selectionchange", updateSelectedLineRange);
+  }, [data?.content, displayMode, onMentionLines]);
+
+  const mentionLineRange = useCallback((lineRange: SelectedLineRange | null) => {
+    if (!onMentionLines || !lineRange) return;
+    onMentionLines(
+      getRelativeFilePath(filePath, cwd),
+      lineRange.startLine,
+      lineRange.endLine,
+    );
+  }, [cwd, filePath, onMentionLines]);
+
+  useEffect(() => {
+    if (!onMentionLines || displayMode !== "source") return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.key.toLowerCase() !== "i" || (!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return;
+
+      const target = event.target;
+      if (target instanceof Element && target.closest("input, textarea, [contenteditable='true']")) return;
+
+      const root = contentRef.current;
+      const lineRange = root ? getSelectedSourceLineRange(root, window.getSelection()) : null;
+      if (!lineRange) return;
+
+      event.preventDefault();
+      mentionLineRange(lineRange);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [displayMode, mentionLineRange, onMentionLines]);
+
+  useEffect(() => {
+    if (!scrollRestorePendingRef.current || loading) return;
+    if (error && !isDeletedDiff) return;
+    if (requestedInitialDisplayMode === "diff" && !gitDiffResolved) return;
+    if (requestedInitialDisplayMode === "diff" && hasGitDiff && displayMode !== "diff") return;
+
+    const content = contentRef.current;
+    if (!content) return;
+
+    content.scrollTop = viewerStateRef.current.scrollTop;
+    content.scrollLeft = viewerStateRef.current.scrollLeft;
+    scrollRestorePendingRef.current = false;
+  }, [
+    data?.content,
+    displayMode,
+    error,
+    gitDiffResolved,
+    hasGitDiff,
+    isDeletedDiff,
+    loading,
+    requestedInitialDisplayMode,
+  ]);
+
+  if (loading || (requestedInitialDisplayMode === "diff" && gitDiffLoading && !data)) {
+    return (
+      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 13 }}>
+        {t("i18n.loading")}
+      </div>
+    );
+  }
+
+  if (error && !isDeletedDiff) {
+    return (
+      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#f87171", fontSize: 13 }}>
+        {error}
+      </div>
+    );
+  }
+
+  if (binaryInfo) {
+    return (
+      <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "var(--text-muted)", fontSize: 13, padding: 16, textAlign: "center" }}>
+        <div style={{ fontSize: 15, color: "var(--text)" }}>{t("files.binaryFileTitle")}</div>
+        <div>{t("files.binaryFileHint")}</div>
+        {binaryInfo.size != null && (
+          <div style={{ fontSize: 11 }}>{formatSize(binaryInfo.size)}</div>
+        )}
+        <a
+          href={getFileApiUrl(filePath, "download", sourceSessionId)}
+          download={getFileName(filePath)}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 14px",
+            marginTop: 4,
+            fontSize: 12,
+            color: "var(--text)",
+            background: "var(--bg-hover)",
+            border: "1px solid var(--border)",
+            borderRadius: 7,
+            cursor: "pointer",
+            textDecoration: "none",
+          }}
+        >
+          {t("i18n.downloadFile")}
+        </a>
+      </div>
+    );
+  }
+
+  if (!data && !isDeletedDiff) return null;
+
+  const content = viewerContent;
+  const markdownDirectory = getFileDirectory(filePath);
+  const lines = sourceLines;
+  const displayModes: DisplayMode[] = isDeletedDiff
+    ? ["diff"]
+    : [
+        "source",
+        ...(hasPreview ? ["preview" as const] : []),
+        ...(hasGitDiff ? ["diff" as const] : []),
+      ];
+  const metadata = isDeletedDiff
+    ? t("files.deleted")
+    : isBinary
+      ? `${t("files.binary")} · ${formatSize(data!.size)}`
+      : `${language} · ${lines.length} lines · ${formatSize(data!.size)}`;
+
+  return (
+    <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", position: "relative" }}>
+      <div
+        className="file-viewer-toolbar"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "5px 12px",
+          borderBottom: "1px solid var(--border)",
+          fontSize: 11,
+          color: "var(--text-dim)",
+          background: "var(--bg)",
+          flexShrink: 0,
+        }}
+      >
+        <span
+          className="file-viewer-path"
+          style={{ fontFamily: "var(--font-mono)", color: dirty ? "var(--accent)" : undefined }}
+          title={dirty ? t("fileEdit.unsaved") : filePath}
+        >
+          {dirty ? "● " : ""}{getRelativeFilePath(filePath, cwd)}
+        </span>
+
+        <span className="file-viewer-meta" title={metadata}>{metadata}</span>
+        {!isDeletedDiff && (
+          <span
+            title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+            aria-label={watching ? t("i18n.liveSync") : t("i18n.notWatching")}
+            className="file-viewer-live-indicator"
+            style={{
+              background: watching ? "#4ade80" : "var(--border)",
+              boxShadow: watching ? "0 0 4px #4ade80" : "none",
+            }}
+          />
+        )}
+
+        <div className="file-viewer-controls">
+          {displayModes.length > 1 && (
+            <div className="file-viewer-mode-switch" aria-label={t("i18n.fileViewMode")}>
+              {displayModes.map((mode) => {
+                const active = effectiveDisplayMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => {
+                      // Dirty drafts confirm before any mode leaves the editor (pi#81).
+                      if (editMode && dirty) setConfirmExit({ redirectTo: mode });
+                      else updateDisplayMode(mode);
+                    }}
+                    title={mode === "diff" ? t("i18n.compareHead") : undefined}
+                    aria-pressed={active}
+                    className="file-viewer-mode-button"
+                    style={{
+                      background: active ? "var(--bg-selected)" : "transparent",
+                      color: active ? "var(--text)" : "var(--text-muted)",
+                    }}
+                  >
+                    {DISPLAY_MODE_LABELS[mode]}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="file-viewer-actions">
+            {(onAtMention || onMentionLines) && (
+              <button
+                type="button"
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  // Mention selected lines when a range is active (and line
+                  // mention is wired up); otherwise fall back to a whole-file
+                  // @mention. Same button, behavior follows the selection.
+                  if (selectedLineRange && onMentionLines) {
+                    mentionLineRange(selectedLineRange);
+                  } else {
+                    onAtMention?.(getRelativeFilePath(filePath, cwd), false);
+                  }
+                }}
+                title={
+                  selectedLineRange && onMentionLines
+                    ? `${t("i18n.mentionSelectedLines")} (L${selectedLineRange.startLine}${selectedLineRange.startLine !== selectedLineRange.endLine ? `-L${selectedLineRange.endLine}` : ""})`
+                    : t("files.insertPath")
+                }
+                aria-label={t("files.mention")}
+                disabled={!onAtMention && !onMentionLines}
+                className="file-viewer-icon-button"
+              >
+                <MentionIcon />
+              </button>
+            )}
+            {(effectiveDisplayMode === "source" || effectiveDisplayMode === "diff") && !isBinary && (
+              <>
+                {editable || editMode ? (
+                  <button
+                    type="button"
+                    onClick={() => (editMode ? exitEdit() : void enterEdit())}
+                    title={editMode ? t("fileEdit.exit") : editDisabledReason ?? t("fileEdit.edit")}
+                    aria-label={editMode ? t("fileEdit.exit") : t("fileEdit.edit")}
+                    aria-pressed={editMode}
+                    disabled={!editMode && !editable}
+                    className="file-viewer-icon-button"
+                    style={{
+                      background: editMode ? "var(--bg-selected)" : "transparent",
+                      color: editMode ? "var(--text)" : "var(--text-muted)",
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "block" }}>
+                      <path d="M12 20h9" />
+                      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                    </svg>
+                  </button>
+                ) : (
+                  <span
+                    title={editDisabledReason ?? t("fileEdit.edit")}
+                    aria-label={editDisabledReason ?? t("fileEdit.edit")}
+                    style={{ display: "inline-flex", width: 22, height: 22, alignItems: "center", justifyContent: "center", color: "var(--text-dim)", opacity: 0.5 }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "block" }}>
+                      <path d="M12 20h9" />
+                      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                    </svg>
+                  </span>
+                )}
+                {editMode && (
+                  <button
+                    type="button"
+                    onClick={() => void saveDraft()}
+                    disabled={saving || !dirty}
+                    title={t("fileEdit.saveButton")}
+                    aria-label={t("fileEdit.saveButton")}
+                    className="file-viewer-mode-button"
+                    style={{
+                      background: dirty ? "var(--accent)" : "transparent",
+                      color: dirty ? "#fff" : "var(--text-muted)",
+                      fontSize: 11,
+                    }}
+                  >
+                    {saving ? t("fileEdit.saving") : t("fileEdit.saveButton")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchOpen((open) => !open);
+                    if (searchOpen) paintSearchHighlights([], null);
+                  }}
+                  title={t("tabSearch.openButton")}
+                  aria-label={t("tabSearch.openButton")}
+                  aria-pressed={searchOpen}
+                  className="file-viewer-icon-button"
+                  style={{
+                    background: searchOpen ? "var(--bg-selected)" : "transparent",
+                    color: searchOpen ? "var(--text)" : "var(--text-muted)",
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ display: "block" }}>
+                    <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="2" />
+                    <path d="M16 16 L21 21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleWrapLines}
+                  title={wrapLines ? t("i18n.disableWrap") : t("i18n.enableWrap")}
+                  aria-label={wrapLines ? t("i18n.disableWrap") : t("i18n.enableWrap")}
+                  aria-pressed={wrapLines}
+                  className="file-viewer-icon-button"
+                  style={{
+                    background: wrapLines ? "var(--bg-selected)" : "transparent",
+                    color: wrapLines ? "var(--text)" : "var(--text-muted)",
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M3 6h18" />
+                    <path d="M3 12h15a3 3 0 1 1 0 6h-4" />
+                    <path d="m16 16-2 2 2 2" />
+                    <path d="M3 18h7" />
+                  </svg>
+                </button>
+              </>
+            )}
+          </div>
+
+          {!isDeletedDiff && <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />}
+        </div>
+      </div>
+
+      {searchOpen && (
+        <div style={{ position: "relative", padding: "2px 8px", borderBottom: "1px solid var(--border)" }}>
+          <TabSearchBar
+            value={searchQuery}
+            onChange={setSearchQuery}
+            caseSensitive={searchCase}
+            regexEnabled={searchRegex}
+            onToggleCase={() => setSearchCase((value) => !value)}
+            onToggleRegex={() => setSearchRegex((value) => !value)}
+            current={searchIndex >= 0 ? searchIndex + 1 : 0}
+            total={searchRanges.length + (restMatches?.length ?? 0)}
+            localCount={searchRanges.length}
+            earlierCount={0}
+            loadingEarlier={searchingRest}
+            hasEarlierHistory={false}
+            onPrevious={() => setSearchIndex((index) => Math.max(0, index - 1))}
+            onNext={() => setSearchIndex((index) => Math.min(index + 1, searchRanges.length - 1))}
+            onClose={() => {
+              setSearchOpen(false);
+              paintSearchHighlights([], null);
+            }}
+            extraAction={data?.truncated ? {
+              label: t("tabSearch.searchRestOfFile"),
+              onClick: searchRestOfFile,
+              busy: searchingRest,
+            } : undefined}
+          />
+          <style>{`
+            .file-viewer-shell .tab-search-bar { position: static; box-shadow: none; border: none; padding: 0; background: transparent; }
+            .file-viewer-shell .tab-search-earlier-note { display: none; }
+          `}</style>
+          {restMatches && (
+            <div className="file-search-rest" style={{ maxHeight: 180, overflow: "auto", fontSize: 11, color: "var(--text-muted)", padding: "4px 2px", fontFamily: "var(--font-mono)" }}>
+              {restMatches.length === 0 && <div>{t("tabSearch.noMatches")}</div>}
+              {restMatches.map((match) => (
+                <div
+                  key={`${match.line}-${match.byteOffset}`}
+                  style={{ padding: "1px 4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                  title={match.snippet}
+                >
+                  L{match.line}: {match.snippet}
+                </div>
+              ))}
+              {restTruncated && <div style={{ padding: "2px 4px", color: "var(--text-dim)" }}>{t("tabSearch.fileMatchesTruncated")}</div>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {(editMode || saveState || confirmExit) && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 8,
+            padding: "4px 12px",
+            borderBottom: "1px solid var(--border)",
+            background: "var(--bg-panel)",
+            color: "var(--text-muted)",
+            fontSize: 11,
+            flexShrink: 0,
+          }}
+          data-testid="file-edit-bar"
+        >
+          {confirmExit ? (
+            <>
+              <span>{t("fileEdit.unsaved")}</span>
+              <button type="button" className="file-viewer-mode-button" onClick={() => void (async () => { await saveDraft(); const target = confirmExit; setConfirmExit(null); setEditMode(false); if (target?.redirectTo) updateDisplayMode(target.redirectTo); })()}>
+                {t("fileEdit.save")}
+              </button>
+              <button
+                type="button"
+                className="file-viewer-mode-button"
+                onClick={() => {
+                  draftCacheRef.current.delete(filePath);
+                  const target = confirmExit;
+                  setConfirmExit(null);
+                  setEditMode(false);
+                  setSaveState(null);
+                  if (target?.redirectTo) updateDisplayMode(target.redirectTo);
+                }}
+              >
+                {t("fileEdit.discard")}
+              </button>
+              <button type="button" className="file-viewer-mode-button" onClick={() => setConfirmExit(null)}>
+                {t("fileEdit.stay")}
+              </button>
+            </>
+          ) : saveState?.kind === "conflict" ? (
+            <>
+              <span style={{ color: "#f59e0b" }}>{t("fileEdit.conflict")}</span>
+              <span title={`${t("fileEdit.conflictExpected")}: ${new Date(saveState.expectedMtimeMs).toISOString()}
+${t("fileEdit.conflictCurrent")}: ${new Date(saveState.currentMtimeMs).toISOString()}`}>
+                {t("fileEdit.conflictDetail")}
+              </span>
+              <button
+                type="button"
+                className="file-viewer-mode-button"
+                onClick={() => {
+                  // Reload from disk: the on-disk version wins, the draft is gone.
+                  draftCacheRef.current.delete(filePath);
+                  setDraft("");
+                  setEditMode(false);
+                  setSaveState(null);
+                  void fetchContent(filePath).finally(() => setLoadingMore(false));
+                }}
+              >
+                {t("fileEdit.reload")}
+              </button>
+              <button type="button" className="file-viewer-mode-button" onClick={() => setSaveState(null)}>
+                {t("fileEdit.stay")}
+              </button>
+            </>
+          ) : saveState?.kind === "error" ? (
+            <span style={{ color: "#ef4444" }}>{t("fileEdit.saveFailed")}: {saveState.detail}</span>
+          ) : saveState?.kind === "saved" ? (
+            <span style={{ color: "#4ade80" }}>{t("fileEdit.saved")}</span>
+          ) : (
+            <span>{t("fileEdit.editingLabel")}</span>
+          )}
+        </div>
+      )}
+
+      {data?.truncated && (
+        <div
+          className="file-viewer-load-more"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+            padding: "5px 8px",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            color: "var(--text-dim)",
+            fontSize: 11,
+          }}
+        >
+          <span>{formatSize(data.nextOffset)} / {formatSize(data.size)}</span>
+          <button
+            type="button"
+            className="file-viewer-mode-button"
+            disabled={loadingMore}
+            onClick={() => {
+              setLoadingMore(true);
+              void fetchContent(filePath, data.nextOffset).finally(() => setLoadingMore(false));
+            }}
+          >
+            {loadingMore ? t("i18n.loading") : t("i18n.loadMore")}
+          </button>
+        </div>
+      )}
+
+      {/* Content area */}
+      <div
+        ref={contentRef}
+        className="file-viewer-content"
+        onScroll={(event) => {
+          viewerStateRef.current.scrollTop = event.currentTarget.scrollTop;
+          viewerStateRef.current.scrollLeft = event.currentTarget.scrollLeft;
+        }}
+        onKeyDown={(event) => {
+          // Ctrl/Cmd+E enters edit from any source-view focus (pi#81).
+          if (
+            (event.metaKey || event.ctrlKey)
+            && !event.altKey
+            && event.key.toLowerCase() === "e"
+            && !editMode
+            && editable
+            && effectiveDisplayMode === "source"
+          ) {
+            event.preventDefault();
+            void enterEdit();
+          }
+        }}
+        style={{ flex: 1, overflow: "auto", background: "var(--bg)", paddingBottom: showLoadMore ? 48 : undefined }}
+      >
+        {effectiveDisplayMode === "diff" && hasGitDiff ? (
+          <DiffView patch={gitDiff.patch!} wrapLines={wrapLines} />
+        ) : isHtml && effectiveDisplayMode === "preview" && data?.truncated && !htmlFull?.text ? (
+          <div style={{ padding: 24, color: "var(--text-dim)", fontSize: 12 }}>
+            {htmlFull?.error ?? t("i18n.loading")}
+          </div>
+        ) : isHtml && effectiveDisplayMode === "preview" ? (
+          <iframe
+            srcDoc={htmlPreview}
+            sandbox="allow-scripts"
+            style={{ width: "100%", height: "100%", border: "none", background: "var(--bg)" }}
+             title={t("i18n.htmlPreview")}
+          />
+        ) : isMarkdown && effectiveDisplayMode === "preview" ? (
+          <div
+            className="markdown-body markdown-file-preview"
+            style={{ padding: "24px 32px" }}
+          >
+            {frontmatter?.data && <FrontmatterCard data={frontmatter.data} />}
+            <ReactMarkdown
+              remarkPlugins={markdownPreviewRemarkPlugins}
+              rehypePlugins={markdownPreviewRehypePlugins}
+              urlTransform={onOpenFile ? markdownUrlTransform : markdownAppUrlTransform}
+              components={{
+                code({ className, children, ...props }) {
+                  const lang = className?.replace("language-", "").toLowerCase() ?? "";
+                  const raw = String(children);
+                  const isBlock = className?.includes("language-") || raw.includes("\n");
+                  if (isBlock) {
+                    if (lang === "mermaid") {
+                      return <MermaidBlock code={raw.replace(/\n$/, "")} defaultPreview />;
+                    }
+                    if (lang === "svg") {
+                      return <SvgBlock code={raw.replace(/\n$/, "")} />;
+                    }
+                    return <CodeBlock code={raw.replace(/\n$/, "")} lang={lang} />;
+                  }
+                  return (
+                    <code className={className} {...props}>
+                      {children}
+                    </code>
+                  );
+                },
+                pre({ children }) {
+                  // Render the code block directly — CodeBlock provides its own wrapping.
+                  // For non-mermaid blocks, pass through to default pre rendering.
+                  return <>{children}</>;
+                },
+                a({ href, children, ...props }) {
+                  delete props.node;
+                  const linkedFile = onOpenFile
+                    ? resolveLocalFileHref(href, markdownDirectory, cwd ?? markdownDirectory)
+                    : null;
+                  if (!linkedFile || !onOpenFile) {
+                    // Like chat links: a web or app link must not replace Pi Web.
+                    return isExternalMarkdownHref(href)
+                      ? <a href={href} {...props} target="_blank" rel="noopener noreferrer">{children}</a>
+                      : <a href={href} {...props} onClick={jumpToMarkdownFragment}>{children}</a>;
+                  }
+
+                  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+                    if (!shouldOpenLocalFileInApp(event)) return;
+                    event.preventDefault();
+                    onOpenFile(linkedFile, parsePdfPageFragment(href) ?? undefined);
+                  };
+
+                  return <a href={href} {...props} onClick={handleClick}>{children}</a>;
+                },
+                img({ src, alt, ...props }) {
+                  delete props.node;
+                  const imagePath = typeof src === "string"
+                    ? resolveLocalFileHref(src, markdownDirectory, cwd ?? markdownDirectory)
+                    : null;
+                  const imageSrc = imagePath
+                    ? getFileApiUrl(imagePath, "read", sourceSessionId)
+                    : src;
+                  // Dynamic local paths are served directly by the file API.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  return <img src={imageSrc} alt={alt ?? ""} loading="lazy" {...props} />;
+                },
+              }}
+            >
+              {markdownPreview}
+            </ReactMarkdown>
+          </div>
+        ) : isDelimitedTable && effectiveDisplayMode === "preview" ? (
+          <DelimitedTable
+            content={content}
+            filePath={filePath}
+            complete={!data?.truncated}
+            scrollRef={contentRef}
+          />
+        ) : isBinary ? (
+          // Decoded bytes are noise; opening a file never downloads it on its own (#1401).
+          <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, padding: 24, color: "var(--text-muted)", fontSize: 13, textAlign: "center" }}>
+            <span>{t("files.binaryNoPreview")}</span>
+            <a
+              href={getFileApiUrl(filePath, "download", sourceSessionId)}
+              download={getFileName(filePath)}
+              className="file-viewer-mode-button"
+              style={{ display: "inline-flex", alignItems: "center", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)", textDecoration: "none" }}
+            >
+              {t("files.download")}
+            </a>
+          </div>
+        ) : useLightweightSource ? (
+          <div
+            className="file-source-view is-lightweight"
+            style={{
+              width: wrapLines ? "100%" : "max-content",
+              minWidth: "100%",
+              minHeight: "100%",
+              background: "var(--bg)",
+              ...FILE_CODE_STYLE,
+            }}
+          >
+            {lightweightSourceLines}
+          </div>
+        ) : editMode ? (
+          <div style={{ minHeight: "100%", background: "var(--bg)", ...FILE_CODE_STYLE }}>
+            <FileEditorOverlay
+              value={draft}
+              onChange={setDraft}
+              language={language}
+              isDark={isDark}
+              wrapLines={wrapLines}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+                  event.preventDefault();
+                  void saveDraft();
+                } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "e") {
+                  event.preventDefault();
+                  exitEdit();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  exitEdit();
+                }
+              }}
+            />
+          </div>
+        ) : (
+          highlightedSource
+        )}
+      </div>
+    </div>
+  );
+}

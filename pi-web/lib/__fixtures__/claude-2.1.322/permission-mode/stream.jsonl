@@ -1,0 +1,6 @@
+{"type":"control_response","response":{"subtype":"success","request_id":"pm-1","response":{"mode":"acceptEdits"}}}
+{"type":"control_response","response":{"subtype":"success","request_id":"pm-2","response":{"mode":"plan"}}}
+{"type":"system","subtype":"status","status":null,"permissionMode":"plan","uuid":"e8822d30-54ea-48f4-b9af-c32db68763b0","session_id":"3064c168-bffc-48e0-867b-4a6b10797287"}
+{"type":"control_response","response":{"subtype":"error","request_id":"pm-3","error":"Cannot set permission mode: must be one of acceptEdits, auto, bypassPermissions, default, dontAsk, plan","error_code":"invalid_mode"}}
+{"type":"control_response","response":{"subtype":"success","request_id":"pm-4","response":{"mode":"default"}}}
+{"type":"system","subtype":"status","status":null,"permissionMode":"default","uuid":"3b4e7a42-4308-4f64-a818-cea564315b50","session_id":"3064c168-bffc-48e0-867b-4a6b10797287"}

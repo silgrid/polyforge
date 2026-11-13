@@ -90,7 +90,7 @@ For every dispatch the supervisor maintains: the dispatch moment, the time of th
 | ⓪ | No signal after start | no work-type signal within X after dispatch (the harness stuck at startup, stdout held by a grandchild process, and so on) | `harness_silent` |
 | ① | Stuck after the turn ends | the harness emits "turn ended" and still no result file after a 1-minute grace: error cause → `model_error` (that turn's error text first goes through the same D7 classification as the exit path, see the table below and polyforge#162; the first consecutive model-class death on a candidate resumes it, the second switches candidate); normal end → `ended_without_result` (the first retries on the same model; the second on one candidate rotates like a model-class death, polyforge#33) | `model_error` / `ended_without_result` |
 | ② | Waiting for the model too long | waiting for a model reply, no output at all for more than X | `model_hung` |
-| ③ | A tool too long | some tool has not ended after Y | `tool_hung` |
+| ③ | A tool too long | some tool has not ended after Y; a sub-agent call (Claude's `Agent`, pi's `subagent`) is judged on its silence instead — Y since its sub-agent's last record, however long it has run; a harness heartbeat is no such record | `tool_hung` |
 | ④ | Total duration exceeded | this step's **cumulative** run exceeds T | `step_timeout_slow_model` only when the **dying dispatch itself** is the slow model: it ran **at least half of T** and spent **at least half of its own runtime waiting for the model** ( D1, changing polyforge#147 D6 — T is cumulative, so the dispatch running when it runs out may hold only a sliver of it, and blaming that model would charge it the step's whole history); every other expiry is `step_timeout_long_task` (the step is long). The evidence states both shares |
 | — | Stuck between steps | the driver is in no step and not waiting for a human, for more than N minutes (e.g. a push git subprocess hung while still holding a lock) | `driver_stalled` |
 
@@ -159,7 +159,7 @@ Each harness has one translator that turns native events into standard signals: 
 | harness | Integration | Output while thinking | Verified against |
 |---|---|---|---|
 | pi | `--mode rpc` | ✅ `thinking_delta` | the local source `agent-loop.js` |
-| Claude Code | `-p --output-format stream-json --verbose --include-partial-messages` (always added by the driver) | ✅ | event names of the 2.1.296 binary |
+| Claude Code | `-p --output-format stream-json --verbose --include-partial-messages --input-format stream-json` (always added by the driver; stdin stays open across turns) | ✅ | event names of the 2.1.296 binary; the interactive stdin on 2.1.322 |
 | Codex | **`codex app-server`** (JSON-RPC), **not `exec --json`** | ✅ `item/reasoning/textDelta` and so on | 0.162.1 source; `exec --json` filters out the start events of replies/thinking and has no increments |
 
 The first version implements only the pi translator; Claude Code / Codex land together with "choosing the harness per step", and the protocol is re-verified against the then-latest version when integrating.
@@ -187,6 +187,8 @@ The concrete mechanism of the pi adapter layer: a **dedicated step agent directo
 - The credential boundary (ruling of 2026-10-14): the daemon does not manage credentials — `auth.json` / `models.json` are files a human leaves in the operator agent directory after logging in to the harness, and the daemon only **copies** them into the step-agent directory per the allowlist, never issuing, refreshing or rotating; a claude step's credentials likewise live only in the env block of `<harness-root>/claude-config/settings.json`, maintained by a human. (The earlier note "consistent with the direction of #135's separate agent user" lapsed when #135 was frozen.)
 
 ## 3. Human collaboration: `pf watch` (settled) <!-- §3 -->
+
+> Retired: the chat subscriptions, `PF_CHAT_ID`, the resident `pf watch` watcher and its wake-up lines are gone — human decisions are read from the daemon's decision feed (`GET /decisions`, `pf watch decisions`) and handled in Pi Web's Polyforge panel; the current routes are [uds-routes](../../reference/uds-routes.md).
 
 ### 3.1 Form <!-- §3.1 -->
 
@@ -230,6 +232,8 @@ The concrete mechanism of the pi adapter layer: a **dedicated step agent directo
 - That `tool_execution_start.args` in pi events suffices to extract the command and file paths.
 
 ## 4. The identity model (settled) <!-- §4 -->
+
+> Retired: the chat identity (`PF_CHAT_ID`, origin chat, notification routing) is gone — see §3's note; the machine role request moved to `pf ops role`.
 
 | Concept | Rule |
 |---|---|
@@ -393,6 +397,7 @@ rationale sentences were rewritten for the 2026-10-14 trust model, and cross-ref
 
 - **One FF-only chain**: each WI has a bare repository on aihub, and the capsule's commits are pushed to `refs/heads/main`. The aihub pre-receive hook (`internal/aihub/git/hook.go`)
   enforces: fast-forward only, no ref deletion (except `refs/pf-wip/*`), no gitlink in a commit tree (`GIT-412`; before a local commit, and before a push for every commit in the range to be pushed (the step's own commits included), the daemon prechecks the same rule and refuses; the guidance for a gitlink under `repos/` or `artifacts/release-*` is to restore the capsule `.gitignore`, never to delete a task repo's `.git`), blobs ≤ 16 MiB (`capsule.MaxBlobBytes`).
+- **The blob-size guard** (`gitops/oversize.go`,): before every chain commit (observe, recover, revise and seal alike — all go through `gitops.CommitPush`) a file over `capsule.MaxBlobBytes` is left out of the chain — an untracked one through a daemon-owned block of the capsule git-dir's `info/exclude` (never the tracked `.gitignore`), a tracked one by dropping it from the index (the commit records its removal) — and listed with path, size and sha256 in the tracked manifest `artifacts/oversize.json`; one `chain_oversize_left_out` event names each new file version. The block is rebuilt before every commit, so a file back at or under the limit returns to the chain. The working tree is measured before `git add -A` (a multi-GB file is never hashed) and the staged tree is checked again after it (a file that grew in between); a tree still holding such a blob is not committed. Tracked files under the raw downloads directory `artifacts/downloads/` leave the index the same way (the capsule `.gitignore` keeps new ones out). A push the hook still refuses for size — a blob committed before the guard, or by a step's own `git commit` at the capsule root — answers a `gitops.OversizeRefusal`: the `push_failed` event's error and its `range` / `oversize` fields, and the note of the blocked close it leads to, name each refused path, the commit that records it and the unpushed range `<pushed>..<head>`.
   Commits carry no sequence trailer: a commit the step makes itself with `git commit` at the capsule root is an ordinary fast-forward commit on the chain, pushed verbatim with the next publication.
 - **The session fence**: pushes go through the aihub git proxy, and the Basic password must be the secret of that WI's **current live session** (passed by a one-shot `GIT_ASKPASS`, never in argv); a superseded or
   ended session is refused (`GIT-401`).
@@ -441,9 +446,10 @@ blocks the capsule chain publication (D8).
   2. Outside the task repo (beside the WI bare repo directory, a `pf-carrier-*` temporary directory) create a daemon-owned temporary bare repo whose `objects/info/alternates`
      points at `<repo>/.git/objects`, then `update-ref refs/pf-carrier/tmp <sha>`; delete it after the push.
   3. Push from the temporary repo: write `<tmp>/shallow` with the WI line's upstream-boundary commits, one per line (see the shallow rule above), then
-     `git --git-dir=<tmp> -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helper= -c http.proxy= -c protocol.allow=never -c protocol.<the scheme of RemoteURL>.allow=always push --no-recurse-submodules <RemoteURL> <sha>:refs/pf-task/<name>`.
+     `git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.sshCommand=ssh -c diff.external= --git-dir=<tmp> -c credential.helper= -c http.proxy= -c protocol.allow=never -c protocol.<the scheme of RemoteURL>.allow=always push --no-recurse-submodules <RemoteURL> <sha>:refs/pf-task/<name>`
+     (the first four `-c` lead every git call through the daemon's one git entry, `taskrepo.Command`).
   Every git call on the carrier channel (check and push) uses the same environment: the daemon environment with all `GIT_*` removed, plus `GIT_CONFIG_NOSYSTEM=1`,
-  `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CEILING_DIRECTORIES=<the repos directory with symlinks resolved>` (the same value for check and push); the push adds a one-shot askpass (`GIT_ASKPASS`, `GIT_TERMINAL_PROMPT=0`).
+  `GIT_CONFIG_GLOBAL=<data-dir>/git/empty.config` (a daemon-owned empty file, mode 0444, rebuilt when it is not an empty regular file), `GIT_CEILING_DIRECTORIES=<the repos directory with symlinks resolved>` (the same value for check and push); the push adds a one-shot askpass (`GIT_ASKPASS`, `GIT_TERMINAL_PROMPT=0`).
   Hence a task repo's `credential.helper`, `url.*.insteadOf`/`pushInsteadOf`, `remote.<url>.vcs` (a remote helper),
   `push.recurseSubmodules`/`submodule.recurse`, a submodule's own origin, hooks and so on all take no part in the push. From alternates git reads only object data
   and executes nothing in it. Every git call of the carrier channel has a timeout (1 minute for checks and temporary-repo preparation, 10 minutes for the push and for the borrow-healing repack and connectivity check, the whole git process group killed on timeout),
@@ -492,6 +498,7 @@ The carrier ref records only HEAD, so a re-claim would lose the uncommitted chan
     `unable to index file` lines.
   - Fallback pruning after `add`: changed files whose attributes carry an lfs/git-crypt filter; any single one over the blob cap; and when the changed total exceeds the cap, the largest first.
   A pruned tracked path keeps HEAD's content in the snapshot (it does not become a deletion), and a pruned untracked path is simply not taken.
+- **A merge in progress is not snapshotted**: a task repo whose `.git/MERGE_HEAD` exists (the develop lane's `sync` step waiting on its conflict resolver, an agent's own merge) takes no WIP snapshot at all and sends `task_wip_skipped` (`skipped` names the merge): restored as plain edits with no `MERGE_HEAD`, a merge would lose its second parent. HEAD has not moved, so the hub's older WIP ref, if any, stays (it predates the merge); the carrier still mirrors HEAD, and the merge's owner redoes it after a re-claim.
 - **Shutdown and step end**: the snapshot runs under one context (`gitops.Opts.Ctx`; shutdown: all jobs in parallel sharing one 30-second deadline; step end: the driver's
   context plus a 30-second deadline): the timeout of every git call on the carrier channel is clipped to its deadline, and when the context ends (expiry or cancellation) the whole git process group is killed and the
   per-WI lock released; the remaining repos are then not attempted, and `carrier_push_failed` states `deadline exceeded` or `cancelled` (rather than a misleading repo-layout refusal reason).
@@ -713,6 +720,7 @@ Events are "news", not state: the execution-state authority is always the capsul
 | `close_parked` | runtime `recover.go` | a close (a wrap/fail seal, an operator pause, a blocked verdict, or the release of a session no longer ours — supersede / not-ours, kind `release`) found the old driver Run alive after the handle's bounded teardown, so nothing is committed, pushed, WIP-saved, sealed or quarantined next to it and the record is not dropped: the record keeps the state the close persisted and the close finishes by itself once that Run exits (a daemon restart finishes it too); meanwhile a close or `pf resume` door answers DAEMON-409 naming the park (; body: `kind` — close / pause / blocked / release, `reason`, `state`, `note`) |
 | `claim_paused_ended_blocked` | runtime `runtime.go` | a claim still cloning was hit by `pf pause`: the clone canceled and wrapped up as blocked (§6) |
 | `retired_env_ignored` | daemon `daemon.go` (`wi=""`) | a retired `POLYFORGE_*` variable is in the daemon environment and differs from the resolved value (warning only) |
+| `chain_oversize_left_out` | gitops `oversize.go` | a chain commit left files over `capsule.MaxBlobBytes` out of the chain (body: `files` — path, size, sha256, modified — plus `limit` and `manifest`); once per file version (§14.1) |
 | `carrier_push_failed` / `task_ref_diverged` / `task_wip_skipped` / `task_wip_not_applied` | gitops `gitops.go`, `wip.go` | a task-repo carrier / WIP ref push failed / the carrier diverged / the paths pruned from a WIP snapshot / a WIP not applied at restore (§14.2, §14.3) |
 | `exec_init` / `step_started` / `step_done` / `gate_verdict` / `needs_input` / `incomplete` / `rewind` / `terminal` / `answered` / `interrupted` / `resumed` / `step_failed` / `blocked` / `candidate_switched` / `candidates_exhausted` | driver `transition.go` (`emitLocked` emits per committed state transition) | progress news of state transitions; the body carries spawn_n and step. `step_started` also carries the dispatch's composed `candidate`; `step_failed` carries the candidate that DIED (the same string as its `step_started`, never its successor); `step_dead` is unchanged and keeps no candidate |
 | `step_dead` / `verdict_stale` / `schema_fault` | driver `driver.go`, `supervision.go` | the supervision verdict the driver received (cause/evidence) / a stale verdict was dropped / result envelopes keep being rejected (the contract is broken rather than a model problem); `driver_stalled` is recorded only in `needs_recovery.reason` |
@@ -722,6 +730,8 @@ Events are "news", not state: the execution-state authority is always the capsul
 | `model_unhealthy` | model-health tracker (daemon-scope, `wi=""`; appended through observe) | one edge-triggered event per model+effort episode crossing a constant threshold (≥3 model deaths in 24h, or >20% over 7 days with ≥5 dispatches); the body names the model+effort, the fired rule(s) and the numbers; re-arms when the condition clears |
 
 ### E.2 chat / watch files
+
+> Retired: none of these files is written any more; `pf doctor`'s `retired chat state` row reports leftovers and `--prune-chat-state` deletes them.
 
 | Path | Writer | Content |
 |---|---|---|
@@ -759,7 +769,9 @@ Events are "news", not state: the execution-state authority is always the capsul
 
 | Path | Content |
 |---|---|
-| `capsule.json`, `.gitignore` | the capsule identity (including each repo's SHA at the latest materialization — not a delivery baseline; deliver judges nothing-to-deliver against the fetched origin default branch) / ignoring only `repos/`, `artifacts/release-*/` and `sync/` |
+| `capsule.json`, `.gitignore` | the capsule identity (including each repo's SHA at the latest materialization — not a delivery baseline; deliver judges nothing-to-deliver against the fetched origin default branch) / ignoring only `repos/`, `artifacts/release-*/`, `artifacts/downloads/` and `sync/` (written at every claim and rewritten at every recovery) |
+| `artifacts/downloads/` | raw downloads (CI artifacts, traces, screenshots, video bundles); never committed |
+| `artifacts/oversize.json` | the files the chain leaves out for their size: `limit` and `files` (path, size, sha256, modified), written by the commit guard (§14.1) |
 | `runtime-state/work-item.json` | the WI snapshot written by the daemon |
 | `runtime-state/execution.json` | the sole authority of execution state (structure: `capsule.Execution`) |
 | `runtime-state/spawn-journal.jsonl` | one line per step spawn (harness, session, transcript path) |
@@ -769,6 +781,7 @@ Events are "news", not state: the execution-state authority is always the capsul
 | `artifacts/steps/<step>/s<spawn_n>/result.json` | the archive of accepted envelopes |
 | `artifacts/handoff-<step>.md` | written by a step declaring `handoff` by path convention, read by later inherit steps |
 | `session/session-<token>.jsonl` | the harness session file, synced in at commit boundaries |
+| `session/session-<token>/subagents/` | the subagent conversations of that transcript's conversation: claude's `agent-<id>.jsonl` + `.meta.json` sidecars copied from its native session at the same syncs (beside the session's first capsule transcript, so a resume adds no second copy); pi's children recorded by the driver from the step's stdout as `<tool call id>-<i>.jsonl` + `.meta.json` |
 | `sync/materialized.json` | daemon-private (not in the chain): the marker that bundle materialization completed (the trust gate before recovery) |
 | `workflows/<bundle>/`, `agents/` | the materialized workflow bundle / step definition copy (`agents/` is a deletion target of decision 2026-10-16 G4) |
 | `repos/<name>/`, `logs/`, `artifacts/` | task repo clones (each with its own git history) / logs / step outputs |

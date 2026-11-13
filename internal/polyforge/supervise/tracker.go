@@ -27,6 +27,9 @@ type ToolRun struct {
 	// tool name plus its key argument.
 	Summary string
 	Since   time.Time
+	// LastActive is the newest inner record of the sub-agent running in
+	// this call (Sink.ToolActive); zero for a tool that reports none.
+	LastActive time.Time
 
 	// waitCall is the wait-form candidate (wait.go) this call is, until
 	// its measured time is folded at ToolEnd or FinishOpenWaitCalls.
@@ -64,8 +67,9 @@ type Tracker struct {
 	lastWork  time.Time // newest work-class signal
 	lastNoise time.Time
 
-	// model phase: waiting is true from WaitingModel until a tool starts
-	// or the turn ends; lastOutput moves on every model output.
+	// model phase: waiting is true from WaitingModel, once no tool is
+	// running, until a tool starts or the turn ends; lastOutput moves on
+	// every model output.
 	waiting      bool
 	waitingSince time.Time
 	lastOutput   time.Time
@@ -86,6 +90,10 @@ type Tracker struct {
 	waitSecs    int64
 	waitPending []WaitCall
 	waitNotify  chan struct{}
+
+	// contextWindows: the context window the harness reported per model
+	// (Sink.ContextWindow; surfaced only, never judged).
+	contextWindows map[string]int64
 
 	turnEnded   bool
 	turnEndedAt time.Time
@@ -173,13 +181,16 @@ func (t *Tracker) addClosedLocked(model bool, start, end time.Time) {
 	}
 }
 
-// WaitingModel implements Sink.
+// WaitingModel implements Sink. The model wait starts only once no tool
+// is running: a tool result that returns while another call of the same
+// turn (a sub-agent) still runs is no model wait — rule 3 judges that
+// call — and the wait starts when the last tool returns.
 func (t *Tracker) WaitingModel() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
 	t.workLocked()
-	if !t.waiting {
+	if !t.waiting && len(t.tools) == 0 {
 		t.waiting = true
 		t.waitingSince = now
 	}
@@ -332,6 +343,25 @@ func (t *Tracker) ToolEnd(id, name string) {
 	}
 }
 
+// subagentTools are the tool names that run a sub-agent: Claude Code's
+// Agent tool (its wire name Task in some versions) and pi's subagent
+// tool. Only such a call's rule-3 clock follows its inner activity.
+var subagentTools = map[string]bool{"Agent": true, "Task": true, piSubagentTool: true}
+
+// ToolActive implements Sink: life, and — when the running call id is a
+// sub-agent call (subagentTools) — the restart of its rule-3 clock. Any
+// other call, or an id no running call carries, is life only: a plain
+// tool is judged on its whole run.
+func (t *Tracker) ToolActive(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := t.now()
+	t.workLocked()
+	if run, ok := t.tools[id]; ok && subagentTools[run.Name] {
+		run.LastActive = now
+	}
+}
+
 // TurnEnded implements Sink.
 func (t *Tracker) TurnEnded(ok bool, errText string) {
 	t.mu.Lock()
@@ -355,6 +385,19 @@ func (t *Tracker) TurnEnded(ok bool, errText string) {
 func (t *Tracker) ErrorSeen(text string) {
 	t.mu.Lock()
 	t.lastError = text
+	t.mu.Unlock()
+}
+
+// ContextWindow implements Sink: the latest report per model is kept.
+func (t *Tracker) ContextWindow(model string, window int64) {
+	if model == "" || window <= 0 {
+		return
+	}
+	t.mu.Lock()
+	if t.contextWindows == nil {
+		t.contextWindows = map[string]int64{}
+	}
+	t.contextWindows[model] = window
 	t.mu.Unlock()
 }
 
@@ -388,6 +431,7 @@ func (t *Tracker) ObserveTick(cutoff time.Time, shift time.Duration) {
 		at(&t.turnErrAt)
 		for _, run := range t.tools {
 			at(&run.Since)
+			at(&run.LastActive)
 		}
 		for _, c := range t.closedSinceTick {
 			if c.start.After(cutoff) || !c.end.After(cutoff) {
@@ -448,6 +492,10 @@ type Snapshot struct {
 
 	LastError string
 	Exit      *ExitInfo
+
+	// ContextWindows are the context windows the harness reported per
+	// model this dispatch (Sink.ContextWindow), the latest report each.
+	ContextWindows map[string]int64
 }
 
 // Snapshot reads the tracker at the supplied instant.
@@ -487,6 +535,12 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 		WaitSeconds: t.waitSecs,
 		LastError:   t.lastError,
 	}
+	if len(t.contextWindows) > 0 {
+		s.ContextWindows = make(map[string]int64, len(t.contextWindows))
+		for k, v := range t.contextWindows {
+			s.ContextWindows[k] = v
+		}
+	}
 	if !t.begun {
 		s.StartedAt = t.born
 	}
@@ -508,6 +562,32 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 		s.Exit = &c
 	}
 	return s
+}
+
+// ClockStart is where rule 3's clock of this call starts: its start, or
+// its sub-agent's newest inner record when that is later (:
+// a sub-agent call is judged on its silence, not on its whole run).
+func (r ToolRun) ClockStart() time.Time {
+	if r.LastActive.After(r.Since) {
+		return r.LastActive
+	}
+	return r.Since
+}
+
+// StalestTool answers the running tool whose rule-3 clock started first
+// (ToolRun.ClockStart) — the one rule 3 judges and the monitor measures
+// the queued bar time from; false when no tool runs.
+func (s Snapshot) StalestTool() (ToolRun, bool) {
+	if len(s.Tools) == 0 {
+		return ToolRun{}, false
+	}
+	best := s.Tools[0]
+	for _, r := range s.Tools[1:] {
+		if r.ClockStart().Before(best.ClockStart()) {
+			best = r
+		}
+	}
+	return best, true
 }
 
 // summarizeTool renders a tool call for the live-progress face and extracts

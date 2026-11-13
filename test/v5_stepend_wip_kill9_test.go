@@ -22,18 +22,17 @@ import (
 func TestV5StepEndWIPSurvivesKill9(t *testing.T) {
 	inst, remote := newV1InstallTaskRepo(t)
 	const authored = "package demo // left uncommitted by the fix step\n"
-	verify := map[string]any{"do": "envelope", "id": "verification", "outcome": "completed", "ms": 120000}
+	review := map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "ms": 120000}
 	wi := inst.newWI(t, "v5: step-end WIP survives kill -9",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true,
+			{"do": "envelope", "id": "fix", "outcome": "completed",
 				"name": "demo-src", "origin": remote.url,
 				"files": map[string]string{
 					"repos/demo-src/work.txt":        "edited after the commit\n",
 					"repos/demo-src/e2e_wip_test.go": authored,
 				}},
 			// the next step stays in flight (before and after the re-claim)
-			verify, verify, verify,
+			review, review, review,
 		}, nil)
 	t.Cleanup(func() { killOrphans(wi) })
 
@@ -41,9 +40,9 @@ func TestV5StepEndWIPSurvivesKill9(t *testing.T) {
 	d.start()
 	d.pf(t, "submit", wi)
 
-	// The verification step runs and the capsule chain on the hub already
+	// The review step runs and the capsule chain on the hub already
 	// records it (the re-claim resumes from the chain).
-	waitUntil(t, 120*time.Second, "the hub's capsule chain never recorded the verification step running", func() bool {
+	waitUntil(t, 120*time.Second, "the hub's capsule chain never recorded the review step running", func() bool {
 		raw, err := exec.Command("git", "--git-dir", inst.bareRepo(wi), "show", "main:runtime-state/execution.json").Output()
 		if err != nil {
 			return false
@@ -52,7 +51,7 @@ func TestV5StepEndWIPSurvivesKill9(t *testing.T) {
 		if json.Unmarshal(raw, &x) != nil {
 			return false
 		}
-		fix, ver := x.Steps["fix"], x.Steps["verification"]
+		fix, ver := x.Steps["fix"], x.Steps["review"]
 		return fix != nil && fix.Status == "done" && ver != nil && ver.Status == "in_progress"
 	})
 	capA := d.capsuleDir(wi)

@@ -1,0 +1,16 @@
+Polyforge — license notice
+
+This repository is licensed by path:
+
+- Everything outside pi-web/ is licensed under the PolyForm Noncommercial
+  License 1.0.0 (see LICENSE at the repository root), with the additional
+  grant stated in README.md ("Commercial licensing").
+
+- pi-web/ (the Pi Web package, npm @silgrid/pi-web) is licensed under the
+  MIT License, Copyright (c) 2026 agegr (see pi-web/LICENSE). It is a fork
+  of agegr/pi-web; its provenance is recorded in pi-web/PROVENANCE.md and
+  the fork baseline in pi-web/README.md.
+
+The MIT license of pi-web/ is not changed by its location in this
+repository, and the PolyForm Noncommercial license of the rest of the
+repository does not extend to pi-web/.

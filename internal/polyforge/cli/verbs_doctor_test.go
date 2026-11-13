@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // verbs_doctor_test.go: the `pf doctor` unit pins — the report shape,
@@ -60,9 +62,13 @@ func doctorServerConfig(t *testing.T, server, apiKey, socket string, projects ..
 	}
 	var b strings.Builder
 	b.WriteString("server = \"" + server + "\"\napi_key = \"" + apiKey + "\"\n")
-	if socket != "" {
-		b.WriteString("daemon_socket = \"" + socket + "\"\n")
+	// the doctor's Hub reads go through the daemon's data-plane proxy:
+	// the front stands in for it (and relays GET /status to socket; ""
+	// = a live daemon, a dead path = the daemon is down)
+	if socket == "" {
+		socket = liveDaemonSocket(t, "m-d")
 	}
+	b.WriteString("daemon_socket = \"" + cellFront(t, server, apiKey, socket) + "\"\n")
 	for _, p := range projects {
 		b.WriteString("\n[workspace.\"" + filepath.Join(dir, "ws-"+p) + "\"]\nprojects = [\"" + p + "\"]\n")
 		if err := os.MkdirAll(filepath.Join(dir, "ws-"+p), 0o755); err != nil {
@@ -78,10 +84,27 @@ func doctorServerConfig(t *testing.T, server, apiKey, socket string, projects ..
 // liveDaemonSocket serves GET /status on a real unix socket.
 func liveDaemonSocket(t *testing.T, machineID string) string {
 	t.Helper()
+	return liveDaemonSocketLanes(t, machineID, "")
+}
+
+// liveDaemonSocketLanes is liveDaemonSocket reporting lanes as the lane
+// set the daemon runs work items on ("" = no workflows dir).
+func liveDaemonSocketLanes(t *testing.T, machineID, lanes string) string {
+	t.Helper()
+	pfDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pfDir, "pf"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"machine_id":"`+machineID+`","auto":false,"shutting_down":false,"env_names":["HOME","PATH"],"jobs":[],"queue":{"pending":0,"running":0,"max_concurrent":1},"reload":{},"model_health":{"window":{"duration":"720h0m0s","from":"f","to":"t"},"warnings":[]}}`)
+		// a daemon reports the PATH its in-process commands run under
+		//: this test process's, which carries git; its
+		// steps' PATH also holds its own pf
+		commandPath, _ := json.Marshal(os.Getenv("PATH"))
+		stepPath, _ := json.Marshal(pfDir + string(os.PathListSeparator) + os.Getenv("PATH"))
+		lanesJSON, _ := json.Marshal(lanes)
+		io.WriteString(w, `{"machine_id":"`+machineID+`","auto":false,"shutting_down":false,"env_names":["HOME","PATH"],"command_path":`+string(commandPath)+`,"step_path":`+string(stepPath)+`,"workflows_dir":`+string(lanesJSON)+`,"jobs":[],"queue":{"pending":0,"running":0,"max_concurrent":1},"reload":{},"model_health":{"window":{"duration":"720h0m0s","from":"f","to":"t"},"warnings":[]}}`)
 	})
 	return newFakeDaemon(t, mux)
 }
@@ -112,7 +135,9 @@ func aiSever(t *testing.T, rec *reqRecorder, known map[string]bool, status int, 
 
 func TestDoctorHealthyMachineAllPassExit0(t *testing.T) {
 	srv := aiSever(t, &reqRecorder{}, map[string]bool{"polyforge": true}, 0, "")
-	sock := liveDaemonSocket(t, "m-h")
+	// the daemon runs work items on the shipped lanes
+	lanes, _ := filepath.Abs(filepath.Join("..", "..", "..", "workflows"))
+	sock := liveDaemonSocketLanes(t, "m-h", lanes)
 	env := doctorServerConfig(t, srv.URL, "k_ok", sock, "polyforge")
 	// a healthy machine declares the workspace path's memory policy in
 	// cli.toml (no block is the `pf init` warn)
@@ -123,7 +148,7 @@ func TestDoctorHealthyMachineAllPassExit0(t *testing.T) {
 	} else if err := os.WriteFile(cfgPath, append(raw, "\n[memory_policy.\""+ws+"\".default]\nrecord = [\"r\"]\n"...), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env["HOME"] = displayHome(t, `{"statusLine":{"type":"command","command":"pf watch --statusline --harness-session -"}}`,
+	env["HOME"] = displayHome(t, `{"statusLine":{"type":"command","command":"echo main"}}`,
 		`{"packages":["~/.local/share/polyforge/release/current"]}`)
 	env["PI_CODING_AGENT_DIR"] = ""
 	env["POLYFORGE_DATA_DIR"] = ""
@@ -136,6 +161,15 @@ func TestDoctorHealthyMachineAllPassExit0(t *testing.T) {
 		}
 	}
 	env["PATH"] = fakeTmuxPath(t, 0) // the restart loop is up (polyforge#174)
+	// a healthy machine's project default names a real model: the shipped
+	// lanes' candidates are placeholders no gateway serves, which the
+	// workspace yaml row warns about
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".polyforge.yaml"), []byte("steps:\n  polyforge:\n    default: { models: [pi:prov/model-a] }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	code, stdout, doc := doctorStatus(t, env, "--json", "doctor")
 	if code != 0 {
 		t.Fatalf("healthy machine: exit %d, want 0 (output %s)", code, stdout)
@@ -281,7 +315,7 @@ func TestDoctorUnloadableConfigDoesNotFakeGreen(t *testing.T) {
 	skips := 0
 	for _, c := range doc.Checks {
 		switch c.Name {
-		case docChClaudeDisplay, docChPiDisplay, docChClaudeLayout, docChPiLayout, docChV1Leftovers:
+		case docChClaudeStatusline, docChPiPackage, docChClaudeLayout, docChPiLayout, docChV1Leftovers, docChRetiredChat:
 			continue // the config-independent harness family (polyforge#142, #174)
 		}
 		if c.Status == "skip" {
@@ -308,19 +342,16 @@ func TestDoctorUsageErrorExit2(t *testing.T) {
 	}
 }
 
-// TestDoctorWorkspaceYamlReportsUnknownStepKeys (polyforge#169): a
-// per-step key of a mapped workspace's .polyforge.yaml that is no step
-// id of the daemon's installed workflows fails the check, naming the
-// key; a known step id passes; without the daemon's workflows dir the
-// keys are unjudged (warn, never a faked pass).
+// TestDoctorWorkspaceYamlReportsUnknownStepKeys (polyforge#169):
+// a per-step key of a mapped workspace's .polyforge.yaml that
+// is no step id of the daemon's installed workflows — the retired
+// verify-judge key among them — is stale: the check warns, naming each
+// such key, the rewrite and the upgrade section; a known step id passes;
+// without the daemon's workflows dir the keys are unjudged (warn, never a
+// faked pass).
 func TestDoctorWorkspaceYamlReportsUnknownStepKeys(t *testing.T) {
 	wf := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(wf, "autopilot"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(wf, "autopilot", "workflow.md"), []byte("---\nsteps:\n  - { id: fix }\n---\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeLane(t, wf, "autopilot", "steps:\n  - { id: fix }\n")
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -331,12 +362,13 @@ func TestDoctorWorkspaceYamlReportsUnknownStepKeys(t *testing.T) {
 	env := doctorServerConfig(t, srv.URL, "k", sock, "polyforge")
 	yaml := filepath.Join(filepath.Dir(env["XDG_CONFIG_HOME"]), "ws-polyforge", ".polyforge.yaml")
 
-	if err := os.WriteFile(yaml, []byte("steps:\n  polyforge:\n    default: { models: [pi:a] }\n    fix: { models: [pi:b] }\n    gate: { models: [pi:c] }\n"), 0o600); err != nil {
+	if err := os.WriteFile(yaml, []byte("steps:\n  polyforge:\n    default: { models: [pi:a] }\n    fix: { models: [pi:b] }\n    gate: { models: [pi:c] }\n    verify-judge: { models: [pi:d] }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, _, doc := doctorStatus(t, env, "--json", "doctor")
-	if st, detail := doctorFind(t, doc, "workspace yaml"); st != "fail" || !strings.Contains(detail, "steps.polyforge.gate") || strings.Contains(detail, "steps.polyforge.fix") {
-		t.Fatalf("unknown step key: %s %q, want fail naming only steps.polyforge.gate", st, detail)
+	if st, detail := doctorFind(t, doc, "workspace yaml"); st != "warn" || !strings.Contains(detail, "steps.polyforge.gate, ") || !strings.Contains(detail, "steps.polyforge.verify-judge") ||
+		strings.Contains(detail, "steps.polyforge.fix") || strings.Contains(detail, "steps.polyforge.default") || !strings.Contains(detail, "docs/upgrade.md") || !strings.Contains(detail, workspace.KeyRenameSection) {
+		t.Fatalf("stale step keys: %s %q, want warn naming only steps.polyforge.gate and steps.polyforge.verify-judge, with the upgrade section", st, detail)
 	}
 
 	if err := os.WriteFile(yaml, []byte("steps:\n  polyforge:\n    fix: { models: [pi:b] }\n"), 0o600); err != nil {

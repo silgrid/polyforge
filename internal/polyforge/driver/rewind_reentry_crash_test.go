@@ -2,9 +2,11 @@ package driver
 
 // rewind_reentry_crash_test.go: item 6 — a crash after the
 // rewind target's step_start (before its spawn journal line) must keep the
-// first dispatch of the new round fresh and carrying the FAIL verdict.
-// Without the durable ledger cause the restart resumed the PRE-rewind
-// conversation with no rewind input.
+// first dispatch of the new round's shape. Since the
+// target's shape IS that resume (every rewind target that is not a gate
+// resumes its previous round): the restart keeps it a rewind resume. The
+// FAIL itself is no dispatch input: it is the gate's section of
+// artifacts/handoff.md, which the step reads (workflow contract 4).
 
 import (
 	"context"
@@ -12,7 +14,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,37 +21,6 @@ import (
 )
 
 var errSpawnFailed = errors.New("harness binary missing")
-
-func TestCrashAfterFreshRewindStepStartKeepsFreshAndVerdict(t *testing.T) {
-	e := newCrashEnv(t, spec("build"), gateSpec("review", "build"))
-	// build (spawn 1) then review's FAIL verdict; the held dispatch is the
-	// rewound build's spawn 3.
-	e.crashHeld([]fakeEntry{done(`{}`), gateFAIL()}, func() {})
-
-	crashed := readExec(t, e.execPath)
-	if st := crashed.Steps["build"]; st == nil || st.Status != capsule.StepInProgress || st.Dispatch != 3 {
-		t.Fatalf("the crash must leave the rewind target's first dispatch unsettled: %+v", st)
-	}
-
-	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"PASS"}`)}}
-	if err := e.driver(sp, 3, nil).Run(context.Background()); err != nil {
-		t.Fatalf("restarted Run: %v", err)
-	}
-	if len(sp.spawns) == 0 || sp.spawnAt(0).StepID != "build" {
-		t.Fatalf("the restart must dispatch the rewind target, got %v", sp.dispatched())
-	}
-	if sp.spawnAt(0).Resume {
-		t.Fatalf("the first dispatch of the new round must not resume the pre-rewind conversation: %v", sp.spawnAt(0))
-	}
-	ri := sp.spawnAt(0).RewindInput
-	if ri == nil || !strings.Contains(ri.Reason, "FAIL: tests red") {
-		t.Fatalf("the restart must carry the FAIL verdict to the target, got %+v", ri)
-	}
-	x := readExec(t, e.execPath)
-	if x.WorkflowStatus != StatusCompleted || x.RewindStats.Count != 1 {
-		t.Fatalf("the restarted lane must complete on the one rewind slot: %q %+v", x.WorkflowStatus, x.RewindStats)
-	}
-}
 
 // driverWithInterrupted builds the restarted driver exactly as the recovery
 // lane does: Config.Interrupted set (daemon_restart or driver_relaunch), so
@@ -71,66 +41,44 @@ func (e *crashEnv) driverWithInterrupted(sp StepSpawner, spawnN int64, in *Inter
 	return d
 }
 
-// A crash after a fresh rewind target's step_start reaches the restarted
+// A crash after a rewind target's step_start reaches the restarted
 // driver through the recovery lane (Config.Interrupted): the daemon_restart
 // archive lands on the same unsettled step, so the restoration must key on
 // the latest NON-infra_failure attempt, not the raw last one.
-func TestInterruptedRestartAfterFreshRewindStepStartKeepsFreshAndVerdict(t *testing.T) {
+func TestInterruptedRestartAfterRewindStepStartKeepsTheRewindResume(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		interrupt *InterruptedDispatch
 	}{
 		{"daemon restart", &InterruptedDispatch{Detail: FailDaemonRestart}},
 		{"driver relaunch", &InterruptedDispatch{Detail: FailDriverRelaunch, BookWall: true}},
+		// no Interrupted: Run takes the claim re-entry branch
+		// (TransClaimReentry / applyClaimReentryLocked), a distinct path
+		{"claim re-entry (no Interrupted)", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newCrashEnv(t, spec("build"), gateSpec("review", "build"))
+			// build (spawn 1) then review's FAIL verdict; the held dispatch
+			// is the rewound build's spawn 3
 			e.crashHeld([]fakeEntry{done(`{}`), gateFAIL()}, func() {})
+			if st := readExec(t, e.execPath).Steps["build"]; st == nil || st.Status != capsule.StepInProgress || st.Dispatch != 3 {
+				t.Fatalf("the crash must leave the rewind target's first dispatch unsettled: %+v", st)
+			}
 
-			sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"PASS"}`)}}
+			sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"pass"}`)}}
 			if err := e.driverWithInterrupted(sp, 3, tc.interrupt).Run(context.Background()); err != nil {
 				t.Fatalf("restarted Run: %v", err)
 			}
 			if len(sp.spawns) == 0 || sp.spawnAt(0).StepID != "build" {
 				t.Fatalf("the restart must dispatch the rewind target, got %v", sp.dispatched())
 			}
-			if sp.spawnAt(0).Resume {
-				t.Fatalf("the first dispatch of the new round must not resume the pre-rewind conversation: %v", sp.spawnAt(0))
-			}
-			ri := sp.spawnAt(0).RewindInput
-			if ri == nil || !strings.Contains(ri.Reason, "FAIL: tests red") {
-				t.Fatalf("the restart must carry the FAIL verdict to the target, got %+v", ri)
+			if re := sp.spawnAt(0); !re.Resume || !re.RewindResume || re.Fresh {
+				t.Fatalf("the first dispatch of the new round stays the rewind resume of the previous round: %v", re)
 			}
 			if x := readExec(t, e.execPath); x.WorkflowStatus != StatusCompleted || x.RewindStats.Count != 1 {
 				t.Fatalf("the restarted lane must complete on the one rewind slot: %q %+v", x.WorkflowStatus, x.RewindStats)
 			}
 		})
-	}
-}
-
-// The same crash path for a LIGHT re-entry: the daemon_restart attempt must
-// not hide the light cause, and the restored order keeps the resume plus the
-// light note.
-func TestInterruptedRestartAfterLightRewindStepStartKeepsTheLightOrder(t *testing.T) {
-	e := newCrashEnv(t, spec("build"), gateSpec("review", "build"))
-	e.crashHeld([]fakeEntry{done(`{}`), lightReviewFAIL()}, func() {}) // the held dispatch is the light re-entry
-
-	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"PASS"}`)}}
-	if err := e.driverWithInterrupted(sp, 3, &InterruptedDispatch{Detail: FailDaemonRestart}).Run(context.Background()); err != nil {
-		t.Fatalf("restarted Run: %v", err)
-	}
-	if len(sp.spawns) == 0 {
-		t.Fatalf("the restart must dispatch the light target, got %v", sp.dispatched())
-	}
-	if !sp.spawnAt(0).Resume || sp.spawnAt(0).Fresh {
-		t.Fatalf("the light re-entry must stay a resume: %v", sp.spawnAt(0))
-	}
-	ri := sp.spawnAt(0).RewindInput
-	if ri == nil || ri.Note != LightRewindNote || !strings.Contains(ri.Reason, "comment wording only") {
-		t.Fatalf("the restart must carry the light rewind input: %+v", ri)
-	}
-	if x := readExec(t, e.execPath); x.WorkflowStatus != StatusCompleted || x.RewindStats.Count != 1 {
-		t.Fatalf("the restarted lane must complete on the one light slot: %q %+v", x.WorkflowStatus, x.RewindStats)
 	}
 }
 
@@ -151,27 +99,21 @@ func TestInterruptedRestartAfterPreJournalSpawnFailureKeepsTheRewindOrder(t *tes
 		t.Fatalf("the spawn failure must settle the dispatch: %+v", x.Steps["build"])
 	}
 
-	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"PASS"}`)}}
+	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"pass"}`)}}
 	if err := e.driverWithInterrupted(sp, 4, &InterruptedDispatch{Detail: FailDaemonRestart}).Run(context.Background()); err != nil {
 		t.Fatalf("restarted Run: %v", err)
 	}
 	if len(sp.spawns) == 0 {
 		t.Fatalf("the restart must dispatch the rewind target, got %v", sp.dispatched())
 	}
-	if sp.spawnAt(0).Resume {
-		t.Fatalf("a failed pre-journal spawn never created the new conversation: %v", sp.spawnAt(0))
-	}
-	ri := sp.spawnAt(0).RewindInput
-	if ri == nil || !strings.Contains(ri.Reason, "FAIL: tests red") {
-		t.Fatalf("the restart must carry the FAIL verdict to the target, got %+v", ri)
+	if re := sp.spawnAt(0); !re.Resume || !re.RewindResume {
+		t.Fatalf("a failed pre-journal spawn never created a new conversation: the re-entry still resumes the previous round: %v", re)
 	}
 }
 
 // Once a dispatch of the new round IS journaled, the ordinary resume is
-// correct — and the round is not over yet, so that resume still carries the
-// rewind verdict (it stays in pending_rewind_input until the
-// step is accepted, instead of being consumed by the first dispatch).
-func TestInterruptedRestartAfterJournalledRewindStepResumesWithVerdict(t *testing.T) {
+// correct: the restart resumes that dispatch's conversation.
+func TestInterruptedRestartAfterJournalledRewindStepIsAnOrdinaryResume(t *testing.T) {
 	e := newCrashEnv(t, spec("build"), gateSpec("review", "build"))
 	e.crashHeld([]fakeEntry{done(`{}`), gateFAIL()}, func() {})
 
@@ -192,14 +134,12 @@ func TestInterruptedRestartAfterJournalledRewindStepResumesWithVerdict(t *testin
 		t.Fatal(err)
 	}
 
-	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"PASS"}`)}}
+	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"pass"}`)}}
 	if err := e.driverWithInterrupted(sp, 3, &InterruptedDispatch{Detail: FailDaemonRestart}).Run(context.Background()); err != nil {
 		t.Fatalf("restarted Run: %v", err)
 	}
-	ri := sp.spawnAt(0).RewindInput
-	if len(sp.spawns) == 0 || !sp.spawnAt(0).Resume ||
-		ri == nil || !strings.Contains(ri.Reason, "FAIL: tests red") {
-		t.Fatalf("a journaled new-round dispatch is an ordinary resume that still carries the round's verdict: %v", sp.spawnAt(0))
+	if len(sp.spawns) == 0 || !sp.spawnAt(0).Resume {
+		t.Fatalf("a journaled new-round dispatch is an ordinary resume: %v", sp.spawnAt(0))
 	}
 }
 
@@ -222,7 +162,7 @@ func TestInterruptedRestartAfterGateReentryStepStartIsFresh(t *testing.T) {
 			if st := readExec(t, e.execPath).Steps["review"]; st == nil || st.Status != capsule.StepInProgress || st.Dispatch != 4 {
 				t.Fatalf("the crash must leave the gate's first new-round dispatch unsettled: %+v", st)
 			}
-			sp := &fakeSpawner{script: []fakeEntry{done(`{"verdict":"PASS"}`)}}
+			sp := &fakeSpawner{script: []fakeEntry{done(`{"verdict":"pass"}`)}}
 			if err := e.driverWithInterrupted(sp, 4, tc.interrupt).Run(context.Background()); err != nil {
 				t.Fatalf("restarted Run: %v", err)
 			}
@@ -231,9 +171,6 @@ func TestInterruptedRestartAfterGateReentryStepStartIsFresh(t *testing.T) {
 			}
 			if sp.spawnAt(0).Resume {
 				t.Fatalf("the gate's re-entry must not resume the session that delivered the FAIL: %v", sp.spawnAt(0))
-			}
-			if sp.spawnAt(0).RewindInput != nil {
-				t.Fatalf("the gate itself carries no rewind verdict: %+v", sp.spawnAt(0).RewindInput)
 			}
 			if x := readExec(t, e.execPath); x.WorkflowStatus != StatusCompleted || x.RewindStats.Count != 1 {
 				t.Fatalf("the restarted lane must complete on the one rewind slot: %q %+v", x.WorkflowStatus, x.RewindStats)
@@ -257,15 +194,15 @@ func TestPreJournalSpawnFailureAfterGateStepStartStaysFresh(t *testing.T) {
 		t.Fatalf("the non-fresh spawn failure must settle the gate with no fresh order: %+v", st)
 	}
 
-	sp := &fakeSpawner{script: []fakeEntry{done(`{"verdict":"PASS"}`)}}
+	sp := &fakeSpawner{script: []fakeEntry{done(`{"verdict":"pass"}`)}}
 	if err := e.driverWithInterrupted(sp, 4, &InterruptedDispatch{Detail: FailDaemonRestart}).Run(context.Background()); err != nil {
 		t.Fatalf("restarted Run: %v", err)
 	}
 	if len(sp.spawns) == 0 || sp.spawnAt(0).StepID != "review" {
 		t.Fatalf("the restart must dispatch the gate, got %v", sp.dispatched())
 	}
-	if sp.spawnAt(0).Resume || sp.spawnAt(0).RewindInput != nil {
-		t.Fatalf("the gate must re-enter fresh without a verdict: %v %+v", sp.spawnAt(0), sp.spawnAt(0).RewindInput)
+	if sp.spawnAt(0).Resume {
+		t.Fatalf("the gate must re-enter fresh: %v", sp.spawnAt(0))
 	}
 	if x := readExec(t, e.execPath); x.WorkflowStatus != StatusCompleted {
 		t.Fatalf("the restarted lane must complete: %q", x.WorkflowStatus)
@@ -291,7 +228,7 @@ func TestInterruptedRestartAfterSupersededStepStartIsFresh(t *testing.T) {
 			if st := readExec(t, e.execPath).Steps["check"]; st == nil || st.Status != capsule.StepInProgress || st.Dispatch != 5 {
 				t.Fatalf("the crash must leave the superseded step's first new-round dispatch unsettled: %+v", st)
 			}
-			sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"PASS"}`)}}
+			sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"pass"}`)}}
 			if err := e.driverWithInterrupted(sp, 5, tc.interrupt).Run(context.Background()); err != nil {
 				t.Fatalf("restarted Run: %v", err)
 			}
@@ -300,9 +237,6 @@ func TestInterruptedRestartAfterSupersededStepStartIsFresh(t *testing.T) {
 			}
 			if sp.spawnAt(0).Resume {
 				t.Fatalf("the superseded step must not resume the previous round's conversation: %v", sp.spawnAt(0))
-			}
-			if sp.spawnAt(0).RewindInput != nil {
-				t.Fatalf("only the rewind target carries the verdict: %+v", sp.spawnAt(0).RewindInput)
 			}
 			if x := readExec(t, e.execPath); x.WorkflowStatus != StatusCompleted || x.RewindStats.Count != 1 {
 				t.Fatalf("the restarted lane must complete on the one rewind slot: %q %+v", x.WorkflowStatus, x.RewindStats)
@@ -325,15 +259,15 @@ func TestPreJournalSpawnFailureAfterSupersededStepStartStaysFresh(t *testing.T) 
 		t.Fatalf("the non-fresh spawn failure must settle the superseded step with no fresh order: %+v", st)
 	}
 
-	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"PASS"}`)}}
+	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"pass"}`)}}
 	if err := e.driverWithInterrupted(sp, 5, &InterruptedDispatch{Detail: FailDriverRelaunch}).Run(context.Background()); err != nil {
 		t.Fatalf("restarted Run: %v", err)
 	}
 	if len(sp.spawns) == 0 || sp.spawnAt(0).StepID != "check" {
 		t.Fatalf("the restart must dispatch the superseded step, got %v", sp.dispatched())
 	}
-	if sp.spawnAt(0).Resume || sp.spawnAt(0).RewindInput != nil {
-		t.Fatalf("the superseded step must re-enter fresh without a verdict: %v %+v", sp.spawnAt(0), sp.spawnAt(0).RewindInput)
+	if sp.spawnAt(0).Resume {
+		t.Fatalf("the superseded step must re-enter fresh: %v", sp.spawnAt(0))
 	}
 	if x := readExec(t, e.execPath); x.WorkflowStatus != StatusCompleted {
 		t.Fatalf("the restarted lane must complete: %q", x.WorkflowStatus)

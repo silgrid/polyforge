@@ -52,7 +52,7 @@ func (rs *recordingStarter) last() AgentStartInput {
 // signal rides along as the raw recovery cause.
 func TestRecoveryRelaunchComposesLive(t *testing.T) {
 	setGitIdentity(t)
-	wfDir := frontmatterBundle(t, w079Frontmatter)
+	wfDir := laneBundle(t, w079Lane)
 	hub := newFakeHub()
 	ws := filepath.Join(t.TempDir(), "ws")
 	if err := os.MkdirAll(ws, 0o755); err != nil {

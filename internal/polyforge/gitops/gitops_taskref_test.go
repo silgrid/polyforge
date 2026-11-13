@@ -322,15 +322,15 @@ func TestTaskRefBehindCarrierIsNothingToCarry(t *testing.T) {
 	o, base := taskOpts(t, "wi_behind")
 	mkBare(t, o.RemoteURL, false)
 	mkTaskCapsule(t, o)
-	workHead := mkTaskRepoWithWork(t, o.CapsuleDir, "pi-web-gmi", filepath.Join(base, "origin"))
+	workHead := mkTaskRepoWithWork(t, o.CapsuleDir, "demo", filepath.Join(base, "origin"))
 	if _, _, _, err := CommitPush(ctx, o, "v13"); err != nil {
 		t.Fatalf("first CommitPush: %v", err)
 	}
-	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("pi-web-gmi")); !ok || got != workHead {
+	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("demo")); !ok || got != workHead {
 		t.Fatalf("carrier = %q (%v), want %q", got, ok, workHead)
 	}
 
-	repoDir := filepath.Join(o.CapsuleDir, capsule.DirRepos, "pi-web-gmi")
+	repoDir := filepath.Join(o.CapsuleDir, capsule.DirRepos, "demo")
 	mustRun(t, "git", "-C", repoDir, "checkout", "-q", "HEAD~1")
 
 	var kinds []string
@@ -347,7 +347,7 @@ func TestTaskRefBehindCarrierIsNothingToCarry(t *testing.T) {
 	if len(kinds) != 0 {
 		t.Fatalf("a worktree behind the carrier raised %v, want no events (nothing to carry)", kinds)
 	}
-	if got, _ := bareRefSHA(t, o.RemoteURL, TaskRefName("pi-web-gmi")); got != workHead {
+	if got, _ := bareRefSHA(t, o.RemoteURL, TaskRefName("demo")); got != workHead {
 		t.Fatalf("carrier moved to %q, want it kept at the newer head %q", got, workHead)
 	}
 }
@@ -617,7 +617,7 @@ func TestCarrierPushRunsFromATempRepo(t *testing.T) {
 		t.Fatalf("the temp repo %q must be removed after the push", tmp)
 	}
 	want := []string{
-		"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "http.proxy=",
+		"-c", "credential.helper=", "-c", "http.proxy=",
 		"-c", "protocol.allow=never", "-c", "protocol.file.allow=always",
 		"push", "--no-recurse-submodules", o.RemoteURL, workHead + ":" + TaskRefName("demo-src"),
 	}
@@ -1107,7 +1107,7 @@ func TestCarrierPushTimesOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	objects, sha, reason := carrierSourceT(Opts{}, repos, "demo-src")
+	objects, sha, reason := carrierSourceT(o, repos, "demo-src")
 	if reason != "" || sha == "" {
 		t.Fatalf("carrierSource = %q, %q", sha, reason)
 	}

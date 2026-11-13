@@ -4,8 +4,8 @@
 // The two sides live in the same `pf daemon` process and talk through
 // one Link per work item:
 //
-//   - driver -> supervisor FACTS (step_started, step_waiting_human /
-//     step_answered, step_ended, plus the additive exec_committed commit
+//   - driver -> supervisor FACTS (step_started, step_waiting_human,
+//     step_ended, plus the additive exec_committed commit
 //     boundary notice and step_retry_wait backoff declaration): an
 //     unbounded per-WI queue, the sender never blocks and a fact is never
 //     dropped;
@@ -63,6 +63,11 @@ const (
 	// OutcomeExitedWithoutResult: the process is gone (or was killed on a
 	// verdict / cancellation) and no usable envelope landed.
 	OutcomeExitedWithoutResult Outcome = "exited_without_result"
+	// OutcomeAwaitingOwner: the dispatch asked the owner (`pf ask`) and its
+	// process is gone — the warm window ran out, or it exited while idle —
+	// with the ask still open: no death, no result; the step stays
+	// awaiting the owner and the reply resumes the session (PR 6d).
+	OutcomeAwaitingOwner Outcome = "awaiting_owner"
 )
 
 // Thresholds are the per-dispatch judging limits the driver sends with
@@ -122,11 +127,26 @@ type StepWaitingHuman struct {
 	QuestionID string `json:"question_id"`
 }
 
-// StepAnswered: the human answered; the driver is between steps again.
-type StepAnswered struct {
-	Step       string `json:"step"`
-	SpawnN     int64  `json:"spawn_n"`
-	QuestionID string `json:"question_id"`
+// StepQueued: the driver holds a daemon-run verification in the daemon's
+// heavy-run admission queue. No step process exists while
+// it waits — like a human question, no dispatch timer and no stall clock
+// runs; the admitted run's step_started (or the next fact) ends it.
+type StepQueued struct {
+	Step   string `json:"step"`
+	Reason string `json:"reason"`
+}
+
+// StepOwnerWait: the dispatch's agent asked the owner (`pf ask`, the
+// capsule's asks.jsonl) and the dispatch waits for the reply while its
+// process stays resident (workflow contract v2 §5.2, PR 6c). Waiting true
+// stops every rule over the dispatch — silence, the tool window and T are
+// not counted while the owner is asked — and false (the reply delivered,
+// PR 6d) resumes them. AskAt is the open ask's stamp.
+type StepOwnerWait struct {
+	Step    string `json:"step"`
+	SpawnN  int64  `json:"spawn_n"`
+	Waiting bool   `json:"waiting"`
+	AskAt   string `json:"ask_at,omitempty"`
 }
 
 // StepEnded closes a dispatch.
@@ -161,7 +181,8 @@ type ExecCommitted struct {
 
 func (StepStarted) FactKind() string      { return "step_started" }
 func (StepWaitingHuman) FactKind() string { return "step_waiting_human" }
-func (StepAnswered) FactKind() string     { return "step_answered" }
+func (StepOwnerWait) FactKind() string    { return "step_owner_wait" }
+func (StepQueued) FactKind() string       { return "step_queued" }
 func (StepEnded) FactKind() string        { return "step_ended" }
 func (StepRetryWait) FactKind() string    { return "step_retry_wait" }
 func (ExecCommitted) FactKind() string    { return "exec_committed" }

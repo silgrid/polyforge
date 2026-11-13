@@ -1,0 +1,5 @@
+--- FAIL: TestHandler (0.00s)
+    handler_test.go:12: got 1, want 2
+FAIL
+FAIL	example.com/app/server	0.011s
+FAIL

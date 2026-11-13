@@ -19,10 +19,15 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -79,8 +84,10 @@ func runRealResume(t *testing.T, hubURL, socket string) (int, string, string) {
 		t.Setenv(k, "")
 	}
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("PF_SERVER", hubURL)
-	t.Setenv("PF_DAEMON_SOCKET", socket)
+	// the CLI's business goes through the daemon's data-plane proxy: a
+	// front stands in for the Host's /aihub/ route over hubURL and relays
+	// every other path to this daemon's socket
+	t.Setenv("PF_DAEMON_SOCKET", proxyFront(t, hubURL, socket))
 	var stdout, stderr bytes.Buffer
 	code := cli.Run([]string{"resume", "wi_b6"}, bytes.NewReader(nil), &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
@@ -160,4 +167,43 @@ func TestResumeOnlineHolderContinuesPausedWIInPlace(t *testing.T) {
 
 	// 6. and the job is running again locally.
 	waitState(t, td, "wi_b6", "running")
+}
+
+// proxyFront serves a unix socket that forwards /aihub/<path> to hubURL
+// (the Host's data-plane proxy stand-in) and every other path to socket.
+func proxyFront(t *testing.T, hubURL, socket string) string {
+	t.Helper()
+	u, err := url.Parse(hubURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toHub := httputil.NewSingleHostReverseProxy(u)
+	base := toHub.Director
+	toHub.Director = func(r *http.Request) {
+		base(r)
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/aihub")
+		r.URL.RawPath = ""
+	}
+	toDaemon := &httputil.ReverseProxy{
+		Director: func(r *http.Request) { r.URL.Scheme, r.URL.Host = "http", "daemon" },
+		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", socket)
+		}},
+	}
+	sock := filepath.Join(t.TempDir(), "front.sock")
+	lst, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/aihub/") {
+			toHub.ServeHTTP(w, r)
+			return
+		}
+		toDaemon.ServeHTTP(w, r)
+	})}
+	go func() { _ = srv.Serve(lst) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return sock
 }

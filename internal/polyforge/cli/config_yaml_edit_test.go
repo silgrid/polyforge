@@ -69,8 +69,7 @@ steps:
     # grill comment
     grill:
       models: ["pi:before"]
-      attrs:
-        question_batch_size: 2
+      # grill trailing comment
     # code comment
     code:
       models: ["pi:code"]
@@ -94,12 +93,8 @@ func TestStepsChainWritePreservesBytes(t *testing.T) {
 	if !strings.Contains(added, "  beta:\n    fix:\n      models: [\"pi:f\"]\nmemory_policy:") {
 		t.Fatalf("new entry not created in block style inside steps:\n%s", added)
 	}
-	attr := editStepsYAML(denseStepsYAML, stepKey{project: "alpha", step: "grill", attr: "question_batch_size"}, "3", true)
-	if n := diffLineCount(denseStepsYAML, attr); n != 1 || !strings.Contains(attr, "        question_batch_size: 3\n") {
-		t.Fatalf("an attr edit must change only its line (%d):\n%s", n, attr)
-	}
-	fresh := editStepsYAML("", stepKey{project: "alpha", step: "grill", attr: "question_batch_size"}, "1", true)
-	if fresh != "steps:\n  alpha:\n    grill:\n      attrs:\n        question_batch_size: 1\n" {
+	fresh := editStepsYAML("", stepKey{project: "alpha", step: "grill"}, `["pi:a"]`, true)
+	if fresh != "steps:\n  alpha:\n    grill:\n      models: [\"pi:a\"]\n" {
 		t.Fatalf("an empty file must gain a block-style entry, got:\n%q", fresh)
 	}
 }
@@ -111,27 +106,18 @@ func TestStepsFlowEntryExpandsOnce(t *testing.T) {
 	if !strings.Contains(after, "    default:\n      models: [\"pi:new\"]\nmemory_policy:") {
 		t.Fatalf("flow default entry not expanded and set:\n%s", after)
 	}
-	kept := editStepsYAML("steps:\n  alpha:\n    grill: { models: [pi:a], attrs: { question_batch_size: 2 } }\n", stepKey{project: "alpha", step: "grill"}, `["pi:b"]`, true)
-	if kept != "steps:\n  alpha:\n    grill:\n      models: [\"pi:b\"]\n      attrs:\n        question_batch_size: 2\n" {
-		t.Fatalf("flow expansion must keep the attrs:\n%q", kept)
+	kept := editStepsYAML("steps:\n  alpha: { grill: { models: [pi:a] }, code: { models: [pi:c] } }\n", stepKey{project: "alpha", step: "grill"}, `["pi:b"]`, true)
+	if kept != "steps:\n  alpha:\n    grill:\n      models: [\"pi:b\"]\n    code:\n      models: ['pi:c']\n" {
+		t.Fatalf("flow expansion must keep the other entries:\n%q", kept)
 	}
 }
 
-// TestStepsChainUnsetDeletesEntry pins the clear semantics: a chain-only
-// entry disappears (and an emptied project/section with it), an
-// attrs-carrying entry keeps its attrs, an attr unset drops an emptied map.
+// TestStepsChainUnsetDeletesEntry pins the clear semantics: a cleared
+// entry disappears (and an emptied project/section with it).
 func TestStepsChainUnsetDeletesEntry(t *testing.T) {
 	after := editStepsYAML(denseStepsYAML, stepKey{project: "alpha", step: "code"}, "", false)
 	if strings.Contains(after, "    code:") || !strings.Contains(after, "    # code comment\n    default:") {
 		t.Fatalf("a chain-only entry must be deleted:\n%s", after)
-	}
-	kept := editStepsYAML(denseStepsYAML, stepKey{project: "alpha", step: "grill"}, "", false)
-	if !strings.Contains(kept, "    grill:\n      attrs:\n        question_batch_size: 2\n") || strings.Contains(kept, `"pi:before"`) {
-		t.Fatalf("a chain clear must keep the attrs:\n%s", kept)
-	}
-	noAttr := editStepsYAML(kept, stepKey{project: "alpha", step: "grill", attr: "question_batch_size"}, "", false)
-	if strings.Contains(noAttr, "grill:") {
-		t.Fatalf("an entry left declaring nothing must go:\n%s", noAttr)
 	}
 	only := "steps:\n  alpha:\n    fix: { models: [pi:a] }\nsummarize: { models: [] }\n"
 	if got := editStepsYAML(only, stepKey{project: "alpha", step: "fix"}, "", false); got != "summarize: { models: [] }\n" {

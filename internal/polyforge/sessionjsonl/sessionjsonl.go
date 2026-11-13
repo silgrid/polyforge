@@ -4,7 +4,9 @@
 // CopyReadonly is the one live-transcript copier, consumed by the
 // observe module (the commit-boundary sync) and by the runtime's
 // transcript sync face; Tail is the one bounded-tail reader, consumed
-// by the summarize lane's prompt (polyforge#224) — and the package stays
+// by the summarize lane's prompt (polyforge#224); ContextReader is the one
+// context-usage reader (per harness, incremental), consumed by the observe
+// module for a running step's context meter and the package stays
 // a leaf (stdlib plus the atomicfile leaf) so both consumers can import
 // it without cycles.
 //

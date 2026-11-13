@@ -21,12 +21,11 @@ import (
 // principledSteps is every shipped (bundle, step) that carries the
 // principles; every other shipped step carries none.
 var principledSteps = map[string][]string{
-	"feature-full": {"grill", "spec", "plan", "e2e-author", "code", "review", "deliver"},
-	"autopilot":    {"grill", "fix", "deliver"},
-	"bug-fix":      {"repro", "root-cause", "fix", "review", "deliver"},
-	"chore":        {"plan", "code", "review", "deliver"},
-	"micro":        {"fix", "review", "deliver"},
-	"release":      {"verify"},
+	"micro":   {"fix", "review"},
+	"release": {"verify"},
+	"develop": {"build", "review"},
+	// integrate's four agent steps run pre-written commands under their
+	// skills (workflow contract v2): the principles ride none of them.
 }
 
 func TestShippedPrinciplesRenderedOnce(t *testing.T) {
@@ -42,7 +41,7 @@ func TestShippedPrinciplesRenderedOnce(t *testing.T) {
 		}
 	}
 	seen := 0
-	for _, bs := range shippedBundleSteps(t) {
+	for _, bs := range shippedDefinitions(t) {
 		key := filepath.Base(bs[0]) + "/" + bs[1]
 		def, err := readStepDefinition(bs[0], bs[1], shippedVars(t, bs[0], bs[1]))
 		if err != nil {
@@ -80,7 +79,7 @@ func TestShippedPrinciplesRenderedOnce(t *testing.T) {
 		t.Errorf("found %d of %d principled steps among the shipped bundles", seen, len(want))
 	}
 	// end to end: a materialized capsule renders them into the dispatched prompt
-	for _, bs := range [][2]string{{"feature-full", "review"}, {"chore", "plan"}} {
+	for _, bs := range [][2]string{{"develop", "review"}, {"micro", "fix"}} {
 		if p := spawnStepPrompt(t, bs[0], bs[1]); strings.Count(p, text) != 1 {
 			t.Errorf("%s/%s dispatched prompt carries the principles %d times, want 1", bs[0], bs[1], strings.Count(p, text))
 		}
@@ -124,4 +123,30 @@ func TestPolyforgeOnlyRulesInAgentsMD(t *testing.T) {
 	if claude, err := os.ReadFile(filepath.Join(root, "CLAUDE.md")); err != nil || string(claude) != "@AGENTS.md\n" {
 		t.Errorf("CLAUDE.md must be the one-line import of AGENTS.md: %q, %v", claude, err)
 	}
+}
+
+// shippedStepDef reads one shipped step definition file, rendered with
+// the shipped bundle's vars for that step (so a test bundle carrying the
+// copy needs none).
+func shippedStepDef(t *testing.T, bundle, step string) string {
+	t.Helper()
+	dir := filepath.Join(workflowsRootFor(t, bundle), bundle)
+	raw, err := workflow.RenderDefinition(dir, step, shippedVars(t, dir, step))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// shippedVars answers the vars a shipped bundle's step entry declares.
+func shippedVars(t *testing.T, bundleDir, step string) map[string]string {
+	t.Helper()
+	wf, err := LoadWorkflow(bundleDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := wf.step(step); s != nil {
+		return s.Vars
+	}
+	return nil
 }

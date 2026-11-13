@@ -172,3 +172,31 @@ func TestNothingRecoversAfterTheShutdown(t *testing.T) {
 		t.Fatalf("state %s, %d ends: the record must stay as it was", st, hub.endCount())
 	}
 }
+
+// TestSealingBlockedCloseOfAGoneSessionReleasesWithTheHubStatus (PR #860
+// review 3): a daemon crash mid-seal of a blocked close whose SessionEnd
+// reached aihub with its answer lost — at restart the verify finds the
+// session gone and aihub saying blocked: the release names aihub's status
+// (confirmed), so the decision feed keeps the work item blocked.
+func TestSealingBlockedCloseOfAGoneSessionReleasesWithTheHubStatus(t *testing.T) {
+	hub := newFakeHub()
+	r, toOB, _ := newTestRuntime(t, hub, &scriptedSpawner{})
+	t.Cleanup(r.Close)
+	const wi = "wi_seal_gone_blocked"
+	rec := matrixRecord(r, wi, 0, "")
+	rec.State, rec.StopReason = string(StateSealing), protocol.FinishBlocked
+	initGitCapsule(t, r.restoredJob(rec))
+	writeStateFile(t, r, []*jobRecord{rec})
+	hub.forceEnd(wi)
+	hub.mu.Lock()
+	hub.status[wi] = api.StatusBlocked
+	hub.mu.Unlock()
+	if err := restartSettled(t, r); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	waitFor(t, "the seal to finish", func() bool { return r.jobOf(wi) == nil })
+	if m := recvRT(t, toOB); m.Kind != protocol.RTFinished || m.Reason != api.StatusBlocked || m.Unconfirmed {
+		t.Fatalf("the release must carry aihub's blocked, confirmed: %+v", m)
+	}
+	unseal(t, testWorkspace(r))
+}

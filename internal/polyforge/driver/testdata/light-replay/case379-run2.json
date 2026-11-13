@@ -1,0 +1,61 @@
+{
+ "schema": 1,
+ "run": 2,
+ "out_dir": "runtime-state/verify/2",
+ "mechanical_verdict": "fail",
+ "fail_reason": "polyforge:full-7: `cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all` exit 1; new failures: e2e/polyforge-messages.mjs: PM16 desktop two columns and mobile two columns — the list and the stream must be two columns at the minimum dock width | PM16 — desktop keeps two columns at the default and the minimum dock width and mobile keeps the same two columns with a back control [not re-runnable: the planned aggregate e2e command is not one simple command] (log polyforge/17.log)",
+ "tier": {
+  "requested": "full",
+  "effective": "full"
+ },
+ "checks": [
+  {
+   "name": "polyforge:full-7",
+   "status": "fail",
+   "detail": "`cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all` exit 1; new failures: e2e/polyforge-messages.mjs: PM16 desktop two columns and mobile two columns — the list and the stream must be two columns at the minimum dock width | PM16 — desktop keeps two columns at the default and the minimum dock width and mobile keeps the same two columns with a back control [not re-runnable: the planned aggregate e2e command is not one simple command] (log polyforge/17.log)"
+  }
+ ],
+ "pre_existing_failures": [],
+ "units": [
+  {
+   "repo": "polyforge",
+   "check": "polyforge:full-7",
+   "kind": "e2e-suite",
+   "name": "e2e/polyforge-messages.mjs",
+   "file": "e2e/polyforge-messages.mjs",
+   "status": "fail",
+   "marker": "FAIL e2e/polyforge-messages.mjs: PM16 desktop two columns and mobile two columns — the list and the stream must be two columns at the minimum dock width",
+   "signature": "PM16 desktop two columns and mobile two columns — the list and the stream must be two columns at the minimum dock width | PM16 — desktop keeps two columns at the default and the minimum dock width and mobile keeps the same two columns with a back control",
+   "detail": "not re-runnable: the planned aggregate e2e command is not one simple command"
+  }
+ ],
+ "repos": [
+  {
+   "name": "polyforge",
+   "touched": true,
+   "plan": "planned",
+   "mode": "full",
+   "paths": [
+    "pi-web/e2e/claude-composer-272.mjs",
+    "pi-web/e2e/deploy-pf-bin.mjs",
+    "pi-web/e2e/deploy-served-installed.mjs",
+    "pi-web/e2e/lane-stubs.mjs",
+    "pi-web/e2e/polyforge-config-255.mjs"
+   ],
+   "commands": [
+    {
+     "check": "polyforge:full-7",
+     "name": "full-7",
+     "phase": "full",
+     "origin": "plan",
+     "command": "cd pi-web && E2E_SERVER_MODE=start npm run test:e2e:all",
+     "status": "fail",
+     "exit_code": 1,
+     "log_path": "runtime-state/verify/2/polyforge/17.log"
+    }
+   ]
+  }
+ ],
+ "unplanned_repos": [],
+ "source": "replay fixture case379-run2: the failing checks, units and touched paths of a real 2026-11-08 verify-run result.json, trimmed (repo renamed)"
+}

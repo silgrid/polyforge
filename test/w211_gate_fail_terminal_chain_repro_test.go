@@ -40,6 +40,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,9 +96,10 @@ func TestW211GateFailStraightToTerminalLandsFinalStateOnChain(t *testing.T) {
 		t.Fatalf("the gate must stay in_progress holding its verdict (never done): %s", execDigest(x))
 	}
 	finalVersion := x.Version
-	verdict, _ := x.Steps["release"].Output["verdict"].(string)
-	if verdict != "fail" {
-		t.Fatalf("the FAIL verdict is not on the gate step: output %v", x.Steps["release"].Output)
+	// workflow contract 4: the FAIL verdict is the gate's own section of
+	// the hand-off document, its status stamped by the daemon
+	if doc, err := os.ReadFile(filepath.Join(capsule, "artifacts", "handoff.md")); err != nil || !w211FailSection(string(doc), "release") {
+		t.Fatalf("the FAIL verdict is not the gate's section of handoff.md (%v):\n%s", err, doc)
 	}
 
 	// THE CLAIM (#204): the terminal-carrying version never persisted on
@@ -117,8 +119,8 @@ func TestW211GateFailStraightToTerminalLandsFinalStateOnChain(t *testing.T) {
 	}
 	if st := chain.Steps["release"]; st == nil {
 		t.Fatalf("SYMPTOM (#204): the chain's terminal state carries no release step: %s", execDigest(chain))
-	} else if v, _ := st.Output["verdict"].(string); v != "fail" {
-		t.Fatalf("SYMPTOM (#204): the FAIL verdict never reached the chain: release output %v", st.Output)
+	} else if doc, err := gitShow(t, bare, "refs/heads/main:artifacts/handoff.md"); err != nil || !w211FailSection(doc, "release") {
+		t.Fatalf("SYMPTOM (#204): the FAIL verdict never reached the chain: its handoff.md (%v):\n%s", err, doc)
 	}
 
 	// The transcript the dispatch wrote (the capsule session path) rides
@@ -137,7 +139,10 @@ func TestW211GateFailStraightToTerminalLandsFinalStateOnChain(t *testing.T) {
 // last step_done's push. Asserted against the same contract: the chain
 // carries the terminal version and the verdict.
 func TestW211FinalGateFailAfterStepDoneLandsFinalStateOnChain(t *testing.T) {
-	inst := newV1Install(t)
+	// a task repo: the release lane's steps run their commands in the
+	// owner repo (workflow contract v2 change 9: no notary), so the
+	// capsule carries one
+	inst, _ := newV1InstallTaskRepo(t)
 
 	wi := newWIWithBundle(t, inst,
 		"w211: the final gate FAILs straight to terminal after the lane's "+
@@ -147,6 +152,8 @@ func TestW211FinalGateFailAfterStepDoneLandsFinalStateOnChain(t *testing.T) {
 			// The lane's one step_done: the release gate passes (its
 			// completed result is the last step_done push covers).
 			{"do": "envelope", "id": "release", "outcome": "completed",
+				// the release record the lane requires of it (verify reads it)
+				"files": map[string]string{"artifacts/release-record.json": "{}\n"},
 				"output": map[string]any{
 					"verdict":             "pass",
 					"version":             "2.211.0",
@@ -204,8 +211,8 @@ func TestW211FinalGateFailAfterStepDoneLandsFinalStateOnChain(t *testing.T) {
 	}
 	if st := chain.Steps["verify"]; st == nil {
 		t.Fatalf("SYMPTOM (#204): the chain's terminal state carries no verify step: %s", execDigest(chain))
-	} else if v, _ := st.Output["verdict"].(string); v != "fail" {
-		t.Fatalf("SYMPTOM (#204): the FAIL verdict never reached the chain: verify output %v", st.Output)
+	} else if doc, err := gitShow(t, bare, "refs/heads/main:artifacts/handoff.md"); err != nil || !w211FailSection(doc, "verify") {
+		t.Fatalf("SYMPTOM (#204): the FAIL verdict never reached the chain: its handoff.md (%v):\n%s", err, doc)
 	}
 	if sessions := chainSessionFiles(t, bare); len(sessions) == 0 {
 		t.Fatalf("SYMPTOM (#204): the chain carries no session transcript (session/ empty)")
@@ -214,6 +221,17 @@ func TestW211FinalGateFailAfterStepDoneLandsFinalStateOnChain(t *testing.T) {
 
 // chainExecution answers the remote chain's execution.json view (nil
 // when the chain has none).
+// w211FailSection reports whether the hand-off document carries a
+// section of step whose stamped status is fail.
+func w211FailSection(doc, step string) bool {
+	for _, l := range strings.Split(doc, "\n") {
+		if strings.HasPrefix(l, "## "+step+" · ") && strings.HasSuffix(strings.TrimSpace(l), " · fail") {
+			return true
+		}
+	}
+	return false
+}
+
 func chainExecution(t *testing.T, bare string) *executionView {
 	t.Helper()
 	out, err := gitShow(t, bare, "refs/heads/main:runtime-state/execution.json")

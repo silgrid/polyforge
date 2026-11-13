@@ -1,16 +1,19 @@
 package driver
 
-// lane_contract_test.go: pins the shipped lanes' contract
-// after the reorder — the three review-bearing delivery lanes run
-// code → review → verification → deliver, autopilot keeps its order, the
-// rewind bounds are 9/3 (autopilot 6/3), and per-edge charging behaves
-// identically on a synthetic lane no workbench name ever touches (the
-// generality evidence the platform-layer rule demands).
+// lane_contract_test.go: pins the shipped lanes' rewind
+// contract — every gate edge of a shipped lane exhausts the lane's one
+// budget, max_rewinds, constructively (contract 1: there is no per-edge
+// bound). (The order and bound pins of the lanes removed
+// went with them.)
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/silgrid/polyforge/internal/common/workflow"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 )
@@ -29,90 +32,160 @@ func laneOrder(t *testing.T, bundle string) []string {
 	return out
 }
 
-// TestShippedLanesReviewPrecedesVerification: the three review-bearing
-// delivery lanes declare review before verification (the frontmatter is
-// the only order authority); autopilot keeps grill → fix → verification →
-// deliver.
-func TestShippedLanesReviewPrecedesVerification(t *testing.T) {
-	for _, bundle := range []string{"feature-full", "chore", "bug-fix"} {
-		order := laneOrder(t, bundle)
-		pos := map[string]int{}
-		for i, id := range order {
-			pos[id] = i
-		}
-		ri, okR := pos[reviewStepID]
-		vi, okV := pos[verificationStepID]
-		if !okR || !okV {
-			t.Fatalf("%s: no review/verification steps: %v", bundle, order)
-		}
-		if ri >= vi {
-			t.Errorf("%s: review (%d) must precede verification (%d): %v", bundle, ri, vi, order)
-		}
-	}
-	if got := laneOrder(t, "autopilot"); len(got) != 4 ||
-		got[0] != "grill" || got[1] != "fix" || got[2] != verificationStepID || got[3] != deliverStepID {
-		t.Fatalf("autopilot's order must stay grill → fix → verification → deliver, got %v", got)
-	}
-}
-
-// TestShippedLaneRewindBounds: the delivery lanes carry 9/3, autopilot 6/3.
-func TestShippedLaneRewindBounds(t *testing.T) {
-	for _, bundle := range []string{"feature-full", "chore", "bug-fix"} {
-		wf, err := LoadWorkflow(filepath.Join(shippedWorkflowsDir, bundle))
-		if err != nil {
-			t.Fatalf("%s: %v", bundle, err)
-		}
-		if wf.MaxTotal != 9 || wf.MaxPerStep != 3 {
-			t.Errorf("%s: bounds %d/%d, want 9/3", bundle, wf.MaxTotal, wf.MaxPerStep)
-		}
-	}
-	wf, err := LoadWorkflow(filepath.Join(shippedWorkflowsDir, "autopilot"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if wf.MaxTotal != 6 || wf.MaxPerStep != 3 {
-		t.Fatalf("autopilot: bounds %d/%d, want 6/3", wf.MaxTotal, wf.MaxPerStep)
-	}
-}
-
-// TestShippedMicroLaneShape: micro is exactly fix →
-// review → deliver — no grill, plan, spec, e2e-author or verification —
-// both gates rewind to fix, the bounds are 2/1, the build step is fix and
-// the lane is the verification-less delivery shape the fast-lane guard and
-// merge rule key on.
+// TestShippedMicroLaneShape (; §15.2; workflow
+// contract 2, change 10; contract 4): micro is fix → review → sync →
+// evidence → publish → merge — no grill, plan or verification — every
+// step an agent step: review, evidence and publish rewind to fix, merge to
+// sync, sync is no gate; max_rewinds is 3. fix (mid) and review (mid)
+// judge the bounds with facts.py micro-bounds (fix's skill, review's
+// definition); fix recalls prior experience (the {{recall}} fragment its
+// definition includes); the four mechanical steps run their skills on the
+// cheap tier; evidence is the lane's one waivable gate, with the heavy
+// admission and no lock; merge holds the merge lock and registers the
+// landing as the wrap's `integration` attr (wrap_attrs). What each step
+// reads first and hands off is prose since contract 4:
+// TestShippedMicroLanePrompts.
 func TestShippedMicroLaneShape(t *testing.T) {
 	wf, err := LoadWorkflow(filepath.Join(shippedWorkflowsDir, "micro"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := laneOrder(t, "micro"); len(got) != 3 || got[0] != "fix" || got[1] != reviewStepID || got[2] != deliverStepID {
-		t.Fatalf("micro's order must be fix → review → deliver, got %v", got)
+	lane, err := workflow.LoadStrict(filepath.Join(shippedWorkflowsDir, "micro"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if wf.MaxTotal != 2 || wf.MaxPerStep != 1 {
-		t.Fatalf("micro: bounds %d/%d, want 2/1", wf.MaxTotal, wf.MaxPerStep)
+	if got := strings.Join(laneOrder(t, "micro"), ","); got != "fix,review,sync,evidence,publish,merge" {
+		t.Fatalf("micro's order must be fix → review → sync → evidence → publish → merge, got %v", got)
 	}
-	for _, id := range []string{reviewStepID, deliverStepID} {
+	if wf.MaxRewinds != 3 {
+		t.Fatalf("micro: max_rewinds %d, want 3", wf.MaxRewinds)
+	}
+	for id, target := range map[string]string{reviewStepID: "fix", "evidence": "fix", publishStepID: "fix", "merge": "sync"} {
 		s := wf.step(id)
-		if !s.Gate || s.OnFail == nil || s.OnFail.Target != "fix" {
-			t.Fatalf("micro/%s must be a gate with on_fail fix: %+v", id, s)
+		if !s.Gate || s.OnFail == nil || s.OnFail.Target != target {
+			t.Fatalf("micro/%s must be a gate with on_fail %s: %+v", id, target, s)
 		}
-	}
-	if s := wf.step(reviewStepID); s.ContextPolicy != ContextFresh {
-		t.Fatalf("micro/review must run fresh, got %q", s.ContextPolicy)
-	}
-	if s := wf.step("fix"); s.ContextPolicy != ContextInherit || !s.Recall {
-		t.Fatalf("micro/fix must inherit with recall: %+v", s)
-	}
-	if !wf.step(deliverStepID).RequiresCommandEvidence {
-		t.Fatal("micro/deliver must require command evidence")
 	}
 	for _, s := range wf.Steps {
-		if s.RequiresHumanAnswer || s.HumanAnswerIfAsked {
-			t.Fatalf("micro/%s declares requires_human_answer; the lane has no human checkpoint", s.ID)
+		if s.ID != "evidence" && s.Waivable {
+			t.Fatalf("micro/%s must not be waivable: only evidence is", s.ID)
 		}
 	}
-	if wf.buildStep() != "fix" || !verificationLess(wf) {
-		t.Fatalf("micro: build step %q, verification-less %v", wf.buildStep(), verificationLess(wf))
+	for id, want := range map[string][2]string{
+		"fix": {"micro-bounds", "mid"}, reviewStepID: {"", "mid"}, "sync": {"sync", "cheap"},
+		"evidence": {"evidence", "cheap"}, publishStepID: {"publish", "cheap"}, "merge": {"merge", "cheap"},
+	} {
+		if s := lane.Step(id); s.Skill != want[0] || s.ModelTier != want[1] || len(s.ModelCandidates) != 0 {
+			t.Fatalf("micro/%s must follow skill %q on the %s tier: skill %q tier %q candidates %v", id, want[0], want[1], s.Skill, s.ModelTier, s.ModelCandidates)
+		}
+	}
+	// fix recalls (contract 4: the {{recall}} fragment its definition
+	// includes, not a `memory: recall` input).
+	dir := filepath.Join(shippedWorkflowsDir, "micro")
+	def, err := readStepDefinition(dir, "fix", shippedVars(t, dir, "fix"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(def, "## Prior experience (`pf step recall`)") {
+		t.Fatalf("micro/fix must recall prior experience (the {{recall}} fragment):\n%s", def)
+	}
+	fix := lane.Step("fix")
+	if fix.Gate || fix.WallMinutes != 20 {
+		t.Fatalf("micro/fix must be a non-gate with a 20-minute wall budget: %+v", fix)
+	}
+	if review := lane.Step(reviewStepID); review.WallMinutes != 15 {
+		t.Fatalf("micro/review must declare a 15-minute wall budget: %+v", review)
+	}
+	sync := lane.Step("sync")
+	if sync.Gate || sync.OnFailTarget != "" || sync.ToolMinutes != 20 {
+		t.Fatalf("micro/sync must be a non-gate with a 20-minute tool window: %+v", sync)
+	}
+	ev := lane.Step("evidence")
+	if !ev.Waivable || ev.Resources == nil || !ev.Resources.Heavy() || len(ev.Resources.Locks) != 0 || ev.ToolMinutes != 30 || ev.WallMinutes != 0 {
+		t.Fatalf("micro/evidence must be waivable, take the heavy admission and no lock, and a 30-minute tool window: %+v", ev)
+	}
+	if p := lane.Step(publishStepID); p.Resources != nil || p.WallMinutes != 15 {
+		t.Fatalf("micro/%s must take no resource and a 15-minute wall budget: %+v", publishStepID, p)
+	}
+	m := lane.Step("merge")
+	if strings.Join(m.WrapAttrs, ",") != "integration" || m.Resources == nil || m.Resources.Heavy() || !m.Resources.Holds(workflow.LockMerge) || m.ToolMinutes != 10 {
+		t.Fatalf("micro/merge must hold the merge lock, a 10-minute tool window and register the landing as the wrap's integration attr (wrap_attrs: [integration]): %+v", m)
+	}
+	if raw, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, "micro", workflow.WorkflowFile)); err != nil || strings.Contains(string(raw), "refile_lane") {
+		t.Fatal("micro's out-of-bounds re-file is fix's question to the owner, never the daemon's refile_lane")
+	}
+}
+
+// TestShippedMicroLanePrompts (workflow contract 2, change 10; contract
+// 4): every micro step renders through the spawn adapter from a
+// materialized capsule, carrying its skill (the pre-written command line
+// verbatim) and what it checks of its upstream before it starts; the
+// shared skills name micro's own result file and rewind target, never
+// develop's verification or build. Phrases are matched with whitespace
+// folded (a rewrap keeps them pinned); `pf step ask` alone is not
+// asserted — the step header every prompt carries names it.
+func TestShippedMicroLanePrompts(t *testing.T) {
+	for step, wants := range map[string][]string{
+		"fix": {"# Skill", "`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/facts.py\" micro-bounds --plan artifacts/fix/evidence.json --json --out artifacts/facts/micro-bounds.json`",
+			"`artifacts/fix/evidence.json`", "re-file the work on the `develop` lane",
+			// contract 3's `intent: {kind: cancel}` is the cancel hand-off on the owner's word
+			"`--status cancel --per-owner <the reply's at>`",
+			// contract 3's `pf ask`: the out-of-bounds question to the owner
+			"`pf step ask` the owner — the refused repos and paths verbatim from `reason`",
+			// contract 3's declared artifacts: what fix hands off as evidence
+			// (its owner-review section: test/owner_review_gate_contract_test.go)
+			"**Evidence**: `artifacts/fix/evidence.json`, `artifacts/facts/micro-bounds.json`"},
+		reviewStepID: {"`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/facts.py\" micro-bounds --plan artifacts/fix/evidence.json --json --out artifacts/review/micro-bounds.json`",
+			"artifacts/facts/micro-bounds.json",
+			// contract 3's `class: code`: every blocking finding is fix's to repair
+			"on this lane every blocking finding is `fix`'s to repair in its next round",
+			"## Principles",
+			// contract 3's `- step: fix.answers`: the owner replies quoted in fix's section header
+			"an owner reply quoted in fix's section header that approved a narrower change",
+			"what it drops is not missing"},
+		"sync": {"# Skill", "`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/sync.py\" --json --out artifacts/sync/result.json`", "`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/sync.py\" --continue --json --out artifacts/sync/result.json`",
+			// contract 3's verify-first of review's last_review_round: the heads review's section stamps
+			"**The tree review judged.** Read the latest `review` section of `artifacts/handoff.md`: its header stamps each task repo's end commit",
+			"micro's `fix`", "`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/sync.py\" --abort --json --out artifacts/sync/result.json`"},
+		"evidence": {"# Skill", "`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/run.py\" --isolation host --plan-from artifacts/fix/evidence.json --json --out artifacts/run/result.json`",
+			// the downstream check of sync's result file reads its argv
+			"its `argv` is the arguments of the sync skill's start line or of its continue line",
+			// contract 3's verify-first of sync's result
+			"**The sync's hand-off.** Read sync's latest section of `artifacts/handoff.md` and `artifacts/sync/result.json`",
+			"Same-tree rule",
+			// contract 3's `intent: {kind: waive}`: the waive hand-off on the owner's word
+			"the owner accepts the red: `waive --per-owner <the reply's at>`"},
+		publishStepID: {"# Skill", "artifacts/run/result.json", "micro's `fix`",
+			// contract 3's `steps.evidence.record.waived` and "belong to this round of the gate":
+			// the waive stamped on the evidence's section, in the result's round
+			"the verifying gate's latest section in `artifacts/handoff.md` is stamped `waive` **in the same round** as the result file's `round` (an earlier round's waiver never covers a later red)",
+			"conflict resolved in sync: <files>", "artifacts/publish.json", "do not merge it by hand"},
+		"merge": {"# Skill", "`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/merge.py\" --publish artifacts/publish.json --verified artifacts/run/result.json --landing-out artifacts/merge/landing.json --json --out artifacts/merge/result.json`",
+			"**The verified result file is the gate's line's.** Its `argv` is exactly the arguments",
+			// contract 3's verify-first of publish's repos against the evidence's heads
+			"**publish's hand-off against the verified heads.**",
+			// contract 3's `state: landed` handoff: the landing record and its registration
+			"`{state: landed, repos: [{repo, pr, head, light_verified_head, merge_commit, accepted?}], merge_commits}`",
+			"`pf step hub wrap-attrs integration @artifacts/merge/landing.json`",
+			// the wrap summary is written before the pass is handed off
+			"write the wrap summary (the step header's Memory section), then hand off `done`",
+			"`accepted: true`"},
+	} {
+		p := spawnStepPrompt(t, "micro", step)
+		flat := strings.Join(strings.Fields(p), " ")
+		for _, w := range wants {
+			if !strings.Contains(flat, strings.Join(strings.Fields(w), " ")) {
+				t.Errorf("micro/%s prompt must carry %q", step, w)
+			}
+		}
+		if strings.Contains(p, "{{") {
+			t.Errorf("micro/%s prompt carries an unrendered placeholder", step)
+		}
+		for _, bad := range []string{"fast_lane", "pf bar-run", "resolved-conflict-review", "steps.verification."} {
+			if strings.Contains(p, bad) {
+				t.Errorf("micro/%s prompt names %q (the contract-1 micro path or develop's)", step, bad)
+			}
+		}
 	}
 }
 
@@ -152,26 +225,14 @@ func driveGateRound(t *testing.T, d *Driver, wf *Workflow, gate string, n int64)
 }
 
 // TestShippedLaneExhaustionIsConstructive: for every shipped lane and
-// every gate→target edge, a constructive sequence uses the edge's three
-// charged slots (three rewinds land) and the NEXT charged FAIL on that
-// edge terminates the workflow — never an infinite loop — while the
-// lane-wide invariant (#edges × max_per_step ≥ max_total) holds, so
-// max_total is reachable through charged rewinds alone.
+// every gate→target edge, a constructive sequence of FAILs on that one
+// edge lands max_rewinds rewinds, and the NEXT FAIL parks the workflow
+// on the spent budget — never an infinite loop.
 func TestShippedLaneExhaustionIsConstructive(t *testing.T) {
-	for _, bundle := range []string{"feature-full", "chore", "bug-fix", "autopilot", "micro"} {
+	for _, bundle := range []string{"micro"} {
 		wf, err := LoadWorkflow(filepath.Join(shippedWorkflowsDir, bundle))
 		if err != nil {
 			t.Fatalf("%s: %v", bundle, err)
-		}
-		edges := 0
-		for _, s := range wf.Steps {
-			if s.OnFail != nil {
-				edges++
-			}
-		}
-		if edges*wf.MaxPerStep < wf.MaxTotal {
-			t.Errorf("%s: max_total %d unreachable through %d edges x max_per_step %d",
-				bundle, wf.MaxTotal, edges, wf.MaxPerStep)
 		}
 		for _, s := range wf.Steps {
 			if s.OnFail == nil {
@@ -191,35 +252,17 @@ func TestShippedLaneExhaustionIsConstructive(t *testing.T) {
 				}
 				mustInit(t, d)
 				n := int64(1)
-				if s.ID == rootCauseStepID {
-					// the bug-fix dead end (spec: a second inconclusive
-					// root cause asks the owner): one charged rewind, then
-					// the next FAIL parks the owner question — never a
-					// second charged rewind, never exhaustion.
-					n = driveGateRound(t, d, wf, s.ID, n)
-					driveGateRound(t, d, wf, s.ID, n)
-					x := d.Snapshot()
-					q := x.Steps[s.ID].PendingQuestion
-					if x.WorkflowStatus != StatusRunning || x.RewindStats.Count != 1 || q == nil || q.ID != RootCauseInconclusiveQuestionID {
-						t.Fatalf("root-cause: the second FAIL must park the owner question, got %q count %d question %+v",
-							x.WorkflowStatus, x.RewindStats.Count, q)
-					}
-					return
-				}
-				for round := 0; round < wf.MaxPerStep; round++ {
+				for round := 0; round < wf.MaxRewinds; round++ {
 					n = driveGateRound(t, d, wf, s.ID, n)
 					if x := d.Snapshot(); x.RewindStats.Count != int64(round+1) {
 						t.Fatalf("%s: round %d: count %d, want %d", s.ID, round, x.RewindStats.Count, round+1)
 					}
 				}
-				// the edge is full: the next charged FAIL terminates before
-				// any mutation.
-				before := d.Snapshot()
-				driveGateRound(t, d, wf, s.ID, n)
+				// the budget is spent: the next FAIL not citing the owner is
+				// refused at the call (RewindBudgetSpent)
 				x := d.Snapshot()
-				if x.WorkflowStatus != StatusFailedRewindExhausted || x.RewindStats.Count != before.RewindStats.Count {
-					t.Fatalf("%s: the edge's next charged FAIL must terminate at count %d, got %q count %d",
-						s.ID, before.RewindStats.Count, x.WorkflowStatus, x.RewindStats.Count)
+				if RewindBudgetSpent(wf, x) == "" {
+					t.Fatalf("%s: max_rewinds %d is spent after %d rewinds: %+v", s.ID, wf.MaxRewinds, x.RewindStats.Count, x.RewindStats)
 				}
 				for _, r := range x.RewindStats.Rewinds {
 					if r.Gate != s.ID || r.ToStep != s.OnFail.Target || r.Class != capsule.RewindCharged {
@@ -227,59 +270,6 @@ func TestShippedLaneExhaustionIsConstructive(t *testing.T) {
 					}
 				}
 			})
-		}
-	}
-}
-
-// TestSyntheticLaneChargesPerEdgeToo: the per-edge quota is driver-level —
-// a synthetic lane (a bundle name no workbench project ever touches, an
-// arbitrary repo/task vocabulary) charges exactly like the shipped ones:
-// two gates sharing one target carry their own max_per_step slots, and an
-// edge at its bound never refuses the sibling's or an uncharged rewind.
-func TestSyntheticLaneChargesPerEdgeToo(t *testing.T) {
-	wf := &Workflow{
-		Steps: []StepSpec{
-			{ID: "compose", ContextPolicy: ContextFresh, Handoff: true},
-			{ID: "craft", ContextPolicy: ContextInherit},
-			gateSpec("inspect", "craft"),
-			gateSpec("audit", "craft"),
-		},
-		MaxTotal: 4, MaxPerStep: 2,
-	}
-	if err := validateWorkflow(wf); err != nil {
-		t.Fatalf("the synthetic lane must validate: %v", err)
-	}
-	dir := t.TempDir()
-	d, err := New(Config{
-		WI:       WIInfo{ID: "wi_synth", CapsuleDir: dir, BundleName: "synth-relay"},
-		ExecPath: filepath.Join(dir, capsule.ExecutionJSON),
-		Workflow: wf,
-		Spawner:  &fakeSpawner{},
-		Log:      &eventLog{},
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	mustInit(t, d)
-	n := int64(1)
-	for round := 0; round < 2; round++ {
-		n = driveGateRound(t, d, wf, "inspect", n)
-	}
-	for round := 0; round < 2; round++ {
-		n = driveGateRound(t, d, wf, "audit", n) // the sibling's quota is untouched by inspect's full edge
-	}
-	x := d.Snapshot()
-	if x.RewindStats.Count != 4 || x.WorkflowStatus != StatusRunning {
-		t.Fatalf("both edges' two slots must land: %q %+v", x.WorkflowStatus, x.RewindStats)
-	}
-	n = driveGateRound(t, d, wf, "inspect", n) // inspect's third: the edge bound
-	x = d.Snapshot()
-	if x.WorkflowStatus != StatusFailedRewindExhausted || x.RewindStats.Count != 4 {
-		t.Fatalf("the full edge must terminate its own gate's next FAIL: %q %+v", x.WorkflowStatus, x.RewindStats)
-	}
-	for i, want := range []string{"inspect", "inspect", "audit", "audit"} {
-		if x.RewindStats.Rewinds[i].Gate != want {
-			t.Fatalf("rewind %d attributed to %q, want %q", i, x.RewindStats.Rewinds[i].Gate, want)
 		}
 	}
 }

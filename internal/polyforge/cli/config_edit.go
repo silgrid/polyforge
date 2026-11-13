@@ -378,6 +378,25 @@ func (c *configLines) unsetTableKey(h int, key string) {
 }
 
 // setSummarize sets one [summarize] key (name without the prefix).
+// findModelHeader locates the [model] header (-1 = absent).
+func (c *configLines) findModelHeader() int {
+	for i := range c.lines {
+		if c.isHeader(i) {
+			if kind, _, _, err := parseTableHeader(c.trimmed(i), i+1); err == nil && kind == tableModel {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func (c *configLines) setModel(name, value string) {
+	c.setTableKey(c.findModelHeader(), "[model]", name, value)
+}
+func (c *configLines) unsetModel(name string) {
+	c.unsetTableKey(c.findModelHeader(), name)
+}
+
 func (c *configLines) setSummarize(name, value string) {
 	c.setTableKey(c.findSummarizeHeader(), summarizeHeader, name, value)
 }

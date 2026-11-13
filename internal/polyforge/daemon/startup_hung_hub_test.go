@@ -85,10 +85,7 @@ func TestStartupWithHungHubServesStatusPromptly(t *testing.T) {
 		}
 		// the shutdown does not wait for the queued submit's claim; let its
 		// deferral finish writing before the temp dir goes
-		waitFor(t, "the claim to settle after the shutdown", 15*time.Second, func() bool {
-			ji, live := d.rt.Info(queued)
-			return !live || ji.State != runtime.StateClaiming
-		})
+		settleAfterShutdown(t, d)
 	})
 	select {
 	case <-hub.verifyEntered:

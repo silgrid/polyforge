@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 )
 
@@ -53,9 +55,15 @@ func applyConfigBytes(cfg *Config, path string, data []byte) error {
 		}
 		return fmt.Errorf("config %s: %w", path, perr)
 	}
+	if err := checkFileRole(path, p); err != nil {
+		return err
+	}
 	applyConfigFile(cfg, p.flat)
 	var err error
 	if cfg.Daemon, err = parseDaemonTable(path, p.daemon); err != nil {
+		return err
+	}
+	if cfg.ModelSource, err = parseModelTable(path, p.model); err != nil {
 		return err
 	}
 	if cfg.Summarize, err = parseSummarizeTable(path, p.summarize); err != nil {
@@ -172,4 +180,73 @@ func ValidateWorkspaceRoot(ws string) error {
 		return fmt.Errorf("workspace %s: capsules/ write probe residue: %w", ws, err)
 	}
 	return nil
+}
+
+// checkFileRole applies the Host/Cell key partition to one parsed file. The
+// file's role comes from its name (cellcfg.ProfileOfFile): a
+// cli-<profile>.toml defines one named Cell and may carry Cell keys only —
+// a Host-only key is refused naming the file, the line and the key. Any
+// other file (cli.toml, or a scratch file a test or a repair names with
+// --config) is a Host file: the Host keys plus the default Cell's keys; the
+// [model] declaration belongs to named Cells only (the default Cell's model
+// credentials come from [daemon] operator_agent_dir).
+func checkFileRole(path string, p *parsedConfig) error {
+	profile, isCellFile := cellcfg.ProfileOfFile(filepath.Base(path))
+	if !isCellFile || filepath.Base(path) == cellcfg.HostFileName {
+		if p.model != nil {
+			return fmt.Errorf("config %s: line %d: [model] declares a named Cell's model credentials; the default Cell's come from [daemon] operator_agent_dir — move [model] into a cli-<profile>.toml", path, p.model.line)
+		}
+		return nil
+	}
+	if err := cellcfg.ValidNamedProfile(profile); err != nil {
+		return fmt.Errorf("config %s: %v", path, err)
+	}
+	refuse := func(line int, key string) error {
+		return fmt.Errorf("config %s: line %d: %s is a Host-only key: it belongs in %s (the Host file), never in a named Cell's file (the Host-only keys are %s)",
+			path, line, key, cellcfg.HostFileName, strings.Join(cellcfg.HostOnlyKeyNames(), ", "))
+	}
+	for key, line := range p.flatLine {
+		if cellcfg.HostOnly("", key) {
+			return refuse(line, key)
+		}
+	}
+	for _, kv := range p.daemon {
+		if cellcfg.HostOnly("daemon", kv.key) {
+			return refuse(kv.line, "[daemon] "+kv.key)
+		}
+	}
+	return nil
+}
+
+// ModelSourceShared is the [model] source value that shares the default
+// Cell's model-credential source (the Host's operator_agent_dir).
+const ModelSourceShared = "shared-default"
+
+// parseModelTable validates the [model] table: exactly the source key,
+// `shared-default` or an absolute directory.
+func parseModelTable(path string, t *tableBlock) (string, error) {
+	if t == nil {
+		return "", nil
+	}
+	src := ""
+	for _, kv := range t.rows {
+		refuse := func(reason string) error {
+			return fmt.Errorf("config %s: line %d: [model] %s: %s", path, kv.line, kv.key, reason)
+		}
+		if kv.key != "source" {
+			return "", refuse("unknown key (the [model] table carries only source)")
+		}
+		if src != "" {
+			return "", refuse("duplicate key")
+		}
+		v, err := parseQuotedValue(kv.val, kv.line)
+		if err != nil {
+			return "", refuse(`must be a quoted string: "shared-default" or an absolute directory`)
+		}
+		if v != ModelSourceShared && !filepath.IsAbs(v) {
+			return "", refuse(fmt.Sprintf(`%q is neither "shared-default" nor an absolute directory`, v))
+		}
+		src = v
+	}
+	return src, nil
 }

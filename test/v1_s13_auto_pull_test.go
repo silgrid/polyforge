@@ -9,15 +9,15 @@ import (
 // v1_s13_auto_pull_test.go: auto-pull, driver/envelope edition. The daemon
 // (booted with --auto) autonomously claims the
 // project's ready queue in waves and runs every ticket to completion with
-// no operator action — each member a driver-pinned autopilot workflow,
+// no operator action — each member a driver-pinned vehicle-lane (micro) workflow,
 // completed and sealed by the terminal wiring. An explicit `pf submit`
 // stays legal while auto is on, and `pf ops auto off` stops further
 // pulls.
 func TestV1S13AutoPull(t *testing.T) {
 	inst := newV1Install(t)
-	wiA := inst.newWI(t, "s13: auto-pull member A", envelopeAutopilot(), nil)
-	wiB := inst.newWI(t, "s13: auto-pull member B", envelopeAutopilot(), nil)
-	wiC := inst.newWI(t, "s13: auto-pull member C", envelopeAutopilot(), nil)
+	wiA := inst.newWI(t, "s13: auto-pull member A", envelopeMicro(), nil)
+	wiB := inst.newWI(t, "s13: auto-pull member B", envelopeMicro(), nil)
+	wiC := inst.newWI(t, "s13: auto-pull member C", envelopeMicro(), nil)
 
 	d := newV1Daemon(t, inst, optAuto())
 	d.start()
@@ -33,12 +33,12 @@ func TestV1S13AutoPull(t *testing.T) {
 	inst.waitWIStatus(t, wiC, "wrapped", 120*time.Second)
 
 	// Each member ran on this daemon as a driver workflow: the
-	// execution.json face shows the completed autopilot chain, and the
+	// execution.json face shows the completed chain, and the
 	// auto-seal pushed the chain server-side.
 	for _, wi := range []string{wiA, wiB, wiC} {
 		waitWorkflowStatus(t, d, wi, "completed", 30*time.Second)
 		x := readExecution(t, d.capsuleDir(wi))
-		for _, step := range []string{"grill", "fix", "verification"} {
+		for _, step := range []string{"fix", "review"} {
 			if st := x.Steps[step]; st == nil || st.Status != "done" {
 				t.Fatalf("%s: step %s not done: %+v", wi, step, st)
 			}
@@ -49,7 +49,7 @@ func TestV1S13AutoPull(t *testing.T) {
 	}
 
 	// A manual submit is legal while auto is on (no DAEMON-409).
-	wiD := inst.newWI(t, "s13: manual submit while auto is on", envelopeAutopilot(), nil)
+	wiD := inst.newWI(t, "s13: manual submit while auto is on", envelopeMicro(), nil)
 	if out := d.pf(t, "submit", wiD); strings.Contains(out, "DAEMON-409") {
 		t.Fatalf("manual submit refused while auto is on: %q", out)
 	}

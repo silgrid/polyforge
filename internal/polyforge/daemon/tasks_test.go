@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
@@ -132,14 +133,18 @@ func TestTaskPeerGuardHelperProcess(t *testing.T) {
 	for _, rq := range [][2]string{
 		{"POST", "/task/spawn"},
 		{"POST", "/task/cancel/task_0123456789abcdef"},
-		{"POST", "/step/result"},
+		{"POST", "/step/call"},
 		{"POST", "/shutdown"},
 		{"GET", "/status"},
 		{"GET", "/task/list"},
 		{"GET", "/task/memories/search?q=x"},
 	} {
-		code, _ := stepDo(t, sock, rq[0], rq[1], `{"project":"proj","prompt":"x"}`)
+		code, body := stepDo(t, sock, rq[0], rq[1], `{"project":"proj","prompt":"x"}`)
 		fmt.Printf("W40 %s %s %d\n", rq[0], rq[1], code)
+		// which guard answered: the task guard names the task process tree
+		if strings.Contains(body, "task process tree") {
+			fmt.Printf("W40 task-guard %s %s\n", rq[0], rq[1])
+		}
 	}
 }
 
@@ -152,14 +157,18 @@ func TestTaskPeerIsRefusedEverythingButItsReadFace(t *testing.T) {
 		t.Fatalf("child: %v\n%s", err, out)
 	}
 	got := string(out)
-	// Every write is refused — including the step-write allowlist paths
-	// (/step/result) and another spawn — with the DAEMON-403 envelope.
-	for _, want := range []string{
-		"W40 POST /task/spawn 403", "W40 POST /task/cancel/task_0123456789abcdef 403",
-		"W40 POST /step/result 403", "W40 POST /shutdown 403",
+	// Every write is refused by the task guard — including the step-write
+	// allowlist path (/step/call, the one write a step may send, which the
+	// task guard refuses before the allowlist is consulted) and another
+	// spawn — with the DAEMON-403 envelope.
+	for _, rq := range []string{
+		"POST /task/spawn", "POST /task/cancel/task_0123456789abcdef",
+		"POST /step/call", "POST /shutdown",
 	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("missing %q in:\n%s", want, got)
+		for _, want := range []string{"W40 " + rq + " 403", "W40 task-guard " + rq} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("missing %q in:\n%s", want, got)
+			}
 		}
 	}
 	// The read face passes the guard. GET /status and GET /task/list are
@@ -172,35 +181,34 @@ func TestTaskPeerIsRefusedEverythingButItsReadFace(t *testing.T) {
 	}
 }
 
-func TestTaskTerminalSummaryIsDeliveredOnceToTheOriginChat(t *testing.T) {
+// TestTaskTerminalSummaryReachesTheDecisionFeed ( AC1): a
+// finished task's summary is a decision feed entry (kind task) — the Pi
+// Web panel shows it; no chat is involved.
+func TestTaskTerminalSummaryReachesTheDecisionFeed(t *testing.T) {
 	td := taskDaemon(t, quickRunner{}, taskYaml)
-	chat := "chat_0123456789abcdef"
-	code, body := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"x","origin_chat":"`+chat+`"}`)
+	code, body := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"x"}`)
 	if code != 200 {
 		t.Fatalf("spawn = %d %s", code, body)
 	}
 	var tk task.Task
 	_ = json.Unmarshal([]byte(body), &tk)
-	var notices string
+	var feed protocol.DecisionFeed
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		_, notices = stepGet(t, td.sock, "/chats/"+chat+"/task-notices")
-		if strings.Contains(notices, tk.ID) || time.Now().After(deadline) {
+		_, raw := stepGet(t, td.sock, "/decisions")
+		_ = json.Unmarshal([]byte(raw), &feed)
+		if len(feed.Decisions) > 0 || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !strings.Contains(notices, "pf task show "+tk.ID) {
-		t.Fatalf("notices = %s", notices)
+	if len(feed.Decisions) != 1 {
+		t.Fatalf("feed = %+v", feed)
 	}
-	if _, other := stepGet(t, td.sock, "/chats/chat_other/task-notices"); strings.Contains(other, tk.ID) {
-		t.Fatalf("another chat saw the notice: %s", other)
-	}
-	if code, _ := stepDo(t, td.sock, "POST", "/chats/"+chat+"/task-notices/ack", `{"ids":["`+tk.ID+`"]}`); code != 200 {
-		t.Fatalf("ack = %d", code)
-	}
-	if _, again := stepGet(t, td.sock, "/chats/"+chat+"/task-notices"); strings.Contains(again, tk.ID) {
-		t.Fatalf("acked notice came back: %s", again)
+	e := feed.Decisions[0]
+	if e.Kind != protocol.DecisionTask || e.TaskID != tk.ID || e.Class != "completed" || e.Attention ||
+		!strings.Contains(e.Text, "pf task show "+tk.ID) {
+		t.Fatalf("task entry = %+v", e)
 	}
 }
 

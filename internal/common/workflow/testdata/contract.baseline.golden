@@ -1,0 +1,118 @@
+contract 5
+
+[lane keys]
+acceptance: required|none (default required): whether a work item on the lane must list an acceptance criterion before it runs
+contract: int, required, == ContractVersion
+defaults: map {model_candidates, tiers}
+description: string, required, non-empty
+exclusive: bool (default false): one unfinished work item per project on the lane — a create on it reaches aihub exclusive, refused while another is not wrapped, failed or canceled
+max_rewinds: int >= 0; required when any step declares on_fail, refused otherwise
+name: string, required, ^[a-z][a-z0-9-]{0,39}$, == directory name
+steps: []step, required, non-empty
+
+[defaults keys]
+model_candidates: []<harness>:<model>[:<effort>]
+tiers: map <tier> -> []<harness>:<model>[:<effort>]; the table a step's model_tier names
+
+[step keys]
+budget: map {wall_minutes, tool_minutes}
+gate: bool
+hub: map {verbs, attrs} (default none): what the step may call through `pf step hub`
+id: string, required, ^[a-z][a-z0-9-]{0,39}$, unique
+model_candidates: []<harness>:<model>[:<effort>]; exclusive with model_tier
+model_tier: a tier of defaults.tiers; exclusive with model_candidates
+on_fail: map {target}, gate only
+resources: map {admission, locks}: what the daemon takes for the step's dispatch
+skill: skill name: <lane>/skills/<name>.md, else _shared/skills/<name>.md, rendered into the prompt
+skippable: bool (default false): a project may switch the step off with `steps.<project>.<step>.skip: true` in its workspace yaml, fixed when the work item is first claimed; a switched-off step is never dispatched (its execution status is skipped), and the wrap_attrs of skipped steps at the lane's end pass to the last step that runs
+vars: map[string]string
+vars_files: map <var> -> a file of the lane (fragments/<name>.md), relative to the lane directory and inside it: the var's value is the file's text, exactly as if written in vars; a var is declared in vars or in vars_files, not both
+waivable: bool (default false), gate only: the gate may hand off waive on the owner's word
+wrap_attrs: []attr name (^[a-z][a-z0-9_]{0,63}$), each at most once (default none): the wrap attrs the step registers (`pf step hub wrap-attrs <name>`) before its round may hand off done; listing one lets the step call wrap-attrs. When the steps at the lane's end are skipped (a skippable step a project switched off), their wrap_attrs are the last running step's to register
+
+[on_fail keys]
+target: an earlier step id, required
+
+[resources keys]
+admission: none|heavy (default none): a heavy-run admission slot for the dispatch
+locks: []merge: the task repos' per-repo merge locks
+
+[hub keys]
+attrs: []attrs key (^[a-z][a-z0-9_]{0,63}$), each at most once (default none): the top-level attrs keys the step may write (`pf step hub attrs <wi> --set <key>`); listing one lets the step call attrs, and the daemon refuses a write of any other key
+verbs: []get|list|file|wrap-attrs|batch, each at most once (default none): the `pf step hub` verbs the step may call
+
+[budget keys]
+tool_minutes: int > 0, <= 180, <= wall_minutes when both are declared: the step's own tool window
+wall_minutes: int > 0
+
+[definition keys]
+description: string, required, non-empty
+name: string, required, == file name
+
+[skill keys]
+commands: []string, required (may be empty): the pre-written commands the skill runs by name
+description: string, required, non-empty
+name: string, required, == file name
+
+[removed keys]
+definition.output: removed in workflow contract 4: delete the output schema; the step hands off with `pf step handoff`, and its skill (or this definition) says what the hand-off carries
+on_fail.charge: removed in workflow contract 4: delete the key; a FAIL is charged to max_rewinds unless the gate hands it off with --per-owner (the owner's word)
+step.attrs: removed in workflow contract 4: delete the key, its material (attrs/<name>.md or _shared/attr_<name>.md) and the workspace yaml's steps.<project>.<step>.attrs overrides (docs/upgrade.md)
+step.effects: removed in workflow contract 4: delete the key; the step registers its aihub writes with `pf step hub <verb>`, and its `hub:` names the verbs it may call and the attrs keys it may write
+step.handoff: removed in workflow contract 4: delete the key; the step registers the record its wrap carries with `pf step hub wrap-attrs <name> @<file>` and declares `wrap_attrs: [<name>]` (its done is refused until the record is registered)
+step.inputs: removed in workflow contract 4: delete the key; every step reads artifacts/handoff.md first, and its skill (or definition) names the files it reads before it starts
+step.outputs: removed in workflow contract 4: delete the key; the step hands off with `pf step handoff` (a body, the --evidence files), and its skill says what the hand-off carries
+step.verdicts: removed in workflow contract 4: delete the key; a gate hands off done (its pass) or fail, and a verdict a later command needs is in that command's result file
+step.verifies: removed in workflow contract 4: delete the key; the step's skill says what it reads and checks of its upstream before it starts
+
+[properties]
+acceptance: whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs (absent = required; none = the lane has no criterion to list): pf submit refuses an item without one only on a lane that requires it, the daemon's auto claim skips such an item only there, pf queue (and the Pi Web list, which reads its acceptance_missing) marks it only there, and pf file create prints the carried-by hint only there; a lane the reader cannot load counts as required
+exclusive: one unfinished work item per project on the lane: the daemon's data-plane proxy reads it in the lane set of the project's workspace and forwards a work-item create on the lane (`pf file create --bundle <lane>`) to aihub exclusive, refused CORE-409 OPEN_ON_BUNDLE while another work item of the project on the lane is not wrapped, failed or canceled; nothing else reads it
+
+[placeholders]
+{{<var>}}: the step's vars (vars, vars_files)
+{{<fragment>}}: _shared/<fragment>.md, inserted verbatim
+
+[error codes]
+WFC-100: `contract` missing
+WFC-101: `contract` is not the version this daemon implements, or the lane is a workflow.md (contract 4 and earlier)
+WFC-110: workflow.yaml missing, unparsable or not one mapping, a duplicate key, or a workflow.md beside it
+WFC-111: unknown or removed key (at any level)
+WFC-112: a value of the wrong type or outside its range
+WFC-113: a required key is missing
+WFC-120: `name` malformed or not the lane's directory name
+WFC-121: `description` missing or empty
+WFC-122: a user lane named like a built-in lane of its lane set (it never shadows the built-in lane)
+WFC-123: (claim) the work item's lane is not in its workspace's lane set (the built-in lanes and that workspace's user lanes); the work item stays queued
+WFC-130: step id malformed or duplicated
+WFC-140: `on_fail` on a non-gate step, or a target that is not an earlier step
+WFC-190: a step's definition file is missing
+WFC-191: a definition file's frontmatter is missing, unparsable, carries an unknown key, or its `name`/`description` is wrong
+WFC-195: a placeholder no var or fragment resolves, a var nothing uses, or a var shadowing a fragment
+WFC-198: a model candidate is not `<harness>:<model>[:<effort>]`, or `model_tier` names no tier of `defaults.tiers`
+WFC-200: `skill` resolves to no file (<lane>/skills/<name>.md, else _shared/skills/<name>.md), or its frontmatter is not {name == the file name, description, commands: []string} over a non-empty body
+
+[required]
+lane.contract
+lane.description
+lane.name
+lane.steps
+step.id
+on_fail.target
+definition.description
+definition.name
+skill.commands
+skill.description
+skill.name
+
+[values]
+lane.acceptance: none
+lane.acceptance: required
+resources.admission: none
+resources.admission: heavy
+resources.locks: merge
+hub.verbs: get
+hub.verbs: list
+hub.verbs: file
+hub.verbs: wrap-attrs
+hub.verbs: batch

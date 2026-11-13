@@ -4,7 +4,7 @@ package driver
 // self-consistency and currency, mechanically.
 //
 //  1. TestW79DeliverPromptNeverForbidsItsOwnDuties — the deliver prompt
-//     is assembled exactly as a dispatch assembles it (the shipped chore
+//     is assembled exactly as a dispatch assembles it (the shipped micro
 //     bundle's shared deliver definition, the memory duty the driver
 //     injects for the workflow's LAST step — the wrap summary only, as a
 //     gate deliver declares no recall since — and the
@@ -21,19 +21,13 @@ package driver
 //  3. TestW79ShippedWorkflowTextNeutralAndCurrent — no shipped
 //     workflows/**.md file carries the retired project-specific or
 //     stale literals the sweep removed. Red on the pre-sweep tree.
-//  4. TestW79LaneRewindQuotaTextMatchesPerEdgeCharging — every delivery
-//     lane's workflow.md states the per gate→target edge charging that
-//     transition.go implements (countToEdge: each gate that rewinds to a
-//     step carries its own charged slots; light and converging rewinds
-//     charge none), autopilot states it has no workflow-level budget,
-//     and no shared-quota wording survives. A regression pin of the
-//     per-edge charging (green on the tree that already states it; the
-//     pre-fix shared-quota wording it forbids is the checked-in history).
-//  5. TestW79GrillNeverUnattendedCategoriesInline — the feature-full
-//     grill applies its no-down-lane rule for never-unattended work, so
-//     the never unattended list is stated inline in its text (the six
-//     categories), not as a name with no definition. Red on the pre-fix
-//     tree (the list was named, never defined).
+//  4. TestW79LaneRewindTextMatchesMaxRewinds — every shipped lane that
+//     declares a rewind budget states it as max_rewinds, the one
+//     lane-wide budget (contract 1), and no text names the removed
+//     max_total / max_per_step bounds or a shared-quota claim.
+//
+// (A fifth pin, the feature-full grill's never-unattended categories,
+// went with that lane,/#428.)
 //
 // The file adds no production code, no driver field and no config key.
 
@@ -44,7 +38,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
@@ -104,59 +97,6 @@ func w79UnscopedPFBans(prompt string) []string {
 	return bad
 }
 
-// TestW79DeliverPromptNeverForbidsItsOwnDuties: the assembled deliver
-// prompt names the pf commands it instructs (the delivery contract's
-// `pf result submit`, the last step's one `pf remember` wrap summary)
-// and never prohibits `pf` unscoped — the prompt must not contradict
-// itself.
-func TestW79DeliverPromptNeverForbidsItsOwnDuties(t *testing.T) {
-	bundle := filepath.Join(shippedWorkflowsDir, "chore")
-	capDir := t.TempDir()
-	writeCapsuleFile(t, capDir, capsule.WorkItemJSON,
-		`{"id":"wi_w79","slug":"demo#1","project":"polyforge","goal":"g"}`)
-	def, err := readStepDefinition(bundle, "deliver", nil)
-	if err != nil {
-		t.Fatalf("read the shipped deliver definition: %v", err)
-	}
-	prompt := assembleStepPrompt(promptParts{
-		WIID: "wi_w79", StepID: "deliver", SpawnN: 1,
-		CapsuleRoot: "/ws/capsules/w79",
-		ContextMode: ContextFresh,
-		Definition:  def,
-		Gate:        true,
-		// deliver is the chore workflow's last step, so the memory duty
-		// carries the wrap summary (and, a gate declaring no recall, no
-		// recall duty); its step entry declares the command evidence gate.
-		RequireCommandEvidence: true,
-		MemoryDuty:             memoryDutySection(bundle, capDir, false, true),
-	})
-	// (a) the prompt instructs every command the scoped ban allows.
-	for _, want := range []string{
-		"pf result submit",
-		"pf remember --project polyforge",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("the assembled deliver prompt must instruct %q — the scoped pf ban allows exactly the commands it names", want)
-		}
-	}
-	// (b) no paragraph or list item prohibits pf unless it also names the
-	// allowed set.
-	for _, para := range w79UnscopedPFBans(prompt) {
-		t.Errorf("the deliver prompt prohibits pf without scoping the ban to the commands it instructs (pf result submit, the one pf remember wrap summary):\n%s", para)
-	}
-	// (c) the check has teeth ( P7): an unscoped ban
-	// reintroduced as its own bullet of the real hard-rules list — right
-	// beside the bullet that names `pf result submit` — is caught.
-	const scoped = "- `pf` is limited to the commands this prompt names"
-	if !strings.Contains(prompt, scoped) {
-		t.Fatalf(" P7: the deliver hard rules lost their scoped pf bullet %q — the mutation below has no anchor", scoped)
-	}
-	mutated := strings.Replace(prompt, scoped, "- Never run `pf`.\n"+scoped, 1)
-	if bad := w79UnscopedPFBans(mutated); len(bad) != 1 || !strings.HasPrefix(bad[0], "- Never run `pf`.") {
-		t.Errorf(" P7: an unscoped \"Never run `pf`\" bullet beside the scoped one must be the one finding, got %q", bad)
-	}
-}
-
 // TestW79PFBanCheckSplitsListItems ( P7): each list item is
 // its own unit, so a sibling bullet naming an allowed command never masks
 // an unscoped ban, while a ban scoped inside its own item stays legal.
@@ -197,7 +137,7 @@ func TestW79ReviewNeverBlocksOnMissingPriorExperience(t *testing.T) {
 		t.Error("the owner-rules checklist still blocks on a missing ## Prior experience section — a form gap is never a blocking finding on its own")
 	}
 	if !strings.Contains(checklist, "**Prior experience ignored.**") {
-		t.Error("the owner-rules checklist lost the substantive Prior experience hit (repeating a recalled pitfall without saying why this time differs stays blocking)")
+		t.Error("the owner-rules checklist lost the substantive Prior experience hit (repeating a recalled pitfall without saying why this time differs stays on the checklist, blocking when it is a defect —'s `bug` class)")
 	}
 	// Whitespace-normalized so the sentence matches however it wraps.
 	flat := strings.Join(strings.Fields(s), " ")
@@ -256,15 +196,13 @@ func TestW79ShippedWorkflowTextNeutralAndCurrent(t *testing.T) {
 	}
 }
 
-// TestW79LaneRewindQuotaTextMatchesPerEdgeCharging: every delivery
-// lane's workflow.md states the per gate→target edge charging
-// (transition.go's countToEdge: the per-step bound is not one pool the
-// gates share — each gate→target edge carries its own charged slots, and
-// light and converging rewinds charge none), autopilot states it has no
-// workflow-level budget, and no shipped workflow text carries a
-// shared-quota claim.
-func TestW79LaneRewindQuotaTextMatchesPerEdgeCharging(t *testing.T) {
-	lanes := map[string]bool{"chore": true, "bug-fix": true, "autopilot": true, "feature-full": true}
+// TestW79LaneRewindTextMatchesMaxRewinds: every shipped lane whose
+// workflow.yaml declares a rewind budget states it as the one lane-wide
+// budget, `max_rewinds` (contract 1: the per-edge pair is gone), and no
+// shipped workflow text still names the removed `max_total` /
+// `max_per_step` bounds or a shared-quota claim.
+func TestW79LaneRewindTextMatchesMaxRewinds(t *testing.T) {
+	bounded := 0
 	entries, err := os.ReadDir(shippedWorkflowsDir)
 	if err != nil {
 		t.Fatalf("read workflows/: %v", err)
@@ -273,56 +211,32 @@ func TestW79LaneRewindQuotaTextMatchesPerEdgeCharging(t *testing.T) {
 		if !e.IsDir() {
 			continue
 		}
-		rel := filepath.Join(shippedWorkflowsDir, e.Name(), "workflow.md")
-		raw, err := os.ReadFile(rel)
+		rel := filepath.Join(shippedWorkflowsDir, e.Name(), "README.md")
+		raw, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, e.Name(), workflow.WorkflowFile))
 		if err != nil {
-			continue // a directory with no workflow.md is not a bundle
+			continue // a directory with no workflow.yaml is not a lane
 		}
-		s := string(raw)
-		if lanes[e.Name()] && !strings.Contains(s, "per gate→target edge") {
-			t.Errorf("%s must state the per gate→target edge charging — transition.go charges the per-step bound per gate→target edge (countToEdge), not as one pool the gates share", rel)
+		readme, err := os.ReadFile(rel)
+		if err != nil {
+			t.Fatalf("lane %s has no README.md: %v", e.Name(), err)
 		}
-		if e.Name() == "autopilot" && !strings.Contains(s, "No workflow-level budget") {
-			t.Errorf("%s must state it has no workflow-level budget (the bounds are the rewind limits and the daemon's per-step runtime bound)", rel)
+		front, body := string(raw), string(readme)
+		if !strings.Contains(front, "max_rewinds:") {
+			continue // no rewind edge (integrate, release)
+		}
+		bounded++
+		if !strings.Contains(body, "max_rewinds") {
+			t.Errorf("%s must state its rewind budget as max_rewinds in its narrative", rel)
 		}
 	}
-	// No shipped workflow text may carry the pre-per-edge shared-quota
-	// wording (the retired claim: one allowance the gates draw on
-	// together).
+	if bounded == 0 {
+		t.Fatal("no shipped lane declares max_rewinds — the pin checks nothing (develop and micro declare one)")
+	}
 	for _, f := range w79ShippedWorkflowTexts(t) {
-		for _, shared := range []string{"is shared by the", "shared across the", "each gate 3 times"} {
-			if strings.Contains(f.text, shared) {
-				t.Errorf("%s still states a shared per-step rewind quota (%q) — the bound is charged per gate→target edge", f.path, shared)
+		for _, stale := range []string{"max_per_step", "max_total", "is shared by the", "shared across the", "each gate 3 times"} {
+			if strings.Contains(f.text, stale) {
+				t.Errorf("%s still names %q — the lane's one rewind budget is max_rewinds", f.path, stale)
 			}
-		}
-	}
-}
-
-// TestW79GrillNeverUnattendedCategoriesInline: the feature-full grill
-// keys its no-down-lane rule on the never unattended list, so the list
-// is stated inline where the rule is applied — its six categories, not
-// a name whose definition lives in a doc the adopting project may not
-// carry.
-func TestW79GrillNeverUnattendedCategoriesInline(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, "feature-full", "steps", "grill.md"))
-	if err != nil {
-		t.Fatalf("read the shipped feature-full grill definition: %v", err)
-	}
-	// Whitespace-normalized so a category matches however it wraps.
-	flat := strings.Join(strings.Fields(string(raw)), " ")
-	if !strings.Contains(flat, "never unattended") {
-		t.Fatal("the feature-full grill lost the `never unattended` marker its no-down-lane rule keys on")
-	}
-	for _, cat := range []string{
-		"release/deploy work",
-		"schema or data migration",
-		"credentials and permission surface",
-		"removing features or weakening guarantees",
-		"security-related changes",
-		"large cross-repo changes",
-	} {
-		if !strings.Contains(flat, cat) {
-			t.Errorf("the feature-full grill must state the never unattended category %q inline — the no-down-lane rule is applied from the step text alone", cat)
 		}
 	}
 }
@@ -341,7 +255,7 @@ func w79ShippedWorkflowTexts(t *testing.T) []w79File {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".md") {
+		if ext := strings.ToLower(filepath.Ext(path)); d.IsDir() || (ext != ".md" && ext != ".yaml") {
 			return nil
 		}
 		raw, err := os.ReadFile(path)

@@ -183,9 +183,12 @@ func assertSlimmed(t *testing.T, dir string) {
 func TestDoctorGitDirsPruneNothingWhileDaemonDown(t *testing.T) {
 	f := newGitDirsFixture(t, false)
 	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-capsules")
+	// With the daemon down the Hub is unreachable too (every Hub read goes
+	// through the daemon): no entry's state is known, nothing is
+	// reclaimable, and nothing is pruned.
 	st, detail := doctorFind(t, doc, docChCapsuleRetention)
-	if st != "warn" || !strings.Contains(detail, "nothing pruned") {
-		t.Fatalf("status = %s (%s), want warn naming nothing pruned", st, detail)
+	if st == "fail" || !strings.Contains(detail, "aihub unreachable") || !strings.Contains(detail, "reclaimable 0") {
+		t.Fatalf("status = %s (%s), want nothing reclaimable behind the unreachable hub", st, detail)
 	}
 	assertExist(t, true, f.reclaim, f.retiredGit, f.retiredCap, f.fresh, f.active, f.job, f.ghost, f.activeCap, f.askpass)
 }
@@ -402,7 +405,7 @@ func liveCapsule(t *testing.T, f gitDirsFixture, name, wi string, full bool) str
 	}
 	if full {
 		for _, p := range []string{".git", ".gitignore", "repos/demo/README.md", "runtime-state/execution.json",
-			"logs/step.log", "session/transcript.jsonl", "workflows/chore/workflow.md", "sync/state.json"} {
+			"logs/step.log", "session/transcript.jsonl", "workflows/chore/workflow.yaml", "sync/state.json"} {
 			touch(t, filepath.Join(dir, p), old)
 		}
 	}
@@ -507,9 +510,12 @@ func TestDoctorCapsuleRetentionSlimsNothingWhileDaemonDown(t *testing.T) {
 	f := newGitDirsFixture(t, false)
 	dir := liveCapsule(t, f, "demo-3", "wi_done", true)
 	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-capsules")
+	// With the daemon down the Hub is unreachable too (every Hub read goes
+	// through the daemon): no entry's state is known, nothing is
+	// reclaimable, and nothing is pruned.
 	st, detail := doctorFind(t, doc, docChCapsuleRetention)
-	if st != "warn" || !strings.Contains(detail, "nothing pruned") {
-		t.Fatalf("status = %s (%s), want warn naming nothing pruned", st, detail)
+	if st == "fail" || !strings.Contains(detail, "aihub unreachable") || !strings.Contains(detail, "reclaimable 0") {
+		t.Fatalf("status = %s (%s), want nothing reclaimable behind the unreachable hub", st, detail)
 	}
 	for _, p := range []string{".git", "repos", "runtime-state", "logs", "session", "workflows", "sync"} {
 		assertExist(t, true, filepath.Join(dir, p))

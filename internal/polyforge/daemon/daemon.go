@@ -24,7 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
+	"sync/atomic"
 	"time"
 
 	"crypto/ed25519"
@@ -32,7 +32,9 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/driver"
 	"github.com/silgrid/polyforge/internal/polyforge/gitops"
@@ -117,8 +119,57 @@ type Config struct {
 	// auth.json is missing refuse the daemon start.
 	OperatorAgentDir         string
 	OperatorAgentDirExplicit bool
-	APIKey                   string // machine credential; NEVER reaches an agent env
-	MaxConcurrent            int    // cross-mode concurrency cap (default 4)
+	// Python is the absolute path of the interpreter a step's scripts run
+	// under, every step's PF_PYTHON: Main resolves it once at the start
+	// ([daemon] python, else python3 on the daemon's PATH) and refuses the
+	// start when it is missing or older than cli.MinPython. "" (a test's
+	// bare Config) = PF_PYTHON is set empty.
+	Python string
+	APIKey string // machine credential; NEVER reaches an agent env
+	// Server is the Cell's AIHub base URL as configured (reported
+	// normalized on GET /profiles; the Hub client carries the connection).
+	Server string
+	// Profile is the Cell's name ("" = default): the profile its work
+	// references carry.
+	Profile string
+	// SharedAdmission is the Host's heavy-run admission queue every Cell's
+	// daemon-run verification shares; nil = this daemon's
+	// own.
+	SharedAdmission *verifyQueue
+	// SharedFeed is the DaemonHost's Host-global decision feed
+	// (decisions.go,; nil = this Daemon keeps its own under
+	// its data dir — the unhosted test seam). Shared, every Cell records
+	// into the one feed, each entry naming its Cell.
+	SharedFeed *decisionFeed
+	// LoadFile reads this Cell's file config for a reload (nil = parse
+	// ConfigPath on its own): the Host binds the Host file for default and
+	// the named file over the Host keys for a named Cell.
+	LoadFile func() (cli.Config, error)
+	// Hosted marks a Cell run by a DaemonHost (cells.go): the Host owns the
+	// one socket and serves this Cell's routes through its own listener, so
+	// Run opens no face of its own. Every production daemon is hosted; an
+	// unhosted Daemon serving its own socket is the in-process test seam.
+	Hosted bool
+	// HostSlots is the Host's ceiling over every Cell (nil = this Cell's
+	// own queue ceiling only: the unhosted test seam).
+	HostSlots *hostSlots
+	// PendingAPIKey is a verified rotation the Cell drains toward (restored
+	// from its effective-connection record at a Host restart; "" = none).
+	PendingAPIKey string
+	// FileAPIKey is the Cell file's credential when the Cell started on its
+	// persisted effective one and the two differ: it is a pending change
+	// that goes through the identity check (adoptFileKey) before it is
+	// used ("" = the file agrees with the effective credential).
+	FileAPIKey string
+	// ExecutionDisabled names why this Cell's execution plane is closed
+	// ("" = open): no workspace configured, no model-credential source. A
+	// closed Cell still serves its data plane; submits are refused naming
+	// the reason and the auto-pull wave claims nothing.
+	ExecutionDisabled string
+	// CellMaxConcurrentJobs is the Cell's persisted optional ceiling (0 =
+	// none; reported on GET /profiles).
+	CellMaxConcurrentJobs int
+	MaxConcurrent         int // cross-mode concurrency cap (default 4)
 	// FlagPinned names the [daemon] keys an explicit command-line flag
 	// pinned at startup (max_concurrent_jobs, step_timeout, stall_window,
 	// claude_bin): a reload reports those overridden and never applies
@@ -176,7 +227,7 @@ type Config struct {
 	// Supervision carries the supervisor's global bounds into the
 	// assembly (X silence, Y tool, T step timeout, N driver stall, the
 	// model-error grace; zero fields keep the documented defaults) and
-	// the M4 revalidation cadence. Step overrides live in workflow.md.
+	// the M4 revalidation cadence. Step overrides live in workflow.yaml.
 	Supervision   SupervisionConfig
 	DrainInterval time.Duration // drain wave-fetch period (5s)
 	DispatchTick  time.Duration // dispatcher/backfill period (200ms)
@@ -212,10 +263,10 @@ type SupervisionConfig struct {
 	// ModelErrorGrace is the rule-1 grace after an error-ended turn
 	// (default 1m).
 	ModelErrorGrace time.Duration
-	// RetryBackoffBase is the driver's first retry-pacing wait (default
-	// 1m; test/dev-only flag): consecutive outage-shaped deaths on one
-	// candidate wait 3x, then 9x it.
-	RetryBackoffBase time.Duration
+	// AskWarmWindow is how long a step process that asked the owner (`pf
+	// ask`) stays resident for the reply before the daemon ends it
+	// (default 15m; [daemon] ask_warm_window / --ask-warm-window).
+	AskWarmWindow time.Duration
 	// SessionRevalidateEvery is the M4 periodic session-revalidation
 	// cadence of the held records — observe's running jobs and the
 	// runtime's retained paused records (0 = the default 30s; negative =
@@ -227,7 +278,7 @@ func (c SupervisionConfig) limits() supervise.Defaults {
 	return supervise.Defaults{
 		Silence: c.SilenceWindow, Tool: c.ToolWindow,
 		StepTimeout: c.StepTimeout, ModelErrorGrace: c.ModelErrorGrace,
-		RetryBackoffBase: c.RetryBackoffBase,
+		AskWarmWindow: c.AskWarmWindow,
 	}
 }
 
@@ -253,15 +304,12 @@ func (c *Config) fill() {
 type Daemon struct {
 	// claudeVer caches the claude --version probe of GET /status.
 	claudeVer versionCache
-	chats     *chatStore
-	subs      *subStore // pf watch: chat subscriptions, cursors, watcher liveness
-	// reporters caches wi → WI reporter, the owner of a WI without an
-	// origin owner (ownerOf).
-	reporters sync.Map
-	cfg       Config
-	hub       Hub
-	modes     *ModeCtl
-	q         *jobQueue
+	// feed is the decision feed (decisions.go): the Host's shared one.
+	feed  *decisionFeed
+	cfg   Config
+	hub   Hub
+	modes *ModeCtl
+	q     *jobQueue
 
 	rt  *runtime.Runtime
 	obs *observe.Observe
@@ -270,17 +318,6 @@ type Daemon struct {
 	// <DataDir>/model-health.json and the source of GET /models + the
 	// additive GET /status summary. It never touches dispatch.
 	modelHealth *modelhealth.Tracker
-
-	// adoptMu serializes the adopt route's read-check-act sequence
-	// (see adopt): the eligibility facts (the job record's
-	// origin field, the target's held subscription) and the two writes
-	// (subStore.Adopt, AdoptOrigin) must not interleave between two
-	// concurrent adopts — the origin field would name one adopter while
-	// the re-pointed subscriptions name the other. A dedicated route
-	// lock: it guards nothing else, and the writes' own locks (subStore.mu,
-	// the job's mutex) are never taken together with it in the other
-	// order, so nothing waits on it but another adopt.
-	adoptMu sync.Mutex
 
 	// remoteSnaps caches relayed remote snapshots for remoteSnapTTL so a
 	// polling watcher cannot exhaust the holder's relay budget
@@ -311,6 +348,13 @@ type Daemon struct {
 
 	shutOnce sync.Once
 	shutDone chan struct{} // closed when the shutdown finished
+	// obsDone is closed when the observe lane's Run returned (its monitors
+	// stopped, its event log closed); obsStarted says Run was started. The
+	// shutdown waits for it (bounded): the lane's last appends — a release's
+	// job_finished event and the decision feed's write from it — never land
+	// after the shutdown returned.
+	obsDone    chan struct{}
+	obsStarted atomic.Bool
 
 	// queueFetchDenied is the denial episode flag: set when the first
 	// queue_fetch_denied event of a healthy→denied transition has been
@@ -324,20 +368,59 @@ type Daemon struct {
 	// logs a given refusal once, not every tick. Same single-goroutine
 	// ownership as queueFetchDenied.
 	yamlRefused map[string]string
-	// bundleRefused is bundle → the last load refusal logged for it
-	// (polyforge#175): auto-pull skips ready work items on an installed
-	// bundle that fails to load instead of enqueueing a claim bound to
-	// refuse every wave; logged once per distinct refusal. Same
-	// single-goroutine ownership as yamlRefused.
+	// bundleRefused is `<project> <lane>` → the last lane refusal logged
+	// for it (polyforge#175): auto-pull skips ready work items on a lane
+	// of their project's lane set that fails to load, or one the set does
+	// not carry, instead of enqueueing a claim bound to refuse every wave;
+	// logged once per distinct refusal. Same single-goroutine ownership as
+	// yamlRefused.
 	bundleRefused map[string]string
+	// userLaneRefused is a refused user lane's directory → the defects
+	// last recorded for it (reportUserLanes): one user_lane_refused event
+	// per lane and distinct defect set. Guarded by userLaneMu (the start
+	// and a config reload both judge).
+	userLaneMu      sync.Mutex
+	userLaneRefused map[string]string
 
 	// sup hands out the per-WI supervision links shared by the driver
 	// (facts out, verdicts in, harness trackers) and the observe
 	// monitors.
 	sup *supervise.Registry
 
+	// merges is the per-repo merge lock (mergelock.go): the merge-pr
+	// step's check-then-merge and a lane's revert step.
+	merges *mergeLocks
+	// verifyQ is the heavy-run admission of daemon-run verification bars
+	// (verifyqueue.go,): the Host's shared queue, or this
+	// daemon's own; re-evaluated on the dispatch tick.
+	verifyQ *verifyQueue
+	// commandPath is the live [daemon] command_path ("" = the daemon
+	// process's own PATH;). Guarded by reloadMu.
+	commandPath string
+	// pfDir is the directory of this daemon's own pf executable (selfDir):
+	// first on a step's PATH when command_path is set. Set once in New.
+	pfDir string
+
 	lst net.Listener
 	srv *http.Server
+	// hb is the Cell's last heartbeat outcome (GET /profiles).
+	hb heartbeatState
+	// execDisabled is the live execution-disabled reason (Config's start
+	// value; a reload that adds the first mapping clears the no-workspace
+	// reason). Guarded by reloadMu.
+	execDisabled string
+	// effectiveKey is the credential the Cell runs on; pendingKey a
+	// verified same-identity rotation waiting for safe idle (drain.go).
+	// Guarded by reloadMu.
+	effectiveKey, pendingKey string
+	// connNotice reports a file credential the identity check did not
+	// adopt (unverified, or another Hub user): the Cell keeps serving on
+	// its effective credential. Guarded by reloadMu.
+	connNotice string
+	// ready is closed once Run reached the point where an unhosted daemon
+	// starts serving (lock held, restart reconciled): the Host serves a
+	// hosted Cell's routes only after it.
+	ready chan struct{}
 
 	// faceMu guards lst, srv, dataLock and the faceClosed latch: a
 	// Shutdown can run concurrently with Run's startup, and the latch lets
@@ -356,6 +439,14 @@ type Daemon struct {
 	// stepOriginOf resolves a /step/* caller to its work item (nil = the
 	// UDS peer's process tree, peerStepOrigin; tests bind a stub).
 	stepOriginOf func(*http.Request) (stepJob, string)
+	// stepHubAllow answers the `pf step hub` verbs a step's dispatch may
+	// call and stepHubAttrs the attrs keys it may write (stephub.go):
+	// production binds laneHubAllow — the step's `hub.verbs` (and
+	// wrap-attrs for its `wrap_attrs`, attrs for its `hub.attrs`) — and
+	// laneHubAttrs — its `hub.attrs` — in the capsule's lane snapshot;
+	// tests bind fixtures. nil = none.
+	stepHubAllow func(stepJob) []string
+	stepHubAttrs func(stepJob) []string
 
 	// live holds the reloadable settings (mapping, claude_bin, supervision
 	// bounds) behind a mutex; the daemon and the runtime read them at their
@@ -367,9 +458,37 @@ type Daemon struct {
 	reloadMu      sync.Mutex
 	reloadStatus  cli.ReloadStatus
 	maxConfigured int
-	// reloadApplyMu serializes reloads and guards lastAppliedFile. No
-	// reader takes it, so a reload's disk I/O never blocks GET /status.
+	// reloadApplyMu serializes reloads, guards lastAppliedFile and
+	// serializes the drain switch with them (the dispatch tick only
+	// TryLocks it). No reader takes it, so a reload's disk I/O never
+	// blocks GET /status.
 	reloadApplyMu sync.Mutex
+	// drainGate pairs every admission of new work — a submit's pending
+	// check + enqueue, the auto wave's check + enqueue, a task's check +
+	// slot reservation (admitTask) — with the drain switch's pending +
+	// safe-idle decision (drain.go), so either the admission is refused
+	// or the switch sees it and waits. Held only across in-memory
+	// bookkeeping, never across file I/O or a Hub/AIHub round trip: a
+	// submit or auto-wave entry takes an admitting reservation under it
+	// and persists its queue entry after releasing it; it is taken before
+	// reloadMu, the queue lock and the Host slot lock, never after them.
+	drainGate sync.Mutex
+	// admitting counts admissions that passed their pending check under
+	// drainGate and are persisting their queue entry outside it; an open
+	// reservation keeps the Cell from being safe-idle until the entry is
+	// on the queue (or failed to land).
+	admitting atomic.Int32
+	// claiming counts the dispatch's claim goroutines still running
+	// (startEntry); the shutdown does not wait for them.
+	claiming atomic.Int32
+	// submitWaitMu guards submitWaits only (no I/O under it): the
+	// submit answers waiting on their entry's dispatch outcome
+	//, keyed by canonical work-item id.
+	submitWaitMu sync.Mutex
+	submitWaits  map[string]*submitWait
+	// tasksHeld counts this Cell's admitted one-off tasks not yet done
+	// (admitTask..taskDone): they keep the Cell from being safe-idle.
+	tasksHeld atomic.Int32
 	// lastAppliedFile is the file-only config as of the last successful
 	// reload (initially the startup file baseline). It is the comparison
 	// point for "a reload that CHANGES max_concurrent_jobs", so an
@@ -381,7 +500,11 @@ type Daemon struct {
 	machineKey   ed25519.PrivateKey
 	publicKeyB64 string
 	mfaceMu      sync.Mutex
-	face         machineFaceState
+	// roleMu serializes the operator's role moves (requestDesiredRole), so
+	// the persisted machine-role.json and the face's desired role never
+	// disagree: the file is written while it is held, never under mfaceMu.
+	roleMu sync.Mutex
+	face   machineFaceState
 }
 
 // New validates and assembles the daemon. Restart reconciliation is NOT
@@ -393,13 +516,29 @@ func New(cfg Config) (*Daemon, error) {
 	if cfg.DataDir == "" {
 		return nil, errors.New("daemon: DataDir is required")
 	}
+	// The installed lanes are the release's (workflow contract J25): one
+	// the one lane loader refuses is a release defect, and the daemon
+	// refuses to start rather than claim work it cannot run.
+	if err := checkInstalledLanes(cfg.WorkflowsDir); err != nil {
+		return nil, err
+	}
 	// The mapping and workspace checks are the SHARED validator `pf config`
 	// and `pf doctor` use: one implementation of the
 	// workspace contract, no local copy. The daemon never creates a
 	// workspace directory itself — the operator (or installer) selects
 	// pre-existing ones — and the only subtree it ever writes under any of
 	// them is capsules/.
-	if err := cli.ValidateMappingForDaemon(cli.Config{Mapping: cfg.Mapping}); err != nil {
+	if cfg.Mapping == nil {
+		cfg.Mapping = &mapping.Plan{}
+	}
+	if cfg.Mapping.Empty() {
+		// A Cell with a complete connection and no workspace loads: its data
+		// plane serves, its execution plane stays closed until a mapping
+		// exists (the reason rides GET /status and GET /profiles).
+		if cfg.ExecutionDisabled == "" {
+			cfg.ExecutionDisabled = execDisabledNoWorkspace
+		}
+	} else if err := cli.ValidateMappingForDaemon(cli.Config{Mapping: cfg.Mapping}); err != nil {
 		return nil, fmt.Errorf("daemon: %w", err)
 	}
 	// Relative paths are a footgun measured live on the window rig: the
@@ -414,6 +553,7 @@ func New(cfg Config) (*Daemon, error) {
 	// The [summarize] table and the memory_policy family come from the
 	// file-only startup baseline; a reload swaps them.
 	live.SetSummarize(cfg.StartupFile.Summarize)
+	live.SetAgentLanguage(cfg.StartupFile.Daemon.AgentLanguage)
 	live.SetMemoryPolicy(cfg.StartupFile.MemoryPolicy)
 
 	// liveLimits answers the current supervision defaults (a live reload's
@@ -422,12 +562,12 @@ func New(cfg Config) (*Daemon, error) {
 	// negative stall window still disables the stall check at the consumer.
 	liveLimits := func() supervise.Defaults {
 		return supervise.Defaults{
-			Silence:          cfg.Supervision.SilenceWindow,
-			Tool:             cfg.Supervision.ToolWindow,
-			StepTimeout:      live.StepTimeout(),
-			DriverStall:      live.StallWindow(),
-			ModelErrorGrace:  cfg.Supervision.ModelErrorGrace,
-			RetryBackoffBase: cfg.Supervision.RetryBackoffBase,
+			Silence:         cfg.Supervision.SilenceWindow,
+			Tool:            cfg.Supervision.ToolWindow,
+			StepTimeout:     live.StepTimeout(),
+			DriverStall:     live.StallWindow(),
+			ModelErrorGrace: cfg.Supervision.ModelErrorGrace,
+			AskWarmWindow:   cfg.Supervision.AskWarmWindow,
 		}
 	}
 
@@ -490,7 +630,6 @@ func New(cfg Config) (*Daemon, error) {
 				SpawnN:        in.SpawnN,
 				Spawner:       in.Spawner,
 				Compose:       in.Compose,
-				Attrs:         in.Attrs,
 				Interrupted:   interruptedFromCause(in.InterruptedCause),
 				StepEnded:     in.StepEnded,
 				// polyforge#171: the resume decision for claude dispatches
@@ -507,9 +646,20 @@ func New(cfg Config) (*Daemon, error) {
 				// the next threshold judgement, including in-flight steps
 				//
 				LimitsFunc: func() supervise.Defaults { return liveLimits() },
-				// the deliver step's bar-run record lives
-				// under the data dir; /step/bar-run appends to it
-				DataDir: cfg.DataDir,
+				// the heavy-run admission a step declaring it is admitted by
+				Admission: cellAdmission{d},
+				// workflow contract 4: the pending `pf step hub` writes a
+				// step round makes when it hands off done
+				HubWrites: stepHubSink{d},
+				// the forge binding: git and gh as the daemon, and the
+				// per-repo merge lock (mergelock.go)
+				Forge: cellForge{d},
+				// a step waiting on the owner (`pf ask`) holds no running
+				// slot (occupiedSlots reads the runtime's flag)
+				OwnerWait: in.OwnerWait,
+				// the agent language a new conversation takes: the live
+				// `[daemon] agent_language` at dispatch time
+				Language: live.AgentLanguage,
 			})
 		}
 	}
@@ -521,45 +671,9 @@ func New(cfg Config) (*Daemon, error) {
 		return a, nil
 	}
 
-	subs, err := newSubStore(filepath.Join(cfg.DataDir, chatSubsFile))
+	feed, err := feedOf(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("daemon: %w", err)
-	}
-	// the wake-target scope resolvers the subStore's scoped
-	// broadcast reads — the WI's origin chat id (the job record's
-	// Origin.ChatID, "" = none) and its project-mapping workspace root
-	// (the job record's Project through the [workspace] inverse, "" =
-	// unmapped). Both facts come from rt.ScopeOf, which answers them
-	// for a job the runtime still holds AND for one it already dropped
-	// (terminal close: stopOp moves the job to DONE and dropJob drops
-	// it) — the terminal decision is exactly the one that fires the
-	// scoped wake, so the scope must survive the drop (otherwise the
-	// eligible set reads empty and List falls back to the owner-wide
-	// broadcast — the pi#122 blast radius). In-memory only, called under
-	// subStore.mu (List): ScopeOf takes the job's own mutex (or the
-	// table lock over the retained facts) briefly and WorkspaceFor is a
-	// map lookup — no I/O under any lock, no lock inversion (routes hold
-	// no runtime locks when they call List; the runtime never calls
-	// subStore). The closures read d.rt at call time: the store serves
-	// only once the daemon is assembled.
-	subs.scope = wakeScope{
-		originChat: func(wi string) string {
-			if origin, _, ok := d.rt.ScopeOf(wi); ok {
-				return origin
-			}
-			return ""
-		},
-		workspace: func(wi string) string {
-			_, project, ok := d.rt.ScopeOf(wi)
-			if !ok {
-				return "" // never held here: no workspace to scope to
-			}
-			ws, err := live.Mapping().WorkspaceFor(project)
-			if err != nil {
-				return "" // unmapped: the eligible set is necessarily empty
-			}
-			return ws
-		},
 	}
 	// polyforge#224: the summarize lane's dispatch seam — the exec
 	// dispatcher through the configured harness binaries in production
@@ -576,47 +690,53 @@ func New(cfg Config) (*Daemon, error) {
 		}
 	}
 	d = &Daemon{
-		chats:       &chatStore{path: filepath.Join(cfg.DataDir, chatsFile)},
-		subs:        subs,
-		cfg:         cfg,
-		hub:         cfg.Hub,
-		live:        live,
-		modes:       NewModeCtl(),
-		q:           NewJobQueue(cfg.MaxConcurrent, func() map[string]bool { return d.occupiedSlots() }),
-		shutDone:    make(chan struct{}),
-		sup:         supervise.NewRegistry(),
+		feed:     feed,
+		cfg:      cfg,
+		hub:      cfg.Hub,
+		live:     live,
+		modes:    NewModeCtl(),
+		q:        NewJobQueue(cfg.MaxConcurrent, func() map[string]bool { return d.occupiedSlots() }),
+		shutDone: make(chan struct{}),
+		obsDone:  make(chan struct{}),
+		ready:    make(chan struct{}),
+		sup:      supervise.NewRegistry(),
+		merges:   newMergeLocks(),
+		verifyQ:  cfg.SharedAdmission,
+		// the Cell's own command_path (a reload moves it)
+		commandPath: cfg.StartupFile.Daemon.CommandPath,
+		pfDir:       selfDir(),
 		lane:        summarize.New(laneDispatcher),
 		remoteSnaps: newRemoteSnapCache(remoteSnapTTL, remoteSnapCap),
-		face:        machineFaceState{desiredRole: roleFromLauncher(cfg.Launcher)},
+		face:        initialFace(cfg),
 		// the file-only baseline the reload compares against until the
 		// first successful reload moves it
 		lastAppliedFile: cfg.StartupFile,
 		maxConfigured:   cfg.MaxConcurrent,
+		execDisabled:    cfg.ExecutionDisabled,
+		effectiveKey:    cfg.APIKey,
+		pendingKey:      cfg.PendingAPIKey,
 		locateTranscript: func(capsuleDir string, entries []capsule.SpawnJournalEntry) string {
 			return runtime.LiveTranscript(rtCfg.StepAgentSessionsDir(), rtCfg.ClaudeConfigDir(), capsuleDir, entries)
 		},
+		stepHubAllow: laneHubAllow,
+		stepHubAttrs: laneHubAttrs,
+	}
+	if d.verifyQ == nil {
+		// unhosted: this daemon's own heavy-run admission
+		d.verifyQ = newVerifyQueue(cfg.StartupFile.Daemon.MaxConcurrentBars, cfg.StartupFile.Daemon.BarLoadThreshold)
 	}
 	d.runCtx, d.cancelRun = context.WithCancel(context.Background())
 	d.tasks = d.newTaskManager(&rtCfg)
-	// The paused-record owner revision: the runtime cannot
-	// import the driver (the driver's internal tests import runtime), so the
-	// daemon binds the record-only applier here. It uses the same
-	// transition single writer as a live driver; the runtime then commits
-	// the corrected record to the capsule chain.
-	rtCfg.ReviseRecord = func(capsuleDir, bundleName, sessionHandle, wi string, spawnN int64, stepID string, corrections []capsule.BindingCorrection, by, reason string) error {
-		drv, err := driver.OpenRecord(driver.Config{
-			WI:     driver.WIInfo{ID: wi, CapsuleDir: capsuleDir, BundleName: bundleName, SessionHandle: sessionHandle},
-			SpawnN: spawnN,
-			Log:    d.driverLog(),
-		})
-		if err != nil {
-			return err
-		}
-		return drv.ReviseBinding(stepID, driver.BindingRevisionRequest{Corrections: corrections, By: by, Reason: reason})
-	}
 	rtCfg.EventTap = d.tapRuntimeEvent
-	// The reserved cancel answer's last leg: once the hub took the blocked
-	// close, the hub's existing blocked→canceled door ends the work item.
+	// the daemon-owned step environment every step process carries (the
+	// live command PATH as its PATH, the Python interpreter; stepenv.go)
+	rtCfg.StepEnv = d.stepEnv
+	// a disabled Cell's reconciliation keeps held
+	// operator-paused work paused (d is read at call time).
+	rtCfg.ExecutionDisabled = func() string { return d.executionDisabled() }
+	// An owner's cancel (an `intent: cancel`, intent.go), its last leg: once
+	// the hub took the blocked close, the hub's existing blocked→canceled
+	// door ends the work item.
 	rtCfg.CancelRequested = d.cancelAnsweredWorkItem
 	// a close stops the WI's monitor (drained) before
 	// its seal push and SessionEnd; d.obs is read at call time.
@@ -654,6 +774,10 @@ func New(cfg Config) (*Daemon, error) {
 		// commit-boundary sync calls.
 		LocateLive: func(capsuleDir string, spawnAt time.Time, harness, session string) string {
 			return runtime.LocateTranscript(rtCfg.StepAgentSessionsDir(), rtCfg.ClaudeConfigDir(), capsuleDir, spawnAt, harness, session)
+		},
+		// the claude subagent sidecars ride the same sync.
+		SyncSubagents: func(capsuleDir string) {
+			runtime.SyncSubagentTranscripts(rtCfg.ClaudeConfigDir(), capsuleDir)
 		},
 		// M4 wiring: the periodic session revalidation rides the monitor
 		// tick against the shared aihub client (fencing-on-use discovery —
@@ -750,11 +874,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 		_ = lock.Close()
 		return err
 	}
-	d.obs.Events().SetObserver(mh.Ingest)
+	d.obs.Events().SetObserver(func(e protocol.EventEntry) {
+		mh.Ingest(e)
+		d.ingestDecision(e) // the decision feed
+	})
 	d.faceMu.Lock()
 	d.modelHealth = mh
 	d.faceMu.Unlock()
 	defer mh.Close()
+	// The mapped workspaces' user lanes (workflow contract, "User lanes"):
+	// unlike a built-in lane (New refuses the start), a refused one only
+	// makes that lane unavailable — recorded, and the start goes on.
+	d.reportUserLanes()
 
 	// Startup askpass sweep (crash residue): a previous daemon killed
 	// mid-push leaves one-shot credential scripts — they hold push
@@ -774,10 +905,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if d.cfg.Auto != nil {
 		d.persistModeQuietly()
 	}
-	lst, err := d.listenUDS()
-	if err != nil {
-		_ = lock.Close()
-		return err
+	var lst net.Listener
+	if !d.cfg.Hosted {
+		lst, err = d.listenUDS()
+		if err != nil {
+			_ = lock.Close()
+			return err
+		}
 	}
 	// closeFace and ownsDataDir read both under faceMu: a shutdown
 	// arriving in the next instant cannot race the assignment.
@@ -788,7 +922,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	stop := context.AfterFunc(ctx, d.cancelRun) // the caller giving up stops the loops too
 	defer stop()
 	go d.rt.Run(d.runCtx)
-	go d.obs.Run(d.runCtx)
+	d.obsStarted.Store(true)
+	go func() {
+		defer close(d.obsDone)
+		d.obs.Run(d.runCtx)
+	}()
 
 	// Restart (§十一): every recorded job and claiming-journal entry is
 	// handed to its runtime actor — strictly after this process owns the
@@ -815,12 +953,21 @@ func (d *Daemon) Run(ctx context.Context) error {
 		fmt.Fprintf(os.Stderr, "daemon: task recovery: %v\n", err)
 	}
 
-	serveErr, serving := d.startFace(lst)
-	if !serving {
-		// A shutdown closed the face while this process was reconciling:
-		// nothing is left to drive.
-		return nil
+	var serveErr chan error
+	if d.cfg.Hosted {
+		if d.modes.ShuttingDown() {
+			return nil
+		}
+	} else {
+		var serving bool
+		serveErr, serving = d.startFace(lst)
+		if !serving {
+			// A shutdown closed the face while this process was reconciling:
+			// nothing is left to drive.
+			return nil
+		}
 	}
+	close(d.ready)
 
 	dispatch := time.NewTicker(d.cfg.DispatchTick)
 	defer dispatch.Stop()
@@ -830,6 +977,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// so liveness never blocks or is blocked by the dispatch/drain loop.
 	// Log-only failures inside; never fatal.
 	go d.heartbeatLoop(d.runCtx)
+	// the decision feed's hub reconcile of blocked/paused work items with
+	// no local job (decisions.go): its own goroutine on runCtx.
+	go d.decisionReconcileLoop(d.runCtx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -847,7 +997,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 			<-d.shutDone
 			return nil
 		case <-dispatch.C:
+			d.maybeSwitchConnection()
 			d.dispatch()
+			// a queued heavy dispatch the gates now allow
+			// starts here
+			d.verifyQ.Tick()
 		case <-drain.C:
 			d.fetchAutoWave()
 		}
@@ -985,6 +1139,17 @@ func (d *Daemon) occupiedSlots() map[string]bool {
 		if ji.State == runtime.StatePaused {
 			continue
 		}
+		if d.verifyQ != nil && d.verifyQ.queuedFor(ji.WorkItem) {
+			// a verification queued for the heavy-run
+			// admission runs no process — it holds no slot either
+			continue
+		}
+		if ji.AwaitingOwner {
+			// workflow contract v2 §5.2 (owner ruling Q9): a step waiting on
+			// the owner's reply to its `pf ask` releases its running slot;
+			// the driver takes it back before its next dispatch
+			continue
+		}
 		live[ji.WorkItem] = true
 	}
 	return live
@@ -998,24 +1163,116 @@ func (d *Daemon) occupiedSlots() map[string]bool {
 // the goroutines.
 func (d *Daemon) dispatch() {
 	for !d.modes.ShuttingDown() {
-		e := d.q.Take()
+		e := d.takeNext()
 		if e == nil {
 			return
 		}
 		// A claim that races the shutdown defers itself in the runtime;
 		// nothing here waits for it.
-		go d.startEntry(*e)
+		d.claiming.Add(1)
+		go func(e qEntry) {
+			defer d.claiming.Add(-1)
+			d.startEntry(e)
+		}(*e)
 	}
 }
 
+// takeNext answers the next entry to start: through the Host's two-level
+// gate when hosted (hostslots.go), else the Cell's own queue; nothing
+// while the Cell's execution is disabled.
+func (d *Daemon) takeNext() *qEntry {
+	if d.executionDisabled() != "" {
+		return nil // a disabled Cell starts nothing; its queue is kept
+	}
+	if d.cfg.HostSlots != nil {
+		return d.cfg.HostSlots.take(d)
+	}
+	return d.q.Take()
+}
+
+// submitWait carries one submit's dispatch outcome to the route that
+// is answering it: nil once aihub answered the claim,
+// else the error that ended the attempt. Exactly one outcome is ever
+// delivered; a caller that hung up uses the once up (abandon), so a
+// later outcome is left to the submit_rejected event.
+type submitWait struct {
+	ch   chan error
+	once sync.Once
+}
+
+// settle delivers err unless an outcome was already delivered or the
+// caller hung up. A nil receiver delivers nothing.
+func (w *submitWait) settle(err error) {
+	if w == nil {
+		return
+	}
+	w.once.Do(func() { w.ch <- err })
+}
+
+// abandon is the hung-up caller's side: no outcome is delivered after it.
+func (w *submitWait) abandon() {
+	if w != nil {
+		w.once.Do(func() {})
+	}
+}
+
+// armSubmitWait registers the waiter of wi's submit before its entry is
+// enqueued; nil when one is already armed (a concurrent submit of the
+// same work item).
+func (d *Daemon) armSubmitWait(wi string) *submitWait {
+	d.submitWaitMu.Lock()
+	defer d.submitWaitMu.Unlock()
+	if d.submitWaits == nil {
+		d.submitWaits = map[string]*submitWait{}
+	}
+	if d.submitWaits[wi] != nil {
+		return nil
+	}
+	w := &submitWait{ch: make(chan error, 1)}
+	d.submitWaits[wi] = w
+	return w
+}
+
+// takeSubmitWait removes and answers wi's waiter (nil: nobody waits — a
+// queued, replayed or auto-pulled entry).
+func (d *Daemon) takeSubmitWait(wi string) *submitWait {
+	d.submitWaitMu.Lock()
+	defer d.submitWaitMu.Unlock()
+	w := d.submitWaits[wi]
+	delete(d.submitWaits, wi)
+	return w
+}
+
+// dropSubmitWait removes w if it is still wi's registered waiter and
+// answers whether it did: false means the dispatch already took it and
+// will deliver the outcome.
+func (d *Daemon) dropSubmitWait(wi string, w *submitWait) bool {
+	d.submitWaitMu.Lock()
+	defer d.submitWaitMu.Unlock()
+	if d.submitWaits[wi] != w {
+		return false
+	}
+	delete(d.submitWaits, wi)
+	return true
+}
+
 // startEntry runs one Take()n queue entry's claim to its verdict and
-// settles the entry.
+// settles the entry. A submit waiting on the entry hears
+// the outcome: claimed once aihub answered the claim (before the clone),
+// else the error, delivered only after the queue settled and the refusal
+// was recorded as the work item's submit_rejected event, whether or not
+// a caller hears it.
 func (d *Daemon) startEntry(e qEntry) {
-	err := d.rt.Start(d.runCtx, e.WorkItemID, runtime.StartOpts{Origin: &e.Origin, Models: e.Models})
+	w := d.takeSubmitWait(e.WorkItemID)
+	err := d.rt.Start(d.runCtx, e.WorkItemID, runtime.StartOpts{
+		Origin: &e.Origin, Models: e.Models,
+		OnClaimed: func() { w.settle(nil) },
+	})
 	if runtime.IsClaimDeferred(err) {
 		// the shutdown stopped the claim: the entry stays in flight on
 		// disk (the queue file keeps it) and a claim that landed stays
 		// in the claiming journal — the next start replays them.
+		w.settle(err)
 		return
 	}
 	if errors.Is(err, runtime.ErrClaimClosed) {
@@ -1023,12 +1280,13 @@ func (d *Daemon) startEntry(e qEntry) {
 		if serr := d.q.Settle(e.WorkItemID); serr != nil {
 			fmt.Fprintf(os.Stderr, "daemon: submit queue persist after %s: %v\n", e.WorkItemID, serr)
 		}
+		w.settle(err)
 		return
 	}
 	var ae *api.Error
 	if errors.As(err, &ae) && ae.Code == api.ErrDaemonHubUnavailable {
 		// The hub could not be reached, or the claim's answer was lost: the
-		// accepted submit stays queued and is retried with backoff (never
+		// submit stays queued and is retried with backoff (never
 		// dropped on a transient blip, never blocking the other entries). A
 		// claim that may have landed keeps its claiming-journal entry, so
 		// the retry replays the SAME claim and adopts the session.
@@ -1037,22 +1295,30 @@ func (d *Daemon) startEntry(e qEntry) {
 			fmt.Fprintf(os.Stderr, "daemon: start %s deferred, will retry with backoff: %v\n", e.WorkItemID, err)
 		}
 		d.q.Requeue(e.WorkItemID)
+		w.settle(err)
 		return
 	}
-	if errors.As(err, &ae) && ae.Code == api.ErrDaemonConflict {
+	replayHeld := errors.As(err, &ae) && ae.Code == api.ErrDaemonConflict
+	if replayHeld {
 		// the work item is already held here: a replayed submit whose
 		// claiming-journal start the runtime adopted first
 		// (replaySubmitQueue)
 		d.dropReplay(e, "the work item is already held by this daemon (claiming-journal replay or kept record)")
 	} else if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: start %s failed: %v\n", e.WorkItemID, err)
-		// The submit was answered `accepted`: record the refusal as a
-		// durable event on the WI so watchers can surface it (v2 §5).
-		d.recordSubmitRejected(e, err)
 	}
 	if serr := d.q.Settle(e.WorkItemID); serr != nil {
 		fmt.Fprintf(os.Stderr, "daemon: submit queue persist after %s: %v\n", e.WorkItemID, serr)
 	}
+	if err != nil && !replayHeld {
+		// Every dispatch refusal is a durable event on the WI (v2 §5),
+		// recorded BEFORE a waiting submit hears it: watchers and the
+		// decision feed surface it whether or not a caller also heard it
+		// on the spot (a queued or replayed entry, a claim already
+		// answered claimed, a caller that hung up hears nothing).
+		d.recordSubmitRejected(e, err)
+	}
+	w.settle(err) // a no-op once OnClaimed reported the claim
 	// An origin=auto claim that settled warns on every
 	// repo clone missing from the mapped workspace — one stderr line here
 	// on the dispatch goroutine, holding no lock, the claim already
@@ -1062,6 +1328,26 @@ func (d *Daemon) startEntry(e qEntry) {
 	if e.Origin.Kind == runtime.OriginAuto && err == nil {
 		d.warnMissingClones(e.WorkItemID)
 	}
+}
+
+// laneOf answers the lane bundle of project's lane set (the built-in lanes
+// and the user lanes of the workspace the project maps to), the way
+// laneExclusive reads it; nil when there is no workflows dir or the lane
+// does not load — a lane that cannot be read requires acceptance
+// ((*workflow.Lane).RequiresAcceptance).
+func (d *Daemon) laneOf(project, bundle string) *workflow.Lane {
+	if d.cfg.WorkflowsDir == "" {
+		return nil
+	}
+	ws, err := d.plan().WorkspaceFor(project)
+	if err != nil {
+		ws = ""
+	}
+	lane, _, err := workflow.ForWorkspace(d.cfg.WorkflowsDir, ws).Load(bundle)
+	if err != nil {
+		return nil
+	}
+	return lane
 }
 
 // fetchAutoWave pulls the ready queue and enqueues what is claimable
@@ -1082,7 +1368,10 @@ func (d *Daemon) startEntry(e qEntry) {
 // healthy→denied episode (the flag clears on the next successful
 // fetch); transport-class losses stay silent idle.
 func (d *Daemon) fetchAutoWave() {
-	if !d.modes.AdmitAutoPull() {
+	if !d.modes.AdmitAutoPull() || d.executionDisabled() != "" || d.pendingChange() != "" || d.degradedReason() != "" {
+		// a degraded Cell (its Hub unreachable or refusing its credential)
+		// stops its automatic claims until a Hub round trip succeeds again;
+		// running work keeps the existing recovery and other Cells serve
 		return
 	}
 	// all pending entries (backoff included) are waiting for a slot:
@@ -1133,11 +1422,17 @@ func (d *Daemon) fetchAutoWave() {
 	}
 	var badBundles map[string]error
 	if len(items) > 0 {
-		badBundles = d.rt.RefusedBundles()
+		var pairs [][2]string
+		for _, it := range items {
+			if it.BundleName != nil {
+				pairs = append(pairs, [2]string{it.ProjectName, *it.BundleName})
+			}
+		}
+		badBundles = d.rt.RefusedBundles(pairs)
 	}
-	for name := range d.bundleRefused {
-		if _, still := badBundles[name]; !still {
-			delete(d.bundleRefused, name)
+	for key := range d.bundleRefused {
+		if _, still := badBundles[key]; !still {
+			delete(d.bundleRefused, key)
 		}
 	}
 	for _, it := range items {
@@ -1147,16 +1442,26 @@ func (d *Daemon) fetchAutoWave() {
 		if it.BundleName == nil {
 			continue // registration tickets never execute
 		}
-		if berr, bad := badBundles[*it.BundleName]; bad {
+		if (it.Content == nil || !workflow.HasAcceptance(*it.Content)) && d.laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance() {
+			// an execution ticket that lists no acceptance
+			// criterion needs interaction first (the predicate pf submit
+			// applies) when its lane requires one — the lane's
+			// `acceptance` declaration; it stays queued
+			// and pf queue marks it
+			continue
+		}
+		if berr, bad := badBundles[it.ProjectName+" "+*it.BundleName]; bad {
 			// polyforge#175: the bundle fails to load (e.g. an unprefixed
-			// candidate) — a claim would be refused; leave the WI queued
-			// for other machines and log the refusal once
+			// candidate) or the project's lane set does not carry it — a
+			// claim would be refused; leave the WI queued for other
+			// machines and log the refusal once per project and lane
+			key := it.ProjectName + " " + *it.BundleName
 			if d.bundleRefused == nil {
 				d.bundleRefused = map[string]string{}
 			}
-			if d.bundleRefused[*it.BundleName] != berr.Error() {
-				d.bundleRefused[*it.BundleName] = berr.Error()
-				fmt.Fprintf(os.Stderr, "daemon: drain skips work items on bundle %q (nothing claimed): %v\n", *it.BundleName, berr)
+			if d.bundleRefused[key] != berr.Error() {
+				d.bundleRefused[key] = berr.Error()
+				fmt.Fprintf(os.Stderr, "daemon: drain skips project %q's work items on bundle %q (nothing claimed): %v\n", it.ProjectName, *it.BundleName, berr)
 			}
 			continue
 		}
@@ -1168,7 +1473,18 @@ func (d *Daemon) fetchAutoWave() {
 		// the auto-off purge takes, so an entry either sees auto off or
 		// lands before the purge and is dropped by it (audit B3 race,
 		// wi_seWTgHeKtaa8).
+		// A rotation that became pending during the fetch stops the wave:
+		// the check and the enqueue are one step under drainGate.
+		// The persist runs outside the gate under an admitting reservation.
+		d.drainGate.Lock()
+		if d.pendingChange() != "" {
+			d.drainGate.Unlock()
+			return
+		}
+		d.admitting.Add(1)
+		d.drainGate.Unlock()
 		ok, err := d.q.EnqueueIf(qEntry{WorkItemID: it.ID, Priority: it.Priority, Origin: runtime.Origin{Kind: runtime.OriginAuto}}, d.modes.AdmitAutoPull)
+		d.admitting.Add(-1)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: drain enqueue %s: queue persist failed: %v\n", it.ID, err)
 			continue // nothing landed: the budget is not spent
@@ -1226,30 +1542,12 @@ func authDenied(err error) bool {
 // ---------------------------------------------------------------------------
 // UDS listener
 
+// listenUDS binds an unhosted daemon's own socket — the same bind the Host
+// uses (listenHostUDS: single-instance probe, stale socket removal, and the
+// credListener that captures each accepted conn's UDS peer credential at
+// accept time, polyforge#110).
 func (d *Daemon) listenUDS() (net.Listener, error) {
-	path := d.cfg.SocketPath
-	// Single-instance lock: a live listener on the socket is another
-	// daemon; a dead one is a stale socket file to remove.
-	if conn, err := net.DialTimeout("unix", path, time.Second); err == nil {
-		conn.Close()
-		return nil, fmt.Errorf("daemon: another daemon is listening on %s", path)
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	lst, err := net.Listen("unix", path)
-	if err != nil {
-		return nil, err
-	}
-	_ = os.Chmod(path, 0o660)
-	// credListener (polyforge#110): capture each accepted conn's UDS
-	// peer credential at accept time so the POST /shutdown route can
-	// attribute the shutdown to the dialing process. The wrapper is
-	// transparent otherwise; closeFace closes it like any listener.
-	return &credListener{Listener: lst}, nil
+	return listenHostUDS(d.cfg.SocketPath)
 }
 
 // terminalStatus reports whether an aihub status is terminal for the
@@ -1318,19 +1616,18 @@ func acquireDataDirLock(dataDir string) (*os.File, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dataDir, "daemon.lock")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	f, err := cellcfg.HoldHostLock(dataDir)
+	if errors.Is(err, cellcfg.ErrHostLockHeld) {
+		path := filepath.Join(dataDir, cellcfg.HostLockFile)
 		pid, _ := os.ReadFile(path)
-		f.Close()
 		holder := ""
 		if p := strings.TrimSpace(string(pid)); p != "" {
 			holder = " (pid " + p + ")"
 		}
-		return nil, fmt.Errorf("daemon: another daemon%s holds the data-dir lock %s", holder, path)
+		return nil, fmt.Errorf("daemon: another daemon%s, or a running `pf migrate cell-layout`, holds the data-dir lock %s", holder, path)
+	}
+	if err != nil {
+		return nil, err
 	}
 	// best-effort pid stamp (diagnostics; the lock itself is the guard)
 	_ = f.Truncate(0)
@@ -1344,25 +1641,127 @@ func cancelDoorPath(wi string) string {
 	return "/api/v1/work-items/" + url.PathEscape(wi) + "/cancel"
 }
 
-// authorizeCancelAnswer probes the hub's cancel door (dry_run) for a
-// reserved cancel answer before any state is written: the hub applies
-// its reporter/maintainer/admin gate to the daemon's own authenticated
-// caller (never the self-asserted --by). A refusal is returned verbatim;
-// the question stays pending.
-func (d *Daemon) authorizeCancelAnswer(wi, questionID, answer string) error {
-	return d.hub.Do("POST", cancelDoorPath(wi), api.CancelRequest{Reason: answer, QuestionID: questionID, DryRun: true}, nil)
-}
-
 // cancelAnsweredWorkItem calls the hub's cancel door for a work item whose
-// capsule records an owner's cancel answer, after its blocked close: the
-// verbatim answer and the answered question ride the work_item_canceled
-// event, and the hub records the authenticated caller as its actor. An
-// already-terminal work item is done (the replay after a restart).
+// capsule records a cancel intent (an `intent: cancel` the step's agent
+// delivered on an owner message, intent.go), after its blocked close: the
+// owner's words with the agent's reading and the message's stamp ride the
+// work_item_canceled event, and the hub records the authenticated caller
+// as its actor. An already-terminal work item is done (the replay after a
+// restart).
 func (d *Daemon) cancelAnsweredWorkItem(wi string, intent capsule.CancelIntent) {
 	err := d.hub.Do("POST", cancelDoorPath(wi), api.CancelRequest{Reason: intent.Answer, QuestionID: intent.QuestionID}, nil)
 	var ae *api.Error
 	if err == nil || (errors.As(err, &ae) && ae.Code == api.ErrCoreGone) {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "daemon: %s: the owner's cancel answer could not cancel the work item at the hub (it stays blocked; pf cancel finishes it): %v\n", wi, err)
+	fmt.Fprintf(os.Stderr, "daemon: %s: the owner's cancel could not cancel the work item at the hub (it stays blocked; pf cancel finishes it): %v\n", wi, err)
+}
+
+// profile answers the Cell's name (default when unnamed).
+func (d *Daemon) profile() string {
+	if d.cfg.Profile == "" {
+		return cellcfg.DefaultProfile
+	}
+	return d.cfg.Profile
+}
+
+// executionDisabled answers why this Cell's execution plane is closed
+// ("" = open).
+func (d *Daemon) executionDisabled() string {
+	d.reloadMu.Lock()
+	defer d.reloadMu.Unlock()
+	return d.execDisabled
+}
+
+// execDisabledRefusal answers the one refusal of every entry point that
+// would start execution in a Cell whose execution plane is closed (a
+// submit, a task spawn, a resume, an owner message): DAEMON-409 naming
+// the Cell's reason; nil while it is open. Queries, cancel and work
+// already running are never refused by it.
+func (d *Daemon) execDisabledRefusal() error {
+	why := d.executionDisabled()
+	if why == "" {
+		return nil
+	}
+	return &api.Error{Code: api.ErrDaemonConflict, Detail: "execution is disabled on this Cell: " + why + " — nothing was started; queries, cancel and running work go on"}
+}
+
+// checkInstalledLanes loads every lane of the daemon's workflows dir
+// through the one lane loader: nil when each loads (or no workflows dir is
+// configured or present: nothing is installed, and every claim refuses its
+// lane, WFC-123), else the error naming every defect of every refused lane.
+func checkInstalledLanes(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	lanes, err := workflow.LaneDirs(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("daemon: the workflows dir %s is unreadable: %w", dir, err)
+	}
+	var bad []string
+	for _, l := range lanes {
+		if _, errs := workflow.Load(l); len(errs) > 0 {
+			bad = append(bad, workflow.AsLoadError(l, errs).Error())
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("daemon: the installed lanes do not load under workflow contract %d — a release defect; the daemon does not start (`pf workflows validate` prints the same report):\n%s",
+			workflow.ContractVersion, strings.Join(bad, "\n"))
+	}
+	return nil
+}
+
+// reportUserLanes judges every mapped workspace's user lanes through the
+// one lane loader (workflow contract, "User lanes"; the daemon's start and
+// every change of the workspace mapping call it). A refused user lane is
+// only unavailable — a claim of a work item on it is refused, nothing else
+// is — and is recorded once per lane and distinct defect set: a
+// daemon-scope user_lane_refused event naming every defect, and a log
+// line. A lane fixed and broken again is recorded again.
+func (d *Daemon) reportUserLanes() {
+	if d.cfg.WorkflowsDir == "" || d.obs == nil {
+		return
+	}
+	d.userLaneMu.Lock()
+	defer d.userLaneMu.Unlock()
+	if d.userLaneRefused == nil {
+		d.userLaneRefused = map[string]string{}
+	}
+	refused := map[string]bool{}
+	record := func(ws, lane, dir string, msgs []string) {
+		refused[dir] = true
+		text := strings.Join(msgs, "\n")
+		if d.userLaneRefused[dir] == text {
+			return
+		}
+		d.userLaneRefused[dir] = text
+		fmt.Fprintf(os.Stderr, "daemon: the user lane %s of workspace %s is refused and unavailable (the daemon runs on; a claim of a work item on it is refused):\n  %s\n", lane, ws, strings.Join(msgs, "\n  "))
+		_ = d.obs.Events().Append("", observe.EvUserLaneRefused, map[string]any{"workspace": ws, "lane": lane, "dir": dir, "errors": msgs})
+	}
+	for _, ws := range d.plan().Workspaces() {
+		set := workflow.ForWorkspace(d.cfg.WorkflowsDir, ws)
+		lanes, err := set.UserLanes()
+		if err != nil {
+			record(ws, "", set.User, []string{fmt.Sprintf("the user lanes root %s is unreadable: %v", set.User, err)})
+			continue
+		}
+		for _, l := range lanes {
+			if len(l.Errors) == 0 {
+				continue
+			}
+			msgs := make([]string, 0, len(l.Errors))
+			for _, e := range l.Errors {
+				msgs = append(msgs, e.Error())
+			}
+			record(ws, l.Name, l.Dir, msgs)
+		}
+	}
+	for dir := range d.userLaneRefused {
+		if !refused[dir] {
+			delete(d.userLaneRefused, dir)
+		}
+	}
 }

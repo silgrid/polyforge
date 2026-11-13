@@ -62,57 +62,59 @@ The rule lives in the routing skill (`SKILL.md` §Project routing).
 
 | the work | lane | verification tier |
 |---|---|---|
-| a failure to fix (reproduce first, root-cause, then fix) | `bug-fix` | `scoped-capable` |
-| new user-visible behavior (spec + acceptance scenarios) | `feature-full` | `scoped-capable` |
-| internal maintenance with no new user-visible behavior — tools, docs, config, cleanup, deletion | `chore` | `scoped-capable` |
-| a small, well-understood change | `autopilot` | `full` (not scoped-capable: no review, so no `scope_adequate`) |
-| a pure text change — docs or locale message text — inside the paths every touched repository declares with `micro_path=` in its own `.polyforge/verify-scope.conf`; the ticket body is the spec (`fix` → `review` → `deliver`) | `micro` | none (no verification step: the delivery re-runs the repository's fast evidence) |
+| **the default** for development work — a feature, a fix, maintenance, a small change (`build` → `review` → `verification` → `publish`: one build session plans against the ticket's `## Acceptance`, writes each unit's test red before its implementation and reviews itself; `review` blocks only on its five classes) | `develop` | `light` (the daemon's light tier; the integration lane's full gate runs over what landed) |
+| a pure text change — docs or locale message text — inside the paths every touched repository declares with `micro_path=` in its own `.polyforge/verify-scope.conf`; the ticket body is the spec (`fix` → `review` → `sync` → `evidence` → `publish` → `merge`) | `micro` | none (no verification step: its `evidence` step re-runs fix's evidence plan — the repository's fast evidence — with `run.py`, on the host) |
+| gate what landed: one integration batch over a project's landed work items (`collect` → `revert` → `full-gate` → `close`), filed by a person and run with `pf submit`; the lane is `exclusive: true`, so a second unfinished batch of the project is refused `CORE-409`, naming the open one | `integrate` | `full` (its `full-gate` runs the full gate on the pinned default branches) |
 | cut a release / deploy a published version | `release` | `full` (no verification step) |
 | no execution at all — a design, decision or tracking ticket | omit `--bundle`: a registration ticket runs nothing (it is not claimable, `CORE-409`) | not applicable |
 
-The lane's step table is the `steps:` list in its `workflows/<lane>/workflow.md`
-frontmatter: every acceptance criterion of an execution ticket must name the
-step of that table that carries it.
+The lane's step table is the `steps:` list in its `workflows/<lane>/workflow.yaml`:
+every acceptance criterion of an execution ticket must name the
+step of that table that carries it. The four lanes `develop` superseded
+ are removed (; `workflows/_archive/README.md`): a ticket
+still bound to one is refused at claim, and a terminal one still displays.
 
-Pick the lane with the owner. Every filing proposal fills the four mandatory
+**On `develop`** the ticket's `content` carries a `## Acceptance` section: one list
+item per criterion, its id the item's leading `AC<n>` token, else `AC<n>` by
+position. `build` pins each criterion with a test (or names the existing test or
+doc validator) and `review` judges that coverage criterion by criterion (`## 验收`
+counts the same). Filing does not grill: an idea may be filed as-is, and a ticket
+without the section is legal to file; `pf submit` refuses it without
+`--allow-no-acceptance` — the session grills its acceptance first
+(`verbs/submit.md`, the acceptance check). Submitted anyway, its build stops for
+the owner's list — the judged list is never self-written — asked once together
+with the plan; a content line `confirm_plan: true` stops the build after the
+plan as well. `build` does not grill the ticket (that is this session's job,
+before `pf submit`): it asks the owner (its own `pf step ask`) only on a surprise,
+right after the plan and never at completion — the code reveals something the
+ticket did not decide (a dead end), or the plan diverges from the ticket — each
+question with a recommended answer. The stops are human-only — never answer
+them for the owner, who answers in free text the build reads — and review
+blocks a build that took a decision the owner never gave. `develop`'s other
+human stops: a defect it cannot reproduce (a dead end), rewind exhaustion, and
+publish's owner-review.
+
+Pick the lane with the owner. Every filing proposal fills the two mandatory
 slots below **before** `pf file create` — they are slots the agent answers, not
 prose it may skip:
 
 - **Lane + reason** — the chosen `--bundle` and one line why; the owner may veto
-  or re-route. Every lane except `feature-full` can merge unattended, so work on
-  `docs/concepts.md`'s "never unattended" list is filed `feature-full`. The
+  or re-route. New development work defaults to `develop`. Every delivery lane
+  can merge unattended, so work on `docs/concepts.md`'s "never
+  unattended" list is filed `develop` with the content line `confirm_plan: true`
+  (its build stops for the owner after the plan, before its first test, and
+  review blocks a first test commit older than the owner's reply). The
   selection principles and the never-hand-execute discipline are in
   `verbs/execute-intent.md`; custom bundles and their authoring are the
   authority of `docs/bundles.md` (do not restate it).
-- **Tier + reason** — the verification tier (`scoped` or `full`) and one line
-  why, by the same heuristic everywhere: propose `scoped` for a text/docs change
-  confined to one repository and a small surface; propose `full` when the
-  acceptance is e2e-carried — a criterion an `e2e-author` step would author, or
-  behaviour an existing e2e suite pins — because a scoped run deliberately skips
-  the e2e suites; propose `full` when the change
-  crosses modules or repos, touches the driver/daemon core, or is gate-type (a
-  `gate: true` step definition — `verification`, `review`, `deliver` — or the
-  driver/daemon logic behind it). When you cannot determine the tier, propose
-  `full` — fail-closed. The owner may veto a downgrade and insist on `full`.
-  The tier semantics are the authority of
-  docs/contributing.md『Verification tiers』; the lane's capability is the
-  `verification tier` column above.
-- **Entry confirmation** — required whenever the tier slot proposes `scoped`:
-  name the readiness reading before filing — the `pf doctor`
-  `scoped-gates readiness` row (`pass` / `warn` / `unknown`), or
-  `pf projects get <project>`
-  plus a look at the clone's manifests and `.polyforge/verify-scope.conf` under
-  `<workspace>/.repo/<name>`. Not ready → say so: the marker is inert and the
-  ticket **falls back to full**. This slot reuses the readiness contract in
-  "### Scoped verification (`verification: scoped`)" below and
-  docs/contributing.md『Verification tiers』; it does not restate either.
 - **Acceptance carrier** — every acceptance criterion is written
   `<criterion> — carried by <step id>`, the step id taken from the chosen
   lane's step table (the table is the authority; do not copy a step list into
   the proposal from memory). A criterion that names no step either drops to
   the evidence that graph actually runs, recorded in the `content` as an
   explicit waiver proposed to the owner, or the ticket moves to a lane whose
-  step table carries it. On `micro` the table is `fix`, `review`, `deliver`:
+  step table carries it. On `micro` the table is `fix`, `review`, `sync`,
+  `evidence`, `publish`, `merge`:
   a criterion only a full bar, an e2e scenario or a verification step carries
   makes the ticket ineligible for `micro` — file it on a lane that carries it.
   A registration ticket (no bundle) has no step table and skips this slot.
@@ -120,28 +122,30 @@ prose it may skip:
 Any read of `<workspace>/.repo/<name>` behind these slots (manifests, conf, code) happens
 after the session clone sync: SKILL.md session rule 8.
 
-**Down-lane check.** Judge the ticket on two axes before you settle the lane,
+**Down-lane check.** With `develop` the default, the check routes between
+`develop` and `micro`. Judge the ticket on two axes
+before you settle the lane,
 and name the result in the `Lane + reason` slot above:
 `expected diff size` (how much a competent implementation touches — one file
 or a handful of lines in one module, versus many files across modules) and
 `lane risk surface` (what the change can break or newly expose — a new
 user-visible behavior or behavior face, a cross-module change, a gate-type
-change, or the driver/daemon core). A small expected diff on a low risk
-surface prefers `chore` (internal maintenance) or `autopilot` (a small,
-well-understood change) over `feature-full`: the heavier lane's preamble is
-exactly what such a ticket does not need. A pure text ticket — docs or locale
+change, or the driver/daemon core). A pure text ticket — docs or locale
 message text and nothing else: no code, config, generated file, test or
 behavior change — whose every touched repository declares `micro_path=` covering
 the paths it changes (read each repository's `.polyforge/verify-scope.conf` on
-its default branch) may go further down, to `micro`; a ticket touching any
+its default branch) may go down to `micro`; a ticket touching any
 repository without that declaration, or any path outside it, is never proposed
-`micro` (the driver would end the run and ask for a re-file on `autopilot`).
+`micro` (its fix would find the change out of bounds and ask the owner to re-file it on `develop`).
 Work on `docs/concepts.md`'s "never
 unattended" list counts as a high `lane risk surface` by definition and is
-**never down-laned** off `feature-full`, whatever its `expected diff size`:
-that list's only safeguard is the filer picking the lane that always keeps a
-human in the loop, so the check never proposes a lighter lane for it — `micro`
-included. The
+**never down-laned** off a lane that always keeps a human in the loop —
+`develop` carrying `confirm_plan: true` (build asks before its first test, and
+review blocks a build that did not) —
+whatever its `expected diff size`: that list's only
+safeguard is the filer picking such a lane, so the check never proposes a
+lighter lane for it — `micro` included — nor drops that `confirm_plan: true`
+line. The
 check also never down-lanes onto a lane whose step table carries no step for
 the acceptance criteria: a carrier-less lane is not a cheaper lane, it is the
 wrong one (see the `Acceptance carrier` slot). When the
@@ -150,27 +154,18 @@ heavier lane. The check only
 routes between the lanes the table above defines — the lane definitions and the
 selection authority stay in `docs/bundles.md`; it adds no lane.
 
-### Scoped verification (`verification: scoped`)
+### Acceptance at creation
 
-The scoped verification tier is an opt-in marker: a work item whose
-`content` carries the line `verification: scoped` runs verification narrowed
-to the paths its result declares. The marker is inert unless the release tree
-carries the verification engine `tools/verify-scope` and the target repo is
-scoped-ready — a supported stack manifest (`go.mod` / `package.json`) or a
-`.polyforge/verify-scope.conf` that pins the stack. Otherwise the ticket
-**falls back to full** (fail-closed, and correct).
-
-Before filing a scoped ticket, confirm the target repo is scoped-ready: read
-the `pf doctor` row `scoped-gates readiness` — it reports the engine default
-or the repo conf as `pass`, an unsupported or unpinned multi-manifest repo as
-`warn`, and a repo with no local clone as `unknown`. Alternatively run
-`pf projects get <project>` and read the repo's manifests and
-`.polyforge/verify-scope.conf` in its local clone under
-`<workspace>/.repo/<name>`. When the repo is not ready, tell the owner the
-marker is inert and the ticket will run the full tier. The contract the
-engine implements — what a scoped run may narrow and what it must still
-cover — lives in docs/contributing.md『Verification tiers』; do not restate it
-here.
+Filing any ticket, write its `## Acceptance` at creation only when the
+requirement is **very clear**: what to do, its scope and when it is done are all
+settled, and there is nothing the owner must decide — when unsure, it is not
+clear. Then each item is a verifiable criterion marked `— carried by build`
+(the `Acceptance carrier` slot above), so the ticket can be submitted directly.
+Otherwise file it as usual without the section and write no guessed criteria:
+the submit-time acceptance check (`verbs/submit.md`) brings the interaction that
+settles them. Claiming a follow-up item (`verbs/followup.md`, Claim) whose
+completion standard can be settled from the wrap's evidence is this very-clear
+case.
 
 ### Deepening check
 
@@ -285,17 +280,15 @@ server time, `reply_to` and body. `dep add|rm|list` print the dependency view
 
 `create` of an execution ticket also prints, on stderr only, an advisory
 when the daemon is reachable: the chosen bundle's step sequence with a
-reminder that every acceptance criterion names the step that carries it,
-plus a specific warning when the content mentions e2e and no step of that
-bundle declares `e2e_author_mode` — it never changes the request, the exit
-code or the `--json` stdout.
+reminder that every acceptance criterion names the step that carries it —
+it never changes the request, the exit code or the `--json` stdout.
 
 ## Failure branches
 
 | Code | When | What to tell the user |
 |---|---|---|
-| `AUTH-401` | api key missing or invalid | The AIHub credential is rejected — check `--api-key` / `PF_API_KEY` / the config's `api_key`. |
-| `CORE-400` | Invalid field or type; a workflow-frontmatter rule failed at create (`detail` names the rule); an `--attr` key hit the execution-state blacklist | The request body is wrong — read `detail` for the exact field/rule and fix the flags. |
+| `AUTH-401` | api key missing or invalid | The AIHub credential is rejected — check the Cell's `api_key` (`pf [--profile NAME] config set api_key`). |
+| `CORE-400` | Invalid field or type; a lane (workflow.yaml) rule failed at create (`detail` names the rule); an `--attr` key hit the execution-state blacklist | The request body is wrong — read `detail` for the exact field/rule and fix the flags. |
 | `CORE-400` `PARENT_DEPTH` | `--parent` names a work item that is itself a child — work items nest one level only | Use the top-level work item (the epic) as the parent instead. |
 | `CORE-400` `REPO_NOT_IN_PROJECT` | A `--repo` name is not one of the project's repos | Name a repo the project has (`pf projects get <project>` lists them); a maintainer adds new repos to the project. |
 | `CORE-400` `INVENTORY_DUPLICATE_NAME` / `INVENTORY_URL_NOT_ALLOWED` / `INVENTORY_SUBDIR_UNSUPPORTED` / `INVENTORY_BASE_UNSUPPORTED` | The same repo named twice; a `--stdin` entry carrying `url`, `subdir` or any key other than `name`; a `--stdin` body carrying the removed `repo_inventory_base` array | Drop the duplicate; give names only. |
@@ -304,9 +297,16 @@ code or the `--json` stdout.
 | `CORE-400` `BLOCKER_NOT_EXECUTABLE` | The blocker (`--after` / the first `dep add` argument) has no bundle: a registration ticket or an epic | It runs nothing (it closes only by a hand `pf wrap`) — name the execution ticket that does the work, or bind a bundle to it first (`pf file edit <id> --bundle NAME`). |
 | `CORE-404` | Unknown or invisible work item id, unknown project; `dep rm` of an edge that does not exist; `comment --reply-to` naming no comment on THIS work item (missing, or on another ticket) | No such work item (or you cannot see it) — check the `wi_` id or slug and the project name; for `--reply-to`, reply only to a comment on the same ticket (`pf file show` lists the ids). Nothing is written. |
 | `CORE-409` `DEPENDENCY_CYCLE` | The new edge would close a loop (B already waits, directly or not, for the other side) | Refused — the order you asked for contradicts an existing one; `pf file dep list` shows the chain. |
+| `CORE-409` `OPEN_ON_BUNDLE` | `--bundle` names a lane declaring `exclusive: true` (the shipped `integrate`) and another work item of the project on it is not wrapped, failed or canceled; `detail` names it and its status | One at a time: nothing was filed. Follow the open one (`pf watch`); one still `queued` that no machine ever claimed is yours to run (`pf submit <wi>`) or drop (`pf cancel <wi>`), as `detail` says. |
 | `CORE-409` | Create-time conflict (e.g. duplicate) | The state machine refuses this write — read `detail`. |
 | `CORE-410` | PATCH of a terminal work item (wrapped/failed/canceled) | This work item is closed and can no longer be edited — file a new one instead. |
 
 A `pf:` line with no typed code means a local flag/argument mistake (exit 1
 for a sub-action's flags or arguments, e.g. `file create --bogus` or a
 missing `--goal`) — read the message, fix the invocation.
+
+Transport: like every data-plane verb this one goes through the local daemon
+to the resolved Cell's AIHub connection (`--profile NAME` / `PF_PROFILE` /
+the cwd's mapped Cell / `default`); `--server`, `--api-key`, `PF_SERVER` and
+`PF_API_KEY` are refused, and with the daemon down it fails with
+`DAEMON-410` (`pf daemon ensure`, then retry once).

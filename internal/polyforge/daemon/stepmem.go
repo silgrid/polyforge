@@ -1,26 +1,19 @@
 package daemon
 
-// stepmem.go: the step agent's memory face. A step agent holds no aihub
-// credential path: inside a step `pf recall`, `pf memory show` and `pf
-// remember` come here and the daemon forwards them with its own key. The
+// stepmem.go: the step agent's memory face behind `pf step recall`,
+// `pf step memory show` and `pf step remember` (stepcall.go serves each as
+// a /step/call verb through the forwarders below). A step agent holds no
+// aihub credential path: the daemon forwards them with its own key. The
 // work item — and with it the project — comes from the caller's process
 // tree (peerStepOrigin), never from the request or the caller's env.
 //
-//	GET  /step/memories/search   ?q&type&tags&limit&match[&project]
-//	GET  /step/memories/{id}     {meta, content}
-//	POST /step/memories          {type, title, tags, content[, project, work_item]}
-//
 // Reach: a step agent cannot reach the
 // read-only web console or the browse mode. The daemon proxies no /web/
-// route at all (routes.go registers none), a step process holds no
-// aihub key so it cannot authenticate there either, and forwardMemorySearch below
-// forwards only q/type/tags/limit/match plus the job's project — a
-// cursor or a sort value a caller may send is dropped on the floor and
+// route at all (routes.go registers none), a step process holds no aihub
+// key so it cannot authenticate there either, and the search forwarder
+// below forwards only q/type/tags/limit/match plus the job's project —
+// a cursor or a sort value a caller may send is dropped on the floor and
 // the empty-q browse shape is refused before anything is forwarded.
-//
-// The POST is one of the step-origin guard's three step-allowed writes
-// (routes.go); the others are the result submit (stepresult.go) and the
-// deliver step's bar-run record (stepbarrun.go).
 
 import (
 	"encoding/json"
@@ -35,8 +28,6 @@ import (
 	"github.com/silgrid/polyforge/internal/common/stepmem"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
-
-const stepMemoriesPath = "/step/memories"
 
 // stepJob is the work item and dispatch a step caller runs under.
 type stepJob struct {
@@ -110,15 +101,6 @@ func (d *Daemon) peerStepOrigin(r *http.Request) (stepJob, string) {
 	return matches[0], ""
 }
 
-// stepSearchRoute forwards one search scoped to the caller's project.
-func (d *Daemon) stepSearchRoute(w http.ResponseWriter, r *http.Request) {
-	j, ok := d.stepCaller(w, r)
-	if !ok {
-		return
-	}
-	d.forwardMemorySearch(w, r, j.project, "a step of "+j.wi)
-}
-
 // forwardMemorySearch forwards one search scoped to project; who names
 // the caller in the refusal of a foreign-project ask. The forwarded
 // shape is fixed: the job's project, q, and — when present —
@@ -127,7 +109,11 @@ func (d *Daemon) stepSearchRoute(w http.ResponseWriter, r *http.Request) {
 // as a keyword search of the q it carries, and an empty q is refused —
 // a step agent never reaches aihub's browse mode.
 func (d *Daemon) forwardMemorySearch(w http.ResponseWriter, r *http.Request, project, who string) {
-	q := r.URL.Query()
+	d.forwardMemorySearchQuery(w, r.URL.Query(), project, who)
+}
+
+// forwardMemorySearchQuery is forwardMemorySearch over the query q.
+func (d *Daemon) forwardMemorySearchQuery(w http.ResponseWriter, q url.Values, project, who string) {
 	if p := q.Get("project"); p != "" && p != project {
 		writeErr(w, api.ErrDaemonForbidden, fmt.Sprintf("%s reads project %q only (asked for %q)", who, project, p))
 		return
@@ -149,16 +135,6 @@ func (d *Daemon) forwardMemorySearch(w http.ResponseWriter, r *http.Request, pro
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(raw)
-}
-
-// stepMemoryRoute reads one memory of the caller's project; any other id
-// answers MEM-404 whatever aihub said.
-func (d *Daemon) stepMemoryRoute(w http.ResponseWriter, r *http.Request) {
-	j, ok := d.stepCaller(w, r)
-	if !ok {
-		return
-	}
-	d.forwardMemoryRead(w, r.PathValue("id"), j.project)
 }
 
 // forwardMemoryRead answers one memory of project (MEM-404 for any other).
@@ -198,23 +174,15 @@ func (d *Daemon) forwardMemoryRead(w http.ResponseWriter, id, project string) {
 	writeJSON(w, http.StatusOK, map[string]any{"meta": meta, "content": string(body)})
 }
 
-// stepRememberRoute stores the calling step's experience.wrap summary:
-// checked (stepmem.Check plus the daemon's own key), attributed to the
-// resolved job, created with the step dispatch's idempotency key so a
-// retry after a lost answer returns the memory already stored.
-func (d *Daemon) stepRememberRoute(w http.ResponseWriter, r *http.Request) {
-	j, ok := d.stepCaller(w, r)
-	if !ok {
-		return
-	}
-	var req struct {
-		Type, Title, Content, Project string
-		Tags                          []string
-		WorkItem                      string `json:"work_item"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
+// stepRememberRequest is a step's memory write.
+type stepRememberRequest struct {
+	Type, Title, Content, Project string
+	Tags                          []string
+	WorkItem                      string `json:"work_item"`
+}
+
+// stepRememberAs stores req as the step j's summary (stepRememberRoute).
+func (d *Daemon) stepRememberAs(w http.ResponseWriter, j stepJob, req stepRememberRequest) {
 	switch {
 	case req.Project != "" && req.Project != j.project:
 		writeErr(w, api.ErrDaemonForbidden, fmt.Sprintf("a step of %s writes to project %q only (got %q)", j.wi, j.project, req.Project))

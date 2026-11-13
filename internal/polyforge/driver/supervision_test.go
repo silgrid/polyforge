@@ -6,7 +6,7 @@ package driver
 // per-step failure counter and its resets, the retry shape, the spawn
 // fence on verdicts (one verdict, one failure record per dispatch), the
 // facts the driver sends, and the thresholds (global defaults, step
-// overrides from workflow.md, relaxed values persisted).
+// overrides from workflow.yaml, relaxed values persisted).
 
 import (
 	"context"
@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
@@ -70,7 +71,7 @@ func newSupEnv(t *testing.T, mod func(*Config), steps ...StepSpec) *supEnv {
 	cfg := Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: steps, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, steps...),
 		Spawner:  sp,
 		Log:      log,
 		Link:     link,
@@ -146,6 +147,8 @@ func TestClassifyWaitFailure(t *testing.T) {
 		{"startup death: 401 on stderr", errors.New("runtime: initial prompt injection failed (process torn down): broken pipe; harness stderr: 401 Unauthorized"), FailExitModel},
 		{"startup death with no explanation", errors.New("runtime: initial prompt injection failed (process torn down): broken pipe"), FailExitOther},
 		{"stale model text cannot taint a clean ok-turn exit", &ExitedError{ExitCode: 0, TurnOK: true, LastError: "rate limit 429 (earlier, retried)"}, FailEndedWithoutResult},
+		{"a kill after an ok turn stays exit_other", &ExitedError{ExitCode: -1, Signal: "killed", TurnOK: true}, FailExitOther},
+		{"a crash after an ok turn stays exit_other", &ExitedError{ExitCode: 101, TurnOK: true}, FailExitOther},
 		{"plain crash", &ExitedError{ExitCode: 101}, FailExitOther},
 		{"operator kill", &ExitedError{ExitCode: -1, Signal: "killed"}, FailExitOther},
 		{"driver's own ENOSPC", fmt.Errorf("staging: %w", syscall.ENOSPC), FailExitHost},
@@ -186,97 +189,9 @@ func failEntryFor(cause string) fakeEntry {
 	}
 }
 
-func TestDeathCauseTableSameModelRetry(t *testing.T) {
-	// harness_silent / tool_hung / exit_other: same-model retry, counted
-	for _, cause := range []string{FailExitOther} {
-		env := failOnce(t, cause, "a", "b", "c")
-		if m := env.models(); len(m) != 2 || m[0] != "a" || m[1] != "a" {
-			t.Fatalf("%s: models %v, want the same model twice", cause, m)
-		}
-		x := env.exec(t)
-		st := x.Steps["s"]
-		if st.Supervision == nil || st.Supervision.FailureCount != 1 {
-			t.Fatalf("%s: failure ledger %+v, want count 1", cause, st.Supervision)
-		}
-		var found bool
-		for _, a := range st.Attempts {
-			if a.Cause == CauseInfraFailure && a.FailureCause == cause {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("%s: attempts %+v must record the cause sub-class", cause, st.Attempts)
-		}
-	}
-}
-
-func TestDeathCauseTableModelClassSwitchesCandidate(t *testing.T) {
-	env := failOnce(t, FailExitModel, "a", "b", "c")
-	if m := env.models(); len(m) != 2 || m[0] != "a" || m[1] != "b" {
-		t.Fatalf("models %v, want a then b", m)
-	}
-	st := env.exec(t).Steps["s"]
-	if st.Supervision == nil || st.Supervision.FailureCount != 0 {
-		t.Fatalf("a switch to a new candidate resets the counter: %+v", st.Supervision)
-	}
-	if st.Attempts[0].FailureCause != FailExitModel {
-		t.Fatalf("attempt %+v must carry the cause", st.Attempts[0])
-	}
-	if sw := env.log.byKind("candidate_switched"); len(sw) != 1 || sw[0].body["from"] != "pi:a" || sw[0].body["to"] != "pi:b" {
-		t.Fatalf("candidate_switched events: %+v", sw)
-	}
-	// the switch starts a NEW conversation
-	if !env.sp.spawnAt(1).Fresh || env.sp.spawnAt(1).Resume {
-		t.Fatalf("a candidate switch dispatches fresh: %+v", env.sp.spawnAt(1))
-	}
-}
-
-func TestDeathCauseTableHostClassBlocksWithoutSwitching(t *testing.T) {
-	env := newChainEnv(t, nil, "s", "a", "b")
-	env.sp.script = []fakeEntry{failEntryFor(FailExitHost)}
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	x := env.exec(t)
-	if x.WorkflowStatus != StatusBlocked || !strings.Contains(x.BlockedReason, "host-class") {
-		t.Fatalf("status %q reason %q, want blocked on a host-class fault", x.WorkflowStatus, x.BlockedReason)
-	}
-	if n := len(env.sp.dispatched()); n != 1 {
-		t.Fatalf("a host fault must not redispatch (no model switch): %v", env.models())
-	}
-	if x.Steps["s"].Attempts[0].FailureCause != FailExitHost {
-		t.Fatalf("attempt %+v must carry the host cause", x.Steps["s"].Attempts[0])
-	}
-	bl := env.log.byKind("blocked")
-	if len(bl) != 1 || bl[0].body["report"] != true {
-		t.Fatalf("blocked event must report the owner: %+v", bl)
-	}
-}
-
-func TestFailureCounterBlocksAtThree(t *testing.T) {
-	env := newSupEnv(t, nil, spec("s")) // no candidate chain: nothing to switch
-	env.sp.script = []fakeEntry{failEntryFor(FailExitOther), failEntryFor(FailExitOther), failEntryFor(FailExitOther), done(`{}`)}
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if n := len(env.sp.dispatched()); n != 3 {
-		t.Fatalf("the third counted failure blocks: dispatches %v", env.sp.dispatched())
-	}
-	x := env.exec(t)
-	if x.WorkflowStatus != StatusBlocked || !strings.Contains(x.BlockedReason, "failed 3 times") {
-		t.Fatalf("status %q reason %q", x.WorkflowStatus, x.BlockedReason)
-	}
-	if c := x.Steps["s"].Supervision.FailureCount; c != 3 {
-		t.Fatalf("persisted counter %d, want 3", c)
-	}
-	// Retry shape: 1st retry resumes the transcript, 2nd+ is fresh.
-	if sp := env.sp.spawnAt(1); !sp.Resume || sp.Fresh {
-		t.Fatalf("1st retry must resume: %+v", sp)
-	}
-	if sp := env.sp.spawnAt(2); sp.Resume || !sp.Fresh {
-		t.Fatalf("2nd retry must be fresh: %+v", sp)
-	}
-}
+// The contract 4 decision of every death class (design #483 §7: resume,
+// switch, back off, double the bound, block) is supervision_rules_test.go's,
+// one test per row; this file keeps the inputs and ledger facts around it.
 
 func TestHumanContinueResetsCounter(t *testing.T) {
 	env := newSupEnv(t, nil, spec("s"))
@@ -319,110 +234,7 @@ func TestGateRewindIntoStepResetsLedger(t *testing.T) {
 	}
 }
 
-func TestEnvelopeRejectionsAreNotCounted(t *testing.T) {
-	// #107: in-process envelope retries have their own bound and never
-	// feed the failure counter.
-	env := newSupEnv(t, nil, spec("s"))
-	// a result with a wrong spawn fence is rejected at validation
-	rejected := fakeEntry{res: &StepResult{Outcome: OutcomeCompleted, SpawnN: 99, Output: []byte(`{}`)}}
-	env.sp.script = []fakeEntry{rejected, done(`{}`)}
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	st := env.exec(t).Steps["s"]
-	if st.Supervision != nil && st.Supervision.FailureCount != 0 {
-		t.Fatalf("an envelope rejection was counted as a failure: %+v", st.Supervision)
-	}
-	for _, a := range st.Attempts {
-		if a.Cause == CauseInfraFailure {
-			t.Fatalf("an envelope rejection archived an infra failure: %+v", a)
-		}
-	}
-}
-
-func TestCandidatesExhaustedCountsAsSameModelRetry(t *testing.T) {
-	env := newChainEnv(t, nil, "s", "a", "b")
-	env.sp.script = []fakeEntry{
-		failEntryFor(FailExitModel), // a -> b (switch, counter reset)
-		failEntryFor(FailExitModel), // b is the end: same-model retry, counted 1
-		failEntryFor(FailExitModel), // counted 2
-		failEntryFor(FailExitModel), // counted 3: blocked
-		done(`{}`),
-	}
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if m := env.models(); fmt.Sprint(m) != "[a b b b]" {
-		t.Fatalf("models %v, want a, then b held at the end of the chain", m)
-	}
-	x := env.exec(t)
-	if x.WorkflowStatus != StatusBlocked {
-		t.Fatalf("status %q, want blocked after the counter bound on the last candidate", x.WorkflowStatus)
-	}
-	if c := x.Steps["s"].Supervision.FailureCount; c != 3 {
-		t.Fatalf("counter %d, want 3", c)
-	}
-	if ex := env.log.byKind("candidates_exhausted"); len(ex) == 0 {
-		t.Fatal("the decision event must say the candidates are exhausted")
-	}
-}
-
-func TestPersistentEnvelopeRejectionReports(t *testing.T) {
-	// persistent envelope rejection reports (the result contract is
-	// broken, not the model) before the loop gives up
-	env := newSupEnv(t, nil, spec("s"))
-	var script []fakeEntry
-	for i := 0; i < maxEnvelopeRejects+2; i++ {
-		script = append(script, fakeEntry{res: &StepResult{Outcome: OutcomeCompleted, SpawnN: 99, Output: []byte(`{}`)}})
-	}
-	env.sp.script = script
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("a persistently rejected envelope blocks the step cleanly (no relaunch lane): %v", err)
-	}
-	if rep := env.log.byKind("schema_fault"); len(rep) != 1 {
-		t.Fatalf("schema_fault report events: %+v", rep)
-	}
-	x := env.exec(t)
-	if x.WorkflowStatus != StatusBlocked || !strings.Contains(x.BlockedReason, "result_invalid") {
-		t.Fatalf("status %q reason %q, want blocked with result_invalid", x.WorkflowStatus, x.BlockedReason)
-	}
-	if x.RewindStats.Count != 0 {
-		t.Fatalf("a result-invalid block must not fire a rewind: %+v", x.RewindStats)
-	}
-}
-
 // --- relaxed bounds ---------------------------------------------------
-
-func TestToolHungRelaxesYAndPersists(t *testing.T) {
-	env := newSupEnv(t, func(c *Config) {
-		c.Limits = supervise.Defaults{Tool: 10 * time.Minute}
-	}, spec("s"))
-	env.sp.script = []fakeEntry{fakeEntry{hold: true}, done(`{}`)}
-	go func() {
-		waitForSpawns(env, 1)
-		env.link.Verdict(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseToolHung, Evidence: "bash 11m"})
-	}()
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	sup := env.exec(t).Steps["s"].Supervision
-	if sup.RelaxedToolMs != (20 * time.Minute).Milliseconds() {
-		t.Fatalf("Y must double: %+v", sup)
-	}
-	if sup.FailureCount != 1 || env.models()[0] != env.models()[1] {
-		t.Fatalf("tool_hung is a same-model retry, counted: %+v %v", sup, env.models())
-	}
-	// the second dispatch's step_started carries the relaxed Y
-	var started []supervise.StepStarted
-	for _, f := range env.link.Facts.Drain() {
-		if s, ok := f.(supervise.StepStarted); ok {
-			started = append(started, s)
-		}
-	}
-	if len(started) != 2 || started[0].Thresholds.Tool != 10*time.Minute || started[1].Thresholds.Tool != 20*time.Minute {
-		t.Fatalf("thresholds on step_started: %+v", started)
-	}
-}
 
 func TestRelaxedBoundsSurviveRestart(t *testing.T) {
 	// the persisted relaxed Y/T are re-sent on step_started after a
@@ -446,7 +258,7 @@ func TestRelaxedBoundsSurviveRestart(t *testing.T) {
 	link2 := supervise.NewLink("wi_run")
 	d2, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: filepath.Dir(env.execPath), BundleName: "b"},
-		ExecPath: env.execPath, Workflow: &Workflow{Steps: []StepSpec{spec("s")}, MaxTotal: 4, MaxPerStep: 2},
+		ExecPath: env.execPath, Workflow: testLane(4, []StepSpec{spec("s")}...),
 		Spawner: sp2, Link: link2, SpawnN: env.d.SpawnN(),
 		Limits: supervise.Defaults{StepTimeout: time.Hour},
 	})
@@ -519,25 +331,22 @@ func TestStepTimeoutAccumulatesAcrossDispatches(t *testing.T) {
 	}
 }
 
-// --- thresholds from workflow.md --------------------------------------
+// --- thresholds from workflow.yaml -------------------------------------
 
 // TestStepOverridesFromWorkflowFrontmatter: budget.wall_minutes is the
 // ONLY per-step threshold face left (polyforge#147 C5 retired the
-// per-step silence_minutes / tool_minutes overrides — those keys are no
-// longer read, and the global defaults hold for every step).
+// per-step silence_minutes / tool_minutes overrides — the loader refuses
+// those keys, and the global defaults hold for every step).
 func TestStepOverridesFromWorkflowFrontmatter(t *testing.T) {
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "workflows", "b")
 	if err := os.MkdirAll(bundle, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	md := "---\nname: b\nsteps:\n" +
-		"  - { id: slow, budget: { wall_minutes: 45 }, silence_minutes: 20, tool_minutes: 60 }\n" + // the retired keys are ignored
-		"  - { id: small, budget: { wall_minutes: 15 } }\n" +
-		"  - { id: plain }\n---\n# b\n"
-	if err := os.WriteFile(filepath.Join(bundle, "workflow.md"), []byte(md), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	workflowtest.WriteLane(t, filepath.Join(dir, "workflows"), "b", "steps:\n"+
+		"  - { id: slow, budget: { wall_minutes: 45 } }\n"+
+		"  - { id: small, budget: { wall_minutes: 15 } }\n"+
+		"  - { id: plain }\n")
 	wf, err := LoadWorkflow(bundle)
 	if err != nil {
 		t.Fatal(err)
@@ -673,37 +482,11 @@ func TestCancellationIsNotAFailureAndStaysUncounted(t *testing.T) {
 
 func TestFactsOutOnTheContract(t *testing.T) {
 	env := newChainEnv(t, nil, "grill", "m1")
-	env.sp.script = []fakeEntry{asks("q_1", "ok?"), done(`{}`)}
-	ctx := context.Background()
-	runDone := make(chan error, 1)
-	go func() { runDone <- env.d.Run(ctx) }()
-	waitUntil(t, "the open question", func() bool {
-		x := tryReadExec(env.execPath)
-		return x != nil && x.Steps["grill"].PendingQuestion != nil
-	})
-	// Answer only once the step_waiting_human FACT is out. The parked
-	// question's transition (execution.json's PendingQuestion, the
-	// needs_input event) lands BEFORE the loop re-plans and announces the
-	// wait, so answering on those signals raced the driver goroutine:
-	// the test goroutine's step_answered could precede step_waiting_human,
-	// or (answered before the re-plan saw the question) suppress it.
-	var facts []supervise.Fact
-	waitUntil(t, "step_waiting_human", func() bool {
-		facts = append(facts, env.link.Facts.Drain()...)
-		for _, f := range facts {
-			if _, ok := f.(supervise.StepWaitingHuman); ok {
-				return true
-			}
-		}
-		return false
-	})
-	if err := env.d.Answer("q_1", "yes", "alice"); err != nil {
+	env.sp.script = []fakeEntry{done(`{}`)}
+	if err := env.d.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-runDone; err != nil {
-		t.Fatal(err)
-	}
-	facts = append(facts, env.link.Facts.Drain()...)
+	facts := env.link.Facts.Drain()
 	var kinds []string
 	var versions []int64
 	for _, f := range facts {
@@ -717,13 +500,11 @@ func TestFactsOutOnTheContract(t *testing.T) {
 			kinds = append(kinds, fmt.Sprintf("ended#%d(%s)", v.SpawnN, v.Outcome))
 		case supervise.StepWaitingHuman:
 			kinds = append(kinds, "waiting("+v.QuestionID+")")
-		case supervise.StepAnswered:
-			kinds = append(kinds, "answered("+v.QuestionID+")")
 		case supervise.ExecCommitted:
 			versions = append(versions, v.Version)
 		}
 	}
-	want := "[started#1(grill,m1) ended#1(result) waiting(q_1) answered(q_1) started#2(grill,m1) ended#2(result)]"
+	want := "[started#1(grill,m1) ended#1(result)]"
 	if fmt.Sprint(kinds) != want {
 		t.Fatalf("facts %v\nwant  %s", kinds, want)
 	}
@@ -754,120 +535,11 @@ func TestEventAppendFailureNeverBreaksTheRun(t *testing.T) {
 	}
 }
 
-// TestCandidateSwitchKeepsTCumulative: T accumulates across the WHOLE
-// step (polyforge#147 D6) — a candidate switch does NOT reopen the
-// window. The successor runs with the predecessor's spent time carried
-// over; what keeps it alive is the relaxation a timeout-class disposal
-// applied, not a rebased clock.
-func TestCandidateSwitchKeepsTCumulative(t *testing.T) {
-	var mu sync.Mutex
-	tick := 0
-	env := newChainEnv(t, func(c *Config) {
-		c.Now = func() time.Time {
-			mu.Lock()
-			defer mu.Unlock()
-			tick++
-			return time.Unix(1_000_000, 0).Add(time.Duration(tick) * 40 * time.Minute)
-		}
-		c.Limits = supervise.Defaults{StepTimeout: time.Hour}
-	}, "s", "a", "b")
-	env.sp.script = []fakeEntry{exitErr(1, "model not found", false), done(`{}`)}
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	var started []supervise.StepStarted
-	for _, f := range env.link.Facts.Drain() {
-		if s, ok := f.(supervise.StepStarted); ok {
-			started = append(started, s)
-		}
-	}
-	if len(started) != 2 {
-		t.Fatalf("step_started facts: %d", len(started))
-	}
-	if prior := started[1].Thresholds.PriorRuntime; prior != 40*time.Minute {
-		t.Fatalf("T is cumulative across the switch, prior runtime %v want 40m", prior)
-	}
-	// accounting keeps every booked millisecond and nothing rebases it
-	if st := env.exec(t).Steps["s"]; st.BudgetConsumed.WallMs < (40 * time.Minute).Milliseconds() {
-		t.Fatalf("booked wall time: %+v", st.BudgetConsumed)
-	}
-}
+// --- the startup-death input (a spawn error) -------------------------------
 
-// TestHumanContinueKeepsTCumulative: the human "continue" resets the
-// failure ledger but NOT the step's cumulative runtime (D6).
-func TestHumanContinueKeepsTCumulative(t *testing.T) {
-	env := newSupEnv(t, nil, spec("s"))
-	env.sp.script = []fakeEntry{failEntryFor(FailExitOther), failEntryFor(FailExitOther), failEntryFor(FailExitOther)}
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if err := env.d.ResumeCurrent(); err != nil {
-		t.Fatalf("continue: %v", err)
-	}
-	st := env.exec(t).Steps["s"]
-	if st.Supervision.FailureCount != 0 || st.Supervision.LongTaskTimeouts != 0 {
-		t.Fatalf("a human continue resets the failure ledger: %+v", st.Supervision)
-	}
-	// Nothing rebases the step's cumulative runtime: the only zeroing
-	// of T is a rewind's fresh start (D6).
-}
-
-// --- ended_without_result (rule 1, ok-ended turn) ---------------------------
-
-func TestEndedWithoutResultVerdictRetriesSameModelWithFeedback(t *testing.T) {
-	env := newChainEnv(t, nil, "s", "a", "b")
-	env.sp.script = []fakeEntry{{hold: true}, done(`{"ok":true}`)}
-	go func() {
-		waitForSpawns(env, 1)
-		env.link.Verdict(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseEndedWithoutResult, Evidence: "turn ended ok"})
-	}()
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if m := env.models(); len(m) != 2 || m[0] != "a" || m[1] != "a" {
-		t.Fatalf("ended_without_result is a same-model retry, got %v", m)
-	}
-	st := env.exec(t).Steps["s"]
-	if st.Supervision == nil || st.Supervision.FailureCount != 1 {
-		t.Fatalf("counted failure: %+v", st.Supervision)
-	}
-	if a := st.Attempts[0]; a.FailureCause != FailEndedWithoutResult {
-		t.Fatalf("attempt %+v must carry the cause", a)
-	}
-	if env.sp.spawnAt(0).PriorEndedWithoutResult || !env.sp.spawnAt(1).PriorEndedWithoutResult {
-		t.Fatalf("only the retry tells the agent its previous turn ended without a result: %+v / %+v",
-			env.sp.spawnAt(0), env.sp.spawnAt(1))
-	}
-}
-
-func TestClassifyEndedOKExitIsEndedWithoutResult(t *testing.T) {
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 0, TurnOK: true}); got != FailEndedWithoutResult {
-		t.Fatalf("clean exit after an ok-ended turn: %q", got)
-	}
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: -1, Signal: "killed", TurnOK: true}); got != FailExitOther {
-		t.Fatalf("a kill after an ok turn stays exit_other: %q", got)
-	}
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 101, TurnOK: true}); got != FailExitOther {
-		t.Fatalf("a crash after an ok turn stays exit_other: %q", got)
-	}
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, TurnError: true}); got != FailExitModel {
-		t.Fatalf("an error-ended turn stays model-class: %q", got)
-	}
-}
-
-func TestRetryPromptNamesEndedWithoutResult(t *testing.T) {
-	p := promptParts{PriorEndedWithoutResult: true}
-	out := assembleStepPrompt(p)
-	if !strings.Contains(out, "ended without submitting a result") {
-		t.Fatalf("retry prompt must tell the agent: %q", out)
-	}
-	// the EWR notice names the one delivery channel, never
-	// the stale "envelope file is written" shape.
-	if !strings.Contains(out, "pf result submit") || strings.Contains(out, "envelope file is written") {
-		t.Fatalf("the EWR notice must name `pf result submit` and drop the file wording: %q", out)
-	}
-}
-
+// TestStartupDeathWithModelStderrAdvancesCandidate: a spawn error is
+// classified through the same table as an exit — a model text on the
+// harness stderr is model class and advances the candidate.
 func TestStartupDeathWithModelStderrAdvancesCandidate(t *testing.T) {
 	env := newChainEnv(t, nil, "s", "a", "b")
 	env.sp.script = []fakeEntry{
@@ -879,53 +551,6 @@ func TestStartupDeathWithModelStderrAdvancesCandidate(t *testing.T) {
 	}
 	if m := env.models(); len(m) != 2 || m[0] != "a" || m[1] != "b" {
 		t.Fatalf("models %v, want a then b (a startup model fault advances the candidate)", m)
-	}
-}
-
-// repo review 2026-10-16 B-12: a pi step that wrote a MALFORMED envelope
-// and stayed alive is judged ended_without_result by the supervisor; the
-// defect must reach step_dead's evidence and the retry prompt, which must
-// not claim the agent wrote nothing.
-func TestEndedWithoutResultCarriesTheEnvelopeDefect(t *testing.T) {
-	env := newChainEnv(t, nil, "s", "a", "b")
-	defect := errors.New(`driver: envelope outcome "done" is not in the closed set`)
-	env.sp.script = []fakeEntry{{hold: true, cancelErr: &EnvelopeDefectError{Defect: defect, Cause: context.Canceled}}, done(`{"ok":true}`)}
-	go func() {
-		waitForSpawns(env, 1)
-		env.link.Verdict(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseEndedWithoutResult, Evidence: "turn ended ok"})
-	}()
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	dead := env.log.byKind("step_dead")
-	if len(dead) != 1 || !strings.Contains(fmt.Sprint(dead[0].body["evidence"]), "closed set") {
-		t.Fatalf("step_dead evidence must name the defect: %+v", dead)
-	}
-	retry := env.sp.spawnAt(1)
-	if !strings.Contains(retry.PriorRejection, "closed set") || retry.PriorEndedWithoutResult {
-		t.Fatalf("the retry must name the defect, not claim no envelope: %+v", retry)
-	}
-}
-
-// B-12, the stepRun half: a Wait cut short while the drop path holds an
-// unusable envelope reports the defect (and still unwraps to ctx's error).
-func TestStepRunWaitCancelSurfacesEnvelopeDefect(t *testing.T) {
-	ad, _, capDir := spawnEnv(t)
-	writeCapsuleFile(t, capDir, "artifacts/fix-summary.md", "s")
-	run, err := ad.SpawnStep(context.Background(), StepSpawn{StepID: "verification", SpawnN: 9})
-	if err != nil {
-		t.Fatalf("SpawnStep: %v", err)
-	}
-	writeCapsuleFile(t, capDir, "runtime-state/pending-results/9.json", `{"outcome":"done"}`)
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
-	_, werr := run.Wait(ctx)
-	var ed *EnvelopeDefectError
-	if !errors.As(werr, &ed) || !errors.Is(werr, context.Canceled) {
-		t.Fatalf("canceled Wait over a defective drop: %v", werr)
 	}
 }
 

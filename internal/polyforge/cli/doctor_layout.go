@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
 )
 
@@ -493,14 +494,27 @@ func ensureFixCommand(home string) string {
 }
 
 // supervisionCheck judges whether a live daemon is supervised.
-func supervisionCheck(daemonUp bool) doctorCheck {
-	c := doctorCheck{Name: docChSupervision}
+func supervisionCheck(daemonUp bool) (c doctorCheck) {
+	c = doctorCheck{Name: docChSupervision}
 	home, _ := os.UserHomeDir()
 	fix := ensureFixCommand(home)
+	// The data dir's cell layout rides this row (no new row):
+	// a pre-Cell dir the daemon refuses, or a pre-migration copy kept after
+	// the rollback window closed.
+	layoutWarn, layoutNote := cellLayoutNote(DataDir(home))
 	if !daemonUp {
+		if layoutWarn {
+			c.Status, c.Detail = "warn", layoutNote
+			return c
+		}
 		c.Status, c.Detail = "skip", "not run: the daemon does not answer — start it: pf daemon ensure"
 		return c
 	}
+	defer func() {
+		if layoutWarn {
+			c.Status, c.Detail = "warn", c.Detail+" — "+layoutNote
+		}
+	}()
 	loop, err := supervisor.LoopRunning()
 	switch {
 	case loop:
@@ -513,4 +527,23 @@ func supervisionCheck(daemonUp bool) doctorCheck {
 		c.Status, c.Detail = "warn", "the daemon runs without supervision (no tmux session "+supervisor.SessionName+", no active "+supervisor.SystemdUnit+"): a crash is not restarted — restart it under the loop (graceful; running jobs are checkpointed first): "+fix
 	}
 	return c
+}
+
+// cellLayoutNote reports the data dir's cell-layout warning (warn=false:
+// nothing to say): a pre-Cell dir the runtime refuses, or the untouched
+// pre-migration copy still kept in the root after a Host served the new
+// layout (the rollback window is closed; the copy is stale).
+func cellLayoutNote(dataDir string) (bool, string) {
+	if _, err := cellcfg.CheckLayout(dataDir); err != nil {
+		return true, err.Error()
+	}
+	old := cellcfg.OldLayoutItems(dataDir)
+	if len(old) == 0 {
+		return false, ""
+	}
+	marker := filepath.Join(cellcfg.CellDir(dataDir, cellcfg.DefaultProfile), cellcfg.AcceptedWorkMarker)
+	if _, err := os.Stat(marker); err != nil {
+		return false, "" // inside the rollback window the copy is the rollback source
+	}
+	return true, fmt.Sprintf("the pre-migration copy (%s in %s) is stale: the Host served the cell layout, so `pf migrate cell-layout --rollback` is refused — keep a backup of it if you want one, then remove those root items", strings.Join(old, ", "), dataDir)
 }

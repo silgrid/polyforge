@@ -27,7 +27,7 @@ func anchorEnv(t *testing.T, list *[]string) (*Driver, *fakeSpawner, *safeLog, s
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{spec("s")}, MaxTotal: 10, MaxPerStep: 10},
+		Workflow: testLane(10, []StepSpec{spec("s")}...),
 		Spawner:  sp,
 		Log:      log,
 		Link:     supervise.NewLink("wi_run"),
@@ -47,53 +47,6 @@ func anchorModels(sp *fakeSpawner) []string {
 		out = append(out, sp.spawnAt(i).Model)
 	}
 	return out
-}
-
-// runRotatedAsk drives [EWR(a), EWR(a)] (the rotation to b is decided and
-// persisted), b asks, the owner answers, the re-dispatch completes.
-func runRotatedAsk(t *testing.T) ([]string, *safeLog) {
-	t.Helper()
-	list := []string{"pi:a", "pi:b"}
-	d, sp, log, execPath := anchorEnv(t, &list)
-	ewr := fakeEntry{err: &ExitedError{Step: "s", ExitCode: 0, TurnOK: true}}
-	sp.script = []fakeEntry{ewr, ewr, asks("q_1", "go on?"), done(`{}`)}
-	doneCh := make(chan error, 1)
-	go func() { doneCh <- d.Run(context.Background()) }()
-	waitUntil(t, "the open question on b", func() bool {
-		x := tryReadExec(execPath)
-		return x != nil && x.Steps["s"].PendingQuestion != nil
-	})
-	if err := d.Answer("q_1", "yes", "owner"); err != nil {
-		t.Fatalf("answer: %v", err)
-	}
-	if err := <-doneCh; err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	return anchorModels(sp), log
-}
-
-// Case 1: stale EWR(a) attempts after a persisted rotation owe no second
-// advance: the answered re-dispatch runs b.
-func TestAnchorRotatedModelSurvivesAnswer(t *testing.T) {
-	models, _ := runRotatedAsk(t)
-	want := []string{"a", "a", "b", "b"}
-	if len(models) != len(want) || models[3] != "b" {
-		t.Fatalf("dispatch models %v, want %v", models, want)
-	}
-}
-
-// Case 4: the answered re-dispatch runs the same model and emits no
-// candidate_switched beyond the rotation's own ended_without_result one.
-func TestAnchorAnswerRedispatchEmitsNoFalseSwitch(t *testing.T) {
-	_, log := runRotatedAsk(t)
-	for _, e := range log.byKind("candidate_switched") {
-		if e.body["cause"] != FailEndedWithoutResult || e.body["from"] != "pi:a" || e.body["to"] != "pi:b" {
-			t.Errorf("unexpected candidate_switched: %v", e.body)
-		}
-	}
-	if n := len(log.byKind("candidate_switched")); n != 1 {
-		t.Errorf("candidate_switched events = %d, want exactly the rotation's own", n)
-	}
 }
 
 // Case 2: a model_error(a) whose switch is decided must not double when

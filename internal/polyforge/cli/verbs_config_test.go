@@ -8,6 +8,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -116,9 +117,9 @@ func TestConfigSetNotifiesDaemonAfterReleasingTheWriterFlock(t *testing.T) {
 }
 
 // stepsWriteFixture is newWfFixture with a dense yaml and its sha.
-func stepsWriteFixture(t *testing.T, caps []string) (wfFixture, string) {
+func stepsWriteFixture(t *testing.T) (wfFixture, string) {
 	t.Helper()
-	f := newWfFixture(t, "# keep me\nsteps:\n  alpha:\n    grill:\n      models: [\"pi:before\"]\n    code: { models: [\"pi:c\"] }\n", caps)
+	f := newWfFixture(t, "# keep me\nsteps:\n  alpha:\n    grill:\n      models: [\"pi:before\"]\n    code: { models: [\"pi:c\"] }\n")
 	return f, filepath.Join(f.ws, ".polyforge.yaml")
 }
 
@@ -134,7 +135,7 @@ func fileHash(t *testing.T, path string) (string, []byte) {
 // TestStepsChainWriteRefusesStaleSha pins the CAS: a stale --expect-hash
 // is CORE-409 and the file stays byte-identical; the matching hash lands.
 func TestStepsChainWriteRefusesStaleSha(t *testing.T) {
-	f, path := stepsWriteFixture(t, []string{CapabilityStepsAttrs})
+	f, path := stepsWriteFixture(t)
 	sha, raw := fileHash(t, path)
 	code, _, stderr := runPf(t, f.env, "config", "set", "steps.alpha.grill.models", `["pi:x"]`, "--cwd", f.ws, "--expect-hash", strings.Repeat("0", 64))
 	if code == 0 || !strings.Contains(stderr, "CORE-409") {
@@ -155,7 +156,7 @@ func TestStepsChainWriteRefusesStaleSha(t *testing.T) {
 // TestStepsCandidateRefusedByLoader pins that a malformed candidate is
 // refused by the strict loader (no other validator) with the file intact.
 func TestStepsCandidateRefusedByLoader(t *testing.T) {
-	f, path := stepsWriteFixture(t, []string{CapabilityStepsAttrs})
+	f, path := stepsWriteFixture(t)
 	sha, raw := fileHash(t, path)
 	code, _, stderr := runPf(t, f.env, "config", "set", "steps.alpha.grill.models", `["not-a-candidate"]`, "--cwd", f.ws, "--expect-hash", sha)
 	if code == 0 || !strings.Contains(stderr, "steps.alpha.grill.models[0]") {
@@ -164,52 +165,28 @@ func TestStepsCandidateRefusedByLoader(t *testing.T) {
 	if _, now := fileHash(t, path); string(now) != string(raw) {
 		t.Fatal("a refused candidate changed the file")
 	}
-	for key, want := range map[string]string{
-		"steps.alpha.grill.attrs.mystery_knob":          "undeclared attr",
-		"steps.alpha.default.attrs.question_batch_size": "`default` takes no attrs",
-		"steps.alpha.grill.attrs.question_batch_size":   "",
-	} {
-		value := "1"
-		if want == "" {
-			value = "many"
-			want = "must be an integer"
-		}
-		code, _, stderr := runPf(t, f.env, "config", "set", key, value, "--cwd", f.ws, "--expect-hash", sha)
-		if code == 0 || !strings.Contains(stderr, want) {
-			t.Fatalf("%s: want a refusal naming %q, got %d %s", key, want, code, stderr)
-		}
-		if _, now := fileHash(t, path); string(now) != string(raw) {
-			t.Fatalf("%s: a refused attr changed the file", key)
-		}
-	}
-	code, _, stderr = runPf(t, f.env, "config", "set", "steps.alpha.grill.attrs.question_batch_size", "-1", "--cwd", f.ws, "--expect-hash", sha)
-	if code == 0 || !strings.Contains(stderr, "steps.alpha.grill.attrs.question_batch_size: must be a non-negative integer") {
-		t.Fatalf("a negative int attr must be the loader's refusal: %d %s", code, stderr)
-	}
-	if _, now := fileHash(t, path); string(now) != string(raw) {
-		t.Fatal("a refused negative attr changed the file")
-	}
-	if code, _, stderr := runPf(t, f.env, "config", "set", "steps.alpha.grill.attrs.question_batch_size", "2", "--cwd", f.ws, "--expect-hash", sha); code != 0 {
-		t.Fatalf("a declared attr write failed: %s", stderr)
-	}
-	doc := readWorkspaceDoc(t, f)
-	if v := stepRead(t, doc, "alpha", "grill")["attrs"].(map[string]any)["question_batch_size"].(map[string]any)["value"]; v != 2.0 {
-		t.Fatalf("the written attr reads back as %v", v)
-	}
 }
 
-// TestStepsAttrWriteRefusedBelowCapability pins the capability gate: a
-// daemon without steps_attrs refuses the write with CORE-501 naming the
-// floor, before the file is touched.
-func TestStepsAttrWriteRefusedBelowCapability(t *testing.T) {
-	f, path := stepsWriteFixture(t, nil)
+// TestStepsWriteRefusedWithoutWorkflowsDir pins the write gate: a daemon
+// that names no workflows dir (so no step id can be checked) refuses a
+// set and an unset with CORE-501, before the file is touched; a removed
+// step-attr key is no workspace key at all.
+func TestStepsWriteRefusedWithoutWorkflowsDir(t *testing.T) {
+	f, path := stepsWriteFixture(t)
 	sha, raw := fileHash(t, path)
 	code, _, stderr := runPf(t, f.env, "config", "set", "steps.alpha.grill.attrs.question_batch_size", "3", "--cwd", f.ws, "--expect-hash", sha)
-	if code == 0 || !strings.Contains(stderr, "CORE-501") || !strings.Contains(stderr, StepsAttrsMinimumVersion) {
-		t.Fatalf("want CORE-501 naming %s: %d %s", StepsAttrsMinimumVersion, code, stderr)
+	if code == 0 || !strings.Contains(stderr, `unknown workspace key "steps.alpha.grill.attrs.question_batch_size"`) {
+		t.Fatalf("a step-attr key must be refused as no workspace key: %d %s", code, stderr)
+	}
+	f.env["PF_DAEMON_SOCKET"] = newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(jsonBody(map[string]any{"machine_id": "m", "jobs": []any{}})))
+	}))
+	code, _, stderr = runPf(t, f.env, "config", "set", "steps.alpha.grill.models", `["pi:x"]`, "--cwd", f.ws, "--expect-hash", sha)
+	if code == 0 || !strings.Contains(stderr, "CORE-501") || !strings.Contains(stderr, "no workflows dir") {
+		t.Fatalf("want CORE-501 naming the missing workflows dir: %d %s", code, stderr)
 	}
 	if _, now := fileHash(t, path); string(now) != string(raw) {
-		t.Fatal("the capability refusal changed the file")
+		t.Fatal("the gate's refusal changed the file")
 	}
 	code, _, stderr = runPf(t, f.env, "config", "unset", "steps.alpha.code.models", "--cwd", f.ws)
 	if code == 0 || !strings.Contains(stderr, "CORE-501") {
@@ -220,7 +197,7 @@ func TestStepsAttrWriteRefusedBelowCapability(t *testing.T) {
 // TestStepsChainUnsetFallsBack pins the CLI clear: the chain-only entry is
 // gone and the read reports it undeclared.
 func TestStepsChainUnsetFallsBack(t *testing.T) {
-	f, path := stepsWriteFixture(t, []string{CapabilityStepsAttrs})
+	f, path := stepsWriteFixture(t)
 	sha, _ := fileHash(t, path)
 	if code, _, stderr := runPf(t, f.env, "config", "unset", "steps.alpha.code.models", "--cwd", f.ws, "--expect-hash", sha); code != 0 {
 		t.Fatalf("unset failed: %s", stderr)
@@ -291,5 +268,136 @@ func TestConfigSetWritesSummarizeAndPolicyTables(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ws, ".polyforge.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("a cli.toml write touched the workspace yaml (stat err %v)", err)
+	}
+}
+
+// cellScopeFixture writes a Host file and one named Cell file under a
+// scratch XDG config dir, with no daemon (the socket names nothing).
+func cellScopeFixture(t *testing.T) (dir string) {
+	t.Helper()
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("PF_DAEMON_SOCKET", filepath.Join(t.TempDir(), "none.sock"))
+	t.Setenv("PF_PROFILE", "")
+	dir = filepath.Join(xdg, "polyforge")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cli.toml"), []byte("server = \"http://hub-d:1\"\napi_key = \"kd\"\n\n[daemon]\nmax_concurrent_jobs = 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cli-alpha.toml"), []byte("server = \"http://hub-a:1\"\napi_key = \"ka\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func runPfCode(argv ...string) (int, string, string) {
+	var stdout, stderr strings.Builder
+	code := Run(argv, nil, &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+// TestConfigCellScope: a named Cell's writes land in its own file, a
+// Host-only key under it is refused naming the file and the --host route,
+// --host takes Host-only keys only, and --host with --profile is refused.
+func TestConfigCellScope(t *testing.T) {
+	dir := cellScopeFixture(t)
+	hostBefore, _ := os.ReadFile(filepath.Join(dir, "cli.toml"))
+
+	if code, out, errOut := runPfCode("--profile", "alpha", "config", "set", "cell_max_concurrent_jobs", "1"); code != 0 {
+		t.Fatalf("named Cell write: exit %d (%s%s)", code, out, errOut)
+	}
+	alpha, _ := os.ReadFile(filepath.Join(dir, "cli-alpha.toml"))
+	if !strings.Contains(string(alpha), "cell_max_concurrent_jobs = 1") {
+		t.Fatalf("the write did not land in cli-alpha.toml:\n%s", alpha)
+	}
+	if code, out, errOut := runPfCode("--profile", "alpha", "config", "set", "model.source", "shared-default"); code != 0 {
+		t.Fatalf("model.source: exit %d (%s%s)", code, out, errOut)
+	}
+	alpha, _ = os.ReadFile(filepath.Join(dir, "cli-alpha.toml"))
+	if !strings.Contains(string(alpha), "[model]") || !strings.Contains(string(alpha), `source = "shared-default"`) {
+		t.Fatalf("[model] source not written:\n%s", alpha)
+	}
+
+	code, _, errOut := runPfCode("--profile", "alpha", "config", "set", "max_concurrent_jobs", "9")
+	if code == 0 || !strings.Contains(errOut, "Host-only") || !strings.Contains(errOut, "cli-alpha.toml") || !strings.Contains(errOut, "--host") {
+		t.Fatalf("a Host-only key under a named Cell must be refused naming the file and --host: exit %d %q", code, errOut)
+	}
+	if code, _, errOut := runPfCode("config", "set", "server", "http://x:1", "--host"); code == 0 || !strings.Contains(errOut, "Cell key") {
+		t.Fatalf("--host with a Cell key: exit %d %q", code, errOut)
+	}
+	if code, _, errOut := runPfCode("--profile", "alpha", "config", "get", "server", "--host"); code == 0 || !strings.Contains(errOut, "contradictory") {
+		t.Fatalf("--host with --profile: exit %d %q", code, errOut)
+	}
+	if hostAfter, _ := os.ReadFile(filepath.Join(dir, "cli.toml")); string(hostAfter) != string(hostBefore) {
+		t.Fatalf("a refused or Cell-scoped write changed cli.toml:\n%s", hostAfter)
+	}
+	if code, out, errOut := runPfCode("config", "set", "max_concurrent_jobs", "3", "--host"); code != 0 {
+		t.Fatalf("--host Host key write: exit %d (%s%s)", code, out, errOut)
+	}
+	if hostAfter, _ := os.ReadFile(filepath.Join(dir, "cli.toml")); !strings.Contains(string(hostAfter), "max_concurrent_jobs = 3") {
+		t.Fatalf("--host did not write cli.toml:\n%s", hostAfter)
+	}
+	// list follows the scope: a named Cell lists Cell keys only.
+	code, out, _ := runPfCode("--profile", "alpha", "--json", "config", "list")
+	var doc struct {
+		Items []struct {
+			Key string `json:"key"`
+		} `json:"items"`
+	}
+	_ = json.Unmarshal([]byte(out), &doc)
+	keys := map[string]bool{}
+	for _, it := range doc.Items {
+		keys[it.Key] = true
+	}
+	if code != 0 || keys["max_concurrent_jobs"] || !keys["cell_max_concurrent_jobs"] {
+		t.Fatalf("named Cell list must carry Cell keys only: exit %d %s", code, out)
+	}
+}
+
+// TestConfigValidateWholeHostSet: validate checks every file, isolating an
+// invalid named Cell (reported, exit 1) from the valid Host file.
+func TestConfigValidateWholeHostSet(t *testing.T) {
+	dir := cellScopeFixture(t)
+	if code, out, errOut := runPfCode("config", "validate"); code != 0 {
+		t.Fatalf("a valid set: exit %d (%s%s)", code, out, errOut)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cli-beta.toml"), []byte("server = \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := runPfCode("config", "validate")
+	if code == 0 || !strings.Contains(out, "cli-beta.toml") || !strings.Contains(out, "config ok: "+filepath.Join(dir, "cli.toml")) {
+		t.Fatalf("an invalid named Cell must be reported beside the valid Host file: exit %d %s", code, out)
+	}
+}
+
+// TestStepsWriteRefusesAStaleKey: `pf config set`
+// never writes a key no installed step carries — it would govern nothing —
+// naming the rewrite (the retired verify-judge key: the dispatching step's
+// id); unsetting one a file already carries is allowed (the doctor's
+// warning names it).
+func TestStepsWriteRefusesAStaleKey(t *testing.T) {
+	f, path := stepsWriteFixture(t)
+	sha, raw := fileHash(t, path)
+	for _, key := range []string{"steps.alpha.verify-judge.models", "steps.alpha.gril.models"} {
+		code, _, stderr := runPf(t, f.env, "config", "set", key, `["pi:x"]`, "--cwd", f.ws, "--expect-hash", sha)
+		if code == 0 || !strings.Contains(stderr, "no step of an installed lane") || !strings.Contains(stderr, "docs/upgrade.md") {
+			t.Fatalf("%s: want the stale-key refusal, got %d %s", key, code, stderr)
+		}
+		if _, now := fileHash(t, path); string(now) != string(raw) {
+			t.Fatalf("%s: a refused write changed the file", key)
+		}
+	}
+	stale := strings.Replace(string(raw), "    code: { models: [\"pi:c\"] }\n", "    code: { models: [\"pi:c\"] }\n    verify-judge: { models: [\"pi:j\"] }\n", 1)
+	if err := os.WriteFile(path, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, _ = fileHash(t, path)
+	if code, _, stderr := runPf(t, f.env, "config", "unset", "steps.alpha.verify-judge.models", "--cwd", f.ws, "--expect-hash", sha); code != 0 {
+		t.Fatalf("unsetting a stale key: %d %s", code, stderr)
+	}
+	if _, now := fileHash(t, path); strings.Contains(string(now), "verify-judge") {
+		t.Fatalf("the stale key was not removed:\n%s", now)
 	}
 }

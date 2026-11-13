@@ -1,0 +1,190 @@
+#!/bin/sh
+# green-tag — read the "releasable" marker: a git tag on a commit whose test
+# gate passed, which the release reuses instead of running the gate again.
+#
+# Usage:
+#   tools/green-tag check <commit> [--remote <r>]
+#   tools/green-tag latest [--remote <r>]
+#
+# Run from the repository root. The remote is --remote, else
+# $GREEN_TAG_REMOTE, else origin; it is the only authority: a green tag
+# that exists only locally is never read.
+#
+# This tool never writes a green tag. Only the gate itself does, after a
+# pass: the integrate workflow's full gate, or `python3
+# workflows/_shared/scripts/gate.py --isolation container --mark-green
+# --summary <text> [--remote <r>]` (the writing contract is there).
+#
+# The marker is an annotated tag named green/<YYYYMMDD>-<n> (the UTC date of
+# verified_at; n is one past the highest number of that day among every
+# name on the remote) pointing at the verified commit, whose message is one
+# line of JSON:
+#
+#   {"commit":"<40 hex>","gate_id":"<64 hex>","runner":"gate.py",
+#    "runner_version":"<v>","plan_digest":"<64 hex>",
+#    "verified_at":"<YYYY-MM-DDTHH:MM:SSZ>","summary":"<text>"}
+#
+# commit is the tagged commit, gate_id the tools/gate-id of that commit,
+# runner and runner_version the gate runner's identity, plan_digest the
+# sha256 of the plan as executed (commands in order with phase,
+# prerequisites and timeouts, the image and the container limits),
+# verified_at when it passed (UTC), summary a line saying what ran.
+#
+# check <commit>: <commit> must be HEAD and the worktree clean (the plan is
+#   computed from it). Exit 0, printing the tag name, iff the commit
+#   carries a green tag on the remote whose message names that commit and
+#   whose gate_id equals tools/gate-id of HEAD and whose runner,
+#   runner_version and plan_digest equal what HEAD's own gate computes for
+#   HEAD now (`python3 workflows/_shared/scripts/gate.py --isolation
+#   container --plan-only`) - the same path a gate run takes, in the same
+#   container, under the gate's default limits. So a result another runner
+#   produced, or a gate whose plan, image or limits differ, is never
+#   reused. Exit 1, with the reason on stderr, otherwise. The newest
+#   matching tag wins. The gate is run only when the commit carries a green
+#   tag at all, and it needs the docker engine and python3.
+# latest: prints "<tag> <commit> <gate_id>" of the newest well-formed green
+#   tag on the remote (by date, then number); exit 1 when there is none.
+#
+# Exit 2 on a usage error, an unreadable remote or commit, a plan that
+# cannot be computed, or a missing tool: "cannot tell" is never "green". A
+# tag object is read by fetching that one tag (no local ref is written).
+#
+# The residual risk (docs/reference/release.md, "Green tags"): anyone
+# allowed to push tags to the remote can hand-write a tag of this shape;
+# this check proves the record matches HEAD's gate, not who wrote it.
+set -eu
+
+REMOTE="${GREEN_TAG_REMOTE:-origin}"
+HERE=$(dirname "$0")
+
+die() { echo "green-tag: $*" >&2; exit 2; }
+usage() { sed -n '5,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+# remote_green: "<name> <tag object> <commit>" per annotated green tag on the
+# remote (a lightweight tag of that name is no marker); non-zero when the
+# remote cannot be read.
+remote_green() {
+  _ls=$(git ls-remote --tags "$REMOTE" 'refs/tags/green/*' 2>"$WORK/ls.err") || return 1
+  printf '%s\n' "$_ls" | awk '
+    NF == 2 {
+      ref = $2
+      if (ref ~ /\^\{\}$/) { sub(/\^\{\}$/, "", ref); peeled[ref] = $1; next }
+      obj[ref] = $1
+    }
+    END { for (r in obj) if (r in peeled) { n = r; sub(/^refs\/tags\//, "", n); print n, obj[r], peeled[r] } }' |
+    grep -E "^green/[0-9]{8}-[1-9][0-9]* " || true
+}
+newest_first() { sort -t- -k1,1r -k2,2nr; }
+
+# tag_fields <name> <tag object> <commit>: prints "<commit> <gate_id>
+# <runner> <runner_version> <plan_digest> <verified_at>" from the tag's
+# message; non-zero (the reason on stderr) when the tag is not a
+# well-formed marker for <commit>.
+tag_fields() {
+  if ! git cat-file -e "$2" 2>/dev/null; then
+    git fetch --quiet --no-tags "$REMOTE" "refs/tags/$1" >/dev/null 2>&1 || { echo "$1: cannot fetch the tag from $REMOTE" >&2; return 1; }
+  fi
+  _raw=$(git cat-file tag "$2" 2>/dev/null) || { echo "$1: $2 is not a tag object" >&2; return 1; }
+  _hdr=$(printf '%s\n' "$_raw" | sed '/^$/q')
+  printf '%s\n' "$_hdr" | grep -qx "object $3" || { echo "$1: the tag does not point at $3" >&2; return 1; }
+  printf '%s\n' "$_hdr" | grep -qx "tag $1" || { echo "$1: the tag object names another tag" >&2; return 1; }
+  printf '%s\n' "$_raw" | sed '1,/^$/d' | python3 -I -c '
+import json, re, sys
+name, commit = sys.argv[1], sys.argv[2]
+try:
+    d = json.loads(sys.stdin.read())
+except ValueError as e:
+    sys.exit("%s: the message is not JSON (%s)" % (name, e))
+if not isinstance(d, dict):
+    sys.exit("%s: the message is not a JSON object" % name)
+for k in ("commit", "gate_id", "runner", "runner_version", "plan_digest", "verified_at", "summary"):
+    if not isinstance(d.get(k), str):
+        sys.exit("%s: the message lacks the string field %s" % (name, k))
+if d["commit"] != commit:
+    sys.exit("%s: the message names commit %s, the tag points at %s" % (name, d["commit"], commit))
+for k in ("gate_id", "plan_digest"):
+    if not re.fullmatch(r"[0-9a-f]{64}", d[k]):
+        sys.exit("%s: %s %r is not 64 lowercase hex" % (name, k, d[k]))
+for k in ("runner", "runner_version"):
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", d[k]):
+        sys.exit("%s: %s %r is not a plain token" % (name, k, d[k]))
+if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", d["verified_at"]):
+    sys.exit("%s: verified_at %r is not YYYY-MM-DDTHH:MM:SSZ" % (name, d["verified_at"]))
+print(d["commit"], d["gate_id"], d["runner"], d["runner_version"], d["plan_digest"], d["verified_at"])
+' "$1" "$3"
+}
+
+# matching <commit> <expected "gate_id runner runner_version plan_digest">
+# <remote list>: the newest green tag on <commit> recording exactly that
+# (the reasons the others fail on stderr).
+matching() {
+  printf '%s\n' "$3" | awk -v c="$1" '$3 == c' | newest_first | while read -r _n _o _c; do
+    _f=$(tag_fields "$_n" "$_o" "$_c") || continue
+    _g=$(printf '%s\n' "$_f" | awk '{print $2, $3, $4, $5}')
+    if [ "$_g" = "$2" ]; then echo "$_n"; break; fi
+    echo "$_n: recorded gate/runner/version/plan \"$_g\", HEAD's are \"$2\"" >&2
+  done
+}
+
+need_python() { command -v python3 >/dev/null 2>&1 || die "python3 is not on PATH (it reads the tag's JSON message)"; }
+commit_of() { git rev-parse --verify --quiet "$1^{commit}" 2>/dev/null || die "$1 is not a commit of this repository"; }
+
+[ $# -ge 1 ] || usage
+CMD=$1; shift
+ARG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --remote) [ $# -ge 2 ] || usage; REMOTE=$2; shift 2 ;;
+    -*) die "unknown option $1" ;;
+    *) [ -z "$ARG" ] || die "unexpected argument $1"; ARG=$1; shift ;;
+  esac
+done
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/green-tag.XXXXXX")
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
+case "$CMD" in
+  check)
+    [ -n "$ARG" ] || usage
+    need_python
+    commit=$(commit_of "$ARG")
+    head=$(git rev-parse --verify HEAD) || die "this clone has no HEAD"
+    [ "$commit" = "$head" ] || die "check judges HEAD's gate: $ARG is $commit, HEAD is $head - check it out first"
+    [ -z "$(git status --porcelain)" ] || die "the worktree is not clean: HEAD's plan is computed from it"
+    gate=$(sh "$HERE/gate-id") || exit 2
+    list=$(remote_green) || die "cannot read the green tags of $REMOTE: $(tail -n 1 "$WORK/ls.err")"
+    if ! printf '%s\n' "$list" | awk -v c="$commit" '$3 == c' | grep -q .; then
+      echo "green-tag: $commit carries no green tag on $REMOTE" >&2
+      exit 1
+    fi
+    GATE="$HERE/../workflows/_shared/scripts/gate.py"
+    [ -f "$GATE" ] || die "HEAD carries no gate (workflows/_shared/scripts/gate.py): its plan cannot be computed"
+    plan=$(python3 "$GATE" --isolation container --plan-only --log-dir "$WORK/plan" 2>"$WORK/plan.err") \
+      || die "cannot compute HEAD's gate plan (gate.py --plan-only): $(grep 'INCOMPLETE\|gate.py:' "$WORK/plan.err" | tail -n 1)"
+    want=$(printf '%s\n' "$plan" | python3 -I -c '
+import json, re, sys
+d = json.loads(sys.stdin.read())
+head = sys.argv[1]
+if d.get("commit") != head:
+    sys.exit("gate.py --plan-only judged %r, not HEAD %s" % (d.get("commit"), head))
+for k in ("runner", "runner_version", "plan_digest"):
+    if not isinstance(d.get(k), str) or not d[k]:
+        sys.exit("gate.py --plan-only printed no %s" % k)
+print(d["runner"], d["runner_version"], d["plan_digest"])
+' "$head") || die "unreadable plan from gate.py --plan-only"
+    found=$(matching "$commit" "$gate $want" "$list")
+    if [ -n "$found" ]; then echo "$found"; exit 0; fi
+    echo "green-tag: $commit carries no green tag on $REMOTE for HEAD's gate $gate, runner/version/plan $want" >&2
+    exit 1 ;;
+  latest)
+    [ -z "$ARG" ] || usage
+    need_python
+    list=$(remote_green) || die "cannot read the green tags of $REMOTE: $(tail -n 1 "$WORK/ls.err")"
+    best=$(printf '%s\n' "$list" | grep . | newest_first | while read -r _n _o _c; do
+      _f=$(tag_fields "$_n" "$_o" "$_c") || continue
+      echo "$_n $_c $(printf '%s\n' "$_f" | awk '{print $2}')"; break
+    done)
+    [ -n "$best" ] || { echo "green-tag: no green tag on $REMOTE" >&2; exit 1; }
+    echo "$best" ;;
+  -h|--help) sed -n '2,/^set -eu$/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+  *) usage ;;
+esac

@@ -2,7 +2,7 @@ package test
 
 // w27_scope_test_import_repro_test.go: the reproduction/regression
 // test for the scoped selection's test-import blind spot in
-// the release-shipped `tools/verify-scope` with the repository conf.
+// the release-shipped `workflows/_shared/scripts/verify-scope` with the repository conf.
 //
 // The reported failure ( review, blocking B1): `compute_scoped`
 // selects package P only when a changed import path appears in P's non-test
@@ -74,13 +74,13 @@ func w27Fixture(t *testing.T) (dir, base string) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not installed")
 	}
-	src, err := filepath.Abs(filepath.Join("..", "tools", "verify-scope"))
+	src, err := filepath.Abs(filepath.Join("..", "workflows", "_shared", "scripts", "verify-scope"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(src)
 	if err != nil {
-		t.Fatalf("tools/verify-scope must exist: %v", err)
+		t.Fatalf("workflows/_shared/scripts/verify-scope must exist: %v", err)
 	}
 	confSrc, err := filepath.Abs(filepath.Join("..", ".polyforge", "verify-scope.conf"))
 	if err != nil {
@@ -105,8 +105,8 @@ func w27Fixture(t *testing.T) (dir, base string) {
 	for rel, body := range files {
 		w27Write(t, dir, rel, body)
 	}
-	w27Write(t, dir, "tools/verify-scope", string(raw))
-	if err := os.Chmod(filepath.Join(dir, "tools", "verify-scope"), 0o755); err != nil {
+	w27Write(t, dir, "workflows/_shared/scripts/verify-scope", string(raw))
+	if err := os.Chmod(filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	w27Write(t, dir, ".polyforge/verify-scope.conf", string(confRaw))
@@ -119,7 +119,7 @@ func w27Fixture(t *testing.T) (dir, base string) {
 // w27Run executes the fixture's entry point with cwd at the fixture root.
 func w27Run(t *testing.T, dir string, args ...string) (string, string, int) {
 	t.Helper()
-	cmd := exec.Command(filepath.Join(dir, "tools", "verify-scope"), args...)
+	cmd := exec.Command(filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), args...)
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
 	var out, errb strings.Builder
@@ -128,7 +128,7 @@ func w27Run(t *testing.T, dir string, args ...string) (string, string, int) {
 	if err := cmd.Run(); err != nil {
 		ee, ok := err.(*exec.ExitError)
 		if !ok {
-			t.Fatalf("run tools/verify-scope %v: %v", args, err)
+			t.Fatalf("run workflows/_shared/scripts/verify-scope %v: %v", args, err)
 		}
 		code = ee.ExitCode()
 	}
@@ -145,7 +145,7 @@ func TestW27ScopedSelectionIncludesTestOnlyImporters(t *testing.T) {
 
 	out, errb, code := w27Run(t, dir, "--base", base)
 	if code != 0 {
-		t.Fatalf("tools/verify-scope --base %s: exit %d (stdout %q, stderr %q)", base, code, out, errb)
+		t.Fatalf("workflows/_shared/scripts/verify-scope --base %s: exit %d (stdout %q, stderr %q)", base, code, out, errb)
 	}
 	if !strings.Contains(out, "mode: scoped") {
 		t.Fatalf("a runtime-only change must stay scoped, got:\n%s", out)

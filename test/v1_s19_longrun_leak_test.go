@@ -8,7 +8,7 @@ package test
 // writes to the durable events log would pass today's suite unnoticed.
 // This scenario closes that gap at PROCESS level, against the REAL
 // `pf daemon` binary running a long driver workload: 20 consecutive
-// driver-pinned autopilot work items, each completing and sealing through
+// driver-pinned vehicle-lane (micro) work items, each completing and sealing through
 // the terminal wiring.
 //
 //   - fd count does not grow: the number of entries in
@@ -276,7 +276,7 @@ func TestV1S19LongRunLeakProbe(t *testing.T) {
 	//     timeout); a first post-run status call would open it after the
 	//     baseline. One status call now pins that accepted fd in the
 	//     baseline instead.
-	warm := inst.newWI(t, "s19: hub-client warm-up job", envelopeAutopilot(), nil)
+	warm := inst.newWI(t, "s19: hub-client warm-up job", envelopeMicro(), nil)
 	d.pf(t, "submit", warm)
 	inst.waitWIStatus(t, warm, "wrapped", 120*time.Second)
 	d.status(t)
@@ -287,13 +287,13 @@ func TestV1S19LongRunLeakProbe(t *testing.T) {
 	baselineList := s19FDList(pid) // captured at baseline time for failure diagnosis
 	t.Logf("s19: daemon fd baseline after start-up settle: %d (+%d hub connections)", baseline, baseHub)
 
-	// 20 strictly consecutive driver work items: each is an autopilot
+	// 20 strictly consecutive driver work items: each is a micro
 	// workflow that completes and seals itself, and the next one starts
 	// only after this one reached its terminal state.
 	wis := make([]string, 0, s19Jobs)
 	for i := 0; i < s19Jobs; i++ {
 		wi := inst.newWI(t, fmt.Sprintf("s19: long-run leak probe job %02d", i+1),
-			envelopeAutopilot(), nil)
+			envelopeMicro(), nil)
 		wis = append(wis, wi)
 		d.pf(t, "submit", wi)
 		inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)

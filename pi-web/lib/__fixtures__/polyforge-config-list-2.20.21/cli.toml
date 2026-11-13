@@ -1,0 +1,29 @@
+# Sample cli.toml for the pi-web fixture (throwaway HOME).
+server = "http://127.0.0.1:18080"
+
+[daemon]
+max_concurrent_jobs = 4
+
+[workspace."/tmp/pi-web-fixture/ws-alpha"]
+projects = ["alpha", "gamma"]
+
+[workspace."/tmp/pi-web-fixture/ws-beta"]
+projects = ["beta"]
+
+[summarize]
+models = ["pi:fixture/summarize-a", "pi:fixture/summarize-b"]
+language = "Chinese"
+interval_sec = 120
+
+[memory_policy."/tmp/pi-web-fixture/ws-alpha".default]
+record = ["pitfalls and their root cause", "the owner's rulings"]
+skip = ["transient state"]
+
+[memory_policy."/tmp/pi-web-fixture/ws-alpha".gamma]
+record = ["gamma release facts"]
+
+[memory_policy."/tmp/pi-web-fixture/ws-alpha".alpha]
+skip = ["alpha scratch notes"]
+
+[memory_policy."/tmp/pi-web-fixture/ws-beta".default]
+skip = ["credential values"]

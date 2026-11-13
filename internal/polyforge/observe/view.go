@@ -3,7 +3,11 @@ package observe
 // view.go: the monitor's owner-facing projections for the status and
 // watch faces (activity, live progress).
 
-import "time"
+import (
+	"time"
+
+	"github.com/silgrid/polyforge/internal/common/protocol"
+)
 
 // Activity is one work item's owner-facing liveness reading (the ops
 // status face): when its current dispatch began and when its harness last
@@ -27,6 +31,9 @@ type Activity struct {
 	// watched: counted and surfaced, never judged.
 	WaitCalls   int
 	WaitSeconds int64
+	// Context is the dispatch's step-session context usage; nil when
+	// unknown (contextusage.go).
+	Context *protocol.ContextUsage
 }
 
 // Activities answers the activity of every monitored work item:
@@ -66,6 +73,9 @@ type LiveProgress struct {
 	// WaitCalls / WaitSeconds: the step's wait calls, as on Activity.
 	WaitCalls   int
 	WaitSeconds int64
+	// Context is the dispatch's step-session context usage; nil when
+	// unknown (contextusage.go).
+	Context *protocol.ContextUsage
 }
 
 // Progress answers the live progress of one work item's current dispatch

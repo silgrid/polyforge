@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/spawn"
+	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
@@ -103,14 +105,15 @@ func (h *startStepHandle) Terminate(bound time.Duration) error {
 func TestStartForwardsStepCandidates(t *testing.T) {
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "workflows", "wf")
+	writeStepHeader(t, filepath.Join(dir, "workflows"))
 	if err := os.MkdirAll(filepath.Join(bundle, "steps"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	front := "---\nname: wf\ndefaults:\n  model_candidates: [pi:bundle-weak]\nsteps:\n  - { id: fix }\n---\n# body\n"
-	if err := os.WriteFile(filepath.Join(bundle, "workflow.md"), []byte(front), 0o644); err != nil {
+	front := workflowtest.Header("wf") + "defaults:\n  model_candidates: [pi:bundle-weak]\nsteps:\n  - { id: fix }\n"
+	if err := os.WriteFile(filepath.Join(bundle, workflow.WorkflowFile), []byte(front), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bundle, "steps", "fix.md"), []byte("do the fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(bundle, "steps", "fix.md"), []byte(extDef("fix", "do the fix\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,14 +181,15 @@ func (l *startLog) has(kind string) bool {
 func TestStartWiresDriverEventsAndSupervisionLink(t *testing.T) {
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "workflows", "wf")
+	writeStepHeader(t, filepath.Join(dir, "workflows"))
 	if err := os.MkdirAll(filepath.Join(bundle, "steps"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	front := "---\nname: wf\nsteps:\n  - { id: fix }\n---\n# body\n"
-	if err := os.WriteFile(filepath.Join(bundle, "workflow.md"), []byte(front), 0o644); err != nil {
+	front := workflowtest.Header("wf") + "steps:\n  - { id: fix }\n"
+	if err := os.WriteFile(filepath.Join(bundle, workflow.WorkflowFile), []byte(front), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bundle, "steps", "fix.md"), []byte("do the fix\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(bundle, "steps", "fix.md"), []byte(extDef("fix", "do the fix\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	sp := &startSpawner{}

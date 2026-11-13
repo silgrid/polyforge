@@ -40,6 +40,7 @@ func seedReadyB3(t *testing.T, td *testDaemon, n int) {
 			ProjectName: "proj",
 			Priority:    api.PriorityNormal,
 			BundleName:  &bundle,
+			Content:     strp(w461AcceptanceContent),
 		})
 	}
 	td.hub.mu.Unlock()
@@ -109,6 +110,15 @@ func TestAutoOffClearsPendingAutoEntries(t *testing.T) {
 		t.Fatalf("precondition: the wave should queue the 3 ready items, got %d", got)
 	}
 
+	// The entries stay not-yet-started: — a submit that
+	// finds a free slot runs the dispatcher before it answers, which would
+	// take the older auto entries (FIFO). Every slot (default cap 4) is
+	// held, so the explicit submit is answered queued and nothing starts.
+	occupySlots(td, "wi_b3_hold_1", "wi_b3_hold_2", "wi_b3_hold_3", "wi_b3_hold_4")
+	if got := td.q.FreeSlots(); got != 0 {
+		t.Fatalf("precondition: every slot must be held, %d free", got)
+	}
+
 	// one EXPLICIT submit rides alongside — auto off must not touch it.
 	if _, err := td.client.ClaimWithModels("wi_b3_manual", "normal", nil); err != nil {
 		t.Fatalf("explicit claim: %v", err)
@@ -126,7 +136,7 @@ func TestAutoOffClearsPendingAutoEntries(t *testing.T) {
 		case runtime.OriginAuto:
 			auto++
 		case runtime.OriginChat:
-			manual++ // the explicit submit is a chat origin (chat-less: empty ChatID)
+			manual++ // the explicit submit is an interactive (chat-kind) origin
 		}
 	}
 	if auto != 0 {

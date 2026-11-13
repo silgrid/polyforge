@@ -1,0 +1,3 @@
+{"type":"user","message":{"role":"user","content":"Reply with exactly the word: low"}}
+{"type":"control_request","request_id":"req_effort_max","request":{"subtype":"apply_flag_settings","settings":{"effortLevel":"max"}}}
+{"type":"user","message":{"role":"user","content":"Reply with exactly the word: max"}}

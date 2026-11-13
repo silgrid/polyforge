@@ -1,8 +1,8 @@
 package test
 
 // w33_dispatch_recomposition_acceptance_test.go: —
-// dispatch-time candidate recomposition + ended_without_result (EWR)
-// rotation, authored against the SPEC (the capsule's artifacts/spec.md,
+// dispatch-time candidate recomposition (the ended_without_result (EWR)
+// rotation it also shipped left with workflow contract 4), authored against the SPEC (the capsule's artifacts/spec.md,
 // "## Acceptance criteria" and "#### Scenario" blocks) BEFORE the
 // implementation lands. Every bar below is RED on the pre-implementation
 // tree — an assertion-level red (a wrong dispatch model, a missing
@@ -21,21 +21,21 @@ package test
 //     dispatch), AC4 (removed → new list head; the in-flight dispatch is
 //     never killed), AC12 (candidate_switched cause config_changed),
 //     AC3 (no claim-time snapshot is persisted).
-//   - TestW33TwoEwrsSwitchLikeModelError: AC6 (the two-EWR
-//     model_error-style switch) + AC9 (the streak survives a SIGKILLed
-//     daemon — derived from persisted attempts).
-//   - TestW33NeutralAttemptsKeepEwrStreak: AC7 (rate_limited /
-//     upstream_transient neither count toward nor break the streak).
-//   - TestW33AcceptedResultResetsEwrStreak: AC8's first half (an
-//     accepted result resets the streak).
+//   - AC6/AC7/AC8's first half/AC9 (the EWR streak: derived from the
+//     persisted attempts, so it survives a restart; neutral attempts
+//     neither count toward nor break it; an accepted result resets it)
+//     left with workflow contract 4's one-test-per-rule supervision
+//     (design #483 §7,): the driver's TestClassStreak pins
+//     the ledger, TestEndedWithoutHandoffResumesThenBlocksAtThree the
+//     rule, and v2_supervision_test.go's
+//     TestV2OkEndedTurnWithoutResultRetriesSameModel is its e2e smoke.
 //   - TestW33InvalidYamlBlocksAndResumeContinues: AC5 (the DAEMON-414
 //     dispatch block; fix + `pf resume` continues from the checkpoint).
-//   - TestW33EwrChainEndExhaustionAndResumeKeepsEndModel: AC10 (chain
-//     end keeps exhaustion semantics with an actionable block reason)
-//     + AC8's second half (blocked→resume does not restore the bad
-//     model).
-//   - TestW33ManualModelsFrozenWithEwrRotation: AC11 (manual --models
-//     lists are not recomposed; EWR rotation fires within them).
+//   - TestW33ChainEndModelDeathBlocksAndResumeKeepsEndModel: AC10 (the
+//     chain end blocks with an actionable reason) + AC8's second half
+//     (blocked→resume does not restore the bad model).
+//   - TestW33ManualModelsFrozenWithModelRotation: AC11 (manual --models
+//     lists are not recomposed; the model-class switch moves within them).
 //   - TestW33SummarizeLaneReadsLive: AC2's summarize half (the lane
 //     reads its models live, not from a claim-time snapshot).
 //   - TestW33NoDocKeepsClaimTimeFreeze: AC13 (no named doc surface
@@ -102,14 +102,13 @@ func (r *w33Rig) daemon(t *testing.T, extra ...string) *w113Daemon {
 }
 
 // w33StepYaml builds a workspace yaml pinning one candidate list on every
-// autopilot step. The yaml STEP level outranks the bundle's own step-level
-// model_candidates (the shipped autopilot pins its verification step), so
-// the scenarios — not the bundle — govern every dispatch's list.
+// step of the vehicle lane (micro). The yaml STEP level outranks the
+// bundle's defaults, so the scenarios — not the bundle — govern every
+// dispatch's list.
 func w33StepYaml(list string) string {
 	return "steps:\n  e2e:\n" +
-		"    grill: { models: [" + list + "] }\n" +
 		"    fix: { models: [" + list + "] }\n" +
-		"    verification: { models: [" + list + "] }\n"
+		"    review: { models: [" + list + "] }\n"
 }
 
 // w33Yaml writes the workspace .polyforge.yaml atomically (tmp+rename):
@@ -235,27 +234,13 @@ func w33WantModels(t *testing.T, capDir string, want []string) {
 	}
 }
 
-// w33EwrSwitchEvents answers the candidate_switched events whose cause
-// is ended_without_result — the EWR rotation's observable, however many
-// first-dispatch or config-driven switch events a daemon also emits.
-func w33EwrSwitchEvents(t *testing.T, dataDir, wi string) []w33Event {
-	t.Helper()
-	var out []w33Event
-	for _, e := range w33EventsOf(t, dataDir, wi, "candidate_switched") {
-		if e.body["cause"] == "ended_without_result" {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
 // w33AssertNoSnapshotKeys pins AC3's observable face: the daemon's
 // persisted bookkeeping (data-dir runtime-state.json) carries no
 // claim-time candidate or summarize snapshot — with composition live at
 // every dispatch there is nothing to snapshot.
 func w33AssertNoSnapshotKeys(t *testing.T, dataDir string) {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(dataDir, "runtime-state.json"))
+	raw, err := os.ReadFile(filepath.Join(dataDir, "cells", "default", "runtime-state.json"))
 	if err != nil {
 		t.Fatalf("read runtime-state.json: %v", err)
 	}
@@ -293,12 +278,11 @@ func TestW33ConfigEditGovernsNextDispatch(t *testing.T) {
 	}
 	d := rig.daemon(t)
 	wi := w113NewWI(t, inst, "e2e", "w33: config edit governs the next dispatch", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 		// fix's first dispatch: 12 s in flight on w33-a, then a bare
 		// crash (an unclassified exit — a counted same-model retry).
 		{"do": "envelope", "id": "fix", "ms": 12000, "crash": "before"},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	})
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pfWant(inst, -1, "submit", wi)
@@ -307,9 +291,9 @@ func TestW33ConfigEditGovernsNextDispatch(t *testing.T) {
 
 	// The emergency edit lands while fix's first dispatch is mid-flight
 	// on w33-a.
-	models := w33WaitModels(t, capDir, 2, 60*time.Second)
-	if models[1] != "w33-a" {
-		t.Fatalf("fix's first dispatch ran on %q, want w33-a (the pre-edit list head)", models[1])
+	models := w33WaitModels(t, capDir, 1, 60*time.Second)
+	if models[0] != "w33-a" {
+		t.Fatalf("fix's first dispatch ran on %q, want w33-a (the pre-edit list head)", models[0])
 	}
 	w33Yaml(t, ws, w33StepYaml("pi:w33-c, pi:w33-b"))
 
@@ -325,9 +309,9 @@ func TestW33ConfigEditGovernsNextDispatch(t *testing.T) {
 	if causes := w33Causes(t, capDir, "fix"); causes[0] != "exit_other" {
 		t.Fatalf("the in-flight dispatch's archive is %v, want one exit_other attempt (it must survive the config edit)", causes)
 	}
-	// The post-edit retry and the verification dispatch recompose from
-	// the current yaml: the new list head w33-c.
-	w33WantModels(t, capDir, []string{"w33-a", "w33-a", "w33-c", "w33-c"})
+	// The post-edit retry and the review dispatch recompose from the
+	// current yaml: the new list head w33-c.
+	w33WantModels(t, capDir, []string{"w33-a", "w33-c", "w33-c"})
 
 	// The config-driven switch is observable (AC12): the existing
 	// candidate_switched event, cause config_changed, no new event kind.
@@ -345,183 +329,12 @@ func TestW33ConfigEditGovernsNextDispatch(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario 2 — two EWRs switch like a model_error, and the streak
-// survives a SIGKILLed daemon (AC6, AC9).
-// ---------------------------------------------------------------------------
+// (Scenarios 2 and 3 — the EWR streak across a restart and across neutral
+// attempts — left with see the scenario map above.)
 
-// TestW33TwoEwrsSwitchLikeModelError: GIVEN a work item dispatched to
-// w33-a of [w33-a, w33-b] with one ended_without_result attempt recorded,
-// WHEN the daemon is SIGKILLed mid-retry and its restart is followed by
-// a second EWR on w33-a, THEN recovery derives pointer and streak purely
-// from the persisted attempts (the interrupted attempt neither counts
-// nor breaks), the second EWR switches to w33-b exactly as a model_error
-// does — the failure counter resets, the next dispatch is fresh — and
-// the switch fires the existing candidate_switched event with cause
-// ended_without_result.
-func TestW33TwoEwrsSwitchLikeModelError(t *testing.T) {
-	inst := newV1Install(t)
-	ws := t.TempDir()
-	w33Yaml(t, ws, w33StepYaml("pi:w33-a, pi:w33-b"))
-	rig := w33RigAt(t, inst, ws)
-	d := rig.daemon(t, "--model-error-grace", "2s")
-	wi := w113NewWI(t, inst, "e2e", "w33: two EWRs switch like a model_error", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "end_turn": true}, // EWR #1 on w33-a
-		{"do": "envelope", "id": "fix", "park": true},     // alive while the daemon is SIGKILLed
-		{"do": "envelope", "id": "fix", "end_turn": true}, // EWR #2 — the streak reaches the threshold
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
-	})
-	t.Cleanup(func() { killOrphans(wi) })
-	d.pfWant(inst, -1, "submit", wi)
-	capDir := w079Capsule(t, inst, ws, wi)
-	w113WaitCapsule(t, capDir, 90*time.Second)
-
-	// EWR #1 is recorded (cause ended_without_result), and the retry is
-	// in flight when the daemon dies hard.
-	if body := w33WaitEvent(t, d.dataDir, wi, "step_failed", 90*time.Second); body["cause"] != "ended_without_result" {
-		t.Fatalf("the first failure is %v, want ended_without_result", body["cause"])
-	}
-	w33WaitModels(t, capDir, 3, 60*time.Second)
-	d.crash()
-	d = rig.daemon(t, "--model-error-grace", "2s")
-
-	w113WaitCompleted(t, capDir, 240*time.Second)
-	inst.waitWIStatus(t, wi, "wrapped", 90*time.Second)
-
-	// The streak survived the restart: EWR #1, the neutral
-	// daemon_restart interruption, EWR #2 — the switch fires.
-	if causes := w33Causes(t, capDir, "fix"); strings.Join(causes, ",") != "ended_without_result,daemon_restart,ended_without_result" {
-		t.Fatalf("fix's attempt causes %v, want the EWR / neutral-interruption / EWR ledger", causes)
-	}
-	// fix's post-switch dispatches run w33-b (verification is its own
-	// step: its pointer starts at its list head w33-a).
-	w33WantModels(t, capDir, []string{"w33-a", "w33-a", "w33-a", "w33-a", "w33-b", "w33-a"})
-
-	// The model_error-style switch semantics: the counter resets and the
-	// next dispatch is fresh.
-	failed := w33EventsOf(t, d.dataDir, wi, "step_failed")
-	if len(failed) < 2 {
-		t.Fatalf("only %d step_failed events, want the two EWR records", len(failed))
-	}
-	last := failed[len(failed)-1].body
-	if last["cause"] != "ended_without_result" || last["disposition"] != "switch_model" {
-		t.Fatalf("the second EWR's decision is %+v, want cause ended_without_result / switch_model", last)
-	}
-	if last["failure_count"] != float64(0) || last["next_dispatch"] != "fresh" {
-		t.Fatalf("the switch did not reset the failure counter or dispatch fresh: %+v", last)
-	}
-	// The switch is observable: candidate_switched, cause
-	// ended_without_result, to the next candidate.
-	if switches := w33EwrSwitchEvents(t, d.dataDir, wi); len(switches) != 1 || switches[0].body["to"] != "pi:w33-b" {
-		t.Fatalf("the EWR rotation's switch events: %+v, want exactly one ended_without_result to pi:w33-b", switches)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Scenario 3 — neutral attempts neither count toward nor break the EWR
-// streak (AC7).
-// ---------------------------------------------------------------------------
-
-// TestW33NeutralAttemptsKeepEwrStreak: GIVEN one EWR on w33-a of
-// [w33-a, w33-b], WHEN a rate_limited and an upstream_transient attempt
-// interleave (the pi-web- shape), and a second EWR on w33-a
-// follows, THEN the throttles and transients neither incremented nor
-// reset the streak — the switch fires exactly at the second EWR.
-func TestW33NeutralAttemptsKeepEwrStreak(t *testing.T) {
-	inst := newV1Install(t)
-	ws := t.TempDir()
-	w33Yaml(t, ws, w33StepYaml("pi:w33-a, pi:w33-b"))
-	rig := w33RigAt(t, inst, ws)
-	d := rig.daemon(t, "--model-error-grace", "2s")
-	wi := w113NewWI(t, inst, "e2e", "w33: neutral attempts keep the EWR streak", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "end_turn": true},
-		{"do": "envelope", "id": "fix", "crash": "before", "crash_stderr": "HTTP 429: too many requests (rate limit exceeded)"},
-		{"do": "envelope", "id": "fix", "crash": "before", "crash_stderr": "the upstream connection was reset mid-stream"},
-		{"do": "envelope", "id": "fix", "end_turn": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
-	})
-	t.Cleanup(func() { killOrphans(wi) })
-	d.pfWant(inst, -1, "submit", wi)
-	capDir := w079Capsule(t, inst, ws, wi)
-	w113WaitCapsule(t, capDir, 90*time.Second)
-	w113WaitCompleted(t, capDir, 240*time.Second)
-	inst.waitWIStatus(t, wi, "wrapped", 90*time.Second)
-
-	// The interleave is on the ledger exactly as scripted (a guard: the
-	// throttle and the transient are classified, not counted failures).
-	if causes := w33Causes(t, capDir, "fix"); strings.Join(causes, ",") !=
-		"ended_without_result,rate_limited,upstream_transient,ended_without_result" {
-		t.Fatalf("fix's attempt causes %v, want the EWR / rate_limited / upstream_transient / EWR interleave", causes)
-	}
-	// The streak skipped both neutrals: the switch fires exactly at the
-	// second EWR — never earlier, never not at all. (verification is
-	// its own step: it starts from its list head w33-a.)
-	w33WantModels(t, capDir, []string{"w33-a", "w33-a", "w33-a", "w33-a", "w33-a", "w33-b", "w33-a"})
-	if switches := w33EwrSwitchEvents(t, d.dataDir, wi); len(switches) != 1 || switches[0].body["to"] != "pi:w33-b" {
-		t.Fatalf("the EWR rotation's switch events: %+v, want exactly one ended_without_result to pi:w33-b", switches)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Scenario 4 — an accepted result resets the EWR streak (AC8, first
-// half).
-// ---------------------------------------------------------------------------
-
-// TestW33AcceptedResultResetsEwrStreak: GIVEN one EWR on w33-a of
-// [w33-a, w33-b], WHEN a step result is accepted on w33-a (a needs_input
-// round the owner answers), and two further EWRs follow on the
-// continuation, THEN the accepted result reset the streak — the switch
-// fires only at the SECOND post-answer EWR, never at the first.
-func TestW33AcceptedResultResetsEwrStreak(t *testing.T) {
-	inst := newV1Install(t)
-	ws := t.TempDir()
-	w33Yaml(t, ws, w33StepYaml("pi:w33-a, pi:w33-b"))
-	rig := w33RigAt(t, inst, ws)
-	d := rig.daemon(t, "--model-error-grace", "2s")
-	const qid = "q_w33"
-	wi := w113NewWI(t, inst, "e2e", "w33: an accepted result resets the EWR streak", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "end_turn": true}, // EWR #1 on w33-a
-		{"do": "envelope", "id": "fix", "outcome": "needs_input", "question_id": qid, "question": "lean or compatible?"},
-		{"do": "envelope", "id": "fix", "end_turn": true}, // EWR — the streak restarts: no switch yet
-		{"do": "envelope", "id": "fix", "end_turn": true}, // EWR — streak 2: the switch fires
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
-	})
-	t.Cleanup(func() { killOrphans(wi) })
-	d.pfWant(inst, -1, "submit", wi)
-	capDir := w079Capsule(t, inst, ws, wi)
-	w113WaitCapsule(t, capDir, 90*time.Second)
-	waitExecution(t, capDir, 120*time.Second, "fix never asked its question", func(x *executionView) bool {
-		st := x.Steps["fix"]
-		return st != nil && st.PendingQuestion != nil
-	})
-	if out := d.pfWant(inst, -1, "answer", wi, "--text", "lean", "--question", qid, "--by", "usr_root"); !strings.Contains(out, "delivered") {
-		t.Fatalf("pf answer: %q", out)
-	}
-	// Without the rotation the third EWR reaches the failure bound and
-	// blocks — a bounded, diagnosable red, not a silent timeout.
-	waitUntil(t, 150*time.Second, "the work item neither completed nor blocked", func() bool {
-		x, err := readExecutionFile(capDir)
-		return err == nil && (x.WorkflowStatus == "completed" || x.WorkflowStatus == "blocked")
-	})
-	if x := readExecution(t, capDir); x.WorkflowStatus != "completed" {
-		t.Fatalf("the work item blocked instead of completing: %q — with no EWR rotation the third EWR hit the failure bound", x.BlockedReason)
-	}
-
-	// The switch fires only at the second post-answer EWR: the first
-	// post-answer EWR still dispatches w33-a (the accepted result reset
-	// the streak — had it been neutral, the switch would have fired one
-	// attempt earlier). (verification is its own step: head w33-a.)
-	w33WantModels(t, capDir, []string{"w33-a", "w33-a", "w33-a", "w33-a", "w33-a", "w33-b", "w33-a"})
-	if switches := w33EwrSwitchEvents(t, d.dataDir, wi); len(switches) != 1 || switches[0].body["to"] != "pi:w33-b" {
-		t.Fatalf("the EWR rotation's switch events: %+v, want exactly one ended_without_result to pi:w33-b", switches)
-	}
-}
+// (Scenario 4 — a needs_input round the owner answered, accepted mid-step,
+// reset the EWR streak — left with the v1 question, workflow contract v2
+// change 19: an ask's reply is no step result.)
 
 // ---------------------------------------------------------------------------
 // Scenario 5 — invalid yaml at dispatch time blocks; fix + resume
@@ -542,9 +355,8 @@ func TestW33InvalidYamlBlocksAndResumeContinues(t *testing.T) {
 	rig := w33RigAt(t, inst, ws)
 	d := rig.daemon(t)
 	wi := w113NewWI(t, inst, "e2e", "w33: invalid yaml blocks the dispatch", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 12000},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 12000},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	})
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pfWant(inst, -1, "submit", wi)
@@ -552,8 +364,8 @@ func TestW33InvalidYamlBlocksAndResumeContinues(t *testing.T) {
 	w113WaitCapsule(t, capDir, 90*time.Second)
 
 	// The half-finished edit lands while fix's dispatch is in flight;
-	// the NEXT dispatch (verification) must meet it.
-	w33WaitModels(t, capDir, 2, 60*time.Second)
+	// the NEXT dispatch (review) must meet it.
+	w33WaitModels(t, capDir, 1, 60*time.Second)
 	w33Yaml(t, ws, "steps: [broken — a half-finished edit\n")
 	waitUntil(t, 120*time.Second, "the half-edited yaml neither blocked nor completed the work item", func() bool {
 		x, err := readExecutionFile(capDir)
@@ -568,7 +380,7 @@ func TestW33InvalidYamlBlocksAndResumeContinues(t *testing.T) {
 	}
 
 	// The owner fixes the yaml and resumes: the dispatch continues from
-	// the preserved checkpoint — three dispatches total, one per step.
+	// the preserved checkpoint — two dispatches total, one per step.
 	w33Yaml(t, ws, w33StepYaml("pi:w33-a"))
 	// the hub's blocked close lands shortly after execution.json shows
 	// blocked; `pf resume` reads the hub status first
@@ -576,104 +388,87 @@ func TestW33InvalidYamlBlocksAndResumeContinues(t *testing.T) {
 	d.pfWant(inst, -1, "resume", wi)
 	w113WaitCompleted(t, capDir, 180*time.Second)
 	inst.waitWIStatus(t, wi, "wrapped", 90*time.Second)
-	w33WantModels(t, capDir, []string{"w33-a", "w33-a", "w33-a"})
+	w33WantModels(t, capDir, []string{"w33-a", "w33-a"})
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 6 — EWR at chain end keeps exhaustion semantics; resume does
-// not restore the bad model (AC10, AC8 second half).
+// Scenario 6 — a model-class death at the chain end blocks actionably;
+// resume does not restore the bad model (AC10, AC8 second half; workflow
+// contract 4, design #483 §7: no candidate left blocks at once).
 // ---------------------------------------------------------------------------
 
-// TestW33EwrChainEndExhaustionAndResumeKeepsEndModel: GIVEN a work item
-// whose pointer sits at the last candidate w33-b of [w33-a, w33-b],
-// WHEN two EWRs accumulate on w33-b (rotation wanted, no room), THEN the
-// EWR is counted as a same-model retry — the existing failure bound
-// blocks on the third — AND the block reason names the current model
-// and the escape hatch (edit .polyforge.yaml, then `pf resume`), AND
-// `pf resume` keeps the end model w33-b: the human loop cannot silently
+// TestW33ChainEndModelDeathBlocksAndResumeKeepsEndModel: GIVEN a work
+// item whose model-class death moved it to the last candidate w33-b of
+// [w33-a, w33-b], WHEN a second model-class death lands on w33-b (no
+// candidate left), THEN the step blocks at once — candidates_exhausted
+// fires, the block reason names no usable model, the current model and
+// the escape hatch (edit .polyforge.yaml, then `pf resume`) — AND `pf
+// resume` keeps the end model w33-b: the human loop cannot silently
 // restore the earlier candidate.
-func TestW33EwrChainEndExhaustionAndResumeKeepsEndModel(t *testing.T) {
+func TestW33ChainEndModelDeathBlocksAndResumeKeepsEndModel(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
 	w33Yaml(t, ws, w33StepYaml("pi:w33-a, pi:w33-b"))
 	rig := w33RigAt(t, inst, ws)
 	d := rig.daemon(t, "--model-error-grace", "2s")
-	wi := w113NewWI(t, inst, "e2e", "w33: chain-end EWR exhaustion blocks actionably", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		// A model-class failure advances to w33-b (existing behavior).
-		{"do": "envelope", "id": "fix", "crash": "before", "crash_stderr": w079ProviderErr},
-		{"do": "envelope", "id": "fix", "end_turn": true}, // EWR #1 on w33-b
-		{"do": "envelope", "id": "fix", "end_turn": true}, // EWR #2: rotation wanted, chain end — a counted retry
-		{"do": "envelope", "id": "fix", "end_turn": true}, // EWR #3: the failure bound blocks
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+	wi := w113NewWI(t, inst, "e2e", "w33: a chain-end model death blocks actionably", []map[string]any{
+		{"do": "envelope", "id": "fix", "crash": "before", "crash_stderr": w079ProviderErr}, // a → b
+		{"do": "envelope", "id": "fix", "crash": "before", "crash_stderr": w079ProviderErr}, // b: no candidate left
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	})
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pfWant(inst, -1, "submit", wi)
 	capDir := w079Capsule(t, inst, ws, wi)
 	w113WaitCapsule(t, capDir, 90*time.Second)
-	waitExecution(t, capDir, 180*time.Second, "the chain-end EWR episode never blocked", func(x *executionView) bool {
+	waitExecution(t, capDir, 180*time.Second, "the chain-end model death never blocked", func(x *executionView) bool {
 		return x.WorkflowStatus == "blocked"
 	})
 
-	// The episode's ledger: the model-class switch, then three EWRs on
-	// the end model.
-	if causes := w33Causes(t, capDir, "fix"); strings.Join(causes, ",") !=
-		"exit_model_class,ended_without_result,ended_without_result,ended_without_result" {
-		t.Fatalf("fix's attempt causes %v, want the model-class switch then three EWRs on the end model", causes)
+	if causes := w33Causes(t, capDir, "fix"); strings.Join(causes, ",") != "exit_model_class,exit_model_class" {
+		t.Fatalf("fix's attempt causes %v, want the switch then the chain-end death", causes)
 	}
-	// Rotation at the chain end is exhaustion, not a switch: the
-	// existing candidates_exhausted event fires.
 	if n := len(w33EventsOf(t, d.dataDir, wi, "candidates_exhausted")); n != 1 {
-		t.Fatalf("candidates_exhausted fired %d times, want exactly 1 (the second EWR at the chain end)", n)
+		t.Fatalf("candidates_exhausted fired %d times, want exactly 1 (the chain-end death)", n)
 	}
-	// The block reason is actionable: it names the current model and the
-	// edit-yaml-then-resume escape hatch.
 	reason := readExecution(t, capDir).BlockedReason
-	for _, needle := range []string{"w33-b", ".polyforge.yaml", "resume"} {
+	for _, needle := range []string{"no usable model", "w33-b", ".polyforge.yaml", "pf resume"} {
 		if !strings.Contains(reason, needle) {
-			t.Fatalf("the EWR bound block reason %q does not name %q (the current model / the escape hatch)", reason, needle)
+			t.Fatalf("the chain-end block reason %q does not name %q", reason, needle)
 		}
 	}
 
-	// The owner resumes: the streak is not reset and the pointer stays
-	// at the end model — the earlier candidate is never silently
-	// restored. (verification is its own step: it starts from its list
-	// head w33-a, not from fix's end model.)
-	// the hub's blocked close lands shortly after execution.json shows
-	// blocked; `pf resume` reads the hub status first
+	// The owner resumes: the pointer stays at the end model — the earlier
+	// candidate is never silently restored. (review is its own step: it
+	// starts from its list head w33-a, not from fix's end model.)
 	inst.waitWIStatus(t, wi, "blocked", 60*time.Second)
 	d.pfWant(inst, -1, "resume", wi)
 	w113WaitCompleted(t, capDir, 180*time.Second)
 	inst.waitWIStatus(t, wi, "wrapped", 90*time.Second)
-	models := w33Models(t, capDir)
-	if len(models) != 7 || models[5] != "w33-b" {
-		t.Fatalf("post-resume dispatch models %v, want the blocked→resume continuation of fix on the end model w33-b (7 dispatches)", models)
-	}
+	w33WantModels(t, capDir, []string{"w33-a", "w33-b", "w33-b", "w33-a"})
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 7 — manual --models lists stay frozen; EWR rotation applies
-// within them (AC11).
+// Scenario 7 — manual --models lists stay frozen; the model-class switch
+// moves within them (AC11).
 // ---------------------------------------------------------------------------
 
-// TestW33ManualModelsFrozenWithEwrRotation: GIVEN a work item submitted
+// TestW33ManualModelsFrozenWithModelRotation: GIVEN a work item submitted
 // with `pf submit --models pi:w33-m1,pi:w33-m2` whose yaml is edited
-// mid-run, WHEN two EWRs accumulate on w33-m1, THEN the dispatches keep
-// using the frozen manual list (the yaml edit never reaches them) and
-// the rotation fires within it — the next manual candidate w33-m2.
-func TestW33ManualModelsFrozenWithEwrRotation(t *testing.T) {
+// mid-run, WHEN a model-class death lands on w33-m1, THEN the dispatches
+// keep using the frozen manual list (the yaml edit never reaches them) and
+// the switch moves within it — the next manual candidate w33-m2.
+func TestW33ManualModelsFrozenWithModelRotation(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
 	w33Yaml(t, ws, w33StepYaml("pi:w33-y1"))
 	rig := w33RigAt(t, inst, ws)
 	d := rig.daemon(t, "--model-error-grace", "2s")
-	wi := w113NewWI(t, inst, "e2e", "w33: manual models frozen, EWR rotates within", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "end_turn": true}, // EWR #1 on w33-m1
-		{"do": "envelope", "id": "fix", "end_turn": true}, // EWR #2 — rotation within the manual list
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+	wi := w113NewWI(t, inst, "e2e", "w33: manual models frozen, the switch moves within", []map[string]any{
+		{"do": "envelope", "id": "fix", "end_turn": true},                                   // an EWR: resumed on w33-m1
+		{"do": "envelope", "id": "fix", "crash": "before", "crash_stderr": w079ProviderErr}, // model class: → w33-m2
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	})
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pfWant(inst, -1, "submit", wi, "--models", "pi:w33-m1,pi:w33-m2")
@@ -684,26 +479,29 @@ func TestW33ManualModelsFrozenWithEwrRotation(t *testing.T) {
 	// list): the manual list is the submitter's explicit choice and must
 	// never be recomposed.
 	w33Yaml(t, ws, w33StepYaml("pi:w33-z9"))
-	// Without the rotation the third EWR reaches the failure bound and
-	// blocks — a bounded, diagnosable red, not a silent timeout.
 	waitUntil(t, 150*time.Second, "the work item neither completed nor blocked", func() bool {
 		x, err := readExecutionFile(capDir)
 		return err == nil && (x.WorkflowStatus == "completed" || x.WorkflowStatus == "blocked")
 	})
 	if x := readExecution(t, capDir); x.WorkflowStatus != "completed" {
-		t.Fatalf("the work item blocked instead of completing: %q — with no EWR rotation the third EWR hit the failure bound", x.BlockedReason)
+		t.Fatalf("the work item blocked instead of completing: %q", x.BlockedReason)
 	}
-
 	for _, m := range w33Models(t, capDir) {
 		if m != "w33-m1" && m != "w33-m2" {
 			t.Fatalf("a dispatch ran on %q — the manual list must stay frozen (never the yaml's w33-y1/w33-z9)", m)
 		}
 	}
-	// The EWR rotation fires within the frozen manual list. (verification
-	// is its own step: its manual-list pointer starts at the head w33-m1.)
-	w33WantModels(t, capDir, []string{"w33-m1", "w33-m1", "w33-m1", "w33-m2", "w33-m1"})
-	if switches := w33EwrSwitchEvents(t, d.dataDir, wi); len(switches) != 1 || switches[0].body["to"] != "pi:w33-m2" {
-		t.Fatalf("the EWR rotation's switch events: %+v, want exactly one ended_without_result to pi:w33-m2", switches)
+	// The switch moves within the frozen manual list. (review is its own
+	// step: its manual-list pointer starts at the head w33-m1.)
+	w33WantModels(t, capDir, []string{"w33-m1", "w33-m1", "w33-m2", "w33-m1"})
+	var switches []w33Event
+	for _, e := range w33EventsOf(t, d.dataDir, wi, "candidate_switched") {
+		if e.body["cause"] == "exit_model_class" {
+			switches = append(switches, e)
+		}
+	}
+	if len(switches) != 1 || switches[0].body["to"] != "pi:w33-m2" {
+		t.Fatalf("the model-class switch events: %+v, want exactly one to pi:w33-m2", switches)
 	}
 }
 
@@ -724,9 +522,8 @@ func TestW33SummarizeLaneReadsLive(t *testing.T) {
 	d.start()
 	wi := w224NewWI(t, inst, "w33: the summarize lane reads live", func(wi string) []map[string]any {
 		return []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 			{"do": "envelope", "id": "fix", "run": []string{w224GrowCmd(70)}, "ms": 90000},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}
 	})
 	d.pf(t, "submit", wi)

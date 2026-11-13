@@ -6,10 +6,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/version"
@@ -36,20 +41,115 @@ type Context struct {
 	// Task is the task id of the one-shot task agent this invocation runs
 	// in ("" = not in a task; stepctx.go).
 	Task string
+	// FlagProfile is the raw global --profile value ("" = absent): the
+	// first source of the profile resolver (profile.go).
+	FlagProfile string
+	// cfgScope is the file a `pf config` invocation addresses
+	// (verbs_config.go selectConfigScope).
+	cfgScope configScope
+	// resolved caches the invocation's profile resolution (cellProfile);
+	// resolveErr is its fail-closed answer when the Host's effective
+	// index could not be read (every business request refuses with it).
+	resolved   *Resolution
+	resolveErr error
 }
 
-// aihub returns the direct-aihub client for the resolved config.
+// aihub returns the business client: every AIHub call goes through the
+// daemon's data-plane proxy (POST|GET… /aihub/…) to the resolved Cell's
+// effective connection. The CLI holds no Hub credential path of its own
+// and never dials a Hub; with the daemon down a business call fails
+// explicitly (DAEMON-410).
 func (ctx *Context) aihub() *aihubclient.Client {
-	return aihubclient.New(ctx.Cfg.Server, ctx.Cfg.APIKey)
+	profile := ""
+	if ctx.Step == "" && ctx.Task == "" {
+		profile = ctx.cellProfile()
+		if ctx.resolveErr != nil {
+			// the Cell is unknown: every call answers the refusal before
+			// any dial, so nothing reaches the daemon or a Hub
+			c := aihubclient.New(proxyBase, "")
+			c.HTTP = &http.Client{Transport: refusingTransport{err: ctx.resolveErr}}
+			return c
+		}
+	}
+	return newProxyClient(ctx.Cfg.DaemonSocket, profile)
 }
 
-// daemon returns the daemon-socket client for the resolved config.
+// refusingTransport answers every request with err and dials nothing.
+type refusingTransport struct{ err error }
+
+func (t refusingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, t.err }
+
+// proxyBase is the decorative base URL of the daemon-mediated client (the
+// transport dials the socket; the path prefix is the proxy route).
+const proxyBase = "http://pf-daemon/aihub"
+
+// newProxyClient builds an aihub client whose transport is the daemon's
+// Unix socket and whose requests carry the routed Cell (profile "" = the
+// default Cell). A dial failure is the typed DAEMON-410 refusal.
+func newProxyClient(sock, profile string) *aihubclient.Client {
+	c := aihubclient.New(proxyBase, "")
+	c.HTTP = &http.Client{Timeout: 120 * time.Second, Transport: daemonDownTransport{sock: sock, rt: NewDaemonClient(sock).HTTP.Transport}}
+	if profile != "" {
+		c.Header = http.Header{protocol.ProfileHeader: []string{profile}}
+	}
+	return c
+}
+
+// daemonDownTransport turns a failed dial of the daemon socket into the
+// explicit business refusal: no daemon, no business — never a direct Hub
+// fallback.
+type daemonDownTransport struct {
+	sock string
+	rt   http.RoundTripper
+}
+
+func (t daemonDownTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.rt.RoundTrip(req)
+	var op *net.OpError
+	if err != nil && errors.As(err, &op) && op.Op == "dial" {
+		return nil, &api.Error{Code: api.ErrDaemonGone, Detail: fmt.Sprintf(
+			"the daemon does not answer (dial unix %s: %v): AIHub business goes through the daemon's Cell connection and never dials a Hub directly — start it with `pf daemon ensure`; local commands (pf config, pf doctor, pf init, pf profile) work without it",
+			t.sock, op.Err)}
+	}
+	return resp, err
+}
+
+// daemon returns the daemon-socket client for the resolved config. Outside
+// a step or task it stamps the resolved Cell (profile.go) on every request;
+// a step or task agent sends no header — the Host routes it by its own
+// ownership record.
 func (ctx *Context) daemon() *DaemonClient {
 	d := NewDaemonClient(ctx.Cfg.DaemonSocket)
-	if ctx.Cfg.ChatID != "" || ctx.Cfg.UserID != "" {
-		d.Origin = &SubmitOrigin{ChatID: ctx.Cfg.ChatID, Owner: ctx.Cfg.UserID}
+	if ctx.Cfg.UserID != "" {
+		d.Origin = &SubmitOrigin{Owner: ctx.Cfg.UserID}
+	}
+	if ctx.Step == "" && ctx.Task == "" {
+		d.Profile = ctx.cellProfile()
+		if ctx.resolveErr != nil {
+			d.Profile, d.ProfileErr = unresolvedProfile, ctx.resolveErr
+		}
 	}
 	return d
+}
+
+// cellProfile resolves (once) the Cell this invocation's Cell-scoped
+// requests go to. An invalid --profile spelling still routes the raw
+// value, so the Host refuses it explicitly; an unreadable effective index
+// is kept in resolveErr (the business clients refuse with it).
+func (ctx *Context) cellProfile() string {
+	if ctx.resolved == nil {
+		res, err := ctx.resolveProfile(false)
+		var ae *api.Error
+		switch {
+		case errors.As(err, &ae) && ae.Code == api.ErrDaemonGone:
+			ctx.resolveErr = err
+			res = Resolution{}
+		case err != nil:
+			res = Resolution{Profile: ctx.FlagProfile, Source: ProfileSourceFlag}
+		}
+		ctx.resolved = &res
+	}
+	return ctx.resolved.Profile
 }
 
 // Command is one `pf <name>` subcommand.
@@ -76,11 +176,8 @@ type Command struct {
 // daemon UDS face (submit, watch, answer, pause, resume, wrap, ops) — with
 // `chat` (the harness chat identity, also GroupExec) between ops and watch
 // and `result` (a workflow step's result delivery, #214, also GroupExec)
-// after watch, followed by `verify-run` (a verification step's one
-// mechanical run, local: no daemon, no aihub; also GroupExec) and `bar-run`
-// (a deliver step's recorded re-run of one carried test_bar command,
-// the daemon's /step/bar-run; also GroupExec, so the help
-// face shows 12 exec verbs), then the management face M1–M5, then the
+// after watch, `ask` and `step` (a step's one entry point, workflow
+// contract 4) after it, then the management face M1–M5, then the
 // machine health face (doctor, #113), the build version (version, #196:
 // the verb form of the `--version` flag) and the workspace layout (init,
 // #177), then the daemon and aihub server placeholders (help-only:
@@ -94,25 +191,24 @@ var commands = []*Command{
 	cmdMemory,
 	cmdSubmit,
 	cmdAnswer,
-	cmdReviseBinding,
 	cmdPause,
 	cmdResume,
 	cmdWrap,
 	cmdOps,
-	cmdChat,
 	cmdWatch,
 	cmdTask,
-	cmdResult,
-	cmdVerifyRun,
-	cmdBarRun,
+	cmdStep,
 	cmdMsg,
 	cmdUsers,
 	cmdApiKeys,
 	cmdMachines,
 	cmdProjects,
 	cmdBackup,
+	cmdCell,
+	cmdMigrate,
 	cmdDoctor,
 	cmdVersion,
+	cmdProfile,
 	cmdInit,
 	cmdConfig,
 	cmdWorkflows,
@@ -135,10 +231,15 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	gfs.Usage = func() { printUsage(stderr) }
 	jsonFlag := gfs.Bool("json", false, "machine-readable output (server JSON as-is)")
 	cfgFlag := gfs.String("config", "", "config file (default ~/.config/polyforge/cli.toml)")
-	serverFlag := gfs.String("server", "", "aihub base URL (env PF_SERVER)")
-	apiKeyFlag := gfs.String("api-key", "", "aihub api key (env PF_API_KEY)")
+	// --server/--api-key are parsed only to be refused (and PF_SERVER/
+	// PF_API_KEY are refused, or ignored with a notice on the local repair
+	// verbs): a Cell's connection lives in its config file and business
+	// goes through the daemon (refuseConnectionOverride).
+	serverFlag := gfs.String("server", "", "refused: a Cell's AIHub connection is configured, never overridden per command")
+	apiKeyFlag := gfs.String("api-key", "", "refused: a Cell's AIHub credential is configured, never overridden per command")
 	socketFlag := gfs.String("socket", "", "daemon unix socket (env PF_DAEMON_SOCKET)")
 	userFlag := gfs.String("user", "", "caller user id, e.g. for answer.answered_by (env PF_USER_ID)")
+	profileFlag := gfs.String("profile", "", "the Cell (profile) a Cell-scoped command targets (env PF_PROFILE; else the cwd's mapped Cell, else default)")
 	versionFlag := gfs.Bool("version", false, "print version and exit")
 
 	if err := gfs.Parse(argv); err != nil {
@@ -151,7 +252,7 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// face is `pf version` (verbs_version.go): same source, same shapes.
 	if *versionFlag {
 		if *jsonFlag {
-			fmt.Fprintf(stdout, "{\"version\":%q}\n", version.Version)
+			fmt.Fprintln(stdout, versionJSON())
 		} else {
 			fmt.Fprintln(stdout, version.Version)
 		}
@@ -210,12 +311,6 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cfg = loaded
 	}
 	// Flags override environment, environment overrides the file.
-	if *serverFlag != "" {
-		cfg.Server = *serverFlag
-	}
-	if *apiKeyFlag != "" {
-		cfg.APIKey = *apiKeyFlag
-	}
 	if *socketFlag != "" {
 		cfg.DaemonSocket = *socketFlag
 	}
@@ -234,6 +329,8 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		FlagAPIKey: *apiKeyFlag,
 		FlagSocket: *socketFlag,
 		FlagUser:   *userFlag,
+
+		FlagProfile: *profileFlag,
 	}
 	if wi := stepWorkItem(); wi != "" {
 		if err := stepRefusal(cmd); err != nil {
@@ -243,10 +340,21 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// no key, and an unresolvable server: nothing reaches aihub directly
 		ctx.Step, ctx.Cfg.APIKey, ctx.Cfg.Server = wi, "", "http://step-mode.invalid"
 	}
+	if err := refuseConnectionOverride(cmd, *serverFlag, *apiKeyFlag, args[1:]); err != nil {
+		renderError(ctx, err)
+		return exitCode(err)
+	}
+	warnInheritedConnectionEnv(cmd, stderr)
 
 	if taskID != "" && ctx.Step == "" {
 		// no key, and an unresolvable server: nothing reaches aihub directly
 		ctx.Task, ctx.Cfg.APIKey, ctx.Cfg.Server = taskID, "", "http://task-mode.invalid"
+	}
+	if (ctx.Step != "" || ctx.Task != "") && *profileFlag != "" {
+		err := &api.Error{Code: api.ErrDaemonForbidden, Detail: fmt.Sprintf(
+			"--profile %s refused inside a workflow step or task: an agent acts only within its owning Cell, which the daemon resolves from its own records", *profileFlag)}
+		renderError(ctx, err)
+		return exitCode(err)
 	}
 
 	fs := flag.NewFlagSet("pf "+cmd.Name, flag.ContinueOnError)
@@ -267,10 +375,6 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // status: 4xx → 1, 5xx → 2. Transport failures and local validation
 // carry no code and stay 1.
 func exitCode(err error) int {
-	var es *exitStatusError
-	if errors.As(err, &es) {
-		return es.code
-	}
 	var ae *api.Error
 	if errors.As(err, &ae) && ae.HTTPStatus() >= 500 {
 		return 2
@@ -355,7 +459,7 @@ const (
 )
 
 var helpGroups = []struct{ id, title string }{
-	{GroupData, "Data-plane verbs (direct to aihub):"},
+	{GroupData, "Data-plane verbs (via the daemon to the Cell's aihub):"},
 	{GroupExec, "Execution-plane verbs (local daemon UDS face):"},
 	{GroupMgmt, "Management face (M1–M5):"},
 	{GroupDiag, "Diagnostics:"},
@@ -380,10 +484,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Global flags (before the command):")
 	fmt.Fprintln(w, "  --json          machine-readable output (server JSON as-is)")
 	fmt.Fprintln(w, "  --config PATH   config file (default ~/.config/polyforge/cli.toml)")
-	fmt.Fprintln(w, "  --server URL    aihub base URL (env PF_SERVER)")
-	fmt.Fprintln(w, "  --api-key KEY   aihub api key (env PF_API_KEY)")
 	fmt.Fprintln(w, "  --socket PATH   daemon unix socket (env PF_DAEMON_SOCKET)")
 	fmt.Fprintln(w, "  --user ID       caller identity (env PF_USER_ID)")
+	fmt.Fprintln(w, "  --profile NAME  the Cell a Cell-scoped command targets (env PF_PROFILE; else cwd match; else default)")
 	fmt.Fprintln(w, "  --version      print version and exit")
 }
 
@@ -400,14 +503,13 @@ const extensionsPointer = "shapes: docs/extending.md (pf help extensions)"
 var extensionPoints = []struct{ what, section string }{
 	{"repos/<repo>/AGENTS.md (else CLAUDE.md)", "Per-repo rules"},
 	{"docs/agents/ area notes", "Area notes"},
-	{".polyforge.yaml steps.<project>.<step|default>.models", "Model candidates"},
-	{".polyforge.yaml steps.<project>.<step>.attrs.<name>", "Step attributes"},
+	{".polyforge.yaml steps.<project>.<step|default>.models, steps.<project>.<step>.skip", "Model candidates"},
 	{"cli.toml [summarize] models, language, interval_sec", "Summarize models"},
 	{"cli.toml [memory_policy.\"<path>\".<entry>]", "Memory policy"},
 	{"cli.toml [workspace.\"<path>\"]", "Workspace mapping"},
 	{"cli.toml [daemon]", "Daemon knobs"},
 	{"cli.toml claude_bin", "Claude binary"},
-	{"workflows dir <bundle>/workflow.md, steps/<id>.md", "Custom workflow bundles"},
+	{"workflows dir <bundle>/workflow.yaml, steps/<id>.md", "Custom workflow bundles"},
 }
 
 // printExtensions prints the extension-point index (local text only).
@@ -560,3 +662,72 @@ func durationFlag(fs *flag.FlagSet, name string) time.Duration {
 
 // strPtr wraps a plain string in a pointer.
 func strPtr(s string) *string { return &s }
+
+// localRepairVerbs are the local verbs an operator repairs a Cell with
+// (a fixed list, no config): they never take a connection from the
+// environment, so an inherited PF_SERVER/PF_API_KEY — a shell or harness
+// left over from the retired overrides — must not lock the operator out of
+// them. On these verbs the inherited variables are ignored with one notice
+// (warnInheritedConnectionEnv); an explicit --server/--api-key is still
+// refused, as on every verb.
+var localRepairVerbs = []string{"config", "profile", "doctor", "init", "migrate", "version"}
+
+// inheritedConnectionEnv names the retired connection variables set in the
+// environment (names only, never values).
+func inheritedConnectionEnv() []string {
+	var set []string
+	for _, env := range []string{"PF_SERVER", "PF_API_KEY"} {
+		if os.Getenv(env) != "" {
+			set = append(set, env)
+		}
+	}
+	return set
+}
+
+// warnInheritedConnectionEnv prints the one stderr notice of a local
+// repair verb run under an inherited PF_SERVER/PF_API_KEY: it names the
+// variables, never a value, and changes no exit code.
+func warnInheritedConnectionEnv(cmd *Command, stderr io.Writer) {
+	set := inheritedConnectionEnv()
+	if len(set) == 0 || !slices.Contains(localRepairVerbs, cmd.Name) {
+		return
+	}
+	fmt.Fprintf(stderr, "pf %s: ignoring the inherited %s — a Cell's connection comes only from its config file, and this local command dials no address from the environment (unset it to silence this notice)\n",
+		cmd.Name, strings.Join(set, " and "))
+}
+
+// refuseConnectionOverride refuses the retired per-command connection
+// overrides: --server and --api-key on every verb, and PF_SERVER /
+// PF_API_KEY on every verb but the local repair verbs (which ignore them
+// with a notice). AIHub business goes through the daemon to the resolved
+// Cell's configured connection, so an override can only be a mistake, and
+// it is never silently ignored. Nothing is sent on a refusal.
+func refuseConnectionOverride(cmd *Command, server, apiKey string, verbArgs []string) error {
+	var named []string
+	if server != "" {
+		named = append(named, "--server")
+	}
+	if apiKey != "" {
+		named = append(named, "--api-key")
+	}
+	// the same flags after the verb (`pf projects create --server …`): no
+	// business verb defines them, so they can only be a connection override
+	// (`pf cell add --server` is the Cell's configuration itself)
+	for _, a := range verbArgs {
+		if cmd.Name == "cell" {
+			break
+		}
+		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if strings.HasPrefix(a, "-") && (name == "server" || name == "api-key") && !slices.Contains(named, "--"+name) {
+			named = append(named, "--"+name)
+		}
+	}
+	if !slices.Contains(localRepairVerbs, cmd.Name) {
+		named = append(named, inheritedConnectionEnv()...)
+	}
+	if len(named) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s refused: a Cell's AIHub server and api key come from its config file and every business call goes through the daemon to that Cell — configure the Cell instead (`pf [--profile NAME] config set server <url>`, `printf %%s \"$KEY\" | pf [--profile NAME] config set api_key`, or `pf cell add`), unset %s, and retry; nothing was sent",
+		strings.Join(named, ", "), strings.Join(named, ", "))
+}

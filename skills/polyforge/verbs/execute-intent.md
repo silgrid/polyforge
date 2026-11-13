@@ -21,67 +21,39 @@ it" of an existing work item → `verbs/submit.md`.
 
 ## The routing action
 
-1. Pick the lane with the owner. The filing proposal fills four mandatory
-   slots before `pf file create` — `Lane + reason`, `Tier + reason`, when
-   the tier is `scoped`, `Entry confirmation`, and `Acceptance carrier`.
-   Answer all four; do not file on prose alone.
+1. Pick the lane with the owner. The filing proposal fills two mandatory
+   slots before `pf file create` — `Lane + reason` and `Acceptance carrier`.
+   Answer both; do not file on prose alone. A lane runs the verification
+   its steps declare; a work item chooses no tier.
    - **Lane + reason** — the chosen `--bundle` and one line why; the owner may
      veto or re-route. Apply the filing skill's `Down-lane check` first — judge
-     `expected diff size` and `lane risk surface`; a small, low-risk ticket
-     prefers `chore`/`autopilot` over `feature-full` (a pure text ticket whose
-     every touched repository declares `micro_path=` covering its paths may go
-     to `micro`), but it
+     `expected diff size` and `lane risk surface`; with `develop` the default, a
+     small, low-risk pure text ticket whose every touched repository declares
+     `micro_path=` covering its paths may go to `micro`, but it
      never down-lanes onto a lane whose step table carries no step for the
-     acceptance criteria. Shipped lanes:
-     `bug-fix` (fix a failure: repro →
-     root-cause → fix → review → verification → deliver), `feature-full` (new
-     user-visible behavior: grill → spec → grill-review → plan → e2e-author →
-     code → review → verification → deliver), `chore` (internal maintenance
-     with no new user-visible behavior — tools, docs, config, cleanup,
-     deletion: plan → code → review → verification → deliver), `autopilot`
-     (small well-understood changes: grill → fix → verification → deliver),
+     acceptance criteria. Shipped lanes: `develop` — **the default** for
+     development work (build → review → verification → publish: one build session
+     plans against the ticket's `## Acceptance`, writes each unit's test red before
+     its implementation and reviews itself; review blocks only on its five classes;
+     a ticket without `## Acceptance` stops at build for the owner's list) — and
      `micro` (a pure text change — docs or locale message text, no code,
      config, generated file, test or behavior change — inside the paths every
      touched repository declares with `micro_path=` in its own
-     `.polyforge/verify-scope.conf`: fix → review → deliver, no verification
-     step, the ticket body as its spec; never for a repository without that
+     `.polyforge/verify-scope.conf`: fix → review → sync → evidence → publish
+     → merge, no verification step, the ticket body as its spec; never for a repository without that
      declaration nor for work on the "never unattended" list, and a criterion
      only a full bar, an e2e scenario or a verification step carries makes the
      ticket ineligible for it).
      `release` is the separate release lane — see the lane table in
-     `verbs/file.md`. Every lane except `feature-full` can merge unattended, so
-     work on `docs/concepts.md`'s "never unattended" list is filed
-     `feature-full`. A project may carry its own bundles — ask when unsure.
-     Verification tier capability: `bug-fix`, `feature-full` and `chore` are
-     `scoped-capable`; `autopilot` always verifies `full` (it has no review, so
-     no `scope_adequate`) and is not scoped-capable; `micro` and `release` have
-     no verification step.
-   - **Tier + reason** — `scoped` or `full` and one line why, by the same
-     heuristic as the filing skill: propose `scoped` for a text/docs change
-     confined to one repository and a small surface; propose `full` when the
-     acceptance is e2e-carried — a criterion an `e2e-author` step would author,
-     or behaviour an existing e2e suite pins — because a scoped run deliberately
-     skips the e2e suites; propose `full` when the
-     change crosses modules or repos, touches the driver/daemon core, or is
-     gate-type (a `gate: true` step definition — `verification`, `review`,
-     `deliver` — or the driver/daemon logic behind it); when you
-     cannot determine the tier, propose `full` (fail-closed). The owner may veto a
-     downgrade and insist on `full`. The tier is an opt-in marker
-     (`verification: scoped` in the ticket `content`), and a scoped-capable
-     lane still needs the release tree's `tools/verify-scope` engine plus a
-     scoped-ready repo (a supported stack manifest, or a
-     `.polyforge/verify-scope.conf` pin).
-   - **Entry confirmation** — required whenever the tier slot proposes
-     `scoped`: confirm readiness before filing with the `pf doctor`
-     `scoped-gates readiness` row (engine default / repo conf = `pass`,
-     unsupported or unpinned multi-manifest = `warn`, no local clone =
-     `unknown`), or `pf projects get` plus a look at the clone's
-     manifests/conf; if it is not ready the marker is inert and the ticket
-     **falls back to full** — the contract is
-     docs/contributing.md『Verification tiers』.
+     `verbs/file.md`. Every delivery lane can merge unattended, so
+     work on `docs/concepts.md`'s "never unattended" list is filed `develop` with
+     the content line `confirm_plan: true` (build stops for the owner after its
+     plan; the driver refuses the build's completion until that answer is
+     recorded). A project may carry its own
+     bundles — ask when unsure.
    - **Acceptance carrier** — every acceptance criterion is written
      `<criterion> — carried by <step id>`, the step id taken from the chosen
-     lane's step table (the `steps:` list of its `workflow.md`; the lane
+     lane's step table (the `steps:` list of its `workflow.yaml`; the lane
      table in `verbs/file.md` names the lanes). A criterion that names no
      step either drops to the evidence that graph actually runs, recorded as
      an explicit waiver proposed to the owner, or the ticket moves to a lane
@@ -121,10 +93,10 @@ it" of an existing work item → `verbs/submit.md`.
    target workspace differs from the session cwd or a repo clone is
    missing under `<workspace>/.repo/<name>` ("this ticket will land in
    X": machine + workspace), and submit only after the owner agrees.
-   Then watch and answer needs_input (`verbs/answer.md`); the deliver
-   step's two questions - the merge question (`deliver-merge`) and the
-   owner-review question (`deliver-owner-review`) - are human-only
-   (`verbs/ship.md`).
+   Then watch and answer needs_input (`verbs/answer.md`); the publish
+   step's owner-review question (its `pf step ask`) is human-only
+   (`verbs/ship.md`), and so are a develop build's stops (its `pf step ask`
+   after the plan: the owner answers in free text that the build reads).
 
 ## The discipline: routing, not executing
 
@@ -133,7 +105,7 @@ before any Edit/Write under `.repo/`, ask: **which execution ticket does
 this change hang on?** No answer → file one first (with a bundle) and route
 the work through it. Write operations happen only inside the daemon's
 claimed work-item worktree (the capsule) — a session that hand-executes
-bypasses every gate: no root-cause, no verification, no review, no deliver
+bypasses every gate: no root-cause, no verification, no review, no delivery
 record (2026-10-20: a session hand-upgraded a library end-to-end — branch,
 tests, commit, push, PR — with no ticket until after the PR; the daemon had
 correctly refused the bundle-less ticket, and nothing loaded told the

@@ -181,7 +181,7 @@ func TestWorkItemRouteCoverageConceals(t *testing.T) {
 	request := func(r w74rRoute, priv ed25519.PrivateKey, machine string) (int, []byte) {
 		path := w74rPath(r, ref)
 		if r.signed {
-			return signedPost(t, e, outKey, machine, priv, path, bodyOf(r))
+			return e.doSigned(t, r.method, path, outKey, machine, priv, 0, bodyOf(r))
 		}
 		return e.do(t, r.method, path, outKey, bodyOf(r), nil)
 	}

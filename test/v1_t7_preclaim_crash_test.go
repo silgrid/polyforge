@@ -146,7 +146,7 @@ func (p *claimHoldProxy) drop() {
 // claimingEntries reads <dataDir>/claiming.json — the B1 journal.
 func claimingEntries(t *testing.T, dataDir string) map[string]map[string]any {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(dataDir, "claiming.json"))
+	raw, err := os.ReadFile(filepath.Join(dataDir, "cells", "default", "claiming.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -166,9 +166,8 @@ func TestV1T7PreClaimCrashJournalReplay(t *testing.T) {
 	inst := newV1Install(t)
 	wi := inst.newWI(t, "t7: pre-claim crash, journal replay adopts",
 		[]map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	t.Cleanup(func() { killOrphans(wi) })
 
@@ -210,15 +209,18 @@ func TestV1T7PreClaimCrashJournalReplay(t *testing.T) {
 	d.crash()
 	proxy.drop()
 
-	// Restart the SAME daemon (same socket/dataDir/workspace), direct to
-	// aihub: the startup replay must verify the journaled session
+	// Restart the SAME daemon (same socket/dataDir/workspace/--server):
+	// the released proxy now forwards untouched, and the Cell's recorded
+	// AIHub identity is the --server it first started on, so a restart
+	// against another URL would be refused as a different identity
+	// domain ( Cell identity rule). The startup replay must verify the journaled session
 	// (matches), re-claim with the SAME secret (D4: the same answer comes
 	// back — no second session, no ALREADY_HELD refusal) and finish the
 	// start: the adopted driver dispatches its first step process, then
 	// the workflow runs to its terminal wrap.
 	d2 := &v1Daemon{
 		t: t, inst: inst, sock: d.sock, dataDir: d.dataDir, workspace: d.workspace,
-		machineID: d.machineID, extraArgs: d.extraArgs,
+		machineID: d.machineID, extraArgs: d.extraArgs, serverURL: d.serverURL,
 		logPath: filepath.Join(t.TempDir(), "daemon2.log"),
 	}
 	t.Cleanup(func() { d2.stop() })
@@ -247,8 +249,8 @@ func TestV1T7PreClaimCrashJournalReplay(t *testing.T) {
 	// dispatches, no re-derivations — and the wrap cleared the session
 	// row.
 	spawns := spawnJournal(t, d2.capsuleDir(wi))
-	if len(spawns) != 3 {
-		t.Fatalf("spawn journal has %d entries, want 3 (the adopted start's single pass): %+v", len(spawns), spawns)
+	if len(spawns) != 2 {
+		t.Fatalf("spawn journal has %d entries, want 2 (the adopted start's single pass): %+v", len(spawns), spawns)
 	}
 	for _, s := range spawns {
 		if s["resume"] != false {

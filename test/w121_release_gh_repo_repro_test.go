@@ -18,6 +18,14 @@ package test
 // The fail-loud half is red on the defective tree (the script silently picks
 // the public repo and pushes the tag); the projection subtest also fails there
 // because release.sh has no internal example for REWRITE to map yet.
+//
+// replaced fail-loud with the internal default: an unset
+// RELEASE_GH_REPO now means silgrid/polyforge (the projection maps the
+// default to silgrid/polyforge on the public side), and the tag/release split
+// that burned v2.20.10 is refused by comparing GH_REPO with REMOTE's GitHub URL
+// (test/w372_release_lane_test.go). The fail-loud cost a release attempt of its
+// own (#155's first invocation refused). This file keeps the half that still
+// holds: an unset RELEASE_GH_REPO never reaches the public repo.
 
 import (
 	"os"
@@ -55,43 +63,45 @@ func w121RunWithoutGHRepo(t *testing.T, w *relWorld, extra []string, args ...str
 	return string(out), err
 }
 
-// TestW121ReleaseGHRepoFailLoud pins the fail-loud half: with
-// RELEASE_GH_REPO unset, neither release mode nor --verify may run against
-// the public default; both must refuse, naming the variable and the internal
-// example, before any publish/audit work.
+// TestW121ReleaseGHRepoFailLoud pins what is left of the fail-loud half after
+// with RELEASE_GH_REPO unset, neither release mode nor --verify
+// may touch the public mirror; both use the internal release repo.
 func TestW121ReleaseGHRepoFailLoud(t *testing.T) {
-	t.Run("release mode refuses before any work when unset", func(t *testing.T) {
+	repos := func(w *relWorld) []string {
+		b, _ := os.ReadFile(filepath.Join(w.fakeRel, "repos.log"))
+		return strings.Fields(string(b))
+	}
+	t.Run("release mode uses the internal repo when unset", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		out, err := w121RunWithoutGHRepo(t, w, nil)
-		if err == nil {
-			t.Fatalf("release succeeded with RELEASE_GH_REPO unset — it must fail loud instead of silently publishing to %s:\n%s", w121PublicRepo, out)
+		if err != nil {
+			t.Fatalf("release with RELEASE_GH_REPO unset must use the internal default: %v\n%s", err, out)
 		}
-		for _, want := range []string{"RELEASE_GH_REPO", w121InternalRepo} {
-			if !strings.Contains(out, want) {
-				t.Errorf("the refusal must name %q:\n%s", want, out)
+		got := repos(w)
+		if len(got) == 0 {
+			t.Fatalf("no gh call recorded a repository:\n%s", out)
+		}
+		for _, r := range got {
+			if r != w121InternalRepo {
+				t.Fatalf("a gh call targeted %q, want only %s (never %s): %v", r, w121InternalRepo, w121PublicRepo, got)
 			}
-		}
-		if calls := w.calls(); len(calls) != 0 {
-			t.Fatalf("work ran before the RELEASE_GH_REPO refusal: %v", calls)
-		}
-		if got := w.originTags(); strings.Contains(got, "v1.2.1") {
-			t.Fatalf("a tag was pushed despite the refusal: %q", got)
 		}
 	})
 
-	t.Run("verify mode refuses when unset", func(t *testing.T) {
+	t.Run("verify mode uses the internal repo when unset", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		out, err := w121RunWithoutGHRepo(t, w, nil, "--verify", "v1.2.0")
-		if err == nil {
-			t.Fatalf("--verify succeeded with RELEASE_GH_REPO unset — it must fail loud instead of auditing %s:\n%s", w121PublicRepo, out)
+		if out, err := w.run(nil); err != nil {
+			t.Fatalf("release: %v\n%s", err, out)
 		}
-		for _, want := range []string{"RELEASE_GH_REPO", w121InternalRepo} {
-			if !strings.Contains(out, want) {
-				t.Errorf("the refusal must name %q:\n%s", want, out)
+		_ = os.Remove(filepath.Join(w.fakeRel, "repos.log"))
+		out, err := w121RunWithoutGHRepo(t, w, nil, "--verify", "v1.2.1")
+		if err != nil {
+			t.Fatalf("--verify with RELEASE_GH_REPO unset must audit the internal repo: %v\n%s", err, out)
+		}
+		for _, r := range repos(w) {
+			if r != w121InternalRepo {
+				t.Fatalf("--verify targeted %q, want only %s: %v", r, w121InternalRepo, repos(w))
 			}
-		}
-		if calls := w.calls(); len(calls) != 0 {
-			t.Fatalf("work ran before the RELEASE_GH_REPO refusal: %v", calls)
 		}
 	})
 }

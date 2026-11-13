@@ -1,0 +1,64 @@
+===== failures =====
+FAIL e2e/polyforge-messages.mjs: PM16 desktop two columns and mobile two columns — the list and the stream must be two columns at the minimum dock width
+FAIL e2e/polyforge-messages.mjs: PM16 — desktop keeps two columns at the default and the minimum dock width and mobile keeps the same two columns with a back control
+host loadavg 1m/5m/15m: 8.88 / 13.21 / 16.89
+re-run: npm run test:e2e:all -- polyforge-messages.mjs
+
+===== summary =====
+PASS agent-language-293.mjs 17s
+PASS chat-minimap-heading-334.mjs 4s
+PASS claude-250.mjs 15s
+PASS claude-composer-272.mjs 70s
+PASS claude-context-363.mjs 7s
+PASS claude-fork-370.mjs 23s
+PASS claude-image-270.mjs 18s
+PASS claude-session-219.mjs 21s
+PASS claude-subagent-253.mjs 34s
+PASS context-after-compact-368.mjs 8s
+PASS deploy-install-channel.mjs 6s
+PASS deploy-pf-bin.mjs 0s
+PASS deploy-served-installed.mjs 5s
+PASS deploy-service-shape.mjs 82s
+PASS deploy-tunnel-dead-connector.mjs 5s
+PASS deploy-tunnel-variants.mjs 22s
+PASS deploy-tunnel.mjs 4s
+PASS machine-load.mjs 10s
+PASS manual-fetch.mjs 74s
+PASS pdf-page-fragment.mjs 10s
+PASS polyforge-210.mjs 9s
+PASS polyforge-238.mjs 21s
+PASS polyforge-271.mjs 9s
+PASS polyforge-cards.mjs 85s
+PASS polyforge-config-255.mjs 23s
+PASS polyforge-config-290.mjs 9s
+PASS polyforge-config-layout.mjs 6s
+PASS polyforge-config-panel.mjs 35s
+PASS polyforge-config-simplify-212.mjs 8s
+PASS polyforge-config-viewport.mjs 2s
+PASS polyforge-graph.mjs 14s
+PASS polyforge-memory-panel.mjs 46s
+PASS polyforge-messages-analysis-v2.mjs 18s
+PASS polyforge-messages-contacts.mjs 13s
+PASS polyforge-messages-groups-223.mjs 20s
+PASS polyforge-messages-prompt-281.mjs 25s
+FAIL polyforge-messages.mjs 63s
+PASS polyforge-panel-213.mjs 10s
+PASS polyforge-panels-123.mjs 14s
+PASS polyforge-settings.mjs 82s
+PASS polyforge-task-report-194.mjs 26s
+PASS polyforge-widget.mjs 3s
+PASS polyforge-work-items-203.mjs 31s
+PASS polyforge-work-tab-163.mjs 73s
+PASS polyforge-workflow-216.mjs 20s
+PASS polyforge.mjs 117s
+PASS run.mjs 76s
+PASS session-stall-recovery.mjs 30s
+PASS terminal.mjs 14s
+PASS ui-polish-198.mjs 17s
+PASS verify-scope-acceptance.mjs 0s
+PASS w348-cell-page.mjs 4s
+PASS w364-cell-master-detail.mjs 7s
+PASS w367-default-cell-pinned.mjs 3s
+PASS w385-named-cell-parity.mjs 8s
+54/55 passed in 405s
+e2e/all: removed 54 passing suite dist dir(s) under .next/e2e, kept 1 failed for re-run

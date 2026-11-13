@@ -1,7 +1,7 @@
 package test
 
 // w25_engine_acceptance_test.go: the end-to-end acceptance suite
-// for the release-shipped verification-scope engine, `tools/verify-scope`.
+// for the release-shipped verification-scope engine, `workflows/_shared/scripts/verify-scope`.
 //
 // Authored from artifacts/spec.md's `## Acceptance criteria` and `####
 // Scenario` blocks BEFORE the engine exists (e2e-author), driving it only
@@ -42,13 +42,13 @@ func w25e2eRoot(t *testing.T) string {
 // missing or non-executable file is the baseline red.
 func w25e2eEnginePath(t *testing.T) string {
 	t.Helper()
-	p := filepath.Join(w25e2eRoot(t), "tools", "verify-scope")
+	p := filepath.Join(w25e2eRoot(t), "workflows", "_shared", "scripts", "verify-scope")
 	info, err := os.Stat(p)
 	if err != nil {
-		t.Fatalf("tools/verify-scope must ship in the release tree (the pre-implementation tree has no engine): %v", err)
+		t.Fatalf("workflows/_shared/scripts/verify-scope must ship in the release tree (the pre-implementation tree has no engine): %v", err)
 	}
 	if info.Mode()&0o111 == 0 {
-		t.Fatalf("tools/verify-scope must be executable: mode %v", info.Mode())
+		t.Fatalf("workflows/_shared/scripts/verify-scope must be executable: mode %v", info.Mode())
 	}
 	return p
 }
@@ -120,7 +120,7 @@ func w25e2eRun(t *testing.T, dir string, env []string, args ...string) (string, 
 	if err := cmd.Run(); err != nil {
 		ee, ok := err.(*exec.ExitError)
 		if !ok {
-			t.Fatalf("run tools/verify-scope %v: %v", args, err)
+			t.Fatalf("run workflows/_shared/scripts/verify-scope %v: %v", args, err)
 		}
 		code = ee.ExitCode()
 	}
@@ -143,7 +143,7 @@ func w25e2eParse(t *testing.T, out string) w25e2eReport {
 	t.Helper()
 	trimmed := strings.TrimRight(out, "\n")
 	if trimmed == "" {
-		t.Fatalf("tools/verify-scope printed no report on stdout")
+		t.Fatalf("workflows/_shared/scripts/verify-scope printed no report on stdout")
 	}
 	lines := strings.Split(trimmed, "\n")
 	var r w25e2eReport
@@ -185,7 +185,7 @@ func w25e2eScope(t *testing.T, dir string, args ...string) w25e2eReport {
 	t.Helper()
 	out, errb, code := w25e2eRun(t, dir, nil, args...)
 	if code != 0 {
-		t.Fatalf("tools/verify-scope %v: exit %d (stdout %q, stderr %q)", args, code, out, errb)
+		t.Fatalf("workflows/_shared/scripts/verify-scope %v: exit %d (stdout %q, stderr %q)", args, code, out, errb)
 	}
 	return w25e2eParse(t, out)
 }
@@ -598,15 +598,13 @@ func TestW25E2ERepoMigration(t *testing.T) {
 // describe the engine".
 func TestW25E2EGenericDefaultsAndDocs(t *testing.T) {
 	root := w25e2eRoot(t)
-	// Internal identifiers never spelled literally in this test file.
-	internal := []string{"GMIS" + "WE", "ieops" + "-polyforge", "pi-web" + "-gmi"}
 
 	// Docs describe the engine and no longer name the deleted script.
 	doc, err := os.ReadFile(filepath.Join(root, "docs", "contributing.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"tools/verify-scope", "verify-scope.conf"} {
+	for _, want := range []string{"workflows/_shared/scripts/verify-scope", "verify-scope.conf"} {
 		if !strings.Contains(string(doc), want) {
 			t.Fatalf("docs/contributing.md must describe %q", want)
 		}
@@ -624,37 +622,13 @@ func TestW25E2EGenericDefaultsAndDocs(t *testing.T) {
 		if strings.Contains(string(body), ".polyforge/verify-scope.sh") {
 			t.Fatalf("skills/polyforge/verbs/%s still tells a filer to look for the deleted script", rel)
 		}
-		if !strings.Contains(string(body), "verify-scope.conf") && !strings.Contains(string(body), "tools/verify-scope") {
+		if !strings.Contains(string(body), "verify-scope.conf") && !strings.Contains(string(body), "workflows/_shared/scripts/verify-scope") {
 			t.Fatalf("skills/polyforge/verbs/%s must carry the engine/conf precondition", rel)
 		}
 	}
 
-	// The lane references the shipped engine and has no engine-absent branch.
-	lane, err := os.ReadFile(filepath.Join(root, "workflows", "_shared", "steps", "verification.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(lane), "tools/verify-scope") {
-		t.Fatalf("the verification lane must name the release-shipped engine")
-	}
-	if strings.Contains(string(lane), ".polyforge/verify-scope.sh") {
-		t.Fatalf("the verification lane still names the deleted repo-owned script")
-	}
-
-	// The engine defaults carry no repository identifier and run on a
-	// synthetic zero-config fixture without a workspace clone.
-	engine, err := os.ReadFile(w25e2eEnginePath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, m := range internal {
-		if strings.Contains(string(engine), m) {
-			t.Fatalf("the engine defaults hard-code %q", m)
-		}
-		if strings.Contains(string(lane), m) {
-			t.Fatalf("the lane text hard-codes %q", m)
-		}
-	}
+	// The engine runs on a synthetic zero-config fixture without a
+	// workspace clone.
 	synthetic, _ := w25e2eFixture(t, w25e2eGoModule("fixture.test/w25e2e"))
 	if r := w25e2eScope(t, synthetic); r.mode != "scoped" {
 		t.Fatalf("a synthetic zero-config Go fixture must produce a scoped report, got %q", r.mode)

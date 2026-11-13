@@ -17,10 +17,14 @@ package daemon
 //     restart reconciliation resume-spawns wi_e2e_live quickly, then
 //     hits wi_e2e_push's commit-dirty push, which a slowed pre-receive
 //     hook keeps in flight (the mid-shutdown push of the incident).
-//   - its graceful shutdown is triggered and PARKS in the stop-notice
-//     ack (the fake agent never acks until the test releases it), so
-//     the UDS listener — which closes only at step 5 — is still open
-//     while the push is still running.
+//   - its graceful shutdown is triggered and PARKS in the agent
+//     teardown (the fake agent's Terminate holds until the test
+//     releases it), so the data-dir flock and the UDS listener — both
+//     let go only after that teardown — are still held while the push
+//     is still running. The new process starts only once that park is
+//     observed: without it the old shutdown finishes in a few
+//     milliseconds and a descheduled test goroutine would start the
+//     new process after the guard came down.
 //   - daemon 2 (the NEW process of the operator restart) starts with
 //     the SAME data-dir and socket. It must abort on the
 //     single-instance guard BEFORE restart reconciliation: no second
@@ -47,24 +51,6 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
-
-// parkedSpawner spawns fake agents whose control acks park until the
-// release channel closes — the stand-in for an agent that is still
-// working through its stop boundary, keeping the graceful shutdown (and
-// therefore the UDS listener) alive. Spawn runs on the runtime's
-// message-loop goroutine while the test goroutine polls callCount, so
-// the counter is atomic.
-type parkedSpawner struct {
-	release chan struct{}
-	calls   atomic.Int64
-}
-
-func (s *parkedSpawner) Spawn(ctx context.Context, p runtime.SpawnParams) (runtime.AgentHandle, error) {
-	s.calls.Add(1)
-	return &fakeAgent{}, nil
-}
-
-func (s *parkedSpawner) callCount() int { return int(s.calls.Load()) }
 
 // slowPreReceive installs a sleeping pre-receive hook on a bare repo
 // (test scaffolding): it widens the window between ref advertisement
@@ -293,11 +279,20 @@ func TestShutdownRestartFullChainPushIdempotency(t *testing.T) {
 		return h != "" && h != basePush
 	})
 
-	// --- the graceful stop: parks in the stop-notice ack, keeping the
-	// UDS listener open while the commit-dirty push is still in flight.
-	// ---
+	// --- the graceful stop: parks in the agent teardown, keeping the
+	// data-dir flock and the UDS listener held while the commit-dirty
+	// push is still in flight. ---
 	shutErr := make(chan error, 1)
 	go func() { shutErr <- d1.Shutdown(context.Background(), DirectShutdownCause()) }()
+	// The old process is provably mid-shutdown and still holds the
+	// single-instance guard: its stop sequence sits in wi_e2e_live's
+	// agent teardown, which comes before its state persist, its face
+	// close and its Run's flock release. Only then does the new process
+	// start — an observed condition, not a head start, so a slow or
+	// descheduled runner only takes longer to get here.
+	waitFor(t, "old daemon's shutdown parked in its agent teardown, still holding the data-dir lock", 10*time.Second, func() bool {
+		return sp1.parkedStops() >= 1 && d1.ownsDataDir()
+	})
 
 	// --- the NEW process of the operator restart: same data-dir, same
 	// socket, started while the old process is mid-shutdown. ---
@@ -383,7 +378,7 @@ func TestShutdownRestartFullChainPushIdempotency(t *testing.T) {
 	waitFor(t, "third daemon's restart reconciliation", 10*time.Second, func() bool {
 		return sp3.callCount() >= 2
 	})
-	close(sp3rel) // let the third daemon's stop notices ack
+	close(sp3rel) // let the third daemon's agent teardowns finish
 	if err := d3.Shutdown(context.Background(), DirectShutdownCause()); err != nil {
 		t.Fatalf("third daemon shutdown: %v", err)
 	}

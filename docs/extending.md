@@ -42,19 +42,11 @@ precedence chain are the config reference's one authority
 the routing skill's fragments, `pf submit --models` and
 [upgrade.md](upgrade.md) point there.
 
-### Step attributes
-
-`steps.<project>.<step-id>.attrs` in `.polyforge.yaml` — per-project
-overrides of the configurable attributes a bundle step declares
-(`attrs:` in its `workflow.md` entry): the config reference's
-[step attributes section](reference/config.md#stepsprojectstep-idattrs--step-attributes)
-owns the override grammar, the [bundle-authoring chapter](bundles.md) the
-declaration and its prompt material.
-
 ### Summarize models
 
 The one machine-level `[summarize]` table of `cli.toml` (`summarize.models`,
-`summarize.language`, `summarize.interval_sec`; written with `pf config set`,
+`summarize.language`, `summarize.interval_sec`; written with `pf config set`
+(Cell-scoped: the resolved Cell's file),
 read with `pf config list`) — the summarize lane's model candidates,
 narration language and interval: the config reference's
 [`[summarize]` section](reference/config.md#summarize--the-summarize-lane).
@@ -76,12 +68,22 @@ refused whole; `pf config migrate` moves them.
 The `[workspace."<path>"]` sections of `cli.toml` — the daemon's only
 workspace source (polyforge#113): the config reference's
 [`[workspace]` section](reference/config.md#workspacepath--the-repo-mapping).
+A named Cell maps its own workspaces in its own `cli-<profile>.toml`
+(the config reference's
+[Host and Cells section](reference/config.md#host-and-cells--clitoml-and-cli-profiletoml));
+two Cells never map the same or nested workspace.
 
 ### Daemon knobs
 
 The `[daemon]` table of `cli.toml` — the production knobs the daemon reads
 from its `--config` file: the config reference's
 [`[daemon]` section](reference/config.md#daemon--the-daemon-knobs).
+Each key is either Host-only (only `cli.toml` may carry it) or a Cell key
+(`cli.toml` for the default Cell, `cli-<profile>.toml` for a named Cell);
+the one partition, including a named Cell's `[model] source` model-credential
+declaration (an extension point: a Cell names `shared-default` or its own
+absolute credential directory; only credential material is shared), is the config reference's
+[Host and Cells section](reference/config.md#host-and-cells--clitoml-and-cli-profiletoml).
 
 ### Claude binary
 
@@ -92,10 +94,10 @@ claude steps: the config reference's
 ### Custom workflow bundles
 
 A workflow bundle is a directory under the daemon's workflows dir:
-`<bundle>/workflow.md` plus `<bundle>/steps/<id>.md`, one step definition
+`<bundle>/workflow.yaml` (with its `README.md`) plus `<bundle>/steps/<id>.md`, one step definition
 per step id, with the shared `_shared/steps/<id>.md` fallback. A work item
 runs the bundle it was filed with (`pf file create --bundle <name>`).
-Authoring detail — the layout, the frontmatter schema, step definitions,
+Authoring detail — the layout, the lane keys and their JSON Schema, step definitions,
 vars, budgets, and a worked custom-bundle example validated by the real
 loader — is the [bundle-authoring chapter](bundles.md), including how a
 bundle ships (added under `workflows/` in this repository and released;

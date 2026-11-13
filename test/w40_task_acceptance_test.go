@@ -95,6 +95,7 @@ func (r *w40Rig) pf(t *testing.T, args ...string) (string, int) {
 		"PF_DAEMON_SOCKET="+r.d.sock,
 	)
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := 0
 	if err := cmd.Run(); err != nil {

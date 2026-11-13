@@ -9,7 +9,7 @@ package driver
 //     principle in its assembled prompt. Red on the pre-change tree (the
 //     shared principles had no waiting rule).
 //  2. TestW111ReleaseStepsAwaitInsideOneCall — both release-lane steps
-//     run the procedure in the foreground with an explicit timeout, and a
+//     run the procedure in the foreground within the step's tool window, and a
 //     backgrounded procedure is awaited inside one call by a condition
 //     loop with a deadline; neither says "then poll". Red on the
 //     pre-change tree (both said "background it … then poll").
@@ -50,7 +50,7 @@ func w111Flat(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // w111Principle is the waiting principle's text (after its bold title)
 // in workflows/_shared/principles.md.
-const w111Principle = "Waiting is never a tool call of its own. Run a command in the foreground with an explicit timeout at least as long as you expect it to take (the harness allows up to the daemon's tool bound). If something must be awaited — a server coming up, a procedure already started — wait INSIDE the same call: a loop that checks a real condition, sleeps at most 3 s per iteration and has a deadline. A bare `sleep N` call, or a loop whose only exit is the deadline, is a violation and is recorded. The same binding covers a shell's `wait` and every background job: a `wait` is a wait like `sleep`, so never wait on something with no timeout of its own — await a real condition with a deadline, or bound and poll what you started. A step never manufactures artificial load on a shared host to reproduce a load-sensitive flake (spin loops, `yes`, stress tools): use the test's own parallelism knobs (`-parallel`, `E2E_JOBS`) or record the flake as load-sensitive in the conclusion. Every background process a step starts is bounded: kill it by process group before the call returns, with a `trap` as the backstop, and never pass a pid list through an unquoted shell variable."
+const w111Principle = "Waiting is never a tool call of its own. Run a command in the foreground, never with a timeout or deadline of your own: the harness bounds each call by the step's tool window. If something must be awaited — a server coming up, a procedure already started — wait INSIDE the same call: a loop that checks a real condition, sleeps at most 3 s per iteration and has a deadline. A bare `sleep N` call, or a loop whose only exit is the deadline, is a violation and is recorded. The same binding covers a shell's `wait` and every background job: a `wait` is a wait like `sleep`, so never wait on something with no timeout of its own — await a real condition with a deadline, or bound and poll what you started. A step never manufactures artificial load on a shared host to reproduce a load-sensitive flake (spin loops, `yes`, stress tools): use the test's own parallelism knobs (`-parallel`, `E2E_JOBS`) or record the flake as load-sensitive in the conclusion. Every background process a step starts is bounded: kill it by process group before the call returns, with a `trap` as the backstop, and never pass a pid list through an unquoted shell variable."
 
 // w111RuleSentences are the waiting rule's sentences that carry the word
 // "sleep": the principle states them and both release steps restate them
@@ -113,7 +113,7 @@ func TestW111WaitingPrincipleInEveryPrincipledPrompt(t *testing.T) {
 		t.Error("the waiting principle keeps the numbered style (`6. **Waiting.** …`)")
 	}
 	principled := 0
-	for _, bs := range shippedBundleSteps(t) {
+	for _, bs := range shippedDefinitions(t) {
 		bundle, step := filepath.Base(bs[0]), bs[1]
 		def, err := os.ReadFile(workflow.StepDefinitionPath(bs[0], step))
 		if err != nil {
@@ -132,17 +132,15 @@ func TestW111WaitingPrincipleInEveryPrincipledPrompt(t *testing.T) {
 		prompt := assembleStepPrompt(promptParts{
 			WIID: "wi_w111", StepID: step, SpawnN: 1,
 			CapsuleRoot: "/ws/capsules/w111",
-			ContextMode: ContextFresh,
-			Definition:  rendered,
+
+			Definition: rendered,
 		})
 		if !strings.Contains(w111Flat(prompt), w111Principle) {
 			t.Errorf("the assembled %s/%s prompt renders {{principles}} but lacks the waiting principle", bundle, step)
 		}
 	}
 	// every principled step the principles test enumerates was checked:
-	// the count is pinned to principledSteps, which since
-	// also covers bug-fix repro, feature-full e2e-author, the shared
-	// deliver in every delivery lane and release verify
+	// the count is pinned to principledSteps (the shipped lanes' steps)
 	want := 0
 	for _, steps := range principledSteps {
 		want += len(steps)
@@ -153,46 +151,54 @@ func TestW111WaitingPrincipleInEveryPrincipledPrompt(t *testing.T) {
 }
 
 // TestW111ReleaseStepsAwaitInsideOneCall: the release lane's two
-// procedure-running steps state the waiting rule for their long run —
-// foreground with an explicit timeout; only a procedure known to exceed
-// the tool bound is backgrounded, then awaited inside one call by a
-// condition loop of at most 3 s per iteration with a deadline; the
-// invocation recorded as command evidence with its real duration — and
-// carry no background-then-poll instruction.
+// procedure-running steps run their procedure THEMSELVES, inside one tool
+// call, and wait for it (workflow contract v2 §4.4 / O11, change 9; the
+// v1 run request — AC5 — is gone from this lane): the line
+// runs in the owner repo under the daemon's command PATH (the step's own
+// PATH), its output teed to the step's log, under the
+// step's own tool window (`budget.tool_minutes`: 120 minutes for release,
+// 30 for deploy) — and no background-then-poll or request-and-end-turn
+// instruction survives.
 func TestW111ReleaseStepsAwaitInsideOneCall(t *testing.T) {
-	for _, step := range []string{"deploy", "release"} {
+	for _, c := range []struct{ step, line, window string }{
+		// pipefail first: `&&` binds tighter than `;`, so a failed cd must
+		// not run the pipeline from the capsule root without it
+		{"deploy", `set -o pipefail; cd repos/<owner> && .polyforge/deploy.sh V --confirm V 2>&1 | tee ../../artifacts/deploy.log`, "30 minutes"},
+		{"release", `set -o pipefail; cd repos/<owner> && .polyforge/release.sh [<bump>] 2>&1 | tee ../../artifacts/release.log`, "120 minutes"},
+	} {
 		bundle := filepath.Join(shippedWorkflowsDir, "release")
-		def, err := readStepDefinition(bundle, step, shippedVars(t, bundle, step))
+		def, err := readStepDefinition(bundle, c.step, shippedVars(t, bundle, c.step))
 		if err != nil {
-			t.Fatalf("read release/%s: %v", step, err)
+			t.Fatalf("read release/%s: %v", c.step, err)
 		}
 		flat := w111Flat(def)
-		if strings.Contains(strings.ToLower(flat), "then poll") {
-			t.Errorf("release/%s still says \"then poll\" — a backgrounded procedure is awaited inside one call", step)
+		low := strings.ToLower(flat)
+		for _, gone := range []string{"then poll", "backgrounded", "run_request", "run request", "end your turn and", "pf bar-run", "command_evidence"} {
+			if strings.Contains(low, gone) {
+				t.Errorf("release/%s still carries %q — the step runs its procedure itself, in one tool call", c.step, gone)
+			}
 		}
-		for _, want := range append([]string{
-			"Waiting is never a tool call of its own",
-			"in the foreground with an explicit timeout at least as long as you expect it to take (the harness allows up to the daemon's tool bound)",
-			"Only a procedure known to exceed that bound may be backgrounded",
-			"it is then awaited inside one call",
-			"The condition is the exit-code file existing",
-			"Record the invocation as command evidence with its real duration.",
-		}, w111RuleSentences...) {
+		for _, want := range []string{
+			c.line,
+			"in ONE tool call",
+			c.window,
+			"PF_TOOL_WINDOW_MS",
+			"heavy-run admission",
+		} {
 			if !strings.Contains(flat, want) {
-				t.Errorf("release/%s must state the waiting rule for its long run, missing %q", step, want)
+				t.Errorf("release/%s must run its procedure itself under its tool window, missing %q", c.step, want)
 			}
 		}
 	}
 }
 
-// w111ScopedReport is the scoped-report duty the four build steps carry
+// w111ScopedReport is the scoped-report duty the build steps carry
 // in their per-unit bar, phrase by phrase: the engine's JSON report, and
 // the commands chosen by their reported phase — never by reading a line
 // report's order, which is ambiguous when the full phase has several
 // commands.
 var w111ScopedReport = []string{
-	"Before reporting a unit green, also run the release-shipped engine's scoped report in each repo the unit touched: `<data-dir>/release/current/tools/verify-scope --json`",
-	"`<data-dir>` is `$POLYFORGE_DATA_DIR` when set, else `~/.local/share/polyforge`) from the repo clone, no other argument: the diff against `merge-base HEAD origin/<default>`.",
+	"Before reporting a unit green, also run the workflow's engine's scoped report in each repo the unit touched: `sh \"$PF_SHARED_DIR/scripts/verify-scope\" --json` (the engine in this lane's snapshot) from the repo clone, no other argument: the diff against `merge-base HEAD origin/<default>`.",
 	"Of its `commands` (the repo's `.polyforge/verify-scope.conf` or the engine's defaults decide them), run in order each whose `phase` is `fast` or `scoped` — its `cmd` via `bash -c`, its `timeout` as the explicit timeout — never one whose `phase` is `full` (scoped is not full).",
 	"A red there is a red fast check; one missing a `requires_env` or `requires_cmd` prerequisite is skipped and named in your artifact.",
 	"A failure confined to tests an earlier step committed red on purpose (this lane's authored or repro tests) is the work still to do, not a red fast check.",
@@ -212,7 +218,7 @@ var w111PositionalFull = []string{
 // reported phase, and keeps the full phase (and the full suite) out of it.
 func TestW111BuildStepsRunTheScopedReport(t *testing.T) {
 	for _, bs := range [][2]string{
-		{"feature-full", "code"}, {"chore", "code"}, {"bug-fix", "fix"}, {"autopilot", "fix"},
+		{"develop", "build"},
 	} {
 		bundle := filepath.Join(shippedWorkflowsDir, bs[0])
 		def, err := readStepDefinition(bundle, bs[1], shippedVars(t, bundle, bs[1]))
@@ -257,8 +263,10 @@ func TestW111NoSleepOutsideTheWaitingRule(t *testing.T) {
 			t.Errorf("%s carries \"sleep\" outside the waiting rule: …%s…", rel, hit)
 		}
 	}
-	// The rule's sentences are where the exemption assumes them.
-	for _, rel := range []string{"_shared/principles.md", "release/steps/deploy.md", "release/steps/release.md"} {
+	// The rule's sentences are where the exemption assumes them (the
+	// release steps no longer wait at all: their procedures are run
+	// requests,).
+	for _, rel := range []string{"_shared/principles.md"} {
 		for _, s := range w111RuleSentences {
 			if !strings.Contains(w111Flat(byRel[rel]), s) {
 				t.Errorf("%s lost the waiting rule's sentence %q", rel, s)
@@ -271,8 +279,8 @@ func TestW111NoSleepOutsideTheWaitingRule(t *testing.T) {
 	deploy := byRel["release/steps/deploy.md"]
 	for _, m := range []struct{ rel, text string }{
 		{"release/steps/deploy.md", deploy + "\nIf it is still running, `sleep 30` and check again.\n"},
-		{"release/steps/deploy.md", strings.Replace(deploy, "sleeps at most 3 s", "sleeps at most 30 s", 1)},
-		{"_shared/steps/verification.md", byRel["_shared/steps/verification.md"] + "\nno sleep posing as synchronization\n"},
+		{"_shared/principles.md", strings.Replace(byRel["_shared/principles.md"], "sleeps at most 3 s", "sleeps at most 30 s", 1)},
+		{"_shared/steps/review.md", byRel["_shared/steps/review.md"] + "\nno sleep posing as synchronization\n"},
 		{"_shared/principles.md", byRel["_shared/principles.md"] + "\nSleep a while between checks.\n"},
 	} {
 		if len(w111StraySleeps(m.rel, m.text)) == 0 {
@@ -305,8 +313,14 @@ func TestW111AgentsMDKeepsTheUpgradePinRule(t *testing.T) {
 	if at < 0 {
 		t.Fatal("AGENTS.md lost its coupled-obligations rule")
 	}
+	// The rule must come before the section's first fork-only block; a
+	// projected copy has no block left (the projection strips them), so
+	// there the whole section counts.
 	coupled := flat[at:]
-	if i := strings.Index(coupled, "<!-- fork-only:begin -->"); i < 0 || !strings.Contains(coupled[:i], "`docs/upgrade.md` is append-only") {
+	if i := strings.Index(coupled, "<!-- fork-only:begin -->"); i >= 0 {
+		coupled = coupled[:i]
+	}
+	if !strings.Contains(coupled, "`docs/upgrade.md` is append-only") {
 		t.Error("the pin rule belongs in AGENTS.md's coupled obligations, outside any fork-only block (both files it names are projected)")
 	}
 	pin, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(pinFile)))

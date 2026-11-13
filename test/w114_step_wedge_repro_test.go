@@ -36,20 +36,19 @@ import (
 	"time"
 )
 
-// w114Plan parks the first dispatch of grill and scripts the healthy
+// w114Plan parks the first dispatch of fix and scripts the healthy
 // continuation for every later ordinal, so a daemon that DOES detect the
 // wedge kills it, re-dispatches in place under the next ordinal, and the
 // workflow completes and wraps.
 func w114Plan() []map[string]any {
 	return []map[string]any{
-		// Ordinal 1: grill parks silently — open turn, then nothing:
+		// Ordinal 1: fix parks silently — open turn, then nothing:
 		// no envelope, no exit, no further record, indefinitely.
-		{"do": "envelope", "id": "grill", "park": true},
-		// Ordinals 2..5: the recovery continuation (grill resume) and
-		// the remaining steps, all healthy.
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "park": true},
+		// Ordinals 2..3: the recovery continuation (fix resume) and
+		// the remaining step, all healthy.
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	}
 }
 
@@ -58,9 +57,9 @@ func w114Plan() []map[string]any {
 func w114WaitParked(t *testing.T, d *v1Daemon, wi string) {
 	t.Helper()
 	capDir := d.capsuleDir(wi)
-	waitUntil(t, 30*time.Second, "the wedge never engaged (no park journal record for grill)", func() bool {
+	waitUntil(t, 30*time.Second, "the wedge never engaged (no park journal record for fix)", func() bool {
 		for _, rec := range fakeJournal(t, capDir) {
-			if rec["type"] == "park" && rec["step"] == "grill" {
+			if rec["type"] == "park" && rec["step"] == "fix" {
 				return true
 			}
 		}
@@ -109,7 +108,7 @@ func TestW114StepWedgeDetectedWithoutOperator(t *testing.T) {
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pf(t, "submit", wi)
 
-	// The wedge engages: grill's first dispatch parks (open turn, no
+	// The wedge engages: fix's first dispatch parks (open turn, no
 	// envelope, no exit, no transcript growth).
 	w114WaitParked(t, d, wi)
 	wedged := orphanPIDs(wi)
@@ -124,8 +123,8 @@ func TestW114StepWedgeDetectedWithoutOperator(t *testing.T) {
 		Evidence string `json:"evidence"`
 	}
 	eventBody(t, rec, &v)
-	if v.Cause != "model_hung" || v.Step != "grill" || v.Evidence == "" {
-		t.Fatalf("verdict %+v, want step_dead model_hung for grill with evidence.\nobserved state:\n%s",
+	if v.Cause != "model_hung" || v.Step != "fix" || v.Evidence == "" {
+		t.Fatalf("verdict %+v, want step_dead model_hung for fix with evidence.\nobserved state:\n%s",
 			v, w114WedgeDiagnostic(t, d, inst, wi))
 	}
 	// The driver's handling: one failure record, candidate switched (a
@@ -217,8 +216,8 @@ func TestW114StepWedgeOperatorKillRecovers(t *testing.T) {
 		t.Fatalf("step_failed = %+v, want exit_other/retry_same_model/resume/1", f)
 	}
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
-	spawns := waitSpawnCount(t, d, wi, 4, 60*time.Second)
-	if len(spawns) != 4 || spawns[1]["resume"] != true {
+	spawns := waitSpawnCount(t, d, wi, 3, 60*time.Second)
+	if len(spawns) != 3 || spawns[1]["resume"] != true {
 		t.Fatalf("the retry was not an in-place resume: %+v", spawns)
 	}
 	if n := countOf(d.eventKinds(t, wi), "step_dead"); n != 0 {

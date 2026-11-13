@@ -91,17 +91,17 @@ The interactive conversation: every reply, including status answers and error re
 
 ```
 好的，收到你的需求！我先梳理一下：这是一个升级依赖的任务。
-经过分析，我发现它属于执行意图，可以考虑 chore 或 feature-full 车道，
-不过具体要看是否有用户可见行为……要不我先帮你看看队列，
+经过分析，我发现它属于执行意图，可以考虑 develop 或 micro 车道，
+不过具体要看是否只改文本……要不我先帮你看看队列，
 如果有空位的话，要不要我帮你建票并提交执行呢？
 ```
 
 **Good** (first line = the decision, last line = one pastable action):
 
 ```
-下一步: 建票并提交 — 建议 chore 车道（内部维护、无新用户可见行为）。
-理由: 升级依赖不改对外行为，feature-full 的 e2e 车道是多余的。
-执行 1: pf file create --project polyforge --bundle chore --goal "升级 X 库"
+下一步: 建票并提交 — 建议 develop 车道（默认开发车道）。
+理由: 升级依赖会改代码和锁文件，不是纯文本，micro 车道不适用。
+执行 1: pf file create --project polyforge --bundle develop --goal "升级 X 库"
 执行 2: pf submit <上一步打印的 wi_…>
 ```
 
@@ -164,7 +164,7 @@ require.
 **Bad** (a prose conditional menu where the table belongs):
 
 ```
-这个问题想跟你确认一下。一方面可以走 chore 车道，另一方面 feature-full 也有它的
+这个问题想跟你确认一下。一方面可以走 develop 车道，另一方面 micro 也有它的
 好处，各有取舍……你看哪种更合适？
 ```
 

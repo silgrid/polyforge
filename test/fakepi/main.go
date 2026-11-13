@@ -156,18 +156,102 @@ func main() {
 	sc.Buffer(make([]byte, 1<<20), 8<<20)
 	for sc.Scan() {
 		var cmd struct {
-			ID      string `json:"id"`
-			Type    string `json:"type"`
-			Message string `json:"message"`
+			ID                string `json:"id"`
+			Type              string `json:"type"`
+			Message           string `json:"message"`
+			StreamingBehavior string `json:"streamingBehavior"`
 		}
-		if json.Unmarshal(sc.Bytes(), &cmd) != nil || cmd.Type != "prompt" {
+		if json.Unmarshal(sc.Bytes(), &cmd) != nil {
 			continue
 		}
-		drv.answerPrompt(cmd.ID, cmd.Message)
+		switch cmd.Type {
+		case "prompt":
+			drv.handlePrompt(cmd.ID, cmd.Message, cmd.StreamingBehavior)
+		case "steer", "follow_up":
+			// queued like the real harness; an open turn here never
+			// closes, so a queued message is never delivered (see
+			// handlePrompt)
+			drv.queueMessage(cmd.ID, cmd.Type, cmd.Message)
+		}
 	}
 	// stdin EOF (the daemon died): park alive — the crash drills need
 	// the WI agent to survive the parent's kill.
 	parkForever()
+}
+
+// handlePrompt routes one prompt command as pi 1.4.0 does (verified live,
+// see runtime/spawn.go SendMessage): idle, it starts a run (answerPrompt);
+// while a run is active — between the agent_start and agent_settled this
+// process emitted — a prompt without streamingBehavior is REFUSED with
+// pi's own error text, and one with it is queued. This fake has no model
+// behind a turn: the only runs that stay active are the open-turn shapes
+// (park, open_turn), which never close, so a queued message is
+// acknowledged, journaled and never delivered — exactly the gap the
+// delivery marker exists for.
+func (drv *driveEnv) handlePrompt(id, message, streamingBehavior string) {
+	if !isStreaming() {
+		drv.answerPrompt(id, message)
+		return
+	}
+	if streamingBehavior == "" {
+		emitRecord(map[string]any{
+			"id": id, "type": "response", "command": "prompt", "success": false,
+			"error": "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+		})
+		drv.journal("prompt_refused", map[string]any{"spawn_n": drv.spawnN, "id": id, "message": message})
+		return
+	}
+	drv.queueMessage(id, "prompt", message)
+}
+
+// queueMessage acknowledges a message that arrived while a run is active
+// (a prompt with streamingBehavior, a steer, a follow_up): the response
+// with disposition "queued" and a queue_update record, as the real
+// harness emits them. The message is delivered at the run's next turn
+// boundary (drainSteers, as pi hands a steering message to the model
+// after the current assistant turn's tool calls): the open-turn shapes
+// (park, open_turn) never reach one, so there a queued message is
+// acknowledged, journaled and never delivered — exactly the gap the
+// delivery marker exists for.
+func (drv *driveEnv) queueMessage(id, command, message string) {
+	emitRecord(map[string]any{
+		"id": id, "type": "response", "command": command, "success": true,
+		"data": map[string]any{"disposition": "queued"},
+	})
+	emitRecord(map[string]any{"type": "queue_update", "steering": []any{message}, "followUp": []any{}})
+	drv.journal("message_queued", map[string]any{"spawn_n": drv.spawnN, "id": id, "command": command, "message": message})
+	drv.mu.Lock()
+	drv.steers = append(drv.steers, queuedMessage{id: id, message: message})
+	drv.mu.Unlock()
+}
+
+// queuedMessage is one steering message waiting for a turn boundary.
+type queuedMessage struct{ id, message string }
+
+// drainSteers delivers the queued steering messages at a turn boundary
+// the way pi does: each one is handed to the model as a user message —
+// the stream's `message_start` with role user and the text verbatim (what
+// the daemon's delivery watch reads the marker from) — and recorded in
+// the session file first, as pi records a user message before the model
+// call. Journaled as message_delivered.
+func (drv *driveEnv) drainSteers() {
+	drv.mu.Lock()
+	queued := drv.steers
+	drv.steers = nil
+	drv.mu.Unlock()
+	for _, q := range queued {
+		drv.appendTranscript(map[string]any{"t": "user", "at": nowStamp(), "steer": true, "text": q.message})
+		emitUserMessage(q.message)
+		drv.journal("message_delivered", map[string]any{"spawn_n": drv.spawnN, "id": q.id, "message": q.message})
+	}
+}
+
+// emitUserMessage emits the stream record of a user message handed to
+// the model (pi: message_start, role user, the text as one text block).
+func emitUserMessage(text string) {
+	emitRecord(map[string]any{"type": "message_start", "message": map[string]any{
+		"role": "user", "content": []any{map[string]any{"type": "text", "text": text}},
+	}})
 }
 
 // answerPrompt answers one prompt command the way pi does: the command
@@ -178,31 +262,58 @@ func main() {
 // load the supervisor judged that greeting ended_without_result); any
 // other spawn answers with the plain greeting turn, a zero-signal spawn
 // with no turn at all. A second prompt to the same process gets the
-// greeting: the scripted turn fires once.
+// greeting: the scripted turn fires once. Every prompt is written to the
+// transcript as a user line first (the real harness records the user
+// message in the session file before the turn), which is what a delivery
+// check reads the message marker from.
 func (drv *driveEnv) answerPrompt(id, message string) {
 	emitRecord(map[string]any{
 		"id": id, "type": "response", "command": "prompt", "success": true,
+		"data": map[string]any{"disposition": "started"},
 	})
+	drv.promptsSeen++
 	drv.journal("prompt", map[string]any{
 		"spawn_n": drv.spawnN,
+		// the prompt's ordinal within THIS process: 1 is the dispatch's
+		// initial prompt, a later one is a message into the resident
+		// session
+		"n_in_session": drv.promptsSeen,
 		// the EWR feedback is the phrase shared by the
 		// full-prompt notice and the first same-session retry's short
-		// reminder (spawn.go). The old "envelope file is written"
-		// wording is gone; keep this in step with spawn.go.
-		"ended_without_result_hint": strings.Contains(message, "ended without submitting a result"),
+		// reminder (spawn.go, workflow contract 4: "ended without `pf
+		// step handoff`"); keep this in step with spawn.go.
+		"ended_without_result_hint": strings.Contains(message, "ended without `pf step handoff`"),
 		// polyforge#175: a fresh dispatch after a candidate switch
 		// (possibly from another harness) carries the previous
 		// transcript as read-only reference
 		"prompt_has_reference": strings.Contains(message, "Previous attempt (read-only reference)"),
 	})
+	drv.appendTranscript(map[string]any{"t": "user", "at": nowStamp(), "n_in_session": drv.promptsSeen, "text": message})
+	// the prompt handed to the model is a user message in the stream
+	// (the daemon's delivery watch reads an owner message's marker from
+	// it, PR 6d) — except on the zero-signal shape (Silent: rule 0's
+	// harness emits no work record at all)
+	if !drv.silentThisSpawn() {
+		emitUserMessage(message)
+	}
 	// the full prompt lands beside the journal (polyforge#21: the
 	// retry-shape scenarios assert the dispatched prompt; the claude
 	// persona already persists fakeclaude-prompt-<N>.txt, this is the
-	// pi twin). Best effort: a write failure never affects the run.
-	_ = os.WriteFile(filepath.Join("logs", "fakepi-prompt-"+strconv.Itoa(drv.spawnN)+".txt"), []byte(message), 0o644)
+	// pi twin). Best effort: a write failure never affects the run. Only
+	// the dispatch's initial prompt: a later message never overwrites it.
+	if drv.promptsSeen == 1 {
+		_ = os.WriteFile(filepath.Join("logs", "fakepi-prompt-"+strconv.Itoa(drv.spawnN)+".txt"), []byte(message), 0o644)
+	}
 	if act := drv.promptTurnAction(); act != nil && !drv.promptTurnDone {
 		drv.promptTurnDone = true
 		drv.emitScriptedTurn(*act)
+		return
+	}
+	if act := drv.currentAction(); drv.promptsSeen > 1 && act != nil && act.OnMessage != nil {
+		// a later message into the resident session (the owner-message
+		// relay, PR 6d): the scripted on_message turn, in this dispatch
+		drv.journal("on_message", map[string]any{"spawn_n": drv.spawnN, "n_in_session": drv.promptsSeen, "message": message})
+		drv.runEnvelopeAction(*act.OnMessage)
 		return
 	}
 	// the initial instruction: a plain assistant turn — unless this
@@ -286,7 +397,10 @@ func stopOf(errMsg string) string {
 	return "stop"
 }
 
-// emitRecord writes ONE protocol record to stdout (JSON + LF).
+// emitRecord writes ONE protocol record to stdout (JSON + LF) and keeps
+// the run-active flag the real harness's isStreaming stands for: set by
+// agent_start, cleared by agent_settled (the records this process emits
+// are the only runs it has).
 func emitRecord(rec map[string]any) {
 	raw, err := json.Marshal(rec)
 	if err != nil {
@@ -294,7 +408,24 @@ func emitRecord(rec map[string]any) {
 	}
 	outMu.Lock()
 	defer outMu.Unlock()
+	switch rec["type"] {
+	case "agent_start":
+		streaming = true
+	case "agent_settled":
+		streaming = false
+	}
 	fmt.Fprintln(stdout, string(raw))
+}
+
+// streaming: a run is active (guarded by outMu, see emitRecord).
+var streaming bool
+
+// isStreaming reports whether a run is active — pi's isStreaming, the
+// state that decides how a prompt command is taken (handlePrompt).
+func isStreaming() bool {
+	outMu.Lock()
+	defer outMu.Unlock()
+	return streaming
 }
 
 // stdout is where the records go (the package's tests capture it).

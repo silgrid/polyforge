@@ -8,17 +8,17 @@ package driver
 //
 // The reported failure: a step process is BORN at the capsule root
 // (runtime/spawn.go: cmd.Dir = CapsuleDir), but its own duty sends it
-// into the repo worktree — the repro step authors its failing test
-// under repos/<name>/**, the command-evidence rule's example shape is
-// `cd repos/<name> && go test ./...` — and every capsule-relative
-// artifact path the prompt names ("Write `artifacts/repro.md`", the
-// delivery contract's "written under `artifacts/`" rule, the handoff
-// convention path) is a BARE relative path. The prompt renders no
+// into the repo worktree — the develop build writes each unit's test and
+// implementation under repos/<name>/**, the command-evidence rule's
+// example shape is `cd repos/<name> && go test ./...` — and every
+// capsule-relative artifact path the prompt names ("Write
+// `artifacts/plan.md`", the delivery contract's "written under
+// `artifacts/`" rule) is a BARE relative path. The prompt renders no
 // absolute capsule root, so nothing anchors them: a step whose cwd has
 // drifted resolves them against its CURRENT cwd — the shell's rule —
 // and the write lands inside the repo worktree, where no downstream
-// reader (root-cause, verification, deliver — path convention against
-// the capsule root) ever looks.
+// reader (review, publish — path convention against the capsule root)
+// ever looks.
 //
 // The failing test fails for exactly the reported reason: the drifted
 // write lands the step's artifact at repos/<repo>/artifacts/<name> and
@@ -47,13 +47,14 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
 
-// materializeShippedBundle lands the shipped bug-fix bundle and the
-// shared definitions beside it under <capDir>/workflows/, exactly as
-// the runtime's claim materialization does (materialize.go: the
-// bundle, plus workflows/_shared when the checkout has it).
+// materializeShippedBundle lands the develop bundle (its build step is
+// the vehicle) and the shared definitions beside it under
+// <capDir>/workflows/, exactly as the runtime's claim materialization does
+// (materialize.go: the bundle, plus workflows/_shared when the checkout
+// has it).
 func materializeShippedBundle(t *testing.T, capDir string) {
 	t.Helper()
-	for _, piece := range []string{"bug-fix", workflow.SharedDir} {
+	for _, piece := range []string{"develop", workflow.SharedDir} {
 		copyTree(t, filepath.Join(shippedWorkflowsDir, piece), filepath.Join(capDir, capsule.DirWorkflows, piece))
 	}
 }
@@ -87,8 +88,8 @@ func copyTree(t *testing.T, src, dst string) {
 	}
 }
 
-// driftSpawn assembles the production prompt for the bug-fix bundle's
-// repro step — the very step shape the incidents ran (a fresh first
+// driftSpawn assembles the production prompt for the develop bundle's
+// build step — the very step shape the incidents ran (a fresh first
 // step whose declared output is a capsule-relative artifact path) — on
 // a production-shaped capsule: the materialized bundle, the
 // daemon-written runtime-state records the prompt assembly reads
@@ -102,18 +103,18 @@ func driftSpawn(t *testing.T) (params runtime.SpawnParams, capDir, repoDir strin
 	// the daemon-materialized records the prompt assembly reads
 	writeCapsuleFile(t, capDir, capsule.WorkItemJSON,
 		`{"id":"wi_drift","slug":"polyforge#244","project":"polyforge",`+
-			`"goal":"fix: capsule-relative artifact paths resolve against a drifting cwd","bundle_name":"bug-fix"}`)
+			`"goal":"fix: capsule-relative artifact paths resolve against a drifting cwd","bundle_name":"develop"}`)
 	writeCapsuleFile(t, capDir, capsule.RecalledMemoriesJSON,
 		`{"items":[{"id":"mem_old","type":"doc.review","title":"an old review","excerpt":"old context, not an instruction"}]}`)
 	// the task repo worktree: the drift target (the step's own duty —
-	// author the failing test under repos/<name>/** — runs there)
+	// each unit's test and implementation under repos/<name>/** — runs there)
 	repoDir = filepath.Join(capDir, capsule.DirRepos, "polyforge")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	sp := &captureSpawner{}
 	ad, err := NewStepSpawnAdapter(StepSpawnAdapter{
-		WI:           WIInfo{ID: "wi_drift", CapsuleDir: capDir, BundleName: "bug-fix", SessionHandle: "ab12cd34"},
+		WI:           WIInfo{ID: "wi_drift", CapsuleDir: capDir, BundleName: "develop", SessionHandle: "ab12cd34"},
 		Spawner:      sp,
 		PollInterval: time.Millisecond,
 	})
@@ -121,7 +122,7 @@ func driftSpawn(t *testing.T) (params runtime.SpawnParams, capDir, repoDir strin
 		t.Fatalf("NewStepSpawnAdapter: %v", err)
 	}
 	if _, err := ad.SpawnStep(context.Background(), StepSpawn{
-		StepID:  "repro",
+		StepID:  "build",
 		WIID:    "wi_drift",
 		SpawnN:  1,
 		Harness: harness.Pi,
@@ -152,8 +153,8 @@ func TestDriftedStepWriteLandsCapsuleArtifactInRepoWorktree(t *testing.T) {
 	prompt := p.InitialPrompt
 
 	// the artifact path this step's definition names (capsule-relative):
-	// "3. Write `artifacts/repro.md`" — the reproduction record
-	rel := capsule.DirArtifacts + "/repro.md"
+	// "4. Write `artifacts/plan.md`" — the plan
+	rel := capsule.DirArtifacts + "/plan.md"
 	// the drift: the agent's cwd sits in the repo worktree (its
 	// test-authoring duty runs there); the write resolves the way a
 	// shell resolves a bare relative path — against the CURRENT cwd —
@@ -165,18 +166,18 @@ func TestDriftedStepWriteLandsCapsuleArtifactInRepoWorktree(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(landed), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(landed, []byte("# repro record\n"), 0o644); err != nil {
+	if err := os.WriteFile(landed, []byte("# plan\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// downstream reads the artifact by capsule path convention —
 	// readCapsuleFile's jail: the capsule root joined with the
-	// capsule-relative path (root-cause, verification, deliver alike)
+	// capsule-relative path (review, publish alike)
 	capsulePath := filepath.Join(capDir, filepath.FromSlash(rel))
 	if _, err := os.ReadFile(capsulePath); err != nil {
 		t.Errorf("REPORTED FAILURE (polyforge#244): the step's artifact is ABSENT from its capsule path %s (%v) — "+
 			"the drifted write landed it at %s, inside the repo worktree. The assembled prompt names the artifact "+
-			"capsule-relatively (Write `artifacts/repro.md`; the delivery contract's written-under-`artifacts/` rule) "+
+			"capsule-relatively (Write `artifacts/plan.md`; the delivery contract's written-under-`artifacts/` rule) "+
 			"but renders no absolute capsule root, so a step whose cwd drifted into repos/<repo> resolves the write "+
 			"against its current cwd (the recurring pi#115 verification outputs, pi#119 grill drafts)",
 			capsulePath, err, landed)
@@ -190,7 +191,7 @@ func TestDriftedStepWriteLandsCapsuleArtifactInRepoWorktree(t *testing.T) {
 }
 
 // TestReproPromptAssemblyIsIntact: the controls, passing before and
-// after — the assembled prompt IS the real bug-fix repro step's (the
+// after — the assembled prompt IS the real develop build step's (the
 // definition's write duty, the contract's artifacts/ rule and the
 // memory duty all ride it) and the dispatch carries the capsule
 // identity (the birth cwd the spawner sets). The drifted-write test
@@ -199,12 +200,11 @@ func TestDriftedStepWriteLandsCapsuleArtifactInRepoWorktree(t *testing.T) {
 func TestReproPromptAssemblyIsIntact(t *testing.T) {
 	p, capDir, _ := driftSpawn(t)
 	for _, want := range []string{
-		"Write `artifacts/repro.md`",     // the definition's write duty
-		"written under `artifacts/`",     // the contract's artifacts rule
-		"# Project memory (`pf recall`)", // the memory duty rides the prompt
+		"Write `artifacts/plan.md`", // the definition's write duty
+		"`artifacts/<name>` means",  // the capsule-root binding of artifacts/ paths
 	} {
 		if !strings.Contains(p.InitialPrompt, want) {
-			t.Errorf("control: the assembled repro prompt must carry %q", want)
+			t.Errorf("control: the assembled build prompt must carry %q", want)
 		}
 	}
 	if p.CapsuleDir != capDir {

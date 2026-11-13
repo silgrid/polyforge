@@ -1,0 +1,9 @@
+#!/bin/sh
+# Stub govulncheck for the audit-deps unit tests: records its arguments and
+# replays a recorded `govulncheck -json` stream. W320_GOVULN_OUT names the
+# stdout file, W320_GOVULN_ERR an optional stderr file, W320_GOVULN_RC the
+# exit status.
+printf 'GOWORK=%s %s\n' "${GOWORK:-}" "$*" >>"${W320_STUB_ARGS:-/dev/null}"
+cat "$W320_GOVULN_OUT"
+[ -n "${W320_GOVULN_ERR:-}" ] && cat "$W320_GOVULN_ERR" >&2
+exit "${W320_GOVULN_RC:-0}"

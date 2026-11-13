@@ -2,55 +2,53 @@ package runtime
 
 // workspace_compose_test.go: the claim-time compose wiring — the
 // precedence runs ONCE per claim over the pinned bundle's
-// frontmatter (read from the daemon checkout) and the claim's workspace
+// workflow.yaml (read from the daemon checkout) and the claim's workspace
 // yaml, and the composed map rides the job.
 
 import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
-// frontmatterBundle writes a demo bundle whose workflow.md carries real
-// frontmatter (candidate layers) and answers the workflows dir.
-func frontmatterBundle(t *testing.T, frontmatter string) (workflowsDir string) {
+// laneBundle writes a demo bundle whose workflow.yaml carries real
+// candidate layers and answers the workflows dir.
+func laneBundle(t *testing.T, lane string) (workflowsDir string) {
 	t.Helper()
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "demo-bundle")
 	if err := os.MkdirAll(filepath.Join(bundle, "steps"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bundle, "workflow.md"), []byte(frontmatter), 0o644); err != nil {
+	lane = strings.Replace(lane, "name: demo-bundle\n", workflowtest.Header("demo-bundle"), 1)
+	if err := os.WriteFile(filepath.Join(bundle, workflow.WorkflowFile), []byte(lane), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bundle, "steps", "step.md"), []byte("do the thing\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	workflowtest.FillMissing(t, bundle)
 	return dir
 }
 
-const w079Frontmatter = `---
-name: demo-bundle
+const w079Lane = `name: demo-bundle
 defaults:
   model_candidates: [pi:prov/weak-a, pi:prov/weak-b]
 steps:
   - { id: grill }
   - { id: fix, model_candidates: [pi:prov/flash, pi:prov/glm] }
   - { id: release, model_candidates: [pi:prov/glm] }
----
-
-# demo
 `
 
-// A claim composes the effective lists from the bundle frontmatter and
+// A claim composes the effective lists from the bundle's workflow.yaml and
 // the workspace yaml, keyed by step id.
 func TestClaimComposeRidesTheJob(t *testing.T) {
 	setGitIdentity(t)
-	wfDir := frontmatterBundle(t, w079Frontmatter)
+	wfDir := laneBundle(t, w079Lane)
 	hub := newFakeHub()
 	ws := filepath.Join(t.TempDir(), "ws")
 	if err := os.MkdirAll(ws, 0o755); err != nil {
@@ -101,7 +99,7 @@ func TestClaimComposeRidesTheJob(t *testing.T) {
 // the driver's parsed step lists, so substitution is a no-op.
 func TestClaimComposeWithoutYamlIsBundleOnly(t *testing.T) {
 	setGitIdentity(t)
-	wfDir := frontmatterBundle(t, w079Frontmatter)
+	wfDir := laneBundle(t, w079Lane)
 	hub := newFakeHub()
 	ws := filepath.Join(t.TempDir(), "ws")
 	if err := os.MkdirAll(ws, 0o755); err != nil {
@@ -142,13 +140,14 @@ func TestClaimComposeWithoutYamlIsBundleOnly(t *testing.T) {
 }
 
 // liveCands answers the candidate lists the job's next dispatch composes
-// (polyforge#33: composition is live, nothing is snapshotted at claim).
+// (polyforge#33: the workspace yaml is read live, the lane from the
+// capsule's snapshot).
 func liveCands(t *testing.T, r *Runtime, j *job) map[string][]string {
 	t.Helper()
 	j.mu.Lock()
-	project, bundle := j.project, j.bundleName
+	capDir, project, bundle := j.capsuleDir, j.project, j.bundleName
 	j.mu.Unlock()
-	got, err := r.composeFor(project, bundle, r.loadManualModels(j.wi))()
+	got, err := r.composeFor(capDir, project, bundle, r.loadManualModels(j.wi))()
 	if err != nil {
 		t.Fatalf("dispatch-time composition: %v", err)
 	}

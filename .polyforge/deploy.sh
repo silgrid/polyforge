@@ -13,18 +13,39 @@
 #     deploy is redeployed by running this script again with the same
 #     version, never by cutting a new release of the same commit.
 #
-# Scope: the aihub SERVICE HOST only. Work machines are out of scope (they
-# re-run tools/install.sh, one at a time - printed at the end).
+# Scope: one component per run, chosen by --component:
+#   aihub   (the default - every invocation without --component means it) the
+#           aihub SERVICE HOST: everything below this list describes it.
+#   pi-web  the Pi Web package service on THIS machine: the package-level
+#           channel pi-web/deploy-piweb.sh installs exactly <version>'s
+#           silgrid-pi-web-<version>.tgz from the same GitHub Release
+#           (PIWEB_INSTALL_REPO=$GH_REPO, PIWEB_INSTALL_VERSION=<version>;
+#           download -> checksum -> npm install -g -> tmux service swap ->
+#           probes are the channel's) and restarts the service. No AIHub
+#           step runs at all: no AIHub preflight or required variable, no
+#           ssh, docker, compose, SQL, backup, lock or AIHub health probe.
+#           The installed version is read before (npm ls -g) and the state is
+#           reported from evidence: previous_version=, version=,
+#           state=deployed | not_changed (failed before the service swap: the
+#           old service runs untouched) | changed (the service was swapped
+#           but is not verified healthy, or a failure followed an install).
+#           --dry-run prints that plan and changes nothing; --force does not
+#           apply. deploy-piweb.sh stays the package's standalone path.
+# Reach: the release workflow's deploy step and a human operator, like the
+# aihub component; both need --confirm <version>.
+# Work machines are out of scope (they re-run tools/install.sh, one at a
+# time - printed at the end of an aihub deploy).
 #
 # What it does: promote an already-released version onto the aihub docker
 # service. The release (release.sh) publishes the aihub image to the PRIVATE
 # GHCR repo ghcr.io/silgrid/aihub:<tag> plus the release assets
 # (the one pf binary for linux-amd64, darwin-arm64,
-# darwin-amd64, aihub-image.digest, and SHA256SUMS covering those four; the
-# image is built from the linux pf and its entrypoint runs `pf aihub`). The
+# darwin-amd64, aihub-image.digest, the pi-web tarball,
+# SHA256SUMS covering those five and release-manifest.json; the image is
+# built from the linux pf and its entrypoint runs `pf aihub`). The aihub
 # deployer consumes the linux pf and the digest file; its checksum check
 # verifies exactly those (the darwin assets belong to work machines,
-# tools/install.sh). This
+# tools/install.sh; the tarball to the pi-web component). This
 # script runs on the DEPLOYER machine (which holds the GitHub / GHCR
 # credentials), pulls that image, verifies it, and ships it to the server with
 # `docker save | ssh docker load`: the server never holds GitHub credentials
@@ -128,13 +149,17 @@
 #     or rollback target.
 #
 # Usage:
-#   .polyforge/deploy.sh <version> --confirm <version> [--dry-run] [--force]
+#   .polyforge/deploy.sh <version> --confirm <version> [--component aihub|pi-web] [--dry-run] [--force]
+#     --component  aihub (default) or pi-web (see Scope above).
 #     --confirm  REQUIRED for a real deploy; must equal <version>. There is
 #                deliberately no prompt and no --yes.
 #     --dry-run  steps 0-1 run for real (strictly read-only on the server),
 #                steps 2-8 are printed as a plan; nothing is changed, no lock
 #                is taken. --confirm is not required (if given it must match).
-#     --force    allow re-deploying the running version / a downgrade. A
+#     --force    allow re-deploying the running version / a downgrade
+#                (versions are ordered as VLINE_AWK below states: SemVer
+#                precedence, so v0.2.0-<name>.2 is older than
+#                v0.2.0-<name>.10 and than v0.2.0). A
 #                downgrade across a deploy/sql version (a dir in (<version>,
 #                running]) is refused even with --force: no rollback SQL runs
 #                for a downgrade - roll the schema back by hand.
@@ -179,15 +204,34 @@
 # Environment (defaults):
 #   AIHUB_CONTAINER=aihub   BACKUP_ROOT=/data/polyforge-backups (local)
 #   GH_REPO=silgrid/polyforge   GHCR_IMAGE=ghcr.io/silgrid/aihub   AIHUB_PORT=8080   WAIT_SECS=60
+#   (GH_REPO must be the GitHub repo this checkout's origin names; when origin
+#   is not a github.com URL, DEPLOY_REMOTE_IS=<owner>/<repo> states it -
+#   anything else refuses before any work,)
 #   AIHUB_SERVICE=aihub
 #   DRAIN_SECS=15 (stop_grace_period; > aihub's own 10s drain)   MAX_DOWNTIME_SECS=20 (warn; > DRAIN_SECS)   UP_WAIT_SECS=120 (fail;
 #   covers aihub's one-time memory content migration at its first start)
 #   LOCK_WAIT_SECS=20
+#
+# --preflight [--component aihub|pi-web]: a READ-ONLY check of
+# this machine and the deploy target, run BEFORE a release is published (the
+# release workflow's release step runs it first), so a missing prerequisite
+# fails a release lane before a version is claimed instead of after it (#283:
+# the release and its audit passed, then the deploy died on "ssh ... failed
+# (BatchMode)"). It takes no version and needs no --confirm; it reads the same
+# environment / deploy.env, and reports EVERY problem it finds in one message:
+# aihub - the required variables, the local tools, gh's login, ssh BatchMode
+# to AIHUB_HOST, the server tools, docker compose and the running container;
+# pi-web - the package channel and its local tools. Exit 0 = ready, 1 = not
+# (nothing is changed either way: no download, lock, backup or docker call
+# that mutates).
 set -eu
 
-USAGE="usage: .polyforge/deploy.sh <version> --confirm <version> [--dry-run] [--force]"
+USAGE="usage: .polyforge/deploy.sh <version> --confirm <version> [--component aihub|pi-web] [--dry-run] [--force]
+       .polyforge/deploy.sh --preflight [--component aihub|pi-web]"
 TAG=""
+COMPONENT="aihub"
 DRY=""
+PREFLIGHT=""
 FORCE=""
 CONFIRM=""
 CONFIRM_SET=""
@@ -195,22 +239,35 @@ while [ $# -gt 0 ]; do
   a="$1"; shift
   case "$a" in
     --dry-run) DRY=1 ;;
+    --preflight) PREFLIGHT=1 ;;
     --force) FORCE=1 ;;
     --confirm)
       if [ $# -lt 1 ]; then echo "deploy: --confirm needs a value (the version again)" >&2; echo "$USAGE" >&2; exit 2; fi
       CONFIRM="$1"; CONFIRM_SET=1; shift ;;
     --confirm=*) CONFIRM="${a#--confirm=}"; CONFIRM_SET=1 ;;
+    --component)
+      if [ $# -lt 1 ]; then echo "deploy: --component needs a value (aihub or pi-web)" >&2; echo "$USAGE" >&2; exit 2; fi
+      COMPONENT="$1"; shift ;;
+    --component=*) COMPONENT="${a#--component=}" ;;
     --yes|-y) echo "deploy: --yes is not allowed - confirm with --confirm <version>" >&2; exit 2 ;;
-    -*) echo "deploy: unknown flag $a (use --confirm <version>, --dry-run, --force)" >&2; exit 2 ;;
+    -*) echo "deploy: unknown flag $a (use --confirm <version>, --component aihub|pi-web, --dry-run, --force)" >&2; exit 2 ;;
     *)
       if [ -n "$TAG" ]; then echo "deploy: more than one version given" >&2; exit 2; fi
       TAG="$a" ;;
   esac
 done
-if [ -z "$TAG" ]; then
+if [ -n "$PREFLIGHT" ]; then
+  if [ -n "$TAG$CONFIRM_SET$DRY$FORCE" ]; then echo "deploy: --preflight takes no version and no other flag than --component" >&2; echo "$USAGE" >&2; exit 2; fi
+elif [ -z "$TAG" ]; then
   echo "$USAGE" >&2
   exit 2
 fi
+case "$COMPONENT" in
+  aihub) ;;
+  pi-web) [ -z "$FORCE" ] || { echo "deploy: --force applies to the aihub component only" >&2; echo "$USAGE" >&2; exit 2; } ;;
+  *) echo "deploy: unknown component \"$COMPONENT\" (aihub or pi-web)" >&2; echo "$USAGE" >&2; exit 2 ;;
+esac
+if [ -z "$PREFLIGHT" ]; then
 case "$TAG" in
   v[0-9]*.[0-9]*.[0-9]*) ;;
   *) echo "deploy: tag must look like v<major>.<minor>.<patch> (got \"$TAG\")" >&2; exit 2 ;;
@@ -218,6 +275,7 @@ esac
 case "$TAG" in
   *[!A-Za-z0-9._-]*) echo "deploy: tag has unexpected characters (got \"$TAG\")" >&2; exit 2 ;;
 esac
+fi
 # The confirmation gate: a deploy happens because a person typed the version
 # twice, never because an automation decided to. Checked before ANY network work.
 if [ -n "$CONFIRM_SET" ] && [ "$CONFIRM" != "$TAG" ]; then
@@ -225,7 +283,7 @@ if [ -n "$CONFIRM_SET" ] && [ "$CONFIRM" != "$TAG" ]; then
   echo "$USAGE" >&2
   exit 1
 fi
-if [ -z "$DRY" ] && [ -z "$CONFIRM_SET" ]; then
+if [ -z "$DRY" ] && [ -z "$CONFIRM_SET" ] && [ -z "$PREFLIGHT" ]; then
   echo "deploy: REFUSED - a real deploy needs --confirm $TAG (no prompt, no --yes). Nothing was touched." >&2
   echo "$USAGE" >&2
   exit 1
@@ -243,6 +301,136 @@ if [ -n "${HOME:-}" ] && [ -f "$DEPLOY_ENV" ]; then
   set +a
   eval "$ENV_SNAPSHOT"   # the environment wins over the file
 fi
+GH_REPO="${GH_REPO:-silgrid/polyforge}"
+
+# The release a deploy downloads (gh -R GH_REPO) must be the one of the
+# repository this checkout's tags come from: an ambient
+# GH_REPO - an operator env file kept for another channel - must not send a
+# deploy to another repository's release of the same tag. Every configured
+# origin URL (url and pushurl) that is a github.com URL must name GH_REPO; a
+# URL this cannot read as one (another host, an ssh host alias, no origin)
+# refuses unless DEPLOY_REMOTE_IS=<owner>/<repo> states the repo, and that
+# must be GH_REPO too. Checked before any work (--preflight reports it).
+REPO_CHECK=""
+_dlc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+_ddir="$(dirname "$0")"
+_durls=$({ git -C "$_ddir" config --get-all remote.origin.url; git -C "$_ddir" config --get-all remote.origin.pushurl; } 2>/dev/null || true)
+_dunread=""
+for _u in $_durls; do
+  _r=$(printf '%s\n' "$_u" | sed 's#/*$##; s#\.git$##' | sed -n 's#^.*github\.com[:/]\([^/][^/]*/[^/][^/]*\)$#\1#p')
+  if [ -z "$_r" ]; then _dunread="$_dunread $_u"; continue; fi
+  if [ "$(_dlc "$_r")" != "$(_dlc "$GH_REPO")" ]; then
+    REPO_CHECK="this checkout's origin is $_r ($_u) but GH_REPO is $GH_REPO: a deploy downloads the release of the repository its tags come from - unset GH_REPO or set it to $_r"
+    break
+  fi
+done
+if [ -z "$REPO_CHECK" ]; then
+  [ -n "$_durls" ] || _dunread=" <no origin configured>"
+  if [ -n "$_dunread" ] && [ -z "${DEPLOY_REMOTE_IS:-}" ]; then
+    REPO_CHECK="cannot tell which GitHub repo this checkout's origin is ($_dunread ) - set DEPLOY_REMOTE_IS=<owner>/<repo> to state it (it must equal GH_REPO, $GH_REPO)"
+  elif [ -n "$_dunread" ] && [ "$(_dlc "$DEPLOY_REMOTE_IS")" != "$(_dlc "$GH_REPO")" ]; then
+    REPO_CHECK="this checkout's origin is $DEPLOY_REMOTE_IS (DEPLOY_REMOTE_IS) but GH_REPO is $GH_REPO"
+  fi
+fi
+if [ -n "$REPO_CHECK" ] && [ -z "$PREFLIGHT" ]; then
+  echo "deploy: REFUSED - $REPO_CHECK. Nothing was touched." >&2
+  exit 1
+fi
+
+# ------------------------------------------------------------- --preflight
+# (see the header): read-only, every problem in one message, then exit.
+if [ -n "$PREFLIGHT" ]; then
+  PF_PROBLEMS=""
+  pf_problem() { PF_PROBLEMS="$PF_PROBLEMS
+  - $*"; }
+  [ -z "$REPO_CHECK" ] || pf_problem "$REPO_CHECK"
+  pf_tools() {
+    _miss=""
+    for _c in "$@"; do command -v "$_c" >/dev/null 2>&1 || _miss="$_miss $_c"; done
+    [ -z "$_miss" ] || pf_problem "local tool(s) not on PATH:$_miss"
+  }
+  if [ "$COMPONENT" = pi-web ]; then
+    _ch="$(cd "$(dirname "$0")/.." && pwd)/pi-web/deploy-piweb.sh"
+    [ -f "$_ch" ] || pf_problem "the pi-web package channel $_ch is missing"
+    pf_tools gh npm tmux
+  else
+    _vars=""
+    for v in AIHUB_HOST AIHUB_DATA COMPOSE_FILE COMPOSE_PROJECT DEPLOY_LOCK_FILE; do
+      eval "[ -n \"\${$v:-}\" ]" || _vars="$_vars $v"
+    done
+    [ -z "$_vars" ] || pf_problem "required variable(s) unset:$_vars - set them in the environment or in $DEPLOY_ENV (see this script's header)"
+    pf_tools gh docker ssh scp rsync python3 sha256sum
+    if command -v gh >/dev/null 2>&1 && ! gh auth status >/dev/null 2>&1; then
+      pf_problem "gh is not logged in (gh auth status) - the deploy downloads the release assets of $GH_REPO with it"
+    fi
+    if [ -n "${AIHUB_HOST:-}" ]; then
+      pf_ssh() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$AIHUB_HOST" "$@"; }
+      if ! _e=$(pf_ssh true 2>&1); then
+        pf_problem "ssh to $AIHUB_HOST failed (BatchMode): $(printf '%s' "$_e" | tail -n 1) - the deploy needs non-interactive ssh: load the key into ssh-agent or name it in ~/.ssh/config for this host"
+      else
+        _cont="${AIHUB_CONTAINER:-aihub}"
+        # shellcheck disable=SC2016
+        _m="$(pf_ssh 'for c in docker python3 rsync flock curl; do command -v "$c" >/dev/null 2>&1 || printf "%s " "$c"; done' 2>/dev/null || true)"
+        [ -z "$_m" ] || pf_problem "required tool(s) missing on $AIHUB_HOST: $_m"
+        pf_ssh docker compose version >/dev/null 2>&1 || pf_problem "docker compose (v2 plugin) is not available on $AIHUB_HOST"
+        _st="$(pf_ssh docker inspect -f '{{.State.Status}}' "$_cont" 2>/dev/null || true)"
+        [ "$_st" = running ] || pf_problem "container $_cont on $AIHUB_HOST is ${_st:-absent}, not running"
+      fi
+    fi
+  fi
+  if [ -n "$PF_PROBLEMS" ]; then
+    echo "deploy: preflight FAILED for component $COMPONENT (read-only check; nothing was touched) - fix these before releasing:$PF_PROBLEMS" >&2
+    exit 1
+  fi
+  echo "deploy: preflight OK for component $COMPONENT${AIHUB_HOST:+ (target $AIHUB_HOST)}"
+  exit 0
+fi
+
+# ------------------------------------------------------- the pi-web component
+# (see Scope in the header): no AIHub step below this branch ever runs for it.
+if [ "$COMPONENT" = pi-web ]; then
+  PKG="@silgrid/pi-web"
+  CHANNEL="$(cd "$(dirname "$0")/.." && pwd)/pi-web/deploy-piweb.sh"
+  [ -f "$CHANNEL" ] || { echo "deploy: the pi-web package channel $CHANNEL is missing. Nothing was touched." >&2; exit 1; }
+  piweb_installed() {
+    npm ls -g "$PKG" --depth=0 2>/dev/null | sed -n 's|.*@silgrid/pi-web@\([0-9][0-9A-Za-z.+-]*\).*|\1|p' | head -n 1
+  }
+  PREV="$(piweb_installed)"
+  if [ -n "$DRY" ]; then
+    echo "deploy: --dry-run, component pi-web: nothing is changed. The plan:"
+    echo "  installed now: $PKG ${PREV:-absent}"
+    echo "  run: PIWEB_INSTALL_REPO=$GH_REPO PIWEB_INSTALL_VERSION=$TAG bash pi-web/deploy-piweb.sh"
+    echo "       (download silgrid-pi-web-$TAG.tgz + SHA256SUMS of release $TAG, verify the checksum,"
+    echo "        npm install -g it, swap and probe the tmux service; no AIHub step)"
+    echo "previous_version=${PREV:-absent}"
+    echo "version=$TAG"
+    echo "state=not_changed"
+    exit 0
+  fi
+  RC=0
+  PIWEB_INSTALL_REPO="$GH_REPO" PIWEB_INSTALL_VERSION="$TAG" bash "$CHANNEL" || RC=$?
+  echo "previous_version=${PREV:-absent}"
+  if [ "$RC" -eq 0 ]; then
+    echo "version=$TAG"
+    echo "state=deployed"
+    exit 0
+  fi
+  # The channel failed: judge the machine by evidence. Exit 3 is the
+  # channel's failed post-swap service probe (the service WAS replaced, even
+  # on a same-version redeploy); otherwise an unchanged install means the
+  # failure preceded the swap (the channel installs before it touches tmux).
+  NOW="$(piweb_installed)"
+  if [ "$RC" -ne 3 ] && [ "$NOW" = "$PREV" ]; then
+    echo "state=not_changed"
+    echo "deploy: pi-web $TAG failed before the service swap (exit $RC); the old service runs untouched - the reason is above." >&2
+    exit 1
+  fi
+  echo "installed_version=${NOW:-absent}"
+  echo "state=changed"
+  echo "deploy: pi-web $TAG failed after the service was swapped or the package installed (exit $RC); it is not verified healthy - the reason is above." >&2
+  exit 1
+fi
+
 MISSING=""
 for v in AIHUB_HOST AIHUB_DATA COMPOSE_FILE COMPOSE_PROJECT DEPLOY_LOCK_FILE; do
   eval "[ -n \"\${$v:-}\" ]" || MISSING="$MISSING $v"
@@ -253,7 +441,6 @@ if [ -n "$MISSING" ]; then
 fi
 AIHUB_CONTAINER="${AIHUB_CONTAINER:-aihub}"
 BACKUP_ROOT="${BACKUP_ROOT:-/data/polyforge-backups}"
-GH_REPO="${GH_REPO:-silgrid/polyforge}"
 AIHUB_PORT="${AIHUB_PORT:-8080}"
 WAIT_SECS="${WAIT_SECS:-60}"
 POLL_SECS="${POLL_SECS:-2}"
@@ -473,14 +660,52 @@ auto_rollback() {
   exit 10
 }
 
-# vcmp A B -> -1 / 0 / 1 comparing vMAJOR.MINOR.PATCH numerically.
+# The named version-line cutover: the unified product line
+# v0.2.x follows the retired internal v2.20.x line, so every version compare
+# below ranks a v0.2.x version above the whole retired line (VLINE_AWK maps
+# major 0 / minor 2 to major 1000). A running v2.20.x -> a v0.2.x target is
+# therefore an upgrade whose SQL plan is the tags in (running, target] by
+# that rank - the v0.2.x dirs only, never the retired v2.4.0..v2.20.x dirs
+# below the running version; every other downgrade (v0.2.2 -> v0.2.0,
+# v2.20.22 -> v0.1.9) is still a downgrade. Delete VLINE_AWK's mapping
+# together with .polyforge/release.sh's CUTOVER_* branches, once no v2.20.x
+# release is the current line anywhere (every deployed aihub and installed
+# pf runs v0.2.x).
+# vord(a, b) -> -1 / 0 / 1 orders two release versions vX.Y.Z[-<pre>] by
+# SemVer 2.0 precedence (build metadata +... ignored): the line-mapped core
+# numerically, then a pre-release below its core release, pre-release
+# identifiers one by one (numeric ones as numbers and below alphanumeric
+# ones, alphanumeric ones in ASCII order - run awk under LC_ALL=C - a shorter
+# prefix first). So v0.2.0-<name>.9 < v0.2.0-<name>.10 < v0.2.1-<name>.1 <
+# v0.2.1, and v0.2.0-<name>.1 is older than v0.2.12.
+VLINE_AWK='function vid(x, y,  xn, yn) {
+      xn = x ~ /^[0-9]+$/; yn = y ~ /^[0-9]+$/
+      if (xn && yn) return (x + 0 < y + 0) ? -1 : (x + 0 > y + 0)
+      if (xn) return -1
+      if (yn) return 1
+      return ((x "") < (y "")) ? -1 : ((x "") > (y ""))
+    }
+    function vord(a, b,  i, x, y, pa, pb, na, nb, r) {
+      sub(/^v/, "", a); sub(/\+.*/, "", a); sub(/^v/, "", b); sub(/\+.*/, "", b)
+      pa = ""; i = index(a, "-"); if (i) { pa = substr(a, i + 1); a = substr(a, 1, i - 1) }
+      pb = ""; i = index(b, "-"); if (i) { pb = substr(b, i + 1); b = substr(b, 1, i - 1) }
+      split(a, x, "."); split(b, y, ".")
+      if (x[1] + 0 == 0 && x[2] + 0 == 2) x[1] = 1000
+      if (y[1] + 0 == 0 && y[2] + 0 == 2) y[1] = 1000
+      for (i = 1; i <= 3; i++) { if (x[i] + 0 < y[i] + 0) return -1; if (x[i] + 0 > y[i] + 0) return 1 }
+      if (pa == pb) return 0
+      if (pa == "") return 1
+      if (pb == "") return -1
+      na = split(pa, x, "."); nb = split(pb, y, ".")
+      for (i = 1; i <= na && i <= nb; i++) { r = vid(x[i], y[i]); if (r) return r }
+      return (na < nb) ? -1 : (na > nb)
+    }'
+
+# vcmp A B -> -1 / 0 / 1 ordering two release versions (line-aware SemVer
+# precedence, see VLINE_AWK).
 vcmp() {
-  awk -v a="$1" -v b="$2" 'BEGIN {
-    sub(/^v/, "", a); sub(/^v/, "", b); sub(/[-+].*/, "", a); sub(/[-+].*/, "", b)
-    n = split(a, x, "."); m = split(b, y, ".")
-    for (i = 1; i <= 3; i++) { p = x[i] + 0; q = y[i] + 0
-      if (p < q) { print -1; exit } if (p > q) { print 1; exit } }
-    print 0 }'
+  LC_ALL=C awk -v a="$1" -v b="$2" "$VLINE_AWK"'
+  BEGIN { print vord(a, b) }'
 }
 
 # ---- upgrade SQL (deploy/sql/<TAG>/{upgrade,rollback,probe}.sql plus the
@@ -499,17 +724,21 @@ sql_candidate_versions() {
   sql_tags_between "$OLDVER" "$TAG"
 }
 
-# sql_tags_between <lo> <hi>: the LOCAL release tags in (lo, hi], ascending.
-# Only the target tag must exist locally (checked in step 0); lo is just a
-# numeric bound, so a running version whose tag is absent locally is fine.
+# sql_tags_between <lo> <hi>: the LOCAL release tags in (lo, hi], ascending
+# (line-aware SemVer precedence, see VLINE_AWK). Only the target tag must
+# exist locally (checked in step 0); lo is just a bound, so a running version
+# whose tag is absent locally is fine.
 sql_tags_between() {
-  git -C "$SCRIPT_DIR" tag -l 'v*' | awk -v old="${1#v}" -v new="${2#v}" '
-    function num(s,  a) { sub(/[-+].*/, "", s); split(s, a, "."); return a[1] * 1000000 + a[2] * 1000 + a[3] + 0 }
-    { v = $0; sub(/^v/, "", v)
-      if (v !~ /^[0-9]+\.[0-9]+\.[0-9]+/) next
-      n = num(v)
-      if (n > num(old) && n <= num(new)) printf "%012d %s\n", n, v }' \
-    | sort -n | awk '{print "v" $2}'
+  git -C "$SCRIPT_DIR" tag -l 'v*' | LC_ALL=C awk -v old="$1" -v new="$2" "$VLINE_AWK"'
+    $0 ~ /^v[0-9]+\.[0-9]+\.[0-9]+/ && vord($0, old) > 0 && vord($0, new) <= 0 { t[++n] = $0 }
+    END {
+      for (i = 2; i <= n; i++) {
+        k = t[i]
+        for (j = i - 1; j >= 1 && vord(t[j], k) > 0; j--) t[j + 1] = t[j]
+        t[j + 1] = k
+      }
+      for (i = 1; i <= n; i++) print t[i]
+    }'
 }
 
 # sql_fetch <ver> <file> <dest>: copy the version's SQL file into <dest>

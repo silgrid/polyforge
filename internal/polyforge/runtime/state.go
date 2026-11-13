@@ -182,13 +182,12 @@ type jobRecord struct {
 
 // Origin kinds.
 const (
-	OriginChat = "chat" // interactive submit — a harness chat when ChatID is set, a chat-less manual submit when it is empty
+	OriginChat = "chat" // interactive submit (the kind's name predates; no chat is recorded)
 	OriginAuto = "auto" // auto-claim (pf ops auto on)
 )
 
 // Origin is the record of where a job came from (the one wire shape,
-// protocol.Origin). ChatID is a notification label, not a credential.
-// Owner may be empty (unknown).
+// protocol.Origin). Owner may be empty (unknown).
 type Origin = protocol.Origin
 
 func (j *job) record() *jobRecord {

@@ -1,22 +1,27 @@
 package test
 
-// w115_verify_run_acceptance_test.go: `pf verify-run`, the verification
-// step's mechanical half, driven end to end through the real pf binary
+// w115_verify_run_acceptance_test.go: the mechanical bar — the workflow
+// script workflows/_shared/scripts/verify.py since (the
+// light bar pf-verify ran, verifyrun.Run, before it) — driven end to end
 // over a throwaway capsule: a Go task repo cloned from a bare origin, a
 // fake scope engine answering a canned `--json` report (a script beside
-// the test, the way fakepi stands in for a model), and real `go test`
-// runs through the green, red, flaky and pre-existing paths.
+// the test, the way fakepi stands in for a model), and real `go test` runs
+// through the green, red, flaky and pre-existing paths, on the light tier
+// and on the host (no repo carries a Dockerfile.verify; a `docker` that
+// answers nothing keeps the host's engine out). (The daemon's verify
+// action that also ran it in-process, with its merge phase, test bar and
+// command evidence, left with workflow contract v2 change 16.)
 //
 // Run (targeted): GOWORK=off go test ./test/ -run 'W115' -count=1 -v
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // w115Result is the slice of result.json the scenarios assert on.
@@ -27,18 +32,7 @@ type w115Result struct {
 	Checks            []struct {
 		Name, Status, Detail string
 	} `json:"checks"`
-	PreExisting []string `json:"pre_existing_failures"`
-	TestBar     []struct {
-		Repo, Command string
-	} `json:"test_bar"`
-	CommandEvidence []struct {
-		Argv       []string `json:"argv"`
-		Cwd        string   `json:"cwd"`
-		ExitCode   int      `json:"exit_code"`
-		StartedAt  string   `json:"started_at"`
-		DurationMs int64    `json:"duration_ms"`
-		LogPath    string   `json:"log_path"`
-	} `json:"command_evidence"`
+	PreExisting   []string `json:"pre_existing_failures"`
 	MergeOutcomes map[string]struct {
 		Outcome string `json:"outcome"`
 		Touched bool   `json:"touched"`
@@ -47,11 +41,7 @@ type w115Result struct {
 	Units []struct {
 		Repo, Check, Kind, Name, File, Status, Detail string
 	} `json:"units"`
-	BoundScenarios []struct {
-		Title, Status, Detail string
-	} `json:"bound_scenarios"`
-	UnboundTitles []string        `json:"unbound_titles"`
-	ConfChanged   map[string]bool `json:"conf_changed_in_diff"`
+	ConfChanged map[string]bool `json:"conf_changed_in_diff"`
 }
 
 func (r *w115Result) check(t *testing.T, name string) (status, detail string) {
@@ -146,7 +136,7 @@ func w115Capsule(t *testing.T, repos map[string]map[string]string) (string, map[
 		ids[name] = w115Git(t, clone, "rev-parse", "HEAD")
 		seeds[name] = seed
 	}
-	raw, _ := json.Marshal(map[string]any{"work_item_id": "wi_w115", "bundle_name": "feature-full", "repos": ids})
+	raw, _ := json.Marshal(map[string]any{"work_item_id": "wi_w115", "bundle_name": "develop", "repos": ids})
 	w115Write(t, capsuleDir, map[string]string{"capsule.json": string(raw)})
 	return capsuleDir, seeds
 }
@@ -166,7 +156,7 @@ func w115Engine(t *testing.T, conf map[string]bool, cmds map[string][][3]string)
 		raw, _ := json.Marshal(map[string]any{"schema": 1, "root": "/x", "stack": "go", "analyzer": "go",
 			"conf": "present", "conf_changed_in_diff": conf[repo], "base": "b", "head": "h", "default_branch": "main",
 			"mode": "full", "paths": []string{"calc.go"}, "commands": commands,
-			"test_glob": []string{}, "base_setup": []string{}, "runner": nil, "ci_evidence": []string{}, "diagnostics": []string{}})
+			"test_glob": []string{}, "base_setup": []string{}, "runner": nil, "diagnostics": []string{}})
 		w115Write(t, dir, map[string]string{repo + ".json": string(raw)})
 	}
 	script := "#!/bin/bash\nf=\"$(dirname \"$0\")/$(basename \"$PWD\").json\"\n[ -f \"$f\" ] || { echo \"no report for $PWD\" >&2; exit 3; }\ncat \"$f\"\n"
@@ -177,40 +167,54 @@ func w115Engine(t *testing.T, conf map[string]bool, cmds map[string][][3]string)
 	return p
 }
 
-// w115Run runs `pf verify-run` at the capsule root and reads result.json.
+// w115Run runs the light mechanical bar over the capsule (python3
+// verify.py --tier light, its logs in the capsule's runtime-state/verify)
+// and reads its result.json; its second answer summarizes the run for
+// failure messages.
 func w115Run(t *testing.T, capsuleDir, engine string, env ...string) (*w115Result, string) {
 	t.Helper()
-	bins := v1Bins(t)
-	c := exec.Command(filepath.Join(bins, "pf"), "verify-run", "--tier", "full", "--engine", engine)
-	c.Dir = capsuleDir
-	// the outer harness's own selection must not leak into the fixture's
-	c.Env = append(append(os.Environ(), "E2E_RUN=", "E2E_SKIP="), env...)
-	out, err := c.CombinedOutput()
+	py, err := exec.LookPath("python3")
 	if err != nil {
-		t.Fatalf("pf verify-run: %v\n%s", err, out)
+		t.Skip("python3 not installed")
 	}
-	var resultPath string
-	for _, l := range strings.Split(string(out), "\n") {
-		if p, ok := strings.CutPrefix(l, "verify-run: result "); ok {
-			resultPath = filepath.Join(capsuleDir, p)
-		}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
+	cmd := exec.Command(py, "-B", filepath.Join(v1Root(t), "workflows", "_shared", "scripts", "verify.py"),
+		"--tier", "light", "--capsule", capsuleDir, "--engine", engine, "--deadline", "10m", "--json")
+	// the outer harness's own selection must not leak into the fixture's
+	cmd.Env = append(append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "E2E_RUN=", "E2E_SKIP="), env...)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	runErr := cmd.Run()
+	var printed struct {
+		ExitCode int    `json:"exit_code"`
+		Summary  string `json:"summary"`
+		Details  struct {
+			Result string `json:"result"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &printed); err != nil || printed.Details.Result == "" {
+		t.Fatalf("verify.py printed no result (%v): %v\n%s\n%s", runErr, err, stdout.String(), stderr.String())
+	}
+	resultPath := filepath.Join(capsuleDir, filepath.FromSlash(printed.Details.Result))
 	raw, err := os.ReadFile(resultPath)
 	if err != nil {
-		t.Fatalf("result.json (%q): %v\n%s", resultPath, err, out)
+		t.Fatalf("result.json (%q): %v", resultPath, err)
 	}
 	var res w115Result
 	if err := json.Unmarshal(raw, &res); err != nil {
 		t.Fatalf("result.json: %v\n%s", err, raw)
 	}
-	return &res, string(out)
+	return &res, fmt.Sprintf("exit %d: %s (result %s)\n%s", printed.ExitCode, printed.Summary, printed.Details.Result, stderr.String())
 }
 
-// TestW115GreenBarUntouchedRepoAndBindings: a touched repo merged with a
-// moved default branch runs its whole plan green; an untouched repo runs
-// no bar; the bound scenario resolves from its own authored run; the
-// evidence has the envelope's shape and every log stays out of artifacts/.
-func TestW115GreenBarUntouchedRepoAndBindings(t *testing.T) {
+// TestW115GreenBarUntouchedRepo: a touched repo runs its whole plan green
+// at HEAD — a default branch that moved on origin is not taken in (the
+// sync step merges, the bar verifies the tree as it stands); an untouched
+// repo runs no bar; every log stays out of artifacts/.
+func TestW115GreenBarUntouchedRepo(t *testing.T) {
 	capsuleDir, seeds := w115Capsule(t, map[string]map[string]string{"app": w115Base, "docs": {"README.md": "docs\n"}})
 	app := filepath.Join(capsuleDir, "repos", "app")
 	w115Commit(t, app, map[string]string{"calc_test.go": `package w115app
@@ -227,15 +231,9 @@ func TestAdds(t *testing.T) {
 	fmt.Println("PASS S1")
 }
 `}, "feature")
+	head := w115Git(t, app, "rev-parse", "HEAD")
 	w115Commit(t, seeds["app"], map[string]string{"NOTES.md": "upstream moved\n"}, "upstream")
 	w115Git(t, seeds["app"], "push", "-q", "origin", "main")
-	bound := "go test -count=1 -v -run '^TestAdds$' ./..."
-	execJSON, _ := json.Marshal(map[string]any{"steps": map[string]any{"e2e-author": map[string]any{"status": "done", "output": map[string]any{
-		"scenario_titles": []string{"S1 adds", "S2 is a document"},
-		"test_files":      []string{"calc_test.go"},
-		"bindings":        []map[string]string{{"title": "S1 adds", "repo": "app", "command": bound, "unit": "TestAdds", "marker": "^PASS S1$"}},
-	}}}})
-	w115Write(t, capsuleDir, map[string]string{"runtime-state/execution.json": string(execJSON)})
 	engine := w115Engine(t, map[string]bool{"app": true}, map[string][][3]string{"app": {
 		{"fast-1", "fast", "go vet ./..."}, {"full-1", "full", "go test -count=1 ./..."}}})
 
@@ -243,50 +241,23 @@ func TestAdds(t *testing.T) {
 	if res.MechanicalVerdict != "pass" || res.Incomplete != "" {
 		t.Fatalf("verdict %q incomplete %q: %s\n%s", res.MechanicalVerdict, res.Incomplete, res.FailReason, out)
 	}
-	if m := res.MergeOutcomes["app"]; m.Outcome != "merge-commit" || !m.Touched {
+	if m := res.MergeOutcomes["app"]; m.Outcome != "none" || !m.Touched {
 		t.Errorf("app merge = %+v", m)
 	}
-	if m := res.MergeOutcomes["docs"]; m.Outcome != "up-to-date" || m.Touched {
+	if got := w115Git(t, app, "rev-parse", "HEAD"); got != head {
+		t.Errorf("the bar moved HEAD to %s: it merges nothing", got)
+	}
+	if m := res.MergeOutcomes["docs"]; m.Outcome != "none" || m.Touched {
 		t.Errorf("docs merge = %+v", m)
 	}
-	for name, want := range map[string]string{"app:fast-1": "pass", "app:full-1": "pass", "app:authored-1": "pass",
-		"docs:untouched": "skipped", "app:conf-changed": "skipped", "app:no-untracked-test-files": "pass", "test-files-present": "pass"} {
+	for name, want := range map[string]string{"app:fast-1": "pass", "app:full-1": "pass",
+		"docs:untouched": "skipped", "app:conf-changed": "skipped", "app:no-untracked-test-files": "pass"} {
 		if got, detail := res.check(t, name); got != want {
 			t.Errorf("check %s = %s (%s), want %s", name, got, detail, want)
 		}
 	}
-	wantBar := []string{"go vet ./...", "go test -count=1 ./...", bound}
-	if len(res.TestBar) != len(wantBar) {
-		t.Fatalf("test_bar = %+v", res.TestBar)
-	}
-	for i, w := range wantBar {
-		if res.TestBar[i].Repo != "app" || res.TestBar[i].Command != w {
-			t.Errorf("test_bar[%d] = %+v, want app %q", i, res.TestBar[i], w)
-		}
-	}
-	if len(res.BoundScenarios) != 1 || res.BoundScenarios[0].Status != "pass" || len(res.UnboundTitles) != 1 || res.UnboundTitles[0] != "S2 is a document" {
-		t.Errorf("bound %+v unbound %v", res.BoundScenarios, res.UnboundTitles)
-	}
-	var bash int
-	for _, e := range res.CommandEvidence {
-		if len(e.Argv) == 0 || e.DurationMs < 1 || !strings.HasPrefix(e.LogPath, "runtime-state/verify/1/") {
-			t.Errorf("evidence %+v", e)
-		}
-		if _, err := time.Parse(time.RFC3339, e.StartedAt); err != nil {
-			t.Errorf("started_at %q is not RFC3339", e.StartedAt)
-		}
-		if e.Argv[0] == "bash" && e.Argv[1] == "-c" {
-			bash++
-			if e.Cwd != "repos/app" {
-				t.Errorf("bar evidence cwd %q", e.Cwd)
-			}
-		}
-	}
-	if bash != 3 {
-		t.Errorf("bash -c evidence entries = %d, want the 3 bar commands", bash)
-	}
 	if _, err := os.Stat(filepath.Join(capsuleDir, "artifacts")); err == nil {
-		t.Error("pf verify-run wrote under artifacts/")
+		t.Error("the mechanical bar wrote under artifacts/")
 	}
 	if raw, err := os.ReadFile(filepath.Join(capsuleDir, "runtime-state", "verify", "1", "report-mechanical.md")); err != nil || !strings.Contains(string(raw), "Mechanical verdict: **pass**") {
 		t.Errorf("report-mechanical.md: %v\n%s", err, raw)
@@ -360,13 +331,6 @@ func TestWobbly(t *testing.T) {
 	if st, _ := res.unit(t, "TestWobbly"); st != "flaky" {
 		t.Errorf("TestWobbly = %s", st)
 	}
-	var rerun bool
-	for _, e := range res.CommandEvidence {
-		rerun = rerun || (len(e.Argv) == 3 && strings.Contains(e.Argv[2], "-run '^TestWobbly$'"))
-	}
-	if !rerun {
-		t.Error("the targeted re-run carries no command evidence")
-	}
 }
 
 // TestW115PreExistingFailureProvenOnBase: a test failing on the base the
@@ -386,7 +350,12 @@ func TestW115PreExistingFailureProvenOnBase(t *testing.T) {
 	if res.MechanicalVerdict != "pass" {
 		t.Fatalf("verdict %q: %s\n%s", res.MechanicalVerdict, res.FailReason, out)
 	}
+	// the light tier names its baseline (the merge-base, the base itself
+	// on a tree verified as it stands) by its short sha
 	baseSHA := res.MergeOutcomes["app"].Base
+	if len(baseSHA) > 12 {
+		baseSHA = baseSHA[:12]
+	}
 	// go test proves nothing about its own completion: the explained
 	// failure is confirmed by re-running the whole command in its skip form
 	if st, d := res.check(t, "app:full-1"); st != "pre_existing" || !strings.Contains(d, baseSHA) ||
@@ -396,13 +365,11 @@ func TestW115PreExistingFailureProvenOnBase(t *testing.T) {
 	if len(res.PreExisting) != 1 || res.PreExisting[0] != "old_test.go: TestOld" {
 		t.Errorf("pre_existing_failures = %v", res.PreExisting)
 	}
-	if len(res.TestBar) != 1 || res.TestBar[0].Command != "go test -count=1 ./... -skip '^(TestOld)$'" {
-		t.Fatalf("test_bar = %+v", res.TestBar)
-	}
-	c := exec.Command("bash", "-c", res.TestBar[0].Command)
+	// the skip form the confirming re-run ran passes on its own too
+	c := exec.Command("bash", "-c", "go test -count=1 ./... -skip '^(TestOld)$'")
 	c.Dir = app
 	if out, err := c.CombinedOutput(); err != nil {
-		t.Errorf("the derived test-bar command fails: %v\n%s", err, out)
+		t.Errorf("the skip form fails: %v\n%s", err, out)
 	}
 	if list := w115Git(t, app, "worktree", "list"); strings.Count(list, "\n") != 0 {
 		t.Errorf("the base worktree was not removed:\n%s", list)
@@ -519,10 +486,9 @@ func TestW115HarnessPreExistingSkipsWithE2ESkip(t *testing.T) {
 	if len(res.PreExisting) != 1 || res.PreExisting[0] != "old_test.go: TestOld" {
 		t.Errorf("pre_existing_failures = %v", res.PreExisting)
 	}
-	if len(res.TestBar) != 1 || res.TestBar[0].Command != "E2E_SKIP='^(TestOld)$' sh harness.sh" {
-		t.Fatalf("test_bar = %+v", res.TestBar)
-	}
-	c := exec.Command("bash", "-c", res.TestBar[0].Command)
+	// the harness's skip form (verifyrun's skipForm) passes and counts the
+	// exclusion
+	c := exec.Command("bash", "-c", "E2E_SKIP='^(TestOld)$' sh harness.sh")
 	c.Dir = app
 	c.Env = append(os.Environ(), "E2E_RUN=")
 	if out, err := c.CombinedOutput(); err != nil || !strings.Contains(string(out), "1 excluded by E2E_SKIP") {

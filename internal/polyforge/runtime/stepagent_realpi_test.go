@@ -158,9 +158,7 @@ func realPiToolInventory(t *testing.T, h AgentHandle) map[string]bool {
 	}
 	out := filepath.Join(t.TempDir(), "export.html")
 	blob, _ := json.Marshal(map[string]string{"id": "pf-tools", "type": "export_html", "outputPath": out})
-	p.mu.Lock()
-	_, err := p.stdin.Write(append(blob, '\n'))
-	p.mu.Unlock()
+	err := p.writeLine("", append(blob, '\n'))
 	if err != nil {
 		t.Fatalf("export_html command: %v", err)
 	}

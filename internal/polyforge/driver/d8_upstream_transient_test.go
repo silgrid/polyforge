@@ -4,19 +4,14 @@ package driver
 // wi_seWTgHeKtaa8.
 // An upstream's OCCASIONAL return corruption — truncated tool-call
 // arguments, an empty response, a dropped connection — is NOT a
-// model-class death: the same model is retried under the D7 backoff,
-// bounded at UpstreamTransientRetryBound; past the bound the attempt
-// archives as a model-class death and switches candidates. Allowance /
+// model-class death: the same model is retried under the transient
+// backoff (design #483 §7: 1s doubling to 3m, never counted, no retry
+// bound but the step's cumulative T). Allowance /
 // auth / model-name texts keep the immediate switch (the existing D7
 // tests pin those); pure throttle texts keep their own class.
 
 import (
-	"context"
 	"testing"
-	"time"
-
-	"github.com/silgrid/polyforge/internal/common/capsule"
-	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 // TestD8TransientTextsClassifyUpstreamTransient: the transient
@@ -74,84 +69,6 @@ func errWithText(text string) error {
 type textError struct{ s string }
 
 func (e *textError) Error() string { return e.s }
-
-// TestD8TransientStreakResetsOnAnotherCause: the bound's ledger counts
-// only the TRAILING consecutive transients.
-func TestD8TransientStreakResetsOnAnotherCause(t *testing.T) {
-	att := func(cause string) capsule.Attempt {
-		return capsule.Attempt{Cause: CauseInfraFailure, FailureCause: cause}
-	}
-	cases := []struct {
-		name string
-		in   []capsule.Attempt
-		want int
-	}{
-		{"none", nil, 0},
-		{"one", []capsule.Attempt{att(FailUpstreamTransient)}, 1},
-		{"two", []capsule.Attempt{att(FailUpstreamTransient), att(FailUpstreamTransient)}, 2},
-		{"interrupted", []capsule.Attempt{att(FailUpstreamTransient), att(FailExitOther), att(FailUpstreamTransient)}, 1},
-		{"trailing other", []capsule.Attempt{att(FailUpstreamTransient), att(FailExitModel)}, 0},
-	}
-	for _, tc := range cases {
-		if got := upstreamTransientStreak(tc.in); got != tc.want {
-			t.Errorf("%s: streak %d, want %d", tc.name, got, tc.want)
-		}
-	}
-}
-
-// TestD8TransientArchiveLedgerAndSwitch: three consecutive transients —
-// the first two archive upstream_transient and retry the same model
-// (counter untouched, the retry pacing's backoff imposed, booked into T),
-// the third archives exit_model_class and switches. The archive alone
-// answers the remaining bound.
-func TestD8TransientArchiveLedgerAndSwitch(t *testing.T) {
-	var slept []time.Duration
-	env := newChainEnv(t, func(c *Config) {
-		c.Sleep = func(_ context.Context, d time.Duration) { slept = append(slept, d) }
-	}, "s", "a", "b")
-	text := "Upstream tool call has incomplete or invalid JSON arguments"
-	env.sp.script = []fakeEntry{
-		exitErr(1, text, true),
-		exitErr(1, text, true),
-		exitErr(1, text, true),
-		done(`{"ok":true}`),
-	}
-	if err := env.d.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	x := env.exec(t)
-	if x.WorkflowStatus != StatusCompleted {
-		t.Fatalf("the transient-bounded step must deliver: status %q (%q)", x.WorkflowStatus, x.BlockedReason)
-	}
-	st := x.Steps["s"]
-	var causes []string
-	for _, a := range st.Attempts {
-		if a.Cause == CauseInfraFailure {
-			causes = append(causes, a.FailureCause)
-		}
-	}
-	want := []string{FailUpstreamTransient, FailUpstreamTransient, FailExitModel}
-	if len(causes) != len(want) {
-		t.Fatalf("archived failure causes %v, want %v", causes, want)
-	}
-	for i := range want {
-		if causes[i] != want[i] {
-			t.Fatalf("archived failure causes %v, want %v", causes, want)
-		}
-	}
-	// the bound-crossing attempt is a model-class SWITCH: the blocking
-	// counter starts the new candidate's fresh ledger (Count=0, the
-	// existing switch rule), and the two in-bound retries never moved it.
-	if st.Supervision != nil && st.Supervision.FailureCount != 0 {
-		t.Fatalf("the in-bound retries must not move the blocking counter: %+v", st.Supervision)
-	}
-	// the two in-bound retries waited the retry pacing (1m, 3m); the
-	// exit_model_class switch is not a paced cause and did not wait.
-	base := supervise.DefaultRetryBackoffBase
-	if len(slept) != 2 || slept[0] != base || slept[1] != RetryBackoffFactor*base {
-		t.Fatalf("backoff waits %v, want the retry pacing [1m 3m] for the two retries only", slept)
-	}
-}
 
 // TestD8ClassificationPrecedence pins the text-class order: allowance/
 // auth (switch) > throttle (same model) > upstream transient (same

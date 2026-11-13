@@ -34,21 +34,19 @@ func stepRead(t *testing.T, doc map[string]any, project, id string) map[string]a
 	return e
 }
 
-const workspaceReadYAML = "steps:\n  alpha:\n    grill:\n      models: [claude:declared]\n      attrs: { question_batch_size: 2 }\n    code: { models: [] }\n    default: { models: [pi:ws-default] }\n"
+const workspaceReadYAML = "steps:\n  alpha:\n    grill:\n      models: [claude:declared]\n    code: { models: [] }\n    default: { models: [pi:ws-default] }\n"
 
-// TestConfigWorkspaceReadsDeclaredChainsAttrsMemoryPolicy pins the step
-// entry's additive fields: source/class of a declared chain and a
-// declared attr override with its declaration's schema.
-func TestConfigWorkspaceReadsDeclaredChainsAttrsMemoryPolicy(t *testing.T) {
-	doc := readWorkspaceDoc(t, newWfFixture(t, workspaceReadYAML, []string{CapabilityStepsAttrs}))
+// TestConfigWorkspaceReadsDeclaredChainsMemoryPolicy pins the step
+// entry's additive fields: source/class of a declared chain; the moved
+// cli.toml facts and the removed step attrs are not carried.
+func TestConfigWorkspaceReadsDeclaredChainsMemoryPolicy(t *testing.T) {
+	doc := readWorkspaceDoc(t, newWfFixture(t, workspaceReadYAML))
 	grill := stepRead(t, doc, "alpha", "grill")
 	if grill["declared"] != true || !reflect.DeepEqual(grill["models"], []any{"claude:declared"}) || grill["source"] != "file" || grill["class"] != "live" {
 		t.Fatalf("grill chain read wrong: %v", grill)
 	}
-	attr := grill["attrs"].(map[string]any)["question_batch_size"].(map[string]any)
-	want := map[string]any{"value": 2.0, "declared": true, "source": "file", "class": "live", "default": 0.0, "schema": map[string]any{"kind": "int"}}
-	if !reflect.DeepEqual(attr, want) {
-		t.Fatalf("attr read %v, want %v", attr, want)
+	if _, ok := grill["attrs"]; ok {
+		t.Fatalf("a step entry carries no attrs any more: %v", grill)
 	}
 	for _, moved := range []string{"memory_policy", "summarize"} {
 		if _, ok := doc[moved]; ok {
@@ -61,7 +59,7 @@ func TestConfigWorkspaceReadsDeclaredChainsAttrsMemoryPolicy(t *testing.T) {
 // block per workspace path: the default's effective lists (declared, else
 // built-in), each project's own declared lists, never pre-merged.
 func TestConfigListReadsMemoryPolicy(t *testing.T) {
-	f := newWfFixture(t, workspaceReadYAML, []string{CapabilityStepsAttrs})
+	f := newWfFixture(t, workspaceReadYAML)
 	cfgPath := filepath.Join(f.env["XDG_CONFIG_HOME"], "polyforge", "cli.toml")
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -112,10 +110,10 @@ func TestConfigListReadsMemoryPolicy(t *testing.T) {
 }
 
 // TestConfigWorkspaceReportsOnlyDeclaredValues pins that nothing is
-// invented: an undeclaring project gets no declared value, its attrs show
-// the declaration's default as undeclared, and default/task rows exist.
+// invented: an undeclaring project gets no declared value, and
+// default/task rows exist.
 func TestConfigWorkspaceReportsOnlyDeclaredValues(t *testing.T) {
-	doc := readWorkspaceDoc(t, newWfFixture(t, workspaceReadYAML, []string{CapabilityStepsAttrs}))
+	doc := readWorkspaceDoc(t, newWfFixture(t, workspaceReadYAML))
 	beta := doc["steps"].(map[string]any)["beta"].(map[string]any)
 	for id, raw := range beta {
 		if e := raw.(map[string]any); e["declared"] != false || e["models"] != nil || e["source"] != "default" {
@@ -127,19 +125,12 @@ func TestConfigWorkspaceReportsOnlyDeclaredValues(t *testing.T) {
 			t.Fatalf("beta lacks the %s row: %v", id, beta)
 		}
 	}
-	attr := stepRead(t, doc, "beta", "grill")["attrs"].(map[string]any)["question_batch_size"].(map[string]any)
-	if attr["declared"] != false || attr["value"] != 0.0 || attr["source"] != "default" {
-		t.Fatalf("an undeclared attr must show its declaration's default: %v", attr)
-	}
-	if _, ok := stepRead(t, doc, "beta", "default")["attrs"]; ok {
-		t.Fatal("default takes no attrs")
-	}
 }
 
 // TestConfigWorkspaceReportsDeclaredEmptyList pins "declared-empty is
 // declared, never absent".
 func TestConfigWorkspaceReportsDeclaredEmptyList(t *testing.T) {
-	doc := readWorkspaceDoc(t, newWfFixture(t, workspaceReadYAML, []string{CapabilityStepsAttrs}))
+	doc := readWorkspaceDoc(t, newWfFixture(t, workspaceReadYAML))
 	code := stepRead(t, doc, "alpha", "code")
 	if code["declared"] != true || !reflect.DeepEqual(code["models"], []any{}) || code["source"] != "file" {
 		t.Fatalf("declared-empty read wrong: %v", code)
@@ -150,7 +141,7 @@ func TestConfigWorkspaceReportsDeclaredEmptyList(t *testing.T) {
 // daemon: still mapped, the file's own declarations, steps_complete false
 // with a reason.
 func TestConfigWorkspaceUnreachableReportsIncomplete(t *testing.T) {
-	f := newWfFixture(t, workspaceReadYAML, nil)
+	f := newWfFixture(t, workspaceReadYAML)
 	f.env["PF_DAEMON_SOCKET"] = filepath.Join(t.TempDir(), "none.sock")
 	doc := readWorkspaceDoc(t, f)
 	if doc["mapped"] != true || doc["steps_complete"] != false || doc["steps_reason"] == "" {
@@ -159,9 +150,6 @@ func TestConfigWorkspaceUnreachableReportsIncomplete(t *testing.T) {
 	grill := stepRead(t, doc, "alpha", "grill")
 	if grill["declared"] != true {
 		t.Fatalf("the file's own declarations must still be listed: %v", grill)
-	}
-	if v := grill["attrs"].(map[string]any)["question_batch_size"].(map[string]any)["value"]; v != 2.0 {
-		t.Fatalf("the override must be listed unchecked: %v", v)
 	}
 }
 
@@ -174,7 +162,7 @@ func TestConfigWorkspaceRefusesLegacySections(t *testing.T) {
 		"steps:\n  alpha:\n    default: { models: [pi:a] }\nsummarize:\n  models: [pi:s]\n",
 		"memory_policy:\n  default: { record: [a] }\n",
 	} {
-		f := newWfFixture(t, yaml, []string{CapabilityStepsAttrs})
+		f := newWfFixture(t, yaml)
 		code, _, stderr := runPf(t, f.env, "--json", "config", "workspace", "--cwd", f.ws)
 		if code == 0 {
 			t.Fatalf("config workspace accepted a legacy yaml:\n%s", yaml)

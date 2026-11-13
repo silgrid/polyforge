@@ -12,11 +12,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 type crashEnv struct {
@@ -29,7 +30,7 @@ type crashEnv struct {
 func newCrashEnv(t *testing.T, steps ...StepSpec) *crashEnv {
 	dir := t.TempDir()
 	return &crashEnv{t: t, dir: dir, execPath: filepath.Join(dir, capsule.ExecutionJSON),
-		wf: &Workflow{Steps: steps, MaxTotal: 4, MaxPerStep: 2}}
+		wf: testLane(4, steps...)}
 }
 
 // driver builds a driver over the env's capsule, seeded at spawnN (the
@@ -50,16 +51,26 @@ func (e *crashEnv) driver(sp StepSpawner, spawnN int64, log EventLogger) *Driver
 	return d
 }
 
-// archived writes what stepRun.Wait archives on collection.
+// archived records the dispatch's accepted hand-off on the call ledger,
+// as the daemon does when the step calls `pf step handoff` (workflow
+// contract 4): the result's outcome as its status (completed → done,
+// gate_failed → fail, incomplete → blocked), its SubmittedAt as the
+// result line's stamp.
 func (e *crashEnv) archived(step string, n int64, res StepResult) {
 	e.t.Helper()
-	res.StepID, res.WIID, res.SpawnN = step, "wi_crash", n
-	blob, _ := json.Marshal(res)
-	path := filepath.Join(e.dir, capsule.DirArtifacts, "steps", step, spawnTokenDir(n), "result.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	status := map[Outcome]string{OutcomeCompleted: stepcall.StatusDone, OutcomeGateFailed: stepcall.StatusFail, OutcomeIncomplete: stepcall.StatusBlocked}[res.Outcome]
+	if status == "" {
+		e.t.Fatalf("no hand-off status for outcome %q", res.Outcome)
+	}
+	call, err := stepcall.Append(e.dir, stepcall.Line{Kind: stepcall.KindCall, Step: step, Spawn: n, Verb: stepcall.VerbHandoff})
+	if err != nil {
 		e.t.Fatal(err)
 	}
-	if err := os.WriteFile(path, blob, 0o644); err != nil {
+	line := stepcall.Line{Kind: stepcall.KindResult, Step: step, Spawn: n, Verb: stepcall.VerbHandoff, Call: call.Seq, Outcome: stepcall.OutcomeOK, Handoff: &stepcall.Handoff{Status: status}}
+	if !res.SubmittedAt.IsZero() {
+		line.At = res.SubmittedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if _, err := stepcall.Append(e.dir, line); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -83,9 +94,9 @@ func (e *crashEnv) crashHeld(prefix []fakeEntry, act func()) {
 }
 
 // TestCrashAfterEnvelopeCollectedSettlesWithoutRerun (CR-1): the daemon
-// dies after the step's envelope was collected (archived, drop consumed)
-// but before execution.json recorded the result. The restarted driver
-// settles the collected envelope; the step is not run again.
+// dies after the step's hand-off was recorded on the call ledger but
+// before execution.json recorded the result. The restarted driver settles
+// the recorded hand-off; the step is not run again.
 func TestCrashAfterEnvelopeCollectedSettlesWithoutRerun(t *testing.T) {
 	e := newCrashEnv(t, spec("build"), spec("ship"))
 	e.crashHeld([]fakeEntry{done(`{}`)}, func() {
@@ -103,79 +114,20 @@ func TestCrashAfterEnvelopeCollectedSettlesWithoutRerun(t *testing.T) {
 		t.Fatalf("a delivered step must not be dispatched again: %v", got)
 	}
 	x := readExec(t, e.execPath)
-	if x.WorkflowStatus != StatusCompleted || x.Steps["ship"].Output["merged"] != "abc" {
+	if x.WorkflowStatus != StatusCompleted || x.Steps["ship"].Status != capsule.StepDone {
 		t.Fatalf("the collected result must settle the step: %q %+v", x.WorkflowStatus, x.Steps["ship"])
 	}
 }
 
-// TestCrashWithEnvelopeAtDropPathSettles (CR-1): the step wrote its
-// envelope but the daemon died before collecting it (the orphan is
-// reaped at restart). The envelope at the drop path is settled.
-func TestCrashWithEnvelopeAtDropPathSettles(t *testing.T) {
-	e := newCrashEnv(t, spec("a"))
-	e.crashHeld(nil, func() {
-		blob, _ := json.Marshal(StepResult{StepID: "a", WIID: "wi_crash", SpawnN: 1, Outcome: OutcomeCompleted, Output: json.RawMessage(`{"x":1}`)})
-		path := PendingResultPath(e.dir, 1)
-		_ = os.MkdirAll(filepath.Dir(path), 0o755)
-		_ = os.WriteFile(path, blob, 0o644)
-	})
-	sp := &fakeSpawner{}
-	if err := e.driver(sp, 1, nil).Run(context.Background()); err != nil {
-		t.Fatalf("restarted Run: %v", err)
-	}
-	if got := sp.dispatched(); len(got) != 0 {
-		t.Fatalf("no re-dispatch expected: %v", got)
-	}
-	if x := readExec(t, e.execPath); x.WorkflowStatus != StatusCompleted {
-		t.Fatalf("completed expected: %q", x.WorkflowStatus)
-	}
-	if _, err := os.Stat(PendingResultPath(e.dir, 1)); !os.IsNotExist(err) {
-		t.Fatalf("the settled drop must be consumed: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(e.dir, capsule.DirArtifacts, "steps", "a", "s1", "result.json")); err != nil {
-		t.Fatalf("the settled drop must be archived: %v", err)
-	}
-}
-
 // TestSettledEnvelopeIsNotSettledTwice: an envelope whose result already
-// landed (a question since answered, an incomplete since resumed) is
-// history, not an unsettled result: the restart dispatches as usual.
+// landed (an incomplete since resumed) is history, not an unsettled
+// result: the restart dispatches as usual.
 func TestSettledEnvelopeIsNotSettledTwice(t *testing.T) {
-	t.Run("answered question", func(t *testing.T) {
-		e := newCrashEnv(t, spec("s"))
-		sp := &fakeSpawner{script: []fakeEntry{{
-			res: &StepResult{Outcome: OutcomeNeedsInput, QuestionID: "q1", Question: "which?"},
-			act: func() {
-				e.archived("s", 1, StepResult{Outcome: OutcomeNeedsInput, QuestionID: "q1", Question: "which?"})
-			},
-		}}}
-		d := e.driver(sp, 0, nil)
-		ctx, cancel := context.WithCancel(context.Background())
-		errCh := make(chan error, 1)
-		go func() { errCh <- d.Run(ctx) }()
-		waitUntil(t, "the question", func() bool {
-			x := tryReadExec(e.execPath)
-			return x != nil && x.Steps["s"].PendingQuestion != nil
-		})
-		cancel()
-		<-errCh
-		if err := d.Answer("q1", "this", "bob"); err != nil {
-			t.Fatalf("answer: %v", err)
-		}
-		// killed after the answer, before the re-dispatch started
-		sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
-		if err := e.driver(sp2, 1, nil).Run(context.Background()); err != nil {
-			t.Fatalf("restarted Run: %v", err)
-		}
-		if got := sp2.dispatched(); len(got) != 1 {
-			t.Fatalf("the answered step must be re-dispatched with its answer: %v", got)
-		}
-	})
 	t.Run("resumed incomplete", func(t *testing.T) {
 		e := newCrashEnv(t, spec("s"))
 		sp := &fakeSpawner{script: []fakeEntry{{
-			res: &StepResult{Outcome: OutcomeIncomplete, Output: json.RawMessage(`{}`)},
-			act: func() { e.archived("s", 1, StepResult{Outcome: OutcomeIncomplete, Output: json.RawMessage(`{}`)}) },
+			res: &StepResult{Handoff: handoffOf(stepcall.StatusBlocked, "build dependency unavailable")},
+			act: func() { e.archived("s", 1, StepResult{Outcome: OutcomeIncomplete}) },
 		}}}
 		if err := e.driver(sp, 0, nil).Run(context.Background()); err != nil {
 			t.Fatalf("Run: %v", err)
@@ -216,28 +168,27 @@ func (l *snapshotLog) Append(_, kind string, _ any) error {
 	return os.WriteFile(l.dst, raw, 0o644)
 }
 
-// TestCrashAroundLightRewindStillResumes (polyforge#222): the light
+// TestCrashAroundRewindStillResumes: the rewind re-entry's
 // order is DURABLE — the resume order is the ledger cause itself, which
-// the same single gate-FAIL write that archives the range and routes the
-// verdict also records, so a kill -9 between that write and the
-// re-dispatch resumes on restart (the ledger and the rewind input are on
-// disk), and a kill after the re-entry's step_start resumes through the
-// in_progress continuation. No window degrades the light re-entry to
-// fresh.
-func TestCrashAroundLightRewindStillResumes(t *testing.T) {
-	lightOut := `{"verdict":"fail","fail_reason":"comment wording only","findings":[{"severity":"blocking","repair_target":"code","detail":"d","text_only":true}]}`
+// the same single gate-FAIL write that archives the range and records the
+// rewind (count, edge attribution) also records, so a kill -9 between that
+// write and the re-dispatch resumes on restart (the ledger is on disk) and
+// the replayed round counts exactly once. (A kill after the re-entry's step_start is
+// rewind_reentry_crash_test.go's
+// TestInterruptedRestartAfterRewindStepStartKeepsTheRewindResume.)
+func TestCrashAroundRewindStillResumes(t *testing.T) {
 
-	// Window 1: the crash lands between the gate-FAIL transition write
-	// (the rewind event fires with the write) and the re-dispatch.
+	// The crash lands between the gate-FAIL transition write (the rewind
+	// event fires with the write) and the re-dispatch.
 	t.Run("crash between the gate write and the dispatch", func(t *testing.T) {
 		e := newCrashEnv(t, spec("build"), gateSpec("review", "build"))
 		crashed := filepath.Join(t.TempDir(), "execution.json")
 		log := &snapshotLog{kind: "rewind", src: e.execPath, dst: crashed}
 		sp := &fakeSpawner{script: []fakeEntry{
-			done(`{}`), // build (spawn 1)
-			{res: &StepResult{Outcome: OutcomeGateFailed, Output: json.RawMessage(lightOut)}}, // review (spawn 2): the light rewind
-			done(`{}`),                 // the light re-entry (spawn 3)
-			done(`{"verdict":"PASS"}`), // review re-run (spawn 4)
+			done(`{}`),                 // build (spawn 1)
+			gateFAIL(),                 // review (spawn 2): the rewind
+			done(`{}`),                 // the re-entry (spawn 3)
+			done(`{"verdict":"pass"}`), // review re-run (spawn 4)
 		}}
 		if err := e.driver(sp, 0, log).Run(context.Background()); err != nil {
 			t.Fatalf("Run: %v", err)
@@ -249,51 +200,30 @@ func TestCrashAroundLightRewindStillResumes(t *testing.T) {
 		if atCrash == nil {
 			t.Fatal("the crash-instant execution.json is unreadable")
 		}
-		// the ledger IS the resume order: the pending target, its light
+		// the ledger IS the resume order: the pending target and its rewind
 		// cause (the fact the restart's prepareDispatch derives the resume
-		// from) and the rewind input must all be on disk at the crash instant
+		// from) must be on disk at the crash instant
 		if b := atCrash.Steps["build"]; b == nil || b.Status != capsule.StepPending ||
-			!lightRewindContext(b.Attempts) ||
-			b.PendingRewindInput == nil || b.PendingRewindInput.Note != LightRewindNote {
-			t.Fatalf("the crash instant must hold the durable light order (the pending target, the light ledger cause, the rewind input): %+v", b)
+			!rewindResumeContext(b.Attempts) {
+			t.Fatalf("the crash instant must hold the durable rewind order (the pending target, the ledger cause): %+v", b)
+		}
+		if atCrash.RewindStats.Count != 1 || len(atCrash.RewindStats.Rewinds) != 1 ||
+			atCrash.RewindStats.Rewinds[0] != (capsule.RewindRecord{Gate: "review", ToStep: "build", Class: capsule.RewindCharged}) {
+			t.Fatalf("the crash instant must hold the full rewind record (count + edge attribution): %+v", atCrash.RewindStats)
 		}
 		raw, _ := os.ReadFile(crashed)
 		if err := os.WriteFile(e.execPath, raw, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"PASS"}`)}}
+		sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"pass"}`)}}
 		if err := e.driver(sp2, 2, nil).Run(context.Background()); err != nil {
 			t.Fatalf("restarted Run: %v", err)
 		}
 		if got := sp2.dispatched(); len(got) == 0 || !sp2.spawnAt(0).Resume || sp2.spawnAt(0).Fresh {
-			t.Fatalf("the restart must resume the light re-entry, never fresh: %v", got)
-		}
-		if ri := sp2.spawnAt(0).RewindInput; ri == nil || ri.Note != LightRewindNote || !strings.Contains(ri.Reason, "comment wording only") {
-			t.Fatalf("the restart must carry the light rewind input: %+v", ri)
+			t.Fatalf("the restart must resume the re-entry, never fresh: %v", got)
 		}
 		if x := readExec(t, e.execPath); x.WorkflowStatus != StatusCompleted || x.RewindStats.Count != 1 {
-			t.Fatalf("the restarted lane must complete on the one light slot: %q %+v", x.WorkflowStatus, x.RewindStats)
-		}
-	})
-
-	// Window 2: the crash lands after the re-entry's step_start — the
-	// dispatch is in flight, the step in_progress — and the restart
-	// resumes through the in_progress continuation.
-	t.Run("crash after the re-entry's step_start", func(t *testing.T) {
-		e := newCrashEnv(t, spec("build"), gateSpec("review", "build"))
-		e.crashHeld([]fakeEntry{
-			done(`{}`), // build (spawn 1)
-			{res: &StepResult{Outcome: OutcomeGateFailed, Output: json.RawMessage(lightOut)}}, // review (spawn 2): the light rewind
-		}, func() {}) // the held dispatch IS the light re-entry (spawn 3)
-		sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"PASS"}`)}}
-		if err := e.driver(sp2, 3, nil).Run(context.Background()); err != nil {
-			t.Fatalf("restarted Run: %v", err)
-		}
-		if got := sp2.dispatched(); len(got) == 0 || !sp2.spawnAt(0).Resume {
-			t.Fatalf("the restart must resume the in-flight light re-entry: %v", got)
-		}
-		if x := readExec(t, e.execPath); x.WorkflowStatus != StatusCompleted || x.RewindStats.Count != 1 {
-			t.Fatalf("the resumed lane must complete on the one light slot: %q %+v", x.WorkflowStatus, x.RewindStats)
+			t.Fatalf("the restarted lane must complete on the one rewind: %q %+v", x.WorkflowStatus, x.RewindStats)
 		}
 	})
 }
@@ -305,7 +235,7 @@ func TestCrashAtGateVerdictKeepsTheVerdict(t *testing.T) {
 	e := newCrashEnv(t, spec("build"), gateSpec("review", "build"))
 	crashed := filepath.Join(t.TempDir(), "execution.json")
 	log := &snapshotLog{kind: "gate_verdict", src: e.execPath, dst: crashed}
-	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), gateFAIL(), done(`{}`), done(`{"verdict":"PASS"}`)}}
+	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), gateFAIL(), done(`{}`), done(`{"verdict":"pass"}`)}}
 	if err := e.driver(sp, 0, log).Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -316,7 +246,7 @@ func TestCrashAtGateVerdictKeepsTheVerdict(t *testing.T) {
 	if err := os.WriteFile(e.execPath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"PASS"}`)}}
+	sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{"verdict":"pass"}`)}}
 	if err := e.driver(sp2, 2, nil).Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("restarted Run: %v", err)
 	}
@@ -325,8 +255,8 @@ func TestCrashAtGateVerdictKeepsTheVerdict(t *testing.T) {
 		t.Fatalf("the FAIL verdict must rewind to build after the crash, dispatched %v", got)
 	}
 	x := readExec(t, e.execPath)
-	if x.RewindStats.Count != 1 || x.ReviewRounds["review"] != 1 {
-		t.Fatalf("one verdict, one rewind: rewind=%+v rounds=%+v", x.RewindStats, x.ReviewRounds)
+	if x.RewindStats.Count != 1 {
+		t.Fatalf("one verdict, one rewind: rewind=%+v", x.RewindStats)
 	}
 }
 
@@ -358,11 +288,7 @@ func TestCrashBeforeJournalLineNeverReusesOrdinal(t *testing.T) {
 	t.Run("envelope written", func(t *testing.T) {
 		e := newCrashEnv(t, spec("a"))
 		e.crashedStart(1)
-		blob, _ := json.Marshal(StepResult{StepID: "a", WIID: "wi_crash", SpawnN: 1, Outcome: OutcomeCompleted, Output: json.RawMessage(`{}`)})
-		_ = os.MkdirAll(filepath.Dir(PendingResultPath(e.dir, 1)), 0o755)
-		if err := os.WriteFile(PendingResultPath(e.dir, 1), blob, 0o644); err != nil {
-			t.Fatal(err)
-		}
+		e.archived("a", 1, StepResult{Outcome: OutcomeCompleted})
 		sp := &fakeSpawner{}
 		if err := e.driver(sp, 0, nil).Run(context.Background()); err != nil {
 			t.Fatalf("Run: %v", err)

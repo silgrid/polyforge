@@ -31,7 +31,7 @@ import (
 )
 
 // An answer addressed BY SLUG delivers to the live driver of the
-// canonical job — the needs_input park of the live repro
+// canonical job — the live repro's shape
 // (polyforge#246 / w246-repro-test-vs-yaml-quote, answered by id at
 // 16:27:38 after the slug spelling was refused).
 func TestAnswerBySlugReachesTheLiveDriver(t *testing.T) {
@@ -40,7 +40,7 @@ func TestAnswerBySlugReachesTheLiveDriver(t *testing.T) {
 		slug      = "polyforge#246"   // the slug spelling the live repro was refused by
 		question  = "w246-repro-test-vs-yaml-quote"
 	)
-	aa := &answerAgent{answered: make(chan string, 1)}
+	aa := &answerAgent{messages: make(chan string, 1)}
 	hub := newFakeHub()
 	// aihub resolves the slug to the canonical id — the liveness
 	// fallback reads exactly this (canonWI), the driver-branch lookup
@@ -63,11 +63,7 @@ func TestAnswerBySlugReachesTheLiveDriver(t *testing.T) {
 	// claim was by id, exactly the live repro's shape).
 	td.submitClaim(t, canonical)
 	td.waitMonitored(t, canonical)
-	// one open pending question: the driver is live and parked waiting
-	// for this very answer.
-	td.seedPendingQuestion(t, canonical, question, "repro",
-		"w246: does the repro prefer a failing test or the yaml quote?")
-	payload := cli.AnswerPayload{QuestionID: question, AnswerText: "A", AnsweredBy: "u_1"}
+	payload := cli.AnswerPayload{AnswerText: question, AnsweredBy: "u_1"}
 
 	// control: the ID spelling delivers on this exact rig — the driver
 	// branch, the pending question and the answer handle are all live
@@ -77,9 +73,9 @@ func TestAnswerBySlugReachesTheLiveDriver(t *testing.T) {
 		t.Fatalf("control: answer by id %s must deliver on this rig: %v", canonical, err)
 	}
 	select {
-	case q := <-aa.answered:
+	case q := <-aa.messages:
 		if q != question {
-			t.Fatalf("control: delivered question = %q, want %q", q, question)
+			t.Fatalf("control: delivered words = %q, want %q", q, question)
 		}
 	default:
 		t.Fatalf("control: answer by id never reached the driver's handle")
@@ -94,13 +90,13 @@ func TestAnswerBySlugReachesTheLiveDriver(t *testing.T) {
 		for i := 0; i < 2; i++ {
 			_, last = td.client.Answer(slug, payload)
 		}
-		t.Fatalf("REPORTED FAILURE (polyforge#249): answer by slug %q was refused — first: %v; after two retries per the refusal's own advice: %v — while the id spelling delivered on this very rig and the driver IS live (job %s) with question %q pending; \"between derivations\" is not what is happening and the retry never succeeds",
+		t.Fatalf("REPORTED FAILURE (polyforge#249): answer by slug %q was refused — first: %v; after two retries per the refusal's own advice: %v — while the id spelling delivered on this very rig and the driver IS live (job %s, words %q); \"between derivations\" is not what is happening and the retry never succeeds",
 			slug, err, last, canonical, question)
 	}
 	select {
-	case q := <-aa.answered:
+	case q := <-aa.messages:
 		if q != question {
-			t.Fatalf("delivered question = %q, want %q", q, question)
+			t.Fatalf("delivered words = %q, want %q", q, question)
 		}
 	default:
 		t.Fatalf("REPORTED FAILURE (polyforge#249): the slug answer was accepted but never reached the driver's handle")

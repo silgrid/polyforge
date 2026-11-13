@@ -104,7 +104,7 @@ func TestW241DeployGHRepoDefault(t *testing.T) {
 func TestW241DeployGHRepoExplicitOverride(t *testing.T) {
 	const fork = "acme/fork"
 	d := newReadyWorld(t)
-	w241RunDryRun(t, d, "GH_REPO="+fork)
+	w241RunDryRun(t, d, "GH_REPO="+fork, "DEPLOY_REMOTE_IS="+fork) // the deployer repo's remote is the fork
 	for _, r := range w241DownloadRepos(t, d) {
 		if r != fork {
 			t.Errorf("an explicit GH_REPO=%s must win, got -R %s:\n%s", fork, r, d.logOf("log-gh"))

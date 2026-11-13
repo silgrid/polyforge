@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
@@ -65,7 +67,7 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	maxConcurrent, recallTopK, auto := f.MaxConcurrent, f.RecallTopK, f.Auto
 	silenceWindow, toolWindow, stepTimeout, stallWindow := f.SilenceWindow, f.ToolWindow, f.StepTimeout, f.StallWindow
 	modelErrorGrace, revalidateEvery, heartbeatEvery := f.ModelErrorGrace, f.RevalidateEvery, f.HeartbeatEvery
-	retryBackoffBase := f.RetryBackoffBase
+	askWarmWindow := f.AskWarmWindow
 	if err := fs.Parse(argv); err != nil {
 		return 2
 	}
@@ -74,61 +76,61 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	autoCfg := resolveAuto(fs, *auto)
-	shared, err := cli.LoadConfig(*cfgPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "pf daemon: %v\n", err)
-		return ExitNeedsOperator
-	}
-	// StartupFile is the daemon's FILE-ONLY baseline: the reload path
-	// compares file values against it, so an env override (PF_SERVER and
-	// so on) never reads as a permanently pending restart.
-	startupFile, err := cli.LoadFileConfig(*cfgPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "pf daemon: %v\n", err)
-		return ExitNeedsOperator
-	}
-	applyDaemonTable(fs, shared.Daemon, stepTimeout, stallWindow, harnessRoot, operatorAgentDir, maxConcurrent)
-	if *socket == "" {
-		*socket = shared.DaemonSocket
-	}
-	if *server == "" {
-		*server = shared.Server
-	}
-	if *apiKey == "" {
-		*apiKey = shared.APIKey
-	}
-	if *claudeBin == "" {
-		*claudeBin = shared.ClaudeBin
-	}
-
-	// The mapping is the ONLY workspace source (polyforge#113): run the
-	// SAME shared mapping/workspace validator daemon.New, `pf config` and
-	// `pf doctor` use, before any machine state is touched.
-	if err := cli.ValidateMappingForDaemon(shared); err != nil {
-		where := *cfgPath
-		if where == "" {
-			where = cli.DefaultConfigPath()
-		}
-		fmt.Fprintf(stderr, "pf daemon: refusing to start: %v (config %s; the daemon places capsules at <workspace>/capsules/<project>-<seq> per the claim's project, and `pf doctor` checks the mapping)\n", err, where)
-		return ExitNeedsOperator
-	}
-
-	if *dataDir == "" {
-		home, _ := os.UserHomeDir()
-		*dataDir = cli.DataDir(home)
-	}
-	// v2 identity: <data-dir>/daemon-id is THE id once written; a flag
-	// value that disagrees refuses to start (never silently switch).
-	explicitID := *machineID != ""
-	if *machineID == "" {
-		*machineID = hostMachineID()
-	}
-	id, err := ResolveDaemonID(*dataDir, *machineID, explicitID)
+	// The Host set: cli.toml (the Host keys and the default Cell) and every
+	// cli-<profile>.toml next to it, file contents only (a Cell's connection
+	// lives in its file; no PF_* environment override reaches the daemon).
+	// An invalid Host file refuses the start naming the file; an invalid
+	// named Cell file is isolated.
+	set, err := cli.LoadHostSet(*cfgPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "pf daemon: refusing to start: %v\n", err)
 		return ExitNeedsOperator
 	}
-	*machineID = id
+	host := set.Host
+	// The step scripts' interpreter (the workflow contract's "Scripts"):
+	// resolved once, here, and checked before any machine state is
+	// touched — a missing or too old one refuses the start, naming it.
+	python, err := cli.ResolvePython(host.Daemon.Python, exec.LookPath, cli.ProbePython)
+	if err != nil {
+		fmt.Fprintf(stderr, "pf daemon: refusing to start: %v (config %s)\n", err, set.HostPath)
+		return ExitNeedsOperator
+	}
+	if *socket == "" {
+		*socket = host.DaemonSocket
+	}
+	if v := os.Getenv("PF_DAEMON_SOCKET"); v != "" && !flagWasSet(fs, "socket") {
+		*socket = v
+	}
+	// The default Cell's mapping, when present, must be usable (the SAME
+	// shared validator `pf config` and `pf doctor` use) before any machine
+	// state is touched; an empty one loads with the execution plane closed.
+	if !host.Mapping.Empty() {
+		if err := cli.ValidateMappingForDaemon(host); err != nil {
+			fmt.Fprintf(stderr, "pf daemon: refusing to start: %v (config %s; the daemon places capsules at <workspace>/capsules/<project>-<seq> per the claim's project, and `pf doctor` checks the mapping)\n", err, set.HostPath)
+			return ExitNeedsOperator
+		}
+	}
+	if *dataDir == "" {
+		home, _ := os.UserHomeDir()
+		*dataDir = cli.DataDir(home)
+	}
+	if abs, aerr := filepath.Abs(*dataDir); aerr == nil {
+		*dataDir = abs
+	}
+	// The layout gate (cellcfg/layout.go): a data dir on the per-Cell
+	// layout starts; a fresh one is initialized; a pre-Cell one is refused
+	// naming `pf migrate cell-layout` — never migrated here, nothing written.
+	fresh, lerr := cellcfg.CheckLayout(*dataDir)
+	if lerr != nil {
+		fmt.Fprintf(stderr, "pf daemon: refusing to start: %v\n", lerr)
+		return ExitNeedsOperator
+	}
+	if fresh {
+		if err := cellcfg.InitLayout(*dataDir); err != nil {
+			fmt.Fprintf(stderr, "pf daemon: refusing to start: initialize the data dir layout: %v\n", err)
+			return ExitNeedsOperator
+		}
+	}
 	if *displayName == "" {
 		*displayName, _ = os.Hostname()
 	}
@@ -138,41 +140,33 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if abs, err := filepath.Abs(*workflowsDir); err == nil {
 		*workflowsDir = abs // GET /status reports it; pf doctor reads by it
 	}
-	if *gitRemoteBase == "" {
-		*gitRemoteBase = strings.TrimSuffix(*server, "/") + "/git"
-	}
+	// The Host-only [daemon] knobs: an explicit flag (tests/dev) beats the
+	// table.
+	applyDaemonTable(fs, host.Daemon, stepTimeout, stallWindow, askWarmWindow, harnessRoot, operatorAgentDir, maxConcurrent)
 	envWarnings := retiredEnvWarnings(os.Getenv, *harnessRoot, *dataDir, *operatorAgentDir)
 	for _, w := range envWarnings {
 		fmt.Fprintln(stderr, "pf daemon: WARNING: "+w)
 	}
-
-	cfg := Config{
-		MachineID:     *machineID,
-		DisplayName:   *displayName,
-		SocketPath:    *socket,
-		ConfigPath:    *cfgPath,
-		StartupFile:   startupFile,
-		FlagPinned:    flagPinned(fs),
-		Mapping:       shared.Mapping,
-		DataDir:       *dataDir,
-		GitRemoteBase: *gitRemoteBase,
-		WorkflowsDir:  *workflowsDir,
-		PiBin:         *piBin,
-		ClaudeBin:     *claudeBin,
-		HarnessRoot:   *harnessRoot,
+	pinned := flagPinned(fs)
+	base := Config{
+		DisplayName:  *displayName,
+		SocketPath:   *socket,
+		FlagPinned:   pinned,
+		WorkflowsDir: *workflowsDir,
+		PiBin:        *piBin,
 		// An operator-named source is EXPLICIT: a missing auth.json
 		// under it refuses the start rather than running step agents
 		// without credentials (addendum 2).
 		OperatorAgentDir:         *operatorAgentDir,
 		OperatorAgentDirExplicit: *operatorAgentDir != "",
-		APIKey:                   *apiKey,
+		Python:                   python.Path,
 		MaxConcurrent:            *maxConcurrent,
 		RecallTopK:               *recallTopK,
 		Auto:                     autoCfg,
 		HeartbeatEvery:           *heartbeatEvery,
 		Launcher:                 *launcher,
 		EnvWarnings:              envWarnings,
-		Hub:                      aihubclient.New(*server, *apiKey),
+		Hosted:                   true,
 		// Zero fields fall through to the documented defaults.
 		Supervision: SupervisionConfig{
 			SilenceWindow:          *silenceWindow,
@@ -180,15 +174,24 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			StepTimeout:            *stepTimeout,
 			StallWindow:            *stallWindow,
 			ModelErrorGrace:        *modelErrorGrace,
-			RetryBackoffBase:       *retryBackoffBase,
+			AskWarmWindow:          *askWarmWindow,
 			SessionRevalidateEvery: *revalidateEvery,
 		},
 	}
-	d, err := New(cfg)
+	build := func(profile string, c cli.Config) (Config, error) {
+		return cellConfig(base, cellBuildInput{
+			profile: profile, file: c, hostRoot: *dataDir, configPath: cellFilePath(set, profile),
+			harnessRoot: *harnessRoot, gitRemoteBase: *gitRemoteBase,
+			flagServer: *server, flagAPIKey: *apiKey, flagMachineID: *machineID, flagClaudeBin: *claudeBin,
+			flagStepTimeout: flagWasSet(fs, "step-timeout"), flagStallWindow: flagWasSet(fs, "stall-window"),
+			flagHeartbeat: flagWasSet(fs, "heartbeat-every"),
+		})
+	}
+	h, err := NewHost(HostConfig{SocketPath: *socket, DataDir: *dataDir, Set: set, Build: build, MaxConcurrent: *maxConcurrent})
 	if err != nil {
-		// every New failure is configuration or on-disk state (a missing
+		// every assembly failure is configuration or on-disk state (a missing
 		// workspace, an unreadable state file, a missing agent dir)
-		fmt.Fprintf(stderr, "pf daemon: %v\n", err)
+		fmt.Fprintf(stderr, "pf daemon: refusing to start: %v\n", err)
 		return ExitNeedsOperator
 	}
 
@@ -209,10 +212,10 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if s, ok := sig.(syscall.Signal); ok {
 			cause = fmt.Sprintf("signal: %s (signal %d)", s, int(s))
 		}
-		_ = d.Shutdown(context.Background(), cause)
+		_ = h.Shutdown(context.Background(), cause)
 	}()
 
-	if err := d.Run(context.Background()); err != nil {
+	if err := h.Run(context.Background()); err != nil {
 		fmt.Fprintf(stderr, "pf daemon: %v\n", err)
 		var no *needsOperatorError
 		if errors.As(err, &no) {
@@ -297,7 +300,7 @@ func flagPinned(fs *flag.FlagSet) map[string]bool {
 // applyDaemonTable fills each knob the command line did not set
 // explicitly from the config's [daemon] table (already validated by
 // cli.LoadConfig); an unset table key leaves the built-in default.
-func applyDaemonTable(fs *flag.FlagSet, t cli.DaemonSettings, stepTimeout, stallWindow *time.Duration, harnessRoot, operatorAgentDir *string, maxConcurrent *int) {
+func applyDaemonTable(fs *flag.FlagSet, t cli.DaemonSettings, stepTimeout, stallWindow, askWarmWindow *time.Duration, harnessRoot, operatorAgentDir *string, maxConcurrent *int) {
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	if !set["step-timeout"] && t.StepTimeout != 0 {
@@ -305,6 +308,9 @@ func applyDaemonTable(fs *flag.FlagSet, t cli.DaemonSettings, stepTimeout, stall
 	}
 	if !set["stall-window"] && t.StallWindow != 0 {
 		*stallWindow = t.StallWindow
+	}
+	if !set["ask-warm-window"] && t.AskWarmWindow != 0 {
+		*askWarmWindow = t.AskWarmWindow
 	}
 	if !set["harness-root"] && t.HarnessRoot != "" {
 		*harnessRoot = t.HarnessRoot
@@ -330,4 +336,204 @@ func resolveAuto(fs *flag.FlagSet, auto bool) *bool {
 		return nil
 	}
 	return &auto
+}
+
+// flagWasSet reports whether the named flag was given on the command line.
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
+}
+
+// cellBuildInput is what one Cell's daemon Config is assembled from.
+type cellBuildInput struct {
+	profile    string
+	file       cli.Config // the Cell's file config (the Host file for default)
+	hostRoot   string     // the Host data dir
+	configPath string     // the Cell's file
+	// harnessRoot is the Host-only [daemon] harness_root ("" = the Cell dir).
+	harnessRoot, gitRemoteBase string
+	// The test/dev launch flags; they address the default Cell only.
+	flagServer, flagAPIKey, flagMachineID, flagClaudeBin string
+	flagStepTimeout, flagStallWindow, flagHeartbeat      bool
+}
+
+// cellConfig assembles one Cell's daemon Config: the Host-wide base, the
+// Cell's own state directory, hub client, machine identity, mapping and
+// execution settings. Every Cell, the default one included, keeps its state
+// in cells/<profile> under the Host data dir.
+func cellConfig(base Config, in cellBuildInput) (Config, error) {
+	c := in.file
+	cfg := base
+	cfg.ConfigPath = in.configPath
+	cfg.StartupFile = c
+	cfg.Mapping = c.Mapping
+	cfg.Server, cfg.APIKey = c.Server, c.APIKey
+	cfg.ClaudeBin = c.ClaudeBin
+	named := in.profile != cellcfg.DefaultProfile
+	// Every Cell, default included, lives under cells/<profile> (the
+	// layout gate in Main refused a pre-Cell data dir); its harness root is
+	// the Cell dir, or <harness_root>/cells/<profile>.
+	cfg.DataDir = cellcfg.CellDir(in.hostRoot, in.profile)
+	cfg.HarnessRoot = ""
+	if in.harnessRoot != "" {
+		cfg.HarnessRoot = filepath.Join(in.harnessRoot, cellcfg.CellsDirName, in.profile)
+	}
+	if named {
+		// A named Cell's knobs come from its own file only.
+		cfg.Supervision.StepTimeout = c.Daemon.StepTimeout
+		cfg.Supervision.StallWindow = c.Daemon.StallWindow
+		cfg.Supervision.AskWarmWindow = c.Daemon.AskWarmWindow
+		cfg.Auto = nil
+		cfg.EnvWarnings = nil
+		switch c.ModelSource {
+		case "":
+			cfg.ExecutionDisabled = execDisabledNoModelSource
+			cfg.OperatorAgentDir = filepath.Join(cfg.DataDir, "no-model-source")
+			cfg.OperatorAgentDirExplicit = false
+		case cli.ModelSourceShared:
+			// shares the default Cell's source (base carries it): the pi
+			// minimal set is synced from it like the default's, and only the
+			// env block of the default Cell's claude settings is copied
+			if err := shareDefaultClaudeEnv(in, cfg); err != nil {
+				cfg.ExecutionDisabled = "the shared model-credential source could not be copied: " + err.Error()
+			}
+		default:
+			if why := unusableModelSource(c.ModelSource); why != "" {
+				cfg.ExecutionDisabled = why
+				cfg.OperatorAgentDir = filepath.Join(cfg.DataDir, "no-model-source")
+				cfg.OperatorAgentDirExplicit = false
+			} else {
+				cfg.OperatorAgentDir, cfg.OperatorAgentDirExplicit = c.ModelSource, true
+			}
+		}
+	} else {
+		if in.flagServer != "" {
+			cfg.Server = in.flagServer
+		}
+		if in.flagAPIKey != "" {
+			cfg.APIKey = in.flagAPIKey
+		}
+		if in.flagClaudeBin != "" {
+			cfg.ClaudeBin = in.flagClaudeBin
+		}
+	}
+	if !named || !in.flagHeartbeat {
+		if c.Daemon.HeartbeatEvery > 0 && !in.flagHeartbeat {
+			cfg.HeartbeatEvery = c.Daemon.HeartbeatEvery
+		}
+	}
+	if cfg.MaxConcurrent <= 0 {
+		cfg.MaxConcurrent = cli.DefaultMaxConcurrentJobs
+	}
+	if c.Daemon.CellMaxConcurrentJobs > 0 && c.Daemon.CellMaxConcurrentJobs < cfg.MaxConcurrent {
+		cfg.MaxConcurrent = c.Daemon.CellMaxConcurrentJobs
+	}
+	cfg.CellMaxConcurrentJobs = c.Daemon.CellMaxConcurrentJobs
+	// The Cell's machine identity: <cell-dir>/daemon-id is THE id once
+	// written; a configured value (the launch flag for default, [daemon]
+	// machine_id) that disagrees refuses this Cell — never a silent switch.
+	seed, explicit := c.Daemon.MachineID, c.Daemon.MachineID != ""
+	if !named && in.flagMachineID != "" {
+		seed, explicit = in.flagMachineID, true
+	}
+	if seed == "" {
+		// every Cell's machine id is its own: the step and task process
+		// markers (PF_DAEMON_ID) then name exactly one Cell
+		seed = hostMachineID()
+		if named {
+			seed += "-" + in.profile
+		}
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		return cfg, err
+	}
+	id, err := ResolveDaemonID(cfg.DataDir, seed, explicit)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.MachineID = id
+	// Identity is stable at every assembly (Host start, add, repair): a
+	// Cell file whose normalized server differs from the one recorded in
+	// the Cell's identity.json is another identity domain — refused with
+	// the new-profile route, never adopted silently.
+	if why := identityMismatch(in.profile, cfg.DataDir, cfg.Server); why != "" {
+		return cfg, errors.New(why)
+	}
+	cfg.GitRemoteBase = in.gitRemoteBase
+	if cfg.GitRemoteBase == "" || named {
+		cfg.GitRemoteBase = strings.TrimSuffix(cfg.Server, "/") + "/git"
+	}
+	// The effective credential is persisted from the first start on; a
+	// Host restart restores it and a pending rotation first (drain.go). A
+	// file credential that differs from it is a pending change: the Cell
+	// starts on its effective credential and the file's goes through the
+	// identity check (adoptFileKey) — a newer file value can neither
+	// switch the Cell's user nor bypass the idle gate. An explicit launch
+	// flag (the default Cell's test/dev seam) pins the key instead.
+	if named || in.flagAPIKey == "" {
+		if cfg.APIKey == "" {
+			// the file holds no api_key: the persisted copy never stands in
+			// for it — the record is deleted and the Cell holds no
+			// credential (it reads degraded and refuses AIHub business
+			// naming the missing key; drain.go missingCredential)
+			if err := os.Remove(filepath.Join(cfg.DataDir, effectiveFile)); err != nil && !os.IsNotExist(err) {
+				return cfg, fmt.Errorf("drop the effective connection of a Cell whose file has no api_key: %w", err)
+			}
+		} else if rec, ok := readEffective(cfg.DataDir); ok {
+			if cfg.APIKey != rec.APIKey && cfg.APIKey != rec.PendingAPIKey {
+				cfg.FileAPIKey = cfg.APIKey
+			}
+			cfg.APIKey, cfg.PendingAPIKey = rec.APIKey, rec.PendingAPIKey
+		} else if cfg.APIKey != "" {
+			if err := writeEffective(cfg.DataDir, effectiveConnection{APIKey: cfg.APIKey}); err != nil {
+				return cfg, fmt.Errorf("persist the effective connection: %w", err)
+			}
+		}
+	}
+	cfg.Hub = aihubclient.New(cfg.Server, cfg.APIKey)
+	return cfg, nil
+}
+
+// unusableModelSource answers why a declared model-credential source
+// directory cannot serve a Cell ("" = usable): it must be absolute and
+// carry a readable auth.json.
+func unusableModelSource(dir string) string {
+	if !filepath.IsAbs(dir) {
+		return fmt.Sprintf("the declared model-credential source %q is not an absolute directory — fix [model] source in this Cell's file", dir)
+	}
+	f, err := os.Open(filepath.Join(dir, "auth.json"))
+	if err != nil {
+		return fmt.Sprintf("the declared model-credential source %s is unusable (no readable auth.json: %v) — fix [model] source in this Cell's file", dir, err)
+	}
+	_ = f.Close()
+	return ""
+}
+
+// shareDefaultClaudeEnv copies the env block of the default Cell's claude
+// settings into a sharing named Cell's own claude config dir.
+func shareDefaultClaudeEnv(in cellBuildInput, cfg Config) error {
+	defRoot := cellcfg.CellDir(in.hostRoot, cellcfg.DefaultProfile)
+	if in.harnessRoot != "" {
+		defRoot = filepath.Join(in.harnessRoot, cellcfg.CellsDirName, cellcfg.DefaultProfile)
+	}
+	root := cfg.HarnessRoot
+	if root == "" {
+		root = cfg.DataDir
+	}
+	return runtime.ShareClaudeEnv(filepath.Join(defRoot, runtime.ClaudeConfigDirName, "settings.json"), filepath.Join(root, runtime.ClaudeConfigDirName))
+}
+
+// cellFilePath answers the file a Cell's keys were loaded from: the Host
+// file itself (whatever its name, --config included) for default, the
+// cli-<profile>.toml next to it for a named Cell.
+func cellFilePath(set *cli.HostSet, profile string) string {
+	if profile == cellcfg.DefaultProfile {
+		return set.HostPath
+	}
+	return set.CellPath(profile)
 }

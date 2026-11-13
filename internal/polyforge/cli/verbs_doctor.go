@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"maps"
-	"net/http"
 	"os"
 	"os/exec"
 	"slices"
@@ -16,7 +15,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/harness"
-	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
@@ -79,6 +78,10 @@ const (
 	docChDaemonEnv = "daemon env"
 	// docChModelHealth is the additive warn-at-most row.
 	docChModelHealth = "model health"
+	// docChLanes is the workflow contract row: the
+	// daemon's lane set loads, and no queued work item waits on a lane the
+	// set does not carry (WFC-123).
+	docChLanes = "workflow lanes"
 )
 
 // doctorRun is what one run loaded and probed once; the checks read it.
@@ -104,13 +107,17 @@ const (
 	needAihub              // a reachable aihub, then a mapping
 )
 
-// doctorChecks is the check ladder in report order. A check whose need
-// is unmet is reported skip with the reason.
-var doctorChecks = []struct {
+// doctorCheckSpec is one rung of the check ladder: the row name, its
+// prerequisite and the check itself.
+type doctorCheckSpec struct {
 	name string
 	need doctorNeed
 	run  func(*doctorRun) (string, string)
-}{
+}
+
+// doctorChecks is the check ladder in report order. A check whose need
+// is unmet is reported skip with the reason.
+var doctorChecks = []doctorCheckSpec{
 	{docChMapping, needConfig, mappingCheck},
 	{docChDirs, needMapping, func(r *doctorRun) (string, string) {
 		if len(r.missing) > 0 {
@@ -126,10 +133,21 @@ var doctorChecks = []struct {
 	}},
 	{docChDisk, needMapping, func(r *doctorRun) (string, string) { return diskCheck(r.present).row() }},
 	{docChRepoClones, needMapping, func(r *doctorRun) (string, string) { return repoClonesCheck(r) }},
-	{docChScopedGates, needMapping, func(r *doctorRun) (string, string) { return scopedGatesCheck(r) }},
+	{docChLightFallbacks, needMapping, lightFallbacksCheck},
 	{docChMemPolicy, needMapping, func(r *doctorRun) (string, string) { return memoryPolicyCheck(r.cfg, r.present).row() }},
 	{docChPrereqs, needConfig, func(r *doctorRun) (string, string) { return prerequisitesCheck(exec.LookPath).row() }},
-	{docChServer, needConfig, func(r *doctorRun) (string, string) { return passOrFail(r.reachOK), r.reachMsg }},
+	{docChPython, needConfig, func(r *doctorRun) (string, string) {
+		return pythonCheck(r.cfg.Daemon.Python, exec.LookPath, ProbePython).row()
+	}},
+	{docChDevNull, needConfig, func(r *doctorRun) (string, string) { return devNullCheck(os.DevNull).row() }},
+	{docChAuditTools, needConfig, func(r *doctorRun) (string, string) { return auditToolsCheck(exec.LookPath).row() }},
+	{docChHostRequires, needMapping, hostRequiresCheck},
+	{docChServer, needConfig, func(r *doctorRun) (string, string) {
+		if !r.sockOK {
+			return "skip", "not run: " + r.reachMsg
+		}
+		return passOrFail(r.reachOK), r.reachMsg
+	}},
 	{docChSocket, needConfig, func(r *doctorRun) (string, string) { return passOrFail(r.sockOK), r.sockMsg }},
 	{docChSupervision, needConfig, func(r *doctorRun) (string, string) { return supervisionCheck(r.sockOK).row() }},
 	{docChReload, needConfig, reloadCheck},
@@ -138,6 +156,7 @@ var doctorChecks = []struct {
 	{docChDaemonEnv, needConfig, func(r *doctorRun) (string, string) {
 		return daemonEnvCheck(r.sockOK, r.status.EnvNames, r.status.PiModelsEnvRefs).row()
 	}},
+	{docChCommandPath, needConfig, commandPathCheck},
 	{docChYaml, needMapping, func(r *doctorRun) (string, string) {
 		st, detail, steps := workspaceYamlCheck(r.cfg.Mapping, r.status.WorkflowsDir, r.sockOK)
 		r.claudeSteps = steps
@@ -161,6 +180,7 @@ var doctorChecks = []struct {
 		}
 		return harnessPromptCheck(home, piDir, root, r.fixPrompts).row()
 	}},
+	{docChLanes, needMapping, workflowLanesCheck},
 	{docChProjects, needAihub, projectsCheck},
 	{docChAuth, needAihub, func(r *doctorRun) (string, string) { return r.auth.row() }},
 }
@@ -262,13 +282,14 @@ func daemonEnvCheck(daemonUp bool, names, piModelsRefs []string) doctorCheck {
 var cmdDoctor = &Command{
 	Name:         "doctor",
 	Group:        GroupDiag,
-	Summary:      "Check this daemon's health: config, workspace mapping and layout, connectivity, progress display",
-	Usage:        "pf doctor [--harness] [--prune-scratch] [--prune-capsules] [--fix-harness-prompts] [--fix-install-layout] [--json]",
+	Summary:      "Check this daemon's health: config, workspace mapping and layout, connectivity, harness setup",
+	Usage:        "pf doctor [--harness] [--prune-scratch] [--prune-capsules] [--prune-chat-state] [--fix-harness-prompts] [--fix-install-layout] [--json]",
 	NoConfigLoad: true,
 	Setup: func(fs *flag.FlagSet) {
-		fs.Bool("harness", false, "run only the harness progress-display checks")
+		fs.Bool("harness", false, "run only the harness checks (statusLine leftover, pi package, install layout, v1 leftovers, retired chat state)")
 		fs.Bool("prune-scratch", false, "remove the mapped workspaces' scratch/ entries older than 14 days (default: report them only)")
 		fs.Bool("prune-capsules", false, "slim wrapped work items' capsules (live or set aside) to artifacts/ + capsule.json, and remove the external git dirs and set-aside scenes of failed/canceled ones, untouched for more than 14 days (default: report them only; never while the daemon is down)")
+		fs.Bool("prune-chat-state", false, "delete the retired chat-subscription state (chats.json, chat-subs.json, chat-status/ and the old watcher's runtime files; default: report them only)")
 		fs.Bool("fix-harness-prompts", false, "append the native-SVG diagram-guidance block to each installed harness's existing context file that lacks that block — legacy mermaid-only guidance included, left as it is (append-only, idempotent; never creates a file; default: report only)")
 		fs.Bool("fix-install-layout", false, "link ~/.claude/skills/polyforge to the installed release's skill when it is missing or links elsewhere — only that one entry; idempotent, a no-op when the link is already correct; never removes a copied directory and never installs pf or a release (no release: re-run tools/install.sh); default: report only")
 	},
@@ -282,7 +303,10 @@ var cmdDoctor = &Command{
 		if boolFlag(fs, "harness") && boolFlag(fs, "fix-install-layout") {
 			return fmt.Errorf("doctor: --fix-install-layout cannot be combined with --harness (the --harness projection tools/install.sh runs is read-only)")
 		}
-		checks := harnessDisplayChecks(boolFlag(fs, "fix-install-layout"))
+		if boolFlag(fs, "harness") && boolFlag(fs, "prune-chat-state") {
+			return fmt.Errorf("doctor: --prune-chat-state cannot be combined with --harness (the --harness projection tools/install.sh runs is read-only)")
+		}
+		checks := harnessDisplayChecks(boolFlag(fs, "fix-install-layout"), boolFlag(fs, "prune-chat-state"))
 		if !boolFlag(fs, "harness") {
 			checks = append(runDoctorChecks(ctx, boolFlag(fs, "prune-scratch"), boolFlag(fs, "prune-capsules"), boolFlag(fs, "fix-harness-prompts")), checks...)
 		}
@@ -349,14 +373,14 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool)
 			r.missing = append(r.missing, ws)
 		}
 	}
-	r.reachOK, r.reachMsg = probeServerReach(cfg.Server)
 	r.sockOK, r.sockMsg, r.status = probeDaemonSocket(cfg.DaemonSocket)
+	r.reachOK, r.reachMsg = probeServerReach(cfg.DaemonSocket, r.sockOK)
 
 	for _, d := range doctorChecks {
 		c := doctorCheck{Name: d.name, Status: "skip"}
 		switch {
 		case d.need == needAihub && !r.reachOK:
-			c.Detail = "not run: aihub unreachable (" + cfg.Server + ")"
+			c.Detail = "not run: " + r.reachMsg
 		case d.need >= needMapping && cfg.Mapping.Empty():
 			c.Detail = "not run: the mapping is absent"
 		default:
@@ -384,7 +408,7 @@ func mappingCheck(r *doctorRun) (string, string) {
 // fails it, any successful read proves it. aihub answers 404 both for an
 // unknown project and for one the key's user is not a member of.
 func projectsCheck(r *doctorRun) (string, string) {
-	client := aihubclient.New(r.cfg.Server, r.cfg.APIKey)
+	client := newProxyClient(r.cfg.DaemonSocket, "")
 	var fails []string
 	denied, proven := false, false
 	for _, project := range r.cfg.Mapping.Projects() {
@@ -427,15 +451,25 @@ func passOrFail(ok bool) string {
 	return "fail"
 }
 
-// probeServerReach classifies server reachability.
-func probeServerReach(server string) (bool, string) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(strings.TrimSuffix(server, "/") + "/api/v1/projects")
-	if err != nil {
-		return false, fmt.Sprintf("aihub server %s unreachable: %v", server, err)
+// probeServerReach asks the default Cell's AIHub through the daemon's
+// data-plane proxy (the CLI never dials a Hub itself). With the daemon down
+// the Hub-dependent checks are skipped, never failed: local repair keeps
+// working.
+func probeServerReach(sock string, daemonUp bool) (bool, string) {
+	if !daemonUp {
+		return false, "the daemon does not answer — the Hub-dependent checks go through it (start it with `pf daemon ensure`)"
 	}
-	resp.Body.Close()
-	return true, fmt.Sprintf("aihub server %s answered (HTTP %d)", server, resp.StatusCode)
+	c := newProxyClient(sock, "")
+	c.HTTP.Timeout = 5 * time.Second
+	_, err := c.ListProjects()
+	var ae *api.Error
+	switch {
+	case err == nil:
+		return true, "the default Cell's aihub answered through the daemon"
+	case errors.As(err, &ae) && ae.Code != api.ErrDaemonHubUnavailable && ae.Code != api.ErrDaemonGone:
+		return true, fmt.Sprintf("the default Cell's aihub answered through the daemon (%s)", ae.Code)
+	}
+	return false, fmt.Sprintf("the default Cell's aihub is unreachable through the daemon: %v", err)
 }
 
 // probeDaemonSocket dials the daemon's UDS face and asks GET /status;
@@ -473,27 +507,32 @@ func daemonStatus(sock string, timeout time.Duration, harnesses bool) (StatusRes
 
 // workspaceYamlCheck loads every mapped workspace's .polyforge.yaml and
 // the daemon's installed bundles the way a claim does (the refusal it
-// would meet, DAEMON-414, surfaced before any claim). Without the
-// daemon's workflows dir the per-step keys cannot be judged: a yaml that
-// otherwise loads is a warn, never a pass. It also answers every step
-// with a `claude:` candidate (the "harness claude" check's subject).
+// would meet, DAEMON-414, surfaced before any claim); each workspace's
+// steps resolve over its own lane set (the built-in lanes and its user
+// lanes, whose defects are the `workflow lanes` row's). A per-step key
+// that names no step of a lane of the workspace's set — the retired
+// `verify-judge` among them — is stale: it governs nothing and is a warn
+// naming the key and the rewrite. Without the daemon's workflows dir the
+// per-step keys cannot be judged: a yaml that otherwise loads is a warn,
+// never a pass. It also answers every step with a `claude:` candidate (the
+// "harness claude" check's subject).
 func workspaceYamlCheck(m *mapping.Plan, workflowsDir string, daemonUp bool) (string, string, []workspace.StepResolution) {
 	var fails []string
 	var claudeSteps []workspace.StepResolution
-	bundles, bad, _ := workspace.Bundles(workflowsDir, "")
-	bundleNames := slices.Sorted(maps.Keys(bundles))
+	_, bad, _ := workspace.Bundles(workflow.LaneSet{Builtin: workflowsDir}, "")
 	var badBundles []string
 	for name, err := range bad {
 		badBundles = append(badBundles, fmt.Sprintf("bundle %s: %v", name, err))
 	}
 	sort.Strings(badBundles)
 	present, withSteps := 0, 0
+	var stale, unjudged, placeholders []string
 	for _, ws := range m.Workspaces() {
 		_, serr := os.Stat(workspace.PathFor(ws))
 		if serr == nil {
 			present++
 		}
-		cfg, err := workspace.Load(ws, workflowsDir, m.ProjectsOf(ws))
+		cfg, err := workspace.Load(ws, m.ProjectsOf(ws))
 		if err != nil {
 			fails = append(fails, err.Error())
 			continue
@@ -504,6 +543,24 @@ func workspaceYamlCheck(m *mapping.Plan, workflowsDir string, daemonUp bool) (st
 		if workflowsDir == "" {
 			continue
 		}
+		set := workflow.ForWorkspace(workflowsDir, ws)
+		keys, err := workspace.StaleKeys(cfg, set)
+		var ule *workflow.UserLanesError
+		switch {
+		case errors.As(err, &ule):
+			// only the workspace's user lanes are unknown: the built-in
+			// lanes still answer (a claim on one runs), but a key no
+			// built-in lane carries may name a user lane's step
+			unjudged = append(unjudged, fmt.Sprintf("%s: its step keys are not judged — %v (the `workflow lanes` row)", workspace.PathFor(ws), err))
+		case err != nil:
+			fails = append(fails, fmt.Sprintf("%s: the installed workflows are unreadable, so the step keys cannot be checked: %v", workspace.PathFor(ws), err))
+			continue
+		}
+		for _, k := range keys {
+			stale = append(stale, workspace.PathFor(ws)+": "+k)
+		}
+		bundles, _, _ := workspace.Bundles(set, "")
+		bundleNames := slices.Sorted(maps.Keys(bundles))
 		for _, project := range m.ProjectsOf(ws) {
 			for _, name := range bundleNames {
 				for _, r := range workspace.ResolveSteps(name, bundles[name], cfg, project, nil) {
@@ -514,6 +571,9 @@ func workspaceYamlCheck(m *mapping.Plan, workflowsDir string, daemonUp bool) (st
 					}
 					if slices.Contains(hs, harness.Claude) {
 						claudeSteps = append(claudeSteps, r)
+					}
+					if len(r.Models) > 0 && workspace.IsPlaceholder(r.Models[0]) {
+						placeholders = append(placeholders, fmt.Sprintf("%s/%s/%s → %s (%s)", r.Project, r.Bundle, r.Step, r.Models[0], r.ModelsFrom))
 					}
 				}
 			}
@@ -526,9 +586,31 @@ func workspaceYamlCheck(m *mapping.Plan, workflowsDir string, daemonUp bool) (st
 	if len(badBundles) > 0 {
 		parts = append(parts, strings.Join(badBundles, "; ")+" — a claim of a work item on such a bundle is refused until it is fixed")
 	}
+	staleNote := ""
+	if len(stale) > 0 {
+		staleNote = fmt.Sprintf("%d stale key(s) name no step of an installed lane and govern nothing: %s — rename or delete each (%s)", len(stale), strings.Join(stale, ", "), workspace.StaleKeyHint)
+	}
+	if len(unjudged) > 0 {
+		if staleNote != "" {
+			staleNote += "; "
+		}
+		staleNote += strings.Join(unjudged, "; ")
+	}
+	if len(placeholders) > 0 {
+		if staleNote != "" {
+			staleNote += "; "
+		}
+		staleNote += fmt.Sprintf("%d step(s) would run on a placeholder model no gateway serves (the first resolved candidate is `%s…`): %s — set steps.<project>.default.models (or the step's key) in the workspace yaml",
+			len(placeholders), workspace.PlaceholderPrefix, strings.Join(capRows(placeholders), ", "))
+	}
 	switch {
 	case len(parts) > 0:
+		if staleNote != "" {
+			parts = append(parts, staleNote)
+		}
 		return "fail", strings.Join(parts, "; ") + "; " + extensionsPointer, claudeSteps
+	case staleNote != "":
+		return "warn", fmt.Sprintf("%d %s file(s) load; %s", present, workspace.FileName, staleNote), claudeSteps
 	case present == 0 && workflowsDir != "":
 		return "pass", "no mapped workspace carries a " + workspace.FileName + "; every installed bundle's candidates name their harness", claudeSteps
 	case present == 0:

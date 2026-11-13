@@ -1,0 +1,2 @@
+{"type":"api-request","id":"444d3ddc-328b-450e-a022-c25a5646ec7d","timestamp":"2026-11-02T23:39:21.038Z","version":"2.1.312","querySource":"sdk","params":{"model":"claude-haiku-5-5","max_tokens":128000,"thinking":{"type":"adaptive","display":"updates"},"output_config":{"effort":"low"}}}
+{"type":"api-request","id":"a7df56dd-51fe-4103-99b4-854ea966e794","timestamp":"2026-11-02T23:39:21.759Z","version":"2.1.312","querySource":"sdk","params":{"model":"claude-haiku-5-5","max_tokens":128000,"thinking":{"type":"adaptive","display":"updates"},"output_config":{"effort":"max"}}}

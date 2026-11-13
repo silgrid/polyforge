@@ -10,11 +10,14 @@ package daemon
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/atomicfile"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 )
 
@@ -42,10 +45,15 @@ func roleFromLauncher(launcher string) string {
 
 // machineFaceState is guarded by Daemon.faceMu.
 type machineFaceState struct {
-	available      bool
-	version        int
-	role           string
-	desiredRole    string
+	available   bool
+	version     int
+	role        string
+	desiredRole string
+	// roleChosen: an operator chose the role explicitly (POST
+	// /machine/role without if_unset); persisted in <data-dir>/
+	// machine-role.json so it survives a restart. The session-start
+	// adapters' if_unset request then leaves it alone.
+	roleChosen     bool
 	forceNext      bool
 	multiMachine   bool
 	superseded     bool
@@ -165,18 +173,78 @@ func (d *Daemon) faceStatus() map[string]any {
 	}
 }
 
-// requestDesiredRole records an operator move (`pf chat init --force`).
-func (d *Daemon) requestDesiredRole(role string, force bool) error {
+// requestDesiredRole records an operator move (`pf ops role`, POST
+// /machine/role) and answers whether it was applied. ifUnset is the
+// session-start adapters' request (`--if-unset`): applied only while no
+// operator chose a role explicitly (persisted, so across restarts; an explicit
+// `pf ops role runner` is never undone by a session start, compact or
+// clear); an explicit move always applies and marks the role chosen.
+func (d *Daemon) requestDesiredRole(role string, force, ifUnset bool) (bool, error) {
 	if role != api.MachineRoleInteractive && role != api.MachineRoleRunner {
-		return fmt.Errorf("role must be interactive or runner")
+		return false, fmt.Errorf("role must be interactive or runner")
 	}
+	// one role move at a time: memory and the persisted file follow the
+	// same order (the file write happens under roleMu, not the face lock)
+	d.roleMu.Lock()
+	defer d.roleMu.Unlock()
 	d.mfaceMu.Lock()
+	if ifUnset && d.face.roleChosen {
+		d.mfaceMu.Unlock()
+		return false, nil
+	}
 	d.face.desiredRole = role
+	if !ifUnset {
+		d.face.roleChosen = true
+	}
 	if force {
 		d.face.forceNext = true
 	}
 	d.mfaceMu.Unlock()
-	return nil
+	if ifUnset {
+		return true, nil
+	}
+	// the explicit choice outlives the process (no I/O under the face lock)
+	if err := writeChosenRole(d.cfg.DataDir, role); err != nil {
+		return true, fmt.Errorf("the role is requested but could not be recorded (it lasts until the daemon restarts): %w", err)
+	}
+	return true, nil
+}
+
+// chosenRoleFile holds the operator's explicit role choice (pf ops role
+// interactive|runner without --if-unset), so a restart keeps it.
+const chosenRoleFile = "machine-role.json"
+
+func writeChosenRole(dataDir, role string) error {
+	blob, err := json.Marshal(map[string]string{"role": role})
+	if err != nil {
+		return err
+	}
+	return atomicfile.Write(filepath.Join(dataDir, chosenRoleFile), blob, 0o600)
+}
+
+// readChosenRole answers the persisted explicit choice ("" = none, or an
+// unreadable file: the launcher default then applies, as before any choice).
+func readChosenRole(dataDir string) string {
+	raw, err := os.ReadFile(filepath.Join(dataDir, chosenRoleFile))
+	if err != nil {
+		return ""
+	}
+	var doc struct {
+		Role string `json:"role"`
+	}
+	if json.Unmarshal(raw, &doc) != nil || (doc.Role != api.MachineRoleInteractive && doc.Role != api.MachineRoleRunner) {
+		return ""
+	}
+	return doc.Role
+}
+
+// initialFace answers the face state a daemon starts with: the persisted
+// explicit choice, else the launcher's default (not a choice).
+func initialFace(cfg Config) machineFaceState {
+	if role := readChosenRole(cfg.DataDir); role != "" {
+		return machineFaceState{desiredRole: role, roleChosen: true}
+	}
+	return machineFaceState{desiredRole: roleFromLauncher(cfg.Launcher)}
 }
 
 // faceSleep is the loop's context-aware pause (never a bare sleep).

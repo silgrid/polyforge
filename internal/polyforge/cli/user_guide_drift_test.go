@@ -162,7 +162,7 @@ func docDriftSets(t *testing.T) (knownVerbs, global, pkg map[string]bool, verbFl
 		verbFlags[c.Name] = set
 	}
 	// pkg collects the flag literals this package's sub-actions define
-	// or match themselves (file create, ops end-session, chat init,
+	// or match themselves (file create, ops end-session, ops role,
 	// watch subcommands, ...) — the same scan skill_flags_test.go runs.
 	pkg = map[string]bool{}
 	srcs, err := filepath.Glob("*.go")
@@ -211,7 +211,7 @@ func docDriftSets(t *testing.T) (knownVerbs, global, pkg map[string]bool, verbFl
 //     fragments are not checked: path existence is the bar.
 //
 // name is the page's repo-relative path (error messages carry it).
-// Sub-action names (the word after file, ops, chat, result) are
+// Sub-action names (the word after file, ops, watch, result) are
 // intentionally not checked: the spec's bar is verbs and flags, and no
 // sub-action registry exists as data — they are switch arms.
 func docDriftCheck(t *testing.T, name, dir, body string) (checkedVerbs, checkedFlags, checkedLinks, skippedLinks int, bad []string) {

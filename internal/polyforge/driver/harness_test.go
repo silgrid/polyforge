@@ -38,9 +38,9 @@ func harnessDriverErr(t *testing.T, list []string, attempts []capsule.Attempt) (
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{
-			{ID: "review", ContextPolicy: "fresh"},
-		}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{
+			{ID: "review"},
+		}...),
 		Spawner: &fakeSpawner{},
 		Log:     &eventLog{},
 		Compose: composeOf(cands),
@@ -179,7 +179,7 @@ func TestAdapterClaudeSessionAndResume(t *testing.T) {
 		// spawner would, so the resume lookup has its ledger
 		t.Fatalf("unexpected journal %+v", entries)
 	}
-	if err := ad.appendSpawnJournal(p, "grill", "ab12cd34", 1, "2026-10-15T00:00:00Z"); err != nil {
+	if err := ad.appendSpawnJournal(p, "grill", "ab12cd34", "", 1, "2026-10-15T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -253,19 +253,6 @@ func entries0Transcript(t *testing.T, capDir string) string {
 	return entries[0].Transcript
 }
 
-// The driver's own bundle parse no longer knows a `harness` key (it is
-// refused by the claim-side frontmatter read, polyforge#175); an old
-// capsule snapshot that still carries one loads, its key ignored.
-func TestWorkflowParseIgnoresRetiredHarnessKey(t *testing.T) {
-	wf, err := parseWorkflow([]byte("defaults:\n  harness: claude\nsteps:\n  - { id: a }\n  - { id: b, harness: pi }\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateWorkflow(wf); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // polyforge#175 ruling 3: a candidate switch onto another harness is a
 // FRESH dispatch (the switch decision) on the new harness; the previous
 // dispatch's capsule transcript — the other harness's JSONL — rides the
@@ -279,7 +266,7 @@ func TestAdapterCrossHarnessSwitchCarriesReference(t *testing.T) {
 				t.Fatal(err)
 			}
 			p, _ := sp.last()
-			if err := ad.appendSpawnJournal(p, "grill", "ab12cd34", 1, "2026-10-15T00:00:00Z"); err != nil {
+			if err := ad.appendSpawnJournal(p, "grill", "ab12cd34", "", 1, "2026-10-15T00:00:00Z"); err != nil {
 				t.Fatal(err)
 			}
 			writeCapsuleFile(t, capDir, strings.TrimPrefix(p.TranscriptPath, capDir+"/"), "{\"type\":\"user\"}\n")
@@ -309,7 +296,7 @@ func TestCrossHarnessReferenceDoesNotWaitForTheCommitBoundaryCopy(t *testing.T) 
 		t.Fatal(err)
 	}
 	p, _ := sp.last()
-	if err := ad.appendSpawnJournal(p, "grill", "ab12cd34", 1, "2026-10-15T00:00:00Z"); err != nil {
+	if err := ad.appendSpawnJournal(p, "grill", "ab12cd34", "", 1, "2026-10-15T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	native := filepath.Join(cfgDir, "projects", harness.ClaudeProjectDirName(capDir), p.HarnessSession+".jsonl")

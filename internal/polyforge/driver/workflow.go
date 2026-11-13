@@ -1,106 +1,137 @@
 package driver
 
-// workflow.go: the ONE parse of a bundle's workflow.md frontmatter. The
-// driver (sequencing, supervision overrides, result duties) and the
-// spawn adapter (prompt assembly) read the same Workflow value, parsed
-// once in driver.New / NewStepSpawnAdapter. The read is loose (unknown
-// keys ignored); validateWorkflow is the one structural check of a
-// bundle (docs/design/polyforge-vnext/01-workflow-skills.md §4) and
-// surfaces every parse error.
+// workflow.go: the driver's view of a lane. LoadWorkflow reads the lane
+// through the one lane loader (workflow.Load) — the strict parse every
+// reader of a lane shares, which refuses any lane the contract does not
+// accept with every WFC-* defect at once — and maps the loaded lane onto
+// the execution graph the driver and its spawn adapter run.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/workflow"
-	"gopkg.in/yaml.v3"
-)
-
-const (
-	defaultMaxRewindTotal   = 4
-	defaultMaxRewindPerStep = 2
-)
-
-// Context policies (the frontmatter extension vocabulary).
-const (
-	// ContextInherit: the step continues the previous step's work —
-	// its prompt carries the producing step's handoff artifact.
-	ContextInherit = "inherit"
-	// ContextFresh: the step starts from a clean context — declared
-	// inputs only, never a handoff.
-	ContextFresh = "fresh"
 )
 
 // Workflow is the execution graph: the step order IS the declaration
-// order (rule V3), plus the rewind bounds.
+// order (rule V3), plus the lane's rewind budget.
 type Workflow struct {
-	Steps      []StepSpec
-	MaxTotal   int
-	MaxPerStep int
+	// Name is the lane's name (its directory's).
+	Name  string
+	Steps []StepSpec
+	// MaxRewinds is the lane's `max_rewinds: <n>`: ONE
+	// total budget across every gate→target edge — every automatic rewind
+	// counts toward it (an owner-routed one counts
+	// toward nothing). 0 is a valid budget: every gate FAIL asks the owner.
+	MaxRewinds int
 }
 
-// StepSpec is one workflow step: identity and order, gate policy,
-// context policy and the artifact surface the spawn adapter assembles
-// prompts from. Candidate lists are not read here: each dispatch composes
-// them (Config.Compose).
+// StepSpec is one workflow step: identity and order, gate policy and the
+// artifact surface the spawn adapter assembles prompts from. Candidate
+// lists are not read here: each dispatch composes them (Config.Compose).
 type StepSpec struct {
-	ID   string
-	Gate bool
-	// ContextPolicy is ContextInherit (the default) or ContextFresh.
-	ContextPolicy string
-	OnFail        *OnFail
-	// Handoff marks a step that must produce a handoff artifact
-	// (artifacts/handoff-<id>.md) for a later inherit step; the prompt
-	// carries the duty, nothing checks the file (resolveHandoff).
-	Handoff bool
-	// RequiresHumanAnswer mirrors `requires_human_answer: true`: the step
-	// may not complete until a human answered at least one of its
-	// questions in the current attempt chain (ResultSpec.HumanAnswers).
-	RequiresHumanAnswer bool
-	// HumanAnswerIfAsked mirrors `requires_human_answer: if_asked`
-	// (polyforge#164 H11): the step's questions are a human's to answer
-	// (the daemon refuses an answer from a step process tree), and a
-	// completion with ZERO human answers is accepted but recorded as the
-	// durable EvHumanGateUnasked event, which notifies the owner.
-	HumanAnswerIfAsked bool
-	// RequiresCommandEvidence mirrors `requires_command_evidence: true`
-	// (the V4 gate).
-	RequiresCommandEvidence bool
+	ID     string
+	Gate   bool
+	OnFail *OnFail
 	// The step's wall-budget estimate (budget.wall_minutes, T's base).
 	WallMinutes int
-	// Vars fills the {{name}} placeholders of the step's definition file
-	// (workflow.RenderStepVars): the lane-specific facts a shared
-	// workflows/_shared/steps/<id>.md leaves to each bundle.
+	// ToolMinutes is the step's own supervision tool window Y (0 = the
+	// daemon's global window): a declared one replaces the global default
+	// for the step's dispatches, rides every step process as
+	// PF_TOOL_WINDOW_MS, and sizes a claude step's Bash default timeout to
+	// the max. It is the contract-2 `budget.tool_minutes` key (workflow
+	// contract v2 O1).
+	ToolMinutes int
+	// Waivable mirrors `waivable` (contract 2; default false): the gate
+	// takes a hand-off `waive --per-owner`.
+	Waivable bool
+	// Skippable mirrors `skippable` (default false,): a
+	// project may switch the step off. Skipped is set by WithSkipped: the
+	// step is skippable and the work item's skipped-step set names it, so
+	// the driver never dispatches it.
+	Skippable bool
+	Skipped   bool
+	// Skill mirrors `skill` ("" = none): the lane snapshot's skill file
+	// rendered into the prompt as the `# Skill` section.
+	Skill string
+	// Resources mirrors `resources` (nil = none): what the daemon takes
+	// for each dispatch of the step (resources.go).
+	Resources *workflow.Resources
+	// Vars fills the {{name}} placeholders of the step's definition file:
+	// the lane-specific facts a shared workflows/_shared/steps/<id>.md
+	// leaves to each lane.
 	Vars map[string]string
-	// MechanicalFix mirrors `mechanical_fix: true` (polyforge#260): the
-	// verification step entry arms the mechanical fast lane — an armed
-	// lane's all-static verification FAIL may carry a mechanical
-	// classification (mechanical_bound) and rewind cheaply (no edge slot
-	// charged, a light re-entry of code, one light recheck). Absent = false = off:
-	// every fast-lane branch in the driver is gated on it, and an unarmed
-	// lane's FAIL rewinds exactly as today.
-	MechanicalFix bool
-	// Recall mirrors `recall: true`: the step's prompt
-	// carries the project-memory recall duty (workflows/_shared/memory.md:
-	// recall from three angles, read the relevant bodies, add a
-	// `## Prior experience` section). The lanes declare it on their
-	// decision/authoring steps; a judging or executing step (the review,
-	// verification and deliver gates, the release lane) declares none and
-	// spends no dispatch time recalling. Independent of it, the workflow's
-	// last step always carries the wrap-summary duty (memory-wrap.md).
-	Recall bool
-	// PlanConformance mirrors `plan_conformance: true`:
-	// the verification step entry receives the driver-computed
-	// plan-conformance facts (planconformance.go) beside review, which
-	// always receives them on a lane with a done plan step. Absent =
-	// false: the verification prompt carries no facts section.
-	PlanConformance bool
+	// Hub mirrors `hub.verbs`, HubAttrs `hub.attrs` and WrapAttrs
+	// `wrap_attrs` (workflow contracts 4 and 5): the `pf step hub` verbs
+	// the step may call, the attrs keys it may write, and the wrap attrs
+	// its round registers before it may hand off done.
+	Hub       []string
+	HubAttrs  []string
+	WrapAttrs []string
+}
+
+// HubAllowed answers the `pf step hub` verbs step id may call: its
+// `hub.verbs`, wrap-attrs when it declares `wrap_attrs`, attrs when its
+// `hub.attrs` names a key (nil for an unknown step or a nil workflow) —
+// the daemon's whitelist of the step's calls.
+func (w *Workflow) HubAllowed(id string) []string {
+	if w == nil {
+		return nil
+	}
+	s := w.step(id)
+	if s == nil {
+		return nil
+	}
+	return (&workflow.Step{Hub: s.Hub, HubAttrs: s.HubAttrs, WrapAttrs: s.WrapAttrs}).HubAllowed()
+}
+
+// HubAttrs answers the attrs keys step id may write with `pf step hub
+// attrs` (nil for none, an unknown step or a nil workflow) — the daemon's
+// whitelist of the step's attrs writes.
+func (w *Workflow) HubAttrs(id string) []string {
+	if w == nil {
+		return nil
+	}
+	if s := w.step(id); s != nil {
+		return s.HubAttrs
+	}
+	return nil
+}
+
+// WrapAttrs answers the wrap attrs step id's round must register before
+// it hands off done (nil for none, an unknown step or a nil workflow).
+func (w *Workflow) WrapAttrs(id string) []string {
+	if w == nil {
+		return nil
+	}
+	if s := w.step(id); s != nil {
+		return s.WrapAttrs
+	}
+	return nil
+}
+
+// Waivable reports whether the owner may waive a FAIL of step id
+// (contract 2): a gate declaring `waivable: true` (default false). The
+// daemon's waive route asks it of the parked capsule's lane.
+func (w *Workflow) Waivable(id string) bool {
+	if w == nil {
+		return false
+	}
+	s := w.step(id)
+	return s != nil && s.Gate && s.Waivable
+}
+
+// IsGate reports whether step id declares gate: true.
+func (w *Workflow) IsGate(id string) bool {
+	s := w.step(id)
+	return s != nil && s.Gate
 }
 
 // OnFail is the gate FAIL policy: the rewind target the gate's FAIL
-// verdict rewinds to (the terminate option is deleted — a gate FAIL
-// always rewinds to its declared target).
+// verdict rewinds to.
 type OnFail struct {
 	Target string
 }
@@ -122,262 +153,158 @@ func (w *Workflow) step(id string) *StepSpec {
 	return nil
 }
 
-// lastStep reports whether id is the workflow's last declared step.
-func (w *Workflow) lastStep(id string) bool {
+// lastAgentStep reports whether id is the workflow's last step not
+// skipped (StepSpec.Skipped): the last step an agent runs — the one that
+// owes the work item's wrap summary, and the delivery a waiver cannot
+// skip.
+func (w *Workflow) lastAgentStep(id string) bool {
 	if w == nil {
 		return false
 	}
-	i, ok := w.indexOf(id)
-	return ok && i == len(w.Steps)-1
+	for i := len(w.Steps) - 1; i >= 0; i-- {
+		if !w.Steps[i].Skipped {
+			return w.Steps[i].ID == id
+		}
+	}
+	return false
 }
 
-// stepVars answers the vars step id declares (nil for none, an unknown
-// step or a nil workflow).
-func (w *Workflow) stepVars(id string) map[string]string {
-	if w == nil {
+// skipped reports whether the driver skips step id (StepSpec.Skipped).
+func (w *Workflow) skipped(id string) bool {
+	s := w.step(id)
+	return s != nil && s.Skipped
+}
+
+// ReadSkippedSteps reads the work item's skipped-step set the daemon
+// fixed in the capsule at the first claim (capsule.SkippedStepsJSON); a
+// capsule without one (or with an unreadable one) skips nothing.
+func ReadSkippedSteps(capsuleDir string) []string {
+	raw, err := os.ReadFile(filepath.Join(capsuleDir, filepath.FromSlash(capsule.SkippedStepsJSON)))
+	if err != nil {
 		return nil
 	}
-	if s := w.step(id); s != nil {
-		return s.Vars
+	var ids []string
+	if json.Unmarshal(raw, &ids) != nil {
+		return nil
 	}
-	return nil
+	return ids
 }
 
-// buildStep answers the lane's build step — the step whose product is the
-// task-repo tree the unchanged-tree guard compares. It is
-// the verification entry's `build_step` var, else that gate's on_fail
-// target (both name the step a FAIL sends the build work back to); a
-// reduced lane without one falls back to the newest gate's on_fail target.
-// Empty = the lane declares no build step, and the guard stays out.
-func (w *Workflow) buildStep() string {
-	if w == nil {
-		return ""
+// WithSkipped answers the workflow with the steps of ids that it declares
+// skippable marked Skipped; a listed step the lane does
+// not declare skippable runs as usual. The wrap attrs of the skipped steps
+// at the lane's tail (after the last step that runs) move to that last
+// running step: its round registers them before it hands off done, and it
+// may call wrap-attrs (HubAllowed). The receiver is never changed: a copy
+// is answered when a step is marked, else the receiver itself.
+func (w *Workflow) WithSkipped(ids []string) *Workflow {
+	if w == nil || len(ids) == 0 {
+		return w
 	}
-	if v := w.step(verificationStepID); v != nil {
-		if b := v.Vars["build_step"]; b != "" {
-			return b
+	listed := map[string]bool{}
+	for _, id := range ids {
+		listed[id] = true
+	}
+	var out *Workflow
+	for i, s := range w.Steps {
+		if !s.Skippable || s.Skipped || !listed[s.ID] {
+			continue
 		}
-		if v.OnFail != nil {
-			return v.OnFail.Target
+		if out == nil {
+			cp := *w
+			cp.Steps = append([]StepSpec(nil), w.Steps...)
+			out = &cp
+		}
+		out.Steps[i].Skipped = true
+	}
+	if out == nil {
+		return w
+	}
+	last := len(out.Steps) - 1
+	for last >= 0 && out.Steps[last].Skipped {
+		last--
+	}
+	if last < 0 {
+		return out
+	}
+	moved := append([]string(nil), out.Steps[last].WrapAttrs...)
+	has := map[string]bool{}
+	for _, name := range moved {
+		has[name] = true
+	}
+	for _, s := range out.Steps[last+1:] {
+		for _, name := range s.WrapAttrs {
+			if !has[name] {
+				has[name] = true
+				moved = append(moved, name)
+			}
 		}
 	}
-	for i := len(w.Steps) - 1; i >= 0; i-- {
-		if s := &w.Steps[i]; s.Gate && s.OnFail != nil {
-			return s.OnFail.Target
-		}
+	if len(moved) > len(out.Steps[last].WrapAttrs) {
+		out.Steps[last].WrapAttrs = moved
 	}
-	return ""
+	return out
 }
 
-// LoadWorkflow reads a materialized bundle's workflow.md, parses its
-// frontmatter and validates it.
+// LoadWorkflow reads the lane at bundleDir through the one lane loader
+// and answers its execution graph; a lane with any contract defect is
+// refused with every defect (*workflow.LoadError).
 func LoadWorkflow(bundleDir string) (*Workflow, error) {
-	raw, err := os.ReadFile(filepath.Join(bundleDir, "workflow.md"))
-	if err != nil {
-		return nil, fmt.Errorf("driver: bundle workflow.md unreadable: %w", err)
-	}
-	front, _, ok := workflow.SplitFrontmatter(raw)
-	if !ok {
-		return nil, fmt.Errorf("driver: bundle workflow.md has no frontmatter block")
-	}
-	wf, err := parseWorkflow(front)
+	lane, err := workflow.LoadStrict(bundleDir)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateWorkflow(wf); err != nil {
-		return nil, err
-	}
-	return wf, nil
+	return workflowOf(lane), nil
 }
 
-// parseWorkflow parses one frontmatter block, filling the defaults:
-// context_policy inherit, rewind bounds 4/2 ( code review: a
-// declared bound ≤0 falls back like an omitted one, and an omitted
-// max_total derives the reachable min(4, #on_fail edges × max_per_step)
-// — see the derivation below). Judging the filled values is
-// validateWorkflow's job.
-func parseWorkflow(front []byte) (*Workflow, error) {
-	var doc extDoc
-	if err := yaml.Unmarshal(front, &doc); err != nil {
-		return nil, fmt.Errorf("driver: bundle frontmatter unparsable: %w", err)
-	}
-	wf := &Workflow{
-		MaxTotal:   defaultMaxRewindTotal,
-		MaxPerStep: defaultMaxRewindPerStep,
-	}
-	// A declared bound ≤0 falls back like an omitted one — the driver
-	// never honors a ≤0 bound, and validation must see the same values
-	// the driver later uses (driver.New applies the identical fallback
-	// to an injected workflow).
-	declaredTotal := false
-	if doc.Rewind != nil {
-		if doc.Rewind.MaxTotal != nil && *doc.Rewind.MaxTotal > 0 {
-			wf.MaxTotal = *doc.Rewind.MaxTotal
-			declaredTotal = true
-		}
-		if doc.Rewind.MaxPerStep != nil && *doc.Rewind.MaxPerStep > 0 {
-			wf.MaxPerStep = *doc.Rewind.MaxPerStep
+// LoadWorkflowGraph loads a lane's step graph — the step entries of its
+// workflow.yaml (gate, on_fail, waivable, wrap_attrs, hub, …) — even when a
+// step definition, a skill or a fragment it renders is defective: those
+// are the driver's to meet when it dispatches the step that needs them.
+// It fails only when workflow.yaml itself carries a defect (or cannot be
+// read). The daemon's `pf step` checks read it (a hand-off's status and
+// wrap attrs, the hub whitelist): a broken definition of a later step
+// must not refuse this step's hand-off.
+func LoadWorkflowGraph(bundleDir string) (*Workflow, error) {
+	lane, errs := workflow.Load(bundleDir)
+	front := filepath.Clean(filepath.Join(bundleDir, workflow.WorkflowFile))
+	var own []workflow.ContractError
+	for _, e := range errs {
+		if e.File == "" || filepath.Clean(e.File) == front {
+			own = append(own, e)
 		}
 	}
-	for _, s := range doc.Steps {
+	if err := workflow.AsLoadError(bundleDir, own); err != nil {
+		return nil, err
+	}
+	if lane == nil || len(lane.Steps) == 0 {
+		return nil, fmt.Errorf("driver: lane %s has no step graph", bundleDir)
+	}
+	return workflowOf(lane), nil
+}
+
+// workflowOf maps a loaded lane onto the execution graph.
+func workflowOf(lane *workflow.Lane) *Workflow {
+	wf := &Workflow{Name: lane.Name, MaxRewinds: lane.MaxRewinds}
+	for _, s := range lane.Steps {
 		step := StepSpec{
-			ID:                      s.ID,
-			Gate:                    s.Gate,
-			Handoff:                 s.Handoff,
-			ContextPolicy:           s.ContextPolicy,
-			RequiresHumanAnswer:     s.RequiresHumanAnswer.required,
-			HumanAnswerIfAsked:      s.RequiresHumanAnswer.ifAsked,
-			RequiresCommandEvidence: s.RequiresCommandEvidence,
-			Vars:                    s.Vars,
-			MechanicalFix:           s.MechanicalFix,
-			PlanConformance:         s.PlanConformance,
-			Recall:                  s.Recall,
+			ID:          s.ID,
+			Gate:        s.Gate,
+			WallMinutes: s.WallMinutes,
+			ToolMinutes: s.ToolMinutes,
+			Waivable:    s.Waivable,
+			Skippable:   s.Skippable,
+			Skill:       s.Skill,
+			Resources:   s.Resources,
+			Vars:        s.Vars,
+			Hub:         s.Hub,
+			HubAttrs:    s.HubAttrs,
+			WrapAttrs:   s.WrapAttrs,
 		}
-		if s.Budget != nil {
-			step.WallMinutes = s.Budget.WallMinutes
-		}
-		if step.ContextPolicy == "" {
-			step.ContextPolicy = ContextInherit // the declared default
-		}
-		if s.OnFail != nil {
-			step.OnFail = &OnFail{Target: s.OnFail.Target}
+		if s.OnFailTarget != "" {
+			step.OnFail = &OnFail{Target: s.OnFailTarget}
 		}
 		wf.Steps = append(wf.Steps, step)
 	}
-	// code review: an omitted max_total derives the reachable
-	// default min(4, #on_fail edges × max_per_step) instead of refusing
-	// the load — the driver's own 4/2 defaults must keep every previously
-	// loading workflow loading (the one-edge default shape was the one
-	// the plain 4 could make unreachable). A DECLARED total rides as
-	// declared: max_total counts the uncharged light, mechanical and
-	// converging rewinds too, so a total above edges × max_per_step is
-	// still reachable and binding — never a load error.
-	if !declaredTotal {
-		edges := 0
-		for i := range wf.Steps {
-			if wf.Steps[i].OnFail != nil {
-				edges++
-			}
-		}
-		if edgeCap := edges * wf.MaxPerStep; edges > 0 && wf.MaxTotal > edgeCap {
-			wf.MaxTotal = edgeCap
-		}
-	}
-	return wf, nil
-}
-
-// validateWorkflow refuses, at load, what the driver cannot honor:
-// missing/duplicate step ids, context policies outside the closed set
-// (every step carries one after parseWorkflow — the inherit default),
-// gate steps that are not fresh (a gate must judge on its own declared
-// inputs, never on an inherited persuasive context), and an on_fail that is
-// not on a gate or whose target is not an earlier step of the workflow
-// (otherwise the mistake would only surface at the gate's first FAIL),
-// and mechanical_fix on any step entry other than the verification
-// gate (the switch arms a verification-only fast lane — see
-// spawnStep — and was silently ignored anywhere else); plan_conformance
-// likewise belongs to the verification entry alone.
-func validateWorkflow(wf *Workflow) error {
-	if wf == nil || len(wf.Steps) == 0 {
-		return fmt.Errorf("driver: workflow has no steps")
-	}
-	seen := map[string]bool{}
-	for i := range wf.Steps {
-		s := &wf.Steps[i]
-		if s.ID == "" {
-			return fmt.Errorf("driver: workflow step %d without an id", i)
-		}
-		if seen[s.ID] {
-			return fmt.Errorf("driver: duplicate step id %q", s.ID)
-		}
-		seen[s.ID] = true
-		switch s.ContextPolicy {
-		case ContextInherit, ContextFresh:
-		default:
-			return fmt.Errorf("driver: step %q has unknown context_policy %q (want %q or %q)",
-				s.ID, s.ContextPolicy, ContextInherit, ContextFresh)
-		}
-		if s.Gate && s.ContextPolicy != ContextFresh {
-			return fmt.Errorf("driver: gate step %q must run context_policy: %s (found %q)",
-				s.ID, ContextFresh, s.ContextPolicy)
-		}
-		if s.MechanicalFix && s.ID != verificationStepID {
-			return fmt.Errorf("driver: step %q declares mechanical_fix — the switch belongs to the verification step entry alone", s.ID)
-		}
-		if s.PlanConformance && s.ID != verificationStepID {
-			return fmt.Errorf("driver: step %q declares plan_conformance — the switch belongs to the verification step entry alone (review always receives the facts)", s.ID)
-		}
-		if s.OnFail != nil {
-			if !s.Gate {
-				return fmt.Errorf("driver: step %q declares on_fail but is not a gate", s.ID)
-			}
-			// seen holds this step and every step declared before it.
-			if s.OnFail.Target == s.ID || !seen[s.OnFail.Target] {
-				return fmt.Errorf("driver: gate %q on_fail target %q is not an earlier step of the workflow", s.ID, s.OnFail.Target)
-			}
-		}
-	}
-	return nil
-}
-
-// The loose frontmatter schema (unknown keys are ignored — the retired
-// step `kind:` an old bundle snapshot may still carry included, so a
-// same-daemon recovery of such a capsule loads it unchanged).
-type extDoc struct {
-	Rewind *extRewind `yaml:"rewind"`
-	Steps  []extStep  `yaml:"steps"`
-}
-
-type extRewind struct {
-	MaxTotal   *int `yaml:"max_total"`
-	MaxPerStep *int `yaml:"max_per_step"`
-}
-
-type extStep struct {
-	ID                      string            `yaml:"id"`
-	Gate                    bool              `yaml:"gate"`
-	Handoff                 bool              `yaml:"handoff"`
-	RequiresHumanAnswer     humanGate         `yaml:"requires_human_answer"`
-	RequiresCommandEvidence bool              `yaml:"requires_command_evidence"`
-	MechanicalFix           bool              `yaml:"mechanical_fix"`
-	PlanConformance         bool              `yaml:"plan_conformance"`
-	Recall                  bool              `yaml:"recall"`
-	ContextPolicy           string            `yaml:"context_policy"`
-	OnFail                  *extOnFail        `yaml:"on_fail"`
-	Budget                  *extBudget        `yaml:"budget"`
-	Vars                    map[string]string `yaml:"vars"`
-}
-
-// humanGate is the requires_human_answer value: a bool (true = a human
-// answer must precede completion) or the string "if_asked" (questions
-// are human-only, zero questions pass with a recorded notification).
-type humanGate struct {
-	required bool
-	ifAsked  bool
-}
-
-// HumanGateIfAsked is the requires_human_answer value that allows a
-// zero-question completion (recorded and notified, never refused).
-const HumanGateIfAsked = "if_asked"
-
-func (h *humanGate) UnmarshalYAML(n *yaml.Node) error {
-	var b bool
-	if err := n.Decode(&b); err == nil {
-		h.required = b
-		return nil
-	}
-	var s string
-	if err := n.Decode(&s); err == nil && s == HumanGateIfAsked {
-		h.ifAsked = true
-		return nil
-	}
-	return fmt.Errorf("requires_human_answer: want true, false or %q, got %q", HumanGateIfAsked, n.Value)
-}
-
-type extBudget struct {
-	WallMinutes int `yaml:"wall_minutes"`
-}
-
-type extOnFail struct {
-	Target string `yaml:"target"`
+	return wf
 }

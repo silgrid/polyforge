@@ -1,0 +1,6 @@
+contract: 5
+name: wfc-111
+description: fixture lane for WFC-111
+steps:
+  - id: work
+    context_policy: fresh

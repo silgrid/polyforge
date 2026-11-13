@@ -1,63 +1,80 @@
-# answer — answer a pending needs_input question
+# answer — speak to the current step's agent
 
 Execution-plane verb: routed to the local daemon (the answer route). The
-daemon hands the payload to the work item's in-process Go driver; it never
-rewrites the answer. One answer is reserved: `cancel` (the whole answer, ignoring
-case and surrounding whitespace — every question states it) abandons the work
-item. The daemon first probes the hub's cancel door (`dry_run`) with its own
-credential, so the hub's `pf cancel` gate decides (reporter, project maintainer or
-admin — never the self-asserted `--by`); a refusal is returned and the question
-stays pending. An authorized cancel parks the workflow, ends the session blocked
-and cancels the work item through the hub's blocked→canceled door, with your
-verbatim answer on the cancel event; no memory wrap is written.
+daemon hands the words to the work item's in-process Go driver; it never
+rewrites them. `pf answer <id> --text "..."` goes to the current step's
+agent at any time (workflow contract v2) — a reply to its `pf step ask` question
+(the one `pf watch --once` shows under the ask's stamp as its id) while it
+waits, an interjection while it runs; the words are recorded in the capsule
+first, then relayed verbatim into that agent's own conversation (the live
+process, or the session resumed after the warm window), and the daemon reads
+none of them — no question id, no option, no reserved word. To send the
+work item back to an earlier step, to let a waivable gate's FAIL through, or
+to abandon it, say so in your words: the step's agent reads them and hands
+off `rewind --to <step>`, `waive` or `cancel` itself, citing your message
+(there is no owner command for the first two). `pf cancel` (`cancel.md`)
+abandons a work item directly.
+
+A **parked** work item (blocked or paused) is answered too (workflow
+contract 4): the message wakes the step the park belongs to — its own
+session after it handed off `blocked`, the step that timed out or kept
+exiting without a hand-off, the current step after a pause, a replay of
+failed hub writes. The command opens the work item's door with your own
+key first (the one `pf resume` opens), then the daemon records the words
+and claims the work item. Only a park no agent can start (no usable model,
+a snapshot of another contract) is refused — then `pf resume` after the
+fix, or `pf cancel`.
 
 ## Triggers
 
-- EN: answer the question / reply to needs_input / here's my answer / tell
+- EN: answer the question / reply to the step / here's my answer / tell
   it X / respond to what it's asking
 - 中文: 回答问题 / 它在问我 / 答一下 / 回复它 / 告诉它……
 
 ## Command
 
 ```
-pf answer <id> --text "..." [--question q_xxx] [--by user]
+pf answer <id> --text "..." [--by user]
 ```
 
-`--question` is the `question_id` the `pf watch --once` output showed; it may be
-omitted when exactly one question is pending (the default). With ZERO or
-SEVERAL pending questions a no-id answer is refused typed (`DAEMON-400`)
-and nothing is delivered — with several, the error names the open
-questions: pick one and pass its id via `--question` (a guess would
-deliver the answer to an arbitrary question). `--text` is the
-natural-language answer — required. Without `--question` the daemon answers
-the step's currently pending question; there is no idempotent replay (see
-Success). `--by` is the answerer's user id recorded as `answered_by`, defaulting to the config's
-`user_id` / `PF_USER_ID` (the daemon does not cross-check it against the
-caller); the CLI refuses locally if no identity is resolvable.
+`--text` is your words — required, verbatim (an owner's `/foo` reaches the
+agent as words). `--by` is the answerer's user id recorded with the
+message, defaulting to the config's `user_id` / `PF_USER_ID` (the daemon
+does not cross-check it against the caller); the CLI refuses locally if no
+identity is resolvable.
 
 ## Success
 
-`answer delivered for question <q_…>` (`--json`: the daemon's raw answer,
-`{"status":"accepted","question_id":"q_…"}`): the driver accepted the answer
-for its pending question and the parked step resumes — `pf watch` to follow
-it land. An answer is applied once: a second answer to a question that was
-already answered is refused with `DAEMON-409` — it is never re-applied and
-does not return the first submission's outcome. Run `pf watch <id> --once` to
-confirm the first answer landed.
+`reply to ask <at> recorded for step <s> (dispatch <n>, at <at>): delivered
+to the step's agent` — or `… queued by the step process (a turn is
+running); delivered at the turn's next boundary`, `… no step process is
+alive; the daemon resumes the session to deliver it`, `… the step process
+did not take it (<why>); the step's next dispatch carries it`; `message
+recorded for step …` for an interjection (`--json`: `{status, at, kind,
+ask_at?, step, spawn_n, delivered, disposition?, note?}`). The agent reads
+the words in its next turn and goes on, or asks again with `pf step ask`; the
+daemon never judges whether they answered the question. `pf watch <id>
+--once` lists `owner_message` and `delivered` among the events. A woken
+park prints `… recorded for step <s> (dispatch <n>, at <at>): the parked
+work item is woken — <how it continues>`.
 
 ## Failure branches
 
 | Code | When | What to tell the user |
 |---|---|---|
-| `DAEMON-409` (driver refused) | The driver could not take the answer: the `question_id` does not match the waiting step's persisted question, was already consumed, or another delivery of the same answer is in flight | The question is stale or mistyped — run `pf watch <id> --once` again, take the currently printed `question_id`, and answer that one; for an in-flight duplicate, simply retry shortly. Nothing was lost. |
 | `DAEMON-409` (no driver handle) | The work item has no live driver handle (the workflow is between derivations) | Retry shortly, after the daemon re-derives the workflow. |
-| `DAEMON-400` | No `--question` was given and the work item has NO pending question | Nothing is waiting for an answer — check `pf watch <id> --once`; do not retry blindly. |
-| `DAEMON-400` (several open questions) | No `--question` was given and the work item has TWO OR MORE pending questions (the error names them) | The daemon refuses to guess which one you meant — run `pf watch <id> --once`, pick the question you intend, and answer with `--question <id>`. |
+| `DAEMON-409` (no step agent) | No step agent can be talked to: the workflow is terminal, or no step is in progress under a dispatch | Nothing is running to talk to — check `pf watch <id> --once`. |
+| `DAEMON-409` `WAKE_CANNOT_START` | The work item is parked and its agent cannot start (no usable model, a failed candidate composition, a lane snapshot of another contract); nothing was recorded | Relay the reason; fix it (e.g. the step's models in `.polyforge.yaml`), then `pf resume <id>` (`resume.md`), or `pf cancel <id>`. |
+| (door refused) `answer: <id> is parked …; opening its door was refused` | aihub refused the resume door with your key (you are not the reporter, a maintainer, an admin or the machine's operator) | Nothing was recorded; ask someone who may resume it. |
+| `DAEMON-409` (disabled Cell) | The Cell's execution plane is closed (the error names why) | Nothing was recorded; fix the Cell's cause first. |
+| `DAEMON-400` (empty or oversize message) | The `--text` words are blank or over 64 KiB; nothing was recorded | Say it in words, at most 64 KiB (split a longer message). |
+| `DAEMON-400` (a question id or an option) | The request named a `question_id` or an `option` — the v1 answer's fields, gone with workflow contract v2 change 19 (an older client) | Answer with `--text` alone; the step's agent reads the words. |
 | `DAEMON-403` (step process — the only 403) | The caller runs inside a step agent's process tree (polyforge#122: the daemon checks the UDS peer, its ancestors and its process group for the step markers) | Questions are a human's to answer — a step agent never answers; answer from your own session. |
 | `DAEMON-404` | No local job for this work item | The work item is not running on this machine — answer from the machine that runs it. |
 | (no code) `answer: --text is required` / `… identity required` | Local usage refusal | Fill in the required flags; no request left the machine. |
 | `dial unix …` | Daemon not running | Run `pf daemon ensure`, then retry once (or check `--socket`). |
 
-Answers bind per `question_id`: if the step re-asks, it mints a **new**
-question id — never reuse an old answer command; read the new one with
-`pf watch --once` and answer that question.
+Every question comes from a step's own agent (`pf step ask`), and your
+words continue that agent's conversation; the daemon itself asks nothing. A
+parked work item asks nothing either, but your message wakes it (above);
+`pf resume` is for the park no agent can start.

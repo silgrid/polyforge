@@ -40,7 +40,9 @@ package gitops
 // never hashed), tracked files over the blob limit and lfs/git-crypt
 // files (kept at HEAD via skip-worktree, never hashed), files git cannot
 // read (add --ignore-errors). A left-out tracked path keeps its HEAD
-// entry, never becomes a deletion.
+// entry, never becomes a deletion. A repo with a merge in progress
+// (MERGE_HEAD) takes no snapshot at all and keeps the hub's older WIP ref:
+// restored as plain edits, a merge would lose its second parent.
 //
 // `git stash create` was rejected: it runs inside the agent repo (its
 // config, its object store) and never records untracked files.
@@ -89,8 +91,22 @@ var wipIdentity = []string{
 // paths of a task repo's uncommitted work out of the WIP commit (an
 // embedded repository, a filtered LFS/git-crypt file, a blob over the
 // carrier limit, the total-size cap): those paths come back at their HEAD
-// state (or absent) after a re-claim.
+// state (or absent) after a re-claim. A repo with a merge in progress is
+// left out whole (wipMergeInProgress): a re-claim restores its HEAD and
+// the hub's older WIP ref, if any.
 const EventTaskWIPSkipped = "task_wip_skipped"
+
+// wipMergeInProgress is the skipped detail of a repo whose merge is in
+// progress.
+const wipMergeInProgress = "the whole snapshot: a merge is in progress (MERGE_HEAD) — a re-claim cannot restore one, so the work branch comes back at HEAD (the hub's older WIP ref, if any, stands)"
+
+// mergeInProgress reports whether the task repo name has a merge in
+// progress: its own .git (the carrier lane's layout check refuses any
+// other) holds MERGE_HEAD. A file check, no git run in the repo.
+func mergeInProgress(reposDir, name string) bool {
+	_, err := os.Lstat(filepath.Join(reposDir, name, ".git", "MERGE_HEAD"))
+	return err == nil
+}
 
 // wipTotalCap bounds the bytes of changed content one WIP snapshot may
 // carry (the largest changed files are left out first above it). A var
@@ -167,7 +183,14 @@ func pushTaskWIP0(o Opts, keep, chainOK bool) (want, failed []string) {
 		return want, failed
 	}
 	defer cleanup()
-	env := carrierEnv(reposDir)
+	env, err := carrierEnv(o, reposDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gitops: %s: task WIP lane skipped: %v\n", o.WorkItemID, err)
+		for _, s := range srcs {
+			failed = append(failed, s.name)
+		}
+		return want, failed
+	}
 	for _, s := range srcs {
 		ref := TaskWIPRefName(s.name)
 		if o.expired() {
@@ -175,6 +198,20 @@ func pushTaskWIP0(o Opts, keep, chainOK bool) (want, failed []string) {
 			if keep {
 				o.carrierRefFailed(s.name, ref, chainOK, o.ended()+" before the WIP snapshot (the hub's WIP ref, if any, predates this close)")
 				failed = append(failed, s.name)
+			}
+			continue
+		}
+		if keep && mergeInProgress(reposDir, s.name) {
+			// a merge in progress cannot be carried: the snapshot would come
+			// back as plain edits with no MERGE_HEAD (a commit of them would
+			// flatten the merged branch into the work branch). Its HEAD is
+			// unmoved, so the hub's WIP ref, if any, predates the merge and
+			// stays; the merge's owner (the sync step, an agent) redoes it.
+			fmt.Fprintf(os.Stderr, "gitops: %s: repo %s: a merge is in progress (MERGE_HEAD): no WIP snapshot, the hub's WIP ref, if any, predates the merge\n", o.WorkItemID, s.name)
+			if o.EventSink != nil {
+				o.EventSink(EventTaskWIPSkipped, map[string]any{
+					"repo": s.name, "ref": ref, "skipped": EventDetail(wipMergeInProgress),
+				})
 			}
 			continue
 		}

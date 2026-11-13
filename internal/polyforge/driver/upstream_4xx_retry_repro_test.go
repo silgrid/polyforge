@@ -17,8 +17,9 @@ package driver
 // resuming the transcript, bounded at UpstreamTransientRetryBound; a
 // plain 4xx (no upstream, or no retry invitation) stays model-class.
 //
-// The first two tests fail before the fix, for exactly the reported
-// reason; the controls pass before and after.
+// The classification test failed before the fix, for exactly the
+// reported reason; the controls pass before and after. (What the driver
+// does with an upstream_transient is supervision_rules_test.go's.)
 
 import (
 	"testing"
@@ -58,55 +59,6 @@ func TestUpstream4xxRetryInvitationClassifiesTransient(t *testing.T) {
 		if got, _, _ := classifyWaitFailure(errWithText("read transcript: " + text)); got == FailUpstreamTransient {
 			t.Errorf("driver-local %q classified %q, want not transient", text, got)
 		}
-	}
-}
-
-// TestUpstream4xxRetryInvitationLiveTurnRetriesSameModel: ONE live
-// error turn carrying the incident's text, then a delivering dispatch.
-// Expected: the retry runs on the SAME model after the D7 backoff
-// (booked into T), resuming the transcript, the blocking counter
-// untouched, the attempt archived upstream_transient, no candidate burn.
-// Observed before the fix: the candidate switches on the first error
-// and the step restarts from scratch.
-func TestUpstream4xxRetryInvitationLiveTurnRetriesSameModel(t *testing.T) {
-	env, waits := runLive(t, []liveCase{
-		{name: "upstream-4xx-retry-invitation", errMsg: upstream4xxRetryInvitation, retries: 0, cause: FailUpstreamTransient, same: true},
-	})
-	models := env.models()
-	if len(models) != 2 {
-		t.Fatalf("dispatched %v, want two (the error turn + the delivery)", models)
-	}
-	if models[0] != models[1] {
-		t.Fatalf("REPORTED FAILURE (polyforge#227): one live 4xx upstream turn %q switched the model immediately (%q -> %q) and restarted the step from scratch — an upstream 4xx that invites a retry must retry the SAME model first", upstream4xxRetryInvitation, models[0], models[1])
-	}
-	if sw := env.log.byKind("candidate_switched"); len(sw) != 0 {
-		t.Fatalf("REPORTED FAILURE (polyforge#227): the glm candidate was burned on one upstream 4xx retry invitation: %+v", sw)
-	}
-	ev := env.log.byKind("step_failed")
-	if len(ev) != 1 {
-		t.Fatalf("step_failed events %d, want 1", len(ev))
-	}
-	body := ev[0].body
-	if body["cause"] != FailUpstreamTransient {
-		t.Fatalf("REPORTED FAILURE (polyforge#227): live error turn %q recorded cause %v, want %q (step_failed %v)", upstream4xxRetryInvitation, body["cause"], FailUpstreamTransient, body)
-	}
-	if body["disposition"] != "retry_same_model" {
-		t.Fatalf("REPORTED FAILURE (polyforge#227): disposition %v, want retry_same_model", body["disposition"])
-	}
-	if base := supervise.DefaultRetryBackoffBase; len(waits) != 1 || waits[0] != base {
-		t.Fatalf("REPORTED FAILURE (polyforge#227): backoff waits %v, want one %v (the same-model retry's first retry-pacing backoff)", waits, base)
-	}
-	st := env.exec(t).Steps["s"]
-	if st.Supervision != nil && st.Supervision.FailureCount != 0 {
-		t.Fatalf("REPORTED FAILURE (polyforge#227): the same-model retry moved the blocking counter: %+v", st.Supervision)
-	}
-	if got := st.BudgetConsumed.WallMs; got < supervise.DefaultRetryBackoffBase.Milliseconds() {
-		t.Fatalf("REPORTED FAILURE (polyforge#227): step T %dms, want the %v backoff booked in", got, supervise.DefaultRetryBackoffBase)
-	}
-	// the retry resumes the transcript: the #222 death forced a fresh
-	// re-derivation of the whole step instead.
-	if sp := env.sp.spawnAt(1); !sp.Resume || sp.Fresh {
-		t.Fatalf("REPORTED FAILURE (polyforge#227): the same-model retry must resume the transcript, got %+v", sp)
 	}
 }
 

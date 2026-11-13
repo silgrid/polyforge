@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=../_schema/workflow-5.schema.json
+contract: 5
+name: micro
+description: Pure-text lane - fix → review → sync → evidence → publish → merge, no grill, plan or verification step; the ticket body is the spec, the change must stay inside the paths each touched repository declares text-only (micro_path= in its .polyforge/verify-scope.conf). Every step is an agent step - fix and review on the mid tier, the four mechanical ones on the cheap tier, each running a pre-written command its skill names and checking what the step before it handed off first - fix writes the evidence plan and judges its own bounds (facts.py micro-bounds; out of bounds it asks the owner to re-file on develop and hands off cancel on the owner's word), review re-runs that judgment, sync merges the default branch in and resolves a real conflict in place (sync.py), evidence re-runs the plan on the host (run.py --isolation host --plan-from; waivable), publish opens the PR and merge merges it and registers the landing record (merge.py); the integration lane's full gate runs over what landed.
+max_rewinds: 3
+defaults:
+  model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
+  tiers: { cheap: [pi:example-gateway/model-cheap], mid: [pi:example-gateway/model-mid] }
+steps:
+  - id: fix
+    skill: micro-bounds
+    model_tier: mid
+    budget: { wall_minutes: 20 }
+  - id: review
+    gate: true
+    on_fail: { target: fix }
+    model_tier: mid
+    budget: { wall_minutes: 15 }
+  - id: sync
+    skill: sync
+    model_tier: cheap
+    budget: { tool_minutes: 20 }
+    vars: { verifying_gate: evidence, change_step: fix }
+  - id: evidence
+    gate: true
+    on_fail: { target: fix }
+    waivable: true
+    skill: evidence
+    model_tier: cheap
+    resources: { admission: heavy }
+    budget: { tool_minutes: 30 }
+  - id: publish
+    gate: true
+    on_fail: { target: fix }
+    skill: publish
+    model_tier: cheap
+    budget: { wall_minutes: 15 }
+  - id: merge
+    gate: true
+    on_fail: { target: sync }
+    skill: merge
+    model_tier: cheap
+    resources: { locks: [merge] }
+    budget: { tool_minutes: 10 }
+    wrap_attrs: [integration]
+    vars: { verifying_gate: evidence }

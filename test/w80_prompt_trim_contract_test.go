@@ -12,8 +12,9 @@ package test
 //  2. One source per repeated block: each shared fragment is included by
 //     the step files that need it (at least two — a repeated block), its
 //     text appears exactly once in each rendered definition, and no raw
-//     step file carries a second copy. The driver-rendered rare-path
-//     sections have no copy in any step file either.
+//     step file carries a second copy. The review's later-round rule (the
+//     two faces and the round contract) lives once too, in the review
+//     skill, with no copy in any step file.
 
 import (
 	"os"
@@ -40,8 +41,6 @@ func w80Read(t *testing.T, rel string) string {
 
 func TestW80DefaultBranchFallbackStripsRemote(t *testing.T) {
 	for _, rel := range []string{
-		"workflows/_shared/steps/deliver.md",
-		"workflows/_shared/steps/verification.md",
 		"workflows/release/steps/release.md",
 	} {
 		text := w80Read(t, rel)
@@ -72,7 +71,12 @@ func w80StepFiles(t *testing.T) []string {
 
 func TestW80SharedFragmentsAreTheOneSource(t *testing.T) {
 	files := w80StepFiles(t)
-	for _, frag := range []string{"fast_checks", "fast_checks_build", "batch_questions", "handoff_duty", "deliverable_carrier", "owner_review"} {
+	// (deliverable_carrier went with workflow contract 3: no shipped step
+	// included it since removed the lanes whose steps did;
+	// fast_checks, fast_checks_build and batch_questions have one includer,
+	// develop's build, so the bar is "included, never copied" rather than
+	// "repeated")
+	for _, frag := range []string{"fast_checks", "fast_checks_build", "batch_questions", "owner_review"} {
 		text := strings.TrimSpace(w80Read(t, "workflows/_shared/"+frag+".md"))
 		var users []string
 		for _, rel := range files {
@@ -84,14 +88,14 @@ func TestW80SharedFragmentsAreTheOneSource(t *testing.T) {
 				users = append(users, rel)
 			}
 		}
-		if len(users) < 2 {
-			t.Errorf("fragment %s is included by %d step files (%v), want a repeated block (>= 2)", frag, len(users), users)
+		if len(users) < 1 {
+			t.Errorf("fragment %s is included by no step file: a dead fragment", frag)
 		}
 		for _, rel := range users {
 			// rel is workflows/<bundle>/steps/<id>.md; the users carry no vars
 			parts := strings.Split(rel, "/")
 			bundle, step := parts[1], strings.TrimSuffix(parts[3], ".md")
-			out, err := workflow.ReadStepDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, nil)
+			out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, nil)
 			if err != nil {
 				t.Fatalf("render %s: %v", rel, err)
 			}
@@ -100,19 +104,20 @@ func TestW80SharedFragmentsAreTheOneSource(t *testing.T) {
 			}
 		}
 	}
-	// The driver-rendered rare-path sections live once: no step file
-	// carries their distinctive lines.
-	for frag, line := range map[string]string{
-		"scoped_verification": "- **Any engine failure falls back to the full tier.**",
-		"scoped_review":       "**Answer `scope_adequate` and record your `scope` when the work item opted",
-		"review_reentry":      "On a re-entry, run two additive faces over the current tree:",
+	// The review's later-round rule lives once: workflow contract 4 moved
+	// it from the driver-rendered `# Review re-entry` section
+	// (_shared/review_reentry.md) into the review skill, which the shared
+	// review step only points at; no step file carries its distinctive
+	// lines.
+	for src, line := range map[string]string{
+		"workflows/_shared/skills/review.md": "Run two faces over the current tree:",
 	} {
-		if !strings.Contains(w80Read(t, "workflows/_shared/"+frag+".md"), line) {
-			t.Fatalf("workflows/_shared/%s.md lost its pinned line %q", frag, line)
+		if !strings.Contains(strings.Join(strings.Fields(w80Read(t, src)), " "), line) {
+			t.Fatalf("%s lost its pinned line %q", src, line)
 		}
 		for _, rel := range files {
-			if strings.Contains(w80Read(t, rel), line) {
-				t.Errorf("%s carries a copy of the driver-rendered %s section", rel, frag)
+			if strings.Contains(strings.Join(strings.Fields(w80Read(t, rel)), " "), line) {
+				t.Errorf("%s carries a copy of the later-round rule %s owns", rel, src)
 			}
 		}
 	}

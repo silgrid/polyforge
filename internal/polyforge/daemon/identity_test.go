@@ -1,14 +1,13 @@
 package daemon
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/silgrid/polyforge/internal/polyforge/cli"
+	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
 
@@ -35,136 +34,65 @@ func TestResolveDaemonID(t *testing.T) {
 	}
 }
 
-func TestChatInitStableAcrossStoresAndSessions(t *testing.T) {
-	dir := t.TempDir()
-	s := &chatStore{path: filepath.Join(dir, chatsFile)}
-	a, err := s.Init("claude", "sess-1")
-	if err != nil || !a.Created || !strings.HasPrefix(a.ChatID, "chat_") {
-		t.Fatalf("first: %+v %v", a, err)
-	}
-	// a new store over the same file (daemon restart) resumes the same chat
-	b, _ := (&chatStore{path: s.path}).Init("claude", "sess-1")
-	if b.ChatID != a.ChatID || b.Created {
-		t.Fatalf("resume: %+v vs %+v", b, a)
-	}
-	if c, _ := s.Init("pi", "sess-1"); c.ChatID == a.ChatID {
-		t.Fatal("same session id under another harness must be another chat")
-	}
-	if c, _ := s.Init("claude", "sess-2"); c.ChatID == a.ChatID {
-		t.Fatal("another session must be another chat")
-	}
-}
-
-func TestChatInitRoute(t *testing.T) {
-	dir := t.TempDir()
-	ws := filepath.Join(dir, "ws")
-	if err := os.MkdirAll(ws, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	aPlan := mappingFor(ws)
-	subs, err := newSubStore(filepath.Join(dir, chatSubsFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := &Daemon{chats: &chatStore{path: filepath.Join(dir, chatsFile)}, subs: subs, cfg: Config{Mapping: aPlan}}
-	call := func(body string) *httptest.ResponseRecorder {
-		w := httptest.NewRecorder()
-		d.chatInitRoute(w, httptest.NewRequest("POST", "/chat/init", strings.NewReader(body)))
-		return w
-	}
-	if w := call(`{"harness":"claude","harness_session":"s"}`); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"chat_id":"chat_`) {
-		t.Fatalf("ok: %d %s", w.Code, w.Body)
-	}
-	if w := call(`{"harness":"emacs","harness_session":"s"}`); w.Code != http.StatusBadRequest {
-		t.Fatalf("bad harness: %d", w.Code)
-	}
-	if w := call(`{"harness":"pi"}`); w.Code != http.StatusBadRequest {
-		t.Fatalf("missing session: %d", w.Code)
-	}
-}
-
-// TestChatInitRecordsWorkspaceTag — the route records the
-// chat's workspace tag on the chat-subs chatDoc (recorded even
-// untagged), refreshes it on a re-init, refuses a workspace the
-// daemon's own mapping does not carry, and leaves chats.json — the
-// (harness, session)→id identity map — with its exact shape.
-func TestChatInitRecordsWorkspaceTag(t *testing.T) {
-	dir := t.TempDir()
-	wsA, wsB := filepath.Join(dir, "wsA"), filepath.Join(dir, "wsB")
-	for _, d := range []string{wsA, wsB} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	aPlan := mappingFor(wsA, "projA")
-	subs, err := newSubStore(filepath.Join(dir, chatSubsFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := &Daemon{chats: &chatStore{path: filepath.Join(dir, chatsFile)}, subs: subs, cfg: Config{Mapping: aPlan}}
-	call := func(body string) *httptest.ResponseRecorder {
-		w := httptest.NewRecorder()
-		d.chatInitRoute(w, httptest.NewRequest("POST", "/chat/init", strings.NewReader(body)))
-		return w
-	}
-	chat := func() string {
-		t.Helper()
-		w := call(`{"harness":"pi","harness_session":"gmi14","workspace":"` + wsA + `"}`)
-		if w.Code != http.StatusOK {
-			t.Fatalf("chat init: %d %s", w.Code, w.Body)
-		}
-		var rec chatRecord
-		if err := json.Unmarshal(w.Body.Bytes(), &rec); err != nil || rec.ChatID == "" {
-			t.Fatalf("chat init answer: %s (%v)", w.Body, err)
-		}
-		return rec.ChatID
-	}
-	id := chat()
-	if tag := subs.WorkspaceOf(id); tag != wsA {
-		t.Fatalf("the tag must be recorded on the chat's chatDoc: %q", tag)
-	}
-	// a re-init from another cwd refreshes the tag
-	w := call(`{"harness":"pi","harness_session":"gmi14","workspace":""}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("re-init untagged: %d %s", w.Code, w.Body)
-	}
-	if tag := subs.WorkspaceOf(id); tag != "" {
-		t.Fatalf("re-init must refresh the tag from the current cwd: %q", tag)
-	}
-	// an untagged chat is a RECORDED chat (present in the tag store)
-	subs.mu.Lock()
-	_, recorded := subs.doc.Chats[id]
-	subs.mu.Unlock()
-	if !recorded {
-		t.Fatal("an untagged chat must exist in the tag store")
-	}
-	// a workspace outside the daemon's mapping is a DAEMON-400 refusal
-	w = call(`{"harness":"pi","harness_session":"gmi14","workspace":"` + wsB + `"}`)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), wsB) || !strings.Contains(w.Body.String(), "DAEMON-400") {
-		t.Fatalf("a config drift must refuse naming the workspace: %d %s", w.Code, w.Body)
-	}
-	// chats.json keeps its exact shape: (harness, session)→id only
-	raw, err := os.ReadFile(filepath.Join(dir, chatsFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc struct {
-		Chats map[string]string `json:"chats"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil || len(doc.Chats) != 1 || doc.Chats["pi:gmi14"] != id {
-		t.Fatalf("chats.json shape: %s (%v)", raw, err)
-	}
-}
-
 func TestReqOriginKinds(t *testing.T) {
 	var none *reqOrigin
-	if o := none.origin(); o.Kind != runtime.OriginChat || o.ChatID != "" {
-		t.Errorf("nil (chat-less manual): %+v", o)
+	if o := none.origin(); o.Kind != runtime.OriginChat || o.Owner != "" {
+		t.Errorf("nil (manual, no owner): %+v", o)
 	}
-	if o := (&reqOrigin{ChatID: "chat_x", Owner: "u"}).origin(); o.Kind != runtime.OriginChat || o.ChatID != "chat_x" || o.Owner != "u" {
-		t.Errorf("chat: %+v", o)
+	if o := (&reqOrigin{Owner: "u"}).origin(); o.Kind != runtime.OriginChat || o.Owner != "u" {
+		t.Errorf("manual with owner: %+v", o)
 	}
-	if o := (&reqOrigin{Owner: "u"}).origin(); o.Kind != runtime.OriginChat || o.ChatID != "" || o.Owner != "u" {
-		t.Errorf("chat-less manual: %+v", o)
+}
+
+// TestCellIdentityIsPerCell: a named Cell records its own daemon-id under
+// cells/<profile>, seeded by [daemon] machine_id; a differing configured
+// value later refuses that Cell's assembly (never a silent switch), and the
+// default Cell's identity is untouched.
+func TestCellIdentityIsPerCell(t *testing.T) {
+	root := t.TempDir()
+	in := func(profile, machineID string) cellBuildInput {
+		return cellBuildInput{profile: profile, hostRoot: root, file: cli.Config{Server: "http://hub-" + profile + ":1", Mapping: &mapping.Plan{}, Daemon: cli.DaemonSettings{MachineID: machineID}}}
+	}
+	cfg, err := cellConfig(Config{}, in("alpha", "m-alpha-1"))
+	if err != nil || cfg.MachineID != "m-alpha-1" || cfg.DataDir != filepath.Join(root, "cells", "alpha") {
+		t.Fatalf("alpha: %q %q %v", cfg.MachineID, cfg.DataDir, err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(root, "cells", "alpha", "daemon-id")); strings.TrimSpace(string(raw)) != "m-alpha-1" {
+		t.Fatalf("cells/alpha/daemon-id: %q", raw)
+	}
+	if _, err := cellConfig(Config{}, in("alpha", "m-alpha-2")); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("a differing machine_id must refuse the Cell: %v", err)
+	}
+	def, err := cellConfig(Config{}, in("default", ""))
+	if err != nil || def.DataDir != filepath.Join(root, "cells", "default") || def.MachineID == "m-alpha-1" {
+		t.Fatalf("default: %q %q %v", def.MachineID, def.DataDir, err)
+	}
+	// unset: the file wins on every later assembly
+	again, err := cellConfig(Config{}, in("alpha", ""))
+	if err != nil || again.MachineID != "m-alpha-1" {
+		t.Fatalf("the recorded id must win: %q %v", again.MachineID, err)
+	}
+}
+
+// TestHostCellsHoldSeparateMachineKeys: each Cell creates its own machine
+// key in its own state directory and reports its heartbeat outcome.
+func TestHostCellsHoldSeparateMachineKeys(t *testing.T) {
+	th := newTestHost(t, hostCell{profile: "default", machineID: "m-def"}, hostCell{profile: "alpha", machineID: "m-alpha"})
+	def, alpha := th.cell("default").d, th.cell("alpha").d
+	kd, err1 := os.ReadFile(filepath.Join(def.cfg.DataDir, "machine-key"))
+	ka, err2 := os.ReadFile(filepath.Join(alpha.cfg.DataDir, "machine-key"))
+	if err1 != nil || err2 != nil || string(kd) == string(ka) {
+		t.Fatalf("machine keys must be separate per Cell: %v %v equal=%v", err1, err2, string(kd) == string(ka))
+	}
+	alpha.noteHeartbeat("usr_a", nil)
+	th.hubs["default"].setHeartbeatErr(nil)
+	resp, err := th.client("").Profiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range resp.Profiles {
+		if p.Profile == "alpha" && (p.MachineID != "m-alpha" || p.Heartbeat != "ok") {
+			t.Fatalf("alpha's identity row: %+v", p)
+		}
 	}
 }

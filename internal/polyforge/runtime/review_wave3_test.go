@@ -98,6 +98,10 @@ func TestBlockedRecordDroppedAtRestartThenResumeReclaims(t *testing.T) {
 	if err := restartSettled(t, r); err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
+	// the dropped record announces the hub's blocked
+	if m := recvRT(t, toOB); m.Kind != protocol.RTFinished || m.Reason != api.StatusBlocked {
+		t.Fatalf("release = %+v", m)
+	}
 	hub.status[wi] = api.StatusQueued // pf resume
 	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
 		t.Fatalf("resume re-claim refused: %v", err)

@@ -26,7 +26,7 @@ import (
 // file bytes, which now carry only the include).
 func w58Step(t *testing.T, bundle, step string) string {
 	t.Helper()
-	raw, err := workflow.ReadStepDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, nil)
+	raw, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, nil)
 	if err != nil {
 		t.Fatalf("render %s/%s: %v", bundle, step, err)
 	}
@@ -39,15 +39,14 @@ func TestW58GrillAttentionContract(t *testing.T) {
 		starScale = "★~★★★★★"
 		topStar   = "★★★★★"
 	)
+	// the grill-family step texts (develop's build, which asks at its
+	// build-grill stop; the retired lanes' grill steps went with
+	//)
 	templates := []string{
-		"feature-full/grill",
-		"feature-full/grill-review",
-		"autopilot/grill",
+		"develop/build",
 	}
 	rendered := map[string]string{
-		"feature-full/grill":        w58Step(t, "feature-full", "grill"),
-		"feature-full/grill-review": w58Step(t, "feature-full", "grill-review"),
-		"autopilot/grill":           w58Step(t, "autopilot", "grill"),
+		"develop/build": w58Step(t, "develop", "build"),
 	}
 	surfaces := append(append([]string{}, templates...),
 		"skills/output-format/SKILL.md", "docs/user-guide.md")
@@ -77,7 +76,7 @@ func TestW58GrillAttentionContract(t *testing.T) {
 		}
 	}
 
-	// The three step templates carry the full legend verbatim: the star
+	// The step templates carry the full legend verbatim: the star
 	// endpoints, the midpoint band, every row marked, and the four-column
 	// shape (no fifth column).
 	for _, rel := range templates {

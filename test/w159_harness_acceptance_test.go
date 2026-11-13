@@ -36,7 +36,7 @@ func w159HarnessRoot(t *testing.T, inst *v1Install, ws, claudeBin string, daemon
 	cfg := w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"), inst.url, inst.adminKey, sock,
 		[]w113WS{{key: ws, projects: []string{"e2e"}}})
 	root := t.TempDir() // an explicit --harness-root: the settings live outside the data dir
-	ccDir := filepath.Join(root, "claude-config")
+	ccDir := filepath.Join(root, "cells", "default", "claude-config")
 	if err := os.MkdirAll(ccDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -47,8 +47,12 @@ func w159HarnessRoot(t *testing.T, inst *v1Install, ws, claudeBin string, daemon
 	if claudeBin == "" {
 		claudeBin = filepath.Join(v1Bins(t), "fakepi")
 	}
+	// a 2s rule-1 grace, as the other rule-1 e2e scenarios use: an
+	// interactive claude process idles alive after an error turn or an
+	// ok turn without an envelope (never exits), so those dispatches end
+	// by the supervisor's verdict after the grace
 	d := w113NewDaemon(t, inst, w113DOptConfig(cfg), w113DOptSock(sock),
-		w113DOptArgs(append([]string{"--claude-bin", claudeBin, "--harness-root", root}, daemonArgs...)...))
+		w113DOptArgs(append([]string{"--claude-bin", claudeBin, "--harness-root", root, "--model-error-grace", "2s"}, daemonArgs...)...))
 	d.start()
 	t.Cleanup(d.stop)
 	return d, cfg, root
@@ -132,10 +136,9 @@ func w159SpawnJournal(t *testing.T, capDir string) []map[string]any {
 // chains live in w175_mixed_chain_acceptance_test.go.
 const w159Yaml = "steps:\n  e2e:\n    fix: { models: [claude:claude-opus-5-5, claude:claude-sonnet-5] }\n"
 
-// ① One work item, two harnesses: grill and verification on pi, fix on
-// Claude Code. The result contract, the handoff injection, the clean
-// claude argv/env (only the bare model rides --model, never the prefix)
-// and the transcript copy.
+// ① One work item, two harnesses: review on pi, fix on Claude Code. The
+// result contract, the clean claude argv/env (only the bare model rides
+// --model, never the prefix) and the transcript copy.
 func TestW159MixedHarnessWorkItem(t *testing.T) {
 	inst := newV1Install(t)
 	ws := t.TempDir()
@@ -144,30 +147,31 @@ func TestW159MixedHarnessWorkItem(t *testing.T) {
 	// daemon threads its own Y into the claude step (a dropped value would
 	// read as the 30m default)
 	d, _, root := w159HarnessRoot(t, inst, ws, "", "--tool-window", "20m")
-	wi := w113NewWI(t, inst, "e2e", "w159 mixed harness", envelopeAutopilot())
+	wi := w113NewWI(t, inst, "e2e", "w159 mixed harness", envelopeMicro())
 	capDir := w079Run(t, d, inst, ws, wi)
 
 	if got := w079Model(t, capDir, "fix"); got != "claude-opus-5-5" {
 		t.Fatalf("fix model %q, want the head of the claude chain", got)
 	}
-	if got := w079Model(t, capDir, "grill"); strings.HasPrefix(got, "claude-") {
-		t.Fatalf("grill (pi) model %q", got)
+	if got := w079Model(t, capDir, "review"); strings.HasPrefix(got, "claude-") {
+		t.Fatalf("review (pi) model %q", got)
 	}
 	cl := w159Spawns(t, capDir, "fakeclaude.jsonl")
 	if len(cl) != 1 || cl[0]["step"] != "fix" {
 		t.Fatalf("claude spawns %v, want exactly the fix step", cl)
 	}
 	argv := w159Argv(cl[0])
-	for _, want := range []string{"-p --bare", "--output-format stream-json --verbose --include-partial-messages",
-		"--session-id ", "--model claude-opus-5-5", "--tools Bash,Read,Edit,Write,Glob,Grep,TodoWrite,Agent",
+	for _, want := range []string{"-p --safe-mode --setting-sources user --settings ", "--output-format stream-json --verbose --include-partial-messages",
+		"--input-format stream-json", "--session-id ", "--model claude-opus-5-5", "--tools Bash,Read,Edit,Write,Glob,Grep,TodoWrite,Agent",
 		"--allowedTools Bash,Read,Edit,Write,Glob,Grep,TodoWrite,Agent", "--permission-mode dontAsk",
 		"--permission-prompts none", "--strict-mcp-config", "--disable-slash-commands"} {
 		if !strings.Contains(argv, want) {
 			t.Fatalf("claude argv %q misses %q", argv, want)
 		}
 	}
-	// polyforge#223: the settings.json carries a token → --bare only
-	for _, banned := range []string{w159Token, "--safe-mode", "--setting-sources", "--fallback-model", "claude:claude-opus-5-5"} {
+	// token mode too runs --safe-mode, never --bare (under
+	// --bare Claude Code offers Bash, Edit and Read whatever --tools names)
+	for _, banned := range []string{w159Token, "--bare", "--fallback-model", "claude:claude-opus-5-5"} {
 		if strings.Contains(argv, banned) {
 			t.Fatalf("claude argv carries %q: %s", banned, argv)
 		}
@@ -181,7 +185,7 @@ func TestW159MixedHarnessWorkItem(t *testing.T) {
 	// migration shape) is read by the step persona — what real claude
 	// applies from the authority layer — and its VALUES stay out of every
 	// journal line while a resume dispatch reads the same file again.
-	for _, k := range []string{"background_off", "autoupdater_off", "startup_results", "prompt_has_handoff", "nonessential_off", "settings_auth_token_set"} {
+	for _, k := range []string{"background_off", "autoupdater_off", "startup_results", "tasks_off", "nonessential_off", "settings_auth_token_set"} {
 		if cl[0][k] != true {
 			t.Fatalf("claude spawn %s = %v (entry %v)", k, cl[0][k], cl[0])
 		}
@@ -192,8 +196,8 @@ func TestW159MixedHarnessWorkItem(t *testing.T) {
 	if n, _ := cl[0]["env_count_claude_config_dir"].(float64); n != 1 {
 		t.Fatalf("CLAUDE_CONFIG_DIR entries %v, want exactly one (no duplicate)", cl[0]["env_count_claude_config_dir"])
 	}
-	if dir, _ := cl[0]["claude_config_dir"].(string); dir != root+"/claude-config" {
-		t.Fatalf("claude config dir %v, want %q", cl[0]["claude_config_dir"], root+"/claude-config")
+	if dir, _ := cl[0]["claude_config_dir"].(string); dir != root+"/cells/default/claude-config" {
+		t.Fatalf("claude config dir %v, want %q", cl[0]["claude_config_dir"], root+"/cells/default/claude-config")
 	}
 	if cl[0]["settings_base_url_set"] != true {
 		t.Fatalf("the settings.json env pair was not read by the step: %v", cl[0])
@@ -214,11 +218,11 @@ func TestW159MixedHarnessWorkItem(t *testing.T) {
 	}
 	// the pi steps ran on the fake pi (never the claude persona)
 	pi := w159Spawns(t, capDir, "fakepi.jsonl")
-	if len(pi) != 2 {
-		t.Fatalf("pi spawns %d, want 2 (grill, verification)", len(pi))
+	if len(pi) != 1 {
+		t.Fatalf("pi spawns %d, want 1 (review)", len(pi))
 	}
 	for _, e := range pi {
-		if strings.Contains(w159Argv(e), "--bare") {
+		if strings.Contains(w159Argv(e), "--safe-mode") {
 			t.Fatalf("a pi step ran claude argv: %v", e)
 		}
 	}
@@ -250,7 +254,7 @@ func TestW159MixedHarnessWorkItem(t *testing.T) {
 	// must find it BEFORE the capsule copy by the same shape, no mtime
 	// hunt), direct concatenation.
 	sess, _ := claudeLine["harness_session"].(string)
-	native := filepath.Join(root, "claude-config", "projects", w159DashedName(t, capDir), sess+".jsonl")
+	native := filepath.Join(root, "cells", "default", "claude-config", "projects", w159DashedName(t, capDir), sess+".jsonl")
 	nb, err := os.ReadFile(native)
 	if err != nil || len(nb) == 0 {
 		t.Fatalf("native claude session %s missing (%v)", native, err)
@@ -260,7 +264,7 @@ func TestW159MixedHarnessWorkItem(t *testing.T) {
 	}
 	// the fix step's V-gates ran on the claude result exactly as on pi
 	x := readExecution(t, capDir)
-	if x.Steps["fix"].Status != "done" || x.Steps["verification"].Status != "done" {
+	if x.Steps["fix"].Status != "done" || x.Steps["review"].Status != "done" {
 		t.Fatalf("steps %s", execDigest(x))
 	}
 	// the token value never lands anywhere the daemon writes: the capsule
@@ -318,13 +322,12 @@ func TestW159ClaudeD7(t *testing.T) {
 	d, _, _ := w159HarnessRoot(t, inst, ws, "")
 	wi := w113NewWI(t, inst, "e2e", "w159 claude d7", nil)
 	w159Plan(t, inst, wi, map[string]any{"actions": []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
 		{"do": "envelope", "id": "fix", "claude_error": "rate_limit", "claude_status": 429, "claude_retries": 2},
 		{"do": "envelope", "id": "fix", "claude_error": "authentication_failed", "claude_status": 401},
 		{"do": "envelope", "id": "fix", "claude_error": "server_error", "claude_status": 500, "claude_message": "Server error mid-response"},
 		{"do": "envelope", "id": "fix", "end_turn": true},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
+		{"do": "envelope", "id": "fix", "outcome": "completed"},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
 	}})
 	capDir := w079Run(t, d, inst, ws, wi)
 	var models []string
@@ -346,6 +349,27 @@ func TestW159ClaudeD7(t *testing.T) {
 	if strings.Join(causes, ",") != strings.Join(wantCauses, ",") {
 		t.Fatalf("fix attempt causes %v, want %v", causes, wantCauses)
 	}
+	// v2 PR 6a: an interactive process idles alive after each of those
+	// turns (the error turns and the ok turn without an envelope), so
+	// every one of the four dispatches was ended by the daemon (rule 1 /
+	// 1b verdicts), and the accepted fifth too; the rule-1b retry resumed
+	// the same session
+	cl := w159Spawns(t, capDir, "fakeclaude.jsonl")
+	exits := w159Exits(t, capDir)
+	if len(cl) != 5 || len(exits) != 5 {
+		t.Fatalf("%d claude spawns, %d exit lines, want 5 and 5 (the daemon ends every idle process)", len(cl), len(exits))
+	}
+	for i, e := range exits {
+		if e["pid"] != cl[i]["pid"] {
+			t.Fatalf("exit line %d is for pid %v, want dispatch %d's %v", i, e["pid"], i+1, cl[i]["pid"])
+		}
+		if r := e["reason"]; r != "stdin_eof" && r != "sigterm" {
+			t.Fatalf("dispatch %d exited for %q, want the daemon's teardown", i+1, r)
+		}
+	}
+	if cl[4]["resume"] != true {
+		t.Fatalf("the ended_without_result retry did not resume its session: %v", cl[4])
+	}
 }
 
 // Candidates exhausted on claude: an unknown model on every candidate of
@@ -359,11 +383,10 @@ func TestW159ClaudeCandidatesExhaustedBlocks(t *testing.T) {
 	w159Plan(t, inst, wi, map[string]any{
 		"bad_models": []string{"claude-opus-5-5", "claude-sonnet-5"},
 		"actions": []map[string]any{
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
 		}})
 	d.pfWant(inst, -1, "submit", wi)
 	capDir := w079Capsule(t, inst, ws, wi)
@@ -380,66 +403,6 @@ func TestW159ClaudeCandidatesExhaustedBlocks(t *testing.T) {
 	}
 }
 
-// ④ needs_input on a claude step → answer → the continuation resumes the
-// SAME claude session (--resume <uuid>).
-func TestW159ClaudeNeedsInputResumes(t *testing.T) {
-	inst := newV1Install(t)
-	ws := t.TempDir()
-	w079Yaml(t, ws, w159Yaml)
-	d, _, root := w159HarnessRoot(t, inst, ws, "")
-	const qid = "q_w159"
-	wi := w113NewWI(t, inst, "e2e", "w159 needs_input", []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "fix", "outcome": "needs_input", "question_id": qid, "question": "lean or compatible?"},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-		{"do": "envelope", "id": "verification", "outcome": "completed"},
-	})
-	d.pfWant(inst, -1, "submit", wi)
-	capDir := w079Capsule(t, inst, ws, wi)
-	w113WaitCapsule(t, capDir, 90*time.Second)
-	waitExecution(t, capDir, 120*time.Second, "fix never asked", func(x *executionView) bool {
-		st := x.Steps["fix"]
-		return st != nil && st.PendingQuestion != nil
-	})
-	out := d.pfWant(inst, -1, "answer", wi, "--text", "lean", "--question", qid, "--by", "usr_root")
-	if !strings.Contains(out, "delivered") {
-		t.Fatalf("pf answer: %q", out)
-	}
-	w113WaitCompleted(t, capDir, 180*time.Second)
-	cl := w159Spawns(t, capDir, "fakeclaude.jsonl")
-	if len(cl) != 2 {
-		t.Fatalf("claude spawns %v, want 2 (ask, continue)", cl)
-	}
-	first, _ := cl[0]["session"].(string)
-	if cl[1]["resume"] != true || cl[1]["session"] != first || !strings.Contains(w159Argv(cl[1]), "--resume "+first) {
-		t.Fatalf("continuation %v did not resume session %s", cl[1], first)
-	}
-	// the resumed dispatch copied the (shared) native session onto its
-	// OWN capsule transcript: both fix dispatches' files exist; the TWO
-	// claude dispatches share ONE native session file under the
-	// claude-config dir (polyforge#171: <harness-root>/claude-config/
-	// projects/<dashed capsule path>/<session-id>.jsonl — the resume path
-	// decision located it there explicitly, no daemon process env)
-	n := 0
-	for _, e := range w159SpawnJournal(t, capDir) {
-		if e["step_id"] != "fix" {
-			continue
-		}
-		tr, _ := e["transcript"].(string)
-		if raw, err := os.ReadFile(tr); err != nil || !strings.Contains(string(raw), first) {
-			t.Fatalf("fix transcript %s: %q (%v)", tr, raw, err)
-		}
-		native := filepath.Join(root, "claude-config", "projects", w159DashedName(t, capDir), first+".jsonl")
-		if raw, err := os.ReadFile(native); err != nil || len(raw) == 0 {
-			t.Fatalf("native claude session %s missing (%v)", native, err)
-		}
-		n++
-	}
-	if n != 2 {
-		t.Fatalf("%d fix journal lines, want 2", n)
-	}
-}
-
 // ⑥ polyforge#175: the retired `harness` key refuses the claim
 // (DAEMON-414, the WI stays queued) and doctor fails it; a prefixed
 // chain passes doctor's claude check (the check runs because a resolved
@@ -450,7 +413,7 @@ func TestW159RetiredHarnessKeyRefusedAndDoctor(t *testing.T) {
 	ws := t.TempDir()
 	w079Yaml(t, ws, "steps:\n  e2e:\n    fix: { models: [claude-opus-5-5], harness: claude }\n")
 	d, cfg, _ := w159HarnessRoot(t, inst, ws, "")
-	wi := w113NewWI(t, inst, "e2e", "w159 mismatch", envelopeAutopilot())
+	wi := w113NewWI(t, inst, "e2e", "w159 mismatch", envelopeMicro())
 	out, code := w113Pf(t, inst, w113Env{socket: d.sock}, "submit", wi)
 	w079Refused(t, d, inst, ws, wi, out, code, "steps.e2e.fix.harness: the `harness` key was removed (polyforge#175)")
 
@@ -476,7 +439,7 @@ func TestW159RetiredHarnessKeyRefusedAndDoctor(t *testing.T) {
 			claudeCheck = &parsed.Checks[i]
 		}
 	}
-	if claudeCheck == nil || claudeCheck.Status != "pass" || !strings.Contains(claudeCheck.Detail, "e2e/autopilot/fix: [claude:claude-opus-5-5, claude:claude-sonnet-5] (steps.e2e.fix.models)") || !strings.Contains(claudeCheck.Detail, "2.1.296") {
+	if claudeCheck == nil || claudeCheck.Status != "pass" || !strings.Contains(claudeCheck.Detail, "e2e/micro/fix: [claude:claude-opus-5-5, claude:claude-sonnet-5] (steps.e2e.fix.models)") || !strings.Contains(claudeCheck.Detail, "2.1.296") {
 		t.Fatalf("harness claude check %+v", claudeCheck)
 	}
 	if strings.Contains(doc, w159Token) {

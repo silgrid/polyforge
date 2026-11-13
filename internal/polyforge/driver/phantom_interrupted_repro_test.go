@@ -46,7 +46,7 @@ func TestSettledDispatchRestartArchivesNoPhantomInterrupted(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: execPath,
-		Workflow: &Workflow{Steps: []StepSpec{{ID: "fix", ContextPolicy: "fresh"}}, MaxTotal: 4, MaxPerStep: 2},
+		Workflow: testLane(4, []StepSpec{{ID: "fix"}}...),
 		Spawner:  sp,
 		Log:      &eventLog{},
 		Compose:  composeOf(map[string][]string{"fix": {"pi:eff-a"}}),

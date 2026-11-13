@@ -1,0 +1,6 @@
+contract: 5
+name: wfc-112-max-rewinds
+description: fixture lane for WFC-112
+max_rewinds: 2
+steps:
+  - id: work

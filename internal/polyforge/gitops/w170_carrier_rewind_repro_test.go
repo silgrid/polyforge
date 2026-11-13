@@ -26,13 +26,13 @@ func TestW170CarrierSelfHealsRewrittenTipAfterRewind(t *testing.T) {
 	o, base := taskOpts(t, "wi_w170")
 	mkBare(t, o.RemoteURL, false)
 	mkTaskCapsule(t, o)
-	repoDir := filepath.Join(o.CapsuleDir, capsule.DirRepos, "pi-web-gmi")
-	publishedHead := mkTaskRepoWithWork(t, o.CapsuleDir, "pi-web-gmi", filepath.Join(base, "origin"))
+	repoDir := filepath.Join(o.CapsuleDir, capsule.DirRepos, "demo")
+	publishedHead := mkTaskRepoWithWork(t, o.CapsuleDir, "demo", filepath.Join(base, "origin"))
 
 	if _, _, _, err := CommitPush(ctx, o, "observe: v1"); err != nil {
 		t.Fatalf("first CommitPush: %v", err)
 	}
-	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("pi-web-gmi")); !ok || got != publishedHead {
+	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("demo")); !ok || got != publishedHead {
 		t.Fatalf("carrier before the rewind = %q (%v), want %q", got, ok, publishedHead)
 	}
 
@@ -55,7 +55,7 @@ func TestW170CarrierSelfHealsRewrittenTipAfterRewind(t *testing.T) {
 	if _, _, _, err := CommitPush(ctx, o, "observe: v2 after rewind"); err != nil {
 		t.Fatalf("CommitPush after the rewind must not fail the chain publish: %v", err)
 	}
-	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("pi-web-gmi")); !ok || got != rewrittenHead {
+	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("demo")); !ok || got != rewrittenHead {
 		t.Fatalf("carrier after the rewind = %q (%v), want the worktree head %q (events: %v)", got, ok, rewrittenHead, events)
 	}
 }

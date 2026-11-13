@@ -1,0 +1,8 @@
+contract: 5
+name: wfc-110-duplicate
+description: fixture lane for WFC-110
+steps:
+  - id: work
+  - id: check
+    gate: true
+    gate: false

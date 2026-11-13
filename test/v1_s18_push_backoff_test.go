@@ -28,21 +28,20 @@ func TestV1S18PushBackoffBackpressure(t *testing.T) {
 	// The driver keeps producing versions through the (short) outage
 	// window, then completes — degradation never kills the engine and
 	// the scenario closes the WI itself. Each envelope action holds its
-	// step open (ms) so the outage window sits INSIDE the run. grill
+	// step open (ms) so the outage window sits INSIDE the run. fix
 	// holds only 2s: the pre-outage published event lands within ~150ms,
-	// and grill's completion is then the outage's first boundary (the
-	// first failed push) without idling; fix and verification hold 8s
-	// each, so the ladder reaches its cap inside fix and the whole
-	// episode, recovery included, ends before the run does.
+	// and fix's completion is then the outage's first boundary (the
+	// first failed push) without idling; review holds 16s, so the ladder
+	// reaches its cap inside review and the whole episode, recovery
+	// included, ends before the run does.
 	actions := []map[string]any{
-		{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true, "ms": 2000},
-		{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true, "ms": 8000},
-		{"do": "envelope", "id": "verification", "outcome": "completed", "handoff": true, "ms": 8000},
+		{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 2000},
+		{"do": "envelope", "id": "review", "outcome": "completed", "ms": 16000},
 	}
 	wi := inst.newWI(t, "s18: push backpressure (backoff cap, inproc rig)",
 		actions, nil)
 	// The injected ladder: 200ms doubling to a 1s cap, reached after
-	// four failures of one Version (well inside an 8s step).
+	// four failures of one Version (well inside the 16s step).
 	rig := newInprocRig(t, inst, optPushBackoff(200*time.Millisecond, time.Second))
 	t.Cleanup(func() { killOrphans(wi) })
 	rig.start(wi)

@@ -1,0 +1,5 @@
+contract: 5
+name: wfc-195
+description: fixture lane for WFC-195
+steps:
+  - id: hole

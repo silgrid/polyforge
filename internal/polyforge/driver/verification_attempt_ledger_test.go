@@ -4,13 +4,12 @@ package driver
 // rewound the workflow keeps its own audit-only record in the gate's
 // attempts[] (cause gate_fail_verdict: the verdict output and the window
 // it consumed), while the gate stays in_progress and every rewind-ledger
-// fact (the target's gate_fail_rewind archive, the rewind stats, the
-// gate's last-verdict time) reads exactly as before.
+// fact (the target's gate_fail_rewind archive, the rewind stats) reads
+// exactly as before.
 
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 )
@@ -55,13 +54,6 @@ func TestRewoundGateDispatchKeepsItsOwnAttempt(t *testing.T) {
 		tgt := cst.Attempts[len(cst.Attempts)-1]
 		if tgt.Cause != CauseGateFailRewind || tgt.RewindGate != gate || exec.RewindStats.Count != 1 {
 			t.Fatalf("%s: target archive %+v, stats %+v", gate, tgt, exec.RewindStats)
-		}
-		d.mu.Lock()
-		at, ok := d.gateLastVerdictAtLocked(gate)
-		d.mu.Unlock()
-		archived, _ := time.Parse(time.RFC3339Nano, tgt.ArchivedAt)
-		if !ok || !at.Equal(archived) {
-			t.Fatalf("%s: the gate's last verdict time = %v (%v), want the target archive's %v", gate, at, ok, archived)
 		}
 	}
 }

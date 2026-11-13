@@ -77,9 +77,9 @@ func w198Doctor(t *testing.T, inst *v1Install, ws, server, sock string, extra ..
 	} else {
 		env.noConn = true // the config's dead server is the value under test
 	}
-	if sock == "" {
-		sock = filepath.Join(t.TempDir(), "dead.sock")
-	}
+	// No daemon_socket: the Hub-dependent faces reach the Hub through the
+	// harness's data-plane stand-in (business goes through a daemon Cell,
+	// never a direct dial); the daemon's own checks find no daemon.
 	env.config = w113ConfigFile(t, filepath.Join(t.TempDir(), "cli.toml"), server, inst.adminKey, sock,
 		[]w113WS{{key: ws, projects: []string{v1Project}}})
 	out, code := w113Pf(t, inst, env, append([]string{"doctor"}, extra...)...)

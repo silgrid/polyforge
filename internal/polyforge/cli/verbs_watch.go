@@ -3,29 +3,22 @@ package cli
 // verbs_watch.go: `pf watch` — the human-coordination lane (v2-converge §3).
 //
 //	pf watch <wi> --once [--json]          one snapshot of a WI
-//	pf watch --chat <id> [--wait-decision] the resident per-chat watcher
-//	pf watch --chat <id> --statusline      print the progress file (fast)
-//	pf watch subscribe|unsubscribe <wi>    daemon-held subscriptions
-//	pf watch adopt <wi>                    take over the WI's wake-target role
-//	pf watch list                          the chat's subscriptions
+//	pf watch decisions [--json]            the machine's decision feed
+//	pf watch dismiss <id>...|--all         mark feed entries seen
 //
-// The chat defaults to PF_CHAT_ID; --harness-session maps a harness
-// session id to its chat through the daemon (the Claude Code statusLine
-// gets the session JSON on stdin, not PF_CHAT_ID). All mechanics live in
-// internal/polyforge/watcher; this file only wires flags and the daemon.
+// The resident per-chat watcher, its subscriptions, adopt and statusline
+// faces are retired: human decisions are the daemon's
+// decision feed, shown and handled in the Pi Web Polyforge panel. All
+// rendering mechanics live in internal/polyforge/watcher; this file only
+// wires flags and the daemon.
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"os"
-	"os/signal"
+	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -36,147 +29,150 @@ import (
 // watchNow is the clock seam for the snapshot render.
 var watchNow = time.Now
 
-// chatAPI adapts the daemon client to watcher.API for one chat.
-type chatAPI struct {
-	d    *DaemonClient
-	chat string
-}
-
-func (c chatAPI) Subscriptions() (protocol.ChatSubscriptions, error) {
-	return c.d.ChatSubscriptions(c.chat)
-}
-func (c chatAPI) Snapshot(wi string, after int64) (*protocol.WatchSnapshot, error) {
-	// the resident watcher's polls NEVER carry the demand marker
-	// (polyforge#224): only the human-side --once --demand poll arms the
-	// lane.
-	return c.d.WatchSnapshot(wi, after, false)
-}
-func (c chatAPI) Ack(a protocol.ChatAck) error                { return c.d.ChatAck(c.chat, a) }
-func (c chatAPI) TaskNotices() ([]protocol.TaskNotice, error) { return c.d.ChatTaskNotices(c.chat) }
-func (c chatAPI) AckTaskNotices(ids []string) error           { return c.d.ChatTaskNoticesAck(c.chat, ids) }
-func (c chatAPI) SubscribeOwned(owner string) ([]protocol.ChatSub, error) {
-	return c.d.ChatSubscribeOwned(c.chat, owner)
-}
-
 var cmdWatch = &Command{
 	Name:    "watch",
 	Group:   GroupExec,
-	Summary: "Watch work items: one snapshot, or the resident per-chat watcher (progress + human-decision wake-ups)",
+	Summary: "Watch work items: one snapshot of a work item, or the machine's decision feed (the human decisions the Pi Web panel shows)",
 	Usage: "pf watch <wi> --once [--json] [--after N] [--events N] [--demand] [--artifact <relpath>]\n" +
-		"       pf watch --chat ID [--wait-decision] [--poll D]      (chat default: $PF_CHAT_ID)\n" +
-		"       pf watch --chat ID --statusline                       (print the progress file)\n" +
-		"       pf watch --harness-session ID|- [--harness claude|pi] ...   (resolve the chat via the daemon; - reads {\"session_id\"} from stdin)\n" +
-		"       pf watch subscribe|unsubscribe <wi> [--chat ID]\n" +
-		"       pf watch adopt <wi> [--chat ID]                       (take over the WI's wake-target role)\n" +
-		"       pf watch list [--chat ID]",
+		"       pf watch decisions [--json]                    (the decision feed of every Cell, newest first)\n" +
+		"       pf watch dismiss <id>... | --all               (mark feed entries seen)",
 	Setup: func(fs *flag.FlagSet) {
 		fs.Bool("once", false, "print one snapshot of <wi> and exit (status, step, ages, pending question, latest events)")
-		fs.Bool("json", false, "machine-readable output for --once / list")
+		fs.Bool("json", false, "machine-readable output for --once / decisions / dismiss")
 		fs.Int64("after", 0, "--once: only events with seq above this cursor")
 		fs.Int("events", 8, "--once: how many latest events to show")
-		fs.Bool("demand", false, "--once: mark this snapshot request as human-side demand for the summarize lane (the panel's poll arms the narration; the resident watcher never marks)")
+		fs.Bool("demand", false, "--once: mark this snapshot request as human-side demand for the summarize lane (the panel's poll arms the narration)")
 		fs.String("artifact", "", "--once: read a capsule artifacts/<relpath> file (local holder or signed remote relay)")
-		fs.String("chat", "", "chat id (default: env PF_CHAT_ID)")
-		fs.Bool("wait-decision", false, "resident: exit 0 printing one fixed-template line per human decision")
-		fs.Bool("statusline", false, "print the resident watcher's progress lines (for a harness status line) and exit")
-		fs.String("harness-session", "", "resolve the chat from a harness session id via the daemon ('-' = read session_id from stdin JSON)")
-		fs.String("harness", "claude", "harness of --harness-session: claude|pi")
-		fs.Duration("poll", 2*time.Second, "resident poll interval")
-		fs.Bool("no-parent-check", false, "resident: do not exit when the parent process goes away")
+		fs.Bool("all", false, "dismiss: every open entry")
 	},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		// polyforge#224: --demand is a --once flag — an authorizing flag
-		// is never silently dropped (the --chat/--harness-session
-		// usage-error pattern).
+		// is never silently dropped.
 		if boolFlag(fs, "demand") && !boolFlag(fs, "once") {
-			return fmt.Errorf("watch: --demand needs --once — it marks this snapshot request as human-side demand for the summarize lane (the panel's poll arms the narration; the resident watcher never marks)")
+			return fmt.Errorf("watch: --demand needs --once — it marks this snapshot request as human-side demand for the summarize lane (the panel's poll arms the narration)")
 		}
 		asJSON := ctx.JSON || boolFlag(fs, "json")
 		if len(args) > 0 {
 			switch args[0] {
-			case "subscribe", "unsubscribe":
-				if len(args) != 2 {
-					return fmt.Errorf("watch %s: expected exactly one work item id", args[0])
+			case "decisions":
+				if len(args) != 1 {
+					return fmt.Errorf("watch decisions: unexpected arguments %v", args[1:])
 				}
-				chat, err := watchChat(ctx, fs)
-				if err != nil {
-					return err
-				}
-				ans, err := ctx.daemon().ChatSubscribe(chat, args[1], args[0] == "subscribe")
-				if err != nil {
-					return err
-				}
-				verb := map[bool]string{true: "subscribed", false: "unsubscribed"}[args[0] == "subscribe"]
-				if asJSON {
-					b, _ := json.Marshal(ans)
-					ctx.Out(b)
-				} else if ans.Changed {
-					fmt.Fprintf(ctx.Stdout, "%s %s: %s\n", verb, chat, api.DisplayName(ans.Slug, ans.WI))
-				} else {
-					fmt.Fprintf(ctx.Stdout, "no change: %s %s was already %s\n", chat, api.DisplayName(ans.Slug, ans.WI), map[bool]string{true: "subscribed", false: "not subscribed"}[args[0] == "subscribe"])
-				}
-				return nil
-			case "adopt":
-				// an eligible same-workspace chat takes over the WI's
-				// wake-target role. ONLY on an explicit user request — never
-				// automatic (no watcher or extension code ever adopts).
-				if len(args) != 2 {
-					return fmt.Errorf("watch adopt: expected exactly one work item id")
-				}
-				chat, err := watchChat(ctx, fs)
-				if err != nil {
-					return err
-				}
-				ans, err := ctx.daemon().ChatAdopt(chat, args[1])
-				if err != nil {
-					return err
-				}
-				if asJSON {
-					b, _ := json.Marshal(ans)
-					ctx.Out(b)
-					return nil
-				}
-				fmt.Fprintf(ctx.Stdout, "adopted %s: %s is its wake target now\n", api.DisplayName(ans.Slug, ans.WI), chat)
-				return nil
-			case "list":
-				chat, err := watchChat(ctx, fs)
-				if err != nil {
-					return err
-				}
-				subs, err := ctx.daemon().ChatSubscriptions(chat)
-				if err != nil {
-					return err
-				}
-				if asJSON {
-					b, _ := json.Marshal(subs)
-					ctx.Out(b)
-					return nil
-				}
-				fmt.Fprintf(ctx.Stdout, "chat %s: %d subscription(s)\n", chat, len(subs.Subscriptions))
-				for _, s := range subs.Subscriptions {
-					state := "active"
-					if s.Done {
-						state = "finished"
-					}
-					fmt.Fprintf(ctx.Stdout, "  %-22s %-8s cursor=%d\n", api.DisplayName(s.Slug, s.WI), state, s.Cursor)
-				}
-				return nil
+				return watchDecisions(ctx, asJSON)
+			case "dismiss":
+				return watchDismiss(ctx, args[1:], boolFlag(fs, "all"), asJSON)
+			case "list", "subscribe", "unsubscribe", "adopt", "ack":
+				// the chat watcher's subcommand words: refused by name, never
+				// read as a work item id
+				return fmt.Errorf("watch %s: retired with the chat subscriptions human decisions are the machine's decision feed: `pf watch decisions` (mark them seen with `pf watch dismiss`), shown in Pi Web's Polyforge panel", args[0])
 			}
 		}
-		if boolFlag(fs, "statusline") {
-			return watchStatusline(ctx, fs)
+		if boolFlag(fs, "all") {
+			return fmt.Errorf("watch: --all belongs to `pf watch dismiss`")
 		}
 		if len(args) == 1 && args[0] != "" {
 			return watchOnce(ctx, fs, args[0], asJSON)
 		}
 		if len(args) > 1 {
-			return fmt.Errorf("watch: expected one work item id (with --once) or none (with --chat)")
+			return fmt.Errorf("watch: expected one work item id (with --once), or decisions / dismiss")
 		}
-		if boolFlag(fs, "once") {
-			return fmt.Errorf("watch --once: a work item id is required")
-		}
-		return watchResident(ctx, fs)
+		return fmt.Errorf("watch: a work item id is required (pf watch <wi> --once), or use `pf watch decisions`")
 	},
+}
+
+// hostDaemon answers the Host-scope client: the decision feed is one list
+// for every Cell, so no profile header rides it.
+func hostDaemon(ctx *Context) *DaemonClient {
+	d := ctx.daemon()
+	d.Profile, d.ProfileErr = "", nil
+	return d
+}
+
+// watchDecisions prints the decision feed (`pf watch decisions`).
+func watchDecisions(ctx *Context, asJSON bool) error {
+	raw, err := hostDaemon(ctx).Decisions()
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		ctx.Out(raw)
+		return nil
+	}
+	var feed protocol.DecisionFeed
+	if err := json.Unmarshal(raw, &feed); err != nil {
+		return fmt.Errorf("watch decisions: decode the feed: %w", err)
+	}
+	renderDecisions(ctx.Stdout, feed)
+	return nil
+}
+
+// renderDecisions prints one line per entry, newest first: id, time,
+// state, the work item (or task), class, identifiers and the fixed
+// phrase; a task entry adds its summary on the next line.
+func renderDecisions(w io.Writer, feed protocol.DecisionFeed) {
+	fmt.Fprintf(w, "%d open decision(s), %d retained\n", feed.Attention, len(feed.Decisions))
+	for _, e := range feed.Decisions {
+		state := "info"
+		switch {
+		case e.Dismissed:
+			state = "dismissed"
+		case e.Resolved:
+			state = "resolved"
+		case e.Attention:
+			state = "OPEN"
+		}
+		name := api.DisplayName(e.Slug, e.WI)
+		if e.Kind == protocol.DecisionTask {
+			name = "task " + e.TaskID
+		}
+		if e.Profile != "" && e.Profile != "default" {
+			name = e.Profile + ":" + name
+		}
+		class := e.Class
+		if e.Source != "" && e.Source != e.Class && e.Source != "task" {
+			class += " (" + e.Source + ")"
+		}
+		ident := ""
+		switch {
+		case e.QuestionID != "":
+			ident = " " + e.QuestionID
+		case e.Repo != "":
+			ident = " " + e.Repo
+		}
+		fmt.Fprintf(w, "#%-5d %s %-9s %s %s%s — %s\n", e.ID, e.At, state, name, class, ident, e.Phrase)
+		if e.Text != "" {
+			fmt.Fprintf(w, "       %s\n", e.Text)
+		}
+	}
+}
+
+// watchDismiss marks feed entries dismissed (`pf watch dismiss`).
+func watchDismiss(ctx *Context, args []string, all, asJSON bool) error {
+	if all == (len(args) > 0) {
+		return fmt.Errorf("watch dismiss: name the entry ids or pass --all (not both)")
+	}
+	var ids []int64
+	for _, a := range args {
+		n, err := strconv.ParseInt(strings.TrimPrefix(a, "#"), 10, 64)
+		if err != nil || n <= 0 {
+			return fmt.Errorf("watch dismiss: %q is not a decision id (a positive integer)", a)
+		}
+		ids = append(ids, n)
+	}
+	raw, err := hostDaemon(ctx).DismissDecisions(ids, all)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		ctx.Out(raw)
+		return nil
+	}
+	var ans protocol.DecisionDismissAnswer
+	if err := json.Unmarshal(raw, &ans); err != nil {
+		return fmt.Errorf("watch dismiss: decode the answer: %w", err)
+	}
+	fmt.Fprintf(ctx.Stdout, "dismissed %d decision(s)\n", ans.Dismissed)
+	return nil
 }
 
 // watchOnce prints one snapshot (`pf watch <wi> --once`).
@@ -216,146 +212,4 @@ func watchOnce(ctx *Context, fs *flag.FlagSet, wi string, asJSON bool) error {
 	}
 	fmt.Fprint(ctx.Stdout, watcher.FormatOnce(snap, watchNow(), intFlag(fs, "events")))
 	return nil
-}
-
-// watchChat resolves the chat id (addendum 1): the explicit flags
-// outrank the environment — --chat and --harness-session are BOTH
-// explicit (passing both is a usage error, never a silent pick), and
-// the session lookup's result (including its not-found error) wins
-// over PF_CHAT_ID. With neither flag, PF_CHAT_ID is used; with nothing
-// at all, the existing no-chat-id error.
-func watchChat(ctx *Context, fs *flag.FlagSet) (string, error) {
-	chat := stringFlag(fs, "chat")
-	hs := stringFlag(fs, "harness-session")
-	if chat != "" && hs != "" {
-		return "", fmt.Errorf("watch: --chat and --harness-session are both explicit chat-id sources — pass exactly one (not both)")
-	}
-	if chat != "" {
-		return validateChatID(chat)
-	}
-	if hs != "" {
-		c, err := chatFromHarnessSession(ctx, stringFlag(fs, "harness"), hs)
-		if err != nil {
-			return "", err
-		}
-		return validateChatID(c)
-	}
-	if c := ctx.Cfg.ChatID; c != "" {
-		return validateChatID(c)
-	}
-	return "", fmt.Errorf("watch: no chat id — pass --chat <id>, set PF_CHAT_ID, or use --harness-session <id>")
-}
-
-// validateChatID enforces the chat-id shape at the resolution exit.
-func validateChatID(chat string) (string, error) {
-	if !watcher.ChatIDRe.MatchString(chat) {
-		return "", fmt.Errorf("watch: chat id %q must be 1-64 characters of [A-Za-z0-9_-]", chat)
-	}
-	return chat, nil
-}
-
-// chatFromHarnessSession maps a harness session id to its chat (`pf chat
-// init` semantics: created on first use, stable on resume). The answer is
-// cached in the runtime dir so a statusLine refresh stays off the daemon.
-func chatFromHarnessSession(ctx *Context, harness, session string) (string, error) {
-	if session == "-" {
-		raw, err := io.ReadAll(io.LimitReader(ctx.Stdin, 1<<20))
-		if err != nil {
-			return "", err
-		}
-		var in struct {
-			SessionID string `json:"session_id"`
-		}
-		if json.Unmarshal(raw, &in) != nil || in.SessionID == "" {
-			return "", fmt.Errorf("watch: no session_id in the JSON on stdin")
-		}
-		session = in.SessionID
-	}
-	sum := sha256.Sum256([]byte(harness + ":" + session))
-	rdir := watcher.RuntimeDir()
-	if err := watcher.EnsureDir(rdir); err != nil {
-		return "", fmt.Errorf("watch: %w", err)
-	}
-	cache := rdir + "/session-" + hex.EncodeToString(sum[:8]) + ".chat"
-	if raw, err := os.ReadFile(cache); err == nil {
-		if c := strings.TrimSpace(string(raw)); watcher.ChatIDRe.MatchString(c) {
-			return c, nil
-		}
-	}
-	ws, werr := sessionWorkspace(ctx)
-	if werr != nil {
-		return "", werr
-	}
-	raw, err := ctx.daemon().ChatInit(harness, session, ws)
-	if err != nil {
-		return "", err
-	}
-	var rec ChatRecord
-	if err := json.Unmarshal(raw, &rec); err != nil || rec.ChatID == "" {
-		return "", fmt.Errorf("watch: unexpected chat init answer")
-	}
-	_ = os.WriteFile(cache, []byte(rec.ChatID+"\n"), 0o600)
-	return rec.ChatID, nil
-}
-
-// watchStatusline prints the progress file. It must never fail a
-// status line: any problem prints nothing.
-func watchStatusline(ctx *Context, fs *flag.FlagSet) error {
-	chat, err := watchChat(ctx, fs)
-	if err != nil {
-		return nil
-	}
-	fmt.Fprint(ctx.Stdout, watcher.NewFiles("", chat).ReadStatusline(30*time.Second))
-	return nil
-}
-
-// watchResident runs the per-chat watcher until its parent goes away, the
-// user interrupts it, or (--wait-decision) a decision was printed.
-func watchResident(ctx *Context, fs *flag.FlagSet) error {
-	chat, err := watchChat(ctx, fs)
-	if err != nil {
-		return err
-	}
-	files := watcher.NewFiles("", chat)
-	release, err := files.Lock(5 * time.Second)
-	if err != nil {
-		return fmt.Errorf("watch: %w", err)
-	}
-	defer release()
-	_ = files.WritePID()
-
-	d := ctx.daemon()
-	d.HTTP.Timeout = 10 * time.Second
-	api := chatAPI{d: d, chat: chat}
-
-	opts := watcher.Options{
-		Owner:        ctx.Cfg.UserID,
-		WaitDecision: boolFlag(fs, "wait-decision"),
-		Poll:         durationFlag(fs, "poll"),
-		Out:          ctx.Stdout,
-		Err:          ctx.Stderr,
-		Status:       files.WriteStatus,
-	}
-	if !boolFlag(fs, "no-parent-check") {
-		opts.ParentAlive = parentAlive()
-	}
-	sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	err = watcher.Run(sctx, api, opts)
-	if err == watcher.ErrParentGone {
-		return nil
-	}
-	return err
-}
-
-// parentAlive answers false once the process that started the watcher is
-// gone (reparented). A watcher launched already orphaned (ppid 1, e.g. by
-// nohup or a service manager) has no parent to follow and never exits on
-// this account.
-func parentAlive() func() bool {
-	ppid := os.Getppid()
-	if ppid == 1 {
-		return func() bool { return true }
-	}
-	return func() bool { return os.Getppid() == ppid }
 }

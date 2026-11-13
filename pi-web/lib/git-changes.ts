@@ -1,0 +1,257 @@
+import fs from "fs";
+import path from "path";
+import { runGit } from "./exec-file";
+import { TEXT_PREVIEW_MAX_BYTES } from "./file-types";
+import type {
+  GitFileDiffResponse,
+  GitFileStatus,
+  GitStatusResponse,
+} from "./git-types";
+import {
+  classifyGitStatus,
+  parseGitPorcelainV1,
+  type GitPorcelainEntry,
+} from "./git-status";
+import { resolveExistingPath } from "./paths";
+
+const GIT_STATUS_MAX_BUFFER = 8 * 1024 * 1024;
+
+async function findRepositoryRoot(cwd: string): Promise<string | null> {
+  try {
+    return (await runGit(cwd, ["rev-parse", "--show-toplevel"], { maxBuffer: GIT_STATUS_MAX_BUFFER })).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function isWithinPath(parent: string, target: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(target));
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function toGitPath(filePath: string): string {
+  return filePath.split(path.sep).join("/");
+}
+
+async function readStatusEntries(
+  repositoryRoot: string,
+  gitConfig: readonly string[] = [],
+): Promise<GitPorcelainEntry[]> {
+  const output = await runGit(repositoryRoot, [
+    ...gitConfig,
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+  ], { maxBuffer: GIT_STATUS_MAX_BUFFER });
+  return parseGitPorcelainV1(output);
+}
+
+async function readTrackedLineStats(
+  repositoryRoot: string,
+  cwd: string,
+): Promise<{ additions: number; deletions: number }> {
+  const relativeCwd = toGitPath(path.relative(repositoryRoot, cwd));
+  const pathspec = relativeCwd || ".";
+  try {
+    const output = await runGit(repositoryRoot, [
+      "diff",
+      "--no-color",
+      "--no-ext-diff",
+      "--numstat",
+      "HEAD",
+      "--",
+      pathspec,
+    ], { maxBuffer: GIT_STATUS_MAX_BUFFER });
+    let additions = 0;
+    let deletions = 0;
+    for (const line of output.split(/\r?\n/)) {
+      if (!line) continue;
+      const [added, deleted] = line.split("\t", 2);
+      const addedCount = Number(added);
+      const deletedCount = Number(deleted);
+      if (Number.isInteger(addedCount)) additions += addedCount;
+      if (Number.isInteger(deletedCount)) deletions += deletedCount;
+    }
+    return { additions, deletions };
+  } catch {
+    return { additions: 0, deletions: 0 };
+  }
+}
+
+function countUntrackedTextLines(filePath: string): number {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (!stat.isFile() || stat.size > TEXT_PREVIEW_MAX_BYTES) return 0;
+    const content = fs.readFileSync(filePath);
+    if (hasNullByte(content) || content.length === 0) return 0;
+    const text = content.toString("utf8");
+    return text.endsWith("\n") ? text.split("\n").length - 1 : text.split("\n").length;
+  } catch {
+    return 0;
+  }
+}
+
+export async function getGitStatus(cwd: string): Promise<GitStatusResponse> {
+  const repositoryRoot = await findRepositoryRoot(cwd);
+  if (!repositoryRoot) {
+    return {
+      isGitRepository: false,
+      repositoryRoot: null,
+      files: [],
+      additions: 0,
+      deletions: 0,
+    };
+  }
+
+  // Git names the repository by its real path, while the cwd may reach it through a
+  // link (`/tmp` and `/var/folders/…` are links on macOS): compare real paths, and
+  // report each file under the cwd as given, the way the file tree lists it.
+  const realRoot = resolveExistingPath(repositoryRoot);
+  const realCwd = resolveExistingPath(cwd);
+  const [entries, trackedLineStats] = await Promise.all([
+    readStatusEntries(repositoryRoot),
+    readTrackedLineStats(realRoot, realCwd),
+  ]);
+  const files = entries.flatMap((entry): GitFileStatus[] => {
+    const realFilePath = path.resolve(realRoot, entry.path);
+    if (!isWithinPath(realCwd, realFilePath)) return [];
+    const filePath = path.join(cwd, path.relative(realCwd, realFilePath));
+    const classified = classifyGitStatus(entry);
+    return [{
+      filePath,
+      ...classified,
+      indexStatus: entry.indexStatus,
+      worktreeStatus: entry.worktreeStatus,
+    }];
+  });
+  const untrackedAdditions = files.reduce(
+    (total, file) => total + (file.status === "untracked" ? countUntrackedTextLines(file.filePath) : 0),
+    0,
+  );
+
+  return {
+    isGitRepository: true,
+    repositoryRoot,
+    files,
+    additions: trackedLineStats.additions + untrackedAdditions,
+    deletions: trackedLineStats.deletions,
+  };
+}
+
+function hasNullByte(content: Buffer): boolean {
+  return content.includes(0);
+}
+
+function createAddedFilePatch(gitPath: string, content: string): string {
+  const hasTrailingNewline = content.endsWith("\n");
+  const lines = content.split("\n");
+  if (hasTrailingNewline) lines.pop();
+  const body = lines.map((line) => `+${line}`).join("\n");
+  const noNewlineMarker = !hasTrailingNewline && lines.length > 0
+    ? "\n\\ No newline at end of file"
+    : "";
+  return [
+    `diff --git a/${gitPath} b/${gitPath}`,
+    "new file mode 100644",
+    "--- /dev/null",
+    `+++ b/${gitPath}`,
+    `@@ -0,0 +1,${lines.length} @@`,
+    `${body}${noNewlineMarker}`,
+  ].join("\n");
+}
+
+async function createTrackedFilePatch(
+  repositoryRoot: string,
+  relativePath: string,
+  originalPath?: string,
+  gitConfig: readonly string[] = [],
+): Promise<string | null> {
+  const paths = originalPath && originalPath !== relativePath
+    ? [originalPath, relativePath]
+    : [relativePath];
+  try {
+    return await runGit(repositoryRoot, [
+      ...gitConfig,
+      "diff",
+      "--no-color",
+      "--no-ext-diff",
+      "--unified=3",
+      "HEAD",
+      "--",
+      ...paths,
+    ], { maxBuffer: TEXT_PREVIEW_MAX_BYTES * 4 });
+  } catch {
+    return null;
+  }
+}
+
+// The file's own repository, not the cwd's: a session may start in a plain folder
+// holding several repositories. A deleted file's folder may be gone too, so start
+// from its nearest existing ancestor; fall back to the cwd.
+async function findFileRepositoryRoot(cwd: string, filePath: string): Promise<string | null> {
+  let directory = path.dirname(path.resolve(filePath));
+  while (!fs.existsSync(directory)) {
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  return (await findRepositoryRoot(directory)) ?? (await findRepositoryRoot(cwd));
+}
+
+export async function getGitFileDiff(cwd: string, filePath: string): Promise<GitFileDiffResponse> {
+  const repositoryRoot = await findFileRepositoryRoot(cwd, filePath);
+  if (!repositoryRoot) return { supported: false };
+  // Git names the repository by its real path, while the file and the cwd may be named
+  // through a link: compare real paths. A file whose real path leaves the repository
+  // stays out; the route has already checked that real path against the allowed roots.
+  const realRoot = resolveExistingPath(repositoryRoot);
+  const realFilePath = resolveExistingPath(filePath);
+  if (!isWithinPath(realRoot, realFilePath)) return { supported: false };
+  // Reading the index runs a repository-configured fsmonitor hook. Opening a
+  // file in another checkout (one nested in the cwd, say) must not run its hook,
+  // as expanding that folder in the file tree does not (lib/file-tree-visibility.ts);
+  // the cwd's own repository keeps its fsmonitor.
+  const gitConfig = isWithinPath(realRoot, resolveExistingPath(cwd)) ? [] : ["-c", "core.fsmonitor=false"];
+
+  const resolvedFilePath = path.resolve(filePath);
+  const relativePath = toGitPath(path.relative(realRoot, realFilePath));
+  const entries = await readStatusEntries(repositoryRoot, gitConfig);
+  const entry = entries.find((candidate) => candidate.path === relativePath);
+  if (!entry) return { supported: false };
+
+  const { status } = classifyGitStatus(entry);
+  if (status === "deleted") {
+    const patch = await createTrackedFilePatch(repositoryRoot, relativePath, entry.originalPath, gitConfig);
+    if (!patch?.includes("\n@@ ")) return { supported: false };
+    return { supported: true, status, patch };
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(resolvedFilePath);
+  } catch {
+    return { supported: false };
+  }
+  if (!stat.isFile() || stat.size > TEXT_PREVIEW_MAX_BYTES) return { supported: false };
+
+  const currentBuffer = fs.readFileSync(resolvedFilePath);
+  if (hasNullByte(currentBuffer)) return { supported: false };
+  const newContent = currentBuffer.toString("utf8");
+
+  let patch: string;
+  if (status === "untracked") {
+    patch = createAddedFilePatch(relativePath, newContent);
+  } else {
+    const trackedPatch = await createTrackedFilePatch(repositoryRoot, relativePath, entry.originalPath, gitConfig);
+    if (trackedPatch === null) {
+      if (status !== "added") return { supported: false };
+      patch = createAddedFilePatch(relativePath, newContent);
+    } else {
+      patch = trackedPatch;
+    }
+  }
+
+  if (!patch.includes("\n@@ ")) return { supported: false };
+  return { supported: true, status, patch };
+}

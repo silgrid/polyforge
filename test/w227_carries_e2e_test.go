@@ -46,7 +46,7 @@ func w227Run(t *testing.T, dir string, args ...string) (w25e2eReport, string) {
 	t.Helper()
 	out, errb, code := w25e2eRun(t, dir, nil, args...)
 	if code != 0 {
-		t.Fatalf("tools/verify-scope %v: exit %d (stdout %q, stderr %q)", args, code, out, errb)
+		t.Fatalf("workflows/_shared/scripts/verify-scope %v: exit %d (stdout %q, stderr %q)", args, code, out, errb)
 	}
 	return w25e2eParse(t, out), errb
 }
@@ -80,7 +80,7 @@ func w227JSON(t *testing.T, dir string) w227JSONReport {
 	t.Helper()
 	out, errb, code := w25e2eRun(t, dir, nil, "--json")
 	if code != 0 {
-		t.Fatalf("tools/verify-scope --json: exit %d (stderr %q)", code, errb)
+		t.Fatalf("workflows/_shared/scripts/verify-scope --json: exit %d (stderr %q)", code, errb)
 	}
 	var r w227JSONReport
 	if err := json.Unmarshal([]byte(out), &r); err != nil {
@@ -109,7 +109,7 @@ func w227Echo(t *testing.T, dir, key string) any {
 	t.Helper()
 	out, _, code := w25e2eRun(t, dir, nil, "--json")
 	if code != 0 {
-		t.Fatalf("tools/verify-scope --json: exit %d", code)
+		t.Fatalf("workflows/_shared/scripts/verify-scope --json: exit %d", code)
 	}
 	raw := map[string]any{}
 	if err := json.Unmarshal([]byte(out), &raw); err != nil {

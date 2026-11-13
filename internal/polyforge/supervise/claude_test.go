@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestClaudeTranslatorReplay replays a hand-written stream-json session
@@ -43,7 +44,9 @@ func TestClaudeTranslatorReplay(t *testing.T) {
 		"alive", `tool_start:Bash:{"command":"sleep 1m"}`,
 		"tool_end:", "waiting",
 		"alive", `tool_start:Agent:{"description":"review","prompt":"review the diff"}`,
-		"alive", "alive", "alive", // sub-agent internals (its own sleep included): life only
+		// sub-agent internals (its own sleep included): the Agent call's
+		// inner activity, never tools of the step
+		"tool_active:toolu_2", "tool_active:toolu_2", "tool_active:toolu_2",
 		"tool_end:", "waiting",
 		"alive", "waiting", "error:claude-code rate limit (429) (HTTP 429)", // api_retry
 		"noise", "noise", "noise", // rate_limit_event, task_started, garbage
@@ -81,5 +84,34 @@ func TestClaudeCanonicalError(t *testing.T) {
 		if got != want {
 			t.Errorf("got %q want %q", got, want)
 		}
+	}
+}
+
+// TestClaudeResultReportsContextWindow: a result's modelUsage names claude's
+// own context window per model; the tracker keeps the latest
+// positive report of each and its snapshot carries them. The turn signal
+// still comes last.
+func TestClaudeResultReportsContextWindow(t *testing.T) {
+	c := &fixClock{now: time.Unix(1000, 0)}
+	tr := newTrackerAt(c, Thresholds{Silence: time.Hour, Tool: time.Hour, StepTimeout: time.Hour})
+	tl := NewClaude(tr)
+	if w := tr.Snapshot(c.now).ContextWindows; len(w) != 0 {
+		t.Fatalf("no result yet: windows %v, want none", w)
+	}
+	tl.Feed([]byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok","modelUsage":{"claude-model-x":{"inputTokens":10,"outputTokens":5,"contextWindow":200000},"claude-model-small":{"inputTokens":1,"contextWindow":0},"claude-model-odd":{"contextWindow":"big"}}}`))
+	w := tr.Snapshot(c.now).ContextWindows
+	if len(w) != 1 || w["claude-model-x"] != 200000 {
+		t.Fatalf("after the first result: windows %v, want only claude-model-x=200000", w)
+	}
+	// a later result (an error turn reports it too) replaces the value
+	tl.Feed([]byte(`{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom","modelUsage":{"claude-model-x":{"contextWindow":1000000}}}`))
+	if w := tr.Snapshot(c.now).ContextWindows; len(w) != 1 || w["claude-model-x"] != 1000000 {
+		t.Fatalf("after the second result: windows %v, want claude-model-x=1000000", w)
+	}
+
+	sink := &recSink{}
+	NewClaude(sink).Feed([]byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok","modelUsage":{"claude-model-x":{"contextWindow":200000}}}`))
+	if want := []string{"context_window:claude-model-x:200000", "turn_end:true:"}; strings.Join(sink.log, "|") != strings.Join(want, "|") {
+		t.Fatalf("signals %v, want %v", sink.log, want)
 	}
 }

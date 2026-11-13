@@ -41,13 +41,13 @@ func TestW170CarrierRewindLandsThroughRealAihubHook(t *testing.T) {
 	o, base := taskOpts(t, "wi_w170_hook")
 	w170RealHookHub(t, &o, base)
 	mkTaskCapsule(t, o)
-	repoDir := filepath.Join(o.CapsuleDir, capsule.DirRepos, "pi-web-gmi")
-	publishedHead := mkTaskRepoWithWork(t, o.CapsuleDir, "pi-web-gmi", filepath.Join(base, "origin"))
+	repoDir := filepath.Join(o.CapsuleDir, capsule.DirRepos, "demo")
+	publishedHead := mkTaskRepoWithWork(t, o.CapsuleDir, "demo", filepath.Join(base, "origin"))
 
 	if _, _, _, err := CommitPush(ctx, o, "observe: v1"); err != nil {
 		t.Fatalf("first CommitPush: %v", err)
 	}
-	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("pi-web-gmi")); !ok || got != publishedHead {
+	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("demo")); !ok || got != publishedHead {
 		t.Fatalf("carrier before the rewind = %q (%v), want %q", got, ok, publishedHead)
 	}
 
@@ -64,7 +64,7 @@ func TestW170CarrierRewindLandsThroughRealAihubHook(t *testing.T) {
 	if _, _, _, err := CommitPush(ctx, o, "observe: v2 after rewind"); err != nil {
 		t.Fatalf("CommitPush after the rewind: %v", err)
 	}
-	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("pi-web-gmi")); !ok || got != rewrittenHead {
+	if got, ok := bareRefSHA(t, o.RemoteURL, TaskRefName("demo")); !ok || got != rewrittenHead {
 		t.Fatalf("carrier after the rewind = %q (%v), want the rewritten head %q (events: %v)", got, ok, rewrittenHead, events)
 	}
 	if len(events) != 0 {
@@ -82,8 +82,8 @@ func TestW170CarrierForeignRewriteRefusedAndAlertedOnce(t *testing.T) {
 	o, base := taskOpts(t, "wi_w170_foreign")
 	w170RealHookHub(t, &o, base)
 	mkTaskCapsule(t, o)
-	repoDir := filepath.Join(o.CapsuleDir, capsule.DirRepos, "pi-web-gmi")
-	publishedHead := mkTaskRepoWithWork(t, o.CapsuleDir, "pi-web-gmi", filepath.Join(base, "origin"))
+	repoDir := filepath.Join(o.CapsuleDir, capsule.DirRepos, "demo")
+	publishedHead := mkTaskRepoWithWork(t, o.CapsuleDir, "demo", filepath.Join(base, "origin"))
 	if _, _, _, err := CommitPush(ctx, o, "observe: v1"); err != nil {
 		t.Fatalf("first CommitPush: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestW170CarrierForeignRewriteRefusedAndAlertedOnce(t *testing.T) {
 	if _, _, _, err := CommitPush(ctx, o, "observe: foreign"); err != nil {
 		t.Fatalf("a rejected carrier must not fail the chain publish: %v", err)
 	}
-	if got, _ := bareRefSHA(t, o.RemoteURL, TaskRefName("pi-web-gmi")); got != publishedHead {
+	if got, _ := bareRefSHA(t, o.RemoteURL, TaskRefName("demo")); got != publishedHead {
 		t.Fatalf("foreign rewrite moved the carrier to %q, want it kept at %q", got, publishedHead)
 	}
 	if len(events) != 2 || events[0] != EventCarrierPushFailed || events[1] != EventTaskRefDiverged {

@@ -94,7 +94,7 @@ func (r *w167Rig) pf(t *testing.T, cfg string, extraEnv []string, args ...string
 		switch {
 		case strings.HasPrefix(kv, "PF_SERVER="), strings.HasPrefix(kv, "PF_API_KEY="),
 			strings.HasPrefix(kv, "PF_USER_ID="), strings.HasPrefix(kv, "PF_DAEMON_SOCKET="),
-			strings.HasPrefix(kv, "PF_CHAT_ID="), strings.HasPrefix(kv, "PF_WI_ID="),
+			strings.HasPrefix(kv, "PF_WI_ID="),
 			strings.HasPrefix(kv, "PF_TASK_ID="), strings.HasPrefix(kv, "PF_DAEMON_ID="):
 			continue
 		}
@@ -105,6 +105,7 @@ func (r *w167Rig) pf(t *testing.T, cfg string, extraEnv []string, args ...string
 	env = append(env, extraEnv...)
 	cmd.Env = env
 	var out strings.Builder
+	v1BusinessCmd(t, cmd)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := 0
 	if err := cmd.Run(); err != nil {

@@ -1,0 +1,7 @@
+contract: 5
+name: wfc-112-vars-both
+description: fixture lane for WFC-112 - one var in both vars and vars_files
+steps:
+  - id: echo
+    vars: { note: inline }
+    vars_files: { note: fragments/note.md }

@@ -61,18 +61,18 @@ bin/pf --config /tmp/pf-quickstart/cli.toml api-keys create --user <MACHINE_USER
 ```
 
 **5. File a minimal smoke work item.** `--bundle` makes it an execution
-ticket — only execution tickets can be claimed; `autopilot` is one of
-the workflow bundles shipped in `workflows/`:
+ticket — only execution tickets can be claimed; `develop` (the default
+lane) is one of the workflow bundles shipped in `workflows/`:
 
 ```
 bin/pf --config /tmp/pf-quickstart/cli.toml file create --project demo \
-  --bundle autopilot \
+  --bundle develop \
   --goal "Quickstart smoke: exercise the file -> submit -> watch -> wrap chain." \
   --content "Minimal smoke work item; no product change is expected." \
   --label smoke
 ```
 
-**6. Start the local daemon** (runtime, driver and watcher behind its own UDS
+**6. Start the local daemon** (runtime, driver and decision feed behind its own UDS
 socket; keep it running in a second terminal). Capsules route by the
 claimed work item's project through the `[workspace]` mapping — the `demo`
 section above sends `demo` capsules to
@@ -114,9 +114,9 @@ restores progress from the aihub capsule revision chain (and the task repos'
 step. `pf watch <id> --once` shows a
 snapshot read from the capsule's `execution.json`: status, current step and
 how long it has run, the pending question and the latest events;
-`pf watch --chat "$PF_CHAT_ID" --wait-decision` is the resident per-chat
-watcher that wakes a harness session only for human decisions (see
-`skills/polyforge/SKILL.md`). Give the first step a
+`pf watch decisions` prints the machine's decision feed — every human
+decision of every work item, the same list pi-web's Polyforge panel shows
+(see `skills/polyforge/SKILL.md`). Give the first step a
 few minutes: once the driver commits the first `runtime-state/execution.json`
 version, the snapshot shows a current step and a `published` event.
 
@@ -134,7 +134,9 @@ fingerprint). Note: wrapping before the
 capsule's first commit lands leaves no revision to seal — the close
 degrades to `blocked`, and the WI is not claimable again until
 `pf resume <WI_ID>` continues it, or `pf cancel <WI_ID>` abandons it (the task's
-reporter, a project maintainer or an admin; the same two moves apply to a WI the
+reporter, a project maintainer, an admin, or — on a blocked WI only — the current
+operator of the machine that last held it, as a project writer or maintainer; the
+same two moves apply to a WI the
 daemon set `blocked` at restart for a missing capsule / unmapped project — see
 below; `pf wrap` / `pf wrap --fail` do not apply to a blocked WI — there is no
 completed run to wrap or fail, and the daemon refuses with DAEMON-409).

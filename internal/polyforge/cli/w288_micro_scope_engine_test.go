@@ -2,7 +2,7 @@ package cli
 
 // w288_micro_scope_engine_test.go: the engine's micro declaration
 // (micro_path=, micro_check=) and its `--micro` evidence mode
-// (tools/verify-scope,). Every case runs the in-tree engine
+// (workflows/_shared/scripts/verify-scope,). Every case runs the in-tree engine
 // in a git fixture, never the release-installed copy. --json needs
 // python3, a documented prerequisite — without it the test skips and says
 // so.
@@ -64,7 +64,7 @@ func microFixture(t *testing.T, base, change map[string]string) (string, string)
 // and the exit code.
 func microEngine(t *testing.T, dir string, args ...string) (string, string, int) {
 	t.Helper()
-	engine, err := filepath.Abs(filepath.Join("..", "..", "..", "tools", "verify-scope"))
+	engine, err := filepath.Abs(filepath.Join("..", "..", "..", "workflows", "_shared", "scripts", "verify-scope"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func microEngine(t *testing.T, dir string, args ...string) (string, string, int)
 	if ee, ok := err.(*exec.ExitError); ok {
 		code = ee.ExitCode()
 	} else if err != nil {
-		t.Fatalf("tools/verify-scope: %v", err)
+		t.Fatalf("workflows/_shared/scripts/verify-scope: %v", err)
 	}
 	return stdout.String(), stderr.String(), code
 }
@@ -85,11 +85,11 @@ func microEngine(t *testing.T, dir string, args ...string) (string, string, int)
 func microJSON(t *testing.T, dir string, args ...string) microReport {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 is not installed: tools/verify-scope --json needs it (a documented prerequisite)")
+		t.Skip("python3 is not installed: workflows/_shared/scripts/verify-scope --json needs it (a documented prerequisite)")
 	}
 	out, errb, code := microEngine(t, dir, append([]string{"--json"}, args...)...)
 	if code != 0 {
-		t.Fatalf("tools/verify-scope --json %v: exit %d\nstderr: %s", args, code, errb)
+		t.Fatalf("workflows/_shared/scripts/verify-scope --json %v: exit %d\nstderr: %s", args, code, errb)
 	}
 	var r microReport
 	if err := json.Unmarshal([]byte(out), &r); err != nil {

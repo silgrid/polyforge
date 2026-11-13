@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -202,7 +203,25 @@ func w140Race(doA, doB func() error) (error, error) {
 // w140Pf runs the real pf CLI (no daemon face) and returns output+code.
 func w140Pf(t *testing.T, inst *v1Install, args ...string) (string, int) {
 	t.Helper()
-	cmd := exec.Command(inst.pfPath, args...)
+	// the connection rides the data-plane proxy stand-in (v1BusinessEnv):
+	// the CLI refuses --server/--api-key
+	env := os.Environ()
+	var kept []string
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "--server" || args[i] == "--api-key") && i+1 < len(args) {
+			name := "PF_SERVER="
+			if args[i] == "--api-key" {
+				name = "PF_API_KEY="
+			}
+			env = append(env, name+args[i+1])
+			i++
+			continue
+		}
+		kept = append(kept, args[i])
+	}
+	cmd := exec.Command(inst.pfPath, kept...)
+	cmd.Env = env
+	v1BusinessCmd(t, cmd)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()

@@ -4,10 +4,12 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 // v1_s05: the step process is killed with SIGKILL. The driver's step
-// processes ARE the supervised units: the killed grill dispatch never
+// processes ARE the supervised units: the killed fix dispatch never
 // writes its result envelope, the DRIVER surfaces the envelope-less exit
 // itself (exit_other: a same-model retry) and re-dispatches the step in
 // place under the NEXT spawn ordinal — the v1.5 B2 rule: the ONLY
@@ -22,11 +24,10 @@ func TestV1S05AgentKill9(t *testing.T) {
 		[]map[string]any{
 			// Ordinal 1 delays its envelope write 2.5s: the deterministic
 			// kill window (the envelope never lands).
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true, "ms": 2500},
-			// Ordinal 2 is the crash continuation: grill again, in place.
-			{"do": "envelope", "id": "grill", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "fix", "outcome": "completed", "handoff": true},
-			{"do": "envelope", "id": "verification", "outcome": "completed"},
+			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 2500},
+			// Ordinal 2 is the crash continuation: fix again, in place.
+			{"do": "envelope", "id": "fix", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}, nil)
 	d := newV1Daemon(t, inst)
 	d.start()
@@ -83,9 +84,9 @@ func TestV1S05AgentKill9(t *testing.T) {
 	}
 
 	// The spawn journal: the kill consumed ordinal 1 and the driver
-	// re-dispatched grill in place as a RESUME under ordinal 2 (the B2
-	// fence key), then the fresh dispatches of the tail.
-	spawns := waitSpawnCount(t, d, wi, 4, 60*time.Second)
+	// re-dispatched fix in place as a RESUME under ordinal 2 (the B2
+	// fence key), then the fresh dispatch of the tail.
+	spawns := waitSpawnCount(t, d, wi, 3, 60*time.Second)
 	if spawns[0]["resume"] != false || spawns[1]["resume"] != true {
 		t.Fatalf("the retry was not a resume: %+v %+v", spawns[0], spawns[1])
 	}
@@ -96,18 +97,17 @@ func TestV1S05AgentKill9(t *testing.T) {
 		t.Fatalf("second derivation counter wrong: %+v", spawns[1])
 	}
 
-	// The driver faces: the whole autopilot chain done, grill's accepted
-	// envelope is the CONTINUATION's (ordinal 2), and the sealed chain
-	// carries the spawn journal.
+	// The driver faces: the whole chain done, fix's accepted envelope is
+	// the CONTINUATION's (ordinal 2), and the sealed chain carries the
+	// spawn journal.
 	x := readExecution(t, d.capsuleDir(wi))
-	for _, step := range []string{"grill", "fix", "verification"} {
+	for _, step := range []string{"fix", "review"} {
 		if st := x.Steps[step]; st == nil || st.Status != "done" {
 			t.Fatalf("step %s: %+v, want done", step, st)
 		}
 	}
-	env2 := archivedEnvelope(t, d.capsuleDir(wi), "grill", 2)
-	if env2["outcome"] != "completed" {
-		t.Fatalf("grill's continuation envelope wrong: %v", env2["outcome"])
+	if h := acceptedHandoff(t, d.capsuleDir(wi), "fix", 2); h.Handoff.Status != stepcall.StatusDone {
+		t.Fatalf("fix's continuation handed off %s, want done", h.Handoff.Status)
 	}
 	if !inst.bareHasPath(t, wi, "runtime-state/spawn-journal.jsonl") {
 		t.Fatal("sealed chain misses the spawn journal")

@@ -10,9 +10,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
 )
 
 // startedWithBundle runs one full Start against the pristine demo bundle
@@ -50,15 +53,19 @@ func readMarker(t *testing.T, capDir string) materializeMarkerRecord {
 	return m
 }
 
-// The full materialization: workflows/<bundle>/ tree (step definitions
-// included, no second agents/ copy), and a marker whose targets list
-// covers every file on disk.
+// The full materialization: workflows/<bundle>/ tree (workflow.yaml, its
+// README.md, its fragments/ and the step definitions; no second agents/
+// copy), each step's rendered definition under workflows/_rendered/, and
+// a marker whose targets list covers every file on disk.
 func TestMaterializeSetCompleteShape(t *testing.T) {
 	_, capDir, _ := startedWithBundle(t, "wi_f7a")
 
 	for _, rel := range []string{
-		"workflows/demo-bundle/workflow.md",
+		"workflows/demo-bundle/workflow.yaml",
+		"workflows/demo-bundle/README.md",
+		"workflows/demo-bundle/fragments/note.md",
 		"workflows/demo-bundle/steps/step.md",
+		"workflows/_rendered/step.md",
 	} {
 		if _, err := os.Stat(filepath.Join(capDir, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("materialized target missing: %s: %v", rel, err)
@@ -76,9 +83,21 @@ func TestMaterializeSetCompleteShape(t *testing.T) {
 	if m.BundleName != "demo-bundle" {
 		t.Fatalf("marker identity = %+v", m)
 	}
+	// workflow contract ( AC7): the marker records the
+	// snapshot's contract version, its source and its content hash.
+	hash, err := workflow.ContentHash(capDir, m.Targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Contract != workflow.ContractVersion || m.Source != workflow.SourceBuiltin || m.ContentHash != hash || !strings.HasPrefix(hash, "sha256:") {
+		t.Fatalf("marker contract/source/content_hash = %d %q %q, want %d %q %q", m.Contract, m.Source, m.ContentHash, workflow.ContractVersion, workflow.SourceBuiltin, hash)
+	}
 	want := map[string]bool{
-		"workflows/demo-bundle/workflow.md":   false,
-		"workflows/demo-bundle/steps/step.md": false,
+		"workflows/demo-bundle/workflow.yaml":     false,
+		"workflows/demo-bundle/README.md":         false,
+		"workflows/demo-bundle/fragments/note.md": false,
+		"workflows/demo-bundle/steps/step.md":     false,
+		"workflows/_rendered/step.md":             false,
 	}
 	if len(m.Targets) != len(want) {
 		t.Fatalf("marker targets = %v", m.Targets)
@@ -137,13 +156,13 @@ func TestMaterializeSetTornSnapshotRebuilt(t *testing.T) {
 
 	// (a) torn: marker gone, one staged copy vandalized.
 	os.Remove(filepath.Join(capDir, filepath.FromSlash(RelMaterializeMarker)))
-	os.Remove(filepath.Join(capDir, "workflows", "demo-bundle", "workflow.md"))
+	os.Remove(filepath.Join(capDir, "workflows", "demo-bundle", workflow.WorkflowFile))
 
 	if err := r.materializeBundle(j); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := os.Stat(filepath.Join(capDir, "workflows", "demo-bundle", "workflow.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(capDir, "workflows", "demo-bundle", workflow.WorkflowFile)); err != nil {
 		t.Fatalf("torn snapshot not rebuilt: %v", err)
 	}
 	m := readMarker(t, capDir)
@@ -189,7 +208,7 @@ func TestMaterializeSetAdoptsPreG4Capsule(t *testing.T) {
 	old, _ := json.Marshal(map[string]any{
 		"bundle_name":  "demo-bundle",
 		"adapters":     []string{"pi"},
-		"targets":      []string{"agents/step.md", "workflows/demo-bundle/workflow.md"},
+		"targets":      []string{"agents/step.md", "workflows/demo-bundle/workflow.yaml"},
 		"completed_at": "2026-10-01T00:00:00Z",
 	})
 	if err := os.WriteFile(markerPath, old, 0o444); err != nil {
@@ -219,19 +238,23 @@ func TestMaterializeSetAdoptsPreG4Capsule(t *testing.T) {
 	}
 }
 
-// A bundle without steps/ still gets its workflows/<bundle>
-// tree copied and a valid completion marker (the latent bug: the workflow
-// tree copy used to hang off the presence of a step directory).
+// A lane without steps/ of its own (its one step's definition the shared
+// one) still gets its workflows/<bundle> tree copied and a valid
+// completion marker (the latent bug: the workflow tree copy used to hang
+// off the presence of a step directory).
 func TestMaterializeBundleWithoutStepsStillCopiesWorkflowTree(t *testing.T) {
 	setGitIdentity(t)
 	dir := t.TempDir()
-	bundle := filepath.Join(dir, "demo-bundle")
-	if err := os.MkdirAll(bundle, 0o755); err != nil {
+	// the lane's one step falls back on the shared definition: its own
+	// directory holds the workflow.yaml alone (workflow contract 3 has no
+	// daemon step, the steps-less shape of contract 1/2)
+	if err := os.MkdirAll(filepath.Join(dir, workflow.SharedDir, "steps"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bundle, "workflow.md"), []byte("# demo\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, workflow.SharedDir, "steps", "close.md"), []byte(workflowtest.Definition("close")), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	workflowtest.WriteLane(t, dir, "demo-bundle", "steps:\n  - { id: close }\n")
 	hub := newFakeHub()
 	r, _, _ := newTestRuntime(t, hub, &scriptedSpawner{})
 	r.cfg.WorkflowsDir = dir
@@ -240,11 +263,11 @@ func TestMaterializeBundleWithoutStepsStillCopiesWorkflowTree(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = r.Stop(context.Background(), "wi_f7nos", protocol.FinishWrapped) })
 	capDir := testCapsuleDir(r, "wi_f7nos")
-	if _, err := os.Stat(filepath.Join(capDir, "workflows", "demo-bundle", "workflow.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(capDir, "workflows", "demo-bundle", workflow.WorkflowFile)); err != nil {
 		t.Fatalf("workflow tree not materialized: %v", err)
 	}
 	m := readMarker(t, capDir)
-	if len(m.Targets) != 1 || m.Targets[0] != "workflows/demo-bundle/workflow.md" {
+	if len(m.Targets) != 3 || m.Targets[0] != "workflows/_rendered/close.md" || m.Targets[1] != "workflows/_shared/steps/close.md" || m.Targets[2] != "workflows/demo-bundle/workflow.yaml" {
 		t.Fatalf("marker targets = %v", m.Targets)
 	}
 	if !r.materializationComplete(r.jobOf("wi_f7nos")) {
@@ -258,12 +281,12 @@ func TestMaterializeBundleWithoutStepsStillCopiesWorkflowTree(t *testing.T) {
 // a blocked finish, not a silent rebuild.
 func TestRecoveryUsesClaimSnapshotNeverRepins(t *testing.T) {
 	r, capDir, j := startedWithBundle(t, "wi_norepin")
-	src := filepath.Join(r.cfg.WorkflowsDir, "demo-bundle", "workflow.md")
+	src := filepath.Join(r.cfg.WorkflowsDir, "demo-bundle", workflow.WorkflowFile)
 	if err := os.WriteFile(src, []byte("# evolved after claim\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	r.handleOB(context.Background(), recoveryMsg(j, protocol.RecoverDeath))
-	got, _ := os.ReadFile(filepath.Join(capDir, "workflows", "demo-bundle", "workflow.md"))
+	got, _ := os.ReadFile(filepath.Join(capDir, "workflows", "demo-bundle", workflow.WorkflowFile))
 	if string(got) == "# evolved after claim\n" {
 		t.Fatal("recovery re-materialized from the moved source")
 	}

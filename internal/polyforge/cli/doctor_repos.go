@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+	"github.com/silgrid/polyforge/internal/polyforge/taskrepo"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
@@ -156,27 +156,15 @@ func probeRepoUnit(u *repoUnit) {
 }
 
 // probeGit runs one read-only git command inside an (untrusted) mapped
-// .repo/ clone: its own git-dir (its inherited GIT_* stripped), system
-// config ignored, fsmonitor and hooks disabled, literal pathspecs, no
-// optional locks and a hard timeout (the deliver facts' face — the doctor
-// never writes into someone's clone, not even an advice file).
+// .repo/ clone through taskrepo.Command (no program the clone's config
+// names runs; its own git-dir — its inherited GIT_* stripped — system
+// config ignored, no prompt), literal pathspecs, no optional locks and a
+// hard timeout (the driver's repo facts' face — the doctor never writes
+// into someone's clone, not even an advice file).
 func probeGit(dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), repoClonesGitTimeout)
 	defer cancel()
-	argv := append([]string{
-		"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-		"--no-optional-locks", "--literal-pathspecs",
-	}, args...)
-	cmd := exec.CommandContext(ctx, "git", argv...)
-	cmd.Dir = dir
-	env := make([]string, 0, len(os.Environ())+2)
-	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "GIT_") || strings.HasPrefix(kv, "LC_ALL=") {
-			continue
-		}
-		env = append(env, kv)
-	}
-	cmd.Env = append(env, "GIT_CONFIG_NOSYSTEM=1", "LC_ALL=C")
+	cmd := taskrepo.Command(ctx, nil, dir, append([]string{"--no-optional-locks", "--literal-pathspecs"}, args...)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -362,7 +350,7 @@ func cloneRemediation(name string, reg *repoRegistry) string {
 // verdicts into ONE row (status pass|skip|warn as plan decision 6 —
 // never fail; pass says how many were scanned).
 func repoClonesCheck(r *doctorRun) (string, string) {
-	aihub := aihubclient.New(r.cfg.Server, r.cfg.APIKey)
+	aihub := newProxyClient(r.cfg.DaemonSocket, "")
 	reg := repoRegistry{client: aihub, projects: r.cfg.Mapping.Projects()}
 	var warnNotes, skipNotes []string
 	scanned := 0
