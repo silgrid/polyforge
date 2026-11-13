@@ -5,7 +5,7 @@ package workflow_test
 // (`steps.<project>.<step>.skip`); any other value is WFC-112 at the
 // step's path. The registry dump and the generated lane Schema carry it,
 // the Schema as a boolean. Contract 1 is extended in place (owner ruling
-// 2026-11-12, as for): an optional key whose default is the
+// 2026-11-12): an optional key whose default is the
 // present behaviour does not bump the contract version.
 
 import (
