@@ -36,8 +36,9 @@ Polyforge's recommended web UI is **Pi Web** (its own npm package
 and released with the same tag as `pf`): a local browser UI for the pi
 coding agent with a Polyforge panel — work items, jobs and their step
 graphs, project memory and messages. It is optional; `pf` works from any
-harness without it. Install it with the installer's `--with-pi-web`
-(the same release as `pf`) or `npm install -g @silgrid/pi-web@latest` — see
+harness without it. It ships only as part of the GitHub Release (the
+`silgrid-pi-web-<tag>.tgz` asset, the same release as `pf`) and is installed
+by the installer's `--with-pi-web`, not from npm — see
 [install: the web workbench](docs/install.md#optional-the-web-workbench-pi-web).
 
 ## Core concepts

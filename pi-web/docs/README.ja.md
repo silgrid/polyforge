@@ -23,23 +23,22 @@ Pi Web は [Polyforge](https://github.com/silgrid/polyforge) の Web ワーク�
 
 ## クイックスタート
 
-> **⚠️ 公開に関する警告。** `npx` / `pi-web` はデフォルトで `127.0.0.1` のみをリッスンします。`pi-web -H 0.0.0.0` / `npm run start:lan` は `PI_WEB_PASSWORD` を設定しない限り**認証なし**でアプリを公開します。ポートに到達できる人は誰でも、ファイルの読み書き、ターミナルの起動、エージェントの操作ができます。`deploy-piweb.sh` はデフォルトで `0.0.0.0` にバインドしますが、`PIWEB_PORT` と `PI_WEB_PASSWORD` の両方がない非ループバックへのデプロイを拒否するようになったため、パスワードなしのサービスを起動することはありません。ポートを公開する前に、`PI_WEB_PASSWORD` を設定するか、ループバックへのバインドを維持するか、信頼できるエッジ（リバースプロキシ）越しに公開してください。
+> **⚠️ 公開に関する警告。** `pi-web` はデフォルトで `127.0.0.1` のみをリッスンします。`pi-web -H 0.0.0.0` / `npm run start:lan` は `PI_WEB_PASSWORD` を設定しない限り**認証なし**でアプリを公開します。ポートに到達できる人は誰でも、ファイルの読み書き、ターミナルの起動、エージェントの操作ができます。`deploy-piweb.sh` はデフォルトで `0.0.0.0` にバインドしますが、`PIWEB_PORT` と `PI_WEB_PASSWORD` の両方がない非ループバックへのデプロイを拒否するようになったため、パスワードなしのサービスを起動することはありません。ポートを公開する前に、`PI_WEB_PASSWORD` を設定するか、ループバックへのバインドを維持するか、信頼できるエッジ（リバースプロキシ）越しに公開してください。
 
-Pi Web には Node.js 22.19.0 以降が必要です。`node --version` でバージョンを確認してから、次を実行します：
+Pi Web には Node.js 22.19.0 以降が必要です（`node --version` でバージョンを確認してください）。Pi Web は Polyforge の GitHub Release の一部としてのみ配布されます（`pf` と並ぶ `silgrid-pi-web-<tag>.tgz` アセットとその `SHA256SUMS` 行）。npm からではなく、Polyforge インストーラーの `--with-pi-web` でインストールします：[インストール：Web ワークベンチ](https://github.com/silgrid/polyforge/blob/main/docs/install.md#optional-the-web-workbench-pi-web)を参照してください。インストール後に起動します：
 
 ```bash
-npx @silgrid/pi-web@latest
+pi-web
 ```
 
 サーバーの準備が整うと、CLI はブラウザーを自動的に開こうとします。開かない場合は [http://127.0.0.1:30141](http://127.0.0.1:30141) にアクセスしてください。Pi Web はデフォルトで `127.0.0.1` のみをリッスンします。
 
 モデル Provider が未設定の場合は、**Models** パネルを開いてログインするか API Key を追加してください。
 
-`pi-web` コマンドをグローバルにインストールする場合：
+インストーラーは tarball をインストールした後、パッケージに同梱のインストールチェックを実行します。手動でもう一度実行する場合：
 
 ```bash
-npm install -g @silgrid/pi-web@latest
-pi-web
+node "$(npm root -g)/@silgrid/pi-web/bin/pi-web-install-check.js"
 ```
 
 コマンド：
@@ -94,7 +93,7 @@ macOS または Linux：
 HTTP_PROXY=http://127.0.0.1:7890 \
 HTTPS_PROXY=http://127.0.0.1:7890 \
 NO_PROXY=localhost,127.0.0.1 \
-npx @silgrid/pi-web@latest
+pi-web
 ```
 
 Windows PowerShell：
@@ -103,7 +102,7 @@ Windows PowerShell：
 $env:HTTP_PROXY = "http://127.0.0.1:7890"
 $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:NO_PROXY = "localhost,127.0.0.1"
-npx @silgrid/pi-web@latest
+pi-web
 ```
 
 ## 注意事項
