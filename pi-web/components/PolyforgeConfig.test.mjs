@@ -720,7 +720,7 @@ test("the step row's summary wraps by segment (lead, effective chain, suffix) an
   const suffix = rule(".polyforge-workflow-bundle-suffix");
   for (const decl of ["display: inline;", "margin-left: auto;", "white-space: pre;"]) assert.ok(suffix.includes(decl), `the suffix keeps ${decl}`);
   assert.match(css, /\.polyforge-workflow-summary\.is-divergent \{ flex-wrap: wrap; \}/, "the divergent rule stays");
-  assert.match(css, /@container \(max-width: 640px\) \{\n  \/\* a phone row \(a narrow pane,\) may wrap inside its summary container\. \*\/\n  \.polyforge-workflow-summary \{ flex-wrap: wrap; \}/, "the <=640 rule stays (a pane-width query since)");
+  assert.match(css, /@container \(max-width: 640px\) \{\n  \/\* a phone row \(a narrow pane\) may wrap inside its summary container\. \*\/\n  \.polyforge-workflow-summary \{ flex-wrap: wrap; \}/, "the <=640 rule stays (a pane-width query since)");
 });
 
 test("the machine-scope hint has its own class and title; .config-scope-switch-reason and its other users are unchanged", async () => {
