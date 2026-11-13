@@ -133,7 +133,7 @@ const waitFor = createWaitUntil({ every: 200, withLast: true });
 // non-existent PF_BIN, so this suite never touches the operator's sessions,
 // Claude config or pf configuration. The shared
 // helper starts `next dev`, or `next start` under E2E_SERVER_MODE=start
-// ( build-once mode).
+// (build-once mode).
 
 async function api(pathname, init = {}) {
   return fetch(`${base}${pathname}`, {

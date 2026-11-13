@@ -63,7 +63,7 @@ func hangingRemote(t *testing.T) string {
 // waitRemoteAccepted blocks until the clone pointed at url reaches it: the
 // remote's accepted connection is the precondition that makes the clone
 // really hang, which CLAIMING alone does not (the restart inserts its
-// placeholder synchronously, before the replay runs —).
+// placeholder synchronously, before the replay runs).
 func waitRemoteAccepted(t *testing.T, url string) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)

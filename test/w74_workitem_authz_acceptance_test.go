@@ -300,7 +300,7 @@ func TestW74ScopedKeyConcealsWorkItemsOnly(t *testing.T) {
 	w74Concealed(t, inst, key, wi, missing, "get", "GET", "", nil, nil)
 	w74Concealed(t, inst, key, wi, missing, "progress-query", "POST", "/progress-query",
 		w74JSON(t, map[string]any{}), signer)
-	// The body-addressed reference conceals too ( A1): a
+	// The body-addressed reference conceals too (A1): a
 	// memory in the key's own project attributed to the foreign work item
 	// answers exactly as one attributed to a missing reference.
 	remember := func(ref string) (int, string) {

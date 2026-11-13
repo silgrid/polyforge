@@ -1,7 +1,7 @@
 package driver
 
 // wake.go: the owner's message to a parked work item (workflow contract 4,
-// design #483 §7 "叫醒谁",). A message no longer bounces off a
+// design #483 §7 "叫醒谁"). A message no longer bounces off a
 // parked work item: it wakes the step the park belongs to, and the daemon
 // reads none of its words. WakeOf names, from the capsule's own records,
 // which step that is and how it continues:

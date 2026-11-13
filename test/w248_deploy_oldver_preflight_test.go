@@ -1,6 +1,6 @@
 package test
 
-// w248_deploy_oldver_preflight_test.go: repro for (#217 N2).
+// w248_deploy_oldver_preflight_test.go: a bug repro.
 //
 // The legacy rollback image (a running version with no GHCR image) is built
 // from the OLD release's deploy/Dockerfile, which names the binary that

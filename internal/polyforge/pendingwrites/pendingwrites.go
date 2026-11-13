@@ -1,5 +1,5 @@
 // Package pendingwrites is the executor of the hub writes a step records
-// pending with `pf step hub` (workflow contract 4 §5.2,): once
+// pending with `pf step hub` (workflow contract 4 §5.2): once
 // a step round hands off done, its pending writes are made in declaration
 // order through the daemon's own aihub binding (Sink), and each one's
 // execution — done with the reference it produced, or failed with why — is

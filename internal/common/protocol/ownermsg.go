@@ -30,8 +30,8 @@ type OwnerMessageAck struct {
 	// Note names why a live process did not take the message (it is
 	// recorded; the next dispatch carries it); absent otherwise.
 	Note string `json:"note,omitempty"`
-	// Park and Wake describe a parked work item (workflow contract 4,
-	//): the park (`blocked` or `paused`) and how a message
+	// Park and Wake describe a parked work item (workflow contract 4):
+	// the park (`blocked` or `paused`) and how a message
 	// wakes it (`step_blocked`, `step`, `write_failed`, `paused`). With
 	// Status `parked` nothing was recorded — the caller opens the park's
 	// door and asks again naming the park; with Status `accepted` and

@@ -1,6 +1,6 @@
 package server
 
-// markdown_test.go (carried to /web/ by):
+// markdown_test.go (carried to /web/):
 // the one server-side Markdown renderer — the hostile corpus produces
 // no executable markup and no clickable external link (raw HTML is
 // omitted outright, links render as text, images as alt text), body

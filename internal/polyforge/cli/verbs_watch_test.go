@@ -163,7 +163,7 @@ func TestWatchDemandWithoutOnceIsUsageError(t *testing.T) {
 	}
 }
 
-// TestRetiredWatchFacesAreGone ( AC2): the resident chat
+// TestRetiredWatchFacesAreGone (AC2): the resident chat
 // watcher, its subscription verbs and its statusline face are no longer
 // there — a usage error, never a silent no-op.
 func TestRetiredWatchFacesAreGone(t *testing.T) {
@@ -252,7 +252,7 @@ func TestWatchDecisionsAndDismiss(t *testing.T) {
 	}
 }
 
-// TestFollowUpResolvesLikeAnyCellCommand ( AC5): a follow-up
+// TestFollowUpResolvesLikeAnyCellCommand (AC5): a follow-up
 // on a work item (`pf answer`, `pf watch <wi> --once`) without --profile
 // resolves its Cell by the cwd / PF_PROFILE rules; a leftover PF_CHAT_ID
 // changes nothing and no chat route is read.

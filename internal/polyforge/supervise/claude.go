@@ -29,7 +29,7 @@ package supervise
 // `Agent` call; inner tools are never tools of the step) are that call's
 // inner activity (Sink.ToolActive): life, and the restart of the call's
 // rule-3 clock, so a sub-agent still working is never tool_hung
-// (; the pi subagent parity). A tool_progress record is the
+// (the pi subagent parity). A tool_progress record is the
 // harness's own heartbeat for a running call (every 30s, its
 // parent_tool_use_id the call's own id, `"heartbeat":true`) — it shows
 // the call is still running, never that anything inside it works, so it

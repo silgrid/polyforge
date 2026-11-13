@@ -1,6 +1,6 @@
 package test
 
-// w429_one_lane_loader_test.go ( AC1): every reader of a lane
+// w429_one_lane_loader_test.go (AC1): every reader of a lane
 // definition gets the same answer for the same lane, because each one is
 // the one lane loader (workflow.Load) — the driver (LoadWorkflow), the
 // spawn adapter (NewStepSpawnAdapter), the claim-side and `pf file

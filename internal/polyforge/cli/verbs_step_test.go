@@ -151,7 +151,7 @@ func runPfStdin(t *testing.T, env map[string]string, stdin string, args ...strin
 }
 
 // `pf step ask` checks the question before any call (ported from contract
-// 3's `pf ask`,): one is required, not blank, within
+// 3's `pf ask`): one is required, not blank, within
 // capsule.MaxAskBytes and valid UTF-8; `-` reads it from stdin.
 func TestStepAskChecksTheQuestion(t *testing.T) {
 	env, drec, _ := stepCallEnv(t)

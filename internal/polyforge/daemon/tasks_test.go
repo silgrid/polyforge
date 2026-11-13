@@ -181,7 +181,7 @@ func TestTaskPeerIsRefusedEverythingButItsReadFace(t *testing.T) {
 	}
 }
 
-// TestTaskTerminalSummaryReachesTheDecisionFeed ( AC1): a
+// TestTaskTerminalSummaryReachesTheDecisionFeed (AC1): a
 // finished task's summary is a decision feed entry (kind task) — the Pi
 // Web panel shows it; no chat is involved.
 func TestTaskTerminalSummaryReachesTheDecisionFeed(t *testing.T) {

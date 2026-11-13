@@ -1,7 +1,7 @@
 package daemon
 
 // analyzer.go: the explicit, human-triggered, read-only message analyzer
-// (moved onto the task lane by). One analysis
+// (moved onto the task lane). One analysis
 // is ONE task in the task lane: spawned in the message's project (the
 // first mapped project when the message has no work-item anchor), models
 // from steps.<project>.task through the lane's own resolution, the

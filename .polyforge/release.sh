@@ -53,7 +53,7 @@
 #      credential - every problem in one message); refuse unless every commit that entered
 #      main since the previous release tag came through a merged PR or is an
 #      allowlisted owner-direct commit (the PR-only check below); the
-#      workflow-contract check (step 1d below,): refuse while
+#      workflow-contract check (step 1d below): refuse while
 #      internal/common/workflow/contract-pending.md registers an incompatible
 #      change and ContractVersion is still the previous release's, refuse a
 #      bump that leaves the list non-empty or moves the version by more than
@@ -179,7 +179,7 @@
 # lags, never a weaker rule). A gh API failure is a refusal, never a pass -
 # and it is reported as what it is: "PR lookup failed ... retryable", never
 # as "without a merged PR", so a transient GitHub error is not mistaken for
-# a commit that bypassed review (; the run is refused before the
+# a commit that bypassed review (the run is refused before the
 # version is claimed, so a retry costs no version). The initial version of
 # this check also demanded a two-parent merge commit; that shape half is gone so
 # that a PR merged as squash/rebase is judged by the same rule, while a commit
@@ -264,9 +264,9 @@
 #                       Whatever it names, it must be the repo the tag is
 #                       pushed to: when RELEASE_REMOTE's configured URL is a
 #                       GitHub URL, a GH repo that differs from it refuses
-#                       before any work in both modes ( pushed
+#                       before any work in both modes (pushed
 #                       the tag to one repo and created the release in
-#                       another, burning the version;)
+#                       another, burning the version)
 #   RELEASE_REMOTE      git remote                (default: origin)
 #   RELEASE_BRANCH      branch HEAD must equal    (default: main)
 #   DOCKER_CONFIG       docker config dir (ghcr login check; default ~/.docker)

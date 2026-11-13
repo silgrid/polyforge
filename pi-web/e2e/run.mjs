@@ -805,7 +805,7 @@ try {
       await preview.getByRole("button", { name: "E2E compaction anchor", exact: true }).waitFor();
       const headingRow = preview.getByRole("button", { name: "E2E compacted heading", exact: true });
       await headingRow.click();
-      // The jump is load-sensitive ( full bar: the heading-row
+      // The jump is load-sensitive (full bar: the heading-row
       // click was dispatched, yet the chat never settled at 30%). Under load
       // the click can land on a preview whose target was stale (the jump
       // returns silently) or defer to a history reveal that a later layout

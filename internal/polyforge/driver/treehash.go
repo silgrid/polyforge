@@ -19,7 +19,7 @@
 // its target string (Git's own identity for a link) and any other
 // non-regular path is skipped, so a link to /dev/zero or a FIFO cannot
 // hang hashing. (The task-repo-only subset the unchanged-tree guard
-// compared,, was deleted with the guard: workflow contract
+// compared, was deleted with the guard: workflow contract
 // v2 change 19.)
 //
 // Every git call goes through repoGit (gitfacts.go): its own git-dir,

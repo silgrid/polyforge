@@ -42,7 +42,7 @@ function rejected(commandType: string | undefined, body: Record<string, unknown>
 /**
  * A new claude session (#250), after the cwd guard: claude must be on PATH,
  * then the index entry (the model name as given, effort, no preset; the Agent language and
- * Settings › Claude's permission mode and hook switch as they are now,,
+ * Settings › Claude's permission mode and hook switch as they are now,
  * #445) and the first child
  * (`--session-id <new id>`, `--effort` for a non-default level).
  * The child is spawned before the reply; a prompt goes to its stdin.
@@ -98,7 +98,7 @@ async function createClaudeSession(
 
 // POST /api/agent/new  body: { cwd: string; type: string; message?: string; harness?: "pi" | "claude"; ... }
 // Spawns a brand-new pi session, or with harness "claude" a claude session
-// (`model`: a name `--model` takes — one of claude's aliases or a full name,; optional `effort`: a claude level or "default")
+// (`model`: a name `--model` takes — one of claude's aliases or a full name; optional `effort`: a claude level or "default")
 // (type "prompt" or "ensure_session";
 // a #219 `claudePreset` is dropped unread). Most calls immediately send the first command;
 // type:"ensure_session" only creates the runtime so clients can query commands.

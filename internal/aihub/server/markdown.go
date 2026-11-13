@@ -1,7 +1,7 @@
 package server
 
 // markdown.go: the one server-side Markdown renderer (
-// carried into the console's JSON face by) — goldmark
+// carried into the console's JSON face) — goldmark
 // over the stored body with raw HTML OFF (a hostile corpus escapes
 // into inert text, never executes) and one custom renderer that demotes
 // headings one level (the page's own h1 is the object's title),

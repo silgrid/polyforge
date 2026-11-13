@@ -1,6 +1,6 @@
 package test
 
-// w30_filing_deepening_contract_test.go: text contract for.
+// w30_filing_deepening_contract_test.go: a text contract.
 //
 // Work item #30 put the four-point "deepening check" (expert gap / raw
 // material / methods and tools / external oracle) into the filing skill and

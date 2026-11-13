@@ -6,7 +6,7 @@ import { isClaudePermissionMode, type ClaudePermissionMode } from "@/lib/claude-
 import { ConfigSwitch } from "./SettingsUi";
 
 /**
- * Settings › General's claude permission block (; docs/agents/settings-ui.md,
+ * Settings › General's claude permission block (docs/agents/settings-ui.md,
  * claude-sessions.md): the global permission mode — 「弹窗询问」 (claude's prompts as Pi Web
  * dialogs) or 「静默拒绝」 (claude denies them itself) — the pending-permission push switch,
  * and, when the open session is a claude session, that session's override (follow the

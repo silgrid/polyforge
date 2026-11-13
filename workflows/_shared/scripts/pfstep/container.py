@@ -69,8 +69,8 @@ DOCKERFILE_VERIFY = ".polyforge/Dockerfile.verify"
 
 # The limits a container gets when none is given (measured on this
 # repository's own full bar and its light tier's browser e2e, whose
-# per-suite `next dev` servers peak near 12.5 GiB at 4 browsers —
-#; Go's DefaultContainer*). The CPU default a
+# per-suite `next dev` servers peak near 12.5 GiB at 4 browsers;
+# Go's DefaultContainer*). The CPU default a
 # container actually gets is default_cpus(): this ceiling, capped at the
 # machine's cores — docker refuses a --cpus above them.
 DEFAULT_CONTAINER_CPUS = 8.0

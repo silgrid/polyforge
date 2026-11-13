@@ -844,7 +844,7 @@ func DirectShutdownCause() string { return "direct: in-process Shutdown call" }
 // call in flight until the test closes it. mu guards every field: the
 // lane calls Dispatch on its own goroutine, and the test reaches the
 // daemon through a child process and a socket, which the race detector
-// does not count as synchronisation so a test sets
+// does not count as synchronisation — so a test sets
 // answer/block only through setAnswer/setBlock.
 type w224Dispatcher struct {
 	mu     sync.Mutex

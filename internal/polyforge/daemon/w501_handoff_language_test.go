@@ -14,7 +14,7 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
-// w501HeadingsEN are the English body headings ( U5): with
+// w501HeadingsEN are the English body headings (U5): with
 // the Chinese ones, a body passes the shape check under either language.
 var w501HeadingsEN = []string{"Conclusion", "The question this step answers", "What was done", "Decisions and why", "Verification", "Problems and risks found", "For downstream, and what is open"}
 

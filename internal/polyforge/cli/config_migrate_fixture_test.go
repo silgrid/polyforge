@@ -1,6 +1,6 @@
 package cli
 
-// config_migrate_fixture_test.go: the real-data pin of — the
+// config_migrate_fixture_test.go: the real-data pin — the
 // three workspace blocks as recorded on 2026-11-02 (summarize: identical
 // models, interval_sec 120, the languages Chinese / Japanese / Chinese;
 // memory_policy: one path with an extra project entry, one with a

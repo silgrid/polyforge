@@ -10,8 +10,8 @@ package test
 // classification must still apply: a throttle is a same-model retry with
 // the backoff booked into T.
 //
-// This is the transient rule's one e2e smoke (design #483 §7,
-//): the other texts' classes on the live path are the
+// This is the transient rule's one e2e smoke (design #483 §7):
+// the other texts' classes on the live path are the
 // driver's TestLiveErrorTurnGoesThroughD7Classification, the rule's
 // decision its TestTransientRetriesSameModelAfterBackoffUncounted.
 

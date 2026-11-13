@@ -1,7 +1,7 @@
 package driver
 
-// waitcall_test.go: the driver's wait_call relay (
-//): one durable event per wait call the dispatch's tracker
+// waitcall_test.go: the driver's wait_call relay:
+// one durable event per wait call the dispatch's tracker
 // folds — recorded while the dispatch runs, recorded once, carrying its
 // form, and never a verdict. `pf watch --json` re-emits these bodies
 // verbatim, so this is where its wait_call contract is pinned.

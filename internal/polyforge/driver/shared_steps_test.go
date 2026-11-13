@@ -24,8 +24,8 @@ var shippedWorkflowsDir = filepath.Join("..", "..", "..", "workflows")
 // laneRootOverride, when set (useLaneTree), is the workflows root a test
 // materializes every bundle from instead of the shipped tree: the
 // test-local lanes the generic-mechanism tests run on (attrs, handoff) —
-// no shipped lane declares those keys since, and the frozen
-// copies of the lanes that did went with. Driver tests run
+// no shipped lane declares those keys, and the frozen
+// copies of the lanes that did were removed. Driver tests run
 // serially (none calls t.Parallel), so one package-level root is safe.
 var laneRootOverride string
 
@@ -324,15 +324,15 @@ func TestSharedStepPromptsKeepLaneFacts(t *testing.T) {
 			// v2 PR 12 on the facts its skill's facts.py lines write (the
 			// owner-replies check and the facts.py lines themselves are
 			// test/w403_develop_grill_e2e_contract_test.go's and
-			// test/w374_develop_driver_contract_test.go's,)
+			// test/w374_develop_driver_contract_test.go's)
 			"develop": {[]string{"**Coverage, criterion by criterion (`ac_gap`).**", "**Tests after their red commit (`test_weakened`).**",
 				"concepts the work item's acceptance criteria (or the plan's owner-confirmed `## Acceptance` list) did not request"}},
 		},
 	}
 	common := map[string][]string{
-		//'s scoped facts (`steps.review.output.scope`, the
+		// the scoped facts (`steps.review.output.scope`, the
 		// automatic-merge block on disagreement) ride a SCOPED dispatch
-		// only since TestW80VerificationPromptShapes.
+		// only: TestW80VerificationPromptShapes.
 		"review": {"No faked concurrency semantics", "**Unruled destination change.**", "**I/O under a lock.**", "**Weak tests.**", "**Stale docs.**", "**Leaked credentials**", "**Guess as fact.**", "**Do not run tests or builds.**", "Write `artifacts/review.md`", "If any of the change's own requirements",
 			// review runs BEFORE verification — it never reads a
 			// verification report, and the project-rules violation keeps its
@@ -408,9 +408,9 @@ func TestSharedStepPromptsKeepLaneFacts(t *testing.T) {
 func TestSharedFragmentRendersOncePerDefinition(t *testing.T) {
 	fragmentOnce := map[string][][2]string{
 		// the per-unit fast-check bar's definition and its run-time
-		// imperatives ( W2): the shipped build step that runs
+		// imperatives (W2): the shipped build step that runs
 		// it. (The retired lanes' plan, code and fix steps and their
-		// handoff_duty fragment went with, the unused
+		// handoff_duty fragment was removed, the unused
 		// deliverable_carrier fragment with workflow contract 3.)
 		"fast_checks.md":       {{"develop", "build"}},
 		"fast_checks_build.md": {{"develop", "build"}},
@@ -441,7 +441,7 @@ func TestSharedFragmentRendersOncePerDefinition(t *testing.T) {
 // w80ReviewLaterRoundPhrases are the facts of the review's later-round
 // material — contract 3's shared re-entry fragment
 // (workflows/_shared/review_reentry.md), in the review skill since
-// workflow contract 4:'s round contract and's
+// workflow contract 4: the round contract and the
 // two faces (the earlier round's findings inherited, never its
 // conversation), each residual named by its place without re-deriving it.
 // The fix surface is TestW109ReviewReentryFixSurfaceIsFirstParentNonMerge's.
@@ -457,7 +457,7 @@ var w80ReviewLaterRoundPhrases = []string{
 	"## A later round: the two faces and the round contract",
 }
 
-// TestW80ReviewPromptShapes (; workflow contract 4): the
+// TestW80ReviewPromptShapes (workflow contract 4): the
 // review's later-round material — the round contract and the two faces —
 // lives in the review skill since contract 4 (review_reentry.md and the
 // re-entry dispatch flag that rendered it on a re-entry only are gone), so
@@ -468,7 +468,7 @@ var w80ReviewLaterRoundPhrases = []string{
 // schema, whose removed fields this test also pinned absent, is gone.)
 func TestW80ReviewPromptShapes(t *testing.T) {
 	// the shipped lanes whose review resolves to the shared definition
-	// (micro ships its own review; the retired lanes went with)
+	// (micro ships its own review; the retired lanes were removed)
 	for _, bundle := range []string{"develop"} {
 		raw := spawnStepPrompt(t, bundle, reviewStepID)
 		if strings.Contains(raw, "{{") {

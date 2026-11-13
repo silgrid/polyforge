@@ -1,5 +1,5 @@
-// Every e2e suite's `carries:` declaration resolves inside this package
-//. The suites' headers are rooted at the pi-web package
+// Every e2e suite's `carries:` declaration resolves inside this package.
+// The suites' headers are rooted at the pi-web package
 // directory — the subtree's engine context, `.polyforge/verify-scope.conf`
 // run with `cd pi-web` — so after the merge into the Polyforge repository
 // each glob must still name at least one tracked path under pi-web/. A glob

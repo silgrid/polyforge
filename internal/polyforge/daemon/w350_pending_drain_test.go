@@ -1,6 +1,6 @@
 package daemon
 
-// w350_pending_drain_test.go ( D4): while a verified
+// w350_pending_drain_test.go (D4): while a verified
 // same-identity rotation is pending, a task spawn is refused DAEMON-409
 // naming the pending rotation and leaves no record; a running one-off task
 // keeps the Cell from being safe-idle; and an admission half-way under

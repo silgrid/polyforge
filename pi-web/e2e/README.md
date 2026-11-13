@@ -81,7 +81,7 @@ tracked path declared by more than 3 suites, naming those suites
 (the locale tables `lib/i18n/*` are declared only by
 `agent-language-293` and `polyforge`, the shell components only by `run`,
 `session-stall-recovery` and `polyforge`). It also pins the light tier's bound:
-the changes of, and a locale-tables-only change
+two recorded changes and a locale-tables-only change
 each select at most 8 browser suites. The repository's root bar runs
 `npm run test:e2e:all` from `pi-web/`. The standalone repository's release, deploy-lane and sync suites were retired with
 the tooling they exercised (its release/deploy now live in the repository
@@ -115,15 +115,15 @@ root's `.polyforge/` scripts, tested there).
   The first run after a clean checkout compiles cold and is slower and more
   sensitive to the suites' page-load timeouts; lower `E2E_JOBS` if a loaded
   machine times out.
-- The suites' scaffolding lives in one helper module, `e2e/harness.mjs`
-: the scenario runner (`createCheck`), the bounded polls
+- The suites' scaffolding lives in one helper module, `e2e/harness.mjs`:
+  the scenario runner (`createCheck`), the bounded polls
   (`createWaitFor`, `createWaitUntil`, `eventually`), one suite's browser and
   server (`createHarness`: `launchBrowser`, `openPage`, `withPage`,
   `startServer`, `close`), the `/api/polyforge/*` route mock (`mockPolyforge`) and the context-usage mock,
   the host-session and claude-stub fixtures. A suite states its parameters
   (viewport, locale, storage, timeouts, failure-line shape) instead of copying
-  a helper. It gets its browser through `h.launchBrowser(() => chromium.launch())`
-: with the runner's shared browser named in `E2E_BROWSER_WS` it
+  a helper. It gets its browser through `h.launchBrowser(() => chromium.launch())`:
+  with the runner's shared browser named in `E2E_BROWSER_WS` it
   connects to it and `h.close()` drops only its own connection; without it (a
   suite run alone) its own `chromium.launch()` runs as before. That literal
   stays the runner's browser-lane marker. A change to the module selects every
@@ -206,7 +206,7 @@ root's `.polyforge/` scripts, tested there).
   first-screen figure read 1288 ms at loadavg 67; its budget is now the
   renderer's frame/chunk cadence — first paint at most one 200-line chunk
   within 2 animation frames of the answer, at most one chunk per frame, no
-  entry dropped — not a wall clock,). The
+  entry dropped — not a wall clock). The
   runner starts those suites only after both lanes have drained, one at a
   time, so another `next dev` + Chromium cannot push the bound over while the
   suite passes alone.
@@ -237,8 +237,8 @@ root's `.polyforge/` scripts, tested there).
 
 ## Build-once mode
 
-`E2E_SERVER_MODE` chooses how every browser suite gets its server
-. Unset or `dev` is the default described above: each suite
+`E2E_SERVER_MODE` chooses how every browser suite gets its server.
+Unset or `dev` is the default described above: each suite
 runs its own `next dev` and compiles every route it touches. With `start`,
 `e2e/all.mjs` runs `next build --webpack` (the package's `npm run build`)
 once into `.next/e2e-build` before the lanes start, and every suite's server
@@ -286,7 +286,7 @@ E2E_SERVER_MODE=start E2E_PREBUILT_DIST=.next/e2e-build npm run test:e2e:all -- 
   on a 2-CPU host a page's navigation fetch has stalled that long in the
   browser while the server answered the same URL in milliseconds, so the next
   page was "Pi Web is offline" and its controls never appeared
-  (`polyforge-config-290` S290-8,). A suite that does not test
+  (`polyforge-config-290` S290-8). A suite that does not test
   the worker should create its contexts with `serviceWorkers: "block"`, as
   `next dev` never has one; so far only `polyforge-config-290` does.
   `public/sw.test.mjs` covers the worker itself.

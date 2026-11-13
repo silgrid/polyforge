@@ -1,7 +1,7 @@
 package observe
 
 // contextusage.go: the running step session's context usage
-// the tokens the current dispatch's conversation fills,
+// — the tokens the current dispatch's conversation fills,
 // counted from the session transcript its harness writes the way the chat
 // header counts an interactive session (sessionjsonl.ContextReader), with
 // the model id and the transcript timestamp the count was taken from.

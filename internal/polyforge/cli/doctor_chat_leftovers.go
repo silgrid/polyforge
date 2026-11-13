@@ -1,7 +1,7 @@
 package cli
 
-// doctor_chat_leftovers.go: the `retired chat state` row of `pf doctor`
-//. The chat-subscription model is retired; the files it
+// doctor_chat_leftovers.go: the `retired chat state` row of `pf doctor`.
+// The chat-subscription model is retired; the files it
 // left behind are dead weight nothing reads any more:
 //
 //   - <data-dir>/chats.json, chat-subs.json, a chat-status/ directory and

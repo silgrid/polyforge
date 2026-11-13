@@ -25,7 +25,7 @@ package test
 //     persisted attempts, so it survives a restart; neutral attempts
 //     neither count toward nor break it; an accepted result resets it)
 //     left with workflow contract 4's one-test-per-rule supervision
-//     (design #483 §7,): the driver's TestClassStreak pins
+//     (design #483 §7): the driver's TestClassStreak pins
 //     the ledger, TestEndedWithoutHandoffResumesThenBlocksAtThree the
 //     rule, and v2_supervision_test.go's
 //     TestV2OkEndedTurnWithoutResultRetriesSameModel is its e2e smoke.
@@ -330,7 +330,7 @@ func TestW33ConfigEditGovernsNextDispatch(t *testing.T) {
 }
 
 // (Scenarios 2 and 3 — the EWR streak across a restart and across neutral
-// attempts — left with see the scenario map above.)
+// attempts — removed: see the scenario map above.)
 
 // (Scenario 4 — a needs_input round the owner answered, accepted mid-step,
 // reset the EWR streak — left with the v1 question, workflow contract v2

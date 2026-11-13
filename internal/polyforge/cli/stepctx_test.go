@@ -173,7 +173,7 @@ func TestStepModeNeedsBothMarkersAndRefusesDoctor(t *testing.T) {
 }
 
 // TestRemovedStepVerbsAreUnknownCommands: contract 3's `pf result submit`
-// and `pf ask` are gone inside a step each is an unknown
+// and `pf ask` are gone — inside a step each is an unknown
 // command, and nothing is sent to the daemon or aihub.
 func TestRemovedStepVerbsAreUnknownCommands(t *testing.T) {
 	env, drec, arec := stepEnv(t)

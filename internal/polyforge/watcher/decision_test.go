@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestEveryDocumentedKindIsClassified ( AC1): every decision
+// TestEveryDocumentedKindIsClassified (AC1): every decision
 // kind the retired chat watcher woke a chat for is still classified — the
 // daemon's decision feed records it for the Pi Web panel — with its class
 // and its attention mark.

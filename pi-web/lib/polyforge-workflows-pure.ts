@@ -6,8 +6,8 @@ import type {
 } from "./polyforge-workflows";
 
 /**
- * Client-safe row model of the Settings › Polyforge workflow card
- *: no React, no Node import (type imports only). It decides
+ * Client-safe row model of the Settings › Polyforge workflow card:
+ * no React, no Node import (type imports only). It decides
  * the default project, one row per step id across bundles (with every bundle
  * it appears in), the row order (`default`, the step ids alphabetically, then
  * `task`), the declared-vs-inherited chain, the per-bundle effective chain

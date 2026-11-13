@@ -570,7 +570,7 @@ func TestW174EnsureRefusesWithoutMapping(t *testing.T) {
 func TestW174EnsureWithoutTmuxStartsOneUnsupervisedDaemon(t *testing.T) {
 	e := w174NewEnv(t, true)
 	// a PATH carrying the daemon's tools but no tmux (python3: the daemon
-	// refuses to start without the step scripts' interpreter,)
+	// refuses to start without the step scripts' interpreter)
 	bin := t.TempDir()
 	for _, tool := range []string{"git", "sh", "python3"} {
 		if p, err := exec.LookPath(tool); err == nil {

@@ -27,8 +27,8 @@ function classColor(decision: PolyforgeDecision): string {
 /**
  * One decision-feed entry, shown where its subject lives: a
  * background task's entries on its row in Work › Tasks (a work item's entries
- * are its feed-only attention card and its job card's composer,
- *). It names its class (localized; an unknown class shows its
+ * are its feed-only attention card and its job card's composer).
+ * It names its class (localized; an unknown class shows its
  * wire phrase), the source when it differs, the time and its state (resolved
  * and dismissed muted), the reason (the daemon's phrase), the question id /
  * repo when present, a task's summary (verbatim, folded when long) and, while

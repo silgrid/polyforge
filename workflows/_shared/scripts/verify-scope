@@ -1351,8 +1351,7 @@ add_scoped() { printf '%s\n' "$1" >>"$tmp/scoped_cmds"; }
 # error). An embed pattern that matches no file (`pattern <p>: no matching
 # files found` — `//go:embed all:dist` before a front-end build) is
 # tolerated: it changes no package's dependencies, so the graph is the one
-# the built tree gives. Any other package error fails the graph closed
-#.
+# the built tree gives. Any other package error fails the graph closed.
 go_graph_state=""
 go_graph_why=""
 go_graph() {

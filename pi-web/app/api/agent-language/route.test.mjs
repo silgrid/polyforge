@@ -94,7 +94,7 @@ test("PUT reports a refused write of a malformed file as 500 and keeps the file"
 // A stub pf (PF_BIN) records every argv; its behaviour is read from state.json.
 // Like the real pf (internal/polyforge/cli/config_cas.go), the list reports the
 // file's sha256 and a set whose `--expect-state {"file_sha256": …}` no longer
-// matches is refused CORE-409, exit 1, with nothing written ( r1#1).
+// matches is refused CORE-409, exit 1, with nothing written (r1#1).
 const fileHash = (state) => crypto.createHash("sha256").update(JSON.stringify({ agent_language: state.source === "file" ? state.value : null })).digest("hex");
 const stubPf = path.join(pfDir, "pf");
 const stubState = path.join(pfDir, "state.json");

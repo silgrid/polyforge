@@ -927,7 +927,7 @@ try {
   await check(T.PM8, "PM8 below-floor upgrade state", async () => {
     // A fresh server process re-probes pf, so the floor is seen (the probe is
     // cached per process); no message verb may be spawned below 2.20.12
-    // ( moves the floor: below-floor fixture 2.20.11).
+    // (moves the floor: below-floor fixture 2.20.11).
     await h.stop();
     writeFileSync(argvLog, "");
     await startServer("floor", "v2.20.11");
@@ -1254,8 +1254,8 @@ try {
     assert.ok((await leafBoxes(panel, "PEER-RUN-ONE")).length >= 2, "the reply must quote its original message");
   }));
 
-  // PM16's desktop procedure, run as it is and with a late layout refit
-  //. The list column refits to the panel from a
+  // PM16's desktop procedure, run as it is and with a late layout refit.
+  // The list column refits to the panel from a
   // ResizeObserver, which the browser runs in its next rendering frame: right
   // after the dock resizes, the column still has the old dock's width until
   // that frame comes, and on a loaded host it comes after a measurement taken

@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 // and hook switch a new claude session starts with, and the custom model names offered
 // beside claude's aliases. The only writer of `pi-web-claude-settings.json`
 // (lib/claude-settings.ts); a save reaches new sessions only. Plan is offered only while
-//'s global claude tool permissions are ask ( r3, plan D11): GET
+// the global claude tool permissions are ask (r3, plan D11): GET
 // answers it as `planAvailable`, the PUT refuses plan on deny.
 // Reached through the proxy's `/api/*` authentication (PI_WEB_PASSWORD when set);
 // the PUT also refuses an untrusted (cross-site / foreign host) request itself.

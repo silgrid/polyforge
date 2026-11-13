@@ -87,7 +87,7 @@ export async function checkChatAppearance(page) {
   for (const viewport of [{ width: 1280, height: 600 }, { width: 320, height: 568 }]) {
     await page.setViewportSize(viewport);
     // The panel's own end stays reachable by scrolling, and so does every
-    // language option (no longer the panel's last block since).
+    // language option (no longer the panel's last block).
     await page.locator(".settings-general").evaluate((el) => { el.scrollTop = el.scrollHeight; });
     assert.equal(await page.locator(".settings-general").evaluate((panel) => {
       const controls = panel.querySelectorAll("button, input, select");

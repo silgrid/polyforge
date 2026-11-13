@@ -88,7 +88,7 @@ const cellStyle = { padding: "6px 8px", textAlign: "left", verticalAlign: "top",
 export function ClaudeSettings() {
   const { t } = useI18n();
   const [settings, setSettings] = useState<ClaudeSettingsResponse | null>(null);
-  // GET's planAvailable ( r3):'s global claude tool permissions are ask.
+  // GET's planAvailable (r3): the global claude tool permissions are ask.
   const [planAvailable, setPlanAvailable] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -198,7 +198,7 @@ export function ClaudeSettings() {
             <div role="radiogroup" aria-label={t("settings.claudeLaunchPermissionMode")} className="settings-agent-language-options">
               {CLAUDE_LAUNCH_PERMISSION_MODES.map((mode) => {
                 const selected = settings.launchPermissionMode === mode;
-                // plan needs's claude tool permissions on ask: else offered, disabled, its reason as text.
+                // plan needs the claude tool permissions on ask: else offered, disabled, its reason as text.
                 const unavailable = mode === "plan" && !planAvailable;
                 const description = permissionModeDescription(mode, planAvailable, t);
                 return (

@@ -29,7 +29,7 @@ export const SHOW_FILTERED_SESSIONS_STORAGE_KEY = "pi-web:show-filtered-sessions
 export const SESSION_AGE_FILTER_DAYS_STORAGE_KEY = "pi-web:session-age-filter-days";
 
 /** Default age window when the storage key is absent or unreadable
- *  (pi#82; 15 days since, was 7): the owner's "最近几天"
+ *  (pi#82; 15 days, was 7): the owner's "最近几天"
  *  reading of the sidebar. A stored value — 7 and 0 included — is kept. */
 export const DEFAULT_SESSION_AGE_FILTER_DAYS = 15;
 
@@ -210,8 +210,8 @@ export function isSessionFiltered(
 /** Hidden-count affordance (wi pi#65): how many of `sessions` the active
  *  patterns would hide — the badge count. Only sessions inside the age
  *  window (`days`, see {@link filterSessionsByAge}; 0 = every session)
- *  count, so revealing never shows fewer rows than the badge promised
- *. Zero patterns (hiding disabled) yields 0 by
+ *  count, so revealing never shows fewer rows than the badge promised.
+ * Zero patterns (hiding disabled) yields 0 by
  *  construction; the caller decides visibility. */
 export function countFilteredSessions(
   sessions: readonly (Pick<SessionInfo, "id" | "name" | "firstMessage" | "modified">)[],

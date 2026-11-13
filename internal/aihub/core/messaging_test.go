@@ -366,7 +366,7 @@ func TestMessagingListKeepsTheAdminWideListing(t *testing.T) {
 }
 
 // TestMessagingMemberNamesMatchMembersExactly: member_names' scope is
-// membership and nothing else the key set equals members
+// membership and nothing else — the key set equals members
 // for an admin's non-member row and for a member's own, a non-member's
 // display name never appears, the wire shape carries "member_names", and
 // an empty display name keeps its key with an empty value.

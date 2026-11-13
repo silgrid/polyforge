@@ -244,7 +244,7 @@ func (r *Runtime) materialize(ctx context.Context, j *job) error {
 // own lines plus sync/ — unless it already reads so. Claim writes it into
 // every fresh clone and recovery (a resume, a restart, a re-derivation)
 // rewrites it before its first commit, so a capsule whose chain carries
-// an older .gitignore gets the current rules ('s
+// an older .gitignore gets the current rules (the
 // artifacts/downloads/) on its next claim or resume.
 func writeCapsuleGitignore(capsuleDir string) error {
 	path := filepath.Join(capsuleDir, ".gitignore")

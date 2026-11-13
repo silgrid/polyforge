@@ -7,8 +7,7 @@
 //   COLD_MS    the warm-up load that compiles the route cold (default 480 s)
 //   NAV_MS     every later load and first-text wait        (default 180 s)
 //   ACTION_MS  a suite's page.setDefaultTimeout: the retried actionability
-//              window of a click/fill on a shared host     (default 30 s,
-//)
+//              window of a click/fill on a shared host     (default 30 s)
 //
 // Override with E2E_COLD_MS / E2E_NAV_MS / E2E_ACTION_MS (milliseconds). A blank or unset
 // variable keeps the default; any other value that is not a positive number

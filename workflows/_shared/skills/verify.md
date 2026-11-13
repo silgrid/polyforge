@@ -52,7 +52,7 @@ call, and a pass is the command's, not yours.
      `units[]` entry marked `flaky` or `pre_existing` already passed on record: the command
      re-ran and baselined it). A unit's `failure` is `browser_crash` — Chromium's renderer
      crashed (`Target crashed` / `Page crashed`), most often the container's memory OOM
-     or `assertion`: never place a `browser_crash` on the change from its
+     — or `assertion`: never place a `browser_crash` on the change from its
      log; still red, it is a red you cannot place. A unit with `not_rerun` is neither a
      proven red nor flaky (its re-run never started): `pf step ask` the owner with those
      units by check (usually: run again). A red you can place on the change — a unit of the plan (a

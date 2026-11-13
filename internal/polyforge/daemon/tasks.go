@@ -10,7 +10,7 @@ package daemon
 //	GET  /task/memories/search   (task peers only; scoped to the task's project)
 //	GET  /task/memories/{id}     (task peers only; scoped to the task's project)
 //
-// Reach (,): a task agent cannot
+// Reach: a task agent cannot
 // reach the read-only web console or the browse mode — browse is the human
 // direct-aihub `pf recall` (no query), which also refuses it locally inside
 // a task or step. The daemon proxies no /web/
@@ -34,7 +34,7 @@ package daemon
 //     exactly like GET /status (the list's rows carry only a bounded
 //     first-line prompt_summary, the reporter snapshot and a bounded
 //     last-line report_tail — no full prompt, no full report — and show
-//     the full record;,); the two
+//     the full record); the two
 //     memory reads answer a task process tree only, and the route itself
 //     scopes them to the caller's own running task's project.
 //

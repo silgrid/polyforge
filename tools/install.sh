@@ -25,7 +25,7 @@
 #   4. daemon — `pf daemon ensure` (also run by the harness adapters at
 #      session start, e.g. after a reboot).
 #   5. verify — pf doctor.
-#   Opt-in --with-pi-web (; the default installs pf only): the
+#   Opt-in --with-pi-web (the default installs pf only): the
 #      Pi Web package of the SAME release — silgrid-pi-web-<VER>.tgz and its
 #      SHA256SUMS line from $REPO at $VER — is downloaded and checksum-
 #      verified in step 1 (a missing asset or a mismatch refuses there, with
@@ -60,8 +60,8 @@
 #      --restart-pi-web (only together with --with-pi-web) it sends that
 #      process SIGTERM instead and waits up to 60 s until the loop serves the
 #      installed package (a timeout is reported and exits 1). The served
-#      package is the working directory of pi-web's Next.js server
-#, which npm deletes on every install, so a pi-web left
+#      package is the working directory of pi-web's Next.js server,
+# which npm deletes on every install, so a pi-web left
 #      stale by an earlier run (an ignored ACTION line) or by a manual
 #      `npm i -g` is detected on any later --with-pi-web run too: the ACTION
 #      line, or a restart with --restart-pi-web. Its version can no longer
@@ -789,7 +789,7 @@ if [ -n "$WITH_PIWEB" ]; then
   PIWEB_SESSION="${PIWEB_TMUX_SESSION:-piweb}"
   PIWEB_BEFORE="$(node "$PIWEB_SERVED" served "$PIWEB_SESSION" 2>/dev/null || true)"
   # The installed package, "<version>|<dir>" (empty when none): one of the
-  # version this tarball installs is kept npm would delete
+  # version this tarball installs is kept — npm would delete
   # the directory a running pi-web serves — unless --reinstall-pi-web.
   PIWEB_ROOT="$(npm root -g 2>/dev/null || true)"
   PIWEB_HAVE=""

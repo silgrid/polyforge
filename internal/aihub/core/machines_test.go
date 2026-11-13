@@ -262,7 +262,7 @@ func TestHeartbeatOnlyTheOperatorHasEffect(t *testing.T) {
 	registerMachine(t, env, "m-op", op1, "pk-A")
 
 	// A different authenticated user → AUTH-403 saying another operator
-	// and suggesting --machine-id, but naming no one ( changed
+	// and suggesting --machine-id, but naming no one (changed
 	// this: the collision refusal no longer discloses the operator's id).
 	_, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{
 		MachineID: "m-op", Role: "interactive", Force: true, Launcher: "claude",

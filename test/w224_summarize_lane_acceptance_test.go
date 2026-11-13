@@ -213,7 +213,7 @@ func w224Yaml(t *testing.T, ws, content string) {
 
 // w224Summarize writes the daemon's own cli.toml — the harness mapping
 // plus a [summarize] table naming models (none = no table: the lane is
-// off) — the summarize lane's only source since. Before the
+// off) — the summarize lane's only source. Before the
 // daemon starts it points the daemon at that file (a later --config flag
 // wins); on a running daemon it runs `pf config reload`, the step a hand
 // edit needs before the daemon serves it.

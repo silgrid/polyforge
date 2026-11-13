@@ -419,7 +419,7 @@ func (d *Driver) Run(ctx context.Context) error {
 			res := collected
 			collected = nil
 			// Book the dead dispatch's runtime before its envelope settles
-			// ( B4): the measure ends where the dispatch actually
+			// (B4): the measure ends where the dispatch actually
 			// ran — at the envelope's daemon stamp — so daemon downtime and a
 			// paused period are not counted (the D6 lifecycle ruling).
 			d.bookCollectedWall(res)
@@ -609,7 +609,7 @@ func (d *Driver) unconsumedResult() (*StepResult, int64) {
 }
 
 // bookCollectedWall books the runtime of a dispatch whose envelope a dead
-// predecessor collected ( B4). The measure starts at the
+// predecessor collected (B4). The measure starts at the
 // dispatch's StepStartedAt and ends at the envelope's daemon-stamped
 // SubmittedAt: the agent stopped running when it delivered, so the daemon
 // downtime before this successor collected the envelope — and any paused
@@ -637,7 +637,7 @@ func (d *Driver) bookCollectedWall(res *StepResult) {
 
 // rewindReentryOrder answers the dispatch SHAPE a rewind still owes the
 // first new-round dispatch after a crash landed following that dispatch's
-// step_start but before its spawn-journal line ( item 6):
+// step_start but before its spawn-journal line (item 6):
 // atBoundary when such a dispatch is owed, forceFresh when its shape is a
 // new conversation.
 // One rule covers every step the rewind re-enters: a resume never crosses
@@ -1109,8 +1109,8 @@ type StepSpawn struct {
 	// fast path requires it non-empty and equal to the current tree.
 	RecordedTreeHash string
 	// RetryTriggered reports that the step has an archived attempt (a
-	// non-zero one): this dispatch is a death-triggered re-dispatch
-	//. It is derived from the existing Attempts ledger,
+	// non-zero one): this dispatch is a death-triggered re-dispatch.
+	// It is derived from the existing Attempts ledger,
 	// never a new persisted fact.
 	RetryTriggered bool
 	// RecordedAttemptAt is the archive stamp (InterruptedAt, else

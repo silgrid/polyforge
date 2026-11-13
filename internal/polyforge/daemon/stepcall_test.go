@@ -32,7 +32,7 @@ import (
 )
 
 // c4Body answers a hand-off body carrying the template's seven sections
-// in the fixture's pinned language (zh-CN,), plus the extra
+// in the fixture's pinned language (zh-CN), plus the extra
 // headings given.
 func c4Body(extra ...string) string {
 	var b strings.Builder

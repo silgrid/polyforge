@@ -20,7 +20,7 @@ const (
 	inboxLongPoll         = 25 * time.Second
 )
 
-// The relay admission budget ( A2). A relayed query costs
+// The relay admission budget (A2). A relayed query costs
 // its holder one signed inbox wake (laneInbox) and one signed answer
 // (laneAnswer), each recorded for machinesign.ReplayTTL; the answer comes
 // at most progressQueryDeadline after the admission. Counting admissions

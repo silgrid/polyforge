@@ -573,7 +573,7 @@ func TestMemoryWorkItemSlug(t *testing.T) {
 		}
 	}
 
-	// No existence leak through the key scope either ( A1):
+	// No existence leak through the key scope either (A1):
 	// a key scoped to beta, held by a writer of BOTH projects, names
 	// alpha's existing work item in a beta memory and gets exactly the
 	// unknown-work-item answer — the scope, not the membership, conceals

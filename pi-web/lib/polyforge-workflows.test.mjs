@@ -22,7 +22,7 @@ const WORKFLOWS = {
     name: "feature-full",
     defaults: { model_candidates: ["pi:ff"], effective: { alpha: { models: ["pi:d"], from: "steps.alpha.default.models" } } },
     steps: [
-      // an older pf's attrs ( removed them) are dropped
+      // an older pf's attrs (removed them) are dropped
       { id: "grill", model_candidates: ["pi:g"], attrs: [{ name: "question_batch_size", type: "int", default: 0 }], effective: { alpha: { models: ["pi:g"], from: "bundle feature-full step grill model_candidates" } } },
       { id: "spec" },
     ],

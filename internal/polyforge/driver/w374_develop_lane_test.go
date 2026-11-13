@@ -1,6 +1,6 @@
 package driver
 
-// w374_develop_lane_test.go ( D1): the develop lane — the
+// w374_develop_lane_test.go (D1): the develop lane — the
 // default development lane that supersedes feature-full, chore, bug-fix
 // and autopilot — loads through the same LoadWorkflow / spawn-adapter path
 // as every shipped lane and runs on today's driver: build → review → sync
@@ -35,7 +35,7 @@ func TestShippedDevelopLaneShape(t *testing.T) {
 	if got := laneOrder(t, developBundle); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("develop's order must be %v, got %v", want, got)
 	}
-	// rewind: ONE total budget of 3 ('s max_rewinds; the
+	// rewind: ONE total budget of 3 (the max_rewinds; the
 	// contract has no per-edge bound; each gate names its rewind target
 	// in on_fail)
 	if wf.MaxRewinds != 3 {
@@ -118,7 +118,7 @@ func TestShippedDevelopLanePromptsRender(t *testing.T) {
 		// test/owner_review_gate_contract_test.go pin — confirm_plan, the
 		// `carries:` header, the owner-review section, units.json and its
 		// replay/verify commands, when build asks, the owner-replied plan —
-		// is pinned there once,)
+		// is pinned there once)
 		"build": {
 			"the judged list — each list item one criterion",
 			"red on an assertion", "`artifacts/self-review.md`",

@@ -10,8 +10,8 @@ import {
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/polyforge/work-items/[id] — one work item's read-only detail
- *: exactly one `pf --json file show <id>`, the id (`wi_` +
+ * GET /api/polyforge/work-items/[id] — one work item's read-only detail:
+ * exactly one `pf --json file show <id>`, the id (`wi_` +
  * alphanumerics) validated before any probe or spawn, the body through the
  * eighteen-key passport with the content capped at 262144 UTF-8 bytes and
  * `content_len` uncut. Read-only: GET alone, any other method is 405. pf

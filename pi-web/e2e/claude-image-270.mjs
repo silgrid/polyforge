@@ -456,7 +456,7 @@ try {
     assert.equal(await page.getByText(/\[Image: source:/).count(), 0, "claude's hidden [Image: source: …] companion rendered in the history");
   });
 
-  // S270-07 — acceptance: none of claude's models (its aliases,) shows the
+  // S270-07 — acceptance: none of claude's models (its aliases) shows the
   // unsupported-image warning for an attached whitelisted image.
   await scenario("S270-07", "No unsupported-image warning for any claude model", async () => {
     await openFreshComposer();

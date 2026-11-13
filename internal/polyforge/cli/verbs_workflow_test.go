@@ -1,6 +1,6 @@
 package cli
 
-// verbs_workflow_test.go ( AC8/AC9): `pf workflows validate`
+// verbs_workflow_test.go (AC8/AC9): `pf workflows validate`
 // judges lanes with the daemon's own loader and exits 1 on any defect;
 // `pf doctor`'s `workflow lanes` row runs the same judgement and lists the
 // queued work items bound to a lane the daemon's lane set does not carry

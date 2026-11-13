@@ -1,6 +1,6 @@
 package test
 
-// w32_output_format_contract_test.go: text contract for.
+// w32_output_format_contract_test.go: a text contract.
 //
 // Work item #32 ships a standalone output-format skill (skills/output-format/
 // SKILL.md): output discipline for the three owner-facing surfaces — the

@@ -11,7 +11,7 @@
 // and vets against the tree as it stands.
 //
 // Each of the ten scenarios prints a single PASS marker only after all of its
-// assertions pass (reused from's pf-authored suite per the
+// assertions pass (reused from the pf-authored suite per the
 // grill row 6 ruling, with the pi-web scenarios dropped):
 //
 //	PASS W286-S1 ... through PASS W286-S10 ...

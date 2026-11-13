@@ -114,7 +114,7 @@ export function configValueError(key: string, value: unknown, schema: PolyforgeC
 }
 
 /** The workspace step keys the panel writes:
- *  `steps.<project>.<step-id>.models` (a candidate list) and,,
+ *  `steps.<project>.<step-id>.models` (a candidate list) and,
  *  `steps.<project>.<step-id>.skip` (a boolean: the project's switch of a
  *  step its lane declares skippable — pf refuses any other step). Shared by
  *  the client form and the write route, so the allowlist and the guard are
@@ -130,7 +130,7 @@ export function parseStepWriteKey(key: string): StepWriteKey | null {
   return null;
 }
 
-/** Whether a step key is the skip switch (`steps.<p>.<s>.skip`,). */
+/** Whether a step key is the skip switch (`steps.<p>.<s>.skip`). */
 export function isStepSkipKey(key: string): boolean {
   return parseStepWriteKey(key) !== null && key.endsWith(".skip");
 }

@@ -28,8 +28,8 @@ type State struct {
 	stepTimeout time.Duration
 	stallWindow time.Duration
 	// summarize is cli.toml's [summarize] table (nil = absent: the lane
-	// is off); memoryPolicy is the [memory_policy."<path>".<entry>] family
-	//. Both are swapped whole, never mutated in place.
+	// is off); memoryPolicy is the [memory_policy."<path>".<entry>] family.
+	// Both are swapped whole, never mutated in place.
 	summarize    *workspace.SummarizeSettings
 	memoryPolicy map[string]map[string]workspace.PolicyEntry
 	// agentLanguage is [daemon] agent_language ("" = unset: "en").

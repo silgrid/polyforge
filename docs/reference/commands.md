@@ -224,8 +224,8 @@ its four columns.
 - **Trust: the same as a session agent's.** A task agent runs with the
   daemon user's own filesystem and network reach — there is no OS-level
   sandbox, no read-only mount, no masked home (owner ruling 2026-10-26; the
-  platform-level non-root design that would cover every agent class is
-). The harness runs in the selected project's workspace
+  platform-level non-root design that would cover every agent class is).
+  The harness runs in the selected project's workspace
   directory, so its clones are right there; it may read and write anything a
   human's session may. Its prompt opens with the prohibited-actions list every
   step carries (the daemon's data and config, Claude settings,
@@ -363,14 +363,14 @@ Every unit that failed its first run — still red, flaky or pre-existing —
 carries `units[].failure` (also under `details.checks[].units[]`):
 `browser_crash` when that run's output for it shows Chromium's renderer
 crash (`Target crashed` / `Page crashed`, a suite's `ABORT` line inside its
-block included;), else `assertion`; `report-mechanical.md`
+block included), else `assertion`; `report-mechanical.md`
 marks the crashes.
 A wall budget (20m) bounds when those re-runs and base runs may still
 start; a unit or command they no longer reach stays a failure — a failed
 unit whose re-run never started (the budget spent, the deadline passed)
 carries `units[].not_rerun: true` (also under `details.checks[].units[]`),
-and `report-mechanical.md` lists those units by check under `Not re-run`
-. The whole
+and `report-mechanical.md` lists those units by check under `Not re-run`.
+The whole
 run is bounded by `verify.py --deadline` (default: two minutes under the
 step's tool window): no command runs past it — a command it cuts short or
 that can no longer start is recorded failed — and the result is written
@@ -420,13 +420,13 @@ full_commands}`, which `report-mechanical.md` renders under its plan; and
 `repos/<name>: <why>` entry per repo and fallback reason, each rendered as
 its own line of `report-mechanical.md`: each of the engine's full-tier
 fallback diagnostics (those saying `falling back to the full tier`, e.g. a
-failed `go list` with its command, exit and first output line
-, or a changed stack config file such as `go.mod`; the
+failed `go list` with its command, exit and first output line,
+or a changed stack config file such as `go.mod`; the
 informational `--light` diagnostics are not reasons); a
 repository whose tree carries `.polyforge/Dockerfile.verify` runs its bar
 in a container (docs/concepts.md), and that repository's `repos[]` entry
 then carries `container` `{image, built, build_log, name, cpus, memory,
-pids, lost}`,; the limits are the script's: CPUs min(8,
+pids, lost}`; the limits are the script's: CPUs min(8,
 cores), memory 16g, pids 4096) and `report-mechanical.md` into its run
 directory (`verify.py --log-dir`, else `logs/` beside `--out`, else
 `runtime-state/verify/<n>/`); the
@@ -715,7 +715,7 @@ killed step left ends by itself and is removed by the next script's start.
 
 The workflow's own scripts sync, merge, revert and run, and
 `published.py`
-(`workflows/_shared/scripts/<name>.py`,; the conventions are
+(`workflows/_shared/scripts/<name>.py`; the conventions are
 the [workflow contract's Scripts section](workflow-contract.md#scripts)): a
 skill runs each as `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/<name>.py" --flag
 value …`, written out in full, and names it in `commands:` by its file
@@ -861,7 +861,7 @@ the lane's own identity.
 
 Two of the commands a step's skill runs are the workflow's own scripts,
 not `pf`'s: `workflows/_shared/scripts/facts.py` and `integrate.py`
-(; they replaced `pf-facts` and `pf-integrate`). They ship
+(they replaced `pf-facts` and `pf-integrate`). They ship
 in the lane snapshot (docs/reference/workflow-contract.md, "Scripts"), so
 they change with the workflow, never with a pf release; a skill runs them
 as `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" <kind> …` and names
@@ -1062,7 +1062,7 @@ nothing, while any `cells/<profile>` other than `default` exists, an entry
 of `cells/default` is no migrated member (e.g. `effective-connection.json`),
 or a migrated member differs from its root copy. (A retired
 `chat-subs.json` is left as it is; `pf doctor --prune-chat-state` removes
-it,.) After that window,
+it.) After that window,
 `--restore-backup DIR` lists the data-loss scope (every live item a restore
 replaces — the work recorded since the backup) and exits 1 changing
 nothing; with `--confirm` it moves those items aside under

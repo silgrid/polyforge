@@ -279,7 +279,7 @@ and the release:
   the engine included, inside the container built from
   `.polyforge/Dockerfile.verify`. The tree's own workflow script runs it,
   `python3 workflows/_shared/scripts/gate.py --isolation container`
-  (; `cmd/pf-gate` before), through the workflow scripts'
+  (`cmd/pf-gate` before), through the workflow scripts'
   container executor (`pfstep.container`): the image tag
   `pf-verify-<clone name>:<hash>` (an image a verification built is
   reused), the clone mounted alone at its own path, the repository's cache

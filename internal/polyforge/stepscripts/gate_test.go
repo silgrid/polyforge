@@ -1,7 +1,7 @@
 package stepscripts
 
 // gate_test.go: the full test gate — the workflow script
-// workflows/_shared/scripts/gate.py (; pf-gate's successor),
+// workflows/_shared/scripts/gate.py (pf-gate's successor),
 // run as the integrate lane's full-gate skill runs it, `python3 gate.py
 // --isolation container --capsule … --pins …` / `--triage` (invoke runs it
 // by NameGate: scripts_test.go, its "containers" the fake docker's, run
@@ -348,7 +348,7 @@ func TestGateCapsuleWithoutTheDockerfileIsNotJudged(t *testing.T) {
 	}
 }
 
-// TestIntegrateReadsTheGateScriptsResultsAndTags ('s
+// TestIntegrateReadsTheGateScriptsResultsAndTags (the
 // acceptance: integrate.py reads gate.py's result files and green tags):
 // on real gate.py output — a red gate whose one failure is flaky, its
 // triage with --mark-green running the gate once more and tagging the

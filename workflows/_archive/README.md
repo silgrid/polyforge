@@ -1,4 +1,4 @@
-# Archived lanes (removed by)
+# Archived lanes (removed)
 
 `develop` (`workflows/develop/`, build → review → sync → verification → publish → merge) is the
 default development lane and superseded four lanes:

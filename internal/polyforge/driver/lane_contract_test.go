@@ -32,7 +32,7 @@ func laneOrder(t *testing.T, bundle string) []string {
 	return out
 }
 
-// TestShippedMicroLaneShape (; §15.2; workflow
+// TestShippedMicroLaneShape (§15.2; workflow
 // contract 2, change 10; contract 4): micro is fix → review → sync →
 // evidence → publish → merge — no grill, plan or verification — every
 // step an agent step: review, evidence and publish rewind to fix, merge to

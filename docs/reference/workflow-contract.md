@@ -352,7 +352,7 @@ under Python 3.12 and 3.9, on Linux and macOS, with `mypy --strict
 **A pattern a lane file hands a script** is a Python regular expression
 compiled with `re.ASCII` and searched in each line: units.json's `marker`,
 which `verify.py --unit-runs` matches against a unit's output, was Go's
-RE2 until. What reads differently: RE2-only syntax (`\z`,
+RE2 before. What reads differently: RE2-only syntax (`\z`,
 the POSIX classes `[[:alpha:]]`, `\pL`) is an error or another pattern in
 Python, Python's `\s` also takes a vertical tab, and `$` also matches
 before a line's final newline (an output line carries none). `verify.py`
@@ -856,5 +856,5 @@ every reference to it, loads to the same execution graph. The daemon,
 driver and runtime carry no integration-lane identifier either (`pool`,
 `effects`, `landing`, `integration_batch` and the like — the contract 3
 code still naming them, and the static test that pins their absence, go
-with). Renaming `develop` and `integrate` together (and the
+with it). Renaming `develop` and `integrate` together (and the
 `--lane` the integrate skills pass) changes no behaviour.

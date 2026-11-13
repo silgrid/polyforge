@@ -446,7 +446,7 @@ function eventField(body: Record<string, unknown>, key: string): string | undefi
  * `status`, `reason`, `detail`, `error`, `position`, `since`, `queued_ms`,
  * `question`, `text`, `by`, `disposition`, `kind`, `to`, `from`); the composed text goes through `mask`
  * (the server's credential mask — this module stays Node-free) without a
- * length cap ( removed the per-line caps); an `ask` or `owner`
+ * length cap (removed the per-line caps); an `ask` or `owner`
  * line keeps its text's whitespace (it is read as prose, not as a status
  * row). Pure.
  */
@@ -714,13 +714,13 @@ export function nextProgressSnapshot(
   return { available: true, lines: all, omitted };
 }
 
-/** One step's spawn block in the job detail's execution progress
- *, cut at each `step_started` line in stream order. */
+/** One step's spawn block in the job detail's execution progress,
+ *  cut at each `step_started` line in stream order. */
 export interface PolyforgeProgressBlock {
   /** Index of the block's own `step_started` line in the snapshot. */
   start: number;
-  /** Index of the block's first line when lead-in lines precede its start
-   *: the dispatch's `verify_queued` / `verify_admitted`
+  /** Index of the block's first line when lead-in lines precede its start:
+   *  the dispatch's `verify_queued` / `verify_admitted`
    *  lines right before a `step_started`. Absent when the block opens at
    *  `start`. */
   first?: number;
@@ -787,7 +787,7 @@ function stepStartedHeader(text: string): { step?: string; spawn?: string } {
  * after it (the owner's reply) ends that wait; any `job_stopped` → stopped;
  * otherwise the newest block is running and an older one has no mark.
  * Leading lines plus every block's count equal the stream length; no line
- * is dropped. Since each block also names its terminal
+ * is dropped. Each block also names its terminal
  * lifecycle line and its start/end times and duration from the lines' `at`
  * (absent when a time is missing — never invented). Pure.
  */

@@ -99,7 +99,7 @@ export interface ClaudeTranslation {
   /**
    * Set by the `init` that starts claude's own follow-up turn after a background
    * subagent's task notification: a turn no user message started (no `started`
-   * lifecycle came before it,). Its events open with the hidden turn
+   * lifecycle came before it). Its events open with the hidden turn
    * anchor (claudeTaskNotificationAnchor()).
    */
   claudeTurnStart?: true;
@@ -328,8 +328,8 @@ function toolResultBlocks(content: unknown): Record<string, unknown>[] {
 
 /**
  * claude's receipt `structuredPatch` (`[{oldStart, oldLines, newStart, newLines, lines[]}]`,
- * on an `Edit` and a `Write` update, claude 2.1.322) as a unified patch of its `filePath`
- *; undefined without a non-empty patch.
+ * on an `Edit` and a `Write` update, claude 2.1.322) as a unified patch of its `filePath`;
+ * undefined without a non-empty patch.
  */
 function claudeReceiptDiff(receipt: unknown): string | undefined {
   if (!isObject(receipt) || !Array.isArray(receipt.structuredPatch) || typeof receipt.filePath !== "string" || !receipt.filePath) return undefined;
@@ -529,13 +529,13 @@ export function claudeUserInputLine(text: string, images: readonly ClaudePromptI
       ...(text ? [{ type: "text", text }] : []),
       ...images.map((image) => ({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } })),
     ];
-  // A uuid makes claude report the message's lifecycle (command_lifecycle,).
+  // A uuid makes claude report the message's lifecycle (command_lifecycle).
   return `${JSON.stringify({ type: "user", ...(uuid ? { uuid } : {}), message: { role: "user", content } })}\n`;
 }
 
 /**
- * The stdin line of Stop's stream-json interrupt control request. It ends the turn only
- *: `spare_background_tasks` leaves claude's background agents and tasks
+ * The stdin line of Stop's stream-json interrupt control request. It ends the turn only:
+ * `spare_background_tasks` leaves claude's background agents and tasks
  * running — a plain interrupt stops its background agents too (2.1.319 idle-interrupt/);
  * claude 2.1.322's schema: "this Stop ends the turn and leaves running background agents
  * and workflows alone", and a CLI that does not read it treats it as a plain interrupt.
@@ -568,8 +568,8 @@ export function claudeSetPermissionModeLine(requestId: string, mode: string): st
 }
 
 /**
- * The stdin line that moves a running foreground `Agent` / `Task` call to the background
- *: claude's own `background_tasks` control request, the TUI's Ctrl+B. claude
+ * The stdin line that moves a running foreground `Agent` / `Task` call to the background:
+ * claude's own `background_tasks` control request, the TUI's Ctrl+B. claude
  * answers `{ backgrounded: true }` and the call returns its async receipt; the relay recording
  * (lib/__fixtures__/claude-2.1.322/relay/) shows it.
  */
@@ -750,7 +750,7 @@ export class ClaudeStreamTranslator {
 
   /**
    * A background subagent still running, or one that finished — or a background task
-   * that finished whose follow-up turn claude has not started yet: the
+   * that finished — whose follow-up turn claude has not started yet: the
    * session is not settled. A background task still running is not counted.
    */
   hasUnsettledSubagents(): boolean {
@@ -763,8 +763,8 @@ export class ClaudeStreamTranslator {
   }
 
   /**
-   * The background subagents this child reported running and claude has not followed up
-   *, in start order: each `Agent` call id and its label (description, else
+   * The background subagents this child reported running and claude has not followed up,
+   * in start order: each `Agent` call id and its label (description, else
    * agent type). A run only seeded from the transcript is not one this child runs.
    */
   runningBackgroundSubagents(): { id: string; label: string }[] {
@@ -986,8 +986,8 @@ export class ClaudeStreamTranslator {
   }
 
   /**
-   * A finished hook (claude's `hook_response`, only with `--include-hook-events`;
-   *): the one hook status line names its event and hook, a failure or
+   * A finished hook (claude's `hook_response`, only with `--include-hook-events`):
+   * the one hook status line names its event and hook, a failure or
    * cancellation its outcome; a failed hook (`outcome` error or a non-zero exit) is also a
    * warning notice with its exit code and first output line. `hook_started` and
    * `hook_progress` show nothing.
@@ -1424,7 +1424,7 @@ function isClaudeCommandBookkeeping(entry: Record<string, unknown>, message: Rec
     && /^<(command-name|local-command-stdout|local-command-stderr|local-command-caveat)>/.test(message.content);
 }
 
-/** A message the main agent's `SendMessage` delivered into a sidecar (claude marks it meta;). */
+/** A message the main agent's `SendMessage` delivered into a sidecar (claude marks it meta). */
 function isCoordinatorMessage(entry: Record<string, unknown>): boolean {
   return entry.isSidechain === true && isObject(entry.origin) && entry.origin.kind === "coordinator";
 }
@@ -1528,8 +1528,8 @@ interface HistoryWalk {
   toolNames: Map<string, string>;
   model: string;
   /**
-   * claude's input queue as its transcript's `queue-operation` entries show it
-   *: each open `enqueue`, and whether a conversation entry was written
+   * claude's input queue as its transcript's `queue-operation` entries show it:
+   * each open `enqueue`, and whether a conversation entry was written
    * after it — a message that waited behind a running turn.
    */
   queue: Array<{ content: string | null; behind: boolean }>;
@@ -1539,8 +1539,7 @@ interface HistoryWalk {
    * The main conversation's `SendMessage` calls, in order: to whom, when,
    * whether claude answered, and whether the answer revived the agent in the background
    * (`revivedAgentId`; an awaited resume answers with the agent's report inline instead).
-   * `notes`: how many notes the walk held at the call, so the ones after it are known
-   *.
+   * `notes`: how many notes the walk held at the call, so the ones after it are known.
    */
   sends: Map<string, { to: string; at: number; answered: boolean; revived: boolean; notes: number }>;
 }

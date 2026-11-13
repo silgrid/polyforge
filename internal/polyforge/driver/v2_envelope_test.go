@@ -3,8 +3,7 @@ package driver
 // v2_envelope_test.go: the contract-2 step keys contract 4 keeps, as the
 // driver reads them: a step's declared resources taken for its dispatch,
 // and `waivable` defaulting to false. (The envelope's effects, hand-off
-// field and prompt sections left with workflow contract 4's stage C3,
-//.)
+// field and prompt sections left with workflow contract 4's stage C3.)
 
 import (
 	"context"

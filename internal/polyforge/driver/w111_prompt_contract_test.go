@@ -265,7 +265,7 @@ func TestW111NoSleepOutsideTheWaitingRule(t *testing.T) {
 	}
 	// The rule's sentences are where the exemption assumes them (the
 	// release steps no longer wait at all: their procedures are run
-	// requests,).
+	// requests).
 	for _, rel := range []string{"_shared/principles.md"} {
 		for _, s := range w111RuleSentences {
 			if !strings.Contains(w111Flat(byRel[rel]), s) {

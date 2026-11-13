@@ -106,7 +106,7 @@ func newDeliverWorld(t *testing.T) *deliverWorld {
 	if err := os.WriteFile(filepath.Join(w.bin, "gh"), []byte(fakeGHPRs), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// a carried e2e bar command (`npm run test:e2e:all`,) has
+	// a carried e2e bar command (`npm run test:e2e:all`) has
 	// no package.json in this world: the shim stands in for a passing run.
 	if err := os.WriteFile(filepath.Join(w.bin, "npm"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)

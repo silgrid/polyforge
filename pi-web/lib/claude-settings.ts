@@ -3,7 +3,7 @@
 // "customModels": string[], "includeHookEvents": boolean }`. pi-web's own file, apart
 // from the Agent language's pi-web-settings.json; `app/api/claude-settings` is its one
 // writer. A new claude session captures it (`app/api/agent/new`); a change never
-// reaches a session already created. Whether plan may be stored follows's
+// reaches a session already created. Whether plan may be stored follows the
 // global claude tool permissions (claude-permissions.json, read only; r3).
 import { mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
@@ -35,7 +35,7 @@ export function claudeSettingsPath(agentDir: string = defaultAgentDir()): string
 
 /**
  * Stored values as settings, each field on its own: an unknown permission mode reads as
- * default, and so does plan while's global approval mode `approvalMode` is
+ * default, and so does plan while the global approval mode `approvalMode` is
  * deny (claudePlanModeAllowed; the file keeps it), an invalid or repeated custom name is
  * dropped (at most 50 kept), anything but `true` is hooks off. Never throws.
  */

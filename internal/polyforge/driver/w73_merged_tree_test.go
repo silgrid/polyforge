@@ -6,7 +6,7 @@ package driver
 // deliver prompt states the no-re-run consequence and the
 // earlier-dispatch rule. (Its end-to-end suite drove only retired lanes
 // and was deleted, owner 2026-11-09; the agent verification step text
-// that carried the duty was deleted with — develop's
+// that carried the duty was deleted — develop's
 // verification is the daemon's verify action.)
 // It adds no production code and no driver field, event or check.
 

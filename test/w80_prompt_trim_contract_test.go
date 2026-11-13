@@ -72,7 +72,7 @@ func w80StepFiles(t *testing.T) []string {
 func TestW80SharedFragmentsAreTheOneSource(t *testing.T) {
 	files := w80StepFiles(t)
 	// (deliverable_carrier went with workflow contract 3: no shipped step
-	// included it since removed the lanes whose steps did;
+	// included it since the lanes whose steps did were removed;
 	// fast_checks, fast_checks_build and batch_questions have one includer,
 	// develop's build, so the bar is "included, never copied" rather than
 	// "repeated")

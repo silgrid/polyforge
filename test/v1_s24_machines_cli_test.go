@@ -40,7 +40,7 @@ import (
 )
 
 // s24MachineKey answers a fresh Ed25519 identity and its base64 wire
-// spelling: since a heartbeat must be signed by the machine's
+// spelling: a heartbeat must be signed by the machine's
 // bound key, so the scenario installs an identity instead of relying on the
 // unsigned transition.
 func s24MachineKey(t *testing.T) (string, ed25519.PrivateKey) {

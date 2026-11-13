@@ -148,7 +148,7 @@ var w254UnattendedHeadingRe = regexp.MustCompile(`(?i)unattended`)
 
 // w254UnattendedSection answers the unattended-mode section (the spec:
 // no question asked + the merge rule ⇒ auto-merge in the delivery lanes —
-// develop and micro since removed the four older ones; the
+// develop and micro since the four older ones were removed; the
 // "never unattended" list as settled docs-only policy) — wherever in the
 // new doc set it lives.
 func w254UnattendedSection(t *testing.T) (string, string) {
@@ -323,7 +323,7 @@ func TestW254UnattendedModeActualBehavior(t *testing.T) {
 // not enforce — stated within one sentence — and avoiding unattended
 // merges as the filer putting the work item on develop with
 // `confirm_plan: true` (the feature-full bundle it named before was
-// removed,), never as a draft awaiting confirmation.
+// removed), never as a draft awaiting confirmation.
 func TestW254NeverUnattendedSettledPolicy(t *testing.T) {
 	page, sec := w254UnattendedSection(t)
 	norm := w254Norm(sec)

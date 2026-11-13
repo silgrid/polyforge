@@ -99,7 +99,7 @@ func BundlelessKey(key string) bool {
 }
 
 // SummarizeKey and MemoryPolicyKey are the retired root sections (moved
-// to cli.toml,): a file carrying either is refused whole.
+// to cli.toml): a file carrying either is refused whole.
 const (
 	SummarizeKey    = "summarize"
 	MemoryPolicyKey = "memory_policy"
@@ -111,8 +111,8 @@ type Config struct {
 	// list): steps.<project>.<key>.models, flattened for the compose.
 	// Every candidate is in canonical `<harness>:<model>` form.
 	Models map[string]map[string][]string
-	// Skip is project name → step id → bool: steps.<project>.<step>.skip
-	//. A step is skipped only where its lane declares it
+	// Skip is project name → step id → bool: steps.<project>.<step>.skip.
+	// A step is skipped only where its lane declares it
 	// skippable (SkippedSteps). nil when no entry declares skip.
 	Skip map[string]map[string]bool
 	// Tiers is project name → tier name → candidate list:
@@ -582,7 +582,7 @@ func SkippedSteps(cfg *Config, lane *workflow.Lane, project string) []string {
 // KeyRenameSection is the docs/upgrade.md section that explains the
 // per-step key renames a stale key most often needs — the retired
 // `verify-judge` key to `verification`, a `full-gate` key meant for
-// collect's ruling copied to `collect` the section
+// collect's ruling copied to `collect` — the section
 // StaleKeyHint names. It is a section of its own, not the current
 // contract's UpgradeSection: the renames do not move with the contract.
 const KeyRenameSection = "Workflow contract 4: the integration lane is a declaration; a sub-definition takes its step's models"

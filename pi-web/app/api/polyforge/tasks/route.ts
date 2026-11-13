@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
  * GET /api/polyforge/tasks — the Tasks tab's list read:
  * exactly one `pf --json task list`, every task of the local daemon, each row
  * id/project/state/prompt_summary plus started_at?/ended_at?/wall_consumed_ns?
- * plus report_tail?/reporter? nine keys, the
+ * plus report_tail?/reporter? — nine keys, the
  * two new ones forwarded only as pf's own string, never re-cut; the full report
  * stays out. Read-only: this route exports GET alone,
  * so any other method is 405. Degradation-first: pf absent, below the 2.20.12

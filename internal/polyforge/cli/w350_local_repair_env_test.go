@@ -1,6 +1,6 @@
 package cli
 
-// w350_local_repair_env_test.go ( D6): the local repair verbs
+// w350_local_repair_env_test.go (D6): the local repair verbs
 // (config, profile, doctor, init, migrate, version) run under an inherited
 // PF_SERVER/PF_API_KEY with exactly one value-free stderr notice and their
 // normal exit code; an explicit --server/--api-key is refused on every verb

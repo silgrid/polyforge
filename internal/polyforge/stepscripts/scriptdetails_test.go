@@ -2,7 +2,7 @@ package stepscripts
 
 // scriptdetails_test.go: the result files of the workflow scripts that took
 // over pf-facts and pf-integrate (workflows/_shared/scripts/facts.py and
-// integrate.py,) as these black-box tests read them — their
+// integrate.py) as these black-box tests read them — their
 // command names and kinds, and their details' shapes.
 
 // The scripts' result file command names (each script's file name: their

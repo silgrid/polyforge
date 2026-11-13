@@ -4,7 +4,7 @@ package workspace
 // workflow's last step puts into the work item's experience.wrap summary
 // (`record`) and what never goes in (`skip`). The declared entries are
 // cli.toml's [memory_policy."<path>".<default|project>] family
-// (; parsed in internal/polyforge/cli); a path without a
+// (parsed in internal/polyforge/cli); a path without a
 // block is the built-in default, never a refusal.
 //
 // Merge: a list `default` declares replaces the built-in one; a project's

@@ -193,7 +193,7 @@ const h = createHarness({
   // The first page load after a fresh dev-server start compiles the route cold,
   // so it gets COLD_MS (coldFirst; the warm-up ceiling other suites use); later
   // loads use NAV_MS. The first Settings open once exceeded the 30 s action
-  // default under a loaded 32-core host ( verification), so that
+  // default under a loaded 32-core host (verification), so that
   // click and its dialog wait share the same load-bound ceiling. Action ceiling
   // only; assertions and their polling unchanged (same reasoning as
   // e2e/run.mjs's settle poll).
@@ -407,7 +407,7 @@ try {
     // The switch renders as soon as detection reports the package, but it stays
     // disabled until the section's package read (/api/plugins) answers. That
     // first read is a cold route compile, which a loaded host can push past the
-    // 30 s action default; the one click then times out ( full-1
+    // 30 s action default; the one click then times out (full-1
     // S10). Wait for the enabled switch under the suite's warm-open ceiling,
     // before the write audit starts, so background session-lease writes during
     // the wait are not counted against the toggle.

@@ -7,7 +7,7 @@
 // no separate reminder renders beside it. Its name carries the count and
 // `data-pf-attention` the number. With the dock closed a click opens it
 // through the attention walk: the next item's job detail in Work › Jobs
-// (selected — nothing else opens;), and the name says so; with
+// (selected — nothing else opens), and the name says so; with
 // the dock open a click
 // closes it and the name carries the count alone. With nothing pending the
 // button is the plain toggle.
@@ -37,7 +37,7 @@
 //          keeps one amber card (tint, amber frame, 已阻塞 marker) first in
 //          the row; a click opens its detail with the park cause above the
 //          input box; the owner's
-//          message wakes it (workflow contract 4; no 继续 button,)
+//          message wakes it (workflow contract 4; no 继续 button)
 //          and the live card comes back in its place, once and normally
 //          coloured.
 //   S458-4 (AC2, other classes; dismiss) failed / submit_rejected /
@@ -51,14 +51,14 @@
 //   S458-6 (AC3, themes) in the light and the dark theme, selected and not,
 //          the blocked card's tint differs visibly from the panel and the
 //          slug's contrast over the composited tint is at least 4.5.
-//   S499-2 ( AC3, dismiss on the card) each feed-only card shows
+//   S499-2 (AC3, dismiss on the card) each feed-only card shows
 //          its newest open entry's reason (`data-pf-attention-reason`) and a
 //          忽略 button (`data-pf-attention-dismiss`; the live card has none);
 //          a refused dismiss keeps the card and shows 忽略失败：<pf's text> on
 //          it without selecting it; an accepted one posts every open entry of
 //          the item, newest first, in one `{ ids }`, the card is gone and the
 //          button's count drops by that many.
-//   S458-7 (AC3 of, replied) a running job's only feed entry is
+//   S458-7 (replied) a running job's only feed entry is
 //          a needs_input question the owner already replied to (the daemon's
 //          `replied:true`, `attention:false`, unresolved): it counts nowhere —
 //          the button stays plain (no data-pf-attention, transparent) and the
@@ -363,7 +363,7 @@ try {
       await waitTitle(page, W.slug, "the card opens W's detail");
       await dock(page).locator(`[data-pf-chat] [data-pf-chat-park-cause="${BLOCKED.kind}"]`).waitFor();
       // 3. the owner's message wakes W (workflow contract 4: the card's box
-      // stays open on a park; no 继续 button,): W runs again,
+      // stays open on a park; no 继续 button): W runs again,
       // its entry resolves; the live card takes its place.
       assert.equal(await dock(page).locator("[data-pf-resume-button], [data-pf-chat-menu]").count(), 0, "no 继续 anywhere: the card is the box");
       const box = dock(page).locator("[data-pf-chat-input]");

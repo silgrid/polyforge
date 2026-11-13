@@ -2,7 +2,7 @@ package cli
 
 // python.go: the Python interpreter a workflow's step scripts run under
 // (the workflow contract's "Scripts" section, docs/reference/workflow-
-// contract.md;). One rule, two readers: the daemon resolves
+// contract.md). One rule, two readers: the daemon resolves
 // it once at its start, refuses to start without a usable one and hands it
 // to every step as PF_PYTHON (daemon.Main); `pf doctor`'s python3 row
 // judges the same rule in its own process (doctor_python.go).

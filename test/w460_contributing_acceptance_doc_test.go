@@ -2,7 +2,7 @@
 
 package test
 
-// w460_contributing_acceptance_doc_test.go: doc contract for (AC4).
+// w460_contributing_acceptance_doc_test.go: a doc contract.
 //
 // The contributor guide's filing guidance agrees with the shipped behaviour:
 // filing does not grill, `pf submit` refuses a bundled ticket with no

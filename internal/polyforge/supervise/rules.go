@@ -96,7 +96,7 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 	return nil
 }
 
-// slowModelOwnsTimeout is rule 4's attribution ( D1, changing
+// slowModelOwnsTimeout is rule 4's attribution (D1, changing
 // polyforge#147 D6): T is CUMULATIVE over the whole step, so the dispatch
 // running when it runs out may have spent only a sliver of it. That
 // dispatch is the slow-model cause (step_timeout_slow_model: a model-class

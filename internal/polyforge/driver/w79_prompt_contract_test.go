@@ -7,7 +7,7 @@ package driver
 //     is assembled exactly as a dispatch assembles it (the shipped micro
 //     bundle's shared deliver definition, the memory duty the driver
 //     injects for the workflow's LAST step — the wrap summary only, as a
-//     gate deliver declares no recall since — and the
+//     gate deliver declares no recall — and the
 //     delivery contract), and it instructs `pf result submit` and the one
 //     `pf remember` wrap summary — so no line of it may forbid running
 //     `pf` unless the prohibition is scoped to exactly those commands.
@@ -57,7 +57,7 @@ var w79ListItem = regexp.MustCompile(`^\s*([-*+]|[0-9]+[.)])\s`)
 
 // w79Paragraphs splits a markdown prompt into logical units — paragraphs
 // (blank-line separated) and, inside a list, each list item on its own
-// ( P7: a whole bullet list joined into one unit let a
+// (P7: a whole bullet list joined into one unit let a
 // sibling bullet naming `pf result submit` mask an unscoped ban) — with
 // each unit's wrapped lines joined into one logical line, so a
 // prohibition and its scope are compared however the text is wrapped.
@@ -97,7 +97,7 @@ func w79UnscopedPFBans(prompt string) []string {
 	return bad
 }
 
-// TestW79PFBanCheckSplitsListItems ( P7): each list item is
+// TestW79PFBanCheckSplitsListItems (P7): each list item is
 // its own unit, so a sibling bullet naming an allowed command never masks
 // an unscoped ban, while a ban scoped inside its own item stays legal.
 func TestW79PFBanCheckSplitsListItems(t *testing.T) {

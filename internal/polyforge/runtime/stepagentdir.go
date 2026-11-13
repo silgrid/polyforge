@@ -73,7 +73,7 @@ package runtime
 // <harness-root>/summarize-cwd        the summarize lane's one-shot
 //                                     dispatch working dir (empty,
 //                                     daemon-owned: no project settings
-//                                     a harness could pick up;)
+//                                     a harness could pick up)
 //
 // What unifies is WHERE, not the shapes inside: the pi dirs keep their
 // enumerated-minimal-set/sibling logic, and the claude-config dir rides

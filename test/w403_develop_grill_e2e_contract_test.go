@@ -2,7 +2,7 @@
 
 package test
 
-// w403_develop_grill_e2e_contract_test.go ( A1, rewritten by
+// w403_develop_grill_e2e_contract_test.go (A1, rewritten by
 // workflow contract v2 PR 1 and PR 12 — the stops are build's asks and
 // no daemon check judges the build; workflow contract 4: the ask is
 // `pf step ask`, the owner's replies are quoted in build's section headers

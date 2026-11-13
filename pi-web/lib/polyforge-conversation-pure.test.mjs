@@ -5,7 +5,7 @@ import test from "node:test";
 import { createJiti } from "jiti";
 
 // The job card's conversation vocabulary (workflow contract v2, design §5.2,
-// §5.4; change 14; workflow contract 4, design #483 §7,): which
+// §5.4; change 14; workflow contract 4, design #483 §7): which
 // jobs wait, the question the selected one waits on, when the one input box
 // is open (running AND awaiting: one path; parked: the message wakes it) and
 // when it closes (no agent to reach, or one that cannot start — then the
@@ -34,9 +34,9 @@ test("currentPendingQuestion: the watch snapshot's pending question", () => {
   assert.deepEqual(pure.currentPendingQuestion({ ...base, pendingQuestion: q }), q, "an ask: id = its stamp, the question verbatim");
 });
 
-// workflow contract 4 (design #483 §7,): a parked work item's
+// workflow contract 4 (design #483 §7): a parked work item's
 // box stays open — the message wakes the step; the card has no buttons
-// and only a park whose agent cannot start closes it, with
+// — and only a park whose agent cannot start closes it, with
 // the copyable owner commands.
 const BLOCKED = { input: "open", awaiting: false, park: "blocked" };
 const PAUSED = { input: "open", awaiting: false, park: "paused" };

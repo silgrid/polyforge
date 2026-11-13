@@ -1,6 +1,6 @@
 package test
 
-// w241_deploy_gh_repo_repro_test.go: repro for.
+// w241_deploy_gh_repo_repro_test.go: a bug repro.
 //
 // Reported failure (#240): the release lane's deploy step runs
 // `.polyforge/deploy.sh <TAG> --confirm <TAG>` with no GH_REPO, and the

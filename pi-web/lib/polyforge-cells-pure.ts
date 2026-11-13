@@ -37,7 +37,7 @@ export function hasPolyforgeCellCapabilities(capabilities: readonly string[] | n
 
 /** The config scope one read/write addresses: the Host (`--host`, cli.toml's
  *  Host-only keys) or one Cell (`--profile NAME`, `default` included).
- *  there is no unscoped form — an unscoped pf call resolves
+ * there is no unscoped form — an unscoped pf call resolves
  *  its Cell from the calling process's PF_PROFILE and cwd, i.e. from pi-web's
  *  server process rather than the page, so every Settings › Polyforge pf call
  *  names its scope. */

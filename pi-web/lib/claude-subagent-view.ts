@@ -72,8 +72,8 @@ export function isSettledClaudeSubagentStatus(status: ClaudeSubagentStatus): boo
  * Folds `incoming` into `current` (either may come from the live stream or from
  * history): an entry id already held keeps its place and takes the incoming copy,
  * new ids append once in their order; header fields take the incoming value when
- * it has one, and a settled status never goes back to running — except for a resume
- *: a running copy that started later than the held run. A read with
+ * it has one, and a settled status never goes back to running — except for a resume:
+ * a running copy that started later than the held run. A read with
  * the same or no start (an older read) never reopens, and the later start is kept.
  */
 export function mergeClaudeSubagentRun(current: ClaudeSubagentRun | undefined, incoming: ClaudeSubagentRun): ClaudeSubagentRun {

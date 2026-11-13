@@ -71,8 +71,8 @@ var cmdSubmit = &Command{
 			// the mapped workspace — the claim clones fresh, so the submit
 			// stays accepted; no override flag exists. An unknown placement
 			// prints nothing beyond the acceptance line (nothing invented).
-			// The daemon states the placement on a claimed answer only
-			//; a queued one says why it waits instead.
+			// The daemon states the placement on a claimed answer only;
+			// a queued one says why it waits instead.
 			if sr.MachineID != "" && sr.CapsulePath != "" {
 				fmt.Fprintf(ctx.Stdout, "placement: claimed by machine %s, capsule %s\n", sr.MachineID, sr.CapsulePath)
 			}
@@ -113,7 +113,7 @@ func submitPrecheck(ctx *Context, wiID string) (string, *api.WorkItem, error) {
 }
 
 // submitRefusal states aihub's typed claim refusal (a CORE- code the
-// daemon passed through,) as a failed submit: the same
+// daemon passed through) as a failed submit: the same
 // code and extra, a detail that says nothing was submitted or kept
 // queued, and — for an unmerged blocker (DEPENDENCY_BLOCKED) — the
 // blockers and what to do. A new *api.Error rather than a %w wrap:

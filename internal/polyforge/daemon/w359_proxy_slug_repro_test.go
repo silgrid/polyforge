@@ -1,8 +1,8 @@
 package daemon
 
-// w359_proxy_slug_repro_test.go: repro for — since v0.2.0
+// w359_proxy_slug_repro_test.go: repro — since v0.2.0
 // every AIHub data-plane call goes through the Host's unified business
-// proxy (`ANY /aihub/{path...}`,), and a slug-addressed
+// proxy (`ANY /aihub/{path...}`), and a slug-addressed
 // command loses the "#…" part of the slug:
 //
 //	pf file show        -> CORE-404: work item workbench

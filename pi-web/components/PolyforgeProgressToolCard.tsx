@@ -31,7 +31,7 @@ export function parseProgressToolDetail(body: unknown): PolyforgeProgressToolDet
 export const PROGRESS_TOOL_URL = "/api/polyforge/progress/tool";
 
 /** One call's detail read: `GET PROGRESS_TOOL_URL?wi=&id=[&profile=]` once
- *  (`profile` = the job row's Cell,), settled as the card's
+ *  (`profile` = the job row's Cell), settled as the card's
  *  state — an HTTP refusal, a network error or a malformed body is
  *  unavailable. Never rejects. */
 export async function fetchProgressToolDetail(wi: string, id: string, profile?: string): Promise<PolyforgeProgressToolDetailState> {

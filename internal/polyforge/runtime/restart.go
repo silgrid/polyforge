@@ -33,7 +33,7 @@ package runtime
 // end_pending, with close_refused, when that blocked close is itself
 // refused). A typed 4xx from the replay of a paused record's OWN close —
 // its terminal close or pending pause, its verify matching — is parked as
-// close_refused instead (parkRefused,). A
+// close_refused instead (parkRefused). A
 // mid-flight record whose capsule directory is missing, or whose project
 // fell out of the [workspace]
 // mapping, blocks that ONE work item (blockUnrecoverable — the ordinary
@@ -347,7 +347,7 @@ func isStaleSession(err error) bool {
 // local close never reached the hub under this session. hubStatus is the
 // work item's aihub status when the caller read it (a session verify), ""
 // when unknown (a STALE_SESSION refusal): the release names aihub's status
-// when known, else the requested end marked unconfirmed (:
+// when known, else the requested end marked unconfirmed (
 // the decision feed keeps an unconfirmed block open and re-reads aihub).
 func (r *Runtime) finishSealLocally(j *job, reason, hubStatus string, cause error) {
 	if err := sealReadOnly(j.capsuleDir); err != nil {

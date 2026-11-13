@@ -139,7 +139,7 @@ func (d *Driver) ownerMessageAt(step, at string) *capsule.AskLine {
 // OwnerMessagesOfRound answers, from the record's lines, the owner's
 // messages to step in the round st records (nil st: its first round) —
 // the daemon's `pf step handoff` stamp and its --per-owner check
-// (workflow contract 4,), by the rules above.
+// (workflow contract 4), by the rules above.
 func OwnerMessagesOfRound(lines []capsule.AskLine, step string, st *capsule.Step) []capsule.AskLine {
 	return ownerMessagesOf(askLinesOf(lines, step), roundStart(st))
 }

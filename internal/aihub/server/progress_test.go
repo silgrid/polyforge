@@ -355,7 +355,7 @@ func TestRelayBudgetWindowAndMemory(t *testing.T) {
 }
 
 // TestRelayBudgetFitsTheHolderLanes pins the derivation of the shipped
-// constants ( A2): relay-driven entries can fill neither the
+// constants (A2): relay-driven entries can fill neither the
 // holder's answer lane nor, with the two loops' idle polls, its inbox
 // lane, and no single member holds the whole holder budget.
 func TestRelayBudgetFitsTheHolderLanes(t *testing.T) {

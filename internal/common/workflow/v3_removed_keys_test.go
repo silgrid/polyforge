@@ -5,7 +5,7 @@ package workflow_test
 // keys executor, action, with, checks, sweep and evidence, the facts
 // input — is refused in one load for its version and for each of them
 // (an unknown key: the rewrite hints of the keys earlier contracts removed
-// left with workflow contract 4's stage C3,).
+// left with workflow contract 4's stage C3).
 
 import (
 	"fmt"

@@ -206,7 +206,7 @@
 #   GH_REPO=silgrid/polyforge   GHCR_IMAGE=ghcr.io/silgrid/aihub   AIHUB_PORT=8080   WAIT_SECS=60
 #   (GH_REPO must be the GitHub repo this checkout's origin names; when origin
 #   is not a github.com URL, DEPLOY_REMOTE_IS=<owner>/<repo> states it -
-#   anything else refuses before any work,)
+#   anything else refuses before any work)
 #   AIHUB_SERVICE=aihub
 #   DRAIN_SECS=15 (stop_grace_period; > aihub's own 10s drain)   MAX_DOWNTIME_SECS=20 (warn; > DRAIN_SECS)   UP_WAIT_SECS=120 (fail;
 #   covers aihub's one-time memory content migration at its first start)

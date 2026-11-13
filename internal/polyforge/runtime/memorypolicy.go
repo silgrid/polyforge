@@ -3,8 +3,8 @@ package runtime
 // memorypolicy.go: the claimed project's effective memory policy, written
 // into the capsule at claim (capsule.MemoryPolicyJSON) for the driver's
 // wrap prompt. The source is the daemon's loaded cli.toml snapshot — the
-// [memory_policy."<path>".<entry>] block of the project's workspace path
-//; a path without a block is the built-in default. A job
+// [memory_policy."<path>".<entry>] block of the project's workspace path;
+// a path without a block is the built-in default. A job
 // that already claimed keeps the capsule its claim wrote.
 
 import (

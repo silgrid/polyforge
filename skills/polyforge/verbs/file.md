@@ -71,7 +71,7 @@ The rule lives in the routing skill (`SKILL.md` §Project routing).
 The lane's step table is the `steps:` list in its `workflows/<lane>/workflow.yaml`:
 every acceptance criterion of an execution ticket must name the
 step of that table that carries it. The four lanes `develop` superseded
- are removed (; `workflows/_archive/README.md`): a ticket
+are removed (`workflows/_archive/README.md`): a ticket
 still bound to one is refused at claim, and a terminal one still displays.
 
 **On `develop`** the ticket's `content` carries a `## Acceptance` section: one list

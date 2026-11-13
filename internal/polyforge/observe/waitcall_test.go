@@ -1,7 +1,7 @@
 package observe
 
 // waitcall_test.go: the status and watch faces read the current step's
-// wait-call total summed over every dispatch of the step
+// wait-call total — summed over every dispatch of the step
 // this monitor watched, and never mixed with another step's.
 
 import (

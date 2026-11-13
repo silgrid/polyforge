@@ -70,7 +70,7 @@ by a person with `pf file create --bundle integrate` and `pf submit`, one
 unfinished batch per project (`exclusive: true`);
 [concepts](concepts.md#the-integration-lane)),
 `micro` and `release` (the project-agnostic release flow). The four delivery
-lanes `develop` superseded were removed by
+lanes `develop` superseded were removed
 (`workflows/_archive/README.md`).
 `micro` is the pure-text lane: `fix` → `review` → `sync` → `evidence` →
 `publish` → `merge`, no grill, plan or verification step, the ticket body as

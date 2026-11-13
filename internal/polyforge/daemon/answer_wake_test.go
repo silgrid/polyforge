@@ -1,7 +1,7 @@
 package daemon
 
 // answer_wake_test.go: the owner's message to a parked work item
-// (workflow contract 4, design #483 §7,; ruling R9). `pf
+// (workflow contract 4, design #483 §7; ruling R9). `pf
 // answer` no longer bounces off a parked work item with DAEMON-409: the
 // daemon names the park and writes nothing, the CLI opens the door `pf
 // resume` opens with the caller's own key, then the daemon records the

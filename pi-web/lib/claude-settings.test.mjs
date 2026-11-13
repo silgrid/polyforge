@@ -31,7 +31,7 @@ test("claude settings: a missing, malformed or unknown file reads the defaults",
   // Unknown values each read as their default; claude's other modes are not offered.
   fs.writeFileSync(file, JSON.stringify({ version: 1, launchPermissionMode: "bypassPermissions", customModels: "opus", includeHookEvents: "yes" }));
   assert.deepEqual(settings.readClaudeSettings(dir), DEFAULTS);
-  // plan needs host approvals:'s claude tool permissions on ask ( r3).
+  // plan needs host approvals: the claude tool permissions on ask (r3).
   // On deny a stored plan reads as default; on ask (the default) it reads as plan.
   const permissionConfig = path.join(dir, "claude-permissions.json");
   fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, mode: "deny", push: false }));

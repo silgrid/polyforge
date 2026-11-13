@@ -1,6 +1,6 @@
 /**
- * Browser-only preferences of the Polyforge Jobs-tab card stream
- *, set in Settings › Polyforge: the goal-title length and
+ * Browser-only preferences of the Polyforge Jobs-tab card stream,
+ * set in Settings › Polyforge: the goal-title length and
  * the card poll interval. They live in this browser's localStorage only —
  * never pf config, never a server file. Client-safe: no Node import.
  */

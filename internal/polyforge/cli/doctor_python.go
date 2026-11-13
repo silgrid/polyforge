@@ -1,6 +1,6 @@
 package cli
 
-// doctor_python.go: the `python3` row the interpreter a
+// doctor_python.go: the `python3` row — the interpreter a
 // workflow's step scripts run under resolves and is at least MinPython,
 // judged by the rule the daemon applies at its start (python.go:
 // `[daemon] python`, else python3 on this shell's PATH). A fail here is a

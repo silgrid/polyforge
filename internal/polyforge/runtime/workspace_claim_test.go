@@ -155,7 +155,7 @@ func TestWorkspaceYamlRefusalFamilies(t *testing.T) {
 	}
 }
 
-// A stale key — no step id of an installed lane (:
+// A stale key — no step id of an installed lane (
 // the retired verify-judge key, a typo) — refuses nothing: it governs
 // nothing, and `pf doctor` warns about it.
 func TestWorkspaceYamlStaleKeyClaims(t *testing.T) {

@@ -8,7 +8,7 @@
 // its last 8 KiB): read on open, every 2 s while the task runs and the panel is open, and
 // once more after it ends; claude's refusal shows as its text. The panel reads the task
 // it is given on every render, so a task that ends while open keeps its panel, showing
-// the final status (as a subagent's panel does,).
+// the final status (as a subagent's panel does).
 import { useEffect, useRef, useState } from "react";
 import { ClaudeTaskKindBadge, CLAUDE_TASK_COLOR, useClaudeSubagentClock } from "./ClaudeSubagentRunningList";
 import { useI18n } from "@/hooks/useI18n";

@@ -1,6 +1,6 @@
 package daemon
 
-// w350_cell_limit_test.go ( D3): a reloaded
+// w350_cell_limit_test.go (D3): a reloaded
 // cell_max_concurrent_jobs governs the Cell's admission ceiling at once —
 // raised, lowered, removed (back to the Host ceiling), clamped to the Host
 // ceiling — and GET /profiles reports the applied value and the effective

@@ -1,6 +1,6 @@
 package daemon
 
-// w432_integration_lane_test.go ( AC2): the
+// w432_integration_lane_test.go (AC2): the
 // daemon's integration hub never guesses a lane: a fix ticket is filed on
 // the lane its `pf step hub file --lane` names, looked up on that lane
 // before filing, and a ticket naming none is refused at the call rather

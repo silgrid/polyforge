@@ -6,7 +6,7 @@
 // runs 4 browser suites at a time, 12 cores and up run 6, 4 cores and fewer keep 2.
 // The former floor(cpus / 4) (2 on 8 cpus) dates from each suite compiling its
 // own `next dev` (E2E_JOBS=4 on a 12-core box then pushed suites over their
-// page-load timeouts,); the bar now serves a build made once
+// page-load timeouts); the bar now serves a build made once
 // (`next start`), and at pool 2 its suites used about 1.4 of 8 cores
 // (owner decision). cpuCount is the CPUs the
 // runner may use (os.availableParallelism(), which follows a container's CPU limit;

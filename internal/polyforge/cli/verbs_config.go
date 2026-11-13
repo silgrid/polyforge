@@ -880,7 +880,7 @@ func parseProjectsValue(arg string) ([]string, error) {
 // mapping-less file is accepted and the daemon's start refusal is noted.
 // The flock guards only the local read-modify-write: it is released
 // before the daemon is notified, because that round trip is a
-// cross-process wait ( F1).
+// cross-process wait (F1).
 func applyConfigEdit(ctx *Context, k configKey, apply func([]byte) []byte, exp configExpectation) error {
 	path := configPath(ctx)
 	touchesMapping := k.isWorkspace()

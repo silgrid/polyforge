@@ -1,6 +1,6 @@
 package driver
 
-// w403_develop_prompts_test.go ( A1; workflow contract v2 PR
+// w403_develop_prompts_test.go (A1; workflow contract v2 PR
 // 1 and PR 12): the develop build and review prompts, rendered from a
 // materialized capsule, carry no grill — build asks the owner only on a
 // surprise, right after the plan, through `pf step ask` (its question

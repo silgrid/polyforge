@@ -98,7 +98,7 @@ type WatchExecution struct {
 	Steps           map[string]WatchStep  `json:"steps,omitempty"`
 	PendingQuestion *WatchPendingQuestion `json:"pending_question,omitempty"`
 	// Blocked is present only while the workflow is blocked
-	// (workflow_status blocked;): why, and what releases it.
+	// (workflow_status blocked): why, and what releases it.
 	// A blocked work item asks nothing — it is resumed (`pf resume`) once
 	// the required action is done — so a panel shows it as blocked, never
 	// as a question.
@@ -183,8 +183,8 @@ type WatchProgress struct {
 	// step has none.
 	WaitCalls   *int64 `json:"wait_calls,omitempty"`
 	WaitSeconds *int64 `json:"wait_seconds,omitempty"`
-	// Context is the current step session's context-window usage
-	//; absent when unknown.
+	// Context is the current step session's context-window usage;
+	// absent when unknown.
 	Context *ContextUsage `json:"context,omitempty"`
 }
 

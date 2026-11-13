@@ -1,8 +1,8 @@
 package test
 
 // w405_green_tag_test.go: the test gate's identity (tools/gate-id) and its
-// releasable marker: written only by the gate (`gate.py --mark-green`,
-//; pf-gate before) after a pass,
+// releasable marker: written only by the gate (`gate.py --mark-green`;
+// pf-gate before) after a pass,
 // read by tools/green-tag check / latest, the format both the release and
 // the integrate workflow use. Every remote is a local bare
 // repository; no real remote is ever touched.

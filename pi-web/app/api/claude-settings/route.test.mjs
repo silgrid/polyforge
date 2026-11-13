@@ -21,7 +21,7 @@ after(() => {
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, moduleCache: false });
 const { GET, PUT } = await jiti.import("./route.ts");
 const file = path.join(agentDir, "pi-web-claude-settings.json");
-//'s global claude permission mode (absent: ask); plan follows it ( r3).
+// the global claude permission mode (absent: ask); plan follows it (r3).
 const permissionConfig = path.join(agentDir, "claude-permissions.json");
 const DEFAULTS = { launchPermissionMode: "default", customModels: [], includeHookEvents: false };
 
@@ -59,7 +59,7 @@ test("GET answers the stored settings and PUT stores them for the next GET", asy
 });
 
 test("PUT refuses plan while Pi Web has no host approvals, naming the reason", async () => {
-  // r3: no host approvals is's claude tool permissions on Deny silently.
+  // r3: no host approvals is the claude tool permissions on Deny silently.
   fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, mode: "deny", push: false }));
   try {
     fs.writeFileSync(file, JSON.stringify({ version: 1, ...DEFAULTS }));

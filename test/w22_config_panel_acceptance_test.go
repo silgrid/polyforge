@@ -568,7 +568,7 @@ func TestW22WorkspaceSummarizeRead(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestW22WorkspaceSummarizeWritePinned pins the spec's "Validated write"
-// (since into cli.toml's [summarize] table): a valid summarize
+// (now in cli.toml's [summarize] table): a valid summarize
 // write is atomic, keeps every other byte, is judged by the same validator
 // the daemon applies, needs no path flag (and refuses one), an invalid value
 // is refused with the file byte-identical, and a language-only write cannot

@@ -1,5 +1,5 @@
-// Static check that every literal t() key exists in the English message table
-//. Test tooling only: lib/i18n/literal-keys.test.mjs runs it.
+// Static check that every literal t() key exists in the English message table.
+// Test tooling only: lib/i18n/literal-keys.test.mjs runs it.
 //
 // A translation call is `t(…)`, `translate(…)` (the name two components give
 // useI18n's t) or `<object>.t(…)`. Every literal leaf of its first argument — a

@@ -302,7 +302,7 @@ export async function mockPolyforge(page, handlers, { otherwise = {} } = {}) {
 /**
  * Pins the context reading for `session`: the mount's state read and the live
  * GET /api/agent/<id> read (the newer wins) both answer `usage` (the live one
- * with `running: true`;, #236, #247). Other calls pass through.
+ * with `running: true`, #236, #247). Other calls pass through.
  */
 export async function mockContextUsage(page, session, usage) {
   await page.route("**/api/sessions/*/state", (route) => reply(route, { running: false, state: { contextUsage: usage } }));

@@ -49,7 +49,7 @@ export interface PolyforgeWorkflowStep {
   /** The lane declares the step `skippable: true`; kept only when true. */
   skippable?: true;
   /** Each mapped project's current `steps.<project>.<id>.skip`, as pf judged it
-   *  (only a step its lane declares skippable carries it;). */
+   *  (only a step its lane declares skippable carries it). */
   skip?: Record<string, boolean>;
 }
 

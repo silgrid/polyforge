@@ -1,6 +1,6 @@
 package daemon
 
-// w350_exec_disabled_test.go ( D5): a Cell whose execution
+// w350_exec_disabled_test.go (D5): a Cell whose execution
 // plane is disabled starts nothing from any entry point — a task spawn, a
 // resume of held work, a submit — refusing with the Cell's own reason,
 // while queries keep serving and a job already running is not killed. The

@@ -67,8 +67,8 @@ type Sink interface {
 	// ProcessExit: the process is gone.
 	ProcessExit(info ExitInfo)
 	// ContextWindow: the harness reported the context window of a model
-	// it used (claude's `result.modelUsage[<model>].contextWindow`,
-	//); window > 0.
+	// it used (claude's `result.modelUsage[<model>].contextWindow`);
+	// window > 0.
 	ContextWindow(model string, window int64)
 }
 

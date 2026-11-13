@@ -1,6 +1,6 @@
 package driver
 
-// handoff_test.go (workflow contract 4 stage C2,): the
+// handoff_test.go (workflow contract 4 stage C2): the
 // driver's reaction to a dispatch's hand-off, row by row of design #483
 // §7 — done makes the step round's pending hub writes and then dispatches
 // the next step; a write that fails parks write_failed and the resume

@@ -50,9 +50,9 @@ import {
  * every identity is the display name or the unknown-user placeholder. It
  * renders only inside the dock panel (the desktop dock and the mobile sheet
  * share the same component, two panes side by side at every width). On
- * desktop the list's left divider is also its resize separator
- *. Between the direct area and 群聊 sit the project groups
- *: one collapsible group per `cli.toml`-mapped project with
+ * desktop the list's left divider is also its resize separator.
+ * Between the direct area and 群聊 sit the project groups:
+ * one collapsible group per `cli.toml`-mapped project with
  * its contact count, an explicit empty or read-failure note, and rows that
  * open the contact's existing conversation or its empty pane (no unread
  * badge — unread lives on the direct row only). An admin (the users read

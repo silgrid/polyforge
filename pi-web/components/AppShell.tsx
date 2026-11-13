@@ -2329,7 +2329,7 @@ export function AppShell() {
     });
   }, []);
 
-  //, widened by, carried by the button since
+  // Later widened and carried by the button:
   // the attention walk. A click on the Polyforge button while
   // the dock is closed and something needs a human (the jobs waiting for an
   // answer plus the decision feed's other open entries) opens the dock

@@ -1,6 +1,6 @@
 /**
- * The pure half of Settings › Polyforge's pf install / update entry
- *: the release channel, the wire shapes the route answers,
+ * The pure half of Settings › Polyforge's pf install / update entry:
+ * the release channel, the wire shapes the route answers,
  * and the judgements both sides share — which versions disagree, which jobs
  * block an upgrade (install.sh's own rule), what install.sh's refusal said.
  * Import-free, so the panel can import it without pulling the server module

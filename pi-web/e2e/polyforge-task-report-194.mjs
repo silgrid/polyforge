@@ -322,7 +322,7 @@ try {
 
   await check("S194-7", () => withPage({ storage: { "pi-web:polyforge-dock-width": "460" } }, async (page) => {
     seed();
-    // Fixture readiness ( s194-7-fixture-and-stale-lock): as in S194-10,
+    // Fixture readiness (s194-7-fixture-and-stale-lock): as in S194-10,
     // let the shared status snapshot reflect this seed before opening Tasks, so the
     // #163 count-change re-read cannot land during the exactly-one-read check.
     await openDock(page);
@@ -393,10 +393,10 @@ try {
 
   await check("S194-10", () => withPage({}, async (page) => {
     seed({ taskRows: fieldlessRows(), tasks: { running: 1, completed: 1, capped: 0, failed: 0, interrupted: 0 } });
-    // Fixture readiness ( s194-10-fixture-race): the server's shared
+    // Fixture readiness (s194-10-fixture-race): the server's shared
     // ops-status reader may still answer the previous scenario's snapshot, whose
-    // task counts differ; a count change while Tasks is mounted re-reads by design
-    //. Let the status snapshot reflect this seed before opening Tasks.
+    // task counts differ; a count change while Tasks is mounted re-reads by design.
+    // Let the status snapshot reflect this seed before opening Tasks.
     await openDock(page);
     await waitFor(async () => (await topTab(page, RE_WORK).count()) > 0, "a 工单 (Work) top-level tab exists", 20_000);
     await topTab(page, RE_WORK).click();

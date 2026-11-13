@@ -1,6 +1,6 @@
 package driver
 
-// w521_skip_test.go ( u4): the driver never dispatches a step
+// w521_skip_test.go (u4): the driver never dispatches a step
 // the work item's skipped-step set (runtime-state/skipped-steps.json,
 // fixed at the first claim) names when its lane snapshot declares it
 // skippable: the step is recorded skipped with a step_skipped event, the

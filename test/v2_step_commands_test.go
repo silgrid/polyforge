@@ -32,7 +32,7 @@ func v2PfBinDir(t *testing.T) string {
 		t.Fatalf("go build ./cmd/pf: %v\n%s", err, out)
 	}
 	// pf-verify, pf-run, pf-facts, pf-integrate and pf-gate: links a
-	// machine installed before, #474, #475 and #477 made them
+	// machine installed before the changes that made them
 	// workflow scripts — no step commands any more, so pf itself
 	for _, name := range []string{"pf-run", "pf-verify", "pf-facts", "pf-integrate", "pf-gate", "pf-stranger"} {
 		if err := os.Symlink("pf", filepath.Join(bin, name)); err != nil {

@@ -1,6 +1,6 @@
 package cli
 
-// w350_resolver_test.go ( D2): the cwd step of the profile
+// w350_resolver_test.go (D2): the cwd step of the profile
 // resolver reads the Host's effective index and nothing else — a Cell file
 // missing on disk never demotes a mapped cwd — and a business command
 // whose effective index cannot be read fails closed (DAEMON-410 naming the

@@ -1,8 +1,8 @@
 /**
  * Client-safe pure model for the dock's read-only Tasks tab:
  * the list-row and detail wire types (the row type names exactly the nine
- * keys the server passport forwards, report_tail/reporter included —
- *), the task id validator, the
+ * keys the server passport forwards, report_tail/reporter included),
+ * the task id validator, the
  * running-on-top section split, the client-side search, the project/state
  * filters and the block timing helpers, and the reporter
  * filter's options and term (全部发起人, human display names

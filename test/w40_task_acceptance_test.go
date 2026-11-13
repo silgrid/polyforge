@@ -1,6 +1,6 @@
 package test
 
-// w40_task_acceptance_test.go:'s end-to-end acceptance for the
+// w40_task_acceptance_test.go: the end-to-end acceptance for the
 // one-shot task agent, carried into (the re-established #40,
 // owner ruling 2026-10-26: the OS sandbox is deleted, the feature body and
 // the PF_TASK_ID write-verb guard stay). Authored against #40's spec
@@ -41,7 +41,7 @@ package test
 // face here; the write-verb guard has its own frozen reproduction
 // (test/w53_task_write_verb_guard_repro_test.go). #40's read-only-boundary
 // scenarios went with the sandbox: a task agent's filesystem/network trust
-// now equals a session agent's ( owns platform-level isolation).
+// now equals a session agent's (owns platform-level isolation).
 
 import (
 	"os"

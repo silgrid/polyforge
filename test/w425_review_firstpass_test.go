@@ -1,6 +1,6 @@
 package test
 
-// w425_review_firstpass_test.go ( AC5): tools/review-firstpass
+// w425_review_firstpass_test.go (AC5): tools/review-firstpass
 // re-runs the rework baseline's measure over a capsules directory — the
 // first review's verdict per run, the plan's ex-ante write set (develop:
 // the initial units only), the <=7 / 8-22 / >22 buckets — and groups it by

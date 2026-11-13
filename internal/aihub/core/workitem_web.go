@@ -5,7 +5,7 @@ package core
 // page: fixed 20-row pages, newest first, keyset cursor, one status
 // filter and a case-insensitive goal/content substring search. The
 // readable-project set is pushed into the candidate SQL BEFORE the
-// page cut (the shipped anti-pressure property,): no
+// page cut (the shipped anti-pressure property): no
 // unreadable row costs a per-row membership lookup and none can appear
 // on a page.
 //

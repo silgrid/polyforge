@@ -4,7 +4,7 @@ package daemon
 // /jobs/{wi}/watch?after=<seq>: execution.json authority + events after a
 // cursor + job bookkeeping. `pf watch <wi> --once` and the Pi Web panel's
 // job detail read it. (The chat-subscription store that once shared this
-// file is retired,; human decisions are the decision feed,
+// file is retired; human decisions are the decision feed,
 // decisions.go.)
 
 import (

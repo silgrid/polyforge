@@ -119,7 +119,7 @@ function versionLineRank(core: [number, number, number]): [number, number, numbe
 }
 
 /** Non-blocking minimum-version hint (pure): SemVer 2.0 precedence
- *  the X.Y.Z cores, line-aware (see versionLineRank: a
+ * — the X.Y.Z cores, line-aware (see versionLineRank: a
  *  v0.2.x pf is newer than every 2.20.x floor), then a pre-release below its
  *  core release and pre-release identifiers by comparePreRelease, so
  *  `v0.2.0-<name>.9` is below `v0.2.0-<name>.10` (leading `v` tolerated, the

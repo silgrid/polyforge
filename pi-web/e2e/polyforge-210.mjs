@@ -432,8 +432,8 @@ try {
   }));
 
   await check("S210-10", async () => {
-    // (reverses #210's newest-50 cap by ruling) and
-    // (removed the 2000-line window): every line of the job is served and rendered.
+    // Later changes reversed #210's newest-50 cap by ruling and
+    // removed the 2000-line window: every line of the job is served and rendered.
     const response = await fetch(`${base}${ROUTE}?wi=${routeWi(5)}`, { signal: AbortSignal.timeout(30_000) });
     const body = await response.json();
     assert.equal(response.status, 200); assert.equal(body.lines.length, 60, "the read face serves every line under the bound");

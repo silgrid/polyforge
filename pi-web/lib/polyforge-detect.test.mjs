@@ -272,7 +272,7 @@ test("pf absent: 200-shaped flat JSON, every dependent field absent, daemon ‰∏çÈ
       capabilities: [],
       cellsSupported: false,
     }, "the absent state is flat, complete and carries no error field");
-    // R8 surface: exactly the eleven keys ( adds the
+    // R8 surface: exactly the eleven keys (adds the
     // capability pair), no home paths anywhere.
     assert.deepEqual(Object.keys(status).sort(), [
       "capabilities", "cellsSupported", "claudeSessionStartHook", "claudeSkillsSymlink", "daemon", "line",

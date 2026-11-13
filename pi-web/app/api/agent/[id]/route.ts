@@ -64,7 +64,7 @@ export async function POST(
       if (commandType === "set_effort" && !claudeCommandEffort(body)) {
         return NextResponse.json({ error: `Not a claude effort: ${String(body.effort)}` }, { status: 400 });
       }
-      // an unknown mode, or plan for a session whose approvals are not's
+      // an unknown mode, or plan for a session whose approvals are not the
       // ask (its live child's mode, else its next launch's; r3), touches nothing.
       const permissionModeRefusal = commandType === "set_permission_mode" ? claudeLaunchPermissionModeRefusal(body, claudeSessionApprovalMode(claudeRecord)) : null;
       if (permissionModeRefusal) return NextResponse.json({ error: permissionModeRefusal }, { status: 400 });

@@ -48,7 +48,7 @@ type StepSpec struct {
 	// Waivable mirrors `waivable` (contract 2; default false): the gate
 	// takes a hand-off `waive --per-owner`.
 	Waivable bool
-	// Skippable mirrors `skippable` (default false,): a
+	// Skippable mirrors `skippable` (default false): a
 	// project may switch the step off. Skipped is set by WithSkipped: the
 	// step is skippable and the work item's skipped-step set names it, so
 	// the driver never dispatches it.

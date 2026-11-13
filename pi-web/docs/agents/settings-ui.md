@@ -13,8 +13,8 @@
 
 ## Claude section
 - Settings › Claude's values live on the server in their own file, `<pi agent dir>/pi-web-claude-settings.json` (keys `launchPermissionMode`, `customModels`, `includeHookEvents`; `lib/claude-settings.ts`, the same tolerant read and serialized atomic 0600 write as the Agent language's file), and `PUT /api/claude-settings` (`app/api/claude-settings/route.ts`) is its only writer. `pi-web-settings.json` stays the Agent language's alone: `/api/agent-language` is still its only writer. What the values do to claude sessions, and the route's refusals: [claude-sessions.md](claude-sessions.md), "Settings › Claude".
-- **Place.** `"claude"` in `lib/settings-navigation.ts`'s `SETTINGS_SECTION_VALUES`, right before Polyforge, labelled 「Claude」 in every locale, with its own icon; not in `PROJECT_SECTIONS`, so it opens and restores with no project. It is claude's page alone, apart from pi's sections (General, Models, …): pi's settings never show there and claude's never in General (General's retired claude config-dir section stays gone,).
-- **Page** (`components/ClaudeSettings.tsx`, General's section look plus the shared `SettingsUi` blocks — `ConfigDetailGrid`, `ConfigSwitch`, `ConfigButton`, `ConfigNotice`). Top to bottom: the 「Claude」 heading and a note that the values apply to claude sessions created afterwards; **Default permission mode** (`settings.claudeLaunchPermissionMode`), a radio group in the Agent language's look — default labelled `claude.permissionModeDefault` (「默认（按 Claude Code 自身设置）」, the key the composer's control uses, owner ruling Q2=A), acceptEdits, and plan, enabled while's global claude tool permissions (Settings › General's `ClaudePermissionSettings`, read only here) are Ask in a dialog — GET /api/claude-settings' `planAvailable` — and otherwise disabled with `claude.permissionModePlanUnavailable` as visible text in its row, pointing to Settings › General (never only a tooltip; r3, plan D11); **Models**, claude's aliases from GET /api/claude read-only (each with the full name it resolves to) above the custom names, each with a Remove button, and one field + Add: a name that is not `isClaudeModelName` or already offered is refused on the spot as a visible line (`role="alert"`) and nothing is sent; **Show hook activity**, one `ConfigSwitch` with its description; then the read-only **Claude Code** block from GET /api/claude: the version, claude's own `capabilities` verbatim, and a table of Pi Web's three features (approvals, background tasks, subagent text forwarding), each Available / Not available / Unknown with its `basis` code rendered as text (the recorded threshold version,'s global claude tool permissions — Ask in a dialog or Deny silently, the environment variable), plus a `ConfigNotice` when the version is not in `CLAUDE_RECORDED_VERSIONS` (`versionRecorded` false) and visible lines for a claude not on PATH or a failed probe.
+- **Place.** `"claude"` in `lib/settings-navigation.ts`'s `SETTINGS_SECTION_VALUES`, right before Polyforge, labelled 「Claude」 in every locale, with its own icon; not in `PROJECT_SECTIONS`, so it opens and restores with no project. It is claude's page alone, apart from pi's sections (General, Models, …): pi's settings never show there and claude's never in General (General's retired claude config-dir section stays gone).
+- **Page** (`components/ClaudeSettings.tsx`, General's section look plus the shared `SettingsUi` blocks — `ConfigDetailGrid`, `ConfigSwitch`, `ConfigButton`, `ConfigNotice`). Top to bottom: the 「Claude」 heading and a note that the values apply to claude sessions created afterwards; **Default permission mode** (`settings.claudeLaunchPermissionMode`), a radio group in the Agent language's look — default labelled `claude.permissionModeDefault` (「默认（按 Claude Code 自身设置）」, the key the composer's control uses, owner ruling Q2=A), acceptEdits, and plan, enabled while the global claude tool permissions (Settings › General's `ClaudePermissionSettings`, read only here) are Ask in a dialog — GET /api/claude-settings' `planAvailable` — and otherwise disabled with `claude.permissionModePlanUnavailable` as visible text in its row, pointing to Settings › General (never only a tooltip; r3, plan D11); **Models**, claude's aliases from GET /api/claude read-only (each with the full name it resolves to) above the custom names, each with a Remove button, and one field + Add: a name that is not `isClaudeModelName` or already offered is refused on the spot as a visible line (`role="alert"`) and nothing is sent; **Show hook activity**, one `ConfigSwitch` with its description; then the read-only **Claude Code** block from GET /api/claude: the version, claude's own `capabilities` verbatim, and a table of Pi Web's three features (approvals, background tasks, subagent text forwarding), each Available / Not available / Unknown with its `basis` code rendered as text (the recorded threshold version, the global claude tool permissions — Ask in a dialog or Deny silently, the environment variable), plus a `ConfigNotice` when the version is not in `CLAUDE_RECORDED_VERSIONS` (`versionRecorded` false) and visible lines for a claude not on PATH or a failed probe.
 - **Saving.** Every change is one `PUT /api/claude-settings` of all three values; a control shows the new value only once the PUT succeeded, and a refusal or failure keeps the old value and shows `settings.claudeSaveError` with the route's reason (`role="alert"`), as the Agent language does. A failed read shows `settings.claudeLoadFailed` and no controls. Only claude sessions created afterwards take the values: an open session keeps its own, and its mode is switched from its composer.
 
 ## Plugins and skills
@@ -48,10 +48,10 @@ are described in
 [polyforge-panel.md](polyforge-panel.md#the-pages-host-and-cells-master-detail-workbench364).
 
 **Order and disclosure.** Each pane keeps the confirmed order
-of its part of the page ( split it into two homes). The Host
+of its part of the page (split it into two homes). The Host
 pane, top to bottom: the machine-status card, the Host region, the
 package-switch card, the Jobs card stream card, then the read-outs — recent
-panel writes, the install/upgrade command. Every Cell's pane (:
+panel writes, the install/upgrade command. Every Cell's pane (
 the default Cell's and each named Cell's alike, one `CellSettings`): the
 configuration surface (machine-scope note, the two source cards — the one
 file card of that Cell's own file (`cli.toml` / `cli-<profile>.toml`) with
@@ -175,7 +175,7 @@ removed or conditionally hidden; parts are folded:
   settings.json.
 
 A "Jobs card stream" card carries exactly two numeric
-controls for the dock's Jobs tab: title length (default 60, 10–200;
+controls for the dock's Jobs tab: title length (default 60, 10–200
 raised it from 30 so a goal fills the card's two-line clamp) and poll
 interval in seconds (default 3, 1–60), each a `ConfigDetailGridRow` with its
 input, a Save `ConfigButton` right after it and a visible hint. The values live
@@ -231,7 +231,7 @@ The page also has one spacing/row scale (card gap, card padding, row height,
 row divider), source tags inline with their key when width allows, history rows
 aligned `key | old → new | 回滚`, and the workflow card's step blocks as
 outlined blocks with a weightier title line and a subordinate editor inset —
-hierarchy and spacing only, no content removed ( density pass). A key outside the three live daemon keys has no daemon cell
+hierarchy and spacing only, no content removed (density pass). A key outside the three live daemon keys has no daemon cell
 (its file value takes that width); a live daemon key whose daemon value is
 unset shows the unset placeholder in that one cell. The Save button lives
 inside the row's value cell, directly beside its input — never in a far-right actions column. A
@@ -253,8 +253,8 @@ the left with its class badge flush right on the same line (the badge is never
 squeezed; a long key wraps instead), then the file value and the daemon value
 each across the whole row below; the header hides and nothing overflows
 horizontally. Also at ≤640px the Jobs-card preferences put their label above
-a full-width control and the workflow chain-add input spans its row
-. Wider layouts
+a full-width control and the workflow chain-add input spans its row.
+Wider layouts
 keep the shared columns. Below the pf capability floor,
 or an old list shape, the write controls are unavailable with visible reason
 text while detection keeps working. The step candidates are no longer a
@@ -357,6 +357,6 @@ claim.
 ## Shared blocks
 - Panels are built from the shared blocks in `components/SettingsUi.tsx` (`ConfigScopeTag`, `ConfigScopeSwitch`, `ConfigSaveTarget`, `ConfigAddSourceHeading`, `ConfigAddSourcePanel`, `ConfigDetailGrid`, `ConfigFooterStatus`, `ConfigTrustNotice`), `itemsToSwitch()` in `components/settings-ui-helpers.ts`, and `lib/display-path.ts`; a new settings section reuses them instead of copying a panel. `SettingsUi.tsx` takes every word as a prop and holds no state, so it renders outside the i18n provider; panels pass `t()` strings.
 - **Every add pane chooses global or project in one place:** a `ConfigSaveTarget` (scope switch aria-labelled `config.saveTo`, plus the path that choice writes to) first under the pane's title, where a detail pane shows its `ConfigScopeTag` and path. Skills, Plugins and MCP get it through `ConfigAddSourceHeading` (title, the catalog links at its right, then the save target); Sub-agents put it in the detail header in place of the tag while creating. The submit button stays where its flow needs it (Install under the source box or on each skill result, Save in the footer, Add at the end of the MCP form), with why it waits beside it, not under the save target. The path is shown whole, never cut short: it wraps after a separator (`<wbr>`), then anywhere. Sub-agents offer both scopes whatever the folder's trust: profiles are not project resources that wait for it.
-- **One inset, one scroll region.** The detail pane (`.config-detail`) keeps the shared 20 px inset on every edge and is the one vertical scroll region; a section page adds no extra bottom padding of its own ( removed Settings › Polyforge's `padding-bottom: 24px`, which made a 44 px bottom gap), and `e2e/polyforge-config-viewport.mjs` pins 20 ± 1 px on all four edges.
+- **One inset, one scroll region.** The detail pane (`.config-detail`) keeps the shared 20 px inset on every edge and is the one vertical scroll region; a section page adds no extra bottom padding of its own (removed Settings › Polyforge's `padding-bottom: 24px`, which made a 44 px bottom gap), and `e2e/polyforge-config-viewport.mjs` pins 20 ± 1 px on all four edges.
 - **Why a control is unavailable is visible text** — a scope switch's `disabledReason` (under the switch's whole line, so controls passed as its `children` stay level with it), the note under a detail header, a footer summary that opens its diagnostics — never only a `title` tooltip, which a touch screen cannot show.
 - `ConfigTrustNotice` shows its button only when given `onTrust`; Settings › MCP passes AppShell's trust dialog through `SettingsPanel` (see **Trust from Settings** in [mcp-settings.md](mcp-settings.md)). Skills and Plugins take the page's `trust` and reload after a decision but have no Trust button; adding one needs `onOpenTrustDialog` passed to them and `mcpProjectTrustable()`'s rule.

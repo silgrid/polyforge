@@ -1,8 +1,8 @@
 package cli
 
 // doctor_light_fallbacks_test.go: the light verification fallbacks row
-// ( U3; the scoped-gates row carried it until its check moved
-// into the workflow,).
+// (U3; the scoped-gates row carried it until its check moved
+// into the workflow).
 
 import (
 	"os"

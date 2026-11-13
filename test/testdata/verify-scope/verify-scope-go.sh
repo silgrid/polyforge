@@ -28,16 +28,16 @@
 #   2. GOWORK=off go build ./...
 #   3. GOWORK=off go vet ./...
 #   4. test -z "$(gofmt -l $(git ls-files '*.go'))"
-#      (tracked files only: pi-web/node_modules is never walked,)
+#      (tracked files only: pi-web/node_modules is never walked)
 #   5. python3 -I docs/design/polyforge-vnext/tools/check-xrefs.py
 #   6. GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./...
 #   7. GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./...
 #   8. cd workflows/_shared/scripts && python3 -m mypy --strict --python-version 3.9 pfstep tests *.py
-#      (pf CI's python-types job,)
+#      (pf CI's python-types job)
 #   full tier only:
 #   9. GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/test$') -count=1
 #  10. GOWORK=off go test -race -count=1 -timeout 30m ./internal/polyforge/daemon/
-#      (the daemon package under the race detector,)
+#      (the daemon package under the race detector)
 #  11. GOWORK=off sh test/e2e-parallel.sh
 #  12-16. the pi-web package's bar from pi-web/: npm ci,
 #      npm run lint, node_modules/.bin/tsc --noEmit, npm test,

@@ -1,6 +1,6 @@
 package driver
 
-// contractblock_test.go ( AC7): a capsule whose lane snapshot
+// contractblock_test.go (AC7): a capsule whose lane snapshot
 // targets another workflow contract version starts nothing — its workflow
 // parks blocked with kind contract, the reason naming both versions and
 // the docs/upgrade.md section — and a resume parks it again.

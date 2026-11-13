@@ -419,8 +419,8 @@ class HubLister:
 def waivers_of(attrs: Mapping[str, Any], integration: Mapping[str, Any]) -> Optional[List[Any]]:
     """An item's owner waivers: its attrs.waivers when the attrs carry the
     key (a contract 4 wrap writes it), else — an item that landed before
-    contract 4 — its integration record's `waived` (owner ruling R13,
-). Transition code for the upgrade across contract 4:
+    contract 4 — its integration record's `waived` (owner ruling R13).
+    Transition code for the upgrade across contract 4:
     delete the fallback (and the integration record's `waived` reading) once
     no project's pool holds an item that landed before contract 4 — every
     such item merged or reverted by an integration batch."""

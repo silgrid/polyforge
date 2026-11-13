@@ -359,7 +359,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   const claudeActionsLocked = isClaudeSession && (agentRunning || isCompacting);
   const claudeEditable = useMemo(() => new Set(claudeEditEntryIds), [claudeEditEntryIds]);
   // A fresh composer picks pi or claude side by side with the model selector
-  // (claude's model names when claude is chosen,) and, for claude, its effort; an
+  // (claude's model names when claude is chosen) and, for claude, its effort; an
   // open claude session switches its model and effort while idle, never its harness.
   const claudeComposer = useMemo<ClaudeComposerState | undefined>(() => {
     if (isNew) {
@@ -387,7 +387,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       // the session's permission mode (absent from its row = default) and its in-session switch.
       launchPermissionMode: claudeSessionChoices?.launchPermissionMode ?? CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT,
       onLaunchPermissionModeChange: handleClaudeLaunchPermissionModeChange,
-      // r3: plan is offered unless the session's approvals are's deny.
+      // r3: plan is offered unless the session's approvals are on deny.
       planAvailable: claudeSessionChoices?.planAvailable !== false,
       switchError: claudeSwitchError,
       stateKnown: claudeStateKnown,

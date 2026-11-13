@@ -9,7 +9,7 @@ import test from "node:test";
 import { createJiti } from "jiti";
 
 // POST /api/polyforge/answer (workflow contract v2 §5.2 / §5.4, change 14;
-// workflow contract 4,): the job card's one input box runs
+// workflow contract 4): the job card's one input box runs
 // `pf --json answer <wi> --text=<words>` with no question id — the daemon
 // tells a reply from an interjection, and wakes a parked work item; the
 // words go verbatim; the daemon's acknowledgement comes back as `ack`, a

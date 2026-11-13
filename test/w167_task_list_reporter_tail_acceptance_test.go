@@ -1,7 +1,7 @@
 package test
 
 // w167_task_list_reporter_tail_acceptance_test.go: the real-binary e2e
-// acceptance suite for — `pf --json task list` gains
+// acceptance suite — `pf --json task list` gains
 // `reporter` (the spawn-time display-name snapshot, else `machine`) and
 // `report_tail` (one bounded report line), while the text table and every
 // existing row field stay unchanged.

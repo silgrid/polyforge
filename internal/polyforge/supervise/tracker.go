@@ -565,7 +565,7 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 }
 
 // ClockStart is where rule 3's clock of this call starts: its start, or
-// its sub-agent's newest inner record when that is later (:
+// its sub-agent's newest inner record when that is later (
 // a sub-agent call is judged on its silence, not on its whole run).
 func (r ToolRun) ClockStart() time.Time {
 	if r.LastActive.After(r.Since) {

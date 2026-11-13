@@ -10,7 +10,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
-// TestOpsRoleIsTheMachineRoleEntry ( AC5): the interactive
+// TestOpsRoleIsTheMachineRoleEntry (AC5): the interactive
 // role request and its --force takeover — once a side effect of `pf chat
 // init` — are `pf ops role`; the default Cell unless --profile names one.
 func TestOpsRoleIsTheMachineRoleEntry(t *testing.T) {

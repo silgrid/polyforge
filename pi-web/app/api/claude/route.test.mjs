@@ -41,7 +41,7 @@ const ALIASES = [
 ];
 const CAPABILITIES = ["ui_surface_v1", "mcp_call_result_not_for_model_v1", "mcp_call_check_permissions_v1"];
 const RECORDED = ["2.1.312", "2.1.319", "2.1.322"];
-// r3: approvals follow's global permission mode; no
+// r3: approvals follow the global permission mode; no
 // claude-permissions.json reads as its default, ask.
 const permissionConfig = path.join(agentDir, "claude-permissions.json");
 const FEATURES_322 = [
@@ -130,7 +130,7 @@ test("GET /api/claude answers Pi Web's three claude features with their basis ne
     { id: "subagentText", available: null, basis: "version-unknown" },
   ]);
 
-  //'s global mode on deny: Pi Web starts claude with --permission-prompts none.
+  // the global mode on deny: Pi Web starts claude with --permission-prompts none.
   process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
   fs.mkdirSync(agentDir, { recursive: true });
   fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, mode: "deny", push: false }));

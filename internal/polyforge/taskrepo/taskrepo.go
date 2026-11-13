@@ -7,7 +7,7 @@
 // Git adds the read's own rules: system config ignored, inherited GIT_*
 // stripped, a hard timeout. The driver's and the daemon's reads of the task
 // repos use Git (it was the facts package's, whose computations moved to
-// the workflow's facts.py,); the step scripts' pfstep/git.py
+// the workflow's facts.py); the step scripts' pfstep/git.py
 // pins only the fsmonitor and the hooks.
 //
 // Reachability: no daemon, no aihub, no credential; the git on PATH.

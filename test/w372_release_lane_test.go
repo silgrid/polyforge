@@ -1,7 +1,7 @@
 package test
 
 // w372_release_lane_test.go: one regression test per release-lane failure
-// class of (17 failed_gate + 1 rollback since 2026-10-29; the
+// class (17 failed_gate + 1 rollback since 2026-10-29; the
 // classification table is in docs/reference/release.md). Every test runs the
 // real .polyforge/release.sh / deploy.sh against the fake environments of
 // release_script_test.go and deploy_image_test.go: no network, no registry,

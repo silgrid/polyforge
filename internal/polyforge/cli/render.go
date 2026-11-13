@@ -188,9 +188,9 @@ type WIView struct {
 	Comments []api.Comment `json:"comments"`
 	// AcceptanceMissing is set by pf queue (never by the server) on a
 	// queued execution ticket whose content lists no acceptance criterion
-	// while its lane requires one (the lane's `acceptance` declaration,
-	//): the auto-pull wave skips it and it needs interaction
-	// first (; markAcceptanceMissing).
+	// while its lane requires one (the lane's `acceptance` declaration):
+	// the auto-pull wave skips it and it needs interaction
+	// first (markAcceptanceMissing).
 	AcceptanceMissing bool `json:"acceptance_missing,omitempty"`
 }
 

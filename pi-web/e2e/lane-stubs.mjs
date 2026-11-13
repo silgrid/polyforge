@@ -1,7 +1,7 @@
 // pi-web- (wi_ISnuy5WMLcdm) e2e shared fixtures: the offline gh CLI stub
 // and stub-file helpers, first authored for the repo-level release/deploy
 // lane suites (retired with those scripts when pi-web joined the Polyforge
-// repository,) and still shared by the deploy-piweb.sh suites
+// repository) and still shared by the deploy-piweb.sh suites
 // that import it: deploy-pf-bin, deploy-served-installed,
 // deploy-service-shape, deploy-install-channel, deploy-tunnel,
 // deploy-tunnel-variants, deploy-tunnel-dead-connector and

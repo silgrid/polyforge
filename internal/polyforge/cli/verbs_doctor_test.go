@@ -98,8 +98,8 @@ func liveDaemonSocketLanes(t *testing.T, machineID, lanes string) string {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// a daemon reports the PATH its in-process commands run under
-		//: this test process's, which carries git; its
+		// a daemon reports the PATH its in-process commands run under:
+		// this test process's, which carries git; its
 		// steps' PATH also holds its own pf
 		commandPath, _ := json.Marshal(os.Getenv("PATH"))
 		stepPath, _ := json.Marshal(pfDir + string(os.PathListSeparator) + os.Getenv("PATH"))

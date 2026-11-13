@@ -2,8 +2,8 @@ package workflow_test
 
 // c4_skill_sections_test.go: workflow contract 4 moves what a step reads
 // and checks before it starts, and what its hand-off carries, out of lane
-// keys (inputs, verifies, outputs) into prose (design #483 §12 row 10,
-//). Every step of the four built-in lanes says both: its
+// keys (inputs, verifies, outputs) into prose (design #483 §12 row 10).
+// Every step of the four built-in lanes says both: its
 // skill carries the two sections, and a step without a skill carries them
 // in its own definition. The loader does not judge prose; this test does.
 

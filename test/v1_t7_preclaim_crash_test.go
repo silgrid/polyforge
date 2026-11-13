@@ -213,7 +213,7 @@ func TestV1T7PreClaimCrashJournalReplay(t *testing.T) {
 	// the released proxy now forwards untouched, and the Cell's recorded
 	// AIHub identity is the --server it first started on, so a restart
 	// against another URL would be refused as a different identity
-	// domain ( Cell identity rule). The startup replay must verify the journaled session
+	// domain (Cell identity rule). The startup replay must verify the journaled session
 	// (matches), re-claim with the SAME secret (D4: the same answer comes
 	// back — no second session, no ALREADY_HELD refusal) and finish the
 	// start: the adopted driver dispatches its first step process, then

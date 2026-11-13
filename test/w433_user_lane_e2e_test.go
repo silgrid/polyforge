@@ -1,6 +1,6 @@
 package test
 
-// w433_user_lane_e2e_test.go ( AC5, workflow contract "User
+// w433_user_lane_e2e_test.go (AC5, workflow contract "User
 // lanes"): a user lane written from the reference document alone runs a
 // work item to the end. The lane is the reference's own worked example —
 // the fenced files of docs/reference/workflow-contract.md's "A user lane,

@@ -33,7 +33,7 @@ func TestW78CouplingRulesLiveInAgentsMd(t *testing.T) {
 		t.Errorf("w78: AGENTS.md must name the known coupling %q", "skills/polyforge/verbs/doctor.md")
 	}
 	// every shipped step definition (the retired lanes' plan steps this
-	// once named went with)
+	// once named were removed)
 	steps, err := filepath.Glob(filepath.Join(root, "workflows", "*", "steps", "*.md"))
 	if err != nil || len(steps) == 0 {
 		t.Fatalf("w78: no shipped step definitions found (%v)", err)

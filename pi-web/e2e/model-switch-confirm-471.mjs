@@ -35,7 +35,7 @@ const { artifacts, scratch, agentDir, project } = kit;
 
 const PI_FROM = { id: "fake-model", name: "Fake Model" };
 const PI_TO = { id: "fake-model-2", name: "Fake Model 2" };
-// The session starts on a full name (listed beside claude's aliases,) and
+// The session starts on a full name (listed beside claude's aliases) and
 // switches to one of the aliases claude's initialize answer lists.
 const CLAUDE_FROM = "claude-opus-5-5";
 const CLAUDE_TO = "fable";

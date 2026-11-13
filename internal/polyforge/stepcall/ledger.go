@@ -245,7 +245,7 @@ func StepHandoffs(lines []Line, step string) []Line {
 // PendingOps answers the hub writes the dispatches of one step round
 // recorded pending, in declaration order, except the ones a hand-off of
 // that round dropped. A write belongs to its step round, not to the
-// dispatch that recorded it (owner ruling R8,): a dispatch
+// dispatch that recorded it (owner ruling R8): a dispatch
 // that died before its hand-off leaves its writes to the next dispatch of
 // the round, and the round's done makes them all (each idempotent by its
 // key, fence or hold, so a repeat makes nothing twice).

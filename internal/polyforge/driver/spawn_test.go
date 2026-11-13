@@ -607,7 +607,7 @@ func TestSpawnStepResumeWithoutJournalLineDegradesToFresh(t *testing.T) {
 // rewindStepSpawn is the rewind re-entry shape the driver's
 // prepareDispatch hands the adapter: a resume of the previous dispatch's
 // conversation on a pending rewind target (the ledger's rewind cause
-// derives the resume;).
+// derives the resume).
 func rewindStepSpawn(harnessID string) StepSpawn {
 	return StepSpawn{StepID: "verification", SpawnN: 3, Resume: true, Harness: harnessID}
 }
@@ -1044,7 +1044,7 @@ func TestSpawnStepFastPathDecision(t *testing.T) {
 	})
 }
 
-// TestCapsuleReclaimed pins the re-claim detection ( owner
+// TestCapsuleReclaimed pins the re-claim detection (owner
 // ruling): a materialization marker that postdates the recorded failure
 // attempt is a re-claim (the fast path is refused); a marker that
 // predates it is the same claim; a missing or unparsable marker fails

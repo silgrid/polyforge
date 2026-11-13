@@ -1,6 +1,6 @@
 package cellcfg
 
-// w350_hostlock_test.go ( D1): the data dir's Host lock is
+// w350_hostlock_test.go (D1): the data dir's Host lock is
 // exclusive — a second holder (a Host start while a migration runs, or the
 // reverse) is refused with ErrHostLockHeld naming daemon.lock — it is
 // released by Close, and it never creates a missing data dir.

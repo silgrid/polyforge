@@ -116,7 +116,7 @@ const h = createHarness({
       "messages/*": () => ({ capable: true, messages: [], last_seq: conversation.last_seq, has_older: false }),
     });
     // the stats strip's context reading comes from the mount's
-    // state read; the page's live status read ( / #236 / #247) is
+    // state read; the page's live status read (/ #236 / #247) is
     // pinned to the same reading.
     await mockContextUsage(page, SESSION, CONTEXT_USAGE);
   },

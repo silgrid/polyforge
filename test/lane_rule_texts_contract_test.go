@@ -4,7 +4,7 @@ package test
 // narrowed to removals the work item does not name, micro is a down-lane
 // target only for an eligible pure text ticket, and the weak-test rule
 // applies only to tests that pin new or changed behaviour. (The retired
-// lanes' grill and chore texts it also pinned went with.)
+// lanes' grill and chore texts it also pinned were removed.)
 
 import (
 	"strings"

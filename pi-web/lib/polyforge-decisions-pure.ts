@@ -2,8 +2,8 @@ import type { PolyforgeJob } from "./polyforge-status";
 import { isPolyforgeTaskId } from "./polyforge-tasks-pure";
 
 /**
- * Client-safe vocabulary of the Polyforge panel's decision feed
- *: the daemon's machine-level feed of every human decision
+ * Client-safe vocabulary of the Polyforge panel's decision feed:
+ * the daemon's machine-level feed of every human decision
  * (`GET /decisions`, printed verbatim by `pf --json watch decisions`), its one
  * sanitizer, the Polyforge button's attention items and click walk, the
  * feed-only attention cards of dropped work items, and the jump
@@ -205,7 +205,7 @@ function jobMatches(job: Pick<PolyforgeJob, "wi" | "slug" | "profile">, decision
   return Boolean(named) && profileOf(job) === profileOf(decision);
 }
 
-/** Where an entry leads ( owner ruling 2026-11-09: every
+/** Where an entry leads (owner ruling 2026-11-09: every
  *  interaction belongs to its work item): a work item → its job detail in
  *  Work › Jobs — the live job of the last status read (its Cell), else the
  *  work item by id in the entry's own Cell (a job the daemon dropped still
@@ -312,8 +312,8 @@ export function attentionItems(waitingJobs: readonly PolyforgeJob[], decisions: 
   return items;
 }
 
-/** The work items that need attention but that the daemon no longer holds
- *: the open work-item entries carrying a `wi` whose item
+/** The work items that need attention but that the daemon no longer holds:
+ *  the open work-item entries carrying a `wi` whose item
  *  matches none of `jobs` (by wi, else slug, in the same Cell — the jump
  *  target's rule), one per item (`<profile>/<wi>`), its newest entry, newest
  *  first in feed order. Blocked, failed, submit_rejected, submit_dropped,

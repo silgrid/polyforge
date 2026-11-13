@@ -173,7 +173,7 @@ func TestClaudeSummarizeInitRejectsDefaultTools(t *testing.T) {
 // init. It requires an empty init.tools, no cross-session inbox (no socket
 // under the run's TMPDIR), a run that reached the model, and that the call
 // left no session record under the config dir's projects/ (the dispatch
-// runs with --no-session-persistence,).
+// runs with --no-session-persistence).
 func TestClaudeSummarizeRealProbe(t *testing.T) {
 	if os.Getenv("POLYFORGE_TEST_REAL_CLAUDE") != "1" {
 		t.Skip("this probe launches a REAL claude process with the harness root's credentials; set POLYFORGE_TEST_REAL_CLAUDE=1 to run it")

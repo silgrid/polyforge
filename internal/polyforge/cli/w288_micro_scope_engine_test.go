@@ -2,7 +2,7 @@ package cli
 
 // w288_micro_scope_engine_test.go: the engine's micro declaration
 // (micro_path=, micro_check=) and its `--micro` evidence mode
-// (workflows/_shared/scripts/verify-scope,). Every case runs the in-tree engine
+// (workflows/_shared/scripts/verify-scope). Every case runs the in-tree engine
 // in a git fixture, never the release-installed copy. --json needs
 // python3, a documented prerequisite — without it the test skips and says
 // so.

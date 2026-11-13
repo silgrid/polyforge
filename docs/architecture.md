@@ -11,8 +11,8 @@ the one concept this page assumes; every term a newcomer meets is
 defined on the [concepts page](concepts.md).
 
 The aihub server's only HTML face is the **read-only web console** on
-`/web/…` — a React single-page app embedded in the server (`pf aihub`)
-: work items, memories, machines and project-scoped
+`/web/…` — a React single-page app embedded in the server (`pf aihub`):
+work items, memories, machines and project-scoped
 search, all behind HTTP Basic authentication (an api key as the
 password). Everything else the server answers is the JSON API or the
 git proxy. The console's data comes from its private, non-contractual

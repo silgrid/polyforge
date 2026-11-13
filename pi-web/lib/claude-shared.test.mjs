@@ -80,7 +80,7 @@ test("every claude feature threshold is a recorded fixture version", () => {
   }
 });
 
-// r3 (owner ruling 2026-11-13T07:40:00Z):'s naming wins on the default
+// r3 (owner ruling 2026-11-13T07:40:00Z): the naming wins on the default
 // branch, so #445's launch permission mode (claude's --permission-mode) has its own names.
 test("the launch permission mode is its own vocabulary: default, acceptEdits and plan under CLAUDE_LAUNCH_PERMISSION_MODES, apart from's approval modes ( r3)", () => {
   assert.deepEqual(shared.CLAUDE_LAUNCH_PERMISSION_MODES, ["default", "acceptEdits", "plan"]);

@@ -13,7 +13,7 @@ the Polyforge button. Files: `lib/polyforge-status.ts`, `lib/polyforge-decisions
 `lib/polyforge-messages-pure.ts`, `lib/polyforge-cards.ts`, `lib/polyforge-cards-pure.ts`,
 `lib/polyforge-panel-preferences.ts`, `lib/polyforge-conversation-pure.ts` (the job card's conversation, workflow contract v2 change 14), `lib/polyforge-disclosure.ts`, `lib/polyforge-messages-collapse.ts`, `lib/polyforge-messages-list-collapse.ts`, `app/api/polyforge/**`,
 `hooks/usePolyforge.ts`, `hooks/usePolyforgePanelPreferences.ts`, `hooks/usePolyforgeDisclosure.ts`, `hooks/usePolyforgeMessagesCollapse.ts`, `hooks/usePolyforgeMessagesListCollapse.ts`, `components/PolyforgePanel.tsx`,
-`components/PolyforgeMessages.tsx`, `components/PolyforgeAnalysisCard.tsx`, `components/PolyforgeFileTicketDialog.tsx`, `components/PolyforgeJobComposer.tsx` (the job card's conversation, workflow contract v2 change 14; a parked work item's message wakes it, workflow contract 4; no buttons,), `components/PolyforgeDecisionEntry.tsx` (a task's feed entries in Work › Tasks,), the `polyforge.*` wiring in
+`components/PolyforgeMessages.tsx`, `components/PolyforgeAnalysisCard.tsx`, `components/PolyforgeFileTicketDialog.tsx`, `components/PolyforgeJobComposer.tsx` (the job card's conversation, workflow contract v2 change 14; a parked work item's message wakes it, workflow contract 4; no buttons), `components/PolyforgeDecisionEntry.tsx` (a task's feed entries in Work › Tasks), the `polyforge.*` wiring in
 `components/AppShell.tsx`, the dock width
 and sheet height constants in `lib/panel-layout.ts`, the resize handles
 `hooks/useResizablePanel.ts` / `hooks/useResizableSheet.ts` and their
@@ -40,14 +40,14 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   (see [Context meter](#context-meter-workbench384)); absent outside a
   dispatch and when nothing about it is known.
   Pf absent answers `{pfPresent:false,status:null}` (no error; the client only
-  re-probes this route, every 30 s and on window focus —); daemon down / auth failure / hang answer `{pfPresent:true,status:null,error}`.
+  re-probes this route, every 30 s and on window focus); daemon down / auth failure / hang answer `{pfPresent:true,status:null,error}`.
 - `GET /api/polyforge/watch?wi=<slug|wi_id>` → 200 `{status:{wi,slug,workflowStatus,
   currentStep,updatedAt,steps:[{name,status,startedAt?}],declared_steps:[{id}]|null,
   events:[{at,kind,step?,…,question?,question_id?,by?,disposition?,intent?}],progress?:{command,command_age_sec,tool_calls,
   recent_files},origin?:{kind:"chat",owner},summary?,summary_age_sec?,
   summary_error?,summary_capped?,blocked?:{kind,step?,reason,requiredAction?},
   pendingQuestion?:{id,step?,question,askedAt?}} | null, error?}`
-  (`blocked`:'s optional addition,
+  (`blocked`: the optional addition,
   [Decision feed](#decision-feed-workbench415); `pendingQuestion` and the
   admitted `awaiting_owner` / `owner_message` / `delivered` / `intent` event
   fields: workflow contract v2 change 14, [Job card
@@ -58,7 +58,7 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   absent when missing or malformed on the wire, and every existing field is
   unchanged.
 - `POST /api/polyforge/answer` `{wi, profile?, text}` (workflow contract v2
-  change 14; workflow contract 4,) → the job card's one input
+  change 14; workflow contract 4) → the job card's one input
   box: `pf [--profile p] --json answer <wi> --text=<words>` — no question
   id, no option — the owner's words to the work item's current step agent
   through the owner-message relay (a reply to its open `pf step ask`, or an
@@ -209,7 +209,7 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   `default`) and `class` (`live`) and the unconditional `default` and
   `task` entries of every mapped project (workflow contract 4,
   no `attrs`; an older pf's are dropped by the sanitizer).
-- `POST /api/polyforge/config` the only write entry point.
+- `POST /api/polyforge/config` — the only write entry point.
   JSON body `{action:"set"|"unset", key, value?, cwd?, expect_state?}`; the
   exact writable allowlist is every non-secret cli.toml key —
   `max_concurrent_jobs`, `step_timeout`, `stall_window`, `claude_bin`,
@@ -314,10 +314,10 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   and every other method 405), `isApiRequestAllowed` re-checked in-route (403,
   and a malformed `profile`'s 400, the only non-2xx). Step-chain writes do not go here: they reuse
   `POST /api/polyforge/config`.
-- `POST /api/polyforge/config/reload` `pf config reload` then
+- `POST /api/polyforge/config/reload` — `pf config reload` then
   an independent `pf --json ops status` read, so the response carries the
   daemon's own newly loaded values.
-- `GET|POST /api/polyforge/config/history` the bounded
+- `GET|POST /api/polyforge/config/history` — the bounded
   (50-entry) panel history at `<agentDir>/polyforge-config-history.json`
   (mode 0600, newest first). POST is rollback: a fresh read, then the same CAS
   write path, recorded as a new entry; a workspace (step-key) entry rolls back
@@ -415,8 +415,8 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   optional fields degrade one by one (`wi` must be `wi_…`, `profile` a Cell
   name, `question_id` the question-id shape, `task_id` the daemon's `task_` + 16 lowercase hex, `isPolyforgeTaskId`); `phrase`
   ≤200 and `text` ≤16,000 characters (verbatim, whitespace kept); `replied`
-  is true only for a boolean true and `replied_at` (the owner's reply stamp,
-) is bounded like `at`; unknown
+  is true only for a boolean true and `replied_at` (the owner's reply stamp)
+  is bounded like `at`; unknown
   fields never leave; the daemon's order (newest first) is kept; `attention`
   is the wire count, else the open entries counted. pf absent →
   `{pfPresent:false, feed:null}`; a failed or undecodable read →
@@ -491,7 +491,7 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   snapshot's `blocked`, not the feed, so the card is the entry's only home).
   The card shows the newest carried entry's reason (its phrase, else its
   class label) and a 忽略 that dismisses all of them in one post (owner
-  ruling 2026-11-12,); it stays a live card. A work item the
+  ruling 2026-11-12); it stays a live card. A work item the
   daemon no longer holds has its feed-only attention card in the Jobs row,
   with the newest open entry's reason and a 忽略 that dismisses every open
   entry of the item ([Attention cards](#jobs-tab-card-stream-workbench125)).
@@ -522,8 +522,8 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   command is `pf cancel <wi>`); the
   job card's composer keeps its input box for the same park (a message
   wakes it) unless its agent cannot start ([Job card conversation](#job-card-conversation-workflow-contract-v2-change-14)).
-- **Resume (继续,).** <a id="resume-继续-workbench415"></a>
-  There is no 继续 button ( deleted it with 取消 and 打回到…
+- **Resume (继续).** <a id="resume-继续-workbench415"></a>
+  There is no 继续 button (deleted it with 取消 and 打回到…
   and their routes): a parked item is woken by a message in the job card's
   box ([Job card
   conversation](#job-card-conversation-workflow-contract-v2-change-14)); the
@@ -543,7 +543,7 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   Polyforge button's attention walk both select the work item by id in the
   entry's Cell (`decisionJumpTarget`: the live job's ref and Cell, else
   `{ref: wi, profile}`), which opens that detail in Work › 作业, selected —
-  nothing else opens (; its `blocked` cause above the input
+  nothing else opens (its `blocked` cause above the input
   box). The card itself also shows the newest open entry's reason and a 忽略 that dismisses
   every open entry of the item (see Attention cards). An
   informational entry of a work item is listed nowhere.
@@ -553,7 +553,7 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   (`[data-pf-task-attention]`, an accent dot; the row is a button, so the
   entries themselves are in the detail); the task's detail lists its entries
   (`[data-pf-task-decisions]`, the summary text, dismiss while open).
-- **The Polyforge button's attention state** (; #413's count,
+- **The Polyforge button's attention state** (#413's count,
   widened by #415) counts what needs a human (`attentionItems`, unchanged):
   the needs_input jobs (`needsInputJobs`, `lib/polyforge-conversation-pure.ts`:
   the status face says `needs_input` for an open `pf step ask`) in list order,
@@ -576,7 +576,7 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   `nextAttentionItem`): the item after the last one it opened (wrapping; the
   first time the selected waiting job stands in, as #413's walk did) to its
   target (`attentionTarget`): a waiting job or a work item entry → its job
-  detail in Work › 作业, selected — nothing else opens (;
+  detail in Work › 作业, selected — nothing else opens (
   re-selecting the shown job keeps its snapshot; the waiting job's question sits in its card's
   conversation above the input box); a task entry → Work › 任务 on that task
   (`taskRequest`, handed to `openTaskId`). Every other click toggles the
@@ -626,7 +626,7 @@ event fields in `lib/polyforge-status.ts`.
   等待 owner label and the time, the text rendered as Markdown through
   `SafeMarkdownBody` like narration — the step-ask question table as a
   table, inline code, bold — and over `MAX_MARKDOWN_CHARS` inline in full as
-  plain `pre-wrap` text, no reveal box,); `owner` — an
+  plain `pre-wrap` text, no reveal box); `owner` — an
   `owner_message` event's `text`, verbatim and masked, with `by`, rendered
   as the user's bubble on the right (`[data-pf-progress-kind="owner"]`,
   `var(--user-bg)`, plain text never Markdown — the words are the owner's
@@ -647,7 +647,7 @@ event fields in `lib/polyforge-status.ts`.
   stay dropped: the step prompt is the daemon's, and the owner's words come
   from the event with their stamp (the `[pf-msg:<at>]` framing never
   shows). The progress read (`usePolyforgeProgress`) is the panel's own and
-  keeps's rule (`progressLive`: it polls while the job runs; a
+  keeps the rule (`progressLive`: it polls while the job runs; a
   job that starts waiting is read once on that change, its ask line
   included; a reply makes it run again, the status read flips it back and
   the poll resumes); the composer under the scroll region shares the
@@ -667,9 +667,9 @@ event fields in `lib/polyforge-status.ts`.
   `data-pf-chat-state` = `awaiting` | `running` | `parked` (with
   `data-pf-chat-park` = `blocked` | `paused`) | the closed reason), under
   the detail's scroll region (nothing floats over the scroller since
- deleted the 交互 button). It holds no running sub-agent list
-: a running subagent is its entry in the flow
-  (`[data-pf-progress-subagent-id=<id>]`,), expanded by its
+  deleted the 交互 button). It holds no running sub-agent list:
+  a running subagent is its entry in the flow
+  (`[data-pf-progress-subagent-id=<id>]`), expanded by its
   own toggle.
   - the question strip (`[data-pf-chat-question]`,
     `data-pf-chat-question-id`), only while the job waits: the watch
@@ -736,7 +736,7 @@ event fields in `lib/polyforge-status.ts`.
   waiting step shows none, even with a stale `blocked`. The commands
   follow the park: a wakeable park `pf resume` alone, the contract park
   `pf cancel` alone (no box), a `candidates` park `pf resume` · `pf cancel`.
-- **A park whose agent cannot start** (design #483 §7,): only
+- **A park whose agent cannot start** (design #483 §7): only
   then — and for the states no message could reach — the box gives way to
   the reason (`[data-pf-chat-closed=<reason>]`,
   `polyforge.chat.closed.<reason>`) and, when no agent can start, the
@@ -793,7 +793,7 @@ event fields in `lib/polyforge-status.ts`.
   `instrumentation-node.ts`, the Go pins `test/w413_discussion_liveness_test.go`
   and `w413_asked_by_wire_test.go` with the `polyforge-413` fixture, the
   `polyforge.question.*` / `polyforge.discussion.*` / `polyforge.answer.*`
-  / `polyforge.options.*` phrases — and's option buttons
+  / `polyforge.options.*` phrases — and the option buttons
   (`PolyforgeQuestionOptions`, `pf answer --question --option` from a
   click); workflow contract v2 change 19 then took the composer's
   transitional option path (`routeOwnerMessage`, the options listed as
@@ -819,7 +819,7 @@ event fields in `lib/polyforge-status.ts`.
   message sent as words; S487-1 a message waking a blocked and a paused
   item, S487-2 the WAKE_CANNOT_START refusal with the words kept), with the
   decisions-415, attention-458 and smoke suites retargeted (the
-  rewind-420 suite left with the form,).
+  rewind-420 suite left with the form).
 
 ## Work tab
 
@@ -831,7 +831,7 @@ the Work tab carries no count. The former Jobs and Tasks tabs are Work's
 first two sub-tabs (作业/任务 in zh-CN, 作業/任務 in zh-TW, so the workflow jobs
 and the one-shot tasks read apart from pi's own background-tasks surface),
 followed by the read-only work item list (工单列表 / 工單列表 /
-Work items, `polyforge.work.itemsTab`) and the integration view (:
+Work items, `polyforge.work.itemsTab`) and the integration view (
 待集成 / 待整合 / Integration, `polyforge.work.integrateTab`) — order 作业,
 任务, 工单列表, 待集成 — in their
 own tablist (`data-pf-tabstrip="work"`) placed after the main area in the
@@ -854,7 +854,7 @@ is a column (`data-pf-work-layout`) of two parts. The top part
 (`data-pf-work-top`) is the row: the main area (`data-pf-work-main`) shows the
 selected sub-tab's list — the Jobs queue line and card row, the Tasks list or
 the 工单列表 list, each with its own search and filters, or the 待集成 view
-and the rail sits beside it on the right. The lower part (`data-pf-work-detail`, a top border)
+— and the rail sits beside it on the right. The lower part (`data-pf-work-detail`, a top border)
 spans the whole panel width and holds the selected item's detail: the job
 detail (its one scroll region) with the input box (`PolyforgeJobComposer`)
 at its bottom; a task's report; a work item's detail. Jobs shows the lower
@@ -979,7 +979,7 @@ included (replacing the earlier one-view-at-a-time mobile
 switch) — the same component keeps both panes side by side. On the mobile
 sheet the expanded list column keeps the fixed
 `clamp(120px, 35%, 220px)` with its left divider and no resize handle (about
-131px at a 375px sheet, the 120px floor at 320px;), and folds to
+131px at a 375px sheet, the 120px floor at 320px), and folds to
 its own 40px strip through the shared key (below); the chat
 pane sits beside it, shows
 选择一个会话 (`polyforge.messages.select`) while nothing is open — nothing is
@@ -1154,7 +1154,7 @@ helpers, `directRows`, the flat direct area's row sequence,
   `{error}` only: there is no invented error-code field. pf runs with `--json`,
   so its stderr envelope `{code, detail}` (or plain `CODE: text`) is decoded
   and only `detail` reaches the panel.
-- `POST /api/polyforge/messages/analyze` JSON-only
+- `POST /api/polyforge/messages/analyze` — JSON-only
   `{message_id}`, validated before any spawn. pf below the **analysis floor**
   (`POLYFORGE_ANALYZE_MINIMUM_PF_VERSION = "2.20.18"`, the release whose
   `pf msg analyze` runs one task) answers 400 `{error, upgrade: true}` and
@@ -1178,7 +1178,7 @@ helpers, `directRows`, the flat direct area's row sequence,
   `interrupted` task, named in pf's text) and an unreachable pf answer 200
   `{error}` (this repo has no 5xx route path). The analysis exists only in the
   response and in page memory; nothing is written or logged.
-- `POST /api/polyforge/messages/prompt` the Messages 「@」
+- `POST /api/polyforge/messages/prompt` — the Messages 「@」
   action. Reach: pi-web's authenticated surface only (the in-route
   `isApiRequestAllowed` gate, 403). JSON-only `{message_id}`, validated
   before any spawn. pf below the **prompt floor**
@@ -1198,7 +1198,7 @@ helpers, `directRows`, the flat direct area's row sequence,
   failed/capped/interrupted task or a blank report) and an unreachable pf
   answer 200 `{error}`. The prompt exists only in the response and in the
   panel's component memory; nothing is written or logged.
-- `POST /api/polyforge/messages/file-ticket` the analysis
+- `POST /api/polyforge/messages/file-ticket` — the analysis
   card's 【建票】 confirm, JSON-only `{goal, project, content}`. Reach:
   whoever can already reach pi-web's authenticated surface — the same in-route
   `isApiRequestAllowed` gate as the other messaging writes (403); it holds no
@@ -1227,7 +1227,7 @@ helpers, `directRows`, the flat direct area's row sequence,
   refusal (non-admin, AUTH-403) or an unreachable pf is
   `{admin:false, users:[], error}` at 200. The in-route gate's 403 is the only
   non-200; there is no POST.
-- `POST /api/polyforge/projects/members` JSON-only
+- `POST /api/polyforge/projects/members` — JSON-only
   `{action: "add" | "remove", project, user_id}`; the one browser-reachable
   membership write, for the authenticated surface only (in-route gate 403,
   non-JSON 415). Before any membership spawn: an unparsable body is 400, pf
@@ -1588,7 +1588,7 @@ card counts as selected for either its slug or its wi id.
   for every status, while the card's `aria-label` keeps `${slug} · <full
   status text>`; no card-level `title` is added (the goal span keeps its
   own). Never a nowrap slug + goal row: in a ~112px cell that squeezed the
-  slug to a few characters and hid the goal ( review s14#2;
+  slug to a few characters and hid the goal (review s14#2;
   `e2e/polyforge-cards.mjs` S18 checks the geometry, the fixed 180px width and
   the one-row horizontal scroll at 460/375/340). The
   model, `#spawnN`, step age and idle age left the card: the
@@ -1598,7 +1598,7 @@ card counts as selected for either its slug or its wi id.
 - **Needs-input marker:** a `needs_input` job shows its status
   label (`polyforge.jobStatus.needs_input`: 等待输入 / Needs input / 等待輸入)
   emphasized (`data-pf-needs-input`, bold, a solid amber `#d97706` marker with
-  white text since, so it reads over the card's amber tint) in place
+  white text, so it reads over the card's amber tint) in place
   of the dim label at the right end of the slug's row (it was a
   row of its own). Its `title` is the full status label. It
   follows the job's status on the next status/cards read —
@@ -1621,8 +1621,8 @@ card counts as selected for either its slug or its wi id.
   failed_gate, 提交被拒绝, 候选模型已用尽); the marker's `title` is the daemon's
   phrase and the card's name `slug · label`. No goal or step line: the feed
   carries neither, and the full cause (`blocked.reason` / `requiredAction`)
-  renders above the selected item's composer. Under that first row
-: the reason (`data-pf-attention-reason`, 11px, clamped to
+  renders above the selected item's composer. Under that first row:
+  the reason (`data-pf-attention-reason`, 11px, clamped to
   two lines, the full text as its `title`) — the newest open entry's phrase,
   only for a known class (an unknown class's label already is its phrase) —
   then a bottom row with a small right-aligned 忽略
@@ -1643,7 +1643,7 @@ card counts as selected for either its slug or its wi id.
   as the reason; 忽略 posts all of them); it stays a live card — no amber,
   frame, name and status unchanged — and a pending stand-in shows none.
   A click selects the item — its job detail, the park cause above the input
-  box; nothing else opens and the card shows
+  box; nothing else opens — and the card shows
   `aria-pressed`; a second click deselects. A waiting job's needs_input entry never makes one (that job's
   card is the attention card), and neither do task, informational, resolved
   or dismissed entries. Lifetime: an answered job turns `running` and its
@@ -1947,7 +1947,7 @@ with #204's busy state (disabled, `aria-busy`, spinning, labelled
 `polyforge.refresh`/`polyforge.refreshing` while the newest read is in
 flight); a failed read keeps the old list and shows the error. Selecting a
 row makes one detail read and shows the detail in Work's full-width lower
-part, the list with its filters and search staying above it (;
+part, the list with its filters and search staying above it (
 it used to replace the list): the full goal
 (unclipped), slug, status, priority, bundle, project, labels, milestone,
 reporter, assignee, created/updated/closed, the waiting line
@@ -2057,7 +2057,7 @@ the list never carries the full prompt or the report) plus the three timing
 facts started_at?/ended_at?/wall_consumed_ns? (each absent when
 pf has none — pf's zero time reads as absent, a non-numeric wall time is
 dropped), so a block shows its duration without a detail read, plus
-report_tail?/reporter? nine keys in all: `report_tail` is
+report_tail?/reporter? — nine keys in all: `report_tail` is
 pf's own bounded last non-empty report line (≤ 200 code points, an over-long
 line already `…` + its last 199; `""` while running) forwarded exactly as sent,
 never trimmed or re-cut, and `reporter` is the spawn-time human display name
@@ -2260,7 +2260,7 @@ and writes through `POST /api/polyforge/config`. Its row model is pure
   (`effective.<project>`, `defaults.effective`, `task`): one chain when every
   bundle agrees, else one per bundle (`diverges`); none when no level governs
   (the harness default model runs). A row carries no attrs (workflow
-  contract 4,).
+  contract 4).
 - **Edits** are list operations only (`addCandidate` — trimmed, no duplicate —
   `removeCandidate`, `moveCandidate`); the candidate format is pf's judgment.
 
@@ -2323,8 +2323,8 @@ configuration cards; `aria-label` 「工作流」 / Workflow):
 - **Project.** A select of the union's projects, defaulting
   as above; switching re-renders that project's rows from the same read and
   drops the unsaved drafts; the disclosure state is the card's own, kept.
-  The 工作区 card lists and edits the pane's Cell file's own mapping rows
-, not the settings cwd's; the workflow card is the union of
+  The 工作区 card lists and edits the pane's Cell file's own mapping rows,
+  not the settings cwd's; the workflow card is the union of
   that Cell's mapped workspaces.
 
 ## Host and Cells
@@ -2388,7 +2388,7 @@ carried.
   `e2e/w367-default-cell-pinned.mjs` runs the server with `PF_PROFILE` and
   its cwd in a named Cell and asserts the exact argv.
 
-### The page's Host and Cells (master-detail,)
+### The page's Host and Cells (master-detail)
 
 `Settings › Polyforge` is a master-detail page built from the shared split
 view (`ConfigPanelShell embedded` › `ConfigSplitView`): a list beside one
@@ -2544,8 +2544,8 @@ settings file, a failed spawn, a broken link — never an error, never a guess.
   X.Y.Z cores, then a pre-release below its core release and pre-release
   identifiers one by one (numeric ones as numbers and below alphanumeric
   ones, alphanumeric ones in ASCII order, a shorter prefix first), so a
-  suffixed release `v0.2.0-<name>.9` is below `v0.2.0-<name>.10`
-; non-blocking — every other field is still reported below
+  suffixed release `v0.2.0-<name>.9` is below `v0.2.0-<name>.10`;
+  non-blocking — every other field is still reported below
   the floor.
 - **Line (R4):** the clone root is located as the global polyforge package
   entry's source when that entry exists, else install.sh's conventional
@@ -2608,7 +2608,7 @@ effort, resume, failure_count, from_model/to_model, archived, version,
 commit_ms/push_ms/pushed, spawn_n, an owner message's text, an intent's
 reason and reply_at, a delivery's msg_at and confirmed_by. Raw event bodies
 are dropped. A blocked workflow's `execution.blocked` passes only as
-`blocked: {kind, step?, reason, requiredAction?}` (; masked,
+`blocked: {kind, step?, reason, requiredAction?}` (masked,
 capped at 2000; never `evidence` or `log_tail`); `execution.pending_question`
 only as `pendingQuestion: {id, step?, question, askedAt?}` (the question
 verbatim; the asker's ordinal, definition, harness, session id and
@@ -2692,7 +2692,7 @@ chip row (`buildStepGraph` in `components/PolyforgePanel.tsx`, pure):
 
 - **Nodes** — one node per step, `role="list"`/`role="listitem"`,
   display-only (no click handler, no navigation). A node shows the 24-char
-  cut step name and a status dot only ( removed the visible
+  cut step name and a status dot only (removed the visible
   status text had added); the full untruncated name and the
   translated status label (`polyforge.stepStatus.*`: 已完成 / 进行中 / 待开始 /
   已跳过 …, an unknown status raw) are carried in the node's `title` and
@@ -2798,7 +2798,7 @@ between polls. The job-list rows show none of it.
 ## Detail scroll region (pi#120)
 
 With a job selected, the whole detail — ① the summary block, ② the step flow
-graph with its timing lines, ③ the execution progress is ONE
+graph with its timing lines, ③ the execution progress — is ONE
 vertical scroll region, `[data-pf-detail-scroll]`: the container under the
 job list (`flex: 1; min-height: 0; overflow-y: auto`). No nested vertical
 scroller exists inside the detail (the execution progress lists its lines
@@ -3042,8 +3042,8 @@ not pull the reader off the opened card), and collapsing at the bottom stays
 pinned (pin S238-27 in `e2e/polyforge-238.mjs`).
 
 Narration is
-`var(--text)`; thinking narration is `var(--text-dim)` italic (the owner ruling
-on) — its row also rebinds `--text` to `var(--text-dim)`, because
+`var(--text)`; thinking narration is `var(--text-dim)` italic (an owner ruling)
+— its row also rebinds `--text` to `var(--text-dim)`, because
 the Markdown body sets its own `color: var(--text)` and would otherwise
 render thinking at full text colour (computed-colour pin S238-26 in
 `e2e/polyforge-238.mjs`); a tool line is its card; an event line mono, in its tone
@@ -3189,8 +3189,8 @@ replaces it. An abort by hiding, deselecting or unmounting writes nothing.
 ## Client behavior
 
 - `hooks/usePolyforge.ts`: a status fetch at mount decides presence; while
-  pf is absent the status route is re-probed every 30 s and on window focus
-, so a pf that becomes available shows the Polyforge button
+  pf is absent the status route is re-probed every 30 s and on window focus,
+  so a pf that becomes available shows the Polyforge button
   without a reload — nothing else is polled while absent. With pf: 3 s cadence while the panel is
   open, 30 s while closed (the badge = queue running count; no badge while the
   daemon is down). With a selection while open: watch polls every 3 s; a null

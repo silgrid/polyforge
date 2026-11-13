@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/polyforge/answer { wi, profile?, text } — the job card's one
  * input box (workflow contract v2 §5.2 and §5.4, change 14; workflow
- * contract 4, design #483 §7,): the owner's words to the work
+ * contract 4, design #483 §7): the owner's words to the work
  * item's current step agent through the owner message relay, or — the work
  * item parked (blocked or paused) — the wake of the step the park belongs
  * to: `pf [--profile p] --json answer <wi> --text=<words>`, the same command

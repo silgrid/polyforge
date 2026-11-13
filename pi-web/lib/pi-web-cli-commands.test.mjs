@@ -379,7 +379,7 @@ test("install kind: global npm, npx cache or anything else", () => {
     "other",
   );
   assert.equal(getInstallKind({ pkgDir: "/usr/lib/node_modules/@silgrid/pi-web", npmRoot: null, realpath }), "other");
-  // The fork updates itself, never into upstream's package ( s1#3).
+  // The fork updates itself, never into upstream's package (s1#3).
   assert.equal(
     getInstallKind({ pkgDir: "/usr/lib/node_modules/@agegr/pi-web", npmRoot: "/usr/lib/node_modules", realpath }),
     "other",

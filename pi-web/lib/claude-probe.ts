@@ -188,12 +188,12 @@ function claudeEnvTrue(value: string | undefined): boolean {
 
 /**
  * Pi Web's three claude features (owner ruling Q1=A), from Pi Web's own
- * evidence: approvals from's approval mode `approvalMode` — the global
+ * evidence: approvals from the approval mode `approvalMode` — the global
  * claude-permissions.json mode the caller reads, the one claude-argv's permissionPromptFlags()
  * turns into the child's flags: `ask` is `--permission-prompts host --permission-prompt-tool
  * stdio`, Pi Web answers claude's approval requests (`host-prompts`); `deny` is
  * `--permission-prompts none`, claude denies what would ask (`no-host-prompts`); never by
- * claude version, as #442 is not ( r3, plan D12); background tasks and the subagent's forwarded text from
+ * claude version, as #442 is not (r3, plan D12); background tasks and the subagent's forwarded text from
  * the recorded threshold (CLAUDE_FEATURE_MIN_VERSION: unknown without a version, off
  * below it), background tasks also off when the child's environment `env` — the caller
  * passes `buildClaudeEnv(process.env)` — sets CLAUDE_CODE_DISABLE_BACKGROUND_TASKS (claude

@@ -1,7 +1,7 @@
 package cli
 
-// config_workspace.go: the workspace `.polyforge.yaml` read/write surface
-//. Reads are live (no cache): the cwd→workspace resolution is
+// config_workspace.go: the workspace `.polyforge.yaml` read/write surface.
+// Reads are live (no cache): the cwd→workspace resolution is
 // mapping.Plan.MatchWorkspace, the file is parsed by the one strict
 // workspace loader, and the declared step candidates come from the installed
 // bundles the daemon reports. The read carries the mapping, the projects and

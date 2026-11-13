@@ -2,8 +2,8 @@ package driver
 
 // owner_rewind_handoff_test.go: the rewind the owner's word orders, as the
 // step hands it off (`rewind --to <step> --per-owner <at>`, workflow
-// contract 4) — the only door to it since `pf rewind` was removed
-//. Ported from the command's driver tests:
+// contract 4) — the only door to it since `pf rewind` was removed.
+// Ported from the command's driver tests:
 // the record and the event it lands, the budget it never spends, and the
 // write's own guard on the target.
 

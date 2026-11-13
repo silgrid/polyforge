@@ -24,7 +24,7 @@ export interface PolyforgeConfigHistoryEntry {
   rollbackable: boolean;
   /** the file a scoped write addressed — the Host (`host`)
    *  or one Cell (`profile`). A rollback writes the same file back.
-   *  every write records one (`profile: "default"` for the
+   * every write records one (`profile: "default"` for the
    *  default Cell); an entry without either is the default Cell's. */
   host?: true;
   profile?: string;

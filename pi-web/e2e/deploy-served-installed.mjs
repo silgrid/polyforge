@@ -1,6 +1,5 @@
 // carries: deploy-piweb.sh, bin/pi-web.js, bin/pi-web-install-check.js, bin/pi-web-served.js, e2e/lane-stubs.mjs
-// Served == installed deploy contract (re-pinned by
-//).
+// Served == installed deploy contract (re-pinned by).
 //
 // Reported failure: npm installed v0.1.7 into a global prefix whose bin dir was
 // not on the service PATH, so `command -v pi-web` and the running loop process

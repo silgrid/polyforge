@@ -11,7 +11,7 @@
 /** One merged `pf --json queue` row, exactly the eight keys the list
  *  passport forwards, plus the one conditional ninth key
  *  `acceptance_missing` (present only when pf sends `true`: a queued
- *  execution ticket with no acceptance section,). Nullable
+ *  execution ticket with no acceptance section). Nullable
  *  fields stay null when pf sends null or a wrong-typed value (never
  *  coerced). */
 export interface PolyforgeWorkItemRow {

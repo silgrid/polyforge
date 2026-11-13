@@ -3272,7 +3272,7 @@ select.mcp-add-input {
 }
 .polyforge-workflow-editor[hidden] { display: none; }
 @container (max-width: 640px) {
-  /* a phone row (a narrow pane,) may wrap inside its summary container. */
+  /* a phone row (a narrow pane) may wrap inside its summary container. */
   .polyforge-workflow-summary { flex-wrap: wrap; }
 }
 

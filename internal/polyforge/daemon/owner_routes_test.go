@@ -1,6 +1,6 @@
 package daemon
 
-// owner_routes_test.go: workflow contract 4 C3 the
+// owner_routes_test.go: workflow contract 4 C3 — the
 // daemon serves no owner waive or rewind route (`pf waive` / `pf rewind`
 // were removed; the owner tells the step), while the doors `pf resume`
 // takes stay; and the owner_rewind event a hand-off citing the owner lands

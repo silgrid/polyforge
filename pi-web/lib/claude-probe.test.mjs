@@ -128,7 +128,7 @@ test("a version outside CLAUDE_RECORDED_VERSIONS is flagged as not covered", asy
 // (owner ruling Q1=A): the three claude features Pi Web relies on are judged
 // from Pi Web's own evidence, never from claude's capability names or `claude --help`.
 test("Pi Web's claude features: approvals are unavailable until host prompts; background tasks and subagent text are available from the recorded 2.1.322, unavailable below it, unknown without a version, and CLAUDE_CODE_DISABLE_BACKGROUND_TASKS turns background tasks off", () => {
-  // r3 (owner ruling 2026-11-13T07:40:00Z): host prompts are's
+  // r3 (owner ruling 2026-11-13T07:40:00Z): host prompts are the
   // approval mode, the third argument — ask is --permission-prompts host, deny is none.
   const features = (version, env = {}, approvalMode = "deny") => Object.fromEntries(probe.claudePiWebFeatures(version, env, approvalMode).map((feature) => [feature.id, [feature.available, feature.basis]]));
   assert.deepEqual(probe.claudePiWebFeatures("2.1.322", {}, "ask").map((feature) => feature.id), ["approvals", "backgroundTasks", "subagentText"]);
@@ -163,7 +163,7 @@ test("Pi Web's claude features: approvals are unavailable until host prompts; ba
   assert.deepEqual(features(null, { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" }).backgroundTasks, [null, "version-unknown"]);
 });
 
-// r3 (plan D12): approvals are available exactly when's global
+// r3 (plan D12): approvals are available exactly when the global
 // permission mode is ask (claude's approval requests come to Pi Web's dialog); #442 gates
 // on no claude version, so neither does this.
 test("approvals follow's permission mode, not the claude version: ask is available and deny is not, for a recorded, an unrecorded and an unknown version ( r3)", () => {
@@ -178,7 +178,7 @@ test("approvals follow's permission mode, not the claude version: ask is availab
 });
 
 // r3: the probe ends claude the way claude ends — by closing its stdin — and
-// signals only a child that outlives the grace period ('s stub logs every signal).
+// signals only a child that outlives the grace period (the stub logs every signal).
 test("a probe ends an answering claude by closing its stdin, signalling it only when it outlives the grace period ( r3)", async () => {
   const answerThen = (onEnd) => `#!/usr/bin/env node
 const fs = require("node:fs");
