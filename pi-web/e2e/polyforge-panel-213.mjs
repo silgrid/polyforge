@@ -1,5 +1,4 @@
 // carries: components/PolyforgeTasks*
-// carries: components/PolyforgePanel*
 // Polyforge panel UI revision, re-filed from an earlier ticket
 //
 // Authored pre-code against artifacts/spec.md (the owner-confirmed acceptance
