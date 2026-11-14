@@ -384,6 +384,11 @@ const ABSORBED112 = [
   [["step_started", `▶ zulu-grill #2 · ${SHORT_MODEL112}`]],
   [["step_started", `▶ kilo-author #2 · ${MODEL112}`], ["step_dead", "✕ mike-spec · timeout-after-3-retries"]],
 ];
+// owner-intended change (polyforge#24): the panel shows the SELECTED step's
+// blocks, and the detail defaults to the current step — kilo-author here. Its
+// block is ABSORBED112[1]'s; every MARKERS112 row rides inside it, so the
+// selected view pins the same marker rows, one head, and zulu-grill's block out.
+const SELECTED_HEADS112 = [ABSORBED112[1]];
 const MARKERS112 = LINES112.filter(([kind]) => kind !== "step_started" && kind !== "step_dead");
 const headLines = (panel) => panel.first().evaluate((root) => [...root.querySelectorAll("[data-pf-progress] [data-pf-progress-block-toggle]")].map((el) => {
   const cs = getComputedStyle(el);
@@ -727,15 +732,15 @@ try {
     // lines are the whole retained list (see ABSORBED112).
     assert.deepEqual(lines.map((line) => [line.kind, lineBody(line)]), MARKERS112, `the lifecycle marker rows: ${JSON.stringify(lines.map((line) => line.text))}`);
     const heads = await headLines(panel);
-    assert.deepEqual(heads.map((head) => head.lines.map((line) => [line.kind, lineBody(line)])), ABSORBED112, `the heads' absorbed lines: ${JSON.stringify(heads)}`);
-    assert.equal(lines.length + heads.flatMap((head) => head.lines).length, LINES112.length, "no retained line is dropped");
+    assert.deepEqual(heads.map((head) => head.lines.map((line) => [line.kind, lineBody(line)])), SELECTED_HEADS112, `the heads' absorbed lines: ${JSON.stringify(heads)}`);
+    assert.equal(lines.length + heads.flatMap((head) => head.lines).length, LINES112.length - 1, "no retained line of the selected step is dropped");
     for (const line of [...lines, ...heads.flatMap((head) => head.lines)]) assert.match(line.text, /^\d{2}:\d{2}:\d{2} /, `each line starts with its clock: ${line.text}`);
     // owner-intended change: the long model rode the kilo-author start line,
     // which the head absorbs — it is on the head's title in full, and neither the
     // head nor any marker row is ellipsized.
-    const long = heads[1].lines.find((line) => line.text.includes(MODEL112));
-    assert.ok(long && !heads.some((head) => head.ellipsis) && !lines.some((line) => line.ellipsis), `the long model line stays whole, not ellipsized: ${JSON.stringify(heads[1])}`);
-    assert.ok(heads[1].text.includes("kilo-author #2"), `the head names the absorbed start's step and spawn: ${heads[1].text}`);
+    const long = heads[0].lines.find((line) => line.text.includes(MODEL112));
+    assert.ok(long && !heads.some((head) => head.ellipsis) && !lines.some((line) => line.ellipsis), `the long model line stays whole, not ellipsized: ${JSON.stringify(heads[0])}`);
+    assert.ok(heads[0].text.includes("kilo-author #2"), `the head names the absorbed start's step and spawn: ${heads[0].text}`);
     const text = await panel.innerText();
     // owner-intended change: the tool line is the shared tool card — its
     // header shows the name and the masked argument, its title the full header.
@@ -755,7 +760,7 @@ try {
       const lines = await eventLines(panel, null);
       // owner-intended change: marker rows + the heads' absorbed lines.
       assert.deepEqual(lines.map((line) => [line.kind, lineBody(line)]), MARKERS112, `${locale}: the lifecycle marker rows`);
-      assert.deepEqual((await headLines(panel)).map((head) => head.lines.map((line) => [line.kind, lineBody(line)])), ABSORBED112, `${locale}: the heads' absorbed lines`);
+      assert.deepEqual((await headLines(panel)).map((head) => head.lines.map((line) => [line.kind, lineBody(line)])), SELECTED_HEADS112, `${locale}: the heads' absorbed lines`);
       assert.equal(await panel.locator("[data-pf-progress]").getByText(heading, { exact: true }).count(), 1, `${locale}: the progress heading is translated`);
       assert.doesNotMatch(await panel.innerText(), /polyforge\.[a-z]/i, `${locale} panel shows a raw i18n key`);
     });
@@ -781,9 +786,10 @@ try {
     }
     assert.equal(await panel.getByText(/sync\s*[×x]\s*\d/i).count(), 0, "no collapsed sync row");
     assert.equal((await eventLines(panel, "terminal")).length, 3, "terminal events never collapse");
-    // owner-intended change: both step_started lines live on their group heads.
+    // owner-intended change: the selected step's step_started line lives on its
+    // group head (the other step's block is out of the selected view).
     const starts = (await headLines(panel)).flatMap((head) => head.lines).filter((line) => line.kind === "step_started");
-    assert.equal(starts.length, 2, "step_started events never collapse");
+    assert.equal(starts.length, 1, "step_started events never collapse");
   });
 
   // N6 — (was: verbose mode) there is no mode: no control switches the
@@ -824,9 +830,9 @@ try {
       assert.ok(line.tone === "red" && line.family === "red", `the ${kind} line is not red: ${JSON.stringify(line)}`);
     }
     // owner-intended change: the step_dead line is its block's absorbed
-    // terminal — the block's head carries the failed status and its ✕ mark.
+    // terminal — the selected block's head carries the failed status and its ✕ mark.
     const heads = await headLines(panel);
-    assert.ok(heads[1].lines.some((line) => line.kind === "step_dead") && heads[1].status === "failed" && heads[1].text.includes("✕"), `the step_dead block reads failed: ${JSON.stringify(heads[1])}`);
+    assert.ok(heads[0].lines.some((line) => line.kind === "step_dead") && heads[0].status === "failed" && heads[0].text.includes("✕"), `the step_dead block reads failed: ${JSON.stringify(heads[0])}`);
     const terminals = await eventLines(panel, "terminal");
     assert.equal(terminals.length, 3, `expected 3 terminal lines, found ${terminals.length}`);
     assert.ok(terminals[0].tone === "green" && terminals[0].family === "green", "the terminal completed line is not green");
@@ -838,8 +844,8 @@ try {
       assert.ok(line.tone === "neutral" && plainColour(line), `the ${kind} line is not neutral: ${JSON.stringify(line)}`);
     }
     // owner-intended change: start lines are absorbed into the group heads;
-    // the older head carries no mark, the head of the block with a failure ✕.
-    assert.deepEqual(heads.map((head) => head.status), ["none", "failed"], "each head carries its block's status");
+    // the selected view holds the one head, of the block with a failure ✕.
+    assert.deepEqual(heads.map((head) => head.status), ["failed"], "each head carries its block's status");
   });
 
   // N9 — (was: the toggle persists) the toggle is gone and the old
