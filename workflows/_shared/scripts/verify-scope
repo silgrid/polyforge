@@ -874,11 +874,15 @@ if [ -f "$conf" ]; then
 		e2e_start_threshold)
 			val="$(printf '%s' "$val" | sed 's/[[:space:]]*$//')"
 			case "$val" in
-			'' | 0 | *[!0-9]*)
+			'' | *[!0-9]*)
 				diag "conf rejects e2e_start_threshold '$val' (expected a positive integer)"
 			;;
 			*)
-				if [ -n "$conf_e2e_start_threshold" ]; then
+				# r2#3: leading zeros pass the digit scan but read as zero
+				# (any non-empty selection would take the prefix), so reject by value.
+				if [ "$val" -eq 0 ]; then
+					diag "conf rejects e2e_start_threshold '$val' (expected a positive integer)"
+				elif [ -n "$conf_e2e_start_threshold" ]; then
 					diag "conf ignores a second e2e_start_threshold: $line"
 				else
 					conf_e2e_start_threshold="$val"

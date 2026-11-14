@@ -304,9 +304,9 @@ package's own conf, used when the engine runs from `pi-web/`, has
 `e2e_start_threshold`; when a light selection exceeds that threshold, the
 engine adds `E2E_SERVER_MODE=start` before the runner. The engine
 recognizes the runner file only in a value that begins `npm run <script>`
-
 (a prefixed one would make `e2e/all.mjs` an undeclared suite and force the
-full tier), so suites it selects still run on `next dev`.
+full tier), so the prefix is the engine's to add: a light selection at or
+below the threshold still runs on `next dev`, one above it on `next start`.
 
 Measured 2026-11-07 on a shared 32-vCPU x86_64 dev host (Node 24.22.2,
 Next 16.4.4), `E2E_JOBS=3`, host load average 1–16 from other work during the

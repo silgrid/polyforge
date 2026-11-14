@@ -249,9 +249,11 @@ items that merged.
   `check=<name>|<fast|full>|<command>` lines, and their
   `check_requires_env=` / `check_requires_cmd=` / `check_timeout=` /
   `report=` / `rerun=` declarations), the tier triggers `forced_full=`, `module_root=`,
-  `exclude=`, the carries keys `e2e_runner=`, `e2e_start_threshold=`, `suite_glob=`, `e2e_map=` and
-  `smoke_suite=` (below); `e2e_start_threshold=` applies only with `e2e_runner=` in
-  `--light`, and only when the selected suite count is strictly greater than it;
+  `exclude=`, the carries keys `e2e_runner=`, `suite_glob=`, `e2e_map=` and
+  `smoke_suite=` (below), the light-tier threshold `e2e_start_threshold=` (not a
+  carries key: a bad value is diagnosed and ignored, never fail-closed), which
+  applies only with `e2e_runner=` in `--light`, and only when the selected
+  suite count is strictly greater than it;
   the micro lane's `micro_path=` / `micro_check=`
   (the `--micro` bullet below), and the keys the engine only echoes in its JSON report
   (`test_glob=`, `base_setup=`, `runner=complete`, `host_requires=`). Any
