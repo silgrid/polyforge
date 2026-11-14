@@ -1,12 +1,16 @@
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url);
 const lib = await jiti.import("./polyforge-memory.ts");
 const pure = await jiti.import("./polyforge-memory-pure.ts");
+const cells = await jiti.import("./polyforge-cells.ts");
 
 test("the Memory floor is 2.20.12 (browse-mode recall) and the boundary is inclusive", async () => {
   assert.equal(lib.POLYFORGE_MEMORY_MINIMUM_PF_VERSION, "2.20.12");
@@ -205,4 +209,87 @@ test("the shared UTF-8 cap cuts on a code-point boundary and passes a text at th
   assert.equal(pure.capUtf8Bytes("ab字", 4), "ab");
   assert.equal(pure.capUtf8Bytes("ab字", 5), "ab字");
   assert.equal(pure.capUtf8Bytes("😀x", 3), "", "a four-byte char is never split");
+});
+
+// ---- the pinned Cell scope (polyforge#18 AC4): every pf call the Memory
+// tab makes names the Cell it acts on ----
+
+/** A stub pf that reports the multi-Cell capabilities and resolves the
+ *  public Cell, logging every argv. answers holds the data verbs. */
+function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public", answers = {} } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "pf-cellmem-"));
+  const log = join(dir, "calls.log");
+  writeFileSync(log, "");
+  const bin = join(dir, "pf");
+  writeFileSync(bin, `#!${process.execPath}
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
+const out = (v) => { process.stdout.write(JSON.stringify(v)); process.exit(0); };
+if (args[0] === "--version") { process.stdout.write("v2.20.16\\n"); process.exit(0); }
+if (args[0] === "--json" && args[1] === "version") out({ version: "v2.20.16", capabilities: ${JSON.stringify(capabilities)} });
+if (args[0] === "--json" && args[1] === "profile") { ${profile ? `out({ profile: ${JSON.stringify(profile)}, source: "cwd" });` : 'process.exit(2);'} }
+const rest = args.filter((a) => a !== "--json" && a !== "--profile" && a !== ${JSON.stringify(profile ?? "")});
+const at = (name) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : undefined; };
+if (rest[0] === "config" && rest[1] === "workspace") out({ mapped: true, workspace: "/ws" });
+if (rest[0] === "config" && rest[1] === "list") out({ items: [
+  { key: "user_id", value: "u1", source: "file" },
+  { key: '[workspace."/ws"]', value: "polyforge", section: true },
+] });
+if (rest[0] === "recall") out({ items: [], total: 0 });
+if (rest[0] === "memory" && rest[1] === "show") out({ id: "mem_ab12cd34ef", type: "fact.note", title: "t", visibility: "project", status: "active", tags: [], related: [], work_item_id: null, created_at: "c", updated_at: "u", content_len: 3, content: "abc" });
+if (rest[0] in ${JSON.stringify(Object.keys(answers))}) out(${JSON.stringify("{}")});
+process.exit(2);
+`);
+  chmodSync(bin, 0o755);
+  const previous = process.env.PF_BIN;
+  process.env.PF_BIN = bin;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PF_BIN;
+    else process.env.PF_BIN = previous;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+}
+
+/** The data calls only: the probe, capability and resolution reads dropped. */
+const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && !(a[1] === "version") && !(a[1] === "profile"));
+
+test("resolvePolyforgeCellScope names the resolved Cell and pins every call to it (AC4)", async (t) => {
+  const calls = cellPf(t);
+  const scope = await cells.resolvePolyforgeCellScope("/ws");
+  assert.equal(scope.cell, "public");
+  assert.deepEqual(scope.pin.prefix, ["--profile", "public"]);
+
+  await lib.readPolyforgeMemoryProjects("/ws", scope.pin.prefix);
+  await lib.searchPolyforgeMemory({ cwd: "/ws", project: "polyforge", q: "kw", type: "*" }, scope.pin.prefix);
+  await lib.browsePolyforgeMemory({ cwd: "/ws", project: "polyforge", type: "*" }, scope.pin.prefix);
+  assert.equal(await lib.showPolyforgeMemory("mem_ab12cd34ef", scope.pin.prefix), null, "the stub's detail passes the sanitizer only with its full shape; the argv is what is pinned here");
+  const data = dataCalls(calls);
+  assert.ok(data.length >= 6, `the reads must have spawned (ledger ${JSON.stringify(data)})`);
+  for (const argv of data) {
+    assert.deepEqual(argv.slice(0, 2), ["--profile", "public"], `every Memory-tab pf call names the Cell first: ${JSON.stringify(argv)}`);
+  }
+});
+
+test("a pf without the multi-Cell protocol keeps today's unflagged calls", async (t) => {
+  const calls = cellPf(t, { capabilities: [], profile: "" });
+  const scope = await cells.resolvePolyforgeCellScope("/ws");
+  assert.equal(scope.cell, null);
+  assert.deepEqual(scope.pin.prefix, []);
+  await lib.readPolyforgeMemoryProjects("/ws", scope.pin.prefix);
+  for (const argv of dataCalls(calls)) {
+    assert.equal(argv.includes("--profile"), false, `no flag on a pre-Cell pf: ${JSON.stringify(argv)}`);
+  }
+});
+
+test("a multi-Cell pf that cannot resolve a Cell pins the default Cell explicitly", async (t) => {
+  const calls = cellPf(t, { profile: "" });
+  const scope = await cells.resolvePolyforgeCellScope("/ws");
+  assert.equal(scope.cell, null);
+  assert.deepEqual(scope.pin.prefix, ["--profile", "default"]);
+  await lib.readPolyforgeMemoryProjects("/ws", scope.pin.prefix);
+  for (const argv of dataCalls(calls)) {
+    assert.deepEqual(argv.slice(0, 2), ["--profile", "default"], `the default Cell is named, never ambient: ${JSON.stringify(argv)}`);
+  }
 });
