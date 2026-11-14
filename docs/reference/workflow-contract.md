@@ -194,7 +194,7 @@ refused for its version (`WFC-101`).
 
 | Property | Read by |
 |---|---|
-| `acceptance` | whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs (absent = required; none = the lane has no criterion to list): pf submit refuses an item without one only on a lane that requires it, the daemon's auto claim skips such an item only there, pf queue (and the Pi Web list, which reads its acceptance_missing) marks it only there, and pf file create prints the carried-by hint only there; a lane the reader cannot load counts as required |
+| `acceptance` | whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs (absent = required; none = the lane has no criterion to list): pf submit refuses an item without one only on a lane that requires it, the daemon's auto claim skips such an item only there, pf queue (and the Pi Web list, which reads its acceptance_missing) marks it only there, and pf file create prints the carried-by hint only there; the pre-submit analysis check (a `## 分析` / `## Analysis` section with content) applies on the same lanes — refused by pf submit, skipped by the auto claim, marked 需要交互：未分析 by pf queue; a lane the reader cannot load counts as required |
 | `exclusive` | one unfinished work item per project on the lane: the daemon's data-plane proxy reads it in the lane set of the project's workspace and forwards a work-item create on the lane (`pf file create --bundle <lane>`) to aihub exclusive, refused CORE-409 OPEN_ON_BUNDLE while another work item of the project on the lane is not wrapped, failed or canceled; nothing else reads it |
 
 A property is a declaration the code reads, never a lane's name: nothing
