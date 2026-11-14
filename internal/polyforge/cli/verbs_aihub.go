@@ -94,7 +94,7 @@ func requiredProjectFlagErrorIn(file string) string {
 func inferProjectFromCwd(ctx *Context) (string, error) {
 	plan, file, err := ctx.routedCellMapping()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("file create: %w", err)
 	}
 	cwd, err := osGetwd()
 	if err != nil || plan == nil || plan.Empty() {
