@@ -30,6 +30,7 @@ import (
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 )
 
@@ -401,5 +402,53 @@ func TestW18SubmitAcceptanceCheckReadsTheRoutedMapping(t *testing.T) {
 	}
 	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 1 {
 		t.Fatalf("--profile alpha submit: default hub got %d, alpha hub got %d (want 0/1 — the ticket read alone)", nDef, nAlpha)
+	}
+}
+
+// TestW18ValidateJudgesTheRoutedCellsLaneSet (AC3): `pf workflows validate`
+// with no lane directory judges the lane set of the workspace the routed
+// Cell's mapping gives the working directory — standing in wsA,
+// --profile alpha judges alpha's own user lanes (devuser), not just the
+// builtin lanes the Host file's mapping would leave.
+func TestW18ValidateJudgesTheRoutedCellsLaneSet(t *testing.T) {
+	f := newW18Fixture(t)
+	t.Chdir(f.wsA)
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "--json", "workflows", "validate")
+	if code != 0 {
+		t.Fatalf("--profile alpha validate: code=%d stderr=%s", code, stderr)
+	}
+	var rep validateReport
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+		t.Fatalf("--profile alpha validate: %v\n%s", err, stdout)
+	}
+	if rep.Workspace != f.wsA {
+		t.Fatalf("--profile alpha validate: workspace %q, want wsA (the routed Cell's mapping)", rep.Workspace)
+	}
+	names := map[string]string{}
+	for _, l := range rep.Lanes {
+		names[l.Name] = l.Source
+	}
+	if names["devuser"] != workflow.SourceWorkspace {
+		t.Fatalf("--profile alpha validate: lanes %v, want devuser judged as alpha's user lane", names)
+	}
+	if names["develop"] != workflow.SourceBuiltin {
+		t.Fatalf("--profile alpha validate: lanes %v, want the builtin develop lane too", names)
+	}
+
+	// The default Cell keeps its shape: standing in wsD, its mapping
+	// answers and its (lane-less) workspace judges the builtin lanes.
+	t.Chdir(f.wsD)
+	code, stdout, stderr = runPf(t, f.env, "--profile", "default", "--json", "workflows", "validate")
+	if code != 0 {
+		t.Fatalf("--profile default validate: code=%d stderr=%s", code, stderr)
+	}
+	rep = validateReport{}
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+		t.Fatalf("--profile default validate: %v\n%s", err, stdout)
+	}
+	for _, l := range rep.Lanes {
+		if l.Name == "devuser" {
+			t.Fatalf("--profile default validate: devuser is not the default Cell's lane: %+v", rep.Lanes)
+		}
 	}
 }
