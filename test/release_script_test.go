@@ -975,6 +975,29 @@ func TestReleaseScriptCommittedNotesUsedAsIs(t *testing.T) {
 	}
 }
 
+// TestReleaseScriptCommittedNotesTooLongRefused (polyforge#14 AC3): a
+// committed docs/release-notes/<tag>.md over the limit refuses the release
+// BEFORE the version is claimed ("no version claimed"): no tag reaches
+// origin, no image is pushed and no release is created - a human's text is
+// the human's to shorten, never truncated.
+func TestReleaseScriptCommittedNotesTooLongRefused(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	w.mergeOnMain(filepath.Join("docs", "release-notes", "v1.2.1.md"),
+		"# hand written\n\n"+strings.Repeat("x", 130000), "overlong notes", true)
+	out, err := w.run(nil)
+	if err == nil || !strings.Contains(out, "no version claimed") || !strings.Contains(out, "125000") {
+		t.Fatalf("an overlong committed notes file must refuse before the claim: %v\n%s", err, out)
+	}
+	if got := w.originTags(); got != "v1.2.0" {
+		t.Fatalf("origin tags = %q, want the claim never reached origin", got)
+	}
+	for _, c := range w.calls() {
+		if strings.HasPrefix(c, "docker push") || strings.HasPrefix(c, "gh release create") || strings.Contains(c, "refs/tags/v1.2.1") {
+			t.Fatalf("the refusal must come before anything is published: %v", w.calls())
+		}
+	}
+}
+
 // relLongNotesWorld: the plain-line world of v1.2.0 whose commits since it
 // make a generated list far over the byte budget: prs merged PRs, each
 // carrying a subjectLen-byte subject (every commit still enters main
