@@ -980,7 +980,7 @@ test("the detail order is summary (title row, goal, facts, narration, pi#117 fac
     "{/* pi#119 summarize narration",
     "{/* pi#117 facts, moved into the summary",
     "data-pf-detail-graph",
-    "<PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={progressSnapshot} echoes={detailEchoes} scrollRef={detailScrollRef} />",
+    "<PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? \"\"} echoes={detailEchoes} scrollRef={detailScrollRef} />",
   ].map((needle) => detail.indexOf(needle));
   assert.ok(marks.every((index, i) => index >= 0 && (i === 0 || index > marks[i - 1])), `detail order: ${marks}`);
   const after = detail.slice(detail.indexOf("<PolyforgeDetailProgress"));
@@ -1007,7 +1007,7 @@ test("the progress section renders every stream line in full (wrapping, no ellip
   assert.match(block, /t\("polyforge\.progress\.title"\)/);
   assert.match(block, /!wi \|\| snapshot\?\.available === false \? t\("polyforge\.progress\.unavailable"\)/, "nothing readable: the unavailable state, no fabricated line");
   assert.match(block, /: !snapshot \? t\("polyforge\.loading"\)/, "Loading only until the first read settles");
-  assert.match(block, /snapshot\.lines\.length === 0 \? t\("polyforge\.progress\.empty"\)/);
+  assert.match(block, /snapshot\.lines\.length === 0 \? \(emptyMessage \?\? t\("polyforge\.progress\.empty"\)\)/);
   assert.match(block, /snapshot\.omitted > 0 && \(\s*<span data-pf-progress-omitted="" [^>]*>\{t\("polyforge\.progress\.omitted", \{ count: snapshot\.omitted \}\)\}<\/span>/, "a legacy omitted count still renders before the lines");
   assert.match(source, /export const PROGRESS_RENDER_CHUNK = 200;/);
   assert.match(block, /const total = snapshot\?\.lines\.length \?\? 0;\s*if \(visibleCount >= total\) return;\s*const frame = requestAnimationFrame\(\(\) => \{\s*setVisibleCount\(\(current\) => Math\.min\(total, current \+ PROGRESS_RENDER_CHUNK\)\);/, "a large stream appends one bounded chunk per animation frame");
@@ -1167,3 +1167,42 @@ test(" DAG: a skipped step is grayed", () => {
   assert.match(item, /aria-label=\{`\$\{node\.id\} · \$\{stepStatusLabel\(node\.status\)\}`\}/);
   assert.match(zhCNSource, /"polyforge\.stepStatus\.skipped": "已跳过",/);
 });
+
+test("polyforge#24: selectProgressStep keeps every matching rerun block and empties unstarted steps", () => {
+  const helper = source.slice(source.indexOf("export function selectProgressStep"), source.indexOf("\n}\n", source.indexOf("export function selectProgressStep")) + 2).replace(/export /g, "");
+  const context = vm.createContext({ progressBlocks: (lines) => {
+    const starts = lines.map((line, index) => line.event === "step_started" ? index : -1).filter((index) => index >= 0);
+    return { blocks: starts.map((start, index) => {
+      const end = starts[index + 1] ?? lines.length;
+      const match = /▶ ([^ #]+) /.exec(lines[start].text);
+      return { start, count: end - start, step: match?.[1] };
+    }) };
+  }});
+  vm.runInContext(stripTypeScriptTypes(helper), context);
+  const lines = [
+    { id: "lead", kind: "narration", text: "lead" },
+    { id: "s1", kind: "event", event: "step_started", text: "▶ spec #1 · pi" },
+    { id: "r1", kind: "narration", text: "round one" },
+    { id: "s2", kind: "event", event: "step_started", text: "▶ spec #2 · claude" },
+    { id: "r2", kind: "narration", text: "round two" },
+    { id: "c1", kind: "event", event: "step_started", text: "▶ code #1 · pi" },
+  ];
+  const snapshot = { available: true, lines, omitted: 0 };
+  assert.deepEqual(context.selectProgressStep(snapshot, "spec").lines.map((line) => line.id), ["s1", "r1", "s2", "r2"]);
+  assert.deepEqual(context.selectProgressStep(snapshot, "review").lines, []);
+});
+
+test("polyforge#24: DAG selection wiring follows current step until a manual choice", () => {
+  assert.match(source, /const \[selectedStep, setSelectedStep\] = useState<string \| null>\(null\);/);
+  assert.match(source, /const \[selectedStepManual, setSelectedStepManual\] = useState\(false\);/);
+  assert.match(source, /onClick=\{\(\) => \{ setSelectedStep\(node\.id\); setSelectedStepManual\(true\); \}\}/);
+  assert.match(source, /data-pf-step-selected=\{selectedStep === node\.id\}/);
+  assert.match(source, /const selectedProgressSnapshot = selectProgressStep\(progressSnapshot, selectedStep\);/);
+  assert.match(source, /function selectProgressStep\(snapshot: PolyforgeProgressSnapshot \| null, step: string \| null\)/);
+  assert.match(source, /layout\.blocks\.filter\(\(block\) => block\.step === step\)/);
+  assert.match(source, /blocks\.flatMap\(\(block\) => lines\.slice\(block\.first \?\? block\.start, \(block\.first \?\? block\.start\) \+ block\.count\)\)/);
+  assert.match(source, /if \(!selectedStepManual && defaultStep\) setSelectedStep\(defaultStep\);/);
+  assert.match(source, /const defaultStep = watchStatus\?\.currentStep \?\? lastStartedStep \?\? latestProgressStep/, "an ended ticket's default is its last started step, ahead of the progress-stream fallback");
+  assert.match(source, /title=\{`\$\{node\.id\} · \$\{stepStatusLabel\(node\.status\)\}\$\{timing \? ` · \$\{formatEventTime\(timing\.startedAt\)\}` : ""\}`\}/);
+});
+

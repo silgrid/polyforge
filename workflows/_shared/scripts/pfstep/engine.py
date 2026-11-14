@@ -7,13 +7,16 @@ to a tier (``choose``). Ported from the Go step commands' engine.go
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from . import gostr
+from . import git, gostr, stepenv
 
 TIER_FULL = "full"
 TIER_SCOPED = "scoped"
 TIER_LIGHT = "light"
+
+# The bound of one git read the planning helpers make (seconds).
+GIT_TIMEOUT = 600.0
 
 # The e2e selection modes.
 SELECTION_MODES = ("carries", "smoke", "full")
@@ -180,3 +183,38 @@ def argv_of(engine: str) -> List[str]:
     """How the engine at path engine runs: itself when it is executable,
     else through sh (a lane snapshot's files are mode 0444)."""
     return [engine] if os.access(engine, os.X_OK) else ["sh", engine]
+
+
+def nested_roots(repo_dir: str) -> List[str]:
+    """The repo's nested engine roots: the directories (never the root)
+    whose tracked .polyforge/verify-scope.conf declares a root of their own."""
+    c = git.run(repo_dir, "ls-files", "-z", "--", "*/.polyforge/verify-scope.conf", timeout=GIT_TIMEOUT, literal_pathspecs=False)
+    if c.exit_code != 0:
+        return []
+    roots = []
+    suffix = "/.polyforge/verify-scope.conf"
+    for f in c.stdout.decode("utf-8", "replace").split("\x00"):
+        if f.endswith(suffix) and f[: -len(suffix)] != "":
+            roots.append(f[: -len(suffix)])
+    return sorted(roots)
+
+
+def reached_roots(roots: Sequence[str], paths: Sequence[str]) -> List[str]:
+    """The roots owning at least one of the paths (each path owned by its
+    deepest root), in root order."""
+    hit: Set[str] = set()
+    for p in paths:
+        best = ""
+        for d in roots:
+            if p.startswith(d + "/") and len(d) > len(best):
+                best = d
+        if best:
+            hit.add(best)
+    return [d for d in roots if d in hit]
+
+
+def default_engine(environ: Optional[Dict[str, str]] = None) -> str:
+    """The scope engine when --engine names none: the shared tree's
+    ``scripts/verify-scope``."""
+    env = os.environ if environ is None else environ
+    return os.path.join(stepenv.read(env).shared_dir, "scripts", "verify-scope")
