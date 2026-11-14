@@ -63,13 +63,13 @@ BROWSER_NODE_TEST = {
     "web2/t.test.mjs": (
         "import { existsSync } from 'node:fs';\n"
         "import { test } from 'node:test';\n"
-        "import assert from 'node:assert';\n"
-        "import { v } from 'dep';\n"
-        "import { double } from './lib.mjs';\n\n"
+        "import assert from 'node:assert';\n\n"
         "if (!existsSync('node_modules')) {\n"
         "  console.error('node_modules/ is missing: run `npm ci` once, then re-run.');\n"
         "  process.exit(2);\n"
         "}\n\n"
+        "const { v } = await import('dep');\n"
+        "const { double } = await import('./lib.mjs');\n\n"
         "test('browser preflight reaches assertion after setup', () => {\n  assert.strictEqual(double(v), 2);\n});\n"
     ),
 }
@@ -148,7 +148,7 @@ class ReplaySetupTest(GitCase):
         self.assertNotIn("not_runnable", r)
         self.assertEqual(r["setup"]["because"]["rule"], "node-e2e-dependency")
         self.assertEqual(r["setup"]["commands"][0]["exit_code"], 0)
-        self.assertIn("not ok 1 - browser preflight reaches assertion after setup", self.log_text(cap, r))
+        self.assertIn("✖ browser preflight reaches assertion after setup", self.log_text(cap, r))
 
     @unittest.skipUnless(HAVE_NODE, "node not installed")
     def test_node_unit_runs_after_setup_and_is_red(self) -> None:
