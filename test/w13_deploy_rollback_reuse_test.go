@@ -230,7 +230,15 @@ func TestW13FallbackRefusesDockerfileWithoutUniqueCopy(t *testing.T) {
 			if !strings.Contains(out, "no unique COPY source") {
 				t.Errorf("the refusal must name the missing unique COPY source:\n%s", out)
 			}
-			d.assertNothingMutated("v2.2.0")
+			// the refusal is at step 2, so the lock and the saved binary are
+		// legitimate; what must NOT have happened: any server docker
+			// mutation, any compose edit, a lock left behind
+			if m := d.serverDockerMutations(); len(m) != 0 {
+				t.Errorf("server docker was changed: %v", m)
+			}
+			if !strings.Contains(d.composeText(), "image: polyforge/aihub:v2.2.0") {
+				t.Errorf("compose file changed:\n%s", d.composeText())
+			}
 			if !d.lockFree() {
 				t.Error("the deploy lock is still held after the refusal")
 			}
