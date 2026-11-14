@@ -1117,7 +1117,9 @@ prints every defect with its `WFC-*` code, file:line and YAML path
 A lane that is still a `workflow.md` (the lane file of the earlier releases) is `WFC-101` with its
 rewrite. With no lane
 directory it judges the lane set of the workspace — `--workspace`, else the
-mapped workspace holding the working directory (none: the built-in lanes
+mapped workspace holding the working directory, through the `[workspace]`
+mapping of the Cell the invocation routes to (cli.toml for the default
+Cell, `cli-<profile>.toml` for a named one; none: the built-in lanes
 alone): the built-in lanes the daemon runs work items on (its workflows
 dir; the installed release's when the daemon does not answer) and the
 workspace's user lanes (`.polyforge/workflows/<lane>/`, [User

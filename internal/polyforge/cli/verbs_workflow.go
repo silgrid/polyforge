@@ -224,18 +224,18 @@ func reportLane(sl workflow.SetLane) laneReport {
 
 // laneSetRoot answers the built-in lanes root a validation judges against
 // — the running daemon's workflows dir, else the installed release's — and
-// the config's workspace mapping (empty when the config does not load).
+// the [workspace] mapping of the Cell the invocation routes to
+// (profile.go's routedCellPlanLocal: this local read must keep working
+// with the daemon down, and a NoConfigLoad verb's Cfg.Mapping is empty).
+// An unreadable routed mapping is the resolver's typed or loud refusal —
+// validate never judges user lanes against a mapping it could not read.
 func laneSetRoot(ctx *Context) (string, *mapping.Plan, error) {
-	m := &mapping.Plan{}
-	cfg, err := LoadConfig(ctx.ConfigPath)
-	if err == nil {
-		ctx.Cfg = cfg
-		if cfg.Mapping != nil {
-			m = cfg.Mapping
-		}
-		if f := readDaemonFacts(ctx); f.reachable && f.workflowsDir != "" {
-			return f.workflowsDir, m, nil
-		}
+	m, _, err := ctx.routedCellPlanLocal()
+	if err != nil {
+		return "", nil, err
+	}
+	if f := readDaemonFacts(ctx); f.reachable && f.workflowsDir != "" {
+		return f.workflowsDir, m, nil
 	}
 	home, _ := os.UserHomeDir()
 	release := filepath.Join(DataDir(home), "release", "current", "workflows")
