@@ -7,8 +7,12 @@ import {
   hasPolyforgeCellCapabilities,
   isNewCellName,
   isPolyforgeProfileName,
+  polyforgeDefaultScope,
+  polyforgeDefaultScopeArgv,
+  polyforgeScopeArgv,
   sanitizePolyforgeCells,
   type PolyforgeCell,
+  type PolyforgeScopeArgv,
 } from "./polyforge-cells-pure";
 
 /**
@@ -157,4 +161,33 @@ export async function readPolyforgeResolvedCell(cwd?: string): Promise<string | 
   } catch {
     return null;
   }
+}
+
+/** The scope every data-plane pf call of the dock tabs (Memory, Messages,
+ *  Work items) is pinned to: the Cell pf resolves for the tab's cwd (the
+ *  server's own context when there is none — the same resolution the tab
+ *  names), made explicit as argv so no call lands on whatever Cell a
+ *  spawn's ambient PF_PROFILE or cwd would pick (polyforge#18).
+ *  `cell` is the resolved Cell's name, for display; `pin` is the argv
+ *  every pf call of the request carries. */
+export interface PolyforgeResolvedCellScope {
+  cell: string | null;
+  pin: PolyforgeScopeArgv;
+}
+
+/** Resolve the dock tabs' pinned scope: one `pf --json profile` read (the
+ *  tab's cwd when there is one) plus one capability read, answered as the
+ *  explicit scope — `polyforgeScopeArgv`, so a multi-Cell pf names even the
+ *  default Cell and a pre-Cell pf keeps today's unflagged calls (a resolved
+ *  named Cell it cannot address cannot happen: the pf that resolved it
+ *  reports the capabilities; a failed capability read degrades to the
+ *  unflagged default). Never throws. */
+export async function resolvePolyforgeCellScope(cwd?: string): Promise<PolyforgeResolvedCellScope> {
+  const [cell, capabilities] = await Promise.all([
+    readPolyforgeResolvedCell(cwd),
+    readPolyforgeCapabilities(),
+  ]);
+  const pin = polyforgeScopeArgv(cell ? { profile: cell } : polyforgeDefaultScope(), capabilities)
+    ?? polyforgeDefaultScopeArgv(capabilities);
+  return { cell, pin };
 }

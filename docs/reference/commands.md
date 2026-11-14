@@ -114,7 +114,8 @@ union, deduplicated by user id (first display name wins, mapping
 declaration order), of the aihub project member face
 (`GET /api/v1/projects/{id}/members`: human co-members other than the
 caller, id + display name only, gated by the project read) over every
-project the `cli.toml` `[workspace.*]` mapping names, read at call time (no
+project the routed Cell's `[workspace.*]` mapping names (cli.toml for
+the default Cell, `cli-<profile>.toml` for a named one), read at call time (no
 daemon restart). It issues one read per project, at most 4 at once, 15 s
 each, no retry; an unreadable project contributes nothing and the verb
 still exits 0, and no mapping answers `{"contacts":[]}`. Its `--json` is
@@ -882,7 +883,7 @@ hold no credential.
   `.polyforge/Dockerfile.verify`), neither: the container when HEAD
   carries one, else the host; a replay is red only when its run failed
   on its assertions — one that could not run there, a build, setup,
-  compile or import error or a missing module in its output, is reported
+  compile or import error or a missing module or test runner dependency preflight (`node_modules/` or Playwright Chromium missing) in its output, is reported
   `not_runnable`, a difference to class (exit 1), never red), `carries` (every e2e suite the build added
   or changed declares a `carries:` that covers it) and `micro-bounds
   --plan <evidence.json>` (every changed path inside the repo's
@@ -1089,7 +1090,9 @@ when it declares none) and `skippable` (`true` when the lane declares the
 step `skippable: true`, else absent). A bundle the one lane loader refuses is listed only in
 `bundle_errors` (`bundle`, `reason`: every `WFC-*` defect); the rest still render. With `--cwd`
 inside a mapped workspace it adds `workspace`, `projects` (the mapping's
-projects, in order) and, per step, `effective.<project>` — the effective
+projects, in order — the `[workspace]` mapping of the Cell the invocation
+routes to: cli.toml for the default Cell, `cli-<profile>.toml` for a named
+one) and, per step, `effective.<project>` — the effective
 chain (`models`) and the level it came from (`from`), resolved by the same
 precedence chain a dispatch uses (absent when no level governs, so the
 harness default runs), and `skip` — `{<project>: true}` for each project that
@@ -1115,7 +1118,9 @@ prints every defect with its `WFC-*` code, file:line and YAML path
 A lane that is still a `workflow.md` (the lane file of the earlier releases) is `WFC-101` with its
 rewrite. With no lane
 directory it judges the lane set of the workspace — `--workspace`, else the
-mapped workspace holding the working directory (none: the built-in lanes
+mapped workspace holding the working directory, through the `[workspace]`
+mapping of the Cell the invocation routes to (cli.toml for the default
+Cell, `cli-<profile>.toml` for a named one; none: the built-in lanes
 alone): the built-in lanes the daemon runs work items on (its workflows
 dir; the installed release's when the daemon does not answer) and the
 workspace's user lanes (`.polyforge/workflows/<lane>/`, [User

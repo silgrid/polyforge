@@ -199,15 +199,17 @@ export async function readPolyforgeWorkItemsCapability(): Promise<PolyforgeWorkI
 /** The argv of the one merged list read — no project, status or limit. */
 export const WORK_ITEMS_LIST_ARGV: readonly string[] = ["--json", "queue"];
 
-/** The list face: exactly one merged `pf --json queue`. Any failure (one
- *  project failing fails pf's whole verb) throws; the caller answers an
- *  empty table, never a partial one. */
-export async function listPolyforgeWorkItems(): Promise<{ items: PolyforgeWorkItemRow[]; total: number }> {
-  return sanitizeWorkItemListAnswer(await runPfJson([...WORK_ITEMS_LIST_ARGV]));
+/** The list face: exactly one merged `pf --json queue`, carrying the pinned
+ *  Cell scope's argv prefix (polyforge#18 AC4 — the Cell pf resolves, named
+ *  explicitly). Any failure (one project failing fails pf's whole verb)
+ *  throws; the caller answers an empty table, never a partial one. */
+export async function listPolyforgeWorkItems(pin: string[] = []): Promise<{ items: PolyforgeWorkItemRow[]; total: number }> {
+  return sanitizeWorkItemListAnswer(await runPfJson([...pin, ...WORK_ITEMS_LIST_ARGV]));
 }
 
-/** The detail face: exactly one `pf --json file show <id>`; the caller has
- *  validated the id. A body that is not a work item degrades to null. */
-export async function showPolyforgeWorkItem(id: string): Promise<PolyforgeWorkItemDetail | null> {
-  return sanitizeWorkItemDetail(await runPfJson(["--json", "file", "show", id]));
+/** The detail face: exactly one `pf --json file show <id>` with the same
+ *  pinned prefix; the caller has validated the id. A body that is not a
+ *  work item degrades to null. */
+export async function showPolyforgeWorkItem(id: string, pin: string[] = []): Promise<PolyforgeWorkItemDetail | null> {
+  return sanitizeWorkItemDetail(await runPfJson([...pin, "--json", "file", "show", id]));
 }

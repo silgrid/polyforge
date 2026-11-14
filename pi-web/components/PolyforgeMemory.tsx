@@ -169,7 +169,7 @@ export function PolyforgeMemory({ cwd, onOpenWorkItem }: PolyforgeMemoryProps) {
     setExpanded(false);
     setCopied(false);
     if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
-    fetch(`/api/polyforge/memory/${encodeURIComponent(id)}`)
+    fetch(`/api/polyforge/memory/${encodeURIComponent(id)}${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`)
       .then(async (response) => {
         const body = await response.json() as ShowResponse;
         if (seq !== detailSeqRef.current) return;
