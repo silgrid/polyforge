@@ -36,10 +36,10 @@ func TestPF27AnalysisSectionPresence(t *testing.T) {
 			t.Errorf("%s: HasAnalysis = %v, want %v", c.name, got, c.want)
 		}
 	}
-	if IsAnalysisHeading("## 分析") != true || IsAnalysisHeading("## Analysis") != true {
-		t.Error("IsAnalysisHeading must match ## 分析 and ## Analysis")
+	if isAnalysisHeading("## 分析") != true || isAnalysisHeading("## Analysis") != true {
+		t.Error("isAnalysisHeading must match ## 分析 and ## Analysis")
 	}
-	if IsAnalysisHeading("### 分析") || IsAnalysisHeading("## 验收") {
-		t.Error("IsAnalysisHeading must not match a level-three heading or an acceptance heading")
+	if isAnalysisHeading("### 分析") || isAnalysisHeading("## 验收") {
+		t.Error("isAnalysisHeading must not match a level-three heading or an acceptance heading")
 	}
 }

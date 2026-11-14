@@ -20,9 +20,10 @@ import (
 // section.
 var analysisHeadingRe = regexp.MustCompile(`(?i)^##\s+(?:analysis\b|分析)`)
 
-// IsAnalysisHeading reports whether line (trimmed) opens an analysis
+// isAnalysisHeading reports whether line (trimmed) opens an analysis
 // section: `## Analysis` or `## 分析`, case-insensitive, prefix match.
-func IsAnalysisHeading(line string) bool {
+// Un-exported (review r1#8): no consumer outside the package needs it.
+func isAnalysisHeading(line string) bool {
 	return analysisHeadingRe.MatchString(strings.TrimSpace(line))
 }
 
@@ -35,7 +36,7 @@ func analysisSection(doc string) (text string, found bool) {
 	for _, line := range strings.Split(doc, "\n") {
 		t := strings.TrimSpace(line)
 		if !found {
-			found = IsAnalysisHeading(t)
+			found = isAnalysisHeading(t)
 			continue
 		}
 		if strings.HasPrefix(t, "# ") || strings.HasPrefix(t, "## ") {
