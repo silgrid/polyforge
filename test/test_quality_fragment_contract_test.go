@@ -1,6 +1,6 @@
 package test
 
-// carries: workflows/_shared/test_quality.md, workflows/_shared/steps/review.md, workflows/develop/steps/build.md, workflows/micro/steps/fix.md
+// carries: workflows/_shared/test_quality.md, workflows/_shared/steps/review.md, workflows/develop/steps/build.md, workflows/micro/steps/fix.md, workflows/develop/README.md, workflows/micro/README.md, docs/design/polyforge-vnext/reference.md
 
 // test_quality_fragment_contract_test.go: text contract for the shared
 // test-quality bar (polyforge#28; adapted from spec-superflow's
@@ -121,4 +121,24 @@ func TestTestQualityFragmentReachesItsSteps(t *testing.T) {
 		t.Fatalf("render %s: %v", rel, err)
 	}
 	testQualityOnce(t, rel, string(out))
+}
+
+func TestBuildPlanUnitsCarryTheTestQualityRecord(t *testing.T) {
+	// the plan spec: every ## Units entry carries the record the bar names
+	build := w68Flat(t, "workflows/develop/steps/build.md")
+	const record = "its test-quality record (the behaviour its test observes, why its red is expected, the change it catches — the bar below)"
+	if !strings.Contains(build, record) {
+		t.Errorf("the build step's plan spec must require %q", record)
+	}
+	// the lane README describes the same record where it describes the plan
+	readme := w68Flat(t, "workflows/develop/README.md")
+	const readmeRecord = "each `## Units` entry recording the behaviour its test observes, why its red is expected and the change it catches (`workflows/_shared/test_quality.md`)"
+	if !strings.Contains(readme, readmeRecord) {
+		t.Errorf("the develop README must state %q", readmeRecord)
+	}
+	// and the record's home is the fragment itself, not a second copy
+	frag := testQualityFlat(testQualityFragment(t))
+	if !strings.Contains(frag, "Every unit of the plan carries the three statements above as its test-quality record, in its `## Units` entry") {
+		t.Error("the test_quality fragment no longer names the per-unit record duty")
+	}
 }
