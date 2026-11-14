@@ -167,6 +167,56 @@ class SkipTest(FastChecksCase):
                           by_name[name]["skip_reason"], name)
 
 
+class NestedRootTest(FastChecksCase):
+    """AC3 (polyforge#24's scenario): a change confined to a subdirectory
+    with its own verify-scope conf — the nested root — runs that root's
+    gates in the subdirectory; the same gate run at the repository root,
+    the pre-ticket approach, fails in the same scenario."""
+
+    NESTED_FILES = {
+        "webapp/.polyforge/verify-scope.conf":
+            "stack=npm\nfast_gate=test -f package-lock.json && pwd > nested-root.txt\n",
+        "webapp/package.json": '{"name": "webapp", "version": "1.0.0"}\n',
+        "webapp/package-lock.json": '{"name": "webapp", "lockfileVersion": 3}\n',
+        "webapp/src/x.js": "1\n",
+    }
+
+    def nested_repo(self) -> str:
+        files = {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf": CONF,
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+        }
+        files.update(self.NESTED_FILES)
+        return self.task_repo("app", files, {"webapp/src/x.js": "2\n"})
+
+    def test_a_change_confined_to_the_nested_root_runs_there(self) -> None:
+        clone = self.nested_repo()
+        code, res = self.run_checks("app")
+        self.assertEqual(code, 0, res)
+        where = {(c["name"], c["root"]) for c in self.commands_of(res)}
+        self.assertIn(("fast-1", "repos/app"), where)
+        self.assertIn(("webapp/fast-1", "repos/app/webapp"), where)
+        # the nested gate ran in the nested root, and proved it
+        with open(os.path.join(clone, "webapp", "nested-root.txt"), encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), os.path.join(clone, "webapp"))
+        # the repository root's own gate still ran at the root
+        with open(os.path.join(clone, "root.txt"), encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), clone)
+        # the full phase never ran
+        self.assertFalse(os.path.exists(os.path.join(clone, "full.txt")))
+        self.assertEqual([p["root"] for p in res["details"]["reports"]],
+                         ["repos/app", "repos/app/webapp"])
+
+    def test_the_pre_ticket_approach_fails_in_the_same_scenario(self) -> None:
+        """The same gate, run at the repository root as the model did in
+        #24, exits non-zero there: the root has no package-lock.json."""
+        clone = self.nested_repo()
+        c = subprocess.run(["bash", "-c", "test -f package-lock.json"], cwd=clone, capture_output=True)
+        self.assertNotEqual(c.returncode, 0)
+
+
 class UsageTest(FastChecksCase):
     def test_no_repo_is_a_usage_error(self) -> None:
         argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--engine", ENGINE, "--out", self.out]
