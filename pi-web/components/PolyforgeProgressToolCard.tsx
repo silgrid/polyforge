@@ -86,22 +86,6 @@ const bodyText: CSSProperties = {
 };
 const sectionLabel: CSSProperties = { padding: "4px 10px 0", color: "var(--text-dim)", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4 };
 
-/**
- * One tool call of the job detail's execution progress: the
- * transcript's ToolCallCard shell — name, the 120-code-point preview with the
- * full header on hover, `ok` / `error` / `running` and the duration (only
- * when the poll carries one, with the transcript's 100 ms floor). Collapsed
- * by default; every toggle is reported to the panel (`onToggle`, which
- * re-measures the follow state and, on an expansion, asks for that one call's
- * detail — at most once per call per selection, then re-read on every poll
- * while it still has no result: the step's progress lines while the command
- * runs, the final result once it ends) and the body shows it inline —
- * the complete masked input and output, wrapping, no scroller of its own —
- * or the step's interim progress lines while there is no result yet, or
- * states that there is no result yet, or that the detail is unavailable
- * (that card only; the stream is untouched). The root carries
- * `data-pf-progress-kind="tool"`.
- */
 /** The expanded card's body: the detail states — the complete masked
  *  input and output, the step's interim progress lines while there is no
  *  result yet, the no-result and unavailable notes. Presentational, so a
@@ -135,6 +119,22 @@ export function PolyforgeProgressToolBody({ detail }: { detail: PolyforgeProgres
   );
 }
 
+/**
+ * One tool call of the job detail's execution progress: the
+ * transcript's ToolCallCard shell — name, the 120-code-point preview with the
+ * full header on hover, `ok` / `error` / `running` and the duration (only
+ * when the poll carries one, with the transcript's 100 ms floor). Collapsed
+ * by default; every toggle is reported to the panel (`onToggle`, which
+ * re-measures the follow state and, on an expansion, asks for that one call's
+ * detail — at most once per call per selection, then re-read on every poll
+ * while it still has no result: the step's progress lines while the command
+ * runs, the final result once it ends) and the body shows it inline —
+ * the complete masked input and output, wrapping, no scroller of its own —
+ * or the step's interim progress lines while there is no result yet, or
+ * states that there is no result yet, or that the detail is unavailable
+ * (that card only; the stream is untouched). The root carries
+ * `data-pf-progress-kind="tool"`.
+ */
 export const PolyforgeProgressToolCard = memo(function PolyforgeProgressToolCard({ line, detail, onToggle }: {
   line: PolyforgeProgressLine;
   detail: PolyforgeProgressToolDetailState | undefined;
