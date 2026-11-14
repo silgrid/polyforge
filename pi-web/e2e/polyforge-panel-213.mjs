@@ -91,6 +91,16 @@ const tasks = { pfPresent: true, capable: true, tasks: T };
 const conversation = { id: "conv_e2e213", kind: "direct", peer: "u_e2e213", peer_name: "Alice Chen",
   last_seq: 1, unread: 0, created_at: EPOCH };
 const messages = { pfPresent: true, pfVersion: "v2.20.13", capable: true, conversations: [conversation], contacts: [] };
+// S213-13's 全部 list answer: twelve running rows give the third sub-tab's
+// badge its two-digit count (the passport's eight keys, the route's shape).
+const runningItems = [
+  ...Array.from({ length: 12 }, (_, i) => ({
+    id: `wi_E2E213R${String(i).padStart(2, "0")}`, slug: `213-r${String(i + 1).padStart(2, "0")}`, project: "workbench",
+    status: "running", priority: "normal", bundle_name: "develop", goal: `E2E 213 running item ${i + 1}`, created_at: EPOCH,
+  })),
+  { id: "wi_E2E213W1", slug: "213-wrapped", project: "workbench", status: "wrapped", priority: "normal",
+    bundle_name: "develop", goal: "E2E 213 wrapped item", created_at: EPOCH },
+];
 
 // ---- scenario bookkeeping and helpers ----
 const failures = [];
@@ -290,7 +300,7 @@ try {
       assert.ok(Math.abs(railBox.width - 40) <= 4, `the rail is about 40px wide (${railBox.width})`);
       assert.ok(railBox.x >= jobs.main.x + jobs.main.width - 2, `the rail sits right of the main area (rail ${railBox.x}, main end ${jobs.main.x + jobs.main.width})`);
       const buttons = rail.getByRole("tab");
-      // intentional fourth sub-tab: 待集成 joins the Work rail after 工单列表.
+      // intentional fourth sub-tab: 待集成 joins the Work rail after 全部 (工单列表 before polyforge#22).
       assert.equal(await buttons.count(), 4, "four sub-tab buttons");
       mobileButtons = [];
       for (let i = 0; i < 4; i++) {
@@ -314,8 +324,14 @@ try {
       assert.ok(desktop.every(Boolean), "the desktop rail buttons measure");
       for (const box of mobileButtons) {
         assert.ok(box.width <= Math.max(...desktop.map((item) => item.width)) + 1, `a mobile button is no wider than a desktop rail button (${box.width})`);
-        assert.ok(box.height <= Math.max(...desktop.map((item) => item.height)) + 1, `a mobile button is no taller than a desktop rail button (${box.height})`);
       }
+      // polyforge#22 (r1#1): the desktop badge rides the label's line, so the
+      // desktop button is one line tall — the retired two-line button was the
+      // old height reference. The pin states the new shape directly: the
+      // desktop rail button stays one line tall, no taller than the 40px
+      // mobile button.
+      assert.ok(desktop.every((item) => item.height <= 40),
+        `a desktop rail button stays one line tall (${JSON.stringify(desktop.map((item) => item.height))})`);
     });
   });
 
@@ -341,7 +357,7 @@ try {
     const buttons = rail.getByRole("tab");
     // intentional fourth sub-tab: 待集成 joins the Work rail after 工单列表.
     assert.equal(await buttons.count(), 4, "four sub-tab buttons");
-    const names = ["作业", "任务", "工单列表", "待集成"];
+    const names = ["作业", "任务", "全部", "待集成"];
     for (let i = 0; i < 4; i++) {
       const button = buttons.nth(i);
       assert.equal(await button.getAttribute("aria-label"), names[i], `button ${i} has the existing tab copy as aria-label`);
@@ -372,6 +388,83 @@ try {
       "the badge stays under the icon horizontally");
     assert.match(await badge.getAttribute("aria-label"), /3/, "the badge keeps its accessible count label");
   }));
+
+  // S213-13 (polyforge#22 AC1/AC3): on the desktop rail the running badge rides
+  // right of the label on one line (it sat under the label before), in all
+  // three locales, with two-digit counts (12/34/12), never wrapping (one client
+  // rect, nowrap) and never leaving the 72px rail; the badge keeps its accessible
+  // count name. Red on the pre-change tree: the badge sat under the label.
+  await check("S213-13", async () => {
+    const badgeGeo = (page, tab) => workTablist(page).locator(`[data-pf-work-badge="${tab}"]`).evaluate((el) => {
+      const button = el.closest("button");
+      const label = button.querySelector("span:not([data-pf-work-badge])");
+      const b = el.getBoundingClientRect(); const l = label.getBoundingClientRect();
+      return {
+        label: { text: label.textContent.trim(), x: l.x, y: l.y, width: l.width, height: l.height },
+        badge: { text: el.textContent.trim(), x: b.x, y: b.y, width: b.width, height: b.height,
+          aria: el.getAttribute("aria-label"), title: el.getAttribute("title") },
+        button: { scrollWidth: button.scrollWidth, clientWidth: button.clientWidth },
+        labelRects: label.getClientRects().length,
+      };
+    });
+    for (const [locale, labels] of [
+      ["zh-CN", { jobs: "作业", tasks: "任务", items: "全部" }],
+      ["en", { jobs: "Jobs", tasks: "Tasks", items: "All" }],
+      ["zh-TW", { jobs: "作業", tasks: "任務", items: "全部" }],
+    ]) {
+      await withPage(locale === "zh-CN" ? {} : { locale, storage: { "pi-locale": locale } }, async (page) => {
+        // Two-digit counts on every badged tab: the status snapshot answers
+        // 12 running jobs and 34 running tasks; the 全部 list read reports
+        // 12 running rows. Registered after the harness's own mocks, so this
+        // map answers first.
+        await mockPolyforge(page, {
+          status: { ...status, status: { ...status.status,
+            queue: { ...status.status.queue, running: 12 }, tasks: { running: 34, completed: 3 } } },
+          cards: () => ({ pfPresent: true, cards }),
+          watch: () => watch,
+          tasks: () => tasks,
+          messages: () => messages,
+          "messages/*": () => ({ capable: true, messages: [], last_seq: conversation.last_seq, has_older: false }),
+          "work-items": () => ({ pfPresent: true, capable: true, items: runningItems, total: runningItems.length }),
+        });
+        // openWork's top-tab regex is zh-CN-only (工单); this scenario also runs
+        // en and zh-TW (Work / 工單), so it opens the Work tab itself.
+        await openDock(page);
+        const work = topTab(page, /工单|工單|work/i);
+        await work.waitFor({ timeout: 20_000 });
+        await work.click();
+        const rail = workTablist(page);
+        await rail.waitFor({ timeout: 15_000 });
+        const railBox = await rail.boundingBox();
+        assert.ok(railBox && Math.abs(railBox.width - 72) <= 1, `${locale}: the desktop rail is 72px wide (${railBox?.width})`);
+        // the 全部 badge needs its one list read: open the sub-tab (bounded).
+        await workTab(page, /全部|all/i).click();
+        for (const [tab, count] of [["jobs", "12"], ["tasks", "34"], ["items", "12"]]) {
+          const badge = workTablist(page).locator(`[data-pf-work-badge="${tab}"]`);
+          await badge.waitFor({ timeout: 15_000 });
+          const geo = await badgeGeo(page, tab);
+          const what = `${locale} ${labels[tab]}`;
+          assert.equal(geo.label.text, labels[tab], `${what}: the label reads ${labels[tab]}`);
+          assert.equal(geo.badge.text, count, `${what}: the badge carries the two-digit count`);
+          // AC1: same line, badge right of the label, both inside the 72px rail.
+          assert.ok(Math.abs((geo.label.y + geo.label.height / 2) - (geo.badge.y + geo.badge.height / 2)) <= 2,
+            `${what}: the badge is on the label's line (label ${geo.label.y}, badge ${geo.badge.y})`);
+          assert.ok(geo.badge.x >= geo.label.x + geo.label.width - 0.5,
+            `${what}: the badge sits right of the label (label end ${geo.label.x + geo.label.width}, badge ${geo.badge.x})`);
+          assert.ok(geo.label.x >= railBox.x - 0.5 && geo.badge.x + geo.badge.width <= railBox.x + railBox.width + 0.5,
+            `${what}: label and badge stay inside the ${railBox.width}px rail`);
+          // AC3: no wrap, no overflow — one client rect, nothing wider than the button.
+          assert.equal(geo.labelRects, 1, `${what}: the label does not wrap (${geo.labelRects} rects)`);
+          assert.ok(geo.label.height <= 18, `${what}: the label keeps one line's height (${geo.label.height}px)`);
+          assert.ok(geo.button.scrollWidth <= geo.button.clientWidth + 1,
+            `${what}: the button does not overflow (${geo.button.scrollWidth}/${geo.button.clientWidth})`);
+          // AC1's unchanged rules: the badge keeps its accessible count name on title too.
+          assert.equal(geo.badge.aria, geo.badge.title, `${what}: aria-label and title agree`);
+          assert.ok(geo.badge.aria.includes(count), `${what}: the accessible name carries the count (${geo.badge.aria})`);
+        }
+      });
+    }
+  });
 
   const messagesLayout = (opts, label, expectedColumns) => withPage(opts, async (page) => {
     await openMessages(page);

@@ -2033,7 +2033,7 @@ export const zhCNLocale: LocalePlugin = {
     "polyforge.work.tab": "工单",
     "polyforge.work.jobsRunning": "{count} 个运行中的作业",
     "polyforge.work.tasksRunning": "{count} 个运行中的任务",
-    "polyforge.work.itemsTab": "工单列表",
+    "polyforge.work.itemsTab": "全部",
     "polyforge.work.itemsRunning": "{count} 个运行中的工单",
     "polyforge.work.integrateTab": "待集成",
     "polyforge.integrate.loading": "正在读取待集成…",

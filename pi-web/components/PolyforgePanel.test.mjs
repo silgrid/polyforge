@@ -854,10 +854,10 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
   assert.match(messagesTab, /t\("polyforge\.messages\.tab"\)\}\s*\{messagesSurface\.unreadTotal > 0 && \(/, "the dot follows the Messages label");
   // Work: the main area renders only the selected sub-tab's surface.
   assert.match(source, /\) : workTab === "tasks" \? \(\s*(?:\/\/[^\n]*\n\s*)*<PolyforgeTasks/, "the Tasks sub-tab renders the tasks surface");
-  // (intentional 2026-10-31 third-segment change): 工单列表 renders only the work-item surface.
+  // (intentional 2026-10-31 third-segment change; label renamed 全部 by polyforge#22): the third sub-tab renders only the work-item surface.
   // its detail goes to Work's full-width lower part.
   assert.match(source, /\{workTab === "items" \? \(\s*(?:\/\/[^\n]*\n\s*)*<PolyforgeWorkItems itemCountKey=\{itemCountKey\} onRunningCount=\{onWorkItemsRunningChange\} renderDetail=\{renderWorkDetail\} onDetailOpenChange=\{setSubDetailOpen\} \/>/,
-    "the 工单列表 sub-tab renders the work-item surface with the count key, the badge reporter and the lower-part detail");
+    "the 全部 sub-tab renders the work-item surface with the count key, the badge reporter and the lower-part detail");
   // the external task open rides beside the count key.
   // the task summaries (decision-feed entries) ride beside it.
   assert.match(source, /<PolyforgeTasks\s+taskCountKey=\{opsStatus \? `\$\{opsStatus\.tasks\?\.running \?\? 0\}:\$\{opsStatus\.tasks\?\.completed \?\? 0\}` : null\}\s+openTaskId=\{taskToOpen\}\s+onOpenTaskHandled=\{clearTaskToOpen\}\s+decisions=\{decisionsSurface\.feed\?\.decisions \?\? \[\]\}\s+onDismissDecisions=\{decisionsSurface\.onDismiss\}\s+renderDetail=\{renderWorkDetail\}\s+onDetailOpenChange=\{setSubDetailOpen\}\s+\/>/,
@@ -871,7 +871,7 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
   assert.match(work, /\(\["jobs", "tasks", "items", "integrate"\] as const\)\.map\(\(tab\) =>/);
   assert.match(work, /role="tab" aria-selected=\{active\}\s*onClick=\{\(\) => onWorkTab\(tab\)\}/);
   assert.match(work, /const label = tab === "jobs" \? t\("polyforge\.messages\.jobsTab"\) : tab === "tasks" \? t\("polyforge\.tasks\.tab"\)\s*: tab === "items" \? t\("polyforge\.work\.itemsTab"\) : t\("polyforge\.work\.integrateTab"\);/,
-    "作业 / 任务 / 工单列表 / 待集成 labels ( adds the third; intentional fourth sub-tab)");
+    "作业 / 任务 / 全部 / 待集成 labels ( adds the third; intentional fourth sub-tab; 全部 renamed by polyforge#22)");
   // owner-intended change（重立自 #209）: desktop keeps the ~72px text rail;
   // ≤640px is a 40px vertical icon rail on the right (was a three-segment bar
   // above the main area). owner-intended change: Work is two
@@ -884,7 +884,7 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
   assert.ok(detailPart > source.indexOf('data-pf-tabstrip="work"'), "the full-width detail part follows the top row (and its rail) in the DOM");
   assert.ok(source.indexOf("data-pf-detail-scroll") > detailPart && source.indexOf("<PolyforgeJobComposer") > source.indexOf("data-pf-detail-scroll"),
     "the job detail and, under it, the input box sit in the full-width part");
-  // Tasks and 工单列表 render their detail into the part's slot (a portal), so
+  // Tasks and 全部 render their detail into the part's slot (a portal), so
   // the part stays mounted and only hides while no detail is open.
   assert.match(source, /const workDetailOpen = workTab === "jobs" \? Boolean\(opsStatus\) : subDetailOpen;/);
   assert.match(source, /workDetailSlot \? createPortal\(detail, workDetailSlot\) : null/);
@@ -898,8 +898,10 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
   // Icon-only on mobile, named by the existing tab copy; desktop keeps the visible label.
   assert.match(work, /aria-label=\{isMobile \? label : undefined\}\s*title=\{isMobile \? label : undefined\}/, "the icon-only button is named by its tab copy");
   assert.match(work, /\{isMobile \? WORK_TAB_ICONS\[tab\] : <span>\{label\}<\/span>\}/, "icon on mobile, visible label on desktop");
-  assert.match(work, /\.\.\.\(isMobile \? \{ width: "100%", height: 40, padding: 0 \} : \{ padding: "10px 4px" \}\)/, "about 40×40 mobile buttons");
-  assert.match(work, /display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center"/, "the badge sits under the icon/label");
+  assert.match(work, /\.\.\.\(isMobile \? \{ width: "100%", height: 40, padding: 0 \} : \{ padding: "10px 4px", flexWrap: "nowrap", whiteSpace: "nowrap" \}\)/, "about 40×40 mobile buttons; the desktop label+badge row never wraps (polyforge#22)");
+  // polyforge#22 AC1: mobile keeps the icon-over-badge stack; desktop is a row —
+  // the badge rides right of the label on one line.
+  assert.match(work, /display: "flex", flexDirection: isMobile \? "column" : "row", alignItems: "center", justifyContent: "center"/, "mobile stacks the icon over the badge; desktop puts the badge right of the label on one line (polyforge#22)");
   assert.match(source, /const workTabIcon = \(paths: ReactNode\) => \(\s*<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">/, "16px icons in the panel's 24-viewBox stroke style");
   // intentional fourth sub-tab: 待集成 has its rail icon too.
   for (const tab of ["jobs", "tasks", "items", "integrate"]) assert.match(source, new RegExp(`\\n  ${tab}: workTabIcon\\(`), `${tab} has a rail icon`);
@@ -955,7 +957,7 @@ test("the header carries a pressed-state pin control only when showPin", () => {
   }
 });
 
-test("the 工单列表 count key is queue.running plus the terminal-job count, null without a snapshot; the panel adds no read", () => {
+test("the 全部 count key is queue.running plus the terminal-job count, null without a snapshot; the panel adds no read", () => {
   const start = source.indexOf("export function workItemCountKey(");
   assert.ok(start >= 0, "one pure key helper");
   const body = source.slice(start, source.indexOf("export function PolyforgePanel(", start));

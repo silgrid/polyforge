@@ -821,15 +821,17 @@ the Messages unread dot stays its own element beside the Messages label and
 the Work tab carries no count. The former Jobs and Tasks tabs are Work's
 first two sub-tabs (作业/任务 in zh-CN, 作業/任務 in zh-TW, so the workflow jobs
 and the one-shot tasks read apart from pi's own background-tasks surface),
-followed by the read-only work item list (工单列表 / 工單列表 /
-Work items, `polyforge.work.itemsTab`) and the integration view (
+followed by the read-only work item list (全部 / 全部 /
+All — 工单列表 / 工單列表 / Work items before polyforge#22, `polyforge.work.itemsTab`) and the integration view (
 待集成 / 待整合 / Integration, `polyforge.work.integrateTab`) — order 作业,
-任务, 工单列表, 待集成 — in their
+任务, 全部, 待集成 — in their
 own tablist (`data-pf-tabstrip="work"`) placed after the main area in the
 DOM, beside it on the right (`aria-orientation="vertical"`): on desktop (viewport ≥ 641px,
 `useIsMobile`, whatever the dock width) a ~72px text rail (`flex: 0 0 72px`,
 `border-left`, the active one on `var(--bg-selected)` with an accent edge,
-visible label with the badge under it); at ≤ 640px (replacing
+visible label with the running badge right of it on one line — polyforge#22, it sat under
+the label; the row is nowrap so label + two-digit count never wrap or leave the
+72px rail); at ≤ 640px (replacing
 the three-segment bar above the main area) a 40px icon rail
 (`flex: 0 0 40px`, the same left border and accent edge) of ~40×40
 icon-only buttons — a 16px stroke icon in the panel's 24-viewBox style
@@ -844,13 +846,13 @@ branches merging into one line).
 is a column (`data-pf-work-layout`) of two parts. The top part
 (`data-pf-work-top`) is the row: the main area (`data-pf-work-main`) shows the
 selected sub-tab's list — the Jobs queue line and card row, the Tasks list or
-the 工单列表 list, each with its own search and filters, or the 待集成 view
+the 全部 (work item) list, each with its own search and filters, or the 待集成 view
 — and the rail sits beside it on the right. The lower part (`data-pf-work-detail`, a top border)
 spans the whole panel width and holds the selected item's detail: the job
 detail (its one scroll region) with the input box (`PolyforgeJobComposer`)
 at its bottom; a task's report; a work item's detail. Jobs shows the lower
 part whenever there is a status snapshot (with nothing selected it holds the
-`polyforge.selectJob` hint); Tasks and 工单列表 show it only while a detail is
+`polyforge.selectJob` hint); Tasks and 全部 show it only while a detail is
 open — they hand the detail to `renderDetail` (a portal into the part's slot,
 `data-pf-work-detail-slot`) and report `onDetailOpenChange`, and with nothing
 selected the part is hidden and the top part takes the whole height. 待集成
@@ -865,7 +867,7 @@ lower part hides, never unmounts), so switching a sub-tab never remounts them.
 **Badges.** Jobs and Tasks carry their running count from the one status
 snapshot the existing 3 s/30 s status poll already reads — `queue.running` on
 Jobs, `tasks.running` on Tasks (see the status route contract); no timer, no
-task-list read. 工单列表 carries the count of `status ===
+task-list read. 全部 carries the count of `status ===
 "running"` rows of its last list read (`workItemsRunning` in the hook): absent
 until the first read in the page session, then kept — also while the surface
 is unmounted — until the next list answer; it costs no read of its own. A
@@ -881,13 +883,13 @@ State: `usePolyforge` holds `activeTab` (`PolyforgeTab = "memory" |
 (`number | null`). The hook outlives the dock, so a
 close/reopen keeps the sub-tab and the items badge; a reload resets all
 three; nothing is written to storage. `openAnchor` (the Messages and Memory
-work-item links) sets Work › Jobs and the selection — never 工单列表. The
+work-item links) sets Work › Jobs and the selection — never the 全部 list. The
 cards poll is gated on `activeTab === "work" && workTab === "jobs"`; the
 Tasks, work-item and 待集成 surfaces read only while they are mounted.
 
 ## Search bars
 
-Work › 工单列表, Memory and Tasks render through one layout:
+Work › 全部, Memory and Tasks render through one layout:
 `components/PolyforgeSearchBar.tsx` plus its `.pf-searchbar` rules in
 `app/globals.css`, each root carrying `data-pf-searchbar`. Row 1 is the
 search input (`flex: 1`, its `aria-label` and `title` plus a placeholder)
@@ -899,7 +901,7 @@ row. At ≤640px row 1 never wraps, the filters become a two-column grid (an odd
 last control spans the row), every input/select/action is at least 40px high
 (the action 40×40, the any-word checkbox's label cell 40px), and the global
 16px mobile input/select font stays. The surface keeps its own semantics:
-工单列表 filters as you type and its ↻ is the one manual list re-read (#204's
+全部 filters as you type and its ↻ is the one manual list re-read (#204's
 busy contract, one existing `GET /api/polyforge/work-items` per click);
 Memory still applies its keyword only on Enter or the 🔍 action (accessible
 name `polyforge.memory.search`), and a project/type/tags change still

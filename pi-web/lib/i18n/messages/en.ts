@@ -2033,7 +2033,7 @@ export const enLocale: LocalePlugin = {
     "polyforge.work.tab": "Work",
     "polyforge.work.jobsRunning": "{count} running jobs",
     "polyforge.work.tasksRunning": "{count} running tasks",
-    "polyforge.work.itemsTab": "Work items",
+    "polyforge.work.itemsTab": "All",
     "polyforge.work.itemsRunning": "{count} running work items",
     "polyforge.work.integrateTab": "Integration",
     "polyforge.integrate.loading": "Reading the integration view…",
