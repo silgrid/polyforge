@@ -10,9 +10,9 @@ import (
 
 func w407Files(suites int) map[string]string {
 	files := map[string]string{
-		"package.json": `{"scripts":{"test:e2e":"node e2e/all.mjs"}}` + "\n",
+		"package.json":                 `{"scripts":{"test:e2e":"node e2e/all.mjs"}}` + "\n",
 		".polyforge/verify-scope.conf": "stack=npm\ne2e_runner=npm run test:e2e --\ne2e_start_threshold=20\n",
-		"lib/app.js": "export const app = 1;\n",
+		"lib/app.js":                   "export const app = 1;\n",
 	}
 	for i := 0; i < suites; i++ {
 		files[fmt.Sprintf("e2e/suite-%02d.mjs", i)] = "// carries: lib/app.js\nconsole.log('suite');\n"
