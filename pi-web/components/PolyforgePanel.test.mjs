@@ -1088,10 +1088,11 @@ test(" (owner intentional change, reversing #238): the detail opens at its botto
   assert.match(block, /const streamed = Boolean\(snapshot\?\.available && lines\.length > 0\);/, "nothing is forced while loading, empty or unavailable");
   assert.match(block, /useLayoutEffect\(\(\) => \{\s*const region = scrollRef\.current;\s*if \(region && streamed && pinned\.current\) region\.scrollTop = region\.scrollHeight;\s*\}, \[snapshot, visibleCount, streamed, shownEchoes\.length, scrollRef\]\);/, "the first stream, every later chunk and an echoed owner message end at the whole region's bottom while pinned");
   assert.match(block, /setVisibleCount\(PROGRESS_RENDER_CHUNK\);/, "another job re-chunks its stream");
-  assert.match(block, /const onScroll = \(\) => \{\s*const at = isProgressPinnedToBottom\(region\);\s*pinned\.current = at;\s*setAtBottom\(at\);\s*\};/, "a passive listener tracks the follow state and the control's visibility");
+  assert.match(block, /const onScroll = \(\) => \{\s*const at = isProgressPinnedToBottom\(region\);\s*pinned\.current = at;\s*setAtBottom\(at\);\s*setAtTop\(isProgressAtTop\(region\)\);\s*\};/, "a passive listener tracks the follow state and both controls' visibility (the at-top read since polyforge#31)");
   assert.match(block, /if \(region\) region\.scrollTop = region\.scrollHeight;\s*pinned\.current = true;/, "a click on ↓ Latest jumps immediately and restores following");
-  assert.match(block, /!atBottom && \(/, "the control is visible exactly while the region is off its bottom");
-  assert.doesNotMatch(block, /scrollTo\(|smooth/i, "the jump is not animated");
+  assert.match(block, /!atBottom && \(/, "the latest control is visible exactly while the region is off its bottom");
+  assert.match(block, /!atTop && \(/, "the top control is visible exactly while the region is off its top (polyforge#31)");
+  assert.match(block, /const jumpToTop = \(\) => \{\s*const region = scrollRef\.current;\s*if \(region\) region\.scrollTo\(\{ top: 0, behavior: "smooth" \}\);\s*\};/, "the up button's one click smooth-scrolls to the very top (polyforge#31 — the latest jump stays instant)");
   assert.doesNotMatch(block, /unread/i, "the control carries no unread count");
 });
 
