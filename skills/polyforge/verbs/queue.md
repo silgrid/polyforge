@@ -64,6 +64,17 @@ settled with the owner and written in (`pf file edit <id> --content
 document carries `"acceptance_missing": true` on such an item (absent on
 every other); the `--project` `--json` body is the server's and does not.
 
+The same lane gate marks the missing **pre-submit analysis** (polyforge#27):
+a queued execution ticket whose content carries no `## 分析` (or `##
+Analysis`) section with content — 「免分析」 with its date counts as content —
+has the STATUS cell `queued (需要交互：未分析)`, and a ticket missing both
+shows both marks (`queued (需要交互：缺验收) (需要交互：未分析)`); the daemon's
+auto-pull skips it the same way. The merged `--json` document carries
+`"analysis_missing": true` on such an item (absent on every other). The way
+out is `verbs/submit.md`'s analysis check: a `pf task spawn` errand whose
+report the session writes into the ticket's `## 分析` section, or the
+owner's dated 「免分析」.
+
 ### Presenting a queue result
 
 The CLI's terminal table truncates the GOAL column (60 runes), so read the
@@ -78,7 +89,10 @@ answer may render the headers 状态 / 优先级 / 车道 / 一句话内容). SU
 a compressed one-line summary of the item's full GOAL; LANE is the item's
 bundle (the lane table in `verbs/file.md`). A row with
 `acceptance_missing: true` (set only when its lane requires acceptance) is presented with STATUS 「需要交互：缺验收」
-(needs interaction: no acceptance), never as a plain `queued`.
+(needs interaction: no acceptance), never as a plain `queued`; a row with
+`analysis_missing: true` likewise with STATUS 「需要交互：未分析」
+(needs interaction: no analysis), and a row carrying both marks presents
+both.
 
 The complete per-row list remains mandatory: present every row of the
 requested scope (the status filter asked for, or all rows). Classification,

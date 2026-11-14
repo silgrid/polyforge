@@ -89,6 +89,31 @@ One row per group, exactly as `pf help` prints it:
 | Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries; `--prune-chat-state` deletes the retired chat-subscription files the `retired chat state` row lists (`chats.json`, `chat-subs.json`, `chat-status/` and `migration/chat-subs.json.pre-migration` in the data dir, and the runtime dir's `chat-*` and `session-*.chat` files); `--prune-capsules` acts on the entries the `capsule retention` row calls reclaimable or retired — past the 14-day retention, holding no uncommitted or unpushed task-repo work: a wrapped work item's capsule, live or set aside, is slimmed to `artifacts/` + `capsule.json`, and terminal work items' external git dirs and failed or canceled ones' set-aside scenes are removed — a commit counts as pushed when either the task clone's own or the mapped workspace's `.repo/<name>` clone's remote-tracking refs reach it; a capsule holding such work, and the work item's git dirs, are kept and named; its `disk watermark` row reports each mapped workspace's filesystem use and `capsules/` bytes and warns above 70% used; `--fix-harness-prompts` appends the native-SVG diagram-guidance block to each installed harness's existing context file that lacks that block — legacy mermaid-only guidance, which the `harness diagram guidance` row warns as `legacy`, included and left as it is — append-only and idempotent, never creating a file; `--fix-install-layout` links `~/.claude/skills/polyforge` to `<data-dir>/release/current/skills/polyforge` when the `claude install layout` row finds it missing or linked elsewhere — only that entry, idempotent, a no-op on a correct link; a copied directory or a missing release is left to `tools/install.sh`, and it never installs `pf` or a release), `version` (the verb form of `pf --version`), `profile` (the resolved Cell and its source), `init` (a workspace's local layout) |
 | Process | `daemon` (run the work machine; `pf daemon ensure` starts it), `aihub` (run the aihub server on the service host; `main.go` intercepts `pf aihub`, this verb serves `pf help aihub` only) |
 
+## `pf submit` — the prechecks; `pf queue` — the interaction marks
+
+An execution ticket (one with a bundle) on a lane that requires acceptance
+(the lane's `workflow.yaml` key `acceptance`, default `required`; the shipped
+`integrate` and `release` lanes declare `none`) passes two CLI prechecks
+before the local daemon is contacted — each with its own bypass flag, each
+refusing with exit 1 and nothing claimed:
+
+- **the acceptance check** — at least one criterion (a top-level list item)
+  under `## Acceptance` or `## 验收`; `pf submit <id> --allow-no-acceptance`
+  submits the ticket anyway.
+- **the analysis check (polyforge#27)** — a `## 分析` (or `## Analysis`)
+  section with content; a dated 「免分析」 the session writes on the owner's
+  explicit skip counts as content; `pf submit <id> --allow-no-analysis`
+  submits the ticket anyway. The check never judges what the section says.
+
+The daemon's auto-pull skips a ticket either check would refuse: it stays
+queued, and `pf queue` marks it in the STATUS cell —
+`queued (需要交互：缺验收)` (no acceptance criterion),
+`queued (需要交互：未分析)` (no analysis section), and both marks when both
+are missing. The merged `--json` document (`pf queue` without `--project`)
+carries `"acceptance_missing": true` and `"analysis_missing": true` on such
+items (absent on every other); the `--project` `--json` body is the
+server's raw answer and carries neither.
+
 ## `pf msg` — user-to-user messages
 
 `pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]`

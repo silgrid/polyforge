@@ -73,7 +73,15 @@ driver reads both headings the same), and the session grills the acceptance in
 before submitting; `--allow-no-acceptance` submits it anyway, on the owner's
 explicit say-so. The daemon's auto-pull skips such a ticket too: it stays
 queued and `pf queue` marks it 需要交互：缺验收 until its acceptance is
-written in or it is submitted by hand. `build` does not grill the ticket; it asks the owner only on a
+written in or it is submitted by hand. On the same lanes a pre-submit
+analysis rides (polyforge#27): `pf submit` also refuses an execution ticket
+whose content carries no `## 分析` (or `## Analysis`) section with content —
+a dated 「免分析」 the session writes on the owner's explicit skip counts as
+content — unless `--allow-no-analysis` is passed; the daemon's auto-pull
+skips such a ticket too, and `pf queue` marks it 需要交互：未分析 (both
+marks when both are missing). The routing skill's submit fragment owns the
+analysis flow: a read-only `pf task spawn` errand whose 7-item report the
+session writes into the ticket's `## 分析` section. `build` does not grill the ticket; it asks the owner only on a
 surprise, right after the plan and never at completion, with `pf step ask`. Human stops: a dead end or a
 contradiction the code reveals (a defect `build` cannot reproduce included); the plan
 diverging from the ticket; `confirm_plan` (one stop right after the plan, before the

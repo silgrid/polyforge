@@ -96,11 +96,16 @@ re-admitted.
 On a lane that requires acceptance (its `workflow.yaml` key `acceptance`,
 default `required`; a lane that cannot be read counts as requiring it), auto
 pull claims only ready execution tickets whose content lists an acceptance
-criterion (under `## Acceptance` or `## 验收` — the check `pf submit`
-applies); a lane declaring `acceptance: none` is pulled without one. Others
-stay queued, and `pf queue` marks them
-需要交互：缺验收: settle the acceptance with the owner and write it in
-(`pf file edit <id> --content @file`), or submit by hand
+criterion (under `## Acceptance` or `## 验收`) and carries a pre-submit
+analysis section with content (under `## 分析` or `## Analysis` — 「免分析」
+with its date counts; the checks `pf submit` applies, polyforge#27); a lane
+declaring `acceptance: none` is pulled without either. Others stay queued,
+and `pf queue` marks them
+需要交互：缺验收 (settle the acceptance with the owner and write it in:
+`pf file edit <id> --content @file`) or
+需要交互：未分析 (run the pre-submit analysis — a `pf task spawn` errand
+whose report the session writes into the ticket's `## 分析` section — or the
+owner's dated 免分析), or submit by hand
 (`verbs/submit.md`).
 
 To see what is ready before turning auto on (or to submit by hand), use

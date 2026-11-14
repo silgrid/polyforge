@@ -133,7 +133,9 @@ and name the result in the `Lane + reason` slot above:
 or a handful of lines in one module, versus many files across modules) and
 `lane risk surface` (what the change can break or newly expose — a new
 user-visible behavior or behavior face, a cross-module change, a gate-type
-change, or the driver/daemon core). A pure text ticket — docs or locale
+change, or the project's core runtime parts — whatever components keep the
+product itself running; each project names its own, and the check never
+names a specific project's components). A pure text ticket — docs or locale
 message text and nothing else: no code, config, generated file, test or
 behavior change — whose every touched repository declares `micro_path=` covering
 the paths it changes (read each repository's `.polyforge/verify-scope.conf` on
@@ -163,12 +165,27 @@ Filing any ticket, write its `## Acceptance` at creation only when the
 requirement is **very clear**: what to do, its scope and when it is done are all
 settled, and there is nothing the owner must decide — when unsure, it is not
 clear. Then each item is a verifiable criterion marked `— carried by build`
-(the `Acceptance carrier` slot above), so the ticket can be submitted directly.
+(the `Acceptance carrier` slot above), and it names its proof: the command
+that shows the criterion holds and the directory that command runs in (for
+example `- AC1 the queue marks a ticket without analysis — carried by
+build, proof: cd <repo> && go test ./internal/polyforge/cli/ -run
+'^TestPF27Queue'`), so the ticket can be submitted directly.
 Otherwise file it as usual without the section and write no guessed criteria:
 the submit-time acceptance check (`verbs/submit.md`) brings the interaction that
 settles them. Claiming a follow-up item (`verbs/followup.md`, Claim) whose
 completion standard can be settled from the wrap's evidence is this very-clear
 case.
+
+### Pre-submit analysis
+
+An execution ticket filed on a lane that requires acceptance also carries a
+pre-submit analysis before it is submitted: propose it right after filing (or
+when `pf submit`'s check refuses the ticket for it) — a read-only `pf task
+spawn` errand, the session writing the task's report into the ticket's `##
+分析` section; the owner may instead explicitly waive it with one dated line
+「免分析」. The flow, the 7-item report format, the boundary against grilling
+and the pre-submit confirmation rule are defined once in `verbs/submit.md`
+(the analysis check) — this fragment adds nothing to them.
 
 ### Deepening check
 
