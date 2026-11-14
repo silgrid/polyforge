@@ -380,3 +380,26 @@ func TestW18QueueEmptyMappingNamesTheRoutedFile(t *testing.T) {
 		t.Fatalf("--profile beta queue: %d/%d request(s) still sent", nDef, nAlpha)
 	}
 }
+
+// TestW18SubmitAcceptanceCheckReadsTheRoutedMapping (AC3): the submit
+// acceptance check judges the ticket's lane through the routed Cell's
+// mapping — aproj's user lane devuser declares `acceptance: none`, so a
+// queued ticket of aproj without an acceptance section submits through
+// alpha; a mapping that does not know aproj (the Host file's) must not
+// degrade the check into a blanket refusal through a nil lane.
+func TestW18SubmitAcceptanceCheckReadsTheRoutedMapping(t *testing.T) {
+	f := newW18Fixture(t)
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "submit", "wi_aproj")
+	if code != 0 {
+		t.Fatalf("--profile alpha submit: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "submitted ") {
+		t.Fatalf("--profile alpha submit: stdout=%q", stdout)
+	}
+	if strings.Contains(stderr, "no acceptance section") {
+		t.Fatalf("--profile alpha submit: wrongly refused: %s", stderr)
+	}
+	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 1 {
+		t.Fatalf("--profile alpha submit: default hub got %d, alpha hub got %d (want 0/1 — the ticket read alone)", nDef, nAlpha)
+	}
+}
