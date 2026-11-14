@@ -10,7 +10,7 @@ import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true });
 const { overrideActionArgv, sanitizeOverrideView, sanitizeOverrideWriteResult, POLYFORGE_OVERRIDE_MINIMUM_PF_VERSION } =
-  await jiti.import("./lib/polyforge-overrides.ts");
+  await jiti.import("./polyforge-overrides.ts");
 
 test("one action answers one argv: models comma-joined in order, clear-models, skip, unskip; a profile prefixes", () => {
   assert.deepEqual(
