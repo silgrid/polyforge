@@ -705,23 +705,30 @@ var cmdQueue = &Command{
 				"(they filter the default list mode only)")
 		}
 		proj := stringFlag(fs, "project")
+		// polyforge#18: the mapping this verb merges over, marks against and
+		// names in its empty-mapping refusal is the routed Cell's
+		// (profile.go's routedCellMapping), never the Host file's alone —
+		// a named Cell's queue never silently lists another Cell's
+		// projects. An unreadable routed mapping is a loud refusal, exactly
+		// like the placement verbs'.
+		plan, mapFile, err := ctx.routedCellMapping()
+		if err != nil {
+			return err
+		}
 		if proj == "" {
 			// polyforge#113: no ambient default project exists. Without
 			// --project the verb covers ALL mapped projects in one merged
 			// presentation; with no mapping at all it fails loudly with
 			// guidance — it never silently lists nothing.
-			if ctx.Cfg.Mapping.Empty() {
-				return fmt.Errorf("queue: --project is required — no [workspace] mapping is configured in cli.toml; add a [workspace.\"<path>\"] section (`pf doctor` checks the mapping) or pass --project P")
+			if plan.Empty() {
+				return fmt.Errorf("queue: --project is required — no [workspace] mapping is configured in %s; add a [workspace.\"<path>\"] section (`pf doctor` checks the mapping) or pass --project P", mapFile)
 			}
-			return queueMerged(ctx, boolFlag(fs, "ready"), filter)
+			return queueMerged(ctx, plan, boolFlag(fs, "ready"), filter)
 		}
 		// An explicit --project passes through to aihub UNVALIDATED
 		// (mapped or not — exactly one query; the mapping governs
 		// placement, not knowledge).
-		var (
-			raw json.RawMessage
-			err error
-		)
+		var raw json.RawMessage
 		if boolFlag(fs, "ready") {
 			raw, err = ctx.aihub().ReadyQueueRaw(proj)
 		} else {
@@ -734,10 +741,10 @@ var cmdQueue = &Command{
 		// Both faces render the items segment; --json is the raw server
 		// body (no acceptance_missing: that is the merged document's).
 		finishAs(ctx, raw, func(l *itemList[WIView]) {
-			markAcceptanceMissing(l.Items, laneResolver(readDaemonFacts(ctx), ctx.Cfg.Mapping))
+			markAcceptanceMissing(l.Items, laneResolver(readDaemonFacts(ctx), plan))
 			fmt.Fprintf(ctx.Stdout, "%d work item(s)\n", len(l.Items))
 			renderWITable(ctx.Stdout, l.Items)
-			renderMissingLanes(ctx, l.Items)
+			renderMissingLanes(ctx, plan, l.Items)
 		})
 		return nil
 	},
@@ -752,8 +759,8 @@ var cmdQueue = &Command{
 // per-project fetch failure fails the verb naming the project — fake
 // coverage is worse than none. Determinism: mapping declaration order,
 // then the server's own order within each project.
-func queueMerged(ctx *Context, ready bool, filter aihubclient.WorkItemFilter) error {
-	projects := ctx.Cfg.Mapping.Projects()
+func queueMerged(ctx *Context, m *mapping.Plan, ready bool, filter aihubclient.WorkItemFilter) error {
+	projects := m.Projects()
 	var items []WIView
 	for _, p := range projects {
 		var (
@@ -777,8 +784,8 @@ func queueMerged(ctx *Context, ready bool, filter aihubclient.WorkItemFilter) er
 	}
 	// a queued execution ticket without acceptance on a lane requiring
 	// it is marked (the auto-pull wave skips it): the STATUS cell and
-	// acceptance_missing
-	markAcceptanceMissing(items, laneResolver(readDaemonFacts(ctx), ctx.Cfg.Mapping))
+	// acceptance_missing — judged through the routed Cell's mapping m.
+	markAcceptanceMissing(items, laneResolver(readDaemonFacts(ctx), m))
 	if ctx.JSON {
 		// ONE merged document; lanes_missing lists the queued items a
 		// claim refuses because their lane is not in the daemon's lane
@@ -787,7 +794,7 @@ func queueMerged(ctx *Context, ready bool, filter aihubclient.WorkItemFilter) er
 			Items        []WIView      `json:"items"`
 			Total        int           `json:"total"`
 			LanesMissing []laneMissing `json:"lanes_missing,omitempty"`
-		}{Items: items, Total: len(items), LanesMissing: queueMissingLanes(ctx, items)}
+		}{Items: items, Total: len(items), LanesMissing: queueMissingLanes(ctx, m, items)}
 		if b, err := json.Marshal(doc); err == nil {
 			ctx.Out(b)
 		}
@@ -795,25 +802,26 @@ func queueMerged(ctx *Context, ready bool, filter aihubclient.WorkItemFilter) er
 	}
 	fmt.Fprintf(ctx.Stdout, "%d work item(s)\n", len(items))
 	renderWITable(ctx.Stdout, items)
-	renderMissingLanes(ctx, items)
+	renderMissingLanes(ctx, m, items)
 	return nil
 }
 
 // queueMissingLanes answers the queued items of items bound to a lane
 // their workspace's lane set does not carry (WFC-123): a claim refuses
 // each and it stays queued. nil when the daemon does not answer (its lane
-// set is unknown) or none is.
-func queueMissingLanes(ctx *Context, items []WIView) []laneMissing {
+// set is unknown) or none is. The lane sets come through the routed
+// Cell's mapping m.
+func queueMissingLanes(ctx *Context, m *mapping.Plan, items []WIView) []laneMissing {
 	f := readDaemonFacts(ctx)
 	if !f.reachable || f.workflowsDir == "" {
 		return nil
 	}
-	return missingLanes(projectLaneSets(f.workflowsDir, ctx.Cfg.Mapping), items)
+	return missingLanes(projectLaneSets(f.workflowsDir, m), items)
 }
 
 // renderMissingLanes prints the WFC-123 line under the human queue table.
-func renderMissingLanes(ctx *Context, items []WIView) {
-	if rows := queueMissingLanes(ctx, items); len(rows) > 0 {
+func renderMissingLanes(ctx *Context, m *mapping.Plan, items []WIView) {
+	if rows := queueMissingLanes(ctx, m, items); len(rows) > 0 {
 		fmt.Fprintf(ctx.Stdout, "\n%s\n", missingLanesText(rows))
 	}
 }

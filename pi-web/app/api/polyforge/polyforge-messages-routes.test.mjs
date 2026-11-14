@@ -76,8 +76,8 @@ test("the list route's answer carries contacts and groups on every branch", () =
   assert.ok(read.indexOf("readPolyforgeMessagesCapability()") < read.indexOf("readProjectGroups("), "the grouping read starts only after the floor gate");
   assert.equal((read.match(/contacts: await contactsRead/g) ?? []).length, 2, "both the list-failure and success answers carry the contact read");
   assert.equal((read.match(/groups: await groupsRead/g) ?? []).length, 2, "both the list-failure and success answers carry the groups");
-  assert.match(lib, /runPfJson\(\["--json", "msg", "contacts"\], CONTACT_READ_TIMEOUT_MS\)/, "one bounded `pf --json msg contacts` spawn");
-  assert.match(lib, /runPfJson\(\["--json", "projects", "get", project\], CONTACT_READ_TIMEOUT_MS\)/, "each project read shares the 2 s contact bound");
+  assert.match(lib, /runPfJson\(\[\.\.\.pin, "--json", "msg", "contacts"\], CONTACT_READ_TIMEOUT_MS\)/, "one bounded `pf --json msg contacts` spawn, pinned to the Cell");
+  assert.match(lib, /runPfJson\(\[\.\.\.pin, "--json", "projects", "get", project\], CONTACT_READ_TIMEOUT_MS\)/, "each project read shares the 2 s contact bound");
   assert.match(lib, /const CONTACT_READ_TIMEOUT_MS = 2000;/, "the contact read is bounded well below the 15 s read timeout");
 });
 
@@ -87,20 +87,20 @@ test("the analyze route gates on the analysis floor before the spawn and answers
   assert.ok(gate >= 0 && gate < spawn, "the analysis floor gates before any analyze spawn");
   assert.doesNotMatch(analyze, /readPolyforgeMessagesCapability/, "the analysis floor, not the Messages floor, gates the analysis");
   assert.match(analyze, /\{ error: capability\.reason \?\? "polyforge is unavailable", upgrade: capability\.pfPresent \},\s*\{ status: 400 \}/);
-  assert.match(analyze, /NextResponse\.json\(\{ ok: true, analysis: await analyzePolyforgeMessage\(body\.message_id\) \}\)/);
+  assert.match(analyze, /NextResponse\.json\(\{ ok: true, analysis: await analyzePolyforgeMessage\(body\.message_id, \(await resolvePolyforgeCellScope\(\)\)\.pin\.prefix\) \}\)/);
   assert.doesNotMatch(analyze, /\.conclusion|"conclusion"|conclusion:/, "no conclusion is read or answered");
 });
 
 test("the prompt route gates on its own floor before the one spawn and answers the sanitized prompt", () => {
   const gate = prompt.search(/const capability = await readPolyforgePromptCapability\(\);/);
-  const spawn = prompt.search(/promptPolyforgeMessage\(body\.message_id\)/);
+  const spawn = prompt.search(/promptPolyforgeMessage\(body\.message_id,/);
   assert.ok(gate >= 0 && gate < spawn, "the prompt floor gates before any prompt spawn");
   assert.equal(prompt.split("promptPolyforgeMessage(").length - 1, 1, "exactly one spawn site");
   assert.doesNotMatch(prompt, /readPolyforgeMessagesCapability|readPolyforgeAnalysisCapability/, "the prompt floor, not another floor, gates the action");
   assert.match(prompt, /\{ error: capability\.reason \?\? "polyforge is unavailable", upgrade: capability\.pfPresent \},\s*\{ status: 400 \}/);
-  assert.match(prompt, /NextResponse\.json\(\{ ok: true, prompt: await promptPolyforgeMessage\(body\.message_id\) \}\)/);
+  assert.match(prompt, /NextResponse\.json\(\{ ok: true, prompt: await promptPolyforgeMessage\(body\.message_id, \(await resolvePolyforgeCellScope\(\)\)\.pin\.prefix\) \}\)/);
   assert.match(prompt, /Reach: pi-web's authenticated surface only/, "the route states its reach");
-  assert.match(lib, /runPfJson\(\["--json", "msg", "prompt", messageId\], ANALYZE_TIMEOUT_MS, ANALYZE_MAX_BUFFER\)/, "one bounded pf spawn");
+  assert.match(lib, /runPfJson\(\[\.\.\.pin, "--json", "msg", "prompt", messageId\], ANALYZE_TIMEOUT_MS, ANALYZE_MAX_BUFFER\)/, "one bounded pf spawn");
   assert.match(lib, /parsePolyforgePrompt\(raw\)/, "the one sanitizer");
 });
 
@@ -113,7 +113,7 @@ test("the file-ticket route — reach stated, gate, JSON-only, validation before
   assert.match(ticket, /status: 415/);
   const gate = ticket.search(/isApiRequestAllowed\(request\)\)/);
   const json = ticket.search(/hasJsonContentType\(request\)/);
-  const validate = ticket.search(/validateFileTicketInput\(body, await readPolyforgeMappedProjects\(\)\)/);
+  const validate = ticket.search(/validateFileTicketInput\(body, await readPolyforgeMappedProjects\(pin\)\)/);
   const spawn = ticket.search(/createPolyforgeFileTicket\(/);
   assert.ok(gate < json && json < validate && validate < spawn, "403 → 415 → 400 before the one create");
   assert.equal(ticket.split("createPolyforgeFileTicket(").length - 1, 1, "exactly one create per valid confirm");
@@ -122,6 +122,6 @@ test("the file-ticket route — reach stated, gate, JSON-only, validation before
   assert.doesNotMatch(ticket, /--bundle"|bundle:/, "a registration ticket only");
   assert.match(ticket, /status: messageErrorStatus\(failure\.code\)/, "pf's 4xx kept, DAEMON-500/unreachable a 200 {error}");
   const create = lib.slice(lib.indexOf("export async function createPolyforgeFileTicket("));
-  assert.match(create, /\["--json", "file", "create", "--project", input\.project, "--goal", input\.goal, "--content", input\.content\]/);
+  assert.match(create, /\[\.\.\.pin, "--json", "file", "create", "--project", input\.project, "--goal", input\.goal, "--content", input\.content\]/);
   assert.doesNotMatch(create.slice(0, create.indexOf("\n}\n")), /--bundle/);
 });

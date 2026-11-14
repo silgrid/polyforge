@@ -18,7 +18,9 @@ pf queue --ready [--project P]
 
 `--project` is OPTIONAL (polyforge#113): without it the verb covers ALL
 mapped projects — one merged presentation over the `[workspace]` mapping
-in cli.toml, each row's PROJECT column naming its project; `--json`
+of the Cell the invocation routes to (cli.toml for the default Cell,
+`cli-<profile>.toml` for a named one), each row's PROJECT column naming
+its project; `--json`
 emits one merged items array. With `--project P` the value is passed to
 aihub UNVALIDATED (mapped or not — the mapping governs placement, not
 knowledge; exactly one query). Without `--project` AND without any
@@ -102,7 +104,7 @@ fixed, not a judgment call.
 | `AUTH-401` | api key missing or invalid | Credential rejected — check the Cell's `api_key` (`pf [--profile NAME] config set api_key`). |
 | `CORE-400` | Bad filter value | A filter flag is malformed (an `--attr` path aihub refuses included) — read `detail` and fix the flag. |
 | `CORE-404` | Unknown project | No such project (or no access to it) — that is aihub's own answer for an explicit `--project`; read-only queries are never locally rejected. |
-| (no code) `queue: --project is required — no [workspace] mapping` | No `--project` and no mapping configured | Add a `[workspace."<path>"]` section to cli.toml (`pf doctor` checks the mapping) or pass `--project P`. |
+| (no code) `queue: --project is required — no [workspace] mapping` | No `--project` and no mapping configured on the routed Cell | Add a `[workspace."<path>"]` section to the routed Cell's file — cli.toml for the default Cell, `cli-<profile>.toml` for a named one (the error names it; `pf doctor` checks the mapping) — or pass `--project P`. |
 | (no code) `queue: --attr "…" is not <path>=<value>` | An `--attr` with no `=` or an empty path | Nothing was sent — write it as `<path>=<value>`. |
 | (no code) `queue: --bundle/--attr cannot be combined with --ready` | A filter with `--ready` | They filter the list mode only — drop `--ready` or the filter. |
 | (no code) `queue: project P: ...` | A per-project fetch failed in merged mode | The verb fails naming the failing project — fake coverage is worse than none; retry or scope with `--project`. |

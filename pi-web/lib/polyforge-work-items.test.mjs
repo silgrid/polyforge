@@ -11,6 +11,7 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url);
 const lib = await jiti.import("./polyforge-work-items.ts");
 const detect = await jiti.import("./polyforge-detect.ts");
+const cells = await jiti.import("./polyforge-cells.ts");
 
 // The real merged `pf --json queue` row shape (artifacts/real-queue-snapshot.json),
 // with every dropped field carrying a sentinel.
@@ -188,5 +189,65 @@ test("the modules never log, read env, or name a write verb", async () => {
     assert.doesNotMatch(source, /"(cancel|edit|claim|create|close|file", "(new|edit|close))"/, `${path} never names a write verb`);
     assert.doesNotMatch(source, /"--(project|status|limit)"/, `${path} never narrows the merged read`);
     assert.doesNotMatch(source, /fetch\(|https?:\/\//, `${path} makes no direct aihub HTTP call`);
+  }
+});
+
+// ---- the pinned Cell scope (polyforge#18 AC4): the work-item list and
+// detail reads name the Cell they act on ----
+
+/** A stub pf that reports the multi-Cell capabilities and resolves the
+ *  public Cell, logging every argv, answering the queue and file verbs. */
+function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public" } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "pf-cellwi-"));
+  const log = join(dir, "calls.log");
+  writeFileSync(log, "");
+  const bin = join(dir, "pf");
+  writeFileSync(bin, `#!${process.execPath}
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
+const out = (v) => { process.stdout.write(JSON.stringify(v)); process.exit(0); };
+if (args[0] === "--version") { process.stdout.write("v2.20.16\\n"); process.exit(0); }
+if (args[0] === "--json" && args[1] === "version") out({ version: "v2.20.16", capabilities: ${JSON.stringify(capabilities)} });
+if (args[0] === "--json" && args[1] === "profile") { ${profile ? `out({ profile: ${JSON.stringify(profile)}, source: "cwd" });` : 'process.exit(2);'} }
+const rest = args.filter((a) => a !== "--json" && a !== "--profile" && a !== ${JSON.stringify(profile ?? "")});
+if (rest[0] === "queue") out({ items: [], total: 0 });
+if (rest[0] === "file" && rest[1] === "show") out({});
+process.exit(2);
+`);
+  chmodSync(bin, 0o755);
+  const previous = process.env.PF_BIN;
+  process.env.PF_BIN = bin;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PF_BIN;
+    else process.env.PF_BIN = previous;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+}
+
+const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && !(a[1] === "version") && !(a[1] === "profile"));
+
+test("the work-item list and detail reads carry the pinned Cell's --profile (AC4)", async (t) => {
+  const calls = cellPf(t);
+  const scope = await cells.resolvePolyforgeCellScope();
+  assert.equal(scope.cell, "public");
+  assert.deepEqual(scope.pin.prefix, ["--profile", "public"]);
+  assert.deepEqual(await lib.listPolyforgeWorkItems(scope.pin.prefix), { items: [], total: 0 });
+  assert.equal(await lib.showPolyforgeWorkItem("wi_ab12cd34", scope.pin.prefix), null, "the stub's empty detail degrades to null; the argv is what is pinned here");
+  const data = dataCalls(calls);
+  assert.equal(data.length, 2);
+  for (const argv of data) {
+    assert.deepEqual(argv.slice(0, 2), ["--profile", "public"], `every work-items pf call names the Cell first: ${JSON.stringify(argv)}`);
+  }
+});
+
+test("a pf without the multi-Cell protocol keeps today's unflagged work-item reads", async (t) => {
+  const calls = cellPf(t, { capabilities: [], profile: "" });
+  const scope = await cells.resolvePolyforgeCellScope();
+  assert.deepEqual(scope.pin.prefix, []);
+  await lib.listPolyforgeWorkItems(scope.pin.prefix);
+  for (const argv of dataCalls(calls)) {
+    assert.equal(argv.includes("--profile"), false, `no flag on a pre-Cell pf: ${JSON.stringify(argv)}`);
   }
 });
