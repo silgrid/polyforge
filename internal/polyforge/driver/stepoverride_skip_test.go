@@ -126,44 +126,40 @@ func TestStepOverrideSkipMidRun(t *testing.T) {
 
 // An un-skip (the aspect cleared) mid-run dispatches the step again, and
 // an overlay naming a step the lane does not declare skippable changes
-// nothing.
+// nothing: the overlay starts by skipping c and naming a, and while a
+// works it is rewritten with the skip cleared — every step runs, nothing
+// is recorded skipped.
 func TestStepOverrideUnskipDispatches(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "capsules", "wi_ov3u")
 	workflowtest.WriteLane(t, filepath.Join(dir, capsule.DirWorkflows), "demo",
-		"steps:\n  - { id: a }\n  - { id: b, skippable: true }\n")
+		"steps:\n  - { id: a }\n  - { id: b, skippable: true }\n  - { id: c, skippable: true }\n")
 	writeCapsuleFile(t, dir, capsule.WorkItemJSON, `{"id":"wi_ov3u","slug":"demo-5","project":"proj","goal":"g"}`)
-	writeCapsuleFile(t, dir, capsule.StepOverridesJSON, `{"steps":{"b":{"skip":true},"a":{"skip":true}}}`)
-	sp := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{}`)}}
+	writeCapsuleFile(t, dir, capsule.StepOverridesJSON, `{"steps":{"c":{"skip":true},"a":{"skip":true}}}`)
+	sp := &fakeSpawner{script: []fakeEntry{
+		{res: done(`{}`).res, act: func() {
+			// the owner's un-skip: the skip aspect cleared while a works
+			writeCapsuleFile(t, dir, capsule.StepOverridesJSON, `{"steps":{"a":{"skip":true}}}`)
+		}},
+		done(`{}`), done(`{}`),
+	}}
 	log := &eventLog{}
 	d, err := New(Config{WI: WIInfo{ID: "wi_ov3u", CapsuleDir: dir, BundleName: "demo"}, Spawner: sp, Log: log})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// a first pass with the skip in place: b is skipped, a runs (the lane
-	// does not declare a skippable, so the overlay's a entry is inert)
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := overlaySkipSteps(sp); !reflect.DeepEqual(got, []string{"a"}) {
-		t.Fatalf("dispatched %v, want [a] (b skipped, a's non-skippable overlay entry inert)", got)
+	if got := overlaySkipSteps(sp); !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
+		t.Fatalf("dispatched %v, want [a b c] (a's non-skippable overlay entry is inert; c's skip was cleared before its turn)", got)
 	}
-
-	// a fresh derivation over the same capsule with the skip cleared
-	// dispatches b again: the overlay is read per plan pass, not cached.
-	writeCapsuleFile(t, dir, capsule.StepOverridesJSON, `{"steps":{"a":{"skip":true}}}`)
-	sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`), done(`{}`)}}
-	d2, err := New(Config{WI: WIInfo{ID: "wi_ov3u", CapsuleDir: dir, BundleName: "demo"}, Spawner: sp2, Log: log})
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	x := readExec(t, filepath.Join(dir, capsule.ExecutionJSON))
+	for _, id := range []string{"a", "b", "c"} {
+		if x.Steps[id].Status != capsule.StepDone {
+			t.Fatalf("%s status %q, want done", id, x.Steps[id].Status)
+		}
 	}
-	if err := d2.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if got := overlaySkipSteps(sp2); !reflect.DeepEqual(got, []string{"a", "b"}) {
-		t.Fatalf("dispatched %v, want [a b] (the cleared skip dispatches b again)", got)
-	}
-	x2 := readExec(t, filepath.Join(dir, capsule.ExecutionJSON))
-	if x2.Steps["b"].Status != capsule.StepDone {
-		t.Fatalf("b status %q after the re-run, want done", x2.Steps["b"].Status)
+	if n := log.count("step_skipped"); n != 0 {
+		t.Fatalf("events %v: no step may be recorded skipped", log.kinds())
 	}
 }
