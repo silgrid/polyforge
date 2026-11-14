@@ -106,7 +106,7 @@ export function ClaudeBackgroundTaskPanel({ task, onStop, onReadOutput, onClose,
       style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, maxHeight: "min(60vh, 560px)", overflow: "hidden", fontSize: 12, borderRadius: 8, border: "1px solid rgba(13,148,136,0.35)", borderLeftColor: task.status === "failed" ? "#f87171" : CLAUDE_TASK_COLOR, background: "var(--bg-panel)", boxShadow: "0 6px 24px rgba(0,0,0,0.18)" }}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0, minWidth: 0, padding: "8px 8px 6px 10px" }}>
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 7, minWidth: 0 }}>
+        <div data-claude-task-header-row="" style={{ display: "flex", alignItems: "flex-start", gap: 7, minWidth: 0 }}>
           <ClaudeTaskKindBadge task={task} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div data-claude-task-command="" style={{ color: "var(--text)", fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 72, overflowY: "auto" }}>{command}</div>
