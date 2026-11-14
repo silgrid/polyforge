@@ -23,11 +23,11 @@ test("the gate, then the id check, then the floor, then the one spawn; the list:
   const gate = show.indexOf("isApiRequestAllowed(request)");
   const idCheck = show.indexOf("isPolyforgeWorkItemId(id)");
   const showCapability = show.indexOf("readPolyforgeWorkItemsCapability()");
-  const showSpawn = show.indexOf("showPolyforgeWorkItem(id)");
+  const showSpawn = show.indexOf("showPolyforgeWorkItem(id,");
   assert.ok(gate >= 0 && idCheck > gate && showCapability > idCheck && showSpawn > showCapability, "gate, id check, floor, then the one spawn");
   assert.equal(show.split("showPolyforgeWorkItem(").length - 1, 1, "exactly one detail read");
   const listCapability = list.indexOf("readPolyforgeWorkItemsCapability()");
-  const listSpawn = list.indexOf("listPolyforgeWorkItems()");
+  const listSpawn = list.indexOf("listPolyforgeWorkItems((");
   assert.ok(list.indexOf("isApiRequestAllowed(request)") < listCapability && listCapability >= 0 && listSpawn > listCapability, "gate, floor, then the one list read");
   assert.equal(list.split("listPolyforgeWorkItems(").length - 1, 1, "exactly one list read");
 });
@@ -48,9 +48,9 @@ test("no work-item route answers 5xx, logs, reads env or exposes a write action"
 });
 
 test("the list route degrades as a whole: every failure is an empty table with a zero total", () => {
-  assert.match(list, /const \{ items, total \} = await listPolyforgeWorkItems\(\);\s*return NextResponse\.json\(\{ \.\.\.capability, items, total \}\);/,
+  assert.match(list, /const \{ items, total \} = await listPolyforgeWorkItems\(\(await resolvePolyforgeCellScope\(\)\)\.pin\.prefix\);\s*return NextResponse\.json\(\{ \.\.\.capability, items, total \}\);/,
     "the rows come from the one passport");
   assert.match(list, /if \(!capability\.capable\) \{\s*return NextResponse\.json\(\{ \.\.\.capability, items: \[\], total: 0 \}\);/);
   assert.match(list, /return NextResponse\.json\(\{ \.\.\.capability, items: \[\], total: 0, error: failure\.message \}\);/);
-  assert.match(show, /const item = await showPolyforgeWorkItem\(id\);\s*return NextResponse\.json\(\{ \.\.\.capability, item \}\);/);
+  assert.match(show, /const item = await showPolyforgeWorkItem\(id, \(await resolvePolyforgeCellScope\(\)\)\.pin\.prefix\);\s*return NextResponse\.json\(\{ \.\.\.capability, item \}\);/);
 });

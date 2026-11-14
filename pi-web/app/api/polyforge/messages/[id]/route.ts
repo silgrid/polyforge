@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolvePolyforgeCellScope } from "@/lib/polyforge-cells";
 import { isApiRequestAllowed } from "@/lib/request-security";
 import {
   isPolyforgeConversationId,
@@ -61,11 +62,12 @@ export async function GET(
   try {
     // `?after=` is the open conversation's 3 s refresh: one forward read,
     // never a second backward page (scroll-up owns `?before=`).
+    const pin = (await resolvePolyforgeCellScope()).pin.prefix;
     const page = after > 0
-      ? { messages: await readPolyforgeNewerMessages(id, after), last_seq: 0 }
+      ? { messages: await readPolyforgeNewerMessages(id, after, pin), last_seq: 0 }
       : before > 0
-        ? await readPolyforgeMessagesPage(id, before)
-        : await readPolyforgeNewestPage(id);
+        ? await readPolyforgeMessagesPage(id, before, undefined, pin)
+        : await readPolyforgeNewestPage(id, pin);
     return NextResponse.json({ capable: true, ...page });
   } catch (error) {
     const failure = error instanceof PolyforgeMessagesError

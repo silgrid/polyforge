@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolvePolyforgeCellScope } from "@/lib/polyforge-cells";
 import { isApiRequestAllowed } from "@/lib/request-security";
 import { readPolyforgeUsers } from "@/lib/polyforge-messages";
 
@@ -20,7 +21,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   try {
-    return NextResponse.json(await readPolyforgeUsers());
+    return NextResponse.json(await readPolyforgeUsers((await resolvePolyforgeCellScope()).pin.prefix));
   } catch {
     return NextResponse.json({
       pfPresent: true,

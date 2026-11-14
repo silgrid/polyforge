@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolvePolyforgeCellScope } from "@/lib/polyforge-cells";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import {
   acknowledgePolyforgeMessage,
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
     );
   }
   try {
-    await acknowledgePolyforgeMessage(body.conversation_id, body.seq);
+    await acknowledgePolyforgeMessage(body.conversation_id, body.seq, (await resolvePolyforgeCellScope()).pin.prefix);
     return NextResponse.json({ ok: true });
   } catch (error) {
     const failure = error instanceof PolyforgeMessagesError
