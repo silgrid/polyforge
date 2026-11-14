@@ -30,7 +30,7 @@ this order:
   which v0.2.0 refuses (`WFC-101`). One left over parks blocked with kind
   `contract`, naming this section; cancel it and file it again.
 - **The server.** `pf aihub` replaces the separate `aihub` binary of v0.1.x
-  (the image `ghcr.io/silgrid/aihub:<tag>` runs it). The server never
+  (the image `ghcr.io/silgrid/polyforge-aihub:<tag>` runs it). The server never
   migrates its database at start, and a database written by v0.1.x lacks
   one schema change v0.2.0 needs: the messaging read cursor is split into a
   delivery cursor and a read cursor. With the server stopped and `aihub.db`
@@ -79,18 +79,3 @@ this order:
   Check each lane with `pf workflows validate <lane-dir>`;
   [bundles](bundles.md) teaches the format.
 - **Finish.** `pf ops auto on` on each work machine, then `pf doctor`.
-
-## The public AIHub image is ghcr.io/silgrid/polyforge-aihub
-
-- **Behavior.** The release publishes the AIHub image to
-  `ghcr.io/silgrid/polyforge-aihub:<tag>`, not to `ghcr.io/silgrid/aihub`
-  as the section above says; `.polyforge/deploy.sh` pulls from the new
-  name by default. Another deployment keeps its own package through its
-  configuration alone: `RELEASE_IMAGE` for the release, `GHCR_IMAGE` for
-  the deploy.
-- **Behavior.** A fresh release (not a resume) refuses, before any build
-  or version claim, when its image tag already exists in the package, so it
-  never pushes over another build's image.
-- **Action.** None on a work machine. A server deployed from the public
-  release pulls `ghcr.io/silgrid/polyforge-aihub:<tag>`; a deployment that
-  publishes or pulls another package sets `RELEASE_IMAGE` / `GHCR_IMAGE`.
