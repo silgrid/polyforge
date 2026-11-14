@@ -366,6 +366,59 @@ class FullPhaseNeverRunsTest(FastChecksCase):
         self.assertFalse(os.path.exists(os.path.join(clone, "full.txt")), "the root full phase ran")
 
 
+class DefaultTierTest(FastChecksCase):
+    """AC5 (review r1 #2): the engine's default report — the one the model
+    ran by hand before, no --light — so a root-level change on a
+    forced-full path runs its fast gates and nothing more, exactly as
+    before; and the #24 shape still works: a change confined to a nested
+    root runs that root's gates in the subdirectory even though the root
+    report answered full."""
+
+    def test_a_forced_full_root_change_runs_its_fast_gates_and_nothing_more(self) -> None:
+        clone = self.task_repo("app", {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf":
+                "stack=go\nforced_full=app\nfast_gate=pwd > root.txt\n"
+                "full_command=echo full-ran > full.txt\n",
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+        }, APP_CHANGE)
+        code, res = self.run_checks("app")
+        self.assertEqual(code, 0, res)
+        self.assertEqual(res["details"]["reports"][0]["mode"], "full")
+        cmds = self.commands_of(res)
+        self.assertTrue(cmds)
+        for c in cmds:
+            self.assertEqual(c["phase"], "fast", c)
+        self.assertTrue(os.path.exists(os.path.join(clone, "root.txt")))
+        self.assertFalse(os.path.exists(os.path.join(clone, "full.txt")), "the full phase ran")
+
+    def test_a_nested_root_change_still_runs_there_when_the_root_report_is_full(self) -> None:
+        files = {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf":
+                "stack=go\nforced_full=webapp\nfast_gate=pwd > root.txt\n"
+                "full_command=echo full-ran > full.txt\n",
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+            "webapp/.polyforge/verify-scope.conf":
+                "stack=npm\nfast_gate=test -f package-lock.json && pwd > nested-root.txt\n",
+            "webapp/package.json": '{"name": "webapp", "version": "1.0.0"}\n',
+            "webapp/package-lock.json": '{"name": "webapp", "lockfileVersion": 3}\n',
+            "webapp/src/x.js": "1\n",
+        }
+        clone = self.task_repo("app", files, {"webapp/src/x.js": "2\n"})
+        code, res = self.run_checks("app")
+        self.assertEqual(code, 0, res)
+        self.assertEqual(res["details"]["reports"][0]["mode"], "full",
+                         "the root conf forces the full tier for every webapp/ path")
+        where = {(c["name"], c["root"]) for c in self.commands_of(res)}
+        self.assertIn(("webapp/fast-1", "repos/app/webapp"), where)
+        with open(os.path.join(clone, "webapp", "nested-root.txt"), encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), os.path.join(clone, "webapp"))
+        self.assertFalse(os.path.exists(os.path.join(clone, "full.txt")), "the full phase ran")
+
+
 class UsageTest(FastChecksCase):
     def test_no_repo_is_a_usage_error(self) -> None:
         argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--engine", ENGINE, "--out", self.out]
