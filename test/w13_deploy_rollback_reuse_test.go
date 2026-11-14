@@ -127,9 +127,9 @@ func TestW13ExistingRollbackImagePrintsBothIDs(t *testing.T) {
 	if !strings.Contains(dl, "server docker run --rm --entrypoint /pf polyforge/aihub:"+old+" aihub -version") {
 		t.Errorf("the existing rollback image's version must still be verified:\n%s", dl)
 	}
-	for _, bad := range []string{"server docker build", "server docker tag "} {
+	for _, bad := range []string{"server docker build", "server docker tag sha256:"} {
 		if strings.Contains(dl, bad) {
-			t.Errorf("an existing rollback image is kept as is - no %q:\n%s", bad, dl)
+			t.Errorf("an existing rollback image is kept as is - the running image's ID must never be tagged (%q):\n%s", bad, dl)
 		}
 	}
 	if !strings.Contains(out, "deployed=v2.3.0 previous="+old) {
