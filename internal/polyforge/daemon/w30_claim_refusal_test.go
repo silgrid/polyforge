@@ -71,7 +71,7 @@ func TestW30ClaimRefusalSettlesEntry(t *testing.T) {
 		seen = true
 		var body struct {
 			Error string `json:"error"`
-			Code   string `json:"code"`
+			Code  string `json:"code"`
 		}
 		if err := json.Unmarshal(ev.Body, &body); err != nil {
 			t.Fatalf("submit_rejected body: %v (%s)", err, ev.Body)
