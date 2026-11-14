@@ -367,6 +367,10 @@ class CheckRun:
             self.inv.summary = "repos/%s: %s" % (self.repo, why)
             return 2
         chosen, mode = choose(rep, TIER_LIGHT)
+        # AC2: only the fast and scoped phases ever run — a report that
+        # fell back to the full tier contributes its fast gates and nothing
+        # more (choose hands back the full tail there; it is never run)
+        chosen = [c for c in chosen if c.phase in ("fast", "scoped")]
         self.details["reports"].append({"root": self.cwd_rel(clone), "mode": rep.mode,
                                         "light": mode == TIER_LIGHT, "commands": len(chosen)})
         commands += [(c, clone, self.cwd_rel(clone)) for c in chosen]
@@ -382,6 +386,7 @@ class CheckRun:
                     self.inv.summary = "repos/%s: the nested engine root %s: %s" % (self.repo, d, nwhy)
                     return 2
                 nchosen, nmode = choose(nrep, TIER_LIGHT)
+                nchosen = [c for c in nchosen if c.phase in ("fast", "scoped")]
                 self.details["reports"].append({"root": root_rel, "mode": nrep.mode,
                                                 "light": nmode == TIER_LIGHT, "commands": len(nchosen)})
                 commands += [(nested_command(d, c), directory, root_rel) for c in nchosen]
