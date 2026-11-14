@@ -992,8 +992,8 @@ func TestReleaseScriptCommittedNotesTooLongRefused(t *testing.T) {
 		t.Fatalf("origin tags = %q, want the claim never reached origin", got)
 	}
 	for _, c := range w.calls() {
-		if strings.HasPrefix(c, "docker push") || strings.HasPrefix(c, "gh release create") || strings.Contains(c, "refs/tags/v1.2.1") {
-			t.Fatalf("the refusal must come before anything is published: %v", w.calls())
+		if strings.HasPrefix(c, "docker build") || strings.HasPrefix(c, "docker push") || strings.HasPrefix(c, "gh release create") || strings.Contains(c, "refs/tags/v1.2.1") {
+			t.Fatalf("the refusal must come before anything is built or published (r1#2): %v", w.calls())
 		}
 	}
 }
@@ -1056,6 +1056,9 @@ func TestReleaseScriptNotesTooLongAreTruncated(t *testing.T) {
 	notice := strings.Index(notes, "还有 ")
 	if gate < 0 || notice < 0 || notice > gate {
 		t.Fatalf("the notes must still end with the Test gate section after the notice:\n%.500s…", notes)
+	}
+	if last := strings.LastIndex(notes, "## "); last != gate {
+		t.Fatalf("the Test gate section must be the notes' last section (r1#5):\n%.500s…", notes)
 	}
 }
 
