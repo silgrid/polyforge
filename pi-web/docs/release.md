@@ -52,9 +52,10 @@ once).
 - `tools/install.sh --with-pi-web` installs Pi Web from the same release as
   `pf`, then runs the install check the package ships, which confirms the
   install scripts' effects even when npm skipped the scripts (e.g. npm 11
-  under `ignore-scripts` or an explicit `allowScripts` denial) and otherwise exits non-zero naming the step. The
-  equivalent standalone path is `npm install -g @silgrid/pi-web` followed by
-  `node "$(npm root -g)/@silgrid/pi-web/bin/pi-web-install-check.js"`.
+  under `ignore-scripts` or an explicit `allowScripts` denial) and otherwise exits non-zero naming the step. Pi
+  Web ships only as part of the GitHub Release, so this is the install path;
+  it is not installed from the npm registry. The check can be run again by
+  hand: `node "$(npm root -g)/@silgrid/pi-web/bin/pi-web-install-check.js"`.
 - `deploy-piweb.sh` (`PIWEB_INSTALL_REPO` / `PIWEB_INSTALL_VERSION`) installs
   a pinned release for the container-autostart service; the repository's
   `.polyforge/deploy.sh <version> --confirm <version> --component pi-web`

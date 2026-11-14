@@ -230,10 +230,12 @@ running pi-web, or when it already serves the installed package, neither form
 prints an `ACTION:` line or restarts anything; `--restart-pi-web` without
 `--with-pi-web` is refused with nothing changed.
 
-Or install it standalone — equivalent, the same check after the install:
+Pi Web ships only as part of the GitHub Release — the
+`silgrid-pi-web-<tag>.tgz` asset next to `pf` — so the installer is the way to
+install it; it is not installed from the npm registry. To run the install
+check again by hand after an install:
 
 ```
-npm install -g @silgrid/pi-web@latest
 node "$(npm root -g)/@silgrid/pi-web/bin/pi-web-install-check.js"
 ```
 

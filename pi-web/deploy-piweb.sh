@@ -92,11 +92,13 @@
 #
 # Two invocation modes:
 #   1. From the repository root:            ./deploy-piweb.sh
-#   2. After a global npm install:          pi-web-deploy
+#   2. From the installed package:          pi-web-deploy
 #      (the bin/pi/pi-web-deploy shim runs this same script from inside the
 #       installed package directory; arguments and env are passed through)
 #
-# Usage: ./deploy-piweb.sh   (or: pi-web-deploy after `npm i -g @silgrid/pi-web`)
+# Usage: PIWEB_INSTALL_REPO=silgrid/polyforge ./deploy-piweb.sh
+#        (or: pi-web-deploy, once Pi Web is installed from a Polyforge
+#        GitHub Release by the pf installer's --with-pi-web)
 # Env:
 #   PIWEB_TMUX_SESSION  tmux session name (default: piweb)
 #   PIWEB_PORT          port passed to pi-web (required for a non-loopback
@@ -112,13 +114,15 @@
 #                       and ingress <hostname> -> http://127.0.0.1:<port>)
 #   PIWEB_CF_HOSTNAME   cloudflare named mode: the public ingress hostname to
 #                       append to PI_WEB_ALLOWED_HOSTS
-#   PIWEB_INSTALL_REPO   optional internal install channel: OWNER/REPO whose
-#                        GitHub Release provides the pi-web tarball; the
-#                        tgz + its SHA256SUMS asset are downloaded to a
-#                        scratch dir, checksum-verified, and installed
-#                        globally in place of the public-npm @latest
-#                        install (a mismatch aborts before anything is
-#                        installed). Unset keeps the public-npm path.
+#   PIWEB_INSTALL_REPO   the install channel: OWNER/REPO whose GitHub
+#                        Release provides the pi-web tarball (Pi Web ships
+#                        only there: silgrid/polyforge); the tgz + its
+#                        SHA256SUMS asset are downloaded to a scratch dir,
+#                        checksum-verified, and installed globally (a
+#                        mismatch aborts before anything is installed).
+#                        Unset falls back to `npm install -g` of the npm
+#                        registry's @latest, which is not where Pi Web is
+#                        released: set it.
 #   PIWEB_INSTALL_VERSION  optional release pin for the channel above: the
 #                        vX.Y.Z tag of exactly the release to install. When
 #                        set, that release is resolved, checked to equal

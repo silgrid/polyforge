@@ -39,27 +39,23 @@ Upstream releases are taken by the prefix-diff procedure in [docs/upstream-track
 
 ## Quick Start
 
-> **⚠️ Exposure warning.** `npx` / `pi-web` binds `127.0.0.1` only by default. `pi-web -H 0.0.0.0` / `npm run start:lan` expose the app **without authentication** unless `PI_WEB_PASSWORD` is set: anyone who can reach the port can read and write files, open a terminal, and drive the agent. `deploy-piweb.sh` defaults to `0.0.0.0`, but it now refuses a non-loopback bind unless both `PIWEB_PORT` and `PI_WEB_PASSWORD` are set, so it cannot start a passwordless service. Set `PI_WEB_PASSWORD` (or keep the loopback bind / front it with a trusted edge) before exposing the port.
+> **⚠️ Exposure warning.** `pi-web` binds `127.0.0.1` only by default. `pi-web -H 0.0.0.0` / `npm run start:lan` expose the app **without authentication** unless `PI_WEB_PASSWORD` is set: anyone who can reach the port can read and write files, open a terminal, and drive the agent. `deploy-piweb.sh` defaults to `0.0.0.0`, but it now refuses a non-loopback bind unless both `PIWEB_PORT` and `PI_WEB_PASSWORD` are set, so it cannot start a passwordless service. Set `PI_WEB_PASSWORD` (or keep the loopback bind / front it with a trusted edge) before exposing the port.
 
-Pi Web requires Node.js 22.19.0 or newer. Check your version with `node --version`, then run:
+Pi Web requires Node.js 22.19.0 or newer (check your version with `node --version`). It ships only as part of a Polyforge GitHub Release — the `silgrid-pi-web-<tag>.tgz` asset next to `pf`, with its `SHA256SUMS` line — and is installed by the Polyforge installer with `--with-pi-web`, not from npm: see [install: the web workbench](https://github.com/silgrid/polyforge/blob/main/docs/install.md#optional-the-web-workbench-pi-web). Then start it:
 
 ```bash
-npx @silgrid/pi-web@latest
+pi-web
 ```
 
 The CLI opens a browser after the server is ready. If it does not, open [http://127.0.0.1:30141](http://127.0.0.1:30141). Pi Web listens only on `127.0.0.1` by default.
 
 If no model provider is configured yet, open the **Models** panel to sign in or add an API key.
 
-To install the `pi-web` command globally:
+After installing the tarball, the installer runs the package's install check, which confirms the package's install scripts took effect: npm can skip install scripts and still exit 0 (e.g. npm 11 under `ignore-scripts` or an explicit `allowScripts` denial; at default settings it runs unreviewed scripts with a notice), so the check runs the postinstall steps itself, starts one terminal through `node-pty` (rebuilding it with its install scripts allowed when it cannot), and exits non-zero naming the step that failed. To run it again by hand:
 
 ```bash
-npm install -g @silgrid/pi-web@latest
 node "$(npm root -g)/@silgrid/pi-web/bin/pi-web-install-check.js"
-pi-web
 ```
-
-The second line confirms the package's install scripts took effect: npm can skip install scripts and still exit 0 (e.g. npm 11 under `ignore-scripts` or an explicit `allowScripts` denial; at default settings it runs unreviewed scripts with a notice), so the check runs the postinstall steps itself, starts one terminal through `node-pty` (rebuilding it with its install scripts allowed when it cannot), and exits non-zero naming the step that failed.
 
 Commands:
 
@@ -78,13 +74,19 @@ To update, stop the running process with `Ctrl+C` and run `pi-web update`. It up
 This fork ships a deployment script for containers without systemd:
 
 ```bash
-./deploy-piweb.sh   # npm i -g @silgrid/pi-web@latest, then restart the tmux service
+PIWEB_INSTALL_REPO=silgrid/polyforge ./deploy-piweb.sh   # install the latest Polyforge GitHub Release's Pi Web, then restart the tmux service
 ```
 
-The script installs the latest published package globally, confirms its install
+With `PIWEB_INSTALL_REPO` naming the Polyforge repository (put it in
+`~/.config/piweb/deploy.env` to keep it; `PIWEB_INSTALL_VERSION` pins one
+release), the script downloads that release's Pi Web tarball and
+`SHA256SUMS`, verifies the checksum, installs the tarball globally, confirms its install
 scripts took effect (below), and (re)starts pi-web in a detached `tmux` session (`piweb`) with a restart loop. `PI_WEB_IDLE_TIMEOUT_MS=0`
 is required for unattended runs: by default pi-web exits after 10 idle minutes,
 which looks like the process "self-exits" when run as a background service.
+Always set `PIWEB_INSTALL_REPO`: without it the script falls back to
+`npm install -g @silgrid/pi-web@latest` from the npm registry, which is not
+where Pi Web is released.
 
 Right after `npm install -g`, the deploy runs the installed package's own
 install check, `bin/pi-web-install-check.js` under `npm root -g`: npm can skip
@@ -251,7 +253,7 @@ On macOS or Linux:
 HTTP_PROXY=http://127.0.0.1:7890 \
 HTTPS_PROXY=http://127.0.0.1:7890 \
 NO_PROXY=localhost,127.0.0.1 \
-npx @silgrid/pi-web@latest
+pi-web
 ```
 
 On Windows PowerShell:
@@ -260,7 +262,7 @@ On Windows PowerShell:
 $env:HTTP_PROXY = "http://127.0.0.1:7890"
 $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:NO_PROXY = "localhost,127.0.0.1"
-npx @silgrid/pi-web@latest
+pi-web
 ```
 
 ## Expose pi-web to your phone

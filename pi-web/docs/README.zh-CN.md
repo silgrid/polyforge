@@ -23,23 +23,22 @@ Pi Web 是 [Polyforge](https://github.com/silgrid/polyforge) 的 Web 工作台�
 
 ## 快速开始
 
-> **⚠️ 暴露警告。** `npx` / `pi-web` 默认仅监听 `127.0.0.1`。`pi-web -H 0.0.0.0` / `npm run start:lan` 在未设置 `PI_WEB_PASSWORD` 时会让应用在**无认证**状态下对外暴露：任何能访问该端口的人都可以读写文件、打开终端并操控 agent。`deploy-piweb.sh` 默认绑定 `0.0.0.0`，但现在会拒绝缺少 `PIWEB_PORT` 或 `PI_WEB_PASSWORD` 的非回环部署，因此不会再启动无密码服务。对外暴露端口前，请先设置 `PI_WEB_PASSWORD`（或保持仅监听回环地址 / 使用可信的边缘代理）。
+> **⚠️ 暴露警告。** `pi-web` 默认仅监听 `127.0.0.1`。`pi-web -H 0.0.0.0` / `npm run start:lan` 在未设置 `PI_WEB_PASSWORD` 时会让应用在**无认证**状态下对外暴露：任何能访问该端口的人都可以读写文件、打开终端并操控 agent。`deploy-piweb.sh` 默认绑定 `0.0.0.0`，但现在会拒绝缺少 `PIWEB_PORT` 或 `PI_WEB_PASSWORD` 的非回环部署，因此不会再启动无密码服务。对外暴露端口前，请先设置 `PI_WEB_PASSWORD`（或保持仅监听回环地址 / 使用可信的边缘代理）。
 
-Pi Web 要求 Node.js 22.19.0 或更高版本。先用 `node --version` 检查版本，然后运行：
+Pi Web 要求 Node.js 22.19.0 或更高版本（用 `node --version` 检查版本）。Pi Web 只随 Polyforge 的 GitHub Release 发布——即与 `pf` 同列的 `silgrid-pi-web-<tag>.tgz` 资产及其 `SHA256SUMS` 行——由 Polyforge 安装脚本的 `--with-pi-web` 安装，不从 npm 安装：见[安装：web 工作台](https://github.com/silgrid/polyforge/blob/main/docs/install.md#optional-the-web-workbench-pi-web)。安装后运行：
 
 ```bash
-npx @silgrid/pi-web@latest
+pi-web
 ```
 
 服务就绪后，命令行会尝试自动打开浏览器。如果没有打开，请访问 [http://127.0.0.1:30141](http://127.0.0.1:30141)。Pi Web 默认仅监听 `127.0.0.1`。
 
 如果尚未配置模型 Provider，请打开**模型（Models）**面板登录或添加 API Key。
 
-如需全局安装 `pi-web` 命令：
+安装脚本装好 tarball 后会运行包内自带的安装检查；如需手动再运行一次：
 
 ```bash
-npm install -g @silgrid/pi-web@latest
-pi-web
+node "$(npm root -g)/@silgrid/pi-web/bin/pi-web-install-check.js"
 ```
 
 命令：
@@ -97,7 +96,7 @@ macOS 或 Linux：
 HTTP_PROXY=http://127.0.0.1:7890 \
 HTTPS_PROXY=http://127.0.0.1:7890 \
 NO_PROXY=localhost,127.0.0.1 \
-npx @silgrid/pi-web@latest
+pi-web
 ```
 
 Windows PowerShell：
@@ -106,7 +105,7 @@ Windows PowerShell：
 $env:HTTP_PROXY = "http://127.0.0.1:7890"
 $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:NO_PROXY = "localhost,127.0.0.1"
-npx @silgrid/pi-web@latest
+pi-web
 ```
 
 ## 注意事项

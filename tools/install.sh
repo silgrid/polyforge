@@ -46,8 +46,8 @@
 #      when needed) and prints `ERROR: Pi Web install check failed at <step>:
 #      <reason>` when it cannot. A failing npm install or install check is
 #      reported and exits non-zero, and pf, the release checkout and the
-#      daemon stay as installed. The equivalent standalone path is
-#      `npm install -g @silgrid/pi-web` followed by that check command.
+#      daemon stay as installed. Pi Web ships only as part of the GitHub
+#      Release, so this is its install path (never the npm registry).
 #      A pi-web already running under the deploy's restart loop (tmux session
 #      PIWEB_TMUX_SESSION, default piweb, window piweb) keeps serving the old
 #      tree npm just deleted: blank pages, /_next/static/* answering 5xx.
@@ -799,7 +799,7 @@ if [ -n "$WITH_PIWEB" ]; then
     echo "   Pi Web $PIWEB_WANT is already installed (${PIWEB_HAVE#*|}); npm install -g skipped (--reinstall-pi-web reinstalls it)"
   else
     if ! npm install -g "$PIWEB_DIR/$PIWEB_TGZ"; then
-      echo "ERROR: npm install -g $PIWEB_TGZ failed; pf $VER, release/current and the daemon are installed and unchanged by this failure. Retry: npm install -g @silgrid/pi-web, or re-run with --with-pi-web."
+      echo "ERROR: npm install -g $PIWEB_TGZ failed; pf $VER, release/current and the daemon are installed and unchanged by this failure. Retry: re-run with --with-pi-web."
       exit 1
     fi
     PIWEB_INSTALLED=1
@@ -873,6 +873,6 @@ echo "Done. Daily use: 'pf queue' / 'pf submit <wi>' / 'pf watch <wi> --once'"
 echo "From a pi session: just ask naturally (polyforge skill routes)."
 [ -n "$WITH_PIWEB" ] || {
   echo "Optional web workbench (Pi Web, developed in this repository under pi-web/): re-run with --with-pi-web"
-  echo "  (same release as pf), or npm install -g @silgrid/pi-web@latest;"
+  echo "  (same release as pf; Pi Web ships only with the GitHub Release, never from npm);"
   echo "  see docs/install.md#optional-the-web-workbench-pi-web; pf works without it."
 }
