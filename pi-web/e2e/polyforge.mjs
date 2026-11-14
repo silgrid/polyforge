@@ -347,6 +347,7 @@ const T = {
   P31A: "P31A: Mid-progress both centered jump buttons show; up reaches the top, latest the bottom and restores the follow (AC1 AC2 AC4)",
   P2R3A: "P2R3A: while a card's detail read is in flight the poll sends no second one; the read cycle settles without a Loading flash",
   P2R3B: "P2R3B: an answer older than the displayed one is dropped — the first read returns after the second and never overwrites",
+  P2R3C: "P2R3C: a replaced read's answer clears only its own mark — no second read piles up while the newer one is in flight",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1292,6 +1293,53 @@ try {
     const text = (await card.innerText()).replace(/\s+/g, " ").trim();
     assert.ok(text.includes("E2E-P2R3-FINAL"), `the final result stays (${text})`);
     assert.ok(!text.includes("E2E-P2R3-STALE"), "the older answer never reaches the card");
+  });
+
+  // P2R3C — polyforge#2 r3#1: a replaced read's answer clears only the
+  // mark set its own read captured. read1 is held; the step switch resets
+  // the detail (the mark set is replaced) and the re-expanded card reads
+  // anew (read2, answered resultless with progress lines); the poll then
+  // issues read3 and holds it; releasing read1 must not clear read3's mark
+  // (the old tree deleted from the new set: a read4 piled up, and read3's
+  // answer was then seq-dropped too) — the read count must not grow, and
+  // read3's eventual final result must render.
+  await checkPage(T.P2R3C, "a replaced read's answer clears only its own mark", {}, async (page) => {
+    const reads = [];
+    await page.route((url) => url.pathname === "/api/polyforge/progress/tool", async (route) => {
+      reads.push(route);
+    });
+    const progressPolls = [];
+    page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/polyforge/progress") progressPolls.push(Date.now()); });
+    const panel = await ensureDetail24(page, SLUG2R3, WIP2R3);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    const card = panel.locator('[data-pf-progress-kind="tool"]');
+    await pollUntil(async () => (await card.count()) === 1, "the running call's tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 1, "read1 is captured — held unanswered");
+    await node("review").click();
+    await pollUntil(async () => (await card.count()) === 0, "the unselected step's record leaves");
+    await node("build").click();
+    await pollUntil(async () => (await card.count()) === 1, "the switched-back step's tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 2, "the re-expanded card reads anew (read2)");
+    // read2 answers resultless (the command still runs): the poll re-reads
+    await reads[1].fulfill({ status: 200, json: { available: true, hasResult: false, progress: ["verify.py: [1/2] lint (fast): npm run lint"],
+      tool: { name: "bash", argument: "npm test", status: "running", input: "npm test", output: null, isError: false } } });
+    await pollUntil(async () => (await card.innerText()).includes("npm run lint"), "read2's interim progress lines render");
+    await pollUntil(() => reads.length === 3, "the poll re-reads the resultless card (read3) — held");
+    // read1 finally answers: a stale resultless state, dropped by seq — and
+    // it must clear only its own mark set, never read3's
+    await reads[0].fulfill({ status: 200, json: { available: true, hasResult: false, progress: ["verify.py: [1/2] lint (fast): E2E-P2R3C-STALE"],
+      tool: { name: "bash", argument: "npm test", status: "running", input: "npm test", output: null, isError: false } } });
+    const pollsAtStale = progressPolls.length;
+    await pollUntil(() => progressPolls.length - pollsAtStale >= 2, "two poll cycles pass while read3 is in flight", 30_000);
+    assert.equal(reads.length, 3, `a replaced read's answer clears only its own mark — no second read piled up (${reads.length} reads)`);
+    assert.ok(!(await card.innerText()).includes("E2E-P2R3C-STALE"), "the stale answer never reaches the card");
+    await reads[2].fulfill({ status: 200, json: { available: true, hasResult: true,
+      tool: { name: "bash", argument: "npm test", status: "ok", durationMs: 3000, input: "npm test", output: "E2E-P2R3C-FINAL", isError: false } } });
+    await pollUntil(async () => (await card.innerText()).includes("E2E-P2R3C-FINAL"), "read3's final result renders");
+    const text = (await card.innerText()).replace(/\s+/g, " ").trim();
+    assert.ok(!text.includes("npm run lint") && !text.includes("E2E-P2R3C-STALE"), `the interim and stale lines are gone (${text})`);
   });
 
   await check(T.AC3, "pf present: no 5xx or console errors", async () => assert.deepEqual(errors.splice(0), []));
