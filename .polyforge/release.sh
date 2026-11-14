@@ -57,7 +57,10 @@
 #      preflight (step 1b''' below: tools, node major, the ghcr.io push
 #      credential - every problem in one message); refuse unless every commit that entered
 #      main since the previous release tag came through a merged PR or is an
-#      allowlisted owner-direct commit (the PR-only check below); the
+#      allowlisted owner-direct commit (the PR-only check below); a
+#      committed docs/release-notes/<tag>.md over GitHub's 125000-character
+#      release-notes limit refuses right here, before the gates (never
+#      truncated - see the notes step below); the
 #      workflow-contract check (step 1d below): refuse while
 #      internal/common/workflow/contract-pending.md registers an incompatible
 #      change and ContractVersion is still the previous release's, refuse a
@@ -514,7 +517,7 @@ notes_commit_list() {
   fi
   git log $_anc --oneline "$PREVCOMMIT..HEAD" >"$WORK/notes.log"
   LC_ALL=C awk -v max="$NOTES_LIST_BUDGET" -v repo="$GH_REPO" -v base="$PREVCOMMIT" -v tip="$COMMIT" '
-    { _l = length($0) + 2
+    { _l = length($0) + 3
       if (_n + _l <= max) { print "- " $0; _n += _l } else _drop++ }
     END { if (_drop > 0)
       printf "还有 %d 个提交未列出（GitHub 发版说明上限 %d 字节，保留最新的提交）：https://github.com/%s/compare/%s...%s\n", _drop, max, repo, base, tip }
@@ -1069,6 +1072,17 @@ fi
 # one stays claimed, resumable).
 if [ -n "$RESUME" ]; then NOCLAIM="$TAG stays claimed and resumable"; else NOCLAIM="no version claimed ($TAG is still free)"; fi
 
+# polyforge#14: a committed notes file is published as it is, so it must
+# respect GitHub's release-notes limit itself; refusing here, before the
+# gates and the build, costs no test-gate run. Over the limit the release
+# refuses - never truncated: a human's text is the human's to shorten. A
+# resume whose release already exists skips this (its notes are never
+# regenerated).
+if [ -z "$REL_EXISTS" ] && [ -s "docs/release-notes/$TAG.md" ]; then
+  _sz=$(wc -c <"docs/release-notes/$TAG.md")
+  [ "$_sz" -le "$NOTES_MAX" ] || die "docs/release-notes/$TAG.md is $_sz bytes, over the $NOTES_MAX-byte GitHub release-notes limit - shorten the file and run again (a committed notes file is never truncated); nothing built or published, $NOCLAIM"
+fi
+
 # 1d. the workflow contract: ContractVersion moves only on an
 # incompatible change, at most once per release, and an incompatible change
 # is registered in the pending list when it merges. Read the version of the
@@ -1241,12 +1255,8 @@ fi
 NOTES="docs/release-notes/$TAG.md"
 if [ -z "$REL_EXISTS" ]; then
   if [ -s "$NOTES" ]; then
-    # polyforge#14: a committed notes file is published as it is, so it
-    # must respect GitHub's release-notes limit itself - over it the
-    # release refuses here, BEFORE the claim (never truncated: a human's
-    # text is the human's to shorten).
-    _sz=$(wc -c <"$NOTES")
-    [ "$_sz" -le "$NOTES_MAX" ] || die "docs/release-notes/$TAG.md is $_sz bytes, over the $NOTES_MAX-byte GitHub release-notes limit - shorten the file and run again (a committed notes file is never truncated); nothing built or published, $NOCLAIM"
+    # polyforge#14: over the limit the file already refused before the
+    # gates (nothing built or published); here it only rides along.
     cp "$NOTES" "$WORK/notes.md"
   else
     {
@@ -1275,7 +1285,7 @@ if [ -z "$REL_EXISTS" ]; then
   # it after the claim (the generated list is cut by its budget; this
   # catches a committed file that only the appended sections push over).
   _sz=$(wc -c <"$WORK/notes.md")
-  [ "$_sz" -le "$NOTES_MAX" ] || die "the release notes of $TAG assemble to $_sz bytes, over the $NOTES_MAX-byte GitHub release-notes limit - shorten docs/release-notes/$TAG.md (a committed notes file is never truncated; the generated list keeps the newest commits within the budget); nothing built or published, $NOCLAIM"
+  [ "$_sz" -le "$NOTES_MAX" ] || die "the release notes of $TAG assemble to $_sz bytes, over the $NOTES_MAX-byte GitHub release-notes limit - shorten docs/release-notes/$TAG.md (a committed notes file is never truncated; the generated list keeps the newest commits within the budget); nothing published, $NOCLAIM"
   NOTES="$WORK/notes.md"
 fi
 

@@ -253,7 +253,11 @@ contract checks, the generated notes) is the highest `-<name>.N` tag below
 the version on origin, else the public base tag, each at the commit its own
 `ls-remote` reports; resume and `--verify` judge the same shape the same
 way, and the version-line cutover does not apply. The name lives only in
-that file: the procedure names none.
+that file: the procedure names none. The generated notes of the line's
+first release (whose previous release is the public base tag) list only
+the absorption's descendants (`git log --ancestry-path`): the history
+before that point belongs to no version of this line; between the line's
+own versions the plain range stands, unchanged.
 
 ```
  RELEASE: a work item on the `release` bundle (no platform release code)
