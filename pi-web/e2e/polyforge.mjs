@@ -1068,7 +1068,9 @@ try {
       };
       await advance({ current_step: "bravo-code", steps: { ...WATCH_112.execution.steps, "bravo-code": { status: "in_progress", started_at: "2026-10-18T11:50:00Z" } } },
         (aria) => (aria ?? "").includes("In progress"));
-      assert.equal(await node("bravo-code").getAttribute("data-pf-step-selected"), "true", "the selection follows the current step");
+      // The selection follows one effect-triggered render AFTER the aria label
+      // settles — poll the selected state itself, never read it between renders.
+      await pollUntil(async () => (await node("bravo-code").getAttribute("data-pf-step-selected")) === "true", "the selection follows the current step");
       await node("zulu-grill").click();
       await pollUntil(async () => (await node("zulu-grill").getAttribute("data-pf-step-selected")) === "true", "the manual choice lands");
       const outline = await node("zulu-grill").evaluate((el) => getComputedStyle(el).outlineStyle);
