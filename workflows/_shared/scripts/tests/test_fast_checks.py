@@ -378,7 +378,7 @@ class DefaultTierTest(FastChecksCase):
         clone = self.task_repo("app", {
             "go.mod": GO_MOD,
             ".polyforge/verify-scope.conf":
-                "stack=go\nforced_full=app\nfast_gate=pwd > root.txt\n"
+                "stack=go\nforced_full=app\nforced_full=app/*\nfast_gate=pwd > root.txt\n"
                 "full_command=echo full-ran > full.txt\n",
             "app/app.go": APP,
             "app/app_test.go": APP_TEST,
@@ -397,7 +397,7 @@ class DefaultTierTest(FastChecksCase):
         files = {
             "go.mod": GO_MOD,
             ".polyforge/verify-scope.conf":
-                "stack=go\nforced_full=webapp\nfast_gate=pwd > root.txt\n"
+                "stack=go\nforced_full=webapp\nforced_full=webapp/*\nfast_gate=pwd > root.txt\n"
                 "full_command=echo full-ran > full.txt\n",
             "app/app.go": APP,
             "app/app_test.go": APP_TEST,
