@@ -1229,6 +1229,12 @@ fi
 NOTES="docs/release-notes/$TAG.md"
 if [ -z "$REL_EXISTS" ]; then
   if [ -s "$NOTES" ]; then
+    # polyforge#14: a committed notes file is published as it is, so it
+    # must respect GitHub's release-notes limit itself - over it the
+    # release refuses here, BEFORE the claim (never truncated: a human's
+    # text is the human's to shorten).
+    _sz=$(wc -c <"$NOTES")
+    [ "$_sz" -le "$NOTES_MAX" ] || die "docs/release-notes/$TAG.md is $_sz bytes, over the $NOTES_MAX-byte GitHub release-notes limit - shorten the file and run again (a committed notes file is never truncated); nothing built or published, $NOCLAIM"
     cp "$NOTES" "$WORK/notes.md"
   else
     {
@@ -1252,6 +1258,12 @@ if [ -z "$REL_EXISTS" ]; then
       for _a in $ALLOW_COMMITS; do printf -- '- %s %s\n' "$_a" "$(git log -1 --format=%s "$_a")"; done
     } >>"$WORK/notes.md"
   fi
+  # polyforge#14: the assembled notes (list or committed file plus the
+  # sections above) must respect the limit too - a release never dies on
+  # it after the claim (the generated list is cut by its budget; this
+  # catches a committed file that only the appended sections push over).
+  _sz=$(wc -c <"$WORK/notes.md")
+  [ "$_sz" -le "$NOTES_MAX" ] || die "the release notes of $TAG assemble to $_sz bytes, over the $NOTES_MAX-byte GitHub release-notes limit - shorten docs/release-notes/$TAG.md (a committed notes file is never truncated; the generated list keeps the newest commits within the budget); nothing built or published, $NOCLAIM"
   NOTES="$WORK/notes.md"
 fi
 
