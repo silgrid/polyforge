@@ -14,6 +14,8 @@ const card = await jiti.import("./PolyforgeProgressToolCard.tsx");
 const line = (tool, text = tool ? `${tool.name}: ${tool.argument ?? ""}` : "legacy: text") => ({ id: "0123456789abcdef.10.0", kind: "tool", text, ...(tool ? { tool } : {}) });
 const render = (props) => renderToStaticMarkup(React.createElement(I18nProvider, null,
   React.createElement(card.PolyforgeProgressToolCard, { detail: undefined, onToggle: () => {}, ...props })));
+const renderBody = (detail) => renderToStaticMarkup(React.createElement(I18nProvider, null,
+  React.createElement(card.PolyforgeProgressToolBody, { detail })));
 
 test("the header is name + a preview within 120 code points; the full masked header is the title", () => {
   const argument = `curl --token=*** https://e2e.invalid/${"x".repeat(200)} TAIL`;
@@ -79,21 +81,22 @@ test("the detail read is one GET of the route with the wi and the id; any failur
   }
 });
 
-test("no result yet: the step's progress lines render in the output area; none keeps the no-result note; a result renders without them", () => {
+test("no result yet: the step's progress lines render in the body's output area; none keeps the no-result note; a result renders without them", () => {
   const held = { status: "available", input: "npm test", output: null, isError: false };
-  const running = line({ name: "bash", argument: "npm test", status: "running" });
   const lines = ["verify.py: [1/2] lint (fast): npm run lint", "verify.py: [1/2] lint PASS (12s)"];
-  const withLines = render({ line: running, detail: { ...held, progress: lines } });
+  const withLines = renderBody({ ...held, progress: lines });
+  assert.match(withLines, /npm test</, "the input renders");
   assert.match(withLines, /verify\.py: \[1\/2\] lint \(fast\): npm run lint/, "the lines render as text, not markup");
-  assert.match(withLines, />verify\.py: \[1\/2\] lint PASS \(12s\)</);
+  assert.match(withLines, /verify\.py: \[1\/2\] lint PASS \(12s\)</, "the newest line last");
   assert.doesNotMatch(withLines, /No result yet/, "interim lines replace the no-result note");
-  const without = render({ line: running, detail: held });
+  const without = renderBody(held);
   assert.match(without, /No result yet/, "no lines: the note stays");
   assert.doesNotMatch(without, /lint \(fast\)/, "and nothing is invented");
-  const settled = render({ line: line({ name: "bash", argument: "npm test", status: "ok", durationMs: 1500 }),
-                           detail: { status: "available", input: "npm test", output: "1..1 ok", isError: false, progress: ["verify.py: [1/2] lint PASS (12s)"] } });
+  const settled = renderBody({ status: "available", input: "npm test", output: "1..1 ok", isError: false, progress: ["verify.py: [1/2] lint PASS (12s)"] });
   assert.match(settled, /1\.\.1 ok/, "the final result renders");
   assert.doesNotMatch(settled, /lint PASS/, "and the interim lines are gone");
+  assert.match(renderBody(undefined), /Loading…/, "no detail yet: the loading note");
+  assert.match(renderBody({ status: "unavailable" }), /Tool detail unavailable/, "an unavailable body says so");
 });
 
 test("parseProgressToolDetail keeps the answer's progress lines only while there is no result", () => {

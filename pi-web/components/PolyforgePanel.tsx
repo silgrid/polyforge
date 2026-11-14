@@ -287,6 +287,10 @@ function progressBlockDurationSec(block: PolyforgeProgressBlock): number | undef
  *  a large transcript is rendered in bounded chunks, never truncated). */
 export const PROGRESS_RENDER_CHUNK = 200;
 
+/** The progress lines of a snapshot with none (a stable array, so the poll
+ *  re-read effect depends on the snapshot alone). */
+const EMPTY_PROGRESS_LINES: PolyforgeProgressLine[] = [];
+
 /**
  * The job detail's execution progress, whole-job,
  * full lines, spawn blocks and the open-at-bottom follow
@@ -301,9 +305,10 @@ export const PROGRESS_RENDER_CHUNK = 200;
  * wrapped text (the guard's click-to-reveal box would be a per-entry gate
  * and a nested scroller here); a tool call as one
  * PolyforgeProgressToolCard on the transcript's ToolCallCard shell (header
- * from the poll's light fields, the full detail fetched only when that card
- * is expanded, at most once per call per selection, a failed read leaving
- * only that card unavailable); every other lifecycle event a restrained
+ * from the poll's light fields, the full detail fetched when that card is
+ * expanded and re-read on every poll while it still has no result — the
+ * step's progress lines while the command runs, the final result once it
+ * ends; a failed read leaving only that card unavailable); every other lifecycle event a restrained
  * marker row in its tone, wrapping in full, its raw kind and text on hover.
  * A snapshot renders the first PROGRESS_RENDER_CHUNK lines at once, then
  * appends the rest one chunk per animation frame, so a large stream stays
@@ -374,6 +379,25 @@ export function selectProgressStep(snapshot: PolyforgeProgressSnapshot | null, s
   return { ...snapshot, lines: selectedLines };
 }
 
+/** The expanded tool cards the poll re-reads (polyforge#2): one whose held
+ *  detail still has no result — its step's progress lines while its command
+ *  runs, the final result once it ends — and whose line is still in the
+ *  snapshot. A loading, unavailable or settled detail and a card whose line
+ *  is gone (another selection, a folded-away step) is not re-read. Pure. */
+export function rereadToolIds(
+  details: ReadonlyMap<string, PolyforgeProgressToolDetailState | undefined>,
+  expanded: ReadonlySet<string>,
+  lineIds: ReadonlySet<string>,
+): string[] {
+  const out: string[] = [];
+  for (const id of expanded) {
+    if (!lineIds.has(id)) continue;
+    const held = details.get(id);
+    if (held && held.status === "available" && held.output === null) out.push(id);
+  }
+  return out;
+}
+
 export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef, emptyMessage, resetKey }: {
   wi: string | null;
   profile?: string;
@@ -392,6 +416,9 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   const detailsRef = useRef(details);
   detailsRef.current = details;
   const selection = useRef(wi);
+  // polyforge#2: the tool cards the reader expanded (their onToggle said
+  // so); the poll re-reads the ones whose detail still has no result.
+  const openTools = useRef<Set<string>>(new Set());
   const pinned = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const [atTop, setAtTop] = useState(true);
@@ -405,6 +432,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setFolded(new Map());
     setFoldVersion(0);
     setDetails(new Map());
+    openTools.current = new Set();
     pinned.current = true;
     setAtBottom(true);
     setAtTop(true);
@@ -454,13 +482,17 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setAtBottom(at);
     setAtTop(isProgressAtTop(region));
   }, [foldVersion, scrollRef]);
-  // One tool card's detail, read when that card is expanded:
-  // a call already loading or loaded is never asked again; an unavailable one
-  // is asked again on its next expansion. An answer for another selection
-  // writes nothing.
+  // One tool card's detail, read when that card is expanded: never held
+  // again while a read is in flight or the answer carries a result; an
+  // unavailable one is asked again on its next expansion, and a resultless
+  // one is re-read by the poll while its card stays expanded (polyforge#2:
+  // its step's progress lines while the command runs, the final result once
+  // it ends). An answer for another selection writes nothing.
   const loadDetail = useCallback((id: string) => {
     const held = detailsRef.current.get(id);
-    if (!wi || (held && held.status !== "unavailable")) return;
+    const askable = !held || held.status === "unavailable"
+      || (held && held.status === "available" && held.output === null);
+    if (!wi || !askable) return;
     const asked = wi;
     const settle = (state: PolyforgeProgressToolDetailState) => {
       if (selection.current !== asked) return;
@@ -475,9 +507,22 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   // that leaves the view off the bottom unpins (↓ Latest, no pull on the next
   // poll) and a collapse at the bottom stays pinned.
   const toggleTool = useCallback((id: string, open: boolean) => {
-    if (open) loadDetail(id);
+    if (open) {
+      openTools.current.add(id);
+      loadDetail(id);
+    } else {
+      openTools.current.delete(id);
+    }
     setFoldVersion((current) => current + 1);
   }, [loadDetail]);
+  // polyforge#2: every poll re-reads the expanded cards whose detail still
+  // has no result (each poll's snapshot is a new object, so this runs on the
+  // 2 s cadence while the job runs — no timer of its own).
+  useEffect(() => {
+    if (!wi) return;
+    const lineIds = new Set((snapshot?.lines ?? EMPTY_PROGRESS_LINES).map((line) => line.id));
+    for (const id of rereadToolIds(detailsRef.current, openTools.current, lineIds)) loadDetail(id);
+  }, [wi, snapshot, loadDetail]);
   const message = !wi || snapshot?.available === false ? t("polyforge.progress.unavailable")
     : !snapshot ? t("polyforge.loading")
       : snapshot.lines.length === 0 ? (emptyMessage ?? t("polyforge.progress.empty")) : null;

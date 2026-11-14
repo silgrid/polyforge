@@ -1122,12 +1122,15 @@ test("every block has a group head with step, status mark, duration and count; t
   assert.match(helper, /return undefined;/, "no times: no invented duration");
 });
 
-test("a tool card's detail is read only on its expansion, once per call per selection, through the card module", () => {
+test("a tool card's detail is read on its expansion and re-read by the poll while it still has no result, through the card module", () => {
   const start = source.indexOf("function PolyforgeDetailProgress(");
   const block = source.slice(start, source.indexOf("\n}\n", start));
-  assert.match(block, /const loadDetail = useCallback\(\(id: string\) => \{\s*const held = detailsRef\.current\.get\(id\);\s*if \(!wi \|\| \(held && held\.status !== "unavailable"\)\) return;/, "loading or loaded: never asked again; unavailable: asked again on the next expansion");
+  assert.match(block, /const askable = !held \|\| held\.status === "unavailable"\s*\|\| \(held && held\.status === "available" && held\.output === null\);/,
+    "loading or a settled result: never asked again; unavailable once; a resultless answer is re-read while its card stays expanded (polyforge#2)");
   assert.match(block, /if \(selection\.current !== asked\) return;\s*setDetails\(\(current\) => new Map\(current\)\.set\(id, state\)\);\s*setFoldVersion\(\(current\) => current \+ 1\);/, "an answer for another selection writes nothing; a settled detail re-measures the follow state like a fold (review s10#2)");
-  assert.match(block, /const toggleTool = useCallback\(\(id: string, open: boolean\) => \{\s*if \(open\) loadDetail\(id\);\s*setFoldVersion\(\(current\) => current \+ 1\);\s*\}, \[loadDetail\]\);/, "a card toggle is a fold: it re-measures the follow state and only an expansion asks for the detail (review s10#2)");
+  assert.match(block, /const toggleTool = useCallback\(\(id: string, open: boolean\) => \{\s*if \(open\) \{\s*openTools\.current\.add\(id\);\s*loadDetail\(id\);\s*\} else \{\s*openTools\.current\.delete\(id\);\s*\}\s*setFoldVersion\(\(current\) => current \+ 1\);\s*\}, \[loadDetail\]\);/,
+    "a card toggle is a fold: it re-measures the follow state and only an expansion opens (and registers) the card's detail read (review s10#2)");
+  assert.match(block, /for \(const id of rereadToolIds\(detailsRef\.current, openTools\.current, lineIds\)\) loadDetail\(id\);/, "every poll re-reads the expanded resultless cards");
   assert.match(block, /void fetchProgressToolDetail\(asked, id, profile\)\.then\(settle\);/);
   assert.match(block, /setDetails\(new Map\(\)\);/, "the cache resets per selection, never persisted");
   assert.doesNotMatch(source, /fetch\(/, "the panel itself still adds no read");
@@ -1254,10 +1257,10 @@ test("polyforge#2: the poll re-reads an expanded tool card whose held detail sti
   ]);
   const lineIds = new Set(["running", "settled", "loading"]);
   const expanded = new Set(["running", "settled", "loading", "unavailable", "gone"]);
-  assert.deepEqual(context.rereadToolIds(details, expanded, lineIds), ["running"],
+  assert.deepEqual(JSON.parse(JSON.stringify(context.rereadToolIds(details, expanded, lineIds))), ["running"],
     "only the expanded card whose detail still has no result is re-read (its id must still be in the snapshot)");
-  assert.deepEqual(context.rereadToolIds(details, new Set(), lineIds), [], "nothing expanded: nothing re-read");
-  assert.deepEqual(context.rereadToolIds(new Map(), expanded, lineIds), [], "nothing held yet: the first read comes from the card's expansion");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.rereadToolIds(details, new Set(), lineIds))), [], "nothing expanded: nothing re-read");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.rereadToolIds(new Map(), expanded, lineIds))), [], "nothing held yet: the first read comes from the card's expansion");
   // wiring: the panel keeps the expanded ids and feeds the poll's snapshot into it
   assert.match(source, /const openTools = useRef<Set<string>>\(new Set\(\)\);/);
   assert.match(source, /for \(const id of rereadToolIds\(detailsRef\.current, openTools\.current, lineIds\)\) loadDetail\(id\);/);

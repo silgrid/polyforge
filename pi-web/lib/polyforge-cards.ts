@@ -654,9 +654,13 @@ export interface PolyforgeProgressToolDetail extends PolyforgeProgressTool {
   isError: boolean;
 }
 
-/** `GET /api/polyforge/progress/tool` — one call's detail, or why not. */
+/** `GET /api/polyforge/progress/tool` — one call's detail, or why not. A
+ *  resultless answer also carries `progress`: the newest lines of the
+ *  step's progress file (`runtime-state/progress/<step>.log`, written by
+ *  the scripts' say), masked, the card's interim view while the call
+ *  runs. */
 export type PolyforgeProgressToolAnswer =
-  | { available: true; hasResult: boolean; tool: PolyforgeProgressToolDetail }
+  | { available: true; hasResult: boolean; tool: PolyforgeProgressToolDetail; progress?: string[] }
   | { available: false; error: string };
 
 interface ProgressCall {
@@ -1372,6 +1376,28 @@ function toolInputText(input: unknown): string {
 
 const unavailableTool = (error: string): PolyforgeProgressToolAnswer => ({ available: false, error });
 
+/** The step's progress file's bounds: the last `PROGRESS_FILE_TAIL_BYTES`
+ *  bytes are read, the newest `PROGRESS_FILE_LINES` complete lines of them
+ *  are answered (each masked) — enough to see which command runs and how
+ *  long the last one took, never the whole log. */
+const PROGRESS_FILE_TAIL_BYTES = 64 * 1024;
+const PROGRESS_FILE_LINES = 10;
+/** A step id as the workflow names one: the file name stays inside the
+ *  progress directory (the journal's step_id is input like any other). */
+const PROGRESS_FILE_STEP = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** The step's progress file (`<capsule>/runtime-state/progress/<step>.log`,
+ *  appended by the scripts' say — pfstep.progress): its newest lines,
+ *  credential-masked, for a call that has no result yet. Undefined when
+ *  the step names no file or nothing is readable. */
+async function progressFileLines(capsuleDir: string, step: string | undefined): Promise<string[] | undefined> {
+  if (!step || !PROGRESS_FILE_STEP.test(step)) return undefined;
+  const lines = await readWholeLines(join(capsuleDir, "runtime-state", "progress", `${step}.log`), PROGRESS_FILE_TAIL_BYTES);
+  if (!lines || lines.length === 0) return undefined;
+  const tail = lines.slice(-PROGRESS_FILE_LINES).map((line) => maskPolyforgeCredentials(line.text));
+  return tail.length > 0 ? tail : undefined;
+}
+
 /**
  * One tool call's full detail for the expanded progress card,
  * read on demand: `id` is the tool line's id from `readProgressSnapshot`.
@@ -1405,10 +1431,15 @@ export async function readProgressToolDetail(root: string, capsuleDir: string | 
       if (!call) return unavailableTool("the tool call is no longer in its transcript");
       const tool = call.line.tool!;
       const output = call.result ? toolResultText(call.result.content) : null;
+      // no result yet: the step's progress file's newest lines ride along,
+      // the card's interim view (a spawn's transcript source carries its
+      // step; a subagent's does not)
+      const progress = call.result === undefined ? await progressFileLines(capsuleDir, source.step) : undefined;
       return {
         available: true,
         hasResult: call.result !== undefined,
         tool: { ...tool, input: toolInputText(call.input), output, isError: call.result?.isError ?? false },
+        ...(progress ? { progress } : {}),
       };
     }
     return unavailableTool("the tool call's transcript is no longer readable");
