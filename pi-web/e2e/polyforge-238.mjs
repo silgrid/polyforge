@@ -537,8 +537,9 @@ try {
       line("d4", "narration", "E2E-S238-SECOND"),
     ]);
     await openUI(page);
-    await selectStepForProgress(page, "spec");
     const blocks = progressBlock(page).locator("[data-pf-progress-block]");
+    await progressBlock(page).waitFor({ timeout: UI_WAIT });
+    await selectStepForProgress(page, "spec");
     await waitFor(async () => (await blocks.count()) === 2, "two spawn blocks render");
     const expanded = () => blocks.locator("[data-pf-progress-block-toggle]").evaluateAll((els) => els.map((el) => el.getAttribute("aria-expanded")));
     assert.deepEqual(await expanded(), ["false", "true"], "only the newest of the two starts expanded");
@@ -578,8 +579,8 @@ try {
   await check("S238-23", () => withPage({}, async (page) => {
     page.__progress.body = progressBody(blockLines());
     await openUI(page);
-    await selectStepForProgress(page, "spec");
     await progressBlock(page).waitFor({ timeout: UI_WAIT });
+    await selectStepForProgress(page, "spec");
     const blocks = progressBlock(page).locator("[data-pf-progress-block]");
     await waitFor(async () => (await blocks.count()) === 3, "three spawn blocks render");
     const headers = await blocks.locator("[data-pf-progress-block-toggle]").evaluateAll((els) => els.map((el) => el.textContent));
