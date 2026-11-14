@@ -313,6 +313,7 @@ const scenarios = [
   ['S22a no horizontal overflow and a functional narrow rail', scenarioOverflow],
   ['S22b links from escaping names resolve to the exact object', scenarioEscapedLinks],
   ['S23 ticket discussion shows comments and anchored messages', scenarioDiscussion],
+  ['S24 the picker hides deactivated projects and restores them in place', scenarioPickerDeactivated],
 ]
 
 const browser = await chromium.launch()
@@ -877,4 +878,54 @@ async function scenarioDiscussion(page) {
 
 function enc(segment) {
   return encodeURIComponent(segment)
+}
+
+// ---------------------------------------------------------------------------
+// S24 (polyforge#30, AC7): the picker hides the deactivated project by
+// default, the「show deactivated」entry reveals it with its marker and
+// the restore entry in the same row, and restoring moves the project
+// back into the default view — the admin key this run holds carries the
+// restore right, so the in-place door is exercised end to end through
+// the console's own write route.
+async function scenarioPickerDeactivated(page) {
+  await page.goto('/web/')
+  const picker = page.getByTestId('picker')
+  await picker.waitFor()
+  await waitForContent(picker.locator('a'), 'S24: the picker never rendered its rows')
+
+  // Default: the deactivated fixture project is absent, the active one present.
+  const dormant = fixtures.deactivated_project
+  let body = await picker.textContent()
+  assert(!body.includes(dormant), 'S24: the default picker lists the deactivated project')
+  assert(body.includes(fixtures.project), 'S24: the default picker lost the active project')
+
+  // The toggle: the deactivated project appears, marked, with the
+  // restore entry in the same row.
+  const toggle = page.getByTestId('show-deactivated')
+  assert(await toggle.count() === 1, 'S24: no「show deactivated」entry beside the list')
+  await toggle.click()
+  const row = picker.getByTestId('picker-row').filter({ hasText: dormant })
+  await waitForContent(row, 'S24: the toggle did not reveal the deactivated project')
+  assert((await row.textContent()).includes('deactivated'), 'S24: the revealed row carries no deactivated marker')
+  const restore = row.getByTestId('restore-project')
+  assert(await restore.count() === 1, 'S24: the revealed row carries no in-place restore entry')
+
+  // Restore: the write answers through the console's own route; the
+  // row's deactivated marker is the settled state the poll waits for
+  // (the refetch recomputes it), and the view keeps listing the
+  // project — unmarked.
+  await restore.click()
+  const marker = row.getByTestId('deactivated-mark')
+  try {
+    await marker.waitFor({ state: 'detached', timeout: 10_000 })
+  } catch {
+    throw new Error('S24: the restore never cleared the row’s deactivated marker')
+  }
+  assert(!(await row.textContent()).includes('deactivated'), 'S24: the restored row still carries the deactivated marker')
+
+  const toggleBack = page.getByTestId('show-deactivated')
+  await toggleBack.click()
+  const backRow = picker.getByTestId('picker-row').filter({ hasText: dormant })
+  await waitForContent(backRow, 'S24: the default view never listed the restored project')
+  assert(!(await backRow.textContent()).includes('deactivated'), 'S24: the restored project is still marked in the default view')
 }
