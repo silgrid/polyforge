@@ -309,20 +309,61 @@ func (d *Daemon) loadExecution(wi string, item *api.WorkItem) (*capsule.Executio
 
 // declaredSteps answers the step sequence of the workflow the capsule's
 // driver executes (capsuleWorkflow: its pinned bundle, parsed by the
-// driver's own loader) in frontmatter order. nil when that workflow is
-// unreadable: the snapshot then omits the field and nothing else changes.
+// driver's own loader) in frontmatter order, with the lane's skippable
+// declarations (polyforge#25). nil when that workflow is unreadable: the
+// snapshot then omits the field and nothing else changes.
 func declaredSteps(wf *driver.Workflow) []protocol.WatchDeclaredStep {
 	if wf == nil {
 		return nil
 	}
 	out := make([]protocol.WatchDeclaredStep, 0, len(wf.Steps))
 	for _, s := range wf.Steps {
-		ds := protocol.WatchDeclaredStep{ID: s.ID}
+		ds := protocol.WatchDeclaredStep{ID: s.ID, Skippable: s.Skippable}
 		if s.OnFail != nil {
 			target := s.OnFail.Target
 			ds.OnFail = &target
 		}
 		out = append(out, ds)
+	}
+	return out
+}
+
+// watchOverrides answers the step-overlay values the snapshot carries
+// (polyforge#25): the capsule's record, with the pending record of a work
+// item this daemon holds no job of merged on top (its aspects marked
+// pending — they land with the next claim here). nil when nothing carries
+// an aspect.
+func watchOverrides(d *Daemon, wi, capsuleDir string) map[string]protocol.WatchOverride {
+	ov, err := capsule.ReadStepOverrides(capsuleDir)
+	if err != nil {
+		ov = capsule.StepOverrides{}
+	}
+	out := map[string]protocol.WatchOverride{}
+	for id, e := range ov.Steps {
+		if e == nil {
+			continue
+		}
+		out[id] = protocol.WatchOverride{Models: e.Models, Skip: e.Skip}
+	}
+	// the pending record of a work item this daemon holds no job of (its
+	// aspects land with the next claim here); a live job consumed it at
+	// its claim, so this reads empty there
+	for id, e := range d.rt.PendingStepOverrides(wi) {
+		if e == nil {
+			continue
+		}
+		w := out[id]
+		w.Pending = true
+		if e.Models != nil {
+			w.Models = e.Models
+		}
+		if e.Skip != nil {
+			w.Skip = e.Skip
+		}
+		out[id] = w
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -434,6 +475,7 @@ func (d *Daemon) readExecution(wi string, item *api.WorkItem) *protocol.WatchExe
 	out := &protocol.WatchExecution{
 		WorkflowStatus: ex.WorkflowStatus, CurrentStep: ex.CurrentStep, UpdatedAt: ex.UpdatedAt,
 		Steps: map[string]protocol.WatchStep{}, DeclaredSteps: declaredSteps(wf),
+		Overrides: watchOverrides(d, wi, dir),
 	}
 	// the rewind tally: the automatic rewinds and the owner's apart
 	if wf != nil {
