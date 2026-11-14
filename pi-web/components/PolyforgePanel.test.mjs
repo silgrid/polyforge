@@ -867,11 +867,12 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
   assert.ok(source.indexOf('data-pf-tabstrip="work"') > source.indexOf(") : workTab === \"tasks\" ? ("), "the sub-tab controls follow the main area in the DOM");
   // (intentional 2026-10-31 third-segment change): jobs, tasks, items in that order
   // (the 决策 sub-tab is gone again: owner ruling 2026-11-09, every interaction is the work item's).
-  // intentional fourth sub-tab: 待集成 (`integrate`) last.
-  assert.match(work, /\(\["jobs", "tasks", "items", "integrate"\] as const\)\.map\(\(tab\) =>/);
+  // intentional fourth sub-tab: 待集成 (`integrate`) last; polyforge#30 adds
+  // the fifth segment 项目 (`projects`) between 全部 and 待集成.
+  assert.match(work, /\(\["jobs", "tasks", "items", "projects", "integrate"\] as const\)\.map\(\(tab\) =>/);
   assert.match(work, /role="tab" aria-selected=\{active\}\s*onClick=\{\(\) => onWorkTab\(tab\)\}/);
-  assert.match(work, /const label = tab === "jobs" \? t\("polyforge\.messages\.jobsTab"\) : tab === "tasks" \? t\("polyforge\.tasks\.tab"\)\s*: tab === "items" \? t\("polyforge\.work\.itemsTab"\) : t\("polyforge\.work\.integrateTab"\);/,
-    "作业 / 任务 / 全部 / 待集成 labels ( adds the third; intentional fourth sub-tab; 全部 renamed by polyforge#22)");
+  assert.match(work, /const label = tab === "jobs" \? t\("polyforge\.messages\.jobsTab"\) : tab === "tasks" \? t\("polyforge\.tasks\.tab"\)\s*: tab === "items" \? t\("polyforge\.work\.itemsTab"\) : tab === "projects" \? t\("polyforge\.work\.projectsTab"\)\s*: t\("polyforge\.work\.integrateTab"\);/,
+    "作业 / 任务 / 全部 / 项目 / 待集成 labels ( adds the third; intentional fourth sub-tab; 全部 renamed by polyforge#22; polyforge#30 adds 项目)");
   // owner-intended change（重立自 #209）: desktop keeps the ~72px text rail;
   // ≤640px is a 40px vertical icon rail on the right (was a three-segment bar
   // above the main area). owner-intended change: Work is two
@@ -923,10 +924,11 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
 test("the sub-tab badges show running counts from the one status snapshot; zero greyed, none on Work", () => {
   const work = source.slice(source.indexOf('data-pf-tabstrip="work"'));
   // (intentional 2026-10-31 third-segment change): the items badge is the last list read's count.
-  assert.match(work, /const count = tab === "items" \? workItemsRunning\s*: opsStatus \? \(tab === "jobs" \? opsStatus\.queue\.running : \(opsStatus\.tasks\?\.running \?\? 0\)\) : null;/,
+  assert.match(work, /const count = tab === "items" \? workItemsRunning\s*: tab === "projects" \? null\s*: opsStatus \? \(tab === "jobs" \? opsStatus\.queue\.running : \(opsStatus\.tasks\?\.running \?\? 0\)\) : null;/,
     "queue.running on Jobs, tasks.running on Tasks, no badge without a snapshot; the items badge from the last list read (absent before it)");
-  // intentional fourth sub-tab: 待集成 carries no badge.
-  assert.match(work, /\{count !== null && tab !== "integrate" && \(/);
+  // intentional fourth sub-tab: 待集成 carries no badge; polyforge#30's 项目
+  // segment carries none either (its list has no running count).
+  assert.match(work, /\{count !== null && \(tab === "jobs" \|\| tab === "tasks" \|\| tab === "items"\) && \(/);
   assert.match(work, /color: count > 0 \? "var\(--accent\)" : "var\(--text-dim\)"/, "zero renders greyed, never hidden");
   assert.match(work, /aria-label=\{t\(WORK_TAB_BADGES\[tab\], \{ count \}\)\}/, "the badge has an accessible name");
   assert.match(source, /const WORK_TAB_BADGES = \{ jobs: "polyforge\.work\.jobsRunning", tasks: "polyforge\.work\.tasksRunning", items: "polyforge\.work\.itemsRunning" \} as const;/);

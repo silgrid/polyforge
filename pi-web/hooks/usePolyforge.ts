@@ -149,7 +149,7 @@ export type PolyforgeTab = "memory" | "messages" | "work";
  *  待集成, `integrate`, which reads on its own gestures). Page memory only:
  *  kept across a dock close/reopen (this hook outlives the dock), reset by a
  *  reload, never written to storage. */
-export type PolyforgeWorkTab = "jobs" | "tasks" | "items" | "integrate";
+export type PolyforgeWorkTab = "jobs" | "tasks" | "items" | "projects" | "integrate";
 
 export interface MembershipChangeInput {
   action: "add" | "remove";

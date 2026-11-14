@@ -287,7 +287,7 @@ try {
       await openDock(page);
       const tabs = await dock(page).locator('[data-pf-tabstrip="work"] [role="tab"]').allInnerTexts();
       // intentional fourth sub-tab: 待集成 joins the Work rail after 工单列表.
-      assert.deepEqual(tabs.map((text) => text.trim().split(/\s/)[0]), ["作业", "任务", "工单列表", "待集成"], "no 决策 sub-tab");
+      assert.deepEqual(tabs.map((text) => text.trim().split(/\s/)[0]), ["作业", "任务", "工单列表", "项目", "待集成"], "no 决策 sub-tab");
       // J1: its card is the flow and the input box — no 交互 button, none of its entries listed.
       await openJob(page, J1);
       await dock(page).locator("[data-pf-chat]").waitFor();

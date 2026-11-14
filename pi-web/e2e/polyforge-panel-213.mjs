@@ -357,7 +357,7 @@ try {
     const buttons = rail.getByRole("tab");
     // intentional fourth sub-tab: 待集成 joins the Work rail after 工单列表.
     assert.equal(await buttons.count(), 4, "four sub-tab buttons");
-    const names = ["作业", "任务", "全部", "待集成"];
+    const names = ["作业", "任务", "全部", "项目", "待集成"];
     for (let i = 0; i < 4; i++) {
       const button = buttons.nth(i);
       assert.equal(await button.getAttribute("aria-label"), names[i], `button ${i} has the existing tab copy as aria-label`);
