@@ -1193,7 +1193,21 @@ if [ -z "$REL_EXISTS" ]; then
       echo
       if [ -n "$PREVTAG" ] && git cat-file -e "$PREVCOMMIT^{commit}" 2>/dev/null; then
         echo "Changes since $PREVTAG:"; echo
-        git log "$PREVCOMMIT..HEAD" --oneline | sed 's/^/- /'
+        # polyforge#14: the first release of a suffixed line (its previous
+        # release the public base tag) lists only the absorption's
+        # descendants: the history before that point belongs to no version
+        # of this line, and --ancestry-path keeps the commits that descend
+        # from the base, so the replacement commit's other side - the line
+        # absorbed away - is never listed. Between the line's own versions
+        # the plain range stands, unchanged.
+        _anc=""
+        if [ -n "$SUFFIX" ]; then
+          case "$PREVTAG" in
+            *-"$SUFFIX".*) ;;
+            *) _anc="--ancestry-path" ;;
+          esac
+        fi
+        git log $_anc --oneline "$PREVCOMMIT..HEAD" | sed 's/^/- /'
       elif [ -n "$PREVTAG" ]; then
         echo "Changes since $PREVTAG:"; echo
         git log --oneline -n 50 | sed 's/^/- /'
