@@ -244,8 +244,8 @@ async function openJob(page, wi) {
   await openDock(page); await card(page, wi).waitFor({ timeout: 30_000 }); await card(page, wi).click();
   await dock(page).getByRole("button", { name: /back to job list|deselect/i }).waitFor({ timeout: 10_000 });
 }
-const openUI = async (page) => { await openJob(page, UI.wi); await selectStepForProgress(page, "code"); };
-const openDONE = async (page) => { await openJob(page, DONE.wi); await selectStepForProgress(page, "code"); };
+const openUI = (page) => openJob(page, UI.wi);
+const openDONE = (page) => openJob(page, DONE.wi);
 const waitFor = createWaitFor({ every: 150 });
 const tick = (page, ms) => (ms > 0 ? page.clock.runFor(ms) : Promise.resolve());
 const progressBlock = (page) => dock(page).locator("[data-pf-progress]").first();
