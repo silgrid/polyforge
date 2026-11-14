@@ -190,7 +190,7 @@ class UnitCheck:
         self.seq = 0
         self.details: Dict[str, Any] = {"units": []}
 
-    def prepare(self, d: UnitRunDecl, entry: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    def prepare(self, d: UnitRunDecl) -> Tuple[Optional[str], Optional[str]]:
         """Why d cannot run as written ("" = it can): (the directory to run
         in, the cwd as the record names it), or the problem twice."""
         if not d.argv or gostr.trim_space(d.argv[0]) == "":
@@ -208,7 +208,7 @@ class UnitCheck:
     def check(self, d: UnitRunDecl) -> Dict[str, Any]:
         entry: Dict[str, Any] = {"id": d.id, "check": d.check(), "repo": d.repo, "cwd": d.cwd,
                                 "argv": list(d.argv), "marker": d.marker}
-        directory, prepared = self.prepare(d, entry)
+        directory, prepared = self.prepare(d)
         why = prepared if directory is None else marker_problem(d.marker)
         if directory is None or why:
             entry["passed"] = False
