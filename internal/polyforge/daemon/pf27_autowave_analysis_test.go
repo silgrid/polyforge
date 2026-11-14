@@ -67,3 +67,39 @@ func TestPF27AutoWaveSkipsATicketWithoutAnalysis(t *testing.T) {
 		t.Error("wi_pf27_nolist claimed by the wave = false, want true (a lane declaring acceptance none is pulled without an analysis section)")
 	}
 }
+
+// TestPF27AutoWaveStillSkipsWithoutAcceptanceWhenAnalyzed pins review
+// r1#1's discriminating case: the acceptance half of the wave's
+// condition stays load-bearing now that the analysis half rides beside
+// it — a ticket whose content carries an analysis section but lists no
+// acceptance criterion is still skipped, and a control carrying both is
+// claimed. Removing the acceptance half of the condition claims the
+// analyzed ticket and turns this red.
+func TestPF27AutoWaveStillSkipsWithoutAcceptanceWhenAnalyzed(t *testing.T) {
+	td := newTestDaemon(t, func(c *Config) {
+		c.MaxConcurrent = 8
+		c.DrainInterval = time.Hour
+		c.DispatchTick = time.Hour
+	})
+	bundle := "demo-bundle"
+	item := func(id, content string) api.WorkItem {
+		return api.WorkItem{ID: id, Slug: id, ProjectName: "proj", Status: api.StatusQueued,
+			Priority: api.PriorityNormal, BundleName: &bundle, Content: strp(content)}
+	}
+	td.hub.mu.Lock()
+	td.hub.queues = append(td.hub.queues,
+		item("wi_pf27_accless", "## 分析\n\n- 改动范围：internal/x；风险：低\n"),
+		item("wi_pf27_control", w461AcceptanceContent),
+	)
+	td.hub.mu.Unlock()
+	if err := td.modes.SetAuto(true); err != nil {
+		t.Fatalf("enable auto: %v", err)
+	}
+	td.fetchAutoWave()
+	if td.q.IsPending("wi_pf27_accless") {
+		t.Error("wi_pf27_accless claimed by the wave = true, want false (a ticket with an analysis section but no acceptance criterion is still skipped — the acceptance half of the condition is load-bearing)")
+	}
+	if !td.q.IsPending("wi_pf27_control") {
+		t.Error("wi_pf27_control claimed by the wave = false, want true (the control carrying both sections is claimed)")
+	}
+}
