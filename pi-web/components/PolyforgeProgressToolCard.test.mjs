@@ -86,8 +86,8 @@ test("no result yet: the step's progress lines render in the body's output area;
   const lines = ["verify.py: [1/2] lint (fast): npm run lint", "verify.py: [1/2] lint PASS (12s)"];
   const withLines = renderBody({ ...held, progress: lines });
   assert.match(withLines, /npm test</, "the input renders");
-  assert.match(withLines, /verify\.py: \[1\/2\] lint \(fast\): npm run lint/, "the lines render as text, not markup");
-  assert.match(withLines, /verify\.py: \[1\/2\] lint PASS \(12s\)</, "the newest line last");
+  assert.match(withLines, /lint \(fast\): npm run lint\nverify\.py: \[1\/2\] lint PASS \(12s\)</,
+    "both progress lines as text in one pre, in order, the newest last (r1#4: the pin restored)");
   assert.doesNotMatch(withLines, /No result yet/, "interim lines replace the no-result note");
   const without = renderBody(held);
   assert.match(without, /No result yet/, "no lines: the note stays");

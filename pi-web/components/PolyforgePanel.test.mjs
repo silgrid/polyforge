@@ -1125,9 +1125,11 @@ test("every block has a group head with step, status mark, duration and count; t
 test("a tool card's detail is read on its expansion and re-read by the poll while it still has no result, through the card module", () => {
   const start = source.indexOf("function PolyforgeDetailProgress(");
   const block = source.slice(start, source.indexOf("\n}\n", start));
-  assert.match(block, /const askable = !held \|\| held\.status === "unavailable"\s*\|\| \(held && held\.status === "available" && held\.output === null\);/,
-    "loading or a settled result: never asked again; unavailable once; a resultless answer is re-read while its card stays expanded (polyforge#2)");
-  assert.match(block, /if \(selection\.current !== asked\) return;\s*setDetails\(\(current\) => new Map\(current\)\.set\(id, state\)\);\s*setFoldVersion\(\(current\) => current \+ 1\);/, "an answer for another selection writes nothing; a settled detail re-measures the follow state like a fold (review s10#2)");
+  assert.match(block, /const ask = detailAsk\(held, inFlight\.current\.has\(id\)\);\s*if \(!wi \|\| ask === "skip"\) return;/,
+    "a read in flight or a settled result is never asked again (detailAsk, r1#1)");
+  assert.match(block, /if \(ask === "loading"\) settle\(\{ status: "loading" \}\);/, "only a first read replaces the card's body with the loading note (r1#1: a re-read keeps the held detail)");
+  assert.match(block, /if \(selection\.current !== asked\) return;\s*const heldNow = detailsRef\.current\.get\(id\);\s*if \(heldNow !== undefined && sameProgressToolDetail\(heldNow, state\)\) return;\s*setDetails\(\(current\) => new Map\(current\)\.set\(id, state\)\);\s*setFoldVersion\(\(current\) => current \+ 1\);/,
+    "an answer for another selection writes nothing; a repeat answer writes nothing either; a settled detail re-measures the follow state like a fold (review s10#2)");
   assert.match(block, /const toggleTool = useCallback\(\(id: string, open: boolean\) => \{\s*if \(open\) \{\s*openTools\.current\.add\(id\);\s*loadDetail\(id\);\s*\} else \{\s*openTools\.current\.delete\(id\);\s*\}\s*setFoldVersion\(\(current\) => current \+ 1\);\s*\}, \[loadDetail\]\);/,
     "a card toggle is a fold: it re-measures the follow state and only an expansion opens (and registers) the card's detail read (review s10#2)");
   assert.match(block, /for \(const id of rereadToolIds\(detailsRef\.current, openTools\.current, lineIds\)\) loadDetail\(id\);/, "every poll re-reads the expanded resultless cards");
@@ -1263,6 +1265,54 @@ test("polyforge#2: the poll re-reads an expanded tool card whose held detail sti
   assert.deepEqual(JSON.parse(JSON.stringify(context.rereadToolIds(new Map(), expanded, lineIds))), [], "nothing held yet: the first read comes from the card's expansion");
   // wiring: the panel keeps the expanded ids and feeds the poll's snapshot into it
   assert.match(source, /const openTools = useRef<Set<string>>\(new Set\(\)\);/);
+  assert.match(source, /const lineIds = progressLineIds\(snapshot\?\.lines \?\? EMPTY_PROGRESS_LINES\);/, "the re-read set is every line of the snapshot, a subagent's lines included (r1#2)");
   assert.match(source, /for \(const id of rereadToolIds\(detailsRef\.current, openTools\.current, lineIds\)\) loadDetail\(id\);/);
   assert.match(source, /held && held\.status === "available" && held\.output === null/, "loadDetail re-asks a resultless held detail");
+});
+
+test("polyforge#2 r1#1: a re-read never flashes Loading — detailAsk keeps the held resultless detail; a repeat answer writes nothing", () => {
+  const context = vm.createContext({});
+  vm.runInContext(stripTypeScriptTypes(
+    extractPureFunction("detailAsk").replace(/export /g, "")
+    + "\n" + stripTypeScriptTypes(extractPureFunction("sameProgressToolDetail").replace(/export /g, "")),
+  ), context);
+  const detail = (over) => ({ status: "available", input: "I", output: null, isError: false, ...over });
+  assert.equal(context.detailAsk(detail({ progress: ["verify.py: [1/2] lint PASS (12s)"] }), false), "keep",
+    "the re-read keeps the held resultless detail on screen — never a Loading flash every 2 s");
+  assert.equal(context.detailAsk(detail({ output: "DONE" }), false), "skip", "a settled result is not asked again");
+  assert.equal(context.detailAsk({ status: "loading" }, false), "skip", "a read already in flight is not asked again");
+  assert.equal(context.detailAsk(detail({}), true), "skip", "in flight: no duplicate read");
+  assert.equal(context.detailAsk(undefined, false), "loading", "the first read of an expansion shows Loading");
+  assert.equal(context.detailAsk({ status: "unavailable" }, false), "loading", "an unavailable answer is asked again on its next expansion");
+  assert.equal(context.sameProgressToolDetail(detail({ progress: ["a", "b"] }), detail({ progress: ["a", "b"] })), true, "a repeat answer");
+  assert.equal(context.sameProgressToolDetail(detail({ progress: ["a"] }), detail({ progress: ["a", "b"] })), false, "new progress lines are written");
+  assert.equal(context.sameProgressToolDetail(detail({ output: "x" }), detail({ output: "y" })), false, "a changed result is written");
+  assert.equal(context.sameProgressToolDetail({ status: "unavailable" }, { status: "unavailable" }), true, "unavailable states compare equal too");
+  assert.equal(context.sameProgressToolDetail(detail({}), { status: "unavailable" }), false, "different states never compare equal");
+});
+
+test("polyforge#2 r1#2: the poll's line-id set includes a subagent's lines, nested ones too — its expanded card re-reads like any other", () => {
+  const context = vm.createContext({});
+  vm.runInContext(stripTypeScriptTypes(
+    extractPureFunction("progressLineIds").replace(/export /g, "")
+    + "\n" + stripTypeScriptTypes(extractPureFunction("rereadToolIds").replace(/export /g, "")),
+  ), context);
+  const line = (id, tool) => ({ id, kind: "tool", text: id, tool: tool ?? { name: "bash", argument: id, status: "running" } });
+  const snapshot = [
+    line("top-1"),
+    line("parent", { name: "Agent", argument: "run the units", status: "running", subagents: [
+      { id: "sub-1", description: "the unit task", status: "running", lines: [
+        line("sub-tool"),
+        line("sub-parent", { name: "Agent", argument: "nested", status: "running", subagents: [
+          { id: "sub-2", description: "nested task", status: "running", lines: [line("nested-tool")] },
+        ] }),
+      ] },
+    ] }),
+  ];
+  const ids = new Set(context.progressLineIds(snapshot));
+  assert.deepEqual([...ids].sort(), ["nested-tool", "parent", "sub-parent", "sub-tool", "top-1"],
+    "every line's id, the subagents' lines and the nested ones included");
+  const details = new Map([["sub-tool", { status: "available", input: "", output: null, isError: false }]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.rereadToolIds(details, new Set(["sub-tool"]), ids))), ["sub-tool"],
+    "an expanded subagent card with no result is re-read (the defect review r1#2 sent back)");
 });
