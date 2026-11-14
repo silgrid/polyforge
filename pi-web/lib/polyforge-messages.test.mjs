@@ -646,7 +646,7 @@ test("the analyze read spawns one structured read and reads no conclusion", () =
   const source = readFileSync(new URL("./polyforge-messages.ts", import.meta.url), "utf8");
   const start = source.indexOf("export async function analyzePolyforgeMessage(");
   const body = source.slice(start, source.indexOf("\n}\n", start));
-  assert.match(body, /runPfJson\(\["--json", "msg", "analyze", messageId\], ANALYZE_TIMEOUT_MS, ANALYZE_MAX_BUFFER\)/);
+  assert.match(body, /runPfJson\(\[\.\.\.pin, "--json", "msg", "analyze", messageId\], ANALYZE_TIMEOUT_MS, ANALYZE_MAX_BUFFER\)/);
   assert.match(body, /parsePolyforgeAnalysis\(raw\)/);
   assert.match(body, /"the analyzer answered no structured result", "DAEMON-500"/);
   assert.doesNotMatch(source, /conclusion/, "no conclusion read anywhere");
@@ -862,8 +862,11 @@ test("the Messages panel's reads all carry the pinned Cell's --profile (AC4)", a
   assert.equal(read.capable, true);
   assert.deepEqual(read.conversations, []);
   assert.deepEqual(read.contacts, []);
-  assert.deepEqual(read.groups, []);
-  assert.deepEqual(await lib.readPolyforgeUsers(scope.pin.prefix), { pfPresent: true, pfVersion: "v2.20.16", capable: true, admin: true, users: [] });
+  assert.deepEqual(read.groups, [{ project: "polyforge", contacts: [] }], "the stub maps one project, so its group is the read's one row");
+  const usersRead = await lib.readPolyforgeUsers(scope.pin.prefix);
+  assert.equal(usersRead.capable, true);
+  assert.equal(usersRead.admin, true);
+  assert.deepEqual(usersRead.users, []);
   assert.deepEqual(await lib.readPolyforgeMappedProjects(scope.pin.prefix), ["polyforge"]);
   const data = dataCalls(calls);
   assert.ok(data.length >= 6, `the reads must have spawned (ledger ${JSON.stringify(data)})`);

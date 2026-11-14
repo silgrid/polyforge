@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolvePolyforgeCellScope } from "@/lib/polyforge-cells";
 import { isApiRequestAllowed } from "@/lib/request-security";
 import {
   isPolyforgeWorkItemId,
@@ -36,7 +37,7 @@ export async function GET(
     return NextResponse.json({ ...capability, item: null });
   }
   try {
-    const item = await showPolyforgeWorkItem(id);
+    const item = await showPolyforgeWorkItem(id, (await resolvePolyforgeCellScope()).pin.prefix);
     return NextResponse.json({ ...capability, item });
   } catch (error) {
     const failure = error instanceof PolyforgeWorkItemsError ? error : new PolyforgeWorkItemsError("polyforge is unavailable");

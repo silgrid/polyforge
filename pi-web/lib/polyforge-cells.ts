@@ -7,6 +7,9 @@ import {
   hasPolyforgeCellCapabilities,
   isNewCellName,
   isPolyforgeProfileName,
+  polyforgeDefaultScope,
+  polyforgeDefaultScopeArgv,
+  polyforgeScopeArgv,
   sanitizePolyforgeCells,
   type PolyforgeCell,
   type PolyforgeScopeArgv,
@@ -174,9 +177,17 @@ export interface PolyforgeResolvedCellScope {
 
 /** Resolve the dock tabs' pinned scope: one `pf --json profile` read (the
  *  tab's cwd when there is one) plus one capability read, answered as the
- *  explicit scope. Never throws; a failed resolution degrades to the
- *  default Cell and (on a pf without the multi-Cell protocol) to today's
- *  unflagged calls. */
-export async function resolvePolyforgeCellScope(_cwd?: string): Promise<PolyforgeResolvedCellScope> {
-  return { cell: null, pin: { prefix: [], suffix: [] } };
+ *  explicit scope — `polyforgeScopeArgv`, so a multi-Cell pf names even the
+ *  default Cell and a pre-Cell pf keeps today's unflagged calls (a resolved
+ *  named Cell it cannot address cannot happen: the pf that resolved it
+ *  reports the capabilities; a failed capability read degrades to the
+ *  unflagged default). Never throws. */
+export async function resolvePolyforgeCellScope(cwd?: string): Promise<PolyforgeResolvedCellScope> {
+  const [cell, capabilities] = await Promise.all([
+    readPolyforgeResolvedCell(cwd),
+    readPolyforgeCapabilities(),
+  ]);
+  const pin = polyforgeScopeArgv(cell ? { profile: cell } : polyforgeDefaultScope(), capabilities)
+    ?? polyforgeDefaultScopeArgv(capabilities);
+  return { cell, pin };
 }

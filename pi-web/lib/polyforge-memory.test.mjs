@@ -229,7 +229,8 @@ const out = (v) => { process.stdout.write(JSON.stringify(v)); process.exit(0); }
 if (args[0] === "--version") { process.stdout.write("v2.20.16\\n"); process.exit(0); }
 if (args[0] === "--json" && args[1] === "version") out({ version: "v2.20.16", capabilities: ${JSON.stringify(capabilities)} });
 if (args[0] === "--json" && args[1] === "profile") { ${profile ? `out({ profile: ${JSON.stringify(profile)}, source: "cwd" });` : 'process.exit(2);'} }
-const rest = args.filter((a) => a !== "--json" && a !== "--profile" && a !== ${JSON.stringify(profile ?? "")});
+const rest = args.filter((a) => a !== "--json");
+const pi = rest.indexOf("--profile"); if (pi >= 0) rest.splice(pi, 2);
 const at = (name) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : undefined; };
 if (rest[0] === "config" && rest[1] === "workspace") out({ mapped: true, workspace: "/ws" });
 if (rest[0] === "config" && rest[1] === "list") out({ items: [
@@ -257,16 +258,19 @@ const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && !(a[1
 
 test("resolvePolyforgeCellScope names the resolved Cell and pins every call to it (AC4)", async (t) => {
   const calls = cellPf(t);
-  const scope = await cells.resolvePolyforgeCellScope("/ws");
+  const cwd = mkdtempSync(join(tmpdir(), "pf-cwd-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const scope = await cells.resolvePolyforgeCellScope(cwd);
   assert.equal(scope.cell, "public");
   assert.deepEqual(scope.pin.prefix, ["--profile", "public"]);
 
   await lib.readPolyforgeMemoryProjects("/ws", scope.pin.prefix);
   await lib.searchPolyforgeMemory({ cwd: "/ws", project: "polyforge", q: "kw", type: "*" }, scope.pin.prefix);
   await lib.browsePolyforgeMemory({ cwd: "/ws", project: "polyforge", type: "*" }, scope.pin.prefix);
-  assert.equal(await lib.showPolyforgeMemory("mem_ab12cd34ef", scope.pin.prefix), null, "the stub's detail passes the sanitizer only with its full shape; the argv is what is pinned here");
+  const detail = await lib.showPolyforgeMemory("mem_ab12cd34ef", scope.pin.prefix);
+  assert.equal(detail?.id, "mem_ab12cd34ef");
   const data = dataCalls(calls);
-  assert.ok(data.length >= 6, `the reads must have spawned (ledger ${JSON.stringify(data)})`);
+  assert.equal(data.length, 5, `the reads must have spawned (ledger ${JSON.stringify(data)})`);
   for (const argv of data) {
     assert.deepEqual(argv.slice(0, 2), ["--profile", "public"], `every Memory-tab pf call names the Cell first: ${JSON.stringify(argv)}`);
   }
@@ -274,7 +278,9 @@ test("resolvePolyforgeCellScope names the resolved Cell and pins every call to i
 
 test("a pf without the multi-Cell protocol keeps today's unflagged calls", async (t) => {
   const calls = cellPf(t, { capabilities: [], profile: "" });
-  const scope = await cells.resolvePolyforgeCellScope("/ws");
+  const cwd = mkdtempSync(join(tmpdir(), "pf-cwd-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const scope = await cells.resolvePolyforgeCellScope(cwd);
   assert.equal(scope.cell, null);
   assert.deepEqual(scope.pin.prefix, []);
   await lib.readPolyforgeMemoryProjects("/ws", scope.pin.prefix);
@@ -285,7 +291,9 @@ test("a pf without the multi-Cell protocol keeps today's unflagged calls", async
 
 test("a multi-Cell pf that cannot resolve a Cell pins the default Cell explicitly", async (t) => {
   const calls = cellPf(t, { profile: "" });
-  const scope = await cells.resolvePolyforgeCellScope("/ws");
+  const cwd = mkdtempSync(join(tmpdir(), "pf-cwd-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const scope = await cells.resolvePolyforgeCellScope(cwd);
   assert.equal(scope.cell, null);
   assert.deepEqual(scope.pin.prefix, ["--profile", "default"]);
   await lib.readPolyforgeMemoryProjects("/ws", scope.pin.prefix);
