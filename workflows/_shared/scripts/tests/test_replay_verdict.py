@@ -43,6 +43,8 @@ EXTRA_LINES = [
     "\timports example.com/app/web: web/embed.go:19:12: pattern all:dist: no matching files found",
     "go: example.com/app/server imports example.com/dep: no required module provides package example.com/dep; to add it:",
     "Error: Cannot find module 'dep'",
+    "node_modules/ is missing: run `npm ci` once, then re-run.",
+    "Playwright Chromium is missing: run `npx playwright install chromium` once, then re-run.",
     "ModuleNotFoundError: No module named 'dep'",
 ]
 
