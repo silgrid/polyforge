@@ -179,8 +179,8 @@ func TestW30WebProjectsConsoleFace(t *testing.T) {
 	if code, _, _ := webReq(t, e, "POST", "/web/api/context", webBasic("u", e.key)); code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST /web/api/context: %d, want 405 (the write gate opens for the restore route alone)", code)
 	}
-	if code, _, _ := webReq(t, e, "GET", "/web/api/projects/ghost/restore", webBasic("u", e.key)); code != http.StatusMethodNotAllowed {
-		t.Fatalf("GET on the restore path: %d, want 405 (the door opens for POST alone)", code)
+	if code, _, _ := webReq(t, e, "GET", "/web/api/projects/ghost/restore", webBasic("u", e.key)); code != http.StatusNotFound {
+		t.Fatalf("GET on the restore path: %d, want the face's static 404 (the write door opens for POST alone)", code)
 	}
 }
 
