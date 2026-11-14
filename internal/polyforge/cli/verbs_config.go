@@ -499,9 +499,13 @@ func runConfigList(ctx *Context) error {
 		src := "default"
 		if v.hasDaemonKey(key) {
 			src = "file"
-		} else if key == "agent_language" && v.defaultAgentLanguage != "" {
-			val = v.defaultAgentLanguage
-			src = "default Cell"
+		} else if key == "agent_language" && ctx.cfgScope.profile != "" && ctx.cfgScope.profile != cellcfg.DefaultProfile {
+			if v.defaultAgentLanguage != "" {
+				val = v.defaultAgentLanguage
+				src = "default Cell"
+			} else {
+				val = stepcall.DefaultLanguage
+			}
 		}
 		value := strValue(val)
 		if n, err := strconv.Atoi(val); err == nil && ConfigSchema(key)["kind"] == "int" {
