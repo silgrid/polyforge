@@ -118,7 +118,9 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   (the masked primary argument in full, the status from the
   paired result, the duration only when the call and its result both carry a
   timestamp) — a call's full input and output never ride this 2 s poll, they
-  are read on demand from `GET /api/polyforge/progress/tool`; a tool line whose
+  are read on demand from `GET /api/polyforge/progress/tool` (and re-read on
+  every poll while the call still has no result: the step's progress-file
+  lines while the command runs, the final result once it ends); a tool line whose
   call ran subagents also carries `subagents`: one
   `{id, description, agent?, status:"running"|"done"|"error", startAt?,
   durationMs?, lines, omitted?}` per subagent — the "Subagents" paragraph of
@@ -157,13 +159,28 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   result's text blocks joined by a newline, any other block a neutral
   `[image]` / `[<type>]` placeholder) both complete and masked by
   `maskPolyforgeCredentials`, `output: null` and `hasResult:false` while no
-  result is paired — or 200 `{available:false, error}` (a fixed reason) when
+  result is paired, and then also `progress`: the newest lines (at most ten,
+  masked) of the step's progress file `runtime-state/progress/<step>.log`
+  (the step scripts' say appends every progress line there — the daemon keeps
+  no partial output of a running call), the expanded card's interim view of
+  which command runs and how long the last one took — a subagent's card
+  reads its parent spawn's step file (a subagent inherits PF_STEP, so its
+  own say appends there too) — or 200 `{available:false, error}` (a fixed reason) when
   the job index, the capsule, the transcript (moved, replaced — a new inode is
   a new identity — or over the 128 MiB bound) or the call is no longer
   readable. Never 5xx; no answer names a path. The read
   (`readProgressToolDetail`) resolves the same spawns and transcripts as the
   progress read (same realpath containment), reads only the transcript whose
-  identity the id names, and keeps only that call's input and result.
+  identity the id names, and keeps only that call's input and result. The
+  panel reads a card's detail on its expansion and re-reads it on every
+  progress poll while it still has no result — a subagent's card like any
+  other, its lines are in the poll's set: the step's progress lines while
+  the command runs, the final result once it ends; at most one read of a
+  card is in flight at a time (the poll skips while one is pending), an
+  answer of a read a later one replaced is dropped, a re-read keeps the
+  held detail on screen (no interim Loading), a repeat answer writes
+  nothing, and a card expanded during a run never stays on 尚无结果 after
+  the command ends.
 - `GET /api/polyforge/config?cwd=…` → 200
   `{pfPresent, pfVersion, capable, reason?, file?:{sha256,exists},
   items:[{key,value?,set?,source?,class,schema?,daemon?,stale_reason?}],

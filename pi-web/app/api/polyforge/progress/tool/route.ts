@@ -20,7 +20,11 @@ export const dynamic = "force-dynamic";
  * log is 400 `unknown work item`. Otherwise 200: `{ available: true,
  * hasResult, tool: { name, argument?, status, durationMs?, input, output,
  * isError } }` — input and output complete and credential-masked, `output`
- * null while no result is paired — or `{ available: false, error }` when the
+ * null while no result is paired, and then also `progress`: the newest
+ * lines (at most ten, masked) of the step's progress file
+ * `runtime-state/progress/<step>.log` (appended by the step scripts' say),
+ * the expanded card's interim view of a command that has not ended — or
+ * `{ available: false, error }` when the
  * job index, the capsule, the transcript or the call is no longer readable.
  * Never 5xx; no response names a path. GET only (any other method is 405).
  */

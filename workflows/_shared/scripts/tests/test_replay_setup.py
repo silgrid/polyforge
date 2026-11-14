@@ -122,6 +122,16 @@ class ReplaySetupTest(GitCase):
             return f.read()
 
     @unittest.skipUnless(HAVE_GO, "go not installed")
+    def test_replay_closes_each_unit_with_its_end_line(self) -> None:
+        """polyforge#2: the replaying line is closed by an end line — the
+        verdict the run judged (red here), its exit code and duration."""
+        cap = self.capsule("stack=go\nbase_setup=sh tools/setup.sh\n", GO_BASE, GO_TEST, GO_IMPL, ".", ["go", "test", "./server/"])
+        code, res, err = self.replay(cap)
+        self.assertEqual(code, 0, (res["summary"], err))
+        self.assertIn("unit u1: replaying `go test ./server/` at test commit ", err)
+        self.assertRegex(err, r"unit u1: replay red \(exit 1, [^)]+\)\n")
+
+    @unittest.skipUnless(HAVE_GO, "go not installed")
     def test_go_embed_unit_runs_after_setup_and_is_red(self) -> None:
         cap = self.capsule("stack=go\nbase_setup=sh tools/setup.sh\n", GO_BASE, GO_TEST, GO_IMPL, ".", ["go", "test", "./server/"])
         code, res, err = self.replay(cap)

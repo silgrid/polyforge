@@ -14,6 +14,8 @@ const card = await jiti.import("./PolyforgeProgressToolCard.tsx");
 const line = (tool, text = tool ? `${tool.name}: ${tool.argument ?? ""}` : "legacy: text") => ({ id: "0123456789abcdef.10.0", kind: "tool", text, ...(tool ? { tool } : {}) });
 const render = (props) => renderToStaticMarkup(React.createElement(I18nProvider, null,
   React.createElement(card.PolyforgeProgressToolCard, { detail: undefined, onToggle: () => {}, ...props })));
+const renderBody = (detail) => renderToStaticMarkup(React.createElement(I18nProvider, null,
+  React.createElement(card.PolyforgeProgressToolBody, { detail })));
 
 test("the header is name + a preview within 120 code points; the full masked header is the title", () => {
   const argument = `curl --token=*** https://e2e.invalid/${"x".repeat(200)} TAIL`;
@@ -77,4 +79,33 @@ test("the detail read is one GET of the route with the wi and the id; any failur
   } finally {
     globalThis.fetch = previous;
   }
+});
+
+test("no result yet: the step's progress lines render in the body's output area; none keeps the no-result note; a result renders without them", () => {
+  const held = { status: "available", input: "npm test", output: null, isError: false };
+  const lines = ["verify.py: [1/2] lint (fast): npm run lint", "verify.py: [1/2] lint PASS (12s)"];
+  const withLines = renderBody({ ...held, progress: lines });
+  assert.match(withLines, /npm test</, "the input renders");
+  assert.match(withLines, /lint \(fast\): npm run lint\nverify\.py: \[1\/2\] lint PASS \(12s\)</,
+    "both progress lines as text in one pre, in order, the newest last (r1#4: the pin restored)");
+  assert.doesNotMatch(withLines, /No result yet/, "interim lines replace the no-result note");
+  const without = renderBody(held);
+  assert.match(without, /No result yet/, "no lines: the note stays");
+  assert.doesNotMatch(without, /lint \(fast\)/, "and nothing is invented");
+  const settled = renderBody({ status: "available", input: "npm test", output: "1..1 ok", isError: false, progress: ["verify.py: [1/2] lint PASS (12s)"] });
+  assert.match(settled, /1\.\.1 ok/, "the final result renders");
+  assert.doesNotMatch(settled, /lint PASS/, "and the interim lines are gone");
+  assert.match(renderBody(undefined), /Loading…/, "no detail yet: the loading note");
+  assert.match(renderBody({ status: "unavailable" }), /Tool detail unavailable/, "an unavailable body says so");
+});
+
+test("parseProgressToolDetail keeps the answer's progress lines only while there is no result", () => {
+  const answer = (tool, progress) => ({ available: true, hasResult: tool.output === null, ...(progress ? { progress } : {}), tool });
+  const base = { input: "IN", output: null };
+  const said = Array.from({ length: 12 }, (_, i) => `verify.py: line ${i + 1}`);
+  assert.deepEqual(card.parseProgressToolDetail(answer(base, said)).progress, said.slice(-10), "the newest ten lines");
+  assert.deepEqual(card.parseProgressToolDetail(answer(base, ["a", "b"])), { status: "available", input: "IN", output: null, isError: false, progress: ["a", "b"] });
+  assert.equal(card.parseProgressToolDetail(answer(base)).progress, undefined, "no lines in the answer: none held");
+  assert.equal(card.parseProgressToolDetail(answer({ ...base, output: "DONE" }, said)).progress, undefined, "a result: the interim lines are dropped");
+  for (const bad of [["ok", 2], "x", [3]]) assert.equal(card.parseProgressToolDetail(answer(base, bad)).progress, undefined, `a malformed list is dropped: ${JSON.stringify(bad)}`);
 });

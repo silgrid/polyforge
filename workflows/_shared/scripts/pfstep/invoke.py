@@ -9,7 +9,10 @@ summary echoed as ``<script>: <summary> (<verdict>)`` (not when ``quiet``:
 the run wrote its own stdout). A result that cannot be written turns the
 exit code to 2, said on stderr. A usage error is one stderr line and exit
 2 — with the result written when ``--out`` was already parsed. Progress
-lines go to stderr as ``<script>: <text>`` (stdout is the result's).
+lines go to stderr as ``<script>: <text>`` (stdout is the result's) and,
+inside a step, to the step's progress file (``pfstep.progress``: the same
+line, so a reader watching the capsule follows a command that has not
+ended).
 
 The result's ``command`` is the script's name (``sync.py``, ``facts.py``,
 ``integrate.py``…): the files' readers — the next step's skill, the other
@@ -25,7 +28,7 @@ import os
 import sys
 from typing import IO, Any, Callable, Dict, List, Mapping, Optional, Union
 
-from . import LIBRARY, deadline, duration, jsonout, result
+from . import LIBRARY, deadline, duration, jsonout, progress, result
 
 # The version a script's result file names: the shared library's.
 VERSION = LIBRARY
@@ -86,8 +89,10 @@ class Invocation:
         return 2
 
     def say(self, msg: str) -> None:
-        """One progress line on stderr."""
-        print("%s: %s" % (self.name, msg), file=self.stderr, flush=True)
+        """One progress line on stderr, appended to the step's progress
+        file (pfstep.progress: the same line a reader watching the capsule
+        follows while the command runs)."""
+        progress.emit("%s: %s" % (self.name, msg), self.stderr, self.env)
 
     def finish(self, exit_code: int) -> int:
         """The result for exit_code written and printed; the exit code (2 when

@@ -288,6 +288,10 @@ function progressBlockDurationSec(block: PolyforgeProgressBlock): number | undef
  *  a large transcript is rendered in bounded chunks, never truncated). */
 export const PROGRESS_RENDER_CHUNK = 200;
 
+/** The progress lines of a snapshot with none (a stable array, so the poll
+ *  re-read effect depends on the snapshot alone). */
+const EMPTY_PROGRESS_LINES: PolyforgeProgressLine[] = [];
+
 /**
  * The job detail's execution progress, whole-job,
  * full lines, spawn blocks and the open-at-bottom follow
@@ -302,9 +306,10 @@ export const PROGRESS_RENDER_CHUNK = 200;
  * wrapped text (the guard's click-to-reveal box would be a per-entry gate
  * and a nested scroller here); a tool call as one
  * PolyforgeProgressToolCard on the transcript's ToolCallCard shell (header
- * from the poll's light fields, the full detail fetched only when that card
- * is expanded, at most once per call per selection, a failed read leaving
- * only that card unavailable); every other lifecycle event a restrained
+ * from the poll's light fields, the full detail fetched when that card is
+ * expanded and re-read on every poll while it still has no result — the
+ * step's progress lines while the command runs, the final result once it
+ * ends; a failed read leaving only that card unavailable); every other lifecycle event a restrained
  * marker row in its tone, wrapping in full, its raw kind and text on hover.
  * A snapshot renders the first PROGRESS_RENDER_CHUNK lines at once, then
  * appends the rest one chunk per animation frame, so a large stream stays
@@ -375,6 +380,66 @@ export function selectProgressStep(snapshot: PolyforgeProgressSnapshot | null, s
   return { ...snapshot, lines: selectedLines };
 }
 
+/** What a detail read does with the card's held state. `skip`: a read
+ *  is already in flight, or the held answer carries the final result.
+ *  `keep`: a re-read of a resultless answer — the held detail (the step's
+ *  progress lines) stays on screen, never a Loading flash while its
+ *  command runs (review r1#1). `loading`: the first read of an expansion
+ *  (nothing held, or the last read answered unavailable). Pure. */
+export function detailAsk(held: PolyforgeProgressToolDetailState | undefined, inFlight: boolean): "skip" | "keep" | "loading" {
+  if (inFlight) return "skip";
+  if (!held || held.status === "unavailable") return "loading";
+  if (held.status === "loading") return "skip";
+  return held.output === null ? "keep" : "skip";
+}
+
+/** Two detail states a re-read cannot tell apart: the poll's settle
+ *  writes nothing (and re-measures nothing) when the answer repeats the
+ *  held one. Pure. */
+export function sameProgressToolDetail(a: PolyforgeProgressToolDetailState, b: PolyforgeProgressToolDetailState): boolean {
+  if (a.status !== b.status) return false;
+  if (a.status === "available" && b.status === "available") {
+    return a.input === b.input && a.output === b.output && a.isError === b.isError
+      && (a.progress ?? []).join("\n") === (b.progress ?? []).join("\n");
+  }
+  return true;
+}
+
+/** Every progress line id of the snapshot, a subagent's lines included
+ *  (nested subagents too, review r1#2): the poll's re-read set — an
+ *  expanded subagent card re-reads like any other. Pure. */
+export function progressLineIds(lines: readonly PolyforgeProgressLine[]): Set<string> {
+  const ids = new Set<string>();
+  const walk = (ls: readonly PolyforgeProgressLine[]) => {
+    for (const line of ls) {
+      ids.add(line.id);
+      const subs = line.subagents;
+      if (subs) for (const sub of subs) walk(sub.lines);
+    }
+  };
+  walk(lines);
+  return ids;
+}
+
+/** The expanded tool cards the poll re-reads (polyforge#2): one whose held
+ *  detail still has no result — its step's progress lines while its command
+ *  runs, the final result once it ends — and whose line is still in the
+ *  snapshot. A loading, unavailable or settled detail and a card whose line
+ *  is gone (another selection, a folded-away step) is not re-read. Pure. */
+export function rereadToolIds(
+  details: ReadonlyMap<string, PolyforgeProgressToolDetailState | undefined>,
+  expanded: ReadonlySet<string>,
+  lineIds: ReadonlySet<string>,
+): string[] {
+  const out: string[] = [];
+  for (const id of expanded) {
+    if (!lineIds.has(id)) continue;
+    const held = details.get(id);
+    if (held && held.status === "available" && held.output === null) out.push(id);
+  }
+  return out;
+}
+
 export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef, emptyMessage, resetKey }: {
   wi: string | null;
   profile?: string;
@@ -393,6 +458,13 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   const detailsRef = useRef(details);
   detailsRef.current = details;
   const selection = useRef(wi);
+  // polyforge#2: the tool cards the reader expanded (their onToggle said
+  // so); the poll re-reads the ones whose detail still has no result.
+  // The reads in flight, keyed the same way (detailAsk's dedup), and every
+  // id's read sequence number (an answer of a replaced read is dropped).
+  const openTools = useRef<Set<string>>(new Set());
+  const inFlight = useRef<Set<string>>(new Set());
+  const readSeq = useRef<Map<string, number>>(new Map());
   const pinned = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const [atTop, setAtTop] = useState(true);
@@ -406,6 +478,8 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setFolded(new Map());
     setFoldVersion(0);
     setDetails(new Map());
+    openTools.current = new Set();
+    inFlight.current = new Set();
     pinned.current = true;
     setAtBottom(true);
     setAtTop(true);
@@ -455,30 +529,67 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setAtBottom(at);
     setAtTop(isProgressAtTop(region));
   }, [foldVersion, scrollRef]);
-  // One tool card's detail, read when that card is expanded:
-  // a call already loading or loaded is never asked again; an unavailable one
-  // is asked again on its next expansion. An answer for another selection
-  // writes nothing.
+  // One tool card's detail, read when that card is expanded: a read in
+  // flight or a settled result is never asked again (detailAsk — the mark
+  // is added before the fetch and cleared only in its answer, so the poll
+  // skips while a read is pending); an unavailable one is asked again on
+  // its next expansion, and a resultless one is re-read by the poll while
+  // its card stays expanded — keeping the held detail on screen (never a
+  // Loading flash, review r1#1) until the answer changes it. Every read
+  // carries its id's next sequence number and an answer of a read a later
+  // one replaced is dropped (review r2#1: a step switch resets the detail
+  // without unmounting it, so a re-expanded card can read again while an
+  // orphaned answer is still on its way — the older answer must never
+  // overwrite the newer result). An answer for another selection writes
+  // nothing; a repeat answer writes nothing either.
   const loadDetail = useCallback((id: string) => {
     const held = detailsRef.current.get(id);
-    if (!wi || (held && held.status !== "unavailable")) return;
+    const ask = detailAsk(held, inFlight.current.has(id));
+    if (!wi || ask === "skip") return;
     const asked = wi;
+    // the mark set this read captured: a reset replaces inFlight.current,
+    // and an answer of a read the reset replaced must clear only its own
+    // set — never a newer read's mark (review r3#1)
+    const marks = inFlight.current;
+    marks.add(id);
+    const seq = (readSeq.current.get(id) ?? 0) + 1;
+    readSeq.current.set(id, seq);
     const settle = (state: PolyforgeProgressToolDetailState) => {
       if (selection.current !== asked) return;
+      if (readSeq.current.get(id) !== seq) return;  // a later read replaced this one
+      const heldNow = detailsRef.current.get(id);
+      if (heldNow !== undefined && sameProgressToolDetail(heldNow, state)) return;
       setDetails((current) => new Map(current).set(id, state));
       setFoldVersion((current) => current + 1);
     };
-    settle({ status: "loading" });
-    void fetchProgressToolDetail(asked, id, profile).then(settle);
+    if (ask === "loading") settle({ status: "loading" });
+    void fetchProgressToolDetail(asked, id, profile).then((state) => {
+      marks.delete(id);
+      settle(state);
+    });
   }, [wi, profile]);
   // A tool card's expand/collapse is a fold like a block's: it
   // and its detail settling re-measure through foldVersion, so an expansion
   // that leaves the view off the bottom unpins (↓ Latest, no pull on the next
   // poll) and a collapse at the bottom stays pinned.
   const toggleTool = useCallback((id: string, open: boolean) => {
-    if (open) loadDetail(id);
+    if (open) {
+      openTools.current.add(id);
+      loadDetail(id);
+    } else {
+      openTools.current.delete(id);
+    }
     setFoldVersion((current) => current + 1);
   }, [loadDetail]);
+  // polyforge#2: every poll re-reads the expanded cards whose detail still
+  // has no result (each poll's snapshot is a new object, so this runs on the
+  // 2 s cadence while the job runs — no timer of its own; a subagent's
+  // lines are in the set too, review r1#2).
+  useEffect(() => {
+    if (!wi) return;
+    const lineIds = progressLineIds(snapshot?.lines ?? EMPTY_PROGRESS_LINES);
+    for (const id of rereadToolIds(detailsRef.current, openTools.current, lineIds)) loadDetail(id);
+  }, [wi, snapshot, loadDetail]);
   const message = !wi || snapshot?.available === false ? t("polyforge.progress.unavailable")
     : !snapshot ? t("polyforge.loading")
       : snapshot.lines.length === 0 ? (emptyMessage ?? t("polyforge.progress.empty")) : null;

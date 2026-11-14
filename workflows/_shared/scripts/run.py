@@ -23,7 +23,10 @@ whole at the deadline (pfstep.runner).
 One line (``--repo R -- '<line>'``: exactly one argument, the line) or a
 plan (``--plan-from <file>``: a JSON array ``[{"repo": "<name>", "line":
 "<line>"}]``, every entry run in its repo, in the file's order — the fix
-step's evidence plan).
+step's evidence plan). Each line's start line is closed by an end line:
+``repos/<repo>: `<line>` PASS (<duration>)``, or ``FAIL - <why>
+(<duration>), log <path>`` — said on stderr and, inside a step, appended to
+the step's progress file (``pfstep.progress``).
 
 Its logs: <log-dir>/<repo>/<seq>/command.log (and, in a container,
 image-build.log), the log dir being --log-dir, else logs/ beside --out,
@@ -260,12 +263,18 @@ def run(inv: Invocation) -> int:
         if res.head:
             inv.heads[p["repo"]] = res.head
         runs.append(e)
+        at = "repos/%s: `%s`" % (p["repo"], p["line"])
+        took = duration.format((res.duration_ms * duration.MILLISECOND + duration.SECOND // 2)
+                               // duration.SECOND * duration.SECOND)
+        if res.exit == 0 and not res.timed_out:
+            inv.say("%s PASS (%s)" % (at, took))
         if res.exit != 0 or res.timed_out:
             what = "exited %d" % res.exit
             if res.not_started:
                 what = "never started: the deadline (%s) had passed" % duration.format(window)
             elif res.timed_out:
                 what = "was killed at the deadline (%s)" % duration.format(window)
+            inv.say("%s FAIL - %s (%s)%s" % (at, what, took, ", log " + e["log"] if e.get("log") else ""))
             inv.summary = "repos/%s: `%s` %s" % (p["repo"], p["line"], what)
             if e.get("log"):
                 inv.summary += " (log " + e["log"] + ")"

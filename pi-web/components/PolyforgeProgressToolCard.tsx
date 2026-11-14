@@ -9,22 +9,31 @@ import { useI18n } from "@/hooks/useI18n";
  *  the full header text is on the header's title and in the expanded body. */
 export const PROGRESS_TOOL_HEADER_MAX = 120;
 
-/** One call's on-demand detail as the card holds it. */
+/** One call's on-demand detail as the card holds it. `progress`: the
+ *  step's progress-file lines a resultless answer carried — the card's
+ *  interim view while the call runs. */
 export type PolyforgeProgressToolDetailState =
   | { status: "loading" }
   | { status: "unavailable" }
-  | { status: "available"; input: string; output: string | null; isError: boolean };
+  | { status: "available"; input: string; output: string | null; isError: boolean; progress?: string[] };
 
 /** `GET /api/polyforge/progress/tool`'s body → the card's detail state: only
  *  a well-formed `available: true` answer is a detail; anything else — a
- *  degraded answer, a refusal, a malformed body — is unavailable. Pure. */
+ *  degraded answer, a refusal, a malformed body — is unavailable. The
+ *  answer's `progress` lines (strings, the newest ten) are held only while
+ *  the call has no result. Pure. */
 export function parseProgressToolDetail(body: unknown): PolyforgeProgressToolDetailState {
   if (!body || typeof body !== "object") return { status: "unavailable" };
   const answer = body as Record<string, unknown>;
   const tool = answer.tool as Record<string, unknown> | undefined;
   if (answer.available !== true || !tool || typeof tool !== "object") return { status: "unavailable" };
   if (typeof tool.input !== "string" || (tool.output !== null && typeof tool.output !== "string")) return { status: "unavailable" };
-  return { status: "available", input: tool.input, output: tool.output as string | null, isError: tool.isError === true };
+  const said = Array.isArray(answer.progress) && answer.progress.length > 0 && answer.progress.every((x) => typeof x === "string")
+    && tool.output === null
+    ? (answer.progress as string[]).slice(-10)
+    : undefined;
+  return { status: "available", input: tool.input, output: tool.output as string | null, isError: tool.isError === true,
+           ...(said ? { progress: said } : {}) };
 }
 
 /** The on-demand tool detail route. */
@@ -77,6 +86,39 @@ const bodyText: CSSProperties = {
 };
 const sectionLabel: CSSProperties = { padding: "4px 10px 0", color: "var(--text-dim)", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4 };
 
+/** The expanded card's body: the detail states — the complete masked
+ *  input and output, the step's interim progress lines while there is no
+ *  result yet, the no-result and unavailable notes. Presentational, so a
+ *  component test renders it directly. */
+export function PolyforgeProgressToolBody({ detail }: { detail: PolyforgeProgressToolDetailState | undefined }) {
+  const { t } = useI18n();
+  const divider = toolCallCardTone(detail?.status === "available" && detail.isError).divider;
+  return (
+    <div style={{ borderTop: divider, background: "var(--bg-subtle)" }}>
+      {!detail || detail.status === "loading" ? (
+        <div style={{ ...bodyText, color: "var(--text-dim)" }}>{t("polyforge.loading")}</div>
+      ) : detail.status === "unavailable" ? (
+        <div style={{ ...bodyText, color: "var(--text-dim)", fontStyle: "italic" }}>{t("polyforge.progress.toolUnavailable")}</div>
+      ) : (
+        <>
+          <div style={sectionLabel}>{t("polyforge.progress.toolInput")}</div>
+          <pre style={bodyText}>{detail.input}</pre>
+          <div style={{ ...sectionLabel, borderTop: divider }}>{t("polyforge.progress.toolOutput")}</div>
+          {detail.output === null ? (
+            detail.progress && detail.progress.length > 0 ? (
+              <pre style={bodyText}>{detail.progress.join("\n")}</pre>
+            ) : (
+              <div style={{ ...bodyText, color: "var(--text-dim)", fontStyle: "italic" }}>{t("polyforge.progress.toolNoResult")}</div>
+            )
+          ) : (
+            <pre style={{ ...bodyText, background: "var(--bg)", color: detail.isError ? "#f87171" : "var(--text-muted)" }}>{detail.output}</pre>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /**
  * One tool call of the job detail's execution progress: the
  * transcript's ToolCallCard shell — name, the 120-code-point preview with the
@@ -84,9 +126,12 @@ const sectionLabel: CSSProperties = { padding: "4px 10px 0", color: "var(--text-
  * when the poll carries one, with the transcript's 100 ms floor). Collapsed
  * by default; every toggle is reported to the panel (`onToggle`, which
  * re-measures the follow state and, on an expansion, asks for that one call's
- * detail at most once) and the body shows it inline —
+ * detail — at most once per call per selection, then re-read on every poll
+ * while it still has no result: the step's progress lines while the command
+ * runs, the final result once it ends) and the body shows it inline —
  * the complete masked input and output, wrapping, no scroller of its own —
- * or states that there is no result yet, or that the detail is unavailable
+ * or the step's interim progress lines while there is no result yet, or
+ * states that there is no result yet, or that the detail is unavailable
  * (that card only; the stream is untouched). The root carries
  * `data-pf-progress-kind="tool"`.
  */
@@ -99,7 +144,6 @@ export const PolyforgeProgressToolCard = memo(function PolyforgeProgressToolCard
   const [expanded, setExpanded] = useState(false);
   const header = progressToolHeader(line);
   const isError = header.status === "error";
-  const divider = toolCallCardTone(isError).divider;
   const toggle = () => {
     setExpanded(!expanded);
     onToggle(line.id, !expanded);
@@ -119,26 +163,7 @@ export const PolyforgeProgressToolCard = memo(function PolyforgeProgressToolCard
       </>}
       style={{ minWidth: 0, flexShrink: 0 }}
     >
-      {expanded && (
-        <div style={{ borderTop: divider, background: "var(--bg-subtle)" }}>
-          {!detail || detail.status === "loading" ? (
-            <div style={{ ...bodyText, color: "var(--text-dim)" }}>{t("polyforge.loading")}</div>
-          ) : detail.status === "unavailable" ? (
-            <div style={{ ...bodyText, color: "var(--text-dim)", fontStyle: "italic" }}>{t("polyforge.progress.toolUnavailable")}</div>
-          ) : (
-            <>
-              <div style={sectionLabel}>{t("polyforge.progress.toolInput")}</div>
-              <pre style={bodyText}>{detail.input}</pre>
-              <div style={{ ...sectionLabel, borderTop: divider }}>{t("polyforge.progress.toolOutput")}</div>
-              {detail.output === null ? (
-                <div style={{ ...bodyText, color: "var(--text-dim)", fontStyle: "italic" }}>{t("polyforge.progress.toolNoResult")}</div>
-              ) : (
-                <pre style={{ ...bodyText, background: "var(--bg)", color: detail.isError ? "#f87171" : "var(--text-muted)" }}>{detail.output}</pre>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      {expanded && <PolyforgeProgressToolBody detail={detail} />}
     </ToolCallCard>
   );
 });
