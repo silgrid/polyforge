@@ -7,6 +7,7 @@ import {
   cardRunningMinutes,
   formatCardDuration,
   formatProgressClock,
+  isProgressAtTop,
   isProgressPinnedToBottom,
   polyforgeCardKey,
   polyforgeContextDetailText,
@@ -350,13 +351,17 @@ export const PROGRESS_RENDER_CHUNK = 200;
  * scroll listener keeps `pinned` — whether the reader is at its bottom
  * (isProgressPinnedToBottom); loading, empty and unavailable states force
  * nothing. A new snapshot or chunk follows growth only while pinned. The
- * `↓ Latest` button (`[data-pf-detail-latest]`) floats over the region's
- * bottom-right whenever it is not at its bottom (overlay, no in-flow
- * height); one click jumps to the bottom immediately and restores
- * following. Folding never treats its own click as a scroll: collapsing
+ * two jump buttons (polyforge#31) float stacked over the region's bottom,
+ * horizontally centered, both reusing the chat session's
+ * `chat-scroll-to-bottom` style: `↓ Latest` (`[data-pf-detail-latest]`)
+ * whenever the region is not at its bottom — one click jumps to the bottom
+ * immediately and restores following — and `↑ Top` (`[data-pf-detail-top]`)
+ * one button higher whenever it is scrolled away from its top
+ * (isProgressAtTop), one smooth scroll to the very top. Folding never treats
+ * its own click as a scroll: collapsing
  * while pinned clamps the region to its new bottom and stays pinned,
  * expanding an older block leaves `scrollTop` untouched (so the reader
- * leaves the bottom, unpins, and the button appears). A tool card's
+ * leaves the bottom, unpins, and the buttons appear). A tool card's
  * expand/collapse and its detail settling are folds too.
  */
 export function selectProgressStep(snapshot: PolyforgeProgressSnapshot | null, step: string | null): PolyforgeProgressSnapshot | null {
@@ -389,6 +394,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   const selection = useRef(wi);
   const pinned = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
+  const [atTop, setAtTop] = useState(true);
   const lines = snapshot?.lines ?? [];
   const layout = progressBlocks(lines);
   const lastBlockId = layout.blocks.length > 0 ? lines[layout.blocks[layout.blocks.length - 1].start]?.id ?? null : null;
@@ -401,6 +407,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setDetails(new Map());
     pinned.current = true;
     setAtBottom(true);
+    setAtTop(true);
   }, [wi, resetKey]);
   useEffect(() => {
     const total = snapshot?.lines.length ?? 0;
@@ -417,6 +424,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
       const at = isProgressPinnedToBottom(region);
       pinned.current = at;
       setAtBottom(at);
+      setAtTop(isProgressAtTop(region));
     };
     region.addEventListener("scroll", onScroll, { passive: true });
     return () => region.removeEventListener("scroll", onScroll);
@@ -428,7 +436,10 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   }, [snapshot, visibleCount, streamed, shownEchoes.length, scrollRef]);
   useLayoutEffect(() => {
     const region = scrollRef.current;
-    if (region) setAtBottom(isProgressPinnedToBottom(region));
+    if (region) {
+      setAtBottom(isProgressPinnedToBottom(region));
+      setAtTop(isProgressAtTop(region));
+    }
   }, [snapshot, visibleCount, foldVersion, scrollRef]);
   useLayoutEffect(() => {
     // A fold click is not a scroll: measure the position the toggle left
@@ -441,6 +452,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     const at = isProgressPinnedToBottom(region);
     pinned.current = at;
     setAtBottom(at);
+    setAtTop(isProgressAtTop(region));
   }, [foldVersion, scrollRef]);
   // One tool card's detail, read when that card is expanded:
   // a call already loading or loaded is never asked again; an unavailable one
@@ -486,6 +498,15 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     if (region) region.scrollTop = region.scrollHeight;
     pinned.current = true;
     setAtBottom(true);
+    setAtTop(region ? isProgressAtTop(region) : false);
+  };
+  // polyforge#31: the up button's one smooth scroll to the very top. The
+  // passive scroll listener keeps atBottom/atTop as the animation settles —
+  // no optimistic state here, and the follow only ever resumes through
+  // jumpToLatest.
+  const jumpToTop = () => {
+    const region = scrollRef.current;
+    if (region) region.scrollTo({ top: 0, behavior: "smooth" });
   };
   // a subagent entry's expand/collapse is a fold too; a
   // subagent is live only inside a running spawn block (one still marked
@@ -627,16 +648,40 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
               : echo.ack.disposition === "resume" ? t("polyforge.chat.echo.resume")
                 : echo.ack.disposition === "wake" ? t("polyforge.chat.echo.wake")
                   : t("polyforge.chat.echo.pending")))}
-      {!atBottom && (
-        <div data-pf-detail-latest="" style={{ position: "sticky", bottom: 8, alignSelf: "flex-end", width: 0, height: 0, marginTop: -2, zIndex: 1 }}>
+      {/* polyforge#31: the two jump buttons, stacked over the region's bottom,
+          horizontally centered — the same chat-scroll-to-bottom style the
+          interactive session uses, no pill and no second style. Each rides a
+          zero-height sticky anchor (overlay, no in-flow height): the up button
+          one button-height above the latest (8 + 32 + 4 = 44), shown while the
+          region is scrolled away from its top; the latest while it is away
+          from its bottom. */}
+      {!atTop && (
+        <div data-pf-detail-top="" style={{ position: "sticky", bottom: 44, alignSelf: "stretch", height: 0, marginTop: -4, zIndex: 1, display: "flex", justifyContent: "center", alignItems: "flex-end", pointerEvents: "none" }}>
           <button
             type="button"
+            className="chat-scroll-to-bottom is-visible"
+            onClick={jumpToTop}
+            title={t("polyforge.progress.top")}
+            aria-label={t("polyforge.progress.top")}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 19V5M5 12l7-7 7 7" />
+            </svg>
+          </button>
+        </div>
+      )}
+      {!atBottom && (
+        <div data-pf-detail-latest="" style={{ position: "sticky", bottom: 8, alignSelf: "stretch", height: 0, marginTop: -4, zIndex: 1, display: "flex", justifyContent: "center", alignItems: "flex-end", pointerEvents: "none" }}>
+          <button
+            type="button"
+            className="chat-scroll-to-bottom is-visible"
             onClick={jumpToLatest}
             title={t("polyforge.progress.latest")}
             aria-label={t("polyforge.progress.latest")}
-            style={{ position: "absolute", right: 0, bottom: 0, whiteSpace: "nowrap", padding: "3px 8px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text)", fontSize: 11, lineHeight: "16px", cursor: "pointer", boxShadow: "0 1px 4px rgba(0,0,0,0.25)" }}
           >
-            {t("polyforge.progress.latest")}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14M5 12l7 7 7-7" />
+            </svg>
           </button>
         </div>
       )}
