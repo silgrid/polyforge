@@ -57,6 +57,9 @@ const WI112 = "wi_E2Edddd0004";
 // polyforge#24 — step-scoped execution progress fixtures.
 const WIP24A = "wi_E2Eeeee0005"; const SLUGP24A = "pi#24";
 const WIP24B = "wi_E2Eeeee0006"; const SLUGP24B = "pi#240";
+// polyforge#25 — the step-override fixtures: a running ticket whose lane
+// declares its tail step skippable.
+const WIP25 = "wi_E2Eeeee0007"; const SLUGP25 = "pi#25";
 const MODEL112 = "example-gateway/model-a-extended-thinking-very-long-e2e-suffix-abcdef0123456789abcdef0123456789";
 const SHORT_MODEL112 = "pi:glm-5.3-short";
 const FROM112 = "pi:glm-e2e-old-777";
@@ -85,6 +88,7 @@ const JOBS = [
     candidate: "codex:e2e-watch", session_fingerprint: "fp-secret-session-112", origin: { kind: "chat", owner: "u_e2e" } },
   job(WIP24A, SLUGP24A, "completed", 2, 90, 80, "pi:glm-e2e", "u_e2e"),
   job(WIP24B, SLUGP24B, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
+  job(WIP25, SLUGP25, "running", 1, 30, 5, "pi:glm-e2e", "u_e2e"),
 ];
 // owner-intended change: the selected job's progress read looks the wi up in the daemon's own job
 // record; a throwaway data root lists every fixture job (no capsule → 200 `available:false`), as a real
@@ -226,9 +230,32 @@ const WATCH_P24B = { work_item: WIP24B, slug: SLUGP24B, known: true, job: { stat
     spec: { status: "done", started_at: "2026-10-18T12:04:00Z" } },
     declared_steps: [{ id: "grill" }, { id: "spec" }] },
   events: [], last_seq: 9 };
+// polyforge#25: a running ticket with two unstarted steps — bravo-code (the
+// tail, skippable) and alpha-plan (never skippable) — so the selected-step
+// controls render for both and the skip toggle only for the skippable one.
+const WATCH_P25 = { work_item: WIP25, slug: SLUGP25, known: true, job: { status: "running", origin: { kind: "chat", owner: "u_e2e" } },
+  execution: { workflow_status: "running", current_step: "kilo-author", updated_at: at(60),
+    steps: { "zulu-grill": { status: "done", started_at: "2026-10-18T08:00:00Z" },
+      "mike-spec": { status: "done", started_at: "2026-10-18T08:05:00Z" },
+      "kilo-author": { status: "in_progress", started_at: "2026-10-18T08:15:00Z" },
+      "alpha-plan": { status: "pending" }, "bravo-code": { status: "pending" } },
+    declared_steps: STEP_ORDER.map((id) => ({ id, skippable: id === "bravo-code", on_fail: null })) },
+  events: [{ at: at(2), kind: "step_started", body: { step: "kilo-author" }, seq: 1 }], last_seq: 1 };
+// the override face's canned answers (the stub pf serves them; the write log
+// records its argv beside argv.log so the polled reads never drown it).
+const OVERRIDE_VIEW_P25 = { work_item: WIP25, posture: "running", steps: [
+  { id: "zulu-grill", status: "done", skippable: false },
+  { id: "mike-spec", status: "done", skippable: false },
+  { id: "alpha-plan", status: "pending", skippable: false, source: "steps.e2e.alpha-plan.models", effective: ["pi:ovr/yaml-plan"] },
+  { id: "kilo-author", status: "in_progress", skippable: false },
+  { id: "bravo-code", status: "pending", skippable: true, source: "" },
+] };
+const OVERRIDE_WRITE_P25 = { work_item: WIP25, changed: true, posture: "running", published: true,
+  step: { id: "bravo-code", status: "pending", skippable: true } };
 const WATCH_TABLE = (watch112 = WATCH_112) => ({ "pi#108": WATCH_108, wi_E2Eaaaa0001: WATCH_108,
   "pi#109": WATCH_109, wi_E2Ecccc0003: WATCH_109, [SLUG112]: watch112, [WI112]: watch112,
-  [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B });
+  [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B,
+  [SLUGP25]: WATCH_P25, [WIP25]: WATCH_P25 });
 writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.filter((j) => j.work_item_id !== WIP24B).map((j) => j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 }
   : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A } : { work_item_id: j.work_item_id }) }));
 const stubDir = join(work, "stub-bin");
@@ -253,6 +280,14 @@ const run = () => {
     const i = rest.indexOf("--events"); const n = i >= 0 ? Number(rest[i + 1]) : 8;
     const w = s.watch[rest[1]] || { work_item: rest[1], known: false, events: [], last_seq: 0 };
     out({ ...w, events: (w.events || []).slice(-n) });
+  }
+  if (rest[0] === "override") {
+    if (s.overrideRefuse) { process.stderr.write(JSON.stringify(s.overrideRefuse) + "\\n"); process.exit(1); }
+    if (rest.indexOf("--step") >= 0) {
+      fs.appendFileSync(path.join(dir, "ovr.log"), JSON.stringify(args) + "\\n");
+      out(s.overrideWrite);
+    }
+    out(s.overrideView);
   }
   process.stderr.write("pf: unknown command\\n"); process.exit(2);
 };
@@ -295,6 +330,9 @@ const T = {
   P24A: "P24A: An ended ticket defaults to its last-run step and shows that step's every rerun (AC1 AC2 AC4)",
   P24B: "P24B: A dropped ended ticket still defaults to its last-run step (AC2)",
   P24C: "P24C: Selection follows the current step until a manual choice persists (AC3)",
+  P25A: "P25A: The selected unstarted step offers the model-chain controls and the skippable tail's skip switch (polyforge#25 AC8)",
+  P25B: "P25B: A non-skippable unstarted step shows no skip switch, only the waive hint (polyforge#25 AC8)",
+  P25C: "P25C: A refused write shows pf's typed words inline; the view's source line names where the chain comes from (polyforge#25 AC8)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1083,6 +1121,75 @@ try {
     } finally {
       setState({});
     }
+  });
+
+  // P25A — polyforge#25 (AC8): the job detail's selected UNSTARTED step offers
+  // the overlay controls — the effective-model source line, the harness +
+  // model setter (one write argv through the route) and, for a lane-declared
+  // skippable step, the skip switch.
+  await checkPage(T.P25A, "running ticket, skippable tail", {}, async (page) => {
+    const ovrLog = join(stubDir, "ovr.log");
+    setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
+    writeFileSync(ovrLog, "");
+    const panel = await ensureDetail24(page, SLUGP25, WIP25);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    const controls = panel.locator("[data-pf-step-controls]");
+    await node("bravo-code").click();
+    await pollUntil(async () => (await controls.count()) === 1, "the selected unstarted step offers the overlay controls");
+    assert.ok(await controls.locator("[data-pf-step-controls-skip]").count() === 1, "a skippable step shows the skip switch");
+    // the harness + model setter: one write, one argv
+    await controls.locator("[data-pf-step-controls-harness]").selectOption("pi");
+    await controls.locator("[data-pf-step-controls-model]").fill("ovr/p25-model");
+    await controls.locator("[data-pf-step-controls-apply]").click();
+    await pollUntil(async () => {
+      const lines = readFileSync(ovrLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      return lines.some((argv) => JSON.stringify(argv) === JSON.stringify(["--json", "override", WIP25, "--step", "bravo-code", "--models", "pi:ovr/p25-model"]));
+    }, "the setter ran `pf --json override <wi> --step bravo-code --models pi:ovr/p25-model`");
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-applied]").count()) === 1, "the applied feedback shows");
+    // the skip switch of the skippable tail
+    await controls.locator("[data-pf-step-controls-skip]").click();
+    await pollUntil(async () => {
+      const lines = readFileSync(ovrLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      return lines.some((argv) => argv.includes("--skip"));
+    }, "the skip switch ran its write");
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-applied]").count()) === 1, "the skip's feedback shows");
+  });
+
+  // P25B — polyforge#25 (AC8): a NON-skippable unstarted step shows the
+  // controls without the skip switch, the waive hint in its place, and the
+  // effective chain's source line (where the next dispatch's model comes
+  // from).
+  await checkPage(T.P25B, "non-skippable unstarted step", {}, async (page) => {
+    setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
+    const panel = await ensureDetail24(page, SLUGP25, WIP25);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    await node("alpha-plan").click();
+    const controls = panel.locator("[data-pf-step-controls]");
+    await pollUntil(async () => (await controls.count()) === 1, "the non-skippable unstarted step offers the overlay controls");
+    assert.equal(await controls.locator("[data-pf-step-controls-skip]").count(), 0, "no skip switch for a non-skippable step");
+    await pollUntil(async () => /豁免|waive/i.test(await controls.locator("[data-pf-step-controls-waive]").innerText()), "the waive hint shows instead of the switch");
+    await pollUntil(async () => {
+      const source = await controls.locator("[data-pf-step-controls-source]").innerText();
+      return source.includes("steps.e2e.alpha-plan.models") && source.includes("pi:ovr/yaml-plan");
+    }, "the source line names where the effective chain comes from");
+  });
+
+  // P25C — polyforge#25 (AC8): a refused write shows pf's typed words inline
+  // (the daemon's refusal, never a raw error), and the controls stay usable.
+  await checkPage(T.P25C, "refused write", {}, async (page) => {
+    setState({ overrideView: OVERRIDE_VIEW_P25,
+      overrideRefuse: { code: "DAEMON-409", detail: "step bravo-code has a live dispatch (its status is in_progress): the overlay is for steps without one" } });
+    const panel = await ensureDetail24(page, SLUGP25, WIP25);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    await node("bravo-code").click();
+    const controls = panel.locator("[data-pf-step-controls]");
+    await pollUntil(async () => (await controls.count()) === 1, "the controls render");
+    await controls.locator("[data-pf-step-controls-model]").fill("ovr/p25-model");
+    await controls.locator("[data-pf-step-controls-apply]").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-error]").innerText()).includes("DAEMON-409"),
+      "the refusal's typed words show inline");
+    assert.ok((await controls.locator("[data-pf-step-controls-error]").innerText()).includes("live dispatch"), "the daemon's detail shows verbatim");
+    setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
   });
 
   // N11 — DELETED before completion: "N11: Unknown kind renders its raw kind
