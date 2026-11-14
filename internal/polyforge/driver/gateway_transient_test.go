@@ -79,23 +79,27 @@ func TestGatewayTransientSamplesClassifyTransient(t *testing.T) {
 func TestGatewayWideningKeepsTheEstablishedClasses(t *testing.T) {
 	// exit path (a live turn's error text) and live path, one want per
 	// text; the gateway-502 forbidden shape keeps the fallback classes
-	// it always had: exit_model_class on exit, model_error live.
+	// it always had: exit_model_class on exit, model_error live. The
+	// modelClass rows assert the candidate switch; the transient/rate
+	// rows keep their classes (AC2), the model-subject rows keep theirs
+	// (AC3).
 	for _, tc := range []struct {
-		text     string
-		exitWant string
-		liveWant string
+		text       string
+		exitWant   string
+		liveWant   string
+		modelClass bool
 	}{
-		{`Upstream response stream ended before completion`, FailUpstreamTransient, FailUpstreamTransient},
-		{`429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}`, FailRateLimited, FailRateLimited},
-		{`529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`, FailRateLimited, FailRateLimited},
-		{`当前模型并发数过高，请稍后再试`, FailRateLimited, FailRateLimited},
-		{`402 {"error":{"message":"Insufficient balance","type":"insufficient_balance"}}`, FailExitModel, FailExitModel},
-		{`401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, FailExitModel, FailExitModel},
-		{`Upstream access forbidden, please contact administrator`, FailExitModel, FailModelError},
+		{`Upstream response stream ended before completion`, FailUpstreamTransient, FailUpstreamTransient, false},
+		{`429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}`, FailRateLimited, FailRateLimited, false},
+		{`529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`, FailRateLimited, FailRateLimited, false},
+		{`当前模型并发数过高，请稍后再试`, FailRateLimited, FailRateLimited, false},
+		{`402 {"error":{"message":"Insufficient balance","type":"insufficient_balance"}}`, FailExitModel, FailExitModel, true},
+		{`401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, FailExitModel, FailExitModel, true},
+		{`Upstream access forbidden, please contact administrator`, FailExitModel, FailModelError, true},
 		// no upstream/gateway subject: the model's own texts stay model
 		// class — the widening must not swallow them
-		{`the model ended the turn`, FailExitModel, FailModelError},
-		{`The model is temporarily unavailable, please try again`, FailExitModel, FailModelError},
+		{`the model ended the turn`, FailExitModel, FailModelError, true},
+		{`The model is temporarily unavailable, please try again`, FailExitModel, FailModelError, true},
 	} {
 		got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: tc.text, TurnError: true})
 		if got != tc.exitWant {
@@ -105,7 +109,7 @@ func TestGatewayWideningKeepsTheEstablishedClasses(t *testing.T) {
 		if live != tc.liveWant {
 			t.Errorf("%q classified %q on the live path, want %q", tc.text, live, tc.liveWant)
 		}
-		if !IsModelClass(live) {
+		if tc.modelClass && !IsModelClass(live) {
 			t.Errorf("%q: the model classes must keep switching the candidate, got %q", tc.text, live)
 		}
 	}
