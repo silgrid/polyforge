@@ -28,6 +28,35 @@ var principledSteps = map[string][]string{
 	// skills (workflow contract v2): the principles ride none of them.
 }
 
+var principlesContractTerms = []string{
+	"先用仓里已有的函数、组件和既有写法，再用标准库或平台能力、已安装的依赖，最后才自己写；不为省几行代码新增依赖",
+	"只在可信边界（用户或 CLI 输入、网络、文件、其他进程）做校验；进程内部不为调用方不可能产生的状态写防御分支或兜底；防丢数据的错误处理和安全相关代码不受此限",
+	"先用搜索定位，再按需要的行范围读；不整份读取大文件（以超过 16KB 为例），步骤指令明确要求读完整份的产物（例如 review 读 plan）除外",
+}
+
+func TestPrinciplesTextAndRenderedSteps(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, workflow.PrinciplesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, term := range principlesContractTerms {
+		if !strings.Contains(text, term) {
+			t.Errorf("principles.md lacks contract term %q", term)
+		}
+	}
+	for bundle, steps := range principledSteps {
+		for _, step := range steps {
+			def := shippedStepDef(t, bundle, step)
+			for _, term := range principlesContractTerms {
+				if !strings.Contains(def, term) {
+					t.Errorf("%s/%s rendered prompt lacks contract term %q", bundle, step, term)
+				}
+			}
+		}
+	}
+}
+
 func TestShippedPrinciplesRenderedOnce(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, workflow.PrinciplesFile))
 	if err != nil {
