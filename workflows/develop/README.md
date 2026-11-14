@@ -41,7 +41,9 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
 
 - **build** (fresh session; skill `build`) — one session, four segments
   (`steps/build.md`): a plan against the work item's acceptance criteria
-  (`artifacts/plan.md`, its `## Coverage` the criterion → test table); per unit, a test — a
+  (`artifacts/plan.md`, its `## Coverage` the criterion → test table, each `## Units` entry
+  recording the behaviour its test observes, why its red is expected and the change it
+  catches (`workflows/_shared/test_quality.md`)); per unit, a test — a
   unit-level test, or an e2e scenario whose suite declares `carries:` — committed red
   before the implementation that turns it green, both runs the session's own, recorded in
   `artifacts/build/units.json` (`[{id, test_commit, impl_commit, run{repo, cwd, argv},
