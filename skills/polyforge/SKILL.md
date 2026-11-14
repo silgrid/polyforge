@@ -38,8 +38,9 @@ HTTP client, and daemon
 mediation does not loosen Core-side validation. If no intent fits or the
 intent is ambiguous, **ask rather than guess**.
 
-When filing a second ticket in the same area, 同一区域（同一组文件或同一概念）, first check queued and running tickets. 约定：加先后依赖（`--after`），或合并成一张票；do not run parallel tickets against the same semantic surface.
+When filing a second ticket in the same area, 同一区域（同一组文件或同一概念）, first check queued and running tickets. 约定：加先后依赖（`--after`），或合并成一张票；不要让同一语义面上的票并行执行。
 
+## Install surface
 
 This skill is the **only** thing a user harness installs, and both
 harnesses REFERENCE the release checkout `tools/install.sh` keeps at

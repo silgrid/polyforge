@@ -253,8 +253,9 @@ class Merge:
                             r.why = ("origin's %s is at %s, not the verified head %s — the PR moved since verification (publish"
                                      " pushed %s)" % (r.branch, gostr.short(r.tip), gostr.short(r.head), gostr.short(r.published)))
                         else:
-                            current_base = g.rev(r.dir, "refs/remotes/origin/" + r.base)
-                            r.why = default_branch_update_reason(r.verified_base, current_base)
+                            if r.verified_base:
+                                current_base = g.rev(r.dir, "refs/remotes/origin/" + r.base)
+                                r.why = default_branch_update_reason(r.verified_base, current_base)
                             if not r.why:
                                 opened.append(r)
             else:
@@ -358,11 +359,12 @@ def run(inv: Invocation, a: argparse.Namespace, held: List[Details]) -> int:
     try:
         ver = read_json(a.verified)
         vheads = _field(ver, "heads", dict, a.verified) or {}
-        vrepos = _field(ver, "repos", list, a.verified) or []
+        vdetails = _field(ver, "details", dict, a.verified) or {}
+        vrepos = _field(vdetails, "repos", list, a.verified) or []
         vbases: Dict[str, str] = {}
         for vrepo in vrepos:
             if not isinstance(vrepo, dict):
-                raise GoError("%s is not the JSON expected: a repos entry is not an object" % a.verified)
+                raise GoError("%s is not the JSON expected: a details.repos entry is not an object" % a.verified)
             name = vrepo.get("name")
             base = vrepo.get("base")
             if isinstance(name, str) and isinstance(base, str):
@@ -392,9 +394,6 @@ def run(inv: Invocation, a: argparse.Namespace, held: List[Details]) -> int:
         if r.head == "":
             return inv.usage("--verified %s names no head for the published repo %s: the merge has nothing to match (the"
                              " verification must have run over it)" % (a.verified, name))
-        if r.verified_base == "":
-            return inv.usage("--verified %s names no verified default branch for the published repo %s: re-run verification" %
-                             (a.verified, name))
         if not os.path.isdir(r.dir):
             return inv.usage("repos/%s is not a task repo of the capsule %s" % (name, capsule))
         details.repos.append(r)

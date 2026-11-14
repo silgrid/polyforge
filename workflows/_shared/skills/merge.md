@@ -53,9 +53,10 @@ is wrapped with. You never merge by hand, and you never write the landing record
      until the line was accepted. Then, as the lane's
      last step, write the wrap summary (the step header's Memory section), then hand off
      `done`.
-   - **1** — a PR moved (its head is not the verified one), closed, retargeted, merged
+   - **1** — a PR moved (its head is not the verified one), the default branch gained commits after verification, closed, retargeted, merged
      elsewhere off the verified head, or the forge refused the merge: hand off `fail` (the
-     lane goes back to `sync`, which merges the default branch again).
+     lane goes back to `sync`, which merges the default branch again). The check compares
+     the current `origin/<default>` with the verifying result's recorded base.
    - **2** — not judged (a file unreadable, a head missing, gh or git unreachable, the
      deadline). Wait one minute and run 2 again, at most twice more; still 2: hand off
      `blocked`, the result's `summary` in the body and what the forge or the machine needs
