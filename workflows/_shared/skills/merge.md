@@ -1,6 +1,6 @@
 ---
 name: merge
-description: Merge the published PRs at the verified heads with one pre-written script and register the landing record it writes for the work item's wrap (pf step hub wrap-attrs integration); a PR that moved, closed or was refused is this gate's FAIL back to sync.
+description: Merge the published PRs at the verified heads with one pre-written script and register the landing record it writes for the work item's wrap (pf step hub wrap-attrs integration); a PR that moved, the default branch gained commits after verification when the verified result records a base, closed or was refused is this gate's FAIL back to sync.
 commands: [merge.py]
 ---
 # merge
@@ -53,7 +53,7 @@ is wrapped with. You never merge by hand, and you never write the landing record
      until the line was accepted. Then, as the lane's
      last step, write the wrap summary (the step header's Memory section), then hand off
      `done`.
-   - **1** — a PR moved (its head is not the verified one), the default branch gained commits after verification, closed, retargeted, merged
+   - **1** — a PR moved (its head is not the verified one), the default branch gained commits after verification when the verified result includes `details.repos[].base` (develop verification; micro evidence has no base and does not run this check), closed, retargeted, merged
      elsewhere off the verified head, or the forge refused the merge: hand off `fail` (the
      lane goes back to `sync`, which merges the default branch again). The check compares
      the current `origin/<default>` with the verifying result's recorded base.

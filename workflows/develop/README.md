@@ -9,7 +9,7 @@ build --> review --> sync --> verification --> publish --> merge ==> landed
   ^         |                       |              |         |
   +---------+-----------------------+--------------+         |  (a FAIL: back to build)
                       ^                                      |
-                      +--------------------------------------+  (a PR that moved or was refused at merge)
+                      +--------------------------------------+  (a PR that moved, the default branch moved since verification, or was refused at merge)
 ```
 
 A project may skip `merge` (below, **Skipping merge**): the lane then ends after `publish`
