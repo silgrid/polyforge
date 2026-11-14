@@ -25,7 +25,10 @@ scenario is not a micro ticket: it belongs on a lane whose step table carries it
 overridden per project in the workspace yaml). `fix` follows the lane's `micro-bounds`
 skill and `evidence` the lane's `evidence` skill (`workflows/micro/skills/`); `sync`,
 `publish` and `merge` the ones the develop lane uses too (`workflows/_shared/skills/`);
-`review` has no skill — its definition is its procedure.
+`review` has no skill — its definition is its procedure. `fix`'s definition includes the
+shared test-quality bar (`workflows/_shared/test_quality.md`): the lane writes no test of
+its own, but the bar is its standard for what counts as one — the acceptance here is
+itself text, the one exemption the bar names.
 
 **How the steps connect.** Every step reads `artifacts/handoff.md` first and ends with one
 `pf step handoff` (`workflows/_shared/step-header.md`): the daemon stamps each section's
