@@ -77,8 +77,9 @@ func newOverrideFixture(t *testing.T, wi string) *ovFixture {
 	td.submitClaim(t, wi)
 	ji, _ := td.rt.Info(wi)
 	f := &ovFixture{td: td, wi: wi, capDir: ji.CapsuleDir}
-	workflowtest.WriteLane(t, filepath.Join(f.capDir, capsule.DirWorkflows), "develop", ovLane)
-	idn := capsule.Identity{WorkItemID: wi, Project: "proj", BundleName: "develop"}
+	// the lane lands under the bundle name the claim pinned
+	workflowtest.WriteLane(t, filepath.Join(f.capDir, capsule.DirWorkflows), ji.BundleName, ovLane)
+	idn := capsule.Identity{WorkItemID: wi, Project: "proj", BundleName: ji.BundleName}
 	raw, _ := json.Marshal(idn)
 	if err := os.WriteFile(filepath.Join(f.capDir, capsule.CapsuleJSON), raw, 0o644); err != nil {
 		t.Fatal(err)
@@ -479,7 +480,7 @@ func TestOverrideViewEffectiveSource(t *testing.T) {
 		[]byte("steps:\n  proj:\n    review: { models: [pi:ovtest/m-review] }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "merge", Operator: "usr_1", Models: []string{"pi:ovtest/m-merge"}}); ae != nil {
+	if _, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "merge", Operator: "usr_1", Models: []string{"pi:ovtest/m-two"}}); ae != nil {
 		t.Fatalf("the merge write: %s", ae.Detail)
 	}
 	v, ae := f.td.ovView(t, f.wi)
@@ -499,7 +500,7 @@ func TestOverrideViewEffectiveSource(t *testing.T) {
 	if r := byID["review"]; r.Skippable || r.Status != capsule.StepPending || r.Source != "steps.proj.review.models" || len(r.Effective) != 1 || r.Effective[0] != "pi:ovtest/m-review" {
 		t.Fatalf("the review row: %+v", r)
 	}
-	if m := byID["merge"]; !m.Skippable || m.Source != "step override" || len(m.Effective) != 1 || m.Effective[0] != "pi:ovtest/m-merge" {
+	if m := byID["merge"]; !m.Skippable || m.Source != "step override" || len(m.Effective) != 1 || m.Effective[0] != "pi:ovtest/m-two" {
 		t.Fatalf("the merge row (the overlay governs): %+v", m)
 	}
 	if b := byID["build"]; b.Skippable || b.Status != capsule.StepInProgress || b.Source != "" {
