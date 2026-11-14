@@ -26,7 +26,7 @@
 //
 //   node e2e/polyforge.mjs
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -57,6 +57,11 @@ const WI112 = "wi_E2Edddd0004";
 // polyforge#24 — step-scoped execution progress fixtures.
 const WIP24A = "wi_E2Eeeee0005"; const SLUGP24A = "pi#24";
 const WIP24B = "wi_E2Eeeee0006"; const SLUGP24B = "pi#240";
+// polyforge#31 — scroll-jump buttons fixture: one RUNNING ticket whose
+// event-only stream is long (one step_started + 258 answered lines), so the
+// detail's one scroll region is tall enough to park a reader mid-progress; a
+// later appended intent line proves the latest click restored the follow.
+const WIP31 = "wi_E2Eeeee0007"; const SLUG31 = "polyforge#31";
 const MODEL112 = "example-gateway/model-a-extended-thinking-very-long-e2e-suffix-abcdef0123456789abcdef0123456789";
 const SHORT_MODEL112 = "pi:glm-5.3-short";
 const FROM112 = "pi:glm-e2e-old-777";
@@ -85,6 +90,7 @@ const JOBS = [
     candidate: "codex:e2e-watch", session_fingerprint: "fp-secret-session-112", origin: { kind: "chat", owner: "u_e2e" } },
   job(WIP24A, SLUGP24A, "completed", 2, 90, 80, "pi:glm-e2e", "u_e2e"),
   job(WIP24B, SLUGP24B, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
+  job(WIP31, SLUG31, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
 ];
 // owner-intended change: the selected job's progress read looks the wi up in the daemon's own job
 // record; a throwaway data root lists every fixture job (no capsule → 200 `available:false`), as a real
@@ -226,9 +232,24 @@ const WATCH_P24B = { work_item: WIP24B, slug: SLUGP24B, known: true, job: { stat
     spec: { status: "done", started_at: "2026-10-18T12:04:00Z" } },
     declared_steps: [{ id: "grill" }, { id: "spec" }] },
   events: [], last_seq: 9 };
+// ── polyforge#31: the long event-only stream (at3 caps at minute 59, so the
+// 259 fixtures run over the whole day: hour = floor((n-1)/60)).
+const atP31 = (n) => `2026-10-18T${String(Math.floor((n - 1) / 60)).padStart(2, "0")}:${String((n - 1) % 60).padStart(2, "0")}:00Z`;
+const evP31 = (n, kind, body) => ({ at: atP31(n), kind, work_item: WIP31, body, seq: n });
+const EVENTS_P31 = [
+  evP31(1, "step_started", { step: "scroll", model: "pi:glm-e2e", spawn_n: 1 }),
+  ...Array.from({ length: 258 }, (_, i) => evP31(2 + i, "answered", { step: "scroll" })),
+];
+writeFileSync(join(dataRoot, "events", `wi-${WIP31}.jsonl`), EVENTS_P31.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_P31 = { work_item: WIP31, slug: SLUG31, known: true, job: { status: "running" },
+  execution: { workflow_status: "running", current_step: "scroll", updated_at: atP31(259), steps: {
+    scroll: { status: "in_progress", started_at: atP31(1) } },
+    declared_steps: [{ id: "scroll" }] },
+  events: [], last_seq: 259 };
 const WATCH_TABLE = (watch112 = WATCH_112) => ({ "pi#108": WATCH_108, wi_E2Eaaaa0001: WATCH_108,
   "pi#109": WATCH_109, wi_E2Ecccc0003: WATCH_109, [SLUG112]: watch112, [WI112]: watch112,
-  [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B });
+  [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B,
+  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31 });
 writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.filter((j) => j.work_item_id !== WIP24B).map((j) => j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 }
   : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A } : { work_item_id: j.work_item_id }) }));
 const stubDir = join(work, "stub-bin");
@@ -295,6 +316,7 @@ const T = {
   P24A: "P24A: An ended ticket defaults to its last-run step and shows that step's every rerun (AC1 AC2 AC4)",
   P24B: "P24B: A dropped ended ticket still defaults to its last-run step (AC2)",
   P24C: "P24C: Selection follows the current step until a manual choice persists (AC3)",
+  P31A: "P31A: Mid-progress both centered jump buttons show; up reaches the top, latest the bottom and restores the follow (AC1 AC2 AC4)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1083,6 +1105,84 @@ try {
     } finally {
       setState({});
     }
+  });
+
+  // P31A — polyforge#31 (AC1, AC2, AC4): over a long execution progress the
+  // two jump buttons float stacked at the region's bottom, horizontally
+  // centered, reusing the chat session's chat-scroll-to-bottom style; the up
+  // button smooth-scrolls to the top (and hides there), the latest button
+  // jumps to the bottom (and hides there) and restores the follow, so the
+  // next poll's line keeps the region pinned. Every wait is a bounded poll on
+  // a real condition — never a fixed delay.
+  await checkPage(T.P31A, "scroll jump buttons", {}, async (page) => {
+    const panel = await ensureDetail24(page, SLUG31, WIP31);
+    const scroll = panel.locator("[data-pf-detail-scroll]");
+    const latest = panel.locator("[data-pf-detail-latest]");
+    const top = panel.locator("[data-pf-detail-top]");
+    const atBottom = () => scroll.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 8);
+    await pollUntil(async () => (await panel.locator("[data-pf-progress] [data-pf-progress-kind]").count()) >= 200, "the long progress renders");
+    await pollUntil(atBottom, "the detail opens at its bottom");
+    assert.equal(await latest.count(), 0, "the latest control is hidden at the bottom");
+    assert.equal(await top.count(), 1, "away from the top, the up control shows");
+    // Park mid-progress: both buttons show, centered on their anchors.
+    await scroll.evaluate((el) => { el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) / 2); });
+    await pollUntil(async () => (await latest.count()) === 1 && (await top.count()) === 1, "both jump buttons show mid-progress");
+    const geometry = await panel.evaluate((root) => {
+      const center = (el) => { const r = el.getBoundingClientRect(); return (r.left + r.right) / 2; };
+      const progress = root.querySelector("[data-pf-progress]");
+      const region = root.querySelector("[data-pf-detail-scroll]");
+      const latestAnchor = root.querySelector("[data-pf-detail-latest]");
+      const topAnchor = root.querySelector("[data-pf-detail-top]");
+      const latestBtn = latestAnchor?.querySelector("button");
+      const topBtn = topAnchor?.querySelector("button");
+      const latestBox = latestBtn?.getBoundingClientRect();
+      const topBox = topBtn?.getBoundingClientRect();
+      const latestStyle = latestBtn && getComputedStyle(latestBtn);
+      const topStyle = topBtn && getComputedStyle(topBtn);
+      const regionBox = region && region.getBoundingClientRect();
+      const inside = (box) => Boolean(box && regionBox && box.top >= regionBox.top - 0.5 && box.bottom <= regionBox.bottom + 0.5 && box.left >= regionBox.left - 0.5 && box.right <= regionBox.right + 0.5);
+      return {
+        progress: center(progress),
+        latestAnchor: latestAnchor && center(latestAnchor), topAnchor: topAnchor && center(topAnchor),
+        latestBtn: latestBtn && center(latestBtn), topBtn: topBtn && center(topBtn),
+        latestClass: latestBtn?.className ?? "", topClass: topBtn?.className ?? "",
+        latestShape: latestStyle && [latestStyle.width, latestStyle.height, latestStyle.borderRadius],
+        topShape: topStyle && [topStyle.width, topStyle.height, topStyle.borderRadius],
+        stacked: Boolean(latestBox && topBox && latestBox.top >= topBox.bottom),
+        latestInView: inside(latestBox), topInView: inside(topBox),
+      };
+    });
+    for (const [name, btn, anchor] of [["latest", geometry.latestBtn, geometry.latestAnchor], ["top", geometry.topBtn, geometry.topAnchor]]) {
+      assert.ok(btn != null && anchor != null, `the ${name} button and its anchor render`);
+      assert.ok(Math.abs(btn - anchor) <= 1.5, `the ${name} button centers on its anchor (Δ ${Math.abs(btn - anchor).toFixed(2)}px)`);
+      assert.ok(Math.abs(anchor - geometry.progress) <= 2, `the ${name} anchor spans the progress block's width (Δ ${Math.abs(anchor - geometry.progress).toFixed(2)}px)`);
+    }
+    assert.match(geometry.latestClass, /(^|\s)chat-scroll-to-bottom(\s|$)/, "the latest button reuses the chat's style class");
+    assert.match(geometry.latestClass, /(^|\s)is-visible(\s|$)/, "the latest button is visible");
+    assert.match(geometry.topClass, /(^|\s)chat-scroll-to-bottom(\s|$)/, "the top button reuses the chat's style class");
+    assert.match(geometry.topClass, /(^|\s)is-visible(\s|$)/, "the top button is visible");
+    assert.deepEqual(geometry.latestShape, ["32px", "32px", "999px"], `the latest button is the chat's 32px round control: ${JSON.stringify(geometry.latestShape)}`);
+    assert.deepEqual(geometry.topShape, ["32px", "32px", "999px"], `the top button is the chat's 32px round control: ${JSON.stringify(geometry.topShape)}`);
+    assert.ok(geometry.stacked, "the up button floats above the latest button");
+    assert.ok(geometry.latestInView, "the latest button sits inside the region's visible box");
+    assert.ok(geometry.topInView, "the up button sits inside the region's visible box");
+    // The up click reaches the top; the control hides there, the latest stays.
+    await top.locator("button").click();
+    await pollUntil(async () => await scroll.evaluate((el) => el.scrollTop <= 8), "the up button scrolls the region to its top");
+    // r1#1: the hiding rides scroll events → the passive listener → a React
+    // continuous-priority commit, so the removed control is itself polled —
+    // never asserted straight off the scroll-position proxy.
+    await pollUntil(async () => (await top.count()) === 0, "the up control hides at the top");
+    assert.equal(await latest.count(), 1, "the latest control stays away from the bottom");
+    // The latest click jumps to the bottom; the control hides there, and the
+    // follow is restored: a later poll's appended line keeps the region pinned.
+    await latest.locator("button").click();
+    await pollUntil(atBottom, "the latest button returns the region to its bottom");
+    assert.equal(await latest.count(), 0, "the latest control hides at the bottom");
+    assert.equal(await top.count(), 1, "the up control shows away from the top");
+    appendFileSync(join(dataRoot, "events", `wi-${WIP31}.jsonl`), JSON.stringify({ at: atP31(260), kind: "intent", work_item: WIP31, body: { step: "scroll", kind: "wake", to: WIP31, reason: "E2E-P31-FOLLOW-MARKER" }, seq: 260 }) + "\n");
+    await pollUntil(async () => (await panel.locator("[data-pf-progress]").innerText()).includes("E2E-P31-FOLLOW-MARKER"), "the follow-marker line arrives");
+    await pollUntil(atBottom, "the latest click restored the follow: the new line keeps the region at its bottom");
   });
 
   // N11 — DELETED before completion: "N11: Unknown kind renders its raw kind

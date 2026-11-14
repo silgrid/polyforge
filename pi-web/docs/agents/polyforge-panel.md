@@ -2817,13 +2817,25 @@ than the viewport; unreadable numbers never pin). After every new snapshot
 or added chunk the region scrolls to the bottom only while pinned; a reader
 parked anywhere else is never moved by a poll.
 
-**↓ Latest (`[data-pf-detail-latest]`).** A floating button at
-the region's bottom-right, an overlay with no in-flow height, visible
-whenever the region is not at its bottom (including while the reader is at
-the summary) and hidden once it is. One click jumps to the bottom
-immediately (no smooth animation) and restores following, so the next
-snapshot or chunk keeps it there. It carries no unread/new-line count. The
-label is translated: `polyforge.progress.latest` = ↓ 最新 / ↓ Latest / ↓ 最新.
+**The two jump buttons (`[data-pf-detail-top]` above, `[data-pf-detail-latest]`
+below).** Two floating buttons stacked over the region's bottom, horizontally
+centered — both reuse the interactive session's `.chat-scroll-to-bottom`
+style from `app/globals.css` verbatim (one 32px round control, an SVG arrow,
+no label text, no second style of their own); each rides a zero-height sticky
+anchor that spans the progress block's width, an overlay with no in-flow
+height that never eats the lines' clicks. ↓ Latest
+(`[data-pf-detail-latest]`) is visible whenever the region is not at its
+bottom (including while the reader is at the summary) and hidden once it is;
+one click jumps to the bottom immediately (no smooth animation) and restores
+following, so the next snapshot or chunk keeps it there. It carries no
+unread/new-line count. ↑ Top (`[data-pf-detail-top]`) sits one button-height
+above it (a 4px gap) and is visible whenever the region is scrolled away from
+its top (`isProgressAtTop`, the same 8 px threshold the bottom pin uses) and
+hidden at the top; one click smooth-scrolls to the very top (`scrollTo({
+top: 0, behavior: "smooth" })`), and only the latest click ever resumes the
+follow. Both buttons carry translated aria-labels and titles:
+`polyforge.progress.latest` = 回到最新 / Scroll to latest / 回到最新 and
+`polyforge.progress.top` = 回到顶部 / Scroll to top / 回到頂部.
 
 ## Job detail layout and execution progress
 

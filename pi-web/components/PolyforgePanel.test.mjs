@@ -597,11 +597,45 @@ test("the detail opens at its bottom, offers ↓ Latest and folds spawn blocks",
 });
 
 test("the latest label and line-count wording exist in all three locales", () => {
-  const latest = { en: "↓ Latest", "zh-CN": "↓ 最新", "zh-TW": "↓ 最新" };
+  // polyforge#31: the two jump buttons are icon-only round controls, so the
+  // labels are their aria-labels/titles — no "↓" prefix any more — and the
+  // up button gets its own key in every locale (AC3).
+  const latest = { en: "Scroll to latest", "zh-CN": "回到最新", "zh-TW": "回到最新" };
+  const top = { en: "Scroll to top", "zh-CN": "回到顶部", "zh-TW": "回到頂部" };
   for (const [name, localeSource] of [["en", enSource], ["zh-CN", zhCNSource], ["zh-TW", zhTWSource]]) {
     assert.match(localeSource, new RegExp(`"polyforge\\.progress\\.latest": "${latest[name]}"`), `${name} latest label`);
+    assert.match(localeSource, new RegExp(`"polyforge\\.progress\\.top": "${top[name]}"`), `${name} top label`);
     assert.match(localeSource, /"polyforge\.progress\.lines": "\{count\} \S/, `${name} line-count wording`);
   }
+});
+
+test("polyforge#31: the progress jump buttons reuse the chat style, centered, one down one up", () => {
+  // AC1/AC2: two floating buttons stacked over the region's bottom, both
+  // horizontally centered and reusing the chat session's chat-scroll-to-bottom
+  // style; the old right-aligned text pill is gone. The down button keeps its
+  // instant jump and follow restore; the up button smooth-scrolls to the top.
+  assert.match(source, /data-pf-detail-top=""/);
+  assert.match(source, /!atTop && \(/);
+  assert.match(source, /!atBottom && \(/);
+  for (const anchor of ["data-pf-detail-top", "data-pf-detail-latest"]) {
+    const at = source.indexOf(`${anchor}=""`);
+    assert.ok(at >= 0, `${anchor} exists`);
+    const style = source.slice(at, at + 400);
+    assert.match(style, /position: "sticky", bottom: (8|44), alignSelf: "stretch"/, `${anchor} is a full-width sticky anchor`);
+    assert.match(style, /justifyContent: "center"/, `${anchor} centers its button`);
+    assert.match(style, /pointerEvents: "none"/, `${anchor} never eats the lines' clicks`);
+  }
+  assert.equal((source.match(/chat-scroll-to-bottom is-visible/g) ?? []).length, 2, "both buttons reuse the chat's style class");
+  assert.doesNotMatch(source, /bottom: 8, alignSelf: "flex-end"/, "the old right-aligned pill anchor is gone");
+  assert.doesNotMatch(source, /borderRadius: 10/, "the old pill button style is gone");
+  assert.match(source, /title=\{t\("polyforge\.progress\.latest"\)\}/);
+  assert.match(source, /aria-label=\{t\("polyforge\.progress\.latest"\)\}/);
+  assert.match(source, /title=\{t\("polyforge\.progress\.top"\)\}/);
+  assert.match(source, /aria-label=\{t\("polyforge\.progress\.top"\)\}/);
+  assert.match(source, /const jumpToTop = \(\) => \{/);
+  assert.match(source, /region\.scrollTo\(\{ top: 0, behavior: "smooth" \}\)/);
+  assert.match(source, /region\.scrollTop = region\.scrollHeight;\n\s*pinned\.current = true;/);
+  assert.match(source, /isProgressAtTop/, "the at-top read is the pure helper's");
 });
 
 test("the dock adds Jobs | Messages tabs with an unread dot of its own", () => {
@@ -1054,10 +1088,11 @@ test(" (owner intentional change, reversing #238): the detail opens at its botto
   assert.match(block, /const streamed = Boolean\(snapshot\?\.available && lines\.length > 0\);/, "nothing is forced while loading, empty or unavailable");
   assert.match(block, /useLayoutEffect\(\(\) => \{\s*const region = scrollRef\.current;\s*if \(region && streamed && pinned\.current\) region\.scrollTop = region\.scrollHeight;\s*\}, \[snapshot, visibleCount, streamed, shownEchoes\.length, scrollRef\]\);/, "the first stream, every later chunk and an echoed owner message end at the whole region's bottom while pinned");
   assert.match(block, /setVisibleCount\(PROGRESS_RENDER_CHUNK\);/, "another job re-chunks its stream");
-  assert.match(block, /const onScroll = \(\) => \{\s*const at = isProgressPinnedToBottom\(region\);\s*pinned\.current = at;\s*setAtBottom\(at\);\s*\};/, "a passive listener tracks the follow state and the control's visibility");
+  assert.match(block, /const onScroll = \(\) => \{\s*const at = isProgressPinnedToBottom\(region\);\s*pinned\.current = at;\s*setAtBottom\(at\);\s*setAtTop\(isProgressAtTop\(region\)\);\s*\};/, "a passive listener tracks the follow state and both controls' visibility (the at-top read since polyforge#31)");
   assert.match(block, /if \(region\) region\.scrollTop = region\.scrollHeight;\s*pinned\.current = true;/, "a click on ↓ Latest jumps immediately and restores following");
-  assert.match(block, /!atBottom && \(/, "the control is visible exactly while the region is off its bottom");
-  assert.doesNotMatch(block, /scrollTo\(|smooth/i, "the jump is not animated");
+  assert.match(block, /!atBottom && \(/, "the latest control is visible exactly while the region is off its bottom");
+  assert.match(block, /!atTop && \(/, "the top control is visible exactly while the region is off its top (polyforge#31)");
+  assert.match(block, /const jumpToTop = \(\) => \{\s*const region = scrollRef\.current;\s*if \(region\) region\.scrollTo\(\{ top: 0, behavior: "smooth" \}\);\s*\};/, "the up button's one click smooth-scrolls to the very top (polyforge#31 — the latest jump stays instant)");
   assert.doesNotMatch(block, /unread/i, "the control carries no unread count");
 });
 

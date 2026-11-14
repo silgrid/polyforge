@@ -425,6 +425,17 @@ test("the progress follow counts a region as pinned within 8 px of its bottom; u
   }
 });
 
+test("polyforge#31: isProgressAtTop mirrors the pin's 8 px threshold for the back-to-top control", () => {
+  const at = (scrollTop) => pure.isProgressAtTop({ scrollTop });
+  assert.equal(at(0), true, "at the top");
+  assert.equal(at(8), true, "8 px down still reads as at the top");
+  assert.equal(at(9), false, "9 px down is away from the top");
+  assert.equal(at(600), false, "at the bottom of a long region");
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+    assert.equal(pure.isProgressAtTop({ scrollTop: bad }), false, String(bad));
+  }
+});
+
 test("review r1 #1: an owner line carries the record's own stamp (body.at) as msgAt, apart from the envelope's time", () => {
   const line = pure.composeProgressEventLine("e9", { at: "2026-11-10T10:00:01.131000Z", kind: "owner_message", body: { at: "2026-11-10T10:00:01.123456Z", step: "build", kind: "reply", by: "usr_1", text: "amber" } }, (t) => t);
   assert.equal(line.msgAt, "2026-11-10T10:00:01.123456Z", "the asks.jsonl line's stamp, verbatim");
