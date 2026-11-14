@@ -1130,6 +1130,7 @@ try {
     const geometry = await panel.evaluate((root) => {
       const center = (el) => { const r = el.getBoundingClientRect(); return (r.left + r.right) / 2; };
       const progress = root.querySelector("[data-pf-progress]");
+      const region = root.querySelector("[data-pf-detail-scroll]");
       const latestAnchor = root.querySelector("[data-pf-detail-latest]");
       const topAnchor = root.querySelector("[data-pf-detail-top]");
       const latestBtn = latestAnchor?.querySelector("button");
@@ -1138,6 +1139,8 @@ try {
       const topBox = topBtn?.getBoundingClientRect();
       const latestStyle = latestBtn && getComputedStyle(latestBtn);
       const topStyle = topBtn && getComputedStyle(topBtn);
+      const regionBox = region && region.getBoundingClientRect();
+      const inside = (box) => Boolean(box && regionBox && box.top >= regionBox.top - 0.5 && box.bottom <= regionBox.bottom + 0.5 && box.left >= regionBox.left - 0.5 && box.right <= regionBox.right + 0.5);
       return {
         progress: center(progress),
         latestAnchor: latestAnchor && center(latestAnchor), topAnchor: topAnchor && center(topAnchor),
@@ -1146,6 +1149,7 @@ try {
         latestShape: latestStyle && [latestStyle.width, latestStyle.height, latestStyle.borderRadius],
         topShape: topStyle && [topStyle.width, topStyle.height, topStyle.borderRadius],
         stacked: Boolean(latestBox && topBox && latestBox.top >= topBox.bottom),
+        latestInView: inside(latestBox), topInView: inside(topBox),
       };
     });
     for (const [name, btn, anchor] of [["latest", geometry.latestBtn, geometry.latestAnchor], ["top", geometry.topBtn, geometry.topAnchor]]) {
@@ -1160,14 +1164,19 @@ try {
     assert.deepEqual(geometry.latestShape, ["32px", "32px", "999px"], `the latest button is the chat's 32px round control: ${JSON.stringify(geometry.latestShape)}`);
     assert.deepEqual(geometry.topShape, ["32px", "32px", "999px"], `the top button is the chat's 32px round control: ${JSON.stringify(geometry.topShape)}`);
     assert.ok(geometry.stacked, "the up button floats above the latest button");
+    assert.ok(geometry.latestInView, "the latest button sits inside the region's visible box");
+    assert.ok(geometry.topInView, "the up button sits inside the region's visible box");
     // The up click reaches the top; the control hides there, the latest stays.
-    await top.locator("button").evaluate((el) => el.click());
+    await top.locator("button").click();
     await pollUntil(async () => await scroll.evaluate((el) => el.scrollTop <= 8), "the up button scrolls the region to its top");
-    assert.equal(await top.count(), 0, "the up control hides at the top");
+    // r1#1: the hiding rides scroll events → the passive listener → a React
+    // continuous-priority commit, so the removed control is itself polled —
+    // never asserted straight off the scroll-position proxy.
+    await pollUntil(async () => (await top.count()) === 0, "the up control hides at the top");
     assert.equal(await latest.count(), 1, "the latest control stays away from the bottom");
     // The latest click jumps to the bottom; the control hides there, and the
     // follow is restored: a later poll's appended line keeps the region pinned.
-    await latest.locator("button").evaluate((el) => el.click());
+    await latest.locator("button").click();
     await pollUntil(atBottom, "the latest button returns the region to its bottom");
     assert.equal(await latest.count(), 0, "the latest control hides at the bottom");
     assert.equal(await top.count(), 1, "the up control shows away from the top");
