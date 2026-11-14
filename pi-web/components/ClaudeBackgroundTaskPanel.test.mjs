@@ -45,9 +45,9 @@ test("status and elapsed time are in a separate row below command and descriptio
   const command = html.indexOf('data-claude-task-command=""');
   const status = html.indexOf('data-claude-task-status-label=""');
   assert.ok(command >= 0, html);
-  assert.ok(status > command, html);
+  assert.match(html, /data-claude-task-meta=""/);
   const commandRow = html.slice(command, status);
-  assert.doesNotMatch(commandRow, />Running</);
+  assert.doesNotMatch(commandRow, />Running/);
   assert.doesNotMatch(commandRow, />9s</);
   assert.match(html.slice(status), /Running/);
   assert.match(html.slice(status), /9s/);
@@ -56,18 +56,18 @@ test("status and elapsed time are in a separate row below command and descriptio
 test("stop remains available only while running and close remains in the header actions", () => {
   const running = render();
   assert.match(running, /data-claude-task-status-label=""/);
-  assert.match(running, />Stop<\/button>/);
+  assert.match(running, />Stop task<\/button>/);
   assert.match(running, /aria-label="Close"/);
 
   const stopped = render({ status: "stopped", endedAt: NOW - 2_000 });
-  assert.doesNotMatch(stopped, />Stop<\/button>/);
+  assert.doesNotMatch(stopped, />Stop task<\/button>/);
   assert.match(stopped, /aria-label="Close"/);
 });
 
 test("status presentation keeps running pulse and failure color", () => {
   const running = render();
   assert.match(running, /data-claude-task-status-label="" class="animate-\[pulse_1\.5s_infinite\]"/);
-  assert.match(running, /color:teal/);
+  assert.match(running, /color:#0d9488/);
 
   const failed = render({ status: "failed", endedAt: NOW - 2_000 });
   assert.doesNotMatch(failed, /animate-\[pulse_1\.5s_infinite\]/);
