@@ -1,6 +1,5 @@
 """facts.replay_verdict: a replayed run that could not run — a Go package
-whose setup or build failed, a compile or import error, a Node module or
-package not found — is not runnable, never red; a run whose assertions
+whose setup or build failed, a compile or import error, a Node module or browser dependency preflight failure, or a package not found — is not runnable, never red; a run whose assertions
 failed stays red; an exit 0 is a pass. The logs under
 testdata/replay/ are the shapes such runs print (an embed pattern with no
 files behind it, a bare package name without its installed dependency)."""

@@ -53,7 +53,7 @@ runtime-state/facts/<n>. Details:
 A replay is red only when its run failed on its assertions: a non-zero
 exit whose output has a line of NOT_RUNNABLE_RULES (a Go package's
 [setup failed] or [build failed], an embed pattern without files, a
-compile error, a missing package, a Node module not found, a Python import
+compile error, a missing package, a Node module not found, a test runner dependency preflight (missing node_modules/ or Playwright Chromium), a Python import
 error) is `not_runnable` — the rule and the first such line — and carries
 no red evidence. Such a run is prepared once and replayed again when the
 test commit's .polyforge/verify-scope.conf declares `base_setup=` lines:

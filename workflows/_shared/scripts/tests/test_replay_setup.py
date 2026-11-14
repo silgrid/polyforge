@@ -146,6 +146,7 @@ class ReplaySetupTest(GitCase):
         self.assertEqual(code, 0, (res["summary"], err))
         self.assertIs(r["red"], True, r)
         self.assertNotIn("not_runnable", r)
+        self.assertIsNotNone(r.get("setup"), r)
         self.assertEqual(r["setup"]["because"]["rule"], "node-browser-preflight")
         self.assertEqual(r["setup"]["commands"][0]["exit_code"], 0)
         self.assertIn("✖ browser preflight reaches assertion after setup", self.log_text(cap, r))
