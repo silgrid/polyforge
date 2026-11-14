@@ -483,6 +483,7 @@ conf_host="$tmp/conf_host"
 : >"$conf_smoke"
 conf_runner=""
 conf_e2e_runner=""
+conf_e2e_start_threshold=""
 # conf_closed is set when a carries key (e2e_runner=, suite_glob=, e2e_map=)
 # is empty or malformed: the report then falls back to the full tier, never
 # to a narrower scope computed as if the key were absent.
@@ -868,6 +869,25 @@ if [ -f "$conf" ]; then
 					conf_e2e_runner="$val"
 				fi
 				;;
+			esac
+			;;
+		e2e_start_threshold)
+			val="$(printf '%s' "$val" | sed 's/[[:space:]]*$//')"
+			case "$val" in
+			'' | *[!0-9]*)
+				diag "conf rejects e2e_start_threshold '$val' (expected a positive integer)"
+			;;
+			*)
+				# r2#3: leading zeros pass the digit scan but read as zero
+				# (any non-empty selection would take the prefix), so reject by value.
+				if [ "$val" -eq 0 ]; then
+					diag "conf rejects e2e_start_threshold '$val' (expected a positive integer)"
+				elif [ -n "$conf_e2e_start_threshold" ]; then
+					diag "conf ignores a second e2e_start_threshold: $line"
+				else
+					conf_e2e_start_threshold="$val"
+				fi
+			;;
 			esac
 			;;
 		suite_glob)
@@ -1958,8 +1978,12 @@ cr_select() {
 # one e2e_runner= command, else the analyzer's default command per suite.
 cr_suite_cmds() {
 	[ -s "$1" ] || return 0
+	prefix=""
+	if [ "$light" -eq 1 ] && [ -n "$conf_e2e_start_threshold" ] && [ "$(wc -l <"$1" | tr -d ' ')" -gt "$conf_e2e_start_threshold" ]; then
+		prefix="E2E_SERVER_MODE=start "
+	fi
 	if [ -n "$conf_e2e_runner" ]; then
-		printf '%s %s\n' "$conf_e2e_runner" "$(tr '\n' ' ' <"$1" | sed 's/ $//')"
+		printf '%s%s %s\n' "$prefix" "$conf_e2e_runner" "$(tr '\n' ' ' <"$1" | sed 's/ $//')"
 	else
 		while IFS= read -r s; do
 			cr_suite_cmd "$s"

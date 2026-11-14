@@ -828,7 +828,7 @@ setting:
   heavy-run admission, on the host under the step's command `PATH`: a
   run that passes there is a test the old code already passed,
   `test_weakened`; one that could not run there — a build, setup,
-  compile or import error, a missing module, `not_runnable` — is not red
+  compile or import error, a missing module or test runner dependency preflight (`node_modules/` or Playwright Chromium missing), `not_runnable` — is not red
   either: its red evidence is missing, `test_weakened` too) and `carries` (an e2e suite
   the build added, or whose run a unit records, whose `carries:` matches
   none of the paths it touched; an edited suite owes a well-formed

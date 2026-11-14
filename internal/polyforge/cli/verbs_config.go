@@ -168,14 +168,15 @@ func listedInScope(ctx *Context, section, name string) bool {
 // configView is one load of the file plus the effective (file+env+flag)
 // view and the raw key presence the source reporting needs.
 type configView struct {
-	path     string
-	raw      []byte
-	exists   bool
-	flat     map[string]string
-	sections []workspaceSection
-	dkvs     []daemonKV
-	file     Config
-	eff      Config
+	path                 string
+	raw                  []byte
+	exists               bool
+	flat                 map[string]string
+	sections             []workspaceSection
+	dkvs                 []daemonKV
+	file                 Config
+	eff                  Config
+	defaultAgentLanguage string
 }
 
 func loadConfigView(ctx *Context) (*configView, error) {
@@ -202,7 +203,17 @@ func loadConfigView(ctx *Context) (*configView, error) {
 	eff := fileCfg
 	applyEnv(&eff)
 	applyConfigFlags(&eff, ctx)
-	return &configView{path: path, raw: raw, exists: exists, flat: flat, sections: sections, dkvs: dkvs, file: fileCfg, eff: eff}, nil
+	// A named Cell's unset agent_language is a live projection of the
+	// default Cell, so config list must read the default file separately
+	// while preserving this Cell's own file for source precedence.
+	defaultAgentLanguage := ""
+	if ctx.cfgScope.profile != "" && ctx.cfgScope.profile != cellcfg.DefaultProfile {
+		defaultPath := filepath.Join(filepath.Dir(path), cellcfg.CellFileName(cellcfg.DefaultProfile))
+		if defaultCfg, defaultErr := LoadFileConfig(defaultPath); defaultErr == nil {
+			defaultAgentLanguage = defaultCfg.Daemon.AgentLanguage
+		}
+	}
+	return &configView{path: path, raw: raw, exists: exists, flat: flat, sections: sections, dkvs: dkvs, file: fileCfg, eff: eff, defaultAgentLanguage: defaultAgentLanguage}, nil
 }
 
 func applyConfigFlags(cfg *Config, ctx *Context) {
@@ -488,6 +499,13 @@ func runConfigList(ctx *Context) error {
 		src := "default"
 		if v.hasDaemonKey(key) {
 			src = "file"
+		} else if key == "agent_language" && ctx.cfgScope.profile != "" && ctx.cfgScope.profile != cellcfg.DefaultProfile {
+			if v.defaultAgentLanguage != "" {
+				val = v.defaultAgentLanguage
+				src = "default Cell"
+			} else {
+				val = stepcall.DefaultLanguage
+			}
 		}
 		value := strValue(val)
 		if n, err := strconv.Atoi(val); err == nil && ConfigSchema(key)["kind"] == "int" {

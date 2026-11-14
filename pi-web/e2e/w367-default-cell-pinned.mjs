@@ -234,7 +234,14 @@ try {
     assert.equal(list.cwd, root, "the server's cwd is not alpha's mapped workspace");
     const ws = await waitForCall((call) => call.args.includes("workspace") && call.args.includes("--cwd"));
     assert.deepEqual(ws.args, ["--profile", "default", "--json", "config", "workspace", "--cwd", project]);
+    // The mapping's project renders in the workspace row's input AND as the
+    // workflow card's project option — the card's own read lands after the
+    // pane's config values (its route chains five pf spawns), so the row
+    // alone can lose the race with this check: wait for it, bounded.
     const mapping = def.getByText("acme", { exact: true });
+    try {
+      await mapping.first().waitFor({ state: "attached", timeout: 10_000 });
+    } catch { /* fall through to the assert's message */ }
     assert.ok(await mapping.count() > 0, "the default Cell's workspace mapping (acme) is not shown");
     assert.equal(await def.getByText("beta", { exact: true }).count(), 0, "alpha's mapping renders in the default Cell's pane");
     for (const call of calls().filter((entry) => entry.args.includes("ops"))) {

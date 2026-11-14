@@ -23,16 +23,16 @@ test("validation and the id check run before any pf spawn call (source order)", 
   const validateCall = search.indexOf("const validated = validateMemorySearch({");
   const capabilityCalls = [...search.matchAll(/await readPolyforgeMemoryCapability\(\)/g)].map((m) => m.index);
   const searchCapability = capabilityCalls[capabilityCalls.length - 1];
-  const projects = search.indexOf("readPolyforgeMemoryProjects(validated.value.cwd)");
+  const projects = search.indexOf("readPolyforgeMemoryProjects(validated.value.cwd, pin)");
   const membership = search.indexOf("scope.projects.includes(validated.value.project)");
-  const spawn = search.indexOf("searchPolyforgeMemory(validated.value)");
+  const spawn = search.indexOf("searchPolyforgeMemory(validated.value, pin)");
   assert.ok(validateCall >= 0 && searchCapability > validateCall, "shape validation precedes the search face's version probe (D4)");
   assert.ok(projects > searchCapability, "the capability gate precedes the config read");
   assert.ok(membership > projects, "membership is judged on the config read that defines the dropdown");
   assert.ok(spawn > membership, "the recall spawn runs last, after every refusal path");
   const idCheck = show.indexOf("isPolyforgeMemoryId(id)");
   const showCapability = show.indexOf("readPolyforgeMemoryCapability()");
-  const showSpawn = show.indexOf("showPolyforgeMemory(id)");
+  const showSpawn = show.indexOf("showPolyforgeMemory(id, pin)");
   assert.ok(idCheck >= 0 && showCapability > idCheck && showSpawn > showCapability, "the id check precedes every spawn on the show route");
 });
 
@@ -77,9 +77,9 @@ test("the browse face (no q, a project) validates, gates, checks membership and 
   const browseGuard = search.indexOf("if (q === null) {");
   const validate = search.indexOf("const browse = validateMemoryBrowse({");
   const capability = search.indexOf("await readPolyforgeMemoryCapability()", validate);
-  const projects = search.indexOf("readPolyforgeMemoryProjects(browse.value.cwd)");
+  const projects = search.indexOf("readPolyforgeMemoryProjects(browse.value.cwd, pin)");
   const membership = search.indexOf("browseScope.projects.includes(browse.value.project)");
-  const spawn = search.indexOf("browsePolyforgeMemory(browse.value)");
+  const spawn = search.indexOf("browsePolyforgeMemory(browse.value, pin)");
   const searchValidate = search.indexOf("const validated = validateMemorySearch({");
   assert.ok(scopeGuard >= 0 && browseGuard > scopeGuard, "the scope face (no project) is decided before the browse face");
   assert.ok(validate > browseGuard && capability > validate, "shape validation precedes the browse face's version probe");

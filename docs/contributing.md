@@ -250,7 +250,11 @@ items that merged.
   `check_requires_env=` / `check_requires_cmd=` / `check_timeout=` /
   `report=` / `rerun=` declarations), the tier triggers `forced_full=`, `module_root=`,
   `exclude=`, the carries keys `e2e_runner=`, `suite_glob=`, `e2e_map=` and
-  `smoke_suite=` (below), the micro lane's `micro_path=` / `micro_check=`
+  `smoke_suite=` (below), the light-tier threshold `e2e_start_threshold=` (not a
+  carries key: a bad value is diagnosed and ignored, never fail-closed), which
+  applies only with `e2e_runner=` in `--light`, and only when the selected
+  suite count is strictly greater than it;
+  the micro lane's `micro_path=` / `micro_check=`
   (the `--micro` bullet below), and the keys the engine only echoes in its JSON report
   (`test_glob=`, `base_setup=`, `runner=complete`, `host_requires=`). Any
   fast-phase line replaces the analyzer's default fast gates and any
@@ -670,8 +674,11 @@ declaration.
   full-tier selection above an uncovered path is listed instead, and every
   other reason here selects the full tail.
 - **The conf keys.** `e2e_runner=` (the runner the selected suites are
-  appended to), `suite_glob=` (replaces discovery), `e2e_map=<glob>=<suite>`
-  (replaces one suite's header outright) and `smoke_suite=<suite>` (the
+  appended to), `e2e_start_threshold=` (a positive light-tier count that
+  prefixes `E2E_SERVER_MODE=start` only when the selected count is strictly
+  greater and `e2e_runner=` is present), `suite_glob=` (replaces discovery),
+  `e2e_map=<glob>=<suite>` (replaces one suite's header outright) and
+  `smoke_suite=<suite>` (the
   full-tier opt-in above), each with its exact form in [the
   config reference](reference/config.md#polyforgeverify-scopeconf--the-verification-bar).
 - **Authored suites.** On `develop`, `build` writes a suite as one of its

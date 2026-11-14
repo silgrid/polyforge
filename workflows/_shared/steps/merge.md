@@ -1,6 +1,6 @@
 ---
 name: merge
-description: Merge the published PRs at the heads the {{verifying_gate}} step ran over with the pre-written merge script (the merge skill's `merge.py` line) and register the landing record the work item is wrapped with; a PR that moved, closed or was refused FAILs back to sync.
+description: Merge the published PRs at the heads the {{verifying_gate}} step ran over with the pre-written merge script (the merge skill's `merge.py` line) and register the landing record the work item is wrapped with; a PR that moved, the default branch gained commits after verification, closed or was refused FAILs back to sync.
 ---
 
 # merge
