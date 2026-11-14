@@ -124,8 +124,8 @@ type WatchExecution struct {
 // carries them (the values only; the view face carries the operators and
 // times too).
 type WatchOverride struct {
-	Models  []string `json:"models,omitempty"`
-	Skip    *bool    `json:"skip,omitempty"`
+	Models []string `json:"models,omitempty"`
+	Skip   *bool    `json:"skip,omitempty"`
 	// Pending marks aspects that ride the daemon-local pending record of
 	// a work item this daemon no longer holds (they land with its next
 	// claim here).
