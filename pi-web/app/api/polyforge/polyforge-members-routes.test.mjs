@@ -23,9 +23,9 @@ test("gate, content type, JSON parse, floor, mapping and validation all precede 
     /hasJsonContentType\(request\)/,
     /request\.json\(\)/,
     /readPolyforgeMessagesCapability\(\)/,
-    /validateMembershipInput\(body, await readPolyforgeMappedProjects\(\)\)/,
+    /validateMembershipInput\(body, await readPolyforgeMappedProjects\(pin\)\)/,
     /if \(!validated\.ok\)/,
-    /changePolyforgeMembership\(validated\.value\)/,
+    /changePolyforgeMembership\(validated\.value, pin\)/,
   ].map((pattern) => route.search(pattern));
   for (const [index, at] of order.entries()) assert.ok(at >= 0, `step ${index} is present`);
   for (let i = 1; i < order.length; i++) assert.ok(order[i - 1] < order[i], `step ${i - 1} runs before step ${i}`);
@@ -42,7 +42,8 @@ test("statuses: 400 refusals, pf's 4xx, 200 {error} for an unreachable pf — ne
 });
 
 test("the lib spawns exactly the CLI's add/remove argv, add always as writer", () => {
-  assert.match(lib, /\["--json", "projects", "members", "add", input\.project, "--user", input\.userId, "--role", "writer"\]/);
+  assert.match(lib, /\[\.\.\.pin,\n    \.\.\./, "the membership argv rides the pinned prefix");
+  assert.match(lib, /\["--json", "projects", "members", "add", input\.project, "--user", input\.userId, "--role", "writer"\]/, "the add argv keeps its shape");
   assert.match(lib, /\["--json", "projects", "members", "remove", input\.project, "--user", input\.userId\]/);
   assert.match(lib, /\{ timeout: WRITE_TIMEOUT_MS \}/);
   assert.doesNotMatch(lib, /writeFile|fetch\(/, "no config file write and no direct aihub call");

@@ -21,7 +21,10 @@ import {
  * Server-side reads for the Memory tab and its browse mode.
  * Every fact comes from
  * a `pf` subprocess through `execFileAsync` (no shell); every argv value is
- * validated here, before any spawn. The HTTP faces under
+ * validated here, before any spawn. Every data call carries the pinned
+ * Cell scope's argv prefix (`pin`, polyforge#18 AC4): the Cell pf resolves
+ * for the tab's cwd, named explicitly — never the Cell a spawn's ambient
+ * PF_PROFILE or cwd would pick. The HTTP faces under
  * `app/api/polyforge/memory/**` only degrade and answer.
  *
  * The sanitizers are the only passport off this module: a hit keeps exactly
@@ -337,14 +340,14 @@ export async function readPolyforgeMemoryCapability(): Promise<PolyforgeMemoryCa
  *  unmapped cwd answers `{ mapped: false }` with no second read. A spawn
  *  failure throws (the route degrades it); an unparsable answer maps to
  *  nothing, never a guess. */
-export async function readPolyforgeMemoryProjects(cwd: string): Promise<{ mapped: boolean; projects: string[] }> {
-  const workspaceAnswer = await runPfJson(["--json", "config", "workspace", "--cwd", cwd]);
+export async function readPolyforgeMemoryProjects(cwd: string, pin: string[] = []): Promise<{ mapped: boolean; projects: string[] }> {
+  const workspaceAnswer = await runPfJson([...pin, "--json", "config", "workspace", "--cwd", cwd]);
   const mapped = !!(workspaceAnswer && typeof workspaceAnswer === "object"
     && (workspaceAnswer as { mapped?: unknown }).mapped === true);
   if (!mapped) return { mapped: false, projects: [] };
   const workspace = str((workspaceAnswer as { workspace?: unknown }).workspace);
   if (!workspace) return { mapped: false, projects: [] };
-  const listAnswer = await runPfJson(["--json", "config", "list"]);
+  const listAnswer = await runPfJson([...pin, "--json", "config", "list"]);
   const items = listAnswer && typeof listAnswer === "object" && Array.isArray((listAnswer as { items?: unknown }).items)
     ? (listAnswer as { items: unknown[] }).items
     : [];
@@ -362,23 +365,23 @@ export async function readPolyforgeMemoryProjects(cwd: string): Promise<{ mapped
 /** The search face: exactly one `pf recall` (the argv of buildRecallArgv).
  *  The caller has validated the shape and the capability; membership is the
  *  route's, so this function only transports and sanitizes. */
-export async function searchPolyforgeMemory(input: PolyforgeMemorySearchInput): Promise<PolyforgeMemoryHit[]> {
-  const raw = await runPfJson(buildRecallArgv(input));
+export async function searchPolyforgeMemory(input: PolyforgeMemorySearchInput, pin: string[] = []): Promise<PolyforgeMemoryHit[]> {
+  const raw = await runPfJson([...pin, ...buildRecallArgv(input)]);
   return sanitizeMemorySearchAnswer(raw);
 }
 
 /** The browse face: exactly one `pf recall` with no query
  *  (the argv of buildBrowseRecallArgv). Validation, capability and
  *  membership are the caller's; this only transports and sanitizes. */
-export async function browsePolyforgeMemory(input: PolyforgeMemoryBrowseInput): Promise<PolyforgeMemoryPage> {
-  const raw = await runPfJson(buildBrowseRecallArgv(input));
+export async function browsePolyforgeMemory(input: PolyforgeMemoryBrowseInput, pin: string[] = []): Promise<PolyforgeMemoryPage> {
+  const raw = await runPfJson([...pin, ...buildBrowseRecallArgv(input)]);
   return sanitizeMemoryBrowseAnswer(raw);
 }
 
 /** The single-memory face: exactly one `pf memory show`, body capped. A
  *  pf-side miss (MEM-404) throws pf's own text; a malformed upstream answer
  *  degrades to null, never a guess. */
-export async function showPolyforgeMemory(id: string): Promise<PolyforgeMemoryDetail | null> {
-  const raw = await runPfJson(["--json", "memory", "show", id]);
+export async function showPolyforgeMemory(id: string, pin: string[] = []): Promise<PolyforgeMemoryDetail | null> {
+  const raw = await runPfJson([...pin, "--json", "memory", "show", id]);
   return sanitizeMemoryDetail(raw);
 }

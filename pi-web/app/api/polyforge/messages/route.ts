@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { readPolyforgeResolvedCell } from "@/lib/polyforge-cells";
+import { resolvePolyforgeCellScope } from "@/lib/polyforge-cells";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import {
   PolyforgeMessagesError,
@@ -38,9 +38,11 @@ export async function GET(request: Request) {
   }
   try {
     const withGroups = new URL(request.url).searchParams.get("groups") !== "0";
-    // the Cell the conversations are read from, named in the tab
-    const [messages, cell] = await Promise.all([readPolyforgeMessages({ withGroups }), readPolyforgeResolvedCell()]);
-    return NextResponse.json({ ...messages, ...(cell ? { cell } : {}) });
+    // the pinned Cell scope: the Cell pf resolves, named in the tab and
+    // carried by every pf call of this request (polyforge#18)
+    const cellScope = await resolvePolyforgeCellScope();
+    const messages = await readPolyforgeMessages({ withGroups, pin: cellScope.pin.prefix });
+    return NextResponse.json({ ...messages, ...(cellScope.cell ? { cell: cellScope.cell } : {}) });
   } catch {
     // A capability probe can only throw unexpectedly; keep the read
     // degraded (200, capable so an open conversation stays rendered) and
@@ -82,7 +84,8 @@ export async function POST(request: Request) {
     );
   }
   try {
-    const message = await sendPolyforgeMessage(validated.value);
+    const pin = (await resolvePolyforgeCellScope()).pin.prefix;
+    const message = await sendPolyforgeMessage(validated.value, pin);
     return NextResponse.json({ ok: true, message });
   } catch (error) {
     const failure = error instanceof PolyforgeMessagesError

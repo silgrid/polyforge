@@ -149,13 +149,17 @@ func runWorkflows(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if err != nil {
 			return fmt.Errorf("workflows: %w", err)
 		}
-		v, err := loadConfigView(ctx)
+		// The --cwd workspace resolves against the routed Cell's mapping
+		// (profile.go's routedCellPlanLocal), never the Host file's alone:
+		// a workspace mapped only in a named Cell's file answers through
+		// that Cell (polyforge#18).
+		plan, _, err := ctx.routedCellPlanLocal()
 		if err != nil {
 			return err
 		}
-		if ws := v.eff.Mapping.MatchWorkspace(abs); ws != "" {
+		if ws := plan.MatchWorkspace(abs); ws != "" {
 			doc.Workspace = &ws
-			doc.Projects = append(doc.Projects, v.eff.Mapping.ProjectsOf(ws)...)
+			doc.Projects = append(doc.Projects, plan.ProjectsOf(ws)...)
 		}
 	}
 	ws := ""

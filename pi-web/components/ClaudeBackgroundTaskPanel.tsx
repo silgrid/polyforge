@@ -105,29 +105,35 @@ export function ClaudeBackgroundTaskPanel({ task, onStop, onReadOutput, onClose,
       aria-label={label}
       style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, maxHeight: "min(60vh, 560px)", overflow: "hidden", fontSize: 12, borderRadius: 8, border: "1px solid rgba(13,148,136,0.35)", borderLeftColor: task.status === "failed" ? "#f87171" : CLAUDE_TASK_COLOR, background: "var(--bg-panel)", boxShadow: "0 6px 24px rgba(0,0,0,0.18)" }}
     >
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 7, flexShrink: 0, minWidth: 0, padding: "8px 8px 6px 10px" }}>
-        <ClaudeTaskKindBadge task={task} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div data-claude-task-command="" style={{ color: "var(--text)", fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 72, overflowY: "auto" }}>{command}</div>
-          {description && <div style={{ color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={description}>{description}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0, minWidth: 0, padding: "8px 8px 6px 10px" }}>
+        <div data-claude-task-header-row="" style={{ display: "flex", alignItems: "flex-start", gap: 7, minWidth: 0 }}>
+          <ClaudeTaskKindBadge task={task} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div data-claude-task-command="" style={{ color: "var(--text)", fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 72, overflowY: "auto" }}>{command}</div>
+            {description && <div style={{ color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={description}>{description}</div>}
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 4, flexShrink: 0 }}>
+            {running && (
+              <button type="button" onClick={() => void stop()} disabled={stopping} style={{ ...HEADER_BUTTON, cursor: stopping ? "default" : "pointer" }}>{t("claudeTask.stop")}</button>
+            )}
+            <button type="button" onClick={onClose} aria-label={t("claudeSubagent.closePanel")} title={t("claudeSubagent.closePanel")} style={{ ...HEADER_BUTTON, padding: "2px 6px", border: "none" }}>
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+                <line x1="2" y1="2" x2="8" y2="8" />
+                <line x1="8" y1="2" x2="2" y2="8" />
+              </svg>
+            </button>
+          </div>
         </div>
-        <span
-          data-claude-task-status-label=""
-          className={running ? "animate-[pulse_1.5s_infinite]" : undefined}
-          style={{ flexShrink: 0, color: running ? CLAUDE_TASK_COLOR : task.status === "failed" ? "#f87171" : "var(--text-dim)" }}
-        >
-          {status}
-        </span>
-        <span style={{ flexShrink: 0, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{formatTurnDuration(claudeBackgroundTaskElapsedMs(task, now))}</span>
-        {running && (
-          <button type="button" onClick={() => void stop()} disabled={stopping} style={{ ...HEADER_BUTTON, cursor: stopping ? "default" : "pointer" }}>{t("claudeTask.stop")}</button>
-        )}
-        <button type="button" onClick={onClose} aria-label={t("claudeSubagent.closePanel")} title={t("claudeSubagent.closePanel")} style={{ ...HEADER_BUTTON, padding: "2px 6px", border: "none" }}>
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
-            <line x1="2" y1="2" x2="8" y2="8" />
-            <line x1="8" y1="2" x2="2" y2="8" />
-          </svg>
-        </button>
+        <div data-claude-task-meta="" style={{ display: "flex", alignItems: "center", gap: 7, paddingLeft: 0 }}>
+          <span
+            data-claude-task-status-label=""
+            className={running ? "animate-[pulse_1.5s_infinite]" : undefined}
+            style={{ color: running ? CLAUDE_TASK_COLOR : task.status === "failed" ? "#f87171" : "var(--text-dim)" }}
+          >
+            {status}
+          </span>
+          <span style={{ color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{formatTurnDuration(claudeBackgroundTaskElapsedMs(task, now))}</span>
+        </div>
       </div>
       {stopError && <div data-claude-task-stop-error="" style={{ flexShrink: 0, padding: "0 10px 6px", color: "#f87171" }}>{t("claudeTask.stopFailed", { error: stopError })}</div>}
       <div data-claude-task-output="" style={{ flex: 1, minHeight: 0, overflow: "auto", borderTop: "1px solid rgba(13,148,136,0.2)", padding: "6px 10px 8px" }}>
