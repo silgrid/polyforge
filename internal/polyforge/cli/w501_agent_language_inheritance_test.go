@@ -10,7 +10,7 @@ import (
 func TestW501NamedConfigListShowsInheritedAgentLanguage(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
-	host := writeFile(t, dir+"/cli.toml", "agent_language = \"zh-CN\"\n")
+	host := writeFile(t, dir+"/cli.toml", "[daemon]\nagent_language = \"zh-CN\"\n")
 	named := writeFile(t, dir+"/cli-alpha.toml", "server = \"http://hub:1\"\napi_key = \"key\"\n")
 	_ = host
 	ctx := &Context{JSON: false, Stdout: new(bytes.Buffer), Stderr: new(bytes.Buffer), cfgScope: configScope{path: named, profile: "alpha"}}
@@ -23,6 +23,22 @@ func TestW501NamedConfigListShowsInheritedAgentLanguage(t *testing.T) {
 	}
 	if strings.Contains(got, "agent_language = <unset>") {
 		t.Fatalf("named Cell list still showed unset language:\n%s", got)
+	}
+}
+
+func TestW501NamedConfigListShowsDefaultWhenBothCellsUnset(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	host := writeFile(t, dir+"/cli.toml", "")
+	named := writeFile(t, dir+"/cli-alpha.toml", "server = \"http://hub:1\"\napi_key = \"key\"\n")
+	_ = host
+	ctx := &Context{Stdout: new(bytes.Buffer), Stderr: new(bytes.Buffer), cfgScope: configScope{path: named, profile: "alpha"}}
+	if err := runConfigList(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := ctx.Stdout.(*bytes.Buffer).String()
+	if !strings.Contains(got, "agent_language = en (source: default)") {
+		t.Fatalf("both unset must show effective en:\n%s", got)
 	}
 }
 
