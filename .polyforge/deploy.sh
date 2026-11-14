@@ -1163,17 +1163,31 @@ wait_version() { # wait_version <want>  -> 0 when running and version==want
 }
 
 # shellcheck disable=SC2016
-# build_image <image> <binary-on-server> <expected-version>: LEGACY rollback
+# build_image <image> <binary-on-server> <expected-version>: LEGACY fallback
 # path only - builds on the server in a fresh temp context (service keeps
 # running), then verifies. The release image itself is never built here.
-# Only a release older than the GHCR image takes this path, and every such
-# release predates the consolidation: its deploy/Dockerfile (DOCKERFILE, read
-# from the OLD tag) copies the binary named `aihub` (TRANSITION, see header).
+# Reached only when the running container's image did not verify as the old
+# version (step 2): a release from before the GHCR image existed, or one
+# whose running image has drifted. The saved old binary is placed in the
+# context under the name the OLD release's deploy/Dockerfile copies - its
+# unique COPY source (`pf` since the consolidation, `aihub` before); a
+# hardcoded context name is exactly what this fallback once got wrong.
+# Delete this function (and the step-0 fallback that reads the old release's
+# deploy/Dockerfile) once no release without a GHCR image remains a deploy
+# or rollback target.
 build_image() {
   img="$1"; bin="$2"; want="$3"
   [ -n "$DOCKERFILE" ] || die "no deploy/Dockerfile available for the legacy rollback image build"
+  # the context file must carry the name the old Dockerfile copies: its
+  # unique COPY source. 0 or several COPY lines cannot name it - refuse
+  # rather than guess.
+  src="$(sed -n 's|^COPY \([^ ]*\) /.*|\1|p' "$DOCKERFILE")"
+  case "$(printf '%s\n' "$src" | grep -c .)" in
+    1) ;;
+    *) die "cannot name the legacy build's context file: the old release's deploy/Dockerfile has no unique COPY source (need exactly one COPY <src> /... line)" ;;
+  esac
   ctx="$SRV_ROOT/aihub-build-$TS-$$"
-  rssh "mkdir -p '$ctx' && cp '$bin' '$ctx/aihub'" || die "cannot prepare build context $ctx"
+  rssh "mkdir -p '$ctx' && cp '$bin' '$ctx/$src'" || die "cannot prepare build context $ctx"
   scp -o BatchMode=yes "$DOCKERFILE" "$AIHUB_HOST:$ctx/Dockerfile" >"$WORK/scpdf.log" 2>&1 || die "scp Dockerfile failed: $(cat "$WORK/scpdf.log")"
   if ! rssh docker build -t "$img" "$ctx" >"$WORK/build.log" 2>&1; then
     rssh "rm -rf '$ctx'" || true
