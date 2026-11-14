@@ -391,6 +391,29 @@ func (s *Server) mustWrite(idn *identity, projectID string) error {
 	return err
 }
 
+// refuseDeactivated answers the typed read-only refusal of a deactivated
+// project (polyforge#30, AC2): every write that does work on the project
+// — creating or modifying work items, comments, submits and claims (the
+// auto-claim rides the same claim door), the terminal verdicts, resume
+// execution, dependency edges, the machine face's attrs write and memory
+// writes — answers CORE-403 with the PROJECT_DEACTIVATED reason and a
+// detail naming the project, while the reads keep answering. It is
+// called AFTER the route's own authorization, so a caller without access
+// keeps the route's existing refusal shape (the concealed 404, the
+// membership 403); a caller WITH access — the maintainer, the admin, the
+// daemon's writer key, the machine face — meets this gate instead.
+func (s *Server) refuseDeactivated(projectID string) error {
+	var name, status string
+	if err := s.DB.QueryRow(`SELECT name, status FROM projects WHERE id=?1`, projectID).Scan(&name, &status); err != nil {
+		return err
+	}
+	if status == api.ProjectStatusDeactivated {
+		return core.Fail(api.ErrCoreForbidden, "PROJECT_DEACTIVATED",
+			"project %s is deactivated: it is read-only, restore it first (pf projects restore %s)", name, name)
+	}
+	return nil
+}
+
 // mustRead enforces read access to projectID, hiding the object behind
 // the caller-supplied not-found detail on denial.
 func (s *Server) mustRead(idn *identity, projectID, notFound string, args ...any) error {
@@ -589,6 +612,9 @@ func (s *Server) hCreateWI(w http.ResponseWriter, r *http.Request, idn *identity
 	if err := s.mustWrite(idn, projectID); err != nil {
 		return err
 	}
+	if err := s.refuseDeactivated(projectID); err != nil {
+		return err
+	}
 	for _, ref := range req.After {
 		if _, err := s.visibleWI(idn, ref); err != nil {
 			return err
@@ -713,6 +739,9 @@ func (s *Server) hPatchWI(w http.ResponseWriter, r *http.Request, idn *identity)
 	if err := g.requireWrite(); err != nil {
 		return err
 	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
+		return err
+	}
 	var fields map[string]json.RawMessage
 	if err := decodeBody(r, &fields); err != nil {
 		return err
@@ -738,6 +767,9 @@ func (s *Server) hCancelWI(w http.ResponseWriter, r *http.Request, idn *identity
 	}
 	basis, machine, err := s.blockedDecision(g, "cancel", "cancel", "cancel requires reporter, maintainer or admin")
 	if err != nil {
+		return err
+	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
 		return err
 	}
 	// Optional body: the owner's verbatim reason and the owner message it
@@ -767,6 +799,9 @@ func (s *Server) hWrapWI(w http.ResponseWriter, r *http.Request, idn *identity) 
 	}
 	if !g.ownerDecision() {
 		return core.Fail(api.ErrAuthForbidden, "", "wrap requires reporter, maintainer or admin")
+	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
+		return err
 	}
 	var req api.WrapRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -829,6 +864,11 @@ func (s *Server) hSessionClaim(w http.ResponseWriter, r *http.Request, idn *iden
 	if err := g.requireWrite(); err != nil {
 		return err
 	}
+	// The deactivation gate runs BEFORE the claim gate, so a refused
+	// claim creates no bare repo (the same reason ClaimGate leads).
+	if err := s.refuseDeactivated(g.projectID); err != nil {
+		return err
+	}
 	var req api.SessionClaimRequest
 	if err := decodeBody(r, &req); err != nil {
 		return err
@@ -879,6 +919,9 @@ func (s *Server) hSessionAttach(w http.ResponseWriter, r *http.Request, idn *ide
 	if err := g.requireWrite(); err != nil {
 		return err
 	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
+		return err
+	}
 	var req api.SessionAttachRequest
 	if err := decodeBody(r, &req); err != nil {
 		return err
@@ -903,6 +946,9 @@ func (s *Server) hForceEndSession(w http.ResponseWriter, r *http.Request, idn *i
 		return err
 	}
 	if err := g.requireForceEnd(); err != nil {
+		return err
+	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
 		return err
 	}
 	var req api.ForceEndSessionRequest
@@ -932,6 +978,9 @@ func (s *Server) hSessionEnd(w http.ResponseWriter, r *http.Request, idn *identi
 	if err := g.requireWrite(); err != nil {
 		return err
 	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
+		return err
+	}
 	var req api.SessionEndRequest
 	if err := decodeBody(r, &req); err != nil {
 		return err
@@ -955,6 +1004,9 @@ func (s *Server) hWriteAttrs(w http.ResponseWriter, r *http.Request, idn *identi
 		return err
 	}
 	if err := g.requireWrite(); err != nil {
+		return err
+	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
 		return err
 	}
 	var req api.AttrsWriteRequest
@@ -989,6 +1041,9 @@ func (s *Server) hResumeBlockedWI(w http.ResponseWriter, r *http.Request, idn *i
 	if err != nil {
 		return err
 	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
+		return err
+	}
 	// The body is optional: an empty one is a plain resume.
 	var req api.ResumeBlockedRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -1011,6 +1066,9 @@ func (s *Server) hAddDep(w http.ResponseWriter, r *http.Request, idn *identity) 
 		return err
 	}
 	if err := g.requireWrite(); err != nil {
+		return err
+	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
 		return err
 	}
 	blocked := g.id
@@ -1060,6 +1118,9 @@ func (s *Server) hDelDep(w http.ResponseWriter, r *http.Request, idn *identity) 
 		return err
 	}
 	if err := g.requireWrite(); err != nil {
+		return err
+	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
 		return err
 	}
 	blocked := g.id
@@ -1354,6 +1415,11 @@ func (s *Server) hCreateMemory(w http.ResponseWriter, r *http.Request, idn *iden
 	if err := s.memWriteAllowed(idn, projectID); err != nil {
 		return err
 	}
+	// A deactivated project accepts no memory writes (AC2): the gate
+	// follows the write-permission check, like the work-item doors.
+	if err := s.refuseDeactivated(projectID); err != nil {
+		return err
+	}
 	// The attributing work item accepts every WI spelling the other faces
 	// do (id or "<project>#<seq>" slug) and is stored as the canonical
 	// id; an unknown or unreadable one is a typed CORE-404, never the
@@ -1453,6 +1519,11 @@ func (s *Server) hRedactMemory(w http.ResponseWriter, r *http.Request, idn *iden
 	}
 	if e.OwnerUserID != idn.UserID && idn.Role != "admin" {
 		return core.Fail(api.ErrMemForbidden, "", "only the owner (or admin) can redact")
+	}
+	// Redaction is a memory write: a deactivated project accepts none
+	// (AC2) — the gate follows the ownership check.
+	if err := s.refuseDeactivated(e.ProjectID); err != nil {
+		return err
 	}
 	if err := s.Mems.Redact(memID); err != nil {
 		return err

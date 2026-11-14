@@ -26,6 +26,9 @@ func (s *Server) hAddWIComment(w http.ResponseWriter, r *http.Request, idn *iden
 	if err := g.requireWrite(); err != nil {
 		return err
 	}
+	if err := s.refuseDeactivated(g.projectID); err != nil {
+		return err
+	}
 	var req api.AddCommentRequest
 	if err := decodeBodyStrict(r, &req); err != nil {
 		return err

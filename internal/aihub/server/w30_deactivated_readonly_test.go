@@ -98,9 +98,9 @@ func w30AssertDeactivated(t *testing.T, door string, code int, body []byte) {
 		t.Fatalf("%s: %d %s, want 403", door, code, body)
 	}
 	var refusal struct {
-		Code  string          `json:"code"`
-		Detail string         `json:"detail"`
-		Extra json.RawMessage `json:"extra"`
+		Code   string          `json:"code"`
+		Detail string          `json:"detail"`
+		Extra  json.RawMessage `json:"extra"`
 	}
 	if err := json.Unmarshal(body, &refusal); err != nil {
 		t.Fatalf("%s: decode refusal: %v (%s)", door, err, body)
