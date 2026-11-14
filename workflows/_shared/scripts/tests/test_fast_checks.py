@@ -71,6 +71,8 @@ class FastChecksCase(GitCase):
         argv = [sys.executable, FAST_CHECKS, "--repo", repo, "--capsule", self.capsule,
                 "--engine", ENGINE, "--deadline", "10m", "--out", self.out, *extra]
         c = subprocess.run(argv, capture_output=True, text=True, env=env if env is not None else os.environ)
+        if not os.path.exists(self.out):
+            return c.returncode, None
         with open(self.out, encoding="utf-8") as f:
             return c.returncode, json.load(f)
 
