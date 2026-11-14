@@ -36,6 +36,22 @@ import (
 // errOverrideNotImplemented is the stub's refusal, until u4's impl lands.
 var errOverrideNotImplemented = errors.New("runtime: the step-override write is not implemented yet")
 
+// pendingOverridesPath is the daemon-local pending record's path. Stub
+// (polyforge#25 u4).
+func (r *Runtime) pendingOverridesPath() string { return "" }
+
+// savePendingOverrides records work item wi's pending overlay entries.
+// Stub (polyforge#25 u4).
+func (r *Runtime) savePendingOverrides(wi string, entries map[string]*capsule.StepOverride) error {
+	return errOverrideNotImplemented
+}
+
+// mergePendingAspects merges pending entries over the capsule's overlay
+// record, per aspect. Stub (polyforge#25 u4).
+func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.StepOverride) capsule.StepOverrides {
+	return ov
+}
+
 // OverrideChange is one overlay write as the daemon's route validated it:
 // exactly one action, the candidate chain already parsed and normalized.
 type OverrideChange struct {
