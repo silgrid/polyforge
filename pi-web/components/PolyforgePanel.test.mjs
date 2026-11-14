@@ -1168,12 +1168,35 @@ test(" DAG: a skipped step is grayed", () => {
   assert.match(zhCNSource, /"polyforge\.stepStatus\.skipped": "已跳过",/);
 });
 
-test("polyforge#24: DAG selects one step and filters progress while preserving reruns and empty state", () => {
+test("polyforge#24: selectProgressStep keeps every matching rerun block and empties unstarted steps", () => {
+  const helper = source.slice(source.indexOf("export function selectProgressStep"), source.indexOf("\n}\n", source.indexOf("export function selectProgressStep")) + 2).replace(/export /g, "");
+  const context = vm.createContext({ progressBlocks: (lines) => {
+    const starts = lines.map((line, index) => line.event === "step_started" ? index : -1).filter((index) => index >= 0);
+    return { blocks: starts.map((start, index) => {
+      const end = starts[index + 1] ?? lines.length;
+      const match = /▶ ([^ #]+) /.exec(lines[start].text);
+      return { start, count: end - start, step: match?.[1] };
+    }) };
+  }});
+  vm.runInContext(stripTypeScriptTypes(helper), context);
+  const lines = [
+    { id: "lead", kind: "narration", text: "lead" },
+    { id: "s1", kind: "event", event: "step_started", text: "▶ spec #1 · pi" },
+    { id: "r1", kind: "narration", text: "round one" },
+    { id: "s2", kind: "event", event: "step_started", text: "▶ spec #2 · claude" },
+    { id: "r2", kind: "narration", text: "round two" },
+    { id: "c1", kind: "event", event: "step_started", text: "▶ code #1 · pi" },
+  ];
+  const snapshot = { available: true, lines, omitted: 0 };
+  assert.deepEqual(context.selectProgressStep(snapshot, "spec").lines.map((line) => line.id), ["s1", "r1", "s2", "r2"]);
+  assert.deepEqual(context.selectProgressStep(snapshot, "review").lines, []);
+});
+
+test("polyforge#24: DAG selection wiring follows current step until a manual choice", () => {
   assert.match(source, /const \[selectedStep, setSelectedStep\] = useState<string \| null>\(null\);/);
   assert.match(source, /const \[selectedStepManual, setSelectedStepManual\] = useState\(false\);/);
   assert.match(source, /onClick=\{\(\) => \{ setSelectedStep\(node\.id\); setSelectedStepManual\(true\); \}\}/);
   assert.match(source, /data-pf-step-selected=\{selectedStep === node\.id\}/);
-  assert.match(source, /const selectedProgressSnapshot = selectProgressStep\(progressSnapshot, selectedStep\);/);
   assert.match(source, /const selectedProgressSnapshot = selectProgressStep\(progressSnapshot, selectedStep\);/);
   assert.match(source, /function selectProgressStep\(snapshot: PolyforgeProgressSnapshot \| null, step: string \| null\)/);
   assert.match(source, /layout\.blocks\.filter\(\(block\) => block\.step === step\)/);
@@ -1182,3 +1205,4 @@ test("polyforge#24: DAG selects one step and filters progress while preserving r
   assert.match(source, /const defaultStep = watchStatus\?\.currentStep \?\? latestProgressStep/);
   assert.match(source, /title=\{`\$\{node\.id\} · \$\{stepStatusLabel\(node\.status\)\}\$\{timing \? ` · \$\{formatEventTime\(timing\.startedAt\)\}` : ""\}`\}/);
 });
+

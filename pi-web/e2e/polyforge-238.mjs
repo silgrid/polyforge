@@ -1,4 +1,4 @@
-// carries: hooks/usePolyforgeProgress*, app/api/polyforge/progress/route.ts
+// carries: hooks/usePolyforgeProgress*, app/api/polyforge/progress/route.ts, components/PolyforgePanel*
 // — Polyforge job detail v2: summary → DAG → whole-job execution progress.
 //
 // Authored PRE-CODE against artifacts/spec.md (Acceptance criteria + `####
@@ -240,6 +240,11 @@ const waitFor = createWaitFor({ every: 150 });
 const tick = (page, ms) => (ms > 0 ? page.clock.runFor(ms) : Promise.resolve());
 const progressBlock = (page) => dock(page).locator("[data-pf-progress]").first();
 const summaryBlock = (page) => dock(page).locator("[data-pf-detail-summary]").first();
+async function selectStepForProgress(page, stepId) {
+  const node = dock(page).getByRole("listitem", { name: new RegExp(`^${stepId} ·`) }).first();
+  await node.click();
+  await waitFor(async () => (await node.getAttribute("data-pf-step-selected")) === "true", `${stepId} becomes selected`);
+}
 // the block mounts before the watch snapshot that carries the
 // summary fields lands; under `next start` a read right after mount beats it.
 const summaryLanded = (page) => summaryBlock(page).filter({ hasText: "E2E-S238-SUMMARY-ERROR" }).waitFor({ timeout: UI_WAIT });
@@ -521,6 +526,7 @@ try {
       line("d4", "narration", "E2E-S238-SECOND"),
     ]);
     await openUI(page);
+    await selectStepForProgress(page, "spec");
     const blocks = progressBlock(page).locator("[data-pf-progress-block]");
     await waitFor(async () => (await blocks.count()) === 2, "two spawn blocks render");
     const expanded = () => blocks.locator("[data-pf-progress-block-toggle]").evaluateAll((els) => els.map((el) => el.getAttribute("aria-expanded")));
@@ -539,26 +545,47 @@ try {
     assert.match(await blocks.nth(2).locator("[data-pf-progress-block-toggle]").innerText(), /spec #2 ▶ · 2 lines/, "the new running block is marked ▶");
   }));
 
-  await check("S238-23", () => withPage({}, async (page) => {
+  await check("S238-29", () => withPage({}, async (page) => {
+    page.__progress.body = progressBody(NAV_LINES);
+    await openUI(page);
+    const code = dock(page).getByRole("listitem", { name: /^code ·/ }).first();
+    await waitFor(async () => (await code.getAttribute("data-pf-step-selected")) === "true", "current step is selected by default");
+    const progress = progressBlock(page);
+    assert.ok((await text(progress)).includes("E2E-NAV-CODE"), "default current step shows its record");
+    assert.ok(!(await text(progress)).includes("E2E-NAV-GRILL"), "default view hides other steps");
+    await selectStepForProgress(page, "spec");
+    await waitFor(async () => (await text(progress)).includes("E2E-NAV-SPEC-1") && (await text(progress)).includes("E2E-NAV-SPEC-2"), "both selected step reruns render");
+    assert.ok(!(await text(progress)).includes("E2E-NAV-CODE"), "selected step hides current step record");
+    const selectedStyle = await dock(page).getByRole("listitem", { name: /^spec ·/ }).first().evaluate((el) => ({ selected: el.getAttribute("data-pf-step-selected"), outline: getComputedStyle(el).outlineStyle }));
+    assert.equal(selectedStyle.selected, "true", "manual selection is marked");
+    assert.notEqual(selectedStyle.outline, "none", "manual selection has visible styling");
+    await page.evaluate(() => {});
+    await waitFor(async () => (await dock(page).getByRole("listitem", { name: /^spec ·/ }).first().getAttribute("data-pf-step-selected")) === "true", "manual selection remains selected");
+    await dock(page).getByRole("listitem", { name: /^review ·/ }).first().click();
+    await waitFor(async () => /尚未运行|Not run yet/.test(await text(progress)), "unstarted step shows its empty state");
+  }));
+
+
     page.__progress.body = progressBody(blockLines());
     await openUI(page);
+    await selectStepForProgress(page, "spec");
     await progressBlock(page).waitFor({ timeout: UI_WAIT });
     const blocks = progressBlock(page).locator("[data-pf-progress-block]");
     await waitFor(async () => (await blocks.count()) === 3, "three spawn blocks render");
     const headers = await blocks.locator("[data-pf-progress-block-toggle]").evaluateAll((els) => els.map((el) => el.textContent));
-    assert.match(headers[0], /▸ grill #1 ✓ · 3 lines/, `the first header carries step, spawn, status and count (${headers[0]})`);
-    assert.match(headers[1], /▸ spec #1 ✕ · 3 lines/, `the failed block's header (${headers[1]})`);
-    assert.match(headers[2], /▾ spec #2 \? · \d+ lines/, `the newest needs-input block's header (${headers[2]})`);
-    assert.deepEqual(await blocks.locator("[data-pf-progress-block-toggle]").evaluateAll((els) => els.map((el) => el.getAttribute("aria-expanded"))), ["false", "false", "true"], "only the newest block starts expanded");
+    assert.match(headers[0], /▸ spec #1 ✕ · 3 lines/, `the first selected block carries step, status and count (${headers[0]})`);
+    assert.match(headers[1], /▾ spec #2 \? · \d+ lines/, `the selected rerun header (${headers[1]})`);
+    assert.deepEqual(await blocks.locator("[data-pf-progress-block-toggle]").evaluateAll((els) => els.map((el) => el.getAttribute("aria-expanded"))), ["false", "true"], "only the newest selected block starts expanded");
     const openText = await text(progressBlock(page));
     assert.ok(openText.includes("E2E-S238-LEADING"), "lines before the first start stay unfolded");
-    assert.ok(openText.includes("E2E-S238-BLOCK-3") && openText.includes("E2E-S238-BLOCK-3-TAIL-40"), "the newest block's body is visible");
-    assert.ok(!openText.includes("E2E-S238-BLOCK-1") && !openText.includes("E2E-S238-BLOCK-2"), "older block bodies are folded");
+    assert.ok(openText.includes("E2E-S238-BLOCK-3") && openText.includes("E2E-S238-BLOCK-3-TAIL-40"), "the selected step's newest block body is visible");
+    assert.ok(!openText.includes("E2E-S238-BLOCK-1"), "other step bodies are filtered out");
     // The no-truncation identity: leading lines plus every header count are
     // exactly the snapshot's line count, and expanding every block shows every
     // line's full text.
     const counts = await blocks.evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-pf-progress-block-count"))));
     const total = blockLines().length;
+    assert.equal(1 + counts.reduce((sum, count) => sum + count, 0), total, `leading + header counts = ${total} (${counts})`);
     assert.equal(1 + counts.reduce((sum, count) => sum + count, 0), total, `leading + header counts = ${total} (${counts})`);
     for (const header of await blocks.locator("[data-pf-progress-block-toggle]").all()) {
       if ((await header.getAttribute("aria-expanded")) === "false") await header.evaluate((el) => el.click());
