@@ -1314,9 +1314,6 @@ export function PolyforgePanel({
   const selectedProgressSnapshot = selectProgressStep(progressSnapshot, selectedStep);
   const progressEmptyMessage = selectedStep ? t("polyforge.progress.notRun") : undefined;
   const [echoes, setEchoes] = useState<{ wi: string | null; list: PolyforgeOwnerEcho[] }>({ wi: null, list: [] });
-  const selectedProgressSnapshot = selectProgressStep(progressSnapshot, selectedStep);
-  const progressEmptyMessage = selectedStep ? t("polyforge.progress.notRun") : undefined;
-
   const detailEchoes = echoes.wi === progressWi ? echoes.list : [];
   const onSent = useCallback((echo: PolyforgeOwnerEcho) => {
     setEchoes((current) => (current.wi === progressWi ? { wi: progressWi, list: [...current.list, echo] } : { wi: progressWi, list: [echo] }));
