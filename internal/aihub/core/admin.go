@@ -1218,6 +1218,20 @@ func (m *AdminManager) PatchProject(idOrName string, req ProjectPatchRequest) (*
 // ---------------------------------------------------------------------------
 // Project hard delete
 
+// DeactivateProject moves the project to the deactivated state
+// (polyforge#30): the server then refuses every write that does work on
+// the project while its reads keep answering. Stub ahead of the u2 red
+// test; the implementation follows.
+func (m *AdminManager) DeactivateProject(idOrName string) (*api.Project, error) {
+	return nil, nil
+}
+
+// RestoreProject moves a deactivated project back to active. Stub
+// ahead of the u2 red test; the implementation follows.
+func (m *AdminManager) RestoreProject(idOrName string) (*api.Project, error) {
+	return nil, nil
+}
+
 // DeleteProject hard-deletes a project and everything it owns — work
 // items, events, dependency edges, memories (with their FTS rows),
 // memberships and revoked project-scoped api keys — in ONE SQLite

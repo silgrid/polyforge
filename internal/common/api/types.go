@@ -91,6 +91,15 @@ const (
 	PriorityLow    = "low"
 )
 
+// Project statuses (polyforge#30): the project's global state. A
+// deactivated project is read-only on the server and hidden from the
+// default lists; restore brings it back. Only the hard delete removes
+// data.
+const (
+	ProjectStatusActive      = "active"
+	ProjectStatusDeactivated = "deactivated"
+)
+
 // Project (reference.md §4.1).
 type Project struct {
 	ID          string `json:"id"`
