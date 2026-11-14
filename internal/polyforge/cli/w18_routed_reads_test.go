@@ -452,3 +452,30 @@ func TestW18ValidateJudgesTheRoutedCellsLaneSet(t *testing.T) {
 		}
 	}
 }
+
+// TestW18MsgContactsReadTheRoutedCellsMapping (AC3): `pf msg contacts`
+// unions the member faces of the projects the routed Cell's mapping
+// names — --profile alpha answers aproj's members through alpha's AIHub;
+// the Host file's projects (dproj) are never asked for on that Cell. The
+// default Cell keeps its shape.
+func TestW18MsgContactsReadTheRoutedCellsMapping(t *testing.T) {
+	f := newW18Fixture(t)
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "--json", "msg", "contacts")
+	if code != 0 {
+		t.Fatalf("--profile alpha msg contacts: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, `"u-aproj"`) || strings.Contains(stdout, "u-dproj") {
+		t.Fatalf("--profile alpha msg contacts: stdout=%s, want aproj's member alone", stdout)
+	}
+	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 1 {
+		t.Fatalf("--profile alpha msg contacts: default hub got %d, alpha hub got %d (want 0/1)", nDef, nAlpha)
+	}
+
+	code, stdout, stderr = runPf(t, f.env, "--profile", "default", "--json", "msg", "contacts")
+	if code != 0 {
+		t.Fatalf("--profile default msg contacts: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, `"u-dproj"`) || strings.Contains(stdout, "u-aproj") {
+		t.Fatalf("--profile default msg contacts: stdout=%s, want dproj's member alone", stdout)
+	}
+}
