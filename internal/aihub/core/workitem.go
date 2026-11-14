@@ -158,13 +158,24 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 	}
 	defer tx.Rollback()
 
-	var projectID string
-	err = tx.QueryRow(`SELECT id FROM projects WHERE name=?1 OR id=?1`, req.Project).Scan(&projectID)
+	var projectID, projectStatus string
+	err = tx.QueryRow(`SELECT id, status FROM projects WHERE name=?1 OR id=?1`, req.Project).Scan(&projectID, &projectStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, Fail(api.ErrCoreNotFound, "", "project %q", req.Project)
 	}
 	if err != nil {
 		return nil, err
+	}
+	// polyforge#30 (review r1#3): the deactivation gate holds INSIDE the
+	// create transaction — a deactivation committing between the server
+	// handler's pre-check and this transaction would otherwise insert a
+	// queued work item a deactivated project can neither claim nor cancel
+	// (the same in-transaction discipline OPEN_ON_BUNDLE keeps). The typed
+	// answer is the server face's own.
+	if projectStatus == api.ProjectStatusDeactivated {
+		return nil, Fail(api.ErrCoreForbidden, "PROJECT_DEACTIVATED",
+			"project %s is deactivated: it is read-only, restore it first (pf projects restore %s)",
+			req.Project, req.Project)
 	}
 	if req.Reporter == "" {
 		return nil, Fail(api.ErrCoreBadInput, "", "reporter required")

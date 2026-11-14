@@ -27,7 +27,8 @@ func TestW30CreateRefusesDeactivatedProject(t *testing.T) {
 	if _, err := env.Admin.DeactivateProject("w30"); err != nil {
 		t.Fatalf("deactivate w30: %v", err)
 	}
-	for _, spelling := range []string{"w30", env.Project} {
+	w30ID := projectIDOfTest(t, env, "w30")
+	for _, spelling := range []string{"w30", w30ID} {
 		_, err := env.WIs.Create(CreateRequest{
 			Project: spelling, Goal: "w30 must not take new work", Reporter: env.UserID,
 		})
