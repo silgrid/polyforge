@@ -22,11 +22,13 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
+	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 )
 
 // Profile sources, in resolution order.
@@ -118,4 +120,41 @@ func (ctx *Context) hostSocket() string {
 		return host.DaemonSocket
 	}
 	return ctx.Cfg.DaemonSocket
+}
+
+// routedCellMapping answers the [workspace] mapping the invocation's
+// placement actions (file create, recall, remember) validate against:
+// the mapping of the Cell this call routes to — the resolution above —
+// not the Host file's (polyforge#17: --profile or the cwd match selects a
+// named Cell, and a project mapped only there must place through it).
+// The default Cell reads the Host file's mapping; a step or task agent
+// reads it too (its Cell is the Host's own ownership record, never a CLI
+// resolution — and its placement verbs are refused or go through the
+// daemon anyway); a named Cell reads its own cli-<profile>.toml. file is
+// the mapping file's base name, for messages. An unreadable effective
+// index is the resolver's fail-closed refusal (the Cell is unknown, so
+// nothing is sent anywhere); a named Cell file that cannot be read is a
+// loud local error — placement never validates against a mapping it
+// could not read.
+func (ctx *Context) routedCellMapping() (plan *mapping.Plan, file string, err error) {
+	if ctx.Step != "" || ctx.Task != "" {
+		return ctx.Cfg.Mapping, cellcfg.HostFileName, nil
+	}
+	profile := ctx.cellProfile()
+	if ctx.resolveErr != nil {
+		return nil, "", ctx.resolveErr
+	}
+	if profile == "" || profile == cellcfg.DefaultProfile {
+		return ctx.Cfg.Mapping, cellcfg.HostFileName, nil
+	}
+	hostPath := ctx.ConfigPath
+	if hostPath == "" {
+		hostPath = DefaultConfigPath()
+	}
+	path := filepath.Join(filepath.Dir(hostPath), cellcfg.CellFileName(profile))
+	cfg, err := LoadCellFile(ctx.Cfg, path)
+	if err != nil {
+		return nil, "", err
+	}
+	return cfg.Mapping, filepath.Base(path), nil
 }

@@ -44,10 +44,20 @@ type Plan struct {
 // shape and `pf doctor`).
 type UnmappedError struct {
 	Project string
+	// File names the mapping file whose [workspace] sections should list
+	// the project ("" = cli.toml, the Host file the default Cell reads).
+	// The CLI's placement verbs set it to the file of the Cell the
+	// invocation routes to, so the guidance names the file that actually
+	// governs (polyforge#17).
+	File string
 }
 
 func (e *UnmappedError) Error() string {
-	return fmt.Sprintf("project %q is not mapped on this machine — placement needs a home: add a [workspace.\"<path>\"] section listing %q in cli.toml (`pf doctor` checks the mapping)", e.Project, e.Project)
+	file := e.File
+	if file == "" {
+		file = "cli.toml"
+	}
+	return fmt.Sprintf("project %q is not mapped on this machine — placement needs a home: add a [workspace.\"<path>\"] section listing %q in %s (`pf doctor` checks the mapping)", e.Project, e.Project, file)
 }
 
 // KeyError is a malformed workspace key (relative after ~ expansion, or
