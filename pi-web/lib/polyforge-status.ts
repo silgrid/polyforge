@@ -228,6 +228,21 @@ export interface PolyforgeStep {
  *  response. */
 export interface PolyforgeDeclaredStep {
   id: string;
+  /** polyforge#25: the lane's `skippable` declaration — the step may be
+   *  switched off mid-run through the override face. False when the
+   *  daemon did not send it. */
+  skippable: boolean;
+}
+
+/** One step's overlay aspects as the watch snapshot carries them
+ *  (polyforge#25): the values only — the override view carries the
+ *  operators and times too. */
+export interface PolyforgeStepOverride {
+  models?: string[];
+  skip?: boolean;
+  /** The aspects ride the daemon-local pending record of a work item
+   *  this daemon holds no job of (they land with its next claim there). */
+  pending?: boolean;
 }
 
 export interface PolyforgeEvent {
@@ -312,6 +327,9 @@ export interface PolyforgeWatchStatus extends PolyforgeSummary {
   updatedAt?: string;
   steps: PolyforgeStep[];
   declared_steps: PolyforgeDeclaredStep[] | null;
+  /** (polyforge#25, additive): the per-step overlay's values, keyed by
+   *  step id — absent when no step carries an aspect. */
+  overrides?: Record<string, PolyforgeStepOverride>;
   events: PolyforgeEvent[];
   progress?: PolyforgeProgress;
   origin?: PolyforgeOrigin;
@@ -635,9 +653,37 @@ export function sanitizeDeclaredSteps(value: unknown): PolyforgeDeclaredStep[] |
   for (const entry of value) {
     const id = entry && typeof entry === "object" ? toTrimmedString((entry as { id?: unknown }).id) : "";
     if (!id) return null;
-    steps.push({ id });
+    const skippable = (entry as { skippable?: unknown }).skippable === true;
+    steps.push({ id, skippable });
   }
   return steps;
+}
+
+/**
+ * Sanitize `execution.overrides` (polyforge#25): per step, the overlay's
+ * values — the chain (non-empty strings), the tri-state skip and the
+ * pending mark — keyed by the trimmed step id. Absent, null, non-object
+ * or empty → undefined (the panel then renders no overlay marks).
+ * Pure, never throws.
+ */
+export function sanitizeStepOverrides(value: unknown): Record<string, PolyforgeStepOverride> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out: Record<string, PolyforgeStepOverride> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const id = key.trim();
+    if (!id || !entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const o = entry as Record<string, unknown>;
+    const models = Array.isArray(o.models)
+      ? o.models.map((m) => (typeof m === "string" ? m.trim() : "")).filter(Boolean)
+      : undefined;
+    const override: PolyforgeStepOverride = {
+      ...(models && models.length > 0 ? { models } : {}),
+      ...(typeof o.skip === "boolean" ? { skip: o.skip } : {}),
+      ...(o.pending === true ? { pending: true } : {}),
+    };
+    if (Object.keys(override).length > 0) out[id] = override;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Owner-approved per-kind event body whitelist (pi#112). Every kind not
@@ -664,6 +710,8 @@ const EVENT_BODY_FIELDS: Record<string, readonly (string | readonly [string, str
   needs_input: ["step", "question", "question_id"],
   awaiting_owner: ["step", "question", "question_id"],
   owner_message: ["step", "by"],
+  override_set: ["step", "aspect", "value", "operator"],
+  override_clear: ["step", "aspect", "value", "operator"],
   delivered: ["step", "disposition"],
   intent: ["step", ["kind", "intent"], "to"],
 };
@@ -930,6 +978,7 @@ export function sanitizeWatch(machine: unknown): PolyforgeWatchStatus | null {
     updated_at?: unknown;
     steps?: unknown;
     declared_steps?: unknown;
+    overrides?: unknown;
     blocked?: unknown;
   };
   if (!ex.steps || typeof ex.steps !== "object") return null;
@@ -946,6 +995,7 @@ export function sanitizeWatch(machine: unknown): PolyforgeWatchStatus | null {
     updatedAt: toOptionalTrimmedString(ex.updated_at),
     steps: orderPolyforgeSteps(ex.steps as Record<string, { status?: unknown; started_at?: unknown }>),
     declared_steps: sanitizeDeclaredSteps(ex.declared_steps),
+    ...(sanitizeStepOverrides(ex.overrides) ? { overrides: sanitizeStepOverrides(ex.overrides) } : {}),
     events: tailPolyforgeEvents(Array.isArray(m.events) ? m.events : [], EVENT_TAIL),
     progress: sanitizeProgress(m.progress),
     origin: sanitizeOrigin(m.job),
