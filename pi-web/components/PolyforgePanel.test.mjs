@@ -597,11 +597,45 @@ test("the detail opens at its bottom, offers ↓ Latest and folds spawn blocks",
 });
 
 test("the latest label and line-count wording exist in all three locales", () => {
-  const latest = { en: "↓ Latest", "zh-CN": "↓ 最新", "zh-TW": "↓ 最新" };
+  // polyforge#31: the two jump buttons are icon-only round controls, so the
+  // labels are their aria-labels/titles — no "↓" prefix any more — and the
+  // up button gets its own key in every locale (AC3).
+  const latest = { en: "Scroll to latest", "zh-CN": "回到最新", "zh-TW": "回到最新" };
+  const top = { en: "Scroll to top", "zh-CN": "回到顶部", "zh-TW": "回到頂部" };
   for (const [name, localeSource] of [["en", enSource], ["zh-CN", zhCNSource], ["zh-TW", zhTWSource]]) {
     assert.match(localeSource, new RegExp(`"polyforge\\.progress\\.latest": "${latest[name]}"`), `${name} latest label`);
+    assert.match(localeSource, new RegExp(`"polyforge\\.progress\\.top": "${top[name]}"`), `${name} top label`);
     assert.match(localeSource, /"polyforge\.progress\.lines": "\{count\} \S/, `${name} line-count wording`);
   }
+});
+
+test("polyforge#31: the progress jump buttons reuse the chat style, centered, one down one up", () => {
+  // AC1/AC2: two floating buttons stacked over the region's bottom, both
+  // horizontally centered and reusing the chat session's chat-scroll-to-bottom
+  // style; the old right-aligned text pill is gone. The down button keeps its
+  // instant jump and follow restore; the up button smooth-scrolls to the top.
+  assert.match(source, /data-pf-detail-top=""/);
+  assert.match(source, /!atTop && \(/);
+  assert.match(source, /!atBottom && \(/);
+  for (const anchor of ["data-pf-detail-top", "data-pf-detail-latest"]) {
+    const at = source.indexOf(`${anchor}=""`);
+    assert.ok(at >= 0, `${anchor} exists`);
+    const style = source.slice(at, at + 400);
+    assert.match(style, /position: "sticky", bottom: (8|44), alignSelf: "stretch"/, `${anchor} is a full-width sticky anchor`);
+    assert.match(style, /justifyContent: "center"/, `${anchor} centers its button`);
+    assert.match(style, /pointerEvents: "none"/, `${anchor} never eats the lines' clicks`);
+  }
+  assert.equal((source.match(/chat-scroll-to-bottom is-visible/g) ?? []).length, 2, "both buttons reuse the chat's style class");
+  assert.doesNotMatch(source, /bottom: 8, alignSelf: "flex-end"/, "the old right-aligned pill anchor is gone");
+  assert.doesNotMatch(source, /borderRadius: 10/, "the old pill button style is gone");
+  assert.match(source, /title=\{t\("polyforge\.progress\.latest"\)\}/);
+  assert.match(source, /aria-label=\{t\("polyforge\.progress\.latest"\)\}/);
+  assert.match(source, /title=\{t\("polyforge\.progress\.top"\)\}/);
+  assert.match(source, /aria-label=\{t\("polyforge\.progress\.top"\)\}/);
+  assert.match(source, /const jumpToTop = \(\) => \{/);
+  assert.match(source, /region\.scrollTo\(\{ top: 0, behavior: "smooth" \}\)/);
+  assert.match(source, /region\.scrollTop = region\.scrollHeight;\n\s*pinned\.current = true;/);
+  assert.match(source, /isProgressAtTop/, "the at-top read is the pure helper's");
 });
 
 test("the dock adds Jobs | Messages tabs with an unread dot of its own", () => {
