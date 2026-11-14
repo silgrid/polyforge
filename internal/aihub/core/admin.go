@@ -1077,15 +1077,22 @@ func (m *AdminManager) ListProjectMemberContacts(projectID, callerID string, inc
 	return out, rows.Err()
 }
 
-// ListProjects returns the oldest listProjectsCap projects and the total
-// project count (the caller's object access is decided per object at the
-// business endpoints).
-func (m *AdminManager) ListProjects() ([]api.Project, int, error) {
+// ListProjects returns the oldest listProjectsCap projects and the
+// total project count (the caller's object access is decided per object
+// at the business endpoints). A deactivated project is hidden unless
+// includeDeactivated is set (polyforge#30: the default lists carry the
+// active line only); the total stays the true count of every project
+// — the same page semantics a capped list already has.
+func (m *AdminManager) ListProjects(includeDeactivated bool) ([]api.Project, int, error) {
 	total, err := m.countRows("projects")
 	if err != nil {
 		return nil, 0, err
 	}
-	rows, err := m.db.Query(`SELECT id FROM projects ORDER BY created_at LIMIT ?1`, listProjectsCap)
+	filter := ""
+	if !includeDeactivated {
+		filter = " WHERE status='active'"
+	}
+	rows, err := m.db.Query(`SELECT id FROM projects`+filter+` ORDER BY created_at LIMIT ?1`, listProjectsCap)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -476,9 +476,16 @@ func (c *Client) CreateProject(req ProjectCreateRequest) (json.RawMessage, error
 	return c.raw("POST", "/api/v1/projects", req)
 }
 
-// ListProjects lists visible projects (M3).
-func (c *Client) ListProjects() (json.RawMessage, error) {
-	return c.raw("GET", "/api/v1/projects", nil)
+// ListProjects lists projects (M3). The default view carries the
+// active line only; includeDeactivated adds the deactivated projects
+// (polyforge#30's lists-hide rule; a caller probing reachability passes
+// false and reads only whether the server answered).
+func (c *Client) ListProjects(includeDeactivated bool) (json.RawMessage, error) {
+	path := "/api/v1/projects"
+	if includeDeactivated {
+		path += "?include_deactivated=1"
+	}
+	return c.raw("GET", path, nil)
 }
 
 // GetProject reads one project by id or name (M3).

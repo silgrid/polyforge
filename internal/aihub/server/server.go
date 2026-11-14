@@ -1783,8 +1783,10 @@ func (s *Server) hCreateProject(w http.ResponseWriter, r *http.Request, idn *ide
 }
 
 func (s *Server) hListProjects(w http.ResponseWriter, r *http.Request, idn *identity) error {
-	// one capped page (200, no cursor); total is the true project count
-	projects, total, err := s.Admin.ListProjects()
+	// one capped page (200, no cursor); total is the true project count.
+	// include_deactivated=1 adds the deactivated projects (polyforge#30);
+	// the default hides them.
+	projects, total, err := s.Admin.ListProjects(r.URL.Query().Get("include_deactivated") == "1")
 	if err != nil {
 		return err
 	}
