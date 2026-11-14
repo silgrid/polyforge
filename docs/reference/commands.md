@@ -688,8 +688,9 @@ Every command a workflow step's skill runs verbatim and routes on by exit
 code is a script of the workflow itself, never `pf`: verify ("The
 verification bar" above), sync, merge, revert, run and published
 ([Step scripts](#step-scripts--syncpy-mergepy-revertpy-runpy)), facts and
-integrate ([Workflow scripts](#workflow-scripts--factspy-integratepy)) and
-gate ("The full test gate" above), run from the lane snapshot as
+integrate ([Workflow scripts](#workflow-scripts--factspy-integratepy)),
+gate ("The full test gate" above) and fast_checks
+([Build's checks](#builds-checks--fast_checkspy) below), run from the lane snapshot as
 `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/<name>.py" …`. Their conventions —
 the step environment they read, the result file, the shared library
 `pfstep`, the container labels — are the
@@ -936,6 +937,49 @@ The verification-scope engine is the workflow's too:
 `$PF_SHARED_DIR/scripts/verify-scope` (read-only there: `sh <path>`) —
 `verify.py`'s only engine when `--engine` names none; a hand run uses the
 release checkout's copy.
+
+## Build's checks — `fast_checks.py`
+
+Build's per-unit bar and its on-the-spot unit check are one written
+command, `workflows/_shared/scripts/fast_checks.py`, run from the lane
+snapshot as `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" …` and
+named in the skill's `commands:` by file name. It ships in the snapshot,
+so it changes with the workflow, never with a pf release; `--help` is its
+full reference.
+
+- `--repo <name>` is the per-unit bar: it runs the scope engine's
+  `--json` report — the default report, the one the model ran by hand —
+  in the repo clone and executes the commands whose `phase` is `fast` or
+  `scoped`, in the report's order, each in its report's `root` (a nested
+  root the changed paths reach is a repository of its own: its report
+  runs in that subdirectory), with each entry's own declared `timeout`;
+  a command missing a declared `requires_env`/`requires_cmd`
+  prerequisite is skipped and its reason recorded; the full phase never
+  runs, and the run never stops at a failure. Details: `repo, engine,
+  reports[{root, mode, commands}], commands[{name, phase, root, cmd,
+  exit_code, timed_out, not_started, duration_ms, log, skipped,
+  skip_reason}]`. Exit 0: every command that ran exited 0; 1: a command
+  failed or was killed at its timeout; 2: not judged (no such repo, the
+  engine missing or failing, an unreadable report, a repo the engine
+  planned no command for).
+- `--check-units <units.json> [--unit <id>]` is the on-the-spot unit
+  check at record time: it re-runs the build's recorded unit runs as
+  written (each unit's own `argv` in its own `cwd` of its own
+  `repos/<repo>`) and judges each by `verify.py`'s own marker rules
+  (`pfstep/unitruns`, the one implementation): a unit passes when it
+  exits 0 and one output line matches its marker; a marker problem, a
+  red run or no matching line — a marker wrong by one `$` against a
+  suffixed output line — is red on the spot, the result naming the unit,
+  its marker and the closest output line. Details: `units_file, units[{id,
+  check, repo, cwd, argv, marker, passed, why, exit_code, log,
+  closest_line}]`. Exit 0: every checked unit passed; 1: a unit is red;
+  2: not judged (an unusable units.json, `--unit` naming no unit, a file
+  naming no unit).
+
+The logs of both modes go to `<log-dir>/<repo>/<seq>/command.log`, the
+log dir being `--log-dir`, else `logs/` beside `--out`, else the
+capsule's next `runtime-state/fast-checks/<n>` (a .gitignore keeps them
+out of the capsule chain).
 
 ## `pf config` — cli.toml and hot reload
 

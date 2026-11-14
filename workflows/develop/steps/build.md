@@ -66,7 +66,11 @@ command on that clean commit: red; (3) implement until it is green, then run the
 {{fast_checks_build}}
 (4) commit the implementation (C_i, `impl_commit`), run the same command from the same directory
 on that clean commit: green; (5) record the unit in `artifacts/build/units.json` as your skill
-says — the run exactly as it ran red and green, and its marker.
+says — the run exactly as it ran red and green, and its marker. A unit is not recorded until
+the written check has passed it: `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py"
+--check-units artifacts/build/units.json --unit <id> --json --out artifacts/build/units-check.json`
+right after adding it (verification's own rules: a red names the unit, its marker and the
+closest output line — fix the record and re-check).
 
 A defect ticket's first unit is the reproduction test, red on the reported failure before any fix;
 cannot reproduce it → 3a's case (a). A doc-type criterion gets no red test and no unit: commit the
@@ -74,8 +78,9 @@ change, run its validator and name it in its `## Coverage` row.
 
 ## 3c. Close and 3d. Self-review
 
-Run the fast checks over the whole change and every unit test targeted (the full bar is
-`verification`'s). Read your full diff (per repo `git diff
+Run the fast checks over the whole change (the written command once per touched repo) and
+every unit test targeted, then the written unit check over the whole `artifacts/build/units.json`
+(the same command with no `--unit`) (the full bar is `verification`'s). Read your full diff (per repo `git diff
 $(git merge-base HEAD origin/HEAD)..HEAD`) as `review` will, against its five blocking classes:
 `bug`, `ac_gap`, `project_rule`, `test_weakened`, `guarantee`; write each hit and its disposition
 to `artifacts/self-review.md` and fix what you can now (a new unit for a behaviour fix).

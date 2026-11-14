@@ -13,12 +13,13 @@ package driver
 //     backgrounded procedure is awaited inside one call by a condition
 //     loop with a deadline; neither says "then poll". Red on the
 //     pre-change tree (both said "background it … then poll").
-//  3. TestW111BuildStepsRunTheScopedReport — the four build steps run the
-//     release-shipped engine's JSON report before calling a unit green,
-//     run its `fast` and `scoped` phase commands and never its `full`
-//     phase, and still leave the full suite to verification. Red on the
-//     pre-change tree (the per-unit bar named no engine) and on the
-//     positional reading of a full report it replaced.
+//  3. TestW111BuildStepsRunTheScopedReport — the build steps call the
+//     written fast_checks.py command before reporting a unit green: it
+//     runs the engine's JSON report, takes its `fast` and `scoped` phase
+//     commands in their report's root and never its `full` phase, and
+//     still leaves the full suite to verification. Red on the pre-change
+//     tree (the per-unit bar named no engine) and on the hand-copied
+//     command lines it replaced (polyforge#24).
 //  4. TestW111NoSleepOutsideTheWaitingRule — no shipped workflow text
 //     carries the word "sleep" except inside the waiting rule's own
 //     sentences and three named phrases about the code under change (not
@@ -193,16 +194,16 @@ func TestW111ReleaseStepsAwaitInsideOneCall(t *testing.T) {
 }
 
 // w111ScopedReport is the scoped-report duty the build steps carry
-// in their per-unit bar, phrase by phrase: the engine's JSON report, and
-// the commands chosen by their reported phase — never by reading a line
-// report's order, which is ambiguous when the full phase has several
-// commands.
+// in their per-unit bar, phrase by phrase: the written fast_checks.py
+// command (polyforge#26) — which runs the engine's JSON report itself and
+// executes its fast and scoped phases in their report's root — never a
+// command line the model copies out of the report by hand.
 var w111ScopedReport = []string{
-	"Before reporting a unit green, also run the workflow's engine's scoped report in each repo the unit touched: `sh \"$PF_SHARED_DIR/scripts/verify-scope\" --json` (the engine in this lane's snapshot) from the repo clone, no other argument: the diff against `merge-base HEAD origin/<default>`.",
-	"Of its `commands` (the repo's `.polyforge/verify-scope.conf` or the engine's defaults decide them), run in order each whose `phase` is `fast` or `scoped` — its `cmd` via `bash -c`, its `timeout` as the explicit timeout — never one whose `phase` is `full` (scoped is not full).",
-	"A red there is a red fast check; one missing a `requires_env` or `requires_cmd` prerequisite is skipped and named in your artifact.",
+	"Before reporting a unit green, also run the written fast/scoped check in each repo the unit touched: `\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/fast_checks.py\" --repo <name> --json --out artifacts/build/fast-checks/<repo>.json` (the engine in this lane's snapshot; the command runs the engine itself — no command line of the report is ever copied out by hand).",
+	"It runs the report's fast and scoped commands in order — never one whose `phase` is `full` (scoped is not full) — each in the report's `root`, with each entry's own `timeout`; a command missing its `requires_env` or `requires_cmd` prerequisite is skipped and its reason recorded.",
+	"The result file is the artifact: every command's exit code, log and skip reason land in `artifacts/build/fast-checks/<repo>.json`, and any non-zero exit (or a command killed at its own timeout) is a red fast check — read its summary, never re-derive the commands by hand.",
 	"A failure confined to tests an earlier step committed red on purpose (this lane's authored or repro tests) is the work still to do, not a red fast check.",
-	"A missing engine or a non-zero exit is stated in your artifact and leaves the checks above as the bar.",
+	"A run that is not judged (the engine missing or failing: exit 2) is stated in your artifact and leaves the checks above as the bar.",
 }
 
 // w111PositionalFull is the retired positional reading of a full report
