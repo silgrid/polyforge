@@ -1,7 +1,7 @@
 package test
 
 // Fake-environment tests for .polyforge/deploy.sh's image-pull swap: the
-// deployer machine pulls ghcr.io/silgrid/aihub:<tag>, verifies the repo
+// deployer machine pulls ghcr.io/silgrid/polyforge-aihub:<tag>, verifies the repo
 // digest against the release's aihub-image.digest, then ships the image to
 // the server with docker save | ssh docker load. Everything external is a
 // stub on PATH (gh, docker, ssh, scp, curl): the "server" is a local temp
@@ -253,7 +253,7 @@ func (d *deployWorld) release(tag string, withImage bool, digestInRelease, regis
 	if withImage {
 		wf(t, filepath.Join(rel, "aihub-image.digest"), digestInRelease+"\n", 0o644)
 		files = append(files, "aihub-image.digest")
-		wf(t, filepath.Join(d.w, "registry", "ghcr.io_silgrid_aihub_"+tag),
+		wf(t, filepath.Join(d.w, "registry", "ghcr.io_silgrid_polyforge-aihub_"+tag),
 			fmt.Sprintf("sha256:id%s\n%s\n%s\n%s\n", tag, tag, repoDigestOf(registryDigest), layout), 0o644)
 	}
 	cmd := exec.Command("sha256sum", files...)
@@ -415,7 +415,7 @@ func (d *deployWorld) serverDockerMutations() []string {
 
 // The release digest files hold the canonical bare "sha256:<64 hex>" (the
 // format release.sh writes); the fake registry reports it as
-// "ghcr.io/silgrid/aihub@<digest>" (imageRepoDigest, shared with
+// "ghcr.io/silgrid/polyforge-aihub@<digest>" (imageRepoDigest, shared with
 // release_script_test.go).
 const digOld = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 const digNew = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
@@ -450,9 +450,9 @@ func TestReleaseDeployImagePullSwap(t *testing.T) {
 	}
 	dl := d.logOf("log-docker")
 	// order: local pull -> server load -> server tag -> compose up
-	iPull := strings.Index(dl, "local docker pull ghcr.io/silgrid/aihub:v2.3.0")
+	iPull := strings.Index(dl, "local docker pull ghcr.io/silgrid/polyforge-aihub:v2.3.0")
 	iLoad := strings.Index(dl, "server docker load")
-	iTag := strings.Index(dl, "server docker tag ghcr.io/silgrid/aihub:v2.3.0 polyforge/aihub:v2.3.0")
+	iTag := strings.Index(dl, "server docker tag ghcr.io/silgrid/polyforge-aihub:v2.3.0 polyforge/aihub:v2.3.0")
 	iUp := strings.Index(dl, " up -d --no-deps aihub")
 	if !(iPull >= 0 && iPull < iLoad && iLoad < iTag && iTag < iUp) {
 		t.Errorf("wrong order pull=%d load=%d tag=%d up=%d\n%s", iPull, iLoad, iTag, iUp, dl)
@@ -475,18 +475,18 @@ func TestReleaseDeployImagePullSwap(t *testing.T) {
 	// container, saved binary, rollback image) answers through the
 	// TRANSITION /aihub fallback.
 	for _, want := range []string{
-		"local docker run --rm --entrypoint /pf ghcr.io/silgrid/aihub:v2.3.0 aihub -version",
+		"local docker run --rm --entrypoint /pf ghcr.io/silgrid/polyforge-aihub:v2.3.0 aihub -version",
 		"server docker run --rm --entrypoint /pf polyforge/aihub:v2.3.0 aihub -version",
 		"server docker exec aihub /aihub -version",
 		"server docker cp aihub:/aihub ",
-		"local docker run --rm --entrypoint /aihub ghcr.io/silgrid/aihub:v2.2.1 -version",
+		"local docker run --rm --entrypoint /aihub ghcr.io/silgrid/polyforge-aihub:v2.2.1 -version",
 	} {
 		if !strings.Contains(dl, want) {
 			t.Errorf("docker log lacks %q\n%s", want, dl)
 		}
 	}
 	for _, bad := range []string{
-		"--entrypoint /aihub ghcr.io/silgrid/aihub:v2.3.0", "--entrypoint /aihub polyforge/aihub:v2.3.0",
+		"--entrypoint /aihub ghcr.io/silgrid/polyforge-aihub:v2.3.0", "--entrypoint /aihub polyforge/aihub:v2.3.0",
 	} {
 		if strings.Contains(dl, bad) {
 			t.Errorf("the consolidated new image was probed with the legacy command %q\n%s", bad, dl)
@@ -641,7 +641,7 @@ func TestReleaseScriptDigestFileFeedsDeployPreflight(t *testing.T) {
 		wf(t, filepath.Join(d.w, "ghrel", "v1.2.1", f), string(b), 0o644)
 	}
 	// the registry's image carries the repo digest the release's push produced
-	wf(t, filepath.Join(d.w, "registry", "ghcr.io_silgrid_aihub_v1.2.1"),
+	wf(t, filepath.Join(d.w, "registry", "ghcr.io_silgrid_polyforge-aihub_v1.2.1"),
 		fmt.Sprintf("sha256:idv1.2.1\nv1.2.1\n%s\npf\n", imageRepoDigest(relFakeDigest)), 0o644)
 	d.git("tag", "v1.2.1") // the deployer has fetched the release's tag
 	out, err := d.run("", "v1.2.1", "--dry-run")

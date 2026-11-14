@@ -275,7 +275,7 @@ func TestDeployRollbackFailureIsLoudExit11(t *testing.T) {
 func TestDeployLockSessionDyingBeforeSwapDiesNothingSwapped(t *testing.T) {
 	d := newReadyWorld(t)
 	// the lock ssh session dies while the NEW image is being loaded (step 6)
-	d.env = append(d.env, "FAKE_KILL_LOCK_ON_LOAD=ghcr.io/silgrid/aihub:v2.3.0")
+	d.env = append(d.env, "FAKE_KILL_LOCK_ON_LOAD=ghcr.io/silgrid/polyforge-aihub:v2.3.0")
 	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
 	if exitCode(err) != 1 || !strings.Contains(out, "deploy lock session died") {
 		t.Fatalf("want exit 1 + lock session died, got %v\n%s", err, out)

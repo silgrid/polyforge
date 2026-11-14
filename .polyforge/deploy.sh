@@ -37,8 +37,8 @@
 # time - printed at the end of an aihub deploy).
 #
 # What it does: promote an already-released version onto the aihub docker
-# service. The release (release.sh) publishes the aihub image to the PRIVATE
-# GHCR repo ghcr.io/silgrid/aihub:<tag> plus the release assets
+# service. The release (release.sh) publishes the aihub image to the GHCR
+# package ghcr.io/silgrid/polyforge-aihub:<tag> plus the release assets
 # (the one pf binary for linux-amd64, darwin-arm64,
 # darwin-amd64, aihub-image.digest, the pi-web tarball,
 # SHA256SUMS covering those five and release-manifest.json; the image is
@@ -63,7 +63,7 @@
 # SQL itself and those counts are the whole in-window work.
 #
 #   0 preflight   tag, release assets + SHA256SUMS (covers the binaries and
-#                 aihub-image.digest), docker pull ghcr.io/silgrid/aihub:<tag> on
+#                 aihub-image.digest), docker pull ghcr.io/silgrid/polyforge-aihub:<tag> on
 #                 this machine, repo digest == aihub-image.digest, /pf aihub -version,
 #                 ssh, container, running version (/pf aihub -version, else
 #                 /aihub -version; must print a release tag), compose file,
@@ -203,7 +203,7 @@
 #   DEPLOY_LOCK_FILE=/<path>/aihub-app/.deploy.lock   (on the server)
 # Environment (defaults):
 #   AIHUB_CONTAINER=aihub   BACKUP_ROOT=/data/polyforge-backups (local)
-#   GH_REPO=silgrid/polyforge   GHCR_IMAGE=ghcr.io/silgrid/aihub   AIHUB_PORT=8080   WAIT_SECS=60
+#   GH_REPO=silgrid/polyforge   GHCR_IMAGE=ghcr.io/silgrid/polyforge-aihub   AIHUB_PORT=8080   WAIT_SECS=60
 #   (GH_REPO must be the GitHub repo this checkout's origin names; when origin
 #   is not a github.com URL, DEPLOY_REMOTE_IS=<owner>/<repo> states it -
 #   anything else refuses before any work)
@@ -450,7 +450,7 @@ UP_WAIT_SECS="${UP_WAIT_SECS:-120}"
 LOCK_WAIT_SECS="${LOCK_WAIT_SECS:-20}"
 AIHUB_SERVICE="${AIHUB_SERVICE:-aihub}"
 IMAGE_REPO="${IMAGE_REPO:-polyforge/aihub}"
-GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/silgrid/aihub}"
+GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/silgrid/polyforge-aihub}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRV_ROOT="$(dirname "$AIHUB_DATA")"   # where the server-side backups/binaries live
 # Remote commands carry these paths through ssh's re-joined command line:

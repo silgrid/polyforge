@@ -22,11 +22,11 @@ import (
 // The CROSS-SCRIPT CONTRACT fixture, shared with deploy_image_test.go: the
 // canonical aihub-image.digest content is the bare "sha256:<64 hex>" that
 // release.sh writes and deploy.sh consumes (its repo digest is
-// "ghcr.io/silgrid/aihub@" + that).
+// "ghcr.io/silgrid/polyforge-aihub@" + that).
 const relFakeDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 // imageRepoDigest is the RepoDigests entry the registry reports for a digest.
-func imageRepoDigest(digest string) string { return "ghcr.io/silgrid/aihub@" + digest }
+func imageRepoDigest(digest string) string { return "ghcr.io/silgrid/polyforge-aihub@" + digest }
 
 type relWorld struct {
 	t       *testing.T
@@ -223,6 +223,12 @@ if [ "$1" = ls-remote ] && [ -n "$FAKE_LSREMOTE_FAIL" ]; then echo "fatal: unabl
 exec %s "$@"
 `, realGit), 0o755)
 	relWrite(t, filepath.Join(w.bin, "docker"), `#!/bin/sh
+registry_has() {
+  _t=${1##*:}
+  [ -e "$CALLLOG.pushed" ] && return 0
+  case " $FAKE_REGISTRY_HAS " in *" $_t "*) return 0 ;; esac
+  git --git-dir="$FAKE_ORIGIN" rev-parse -q --verify "refs/tags/$_t" >/dev/null 2>&1
+}
 case "$1" in
   # The test gate's container (; gate.py's docker client):
   # the image built from stdin (no context), a container whose commands
@@ -270,7 +276,7 @@ case "$1" in
     for ctx; do :; done; echo "docker build context: $(ls "$ctx" | tr '\n' ' ')" >> "$CALLLOG" ;;
   push) echo "docker $*" >> "$CALLLOG"; [ -n "$FAKE_PUSH_FAIL" ] && exit 1
     : > "$CALLLOG.pushed" ;;
-  inspect) echo "docker inspect" >> "$CALLLOG"; echo "ghcr.io/silgrid/aihub@$FAKE_PUSH_DIGEST" ;;
+  inspect) echo "docker inspect" >> "$CALLLOG"; echo "ghcr.io/silgrid/polyforge-aihub@$FAKE_PUSH_DIGEST" ;;
   login) echo "docker login" >> "$CALLLOG"; cat >/dev/null; : > "$CALLLOG.loggedin" ;;
   # Registry knobs: FAKE_REGISTRY_MISSING - "not found"
   # until a docker push of this world succeeded; FAKE_REGISTRY_APPEARS_ON=<file>
@@ -278,12 +284,16 @@ case "$1" in
   # FAKE_REGISTRY_UNREADABLE - no read works; FAKE_BUILDX_ERROR=<text> -
   # buildx fails with <text> while docker manifest still answers;
   # FAKE_REGISTRY_NEEDS_LOGIN - unauthorized until a docker login succeeded.
+  # Otherwise the registry holds a tag when origin carries it as a release,
+  # this world pushed an image, or FAKE_REGISTRY_HAS names it (another
+  # build's tag in the same package).
   buildx) [ -n "$FAKE_NO_BUILDX" ] && { echo "docker: 'buildx' is not a docker command." >&2; exit 1; }
     [ -n "$FAKE_REGISTRY_NEEDS_LOGIN" ] && [ ! -e "$CALLLOG.loggedin" ] && { echo "ERROR: unauthorized: authentication required" >&2; exit 1; }
     [ -n "$FAKE_REGISTRY_UNREADABLE" ] && { echo "ERROR: failed to authorize: 403 Forbidden" >&2; exit 1; }
     [ -n "$FAKE_BUILDX_ERROR" ] && { echo "ERROR: $FAKE_BUILDX_ERROR" >&2; exit 1; }
     [ -n "$FAKE_REGISTRY_MISSING" ] && [ ! -e "$CALLLOG.pushed" ] && { echo "ERROR: $4: not found" >&2; exit 1; }
     [ -n "$FAKE_REGISTRY_APPEARS_ON" ] && [ ! -e "$FAKE_REGISTRY_APPEARS_ON" ] && { echo "ERROR: $4: not found" >&2; exit 1; }
+    registry_has "$4" || { echo "ERROR: $4: not found" >&2; exit 1; }
     echo "Name: x"; echo "Digest: $FAKE_REGISTRY_DIGEST" ;;
   # config/layer digests come BEFORE the Descriptor here, so only the
   # Descriptor-scoped read can find the manifest digest
@@ -292,6 +302,7 @@ case "$1" in
     [ -n "$FAKE_REGISTRY_NEEDS_LOGIN" ] && [ ! -e "$CALLLOG.loggedin" ] && { echo "unauthorized: authentication required" >&2; exit 1; }
     [ -n "$FAKE_REGISTRY_MISSING" ] && [ ! -e "$CALLLOG.pushed" ] && { echo "no such manifest: $4" >&2; exit 1; }
     [ -n "$FAKE_REGISTRY_APPEARS_ON" ] && [ ! -e "$FAKE_REGISTRY_APPEARS_ON" ] && { echo "no such manifest: $4" >&2; exit 1; }
+    registry_has "$4" || { echo "no such manifest: $4" >&2; exit 1; }
     printf '{\n\t"Ref": "x",\n\t"SchemaV2Manifest": {\n\t\t"config": {\n\t\t\t"digest": "sha256:cccc"\n\t\t},\n\t\t"layers": [\n\t\t\t{\n\t\t\t\t"Digest": "sha256:dddd"\n\t\t\t}\n\t\t]\n\t},\n\t"Descriptor": {\n\t\t"mediaType": "m",\n\t\t"digest": "%s",\n\t\t"size": 952\n\t}\n}\n' "$FAKE_REGISTRY_DIGEST" ;;
 esac
 exit 0
@@ -518,7 +529,7 @@ func (w *relWorld) env(extra ...string) []string {
 	env := append(os.Environ(),
 		"PATH="+w.bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"CALLLOG="+w.log, "FAKE_GH="+w.fakeRel, "FAKE_PUSH_DIGEST="+relFakeDigest, "FAKE_REGISTRY_DIGEST="+relFakeDigest,
-		"DOCKER_CONFIG="+dockerCfg, "HOME="+w.root,
+		"DOCKER_CONFIG="+dockerCfg, "HOME="+w.root, "FAKE_ORIGIN="+w.origin,
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e",
 		"RELEASE_XREFS_CMD=echo xrefs >> \"$CALLLOG\"",
 		"RELEASE_TEST_CMD=echo tests >> \"$CALLLOG\"",
@@ -587,7 +598,7 @@ func TestReleaseScriptHappyPathOrderAndAssets(t *testing.T) {
 			t.Fatalf("forced operation: %s", c)
 		}
 	}
-	if !strings.Contains(strings.Join(calls, "\n"), "docker build -f deploy/Dockerfile -t ghcr.io/silgrid/aihub:v1.2.1") {
+	if !strings.Contains(strings.Join(calls, "\n"), "docker build -f deploy/Dockerfile -t ghcr.io/silgrid/polyforge-aihub:v1.2.1") {
 		t.Fatalf("image build line wrong: %v", calls)
 	}
 	// the image is built from the linux pf binary alone
@@ -791,6 +802,34 @@ func TestReleaseScriptTagTakenOnOriginStopsBeforePublish(t *testing.T) {
 	}
 	if relGit(t, w.work, "tag", "-l", "v1.2.1") != "" {
 		t.Fatal("our local claim tag was left behind")
+	}
+}
+
+// TestReleaseScriptRefusesAnImageTagAlreadyInThePackage: a fresh release
+// (no resume) whose image tag already exists in the package - another
+// build published it, e.g. another line pushing to the same package -
+// refuses before any gate, build, claim or push, naming the tag; the same
+// world with the tag absent releases.
+func TestReleaseScriptRefusesAnImageTagAlreadyInThePackage(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	out, err := w.run([]string{"FAKE_REGISTRY_HAS=v1.2.1"})
+	if err == nil {
+		t.Fatalf("expected the release to refuse an image tag already in the package\n%s", out)
+	}
+	for _, want := range []string{"ghcr.io/silgrid/polyforge-aihub:v1.2.1 already exists in the registry", "no release of origin to resume", "RELEASE_IMAGE", "no version claimed"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("refusal lacks %q\n%s", want, out)
+		}
+	}
+	if c := w.calls(); len(c) != 0 {
+		t.Fatalf("work happened despite the refusal: %v", c)
+	}
+	if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+		t.Fatalf("tag claimed despite the refusal: %q", got)
+	}
+	out, err = w.run(nil)
+	if err != nil || !strings.Contains(out, "image ghcr.io/silgrid/polyforge-aihub:v1.2.1 is not in the registry yet") || !strings.Contains(out, "version=v1.2.1") {
+		t.Fatalf("with the tag absent the release goes on: %v\n%s", err, out)
 	}
 }
 

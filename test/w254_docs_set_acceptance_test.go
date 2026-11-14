@@ -437,13 +437,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // unions two lines appended at once (.polyforge/integrate.conf, list=).
 // upgrade-sections:begin
 // - the first public release's section (v0.2.0, workflow contract 1; the move from v0.1.x: drain, the aihub read-cursor split SQL, the installer and Pi Web, the per-Cell data dir migration, pf config migrate and stale per-step keys, the removed lanes and the user-lane rewrite)
+// - the appended section (the public AIHub image is ghcr.io/silgrid/polyforge-aihub, deploy.sh pulls it by default, another deployment names its own package with RELEASE_IMAGE / GHCR_IMAGE; a fresh release refuses an image tag already in the package; action: none on a work machine)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "c8a93bb340a7159dd5c43d598c85d3cbdd53e140bd4974f760782b09f7b0dcab" {
+	if got := hex.EncodeToString(sum[:]); got != "3ccbd2d2b0bc5675745d8eb830f362e723293ec613bc6e5b9bd8cd6fe85f839e" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section

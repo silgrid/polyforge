@@ -305,7 +305,7 @@ func TestW372ReleasePreflightRefreshesAStoredGhcrLogin(t *testing.T) {
 		if login < 0 || tests < 0 || push < 0 || login > tests || login > push {
 			t.Fatalf("want docker login (gh's token) before the test gate and the tag push: %v", calls)
 		}
-		if !strings.Contains(out, "replacing the stored ghcr.io login, which cannot read ghcr.io/silgrid/aihub:v1.2.0") {
+		if !strings.Contains(out, "replacing the stored ghcr.io login, which cannot read ghcr.io/silgrid/polyforge-aihub:v1.2.0") {
 			t.Fatalf("the replacement must say why:\n%s", out)
 		}
 	})
@@ -325,7 +325,7 @@ func TestW372ReleasePreflightRefreshesAStoredGhcrLogin(t *testing.T) {
 	t.Run("a stored login that cannot read, gh without write:packages", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		out, err := w.run([]string{"FAKE_GH_SCOPES=repo", "FAKE_REGISTRY_NEEDS_LOGIN=1"})
-		if err == nil || !strings.Contains(out, "cannot read ghcr.io/silgrid/aihub:v1.2.0") || !strings.Contains(out, "preflight failed") {
+		if err == nil || !strings.Contains(out, "cannot read ghcr.io/silgrid/polyforge-aihub:v1.2.0") || !strings.Contains(out, "preflight failed") {
 			t.Fatalf("want a preflight problem: %v\n%s", err, out)
 		}
 		if c := w.calls(); len(c) != 0 {
@@ -785,7 +785,7 @@ func TestW372ResumeRereadsBeforeEachPublishAction(t *testing.T) {
 		if err == nil {
 			t.Fatalf("the resume must refuse when the image appeared after its first read:\n%s", out)
 		}
-		for _, want := range []string{"stopped before docker push", "image ghcr.io/silgrid/aihub:v1.2.1: absent -> present " + relFakeDigest, "Published by this run: nothing", "v1.2.1 stays claimed"} {
+		for _, want := range []string{"stopped before docker push", "image ghcr.io/silgrid/polyforge-aihub:v1.2.1: absent -> present " + relFakeDigest, "Published by this run: nothing", "v1.2.1 stays claimed"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("refusal lacks %q:\n%s", want, out)
 			}

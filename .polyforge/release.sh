@@ -59,7 +59,9 @@
 #      bump that leaves the list non-empty or moves the version by more than
 #      one; an empty list needs no bump; a previous release whose tree has
 #      no workflow contract makes this the first release with one, which
-#      must declare ContractVersion 1 with an empty list;
+#      must declare ContractVersion 1 with an empty list; a fresh release
+#      (not a resume) refuses while its image tag already exists in the
+#      package (step 1b'''' below), so it never pushes over another build;
 #   2. design-doc cross-reference gate (docs/design/polyforge-vnext/tools/
 #      check-xrefs.py, the Makefile's `xrefs` check; python3 is REQUIRED here -
 #      unlike `make xrefs`, a release never skips it), then the test gate
@@ -75,7 +77,7 @@
 #      one pf binary for linux-amd64, darwin-arm64, darwin-amd64
 #      (the server runs as `pf aihub`); build the image from
 #      the LINUX pf (the image stays linux/amd64-only, entrypoint
-#      `pf aihub`) tagged ghcr.io/silgrid/aihub:<tag>; then pack the pi-web
+#      `pf aihub`) tagged ghcr.io/silgrid/polyforge-aihub:<tag>; then pack the pi-web
 #      package (one release entry for every artifact): the
 #      released commit's pi-web/ tree is exported to the staging directory
 #      (the worktree is never touched), npm ci, PI_WEB_RELEASE_VERSION=<tag>
@@ -152,7 +154,7 @@
 # exactly what manifest_of derives from the tag, its commit and SHA256SUMS;
 # the pi-web tarball's packed package.json carries the tag's version;
 # aihub-image.digest is exactly sha256:<64 hex> and the registry digest of
-# ghcr.io/silgrid/aihub:<tag> equals it. Exit 0 iff all pass.
+# ghcr.io/silgrid/polyforge-aihub:<tag> equals it. Exit 0 iff all pass.
 #
 # PR-only check (polyforge#163): main's FIRST-PARENT history from the previous
 # release tag to the released commit must consist only of commits GitHub records
@@ -260,7 +262,7 @@
 #                       artifacts/release-$TAG/pf and the two darwin
 #                       binaries .../pf-darwin-arm64, .../pf-darwin-amd64
 #                                                 (default: GOWORK=off make release VERSION=$TAG)
-#   RELEASE_IMAGE       image repository          (default: ghcr.io/silgrid/aihub)
+#   RELEASE_IMAGE       image repository          (default: ghcr.io/silgrid/polyforge-aihub)
 #   RELEASE_GH_REPO     gh -R repo                (default: silgrid/polyforge,
 #                       this repository's own release repo).
 #                       Whatever it names, it must be the repo the tag is
@@ -279,7 +281,7 @@ set -eu
 
 REMOTE="${RELEASE_REMOTE:-origin}"
 BRANCH="${RELEASE_BRANCH:-main}"
-IMAGE="${RELEASE_IMAGE:-ghcr.io/silgrid/aihub}"
+IMAGE="${RELEASE_IMAGE:-ghcr.io/silgrid/polyforge-aihub}"
 GH_REPO="${RELEASE_GH_REPO:-silgrid/polyforge}"
 SEMVER_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
 # Suffixed versions (see the header): set from .polyforge/release.conf below.
@@ -947,6 +949,23 @@ if [ -n "$RESUME" ]; then
   NEED_BIN=""
   for _a in pf-linux-amd64 pf-darwin-arm64 pf-darwin-amd64; do [ -f "$OUT/$_a" ] || NEED_BIN=1; done
   NEED_PIWEB=""; [ -f "$OUT/$PIWEB_TGZ" ] || NEED_PIWEB=1
+fi
+
+# 1b''''. a fresh release (not a resume) never pushes over an existing image
+# tag: the package may hold a tag this repository never released (another
+# line publishing to the same package, or a release deleted by hand), and a
+# push would overwrite it. The registry is read with the identity the push
+# uses (after the preflight's login), through registry_digest: an image
+# there refuses, an unreadable registry refuses (retryable), and only an
+# explicit not-found answer lets the release go on. A resume of the same
+# release keeps its own image as before (1b above).
+if [ -z "$RESUME" ]; then
+  if registry_digest "$IMAGE:$TAG" >"$WORK/regdigest" 2>"$WORK/reg.err"; then _r=0; else _r=$?; fi
+  case "$_r" in
+    0) die "refusing to release: $IMAGE:$TAG already exists in the registry ($(tr -d ' \t\r\n' <"$WORK/regdigest")), but $TAG is no release of $REMOTE to resume - a push would overwrite that image; publish to another package (RELEASE_IMAGE) or remove the tag from the package by hand, then run again; nothing built or published, no version claimed" ;;
+    1) echo "release: image $IMAGE:$TAG is not in the registry yet" ;;
+    *) die "refusing to release: cannot read whether $IMAGE:$TAG exists in the registry ($(head -n 1 "$WORK/reg.err")) - retryable; nothing built or published, no version claimed" ;;
+  esac
 fi
 
 # 1c. PR-only: every commit that entered the branch since the previous release

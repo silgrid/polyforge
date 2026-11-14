@@ -138,8 +138,15 @@ publishes the five payload assets — `pf-linux-amd64`, `pf-darwin-arm64`,
 `silgrid-pi-web-<tag>.tgz` — plus `SHA256SUMS` covering those five and
 `release-manifest.json` (the tag, the commit, every payload with its
 sha256 and the aihub-first ordering statement), and
-`ghcr.io/silgrid/aihub:<tag>`, built from the linux `pf` binary with the
-entrypoint `pf aihub` (the image stays linux/amd64-only). Pi Web
+`ghcr.io/silgrid/polyforge-aihub:<tag>`, built from the linux `pf` binary with the
+entrypoint `pf aihub` (the image stays linux/amd64-only; another
+deployment names its own package with `RELEASE_IMAGE`, and `deploy.sh`
+with `GHCR_IMAGE`). GHCR creates the package on its first push, and a new
+package is private: once, an owner of the organization makes it public
+(the package's settings, "Danger Zone", "Change visibility", Public) so
+the image pulls without a login. A fresh release (not a resume) refuses
+before any build or claim when its image tag already exists in the
+package, so it never pushes over another build's image. Pi Web
 (`pi-web/`, its own MIT npm package) is packed by the same entry from the
 released commit's tree: `npm ci`, `npm run build` with
 `PI_WEB_RELEASE_VERSION=<tag>`, the tag's version stamped into the packed
