@@ -1301,13 +1301,16 @@ func TestVerbRecallRememberMappingValidated(t *testing.T) {
 }
 
 // TestRequireMappedProjectTyped: the refusal wraps the typed
-// *mapping.UnmappedError (callers can errors.As it).
+// *mapping.UnmappedError (callers can errors.As it). The Context names
+// its Cell with --profile default: since polyforge#17 the placement
+// validation resolves the routed Cell first, and a Context that cannot
+// resolve one fails closed instead of answering a mapping verdict.
 func TestRequireMappedProjectTyped(t *testing.T) {
 	plan, err := mapping.Build([]mapping.Entry{{Workspace: "/ws", Projects: []string{"alpha", "beta"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := &Context{Cfg: Config{Mapping: plan}}
+	ctx := &Context{FlagProfile: "default", Cfg: Config{Mapping: plan}}
 	err = requireMappedProject(ctx, "recall", "ghost")
 	var ue *mapping.UnmappedError
 	if !errors.As(err, &ue) || ue.Project != "ghost" || !strings.Contains(err.Error(), "mapped here: alpha, beta") {

@@ -172,10 +172,14 @@ Cell registry is `GET /profiles`; the key partition is
 ### Repo mapping
 
 The plan that decides where a claimed work item's capsule lives: the
-`[workspace."<path>"]` sections of `cli.toml`, each listing the projects
-whose capsules live under that path. It is the daemon's only placement
-source — every mapped directory must pre-exist, and the daemon refuses to
-start without a real mapping. The full shape is
+`[workspace."<path>"]` sections of a Cell's mapping file — `cli.toml` for
+the default Cell, `cli-<profile>.toml` for a named one — each listing the
+projects whose capsules live under that path. It is the daemon's only
+placement source, read per Cell — and the CLI's placement verbs
+(`file create`, `recall`, `remember`) validate their `--project` against
+the same routed Cell's mapping (polyforge#17). Every mapped directory
+must pre-exist, and the daemon refuses to start without a real mapping.
+The full shape is
 [extending: workspace mapping](extending.md#workspace-mapping).
 
 ### Data plane vs execution plane (aihub vs daemon)

@@ -27,10 +27,12 @@ pf file dep list <id>
 ```
 
 `create` flags: `--project` (REQUIRED — there is no default project
-anymore, polyforge#113; filing places work on THIS machine, so the value
-is validated against the `[workspace]` mapping in cli.toml and a project
-with no mapping fails loudly naming it — unlike `pf recall` / `pf
-remember`, which are hub-wide and need no mapping),
+anymore, polyforge#113; filing places work through the Cell this
+invocation routes to, so the value is validated against that Cell's
+`[workspace]` mapping — cli.toml for the default Cell,
+`cli-<profile>.toml` for a named one, polyforge#17 — and a project with
+no mapping there fails loudly naming the Cell's mapped projects, as
+`pf recall` / `pf remember` do too, owner ruling 2026-10-16),
 `--goal` (required, one line ≤500 chars),
 `--content` (markdown background; `-` reads stdin, `@file` reads a file),
 `--label` (repeatable), `--priority low|normal|high|urgent`, `--milestone`,
@@ -260,7 +262,9 @@ or code area being reshaped, or it needs that one's result). If unsure,
 do not add it — ordinary merge conflicts are handled at delivery.
 
 `--project` inference: when the flag is omitted, the CLI resolves the
-working directory against the cli.toml `[workspace."<path>"]` mapping — a
+working directory against the `[workspace."<path>"]` mapping of the Cell
+the invocation routes to (cli.toml for the default Cell,
+`cli-<profile>.toml` for a named one; polyforge#17) — a
 cwd inside exactly one mapped workspace that lists exactly ONE project
 gets that project as the default and the create proceeds as if the flag
 had been passed. A workspace listing two or more projects errors asking

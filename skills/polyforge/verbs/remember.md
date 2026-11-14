@@ -27,10 +27,11 @@ existing kind; never invent a top-level type. Without
 markers stripped, cut to 80 characters). The content
 is the positional text; `-` reads it from stdin, `@file` from a file.
 `--project` is REQUIRED (polyforge#113 — no default project exists) and
-must be a project of this machine's cli.toml `[workspace]` mapping (owner
-ruling 2026-10-16, superseding the 2026-10-13 C15 ruling): an unmapped
-project — or no mapping at all — is refused locally, naming the mapped
-projects, and nothing is sent. aihub then gates memory by project membership on its own: a search
+must be a project of the `[workspace]` mapping of the Cell the invocation
+routes to — cli.toml for the default Cell, `cli-<profile>.toml` for a
+named one (polyforge#17; owner ruling 2026-10-16, superseding the
+2026-10-13 C15 ruling): an unmapped project — or no mapping at all — is
+refused locally, naming that Cell's mapped projects, and nothing is sent. aihub then gates memory by project membership on its own: a search
 answers only memories of projects the caller can read; `project=` naming an
 unknown project or one the caller cannot read answers the same non-leaking
 `CORE-404`; reading a memory needs read access to its project (else `MEM-404`);
@@ -103,15 +104,17 @@ visibility V)`.
 |---|---|---|
 | `AUTH-401` | api key missing or invalid | Credential rejected — check the Cell's `api_key` (`pf [--profile NAME] config set api_key`). |
 | `MEM-400` | Blank content, missing `--type`, a type whose kind is not one of the server's kinds, or an invalid visibility | Give real content, a `kind.name` type with a kind the error names, and a valid visibility — read `detail` for the exact field. |
-| `CORE-404` | Unknown project (the server's project lookup) | The project does not exist — check `--project` (there is no default project; it must also be listed in a cli.toml `[workspace]` section). |
+| `CORE-404` | Unknown project (the server's project lookup) | The project does not exist — check `--project` (there is no default project; it must also be listed in a `[workspace]` section of the routed Cell's mapping file). |
 | `MEM-403` | You lack the writer (or maintainer) role on the project | Ask a project maintainer for the writer role; nothing was saved. |
 | `MEM-413` | Content (or the whole authority document) exceeds 1 MiB | Split the memory or trim the content. |
 
 A local `pf: remember: ...` line (exit 1, no typed code) means a local
 refusal before any wire call — missing `--type`, missing content, a
 missing `--project`, or a `--project` that is not listed under a
-`[workspace."<path>"]` section of cli.toml (the message names the mapped
-projects; `pf doctor` checks the mapping).
+`[workspace."<path>"]` section of the routed Cell's mapping file
+(cli.toml for the default Cell, `cli-<profile>.toml` for a named one;
+the message names that Cell's mapped projects; `pf doctor` checks the
+mapping).
 
 Transport: like every data-plane verb this one goes through the local daemon
 to the resolved Cell's AIHub connection (`--profile NAME` / `PF_PROFILE` /

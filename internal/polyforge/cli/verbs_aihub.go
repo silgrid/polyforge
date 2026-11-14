@@ -13,6 +13,8 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
+	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
@@ -67,34 +69,50 @@ var osGetwd = os.Getwd
 
 // requiredProjectFlagError is the polyforge#113 required-flag error,
 // byte-identical wherever inference cannot answer (no containing
-// workspace, no yaml). It never mutates.
+// workspace, no yaml). It never mutates. It is the default Cell's shape
+// (the Host file); a named Cell's invocation gets the same error naming
+// its own file (requiredProjectFlagErrorIn, polyforge#17).
 const requiredProjectFlagError = "file create: --project is required — there is no default project (polyforge#113); workspaces and their projects are declared in [workspace.\"<path>\"] sections of cli.toml (`pf doctor` checks the mapping)"
 
+// requiredProjectFlagErrorIn is the #113 required-flag error naming the
+// mapping file of the Cell the invocation routes to: the pinned Host-file
+// shape for the default Cell, the routed Cell's own file otherwise.
+func requiredProjectFlagErrorIn(file string) string {
+	if file == cellcfg.HostFileName {
+		return requiredProjectFlagError
+	}
+	return strings.Replace(requiredProjectFlagError, "sections of cli.toml", "sections of "+file, 1)
+}
+
 // inferProjectFromCwd is the file-create default: the process cwd
-// resolved against the expanded [workspace] mapping of cli.toml by
-// containment (cwd equal to or inside the workspace root). Exactly one
-// containing workspace that lists exactly ONE project answers it — the
-// create proceeds as if --project had been passed. Every other shape
-// asks for --project; inference never ambient-picks (the #113
-// principle).
+// resolved against the expanded [workspace] mapping of the routed Cell
+// (profile.go's routedCellMapping) by containment (cwd equal to or inside
+// the workspace root). Exactly one containing workspace that lists
+// exactly ONE project answers it — the create proceeds as if --project
+// had been passed. Every other shape asks for --project; inference never
+// ambient-picks (the #113 principle).
 func inferProjectFromCwd(ctx *Context) (string, error) {
+	plan, file, err := ctx.routedCellMapping()
+	if err != nil {
+		return "", fmt.Errorf("file create: %w", err)
+	}
 	cwd, err := osGetwd()
-	if err != nil || ctx.Cfg.Mapping == nil || ctx.Cfg.Mapping.Empty() {
-		return "", fmt.Errorf(requiredProjectFlagError)
+	if err != nil || plan == nil || plan.Empty() {
+		return "", errors.New(requiredProjectFlagErrorIn(file))
 	}
 	var containing []string
-	for _, ws := range ctx.Cfg.Mapping.Workspaces() {
+	for _, ws := range plan.Workspaces() {
 		if cwd == ws || strings.HasPrefix(cwd, ws+string(os.PathSeparator)) {
 			containing = append(containing, ws)
 		}
 	}
 	switch {
 	case len(containing) == 0:
-		return "", fmt.Errorf(requiredProjectFlagError)
+		return "", errors.New(requiredProjectFlagErrorIn(file))
 	case len(containing) > 1:
 		return "", fmt.Errorf("file create: --project is required — the working directory is inside more than one mapped workspace (%s); pass --project explicitly (placement stays unambiguous, polyforge#113)", strings.Join(containing, ", "))
 	}
-	projects := ctx.Cfg.Mapping.ProjectsOf(containing[0])
+	projects := plan.ProjectsOf(containing[0])
 	if len(projects) != 1 {
 		return "", fmt.Errorf("file create: --project is required — workspace %s maps %d projects (%s); pass --project explicitly (no default is invented)", containing[0], len(projects), strings.Join(projects, ", "))
 	}
@@ -102,17 +120,27 @@ func inferProjectFromCwd(ctx *Context) (string, error) {
 }
 
 // requireMappedProject validates a placement verb's --project (file
-// create, recall, remember) against the loaded mapping (polyforge#113).
-// An unmapped (or unvalidatable — no mapping configured) project is a
-// loud local error — wrapping the typed *mapping.UnmappedError, naming
-// the projects this machine does map and pointing at the [workspace]
-// shape and `pf doctor` — and nothing is sent to aihub.
+// create, recall, remember) against the [workspace] mapping of the Cell
+// the invocation routes to (polyforge#113; polyforge#17: the routed
+// Cell's, not the Host file's). An unmapped (or unvalidatable — no
+// mapping configured) project is a loud local error — wrapping the typed
+// *mapping.UnmappedError, naming the projects the routed Cell does map
+// and pointing at the [workspace] shape and `pf doctor` — and nothing
+// is sent to aihub.
 func requireMappedProject(ctx *Context, verb, project string) error {
-	if ctx.Cfg.Mapping.Empty() {
-		return fmt.Errorf("%s: project %q cannot be placed: no [workspace] mapping is configured in cli.toml — add a [workspace.\"<path>\"] section (`pf doctor` checks the mapping)", verb, project)
+	plan, file, err := ctx.routedCellMapping()
+	if err != nil {
+		return fmt.Errorf("%s: %w", verb, err)
 	}
-	if _, err := ctx.Cfg.Mapping.WorkspaceFor(project); err != nil {
-		return fmt.Errorf("%s: %w; mapped here: %s", verb, err, strings.Join(ctx.Cfg.Mapping.Projects(), ", "))
+	if plan.Empty() {
+		return fmt.Errorf("%s: project %q cannot be placed: no [workspace] mapping is configured in %s — add a [workspace.\"<path>\"] section (`pf doctor` checks the mapping)", verb, project, file)
+	}
+	if _, err := plan.WorkspaceFor(project); err != nil {
+		var ue *mapping.UnmappedError
+		if errors.As(err, &ue) {
+			ue.File = file
+		}
+		return fmt.Errorf("%s: %w; mapped here: %s", verb, err, strings.Join(plan.Projects(), ", "))
 	}
 	return nil
 }
@@ -275,7 +303,11 @@ func warnAcceptanceCarrier(ctx *Context, req aihubclient.CreateWorkItemRequest) 
 	if !ok {
 		return
 	}
-	ws, _ := ctx.Cfg.Mapping.WorkspaceFor(req.Project)
+	plan, _, err := ctx.routedCellMapping()
+	if err != nil {
+		return
+	}
+	ws, _ := plan.WorkspaceFor(req.Project)
 	fms, _, err := workspace.Bundles(workflow.ForWorkspace(dir, ws), bundle)
 	if err != nil || fms[bundle] == nil || len(fms[bundle].Steps) == 0 || !fms[bundle].RequiresAcceptance() {
 		return

@@ -465,9 +465,7 @@ func (h *Host) routeTo(profile string) (*Daemon, *api.Error) {
 	h.mu.Unlock()
 	switch {
 	case e == nil:
-		return nil, &api.Error{Code: api.ErrDaemonNotFound, Detail: fmt.Sprintf(
-			"unknown profile %q: no Cell is configured under that name — expected %s (create it with `pf cell add %s …` or write that file and run `pf --profile %s config reload`)",
-			profile, h.cellPath(profile), profile, profile)}
+		return nil, &api.Error{Code: api.ErrDaemonNotFound, Detail: cellcfg.UnknownProfileDetail(profile, h.cfg.Set.Dir)}
 	case d == nil:
 		return nil, &api.Error{Code: api.ErrDaemonNotFound, Detail: fmt.Sprintf(
 			"Cell %q has no live runtime: %s — nothing was sent to any other Cell", profile, invalid)}

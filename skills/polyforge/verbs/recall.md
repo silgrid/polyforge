@@ -18,11 +18,13 @@ pf recall --project P [--after CURSOR] [--sort updated|created] [--type T] [--ta
 ```
 
 The query is the positional argument (or `--q`); `--project` is REQUIRED
-(polyforge#113 — no default project exists) and must be a project of this
-machine's cli.toml `[workspace]` mapping (owner ruling 2026-10-16,
-superseding the 2026-10-13 C15 "not mapping-restricted" ruling): an
-unmapped project — or no mapping at all — is refused locally, naming the
-mapped projects, and nothing is sent. aihub then gates memory by project membership on its own: a search
+(polyforge#113 — no default project exists) and must be a project of the
+`[workspace]` mapping of the Cell the invocation routes to — cli.toml for
+the default Cell, `cli-<profile>.toml` for a named one (polyforge#17;
+owner ruling 2026-10-16, superseding the 2026-10-13 C15
+"not mapping-restricted" ruling): an unmapped project — or no mapping
+at all — is refused locally, naming that Cell's mapped projects, and
+nothing is sent. aihub then gates memory by project membership on its own: a search
 answers only memories of projects the caller can read; `project=` naming an
 unknown project or one the caller cannot read answers the same non-leaking
 `CORE-404`; reading a memory needs read access to its project (else `MEM-404`);
@@ -57,7 +59,8 @@ A step agent holds no aihub credential path. Inside a step (`PF_WI_ID` and
 (DAEMON-403): the step searches with `pf step recall <query>` (and reads a
 body with `pf step memory show <id>`), one call to the local daemon, which
 searches with its own credential, scoped to the step's own work item's
-project — the call names no project, and no cli.toml mapping is needed.
+project — the call names no project, and no `[workspace]` mapping is
+needed.
 Inside a task agent (`PF_TASK_ID`) `pf recall` and `pf memory show` go to
 the daemon the same way (`GET /task/memories/...`, `--project` that of the
 task's). Step and task agents search only: browse mode — an
@@ -83,7 +86,7 @@ remain, `next: <cursor>` (the value for `--after`).
 | `MEM-400` | Browse: an unknown `--sort`, a malformed or other-sort cursor; a query mixed with `--after`/`--sort` | Drop `--after`/`--sort` for a search, or drop the query to browse; pass `next_cursor` unchanged with the same `--sort`. |
 | (no code) `recall: a query is required inside a workflow step or task …` | Browse attempted by a step or task agent — local refusal, nothing sent | Give search words: browse is the human direct-aihub path. |
 | `CORE-404` | Unknown project, or one you cannot read (same answer, by design) | The project does not exist or you are not a member — check `--project`, or ask a maintainer for membership. |
-| (no code) `recall: … mapped here: …` | `--project` is not in this machine's `[workspace]` mapping (or there is no mapping) — local refusal, exit 1, nothing sent | Use one of the listed projects, or add the project to a `[workspace."<path>"]` section of cli.toml (`pf doctor` checks the mapping). |
+| (no code) `recall: … mapped here: …` | `--project` is not in the `[workspace]` mapping of the Cell the invocation routes to (or that Cell has no mapping) — local refusal, exit 1, nothing sent | Use one of the listed projects (they are the routed Cell's), or add the project to a `[workspace."<path>"]` section of that Cell's file — cli.toml for the default Cell, `cli-<profile>.toml` for a named one (`pf doctor` checks the mapping). |
 
 Zero hits are **not** an error: the table simply says `0 hit(s)`. Try
 different wording or drop a tag filter before concluding nothing is stored.

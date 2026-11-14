@@ -259,7 +259,9 @@ Eight standing rules, binding on every polyforge session:
    data-plane verb — `pf recall`, `pf memory`, `pf remember` included — is
    refused (DAEMON-403).
    The repo inventory and clone URLs always come from the aihub project
-   registry; the cli.toml `[workspace]` mapping is the only placement source.
+   registry; the `[workspace]` mapping of the Cell the invocation routes to
+   (cli.toml for the default Cell, `cli-<profile>.toml` for a named one;
+   polyforge#17) is the only placement source.
 6. **No unticketed writes into `.repo/` clones (polyforge#198).** This rule binds
    interactive chat sessions only — step agents never load this skill (pi steps run
    against the daemon's own agent dir, claude steps run `--safe-mode` — and they work
@@ -347,8 +349,9 @@ pf [global flags] <verb> [verb flags] [positional args]
   `pf doctor`). A missing file is not an error (defaults apply, empty
   mapping); a malformed file is. The mapping governs capsule placement:
   placement verbs (`file create`, `remember`, `recall`) REQUIRE
-  `--project` and refuse locally a project the mapping does not list (the
-  error names the mapped projects; owner ruling 2026-10-16) — aihub
+  `--project` and refuse locally a project the mapping of the routed Cell
+  does not list (the error names that Cell's mapped projects; owner ruling
+  2026-10-16, routed-Cell scoping polyforge#17) — aihub
   additionally gates memory by project membership (read access to search
   or read, the writer role to remember); `queue` without
   `--project` covers all mapped projects; one daemon serves every mapped
