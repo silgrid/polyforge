@@ -84,6 +84,7 @@ from pfstep import container, duration, git, gostr, jsonout, result, runner, ste
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
+from pfstep.engine import nested_roots, reached_roots  # noqa: E402
 from pfstep.engine import argv_of as engine_argv_of  # noqa: E402
 from pfstep.flaky import RerunRun, rerun_flaky  # noqa: E402
 from pfstep.junit import ReportRead, merge_reported, read_declared_report, snapshot_report  # noqa: E402
@@ -1246,34 +1247,6 @@ def resolve_default(repo_dir: str) -> str:
         if git.run(repo_dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/" + b, timeout=GIT_TIMEOUT).exit_code == 0:
             return b
     return ""
-
-
-def nested_roots(repo_dir: str) -> List[str]:
-    """The repo's nested engine roots: the directories (never the root)
-    whose tracked .polyforge/verify-scope.conf declares a root of their own."""
-    c = git.run(repo_dir, "ls-files", "-z", "--", "*/.polyforge/verify-scope.conf", timeout=GIT_TIMEOUT, literal_pathspecs=False)
-    if c.exit_code != 0:
-        return []
-    roots = []
-    suffix = "/.polyforge/verify-scope.conf"
-    for f in c.stdout.decode("utf-8", "replace").split("\x00"):
-        if f.endswith(suffix) and f[: -len(suffix)] != "":
-            roots.append(f[: -len(suffix)])
-    return sorted(roots)
-
-
-def reached_roots(roots: Sequence[str], paths: Sequence[str]) -> List[str]:
-    """The roots owning at least one of the paths (each path owned by its
-    deepest root), in root order."""
-    hit: Set[str] = set()
-    for p in paths:
-        best = ""
-        for d in roots:
-            if p.startswith(d + "/") and len(d) > len(best):
-                best = d
-        if best:
-            hit.add(best)
-    return [d for d in roots if d in hit]
 
 
 NO_FALLBACK_DIAGNOSTIC = "the engine answered mode full with no fallback diagnostic (a forced-full path or a full-only declaration)"

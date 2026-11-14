@@ -61,6 +61,7 @@ from typing import Any, Dict, List, Optional, Tuple  # noqa: E402
 from pfstep import duration, git, gostr, runner, stepenv  # noqa: E402
 from pfstep.engine import TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
 from pfstep.engine import argv_of as engine_argv_of  # noqa: E402
+from pfstep.engine import nested_roots, reached_roots  # noqa: E402
 from pfstep.invoke import Invocation, duration_flag  # noqa: E402
 from pfstep.runner import Runner, bash_argv, raise_on_termination  # noqa: E402
 
@@ -135,6 +136,14 @@ def timeout_of(c: EngineCommand) -> float:
     except ValueError:
         return COMMAND_TIMEOUT
     return d / duration.SECOND if d > 0 else COMMAND_TIMEOUT
+
+
+def nested_command(root: str, c: EngineCommand) -> EngineCommand:
+    """A nested root's command as the record names it: <root>/<name>. Its
+    cmd stays as its own report gave it — it runs in that report's root."""
+    return EngineCommand(name=root + "/" + c.name, phase=c.phase, cmd=c.cmd, requires_env=c.requires_env,
+                          requires_cmd=c.requires_cmd, timeout=c.timeout, report=c.report,
+                          rerun=c.rerun, source=c.source)
 
 
 class CheckRun:
@@ -224,6 +233,9 @@ class CheckRun:
         self.head = head.strip()
         self.inv.heads[self.repo] = self.head
 
+        # every planned command: (the command, the directory it runs in —
+        # its report's root —, that root as the record names it)
+        commands: List[Tuple[EngineCommand, str, str]] = []
         rep, ref, why = self.ask_engine(clone)
         self.details["engine"] = ref
         if rep is None:
@@ -232,11 +244,26 @@ class CheckRun:
         chosen, mode = choose(rep, TIER_LIGHT)
         self.details["reports"].append({"root": self.cwd_rel(clone), "mode": rep.mode,
                                         "light": mode == TIER_LIGHT, "commands": len(chosen)})
-        if not chosen:
+        commands += [(c, clone, self.cwd_rel(clone)) for c in chosen]
+        if mode == TIER_LIGHT:
+            # a light report owns its diff: every nested engine root the
+            # changed paths reach is a repository of its own — its report
+            # runs there, in its root, not behind a cd the model writes
+            for d in reached_roots(nested_roots(clone), rep.paths or []):
+                directory = os.path.join(clone, d)
+                root_rel = self.cwd_rel(directory)
+                nrep, nref, nwhy = self.ask_engine(directory)
+                if nrep is None:
+                    self.inv.summary = "repos/%s: the nested engine root %s: %s" % (self.repo, d, nwhy)
+                    return 2
+                nchosen, nmode = choose(nrep, TIER_LIGHT)
+                self.details["reports"].append({"root": root_rel, "mode": nrep.mode,
+                                                "light": nmode == TIER_LIGHT, "commands": len(nchosen)})
+                commands += [(nested_command(d, c), directory, root_rel) for c in nchosen]
+        if not commands:
             self.inv.summary = ("repos/%s: the engine planned no command (stack %s, conf %s)"
                                 % (self.repo, gostr.quote(rep.stack), rep.conf))
             return 2
-        commands: List[Tuple[EngineCommand, str, str]] = [(c, clone, self.cwd_rel(clone)) for c in chosen]
         for c, directory, root_rel in commands:
             self.inv.say("repos/%s: `%s` (%s)" % (self.repo, c.cmd, c.phase))
             entry = self.run_command(c, directory, root_rel)
