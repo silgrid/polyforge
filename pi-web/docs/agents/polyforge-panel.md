@@ -1740,6 +1740,8 @@ source, not in the client). Text is whitespace-collapsed, masked by the shared
 `maskPolyforgeCredentials` (the `progress.command` rules — narration can
 itself name a credential) and capped at 400 code points. A first-load window
 with no record of the harness's format reads as `available:false`.
+The job detail's execution progress is step-scoped in the panel: the DAG selects one step, defaulting to the current step (or the last run step for a finished job), and the progress block shows that step's complete stream including all rerun blocks. A manual DAG choice remains selected while live status advances. A pending/unstarted selection shows `polyforge.progress.notRun`; node title/aria-label timing remains the `step_started`/`step_done` hover contract.
+
 The job detail's execution progress, whole-job,
 is a separate, wider read face (`readProgressSnapshot`,
 `GET /api/polyforge/progress`): every spawn's transcript as narration plus one
@@ -2680,8 +2682,7 @@ contract holds); `steps`/`events` are unaffected either way.
 The selected detail renders the steps as a flow graph instead of a plain
 chip row (`buildStepGraph` in `components/PolyforgePanel.tsx`, pure):
 
-- **Nodes** — one node per step, `role="list"`/`role="listitem"`,
-  display-only (no click handler, no navigation). A node shows the 24-char
+- **Nodes** — one node per step, `role="list"`/`role="listitem"`, keyboard and pointer selectable, with `data-pf-step-selected` and a visible selected outline. The panel follows the current step until a manual selection; pending nodes remain selectable and show the localized not-run empty state in execution progress. A node shows the 24-char
   cut step name and a status dot only (removed the visible
   status text had added); the full untruncated name and the
   translated status label (`polyforge.stepStatus.*`: 已完成 / 进行中 / 待开始 /

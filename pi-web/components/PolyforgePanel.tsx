@@ -364,11 +364,12 @@ export function selectProgressStep(snapshot: PolyforgeProgressSnapshot | null, s
   const lines = snapshot.lines;
   const layout = progressBlocks(lines);
   const blocks = layout.blocks.filter((block) => block.step === step);
+  if (layout.blocks.length === 0) return snapshot;
   const selectedLines = blocks.flatMap((block) => lines.slice(block.first ?? block.start, (block.first ?? block.start) + block.count));
   return { ...snapshot, lines: selectedLines };
 }
 
-export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef, emptyMessage }: {
+export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef, emptyMessage, resetKey }: {
   wi: string | null;
   profile?: string;
   running: boolean;
@@ -376,6 +377,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   echoes: readonly PolyforgeOwnerEcho[];
   scrollRef: RefObject<HTMLDivElement | null>;
   emptyMessage?: string;
+  resetKey?: string;
 }) {
   const { t, locale } = useI18n();
   const [visibleCount, setVisibleCount] = useState(PROGRESS_RENDER_CHUNK);
@@ -399,7 +401,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setDetails(new Map());
     pinned.current = true;
     setAtBottom(true);
-  }, [wi]);
+  }, [wi, resetKey]);
   useEffect(() => {
     const total = snapshot?.lines.length ?? 0;
     if (visibleCount >= total) return;
@@ -1878,8 +1880,16 @@ export function PolyforgePanel({
                                   <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center" }}>
                                   <span
                                     role="listitem"
-                                    data-pf-step-selected={selectedStep === node.id}
+                                    tabIndex={0}
                                     onClick={() => { setSelectedStep(node.id); setSelectedStepManual(true); }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        setSelectedStep(node.id);
+                                        setSelectedStepManual(true);
+                                      }
+                                    }}
+                                    data-pf-step-selected={selectedStep === node.id}
                                     title={`${node.id} · ${stepStatusLabel(node.status)}${timing ? ` · ${formatEventTime(timing.startedAt)}` : ""}`}
                                     aria-label={`${node.id} · ${stepStatusLabel(node.status)}`}
                                     style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 6px", borderRadius: 6, border: skipped ? "1px dashed var(--border)" : "1px solid var(--border)", fontSize: 11, color: skipped ? "var(--text-dim)" : "var(--text)", fontFamily: "var(--font-mono, monospace)", background: selectedStep === node.id ? "var(--bg-selected)" : "transparent", outline: selectedStep === node.id ? "1px solid var(--accent)" : undefined, cursor: "pointer" }}
@@ -1928,7 +1938,7 @@ export function PolyforgePanel({
                               finished job from the status/cards lists, so the
                               wi falls back to the selection's watch snapshot
                               (reset per selection) and the last stream stays. */}
-                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} echoes={detailEchoes} scrollRef={detailScrollRef} />
+                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? ""} echoes={detailEchoes} scrollRef={detailScrollRef} />
                         </>
                       ) : (
                       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>{t("polyforge.selectJob")}</div>
