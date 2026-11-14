@@ -48,6 +48,17 @@ func TestUsageSummaryUnknown(t *testing.T) {
 	}
 }
 
+func TestUsageSummaryReadsLongSessionLine(t *testing.T) {
+	p := writeUsageFixture(t,
+		`{"type":"assistant","message":{"id":"before","usage":{"input_tokens":1,"output_tokens":2}}}`,
+		`{"type":"assistant","timestamp":"2026-01-01T00:01:00Z","message":{"id":"long","usage":{"input_tokens":3,"output_tokens":4}},"padding":"`+strings.Repeat("x", 70<<10)+`"}`,
+		`{"type":"assistant","message":{"id":"after","usage":{"input_tokens":5,"output_tokens":6}}}`)
+	got := ReadUsage([]string{p}, false)
+	if !got.Known || got.Input != 9 || got.Output != 12 {
+		t.Fatalf("long line usage = %+v", got)
+	}
+}
+
 func TestUsageSummaryFiltersResumeToCurrentDispatch(t *testing.T) {
 	p := writeUsageFixture(t,
 		`{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"id":"old","usage":{"input_tokens":10,"cache_read_input_tokens":1,"cache_creation_input_tokens":2,"output_tokens":3}}}`,
@@ -62,8 +73,8 @@ func TestRenderSectionUsageScope(t *testing.T) {
 	h := Header{Step: "build", Round: 1, Spawn: 1, Status: StatusDone,
 		Language: LangZhCN, Usage: UsageSummary{Known: true, Input: 12, CacheRead: 3, CacheWrite: 4, Output: 5, ContextPeak: 19, IncludesSubagents: true}}
 	s := RenderSection(h, "### 结论\n通过\n### 这一步要回答什么\nx\n### 做了什么\nx\n### 关键决定和理由\nx\n### 验证\nx\n### 发现的问题和风险\nnone\n### 给下游与未决\nnone")
-	if !strings.Contains(s, "| 子 agent 用量 | 包含 |") || strings.Contains(s, "| 子 agent 用量 | 不包含 |") {
-		t.Fatalf("scope row is not exact: %s", s)
+	if !strings.Contains(s, "| Token 用量 | 输入 12，缓存读 3，缓存写 4，输出 5，上下文峰值 19 |") || !strings.Contains(s, "| 子 agent 用量 | 包含 |") {
+		t.Fatalf("known usage rows are not exact: %s", s)
 	}
 	unknown := RenderSection(Header{Language: LangZhCN, Usage: UsageSummary{}}, "### 结论\nx\n### 这一步要回答什么\nx\n### 做了什么\nx\n### 关键决定和理由\nx\n### 验证\nx\n### 发现的问题和风险\nnone\n### 给下游与未决\nnone")
 	if !strings.Contains(unknown, "| Token 用量 | 未知 |") || strings.Contains(unknown, "输入 0") {
@@ -72,5 +83,9 @@ func TestRenderSectionUsageScope(t *testing.T) {
 	without := RenderSection(Header{Language: LangZhCN, Usage: UsageSummary{Known: true, IncludesSubagents: false}}, "### 结论\nx\n### 这一步要回答什么\nx\n### 做了什么\nx\n### 关键决定和理由\nx\n### 验证\nx\n### 发现的问题和风险\nnone\n### 给下游与未决\nnone")
 	if !strings.Contains(without, "| 子 agent 用量 | 不包含 |") {
 		t.Fatalf("excluded scope row is missing: %s", without)
+	}
+	english := RenderSection(Header{Language: LangEN, Usage: UsageSummary{Known: true, Input: 12, CacheRead: 3, CacheWrite: 4, Output: 5, ContextPeak: 19, IncludesSubagents: false}}, "### Conclusion\nx\n### The question this step answers\nx\n### What was done\nx\n### Decisions and why\nx\n### Verification\nx\n### Problems and risks found\nnone\n### For downstream, and what is open\nnone")
+	if !strings.Contains(english, "| Token usage | input 12, cache read 3, cache write 4, output 5, context peak 19 |") || !strings.Contains(english, "| Sub-agent usage | excluded |") {
+		t.Fatalf("English usage rows are not exact: %s", english)
 	}
 }
