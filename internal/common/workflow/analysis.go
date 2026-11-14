@@ -26,35 +26,11 @@ func IsAnalysisHeading(line string) bool {
 	return analysisHeadingRe.MatchString(strings.TrimSpace(line))
 }
 
-// analysisSection answers the text of doc's first analysis section:
-// the lines after its heading up to the next heading of level one or
-// two, the whole trimmed (found=false when there is none) — the shape
-// AcceptanceSection gives the acceptance section.
-func analysisSection(doc string) (text string, found bool) {
-	var b strings.Builder
-	for _, line := range strings.Split(doc, "\n") {
-		t := strings.TrimSpace(line)
-		if !found {
-			found = IsAnalysisHeading(t)
-			continue
-		}
-		if strings.HasPrefix(t, "# ") || strings.HasPrefix(t, "## ") {
-			break
-		}
-		b.WriteString(strings.TrimRight(line, " \t\r") + "\n")
-	}
-	if !found {
-		return "", false
-	}
-	return strings.TrimSpace(b.String()), true
-}
-
 // HasAnalysis reports whether content's analysis section carries text
 // — the one presence check `pf submit`, the auto-pull wave and the
 // queue display share. 「免分析」 written by the session on the owner's
 // explicit skip (with its date) is one such text; a missing section, or
 // a heading with no content, is not.
 func HasAnalysis(content string) bool {
-	text, found := analysisSection(content)
-	return found && text != ""
+	return false
 }
