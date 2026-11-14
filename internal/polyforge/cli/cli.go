@@ -170,10 +170,11 @@ type Command struct {
 }
 
 // commands is the full registry (help grouping is per-command metadata,
-// Command.Group, not position): the 13 routing verbs — 6 direct to aihub
+// Command.Group, not position): the 14 routing verbs — 6 direct to aihub
 // (file, queue, cancel, recall, remember, memory; the blocked exits are
-// `resume` = continue and `cancel` = abandon, v2-converge §7) + 7 on the
-// daemon UDS face (submit, watch, answer, pause, resume, wrap, ops) — with
+// `resume` = continue and `cancel` = abandon, v2-converge §7) + 8 on the
+// daemon UDS face (submit, watch, answer, pause, resume, wrap, override,
+// ops) — with
 // `chat` (the harness chat identity, also GroupExec) between ops and watch
 // and `result` (a workflow step's result delivery, #214, also GroupExec)
 // after watch, `ask` and `step` (a step's one entry point, workflow
@@ -194,6 +195,7 @@ var commands = []*Command{
 	cmdPause,
 	cmdResume,
 	cmdWrap,
+	cmdOverride,
 	cmdOps,
 	cmdWatch,
 	cmdTask,

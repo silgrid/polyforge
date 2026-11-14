@@ -507,6 +507,20 @@ func (d *DaemonClient) Answer(wiID string, payload AnswerPayload) (json.RawMessa
 		map[string]string{"X-PF-User": payload.AnsweredBy})
 }
 
+// OverrideView reads one work item's per-step overlay face
+// (GET /jobs/{wi}/overrides, polyforge#25).
+func (d *DaemonClient) OverrideView(wiID string) (json.RawMessage, error) {
+	return d.do("GET", "/jobs/"+url.PathEscape(wiID)+"/overrides", "", nil, nil)
+}
+
+// OverrideWrite applies one overlay change (POST /jobs/{wi}/overrides,
+// polyforge#25). The operator rides the body and the X-PF-User header
+// (the daemon fills an empty one from the header).
+func (d *DaemonClient) OverrideWrite(wiID string, req protocol.OverrideWriteRequest) (json.RawMessage, error) {
+	return d.do("POST", "/jobs/"+url.PathEscape(wiID)+"/overrides", "", req,
+		map[string]string{"X-PF-User": req.Operator})
+}
+
 // Pause asks the daemon to pause a running WI (no body: the daemon's close
 // path carries the clean_pause semantics itself).
 func (d *DaemonClient) Pause(wiID string) (json.RawMessage, error) {
