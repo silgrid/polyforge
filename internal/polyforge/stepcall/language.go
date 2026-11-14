@@ -66,11 +66,11 @@ type Labels struct {
 	GateRewindsTo, Waivable, LastStep, Skipped, NoteList, NoteSep string
 	MaxRewinds                                                    string
 	// A section's header (RenderSection) and its repos' diff stat.
-	SectionTitle, StampNote                                                string
-	Step, Round, Dispatch, Started, Ended, Duration, Model, Status, Reason string
-	Evidence, RepoCommits, NoRepo, StartUnknown, RepoStat, Usage, UsageScope                  string
-	StatStartUnknown, StatNoCommits, StatUnavailable, StatNoChanges        string
-	RoundEvents, OwnerMessages, None, PerOwner, Body                       string
+	SectionTitle, StampNote                                                  string
+	Step, Round, Dispatch, Started, Ended, Duration, Model, Status, Reason   string
+	Evidence, RepoCommits, NoRepo, StartUnknown, RepoStat, Usage, UsageScope string
+	StatStartUnknown, StatNoCommits, StatUnavailable, StatNoChanges          string
+	RoundEvents, OwnerMessages, None, PerOwner, Body                         string
 	// The event sections (回退 / Rewind, 收尾 / Close).
 	Event, Rewind, Close, EventNote, Trigger, TriggerText, TriggerPerOwner string
 	EventReason, ReasonSeeBody, ResultEnded, ResultCanceled, Redo, Rewinds string

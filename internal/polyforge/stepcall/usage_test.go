@@ -20,7 +20,7 @@ func TestUsageSummaryPiAndClaude(t *testing.T) {
 	pi := writeUsageFixture(t, `{"type":"message","message":{"role":"assistant","usage":{"input":10,"cacheRead":3,"cacheWrite":2,"output":4}}}`)
 	claude := writeUsageFixture(t, `{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":5,"cache_read_input_tokens":7,"cache_creation_input_tokens":2,"output_tokens":3}}}`)
 	got := ReadUsage([]string{pi, claude}, true)
-	if !got.Known || got.Input != 15 || got.CacheRead != 10 || got.CacheWrite != 2 || got.Output != 7 || got.ContextPeak != 20 {
+	if !got.Known || got.Input != 15 || got.CacheRead != 10 || got.CacheWrite != 4 || got.Output != 7 || got.ContextPeak != 15 {
 		t.Fatalf("usage = %+v", got)
 	}
 }

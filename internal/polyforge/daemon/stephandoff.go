@@ -209,6 +209,7 @@ func (sc *stepCall) stamp(lines []stepcall.Line, st *capsule.Step, a stepcall.Ha
 		OwnerMessages: owner, PerOwner: perOwner, Evidence: evidence,
 		Language: capsule.DispatchLanguage(j.capsuleDir, j.step, int64(j.attempt)),
 	}
+	h.Usage = handoffUsage(j.capsuleDir, j.step, int64(j.attempt))
 	l := stepcall.LabelsOf(h.Language)
 	if st != nil {
 		h.StartedAt, h.Model = st.StepStartedAt, st.Candidate
@@ -264,7 +265,36 @@ func (sc *stepCall) stamp(lines []stepcall.Line, st *capsule.Step, a stepcall.Ha
 	return h, rec
 }
 
-// attemptEvent renders one archived attempt of the round as an event line.
+// handoffUsage gathers the current dispatch transcript and its persisted
+// subagent sidecars. The header states inclusion explicitly even when the
+// sidecar directory is empty.
+func handoffUsage(capsuleDir, step string, spawn int64) stepcall.UsageSummary {
+	entries, _ := capsule.ReadSpawnJournal(capsuleDir)
+	var transcript string
+	for _, e := range entries {
+		if e.StepID == step && int64(e.SpawnN) == spawn {
+			transcript = e.Transcript
+		}
+	}
+	if transcript == "" {
+		return stepcall.ReadUsage(nil, true)
+	}
+	paths := []string{transcript}
+	for _, dir := range []string{capsule.SubagentDir(transcript)} {
+		items, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, item := range items {
+			if item.IsDir() || !strings.HasSuffix(item.Name(), ".jsonl") {
+				continue
+			}
+			paths = append(paths, filepath.Join(dir, item.Name()))
+		}
+	}
+	return stepcall.ReadUsage(paths, true)
+}
+
 func attemptEvent(at capsule.Attempt) string {
 	stamp := at.ArchivedAt
 	if stamp == "" {
