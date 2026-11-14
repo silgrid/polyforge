@@ -888,9 +888,15 @@ function enc(segment) {
 // restore right, so the in-place door is exercised end to end through
 // the console's own write route.
 async function scenarioPickerDeactivated(page) {
+  // Every view switch asserts on the SETTLED state of its own /web/api/
+  // context answer — the DOM only re-renders from a response, so each
+  // segment waits for the response it is about to judge (never for a
+  // delay, and never on the previous view's stale rows).
+  const firstContext = page.waitForResponse((r) => r.url().includes('/web/api/context'))
   await page.goto('/web/')
   const picker = page.getByTestId('picker')
   await picker.waitFor()
+  await firstContext
   await waitForContent(picker.locator('a'), 'S24: the picker never rendered its rows')
 
   // Default: the deactivated fixture project is absent, the active one present.
@@ -903,7 +909,9 @@ async function scenarioPickerDeactivated(page) {
   // restore entry in the same row.
   const toggle = page.getByTestId('show-deactivated')
   assert(await toggle.count() === 1, 'S24: no「show deactivated」entry beside the list')
+  const includeContext = page.waitForResponse((r) => r.url().includes('/web/api/context') && r.url().includes('include_deactivated=1'))
   await toggle.click()
+  await includeContext
   const row = picker.getByTestId('picker-row').filter({ hasText: dormant })
   await waitForContent(row, 'S24: the toggle did not reveal the deactivated project')
   assert((await row.textContent()).includes('deactivated'), 'S24: the revealed row carries no deactivated marker')
@@ -923,8 +931,14 @@ async function scenarioPickerDeactivated(page) {
   }
   assert(!(await row.textContent()).includes('deactivated'), 'S24: the restored row still carries the deactivated marker')
 
+  // Back to the default view: the restored project is listed there —
+  // the include-free context answer is the settle point (the include
+  // view's rows stay in the DOM until it lands, so the assertions
+  // judge the new answer, not the old rows).
   const toggleBack = page.getByTestId('show-deactivated')
+  const defaultContext = page.waitForResponse((r) => r.url().includes('/web/api/context') && !r.url().includes('include_deactivated'))
   await toggleBack.click()
+  await defaultContext
   const backRow = picker.getByTestId('picker-row').filter({ hasText: dormant })
   await waitForContent(backRow, 'S24: the default view never listed the restored project')
   assert(!(await backRow.textContent()).includes('deactivated'), 'S24: the restored project is still marked in the default view')

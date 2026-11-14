@@ -93,7 +93,8 @@ func TestUpgradeV250ProbeRunOnce(t *testing.T) {
 // TestUpgradeV250RoundTrip: v2.4.x data -> upgrade -> the current code
 // files a WI with an inventory and its claim serves only that repo
 // (the current code needs the whole chain, so the fixture applies every
-// later deploy/sql version before that leg) -> the chain rolled back,// v2.5.0's own rollback last -> the v2.4.x code's inventory write works
+// later deploy/sql version before that leg) -> the chain rolled back,
+// v2.5.0's own rollback last -> the v2.4.x code's inventory write works
 // again (unique index included).
 func TestUpgradeV250RoundTrip(t *testing.T) {
 	dataDir, raw := v24SchemaDB(t)

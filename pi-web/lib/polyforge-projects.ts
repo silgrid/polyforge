@@ -50,9 +50,11 @@ export function isPolyforgeProjectToken(value: unknown): value is string {
   return typeof value === "string" && PROJECT_TOKEN.test(value);
 }
 
-/** The project's global state, defaulted: an answer without the status
- *  field (a pf below the v0.2.1 floor) is the active line, the only state
- *  such a server can hold. */
+/** The project's global state, through the one parse path: the status
+ *  string when the answer carries one, else active. A pf older than the
+ *  status column answers nothing for it, and any value other than
+ *  "deactivated" is the active line — the only other state a project
+ *  has. */
 function sanitizeProjectStatus(raw: unknown): { status: "active" | "deactivated" } {
   const status = raw && typeof raw === "object" && typeof (raw as { status?: unknown }).status === "string"
     ? (raw as { status: string }).status

@@ -307,8 +307,9 @@ try {
     // the main area), each button named by its tab copy (aria-label/title).
     await withPage({ viewport: { width: 600, height: 900 } }, async (page) => {
       const panel = await openWork(page);
-      // intentional fourth sub-tab: 待集成 joins the Work rail after 全部.
-      assert.equal(await segments(page).count(), 4, "at ≤640px the Work rail carries four buttons");
+      // intentional fourth sub-tab: 待集成 joins the Work rail after 全部;
+      // polyforge#30 adds the fifth segment 项目 after 全部, before 待集成.
+      assert.equal(await segments(page).count(), 5, "at ≤640px the Work rail carries five buttons");
       const strip = dock(page).locator('[data-pf-tabstrip="work"]');
       assert.equal(await strip.getAttribute("aria-orientation"), "vertical", "the mobile rail is vertical, not a horizontal bar");
       const names = await segments(page).evaluateAll((nodes) => nodes.map((node) => [node.getAttribute("aria-label"), node.getAttribute("title")]));
@@ -323,7 +324,7 @@ try {
       }));
       assert.ok(boxes.every((box) => Math.abs(box.x - boxes[0].x) < 2), `the rail buttons form one vertical rail (${JSON.stringify(boxes)})`);
       assert.ok(boxes[0].y < boxes[1].y && boxes[1].y < boxes[2].y && boxes[2].y < boxes[3].y && boxes[3].y < boxes[4].y, `the rail stacks 作业, 任务, 全部, 项目, 待集成 top to bottom (${JSON.stringify(boxes)})`);
-      assert.ok(boxes.every((box) => box.width > 0 && box.height > 0), "all four buttons are rendered controls");
+      assert.ok(boxes.every((box) => box.width > 0 && box.height > 0), "all five buttons are rendered controls");
       const before = listRequests(page);
       const items = strip.getByRole("tab", { name: RE_ITEMS }).first();
       await items.click();

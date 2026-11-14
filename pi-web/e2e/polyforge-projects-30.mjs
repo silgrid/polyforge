@@ -1,9 +1,10 @@
 // carries: components/PolyforgeProjects*, lib/polyforge-projects*, app/api/polyforge/projects/*
 // — the Work panel's fifth sub-tab 项目 (polyforge#30): the mapped projects
 // with their global states. (The panel rail, the hook, the doc and the
-// locale tables stay with the suites and tests that already carry them
-// — polyforge-panel-213, the smoke suite and the component test — so the
-// light tier's selection carries keep their caps.)
+// locale tables stay with the suites and tests that already declare them
+// — polyforge.mjs and polyforge-cards.mjs for the panel and its doc, the
+// component test for the locale keys — so the light tier's selection
+// carries keep their caps.)
 //
 // Authored pre-code against polyforge#30's acceptance (AC7): the project
 // list hides the deactivated projects by default, a「显示已停用」entry
