@@ -41,7 +41,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { linkNode, readLog, writePiwebLauncher, writePiwebPackageTree, writeStub } from "./lane-stubs.mjs";
+import { ghStubBody, linkNode, readLog, releaseStubEnv, writePiwebLauncher, writePiwebPackageTree, writeStub } from "./lane-stubs.mjs";
 import { blockFail, blockPass, createCheck } from "./harness.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -91,6 +91,7 @@ const npmStub = [
   "",
 ].join("\n");
 writeStub(stubbin, "npm", npmStub);
+writeStub(stubbin, "gh", ghStubBody);
 // The deploy caller ran npm, so node is on its PATH next to it; the stubbed
 // PATH below holds no other node dir (/usr/bin need not have one).
 linkNode(stubbin);
@@ -146,6 +147,7 @@ const baseEnv = (session, tmuxDir, prefix, overrides = {}) => {
   // The global prefix holds node, as a real npm prefix does.
   linkNode(join(prefix, "bin"));
   return Object.assign(env, {
+    ...releaseStubEnv(join(scratch, "gh.argv"), `v${NEW}`),
     PATH: `${stubbin}:/usr/bin:/bin`,
     HOME: scratch,
     TMPDIR: scratch,

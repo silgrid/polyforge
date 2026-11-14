@@ -47,7 +47,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { writePiwebPrefix } from "./lane-stubs.mjs";
+import { ghStubBody, releaseStubEnv, writePiwebPrefix } from "./lane-stubs.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const deployScript = join(root, "deploy-piweb.sh");
@@ -193,6 +193,8 @@ for (const [name, body] of [
   chmodSync(join(stubbin, name), 0o755);
 }
 writePiwebPrefix(npmPrefixTemplate, { version: "0.1.1", entry: join(stubbin, "pi-web") });
+writeFileSync(join(stubbin, "gh"), ghStubBody);
+chmodSync(join(stubbin, "gh"), 0o755);
 
 // Named-mode tunnel config: its ingress service port must match portC so the
 // deploy script's named-tunnel identity (config port == local port) holds.
@@ -245,6 +247,7 @@ const deploy = async ({ expose = "cloudflare", tunnel, port, target = session })
   const piwebCountBefore = pidList("piweb").length;
   const env = withoutTmux({
     ...process.env,
+    ...releaseStubEnv(join(scratch, "gh.argv")),
     PATH: `${stubbin}:${process.env.PATH}`,
     TMPDIR: scratch,
     HOME: scratch, // keep ~/.piweb residue inside the scratch dir (code review)

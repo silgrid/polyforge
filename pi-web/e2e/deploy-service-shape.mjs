@@ -380,12 +380,14 @@ const baseEnv = (session, overrides = {}) => {
     if (key.startsWith("PI_WEB_")) delete env[key];
     if (key.startsWith("PIWEB_") && key !== "PIWEB_TMUX_SESSION") delete env[key];
   }
-  delete env.GHSTUB_LOG;
-  delete env.GHSTUB_LATEST_TAG;
-  delete env.GHSTUB_PAYLOAD;
-  delete env.GHSTUB_HASH;
-  delete env.GHSTUB_CHECKSUM_MODE;
+  // the default install channel (the latest release of silgrid/polyforge)
+  // is served by the gh stub
   Object.assign(env, {
+    GHSTUB_LOG: ghLog,
+    GHSTUB_LATEST_TAG: LATEST_TAG,
+    GHSTUB_PAYLOAD: PAYLOAD,
+    GHSTUB_HASH: HASH,
+    GHSTUB_CHECKSUM_MODE: "match",
     PATH: `${stubbin}:${process.env.PATH}`,
     TMPDIR: scratch,
     HOME: scratch,
@@ -508,6 +510,25 @@ try {
   });
 
   // --- AC1: explicit environment still wins over deploy.env -----------------
+  await scenario("the default install channel is the latest GitHub Release of silgrid/polyforge, never npm", async () => {
+    writeDeployEnv(null);
+    const port = await freePort();
+    const record = join(scratch, "default-channel.jsonl");
+    rmSync(record, { force: true });
+    rmSync(ghLog, { force: true });
+    rmSync(npmLog, { force: true });
+    writeStubConfig(record, "serve");
+    const result = runDeploy({ args: [] }, baseEnv(sessions[0], { PIWEB_PORT: String(port), PI_WEB_PASSWORD: PASSWORD }));
+    assert.equal(result.status, 0, `a deploy with PIWEB_INSTALL_REPO unset must install from the default release channel\n${output(result)}`);
+    const gh = readLog(ghLog);
+    assert.ok(gh.some((line) => /^release download -R silgrid\/polyforge\b/.test(line)), `the tarball must come from silgrid/polyforge's release; observed gh argv: ${JSON.stringify(gh)}`);
+    const installs = readLog(npmLog).filter((line) => /^install\b/.test(line));
+    assert.equal(installs.length, 1, `exactly one npm install; observed: ${JSON.stringify(installs)}`);
+    assert.match(installs[0], new RegExp(`^install -g \\S*/silgrid-pi-web-${LATEST_TAG.slice(1).replaceAll(".", "\\.")}\\.tgz$`), "npm installs the verified release tarball");
+    assert.doesNotMatch(installs[0], /@latest|@silgrid\/pi-web/, "nothing is installed from the npm registry");
+    await waitForRecords(record, 1);
+  });
+
   await scenario("AC1: explicit environment beats deploy.env", async () => {
     const filePort = await freePort();
     const explicitPort = await freePort();

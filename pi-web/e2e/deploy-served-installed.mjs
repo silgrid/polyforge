@@ -49,7 +49,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, s
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ghStubBody, laneRemoteEnv, linkNode, writePiwebLauncher, writePiwebPackageTree, writeStub } from "./lane-stubs.mjs";
+import { ghStubBody, laneRemoteEnv, linkNode, releaseStubEnv, writePiwebLauncher, writePiwebPackageTree, writeStub } from "./lane-stubs.mjs";
 import { blockFail, blockPass, createCheck } from "./harness.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -189,6 +189,7 @@ const baseEnv = (session, pathDir, prefix, overrides = {}) => {
   // shell's /usr/bin need not.
   linkNode(join(prefix, "bin"));
   return Object.assign(env, {
+    ...releaseStubEnv(join(scratch, "gh.argv"), `v${NEW}`),
     PATH: `${stubbin}:${pathDir}:${process.env.PATH}`,
     HOME: scratch,
     TMPDIR: scratch,

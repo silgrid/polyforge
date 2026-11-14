@@ -56,8 +56,9 @@ once).
   Web ships only as part of the GitHub Release, so this is the install path;
   it is not installed from the npm registry. The check can be run again by
   hand: `node "$(npm root -g)/@silgrid/pi-web/bin/pi-web-install-check.js"`.
-- `deploy-piweb.sh` (`PIWEB_INSTALL_REPO` / `PIWEB_INSTALL_VERSION`) installs
-  a pinned release for the container-autostart service; the repository's
+- `deploy-piweb.sh` installs a release for the container-autostart service
+  (`PIWEB_INSTALL_REPO`, default `silgrid/polyforge`; `PIWEB_INSTALL_VERSION`
+  pins one tag, else the latest release); the repository's
   `.polyforge/deploy.sh <version> --confirm <version> --component pi-web`
   drives it.
 
