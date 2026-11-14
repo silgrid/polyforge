@@ -1089,7 +1089,9 @@ when it declares none) and `skippable` (`true` when the lane declares the
 step `skippable: true`, else absent). A bundle the one lane loader refuses is listed only in
 `bundle_errors` (`bundle`, `reason`: every `WFC-*` defect); the rest still render. With `--cwd`
 inside a mapped workspace it adds `workspace`, `projects` (the mapping's
-projects, in order) and, per step, `effective.<project>` — the effective
+projects, in order — the `[workspace]` mapping of the Cell the invocation
+routes to: cli.toml for the default Cell, `cli-<profile>.toml` for a named
+one) and, per step, `effective.<project>` — the effective
 chain (`models`) and the level it came from (`from`), resolved by the same
 precedence chain a dispatch uses (absent when no level governs, so the
 harness default runs), and `skip` — `{<project>: true}` for each project that

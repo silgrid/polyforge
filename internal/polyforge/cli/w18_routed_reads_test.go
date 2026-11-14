@@ -251,7 +251,9 @@ func TestW18WorkflowsListsTheRoutedCellsMapping(t *testing.T) {
 
 	// The unreachable daemon stays a degradation, never a failure: with
 	// no Host answering, the resolver falls back to the disk index and
-	// the default Cell's mapping still answers the --cwd facts.
+	// the default Cell's mapping still answers the --cwd facts (from a
+	// neutral cwd — the disk index routes by the working directory).
+	t.Chdir(t.TempDir())
 	down := map[string]string{"XDG_CONFIG_HOME": f.env["XDG_CONFIG_HOME"], "PF_DAEMON_SOCKET": filepath.Join(t.TempDir(), "none.sock")}
 	code, stdout, stderr = runPf(t, down, "--json", "workflows", "--cwd", f.wsD)
 	if code != 0 {
