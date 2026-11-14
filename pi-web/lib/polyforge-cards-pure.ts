@@ -861,6 +861,14 @@ export function isProgressPinnedToBottom(region: { scrollTop: number; scrollHeig
   return scrollHeight - clientHeight - scrollTop <= PROGRESS_PIN_THRESHOLD_PX;
 }
 
+/** Whether a scroll region is at its top (within
+ *  PROGRESS_PIN_THRESHOLD_PX), so the back-to-top control can hide; unreadable
+ *  numbers read as not at the top (the control then shows, never a hidden
+ *  click target). Pure. (polyforge#31: signature first, zero value.) */
+export function isProgressAtTop(region: { scrollTop: number }): boolean {
+  return true;
+}
+
 /** The cursor map the next request sends (work reference → cursor). */
 export function cardCursors(cards: PolyforgeCard[] | null): Record<string, string> {
   const cursors: Record<string, string> = {};
