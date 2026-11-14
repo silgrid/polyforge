@@ -21,7 +21,7 @@ func TestW243DualLayoutContainerDeploys(t *testing.T) {
 	d.setRunningLayout("dual")
 	d.legacy["v2.2.0"] = true
 	d.tagLegacy("v2.2.0")              // its deploy/Dockerfile copies the binary named aihub
-	d.release("v2.2.0", false, "", "") // no GHCR image: the rollback image is built from the saved binary
+	d.release("v2.2.0", false, "", "") // no GHCR image: the rollback image is the running image, reused (the dual layout answers through /aihub)
 	d.release("v2.3.0", true, digNew, digNew)
 	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
 	if err != nil {

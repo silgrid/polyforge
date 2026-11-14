@@ -839,9 +839,13 @@ the Work tab carries no count. The former Jobs and Tasks tabs are Work's
 first two sub-tabs (作业/任务 in zh-CN, 作業/任務 in zh-TW, so the workflow jobs
 and the one-shot tasks read apart from pi's own background-tasks surface),
 followed by the read-only work item list (全部 / 全部 /
-All — 工单列表 / 工單列表 / Work items before polyforge#22, `polyforge.work.itemsTab`) and the integration view (
+All — 工单列表 / 工單列表 / Work items before polyforge#22, `polyforge.work.itemsTab`), the
+project list (项目 / 專案 / Projects, `polyforge.work.projectsTab`,
+polyforge#30: the mapped projects with their global states — deactivated ones
+hidden by default behind a「显示已停用」toggle, marked, restorable in place
+through the route's one write) and the integration view (
 待集成 / 待整合 / Integration, `polyforge.work.integrateTab`) — order 作业,
-任务, 全部, 待集成 — in their
+任务, 全部, 项目, 待集成 — in their
 own tablist (`data-pf-tabstrip="work"`) placed after the main area in the
 DOM, beside it on the right (`aria-orientation="vertical"`): on desktop (viewport ≥ 641px,
 `useIsMobile`, whatever the dock width) a ~72px text rail (`flex: 0 0 72px`,
@@ -855,8 +859,8 @@ icon-only buttons — a 16px stroke icon in the panel's 24-viewBox style
 (`WORK_TAB_ICONS`, `aria-hidden`) with the running badge under it, each
 button named by its existing tab copy (`aria-label` and `title` =
 `polyforge.messages.jobsTab` / `polyforge.tasks.tab` /
-`polyforge.work.itemsTab` / `polyforge.work.integrateTab`; 待集成's icon is
-branches merging into one line).
+`polyforge.work.itemsTab` / `polyforge.work.projectsTab` / `polyforge.work.integrateTab`; 待集成's icon is
+branches merging into one line; 项目's is a folder).
 
 **Two parts stacked (owner 2026-11-09).** At every width
 (the 460px and 340px docks, the ≤640px 40px icon rail, the 375px sheet) Work

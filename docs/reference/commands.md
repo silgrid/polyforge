@@ -187,6 +187,22 @@ has no read API — inspect it with sqlite directly. On a terminal the CLI
 prompts for the project name after a dry-run preview; without `--yes` on a
 pipe it refuses outright.
 
+`pf projects deactivate <id-or-name>` and `pf projects restore <id-or-name>`
+(`POST /api/v1/projects/{id}/deactivate|restore`) move a project's global
+state: deactivated, the whole project is read-only on the server (creating or
+modifying work items, comments, submits and claims — the daemon's auto-claim
+included — resume execution, dependency writes and memory writes answer
+`CORE-403 PROJECT_DEACTIVATED`; reads keep answering under the existing
+permissions) and every default list hides it. Neither door deletes anything;
+only `pf projects delete` below removes data. Deactivation is refused
+(`CORE-409 NON_TERMINAL_WORK_ITEMS`, every blocker listed) while the project
+still has queued, running, paused or blocked work items — settle the work
+first. Both doors need a project maintainer or an admin; the console's
+project picker and Pi Web's Work › 项目 view restore in place from the
+marked row. `pf projects list [--show-deactivated]` lists the active line by
+default; the flag adds the deactivated projects with their marker.
+
+
 Human moves: continue = `pf resume <id>` (a paused or blocked
 work item), abandon = `pf cancel <id>` (queued, paused or blocked); to send
 the work back to an earlier step or waive a gate's FAIL, tell the step's
@@ -1398,7 +1414,14 @@ problem: the next candidate at once, and none left parks the work item
 the same session resumes with the reminder to end with a hand-off, and
 the third in a row parks. `rate_limited` and `upstream_transient` retry
 the same model after a backoff of 1 s, doubling to at most 3 min, never
-counted; `tool_hung` resumes the same session once with Y doubled (a
+counted. The transient texts the classification recognizes include the
+throttles (429 / rate limit / `overloaded` / the gateways' `server
+overload. Please retry later.` and concurrency texts) and the upstream
+transients: a response stream that ended or was interrupted before
+completion, an upstream/gateway named `temporarily unavailable`, a
+gateway's `no available accounts`, and the upstream model reporting an
+error after output had started (the output so far is partial);
+`tool_hung` resumes the same session once with Y doubled (a
 second timeout parks); any other exit (`exit_other`, `exit_host_class`,
 `harness_silent`) resumes once, and the second in a row parks. A
 restarted daemon serves only what is left of a backoff, and `pf ops

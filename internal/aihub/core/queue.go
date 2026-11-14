@@ -38,14 +38,32 @@ func queueLess(a, b *WIView) bool {
 // one of the project's repos (reference.md §2.1; else its claim would be refused
 // INVENTORY_REPO_GONE on every drain wave).
 func (m *WIManager) ReadyQueue(project string) (*ReadyQueue, error) {
-	var projectID, projectName string
-	err := m.db.QueryRow(`SELECT id, name FROM projects WHERE name=?1 OR id=?1`, project).
-		Scan(&projectID, &projectName)
+	var projectID, projectName, status string
+	err := m.db.QueryRow(`SELECT id, name, status FROM projects WHERE name=?1 OR id=?1`, project).
+		Scan(&projectID, &projectName, &status)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, Fail(api.ErrCoreNotFound, "", "project %q", project)
 		}
 		return nil, err
+	}
+	q := &ReadyQueue{
+		Project: projectName,
+		Items:   []WIView{},
+		Running: []WIView{},
+		Paused:  []WIView{},
+	}
+	// polyforge#30 (AC8): a deactivated project contributes NOTHING to
+	// the auto-claim's source — the executable segment never proposes its
+	// work items, so the daemon's drain wave cannot pull one (the claim
+	// door answers the typed PROJECT_DEACTIVATED refusal in any case;
+	// this early read keeps the wave from re-meeting it every round).
+	// The rule that a deactivated project holds no queued, running,
+	// paused or blocked work item (the deactivation 409) leaves the
+	// visibility segments empty here by construction; the reads the
+	// console and the CLI use (the list and detail doors) are untouched.
+	if status == api.ProjectStatusDeactivated {
+		return q, nil
 	}
 	projectRepos, err := projectReposTx(m.db, projectID)
 	if err != nil {
@@ -54,12 +72,6 @@ func (m *WIManager) ReadyQueue(project string) (*ReadyQueue, error) {
 	inProject := map[string]bool{}
 	for _, pr := range projectRepos {
 		inProject[pr.Name] = true
-	}
-	q := &ReadyQueue{
-		Project: projectName,
-		Items:   []WIView{},
-		Running: []WIView{},
-		Paused:  []WIView{},
 	}
 	// One read of every candidate: the WorkItem, its public session block
 	// (m4), the unfinished blockers flag (#161) and the frozen inventory

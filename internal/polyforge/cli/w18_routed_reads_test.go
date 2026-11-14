@@ -325,8 +325,8 @@ func TestW18QueueMergesTheRoutedCellsMapping(t *testing.T) {
 	if len(doc.LanesMissing) != 0 {
 		t.Fatalf("devuser is aproj's lane through alpha's mapping — no lanes_missing: %+v", doc.LanesMissing)
 	}
-	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 1 {
-		t.Fatalf("--profile alpha queue: default hub got %d, alpha hub got %d (want 0/1)", nDef, nAlpha)
+	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 2 {
+		t.Fatalf("--profile alpha queue: default hub got %d, alpha hub got %d (want 0/2 — the deactivation status read + the list, polyforge#30)", nDef, nAlpha)
 	}
 
 	// The cwd match routes the same merge: standing in wsA without
@@ -354,8 +354,8 @@ func TestW18QueueMergesTheRoutedCellsMapping(t *testing.T) {
 	if doc.Total != 1 || doc.Items[0].ProjectName != "dproj" {
 		t.Fatalf("--profile default queue: %+v, want the one dproj ticket", doc)
 	}
-	if _, nAlpha := w18Counts(f.def, f.alpha); nAlpha != 2 {
-		t.Fatalf("the alpha hub saw %d request(s) after the default merge (want the 2 routed ones)", nAlpha)
+	if _, nAlpha := w18Counts(f.def, f.alpha); nAlpha != 4 {
+		t.Fatalf("the alpha hub saw %d request(s) after the default merge (want the 4 routed ones — status read + list per queue run, polyforge#30)", nAlpha)
 	}
 }
 

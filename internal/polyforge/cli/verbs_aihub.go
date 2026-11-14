@@ -764,6 +764,18 @@ func queueMerged(ctx *Context, m *mapping.Plan, ready bool, filter aihubclient.W
 	projects := m.Projects()
 	var items []WIView
 	for _, p := range projects {
+		// polyforge#30 (AC6): the default view lists no deactivated
+		// project — one project read decides, and its list is never even
+		// queried. A status read that fails falls through to the list
+		// query, which answers with its own error, exactly as before.
+		if raw, err := ctx.aihub().GetProject(p); err == nil {
+			var proj struct {
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(raw, &proj) == nil && proj.Status == api.ProjectStatusDeactivated {
+				continue
+			}
+		}
 		var (
 			raw json.RawMessage
 			err error

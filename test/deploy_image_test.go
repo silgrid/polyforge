@@ -16,7 +16,14 @@ package test
 // aihub subcommand and prints a usage error to stdout whose last word is
 // "directory") or "junk" (both /pf and /aihub print only a usage error -
 // nothing readable). Each fake docker verb answers only on the paths its
-// image layout really has.
+// image layout really has. An image may also be referenced by its ID (line
+// 1 of its image file): run/tag/image inspect resolve a sha256:<id>
+// reference by scanning the image files, like the real docker.
+// FAKE_RUNIMG_VER overrides the version an ID-referenced image answers in
+// `docker run` only - the running container's binary can differ from its
+// image (e.g. a docker-cp patched container answers through exec while its
+// image says something else), which is exactly the image the rollback
+// reuse must refuse.
 
 import (
 	"bytes"
@@ -34,11 +41,21 @@ side="${FAKE_SIDE:-local}"
 S="$FAKE_W/dk-$side"; mkdir -p "$S/img"
 echo "$side docker $*" >> "$FAKE_W/log-docker"
 key() { printf '%s' "$1" | tr '/:@' '___'; }
+# imgf <ref>: the image's file - by name key, else by ID (line 1 of an
+# image file names the ID the real docker accepts in run/tag/inspect).
+imgf() {
+  k=$(key "$1"); if [ -f "$S/img/$k" ]; then echo "$S/img/$k"; return 0; fi
+  for x in "$S/img/"*; do [ -e "$x" ] || continue
+    [ "$(sed -n 1p "$x")" = "$1" ] && { echo "$x"; return 0; }
+  done
+  return 1
+}
 fmt=""
+OVR=""
 # ver <image-file> <path> <args...>: the layout's -version answer, or a
 # missing-path failure (exit 127) when the image has no such binary.
 ver() {
-  v=$(sed -n 2p "$1"); lay=$(sed -n 4p "$1"); p="$2"; shift 2
+  v=$(sed -n 2p "$1"); [ -n "$OVR" ] && v="$OVR"; lay=$(sed -n 4p "$1"); p="$2"; shift 2
   case "$lay:$p:$*" in
     pf:/pf:"aihub -version") echo "$v" ;;
     aihub:/aihub:-version|dual:/aihub:-version) echo "aihub $v" ;;
@@ -56,7 +73,7 @@ case "$1" in
   image)
     shift; [ "$1" = inspect ] || exit 1; shift
     if [ "$1" = "-f" ]; then fmt="$2"; shift 2; fi
-    f="$S/img/$(key "$1")"; [ -f "$f" ] || exit 1
+    f=$(imgf "$1") || exit 1
     id=$(sed -n 1p "$f"); dg=$(sed -n 3p "$f")
     case "$fmt" in
       '{{.Id}}') echo "$id" ;;
@@ -68,7 +85,8 @@ case "$1" in
   run)
     shift; ep=""; img=""
     while [ $# -gt 0 ]; do case "$1" in --rm) shift ;; --entrypoint) ep="$2"; shift 2 ;; *) img="$1"; shift; break ;; esac; done
-    f="$S/img/$(key "$img")"; [ -f "$f" ] || exit 1
+    f=$(imgf "$img") || exit 1
+    OVR=""; case "$img" in sha256:*) OVR="${FAKE_RUNIMG_VER:-}" ;; esac
     case "$ep" in /pf|/aihub) ver "$f" "$ep" "$@"; exit $? ;; git|curl) echo "$ep version 1" ;; esac
     exit 0 ;;
   save) shift; [ "$1" = -o ] && { cp "$S/img/$(key "$3")" "$2.body"; { echo "$3"; cat "$2.body"; } > "$2"; rm -f "$2.body"; }; exit 0 ;;
@@ -78,7 +96,7 @@ case "$1" in
           lp=$(cat "$FAKE_W/lockpid"); pkill -KILL -P "$lp"; kill -KILL "$lp"; sleep 0.3
         fi
         printf '%s\n' "$in" | sed 1d > "$S/img/$(key "$ref")"; echo "Loaded image: $ref"; exit 0 ;;
-  tag) cp "$S/img/$(key "$2")" "$S/img/$(key "$3")"; exit 0 ;;
+  tag) f=$(imgf "$2") || exit 1; cp "$f" "$S/img/$(key "$3")"; exit 0 ;;
   rmi) rm -f "$S/img/$(key "$2")"; exit 0 ;;
   images) for f in "$S/img/"*; do [ -e "$f" ] && basename "$f"; done; exit 0 ;;
   inspect)
@@ -87,6 +105,9 @@ case "$1" in
     case "$3" in
       '{{.State.Status}}') echo running ;; '{{.State.Running}}') if $bad; then echo false; else echo true; fi ;;
       '{{.Config.Image}}') cat "$c" ;;
+      # the image ID the container was created from (the reuse key: a tag
+      # name could already point elsewhere)
+      '{{.Image}}') sed -n 1p "$S/img/$(key "$(cat "$c")")" ;;
     esac; exit 0 ;;
   exec)
     c="$S/container"; [ -n "$FAKE_BAD_IMG" ] && [ "$(cat "$c")" = "$FAKE_BAD_IMG" ] && exit 1
@@ -544,6 +565,10 @@ func TestReleaseDeployLegacyRollbackBuild(t *testing.T) {
 	d.tagLegacy("v2.2.0")              // its deploy/Dockerfile copies the binary named aihub
 	d.release("v2.2.0", false, "", "") // first time: no GHCR image for the running version
 	d.release("v2.3.0", true, digNew, digNew)
+	// the running image no longer qualifies for reuse (the image by ID
+	// answers a different version than the container's exec does), so the
+	// legacy fallback build runs - the path this test pins
+	d.env = append(d.env, "FAKE_RUNIMG_VER=v9.9.9")
 	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
 	if err != nil {
 		t.Fatalf("deploy failed: %v\n%s", err, out)

@@ -995,8 +995,8 @@ func (m *AdminManager) CreateProject(req CreateProjectRequest) (*api.Project, er
 		return nil, err
 	}
 	now := Now()
-	if _, err := m.db.Exec(`INSERT INTO projects(id, name, description, repos, created_at, updated_at)
-		VALUES (?1,?2,?3,?4,?5,?5)`,
+	if _, err := m.db.Exec(`INSERT INTO projects(id, name, description, status, repos, created_at, updated_at)
+		VALUES (?1,?2,?3,'active',?4,?5,?5)`,
 		id, req.Name, req.Description, string(repos), now); err != nil {
 		if isUniqueViolation(err) {
 			return nil, Fail(api.ErrCoreConflict, "", "project %q already exists", req.Name)
@@ -1009,9 +1009,9 @@ func (m *AdminManager) CreateProject(req CreateProjectRequest) (*api.Project, er
 func (m *AdminManager) GetProject(idOrName string) (*api.Project, error) {
 	var p api.Project
 	var repos string
-	err := m.db.QueryRow(`SELECT id, name, description, repos, created_at, updated_at
+	err := m.db.QueryRow(`SELECT id, name, description, status, repos, created_at, updated_at
 		FROM projects WHERE id=?1 OR name=?1`, idOrName).
-		Scan(&p.ID, &p.Name, &p.Description, &repos, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.Name, &p.Description, &p.Status, &repos, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, Fail(api.ErrCoreNotFound, "", "project %q", idOrName)
 	}
@@ -1077,15 +1077,22 @@ func (m *AdminManager) ListProjectMemberContacts(projectID, callerID string, inc
 	return out, rows.Err()
 }
 
-// ListProjects returns the oldest listProjectsCap projects and the total
-// project count (the caller's object access is decided per object at the
-// business endpoints).
-func (m *AdminManager) ListProjects() ([]api.Project, int, error) {
+// ListProjects returns the oldest listProjectsCap projects and the
+// total project count (the caller's object access is decided per object
+// at the business endpoints). A deactivated project is hidden unless
+// includeDeactivated is set (polyforge#30: the default lists carry the
+// active line only); the total stays the true count of every project
+// — the same page semantics a capped list already has.
+func (m *AdminManager) ListProjects(includeDeactivated bool) ([]api.Project, int, error) {
 	total, err := m.countRows("projects")
 	if err != nil {
 		return nil, 0, err
 	}
-	rows, err := m.db.Query(`SELECT id FROM projects ORDER BY created_at LIMIT ?1`, listProjectsCap)
+	filter := ""
+	if !includeDeactivated {
+		filter = " WHERE status='active'"
+	}
+	rows, err := m.db.Query(`SELECT id FROM projects`+filter+` ORDER BY created_at LIMIT ?1`, listProjectsCap)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1217,6 +1224,111 @@ func (m *AdminManager) PatchProject(idOrName string, req ProjectPatchRequest) (*
 
 // ---------------------------------------------------------------------------
 // Project hard delete
+
+// DeactivateProject moves the project to the deactivated state
+// (polyforge#30): the server then refuses every write that does work on
+// the project — creating or modifying work items, comments, submits and
+// claims, resume execution, memory writes — while its reads keep
+// answering under the existing permissions. Nothing is deleted. The
+// checks and the flip run in ONE transaction: an unknown id/name
+// answers CORE-404, an already deactivated project CORE-409, and any
+// work item in a non-terminal status (queued|running|paused|blocked —
+// bundled and bundle-less alike) answers CORE-409 naming every
+// offending <project>#<seq> slug, the same rule the hard delete keeps;
+// nothing is canceled or removed (the caller settles the work first).
+func (m *AdminManager) DeactivateProject(idOrName string) (*api.Project, error) {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var projectID, name, status string
+	err = tx.QueryRow(`SELECT id, name, status FROM projects WHERE id=?1 OR name=?1`, idOrName).
+		Scan(&projectID, &name, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, Fail(api.ErrCoreNotFound, "", "project %q", idOrName)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if status == api.ProjectStatusDeactivated {
+		return nil, Fail(api.ErrCoreConflict, "ALREADY_DEACTIVATED",
+			"project %s is already deactivated", name)
+	}
+	var slugs []string
+	rows, err := tx.Query(`SELECT seq FROM work_items WHERE project_id=?1
+		AND status NOT IN ('wrapped','failed','canceled') ORDER BY seq`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var seq int
+		if err := rows.Scan(&seq); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		slugs = append(slugs, fmt.Sprintf("%s#%d", name, seq))
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close() // the checks and the flip run on the same connection
+	if len(slugs) > 0 {
+		extra, merr := json.Marshal(struct {
+			Reason    string   `json:"reason"`
+			WorkItems []string `json:"work_items"`
+		}{Reason: "NON_TERMINAL_WORK_ITEMS", WorkItems: slugs})
+		if merr != nil {
+			return nil, merr
+		}
+		return nil, &api.Error{Code: api.ErrCoreConflict,
+			Detail: fmt.Sprintf("project %s cannot be deactivated while it has non-terminal work items (wrap, fail or cancel them first, or wait for them to finish): %s",
+				name, strings.Join(slugs, ", ")),
+			Extra: extra}
+	}
+	if _, err := tx.Exec(`UPDATE projects SET status='deactivated', updated_at=?2 WHERE id=?1`,
+		projectID, Now()); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return m.GetProject(projectID)
+}
+
+// RestoreProject moves a deactivated project back to active: every
+// refused write is accepted again immediately and nothing was lost
+// while it was deactivated. An unknown id/name answers CORE-404, an
+// active project CORE-409 (the typed NOT_DEACTIVATED conflict).
+func (m *AdminManager) RestoreProject(idOrName string) (*api.Project, error) {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var projectID, name, status string
+	err = tx.QueryRow(`SELECT id, name, status FROM projects WHERE id=?1 OR name=?1`, idOrName).
+		Scan(&projectID, &name, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, Fail(api.ErrCoreNotFound, "", "project %q", idOrName)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if status != api.ProjectStatusDeactivated {
+		return nil, Fail(api.ErrCoreConflict, "NOT_DEACTIVATED",
+			"project %s is not deactivated", name)
+	}
+	if _, err := tx.Exec(`UPDATE projects SET status='active', updated_at=?2 WHERE id=?1`,
+		projectID, Now()); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return m.GetProject(projectID)
+}
 
 // DeleteProject hard-deletes a project and everything it owns — work
 // items, events, dependency edges, memories (with their FTS rows),

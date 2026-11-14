@@ -155,6 +155,10 @@ type fakeHub struct {
 	// endFails, when > 0, makes the next N SessionEnd calls fail with a
 	// transport-class error and no effect (a hub blip at the close).
 	endFails int
+	// claimErr, when non-nil, is the typed error every SessionClaim
+	// answers instead of a claim (polyforge#30: the deactivated project's
+	// PROJECT_DEACTIVATED refusal, answered to every wave).
+	claimErr error
 	// unknown lists canonical ids GetWorkItem answers CORE-404 for.
 	unknown map[string]bool
 	// bundles maps a canonical id to the bundle GetWorkItem reports
@@ -266,6 +270,9 @@ func (h *fakeHub) SessionClaim(req api.SessionClaimRequest) (*api.SessionClaimRe
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.claims = append(h.claims, req)
+	if h.claimErr != nil {
+		return nil, h.claimErr
+	}
 	id := h.canonicalID(req.WorkItemID)
 	h.held[id] = req.SessionID
 	h.status[id] = api.StatusRunning

@@ -284,7 +284,7 @@ try {
     await withPage({}, async (page) => {
       const panel = await openItems(page);
       // intentional fourth sub-tab: 待集成 joins the Work rail after 全部.
-      assert.deepEqual((await segments(page).allInnerTexts()).map((t) => t.trim().split(/\s/)[0]), ["作业", "任务", "全部", "待集成"], "the Work strip lists 作业, 任务, 全部, 待集成 in order");
+      assert.deepEqual((await segments(page).allInnerTexts()).map((t) => t.trim().split(/\s/)[0]), ["作业", "任务", "全部", "项目", "待集成"], "the Work strip lists 作业, 任务, 全部, 项目, 待集成 in order");
       // The work-items route answers its first read cold in this page.
       await row(panel, "GOAL-B is running now").waitFor({ timeout: COLD_MS });
       assert.equal(await segment(page, RE_TASKS).getAttribute("aria-selected"), "false", "selecting 全部 deselects 任务");
@@ -307,12 +307,13 @@ try {
     // the main area), each button named by its tab copy (aria-label/title).
     await withPage({ viewport: { width: 600, height: 900 } }, async (page) => {
       const panel = await openWork(page);
-      // intentional fourth sub-tab: 待集成 joins the Work rail after 全部.
-      assert.equal(await segments(page).count(), 4, "at ≤640px the Work rail carries four buttons");
+      // intentional fourth sub-tab: 待集成 joins the Work rail after 全部;
+      // polyforge#30 adds the fifth segment 项目 after 全部, before 待集成.
+      assert.equal(await segments(page).count(), 5, "at ≤640px the Work rail carries five buttons");
       const strip = dock(page).locator('[data-pf-tabstrip="work"]');
       assert.equal(await strip.getAttribute("aria-orientation"), "vertical", "the mobile rail is vertical, not a horizontal bar");
       const names = await segments(page).evaluateAll((nodes) => nodes.map((node) => [node.getAttribute("aria-label"), node.getAttribute("title")]));
-      assert.deepEqual(names, [["作业", "作业"], ["任务", "任务"], ["全部", "全部"], ["待集成", "待集成"]], "the four rail buttons are named 作业, 任务, 全部, 待集成 in order");
+      assert.deepEqual(names, [["作业", "作业"], ["任务", "任务"], ["全部", "全部"], ["项目", "项目"], ["待集成", "待集成"]], "the five rail buttons are named 作业, 任务, 全部, 项目, 待集成 in order");
       // Geometry is read once the rail is laid out (a bounded condition wait):
       // a read racing layout under host load sees 0-size boxes.
       await waitFor(async () => (await strip.getAttribute("aria-orientation")) === "vertical"
@@ -322,8 +323,8 @@ try {
         const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, right: rect.right };
       }));
       assert.ok(boxes.every((box) => Math.abs(box.x - boxes[0].x) < 2), `the rail buttons form one vertical rail (${JSON.stringify(boxes)})`);
-      assert.ok(boxes[0].y < boxes[1].y && boxes[1].y < boxes[2].y && boxes[2].y < boxes[3].y, `the rail stacks 作业, 任务, 全部, 待集成 top to bottom (${JSON.stringify(boxes)})`);
-      assert.ok(boxes.every((box) => box.width > 0 && box.height > 0), "all four buttons are rendered controls");
+      assert.ok(boxes[0].y < boxes[1].y && boxes[1].y < boxes[2].y && boxes[2].y < boxes[3].y && boxes[3].y < boxes[4].y, `the rail stacks 作业, 任务, 全部, 项目, 待集成 top to bottom (${JSON.stringify(boxes)})`);
+      assert.ok(boxes.every((box) => box.width > 0 && box.height > 0), "all five buttons are rendered controls");
       const before = listRequests(page);
       const items = strip.getByRole("tab", { name: RE_ITEMS }).first();
       await items.click();

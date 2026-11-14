@@ -36,6 +36,7 @@ import { PolyforgeMemory } from "./PolyforgeMemory";
 import { PolyforgeIntegrate } from "./PolyforgeIntegrate";
 import { PolyforgeTasks } from "./PolyforgeTasks";
 import { PolyforgeWorkItems } from "./PolyforgeWorkItems";
+import { PolyforgeProjects } from "./PolyforgeProjects";
 import { MAX_MARKDOWN_CHARS, SafeMarkdownBody } from "./SafeMarkdownBody";
 import {
   attentionItems,
@@ -1192,6 +1193,8 @@ const WORK_TAB_ICONS = {
   tasks: workTabIcon(<><rect x="4" y="4" width="16" height="16" rx="2" /><path d="m9 12 2 2 4-4" /></>),
   // 工单列表: a bulleted list.
   items: workTabIcon(<><path d="M9 6h11" /><path d="M9 12h11" /><path d="M9 18h11" /><path d="M4 6h.01" /><path d="M4 12h.01" /><path d="M4 18h.01" /></>),
+  // 项目 (polyforge#30): a folder of projects.
+  projects: workTabIcon(<><path d="M4 5a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /><path d="M4 9h16" /></>),
   // 待集成: branches merging into one line.
   integrate: workTabIcon(<><circle cx="6" cy="5" r="2" /><circle cx="18" cy="5" r="2" /><circle cx="12" cy="19" r="2" /><path d="M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7" /><path d="M12 12v5" /></>),
 } as const;
@@ -1662,6 +1665,12 @@ export function PolyforgePanel({
                 // change of queue.running or the terminal-job count while
                 // mounted (null without a snapshot); none elsewhere.
                 <PolyforgeWorkItems itemCountKey={itemCountKey} onRunningCount={onWorkItemsRunningChange} renderDetail={renderWorkDetail} onDetailOpenChange={setSubDetailOpen} />
+              ) : workTab === "projects" ? (
+                // one read per opening (polyforge#30): the mapped projects
+                // with their global states; the view hides the deactivated
+                // ones by default and restores in place through the route's
+                // one write.
+                <PolyforgeProjects />
               ) : workTab === "integrate" ? (
                 // its own read per opening, ↻, accepted answer
                 // and status change of a listed batch's job row
@@ -1757,7 +1766,7 @@ export function PolyforgePanel({
                 ? { flex: "0 0 40px", width: 40, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border)", overflowY: "auto" }
                 : { flex: "0 0 72px", width: 72, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border)", overflowY: "auto" }}
             >
-              {(["jobs", "tasks", "items", "integrate"] as const).map((tab) => {
+              {(["jobs", "tasks", "items", "projects", "integrate"] as const).map((tab) => {
                 const active = workTab === tab;
                 // The running count rides the existing status snapshot (no
                 // timer of its own): queue.running for Jobs, tasks.running
@@ -1766,9 +1775,10 @@ export function PolyforgePanel({
                 // the last list read's running count, absent before the first.
                 // 待集成 shows no badge.
                 const count = tab === "items" ? workItemsRunning
+                  : tab === "projects" ? null
                   : opsStatus ? (tab === "jobs" ? opsStatus.queue.running : (opsStatus.tasks?.running ?? 0)) : null;
                 const label = tab === "jobs" ? t("polyforge.messages.jobsTab") : tab === "tasks" ? t("polyforge.tasks.tab")
-                  : tab === "items" ? t("polyforge.work.itemsTab") : t("polyforge.work.integrateTab");
+                  : tab === "items" ? t("polyforge.work.itemsTab") : tab === "projects" ? t("polyforge.work.projectsTab") : t("polyforge.work.integrateTab");
                 return (
                   <button key={tab} type="button" role="tab" aria-selected={active}
                     onClick={() => onWorkTab(tab)}
@@ -1787,7 +1797,7 @@ export function PolyforgePanel({
                       color: active ? "var(--text)" : "var(--text-muted)", cursor: "pointer", fontSize: 12,
                     }}>
                     {isMobile ? WORK_TAB_ICONS[tab] : <span>{label}</span>}
-                    {count !== null && tab !== "integrate" && (
+                    {count !== null && (tab === "jobs" || tab === "tasks" || tab === "items") && (
                       <span
                         data-pf-work-badge={tab}
                         aria-label={t(WORK_TAB_BADGES[tab], { count })}

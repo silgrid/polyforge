@@ -115,8 +115,13 @@ func (s *Server) webAPI(w http.ResponseWriter, r *http.Request, idn *identity, s
 
 // webContextProject is one readable project of the context answer.
 type webContextProject struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	// CanRestore names whether THIS caller may restore the project
+	// (polyforge#30): a global admin or one of its maintainers. The
+	// picker renders the in-place restore entry only when it holds.
+	CanRestore bool `json:"can_restore"`
 }
 
 // webContext is the /web/api/context answer: the caller's identity and
@@ -128,9 +133,66 @@ type webContext struct {
 	Projects []webContextProject `json:"projects"`
 }
 
-// webAPIContext answers GET /web/api/context.
+// webAPIProjectRestore serves POST /web/api/projects/{name}/restore —
+// the console's ONE write route (polyforge#30, AC7: the restore entry
+// sits in the same place the deactivated project is listed). The door:
+// the console's own custom header (web.go's CSRF guard) → the project
+// read gate (a caller without read access gets the face's static 404,
+// indistinguishable from an unknown name) → the restore right (a global
+// admin or one of the project's maintainers; everyone else the static
+// 403) → core.RestoreProject. The 200 body is the project row (id,
+// name, status); the typed conflicts (NOT_DEACTIVATED, the unknown
+// project) answer their own codes and bodies. Reachability: a human at
+// a browser holding an api key — the face is not proxied by the daemon
+// and a step agent holds no key at all.
+func (s *Server) webAPIProjectRestore(w http.ResponseWriter, r *http.Request, idn *identity, name string) {
+	if r.Header.Get("X-PF-Console-Write") != "1" {
+		writeWebBody(w, r, http.StatusForbidden, "application/json", []byte(webBodyWriteRefused))
+		return
+	}
+	projectID, err := s.projectIDOf(name)
+	if err != nil {
+		writeWebNotFound(w, r)
+		return
+	}
+	if err := s.mustRead(idn, projectID, "project %q", name); err != nil {
+		writeWebNotFound(w, r)
+		return
+	}
+	if idn.Role != "admin" {
+		role, merr := s.memberRole(projectID, idn.UserID)
+		if merr != nil || role != "maintainer" {
+			writeWebBody(w, r, http.StatusForbidden, "application/json", []byte(webBodyWriteRefused))
+			return
+		}
+	}
+	p, err := s.Admin.RestoreProject(name)
+	if err != nil {
+		// The typed refusals answer their own codes and bodies (the SPA
+		// shows the sentence); anything else is the face's internal error.
+		var ae *api.Error
+		if errors.As(err, &ae) {
+			if raw, merr := json.Marshal(ae); merr == nil {
+				writeWebBody(w, r, ae.HTTPStatus(), "application/json", append(raw, '\n'))
+				return
+			}
+		}
+		writeWebBody(w, r, http.StatusInternalServerError, "application/json", []byte("{\"error\":\"internal error\"}\n"))
+		return
+	}
+	writeWebJSON(w, r, http.StatusOK, struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}{ID: p.ID, Name: p.Name, Status: p.Status})
+}
+
+// webAPIContext answers GET /web/api/context. The default view hides
+// deactivated projects (polyforge#30); ?include_deactivated=1 lists them
+// with their status and the caller's restore right, so the picker's
+// "show deactivated" toggle asks for exactly that.
 func (s *Server) webAPIContext(w http.ResponseWriter, r *http.Request, idn *identity) {
-	projects, err := s.webContextProjects(idn)
+	projects, err := s.webContextProjects(idn, r.URL.Query().Get("include_deactivated") == "1")
 	if err != nil {
 		writeWebError(w, r, err)
 		return

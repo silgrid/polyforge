@@ -1,0 +1,12 @@
+-- deploy/sql/v0.2.1/rollback.sql — the automatic-rollback counterpart of
+-- upgrade.sql (the project deactivation status, polyforge#30).
+--
+-- deploy.sh runs this ONLY for a version applied in the same deploy run,
+-- as ONE SQLite transaction, BEFORE the old image is recreated: the
+-- column goes, and with it the deactivation state (a v0.2.0 binary has
+-- nowhere to read it from; deactivation is an operational state, not
+-- durable data — the rows it guarded keep every work item and memory
+-- either way, and a retry upgrade re-adds the column with every project
+-- 'active'). Delete this file with the release window's other rollback
+-- files.
+ALTER TABLE projects DROP COLUMN status;
