@@ -128,6 +128,18 @@ root's `.polyforge/` scripts, tested there).
   suite run alone) its own `chromium.launch()` runs as before. That literal
   stays the runner's browser-lane marker. A change to the module selects every
   suite that imports it.
+- A state that settles asynchronously — what a click, a keypress or a resize
+  leads to, a streamed update, a refetch or a background task — is asserted only
+  through the module's bounded polls, each up to a deadline, on the exact state
+  the scenario names: `createWaitFor` (polls a reading until `done` accepts it,
+  else throws with the last reading), `createWaitUntil` (polls a predicate until
+  it answers truthy, else fails an assertion) or `eventually` (polls a predicate,
+  answering true once it holds, else its final answer for the scenario to
+  assert). Reading the page once right after the action and
+  asserting is a race and blocks review as `test_weakened`
+  (`workflows/_shared/test_quality.md`, its settle duty); a flaky scenario is
+  fixed by polling, never by relaxing the assertion or turning an exact count
+  into "at least".
 - Shared browser: the runner starts one Chromium server
   (`chromium.launchServer()`, default options) before the first browser suite
   and names its ws endpoint in `E2E_BROWSER_WS` for every browser suite, the
