@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 )
 
 var cmdMsg = &Command{
@@ -172,7 +173,11 @@ var cmdMsg = &Command{
 			if len(rest) != 0 {
 				return fmt.Errorf("msg contacts: no arguments")
 			}
-			raw, err := json.Marshal(readContacts(ctx))
+			plan, _, err := ctx.routedCellMapping()
+			if err != nil {
+				return err
+			}
+			raw, err := json.Marshal(readContacts(ctx, plan))
 			if err != nil {
 				return err
 			}
@@ -234,15 +239,17 @@ const (
 )
 
 // readContacts assembles `pf msg contacts`: the union of the member faces
-// of every project the cli.toml [workspace.*] mapping names (read at call
-// time, so a mapping edit shows on the next call with no daemon restart),
+// of every project the routed Cell's [workspace.*] mapping names
+// (profile.go's routedCellMapping — the Host file's for the default
+// Cell, the routed Cell's own for a named one), read at call time, so a
+// mapping edit shows on the next call with no daemon restart,
 // one request per project (the mapping maps a project to one workspace),
 // merged in mapping declaration order and deduplicated by user id — the
 // first display name wins. A project the caller cannot read (or that
 // fails) contributes zero; no mapping is an empty answer. Self and
 // machine rows are dropped by aihub, not here.
-func readContacts(ctx *Context) api.ProjectMemberContacts {
-	projects := ctx.Cfg.Mapping.Projects()
+func readContacts(ctx *Context, m *mapping.Plan) api.ProjectMemberContacts {
+	projects := m.Projects()
 	client := ctx.aihub()
 	bounded := *client.HTTP // same daemon transport, the per-read bound
 	bounded.Timeout = contactsTimeout

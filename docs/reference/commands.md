@@ -114,7 +114,8 @@ union, deduplicated by user id (first display name wins, mapping
 declaration order), of the aihub project member face
 (`GET /api/v1/projects/{id}/members`: human co-members other than the
 caller, id + display name only, gated by the project read) over every
-project the `cli.toml` `[workspace.*]` mapping names, read at call time (no
+project the routed Cell's `[workspace.*]` mapping names (cli.toml for
+the default Cell, `cli-<profile>.toml` for a named one), read at call time (no
 daemon restart). It issues one read per project, at most 4 at once, 15 s
 each, no retry; an unreadable project contributes nothing and the verb
 still exits 0, and no mapping answers `{"contacts":[]}`. Its `--json` is
