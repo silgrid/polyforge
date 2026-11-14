@@ -231,7 +231,7 @@ func TestW13FallbackRefusesDockerfileWithoutUniqueCopy(t *testing.T) {
 				t.Errorf("the refusal must name the missing unique COPY source:\n%s", out)
 			}
 			// the refusal is at step 2, so the lock and the saved binary are
-		// legitimate; what must NOT have happened: any server docker
+			// legitimate; what must NOT have happened: any server docker
 			// mutation, any compose edit, a lock left behind
 			if m := d.serverDockerMutations(); len(m) != 0 {
 				t.Errorf("server docker was changed: %v", m)
