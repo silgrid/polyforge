@@ -149,8 +149,7 @@ func w17DualCellFixture(t *testing.T) (env map[string]string, wsD, wsA string, d
 	return env, wsD, wsA, def, alpha
 }
 
-// w17WantOnlyOn asserts every request so far went to exactly one hub: n
-// on "got", none anywhere else.
+// w17Counts answers the two Cell hubs' request counts (default, alpha).
 func w17Counts(def, alpha *w17Hub) (int, int) {
 	return len(def.rec.all()), len(alpha.rec.all())
 }
@@ -256,7 +255,7 @@ func TestW17RecallRememberPlaceThroughTheRoutedCell(t *testing.T) {
 // locally — nothing is sent — and the error's "mapped here" lists the
 // routed Cell's projects and names the routed Cell's file.
 func TestW17DefaultOnlyProjectRefusedOnTheRoutedCell(t *testing.T) {
-	env, _, _, def, alpha := w17DualCellFixture(t)
+	env, _, wsA, def, alpha := w17DualCellFixture(t)
 	cases := [][]string{
 		{"file", "create", "--project", "dproj", "--goal", "w17 refused"},
 		{"recall", "--project", "dproj", "the query"},
@@ -279,11 +278,33 @@ func TestW17DefaultOnlyProjectRefusedOnTheRoutedCell(t *testing.T) {
 			t.Fatalf("%v: refused call still sent %d/%d request(s)", args[:2], nDef, nAlpha)
 		}
 	}
+
+	// The cwd-routed shape (review r1#8): inside wsA without --profile the
+	// same refusal answers — the routed Cell's mapping governs it too.
+	t.Chdir(wsA)
+	code, _, stderr := runPf(t, env, "file", "create", "--project", "dproj", "--goal", "w17 cwd-refused")
+	if code != 1 {
+		t.Fatalf("cwd-routed refusal: exit %d, want the local refusal (stderr=%s)", code, stderr)
+	}
+	for _, tok := range []string{`project "dproj" is not mapped`, "mapped here: aproj"} {
+		if !strings.Contains(stderr, tok) {
+			t.Fatalf("cwd-routed refusal: stderr misses %q: %s", tok, stderr)
+		}
+	}
+	if strings.Contains(stderr, "mapped here: dproj") {
+		t.Fatalf("cwd-routed refusal: mapped here lists the default Cell's projects: %s", stderr)
+	}
+	if nDef, nAlpha := w17Counts(def, alpha); nDef != 0 || nAlpha != 0 {
+		t.Fatalf("cwd-routed refusal: still sent %d/%d request(s)", nDef, nAlpha)
+	}
 }
 
 // TestW17UnknownNamedCellRefusedBeforeTheWire: a --profile naming no Cell
-// file is a loud local error naming the missing file — placement never
-// validates against a mapping it could not read, and nothing is sent.
+// file is the documented typed refusal (review r1#1, commands.md: an
+// unknown profile fails explicitly, DAEMON-404 naming the profile and its
+// expected cli-<profile>.toml) — the same text the Host's router gives,
+// answered locally, nothing sent. Placement never validates against a
+// mapping it could not read.
 func TestW17UnknownNamedCellRefusedBeforeTheWire(t *testing.T) {
 	env, _, _, def, alpha := w17DualCellFixture(t)
 	code, _, stderr := runPf(t, env, "--profile", "ghost", "file", "create",
@@ -291,11 +312,35 @@ func TestW17UnknownNamedCellRefusedBeforeTheWire(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("ghost profile: exit %d, want the local refusal (stderr=%s)", code, stderr)
 	}
-	if !strings.Contains(stderr, "cli-ghost.toml") {
-		t.Fatalf("ghost profile: stderr must name the missing Cell file: %s", stderr)
+	for _, tok := range []string{"DAEMON-404", `unknown profile "ghost"`, "cli-ghost.toml"} {
+		if !strings.Contains(stderr, tok) {
+			t.Fatalf("ghost profile: stderr misses %q: %s", tok, stderr)
+		}
 	}
 	if nDef, nAlpha := w17Counts(def, alpha); nDef != 0 || nAlpha != 0 {
 		t.Fatalf("ghost profile: %d/%d request(s) still sent", nDef, nAlpha)
+	}
+}
+
+// TestW17NamedCellRequiredFlagErrorNamesItsFile (review r1#5): with no
+// --project and a cwd outside the routed Cell's workspaces, the #113
+// required-flag error names that Cell's mapping file, not cli.toml.
+func TestW17NamedCellRequiredFlagErrorNamesItsFile(t *testing.T) {
+	env, _, _, def, alpha := w17DualCellFixture(t)
+	code, _, stderr := runPf(t, env, "--profile", "alpha", "file", "create", "--goal", "w17 no project")
+	if code != 1 {
+		t.Fatalf("named-Cell required-flag error: exit %d, want 1 (stderr=%s)", code, stderr)
+	}
+	for _, tok := range []string{"--project is required", "polyforge#113", "sections of cli-alpha.toml"} {
+		if !strings.Contains(stderr, tok) {
+			t.Fatalf("named-Cell required-flag error: stderr misses %q: %s", tok, stderr)
+		}
+	}
+	if strings.Contains(stderr, "sections of cli.toml") {
+		t.Fatalf("named-Cell required-flag error still names the Host file: %s", stderr)
+	}
+	if nDef, nAlpha := w17Counts(def, alpha); nDef != 0 || nAlpha != 0 {
+		t.Fatalf("named-Cell required-flag error: %d/%d request(s) still sent", nDef, nAlpha)
 	}
 }
 
