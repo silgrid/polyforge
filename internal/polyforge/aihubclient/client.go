@@ -502,6 +502,22 @@ func (c *Client) DeleteProject(idOrName string, dryRun bool) (json.RawMessage, e
 	return c.raw("DELETE", path, nil)
 }
 
+// DeactivateProject moves a project to the deactivated state
+// (polyforge#30, POST /api/v1/projects/{id}/deactivate): from then on
+// the server refuses every write that does work on the project while
+// its reads keep answering; nothing is deleted. The answer is the
+// whole project (status deactivated).
+func (c *Client) DeactivateProject(idOrName string) (json.RawMessage, error) {
+	return c.raw("POST", "/api/v1/projects/"+url.PathEscape(idOrName)+"/deactivate", nil)
+}
+
+// RestoreProject moves a deactivated project back to active
+// (POST /api/v1/projects/{id}/restore): every refused write is accepted
+// again immediately.
+func (c *Client) RestoreProject(idOrName string) (json.RawMessage, error) {
+	return c.raw("POST", "/api/v1/projects/"+url.PathEscape(idOrName)+"/restore", nil)
+}
+
 // Backup triggers the on-demand snapshot (M4).
 func (c *Client) Backup() (json.RawMessage, error) {
 	return c.raw("POST", "/api/v1/admin/backup", map[string]any{})

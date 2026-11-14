@@ -1220,16 +1220,105 @@ func (m *AdminManager) PatchProject(idOrName string, req ProjectPatchRequest) (*
 
 // DeactivateProject moves the project to the deactivated state
 // (polyforge#30): the server then refuses every write that does work on
-// the project while its reads keep answering. Stub ahead of the u2 red
-// test; the implementation follows.
+// the project — creating or modifying work items, comments, submits and
+// claims, resume execution, memory writes — while its reads keep
+// answering under the existing permissions. Nothing is deleted. The
+// checks and the flip run in ONE transaction: an unknown id/name
+// answers CORE-404, an already deactivated project CORE-409, and any
+// work item in a non-terminal status (queued|running|paused|blocked —
+// bundled and bundle-less alike) answers CORE-409 naming every
+// offending <project>#<seq> slug, the same rule the hard delete keeps;
+// nothing is canceled or removed (the caller settles the work first).
 func (m *AdminManager) DeactivateProject(idOrName string) (*api.Project, error) {
-	return nil, nil
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var projectID, name, status string
+	err = tx.QueryRow(`SELECT id, name, status FROM projects WHERE id=?1 OR name=?1`, idOrName).
+		Scan(&projectID, &name, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, Fail(api.ErrCoreNotFound, "", "project %q", idOrName)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if status == api.ProjectStatusDeactivated {
+		return nil, Fail(api.ErrCoreConflict, "ALREADY_DEACTIVATED",
+			"project %s is already deactivated", name)
+	}
+	var slugs []string
+	rows, err := tx.Query(`SELECT seq FROM work_items WHERE project_id=?1
+		AND status NOT IN ('wrapped','failed','canceled') ORDER BY seq`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var seq int
+		if err := rows.Scan(&seq); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		slugs = append(slugs, fmt.Sprintf("%s#%d", name, seq))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(slugs) > 0 {
+		extra, merr := json.Marshal(struct {
+			Reason    string   `json:"reason"`
+			WorkItems []string `json:"work_items"`
+		}{Reason: "NON_TERMINAL_WORK_ITEMS", WorkItems: slugs})
+		if merr != nil {
+			return nil, merr
+		}
+		return nil, &api.Error{Code: api.ErrCoreConflict,
+			Detail: fmt.Sprintf("project %s cannot be deactivated while it has non-terminal work items (wrap, fail or cancel them first, or wait for them to finish): %s",
+				name, strings.Join(slugs, ", ")),
+			Extra: extra}
+	}
+	if _, err := tx.Exec(`UPDATE projects SET status='deactivated', updated_at=?2 WHERE id=?1`,
+		projectID, Now()); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return m.GetProject(projectID)
 }
 
-// RestoreProject moves a deactivated project back to active. Stub
-// ahead of the u2 red test; the implementation follows.
+// RestoreProject moves a deactivated project back to active: every
+// refused write is accepted again immediately and nothing was lost
+// while it was deactivated. An unknown id/name answers CORE-404, an
+// active project CORE-409 (the typed NOT_DEACTIVATED conflict).
 func (m *AdminManager) RestoreProject(idOrName string) (*api.Project, error) {
-	return nil, nil
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var projectID, name, status string
+	err = tx.QueryRow(`SELECT id, name, status FROM projects WHERE id=?1 OR name=?1`, idOrName).
+		Scan(&projectID, &name, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, Fail(api.ErrCoreNotFound, "", "project %q", idOrName)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if status != api.ProjectStatusDeactivated {
+		return nil, Fail(api.ErrCoreConflict, "NOT_DEACTIVATED",
+			"project %s is not deactivated", name)
+	}
+	if _, err := tx.Exec(`UPDATE projects SET status='active', updated_at=?2 WHERE id=?1`,
+		projectID, Now()); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return m.GetProject(projectID)
 }
 
 // DeleteProject hard-deletes a project and everything it owns — work

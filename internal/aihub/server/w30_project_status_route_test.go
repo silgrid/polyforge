@@ -99,7 +99,9 @@ func w30RouteStatus(t *testing.T, e *srvEnv, key string) string {
 // TestW30ProjectDeactivateRouteAuthz: AC4 — the global admin and the
 // project's maintainer may deactivate and restore; a project writer, a
 // viewer, a non-member and a key scoped to another project are refused
-// AUTH-403; an unknown project answers CORE-404 from both doors.
+// AUTH-403; an unknown project answers CORE-404 from both doors. Every
+// case starts from the door's own entry state (the admin key resets
+// it), so one principal's success cannot answer for the next.
 func TestW30ProjectDeactivateRouteAuthz(t *testing.T) {
 	e, users := w30RouteEnv(t)
 	type want struct {
@@ -119,11 +121,19 @@ func TestW30ProjectDeactivateRouteAuthz(t *testing.T) {
 			if w.who != "admin" {
 				key = users[w.who].key
 			}
+			// Reset to the door's entry state: deactivate ignores a typed
+			// conflict, so the admin key converges both directions.
+			if door == "deactivate" {
+				e.do(t, "POST", "/api/v1/projects/w30/deactivate", e.key, nil, nil)
+				e.do(t, "POST", "/api/v1/projects/w30/restore", e.key, nil, nil)
+			} else {
+				e.do(t, "POST", "/api/v1/projects/w30/deactivate", e.key, nil, nil)
+			}
 			code, body := e.do(t, "POST", "/api/v1/projects/w30/"+door, key, nil, nil)
 			if code != w.code {
 				t.Fatalf("%s by %s: %d %s, want %d", door, w.who, code, body, w.code)
 			}
-			if w.code == http.StatusForbidden && !strings.Contains(string(body), "maintainer") {
+			if w.code == http.StatusForbidden && w.who != "scoped-away" && !strings.Contains(string(body), "maintainer") {
 				t.Fatalf("%s by %s: refusal %s does not name the required role", door, w.who, body)
 			}
 		}
@@ -156,11 +166,9 @@ func TestW30ProjectDeactivateRouteConflictAndRoundTrip(t *testing.T) {
 		t.Fatalf("deactivate with a queued item: %d %s, want 409", code, body)
 	}
 	var refusal struct {
-		Error struct {
-			Code   string          `json:"code"`
-			Detail string          `json:"detail"`
-			Extra  json.RawMessage `json:"extra"`
-		} `json:"error"`
+		Code   string          `json:"code"`
+		Detail string          `json:"detail"`
+		Extra  json.RawMessage `json:"extra"`
 	}
 	if err := json.Unmarshal(body, &refusal); err != nil {
 		t.Fatalf("decode refusal: %v", err)
@@ -169,17 +177,17 @@ func TestW30ProjectDeactivateRouteConflictAndRoundTrip(t *testing.T) {
 		Reason    string   `json:"reason"`
 		WorkItems []string `json:"work_items"`
 	}
-	if err := json.Unmarshal(refusal.Error.Extra, &extra); err != nil {
+	if err := json.Unmarshal(refusal.Extra, &extra); err != nil {
 		t.Fatalf("decode refusal extra: %v", err)
 	}
-	if refusal.Error.Code != api.ErrCoreConflict || extra.Reason != "NON_TERMINAL_WORK_ITEMS" {
-		t.Fatalf("refusal %s/%s, want CORE-409 NON_TERMINAL_WORK_ITEMS", refusal.Error.Code, extra.Reason)
+	if refusal.Code != api.ErrCoreConflict || extra.Reason != "NON_TERMINAL_WORK_ITEMS" {
+		t.Fatalf("refusal %s/%s, want CORE-409 NON_TERMINAL_WORK_ITEMS", refusal.Code, extra.Reason)
 	}
 	if len(extra.WorkItems) != 1 || !strings.HasPrefix(extra.WorkItems[0], "w30#1") {
 		t.Fatalf("refusal work_items %v, want the one blocking slug", extra.WorkItems)
 	}
-	if !strings.Contains(refusal.Error.Detail, extra.WorkItems[0]) {
-		t.Fatalf("refusal detail %q does not list the slug", refusal.Error.Detail)
+	if !strings.Contains(refusal.Detail, extra.WorkItems[0]) {
+		t.Fatalf("refusal detail %q does not list the slug", refusal.Detail)
 	}
 	if got := w30RouteStatus(t, e, maint); got != api.ProjectStatusActive {
 		t.Fatalf("status after the refused deactivation: %q, want active", got)

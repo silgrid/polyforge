@@ -165,6 +165,14 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/projects", s.authAdmin(s.hListProjects))
 	m.HandleFunc("GET /api/v1/projects/{id}", s.auth(s.hGetProject))
 	m.HandleFunc("PATCH /api/v1/projects/{id}", s.auth(s.hPatchProject))
+	// polyforge#30: the project deactivation doors — the maintainer/admin
+	// gate lives in the handlers (the same rule PATCH keeps). Reachability:
+	// `pf projects` is refused inside a workflow step (cli/stepctx.go) and
+	// a step process holds no aihub key, so no step agent reaches either
+	// door; they serve the CLI's `pf projects deactivate|restore` and,
+	// through core, the console's own restore route (web.go).
+	m.HandleFunc("POST /api/v1/projects/{id}/deactivate", s.auth(s.hDeactivateProject))
+	m.HandleFunc("POST /api/v1/projects/{id}/restore", s.auth(s.hRestoreProject))
 	// The project member face (read-only): the caller's human
 	// co-members as id + display name; contacts.go states its gate and
 	// step-agent reachability.
@@ -1781,6 +1789,66 @@ func (s *Server) hPatchProject(w http.ResponseWriter, r *http.Request, idn *iden
 		return err
 	}
 	p, err := s.Admin.PatchProject(r.PathValue("id"), req)
+	if err != nil {
+		return err
+	}
+	return reply(w, http.StatusOK, p)
+}
+
+// requireProjectMaintainer is the shared authorization of the project
+// state doors (deactivate/restore, polyforge#30): a project-scoped key
+// may only touch its own project, then a global admin or a maintainer
+// of THAT project passes — every other caller answers AUTH-403 naming
+// the required role (AC4).
+func (s *Server) requireProjectMaintainer(idn *identity, projectID, what string) error {
+	if err := scopeCheck(idn, projectID); err != nil {
+		return err
+	}
+	if idn.Role == "admin" {
+		return nil
+	}
+	role, err := s.memberRole(projectID, idn.UserID)
+	if err != nil || role != "maintainer" {
+		return core.Fail(api.ErrAuthForbidden, "", "%s requires admin or project maintainer", what)
+	}
+	return nil
+}
+
+// hDeactivateProject serves POST /api/v1/projects/{id}/deactivate
+// (polyforge#30): the project moves to the deactivated state — the
+// server refuses every write that does work on it from then on, its
+// reads keep answering, and nothing is deleted (the hard delete stays
+// the only way to lose data). A queued, running, paused or blocked work
+// item answers CORE-409 naming every blocker; the caller settles the
+// work first. The 200 body is the whole project (status deactivated).
+func (s *Server) hDeactivateProject(w http.ResponseWriter, r *http.Request, idn *identity) error {
+	projectID, err := s.projectIDOf(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	if err := s.requireProjectMaintainer(idn, projectID, "project deactivation"); err != nil {
+		return err
+	}
+	p, err := s.Admin.DeactivateProject(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	return reply(w, http.StatusOK, p)
+}
+
+// hRestoreProject serves POST /api/v1/projects/{id}/restore
+// (polyforge#30): a deactivated project moves back to active and every
+// refused write is accepted again; an active project answers the typed
+// NOT_DEACTIVATED conflict. The 200 body is the whole project.
+func (s *Server) hRestoreProject(w http.ResponseWriter, r *http.Request, idn *identity) error {
+	projectID, err := s.projectIDOf(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	if err := s.requireProjectMaintainer(idn, projectID, "project restore"); err != nil {
+		return err
+	}
+	p, err := s.Admin.RestoreProject(r.PathValue("id"))
 	if err != nil {
 		return err
 	}
