@@ -34,6 +34,9 @@ type State struct {
 	memoryPolicy map[string]map[string]workspace.PolicyEntry
 	// agentLanguage is [daemon] agent_language ("" = unset: "en").
 	agentLanguage string
+	// agentLanguageFallback supplies the default Cell's live language for a
+	// named Cell that leaves its own key unset.
+	agentLanguageFallback func() string
 }
 
 // New builds a state from the startup values. A nil mapping is treated as
@@ -211,11 +214,29 @@ func (s *State) AgentLanguage() string {
 		return stepcall.DefaultLanguage
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.agentLanguage == "" {
-		return stepcall.DefaultLanguage
+	language := s.agentLanguage
+	fallback := s.agentLanguageFallback
+	s.mu.RUnlock()
+	if language != "" {
+		return language
 	}
-	return s.agentLanguage
+	if fallback != nil {
+		if language = fallback(); language != "" {
+			return language
+		}
+	}
+	return stepcall.DefaultLanguage
+}
+
+// SetAgentLanguageFallback makes an unset named Cell follow the default
+// Cell's live language. An explicit value on this Cell still wins.
+func (s *State) SetAgentLanguageFallback(fallback func() string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.agentLanguageFallback = fallback
+	s.mu.Unlock()
 }
 
 // SetAgentLanguage swaps the live [daemon] agent_language ("" = unset:
