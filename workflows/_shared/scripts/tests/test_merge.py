@@ -3,8 +3,10 @@
 import importlib.util
 import os
 from typing import Callable, cast
+import unittest
 
- = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "merge.py")
+MERGE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "merge.py")
+
 _spec = importlib.util.spec_from_file_location("merge_entry", MERGE_PATH)
 assert _spec is not None and _spec.loader is not None
 merge = importlib.util.module_from_spec(_spec)
