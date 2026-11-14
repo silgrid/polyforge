@@ -7,12 +7,16 @@ Usage (from the capsule root, or with --capsule)::
 
     "$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> \\
         [--capsule DIR] [--engine PATH] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
+    "$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --check-units <units.json> [--unit <id>] \\
+        [--capsule DIR] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
 
 The command answers what `workflows/_shared/fast_checks_build.md` used to
 ask the model to do by hand (polyforge#24: a report's commands were copied
 out and run at the repository root, so a nested root's `npm ci` hit the
 wrong directory and the step blocked on a dependency problem that did not
-exist):
+exist) — and what no one checked at record time (polyforge#23: a marker
+wrong by one `$` was only found at verification, costing the lane a
+rewind):
 
 - it runs the scope engine ``--json --light`` in the repo clone
   (``<capsule>/repos/<name>``; the engine in this lane's snapshot, or
@@ -40,11 +44,26 @@ and in ``details`` the engine invocation (``engine``), one entry per report
 (``commands[]``: name, phase, root, cmd, exit_code, timed_out, duration_ms,
 log — or skipped and skip_reason).
 
-Exit 0: every command that ran exited 0 (skips cost nothing). Exit 1: a
-command exited non-zero or was killed at its timeout. Exit 2: not judged —
-no such repo, the engine missing or failing, an unreadable report, a repo
-the engine planned no command for, the deadline, an interrupt — or the
-invocation unusable.
+``--check-units`` is build's on-the-spot unit check: the build's
+``artifacts/build/units.json`` re-run as written — every unit's own
+``argv`` in its own ``cwd`` of its own ``repos/<repo>`` — each unit judged
+by the marker rules verification itself runs (``pfstep.unitruns``: the one
+implementation, never a second copy): a unit passes when it exits 0 and
+one output line matches its marker; a marker problem (blank, no regular
+expression, one matching the empty string), a non-zero exit, a run that
+cannot run as written, or no matching line — the #23 shape, a marker
+anchored ``$`` against a line carrying a suffix — is red on the spot, and
+the result's ``details.units[]`` names the unit, its marker and (on a
+mismatch) the closest output line, so build fixes the record before review
+or verification ever reads it. ``--unit <id>`` checks only that unit.
+The result carries the repo HEADs the units ran at.
+
+Exit 0: every command that ran exited 0 (skips cost nothing), or every
+checked unit passed. Exit 1: a command exited non-zero or was killed at
+its timeout, or a unit is red. Exit 2: not judged — no such repo, the
+engine missing or failing, an unreadable report, a repo the engine planned
+no command for, an unusable units.json, the deadline, an interrupt — or
+the invocation unusable.
 """
 
 import os
@@ -54,9 +73,10 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import argparse  # noqa: E402
+import difflib  # noqa: E402
 import time  # noqa: E402
 import traceback  # noqa: E402
-from typing import Any, Dict, List, Optional, Tuple  # noqa: E402
+from typing import Any, Dict, List, Optional, Sequence, Tuple  # noqa: E402
 
 from pfstep import duration, git, gostr, runner, stepenv  # noqa: E402
 from pfstep.engine import TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
@@ -64,6 +84,8 @@ from pfstep.engine import argv_of as engine_argv_of  # noqa: E402
 from pfstep.engine import nested_roots, reached_roots  # noqa: E402
 from pfstep.invoke import Invocation, duration_flag  # noqa: E402
 from pfstep.runner import Runner, bash_argv, raise_on_termination  # noqa: E402
+from pfstep.unitruns import UnitRunDecl, clean_cwd, marker_matches, marker_problem, read_unit_runs  # noqa: E402
+from pfstep.units import output_lines  # noqa: E402
 
 NAME = "fast_checks.py"
 
@@ -117,8 +139,11 @@ def default_engine(environ: Optional[Dict[str, str]] = None) -> str:
 
 
 def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog=NAME, description="Run a task repo's fast and scoped checks per the scope engine's report.")
+    ap = argparse.ArgumentParser(prog=NAME, description="Run a task repo's fast and scoped checks per the scope engine's report, or check a build's recorded unit runs.")
     ap.add_argument("--repo", default="", help="the task repo (repos/<name>) whose fast/scoped checks run")
+    ap.add_argument("--check-units", default="", metavar="FILE",
+                    help="the build's units.json: re-run its recorded unit runs as written and check each unit's marker against its run's output (verification's own rules)")
+    ap.add_argument("--unit", default="", help="with --check-units: only the unit of that id")
     ap.add_argument("--capsule", default=".", help="the capsule root (its repos/<name> are the clones)")
     ap.add_argument("--engine", default="", help="the scope engine (default: the shared tree's scripts/verify-scope)")
     ap.add_argument("--deadline", type=duration_flag, default=0,
@@ -144,6 +169,106 @@ def nested_command(root: str, c: EngineCommand) -> EngineCommand:
     return EngineCommand(name=root + "/" + c.name, phase=c.phase, cmd=c.cmd, requires_env=c.requires_env,
                           requires_cmd=c.requires_cmd, timeout=c.timeout, report=c.report,
                           rerun=c.rerun, source=c.source)
+
+
+def closest_line(marker: str, lines: Sequence[str]) -> str:
+    """The output line closest to the marker (the one a wrong marker most
+    likely meant); "" when there is no output."""
+    best, ratio = "", -1.0
+    for ln in lines:
+        r = difflib.SequenceMatcher(None, marker, ln).ratio()
+        if r > ratio:
+            best, ratio = ln, r
+    return best
+
+
+class UnitCheck:
+    """One recorded unit run, re-run as written and judged by the marker
+    rules verification itself uses (pfstep.unitruns: the one
+    implementation, never a second copy)."""
+
+    def __init__(self, inv: Invocation, capsule: str, log_dir: str, r: Runner) -> None:
+        self.inv = inv
+        self.capsule = capsule
+        self.log_dir = log_dir
+        self.r = r
+        self.seq = 0
+        self.details: Dict[str, Any] = {"units": []}
+
+    def prepare(self, d: UnitRunDecl, entry: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+        """Why d cannot run as written ("" = it can): (the directory to run
+        in, the cwd as the record names it), or the problem twice."""
+        if not d.argv or gostr.trim_space(d.argv[0]) == "":
+            return None, "its run has no argv (units.json run.argv is empty): nothing to run as written"
+        clone = os.path.join(self.capsule, "repos", d.repo)
+        if not os.path.isdir(clone):
+            return None, "repos/%s is not a task repo clone of the capsule: it cannot run as written" % d.repo
+        cwd, why = clean_cwd(d.cwd)
+        if why:
+            return None, why
+        if not os.path.isdir(os.path.join(clone, cwd)):
+            return None, "its cwd %s is no directory of repos/%s" % (gostr.quote(d.cwd), d.repo)
+        return os.path.join(clone, cwd), ("repos/" + d.repo) + (("/" + cwd) if cwd != "." else "")
+
+    def check(self, d: UnitRunDecl) -> Dict[str, Any]:
+        entry: Dict[str, Any] = {"id": d.id, "check": d.check(), "repo": d.repo, "cwd": d.cwd,
+                                "argv": list(d.argv), "marker": d.marker}
+        directory, prepared = self.prepare(d, entry)
+        why = prepared if directory is None else marker_problem(d.marker)
+        if directory is None or why:
+            entry["passed"] = False
+            entry["why"] = why
+            return entry
+        self.seq += 1
+        log_path = os.path.join(self.log_dir, d.repo, "unit-%d" % self.seq, "command.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        er = self.r.exec_to(runner.ExecSpec(argv=list(d.argv), dir=directory, cwd=prepared or "",
+                                             timeout=COMMAND_TIMEOUT, private_tmp=True), log_path)
+        entry["exit_code"] = er.exit
+        if er.timed_out:
+            entry["timed_out"] = True
+        if er.evidence is not None:
+            entry["duration_ms"] = er.evidence.duration_ms
+        if er.log_path:
+            entry["log"] = self.r.rel(er.log_path)
+            self.inv.logs.append(entry["log"])
+        if er.timed_out:
+            entry["passed"] = False
+            entry["why"] = "exit %d: killed at its timeout" % er.exit
+        elif er.exit != 0:
+            entry["passed"] = False
+            entry["why"] = "exit %d" % er.exit
+        elif not marker_matches(d.marker, output_lines(er.log_path)):
+            entry["passed"] = False
+            entry["why"] = ("exit 0 but no output line matches its marker `%s`: the run did not show its"
+                            " test passing" % d.marker)
+            entry["closest_line"] = closest_line(d.marker, output_lines(er.log_path))
+        else:
+            entry["passed"] = True
+            entry["why"] = ""
+        return entry
+
+    def run(self, decls: List[UnitRunDecl]) -> int:
+        for d in decls:
+            self.inv.say("%s: %s" % (d.check(), " ".join(d.argv)))
+            clone = os.path.join(self.capsule, "repos", d.repo)
+            if os.path.isdir(clone) and d.repo not in self.inv.heads:
+                try:
+                    head = git.git(clone, "rev-parse", "--verify", "HEAD^{commit}", timeout=GIT_TIMEOUT)
+                    self.inv.heads[d.repo] = head.strip()
+                except git.GitError:
+                    pass
+            self.details["units"].append(self.check(d))
+        red = [u for u in self.details["units"] if not u["passed"]]
+        if red:
+            u = red[0]
+            self.inv.summary = "%s: %s%s" % (u["check"], u["why"],
+                                             (" (closest output line: %s)" % u["closest_line"]) if u.get("closest_line") else "")
+            if len(red) > 1:
+                self.inv.summary += "; %d unit(s) red in all" % len(red)
+            return 1
+        self.inv.summary = "%d unit(s) checked, every marker matched" % len(self.details["units"])
+        return 0
 
 
 class CheckRun:
@@ -289,10 +414,10 @@ class CheckRun:
 def run(inv: Invocation) -> int:
     a = parser().parse_args(inv.argv)
     inv.out, inv.json = a.out, a.json
-    if a.repo.strip() == "":
-        return inv.usage("--repo <name> names the task repo whose fast/scoped checks run")
-    if "/" in a.repo or a.repo.startswith("."):
-        return inv.usage("--repo %s: a repo name, the directory under repos/" % gostr.quote(a.repo))
+    if (a.repo.strip() == "") == (a.check_units.strip() == ""):
+        return inv.usage("exactly one of --repo <name> and --check-units <file> is given")
+    if a.unit and not a.check_units:
+        return inv.usage("--unit %s names a unit of --check-units, which is missing" % gostr.quote(a.unit))
     capsule = os.path.abspath(a.capsule)
     engine = a.engine or default_engine(inv.env)
     logs = a.log_dir
@@ -307,6 +432,28 @@ def run(inv: Invocation) -> int:
     r = Runner(capsule, time.time() + duration.seconds(window), env=dict(inv.env),
                deadline_what="the fast checks' timeout (%s)" % duration.format(window),
                command_timeout=COMMAND_TIMEOUT)
+    if a.check_units:
+        try:
+            decls = read_unit_runs(a.check_units)
+        except ValueError as err:
+            return inv.usage("--check-units %s is not a usable units.json: %s" % (a.check_units, err))
+        if a.unit:
+            decls = [d for d in decls if d.id == a.unit]
+            if not decls:
+                return inv.usage("--unit %s names no unit of %s" % (gostr.quote(a.unit), a.check_units))
+        if not decls:
+            return inv.usage("--check-units %s names no unit: nothing to check" % a.check_units)
+        uc = UnitCheck(inv, capsule, logs, r)
+        uc.details["units_file"] = a.check_units
+        inv.details = uc.details
+        try:
+            return uc.run(decls)
+        except (KeyboardInterrupt, runner.Interrupted):
+            inv.summary = "interrupted (context canceled): nothing is proven"
+            return 2
+        except runner.ExecutorError as err:
+            inv.summary = "the units could not be checked (an infrastructure failure, never a verdict): %s" % err
+            return 2
     cr = CheckRun(inv, capsule, a.repo, engine, r.deadline, logs, r)
     inv.details = cr.details
     try:
