@@ -155,7 +155,7 @@ func TestReviewBlocksOnTestQualityViolations(t *testing.T) {
 	// not the recorded one
 	judge := w68Flat(t, "workflows/develop/fragments/review-judge.md")
 	for _, want := range []string{
-		"the shared test-quality bar (`workflows/_shared/test_quality.md`, included in this step's definition)",
+		"The shared test-quality bar (`workflows/_shared/test_quality.md`, included in this step's definition)",
 		"blocking `test_weakened` too — a unit whose plan entry carries no test-quality record",
 		"a test that only asserts that some source text exists (unless the acceptance is itself that text or document)",
 		"a unit whose replayed red fails for another reason than its record states",
