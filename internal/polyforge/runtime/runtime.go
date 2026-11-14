@@ -1604,9 +1604,11 @@ func (r *Runtime) stopOp(ctx context.Context, j *job, reason string, alreadySeal
 	}
 	r.dropJob(j)
 	if finalReason != protocol.FinishBlocked {
-		// terminal on this daemon: the manual --models list dies with it
-		// (a blocked end keeps it for the re-claim)
+		// terminal on this daemon: the manual --models list and an
+		// unconsumed pending step-overlay record (polyforge#25) die with
+		// it (a blocked end keeps both for the re-claim)
 		r.clearManualModels(j.wi)
+		r.clearPendingOverrides(j.wi)
 	}
 	r.persistLog(j.wi)
 	r.send(protocol.RTMsg{Kind: protocol.RTFinished, WorkItem: j.wi, Reason: finalReason})

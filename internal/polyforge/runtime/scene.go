@@ -236,8 +236,14 @@ func (r *Runtime) materialize(ctx context.Context, j *job) error {
 		return err
 	}
 	// the skipped-step set is fixed over the lane snapshot
-	// at the first claim only (skipsteps.go).
-	return r.writeSkippedSteps(j)
+	// at the first claim only (skipsteps.go); the pending step-overlay
+	// record (polyforge#25) — the changes recorded while the work item
+	// was held by no job — merges into the fresh capsule's overlay file
+	// here and is consumed (stepoverrides.go).
+	if err := r.writeSkippedSteps(j); err != nil {
+		return err
+	}
+	return r.writePendingStepOverrides(j)
 }
 
 // writeCapsuleGitignore writes the capsule .gitignore — the capsule's

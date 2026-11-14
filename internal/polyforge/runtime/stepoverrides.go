@@ -10,11 +10,11 @@ package runtime
 //   - a PAUSED record: the same write into the kept scene (a pause seals
 //     nothing — stopOp's read-only seal is the terminal closes' — so the
 //     scene stays writable); aihub refuses pushes for a non-running work
-//     item, so the push is expected to fail, the local commit stands and
+//     item, so a failed push is expected, the local commit stands and
 //     the resume's own publishes carry it;
 //   - no job (the work item parked blocked): the change lands in the
-//     daemon-local pending record (like the manual `--models` list), and
-//     the next claim's scene preparation merges it into the fresh
+//     daemon-local pending record (like the manual `--models` list),
+//     and the next claim's scene preparation merges it into the fresh
 //     capsule's overlay file — the sealed scene of the last close is
 //     read-only and abandoned by the re-claim's fresh clone, so writing
 //     it would lose the change.
@@ -23,34 +23,39 @@ package runtime
 // can move between the route's validation and this turn): a step with a
 // live dispatch is refused; a parked work item's frozen current step
 // (in_progress, no process) accepts a model chain — the owner's
-// change-before-wake window — while the skip switch stays for steps that
-// never started.
+// change-before-wake window — while the skip switch stays for steps
+// that never started.
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
+	"github.com/silgrid/polyforge/internal/common/api"
+	"github.com/silgrid/polyforge/internal/common/atomicfile"
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/polyforge/gitops"
 )
 
-// errOverrideNotImplemented is the stub's refusal, until u4's impl lands.
-var errOverrideNotImplemented = errors.New("runtime: the step-override write is not implemented yet")
+// The overlay event kinds (one per actual change; a clear that found
+// nothing records none).
+const (
+	EventOverrideSet   = "override_set"
+	EventOverrideClear = "override_clear"
+)
 
-// pendingOverridesPath is the daemon-local pending record's path. Stub
-// (polyforge#25 u4).
-func (r *Runtime) pendingOverridesPath() string { return "" }
-
-// savePendingOverrides records work item wi's pending overlay entries.
-// Stub (polyforge#25 u4).
-func (r *Runtime) savePendingOverrides(wi string, entries map[string]*capsule.StepOverride) error {
-	return errOverrideNotImplemented
-}
-
-// mergePendingAspects merges pending entries over the capsule's overlay
-// record, per aspect. Stub (polyforge#25 u4).
-func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.StepOverride) capsule.StepOverrides {
-	return ov
-}
+// The postures the write lands in (protocol.OverrideView.Posture's
+// words).
+const (
+	OverridePostureRunning = "running"
+	OverridePosturePaused  = "paused"
+	OverridePostureBlocked = "blocked"
+)
 
 // OverrideChange is one overlay write as the daemon's route validated it:
 // exactly one action, the candidate chain already parsed and normalized.
@@ -64,40 +69,385 @@ type OverrideChange struct {
 
 // OverrideOutcome is what the actor turn did.
 type OverrideOutcome struct {
-	// Posture the write landed in: "running", "paused" or "blocked".
+	// Posture the write landed in: running, paused or blocked.
 	Posture string
 	// Changed is false when a clear found nothing (the idempotent
 	// success: nothing written, no event).
 	Changed bool
-	// Published: the chain commit reached the server (see
-	// protocol.OverrideWriteResult.Published for the posture-dependent
-	// honesty rules).
+	// Published: the chain commit reached the server. A pause holds the
+	// push (aihub refuses pushes for a non-running work item; the local
+	// commit stands and the resume's own publishes carry it) and a
+	// blocked change rides the daemon-local pending record into the next
+	// claim's fresh capsule.
 	Published bool
 	// Note explains an unpublished change (and anything else the caller
 	// should surface).
-	Note string
-	// Entry is the step's overlay entry after the change (nil when
-	// nothing changed).
+	Note  string
 	Entry *capsule.StepOverride
 }
 
 // ApplyStepOverride applies one overlay change to work item wi, one
 // actor turn (the same per-work-item mailbox a claim or a resume runs
-// on, so the write serializes with both). Stub (polyforge#25 u4).
+// on, so the write serializes with both). The route validates the
+// change's shape, the step's declaration and (for the parked postures)
+// the frozen scene; this turn re-checks the one thing that can move
+// before its turn — the step's status in the live or kept scene.
 func (r *Runtime) ApplyStepOverride(ctx context.Context, wi string, ch OverrideChange) (OverrideOutcome, error) {
-	return OverrideOutcome{}, errOverrideNotImplemented
+	id := r.CanonicalID(wi)
+	if id == "" {
+		id = wi
+	}
+	var out OverrideOutcome
+	err := r.call(ctx, id, func() error {
+		j := r.jobOf(id)
+		if j == nil {
+			var err2 error
+			out, err2 = r.applyOverrideBlocked(id, ch)
+			return err2
+		}
+		var err2 error
+		out, err2 = r.applyOverrideJob(j, ch)
+		return err2
+	})
+	return out, err
+}
+
+// applyOverrideJob applies the change to a job the daemon holds, by its
+// state.
+func (r *Runtime) applyOverrideJob(j *job, ch OverrideChange) (OverrideOutcome, error) {
+	j.mu.Lock()
+	st, capDir := j.state, j.capsuleDir
+	j.mu.Unlock()
+	switch st {
+	case StateRunning:
+		// a live dispatch owns the current step: the overlay is for
+		// steps it has not started
+		ex := capsuleExecution(capDir)
+		if stepLive(ex, ch.Step) {
+			return OverrideOutcome{}, conflict("step %s has a live dispatch (its status is %s): the overlay is for steps without one — set it on a step that has not started, or while the work item is parked", ch.Step, ex.Steps[ch.Step].Status)
+		}
+		return r.applyOverrideScene(j, ch, OverridePostureRunning)
+	case StatePaused:
+		// the frozen current step (in_progress, no process) accepts a
+		// model chain — the owner's change-before-wake window; the skip
+		// switch stays for steps that never started
+		ex := capsuleExecution(capDir)
+		if ch.Skip != nil && ex.CurrentStep == ch.Step {
+			return OverrideOutcome{}, conflict("step %s has started (its status is %s): the skip switch is for steps that never started", ch.Step, ex.Steps[ch.Step].Status)
+		}
+		return r.applyOverrideScene(j, ch, OverridePosturePaused)
+	default:
+		return OverrideOutcome{}, conflict("work item is %s here; try again in a moment", st)
+	}
+}
+
+// stepLive reports whether the step's record shows a live dispatch: only
+// the current step can be in_progress, and a running job's current step
+// holds (or is about to hold) a dispatch.
+func stepLive(ex capsule.Execution, step string) bool {
+	st, ok := ex.Steps[step]
+	return ok && st != nil && st.Status == capsule.StepInProgress
+}
+
+// applyOverrideScene writes the change into the live or paused job's
+// capsule (the read-modify-write), taps the event and commits+pushes the
+// chain. The paused posture's push is expected to fail (aihub refuses
+// pushes for a non-running work item): the local commit stands and the
+// answer says so.
+func (r *Runtime) applyOverrideScene(j *job, ch OverrideChange, posture string) (OverrideOutcome, error) {
+	j.mu.Lock()
+	capDir := j.capsuleDir
+	git := j.git
+	j.mu.Unlock()
+	changed, entry, err := r.mutateOverlay(capDir, ch)
+	if err != nil {
+		return OverrideOutcome{Posture: posture}, err
+	}
+	if !changed {
+		return OverrideOutcome{Posture: posture, Entry: entry}, nil
+	}
+	r.tapOverride(j.wi, ch, posture)
+	out := OverrideOutcome{Posture: posture, Changed: true, Entry: entry, Published: true}
+	_, pushed, _, perr := gitops.CommitPush(context.Background(), git, "step override: "+ch.Step)
+	if perr != nil {
+		out.Published = false
+		if posture == OverridePosturePaused {
+			// expected: the hub refuses pushes while the work item is
+			// paused; the local commit stands and the resume's own
+			// publishes carry it
+			out.Note = "recorded in the kept scene; the chain commit stays local while the work item is paused (aihub refuses pushes for it) — the resume's own publishes carry it"
+		} else {
+			out.Note = fmt.Sprintf("the overlay is written and its commit stands locally, but the chain push failed: %v — the next publish retries it", perr)
+		}
+	} else if !pushed {
+		out.Published = false
+		out.Note = "the overlay is written and committed; the push reported nothing sent"
+	}
+	return out, nil
+}
+
+// applyOverrideBlocked records the change in the daemon-local pending
+// record: the sealed scene of the last close is read-only and abandoned
+// by the re-claim's fresh clone, so the change must ride the claim.
+func (r *Runtime) applyOverrideBlocked(wi string, ch OverrideChange) (OverrideOutcome, error) {
+	entries, err := r.readPendingOverrides()
+	if err != nil {
+		return OverrideOutcome{Posture: OverridePostureBlocked}, err
+	}
+	cur := entries[wi]
+	if cur == nil {
+		cur = map[string]*capsule.StepOverride{}
+	}
+	changed, entry := applyAspect(cur, ch)
+	if !changed {
+		return OverrideOutcome{Posture: OverridePostureBlocked, Entry: entry}, nil
+	}
+	entries[wi] = cur
+	if err := r.writePendingOverrides(entries); err != nil {
+		return OverrideOutcome{Posture: OverridePostureBlocked}, err
+	}
+	r.tapOverride(wi, ch, OverridePostureBlocked)
+	return OverrideOutcome{Posture: OverridePostureBlocked, Changed: true, Entry: entry,
+		Published: false,
+		Note:      "recorded locally; it lands with the next claim of the work item here (pf resume), which carries it into the fresh capsule"}, nil
+}
+
+// applyAspect applies the change's one aspect to the step's entry (nil =
+// none yet), answering whether anything changed and the entry after.
+func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange) (bool, *capsule.StepOverride) {
+	e := entries[ch.Step]
+	if e == nil {
+		e = &capsule.StepOverride{}
+		entries[ch.Step] = e
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	switch {
+	case ch.Models != nil:
+		if equalCandidates(e.Models, ch.Models) {
+			return false, e
+		}
+		e.Models = append([]string(nil), ch.Models...)
+		e.ModelsBy, e.ModelsAt = ch.Operator, now
+	case ch.ClearModels:
+		if e.Models == nil {
+			return false, e
+		}
+		e.Models, e.ModelsBy, e.ModelsAt = nil, "", ""
+	case ch.Skip != nil:
+		if e.Skip != nil && *e.Skip == *ch.Skip {
+			return false, e
+		}
+		skip := *ch.Skip
+		e.Skip = &skip
+		e.SkipBy, e.SkipAt = ch.Operator, now
+	}
+	return true, e
+}
+
+// mutateOverlay is the capsule's read-modify-write: exactly one aspect
+// of one step's entry. An unchanged clear answers changed=false and
+// writes nothing.
+func (r *Runtime) mutateOverlay(capDir string, ch OverrideChange) (bool, *capsule.StepOverride, error) {
+	ov, err := capsule.ReadStepOverrides(capDir)
+	if err != nil {
+		return false, nil, conflict("the overlay record of this capsule does not read: %v", err)
+	}
+	changed, entry := applyAspect(ov.Steps, ch)
+	if !changed {
+		return false, entry, nil
+	}
+	if err := capsule.WriteStepOverrides(capDir, ov); err != nil {
+		return false, nil, &api.Error{Code: api.ErrDaemonInternal, Detail: fmt.Sprintf("writing the overlay record failed (nothing was applied): %v", err)}
+	}
+	return true, entry, nil
+}
+
+// tapOverride records the change as one event: the operator, the step
+// and the new value (the chain, or the skip switch's new state).
+func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string) {
+	kind, aspect, value := EventOverrideSet, "", ""
+	switch {
+	case ch.Models != nil:
+		aspect, value = "models", strings.Join(ch.Models, ",")
+	case ch.ClearModels:
+		kind, aspect, value = EventOverrideClear, "models", "cleared"
+	case ch.Skip != nil:
+		aspect, value = "skip", fmt.Sprintf("%v", *ch.Skip)
+		if !*ch.Skip {
+			kind = EventOverrideClear
+		}
+	}
+	r.tap(wi, kind, map[string]any{
+		"step":     ch.Step,
+		"aspect":   aspect,
+		"value":    value,
+		"operator": ch.Operator,
+		"posture":  posture,
+		"models":   ch.Models,
+		"note":     "the step overlay changed; it governs the step's next dispatch",
+	})
+}
+
+// equalCandidates reports whether two chains name the same candidates in
+// order (the idempotence check of a repeated set).
+func equalCandidates(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// ---------------------------------------------------------------------------
+// The daemon-local pending record: work item id → per-step overlay
+// entries recorded while the work item was held by no job, consumed by
+// the next claim's scene preparation.
+
+// pendingOverridesPath is the daemon-local pending record's path (the
+// manual `--models` list's neighbour — a local operator choice, never in
+// the capsule).
+func (r *Runtime) pendingOverridesPath() string {
+	return filepath.Join(r.cfg.DataDir, "pending-step-overrides.json")
+}
+
+// readPendingOverrides answers the whole pending record (an empty map
+// when none); a torn file is a loud error, never silently overwritten.
+func (r *Runtime) readPendingOverrides() (map[string]map[string]*capsule.StepOverride, error) {
+	raw, err := os.ReadFile(r.pendingOverridesPath())
+	if os.IsNotExist(err) {
+		return map[string]map[string]*capsule.StepOverride{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]map[string]*capsule.StepOverride
+	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
+		if err == nil {
+			err = errors.New("the record is not a JSON object")
+		}
+		return nil, fmt.Errorf("the pending step-override record does not parse (not overwriting it; fix or remove the file, then retry): %w", err)
+	}
+	return m, nil
+}
+
+// writePendingOverrides writes the whole pending record atomically; an
+// empty record removes the file.
+func (r *Runtime) writePendingOverrides(m map[string]map[string]*capsule.StepOverride) error {
+	if len(m) == 0 {
+		if err := os.Remove(r.pendingOverridesPath()); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	blob, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicfile.Write(r.pendingOverridesPath(), blob, 0o600)
+}
+
+// savePendingOverrides records work item wi's pending overlay entries.
+func (r *Runtime) savePendingOverrides(wi string, entries map[string]*capsule.StepOverride) error {
+	m, err := r.readPendingOverrides()
+	if err != nil {
+		return err
+	}
+	m[wi] = entries
+	return r.writePendingOverrides(m)
 }
 
 // PendingStepOverrides answers the daemon-local pending overlay entries
 // of work item wi (nil when none): the changes recorded while the work
-// item was held by no job, waiting for its next claim here. Stub
-// (polyforge#25 u4).
+// item was held by no job, waiting for its next claim here.
 func (r *Runtime) PendingStepOverrides(wi string) map[string]*capsule.StepOverride {
-	return nil
+	id := r.CanonicalID(wi)
+	if id == "" {
+		id = wi
+	}
+	m, err := r.readPendingOverrides()
+	if err != nil {
+		return nil
+	}
+	return m[id]
 }
 
 // ManualModels answers the work item's frozen manual candidate list
-// (`pf submit --models`), nil when none. Stub (polyforge#25 u4).
+// (`pf submit --models`), nil when none — the daemon's read face for the
+// overlay view's source labels.
 func (r *Runtime) ManualModels(wi string) []string {
-	return nil
+	return r.loadManualModels(wi)
+}
+
+// writePendingStepOverrides is the claim's consumption of the pending
+// record: the fresh capsule's overlay file gains the pending entries
+// (aspect merge over what the chain already carried) and the record's
+// key goes. A record that cannot be read or merged fails the claim
+// loudly (the operator's recorded change must not silently vanish).
+func (r *Runtime) writePendingStepOverrides(j *job) error {
+	pend, err := r.readPendingOverrides()
+	if err != nil {
+		return err
+	}
+	entries, ok := pend[j.wi]
+	if !ok || len(entries) == 0 {
+		return nil
+	}
+	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
+	if err != nil {
+		return fmt.Errorf("merging the recorded step overrides into the fresh capsule: %w", err)
+	}
+	merged := mergePendingAspects(ov, entries)
+	if err := capsule.WriteStepOverrides(j.capsuleDir, merged); err != nil {
+		return fmt.Errorf("writing the fresh capsule's step overrides: %w", err)
+	}
+	delete(pend, j.wi)
+	return r.writePendingOverrides(pend)
+}
+
+// mergePendingAspects merges pending entries over the capsule's overlay
+// record, per aspect: a pending aspect replaces the capsule entry's same
+// aspect and leaves the others (an older chain the capsule already
+// carries survives a pending skip, and vice versa).
+func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.StepOverride) capsule.StepOverrides {
+	if ov.Steps == nil {
+		ov.Steps = map[string]*capsule.StepOverride{}
+	}
+	for id, p := range pending {
+		if p == nil {
+			continue
+		}
+		e := ov.Steps[id]
+		if e == nil {
+			e = &capsule.StepOverride{}
+			ov.Steps[id] = e
+		}
+		if p.Models != nil {
+			e.Models, e.ModelsBy, e.ModelsAt = append([]string(nil), p.Models...), p.ModelsBy, p.ModelsAt
+		}
+		if p.Skip != nil {
+			skip := *p.Skip
+			e.Skip, e.SkipBy, e.SkipAt = &skip, p.SkipBy, p.SkipAt
+		}
+	}
+	return ov
+}
+
+// clearPendingOverrides drops work item wi's pending entries (a terminal
+// close; a blocked close keeps them for the re-claim).
+func (r *Runtime) clearPendingOverrides(wi string) {
+	m, err := r.readPendingOverrides()
+	if err != nil {
+		return
+	}
+	if _, ok := m[wi]; !ok {
+		return
+	}
+	delete(m, wi)
+	if err := r.writePendingOverrides(m); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: %s: pending step-override record cleanup failed: %v\n", wi, err)
+	}
 }

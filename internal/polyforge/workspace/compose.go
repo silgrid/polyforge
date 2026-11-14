@@ -164,6 +164,37 @@ func ComposeCandidatesWithOverlay(fm *workflow.Lane, cfg *Config, project string
 	return out
 }
 
+// StepModelSources answers, per step of lane, the effective candidate
+// list and the level it comes from — the chain BELOW the overlay
+// (polyforge#25): the manual list first, then the yaml/bundle levels
+// (composeStepFrom's labels). A step absent from the map has no list
+// (the harness adapter's default model). It is the overlay view's
+// source labelling; the dispatch itself composes per dispatch.
+func StepModelSources(fm *workflow.Lane, cfg *Config, project string, manual []string) map[string]StepModelSource {
+	if fm == nil || len(fm.Steps) == 0 {
+		return nil
+	}
+	pm, pt := projectLists(cfg, project)
+	out := make(map[string]StepModelSource, len(fm.Steps))
+	for _, s := range fm.Steps {
+		if len(manual) > 0 {
+			out[s.ID] = StepModelSource{Models: append([]string(nil), manual...), Source: "pf submit --models"}
+			continue
+		}
+		if list, from := composeStepFrom(fm, pm, pt, s, project, ""); list != nil {
+			out[s.ID] = StepModelSource{Models: append([]string(nil), list...), Source: from}
+		}
+	}
+	return out
+}
+
+// StepModelSource is one step's effective list and the level it came
+// from (StepModelSources).
+type StepModelSource struct {
+	Models []string
+	Source string
+}
+
 // projectLists answers the claimed project's yaml lists: its step entries
 // (steps.<project>) and its tier lists (tiers.<project>); nil when the
 // yaml declares none.
