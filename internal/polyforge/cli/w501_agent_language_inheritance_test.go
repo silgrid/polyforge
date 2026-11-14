@@ -37,8 +37,11 @@ func TestW501NamedConfigListShowsDefaultWhenBothCellsUnset(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := ctx.Stdout.(*bytes.Buffer).String()
-	if !strings.Contains(got, "agent_language = en (source: default)") {
+	if !strings.Contains(got, "agent_language = en (source: default") {
 		t.Fatalf("both unset must show effective en:\n%s", got)
+	}
+	if strings.Contains(got, "agent_language = <unset>") {
+		t.Fatalf("both unset must not show <unset>:\n%s", got)
 	}
 }
 
