@@ -415,7 +415,7 @@ func TestW159RetiredHarnessKeyRefusedAndDoctor(t *testing.T) {
 	d, cfg, _ := w159HarnessRoot(t, inst, ws, "")
 	wi := w113NewWI(t, inst, "e2e", "w159 mismatch", envelopeMicro())
 	out, code := w113Pf(t, inst, w113Env{socket: d.sock}, "submit", wi)
-	w079Refused(t, d, inst, ws, wi, out, code, "steps.e2e.fix.harness: the `harness` key was removed (polyforge#175)")
+	w079Refused(t, d, inst, ws, wi, out, code, "steps.e2e.fix.harness: the `harness` key was removed")
 
 	doc := w079PfWant(t, inst, 1, w079Env{config: cfg}, "--json", "doctor")
 	if !strings.Contains(doc, "the `harness` key was removed") {

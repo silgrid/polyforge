@@ -133,7 +133,7 @@ const TiersKey = "tiers"
 const IntegrateKey = "integrate"
 
 // IntegrateRemovedHint is the rewrite of a refused `integrate:` section.
-const IntegrateRemovedHint = "removed: the daemon no longer files integration batches on its own — a person files a batch with `pf file create --bundle integrate --project <p>` and `pf submit`, so `auto` and `quiet` govern nothing; delete the whole `integrate:` section (docs/upgrade.md)"
+const IntegrateRemovedHint = "removed: the daemon no longer files integration batches on its own — a person files a batch with `pf file create --bundle integrate --project <p>` and `pf submit`, so `auto` and `quiet` govern nothing; delete the whole `integrate:` section"
 
 // Error is the typed load failure: the file that refused and the
 // reason. Every consumer surfaces it verbatim — the file name and the

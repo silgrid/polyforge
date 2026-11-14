@@ -116,7 +116,7 @@ func w457Parse(t *testing.T, out string) w457Report {
 func TestW457MicroJSONReportsTheDocsDeclaration(t *testing.T) {
 	dir, base := w25e2eFixture(t, map[string]string{
 		"go.mod":                       "module fixture.test/w457\n\ngo 1.22\n",
-		".polyforge/verify-scope.conf": w25engIeopsConf(t),
+		".polyforge/verify-scope.conf": w25engShippedConf(t),
 	})
 	out, errb, code := w25e2eRun(t, dir, nil, "--micro", "--json", "--base", base)
 	if code != 0 {
@@ -201,7 +201,7 @@ func TestW457MicroRunFailsOnABrokenPinnedDoc(t *testing.T) {
 	// The fast gates read no doc and every other bar proves them; dropping
 	// them keeps the fixture off the network and the npm cache.
 	var kept []string
-	for _, ln := range strings.SplitAfter(w25engIeopsConf(t), "\n") {
+	for _, ln := range strings.SplitAfter(w25engShippedConf(t), "\n") {
 		if !strings.HasPrefix(ln, "fast_gate=") {
 			kept = append(kept, ln)
 		}

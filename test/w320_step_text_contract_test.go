@@ -83,7 +83,7 @@ func TestW320StepTextChecklistRenders(t *testing.T) {
 			t.Fatalf("%s's checklist must render unconditionally (no template selection):\n%s", step, sec)
 		}
 		lower := strings.ToLower(sec)
-		for _, internal := range []string{"workbench", "gmi", "ieops", "silgrid", "label"} {
+		for _, internal := range []string{"workbench", "gmi", "orbit", "silgrid", "label"} {
 			if strings.Contains(lower, internal) {
 				t.Fatalf("%s's checklist must stay project-neutral and carry no selector (found %q):\n%s", step, internal, sec)
 			}

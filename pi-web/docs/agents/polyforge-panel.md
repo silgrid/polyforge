@@ -11,9 +11,9 @@ resident, immediately right of the toolbar's ⋯ (More) button and left of the
 session-stats strip; the More overlay holds the other chat actions but never
 the Polyforge button. Files: `lib/polyforge-status.ts`, `lib/polyforge-decisions.ts`, `lib/polyforge-decisions-pure.ts`, `lib/polyforge-messages.ts`,
 `lib/polyforge-messages-pure.ts`, `lib/polyforge-cards.ts`, `lib/polyforge-cards-pure.ts`,
-`lib/polyforge-panel-preferences.ts`, `lib/polyforge-conversation-pure.ts` (the job card's conversation, workflow contract v2 change 14), `lib/polyforge-disclosure.ts`, `lib/polyforge-messages-collapse.ts`, `lib/polyforge-messages-list-collapse.ts`, `app/api/polyforge/**`,
+`lib/polyforge-panel-preferences.ts`, `lib/polyforge-conversation-pure.ts` (the job card's conversation), `lib/polyforge-disclosure.ts`, `lib/polyforge-messages-collapse.ts`, `lib/polyforge-messages-list-collapse.ts`, `app/api/polyforge/**`,
 `hooks/usePolyforge.ts`, `hooks/usePolyforgePanelPreferences.ts`, `hooks/usePolyforgeDisclosure.ts`, `hooks/usePolyforgeMessagesCollapse.ts`, `hooks/usePolyforgeMessagesListCollapse.ts`, `components/PolyforgePanel.tsx`,
-`components/PolyforgeMessages.tsx`, `components/PolyforgeAnalysisCard.tsx`, `components/PolyforgeFileTicketDialog.tsx`, `components/PolyforgeJobComposer.tsx` (the job card's conversation, workflow contract v2 change 14; a parked work item's message wakes it, workflow contract 4; no buttons), `components/PolyforgeDecisionEntry.tsx` (a task's feed entries in Work › Tasks), the `polyforge.*` wiring in
+`components/PolyforgeMessages.tsx`, `components/PolyforgeAnalysisCard.tsx`, `components/PolyforgeFileTicketDialog.tsx`, `components/PolyforgeJobComposer.tsx` (the job card's conversation; a parked work item's message wakes it; no buttons), `components/PolyforgeDecisionEntry.tsx` (a task's feed entries in Work › Tasks), the `polyforge.*` wiring in
 `components/AppShell.tsx`, the dock width
 and sheet height constants in `lib/panel-layout.ts`, the resize handles
 `hooks/useResizablePanel.ts` / `hooks/useResizableSheet.ts` and their
@@ -50,23 +50,21 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   (`blocked`: the optional addition,
   [Decision feed](#decision-feed-workbench415); `pendingQuestion` and the
   admitted `awaiting_owner` / `owner_message` / `delivered` / `intent` event
-  fields: workflow contract v2 change 14, [Job card
-  conversation](#job-card-conversation-workflow-contract-v2-change-14)).
+  fields: [Job card
+  conversation](#job-card-conversation)).
   A malformed `wi` answers 400 and never spawns pf. The pi#117 additions
   (`progress`, per-step `startedAt`, chat `origin`) and the pi#119 additions
   (the four summarize-lane fields) are sanitized, additive fields: each is
   absent when missing or malformed on the wire, and every existing field is
   unchanged.
-- `POST /api/polyforge/answer` `{wi, profile?, text}` (workflow contract v2
-  change 14; workflow contract 4) → the job card's one input
+- `POST /api/polyforge/answer` `{wi, profile?, text}` → the job card's one input
   box: `pf [--profile p] --json answer <wi> --text=<words>` — no question
   id, no option — the owner's words to the work item's current step agent
   through the owner-message relay (a reply to its open `pf step ask`, or an
   interjection into its running turn; the daemon tells them apart), or the
   wake of a parked one (blocked or paused: pf opens the park's door with
   the caller's own key, the daemon records the message and wakes the step
-  the park belongs to). (The contract-1 option path left with workflow
-  contract v2 change 19.)
+  the park belongs to). (An earlier option path is gone.)
   `{ok:true, ack:{kind:"reply"|"message", at?, askAt?, step?, spawnN?,
   delivered?, disposition?, note?}}` carries the daemon's acknowledgement
   (`parseOwnerMessageAckWire`: the relay's `OwnerMessageAck`, its `note`
@@ -85,7 +83,7 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   (`wi_…`), profile and the text bound (`OWNER_MESSAGE_TEXT_MAX`,
   16 000 characters, inside the daemon's 64 KiB) are validated before any
   spawn (400); JSON-only (415); the host/origin gate (403); never 5xx. See
-  [Job card conversation](#job-card-conversation-workflow-contract-v2-change-14).
+  [Job card conversation](#job-card-conversation).
 - `GET /api/polyforge/cards[?cursors=<JSON {wi: cursor}>]` → 200
   `{pfPresent, cards:[{job:{wi,slug,status,stepAgeSec,idleAgeSec,candidate,spawnN,context?},
   goal?, startedAt?, steps:[{id, state:"timed"|"unstarted"|"unknown", durationSec?, runs}],
@@ -207,8 +205,7 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   is spawned. api_key always carries set/unset only. The change adds, from
   the workspace read: each `steps[]` entry's `source` (`file` |
   `default`) and `class` (`live`) and the unconditional `default` and
-  `task` entries of every mapped project (workflow contract 4,
-  no `attrs`; an older pf's are dropped by the sanitizer).
+  `task` entries of every mapped project (no `attrs`; an older pf's are dropped by the sanitizer).
 - `POST /api/polyforge/config` — the only write entry point.
   JSON body `{action:"set"|"unset", key, value?, cwd?, expect_state?}`; the
   exact writable allowlist is every non-secret cli.toml key —
@@ -365,7 +362,7 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   the workflow card ([below](#workflow-card-workbench216)) carries those facts.
  tests: the read/sanitizer unit tests parse a real
   `pf --json config list` recording (`lib/__fixtures__/polyforge-config-list-2.20.21/`,
-  pf built from ieops `18412ea6`, provenance in its README); the authored
+  pf built from commit `18412ea6`, provenance in its README); the authored
   acceptance suite is `e2e/polyforge-config-290.mjs`. The six existing suites
   were flipped as an owner-intended change (ruled at review), not a weakening:
   `polyforge-config-255.mjs` S12 now pins a flat summarize write from the
@@ -481,7 +478,7 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   button and no panel of entries: a live job is its card — the flow and one
   input box, with the waiting question or the park cause (and its copyable
   `pf resume` / `pf cancel`) above it ([Job card
-  conversation](#job-card-conversation-workflow-contract-v2-change-14)); its
+  conversation](#job-card-conversation)); its
   card in the Jobs row carries the item's entries the Polyforge button counts
   (`attentionItems(needsInputJobs(opsStatus), itemDecisions(...))`, the
   count's own rule, so card and count cannot drift): every open entry of the
@@ -502,31 +499,27 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   read-only face of `execution.blocked` (`{kind, step?, reason,
   requiredAction?}`, masked and capped; `evidence` never leaves the
   server). It is optional: a daemon without it sends none and
-  nothing requires it (workflow contract v2 change 14 retired the
-  `asked_by` projection with the discussion assistant that read it; the
+  nothing requires it (the
+  `asked_by` projection was retired with the discussion assistant that read it; the
   pending question itself is `pendingQuestion`, below). The blocked cause
   renders in full above the job card's input box (
   `[data-pf-chat-park-cause]`, the panel passing the watch snapshot's
   `blocked` to the composer — [Job
-  card conversation](#job-card-conversation-workflow-contract-v2-change-14)):
+  card conversation](#job-card-conversation)):
   已阻塞 · kind — labelled for the kinds the panel
   knows, `KNOWN_BLOCKED_KINDS` = `incomplete` 步骤未完成,
-  `driver` 被调度器暂停, `contract` and `write_failed`
-  (workflow contract 4) — `rewind_budget` and `effect_failed` left with
-  workflow contract 3, `forge` and
-  `binding_missing` left with the daemon actions (workflow contract v2 change
-  16), `environment` with the run request (change 18) — held equal to the kinds the daemon's `watchBlocked`
+  `driver` 被调度器暂停, `contract` and `write_failed` — held equal to the kinds the daemon's `watchBlocked`
   assigns by the Go test `test/w415_blocked_kinds_test.go`; an unknown kind
   shows its raw name — the reason, 需要的操作), with the copyable
   `pf resume <wi>` command for every kind but `contract` (whose only
   command is `pf cancel <wi>`); the
   job card's composer keeps its input box for the same park (a message
-  wakes it) unless its agent cannot start ([Job card conversation](#job-card-conversation-workflow-contract-v2-change-14)).
+  wakes it) unless its agent cannot start ([Job card conversation](#job-card-conversation)).
 - **Resume (继续).** <a id="resume-继续-workbench415"></a>
   There is no 继续 button (deleted it with 取消 and 打回到…
   and their routes): a parked item is woken by a message in the job card's
   box ([Job card
-  conversation](#job-card-conversation-workflow-contract-v2-change-14)); the
+  conversation](#job-card-conversation)); the
   composer shows the copyable `pf resume <wi>` above the box for a park a
   message wakes (blocked of any non-`contract` kind — every daemon block is
   a non-terminal state `pf resume` releases, PR #860 code review — or paused),
@@ -599,13 +592,11 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   needs_input card once and amber, both themes) are
   `e2e/polyforge-attention-458.mjs`.
 
-## Job card conversation (workflow contract v2, change 14)
+## Job card conversation
 
-<a id="job-card-conversation-workflow-contract-v2-change-14"></a>
-The selected job's detail is the step's conversation (design §5.1, §5.2,
-§5.4 and §5.5; owner rulings of 2026-11-10 in `scratch/daemon-v2/rulings.md`;
-workflow contract 4, design #483 §7, a message wakes a parked
-work item):
+<a id="job-card-conversation"></a>
+The selected job's detail is the step's conversation (a message also wakes
+a parked work item):
 the same interaction form as the main session, another entry point to it.
 The owner types in the card's one input box and the STEP'S OWN AGENT
 replies in the flow; the daemon only relays (change 6d) and never judges
@@ -795,7 +786,7 @@ event fields in `lib/polyforge-status.ts`.
   `polyforge.question.*` / `polyforge.discussion.*` / `polyforge.answer.*`
   / `polyforge.options.*` phrases — and the option buttons
   (`PolyforgeQuestionOptions`, `pf answer --question --option` from a
-  click); workflow contract v2 change 19 then took the composer's
+  click); a later change then took the composer's
   transitional option path (`routeOwnerMessage`, the options listed as
   text, `questionOptions`, the route's `option`). Nothing of them remains,
   no compat path (the repository rule).
@@ -2259,8 +2250,7 @@ and writes through `POST /api/polyforge/config`. Its row model is pure
   Inherited. Its effective chain and source level (`from`) are pf's
   (`effective.<project>`, `defaults.effective`, `task`): one chain when every
   bundle agrees, else one per bundle (`diverges`); none when no level governs
-  (the harness default model runs). A row carries no attrs (workflow
-  contract 4).
+  (the harness default model runs). A row carries no attrs.
 - **Edits** are list operations only (`addCandidate` — trimmed, no duplicate —
   `removeCandidate`, `moveCandidate`); the candidate format is pf's judgment.
 
@@ -2596,7 +2586,7 @@ per-kind body whitelist (pi#112): `step_started` → step+model;
 `candidate_switched` → step+from+to; `step_failed`/`step_dead` → step+cause;
 `rewind` → gate+target; `terminal` → status; `needs_input` and
 `awaiting_owner` → step + question + question_id (owner
-decision 2026-11-09; workflow contract v2 change 14 for the ask: the
+decision 2026-11-09; for the ask: the
 question reaches the browser verbatim — untrimmed — so the panel can show
 it; the only relaxation of the pi#112 whitelist); `owner_message` → step +
 by (never the words: they ride the progress stream); `delivered` → step +
@@ -2612,8 +2602,7 @@ are dropped. A blocked workflow's `execution.blocked` passes only as
 capped at 2000; never `evidence` or `log_tail`); `execution.pending_question`
 only as `pendingQuestion: {id, step?, question, askedAt?}` (the question
 verbatim; the asker's ordinal, definition, harness, session id and
-transcript path never leave; its `options` never leave either — workflow
-contract v2 change 19). `progress` and `job` leave only through
+transcript path never leave; its `options` never leave either). `progress` and `job` leave only through
 the pi#117 whitelists: progress passes `command` (masked + truncated
 server-side, below), `command_age_sec`, `tool_calls` and `recent_files`
 (an array of path strings; anything that is not an array of strings
@@ -2639,8 +2628,7 @@ in the admission queue: `verify_queued` → `position` +
 `reason` + `since` (`⏳ #<position> · <reason> · since <HH:MM:SS>`, amber);
 `verify_admitted` → `queued_ms` (`⏵ +<queued>`, dim). (The daemon-run
 verification's `verify_routed` end line, its check lines and the
-verify-judge's `definition` left with the daemon actions, workflow contract
-v2 change 16.) Workflow contract v2 (change 14): `awaiting_owner`
+verify-judge's `definition` left with the daemon actions.) `awaiting_owner`
 → `question` as an `ask` line (verbatim, masked; `step` for the `? <step>`
 row when the body carries no question); `owner_message` → `text` as an
 `owner` line (verbatim, masked) + `by`; `delivered` → `step` + `disposition`;
@@ -3222,7 +3210,7 @@ replaces it. An abort by hiding, deselecting or unmounting writes nothing.
   (`polyforge.deselect`) calling `onSelect(null)` — the deselect gesture
   survives the job leaving the list and the snapshot still loading. A waiting (`needs_input`) job's question shows in its
   card's conversation — highlighted in the flow where it was asked and
-  above the one input box (workflow contract v2 change 14); the title row
+  above the one input box; the title row
   and its hover never carry it. Manual refresh (pi#113): the refresh
   button's click spins its icon and disables the button until the status
   fetch settles, floored at ~400 ms; further clicks in the window are ignored;

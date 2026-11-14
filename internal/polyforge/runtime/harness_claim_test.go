@@ -51,7 +51,7 @@ func TestCandidateFormatRefusesBeforeClaim(t *testing.T) {
 		"unknown prefix": {"steps:\n  proj:\n    default: { models: [codex:gpt-6] }\n", `unknown harness prefix "codex"`},
 		"empty model":    {"steps:\n  proj:\n    default: { models: [\"pi:\"] }\n", "names no model"},
 		"retired harness key": {"steps:\n  proj:\n    fix: { models: [claude:claude-opus-5-5], harness: claude }\n",
-			"steps.proj.fix.harness: the `harness` key was removed (polyforge#175)"},
+			"steps.proj.fix.harness: the `harness` key was removed"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

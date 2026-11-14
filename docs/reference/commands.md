@@ -165,7 +165,7 @@ Human moves: continue = `pf resume <id>` (a paused or blocked
 work item), abandon = `pf cancel <id>` (queued, paused or blocked); to send
 the work back to an earlier step or waive a gate's FAIL, tell the step's
 agent (`pf answer`, below), which hands off `rewind` or `waive` citing your
-words (workflow contract 4 removed the owner's rewind and waive verbs),
+words (there are no owner rewind or waive verbs),
 owner's failed verdict on a live run = `pf wrap <id> --fail` (refused on
 a blocked work item), done for a work item with no bundle (design,
 decision, tracking) = `pf wrap <id> [--fail] [--note …]` (aihub records
@@ -303,8 +303,8 @@ the task repos as the sync step left them: no fetch, no merge — a merge in pro
 (`MERGE_HEAD`) or an unresolvable default branch makes the run incomplete
 — and it skips a repo with no commit beyond its default branch. (The
 daemon's `verify` action, which ran the same bar in-process after fetching
-and merging the default branch itself, left with the daemon actions,
-workflow contract v2 change 16.) For each touched repo it asks the
+and merging the default branch itself, left with the daemon actions.)
+For each touched repo it asks the
 scope engine (`--engine`, default the shared tree's
 `$PF_SHARED_DIR/scripts/verify-scope`) for its plan and runs the WHOLE
 plan through
@@ -500,7 +500,7 @@ pf step hub wrap-attrs <name> <json | @file>
 pf step hub batch <@ops.json | ->
 ```
 
-Inside a workflow step only (workflow contract 4): the step's one way to
+Inside a workflow step only: the step's one way to
 reach the daemon, and through it aihub. Outside a step (no `PF_WI_ID` +
 `PF_DAEMON_ID`) it refuses with exit 1 before any request. Every
 subcommand is one `POST /step/call` to the daemon
@@ -585,7 +585,7 @@ pf answer <wi> --text "<your words>" [--by <user>]
 
 At any time while a step's agent is running or waiting for you, or while
 the work item is parked — no question id — the words go to that agent
-(the owner-message relay; workflow contract 4 adds the wake of a parked
+(the owner-message relay; it also wakes a parked
 work item, below). The daemon reads none
 of them (P0): no option, no reserved word (`cancel` here is just a word;
 `pf cancel` cancels). It records them first, then delivers them.
@@ -667,8 +667,8 @@ of them (P0): no option, no reserved word (`cancel` here is just a word;
   is terminal, or the daemon does not hold the work item — `DAEMON-409`;
   empty words, or over 64 KiB
   (`DAEMON-400`); a request naming a question id or an option
-  (`DAEMON-400`: the v1 answer's fields, gone with workflow contract v2
-  change 19 together with the reserved `cancel` answer); a disabled Cell
+  (`DAEMON-400`: the fields of an earlier answer shape, gone together with
+  the reserved `cancel` answer); a disabled Cell
   (`DAEMON-409`).
 - **The question stays the agent's.** The daemon never judges whether
   your words answered it: the agent reads them in its next turn and goes
@@ -1112,7 +1112,7 @@ management verb: a step agent is refused, and it adds no daemon route.
 each lane — its `workflow.yaml` — through the daemon's own loader and
 prints every defect with its `WFC-*` code, file:line and YAML path
 ([workflow contract reference](workflow-contract.md)); any defect exits 1.
-A lane that is still a `workflow.md` (contract 4) is `WFC-101` with its
+A lane that is still a `workflow.md` (the lane file of the earlier releases) is `WFC-101` with its
 rewrite. With no lane
 directory it judges the lane set of the workspace — `--workspace`, else the
 mapped workspace holding the working directory (none: the built-in lanes

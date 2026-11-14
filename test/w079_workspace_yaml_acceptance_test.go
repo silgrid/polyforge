@@ -554,7 +554,7 @@ func TestW079InvalidYamlRefusesWithoutClaim(t *testing.T) {
 		{"old shape workflow_defaults", "workflow_defaults:\n  model_candidates: [pi:a]\n", []string{"workflow_defaults"}},
 		{"unknown top-level key", "model:\n  e2e:\n    default: { models: [pi:a] }\n", []string{"model"}},
 		{"legacy top-level models", "models:\n  e2e:\n    default: [a]\n", []string{`unknown top-level key "models"`}},
-		{"retired harness key", "steps:\n  e2e:\n    fix: { models: [pi:a], harness: claude }\n", []string{"steps.e2e.fix.harness: the `harness` key was removed (polyforge#175)"}},
+		{"retired harness key", "steps:\n  e2e:\n    fix: { models: [pi:a], harness: claude }\n", []string{"steps.e2e.fix.harness: the `harness` key was removed"}},
 		{"unprefixed candidate", "steps:\n  e2e:\n    fix: { models: [pi:a, example-gateway/model-a] }\n", []string{`steps.e2e.fix.models[1]: "example-gateway/model-a" needs a harness prefix (pi:… or claude:…)`}},
 		{"unknown harness prefix", "steps:\n  e2e:\n    fix: { models: [codex:a] }\n", []string{`steps.e2e.fix.models[0]: "codex:a" has an unknown harness prefix "codex"`}},
 		{"empty project entry", "steps:\n  e2e:\n", nil},

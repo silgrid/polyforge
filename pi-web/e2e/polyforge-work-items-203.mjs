@@ -53,7 +53,7 @@ const item = (n, projectName, status, minute, goal, extra = {}) => ({
   project: projectName, status, priority: n % 2 ? "high" : "normal", bundle_name: n % 3 ? null : `feature-${n}`,
   goal, created_at: at(minute), content: `${CONTENT_SENTINEL} body ${n}`, attrs: { sentinel: ATTRS_SENTINEL },
   project_id: PROJECT_ID, parent_id: PARENT_ID, seq: n, clean_pause: false, repo_inventory: [REPO_SENTINEL],
-  waiting_on: null, waiting_for: n === 2 ? [{ slug: "ieops#1", status: "queued" }] : undefined,
+  waiting_on: null, waiting_for: n === 2 ? [{ slug: "orbit#1", status: "queued" }] : undefined,
   session_fingerprint: SESSION_SENTINEL, session_machine: "MACHINE-SENTINEL-203", session_started_at: at(minute),
   labels: [LABEL_SENTINEL], milestone: "MILESTONE-203", reporter: "alice", assignee: "bob",
   updated_at: at(minute), closed_at: null, ...extra,
@@ -62,18 +62,18 @@ const baseItems = () => [
   item(1, "workbench", "wrapped", 1, "GOAL-A wraps an old ticket"),
   item(2, "polyforge", "running", 2, "GOAL-B is running now"),
   item(3, "workbench", "queued", 3, "GOAL-C waits in the queue"),
-  item(4, "ieops", "failed", 4, "GOAL-D failed yesterday"),
+  item(4, "orbit", "failed", 4, "GOAL-D failed yesterday"),
   item(5, "workbench", "canceled", 5, "GOAL-E was canceled"),
   item(6, "polyforge", "paused", 6, "GOAL-F is paused"),
-  item(7, "ieops", "blocked", 7, "GOAL-G is blocked"),
+  item(7, "orbit", "blocked", 7, "GOAL-G is blocked"),
 ];
 const manyItems = () => Array.from({ length: 1162 }, (_, i) => {
-  const projectName = i % 2 ? "ieops" : "workbench";
+  const projectName = i % 2 ? "orbit" : "workbench";
   return item(1000 + i, projectName, i % 5 ? "wrapped" : "running", 0, `PERF-GOAL-${String(i + 1).padStart(4, "0")}`,
     { id: `wi_PERF${String(i + 1).padStart(4, "0")}`, slug: `${projectName}-perf-${String(i + 1).padStart(4, "0")}` });
 });
 const capItems = () => [
-  ...Array.from({ length: 500 }, (_, i) => item(2000 + i, "ieops", "wrapped", 0, `CAP-GOAL-${String(i + 1).padStart(3, "0")}`,
+  ...Array.from({ length: 500 }, (_, i) => item(2000 + i, "orbit", "wrapped", 0, `CAP-GOAL-${String(i + 1).padStart(3, "0")}`,
     { id: `wi_CAP${String(i + 1).padStart(4, "0")}`, slug: `demo-cap-${String(i + 1).padStart(4, "0")}` })),
   item(3001, "workbench", "running", 1, "CAP-WORKBENCH-ONE", { id: "wi_CAP9001", slug: "workbench-cap-1" }),
   item(3002, "polyforge", "queued", 2, "CAP-POLYFORGE-ONE", { id: "wi_CAP9002", slug: "polyforge-cap-1" }),
@@ -82,7 +82,7 @@ const longContent = "x".repeat(300_000) + "\nE2E-TAIL-AFTER-CAP";
 const detail = (content = "Detail body of") => ({
   ...item(2, "polyforge", "running", 2, "GOAL-B is running now"),
   content, content_len: Buffer.byteLength(content, "utf8"),
-  waiting_for: [{ slug: "ieops#1", status: "queued" }], waiting_on: null,
+  waiting_for: [{ slug: "orbit#1", status: "queued" }], waiting_on: null,
   labels: [LABEL_SENTINEL], milestone: "MILESTONE-203", reporter: "alice", assignee: "bob", updated_at: at(2), closed_at: null,
 });
 const passportItems = () => [
@@ -90,7 +90,7 @@ const passportItems = () => [
   item(12, "polyforge", "running", 12, "PASSPORT-DEGRADE", { id: "wi_PASS0002", slug: "polyforge-pass-2",
     goal: 42, created_at: 1234, status: null, bundle_name: { bad: true } }),
   item(13, "workbench", "queued", 13, "PASSPORT-BAD-SLUG", { id: "wi_PASS0003", slug: 13 }),
-  item(14, "ieops", "failed", 14, "PASSPORT-BAD-ID", { id: "not-a-work-item", slug: "demo-pass-4" }),
+  item(14, "orbit", "failed", 14, "PASSPORT-BAD-ID", { id: "not-a-work-item", slug: "demo-pass-4" }),
 ];
 
 // ---- stub pf ----
@@ -123,7 +123,7 @@ if (rest[0] === "msg" && rest[1] === "contacts") out({ contacts: [] });
 if (rest[0] === "recall") out({ items: [], total: 0 });
 if (rest[0] === "task" && rest[1] === "list") out({ tasks: [], now: new Date().toISOString() });
 if (rest[0] === "queue") {
-  if (s.mode === "fail") { process.stderr.write("queue: project ieops: do-not-show-half-the-table\\n"); process.exit(1); }
+  if (s.mode === "fail") { process.stderr.write("queue: project orbit: do-not-show-half-the-table\\n"); process.exit(1); }
   if (s.mode === "nomap") { process.stderr.write("pf: no [workspace] mapping for this directory\\n"); process.exit(1); }
   if (s.mode === "malformed") { process.stdout.write("not a decodable queue document\\n"); process.exit(0); }
   out(s.total === null ? { items: s.items } : { items: s.items, total: s.total });
@@ -378,7 +378,7 @@ try {
   });
 
   await check("S203-4", async () => {
-    for (const [mode, reason] of [["fail", /queue: project ieops/], ["nomap", /workspace|mapping/i], ["malformed", /decod|parse|unavailable|queue/i]]) {
+    for (const [mode, reason] of [["fail", /queue: project orbit/], ["nomap", /workspace|mapping/i], ["malformed", /decod|parse|unavailable|queue/i]]) {
       seed({ mode });
       const response = await get("/api/polyforge/work-items"); const body = json(response.text);
       assert.equal(response.status, 200, `${mode}: the list route answers 200, got ${response.status}`);
@@ -405,8 +405,8 @@ try {
       assert.ok(option, "the project filter renders");
       assert.ok((await optionTexts(option)).some((label) => label.includes("仅显示最近 500 条")), "the capped project's option carries the same hint");
     });
-    seed({ items: capItems().filter((r) => r.project !== "ieops").concat(
-      Array.from({ length: 499 }, (_, i) => item(4000 + i, "ieops", "wrapped", 0, `NOCAP-GOAL-${i}`,
+    seed({ items: capItems().filter((r) => r.project !== "orbit").concat(
+      Array.from({ length: 499 }, (_, i) => item(4000 + i, "orbit", "wrapped", 0, `NOCAP-GOAL-${i}`,
         { id: `wi_NOCAP${i}`, slug: `demo-nocap-${i}` }))), total: 501 });
     await withPage({}, async (page) => {
       const panel = await openItems(page);
@@ -425,7 +425,7 @@ try {
       const read = queues().length;
       const project = await findSelect(panel, "全部项目");
       assert.ok(project, "the project filter renders at scale");
-      await project.selectOption({ label: "ieops" });
+      await project.selectOption({ label: "orbit" });
       assert.equal(await goalCount(panel, /^PERF-GOAL-\d{4}$/), 581, "filtering narrows the same rendered list");
       const search = panel.getByRole("searchbox").or(panel.getByPlaceholder(/搜索|search/i)).first();
       await search.fill("PERF-GOAL-1162");
@@ -446,7 +446,7 @@ try {
       assert.deepEqual((await optionValues(status)).slice(1), ["queued", "running", "paused", "blocked", "wrapped", "failed", "canceled"], "the seven real statuses are offered");
       const projects = await optionTexts(project);
       assert.equal(projects[0], "全部项目", "project defaults to 全部项目");
-      assert.deepEqual(projects.slice(1).sort(), ["ieops", "polyforge", "workbench"], "the distinct projects of the loaded list");
+      assert.deepEqual(projects.slice(1).sort(), ["orbit", "polyforge", "workbench"], "the distinct projects of the loaded list");
       const read = queues().length;
       const search = panel.getByRole("searchbox").or(panel.getByPlaceholder(/搜索|search/i)).first();
       await search.fill(CONTENT_SENTINEL);
@@ -497,7 +497,7 @@ try {
       await waitFor(async () => (await panel.innerText()).includes("Detail body of"), "the detail read lands", 20_000);
       assert.deepEqual(fileShows().map((a) => a[2]), ["wi_203E2E0002"], "the selection spawns exactly one file show for that id");
       const text = await panel.innerText();
-      for (const want of ["GOAL-B is running now", LABEL_SENTINEL, "MILESTONE-203", "alice", "bob", "ieops#1"]) assert.ok(text.includes(want), `the detail shows ${want}`);
+      for (const want of ["GOAL-B is running now", LABEL_SENTINEL, "MILESTONE-203", "alice", "bob", "orbit#1"]) assert.ok(text.includes(want), `the detail shows ${want}`);
       const reads = queues().length;
       await panel.getByRole("button", { name: /返回|back|←/i }).first().click();
       await row(panel, "GOAL-B is running now").waitFor({ timeout: 20_000 });

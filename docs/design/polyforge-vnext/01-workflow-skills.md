@@ -55,7 +55,7 @@
 
 ### 4.1 The full workflow.yaml schema (the sole structural schema) <!-- §4.1 -->
 
-`workflow.yaml` is one YAML mapping (through contract 4, the frontmatter of a `workflow.md`). Top-level fields (the driver parses only `defaults`, `rewind` and `steps`; `name`/`description` are for humans and not parsed):
+`workflow.yaml` is one YAML mapping (the earlier releases kept it as the frontmatter of a `workflow.md`). Top-level fields (the driver parses only `defaults`, `rewind` and `steps`; `name`/`description` are for humans and not parsed):
 
 | Field | Type | Required | Notes |
 |---|---|---|---|

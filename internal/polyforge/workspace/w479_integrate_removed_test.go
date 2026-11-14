@@ -48,7 +48,7 @@ func TestW479IntegrateSectionRefused(t *testing.T) {
 			t.Fatalf("%s: the refusal names the file and the rewrite hint: %v", name, err)
 		}
 	}
-	for _, want := range []string{"pf file create --bundle integrate", "pf submit", "delete the whole `integrate:` section", "docs/upgrade.md"} {
+	for _, want := range []string{"pf file create --bundle integrate", "pf submit", "delete the whole `integrate:` section"} {
 		if !strings.Contains(IntegrateRemovedHint, want) {
 			t.Fatalf("the hint says %q: %s", want, IntegrateRemovedHint)
 		}

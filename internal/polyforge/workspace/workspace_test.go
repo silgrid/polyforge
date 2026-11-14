@@ -114,7 +114,7 @@ func TestLoadRefusals(t *testing.T) {
 		{"legacy models beside steps", "steps:\n  e2e:\n    default: { models: [pi:a] }\nmodels:\n  e2e:\n    code: [b]\n", []string{`unknown top-level key "models"`}},
 		{"unknown sub-key", "steps:\n  e2e:\n    fix: { models: [pi:a], modles: [b] }\n", []string{"steps.e2e.fix.modles", "a step entry's one key is `models`"}},
 		// polyforge#175: the retired harness key and the candidate format
-		{"retired harness key", "steps:\n  e2e:\n    fix: { models: [claude:claude-opus-5-5], harness: claude }\n", []string{"steps.e2e.fix.harness: the `harness` key was removed (polyforge#175) — move it into each model candidate's prefix"}},
+		{"retired harness key", "steps:\n  e2e:\n    fix: { models: [claude:claude-opus-5-5], harness: claude }\n", []string{"steps.e2e.fix.harness: the `harness` key was removed — move it into each model candidate's prefix"}},
 		{"retired harness key alone", "steps:\n  e2e:\n    fix: { harness: pi }\n", []string{"steps.e2e.fix.harness: the `harness` key was removed"}},
 		{"unprefixed candidate", "steps:\n  polyforge:\n    code: { models: [pi:a, example-gateway/model-a] }\n", []string{`steps.polyforge.code.models[1]: "example-gateway/model-a" needs a harness prefix (pi:… or claude:…)`}},
 		{"bare claude id", "steps:\n  e2e:\n    review: { models: [claude-opus-5-5] }\n", []string{`steps.e2e.review.models[0]: "claude-opus-5-5" needs a harness prefix`}},

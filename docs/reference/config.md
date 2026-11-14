@@ -79,7 +79,7 @@ one partition; `internal/polyforge/cellcfg/schema.go` owns it):
 | `claude_bin` | flat | Cell | live | execution configuration |
 | `step_timeout` | `[daemon]` | Cell | live | execution configuration |
 | `stall_window` | `[daemon]` | Cell | live | execution configuration |
-| `ask_warm_window` | `[daemon]` | Cell | restart-only | how long a step process that asked the owner (`pf step ask`) stays resident for the reply (workflow contract v2) |
+| `ask_warm_window` | `[daemon]` | Cell | restart-only | how long a step process that asked the owner (`pf step ask`) stays resident for the reply |
 | `command_path` | `[daemon]` | Cell | live | the PATH of the commands the daemon runs in-process, and of every step process behind the daemon's `pf` directory and the harness binary's |
 | `cell_max_concurrent_jobs` | `[daemon]` | Cell | live | optional per-Cell ceiling; absent = no extra limit. A reload applies it to the Cell's admission at once, clamped to the Host ceiling (`max_concurrent_jobs`); unset (or `0`) falls back to the Host's current ceiling. A raise admits queued work up to the new value, a lower value only stops new starts (nothing is killed); other Cells are untouched. `GET /profiles` reports the applied value and the effective `max_concurrent` |
 | `machine_id` | `[daemon]` | Cell | restart-only | seeds `cells/<profile>/daemon-id`; the file wins once written |
@@ -676,13 +676,13 @@ steps:
                                             # with that id in every bundle
     merge: { skip: true }                   # optional: switch off a step its lane
                                             # declares skippable (below)
-tiers:                                      # optional section (workflow contract 2)
+tiers:                                      # optional section
   polyforge:                                # a project of this workspace
     cheap: { models: ["pi:prov/small"] }    # the list of every bundle step
     mid: { models: ["pi:prov/small"] }      # naming model_tier: <tier>
 ```
 
-**Tiers (workflow contract 2).** A bundle step may name a tier instead
+**Tiers.** A bundle step may name a tier instead
 of a list — `model_tier: cheap` — and the tier→model table has two
 places: the workspace yaml's `tiers.<project>.<tier>.models` (the
 project's own table, one key per tier, `models` its only key — the list's
@@ -724,7 +724,7 @@ refuse); no effort, no flag.
 
 A step entry's keys are `models` and `skip`, at least one declared (an
 entry declaring neither is refused as empty); a leftover `attrs` is refused naming
-its removal (workflow contract 4, docs/upgrade.md). An entry declaring only
+its removal. An entry declaring only
 `skip` is no level of the chain below. For a step of the claimed project
 the list is, highest first: the work item's manual `pf submit <id>
 --models pi:a,claude:b` list (every step; kept by this daemon only —
@@ -826,8 +826,7 @@ any step; the integration lane's four steps (`collect`, `revert`,
 `full-gate`, `close`) each run on their own key — their lane tiers are
 placeholders, so the step's key or the project default governs — and
 dispatch no sub-agent. The retired `verify-judge` key is stale: it governs
-nothing, and `pf doctor` names it — rename it to `verification`
-(docs/upgrade.md).
+nothing, and `pf doctor` names it — rename it to `verification`.
 
 ### `integrate:` — removed
 
@@ -843,7 +842,7 @@ refused whole, like any load error (DAEMON-414 at a claim or a dispatch,
 removed: the daemon no longer files integration batches on its own — a
 person files a batch with `pf file create --bundle integrate --project <p>`
 and `pf submit`, so `auto` and `quiet` govern nothing; delete the whole
-`integrate:` section (docs/upgrade.md)
+`integrate:` section
 
 ## `.polyforge/verify-scope.conf` — the verification bar
 

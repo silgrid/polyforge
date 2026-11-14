@@ -77,7 +77,7 @@ document, `artifacts/handoff.md` (below), and through the files they write
 ### Result delivery
 
 The one way a step agent's outcome reaches the daemon: `pf step handoff`
-(workflow contract 4, [the step
+([the step
 interface](reference/workflow-contract.md#the-step-interface)). The step
 ends every dispatch with exactly one call naming a status — `done`, a
 gate's `fail`, `blocked`, or, carrying out an owner's word, `cancel`,
@@ -225,8 +225,7 @@ A step that can FAIL the whole run: the delivery lanes' gates rewind it
 to an earlier step, the release lane's gates end it (published
 releases are immutable — no `on_fail`, no rewind into a re-release).
 Which steps are gates is the lane's own choice — micro gates review,
-evidence, publish and merge (its `sync` is no gate since workflow contract
-2), each rewinding to its build step `fix` — merge's to `sync`; develop gates review, verification, publish and merge (its `sync` is no gate since workflow contract 2: a real conflict is the sync agent's to resolve in place), each rewinding to its one
+evidence, publish and merge (its `sync` is no gate), each rewinding to its build step `fix` — merge's to `sync`; develop gates review, verification, publish and merge (its `sync` is no gate: a real conflict is the sync agent's to resolve in place), each rewinding to its one
 build step `build` — merge's to `sync`; the release lane's release, verify and deploy steps are all gates. A
 gate's FAIL verdict is the input of the rewind (or the ending) it
 triggers.
@@ -314,7 +313,7 @@ inconsistent never merges unattended.
 
 Verification runs the tier its step declares: develop's `verification`
 runs the **light tier** through its skill's `verify.py --tier light`
-(workflow contract 2; the result file's `heads` name the tree it ran
+(the result file's `heads` name the tree it ran
 over); the **full** bar is the integration lane's gate (`gate.py`). There is
 no per-work-item tier: the scoped tier and its
 content marker are gone (workflow contract 1).
@@ -327,8 +326,7 @@ exactly that head, re-running no test; the `merge` step merges it at that
 head with `merge.py`, a default branch that moved since never merged in
 and never verified again (below, "Landed, awaiting the full gate"). (The
 daemon's `verify` action, which fetched and merged the latest default
-branch itself before its bar ran, left with the daemon actions, workflow
-contract v2 change 16.)
+branch itself before its bar ran, left with the daemon actions.)
 
 ### The light verification
 
@@ -427,8 +425,7 @@ it starts only while a global slot is free (`max_concurrent_bars`, default
 **queued**: it runs no process, spends no budget and holds no job slot; the
 queue is ordered by priority, then by when it queued, and `pf watch` and
 `pf ops status` show the run's position in it. (The per-repo bar lock,
-`locks: [bar]`, which no shipped lane declared, went with workflow
-contract 4.)
+`locks: [bar]`, which no shipped lane declared, is gone.)
 
 A queued dispatch writes its wait into the work item's event log (the
 task stream the Pi Web job detail renders): a `verify_queued` line
@@ -439,8 +436,8 @@ line (`queued_ms`).
 
 The develop lane is the fast first stage of three, and each
 work item merges itself at its end — its conflicts with the default branch
-are resolved then, while they are its own, never in a later batch. Since
-workflow contract 2 every step of the lane is an agent step: `sync`,
+are resolved then, while they are its own, never in a later batch. Every
+step of the lane is an agent step: `sync`,
 `verification`, `publish` and `merge` are mechanical steps on the lane's
 `cheap` tier, each following a shared skill
 (`workflows/_shared/skills/<name>.md`, rendered into its prompt) that runs
@@ -540,8 +537,8 @@ oldest first (`{repo: [sha, …]}`). The owner's waivers ride beside it in
 `attrs.waivers`, written by the daemon, never by the agent (aihub merges a
 wrapped session-end's `attrs`; no new work-item status).
 The landing record carries no `waived`: the integration lane reads an
-item's waivers from `attrs.waivers` alone (an item that landed before
-contract 4 has none there, and its record's own `waived` is read
+item's waivers from `attrs.waivers` alone (an item that landed under an
+earlier release has none there, and its record's own `waived` is read
 instead, until no such item is left). An owner waiver
 of verification's FAIL lands with the heads its red run tested: publish's
 PR body says the change's light verification was red and waived (the
@@ -550,7 +547,7 @@ bar; publish and merge are never waived. The
 integration lane then runs the full gate over the default branch's landed
 work items and moves each one's `integration` on.
 
-micro lands the same way since workflow contract 2 (change 10): its `sync`
+micro lands the same way: its `sync`
 runs `sync.py` on an agent step (a real conflict resolved in place by the
 sync agent), its `evidence` gate runs `run.py --isolation host --plan-from
 artifacts/fix/evidence.json` where develop's verification runs
@@ -812,7 +809,7 @@ setting:
   `_shared/review_security.md`). `build` writes the e2e scenarios too:
   a user-visible criterion names one (or why a unit test suffices), and an
   e2e scenario is a unit, red before its implementation like any other.
-  No daemon check judges what `build` reports (workflow contract v2): it
+  No daemon check judges what `build` reports: it
   runs each unit red then green itself and records it in
   `artifacts/build/units.json` (`[{id, test_commit, impl_commit, run{repo,
   cwd, argv}, marker}]`, the run exactly as it ran red and green; the

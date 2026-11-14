@@ -153,13 +153,13 @@ test("inline link segments keep the @ text and the rest exactly plain", () => {
 });
 
 test("binding takes the first known-project token outside quote lines (memo E)", () => {
-  const projects = ["acme", "ieops"];
+  const projects = ["acme", "orbit"];
   assert.equal(pure.firstWorkItemBinding("see @acme#272 now", projects), "acme#272");
   assert.equal(pure.firstWorkItemBinding("> @acme#272\nplain", projects), null, "a quote-line token never binds");
   assert.equal(pure.firstWorkItemBinding("> @other#1\nplain @acme#272", projects), "acme#272", "the quote line is skipped, the next plain token binds");
   assert.equal(pure.firstWorkItemBinding("@unknown#1 @acme#272", projects), "acme#272", "an unknown project is not the binding");
   assert.equal(pure.firstWorkItemBinding("@Acme#272", projects), null, "the project match is case-sensitive");
-  assert.equal(pure.firstWorkItemBinding("@acme#272 @ieops#9", projects), "acme#272", "the first valid token wins");
+  assert.equal(pure.firstWorkItemBinding("@acme#272 @orbit#9", projects), "acme#272", "the first valid token wins");
   assert.equal(pure.firstWorkItemBinding("@acme#272abc", projects), null, "an invalid token never binds");
   assert.equal(pure.firstWorkItemBinding("no token here", projects), null);
   assert.equal(pure.firstWorkItemBinding("", projects), null);

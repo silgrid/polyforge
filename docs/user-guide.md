@@ -125,7 +125,7 @@ forms.
 - **Gate** -- a step that can FAIL the run and rewind it to an earlier step;
   which steps are gates is the lane's own: the develop lane gates review,
   verification, publish and merge, the micro lane review, evidence, publish
-  and merge (neither lane's sync is a gate since workflow contract 2: its
+  and merge (neither lane's sync is a gate: its
   agent resolves a real conflict in place; review before verification: the judgment runs first, then the machine bar
   verifies the tree review passed merged with the latest origin default
   branch). What each gate's FAIL means is the

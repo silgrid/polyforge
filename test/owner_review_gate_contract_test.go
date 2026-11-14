@@ -90,7 +90,7 @@ func TestOwnerReviewFragmentIsSingleSourceAndLaneNeutral(t *testing.T) {
 		t.Errorf("the owner_review fragment carries a placeholder %s; a fragment is rendered verbatim", m)
 	}
 	lower := strings.ToLower(frag)
-	for _, name := range []string{"chore", "feature-full", "bug-fix", "autopilot", "polyforge", "ieops"} {
+	for _, name := range []string{"chore", "feature-full", "bug-fix", "autopilot", "polyforge", "orbit"} {
 		if strings.Contains(lower, name) {
 			t.Errorf("the owner_review fragment names %q; a fragment is lane- and project-neutral", name)
 		}

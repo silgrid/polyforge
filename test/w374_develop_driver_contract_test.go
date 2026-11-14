@@ -50,11 +50,11 @@ func TestW374DevelopDriverChecksContract(t *testing.T) {
 			"A FAIL sends the lane back to `{{rework_step}}`, which resumes its previous session and reads your section first.",
 		},
 		"docs/concepts.md": {
-			"No daemon check judges what `build` reports (workflow contract v2)",
+			"No daemon check judges what `build` reports",
 			"(build asks with `pf step ask` before its first test, and review blocks a build whose first test commit is older than the owner's reply)",
 		},
 		"docs/contributing.md": {
-			"No daemon check settles `build` (workflow contract v2)",
+			"No daemon check settles `build`",
 			"Verification runs each unit's recorded run again on the final tree (`verify.py --unit-runs`).",
 		},
 		"skills/polyforge/SKILL.md": {
