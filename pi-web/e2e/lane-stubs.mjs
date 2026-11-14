@@ -50,6 +50,7 @@
 //     run failed).
 // Every invocation is argv-logged to GHSTUB_LOG so the passes can assert
 // which channel traffic actually ran. No network, no real gh, ever.
+import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -149,6 +150,20 @@ export const writeStub = (bin, name, body) => {
 // the Go lane tests do: DEPLOY_REMOTE_IS = the GH_REPO the run uses (the
 // environment's, else the lane's own default). A readable GitHub origin is
 // still checked first, so a checkout with one runs exactly as before.
+// deploy-piweb.sh installs from the latest GitHub Release of its channel
+// (silgrid/polyforge by default: Pi Web ships only as part of that release),
+// so every suite that runs it puts the gh stub on its PATH and this release
+// in its environment: one tag whose tarball's SHA256SUMS line matches. The
+// stub's argv goes to logPath.
+const RELEASE_STUB_PAYLOAD = "stub Pi Web release tarball payload\n";
+export const releaseStubEnv = (logPath, tag = "v0.1.1") => ({
+  GHSTUB_LOG: logPath,
+  GHSTUB_LATEST_TAG: tag,
+  GHSTUB_PAYLOAD: RELEASE_STUB_PAYLOAD,
+  GHSTUB_HASH: createHash("sha256").update(RELEASE_STUB_PAYLOAD).digest("hex"),
+  GHSTUB_CHECKSUM_MODE: "match",
+});
+
 export const laneRemoteEnv = (laneDeploy, env) => {
   const fallback = /^GH_REPO="\$\{GH_REPO:-([^}"]+)\}"$/m.exec(readFileSync(laneDeploy, "utf8"))?.[1];
   if (!fallback) throw new Error(`no GH_REPO default line in ${laneDeploy}`);

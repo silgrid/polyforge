@@ -74,19 +74,16 @@ To update, stop the running process with `Ctrl+C` and run `pi-web update`. It up
 This fork ships a deployment script for containers without systemd:
 
 ```bash
-PIWEB_INSTALL_REPO=silgrid/polyforge ./deploy-piweb.sh   # install the latest Polyforge GitHub Release's Pi Web, then restart the tmux service
+./deploy-piweb.sh   # install the latest Polyforge GitHub Release's Pi Web, then restart the tmux service
 ```
 
-With `PIWEB_INSTALL_REPO` naming the Polyforge repository (put it in
-`~/.config/piweb/deploy.env` to keep it; `PIWEB_INSTALL_VERSION` pins one
-release), the script downloads that release's Pi Web tarball and
-`SHA256SUMS`, verifies the checksum, installs the tarball globally, confirms its install
+The script downloads the Pi Web tarball and `SHA256SUMS` of the latest
+GitHub Release of `PIWEB_INSTALL_REPO` (default `silgrid/polyforge`; Pi Web
+ships only as part of that release, and `PIWEB_INSTALL_VERSION` pins one
+release), verifies the checksum, installs the tarball globally, confirms its install
 scripts took effect (below), and (re)starts pi-web in a detached `tmux` session (`piweb`) with a restart loop. `PI_WEB_IDLE_TIMEOUT_MS=0`
 is required for unattended runs: by default pi-web exits after 10 idle minutes,
 which looks like the process "self-exits" when run as a background service.
-Always set `PIWEB_INSTALL_REPO`: without it the script falls back to
-`npm install -g @silgrid/pi-web@latest` from the npm registry, which is not
-where Pi Web is released.
 
 Right after `npm install -g`, the deploy runs the installed package's own
 install check, `bin/pi-web-install-check.js` under `npm root -g`: npm can skip
@@ -116,7 +113,7 @@ read:
 | `PIWEB_HOST` | Bind address (default `0.0.0.0`) |
 | `PI_WEB_PASSWORD` | Web-auth password; required for a non-loopback bind |
 | `PI_WEB_ALLOWED_HOSTS` | Comma-separated hostnames pi-web accepts |
-| `PIWEB_INSTALL_REPO` | GitHub Releases install channel: `OWNER/REPO` |
+| `PIWEB_INSTALL_REPO` | GitHub Releases install channel: `OWNER/REPO` (default `silgrid/polyforge`) |
 | `PIWEB_INSTALL_VERSION` | Exact release tag to install (optional pin) |
 
 A value set in the caller's environment wins over the file, including an

@@ -12,7 +12,8 @@
 # caller does not set is read from the operator's
 # ~/.config/piweb/deploy.env (0600). Explicit caller values always win.
 #
-# Dependencies: bash, tmux, npm, node and curl (curl runs the post-swap
+# Dependencies: bash, tmux, gh, npm, node and curl (gh downloads the
+# release's Pi Web tarball and its SHA256SUMS; curl runs the post-swap
 # service probe and the TLS edge probe; without it the service probe fails
 # naming curl and the edge probe is skipped with one line naming curl; node
 # runs the installed package's install check, writes the probe's JSON body
@@ -96,7 +97,7 @@
 #      (the bin/pi/pi-web-deploy shim runs this same script from inside the
 #       installed package directory; arguments and env are passed through)
 #
-# Usage: PIWEB_INSTALL_REPO=silgrid/polyforge ./deploy-piweb.sh
+# Usage: ./deploy-piweb.sh
 #        (or: pi-web-deploy, once Pi Web is installed from a Polyforge
 #        GitHub Release by the pf installer's --with-pi-web)
 # Env:
@@ -115,14 +116,12 @@
 #   PIWEB_CF_HOSTNAME   cloudflare named mode: the public ingress hostname to
 #                       append to PI_WEB_ALLOWED_HOSTS
 #   PIWEB_INSTALL_REPO   the install channel: OWNER/REPO whose GitHub
-#                        Release provides the pi-web tarball (Pi Web ships
-#                        only there: silgrid/polyforge); the tgz + its
-#                        SHA256SUMS asset are downloaded to a scratch dir,
+#                        Release provides the pi-web tarball (default
+#                        silgrid/polyforge: Pi Web ships only as part of
+#                        its GitHub Release); the tgz + its SHA256SUMS
+#                        asset are downloaded to a scratch dir,
 #                        checksum-verified, and installed globally (a
 #                        mismatch aborts before anything is installed).
-#                        Unset falls back to `npm install -g` of the npm
-#                        registry's @latest, which is not where Pi Web is
-#                        released: set it.
 #   PIWEB_INSTALL_VERSION  optional release pin for the channel above: the
 #                        vX.Y.Z tag of exactly the release to install. When
 #                        set, that release is resolved, checked to equal
@@ -472,9 +471,9 @@ if npm ls -g @agegr/pi-web >/dev/null 2>&1; then
   npm uninstall -g @agegr/pi-web
 fi
 
-# Scratch dirs for the PIWEB_INSTALL_REPO channel download and the service
-# probe's password-bearing files; both are empty (and the trap a no-op) on the
-# paths that do not use them.
+# Scratch dirs for the release channel's download and the service probe's
+# password-bearing files; the probe's is empty (and its cleanup a no-op) on
+# the paths that do not use it.
 CHANNEL_DIR=""
 PROBE_DIR=""
 cleanup_scratch() {
@@ -484,51 +483,47 @@ cleanup_scratch() {
 }
 trap cleanup_scratch EXIT
 
-# PIWEB_INSTALL_REPO opts into the internal GitHub-Releases install channel
-# (strict opt-in: with it unset the public-npm path below is byte-identical
-# to the original). PIWEB_INSTALL_VERSION pins the install to exactly that
-# release tag (resolved, checked to equal the requested pin, then downloaded
-# and installed — latest is never resolved on the pinned path); without the
-# pin the repo's LATEST release wins as-is — no version filtering — so the
+# Pi Web ships only as part of a GitHub Release: the install channel is
+# PIWEB_INSTALL_REPO's releases, by default Polyforge's (silgrid/polyforge).
+# PIWEB_INSTALL_VERSION pins the install to exactly that release tag
+# (resolved, checked to equal the requested pin, then downloaded and
+# installed — latest is never resolved on the pinned path); without the pin
+# the repo's LATEST release wins as-is — no version filtering — so the
 # channel tracks whatever release GitHub reports.
-if [ -n "${PIWEB_INSTALL_REPO:-}" ]; then
-  CHANNEL_DIR="$(mktemp -d)"
-  if [ -n "${PIWEB_INSTALL_VERSION:-}" ]; then
-    echo "==> Installing ${PKG} from GitHub Release ${PIWEB_INSTALL_VERSION} of ${PIWEB_INSTALL_REPO}"
-    CHANNEL_TAG="$(gh release view -R "${PIWEB_INSTALL_REPO}" "${PIWEB_INSTALL_VERSION}" --json tagName --jq .tagName)"
-    if [ "${CHANNEL_TAG}" != "${PIWEB_INSTALL_VERSION}" ]; then
-      echo "ERROR: ${PIWEB_INSTALL_VERSION} of ${PIWEB_INSTALL_REPO} resolved to tag '${CHANNEL_TAG}', not the requested release." >&2
-      exit 1
-    fi
-    gh release download -R "${PIWEB_INSTALL_REPO}" "${PIWEB_INSTALL_VERSION}" -p '*.tgz' -p SHA256SUMS -D "${CHANNEL_DIR}"
-  else
-    echo "==> Installing ${PKG} from the latest GitHub Release of ${PIWEB_INSTALL_REPO}"
-    CHANNEL_TAG="$(gh release view -R "${PIWEB_INSTALL_REPO}" --json tagName --jq .tagName)"
-    gh release download -R "${PIWEB_INSTALL_REPO}" -p '*.tgz' -p SHA256SUMS -D "${CHANNEL_DIR}"
-  fi
-  CHANNEL_TGZ="$(find "${CHANNEL_DIR}" -maxdepth 1 -name '*.tgz' -print -quit)"
-  if [ -z "${CHANNEL_TGZ}" ]; then
-    echo "ERROR: the latest release of ${PIWEB_INSTALL_REPO} carries no *.tgz asset." >&2
+PIWEB_INSTALL_REPO="${PIWEB_INSTALL_REPO:-silgrid/polyforge}"
+CHANNEL_DIR="$(mktemp -d)"
+if [ -n "${PIWEB_INSTALL_VERSION:-}" ]; then
+  echo "==> Installing ${PKG} from GitHub Release ${PIWEB_INSTALL_VERSION} of ${PIWEB_INSTALL_REPO}"
+  CHANNEL_TAG="$(gh release view -R "${PIWEB_INSTALL_REPO}" "${PIWEB_INSTALL_VERSION}" --json tagName --jq .tagName)"
+  if [ "${CHANNEL_TAG}" != "${PIWEB_INSTALL_VERSION}" ]; then
+    echo "ERROR: ${PIWEB_INSTALL_VERSION} of ${PIWEB_INSTALL_REPO} resolved to tag '${CHANNEL_TAG}', not the requested release." >&2
     exit 1
   fi
-  # Assets are downloaded flattened into CHANNEL_DIR, so the checksum file's
-  # bare filename matches there. The release's SHA256SUMS also covers the
-  # assets of the same tag this channel does not download (the pf binaries
-  # and the image digest: one release carries every artifact),
-  # so the tarball's own line is checked: a tarball without a line, or any
-  # mismatch, aborts BEFORE any global install side effect.
-  awk -v n="${CHANNEL_TGZ##*/}" '$2 == n || $2 == "*" n' "${CHANNEL_DIR}/SHA256SUMS" >"${CHANNEL_DIR}/tgz.sha256"
-  if [ ! -s "${CHANNEL_DIR}/tgz.sha256" ]; then
-    echo "ERROR: the SHA256SUMS of ${PIWEB_INSTALL_REPO} has no line for ${CHANNEL_TGZ##*/}." >&2
-    exit 1
-  fi
-  (cd "${CHANNEL_DIR}" && sha256sum -c tgz.sha256)
-  echo "==> Checksum verified; installing ${CHANNEL_TGZ##*/} (release ${CHANNEL_TAG:-latest})"
-  npm install -g "${CHANNEL_TGZ}"
+  gh release download -R "${PIWEB_INSTALL_REPO}" "${PIWEB_INSTALL_VERSION}" -p '*.tgz' -p SHA256SUMS -D "${CHANNEL_DIR}"
 else
-  echo "==> Installing ${PKG}@latest"
-  npm install -g "${PKG}@latest"
+  echo "==> Installing ${PKG} from the latest GitHub Release of ${PIWEB_INSTALL_REPO}"
+  CHANNEL_TAG="$(gh release view -R "${PIWEB_INSTALL_REPO}" --json tagName --jq .tagName)"
+  gh release download -R "${PIWEB_INSTALL_REPO}" -p '*.tgz' -p SHA256SUMS -D "${CHANNEL_DIR}"
 fi
+CHANNEL_TGZ="$(find "${CHANNEL_DIR}" -maxdepth 1 -name '*.tgz' -print -quit)"
+if [ -z "${CHANNEL_TGZ}" ]; then
+  echo "ERROR: the latest release of ${PIWEB_INSTALL_REPO} carries no *.tgz asset." >&2
+  exit 1
+fi
+# Assets are downloaded flattened into CHANNEL_DIR, so the checksum file's
+# bare filename matches there. The release's SHA256SUMS also covers the
+# assets of the same tag this channel does not download (the pf binaries
+# and the image digest: one release carries every artifact),
+# so the tarball's own line is checked: a tarball without a line, or any
+# mismatch, aborts BEFORE any global install side effect.
+awk -v n="${CHANNEL_TGZ##*/}" '$2 == n || $2 == "*" n' "${CHANNEL_DIR}/SHA256SUMS" >"${CHANNEL_DIR}/tgz.sha256"
+if [ ! -s "${CHANNEL_DIR}/tgz.sha256" ]; then
+  echo "ERROR: the SHA256SUMS of ${PIWEB_INSTALL_REPO} has no line for ${CHANNEL_TGZ##*/}." >&2
+  exit 1
+fi
+(cd "${CHANNEL_DIR}" && sha256sum -c tgz.sha256)
+echo "==> Checksum verified; installing ${CHANNEL_TGZ##*/} (release ${CHANNEL_TAG:-latest})"
+npm install -g "${CHANNEL_TGZ}"
 
 # Install check: npm may skip the package's install scripts
 # and still exit 0 (e.g. npm 11 under ignore-scripts or an explicit

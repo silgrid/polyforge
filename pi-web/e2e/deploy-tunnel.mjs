@@ -40,7 +40,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { writePiwebPrefix } from "./lane-stubs.mjs";
+import { ghStubBody, releaseStubEnv, writePiwebPrefix } from "./lane-stubs.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const deployScript = join(root, "deploy-piweb.sh");
@@ -126,6 +126,8 @@ for (const [name, body] of [["cloudflared", cloudflaredStub], ["pi-web", piwebSt
   chmodSync(join(stubbin, name), 0o755);
 }
 writePiwebPrefix(npmPrefixTemplate, { version: "0.1.1", entry: join(stubbin, "pi-web") });
+writeFileSync(join(stubbin, "gh"), ghStubBody);
+chmodSync(join(stubbin, "gh"), 0o755);
 
 const lastPid = (name) => {
   const file = join(stubbin, `${name}.pid`);
@@ -152,6 +154,7 @@ const deploy = () => {
     timeout: 120_000,
     env: withoutTmux({
       ...process.env,
+      ...releaseStubEnv(join(scratch, "gh.argv")),
       PATH: `${stubbin}:${process.env.PATH}`,
       TMPDIR: scratch,
       HOME: scratch, // keep the stable ~/.piweb quick-tunnel log out of the real home

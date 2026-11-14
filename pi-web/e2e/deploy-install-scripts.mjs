@@ -41,7 +41,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { linkNode, readLog, writePiwebPrefix, writeStub } from "./lane-stubs.mjs";
+import { ghStubBody, linkNode, readLog, releaseStubEnv, writePiwebPrefix, writeStub } from "./lane-stubs.mjs";
 import { blockFail, blockPass, createCheck, eventually } from "./harness.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -109,6 +109,7 @@ const npmStub = [
   "",
 ].join("\n");
 writeStub(stubbin, "npm", npmStub);
+writeStub(stubbin, "gh", ghStubBody);
 linkNode(stubbin);
 
 // The installed pi-web entry: records its pid, stays alive so the loop's
@@ -168,6 +169,7 @@ const deploy = (name, templateDir, overrides = {}) => {
         encoding: "utf8",
         timeout: 180_000,
         env: childEnv({
+          ...releaseStubEnv(join(scratch, "gh.argv")),
           PATH: `${stubbin}:/usr/bin:/bin`,
           PIWEB_TMUX_SESSION: session,
           PIWEB_HOST: "127.0.0.1",
