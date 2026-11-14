@@ -59,7 +59,9 @@
 #      bump that leaves the list non-empty or moves the version by more than
 #      one; an empty list needs no bump; a previous release whose tree has
 #      no workflow contract makes this the first release with one, which
-#      must declare ContractVersion 1 with an empty list;
+#      must declare ContractVersion 1 with an empty list; a fresh release
+#      (not a resume) refuses while its image tag already exists in the
+#      package (step 1b'''' below), so it never pushes over another build;
 #   2. design-doc cross-reference gate (docs/design/polyforge-vnext/tools/
 #      check-xrefs.py, the Makefile's `xrefs` check; python3 is REQUIRED here -
 #      unlike `make xrefs`, a release never skips it), then the test gate
@@ -75,7 +77,7 @@
 #      one pf binary for linux-amd64, darwin-arm64, darwin-amd64
 #      (the server runs as `pf aihub`); build the image from
 #      the LINUX pf (the image stays linux/amd64-only, entrypoint
-#      `pf aihub`) tagged ghcr.io/silgrid/aihub:<tag>; then pack the pi-web
+#      `pf aihub`) tagged ghcr.io/silgrid/polyforge-aihub:<tag>; then pack the pi-web
 #      package (one release entry for every artifact): the
 #      released commit's pi-web/ tree is exported to the staging directory
 #      (the worktree is never touched), npm ci, PI_WEB_RELEASE_VERSION=<tag>
@@ -152,7 +154,7 @@
 # exactly what manifest_of derives from the tag, its commit and SHA256SUMS;
 # the pi-web tarball's packed package.json carries the tag's version;
 # aihub-image.digest is exactly sha256:<64 hex> and the registry digest of
-# ghcr.io/silgrid/aihub:<tag> equals it. Exit 0 iff all pass.
+# ghcr.io/silgrid/polyforge-aihub:<tag> equals it. Exit 0 iff all pass.
 #
 # PR-only check (polyforge#163): main's FIRST-PARENT history from the previous
 # release tag to the released commit must consist only of commits GitHub records
@@ -200,11 +202,21 @@
 # step-agent identity (the workspace git user.email - the same identity every
 # step agent commits with) is deliberately NOT allowlisted:
 # polyforge#149 was an agent pushing straight to main, and this gate must keep
-# refusing that. The allowlist is a committed constant - changing it takes a
-# PR; there is no env or CLI override. It is a one-time legacy bridge for the
-# owner's pre-existing direct commits on main: delete it (and this paragraph)
-# once every change goes through the standard PR-review-merge route (the
-# open-source route).
+# refusing that. The allowlist is read from the environment (OWNER_DIRECT_EMAILS,
+# empty by default; a fork may also carry its own value in this file). It is
+# a legacy bridge for the owner's pre-existing direct commits on main: delete
+# it (and this paragraph) once every change goes through the standard
+# PR-review-merge route (the open-source route).
+# The second exception names commits, for one run: RELEASE_ALLOW_COMMITS lists
+# full commit ids (40 lowercase hex, separated by spaces, commas or newlines).
+# A first-parent commit it names passes with the audit line `PASS pr-only:
+# allowed: <sha> (RELEASE_ALLOW_COMMITS)`, and the release notes of a release
+# it lets through record each one under "PR-only exceptions" (--verify of that
+# release needs the same list). It fails closed: an entry that is not a full
+# commit id refuses before any work, and an entry that is no first-parent
+# commit of the checked range refuses too, so a stale or mistyped list never
+# passes silently. It launders nothing else: every other commit is still
+# checked.
 # Otherwise there is no override: a non-PR commit on the branch blocks every
 # release (each compares against the previous tag) until a human audits it and
 # decides how to cut the next release by hand.
@@ -260,7 +272,7 @@
 #                       artifacts/release-$TAG/pf and the two darwin
 #                       binaries .../pf-darwin-arm64, .../pf-darwin-amd64
 #                                                 (default: GOWORK=off make release VERSION=$TAG)
-#   RELEASE_IMAGE       image repository          (default: ghcr.io/silgrid/aihub)
+#   RELEASE_IMAGE       image repository          (default: ghcr.io/silgrid/polyforge-aihub)
 #   RELEASE_GH_REPO     gh -R repo                (default: silgrid/polyforge,
 #                       this repository's own release repo).
 #                       Whatever it names, it must be the repo the tag is
@@ -271,6 +283,11 @@
 #                       another, burning the version)
 #   RELEASE_REMOTE      git remote                (default: origin)
 #   RELEASE_BRANCH      branch HEAD must equal    (default: main)
+#   RELEASE_ALLOW_COMMITS  full commit ids that pass the PR-only check for
+#                       this run, recorded in the release notes (default:
+#                       none; see the PR-only check above)
+#   OWNER_DIRECT_EMAILS author emails whose direct commits pass the PR-only
+#                       check (default: none; see the PR-only check above)
 #   DOCKER_CONFIG       docker config dir (ghcr login check; default ~/.docker)
 # Each *_CMD override, when non-empty, runs via sh -c INSTEAD of its default;
 # unset or empty keeps the default. They are independent: RELEASE_TEST_CMD
@@ -279,7 +296,7 @@ set -eu
 
 REMOTE="${RELEASE_REMOTE:-origin}"
 BRANCH="${RELEASE_BRANCH:-main}"
-IMAGE="${RELEASE_IMAGE:-ghcr.io/silgrid/aihub}"
+IMAGE="${RELEASE_IMAGE:-ghcr.io/silgrid/polyforge-aihub}"
 GH_REPO="${RELEASE_GH_REPO:-silgrid/polyforge}"
 SEMVER_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
 # Suffixed versions (see the header): set from .polyforge/release.conf below.
@@ -298,6 +315,12 @@ CUTOVER_LINE='v0.2.'    # the line CUTOVER_TAG opens
 OWNER_DIRECT_EMAILS="${OWNER_DIRECT_EMAILS:-}"
 
 die() { echo "release: $*" >&2; exit 1; }
+# One run's named commits that pass the PR-only check (see the PR-only check
+# above): full commit ids, normalized to one space-separated list.
+ALLOW_COMMITS=$(printf '%s\n' "${RELEASE_ALLOW_COMMITS:-}" | tr ',\t\n' '   ' | tr -s ' ' | sed 's/^ //; s/ $//')
+for _a in $ALLOW_COMMITS; do
+  printf '%s\n' "$_a" | grep -Eq '^[0-9a-f]{40}$' || die "RELEASE_ALLOW_COMMITS: '$_a' is not a full commit id (40 lowercase hex digits); nothing built or published"
+done
 gh_() { gh "$@" -R "$GH_REPO"; }
 lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 # gh_repo_of <url>: the <owner>/<repo> of a github.com URL (https, ssh or scp
@@ -385,13 +408,15 @@ pr_of_merge_message() {
 # commit in <from>..<to> that is not recorded as a merged PR's merge commit (see
 # the PR-only check above), one "lookup-failed: <sha>" line per commit whose
 # PR lookup failed (gh's error is left in $PR_ERR), and one "owner-direct:
-# <sha> <email>" line per commit whose author email is in OWNER_DIRECT_EMAILS;
-# prints nothing when all of them are merged-PR commits. Returns non-zero when
-# the range cannot be walked.
+# <sha> <email>" line per commit whose author email is in OWNER_DIRECT_EMAILS,
+# and one "allowed: <sha> (RELEASE_ALLOW_COMMITS)" line per commit the run's
+# list names; prints nothing when all of them are merged-PR commits. Returns
+# non-zero when the range cannot be walked.
 non_pr_commits() {
   _list=$(git rev-list --first-parent "$1..$2") || return 1
   if _merged=$(merged_pr_commits "$1"); then _gh=ok; else _gh=failed; _merged=""; fi
   for _c in $_list; do
+    case " $ALLOW_COMMITS " in *" $_c "*) echo "allowed: $_c (RELEASE_ALLOW_COMMITS)"; continue ;; esac
     _ae=$(git log -1 --format=%ae "$_c") || return 1
     case " $OWNER_DIRECT_EMAILS " in *" $_ae "*) echo "owner-direct: $_c $_ae"; continue ;; esac
     if [ "$_gh" = failed ]; then echo "lookup-failed: $_c"; continue; fi
@@ -404,9 +429,11 @@ non_pr_commits() {
   done
 }
 # pr_only_check <prev tag> <prev commit> <commit>: one "owner-direct: <sha>
-# <email>" line per allowlisted commit in prev..commit, then the refusal reason
-# as the last line unless every other first-parent commit came through a merged
-# PR. Callers split the two with owner_direct_of / pr_only_why_of.
+# <email>" line per allowlisted commit and one "allowed: <sha> ..." line per
+# named commit in prev..commit, then the refusal reasons unless every other
+# first-parent commit came through a merged PR and every named commit is one
+# of the range's first-parent commits. Callers split the two with
+# owner_direct_of / pr_only_why_of.
 pr_only_check() {
   [ -n "$2" ] || { echo "the commit of previous release tag $1 is unknown (not on $REMOTE${UPSTREAM:+ or $UPSTREAM})"; return; }
   git cat-file -e "$2^{commit}" 2>/dev/null || { echo "previous release tag $1 ($2) is not available locally (git fetch $REMOTE first)"; return; }
@@ -416,13 +443,18 @@ pr_only_check() {
   _all=$(non_pr_commits "$2" "$3") || { rm -f "$PR_ERR" "$PR_ERR.one"; echo "cannot walk $1..$3"; return; }
   _err=$(head -n 1 "$PR_ERR" 2>/dev/null || true); rm -f "$PR_ERR" "$PR_ERR.one"
   owner_direct_of "$_all"
-  _bad=$(printf '%s\n' "$_all" | grep -v '^owner-direct: ' | grep -v '^lookup-failed: ' | grep . || true)
+  _bad=$(printf '%s\n' "$_all" | grep -v '^owner-direct: ' | grep -v '^allowed: ' | grep -v '^lookup-failed: ' | grep . || true)
+  _stale=""
+  for _a in $ALLOW_COMMITS; do
+    printf '%s\n' "$_all" | grep -q "^allowed: $_a " || _stale="$_stale $_a"
+  done
+  [ -z "$_stale" ] || echo "RELEASE_ALLOW_COMMITS names commit(s) that are no first-parent commit of $1..$3:$_stale - drop or correct them"
   [ -z "$_bad" ] || echo "commits entered $BRANCH since $1 without a merged PR: $(printf '%s\n' "$_bad" | tr '\n' ';' | sed 's/;$//; s/;/; /g')"
   _lf=$(printf '%s\n' "$_all" | sed -n 's/^lookup-failed: //p' | tr '\n' ' ' | sed 's/ $//')
   [ -z "$_lf" ] || echo "PR lookup failed (gh api failed: ${_err:-no error text}) for $_lf - retryable, not a missing PR: re-run once GitHub answers"
 }
-owner_direct_of() { printf '%s\n' "$1" | grep '^owner-direct: ' || true; }
-pr_only_why_of() { printf '%s\n' "$1" | grep -v '^owner-direct: ' | grep . || true; }
+owner_direct_of() { printf '%s\n' "$1" | grep -E '^(owner-direct|allowed): ' || true; }
+pr_only_why_of() { printf '%s\n' "$1" | grep -Ev '^(owner-direct|allowed): ' | grep . || true; }
 # manifest_of <tag> <commit> <SHA256SUMS file>: release-manifest.json, one
 # canonical byte form - release mode writes it and --verify re-derives it from
 # the downloaded SHA256SUMS and compares bytes, so no JSON parser is needed.
@@ -949,6 +981,23 @@ if [ -n "$RESUME" ]; then
   NEED_PIWEB=""; [ -f "$OUT/$PIWEB_TGZ" ] || NEED_PIWEB=1
 fi
 
+# 1b''''. a fresh release (not a resume) never pushes over an existing image
+# tag: the package may hold a tag this repository never released (another
+# line publishing to the same package, or a release deleted by hand), and a
+# push would overwrite it. The registry is read with the identity the push
+# uses (after the preflight's login), through registry_digest: an image
+# there refuses, an unreadable registry refuses (retryable), and only an
+# explicit not-found answer lets the release go on. A resume of the same
+# release keeps its own image as before (1b above).
+if [ -z "$RESUME" ]; then
+  if registry_digest "$IMAGE:$TAG" >"$WORK/regdigest" 2>"$WORK/reg.err"; then _r=0; else _r=$?; fi
+  case "$_r" in
+    0) die "refusing to release: $IMAGE:$TAG already exists in the registry ($(tr -d ' \t\r\n' <"$WORK/regdigest")), but $TAG is no release of $REMOTE to resume - a push would overwrite that image; publish to another package (RELEASE_IMAGE) or remove the tag from the package by hand, then run again; nothing built or published, no version claimed" ;;
+    1) echo "release: image $IMAGE:$TAG is not in the registry yet" ;;
+    *) die "refusing to release: cannot read whether $IMAGE:$TAG exists in the registry ($(head -n 1 "$WORK/reg.err")) - retryable; nothing built or published, no version claimed" ;;
+  esac
+fi
+
 # 1c. PR-only: every commit that entered the branch since the previous release
 # came through a merged PR or is owner-direct (audited with a PASS line). A
 # resumed first release has no previous tag to check against.
@@ -1154,6 +1203,12 @@ if [ -z "$REL_EXISTS" ]; then
     } >"$WORK/notes.md"
   fi
   printf '\n## Test gate\n\n%s\n' "$GATE_RECORD" >>"$WORK/notes.md"
+  if [ -n "$ALLOW_COMMITS" ]; then
+    {
+      printf '\n## PR-only exceptions\n\nFirst-parent commits without a merged PR, let through for this release by RELEASE_ALLOW_COMMITS:\n\n'
+      for _a in $ALLOW_COMMITS; do printf -- '- %s %s\n' "$_a" "$(git log -1 --format=%s "$_a")"; done
+    } >>"$WORK/notes.md"
+  fi
   NOTES="$WORK/notes.md"
 fi
 

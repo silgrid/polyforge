@@ -30,7 +30,7 @@ this order:
   which v0.2.0 refuses (`WFC-101`). One left over parks blocked with kind
   `contract`, naming this section; cancel it and file it again.
 - **The server.** `pf aihub` replaces the separate `aihub` binary of v0.1.x
-  (the image `ghcr.io/silgrid/aihub:<tag>` runs it). The server never
+  (the image `ghcr.io/silgrid/polyforge-aihub:<tag>` runs it). The server never
   migrates its database at start, and a database written by v0.1.x lacks
   one schema change v0.2.0 needs: the messaging read cursor is split into a
   delivery cursor and a read cursor. With the server stopped and `aihub.db`

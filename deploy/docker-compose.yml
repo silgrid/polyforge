@@ -5,7 +5,7 @@ services:
   aihub:
     # Images are built by .polyforge/release.sh (docker build from deploy/Dockerfile
     # + the released pf binary, run as `pf aihub`, pushed to
-    # ghcr.io/silgrid/aihub:<tag>) and pulled /
+    # ghcr.io/silgrid/polyforge-aihub:<tag>) and pulled /
     # loaded by .polyforge/deploy.sh (deploy.sh builds only the legacy rollback
     # image of a release that predates the GHCR image), never by compose: a
     # container recreate must not silently fall back to an older image. Production pins the literal tag
