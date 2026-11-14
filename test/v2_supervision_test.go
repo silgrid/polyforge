@@ -36,6 +36,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 // failEvent is the step_failed event body.
@@ -252,17 +254,24 @@ func TestV2DaemonRestartNotCountedSameModel(t *testing.T) {
 //
 // The retry must complete under the same tiny T, and D6 makes T cumulative
 // across the step's dispatches while rule 0 (unlike a timeout) does not
-// relax it: dispatch 2 is born with T already spent, so it only used to
-// survive when the harness's envelope landed before the next supervisor
-// tick (a ~500ms tick beat a ~410ms spawn+settle+poll path by ~80ms; a
-// loaded host lost that race and rule 4 killed the retry). The retry's
-// envelope is therefore staged at its drop path before the dispatch starts
-// — collection is the first thing its Wait does, so the outcome no longer
-// depends on tick timing. The retry itself still dispatches (asserted
-// below), and the scripted 150ms delivery delay that lost the old race is
-// kept so a tree that goes back to relying on delivery timing fails here
-// deterministically. Rule 0 outranking rule 4 at one instant is pinned
-// deterministically by TestJudgeRuleTable's priority case.
+// relax it: dispatch 2 is born with T already spent, so rule 4 kills it at
+// the supervisor's first look unless its hand-off is recorded by then. Its
+// own `pf step handoff` (the fakepi's 250ms settle, the scripted 150ms
+// delay, the call) only beat that first look by tens of milliseconds, and a
+// loaded host lost the race: the retry died as step_timeout_long_task, the
+// next dispatch took the review step's scripted hand-off and review, left
+// with none, timed out until the item blocked. The retry's hand-off is
+// therefore recorded in the step-call ledger (runtime-state/step-calls.jsonl,
+// where Wait and the verdict path's final look collect it) before the
+// dispatch starts: a delivery wins any verdict, so the outcome no longer
+// depends on tick timing. (It used to be staged at the old envelope drop
+// path, runtime-state/pending-results/<spawn>.json; nothing has read that
+// path since hand-offs moved to `pf step handoff`, which is why this test
+// became flaky again.) The retry itself still dispatches (asserted below),
+// and the scripted 150ms delivery delay is kept so a tree that goes back to
+// relying on delivery timing fails here under load. Rule 0 outranking rule 4
+// at one instant is pinned deterministically by TestJudgeRuleTable's
+// priority case.
 func TestV2TwoRulesAtOnceOneVerdictOneFailure(t *testing.T) {
 	inst := newV1Install(t)
 	inst.stripWallBudgets = true
@@ -278,23 +287,24 @@ func TestV2TwoRulesAtOnceOneVerdictOneFailure(t *testing.T) {
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pf(t, "submit", wi)
 
-	// Stage the retry's result. The capsule is materialized by the claim;
-	// execution.json
-	// is the driver's first write, so its presence means the claim is done
-	// and the seed will not be wiped by materialization.
+	// Record the retry's hand-off. The capsule is materialized by the
+	// claim; execution.json is the driver's first write, so its presence
+	// means the claim is done and the record will not be wiped by
+	// materialization. Dispatch 1 is silent for its whole life (no ledger
+	// line of its own), so these two lines are the ledger's only writes
+	// until dispatch 2 starts.
 	capDir := d.capsuleDir(wi)
 	waitUntil(t, 30*time.Second, "the capsule runtime state never materialized", func() bool {
 		_, err := os.Stat(filepath.Join(capDir, "runtime-state", "execution.json"))
 		return err == nil
 	})
-	if err := os.MkdirAll(filepath.Join(capDir, "runtime-state", "pending-results"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	blob, err := json.Marshal(map[string]any{"outcome": "completed", "output": map[string]any{}})
+	call, err := stepcall.Append(capDir, stepcall.Line{Kind: stepcall.KindCall, Step: "fix", Spawn: 2, Verb: stepcall.VerbHandoff,
+		Args: json.RawMessage(`{"status":"done"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(capDir, "runtime-state", "pending-results", "2.json"), blob, 0o644); err != nil {
+	if _, err := stepcall.Append(capDir, stepcall.Line{Kind: stepcall.KindResult, Step: "fix", Spawn: 2, Verb: stepcall.VerbHandoff,
+		Call: call.Seq, Outcome: stepcall.OutcomeOK, Handoff: &stepcall.Handoff{Status: stepcall.StatusDone}}); err != nil {
 		t.Fatal(err)
 	}
 
