@@ -14,7 +14,9 @@ import os
 import shutil
 import subprocess
 import sys
+import typing
 import unittest
+from typing import Any, Dict, List, Optional, Tuple
 
 from .gitworld import GitCase, Repo, git, write
 from .schemacheck import errors as schema_errors
@@ -36,7 +38,7 @@ CONF = "stack=go\nfast_gate=pwd > root.txt\nfast_gate=echo fast-two\nfull_comman
 APP_CHANGE = {"app/app.go": APP.replace("// Answer is the answer.\n", "// Answer is the answer. (changed)\n")}
 
 
-def env_without(name: str) -> dict:
+def env_without(name: str) -> Dict[str, str]:
     env = dict(os.environ)
     env.pop(name, None)
     return env
@@ -54,7 +56,7 @@ class FastChecksCase(GitCase):
         self.capsule = self.new_dir("capsule")
         self.out = os.path.join(self.capsule, "fast-checks.json")
 
-    def task_repo(self, name: str, files: dict, change: dict) -> str:
+    def task_repo(self, name: str, files: Dict[str, str], change: Dict[str, str]) -> str:
         """A clone at <capsule>/repos/<name> one commit ahead of its
         origin, the change confined to the files the diff names."""
         bare = os.path.join(self.tmp, name + ".git")
@@ -66,17 +68,17 @@ class FastChecksCase(GitCase):
         clone.commit("the change", change)
         return clone.dir
 
-    def run_checks(self, repo: str, env=None, extra=()) -> tuple:
+    def run_checks(self, repo: str, env: Optional[Dict[str, str]] = None, extra: Tuple[str, ...] = ()) -> Tuple[int, Dict[str, Any]]:
         """fast_checks.py on the capsule's repo, as a skill runs it."""
         argv = [sys.executable, FAST_CHECKS, "--repo", repo, "--capsule", self.capsule,
                 "--engine", ENGINE, "--deadline", "10m", "--out", self.out, *extra]
         c = subprocess.run(argv, capture_output=True, text=True, env=env if env is not None else os.environ)
         if not os.path.exists(self.out):
-            return c.returncode, None
+            raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (c.returncode, c.stderr[-500:]))
         with open(self.out, encoding="utf-8") as f:
             return c.returncode, json.load(f)
 
-    def go_repo(self, conf: str = CONF, change: dict = None) -> str:
+    def go_repo(self, conf: str = CONF, change: Optional[Dict[str, str]] = None) -> str:
         return self.task_repo("app", {
             "go.mod": GO_MOD,
             ".polyforge/verify-scope.conf": conf,
@@ -84,8 +86,8 @@ class FastChecksCase(GitCase):
             "app/app_test.go": APP_TEST,
         }, change if change is not None else APP_CHANGE)
 
-    def commands_of(self, res: dict) -> list:
-        return res["details"]["commands"]
+    def commands_of(self, res: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return typing.cast(List[Dict[str, Any]], res["details"]["commands"])
 
 
 class RootReportTest(FastChecksCase):
