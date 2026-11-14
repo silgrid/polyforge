@@ -1744,8 +1744,9 @@ source, not in the client). Text is whitespace-collapsed, masked by the shared
 `maskPolyforgeCredentials` (the `progress.command` rules — narration can
 itself name a credential) and capped at 400 code points. A first-load window
 with no record of the harness's format reads as `available:false`.
-The job detail's execution progress, whole-job,
-is a separate, wider read face (`readProgressSnapshot`,
+The job detail's execution progress is step-scoped in the panel: the DAG selects one step, defaulting to the current step — or, for a finished ticket whose current_step the daemon cleared, the last started step of the watch snapshot (the progress stream's last block is the fallback) — and the progress block shows that step's complete stream including all rerun blocks. A manual DAG choice remains selected while live status advances. A pending/unstarted selection shows `polyforge.progress.notRun`; node title/aria-label timing remains the `step_started`/`step_done` hover contract.
+
+The job detail's execution progress READ stays whole-job — a separate, wider read face (`readProgressSnapshot`,
 `GET /api/polyforge/progress`): every spawn's transcript as narration plus one
 masked tool-call line, with the composed lifecycle lines. The card stream
 never uses it; its whitelist above is unchanged.
@@ -2684,8 +2685,7 @@ contract holds); `steps`/`events` are unaffected either way.
 The selected detail renders the steps as a flow graph instead of a plain
 chip row (`buildStepGraph` in `components/PolyforgePanel.tsx`, pure):
 
-- **Nodes** — one node per step, `role="list"`/`role="listitem"`,
-  display-only (no click handler, no navigation). A node shows the 24-char
+- **Nodes** — one node per step, `role="list"`/`role="listitem"`, keyboard and pointer selectable, with `data-pf-step-selected` and a visible selected outline. The panel follows the current step until a manual selection; pending nodes remain selectable and show the localized not-run empty state in execution progress. A node shows the 24-char
   cut step name and a status dot only (removed the visible
   status text had added); the full untruncated name and the
   translated status label (`polyforge.stepStatus.*`: 已完成 / 进行中 / 待开始 /
@@ -2821,13 +2821,25 @@ than the viewport; unreadable numbers never pin). After every new snapshot
 or added chunk the region scrolls to the bottom only while pinned; a reader
 parked anywhere else is never moved by a poll.
 
-**↓ Latest (`[data-pf-detail-latest]`).** A floating button at
-the region's bottom-right, an overlay with no in-flow height, visible
-whenever the region is not at its bottom (including while the reader is at
-the summary) and hidden once it is. One click jumps to the bottom
-immediately (no smooth animation) and restores following, so the next
-snapshot or chunk keeps it there. It carries no unread/new-line count. The
-label is translated: `polyforge.progress.latest` = ↓ 最新 / ↓ Latest / ↓ 最新.
+**The two jump buttons (`[data-pf-detail-top]` above, `[data-pf-detail-latest]`
+below).** Two floating buttons stacked over the region's bottom, horizontally
+centered — both reuse the interactive session's `.chat-scroll-to-bottom`
+style from `app/globals.css` verbatim (one 32px round control, an SVG arrow,
+no label text, no second style of their own); each rides a zero-height sticky
+anchor that spans the progress block's width, an overlay with no in-flow
+height that never eats the lines' clicks. ↓ Latest
+(`[data-pf-detail-latest]`) is visible whenever the region is not at its
+bottom (including while the reader is at the summary) and hidden once it is;
+one click jumps to the bottom immediately (no smooth animation) and restores
+following, so the next snapshot or chunk keeps it there. It carries no
+unread/new-line count. ↑ Top (`[data-pf-detail-top]`) sits one button-height
+above it (a 4px gap) and is visible whenever the region is scrolled away from
+its top (`isProgressAtTop`, the same 8 px threshold the bottom pin uses) and
+hidden at the top; one click smooth-scrolls to the very top (`scrollTo({
+top: 0, behavior: "smooth" })`), and only the latest click ever resumes the
+follow. Both buttons carry translated aria-labels and titles:
+`polyforge.progress.latest` = 回到最新 / Scroll to latest / 回到最新 and
+`polyforge.progress.top` = 回到顶部 / Scroll to top / 回到頂部.
 
 ## Job detail layout and execution progress
 

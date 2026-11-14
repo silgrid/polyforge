@@ -17,7 +17,7 @@ submit as usual.
 ## Command
 
 ```
-pf submit <id> [--priority low|normal|high|urgent] [--models <harness>:<model>[:<effort>],...] [--allow-no-acceptance]
+pf submit <id> [--priority low|normal|high|urgent] [--models <harness>:<model>[:<effort>],...] [--allow-no-acceptance] [--allow-no-analysis]
 ```
 
 `--priority` defaults to `normal`. `--models` is a manual model-candidate
@@ -83,7 +83,10 @@ session: what it does, why, its scope, what it does not do, and
 when it is done. Survey the code with a read-only subagent where the answers depend on
 it. Write the decisions into the ticket's background and each testable
 criterion, marked `— carried by build`, into `## Acceptance` (`pf file edit
-<id> --content @file`), then submit.
+<id> --content @file`) — each criterion written in the `Acceptance carrier`
+slot's shape (`verbs/file.md`): its proof — the command that shows it holds
+and the directory that command runs in — before the carrier, which stays
+last. Then submit.
 
 Research, experiments and feasibility checks happen in the session before
 submitting; only their conclusion goes into the ticket — the claimed build
@@ -99,6 +102,56 @@ requires acceptance (exit 1, nothing is claimed): the lane's steps need a
 criterion to carry, so the ticket needs interaction first. `pf submit <id>
 --allow-no-acceptance` bypasses the check — only when the owner explicitly says
 to submit without acceptance, never on your own.
+
+## Before submitting: the analysis check
+
+Beside the acceptance check, an execution ticket on a lane that requires
+acceptance carries a **pre-submit analysis**: a `## 分析` (or `## Analysis`)
+section with content in the ticket body. `pf submit` refuses the ticket
+without one (exit 1, nothing is claimed) and names the way out;
+`pf submit <id> --allow-no-analysis` bypasses the check — only when the
+owner explicitly says to submit without analysis, never on your own. The
+check applies on exactly the lanes the acceptance check does (a lane
+declaring `acceptance: none` is submitted as is), and it never judges what
+the section says: content is enough.
+
+- **When to run it**: right after an execution ticket is filed, or when the
+  submit check refuses a ticket for the missing analysis, propose the
+  analysis to the owner: a read-only `pf task spawn` errand over the ticket
+  and the code it touches. The task cannot write the ticket, so the session
+  writes what it reports. For a small ticket the owner may instead explicitly
+  waive the analysis.
+- **The report's fixed format — 7 items, defined here and here only** (the
+  filing, task and execute-intent fragments reference this list):
+  1. 改动范围（文件 / 模块）；
+  2. 每条验收的证明命令和运行目录；
+  3. 断言旧行为的已有测试与文档（需要同步修改的义务）；
+  4. 与其他未完成票的依赖或冲突；
+  5. 相关记忆（`pf recall` 命中）；
+  6. 风险；
+  7. 待决问题（每条给选项和推荐，不拍板）。
+- **Writing it in**: the session writes the report — or, on the owner's
+  explicit skip, one dated line 「免分析（<date>，<who>）」 — into the ticket's
+  `## 分析` section (`pf file edit <id> --content @file`), then submits.
+- **The boundary against grilling**: the analysis only establishes facts —
+  what the code does, what memory answers, which existing tests and docs
+  assert the old behavior — and lists the open questions with a
+  recommendation each, never deciding them. Deciding is the grill's: the
+  open questions and the acceptance are settled with the owner (the
+  acceptance check above). What the code or `pf recall` can answer belongs
+  to the analysis; what needs the owner's preference or a trade-off belongs
+  to the grill.
+- **The pre-submit confirmation rule**: a small ticket is submitted directly;
+  every other ticket is explained to the owner first, in plain words — what
+  it will do, what counts as done, what the trade-offs are — never by pasting
+  the acceptance section verbatim; submit only on the owner's explicit
+  confirmation. A ticket is small when all four hold at once (the definition
+  is project-independent):
+  1. the requirement is **very clear** — the "Acceptance at creation"
+     definition of `verbs/file.md`;
+  2. the Down-lane check's `expected diff size` is small (`verbs/file.md`);
+  3. its `lane risk surface` is low;
+  4. the work is not on `docs/concepts.md`'s "never unattended" list.
 
 ## Success
 
@@ -151,6 +204,7 @@ came back on the spot or at a later claim.
 | `CORE-404` | Unknown or invisible id (CLI precheck) | No such work item — check the `wi_` id. |
 | (no code) `submit: <slug> is terminal (<status>)` | The work item is already wrapped/failed/canceled (CLI precheck) | It is finished and can never be claimed again — file a new work item instead. |
 | (no code) `submit: <slug> has no acceptance section …` | An execution ticket with no criterion under `## Acceptance` / `## 验收`, on a lane that requires acceptance (`acceptance`, default `required`; CLI check, exit 1; nothing submitted) | 这张票需要先交互、补齐验收才能提交 — run the acceptance check above, then submit. |
+| (no code) `submit: <slug> has no analysis section …` | An execution ticket with no content under `## 分析` / `## Analysis`, on a lane that requires acceptance (the same lanes as the acceptance check; CLI check, exit 1; nothing submitted) | 这张票需要先提交前分析 — run the analysis check above (a `pf task spawn` errand, the report into `## 分析`), or the owner's dated 免分析, then submit; `--allow-no-analysis` only on the owner's explicit say-so. |
 | `DAEMON-409` | The work item is already active or queued on this daemon, or a `pf wrap` / `pf pause` landed while this submit's claim was materializing | Wait for the running attempt; after a wrap or pause, `pf watch <id> --once` shows where it stands. |
 | `DAEMON-410` (`SHUTTING_DOWN`) | The daemon is shutting down | Wait for the shutdown to finish and the daemon to restart, then submit again. |
 | (exit 0) `queued: aihub could not be reached; …` | The hub could not be reached when the daemon went to claim (transient) | Nothing was claimed yet; the entry stays queued in the daemon and is retried with backoff (1s doubling to 30s). Check aihub reachability; `pf watch <id> --once` shows it once claimed, or the `submit_rejected` event if the claim is later refused. |

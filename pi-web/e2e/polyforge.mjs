@@ -26,7 +26,7 @@
 //
 //   node e2e/polyforge.mjs
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -54,6 +54,14 @@ const LONG_CANDIDATE = "claude:claude-opus-5-5-extended-context-e2e";
 // body field (the owner-approved never-leaks list).
 const SLUG112 = "pi#112";
 const WI112 = "wi_E2Edddd0004";
+// polyforge#24 — step-scoped execution progress fixtures.
+const WIP24A = "wi_E2Eeeee0005"; const SLUGP24A = "pi#24";
+const WIP24B = "wi_E2Eeeee0006"; const SLUGP24B = "pi#240";
+// polyforge#31 — scroll-jump buttons fixture: one RUNNING ticket whose
+// event-only stream is long (one step_started + 258 answered lines), so the
+// detail's one scroll region is tall enough to park a reader mid-progress; a
+// later appended intent line proves the latest click restored the follow.
+const WIP31 = "wi_E2Eeeee0007"; const SLUG31 = "polyforge#31";
 const MODEL112 = "example-gateway/model-a-extended-thinking-very-long-e2e-suffix-abcdef0123456789abcdef0123456789";
 const SHORT_MODEL112 = "pi:glm-5.3-short";
 const FROM112 = "pi:glm-e2e-old-777";
@@ -80,6 +88,9 @@ const JOBS = [
   job("wi_E2Ecccc0003", "pi#109", "needs_input", 2, 900, 880, "codex:gpt-e2e", "svc_ci"),
   { work_item_id: WI112, slug: SLUG112, status: "running", spawn_n: 2, step_age_sec: 42, last_work_ago_sec: 9,
     candidate: "codex:e2e-watch", session_fingerprint: "fp-secret-session-112", origin: { kind: "chat", owner: "u_e2e" } },
+  job(WIP24A, SLUGP24A, "completed", 2, 90, 80, "pi:glm-e2e", "u_e2e"),
+  job(WIP24B, SLUGP24B, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
+  job(WIP31, SLUG31, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
 ];
 // owner-intended change: the selected job's progress read looks the wi up in the daemon's own job
 // record; a throwaway data root lists every fixture job (no capsule → 200 `available:false`), as a real
@@ -152,7 +163,9 @@ writeFileSync(transcript112, [
   { type: "message", id: "t112", parentId: null, timestamp: "2026-10-18T11:06:40Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "E2E-PI112-THINKING" }, { type: "toolCall", id: "c", name: "bash", arguments: { command: "echo token=E2E-SECRET-TOKEN-112" } }] } },
 ].map((record) => JSON.stringify(record)).join("\n") + "\n");
 writeFileSync(join(capsule112, "runtime-state", "spawn-journal.jsonl"), JSON.stringify({ at: at2(7), work_item: WI112, step_id: "kilo-author", spawn_n: 2, started_at: at2(7), transcript: transcript112, harness: "pi" }) + "\n");
-writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.map((j) => (j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 } : { work_item_id: j.work_item_id })) }));
+// the job index: P24A (held, with its capsule) and the 112 capsule in; P24B
+// deliberately out — the daemon dropped it (see the P24 fixture block below).
+
 const WATCH_112 = { work_item: WI112, slug: SLUG112, known: true, job: { status: "running" },
   execution: { workflow_status: "running", current_step: "kilo-author", updated_at: at2(25),
     steps: { "zulu-grill": { status: "done", started_at: "2026-10-18T09:00:00Z" },
@@ -162,12 +175,88 @@ const WATCH_112 = { work_item: WI112, slug: SLUG112, known: true, job: { status:
       "bravo-code": { status: "pending" } } },
   progress: { command: "worker run --token=E2E-SECRET-WORKER-COMMAND-112-0123456789 --flag", tool_calls: 3 },
   events: EVENTS_112, last_seq: 125 };
+// ── polyforge#24: two ended tickets. P24A stays in the daemon's job index with
+// a capsule (three spawn blocks: grill #1, spec #1, spec #2 — spec reran); its
+// watch carries NO current_step (the daemon clears it on completion) and the
+// last-run step (spec) is neither the first run step nor the DAG's first
+// non-pending node. P24B is dropped from the index: the progress route serves
+// its event log alone (the terminal line, no step_started), so the last-run
+// step is only derivable from the watch's started steps.
+const at3 = (n) => `2026-10-18T12:${String(n - 1).padStart(2, "0")}:00Z`;
+const capsuleP24A = join(work, "capsules", WIP24A);
+mkdirSync(join(capsuleP24A, "runtime-state"), { recursive: true });
+mkdirSync(join(capsuleP24A, "session"), { recursive: true });
+const p24Transcript = (name) => join(capsuleP24A, "session", name);
+const p24Spawn = (stepId, spawnN, atSec, file) => ({ at: at3(atSec), work_item: WIP24A, step_id: stepId, spawn_n: spawnN, started_at: at3(atSec), transcript: file, harness: "pi" });
+const p24Session = (id, ts, marker) => [
+  { type: "session", id: `s-${id}`, timestamp: at3(1) },
+  { type: "message", id: `n-${id}`, parentId: null, timestamp: ts, message: { role: "assistant", content: [{ type: "text", text: marker }] } },
+];
+const p24Grill = p24Transcript("grill.jsonl");
+const p24Spec1 = p24Transcript("spec1.jsonl");
+const p24Spec2 = p24Transcript("spec2.jsonl");
+for (const [file, id, ts, marker] of [
+  [p24Grill, "grill", "2026-10-18T12:00:30Z", "E2E-P24A-GRILL"],
+  [p24Spec1, "spec1", "2026-10-18T12:03:30Z", "E2E-P24A-SPEC-1"],
+  [p24Spec2, "spec2", "2026-10-18T12:06:00Z", "E2E-P24A-SPEC-2"],
+]) {
+  writeFileSync(file, p24Session(id, ts, marker).map((record) => JSON.stringify(record)).join("\n") + "\n");
+}
+writeFileSync(join(capsuleP24A, "runtime-state", "spawn-journal.jsonl"), [
+  p24Spawn("grill", 1, 1, p24Grill), p24Spawn("spec", 1, 4, p24Spec1), p24Spawn("spec", 2, 6, p24Spec2),
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+const evP24A = (n, kind, body) => ({ at: at3(n), kind, work_item: WIP24A, body, seq: n });
+const EVENTS_P24A = [
+  evP24A(1, "step_started", { step: "grill", model: "pi:glm-e2e", spawn_n: 1 }),
+  evP24A(3, "step_done", { step: "grill", spawn_n: 1 }),
+  evP24A(4, "step_started", { step: "spec", model: "pi:glm-e2e", spawn_n: 1 }),
+  evP24A(5, "step_done", { step: "spec", spawn_n: 1 }),
+  evP24A(6, "step_started", { step: "spec", model: "pi:glm-e2e", spawn_n: 2 }),
+  evP24A(8, "step_done", { step: "spec", spawn_n: 2 }),
+  evP24A(9, "terminal", { status: "completed" }),
+];
+writeFileSync(join(dataRoot, "events", `wi-${WIP24A}.jsonl`), EVENTS_P24A.map((event) => JSON.stringify(event)).join("\n") + "\n");
+// P24B is deliberately NOT in the job index (runtime-state below): only its
+// event log answers, terminal line only.
+writeFileSync(join(dataRoot, "events", `wi-${WIP24B}.jsonl`), [{ at: at3(9), kind: "terminal", work_item: WIP24B, body: { status: "completed" }, seq: 9 }].map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_P24A = { work_item: WIP24A, slug: SLUGP24A, known: true, job: { status: "completed" },
+  execution: { workflow_status: "completed", updated_at: at3(9), steps: {
+    grill: { status: "done", started_at: "2026-10-18T12:00:00Z" },
+    spec: { status: "done", started_at: "2026-10-18T12:05:00Z" },
+    review: { status: "pending" } },
+    declared_steps: [{ id: "grill" }, { id: "spec" }, { id: "review" }] },
+  events: EVENTS_P24A, last_seq: 9 };
+const WATCH_P24B = { work_item: WIP24B, slug: SLUGP24B, known: true, job: { status: "completed" },
+  execution: { workflow_status: "completed", updated_at: at3(9), steps: {
+    grill: { status: "done", started_at: "2026-10-18T12:00:00Z" },
+    spec: { status: "done", started_at: "2026-10-18T12:04:00Z" } },
+    declared_steps: [{ id: "grill" }, { id: "spec" }] },
+  events: [], last_seq: 9 };
+// ── polyforge#31: the long event-only stream (at3 caps at minute 59, so the
+// 259 fixtures run over the whole day: hour = floor((n-1)/60)).
+const atP31 = (n) => `2026-10-18T${String(Math.floor((n - 1) / 60)).padStart(2, "0")}:${String((n - 1) % 60).padStart(2, "0")}:00Z`;
+const evP31 = (n, kind, body) => ({ at: atP31(n), kind, work_item: WIP31, body, seq: n });
+const EVENTS_P31 = [
+  evP31(1, "step_started", { step: "scroll", model: "pi:glm-e2e", spawn_n: 1 }),
+  ...Array.from({ length: 258 }, (_, i) => evP31(2 + i, "answered", { step: "scroll" })),
+];
+writeFileSync(join(dataRoot, "events", `wi-${WIP31}.jsonl`), EVENTS_P31.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_P31 = { work_item: WIP31, slug: SLUG31, known: true, job: { status: "running" },
+  execution: { workflow_status: "running", current_step: "scroll", updated_at: atP31(259), steps: {
+    scroll: { status: "in_progress", started_at: atP31(1) } },
+    declared_steps: [{ id: "scroll" }] },
+  events: [], last_seq: 259 };
+const WATCH_TABLE = (watch112 = WATCH_112) => ({ "pi#108": WATCH_108, wi_E2Eaaaa0001: WATCH_108,
+  "pi#109": WATCH_109, wi_E2Ecccc0003: WATCH_109, [SLUG112]: watch112, [WI112]: watch112,
+  [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B,
+  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31 });
+writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.filter((j) => j.work_item_id !== WIP24B).map((j) => j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 }
+  : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A } : { work_item_id: j.work_item_id }) }));
 const stubDir = join(work, "stub-bin");
 mkdirSync(stubDir);
 const stateFile = join(stubDir, "state.json");
 const argvLog = join(stubDir, "argv.log");
-const setState = (patch) => writeFileAtomic(stateFile, JSON.stringify({ mode: "ok", ops: ops(JOBS), watch: { "pi#108": WATCH_108,
-  wi_E2Eaaaa0001: WATCH_108, "pi#109": WATCH_109, wi_E2Ecccc0003: WATCH_109, [SLUG112]: WATCH_112, [WI112]: WATCH_112 }, ...patch }));
+const setState = (patch) => writeFileAtomic(stateFile, JSON.stringify({ mode: "ok", ops: ops(JOBS), watch: WATCH_TABLE(), ...patch }));
 setState({});
 writeFileSync(join(stubDir, "pf"), `#!${process.execPath}
 const fs = require("fs"); const path = require("path");
@@ -224,6 +313,10 @@ const T = {
   N8: "N8: Severity emphasis: amber, red, green, neutral (plus accent starts)",
   N9: "N9: The retired event-mode preference is never read or written and changes nothing",
   N10: "N10: Sanitization docs describe the watch whitelist and the progress line whitelist",
+  P24A: "P24A: An ended ticket defaults to its last-run step and shows that step's every rerun (AC1 AC2 AC4)",
+  P24B: "P24B: A dropped ended ticket still defaults to its last-run step (AC2)",
+  P24C: "P24C: Selection follows the current step until a manual choice persists (AC3)",
+  P31A: "P31A: Mid-progress both centered jump buttons show; up reaches the top, latest the bottom and restores the follow (AC1 AC2 AC4)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -384,6 +477,11 @@ const ABSORBED112 = [
   [["step_started", `▶ zulu-grill #2 · ${SHORT_MODEL112}`]],
   [["step_started", `▶ kilo-author #2 · ${MODEL112}`], ["step_dead", "✕ mike-spec · timeout-after-3-retries"]],
 ];
+// owner-intended change (polyforge#24): the panel shows the SELECTED step's
+// blocks, and the detail defaults to the current step — kilo-author here. Its
+// block is ABSORBED112[1]'s; every MARKERS112 row rides inside it, so the
+// selected view pins the same marker rows, one head, and zulu-grill's block out.
+const SELECTED_HEADS112 = [ABSORBED112[1]];
 const MARKERS112 = LINES112.filter(([kind]) => kind !== "step_started" && kind !== "step_dead");
 const headLines = (panel) => panel.first().evaluate((root) => [...root.querySelectorAll("[data-pf-progress] [data-pf-progress-block-toggle]")].map((el) => {
   const cs = getComputedStyle(el);
@@ -437,6 +535,43 @@ async function ensureDetail112(page) {
     await panel.locator('[data-pf-progress] [data-pf-progress-kind="event"]').first().waitFor({ state: "attached", timeout: 10_000 }).catch(() => {});
   }
   throw new Error("the pi#112 detail did not render");
+}
+// polyforge#24 — a bounded poll on a real condition (never a fixed delay).
+const pollUntil = async (fn, label, ms = 12_000) => {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (await fn()) return;
+    if (Date.now() > deadline) throw new Error(label);
+    await delay(150);
+  }
+};
+// Like ensureDetail112, keyed on a fixture's own slug/wi and on the progress
+// block alone (the selected view's own assertions follow in the scenario).
+async function ensureDetail24(page, slug, wi) {
+  const showing = async (panel) => (await panel.locator("[data-pf-detail-title]").getByText(slug, { exact: true }).count()) > 0
+    && (await panel.locator("[data-pf-progress]").count()) > 0;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if ((await pfPanel(page).count()) === 0) { await openPanel(page); continue; }
+    const panel = pfPanel(page).first();
+    if (await showing(panel)) return panel;
+    const workTab = panel.locator('[data-pf-tabstrip="top"] [role="tab"]').first();
+    if ((await workTab.count()) > 0 && (await workTab.getAttribute("aria-selected")) !== "true") {
+      await workTab.click({ timeout: 2000 }).catch(() => {});
+      await panel.locator('[data-pf-tabstrip="work"]').waitFor({ timeout: 5_000 }).catch(() => {});
+      continue;
+    }
+    const jobsTab = panel.locator('[data-pf-tabstrip="work"] [role="tab"]').first();
+    if ((await jobsTab.count()) > 0 && (await jobsTab.getAttribute("aria-selected")) !== "true") {
+      await jobsTab.click({ timeout: 2000 }).catch(() => {});
+      await panel.locator(`[data-pf-card-wi="${wi}"]`).waitFor({ timeout: 5_000 }).catch(() => {});
+      continue;
+    }
+    const card = panel.locator(`[data-pf-card-wi="${wi}"]`);
+    if ((await card.count()) === 0) { await card.waitFor({ timeout: 5_000 }).catch(() => {}); continue; }
+    if ((await panel.locator("[data-pf-detail-title]").getByText(slug, { exact: true }).count()) === 0) await card.click().catch(() => {});
+    await panel.locator("[data-pf-progress]").first().waitFor({ state: "attached", timeout: 10_000 }).catch(() => {});
+  }
+  throw new Error(`the ${slug} detail did not render`);
 }
 const MODE_LABELS = /^(simple|verbose|简洁|详细|簡潔|詳細)$/i;
 
@@ -727,15 +862,15 @@ try {
     // lines are the whole retained list (see ABSORBED112).
     assert.deepEqual(lines.map((line) => [line.kind, lineBody(line)]), MARKERS112, `the lifecycle marker rows: ${JSON.stringify(lines.map((line) => line.text))}`);
     const heads = await headLines(panel);
-    assert.deepEqual(heads.map((head) => head.lines.map((line) => [line.kind, lineBody(line)])), ABSORBED112, `the heads' absorbed lines: ${JSON.stringify(heads)}`);
-    assert.equal(lines.length + heads.flatMap((head) => head.lines).length, LINES112.length, "no retained line is dropped");
+    assert.deepEqual(heads.map((head) => head.lines.map((line) => [line.kind, lineBody(line)])), SELECTED_HEADS112, `the heads' absorbed lines: ${JSON.stringify(heads)}`);
+    assert.equal(lines.length + heads.flatMap((head) => head.lines).length, LINES112.length - 1, "no retained line of the selected step is dropped");
     for (const line of [...lines, ...heads.flatMap((head) => head.lines)]) assert.match(line.text, /^\d{2}:\d{2}:\d{2} /, `each line starts with its clock: ${line.text}`);
     // owner-intended change: the long model rode the kilo-author start line,
     // which the head absorbs — it is on the head's title in full, and neither the
     // head nor any marker row is ellipsized.
-    const long = heads[1].lines.find((line) => line.text.includes(MODEL112));
-    assert.ok(long && !heads.some((head) => head.ellipsis) && !lines.some((line) => line.ellipsis), `the long model line stays whole, not ellipsized: ${JSON.stringify(heads[1])}`);
-    assert.ok(heads[1].text.includes("kilo-author #2"), `the head names the absorbed start's step and spawn: ${heads[1].text}`);
+    const long = heads[0].lines.find((line) => line.text.includes(MODEL112));
+    assert.ok(long && !heads.some((head) => head.ellipsis) && !lines.some((line) => line.ellipsis), `the long model line stays whole, not ellipsized: ${JSON.stringify(heads[0])}`);
+    assert.ok(heads[0].text.includes("kilo-author #2"), `the head names the absorbed start's step and spawn: ${heads[0].text}`);
     const text = await panel.innerText();
     // owner-intended change: the tool line is the shared tool card — its
     // header shows the name and the masked argument, its title the full header.
@@ -755,7 +890,7 @@ try {
       const lines = await eventLines(panel, null);
       // owner-intended change: marker rows + the heads' absorbed lines.
       assert.deepEqual(lines.map((line) => [line.kind, lineBody(line)]), MARKERS112, `${locale}: the lifecycle marker rows`);
-      assert.deepEqual((await headLines(panel)).map((head) => head.lines.map((line) => [line.kind, lineBody(line)])), ABSORBED112, `${locale}: the heads' absorbed lines`);
+      assert.deepEqual((await headLines(panel)).map((head) => head.lines.map((line) => [line.kind, lineBody(line)])), SELECTED_HEADS112, `${locale}: the heads' absorbed lines`);
       assert.equal(await panel.locator("[data-pf-progress]").getByText(heading, { exact: true }).count(), 1, `${locale}: the progress heading is translated`);
       assert.doesNotMatch(await panel.innerText(), /polyforge\.[a-z]/i, `${locale} panel shows a raw i18n key`);
     });
@@ -781,9 +916,10 @@ try {
     }
     assert.equal(await panel.getByText(/sync\s*[×x]\s*\d/i).count(), 0, "no collapsed sync row");
     assert.equal((await eventLines(panel, "terminal")).length, 3, "terminal events never collapse");
-    // owner-intended change: both step_started lines live on their group heads.
+    // owner-intended change: the selected step's step_started line lives on its
+    // group head (the other step's block is out of the selected view).
     const starts = (await headLines(panel)).flatMap((head) => head.lines).filter((line) => line.kind === "step_started");
-    assert.equal(starts.length, 2, "step_started events never collapse");
+    assert.equal(starts.length, 1, "step_started events never collapse");
   });
 
   // N6 — (was: verbose mode) there is no mode: no control switches the
@@ -824,9 +960,9 @@ try {
       assert.ok(line.tone === "red" && line.family === "red", `the ${kind} line is not red: ${JSON.stringify(line)}`);
     }
     // owner-intended change: the step_dead line is its block's absorbed
-    // terminal — the block's head carries the failed status and its ✕ mark.
+    // terminal — the selected block's head carries the failed status and its ✕ mark.
     const heads = await headLines(panel);
-    assert.ok(heads[1].lines.some((line) => line.kind === "step_dead") && heads[1].status === "failed" && heads[1].text.includes("✕"), `the step_dead block reads failed: ${JSON.stringify(heads[1])}`);
+    assert.ok(heads[0].lines.some((line) => line.kind === "step_dead") && heads[0].status === "failed" && heads[0].text.includes("✕"), `the step_dead block reads failed: ${JSON.stringify(heads[0])}`);
     const terminals = await eventLines(panel, "terminal");
     assert.equal(terminals.length, 3, `expected 3 terminal lines, found ${terminals.length}`);
     assert.ok(terminals[0].tone === "green" && terminals[0].family === "green", "the terminal completed line is not green");
@@ -838,8 +974,8 @@ try {
       assert.ok(line.tone === "neutral" && plainColour(line), `the ${kind} line is not neutral: ${JSON.stringify(line)}`);
     }
     // owner-intended change: start lines are absorbed into the group heads;
-    // the older head carries no mark, the head of the block with a failure ✕.
-    assert.deepEqual(heads.map((head) => head.status), ["none", "failed"], "each head carries its block's status");
+    // the selected view holds the one head, of the block with a failure ✕.
+    assert.deepEqual(heads.map((head) => head.status), ["failed"], "each head carries its block's status");
   });
 
   // N9 — (was: the toggle persists) the toggle is gone and the old
@@ -887,6 +1023,166 @@ try {
     for (const needle of ["**Progress lifecycle lines.**", "`composeProgressEventLine`", "`needs_recovery` → `reason` + `detail`", "`push_failed` → `error`", "`candidate_switched`, `envelope_rejected`, `authored_tests_rebaselined`"]) {
       assert.ok(section.includes(needle), `the Sanitization section does not describe ${needle}`);
     }
+  });
+
+  // P24A — polyforge#24 (AC1, AC2 ended default, AC4): an ended ticket the
+  // daemon still holds. No current_step: the default is the LAST-RUN step
+  // (spec — not grill, the first run step and the DAG's first non-pending
+  // node), whose every rerun block (spec #1, spec #2) shows, the unselected
+  // step's records stay out, each round is readable, and clicking a node
+  // switches the view; the unstarted step shows the not-run empty state.
+  await checkPage(T.P24A, "ended ticket, last-run step", {}, async (page) => {
+    const panel = await ensureDetail24(page, SLUGP24A, WIP24A);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    const progress = panel.locator("[data-pf-progress]");
+    const progressText = async () => (await progress.innerText()).replace(/\s+/g, " ").trim();
+    await pollUntil(async () => (await node("spec").getAttribute("data-pf-step-selected")) === "true", "the ended ticket does not default to its last-run step");
+    const outline = await node("spec").evaluate((el) => getComputedStyle(el).outlineStyle);
+    assert.notEqual(outline, "none", "the defaulted node carries a visible selection style");
+    const blocks = progress.locator("[data-pf-progress-block]");
+    await pollUntil(async () => (await blocks.count()) === 2, "the last-run step's two rerun blocks render");
+    const headers = (await blocks.locator("[data-pf-progress-block-toggle]").evaluateAll((els) => els.map((el) => el.textContent))).join(" ");
+    assert.match(headers, /spec #1/, `the first round is labelled (${headers})`);
+    assert.match(headers, /spec #2/, `the rerun is labelled (${headers})`);
+    assert.ok(!/grill #1/.test(headers), `the unselected step's block stays out (${headers})`);
+    for (const header of await blocks.locator("[data-pf-progress-block-toggle]").all()) {
+      if ((await header.getAttribute("aria-expanded")) === "false") await header.evaluate((el) => el.click());
+    }
+    await pollUntil(async () => {
+      const text = await progressText();
+      return text.includes("E2E-P24A-SPEC-1") && text.includes("E2E-P24A-SPEC-2");
+    }, "every round's record is readable");
+    assert.ok(!(await progressText()).includes("E2E-P24A-GRILL"), "the unselected step's record stays out");
+    await node("grill").click();
+    await pollUntil(async () => (await progressText()).includes("E2E-P24A-GRILL"), "clicking a node switches to that step's record");
+    assert.ok(!(await progressText()).includes("E2E-P24A-SPEC-1"), "the switched-out step's record leaves");
+    await node("review").click();
+    await pollUntil(async () => /尚未运行|Not run yet/.test(await progressText()), "an unstarted step shows the not-run empty state");
+  });
+
+  // P24B — polyforge#24 (AC2): a DROPPED ended ticket — no capsule, the
+  // progress route answers from its event log alone (terminal line, no
+  // step_started block), so the last-run step is derivable only from the
+  // watch's started steps. The default must still be spec (last run), not
+  // grill (the first non-pending DAG node).
+  await checkPage(T.P24B, "dropped ended ticket", {}, async (page) => {
+    const panel = await ensureDetail24(page, SLUGP24B, WIP24B);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    const progress = panel.locator("[data-pf-progress]");
+    await pollUntil(async () => (await node("spec").getAttribute("data-pf-step-selected")) === "true", "a dropped ended ticket does not default to its last-run step");
+    await pollUntil(async () => /⏹/.test(await progress.innerText()), "the dropped ticket's terminal line stays readable");
+  });
+
+  // P24C — polyforge#24 (AC3): without a manual choice the selection FOLLOWS
+  // the current step as the watch advances; a manual choice then persists
+  // across later advances. Each wait is on a real watch landing, with one
+  // extra poll after the advance before the persistence read (r2 N8).
+  await checkPage(T.P24C, "follow then persist", {}, async (page) => {
+    try {
+      const panel = await ensureDetail112(page);
+      const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+      await pollUntil(async () => (await node("kilo-author").getAttribute("data-pf-step-selected")) === "true", "the current step starts selected");
+      const advance = async (executionPatch, label) => {
+        const watch = JSON.parse(JSON.stringify(WATCH_112));
+        Object.assign(watch.execution, executionPatch);
+        setState({ watch: WATCH_TABLE(watch) });
+        await pollUntil(async () => label(await node(executionPatch.current_step).getAttribute("aria-label")), `the watch advances to ${executionPatch.current_step}`);
+      };
+      await advance({ current_step: "bravo-code", steps: { ...WATCH_112.execution.steps, "bravo-code": { status: "in_progress", started_at: "2026-10-18T11:50:00Z" } } },
+        (aria) => (aria ?? "").includes("In progress"));
+      // The selection follows one effect-triggered render AFTER the aria label
+      // settles — poll the selected state itself, never read it between renders.
+      await pollUntil(async () => (await node("bravo-code").getAttribute("data-pf-step-selected")) === "true", "the selection follows the current step");
+      await node("zulu-grill").click();
+      await pollUntil(async () => (await node("zulu-grill").getAttribute("data-pf-step-selected")) === "true", "the manual choice lands");
+      const outline = await node("zulu-grill").evaluate((el) => getComputedStyle(el).outlineStyle);
+      assert.notEqual(outline, "none", "the manual choice carries a visible selection style");
+      await advance({ current_step: "kilo-author", steps: { ...WATCH_112.execution.steps, "kilo-author": { status: "done", started_at: "2026-10-18T09:30:00Z" } } },
+        (aria) => (aria ?? "").includes("Done"));
+      await page.waitForRequest((r) => new URL(r.url()).pathname === "/api/polyforge/watch", { timeout: 9_000 });
+      assert.equal(await node("zulu-grill").getAttribute("data-pf-step-selected"), "true", "the manual choice persists while the current step advances");
+      assert.ok((await panel.locator("[data-pf-progress]").innerText()).includes("zulu-grill"), "the manually chosen step's record stays");
+    } finally {
+      setState({});
+    }
+  });
+
+  // P31A — polyforge#31 (AC1, AC2, AC4): over a long execution progress the
+  // two jump buttons float stacked at the region's bottom, horizontally
+  // centered, reusing the chat session's chat-scroll-to-bottom style; the up
+  // button smooth-scrolls to the top (and hides there), the latest button
+  // jumps to the bottom (and hides there) and restores the follow, so the
+  // next poll's line keeps the region pinned. Every wait is a bounded poll on
+  // a real condition — never a fixed delay.
+  await checkPage(T.P31A, "scroll jump buttons", {}, async (page) => {
+    const panel = await ensureDetail24(page, SLUG31, WIP31);
+    const scroll = panel.locator("[data-pf-detail-scroll]");
+    const latest = panel.locator("[data-pf-detail-latest]");
+    const top = panel.locator("[data-pf-detail-top]");
+    const atBottom = () => scroll.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 8);
+    await pollUntil(async () => (await panel.locator("[data-pf-progress] [data-pf-progress-kind]").count()) >= 200, "the long progress renders");
+    await pollUntil(atBottom, "the detail opens at its bottom");
+    assert.equal(await latest.count(), 0, "the latest control is hidden at the bottom");
+    assert.equal(await top.count(), 1, "away from the top, the up control shows");
+    // Park mid-progress: both buttons show, centered on their anchors.
+    await scroll.evaluate((el) => { el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) / 2); });
+    await pollUntil(async () => (await latest.count()) === 1 && (await top.count()) === 1, "both jump buttons show mid-progress");
+    const geometry = await panel.evaluate((root) => {
+      const center = (el) => { const r = el.getBoundingClientRect(); return (r.left + r.right) / 2; };
+      const progress = root.querySelector("[data-pf-progress]");
+      const region = root.querySelector("[data-pf-detail-scroll]");
+      const latestAnchor = root.querySelector("[data-pf-detail-latest]");
+      const topAnchor = root.querySelector("[data-pf-detail-top]");
+      const latestBtn = latestAnchor?.querySelector("button");
+      const topBtn = topAnchor?.querySelector("button");
+      const latestBox = latestBtn?.getBoundingClientRect();
+      const topBox = topBtn?.getBoundingClientRect();
+      const latestStyle = latestBtn && getComputedStyle(latestBtn);
+      const topStyle = topBtn && getComputedStyle(topBtn);
+      const regionBox = region && region.getBoundingClientRect();
+      const inside = (box) => Boolean(box && regionBox && box.top >= regionBox.top - 0.5 && box.bottom <= regionBox.bottom + 0.5 && box.left >= regionBox.left - 0.5 && box.right <= regionBox.right + 0.5);
+      return {
+        progress: center(progress),
+        latestAnchor: latestAnchor && center(latestAnchor), topAnchor: topAnchor && center(topAnchor),
+        latestBtn: latestBtn && center(latestBtn), topBtn: topBtn && center(topBtn),
+        latestClass: latestBtn?.className ?? "", topClass: topBtn?.className ?? "",
+        latestShape: latestStyle && [latestStyle.width, latestStyle.height, latestStyle.borderRadius],
+        topShape: topStyle && [topStyle.width, topStyle.height, topStyle.borderRadius],
+        stacked: Boolean(latestBox && topBox && latestBox.top >= topBox.bottom),
+        latestInView: inside(latestBox), topInView: inside(topBox),
+      };
+    });
+    for (const [name, btn, anchor] of [["latest", geometry.latestBtn, geometry.latestAnchor], ["top", geometry.topBtn, geometry.topAnchor]]) {
+      assert.ok(btn != null && anchor != null, `the ${name} button and its anchor render`);
+      assert.ok(Math.abs(btn - anchor) <= 1.5, `the ${name} button centers on its anchor (Δ ${Math.abs(btn - anchor).toFixed(2)}px)`);
+      assert.ok(Math.abs(anchor - geometry.progress) <= 2, `the ${name} anchor spans the progress block's width (Δ ${Math.abs(anchor - geometry.progress).toFixed(2)}px)`);
+    }
+    assert.match(geometry.latestClass, /(^|\s)chat-scroll-to-bottom(\s|$)/, "the latest button reuses the chat's style class");
+    assert.match(geometry.latestClass, /(^|\s)is-visible(\s|$)/, "the latest button is visible");
+    assert.match(geometry.topClass, /(^|\s)chat-scroll-to-bottom(\s|$)/, "the top button reuses the chat's style class");
+    assert.match(geometry.topClass, /(^|\s)is-visible(\s|$)/, "the top button is visible");
+    assert.deepEqual(geometry.latestShape, ["32px", "32px", "999px"], `the latest button is the chat's 32px round control: ${JSON.stringify(geometry.latestShape)}`);
+    assert.deepEqual(geometry.topShape, ["32px", "32px", "999px"], `the top button is the chat's 32px round control: ${JSON.stringify(geometry.topShape)}`);
+    assert.ok(geometry.stacked, "the up button floats above the latest button");
+    assert.ok(geometry.latestInView, "the latest button sits inside the region's visible box");
+    assert.ok(geometry.topInView, "the up button sits inside the region's visible box");
+    // The up click reaches the top; the control hides there, the latest stays.
+    await top.locator("button").click();
+    await pollUntil(async () => await scroll.evaluate((el) => el.scrollTop <= 8), "the up button scrolls the region to its top");
+    // r1#1: the hiding rides scroll events → the passive listener → a React
+    // continuous-priority commit, so the removed control is itself polled —
+    // never asserted straight off the scroll-position proxy.
+    await pollUntil(async () => (await top.count()) === 0, "the up control hides at the top");
+    assert.equal(await latest.count(), 1, "the latest control stays away from the bottom");
+    // The latest click jumps to the bottom; the control hides there, and the
+    // follow is restored: a later poll's appended line keeps the region pinned.
+    await latest.locator("button").click();
+    await pollUntil(atBottom, "the latest button returns the region to its bottom");
+    assert.equal(await latest.count(), 0, "the latest control hides at the bottom");
+    assert.equal(await top.count(), 1, "the up control shows away from the top");
+    appendFileSync(join(dataRoot, "events", `wi-${WIP31}.jsonl`), JSON.stringify({ at: atP31(260), kind: "intent", work_item: WIP31, body: { step: "scroll", kind: "wake", to: WIP31, reason: "E2E-P31-FOLLOW-MARKER" }, seq: 260 }) + "\n");
+    await pollUntil(async () => (await panel.locator("[data-pf-progress]").innerText()).includes("E2E-P31-FOLLOW-MARKER"), "the follow-marker line arrives");
+    await pollUntil(atBottom, "the latest click restored the follow: the new line keeps the region at its bottom");
   });
 
   // N11 — DELETED before completion: "N11: Unknown kind renders its raw kind

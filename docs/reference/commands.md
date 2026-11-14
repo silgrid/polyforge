@@ -89,6 +89,31 @@ One row per group, exactly as `pf help` prints it:
 | Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries; `--prune-chat-state` deletes the retired chat-subscription files the `retired chat state` row lists (`chats.json`, `chat-subs.json`, `chat-status/` and `migration/chat-subs.json.pre-migration` in the data dir, and the runtime dir's `chat-*` and `session-*.chat` files); `--prune-capsules` acts on the entries the `capsule retention` row calls reclaimable or retired — past the 14-day retention, holding no uncommitted or unpushed task-repo work: a wrapped work item's capsule, live or set aside, is slimmed to `artifacts/` + `capsule.json`, and terminal work items' external git dirs and failed or canceled ones' set-aside scenes are removed — a commit counts as pushed when either the task clone's own or the mapped workspace's `.repo/<name>` clone's remote-tracking refs reach it; a capsule holding such work, and the work item's git dirs, are kept and named; its `disk watermark` row reports each mapped workspace's filesystem use and `capsules/` bytes and warns above 70% used; `--fix-harness-prompts` appends the native-SVG diagram-guidance block to each installed harness's existing context file that lacks that block — legacy mermaid-only guidance, which the `harness diagram guidance` row warns as `legacy`, included and left as it is — append-only and idempotent, never creating a file; `--fix-install-layout` links `~/.claude/skills/polyforge` to `<data-dir>/release/current/skills/polyforge` when the `claude install layout` row finds it missing or linked elsewhere — only that entry, idempotent, a no-op on a correct link; a copied directory or a missing release is left to `tools/install.sh`, and it never installs `pf` or a release), `version` (the verb form of `pf --version`), `profile` (the resolved Cell and its source), `init` (a workspace's local layout) |
 | Process | `daemon` (run the work machine; `pf daemon ensure` starts it), `aihub` (run the aihub server on the service host; `main.go` intercepts `pf aihub`, this verb serves `pf help aihub` only) |
 
+## `pf submit` — the prechecks; `pf queue` — the interaction marks
+
+An execution ticket (one with a bundle) on a lane that requires acceptance
+(the lane's `workflow.yaml` key `acceptance`, default `required`; the shipped
+`integrate` and `release` lanes declare `none`) passes two CLI prechecks
+before the local daemon is contacted — each with its own bypass flag, each
+refusing with exit 1 and nothing claimed:
+
+- **the acceptance check** — at least one criterion (a top-level list item)
+  under `## Acceptance` or `## 验收`; `pf submit <id> --allow-no-acceptance`
+  submits the ticket anyway.
+- **the analysis check (polyforge#27)** — a `## 分析` (or `## Analysis`)
+  section with content; a dated 「免分析」 the session writes on the owner's
+  explicit skip counts as content; `pf submit <id> --allow-no-analysis`
+  submits the ticket anyway. The check never judges what the section says.
+
+The daemon's auto-pull skips a ticket either check would refuse: it stays
+queued, and `pf queue` marks it in the STATUS cell —
+`queued (需要交互：缺验收)` (no acceptance criterion),
+`queued (需要交互：未分析)` (no analysis section), and both marks when both
+are missing. The merged `--json` document (`pf queue` without `--project`)
+carries `"acceptance_missing": true` and `"analysis_missing": true` on such
+items (absent on every other); the `--project` `--json` body is the
+server's raw answer and carries neither.
+
 ## `pf msg` — user-to-user messages
 
 `pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]`
@@ -704,8 +729,9 @@ Every command a workflow step's skill runs verbatim and routes on by exit
 code is a script of the workflow itself, never `pf`: verify ("The
 verification bar" above), sync, merge, revert, run and published
 ([Step scripts](#step-scripts--syncpy-mergepy-revertpy-runpy)), facts and
-integrate ([Workflow scripts](#workflow-scripts--factspy-integratepy)) and
-gate ("The full test gate" above), run from the lane snapshot as
+integrate ([Workflow scripts](#workflow-scripts--factspy-integratepy)),
+gate ("The full test gate" above) and fast_checks
+([Build's checks](#builds-checks--fast_checkspy) below), run from the lane snapshot as
 `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/<name>.py" …`. Their conventions —
 the step environment they read, the result file, the shared library
 `pfstep`, the container labels — are the
@@ -952,6 +978,49 @@ The verification-scope engine is the workflow's too:
 `$PF_SHARED_DIR/scripts/verify-scope` (read-only there: `sh <path>`) —
 `verify.py`'s only engine when `--engine` names none; a hand run uses the
 release checkout's copy.
+
+## Build's checks — `fast_checks.py`
+
+Build's per-unit bar and its on-the-spot unit check are one written
+command, `workflows/_shared/scripts/fast_checks.py`, run from the lane
+snapshot as `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" …` and
+named in the skill's `commands:` by file name. It ships in the snapshot,
+so it changes with the workflow, never with a pf release; `--help` is its
+full reference.
+
+- `--repo <name>` is the per-unit bar: it runs the scope engine's
+  `--json` report — the default report, the one the model ran by hand —
+  in the repo clone and executes the commands whose `phase` is `fast` or
+  `scoped`, in the report's order, each in its report's `root` (a nested
+  root the changed paths reach is a repository of its own: its report
+  runs in that subdirectory), with each entry's own declared `timeout`;
+  a command missing a declared `requires_env`/`requires_cmd`
+  prerequisite is skipped and its reason recorded; the full phase never
+  runs, and the run never stops at a failure. Details: `repo, engine,
+  reports[{root, mode, commands}], commands[{name, phase, root, cmd,
+  exit_code, timed_out, not_started, duration_ms, log, skipped,
+  skip_reason}]`. Exit 0: every command that ran exited 0; 1: a command
+  failed or was killed at its timeout; 2: not judged (no such repo, the
+  engine missing or failing, an unreadable report, a repo the engine
+  planned no command for).
+- `--check-units <units.json> [--unit <id>]` is the on-the-spot unit
+  check at record time: it re-runs the build's recorded unit runs as
+  written (each unit's own `argv` in its own `cwd` of its own
+  `repos/<repo>`) and judges each by `verify.py`'s own marker rules
+  (`pfstep/unitruns`, the one implementation): a unit passes when it
+  exits 0 and one output line matches its marker; a marker problem, a
+  red run or no matching line — a marker wrong by one `$` against a
+  suffixed output line — is red on the spot, the result naming the unit,
+  its marker and the closest output line. Details: `units_file, units[{id,
+  check, repo, cwd, argv, marker, passed, why, exit_code, log,
+  closest_line}]`. Exit 0: every checked unit passed; 1: a unit is red;
+  2: not judged (an unusable units.json, `--unit` naming no unit, a file
+  naming no unit).
+
+The logs of both modes go to `<log-dir>/<repo>/<seq>/command.log`, the
+log dir being `--log-dir`, else `logs/` beside `--out`, else the
+capsule's next `runtime-state/fast-checks/<n>` (a .gitignore keeps them
+out of the capsule chain).
 
 ## `pf config` — cli.toml and hot reload
 
@@ -1339,7 +1408,14 @@ problem: the next candidate at once, and none left parks the work item
 the same session resumes with the reminder to end with a hand-off, and
 the third in a row parks. `rate_limited` and `upstream_transient` retry
 the same model after a backoff of 1 s, doubling to at most 3 min, never
-counted; `tool_hung` resumes the same session once with Y doubled (a
+counted. The transient texts the classification recognizes include the
+throttles (429 / rate limit / `overloaded` / the gateways' `server
+overload. Please retry later.` and concurrency texts) and the upstream
+transients: a response stream that ended or was interrupted before
+completion, an upstream/gateway named `temporarily unavailable`, a
+gateway's `no available accounts`, and the upstream model reporting an
+error after output had started (the output so far is partial);
+`tool_hung` resumes the same session once with Y doubled (a
 second timeout parks); any other exit (`exit_other`, `exit_host_class`,
 `harness_silent`) resumes once, and the second in a row parks. A
 restarted daemon serves only what is left of a backoff, and `pf ops

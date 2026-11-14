@@ -1,7 +1,7 @@
 ---
 name: build
 description: Build the change test first and record each unit's red-then-green run in artifacts/build/units.json - the run review replays red at the test commit and verification runs green again - asking the owner only in the four cases, right after the plan.
-commands: []
+commands: [fast_checks.py]
 ---
 # build
 
@@ -81,6 +81,14 @@ record exactly what ran.
    the red run also prints, never one a filter that matched no test prints (`ok  ` alone is
    not a marker: `go test -run NoSuchTest` prints it), never one the empty string matches
    (`.*`, `^`, `a*`: verification fails such a unit without running it).
+   A unit is not recorded until the written check has passed it: right after adding it to
+   `artifacts/build/units.json`, run
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --check-units artifacts/build/units.json --unit <id> --json --out artifacts/build/units-check.json`
+   — it re-runs the unit's recorded run as written and checks its marker against that run's
+   output by `verify.py`'s own rules (`pfstep/unitruns`: the one implementation, never a second
+   copy). A red names the unit, its marker and the closest output line: fix the record (the
+   marker, or the recorded run) and re-check; at the close (3c) run the same command over the
+   whole file with no `--unit`.
 4. **Coverage stays in the plan.** `artifacts/plan.md`'s `## Coverage` is the table review
    and publish read — one row per criterion of the judged list, every id once:
    `| AC | kind | ref |`, kind `test` (ref `<repo>/<test file>: <test name>`), `existing`
@@ -105,8 +113,9 @@ record exactly what ran.
 - **验证**: each unit's red and green run (exit codes), the fast checks, `artifacts/self-review.md`.
 - **给下游与未决**: an `owner-review:` line when one is declared; what `review` should look
   at first.
-- **Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`, `artifacts/self-review.md`
-  (and `artifacts/grill-qa.md` when there is one).
+- **Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`,
+  `artifacts/build/units-check.json`, `artifacts/build/fast-checks/<repo>.json`,
+  `artifacts/self-review.md` (and `artifacts/grill-qa.md` when there is one).
 
 ## Never
 

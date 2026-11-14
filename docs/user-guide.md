@@ -213,14 +213,23 @@ This example is composed, illustrative only: never a transcript of a real run
 
 A small fix in project `demo`: the login endpoint times out under load. Check
 the queue, then file it on the develop bundle (the default lane), its content
-carrying an `## Acceptance` section with one criterion per line:
+carrying an `## Acceptance` section with one criterion per line — each
+criterion in the `Acceptance carrier` shape: its proof command and the
+directory it runs in, then `— carried by build` — and a `## 分析` section
+holding the pre-submit analysis:
 
 ```
 pf queue --project demo
 pf file create --project demo --bundle develop --goal "Fix the login timeout under load" --content @login-timeout.md
 ```
 
-Submit and watch:
+Before submitting, the session runs the pre-submit analysis: a read-only
+`pf task spawn` errand over the ticket and the code it touches, its report
+written into the ticket's `## 分析` section (`pf file edit demo#7 --content
+@login-timeout.md`) — or the owner explicitly waives it with one dated line
+「免分析」 in that section. On a lane that requires acceptance, `pf submit`
+refuses a ticket without it (`--allow-no-analysis` bypasses, on the owner's
+say-so). Then submit and watch:
 
 ```
 pf submit demo#7

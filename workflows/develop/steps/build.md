@@ -34,7 +34,9 @@ only in the cases item 3 names, and judge the plan; without sub-agents, do it al
    for a ticket without one, the list you propose); `## Non-goals` (what the ticket or an answer
    leaves out, or `none`); `## Units` — ordered compilable units, each with its id, the criterion
    ids its test carries, its test (a unit-level test, or an e2e scenario in a new or extended
-   suite and the `carries:` globs that suite declares), its fast-check commands, `Touched files:
+   suite and the `carries:` globs that suite declares), its fast-check commands, its
+   test-quality record (the behaviour its test observes, why its red is expected, the
+   change it catches — the bar below), `Touched files:
    <path> (write|read), ...` and `Coupled obligations:` (what must change with each write — the
    repo's `AGENTS.md` names its known couplings — or `none` and why); `## Coverage` — per
    criterion `test` (its unit's test), `existing` (the test already pinning it) or `doc` (the file
@@ -44,6 +46,8 @@ only in the cases item 3 names, and judge the plan; without sub-agents, do it al
    contradiction, (b) a deviation, (c) `confirm_plan: true`, (d) a missing or incomplete
    acceptance list — right after the plan, never at the end of your work, with `pf step ask`.
    Its question carries {{batch_questions}}
+
+{{test_quality}}
 
 ## 3b. Units, test first
 
@@ -66,7 +70,11 @@ command on that clean commit: red; (3) implement until it is green, then run the
 {{fast_checks_build}}
 (4) commit the implementation (C_i, `impl_commit`), run the same command from the same directory
 on that clean commit: green; (5) record the unit in `artifacts/build/units.json` as your skill
-says — the run exactly as it ran red and green, and its marker.
+says — the run exactly as it ran red and green, and its marker. A unit is not recorded until
+the written check has passed it: `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py"
+--check-units artifacts/build/units.json --unit <id> --json --out artifacts/build/units-check.json`
+right after adding it (verification's own rules: a red names the unit, its marker and the
+closest output line — fix the record and re-check).
 
 A defect ticket's first unit is the reproduction test, red on the reported failure before any fix;
 cannot reproduce it → 3a's case (a). A doc-type criterion gets no red test and no unit: commit the
@@ -74,8 +82,9 @@ change, run its validator and name it in its `## Coverage` row.
 
 ## 3c. Close and 3d. Self-review
 
-Run the fast checks over the whole change and every unit test targeted (the full bar is
-`verification`'s). Read your full diff (per repo `git diff
+Run the fast checks over the whole change (the written command once per touched repo) and
+every unit test targeted, then the written unit check over the whole `artifacts/build/units.json`
+(the same command with no `--unit`) (the full bar is `verification`'s). Read your full diff (per repo `git diff
 $(git merge-base HEAD origin/HEAD)..HEAD`) as `review` will, against its five blocking classes:
 `bug`, `ac_gap`, `project_rule`, `test_weakened`, `guarantee`; write each hit and its disposition
 to `artifacts/self-review.md` and fix what you can now (a new unit for a behaviour fix).

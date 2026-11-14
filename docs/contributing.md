@@ -73,7 +73,15 @@ driver reads both headings the same), and the session grills the acceptance in
 before submitting; `--allow-no-acceptance` submits it anyway, on the owner's
 explicit say-so. The daemon's auto-pull skips such a ticket too: it stays
 queued and `pf queue` marks it 需要交互：缺验收 until its acceptance is
-written in or it is submitted by hand. `build` does not grill the ticket; it asks the owner only on a
+written in or it is submitted by hand. On the same lanes a pre-submit
+analysis rides (polyforge#27): `pf submit` also refuses an execution ticket
+whose content carries no `## 分析` (or `## Analysis`) section with content —
+a dated 「免分析」 the session writes on the owner's explicit skip counts as
+content — unless `--allow-no-analysis` is passed; the daemon's auto-pull
+skips such a ticket too, and `pf queue` marks it 需要交互：未分析 (both
+marks when both are missing). The routing skill's submit fragment owns the
+analysis flow: a read-only `pf task spawn` errand whose 7-item report the
+session writes into the ticket's `## 分析` section. `build` does not grill the ticket; it asks the owner only on a
 surprise, right after the plan and never at completion, with `pf step ask`. Human stops: a dead end or a
 contradiction the code reveals (a defect `build` cannot reproduce included); the plan
 diverging from the ticket; `confirm_plan` (one stop right after the plan, before the
@@ -106,7 +114,11 @@ final tree (`verify.py --unit-runs`). Review blocks only on five classes — `bu
 `workflows/_shared/steps/review.md`, the schema's enum; an owner reply the change
 ignores is `ac_gap`, a deviation or a self-written acceptance list without an owner
 reply, or a reading of the owner's reply its words do not support, is `guarantee`, a
-unit whose replay is not red, an e2e scenario timed by a fixed delay, measuring before
+unit whose replay is not red, a unit without its test-quality record or whose replayed
+red contradicts the recorded reason, a test that only asserts source text exists, a test
+that asserts an asynchronously settling state on one read right after the action instead
+of a bounded poll (the test-quality bar's settle duty), an e2e
+scenario timed by a fixed delay, measuring before
 its state settles or carrying a wrong `carries:` is `test_weakened`). Every other
 finding is non-blocking, listed in the PR body for the owner to ticket or drop; no
 sweep runs.

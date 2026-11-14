@@ -544,11 +544,11 @@ func (u *v1Install) pfExit(t *testing.T, wantExit int, sock string, args ...stri
 const vehicleLane = "micro"
 
 // v1AcceptanceContent is the content the harness's creators give an
-// execution ticket: an acceptance section with one criterion, so the
-// daemon's auto-pull claims it (it skips a ticket listing none)
-// and `pf queue` shows it without the needs-interaction
-// mark.
-const v1AcceptanceContent = "## Acceptance\n\n- AC1 the scenario's ticket runs — carried by build\n"
+// execution ticket: an acceptance section with one criterion and an
+// analysis section, so the daemon's auto-pull claims it (it skips a
+// ticket listing no criterion or carrying no analysis, polyforge#27)
+// and `pf queue` shows it without the needs-interaction marks.
+const v1AcceptanceContent = "## Acceptance\n\n- AC1 the scenario's ticket runs — carried by build\n\n## 分析\n\n- fixture：免分析（2026-11-14）\n"
 
 // newWI files one execution ticket (bundle vehicleLane, no human session
 // required) and scripts its agent with the given plan actions.
@@ -2131,20 +2131,21 @@ func v1BusinessCmd(t *testing.T, cmd *exec.Cmd) {
 		}
 	}
 	cmd.Env = v1BusinessEnvWith(t, cmd.Env, fileSock)
-	cmd.Args = append(cmd.Args[:1:1], submitAllowNoAcceptance(cmd.Args[1:])...)
+	cmd.Args = append(cmd.Args[:1:1], submitAllowNoPrechecks(cmd.Args[1:])...)
 }
 
 // pfGlobalValueFlags are pf's global flags that take a value (cli.Run's
 // global flag set); --json and --version take none.
 var pfGlobalValueFlags = map[string]bool{"config": true, "server": true, "api-key": true, "socket": true, "user": true, "profile": true}
 
-// submitAllowNoAcceptance answers pf's argv (without the program) with
-// `--allow-no-acceptance` appended when its verb — the first positional
-// after the global flags and their values — is `submit` and the switch is
-// absent. The e2e scenarios submit content-less tickets to exercise the
-// daemon, not `pf submit`'s acceptance check (pinned by the cli package's
-// TestW460SubmitAcceptanceCheck).
-func submitAllowNoAcceptance(args []string) []string {
+// submitAllowNoPrechecks answers pf's argv (without the program) with
+// `--allow-no-acceptance` and `--allow-no-analysis` appended when its
+// verb — the first positional after the global flags and their values —
+// is `submit` and the switch is absent. The e2e scenarios submit
+// content-less tickets to exercise the daemon, not `pf submit`'s
+// acceptance and analysis prechecks (pinned by the cli package's
+// TestW460SubmitAcceptanceCheck and TestPF27SubmitAnalysisCheck).
+func submitAllowNoPrechecks(args []string) []string {
 	i := 0
 	for i < len(args) && strings.HasPrefix(args[i], "-") && args[i] != "--" {
 		if pfGlobalValueFlags[strings.TrimLeft(args[i], "-")] {
@@ -2155,10 +2156,16 @@ func submitAllowNoAcceptance(args []string) []string {
 	if i < len(args) && args[i] == "--" {
 		i++
 	}
-	if i >= len(args) || args[i] != "submit" || slices.Contains(args[i+1:], "--allow-no-acceptance") {
+	if i >= len(args) || args[i] != "submit" {
 		return args
 	}
-	return append(slices.Clip(args), "--allow-no-acceptance")
+	out := args
+	for _, flag := range []string{"--allow-no-acceptance", "--allow-no-analysis"} {
+		if !slices.Contains(out[i+1:], flag) {
+			out = append(slices.Clip(out), flag)
+		}
+	}
+	return out
 }
 
 // v1BusinessEnvWith is v1BusinessEnv with the fallback daemon socket to

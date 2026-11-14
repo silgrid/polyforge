@@ -42,6 +42,15 @@
    changed `carries:` header, a changed helper or fixture the test relies on, or an
    input changed so the assertion holds trivially, with no finding cited for it in
    build's 关键决定和理由.
+   The shared test-quality bar (`workflows/_shared/test_quality.md`, included in this
+   step's definition) is the same standard: blocking `test_weakened` too — a unit whose
+   plan entry carries no test-quality record (the behaviour its test observes, why its
+   red is expected, the change it catches); a test that only asserts that some source
+   text exists (unless the acceptance is itself that text or document); a unit whose
+   replayed red fails for another reason than its record states — the red must be the
+   recorded one, not a missing symbol's or a typo's; and a test, of any kind, that breaks
+   the bar's settle duty (an asynchronously settling state asserted on one read right
+   after the action, or a race fixed by a relaxed or "at least" assertion).
 4. **e2e quality (`test_weakened`).** Read every e2e suite the diff adds or changes.
    Blocking `test_weakened`: a scenario synchronised by a fixed delay instead of
    polling the condition it awaits (a bounded poll deadline is fine); one that asserts

@@ -91,7 +91,7 @@ EXTENDED_GLOB and starts a comment after whitespace.
 | analyze a message / 分析这条消息 | `verbs/message.md` (analyze) | daemon |
 | turn a message into a prompt / 把这条消息整理成 prompt | `verbs/message.md` (prompt) | daemon |
 | owner-directed code work on a project repo / upgrade a library / bump the dependency / fix this bug in the repo / change the code / make it do X / refactor X / 升级 X 库 / 升级一下依赖 / 修一下这个 bug / 改一下仓里的 X / 让它支持 X / 重构一下 X | `verbs/execute-intent.md` (execution intent → execution ticket: `file create --bundle <lane>` + `submit`; the session agent never hand-executes) | AIHub + daemon |
-| run it / submit it / start this work item / execute / 跑起来 / 执行这个 WI / 提交执行 | `verbs/submit.md` (its acceptance check first) | daemon |
+| run it / submit it / start this work item / execute / 跑起来 / 执行这个 WI / 提交执行 | `verbs/submit.md` (its acceptance and analysis checks first) | daemon |
 | spawn a task / outsource a research errand / have a fresh agent look into X / start a background investigation / 起个任务 / 外包给一个新 agent / 调研一下 X / 派个只读跑腿 | `verbs/task.md` (read-only errand: research / analysis / report / pre-review only — a code change stays on the execution-ticket route above) | daemon |
 | take over a stuck work item / its machine is dead / force takeover / 接管 / 强制接管 | `verbs/ops.md` (`pf ops end-session`, then `verbs/submit.md`) | AIHub + daemon |
 | how's it going / show progress / what step is it on / watch this one / follow it / 看看进度 / 跑到哪了 / 观察一下 / 盯着 | `verbs/watch.md` (`pf watch`) | daemon |
@@ -296,8 +296,11 @@ Eight standing rules, binding on every polyforge session:
    answer → file one first and route the work through it. Hand-executing bypasses every
    gate — no root-cause, no verification, no review, no delivery record.
    Filing does not grill: a ticket may be filed as a bare idea. Before `pf submit`, run
-   the acceptance check of `verbs/submit.md` — no criterion under `## Acceptance` /
-   `## 验收` means stop, tell the user and grill the acceptance in the session first.
+   the acceptance check of `verbs/submit.md` — and, beside it, its analysis check: no
+   criterion under `## Acceptance` / `## 验收` means stop and grill the acceptance in
+   the session; no content under `## 分析` means run the pre-submit analysis first —
+   a read-only `pf task spawn` errand whose report the session writes into the
+   ticket's `## 分析` section, or the owner's dated 「免分析」.
 8. **Sync the session clone before reading it as fact (session-layer clone sync).**
    Nothing keeps `<workspace>/.repo/<repo>` current: a claim clones fresh into the
    capsule, but the session's reading copy can sit hundreds of commits behind origin's

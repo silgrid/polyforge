@@ -7,6 +7,7 @@ import {
   cardRunningMinutes,
   formatCardDuration,
   formatProgressClock,
+  isProgressAtTop,
   isProgressPinnedToBottom,
   polyforgeCardKey,
   polyforgeContextDetailText,
@@ -351,22 +352,38 @@ export const PROGRESS_RENDER_CHUNK = 200;
  * scroll listener keeps `pinned` — whether the reader is at its bottom
  * (isProgressPinnedToBottom); loading, empty and unavailable states force
  * nothing. A new snapshot or chunk follows growth only while pinned. The
- * `↓ Latest` button (`[data-pf-detail-latest]`) floats over the region's
- * bottom-right whenever it is not at its bottom (overlay, no in-flow
- * height); one click jumps to the bottom immediately and restores
- * following. Folding never treats its own click as a scroll: collapsing
+ * two jump buttons (polyforge#31) float stacked over the region's bottom,
+ * horizontally centered, both reusing the chat session's
+ * `chat-scroll-to-bottom` style: `↓ Latest` (`[data-pf-detail-latest]`)
+ * whenever the region is not at its bottom — one click jumps to the bottom
+ * immediately and restores following — and `↑ Top` (`[data-pf-detail-top]`)
+ * one button higher whenever it is scrolled away from its top
+ * (isProgressAtTop), one smooth scroll to the very top. Folding never treats
+ * its own click as a scroll: collapsing
  * while pinned clamps the region to its new bottom and stays pinned,
  * expanding an older block leaves `scrollTop` untouched (so the reader
- * leaves the bottom, unpins, and the button appears). A tool card's
+ * leaves the bottom, unpins, and the buttons appear). A tool card's
  * expand/collapse and its detail settling are folds too.
  */
-export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef }: {
+export function selectProgressStep(snapshot: PolyforgeProgressSnapshot | null, step: string | null): PolyforgeProgressSnapshot | null {
+  if (!snapshot || !step || !snapshot.available) return snapshot;
+  const lines = snapshot.lines;
+  const layout = progressBlocks(lines);
+  const blocks = layout.blocks.filter((block) => block.step === step);
+  if (layout.blocks.length === 0) return snapshot;
+  const selectedLines = blocks.flatMap((block) => lines.slice(block.first ?? block.start, (block.first ?? block.start) + block.count));
+  return { ...snapshot, lines: selectedLines };
+}
+
+export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef, emptyMessage, resetKey }: {
   wi: string | null;
   profile?: string;
   running: boolean;
   snapshot: PolyforgeProgressSnapshot | null;
   echoes: readonly PolyforgeOwnerEcho[];
   scrollRef: RefObject<HTMLDivElement | null>;
+  emptyMessage?: string;
+  resetKey?: string;
 }) {
   const { t, locale } = useI18n();
   const [visibleCount, setVisibleCount] = useState(PROGRESS_RENDER_CHUNK);
@@ -378,6 +395,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   const selection = useRef(wi);
   const pinned = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
+  const [atTop, setAtTop] = useState(true);
   const lines = snapshot?.lines ?? [];
   const layout = progressBlocks(lines);
   const lastBlockId = layout.blocks.length > 0 ? lines[layout.blocks[layout.blocks.length - 1].start]?.id ?? null : null;
@@ -390,7 +408,8 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setDetails(new Map());
     pinned.current = true;
     setAtBottom(true);
-  }, [wi]);
+    setAtTop(true);
+  }, [wi, resetKey]);
   useEffect(() => {
     const total = snapshot?.lines.length ?? 0;
     if (visibleCount >= total) return;
@@ -406,6 +425,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
       const at = isProgressPinnedToBottom(region);
       pinned.current = at;
       setAtBottom(at);
+      setAtTop(isProgressAtTop(region));
     };
     region.addEventListener("scroll", onScroll, { passive: true });
     return () => region.removeEventListener("scroll", onScroll);
@@ -417,7 +437,10 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   }, [snapshot, visibleCount, streamed, shownEchoes.length, scrollRef]);
   useLayoutEffect(() => {
     const region = scrollRef.current;
-    if (region) setAtBottom(isProgressPinnedToBottom(region));
+    if (region) {
+      setAtBottom(isProgressPinnedToBottom(region));
+      setAtTop(isProgressAtTop(region));
+    }
   }, [snapshot, visibleCount, foldVersion, scrollRef]);
   useLayoutEffect(() => {
     // A fold click is not a scroll: measure the position the toggle left
@@ -430,6 +453,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     const at = isProgressPinnedToBottom(region);
     pinned.current = at;
     setAtBottom(at);
+    setAtTop(isProgressAtTop(region));
   }, [foldVersion, scrollRef]);
   // One tool card's detail, read when that card is expanded:
   // a call already loading or loaded is never asked again; an unavailable one
@@ -457,7 +481,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   }, [loadDetail]);
   const message = !wi || snapshot?.available === false ? t("polyforge.progress.unavailable")
     : !snapshot ? t("polyforge.loading")
-      : snapshot.lines.length === 0 ? t("polyforge.progress.empty") : null;
+      : snapshot.lines.length === 0 ? (emptyMessage ?? t("polyforge.progress.empty")) : null;
   const chunkLimit = Math.max(PROGRESS_RENDER_CHUNK, visibleCount);
   const expanded = (start: number) => {
     const id = lines[start]?.id;
@@ -475,6 +499,15 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     if (region) region.scrollTop = region.scrollHeight;
     pinned.current = true;
     setAtBottom(true);
+    setAtTop(region ? isProgressAtTop(region) : false);
+  };
+  // polyforge#31: the up button's one smooth scroll to the very top. The
+  // passive scroll listener keeps atBottom/atTop as the animation settles —
+  // no optimistic state here, and the follow only ever resumes through
+  // jumpToLatest.
+  const jumpToTop = () => {
+    const region = scrollRef.current;
+    if (region) region.scrollTo({ top: 0, behavior: "smooth" });
   };
   // a subagent entry's expand/collapse is a fold too; a
   // subagent is live only inside a running spawn block (one still marked
@@ -616,16 +649,40 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
               : echo.ack.disposition === "resume" ? t("polyforge.chat.echo.resume")
                 : echo.ack.disposition === "wake" ? t("polyforge.chat.echo.wake")
                   : t("polyforge.chat.echo.pending")))}
-      {!atBottom && (
-        <div data-pf-detail-latest="" style={{ position: "sticky", bottom: 8, alignSelf: "flex-end", width: 0, height: 0, marginTop: -2, zIndex: 1 }}>
+      {/* polyforge#31: the two jump buttons, stacked over the region's bottom,
+          horizontally centered — the same chat-scroll-to-bottom style the
+          interactive session uses, no pill and no second style. Each rides a
+          zero-height sticky anchor (overlay, no in-flow height): the up button
+          one button-height above the latest (8 + 32 + 4 = 44), shown while the
+          region is scrolled away from its top; the latest while it is away
+          from its bottom. */}
+      {!atTop && (
+        <div data-pf-detail-top="" style={{ position: "sticky", bottom: 44, alignSelf: "stretch", height: 0, marginTop: -4, zIndex: 1, display: "flex", justifyContent: "center", alignItems: "flex-end", pointerEvents: "none" }}>
           <button
             type="button"
+            className="chat-scroll-to-bottom is-visible"
+            onClick={jumpToTop}
+            title={t("polyforge.progress.top")}
+            aria-label={t("polyforge.progress.top")}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 19V5M5 12l7-7 7 7" />
+            </svg>
+          </button>
+        </div>
+      )}
+      {!atBottom && (
+        <div data-pf-detail-latest="" style={{ position: "sticky", bottom: 8, alignSelf: "stretch", height: 0, marginTop: -4, zIndex: 1, display: "flex", justifyContent: "center", alignItems: "flex-end", pointerEvents: "none" }}>
+          <button
+            type="button"
+            className="chat-scroll-to-bottom is-visible"
             onClick={jumpToLatest}
             title={t("polyforge.progress.latest")}
             aria-label={t("polyforge.progress.latest")}
-            style={{ position: "absolute", right: 0, bottom: 0, whiteSpace: "nowrap", padding: "3px 8px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text)", fontSize: 11, lineHeight: "16px", cursor: "pointer", boxShadow: "0 1px 4px rgba(0,0,0,0.25)" }}
           >
-            {t("polyforge.progress.latest")}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14M5 12l7 7 7-7" />
+            </svg>
           </button>
         </div>
       )}
@@ -1293,6 +1350,23 @@ export function PolyforgePanel({
   const progressWi = selectedWi ? (selectedJob?.wi ?? watchStatus?.wi ?? null) : null;
   const progressLive = selectedJob?.status === "running";
   const progressSnapshot = usePolyforgeProgress(progressWi, progressLive, selectedJob?.profile);
+  const [selectedStep, setSelectedStep] = useState<string | null>(null);
+  const [selectedStepManual, setSelectedStepManual] = useState(false);
+  const latestProgressStep = progressSnapshot?.lines ? progressBlocks(progressSnapshot.lines).blocks.at(-1)?.step : undefined;
+  // An ended ticket carries no currentStep (the daemon clears it): its last
+  // run step is the newest started step of the watch snapshot; the progress
+  // stream's last block is the fallback when the watch carries no start times.
+  const lastStartedStep = watchStatus ? [...watchStatus.steps].reverse().find((step) => step.startedAt)?.name : undefined;
+  const defaultStep = watchStatus?.currentStep ?? lastStartedStep ?? latestProgressStep ?? graph?.nodes.find((node) => node.status !== "pending")?.id ?? graph?.nodes[0]?.id ?? null;
+  useEffect(() => {
+    setSelectedStep(null);
+    setSelectedStepManual(false);
+  }, [selectedWi]);
+  useEffect(() => {
+    if (!selectedStepManual && defaultStep) setSelectedStep(defaultStep);
+  }, [defaultStep, selectedStepManual]);
+  const selectedProgressSnapshot = selectProgressStep(progressSnapshot, selectedStep);
+  const progressEmptyMessage = selectedStep ? t("polyforge.progress.notRun") : undefined;
   const [echoes, setEchoes] = useState<{ wi: string | null; list: PolyforgeOwnerEcho[] }>({ wi: null, list: [] });
   const detailEchoes = echoes.wi === progressWi ? echoes.list : [];
   const onSent = useCallback((echo: PolyforgeOwnerEcho) => {
@@ -1865,9 +1939,19 @@ export function PolyforgePanel({
                                   <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center" }}>
                                   <span
                                     role="listitem"
+                                    tabIndex={0}
+                                    onClick={() => { setSelectedStep(node.id); setSelectedStepManual(true); }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        setSelectedStep(node.id);
+                                        setSelectedStepManual(true);
+                                      }
+                                    }}
+                                    data-pf-step-selected={selectedStep === node.id}
                                     title={`${node.id} · ${stepStatusLabel(node.status)}${timing ? ` · ${formatEventTime(timing.startedAt)}` : ""}`}
                                     aria-label={`${node.id} · ${stepStatusLabel(node.status)}`}
-                                    style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 6px", borderRadius: 6, border: skipped ? "1px dashed var(--border)" : "1px solid var(--border)", fontSize: 11, color: skipped ? "var(--text-dim)" : "var(--text)", fontFamily: "var(--font-mono, monospace)" }}
+                                    style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 6px", borderRadius: 6, border: skipped ? "1px dashed var(--border)" : "1px solid var(--border)", fontSize: 11, color: skipped ? "var(--text-dim)" : "var(--text)", fontFamily: "var(--font-mono, monospace)", background: selectedStep === node.id ? "var(--bg-selected)" : "transparent", outline: selectedStep === node.id ? "1px solid var(--accent)" : undefined, cursor: "pointer" }}
                                   >
                                     <span
                                       aria-hidden="true"
@@ -1913,7 +1997,7 @@ export function PolyforgePanel({
                               finished job from the status/cards lists, so the
                               wi falls back to the selection's watch snapshot
                               (reset per selection) and the last stream stays. */}
-                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={progressSnapshot} echoes={detailEchoes} scrollRef={detailScrollRef} />
+                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? ""} echoes={detailEchoes} scrollRef={detailScrollRef} />
                         </>
                       ) : (
                       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>{t("polyforge.selectJob")}</div>

@@ -110,7 +110,7 @@ const T = {
   G8: "G8: Node colours encode status and only the in_progress node pulses",
   G9: "G9: Under prefers-reduced-motion no node animates",
   G10: "G10: Node shows the 24-char-cut name; title and aria label carry full name and status",
-  G11: "G11: Clicking a node does nothing",
+  G11: "G11: Clicking a node selects that step (no navigation, no click-caused reads)",
   G12: "G12: Nine nodes wrap onto rows without horizontal scroll in the 460px dock and the mobile sheet",
   G13: "G13: No step name+status chips, no event-mode control and no sync row (the event modes are gone)",
   G14: "G14: Watch route sanitizes declared_steps to ordered ids only",
@@ -354,11 +354,17 @@ try {
       requireNodes(g, 8);
       const url = page.url(); const hits = [];
       page.on("request", (r) => { if (r.url().startsWith(base)) hits.push({ t: Date.now(), path: new URL(r.url()).pathname }); });
-      const titled = await panel.locator("[title]").count();
       // Synchronize just after a watch poll: the next one is ~3s away.
       await page.waitForRequest((r) => new URL(r.url()).pathname === "/api/polyforge/watch", { timeout: 9000 });
       const t0 = Date.now(); await delay(300);
-      for (const n of g.nodes) await panel.getByRole("listitem", { name: n.aria, exact: true }).first().click({ timeout: 2000 });
+      for (const n of g.nodes) {
+        const item = panel.getByRole("listitem", { name: n.aria, exact: true }).first();
+        await item.click({ timeout: 2000 });
+        assert.equal(await item.getAttribute("data-pf-step-selected"), "true", `clicking ${n.text} must select it`);
+      }
+      // The last clicked node stays selected (a manual choice persists).
+      const selected = await panel.locator('[data-pf-detail-graph] [role="listitem"]').evaluateAll((els) => els.filter((el) => el.getAttribute("data-pf-step-selected") === "true").map((el) => el.textContent));
+      assert.equal(selected.length, 1, `exactly one node stays selected (${JSON.stringify(selected)})`);
       await delay(Math.max(0, 2500 - (Date.now() - t0)));
       // Background reads that are not click-caused:
       // - GET /api/agent/running (sidebar poll, RUNNING_SESSIONS_POLL_MS).
@@ -390,7 +396,7 @@ try {
       const early = hits.filter((h) => h.t > t0 + 250 && h.t < t0 + 2500 && !background.has(h.path));
       assert.deepEqual(early, [], `clicking nodes issued ${JSON.stringify(early)}`);
       assert.equal(page.url(), url, "clicking a node navigated");
-      assert.ok((await panel.locator("[data-pf-detail-title]").getByText("pi#209", { exact: true }).count()) > 0 && (await panel.locator("[title]").count()) === titled, "clicking a node changed the detail");
+      assert.ok((await panel.locator("[data-pf-detail-title]").getByText("pi#209", { exact: true }).count()) > 0, "clicking a node kept the detail open");
     });
   });
   await onPage([T.G9], { reducedMotion: "reduce" }, "pi#209", async (page, panel, g) => {

@@ -597,11 +597,45 @@ test("the detail opens at its bottom, offers ↓ Latest and folds spawn blocks",
 });
 
 test("the latest label and line-count wording exist in all three locales", () => {
-  const latest = { en: "↓ Latest", "zh-CN": "↓ 最新", "zh-TW": "↓ 最新" };
+  // polyforge#31: the two jump buttons are icon-only round controls, so the
+  // labels are their aria-labels/titles — no "↓" prefix any more — and the
+  // up button gets its own key in every locale (AC3).
+  const latest = { en: "Scroll to latest", "zh-CN": "回到最新", "zh-TW": "回到最新" };
+  const top = { en: "Scroll to top", "zh-CN": "回到顶部", "zh-TW": "回到頂部" };
   for (const [name, localeSource] of [["en", enSource], ["zh-CN", zhCNSource], ["zh-TW", zhTWSource]]) {
     assert.match(localeSource, new RegExp(`"polyforge\\.progress\\.latest": "${latest[name]}"`), `${name} latest label`);
+    assert.match(localeSource, new RegExp(`"polyforge\\.progress\\.top": "${top[name]}"`), `${name} top label`);
     assert.match(localeSource, /"polyforge\.progress\.lines": "\{count\} \S/, `${name} line-count wording`);
   }
+});
+
+test("polyforge#31: the progress jump buttons reuse the chat style, centered, one down one up", () => {
+  // AC1/AC2: two floating buttons stacked over the region's bottom, both
+  // horizontally centered and reusing the chat session's chat-scroll-to-bottom
+  // style; the old right-aligned text pill is gone. The down button keeps its
+  // instant jump and follow restore; the up button smooth-scrolls to the top.
+  assert.match(source, /data-pf-detail-top=""/);
+  assert.match(source, /!atTop && \(/);
+  assert.match(source, /!atBottom && \(/);
+  for (const anchor of ["data-pf-detail-top", "data-pf-detail-latest"]) {
+    const at = source.indexOf(`${anchor}=""`);
+    assert.ok(at >= 0, `${anchor} exists`);
+    const style = source.slice(at, at + 400);
+    assert.match(style, /position: "sticky", bottom: (8|44), alignSelf: "stretch"/, `${anchor} is a full-width sticky anchor`);
+    assert.match(style, /justifyContent: "center"/, `${anchor} centers its button`);
+    assert.match(style, /pointerEvents: "none"/, `${anchor} never eats the lines' clicks`);
+  }
+  assert.equal((source.match(/chat-scroll-to-bottom is-visible/g) ?? []).length, 2, "both buttons reuse the chat's style class");
+  assert.doesNotMatch(source, /bottom: 8, alignSelf: "flex-end"/, "the old right-aligned pill anchor is gone");
+  assert.doesNotMatch(source, /borderRadius: 10/, "the old pill button style is gone");
+  assert.match(source, /title=\{t\("polyforge\.progress\.latest"\)\}/);
+  assert.match(source, /aria-label=\{t\("polyforge\.progress\.latest"\)\}/);
+  assert.match(source, /title=\{t\("polyforge\.progress\.top"\)\}/);
+  assert.match(source, /aria-label=\{t\("polyforge\.progress\.top"\)\}/);
+  assert.match(source, /const jumpToTop = \(\) => \{/);
+  assert.match(source, /region\.scrollTo\(\{ top: 0, behavior: "smooth" \}\)/);
+  assert.match(source, /region\.scrollTop = region\.scrollHeight;\n\s*pinned\.current = true;/);
+  assert.match(source, /isProgressAtTop/, "the at-top read is the pure helper's");
 });
 
 test("the dock adds Jobs | Messages tabs with an unread dot of its own", () => {
@@ -982,7 +1016,7 @@ test("the detail order is summary (title row, goal, facts, narration, pi#117 fac
     "{/* pi#119 summarize narration",
     "{/* pi#117 facts, moved into the summary",
     "data-pf-detail-graph",
-    "<PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={progressSnapshot} echoes={detailEchoes} scrollRef={detailScrollRef} />",
+    "<PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? \"\"} echoes={detailEchoes} scrollRef={detailScrollRef} />",
   ].map((needle) => detail.indexOf(needle));
   assert.ok(marks.every((index, i) => index >= 0 && (i === 0 || index > marks[i - 1])), `detail order: ${marks}`);
   const after = detail.slice(detail.indexOf("<PolyforgeDetailProgress"));
@@ -1009,7 +1043,7 @@ test("the progress section renders every stream line in full (wrapping, no ellip
   assert.match(block, /t\("polyforge\.progress\.title"\)/);
   assert.match(block, /!wi \|\| snapshot\?\.available === false \? t\("polyforge\.progress\.unavailable"\)/, "nothing readable: the unavailable state, no fabricated line");
   assert.match(block, /: !snapshot \? t\("polyforge\.loading"\)/, "Loading only until the first read settles");
-  assert.match(block, /snapshot\.lines\.length === 0 \? t\("polyforge\.progress\.empty"\)/);
+  assert.match(block, /snapshot\.lines\.length === 0 \? \(emptyMessage \?\? t\("polyforge\.progress\.empty"\)\)/);
   assert.match(block, /snapshot\.omitted > 0 && \(\s*<span data-pf-progress-omitted="" [^>]*>\{t\("polyforge\.progress\.omitted", \{ count: snapshot\.omitted \}\)\}<\/span>/, "a legacy omitted count still renders before the lines");
   assert.match(source, /export const PROGRESS_RENDER_CHUNK = 200;/);
   assert.match(block, /const total = snapshot\?\.lines\.length \?\? 0;\s*if \(visibleCount >= total\) return;\s*const frame = requestAnimationFrame\(\(\) => \{\s*setVisibleCount\(\(current\) => Math\.min\(total, current \+ PROGRESS_RENDER_CHUNK\)\);/, "a large stream appends one bounded chunk per animation frame");
@@ -1056,10 +1090,11 @@ test(" (owner intentional change, reversing #238): the detail opens at its botto
   assert.match(block, /const streamed = Boolean\(snapshot\?\.available && lines\.length > 0\);/, "nothing is forced while loading, empty or unavailable");
   assert.match(block, /useLayoutEffect\(\(\) => \{\s*const region = scrollRef\.current;\s*if \(region && streamed && pinned\.current\) region\.scrollTop = region\.scrollHeight;\s*\}, \[snapshot, visibleCount, streamed, shownEchoes\.length, scrollRef\]\);/, "the first stream, every later chunk and an echoed owner message end at the whole region's bottom while pinned");
   assert.match(block, /setVisibleCount\(PROGRESS_RENDER_CHUNK\);/, "another job re-chunks its stream");
-  assert.match(block, /const onScroll = \(\) => \{\s*const at = isProgressPinnedToBottom\(region\);\s*pinned\.current = at;\s*setAtBottom\(at\);\s*\};/, "a passive listener tracks the follow state and the control's visibility");
+  assert.match(block, /const onScroll = \(\) => \{\s*const at = isProgressPinnedToBottom\(region\);\s*pinned\.current = at;\s*setAtBottom\(at\);\s*setAtTop\(isProgressAtTop\(region\)\);\s*\};/, "a passive listener tracks the follow state and both controls' visibility (the at-top read since polyforge#31)");
   assert.match(block, /if \(region\) region\.scrollTop = region\.scrollHeight;\s*pinned\.current = true;/, "a click on ↓ Latest jumps immediately and restores following");
-  assert.match(block, /!atBottom && \(/, "the control is visible exactly while the region is off its bottom");
-  assert.doesNotMatch(block, /scrollTo\(|smooth/i, "the jump is not animated");
+  assert.match(block, /!atBottom && \(/, "the latest control is visible exactly while the region is off its bottom");
+  assert.match(block, /!atTop && \(/, "the top control is visible exactly while the region is off its top (polyforge#31)");
+  assert.match(block, /const jumpToTop = \(\) => \{\s*const region = scrollRef\.current;\s*if \(region\) region\.scrollTo\(\{ top: 0, behavior: "smooth" \}\);\s*\};/, "the up button's one click smooth-scrolls to the very top (polyforge#31 — the latest jump stays instant)");
   assert.doesNotMatch(block, /unread/i, "the control carries no unread count");
 });
 
@@ -1169,3 +1204,42 @@ test(" DAG: a skipped step is grayed", () => {
   assert.match(item, /aria-label=\{`\$\{node\.id\} · \$\{stepStatusLabel\(node\.status\)\}`\}/);
   assert.match(zhCNSource, /"polyforge\.stepStatus\.skipped": "已跳过",/);
 });
+
+test("polyforge#24: selectProgressStep keeps every matching rerun block and empties unstarted steps", () => {
+  const helper = source.slice(source.indexOf("export function selectProgressStep"), source.indexOf("\n}\n", source.indexOf("export function selectProgressStep")) + 2).replace(/export /g, "");
+  const context = vm.createContext({ progressBlocks: (lines) => {
+    const starts = lines.map((line, index) => line.event === "step_started" ? index : -1).filter((index) => index >= 0);
+    return { blocks: starts.map((start, index) => {
+      const end = starts[index + 1] ?? lines.length;
+      const match = /▶ ([^ #]+) /.exec(lines[start].text);
+      return { start, count: end - start, step: match?.[1] };
+    }) };
+  }});
+  vm.runInContext(stripTypeScriptTypes(helper), context);
+  const lines = [
+    { id: "lead", kind: "narration", text: "lead" },
+    { id: "s1", kind: "event", event: "step_started", text: "▶ spec #1 · pi" },
+    { id: "r1", kind: "narration", text: "round one" },
+    { id: "s2", kind: "event", event: "step_started", text: "▶ spec #2 · claude" },
+    { id: "r2", kind: "narration", text: "round two" },
+    { id: "c1", kind: "event", event: "step_started", text: "▶ code #1 · pi" },
+  ];
+  const snapshot = { available: true, lines, omitted: 0 };
+  assert.deepEqual(context.selectProgressStep(snapshot, "spec").lines.map((line) => line.id), ["s1", "r1", "s2", "r2"]);
+  assert.deepEqual(context.selectProgressStep(snapshot, "review").lines, []);
+});
+
+test("polyforge#24: DAG selection wiring follows current step until a manual choice", () => {
+  assert.match(source, /const \[selectedStep, setSelectedStep\] = useState<string \| null>\(null\);/);
+  assert.match(source, /const \[selectedStepManual, setSelectedStepManual\] = useState\(false\);/);
+  assert.match(source, /onClick=\{\(\) => \{ setSelectedStep\(node\.id\); setSelectedStepManual\(true\); \}\}/);
+  assert.match(source, /data-pf-step-selected=\{selectedStep === node\.id\}/);
+  assert.match(source, /const selectedProgressSnapshot = selectProgressStep\(progressSnapshot, selectedStep\);/);
+  assert.match(source, /function selectProgressStep\(snapshot: PolyforgeProgressSnapshot \| null, step: string \| null\)/);
+  assert.match(source, /layout\.blocks\.filter\(\(block\) => block\.step === step\)/);
+  assert.match(source, /blocks\.flatMap\(\(block\) => lines\.slice\(block\.first \?\? block\.start, \(block\.first \?\? block\.start\) \+ block\.count\)\)/);
+  assert.match(source, /if \(!selectedStepManual && defaultStep\) setSelectedStep\(defaultStep\);/);
+  assert.match(source, /const defaultStep = watchStatus\?\.currentStep \?\? lastStartedStep \?\? latestProgressStep/, "an ended ticket's default is its last started step, ahead of the progress-stream fallback");
+  assert.match(source, /title=\{`\$\{node\.id\} · \$\{stepStatusLabel\(node\.status\)\}\$\{timing \? ` · \$\{formatEventTime\(timing\.startedAt\)\}` : ""\}`\}/);
+});
+

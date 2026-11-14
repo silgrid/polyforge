@@ -139,7 +139,7 @@ func w348Run(t *testing.T, e w348Env, dir, stdin string, args ...string) (string
 		env = append(env, "POLYFORGE_DATA_DIR="+e.dataDir)
 	}
 	env = append(env, e.extra...)
-	cmd := exec.Command(pfPath, submitAllowNoAcceptance(args)...)
+	cmd := exec.Command(pfPath, submitAllowNoPrechecks(args)...)
 	cmd.Env = env
 	cmd.Dir = dir
 	if stdin != "" {
