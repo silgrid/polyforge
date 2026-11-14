@@ -189,6 +189,7 @@ type Header struct {
 	// Language is the dispatch's agent language (its spawn-journal line,
 	// capsule.DispatchLanguage): the labels the header is stamped in.
 	Language string
+	Usage    UsageSummary
 }
 
 // RenderSection answers the section the daemon appends: the stamped
@@ -217,6 +218,29 @@ func RenderSection(h Header, body string) string {
 	row(l.Duration, h.Duration)
 	row(l.Model, h.Model)
 	row(l.Status, status)
+	if h.Language == LangEN || h.Language == "" {
+		if h.Usage.Known {
+			row(l.Usage, fmt.Sprintf("input %d, cache read %d, cache write %d, output %d, context peak %d", h.Usage.Input, h.Usage.CacheRead, h.Usage.CacheWrite, h.Usage.Output, h.Usage.ContextPeak))
+		} else {
+			row(l.Usage, "unknown")
+		}
+		if h.Usage.IncludesSubagents {
+			row(l.UsageScope, "included")
+		} else {
+			row(l.UsageScope, "excluded")
+		}
+	} else {
+		if h.Usage.Known {
+			row(l.Usage, fmt.Sprintf("输入 %d，缓存读 %d，缓存写 %d，输出 %d，上下文峰值 %d", h.Usage.Input, h.Usage.CacheRead, h.Usage.CacheWrite, h.Usage.Output, h.Usage.ContextPeak))
+		} else {
+			row(l.Usage, "未知")
+		}
+		if h.Usage.IncludesSubagents {
+			row(l.UsageScope, "包含")
+		} else {
+			row(l.UsageScope, "不包含")
+		}
+	}
 	if h.Reason != "" {
 		row(l.Reason, h.Reason)
 	}

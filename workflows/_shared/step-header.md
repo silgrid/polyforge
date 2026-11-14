@@ -14,7 +14,9 @@ only ever grows; nobody rewrites it.
 - **The opening** (the daemon's, written at claim): the work item, its goal, its
   acceptance list verbatim and the lane's step order.
 - **One section per hand-off**, oldest first. Its header is the daemon's stamp — step,
-  round, dispatch, start, end, model, status, the owner messages that step received in
+  round, dispatch, start, end, duration, model, status, token usage (input, cache read,
+  cache write, output and context peak), whether sub-agent usage is included, the owner
+  messages that step received in
   that round (verbatim), the owner message a status cited (`--per-owner`, verbatim), each
   task repo's start → end commit with its diff stat, the evidence files. Its body (under
   Body / 正文) is that step's own account.
