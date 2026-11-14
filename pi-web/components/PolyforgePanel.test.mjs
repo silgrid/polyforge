@@ -898,8 +898,10 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
   // Icon-only on mobile, named by the existing tab copy; desktop keeps the visible label.
   assert.match(work, /aria-label=\{isMobile \? label : undefined\}\s*title=\{isMobile \? label : undefined\}/, "the icon-only button is named by its tab copy");
   assert.match(work, /\{isMobile \? WORK_TAB_ICONS\[tab\] : <span>\{label\}<\/span>\}/, "icon on mobile, visible label on desktop");
-  assert.match(work, /\.\.\.\(isMobile \? \{ width: "100%", height: 40, padding: 0 \} : \{ padding: "10px 4px" \}\)/, "about 40×40 mobile buttons");
-  assert.match(work, /display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center"/, "the badge sits under the icon/label");
+  assert.match(work, /\.\.\.\(isMobile \? \{ width: "100%", height: 40, padding: 0 \} : \{ padding: "10px 4px", flexWrap: "nowrap", whiteSpace: "nowrap" \}\)/, "about 40×40 mobile buttons; the desktop label+badge row never wraps (polyforge#22)");
+  // polyforge#22 AC1: mobile keeps the icon-over-badge stack; desktop is a row —
+  // the badge rides right of the label on one line.
+  assert.match(work, /display: "flex", flexDirection: isMobile \? "column" : "row", alignItems: "center", justifyContent: "center"/, "mobile stacks the icon over the badge; desktop puts the badge right of the label on one line (polyforge#22)");
   assert.match(source, /const workTabIcon = \(paths: ReactNode\) => \(\s*<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">/, "16px icons in the panel's 24-viewBox stroke style");
   // intentional fourth sub-tab: 待集成 has its rail icon too.
   for (const tab of ["jobs", "tasks", "items", "integrate"]) assert.match(source, new RegExp(`\\n  ${tab}: workTabIcon\\(`), `${tab} has a rail icon`);

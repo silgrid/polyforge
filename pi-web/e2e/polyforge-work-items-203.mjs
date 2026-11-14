@@ -292,10 +292,14 @@ try {
     for (const [locale, label] of [["en", "All"], ["zh-TW", "全部"]]) {
       await withPage({ locale, storage: { "pi-locale": locale } }, async (page) => {
         await openWork(page);
-        // The label line is read once it has rendered (bounded); the assertion below is unchanged.
-        await waitFor(async () => (await segment(page, new RegExp(label, "i")).innerText()).trim().split("\n")[0].trim() !== "", `${locale}: the third sub-tab's label line renders`, NAV_MS);
-        // Owner ruling 2026-10-31 (authored-check-defects-203): compare the whole label line (the badge sits on its own line), not the first whitespace token.
-        assert.equal((await segment(page, new RegExp(label, "i")).innerText()).trim().split("\n")[0].trim(), label, `${locale} labels the third sub-tab ${label}`);
+        // polyforge#22: the badge rides the label's line on the desktop rail, so
+        // the label is read from its own span — the whole-line read of the
+        // 2026-10-31 ruling now carries the count too; the same-line geometry
+        // itself is pinned by polyforge-panel-213's S213-13.
+        const labelText = (locator) => locator.evaluate((el) => (el.querySelector("span:not([data-pf-work-badge])") ?? el).textContent.trim());
+        const third = segment(page, new RegExp(label, "i"));
+        await waitFor(async () => (await labelText(third)) !== "", `${locale}: the third sub-tab's label line renders`, NAV_MS);
+        assert.equal(await labelText(third), label, `${locale} labels the third sub-tab ${label}`);
       });
     }
     // owner-intended change（重立自 #209）: at ≤640px the three sub-tabs
