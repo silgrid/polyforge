@@ -209,7 +209,7 @@ func (sc *stepCall) stamp(lines []stepcall.Line, st *capsule.Step, a stepcall.Ha
 		OwnerMessages: owner, PerOwner: perOwner, Evidence: evidence,
 		Language: capsule.DispatchLanguage(j.capsuleDir, j.step, int64(j.attempt)),
 	}
-	h.Usage = handoffUsage(j.capsuleDir, j.step, int64(j.attempt))
+	h.Usage = handoffUsage(sc.d, j.capsuleDir, j.step, int64(j.attempt))
 	l := stepcall.LabelsOf(h.Language)
 	if st != nil {
 		h.StartedAt, h.Model = st.StepStartedAt, st.Candidate
@@ -268,31 +268,39 @@ func (sc *stepCall) stamp(lines []stepcall.Line, st *capsule.Step, a stepcall.Ha
 // handoffUsage gathers the current dispatch transcript and its persisted
 // subagent sidecars. The header states inclusion explicitly even when the
 // sidecar directory is empty.
-func handoffUsage(capsuleDir, step string, spawn int64) stepcall.UsageSummary {
+func handoffUsage(d *Daemon, capsuleDir, step string, spawn int64) stepcall.UsageSummary {
 	entries, _ := capsule.ReadSpawnJournal(capsuleDir)
-	var transcript string
+	var current capsule.SpawnJournalEntry
 	for _, e := range entries {
 		if e.StepID == step && int64(e.SpawnN) == spawn {
-			transcript = e.Transcript
+			current = e
 		}
 	}
-	if transcript == "" {
-		return stepcall.ReadUsage(nil, true)
+	if d == nil || d.locateTranscript == nil {
+		return stepcall.ReadUsage(nil, false)
 	}
-	paths := []string{transcript}
-	for _, dir := range []string{capsule.SubagentDir(transcript)} {
-		items, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, item := range items {
-			if item.IsDir() || !strings.HasSuffix(item.Name(), ".jsonl") {
+	live := d.locateTranscript(capsuleDir, entries)
+	if live == "" {
+		return stepcall.ReadUsage(nil, false)
+	}
+	paths := []string{live}
+	includes := false
+	if rel, err := filepath.Rel(capsuleDir, live); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		for _, dir := range []string{capsule.SubagentDir(live)} {
+			items, err := os.ReadDir(dir)
+			if err != nil {
 				continue
 			}
-			paths = append(paths, filepath.Join(dir, item.Name()))
+			for _, item := range items {
+				if item.IsDir() || !strings.HasSuffix(item.Name(), ".jsonl") {
+					continue
+				}
+				paths = append(paths, filepath.Join(dir, item.Name()))
+				includes = true
+			}
 		}
 	}
-	return stepcall.ReadUsage(paths, true)
+	return stepcall.ReadUsage(paths, includes, current.StartedAt)
 }
 
 func attemptEvent(at capsule.Attempt) string {

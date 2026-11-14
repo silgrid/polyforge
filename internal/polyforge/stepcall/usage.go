@@ -13,34 +13,12 @@ type UsageSummary struct {
 	IncludesSubagents                    bool
 }
 type usageValues struct{ input, read, write, output int64 }
-type usageRecord struct {
-	Type    string `json:"type"`
-	Message struct {
-		ID    string `json:"id"`
-		Usage *struct {
-			Input             int64 `json:"input"`
-			Output            int64 `json:"output"`
-			CacheRead         int64 `json:"cacheRead"`
-			CacheWrite        int64 `json:"cacheWrite"`
-			InputTokens       int64 `json:"input_tokens"`
-			OutputTokens      int64 `json:"output_tokens"`
-			CacheReadTokens   int64 `json:"cache_read_input_tokens"`
-			CacheCreateTokens int64 `json:"cache_creation_input_tokens"`
-		} `json:"usage"`
-	} `json:"message"`
-	Usage *struct {
-		Input             int64 `json:"input"`
-		Output            int64 `json:"output"`
-		CacheRead         int64 `json:"cacheRead"`
-		CacheWrite        int64 `json:"cacheWrite"`
-		InputTokens       int64 `json:"input_tokens"`
-		OutputTokens      int64 `json:"output_tokens"`
-		CacheReadTokens   int64 `json:"cache_read_input_tokens"`
-		CacheCreateTokens int64 `json:"cache_creation_input_tokens"`
-	} `json:"usage"`
-}
 
-func ReadUsage(paths []string, includesSubagents bool) UsageSummary {
+func ReadUsage(paths []string, includesSubagents bool, start ...string) UsageSummary {
+	since := ""
+	if len(start) > 0 {
+		since = start[0]
+	}
 	out := UsageSummary{IncludesSubagents: includesSubagents}
 	seen := map[string]bool{}
 	for _, path := range paths {
@@ -49,59 +27,45 @@ func ReadUsage(paths []string, includesSubagents bool) UsageSummary {
 			continue
 		}
 		sc := bufio.NewScanner(f)
-		var lastPi *usageValues
-		var claudeSeen bool
-		var result *usageValues
 		for sc.Scan() {
-			var r usageRecord
-			if json.Unmarshal(sc.Bytes(), &r) != nil {
+			var rec struct {
+				Type      string `json:"type"`
+				Timestamp string `json:"timestamp"`
+				Message   struct {
+					ID    string `json:"id"`
+					Usage *struct {
+						Input             int64 `json:"input"`
+						Output            int64 `json:"output"`
+						CacheRead         int64 `json:"cacheRead"`
+						CacheWrite        int64 `json:"cacheWrite"`
+						InputTokens       int64 `json:"input_tokens"`
+						OutputTokens      int64 `json:"output_tokens"`
+						CacheReadTokens   int64 `json:"cache_read_input_tokens"`
+						CacheCreateTokens int64 `json:"cache_creation_input_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			if json.Unmarshal(sc.Bytes(), &rec) != nil {
 				continue
 			}
-			if r.Type == "assistant" && r.Message.Usage != nil {
-				claudeSeen = true
-				if r.Message.ID != "" && seen[r.Message.ID] {
+			if since != "" && rec.Timestamp != "" && rec.Timestamp < since {
+				continue
+			}
+			if rec.Type == "assistant" && rec.Message.Usage != nil {
+				if rec.Message.ID != "" && seen[rec.Message.ID] {
 					continue
 				}
-				if r.Message.ID != "" {
-					seen[r.Message.ID] = true
+				if rec.Message.ID != "" {
+					seen[rec.Message.ID] = true
 				}
-				u := r.Message.Usage
+				u := rec.Message.Usage
 				out.add(usageValues{u.InputTokens, u.CacheReadTokens, u.CacheCreateTokens, u.OutputTokens})
 				continue
 			}
-			if r.Type == "result" && r.Usage != nil {
-				u := r.Usage
-				v := usageValues{u.InputTokens, u.CacheReadTokens, u.CacheCreateTokens, u.OutputTokens}
-				result = &v
-				continue
+			if rec.Type == "message" && rec.Message.Usage != nil {
+				u := rec.Message.Usage
+				out.add(usageValues{u.Input, u.CacheRead, u.CacheWrite, u.Output})
 			}
-			if r.Type == "message" && r.Message.Usage != nil {
-				u := r.Message.Usage
-				v := usageValues{u.Input, u.CacheRead, u.CacheWrite, u.Output}
-				if lastPi != nil && *lastPi == v {
-					continue
-				}
-				x := v
-				lastPi = &x
-				out.add(v)
-				continue
-			}
-			if r.Usage != nil {
-				u := r.Usage
-				v := usageValues{u.Input, u.CacheRead, u.CacheWrite, u.Output}
-				if v.input == 0 && v.read == 0 && v.write == 0 && v.output == 0 {
-					v = usageValues{u.InputTokens, u.CacheReadTokens, u.CacheCreateTokens, u.OutputTokens}
-				}
-				if lastPi != nil && *lastPi == v {
-					continue
-				}
-				x := v
-				lastPi = &x
-				out.add(v)
-			}
-		}
-		if result != nil && !claudeSeen {
-			out.add(*result)
 		}
 		_ = f.Close()
 	}
