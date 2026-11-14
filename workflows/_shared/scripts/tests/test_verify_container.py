@@ -329,7 +329,7 @@ class ContainerRunTest(unittest.TestCase):
         assert c is not None
         left = c.get("left", "")
         self.assertIn("cut at its deadline", left)
-        lines = r.stderr.splitlines()
+        lines = [ln for ln in r.stderr.splitlines() if "was left behind" in ln]
         self.assertEqual(len(lines), 1, "want one line naming the container: %r" % r.stderr)
         self.assertIn("cid-1", lines[0])
         self.assertIn(c["name"], lines[0])

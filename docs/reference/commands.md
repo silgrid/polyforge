@@ -347,7 +347,13 @@ command's private `TMPDIR` is named, with its length in bytes, under its
 repo's plan in `report-mechanical.md`, and carried as `tmp_dir` in
 `result.json`'s `repos[].commands[]` and in the result file's
 `details.checks[]`, to check the path and length behind the `<tmp>` the
-failure output shows (failure signatures keep `<tmp>`). Failing tests are re-run at HEAD with
+failure output shows (failure signatures keep `<tmp>`). Every progress
+line is said on stderr and, inside a step, appended to the step's progress
+file (`pfstep.progress`, docs/reference/workflow-contract.md "Scripts";
+Pi Web's progress card reads it while a command has not ended): each plan
+command opens with `[i/n] <name> (<phase>): <cmd>` and closes with
+`PASS (<duration>)`, `FAIL - exit <n> (<duration>), log <path>`,
+`SKIP - <why>` or `not started - <why>` — gate.py's format. Failing tests are re-run at HEAD with
 the command's own flags (a pass there is recorded `flaky n/m`); a failure
 that exists on the base and fails there the same way on every base run, in
 a throwaway worktree outside the capsule, is pre-existing. A command whose
