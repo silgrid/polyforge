@@ -46,7 +46,7 @@
    step's definition) is the same standard: blocking `test_weakened` too — a unit whose
    plan entry carries no test-quality record (the behaviour its test observes, why its
    red is expected, the change it catches); a test that only asserts that some source
-   text exists (unless the acceptance is itself that text or document); and a unit whose
+   text exists (unless the acceptance is itself that text or document); a unit whose
    replayed red fails for another reason than its record states — the red must be the
    recorded one, not a missing symbol's or a typo's; and a test, of any kind, that breaks
    the bar's settle duty (an asynchronously settling state asserted on one read right
