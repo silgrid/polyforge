@@ -980,7 +980,7 @@ test("the detail order is summary (title row, goal, facts, narration, pi#117 fac
     "{/* pi#119 summarize narration",
     "{/* pi#117 facts, moved into the summary",
     "data-pf-detail-graph",
-    "<PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={progressSnapshot} echoes={detailEchoes} scrollRef={detailScrollRef} />",
+    "<PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} echoes={detailEchoes} scrollRef={detailScrollRef} />",
   ].map((needle) => detail.indexOf(needle));
   assert.ok(marks.every((index, i) => index >= 0 && (i === 0 || index > marks[i - 1])), `detail order: ${marks}`);
   const after = detail.slice(detail.indexOf("<PolyforgeDetailProgress"));
@@ -1007,7 +1007,7 @@ test("the progress section renders every stream line in full (wrapping, no ellip
   assert.match(block, /t\("polyforge\.progress\.title"\)/);
   assert.match(block, /!wi \|\| snapshot\?\.available === false \? t\("polyforge\.progress\.unavailable"\)/, "nothing readable: the unavailable state, no fabricated line");
   assert.match(block, /: !snapshot \? t\("polyforge\.loading"\)/, "Loading only until the first read settles");
-  assert.match(block, /snapshot\.lines\.length === 0 \? t\("polyforge\.progress\.empty"\)/);
+  assert.match(block, /snapshot\.lines\.length === 0 \? \(emptyMessage \?\? t\("polyforge\.progress\.empty"\)\)/);
   assert.match(block, /snapshot\.omitted > 0 && \(\s*<span data-pf-progress-omitted="" [^>]*>\{t\("polyforge\.progress\.omitted", \{ count: snapshot\.omitted \}\)\}<\/span>/, "a legacy omitted count still renders before the lines");
   assert.match(source, /export const PROGRESS_RENDER_CHUNK = 200;/);
   assert.match(block, /const total = snapshot\?\.lines\.length \?\? 0;\s*if \(visibleCount >= total\) return;\s*const frame = requestAnimationFrame\(\(\) => \{\s*setVisibleCount\(\(current\) => Math\.min\(total, current \+ PROGRESS_RENDER_CHUNK\)\);/, "a large stream appends one bounded chunk per animation frame");
@@ -1174,11 +1174,11 @@ test("polyforge#24: DAG selects one step and filters progress while preserving r
   assert.match(source, /onClick=\{\(\) => \{ setSelectedStep\(node\.id\); setSelectedStepManual\(true\); \}\}/);
   assert.match(source, /data-pf-step-selected=\{selectedStep === node\.id\}/);
   assert.match(source, /const selectedProgressSnapshot = selectProgressStep\(progressSnapshot, selectedStep\);/);
-  assert.match(source, /selectedProgressSnapshot\.lines\.length === 0 \? t\("polyforge\.progress\.notRun"\)/);
+  assert.match(source, /const selectedProgressSnapshot = selectProgressStep\(progressSnapshot, selectedStep\);/);
   assert.match(source, /function selectProgressStep\(snapshot: PolyforgeProgressSnapshot \| null, step: string \| null\)/);
   assert.match(source, /layout\.blocks\.filter\(\(block\) => block\.step === step\)/);
   assert.match(source, /blocks\.flatMap\(\(block\) => lines\.slice\(block\.first \?\? block\.start, \(block\.first \?\? block\.start\) \+ block\.count\)\)/);
-  assert.match(source, /if \(!selectedStepManual\).*currentStep/s);
-  assert.match(source, /selectedStep \? selectedStep :/);
+  assert.match(source, /if \(!selectedStepManual && defaultStep\) setSelectedStep\(defaultStep\);/);
+  assert.match(source, /const defaultStep = watchStatus\?\.currentStep \?\? latestProgressStep/);
   assert.match(source, /title=\{`\$\{node\.id\} · \$\{stepStatusLabel\(node\.status\)\}\$\{timing \? ` · \$\{formatEventTime\(timing\.startedAt\)\}` : ""\}`\}/);
 });

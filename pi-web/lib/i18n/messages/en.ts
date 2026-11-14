@@ -1987,6 +1987,7 @@ export const enLocale: LocalePlugin = {
     "polyforge.card.skipped": "skipped",
     "polyforge.progress.title": "Execution progress",
     "polyforge.progress.empty": "No progress yet",
+    "polyforge.progress.notRun": "Not run yet",
     "polyforge.progress.unavailable": "Progress unavailable",
     "polyforge.progress.omitted": "{count} earlier lines omitted",
     "polyforge.progress.lines": "{count} lines",
