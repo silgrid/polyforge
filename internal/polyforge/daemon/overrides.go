@@ -40,12 +40,13 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
-// The overlay source labels (protocol.OverrideStepView.Source).
+// The overlay source labels (protocol.OverrideStepView.Source). The
+// manual list's own label lives in workspace.StepModelSources
+// ("pf submit --models"); the chain commit's message prefix is the
+// runtime's ("step override: ").
 const (
-	overrideSource       = "step override"
-	overrideSourcePend   = "step override (pending)"
-	manualModelsSource   = "pf submit --models"
-	overrideCommitPrefix = "step override: "
+	overrideSource     = "step override"
+	overrideSourcePend = "step override (pending)"
 )
 
 // overrideScene is the posture the routes resolve a work item to, with
