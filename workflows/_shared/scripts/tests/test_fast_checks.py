@@ -248,7 +248,7 @@ class CheckUnitsTest(FastChecksCase):
 
     def test_the_23_marker_is_red_with_the_closest_line(self) -> None:
         code, res = self.run_units([
-            self.unit("u1", MARKER_23, ["sh", "-c", "echo '%s'" % LINE_23]),
+            self.unit("u1", MARKER_23, ["sh", "-c", "echo 'a plain unrelated output line'; echo '%s'" % LINE_23]),
         ])
         self.assertEqual(code, 1, res)
         self.assertEqual(res["verdict"], "fail")
@@ -317,6 +317,53 @@ class CheckUnitsTest(FastChecksCase):
             f.write("not json")
         code, res = self.run_checks("", extra=("--check-units", p))
         self.assertEqual(code, 2)
+
+
+class FullPhaseNeverRunsTest(FastChecksCase):
+    """AC2 (review r1 #1): a report that falls back to the full tier — a
+    stack config file changed — never has its full-phase commands run:
+    only the fast gates execute, and the run stays green."""
+
+    def test_a_root_report_falling_back_to_full_runs_fast_only(self) -> None:
+        clone = self.task_repo("app", {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf":
+                "stack=go\nfast_gate=echo fast-one\nfull_command=echo full-ran > full.txt\n",
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+        }, {"go.mod": GO_MOD + "\n// touched in the change\n"})
+        code, res = self.run_checks("app")
+        self.assertEqual(code, 0, res)
+        self.assertEqual(res["details"]["reports"][0]["mode"], "full")
+        cmds = self.commands_of(res)
+        self.assertTrue(cmds)
+        for c in cmds:
+            self.assertEqual(c["phase"], "fast", c)
+        self.assertFalse(os.path.exists(os.path.join(clone, "full.txt")), "the full phase ran")
+
+    def test_a_nested_report_falling_back_to_full_runs_fast_only(self) -> None:
+        files = {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf": CONF,
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+            "webapp/.polyforge/verify-scope.conf":
+                "stack=npm\nfast_gate=test -f package-lock.json && pwd > nested-root.txt\n"
+                "full_command=echo nested-full > nested-full.txt\n",
+            "webapp/package.json": '{"name": "webapp", "version": "1.0.0"}\n',
+            "webapp/package-lock.json": '{"name": "webapp", "lockfileVersion": 3}\n',
+        }
+        clone = self.task_repo("app", files, {"webapp/package.json": '{"name": "webapp", "version": "1.0.1"}\n'})
+        code, res = self.run_checks("app")
+        self.assertEqual(code, 0, res)
+        nested = [c for c in self.commands_of(res) if c["root"] == "repos/app/webapp"]
+        self.assertTrue(nested, "the nested root is planned")
+        for c in nested:
+            self.assertEqual(c["phase"], "fast", c)
+        with open(os.path.join(clone, "webapp", "nested-root.txt"), encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), os.path.join(clone, "webapp"))
+        self.assertFalse(os.path.exists(os.path.join(clone, "webapp", "nested-full.txt")), "the nested full phase ran")
+        self.assertFalse(os.path.exists(os.path.join(clone, "full.txt")), "the root full phase ran")
 
 
 class UsageTest(FastChecksCase):
