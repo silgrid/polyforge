@@ -257,10 +257,10 @@ whose PR is still open clones the default branch without A's changes.
 
 **When filing, check for overlap first.** Before `pf file create` of an
 execution ticket, run `pf queue --project P` and look at the queued,
-running and paused work items. Add `--after <slug>` only when the new
-work item clearly touches the same work as one of them (the same design
-or code area being reshaped, or it needs that one's result). If unsure,
-do not add it — ordinary merge conflicts are handled at delivery.
+running and paused work items. When a second ticket is in the same area
+（同一组文件或同一概念）, add `--after <slug>` as a dependency, or merge the
+work into one ticket. Do not run parallel tickets against the same semantic
+surface. If unsure whether the work overlaps, ask the owner before filing.
 
 `--project` inference: when the flag is omitted, the CLI resolves the
 working directory against the `[workspace."<path>"]` mapping of the Cell
