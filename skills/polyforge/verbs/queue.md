@@ -108,6 +108,7 @@ fixed, not a judgment call.
 | (no code) `queue: --attr "…" is not <path>=<value>` | An `--attr` with no `=` or an empty path | Nothing was sent — write it as `<path>=<value>`. |
 | (no code) `queue: --bundle/--attr cannot be combined with --ready` | A filter with `--ready` | They filter the list mode only — drop `--ready` or the filter. |
 | (no code) `queue: project P: ...` | A per-project fetch failed in merged mode | The verb fails naming the failing project — fake coverage is worse than none; retry or scope with `--project`. |
+| `CORE-403` `PROJECT_DEACTIVATED` (merged mode only) | A mapped project is deactivated | The default merged view skips deactivated projects entirely (polyforge#30); an explicit `--project P` still reads one (its reads keep answering). This code in merged mode means the skip's status read raced a deactivation — re-run the verb. |
 
 `DAEMON-503` naming the Cell means that Cell's AIHub is not reachable (the
 daemon forwards every business call; other Cells keep serving) — check the

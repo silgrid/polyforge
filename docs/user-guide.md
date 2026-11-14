@@ -390,6 +390,41 @@ item whose `clean_pause` was cleared elsewhere stays paused across a restart
 of the disabled Cell — run `pf resume` again once it admits it); reads, `pf cancel`,
 `pf pause` and a job already running are unaffected.
 
+## Deactivating a project
+
+A project no one works on any more can be **deactivated** — hidden from
+the default lists and made read-only on the server — without losing
+anything. Deactivation and the hard delete are different moves:
+
+- `pf projects deactivate <id-or-name>` (a project maintainer or an
+  admin; no confirmation — it is reversible) flips the project to the
+  `deactivated` state. While it still has a queued, running, paused or
+  blocked work item the deactivation is refused (`CORE-409`, every
+  blocker listed): settle the work first — the refusal cancels nothing.
+- Deactivated, the project is read-only on the server: creating or
+  modifying work items, comments, submits and claims (the daemon's
+  auto-claim rides the same door and its ready queue proposes nothing of
+  a deactivated project), resume execution, dependency writes and memory
+  writes are refused with `CORE-403 PROJECT_DEACTIVATED` naming the
+  project; reading work items, memories and history keeps working under
+  the existing permissions. The project's own management (members, task
+  repos, description) stays with its maintainers — deactivation stops
+  the work, not the administration.
+- Nothing is deleted: work items, memories and history stay exactly
+  where they were. Only the hard delete (`pf projects delete`, admin,
+  irreversible) removes data — see its warning in the table below.
+- The default lists hide deactivated projects: `pf projects list`
+  (`--show-deactivated` lists them, marked), `pf queue`'s merged view
+  skips them, and both the AIHub console's project picker and Pi Web's
+  Work › 项目 view hide them behind a「show deactivated」entry. The
+  restore entry sits in the same place: `pf projects restore
+  <id-or-name>` (the same roles), and the console and Pi Web restore in
+  place from the marked row.
+- Restore brings the project back to active at once and every refused
+  operation works again immediately. The deactivation state is
+  operational, never data: the v0.2.1 section of
+  [upgrade.md](upgrade.md) carries the migration that adds it.
+
 ## Where to find what
 
 | The question | Where the answer lives |
