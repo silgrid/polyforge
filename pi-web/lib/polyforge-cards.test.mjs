@@ -929,3 +929,39 @@ test("each job reads its own Cell's state dir (its WorkRef.profile); a pre-Cell 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a subagent's resultless call answers the step's progress lines too — it inherits its parent spawn's step (r1#3)", async (t) => {
+  const f = fixture(t);
+  const wi = "wi_subprog01";
+  const dir = progressCapsule(f, wi, [["build", 1, "pi", "code.jsonl", [
+    piText("n1", "delegate the units"),
+    piCall("c1", 2, "k1", "subagent", { description: "run the units" }),
+    piResult("r1", 4, "k1", false, "agent done"),
+  ]]]);
+  // the subagent's own transcript under the conversation's subagents dir: a bash call, no result yet
+  const subDir = join(dir, "session", "code", "subagents");
+  mkdirSync(subDir, { recursive: true });
+  writeFileSync(join(subDir, "call-k1-0.jsonl"), jsonl([
+    piCall("s1", 10, "sk1", "bash", { command: "npm test" }),
+  ]));
+  writeFileSync(join(subDir, "call-k1-0.meta.json"), JSON.stringify({
+    toolUseId: "k1", index: 0, description: "run the units", agentType: "implementer", finished: false,
+  }));
+  mkdirSync(join(dir, "runtime-state", "progress"), { recursive: true });
+  const said = ["verify.py: [1/3] lint (fast): npm run lint token=SECRET-TOKEN", "verify.py: [1/3] lint PASS (12s)"];
+  writeFileSync(join(dir, "runtime-state", "progress", "build.log"), said.join("\n") + "\n");
+  const snapshot = await lib.readProgressSnapshot(f.root, dir, wi);
+  const parent = snapshot.lines.find((line) => line.subagents !== undefined);
+  assert.ok(parent, "the parent call carries its subagent");
+  const [subTool] = parent.subagents.flatMap((run) => run.lines).filter((line) => line.kind === "tool");
+  assert.ok(subTool, "the subagent's own tool call is a line");
+  const detail = await lib.readProgressToolDetail(f.root, dir, subTool.id);
+  assert.equal(detail.available, true, "the subagent's card opens its detail");
+  assert.equal(detail.hasResult, false);
+  assert.deepEqual(detail.progress, [
+    "verify.py: [1/3] lint (fast): npm run lint token=***",
+    "verify.py: [1/3] lint PASS (12s)",
+  ], "the step's progress lines ride the answer — the subagent inherits PF_STEP, its say writes the same file");
+  const body = JSON.stringify(detail);
+  for (const word of ["SECRET-TOKEN", dir, f.root, "/progress/"]) assert.ok(!body.includes(word), `the answer carries ${word}`);
+});
