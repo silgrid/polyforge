@@ -96,7 +96,7 @@ class RootReportTest(FastChecksCase):
     def test_green(self) -> None:
         clone = self.go_repo()
         code, res = self.run_checks("app")
-        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(code, 0, res)
         self.assertEqual(schema_errors(res, SCHEMA), [])
         self.assertEqual(res["heads"], {"app": git(clone, "rev-parse", "HEAD")})
         cmds = self.commands_of(res)
@@ -157,7 +157,7 @@ class SkipTest(FastChecksCase):
                           "check=absentcmd|fast|echo never\ncheck_requires_cmd=absentcmd|no-such-bin-xyz\n"
                           "check=absentvar|fast|echo never\ncheck_requires_env=absentvar|FAST_CHECKS_TEST_VAR\n")
         code, res = self.run_checks("app", env=env_without("FAST_CHECKS_TEST_VAR"))
-        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(code, 0, res)
         by_name = {c["name"]: c for c in self.commands_of(res)}
         for name in ("absentcmd", "absentvar"):
             self.assertTrue(by_name[name]["skipped"], name)
