@@ -27,6 +27,7 @@ func TestW407LightE2EServerModeThreshold(t *testing.T) {
 		start  bool
 	}{
 		{name: "below threshold", suites: 2, start: false},
+		{name: "at threshold", suites: 20, start: false},
 		{name: "above threshold", suites: 21, start: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
