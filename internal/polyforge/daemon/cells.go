@@ -207,6 +207,8 @@ func (h *Host) build(profile string, c cli.Config) (Config, error) {
 	cfg.SharedAdmission = h.admission
 	hostPath := h.cfg.Set.HostPath
 	if profile != cellcfg.DefaultProfile {
+		// Resolve the default Cell at read time so a live reload is visible
+		// to the next named Cell dispatch without rebuilding this closure.
 		cfg.AgentLanguageFallback = func() string {
 			h.mu.Lock()
 			def := h.cells[cellcfg.DefaultProfile]
