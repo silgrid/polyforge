@@ -829,7 +829,9 @@ own tablist (`data-pf-tabstrip="work"`) placed after the main area in the
 DOM, beside it on the right (`aria-orientation="vertical"`): on desktop (viewport ≥ 641px,
 `useIsMobile`, whatever the dock width) a ~72px text rail (`flex: 0 0 72px`,
 `border-left`, the active one on `var(--bg-selected)` with an accent edge,
-visible label with the badge under it); at ≤ 640px (replacing
+visible label with the running badge right of it on one line — polyforge#22, it sat under
+the label; the row is nowrap so label + two-digit count never wrap or leave the
+72px rail); at ≤ 640px (replacing
 the three-segment bar above the main area) a 40px icon rail
 (`flex: 0 0 40px`, the same left border and accent edge) of ~40×40
 icon-only buttons — a 16px stroke icon in the panel's 24-viewBox style
