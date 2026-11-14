@@ -189,6 +189,7 @@ type Header struct {
 	// Language is the dispatch's agent language (its spawn-journal line,
 	// capsule.DispatchLanguage): the labels the header is stamped in.
 	Language string
+	Usage    UsageSummary
 }
 
 // RenderSection answers the section the daemon appends: the stamped

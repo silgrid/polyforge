@@ -68,7 +68,7 @@ type Labels struct {
 	// A section's header (RenderSection) and its repos' diff stat.
 	SectionTitle, StampNote                                                string
 	Step, Round, Dispatch, Started, Ended, Duration, Model, Status, Reason string
-	Evidence, RepoCommits, NoRepo, StartUnknown, RepoStat                  string
+	Evidence, RepoCommits, NoRepo, StartUnknown, RepoStat, Usage, UsageScope                  string
 	StatStartUnknown, StatNoCommits, StatUnavailable, StatNoChanges        string
 	RoundEvents, OwnerMessages, None, PerOwner, Body                       string
 	// The event sections (回退 / Rewind, 收尾 / Close).
@@ -110,6 +110,8 @@ var labels = map[string]Labels{
 		Status:           "状态",
 		Reason:           "原因",
 		Evidence:         "证据",
+		Usage:            "Token 用量",
+		UsageScope:       "子 agent 用量",
 		RepoCommits:      "各仓提交",
 		NoRepo:           "（无任务仓）",
 		StartUnknown:     "（起点未知）",
@@ -174,6 +176,8 @@ var labels = map[string]Labels{
 		Status:           "Status",
 		Reason:           "Reason",
 		Evidence:         "Evidence",
+		Usage:            "Token usage",
+		UsageScope:       "Sub-agent usage",
 		RepoCommits:      "Task repo commits",
 		NoRepo:           "(no task repo)",
 		StartUnknown:     "(start unknown)",
