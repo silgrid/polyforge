@@ -1987,6 +1987,7 @@ export const zhCNLocale: LocalePlugin = {
     "polyforge.card.skipped": "已跳过",
     "polyforge.progress.title": "执行进度",
     "polyforge.progress.empty": "暂无进度",
+    "polyforge.progress.notRun": "尚未运行",
     "polyforge.progress.unavailable": "进度不可用",
     "polyforge.progress.omitted": "已省略更早的 {count} 行",
     "polyforge.progress.lines": "{count} 行",
