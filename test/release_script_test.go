@@ -15,6 +15,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -348,13 +350,26 @@ cmd="$1 $2"
 case "$cmd" in
   "release create")
     echo "gh release create $3" >> "$CALLLOG"
-    # FAKE_GH_CREATE_FAIL: the create fails after the claim (#120's shape)
-    [ -n "$FAKE_GH_CREATE_FAIL" ] && { echo "tag $3 doesn't exist in the repo, aborting due to --verify-tag flag" >&2; exit 1; }
+    # FAKE_GH_CREATE_FAIL: the create fails after the claim (#120's shape);
+    # no release is left behind, but the attempted notes body is kept
+    # outside the store (polyforge#14: a resume must publish the same bytes).
+    if [ -n "$FAKE_GH_CREATE_FAIL" ]; then
+      _p=""; for _a in "$@"; do
+        [ "$_p" = "--notes-file" ] && cp "$_a" "$FAKE_GH/create-failed.body"
+        _p=$_a
+      done
+      echo "tag $3 doesn't exist in the repo, aborting due to --verify-tag flag" >&2; exit 1
+    fi
     tag="$3"; shift 3
     mkdir -p "$FAKE_GH/$tag"
     while [ $# -gt 0 ]; do
       case "$1" in
-        --notes-file) cp "$2" "$FAKE_GH/$tag/.body"; shift 2 ;;
+        # GitHub rejects a release body over 125000 characters: the stub
+        # holds the byte side of that limit (>= a character count), so an
+        # overlong body fails the create exactly like the real one (polyforge#14).
+        --notes-file) _sz=$(wc -c <"$2")
+          [ "$_sz" -le 125000 ] || { echo "gh: the release notes are $_sz bytes; GitHub rejects a body over 125000 characters" >&2; exit 1; }
+          cp "$2" "$FAKE_GH/$tag/.body"; shift 2 ;;
         --title|-R) shift 2 ;;
         --verify-tag) shift ;;
         *) cp "$1" "$FAKE_GH/$tag/"; shift ;;
@@ -957,6 +972,97 @@ func TestReleaseScriptCommittedNotesUsedAsIs(t *testing.T) {
 	}
 	if got := relGit(t, w.work, "status", "--porcelain"); got != "" {
 		t.Fatalf("the release changed the worktree: %q", got)
+	}
+}
+
+// relLongNotesWorld: the plain-line world of v1.2.0 whose commits since it
+// make a generated list far over the byte budget: prs merged PRs, each
+// carrying a subjectLen-byte subject (every commit still enters main
+// through a merged PR, so the PR-only gate stays green).
+func relLongNotesWorld(t *testing.T, prs, subjectLen int) *relWorld {
+	t.Helper()
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	for i := 0; i < prs; i++ {
+		w.landPR(fmt.Sprintf("long-%03d", i), fmt.Sprintf("change %03d %s", i, strings.Repeat("x", subjectLen)))
+	}
+	return w
+}
+
+// TestReleaseScriptNotesTooLongAreTruncated (polyforge#14 AC2): a plain
+// line whose commit list is over the byte limit still releases: the
+// generated notes stay within 125000 bytes, keep the NEWEST commits, end
+// the list with a 「还有 N 个提交」notice whose count is exactly the dropped
+// lines and a compare link built on the previous release's commit id
+// (never its tag name), and the notes still end with the "Test gate" section.
+func TestReleaseScriptNotesTooLongAreTruncated(t *testing.T) {
+	w := relLongNotesWorld(t, 80, 2000)
+	prev := relGit(t, w.work, "rev-parse", "v1.2.0^{commit}")
+	head := relGit(t, w.work, "rev-parse", "HEAD")
+	out, err := w.run(nil)
+	if err != nil {
+		t.Fatalf("an overlong commit list must still release: %v\n%s", err, out)
+	}
+	body, err := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
+	if err != nil {
+		t.Fatalf("no published notes: %v", err)
+	}
+	if n := len(body); n > 125000 {
+		t.Fatalf("the notes are %d bytes, over the 125000 limit:\n%.300s…", n, body)
+	}
+	notes := string(body)
+	if !strings.Contains(notes, "change 079") || strings.Contains(notes, "change 000") {
+		t.Fatalf("the truncated list must keep the NEWEST commits and drop the oldest:\n%.500s…", notes)
+	}
+	m := regexp.MustCompile(`还有 (\d+) 个提交未列出`).FindStringSubmatch(notes)
+	if m == nil {
+		t.Fatalf("the truncated list must end with a 「还有 N 个提交」 notice:\n%.500s…", notes)
+	}
+	dropped, _ := strconv.Atoi(m[1])
+	listed := len(regexp.MustCompile(`(?m)^- `).FindAllString(notes, -1))
+	total := len(strings.Split(strings.TrimSpace(relGit(t, w.work, "log", "--oneline", "v1.2.0..HEAD")), "\n"))
+	if listed < 1 || listed+dropped != total {
+		t.Fatalf("dropped=%d listed=%d total=%d: the notice must name exactly the dropped commits", dropped, listed, total)
+	}
+	if !strings.Contains(notes, "https://github.com/silgrid/polyforge/compare/"+prev+"..."+head) {
+		t.Fatalf("the notice must carry a compare link on the previous release's commit id:\n%.500s…", notes)
+	}
+	if strings.Contains(notes, "/compare/v1.2.0") {
+		t.Fatalf("the compare link must not use the tag name (a downstream origin may carry an older tag of the same name):\n%.500s…", notes)
+	}
+	gate := strings.Index(notes, "## Test gate")
+	notice := strings.Index(notes, "还有 ")
+	if gate < 0 || notice < 0 || notice > gate {
+		t.Fatalf("the notes must still end with the Test gate section after the notice:\n%.500s…", notes)
+	}
+}
+
+// TestReleaseScriptNotesTooLongResume (polyforge#14 AC4): in the overlong
+// scenario a first run that fails at the release create leaves the version
+// claimed; the resume finishes it and publishes byte-identical notes, still
+// within the limit (the truncated list is generated the same way both
+// times).
+func TestReleaseScriptNotesTooLongResume(t *testing.T) {
+	w := relLongNotesWorld(t, 80, 2000)
+	if out, err := w.run([]string{"FAKE_GH_CREATE_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v1.2.1 WAS CLAIMED") {
+		t.Fatalf("setup: the first run must fail at the release create, after the claim: %v\n%s", err, out)
+	}
+	first, err := os.ReadFile(filepath.Join(w.fakeRel, "create-failed.body"))
+	if err != nil {
+		t.Fatalf("the failed create must keep its attempted notes for the comparison: %v", err)
+	}
+	out, err := w.run(nil)
+	if err != nil || !strings.Contains(out, "resuming v1.2.1") {
+		t.Fatalf("the re-run must resume the claimed version: %v\n%s", err, out)
+	}
+	second, err := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
+	if err != nil {
+		t.Fatalf("no published notes: %v", err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatalf("the resume's notes must be byte-identical to the first attempt:\nfirst %.200q\nsecond %.200q", first, second)
+	}
+	if n := len(second); n > 125000 {
+		t.Fatalf("the resumed notes are %d bytes, over the limit", n)
 	}
 }
 
