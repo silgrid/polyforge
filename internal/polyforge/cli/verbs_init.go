@@ -16,20 +16,29 @@ import (
 // workspace init (polyforge#177). It gives an existing workspace its
 // runtime-artifact layout: scratch/, the convention section of the
 // notes file's polyforge-managed block (workspace.Notes: AGENTS.md, else
-// CLAUDE.md; a fresh workspace gets AGENTS.md) and, for a mapped
-// workspace, cli.toml's default [memory_policy."<path>".default] block
-// (idempotent, an existing entry is never rewritten). It
+// CLAUDE.md; a fresh workspace gets AGENTS.md) and, for a workspace the
+// routed Cell maps, that Cell's own file's default
+// [memory_policy."<path>".default] block (idempotent, an existing entry
+// is never rewritten; cli.toml for the default Cell, cli-<profile>.toml
+// for a named one — the same scope selection `pf config` makes). It
 // never writes .polyforge.yaml and needs no aihub; mapping the workspace
-// stays the operator's cli.toml edit (skills/polyforge/verbs/init.md).
+// stays the operator's config edit (skills/polyforge/verbs/init.md).
 // Machine install is tools/install.sh, not this verb.
 var cmdInit = &Command{
 	Name:         "init",
 	Group:        GroupDiag,
-	Summary:      "Give a workspace its local layout: scratch/, the layout section of AGENTS.md (else CLAUDE.md), the default memory_policy block in cli.toml",
+	Summary:      "Give a workspace its local layout: scratch/, the layout section of AGENTS.md (else CLAUDE.md), the default memory_policy block in the routed Cell's config file",
 	Usage:        "pf init [<workspace-dir>]   (default: the current directory)",
 	NoConfigLoad: true,
 	Setup:        func(*flag.FlagSet) {},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
+		// The memory_policy write addresses the routed Cell's own file —
+		// the same scope selection `pf config` makes (polyforge#18): a
+		// named Cell's init never writes the Host file.
+		args, err := selectConfigScope(ctx, args)
+		if err != nil {
+			return fmt.Errorf("init: %w", err)
+		}
 		if len(args) > 1 {
 			return fmt.Errorf("init: at most one workspace directory, got %v", args)
 		}
