@@ -1446,12 +1446,16 @@ func (d *Daemon) fetchAutoWave() {
 		if it.BundleName == nil {
 			continue // registration tickets never execute
 		}
-		if (it.Content == nil || !workflow.HasAcceptance(*it.Content)) && d.laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance() {
-			// an execution ticket that lists no acceptance
-			// criterion needs interaction first (the predicate pf submit
-			// applies) when its lane requires one — the lane's
-			// `acceptance` declaration; it stays queued
-			// and pf queue marks it
+		content := ""
+		if it.Content != nil {
+			content = *it.Content
+		}
+		if (!workflow.HasAcceptance(content) || !workflow.HasAnalysis(content)) && d.laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance() {
+			// an execution ticket that lists no acceptance criterion, or
+			// carries no analysis section (polyforge#27), needs interaction
+			// first (the predicates pf submit applies) when its lane
+			// requires one — the lane's `acceptance` declaration; it stays
+			// queued and pf queue marks it
 			continue
 		}
 		if berr, bad := badBundles[it.ProjectName+" "+*it.BundleName]; bad {

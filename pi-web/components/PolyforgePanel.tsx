@@ -359,13 +359,25 @@ export const PROGRESS_RENDER_CHUNK = 200;
  * leaves the bottom, unpins, and the button appears). A tool card's
  * expand/collapse and its detail settling are folds too.
  */
-export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef }: {
+export function selectProgressStep(snapshot: PolyforgeProgressSnapshot | null, step: string | null): PolyforgeProgressSnapshot | null {
+  if (!snapshot || !step || !snapshot.available) return snapshot;
+  const lines = snapshot.lines;
+  const layout = progressBlocks(lines);
+  const blocks = layout.blocks.filter((block) => block.step === step);
+  if (layout.blocks.length === 0) return snapshot;
+  const selectedLines = blocks.flatMap((block) => lines.slice(block.first ?? block.start, (block.first ?? block.start) + block.count));
+  return { ...snapshot, lines: selectedLines };
+}
+
+export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef, emptyMessage, resetKey }: {
   wi: string | null;
   profile?: string;
   running: boolean;
   snapshot: PolyforgeProgressSnapshot | null;
   echoes: readonly PolyforgeOwnerEcho[];
   scrollRef: RefObject<HTMLDivElement | null>;
+  emptyMessage?: string;
+  resetKey?: string;
 }) {
   const { t, locale } = useI18n();
   const [visibleCount, setVisibleCount] = useState(PROGRESS_RENDER_CHUNK);
@@ -389,7 +401,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setDetails(new Map());
     pinned.current = true;
     setAtBottom(true);
-  }, [wi]);
+  }, [wi, resetKey]);
   useEffect(() => {
     const total = snapshot?.lines.length ?? 0;
     if (visibleCount >= total) return;
@@ -456,7 +468,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   }, [loadDetail]);
   const message = !wi || snapshot?.available === false ? t("polyforge.progress.unavailable")
     : !snapshot ? t("polyforge.loading")
-      : snapshot.lines.length === 0 ? t("polyforge.progress.empty") : null;
+      : snapshot.lines.length === 0 ? (emptyMessage ?? t("polyforge.progress.empty")) : null;
   const chunkLimit = Math.max(PROGRESS_RENDER_CHUNK, visibleCount);
   const expanded = (start: number) => {
     const id = lines[start]?.id;
@@ -1290,6 +1302,23 @@ export function PolyforgePanel({
   const progressWi = selectedWi ? (selectedJob?.wi ?? watchStatus?.wi ?? null) : null;
   const progressLive = selectedJob?.status === "running";
   const progressSnapshot = usePolyforgeProgress(progressWi, progressLive, selectedJob?.profile);
+  const [selectedStep, setSelectedStep] = useState<string | null>(null);
+  const [selectedStepManual, setSelectedStepManual] = useState(false);
+  const latestProgressStep = progressSnapshot?.lines ? progressBlocks(progressSnapshot.lines).blocks.at(-1)?.step : undefined;
+  // An ended ticket carries no currentStep (the daemon clears it): its last
+  // run step is the newest started step of the watch snapshot; the progress
+  // stream's last block is the fallback when the watch carries no start times.
+  const lastStartedStep = watchStatus ? [...watchStatus.steps].reverse().find((step) => step.startedAt)?.name : undefined;
+  const defaultStep = watchStatus?.currentStep ?? lastStartedStep ?? latestProgressStep ?? graph?.nodes.find((node) => node.status !== "pending")?.id ?? graph?.nodes[0]?.id ?? null;
+  useEffect(() => {
+    setSelectedStep(null);
+    setSelectedStepManual(false);
+  }, [selectedWi]);
+  useEffect(() => {
+    if (!selectedStepManual && defaultStep) setSelectedStep(defaultStep);
+  }, [defaultStep, selectedStepManual]);
+  const selectedProgressSnapshot = selectProgressStep(progressSnapshot, selectedStep);
+  const progressEmptyMessage = selectedStep ? t("polyforge.progress.notRun") : undefined;
   const [echoes, setEchoes] = useState<{ wi: string | null; list: PolyforgeOwnerEcho[] }>({ wi: null, list: [] });
   const detailEchoes = echoes.wi === progressWi ? echoes.list : [];
   const onSent = useCallback((echo: PolyforgeOwnerEcho) => {
@@ -1855,9 +1884,19 @@ export function PolyforgePanel({
                                   <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center" }}>
                                   <span
                                     role="listitem"
+                                    tabIndex={0}
+                                    onClick={() => { setSelectedStep(node.id); setSelectedStepManual(true); }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        setSelectedStep(node.id);
+                                        setSelectedStepManual(true);
+                                      }
+                                    }}
+                                    data-pf-step-selected={selectedStep === node.id}
                                     title={`${node.id} · ${stepStatusLabel(node.status)}${timing ? ` · ${formatEventTime(timing.startedAt)}` : ""}`}
                                     aria-label={`${node.id} · ${stepStatusLabel(node.status)}`}
-                                    style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 6px", borderRadius: 6, border: skipped ? "1px dashed var(--border)" : "1px solid var(--border)", fontSize: 11, color: skipped ? "var(--text-dim)" : "var(--text)", fontFamily: "var(--font-mono, monospace)" }}
+                                    style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 6px", borderRadius: 6, border: skipped ? "1px dashed var(--border)" : "1px solid var(--border)", fontSize: 11, color: skipped ? "var(--text-dim)" : "var(--text)", fontFamily: "var(--font-mono, monospace)", background: selectedStep === node.id ? "var(--bg-selected)" : "transparent", outline: selectedStep === node.id ? "1px solid var(--accent)" : undefined, cursor: "pointer" }}
                                   >
                                     <span
                                       aria-hidden="true"
@@ -1903,7 +1942,7 @@ export function PolyforgePanel({
                               finished job from the status/cards lists, so the
                               wi falls back to the selection's watch snapshot
                               (reset per selection) and the last stream stays. */}
-                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={progressSnapshot} echoes={detailEchoes} scrollRef={detailScrollRef} />
+                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? ""} echoes={detailEchoes} scrollRef={detailScrollRef} />
                         </>
                       ) : (
                       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>{t("polyforge.selectJob")}</div>

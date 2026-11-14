@@ -739,9 +739,10 @@ var cmdQueue = &Command{
 			return err
 		}
 		// Both faces render the items segment; --json is the raw server
-		// body (no acceptance_missing: that is the merged document's).
+		// body (no acceptance_missing / analysis_missing: those are the
+		// merged document's).
 		finishAs(ctx, raw, func(l *itemList[WIView]) {
-			markAcceptanceMissing(l.Items, laneResolver(readDaemonFacts(ctx), plan))
+			markNeedsInteraction(l.Items, laneResolver(readDaemonFacts(ctx), plan))
 			fmt.Fprintf(ctx.Stdout, "%d work item(s)\n", len(l.Items))
 			renderWITable(ctx.Stdout, l.Items)
 			renderMissingLanes(ctx, plan, l.Items)
@@ -782,10 +783,11 @@ func queueMerged(ctx *Context, m *mapping.Plan, ready bool, filter aihubclient.W
 		}
 		items = append(items, l.Items...)
 	}
-	// a queued execution ticket without acceptance on a lane requiring
-	// it is marked (the auto-pull wave skips it): the STATUS cell and
-	// acceptance_missing — judged through the routed Cell's mapping m.
-	markAcceptanceMissing(items, laneResolver(readDaemonFacts(ctx), m))
+	// a queued execution ticket without acceptance or without an
+	// analysis section on a lane requiring one is marked (the
+	// auto-pull wave skips it): the STATUS cell, acceptance_missing and
+	// analysis_missing — judged through the routed Cell's mapping m.
+	markNeedsInteraction(items, laneResolver(readDaemonFacts(ctx), m))
 	if ctx.JSON {
 		// ONE merged document; lanes_missing lists the queued items a
 		// claim refuses because their lane is not in the daemon's lane

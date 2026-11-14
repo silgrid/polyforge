@@ -145,8 +145,12 @@ and YAML path, before a claim ever meets it. The keys:
   default (not declaring it is the same): `pf submit` refuses an item
   without one (unless `--allow-no-acceptance`), the daemon's auto claim
   skips it, `pf queue` marks it as needing interaction, and `pf file
-  create` prints which step carries the criteria. `none` is a lane with no
-  criterion to list: none of the four applies. The shipped `integrate` and
+  create` prints which step carries the criteria. The same lanes carry the
+  pre-submit analysis check: `pf submit` also refuses an item whose content
+  carries no `## 分析` / `## Analysis` section (unless
+  `--allow-no-analysis`), the auto claim skips it, and `pf queue` marks it
+  需要交互：未分析. `none` is a lane with no criterion to list: none of
+  this applies — neither check runs. The shipped `integrate` and
   `release` declare `none`; `develop` and `micro` do not. A user lane may
   declare it too; any other value is `WFC-112`.
 - `defaults:` — `model_candidates`, the workflow-level fallback chain

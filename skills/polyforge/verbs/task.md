@@ -69,6 +69,14 @@ commit or PR goes through a ticket (`pf file create --bundle <lane>` +
 `pf submit`, `verbs/execute-intent.md`); a task owns no work item and produces
 no deliverable.
 
+The **pre-submit analysis** (polyforge#27) is a read-only errand par
+excellence: on a ticket filed on a lane that requires acceptance, the session
+proposes `pf task spawn` with the ticket and the code it touches as scope, the
+fresh task answers with the 7-item report (the format lives once in
+`verbs/submit.md`, the analysis check), and the session — never the task —
+writes the report into the ticket's `## 分析` section (`pf file edit <id>
+--content @file`); a task cannot write the ticket (DAEMON-403).
+
 - The task process carries `PF_TASK_ID` (with `PF_DAEMON_ID`): the daemon
   refuses it every mutating unix-socket request with `DAEMON-403`, and `pf`
   refuses every write verb locally before any config read or network call. Its
