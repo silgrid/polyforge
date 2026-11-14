@@ -1446,11 +1446,13 @@ func (d *Daemon) fetchAutoWave() {
 		if it.Content != nil {
 			content = *it.Content
 		}
-		if !workflow.HasAcceptance(content) && d.laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance() {
-			// an execution ticket that lists no acceptance criterion needs
-			// interaction first (the predicate pf submit applies) when its
-			// lane requires one — the lane's `acceptance` declaration; it
-			// stays queued and pf queue marks it
+		if !workflow.HasAnalysis(content) && d.laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance() {
+			// THE ACCEPTANCE-LESS MUTANT of review r1#1 — the red stage of
+		// u5's pair, never the shipped behavior: the acceptance half of
+		// the condition is dropped, so a ticket with an analysis section
+		// but no acceptance criterion is claimed. The next commit's test
+		// pins that and turns red here; the commit after restores the
+		// full condition.
 			continue
 		}
 		if berr, bad := badBundles[it.ProjectName+" "+*it.BundleName]; bad {
