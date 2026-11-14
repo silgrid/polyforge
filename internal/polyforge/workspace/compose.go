@@ -7,8 +7,11 @@ package workspace
 // the yaml and bundle each time), so an edit governs the next dispatch;
 // nothing is snapshotted at claim or persisted in the daemon's record.
 //
-// The chain, outermost first (six levels):
+// The chain, outermost first (seven levels; the outermost is the work
+// item's step-overlay record, polyforge#25 — see
+// ComposeCandidatesWithOverlay):
 //
+//	step overlay (runtime-state/step-overrides.json) >
 //	manual `pf submit --models` > yaml steps.<project>.<step-id>.models >
 //	yaml tiers.<project>.<tier>.models (a step naming model_tier <tier>) >
 //	bundle step-level model_candidates, or the bundle's defaults.tiers list
@@ -39,6 +42,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
@@ -128,12 +132,26 @@ func (s *SummarizeSettings) Lane() (models []string, language string, intervalSe
 // nil (no yaml — the bundle alone).
 // manual is the work item's `pf submit --models` list (nil/empty = none).
 func ComposeCandidates(fm *workflow.Lane, cfg *Config, project string, manual []string) map[string][]string {
+	return ComposeCandidatesWithOverlay(fm, cfg, project, manual, capsule.StepOverrides{})
+}
+
+// ComposeCandidatesWithOverlay is ComposeCandidates with the work item's
+// step-overlay record (polyforge#25) on top: a step whose overlay names a
+// model chain runs that chain as its whole effective list — over the
+// manual list and every yaml/bundle level; a step without an overlay
+// composes exactly as ComposeCandidates does. An overlay for a step the
+// lane does not declare is ignored (no such dispatch ever composes it).
+func ComposeCandidatesWithOverlay(fm *workflow.Lane, cfg *Config, project string, manual []string, ov capsule.StepOverrides) map[string][]string {
 	if fm == nil || len(fm.Steps) == 0 {
 		return nil
 	}
 	pm, pt := projectLists(cfg, project)
 	out := make(map[string][]string, len(fm.Steps))
 	for _, s := range fm.Steps {
+		if e := ov.Steps[s.ID]; e != nil && len(e.Models) > 0 {
+			out[s.ID] = append([]string(nil), e.Models...)
+			continue
+		}
 		if len(manual) > 0 {
 			out[s.ID] = append([]string(nil), manual...)
 		} else if list := composeStep(fm, pm, pt, s); list != nil {
