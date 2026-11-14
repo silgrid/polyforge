@@ -68,7 +68,10 @@
 #                 ssh, container, running version (/pf aihub -version, else
 #                 /aihub -version; must print a release tag), compose file,
 #                 versions, disk space; for a running version without a
-#                 GHCR image (the legacy rollback image) its tag
+#                 GHCR image the running container's image is probed by
+#                 its ID: it verifies as <old> -> it is reused (tagged
+#                 polyforge/aihub:<old> in step 2, no local tag needed);
+#                 else (the legacy fallback build) its tag
 #                 refs/tags/<old> must be in the local repo (else stop:
 #                 git fetch --tags) - its deploy/Dockerfile is read from
 #                 that tag only, never from the working tree; the
@@ -79,8 +82,11 @@
 #   2 save old binary   docker cp <container>:/pf (a pre-consolidation image:
 #                       /aihub) -> <root>/aihub-bin-<old>-<TS>;
 #                       rollback image polyforge/aihub:<old>: if the old release has
-#                       a GHCR image, ship it like the new one; otherwise (releases
-#                       before the GHCR image existed, e.g. v2.2.0) build it on the
+#                       a GHCR image, ship it like the new one; otherwise reuse the
+#                       running container's image when its ID verifies as <old>
+#                       (docker tag <ID> -> polyforge/aihub:<old>, nothing is
+#                       built); else (the legacy fallback, releases before the
+#                       GHCR image existed, e.g. v2.2.0) build it on the
 #                       server from the saved old binary and the old release's
 #                       deploy/Dockerfile
 #   3 online backup     rsync memory/ git/ (pass 1) -> sqlite backup-API snapshot
@@ -144,9 +150,8 @@
 #     aihub-image.digest and the repo-digest check, not by the layout. When no
 #     attempt yields a release tag, the error quotes every attempt's raw
 #     stdout (PROBE_RAW). Delete the /aihub attempt (probe_read's second
-#     call in probe_ctr/probe_img, OLD_LAYOUT=aihub and the legacy build's
-#     `aihub` context name) once no pre-consolidation release remains a deploy
-#     or rollback target.
+#     call in probe_ctr/probe_img and OLD_LAYOUT=aihub) once no
+#     pre-consolidation release remains a deploy or rollback target.
 #
 # Usage:
 #   .polyforge/deploy.sh <version> --confirm <version> [--component aihub|pi-web] [--dry-run] [--force]
@@ -471,6 +476,7 @@ LOCK_PID=""
 STEP="0"
 OLDVER=""; OLDIMG=""; NEWIMG=""; COMPOSE_BAK=""; DOCKERFILE=""; BIN_SAVED=""; SRV_BACKUP=""; LOCAL_BACKUP=""
 NEW_LOCAL_ID=""; OLD_LOCAL_ID=""; OLD_HAS_GHCR=""
+RUNIMG_ID=""; REUSE_PLAN=""       # the running container's image ID ({{.Image}}) and the reuse plan text, set at step 0 when it verifies as $OLDVER
 OLD_LAYOUT=""; OLD_VCMD=""   # the running (old) container's layout: pf | aihub (TRANSITION), and its -version command
 GOT=""; GOT_LAYOUT=""        # probe_ctr / probe_img results
 PROBE_RAW=""                 # what each probe attempt printed (probe_ctr / probe_img reset it per call)
@@ -560,7 +566,8 @@ take_lock() {
 rollback_text() {
   cat <<EOF
   # point the aihub service back at the rollback image $OLDIMG (prepared in step 2:
-  # the old GHCR image, or built from the saved old binary) and recreate it
+  # the old GHCR image, the reused running image, or built from the saved
+  # old binary) and recreate it
   # (seconds of downtime):
   ssh $AIHUB_HOST "sed -i 's|image: $NEWIMG|image: $OLDIMG|' $COMPOSE_FILE"
   ssh $AIHUB_HOST docker compose -f $COMPOSE_FILE -p $COMPOSE_PROJECT up -d --no-deps $AIHUB_SERVICE
@@ -1427,16 +1434,31 @@ elif [ "$OLD_HAS_GHCR" = 1 ]; then
   OLD_LOCAL_ID="$NEW_LOCAL_ID"
   note "rollback image: same version as the target (--force); reusing the verified pull"
 else
-  note "rollback image: $OLDVER has no GHCR image - will build it from the saved old binary on the server (legacy path)"
-  # deploy/Dockerfile is needed ONLY here (the new image is never built). It
-  # is the OLD release's file - it names the binary that release shipped - so
-  # it is read from the running version's tag and nowhere else: the working
-  # tree's file copies a different binary.
-  git -C "$SCRIPT_DIR" rev-parse -q --verify "refs/tags/$OLDVER^{commit}" >/dev/null \
-    || die "tag $OLDVER (the running version) not in the local repo - git fetch --tags; its deploy/Dockerfile builds the legacy rollback image of $OLDVER (nothing on the server was touched)"
-  DOCKERFILE="$WORK/Dockerfile"
-  git -C "$SCRIPT_DIR" show "$OLDVER:deploy/Dockerfile" >"$DOCKERFILE" 2>/dev/null && [ -s "$DOCKERFILE" ] \
-    || die "tag $OLDVER has no deploy/Dockerfile - needed for the legacy rollback image of $OLDVER (nothing on the server was touched)"
+  note "rollback image: $OLDVER has no GHCR image - the running container's image is reused when it verifies, else it is built from the saved old binary on the server (legacy fallback)"
+  # The running container's image is the rollback image that is actually
+  # wanted: read its ID ({{.Image}} - a tag name could already point
+  # elsewhere) and probe it read-only here. It answers $OLDVER -> step 2
+  # tags it $OLDIMG and nothing is built; no local tag of $OLDVER is
+  # needed. Otherwise the LEGACY fallback build needs deploy/Dockerfile
+  # (the new image is never built). It is the OLD release's file - it names
+  # the binary that release shipped - so it is read from the running
+  # version's tag and nowhere else: the working tree's file copies a
+  # different binary.
+  RUNIMG_ID="$(dk inspect -f '{{.Image}}' "$AIHUB_CONTAINER" 2>/dev/null || true)"
+  if [ -n "$RUNIMG_ID" ]; then
+    probe_img dk "$RUNIMG_ID"
+    if [ "$GOT" = "$OLDVER" ]; then
+      REUSE_PLAN="reuse: docker tag the running container's image $RUNIMG_ID as $OLDIMG (verified -version, /pf aihub else /aihub, == $OLDVER)"
+      note "rollback image: the running container's image $RUNIMG_ID reports $OLDVER - it will be reused; no local tag of $OLDVER is needed"
+    fi
+  fi
+  if [ -z "$REUSE_PLAN" ]; then
+    git -C "$SCRIPT_DIR" rev-parse -q --verify "refs/tags/$OLDVER^{commit}" >/dev/null \
+      || die "tag $OLDVER (the running version) not in the local repo - git fetch --tags; the running image does not verify as $OLDVER, so its deploy/Dockerfile is needed for the legacy rollback image build (nothing on the server was touched)"
+    DOCKERFILE="$WORK/Dockerfile"
+    git -C "$SCRIPT_DIR" show "$OLDVER:deploy/Dockerfile" >"$DOCKERFILE" 2>/dev/null && [ -s "$DOCKERFILE" ] \
+      || die "tag $OLDVER has no deploy/Dockerfile - needed for the legacy rollback image of $OLDVER (nothing on the server was touched)"
+  fi
 fi
 
 rssh "test -f '$COMPOSE_FILE'" || die "compose file $COMPOSE_FILE not found on $AIHUB_HOST"
@@ -1521,8 +1543,10 @@ NEWIMG="$IMAGE_REPO:$TAG"
 COMPOSE_BAK="$COMPOSE_FILE.bak-$TS"
 if [ -n "$OLD_HAS_GHCR" ]; then
   OLD_PLAN="docker save $GHCR_IMAGE:$OLDVER | ssh docker load, verify image ID, tag $OLDIMG"
+elif [ -n "$REUSE_PLAN" ]; then
+  OLD_PLAN="$REUSE_PLAN"
 else
-  OLD_PLAN="legacy: docker build from the saved old binary + $OLDVER's deploy/Dockerfile (no GHCR image for $OLDVER)"
+  OLD_PLAN="legacy fallback: docker build from the saved old binary + $OLDVER's deploy/Dockerfile (the running image did not verify as $OLDVER)"
 fi
 
 echo
@@ -1604,13 +1628,41 @@ note "old binary saved: $BIN_SAVED ($OLDVER)"
 if rssh docker image inspect "$OLDIMG" >/dev/null 2>&1; then
   probe_img dk "$OLDIMG"
   [ "$GOT" = "$OLDVER" ] || die "image $OLDIMG already exists but it reports \"$GOT\", not $OLDVER - a rollback to it would be wrong; remove/retag it by hand (probe output: $PROBE_RAW)"
-  note "rollback image $OLDIMG already exists and reports $OLDVER"
+  exid="$(dk image inspect -f '{{.Id}}' "$OLDIMG" 2>/dev/null || true)"
+  runid="$(dk inspect -f '{{.Image}}' "$AIHUB_CONTAINER" 2>/dev/null || true)"
+  if [ -n "$exid" ] && [ -n "$runid" ] && [ "$exid" != "$runid" ]; then
+    note "rollback image $OLDIMG already exists and reports $OLDVER; its image ID $exid differs from the running container's image ID $runid - the existing tag is kept"
+  else
+    note "rollback image $OLDIMG already exists and reports $OLDVER"
+  fi
 elif [ -n "$OLD_HAS_GHCR" ]; then
   ship_image "$OLDVER" "$OLD_LOCAL_ID" "$OLDIMG"
   probe_img dk "$OLDIMG"
   [ "$GOT" = "$OLDVER" ] || die "rollback image $OLDIMG reports \"$GOT\", expected $OLDVER; probe output: $PROBE_RAW"
 else
-  build_image "$OLDIMG" "$BIN_SAVED" "$OLDVER"
+  # No GHCR image: reuse the running container's image when it verifies as
+  # $OLDVER (docker tag <ID> $OLDIMG; nothing is built), else the legacy
+  # fallback build. The ID is re-read and re-verified HERE, right before the
+  # tag - an image that does not verify is NEVER tagged: the deploy either
+  # falls back to the build or, when step 0 saw a verifying image and
+  # fetched no old deploy/Dockerfile, stops with the service untouched.
+  rid="$(dk inspect -f '{{.Image}}' "$AIHUB_CONTAINER" 2>/dev/null || true)"
+  reuse=""
+  if [ -n "$rid" ]; then
+    probe_img dk "$rid"
+    [ "$GOT" = "$OLDVER" ] && reuse=1
+  fi
+  if [ -n "$reuse" ]; then
+    dk tag "$rid" "$OLDIMG" || die "docker tag $rid $OLDIMG failed on the server"
+    probe_img dk "$OLDIMG"
+    [ "$GOT" = "$OLDVER" ] || die "rollback image $OLDIMG (reused from $rid) reports \"$GOT\", expected $OLDVER; probe output: $PROBE_RAW"
+    note "rollback image $OLDIMG: reused the running container's image $rid (-version ($GOT_LAYOUT layout) = $OLDVER); nothing was built"
+  elif [ -n "$DOCKERFILE" ]; then
+    [ -n "$rid" ] && note "rollback image: the running container's image $rid does not verify as $OLDVER - building the legacy fallback image from the saved old binary"
+    build_image "$OLDIMG" "$BIN_SAVED" "$OLDVER"
+  else
+    die "the running container's image ${rid:-is unreadable} and does not verify as $OLDVER, and no deploy/Dockerfile of $OLDVER is available for the fallback build - git fetch --tags, then re-deploy (nothing was tagged, the service is untouched; probe output: $PROBE_RAW)"
+  fi
 fi
 
 # ---------------------------------------------------------------- step 3
