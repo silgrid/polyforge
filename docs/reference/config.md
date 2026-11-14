@@ -667,7 +667,7 @@ the whole file with an error naming the file, the line and
 ### `steps:` — model candidates per project and step
 
 ```yaml
-# Precedence: pf submit --models > steps.<project>.<step-id>.models > tiers.<project>.<tier>.models (a step naming that model_tier) > bundle step model_candidates (or the tier its model_tier names in the bundle's defaults.tiers) > steps.<project>.default.models > bundle defaults
+# Precedence: pf override (the per-step overlay, polyforge#25) > pf submit --models > steps.<project>.<step-id>.models > tiers.<project>.<tier>.models (a step naming that model_tier) > bundle step model_candidates (or the tier its model_tier names in the bundle's defaults.tiers) > steps.<project>.default.models > bundle defaults
 steps:
   polyforge:                                # a project of this workspace
     default: { models: ["pi:prov/model-a", "pi:prov/model-b"] }  # optional: steps without a list of their own
@@ -726,7 +726,11 @@ A step entry's keys are `models` and `skip`, at least one declared (an
 entry declaring neither is refused as empty); a leftover `attrs` is refused naming
 its removal. An entry declaring only
 `skip` is no level of the chain below. For a step of the claimed project
-the list is, highest first: the work item's manual `pf submit <id>
+the list is, highest first: the work item's per-step **overlay**
+(`pf override <id> --step <s> --models …`, polyforge#25 —
+`runtime-state/step-overrides.json` in the capsule; see
+[the overlay section](#pf-override--the-per-step-overlay)), else the
+work item's manual `pf submit <id>
 --models pi:a,claude:b` list (every step; kept by this daemon only —
 across its restarts and `pf resume` — and a re-claim on another machine
 uses that machine's settings), else the yaml list keyed by the step's
@@ -736,6 +740,37 @@ governs: no switchable chain). A project not listed keeps the bundle's.
 `pf doctor` reports the same refusal (an unknown per-step key and a
 leftover `models:` section included) before any claim. Repo lists and
 clone URLs always come from the aihub project registry.
+
+### `pf override` — the per-step overlay
+
+A running ticket's per-step overlay (polyforge#25): the capsule file
+`runtime-state/step-overrides.json` records, per step of this one work
+item, a model chain and a skip switch with the operator and time of each
+change — written only through the daemon (`pf override`; a step agent's
+process tree is refused `DAEMON-403`), never by an agent. The model chain
+is the whole effective list of that step's next dispatch (its first
+candidate first; a model-class failure rotates along it), over the manual
+`--models` list and every yaml/bundle level above; every other step
+composes exactly as before, re-reading this yaml at every dispatch. The
+overlay holds for the whole ticket — a gate FAIL's rewind re-dispatch
+included — until cleared (`--clear-models`; the step composes from its
+usual sources again), and it travels with the capsule chain: a write on a
+running ticket commits and pushes the chain at once.
+
+Writability: a step with a live dispatch (a running ticket's current
+`in_progress` step) and a step that already ran refuse every action; a
+**paused** ticket accepts chains for every step that has not finished —
+its frozen current step included, the change-before-wake window — and a
+**blocked** ticket's change rides the daemon's local pending record into
+the fresh capsule of its next `pf resume` there (the sealed scene of the
+blocked close is never written; the chain commit of a paused ticket
+lands with the resume, aihub refusing pushes while the ticket is not
+running). The pi candidates must exist in this Cell's step-agent
+`models.json` (`<provider>/<id>` or a globally unique bare id); claude
+candidates are not file-checked. The skip switch is the per-ticket
+runtime twin of the `skip` key below: only a step the lane snapshot
+declares `skippable`, only while it has not started, and a skipped
+tail's wrap attrs move to the last running step the same way.
 
 ### `steps.<project>.<step-id>.skip` — switching off a skippable step
 

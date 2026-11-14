@@ -46,7 +46,7 @@ func TestPF25OverrideSkillContract(t *testing.T) {
 
 	// 2. The intent table routes the intent to the fragment, and the body's
 	// verb count matches the description.
-	for _, tok := range []string{"`verbs/override.md`", "跳过这张票的 merge", "换个模型再继续"} {
+	for _, tok := range []string{"`verbs/override.md`", "跳过这张票的某步", "换个模型再继续"} {
 		if !strings.Contains(skill, tok) {
 			t.Errorf("%s must route the override intent to `verbs/override.md` — the marker %q is missing", pf25SkillRel, tok)
 		}

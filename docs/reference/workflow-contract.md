@@ -690,6 +690,20 @@ is granted `wrap-attrs` and its `done` is refused until it registered them
 (develop's `publish`, when its project skips `merge`, registers the record
 `published.py` writes, `integration: {state: published, …}`).
 
+**A step the operator skips mid-run (polyforge#25).** The per-step overlay
+(`pf override <id> --step <s> --skip`, written only through the daemon)
+switches a lane-declared skippable step off for THIS one work item without
+touching the file above: the driver re-reads the effective set (the claim's
+file union the overlay) before every step, so a skip set while the ticket
+runs governs the next step boundary — the step is never dispatched,
+records `skipped` with its `step_skipped` event, and the wrap attrs of a
+skipped tail move to the last running step exactly as above. The switch
+asks for a step that never started, and a step the lane does not declare
+skippable is refused with the waive as the alternative. The model-chain
+half of the same overlay (`--models`) outranks every candidate source of
+that step's dispatches for the whole ticket; see
+[config.md](config.md#pf-override--the-per-step-overlay).
+
 ## Error codes
 
 | Code | Meaning |

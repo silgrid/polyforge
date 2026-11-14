@@ -1,6 +1,6 @@
 ---
 name: polyforge
-description: "The harness's single install face — a pure intent-routing skill. Maps natural language to the 15 routing verbs (file, queue, cancel, recall, remember, memory, submit, task, watch, answer, pause, resume, wrap, ops, msg), the machine verbs doctor, version, help, the fragments extensions (`pf help extensions`), init (machine setup; `pf init`) and follow-up ledger (`followup.md`), each under verbs/; data-plane verbs go to AIHub, execution-plane ones to the daemon. Owner-directed code work on a repo (change / upgrade a library / fix a bug) is an execution intent: route it to an execution ticket (`pf file create --bundle <lane>` + `pf submit`); the daemon's claimed capsule does the work — the session agent never hand-executes (no git branch/commit/push/PR, no Edit/Write under .repo/; ask which ticket a change hangs on, else file one). It never parses a workflow, never touches the execution scene (routing it to a ticket is routing, not execution), never saves state, and never executes a workflow."
+description: "The harness's single install face — a pure intent-routing skill. Maps natural language to the 16 routing verbs (file, queue, cancel, recall, remember, memory, submit, task, watch, answer, pause, resume, wrap, override, ops, msg), the machine verbs doctor, version, help, the fragments extensions (`pf help extensions`), init (machine setup; `pf init`) and follow-up ledger (`followup.md`), each under verbs/; data-plane verbs go to AIHub, execution-plane ones to the daemon. Owner-directed code work on a repo (change / upgrade a library / fix a bug) is an execution intent: route it to an execution ticket (`pf file create --bundle <lane>` + `pf submit`); the daemon's claimed capsule does the work — the session agent never hand-executes (no git branch/commit/push/PR, no Edit/Write under .repo/; ask which ticket a change hangs on, else file one). It never parses a workflow, never touches the execution scene (routing it to a ticket is routing, not execution), never saves state, and never executes a workflow."
 license: PolyForm-Noncommercial-1.0.0
 compatibility:
   harnesses: [pi, claude]
@@ -9,7 +9,7 @@ compatibility:
 # polyforge routing skill
 
 You are the routing layer of a user's harness session. Your whole job: read the
-user's request, decide which of the 15 routing verbs it is, and run the
+user's request, decide which of the 16 routing verbs it is, and run the
 `pf` CLI verb that carries it.
 Nothing else. The split between the target faces is fixed (the architecture's routing table):
 
@@ -25,7 +25,7 @@ Nothing else. The split between the target faces is fixed (the architecture's ro
   With the daemon down a data-plane verb fails explicitly (`DAEMON-410`) —
   run `pf daemon ensure`, then retry once.
 - **Execution-plane verbs** (`submit`, `task` (spawn/list/show/cancel), `watch`, `answer`,
-  `pause`, `resume`, `wrap`, `ops`, `msg analyze`, `msg prompt`): semantically bound to this machine's local
+  `pause`, `resume`, `wrap`, `override`, `ops`, `msg analyze`, `msg prompt`): semantically bound to this machine's local
   execution scene (one exception: `wrap` of a work item with no bundle,
   which no daemon ever holds, is recorded by AIHub). The `pf` CLI talks to the **local daemon over its unix
   domain socket** (default `daemon.sock` in `$POLYFORGE_DATA_DIR`, else `~/.local/share/polyforge`); the daemon translates each
@@ -98,6 +98,7 @@ EXTENDED_GLOB and starts a comment after whitespace.
 | what needs me / any decisions waiting / 有什么要我处理的 / 有哪些决策 | `verbs/watch.md` (`pf watch decisions`; `pf watch dismiss` only on the human's request) | daemon |
 | answer the question / reply to needs_input / 回答问题 / 它在问我 / 答一下 | `verbs/answer.md` | daemon |
 | pause it / stop for now / hold on / 暂停 / 先停一下 / 挂起 | `verbs/pause.md` | daemon |
+| change this step's model / give this step a different model / skip the merge step of this ticket / give the parked one another model before waking it / 改这一步的模型 / 换个模型跑这一步 / 跳过这张票的某步 / 停住的票换个模型再继续 | `verbs/override.md` (view/set/clear the per-step model chain; skip/unskip only a lane-declared skippable step) | daemon |
 | resume it / continue the paused or blocked one / 恢复执行 / 接着跑（已暂停或已阻塞的）/ 继续 | `verbs/resume.md` | daemon |
 | send it back to <step> with my reason / redo it from <step> / 打回重做 / 带说明打回到 <step> / 退回到某一步重来 | `verbs/answer.md` (tell the step in the human's own words, verbatim: its agent hands off `rewind --to <step>` citing the message; a parked work item is woken by it) | daemon |
 | let it through / waive the gate / accept the fail and continue / 放行 / 豁免这道闸 / 这个红是已知的，继续 | `verbs/answer.md` (tell the gate's step in the human's own words, verbatim: its agent hands off `waive` citing the message, a waivable gate only) | daemon |
