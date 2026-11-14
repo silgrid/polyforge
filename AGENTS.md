@@ -6,9 +6,11 @@ principles every workflow step carries (`workflows/_shared/principles.md`);
 polyforge belongs here, not there. A review treats a violation of any rule
 below as a blocking finding.
 
-- **Scope.** The core is task + memory + workflow. The internal line keeps iterating
-  and evolving; its changes reach the public repository as PRs filed in batches, each
-  gated by the owner. Keep the mental model simple.
+- **Scope.** The core is task + memory + workflow. This public repository is the
+  development mainline: team work — features, fixes, docs, config — and external
+  contributions are all filed and developed here. The internal line carries only the
+  internal layer (config defaults, guards) and the absorption of public changes.
+  Keep the mental model simple.
 - **Resumable capsules.** Every work item has a complete capsule and can resume
   from any stage. Shutdown is designed as crash-equals-shutdown; the kill -9
   chaos tests must keep passing.
