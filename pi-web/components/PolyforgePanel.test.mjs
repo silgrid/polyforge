@@ -1241,3 +1241,25 @@ test("polyforge#24: DAG selection wiring follows current step until a manual cho
   assert.match(source, /title=\{`\$\{node\.id\} · \$\{stepStatusLabel\(node\.status\)\}\$\{timing \? ` · \$\{formatEventTime\(timing\.startedAt\)\}` : ""\}`\}/);
 });
 
+
+test("polyforge#2: the poll re-reads an expanded tool card whose held detail still has no result; the settled, loading, unavailable and gone are not", () => {
+  const context = vm.createContext({});
+  vm.runInContext(stripTypeScriptTypes(extractPureFunction("rereadToolIds").replace(/export /g, "")), context);
+  const detail = (over) => ({ status: "available", input: "", output: null, isError: false, ...over });
+  const details = new Map([
+    ["running", detail({})],
+    ["settled", detail({ output: "DONE" })],
+    ["loading", { status: "loading" }],
+    ["unavailable", { status: "unavailable" }],
+  ]);
+  const lineIds = new Set(["running", "settled", "loading"]);
+  const expanded = new Set(["running", "settled", "loading", "unavailable", "gone"]);
+  assert.deepEqual(context.rereadToolIds(details, expanded, lineIds), ["running"],
+    "only the expanded card whose detail still has no result is re-read (its id must still be in the snapshot)");
+  assert.deepEqual(context.rereadToolIds(details, new Set(), lineIds), [], "nothing expanded: nothing re-read");
+  assert.deepEqual(context.rereadToolIds(new Map(), expanded, lineIds), [], "nothing held yet: the first read comes from the card's expansion");
+  // wiring: the panel keeps the expanded ids and feeds the poll's snapshot into it
+  assert.match(source, /const openTools = useRef<Set<string>>\(\(\) => new Set\(\)\);/);
+  assert.match(source, /for \(const id of rereadToolIds\(detailsRef\.current, openTools\.current, lineIds\)\) loadDetail\(id\);/);
+  assert.match(source, /held && held\.status === "available" && held\.output === null/, "loadDetail re-asks a resultless held detail");
+});

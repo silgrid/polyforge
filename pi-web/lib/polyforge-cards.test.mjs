@@ -869,6 +869,41 @@ test("the detail read returns one call's full masked input and output, no result
   }
 });
 
+test("a call without a result answers the step's progress-file lines, masked and tailed; a paired call or a missing file answers none", async (t) => {
+  const f = fixture(t);
+  const wi = "wi_progress02";
+  const running = [
+    piCall("c1", 3, "k1", "bash", { command: "npm test" }),
+  ];
+  const dir = progressCapsule(f, wi, [["verification", 1, "pi", "pi.jsonl", [
+    ...running,
+    piCall("c2", 5, "k2", "bash", { command: "npm run test:e2e" }),
+    stamped({ type: "message", id: "r2", message: { role: "toolResult", toolCallId: "k2", isError: false, content: [{ type: "text", text: "DONE" }] } }, 6),
+  ]]]);
+  mkdirSync(join(dir, "runtime-state", "progress"), { recursive: true });
+  const said = Array.from({ length: 12 }, (_, i) => `verify.py: [${i + 1}/12] cmd${i + 1} (fast): echo ${i + 1} token=SECRET-TOKEN`);
+  writeFileSync(join(dir, "runtime-state", "progress", "verification.log"), said.join("\n") + "\n");
+  const lines = (await lib.readProgressSnapshot(f.root, dir, wi)).lines.filter((line) => line.kind === "tool");
+  const held = await lib.readProgressToolDetail(f.root, dir, lines[0].id);
+  assert.equal(held.available, true, "the running call is readable");
+  assert.equal(held.hasResult, false);
+  assert.deepEqual(held.progress, said.slice(-10).map((line) => line.replace("SECRET-TOKEN", "***")),
+    "the newest ten lines, each credential-masked");
+  const paired = await lib.readProgressToolDetail(f.root, dir, lines[1].id);
+  assert.equal(paired.hasResult, true);
+  assert.equal("progress" in paired, false, "a paired call shows its result, not interim lines");
+  const body = JSON.stringify(held);
+  for (const word of ["SECRET-TOKEN", dir, f.root, "/progress/"]) assert.ok(!body.includes(word), `an answer carries ${word}`);
+  // a step without a progress file (none written yet, or a journal line without a step id) answers no lines
+  const bare = progressCapsule(f, "wi_progress03", [["code", 1, "pi", "pi.jsonl", [
+    piCall("c3", 3, "k3", "bash", { command: "echo hi" }),
+  ]]]);
+  const bareLines = (await lib.readProgressSnapshot(f.root, bare, "wi_progress03")).lines.filter((line) => line.kind === "tool");
+  const noFile = await lib.readProgressToolDetail(f.root, bare, bareLines[0].id);
+  assert.equal(noFile.available, true, "the call is readable without a progress file");
+  assert.equal(noFile.progress, undefined, "no progress file: no interim lines");
+});
+
 test("each job reads its own Cell's state dir (its WorkRef.profile); a pre-Cell root is its own dir", async () => {
   const root = mkdtempSync(join(tmpdir(), "pf-cells-root-"));
   try {
