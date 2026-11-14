@@ -296,11 +296,11 @@ Eight standing rules, binding on every polyforge session:
    answer → file one first and route the work through it. Hand-executing bypasses every
    gate — no root-cause, no verification, no review, no delivery record.
    Filing does not grill: a ticket may be filed as a bare idea. Before `pf submit`, run
-   the acceptance check of `verbs/submit.md` — and, beside it, its analysis check — no
-   criterion under `## Acceptance` / `## 验收`, or no content under `## 分析`, means
-   stop: tell the user and grill the acceptance in the session first (the pre-submit
-   analysis of `verbs/submit.md` — a read-only `pf task spawn` errand whose report the
-   session writes into the ticket's `## 分析` section — precedes or rides that grill).
+   the acceptance check of `verbs/submit.md` — and, beside it, its analysis check: no
+   criterion under `## Acceptance` / `## 验收` means stop and grill the acceptance in
+   the session; no content under `## 分析` means run the pre-submit analysis first —
+   a read-only `pf task spawn` errand whose report the session writes into the
+   ticket's `## 分析` section, or the owner's dated 「免分析」.
 8. **Sync the session clone before reading it as fact (session-layer clone sync).**
    Nothing keeps `<workspace>/.repo/<repo>` current: a claim clones fresh into the
    capsule, but the session's reading copy can sit hundreds of commits behind origin's

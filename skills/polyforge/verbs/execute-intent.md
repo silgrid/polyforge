@@ -52,7 +52,10 @@ it" of an existing work item → `verbs/submit.md`.
      recorded). A project may carry its own
      bundles — ask when unsure.
    - **Acceptance carrier** — every acceptance criterion is written
-     `<criterion> — carried by <step id>`, the step id taken from the chosen
+     `<criterion> — carried by <step id>`, its proof — the command that
+     shows it holds and the directory that command runs in — riding before
+     the carrier (the slot's shape in `verbs/file.md`), the step id taken
+     from the chosen
      lane's step table (the `steps:` list of its `workflow.yaml`; the lane
      table in `verbs/file.md` names the lanes). A criterion that names no
      step either drops to the evidence that graph actually runs, recorded as

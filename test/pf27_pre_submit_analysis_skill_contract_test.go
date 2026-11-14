@@ -1,4 +1,4 @@
-// carries: skills/polyforge/verbs/submit.md, skills/polyforge/verbs/file.md, skills/polyforge/verbs/execute-intent.md, skills/polyforge/verbs/task.md, skills/polyforge/verbs/queue.md, skills/polyforge/verbs/ops.md, skills/polyforge/SKILL.md, docs/contributing.md, docs/reference/commands.md
+// carries: skills/polyforge/verbs/submit.md, skills/polyforge/verbs/file.md, skills/polyforge/verbs/execute-intent.md, skills/polyforge/verbs/task.md, skills/polyforge/verbs/queue.md, skills/polyforge/verbs/ops.md, skills/polyforge/SKILL.md, docs/contributing.md, docs/reference/commands.md, docs/user-guide.md, docs/bundles.md
 
 package test
 
@@ -96,6 +96,15 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 		}
 	}
 
+	// review r1#2: the grill's writing path carries the same shape, by
+	// reference to the carrier slot.
+	accSection := pf27Section(submit, "## Before submitting: the acceptance check")
+	for _, want := range []string{"the `Acceptance carrier` slot's shape", "the command that shows it holds", "before the carrier, which stays last"} {
+		if !strings.Contains(accSection, want) {
+			t.Errorf("%s's acceptance-check section must carry %q — the criteria written after the grill follow the Acceptance carrier slot's shape, proof command and run directory (AC6, review r1#2)", submitRel, want)
+		}
+	}
+
 	// verbs/file.md: the acceptance item names its proof; the Down-lane
 	// check names no specific project's components; the filing side
 	// references the analysis without restating it.
@@ -109,6 +118,16 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 	} {
 		if !strings.Contains(ac, want) {
 			t.Errorf("%s's \"Acceptance at creation\" must carry %q — every acceptance item names its proof command and run directory (AC6)", fileRel, want)
+		}
+	}
+	// review r1#2: the proof rides in the Acceptance carrier slot — the one
+	// shape every acceptance criterion is written in — carrier still last.
+	for _, want := range []string{
+		"`<criterion> (proof: <command>, run in <dir>) — carried by <step id>`",
+		"the carrier, which stays last",
+	} {
+		if !strings.Contains(fileFlat, want) {
+			t.Errorf("%s's Acceptance carrier slot must carry %q — the proof command and run directory ride in the slot, before the carrier (AC6, review r1#2)", fileRel, want)
 		}
 	}
 	if strings.Contains(fileFlat, "driver/daemon core") {
@@ -126,9 +145,9 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 
 	// The other fragments reference, never restate.
 	intent := pf27Flat(pf27Read(t, filepath.Join("skills", "polyforge", "verbs", "execute-intent.md")))
-	for _, want := range []string{"pre-submit analysis", "`pf task spawn`", "`## 分析`", "`verbs/submit.md`"} {
+	for _, want := range []string{"pre-submit analysis", "`pf task spawn`", "`## 分析`", "`verbs/submit.md`", "riding before the carrier"} {
 		if !strings.Contains(intent, want) {
-			t.Errorf("skills/polyforge/verbs/execute-intent.md must carry %q — the routing action references the analysis check (AC4)", want)
+			t.Errorf("skills/polyforge/verbs/execute-intent.md must carry %q — the routing action references the analysis check (AC4) and the slot's proof shape (AC6)", want)
 		}
 	}
 	task := pf27Flat(pf27Read(t, filepath.Join("skills", "polyforge", "verbs", "task.md")))
@@ -166,6 +185,20 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 	for _, want := range []string{"--allow-no-acceptance", "--allow-no-analysis", "需要交互：未分析", "\"analysis_missing\": true", "both marks when both are missing"} {
 		if !strings.Contains(commands, want) {
 			t.Errorf("docs/reference/commands.md must carry %q — the reference documents the prechecks and the queue's interaction marks (AC7)", want)
+		}
+	}
+	// review r1#3: the guide's develop example and the bundles reference
+	// state the analysis check beside the acceptance check.
+	guide := pf27Flat(pf27Read(t, filepath.Join("docs", "user-guide.md")))
+	for _, want := range []string{"a `## 分析` section", "`pf task spawn`", "--allow-no-analysis", "免分析"} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("docs/user-guide.md's develop example must carry %q — the worked example survives the analysis check (review r1#3)", want)
+		}
+	}
+	bundles := pf27Flat(pf27Read(t, filepath.Join("docs", "bundles.md")))
+	for _, want := range []string{"--allow-no-analysis", "需要交互：未分析", "neither check runs"} {
+		if !strings.Contains(bundles, want) {
+			t.Errorf("docs/bundles.md's `acceptance:` entry must carry %q — the lane key governs the analysis check too (review r1#3)", want)
 		}
 	}
 	contrib := pf27Flat(pf27Read(t, filepath.Join("docs", "contributing.md")))

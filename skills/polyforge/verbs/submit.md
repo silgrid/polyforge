@@ -83,7 +83,10 @@ session: what it does, why, its scope, what it does not do, and
 when it is done. Survey the code with a read-only subagent where the answers depend on
 it. Write the decisions into the ticket's background and each testable
 criterion, marked `— carried by build`, into `## Acceptance` (`pf file edit
-<id> --content @file`), then submit.
+<id> --content @file`) — each criterion written in the `Acceptance carrier`
+slot's shape (`verbs/file.md`): its proof — the command that shows it holds
+and the directory that command runs in — before the carrier, which stays
+last. Then submit.
 
 Research, experiments and feasibility checks happen in the session before
 submitting; only their conclusion goes into the ticket — the claimed build

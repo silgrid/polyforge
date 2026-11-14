@@ -111,7 +111,10 @@ prose it may skip:
   `verbs/execute-intent.md`; custom bundles and their authoring are the
   authority of `docs/bundles.md` (do not restate it).
 - **Acceptance carrier** — every acceptance criterion is written
-  `<criterion> — carried by <step id>`, the step id taken from the chosen
+  `<criterion> (proof: <command>, run in <dir>) — carried by <step id>`:
+  its proof — the command that shows the criterion holds and the
+  directory that command runs in — rides before the carrier, which stays
+  last; the step id is taken from the chosen
   lane's step table (the table is the authority; do not copy a step list into
   the proposal from memory). A criterion that names no step either drops to
   the evidence that graph actually runs, recorded in the `content` as an
@@ -164,12 +167,12 @@ selection authority stay in `docs/bundles.md`; it adds no lane.
 Filing any ticket, write its `## Acceptance` at creation only when the
 requirement is **very clear**: what to do, its scope and when it is done are all
 settled, and there is nothing the owner must decide — when unsure, it is not
-clear. Then each item is a verifiable criterion marked `— carried by build`
-(the `Acceptance carrier` slot above), and it names its proof: the command
-that shows the criterion holds and the directory that command runs in (for
-example `- AC1 the queue marks a ticket without analysis — carried by
-build, proof: cd <repo> && go test ./internal/polyforge/cli/ -run
-'^TestPF27Queue'`), so the ticket can be submitted directly.
+clear. Then each item is a verifiable criterion written in the `Acceptance
+ carrier` slot's shape (above): its proof — the command that shows the
+criterion holds and the directory that command runs in — before the carrier,
+for example `- AC1 the timeout is gone (proof: <the command that shows it>,
+run in <its directory>) — carried by build`, so the ticket can be submitted
+directly.
 Otherwise file it as usual without the section and write no guessed criteria:
 the submit-time acceptance check (`verbs/submit.md`) brings the interaction that
 settles them. Claiming a follow-up item (`verbs/followup.md`, Claim) whose
