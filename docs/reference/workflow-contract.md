@@ -343,7 +343,9 @@ typed shape as `encoding/json` reads it. The shared scripts are
 `published.py`
 ([commands.md](commands.md#step-scripts--syncpy-mergepy-revertpy-runpy)),
 and `facts.py` and `integrate.py`
-([commands.md](commands.md#workflow-scripts--factspy-integratepy)).
+([commands.md](commands.md#workflow-scripts--factspy-integratepy)), and
+`fast_checks.py`
+([commands.md](commands.md#builds-checks--fast_checkspy)).
 Its unit tests are
 `_shared/scripts/tests/` (`python3 -m unittest discover -s
 workflows/_shared/scripts -t workflows/_shared/scripts`); CI runs them

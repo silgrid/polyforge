@@ -1,7 +1,7 @@
 ---
 name: build
 description: Build the change test first and record each unit's red-then-green run in artifacts/build/units.json - the run review replays red at the test commit and verification runs green again - asking the owner only in the four cases, right after the plan.
-commands: []
+commands: [fast_checks.py]
 ---
 # build
 
