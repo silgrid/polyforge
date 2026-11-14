@@ -1270,8 +1270,10 @@ func (m *AdminManager) DeactivateProject(idOrName string) (*api.Project, error) 
 		slugs = append(slugs, fmt.Sprintf("%s#%d", name, seq))
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, err
 	}
+	rows.Close() // the checks and the flip run on the same connection
 	if len(slugs) > 0 {
 		extra, merr := json.Marshal(struct {
 			Reason    string   `json:"reason"`
