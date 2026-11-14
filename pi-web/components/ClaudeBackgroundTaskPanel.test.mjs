@@ -47,12 +47,13 @@ test("status and elapsed time are in a separate row below command and descriptio
   const metaOpenStart = html.lastIndexOf("<div", metaStart);
   const metaEnd = html.indexOf("</div>", metaStart) + "</div>".length;
   const close = html.indexOf('aria-label="Close"');
+  const headerStart = html.indexOf('data-claude-task-header-row=""');
   assert.ok(command >= 0, html);
   assert.ok(metaStart > close && close > command, html);
   assert.match(html.slice(metaOpenStart, metaEnd), /data-claude-task-status-label=""/);
   assert.match(html.slice(metaOpenStart, metaEnd), />Running</);
   assert.match(html.slice(metaOpenStart, metaEnd), />9s</);
-  const headerBeforeMeta = html.slice(command, metaOpenStart);
+  const headerBeforeMeta = html.slice(headerStart, metaOpenStart);
   assert.match(headerBeforeMeta, /data-claude-task-header-row=""/);
   assert.doesNotMatch(headerBeforeMeta, /data-claude-task-status-label=""/);
   assert.doesNotMatch(headerBeforeMeta, />9s</);
