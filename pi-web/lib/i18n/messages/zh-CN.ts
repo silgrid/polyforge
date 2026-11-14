@@ -864,7 +864,7 @@ export const zhCNLocale: LocalePlugin = {
     "transcriptNotice.foldCacheMiss": "缓存未命中 {tokens} Token{cost}",
     "transcriptNotice.foldCacheMisses": "缓存未命中 {count} 次 {tokens} Token{cost}",
     "settings.agentLanguage": "Agent 使用语言",
-    "settings.agentLanguageDescription": "pi-web 自己托管的 agent（新的 pi 与 claude 会话及其 pi 子代理）回复、叙述与汇报所用的语言。保存在服务器上，所有设备共用；与上面的界面语言互不影响。会话保持创建时的语言。若已安装 Polyforge，保存时也会设置其步骤 agent 的语言（默认 Cell）。",
+    "settings.agentLanguageDescription": "pi-web 自己托管的 agent（新的 pi 与 claude 会话及其 pi 子代理）回复、叙述与汇报所用的语言。保存在服务器上，所有设备共用；与上面的界面语言互不影响。会话保持创建时的语言。若已安装 Polyforge，保存时也会设置其步骤 agent 的语言（默认 Cell）；未单独设置语言的 Cell 都沿用默认 Cell 的设置。",
     "settings.agentLanguageEnglish": "English",
     "settings.agentLanguageChinese": "中文",
     "settings.agentLanguageSaveError": "Agent 使用语言保存失败，仍沿用原来的值。",

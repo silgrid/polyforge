@@ -141,6 +141,9 @@ type Config struct {
 	// its data dir — the unhosted test seam). Shared, every Cell records
 	// into the one feed, each entry naming its Cell.
 	SharedFeed *decisionFeed
+	// AgentLanguageFallback supplies the default Cell's live language to a
+	// named Cell when its own [daemon] agent_language is unset.
+	AgentLanguageFallback func() string
 	// LoadFile reads this Cell's file config for a reload (nil = parse
 	// ConfigPath on its own): the Host binds the Host file for default and
 	// the named file over the Host keys for a named Cell.
@@ -554,6 +557,7 @@ func New(cfg Config) (*Daemon, error) {
 	// file-only startup baseline; a reload swaps them.
 	live.SetSummarize(cfg.StartupFile.Summarize)
 	live.SetAgentLanguage(cfg.StartupFile.Daemon.AgentLanguage)
+	live.SetAgentLanguageFallback(cfg.AgentLanguageFallback)
 	live.SetMemoryPolicy(cfg.StartupFile.MemoryPolicy)
 
 	// liveLimits answers the current supervision defaults (a live reload's

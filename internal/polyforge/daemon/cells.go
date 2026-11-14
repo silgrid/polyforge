@@ -39,6 +39,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
+	"github.com/silgrid/polyforge/internal/polyforge/liveconfig"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
 )
@@ -205,6 +206,23 @@ func (h *Host) build(profile string, c cli.Config) (Config, error) {
 	cfg.HostSlots = h.slots
 	cfg.SharedAdmission = h.admission
 	hostPath := h.cfg.Set.HostPath
+	if profile != cellcfg.DefaultProfile {
+		// Resolve the default Cell at read time so a live reload is visible
+		// to the next named Cell dispatch without rebuilding this closure.
+		cfg.AgentLanguageFallback = func() string {
+			h.mu.Lock()
+			def := h.cells[cellcfg.DefaultProfile]
+			var live *liveconfig.State
+			if def != nil && def.d != nil {
+				live = def.d.live
+			}
+			h.mu.Unlock()
+			if live == nil {
+				return ""
+			}
+			return live.AgentLanguage()
+		}
+	}
 	if profile == cellcfg.DefaultProfile {
 		cfg.LoadFile = func() (cli.Config, error) { return cli.LoadFileConfig(hostPath) }
 	} else {

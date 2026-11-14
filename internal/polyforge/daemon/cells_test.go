@@ -26,7 +26,7 @@ type testHost struct {
 // hostCell is one Cell of a test Host: its profile, an invalid reason ("" =
 // valid) and its machine id.
 type hostCell struct {
-	profile, invalid, machineID string
+	profile, invalid, machineID, agentLanguage string
 }
 
 // newTestHost assembles and runs a Host over the given Cells (the first is
@@ -63,6 +63,14 @@ func newTestHost(t *testing.T, cells ...hostCell) *testHost {
 		return Config{
 			MachineID: ids[profile], SocketPath: th.sock, Mapping: mappingFor(ws), DataDir: dataDir,
 			GitRemoteBase: filepath.Join(root, "hub"), MaxConcurrent: 4, Hub: hub, Spawner: &fakeSpawner{},
+			StartupFile: cli.Config{Daemon: cli.DaemonSettings{AgentLanguage: func() string {
+				for _, c := range cells {
+					if c.profile == profile {
+						return c.agentLanguage
+					}
+				}
+				return ""
+			}()}},
 			AgentStarter: fakeEngineStarter(), ObservePoll: 10 * time.Millisecond, DrainInterval: 10 * time.Millisecond,
 			DispatchTick: 10 * time.Millisecond, Hosted: true, Server: "http://hub-" + profile + ":1", APIKey: "k-" + profile,
 		}, nil
