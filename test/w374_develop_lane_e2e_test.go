@@ -815,7 +815,7 @@ func TestW374DevelopLaneEndToEnd(t *testing.T) {
 	if exits := w374RunExits(t, capDir, w374MergeLine); len(exits) != 2 || exits[0] != 1 || exits[1] != 0 {
 		t.Fatalf("merge.py exits (the default branch moved since verification, then landed): %v", exits)
 	}
-	if w.prState("demo", "1") != "MERGED" || w.calls("gh pr merge") != 2 || w.calls("gh pr merge https://github.com/fake/demo/pull/1 --merge --match-head-commit "+head) != 1 {
+	if w.prState("demo", "1") != "MERGED" || w.calls("gh pr merge") != 1 || w.calls("gh pr merge https://github.com/fake/demo/pull/1 --merge --match-head-commit "+head) != 1 {
 		t.Fatalf("the merge step asks the forge once, at the re-verified head (the moved default never reaches gh pr merge): state %q, merges %d (head %s)", w.prState("demo", "1"), w.calls("gh pr merge"), head)
 	}
 	// the conflicting main (the seed's last push) is merged into the landed head
