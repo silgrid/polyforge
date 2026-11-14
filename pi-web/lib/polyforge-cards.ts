@@ -1084,21 +1084,21 @@ function subagentDirOf(transcript: string): string {
  * capsule>/<session>/subagents/` (newer while the step runs; the capsule
  * copy is what remains once claude-config is pruned).
  */
-function subagentDirs(root: string, capsuleDir: string, spawns: PolyforgeSpawn[]): { dirs: string[]; harness: PolyforgeHarness }[] {
-  const out: { dirs: string[]; harness: PolyforgeHarness }[] = [];
+function subagentDirs(root: string, capsuleDir: string, spawns: PolyforgeSpawn[]): { dirs: string[]; harness: PolyforgeHarness; step?: string }[] {
+  const out: { dirs: string[]; harness: PolyforgeHarness; step?: string }[] = [];
   const seen = new Set<string>();
   for (const spawn of spawns) {
     if (spawn.harness === "pi") {
       if (!spawn.transcript || !isAbsolute(spawn.transcript) || seen.has(spawn.transcript)) continue;
       seen.add(spawn.transcript);
-      out.push({ dirs: [subagentDirOf(spawn.transcript)], harness: "pi" });
+      out.push({ dirs: [subagentDirOf(spawn.transcript)], harness: "pi", ...(spawn.step ? { step: spawn.step } : {}) });
     } else if (spawn.harness === "claude") {
       const session = spawn.harnessSession;
       if (!session || !HARNESS_SESSION_PATTERN.test(session) || seen.has(`claude\0${session}`)) continue;
       seen.add(`claude\0${session}`);
       const dirs = [join(root, "claude-config", "projects", encodeClaudeProjectDir(capsuleDir), session, "subagents")];
       if (spawn.transcript && isAbsolute(spawn.transcript)) dirs.push(subagentDirOf(spawn.transcript));
-      out.push({ dirs, harness: "claude" });
+      out.push({ dirs, harness: "claude", ...(spawn.step ? { step: spawn.step } : {}) });
     }
   }
   return out;
@@ -1108,10 +1108,12 @@ function subagentDirs(root: string, capsuleDir: string, spawns: PolyforgeSpawn[]
  *  then file name), the first directory of a conversation winning a name
  *  both hold. Each resolves inside the capsule or the data root; one
  *  without a readable meta naming its parent call is not attachable and
- *  is skipped. */
+ *  is skipped. Each source carries its conversation's spawn's step: a
+ *  subagent inherits PF_STEP, so its say appends to the same step progress
+ *  file its parent's card reads (polyforge#2, review r1#3). */
 async function progressSubagentSources(root: string, capsuleDir: string, spawns: PolyforgeSpawn[]): Promise<SubagentSource[]> {
   const sources: SubagentSource[] = [];
-  for (const { dirs, harness } of subagentDirs(root, capsuleDir, spawns)) {
+  for (const { dirs, harness, step } of subagentDirs(root, capsuleDir, spawns)) {
     const taken = new Set<string>();
     for (const dir of dirs) {
       const real = await realInside(dir, [capsuleDir, root]);
@@ -1134,7 +1136,7 @@ async function progressSubagentSources(root: string, capsuleDir: string, spawns:
         const index = typeof meta.index === "number" && Number.isSafeInteger(meta.index) ? meta.index : 0;
         const agent = asString(meta.agentType);
         sources.push({
-          source: { path, harness },
+          source: { path, harness, ...(step ? { step } : {}) },
           callId,
           index,
           name,

@@ -163,7 +163,9 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   masked) of the step's progress file `runtime-state/progress/<step>.log`
   (the step scripts' say appends every progress line there — the daemon keeps
   no partial output of a running call), the expanded card's interim view of
-  which command runs and how long the last one took — or 200 `{available:false, error}` (a fixed reason) when
+  which command runs and how long the last one took — a subagent's card
+  reads its parent spawn's step file (a subagent inherits PF_STEP, so its
+  own say appends there too) — or 200 `{available:false, error}` (a fixed reason) when
   the job index, the capsule, the transcript (moved, replaced — a new inode is
   a new identity — or over the 128 MiB bound) or the call is no longer
   readable. Never 5xx; no answer names a path. The read
