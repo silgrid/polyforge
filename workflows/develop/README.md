@@ -62,7 +62,9 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   --replay --isolation host` (each unit's run replayed on the tree of its test commit, on
   the host: it must be red) and `carries`. A
   blocking finding names one of five classes: `bug`, `ac_gap`, `project_rule`,
-  `test_weakened`, `guarantee`; everything else is non-blocking. On a later round it checks
+  `test_weakened`, `guarantee`; everything else is non-blocking. A unit that misses its
+  test-quality record (`workflows/_shared/test_quality.md`), or whose replayed red
+  contradicts the recorded reason, is `test_weakened`. On a later round it checks
   the previous round's findings and, from the commits the daemon stamped, whether the build
   changed anything at all — a build that changed nothing without a reason per finding fails
   again.
