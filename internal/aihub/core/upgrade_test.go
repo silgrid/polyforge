@@ -293,6 +293,9 @@ func upgradeStatements(block string) []string {
 // sqlVer2207 splits the messaging read cursor into delivery and read cursors.
 // sqlVer2208 drops machines.user_id and deletes the unreferenced
 // heartbeat-minted machine users.
+// sqlVer021 adds the project deactivation status column (polyforge#30;
+// the first public-tagged window: a v0.2.0 database picks it up in the
+// v0.2.0 -> v0.2.1 deploy).
 const (
 	sqlVer     = "v2.4.0"
 	sqlVer250  = "v2.5.0"
@@ -301,11 +304,12 @@ const (
 	sqlVer2206 = "v2.20.6"
 	sqlVer2207 = "v2.20.7"
 	sqlVer2208 = "v2.20.8"
+	sqlVer021  = "v0.2.1"
 )
 
 // sqlVers lists every deploy/sql version in ascending order: a pre-#149
 // database needs all of them before the current code runs on it.
-var sqlVers = []string{sqlVer, sqlVer250, sqlVer2140, sqlVer2170, sqlVer2206, sqlVer2207, sqlVer2208}
+var sqlVers = []string{sqlVer, sqlVer250, sqlVer2140, sqlVer2170, sqlVer2206, sqlVer2207, sqlVer2208, sqlVer021}
 
 // loadSQLFile reads one file of deploy/sql/v2.4.0/.
 func loadSQLFile(t *testing.T, name string) string { return loadSQLFileOf(t, sqlVer, name) }
@@ -332,6 +336,42 @@ func applyLaterUpgrades(t *testing.T, db *sql.DB) {
 	for _, v := range sqlVers[1:] {
 		applySQLText(t, db, loadSQLFileOf(t, v, "upgrade.sql"))
 	}
+}
+
+// applyUpgradesAfter applies every deploy/sql version strictly AFTER
+// afterVer, in ascending order — the per-version round-trips run the
+// CURRENT code, and the current code needs the whole chain, so a fixture
+// that stops at its own release applies the rest before that leg.
+func applyUpgradesAfter(t *testing.T, db *sql.DB, afterVer string) {
+	t.Helper()
+	seen := false
+	for _, v := range sqlVers {
+		if v == afterVer {
+			seen = true
+			continue
+		}
+		if seen {
+			applySQLText(t, db, loadSQLFileOf(t, v, "upgrade.sql"))
+		}
+	}
+	if !seen {
+		t.Fatalf("applyUpgradesAfter: %q is not a deploy/sql version", afterVer)
+	}
+}
+
+// rollbackThrough rolls back every deploy/sql version from the newest
+// down to AND INCLUDING throughVer, descending — deploy.sh's
+// auto-rollback order — so a fixture that applied the chain above
+// throughVer returns to that version's pre-upgrade shape.
+func rollbackThrough(t *testing.T, db *sql.DB, throughVer string) {
+	t.Helper()
+	for i := len(sqlVers) - 1; i >= 0; i-- {
+		applySQLText(t, db, loadSQLFileOf(t, sqlVers[i], "rollback.sql"))
+		if sqlVers[i] == throughVer {
+			return
+		}
+	}
+	t.Fatalf("rollbackThrough: %q is not a deploy/sql version", throughVer)
 }
 
 // loadUpgradeDoc answers docs/upgrade.md's fenced sql blocks.
@@ -476,10 +516,12 @@ func applySQLText(t *testing.T, db *sql.DB, sqlText string) {
 }
 
 // isMandatoryBlock answers whether one doc sql block is a window
-// upgrade: a DROP (the subtraction releases) or a CREATE TABLE (the
-// admin_audit release — its upgrade carries no DROP).
+// upgrade: a DROP (the subtraction releases), a CREATE TABLE (the
+// admin_audit release — its upgrade carries no DROP) or an ALTER TABLE
+// (the additive releases; v0.2.1's project-status column is ALTER-only).
 func isMandatoryBlock(upper string) bool {
-	return strings.Contains(upper, "DROP") || strings.Contains(upper, "CREATE TABLE")
+	return strings.Contains(upper, "DROP") || strings.Contains(upper, "CREATE TABLE") ||
+		strings.Contains(upper, "ALTER TABLE")
 }
 
 // publicBaseSQL is the newest deploy/sql version a database written by the

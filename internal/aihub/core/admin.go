@@ -995,8 +995,8 @@ func (m *AdminManager) CreateProject(req CreateProjectRequest) (*api.Project, er
 		return nil, err
 	}
 	now := Now()
-	if _, err := m.db.Exec(`INSERT INTO projects(id, name, description, repos, created_at, updated_at)
-		VALUES (?1,?2,?3,?4,?5,?5)`,
+	if _, err := m.db.Exec(`INSERT INTO projects(id, name, description, status, repos, created_at, updated_at)
+		VALUES (?1,?2,?3,'active',?4,?5,?5)`,
 		id, req.Name, req.Description, string(repos), now); err != nil {
 		if isUniqueViolation(err) {
 			return nil, Fail(api.ErrCoreConflict, "", "project %q already exists", req.Name)
@@ -1009,9 +1009,9 @@ func (m *AdminManager) CreateProject(req CreateProjectRequest) (*api.Project, er
 func (m *AdminManager) GetProject(idOrName string) (*api.Project, error) {
 	var p api.Project
 	var repos string
-	err := m.db.QueryRow(`SELECT id, name, description, repos, created_at, updated_at
+	err := m.db.QueryRow(`SELECT id, name, description, status, repos, created_at, updated_at
 		FROM projects WHERE id=?1 OR name=?1`, idOrName).
-		Scan(&p.ID, &p.Name, &p.Description, &repos, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.Name, &p.Description, &p.Status, &repos, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, Fail(api.ErrCoreNotFound, "", "project %q", idOrName)
 	}

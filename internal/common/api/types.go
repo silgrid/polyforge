@@ -93,19 +93,19 @@ const (
 
 // Project (reference.md §4.1).
 type Project struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 	// Status is the project's global state: "active" (the only state a
 	// pre-v0.2.1 database ever had) or "deactivated" (polyforge#30: the
 	// whole project is read-only on the server and hidden from the default
 	// lists; restore brings it back — the hard delete stays the only way
 	// to lose data).
-	Status      string          `json:"status"`
-	Repos       []ProjectRepo   `json:"repos"`
-	Members     []ProjectMember `json:"members"`
-	CreatedAt   string          `json:"created_at"`
-	UpdatedAt   string          `json:"updated_at"`
+	Status    string          `json:"status"`
+	Repos     []ProjectRepo   `json:"repos"`
+	Members   []ProjectMember `json:"members"`
+	CreatedAt string          `json:"created_at"`
+	UpdatedAt string          `json:"updated_at"`
 }
 
 type ProjectRepo struct {
