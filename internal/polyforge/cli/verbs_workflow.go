@@ -286,9 +286,18 @@ func laneResolver(f daemonFacts, m *mapping.Plan) func(project, bundle string) *
 	}
 }
 
-// laneOf is laneResolver over one fresh read of the daemon's facts.
+// laneOf is laneResolver over one fresh read of the daemon's facts,
+// judging through the [workspace] mapping of the Cell the invocation
+// routes to (profile.go's routedCellMapping) — the lane a project's work
+// item runs on is its own workspace's (a named Cell's user lanes
+// included), never another Cell's. A mapping that cannot be read answers
+// a nil lane, which the callers read as a lane requiring acceptance.
 func laneOf(ctx *Context, project, bundle string) *workflow.Lane {
-	return laneResolver(readDaemonFacts(ctx), ctx.Cfg.Mapping)(project, bundle)
+	plan, _, err := ctx.routedCellMapping()
+	if err != nil {
+		return nil
+	}
+	return laneResolver(readDaemonFacts(ctx), plan)(project, bundle)
 }
 
 // missingLanes answers the queued items of items bound to a lane their
