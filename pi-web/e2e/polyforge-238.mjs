@@ -101,6 +101,16 @@ const blockLines = () => [
 ];
 const progressBody = (lines = BASE_LINES, omitted = 0) => ({ available: true, lines, omitted });
 const bulkLines = (count) => Array.from({ length: count }, (_, i) => line(`bulk-${i}`, "narration", `E2E-S238-BULK-${String(i + 1).padStart(3, "0")}`));
+const NAV_LINES = [
+  eventLine("nav-g1", "00:00:01 ▶ grill #1 · pi:e2e/model", "step_started", "accent"),
+  line("nav-g1-text", "narration", "E2E-NAV-GRILL"),
+  eventLine("nav-s1", "00:00:10 ▶ spec #1 · pi:e2e/model", "step_started", "accent"),
+  line("nav-s1-text", "narration", "E2E-NAV-SPEC-1"),
+  eventLine("nav-s2", "00:00:20 ▶ spec #2 · pi:e2e/model", "step_started", "accent"),
+  line("nav-s2-text", "narration", "E2E-NAV-SPEC-2"),
+  eventLine("nav-c1", "00:00:30 ▶ code #1 · pi:e2e/model", "step_started", "accent"),
+  line("nav-c1-text", "narration", "E2E-NAV-CODE"),
+];
 
 // ── route fixture: a throwaway daemon data root with real capsules ─────────
 const MAIN = "wi_S238Main01";
@@ -234,7 +244,7 @@ async function openJob(page, wi) {
   await openDock(page); await card(page, wi).waitFor({ timeout: 30_000 }); await card(page, wi).click();
   await dock(page).getByRole("button", { name: /back to job list|deselect/i }).waitFor({ timeout: 10_000 });
 }
-const openUI = (page) => openJob(page, UI.wi);
+const openUI = async (page) => { await openJob(page, UI.wi); await selectStepForProgress(page, "code"); };
 const openDONE = (page) => openJob(page, DONE.wi);
 const waitFor = createWaitFor({ every: 150 });
 const tick = (page, ms) => (ms > 0 ? page.clock.runFor(ms) : Promise.resolve());
