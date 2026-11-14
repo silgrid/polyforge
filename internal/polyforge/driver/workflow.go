@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/workflow"
@@ -188,6 +189,27 @@ func ReadSkippedSteps(capsuleDir string) []string {
 		return nil
 	}
 	return ids
+}
+
+// EffectiveSkips answers the skip-set the driver honors before every
+// step (polyforge#25): the claim-fixed set (ReadSkippedSteps) UNION the
+// steps whose overlay (capsule.StepOverridesJSON) sets the skip switch.
+// Only steps the lane declares skippable are ever skipped (WithSkipped
+// applies the declaration, on this union as on the fixed set alone); a
+// torn overlay record contributes nothing (fail-open like the fixed
+// file's read).
+func EffectiveSkips(capsuleDir string) []string {
+	set := ReadSkippedSteps(capsuleDir)
+	ov, err := capsule.ReadStepOverrides(capsuleDir)
+	if err != nil {
+		return set
+	}
+	for _, id := range capsule.OverlaySkips(ov) {
+		if !slices.Contains(set, id) {
+			set = append(set, id)
+		}
+	}
+	return set
 }
 
 // WithSkipped answers the workflow with the steps of ids that it declares

@@ -348,10 +348,11 @@ func capsuleWorkflow(capsuleDir string) *driver.Workflow {
 // capsuleLaneGraph is capsuleWorkflow for the `pf step` checks: the
 // snapshot's step graph (its workflow.yaml), readable even when a step
 // definition is broken (driver.LoadWorkflowGraph); nil when workflow.yaml
-// itself cannot be read or judged. The work item's skipped-step set (fixed
-// at the first claim) is applied as the driver applies it
-// (driver.Workflow.WithSkipped): the wrap attrs of a skipped tail are the
-// last running step's to register.
+// itself cannot be read or judged. The work item's effective skip set —
+// the set fixed at the first claim unioned with the overlay's skip
+// switches (driver.EffectiveSkips, polyforge#25) — is applied as the
+// driver applies it (driver.Workflow.WithSkipped): the wrap attrs of a
+// skipped tail are the last running step's to register.
 func capsuleLaneGraph(capsuleDir string) *driver.Workflow {
 	raw, err := os.ReadFile(filepath.Join(capsuleDir, capsule.CapsuleJSON))
 	if err != nil {
@@ -365,7 +366,7 @@ func capsuleLaneGraph(capsuleDir string) *driver.Workflow {
 	if err != nil {
 		return nil
 	}
-	return wf.WithSkipped(driver.ReadSkippedSteps(capsuleDir))
+	return wf.WithSkipped(driver.EffectiveSkips(capsuleDir))
 }
 
 // readExecutionFile parses one execution.json; nil when absent or torn.
