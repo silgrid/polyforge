@@ -39,18 +39,22 @@ type w18Hub struct {
 	srv *httptest.Server
 }
 
-// w18FakeHub answers the read verbs' wire shapes this file pins: the
-// filtered work-item list (one queued execution ticket of the requested
-// project, bundle devuser, content without an acceptance section), the
-// detail read, and one project's member face.
-func w18FakeHub(t *testing.T) *w18Hub {
+// w18FakeHub answers the read verbs' wire shapes this file pins, scoped
+// to the one project its Cell maps (like a real AIHub, an unknown project
+// answers 404): the filtered work-item list (one queued execution ticket
+// of the requested project, bundle devuser, content without an
+// acceptance section), the detail read, and the project's member face.
+func w18FakeHub(t *testing.T, project string) *w18Hub {
 	t.Helper()
 	h := &w18Hub{rec: &reqRecorder{}}
 	h.srv = newFakeAihub(t, h.rec, func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
-		case strings.HasPrefix(path, "/api/v1/work-items") && r.Method == http.MethodGet && path == "/api/v1/work-items":
-			project := r.URL.Query().Get("project")
+		case path == "/api/v1/work-items" && r.Method == http.MethodGet:
+			if r.URL.Query().Get("project") != project {
+				http.NotFound(w, r)
+				return
+			}
 			item := map[string]any{
 				"id": "wi_" + project, "slug": project + "-1", "project_name": project,
 				"status": "queued", "bundle_name": "devuser", "goal": "w18 " + project,
@@ -58,15 +62,21 @@ func w18FakeHub(t *testing.T) *w18Hub {
 			}
 			_, _ = io.WriteString(w, jsonBody(map[string]any{"items": []any{item}, "total": 1}))
 		case strings.HasPrefix(path, "/api/v1/work-items/"):
-			id := strings.TrimPrefix(path, "/api/v1/work-items/")
+			if strings.TrimPrefix(path, "/api/v1/work-items/") != "wi_"+project {
+				http.NotFound(w, r)
+				return
+			}
 			item := map[string]any{
-				"id": id, "slug": "aproj-1", "project_name": "aproj",
+				"id": "wi_" + project, "slug": project + "-1", "project_name": project,
 				"status": "queued", "bundle_name": "devuser", "goal": "w18 submit",
 				"content": "no acceptance here", "created_at": "2026-11-14T00:00:00Z",
 			}
 			_, _ = io.WriteString(w, jsonBody(item))
 		case strings.HasPrefix(path, "/api/v1/projects/") && strings.HasSuffix(path, "/members"):
-			project := strings.TrimSuffix(strings.TrimPrefix(path, "/api/v1/projects/"), "/members")
+			if strings.TrimSuffix(strings.TrimPrefix(path, "/api/v1/projects/"), "/members") != project {
+				http.NotFound(w, r)
+				return
+			}
 			_, _ = io.WriteString(w, jsonBody(map[string]any{
 				"contacts": []any{map[string]any{"id": "u-" + project, "display_name": "Member of " + project}},
 			}))
@@ -160,13 +170,18 @@ type w18Fixture struct {
 
 func newW18Fixture(t *testing.T) *w18Fixture {
 	t.Helper()
-	def, alpha := w18FakeHub(t), w18FakeHub(t)
+	def, alpha := w18FakeHub(t, "dproj"), w18FakeHub(t, "aproj")
 	wsD, wsA := t.TempDir(), t.TempDir()
 	for _, ws := range []string{wsD, wsA} {
 		if err := os.WriteFile(filepath.Join(ws, ".polyforge.yaml"), []byte("steps: {}\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// wsA's user lane devuser declares `acceptance: none`: a queued
+	// ticket of aproj on it carries no acceptance mark through the routed
+	// Cell's mapping, while a mapping that does not know aproj judges it
+	// through a nil lane (acceptance required, lane missing).
+	writeLane(t, filepath.Join(wsA, ".polyforge", "workflows"), "devuser", "acceptance: none\nsteps:\n  - { id: build }\n")
 	dir := t.TempDir()
 	xdg := filepath.Join(dir, "xdg")
 	if err := os.MkdirAll(filepath.Join(xdg, "polyforge"), 0o755); err != nil {
@@ -265,5 +280,103 @@ func TestW18WorkflowsListsTheRoutedCellsMapping(t *testing.T) {
 	}
 	if doc.Workspace == nil || *doc.Workspace != f.wsD || len(doc.Projects) != 1 || doc.Projects[0] != "dproj" {
 		t.Fatalf("daemon-down --cwd wsD: workspace %v projects %v, want wsD [dproj]", doc.Workspace, doc.Projects)
+	}
+}
+
+// w18QueueDoc is `pf --json queue`'s merged document (verbs_aihub.go).
+type w18QueueDoc struct {
+	Items []struct {
+		ID                string `json:"id"`
+		ProjectName       string `json:"project_name"`
+		BundleName        string `json:"bundle_name"`
+		AcceptanceMissing bool   `json:"acceptance_missing"`
+	} `json:"items"`
+	Total        int `json:"total"`
+	LanesMissing []struct {
+		ID     string `json:"id"`
+		Bundle string `json:"bundle"`
+	} `json:"lanes_missing"`
+}
+
+// TestW18QueueMergesTheRoutedCellsMapping (AC2): `pf queue` without
+// --project merges over the routed Cell's mapping — --profile alpha lists
+// aproj's tickets from alpha's AIHub, never the Host file's dproj — and
+// the acceptance_missing / lanes_missing marks are computed through the
+// routed Cell's mapping too: aproj's user lane devuser (acceptance: none)
+// leaves its queued ticket unmarked. The default Cell keeps its shape.
+func TestW18QueueMergesTheRoutedCellsMapping(t *testing.T) {
+	f := newW18Fixture(t)
+
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "--json", "queue")
+	if code != 0 {
+		t.Fatalf("--profile alpha queue: code=%d stderr=%s", code, stderr)
+	}
+	var doc w18QueueDoc
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("--profile alpha queue did not print one JSON document: %v\n%s", err, stdout)
+	}
+	if doc.Total != 1 || len(doc.Items) != 1 || doc.Items[0].ProjectName != "aproj" {
+		t.Fatalf("--profile alpha queue: %+v, want the one aproj ticket of alpha's mapping", doc)
+	}
+	if doc.Items[0].AcceptanceMissing {
+		t.Fatalf("aproj's devuser lane declares acceptance: none — the queued ticket must carry no acceptance mark: %+v", doc.Items[0])
+	}
+	if len(doc.LanesMissing) != 0 {
+		t.Fatalf("devuser is aproj's lane through alpha's mapping — no lanes_missing: %+v", doc.LanesMissing)
+	}
+	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 1 {
+		t.Fatalf("--profile alpha queue: default hub got %d, alpha hub got %d (want 0/1)", nDef, nAlpha)
+	}
+
+	// The cwd match routes the same merge: standing in wsA without
+	// --profile lists aproj through alpha.
+	t.Chdir(f.wsA)
+	code, stdout, stderr = runPf(t, f.env, "--json", "queue")
+	if code != 0 {
+		t.Fatalf("cwd-routed queue: code=%d stderr=%s", code, stderr)
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("cwd-routed queue: %v\n%s", err, stdout)
+	}
+	if doc.Total != 1 || doc.Items[0].ProjectName != "aproj" || doc.Items[0].AcceptanceMissing || len(doc.LanesMissing) != 0 {
+		t.Fatalf("cwd-routed queue doc: %+v", doc)
+	}
+
+	// The default Cell keeps its shape: --profile default lists dproj.
+	code, stdout, stderr = runPf(t, f.env, "--profile", "default", "--json", "queue")
+	if code != 0 {
+		t.Fatalf("--profile default queue: code=%d stderr=%s", code, stderr)
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("--profile default queue: %v\n%s", err, stdout)
+	}
+	if doc.Total != 1 || doc.Items[0].ProjectName != "dproj" {
+		t.Fatalf("--profile default queue: %+v, want the one dproj ticket", doc)
+	}
+	if _, nAlpha := w18Counts(f.def, f.alpha); nAlpha != 2 {
+		t.Fatalf("the alpha hub saw %d request(s) after the default merge (want the 2 routed ones)", nAlpha)
+	}
+}
+
+// TestW18QueueEmptyMappingNamesTheRoutedFile (AC2): routed to a Cell with
+// no mapping, the merged list's empty-mapping judgment is that Cell's —
+// the required-flag error names cli-beta.toml, not cli.toml — and nothing
+// is sent.
+func TestW18QueueEmptyMappingNamesTheRoutedFile(t *testing.T) {
+	f := newW18Fixture(t)
+	code, _, stderr := runPf(t, f.env, "--profile", "beta", "queue")
+	if code != 1 {
+		t.Fatalf("--profile beta queue: exit %d, want the local refusal (stderr=%s)", code, stderr)
+	}
+	for _, tok := range []string{"--project is required", "no [workspace] mapping is configured in cli-beta.toml"} {
+		if !strings.Contains(stderr, tok) {
+			t.Fatalf("--profile beta queue: stderr misses %q: %s", tok, stderr)
+		}
+	}
+	if strings.Contains(stderr, "configured in cli.toml") {
+		t.Fatalf("--profile beta queue: the empty-mapping judgment still names the Host file: %s", stderr)
+	}
+	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 0 {
+		t.Fatalf("--profile beta queue: %d/%d request(s) still sent", nDef, nAlpha)
 	}
 }
