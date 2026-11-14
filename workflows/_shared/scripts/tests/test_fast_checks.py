@@ -242,7 +242,8 @@ class CheckUnitsTest(FastChecksCase):
                 "run": {"repo": "app", "cwd": cwd, "argv": argv}, "marker": marker}
 
     def run_units(self, units: List[Dict[str, Any]], extra: Tuple[str, ...] = ()) -> Tuple[int, Dict[str, Any]]:
-        self.go_repo()
+        if not os.path.isdir(os.path.join(self.capsule, "repos", "app")):
+            self.go_repo()
         return self.run_checks("", extra=("--check-units", self.units_file(units), *extra))
 
     def test_the_23_marker_is_red_with_the_closest_line(self) -> None:
