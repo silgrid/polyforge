@@ -1259,7 +1259,7 @@ test("polyforge#2: the poll re-reads an expanded tool card whose held detail sti
   assert.deepEqual(context.rereadToolIds(details, new Set(), lineIds), [], "nothing expanded: nothing re-read");
   assert.deepEqual(context.rereadToolIds(new Map(), expanded, lineIds), [], "nothing held yet: the first read comes from the card's expansion");
   // wiring: the panel keeps the expanded ids and feeds the poll's snapshot into it
-  assert.match(source, /const openTools = useRef<Set<string>>\(\(\) => new Set\(\)\);/);
+  assert.match(source, /const openTools = useRef<Set<string>>\(new Set\(\)\);/);
   assert.match(source, /for \(const id of rereadToolIds\(detailsRef\.current, openTools\.current, lineIds\)\) loadDetail\(id\);/);
   assert.match(source, /held && held\.status === "available" && held\.output === null/, "loadDetail re-asks a resultless held detail");
 });
