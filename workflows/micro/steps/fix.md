@@ -27,6 +27,14 @@ of the gate that FAILed and the files it names first, and answer every point it 
 - **Work only inside the declared repo worktree(s)** (`repos/<name>/**`), and commit the
   change in each repo with a message that names what it changes.
 
+## The lane's test standard
+
+This lane writes no test of its own — its evidence is the repository's declared checks —
+but the shared bar below is still the lane's standard for what counts as one: the
+acceptance here is itself text, the one exemption it names.
+
+{{test_quality}}
+
 ## The evidence and its plan
 
 In every repo you changed, after your last commit, run the micro evidence from the repo

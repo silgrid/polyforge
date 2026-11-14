@@ -45,6 +45,8 @@ only in the cases item 3 names, and judge the plan; without sub-agents, do it al
    acceptance list — right after the plan, never at the end of your work, with `pf step ask`.
    Its question carries {{batch_questions}}
 
+{{test_quality}}
+
 ## 3b. Units, test first
 
 Who builds each unit is `## Sub-agents`. An implementer's instruction is this section's per-unit text
