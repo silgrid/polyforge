@@ -43,14 +43,19 @@ function render(fields = {}) {
 test("status and elapsed time are in a separate row below command and description", () => {
   const html = render();
   const command = html.indexOf('data-claude-task-command=""');
-  const status = html.indexOf('data-claude-task-status-label=""');
+  const metaStart = html.indexOf('data-claude-task-meta=""');
+  const metaOpenStart = html.lastIndexOf("<div", metaStart);
+  const metaEnd = html.indexOf("</div>", metaStart) + "</div>".length;
+  const close = html.indexOf('aria-label="Close"');
   assert.ok(command >= 0, html);
-  assert.match(html, /data-claude-task-meta=""/);
-  const commandRow = html.slice(command, status);
-  assert.doesNotMatch(commandRow, />Running/);
-  assert.doesNotMatch(commandRow, />9s</);
-  assert.match(html.slice(status), /Running/);
-  assert.match(html.slice(status), /9s/);
+  assert.ok(metaStart > close && close > command, html);
+  assert.match(html.slice(metaOpenStart, metaEnd), /data-claude-task-status-label=""/);
+  assert.match(html.slice(metaOpenStart, metaEnd), />Running</);
+  assert.match(html.slice(metaOpenStart, metaEnd), />9s</);
+  const headerBeforeMeta = html.slice(command, metaOpenStart);
+  assert.match(headerBeforeMeta, /data-claude-task-header-row=""/);
+  assert.doesNotMatch(headerBeforeMeta, /data-claude-task-status-label=""/);
+  assert.doesNotMatch(headerBeforeMeta, />9s</);
 });
 
 test("stop remains available only while running and close remains in the header actions", () => {
@@ -67,7 +72,7 @@ test("stop remains available only while running and close remains in the header 
 test("status presentation keeps running pulse and failure color", () => {
   const running = render();
   assert.match(running, /data-claude-task-status-label="" class="animate-\[pulse_1\.5s_infinite\]"/);
-  assert.match(running, /color:#0d9488/);
+  assert.match(running, /data-claude-task-status-label="" class="[^\"]*" style="[^\"]*color:#0d9488/);
 
   const failed = render({ status: "failed", endedAt: NOW - 2_000 });
   assert.doesNotMatch(failed, /animate-\[pulse_1\.5s_infinite\]/);
