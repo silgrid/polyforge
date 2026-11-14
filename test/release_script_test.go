@@ -1,4 +1,4 @@
-// carries: .polyforge/release.sh
+// carries: .polyforge/release.sh, docs/reference/release.md, test/release_script_test.go
 
 package test
 
@@ -1636,6 +1636,18 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 			t.Fatalf("v0.2.0-fork.1 on origin points at %s, want HEAD %s", got, head)
 		}
 		w.assertOldTagsUntouched(out)
+		// polyforge#14 AC1: the first release of a suffixed line (its previous
+		// release the public base tag) lists only the absorption's descendants
+		// in its generated notes - never the internal history the replacement
+		// commit folded in before that point.
+		body, nerr := os.ReadFile(filepath.Join(w.fakeRel, "v0.2.0-fork.1", ".body"))
+		if nerr != nil || !strings.Contains(string(body), "replace main with the public v0.2.0 tree") ||
+			!strings.Contains(string(body), "internal layer: release suffix") {
+			t.Fatalf("the notes of the first suffixed release must list the absorption's descendants: %v\n%s", nerr, body)
+		}
+		if strings.Contains(string(body), "second change") || strings.Contains(string(body), "topic-second") {
+			t.Fatalf("the notes of the first suffixed release must not list the pre-absorption history:\n%s", body)
+		}
 		vout, verr := w.run(nil, "--verify", "v0.2.0-fork.1")
 		if verr != nil || strings.Contains(vout, "FAIL") ||
 			!strings.Contains(vout, "since v0.2.0 came through a merged PR") {
@@ -1664,6 +1676,14 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 			t.Fatalf("want version v0.2.1-fork.1: %v\n%s", err, out)
 		}
 		w.assertOldTagsUntouched(out)
+		// polyforge#14 AC1: between the line's own versions the range stays
+		// the whole v0.2.0-fork.4..HEAD - the absorption-point limit never
+		// applies inside the line (the absorbed public commit stays listed).
+		body, nerr := os.ReadFile(filepath.Join(w.fakeRel, "v0.2.1-fork.1", ".body"))
+		if nerr != nil || !strings.Contains(string(body), "public v0.2.1") ||
+			strings.Contains(string(body), "second change") {
+			t.Fatalf("the notes between the line's own versions must keep the whole range: %v\n%s", nerr, body)
+		}
 		vout, verr := w.run(nil, "--verify", "v0.2.1-fork.1")
 		if verr != nil || strings.Contains(vout, "FAIL") ||
 			!strings.Contains(vout, "since v0.2.0-fork.4 came through a merged PR") {
