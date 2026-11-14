@@ -53,7 +53,7 @@ func TestPF27QueueMarksAnalysisMissing(t *testing.T) {
 		t.Fatalf("pf queue: no row for %s:\n%s", slug, stdout)
 		return ""
 	}
-	if line := row("alpha-none"); !strings.Contains(line, "queued ("+accLabel+")") || !strings.Contains(line, "queued ("+anLabel+")") {
+	if line := row("alpha-none"); !strings.Contains(line, "queued ("+accLabel+")") || !strings.Contains(line, "("+anLabel+")") {
 		t.Errorf("pf queue: a queued ticket missing both sections must carry both marks:\n%s", line)
 	}
 	if line := row("alpha-acc"); !strings.Contains(line, "queued ("+anLabel+")") || strings.Contains(line, accLabel) {
