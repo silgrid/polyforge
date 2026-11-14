@@ -864,7 +864,7 @@ export const enLocale: LocalePlugin = {
     "transcriptNotice.foldCacheMiss": "cache miss {tokens} tokens{cost}",
     "transcriptNotice.foldCacheMisses": "{count} cache misses {tokens} tokens{cost}",
     "settings.agentLanguage": "Agent language",
-    "settings.agentLanguageDescription": "The language pi-web's own agents use for replies, narration and reports in new pi and claude sessions (and their pi subagents). Saved on the server for every device; separate from the interface language above. A session keeps the language it was created with. When Polyforge is installed, saving also sets the language of its step agents (default Cell).",
+    "settings.agentLanguageDescription": "The language pi-web's own agents use for replies, narration and reports in new pi and claude sessions (and their pi subagents). Saved on the server for every device; separate from the interface language above. A session keeps the language it was created with. When Polyforge is installed, saving also sets the language of its step agents (default Cell); Cells without their own setting follow that default Cell value.",
     "settings.agentLanguageEnglish": "English",
     "settings.agentLanguageChinese": "Chinese",
     "settings.agentLanguageSaveError": "Could not save the Agent language. The previous value is still in effect.",
