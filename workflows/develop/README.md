@@ -41,7 +41,9 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
 
 - **build** (fresh session; skill `build`) — one session, four segments
   (`steps/build.md`): a plan against the work item's acceptance criteria
-  (`artifacts/plan.md`, its `## Coverage` the criterion → test table); per unit, a test — a
+  (`artifacts/plan.md`, its `## Coverage` the criterion → test table, each `## Units` entry
+  recording the behaviour its test observes, why its red is expected and the change it
+  catches (`workflows/_shared/test_quality.md`)); per unit, a test — a
   unit-level test, or an e2e scenario whose suite declares `carries:` — committed red
   before the implementation that turns it green, both runs the session's own, recorded in
   `artifacts/build/units.json` (`[{id, test_commit, impl_commit, run{repo, cwd, argv},
@@ -60,7 +62,9 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   --replay --isolation host` (each unit's run replayed on the tree of its test commit, on
   the host: it must be red) and `carries`. A
   blocking finding names one of five classes: `bug`, `ac_gap`, `project_rule`,
-  `test_weakened`, `guarantee`; everything else is non-blocking. On a later round it checks
+  `test_weakened`, `guarantee`; everything else is non-blocking. A unit that misses its
+  test-quality record (`workflows/_shared/test_quality.md`), or whose replayed red
+  contradicts the recorded reason, is `test_weakened`. On a later round it checks
   the previous round's findings and, from the commits the daemon stamped, whether the build
   changed anything at all — a build that changed nothing without a reason per finding fails
   again.

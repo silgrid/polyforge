@@ -34,7 +34,9 @@ only in the cases item 3 names, and judge the plan; without sub-agents, do it al
    for a ticket without one, the list you propose); `## Non-goals` (what the ticket or an answer
    leaves out, or `none`); `## Units` — ordered compilable units, each with its id, the criterion
    ids its test carries, its test (a unit-level test, or an e2e scenario in a new or extended
-   suite and the `carries:` globs that suite declares), its fast-check commands, `Touched files:
+   suite and the `carries:` globs that suite declares), its fast-check commands, its
+   test-quality record (the behaviour its test observes, why its red is expected, the
+   change it catches — the bar below), `Touched files:
    <path> (write|read), ...` and `Coupled obligations:` (what must change with each write — the
    repo's `AGENTS.md` names its known couplings — or `none` and why); `## Coverage` — per
    criterion `test` (its unit's test), `existing` (the test already pinning it) or `doc` (the file
@@ -44,6 +46,8 @@ only in the cases item 3 names, and judge the plan; without sub-agents, do it al
    contradiction, (b) a deviation, (c) `confirm_plan: true`, (d) a missing or incomplete
    acceptance list — right after the plan, never at the end of your work, with `pf step ask`.
    Its question carries {{batch_questions}}
+
+{{test_quality}}
 
 ## 3b. Units, test first
 
