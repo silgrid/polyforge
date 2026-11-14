@@ -556,10 +556,11 @@ func w348Exists(path string) bool {
 }
 
 // w348HubProjects answers the project names one Hub currently records: the
-// server-side evidence for "no request reached this Hub".
+// server-side evidence for "no request reached this Hub". Deactivated
+// projects are included — the probe counts every row the Hub keeps.
 func w348HubProjects(t *testing.T, inst *v1Install) map[string]bool {
 	t.Helper()
-	raw, err := inst.client.ListProjects()
+	raw, err := inst.client.ListProjects(true)
 	if err != nil {
 		t.Fatalf("list projects on the Hub: %v", err)
 	}

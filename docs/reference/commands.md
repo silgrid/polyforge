@@ -187,6 +187,22 @@ has no read API — inspect it with sqlite directly. On a terminal the CLI
 prompts for the project name after a dry-run preview; without `--yes` on a
 pipe it refuses outright.
 
+`pf projects deactivate <id-or-name>` and `pf projects restore <id-or-name>`
+(`POST /api/v1/projects/{id}/deactivate|restore`) move a project's global
+state: deactivated, the whole project is read-only on the server (creating or
+modifying work items, comments, submits and claims — the daemon's auto-claim
+included — resume execution, dependency writes and memory writes answer
+`CORE-403 PROJECT_DEACTIVATED`; reads keep answering under the existing
+permissions) and every default list hides it. Neither door deletes anything;
+only `pf projects delete` below removes data. Deactivation is refused
+(`CORE-409 NON_TERMINAL_WORK_ITEMS`, every blocker listed) while the project
+still has queued, running, paused or blocked work items — settle the work
+first. Both doors need a project maintainer or an admin; the console's
+project picker and Pi Web's Work › 项目 view restore in place from the
+marked row. `pf projects list [--show-deactivated]` lists the active line by
+default; the flag adds the deactivated projects with their marker.
+
+
 Human moves: continue = `pf resume <id>` (a paused or blocked
 work item), abandon = `pf cancel <id>` (queued, paused or blocked); to send
 the work back to an earlier step or waive a gate's FAIL, tell the step's

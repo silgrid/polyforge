@@ -151,7 +151,7 @@ func TestW105BrowserConsoleAcceptance(t *testing.T) {
 		t.Fatalf("the console browser suite failed (%v):\n%s", err, out)
 	}
 	for _, name := range []string{
-		"S17", "S18", "S19", "S20", "S21", "S22", "S23",
+		"S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24",
 	} {
 		if !strings.Contains(string(out), "PASS "+name) {
 			t.Fatalf("the browser suite output misses scenario %s:\n%s", name, out)
@@ -178,6 +178,9 @@ type browserFixtures struct {
 	DiscussionSlug string `json:"discussion_slug"`
 	CommentBody    string `json:"comment_body"`
 	MessageText    string `json:"message_text"`
+	// one deactivated project (S24): the picker hides it by default and
+	// restores it in place through the console's own write route.
+	DeactivatedProject string `json:"deactivated_project"`
 }
 
 // seedBrowserFixtures seeds the suite's data through the real API
@@ -376,5 +379,16 @@ func seedBrowserFixtures(t *testing.T, inst *v1Install) browserFixtures {
 		t.Fatalf("odd memory: %v", err)
 	}
 	f.OddMem = oddMem.ID
+	// The deactivated project (S24): created and deactivated through the
+	// real doors — no work item, so the deactivation is accepted as-is.
+	f.DeactivatedProject = "w30dormant"
+	if err := inst.client.Do("POST", "/api/v1/projects",
+		map[string]any{"name": f.DeactivatedProject}, nil); err != nil {
+		t.Fatalf("deactivated project: %v", err)
+	}
+	if err := inst.client.Do("POST",
+		"/api/v1/projects/"+f.DeactivatedProject+"/deactivate", nil, nil); err != nil {
+		t.Fatalf("deactivate the dormant project: %v", err)
+	}
 	return f
 }

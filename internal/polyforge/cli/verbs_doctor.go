@@ -461,7 +461,7 @@ func probeServerReach(sock string, daemonUp bool) (bool, string) {
 	}
 	c := newProxyClient(sock, "")
 	c.HTTP.Timeout = 5 * time.Second
-	_, err := c.ListProjects()
+	_, err := c.ListProjects(false)
 	var ae *api.Error
 	switch {
 	case err == nil:

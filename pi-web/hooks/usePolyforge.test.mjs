@@ -122,8 +122,9 @@ test("w93: a send's answer opens the conversation it names, not a raced list rea
 test("the top-level tabs are memory, messages, work; Messages refresh stays gated on messages", () => {
   assert.match(source, /export type PolyforgeTab = "memory" \| "messages" \| "work";/);
   // (intentional 2026-10-31 third-segment change): 工单列表 joins the sub-tabs.
-  // intentional fourth sub-tab: 待集成, `integrate`.
-  assert.match(source, /export type PolyforgeWorkTab = "jobs" \| "tasks" \| "items" \| "integrate";/);
+  // intentional fourth sub-tab: 待集成, `integrate`; polyforge#30 adds the
+  // fifth segment 项目, `projects`.
+  assert.match(source, /export type PolyforgeWorkTab = "jobs" \| "tasks" \| "items" \| "projects" \| "integrate";/);
   const start = source.indexOf("const setActiveTab = useCallback");
   const end = source.indexOf("}, [refreshMessages]);", start);
   const body = source.slice(start, end);

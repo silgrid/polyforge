@@ -91,12 +91,15 @@ func TestUpgradeV250ProbeRunOnce(t *testing.T) {
 }
 
 // TestUpgradeV250RoundTrip: v2.4.x data -> upgrade -> the current code
-// files a WI with an inventory and its claim serves only that repo ->
-// rollback -> the v2.4.x code's inventory write works again (unique
-// index included).
+// files a WI with an inventory and its claim serves only that repo
+// (the current code needs the whole chain, so the fixture applies every
+// later deploy/sql version before that leg) -> the chain rolled back,
+// v2.5.0's own rollback last -> the v2.4.x code's inventory write works
+// again (unique index included).
 func TestUpgradeV250RoundTrip(t *testing.T) {
 	dataDir, raw := v24SchemaDB(t)
 	applySQLText(t, raw, loadSQLFileOf(t, sqlVer250, "upgrade.sql"))
+	applyUpgradesAfter(t, raw, sqlVer250)
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +129,7 @@ func TestUpgradeV250RoundTrip(t *testing.T) {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	applySQLText(t, db, loadSQLFileOf(t, sqlVer250, "rollback.sql"))
+	rollbackThrough(t, db, sqlVer250)
 	assertV24Shape(t, db)
 	// the v2.4.x create transaction's inventory insert
 	ins := `INSERT INTO wi_repo_inventory(work_item_id, position, name, url, subdir, base) VALUES (?1,?2,?3,?4,NULL,?5)`

@@ -111,6 +111,11 @@ CREATE TABLE IF NOT EXISTS projects (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL UNIQUE,
   description TEXT NOT NULL DEFAULT '',
+  -- polyforge#30: the project's global state. 'active' is the only
+  -- state a database before v0.2.1 can hold; 'deactivated' makes the
+  -- whole project read-only on the server (deploy/sql/v0.2.1/ adds the
+  -- column to an existing database — Open runs no column migrations).
+  status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','deactivated')),
   repos       TEXT NOT NULL DEFAULT '[]',
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL

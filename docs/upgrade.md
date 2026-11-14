@@ -79,3 +79,37 @@ this order:
   Check each lane with `pf workflows validate <lane-dir>`;
   [bundles](bundles.md) teaches the format.
 - **Finish.** `pf ops auto on` on each work machine, then `pf doctor`.
+
+## v0.2.1, the project deactivation status
+
+v0.2.1 adds the project's global **deactivation** state: a maintainer or
+admin deactivates a project (`pf projects deactivate <id-or-name>`), the
+server then refuses every write that does work on it — creating or
+modifying work items, comments, submits and claims (the auto-claim
+included), resume execution, memory writes — with the typed
+`PROJECT_DEACTIVATED` error, while reads keep working under the existing
+permissions. Nothing is deleted: only the hard delete
+(`pf projects delete`, unchanged) removes data. `pf projects restore`
+brings the project back. The CLI, Pi Web and the AIHub console hide
+deactivated projects from their lists by default and offer a restore
+entry in the same place. Deactivation is refused (CORE-409, the blocking
+work items listed) while the project still has queued, running, paused
+or blocked work items.
+
+A database written by v0.2.0 or earlier lacks the `projects.status`
+column; the new server refuses to serve projects until the migration
+below has run. Both v0.2.0 and v0.2.1 are public tags, so an unattended
+`deploy.sh` from v0.2.0 applies it inside the switch window
+(`deploy/sql/v0.2.1/`); there is nothing to run by hand on that move:
+
+```sql
+ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'
+  CHECK (status IN ('active','deactivated'));
+```
+
+The migration is purely additive: every existing project answers
+`active` (the only state a pre-v0.2.1 database can hold), and no row is
+rewritten or lost. The same directory's `probe.sql` answers 0 once the
+column exists (the run-once guard), and its `rollback.sql` drops the
+column again — deactivation state is operational, not durable data; a
+retry upgrade re-adds it with every project `active`.

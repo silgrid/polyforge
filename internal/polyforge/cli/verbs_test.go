@@ -355,13 +355,16 @@ func TestVerbQueueMergedAllMapped(t *testing.T) {
 	if !seen["alpha"] || !seen["beta"] {
 		t.Errorf("merged --json does not cover both projects: %v (%q)", seen, stdout)
 	}
-	// The wire saw one query per mapped project, in mapping order, per
-	// merged run (the human run then the --json run: 4 requests total).
+	// The wire saw one status read + one list query per mapped project, in
+	// mapping order, per merged run (the human run then the --json run:
+	// 8 requests total — polyforge#30 added the deactivation status read
+	// that decides the skip).
 	reqs := rec.all()
-	if len(reqs) != 4 {
-		t.Fatalf("wire requests = %d, want 2 per merged run", len(reqs))
+	if len(reqs) != 8 {
+		t.Fatalf("wire requests = %d, want 4 per merged run", len(reqs))
 	}
-	for i, want := range []string{"project=alpha", "project=beta", "project=alpha", "project=beta"} {
+	for i, want := range []string{"projects/alpha", "project=alpha", "projects/beta", "project=beta",
+		"projects/alpha", "project=alpha", "projects/beta", "project=beta"} {
 		if !strings.Contains(reqs[i].Path, want) {
 			t.Errorf("request[%d] = %s, want it to carry %s", i, reqs[i].Path, want)
 		}

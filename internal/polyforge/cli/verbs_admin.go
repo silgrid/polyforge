@@ -228,7 +228,16 @@ var cmdProjects = &Command{
 			})
 			return nil
 		case "list":
-			raw, err := client.ListProjects()
+			f := subFlags(ctx, "projects list")
+			showDeactivated := f.Bool("show-deactivated", false, "also list deactivated projects (marked)")
+			rest, lerr := parseCommandArgs(f, rest)
+			if lerr != nil {
+				return lerr
+			}
+			if len(rest) != 0 {
+				return fmt.Errorf("projects list: unexpected arguments %v", rest)
+			}
+			raw, err := client.ListProjects(*showDeactivated)
 			if err != nil {
 				return err
 			}
@@ -276,6 +285,30 @@ var cmdProjects = &Command{
 			return nil
 		case "members":
 			return projectsMembers(ctx, client, rest)
+		case "deactivate", "restore":
+			if len(rest) != 1 {
+				return fmt.Errorf("projects %s: expected one project id or name", sub)
+			}
+			var (
+				raw json.RawMessage
+				err error
+			)
+			if sub == "deactivate" {
+				raw, err = client.DeactivateProject(rest[0])
+			} else {
+				raw, err = client.RestoreProject(rest[0])
+			}
+			if err != nil {
+				return err
+			}
+			// The reversible state door needs no confirmation (only the hard
+			// delete confirms); the report line names what moved.
+			now := "deactivated"
+			if sub == "restore" {
+				now = "restored"
+			}
+			ctx.finishLine(raw, "%s project %s\n", now, rest[0])
+			return nil
 		case "delete":
 			f := subFlags(ctx, "projects delete")
 			yes := f.Bool("yes", false, "delete without the typed-name confirmation")
