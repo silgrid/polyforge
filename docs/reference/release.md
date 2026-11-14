@@ -253,7 +253,11 @@ contract checks, the generated notes) is the highest `-<name>.N` tag below
 the version on origin, else the public base tag, each at the commit its own
 `ls-remote` reports; resume and `--verify` judge the same shape the same
 way, and the version-line cutover does not apply. The name lives only in
-that file: the procedure names none.
+that file: the procedure names none. The generated notes of the line's
+first release (whose previous release is the public base tag) list only
+the absorption's descendants (`git log --ancestry-path`): the history
+before that point belongs to no version of this line; between the line's
+own versions the plain range stands, unchanged.
 
 ```
  RELEASE: a work item on the `release` bundle (no platform release code)
@@ -403,6 +407,19 @@ and the release:
   tests) replaces the whole gate: no green tag is consulted.
   `release-manifest.json`, the assets and `release.sh --verify` are
   unchanged.
+- **In the release (notes).** The release notes never exceed GitHub's
+  125000-character release-body limit: `release.sh` counts bytes (the
+  character count or more under UTF-8, the conservative side) and checks
+  every form BEFORE the version is claimed, so a release never dies on the
+  limit after the tag is pushed. The generated commit list is cut to the
+  newest commits within a byte budget and ends with a 「还有 N 个提交」
+  notice and a compare link on the previous release's commit id (never its
+  tag name: a downstream origin may carry an older tag of the same name on
+  another commit); a committed `docs/release-notes/<tag>.md` over the limit
+  refuses the release instead - never truncated, a human's text is the
+  human's to shorten. The first release of a suffixed line lists only the
+  absorption's descendants in its generated notes (see above); between the
+  line's own versions the range is unchanged.
 
 ## Release-lane failure classes (2026-10-29 to 2026-11-07)
 
@@ -411,7 +428,10 @@ ended failed in that window: 17 `failed_gate` and one deploy rollback (#71),
 from each work item's recorded step output and the capsules'
 `release.log`/`deploy.log`. `file:line` points at the code before the fix;
 every class has a regression test in `test/w372_release_lane_test.go` unless
-an earlier change already fixed it.
+an earlier change already fixed it. polyforge#14 adds class H from outside
+that window: a failure shape found in analysis and closed before it burned
+a version, recorded here so the table stays the map of release-lane failure
+classes.
 
 | class | work items | root cause | fix | regression test |
 |---|---|---|---|---|
@@ -422,6 +442,7 @@ an earlier change already fixed it.
 | E. PR-only gate logic | #118 (genuine owner-direct commits: the gate was right; allowlist added later), #340 (index-blind `commits/<sha>/pulls`, fixed earlier by 5c7ab5b3) | left over: a failed GitHub read was reported as "without a merged PR" (`release.sh:254,269`) | a failed lookup is "PR lookup failed ... retryable, not a missing PR" (fail closed, before the claim); a merge commit the list lacks is confirmed through the PR its GitHub merge subject names | `TestW372PROnlyLookupFailureIsRetryableNotAMissingPR`, `TestW372PROnlyConfirmsAMergeCommitThroughItsOwnPR`, `TestW341ReleasePROnlyReliableAssociation` |
 | F. test gate red | #155 (`deploy_sql_test.go:174`, a test bug since fixed), #184 (`TestW167ReportTailEmptyAndNoFallback`), #353 (`TestV5Kill9ChaosMatrix/quarantine_split`) | the gate ran before the claim but exited through `set -e` without a word (`release.sh:507`); the flaky tests are not fixed here | the gate refuses with "nothing built or published, no version claimed (V is still free)" or, on a resume, "V stays claimed and resumable" | `TestW372FailingTestGateConsumesNoVersion`, `TestW372FailingTestGateKeepsAResumedVersionResumable` |
 | G. deploy procedure logic (fixed earlier) | #71 (rollback: the row-count guard read the migration's intended row deletion as loss), #240 #242 (a failed `/pf` probe read as version "directory") | `deploy.sh` post-swap baseline guard; `probe_ctr`'s last-word parse | 75a86952 (`expected_deltas`); 303d5555 and 9a4e9590 | `TestDeployAcceptsDeclaredRowDelta`, `TestDeployRefusesUndeclaredRowLoss`, `TestW243DualLayoutContainerDeploys`, `TestW243OldAihubLayoutPreflight` |
+| H. release notes over GitHub's 125000-character body limit | #14 (found in analysis: a suffix line's first release once listed 3243 commits; closed before a release ran into it) | `git log $PREV..HEAD` listed the whole absorbed history on a suffix line's first release, and no length check existed anywhere, so `gh release create` would fail only after the tag was pushed and the image shipped | the suffix line's first release lists only the absorption's descendants (`--ancestry-path`); the generated list is cut to the newest commits within a byte budget (a 「还有 N 个提交」 notice and a compare link on the previous release's commit id); an overlong committed notes file refuses the release before the claim | `TestReleaseScriptSuffixVersion`, `TestReleaseScriptNotesTooLongAreTruncated`, `TestReleaseScriptNotesTooLongResume`, `TestReleaseScriptCommittedNotesTooLongRefused` |
 
 ## Build and test
 

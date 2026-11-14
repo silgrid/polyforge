@@ -1,4 +1,4 @@
-// carries: .polyforge/release.sh
+// carries: .polyforge/release.sh, docs/reference/release.md, test/release_script_test.go
 
 package test
 
@@ -15,6 +15,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -348,13 +350,26 @@ cmd="$1 $2"
 case "$cmd" in
   "release create")
     echo "gh release create $3" >> "$CALLLOG"
-    # FAKE_GH_CREATE_FAIL: the create fails after the claim (#120's shape)
-    [ -n "$FAKE_GH_CREATE_FAIL" ] && { echo "tag $3 doesn't exist in the repo, aborting due to --verify-tag flag" >&2; exit 1; }
+    # FAKE_GH_CREATE_FAIL: the create fails after the claim (#120's shape);
+    # no release is left behind, but the attempted notes body is kept
+    # outside the store (polyforge#14: a resume must publish the same bytes).
+    if [ -n "$FAKE_GH_CREATE_FAIL" ]; then
+      _p=""; for _a in "$@"; do
+        [ "$_p" = "--notes-file" ] && cp "$_a" "$FAKE_GH/create-failed.body"
+        _p=$_a
+      done
+      echo "tag $3 doesn't exist in the repo, aborting due to --verify-tag flag" >&2; exit 1
+    fi
     tag="$3"; shift 3
     mkdir -p "$FAKE_GH/$tag"
     while [ $# -gt 0 ]; do
       case "$1" in
-        --notes-file) cp "$2" "$FAKE_GH/$tag/.body"; shift 2 ;;
+        # GitHub rejects a release body over 125000 characters: the stub
+        # holds the byte side of that limit (>= a character count), so an
+        # overlong body fails the create exactly like the real one (polyforge#14).
+        --notes-file) _sz=$(wc -c <"$2")
+          [ "$_sz" -le 125000 ] || { echo "gh: the release notes are $_sz bytes; GitHub rejects a body over 125000 characters" >&2; exit 1; }
+          cp "$2" "$FAKE_GH/$tag/.body"; shift 2 ;;
         --title|-R) shift 2 ;;
         --verify-tag) shift ;;
         *) cp "$1" "$FAKE_GH/$tag/"; shift ;;
@@ -957,6 +972,123 @@ func TestReleaseScriptCommittedNotesUsedAsIs(t *testing.T) {
 	}
 	if got := relGit(t, w.work, "status", "--porcelain"); got != "" {
 		t.Fatalf("the release changed the worktree: %q", got)
+	}
+}
+
+// TestReleaseScriptCommittedNotesTooLongRefused (polyforge#14 AC3): a
+// committed docs/release-notes/<tag>.md over the limit refuses the release
+// BEFORE the version is claimed ("no version claimed"): no tag reaches
+// origin, no image is pushed and no release is created - a human's text is
+// the human's to shorten, never truncated.
+func TestReleaseScriptCommittedNotesTooLongRefused(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	w.mergeOnMain(filepath.Join("docs", "release-notes", "v1.2.1.md"),
+		"# hand written\n\n"+strings.Repeat("x", 130000), "overlong notes", true)
+	out, err := w.run(nil)
+	if err == nil || !strings.Contains(out, "no version claimed") || !strings.Contains(out, "125000") {
+		t.Fatalf("an overlong committed notes file must refuse before the claim: %v\n%s", err, out)
+	}
+	if got := w.originTags(); got != "v1.2.0" {
+		t.Fatalf("origin tags = %q, want the claim never reached origin", got)
+	}
+	for _, c := range w.calls() {
+		if strings.HasPrefix(c, "docker build") || strings.HasPrefix(c, "docker push") || strings.HasPrefix(c, "gh release create") || strings.Contains(c, "refs/tags/v1.2.1") {
+			t.Fatalf("the refusal must come before anything is built or published (r1#2): %v", w.calls())
+		}
+	}
+}
+
+// relLongNotesWorld: the plain-line world of v1.2.0 whose commits since it
+// make a generated list far over the byte budget: prs merged PRs, each
+// carrying a subjectLen-byte subject (every commit still enters main
+// through a merged PR, so the PR-only gate stays green).
+func relLongNotesWorld(t *testing.T, prs, subjectLen int) *relWorld {
+	t.Helper()
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	for i := 0; i < prs; i++ {
+		w.landPR(fmt.Sprintf("long-%03d", i), fmt.Sprintf("change %03d %s", i, strings.Repeat("x", subjectLen)))
+	}
+	return w
+}
+
+// TestReleaseScriptNotesTooLongAreTruncated (polyforge#14 AC2): a plain
+// line whose commit list is over the byte limit still releases: the
+// generated notes stay within 125000 bytes, keep the NEWEST commits, end
+// the list with a 「还有 N 个提交」notice whose count is exactly the dropped
+// lines and a compare link built on the previous release's commit id
+// (never its tag name), and the notes still end with the "Test gate" section.
+func TestReleaseScriptNotesTooLongAreTruncated(t *testing.T) {
+	w := relLongNotesWorld(t, 80, 2000)
+	prev := relGit(t, w.work, "rev-parse", "v1.2.0^{commit}")
+	head := relGit(t, w.work, "rev-parse", "HEAD")
+	out, err := w.run(nil)
+	if err != nil {
+		t.Fatalf("an overlong commit list must still release: %v\n%s", err, out)
+	}
+	body, err := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
+	if err != nil {
+		t.Fatalf("no published notes: %v", err)
+	}
+	if n := len(body); n > 125000 {
+		t.Fatalf("the notes are %d bytes, over the 125000 limit:\n%.300s…", n, body)
+	}
+	notes := string(body)
+	if !strings.Contains(notes, "change 079") || strings.Contains(notes, "change 000") {
+		t.Fatalf("the truncated list must keep the NEWEST commits and drop the oldest:\n%.500s…", notes)
+	}
+	m := regexp.MustCompile(`还有 (\d+) 个提交未列出`).FindStringSubmatch(notes)
+	if m == nil {
+		t.Fatalf("the truncated list must end with a 「还有 N 个提交」 notice:\n%.500s…", notes)
+	}
+	dropped, _ := strconv.Atoi(m[1])
+	listed := len(regexp.MustCompile(`(?m)^- `).FindAllString(notes, -1))
+	total := len(strings.Split(strings.TrimSpace(relGit(t, w.work, "log", "--oneline", "v1.2.0..HEAD")), "\n"))
+	if listed < 1 || listed+dropped != total {
+		t.Fatalf("dropped=%d listed=%d total=%d: the notice must name exactly the dropped commits", dropped, listed, total)
+	}
+	if !strings.Contains(notes, "https://github.com/silgrid/polyforge/compare/"+prev+"..."+head) {
+		t.Fatalf("the notice must carry a compare link on the previous release's commit id:\n%.500s…", notes)
+	}
+	if strings.Contains(notes, "/compare/v1.2.0") {
+		t.Fatalf("the compare link must not use the tag name (a downstream origin may carry an older tag of the same name):\n%.500s…", notes)
+	}
+	gate := strings.Index(notes, "## Test gate")
+	notice := strings.Index(notes, "还有 ")
+	if gate < 0 || notice < 0 || notice > gate {
+		t.Fatalf("the notes must still end with the Test gate section after the notice:\n%.500s…", notes)
+	}
+	if last := strings.LastIndex(notes, "## "); last != gate {
+		t.Fatalf("the Test gate section must be the notes' last section (r1#5):\n%.500s…", notes)
+	}
+}
+
+// TestReleaseScriptNotesTooLongResume (polyforge#14 AC4): in the overlong
+// scenario a first run that fails at the release create leaves the version
+// claimed; the resume finishes it and publishes byte-identical notes, still
+// within the limit (the truncated list is generated the same way both
+// times).
+func TestReleaseScriptNotesTooLongResume(t *testing.T) {
+	w := relLongNotesWorld(t, 80, 2000)
+	if out, err := w.run([]string{"FAKE_GH_CREATE_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v1.2.1 WAS CLAIMED") {
+		t.Fatalf("setup: the first run must fail at the release create, after the claim: %v\n%s", err, out)
+	}
+	first, err := os.ReadFile(filepath.Join(w.fakeRel, "create-failed.body"))
+	if err != nil {
+		t.Fatalf("the failed create must keep its attempted notes for the comparison: %v", err)
+	}
+	out, err := w.run(nil)
+	if err != nil || !strings.Contains(out, "resuming v1.2.1") {
+		t.Fatalf("the re-run must resume the claimed version: %v\n%s", err, out)
+	}
+	second, err := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
+	if err != nil {
+		t.Fatalf("no published notes: %v", err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatalf("the resume's notes must be byte-identical to the first attempt:\nfirst %.200q\nsecond %.200q", first, second)
+	}
+	if n := len(second); n > 125000 {
+		t.Fatalf("the resumed notes are %d bytes, over the limit", n)
 	}
 }
 
@@ -1636,6 +1768,18 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 			t.Fatalf("v0.2.0-fork.1 on origin points at %s, want HEAD %s", got, head)
 		}
 		w.assertOldTagsUntouched(out)
+		// polyforge#14 AC1: the first release of a suffixed line (its previous
+		// release the public base tag) lists only the absorption's descendants
+		// in its generated notes - never the internal history the replacement
+		// commit folded in before that point.
+		body, nerr := os.ReadFile(filepath.Join(w.fakeRel, "v0.2.0-fork.1", ".body"))
+		if nerr != nil || !strings.Contains(string(body), "replace main with the public v0.2.0 tree") ||
+			!strings.Contains(string(body), "internal layer: release suffix") {
+			t.Fatalf("the notes of the first suffixed release must list the absorption's descendants: %v\n%s", nerr, body)
+		}
+		if strings.Contains(string(body), "second change") || strings.Contains(string(body), "topic-second") {
+			t.Fatalf("the notes of the first suffixed release must not list the pre-absorption history:\n%s", body)
+		}
 		vout, verr := w.run(nil, "--verify", "v0.2.0-fork.1")
 		if verr != nil || strings.Contains(vout, "FAIL") ||
 			!strings.Contains(vout, "since v0.2.0 came through a merged PR") {
@@ -1664,6 +1808,14 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 			t.Fatalf("want version v0.2.1-fork.1: %v\n%s", err, out)
 		}
 		w.assertOldTagsUntouched(out)
+		// polyforge#14 AC1: between the line's own versions the range stays
+		// the whole v0.2.0-fork.4..HEAD - the absorption-point limit never
+		// applies inside the line (the absorbed public commit stays listed).
+		body, nerr := os.ReadFile(filepath.Join(w.fakeRel, "v0.2.1-fork.1", ".body"))
+		if nerr != nil || !strings.Contains(string(body), "public v0.2.1") ||
+			strings.Contains(string(body), "second change") {
+			t.Fatalf("the notes between the line's own versions must keep the whole range: %v\n%s", nerr, body)
+		}
 		vout, verr := w.run(nil, "--verify", "v0.2.1-fork.1")
 		if verr != nil || strings.Contains(vout, "FAIL") ||
 			!strings.Contains(vout, "since v0.2.0-fork.4 came through a merged PR") {
