@@ -48,8 +48,8 @@ included) until cleared.
 
 Only a step the lane snapshot declares `skippable` may be switched off;
 a request for any other step is refused naming the alternative: **to let
-a failed gate pass, use the waive** (`pf wrap --waive`, an owner's word,
-waivable gates only). The skip needs a step that never started; a
+a failed gate pass, waive it** — tell the step's agent (`pf answer`) and
+it hands off `waive` citing your words (waivable gates only). The skip needs a step that never started; a
 skipped tail's wrap attrs move to the last running step exactly as the
 claim-time skip does.
 
