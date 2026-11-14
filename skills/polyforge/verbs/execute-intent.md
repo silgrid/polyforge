@@ -52,7 +52,10 @@ it" of an existing work item → `verbs/submit.md`.
      recorded). A project may carry its own
      bundles — ask when unsure.
    - **Acceptance carrier** — every acceptance criterion is written
-     `<criterion> — carried by <step id>`, the step id taken from the chosen
+     `<criterion> — carried by <step id>`, its proof — the command that
+     shows it holds and the directory that command runs in — riding before
+     the carrier (the slot's shape in `verbs/file.md`), the step id taken
+     from the chosen
      lane's step table (the `steps:` list of its `workflow.yaml`; the lane
      table in `verbs/file.md` names the lanes). A criterion that names no
      step either drops to the evidence that graph actually runs, recorded as
@@ -93,7 +96,13 @@ it" of an existing work item → `verbs/submit.md`.
    target workspace differs from the session cwd or a repo clone is
    missing under `<workspace>/.repo/<name>` ("this ticket will land in
    X": machine + workspace), and submit only after the owner agrees.
-   Then watch and answer needs_input (`verbs/answer.md`); the publish
+   Before that submit, run the ticket's pre-submit analysis — a read-only
+   `pf task spawn` errand proposed right after filing, its report written
+   by the session into the ticket's `## 分析` section, or the owner's
+   dated 「免分析」 — and the acceptance and analysis checks of
+   `verbs/submit.md` (the analysis check there owns the 7-item report
+   format, the boundary against grilling and the pre-submit confirmation
+   rule). Then watch and answer needs_input (`verbs/answer.md`); the publish
    step's owner-review question (its `pf step ask`) is human-only
    (`verbs/ship.md`), and so are a develop build's stops (its `pf step ask`
    after the plan: the owner answers in free text that the build reads).

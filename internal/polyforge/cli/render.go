@@ -190,30 +190,40 @@ type WIView struct {
 	// queued execution ticket whose content lists no acceptance criterion
 	// while its lane requires one (the lane's `acceptance` declaration):
 	// the auto-pull wave skips it and it needs interaction
-	// first (markAcceptanceMissing).
+	// first (markNeedsInteraction).
 	AcceptanceMissing bool `json:"acceptance_missing,omitempty"`
+	// AnalysisMissing is set by pf queue (never by the server) on a
+	// queued execution ticket whose content carries no analysis section
+	// while its lane requires one — the same lane gate as
+	// AcceptanceMissing (polyforge#27): the auto-pull wave skips it too.
+	AnalysisMissing bool `json:"analysis_missing,omitempty"`
 }
 
 // acceptanceMissingLabel is the STATUS-cell mark of an AcceptanceMissing
-// row.
-const acceptanceMissingLabel = "需要交互：缺验收"
+// row; analysisMissingLabel of an AnalysisMissing one (both marks show
+// when both are missing).
+const (
+	acceptanceMissingLabel = "需要交互：缺验收"
+	analysisMissingLabel   = "需要交互：未分析"
+)
 
-// markAcceptanceMissing sets AcceptanceMissing on each queued execution
-// ticket (one with a bundle) of items whose content lists no acceptance
-// criterion — workflow.HasAcceptance — while the lane laneOf answers for
-// its project and bundle requires one (a nil lane, one that cannot be
-// read, does): the check pf submit and the auto-pull wave apply.
-func markAcceptanceMissing(items []WIView, laneOf func(project, bundle string) *workflow.Lane) {
+// markNeedsInteraction sets AcceptanceMissing and AnalysisMissing on
+// each queued execution ticket (one with a bundle) of items whose lane
+// requires acceptance (the lane's `acceptance` declaration; a nil lane,
+// one that cannot be read, does) — the checks pf submit and the
+// auto-pull wave apply; the ticket needs interaction first.
+func markNeedsInteraction(items []WIView, laneOf func(project, bundle string) *workflow.Lane) {
 	for i := range items {
 		it := &items[i]
 		content := ""
 		if it.Content != nil {
 			content = *it.Content
 		}
-		it.AcceptanceMissing = it.Status == api.StatusQueued &&
+		laneRequires := it.Status == api.StatusQueued &&
 			it.BundleName != nil && strings.TrimSpace(*it.BundleName) != "" &&
-			!workflow.HasAcceptance(content) &&
 			laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance()
+		it.AcceptanceMissing = laneRequires && !workflow.HasAcceptance(content)
+		it.AnalysisMissing = laneRequires && !workflow.HasAnalysis(content)
 	}
 }
 
@@ -290,6 +300,9 @@ func wiRow(it WIView) []string {
 	status := it.Status
 	if it.AcceptanceMissing {
 		status += " (" + acceptanceMissingLabel + ")"
+	}
+	if it.AnalysisMissing {
+		status += " (" + analysisMissingLabel + ")"
 	}
 	return []string{
 		slug, orDash(it.ProjectName), status, sess, it.Priority, nullable(it.BundleName), truncate(it.Goal, 60),
