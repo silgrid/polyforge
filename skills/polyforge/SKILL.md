@@ -148,11 +148,11 @@ When the user repeatedly walks the same flow, read the docs' bundle-authoring ch
 
 ## Project routing (team work vs external contributions)
 
-Work the team itself changes — features, fixes, docs, config — files to the
-**internal canon project** (`workbench`): internal first, and the projection
-carries it to the public repo at the next release. The public project
-(`polyforge`) takes **external contributions** only — an outside contributor's
-PR — and is never a filing target for team work.
+Team work — features, fixes, docs, config — and **external contributions** (an
+outside contributor's PR) both file to the **public project** (`polyforge`):
+this repository is the development mainline. The internal project carries only the
+internal layer (config defaults, guards) and the work of absorbing public changes
+into the internal line.
 
 ## Human decisions: Pi Web's Polyforge panel
 
