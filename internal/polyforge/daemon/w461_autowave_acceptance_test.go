@@ -14,8 +14,10 @@ import (
 )
 
 // w461AcceptanceContent is the content the auto-pull fixtures give a
-// ticket the wave must claim.
-const w461AcceptanceContent = "## Acceptance\n\n- AC1 the wave claims it — carried by build\n"
+// ticket the wave must claim: an acceptance criterion and an analysis
+// section (polyforge#27 — the wave claims only a ticket carrying both
+// on a lane requiring acceptance).
+const w461AcceptanceContent = "## Acceptance\n\n- AC1 the wave claims it — carried by build\n\n## 分析\n\n- fixture：免分析（2026-11-14）\n"
 
 func TestW461AutoWaveSkipsATicketWithoutAcceptance(t *testing.T) {
 	td := newTestDaemon(t, func(c *Config) {
