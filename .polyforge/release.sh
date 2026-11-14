@@ -57,7 +57,9 @@
 #      internal/common/workflow/contract-pending.md registers an incompatible
 #      change and ContractVersion is still the previous release's, refuse a
 #      bump that leaves the list non-empty or moves the version by more than
-#      one; an empty list needs no bump;
+#      one; an empty list needs no bump; a previous release whose tree has
+#      no workflow contract makes this the first release with one, which
+#      must declare ContractVersion 1 with an empty list;
 #   2. design-doc cross-reference gate (docs/design/polyforge-vnext/tools/
 #      check-xrefs.py, the Makefile's `xrefs` check; python3 is REQUIRED here -
 #      unlike `make xrefs`, a release never skips it), then the test gate
@@ -969,26 +971,46 @@ if [ -n "$RESUME" ]; then NOCLAIM="$TAG stays claimed and resumable"; else NOCLA
 # previous release and of HEAD, and count the list's entries (its lines
 # starting with "## "); anything unreadable refuses. An entry with the version
 # not bumped refuses with the way out; a bump releases only by one and with
-# the list emptied; an empty list needs no bump. A resume judges against V's
-# previous tag; a first release has none.
+# the list emptied; an empty list needs no bump. A previous release whose
+# tree carries no workflow contract (no $CONTRACT_GO, or one without a
+# ContractVersion line: a release from before the contract existed) makes
+# this the first release with one: it must declare ContractVersion 1 and
+# an empty list. A resume judges against V's previous tag; a first release
+# has none.
 CONTRACT_GO="internal/common/workflow/contract.go"
 CONTRACT_PENDING="internal/common/workflow/contract-pending.md"
-# contract_version_at <commit>: the one `const ContractVersion = <n>` line of
-# $CONTRACT_GO at <commit>; empty when the file or the line is missing, or
-# when there is more than one.
-contract_version_at() {
-  _cv=$(git show "$1:$CONTRACT_GO" 2>/dev/null | sed -n 's/^const ContractVersion = \([0-9][0-9]*\)$/\1/p')
-  [ "$(printf '%s\n' "$_cv" | grep -c .)" -eq 1 ] && printf '%s\n' "$_cv"
+# contract_of <commit>: the workflow contract of <commit>'s tree - the
+# number of its one `const ContractVersion = <n>` line of $CONTRACT_GO;
+# `none` when the tree carries no contract ($CONTRACT_GO absent, or present
+# without any `const ContractVersion` line); empty when it cannot be read
+# (the commit is not here, the line has another shape, or there is more
+# than one).
+contract_of() {
+  git cat-file -e "$1^{commit}" 2>/dev/null || return 0
+  if ! git cat-file -e "$1:$CONTRACT_GO" 2>/dev/null; then echo none; return 0; fi
+  _src=$(git show "$1:$CONTRACT_GO" 2>/dev/null) || return 0
+  _cv=$(printf '%s\n' "$_src" | sed -n 's/^const ContractVersion = \([0-9][0-9]*\)$/\1/p')
+  case "$(printf '%s\n' "$_cv" | grep -c .)" in
+    1) printf '%s\n' "$_cv" ;;
+    0) printf '%s\n' "$_src" | grep -Eq '^const ContractVersion([^A-Za-z0-9_]|$)' || echo none ;;
+  esac
   return 0
 }
 if [ -n "$PREVTAG" ]; then
   _pc=$PREVCOMMIT
-  V_PREV=$(contract_version_at "$_pc")
+  V_PREV=$(contract_of "$_pc")
   [ -n "$V_PREV" ] || die "refusing to release: cannot read ContractVersion of the previous release $PREVTAG ($CONTRACT_GO at $_pc); nothing built or published, $NOCLAIM"
-  V_HEAD=$(contract_version_at "$COMMIT")
-  [ -n "$V_HEAD" ] || die "refusing to release: cannot read ContractVersion at $COMMIT ($CONTRACT_GO: one 'const ContractVersion = <n>' line); nothing built or published, $NOCLAIM"
+  V_HEAD=$(contract_of "$COMMIT")
+  case "$V_HEAD" in ''|none) die "refusing to release: cannot read ContractVersion at $COMMIT ($CONTRACT_GO: one 'const ContractVersion = <n>' line); nothing built or published, $NOCLAIM" ;; esac
   _pend=$(git show "$COMMIT:$CONTRACT_PENDING" 2>/dev/null) || die "refusing to release: $CONTRACT_PENDING is missing at $COMMIT - the workflow contract's pending list cannot be read; nothing built or published, $NOCLAIM"
   P=$(printf '%s\n' "$_pend" | grep -c '^## ' || true)
+fi
+if [ -n "$PREVTAG" ] && [ "$V_PREV" = none ]; then
+  # the first release with a workflow contract: it starts at 1, nothing pending
+  [ "$V_HEAD" -eq 1 ] || die "refusing to release: the previous release $PREVTAG carries no workflow contract ($CONTRACT_GO absent, or without a ContractVersion line), so this is the first release with one and it starts at contract 1, but ContractVersion is $V_HEAD - set it to 1 in a PR (UpgradeSection, the golden file, the baseline, the lane schema and every built-in lane's contract: line with it), merge it, then release again; nothing built or published, $NOCLAIM"
+  [ "$P" -eq 0 ] || die "refusing to release: this is the first release with a workflow contract (the previous release $PREVTAG carries none), which starts at contract 1 with nothing pending, but $CONTRACT_PENDING holds $P entr$([ "$P" -eq 1 ] && echo y || echo ies) - fold them into contract 1 and empty the list (keep its explanation) in a PR, merge it, then release again; nothing built or published, $NOCLAIM"
+  echo "release: contract: 1 (the first release with a workflow contract; the previous release $PREVTAG has none), no incompatible change registered"
+elif [ -n "$PREVTAG" ]; then
   V_NEXT=$((V_PREV + 1))
   if [ "$V_HEAD" -lt "$V_PREV" ] || [ "$V_HEAD" -gt "$V_NEXT" ]; then
     die "refusing to release: ContractVersion is $V_HEAD, the previous release $PREVTAG has $V_PREV - it moves at most once per release, by one (to $V_NEXT, with every entry of $CONTRACT_PENDING written into its docs/upgrade.md section and the list emptied); fix it in a PR, merge it, then release again; nothing built or published, $NOCLAIM"
