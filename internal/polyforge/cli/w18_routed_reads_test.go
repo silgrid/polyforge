@@ -479,3 +479,61 @@ func TestW18MsgContactsReadTheRoutedCellsMapping(t *testing.T) {
 		t.Fatalf("--profile default msg contacts: stdout=%s, want dproj's member alone", stdout)
 	}
 }
+
+// TestW18InitWritesTheRoutedCellsPolicyFile (AC3): `pf init` writes the
+// default memory_policy block into the routed Cell's own file — a
+// workspace alpha maps gets its block in cli-alpha.toml (cli.toml is
+// untouched), a workspace alpha does not map answers unmapped naming
+// cli-alpha.toml, and the default Cell keeps writing cli.toml.
+func TestW18InitWritesTheRoutedCellsPolicyFile(t *testing.T) {
+	f := newW18Fixture(t)
+	xCfg := filepath.Join(f.env["XDG_CONFIG_HOME"], "polyforge")
+
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "init", f.wsA)
+	if code != 0 {
+		t.Fatalf("--profile alpha init wsA: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "[memory_policy") || !strings.Contains(stdout, "inserted") {
+		t.Fatalf("--profile alpha init wsA: stdout=%s", stdout)
+	}
+	alphaRaw, err := os.ReadFile(filepath.Join(xCfg, "cli-alpha.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(alphaRaw), `[memory_policy."`+f.wsA+`".default]`) {
+		t.Fatalf("cli-alpha.toml carries no default policy block for wsA:\n%s", alphaRaw)
+	}
+	hostRaw, err := os.ReadFile(filepath.Join(xCfg, "cli.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(hostRaw), "memory_policy") {
+		t.Fatalf("the alpha init touched the Host file:\n%s", hostRaw)
+	}
+
+	// A workspace the routed Cell does not map: unmapped, its hint names
+	// the routed Cell's file, nothing written.
+	hostBefore := string(hostRaw)
+	code, stdout, stderr = runPf(t, f.env, "--profile", "alpha", "init", f.wsD)
+	if code != 0 {
+		t.Fatalf("--profile alpha init wsD: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "unmapped") || !strings.Contains(stdout, "cli-alpha.toml") {
+		t.Fatalf("--profile alpha init wsD: stdout=%s, want the unmapped hint naming cli-alpha.toml", stdout)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(xCfg, "cli.toml")); string(raw) != hostBefore {
+		t.Fatalf("the unmapped alpha init changed the Host file")
+	}
+
+	// The default Cell keeps its shape: the block lands in cli.toml.
+	code, stdout, stderr = runPf(t, f.env, "init", f.wsD)
+	if code != 0 {
+		t.Fatalf("default init wsD: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "inserted") {
+		t.Fatalf("default init wsD: stdout=%s", stdout)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(xCfg, "cli.toml")); !strings.Contains(string(raw), `[memory_policy."`+f.wsD+`".default]`) {
+		t.Fatalf("the default init wrote no policy block into cli.toml:\n%s", raw)
+	}
+}
