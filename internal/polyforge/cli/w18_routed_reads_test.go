@@ -56,7 +56,7 @@ func w18FakeHub(t *testing.T, project string) *w18Hub {
 				return
 			}
 			item := map[string]any{
-				"id": "wi_" + project, "slug": project + "-1", "project_name": project,
+				"id": "wi_" + project, "slug": project + "-1", "project": project,
 				"status": "queued", "bundle_name": "devuser", "goal": "w18 " + project,
 				"content": "no acceptance here", "created_at": "2026-11-14T00:00:00Z",
 			}
@@ -67,7 +67,7 @@ func w18FakeHub(t *testing.T, project string) *w18Hub {
 				return
 			}
 			item := map[string]any{
-				"id": "wi_" + project, "slug": project + "-1", "project_name": project,
+				"id": "wi_" + project, "slug": project + "-1", "project": project,
 				"status": "queued", "bundle_name": "devuser", "goal": "w18 submit",
 				"content": "no acceptance here", "created_at": "2026-11-14T00:00:00Z",
 			}
@@ -287,7 +287,7 @@ func TestW18WorkflowsListsTheRoutedCellsMapping(t *testing.T) {
 type w18QueueDoc struct {
 	Items []struct {
 		ID                string `json:"id"`
-		ProjectName       string `json:"project_name"`
+		ProjectName       string `json:"project"`
 		BundleName        string `json:"bundle_name"`
 		AcceptanceMissing bool   `json:"acceptance_missing"`
 	} `json:"items"`
