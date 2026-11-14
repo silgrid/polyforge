@@ -325,8 +325,14 @@ try {
       assert.ok(desktop.every(Boolean), "the desktop rail buttons measure");
       for (const box of mobileButtons) {
         assert.ok(box.width <= Math.max(...desktop.map((item) => item.width)) + 1, `a mobile button is no wider than a desktop rail button (${box.width})`);
-        assert.ok(box.height <= Math.max(...desktop.map((item) => item.height)) + 1, `a mobile button is no taller than a desktop rail button (${box.height})`);
       }
+      // polyforge#22 (r1#1): the desktop badge rides the label's line, so the
+      // desktop button is one line tall — the retired two-line button was the
+      // old height reference. The pin states the new shape directly: the
+      // desktop rail button stays one line tall, no taller than the 40px
+      // mobile button.
+      assert.ok(desktop.every((item) => item.height <= 40),
+        `a desktop rail button stays one line tall (${JSON.stringify(desktop.map((item) => item.height))})`);
     });
   });
 
@@ -422,7 +428,12 @@ try {
           "messages/*": () => ({ capable: true, messages: [], last_seq: conversation.last_seq, has_older: false }),
           "work-items": () => ({ pfPresent: true, capable: true, items: runningItems, total: runningItems.length }),
         });
-        await openWork(page);
+        // openWork's top-tab regex is zh-CN-only (工单); this scenario also runs
+        // en and zh-TW (Work / 工單), so it opens the Work tab itself.
+        await openDock(page);
+        const work = topTab(page, /工单|工單|work/i);
+        await work.waitFor({ timeout: 20_000 });
+        await work.click();
         const rail = workTablist(page);
         await rail.waitFor({ timeout: 15_000 });
         const railBox = await rail.boundingBox();
