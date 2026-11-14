@@ -307,6 +307,17 @@ CUTOVER_FROM='v2.20.'   # the retired internal line's tag prefix
 CUTOVER_PUBLIC_FROM='v0.1.' # the public baseline's pre-unification line
 CUTOVER_TAG='v0.2.0'    # the unified product line's first release
 CUTOVER_LINE='v0.2.'    # the line CUTOVER_TAG opens
+# GitHub rejects a release body over 125000 characters (gh release create
+# fails on it); counted in BYTES here - under UTF-8 that is the character
+# count or more, the conservative side - and always before the version is
+# claimed: nothing is published towards a limit the release would die on
+# later. The generated commit list is cut to NOTES_LIST_BUDGET bytes at
+# whole lines, keeping the newest commits (a notice and a compare link name
+# what was dropped); a committed docs/release-notes/<tag>.md over NOTES_MAX
+# refuses the release instead - never truncated, a human's text is the
+# human's to shorten (see notes_commit_list and the notes step below).
+NOTES_MAX=125000
+NOTES_LIST_BUDGET=120000
 # Owner-direct allowlist (polyforge#240; see the PR-only check above): author
 # emails, space-separated, whose direct commits pass the PR-only check. Empty
 # by default - every change goes through PR-review-merge. Forks carrying
@@ -464,6 +475,38 @@ manifest_of() {
   printf '  "artifacts": [\n'
   awk 'NF == 2 { sub(/^\*/, "", $2); printf "%s    {\"name\": \"%s\", \"sha256\": \"%s\"}", (n++ ? ",\n" : ""), $2, $1 } END { print "" }' "$3"
   printf '  ]\n}\n'
+}
+# notes_commit_list: the generated notes' commit list for the range
+# $PREVCOMMIT..HEAD, newest first. The first release of a suffixed line
+# (its previous release the public base tag) lists only the absorption's
+# descendants: the history before that point belongs to no version of this
+# line, and --ancestry-path keeps the commits that descend from the base,
+# so the replacement commit's other side - the line absorbed away - is
+# never listed; between the line's own versions the plain range stands,
+# unchanged. The list must leave room for the header and the sections
+# appended after it, so it is cut to NOTES_LIST_BUDGET bytes at whole
+# lines, keeping the NEWEST commits; when lines were dropped, the list ends
+# with a notice naming their count and a compare link built on the
+# previous release's COMMIT id (never its tag name: a downstream origin
+# may carry an older tag of the same name on another commit). Bytes, not
+# characters: LC_ALL=C makes awk's length count bytes (>= the character
+# count under UTF-8, the conservative side), and the cut lands on whole
+# lines, never inside a character.
+notes_commit_list() {
+  _anc=""
+  if [ -n "$SUFFIX" ]; then
+    case "$PREVTAG" in
+      *-"$SUFFIX".*) ;;
+      *) _anc="--ancestry-path" ;;
+    esac
+  fi
+  git log $_anc --oneline "$PREVCOMMIT..HEAD" >"$WORK/notes.log"
+  LC_ALL=C awk -v max="$NOTES_LIST_BUDGET" -v repo="$GH_REPO" -v base="$PREVCOMMIT" -v tip="$COMMIT" '
+    { _l = length($0) + 2
+      if (_n + _l <= max) { print "- " $0; _n += _l } else _drop++ }
+    END { if (_drop > 0)
+      printf "还有 %d 个提交未列出（GitHub 发版说明上限 %d 字节，保留最新的提交）：https://github.com/%s/compare/%s...%s\n", _drop, max, repo, base, tip }
+  ' "$WORK/notes.log"
 }
 # rank_against <semver tags> <tag>: how <tag> ranks among the OTHER tags (the
 # monotonicity rule --verify judges and a resumed release must satisfy): sets
@@ -1193,21 +1236,7 @@ if [ -z "$REL_EXISTS" ]; then
       echo
       if [ -n "$PREVTAG" ] && git cat-file -e "$PREVCOMMIT^{commit}" 2>/dev/null; then
         echo "Changes since $PREVTAG:"; echo
-        # polyforge#14: the first release of a suffixed line (its previous
-        # release the public base tag) lists only the absorption's
-        # descendants: the history before that point belongs to no version
-        # of this line, and --ancestry-path keeps the commits that descend
-        # from the base, so the replacement commit's other side - the line
-        # absorbed away - is never listed. Between the line's own versions
-        # the plain range stands, unchanged.
-        _anc=""
-        if [ -n "$SUFFIX" ]; then
-          case "$PREVTAG" in
-            *-"$SUFFIX".*) ;;
-            *) _anc="--ancestry-path" ;;
-          esac
-        fi
-        git log $_anc --oneline "$PREVCOMMIT..HEAD" | sed 's/^/- /'
+        notes_commit_list
       elif [ -n "$PREVTAG" ]; then
         echo "Changes since $PREVTAG:"; echo
         git log --oneline -n 50 | sed 's/^/- /'
