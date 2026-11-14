@@ -546,7 +546,11 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     const ask = detailAsk(held, inFlight.current.has(id));
     if (!wi || ask === "skip") return;
     const asked = wi;
-    inFlight.current.add(id);
+    // the mark set this read captured: a reset replaces inFlight.current,
+    // and an answer of a read the reset replaced must clear only its own
+    // set — never a newer read's mark (review r3#1)
+    const marks = inFlight.current;
+    marks.add(id);
     const seq = (readSeq.current.get(id) ?? 0) + 1;
     readSeq.current.set(id, seq);
     const settle = (state: PolyforgeProgressToolDetailState) => {
@@ -559,7 +563,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     };
     if (ask === "loading") settle({ status: "loading" });
     void fetchProgressToolDetail(asked, id, profile).then((state) => {
-      inFlight.current.delete(id);
+      marks.delete(id);
       settle(state);
     });
   }, [wi, profile]);

@@ -175,7 +175,9 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   panel reads a card's detail on its expansion and re-reads it on every
   progress poll while it still has no result — a subagent's card like any
   other, its lines are in the poll's set: the step's progress lines while
-  the command runs, the final result once it ends; a re-read keeps the
+  the command runs, the final result once it ends; at most one read of a
+  card is in flight at a time (the poll skips while one is pending), an
+  answer of a read a later one replaced is dropped, a re-read keeps the
   held detail on screen (no interim Loading), a repeat answer writes
   nothing, and a card expanded during a run never stays on 尚无结果 after
   the command ends.
