@@ -6,8 +6,6 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 )
 
-func (s *State) SetAgentLanguageFallback(func() string) {}
-
 func TestAgentLanguageUsesDefaultCellUntilNamedCellOverrides(t *testing.T) {
 	def := New(&mapping.Plan{}, "", 0, 0)
 	named := New(&mapping.Plan{}, "", 0, 0)
