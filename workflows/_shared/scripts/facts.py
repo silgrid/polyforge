@@ -37,7 +37,8 @@ files changed after its test commit) and, with --replay, each unit's run
 replayed on the tree of its test commit — a detached worktree under the
 clone's .git, removed afterwards — each bounded by --unit-timeout (10m)
 under the whole deadline (--deadline, else the step's tool window less two
-minutes). Where it replays: --isolation container (the repo's verification
+minutes); each unit's ``replaying`` start line is closed by an end line
+(``unit <id>: replay <verdict> (exit <n>, <duration>)``). Where it replays: --isolation container (the repo's verification
 container: its HEAD must carry .polyforge/Dockerfile.verify, else exit 2),
 --isolation host (the host, under the step's PATH), or, without the flag,
 the container when the repo's HEAD carries the Dockerfile, else the host.
@@ -1595,6 +1596,26 @@ def not_run(exit_code: int) -> bool:
     return exit_code in NOT_RUN_EXITS
 
 
+def replay_end_line(unit_id: str, rr: Mapping[str, Any]) -> str:
+    """The end line of one unit's replay (its `replaying` line opened it):
+    the verdict as the run judged it, with the exit code and the duration."""
+    if rr.get("not_started"):
+        word = "not started"
+    elif rr["timed_out"]:
+        word = "killed at its time limit"
+    elif not_run(rr["exit_code"]):
+        word = "could not run"
+    elif rr.get("not_runnable") is not None:
+        word = "not runnable"
+    elif rr["red"]:
+        word = "red"
+    else:
+        word = "green"
+    took = duration.format((rr["duration_ms"] * duration.MILLISECOND + duration.SECOND // 2)
+                          // duration.SECOND * duration.SECOND)
+    return "unit %s: replay %s (exit %d, %s)" % (unit_id, word, rr["exit_code"], took)
+
+
 def replay_verdict(exit_code: int, timed_out: bool, output: str) -> Tuple[str, Optional[Dict[str, str]]]:
     """A replayed run judged: ("pass", None) for exit 0; ("not_judged",
     None) when its time limit killed it or the command never ran
@@ -2013,6 +2034,7 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
             if setup is not None:
                 inv.logs.extend(x for x in [setup["first_log"]] + [c.get("log", "") for c in setup["commands"]] if x)
             bu["replay"] = rr
+            inv.say(replay_end_line(u.id, rr))
             if rr.get("not_started"):
                 inv.summary = "unit %s was not replayed: the deadline (%s) had passed" % (u.id, duration.format(window))
                 return 2
