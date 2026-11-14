@@ -270,16 +270,37 @@ func (sc *stepCall) stamp(lines []stepcall.Line, st *capsule.Step, a stepcall.Ha
 // sidecar directory is empty.
 func handoffUsage(d *Daemon, capsuleDir, step string, spawn int64) stepcall.UsageSummary {
 	entries, _ := capsule.ReadSpawnJournal(capsuleDir)
-	var transcript string
+	var current capsule.SpawnJournalEntry
 	for _, e := range entries {
 		if e.StepID == step && int64(e.SpawnN) == spawn {
-			transcript = e.Transcript
+			current = e
 		}
 	}
-	if transcript == "" {
-		return stepcall.ReadUsage(nil, true)
+	if d == nil || d.locateTranscript == nil {
+		return stepcall.ReadUsage(nil, false)
 	}
-	return stepcall.ReadUsage([]string{transcript}, true)
+	live := d.locateTranscript(capsuleDir, entries)
+	if live == "" {
+		return stepcall.ReadUsage(nil, false)
+	}
+	paths := []string{live}
+	includes := false
+	if rel, err := filepath.Rel(capsuleDir, live); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		for _, dir := range []string{capsule.SubagentDir(live)} {
+			items, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			for _, item := range items {
+				if item.IsDir() || !strings.HasSuffix(item.Name(), ".jsonl") {
+					continue
+				}
+				paths = append(paths, filepath.Join(dir, item.Name()))
+				includes = true
+			}
+		}
+	}
+	return stepcall.ReadUsage(paths, includes, current.StartedAt)
 }
 
 func attemptEvent(at capsule.Attempt) string {

@@ -17,6 +17,9 @@ type usageValues struct{ input, read, write, output int64 }
 
 func ReadUsage(paths []string, includesSubagents bool, start ...string) UsageSummary {
 	since := ""
+	if len(start) > 0 {
+		since = start[0]
+	}
 	out := UsageSummary{IncludesSubagents: includesSubagents}
 	seen := map[string]bool{}
 	for _, path := range paths {
@@ -25,6 +28,7 @@ func ReadUsage(paths []string, includesSubagents bool, start ...string) UsageSum
 			continue
 		}
 		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 64<<10), 16<<20)
 		for sc.Scan() {
 			var rec struct {
 				Type      string `json:"type"`
@@ -64,6 +68,9 @@ func ReadUsage(paths []string, includesSubagents bool, start ...string) UsageSum
 				u := rec.Message.Usage
 				out.add(usageValues{u.Input, u.CacheRead, u.CacheWrite, u.Output})
 			}
+		}
+		if err := sc.Err(); err != nil {
+			return UsageSummary{IncludesSubagents: includesSubagents}
 		}
 		if err := sc.Err(); err != nil {
 			return UsageSummary{IncludesSubagents: includesSubagents}
