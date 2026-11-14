@@ -84,7 +84,7 @@ from pfstep import container, duration, git, gostr, jsonout, result, runner, ste
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
-from pfstep.engine import nested_roots, reached_roots  # noqa: E402
+from pfstep.engine import default_engine, nested_roots, reached_roots  # noqa: E402
 from pfstep.engine import argv_of as engine_argv_of  # noqa: E402
 from pfstep.flaky import RerunRun, rerun_flaky  # noqa: E402
 from pfstep.junit import ReportRead, merge_reported, read_declared_report, snapshot_report  # noqa: E402
@@ -340,13 +340,6 @@ def read_go_harness(repo_dir: str) -> str:
         if t.startswith("go_harness="):
             h = gostr.clean_rel(gostr.trim_space(t[len("go_harness="):]))
     return h
-
-
-def default_engine(environ: Optional[Dict[str, str]] = None) -> str:
-    """The scope engine when --engine names none: the shared tree's
-    ``scripts/verify-scope``."""
-    env = os.environ if environ is None else environ
-    return os.path.join(stepenv.read(env).shared_dir, "scripts", "verify-scope")
 
 
 # ---- the run ---------------------------------------------------------------

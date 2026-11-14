@@ -1,5 +1,5 @@
 """fast_checks.py — build's written fast/scoped check: the scope engine's
-light reports for one task repo, their fast- and scoped-phase commands run
+default reports for one task repo, their fast- and scoped-phase commands run
 as written (the full phase is never run), each command in its report's
 ``root``, the result file the artifact build judges red or green from.
 
@@ -18,11 +18,13 @@ exist) — and what no one checked at record time (polyforge#23: a marker
 wrong by one `$` was only found at verification, costing the lane a
 rewind):
 
-- it runs the scope engine ``--json --light`` in the repo clone
+- it runs the scope engine ``--json`` in the repo clone
   (``<capsule>/repos/<name>``; the engine in this lane's snapshot, or
-  --engine), decodes its report and takes the commands whose ``phase`` is
-  ``fast`` or ``scoped`` — never one whose ``phase`` is ``full`` — in the
-  report's order;
+  --engine) — the default report, the one the model ran by hand, so a
+  change on a forced-full path behaves exactly as before (its fast gates
+  and nothing more) — decodes the report and takes the commands whose
+  ``phase`` is ``fast`` or ``scoped``, never one whose ``phase`` is
+  ``full``, in the report's order;
 - every command runs as ``bash -c <cmd>`` **in the report's ``root``**, the
   directory the engine itself names, with the command's own declared
   ``timeout`` (a command declaring none gets the run's default, 20m) and a
@@ -78,10 +80,10 @@ import time  # noqa: E402
 import traceback  # noqa: E402
 from typing import Any, Dict, List, Optional, Sequence, Tuple  # noqa: E402
 
-from pfstep import duration, git, gostr, runner, stepenv  # noqa: E402
-from pfstep.engine import TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
+from pfstep import duration, git, gostr, runner  # noqa: E402
+from pfstep.engine import EngineCommand, EngineReport, ReportError, decode_report  # noqa: E402
 from pfstep.engine import argv_of as engine_argv_of  # noqa: E402
-from pfstep.engine import nested_roots, reached_roots  # noqa: E402
+from pfstep.engine import default_engine, nested_roots, reached_roots  # noqa: E402
 from pfstep.invoke import Invocation, duration_flag  # noqa: E402
 from pfstep.runner import Runner, bash_argv, raise_on_termination  # noqa: E402
 from pfstep.unitruns import UnitRunDecl, clean_cwd, marker_matches, marker_problem, read_unit_runs  # noqa: E402
@@ -129,13 +131,6 @@ def next_run_dir(root: str) -> str:
             return d
         except FileExistsError:
             continue
-
-
-def default_engine(environ: Optional[Dict[str, str]] = None) -> str:
-    """The scope engine when --engine names none: the shared tree's
-    ``scripts/verify-scope``."""
-    env = os.environ if environ is None else environ
-    return os.path.join(stepenv.read(env).shared_dir, "scripts", "verify-scope")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -294,9 +289,10 @@ class CheckRun:
         return self.r.rel(directory)
 
     def ask_engine(self, directory: str) -> Tuple[Optional[EngineReport], str, str]:
-        """The engine's light report with directory as its root: (report,
-        the invocation, why there is none)."""
-        argv = engine_argv_of(self.engine) + ["--json", "--light"]
+        """The engine's report with directory as its root — the default
+        one, no tier flag, exactly the report the model ran by hand: (the
+        report, the invocation, why there is none)."""
+        argv = engine_argv_of(self.engine) + ["--json"]
         ref = " ".join(argv)
         self.seq += 1
         log_path = os.path.join(self.log_dir, self.repo, "engine-%d" % self.seq, "command.log")
@@ -366,30 +362,30 @@ class CheckRun:
         if rep is None:
             self.inv.summary = "repos/%s: %s" % (self.repo, why)
             return 2
-        chosen, mode = choose(rep, TIER_LIGHT)
-        # AC2: only the fast and scoped phases ever run — a report that
-        # fell back to the full tier contributes its fast gates and nothing
-        # more (choose hands back the full tail there; it is never run)
-        chosen = [c for c in chosen if c.phase in ("fast", "scoped")]
+        # AC2/AC5: the report is the default one — the report the model
+        # ran by hand — and only its fast and scoped phases ever run: a
+        # change on a forced-full path behaves exactly as before (its fast
+        # gates and nothing more)
+        chosen = [c for c in rep.commands if c.phase in ("fast", "scoped")]
         self.details["reports"].append({"root": self.cwd_rel(clone), "mode": rep.mode,
-                                        "light": mode == TIER_LIGHT, "commands": len(chosen)})
+                                        "commands": len(chosen)})
         commands += [(c, clone, self.cwd_rel(clone)) for c in chosen]
-        if mode == TIER_LIGHT:
-            # a light report owns its diff: every nested engine root the
-            # changed paths reach is a repository of its own — its report
-            # runs there, in its root, not behind a cd the model writes
-            for d in reached_roots(nested_roots(clone), rep.paths or []):
-                directory = os.path.join(clone, d)
-                root_rel = self.cwd_rel(directory)
-                nrep, nref, nwhy = self.ask_engine(directory)
-                if nrep is None:
-                    self.inv.summary = "repos/%s: the nested engine root %s: %s" % (self.repo, d, nwhy)
-                    return 2
-                nchosen, nmode = choose(nrep, TIER_LIGHT)
-                nchosen = [c for c in nchosen if c.phase in ("fast", "scoped")]
-                self.details["reports"].append({"root": root_rel, "mode": nrep.mode,
-                                                "light": nmode == TIER_LIGHT, "commands": len(nchosen)})
-                commands += [(nested_command(d, c), directory, root_rel) for c in nchosen]
+        # every nested engine root the changed paths reach is a repository
+        # of its own whatever the root report answered — the #24 shape has
+        # the root conf force the full tier for the nested root's paths, and
+        # the nested root's own report still runs there, in its root, not
+        # behind a cd the model writes
+        for d in reached_roots(nested_roots(clone), rep.paths or []):
+            directory = os.path.join(clone, d)
+            root_rel = self.cwd_rel(directory)
+            nrep, nref, nwhy = self.ask_engine(directory)
+            if nrep is None:
+                self.inv.summary = "repos/%s: the nested engine root %s: %s" % (self.repo, d, nwhy)
+                return 2
+            nchosen = [c for c in nrep.commands if c.phase in ("fast", "scoped")]
+            self.details["reports"].append({"root": root_rel, "mode": nrep.mode,
+                                            "commands": len(nchosen)})
+            commands += [(nested_command(d, c), directory, root_rel) for c in nchosen]
         if not commands:
             self.inv.summary = ("repos/%s: the engine planned no command (stack %s, conf %s)"
                                 % (self.repo, gostr.quote(rep.stack), rep.conf))

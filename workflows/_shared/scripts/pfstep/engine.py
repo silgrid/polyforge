@@ -9,7 +9,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from . import git, gostr
+from . import git, gostr, stepenv
 
 TIER_FULL = "full"
 TIER_SCOPED = "scoped"
@@ -211,3 +211,10 @@ def reached_roots(roots: Sequence[str], paths: Sequence[str]) -> List[str]:
         if best:
             hit.add(best)
     return [d for d in roots if d in hit]
+
+
+def default_engine(environ: Optional[Dict[str, str]] = None) -> str:
+    """The scope engine when --engine names none: the shared tree's
+    ``scripts/verify-scope``."""
+    env = os.environ if environ is None else environ
+    return os.path.join(stepenv.read(env).shared_dir, "scripts", "verify-scope")
