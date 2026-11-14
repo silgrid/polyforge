@@ -1584,6 +1584,8 @@ NOT_RUNNABLE_RULES: Tuple[Tuple[str, str, str], ...] = (
     ("go", "compile-error", r"^(\./)?[^\s:]+\.go:\d+:\d+: "),
     ("go", "missing-package", r"^(go: |\S+\.go:\d+:\d+: |\s+imports \S+: )(.*: )?(cannot find package|no required module provides package)"),
     ("node", "module-not-found", r"^\s*Error \[ERR_MODULE_NOT_FOUND\]: "),
+    ("node", "node-e2e-dependency", r"^node_modules/ is missing: "),
+    ("node", "node-e2e-dependency", r"^Playwright Chromium is missing: "),
     ("node", "cannot-find", r"^\s*Error: Cannot find (module|package) '"),
     ("python", "import-error", r"^(ModuleNotFoundError|ImportError): "),
 )
