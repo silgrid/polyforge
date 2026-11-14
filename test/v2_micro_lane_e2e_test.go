@@ -106,9 +106,9 @@ const v2mLinks = "#!/bin/sh\nif grep -q 'broken-link' docs/guide.md; then echo '
 // v2mPlan is fix's evidence plan: the one declared check, in its repo.
 const v2mPlan = `[{"repo":"demo","line":"sh checks/links.sh"}]`
 
-// v2mTicket is the micro ticket (its acceptance section lets auto-pull
-// take it).
-const v2mTicket = "Reword the guide's first line.\n\n## Acceptance\n\n- AC1 docs/guide.md says the new words\n"
+// v2mTicket is the micro ticket (its acceptance and analysis sections
+// let auto-pull take it, polyforge#27).
+const v2mTicket = "Reword the guide's first line.\n\n## Acceptance\n\n- AC1 docs/guide.md says the new words\n\n## 分析\n\n- fixture：免分析（2026-11-14）\n"
 
 // v2mReviewOut is the python the scripted review routes its own
 // micro-bounds run with: in bounds → pass; out of bounds → the FAIL with
