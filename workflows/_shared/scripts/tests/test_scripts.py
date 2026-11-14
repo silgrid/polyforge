@@ -437,6 +437,26 @@ class RunScriptTest(unittest.TestCase):
         w.change("app", files)
         return w
 
+    def test_every_line_closes_with_an_end_line(self) -> None:
+        """polyforge#2: a line's start line is closed by an end line — PASS
+        with its duration, FAIL with its reason and log — on stderr and, in
+        a step, in the step's progress file (the same lines)."""
+        w = self.world(dockerfile=False)
+        plan = os.path.join(w.root, "evidence.json")
+        write(w.root, "evidence.json", json.dumps([{"repo": "app", "line": "echo one"},
+                                                   {"repo": "app", "line": "echo two; exit 4"}]))
+        out = os.path.join(w.capsule, "artifacts", "run", "result.json")
+        code, res, err = w.run("run.py", "--isolation", "host", "--plan-from", plan, "--capsule", w.capsule, "--out", out,
+                               PF_WI_ID="wi_r", PF_DAEMON_ID="m-a", PF_STEP="integrate", PF_CAPSULE=w.capsule)
+        assert res is not None
+        self.assertEqual(code, 1, err)
+        self.assertIn("run.py: repos/app: `echo one` (1/2)", err)
+        self.assertRegex(err, r"run\.py: repos/app: `echo one` PASS \([^)]+\)\n")
+        self.assertIn("run.py: repos/app: `echo two; exit 4` (2/2)", err)
+        self.assertRegex(err, r"run\.py: repos/app: `echo two; exit 4` FAIL - exited 4 \([^)]+\), log \S+\n")
+        with open(os.path.join(w.capsule, "runtime-state", "progress", "integrate.log"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), err, "the step's progress file is the stderr record")
+
     def test_a_plan_on_the_host_stops_at_the_first_failure(self) -> None:
         w = self.world(dockerfile=False)
         plan = os.path.join(w.root, "evidence.json")
