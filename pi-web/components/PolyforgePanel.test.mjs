@@ -1202,7 +1202,7 @@ test("polyforge#24: DAG selection wiring follows current step until a manual cho
   assert.match(source, /layout\.blocks\.filter\(\(block\) => block\.step === step\)/);
   assert.match(source, /blocks\.flatMap\(\(block\) => lines\.slice\(block\.first \?\? block\.start, \(block\.first \?\? block\.start\) \+ block\.count\)\)/);
   assert.match(source, /if \(!selectedStepManual && defaultStep\) setSelectedStep\(defaultStep\);/);
-  assert.match(source, /const defaultStep = watchStatus\?\.currentStep \?\? latestProgressStep/);
+  assert.match(source, /const defaultStep = watchStatus\?\.currentStep \?\? lastStartedStep \?\? latestProgressStep/, "an ended ticket's default is its last started step, ahead of the progress-stream fallback");
   assert.match(source, /title=\{`\$\{node\.id\} · \$\{stepStatusLabel\(node\.status\)\}\$\{timing \? ` · \$\{formatEventTime\(timing\.startedAt\)\}` : ""\}`\}/);
 });
 

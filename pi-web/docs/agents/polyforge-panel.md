@@ -1740,10 +1740,9 @@ source, not in the client). Text is whitespace-collapsed, masked by the shared
 `maskPolyforgeCredentials` (the `progress.command` rules — narration can
 itself name a credential) and capped at 400 code points. A first-load window
 with no record of the harness's format reads as `available:false`.
-The job detail's execution progress is step-scoped in the panel: the DAG selects one step, defaulting to the current step (or the last run step for a finished job), and the progress block shows that step's complete stream including all rerun blocks. A manual DAG choice remains selected while live status advances. A pending/unstarted selection shows `polyforge.progress.notRun`; node title/aria-label timing remains the `step_started`/`step_done` hover contract.
+The job detail's execution progress is step-scoped in the panel: the DAG selects one step, defaulting to the current step — or, for a finished ticket whose current_step the daemon cleared, the last started step of the watch snapshot (the progress stream's last block is the fallback) — and the progress block shows that step's complete stream including all rerun blocks. A manual DAG choice remains selected while live status advances. A pending/unstarted selection shows `polyforge.progress.notRun`; node title/aria-label timing remains the `step_started`/`step_done` hover contract.
 
-The job detail's execution progress, whole-job,
-is a separate, wider read face (`readProgressSnapshot`,
+The job detail's execution progress READ stays whole-job — a separate, wider read face (`readProgressSnapshot`,
 `GET /api/polyforge/progress`): every spawn's transcript as narration plus one
 masked tool-call line, with the composed lifecycle lines. The card stream
 never uses it; its whitelist above is unchanged.

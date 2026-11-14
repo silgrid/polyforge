@@ -1305,7 +1305,11 @@ export function PolyforgePanel({
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
   const [selectedStepManual, setSelectedStepManual] = useState(false);
   const latestProgressStep = progressSnapshot?.lines ? progressBlocks(progressSnapshot.lines).blocks.at(-1)?.step : undefined;
-  const defaultStep = watchStatus?.currentStep ?? latestProgressStep ?? graph?.nodes.find((node) => node.status !== "pending")?.id ?? graph?.nodes[0]?.id ?? null;
+  // An ended ticket carries no currentStep (the daemon clears it): its last
+  // run step is the newest started step of the watch snapshot; the progress
+  // stream's last block is the fallback when the watch carries no start times.
+  const lastStartedStep = watchStatus ? [...watchStatus.steps].reverse().find((step) => step.startedAt)?.name : undefined;
+  const defaultStep = watchStatus?.currentStep ?? lastStartedStep ?? latestProgressStep ?? graph?.nodes.find((node) => node.status !== "pending")?.id ?? graph?.nodes[0]?.id ?? null;
   useEffect(() => {
     setSelectedStep(null);
     setSelectedStepManual(false);
