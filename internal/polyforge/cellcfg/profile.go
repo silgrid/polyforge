@@ -12,6 +12,7 @@ package cellcfg
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -57,6 +58,18 @@ func CellFileName(profile string) string {
 		return HostFileName
 	}
 	return "cli-" + profile + ".toml"
+}
+
+// UnknownProfileDetail is the one refusal text for a profile no Cell is
+// configured under — the Host's router (daemon/cells.go) and the CLI's
+// placement validation (cli/profile.go) share it, so a name the Host
+// would refuse DAEMON-404 is refused the same way before anything is
+// sent. cfgDir is the configuration directory the Cell file is expected
+// in: the Host's loaded set directory, the CLI's Host-file directory.
+func UnknownProfileDetail(profile, cfgDir string) string {
+	return fmt.Sprintf(
+		"unknown profile %q: no Cell is configured under that name — expected %s (create it with `pf cell add %s …` or write that file and run `pf --profile %s config reload`)",
+		profile, filepath.Join(cfgDir, CellFileName(profile)), profile, profile)
 }
 
 // ProfileOfFile answers the profile a base file name names (ok=false: not

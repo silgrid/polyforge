@@ -20,7 +20,9 @@ package cli
 // the files on disk — that source is labelled "disk".
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,9 +135,12 @@ func (ctx *Context) hostSocket() string {
 // daemon anyway); a named Cell reads its own cli-<profile>.toml. file is
 // the mapping file's base name, for messages. An unreadable effective
 // index is the resolver's fail-closed refusal (the Cell is unknown, so
-// nothing is sent anywhere); a named Cell file that cannot be read is a
-// loud local error — placement never validates against a mapping it
-// could not read.
+// nothing is sent anywhere); a profile no Cell is configured under — a
+// name that is invalid or whose Cell file does not exist — is the Host's
+// typed DAEMON-404 refusal (cellcfg.UnknownProfileDetail), still nothing
+// sent; any other read or parse error of a present Cell file is a loud
+// local error — placement never validates against a mapping it could
+// not read.
 func (ctx *Context) routedCellMapping() (plan *mapping.Plan, file string, err error) {
 	if ctx.Step != "" || ctx.Task != "" {
 		return ctx.Cfg.Mapping, cellcfg.HostFileName, nil
@@ -151,8 +156,18 @@ func (ctx *Context) routedCellMapping() (plan *mapping.Plan, file string, err er
 	if hostPath == "" {
 		hostPath = DefaultConfigPath()
 	}
-	path := filepath.Join(filepath.Dir(hostPath), cellcfg.CellFileName(profile))
+	dir := filepath.Dir(hostPath)
+	// an invalid spelling is never a configured Cell (and never reaches a
+	// path): the Host's registry has no such row, so its typed refusal is
+	// the answer here too
+	if verr := cellcfg.ValidName(profile); verr != nil {
+		return nil, "", &api.Error{Code: api.ErrDaemonNotFound, Detail: cellcfg.UnknownProfileDetail(profile, dir)}
+	}
+	path := filepath.Join(dir, cellcfg.CellFileName(profile))
 	cfg, err := LoadCellFile(ctx.Cfg, path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, "", &api.Error{Code: api.ErrDaemonNotFound, Detail: cellcfg.UnknownProfileDetail(profile, dir)}
+	}
 	if err != nil {
 		return nil, "", err
 	}
