@@ -4,7 +4,7 @@
 // locale tables stay with the suites and tests that already declare them
 // — polyforge.mjs and polyforge-cards.mjs for the panel and its doc, the
 // component test for the locale keys — so the light tier's selection
-// carries keep their caps.)
+// keeps its declaration caps.)
 //
 // Authored pre-code against polyforge#30's acceptance (AC7): the project
 // list hides the deactivated projects by default, a「显示已停用」entry

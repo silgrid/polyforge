@@ -73,6 +73,20 @@ async function waitForContent(locator, message) {
   }
 }
 
+// waitForState polls a real page condition with a bound (the harness's
+// waitFor discipline: every iteration checks the condition, 200 ms
+// between checks, a deadline that fails naming the check it never
+// observed). The settle point of a view switch is the page's expected
+// STATE — never the response's arrival, which precedes the re-render.
+async function waitForState(cond, message) {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    if (await cond()) return
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error(message)
+}
+
 // typeLevels reads the computed typography facts for the named
 // selectors on the current page; a missing element answers null so the
 // caller names the check it could not observe.
@@ -888,22 +902,26 @@ function enc(segment) {
 // restore right, so the in-place door is exercised end to end through
 // the console's own write route.
 async function scenarioPickerDeactivated(page) {
-  // Every view switch asserts on the SETTLED state of its own /web/api/
-  // context answer — the DOM only re-renders from a response, so each
-  // segment waits for the response it is about to judge (never for a
-  // delay, and never on the previous view's stale rows).
+  // Every segment settles on the page's expected state, polled with a
+  // bound — and each view switch ALSO asserts on the /web/api/context
+  // answer that produced it (its body is the view's data truth; the
+  // restored project's row is identical in both views, so the default
+  // answer's body is the one place the re-listing is observable).
   const firstContext = page.waitForResponse((r) => r.url().includes('/web/api/context'))
   await page.goto('/web/')
   const picker = page.getByTestId('picker')
   await picker.waitFor()
-  await firstContext
-  await waitForContent(picker.locator('a'), 'S24: the picker never rendered its rows')
+  const firstCtx = await (await firstContext).json()
 
   // Default: the deactivated fixture project is absent, the active one present.
   const dormant = fixtures.deactivated_project
-  let body = await picker.textContent()
-  assert(!body.includes(dormant), 'S24: the default picker lists the deactivated project')
-  assert(body.includes(fixtures.project), 'S24: the default picker lost the active project')
+  assert(!firstCtx.projects.some((p) => p.name === dormant), 'S24: the first context answer lists the deactivated project')
+  assert(firstCtx.projects.some((p) => p.name === fixtures.project), 'S24: the first context answer lost the active project')
+  await waitForContent(picker.locator('a'), 'S24: the picker never rendered its rows')
+  await waitForState(async () => {
+    const body = await picker.textContent()
+    return body.includes(fixtures.project) && !body.includes(dormant)
+  }, 'S24: the default view lists the deactivated project or loses the active one')
 
   // The toggle: the deactivated project appears, marked, with the
   // restore entry in the same row.
@@ -911,35 +929,41 @@ async function scenarioPickerDeactivated(page) {
   assert(await toggle.count() === 1, 'S24: no「show deactivated」entry beside the list')
   const includeContext = page.waitForResponse((r) => r.url().includes('/web/api/context') && r.url().includes('include_deactivated=1'))
   await toggle.click()
-  await includeContext
+  const includeCtx = await (await includeContext).json()
+  const revealed = includeCtx.projects.find((p) => p.name === dormant)
+  assert(revealed && revealed.status === 'deactivated', 'S24: the include answer does not carry the deactivated project with its status')
   const row = picker.getByTestId('picker-row').filter({ hasText: dormant })
   await waitForContent(row, 'S24: the toggle did not reveal the deactivated project')
+  await waitForState(async () =>
+    (await row.getByTestId('deactivated-mark').count()) === 1 && (await row.getByTestId('restore-project').count()) === 1,
+  'S24: the revealed row never settled with its marker and restore entry')
   assert((await row.textContent()).includes('deactivated'), 'S24: the revealed row carries no deactivated marker')
   const restore = row.getByTestId('restore-project')
   assert(await restore.count() === 1, 'S24: the revealed row carries no in-place restore entry')
 
   // Restore: the write answers through the console's own route; the
-  // row's deactivated marker is the settled state the poll waits for
-  // (the refetch recomputes it), and the view keeps listing the
-  // project — unmarked.
+  // settled state is the row losing BOTH its marker and its restore
+  // entry (the status turned active), polled — never the response's
+  // arrival.
   await restore.click()
-  const marker = row.getByTestId('deactivated-mark')
-  try {
-    await marker.waitFor({ state: 'detached', timeout: 10_000 })
-  } catch {
-    throw new Error('S24: the restore never cleared the row’s deactivated marker')
-  }
+  await waitForState(async () =>
+    (await row.getByTestId('deactivated-mark').count()) === 0 && (await row.getByTestId('restore-project').count()) === 0,
+  'S24: the restore never settled the row (marker and restore entry still there)')
   assert(!(await row.textContent()).includes('deactivated'), 'S24: the restored row still carries the deactivated marker')
 
-  // Back to the default view: the restored project is listed there —
-  // the include-free context answer is the settle point (the include
-  // view's rows stay in the DOM until it lands, so the assertions
-  // judge the new answer, not the old rows).
+  // Back to the default view: the default answer must list the restored
+  // project as active — its body is the one observable the two views do
+  // not share, the row itself being identical — and the page must settle
+  // on it before the DOM assertions read.
   const toggleBack = page.getByTestId('show-deactivated')
   const defaultContext = page.waitForResponse((r) => r.url().includes('/web/api/context') && !r.url().includes('include_deactivated'))
   await toggleBack.click()
-  await defaultContext
+  const defaultCtx = await (await defaultContext).json()
+  const restored = defaultCtx.projects.find((p) => p.name === dormant)
+  assert(restored && restored.status !== 'deactivated', 'S24: the default context answer does not list the restored project as active')
   const backRow = picker.getByTestId('picker-row').filter({ hasText: dormant })
-  await waitForContent(backRow, 'S24: the default view never listed the restored project')
+  await waitForState(async () =>
+    (await backRow.count()) === 1 && !(await backRow.textContent()).includes('deactivated'),
+  'S24: the default view never settled on the restored project, unmarked')
   assert(!(await backRow.textContent()).includes('deactivated'), 'S24: the restored project is still marked in the default view')
 }
