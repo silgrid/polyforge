@@ -26,6 +26,7 @@ func TestPF27AnalysisSectionPresence(t *testing.T) {
 		{"中文 heading with suffix", "## 分析（提交前）\n\n- scope\n", true},
 		{"heading ends at the next level-one/two heading", "## 分析\n\n- scope\n\n## 其他\n\nnot part of the analysis section\n", true},
 		{"empty section before a later filled one", "## 分析\n\n## 其他\n\n## 分析\n\nreal content\n", false},
+		{"filled first section before an empty later one", "## 分析\n\n- real content\n\n## 其他\n\n## 分析\n\n", true},
 		{"a level-three heading does not end the section", "### 分析\n\nno: level three is not the section heading\n", false},
 		{"acceptance section is not the analysis section", "## Acceptance\n\n- AC1 x\n", false},
 		{"no content at all", "", false},
