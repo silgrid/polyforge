@@ -47,11 +47,11 @@ type OverrideStepView struct {
 // OverrideView is the GET answer: the work item's posture on this daemon
 // and one row per declared step, in lane order.
 type OverrideView struct {
-	WorkItem string            `json:"work_item"`
+	WorkItem string `json:"work_item"`
 	// Posture is how the daemon holds the work item: running (a live
 	// job), paused (a retained paused record) or blocked (no job; the
 	// sealed capsule of its last close, plus the pending record).
-	Posture string            `json:"posture"`
+	Posture string             `json:"posture"`
 	Steps   []OverrideStepView `json:"steps"`
 }
 
