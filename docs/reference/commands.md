@@ -1392,7 +1392,14 @@ problem: the next candidate at once, and none left parks the work item
 the same session resumes with the reminder to end with a hand-off, and
 the third in a row parks. `rate_limited` and `upstream_transient` retry
 the same model after a backoff of 1 s, doubling to at most 3 min, never
-counted; `tool_hung` resumes the same session once with Y doubled (a
+counted. The transient texts the classification recognizes include the
+throttles (429 / rate limit / `overloaded` / the gateways' `server
+overload. Please retry later.` and concurrency texts) and the upstream
+transients: a response stream that ended or was interrupted before
+completion, an upstream/gateway named `temporarily unavailable`, a
+gateway's `no available accounts`, and the upstream model reporting an
+error after output had started (the output so far is partial);
+`tool_hung` resumes the same session once with Y doubled (a
 second timeout parks); any other exit (`exit_other`, `exit_host_class`,
 `harness_silent`) resumes once, and the second in a row parks. A
 restarted daemon serves only what is left of a backoff, and `pf ops
