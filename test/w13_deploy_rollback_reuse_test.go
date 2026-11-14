@@ -122,8 +122,10 @@ func TestW13ExistingRollbackImagePrintsBothIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deploy failed:\n%s\n%s", err, out)
 	}
-	if !strings.Contains(out, exid) || !strings.Contains(out, "sha256:old"+old) {
-		t.Errorf("both image IDs (the existing rollback image's %s and the running container's %s) must be printed:\n%s", exid, "sha256:old"+old, out)
+	// pin the whole step-2 note: both IDs in one line (r1#4 - the loose
+	// per-ID checks would stay green with the note's $runid half dropped)
+	if !strings.Contains(out, "its image ID "+exid+" differs from the running container's image ID sha256:old"+old) {
+		t.Errorf("the step-2 note must print both image IDs in one line (%s vs sha256:old%s):\n%s", exid, old, out)
 	}
 	// the existing tag still wins and is verified per the existing rules
 	dl := d.logOf("log-docker")

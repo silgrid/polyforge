@@ -1432,12 +1432,15 @@ git -C "$SCRIPT_DIR" rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null 
 sql_plan
 
 # The rollback image: the old release's GHCR image when it has one (a release
-# that published aihub-image.digest), else the legacy build from the saved old
-# binary (releases before the GHCR image existed, e.g. v2.2.0).
+# that published aihub-image.digest); else (no GHCR image) the running
+# container's image, reused by its ID ({{.Image}}) when it verifies as
+# $OLDVER; else the legacy fallback build from the saved old binary + the
+# old release's deploy/Dockerfile (releases before the GHCR image existed,
+# e.g. v2.2.0).
 if gh release view "$OLDVER" -R "$GH_REPO" --json assets -q '.assets[].name' >"$WORK/oldassets.txt" 2>"$WORK/oldrel.err"; then
   if grep -qx "$ASSET_DIGEST" "$WORK/oldassets.txt"; then OLD_HAS_GHCR=1; fi
 else
-  note "WARNING: cannot read release $OLDVER of $GH_REPO ($(head -1 "$WORK/oldrel.err")); the rollback image falls back to a build from the saved old binary"
+  note "WARNING: cannot read release $OLDVER of $GH_REPO ($(head -1 "$WORK/oldrel.err")); the rollback image falls back to the running container's image (reused when it verifies as $OLDVER), else a build from the saved old binary"
 fi
 if [ "$OLD_HAS_GHCR" = 1 ] && [ "$OLDVER" != "$TAG" ]; then
   note "rollback image: $OLDVER has a GHCR image - pulling and verifying it"
@@ -1675,7 +1678,12 @@ else
     [ -n "$rid" ] && note "rollback image: the running container's image $rid does not verify as $OLDVER - building the legacy fallback image from the saved old binary"
     build_image "$OLDIMG" "$BIN_SAVED" "$OLDVER"
   else
-    die "the running container's image ${rid:-is unreadable} and does not verify as $OLDVER, and no deploy/Dockerfile of $OLDVER is available for the fallback build - git fetch --tags, then re-deploy (nothing was tagged, the service is untouched; probe output: $PROBE_RAW)"
+    if [ -n "$rid" ]; then
+      why="the running container's image $rid does not verify as $OLDVER"
+    else
+      why="the running container's image ID is unreadable (docker inspect -f '{{.Image}}' $AIHUB_CONTAINER failed), so it cannot be verified as $OLDVER"
+    fi
+    die "$why, and no deploy/Dockerfile of $OLDVER is available for the fallback build - git fetch --tags, then re-deploy (nothing was tagged, the service is untouched; probe output: $PROBE_RAW)"
   fi
 fi
 
