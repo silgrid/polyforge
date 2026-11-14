@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"time"
 )
 
 type UsageSummary struct {
@@ -27,6 +28,7 @@ func ReadUsage(paths []string, includesSubagents bool, start ...string) UsageSum
 			continue
 		}
 		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 64<<10), 16<<20)
 		for sc.Scan() {
 			var rec struct {
 				Type      string `json:"type"`
@@ -48,7 +50,7 @@ func ReadUsage(paths []string, includesSubagents bool, start ...string) UsageSum
 			if json.Unmarshal(sc.Bytes(), &rec) != nil {
 				continue
 			}
-			if since != "" && rec.Timestamp != "" && rec.Timestamp < since {
+			if since != "" && rec.Timestamp != "" && usageBefore(rec.Timestamp, since) {
 				continue
 			}
 			if rec.Type == "assistant" && rec.Message.Usage != nil {
@@ -67,9 +69,20 @@ func ReadUsage(paths []string, includesSubagents bool, start ...string) UsageSum
 				out.add(usageValues{u.Input, u.CacheRead, u.CacheWrite, u.Output})
 			}
 		}
+		if err := sc.Err(); err != nil {
+			return UsageSummary{IncludesSubagents: includesSubagents}
+		}
 		_ = f.Close()
 	}
 	return out
+}
+func usageBefore(timestamp, since string) bool {
+	t, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return timestamp < since
+	}
+	s, err := time.Parse(time.RFC3339Nano, since)
+	return err == nil && t.Before(s)
 }
 func (s *UsageSummary) add(v usageValues) {
 	if v.input == 0 && v.read == 0 && v.write == 0 && v.output == 0 {
