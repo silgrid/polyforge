@@ -51,7 +51,7 @@ func w366Files(t *testing.T) map[string]string {
 	return map[string]string{
 		"go.mod":                              "module fixture.test/w366\n\ngo 1.21\n",
 		"cmd/app/main.go":                     "package main\n\nfunc main() {}\n",
-		".polyforge/verify-scope.conf":        w25engIeopsConf(t),
+		".polyforge/verify-scope.conf":        w25engShippedConf(t),
 		"pi-web/go.mod":                       "module fixture.test/w366/pi-web\n\ngo 1.21\n",
 		"pi-web/package.json":                 "{\n  \"name\": \"w366-nested\",\n  \"scripts\": {\"lint\": \"eslint .\", \"test:e2e:all\": \"node e2e/all.mjs\"}\n}\n",
 		"pi-web/.polyforge/verify-scope.conf": w366NestedConf,

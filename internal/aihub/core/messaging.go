@@ -390,7 +390,7 @@ func (m *AdminManager) MarkDelivered(callerID string, req api.AckMessage) error 
 // MessagesAboutWI answers every message anchored to one work item
 // the stored about_wi string is compared against the
 // work item's slug AND its id, because the sender wrote it raw (a slug
-// such as `ieops#1476` or a `wi_` id). Historical rows match too — the
+// such as `acme#1476` or a `wi_` id). Historical rows match too — the
 // anchor is never migrated. Anchoring makes the message visible to
 // anyone who can see the ticket; the console detail is the only reader.
 func (m *AdminManager) MessagesAboutWI(wiID, slug string) ([]api.Message, error) {

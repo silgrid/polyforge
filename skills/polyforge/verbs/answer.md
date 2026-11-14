@@ -3,7 +3,7 @@
 Execution-plane verb: routed to the local daemon (the answer route). The
 daemon hands the words to the work item's in-process Go driver; it never
 rewrites them. `pf answer <id> --text "..."` goes to the current step's
-agent at any time (workflow contract v2) — a reply to its `pf step ask` question
+agent at any time — a reply to its `pf step ask` question
 (the one `pf watch --once` shows under the ask's stamp as its id) while it
 waits, an interjection while it runs; the words are recorded in the capsule
 first, then relayed verbatim into that agent's own conversation (the live
@@ -15,8 +15,7 @@ off `rewind --to <step>`, `waive` or `cancel` itself, citing your message
 (there is no owner command for the first two). `pf cancel` (`cancel.md`)
 abandons a work item directly.
 
-A **parked** work item (blocked or paused) is answered too (workflow
-contract 4): the message wakes the step the park belongs to — its own
+A **parked** work item (blocked or paused) is answered too: the message wakes the step the park belongs to — its own
 session after it handed off `blocked`, the step that timed out or kept
 exiting without a hand-off, the current step after a pause, a replay of
 failed hub writes. The command opens the work item's door with your own
@@ -68,7 +67,7 @@ work item is woken — <how it continues>`.
 | (door refused) `answer: <id> is parked …; opening its door was refused` | aihub refused the resume door with your key (you are not the reporter, a maintainer, an admin or the machine's operator) | Nothing was recorded; ask someone who may resume it. |
 | `DAEMON-409` (disabled Cell) | The Cell's execution plane is closed (the error names why) | Nothing was recorded; fix the Cell's cause first. |
 | `DAEMON-400` (empty or oversize message) | The `--text` words are blank or over 64 KiB; nothing was recorded | Say it in words, at most 64 KiB (split a longer message). |
-| `DAEMON-400` (a question id or an option) | The request named a `question_id` or an `option` — the v1 answer's fields, gone with workflow contract v2 change 19 (an older client) | Answer with `--text` alone; the step's agent reads the words. |
+| `DAEMON-400` (a question id or an option) | The request named a `question_id` or an `option` — the fields of an earlier answer shape (an older client) | Answer with `--text` alone; the step's agent reads the words. |
 | `DAEMON-403` (step process — the only 403) | The caller runs inside a step agent's process tree (polyforge#122: the daemon checks the UDS peer, its ancestors and its process group for the step markers) | Questions are a human's to answer — a step agent never answers; answer from your own session. |
 | `DAEMON-404` | No local job for this work item | The work item is not running on this machine — answer from the machine that runs it. |
 | (no code) `answer: --text is required` / `… identity required` | Local usage refusal | Fill in the required flags; no request left the machine. |

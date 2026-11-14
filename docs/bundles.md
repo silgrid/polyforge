@@ -62,7 +62,7 @@ PR → `merge` (`merge.py` merges it into the default branch under the
 per-repo merge lock; a project may skip it, `steps.<project>.merge.skip:
 true`, and its work items then end after `publish`, wrapped `published`
 with the PRs awaiting a human review) — the four mechanical steps agent steps on shared
-skills since workflow contract 2;
+skills;
 [concepts](concepts.md#landed-awaiting-the-full-gate)), `integrate` (the integration
 lane: one work item per batch — `collect` → `revert` → `full-gate` → `close`,
 four agent steps running pre-written commands, gating what landed, filed
@@ -74,7 +74,7 @@ lanes `develop` superseded were removed
 (`workflows/_archive/README.md`).
 `micro` is the pure-text lane: `fix` → `review` → `sync` → `evidence` →
 `publish` → `merge`, no grill, plan or verification step, the ticket body as
-its spec — every step an agent step since workflow contract 2, the four
+its spec — every step an agent step, the four
 mechanical ones on the same shared skills as develop's or its own:
 `evidence` re-runs fix's evidence plan (`run.py --isolation host --plan-from
 artifacts/fix/evidence.json`, the repository's fast phase and declared
@@ -90,7 +90,7 @@ or touches an undeclared repository, is not micro's: `fix` asks the owner
 to re-file the work on `develop` and cancels the work item on the owner's
 word.
 Their own `README.md` files carry each lane's narrative. Every step of
-every lane is an agent step (workflow contract 3: the daemon runs no step
+every lane is an agent step (the daemon runs no step
 itself); develop's verification runs `verify.py --tier light --unit-runs
 artifacts/build/units.json` through its skill (the build's recorded unit runs
 ride along); there is no per-work-item tier. develop's `build` and `review`

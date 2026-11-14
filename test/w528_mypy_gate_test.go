@@ -43,7 +43,7 @@ func TestW528MypyGateLightTierSelectsIt(t *testing.T) {
 	dir, base := w25e2eFixture(t, map[string]string{
 		"go.mod":                         "module fixture.test/w528\n\ngo 1.21\n",
 		"main.go":                        "package main\n\nfunc main() {}\n",
-		".polyforge/verify-scope.conf":   w25engIeopsConf(t),
+		".polyforge/verify-scope.conf":   w25engShippedConf(t),
 		"workflows/_shared/scripts/x.py": "X = 1\n",
 	})
 	w25e2eWrite(t, dir, "workflows/_shared/scripts/x.py", "X = 2\n")

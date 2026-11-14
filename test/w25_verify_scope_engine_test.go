@@ -210,9 +210,9 @@ func w25engGoModule() map[string]string {
 	}
 }
 
-// w25engIeopsConf reads this repository's shipped conf, so the contrast
+// w25engShippedConf reads this repository's shipped conf, so the contrast
 // catches drift in the declared commands as well as in the engine.
-func w25engIeopsConf(t *testing.T) string {
+func w25engShippedConf(t *testing.T) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(w25engRoot(t), ".polyforge", "verify-scope.conf"))
 	if err != nil {
@@ -766,7 +766,7 @@ func TestW25EngineGoByteContrast(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			dir, base := w25engClone(t, c.files, w25engIeopsConf(t), frozen)
+			dir, base := w25engClone(t, c.files, w25engShippedConf(t), frozen)
 			for rel, body := range c.write {
 				w25engWrite(t, dir, rel, body)
 			}
@@ -1150,7 +1150,7 @@ func TestW344ScopePiWebDiffForcesFull(t *testing.T) {
 	files["pi-web/package.json"] = "{\n  \"name\": \"@silgrid/pi-web\",\n  \"version\": \"0.2.0-dev.0\"\n}\n"
 	files["pi-web/lib/app.ts"] = "export const v = 1;\n"
 	files["pi-web/go.mod"] = "module fixture.test/w25eng/pi-web\n\ngo 1.21\n"
-	dir, base := w25engClone(t, files, w25engIeopsConf(t), "")
+	dir, base := w25engClone(t, files, w25engShippedConf(t), "")
 	w25engWrite(t, dir, "pi-web/lib/app.ts", "export const v = 2;\n")
 	w25engCommit(t, dir, "pi-web only")
 	r := w25engScope(t, dir, "--base", base)

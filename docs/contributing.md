@@ -82,7 +82,7 @@ ticket has none or an incomplete one (never self-written; proposed and asked onc
 the plan); rewind exhaustion (3 in total); and publish's owner-review. The
 owner answers in free text that `build` reads — its summary states each
 decision, the owner's words and its reading, which review checks against the
-words. No daemon check settles `build` (workflow contract v2): it runs each unit red
+words. No daemon check settles `build`: it runs each unit red
 then green itself and records the unit in `artifacts/build/units.json` — `[{id,
 test_commit, impl_commit, run{repo, cwd, argv}, marker}]`, the run exactly as it ran —
 and the steps after it verify that record. Review runs the workflow's `facts.py

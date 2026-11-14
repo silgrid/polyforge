@@ -129,9 +129,9 @@ test("the content is cut at 262144 UTF-8 bytes on a code-point boundary with con
 });
 
 test("spawn-error reasons are bounded pf stderr or fixed text, never env or argv", () => {
-  const withStderr = Object.assign(new Error("Command failed: pf --json queue SECRET"), { stderr: `queue: project ieops: boom\n${"x".repeat(2000)}` });
+  const withStderr = Object.assign(new Error("Command failed: pf --json queue SECRET"), { stderr: `queue: project orbit: boom\n${"x".repeat(2000)}` });
   const reason = lib.PolyforgeWorkItemsError.fromSpawnError(withStderr).message;
-  assert.match(reason, /^queue: project ieops: boom/);
+  assert.match(reason, /^queue: project orbit: boom/);
   assert.ok(reason.length <= 512);
   assert.ok(!reason.includes("SECRET"));
   assert.match(lib.PolyforgeWorkItemsError.fromSpawnError(Object.assign(new Error("x"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", stderr: "" })).message, /buffer/);
@@ -155,7 +155,7 @@ const fs = require("fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
 const mode = fs.readFileSync(${JSON.stringify(mode)}, "utf8");
-if (mode === "fail") { process.stderr.write("queue: project ieops: refused\\n"); process.exit(1); }
+if (mode === "fail") { process.stderr.write("queue: project orbit: refused\\n"); process.exit(1); }
 if (mode === "malformed") { process.stdout.write("not json\\n"); process.exit(0); }
 if (args[1] === "queue") process.stdout.write(JSON.stringify({ items: [${JSON.stringify(REAL_ROW)}], total: 1 }));
 else process.stdout.write(JSON.stringify(${JSON.stringify({ ...REAL_ROW, content: "body" })}));
@@ -174,7 +174,7 @@ else process.stdout.write(JSON.stringify(${JSON.stringify({ ...REAL_ROW, content
     "one merged queue (no --project/--status/--limit) and one file show");
 
   writeFileSync(mode, "fail");
-  await assert.rejects(lib.listPolyforgeWorkItems(), (error) => error instanceof lib.PolyforgeWorkItemsError && /queue: project ieops: refused/.test(error.message));
+  await assert.rejects(lib.listPolyforgeWorkItems(), (error) => error instanceof lib.PolyforgeWorkItemsError && /queue: project orbit: refused/.test(error.message));
   writeFileSync(mode, "malformed");
   await assert.rejects(lib.listPolyforgeWorkItems(), (error) => error instanceof lib.PolyforgeWorkItemsError && /undecodable/.test(error.message));
   await assert.rejects(lib.showPolyforgeWorkItem("wi_7oKHIcJ3v7Ue"), /undecodable/);

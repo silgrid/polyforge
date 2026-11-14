@@ -64,7 +64,7 @@ var cmdWatch = &Command{
 			case "list", "subscribe", "unsubscribe", "adopt", "ack":
 				// the chat watcher's subcommand words: refused by name, never
 				// read as a work item id
-				return fmt.Errorf("watch %s: retired with the chat subscriptions human decisions are the machine's decision feed: `pf watch decisions` (mark them seen with `pf watch dismiss`), shown in Pi Web's Polyforge panel", args[0])
+				return fmt.Errorf("watch %s: retired with the chat subscriptions — human decisions are the machine's decision feed: `pf watch decisions` (mark them seen with `pf watch dismiss`), shown in Pi Web's Polyforge panel", args[0])
 			}
 		}
 		if boolFlag(fs, "all") {

@@ -90,7 +90,7 @@ func retiredChatStateCheck(dataDir, runtimeDir string, prune bool) doctorCheck {
 	}
 	if !prune {
 		c.Status = "warn"
-		c.Detail = fmt.Sprintf("%d file(s), %d bytes of retired chat-subscription state (; nothing reads it): %s%s — `pf doctor --prune-chat-state` deletes them",
+		c.Detail = fmt.Sprintf("%d file(s), %d bytes of retired chat-subscription state (nothing reads it): %s%s — `pf doctor --prune-chat-state` deletes them",
 			len(found), size, strings.Join(sample, ", "), more)
 		return c
 	}

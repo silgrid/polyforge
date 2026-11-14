@@ -52,7 +52,7 @@ step-by-step checks and failure codes are in
 [workflows/release/README.md](../../workflows/release/README.md)
 and its steps.
 
-How the lane runs the procedures (workflow contract v2, change 9): each
+How the lane runs the procedures: each
 step's own agent runs its procedure itself — in the owner repo, inside one
 tool call, under the daemon's command PATH (the step's own `PATH`: the
 `[daemon] command_path` the daemon's own in-process commands run under,
@@ -77,7 +77,7 @@ the version and its commit, `deploy` that `verified-version.json`'s version
 equals the one the release script's result file names (never a version
 copied out of a `handoff.md` body) — each skill's read-and-verify-first
 section says what to check, and a check that does not hold is the gate's
-FAIL. `deploy` hands off `done` (contract 3's `defer`, for a project with
+FAIL. `deploy` hands off `done` (an earlier `defer`, for a project with
 no deploy procedure, is `done` with the reason in its body). `release`
 and `deploy` name `model_tier: mid`; the lane's tiers are placeholders, so
 their models come from the workspace yaml (`steps.<project>.<step-id>.models`,

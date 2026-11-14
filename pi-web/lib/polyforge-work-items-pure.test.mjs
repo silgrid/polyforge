@@ -26,8 +26,8 @@ test("the seven real statuses are offered in order and the cap is 500", () => {
 
 test("newest first is global, stable for equal instants, unparseable last in pf's order", () => {
   const rows = [
-    row(1, "ieops", "wrapped", "2026-10-01T00:00:00Z"),
-    row(2, "ieops", "wrapped", "not a time"),
+    row(1, "orbit", "wrapped", "2026-10-01T00:00:00Z"),
+    row(2, "orbit", "wrapped", "not a time"),
     row(3, "workbench", "queued", "2026-10-03T00:00:00Z"),
     row(4, "workbench", "queued", "2026-10-02T00:00:00Z"),
     row(5, "polyforge", "running", "2026-10-02T00:00:00Z"),
@@ -40,15 +40,15 @@ test("newest first is global, stable for equal instants, unparseable last in pf'
 });
 
 test("project options are the distinct projects of the loaded list, sorted", () => {
-  const rows = [row(1, "workbench", "queued", null), row(2, "ieops", "queued", null), row(3, "workbench", "queued", null), row(4, null, "queued", null)];
-  assert.deepEqual(pure.workItemProjectOptions(rows), ["ieops", "workbench"]);
+  const rows = [row(1, "workbench", "queued", null), row(2, "orbit", "queued", null), row(3, "workbench", "queued", null), row(4, null, "queued", null)];
+  assert.deepEqual(pure.workItemProjectOptions(rows), ["orbit", "workbench"]);
 });
 
 test("the cap hint fires at exactly 500 rows of one project, never 499 or 501", () => {
   const many = (project, count) => Array.from({ length: count }, (_, i) => row(i, project, "wrapped", null));
-  assert.deepEqual([...pure.workItemsAtCap([...many("ieops", 500), ...many("pi", 3)])], ["ieops"]);
-  assert.equal(pure.workItemsAtCap(many("ieops", 499)).size, 0);
-  assert.equal(pure.workItemsAtCap(many("ieops", 501)).size, 0);
+  assert.deepEqual([...pure.workItemsAtCap([...many("orbit", 500), ...many("pi", 3)])], ["orbit"]);
+  assert.equal(pure.workItemsAtCap(many("orbit", 499)).size, 0);
+  assert.equal(pure.workItemsAtCap(many("orbit", 501)).size, 0);
 });
 
 test("one combined predicate: slug/goal/project search, case-insensitive, never content; project and status compose", () => {
@@ -56,14 +56,14 @@ test("one combined predicate: slug/goal/project search, case-insensitive, never 
     row(1, "workbench", "wrapped", null, { goal: "GOAL-A", content: "SECRET-CONTENT" }),
     row(2, "polyforge", "running", null, { goal: "GOAL-B" }),
     row(3, "workbench", "canceled", null, { goal: "GOAL-C", slug: "task#77" }),
-    row(4, "ieops", "failed", null, { goal: null }),
+    row(4, "orbit", "failed", null, { goal: null }),
   ];
   const ids = (filter) => pure.filterWorkItemRows(rows, { search: "", project: "", status: "all", ...filter }).map((entry) => entry.id);
   assert.deepEqual(ids({}), ["wi_ROW1", "wi_ROW2", "wi_ROW3", "wi_ROW4"]);
   assert.deepEqual(ids({ search: "secret-content" }), [], "content is never searched");
   assert.deepEqual(ids({ search: "goal-b" }), ["wi_ROW2"], "goal, case-insensitive");
   assert.deepEqual(ids({ search: "#77" }), ["wi_ROW3"], "slug");
-  assert.deepEqual(ids({ search: "IEOPS" }), ["wi_ROW4"], "project");
+  assert.deepEqual(ids({ search: "ORBIT" }), ["wi_ROW4"], "project");
   assert.deepEqual(ids({ search: "workbench", status: "canceled" }), ["wi_ROW3"]);
   assert.deepEqual(ids({ project: "polyforge" }), ["wi_ROW2"]);
 });

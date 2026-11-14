@@ -1,6 +1,6 @@
 package test
 
-// w25_verify_scope_ieops_contrast_test.go: the real-history byte-identical
+// w25_verify_scope_frozen_contrast_test.go: the real-history byte-identical
 // contrast for. The frozen seed script and the release-shipped
 // engine (driven by this repository's `.polyforge/verify-scope.conf`) must
 // print the same report for the same range, including the last ten real
@@ -15,7 +15,7 @@ package test
 // fall back to `full` identically when `go list` cannot run for any other
 // reason; the stdout comparison is the oracle either way.
 //
-// Run (targeted): GOWORK=off go test ./test/ -run '^TestW25Ieops' -count=1
+// Run (targeted): GOWORK=off go test ./test/ -run '^TestW25FrozenContrast' -count=1
 
 import (
 	"os"
@@ -60,9 +60,9 @@ func w25ioWorktree(t *testing.T, root, sha string) (dir string, cleanup func()) 
 	return dir, cleanup
 }
 
-// TestW25IeopsFrozenContrastOnRealRanges replays the last ten merge ranges in
+// TestW25FrozenContrastOnRealRanges replays the last ten merge ranges in
 // throwaway worktrees and requires byte-identical stdout.
-func TestW25IeopsFrozenContrastOnRealRanges(t *testing.T) {
+func TestW25FrozenContrastOnRealRanges(t *testing.T) {
 	root := w25engRoot(t)
 	frozen := filepath.Join(root, "test", "testdata", "verify-scope", "verify-scope-go.sh")
 	conf := filepath.Join(root, ".polyforge", "verify-scope.conf")

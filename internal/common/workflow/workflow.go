@@ -155,7 +155,7 @@ func SplitFrontmatter(content []byte) (front, body []byte, ok bool) {
 
 // RetiredHarnessHint is the rewrite instruction of a refused `harness`
 // key (yaml step entries and bundle steps/defaults alike).
-const RetiredHarnessHint = "the `harness` key was removed (polyforge#175) — move it into each model candidate's prefix, e.g. [claude:claude-opus-5-5, pi:example-gateway/model-a] (see docs/upgrade.md)"
+const RetiredHarnessHint = "the `harness` key was removed — move it into each model candidate's prefix, e.g. [claude:claude-opus-5-5, pi:example-gateway/model-a]"
 
 // LaneDirs answers the lane directories under a lanes root, in name order:
 // every subdirectory except those whose name begins with `_` (`_shared`,

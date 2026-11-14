@@ -42,7 +42,7 @@ writeHostSession(agentDir, { id: SESSION, cwd: CWD, text: "E2E polyforge 255 hos
 // ---- the three mapped workspaces (this machine's real mapping) ----
 const WS = [
   { path: "/workspace/ws-osp", projects: ["polyforge", "pi", "tsshd"] },
-  { path: CWD, projects: ["ieops", "workbench"] },
+  { path: CWD, projects: ["orbit", "workbench"] },
   { path: "/workspace/ws-yf", projects: ["demo"] },
 ];
 const sha = (text) => createHash("sha256").update(text).digest("hex");
@@ -474,7 +474,7 @@ try {
     assert.ok(/ws-yf/.test(text), "the degradation line does not name the failed workspace");
     const options = (await cardWorkflow.locator("select option").allInnerTexts()).map((entry) => entry.trim());
     assert.ok(!options.includes("demo"), "the unreadable workspace still offers its project");
-    for (const project of ["polyforge", "pi", "tsshd", "ieops", "workbench"]) assert.ok(options.includes(project), `${project} disappeared with the failed workspace`);
+    for (const project of ["polyforge", "pi", "tsshd", "orbit", "workbench"]) assert.ok(options.includes(project), `${project} disappeared with the failed workspace`);
     await cardWorkflow.locator("select").first().selectOption("polyforge");
     const toggle = cardWorkflow.locator("button.polyforge-disclosure-toggle").first();
     if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();

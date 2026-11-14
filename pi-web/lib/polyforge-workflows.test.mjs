@@ -144,7 +144,7 @@ test("the route is GET-only, gated, dynamic, never 5xx and caches nothing", () =
 // the union of every cli.toml-mapped workspace.
 const MAPPED = {
   "/w/a": ["polyforge", "pi", "tsshd"],
-  "/w/b": ["ieops", "workbench"],
+  "/w/b": ["orbit", "workbench"],
   "/w/c": ["demo"],
 };
 function unionPf(t, { fail = "", failYaml = "" } = {}) {
@@ -198,7 +198,7 @@ test("the union reads 1 mapping + 2 per mapped workspace, fresh each call, never
   const calls = unionPf(t);
   const read = await lib.readPolyforgeWorkflows("/w/b/sub", DEFAULT_CELL);
   assert.deepEqual(read.workspaces.map((entry) => entry.workspace), ["/w/a", "/w/b", "/w/c"]);
-  assert.deepEqual(read.workspaces.flatMap((entry) => entry.workflows.projects), ["polyforge", "pi", "tsshd", "ieops", "workbench", "demo"]);
+  assert.deepEqual(read.workspaces.flatMap((entry) => entry.workflows.projects), ["polyforge", "pi", "tsshd", "orbit", "workbench", "demo"]);
   assert.equal(read.workspaces[2].declared.yaml.path, "/w/c/.polyforge.yaml", "each workspace carries its yaml path");
   assert.equal(read.workspaces[2].declared.yaml.sha256, "sha-/w/c");
   assert.equal(read.workflows.workspace, "/w/b", "the top-level fields stay the settings cwd's own workspace");
@@ -226,6 +226,6 @@ test("a failed workspace degrades alone: its reason, no project; the others stay
   assert.equal(read.reason, undefined, "one workspace's failure is not the page's reason");
   const pure = await jiti.import("./polyforge-workflows-pure.ts");
   const union = pure.workflowUnion(read);
-  assert.deepEqual(union.projects.map((entry) => entry.project), ["ieops", "workbench"]);
+  assert.deepEqual(union.projects.map((entry) => entry.project), ["orbit", "workbench"]);
   assert.deepEqual(union.failures.map((entry) => entry.workspace), ["/w/a", "/w/c"]);
 });
