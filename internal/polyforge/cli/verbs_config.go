@@ -203,6 +203,9 @@ func loadConfigView(ctx *Context) (*configView, error) {
 	eff := fileCfg
 	applyEnv(&eff)
 	applyConfigFlags(&eff, ctx)
+	// A named Cell's unset agent_language is a live projection of the
+	// default Cell, so config list must read the default file separately
+	// while preserving this Cell's own file for source precedence.
 	defaultAgentLanguage := ""
 	if ctx.cfgScope.profile != "" && ctx.cfgScope.profile != cellcfg.DefaultProfile {
 		defaultPath := filepath.Join(filepath.Dir(path), cellcfg.CellFileName(cellcfg.DefaultProfile))
