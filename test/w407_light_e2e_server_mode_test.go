@@ -21,6 +21,7 @@ func w407Files(suites int) map[string]string {
 }
 
 func TestW407LightE2EServerModeThreshold(t *testing.T) {
+	// r1#6: retain the exact-threshold case so the strict comparison is pinned.
 	for _, tc := range []struct {
 		name   string
 		suites int
