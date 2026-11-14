@@ -48,8 +48,9 @@ package test
 //   - build fixes the file, review passes while main moves cleanly, sync
 //     (the reviewed tree) makes a merge commit, verification passes,
 //     publish pushes the branch and opens the PR; main then moves again,
-//     conflicting with the branch's NOTES.md: the forge refuses the merge,
-//     `merge.py` exits 1 and merge hands off `fail` to sync (charged);
+//     conflicting with the branch's NOTES.md: `merge.py` refuses before the
+//     forge — the default branch moved since verification — exits 1 and
+//     merge hands off `fail` to sync (charged);
 //   - sync (its own earlier after — not the reviewed head) resolves
 //     NOTES.md in place and continues, verification (u1's run green:
 //     `demo:unit-run:u1`) and publish run again (the PR body lists
@@ -570,8 +571,9 @@ func TestW374DevelopLaneEndToEnd(t *testing.T) {
 	// second sync makes a merge commit (its after is not the reviewed head)
 	other := x.mainMoves(map[string]string{"other.txt": "other\n"}, "main: another file")
 	// and once more right after the second publish, conflicting with the
-	// branch's NOTES.md: the forge refuses to merge the PR, the merge FAILs
-	// to sync, whose verify-first then accepts its own earlier after
+	// branch's NOTES.md: merge.py refuses before the forge (the default
+	// branch moved since verification), the merge FAILs to sync, whose
+	// verify-first then accepts its own earlier after
 	notes := x.mainMoves(map[string]string{"NOTES.md": "Main notes.\n"}, "main: notes of its own")
 	resolveNotes := `cd repos/demo && printf 'Notes. The answer is 42.\nMain notes.\n' > NOTES.md && git add NOTES.md`
 
@@ -610,8 +612,9 @@ func TestW374DevelopLaneEndToEnd(t *testing.T) {
 		verifyAction(map[string]any{"verdict": "pass", "summary": "light verification passed"}),
 		// 12. publish pushes and opens the PR; main then moves, conflicting
 		x.publishAction(branch, notes),
-		// 13. merge: the forge refuses (a conflict with the moved main):
-		// merge.py exit 1, fail to sync (rewind 3)
+		// 13. merge: the default branch moved since verification (main
+		// brought a conflicting NOTES.md): merge.py refuses before asking
+		// the forge, exit 1, fail to sync (rewind 3)
 		x.mergeAction(),
 		// 14-16. sync (its check on its own earlier after; the real
 		// conflict in NOTES.md resolved in place and continued),
@@ -806,13 +809,14 @@ func TestW374DevelopLaneEndToEnd(t *testing.T) {
 	}
 	fmt.Println("PASS P1a publish failed to build on the red result file the verification lied about")
 
-	// the forge refused the merge once (exit 1: main moved and conflicts),
-	// then merge.py landed the re-synced, re-verified head once
+	// merge.py refused the moved default branch once (exit 1: the verified
+	// base is behind origin's main), never asking the forge, then landed
+	// the re-synced, re-verified head once
 	if exits := w374RunExits(t, capDir, w374MergeLine); len(exits) != 2 || exits[0] != 1 || exits[1] != 0 {
-		t.Fatalf("merge.py exits (refused by the forge, then landed): %v", exits)
+		t.Fatalf("merge.py exits (the default branch moved since verification, then landed): %v", exits)
 	}
-	if w.prState("demo", "1") != "MERGED" || w.calls("gh pr merge") != 2 || w.calls("gh pr merge https://github.com/fake/demo/pull/1 --merge --match-head-commit "+head) != 1 {
-		t.Fatalf("the merge step merges the published PR at its verified head (one refused attempt before): state %q, merges %d (head %s)", w.prState("demo", "1"), w.calls("gh pr merge"), head)
+	if w.prState("demo", "1") != "MERGED" || w.calls("gh pr merge") != 1 || w.calls("gh pr merge https://github.com/fake/demo/pull/1 --merge --match-head-commit "+head) != 1 {
+		t.Fatalf("the merge step asks the forge once, at the re-verified head (the moved default never reaches gh pr merge): state %q, merges %d (head %s)", w.prState("demo", "1"), w.calls("gh pr merge"), head)
 	}
 	// the conflicting main (the seed's last push) is merged into the landed head
 	gitRun(t, repo, "merge-base", "--is-ancestor", strings.TrimSpace(gitRun(t, x.seed, "rev-parse", "HEAD")), "HEAD")
@@ -826,11 +830,11 @@ func TestW374DevelopLaneEndToEnd(t *testing.T) {
 			wraps = append(wraps, l)
 		}
 	}
-	if len(mh) != 2 || mh[0].Handoff.Status != stepcall.StatusFail || mh[1].Handoff.Status != stepcall.StatusDone ||
+	if len(mh) != 2 || mh[0].Handoff.Status != stepcall.StatusFail || !strings.Contains(mh[0].Handoff.Reason, "the default branch moved since verification") || mh[1].Handoff.Status != stepcall.StatusDone ||
 		len(wraps) != 1 || wraps[0].Step != "merge" || wraps[0].Round != mh[1].Round || wraps[0].Seq > mh[1].Seq {
-		t.Fatalf("merge's hand-offs (fail, then done after its one wrap-attrs registration in that round): hand-offs %+v, wrap-attrs %+v", mh, wraps)
+		t.Fatalf("merge's hand-offs (a fail naming the moved default branch, then done after its one wrap-attrs registration in that round): hand-offs %+v, wrap-attrs %+v", mh, wraps)
 	}
-	fmt.Println("PASS P1b merge failed to sync on the forge's refusal; sync accepted its own after, merged main again, and the PR landed")
+	fmt.Println("PASS P1b merge failed to sync on the moved default branch (the forge never asked); sync accepted its own after, merged main again, and the PR landed")
 
 	// the landing record: the wrap carries what merge.py wrote and merge
 	// registered — and no waiver (the run has none)
