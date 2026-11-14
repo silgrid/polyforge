@@ -1297,13 +1297,13 @@ test("polyforge#2 r1#2: the poll's line-id set includes a subagent's lines, nest
     extractPureFunction("progressLineIds").replace(/export /g, "")
     + "\n" + stripTypeScriptTypes(extractPureFunction("rereadToolIds").replace(/export /g, "")),
   ), context);
-  const line = (id, tool) => ({ id, kind: "tool", text: id, tool: tool ?? { name: "bash", argument: id, status: "running" } });
+  const line = (id, tool, over) => ({ id, kind: "tool", text: id, ...(tool ? { tool } : {}), ...over });
   const snapshot = [
-    line("top-1"),
-    line("parent", { name: "Agent", argument: "run the units", status: "running", subagents: [
+    line("top-1", { name: "bash", argument: "top-1", status: "running" }),
+    line("parent", { name: "Agent", argument: "run the units", status: "running" }, { subagents: [
       { id: "sub-1", description: "the unit task", status: "running", lines: [
         line("sub-tool"),
-        line("sub-parent", { name: "Agent", argument: "nested", status: "running", subagents: [
+        line("sub-parent", { name: "Agent", argument: "nested", status: "running" }, { subagents: [
           { id: "sub-2", description: "nested task", status: "running", lines: [line("nested-tool")] },
         ] }),
       ] },
