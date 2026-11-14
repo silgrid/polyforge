@@ -31,8 +31,8 @@ func TestW461AutoWaveSkipsATicketWithoutAcceptance(t *testing.T) {
 	}
 	td.hub.mu.Lock()
 	td.hub.queues = append(td.hub.queues,
-		item("wi_w461_en", strp("## Acceptance\n\n- AC1 x — carried by build\n")),
-		item("wi_w461_zh", strp("## 验收\n\n- AC1 y\n")),
+		item("wi_w461_en", strp("## Acceptance\n\n- AC1 x — carried by build\n\n## 分析\n\n- fixture：免分析（2026-11-14）\n")),
+		item("wi_w461_zh", strp("## 验收\n\n- AC1 y\n\n## 分析\n\n- fixture：免分析（2026-11-14）\n")),
 		item("wi_w461_none", nil),
 		item("wi_w461_empty", strp("## Acceptance\n\nprose only\n")),
 	)
