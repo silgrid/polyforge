@@ -132,7 +132,7 @@ func (r *Runtime) applyOverrideJob(j *job, ch OverrideChange) (OverrideOutcome, 
 		// model chain — the owner's change-before-wake window; the skip
 		// switch stays for steps that never started
 		ex := capsuleExecution(capDir)
-		if ch.Skip != nil && ex.CurrentStep == ch.Step {
+		if ch.Skip != nil && *ch.Skip && ex.CurrentStep == ch.Step {
 			return OverrideOutcome{}, conflict("step %s has started (its status is %s): the skip switch is for steps that never started", ch.Step, ex.Steps[ch.Step].Status)
 		}
 		return r.applyOverrideScene(j, ch, OverridePosturePaused)

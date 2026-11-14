@@ -296,16 +296,25 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Skip != nil {
-		if !spec.Skippable {
-			writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("the lane does not declare step %s skippable, so it cannot be switched off mid-run; to let a failed gate of it pass use the waive instead (pf wrap --waive on a waivable gate, an owner's word)", req.Step))
-			return
-		}
-		if status != "" && status != capsule.StepPending {
+		setting := *req.Skip
+		if setting {
+			if !spec.Skippable {
+				writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("the lane does not declare step %s skippable, so it cannot be switched off mid-run; to let a failed gate of it pass use the waive instead (pf wrap --waive on a waivable gate, an owner's word)", req.Step))
+				return
+			}
+			if status != "" && status != capsule.StepPending {
+				writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has started (its status is %s): the skip switch is for steps that never started", req.Step, status))
+				return
+			}
+			if err := d.guardWrapAttrs(scene, wf, spec); err != nil {
+				writeErrOf(w, err)
+				return
+			}
+		} else if status == capsule.StepInProgress || status == capsule.StepDone {
+			// the un-skip is the cleanup of the switch itself: a step the
+			// switch already turned off (skipped) or one that never
+			// started (pending) may un-skip; a step that RAN cannot
 			writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has started (its status is %s): the skip switch is for steps that never started", req.Step, status))
-			return
-		}
-		if err := d.guardWrapAttrs(scene, wf, spec); err != nil {
-			writeErrOf(w, err)
 			return
 		}
 	} else if status == capsule.StepInProgress && scene.live && scene.posture == runtime.OverridePostureRunning {

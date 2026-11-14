@@ -26,6 +26,7 @@ package test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ const pf25ProviderErr = `upstream provider error: model "fake/pf25-missing" not 
 // pf25Setup answers the install, a workspace with the given yaml, and a
 // started daemon whose micro copy declares merge skippable and whose
 // step-agent models.json is the test's own.
-func pf25Setup(t *testing.T, yaml string) (*v1Install, *w113Daemon, string) {
+func pf25Setup(t *testing.T, yaml, workflowsDir string) (*v1Install, *w113Daemon, string) {
 	t.Helper()
 	inst := newV1Install(t)
 	ws := t.TempDir()
@@ -71,22 +72,40 @@ func pf25Setup(t *testing.T, yaml string) (*v1Install, *w113Daemon, string) {
 	d := w113NewDaemon(t, inst,
 		w113DOptConfig(cfg),
 		w113DOptArgs("--operator-agent-dir", src),
-		w113DOptArgs("--workflows-dir", pf25WorkflowsDir(t)))
+		w113DOptArgs("--workflows-dir", workflowsDir))
 	d.start()
 	t.Cleanup(d.stop)
 	return inst, d, ws
 }
 
-// pf25WorkflowsDir is the shipped workflows tree with micro's merge step
-// declared skippable (the one declaration this feature needs a lane to
-// carry; the shipped micro does not, so the test-local copy does).
+// pf25PlainDir is the harness's standard stripped micro copy (the
+// two-step fix → review vehicle the scripted scenarios run on).
+func pf25PlainDir(t *testing.T) string {
+	t.Helper()
+	return strippedWorkflowsDir(t, filepath.Join(v1Root(t), "workflows"))
+}
+
+// pf25WorkflowsDir is the stripped micro copy whose merge step STAYS and
+// is declared skippable (the one declaration the skip scenarios need a
+// lane to carry; the shipped micro does not, so the test-local copy
+// does). sync/evidence/publish leave with the other delivery steps, so
+// the lane is fix → review → merge(skippable, wrap_attrs) and a skipped
+// merge makes review the last running step — its round registers the
+// record, exactly the shape the tail-wrap move exists for.
 func pf25WorkflowsDir(t *testing.T) string {
 	t.Helper()
+	step := regexp.MustCompile(`(?m)^  - id: (sync|verification|evidence|publish)\n(?:(?:    [^\n]*)?\n)*`)
 	return copyWorkflowsTrees(t, func(raw []byte) []byte {
 		if !strings.Contains(string(raw), "name: micro") {
 			return raw
 		}
-		return []byte(strings.Replace(string(raw), "  - id: merge\n",
+		out := step.ReplaceAll(raw, nil)
+		out = microFixOutputs.ReplaceAll(out, nil)
+		out = microReviewVerifies.ReplaceAll(out, nil)
+		// merge's on_fail named sync, which left with the other delivery
+		// steps; review (its earlier gate) takes the rewind target
+		out = []byte(strings.Replace(string(out), "    on_fail: { target: sync }\n", "", 1))
+		return []byte(strings.Replace(string(out), "  - id: merge\n",
 			"  - id: merge\n    skippable: true\n", 1))
 	}, filepath.Join(v1Root(t), "workflows"))
 }
@@ -103,7 +122,7 @@ func pf25Override(t *testing.T, d *w113Daemon, inst *v1Install, wantExit int, ar
 // model, and a model-class death rotates along it (AC1, AC2's control:
 // steps without an overlay keep the manual list).
 func TestPF25OverrideChainGovernsDispatchAndRotates(t *testing.T) {
-	inst, d, ws := pf25Setup(t, "steps:\n  e2e:\n    review: { models: [pi:pf25/yaml-r] }\n")
+	inst, d, ws := pf25Setup(t, "steps:\n  e2e:\n    review: { models: [pi:pf25/yaml-r] }\n", pf25PlainDir(t))
 	wi := w113NewWI(t, inst, "e2e", "pf25 override chain governs and rotates",
 		[]map[string]any{
 			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 6000},
@@ -122,6 +141,12 @@ func TestPF25OverrideChainGovernsDispatchAndRotates(t *testing.T) {
 			t.Fatalf("the write's rendering lacks %q:\n%s", want, out)
 		}
 	}
+	// a pi model outside the step-agent models.json is refused and writes
+	// nothing (AC4, through the CLI, while review is still pending)
+	out = pf25Override(t, d, inst, 1, wi, "--step", "review", "--models", "pi:pf25/absent")
+	if !strings.Contains(out, "models.json") {
+		t.Fatalf("the refusal must name the step-agent models.json:\n%s", out)
+	}
 	w113WaitCompleted(t, capDir, 300*time.Second)
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 
@@ -133,21 +158,19 @@ func TestPF25OverrideChainGovernsDispatchAndRotates(t *testing.T) {
 	if got := w079Model(t, capDir, "review"); got != "pf25/m2" {
 		t.Fatalf("review model %q, want the overlay's second candidate pf25/m2 (the provider death rotated along the overlay)", got)
 	}
+	// the crash attempt itself ran the overlay head (the archived attempt
+	// carries its candidate); the accepted retry — whose step_start pins
+	// the rotated candidate — is covered by the model assertion above
 	x := readExecution(t, capDir)
-	var reviewCandidates []string
-	for _, a := range x.Steps["review"].Attempts {
-		if c, _ := a["candidate"].(string); c != "" {
-			reviewCandidates = append(reviewCandidates, c)
-		}
+	archs := x.Steps["review"].Attempts
+	if len(archs) == 0 {
+		t.Fatal("review has no archived attempts")
 	}
-	if len(reviewCandidates) < 2 || reviewCandidates[0] != "pi:pf25/m1" || reviewCandidates[len(reviewCandidates)-1] != "pi:pf25/m2" {
-		t.Fatalf("review attempt candidates %v, want the overlay chain [pi:pf25/m1 → pi:pf25/m2]", reviewCandidates)
+	if got, _ := archs[0]["candidate"].(string); got != "pi:pf25/m1" {
+		t.Fatalf("the provider-death attempt ran %q, want the overlay head pi:pf25/m1 (over the manual list and the yaml)", got)
 	}
-	// a pi model outside the step-agent models.json is refused and writes
-	// nothing (AC4, through the CLI)
-	out = pf25Override(t, d, inst, 1, wi, "--step", "sync", "--models", "pi:pf25/absent")
-	if !strings.Contains(out, "models.json") {
-		t.Fatalf("the refusal must name the step-agent models.json:\n%s", out)
+	if fc, _ := archs[0]["failure_cause"].(string); fc != "exit_model_class" {
+		t.Fatalf("the provider death's class %q, want exit_model_class (the class that rotates)", fc)
 	}
 }
 
@@ -155,7 +178,7 @@ func TestPF25OverrideChainGovernsDispatchAndRotates(t *testing.T) {
 // rewinds to fix and the re-dispatched review still runs the overlay
 // chain; the clear restores the source below it (AC3).
 func TestPF25OverrideSurvivesRewindAndClearRestoresSource(t *testing.T) {
-	inst, d, ws := pf25Setup(t, "steps:\n  e2e:\n    review: { models: [pi:pf25/yaml-r] }\n")
+	inst, d, ws := pf25Setup(t, "steps:\n  e2e:\n    review: { models: [pi:pf25/yaml-r] }\n", pf25PlainDir(t))
 	wi := w113NewWI(t, inst, "e2e", "pf25 overlay survives the rewind",
 		[]map[string]any{
 			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 6000},
@@ -169,31 +192,40 @@ func TestPF25OverrideSurvivesRewindAndClearRestoresSource(t *testing.T) {
 	w113WaitCapsule(t, capDir, 90*time.Second)
 	w113StepStatus(t, capDir, "fix", "in_progress", 90*time.Second)
 	pf25Override(t, d, inst, 0, wi, "--step", "review", "--models", "pi:pf25/r1")
-	w113WaitCompleted(t, capDir, 300*time.Second)
-	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
-
-	// both review dispatches (before and after the rewind) ran the overlay
-	x := readExecution(t, capDir)
-	var reviewCandidates []string
-	for _, a := range x.Steps["review"].Attempts {
-		if c, _ := a["candidate"].(string); c != "" {
-			reviewCandidates = append(reviewCandidates, c)
-		}
-	}
-	if len(reviewCandidates) != 2 || reviewCandidates[0] != "pi:pf25/r1" || reviewCandidates[1] != "pi:pf25/r1" {
-		t.Fatalf("review attempt candidates %v, want the overlay chain on both sides of the rewind", reviewCandidates)
-	}
-	// the clear restores the source below: the view answers the yaml entry
+	// the clear (while review is still pending) restores the source below:
+	// the view composes from the yaml entry again, and re-setting brings
+	// the overlay back for the rewind half
 	out := pf25Override(t, d, inst, 0, wi, "--step", "review", "--clear-models")
 	if !strings.Contains(out, "overlay cleared") {
 		t.Fatalf("the clear's rendering:\n%s", out)
 	}
 	view := pf25Override(t, d, inst, 0, wi)
-	if !strings.Contains(view, "steps.e2e.review.models") {
+	if !strings.Contains(view, "steps.e2e.review.models") || strings.Contains(view, "overlay-models=pi:pf25/r1") {
 		t.Fatalf("after the clear the view must compose from the yaml again:\n%s", view)
 	}
-	if strings.Contains(view, "overlay-models=pi:pf25/r1") {
-		t.Fatalf("the cleared overlay must be gone from the view:\n%s", view)
+	pf25Override(t, d, inst, 0, wi, "--step", "review", "--models", "pi:pf25/r1")
+	w113WaitCompleted(t, capDir, 300*time.Second)
+	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
+
+	// the overlay survived the rewind: review's first attempt is the
+	// gate FAIL verdict that rewound to fix, and the RE-DISPATCHED review
+	// — whose step_start pins the candidate — still ran the overlay chain
+	x := readExecution(t, capDir)
+	archs := x.Steps["review"].Attempts
+	if len(archs) != 2 {
+		t.Fatalf("review archived %d attempts, want 2 (the gate FAIL and the re-dispatch)", len(archs))
+	}
+	if got, _ := archs[0]["cause"].(string); got != "gate_fail_verdict" {
+		t.Fatalf("review's first attempt cause %q, want gate_fail_verdict (the scripted FAIL rewound)", got)
+	}
+	if got := w079Model(t, capDir, "review"); got != "pf25/r1" {
+		t.Fatalf("the re-dispatched review model %q, want the overlay pf25/r1 (the overlay survived the rewind)", got)
+	}
+	// a clear on the now-done step is refused (the overlay is for steps
+	// that have not started) — the clear's restoration was pinned above,
+	// in the pending window
+	if out := pf25Override(t, d, inst, 1, wi, "--step", "review", "--clear-models"); !strings.Contains(out, "already ran") {
+		t.Fatalf("a clear on a done step must be refused:\n%s", out)
 	}
 }
 
@@ -202,11 +234,12 @@ func TestPF25OverrideSurvivesRewindAndClearRestoresSource(t *testing.T) {
 // dispatched and records skipped with the event visible in `pf watch`;
 // a non-skippable step's request is refused naming the waive (AC5, AC6).
 func TestPF25SkipToggleSkipsStepAndRefusesNonSkippable(t *testing.T) {
-	inst, d, ws := pf25Setup(t, "")
+	inst, d, ws := pf25Setup(t, "", pf25WorkflowsDir(t))
 	wi := w113NewWI(t, inst, "e2e", "pf25 skip toggle",
 		[]map[string]any{
 			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 6000},
-			{"do": "envelope", "id": "review", "outcome": "completed"},
+			{"do": "envelope", "id": "review", "outcome": "completed",
+				"output": map[string]any{"landing": map[string]any{"state": "recorded"}, "summary": "pf25 skip scenario"}},
 		})
 	t.Cleanup(func() { killOrphans(wi) })
 	d.pfWant(inst, 0, "submit", wi)
@@ -246,7 +279,7 @@ func TestPF25SkipToggleSkipsStepAndRefusesNonSkippable(t *testing.T) {
 // capsule, so the woken step's first dispatch runs it (the owner ruling
 // of 2026-11-14; the sealed scene of the blocked close is not written).
 func TestPF25OverrideWhileBlockedAppliesAfterResumeClaim(t *testing.T) {
-	inst, d, ws := pf25Setup(t, "")
+	inst, d, ws := pf25Setup(t, "", pf25PlainDir(t))
 	wi := w113NewWI(t, inst, "e2e", "pf25 blocked-window overlay",
 		[]map[string]any{
 			{"do": "envelope", "id": "fix", "outcome": "completed"},
@@ -280,7 +313,7 @@ func TestPF25OverrideWhileBlockedAppliesAfterResumeClaim(t *testing.T) {
 	d.pfWant(inst, 0, "resume", wi)
 	inst.waitWIStatus(t, wi, "wrapped", 300*time.Second)
 	x := readExecution(t, capDir)
-	if st := x.Steps["review"]; st == nil || st.Status != "done" || w079Model(t, capDir, "review") != "b1" {
+	if st := x.Steps["review"]; st == nil || st.Status != "done" || w079Model(t, capDir, "review") != "pf25/b1" {
 		t.Fatalf("the re-claimed review must run the recorded overlay: %+v", st)
 	}
 	// the claim consumed the record
@@ -294,7 +327,7 @@ func TestPF25OverrideWhileBlockedAppliesAfterResumeClaim(t *testing.T) {
 // dispatch — including the frozen current step's model chain (the
 // change-before-wake window of the owner ruling of 2026-11-14).
 func TestPF25OverrideWhilePausedAppliesAfterInPlaceResume(t *testing.T) {
-	inst, d, ws := pf25Setup(t, "")
+	inst, d, ws := pf25Setup(t, "", pf25PlainDir(t))
 	wi := w113NewWI(t, inst, "e2e", "pf25 paused-window overlay",
 		[]map[string]any{
 			{"do": "envelope", "id": "fix", "outcome": "completed", "ms": 30000},
