@@ -29,5 +29,5 @@ test("the users wire is id + display_name of human users only", () => {
   assert.match(body, /user\.user_type !== "human"/, "machines never reach the picker");
   assert.match(body, /return \[\{ id, display_name: str\(user\.display_name\) \}\];/, "exactly id + display_name");
   assert.doesNotMatch(body, /email|api_tokens|role/, "no other field is copied");
-  assert.match(lib, /runPfJson\(\["--json", "users", "list"\]\)/, "one bounded pf --json users list (the 15 s read bound)");
+  assert.match(lib, /runPfJson\(\[\.\.\.pin, "--json", "users", "list"\]\)/, "one bounded pf --json users list (the 15 s read bound)");
 });

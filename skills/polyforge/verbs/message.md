@@ -83,8 +83,9 @@ pf msg contacts
   move (pi-web's 「@」 action fills a composer and sends nothing).
 - `contacts`: the people the caller can message — the union, deduplicated
   by user id, of the human co-members (id + display name; never the caller,
-  never a machine) of every project the `cli.toml` `[workspace.*]` mapping
-  names. The mapping is read at call time, so an edited workspace entry
+  never a machine) of every project the routed Cell's `[workspace.*]`
+  mapping names (cli.toml for the default Cell, `cli-<profile>.toml` for a
+  named one). The mapping is read at call time, so an edited workspace entry
   shows on the next call without a daemon restart. One read per project, at
   most 4 at once, 15 s each, no retry; a project the caller cannot read
   contributes nothing and is not an error, and no mapping is an empty

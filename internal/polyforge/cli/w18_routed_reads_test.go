@@ -1,0 +1,539 @@
+package cli
+
+// carries: internal/polyforge/cli/*, internal/polyforge/mapping/*
+
+// w18_routed_reads_test.go (polyforge#18): every read that resolves a
+// workspace through the [workspace] mapping reads the mapping of the Cell
+// the invocation routes to (profile.go), not the Host file's — the
+// workspace faces `pf workflows --cwd` (listing and validate), the merged
+// `pf queue`, the submit acceptance check, `pf msg contacts` and the
+// `pf init` memory_policy write. The fixture is the oracle's dual-Cell
+// shape: a Host file mapping wsD (the default Cell), cli-alpha.toml
+// mapping wsA, cli-beta.toml mapping nothing, and a fake Host socket
+// answering GET /profiles with the dual-Cell effective index, GET /status
+// the lane-set facts and the data-plane proxy ANY /aihub/<path> to the
+// AIHub of the X-PF-Profile Cell. Every case drives the real Run entry
+// and is judged on the exit code, the output document and the hub each
+// request reached.
+
+import (
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
+)
+
+// w18Hub is one Cell's fake AIHub: its recorder counts what reached it.
+type w18Hub struct {
+	rec *reqRecorder
+	srv *httptest.Server
+}
+
+// w18FakeHub answers the read verbs' wire shapes this file pins, scoped
+// to the one project its Cell maps (like a real AIHub, an unknown project
+// answers 404): the filtered work-item list (one queued execution ticket
+// of the requested project, bundle devuser, content without an
+// acceptance section), the detail read, and the project's member face.
+func w18FakeHub(t *testing.T, project string) *w18Hub {
+	t.Helper()
+	h := &w18Hub{rec: &reqRecorder{}}
+	h.srv = newFakeAihub(t, h.rec, func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case path == "/api/v1/work-items" && r.Method == http.MethodGet:
+			if r.URL.Query().Get("project") != project {
+				http.NotFound(w, r)
+				return
+			}
+			item := map[string]any{
+				"id": "wi_" + project, "slug": project + "-1", "project": project,
+				"status": "queued", "bundle_name": "devuser", "goal": "w18 " + project,
+				"content": "no acceptance here", "created_at": "2026-11-14T00:00:00Z",
+			}
+			_, _ = io.WriteString(w, jsonBody(map[string]any{"items": []any{item}, "total": 1}))
+		case strings.HasPrefix(path, "/api/v1/work-items/"):
+			if strings.TrimPrefix(path, "/api/v1/work-items/") != "wi_"+project {
+				http.NotFound(w, r)
+				return
+			}
+			item := map[string]any{
+				"id": "wi_" + project, "slug": project + "-1", "project": project,
+				"status": "queued", "bundle_name": "devuser", "goal": "w18 submit",
+				"content": "no acceptance here", "created_at": "2026-11-14T00:00:00Z",
+			}
+			_, _ = io.WriteString(w, jsonBody(item))
+		case strings.HasPrefix(path, "/api/v1/projects/") && strings.HasSuffix(path, "/members"):
+			if strings.TrimSuffix(strings.TrimPrefix(path, "/api/v1/projects/"), "/members") != project {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = io.WriteString(w, jsonBody(map[string]any{
+				"contacts": []any{map[string]any{"id": "u-" + project, "display_name": "Member of " + project}},
+			}))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	return h
+}
+
+// w18CellHost is the fake Host on a unix socket: GET /profiles answers
+// the dual-Cell effective workspace index, GET /status the lane-set facts
+// (a workflows dir whose builtin develop lane requires acceptance), POST
+// /jobs/<id>/claim the accepted claim, and the data-plane proxy ANY
+// /aihub/<path> forwards to the AIHub of the X-PF-Profile Cell ("", the
+// unknown and "default" → the default hub) — the profile header is
+// consumed, exactly like the real Host's proxy.
+func w18CellHost(t *testing.T, def, alpha *w18Hub, wsD, wsA string) string {
+	t.Helper()
+	wf := t.TempDir()
+	writeLane(t, wf, "develop", "steps:\n  - { id: build }\n  - { id: review }\n")
+	proxies := map[string]*httputil.ReverseProxy{}
+	for profile, hub := range map[string]*w18Hub{"default": def, "alpha": alpha} {
+		u, err := url.Parse(hub.srv.URL)
+		if err != nil {
+			t.Fatalf("hub URL %s: %v", hub.srv.URL, err)
+		}
+		p := httputil.NewSingleHostReverseProxy(u)
+		base := p.Director
+		p.Director = func(r *http.Request) {
+			base(r)
+			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/aihub")
+			r.URL.RawPath = ""
+			r.Header.Del(protocol.ProfileHeader)
+		}
+		proxies[profile] = p
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /profiles", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ProfilesResponse{
+			Profiles: []ProfileInfo{
+				{Profile: "default", Valid: true, State: "serving", Workspaces: []string{wsD}},
+				{Profile: "alpha", Valid: true, State: "serving", Workspaces: []string{wsA}},
+			},
+			Index: []cellcfg.IndexEntry{
+				{Profile: "default", Workspace: wsD},
+				{Profile: "alpha", Workspace: wsA},
+			},
+		})
+	})
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"machine_id":"m-w18","workflows_dir":`+jsonBody(wf)+`,"jobs":[],"queue":{}}`)
+	})
+	mux.HandleFunc("POST /jobs/{id}/claim", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, jsonBody(map[string]any{"accepted": true}))
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		profile := r.Header.Get(protocol.ProfileHeader)
+		if profile == "" {
+			profile = "default"
+		}
+		p, ok := proxies[profile]
+		if !ok || !strings.HasPrefix(r.URL.Path, "/aihub/") {
+			http.NotFound(w, r)
+			return
+		}
+		p.ServeHTTP(w, r)
+	})
+	sock := filepath.Join(shortTempDir(t), "w18.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("unix listen: %v", err)
+	}
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(l) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return sock
+}
+
+// w18Fixture builds the dual-Cell shape: a Host file mapping wsD to
+// "dproj" (the default Cell), a named Cell file cli-alpha.toml mapping
+// wsA to "aproj", an empty-mapping Cell file cli-beta.toml, and the fake
+// Host socket. Each mapped workspace carries a minimal .polyforge.yaml so
+// the workflows face's effective-chain read settles.
+type w18Fixture struct {
+	env        map[string]string
+	wsD, wsA   string
+	def, alpha *w18Hub
+}
+
+func newW18Fixture(t *testing.T) *w18Fixture {
+	t.Helper()
+	def, alpha := w18FakeHub(t, "dproj"), w18FakeHub(t, "aproj")
+	wsD, wsA := t.TempDir(), t.TempDir()
+	for _, ws := range []string{wsD, wsA} {
+		if err := os.WriteFile(filepath.Join(ws, ".polyforge.yaml"), []byte("steps: {}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// wsA's user lane devuser declares `acceptance: none`: a queued
+	// ticket of aproj on it carries no acceptance mark through the routed
+	// Cell's mapping, while a mapping that does not know aproj judges it
+	// through a nil lane (acceptance required, lane missing).
+	writeLane(t, filepath.Join(wsA, ".polyforge", "workflows"), "devuser", "acceptance: none\nsteps:\n  - { id: build }\n")
+	dir := t.TempDir()
+	xdg := filepath.Join(dir, "xdg")
+	if err := os.MkdirAll(filepath.Join(xdg, "polyforge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	host := "server = " + jsonBody(def.srv.URL) + "\napi_key = \"kd\"\nuser_id = \"u-d\"\n\n" +
+		"[workspace.\"" + wsD + "\"]\nprojects = [\"dproj\"]\n"
+	alphaFile := "server = " + jsonBody(alpha.srv.URL) + "\napi_key = \"ka\"\nuser_id = \"u-a\"\n\n" +
+		"[workspace.\"" + wsA + "\"]\nprojects = [\"aproj\"]\n"
+	betaFile := "server = " + jsonBody(def.srv.URL) + "\napi_key = \"kb\"\nuser_id = \"u-b\"\n"
+	for name, text := range map[string]string{"cli.toml": host, "cli-alpha.toml": alphaFile, "cli-beta.toml": betaFile} {
+		if err := os.WriteFile(filepath.Join(xdg, "polyforge", name), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sock := w18CellHost(t, def, alpha, wsD, wsA)
+	return &w18Fixture{
+		env: map[string]string{"XDG_CONFIG_HOME": xdg, "PF_DAEMON_SOCKET": sock, "PF_PROFILE": ""},
+		wsD: wsD, wsA: wsA,
+		def: def, alpha: alpha,
+	}
+}
+
+// w18Counts answers the two Cell hubs' request counts (default, alpha).
+func w18Counts(def, alpha *w18Hub) (int, int) {
+	return len(def.rec.all()), len(alpha.rec.all())
+}
+
+// TestW18WorkflowsListsTheRoutedCellsMapping (AC1): `pf workflows --cwd`
+// resolves the workspace against the routed Cell's mapping — --profile
+// alpha answers wsA/aproj where the Host file maps nothing; a workspace
+// the routed Cell does not map answers nothing even though the Host file
+// maps it; the default Cell's behavior is unchanged, and the read still
+// degrades (never fails) with the daemon down.
+func TestW18WorkflowsListsTheRoutedCellsMapping(t *testing.T) {
+	f := newW18Fixture(t)
+
+	// The named Cell's own workspace, named by --profile.
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "--json", "workflows", "--cwd", f.wsA)
+	if code != 0 {
+		t.Fatalf("--profile alpha workflows: code=%d stderr=%s", code, stderr)
+	}
+	doc := decodeWorkflows(t, stdout)
+	if doc.Workspace == nil || *doc.Workspace != f.wsA {
+		t.Fatalf("--profile alpha --cwd wsA: workspace %v, want wsA (the routed Cell's mapping)", doc.Workspace)
+	}
+	if len(doc.Projects) != 1 || doc.Projects[0] != "aproj" {
+		t.Fatalf("--profile alpha --cwd wsA: projects %v, want [aproj]", doc.Projects)
+	}
+
+	// The same workspace, routed by the cwd match alone.
+	t.Chdir(f.wsA)
+	code, stdout, stderr = runPf(t, f.env, "--json", "workflows", "--cwd", f.wsA)
+	if code != 0 {
+		t.Fatalf("cwd-routed workflows: code=%d stderr=%s", code, stderr)
+	}
+	doc = decodeWorkflows(t, stdout)
+	if doc.Workspace == nil || *doc.Workspace != f.wsA || len(doc.Projects) != 1 || doc.Projects[0] != "aproj" {
+		t.Fatalf("cwd-routed --cwd wsA: workspace %v projects %v, want wsA [aproj]", doc.Workspace, doc.Projects)
+	}
+
+	// A workspace the routed Cell does not map answers nothing, even
+	// though the Host file (the default Cell) maps it.
+	code, stdout, stderr = runPf(t, f.env, "--profile", "alpha", "--json", "workflows", "--cwd", f.wsD)
+	if code != 0 {
+		t.Fatalf("--profile alpha --cwd wsD: code=%d stderr=%s", code, stderr)
+	}
+	doc = decodeWorkflows(t, stdout)
+	if doc.Workspace != nil || len(doc.Projects) != 0 {
+		t.Fatalf("--profile alpha --cwd wsD: workspace %v projects %v, want none (alpha does not map wsD)", doc.Workspace, doc.Projects)
+	}
+
+	// The default Cell keeps its shape: the Host file's mapping answers.
+	code, stdout, stderr = runPf(t, f.env, "--profile", "default", "--json", "workflows", "--cwd", f.wsD)
+	if code != 0 {
+		t.Fatalf("--profile default workflows: code=%d stderr=%s", code, stderr)
+	}
+	doc = decodeWorkflows(t, stdout)
+	if doc.Workspace == nil || *doc.Workspace != f.wsD || len(doc.Projects) != 1 || doc.Projects[0] != "dproj" {
+		t.Fatalf("--profile default --cwd wsD: workspace %v projects %v, want wsD [dproj]", doc.Workspace, doc.Projects)
+	}
+
+	// The unreachable daemon stays a degradation, never a failure: with
+	// no Host answering, the resolver falls back to the disk index and
+	// the default Cell's mapping still answers the --cwd facts (from a
+	// neutral cwd — the disk index routes by the working directory).
+	t.Chdir(t.TempDir())
+	down := map[string]string{"XDG_CONFIG_HOME": f.env["XDG_CONFIG_HOME"], "PF_DAEMON_SOCKET": filepath.Join(t.TempDir(), "none.sock")}
+	code, stdout, stderr = runPf(t, down, "--json", "workflows", "--cwd", f.wsD)
+	if code != 0 {
+		t.Fatalf("daemon-down workflows: code=%d stderr=%s", code, stderr)
+	}
+	doc = decodeWorkflows(t, stdout)
+	if doc.DaemonReachable || doc.Reason == "" {
+		t.Fatalf("daemon-down doc must carry the degradation: %+v", doc)
+	}
+	if doc.Workspace == nil || *doc.Workspace != f.wsD || len(doc.Projects) != 1 || doc.Projects[0] != "dproj" {
+		t.Fatalf("daemon-down --cwd wsD: workspace %v projects %v, want wsD [dproj]", doc.Workspace, doc.Projects)
+	}
+}
+
+// w18QueueDoc is `pf --json queue`'s merged document (verbs_aihub.go).
+type w18QueueDoc struct {
+	Items []struct {
+		ID                string `json:"id"`
+		ProjectName       string `json:"project"`
+		BundleName        string `json:"bundle_name"`
+		AcceptanceMissing bool   `json:"acceptance_missing"`
+	} `json:"items"`
+	Total        int `json:"total"`
+	LanesMissing []struct {
+		ID     string `json:"id"`
+		Bundle string `json:"bundle"`
+	} `json:"lanes_missing"`
+}
+
+// TestW18QueueMergesTheRoutedCellsMapping (AC2): `pf queue` without
+// --project merges over the routed Cell's mapping — --profile alpha lists
+// aproj's tickets from alpha's AIHub, never the Host file's dproj — and
+// the acceptance_missing / lanes_missing marks are computed through the
+// routed Cell's mapping too: aproj's user lane devuser (acceptance: none)
+// leaves its queued ticket unmarked. The default Cell keeps its shape.
+func TestW18QueueMergesTheRoutedCellsMapping(t *testing.T) {
+	f := newW18Fixture(t)
+
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "--json", "queue")
+	if code != 0 {
+		t.Fatalf("--profile alpha queue: code=%d stderr=%s", code, stderr)
+	}
+	var doc w18QueueDoc
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("--profile alpha queue did not print one JSON document: %v\n%s", err, stdout)
+	}
+	if doc.Total != 1 || len(doc.Items) != 1 || doc.Items[0].ProjectName != "aproj" {
+		t.Fatalf("--profile alpha queue: %+v, want the one aproj ticket of alpha's mapping", doc)
+	}
+	if doc.Items[0].AcceptanceMissing {
+		t.Fatalf("aproj's devuser lane declares acceptance: none — the queued ticket must carry no acceptance mark: %+v", doc.Items[0])
+	}
+	if len(doc.LanesMissing) != 0 {
+		t.Fatalf("devuser is aproj's lane through alpha's mapping — no lanes_missing: %+v", doc.LanesMissing)
+	}
+	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 1 {
+		t.Fatalf("--profile alpha queue: default hub got %d, alpha hub got %d (want 0/1)", nDef, nAlpha)
+	}
+
+	// The cwd match routes the same merge: standing in wsA without
+	// --profile lists aproj through alpha.
+	t.Chdir(f.wsA)
+	code, stdout, stderr = runPf(t, f.env, "--json", "queue")
+	if code != 0 {
+		t.Fatalf("cwd-routed queue: code=%d stderr=%s", code, stderr)
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("cwd-routed queue: %v\n%s", err, stdout)
+	}
+	if doc.Total != 1 || doc.Items[0].ProjectName != "aproj" || doc.Items[0].AcceptanceMissing || len(doc.LanesMissing) != 0 {
+		t.Fatalf("cwd-routed queue doc: %+v", doc)
+	}
+
+	// The default Cell keeps its shape: --profile default lists dproj.
+	code, stdout, stderr = runPf(t, f.env, "--profile", "default", "--json", "queue")
+	if code != 0 {
+		t.Fatalf("--profile default queue: code=%d stderr=%s", code, stderr)
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("--profile default queue: %v\n%s", err, stdout)
+	}
+	if doc.Total != 1 || doc.Items[0].ProjectName != "dproj" {
+		t.Fatalf("--profile default queue: %+v, want the one dproj ticket", doc)
+	}
+	if _, nAlpha := w18Counts(f.def, f.alpha); nAlpha != 2 {
+		t.Fatalf("the alpha hub saw %d request(s) after the default merge (want the 2 routed ones)", nAlpha)
+	}
+}
+
+// TestW18QueueEmptyMappingNamesTheRoutedFile (AC2): routed to a Cell with
+// no mapping, the merged list's empty-mapping judgment is that Cell's —
+// the required-flag error names cli-beta.toml, not cli.toml — and nothing
+// is sent.
+func TestW18QueueEmptyMappingNamesTheRoutedFile(t *testing.T) {
+	f := newW18Fixture(t)
+	code, _, stderr := runPf(t, f.env, "--profile", "beta", "queue")
+	if code != 1 {
+		t.Fatalf("--profile beta queue: exit %d, want the local refusal (stderr=%s)", code, stderr)
+	}
+	for _, tok := range []string{"--project is required", "no [workspace] mapping is configured in cli-beta.toml"} {
+		if !strings.Contains(stderr, tok) {
+			t.Fatalf("--profile beta queue: stderr misses %q: %s", tok, stderr)
+		}
+	}
+	if strings.Contains(stderr, "configured in cli.toml") {
+		t.Fatalf("--profile beta queue: the empty-mapping judgment still names the Host file: %s", stderr)
+	}
+	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 0 {
+		t.Fatalf("--profile beta queue: %d/%d request(s) still sent", nDef, nAlpha)
+	}
+}
+
+// TestW18SubmitAcceptanceCheckReadsTheRoutedMapping (AC3): the submit
+// acceptance check judges the ticket's lane through the routed Cell's
+// mapping — aproj's user lane devuser declares `acceptance: none`, so a
+// queued ticket of aproj without an acceptance section submits through
+// alpha; a mapping that does not know aproj (the Host file's) must not
+// degrade the check into a blanket refusal through a nil lane.
+func TestW18SubmitAcceptanceCheckReadsTheRoutedMapping(t *testing.T) {
+	f := newW18Fixture(t)
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "submit", "wi_aproj")
+	if code != 0 {
+		t.Fatalf("--profile alpha submit: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "submitted ") {
+		t.Fatalf("--profile alpha submit: stdout=%q", stdout)
+	}
+	if strings.Contains(stderr, "no acceptance section") {
+		t.Fatalf("--profile alpha submit: wrongly refused: %s", stderr)
+	}
+	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 1 {
+		t.Fatalf("--profile alpha submit: default hub got %d, alpha hub got %d (want 0/1 — the ticket read alone)", nDef, nAlpha)
+	}
+}
+
+// TestW18ValidateJudgesTheRoutedCellsLaneSet (AC3): `pf workflows validate`
+// with no lane directory judges the lane set of the workspace the routed
+// Cell's mapping gives the working directory — standing in wsA,
+// --profile alpha judges alpha's own user lanes (devuser), not just the
+// builtin lanes the Host file's mapping would leave.
+func TestW18ValidateJudgesTheRoutedCellsLaneSet(t *testing.T) {
+	f := newW18Fixture(t)
+	t.Chdir(f.wsA)
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "--json", "workflows", "validate")
+	if code != 0 {
+		t.Fatalf("--profile alpha validate: code=%d stderr=%s", code, stderr)
+	}
+	var rep validateReport
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+		t.Fatalf("--profile alpha validate: %v\n%s", err, stdout)
+	}
+	if rep.Workspace != f.wsA {
+		t.Fatalf("--profile alpha validate: workspace %q, want wsA (the routed Cell's mapping)", rep.Workspace)
+	}
+	names := map[string]string{}
+	for _, l := range rep.Lanes {
+		names[l.Name] = l.Source
+	}
+	if names["devuser"] != workflow.SourceWorkspace {
+		t.Fatalf("--profile alpha validate: lanes %v, want devuser judged as alpha's user lane", names)
+	}
+	if names["develop"] != workflow.SourceBuiltin {
+		t.Fatalf("--profile alpha validate: lanes %v, want the builtin develop lane too", names)
+	}
+
+	// The default Cell keeps its shape: standing in wsD, its mapping
+	// answers and its (lane-less) workspace judges the builtin lanes.
+	t.Chdir(f.wsD)
+	code, stdout, stderr = runPf(t, f.env, "--profile", "default", "--json", "workflows", "validate")
+	if code != 0 {
+		t.Fatalf("--profile default validate: code=%d stderr=%s", code, stderr)
+	}
+	rep = validateReport{}
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+		t.Fatalf("--profile default validate: %v\n%s", err, stdout)
+	}
+	for _, l := range rep.Lanes {
+		if l.Name == "devuser" {
+			t.Fatalf("--profile default validate: devuser is not the default Cell's lane: %+v", rep.Lanes)
+		}
+	}
+}
+
+// TestW18MsgContactsReadTheRoutedCellsMapping (AC3): `pf msg contacts`
+// unions the member faces of the projects the routed Cell's mapping
+// names — --profile alpha answers aproj's members through alpha's AIHub;
+// the Host file's projects (dproj) are never asked for on that Cell. The
+// default Cell keeps its shape.
+func TestW18MsgContactsReadTheRoutedCellsMapping(t *testing.T) {
+	f := newW18Fixture(t)
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "--json", "msg", "contacts")
+	if code != 0 {
+		t.Fatalf("--profile alpha msg contacts: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, `"u-aproj"`) || strings.Contains(stdout, "u-dproj") {
+		t.Fatalf("--profile alpha msg contacts: stdout=%s, want aproj's member alone", stdout)
+	}
+	if nDef, nAlpha := w18Counts(f.def, f.alpha); nDef != 0 || nAlpha != 1 {
+		t.Fatalf("--profile alpha msg contacts: default hub got %d, alpha hub got %d (want 0/1)", nDef, nAlpha)
+	}
+
+	code, stdout, stderr = runPf(t, f.env, "--profile", "default", "--json", "msg", "contacts")
+	if code != 0 {
+		t.Fatalf("--profile default msg contacts: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, `"u-dproj"`) || strings.Contains(stdout, "u-aproj") {
+		t.Fatalf("--profile default msg contacts: stdout=%s, want dproj's member alone", stdout)
+	}
+}
+
+// TestW18InitWritesTheRoutedCellsPolicyFile (AC3): `pf init` writes the
+// default memory_policy block into the routed Cell's own file — a
+// workspace alpha maps gets its block in cli-alpha.toml (cli.toml is
+// untouched), a workspace alpha does not map answers unmapped naming
+// cli-alpha.toml, and the default Cell keeps writing cli.toml.
+func TestW18InitWritesTheRoutedCellsPolicyFile(t *testing.T) {
+	f := newW18Fixture(t)
+	xCfg := filepath.Join(f.env["XDG_CONFIG_HOME"], "polyforge")
+
+	code, stdout, stderr := runPf(t, f.env, "--profile", "alpha", "init", f.wsA)
+	if code != 0 {
+		t.Fatalf("--profile alpha init wsA: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "[memory_policy") || !strings.Contains(stdout, "inserted") {
+		t.Fatalf("--profile alpha init wsA: stdout=%s", stdout)
+	}
+	alphaRaw, err := os.ReadFile(filepath.Join(xCfg, "cli-alpha.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(alphaRaw), `[memory_policy."`+f.wsA+`".default]`) {
+		t.Fatalf("cli-alpha.toml carries no default policy block for wsA:\n%s", alphaRaw)
+	}
+	hostRaw, err := os.ReadFile(filepath.Join(xCfg, "cli.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(hostRaw), "memory_policy") {
+		t.Fatalf("the alpha init touched the Host file:\n%s", hostRaw)
+	}
+
+	// A workspace the routed Cell does not map: unmapped, its hint names
+	// the routed Cell's file, nothing written.
+	hostBefore := string(hostRaw)
+	code, stdout, stderr = runPf(t, f.env, "--profile", "alpha", "init", f.wsD)
+	if code != 0 {
+		t.Fatalf("--profile alpha init wsD: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "unmapped") || !strings.Contains(stdout, "cli-alpha.toml") {
+		t.Fatalf("--profile alpha init wsD: stdout=%s, want the unmapped hint naming cli-alpha.toml", stdout)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(xCfg, "cli.toml")); string(raw) != hostBefore {
+		t.Fatalf("the unmapped alpha init changed the Host file")
+	}
+
+	// The default Cell keeps its shape: the block lands in cli.toml.
+	code, stdout, stderr = runPf(t, f.env, "init", f.wsD)
+	if code != 0 {
+		t.Fatalf("default init wsD: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "inserted") {
+		t.Fatalf("default init wsD: stdout=%s", stdout)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(xCfg, "cli.toml")); !strings.Contains(string(raw), `[memory_policy."`+f.wsD+`".default]`) {
+		t.Fatalf("the default init wrote no policy block into cli.toml:\n%s", raw)
+	}
+}

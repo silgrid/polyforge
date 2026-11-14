@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolvePolyforgeCellScope } from "@/lib/polyforge-cells";
 import { isApiRequestAllowed } from "@/lib/request-security";
 import {
   PolyforgeMemoryError,
@@ -10,8 +11,10 @@ import {
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/polyforge/memory/[id] — the single-memory read:
- * exactly one `pf memory show`, the id shape-validated before any spawn.
+ * GET /api/polyforge/memory/[id][?cwd=…] — the single-memory read:
+ * exactly one `pf memory show` pinned to the Cell pf resolves for the
+ * tab's cwd (polyforge#18; no cwd: the server's own context), the id
+ * shape-validated before any spawn.
  * Reads always answer 200 JSON: pf absent and below the 2.20.12 floor answer
  * the capability fields with `memory: null`, and a failed or refused spawn
  * answers 200 with an `error` field — never 5xx. The only non-2xx answers
@@ -33,7 +36,8 @@ export async function GET(
     return NextResponse.json({ ...capability, memory: null });
   }
   try {
-    const memory = await showPolyforgeMemory(id);
+    const pin = (await resolvePolyforgeCellScope(new URL(request.url).searchParams.get("cwd") ?? undefined)).pin.prefix;
+    const memory = await showPolyforgeMemory(id, pin);
     return NextResponse.json({ ...capability, memory });
   } catch (error) {
     const failure = error instanceof PolyforgeMemoryError ? error : new PolyforgeMemoryError("polyforge is unavailable");

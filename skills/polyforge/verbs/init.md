@@ -111,14 +111,15 @@ the user saying "init workspace".
    `fact.*`); locally only `.repo/`, `capsules/`, `.polyforge/`
    (polyforge-generated only, plus `.polyforge/workflows/<lane>/`, the
    workspace's own workflow lanes) and `scratch/` (disposable, reported by
-   `pf doctor` after 14 days). For a workspace cli.toml maps, it also
-   writes the default `[memory_policy."<root>".default]` block (with its
-   comment) into cli.toml once — byte-preserving and atomic, through the
-   same validator `pf config` uses; a re-run, or a path that already
-   declares any entry, leaves cli.toml byte-identical (`--json`:
-   `memory_policy` = inserted / unchanged / unmapped). An unmapped
-   workspace writes nothing to cli.toml and the output hints to map it
-   first (step 3). `pf init` never writes `.polyforge.yaml`.
+   `pf doctor` after 14 days). For a workspace the routed Cell maps, it
+   also writes the default `[memory_policy."<root>".default]` block (with
+   its comment) into that Cell's own file — cli.toml for the default
+   Cell, `cli-<profile>.toml` for a named one — once — byte-preserving and
+   atomic, through the same validator `pf config` uses; a re-run, or a
+   path that already declares any entry, leaves that file byte-identical
+   (`--json`: `memory_policy` = inserted / unchanged / unmapped). An
+   unmapped workspace writes nothing to that file and the output hints to
+   map it first (step 3). `pf init` never writes `.polyforge.yaml`.
 
 ## Verify
 

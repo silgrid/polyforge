@@ -173,3 +173,55 @@ func (ctx *Context) routedCellMapping() (plan *mapping.Plan, file string, err er
 	}
 	return cfg.Mapping, filepath.Base(path), nil
 }
+
+// routedCellPlanLocal answers the [workspace] mapping of the Cell this
+// invocation routes to, resolved the way the local verbs resolve (pf
+// config, pf profile: with no Host answering, the index built from the
+// files on disk) and read from that Cell's own file — the Host file for
+// the default Cell, cli-<profile>.toml for a named one. It is the mapping
+// face for the read paths that must keep working with the daemon down
+// (pf workflows --cwd, pf workflows validate, pf init): a business verb
+// reads routedCellMapping instead (fail-closed on an unreadable
+// effective index; a NoConfigLoad verb's Cfg.Mapping is empty, the
+// polyforge#17 pitfall this helper exists for). file is the mapping
+// file's base name, for messages. A named Cell no file configures is the
+// Host's typed DAEMON-404 refusal (cellcfg.UnknownProfileDetail); any
+// other read or parse error is a loud local error; a missing Host file
+// is no mapping (a fresh machine reads none), like every local face.
+func (ctx *Context) routedCellPlanLocal() (plan *mapping.Plan, file string, err error) {
+	res, err := ctx.resolveProfile(true)
+	if err != nil {
+		return nil, "", err
+	}
+	hostPath := ctx.ConfigPath
+	if hostPath == "" {
+		hostPath = DefaultConfigPath()
+	}
+	dir := filepath.Dir(hostPath)
+	if res.Profile == "" || res.Profile == cellcfg.DefaultProfile {
+		cfg, err := LoadFileConfig(hostPath)
+		if err != nil {
+			return nil, "", err
+		}
+		return cfg.Mapping, cellcfg.HostFileName, nil
+	}
+	// an invalid spelling is never a configured Cell (and never reaches a
+	// path): the Host's registry has no such row, so its typed refusal is
+	// the answer here too
+	if verr := cellcfg.ValidName(res.Profile); verr != nil {
+		return nil, "", &api.Error{Code: api.ErrDaemonNotFound, Detail: cellcfg.UnknownProfileDetail(res.Profile, dir)}
+	}
+	host, err := LoadFileConfig(hostPath)
+	if err != nil {
+		return nil, "", err
+	}
+	path := filepath.Join(dir, cellcfg.CellFileName(res.Profile))
+	cfg, err := LoadCellFile(host, path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, "", &api.Error{Code: api.ErrDaemonNotFound, Detail: cellcfg.UnknownProfileDetail(res.Profile, dir)}
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return cfg.Mapping, filepath.Base(path), nil
+}

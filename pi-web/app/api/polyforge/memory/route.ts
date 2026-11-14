@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { readPolyforgeResolvedCell } from "@/lib/polyforge-cells";
+import { resolvePolyforgeCellScope } from "@/lib/polyforge-cells";
 import { isApiRequestAllowed } from "@/lib/request-security";
 import {
   browsePolyforgeMemory,
@@ -51,10 +51,11 @@ export async function GET(request: Request) {
       return NextResponse.json({ ...capability, mapped: false, projects: [], hits: [] });
     }
     try {
-      const scope = await readPolyforgeMemoryProjects(cwd);
-      // the Cell the CLI resolves for this cwd, named in the tab
-      const cell = await readPolyforgeResolvedCell(cwd);
-      return NextResponse.json({ ...capability, ...scope, hits: [], ...(cell ? { cell } : {}) });
+      // the pinned Cell scope: the Cell pf resolves for this cwd, named in
+      // the tab and carried by every pf call of this request (polyforge#18)
+      const cellScope = await resolvePolyforgeCellScope(cwd);
+      const scope = await readPolyforgeMemoryProjects(cwd, cellScope.pin.prefix);
+      return NextResponse.json({ ...capability, ...scope, hits: [], ...(cellScope.cell ? { cell: cellScope.cell } : {}) });
     } catch (error) {
       return NextResponse.json({ ...capability, mapped: false, projects: [], hits: [], error: failureText(error) });
     }
@@ -77,9 +78,12 @@ export async function GET(request: Request) {
     if (!capability.capable) {
       return NextResponse.json({ ...capability, mapped: false, projects: [], hits: [], total: 0 });
     }
+    // the pinned Cell scope of this browse (polyforge#18): every call of
+    // the request names the Cell pf resolves for the cwd
+    const pin = (await resolvePolyforgeCellScope(browse.value.cwd)).pin.prefix;
     let browseScope: { mapped: boolean; projects: string[] };
     try {
-      browseScope = await readPolyforgeMemoryProjects(browse.value.cwd);
+      browseScope = await readPolyforgeMemoryProjects(browse.value.cwd, pin);
     } catch (error) {
       return NextResponse.json({ ...capability, mapped: false, projects: [], hits: [], total: 0, error: failureText(error) });
     }
@@ -93,7 +97,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "project must be one of the workspace's projects" }, { status: 400 });
     }
     try {
-      const page = await browsePolyforgeMemory(browse.value);
+      const page = await browsePolyforgeMemory(browse.value, pin);
       return NextResponse.json({ ...capability, mapped: true, projects: browseScope.projects,
         hits: page.items, total: page.total, next_cursor: page.next_cursor });
     } catch (error) {
@@ -118,9 +122,12 @@ export async function GET(request: Request) {
   if (!capability.capable) {
     return NextResponse.json({ ...capability, mapped: false, projects: [], hits: [] });
   }
+  // the pinned Cell scope of this search (polyforge#18): every call of
+  // the request names the Cell pf resolves for the cwd
+  const pin = (await resolvePolyforgeCellScope(validated.value.cwd)).pin.prefix;
   let scope: { mapped: boolean; projects: string[] };
   try {
-    scope = await readPolyforgeMemoryProjects(validated.value.cwd);
+    scope = await readPolyforgeMemoryProjects(validated.value.cwd, pin);
   } catch (error) {
     return NextResponse.json({ ...capability, mapped: false, projects: [], hits: [], error: failureText(error) });
   }
@@ -135,7 +142,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "project must be one of the workspace's projects" }, { status: 400 });
   }
   try {
-    const hits = await searchPolyforgeMemory(validated.value);
+    const hits = await searchPolyforgeMemory(validated.value, pin);
     return NextResponse.json({ ...capability, mapped: true, projects: scope.projects, hits });
   } catch (error) {
     return NextResponse.json({ ...capability, mapped: true, projects: scope.projects, hits: [], error: failureText(error) });
