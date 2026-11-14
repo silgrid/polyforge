@@ -37,8 +37,8 @@ function profileArgv(profile: string | undefined): string[] {
 }
 
 /** The capability floor: the first release whose pf carries the override
- *  verb. Below it the panel's controls stay hidden behind the upgrade
- *  hint (the dock's detect answer carries the version). */
+ *  verb. Documentation only — the panel does not gate on it; an older pf
+ *  refuses the unknown verb and the controls show that refusal. */
 export const POLYFORGE_OVERRIDE_MINIMUM_PF_VERSION = "2.21.0";
 
 /** One step row of the view. */
