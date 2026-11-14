@@ -420,7 +420,7 @@ func stepEntry(en *yaml.Node, where string) (stepEntryVal, string) {
 // AttrsRemovedHint is the rewrite of a step entry's `attrs` key: step
 // attributes are no part of workflow contract 4 (the lane's `attrs` key
 // is refused by the loader alike).
-const AttrsRemovedHint = "removed in workflow contract 4: step attrs are gone — delete the key (a step that should behave differently says so in its definition or a `vars` entry of its lane; docs/upgrade.md)"
+const AttrsRemovedHint = "removed: step attrs are gone — delete the key (a step that should behave differently says so in its definition or a `vars` entry of its lane)"
 
 // modelsList reads an entry's `models` value at path where. The items
 // are unique `<harness>:<model>` candidate strings (harness.ParseCandidate
@@ -579,14 +579,7 @@ func SkippedSteps(cfg *Config, lane *workflow.Lane, project string) []string {
 	return out
 }
 
-// KeyRenameSection is the docs/upgrade.md section that explains the
-// per-step key renames a stale key most often needs — the retired
-// `verify-judge` key to `verification`, a `full-gate` key meant for
-// collect's ruling copied to `collect` the section
-// StaleKeyHint names. It is a section of its own, not the current
-// contract's UpgradeSection: the renames do not move with the contract.
-const KeyRenameSection = "Workflow contract 4: the integration lane is a declaration; a sub-definition takes its step's models"
-
 // StaleKeyHint is the rewrite a stale key's warning carries: what a key
-// names, and the upgrade section of the retired sub-definition key.
-const StaleKeyHint = "a per-step key is `default`, `task` or the id of a step of an installed lane — a sub-definition takes the models of the step that dispatches it (the verify-judge: `verification`'s), see docs/upgrade.md, section \"" + KeyRenameSection + "\""
+// names, and the docs/upgrade.md section that tells a deployment moving
+// onto this release what to do with a stale key.
+const StaleKeyHint = "a per-step key is `default`, `task` or the id of a step of an installed lane — a sub-definition takes the models of the step that dispatches it (the verify-judge: `verification`'s), see docs/upgrade.md, section \"" + workflow.UpgradeSection + "\""

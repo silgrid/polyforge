@@ -1,4 +1,4 @@
-contract 5
+contract 1
 
 [lane keys]
 acceptance: required|none (default required): whether a work item on the lane must list an acceptance criterion before it runs
@@ -55,15 +55,15 @@ description: string, required, non-empty
 name: string, required, == file name
 
 [removed keys]
-definition.output: removed in workflow contract 4: delete the output schema; the step hands off with `pf step handoff`, and its skill (or this definition) says what the hand-off carries
-on_fail.charge: removed in workflow contract 4: delete the key; a FAIL is charged to max_rewinds unless the gate hands it off with --per-owner (the owner's word)
-step.attrs: removed in workflow contract 4: delete the key, its material (attrs/<name>.md or _shared/attr_<name>.md) and the workspace yaml's steps.<project>.<step>.attrs overrides (docs/upgrade.md)
-step.effects: removed in workflow contract 4: delete the key; the step registers its aihub writes with `pf step hub <verb>`, and its `hub:` names the verbs it may call and the attrs keys it may write
-step.handoff: removed in workflow contract 4: delete the key; the step registers the record its wrap carries with `pf step hub wrap-attrs <name> @<file>` and declares `wrap_attrs: [<name>]` (its done is refused until the record is registered)
-step.inputs: removed in workflow contract 4: delete the key; every step reads artifacts/handoff.md first, and its skill (or definition) names the files it reads before it starts
-step.outputs: removed in workflow contract 4: delete the key; the step hands off with `pf step handoff` (a body, the --evidence files), and its skill says what the hand-off carries
-step.verdicts: removed in workflow contract 4: delete the key; a gate hands off done (its pass) or fail, and a verdict a later command needs is in that command's result file
-step.verifies: removed in workflow contract 4: delete the key; the step's skill says what it reads and checks of its upstream before it starts
+definition.output: removed before workflow contract 1: delete the output schema; the step hands off with `pf step handoff`, and its skill (or this definition) says what the hand-off carries
+on_fail.charge: removed before workflow contract 1: delete the key; a FAIL is charged to max_rewinds unless the gate hands it off with --per-owner (the owner's word)
+step.attrs: removed before workflow contract 1: delete the key, its material (attrs/<name>.md or _shared/attr_<name>.md) and the workspace yaml's steps.<project>.<step>.attrs overrides
+step.effects: removed before workflow contract 1: delete the key; the step registers its aihub writes with `pf step hub <verb>`, and its `hub:` names the verbs it may call and the attrs keys it may write
+step.handoff: removed before workflow contract 1: delete the key; the step registers the record its wrap carries with `pf step hub wrap-attrs <name> @<file>` and declares `wrap_attrs: [<name>]` (its done is refused until the record is registered)
+step.inputs: removed before workflow contract 1: delete the key; every step reads artifacts/handoff.md first, and its skill (or definition) names the files it reads before it starts
+step.outputs: removed before workflow contract 1: delete the key; the step hands off with `pf step handoff` (a body, the --evidence files), and its skill says what the hand-off carries
+step.verdicts: removed before workflow contract 1: delete the key; a gate hands off done (its pass) or fail, and a verdict a later command needs is in that command's result file
+step.verifies: removed before workflow contract 1: delete the key; the step's skill says what it reads and checks of its upstream before it starts
 
 [properties]
 acceptance: whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs (absent = required; none = the lane has no criterion to list): pf submit refuses an item without one only on a lane that requires it, the daemon's auto claim skips such an item only there, pf queue (and the Pi Web list, which reads its acceptance_missing) marks it only there, and pf file create prints the carried-by hint only there; a lane the reader cannot load counts as required
@@ -75,7 +75,7 @@ exclusive: one unfinished work item per project on the lane: the daemon's data-p
 
 [error codes]
 WFC-100: `contract` missing
-WFC-101: `contract` is not the version this daemon implements, or the lane is a workflow.md (contract 4 and earlier)
+WFC-101: `contract` is not the version this daemon implements, or the lane is a workflow.md (the lane file of the earlier releases)
 WFC-110: workflow.yaml missing, unparsable or not one mapping, a duplicate key, or a workflow.md beside it
 WFC-111: unknown or removed key (at any level)
 WFC-112: a value of the wrong type or outside its range

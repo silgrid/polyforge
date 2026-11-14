@@ -128,7 +128,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/queries/{qid}/answer", s.signedMachine(laneAnswer, s.hQueryAnswer))
 	m.HandleFunc("POST /api/v1/work-items/{id}/progress-query", s.signedMachine(laneQuery, s.hProgressQuery))
 	m.HandleFunc("POST /api/v1/work-items/{id}/artifact-query", s.signedMachine(laneQuery, s.hArtifactQuery))
-	// Workflow contract 5: the generic write of one top-level attrs key
+	// Workflow contract 1: the generic write of one top-level attrs key
 	// (core.WriteAttr: fenced by its optional `if`, audited as
 	// attrs_written). A signed machine request — the daemon's key.
 	// Reachability: a step agent cannot reach it directly (a step process
@@ -646,7 +646,7 @@ func (s *Server) hListWIs(w http.ResponseWriter, r *http.Request, idn *identity)
 	if err != nil {
 		return err
 	}
-	// attr=<path>:<value>, repeatable (workflow contract 5): the attr at
+	// attr=<path>:<value>, repeatable (workflow contract 1): the attr at
 	// path is that string.
 	attrs, err := core.ParseAttrFilters(q["attr"])
 	if err != nil {
@@ -934,7 +934,7 @@ func (s *Server) hSessionEnd(w http.ResponseWriter, r *http.Request, idn *identi
 	return s.replyWI(w, g.id)
 }
 
-// hWriteAttrs serves PATCH /work-items/{id}/attrs (workflow contract 5):
+// hWriteAttrs serves PATCH /work-items/{id}/attrs (workflow contract 1):
 // core.WriteAttr writes one top-level attrs key, fenced by the request's
 // `if`, audited as attrs_written with the signing machine and the owner
 // message the write carries out. Write access is required (a project

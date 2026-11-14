@@ -1,4 +1,4 @@
-contract: 5
+contract: 1
 name: wfc-112-vars-both
 description: fixture lane for WFC-112 - one var in both vars and vars_files
 steps:

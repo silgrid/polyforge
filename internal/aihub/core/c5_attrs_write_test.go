@@ -1,6 +1,6 @@
 package core
 
-// c5_attrs_write_test.go (workflow contract 5, design §3.4):
+// c5_attrs_write_test.go (workflow contract 1, design §3.4):
 // aihub keeps no lane's business rules — the generic attrs write replaces
 // one top-level key whole on a work item of any status (a terminal one
 // included), fenced by its `if` conditions (compare and swap: a mismatch

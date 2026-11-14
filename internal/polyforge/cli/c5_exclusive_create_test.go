@@ -1,6 +1,6 @@
 package cli
 
-// c5_exclusive_create_test.go: workflow contract 5 files an integration
+// c5_exclusive_create_test.go: workflow contract 1 files an integration
 // batch like any work item, `pf file create --bundle integrate` + `pf
 // submit`; `pf ops integrate` is gone. A lane declaring `exclusive: true`
 // has its creates forwarded exclusive by the daemon (daemon package,

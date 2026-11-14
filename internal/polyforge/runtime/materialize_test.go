@@ -24,7 +24,7 @@ func pristineBundle(t *testing.T) (workflowsDir string) {
 	t.Helper()
 	dir := t.TempDir()
 	// the lane's prose and a var file of the lane ride the snapshot too
-	// (workflow contract 5: README.md, fragments/)
+	// (workflow contract 1: README.md, fragments/)
 	for rel, body := range map[string]string{"README.md": "# demo-bundle\n", "fragments/note.md": "a long note\n"} {
 		p := filepath.Join(dir, "demo-bundle", filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

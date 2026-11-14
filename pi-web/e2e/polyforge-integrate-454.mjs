@@ -1,5 +1,5 @@
 // carries: components/PolyforgeIntegrate*, lib/polyforge-integration.ts, app/api/polyforge/integration/*, hooks/usePolyforge.ts
-// — the Polyforge panel's Work › 待集成 view on the contract-5
+// — the Polyforge panel's Work › 待集成 view on the contract-1
 // integration model: per mapped project the work items whose
 // `attrs.integration.state` is `landed` (slug, PR link, short merge commit,
 // the waived mark; an item a red batch blamed shows its fix tickets and red

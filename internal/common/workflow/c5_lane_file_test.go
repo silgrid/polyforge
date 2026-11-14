@@ -1,6 +1,6 @@
 package workflow_test
 
-// c5_lane_file_test.go: workflow contract 5's lane file. A lane is its
+// c5_lane_file_test.go: workflow contract 1's lane file. A lane is its
 // workflow.yaml (README.md is prose the loader never reads); a lane that
 // is still a workflow.md is refused with its rewrite — WFC-101 when it is
 // the only lane file, WFC-110 beside a workflow.yaml — and a step's
@@ -49,7 +49,7 @@ func TestC5Contract4LaneIsRefusedWithItsRewrite(t *testing.T) {
 			t.Fatalf("contract %q: defects %v, want one %s at %s", tc.contract, errs, workflow.CodeContractVersion, workflow.Contract4File)
 		}
 		for _, want := range []string{fmt.Sprintf("declares contract %d)", tc.want), fmt.Sprintf("implements contract %d", workflow.ContractVersion),
-			workflow.UpgradeSection, "workflow.yaml", "README.md", "`contract: 5`", "delete workflow.md"} {
+			workflow.UpgradeSection, "workflow.yaml", "README.md", "`contract: 1`", "delete workflow.md"} {
 			if !strings.Contains(errs[0].Msg, want) {
 				t.Errorf("contract %q: the refusal %q does not name %q", tc.contract, errs[0].Msg, want)
 			}
@@ -94,7 +94,7 @@ func TestC5LaneFileShape(t *testing.T) {
 	for name, body := range map[string]string{
 		"empty":     "# nothing\n",
 		"documents": workflowtest.Header("demo") + "steps:\n  - id: work\n---\n",
-		"list":      "- contract: 5\n",
+		"list":      "- contract: 1\n",
 	} {
 		dir := filepath.Join(t.TempDir(), "demo")
 		write(t, filepath.Join(dir, workflow.WorkflowFile), body)

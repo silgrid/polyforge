@@ -7,8 +7,9 @@ package core
 // The upgrade/rollback/probe SQL is read DIRECTLY out of
 // deploy/sql/v2.4.0/ (the files deploy.sh executes inside the switch
 // window — the single source of truth); docs/upgrade.md is pinned to quote
-// the upgrade file verbatim. After the SQL runs, the current server's write
-// paths must succeed on the upgraded database, and without it they must not.
+// verbatim the upgrade files a database of the earlier public line needs.
+// After the SQL runs, the current server's write paths must succeed on the
+// upgraded database, and without it they must not.
 // The rollback round-trip (upgrade -> new code -> rollback -> old-code
 // write shape) and the probe's run-once semantics are pinned here too.
 
@@ -347,19 +348,6 @@ func loadUpgradeDoc(t *testing.T) []string {
 	return blocks
 }
 
-// loadCleanupSQL answers the optional waiting_on cleanup UPDATE of
-// docs/upgrade.md — manual, deliberately NOT part of the window SQL.
-func loadCleanupSQL(t *testing.T) string {
-	t.Helper()
-	for _, blk := range loadUpgradeDoc(t) {
-		if isCleanupBlock(strings.ToUpper(blk)) {
-			return blk
-		}
-	}
-	t.Fatal("docs/upgrade.md carries no optional waiting_on cleanup UPDATE")
-	return ""
-}
-
 // rawTableExists and rawColumnExists probe the schema on a raw handle.
 func rawTableExists(t *testing.T, db *sql.DB, table string) bool {
 	t.Helper()
@@ -489,17 +477,35 @@ func applySQLText(t *testing.T, db *sql.DB, sqlText string) {
 
 // isMandatoryBlock answers whether one doc sql block is a window
 // upgrade: a DROP (the subtraction releases) or a CREATE TABLE (the
-// admin_audit release — its upgrade carries no DROP). The optional
-// waiting_on cleanup UPDATE matches neither, so it stays excluded.
+// admin_audit release — its upgrade carries no DROP).
 func isMandatoryBlock(upper string) bool {
 	return strings.Contains(upper, "DROP") || strings.Contains(upper, "CREATE TABLE")
 }
-func isCleanupBlock(upper string) bool {
-	return strings.Contains(upper, "UPDATE") && strings.Contains(upper, "WAITING_ON")
+
+// publicBaseSQL is the newest deploy/sql version a database written by the
+// earlier public v0.1.x line already carries (that line shipped the same
+// statements under another directory name), and publicMissingSQL the older
+// ones it lacks: docs/upgrade.md starts at the first public release, v0.2.0,
+// and quotes only what a v0.1.x database needs on that move.
+const publicBaseSQL = sqlVer2208
+
+var publicMissingSQL = []string{sqlVer2207}
+
+// docSQLVers answers the versions docs/upgrade.md quotes, in order: the
+// ones a v0.1.x database lacks, then every version after publicBaseSQL
+// (each later one appended with its own section).
+func docSQLVers() []string {
+	out := append([]string{}, publicMissingSQL...)
+	for i, v := range sqlVers {
+		if v == publicBaseSQL {
+			return append(out, sqlVers[i+1:]...)
+		}
+	}
+	return out
 }
 
-// TestDocsQuoteTheWindowSQL: for every deploy/sql version, one upgrade
-// block of docs/upgrade.md is equal to deploy/sql/<ver>/upgrade.sql
+// TestDocsQuoteTheWindowSQL: for every version docSQLVers names, one
+// upgrade block of docs/upgrade.md is equal to deploy/sql/<ver>/upgrade.sql
 // modulo comments/whitespace, in version order — the file is the source
 // of truth, the doc must not drift from it.
 func TestDocsQuoteTheWindowSQL(t *testing.T) {
@@ -510,10 +516,11 @@ func TestDocsQuoteTheWindowSQL(t *testing.T) {
 			mandatory = append(mandatory, norm(blk))
 		}
 	}
-	if len(mandatory) != len(sqlVers) {
-		t.Fatalf("docs/upgrade.md carries %d mandatory upgrade blocks, want one per version %v", len(mandatory), sqlVers)
+	vers := docSQLVers()
+	if len(mandatory) != len(vers) {
+		t.Fatalf("docs/upgrade.md carries %d mandatory upgrade blocks, want one per version %v", len(mandatory), vers)
 	}
-	for i, v := range sqlVers {
+	for i, v := range vers {
 		if mandatory[i] != norm(loadSQLFileOf(t, v, "upgrade.sql")) {
 			t.Fatalf("docs/upgrade.md's upgrade block %d differs from deploy/sql/%s/upgrade.sql", i+1, v)
 		}
@@ -531,26 +538,6 @@ func upgradeRun(t *testing.T, populate bool) {
 	assertDeadGone(t, raw)
 	applyLaterUpgrades(t, raw)
 
-	if populate {
-		// The optional cleanup (docs/upgrade.md, manual) touches ONLY the
-		// dead waiting_on values.
-		applySQLText(t, raw, loadCleanupSQL(t))
-		var stale, live, total int
-		if err := raw.QueryRow(`SELECT COUNT(*) FROM work_items
-			WHERE waiting_on='gate' OR waiting_on LIKE 'runtime:%'`).Scan(&stale); err != nil {
-			t.Fatal(err)
-		}
-		if err := raw.QueryRow(`SELECT COUNT(*) FROM work_items
-			WHERE waiting_on='owner' OR waiting_on LIKE 'dependency:%'`).Scan(&live); err != nil {
-			t.Fatal(err)
-		}
-		if err := raw.QueryRow(`SELECT COUNT(*) FROM work_items`).Scan(&total); err != nil {
-			t.Fatal(err)
-		}
-		if stale != 0 || live != 2 || total != 4 {
-			t.Fatalf("cleanup: stale=%d live=%d total=%d, want 0/2/4", stale, live, total)
-		}
-	}
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}

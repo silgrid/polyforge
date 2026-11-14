@@ -1,5 +1,5 @@
-# yaml-language-server: $schema=../_schema/workflow-5.schema.json
-contract: 5
+# yaml-language-server: $schema=../_schema/workflow-1.schema.json
+contract: 1
 name: micro
 description: Pure-text lane - fix → review → sync → evidence → publish → merge, no grill, plan or verification step; the ticket body is the spec, the change must stay inside the paths each touched repository declares text-only (micro_path= in its .polyforge/verify-scope.conf). Every step is an agent step - fix and review on the mid tier, the four mechanical ones on the cheap tier, each running a pre-written command its skill names and checking what the step before it handed off first - fix writes the evidence plan and judges its own bounds (facts.py micro-bounds; out of bounds it asks the owner to re-file on develop and hands off cancel on the owner's word), review re-runs that judgment, sync merges the default branch in and resolves a real conflict in place (sync.py), evidence re-runs the plan on the host (run.py --isolation host --plan-from; waivable), publish opens the PR and merge merges it and registers the landing record (merge.py); the integration lane's full gate runs over what landed.
 max_rewinds: 3

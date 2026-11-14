@@ -199,7 +199,7 @@ func newRelWorld(t *testing.T, originTags, localTags []string) *relWorld {
 	// the workflow contract the release's contract check reads:
 	// a fixed version and an empty pending list, never the real files (the
 	// real list may hold entries one day and turn every release test red)
-	relWrite(t, filepath.Join(w.work, filepath.FromSlash(relContractGo)), relContractGoAt(5), 0o644)
+	relWrite(t, filepath.Join(w.work, filepath.FromSlash(relContractGo)), relContractGoAt(1), 0o644)
 	relWrite(t, filepath.Join(w.work, filepath.FromSlash(relContractPending)), relContractPendingEmpty, 0o644)
 	relGit(t, w.work, "add", "-A")
 	relGit(t, w.work, "commit", "-q", "-m", "first")

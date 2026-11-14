@@ -1,6 +1,6 @@
 package daemon
 
-// exclusive.go: a lane's `exclusive: true` (workflow contract 5). The
+// exclusive.go: a lane's `exclusive: true` (workflow contract 1). The
 // data-plane proxy forwards every request unchanged save one: a work-item
 // create (`POST /api/v1/work-items`) whose bundle_name names a lane of the
 // project's lane set declaring `exclusive: true` goes to aihub with

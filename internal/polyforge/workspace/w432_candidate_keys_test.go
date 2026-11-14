@@ -78,7 +78,7 @@ func TestW432StaleKeysLoadAndAreNamed(t *testing.T) {
 	if BundlelessKey("verify-judge") {
 		t.Fatal("verify-judge is no key of its own any more")
 	}
-	if !strings.Contains(StaleKeyHint, `section "`+KeyRenameSection+`"`) || !strings.Contains(StaleKeyHint, "verification") {
+	if !strings.Contains(StaleKeyHint, `section "`+workflow.UpgradeSection+`"`) || !strings.Contains(StaleKeyHint, "verification") {
 		t.Fatalf("the hint names the rewrite and the upgrade section: %s", StaleKeyHint)
 	}
 	// a stale key governs nothing: no step list carries it
@@ -88,30 +88,29 @@ func TestW432StaleKeysLoadAndAreNamed(t *testing.T) {
 	}
 }
 
-// TestStaleKeyHintNamesTheKeyRenameSection: the section the
-// stale-key hint names is a docs/upgrade.md heading whose body explains
-// the rename the hint asks for (verify-judge → verification) — the
-// key-rename section, not the current contract's UpgradeSection, which
-// moves with every contract and explains no key rename.
-func TestStaleKeyHintNamesTheKeyRenameSection(t *testing.T) {
+// TestStaleKeyHintNamesTheUpgradeSection: the section the stale-key hint
+// names is a docs/upgrade.md heading whose body tells a deployment moving
+// onto this release what a stale per-step key is and where `pf doctor`
+// names it.
+func TestStaleKeyHintNamesTheUpgradeSection(t *testing.T) {
 	raw, err := os.ReadFile("../../../docs/upgrade.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	doc := string(raw)
-	at := strings.Index(doc, "\n## "+KeyRenameSection+"\n")
+	at := strings.Index(doc, "\n## "+workflow.UpgradeSection+"\n")
 	if at < 0 {
-		t.Fatalf("docs/upgrade.md has no section %q", KeyRenameSection)
+		t.Fatalf("docs/upgrade.md has no section %q", workflow.UpgradeSection)
 	}
 	body := doc[at+1:]
-	body = body[len("## "+KeyRenameSection):]
+	body = body[len("## "+workflow.UpgradeSection):]
 	if end := strings.Index(body, "\n## "); end >= 0 {
 		body = body[:end]
 	}
-	if !strings.Contains(strings.Join(strings.Fields(body), " "), "rename `steps.<project>.verify-judge` to `steps.<project>.verification`") {
-		t.Fatalf("the section %q does not explain the verify-judge rename", KeyRenameSection)
-	}
-	if KeyRenameSection == workflow.UpgradeSection {
-		t.Fatal("the key-rename section is pinned on its own, not on the contract's upgrade section")
+	flat := strings.Join(strings.Fields(body), " ")
+	for _, want := range []string{"A per-step key must name `default`, `task` or a step of an installed lane", "`workspace yaml` row names each stale key"} {
+		if !strings.Contains(flat, want) {
+			t.Fatalf("the section %q does not say %q", workflow.UpgradeSection, want)
+		}
 	}
 }

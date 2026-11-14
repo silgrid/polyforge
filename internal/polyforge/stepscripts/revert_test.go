@@ -7,7 +7,7 @@ package stepscripts
 // the open PR of the second merged), the reverts of an earlier round
 // carried by a run without --item, the pins only copied when nothing is
 // to revert, and the refused invocations; and the record writes --ops-out
-// writes (registered with `pf step hub batch`): since workflow contract 5
+// writes (registered with `pf step hub batch`): since workflow contract 1
 // each the item's whole record as the step's hub reads it, moved to
 // reverted under the lane's rules.
 

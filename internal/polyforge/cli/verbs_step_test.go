@@ -248,7 +248,7 @@ func TestStepHubAndAskPostTheirCalls(t *testing.T) {
 	}
 	for _, gone := range [][]string{{"hub", "move", "wi_x"}, {"hub", "clear-hold", "wi_x"}, {"hub", "list", "--integration", "landed"}} {
 		if code, _, stderr := runPf(t, env, append([]string{"step"}, gone...)...); code == 0 {
-			t.Fatalf("%v is gone (workflow contract 5): exit %d %s", gone, code, stderr)
+			t.Fatalf("%v is gone (workflow contract 1): exit %d %s", gone, code, stderr)
 		}
 	}
 	if n := len(arec.all()); n != 0 {

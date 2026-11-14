@@ -1,4 +1,4 @@
-contract: 5
+contract: 1
 name: wfc-111-rewind
 description: fixture lane for WFC-111
 rewind: { max_total: 2, max_per_step: 1 }

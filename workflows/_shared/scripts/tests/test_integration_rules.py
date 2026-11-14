@@ -1,5 +1,5 @@
 """The integration lane's record rules (pfstep.integration), ported case by
-case from aihub's former integration route (workflow contract 5: aihub
+case from aihub's former integration route (workflow contract 1: aihub
 keeps no lane's rules). The cases of the deleted
 internal/aihub/core/w404_integration_update_test.go, each under its old
 name: a move is from landed and keeps the develop lane's keys; the

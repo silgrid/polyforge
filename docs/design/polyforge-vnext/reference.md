@@ -183,10 +183,10 @@ health route. All paths under `/api/v1` except `/git/` and the read-only web con
 | Method | Path | Auth / gate | Notes |
 |---|---|---|---|
 | POST | `/work-items` | key + project writer | create (`bundle_name`, `repo_inventory`, `parent_id`, `exclusive`, …); `exclusive: true` → `CORE-409 OPEN_ON_BUNDLE` while the project has an unfinished work item on the same bundle (§2.1 table) |
-| GET | `/work-items` | key; rows filtered by the caller's readable project set, pushed into the SQL **before** the limit (`total` = returned count, admin and non-admin alike) | `limit` (default 500, max 1000), `project`, `status`, `assignee`, `priority`, `milestone`, `bundle`, and `attr=<path>:<value>` (repeatable, all must hold: the attr at the dot path — `^[a-z0-9_]+(\.[a-z0-9_]+)*$`, else `CORE-400` — is that string, read with `json_extract`; workflow contract 5); `?project=<non-member>` stays empty |
+| GET | `/work-items` | key; rows filtered by the caller's readable project set, pushed into the SQL **before** the limit (`total` = returned count, admin and non-admin alike) | `limit` (default 500, max 1000), `project`, `status`, `assignee`, `priority`, `milestone`, `bundle`, and `attr=<path>:<value>` (repeatable, all must hold: the attr at the dot path — `^[a-z0-9_]+(\.[a-z0-9_]+)*$`, else `CORE-400` — is that string, read with `json_extract`; workflow contract 1); `?project=<non-member>` stays empty |
 | GET | `/work-items/{id}` | key + read | `include=events` (anything else `CORE-400`); the answer always carries the append-only `comments` list |
 | PATCH | `/work-items/{id}` | key + writer | `goal content labels priority milestone waiting_on clean_pause`, `bundle_name` in the R2 window (`patchableFields`; `attrs` only at create) |
-| PATCH | `/work-items/{id}/attrs` | signed machine + writer | workflow contract 5 (`core/attrs.go`): body `{key, value, if?, owner_message?}` writes the one top-level attrs key `key` (`^[a-z][a-z0-9_]{0,63}$`; Core's own `blocked_seal` is `CORE-400`) whole with the JSON `value` (`null` deletes it), on a work item of any status, terminal included. `if` maps attrs paths to JSON values, a compare-and-swap fence checked in the write's transaction (an absent path reads as `null`): any mismatch is `CORE-409` reason `ATTRS_IF_MISMATCH` and writes nothing. Every write appends `attrs_written` `{key, machine_id, owner_message?}` (`owner_message` `{words, by, at}`, copied verbatim). aihub keeps no lane's rules on the record. Reach: the daemon's machine key only — a step reaches it solely as a pending `pf step hub attrs` write the daemon makes |
+| PATCH | `/work-items/{id}/attrs` | signed machine + writer | workflow contract 1 (`core/attrs.go`): body `{key, value, if?, owner_message?}` writes the one top-level attrs key `key` (`^[a-z][a-z0-9_]{0,63}$`; Core's own `blocked_seal` is `CORE-400`) whole with the JSON `value` (`null` deletes it), on a work item of any status, terminal included. `if` maps attrs paths to JSON values, a compare-and-swap fence checked in the write's transaction (an absent path reads as `null`): any mismatch is `CORE-409` reason `ATTRS_IF_MISMATCH` and writes nothing. Every write appends `attrs_written` `{key, machine_id, owner_message?}` (`owner_message` `{words, by, at}`, copied verbatim). aihub keeps no lane's rules on the record. Reach: the daemon's machine key only — a step reaches it solely as a pending `pf step hub attrs` write the daemon makes |
 | POST | `/work-items/{id}/cancel` | reporter/maintainer/admin; a blocked work item also its holder operator (writer/maintainer) | §2.1 |
 | POST | `/work-items/{id}/wrap` | reporter/maintainer/admin | §2.1; work items with no bundle only |
 | POST | `/work-items/{id}/claim` | writer (concealed from callers without access, §3.2) | §3.2 |
@@ -485,11 +485,11 @@ monotonic across restarts; a file silent for 30 days is removed at start; `obser
 
 ### 7.2 The lane file: workflow.yaml <!-- §7.2 -->
 
-A lane is `workflows/<lane>/workflow.yaml` (workflow contract 5): one YAML
+A lane is `workflows/<lane>/workflow.yaml` (workflow contract 1): one YAML
 mapping the one lane loader (`internal/common/workflow`, `workflow.Load`)
 judges — its keys, their values, the rules across them and the error codes
 are [the workflow contract reference](../../reference/workflow-contract.md),
-and `workflows/_schema/workflow-5.schema.json` is its JSON Schema, generated
+and `workflows/_schema/workflow-1.schema.json` is its JSON Schema, generated
 from the contract registry. The lane's prose is its `README.md`, which the
 daemon never reads; a lane that is still a `workflow.md` (contract 4 and
 earlier) is refused with its rewrite (`WFC-101` alone, `WFC-110` beside a

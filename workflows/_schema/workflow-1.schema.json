@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
-  "description": "A lane's workflow.yaml under workflow contract 5, generated from the contract registry: each key's own value. The rules across keys, the step definitions, skills and placeholders are the lane loader's (`pf workflows validate`); docs/reference/workflow-contract.md.",
+  "description": "A lane's workflow.yaml under workflow contract 1, generated from the contract registry: each key's own value. The rules across keys, the step definitions, skills and placeholders are the lane loader's (`pf workflows validate`); docs/reference/workflow-contract.md.",
   "properties": {
     "acceptance": {
       "description": "required|none (default required): whether a work item on the lane must list an acceptance criterion before it runs",
@@ -11,7 +11,7 @@
       ]
     },
     "contract": {
-      "const": 5,
+      "const": 1,
       "description": "int, required, == ContractVersion"
     },
     "defaults": {
@@ -230,6 +230,6 @@
     "name",
     "steps"
   ],
-  "title": "workflow.yaml (workflow contract 5)",
+  "title": "workflow.yaml (workflow contract 1)",
   "type": "object"
 }

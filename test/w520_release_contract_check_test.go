@@ -84,45 +84,45 @@ func TestW520ReleaseContractCheck(t *testing.T) {
 		w520Register(w)
 		out, err := w.run(nil)
 		w520Refused(t, w, out, err,
-			"1 incompatible", "ContractVersion", "still 5", "to 6", "docs/upgrade.md", "empt")
+			"1 incompatible", "ContractVersion", "still 1", "to 2", "docs/upgrade.md", "empt")
 	})
 
 	t.Run("empty list needs no bump and releases", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		w.landPR("unrelated", "an unrelated change")
 		out, err := w.run(nil)
-		w520Released(t, w, out, err, "release: contract: 5 (previous release 5), no incompatible change registered")
+		w520Released(t, w, out, err, "release: contract: 1 (previous release 1), no incompatible change registered")
 	})
 
 	t.Run("bump with the list emptied releases", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		w520Register(w)
 		w520Land(w, "topic-bump", "bump the contract version, empty the list", map[string]string{
-			relContractGo:      relContractGoAt(6),
+			relContractGo:      relContractGoAt(2),
 			relContractPending: relContractPendingEmpty,
 		})
 		out, err := w.run(nil)
-		w520Released(t, w, out, err, "release: contract: 6 (previous release 5), no incompatible change registered")
+		w520Released(t, w, out, err, "release: contract: 2 (previous release 1), no incompatible change registered")
 	})
 
 	t.Run("bump with the list not emptied refuses", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		w520Register(w)
 		w520Land(w, "topic-bump", "bump the contract version only", map[string]string{
-			relContractGo: relContractGoAt(6),
+			relContractGo: relContractGoAt(2),
 		})
 		out, err := w.run(nil)
-		w520Refused(t, w, out, err, "ContractVersion", "6", "still holds 1", "empty")
+		w520Refused(t, w, out, err, "ContractVersion", "2", "still holds 1", "empty")
 	})
 
 	t.Run("a bump by two refuses", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		w520Register(w)
 		w520Land(w, "topic-bump", "bump the contract version twice", map[string]string{
-			relContractGo:      relContractGoAt(7),
+			relContractGo:      relContractGoAt(3),
 			relContractPending: relContractPendingEmpty,
 		})
 		out, err := w.run(nil)
-		w520Refused(t, w, out, err, "ContractVersion", "7", "at most once")
+		w520Refused(t, w, out, err, "ContractVersion", "3", "at most once")
 	})
 }

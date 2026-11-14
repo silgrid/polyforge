@@ -1,4 +1,4 @@
-"""The integration lane's record rules (workflow contract 5).
+"""The integration lane's record rules (workflow contract 1).
 
 A work item the develop lane merged into the default branch wraps with
 its hand-off record in attrs ``integration`` (``state: landed``, ``repos``,

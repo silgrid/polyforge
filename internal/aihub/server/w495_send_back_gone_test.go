@@ -1,4 +1,4 @@
-// carries: internal/aihub/server/*, internal/aihub/core/*, internal/common/api/types.go, docs/upgrade.md
+// carries: internal/aihub/server/*, internal/aihub/core/*, internal/common/api/types.go
 
 package server
 
@@ -6,7 +6,7 @@ package server
 // lost their last client with workflow contract 4 C3c, so aihub deletes
 // them: both paths are unknown to the mux (its own 404, not a handler's
 // concealing CORE-404), no code anywhere in the repository implements or
-// calls them, and the deployment note states there is no SQL migration.
+// calls them.
 
 import (
 	"io/fs"
@@ -131,39 +131,6 @@ func TestW495NoSendBackImplementationInTheRepo(t *testing.T) {
 	for _, must := range []string{"internal/aihub/server/server.go", "internal/polyforge/aihubclient/client.go"} {
 		if !seen[must] {
 			t.Fatalf("the scan did not read %s", must)
-		}
-	}
-}
-
-func TestW495UpgradeNoteStatesNoSQLMigration(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join(w495RepoRoot(t), "docs", "upgrade.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The section is found by its heading's own words: a ticket reference in
-	// the heading is not part of every copy of this file.
-	const heading = "## aihub: the send-back and owner-rewind/applied routes are gone"
-	var section string
-	lines := strings.Split(string(b), "\n")
-	for i, line := range lines {
-		if strings.HasPrefix(line, heading) {
-			end := len(lines)
-			for j := i + 1; j < len(lines); j++ {
-				if strings.HasPrefix(lines[j], "## ") {
-					end = j
-					break
-				}
-			}
-			section = strings.Join(lines[i:end], "\n")
-			break
-		}
-	}
-	if section == "" {
-		t.Fatalf("docs/upgrade.md has no section headed %q", heading)
-	}
-	for _, want := range []string{"/send-back", "owner-rewind/applied", "No SQL migration"} {
-		if !strings.Contains(section, want) {
-			t.Errorf("the send-back removal's upgrade section does not contain %q", want)
 		}
 	}
 }

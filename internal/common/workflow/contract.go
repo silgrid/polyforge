@@ -15,13 +15,13 @@ import (
 )
 
 // ContractVersion is the one workflow contract version this build
-// implements: 5 (docs/reference/workflow-contract.md): a lane is defined by
-// its workflow.yaml — contract 4's workflow.md frontmatter, as a YAML file
-// of its own, the prose in a README.md the daemon never reads — and a step
-// may read a long var from a file of the lane (`vars_files`); a
-// workflow.md is refused with its rewrite. A step's one entry point to the
-// daemon is `pf step` and its one hand-off is a section of
-// artifacts/handoff.md (contract 4); a step's `hub` list names the `pf step
+// implements: 1 (docs/reference/workflow-contract.md): a lane is defined by
+// its workflow.yaml — the YAML mapping the earlier releases kept as a
+// workflow.md's frontmatter, as a file of its own, the prose in a README.md
+// the daemon never reads — and a step may read a long var from a file of
+// the lane (`vars_files`); a workflow.md is refused with its rewrite. A
+// step's one entry point to the daemon is `pf step` and its one hand-off is
+// a section of artifacts/handoff.md; a step's `hub` list names the `pf step
 // hub` verbs it may call. A lane declares the version it targets
 // (`contract: <n>`); any other value is WFC-101. The version moves by one
 // rule: only an incompatible change bumps it, at most once per release
@@ -42,14 +42,15 @@ import (
 // golden file, the baseline, the lane schema, the reference document,
 // every built-in lane, a new docs/upgrade.md section (the drain) and the
 // emptied list.
-// (Internal builds before the public freeze numbered their stages 1 to 4;
-// none was released, and the freeze renumbered the final shape to 1.)
-const ContractVersion = 5
+// (Pre-release builds numbered their contract stages up to 5; none of those
+// numbers was released, and the first public release, v0.2.0, starts the
+// numbering at 1.)
+const ContractVersion = 1
 
 // UpgradeSection is the docs/upgrade.md section a deployment moving onto
 // this contract version follows (the drain): the WFC-101 refusal and the
 // blocked `contract` reason name it.
-const UpgradeSection = "Workflow contract 5 (part 1): a lane is workflow.yaml and README.md"
+const UpgradeSection = "v0.2.0, the first public release: workflow contract 1"
 
 // The WFC-* codes in force under ContractVersion (docs/reference/workflow-contract.md,
 // "Error codes").
@@ -77,7 +78,7 @@ const (
 // registry's error-code table (RegistryDump, the reference document).
 var Codes = map[string]string{
 	CodeContractMissing:   "`contract` missing",
-	CodeContractVersion:   "`contract` is not the version this daemon implements, or the lane is a workflow.md (contract 4 and earlier)",
+	CodeContractVersion:   "`contract` is not the version this daemon implements, or the lane is a workflow.md (the lane file of the earlier releases)",
 	CodeLaneFile:          "workflow.yaml missing, unparsable or not one mapping, a duplicate key, or a workflow.md beside it",
 	CodeUnknownKey:        "unknown or removed key (at any level)",
 	CodeInvalidValue:      "a value of the wrong type or outside its range",

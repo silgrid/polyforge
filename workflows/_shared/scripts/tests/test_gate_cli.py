@@ -123,18 +123,23 @@ class GateCLITest(unittest.TestCase):
         self.assertEqual(m.exit, 0, m.stdout + m.stderr)
         s = self.fb.starts[-1]
         self.assertEqual((s.cpus, s.memory, s.pids), (container.default_cpus(), "16g", 4096), "the defaults: min(8, cores), 16g, 4096")
-        m = run_main(ISO + ["--log-dir", logs, "--cpus", "3", "--memory", "3G", "--pids", "333"], d, runtime=self.fb)
+        # one past the default, which follows this machine's cores and so can
+        # equal any fixed value: the flag and the config below always differ
+        # from it
+        other = container.default_cpus() + 1
+        m = run_main(ISO + ["--log-dir", logs, "--cpus", container.format_cpus(other), "--memory", "3G", "--pids", "333"], d, runtime=self.fb)
         self.assertEqual(m.exit, 0, m.stdout + m.stderr)
         s = self.fb.starts[-1]
-        self.assertEqual((s.cpus, s.memory, s.pids), (3.0, "3g", 333))
+        self.assertEqual((s.cpus, s.memory, s.pids), (other, "3g", 333))
         # a machine's pf CLI config is no input of the gate's limits (D7)
         xdg = os.path.join(self.root, "xdg")
         os.makedirs(os.path.join(xdg, "polyforge"))
         with open(os.path.join(xdg, "polyforge", "cli.toml"), "w", encoding="utf-8") as f:
-            f.write("[daemon]\nverify_container_cpus = 3\nverify_container_memory = 8g\n")
+            f.write("[daemon]\nverify_container_cpus = %s\nverify_container_memory = 8g\n" % container.format_cpus(other))
         m = run_main(ISO + ["--log-dir", logs], d, env={"XDG_CONFIG_HOME": xdg}, runtime=self.fb)
         self.assertEqual(m.exit, 0, m.stdout + m.stderr)
-        self.assertEqual(self.fb.starts[-1].cpus, container.default_cpus())
+        s = self.fb.starts[-1]
+        self.assertEqual((s.cpus, s.memory), (container.default_cpus(), "16g"))
 
     def test_the_clone_mode_prints_its_progress_and_its_tag(self) -> None:
         d = green_clone(self.root, "stack=none\nfast_gate=echo one\n")

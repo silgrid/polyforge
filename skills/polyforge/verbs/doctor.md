@@ -254,8 +254,7 @@ refused (DAEMON-414): a malformed shape (each entry is
 `steps.<project>.<default|step-id>: { models: [...] }`, beside which a
 step's entry may carry `skip: true` (a bool; switches off a step its lane
 declares `skippable`, never on `default` or `task`), an entry declaring
-neither is empty — a leftover `attrs` is refused naming its removal in
-workflow contract 4), a
+neither is empty — a leftover `attrs` is refused naming its removal), a
 retired root `summarize:` or `memory_policy:` section (both moved to cli.toml;
 the fail names the file, the line and `pf config migrate`,
 which moves the values and deletes the section), a candidate that
@@ -266,9 +265,9 @@ hint), or a project cli.toml does not map to that workspace. A per-step
 key that is no step id of the daemon's installed lanes (nor `default` or
 `task`) does not fail it: the key is stale — it governs nothing, a claim
 loads the yaml anyway — and the check warns naming each one (file and
-key), the rewrite and the docs/upgrade.md section (workflow contract 1:
-the retired `verify-judge` key becomes `verification`, the id of the step
-that dispatches the judge). It also loads the daemon's
+key), the rewrite (the retired `verify-judge` key becomes `verification`,
+the id of the step that dispatches the judge) and the docs/upgrade.md
+section of the first public release. It also loads the daemon's
 installed bundles: a bundle whose `model_candidates` are not prefixed
 (or that still declares `harness`) fails, naming its file and step — a
 claim of a work item on that bundle is refused until it is fixed. Step ids and

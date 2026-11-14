@@ -1,6 +1,6 @@
 # micro — pure-text lane
 
-The flow-level narrative of the lane (workflow contract 5); the `steps` array of its
+The flow-level narrative of the lane (workflow contract 1); the `steps` array of its
 `workflow.yaml` is the *only* execution order. Nothing here overrides it.
 
 ## Shape of the flow

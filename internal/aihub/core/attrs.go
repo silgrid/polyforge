@@ -1,6 +1,6 @@
 package core
 
-// attrs.go: the generic attrs write and filter (workflow contract 5,
+// attrs.go: the generic attrs write and filter (workflow contract 1,
 // design §3.4). aihub keeps no lane's business rules: a lane
 // keeps its own record in one top-level attrs key and its own scripts
 // judge what goes in it; aihub only

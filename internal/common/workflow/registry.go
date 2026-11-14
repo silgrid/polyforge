@@ -109,7 +109,7 @@ const MaxToolMinutes = 180
 var wrapAttrName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 // HubVerbs are the `pf step hub` verbs a step's `hub.verbs` may name
-// (design #483 §5.2; workflow contract 5): two reads and the writes made
+// (design #483 §5.2; workflow contract 1): two reads and the writes made
 // only when the dispatch hands off done. The attrs write is no entry: a
 // step may call it when its `hub.attrs` names a key (HubAllowed).
 var HubVerbs = []string{"get", "list", "file", "wrap-attrs", "batch"}
@@ -132,16 +132,16 @@ var defKeys = map[string]keySpec{
 	"description": {Type: "string, required, non-empty", Required: true},
 }
 
-// contract4 prefixes the rewrite of every key workflow contract 4 removed
-// (the step I/O, effects and hand-off keys: one entry, `pf step`, and one
-// hand-off document, artifacts/handoff.md; docs/upgrade.md).
-const contract4 = "removed in workflow contract 4: "
+// contract4 prefixes the rewrite of every key removed before workflow
+// contract 1 (the step I/O, effects and hand-off keys: one entry, `pf step`,
+// and one hand-off document, artifacts/handoff.md).
+const contract4 = "removed before workflow contract 1: "
 
-// removedKeys are the keys contract 4 removed, keyed by the mapping they
+// removedKeys are the keys removed before contract 1, keyed by the mapping they
 // sat in ("step", "on_fail", "definition"), each with its rewrite. A
 // removed key is WFC-111 like any unknown key (a definition's is WFC-191);
 // the hint says what to write instead.
-// A key an earlier contract removed is an unknown key: a lane declaring
+// Any other key an earlier release had is an unknown key: a lane declaring
 // it targets an earlier contract, refused for its version (WFC-101).
 var removedKeys = map[string]map[string]string{
 	"step": {
@@ -151,7 +151,7 @@ var removedKeys = map[string]map[string]string{
 		"verdicts": contract4 + "delete the key; a gate hands off done (its pass) or fail, and a verdict a later command needs is in that command's result file",
 		"effects":  contract4 + "delete the key; the step registers its aihub writes with `pf step hub <verb>`, and its `hub:` names the verbs it may call and the attrs keys it may write",
 		"handoff":  contract4 + "delete the key; the step registers the record its wrap carries with `pf step hub wrap-attrs <name> @<file>` and declares `wrap_attrs: [<name>]` (its done is refused until the record is registered)",
-		"attrs":    contract4 + "delete the key, its material (attrs/<name>.md or _shared/attr_<name>.md) and the workspace yaml's steps.<project>.<step>.attrs overrides (docs/upgrade.md)",
+		"attrs":    contract4 + "delete the key, its material (attrs/<name>.md or _shared/attr_<name>.md) and the workspace yaml's steps.<project>.<step>.attrs overrides",
 	},
 	"on_fail": {
 		"charge": contract4 + "delete the key; a FAIL is charged to max_rewinds unless the gate hands it off with --per-owner (the owner's word)",

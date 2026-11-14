@@ -415,7 +415,7 @@ await check("W216-12", async () => {
   writeFileSync(yamlPath, WORKSPACE_YAML.replace('      models: ["pi:before"]\n', '      models: ["pi:before"]\n      attrs:\n        question_batch_size: 2\n'));
   const result = await pfJson(["config", "workspace", "--cwd", ws]);
   assert.notEqual(result.status, 0, "a yaml carrying step attrs must be refused");
-  assert.match(`${result.stdout}\n${result.stderr}`, /steps\.workbench\.grill\.attrs: removed in workflow contract 4/, `the refusal must name the key and the removal: ${result.stderr || result.stdout}`);
+  assert.match(`${result.stdout}\n${result.stderr}`, /steps\.workbench\.grill\.attrs: removed: step attrs are gone/, `the refusal must name the key and the removal: ${result.stderr || result.stdout}`);
 });
 
 await check("W216-13", async () => {

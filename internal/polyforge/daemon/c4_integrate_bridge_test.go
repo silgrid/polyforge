@@ -15,7 +15,7 @@ package daemon
 //     effects did (testdata/c4_batch_writes.golden: the work items the
 //     effects applier left, which this test compared side by side until
 //     the effects package left with workflow contract 4's stage C3, and —
-//     since workflow contract 5 — the generic attrs writes that leave
+//     since workflow contract 1 — the generic attrs writes that leave
 //     them so).
 //
 // Beside them, the two C1 rulings these steps rely on: an empty batch is
@@ -464,7 +464,7 @@ func writesFixture() []map[string]any {
 // TestC4BatchWritesAreContract3Effects: collect's hold fix and clear,
 // full-gate's fix ticket and attribution, revert's and close's moves —
 // registered by each step with `pf step hub batch` as generic attrs
-// writes (workflow contract 5: each the whole record, fenced on the state
+// writes (workflow contract 1: each the whole record, fenced on the state
 // it moves from) and made by the pending-writes executor through the
 // daemon's sink — leave aihub's work items as the contract 3 effects of
 // the same rulings did (the effects applier through the integration

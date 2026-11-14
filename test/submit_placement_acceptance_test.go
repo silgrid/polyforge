@@ -387,27 +387,6 @@ func TestSubmitPlacementAutoPullMissingClonesOneWarningNoNewEvent(t *testing.T) 
 }
 
 // ---------------------------------------------------------------------------
-// Requirement 2 (docs): upgrade.md notes the --json shape change.
-// ---------------------------------------------------------------------------
-
-// TestSubmitPlacementUpgradeNotesSubmitJSONShapeChange: docs/upgrade.md must note
-// the `pf submit --json` answer shape change for external parsers — the
-// new fields machine_id / capsule_path / missing_repos replace the old
-// {accepted, work_item_id}-only shape in place.
-func TestSubmitPlacementUpgradeNotesSubmitJSONShapeChange(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(v1Root(t), "docs", "upgrade.md"))
-	if err != nil {
-		t.Fatalf("placement: docs/upgrade.md: %v", err)
-	}
-	doc := string(raw)
-	for _, tok := range []string{"machine_id", "capsule_path", "missing_repos"} {
-		if !strings.Contains(doc, tok) {
-			t.Fatalf("docs/upgrade.md must note the `pf submit --json` answer shape change for external parsers (token %q missing)", tok)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Requirements 5 + 6 (skill docs): the pre-submit owner confirmation and
 // the verbatim relay of placement + warnings.
 // ---------------------------------------------------------------------------
