@@ -70,8 +70,11 @@ class FastChecksCase(GitCase):
 
     def run_checks(self, repo: str, env: Optional[Dict[str, str]] = None, extra: Tuple[str, ...] = ()) -> Tuple[int, Dict[str, Any]]:
         """fast_checks.py on the capsule's repo, as a skill runs it."""
-        argv = [sys.executable, FAST_CHECKS, "--repo", repo, "--capsule", self.capsule,
-                "--engine", ENGINE, "--deadline", "10m", "--out", self.out, *extra]
+        argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule,
+                "--engine", ENGINE, "--deadline", "10m", "--out", self.out]
+        if repo:
+            argv += ["--repo", repo]
+        argv += list(extra)
         c = subprocess.run(argv, capture_output=True, text=True, env=env if env is not None else os.environ)
         if not os.path.exists(self.out):
             raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (c.returncode, c.stderr[-500:]))
@@ -215,6 +218,104 @@ class NestedRootTest(FastChecksCase):
         clone = self.nested_repo()
         c = subprocess.run(["bash", "-c", "test -f package-lock.json"], cwd=clone, capture_output=True)
         self.assertNotEqual(c.returncode, 0)
+
+
+MARKER_23 = "^✔ status and elapsed time are in a separate row below command and description$"
+LINE_23 = "✔ status and elapsed time are in a separate row below command and description (6.212729ms)"
+
+
+class CheckUnitsTest(FastChecksCase):
+    """AC6 (polyforge#23's lesson): recording a unit checks its marker
+    against its run's output on the spot, with verification's own rules —
+    the #23 marker (anchored $ against node --test's elapsed-time suffix)
+    is judged red and the artifact names the closest output line."""
+
+    def units_file(self, units: List[Dict[str, Any]]) -> str:
+        p = os.path.join(self.capsule, "artifacts", "build", "units.json")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(units, f)
+        return p
+
+    def unit(self, id: str, marker: str, argv: List[str], cwd: str = ".") -> Dict[str, Any]:
+        return {"id": id, "test_commit": "", "impl_commit": "",
+                "run": {"repo": "app", "cwd": cwd, "argv": argv}, "marker": marker}
+
+    def run_units(self, units: List[Dict[str, Any]], extra: Tuple[str, ...] = ()) -> Tuple[int, Dict[str, Any]]:
+        self.go_repo()
+        return self.run_checks("", extra=("--check-units", self.units_file(units), *extra))
+
+    def test_the_23_marker_is_red_with_the_closest_line(self) -> None:
+        code, res = self.run_units([
+            self.unit("u1", MARKER_23, ["sh", "-c", "echo '%s'" % LINE_23]),
+        ])
+        self.assertEqual(code, 1, res)
+        self.assertEqual(res["verdict"], "fail")
+        u = res["details"]["units"][0]
+        self.assertEqual(u["id"], "u1")
+        self.assertFalse(u["passed"])
+        self.assertEqual(u["exit_code"], 0)
+        self.assertEqual(u["closest_line"], LINE_23)
+        self.assertIn("no output line matches", u["why"])
+        self.assertIn(MARKER_23, u["why"])
+        self.assertIn("u1", res["summary"])
+
+    def test_a_matching_marker_passes(self) -> None:
+        code, res = self.run_units([
+            self.unit("u1", "^✔ status and elapsed time are in a separate row below command and description \\(",
+                      ["sh", "-c", "echo '%s'" % LINE_23]),
+        ])
+        self.assertEqual(code, 0, res)
+        u = res["details"]["units"][0]
+        self.assertTrue(u["passed"])
+        self.assertEqual(u["why"], "")
+        self.assertNotIn("closest_line", u)
+
+    def test_broken_markers_are_red_without_running(self) -> None:
+        for marker, why in (("", "names no marker"), (".*", "matches the empty string"),
+                           ("^--- PASS: TestAnswer (", "is not a regexp")):
+            with self.subTest(marker=marker or "(empty)"):
+                code, res = self.run_units([self.unit("u1", marker, ["sh", "-c", "echo should-not-run"])])
+                self.assertEqual(code, 1)
+                u = res["details"]["units"][0]
+                self.assertFalse(u["passed"])
+                self.assertIn(why, u["why"])
+                self.assertNotIn("exit_code", u, "a broken marker never runs")
+
+    def test_a_run_that_cannot_run_as_written_is_red(self) -> None:
+        for cwd, argv, why in (("no/such/dir", ["true"], "no directory"),
+                               (".", [], "no argv")):
+            with self.subTest(why=why):
+                code, res = self.run_units([self.unit("u1", "^x", argv, cwd=cwd)])
+                self.assertEqual(code, 1)
+                u = res["details"]["units"][0]
+                self.assertFalse(u["passed"])
+                self.assertIn(why, u["why"])
+
+    def test_a_unit_naming_a_repo_the_capsule_does_not_carry_is_red(self) -> None:
+        unit = {"id": "u1", "test_commit": "", "impl_commit": "",
+                "run": {"repo": "nonesuch", "cwd": ".", "argv": ["true"]}, "marker": "^x"}
+        code, res = self.run_units([unit])
+        self.assertEqual(code, 1, res)
+        u = res["details"]["units"][0]
+        self.assertFalse(u["passed"])
+        self.assertIn("nonesuch", u["why"])
+
+    def test_the_unit_filter_checks_one_unit(self) -> None:
+        code, res = self.run_units([
+            self.unit("u1", "^PASS23 ", ["sh", "-c", "echo 'PASS23 one'"]),
+            self.unit("u2", "^PASS23 ", ["sh", "-c", "echo 'PASS23 two'"]),
+        ], extra=("--unit", "u2"))
+        self.assertEqual(code, 0, res)
+        self.assertEqual([u["id"] for u in res["details"]["units"]], ["u2"])
+
+    def test_an_unusable_units_file_is_not_judged(self) -> None:
+        self.go_repo()
+        p = os.path.join(self.capsule, "units.json")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("not json")
+        code, res = self.run_checks("", extra=("--check-units", p))
+        self.assertEqual(code, 2)
 
 
 class UsageTest(FastChecksCase):
