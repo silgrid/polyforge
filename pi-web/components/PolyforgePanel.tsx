@@ -458,10 +458,12 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   detailsRef.current = details;
   const selection = useRef(wi);
   // polyforge#2: the tool cards the reader expanded (their onToggle said
-  // so); the poll re-reads the ones whose detail still has no result. The
-  // reads in flight, keyed the same way (detailAsk's dedup).
+  // so); the poll re-reads the ones whose detail still has no result.
+  // The reads in flight, keyed the same way (detailAsk's dedup), and every
+  // id's read sequence number (an answer of a replaced read is dropped).
   const openTools = useRef<Set<string>>(new Set());
   const inFlight = useRef<Set<string>>(new Set());
+  const readSeq = useRef<Map<string, number>>(new Map());
   const pinned = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const [atTop, setAtTop] = useState(true);
@@ -527,27 +529,39 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setAtTop(isProgressAtTop(region));
   }, [foldVersion, scrollRef]);
   // One tool card's detail, read when that card is expanded: a read in
-  // flight or a settled result is never asked again (detailAsk); an
-  // unavailable one is asked again on its next expansion, and a resultless
-  // one is re-read by the poll while its card stays expanded — keeping the
-  // held detail on screen (never a Loading flash, review r1#1) until the
-  // answer changes it. An answer for another selection writes nothing; a
-  // repeat answer writes nothing either.
+  // flight or a settled result is never asked again (detailAsk — the mark
+  // is added before the fetch and cleared only in its answer, so the poll
+  // skips while a read is pending); an unavailable one is asked again on
+  // its next expansion, and a resultless one is re-read by the poll while
+  // its card stays expanded — keeping the held detail on screen (never a
+  // Loading flash, review r1#1) until the answer changes it. Every read
+  // carries its id's next sequence number and an answer of a read a later
+  // one replaced is dropped (review r2#1: a step switch resets the detail
+  // without unmounting it, so a re-expanded card can read again while an
+  // orphaned answer is still on its way — the older answer must never
+  // overwrite the newer result). An answer for another selection writes
+  // nothing; a repeat answer writes nothing either.
   const loadDetail = useCallback((id: string) => {
     const held = detailsRef.current.get(id);
     const ask = detailAsk(held, inFlight.current.has(id));
     if (!wi || ask === "skip") return;
     const asked = wi;
+    inFlight.current.add(id);
+    const seq = (readSeq.current.get(id) ?? 0) + 1;
+    readSeq.current.set(id, seq);
     const settle = (state: PolyforgeProgressToolDetailState) => {
-      inFlight.current.delete(id);
       if (selection.current !== asked) return;
+      if (readSeq.current.get(id) !== seq) return;  // a later read replaced this one
       const heldNow = detailsRef.current.get(id);
       if (heldNow !== undefined && sameProgressToolDetail(heldNow, state)) return;
       setDetails((current) => new Map(current).set(id, state));
       setFoldVersion((current) => current + 1);
     };
     if (ask === "loading") settle({ status: "loading" });
-    void fetchProgressToolDetail(asked, id, profile).then(settle);
+    void fetchProgressToolDetail(asked, id, profile).then((state) => {
+      inFlight.current.delete(id);
+      settle(state);
+    });
   }, [wi, profile]);
   // A tool card's expand/collapse is a fold like a block's: it
   // and its detail settling re-measure through foldVersion, so an expansion

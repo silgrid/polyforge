@@ -1128,12 +1128,13 @@ test("a tool card's detail is read on its expansion and re-read by the poll whil
   assert.match(block, /const ask = detailAsk\(held, inFlight\.current\.has\(id\)\);\s*if \(!wi \|\| ask === "skip"\) return;/,
     "a read in flight or a settled result is never asked again (detailAsk, r1#1)");
   assert.match(block, /if \(ask === "loading"\) settle\(\{ status: "loading" \}\);/, "only a first read replaces the card's body with the loading note (r1#1: a re-read keeps the held detail)");
-  assert.match(block, /if \(selection\.current !== asked\) return;\s*const heldNow = detailsRef\.current\.get\(id\);\s*if \(heldNow !== undefined && sameProgressToolDetail\(heldNow, state\)\) return;\s*setDetails\(\(current\) => new Map\(current\)\.set\(id, state\)\);\s*setFoldVersion\(\(current\) => current \+ 1\);/,
-    "an answer for another selection writes nothing; a repeat answer writes nothing either; a settled detail re-measures the follow state like a fold (review s10#2)");
+  assert.match(block, /inFlight\.current\.add\(id\);\s*const seq = \(readSeq\.current\.get\(id\) \?\? 0\) \+ 1;\s*readSeq\.current\.set\(id, seq\);/, "the id is marked in flight and its read numbered before anything is sent (r2#1)");
+  assert.match(block, /if \(selection\.current !== asked\) return;\s*if \(readSeq\.current\.get\(id\) !== seq\) return;[^\n]*\s*const heldNow = detailsRef\.current\.get\(id\);\s*if \(heldNow !== undefined && sameProgressToolDetail\(heldNow, state\)\) return;\s*setDetails\(\(current\) => new Map\(current\)\.set\(id, state\)\);\s*setFoldVersion\(\(current\) => current \+ 1\);/,
+    "an answer for another selection writes nothing; an answer of a replaced read is dropped (r2#1); a repeat answer writes nothing either; a settled detail re-measures the follow state like a fold (review s10#2)");
   assert.match(block, /const toggleTool = useCallback\(\(id: string, open: boolean\) => \{\s*if \(open\) \{\s*openTools\.current\.add\(id\);\s*loadDetail\(id\);\s*\} else \{\s*openTools\.current\.delete\(id\);\s*\}\s*setFoldVersion\(\(current\) => current \+ 1\);\s*\}, \[loadDetail\]\);/,
     "a card toggle is a fold: it re-measures the follow state and only an expansion opens (and registers) the card's detail read (review s10#2)");
   assert.match(block, /for \(const id of rereadToolIds\(detailsRef\.current, openTools\.current, lineIds\)\) loadDetail\(id\);/, "every poll re-reads the expanded resultless cards");
-  assert.match(block, /void fetchProgressToolDetail\(asked, id, profile\)\.then\(settle\);/);
+  assert.match(block, /void fetchProgressToolDetail\(asked, id, profile\)\.then\(\(state\) => \{\s*inFlight\.current\.delete\(id\);\s*settle\(state\);\s*\}\);/, "the mark clears only in the fetch's answer — the synchronous loading settle cannot (r2#1)");
   assert.match(block, /setDetails\(new Map\(\)\);/, "the cache resets per selection, never persisted");
   assert.doesNotMatch(source, /fetch\(/, "the panel itself still adds no read");
 });
