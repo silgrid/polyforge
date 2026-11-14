@@ -245,7 +245,7 @@ async function openJob(page, wi) {
   await dock(page).getByRole("button", { name: /back to job list|deselect/i }).waitFor({ timeout: 10_000 });
 }
 const openUI = async (page) => { await openJob(page, UI.wi); await selectStepForProgress(page, "code"); };
-const openDONE = (page) => openJob(page, DONE.wi);
+const openDONE = async (page) => { await openJob(page, DONE.wi); await selectStepForProgress(page, "code"); };
 const waitFor = createWaitFor({ every: 150 });
 const tick = (page, ms) => (ms > 0 ? page.clock.runFor(ms) : Promise.resolve());
 const progressBlock = (page) => dock(page).locator("[data-pf-progress]").first();
@@ -254,6 +254,7 @@ async function selectStepForProgress(page, stepId) {
   const node = dock(page).getByRole("listitem", { name: new RegExp(`^${stepId} ·`) }).first();
   await node.click();
   await waitFor(async () => (await node.getAttribute("data-pf-step-selected")) === "true", `${stepId} becomes selected`);
+  await waitFor(async () => (await dock(page).locator("[data-pf-progress]").count()) === 1, `${stepId} progress block remains mounted`);
 }
 // the block mounts before the watch snapshot that carries the
 // summary fields lands; under `next start` a read right after mount beats it.
