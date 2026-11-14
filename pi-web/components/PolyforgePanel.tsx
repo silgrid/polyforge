@@ -1577,7 +1577,7 @@ export function PolyforgePanel({
                 // The running count rides the existing status snapshot (no
                 // timer of its own): queue.running for Jobs, tasks.running
                 // for Tasks; 0 stays visible but greyed; no snapshot (daemon
-                // down) shows no badge at all. 工单列表 shows
+                // down) shows no badge at all. 全部 (the work-item list) shows
                 // the last list read's running count, absent before the first.
                 // 待集成 shows no badge.
                 const count = tab === "items" ? workItemsRunning
@@ -1591,9 +1591,12 @@ export function PolyforgePanel({
                     aria-label={isMobile ? label : undefined}
                     title={isMobile ? label : undefined}
                     style={{
-                      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: isMobile ? 0 : 2,
+                      // polyforge#22 AC1: on desktop the badge rides right of the
+                      // label on one line (nowrap keeps "label + two digits"
+                      // inside the 72px rail); ≤640px keeps the icon-over-badge stack.
+                      display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: "center", justifyContent: "center", gap: isMobile ? 0 : 2,
                       flex: "0 0 auto", minWidth: 0,
-                      ...(isMobile ? { width: "100%", height: 40, padding: 0 } : { padding: "10px 4px" }),
+                      ...(isMobile ? { width: "100%", height: 40, padding: 0 } : { padding: "10px 4px", flexWrap: "nowrap", whiteSpace: "nowrap" }),
                       background: active ? "var(--bg-selected)" : "none", border: "none",
                       borderRight: active ? "2px solid var(--accent)" : "2px solid transparent",
                       color: active ? "var(--text)" : "var(--text-muted)", cursor: "pointer", fontSize: 12,

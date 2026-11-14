@@ -223,8 +223,8 @@ const taskLists = () => calls().filter((a) => a[0] === "task" && a[1] === "list"
 const failures = [];
 const check = createCheck({ failures, message: (error) => String(error?.message ?? error), pass: blockPass, fail: blockFail });
 const RE_MEMORY = /记忆|memory/i, RE_MESSAGES = /消息|messages/i, RE_WORK = /工单|work/i, RE_JOBS = /作业|jobs/i, RE_TASKS = /任务|tasks/i;
-// Work's third sub-tab, 工单列表 (subTab only; RE_WORK stays top-level).
-const RE_ITEMS = /工单列表|work items/i;
+// Work's third sub-tab, 全部 (工单列表 before polyforge#22; subTab only; RE_WORK stays top-level).
+const RE_ITEMS = /全部|all/i;
 let base;
 const h = createHarness({
   locale: "zh-CN",
@@ -299,7 +299,7 @@ async function assertTaskListReads(page, expected, message) {
 }
 const isActive = async (locator) => (await locator.getAttribute("aria-selected")) === "true";
 // (intentional 2026-10-31 third-segment change): the rail/bar is
-// the union of all three sub-tab segments, 作业 / 任务 / 工单列表.
+// the union of all three sub-tab segments, 作业 / 任务 / 全部.
 async function railBox(page) {
   const boxes = [await subTab(page, RE_JOBS).boundingBox(), await subTab(page, RE_TASKS).boundingBox(), await subTab(page, RE_ITEMS).boundingBox()];
   if (boxes.some((box) => !box)) return null;

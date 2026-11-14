@@ -17,7 +17,7 @@
 // extends it with the stacked Work layout (S419-*): the top
 // part keeps the row (the list left, the sub-tab rail right), the selected
 // item's detail below spans the whole panel width — S419-1 for Jobs, S419-2
-// for Tasks and 工单列表 (their reads mocked in the browser). The suite already carries
+// for Tasks and 全部 (the work-item list, 工单列表 before polyforge#22; reads mocked in the browser). The suite already carries
 // components/PolyforgePanel* and is inside the light tier's #485 selection, so
 // the scenarios add no declaring suite to a capped path.
 import assert from "node:assert/strict";
@@ -314,7 +314,7 @@ async function settledLayout(page, measure, what) {
   }, `${what} settles`, 20_000);
 }
 const RAIL = '[data-pf-tabstrip="work"]';
-// S419-2's Tasks and 工单列表 reads, served in the browser in the routes'
+// S419-2's Tasks and 全部 reads, served in the browser in the routes'
 // documented wire shapes (the stub pf lists no task and no work item).
 const TASKS_419 = ["1", "2", "3"].map((n) => ({ id: `task_00000000000419${n}0`, project: "workbench", state: "completed",
   prompt_summary: `E2E-419 task row ${n}`, ended_at: EPOCH, wall_consumed_ns: 60e9, report_tail: "", reporter: "alice" }));
@@ -881,7 +881,7 @@ try {
     });
   });
 
-  // S419-2 (owner-confirmed 2026-11-09): Tasks and 工单列表 follow
+  // S419-2 (owner-confirmed 2026-11-09): Tasks and 全部 follow
   // the same two parts. The top part is the row — the list with its filters
   // and search on the left, the rail on the right — and a selected task's
   // report or work item's detail shows below across the whole panel width;
@@ -897,7 +897,7 @@ try {
       await rail.evaluate((el) => { for (const node of [el, el.previousElementSibling, el.parentElement]) node.__pf419 = "kept"; });
       const panelBottom = async () => { const box = await workBoxes(page, {}); return box.panel.y + box.panel.height; };
       for (const [tab, rowSel, text, back] of [["Tasks", "button[data-pf-task]", "E2E-419 TASK DETAIL", "Back"],
-        ["Work items", "button[data-pf-work-item]", "E2E-419 ITEM DETAIL", "Back"]]) {
+        ["All", "button[data-pf-work-item]", "E2E-419 ITEM DETAIL", "Back"]]) {
         const what = `${label} ${tab}`;
         // The desktop tab's name also carries its running badge: match the label's start.
         await rail.getByRole("tab", { name: new RegExp(`^${tab}`) }).click();
