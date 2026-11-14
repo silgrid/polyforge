@@ -62,6 +62,11 @@ const WIP24B = "wi_E2Eeeee0006"; const SLUGP24B = "pi#240";
 // detail's one scroll region is tall enough to park a reader mid-progress; a
 // later appended intent line proves the latest click restored the follow.
 const WIP31 = "wi_E2Eeeee0007"; const SLUG31 = "polyforge#31";
+// polyforge#2 r2#1 (owner ruling 2026-11-14) — one RUNNING ticket whose single
+// pi tool call has no result yet: the expanded card's detail read is the
+// unit under test (at most one read in flight per card, an answer older
+// than the displayed one dropped).
+const WIP2R3 = "wi_E2Eeeee0008"; const SLUG2R3 = "polyforge#2";
 const MODEL112 = "example-gateway/model-a-extended-thinking-very-long-e2e-suffix-abcdef0123456789abcdef0123456789";
 const SHORT_MODEL112 = "pi:glm-5.3-short";
 const FROM112 = "pi:glm-e2e-old-777";
@@ -91,6 +96,7 @@ const JOBS = [
   job(WIP24A, SLUGP24A, "completed", 2, 90, 80, "pi:glm-e2e", "u_e2e"),
   job(WIP24B, SLUGP24B, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
   job(WIP31, SLUG31, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
+  job(WIP2R3, SLUG2R3, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
 ];
 // owner-intended change: the selected job's progress read looks the wi up in the daemon's own job
 // record; a throwaway data root lists every fixture job (no capsule → 200 `available:false`), as a real
@@ -219,6 +225,27 @@ writeFileSync(join(dataRoot, "events", `wi-${WIP24A}.jsonl`), EVENTS_P24A.map((e
 // P24B is deliberately NOT in the job index (runtime-state below): only its
 // event log answers, terminal line only.
 writeFileSync(join(dataRoot, "events", `wi-${WIP24B}.jsonl`), [{ at: at3(9), kind: "terminal", work_item: WIP24B, body: { status: "completed" }, seq: 9 }].map((event) => JSON.stringify(event)).join("\n") + "\n");
+// ── polyforge#2 r2#1 fixture: the running job's capsule — one pi spawn of
+// step "build" whose transcript holds a toolCall with no result (the
+// running card P2R3A/P2R3B expand). The detail route is intercepted per
+// scenario; the progress route reads these real files.
+const capsule2R3 = join(work, "capsules", WIP2R3);
+mkdirSync(join(capsule2R3, "runtime-state"), { recursive: true });
+mkdirSync(join(capsule2R3, "session"), { recursive: true });
+const p2r3Transcript = join(capsule2R3, "session", "build.jsonl");
+writeFileSync(p2r3Transcript, [
+  { type: "session", id: "s-2r3", timestamp: at3(1) },
+  { type: "message", id: "n-2r3", parentId: null, timestamp: at3(2), message: { role: "assistant", content: [{ type: "text", text: "E2E-P2R3-NARRATION" }] } },
+  { type: "message", id: "tc-2r3", parentId: null, timestamp: at3(3), message: { role: "assistant", content: [{ type: "toolCall", id: "k-2r3", name: "bash", arguments: { command: "npm test" } }] } },
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+writeFileSync(join(capsule2R3, "runtime-state", "spawn-journal.jsonl"), [
+  { at: at3(1), work_item: WIP2R3, step_id: "build", spawn_n: 1, started_at: at3(1), transcript: p2r3Transcript, harness: "pi" },
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+const EVENTS_2R3 = [{ at: at3(1), kind: "step_started", work_item: WIP2R3, body: { step: "build", model: "pi:glm-e2e", spawn_n: 1 }, seq: 1 }];
+writeFileSync(join(dataRoot, "events", `wi-${WIP2R3}.jsonl`), EVENTS_2R3.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_2R3 = { work_item: WIP2R3, slug: SLUG2R3, known: true, job: { status: "running" },
+  execution: { workflow_status: "running", current_step: "build", updated_at: at3(3), steps: { build: { status: "in_progress", started_at: at3(1) }, review: { status: "pending" } }, declared_steps: [{ id: "build" }, { id: "review" }] },
+  events: EVENTS_2R3, last_seq: 1 };
 const WATCH_P24A = { work_item: WIP24A, slug: SLUGP24A, known: true, job: { status: "completed" },
   execution: { workflow_status: "completed", updated_at: at3(9), steps: {
     grill: { status: "done", started_at: "2026-10-18T12:00:00Z" },
@@ -249,9 +276,10 @@ const WATCH_P31 = { work_item: WIP31, slug: SLUG31, known: true, job: { status: 
 const WATCH_TABLE = (watch112 = WATCH_112) => ({ "pi#108": WATCH_108, wi_E2Eaaaa0001: WATCH_108,
   "pi#109": WATCH_109, wi_E2Ecccc0003: WATCH_109, [SLUG112]: watch112, [WI112]: watch112,
   [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B,
-  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31 });
+  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31, [SLUG2R3]: WATCH_2R3, [WIP2R3]: WATCH_2R3 });
 writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.filter((j) => j.work_item_id !== WIP24B).map((j) => j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 }
-  : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A } : { work_item_id: j.work_item_id }) }));
+  : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A }
+  : j.work_item_id === WIP2R3 ? { work_item_id: WIP2R3, capsule_dir: capsule2R3 } : { work_item_id: j.work_item_id }) }));
 const stubDir = join(work, "stub-bin");
 mkdirSync(stubDir);
 const stateFile = join(stubDir, "state.json");
@@ -317,6 +345,8 @@ const T = {
   P24B: "P24B: A dropped ended ticket still defaults to its last-run step (AC2)",
   P24C: "P24C: Selection follows the current step until a manual choice persists (AC3)",
   P31A: "P31A: Mid-progress both centered jump buttons show; up reaches the top, latest the bottom and restores the follow (AC1 AC2 AC4)",
+  P2R3A: "P2R3A: while a card's detail read is in flight the poll sends no second one; the read cycle settles without a Loading flash",
+  P2R3B: "P2R3B: an answer older than the displayed one is dropped — the first read returns after the second and never overwrites",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1190,6 +1220,80 @@ try {
   // already passes unknown kinds through raw) — existing behaviour, recorded
   // as already_satisfied. Its never-a-raw-polyforge.*-key half stays guarded
   // by the AC10 locale checks, which now also cover the pi#112 kinds.
+  // P2R3A — polyforge#2 r2#1 (owner ruling 2026-11-14): at most one detail
+  // read per card is in flight — while a re-read is held unanswered, the
+  // 2 s poll skips instead of piling reads — and the read cycle settles
+  // from the held answer (the interim progress lines, then the final result)
+  // without a Loading flash.
+  await checkPage(T.P2R3A, "one in-flight read per card while polling", {}, async (page) => {
+    const reads = [];
+    await page.route((url) => url.pathname === "/api/polyforge/progress/tool", async (route) => {
+      reads.push(route);
+    });
+    const progressPolls = [];
+    page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/polyforge/progress") progressPolls.push(Date.now()); });
+    const panel = await ensureDetail24(page, SLUG2R3, WIP2R3);
+    const card = panel.locator('[data-pf-progress-kind="tool"]');
+    await pollUntil(async () => (await card.count()) === 1, "the running call's tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 1, "the expansion reads the detail once");
+    // the first read answers with the step's interim progress lines
+    await reads[0].fulfill({ status: 200, json: { available: true, hasResult: false, progress: ["verify.py: [1/2] lint (fast): npm run lint"],
+      tool: { name: "bash", argument: "npm test", status: "running", input: "npm test", output: null, isError: false } } });
+    await pollUntil(async () => (await card.innerText()).includes("npm run lint"), "the held answer's progress lines render — no Loading flash between reads");
+    // the next poll re-reads the resultless card; that read is held
+    await pollUntil(() => reads.length === 2, "the poll re-reads the resultless card");
+    const pollsAtSecond = progressPolls.length;
+    await pollUntil(() => progressPolls.length - pollsAtSecond >= 3, "three more progress polls pass while the re-read is in flight", 30_000);
+    assert.equal(reads.length, 2, `one in-flight read per card: the polls skip while a read is pending (${reads.length} reads)`);
+    await reads[1].fulfill({ status: 200, json: { available: true, hasResult: true,
+      tool: { name: "bash", argument: "npm test", status: "ok", durationMs: 3000, input: "npm test", output: "E2E-P2R3-FINAL", isError: false } } });
+    await pollUntil(async () => (await card.innerText()).includes("E2E-P2R3-FINAL"), "the final result renders");
+    assert.ok(!(await card.innerText()).includes("npm run lint"), "the interim lines leave with the final result");
+  });
+
+  // P2R3B — polyforge#2 r2#1 (owner ruling 2026-11-14): an answer older
+  // than the displayed one is dropped. The first read is held; the DAG's
+  // step selection switches away and back (the reset clears the in-flight
+  // mark without unmounting, so the card reads again and the first read's
+  // closure is still live), the new read answers first with the final
+  // result — then the held, older answer arrives late and must not
+  // overwrite it.
+  await checkPage(T.P2R3B, "a stale answer never overwrites the newer result", {}, async (page) => {
+    const reads = [];
+    await page.route((url) => url.pathname === "/api/polyforge/progress/tool", async (route) => {
+      reads.push(route);
+    });
+    const progressPolls = [];
+    page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/polyforge/progress") progressPolls.push(Date.now()); });
+    const panel = await ensureDetail24(page, SLUG2R3, WIP2R3);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    const card = panel.locator('[data-pf-progress-kind="tool"]');
+    await pollUntil(async () => (await card.count()) === 1, "the running call's tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 1, "the expansion's read is captured — held unanswered");
+    // switching the DAG step resets the detail's state while it stays
+    // mounted: the in-flight mark clears, the card folds away; switching
+    // back re-renders it collapsed — expanding reads anew
+    await node("review").click();
+    await pollUntil(async () => (await card.count()) === 0, "the unselected step's record leaves");
+    await node("build").click();
+    await pollUntil(async () => (await card.count()) === 1, "the switched-back step's tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 2, "the re-expanded card reads again (the step switch cleared the in-flight mark)");
+    await reads[1].fulfill({ status: 200, json: { available: true, hasResult: true,
+      tool: { name: "bash", argument: "npm test", status: "ok", durationMs: 3000, input: "npm test", output: "E2E-P2R3-FINAL", isError: false } } });
+    await pollUntil(async () => (await card.innerText()).includes("E2E-P2R3-FINAL"), "the newer read's final result renders");
+    // the first, older read answers late with a resultless state — dropped
+    await reads[0].fulfill({ status: 200, json: { available: true, hasResult: false, progress: ["verify.py: [1/2] lint (fast): E2E-P2R3-STALE"],
+      tool: { name: "bash", argument: "npm test", status: "running", input: "npm test", output: null, isError: false } } });
+    const pollsBeforeStale = progressPolls.length;
+    await pollUntil(() => progressPolls.length - pollsBeforeStale >= 2, "two poll cycles pass after the older answer arrived", 30_000);
+    const text = (await card.innerText()).replace(/\s+/g, " ").trim();
+    assert.ok(text.includes("E2E-P2R3-FINAL"), `the final result stays (${text})`);
+    assert.ok(!text.includes("E2E-P2R3-STALE"), "the older answer never reaches the card");
+  });
+
   await check(T.AC3, "pf present: no 5xx or console errors", async () => assert.deepEqual(errors.splice(0), []));
   await h.stop();
   await check(T.AC8, "no env value in server logs", async () => {
