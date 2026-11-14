@@ -155,7 +155,10 @@ registers an incompatible change and `ContractVersion` is still the
 previous release's, it refuses and names the bump to make; a bump releases
 only by one and with the list emptied; an empty list needs no bump and no
 drain ([workflow contract](workflow-contract.md), "Versions and the
-drain"). There is one
+drain"). A previous release whose tree carries no workflow contract (no
+`internal/common/workflow/contract.go`, or one without a `ContractVersion`
+line) makes the release the first with one: it must declare
+`ContractVersion` 1 with an empty list, else it refuses. There is one
 binary, `pf`: the server runs as `pf aihub`, the work machine as the CLI
 plus `pf daemon`. The same tag is the same build for both roles, but
 promoting the server and upgrading work machines stay separate, manual
