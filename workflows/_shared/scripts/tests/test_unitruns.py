@@ -7,6 +7,7 @@ with its elapsed time — is the sample that must not match.
 
 import json
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -70,7 +71,7 @@ class CleanCwdTest(unittest.TestCase):
 class ReadUnitRunsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.mkdtemp(prefix="pfstep-ur-")
-        self.addCleanup(lambda: os.rmdir(self.tmp))
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, True))
 
     def path(self, name: str, doc: object) -> str:
         p = os.path.join(self.tmp, name)
