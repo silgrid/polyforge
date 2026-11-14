@@ -1,4 +1,4 @@
-// carries: components/PolyforgePanel*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*
+// carries: components/PolyforgePanel*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*, components/PolyforgeStepControls*, app/api/polyforge/override/*, lib/polyforge-overrides*
 // carries: components/AppShell*, app/api/polyforge/polyforge-routes*, app/api/polyforge/polyforge-status-route*, lib/i18n/*, docs/agents/polyforge-panel.md
 // pi#108 (wi_y3y9SMz4IXKg) — Polyforge dock panel: end-to-end acceptance pass.
 //
@@ -1189,6 +1189,11 @@ try {
     await pollUntil(async () => (await controls.locator("[data-pf-step-controls-error]").innerText()).includes("DAEMON-409"),
       "the refusal's typed words show inline");
     assert.ok((await controls.locator("[data-pf-step-controls-error]").innerText()).includes("live dispatch"), "the daemon's detail shows verbatim");
+    // the browser logs this scenario's own refused write as a network console
+    // entry (a 409 the assertion above demanded) — it leaves the collection
+    // here, so the run's no-console check stays about errors nobody planned
+    const entry = errors.findIndex((line) => line.includes("409"));
+    if (entry >= 0) errors.splice(entry, 1);
     setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
   });
 
