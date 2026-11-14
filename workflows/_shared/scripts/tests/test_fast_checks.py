@@ -97,7 +97,7 @@ class RootReportTest(FastChecksCase):
         clone = self.go_repo()
         code, res = self.run_checks("app")
         self.assertEqual(code, 0, res)
-        self.assertEqual(schema_errors(res, SCHEMA), [])
+        self.assertEqual(schema_errors(SCHEMA, res), [])
         self.assertEqual(res["heads"], {"app": git(clone, "rev-parse", "HEAD")})
         cmds = self.commands_of(res)
         self.assertEqual([c["name"] for c in cmds], ["fast-1", "fast-2", "scoped-1"])
