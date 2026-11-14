@@ -1243,6 +1243,58 @@ func TestReleaseScriptVerifyPROnly(t *testing.T) {
 	}
 }
 
+// ---- named commits for one release (RELEASE_ALLOW_COMMITS)
+
+// TestReleaseScriptAllowsNamedCommitsForOneRun: a first-parent commit
+// without a merged PR passes the PR-only check when this run names its full
+// id in RELEASE_ALLOW_COMMITS, with an audit line and a "PR-only
+// exceptions" section in the release notes; every other commit is still
+// checked. The list fails closed: a short id refuses before any work, and an
+// id that is no first-parent commit of the range refuses too.
+func TestReleaseScriptAllowsNamedCommitsForOneRun(t *testing.T) {
+	t.Run("a named direct commit releases, audited and recorded", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		bad := w.commitOnMain("direct", "direct push")
+		w.landPR("later", "a later PR")
+		out, err := w.run([]string{"RELEASE_ALLOW_COMMITS=" + bad})
+		if err != nil || !strings.Contains(out, "version=v1.2.1") {
+			t.Fatalf("a named commit must let the release through: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "PASS pr-only: allowed: "+bad+" (RELEASE_ALLOW_COMMITS)") {
+			t.Errorf("no audit line for the named commit\n%s", out)
+		}
+		body, rerr := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
+		if rerr != nil || !strings.Contains(string(body), "## PR-only exceptions") || !strings.Contains(string(body), "- "+bad+" direct push") {
+			t.Fatalf("the release notes must record the named commit: %v\n%s", rerr, body)
+		}
+	})
+	t.Run("another unnamed direct commit still refuses", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		named := w.commitOnMain("direct", "direct push")
+		other := w.commitOnMain("other", "another direct push")
+		out, err := w.run([]string{"RELEASE_ALLOW_COMMITS=" + named})
+		if err == nil || !strings.Contains(out, "without a merged PR") || !strings.Contains(out, other) || w.originTags() != "v1.2.0" {
+			t.Fatalf("the unnamed commit must still refuse: %v\n%s", err, out)
+		}
+	})
+	t.Run("a short id refuses before any work", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		bad := w.commitOnMain("direct", "direct push")
+		out, err := w.run([]string{"RELEASE_ALLOW_COMMITS=" + bad[:12]})
+		if err == nil || !strings.Contains(out, "is not a full commit id") || len(w.calls()) != 0 {
+			t.Fatalf("a short id must refuse before any work: %v %v\n%s", err, w.calls(), out)
+		}
+	})
+	t.Run("an id outside the range refuses", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		before := relGit(t, w.work, "rev-parse", "v1.2.0^{commit}")
+		out, err := w.run([]string{"RELEASE_ALLOW_COMMITS=" + before})
+		if err == nil || !strings.Contains(out, "no first-parent commit of") || !strings.Contains(out, before) || w.originTags() != "v1.2.0" {
+			t.Fatalf("a named commit outside the range must refuse: %v\n%s", err, out)
+		}
+	})
+}
+
 // ---- owner-direct allowlist (polyforge#240)
 
 const (
