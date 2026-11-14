@@ -1,6 +1,6 @@
 package test
 
-// carries: workflows/_shared/test_quality.md, workflows/_shared/steps/review.md, workflows/develop/steps/build.md, workflows/micro/steps/fix.md, workflows/develop/README.md, workflows/micro/README.md, docs/design/polyforge-vnext/reference.md
+// carries: workflows/_shared/test_quality.md, workflows/_shared/steps/review.md, workflows/develop/steps/build.md, workflows/micro/steps/fix.md, workflows/develop/README.md, workflows/micro/README.md, workflows/develop/fragments/review-judge.md, docs/concepts.md, docs/contributing.md, docs/design/polyforge-vnext/reference.md
 
 // test_quality_fragment_contract_test.go: text contract for the shared
 // test-quality bar (polyforge#28; adapted from spec-superflow's
@@ -140,5 +140,38 @@ func TestBuildPlanUnitsCarryTheTestQualityRecord(t *testing.T) {
 	frag := testQualityFlat(testQualityFragment(t))
 	if !strings.Contains(frag, "Every unit of the plan carries the three statements above as its test-quality record, in its `## Units` entry") {
 		t.Error("the test_quality fragment no longer names the per-unit record duty")
+	}
+}
+
+func TestReviewBlocksOnTestQualityViolations(t *testing.T) {
+	// the shared review's test_weakened class names the missing or
+	// contradicted record (polyforge#28: review reads the same bar)
+	review := w68Flat(t, "workflows/_shared/steps/review.md")
+	if !strings.Contains(review, "a unit that misses or contradicts its test-quality record") {
+		t.Error("the shared review's test_weakened class must name the missing-or-contradicted test-quality record")
+	}
+	// the develop judgment carries the three blocking conditions against
+	// the same fragment: no record, text existence only, a red that is
+	// not the recorded one
+	judge := w68Flat(t, "workflows/develop/fragments/review-judge.md")
+	for _, want := range []string{
+		"the shared test-quality bar (`workflows/_shared/test_quality.md`, included in this step's definition)",
+		"blocking `test_weakened` too — a unit whose plan entry carries no test-quality record",
+		"a test that only asserts that some source text exists (unless the acceptance is itself that text or document)",
+		"a unit whose replayed red fails for another reason than its record states",
+	} {
+		if !strings.Contains(judge, want) {
+			t.Errorf("the develop review's judgment must state %q", want)
+		}
+	}
+	// the documents that describe review's blocking classes say it too
+	for rel, want := range map[string]string{
+		"docs/concepts.md":            "and so are a unit without its test-quality record",
+		"docs/contributing.md":        "a unit without its test-quality record or whose replayed red contradicts the recorded reason",
+		"workflows/develop/README.md": "A unit that misses its test-quality record",
+	} {
+		if !strings.Contains(w68Flat(t, rel), want) {
+			t.Errorf("%s must state %q", rel, want)
+		}
 	}
 }
