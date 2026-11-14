@@ -290,7 +290,7 @@ try {
       assert.ok(Math.abs(railBox.width - 40) <= 4, `the rail is about 40px wide (${railBox.width})`);
       assert.ok(railBox.x >= jobs.main.x + jobs.main.width - 2, `the rail sits right of the main area (rail ${railBox.x}, main end ${jobs.main.x + jobs.main.width})`);
       const buttons = rail.getByRole("tab");
-      // intentional fourth sub-tab: 待集成 joins the Work rail after 工单列表.
+      // intentional fourth sub-tab: 待集成 joins the Work rail after 全部 (工单列表 before polyforge#22).
       assert.equal(await buttons.count(), 4, "four sub-tab buttons");
       mobileButtons = [];
       for (let i = 0; i < 4; i++) {
@@ -341,7 +341,7 @@ try {
     const buttons = rail.getByRole("tab");
     // intentional fourth sub-tab: 待集成 joins the Work rail after 工单列表.
     assert.equal(await buttons.count(), 4, "four sub-tab buttons");
-    const names = ["作业", "任务", "工单列表", "待集成"];
+    const names = ["作业", "任务", "全部", "待集成"];
     for (let i = 0; i < 4; i++) {
       const button = buttons.nth(i);
       assert.equal(await button.getAttribute("aria-label"), names[i], `button ${i} has the existing tab copy as aria-label`);

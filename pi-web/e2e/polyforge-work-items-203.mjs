@@ -1,5 +1,5 @@
 // carries: components/PolyforgeWorkItems*, components/PolyforgeSearchBar*, lib/polyforge-work-items*, app/api/polyforge/work-items/*, app/api/polyforge/polyforge-work-items-routes*
-// — the Work panel's third, read-only 工单列表 sub-tab.
+// — the Work panel's third, read-only 全部 sub-tab.
 //
 // Authored pre-code against artifacts/spec.md (Requirements 1–11) and
 // artifacts/plan.md; Requirement 12 (real-data reconciliation) is carried by
@@ -149,7 +149,7 @@ const json = (text) => { try { return JSON.parse(text); } catch { return undefin
 // ---- scenario bookkeeping and page helpers ----
 const failures = [];
 const check = createCheck({ failures });
-const RE_WORK = /工单|工單|work/i, RE_TASKS = /任务|任務|tasks/i, RE_ITEMS = /工单列表|工單列表|work items/i, RE_MEMORY = /记忆|記憶|memory/i;
+const RE_WORK = /工单|工單|work/i, RE_TASKS = /任务|任務|tasks/i, RE_ITEMS = /全部|all/i, RE_MEMORY = /记忆|記憶|memory/i;
 const BARRIER = "/__e2e_request_barrier";
 let base;
 const topTab = (page, re) => dock(page).locator('[data-pf-tabstrip="top"] [role="tab"]').filter({ hasText: re }).first();
@@ -283,13 +283,13 @@ try {
     seed();
     await withPage({}, async (page) => {
       const panel = await openItems(page);
-      // intentional fourth sub-tab: 待集成 joins the Work rail after 工单列表.
-      assert.deepEqual((await segments(page).allInnerTexts()).map((t) => t.trim().split(/\s/)[0]), ["作业", "任务", "工单列表", "待集成"], "the Work strip lists 作业, 任务, 工单列表, 待集成 in order");
+      // intentional fourth sub-tab: 待集成 joins the Work rail after 全部.
+      assert.deepEqual((await segments(page).allInnerTexts()).map((t) => t.trim().split(/\s/)[0]), ["作业", "任务", "全部", "待集成"], "the Work strip lists 作业, 任务, 全部, 待集成 in order");
       // The work-items route answers its first read cold in this page.
       await row(panel, "GOAL-B is running now").waitFor({ timeout: COLD_MS });
-      assert.equal(await segment(page, RE_TASKS).getAttribute("aria-selected"), "false", "selecting 工单列表 deselects 任务");
+      assert.equal(await segment(page, RE_TASKS).getAttribute("aria-selected"), "false", "selecting 全部 deselects 任务");
     });
-    for (const [locale, label] of [["en", "Work items"], ["zh-TW", "工單列表"]]) {
+    for (const [locale, label] of [["en", "All"], ["zh-TW", "全部"]]) {
       await withPage({ locale, storage: { "pi-locale": locale } }, async (page) => {
         await openWork(page);
         // The label line is read once it has rendered (bounded); the assertion below is unchanged.
@@ -303,12 +303,12 @@ try {
     // the main area), each button named by its tab copy (aria-label/title).
     await withPage({ viewport: { width: 600, height: 900 } }, async (page) => {
       const panel = await openWork(page);
-      // intentional fourth sub-tab: 待集成 joins the Work rail after 工单列表.
+      // intentional fourth sub-tab: 待集成 joins the Work rail after 全部.
       assert.equal(await segments(page).count(), 4, "at ≤640px the Work rail carries four buttons");
       const strip = dock(page).locator('[data-pf-tabstrip="work"]');
       assert.equal(await strip.getAttribute("aria-orientation"), "vertical", "the mobile rail is vertical, not a horizontal bar");
       const names = await segments(page).evaluateAll((nodes) => nodes.map((node) => [node.getAttribute("aria-label"), node.getAttribute("title")]));
-      assert.deepEqual(names, [["作业", "作业"], ["任务", "任务"], ["工单列表", "工单列表"], ["待集成", "待集成"]], "the four rail buttons are named 作业, 任务, 工单列表, 待集成 in order");
+      assert.deepEqual(names, [["作业", "作业"], ["任务", "任务"], ["全部", "全部"], ["待集成", "待集成"]], "the four rail buttons are named 作业, 任务, 全部, 待集成 in order");
       // Geometry is read once the rail is laid out (a bounded condition wait):
       // a read racing layout under host load sees 0-size boxes.
       await waitFor(async () => (await strip.getAttribute("aria-orientation")) === "vertical"
@@ -318,13 +318,13 @@ try {
         const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, right: rect.right };
       }));
       assert.ok(boxes.every((box) => Math.abs(box.x - boxes[0].x) < 2), `the rail buttons form one vertical rail (${JSON.stringify(boxes)})`);
-      assert.ok(boxes[0].y < boxes[1].y && boxes[1].y < boxes[2].y && boxes[2].y < boxes[3].y, `the rail stacks 作业, 任务, 工单列表, 待集成 top to bottom (${JSON.stringify(boxes)})`);
+      assert.ok(boxes[0].y < boxes[1].y && boxes[1].y < boxes[2].y && boxes[2].y < boxes[3].y, `the rail stacks 作业, 任务, 全部, 待集成 top to bottom (${JSON.stringify(boxes)})`);
       assert.ok(boxes.every((box) => box.width > 0 && box.height > 0), "all four buttons are rendered controls");
       const before = listRequests(page);
       const items = strip.getByRole("tab", { name: RE_ITEMS }).first();
       await items.click();
       await waitFor(() => listRequests(page) > before, "the mobile third rail button is selectable", NAV_MS);
-      assert.equal(await items.getAttribute("aria-selected"), "true", "the mobile 工单列表 button is selected");
+      assert.equal(await items.getAttribute("aria-selected"), "true", "the mobile 全部 button is selected");
       await row(panel, "GOAL-B is running now").waitFor({ timeout: NAV_MS });
       const goal = await row(panel, "GOAL-B is running now").boundingBox();
       assert.ok(goal && goal.x + goal.width <= boxes[0].x + 2, `the rail sits right of the main work area (goal end ${goal ? goal.x + goal.width : null}, rail x ${boxes[0].x})`);
@@ -582,7 +582,7 @@ try {
 
   await check("S203-13", async () => {
     seed();
-    // the 工单列表 and Memory search bars are one shared shape.
+    // the 全部 and Memory search bars are one shared shape.
     // The numeric thresholds are the memo's row-6 oracle; on the pre-#258 tree
     // there is no data-pf-searchbar marker and these checks are red.
     for (const viewport of [{ width: 1280, height: 800 }, { width: 375, height: 800 }, { width: 600, height: 900 }]) {
@@ -590,7 +590,7 @@ try {
         const panel = await openItems(page);
         await row(panel, "GOAL-B is running now").waitFor({ timeout: 20_000 });
         const itemsBars = page.locator('[data-pf-searchbar]');
-        assert.equal(await itemsBars.count(), 1, `工单列表 carries exactly one data-pf-searchbar at ${viewport.width}px`);
+        assert.equal(await itemsBars.count(), 1, `全部 carries exactly one data-pf-searchbar at ${viewport.width}px`);
         const items = await barShape(itemsBars.first());
         const memoryBar = await openMemory(page);
         assert.equal(await page.locator('[data-pf-searchbar]').count(), 1, `Memory carries exactly one data-pf-searchbar at ${viewport.width}px`);
@@ -599,7 +599,7 @@ try {
           assert.deepEqual(
             { height: memory[key].height, borderRadius: memory[key].borderRadius, borderWidth: memory[key].borderWidth, fontSize: memory[key].fontSize },
             { height: items[key].height, borderRadius: items[key].borderRadius, borderWidth: items[key].borderWidth, fontSize: items[key].fontSize },
-            `${key} geometry matches between 工单列表 and Memory at ${viewport.width}px`,
+            `${key} geometry matches between 全部 and Memory at ${viewport.width}px`,
           );
         }
         assert.equal(memory.selects.length, items.selects.length, "both search bars render the same number of selects");
@@ -608,7 +608,7 @@ try {
           assert.deepEqual(pick(memory.selects[index]), pick(items.selects[index]), `select ${index} geometry matches at ${viewport.width}px`);
         }
         if (viewport.width <= 640) {
-          for (const [name, shape] of [["工单列表", items], ["Memory", memory]]) {
+          for (const [name, shape] of [["全部", items], ["Memory", memory]]) {
             assert.ok(shape.scrollWidth <= shape.clientWidth, `${name} search bar does not overflow at ${viewport.width}px (${shape.scrollWidth}/${shape.clientWidth})`);
             assert.ok(Math.abs(shape.input.top - shape.action.top) <= 2, `${name} input and action share row 1 at ${viewport.width}px (${shape.input.top}/${shape.action.top})`);
             assert.ok(shape.action.height >= 40, `${name} action is ≥40px high at ${viewport.width}px (${shape.action.height})`);
@@ -618,7 +618,7 @@ try {
             assert.ok(shape.filterRowCounts.every((count) => count <= 2), `${name} filter rows hold at most two controls at ${viewport.width}px (${JSON.stringify(shape.filterRowCounts)})`);
           }
         } else {
-          for (const [name, shape] of [["工单列表", items], ["Memory", memory]]) {
+          for (const [name, shape] of [["全部", items], ["Memory", memory]]) {
             assert.equal(shape.input.height, 26, `${name} desktop input is 26px high (${shape.input.height})`);
             assert.equal(shape.action.height, 26, `${name} desktop action is 26px high (${shape.action.height})`);
             assert.equal(shape.input.borderWidth, "1px", `${name} desktop border is 1px`);
@@ -637,7 +637,7 @@ try {
       const panel = await openItems(page);
       await row(panel, "GOAL-B is running now").waitFor({ timeout: 20_000 });
       const refresh = page.locator('[data-pf-searchbar] [data-pf-searchbar-action]').first();
-      assert.equal(await refresh.count(), 1, "the 工单列表 search bar renders the shared ↻ action");
+      assert.equal(await refresh.count(), 1, "the 全部 search bar renders the shared ↻ action");
       const reads = listRequests(page); const spawns = queues().length;
       // Hold the answer so the in-flight busy state is observable, then let
       // the one read it represents land.

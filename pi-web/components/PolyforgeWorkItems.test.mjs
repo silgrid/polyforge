@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
 
-// source pins of the read-only Work › 工单列表 surface.
+// source pins of the read-only Work › 全部 (the work-item list) surface.
 const source = await readFile(new URL("./PolyforgeWorkItems.tsx", import.meta.url), "utf8");
 const jiti = createJiti(import.meta.url);
 const { getLocalePlugin } = await jiti.import("../lib/i18n/registry.ts");
@@ -101,9 +101,9 @@ test("every new string is translated in en, zh-CN and zh-TW, with the spec's pin
   for (const [id, messages] of Object.entries(locales)) {
     for (const key of keys) assert.ok(typeof messages[key] === "string" && messages[key] && messages[key] !== key, `${id} translates ${key}`);
   }
-  assert.equal(locales["zh-CN"]["polyforge.work.itemsTab"], "工单列表");
-  assert.equal(locales.en["polyforge.work.itemsTab"], "Work items");
-  assert.equal(locales["zh-TW"]["polyforge.work.itemsTab"], "工單列表");
+  assert.equal(locales["zh-CN"]["polyforge.work.itemsTab"], "全部");
+  assert.equal(locales.en["polyforge.work.itemsTab"], "All");
+  assert.equal(locales["zh-TW"]["polyforge.work.itemsTab"], "全部");
   assert.equal(locales["zh-CN"]["polyforge.workItems.capHint"], "仅显示最近 500 条");
   assert.equal(locales.en["polyforge.workItems.capHint"], "Showing only the latest 500");
   assert.equal(locales["zh-TW"]["polyforge.workItems.capHint"], "僅顯示最近 500 條");
@@ -113,6 +113,19 @@ test("every new string is translated in en, zh-CN and zh-TW, with the spec's pin
   assert.equal(locales["zh-CN"]["polyforge.workItems.filterAllStatuses"], "全部状态");
   assert.equal(locales["zh-CN"]["polyforge.workItems.filterAllProjects"], "全部项目");
   assert.equal(locales["zh-CN"]["polyforge.workItems.back"], "返回");
+});
+
+// polyforge#22 AC2: the third Work sub-tab's visible label is renamed —
+// 工单列表 is now 全部 in both Chinese locales and All in English; the
+// other copy (the badge's itemsRunning wording, the filters' 全部状态/全部项目)
+// is untouched and still reads apart from this tab label.
+test("the third Work sub-tab's label is 全部 in zh-CN/zh-TW and All in en (polyforge#22 AC2)", () => {
+  assert.equal(locales["zh-CN"]["polyforge.work.itemsTab"], "全部");
+  assert.equal(locales["zh-TW"]["polyforge.work.itemsTab"], "全部");
+  assert.equal(locales.en["polyforge.work.itemsTab"], "All");
+  // the rename changes no other copy: the badge wording keeps its own phrasing.
+  assert.equal(locales["zh-CN"]["polyforge.work.itemsRunning"], "{count} 个运行中的工单");
+  assert.equal(locales.en["polyforge.work.itemsRunning"], "{count} running work items");
 });
 
 // a row pf marks acceptance_missing (a queued execution ticket
