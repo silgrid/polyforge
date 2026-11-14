@@ -68,7 +68,9 @@ found it (publish lists it in the PR body).
   is missing or does not name the paths it exercises; a unit that misses or contradicts
   its test-quality record — the behaviour its test observes, why its red is expected, the
   change it catches — or a test that only asserts that some source text exists (the bar
-  below names the one exemption).
+  below names the one exemption); a test that asserts an asynchronously settling state on
+  one read right after the action instead of a bounded poll for it (the bar below, its
+  settle duty).
 - **`guarantee`** — a feature removed or a guarantee weakened without an owner ruling, a
   manual-gate bypass, a spec-forced invention, user-visible wording that contradicts the
   behaviour; a deviation from the ticket, or an acceptance list the build wrote itself,
