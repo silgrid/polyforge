@@ -175,3 +175,56 @@ func TestReviewBlocksOnTestQualityViolations(t *testing.T) {
 		}
 	}
 }
+
+// asyncSettleLines are the operative lines of the bar's settle duty
+// (polyforge#33): a state that settles asynchronously is asserted only
+// after a bounded poll reaches the expected state; one read right after
+// the action is a race and test_weakened; the fix is never a relaxed
+// assertion or an "at least". Each lives in the fragment and renders
+// exactly once in every step that includes it — a second copy written
+// into a step definition or a review fragment counts twice.
+var asyncSettleLines = []string{
+	"Three duties follow, for every test a step writes:",
+	"**Await the settled state before asserting it.**",
+	"A state that settles asynchronously — the effect of a UI action, a streamed update, a background task — is asserted only after a bounded poll has reached the expected state the test names.",
+	"Reading it once right after the action and asserting on that read is a race with the settling, and is `test_weakened`.",
+	"Such a test is fixed by polling, never by relaxing the assertion or weakening an exact expectation to \"at least\".",
+}
+
+func TestAsyncSettleDutyReachesItsSteps(t *testing.T) {
+	flat := testQualityFlat(testQualityFragment(t))
+	for _, line := range asyncSettleLines {
+		if !strings.Contains(flat, line) {
+			t.Errorf("the test_quality fragment lacks the settle duty's line %q", line)
+		}
+	}
+	renders := map[string]string{}
+	for _, bs := range [][2]string{{"develop", "build"}, {"micro", "fix"}} {
+		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bs[0]), bs[1], nil)
+		if err != nil {
+			t.Fatalf("render %s/%s: %v", bs[0], bs[1], err)
+		}
+		renders["workflows/"+bs[0]+"/steps/"+bs[1]+".md"] = string(out)
+	}
+	lane, errs := workflow.Load(filepath.Join(v1Root(t), "workflows", "develop"))
+	if len(errs) > 0 || lane == nil {
+		t.Fatalf("the develop lane does not load: %v", errs)
+	}
+	s := lane.Step("review")
+	if s == nil {
+		t.Fatal("the develop lane declares no review step")
+	}
+	out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", "develop"), "review", s.Vars)
+	if err != nil {
+		t.Fatalf("render review: %v", err)
+	}
+	renders["workflows/_shared/steps/review.md"] = string(out)
+	for rel, def := range renders {
+		f := testQualityFlat(def)
+		for _, line := range asyncSettleLines {
+			if n := strings.Count(f, line); n != 1 {
+				t.Errorf("%s renders the settle duty's line %q %d times, want exactly 1", rel, line, n)
+			}
+		}
+	}
+}
