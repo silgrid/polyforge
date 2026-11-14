@@ -35,8 +35,18 @@ def path(environ: Optional[Mapping[str, str]] = None) -> str:
 
 def append(line: str, environ: Optional[Mapping[str, str]] = None) -> None:
     """One progress line appended to the step's progress file. Best effort:
-    outside a step nothing is written, and a write that fails is dropped."""
-    return None
+    outside a step nothing is written, and a write that fails is dropped
+    (the stderr line is the progress record; this file only lets a reader
+    follow a command that has not ended)."""
+    p = path(environ)
+    if not p:
+        return
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 def emit(line: str, stream: IO[str], environ: Optional[Mapping[str, str]] = None) -> None:
