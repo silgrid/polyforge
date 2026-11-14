@@ -38,7 +38,8 @@ HTTP client, and daemon
 mediation does not loosen Core-side validation. If no intent fits or the
 intent is ambiguous, **ask rather than guess**.
 
-## Install surface
+When filing a second ticket in the same area, 同一区域（同一组文件或同一概念）, first check queued and running tickets. 约定：加先后依赖（`--after`），或合并成一张票；do not run parallel tickets against the same semantic surface.
+
 
 This skill is the **only** thing a user harness installs, and both
 harnesses REFERENCE the release checkout `tools/install.sh` keeps at
@@ -70,7 +71,7 @@ EXTENDED_GLOB and starts a comment after whitespace.
 
 | Intent (EN / 中文) | Fragment | Face |
 |---|---|---|
-| file a new work item / create a ticket / new task / 建票 / 新建任务 / 提个需求 | `verbs/file.md` (create; check `pf queue --project P` first and add `--after <execution ticket>` when it clearly touches the same work as a queued/running one) | AIHub |
+| file a new work item / create a ticket / new task / 建票 / 新建任务 / 提个需求 | `verbs/file.md` (create; check `pf queue --project P` first; when a second ticket is in the same area（同一组文件或同一概念）, add a dependency with `--after`, or merge them into one ticket) | AIHub |
 | run it after X / this waits for X / drop that dependency / who is it waiting for / 等 X 做完再做 / 加依赖 / 去掉依赖 / 它在等谁 | `verbs/file.md` (`dep add` / `dep rm` / `dep list`) | AIHub |
 | edit a work item / update goal or content / 改一下目标 / 编辑这个票 / 更新优先级 | `verbs/file.md` (edit) | AIHub |
 | show me this work item / 看看这个票 / 详情 | `verbs/file.md` (show) | AIHub |

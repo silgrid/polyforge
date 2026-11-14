@@ -97,6 +97,10 @@ class MergeRepo:
     branch_side: str = ""
     by_this_run: bool = False
     why: str = ""
+    # The default branch commit recorded by verification (before the branch
+    # was published).  ``base`` below is the branch name learned from the
+    # forge; keep the two facts separate.
+    verified_base: str = ""
     base: str = ""
     tip: str = ""
 
@@ -110,6 +114,14 @@ class MergeRepo:
         if self.why:
             d["why"] = self.why
         return d
+
+
+def default_branch_update_reason(verified_base: str, current_base: str) -> str:
+    """Return the merge failure reason when the verified default moved."""
+    if verified_base == current_base:
+        return ""
+    return ("the default branch moved since verification (verified %s, now %s); "
+            "sync, verify and publish again" % (gostr.short(verified_base), gostr.short(current_base)))
 
 
 class Details:
@@ -241,7 +253,10 @@ class Merge:
                             r.why = ("origin's %s is at %s, not the verified head %s — the PR moved since verification (publish"
                                      " pushed %s)" % (r.branch, gostr.short(r.tip), gostr.short(r.head), gostr.short(r.published)))
                         else:
-                            opened.append(r)
+                            current_base = g.rev(r.dir, "refs/remotes/origin/" + r.base)
+                            r.why = default_branch_update_reason(r.verified_base, current_base)
+                            if not r.why:
+                                opened.append(r)
             else:
                 r.why = "its PR %s is %s" % (r.pr_url, pr.state.lower())
             if r.why:
@@ -343,6 +358,15 @@ def run(inv: Invocation, a: argparse.Namespace, held: List[Details]) -> int:
     try:
         ver = read_json(a.verified)
         vheads = _field(ver, "heads", dict, a.verified) or {}
+        vrepos = _field(ver, "repos", list, a.verified) or []
+        vbases: Dict[str, str] = {}
+        for vrepo in vrepos:
+            if not isinstance(vrepo, dict):
+                raise GoError("%s is not the JSON expected: a repos entry is not an object" % a.verified)
+            name = vrepo.get("name")
+            base = vrepo.get("base")
+            if isinstance(name, str) and isinstance(base, str):
+                vbases[name] = base
         for v in vheads.values():
             if not isinstance(v, str):
                 raise GoError("%s is not the JSON expected: a head is not a string" % a.verified)
@@ -360,12 +384,17 @@ def run(inv: Invocation, a: argparse.Namespace, held: List[Details]) -> int:
             branch = branch[len("refs/heads/"):]
         r = MergeRepo(name=name, pr_url=gostr.trim_text(p.get("pr_url") or ""), branch=branch,
                       published=gostr.trim_text(p.get("head") or ""), head=vheads.get(name, ""),
+                      verified_base=vbases.get(name, ""),
                       dir=os.path.join(capsule, "repos", name))
+
         if r.pr_url == "" or r.branch == "" or r.published == "":
             return inv.usage("--publish %s: repos[%d] (%s) needs pr_url, branch and head (or a skipped_reason)" % (a.publish, i, name))
         if r.head == "":
             return inv.usage("--verified %s names no head for the published repo %s: the merge has nothing to match (the"
                              " verification must have run over it)" % (a.verified, name))
+        if r.verified_base == "":
+            return inv.usage("--verified %s names no verified default branch for the published repo %s: re-run verification" %
+                             (a.verified, name))
         if not os.path.isdir(r.dir):
             return inv.usage("repos/%s is not a task repo of the capsule %s" % (name, capsule))
         details.repos.append(r)
