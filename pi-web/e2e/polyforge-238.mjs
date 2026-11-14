@@ -65,25 +65,15 @@ const watchBase = (jobStatus, workflowStatus, steps, summary = {}) => ({ status:
   steps, declared_steps: STEPS.map((id) => ({ id })), events: [],
   ...summary,
 } });
-// a scenario may advance the watch mid-run (AC3: a manual DAG selection
-// must persist while the current step moves on)
-let uiWatchOverride = null;
-const watchUI = () => {
-  const base = watchBase(UI, "running", [
-    { name: "grill", status: "done", startedAt: uiAt(0) }, { name: "spec", status: "done", startedAt: uiAt(15) },
-    { name: "plan", status: "done", startedAt: uiAt(60) }, { name: "code", status: "in_progress", startedAt: uiAt(120) },
-    { name: "review", status: "pending" },
-  ], {
-    summary: "E2E-S238-SUMMARY", summary_age_sec: 3, summary_error: "E2E-S238-SUMMARY-ERROR", summary_capped: true,
-    progress: { command: "E2E-S238-COMMAND-ROW --token=SECRET", command_age_sec: 5, tool_calls: 2, recent_files: ["e2e/recent.ts"] },
-    origin: { kind: "chat", owner: "u_e2e238" },
-  });
-  if (uiWatchOverride) {
-    base.status.currentStep = uiWatchOverride.currentStep;
-    base.status.steps = base.status.steps.map((step) => uiWatchOverride.steps.find((override) => override.name === step.name) ?? step);
-  }
-  return base;
-};
+const watchUI = () => watchBase(UI, "running", [
+  { name: "grill", status: "done", startedAt: uiAt(0) }, { name: "spec", status: "done", startedAt: uiAt(15) },
+  { name: "plan", status: "done", startedAt: uiAt(60) }, { name: "code", status: "in_progress", startedAt: uiAt(120) },
+  { name: "review", status: "pending" },
+], {
+  summary: "E2E-S238-SUMMARY", summary_age_sec: 3, summary_error: "E2E-S238-SUMMARY-ERROR", summary_capped: true,
+  progress: { command: "E2E-S238-COMMAND-ROW --token=SECRET", command_age_sec: 5, tool_calls: 2, recent_files: ["e2e/recent.ts"] },
+  origin: { kind: "chat", owner: "u_e2e238" },
+});
 const watchDONE = () => watchBase(DONE, "completed", STEPS.map((id) => ({ name: id, status: "done", startedAt: uiAt(0) })));
 const line = (id, kind, text, extra = {}) => ({ id, kind, text, ...extra });
 const eventLine = (id, text, event, tone) => line(id, "event", text, { event, ...(tone ? { tone } : {}) });
@@ -111,16 +101,6 @@ const blockLines = () => [
 ];
 const progressBody = (lines = BASE_LINES, omitted = 0) => ({ available: true, lines, omitted });
 const bulkLines = (count) => Array.from({ length: count }, (_, i) => line(`bulk-${i}`, "narration", `E2E-S238-BULK-${String(i + 1).padStart(3, "0")}`));
-const NAV_LINES = [
-  eventLine("nav-g1", "00:00:01 ▶ grill #1 · pi:e2e/model", "step_started", "accent"),
-  line("nav-g1-text", "narration", "E2E-NAV-GRILL"),
-  eventLine("nav-s1", "00:00:10 ▶ spec #1 · pi:e2e/model", "step_started", "accent"),
-  line("nav-s1-text", "narration", "E2E-NAV-SPEC-1"),
-  eventLine("nav-s2", "00:00:20 ▶ spec #2 · pi:e2e/model", "step_started", "accent"),
-  line("nav-s2-text", "narration", "E2E-NAV-SPEC-2"),
-  eventLine("nav-c1", "00:00:30 ▶ code #1 · pi:e2e/model", "step_started", "accent"),
-  line("nav-c1-text", "narration", "E2E-NAV-CODE"),
-];
 
 // ── route fixture: a throwaway daemon data root with real capsules ─────────
 const MAIN = "wi_S238Main01";
@@ -578,41 +558,11 @@ try {
     assert.match(await blocks.nth(1).locator("[data-pf-progress-block-toggle]").innerText(), /spec #2 ▶ · 2 lines/, "the new running block is marked ▶");
   }));
 
-  await check("S238-29", () => withPage({}, async (page) => {
-    page.__progress.body = progressBody(NAV_LINES);
-    await openUI(page);
-    const progress = progressBlock(page);
-    const node = (id) => dock(page).getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
-    await waitFor(async () => (await node("code").getAttribute("data-pf-step-selected")) === "true", "the current step is selected by default");
-    assert.ok((await text(progress)).includes("E2E-NAV-CODE"), "the default view shows the current step's record");
-    assert.ok(!(await text(progress)).includes("E2E-NAV-GRILL"), "the default view hides other steps' records");
-    await selectStepForProgress(page, "spec");
-    const blocks = progressBlock(page).locator("[data-pf-progress-block]");
-    await waitFor(async () => (await blocks.count()) === 2, "both rounds of the selected step render as blocks");
-    const headers = (await blocks.locator("[data-pf-progress-block-toggle]").evaluateAll((els) => els.map((el) => el.textContent))).join(" ");
-    assert.match(headers, /spec #1/, "the first round is distinguishable");
-    assert.match(headers, /spec #2/, "the rerun is distinguishable");
-    for (const header of await blocks.locator("[data-pf-progress-block-toggle]").all()) {
-      if ((await header.getAttribute("aria-expanded")) === "false") await header.evaluate((el) => el.click());
-    }
-    await waitFor(async () => (await text(progress)).includes("E2E-NAV-SPEC-1") && (await text(progress)).includes("E2E-NAV-SPEC-2"), "every round's record is readable");
-    assert.ok(!(await text(progress)).includes("E2E-NAV-CODE"), "the selected step hides the current step's record");
-    const selectedStyle = await node("spec").evaluate((el) => ({ selected: el.getAttribute("data-pf-step-selected"), outline: getComputedStyle(el).outlineStyle }));
-    assert.equal(selectedStyle.selected, "true", "the manual selection is marked");
-    assert.notEqual(selectedStyle.outline, "none", "the manual selection has visible styling");
-    // AC3: the watch advances to review while the reader keeps spec chosen —
-    // the manual selection must persist (never follow the current step again).
-    uiWatchOverride = { currentStep: "review", steps: [{ name: "review", status: "in_progress", startedAt: uiAt(150) }] };
-    try {
-      await waitFor(async () => ((await node("review").getAttribute("aria-label")) ?? "").includes("In progress"), "the watch advances to review");
-      assert.equal(await node("spec").getAttribute("data-pf-step-selected"), "true", "the manual selection persists while the current step advances");
-      assert.ok((await text(progress)).includes("E2E-NAV-SPEC-1"), "the selected step's record stays");
-    } finally {
-      uiWatchOverride = null;
-    }
-    await node("review").click();
-    await waitFor(async () => /尚未运行|Not run yet/.test(await text(progress)), "an unstarted step shows its empty state");
-  }));
+  // (S238-29 — the polyforge#24 AC navigation scenarios — moved to
+  // e2e/polyforge.mjs's P24A/P24B/P24C: this suite's carries do not name
+  // components/PolyforgePanel*, so the machine gates would never select it,
+  // while polyforge.mjs is selected for every PolyforgePanel.tsx change.)
+
   await check("S238-23", () => withPage({}, async (page) => {
     page.__progress.body = progressBody(blockLines());
     await openUI(page);
@@ -632,8 +582,13 @@ try {
     // are exactly the matching blocks' line counts, and expanding both shows
     // every one of the selected step's lines in full.
     const counts = await blocks.evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-pf-progress-block-count"))));
+    // The no-truncation identity, from the fixture: the two blocks' counts are
+    // exactly the selected step's lines — everything from spec #1's start line
+    // (b4) to the end of the stream (b4..b6 = 3 lines, b7.. = 43 lines).
+    const specStart = blockLines().findIndex((entry) => entry.event === "step_started" && /spec #1/.test(entry.text));
+    const specLineCount = blockLines().length - specStart;
     const selectedTotal = counts.reduce((sum, count) => sum + count, 0);
-    assert.ok(counts.every((count) => count > 0), `selected block counts are positive (${counts})`);
+    assert.equal(selectedTotal, specLineCount, `the blocks' counts are every selected line (${selectedTotal} vs ${specLineCount})`);
     for (const header of await blocks.locator("[data-pf-progress-block-toggle]").all()) {
       if ((await header.getAttribute("aria-expanded")) === "false") await header.evaluate((el) => el.click());
     }
