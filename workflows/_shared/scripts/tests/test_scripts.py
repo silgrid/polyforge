@@ -291,7 +291,10 @@ class MergeScriptTest(unittest.TestCase):
         publish = os.path.join(w.capsule, "artifacts", "publish.json")
         write(w.capsule, "artifacts/publish.json", json.dumps({"repos": list(entries)}))
         verified = os.path.join(w.capsule, "artifacts", "verify", "result.json")
-        write(w.capsule, "artifacts/verify/result.json", json.dumps({"schema": "pf-step-result/1", "heads": heads or {e["name"]: e["head"] for e in entries}}))
+        bases = {e["name"]: w.git(w.dir(e["name"]), "rev-parse", "refs/remotes/origin/main") for e in entries}
+        details = [{"name": name, "base": base} for name, base in bases.items()]
+        write(w.capsule, "artifacts/verify/result.json", json.dumps({"schema": "pf-step-result/1", "heads": heads or {e["name"]: e["head"] for e in entries},
+                                                                       "details": {"repos": details}}))
         return publish, verified, os.path.join(w.capsule, "artifacts", "merge", "result.json")
 
     def test_lands_at_the_verified_head_and_writes_the_landing(self) -> None:
@@ -309,7 +312,33 @@ class MergeScriptTest(unittest.TestCase):
                 {"repo": "app", "pr": r["pr_url"], "head": head, "light_verified_head": head, "merge_commit": r["merge_commit"]}],
                 "merge_commits": {"app": [r["merge_commit"]]}})
 
-    def test_a_moved_head_merges_nothing_and_leaves_no_landing(self) -> None:
+    def test_default_branch_freshness_controls_merge(self) -> None:
+        w = World(self, "app")
+        head = w.change("app", {"feature.txt": "f\n"}, "app-section")
+        publish_entry = w.publish("app")
+        publish, verified, out = self.inputs(w, publish_entry)
+        landing = os.path.join(w.capsule, "artifacts", "merge", "landing.json")
+        code, res, err = w.run("merge.py", "--publish", publish, "--verified", verified, "--landing-out", landing,
+                               "--capsule", w.capsule, "--json", "--out", out)
+        assert res is not None
+        self.assertEqual((code, res["verdict"], repo_of(res, "app")["how"]), (0, "pass", "merged"), err)
+        self.assertTrue(os.path.exists(landing))
+        self.assertEqual(repo_of(res, "app")["head"], head)
+
+        w = World(self, "app")
+        w.change("app", {"feature.txt": "f\n"}, "app-section")
+        publish_entry = w.publish("app")
+        publish, verified, out = self.inputs(w, publish_entry)
+        w.main_moves("app", {"main-new.txt": "main\n"}, "main-section")
+        landing = os.path.join(w.capsule, "artifacts", "merge", "landing.json")
+        code, res, err = w.run("merge.py", "--publish", publish, "--verified", verified, "--landing-out", landing,
+                               "--capsule", w.capsule, "--json", "--out", out)
+        assert res is not None
+        self.assertEqual(code, 1, err)
+        self.assertIn("default branch moved since verification", res["summary"])
+        self.assertFalse(os.path.exists(landing))
+        self.assertEqual(read(os.path.join(w.gh, "app", "prs", "1"), "state").strip(), "OPEN")
+
         w = World(self, "app")
         w.change("app", {"feature.txt": "f\n"})
         entry = w.publish("app")

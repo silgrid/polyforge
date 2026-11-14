@@ -9,6 +9,7 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url);
 const lib = await jiti.import("./polyforge-messages.ts");
 const pure = await jiti.import("./polyforge-messages-pure.ts");
+const cells = await jiti.import("./polyforge-cells.ts");
 
 test("the Messages floor is 2.20.12 and below it the capability rep says upgrade", async () => {
   // the contact list needs `pf msg contacts` (2.20.12).
@@ -645,7 +646,7 @@ test("the analyze read spawns one structured read and reads no conclusion", () =
   const source = readFileSync(new URL("./polyforge-messages.ts", import.meta.url), "utf8");
   const start = source.indexOf("export async function analyzePolyforgeMessage(");
   const body = source.slice(start, source.indexOf("\n}\n", start));
-  assert.match(body, /runPfJson\(\["--json", "msg", "analyze", messageId\], ANALYZE_TIMEOUT_MS, ANALYZE_MAX_BUFFER\)/);
+  assert.match(body, /runPfJson\(\[\.\.\.pin, "--json", "msg", "analyze", messageId\], ANALYZE_TIMEOUT_MS, ANALYZE_MAX_BUFFER\)/);
   assert.match(body, /parsePolyforgeAnalysis\(raw\)/);
   assert.match(body, /"the analyzer answered no structured result", "DAEMON-500"/);
   assert.doesNotMatch(source, /conclusion/, "no conclusion read anywhere");
@@ -807,4 +808,80 @@ test("the prompt read is one `pf --json msg prompt <id>` behind its own floor", 
   assert.equal(below.capable, false);
   assert.ok((below.reason ?? "").includes(pure.POLYFORGE_PROMPT_MINIMUM_PF_VERSION), "the refusal names the floor");
   await status.probePolyforgeVersion(true);
+});
+
+// ---- the pinned Cell scope (polyforge#18 AC4): every pf call the
+// Messages tab and the 立票 dialog make names the Cell it acts on ----
+
+/** A stub pf that reports the multi-Cell capabilities and resolves the
+ *  public Cell, logging every argv, answering the Messages panel's reads. */
+function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public" } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "pf-cellmsg-"));
+  const log = join(dir, "calls.log");
+  writeFileSync(log, "");
+  const bin = join(dir, "pf");
+  writeFileSync(bin, `#!${process.execPath}
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
+const out = (v) => { process.stdout.write(JSON.stringify(v)); process.exit(0); };
+if (args[0] === "--version") { process.stdout.write("v2.20.16\\n"); process.exit(0); }
+if (args[0] === "--json" && args[1] === "version") out({ version: "v2.20.16", capabilities: ${JSON.stringify(capabilities)} });
+if (args[0] === "--json" && args[1] === "profile") { ${profile ? `out({ profile: ${JSON.stringify(profile)}, source: "cwd" });` : 'process.exit(2);'} }
+const rest = args.filter((a) => a !== "--json" && a !== "--profile" && a !== ${JSON.stringify(profile ?? "")});
+if (rest[0] === "config" && rest[1] === "list") out({ items: [
+  { key: "user_id", value: "u1", source: "file" },
+  { key: '[workspace."/ws"]', value: "polyforge", section: true },
+] });
+if (rest[0] === "msg" && rest[1] === "list") out({ conversations: [], last_seq: 0 });
+if (rest[0] === "msg" && rest[1] === "contacts") out({ contacts: [] });
+if (rest[0] === "users" && rest[1] === "list") out({ users: [] });
+if (rest[0] === "projects" && rest[1] === "get") out({ members: [] });
+process.exit(2);
+`);
+  chmodSync(bin, 0o755);
+  const previous = process.env.PF_BIN;
+  process.env.PF_BIN = bin;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PF_BIN;
+    else process.env.PF_BIN = previous;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+}
+
+const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && !(a[1] === "version") && !(a[1] === "profile"));
+
+test("the Messages panel's reads all carry the pinned Cell's --profile (AC4)", async (t) => {
+  const calls = cellPf(t);
+  const scope = await cells.resolvePolyforgeCellScope();
+  assert.equal(scope.cell, "public");
+  assert.deepEqual(scope.pin.prefix, ["--profile", "public"]);
+
+  const read = await lib.readPolyforgeMessages({ withGroups: true, pin: scope.pin.prefix });
+  assert.equal(read.capable, true);
+  assert.deepEqual(read.conversations, []);
+  assert.deepEqual(read.contacts, []);
+  assert.deepEqual(read.groups, [{ project: "polyforge", contacts: [] }], "the stub maps one project, so its group is the read's one row");
+  const usersRead = await lib.readPolyforgeUsers(scope.pin.prefix);
+  assert.equal(usersRead.capable, true);
+  assert.equal(usersRead.admin, true);
+  assert.deepEqual(usersRead.users, []);
+  assert.deepEqual(await lib.readPolyforgeMappedProjects(scope.pin.prefix), ["polyforge"]);
+  const data = dataCalls(calls);
+  assert.ok(data.length >= 6, `the reads must have spawned (ledger ${JSON.stringify(data)})`);
+  for (const argv of data) {
+    assert.deepEqual(argv.slice(0, 2), ["--profile", "public"], `every Messages-tab pf call names the Cell first: ${JSON.stringify(argv)}`);
+  }
+});
+
+test("a pf without the multi-Cell protocol keeps today's unflagged Messages reads", async (t) => {
+  const calls = cellPf(t, { capabilities: [], profile: "" });
+  const scope = await cells.resolvePolyforgeCellScope();
+  assert.deepEqual(scope.pin.prefix, []);
+  const read = await lib.readPolyforgeMessages({ withGroups: true, pin: scope.pin.prefix });
+  assert.equal(read.capable, true);
+  for (const argv of dataCalls(calls)) {
+    assert.equal(argv.includes("--profile"), false, `no flag on a pre-Cell pf: ${JSON.stringify(argv)}`);
+  }
 });

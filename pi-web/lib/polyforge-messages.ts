@@ -8,7 +8,10 @@ import { probePolyforgeVersion } from "./polyforge-status";
 /**
  * Server-side reads/writes for the Polyforge dock's Messages tab.
  * Every fact comes from a `pf` subprocess through
- * `execFileAsync` (no shell); the argv is validated before any spawn. The
+ * `execFileAsync` (no shell); the argv is validated before any spawn; every
+ * data call carries the pinned Cell scope's argv prefix (polyforge#18 AC4):
+ * the Cell pf resolves for the panel's context, named explicitly — never the
+ * Cell a spawn's ambient PF_PROFILE or cwd would pick. The
  * HTTP faces under `app/api/polyforge/messages/**` only degrade and answer.
  *
  * The sanitizers are the only passport off this module: a conversation keeps
@@ -429,17 +432,17 @@ async function runPfJson(argv: string[], timeoutMs = READ_TIMEOUT_MS, maxBuffer?
   }
 }
 
-async function listConversationsRaw(): Promise<unknown> {
-  return runPfJson(["--json", "msg", "list"]);
+async function listConversationsRaw(pin: string[]): Promise<unknown> {
+  return runPfJson([...pin, "--json", "msg", "list"]);
 }
 
 /** The configured contacts (`pf msg contacts`: the union of the caller's
  *  human co-members over every mapped project, assembled by pf). Its own
  *  isolated spawn bounded by CONTACT_READ_TIMEOUT_MS: any failure, including
  *  the bound, is an empty set, never the messages error. */
-async function readPolyforgeContacts(): Promise<PolyforgeContact[] | null> {
+async function readPolyforgeContacts(pin: string[]): Promise<PolyforgeContact[] | null> {
   try {
-    return sanitizeContactsAnswer(await runPfJson(["--json", "msg", "contacts"], CONTACT_READ_TIMEOUT_MS));
+    return sanitizeContactsAnswer(await runPfJson([...pin, "--json", "msg", "contacts"], CONTACT_READ_TIMEOUT_MS));
   } catch {
     return null;
   }
@@ -447,10 +450,10 @@ async function readPolyforgeContacts(): Promise<PolyforgeContact[] | null> {
 
 /** The items of one `pf --json config list` read: the caller's identity and
  *  the `cli.toml` workspace mapping both come from it. */
-async function readPolyforgeConfigItems(): Promise<unknown[]> {
+async function readPolyforgeConfigItems(pin: string[]): Promise<unknown[]> {
   let raw: unknown;
   try {
-    raw = await runPfJson(["--json", "config", "list"]);
+    raw = await runPfJson([...pin, "--json", "config", "list"]);
   } catch (error) {
     throw PolyforgeMessagesError.fromSpawnError(error);
   }
@@ -493,17 +496,17 @@ function userIdFromConfig(items: unknown[]): string {
 /** The pf caller's own user id, read server-side from `pf config`. It is used
  *  to filter conversations and derive peer/mine, then dropped: no response
  *  carries it. */
-async function readPolyforgeUserId(): Promise<string> {
-  return userIdFromConfig(await readPolyforgeConfigItems());
+async function readPolyforgeUserId(pin: string[]): Promise<string> {
+  return userIdFromConfig(await readPolyforgeConfigItems(pin));
 }
 
 /** One project's members (`pf --json projects get <project>`), bounded by
  *  CONTACT_READ_TIMEOUT_MS and never rejecting: only the member user ids
  *  survive (roles and every other field are dropped here); a failure, the
  *  bound included, is that project's own bounded error text. */
-async function readProjectMembers(project: string): Promise<PolyforgeProjectMembersRead> {
+async function readProjectMembers(project: string, pin: string[]): Promise<PolyforgeProjectMembersRead> {
   try {
-    const raw = await runPfJson(["--json", "projects", "get", project], CONTACT_READ_TIMEOUT_MS);
+    const raw = await runPfJson([...pin, "--json", "projects", "get", project], CONTACT_READ_TIMEOUT_MS);
     const members = raw && typeof raw === "object" && Array.isArray((raw as { members?: unknown }).members)
       ? (raw as { members: unknown[] }).members
       : [];
@@ -526,6 +529,7 @@ async function readProjectMembers(project: string): Promise<PolyforgeProjectMemb
 async function readProjectGroups(
   configRead: Promise<unknown[]>,
   contactsRead: Promise<PolyforgeContact[] | null>,
+  pin: string[],
 ): Promise<PolyforgeProjectGroup[]> {
   let projects: string[];
   try {
@@ -534,7 +538,7 @@ async function readProjectGroups(
     return [];
   }
   if (projects.length === 0) return [];
-  const reads = await Promise.all(projects.map(readProjectMembers));
+  const reads = await Promise.all(projects.map((project) => readProjectMembers(project, pin)));
   const contacts = await contactsRead;
   if (contacts === null) return [];
   const memberReads: Record<string, PolyforgeProjectMembersRead> = {};
@@ -547,8 +551,9 @@ async function listMessagesRaw(
   before: number,
   after: number,
   limit: number,
+  pin: string[],
 ): Promise<unknown> {
-  const argv = ["--json", "msg", "list", "--conversation", conversationId];
+  const argv = [...pin, "--json", "msg", "list", "--conversation", conversationId];
   if (before > 0) argv.push("--before", String(before));
   if (after > 0) argv.push("--after", String(after));
   if (limit > 0) argv.push("--limit", String(limit));
@@ -613,7 +618,7 @@ export async function readPolyforgePromptCapability(): Promise<PolyforgeMessages
  *  contacts). `withGroups: false` (the dock off the Messages tab) skips the
  *  project reads and omits `groups`, so no other tab spawns `projects get`. */
 export async function readPolyforgeMessages(
-  { withGroups = true }: { withGroups?: boolean } = {},
+  { withGroups = true, pin = [] }: { withGroups?: boolean; pin?: string[] } = {},
 ): Promise<PolyforgeMessagesRead> {
   const capability = await readPolyforgeMessagesCapability();
   if (!capability.capable) {
@@ -622,12 +627,12 @@ export async function readPolyforgeMessages(
   const presence = { version: capability.pfVersion };
   // Started alongside the list reads and never rejects: a contact-read
   // failure is an empty set that leaves the conversation answer alone.
-  const contactsAnswer = readPolyforgeContacts();
+  const contactsAnswer = readPolyforgeContacts(pin);
   const contactsRead = contactsAnswer.then((contacts) => contacts ?? []);
   // One config read serves the identity and the mapping; the per-project
   // reads start the moment it lands and never reject.
-  const configRead = readPolyforgeConfigItems();
-  const groupsRead = withGroups ? readProjectGroups(configRead, contactsAnswer) : Promise.resolve(undefined);
+  const configRead = readPolyforgeConfigItems(pin);
+  const groupsRead = withGroups ? readProjectGroups(configRead, contactsAnswer, pin) : Promise.resolve(undefined);
   let raw: unknown;
   let userId: string;
   try {
@@ -637,7 +642,7 @@ export async function readPolyforgeMessages(
     // poll after the dock opens). Any failure keeps the same degraded answer.
     [userId, raw] = await Promise.all([
       configRead.then(userIdFromConfig),
-      listConversationsRaw(),
+      listConversationsRaw(pin),
     ]);
   } catch (error) {
     // A list-read failure (missing user_id, AUTH-401, an unreachable aihub or
@@ -709,15 +714,15 @@ export function sanitizeUsersAnswer(raw: unknown): PolyforgeUser[] {
  *  The caller is dropped (read concurrently from pf config, never sent): it
  *  is never listed in a group, and re-adding it through the picker would be
  *  an upsert that rewrites its own role. */
-export async function readPolyforgeUsers(): Promise<PolyforgeUsersRead> {
+export async function readPolyforgeUsers(pin: string[] = []): Promise<PolyforgeUsersRead> {
   const capability = await readPolyforgeMessagesCapability();
   if (!capability.capable) {
     return { ...capability, admin: false, users: [] };
   }
   try {
     const [userId, raw] = await Promise.all([
-      readPolyforgeUserId(),
-      runPfJson(["--json", "users", "list"]),
+      readPolyforgeUserId(pin),
+      runPfJson([...pin, "--json", "users", "list"]),
     ]);
     const users = sanitizeUsersAnswer(raw).filter((user) => user.id !== userId);
     return { ...capability, admin: true, users };
@@ -730,18 +735,19 @@ export async function readPolyforgeUsers(): Promise<PolyforgeUsersRead> {
 /** The `cli.toml`-mapped projects, read now for a membership write's
  *  validation; a failed read throws pf's typed failure (the route answers it
  *  without spawning a membership verb). */
-export async function readPolyforgeMappedProjects(): Promise<string[]> {
-  return mappedProjectsFromConfig(await readPolyforgeConfigItems());
+export async function readPolyforgeMappedProjects(pin: string[] = []): Promise<string[]> {
+  return mappedProjectsFromConfig(await readPolyforgeConfigItems(pin));
 }
 
 /** One membership change — exactly one pf subprocess:
  *  `projects members add <p> --user <id> --role writer` or
  *  `projects members remove <p> --user <id>`. pi-web writes no config file and
  *  never calls aihub directly; a refusal throws pf's typed failure. */
-export async function changePolyforgeMembership(input: PolyforgeMembershipInput): Promise<void> {
-  const argv = input.action === "add"
-    ? ["--json", "projects", "members", "add", input.project, "--user", input.userId, "--role", "writer"]
-    : ["--json", "projects", "members", "remove", input.project, "--user", input.userId];
+export async function changePolyforgeMembership(input: PolyforgeMembershipInput, pin: string[] = []): Promise<void> {
+  const argv = [...pin,
+    ...(input.action === "add"
+      ? ["--json", "projects", "members", "add", input.project, "--user", input.userId, "--role", "writer"]
+      : ["--json", "projects", "members", "remove", input.project, "--user", input.userId])];
   try {
     await execFileAsync(polyforgePfBin(), argv, { timeout: WRITE_TIMEOUT_MS });
   } catch (error) {
@@ -755,6 +761,7 @@ export async function readPolyforgeMessagesPage(
   conversationId: string,
   before: number,
   limit = DEFAULT_PAGE_SIZE,
+  pin: string[] = [],
 ): Promise<PolyforgeMessagePage> {
   if (!isPolyforgeConversationId(conversationId)) {
     throw new PolyforgeMessagesError("conversation must be a conversation id", "CORE-400");
@@ -763,22 +770,22 @@ export async function readPolyforgeMessagesPage(
   // The identity and page reads are independent spawns: concurrent (w93 —
   // opening a conversation must settle after one spawn's latency, not two).
   const [userId, rawPage] = await Promise.all([
-    readPolyforgeUserId(),
-    listMessagesRaw(conversationId, effectiveBefore, 0, limit),
+    readPolyforgeUserId(pin),
+    listMessagesRaw(conversationId, effectiveBefore, 0, limit, pin),
   ]);
   const page = sanitizeMessagePage(rawPage, userId);
   return pageWithOldestFlag(page, limit);
 }
 
 /** Newest page, one request: the history route's initial open. */
-export async function readPolyforgeNewestPage(conversationId: string): Promise<PolyforgeMessagePage> {
+export async function readPolyforgeNewestPage(conversationId: string, pin: string[] = []): Promise<PolyforgeMessagePage> {
   if (!isPolyforgeConversationId(conversationId)) {
     throw new PolyforgeMessagesError("conversation must be a conversation id", "CORE-400");
   }
   const [userId, rawPage] = await Promise.all([
-    readPolyforgeUserId(),
+    readPolyforgeUserId(pin),
     runPfJson([
-      "--json", "msg", "list", "--conversation", conversationId,
+      ...pin, "--json", "msg", "list", "--conversation", conversationId,
       "--before", NEWEST_BEFORE, "--limit", String(DEFAULT_PAGE_SIZE),
     ]),
   ]);
@@ -791,34 +798,35 @@ export async function readPolyforgeNewestPage(conversationId: string): Promise<P
 export async function readPolyforgeNewerMessages(
   conversationId: string,
   after: number,
+  pin: string[] = [],
 ): Promise<PolyforgeMessage[]> {
   if (!isPolyforgeConversationId(conversationId) || !isPositiveSeq(after)) return [];
   const [userId, rawPage] = await Promise.all([
-    readPolyforgeUserId(),
-    listMessagesRaw(conversationId, 0, after, 50),
+    readPolyforgeUserId(pin),
+    listMessagesRaw(conversationId, 0, after, 50, pin),
   ]);
   const page = sanitizeMessagePage(rawPage, userId);
   return page.messages;
 }
 
-export async function sendPolyforgeMessage(input: PolyforgeSendInput): Promise<PolyforgeMessage | null> {
+export async function sendPolyforgeMessage(input: PolyforgeSendInput, pin: string[] = []): Promise<PolyforgeMessage | null> {
   // Read the identity BEFORE the spawn: a config-read failure must not turn a
   // message that was already sent into a reported failure (a retry would
   // duplicate it).
-  const userId = await readPolyforgeUserId();
-  const argv = ["--json", "msg", "send", "--to", input.to, "--text", input.text];
+  const userId = await readPolyforgeUserId(pin);
+  const argv = [...pin, "--json", "msg", "send", "--to", input.to, "--text", input.text];
   if (input.aboutWi) argv.push("--about-wi", input.aboutWi);
   if (input.replyTo) argv.push("--reply-to", input.replyTo);
   const raw = await runPfJson(argv, WRITE_TIMEOUT_MS);
   return sanitizeMessage(raw, userId);
 }
 
-export async function acknowledgePolyforgeMessage(conversationId: string, seq: number): Promise<void> {
+export async function acknowledgePolyforgeMessage(conversationId: string, seq: number, pin: string[] = []): Promise<void> {
   if (!isPolyforgeConversationId(conversationId) || !isPositiveSeq(seq)) {
     throw new PolyforgeMessagesError("conversation and a positive seq are required", "CORE-400");
   }
   try {
-    await execFileAsync(polyforgePfBin(), ["--json", "msg", "ack", conversationId, "--seq", String(seq)], {
+    await execFileAsync(polyforgePfBin(), [...pin, "--json", "msg", "ack", conversationId, "--seq", String(seq)], {
       timeout: WRITE_TIMEOUT_MS,
     });
   } catch (error) {
@@ -831,11 +839,11 @@ export async function acknowledgePolyforgeMessage(conversationId: string, seq: n
  *  structured sanitizer; anything that is not that shape (for the same
  *  message) is the typed "no structured result" failure — there is no other
  *  shape and no second read. */
-export async function analyzePolyforgeMessage(messageId: string): Promise<PolyforgeAnalysis> {
+export async function analyzePolyforgeMessage(messageId: string, pin: string[] = []): Promise<PolyforgeAnalysis> {
   if (!isPolyforgeMessageId(messageId)) {
     throw new PolyforgeMessagesError("message_id must be a message id", "CORE-400");
   }
-  const raw = await runPfJson(["--json", "msg", "analyze", messageId], ANALYZE_TIMEOUT_MS, ANALYZE_MAX_BUFFER);
+  const raw = await runPfJson([...pin, "--json", "msg", "analyze", messageId], ANALYZE_TIMEOUT_MS, ANALYZE_MAX_BUFFER);
   const analysis = parsePolyforgeAnalysis(raw);
   if (!analysis || analysis.message_id !== messageId) {
     throw new PolyforgeMessagesError("the analyzer answered no structured result", "DAEMON-500");
@@ -850,9 +858,9 @@ const TICKET_SLUG = /^[A-Za-z0-9][A-Za-z0-9_.#-]{0,127}$/;
  *  `--bundle`: a registration ticket, not claimable, no lane chosen. pi-web
  *  writes no config file and never calls aihub directly; a refusal throws
  *  pf's typed failure. Only the created ticket's slug leaves. */
-export async function createPolyforgeFileTicket(input: PolyforgeFileTicketInput): Promise<{ slug: string }> {
+export async function createPolyforgeFileTicket(input: PolyforgeFileTicketInput, pin: string[] = []): Promise<{ slug: string }> {
   const raw = await runPfJson(
-    ["--json", "file", "create", "--project", input.project, "--goal", input.goal, "--content", input.content],
+    [...pin, "--json", "file", "create", "--project", input.project, "--goal", input.goal, "--content", input.content],
     WRITE_TIMEOUT_MS,
   );
   const slug = raw && typeof raw === "object" ? str((raw as { slug?: unknown }).slug) : "";
@@ -867,11 +875,11 @@ export async function createPolyforgeFileTicket(input: PolyforgeFileTicketInput)
  *  (the analyze bound: the daemon's wait is the same 6 minutes). The answer
  *  passes the one prompt sanitizer; any other shape is the typed "no prompt"
  *  failure — no prompt is ever invented and nothing is stored. */
-export async function promptPolyforgeMessage(messageId: string): Promise<PolyforgePrompt> {
+export async function promptPolyforgeMessage(messageId: string, pin: string[] = []): Promise<PolyforgePrompt> {
   if (!isPolyforgeMessageId(messageId)) {
     throw new PolyforgeMessagesError("message_id must be a message id", "CORE-400");
   }
-  const raw = await runPfJson(["--json", "msg", "prompt", messageId], ANALYZE_TIMEOUT_MS, ANALYZE_MAX_BUFFER);
+  const raw = await runPfJson([...pin, "--json", "msg", "prompt", messageId], ANALYZE_TIMEOUT_MS, ANALYZE_MAX_BUFFER);
   const prompt = parsePolyforgePrompt(raw);
   if (!prompt) {
     throw new PolyforgeMessagesError("the prompt task answered no prompt", "DAEMON-500");

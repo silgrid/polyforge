@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolvePolyforgeCellScope } from "@/lib/polyforge-cells";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import {
   PolyforgeMessagesError,
@@ -44,11 +45,12 @@ export async function POST(request: Request) {
     );
   }
   try {
-    const validated = validateMembershipInput(body, await readPolyforgeMappedProjects());
+    const pin = (await resolvePolyforgeCellScope()).pin.prefix;
+    const validated = validateMembershipInput(body, await readPolyforgeMappedProjects(pin));
     if (!validated.ok) {
       return NextResponse.json({ error: validated.error }, { status: 400 });
     }
-    await changePolyforgeMembership(validated.value);
+    await changePolyforgeMembership(validated.value, pin);
     return NextResponse.json({ ok: true });
   } catch (error) {
     const failure = error instanceof PolyforgeMessagesError
