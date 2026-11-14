@@ -805,7 +805,9 @@ setting:
   `carries:` is `test_weakened`, and so are a unit without its test-quality
   record (`workflows/_shared/test_quality.md`: the behaviour its test observes,
   why its red is expected, the change it catches), a test that only asserts
-  source text exists, and a replayed red that contradicts the recorded reason;
+  source text exists, a replayed red that contradicts the recorded reason, and an
+  asynchronously settling state asserted on one read right after the action instead
+  of a bounded poll (the bar's settle duty);
   every other finding is non-blocking and
   reaches the owner in the PR body. Every review (micro's too) does no
   security probing — no offensive probing, injection reproduction or

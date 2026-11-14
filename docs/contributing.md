@@ -115,7 +115,9 @@ final tree (`verify.py --unit-runs`). Review blocks only on five classes — `bu
 ignores is `ac_gap`, a deviation or a self-written acceptance list without an owner
 reply, or a reading of the owner's reply its words do not support, is `guarantee`, a
 unit whose replay is not red, a unit without its test-quality record or whose replayed
-red contradicts the recorded reason, a test that only asserts source text exists, an e2e
+red contradicts the recorded reason, a test that only asserts source text exists, a test
+that asserts an asynchronously settling state on one read right after the action instead
+of a bounded poll (the test-quality bar's settle duty), an e2e
 scenario timed by a fixed delay, measuring before
 its state settles or carrying a wrong `carries:` is `test_weakened`). Every other
 finding is non-blocking, listed in the PR body for the owner to ticket or drop; no
