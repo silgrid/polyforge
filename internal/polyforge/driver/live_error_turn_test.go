@@ -112,8 +112,9 @@ var liveCases = []liveCase{
 	{"upstream-stream-interrupted", `Upstream response stream was interrupted`, 0, FailUpstreamTransient, true},
 	{"server-overload", `The service is currently unable to handle additional requests due to server overload. Please retry later. Request id: 20261114172154000123456789`, 0, FailRateLimited, true},
 	// allowance/auth texts are archived as the exit path archives them
-	// (exit_model_class) and switch at once; only an unclassified error
-	// turn stays model_error and resumes first (ModelErrorRotationThreshold)
+	// (exit_model_class) and switch at once; an unclassified error turn
+	// stays model_error — model class too, switching to the next candidate
+	// at once (design #483 §7, 约定 4)
 	{"insufficient-balance", `402 {"error":{"message":"Insufficient balance","type":"insufficient_balance"}}`, 0, FailExitModel, false},
 	{"401", `401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, 0, FailExitModel, false},
 }

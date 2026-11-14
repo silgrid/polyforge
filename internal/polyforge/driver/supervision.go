@@ -535,11 +535,12 @@ func classifyWaitFailure(err error) (cause string, exitCode int, detail string) 
 // text (allowanceText) or a model name that does not resolve
 // (unresolvedModel) is archived exit_model_class, as on an exited
 // process — it switches the candidate at once. Any other text — a gateway
-// 5xx, a "model ... temporarily unavailable" or "invalid response" outage,
-// an unnamed provider error — keeps model_error: model-class, but its
-// first death on a candidate resumes the same candidate
-// (ModelErrorRotationThreshold). The split lands in the archived cause,
-// so the pointer never re-reads the text.
+// 5xx naming no recognized gateway-layer transient (polyforge#34), a
+// "model ... temporarily unavailable" or "invalid response" outage,
+// an unnamed provider error — keeps model_error: model-class, and every
+// model-class death switches to the next candidate at once (design
+// #483 §7, 约定 4: no same-candidate resume on a first death). The split
+// lands in the archived cause, so the pointer never re-reads the text.
 func verdictCause(v supervise.StepDead) string {
 	if v.Cause != supervise.CauseModelError || strings.TrimSpace(v.TurnError) == "" {
 		return string(v.Cause)
