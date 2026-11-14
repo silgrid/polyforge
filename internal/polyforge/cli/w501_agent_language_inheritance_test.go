@@ -10,7 +10,7 @@ import (
 func TestW501NamedConfigListShowsInheritedAgentLanguage(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
-	host := writeFile(t, dir+"/cli.toml", "agent_language = \"zh-CN\"\n")
+	host := writeFile(t, dir+"/cli.toml", "[daemon]\nagent_language = \"zh-CN\"\n")
 	named := writeFile(t, dir+"/cli-alpha.toml", "server = \"http://hub:1\"\napi_key = \"key\"\n")
 	_ = host
 	ctx := &Context{JSON: false, Stdout: new(bytes.Buffer), Stderr: new(bytes.Buffer), cfgScope: configScope{path: named, profile: "alpha"}}
