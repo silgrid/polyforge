@@ -37,7 +37,12 @@
 # previous release (the PR-only and contract checks, the notes) is the highest
 # -<name>.N tag below the version on origin, else the public base tag itself,
 # each with the commit its own ls-remote reports. Resume and --verify judge
-# the same shape the same way (the cutover exceptions do not apply).
+# the same shape the same way (the cutover exceptions do not apply). The
+# generated notes of the line's FIRST release (whose previous release is the
+# public base tag) list only the absorption's descendants (git log
+# --ancestry-path): the history before that point belongs to no version of
+# this line; between the line's own versions the plain range stands,
+# unchanged.
 # Bump guard (version line, CONTRIBUTING.md): only patch is released - with no
 # argument the bump is patch. minor and major are refused before anything runs
 # (zero side effects): a middle-number (minor) jump needs an explicit owner
@@ -101,7 +106,14 @@
 #      notes from docs/release-notes/<tag>.md (generated from git log when
 #      absent), followed by a "Test gate" section naming how the gate passed
 #      (the green tag reused, or the gate run in its container, with the gate
-#      id; the committed notes file itself is never changed). The aihub image
+#      id; the committed notes file itself is never changed); the notes never
+#      exceed GitHub's 125000-character release-body limit, counted in bytes
+#      (>= the character count under UTF-8) and checked BEFORE the version is
+#      claimed: the generated commit list is cut to the newest commits within
+#      a byte budget and ends with a 「还有 N 个提交」 notice and a compare
+#      link on the previous release's commit id (never its tag name), and a
+#      committed notes file over the limit refuses the release (never
+#      truncated). The aihub image
 #      and the pf binaries are published with the
 #      same tag before tools/install.sh can consume the release (aihub
 #      first); the pi-web tarball rides the same release, so there is no
