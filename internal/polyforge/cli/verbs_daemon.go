@@ -24,9 +24,10 @@ var cmdSubmit = &Command{
 	Name:    "submit",
 	Group:   GroupExec,
 	Summary: "Submit a WI for execution on this machine (claim)",
-	Usage:   "pf submit <id> [--priority low|normal|high|urgent] [--models <harness>:<model>[:<effort>],...] [--allow-no-acceptance]",
+	Usage:   "pf submit <id> [--priority low|normal|high|urgent] [--models <harness>:<model>[:<effort>],...] [--allow-no-acceptance] [--allow-no-analysis]",
 	Setup: func(fs *flag.FlagSet) {
 		fs.Bool("allow-no-acceptance", false, "submit an execution ticket whose content lists no acceptance criterion (under `## Acceptance` or `## 验收`) on a lane that requires acceptance; without it such a ticket is refused")
+		fs.Bool("allow-no-analysis", false, "submit an execution ticket whose content carries no analysis section (under `## 分析` or `## Analysis`) on a lane that requires acceptance; without it such a ticket is refused")
 		fs.String("priority", "normal", "queue priority (low|normal|high|urgent)")
 		fs.String("models", "", "manual model candidates for EVERY step of this WI, comma-separated, in order; "+
 			"each is <harness>:<model>[:<effort>] with harness pi or claude, e.g. claude:claude-opus-5-5:high,pi:example-gateway/model-a "+
@@ -53,6 +54,11 @@ var cmdSubmit = &Command{
 		}
 		if wi != nil && !boolFlag(fs, "allow-no-acceptance") {
 			if err := submitAcceptanceCheck(ctx, wi, name); err != nil {
+				return err
+			}
+		}
+		if wi != nil && !boolFlag(fs, "allow-no-analysis") {
+			if err := submitAnalysisCheck(ctx, wi, name); err != nil {
 				return err
 			}
 		}
@@ -174,6 +180,33 @@ func submitAcceptanceCheck(ctx *Context, wi *api.WorkItem, name string) error {
 		"This ticket needs interaction first: settle its acceptance in the session and write it into the ticket "+
 		"(pf file edit %s --content @file), then submit.\n"+
 		"To submit it without acceptance anyway: pf submit %s --allow-no-acceptance", name, name, name)
+}
+
+// submitAnalysisCheck refuses an execution ticket (one with a bundle)
+// whose content carries no pre-submit analysis — no `## 分析` (or `##
+// Analysis`) section, or a heading with no content; 「免分析」 written by
+// the session on the owner's explicit skip (with its date) is content —
+// on the same lanes the acceptance check applies (the lane's
+// `acceptance` declaration; a lane that cannot be read requires one):
+// it needs interaction first. The flow and the report format are the
+// session's (the routing skill's submit fragment, the analysis check).
+func submitAnalysisCheck(ctx *Context, wi *api.WorkItem, name string) error {
+	if wi.BundleName == nil || strings.TrimSpace(*wi.BundleName) == "" {
+		return nil
+	}
+	content := ""
+	if wi.Content != nil {
+		content = *wi.Content
+	}
+	if workflow.HasAnalysis(content) || !laneOf(ctx, wi.ProjectName, *wi.BundleName).RequiresAcceptance() {
+		return nil
+	}
+	return fmt.Errorf("submit: %s has no analysis section (no content under `## 分析` or `## Analysis`), "+
+		"and its lane requires acceptance (workflow.yaml `acceptance`, default required), so it was not submitted.\n"+
+		"This ticket needs interaction first: analyze it (a read-only `pf task spawn` errand; the report format in the routing skill's submit fragment) "+
+		"and write the report into its `## 分析` section (pf file edit %s --content @file), "+
+		"or have the owner explicitly waive it (「免分析」 with its date, written the same way).\n"+
+		"To submit it without analysis anyway: pf submit %s --allow-no-analysis", name, name, name)
 }
 
 // wiDisplayName answers the display name (slug) of a work item for a
