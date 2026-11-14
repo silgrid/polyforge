@@ -111,7 +111,7 @@ type Host struct {
 	// slots is the Host ceiling over every Cell (hostslots.go).
 	slots *hostSlots
 	// admission is the Host's heavy-run admission every Cell's daemon-run
-	// verification shares (verifyqueue.go,).
+	// verification shares (verifyqueue.go).
 	admission *verifyQueue
 }
 

@@ -1,7 +1,7 @@
 package cli
 
 // config_policy.go: the cli.toml text of the memory_policy family that pf
-// itself writes `pf init`'s editable copy of the built-in
+// itself writes — `pf init`'s editable copy of the built-in
 // default and `pf config migrate`'s moved blocks — and the locked,
 // validated, atomic insert they share with `pf config set`.
 

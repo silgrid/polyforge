@@ -72,7 +72,7 @@ function ParkCause({ blocked }: { blocked: PolyforgeBlocked }) {
 
 /**
  * The job card's bottom (workflow contract v2 §5.4, change 14; workflow
- * contract 4, design #483 §7,) — the same interaction form as
+ * contract 4, design #483 §7) — the same interaction form as
  * the main session: the question the step waits on (highlighted, its
  * Markdown rendered — — the verbatim text on hover),
  * and ONE input box — the main session composer's (`ComposerBox`,
@@ -82,8 +82,7 @@ function ParkCause({ blocked }: { blocked: PolyforgeBlocked }) {
  * on its `pf step ask` (a reply and a live interjection are one path, design
  * §5.2 (3)–(4)), and — the work item parked (blocked or paused) — as the
  * message that wakes the step the park belongs to (a short hint says so,
- * with the copyable `pf resume <wi>` that wakes it without words,
- *).
+ * with the copyable `pf resume <wi>` that wakes it without words).
  * Enter sends (the main composer's send-key setting, Shift+Enter a new
  * line); a rejection keeps the words in the box with pf's refusal beside
  * it; an accepted message is echoed into the flow at once (`onSent`) with
@@ -207,7 +206,7 @@ export function PolyforgeJobComposer({
       {parked && blocked && <ParkCause blocked={blocked} />}
       {open && state.awaiting && question && (
         // The question the owner answers, highlighted (design §5.4), its
-        // Markdown rendered (the step-ask question table,; over
+        // Markdown rendered (the step-ask question table; over
         // MAX_MARKDOWN_CHARS plain wrapped text, like the progress flow),
         // folded to three lines' height until opened.
         <div data-pf-chat-question="" data-pf-chat-question-id={question.id} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "6px 8px", borderLeft: `3px solid ${AMBER}`, borderRadius: 4, background: "rgba(217, 119, 6, 0.10)", minWidth: 0 }}>

@@ -1,8 +1,8 @@
 package test
 
-// w59_task_skill_contract_test.go: text contract for.
+// w59_task_skill_contract_test.go: a text contract.
 //
-// Work item #59 routes the `pf task` CLI face (shipped by,
+// Work item #59 routes the `pf task` CLI face (shipped earlier,
 // PR #706) into the routing skill: one intent-table row, a new
 // verbs/task.md fragment and the verb count in the SKILL.md description.
 // The change is skill text plus this pin — no endpoint, verb, flag or

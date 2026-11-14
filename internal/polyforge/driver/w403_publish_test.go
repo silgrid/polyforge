@@ -1,6 +1,6 @@
 package driver
 
-// w403_publish_test.go ( A2/AC4): the develop lane's publish
+// w403_publish_test.go (A2/AC4): the develop lane's publish
 // step replaces deliver. (Its recorded-command and result rules left with
 // the notary, workflow contract v2 change 18: the publish skill's agent
 // checks its upstream itself, P1.)

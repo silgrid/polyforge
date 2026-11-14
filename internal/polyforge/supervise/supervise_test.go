@@ -280,7 +280,7 @@ func TestJudgeRuleTable(t *testing.T) {
 }
 
 // TestJudgeStepTimeoutBlamesOnlyTheDyingDispatch pins rule 4's attribution
-// ( D1): T is cumulative over the whole step, so the dispatch
+// (D1): T is cumulative over the whole step, so the dispatch
 // that happens to be running when it runs out is the slow-model cause (a
 // candidate switch) only when it ran at least half of T itself AND waited on
 // the model for at least half of its own runtime. Every other expiry is

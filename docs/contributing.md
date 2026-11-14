@@ -146,7 +146,7 @@ defaults. The report of a diff and the commands to run:
 <data-dir>/release/current/workflows/_shared/scripts/verify-scope [--base <rev>] [--full | --micro | --light] [--json] [--run] [--since <rev>]
 ```
 
-**The light tier (develop,).** The develop lane's
+**The light tier (develop).** The develop lane's
 verification runs `verify.py --tier light`:
 `workflows/_shared/scripts/verify-scope --light` in each touched repo and in every nested engine root the diff
 reaches (a subdirectory with its own tracked `.polyforge/verify-scope.conf`,
@@ -332,7 +332,7 @@ items that merged.
   to `pi-web/`);
   the root conf forcing the full tier for `pi-web/` paths is what keeps a
   scoped run of the repository from under-verifying a pi-web change. The
-  light tier (develop,) applies no forced-full path: a pi-web
+  light tier (develop) applies no forced-full path: a pi-web
   change runs the subtree conf's light report (its fast gates and the suites
   whose `carries:` meet it), and the rest of the package's bar is the
   integration run's.

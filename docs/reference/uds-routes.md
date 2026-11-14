@@ -5,7 +5,7 @@ The routes mounted by the daemon's local Unix-socket HTTP face
 route: `user` = the operator's CLI / watch tooling; `step` = a workflow
 step's own process, identified by its process tree (every other caller
 is refused); `task` = a one-shot task agent's process, identified by its
-own markers (`PF_TASK_ID` + `PF_DAEMON_ID`,). Every mutating
+own markers (`PF_TASK_ID` + `PF_DAEMON_ID`). Every mutating
 (non-GET) route refuses a caller that belongs to a step agent's process
 tree, or whose UDS peer credential is unavailable, with `DAEMON-403`
 (polyforge#122 accident guard) — except the one step write the step route

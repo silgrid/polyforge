@@ -1,6 +1,6 @@
 package runtime
 
-// w72_refused_close_settles_once_test.go —, the acceptance the
+// w72_refused_close_settles_once_test.go, the acceptance the
 // repro's own bound is too loose to pin.
 //
 // The repro (w72_verify_refused_livelock_repro_test.go) only bounds the

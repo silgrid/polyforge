@@ -4,7 +4,7 @@
 //
 // The chat subscription model is retired: the daemon's machine-level decision
 // feed (`pf --json watch decisions`, served as `GET /api/polyforge/decisions`)
-// is shown per work item (owner ruling 2026-11-09;): a work
+// is shown per work item (owner ruling 2026-11-09): a work
 // item the daemon no longer holds has a feed-only attention card in the Jobs
 // row with the entry's reason and 忽略 (dismissing the item's open entries); a
 // live job is its card — the flow and one input box, with the waiting

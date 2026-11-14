@@ -1,7 +1,7 @@
 package driver
 
 // wake_test.go: the owner's message to a parked work item (workflow
-// contract 4, design #483 §7 "叫醒谁",) — the park's
+// contract 4, design #483 §7 "叫醒谁") — the park's
 // classification (WakeOf, one case per row of the table) and the shape of
 // the woken dispatch: a step that handed off `blocked` resumes its session
 // with the message alone, derived from the capsule's records so the

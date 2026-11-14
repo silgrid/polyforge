@@ -2,7 +2,7 @@ package test
 
 // w405_pf_gate_test.go: the test gate as the release runs it — the tree's
 // own workflow script, `python3 workflows/_shared/scripts/gate.py
-// --isolation container` from the clone's root (; cmd/pf-gate
+// --isolation container` from the clone's root (cmd/pf-gate
 // before) — in a release world (release_script_test.go: a local bare
 // origin, a clone carrying the gate tree and the script, the fake docker
 // whose container runs a --workdir exec in that directory). No real remote

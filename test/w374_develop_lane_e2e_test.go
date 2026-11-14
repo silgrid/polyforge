@@ -3,8 +3,8 @@
 
 package test
 
-// w374_develop_lane_e2e_test.go ( D2, rewritten by workflow
-// contract v2 change 11, ported to workflow contract 4 by):
+// w374_develop_lane_e2e_test.go (D2, rewritten by workflow
+// contract v2 change 11, ported to workflow contract 4):
 // the develop lane end to end through the real daemon + Go driver and the
 // fake harness (test/fakepi as pi, the fake `gh`): build → review → sync →
 // verification → publish → merge, every step an agent step ending its

@@ -1,7 +1,7 @@
 package daemon
 
-// progresslookup.go: the caller half of the cross-machine query face
-//. The fixed decision order lives here:
+// progresslookup.go: the caller half of the cross-machine query face.
+// The fixed decision order lives here:
 //
 //  1. local queue/job/capsule -> local snapshot (no remote call)
 //  2. aihub cannot resolve the WI -> CORE-404
@@ -10,7 +10,7 @@ package daemon
 //     registered-window snapshot
 //  5. running/blocked, fresh holder != this machine -> signed 5 s query
 //     and the holder's snapshot plus holder_machine, served from the
-//     remote-snapshot cache for remoteSnapTTL ( A3)
+//     remote-snapshot cache for remoteSnapTTL (A3)
 //  6. stale holder -> CORE-504 (never stale data)
 //  7. deregistered holder -> CORE-410
 //  8. holder without the capability -> CORE-501
@@ -27,7 +27,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
-// The remote-snapshot cache ( A3). A resident `pf watch`
+// The remote-snapshot cache (A3). A resident `pf watch`
 // polls every 2 s, and every poll of a WI held elsewhere used to cost the
 // holder a signed relay: ≈300 per 605 s relay window per watcher, close
 // to aihub's 320-per-member budget and two thirds of its 448-per-holder

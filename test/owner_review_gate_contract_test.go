@@ -1,6 +1,6 @@
 package test
 
-// owner_review_gate_contract_test.go: text contract for — a
+// owner_review_gate_contract_test.go: text contract — a
 // work item that declares an owner-review artifact has it shown to the owner
 // in publish's question (`pf step ask`, workflow contract 4) once its PRs
 // are open, and the lane's
@@ -25,7 +25,7 @@ import (
 // the shipped (bundle, step) pairs that may declare an owner-review
 // artifact (micro's fix, the lane has no plan, so its build
 // step's hand-off body is the only place to declare one; the retired lanes'
-// plan and build steps went with)
+// plan and build steps were removed)
 var ownerReviewAuthoringSteps = [][2]string{
 	{"micro", "fix"},
 	{"develop", "build"}, // the develop lane's one authoring step

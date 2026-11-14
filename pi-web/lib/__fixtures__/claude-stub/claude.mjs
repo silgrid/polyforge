@@ -69,7 +69,7 @@
 //   PI_TEST_CLAUDE_STUB_REFUSE_PERMISSION_MODE=1  answers every set_permission_mode with
 //                             claude 2.1.322's recorded invalid_mode refusal.
 //   In every mode (hang and deaf included) an `initialize` control request is answered with
-//   claude 2.1.322's recorded answer (claude-2.1.322/initialize/,) under this
+//   claude 2.1.322's recorded answer (claude-2.1.322/initialize/) under this
 //   request's id; PI_TEST_CLAUDE_STUB_VERSION replaces its `claude_code_version`. A launch
 //   with `--no-session-persistence` and no session (Pi Web's probe, lib/claude-probe.ts) is
 //   logged as `kind: "probe"`, never `launch`, so a session's launch count is its own.
@@ -115,8 +115,8 @@ function initializeAnswer(requestId) {
   }
 }
 let model = valueOf("--model") ?? "claude-default";
-// As claude 2.1.322 answers `set_permission_mode` (lib/__fixtures__/claude-2.1.322/permission-mode/,
-//): the mode back on success, a status frame when it changed, claude's
+// As claude 2.1.322 answers `set_permission_mode` (lib/__fixtures__/claude-2.1.322/permission-mode/):
+// the mode back on success, a status frame when it changed, claude's
 // invalid_mode text otherwise. PI_TEST_CLAUDE_STUB_REFUSE_PERMISSION_MODE=1 refuses every mode.
 const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"];
 const INVALID_PERMISSION_MODE = "Cannot set permission mode: must be one of acceptEdits, auto, bypassPermissions, default, dontAsk, plan";

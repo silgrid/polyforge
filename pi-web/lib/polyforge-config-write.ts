@@ -55,9 +55,9 @@ import {
  * never a write.
  */
 
-/** The fixed allowlist: every cli.toml key the panel edits (:
+/** The fixed allowlist: every cli.toml key the panel edits (
  *  the nine non-secret keys plus write-only api_key) and the cli.toml
- *  [summarize] keys the same constants the client form
+ *  [summarize] keys — the same constants the client form
  *  renders from. memory_policy is read-only in the panel and never listed. */
 export const WRITABLE_KEYS = new Set([...CLI_WRITABLE_KEYS, ...SUMMARIZE_KEYS]);
 
@@ -403,7 +403,7 @@ async function executeWrite(body: ConfigWriteRequest): Promise<ConfigWriteResult
     throw new ConfigWriteError(error instanceof Error ? error.message : "bad scope", 400);
   }
   // A workspace (.polyforge.yaml) key is a Cell's workflow card's: pf
-  // matches its cwd in that Cell's own mapping (:
+  // matches its cwd in that Cell's own mapping (
   // every Cell pane has the card). The Host has no workspace.
   if (scope === "workspace" && "host" in cellScope) {
     throw new ConfigWriteError("a workspace (.polyforge.yaml) write belongs to a Cell: it takes no Host scope", 400);
@@ -524,7 +524,7 @@ export async function reloadPolyforgeConfig(cellScope: PolyforgeConfigScope): Pr
  *  caller writes nothing local. Not a panel write: no history entry, and the
  *  key stays out of WRITABLE_KEYS. This is the user's explicit save and may
  *  overwrite a key pf's file sets; the automatic backfill
- *  (`reconcilePolyforgeAgentLanguage` below,) never does. */
+ *  (`reconcilePolyforgeAgentLanguage` below) never does. */
 export async function syncAgentLanguageToPolyforge(language: string): Promise<{ synced: boolean }> {
   const presence = await probePolyforgeVersion(true);
   if (!presence.present) return { synced: false };

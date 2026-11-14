@@ -5,7 +5,7 @@ package server
 // gets the same missing-work-item answer an unknown reference gets, so
 // the relay is no existence oracle); the holder resolution answers the
 // typed CORE-404/410/504/501; the relay budget answers CORE-429 before
-// the holder is reached ( A2); the holder's answer is relayed
+// the holder is reached (A2); the holder's answer is relayed
 // byte-for-byte and nothing is written to the database.
 
 import (
@@ -66,7 +66,7 @@ func (s *Server) relayQuery(w http.ResponseWriter, r *http.Request, idn *identit
 	if kind == "artifact" && req.ArtifactPath == "" {
 		return core.Fail(api.ErrCoreBadInput, "", "artifact_path is required")
 	}
-	// The last gate before the holder is reached ( A2): every
+	// The last gate before the holder is reached (A2): every
 	// relayed query costs the holder a signed inbox wake and a signed
 	// answer, so the budget bounds what any member can make it send.
 	if err := s.relay.admit(time.Now(), idn.UserID, holder.MachineID); err != nil {

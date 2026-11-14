@@ -2,7 +2,7 @@ package daemon
 
 // answer.go: POST /jobs/{wi}/answer — the owner's words to a work item's
 // step (workflow contract v2 §5.2, the owner-message relay) and, since
-// workflow contract 4 (design #483 §7,), the wake of a
+// workflow contract 4 (design #483 §7), the wake of a
 // parked one.
 //
 // A running work item: the live driver records the message and delivers it

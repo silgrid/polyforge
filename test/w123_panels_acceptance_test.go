@@ -1,7 +1,7 @@
 package test
 
 // w123_panels_acceptance_test.go: the e2e acceptance suite for
-//'s pf-side half — `pf recall` browse mode (human
+// the pf-side half — `pf recall` browse mode (human
 // direct-to-aihub) and the bounded prompt summary on GET /task/list.
 //
 // Authored pre-code against the capsule's artifacts/spec.md (and the route

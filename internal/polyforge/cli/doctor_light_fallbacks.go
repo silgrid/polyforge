@@ -1,12 +1,12 @@
 package cli
 
 // doctor_light_fallbacks.go: `pf doctor`'s "light verification fallbacks"
-// row ( U3). It reads, never writes, the latest verify run of
+// row (U3). It reads, never writes, the latest verify run of
 // every live capsule of the mapped workspaces and, when a light request
 // ran full, counts those capsules and names the fallback reasons by
 // category. The note rode the scoped-gates readiness row until that row's
-// check moved into the workflow with the scope engine (scope_ready.py,
-//); the run history is the doctor's to read, so the note is
+// check moved into the workflow with the scope engine (scope_ready.py);
+// the run history is the doctor's to read, so the note is
 // a row of its own. It reports, never judges: always `pass` (or `skip`
 // with no mapped workspace), never moves the exit code; out of --harness.
 

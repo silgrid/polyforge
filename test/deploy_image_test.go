@@ -342,7 +342,7 @@ c.commit()`
 		"BACKUP_ROOT="+filepath.Join(w, "backups"), "DEPLOY_LOCK_FILE="+filepath.Join(w, "srv", "deploy.lock"), "COMPOSE_FILE="+compose,
 		"COMPOSE_PROJECT=aihub-app",
 		// the deployer repo has no origin: state which GitHub repo it stands
-		// for (deploy.sh refuses a GH_REPO it cannot match,)
+		// for (deploy.sh refuses a GH_REPO it cannot match)
 		"DEPLOY_REMOTE_IS=silgrid/polyforge",
 		"WAIT_SECS=4", "POLL_SECS=1", "UP_WAIT_SECS=5")
 	return d

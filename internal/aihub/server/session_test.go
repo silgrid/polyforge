@@ -594,7 +594,7 @@ func TestSessionClaimRequiresWriter(t *testing.T) {
 	claim := func(key string) (int, []byte) {
 		return e.do(t, "POST", "/api/v1/work-items/"+id+"/claim", key,
 			// No machine_id: the writer gate is under test, not the
-			// machine-ownership rule ( step 3).
+			// machine-ownership rule (step 3).
 			map[string]string{"session_id": "s-" + key[:8], "idempotency_key": "k-" + key[:8]}, nil)
 	}
 	// Outsider: the work item is concealed — the same missing-work-item

@@ -373,7 +373,7 @@ func TestD6PausedDispatchNeverBookedByALaterRelaunch(t *testing.T) {
 }
 
 // TestD6CumulativeTimeoutRotatesOnlyForTheDyingDispatch reproduces the two
-// production shapes of D1 end to end through the decision: the
+// production shapes end to end through the decision: the
 // supervisor's own rule 4 judges the dispatch's snapshot, and the driver
 // disposes of that verdict. The shape (a 12m38s tail of a step
 // that spent 1h17m22s before it) must NOT switch the model — it is the
@@ -442,7 +442,7 @@ func TestD6CumulativeTimeoutRotatesOnlyForTheDyingDispatch(t *testing.T) {
 	}
 }
 
-// TestD6SlowModelRotatesAtMostOncePerTimeoutLedger ( S3):
+// TestD6SlowModelRotatesAtMostOncePerTimeoutLedger (S3):
 // "a T era switches the candidate on a timeout at most once" is enforced
 // by the driver, not left to timing (whether the successor's tick
 // overshoot beats its predecessor's teardown and so hands it half of the

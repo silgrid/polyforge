@@ -179,8 +179,8 @@ class MiscTest(unittest.TestCase):
 
     @unittest.skipUnless(os.path.isfile(SCOPE_ENGINE), "scripts/verify-scope is not in this tree")
     def test_w465_tier_reasons_one_line_each(self) -> None:
-        """Port of TestW465TierReasonsOneLineEach (w386_tier_reason_test.go,
-): every reason a light request runs full is its own
+        """Port of TestW465TierReasonsOneLineEach (w386_tier_reason_test.go):
+        every reason a light request runs full is its own
         tier.reasons entry, prefixed with its repo, and its own `- ` line of
         report-mechanical.md — a changed stack config file and a failed go
         list here — while the engine's informational --light diagnostics (a

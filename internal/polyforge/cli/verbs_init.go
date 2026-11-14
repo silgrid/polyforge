@@ -18,7 +18,7 @@ import (
 // notes file's polyforge-managed block (workspace.Notes: AGENTS.md, else
 // CLAUDE.md; a fresh workspace gets AGENTS.md) and, for a mapped
 // workspace, cli.toml's default [memory_policy."<path>".default] block
-// (; idempotent, an existing entry is never rewritten). It
+// (idempotent, an existing entry is never rewritten). It
 // never writes .polyforge.yaml and needs no aihub; mapping the workspace
 // stays the operator's cli.toml edit (skills/polyforge/verbs/init.md).
 // Machine install is tools/install.sh, not this verb.

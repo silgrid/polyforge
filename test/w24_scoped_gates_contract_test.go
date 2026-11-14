@@ -1,11 +1,11 @@
 package test
 
-// w24_scoped_gates_contract_test.go: text contract for.
+// w24_scoped_gates_contract_test.go: a text contract.
 //
 // Work item #24 added the scoped-gate discoverability surfaces. The doctor
 // verb's own authority (verbs/doctor.md) documents the readiness check —
 // a doctor row until the engine moved into the workflow, the workflow's
-// scope_ready.py since; this test pins the markers it
+// scope_ready.py; this test pins the markers it
 // carries. (The filing skill's per-work-item scoped-tier hint left with
 // the scoped tier, a lane runs the tier its
 // verification step declares.)

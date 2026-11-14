@@ -1,6 +1,6 @@
 package test
 
-// w294_diagram_svg_contract_test.go: text contract for.
+// w294_diagram_svg_contract_test.go: a text contract.
 //
 // Work item #294 moves the diagram guidance to native SVG: the `harness
 // diagram guidance` doctor row passes only the SVG block, warns legacy

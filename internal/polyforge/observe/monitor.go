@@ -119,7 +119,7 @@ const (
 	phaseInStep  = "in_step"
 	phaseWaiting = "waiting_human"
 	// phaseQueued: a daemon-run verification waits in the daemon's
-	// heavy-run admission queue no process, no stall
+	// heavy-run admission queue — no process, no stall
 	// clock (like a human question).
 	phaseQueued = "verify_queued"
 )

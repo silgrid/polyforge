@@ -8,7 +8,7 @@ Read-only over <capsules-dir> (a workspace's capsules/, one directory per work
 item run). It prints two tables and, with --csv, writes one row per run.
 
 The measure is the 2026-11-09 rework baseline's (aihub doc.audit
-mem_2wmAvnsWFWmw, filed on), kept byte-for-byte where it decides
+mem_2wmAvnsWFWmw), kept byte-for-byte where it decides
 a number:
 
   run set      every capsule directory except `*.quarantined.*`; --since/--until

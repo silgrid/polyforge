@@ -24,8 +24,8 @@ import {
 } from "./polyforge-install-pure";
 
 /**
- * Server side of Settings › Polyforge's pf install / update entry
- *. One run at a time, owned by this server process and not
+ * Server side of Settings › Polyforge's pf install / update entry.
+ * One run at a time, owned by this server process and not
  * by the page that started it: closing the page never stops it, and a page
  * opened later reads its progress or its result here.
  *

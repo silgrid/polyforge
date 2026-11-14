@@ -1,4 +1,4 @@
-// claude's permission prompts in Pi Web (; docs/agents/claude-sessions.md).
+// claude's permission prompts in Pi Web (docs/agents/claude-sessions.md).
 // claude asks with `control_request` / `can_use_tool`; the broker turns each request into
 // Pi Web's existing extension dialogs (`select` / `input` with `timeout` / `expiresAt`,
 // no new field or method), answers claude with one `control_response` stdin line, and

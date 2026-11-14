@@ -2,7 +2,7 @@
 
 package test
 
-// w521_docs_test.go ( u14): the documents teach a project's
+// w521_docs_test.go (u14): the documents teach a project's
 // skip of a step its lane declares skippable — the lane key, the
 // workspace yaml switch and its write, the claim fixing the skipped set,
 // the skipped execution status and its event, the wrap attrs a skipped

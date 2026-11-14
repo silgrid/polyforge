@@ -338,12 +338,12 @@ func TestDaemonVerbHelpOnlyExitGoldens(t *testing.T) {
 	}
 	// Sanity: the registry really is the full verb set (12 routing, +
 	// 5 admin + doctor + version + init + daemon + aihub (the server
-	// entry, help-only like daemon,) + watch + step (a
-	// step's one entry point, workflow contract 4,, which
-	// replaced contract 3's result and ask,); watch replaced the
+	// entry, help-only like daemon) + watch + step (a
+	// step's one entry point, workflow contract 4, which
+	// replaced contract 3's result and ask); watch replaced the
 	// retired watch-probe; doctor is the #113 machine health face; version
 	// the #196 build string (the `--version` flag's verb form); init
-	// the #177 workspace layout; chat was retired by).
+	// the #177 workspace layout; chat was retired).
 	want := []string{
 		"file", "queue", "cancel", "recall", "remember", "memory",
 		"submit", "answer", "pause", "resume",

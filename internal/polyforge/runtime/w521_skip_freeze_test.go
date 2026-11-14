@@ -1,6 +1,6 @@
 package runtime
 
-// w521_skip_freeze_test.go ( u3): the steps a claim skips
+// w521_skip_freeze_test.go (u3): the steps a claim skips
 // are fixed in the capsule when the work item is first claimed —
 // runtime-state/skipped-steps.json, the steps the lane snapshot declares
 // skippable that the project's workspace yaml switches off. A re-claim

@@ -139,7 +139,7 @@ test("the relay recording resumes the finished agent under its original Agent ca
 });
 
 test("the 2.1.322 permission-mode recording: success answers carry the mode, a change adds a status frame, an unknown mode is invalid_mode", () => {
-  //, zero credit: control requests only, no user line, so claude ran no turn.
+  // Zero credit: control requests only, no user line, so claude ran no turn.
   const stdin = jsonl("permission-mode/stdin.jsonl");
   assert.deepEqual(stdin.map((line) => [line.type, line.request_id, line.request?.subtype, line.request?.mode]), [
     ["control_request", "pm-1", "set_permission_mode", "acceptEdits"],

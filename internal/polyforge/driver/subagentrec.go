@@ -1,6 +1,6 @@
 package driver
 
-// subagentrec.go: the pi half of — a pi step's subagent
+// subagentrec.go: the pi half — a pi step's subagent
 // conversations, recorded into the capsule while they run.
 //
 // pi's subagent tool (the extension the step agent dir carries) runs each

@@ -1,7 +1,7 @@
 package daemon
 
 // stephub.go: `pf step hub <verb>` (workflow contract 4, design #483 §5.2;
-// stage C1,) — a step's reads and writes of aihub work
+// stage C1) — a step's reads and writes of aihub work
 // items, through the daemon's own client and only aihub's existing routes:
 //
 //   - get <wi> and list (project, status, bundle, attrs filters, limit)

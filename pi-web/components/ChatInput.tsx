@@ -155,7 +155,7 @@ export interface ClaudeComposerState {
   effort: ClaudeEffort;
   /**
    * GET /api/claude's answer; null until it came (claude then stays unavailable).
-   * `models`: the names its model list offers (claude's aliases and the custom names,).
+   * `models`: the names its model list offers (claude's aliases and the custom names).
    */
   availability: { available: boolean; models?: readonly string[] } | null;
   onHarnessChange?: (harness: SessionHarness) => void;
@@ -169,8 +169,8 @@ export interface ClaudeComposerState {
   launchPermissionMode?: ClaudeLaunchPermissionMode;
   onLaunchPermissionModeChange?: (mode: ClaudeLaunchPermissionMode) => void;
   /**
-   * Whether the control offers plan ( r3): the session's approvals come to Pi
-   * Web ('s ask). Otherwise plan shows disabled with its reason.
+   * Whether the control offers plan (r3): the session's approvals come to Pi
+   * Web (ask mode). Otherwise plan shows disabled with its reason.
    */
   planAvailable?: boolean;
   /** The visible line of a switch claude refused (localized prefix + claude's own text). */
@@ -217,7 +217,7 @@ export function ClaudeComposerControls({ state, t }: { state: ClaudeComposerStat
  */
 export function ClaudeLaunchPermissionModeMenu({ mode, planAvailable, t, onSelect }: {
   mode: ClaudeLaunchPermissionMode;
-  /** Whether this session's approvals come to Pi Web ('s ask; r3). */
+  /** Whether this session's approvals come to Pi Web (ask mode; r3). */
   planAvailable: boolean;
   t: (key: string, params?: Record<string, string | number>) => string;
   onSelect: (mode: ClaudeLaunchPermissionMode) => void;
@@ -226,7 +226,7 @@ export function ClaudeLaunchPermissionModeMenu({ mode, planAvailable, t, onSelec
     <div role="listbox" aria-label={t("claude.permissionModeLabel")}>
       {CLAUDE_LAUNCH_PERMISSION_MODES.map((entry) => {
         const active = entry === mode;
-        // plan needs the session's approvals in Pi Web ('s ask): else offered, disabled, the reason in the row.
+        // plan needs the session's approvals in Pi Web (ask mode): else offered, disabled, the reason in the row.
         const unavailable = entry === "plan" && !planAvailable;
         return (
           <button

@@ -1,6 +1,6 @@
 package core
 
-// w403_wrap_attrs_test.go ( A2/AC4): the wrapped session-end
+// w403_wrap_attrs_test.go (A2/AC4): the wrapped session-end
 // may carry attrs — the develop lane's hand-off to the integration lane
 // (`integration: {state: landed, …}`) — merged key by key into the work
 // item's attrs in the same fenced transaction; every other attr stays.

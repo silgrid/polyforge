@@ -1,7 +1,7 @@
 package protocol
 
 // decisions.go: the wire shapes of the daemon's decision feed
-// the machine-level record of every human decision the
+// — the machine-level record of every human decision the
 // daemon observed (a question waiting for an answer, a blocked or failed
 // work item, a dropped submit, a finished background task, …), read by the
 // Pi Web Polyforge panel and `pf watch decisions`. It replaced the

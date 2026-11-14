@@ -1,7 +1,7 @@
 package driver
 
 // static_ids_test.go: the two static invariants of the workflow contract
-// (§13.1 ⑥ and ⑦), in force without exception since.
+// (§13.1 ⑥ and ⑦), in force without exception.
 //
 // ⑥ No Go code of the execution plane or the CLI branches on a step id or
 // a lane name: a string literal equal to a shipped lane's name or one of

@@ -112,7 +112,7 @@ test("every createHarness browser suite launches through h.launchBrowser", () =>
 });
 
 test("every other browser suite but manual-fetch and pdf-page-fragment launches through launchBrowser", () => {
-  // manual-fetch.mjs keeps its own Chromium ( AC1);
+  // manual-fetch.mjs keeps its own Chromium (AC1);
   // pdf-page-fragment.mjs needs full Chromium's PDF viewer (channel "chromium"),
   // which the shared headless server does not have.
   const allowed = new Set(["manual-fetch.mjs", "pdf-page-fragment.mjs"]);

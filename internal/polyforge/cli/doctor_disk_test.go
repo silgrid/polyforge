@@ -1,6 +1,6 @@
 package cli
 
-// doctor_disk_test.go: the "disk watermark" row a
+// doctor_disk_test.go: the "disk watermark" row — a
 // filesystem used above 70% warns, at or below passes, a filesystem
 // shared by two workspaces is reported once, the capsules/ byte count is
 // what the tree holds (no symlink followed), and a workspace whose

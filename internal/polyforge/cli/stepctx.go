@@ -90,7 +90,7 @@ func taskRefusal(cmd *Command) error {
 const taskMemories = "/task/memories"
 
 // searchMemories is `pf recall`'s search (via the daemon in a task).
-// sort and after (browse paging,) reach aihub on the human
+// sort and after (browse paging) reach aihub on the human
 // direct path only: the daemon's task memory proxy is search-only and
 // cmdRecall refuses browse and its flags there before calling this, so
 // they are never put on a daemon request.

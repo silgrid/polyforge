@@ -135,7 +135,7 @@ type qEntry struct {
 	// evidence; EnqueuedAt is the FIFO key and equals it for live submits).
 	SubmittedAt time.Time `json:"submitted_at"`
 	// Origin is the typed submit origin (identity model: its kind and
-	// owner; no chat is recorded since). Persisted so a
+	// owner; no chat is recorded). Persisted so a
 	// replayed claim hands it to the job record exactly like a live submit.
 	Origin runtime.Origin `json:"origin"`
 	// NotBefore/Deferrals are the DAEMON-503 backoff: a claim the hub

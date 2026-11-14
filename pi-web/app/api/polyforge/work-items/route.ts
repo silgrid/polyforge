@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
  * `--project`/`--status`/`--limit`; pf's own 500-per-project cap), each row
  * through the eight-key passport (id, slug, project, status, priority,
  * bundle_name, goal, created_at; plus `acceptance_missing` only when pf
- * sends `true`,) in pf's order — the client sorts — with
+ * sends `true`) in pf's order — the client sorts — with
  * `total` pf's total (else the sanitized row count). Read-only: this route
  * exports GET alone, so any other method is 405. Degradation-first and whole:
  * pf absent, below the 2.19.0 floor, a failed project (pf fails the whole

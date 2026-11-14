@@ -8,7 +8,7 @@ package test
 // judges them, an unexplained hit blocks unless an owner ruling is on record,
 // and the upstream item is N/A when no upstream is claimed. A revert of the
 // section is red. (The agent verification step that recorded the readings as
-// named checks was deleted with.)
+// named checks was deleted.)
 //
 // Run (targeted): GOWORK=off go test ./test/ -run '^TestW320StepText' -count=1
 

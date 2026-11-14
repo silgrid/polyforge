@@ -681,10 +681,10 @@ func (d *Driver) announceStart(sp *StepSpawn, run StepRun, startedAt time.Time) 
 }
 
 // declaredPause answers how much of dispatch n's wall the supervisor
-// declared unobserved ( R4). The monitor forgives its own
+// declared unobserved (R4). The monitor forgives its own
 // observation gap — a host or daemon freeze — by moving every stamp of
 // the dispatch's tracker at or before the pause forward by the gap
-// (Tracker.ObserveTick,), the dispatch's start included, so
+// (Tracker.ObserveTick), the dispatch's start included, so
 // the distance from the start the driver announced to the tracker's start
 // now is exactly the sum of the gaps declared during this dispatch. It
 // must be read before step_ended (the monitor drops the tracker on it). No

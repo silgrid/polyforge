@@ -24,7 +24,7 @@
 //
 // e2e/all: isolated — proven load-sensitive on a shared host: under the
 // parallel full bar S3/S20/S10 hit `locator.click: Timeout 8000ms exceeded`
-// while the suite passed alone (#227, #235;).
+// while the suite passed alone (#227, #235).
 import assert from "node:assert/strict";
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -865,7 +865,7 @@ try {
     // `pf --version` is the presence probe, not a state read: its 60s module cache
     // (lib/polyforge-status.ts PRESENCE_TTL_MS) re-spawns it once per route bundle
     // whenever this window crosses an expiry, which a loaded host makes likely
-    // ( full bar: [["--version"]×3]). It is not a verb that detects the state.
+    // (full bar: [["--version"]×3]). It is not a verb that detects the state.
     const stateCalls = calls().filter((argv) => argv[0] !== "--version");
     assert.equal(stateCalls.filter((argv) => !verbs.has(argv[0])).length, 0,
       `no new pf verb was spawned to detect the state ${JSON.stringify(stateCalls.filter((argv) => !verbs.has(argv[0])))}`);

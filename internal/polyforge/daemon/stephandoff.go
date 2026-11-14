@@ -1,7 +1,7 @@
 package daemon
 
 // stephandoff.go: `pf step handoff` (workflow contract 4, design #483
-// §5.1 and §6; stage C1,). The dispatch ends with one status
+// §5.1 and §6; stage C1). The dispatch ends with one status
 // and a body; the daemon checks the call's shape on the spot — the
 // refusal is the step's to fix, and nothing is written — then stamps the
 // section's header from its own records and appends the section to

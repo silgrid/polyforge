@@ -3,7 +3,7 @@ package daemon
 // stepmem_test.go: the step agent's daemon-mediated memory face, `pf step
 // recall | memory show | remember` (the /step/call verbs recall,
 // memory.show and remember; the /step/memories routes left with workflow
-// contract 4's stage C3,) — the caller's work item comes from
+// contract 4's stage C3) — the caller's work item comes from
 // its peer (never the request), every search is scoped to that work item's
 // project, another project's memory is not found, and callers that are no
 // step process are refused.

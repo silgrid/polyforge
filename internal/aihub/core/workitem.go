@@ -1040,7 +1040,7 @@ func withHolderBasis(body map[string]any, basis, machineID string) map[string]an
 // (a blocked WI still carrying a session would orphan a
 // holder). Effect: status→queued, waiting_on=NULL, event wi_resumed; the
 // claim gate (unchanged: queued only) then admits the WI like any queued
-// ticket. Authorization (server layer, v2-converge §7,): the
+// ticket. Authorization (server layer, v2-converge §7): the
 // WI's reporter, a project maintainer, an admin, or — only while the WI is
 // blocked — the holder operator (the current operator of the machine on the
 // latest claim/attach, a project writer or maintainer); the same gate as

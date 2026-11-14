@@ -1,6 +1,6 @@
 package runtime
 
-// w429_contract_reclaim_test.go ( AC7, contract §13.4 "resume
+// w429_contract_reclaim_test.go (AC7, contract §13.4 "resume
 // / re-claim ⇒ blocked contract"): a re-claim — `pf resume` of a work item
 // whose capsule chain carries a lane snapshot of another workflow
 // contract version — keeps that snapshot instead of materializing the

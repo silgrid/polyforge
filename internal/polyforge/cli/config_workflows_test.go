@@ -251,7 +251,7 @@ func TestWorkflowsUsageGlobalJSONBeforeVerb(t *testing.T) {
 	}
 }
 
-// TestWorkflowsSkillUsageGlobalJSONBeforeVerb ( self-review):
+// TestWorkflowsSkillUsageGlobalJSONBeforeVerb (self-review):
 // the doctor skill page restates the validate usage; it shows only the
 // usable form too.
 func TestWorkflowsSkillUsageGlobalJSONBeforeVerb(t *testing.T) {

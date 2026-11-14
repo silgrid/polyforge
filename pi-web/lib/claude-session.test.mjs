@@ -155,7 +155,7 @@ test("a prompt reaches stdin and the reply streams through the adapter; usage co
   const events = collect(session);
   assert.equal(await session.send({ type: "prompt", message: "read the notes" }), null);
   assert.equal(session.isRunning(), true);
-  // A message sent meanwhile is a steer now ( AC4: lib/claude-steer-395.test.mjs).
+  // A message sent meanwhile is a steer now (AC4: lib/claude-steer-395.test.mjs).
   await waitFor(() => events.some((event) => event.type === "prompt_done"), 10_000, "the turn never ended");
   const stdin = records().filter((entry) => entry.kind === "stdin" && entry.pid === session.pid).map((entry) => JSON.parse(entry.line));
   // Each user line carries a fresh uuid, so claude reports its lifecycle.

@@ -230,7 +230,7 @@ async function openMemory(page) {
   await bar.waitFor({ timeout: 20_000 });
   return bar;
 }
-// The shared search-bar's measurable shape ( row 6): the input,
+// The shared search-bar's measurable shape (row 6): the input,
 // each select and the square action are compared control type by control
 // type; the container and filter rows are measured for the ≤640px layout.
 const barShape = (bar) => bar.evaluate((root) => {
@@ -292,7 +292,7 @@ try {
     for (const [locale, label] of [["en", "Work items"], ["zh-TW", "工單列表"]]) {
       await withPage({ locale, storage: { "pi-locale": locale } }, async (page) => {
         await openWork(page);
-        // The label line is read once it has rendered (bounded,); the assertion below is unchanged.
+        // The label line is read once it has rendered (bounded); the assertion below is unchanged.
         await waitFor(async () => (await segment(page, new RegExp(label, "i")).innerText()).trim().split("\n")[0].trim() !== "", `${locale}: the third sub-tab's label line renders`, NAV_MS);
         // Owner ruling 2026-10-31 (authored-check-defects-203): compare the whole label line (the badge sits on its own line), not the first whitespace token.
         assert.equal((await segment(page, new RegExp(label, "i")).innerText()).trim().split("\n")[0].trim(), label, `${locale} labels the third sub-tab ${label}`);
@@ -309,8 +309,8 @@ try {
       assert.equal(await strip.getAttribute("aria-orientation"), "vertical", "the mobile rail is vertical, not a horizontal bar");
       const names = await segments(page).evaluateAll((nodes) => nodes.map((node) => [node.getAttribute("aria-label"), node.getAttribute("title")]));
       assert.deepEqual(names, [["作业", "作业"], ["任务", "任务"], ["工单列表", "工单列表"], ["待集成", "待集成"]], "the four rail buttons are named 作业, 任务, 工单列表, 待集成 in order");
-      // Geometry is read once the rail is laid out (a bounded condition wait,
-      //): a read racing layout under host load sees 0-size boxes.
+      // Geometry is read once the rail is laid out (a bounded condition wait):
+      // a read racing layout under host load sees 0-size boxes.
       await waitFor(async () => (await strip.getAttribute("aria-orientation")) === "vertical"
         && (await segments(page).evaluateAll((nodes) => nodes.every((node) => { const rect = node.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }))),
       "the mobile rail is laid out", NAV_MS);

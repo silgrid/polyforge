@@ -1,6 +1,6 @@
 package cli
 
-// w350_resume_refusal_test.go ( D5): a `pf resume` refused by
+// w350_resume_refusal_test.go (D5): a `pf resume` refused by
 // an execution-disabled Cell changes nothing — the CLI reads the Cell's
 // execution_disabled from GET /status (an existing route) before it
 // touches the hub, so clean_pause stays set, the work item stays paused

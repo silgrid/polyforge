@@ -116,8 +116,8 @@ export function isClaudeLaunchPermissionMode(value: unknown): value is ClaudeLau
 }
 
 /**
- * Whether plan mode can be offered to a claude child launched with's approval
- * mode `approvalMode` ( r3, plan D11): only `ask`, the mode whose
+ * Whether plan mode can be offered to a claude child launched with the approval
+ * mode `approvalMode` (r3, plan D11): only `ask`, the mode whose
  * `--permission-prompts host --permission-prompt-tool stdio` brings claude's approval
  * requests to Pi Web's dialog. Leaving plan is ExitPlanMode, which always asks; on `deny`
  * (`--permission-prompts none`) claude refuses what would ask, so a plan session could
@@ -174,7 +174,7 @@ export interface ClaudeModelOption {
 export const CLAUDE_PI_WEB_FEATURES = ["approvals", "backgroundTasks", "subagentText"] as const;
 export type ClaudeFeatureId = typeof CLAUDE_PI_WEB_FEATURES[number];
 /**
- * Why a feature is judged so: `host-prompts` / `no-host-prompts` ('s global
+ * Why a feature is judged so: `host-prompts` / `no-host-prompts` (the global
  * permission mode ask / deny: `--permission-prompts host` / `none`; r3),
  * `recorded` (the version is at least the recorded threshold), `below-recorded`,
  * `env-disabled` (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS in the child's environment) and
@@ -189,7 +189,7 @@ export interface ClaudeFeature {
 }
 
 /**
- * The first claude version a recording proves each feature in ('s 2.1.322
+ * The first claude version a recording proves each feature in (the 2.1.322
  * `subagent-forward/` and `relay/` recordings, lib/__fixtures__/claude-2.1.322/). Each is
  * one of CLAUDE_RECORDED_VERSIONS (lib/claude-shared.test.mjs); recording a newer claude
  * that changes a feature moves its threshold with that recording.

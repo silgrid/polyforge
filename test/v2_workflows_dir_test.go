@@ -93,7 +93,7 @@ func setMicroMaxRewinds(t testing.TB, dir string, n int) {
 // shipped micro or develop agent step declares a list of its own (micro's
 // review names its lane's mid tier instead, a placeholder tier that never
 // outranks the project default). Its names are no placeholders (a
-// `<harness>:example-…` step list is undeclared,), so the
+// `<harness>:example-…` step list is undeclared), so the
 // list really governs.
 const reviewStepCandidates = "[pi:lane-step/model-a, pi:lane-step/model-b]"
 

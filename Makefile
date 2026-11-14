@@ -19,7 +19,7 @@ GO_LDFLAGS := -X github.com/silgrid/polyforge/internal/version.Version=$(VERSION
 # without a node of the pinned major fails loudly, never skips.
 WEBUI_NODE := $(shell cat .nvmrc 2>/dev/null)
 # NODE_CHECK is that check, shared by every target that runs npm (the console
-# SPA and the pi-web package,); $@ names the target.
+# SPA and the pi-web package); $@ names the target.
 NODE_CHECK = command -v node >/dev/null 2>&1 || { echo "$@: node $(WEBUI_NODE).x is required (major version pinned by .nvmrc); install node $(WEBUI_NODE).x first"; exit 1; }; \
 	if [ "$$(node --version | cut -d. -f1)" != "v$(WEBUI_NODE)" ]; then \
 		echo "$@: node $$(node --version) is not major $(WEBUI_NODE) (pinned by .nvmrc); install node $(WEBUI_NODE).x first"; exit 1; \

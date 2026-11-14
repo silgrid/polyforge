@@ -4,8 +4,8 @@
 // Authored pre-code against artifacts/spec.md (the capsule's
 // artifacts/e2e-scenarios.md mirrors its GIVEN/WHEN/THEN scenarios). The suite
 // drives the new surface through the real `pf` binary built from this
-// repository's own ./cmd/pf (pi-web/ lives inside the Polyforge repository,
-//) with GOWORK=off, placed first on PATH, and through the
+// repository's own ./cmd/pf (pi-web/ lives inside the Polyforge repository)
+// with GOWORK=off, placed first on PATH, and through the
 // app's real HTTP face. A tiny unix-socket daemon supplies the machine facts
 // `pf` asks the daemon for (workflows_dir) so the fixture is
 // deterministic and no host daemon is required.

@@ -12,7 +12,7 @@
 // /api/sessions/[id]`, the fresh composer, Settings › General, and the stub
 // child's recorded argv/environment. The new surfaces are matched only by the
 // user-visible facts the spec names (the harness selector beside the model
-// selector, the model names (since claude's own aliases from its
+// selector, the model names (claude's own aliases from its
 // initialize answer, not four pinned full names), the three hint wordings, the full model
 // name in the read-only line); no symbol that does not exist today is imported,
 // so a pre-code run fails at assertion level, never at build level. The suite
@@ -299,7 +299,7 @@ try {
   });
 
   // S250-02 — acceptance: switching the harness swaps the model list and resets
-  // the selection to that harness's default (claude -> default,).
+  // the selection to that harness's default (claude -> default).
   await scenario("S250-02", async () => {
     await openFreshComposer();
     await chooseHarness("claude");
@@ -318,7 +318,7 @@ try {
     await closeMenu();
   });
 
-  // S250-03 — acceptance, rewritten by (AC4: no fixed list): exactly the
+  // S250-03 — acceptance, rewritten (no fixed list): exactly the
   // aliases claude's initialize answer lists, no pinned full name, no retired
   // "claude default" entry, default initially.
   await scenario("S250-03", async () => {
@@ -337,7 +337,7 @@ try {
   // S250-04 — acceptance: the recorded first-launch argv is the reduced set with
   // the full model name, no preset flag and no --cwd; the child's cwd is the session's.
   // The session is at claude's default effort, so its argv carries no --effort and stays
-  // 16 words (--forward-subagent-text included,; the ask mode's four permission words,); a picked level adds `--effort <level>` (claude-composer-272.mjs).
+  // 16 words (--forward-subagent-text included; the ask mode's four permission words); a picked level adds `--effort <level>` (claude-composer-272.mjs).
   await scenario("S250-04", async () => {
     const id = await createClaudeSession({ message: "E2E 250 argv one", model: "claude-haiku-5-5" });
     sessionIds.argv = id;

@@ -4,7 +4,7 @@
 // suites import it, e2e/all.mjs and the verify-scope engine both discover it
 // as a helper (CONTRIBUTING.md §6). The toggle and dock locators, the bounded
 // wait for the resident toggle and the open path live here once instead of in
-// eight per-suite copies ( follow-up).
+// eight per-suite copies (follow-up).
 //
 // the toggle renders only once the mount-time status probe
 // resolves (`pfPresent`), so a caller waits for that bounded condition instead
@@ -29,7 +29,7 @@ export const polyforgeToggle = (page) => page.locator("[data-pf-toggle]:visible"
 // The toggle waits on the mount-time status probe (and, on a cold server, that
 // route's first compile), so the ceiling is the suite's page-open one, not a
 // fixed 20 s guess: under host contention the probe can outlast 20 s while the
-// rest of the bar is healthy ( full-1: S203-1..S203-5 red with
+// rest of the bar is healthy (full-1: S203-1..S203-5 red with
 // `the Polyforge toggle renders (last: 0)` at loadavg 27).
 export async function waitForPolyforgeToggle(page, ms = NAV_MS) {
   const deadline = Date.now() + ms; let last;

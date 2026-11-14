@@ -303,8 +303,8 @@ type StatusResponse struct {
 	// the window and the currently firing warnings, never the full table
 	// (that stays `pf ops models`). Absent on an older daemon.
 	ModelHealth *modelhealth.Summary `json:"model_health,omitempty"`
-	// Supervision is the running daemon's live supervision bounds
-	//: T (`step_timeout`) and N (`stall_window`) as Go
+	// Supervision is the running daemon's live supervision bounds:
+	// T (`step_timeout`) and N (`stall_window`) as Go
 	// duration strings. It makes a live reload of those keys observable
 	// without a dispatch. Absent on an older daemon.
 	Supervision *SupervisionStatus `json:"supervision,omitempty"`
@@ -334,7 +334,7 @@ type StatusResponse struct {
 }
 
 // SupervisionStatus is the live supervision bounds GET /status carries
-// (; 0 = unset, the documented default applies).
+// (0 = unset, the documented default applies).
 type SupervisionStatus struct {
 	StepTimeout string `json:"step_timeout"`
 	StallWindow string `json:"stall_window"`
@@ -409,8 +409,8 @@ type StatusJob struct {
 	// surfaced, never judged; nil = none.
 	WaitCalls   *int64 `json:"wait_calls,omitempty"`
 	WaitSeconds *int64 `json:"wait_seconds,omitempty"`
-	// Context is the in-flight step session's context-window usage
-	//; absent outside a dispatch or when unknown.
+	// Context is the in-flight step session's context-window usage;
+	// absent outside a dispatch or when unknown.
 	Context *protocol.ContextUsage `json:"context,omitempty"`
 	// RetryInSec / RetryCause: the current step waits a decided retry
 	// backoff before its next dispatch — whole seconds left (rounded up)
@@ -419,7 +419,7 @@ type StatusJob struct {
 	RetryInSec *int64 `json:"retry_in_sec,omitempty"`
 	RetryCause string `json:"retry_cause,omitempty"`
 	// VerifyQueue: the job's daemon-run verification waits in the
-	// heavy-run admission queue position, the holding
+	// heavy-run admission queue — position, the holding
 	// gate, since. Rendered "queued #2: <reason>" in the VERIFY column.
 	VerifyQueue *protocol.WatchVerifyQueue `json:"verify_queue,omitempty"`
 	// Origin is how the job was submitted (may be absent).

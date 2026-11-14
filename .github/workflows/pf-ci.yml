@@ -149,7 +149,7 @@ jobs:
     # runs it on: as the runner user ~90 Go tests fail only because capsule
     # directories they leave read-only cannot be cleaned up, and tests that
     # look up the account's real home (user.Current) must find $HOME
-    # ('s dispatch runs). Hence no npm/Go cache restore into
+    # (the dispatch runs). Hence no npm/Go cache restore into
     # the runner's home, and a full clone (tests read history and tags).
     defaults:
       run:
@@ -281,7 +281,7 @@ jobs:
         run: cd pi-web && npm ci
       - name: Playwright Chromium (as pi-web-ci.yml's e2e job installs it)
         run: cd pi-web && npx playwright install --with-deps chromium
-      # Build-once mode (the conf's command;): one `next build`,
+      # Build-once mode (the conf's command): one `next build`,
       # then `next start` per suite, so the 2-core runner carries no
       # per-suite compile (in `next dev` mode its load reached 10-14 and 17
       # of 53 suites timed out, run 42402768050).

@@ -4,8 +4,8 @@
 // page through the adapter (lib/claude-adapter.ts) and the existing SSE stream.
 //
 // Lifecycle as pi's: the child lives while a page renews the lease, a turn runs,
-// a background subagent is unsettled or a background task runs
-//, and is ended one
+// a background subagent is unsettled or a background task runs,
+// and is ended one
 // PI_WEB_IDLE_TIMEOUT_MS after the last renewal; the next
 // open or send starts a new child with `--resume <id>`. Every child runs in its
 // own process group, which is what is signalled, so no descendant outlives it.
@@ -188,7 +188,7 @@ export function readClaudeHistory(sessionId: string): ClaudeHistory {
  * A claude model's context window before its child reported one (#368):
  * pi's built-in model catalog, the anthropic entry of the same full name — the catalog a
  * pi session on that model reads; one of claude's aliases reads the full name claude's
- * `initialize` answer resolves it to (claudeResolvedModel(),). null when the
+ * `initialize` answer resolves it to (claudeResolvedModel()). null when the
  * catalog has no positive window for it: no meter rather than a guessed one.
  */
 export function claudeContextWindow(model: string): number | null {
@@ -346,7 +346,7 @@ export function claudeCommandEffort(command: Record<string, unknown>): ClaudeEff
 }
 
 /**
- * The approval mode plan is judged by for session `record` ( r3,
+ * The approval mode plan is judged by for session `record` (r3,
  * plan D11): its live child's, fixed at that child's launch; with none, the one its next
  * launch would take — the record's override, else the global mode.
  */
@@ -460,7 +460,7 @@ export interface ClaudeForkResult {
  * source's transcript, sidecars and record are only read. Refused while the source runs a
  * turn (a compaction included) or holds an unsettled background subagent (its sidecar is
  * still being written and its result has not reached the conversation), naming each one
- * still running (claudeForkRefusal(),).
+ * still running (claudeForkRefusal()).
  */
 export async function forkClaudeSession(sourceId: string, entryId: string): Promise<ClaudeForkResult> {
   const record = getClaudeSessionRecord(sourceId);
@@ -557,7 +557,7 @@ export class ClaudeSession {
    */
   private readonly queuedMessages = new Set<string>();
   /**
-   * Messages sent while a turn ran ( steer), by uuid: written to claude's
+   * Messages sent while a turn ran (steer), by uuid: written to claude's
    * stdin at once, listed in pi's queue (`queue_update`) until claude starts one, then
    * delivered as a user message with what claude did with it.
    */
@@ -581,8 +581,8 @@ export class ClaudeSession {
   private readonly permissions: ClaudePermissionBroker;
   private readonly exited: Promise<void>;
   /**
-   * A page may hold this session's background tasks from before this subscription
-   *: the child resumed a conversation (an earlier child, or an earlier
+   * A page may hold this session's background tasks from before this subscription:
+   * the child resumed a conversation (an earlier child, or an earlier
    * pi-web, ran it) or has listed a task itself. A new conversation's first child, before
    * any task, owes a new subscriber no task list.
    */
@@ -684,8 +684,8 @@ export class ClaudeSession {
   }
 
   /**
-   * A background task (a `Bash` in the background, a `Monitor`) claude still runs
-   *: not unsettled — it holds no announcement, lease flag or fork — but
+   * A background task (a `Bash` in the background, a `Monitor`) claude still runs:
+   * not unsettled — it holds no announcement, lease flag or fork — but
    * the child is not reaped while it runs, since ending the child ends the task.
    */
   hasRunningBackgroundTasks(): boolean {
@@ -943,8 +943,8 @@ export class ClaudeSession {
    * `apply_flag_settings {effortLevel}`, which the recording proves reaches the next
    * turn; the default entry has no such value, so the idle child is ended and the next
    * one starts without `--effort`. Either way the index records it first for every later child.
-   * The default is refused, changing nothing, while background work is unfinished
-   *: ending the child would end it, and claude has no live equivalent
+   * The default is refused, changing nothing, while background work is unfinished:
+   * ending the child would end it, and claude has no live equivalent
    * (`effortLevel: null` is its own default, not "no --effort").
    */
   private async setEffort(command: Record<string, unknown>): Promise<ClaudeEffortSwitch> {
@@ -974,7 +974,7 @@ export class ClaudeSession {
    * session's own, Settings › Claude is not changed. Refused by claude: its text comes
    * back and nothing changes. No live child (or one that exits before answering): the
    * index alone. Plan is refused before anything is sent unless this child was launched
-   * with's ask (r3, plan D11); with no live child, the next launch's mode decides.
+   * with ask mode (r3, plan D11); with no live child, the next launch's mode decides.
    */
   private async setLaunchPermissionMode(command: Record<string, unknown>): Promise<ClaudeLaunchPermissionModeSwitch> {
     const launchPermissionMode = claudeCommandLaunchPermissionMode(command, this.alive ? this.permissionMode : claudeSessionApprovalMode(this.currentRecord()));
@@ -1087,9 +1087,9 @@ export class ClaudeSession {
   }
 
   /**
-   * Stop, only while a turn runs (an idle interrupt stops claude's background agents,
-   *): claude's interrupt for the turn alone, its background work spared
-   * (claudeInterruptLine(),). A turn still running at the deadline gets
+   * Stop, only while a turn runs (an idle interrupt stops claude's background agents):
+   * claude's interrupt for the turn alone, its background work spared
+   * (claudeInterruptLine()). A turn still running at the deadline gets
    * SIGINT to the process group when no background work runs (backgroundWork(): a finished
    * one awaiting claude's follow-up turn has nothing a signal would end); otherwise nothing
    * is signalled and a force stop is asked for (CLAUDE_FORCE_STOP_EVENT, naming the work).

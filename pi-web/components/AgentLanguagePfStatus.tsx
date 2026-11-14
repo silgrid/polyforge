@@ -60,8 +60,8 @@ export function AgentLanguagePfStatus({
 }
 
 /**
- * The sync: `PUT /api/agent-language` with Pi Web's own language (the route writes pf first,
- *), then `GET /api/agent-language` for both sides afresh. Throws on any non-2xx
+ * The sync: `PUT /api/agent-language` with Pi Web's own language (the route writes pf first),
+ * then `GET /api/agent-language` for both sides afresh. Throws on any non-2xx
  * answer or a reply without a language; a refused PUT sends no GET.
  */
 export async function requestAgentLanguageSync(language: AgentLanguage, fetchImpl: typeof fetch = fetch): Promise<AgentLanguageResponse> {

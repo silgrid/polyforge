@@ -1,6 +1,6 @@
 package test
 
-// w205_filing_acceptance_carrier_contract_test.go: text contract for.
+// w205_filing_acceptance_carrier_contract_test.go: a text contract.
 //
 // Work item #205 adds a fourth mandatory slot to the filing proposal,
 // `Acceptance carrier`: every acceptance criterion is written

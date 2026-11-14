@@ -115,7 +115,7 @@ func TestPiPackageCheck(t *testing.T) {
 	}
 }
 
-// TestRetiredChatStateIsReportedAndPruned ( AC2): the
+// TestRetiredChatStateIsReportedAndPruned (AC2): the
 // chat-subscription leftovers in the data dir and the old watcher's
 // runtime files are reported (warn, exit code unchanged) and
 // --prune-chat-state deletes exactly them.

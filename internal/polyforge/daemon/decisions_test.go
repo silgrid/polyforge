@@ -1,6 +1,6 @@
 package daemon
 
-// decisions_test.go: the decision feed every decision
+// decisions_test.go: the decision feed — every decision
 // kind the retired chat watcher woke a chat for becomes a feed entry from
 // the daemon's own observations; resolution, dedupe, dismiss, persistence
 // and the hub reconcile.
@@ -673,7 +673,7 @@ func ownerMessage(wi, kind, askAt, at string) protocol.EventEntry {
 	return protocol.EventEntry{WI: wi, Kind: "owner_message", At: at, Body: raw}
 }
 
-// TestOwnerReplyMarksTheQuestionReplied ( AC1): the owner's
+// TestOwnerReplyMarksTheQuestionReplied (AC1): the owner's
 // reply naming the question's ask marks its entry replied — no longer
 // needing a human, still unresolved, persisted — the step's hand-over
 // resolves it, and a later question is a new open entry.
@@ -720,7 +720,7 @@ func TestOwnerReplyMarksTheQuestionReplied(t *testing.T) {
 	}
 }
 
-// TestOnlyTheAnsweredAskIsMarkedReplied ( AC2): an
+// TestOnlyTheAnsweredAskIsMarkedReplied (AC2): an
 // interjection, a reply naming an earlier ask, and a reply of another
 // work item or Cell leave the open question as it is; only the reply
 // naming its own ask marks it replied.

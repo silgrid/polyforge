@@ -20,7 +20,7 @@
 //     standing HEAD unfetchable; the precheck keeps the poison out of
 //     history entirely).
 //   - NO blob over capsule.MaxBlobBytes enters local history either
-//     (oversize.go,): such a file is left out of the commit
+//     (oversize.go): such a file is left out of the commit
 //     and listed in capsule.OversizeManifest, and a push the hub still
 //     refuses for size names the paths and the unpushed range.
 //   - task-repo durability lane (polyforge#108): every publish also
@@ -512,7 +512,7 @@ func CommitPush(ctx context.Context, o Opts, message string) (string, bool, Push
 		return "", false, timings, err
 	}
 	env := o.Env()
-	// The blob-size guard (oversize.go,): files over the
+	// The blob-size guard (oversize.go): files over the
 	// hub's blob limit — and tracked files under the downloads directory —
 	// leave the index before anything is staged, and the manifest that
 	// lists them is part of this commit.
@@ -744,7 +744,7 @@ func pushTaskRefsLocked(o Opts, chainOK bool) (string, []carrierSrc, []string) {
 		out, behind, err := pushCarrier(o, reposDir, s.objects, s.sha, s.name, additions)
 		if behind {
 			// The worktree sits on an ancestor of the carried head (an
-			// agent's detached checkout of an older commit,):
+			// agent's detached checkout of an older commit):
 			// the carrier already holds a superset, so there is nothing to
 			// carry — not a divergence, and never a backwards push.
 			fmt.Fprintf(os.Stderr, "gitops: %s: task-ref push for repo %s: HEAD %s is behind the carried head — nothing to carry, carrier kept\n", o.WorkItemID, s.name, s.sha)

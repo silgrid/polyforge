@@ -514,7 +514,7 @@ if [ -n "${PIWEB_INSTALL_REPO:-}" ]; then
   # Assets are downloaded flattened into CHANNEL_DIR, so the checksum file's
   # bare filename matches there. The release's SHA256SUMS also covers the
   # assets of the same tag this channel does not download (the pf binaries
-  # and the image digest: one release carries every artifact,),
+  # and the image digest: one release carries every artifact),
   # so the tarball's own line is checked: a tarball without a line, or any
   # mismatch, aborts BEFORE any global install side effect.
   awk -v n="${CHANNEL_TGZ##*/}" '$2 == n || $2 == "*" n' "${CHANNEL_DIR}/SHA256SUMS" >"${CHANNEL_DIR}/tgz.sha256"
@@ -557,8 +557,8 @@ fi
 # script killed the whole session and rebuilt the tunnel on every run, so
 # every deploy minted a fresh trycloudflare.com URL.)
 
-# The restarter's PATH must not decide which pi-web the loop runs
-#. npm's global root (INSTALLED_NPM_ROOT, read by the install
+# The restarter's PATH must not decide which pi-web the loop runs.
+# npm's global root (INSTALLED_NPM_ROOT, read by the install
 # check) is <prefix>/lib/node_modules, so the bin directory holding the
 # just-installed `pi-web` link is <prefix>/bin.
 installed_piweb_bin_dir() {
@@ -617,7 +617,7 @@ build_loop_cmd() {
   path_prefix="PATH='$(installed_piweb_bin_dir)':\"\${PATH}\" "
   if [ -n "${PF_BIN_EFFECTIVE:-}" ]; then
     # Pin the resolved pf too, so the printed line names exactly what the
-    # service gets and a hostile respawn cannot drop it ( AC6).
+    # service gets and a hostile respawn cannot drop it (AC6).
     pf_prefix="PF_BIN='${PF_BIN_EFFECTIVE}' "
   fi
   # Unset provider env credentials that leak from the container shell
@@ -755,7 +755,7 @@ tailscale_serve_current() {
   tailscale serve status 2>/dev/null | grep -qE "(127\.0\.0\.1|localhost):${LOCAL_PORT}([^0-9]|$)"
 }
 
-# Resolve and print the pf the loop will run ( AC6). Done once,
+# Resolve and print the pf the loop will run (AC6). Done once,
 # after the install, before any window is built; build_loop_cmd then pins the
 # same value. Both a configured-but-missing PF_BIN and no pf at all print a
 # clear 'none found' line instead of a misleading path.

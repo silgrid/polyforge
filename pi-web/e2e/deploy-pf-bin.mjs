@@ -24,7 +24,7 @@
 // (e2e/lane-stubs.mjs writePiwebPackageTree, so the deploy's install check
 // passes; its bin/pi-web.js the stub launcher that spawns the pi-web entry,
 // bin/pi-web-entry, with the package directory as cwd, as the real launcher
-// spawns Next,) under a scratch prefix and writes its
+// spawns Next) under a scratch prefix and writes its
 // package.json, `root -g` reads it back) and pi-web; a stub pf answers `--version` and logs invocations. The
 // node running this suite is linked next to the npm stub and into the prefix's
 // bin dir (where a real npm prefix keeps it), so neither the deploy nor a

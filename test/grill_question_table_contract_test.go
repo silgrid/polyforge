@@ -8,8 +8,8 @@ package test
 // column) instead of the retired NUMBERED list, and the polyforge skill must
 // tell the session to show the question verbatim as soon as the human
 // brings a needs_input decision to it instead of reading it "only on
-// explicit request" (since the chat wake-up lines were retired
-//, decisions reach the session only through the human).
+// explicit request" (since the chat wake-up lines were retired,
+// decisions reach the session only through the human).
 
 import (
 	"os"
@@ -22,7 +22,7 @@ import (
 
 const grillTableHeader = "| 问题 | 推荐选项 | 理由 | 重点关注程度 |"
 
-// grillStepDef is a grill-family step's RENDERED definition (:
+// grillStepDef is a grill-family step's RENDERED definition (
 // the question-table block lives in the shared fragment
 // workflows/_shared/batch_questions.md, so the contract reads the
 // definition the step agent sees, the include rendered in).
@@ -37,7 +37,7 @@ func grillStepDef(t *testing.T, bundle, step string) string {
 
 func TestGrillStepsRequireQuestionTable(t *testing.T) {
 	for _, rel := range []string{
-		"develop/build", // its grill stop, build-grill ( AC0)
+		"develop/build", // its grill stop, build-grill (AC0)
 	} {
 		bundle, step, _ := strings.Cut(rel, "/")
 		s := grillStepDef(t, bundle, step)

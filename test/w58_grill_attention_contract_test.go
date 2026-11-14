@@ -1,6 +1,6 @@
 package test
 
-// w58_grill_attention_contract_test.go: text contract for.
+// w58_grill_attention_contract_test.go: a text contract.
 // The grill question batch is a four-column table whose last column is the
 // owner-attention grade rendered as stars (★ routine confirmation up to
 // ★★★★★ directional ruling), followed by 预期效果 then 注意事项. Prompt
@@ -19,7 +19,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
-// w58Step is a grill-family step's RENDERED definition (:
+// w58Step is a grill-family step's RENDERED definition (
 // the batch-question block lives in the shared fragment
 // workflows/_shared/batch_questions.md, so the contract reads the
 // definition the step agent sees, placeholders included — not the raw
@@ -40,8 +40,7 @@ func TestW58GrillAttentionContract(t *testing.T) {
 		topStar   = "★★★★★"
 	)
 	// the grill-family step texts (develop's build, which asks at its
-	// build-grill stop; the retired lanes' grill steps went with
-	//)
+	// build-grill stop; the retired lanes' grill steps went with)
 	templates := []string{
 		"develop/build",
 	}

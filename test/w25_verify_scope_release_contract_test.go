@@ -1,12 +1,12 @@
 package test
 
-// w25_verify_scope_release_contract_test.go: the same-release-tree contract
-// for. The verification lane may only take its fast-gate scope
+// w25_verify_scope_release_contract_test.go: the same-release-tree contract.
+// The verification lane may only take its fast-gate scope
 // from the release-shipped engine, so the shipped `workflows/_shared/scripts/verify-scope` and the
 // lane text that names it must travel in one tree. There is no
 // backward-compatibility branch: the old repo-owned script is gone and the
 // lane never describes an engine-absent or old-release path.
-// Since the verify action runs the engine in the
+// The verify action runs the engine in the
 // daemon: no lane text names it, so the contract is the shipped engine.
 //
 // Run (targeted): GOWORK=off go test ./test/ -run '^TestW25ReleaseTree' -count=1

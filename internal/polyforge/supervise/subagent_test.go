@@ -5,7 +5,7 @@ package supervise
 // sub-agent works. Rule 3 judges it on its silence — the time since its
 // last inner activity — not on its total run: a sub-agent still working
 // is never tool_hung, one that stopped for longer than the tool window Y
-// is ( AC7). The replays feed each harness's records of one
+// is (AC7). The replays feed each harness's records of one
 // sub-agent call at a fixed cadence well past Y in total.
 
 import (

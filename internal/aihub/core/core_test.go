@@ -400,8 +400,7 @@ func TestAdminFaces(t *testing.T) {
 		t.Fatalf("duplicate project allowed: %v", err)
 	}
 	// Machine heartbeat: first registers; second refreshes. Registration
-	// mints no machine user: the operator is the machine's one identity
-	//.
+	// mints no machine user: the operator is the machine's one identity.
 	proof := HeartbeatProof{CallerID: env.UserID, Signed: true, KeyB64: "pk-m1"}
 	h1, err := env.Admin.HeartbeatAuthorized(MachineHeartbeat{MachineID: "m1", PublicKey: "pk-m1"}, proof, nil)
 	if err != nil || !h1.Registered {

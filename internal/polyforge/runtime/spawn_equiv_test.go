@@ -164,7 +164,7 @@ func TestSpawnStartedEnvHygiene(t *testing.T) {
 	}
 	// the adapter's own PF_ names for a derivation naming its capsule (and
 	// no lane, round or step): the markers, the tool window and the
-	// capsule root its scripts run from (PF_CAPSULE,)
+	// capsule root its scripts run from (PF_CAPSULE)
 	ownPF := []string{"PF_WI_ID", "PF_DAEMON_ID", "PF_TOOL_WINDOW_MS", "PF_CAPSULE"}
 	ownClaude := []string{
 		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "CLAUDE_CODE_STARTUP_FAILURE_RESULTS",

@@ -3,7 +3,7 @@ package daemon
 // w393_admission_order_test.go: a queued heavy run is
 // admitted in the admission order — priority, then the time it first
 // queued, then arrival — and the displayed position is that order. (The
-// per-repo bar lock's grant-order cases left with the lock,.)
+// per-repo bar lock's grant-order cases left with the lock.)
 
 import (
 	"fmt"

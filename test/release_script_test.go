@@ -187,13 +187,13 @@ func newRelWorld(t *testing.T, originTags, localTags []string) *relWorld {
 	relWrite(t, filepath.Join(w.work, "deploy", "Dockerfile"), "FROM scratch\n", 0o644)
 	relWrite(t, filepath.Join(w.work, "README"), "x\n", 0o644)
 	// like the real repo: the build output never dirties the worktree, so a
-	// second run (a resume,) starts from a clean tree
+	// second run (a resume) starts from a clean tree
 	relWrite(t, filepath.Join(w.work, ".gitignore"), "/artifacts/release-*/\n", 0o644)
 	// the pi-web package the release packs: main keeps its
 	// development version; the tag's version reaches only the packed copy.
 	relWrite(t, filepath.Join(w.work, "pi-web", "package.json"), relPiwebPkg("0.2.0-dev.0"), 0o644)
 	// the test gate's definition and its tools (the gate id and the green
-	// tag,), like the real tree: the release reads them from
+	// tag), like the real tree: the release reads them from
 	// the commit it releases
 	relGateTree(t, w.work)
 	// the workflow contract the release's contract check reads:
@@ -525,7 +525,7 @@ func (w *relWorld) env(extra ...string) []string {
 		"RELEASE_AUDIT_CMD=echo audit >> \"$CALLLOG\"",
 		"RELEASE_GH_REPO=silgrid/polyforge",
 		// origin is a local bare repo: state which GitHub repo it stands for
-		// (release.sh refuses a remote it cannot read as one,)
+		// (release.sh refuses a remote it cannot read as one)
 		"RELEASE_REMOTE_IS=silgrid/polyforge",
 		"RELEASE_BUILD_CMD=echo build >> \"$CALLLOG\"; mkdir -p artifacts/release-$TAG; echo pf-bin > artifacts/release-$TAG/pf; "+
 			"echo pf-arm64-bin > artifacts/release-$TAG/pf-darwin-arm64; "+
@@ -878,7 +878,7 @@ func TestReleaseScriptRefusals(t *testing.T) {
 	})
 	// minor/major need an owner ruling the script cannot judge: refused
 	// before any work, with the floor's minor/major successor never computed
-	// (; the repro test pins the no-side-effect contract).
+	// (the repro test pins the no-side-effect contract).
 	for _, bump := range []string{"minor", "major"} {
 		t.Run(bump+" refused", func(t *testing.T) {
 			w := newRelWorld(t, []string{"v1.10.1"}, nil)
@@ -911,8 +911,8 @@ func TestReleaseScriptCommittedNotesUsedAsIs(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	body, _ := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
-	// the committed notes, byte for byte, then the test gate's record
-	//; the committed file itself is not touched
+	// the committed notes, byte for byte, then the test gate's record;
+	// the committed file itself is not touched
 	if !strings.HasPrefix(string(body), "# hand written\n\n## Test gate\n\n") || !strings.Contains(string(body), "Ran RELEASE_TEST_CMD (gate `") {
 		t.Fatalf("notes = %q", body)
 	}
@@ -1590,7 +1590,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 		}
 	})
 
-	// Case 6 ( Q6): a HEAD already carrying its suffixed tag is
+	// Case 6 (Q6): a HEAD already carrying its suffixed tag is
 	// resumed, never released as a second version.
 	t.Run("case 6: a claimed suffixed version is resumed", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))

@@ -1,7 +1,7 @@
 package cli
 
 // config_tables.go: the two machine-level table families cli.toml carries
-// for the workflow lanes the one [summarize] table and
+// for the workflow lanes — the one [summarize] table and
 // the path-keyed [memory_policy."<path>".<entry>] family. The parser
 // (config.go) collects their raw rows with file lines; this file validates
 // the values. Every refusal names the file, the line and the key.

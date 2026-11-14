@@ -1,7 +1,7 @@
 """scope_ready.py — whether the verification-scope engine is here and each
 named repository is scoped-ready: the check `pf doctor`'s former
 `scoped-gates readiness` row made, now the workflow's own (the engine,
-verify-scope, moved into the workflow beside this script:).
+verify-scope, moved into the workflow beside this script).
 
 Usage:
 

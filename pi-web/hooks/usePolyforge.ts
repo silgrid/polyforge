@@ -37,8 +37,8 @@ import { usePolyforgePanelPreferences } from "./usePolyforgePanelPreferences";
  * Messages tab.
  *
  * - A status fetch at mount decides presence (`pfPresent`). While pf is
- *   absent the status route is re-probed every 30s and on window focus
- *, so a pf that becomes available turns present without a
+ *   absent the status route is re-probed every 30s and on window focus,
+ * so a pf that becomes available turns present without a
  *   reload; besides those status reads a pf-less install sees exactly one
  *   messages read at mount (all 2xx, no pf spawn; the users read runs only
  *   while the open dock shows Messages), so unrelated e2e flows log no
@@ -145,7 +145,7 @@ export function nextWatchSnapshot(
  *  3s/30s cadence. */
 export type PolyforgeTab = "memory" | "messages" | "work";
 
-/** Work's sub-tabs ( adds 工单列表, `items`; adds
+/** Work's sub-tabs (adds 工单列表, `items`; adds
  *  待集成, `integrate`, which reads on its own gestures). Page memory only:
  *  kept across a dock close/reopen (this hook outlives the dock), reset by a
  *  reload, never written to storage. */
@@ -806,13 +806,13 @@ export function usePolyforge(panelOpen: boolean) {
     await refreshDecisions();
   }, [refreshDecisions]);
 
-  // The Polyforge button's attention state (widened by
-  //, on the button itself since): the
+  // The Polyforge button's attention state (later widened and
+  // moved onto the button itself): the
   // jobs waiting for an answer, then every other open feed entry (a
   // needs_input entry of a waiting job counted once). A click opens the next
   // one after the last opened (wrapping; the selected waiting job stands in
   // the first time, as #413's walk did): a work item's job detail in Work ›
-  // Jobs, selected — nothing else opens (; re-selecting the job
+  // Jobs, selected — nothing else opens (re-selecting the job
   // already shown keeps its snapshot; select() would blank it), a task in
   // Work › Tasks.
   const waitingJobs = needsInputJobs(opsStatus);

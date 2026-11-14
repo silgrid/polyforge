@@ -1,6 +1,6 @@
 package runtime
 
-// w350_restart_disabled_test.go ( D5, review s12#2): held work
+// w350_restart_disabled_test.go (D5, review s12#2): held work
 // never starts behind an execution-disabled Cell. An operator-paused
 // record whose hub clean_pause was cleared without the Cell's admission
 // (pf resume while the Host was down, or from another machine) stays

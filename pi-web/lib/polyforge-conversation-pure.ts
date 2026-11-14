@@ -4,7 +4,7 @@ import { TERMINAL_BLOCKED_KINDS } from "./polyforge-decisions-pure";
 
 /**
  * Client-safe vocabulary of the job card's conversation (workflow contract
- * v2, design §5.2, §5.4; workflow contract 4, design #483 §7,):
+ * v2, design §5.2, §5.4; workflow contract 4, design #483 §7):
  * which jobs wait for the owner, the question the selected one waits on,
  * whether the card's one input box takes a message right now — a step agent
  * runs or waits, or the work item is parked and the message wakes it — else

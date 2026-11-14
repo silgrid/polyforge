@@ -1,7 +1,7 @@
 package runtime
 
-// c4_wrap_attrs_test.go (workflow contract 4, design #483 §5.2/§5.3,
-//): the wrapped close carries every `wrap-attrs` write the
+// c4_wrap_attrs_test.go (workflow contract 4, design #483 §5.2/§5.3):
+// the wrapped close carries every `wrap-attrs` write the
 // pending-writes executor made (develop's and micro's landing
 // `integration`, an integration batch's `integration_batch`) and, for
 // every lane, `waivers`: each owner waiver of the run with the owner's

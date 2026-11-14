@@ -1,7 +1,7 @@
 package stepcall
 
 // ended.go: how a dispatch ended, read from the ledger alone — the facts
-// the daemon's message wake (a parked step's kind,) and
+// the daemon's message wake (a parked step's kind) and
 // the driver's resume shape need without reading execution.json's
 // contract 3 records: whether the dispatch handed off, with which status,
 // and whether the hub writes a `done` recorded are all made.

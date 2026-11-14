@@ -148,8 +148,7 @@ GATE_RUNNER = "gate.py"
 # this script's (its digest is of another encoding, its runner gate.py).
 GATE_RUNNER_VERSION = "2"
 
-# The scope engine the gate plans with: the tree's own (the workflow's,
-#).
+# The scope engine the gate plans with: the tree's own (the workflow's).
 GATE_ENGINE_REL = "workflows/_shared/scripts/verify-scope"
 
 DEFAULT_GATE_DEADLINE = 3 * duration.HOUR

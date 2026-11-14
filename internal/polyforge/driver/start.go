@@ -113,8 +113,8 @@ type StartConfig struct {
 	// ask.go): set while the step's `pf ask` is open, so the daemon counts
 	// no running slot for it.
 	OwnerWait func(waiting bool)
-	// Language answers the live agent language (`[daemon] agent_language`,
-	//), read at every dispatch (StepSpawnAdapter.Language)
+	// Language answers the live agent language (`[daemon] agent_language`),
+	// read at every dispatch (StepSpawnAdapter.Language)
 	// and whenever the daemon writes the opening or an event section of
 	// artifacts/handoff.md (Config.Language).
 	Language func() string

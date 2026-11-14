@@ -1,6 +1,6 @@
 package daemon
 
-// stephandoff_c2_test.go (workflow contract 4 stage C2,):
+// stephandoff_c2_test.go (workflow contract 4 stage C2):
 // the rules `pf step handoff` and `pf step hub` take from the lane and the
 // record once the driver reacts to them — a gate's fail without the
 // owner's word refused once the rewind budget is spent (design #483

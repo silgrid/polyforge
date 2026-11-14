@@ -156,7 +156,7 @@ type RowFeedback = { message: string; tone: "default" | "error" };
 type SourceState = { status: "pending" | "found" | "missing"; source: string | null };
 
 /** Every key the panel writes: the cli.toml keys and the
- *  cli.toml [summarize] keys the write route's own
+ *  cli.toml [summarize] keys — the write route's own
  *  allowlist constants. */
 const WRITABLE = new Set([...CLI_WRITABLE_KEYS, ...SUMMARIZE_KEYS]);
 
@@ -229,7 +229,7 @@ function BreakableToken({ text }: { text: string }) {
 
 /** One Cell's file card holds its file zones —
  *  the top-level keys, the `[daemon]` table, the `[model]` table (a named
- *  Cell's model.source,) and the `[summarize]` table — plus
+ *  Cell's model.source) and the `[summarize]` table — plus
  *  the read-only `[memory_policy]` blocks grouped per workspace path (added
  *  at render); the 工作区 card holds the file's
  *  `[workspace]` mapping rows only. */
@@ -1506,8 +1506,8 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus }: 
     );
   };
 
-  // A region holding an unsaved draft or a row error stays open and says so
-  //; the lock is runtime state, never written to storage.
+  // A region holding an unsaved draft or a row error stays open and says so;
+  // the lock is runtime state, never written to storage.
   const lockMarker = (ids: string[]): string | null => {
     if (ids.some((id) => rowFeedback[id]?.tone === "error")) return t("polyforge.settings.configErrorMarker");
     if (ids.some((id) => drafts[id] !== undefined || modelEdits[id] !== undefined || Boolean(modelAdds[id]?.trim()) || confirming?.item.key === id)) {

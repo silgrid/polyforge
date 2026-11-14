@@ -1,6 +1,6 @@
 // carries: lib/i18n/literal-keys.ts, lib/i18n/dynamic-key-allowlist.json, lib/i18n/messages/*
-// Every literal t("…") key the source uses exists in the English message table
-//. registry.test.mjs compares the locales with English; this
+// Every literal t("…") key the source uses exists in the English message table.
+// registry.test.mjs compares the locales with English; this
 // closes the other gap: a key written only in a component, never added to
 // English, rendered as the raw key and no test said so. Dynamic keys (built at
 // run time) cannot be checked statically; a key concatenated at run time

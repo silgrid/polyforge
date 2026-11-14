@@ -1,7 +1,7 @@
 package runtime
 
 // Real-harness drive of a pi subagent call's supervision input
-// ( AC7): a REAL pi step process, launched exactly as the
+// (AC7): a REAL pi step process, launched exactly as the
 // daemon launches one against the dedicated step agent dir, calls the
 // subagent tool with an agent the operator dir defines (a test-only
 // definition in a temp copy of it); the call's record stream, folded

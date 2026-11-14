@@ -12,8 +12,8 @@
 // claude 2.1.322's recorded `initialize` answer (its aliases, version and capabilities;
 // `PI_E2E_CLAUDE_STUB_VERSION` reports another version), opens each turn of a
 // `--include-hook-events` child with the recorded `hooks/` frames, and answers
-// `set_permission_mode` as claude 2.1.322 did. Plan follows's claude tool
-// permissions ( r3): offered on Ask in a dialog (the default), disabled with its
+// `set_permission_mode` as claude 2.1.322 did. Plan follows the claude tool
+// permissions (r3): offered on Ask in a dialog (the default), disabled with its
 // reason on Deny silently, set through PUT /api/claude-permissions. Two servers run in turn on one scratch tree:
 // the second reports claude 9.9.9, and its first message to an existing session is that
 // session's `--resume` launch.
@@ -54,7 +54,7 @@ const { apiFetch } = createApi(() => base);
 const stubRecords = () => readJsonLines(stubLog);
 const stubLaunches = () => stubRecords().filter((record) => record.kind === "launch");
 const readSettingsFile = () => (existsSync(settingsFile) ? readFileSync(settingsFile, "utf8") : null);
-/**'s global claude tool permissions (ask / deny), through its own route. */
+/** the global claude tool permissions (ask / deny), through its own route. */
 async function setGlobalPermissionMode(mode) {
   const response = await apiFetch("/api/claude-permissions", { method: "PUT", body: JSON.stringify({ mode }) });
   assert.equal(response.status, 200, `PUT /api/claude-permissions ${mode} -> ${response.status} ${(await response.text()).slice(0, 200)}`);
@@ -265,7 +265,7 @@ try {
   });
 
   // S445-02 (first server) — AC3: claude's version and its capabilities verbatim, and Pi Web's three features with their basis;
-  // approvals follow's claude tool permissions (r3): available on Ask in a dialog, not on Deny silently.
+  // approvals follow the claude tool permissions (r3): available on Ask in a dialog, not on Deny silently.
   await part("S445-02", "the version, claude's capabilities and Pi Web's features for claude 2.1.322", async () => {
     await goto("/");
     await openClaudeSection();
@@ -299,7 +299,7 @@ try {
   });
 
   // S445-03 — AC2/AC6: default reads as Claude Code's own setting; plan is offered under
-  //'s Ask in a dialog (the default) and survives a reload; on Deny silently it is
+  // Ask in a dialog (the default) and survives a reload; on Deny silently it is
   // disabled with its reason visible and the stored plan shows as default; back on ask,
   // acceptEdits is saved, survives a reload and is the file's value.
   await part("S445-03", "the permission mode: default's label, plan under ask and disabled with its reason under deny, acceptEdits saved", async () => {
@@ -477,7 +477,7 @@ try {
   });
 
   // S445-07 — AC2: the open session's permission control switches claude's mode live; plan
-  // is a choice for a session launched with's Ask in a dialog.
+  // is a choice for a session launched with Ask in a dialog.
   await part("S445-07", "switching the open session's permission mode sends set_permission_mode", async () => {
     assert.ok(hookSession, "no session with a live child (S445-05)");
     const child = stubLaunches().filter((record) => record.sessionId === hookSession).at(-1);

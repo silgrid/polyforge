@@ -1,6 +1,6 @@
 package cli
 
-// verbs_config_migrate.go: `pf config migrate` the one
+// verbs_config_migrate.go: `pf config migrate` — the one
 // transition step that moves each mapped workspace's retired
 // `.polyforge.yaml` `summarize:` / `memory_policy:` sections into cli.toml
 // (the [summarize] table and one [memory_policy."<path>".<entry>] block per

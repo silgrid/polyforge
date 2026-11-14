@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PATH-injected stand-in for the `claude` CLI ( e2e, authored
+ * PATH-injected stand-in for the `claude` CLI (e2e, authored
  * before `code`).
  *
  * The suite puts a copy of this file on the server's PATH as `claude`, so

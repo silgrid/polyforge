@@ -789,7 +789,7 @@ test("the summary's facts carry the current step, model + spawn, step/idle age, 
   assert.match(source, /const selectedCard = selectedWi\s*\? shownCards\.find\(\(card\) => isSelected\(card\.job\)\)/);
   assert.match(source, /const selectedJob = selectedWi\s*\? \(selectedCard\?\.job \?\? opsStatus\?\.jobs\.find/);
   assert.match(source, /const detailCurrentStep = watchStatus\?\.currentStep \?\? selectedCard\?\.currentStep;/);
-  const factsStart = source.indexOf("{/* Job facts ( + #238)");
+  const factsStart = source.indexOf("{/* Job facts (+ #238)");
   const factsEnd = source.indexOf("{/* pi#119 summarize narration", factsStart);
   assert.ok(factsStart >= 0 && factsEnd > factsStart, "the facts sit in the summary, before the narration");
   const facts = source.slice(factsStart, factsEnd);
@@ -866,7 +866,7 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
   const work = source.slice(source.indexOf('role="tablist"\n              data-pf-tabstrip="work"'), source.indexOf('<div data-pf-work-detail=""'));
   assert.ok(source.indexOf('data-pf-tabstrip="work"') > source.indexOf(") : workTab === \"tasks\" ? ("), "the sub-tab controls follow the main area in the DOM");
   // (intentional 2026-10-31 third-segment change): jobs, tasks, items in that order
-  // ('s 决策 sub-tab is gone again: owner ruling 2026-11-09, every interaction is the work item's).
+  // (the 决策 sub-tab is gone again: owner ruling 2026-11-09, every interaction is the work item's).
   // intentional fourth sub-tab: 待集成 (`integrate`) last.
   assert.match(work, /\(\["jobs", "tasks", "items", "integrate"\] as const\)\.map\(\(tab\) =>/);
   assert.match(work, /role="tab" aria-selected=\{active\}\s*onClick=\{\(\) => onWorkTab\(tab\)\}/);
@@ -974,7 +974,7 @@ test("the detail order is summary (title row, goal, facts, narration, pi#117 fac
     "data-pf-detail-summary",
     "data-pf-detail-title",
     "data-pf-summary-goal",
-    "{/* Job facts ( + #238)",
+    "{/* Job facts (+ #238)",
     "{/* pi#119 summarize narration",
     "{/* pi#117 facts, moved into the summary",
     "data-pf-detail-graph",
@@ -992,7 +992,7 @@ test("the detail order is summary (title row, goal, facts, narration, pi#117 fac
   assert.ok(source.includes("const progressWi = selectedWi ? (selectedJob?.wi ?? watchStatus?.wi ?? null) : null;"), "the progress wi survives the job leaving the lists");
   // workflow contract v2 (change 14): the read is the panel's (the composer
   // under the scroll region shares the stream); it polls while the job runs
-  // ('s rule): a waiting job is read once, a reply makes it run.
+  // (the rule): a waiting job is read once, a reply makes it run.
   assert.match(source, /const progressLive = selectedJob\?\.status === "running";/);
   assert.match(source, /const progressSnapshot = usePolyforgeProgress\(progressWi, progressLive, selectedJob\?\.profile\);/);
 });

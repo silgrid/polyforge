@@ -40,7 +40,7 @@ import (
 // (reviewStepListWorkflowsDir; fix has no list of its own). Kept-face
 // guards assert these stay in effect wherever the yaml layer is silent.
 // The step-level list names no placeholder (`example-…`): a placeholder
-// step list is undeclared since and would fall through to
+// step list is undeclared and would fall through to
 // the project default.
 const (
 	w079DefaultsHead   = "example-gateway/model-a"
@@ -537,7 +537,7 @@ func TestW079YamlEditGovernsNextClaimNoRestart(t *testing.T) {
 // surfaces the typed DAEMON-414 naming .polyforge.yaml, the WI stays
 // queued (never even transiently running), no capsule exists, and the
 // daemon keeps serving. (A per-step key naming no installed step is
-// stale, not invalid, since it refuses nothing and
+// stale, not invalid: it refuses nothing and
 // `pf doctor` warns — TestW224SummarizeKeyValidates.)
 func TestW079InvalidYamlRefusesWithoutClaim(t *testing.T) {
 	inst := newV1Install(t)
@@ -734,7 +734,7 @@ func w079RequireCappedBlock(t *testing.T, capDir, last string) {
 // TestW079GateFailRewindKeepsTheEffectiveCandidate pins the rewind's
 // composition with the yaml-derived list: one provider failure advances
 // the pin along the EFFECTIVE (yaml) list to its second entry, then a gate
-// FAIL on review rewinds to fix. Since the rewound
+// FAIL on review rewinds to fix. The rewound
 // target resumes its round and keeps its candidate (the pointer is no
 // longer reset to the head, which would move the re-entry off the session
 // it resumes), so the guarantee is: the re-entry stays on the effective

@@ -13,8 +13,8 @@ import {
 } from "./polyforge-work-items-pure";
 
 /**
- * Server-side reads for the Work panel's read-only 工单列表 sub-tab
- *. Exactly two pf verbs, through `execFileAsync` (no shell)
+ * Server-side reads for the Work panel's read-only 工单列表 sub-tab.
+ * Exactly two pf verbs, through `execFileAsync` (no shell)
  * on `polyforgePfBin()`: `pf --json queue` — ONE merged `{items, total}` over
  * every `[workspace]`-mapped project, with no `--project`, `--status` or
  * `--limit` (pf's server default is 500 rows per project, `created_at DESC`)
@@ -28,7 +28,7 @@ import {
  * is null when pf sends null or a wrong type; a row without a `wi_` id or a
  * non-empty string slug is omitted. One conditional ninth key,
  * `acceptance_missing`, is forwarded only when pf sends `true` (pf queue's
- * mark on a queued execution ticket without acceptance,) and
+ * mark on a queued execution ticket without acceptance) and
  * is otherwise absent; it is never on a detail. A detail keeps those
  * eight plus labels, milestone, reporter, assignee, updated_at, closed_at,
  * waiting_for (pf's derived blockers as `{slug, status}`), waiting_on (the

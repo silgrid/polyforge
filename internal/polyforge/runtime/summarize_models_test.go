@@ -1,7 +1,7 @@
 package runtime
 
 // summarize_models_test.go: the summarize lane's configuration is the
-// daemon's live cli.toml [summarize] snapshot (; polyforge#33
+// daemon's live cli.toml [summarize] snapshot (polyforge#33
 // already superseded the claim-time snapshot of polyforge#224/#243/#250):
 // the machine-level models list, the narration language and the per-WI
 // call spacing — read at every lane request through Runtime.SummarizeLane,

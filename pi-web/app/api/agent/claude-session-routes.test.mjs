@@ -26,7 +26,7 @@ process.env.CLAUDE_CONFIG_DIR = path.join(scratch, "claude-config");
 const originalPath = process.env.PATH;
 process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
 process.env.PI_TEST_CLAUDE_STUB_LOG = stubLog;
-// The claude routes spawn no pf ( retired the chat's `pf watch`); a stray spawn
+// The claude routes spawn no pf (retired the chat's `pf watch`); a stray spawn
 // would still never reach the operator's pf or daemon.
 process.env.PF_BIN = path.join(scratch, "no-pf");
 
@@ -546,7 +546,7 @@ test("a running claude turn, or an unsettled background subagent, refuses an edi
 });
 
 test("set_permission_mode: an unknown mode is 400 and plan is 400 while host approvals are not ready, before any child is touched", async () => {
-  // r3: host approvals not ready is's global mode on deny.
+  // r3: host approvals not ready is the global mode on deny.
   const permissionConfig = path.join(agentDir, "claude-permissions.json");
   fs.mkdirSync(agentDir, { recursive: true });
   fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, mode: "deny", push: false }));
@@ -589,7 +589,7 @@ test("set_permission_mode: an unknown mode is 400 and plan is 400 while host app
 });
 
 test("set_permission_mode plan is 200 for a session whose permission prompts come to Pi Web and 400, naming the reason, for one on deny ( r3)", async () => {
-  // No claude-permissions.json:'s default, ask.
+  // No claude-permissions.json: the default, ask.
   fs.rmSync(path.join(agentDir, "claude-permissions.json"), { force: true });
   const before = launches().length;
   const asked = await newRecord();

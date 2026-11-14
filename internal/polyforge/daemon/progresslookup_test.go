@@ -379,7 +379,7 @@ func pollRemote(t *testing.T, td *testDaemon, wi string) *protocol.WatchSnapshot
 	return snap
 }
 
-// TestRemoteSnapshotCacheTTLAndKey ( A3): a poll after the
+// TestRemoteSnapshotCacheTTLAndKey (A3): a poll after the
 // TTL relays again, and inside the TTL any aihub-visible change of the
 // WI — a status change (running -> blocked, still remote) or a new
 // updated_at (a claim, a session end, a patch) — relays instead of
@@ -409,7 +409,7 @@ func TestRemoteSnapshotCacheTTLAndKey(t *testing.T) {
 	}
 }
 
-// TestRemoteSnapshotCacheBypassedForLocalOrClosedWI ( A3): a
+// TestRemoteSnapshotCacheBypassedForLocalOrClosedWI (A3): a
 // WI the local side knows is not remote — paused, queued or terminal at
 // aihub, or now a local job — never reads the cache: it answers the
 // local snapshot without a relay, and its entry is gone, so a later
@@ -439,7 +439,7 @@ func TestRemoteSnapshotCacheBypassedForLocalOrClosedWI(t *testing.T) {
 	}
 }
 
-// TestRemoteSnapshotErrorsAreNotCached ( A3): a failed relay
+// TestRemoteSnapshotErrorsAreNotCached (A3): a failed relay
 // is never stored — the next poll asks the holder again, as before — and
 // the first success after it is cached.
 func TestRemoteSnapshotErrorsAreNotCached(t *testing.T) {
@@ -466,7 +466,7 @@ func TestRemoteSnapshotErrorsAreNotCached(t *testing.T) {
 	}
 }
 
-// TestArtifactRouteIsNotCached ( A3): artifacts are fetched
+// TestArtifactRouteIsNotCached (A3): artifacts are fetched
 // on demand, so every remote artifact read relays — the progress cache
 // (primed here) never answers one.
 func TestArtifactRouteIsNotCached(t *testing.T) {
@@ -487,7 +487,7 @@ func TestArtifactRouteIsNotCached(t *testing.T) {
 	}
 }
 
-// TestRemoteSnapCacheBoundedMemory ( A3): the cache never
+// TestRemoteSnapCacheBoundedMemory (A3): the cache never
 // holds more than its cap — the oldest entry goes — and a store sweeps
 // every expired entry.
 func TestRemoteSnapCacheBoundedMemory(t *testing.T) {

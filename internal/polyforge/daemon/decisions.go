@@ -1,6 +1,6 @@
 package daemon
 
-// decisions.go: the daemon's decision feed the
+// decisions.go: the daemon's decision feed — the
 // machine-level record of every human decision the daemon observed, read
 // by the Pi Web Polyforge panel and `pf watch decisions`. It replaced the
 // per-chat subscription model (chat-subs.json, the resident `pf watch

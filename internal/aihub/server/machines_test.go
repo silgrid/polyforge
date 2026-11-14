@@ -2,7 +2,7 @@ package server
 
 // machines_test.go: the machines faces over real HTTP — the M3 liveness read
 // face (admin-only auth, the stale projection against the configured
-// threshold, the cannot-judge case) and, since, the
+// threshold, the cannot-judge case) and the
 // machine-heartbeat permission model: who may register, the operator-plus-
 // signature refresh, replay/staleness, and the machine_id collision.
 
@@ -273,7 +273,7 @@ func TestHeartbeatRefreshMatrix(t *testing.T) {
 
 	// (b) the same valid signature under another user's Bearer: AUTH-403,
 	// unchanged (and the collision message is actionable but names no
-	// one —).
+	// one).
 	code, body := e.doSigned(t, "POST", hbPath, otherKey, "m-sig", priv, 0, map[string]any{
 		"machine_id": "m-sig", "live_wi_ids": []string{"wi-b"},
 	})
@@ -430,15 +430,15 @@ func TestMachinesFaceUnparseableStamp(t *testing.T) {
 	}
 }
 
-// TestReplayQuotaIsPerMachinePerLane pins's quota over HTTP
-// as it is keyed since A2 — per machine and per lane (the
+// TestReplayQuotaIsPerMachinePerLane pins the quota over HTTP
+// as it is keyed — per machine and per lane (the
 // lane split itself is TestRelayAnswersCannotStarveHeartbeat's): a machine
 // at its heartbeat lane's quota (512 live signatures) is CORE-429 while
 // another machine is accepted in the same period, and a verbatim replay stays
 // AUTH-401. The cache is pre-filled directly through e.srv.replay.Check
 // (cheap: no 512 HTTP round-trips), exactly the entries the heartbeat
 // commit path would have recorded in that machine's heartbeat lane
-// ( A2).
+// (A2).
 func TestReplayQuotaIsPerMachinePerLane(t *testing.T) {
 	e := newSrvEnv(t)
 	pub, priv := machineKey(t)

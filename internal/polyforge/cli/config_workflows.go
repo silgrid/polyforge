@@ -120,8 +120,8 @@ type workflowStep struct {
 	ID              string                    `json:"id"`
 	ModelCandidates []string                  `json:"model_candidates,omitempty"`
 	Effective       map[string]effectiveChain `json:"effective,omitempty"`
-	// Skippable: the lane declares the step `skippable: true`
-	//; Skip names each mapped project whose yaml
+	// Skippable: the lane declares the step `skippable: true`;
+	// Skip names each mapped project whose yaml
 	// switches it off — through workspace.SkippedSteps, so a skip the
 	// yaml writes for a step its lane does not declare skippable never
 	// shows. Skip is set only when --cwd maps a workspace.

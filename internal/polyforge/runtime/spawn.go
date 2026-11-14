@@ -414,7 +414,7 @@ const (
 	// while a descendant floods stdout after the exit.
 	stdoutDrainBound = 5 * time.Second
 	// stderrDrainBound bounds how long it waits for the stderr copy to
-	// catch up with what the dead process left in its pipe (:
+	// catch up with what the dead process left in its pipe (
 	// its own bound, never a share of stdout's). A descendant merely
 	// holding the pipe open costs nothing here — the catch-up is an empty
 	// pipe, not EOF. The bound is spent while the copy itself cannot run,
@@ -589,7 +589,7 @@ func newProcOpts(cmd *exec.Cmd, stdin io.WriteCloser, stdout *os.File, o procOpt
 		// teardown (killAgentTree at step end) releases it.
 		_ = cmd.Wait()
 		// the kernel may reuse the pid only from here on: Terminate runs its
-		// identity/provenance proofs only after this ( R1)
+		// identity/provenance proofs only after this (R1)
 		p.reaped.Store(true)
 		reapedAt := time.Now()
 		// wake a reader parked on an empty pipe: it re-reads it now that

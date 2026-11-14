@@ -246,8 +246,8 @@ const PROGRESS_TONE_COLORS: Record<PolyforgeProgressTone, string> = {
   green: "#16a34a",
 };
 
-/** A spawn block header's mark, from the block's own lifecycle lines
- *; an older block with none carries no mark. */
+/** A spawn block header's mark, from the block's own lifecycle lines;
+ *  an older block with none carries no mark. */
 const PROGRESS_BLOCK_STATUS_MARKS: Record<PolyforgeProgressBlockStatus, string> = {
   done: "✓",
   failed: "✕",
@@ -282,7 +282,7 @@ function progressBlockDurationSec(block: PolyforgeProgressBlock): number | undef
   return undefined;
 }
 
-/** Lines added per animation frame by the progress renderer (:
+/** Lines added per animation frame by the progress renderer (
  *  a large transcript is rendered in bounded chunks, never truncated). */
 export const PROGRESS_RENDER_CHUNK = 200;
 
@@ -316,7 +316,7 @@ export const PROGRESS_RENDER_CHUNK = 200;
  *
  * Spawn blocks: `progressBlocks` cuts the stream at every
  * `step_started` line in stream order; lines before the first stay leading
- * and unfolded. Every block — a lone one too has a group
+ * and unfolded. Every block — a lone one too — has a group
  * head (`aria-expanded`) carrying its step, spawn number, status mark,
  * duration (its lifecycle times; a running block's age; none without times)
  * and line count. The head absorbs the block's `step_started` and terminal
@@ -336,7 +336,7 @@ export const PROGRESS_RENDER_CHUNK = 200;
  * question) as a highlighted amber block — the question the owner answers,
  * in the flow where it was asked, rendered as Markdown like narration (the
  * step-ask question table as a table; one over MAX_MARKDOWN_CHARS plain
- * wrapped text,); `delivered`, `intent` and
+ * wrapped text); `delivered`, `intent` and
  * `blocked` events are status rows like the other lifecycle lines. The
  * owner's messages the route just accepted (`echoes`, the panel's) render
  * as bubbles after the stream until the event log's own line arrives. The
@@ -816,15 +816,15 @@ function PolyforgeEntriesDismiss({ reason, openIds, onDismiss }: { reason?: stri
  * the small status label at the right end of its row, for a
  * `needs_input` job the emphasized 等待输入 marker there instead of the dim
  * label; the truncated goal under them (at most 2 lines). No narration on the
- * card ( removed the 32px scroller added; the
+ * card (removed the 32px scroller added; the
  * assistant narration stays in the job detail's execution progress and
  * summary). No step information on the card: the DAG, per-step durations and
  * reruns, model and step/idle age live in the job detail.
  * Keyed by wi in the stream and memoized, so a poll updates the same DOM node
  * (a trusted click never lands on a replaced one). Clicking (or Enter/Space)
  * toggles the existing slug selection and its detail. A status-only stand-in
- * (before the first card read) has no select handler and takes no pointer
- *: the first card read may reorder the stream once (server
+ * (before the first card read) has no select handler and takes no pointer:
+ * the first card read may reorder the stream once (server
  * start order replaces `pf ops status` order), and a click in that window
  * could otherwise land on a neighbouring job.
  *
@@ -834,7 +834,7 @@ function PolyforgeEntriesDismiss({ reason, openIds, onDismiss }: { reason?: stri
  * padding 0 5px / line-height 14px and the dim status label at 16px, plus the
  * shared block padding 6px 8px. A 1-line slug + 2-line goal card was 100px.
  *
- * (owner's intentional change, reversing the
+ * (owner's intentional change, reversing the earlier
  * narration): the card-only vertical padding drops to 4px (left/right stay
  * 8px) and the slug/goal gap to 0, so a card with a goal is 42px + its slug
  * row — 58px with a 1-line slug, 74px with a 2-line one. A `running` job's
@@ -1283,7 +1283,7 @@ export function PolyforgePanel({
   // The progress stream is read here (not in the flow component) so the
   // composer under the scroll region shares it: its running subagents, and
   // the owner's own messages echoed until the event log shows them. The
-  // poll runs while the job runs ('s rule, unchanged): a job
+  // poll runs while the job runs (the rule, unchanged): a job
   // that starts waiting is read once on that change (its ask line), and a
   // reply makes it run again — the status read flips it back, the poll
   // resumes, and the echo covers the gap.
@@ -1312,8 +1312,7 @@ export function PolyforgePanel({
   const conversation = conversationState({ jobStatus: selectedJob?.status, workflowStatus: watchStatus?.workflowStatus, currentStep: watchStatus?.currentStep, blocked: watchStatus?.blocked,
     steps: watchStatus?.steps, events: watchStatus?.events, entries: selectedItemEntries, daemonPresent: opsStatus !== null });
   // the per-step rerun count the card no longer shows, from the
-  // selected card's own read (no new read); shown on the DAG timing line
-  //.
+  // selected card's own read (no new read); shown on the DAG timing line.
   const stepRuns = new Map((selectedCard?.steps ?? []).map((step) => [step.id, step.runs]));
   // title row: the slug (the watch read's, else the selected
   // job's, else the selection ref), the goal's pure first-clause short title
@@ -1623,7 +1622,7 @@ export function PolyforgePanel({
                 {workTab === "jobs" && opsStatus && (<>
                   {/* Detail for the selected work item */}
                   {/* pi#120: with a job selected, the whole detail — summary,
-                      graph and execution progress is ONE
+                      graph and execution progress — is ONE
                       vertical scroll region (this container,
                       [data-pf-detail-scroll]). No nested vertical scroller exists
                       inside it, so every line is reachable by scrolling at any
@@ -1702,7 +1701,7 @@ export function PolyforgePanel({
                                 </button>
                               </div>
                             )}
-                            {/* Job facts ( + #238): current step, the
+                            {/* Job facts (+ #238): current step, the
                                 model (24 chars + …, full on hover) with the spawn
                                 number, step/idle age from the status snapshot (so
                                 they show while the watch read loads), the job start

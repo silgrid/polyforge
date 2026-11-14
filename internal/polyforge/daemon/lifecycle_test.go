@@ -26,8 +26,8 @@ func TestRemoveKeepsStateAndRestoreChecksIdentity(t *testing.T) {
 		t.Fatal("default must not be removable")
 	}
 	// a queued submit is held work. The Cell's dispatch tick reads the
-	// queue under q.mu, so the test writes it under q.mu too
-	//; the entry is due only in an hour, so no tick
+	// queue under q.mu, so the test writes it under q.mu too;
+	// the entry is due only in an hour, so no tick
 	// Takes it while the test holds it queued.
 	alpha.q.mu.Lock()
 	alpha.q.pending = append(alpha.q.pending, qEntry{WorkItemID: "wi_q", NotBefore: time.Now().Add(time.Hour)})

@@ -1,6 +1,6 @@
 package core
 
-// w446_exclusive_create_test.go ( AC2, AC3): an exclusive
+// w446_exclusive_create_test.go (AC2, AC3): an exclusive
 // create is refused while another work item of the same project on the
 // same bundle is unfinished — atomically, inside the create transaction,
 // so two creators racing never both commit — and writes nothing when

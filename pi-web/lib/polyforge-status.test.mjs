@@ -535,8 +535,8 @@ test("watch transport validates the ref before argv and builds the once/demand/4
 
 // ---------------------------------------------------------------------------
 // pi#122: the presence cache carries the version; probePolyforgeVersion
-// shares the one `pf --version` spawn + cache (60s present, 5s absent,
-//), force bypasses the read.
+// shares the one `pf --version` spawn + cache (60s present, 5s absent),
+// force bypasses the read.
 // ---------------------------------------------------------------------------
 
 test("version parse keeps a semver-ish line verbatim and reads anything else as absent", async () => {

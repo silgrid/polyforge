@@ -36,7 +36,7 @@ type machineAuth struct {
 type machineHandler func(w http.ResponseWriter, r *http.Request, idn *identity, m machineAuth) error
 
 // replayLane is the signed-route class whose anti-replay bucket a
-// machine's signature is recorded in ( A2). One shared
+// machine's signature is recorded in (A2). One shared
 // bucket per machine let traffic another member induces — the answers to
 // its relayed queries and the inbox wakes they cause — fill the quota the
 // machine's own heartbeat needs, so a third party could push a holder
@@ -164,7 +164,7 @@ func replayVerdict(v machinesign.ReplayVerdict, machineID string, lane replayLan
 // the key the body presents (a first registration, a first bind, a claim),
 // else the row's bound key, through the same ±300 s window and the shared
 // replay cache as the rest of the machine face — one scheme, no second one
-// — in the machine's heartbeat lane ( A2: no other party can
+// — in the machine's heartbeat lane (A2: no other party can
 // add an entry to it, so relayed traffic can never refuse a beat).
 //
 // The replay cache is in memory: an aihub restart forgets it, so at most one

@@ -2,7 +2,7 @@
 
 package test
 
-// w374_develop_driver_contract_test.go ( D2; rewritten by
+// w374_develop_driver_contract_test.go (D2; rewritten by
 // workflow contract v2 PR 12): the texts that state how the develop
 // lane's build is held to its contract agree with what holds it now — no
 // daemon check: build runs its units red then green itself and records
@@ -14,7 +14,7 @@ package test
 // and a review FAIL resumes build's previous session. Whitespace-flattened, so a
 // rewrap keeps them pinned; build.md stays within its line budget — 120
 // lines, raised to 145 when the grill and e2e authoring moved into build
-// ( A1), and to 160 when the analysis and a big plan's units
+// (A1), and to 160 when the analysis and a big plan's units
 // moved to sub-agents.
 
 import (

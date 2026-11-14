@@ -1,9 +1,9 @@
 // carries: components/PolyforgeJobComposer*, components/ComposerBox*, components/PolyforgeProgressSubagent*
 // carries: app/api/polyforge/answer/*, lib/polyforge-conversation-pure*, app/api/polyforge/polyforge-answer-route*, lib/clipboard*, e2e/polyforge-dock.mjs
-// workflow contract v2, change 14 the job card is a chat-style
+// workflow contract v2, change 14 — the job card is a chat-style
 // session with one input box; the discussion assistant is gone. Workflow
 // contract 4: a parked work item keeps the box — a message
-// wakes it, and a copyable `pf resume` sits above it and
+// wakes it, and a copyable `pf resume` sits above it — and
 // only a park whose agent cannot start shows the reason with copyable
 // `pf resume` / `pf cancel` instead of the box.
 //
@@ -16,7 +16,7 @@
 // agent through `POST /api/polyforge/answer` → `pf --json answer <wi> --text=…`,
 // no question id — enabled while the step runs AND while it waits (a reply and
 // an interjection are one path) AND while it is parked (the message wakes it;
-// the card has no buttons,). Only a park whose agent cannot
+// the card has no buttons). Only a park whose agent cannot
 // start gives the box way to the reason and the copyable commands.
 //
 // The suite starts its own `next dev` and drives the panel through its HTTP
@@ -38,14 +38,14 @@
 //          row and the running state follow; the question strip leaves.
 //   S464-2 a running step: the box is enabled (an interjection is the same
 //          path), a message posts and echoes as queued; the card holds no
-//          running sub-agent list the running subagent's
+//          running sub-agent list — the running subagent's
 //          entry in the flow expands on its own toggle; the job card has no
 //          交互 button and no 继续 / 取消 / 打回 control.
 //   S464-3 a parked work item keeps its box: a dropped blocked
 //          one and a paused job show the box with the parked hint and, above
-//          it, the copyable `pf resume <wi>` its buttons are
-//          that copy and send (no 继续 / 取消 / 打回到…,
-//); a park whose agent cannot start —
+//          it, the copyable `pf resume <wi>` — its buttons are
+//          that copy and send (no 继续 / 取消 / 打回到…);
+// a park whose agent cannot start —
 //          the contract park, a step out of model candidates, a block the
 //          runtime made — shows no box but the reason and the copyable
 //          commands (`pf cancel` only for the contract park); a queued job
@@ -428,8 +428,8 @@ try {
       assert.deepEqual(await chatButtons(page), [], "and no control");
       assert.equal(await input(page).count(), 0);
     });
-    // the dropped items, reached through their feed-only attention cards
-    //: the daemon holds no job for them, their detail is the
+    // the dropped items, reached through their feed-only attention cards:
+    // the daemon holds no job for them, their detail is the
     // watch snapshot
     fixture.feed = [entry(7, W10, "blocked"), entry(5, W8, "blocked"), entry(4, W7, "candidates_exhausted"), entry(3, W7, "blocked"), entry(2, W3, "blocked"), entry(1, W6, "blocked")];
     for (const [item, state, commands] of [

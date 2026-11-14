@@ -10,8 +10,8 @@ import {
 } from "./polyforge-status";
 
 /**
- * Server-side reads for the Settings › Polyforge CONFIGURATION panel
- *. Every fact is a `pf` subprocess read — the panel never
+ * Server-side reads for the Settings › Polyforge CONFIGURATION panel.
+ * Every fact is a `pf` subprocess read — the panel never
  * parses cli.toml or `.polyforge.yaml` itself. The sanitizers are the only
  * passport off this module: an api_key value is never present on the wire,
  * and a class pf reports but the panel has never seen passes through
@@ -320,7 +320,7 @@ export function withListSummarize(
  *  shape answers capable:false with visible reason text and issues no new
  *  workspace/write spawn.
  *
- *  `scope` is always explicit — the Host, the default Cell or
+ * `scope` is always explicit — the Host, the default Cell or
  *  a named Cell — and every Cell read is pinned to it (`pinPolyforgeScope`),
  *  never left to the Cell pf would resolve from the server's PF_PROFILE or
  *  cwd. A scope this pf cannot address answers capable:false with the

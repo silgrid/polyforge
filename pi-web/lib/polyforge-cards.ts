@@ -56,7 +56,7 @@ import {
  * Every path derives from a wi id validated by its shape and found in the
  * daemon's own job record; a transcript must resolve inside the capsule or
  * the data root. Content leaves only through the entry whitelist: assistant
- * narration text, credential-masked never a tool call, its
+ * narration text, credential-masked — never a tool call, its
  * name or command/argument, tool results, thinking, user/system prompts. Every failure degrades to an
  * absent field or `available: false`; nothing here throws to the route.
  * Every read is asynchronous (`node:fs/promises`): a 2 s poll
@@ -671,7 +671,7 @@ interface ProgressCall {
  * One transcript projected for the progress face: every record's
  * `progressEntries` pushed with its time (the record's `timestamp`, else its
  * spawn's start plus its ordinal in microseconds), and each tool call paired
- * with its result by call id (pi `toolCallId`, claude
+ * with its result — by call id (pi `toolCallId`, claude
  * `tool_use_id`) when the result names one (an id no call of this transcript
  * carries pairs nothing), else the oldest unpaired call of the same
  * transcript (the recorded pi format names none). A paired call's
@@ -1266,7 +1266,7 @@ export function isProgressToolId(value: unknown): value is string {
  * capsule: every spawn in the spawn journal (reruns included), each spawn's
  * transcript projected by `progressEntries` (narration + one masked tool
  * line; a `--resume` continuation is read once: pi's shared transcript
- * once, a claude session from its newest spawn's copy —),
+ * once, a claude session from its newest spawn's copy),
  * merged with one lifecycle line per retained event of the WI's
  * event log (`composeProgressEventLine`; `step_done` carries the duration
  * since its `step_started` of the same step and spawn). The stream is the

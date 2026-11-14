@@ -139,8 +139,8 @@ func (d *Daemon) routes() *http.ServeMux {
 	// refuseStepOrigin like every POST here, so a step or task process
 	// tree is refused DAEMON-403.
 	mux.HandleFunc("POST /machine/role", d.machineRoleRoute)
-	// The explicit, read-only message analyzer (; one task in
-	// the task lane since body {caller_id}, it blocks until
+	// The explicit, read-only message analyzer (one task in
+	// the task lane: body {caller_id}, it blocks until
 	// the task is terminal and answers the structured result). A POST
 	// outside the step-write allowlist: the whole UDS face sits behind
 	// refuseStepOrigin, so a step or task process is refused DAEMON-403
@@ -153,7 +153,7 @@ func (d *Daemon) routes() *http.ServeMux {
 	// task process is refused DAEMON-403 before this handler).
 	mux.HandleFunc("POST /messages/{id}/prompt", d.promptRoute)
 	// pf watch: the per-WI snapshot and the machine's decision feed
-	// (decisions.go,). GET /decisions is a read any local
+	// (decisions.go). GET /decisions is a read any local
 	// peer may make; the dismiss POST sits behind refuseStepOrigin, so a
 	// step or task process tree is refused DAEMON-403.
 	mux.HandleFunc("GET /jobs/{wi}/watch", d.watchSnapshotRoute)
@@ -163,7 +163,7 @@ func (d *Daemon) routes() *http.ServeMux {
 	// `pf step`, the step's one entry point (stepcall.go, workflow
 	// contract 4): every call recorded on the capsule's call ledger first
 	mux.HandleFunc("POST "+stepCallPath, d.stepCallRoute)
-	// the one-shot task agent (tasks.go,): the spawn/cancel
+	// the one-shot task agent (tasks.go): the spawn/cancel
 	// POSTs sit behind refuseStepOrigin, so a step OR task process tree is
 	// refused DAEMON-403; the two /task/memories GETs serve a task agent
 	// only and scope the read to its own project.
@@ -201,7 +201,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 // submitRoute serves POST /jobs/{wi}/claim. A submit's entry lands on
 // disk, then the dispatcher is run at once (priority-desc against the
 // concurrency cap, as on its tick): an entry it takes is answered with
-// its claim's verdict state "claimed" once aihub
+// its claim's verdict — state "claimed" once aihub
 // answered the claim (never after the capsule clone), or aihub's own
 // typed refusal with nothing left queued; an entry left waiting for a
 // slot is answered state "queued" with the reason, and a later refusal

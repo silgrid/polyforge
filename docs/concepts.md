@@ -45,10 +45,10 @@ bundle's `workflow.yaml`. "Lane" is the informal word for one
 bundle's flow — people say "the develop lane" the way they say "the
 develop workflow". Each lane's own narrative is its
 `workflows/<bundle>/README.md`; the shipped lanes are **develop** — the
-default development lane since (build → review → sync →
+default development lane (build → review → sync →
 verification → publish → merge: each work item merges itself into the
 default branch at its end, as the daemon) — micro, integrate and release.
-The four lanes develop superseded were removed by
+The four lanes develop superseded were removed
 (`workflows/_archive/README.md`): a work item still bound to one is refused
 at claim, and a terminal one keeps displaying. micro is the pure-text
 lane — fix → review → sync → evidence → publish → merge, no grill, plan or
@@ -231,7 +231,7 @@ build step `build` — merge's to `sync`; the release lane's release, verify and
 gate's FAIL verdict is the input of the rewind (or the ending) it
 triggers.
 
-Since the shared review gate — every lane's review except
+The shared review gate — every lane's review except
 micro's own — blocks only on five classes: `bug`, `ac_gap`,
 `project_rule`, `test_weakened` and `guarantee` (defined once in
 `workflows/_shared/steps/review.md`): an unrequested concept, a guess
@@ -284,7 +284,7 @@ off `cancel --per-owner` (micro's fix out of bounds); the work item ends
 canceled, then the owner files anew.
 
 `plan` is never a rewind target. A lane with a `plan` step (no shipped lane
-has one since; develop's build writes its own
+has one; develop's build writes its own
 `artifacts/plan.md`) declares every file it writes together with its coupled
 obligations (the documents, tables and projection rules that must change with
 it, or an explicit none with a reason — a plan missing one is rejected), and
@@ -332,7 +332,7 @@ contract v2 change 16.)
 
 ### The light verification
 
-`verify.py --tier light` (; develop's `verification` step,
+`verify.py --tier light` (develop's `verification` step,
 skill `verify`) runs the **light tier** — `workflows/_shared/scripts/verify-scope --light` in
 each touched repo and in every nested engine root the diff reaches, i.e.
 the fast gates, the affected unit tests, the e2e suites the change added
@@ -409,7 +409,7 @@ ceiling measured on this repository's own full bar: its browser e2e suites
 peak near 10 cores, 5.4 GiB and 1,100 processes; and on the light tier's
 browser e2e, where each suite runs its own `next dev`: at 4 browsers 3
 suites peak near 9.4 GiB and 6 suites near 12.5 GiB, and under `8g` the
-kernel's OOM kill took Chromium's renderer,).
+kernel's OOM kill took Chromium's renderer).
 The logs, the junit reports and `result.json` have the
 host run's shape; the repo's `repos[]` entry adds `container` (image, name,
 whether this run built the image, the build log, the limits). Docker
@@ -808,7 +808,7 @@ setting:
   acceptance, project rules and regressions: a security risk it notices is
   one non-blocking line, unless the change is itself a security feature or
   the risk breaks a written rule (a repo's `AGENTS.md`, a principle, a
-  review checklist item) (owner ruling 2026-11-10,;
+  review checklist item) (owner ruling 2026-11-10;
   `_shared/review_security.md`). `build` writes the e2e scenarios too:
   a user-visible criterion names one (or why a unit test suffices), and an
   e2e scenario is a unit, red before its implementation like any other.

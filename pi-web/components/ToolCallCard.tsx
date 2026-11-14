@@ -48,7 +48,7 @@ export interface ToolCallCardProps extends Omit<HTMLAttributes<HTMLDivElement>, 
 }
 
 /**
- * The tool card shell of the session transcript ( extracted it
+ * The tool card shell of the session transcript (extracted it
  * from MessageView's ToolCallBlock, which renders its rich body inside it):
  * a rounded bordered card in the call's tone, one header button
  * (`aria-expanded`) — name, a single ellipsized preview line, the stats and

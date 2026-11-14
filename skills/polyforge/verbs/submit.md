@@ -63,7 +63,7 @@ When the ticket's goal or content restates a repo's current state, sync that clo
 before submitting: SKILL.md session rule 8.
 
 A ticket bound to a lane that is no longer installed (the four lanes `develop`
-superseded were removed,) is refused at submit and at claim (the
+superseded were removed) is refused at submit and at claim (the
 installed bundle is missing; the work item stays queued):
 re-bind it while it is queued and never claimed (`pf file edit <id> --bundle develop`),
 or cancel it. New development work is filed on `develop` (`verbs/file.md`).

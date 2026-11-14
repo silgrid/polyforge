@@ -48,15 +48,15 @@ const (
 	SkippedStepsJSON = "runtime-state/skipped-steps.json"
 	// OversizeManifest lists the files the daemon left out of the chain
 	// because each is over MaxBlobBytes: path, size and sha256 (gitops'
-	// commit guard writes it,).
+	// commit guard writes it).
 	OversizeManifest = "artifacts/oversize.json"
-	// StepCallsJSONL is the `pf step` call ledger (workflow contract 4,
-	//): the daemon appends every call of a step before it
+	// StepCallsJSONL is the `pf step` call ledger (workflow contract 4):
+	// the daemon appends every call of a step before it
 	// runs and what it came to after — the daemon's record of a step's
 	// hand-off and of the hub writes it left pending (stepcall package).
 	StepCallsJSONL = "runtime-state/step-calls.jsonl"
 	// HandoffMD is the work item's one hand-off document (workflow
-	// contract 4,): append-only, each section a
+	// contract 4): append-only, each section a
 	// daemon-stamped header over the body a step handed off with
 	// `pf step handoff`.
 	HandoffMD = "artifacts/handoff.md"
@@ -65,7 +65,7 @@ const (
 // GitignoreContent is the capsule .gitignore (v1 ruling C1 (archive/v1-architecture-spec.md)), written at
 // every claim and rewritten at every recovery, so an existing capsule gets
 // a new line on its next claim or resume. /artifacts/downloads/ is the raw
-// downloads directory (DirDownloads,).
+// downloads directory (DirDownloads).
 const GitignoreContent = "/repos/\n/artifacts/release-*/\n/" + DirDownloads + "/\n"
 
 // Identity is capsule.json (v2-converge.md Appendix E.5). Repos records the SHA each task repo
@@ -350,7 +350,7 @@ const MaxTaskBlobBytes = 100 << 20
 // the owner's ruling: 10× the largest blob the hook accepts
 // (MaxTaskBlobBytes = 100 MiB, so a shallow carrier's first push — a
 // whole root-commit tree snapshot — fits with an order of magnitude to
-// spare;), pinned at the binary GiB boundary the ruling
+// spare), pinned at the binary GiB boundary the ruling
 // names (the raw 10× product is 1000 MiB; the cap must not shrink
 // below 1 GiB). It is a constant: no flag, config key or environment
 // variable adjusts it (the git.Manager field merely lets tests inject a

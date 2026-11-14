@@ -622,8 +622,8 @@ function lateSnapshotTail(
 
 /**
  * A read's snapshot can end before messages the stream delivered after the read
- * was issued: applying it wholesale would remove a reply already on screen
- *. The snapshot stays the truth for the messages it holds; the
+ * was issued: applying it wholesale would remove a reply already on screen.
+ * The snapshot stays the truth for the messages it holds; the
  * view's live tail (messages after its last loaded entry) that the snapshot
  * does not already hold at its end stays after it. A window that slid past the
  * view's anchor merges nothing, as `lateSnapshotTail()` records no tail there.
@@ -2768,8 +2768,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         break;
       case "auto_compaction_end":
       case "compaction_end":
-        // claude's own /compact turn ends here: a force stop asked for in it no longer stands
-        //. An automatic compaction inside a running turn ends no turn.
+        // claude's own /compact turn ends here: a force stop asked for in it no longer stands.
+        // An automatic compaction inside a running turn ends no turn.
         if (event.type === "compaction_end") setClaudeForceStop(null);
         setIsCompacting(false);
         if (event.errorMessage) {

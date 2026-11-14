@@ -719,7 +719,7 @@ type StartOpts struct {
 	Origin *Origin
 	Models []string
 	// OwnerMessage is the owner message that wakes a parked work item
-	// (workflow contract 4,): appended to the claimed
+	// (workflow contract 4): appended to the claimed
 	// scene's asks.jsonl once the scene is ready and before the engine
 	// starts, so the woken step's first dispatch carries it. A claim
 	// always starts from a fresh clone (prepareCapsule), so a line written
@@ -1678,7 +1678,7 @@ func (r *Runtime) sealNetwork(j *job, reason, note string, alreadyPushed bool) (
 }
 
 // wrapAttrs answers the attrs a wrapped close carries to aihub (workflow
-// contract 4, design #483 §5.2/§5.3,):
+// contract 4, design #483 §5.2/§5.3):
 //
 //   - every `wrap-attrs` write a step recorded and the pending-writes
 //     executor made (the call ledger, pendingwrites.WrapAttrs): its name →

@@ -2,7 +2,7 @@
  * Client-safe pure model and helpers for the Messages tab:
  * response types, the page merges, the one acknowledgment decision, the
  * anchor split, the flat direct contact list, the project
- * groups and the structured message analysis (:
+ * groups and the structured message analysis (
  * the closed vocabularies, the one wire sanitizer, the primary action). No
  * Node import lives here, so both the server module and the client
  * hook/panel can use it.

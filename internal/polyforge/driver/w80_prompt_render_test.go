@@ -65,9 +65,9 @@ func TestW80PromptSizeBudget(t *testing.T) {
 		// texts render (about 1.6 KB and 1.4 KB measured with its
 		// outside-team-code trigger; the rest is the headroom the earlier
 		// budgets granted); + ~800: re-baselined (not trimmed) for the
-		// incomplete-evidence contract every result delivery renders
-		//; review + 3000: re-baselined (not trimmed) for
-		// the five blocking classes every review renders ( D1:
+		// incomplete-evidence contract every result delivery renders;
+		// review + 3000: re-baselined (not trimmed) for
+		// the five blocking classes every review renders (D1:
 		// the findings' class schema with tier_ok, the class definitions
 		// and each checklist rule's class, about 2.9 KB); review + 300:
 		// re-baselined (not trimmed) for the class definitions' e2e quality
@@ -79,7 +79,7 @@ func TestW80PromptSizeBudget(t *testing.T) {
 		// result delivery renders (how a gate asks the owner
 		// with options naming daemon actions, about 380 bytes); + 300:
 		// re-baselined (not trimmed) for the downloads-directory sentence
-		// every step prompt renders beside the capsule root (:
+		// every step prompt renders beside the capsule root (
 		// where raw downloads go and the chain's blob limit, 288 bytes
 		// measured, past the 48-82 the earlier headroom had left)
 		// 14000 + 1500: the deliverable-carrier block (

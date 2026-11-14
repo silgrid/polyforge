@@ -234,7 +234,7 @@ type CreateWorkItemRequest struct {
 	After []string `json:"after,omitempty"`
 	// Exclusive (needs BundleName) asks aihub to refuse the create CORE-409
 	// OPEN_ON_BUNDLE while another work item of the project on the same
-	// bundle is unfinished (; a lane's `exclusive: true`).
+	// bundle is unfinished (a lane's `exclusive: true`).
 	Exclusive bool `json:"exclusive,omitempty"`
 }
 
@@ -592,7 +592,7 @@ func (c *Client) SessionEnd(wi string, req api.SessionEndRequest) error {
 // re-establishes execution over the parked capsule. Authorization is
 // server-side (the reporter, a project maintainer, an admin, or the
 // current operator of the machine that last held the work item as a
-// project writer or maintainer —).
+// project writer or maintainer).
 func (c *Client) ResumeBlockedWorkItem(idOrSlug string) (json.RawMessage, error) {
 	return c.ResumeBlockedWorkItemWith(idOrSlug, api.ResumeBlockedRequest{})
 }

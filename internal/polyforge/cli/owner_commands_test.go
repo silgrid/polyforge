@@ -3,7 +3,7 @@ package cli
 // owner_commands_test.go: the owner's commands on a parked work item are
 // `pf resume` and `pf cancel` alone (workflow contract 4, design #483 §7,
 // owner ruling 2026-11-11): `pf waive` and `pf rewind` were removed
-// the owner tells the step, which hands off `waive` or
+// — the owner tells the step, which hands off `waive` or
 // `rewind --to` citing the message (--per-owner).
 
 import (

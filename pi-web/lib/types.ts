@@ -413,9 +413,9 @@ export interface SessionInfo {
   /** The agent the session runs on; absent means pi. "claude" rows come from
    *  pi-web's claude index, never from a pi session file. */
   harness?: "pi" | "claude";
-  /** A claude session's current full model name and effort (claude rows only;)
-   *  and its permission mode when it is not `default` (absent reads as default;);
-   *  `planAvailable: false` when its approvals are's deny, so the composer offers
+  /** A claude session's current full model name and effort (claude rows only)
+   *  and its permission mode when it is not `default` (absent reads as default);
+   *  `planAvailable: false` when its approvals are on deny, so the composer offers
    *  plan disabled with its reason (absent: offered; r3). */
   claude?: { model: string; effort?: string; launchPermissionMode?: ClaudeLaunchPermissionMode; planAvailable?: false };
   /** Archived in pi-web's claude index (claude rows only; pi rows keep the browser's archive set). */

@@ -1,6 +1,6 @@
 package test
 
-// w341_release_pr_association_repro_test.go: repro for.
+// w341_release_pr_association_repro_test.go: a bug repro.
 //
 // Reported failure (#340): `.polyforge/release.sh` proves that every first-parent
 // commit entering main since the previous release came through a merged PR by

@@ -29,8 +29,8 @@ function isMissing(error: unknown): boolean {
  * project's `.pi/settings.json`: anything there would otherwise stall the
  * whole server, since the read is synchronous. This synchronous form serves
  * the settings, skill and extension reads; a read path polled often enough
- * that blocking the event loop matters (the Polyforge cards/progress reader,
- *) uses `readRegularFileTextAsync`, the same rules on
+ * that blocking the event loop matters (the Polyforge cards/progress reader)
+ * uses `readRegularFileTextAsync`, the same rules on
  * `node:fs/promises`.
  */
 export function readRegularFileText(path: string, maxBytes?: number): string | undefined {

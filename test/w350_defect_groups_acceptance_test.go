@@ -1,8 +1,8 @@
 // carries: internal/polyforge/cellcfg/*, internal/polyforge/cli/*, internal/polyforge/daemon/*
 package test
 
-// w350_defect_groups_acceptance_test.go: red-first end-to-end acceptance for
-//, authored against artifacts/spec.md before code lands. Every
+// w350_defect_groups_acceptance_test.go: red-first end-to-end acceptance for,
+// authored against artifacts/spec.md before code lands. Every
 // scenario drives the project's real faces (the pf binary, real aihub
 // processes, the Host's UDS face, real config files and processes) and uses
 // an oracle outside the executor: file bytes, Hub-side project reads, real

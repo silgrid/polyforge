@@ -1,6 +1,6 @@
 package driver
 
-// w374_d2_build_settle_test.go ( D2, item 9): the acceptance
+// w374_d2_build_settle_test.go (D2, item 9): the acceptance
 // reader. The test-path rules this file also pinned moved with the facts
 // computations to the workflow's facts.py and are pinned
 // there (workflows/_shared/scripts/tests/test_facts.py).

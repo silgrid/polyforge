@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PATH-injected stand-in for the `claude` CLI ( e2e, authored before
+ * PATH-injected stand-in for the `claude` CLI (e2e, authored before
  * `code`). It replays the real 2.1.312 background-subagent recording under
  * `lib/__fixtures__/claude-2.1.312/subagent/`, rewriting the recorded session id
  * and cwd to this launch's, and writing claude-shaped transcript/sidecar files

@@ -20,7 +20,7 @@ import (
 // NO closed_at (blocked is resumable-by-owner, not closed), the job
 // dropped from the daemon's live set. This one runs the counter through
 // the REAL daemon, the real spawner and real step processes: it is the
-// "other exit" rule's one e2e smoke (; the rule's detailed
+// "other exit" rule's one e2e smoke (the rule's detailed
 // test is the driver's TestOtherExitResumesOnceThenBlocks).
 func TestV1S17RecoveryBudgetBoundedFail(t *testing.T) {
 	inst := newV1Install(t)

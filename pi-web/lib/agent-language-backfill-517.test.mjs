@@ -40,7 +40,7 @@ const file = path.join(agentDir, "pi-web-settings.json");
 // list reports the file's sha256 and a set carrying `--expect-state
 // {"file_sha256": …}` that no longer matches is refused CORE-409, exit 1, with
 // nothing written. `racingWrite: X` is another writer that sets the key to X
-// right after the list was read ( r1#1).
+// right after the list was read (r1#1).
 const fileHash = (state) => crypto.createHash("sha256").update(JSON.stringify({ agent_language: state.source === "file" ? state.value : null })).digest("hex");
 const stubPf = path.join(pfDir, "pf");
 const stubState = path.join(pfDir, "state.json");

@@ -26,8 +26,8 @@ package test
 //     call — no gate of the lane declares `waivable: true` — the refusal
 //     names the gate's declaration, not the owner message, nothing is
 //     recorded, and the step's resumed session hands off done;
-//   - downstream reads upstream from result files (workflow contract 4,
-//): the deploy dispatch's prompt carries its definition's
+//   - downstream reads upstream from result files (workflow contract 4):
+// the deploy dispatch's prompt carries its definition's
 //     开工前读什么、核对什么 section — the verified version from
 //     verified-version.json, checked against the version of the release
 //     script's record (artifacts/release-record.json), never execution.json;

@@ -1,6 +1,6 @@
 package test
 
-// w47_lane_downgrade_contract_test.go: text contract for.
+// w47_lane_downgrade_contract_test.go: a text contract.
 //
 // Work item #47 adds a down-lane mechanism: the filing skill judges a ticket on
 // two axes (expected diff size and lane risk surface) and prefers the lighter

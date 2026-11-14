@@ -132,7 +132,7 @@ json.dump(out, open("artifacts/review-out.json", "w"))
 `
 
 // v2mEvidenceCheck is the python an honest evidence agent checks sync's
-// hand-off with first (the evidence skill's 开工前 1,): the
+// hand-off with first (the evidence skill's 开工前 1): the
 // sync result file's argv must be the arguments of the sync skill's start
 // or continue line, read from the skill itself in the lane snapshot
 // ($PF_SHARED_DIR/skills/sync.md), and every repo's conflicts empty. It

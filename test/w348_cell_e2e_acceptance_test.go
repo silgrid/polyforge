@@ -1117,7 +1117,7 @@ func TestW348OldLayoutIsRefusedAtStartup(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Scenario 16 — plan writes nothing; apply migrates and preserves identity
-// (the retired chat-subs.json is no longer annotated,).
+// (the retired chat-subs.json is no longer annotated).
 // ---------------------------------------------------------------------------
 
 func TestW348MigrationPlanAndApplyPreserveIdentity(t *testing.T) {
@@ -2334,7 +2334,7 @@ func TestW348UnknownOutcomeIsNotResent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Appended amendment (review s23#1), rewritten by the chat
+// Appended amendment (review s23#1), rewritten later: the chat
 // delivery it pinned is retired; a decision of a named Cell is an entry of
 // the Host decision feed carrying its WorkRef.
 // ---------------------------------------------------------------------------

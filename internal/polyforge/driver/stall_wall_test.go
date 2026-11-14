@@ -1,6 +1,6 @@
 package driver
 
-// stall_wall_test.go ( R4): the supervisor forgives its own
+// stall_wall_test.go (R4): the supervisor forgives its own
 // observation gap — a host or daemon freeze — by shifting the dispatch
 // tracker's stamps, so a stalled dispatch is not judged
 // dead for the time nobody watched. The driver's T ledger must agree: the

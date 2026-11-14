@@ -1,6 +1,6 @@
 package runtime
 
-// w403_wrap_attrs_test.go ( A2/AC4): the wrapped close carries
+// w403_wrap_attrs_test.go (A2/AC4): the wrapped close carries
 // the capsule's hand-off — since workflow contract 4 the call ledger's made
 // `wrap-attrs` (c4_wrap_attrs_test.go: develop's landing `integration`) —
 // to aihub as the session-end's attrs. A record that cannot be read never

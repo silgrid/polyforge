@@ -14,7 +14,7 @@ package harness
 // in (a step's capsule root, a task's project workspace).
 //
 // Summarize (internal/polyforge/summarize) carries no list: its claude
-// dispatch runs with no tools (`--tools ""`,), but its pi
+// dispatch runs with no tools (`--tools ""`), but its pi
 // dispatch, `pi -p --no-session --model <m>`, keeps pi's default tools
 // (read, bash, edit, write) — a gap noted here, not closed (summarize is
 // outside).

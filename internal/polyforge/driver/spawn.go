@@ -77,8 +77,8 @@ type StepSpawnAdapter struct {
 	PollInterval time.Duration
 	// Now overrides the clock for journal stamps (tests).
 	Now func() time.Time
-	// Language answers the live agent language (`[daemon] agent_language`,
-	//) at dispatch time; nil = the default. A new
+	// Language answers the live agent language (`[daemon] agent_language`)
+	// at dispatch time; nil = the default. A new
 	// conversation takes it; a resumed one keeps its own (SpawnStep).
 	Language func() string
 }
@@ -161,7 +161,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 	degraded := ""
 	if resume {
 		// Same-step continuation (an answered question, the first retry
-		// after a crash, a rewind re-entry —) resumes the
+		// after a crash, a rewind re-entry) resumes the
 		// previous dispatch's conversation only when it can. The
 		// degradation conditions, each a new conversation with the previous
 		// transcript as read-only reference when one is readable (a rewind
@@ -286,7 +286,7 @@ func dispatchLanguage(v string) string {
 }
 
 // subagentsRulesVar is the shared fragment carrying the sub-agent rules a
-// step definition may include ({{build_subagents}},).
+// step definition may include ({{build_subagents}}).
 const subagentsRulesVar = "build_subagents"
 
 // piNoSubagents is the fact a pi dispatch of such a step carries (PR #869
@@ -417,7 +417,7 @@ const materializeMarkerRel = "sync/materialized.json"
 // only the carrier HEAD and the WIP ref (tracked edits and non-ignored
 // untracked files), so every .gitignore'd build directory (node_modules/,
 // build outputs, venvs) is gone; the fast path's "its environment is
-// intact" claim would be false ( owner ruling: owner
+// intact" claim would be false (owner ruling: owner
 // `pf resume` / any re-claim keeps today's cold path). The per-claim
 // marker sync/materialized.json carries the claim's completed_at, which
 // postdates the recorded attempt on a re-claim and stays untouched across

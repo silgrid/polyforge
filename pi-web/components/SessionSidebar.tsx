@@ -3050,8 +3050,8 @@ export function SessionSidebar({ selectedSessionId, highlightSessionId, followHi
  */
 /**
  * The visible harness marker of a claude session's row: just "claude", pushed to
- * the right end of its title line. The model is never shown (owner intentional change,
- *): a claude session's model can change in-session, so a listed value would go
+ * the right end of its title line. The model is never shown (owner intentional change):
+ * a claude session's model can change in-session, so a listed value would go
  * stale. pi rows show none.
  */
 export function HarnessMarker({ session }: { session: Pick<SessionInfo, "harness"> }) {

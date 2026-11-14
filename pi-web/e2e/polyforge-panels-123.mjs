@@ -183,8 +183,8 @@ const check = createCheck({ failures: ([id], text) => failures.get(T[id]).push(t
 let base;
 const h = createHarness({
   // The fixture session is pinned to 2026-10-27, so the sidebar's default
-  // 15-day age filter (7 before) would hide its row once the wall clock passes it
-  //: W12's outside press would then land on the right-aligned
+  // 15-day age filter (7 earlier) would hide its row once the wall clock passes it:
+  // W12's outside press would then land on the right-aligned
   // chat message, which the dock overlay covers. Disable the filter for
   // determinism, the seed e2e/run.mjs and e2e/claude-session-219.mjs already use.
   storage: { "pi-web:split-view-enabled": "false", "pi-locale": "en", "pi-web:session-age-filter-days": "0" },

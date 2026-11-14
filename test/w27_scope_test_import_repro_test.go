@@ -4,7 +4,7 @@ package test
 // test for the scoped selection's test-import blind spot in
 // the release-shipped `workflows/_shared/scripts/verify-scope` with the repository conf.
 //
-// The reported failure ( review, blocking B1): `compute_scoped`
+// The reported failure (review, blocking B1): `compute_scoped`
 // selects package P only when a changed import path appears in P's non-test
 // `go list {{.Deps}}` closure. A package whose `_test.go` files (internal or
 // external test package) import the changed package is not selected, even

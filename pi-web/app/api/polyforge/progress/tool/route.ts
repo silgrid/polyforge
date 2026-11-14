@@ -7,8 +7,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/polyforge/progress/tool?wi=<wi_…>&id=<tool line id>[&profile=<Cell>] — one tool
- * call's full detail for the job detail's expanded progress card
- *, fetched only when a reader expands that card; the 2 s
+ * call's full detail for the job detail's expanded progress card,
+ * fetched only when a reader expands that card; the 2 s
  * progress poll carries only the light tool fields.
  *
  * Reachable by whoever passes the existing /api gate, the same in-route

@@ -37,7 +37,7 @@ func TestDevelopBuildPromptDelegatesToSubagents(t *testing.T) {
 		// AC1: the analysis is the sub-agent's; the stop stays this session's
 		// (that it reproduces a defect and writes the plan, does not grill and
 		// that the session asks the owner are the fragment's lines
-		// test/w403_develop_grill_e2e_contract_test.go pins,)
+		// test/w403_develop_grill_e2e_contract_test.go pins)
 		"## Sub-agents",
 		"**The analysis sub-agent**",
 		"every surprise as one question with its options and a recommended answer — a dead end, a ticket that contradicts the code or itself, a plan that diverges from the ticket",

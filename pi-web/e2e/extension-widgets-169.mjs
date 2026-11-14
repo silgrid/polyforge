@@ -1,5 +1,5 @@
 // carries: components/ExtensionStatusBar*, components/ExtensionWidgets*, lib/extension-widgets*
-// The chat pane's bottom extension shelf (pi#111,,).
+// The chat pane's bottom extension shelf (pi#111).
 // Standalone: it starts its own dev server with a stub pi extension in a
 // temporary PI_CODING_AGENT_DIR. The extension's `/e2e-widgets` command sets
 // two widgets, so the run asserts through the real SSE → useAgentSession →

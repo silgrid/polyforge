@@ -3,8 +3,8 @@
 // composer (claude's set_permission_mode, temporary for that session). default is
 // labelled as Claude Code's own setting (owner ruling Q2=A: no --permission-mode, the
 // user's ~/.claude decides); plan is offered, enabled when the session's permission prompts
-// come to Pi Web ('s ask) and otherwise disabled with its reason as visible text
-// ( r3, owner ruling 2026-11-13T07:40:00Z).
+// come to Pi Web (ask mode) and otherwise disabled with its reason as visible text
+// (r3, owner ruling 2026-11-13T07:40:00Z).
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -29,7 +29,7 @@ const DEFAULT_LABEL = {
   "zh-CN": "默认（按 Claude Code 自身设置）",
   "zh-TW": "預設（依 Claude Code 自身設定）",
 };
-// r3 (D11): plan needs's claude tool permissions on 「Ask in a dialog」.
+// r3 (D11): plan needs the claude tool permissions on 「Ask in a dialog」.
 const PLAN_UNAVAILABLE = {
   en: "Not available: plan mode needs claude tool permissions set to Ask in a dialog (Settings › General) — on Deny silently claude would refuse to leave plan mode",
   "zh-CN": "暂不可用：plan 模式需要 claude 工具授权为「弹窗询问」（设置 › 常规）——在「静默拒绝」下 claude 会拒绝退出 plan 模式",

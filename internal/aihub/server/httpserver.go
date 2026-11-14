@@ -1,7 +1,7 @@
 package server
 
-// httpserver.go: the aihub production HTTP server's pressure bounds
-//. An unbounded http.Server lets an unauthenticated
+// httpserver.go: the aihub production HTTP server's pressure bounds.
+// An unbounded http.Server lets an unauthenticated
 // remote hold a connection open indefinitely (a slow or partial request
 // header never releases it) and feed it arbitrarily large headers; the
 // three constants below bound that face WITHOUT imposing a global read

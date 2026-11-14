@@ -12,8 +12,7 @@
 // The authored new-behaviour scenarios are S18 (visual hierarchy),
 // S20a (WCAG contrast and band colours), S21a (system typography and
 // tabular figures), S22a (no horizontal overflow, narrow icon rail) and
-// S23 (the ticket detail shows its comments and anchored messages,
-//).
+// S23 (the ticket detail shows its comments and anchored messages).
 // S17/S19/S20b/S21b/S22b keep the v1 semantic coverage. Every
 // data-derived assertion is preceded by the bounded waitForContent on
 // the same element; there is no fixed sleep anywhere in this file.
@@ -499,7 +498,7 @@ async function scenarioSearch(page) {
 // WCAG ratio in BOTH themes, measured from computed styles — text at
 // least 4.5:1, every memory kind colour at least 3:1, distinct from
 // every other kind and from the rendered --accent and --accent-fg (a
-// kind never wears the link/accent family,) and (doc
+// kind never wears the link/accent family) and (doc
 // aside) no neutral gray — and the three
 // heartbeat bands resolve to distinguishable green / amber / red hues
 // that each clear the non-text 3:1 floor. The band check is the
@@ -853,7 +852,7 @@ async function scenarioEscapedLinks(page) {
 }
 
 // ---------------------------------------------------------------------------
-// S23 (new behaviour,): the work-item detail carries the
+// S23 (new behaviour): the work-item detail carries the
 // ticket's append-only comment thread and every message anchored to it
 // (about_wi, matched by slug or id — the seeded message uses the slug, the
 // shape the pre-change send face stored).

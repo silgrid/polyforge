@@ -7,8 +7,8 @@ import { ConfigWriteError, writePolyforgeConfig, type ConfigWriteRequest } from 
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/polyforge/config?cwd=… — the panel's configuration read
- *. Reads only through pf; every degradation (pf absent, below
+ * GET /api/polyforge/config?cwd=… — the panel's configuration read.
+ * Reads only through pf; every degradation (pf absent, below
  * the capability floor, an old list shape, daemon down, an unmapped cwd) is
  * a 200 field, never 5xx. The in-route isApiRequestAllowed check is the
  * authenticated-surface gate (the proxy still enforces PI_WEB_PASSWORD).

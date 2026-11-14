@@ -2,7 +2,7 @@
 
 package test
 
-// w460_submit_acceptance_skill_contract_test.go: text contract for (AC1).
+// w460_submit_acceptance_skill_contract_test.go: a text contract.
 //
 // The routing skill's submit action checks the ticket for acceptance before
 // `pf submit` runs: no criterion under `## Acceptance` or `## 验收` means stop,

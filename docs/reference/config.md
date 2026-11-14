@@ -404,8 +404,8 @@ lists the file's current values.
 `MatchWorkspace` longest-prefix rule as every other workspace consumer and
 always answers one JSON document: `mapped`, the workspace label, the yaml
 `path`/`sha256`/`exists`, the per-project `steps` map and `steps_complete`.
-It carries no `summarize` and no `memory_policy` (cli.toml facts since
-, read through `pf config list`); a yaml still carrying either
+It carries no `summarize` and no `memory_policy` (cli.toml facts since,
+read through `pf config list`); a yaml still carrying either
 retired section makes it error with the file, the line and
 `pf config migrate`. An unmapped cwd answers `mapped:false` with exit 0.
 
@@ -466,8 +466,8 @@ is local-UDS only and refuses step agents (`docs/reference/uds-routes.md`).
 
 The model candidates of the demand-gated summarize lane — the one-line
 narration of a running step's live transcript that a watched work
-item's snapshot carries (polyforge#224). One machine-level table
-: every mapped workspace's work items use it; there is no
+item's snapshot carries (polyforge#224). One machine-level table:
+every mapped workspace's work items use it; there is no
 per-workspace or per-project summarize setting (a
 `steps.<project>.summarize` key in a `.polyforge.yaml` is an unknown step
 id and refuses):
@@ -697,7 +697,7 @@ of a tier is the workspace's — set `tiers.<project>.<tier>.models`, or let
 the project default govern. A bundle step list — a `model_candidates`
 list or a tier — whose every candidate is a placeholder
 (`<harness>:example-…`) is undeclared: it never outranks the project default
-(; `pf doctor`'s workspace yaml row warns when a resolved
+(`pf doctor`'s workspace yaml row warns when a resolved
 step's first candidate is a placeholder). A tier name no bundle step names governs nothing.
 
 

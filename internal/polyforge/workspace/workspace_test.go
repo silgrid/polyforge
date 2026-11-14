@@ -280,7 +280,7 @@ func TestLoadStepIDsOfARefusedBundleStillCount(t *testing.T) {
 }
 
 // TestWorkspaceLoadRefusesStepAttrs pins the removal of the step attrs
-// (workflow contract 4,): an `attrs` key under any step
+// (workflow contract 4): an `attrs` key under any step
 // entry — a step id, `default` or `task`; beside `models`, alone, or
 // empty — refuses the whole file at its yaml path with the rewrite.
 func TestWorkspaceLoadRefusesStepAttrs(t *testing.T) {

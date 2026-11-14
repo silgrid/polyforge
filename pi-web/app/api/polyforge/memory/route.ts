@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/polyforge/memory?cwd=… — the Memory tab's three faces on one GET
- * ( D2, browse):
+ * (D2, browse):
  *   - no `q`, no `project`: the SCOPE read (capability plus the cwd's
  *     workspace projects, no memory verb);
  *   - no `q`, a `project` (optional `type`, `tags`, `after`): one BROWSE page,

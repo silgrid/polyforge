@@ -5,9 +5,9 @@ package daemon
 // validator `pf config` runs, and applies each key by its class:
 //
 //   - live: max_concurrent_jobs (the queue), max_concurrent_bars/
-//     bar_load_threshold (the heavy-run admission,),
+//     bar_load_threshold (the heavy-run admission),
 //     command_path (the next step process's PATH and the daemon's own
-//     git and gh,),
+//     git and gh),
 //     step_timeout/stall_window/claude_bin/agent_language (the live state
 //     the runtime reads);
 //   - live: summarize.models|language|interval_sec (the [summarize] table

@@ -1,7 +1,7 @@
 package daemon
 
-// prompter.go: the explicit, human-triggered message-to-prompt task
-//, built like the analyzer. One call is ONE read-only task
+// prompter.go: the explicit, human-triggered message-to-prompt task,
+// built like the analyzer. One call is ONE read-only task
 // in the task lane that restates one message — with the most recent
 // earlier messages of its conversation, its replied-to message and its
 // anchored work item — as a self-contained execution prompt for another

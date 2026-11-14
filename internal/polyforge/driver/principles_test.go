@@ -2,7 +2,7 @@ package driver
 
 // principles_test.go: workflows/_shared/principles.md is rendered once
 // into the grill/spec/plan/code-like steps of every shipped bundle, into
-// the shared review step and, since, into the long-running
+// the shared review step and into the long-running
 // steps that need the waiting rule (bug-fix repro, feature-full
 // e2e-author, the shared deliver in every delivery lane, release verify);
 // polyforge-only rules live in the repo's AGENTS.md, never in the

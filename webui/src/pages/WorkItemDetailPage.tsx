@@ -12,7 +12,7 @@ import { Card, Muted, SectionHeading } from '../components/ui'
 // WorkItemDetailPage renders one work item: the slug over the goal as
 // the page's one h1, the metadata card, the server-sanitized content
 // card, the append-only comment thread, the messages anchored to this
-// ticket (about_wi by slug or id —), both dependency
+// ticket (about_wi by slug or id), both dependency
 // directions and the aihub event timeline card (labels, comments,
 // messages and payloads render as text — React escapes them).
 export default function WorkItemDetailPage({ project, id }: { project: string; id: string }) {

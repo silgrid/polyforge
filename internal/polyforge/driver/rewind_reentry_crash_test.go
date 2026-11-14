@@ -2,7 +2,7 @@ package driver
 
 // rewind_reentry_crash_test.go: item 6 — a crash after the
 // rewind target's step_start (before its spawn journal line) must keep the
-// first dispatch of the new round's shape. Since the
+// first dispatch of the new round's shape. The
 // target's shape IS that resume (every rewind target that is not a gate
 // resumes its previous round): the restart keeps it a rewind resume. The
 // FAIL itself is no dispatch input: it is the gate's section of

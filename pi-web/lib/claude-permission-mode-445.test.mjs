@@ -12,7 +12,7 @@ import { readStubLog } from "./__fixtures__/claude-stub-log.mjs";
 // The in-session permission-mode switch: claude's own `set_permission_mode`
 // control request on a live child (lib/__fixtures__/claude-2.1.322/permission-mode/), the
 // index alone without one, plan offered only to a session whose permission prompts come to
-// Pi Web ('s ask; on deny claude would refuse plan's ExitPlanMode,
+// Pi Web (ask mode; on deny claude would refuse plan's ExitPlanMode
 // r3, owner ruling 2026-11-13T07:40:00Z). A scratch agent dir, claude config dir, HOME
 // and a PATH whose `claude` is the stub: nothing here touches the operator's ~/.claude.
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-claude-permission-"));
@@ -37,7 +37,7 @@ const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, intero
 const claude = await jiti.import("./claude-session.ts");
 const index = await jiti.import("./claude-index.ts");
 const permissionConfig = path.join(agentDir, "claude-permissions.json");
-/**'s global permission mode for the duration of `fn` (absent file: its default, ask). */
+/** the global permission mode for the duration of `fn` (absent file: its default, ask). */
 async function withGlobalMode(mode, fn) {
   fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, mode, push: false }));
   try {
@@ -158,7 +158,7 @@ test("with no live child the switch only writes the index and the next child sta
 });
 
 test("plan is refused while Pi Web has no host approvals and nothing reaches the child", async () => {
-  // r3: "no host approvals" is's deny, the global mode here.
+  // r3: "no host approvals" is deny, the global mode here.
   await withGlobalMode("deny", async () => {
     const record = await newRecord({ launchPermissionMode: "acceptEdits" });
     const { session } = await started(record);

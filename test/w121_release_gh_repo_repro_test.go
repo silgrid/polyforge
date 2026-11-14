@@ -1,6 +1,6 @@
 package test
 
-// w121_release_gh_repo_repro_test.go: repro for.
+// w121_release_gh_repo_repro_test.go: a bug repro.
 //
 // Reported failure (#120): with RELEASE_GH_REPO unset, .polyforge/release.sh
 // silently falls back to the public mirror silgrid/polyforge, so a release

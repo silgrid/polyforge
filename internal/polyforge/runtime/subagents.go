@@ -1,6 +1,6 @@
 package runtime
 
-// subagents.go: the claude half of — a step's subagent
+// subagents.go: the claude half — a step's subagent
 // conversations ride the main session's sync into the capsule. Claude
 // Code writes each subagent's conversation beside the native session, in
 // <claude-config>/projects/<cwd>/<uuid>/subagents/agent-<id>.jsonl (plus

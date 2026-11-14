@@ -171,7 +171,7 @@ func composeStep(fm *workflow.Lane, pm, pt map[string][]string, s workflow.Step)
 // tier→model table), then the lane's own (`defaults.tiers`); the yaml
 // project default ranks below both. The bundle step level is the step's
 // own `model_candidates`, or that lane tier list. A bundle list that is
-// placeholders only (every candidate `<harness>:example-…`,)
+// placeholders only (every candidate `<harness>:example-…`)
 // is undeclared: a shipped placeholder never outranks the project default.
 func composeStepFrom(fm *workflow.Lane, pm, pt map[string][]string, s workflow.Step, project, bundle string) ([]string, string) {
 	if list, ok := pm[s.ID]; ok {

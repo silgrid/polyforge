@@ -19,7 +19,7 @@ package daemon
 // a queued run out). Position i is the i-th in that order. The dispatch
 // tick re-evaluates the queue; an admission or a release re-evaluates it
 // at once. (The per-repo bar lock whose reservations made a third, repo
-// gate left with workflow contract 4,.)
+// gate left with workflow contract 4.)
 //
 // State is memory only (the driver's execution.json is the durable record).
 // Locking (AGENTS.md runtime locking): mu guards the in-memory queue; the

@@ -83,7 +83,7 @@ type ExecDispatcher struct {
 	// built-in default). The daemon binds its live state's ClaudeBin, so
 	// a reloaded cli.toml claude_bin reaches the lane without a restart
 	// — one fact, one place, never a construction-time copy
-	// ( F2).
+	// (F2).
 	ClaudeBin       func() string
 	ClaudeConfigDir string
 	// Dir is the dispatch's working directory: the

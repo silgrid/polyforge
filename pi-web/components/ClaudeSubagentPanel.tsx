@@ -9,7 +9,7 @@
 // The panel fits whatever height its caller gives it: the header and
 // the input box keep their size and the body between them scrolls, so a short space
 // clips the body, never the header with Close. The input box is the main session's
-// (ComposerBox,): the bordered row with Send inside it. Its top edge
+// (ComposerBox): the bordered row with Send inside it. Its top edge
 // drags its height: see useClaudeSubagentPanelHeight.
 import { useCallback, useRef, useState, type PointerEvent } from "react";
 import { ComposerBox } from "./ComposerBox";

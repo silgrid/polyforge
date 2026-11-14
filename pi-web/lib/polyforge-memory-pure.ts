@@ -1,6 +1,6 @@
 /**
- * Client-safe pure model for the Memory tab (browse mode
- *): the wire types, the six type-filter values, the display
+ * Client-safe pure model for the Memory tab (browse mode):
+ * the wire types, the six type-filter values, the display
  * constants (page size, pf-side result limit, browse page size, collapse
  * threshold), the id/tag validators, the newest-first sort, the page slicer,
  * the browse-page merge, the UTF-8 cap (shared with the Tasks server) and the

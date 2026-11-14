@@ -81,7 +81,7 @@ func TestToolWindowEnvFollowsDeclaredWindow(t *testing.T) {
 // Every step process carries the daemon's step env, the places its
 // scripts run from and its round, each name exactly once, on both
 // harnesses; an inherited copy never leaks in — the composed step PATH
-// replaces the inherited PATH ( added PF_PYTHON, PF_CAPSULE,
+// replaces the inherited PATH (added PF_PYTHON, PF_CAPSULE,
 // PF_LANE_DIR and PF_SHARED_DIR).
 func TestStepEnvInjectedOnBothHarnesses(t *testing.T) {
 	clearBashTimeoutEnv(t)

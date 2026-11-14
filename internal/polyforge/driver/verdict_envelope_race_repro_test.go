@@ -1,7 +1,7 @@
 package driver
 
-// verdict_envelope_race_repro_test.go: the verdict / recorded-hand-off race
-//. A supervisor StepDead and the dispatch's own hand-off
+// verdict_envelope_race_repro_test.go: the verdict / recorded-hand-off race.
+// A supervisor StepDead and the dispatch's own hand-off
 // can land in the same tick. When the hand-off is already on the call
 // ledger but the stepRun has not collected it yet, awaitDispatch's verdict
 // path must not cancel the wait and return the verdict — the recorded

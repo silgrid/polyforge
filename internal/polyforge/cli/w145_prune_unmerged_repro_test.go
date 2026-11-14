@@ -1,6 +1,6 @@
 package cli
 
-// w145_prune_unmerged_repro_test.go: the repro of — a
+// w145_prune_unmerged_repro_test.go: the repro — a
 // failed work item's scene is removed wholesale by the cleanup path, no
 // set-aside copy survives, and the commits the scene holds that no
 // remote ever received go with it.

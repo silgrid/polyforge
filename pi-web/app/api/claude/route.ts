@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 // Claude's custom names, `default` the default; its version, whether the fixtures cover
 // it, and its own capabilities verbatim; beside them Pi Web's three claude features with
 // their basis (claudePiWebFeatures(): approvals, background tasks, subagent text — from Pi
-// Web's own evidence, the child's environment included; approvals from's global
+// Web's own evidence, the child's environment included; approvals from the global
 // claude tool permissions, read only — r3). A failed probe still offers `default` (the alias
 // the CLI resolves itself) plus the custom names, with the error. Writes nothing, creates
 // no directory and never reads a credential. Behind proxy.ts's password gate.

@@ -1,7 +1,7 @@
 package stepscripts
 
 // verify_unitruns_test.go: verify.py --unit-runs (workflow contract v2
-// PR 12; the script since) — the build's recorded green run of each unit
+// PR 12; now the script) — the build's recorded green run of each unit
 // (artifacts/build/units.json `[{id, test_commit, impl_commit, run{repo,
 // cwd, argv}, marker}]`) run again as written, beside the light plan, each
 // one check under details.checks[] with its unit under units[]: a pass

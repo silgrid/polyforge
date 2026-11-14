@@ -1,7 +1,7 @@
 package stepscripts
 
 // verify_test.go: the light verification — the workflow script
-// workflows/_shared/scripts/verify.py (; pf-verify's
+// workflows/_shared/scripts/verify.py (pf-verify's
 // successor), run as the verify skill runs it, `python3 verify.py --tier
 // light …` — over a capsule fixture with a fake scope engine: a passing
 // plan (exit 0, the checks, heads and logs in the result), a failing one
@@ -386,7 +386,7 @@ func TestVerifyRefusesUnusableInvocations(t *testing.T) {
 		}
 	}
 	// the default engine is the shared tree's scripts/verify-scope (no
-	// release-copy fallback since): it is not here
+	// release-copy fallback): it is not here
 	empty := t.TempDir()
 	exit, _, errb := w.run(t, []string{"--tier", "light", "--capsule", f.dir}, "PF_SHARED_DIR="+empty)
 	if exit != 2 || !strings.Contains(errb, "no scope engine at "+filepath.Join(empty, "scripts", "verify-scope")) {

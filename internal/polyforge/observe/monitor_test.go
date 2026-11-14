@@ -237,7 +237,7 @@ func TestRuleStepTimeoutTrickleWedgePastT(t *testing.T) {
 	// counts the runtime earlier dispatches of the step already spent.
 	// This dispatch runs only a sixth of T (the rest was spent before it),
 	// so although its own time all goes to the model the expiry is the
-	// step's length, not this model ( D1): long_task. Only a
+	// step's length, not this model (D1): long_task. Only a
 	// tick delayed past half of T (300ms) could flip the attribution, and
 	// the timing check below already fails at 250ms.
 	h := newFakeHandle("att_1")

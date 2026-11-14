@@ -8,7 +8,7 @@ package cli
 //
 // A follow-up on a work item (answer, watch --once) resolves like every
 // other Cell-scoped command (the chat-subscription step that once came
-// right after --profile is retired,).
+// right after --profile is retired).
 //
 // No LLM, prompt or skill ever infers a profile, and the Host never guesses
 // one from a cwd, a work item or a server: the CLI resolves, the Host

@@ -85,7 +85,7 @@ var errAbandoned = errors.New("runtime: the caller gave up before the work item'
 // EndRetryMax, then every EndRetryMax. This is the ONLY scheduler of a
 // retry: an operation that schedules one and the reconcile running it
 // must not clear it (a caller that cleared it pinned the chain at the
-// base —). A step the hub REFUSED (a typed 4xx) never
+// base). A step the hub REFUSED (a typed 4xx) never
 // reaches it; that is a final answer (parkRefused).
 //
 // The chain is BOUNDED by time, not by a count: the

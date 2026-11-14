@@ -239,8 +239,8 @@ func TestW218InstallSwitchSurvivesBsdMv(t *testing.T) {
 		t.Fatalf("restart loops = %d (sessions %v), want 1", n, in.sessions())
 	}
 	// B7 guard: the step-4 NOTE line is pinned byte for byte. Its text
-	// moved with's heartbeat permission model (owner ruling
-	// carried by): the first signed heartbeat registers the
+	// moved with the heartbeat permission model (an owner
+	// ruling): the first signed heartbeat registers the
 	// machine, and the note names the real refusal causes.
 	if !strings.Contains(out, "NOTE: the daemon's first signed heartbeat registers this machine; if it fails, daemon.log names the cause:") {
 		t.Fatalf("the step-4 NOTE line must be its pinned text (B7: Linux-visible output byte-pinned); observed:\n%s", out)

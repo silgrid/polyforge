@@ -2,7 +2,7 @@
 doctor`'s row — its exit codes (an engine missing or a conf the engine
 cannot read is not ready, exit 1; no clone, exit 2), and its reading of the
 carries layer against the engine's own on the same git fixture (the
-doctor row's parity test,, moved with it: one fact in two
+doctor row's parity test, moved with it: one fact in two
 places, so drift reddens the suite)."""
 
 import contextlib

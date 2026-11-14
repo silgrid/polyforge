@@ -32,7 +32,7 @@ import { POLYFORGE_SEARCH_CONTROL_CLASS, PolyforgeRefreshButton, PolyforgeSearch
  * Reads follow gestures only: one list read when the sub-tab opens (this
  * component mounts), one more per change of the local count key while it
  * stays mounted and one per click of the search bar's ↻ (
- *'s busy contract) — never a timer, a filter, a search, a
+ * the busy contract) — never a timer, a filter, a search, a
  * detail or a back. Every list answer reports its running count to the
  * parent, which keeps the last one for the sub-tab badge for the rest of the
  * page session. No storage, no write control: the surface is read-only.

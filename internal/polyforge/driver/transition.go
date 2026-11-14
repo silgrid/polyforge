@@ -53,7 +53,7 @@ const (
 // failed nothing; a later gate discarded its output). Both carry
 // rewind_gate. Q&A history never lands in attempts[].
 //
-// Since every rewind target archive orders the target's
+// Every rewind target archive orders the target's
 // re-entry as a resume of its previous conversation (the order is that
 // ledger cause itself, derived by prepareDispatch/applyStepStartLocked —
 // no second carrier); a resuming target keeps its candidate pointer, a
@@ -116,8 +116,8 @@ const (
 	// composition failure. Plumbing only: it emits the existing blocked
 	// event and the owner's `pf resume` unblocks it.
 	TransBlocked TransitionKind = "blocked"
-	// TransStepSkipped records a step the workflow skips (StepSpec.Skipped,
-	//) as skipped instead of dispatching it: no derivation,
+	// TransStepSkipped records a step the workflow skips (StepSpec.Skipped)
+	// as skipped instead of dispatching it: no derivation,
 	// no position move; it emits step_skipped.
 	TransStepSkipped TransitionKind = "step_skipped"
 )
@@ -145,7 +145,7 @@ type TransitionRequest struct {
 	// BookWall (interrupted): the system relaunched the dispatch after a
 	// hang, stall or death — book its wall time toward the step's T.
 	BookWall bool
-	// TreeHash (interrupted,) is the capsule tree hash as of
+	// TreeHash (interrupted) is the capsule tree hash as of
 	// the archive, computed before the transition takes the driver's lock
 	// (git I/O never under d.mu) and recorded on the archived attempt.
 	// Empty when hashing failed.
@@ -284,7 +284,7 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 		// The block names the dispatch that could not be assembled, so the
 		// position, the panels/observe faces and the unblock Supervision
 		// reset all act on that step — never on the previous completed one
-		// ( C5).
+		// (C5).
 		if req.StepID != "" {
 			d.exec.CurrentStep = req.StepID
 		}
@@ -334,7 +334,7 @@ func (d *Driver) applyInitLocked() error {
 // and moves the execution position onto it. Two entry shapes share the
 // kind: a PENDING step is a fresh entry (first dispatch or rewind re-entry
 // — the round's rewind verdict stays in pending_rewind_input for the
-// whole round,, and the budget window re-opens after the
+// whole round, and the budget window re-opens after the
 // rewind archived it); an IN_PROGRESS step is a resume re-dispatch (answer
 // continuation, crash recovery, recovery-lane re-derivation — a new
 // measurement window, the prior partial output kept). From StatusBlocked
@@ -632,7 +632,7 @@ func (d *Driver) closeGateRoundLocked(gate string, out map[string]any, detail st
 // rewindResumeContext answers whether a step's latest non-infra_failure
 // archived attempt is a rewind target archive (gate_fail_rewind, the
 // text-only or the mechanical light cause — whatever the verdict's
-// findings,): its next dispatch is the rewind re-entry and
+// findings): its next dispatch is the rewind re-entry and
 // resumes the previous round's conversation (rewindResumes decides which
 // steps may). An accepted attempt or a superseded_by_rewind archive
 // answers false.

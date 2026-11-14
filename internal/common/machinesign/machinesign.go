@@ -38,7 +38,7 @@ const (
 const Window = 300
 
 // Per-bucket replay quota and the entry TTL. aihub keys a bucket by
-// machine id AND signed-route lane (server/machineface.go,
+// machine id AND signed-route lane (server/machineface.go
 // A2): the heartbeat, the inbox long-poll, the relay answer and the
 // outgoing query each fill their own bucket, so traffic another member
 // can induce (answers to its queries, inbox wakes) never shares the
@@ -47,7 +47,7 @@ const Window = 300
 // ever checked in one bucket — the per-lane duplicate check is exactly
 // as strong as a per-machine one.
 //
-// Derivation ( D1, per lane since): a daemon
+// Derivation (per lane): a daemon
 // beats ≤11 times per TTL and each signed inbox loop (the query loop, and
 // on an interactive daemon the message loop) idles at one 25 s poll —
 // ≤24 per TTL per loop — so a correctly behaving daemon cannot reach the

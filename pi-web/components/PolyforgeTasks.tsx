@@ -156,7 +156,7 @@ export function PolyforgeTasks({
 
   // The list read: once when the sub-tab opens (the component mounts), once
   // more per status task-count change while it stays mounted
-  // and once per click of the search row's ↻ button never
+  // and once per click of the search row's ↻ button — never
   // on a timer, a search, a filter, a detail or a back. Only the newest read
   // may write the list, and only it clears the refreshing state: a stale read
   // that lands late neither writes nor ends the newer one's spin.

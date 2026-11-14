@@ -1,6 +1,6 @@
 package cellcfg
 
-// w350_migrate_guard_test.go ( D1): a completed layout is
+// w350_migrate_guard_test.go (D1): a completed layout is
 // never re-planned (re-apply is a byte-identical no-op, whatever was
 // written after it); the accepted-work marker without layout-version is
 // refused; a rollback that would not be a byte-exact return to the

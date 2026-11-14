@@ -43,7 +43,7 @@ const WORKSPACE_216 = {
   summarize: {},
   steps: {
     alpha: {
-      // an older pf's attrs ( removed them) are dropped
+      // an older pf's attrs (removed them) are dropped
       grill: { declared: true, models: ["claude:x"], source: "file", class: "live", attrs: { question_batch_size: { value: 2, declared: true, source: "file", class: "live", default: 0, schema: { kind: "int" } } } },
       review: { declared: true, models: [], source: "file", class: "live" },
       default: { declared: false, models: null, source: "default", class: "live" },

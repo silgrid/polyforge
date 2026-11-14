@@ -1,7 +1,7 @@
 package stepcall
 
 // waivers.go: the owner waivers of a work item's run, read from the ledger
-// (workflow contract 4, design #483 §5.3,). A waiver is an
+// (workflow contract 4, design #483 §5.3). A waiver is an
 // accepted `pf step handoff --status waive --per-owner <at>` of a waivable
 // gate: the daemon checked, when it accepted the hand-off, that the cited
 // owner message is on the ask record. The wrap writes every one into the

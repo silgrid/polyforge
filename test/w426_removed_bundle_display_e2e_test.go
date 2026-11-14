@@ -156,7 +156,7 @@ func TestW426TerminalWorkItemOnRemovedBundleStillDisplays(t *testing.T) {
 	if st := inst.wiStatus(t, queued); st != "queued" {
 		t.Fatalf("a refused submit must leave the work item queued, got %q", st)
 	}
-	// workflow contract 1 ( AC8): the queue view lists the
+	// workflow contract 1 (AC8): the queue view lists the
 	// queued work item a claim refuses for its missing lane (WFC-123)
 	// under its table — never silently (the merged --json view's
 	// lanes_missing: internal/polyforge/cli's queue tests)

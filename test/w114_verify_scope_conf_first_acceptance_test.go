@@ -96,9 +96,9 @@ var w114vsTopKeys = []string{
 	"paths", "root", "runner", "schema", "stack", "suite_glob", "test_glob",
 }
 
-// report is the command's declared failure report ( report=),
+// report is the command's declared failure report (report=),
 // null when none is declared; rerun is its unit re-run template
-// ( rerun=), null when none is declared.
+// (rerun=), null when none is declared.
 var w114vsCommandKeys = []string{"cmd", "name", "phase", "report", "requires_cmd", "requires_env", "rerun", "source", "timeout"}
 
 // w114vsKeys answers the sorted keys of a JSON object, failing on a non-object.

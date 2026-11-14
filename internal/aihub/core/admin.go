@@ -316,7 +316,7 @@ const machineStaleDefault = 5 * time.Minute
 // freshness, replay); this package owns the write decision. Signed=false is
 // the bounded transition for an already-registered pre-signing daemon —
 // accepted only while both the request version and the stored runtime_version
-// predate v2.20.8 ('s gate, see refreshLivenessOnly; the
+// predate v2.20.8 (the gate, see refreshLivenessOnly; the
 // deletion condition stays at its branch in refreshMachine).
 type HeartbeatProof struct {
 	CallerID string // the authenticated caller's user id
@@ -330,7 +330,7 @@ type HeartbeatProof struct {
 	// be replayed byte-for-byte. The commit maps the cache's verdict
 	// itself: a verbatim repeat answers AUTH-401 and a
 	// machine over its heartbeat lane's quota answers CORE-429 (the lane
-	// holds only the machine's own beats,).
+	// holds only the machine's own beats).
 	Commit func() error
 }
 
@@ -387,7 +387,7 @@ func (m *AdminManager) machineCollisionError(machineID string) error {
 // single connection is held) — and is enforced here only on the two
 // registration acts (a fresh machine_id, and the claim of a legacy row
 // with no operator); a refresh ignores it (membership gates registration
-// only, spec R5). The refusal order stays's: caller 403
+// only, spec R5). The refusal order stays: caller 403
 // (HeartbeatCallerCheck, then the in-transaction collision check),
 // signature 401, registration gate 403.
 func (m *AdminManager) HeartbeatAuthorized(req MachineHeartbeat, proof HeartbeatProof, registrationGate error) (*HeartbeatResult, error) {
@@ -528,7 +528,7 @@ func (m *AdminManager) insertMachineRow(tx *sql.Tx, req MachineHeartbeat, operat
 // rollback exception): it is accepted only from the row's operator, only on
 // a row that already has a bound key, only while BOTH the request version
 // and the stored runtime_version parse and predate the signing release
-// v2.20.8 ('s gate — see refreshLivenessOnly), and it touches
+// v2.20.8 (the gate — see refreshLivenessOnly), and it touches
 // liveness fields only.
 // DELETION CONDITION: the owner confirms `GET /machines` shows no live
 // unsigned machine — a live row (stale=false) whose runtime_version

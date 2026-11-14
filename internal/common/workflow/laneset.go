@@ -260,7 +260,7 @@ func (s LaneSet) StepIDs() (map[string]bool, error) {
 }
 
 // SkippableSteps answers the set of step ids some lane of the set declares
-// `skippable: true` the steps whose workspace yaml
+// `skippable: true` — the steps whose workspace yaml
 // `skip` a write may set. Its errors are StepIDs'.
 func (s LaneSet) SkippableSteps() (map[string]bool, error) {
 	return s.stepIDs(func(st Step) bool { return st.Skippable })

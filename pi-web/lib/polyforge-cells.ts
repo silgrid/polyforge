@@ -12,8 +12,8 @@ import {
 } from "./polyforge-cells-pure";
 
 /**
- * Server-side Cell reads and lifecycle writes for Settings › Polyforge
- *. Every read goes through pf (`pf --json version`,
+ * Server-side Cell reads and lifecycle writes for Settings › Polyforge.
+ * Every read goes through pf (`pf --json version`,
  * `pf --json cell list`), never through the config files; every write is a
  * `pf cell …` spawn (argv only, no shell) gated on the multi-Cell
  * capabilities — a pf without them is refused with the upgrade hint and

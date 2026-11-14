@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  * down, auth failure or a hang all answer 200 JSON with `status: null` (plus
  * `pfPresent`, so the client can distinguish "no pf" from "pf, daemon down";
  * on the former it only re-probes this route, every 30 s and on window
- * focus —). No 5xx path: the e2e suite treats any 5xx as a
+ * focus). No 5xx path: the e2e suite treats any 5xx as a
  * browser error.
  */
 export async function GET(request: Request) {

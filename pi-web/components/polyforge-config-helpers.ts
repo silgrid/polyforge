@@ -1,6 +1,6 @@
 /**
- * Pure presentation helpers for Settings › Polyforge's configuration panel
- *. Import-free on purpose, like `lib/polyforge-config-schema.ts`:
+ * Pure presentation helpers for Settings › Polyforge's configuration panel.
+ * Import-free on purpose, like `lib/polyforge-config-schema.ts`:
  * the client component imports it, so it must never pull a server module into
  * the browser bundle. Nothing here changes what is read or written — it only
  * decides which card a `pf --json config list` item renders in and how a

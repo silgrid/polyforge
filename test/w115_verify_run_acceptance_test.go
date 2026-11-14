@@ -1,7 +1,7 @@
 package test
 
 // w115_verify_run_acceptance_test.go: the mechanical bar — the workflow
-// script workflows/_shared/scripts/verify.py since (the
+// script workflows/_shared/scripts/verify.py (the
 // light bar pf-verify ran, verifyrun.Run, before it) — driven end to end
 // over a throwaway capsule: a Go task repo cloned from a bare origin, a
 // fake scope engine answering a canned `--json` report (a script beside

@@ -9,10 +9,10 @@ import {
 } from "./claude-shared";
 
 // Flags as `claude 2.1.312 --help` documents them (`--forward-subagent-text` is listed by
-// 2.1.312, 2.1.319 and 2.1.322 alike; 2.1.322 forwards a subagent's text only with it,
-//; `--permission-mode` and `--include-hook-events` as 2.1.322 lists them,
-//), plus the hidden `--resume-session-at`
-// of an in-session edit (; read from the 2.1.312 bundle, see
+// 2.1.312, 2.1.319 and 2.1.322 alike; 2.1.322 forwards a subagent's text only with it;
+// `--permission-mode` and `--include-hook-events` as 2.1.322 lists them),
+// plus the hidden `--resume-session-at`
+// of an in-session edit (read from the 2.1.312 bundle, see
 // docs/agents/claude-sessions.md); that doc states the one reduced set and the tests pin it.
 
 /** Print mode, NDJSON user messages on stdin, stream-json events (token deltas and subagent text included) on stdout. */

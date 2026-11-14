@@ -86,7 +86,7 @@ package runtime
 //     requests.
 //   - CLAUDE_CODE_ENABLE_TASKS=false: Claude Code's Tasks family supersedes
 //     TodoWrite, which exists only while the family is off.
-//   - CLAUDE_CODE_HARBOR_KITE=0 (ClaudeNoInbox,): no
+//   - CLAUDE_CODE_HARBOR_KITE=0 (ClaudeNoInbox): no
 //     cross-session messaging inbox. Without it Claude Code 2.1.319 opens a
 //     socket (<TMPDIR>/cc-socks/<pid>.sock, or the hidden
 //     --messaging-socket-path) and exports CLAUDE_CODE_MESSAGING_SOCKET and

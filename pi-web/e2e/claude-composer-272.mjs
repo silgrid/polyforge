@@ -16,7 +16,7 @@
 // reasoning button, the compact button), the PATH-injected e2e stub's argv/stdin log,
 // claude's transcript and pi-web's index file. Where the spec names a new fact, it is
 // matched only by the user-visible or file-visible fact it names (claude's model names —
-// since the aliases its initialize answer lists, not four pinned full names —
+// now the aliases its initialize answer lists, not four pinned full names —
 // claude's five effort levels, `/compact` on stdin, the localized result line,
 // `--effort`/`--model` in argv, the index's `effort`), so a pre-code run fails at
 // assertion level, never at build level.
@@ -817,7 +817,7 @@ try {
     }
   });
 
-  // S272-20 — regression for a scenario's own dwell must not end
+  // S272-20 — regression: a scenario's own dwell must not end
   // the open session's child. With the old 5 s idle window a 13 s dwell was
   // enough to reap the child, reconnect the stream after 1 s and resume it
   // twice, so the live-action scenarios read those resumes as their own

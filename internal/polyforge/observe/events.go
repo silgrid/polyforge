@@ -125,8 +125,8 @@ const (
 	// episode event: daemon-scope (wi=""), one per
 	// model+effort episode, body = modelhealth.Alert (never a secret).
 	EvModelUnhealthy = "model_unhealthy"
-	// EvConfigReload is the successful cli.toml reload record
-	//: daemon-scope, body = applied/pending/overridden key
+	// EvConfigReload is the successful cli.toml reload record:
+	// daemon-scope, body = applied/pending/overridden key
 	// names only (never a value).
 	EvConfigReload = "config_reload"
 	// EvConfigReloadFailed is the refused reload record: the daemon

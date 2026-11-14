@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 
-// Restored from upstream v0.13.0 (d128bae4) and wired into e2e/run.mjs
-//. One internal adaptation: split view is the internal
+// Restored from upstream v0.13.0 (d128bae4) and wired into e2e/run.mjs.
+// One internal adaptation: split view is the internal
 // default (pi#27) and a `?cwd=` load restores the persisted pane strip
 // instead of a fresh composer, so this pass opens its composer in the classic
 // single-chat layout (`pi-web:split-view-enabled` = "false") and puts the

@@ -335,7 +335,7 @@ func TestHoldLineCollapsesAndCaps(t *testing.T) {
 }
 
 // The configured working directory (the daemon binds
-// <harness-root>/summarize-cwd,) is where both harnesses
+// <harness-root>/summarize-cwd) is where both harnesses
 // run, created 0700 when missing — never the dispatcher's inherited cwd.
 func TestDispatchRunsAtTheConfiguredDir(t *testing.T) {
 	bin := scriptBin(t, "pwd -P")

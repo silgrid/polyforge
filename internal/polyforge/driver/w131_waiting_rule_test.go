@@ -18,8 +18,8 @@ import (
 )
 
 // w131LongRunSteps are the shipped ones, as (bundle, step). (bug-fix
-// repro and feature-full e2e-author went with the lanes
-// removed; micro's deliver with — its fast evidence
+// repro and feature-full e2e-author went with the removed lanes;
+// micro's deliver went too — its fast evidence
 // is the daemon's run step.)
 var w131LongRunSteps = [][2]string{
 	{"release", "verify"},

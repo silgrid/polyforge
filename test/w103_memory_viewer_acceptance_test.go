@@ -2,7 +2,7 @@ package test
 
 // w103_memory_viewer_acceptance_test.go: the e2e acceptance suite for
 // — the aihub read-only memory face — carried to the
-// console prefix by. S1–S7 stay byte-identical: the
+// console prefix. S1–S7 stay byte-identical: the
 // /api/v1 memories browse face they drive is unchanged shipped
 // surface. S8–S19 moved from the deleted /view/ HTML pages to the /web/
 // documents + the private /web/api/memories JSON face, with the HTML

@@ -6,8 +6,8 @@ import { polyforgePfBin } from "./polyforge-pf-bin";
 import { probePolyforgeVersion } from "./polyforge-status";
 
 /**
- * Server-side reads/writes for the Polyforge dock's Messages tab
- *. Every fact comes from a `pf` subprocess through
+ * Server-side reads/writes for the Polyforge dock's Messages tab.
+ * Every fact comes from a `pf` subprocess through
  * `execFileAsync` (no shell); the argv is validated before any spawn. The
  * HTTP faces under `app/api/polyforge/messages/**` only degrade and answer.
  *
@@ -18,8 +18,8 @@ import { probePolyforgeVersion } from "./polyforge-status";
  * (mine derived from `sender_id` and the server-side pf config user id) plus
  * its own optional conversation_id — the conversation the message lives in,
  * carried by a send's answer so its client can open that conversation
- * without re-reading the list. A contact keeps exactly id/display_name
- *: the id is the send address, the name may be "". A project
+ * without re-reading the list. A contact keeps exactly id/display_name:
+ * the id is the send address, the name may be "". A project
  * group keeps its project name and contacts from that same
  * contact set, joined by id to the members of `pf --json projects get`:
  * roles, machines and the caller never leave.
@@ -324,8 +324,8 @@ export function sanitizeConversation(raw: unknown, userId = ""): PolyforgeConver
   const peer = userId ? members.find((member) => member !== userId) : "";
   if (peer) {
     conversation.peer = peer;
-    // Scope: exactly the peer's own key of member_names is read
-    //. The caller's own name and any other member's name
+    // Scope: exactly the peer's own key of member_names is read.
+    // The caller's own name and any other member's name
     // never leave the server; a missing or non-string value — the
     // old-aihub transient with no member_names at all included — reads as
     // "" and renders as the unknown-user placeholder, never an id.
@@ -608,7 +608,7 @@ export async function readPolyforgePromptCapability(): Promise<PolyforgeMessages
 /** Read the conversations the pf caller may see, filtered server-side to its
  *  own membership and annotated with the peer from `members` (one spawn; no
  *  per-conversation preview fan-out), plus the configured contacts from one
- *  independent `pf msg contacts` spawn and the project groups (:
+ *  independent `pf msg contacts` spawn and the project groups (
  *  one bounded `pf projects get` per mapped project, joined with those
  *  contacts). `withGroups: false` (the dock off the Messages tab) skips the
  *  project reads and omits `groups`, so no other tab spawns `projects get`. */
@@ -734,7 +734,7 @@ export async function readPolyforgeMappedProjects(): Promise<string[]> {
   return mappedProjectsFromConfig(await readPolyforgeConfigItems());
 }
 
-/** One membership change exactly one pf subprocess:
+/** One membership change — exactly one pf subprocess:
  *  `projects members add <p> --user <id> --role writer` or
  *  `projects members remove <p> --user <id>`. pi-web writes no config file and
  *  never calls aihub directly; a refusal throws pf's typed failure. */
@@ -845,7 +845,7 @@ export async function analyzePolyforgeMessage(messageId: string): Promise<Polyfo
 
 const TICKET_SLUG = /^[A-Za-z0-9][A-Za-z0-9_.#-]{0,127}$/;
 
-/** One 【建票】 confirm exactly one pf subprocess:
+/** One 【建票】 confirm — exactly one pf subprocess:
  *  `pf --json file create --project <p> --goal <g> --content <c>`, never
  *  `--bundle`: a registration ticket, not claimable, no lane chosen. pi-web
  *  writes no config file and never calls aihub directly; a refusal throws

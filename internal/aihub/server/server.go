@@ -43,9 +43,9 @@ type Server struct {
 	StaleAfter time.Duration
 
 	// pending is the in-memory progress/artifact relay registry, relay its
-	// enqueue-time admission budget ( A2) and replay the
-	// signed-request anti-replay cache (; since
-	// 512-live-entry buckets, 600 s TTL, no global eviction; since
+	// enqueue-time admission budget (A2) and replay the
+	// signed-request anti-replay cache
+	// (512-live-entry buckets, 600 s TTL, no global eviction;
 	// one bucket per machine id per signed-route lane).
 	// None of them persists anything.
 	pending *queryRegistry
@@ -122,7 +122,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/machines/{id}/rekey", s.authAdmin(s.hRekeyMachine))
 	// cross-machine face: signed, timestamped, replay-protected
 	// (see machineface.go), each route recording its signatures in its own
-	// replay lane ( A2). Reachability: a step agent cannot
+	// replay lane (A2). Reachability: a step agent cannot
 	// reach any of them — step processes hold no aihub key at all.
 	m.HandleFunc("GET /api/v1/machines/inbox", s.signedMachine(laneInbox, s.hMachineInbox))
 	m.HandleFunc("POST /api/v1/queries/{qid}/answer", s.signedMachine(laneAnswer, s.hQueryAnswer))
@@ -486,7 +486,7 @@ func (g *wiGrant) requireWrite() error {
 // resume-blocked right even after losing project membership.
 // The decision itself is the reporter/maintainer/admin
 // rule, widened on cancel and resume-blocked by the blocked-only holder
-// operator (a project writer or maintainer;).
+// operator (a project writer or maintainer).
 func (g *wiGrant) requireOwnerDecision() error {
 	if g.scopedAway {
 		return g.hidden()
@@ -723,7 +723,7 @@ func (s *Server) hCancelWI(w http.ResponseWriter, r *http.Request, idn *identity
 	}
 	// Cancel authorization: reporter, project maintainer, or admin, and on
 	// a blocked work item also the holder machine's current operator
-	// (reference.md §2.1,); a caller with no relationship to
+	// (reference.md §2.1); a caller with no relationship to
 	// the work item gets the missing-work-item answer.
 	if err := g.requireOwnerDecision(); err != nil {
 		return err
@@ -1092,7 +1092,7 @@ func (s *Server) hReadyQueue(w http.ResponseWriter, r *http.Request, idn *identi
 const defaultMachinesStaleAfter = 5 * time.Minute
 
 // authorizeMachineRegistration gates the heartbeat path's two registration
-// acts ( R1): a machine_id with no machines row, and the claim
+// acts (R1): a machine_id with no machines row, and the claim
 // of a legacy row that has no operator. Any project_members row qualifies —
 // viewer, writer or maintainer, no role filter — and so does a global admin
 // outside every project. A refresh never calls it: membership gates
@@ -1136,7 +1136,7 @@ func (s *Server) hHeartbeat(w http.ResponseWriter, r *http.Request, idn *identit
 	// A machine belongs to its operator. Refuse anyone else here, before a
 	// signature they may not hold is checked, so the machine_id collision is
 	// AUTH-403 whatever the beat looks like (the message says another
-	// operator and suggests --machine-id, naming no one —).
+	// operator and suggests --machine-id, naming no one).
 	if err := s.Admin.HeartbeatCallerCheck(req.MachineID, idn.UserID); err != nil {
 		return err
 	}
@@ -1148,7 +1148,7 @@ func (s *Server) hHeartbeat(w http.ResponseWriter, r *http.Request, idn *identit
 	// core's heartbeat transaction the store's single connection is held,
 	// so the gate's membership query could never run. Core enforces the
 	// verdict only on the two registration acts; a refresh ignores it
-	// ( R5), and the refusal order is unchanged (#74).
+	// (R5), and the refusal order is unchanged (#74).
 	gate := s.authorizeMachineRegistration(idn)
 	res, err := s.Admin.HeartbeatAuthorized(req, proof, gate)
 	if err != nil {
@@ -1353,7 +1353,7 @@ func (s *Server) hCreateMemory(w http.ResponseWriter, r *http.Request, idn *iden
 	// no attribution. Unreadable covers a non-member AND a key scoped to
 	// another project: both get the missing-work-item answer of the
 	// shared work-item grant, never the scope's AUTH-403, so the body
-	// field is no existence oracle across projects ( A1).
+	// field is no existence oracle across projects (A1).
 	// A memory belongs to one project: a readable work item of another
 	// project is refused as bad input (checked after the read gate, so an
 	// unreadable one stays indistinguishable from an unknown one).

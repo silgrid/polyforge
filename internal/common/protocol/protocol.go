@@ -27,7 +27,7 @@ type RTMsg struct {
 	AgentPID int    `json:"agent_pid,omitempty"`
 	Reason   string `json:"reason,omitempty"` // WIFinished: wrapped|failed|blocked|paused|superseded, or the hub's status of a dropped record (wrapped|failed|canceled|blocked|queued)
 	Detail   string `json:"detail,omitempty"`
-	// Unconfirmed (WIFinished,): the hub no longer held the
+	// Unconfirmed (WIFinished): the hub no longer held the
 	// session when this daemon finished its close locally — Reason is what
 	// this daemon asked, not necessarily the work item's state.
 	Unconfirmed bool `json:"unconfirmed,omitempty"`

@@ -302,7 +302,7 @@ const workBoxes = (page, selectors, paths = []) => dock(page).evaluate((panel, {
   return out;
 }, { selectors, paths });
 // A layout read only once it has settled: two reads a double rAF apart agree
-// (a ResizeObserver refit lands a frame later —). Bounded by
+// (a ResizeObserver refit lands a frame later). Bounded by
 // waitFor's deadline; never a fixed delay.
 async function settledLayout(page, measure, what) {
   return waitFor(async () => {
@@ -692,7 +692,7 @@ try {
     }
   }));
 
-  // S18 ( review s14#3): the card title is legible, not merely
+  // S18 (review s14#3): the card title is legible, not merely
   // in the DOM (innerText also counts text an overflow:hidden box clips). At
   // the 460px dock, the 375px sheet and the 340px dock the slug element is
   // not clipped (scrollWidth <= clientWidth + 1, and no ancestor up to the

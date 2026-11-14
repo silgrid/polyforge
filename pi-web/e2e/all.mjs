@@ -21,7 +21,7 @@
 // scenarios are proven load-sensitive on a shared host, opt in
 // with the `e2e/all: isolated` marker: they run one at a time after both lanes
 // drain, because a second `next dev` + Chromium on the host can push such a
-// bound over even though the suite passes alone ( full bar:
+// bound over even though the suite passes alone (full bar:
 // 20167ms vs 10s).
 // Build-once mode: with E2E_SERVER_MODE=start the runner runs
 // `next build --webpack` (the package's `npm run build`) once, into

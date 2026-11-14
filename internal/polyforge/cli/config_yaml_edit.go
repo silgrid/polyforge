@@ -1,7 +1,7 @@
 package cli
 
-// config_yaml_edit.go: the byte-preserving `.polyforge.yaml` editor
-//. A step write
+// config_yaml_edit.go: the byte-preserving `.polyforge.yaml` editor.
+// A step write
 // (steps.<project>.<step-id>.models|skip) touches only the addressed line
 // inside the `steps:` block, creating a missing section, project or step
 // entry in block style and expanding a flow-style entry once. Every other

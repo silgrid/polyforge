@@ -1,6 +1,6 @@
 package memory
 
-// browse.go: the memory store's browse mode the
+// browse.go: the memory store's browse mode — the
 // empty-query list face behind GET /api/v1/memories/search and the
 // web console's memories module. Browse answers pages of the caller's readable, active
 // entries in descending updated_at (default) or created_at order,

@@ -1,6 +1,6 @@
 package cli
 
-// w350_migrate_lock_test.go ( D1): a mutating
+// w350_migrate_lock_test.go (D1): a mutating
 // `pf migrate cell-layout` takes the data dir's Host lock before its first
 // check — a held lock refuses it with nothing changed — and releases it
 // when the run ends; a completed layout re-applies as the "already on the

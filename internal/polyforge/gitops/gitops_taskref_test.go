@@ -309,7 +309,7 @@ func TestTaskRefDivergenceIsRejectedAndRaisedAsEvent(t *testing.T) {
 	}
 }
 
-// A task repo whose HEAD is BEHIND the carried head (:
+// A task repo whose HEAD is BEHIND the carried head (
 // a step agent's detached `git checkout HEAD~1` to check the old code)
 // is not a divergence: the carrier already holds a superset, so every
 // publish in that window — the WIP lane's and the chain's — carries
@@ -794,7 +794,7 @@ func TestCarrierIgnoresSubmoduleRecursion(t *testing.T) {
 // borrowing (objects/info/http-alternates) — is refused before any
 // credential is prepared, as a carrier_push_failed. A LOCAL alternates
 // file is not here: it is recoverable and healed, not refused
-// (TestCarrierSelfContainsLocalAlternates,).
+// (TestCarrierSelfContainsLocalAlternates).
 func TestCarrierRefusesForeignGitDir(t *testing.T) {
 	cases := map[string]func(t *testing.T, repoDir string){
 		"gitfile": func(t *testing.T, repoDir string) {

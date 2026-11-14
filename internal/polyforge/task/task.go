@@ -13,7 +13,7 @@
 // refuses it every write and the CLI refuses it every write verb — the
 // lane's one real gate. There is no OS-level isolation (owner ruling
 // 2026-10-26, mem_TdI0isaGmTgG): a task agent's filesystem/network trust is
-// a session agent's, and platform-level isolation belongs to.
+// a session agent's, and platform-level isolation is a separate concern.
 package task
 
 import (

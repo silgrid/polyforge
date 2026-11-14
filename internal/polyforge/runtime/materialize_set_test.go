@@ -83,7 +83,7 @@ func TestMaterializeSetCompleteShape(t *testing.T) {
 	if m.BundleName != "demo-bundle" {
 		t.Fatalf("marker identity = %+v", m)
 	}
-	// workflow contract ( AC7): the marker records the
+	// workflow contract (AC7): the marker records the
 	// snapshot's contract version, its source and its content hash.
 	hash, err := workflow.ContentHash(capDir, m.Targets)
 	if err != nil {

@@ -5,12 +5,12 @@
 
 package test
 
-// w404_integrate_e2e_test.go (; workflow contract v2 change
-// 13, on contract 4 since): the integration lane end to end
+// w404_integrate_e2e_test.go (workflow contract v2 change
+// 13, on contract 4): the integration lane end to end
 // through the real aihub, the real daemon and Go driver, the lane's four
 // agent steps played by fakepi — each step's scripted agent runs the
 // skill's pre-written command lines verbatim (`integrate.py collect`,
-// `revert.py --ops-out` (the revert script,), the gate
+// `revert.py --ops-out` (the revert script), the gate
 // script `gate.py --capsule --pins` / `--triage`, each
 // from the capsule's lane snapshot under the daemon's PF_PYTHON,
 // `integrate.py close --rulings --decision --calls --ops-out --record-out`,

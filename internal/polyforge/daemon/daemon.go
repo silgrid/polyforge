@@ -137,7 +137,7 @@ type Config struct {
 	// own.
 	SharedAdmission *verifyQueue
 	// SharedFeed is the DaemonHost's Host-global decision feed
-	// (decisions.go,; nil = this Daemon keeps its own under
+	// (decisions.go; nil = this Daemon keeps its own under
 	// its data dir — the unhosted test seam). Shared, every Cell records
 	// into the one feed, each entry naming its Cell.
 	SharedFeed *decisionFeed
@@ -321,7 +321,7 @@ type Daemon struct {
 
 	// remoteSnaps caches relayed remote snapshots for remoteSnapTTL so a
 	// polling watcher cannot exhaust the holder's relay budget
-	// ( A3; progresslookup.go). Memory-only.
+	// (A3; progresslookup.go). Memory-only.
 	remoteSnaps *remoteSnapCache
 
 	// lane is the demand-gated summarize lane (polyforge#224): per-WI
@@ -331,7 +331,7 @@ type Daemon struct {
 	// is the test seam.
 	lane *summarize.Lane
 
-	// tasks is the one-shot task manager (; tasks.go).
+	// tasks is the one-shot task manager (tasks.go).
 	tasks *task.Manager
 	// locateTranscript resolves the current dispatch's live transcript
 	// through the shared per-dispatch rule (runtime.LiveTranscript — the
@@ -391,11 +391,11 @@ type Daemon struct {
 	// step's check-then-merge and a lane's revert step.
 	merges *mergeLocks
 	// verifyQ is the heavy-run admission of daemon-run verification bars
-	// (verifyqueue.go,): the Host's shared queue, or this
+	// (verifyqueue.go): the Host's shared queue, or this
 	// daemon's own; re-evaluated on the dispatch tick.
 	verifyQ *verifyQueue
 	// commandPath is the live [daemon] command_path ("" = the daemon
-	// process's own PATH;). Guarded by reloadMu.
+	// process's own PATH). Guarded by reloadMu.
 	commandPath string
 	// pfDir is the directory of this daemon's own pf executable (selfDir):
 	// first on a step's PATH when command_path is set. Set once in New.
@@ -482,8 +482,8 @@ type Daemon struct {
 	// (startEntry); the shutdown does not wait for them.
 	claiming atomic.Int32
 	// submitWaitMu guards submitWaits only (no I/O under it): the
-	// submit answers waiting on their entry's dispatch outcome
-	//, keyed by canonical work-item id.
+	// submit answers waiting on their entry's dispatch outcome,
+	// keyed by canonical work-item id.
 	submitWaitMu sync.Mutex
 	submitWaits  map[string]*submitWait
 	// tasksHeld counts this Cell's admitted one-off tasks not yet done

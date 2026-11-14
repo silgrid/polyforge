@@ -138,8 +138,8 @@ async function waitForHits(count) {
 const tick = (page, ms) => (ms > 0 ? page.clock.runFor(ms) : Promise.resolve());
 
 /**
- * A page-side ordering barrier instead of a wall-clock grace window
- *: the page fetches a stubbed marker URL and the call returns
+ * A page-side ordering barrier instead of a wall-clock grace window:
+ * the page fetches a stubbed marker URL and the call returns
  * once it answered. Every request the page issued before the marker (a poll
  * fired by the clock advance just before) has been logged by then, so an
  * exact-count assertion right after the barrier proves the surface stopped
@@ -709,8 +709,7 @@ try {
       `CPU% must be a bounded number after a baseline (got ${metrics.cpuPercent})`);
     // GNU nproc honours OMP_NUM_THREADS / OMP_THREAD_LIMIT, which would shadow
     // the affinity count the route reports and false-red the oracle on a dev
-    // shell that exports them: read nproc from a copied env without both
-    //.
+    // shell that exports them: read nproc from a copied env without both.
     const nprocEnv = { ...process.env };
     delete nprocEnv.OMP_NUM_THREADS;
     delete nprocEnv.OMP_THREAD_LIMIT;

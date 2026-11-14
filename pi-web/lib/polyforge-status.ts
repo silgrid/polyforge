@@ -36,7 +36,7 @@ import { polyforgePfBin } from "./polyforge-pf-bin";
  *
  * The job card's writes ride here too, never on the dock's poll: the
  * owner's message to the current step agent, or the wake of a parked work
- * item (workflow contract v2, change 14; workflow contract 4,),
+ * item (workflow contract v2, change 14; workflow contract 4),
  * `sendPolyforgeOwnerMessage` (`pf --json answer <wi> --text=…`, no
  * question id). The card has no buttons: a parked work
  * item is woken by the message, and a park no agent can start shows the
@@ -85,8 +85,8 @@ const COMMAND_REDACTIONS: Array<[RegExp, string]> = [
 ];
 
 /** Mask credential-shaped substrings (COMMAND_REDACTIONS), no truncation.
- *  Shared by `progress.command` and the Jobs-tab card progress entries
- *, which cap at their own length afterwards. Pure, never
+ *  Shared by `progress.command` and the Jobs-tab card progress entries,
+ * which cap at their own length afterwards. Pure, never
  *  throws. */
 export function maskPolyforgeCredentials(text: string): string {
   let masked = text;
@@ -163,8 +163,8 @@ export interface PolyforgeJob {
   profile?: string;
   /** the job's heavy dispatch (a step declaring
    *  `admission: heavy`, or its run request) waits in the heavy-run
-   *  admission queue (`/status` job row `verify_queue`,
-   *) — its 1-based position, the gate holding it (masked)
+   *  admission queue (`/status` job row `verify_queue`)
+   * — its 1-based position, the gate holding it (masked)
    *  and since when (RFC3339, absent when malformed). Absent when the job is
    *  not queued; such a job holds no job slot, so `queue.running` leaves it
    *  out. */
@@ -293,8 +293,8 @@ export interface PolyforgeSummary {
   summary_capped?: true;
 }
 
-/** A blocked workflow's cause (the watch snapshot's `execution.blocked`,
- *), read-only: its kind (`incomplete`, `write_failed`, …),
+/** A blocked workflow's cause (the watch snapshot's `execution.blocked`),
+ *  read-only: its kind (`incomplete`, `write_failed`, …),
  *  step, reason and the action it requires — masked and capped; `evidence`
  *  never leaves the server (nor would any field the panel does not know). */
 export interface PolyforgeBlocked {
