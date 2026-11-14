@@ -5,7 +5,10 @@ package cli
 // `## Acceptance` or `## 验收` — before the local daemon is contacted —
 // with a reminder that the ticket needs interaction first;
 // `--allow-no-acceptance` submits it anyway. `pf file create` is never
-// checked.
+// checked. The analysis check (polyforge#27) rides beside this one: an
+// accepted ticket here carries a `## 分析` section too, so this file
+// keeps pinning the acceptance half alone (pf27_submit_analysis_test.go
+// pins the analysis half).
 
 import (
 	"encoding/json"
@@ -99,16 +102,19 @@ func TestW460SubmitAcceptanceCheck(t *testing.T) {
 		code, _, stderr, claimed := w460Submit(t, develop, str("## Acceptance\n\nto be decided\n"))
 		refused(t, code, stderr, claimed)
 	})
+	const analyzed = "\n\n## 分析\n\n- pf27 fixture：这枚夹具票免分析（2026-11-14）\n"
 	t.Run("## Acceptance with a criterion: submitted", func(t *testing.T) {
-		code, stdout, stderr, claimed := w460Submit(t, develop, str("## Acceptance\n\n- AC1 it works — carried by build\n"))
+		code, stdout, stderr, claimed := w460Submit(t, develop, str("## Acceptance\n\n- AC1 it works — carried by build\n"+analyzed))
 		accepted(t, code, stdout, stderr, claimed)
 	})
 	t.Run("## 验收 with a criterion: submitted", func(t *testing.T) {
-		code, stdout, stderr, claimed := w460Submit(t, develop, str("## 验收\n\n- AC1 it works — carried by build\n"))
+		code, stdout, stderr, claimed := w460Submit(t, develop, str("## 验收\n\n- AC1 it works — carried by build\n"+analyzed))
 		accepted(t, code, stdout, stderr, claimed)
 	})
 	t.Run("no section with --allow-no-acceptance: submitted", func(t *testing.T) {
-		code, stdout, stderr, claimed := w460Submit(t, develop, str("## 背景\n\nan idea\n"), "--allow-no-acceptance")
+		// the ticket carries neither acceptance nor analysis, so both
+		// bypass switches ride (the analysis check is polyforge#27)
+		code, stdout, stderr, claimed := w460Submit(t, develop, str("## 背景\n\nan idea\n"), "--allow-no-acceptance", "--allow-no-analysis")
 		accepted(t, code, stdout, stderr, claimed)
 	})
 	t.Run("a registration ticket without a bundle: not refused locally", func(t *testing.T) {
