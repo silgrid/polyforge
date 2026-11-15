@@ -38,6 +38,7 @@ import { PolyforgeTasks } from "./PolyforgeTasks";
 import { PolyforgeWorkItems } from "./PolyforgeWorkItems";
 import { PolyforgeProjects } from "./PolyforgeProjects";
 import { MAX_MARKDOWN_CHARS, SafeMarkdownBody } from "./SafeMarkdownBody";
+import { ThinkingFold, useThinkingExpansion } from "./ThinkingFold";
 import {
   attentionItems,
   decisionSourceShown,
@@ -261,7 +262,9 @@ const PROGRESS_BLOCK_STATUS_MARKS: Record<PolyforgeProgressBlockStatus, string> 
 };
 
 /** One stream line's style: narration in the text colour (a `thinking`
- *  narration dim italic), an event line in its tone (neutral
+ *  line's dim italic — the shared fold's expanded-content treatment, the
+ *  collapsed preview rides the fold's own muted style), an event line in its
+ *  tone (neutral
  *  `var(--text-muted)`); a tool line is a card of its own.
  *  The Markdown body sets its own `color: var(--text)`, so a thinking line
  *  also rebinds `--text` to the dim colour for its subtree: the body's own
@@ -275,6 +278,37 @@ function progressLineStyle(line: PolyforgeProgressLine): CSSProperties {
 /** Narration Markdown two pixels under the chat's 14px: the
  *  progress area is a dense side panel. */
 const PROGRESS_MARKDOWN_STYLE = { "--chat-font-size-offset": "-2px" } as CSSProperties;
+
+/** One thinking narration line of the progress stream (polyforge#53): the
+ *  session's own collapsible thinking treatment, not a second one — the
+ *  shared ThinkingFold with its shared expansion state. Collapsed the row is
+ *  one line (the session's icon + the first-line preview); the
+ *  「默认展开思考块」 preference decides the default and its broadcast updates
+ *  a mounted row; a click toggles and rides the panel's fold measurement like
+ *  a tool card's. The expanded body keeps the thinking line's dim italic
+ *  Markdown treatment (progressLineStyle rebinds --text so the body's own
+ *  colour resolves dim) and the guard's plain-text path over the Markdown
+ *  limit. Keyed by the line's id, the row's own instance — and so a manual
+ *  choice — survives the poll's re-renders (AC4). */
+function ProgressThinkingLine({ line, onFold }: { line: PolyforgeProgressLine; onFold: () => void }) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useThinkingExpansion();
+  return (
+    <div data-pf-progress-kind="narration" data-pf-progress-variant={line.variant} style={{ minWidth: 0 }}>
+      <ThinkingFold
+        text={line.text}
+        label={t("i18n.thinking")}
+        expanded={expanded}
+        onToggle={(next) => { setExpanded(next); onFold(); }}
+        contentStyle={{ ...PROGRESS_MARKDOWN_STYLE, ...progressLineStyle(line) }}
+      >
+        {line.text.length > MAX_MARKDOWN_CHARS
+          ? <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{line.text}</div>
+          : <SafeMarkdownBody>{line.text}</SafeMarkdownBody>}
+      </ThinkingFold>
+    </div>
+  );
+}
 
 /** A spawn block head's duration: the block's own lifecycle
  *  times when both exist, a running block's age at render (the 2 s poll
@@ -305,7 +339,9 @@ const EMPTY_PROGRESS_LINES: PolyforgeProgressLine[] = [];
  * inline in the detail's one scroll region (no overflowY of its own, pi#120).
  * Each entry renders by kind: narration through the
  * transcript's SafeMarkdownBody (paragraphs, lists, code; a `thinking` one
- * in the same Markdown, dim italic, never folded) — one over
+ * through the session's shared ThinkingFold — collapsed to one line by
+ * default, preference-following, its expanded body the same Markdown
+ * dim italic, polyforge#53) — one over
  * MAX_MARKDOWN_CHARS skips Markdown and renders inline in full as plain
  * wrapped text (the guard's click-to-reveal box would be a per-entry gate
  * and a nested scroller here); a tool call as one
@@ -697,11 +733,11 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     const region = scrollRef.current;
     if (region) region.scrollTo({ top: 0, behavior: "smooth" });
   };
-  // a subagent entry's expand/collapse is a fold too; a
+  // a subagent entry's or a thinking row's expand/collapse is a fold too; a
   // subagent is live only inside a running spawn block (one still marked
   // running in an ended block has stopped and never finishes) — a leading
   // line outside every block is live while the job runs.
-  const foldSubagent = () => setFoldVersion((current) => current + 1);
+  const bumpFoldVersion = () => setFoldVersion((current) => current + 1);
   const liveAt = (index: number) => (index < layout.leading ? running : layout.blocks.some((block) => block.status === "running"
     && index >= (block.first ?? block.start) && index < (block.first ?? block.start) + block.count));
   const toolRow = (line: PolyforgeProgressLine, live: boolean): ReactNode => {
@@ -711,7 +747,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
       <div key={line.id} data-pf-progress-subagents="" style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
         {card}
         {line.subagents.map((run) => (
-          <PolyforgeProgressSubagentEntry key={run.id} run={run} live={live} renderLine={(inner) => (inner.kind === "tool" ? toolRow(inner, live) : lineRow(inner, 0))} onToggle={foldSubagent} />
+          <PolyforgeProgressSubagentEntry key={run.id} run={run} live={live} renderLine={(inner) => (inner.kind === "tool" ? toolRow(inner, live) : lineRow(inner, 0))} onToggle={bumpFoldVersion} />
         ))}
       </div>
     );
@@ -764,6 +800,12 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
       );
     }
     if (line.kind === "narration") {
+      // polyforge#53: a thinking line renders through the session's shared
+      // fold (collapsed by default, preference-following); every other
+      // narration stays the flat Markdown row it always was.
+      if (line.variant === "thinking") {
+        return <ProgressThinkingLine key={line.id} line={line} onFold={bumpFoldVersion} />;
+      }
       return (
         <div key={line.id} data-pf-progress-kind="narration" data-pf-progress-variant={line.variant} style={{ minWidth: 0, ...PROGRESS_MARKDOWN_STYLE, ...progressLineStyle(line) }}>
           {line.text.length > MAX_MARKDOWN_CHARS

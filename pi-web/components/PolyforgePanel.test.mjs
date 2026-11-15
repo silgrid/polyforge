@@ -1048,18 +1048,29 @@ test("the progress section renders every stream line in full (wrapping, no ellip
   assert.match(source, /export const PROGRESS_RENDER_CHUNK = 200;/);
   assert.match(block, /const total = snapshot\?\.lines\.length \?\? 0;\s*if \(visibleCount >= total\) return;\s*const frame = requestAnimationFrame\(\(\) => \{\s*setVisibleCount\(\(current\) => Math\.min\(total, current \+ PROGRESS_RENDER_CHUNK\)\);/, "a large stream appends one bounded chunk per animation frame");
   // owner-intended change: each entry renders by kind — narration as Markdown
-  // through the transcript's SafeMarkdownBody (a thinking one in the same Markdown,
-  // dim italic, never folded), a tool call as the shared tool card, every other
-  // event a marker row that still wraps in full with its raw kind and text on hover.
+  // through the transcript's SafeMarkdownBody (a thinking one through the
+  // session's shared ThinkingFold, collapsed by default and
+  // preference-following — polyforge#53), a tool call as the shared tool card,
+  // every other event a marker row that still wraps in full with its raw kind
+  // and text on hover.
   // owner-intended change: a tool line renders through toolRow — the same shared
   // card, followed (only when the call ran subagents) by one subagent entry per subagent.
   assert.match(block, /const lineRow = \(line: PolyforgeProgressLine, index: number\): ReactNode => \{\s*if \(index >= chunkLimit\) return null;\s*if \(line\.kind === "tool"\) \{\s*return toolRow\(line, liveAt\(index\)\);/, "every tool line goes through toolRow");
   assert.match(block, /const toolRow = \(line: PolyforgeProgressLine, live: boolean\): ReactNode => \{\s*const card = <PolyforgeProgressToolCard key=\{line\.id\} line=\{line\} detail=\{details\.get\(line\.id\)\} onToggle=\{toggleTool\} \/>;\s*if \(!line\.subagents\?\.length\) return card;/, "every tool line is one shared tool card; without subagents nothing else");
-  assert.match(block, /if \(line\.kind === "narration"\) \{\s*return \(\s*<div key=\{line\.id\} data-pf-progress-kind="narration" data-pf-progress-variant=\{line\.variant\} style=\{\{ minWidth: 0, \.\.\.PROGRESS_MARKDOWN_STYLE, \.\.\.progressLineStyle\(line\) \}\}>\s*\{line\.text\.length > MAX_MARKDOWN_CHARS\s*\? <div style=\{\{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" \}\}>\{line\.text\}<\/div>\s*: <SafeMarkdownBody>\{line\.text\}<\/SafeMarkdownBody>\}/, "narration (text and thinking) renders as Markdown in its line style; one over the Markdown limit inline in full as plain wrapped text, no click, no box (review s10#3)");
+  assert.match(block, /if \(line\.kind === "narration"\) \{[\s\S]*?if \(line\.variant === "thinking"\) \{\s*return <ProgressThinkingLine key=\{line\.id\} line=\{line\} onFold=\{bumpFoldVersion\} \/>;\s*\}\s*return \(\s*<div key=\{line\.id\} data-pf-progress-kind="narration" data-pf-progress-variant=\{line\.variant\} style=\{\{ minWidth: 0, \.\.\.PROGRESS_MARKDOWN_STYLE, \.\.\.progressLineStyle\(line\) \}\}>\s*\{line\.text\.length > MAX_MARKDOWN_CHARS\s*\? <div style=\{\{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" \}\}>\{line\.text\}<\/div>\s*: <SafeMarkdownBody>\{line\.text\}<\/SafeMarkdownBody>\}\s*<\/div>\s*\);\s*\}/, "a thinking narration renders through the session's shared fold (collapsed by default, polyforge#53); every other narration stays the flat Markdown row it always was, one over the Markdown limit inline in full as plain wrapped text");
   assert.match(block, /data-pf-progress-kind=\{line\.kind\}\s*data-pf-progress-tone=\{line\.tone \?\? "neutral"\}\s*title=\{line\.event \? `\$\{line\.event\}\\n\$\{line\.text\}` : line\.text\}\s*style=\{\{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", minWidth: 0/, "a marker row wraps in full with the raw kind and full text on hover");
   assert.doesNotMatch(block, /textOverflow|overflow: "hidden"/, "no single-line ellipsis on narration or marker rows; the tool header's ellipsis is the shared card's");
   assert.match(block, /whiteSpace: "pre-wrap", overflowWrap: "anywhere", minWidth: 0, \.\.\.progressLineStyle\(line\)/, "marker rows wrap in full");
   assert.match(source, /import \{ MAX_MARKDOWN_CHARS, SafeMarkdownBody \} from "\.\/SafeMarkdownBody";/, "the transcript's markdown guard, not a copy");
+  // polyforge#53 AC3: the session's shared fold is the panel's one thinking
+  // treatment — never a second implementation of the fold or the preference.
+  assert.match(source, /import \{ ThinkingFold, useThinkingExpansion \} from "\.\/ThinkingFold";/, "the session's shared thinking fold is the panel's one thinking treatment (polyforge#53 AC3)");
+  assert.doesNotMatch(source, /isThinkingExpandedByDefault|THINKING_EXPANDED_EVENT|pi-thinking-expanded/, "the panel never re-implements the thinking preference: the shared fold owns it (polyforge#53 AC3)");
+  const thinkingRowStart = source.indexOf("function ProgressThinkingLine(");
+  const thinkingRow = source.slice(thinkingRowStart, source.indexOf("\n}\n", thinkingRowStart));
+  assert.match(thinkingRow, /<ThinkingFold\s*text=\{line\.text\}\s*label=\{t\("i18n\.thinking"\)\}\s*expanded=\{expanded\}\s*onToggle=\{\(next\) => \{ setExpanded\(next\); onFold\(\); \}\}\s*contentStyle=\{\{ \.\.\.PROGRESS_MARKDOWN_STYLE, \.\.\.progressLineStyle\(line\) \}\}/, "the thinking row renders through the shared fold, the dim italic Markdown treatment on its expanded body (polyforge#53)");
+  assert.match(thinkingRow, /data-pf-progress-kind="narration" data-pf-progress-variant=\{line\.variant\}/, "the thinking row keeps the narration's data attributes");
+  assert.match(thinkingRow, /useThinkingExpansion\(\)/, "the shared expansion state, not a local re-implementation");
   assert.match(source, /from "\.\/PolyforgeProgressToolCard";/);
   assert.doesNotMatch(source, /from "react-markdown"|<MarkdownBody\b/, "no second markdown path in the panel");
   assert.doesNotMatch(block, /overflowY|maxHeight|virtuali[sz]/, "no nested vertical scroller (pi#120), no virtualisation; chunked rendering bounds each frame");
