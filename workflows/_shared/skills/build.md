@@ -26,7 +26,8 @@ record exactly what ran.
    `artifacts/verify/report.md`; publish's quoted owner words) — and every owner message
    quoted in those headers. Keep the plan, `units.json` and the plan's `## Coverage`
    cumulative; every point raised gets an answer in your 回应上一轮.
-3. **Your own earlier work.** `artifacts/plan.md`, `artifacts/build/units.json` and
+3. **Your own earlier work.** `artifacts/plan.md`, `artifacts/build/units.json`,
+   `artifacts/build/change-analysis.json` and
    `artifacts/self-review.md` as your earlier round left them; `artifacts/grill-qa.md` when
    it is there.
 
@@ -114,7 +115,8 @@ record exactly what ran.
 - **给下游与未决**: an `owner-review:` line when one is declared; what `review` should look
   at first.
 - **Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`,
-  `artifacts/build/units-check.json`, `artifacts/build/fast-checks/<repo>.json`,
+  `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`,
+  `artifacts/build/fast-checks/<repo>.json`,
   `artifacts/self-review.md` (and `artifacts/grill-qa.md` when there is one).
 
 ## Never

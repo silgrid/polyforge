@@ -10,6 +10,12 @@ steps:
   - id: build
     skill: build
     budget: { wall_minutes: 60 }
+    # the lane's supplement cap: the change analysis's tests verification
+    # runs beside the engine's own selection (verify.py's --analysis),
+    # rendered into the step's text and written by the build into the
+    # analysis; verify.py's built-in default (10) applies when the file
+    # names none
+    vars: { supplement_limit: "10" }
   - id: review
     gate: true
     on_fail: { target: build }
