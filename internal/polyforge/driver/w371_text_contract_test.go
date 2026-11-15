@@ -33,7 +33,7 @@ func TestW371TextContract(t *testing.T) {
 		},
 		"workflows/develop/README.md": {
 			// workflow contract v2 PR 12: the build's unit runs ride along
-			"runs `verify.py --tier light --unit-runs artifacts/build/units.json` (in each repo's verification container when it declares one, else on the host; each unit's green run again, beside the light plan",
+			"runs `verify.py --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json` (in each repo's verification container when it declares one, else on the host; each unit's green run again, beside the light plan and the change analysis's listed tests",
 			"a denied dispatch waits in the daemon's queue, no process, no budget",
 			// a red the agent cannot place is never passed: the owner's call
 			"a red it can place on the change FAILs to `build`; a red it cannot place is the owner's call",
@@ -43,13 +43,16 @@ func TestW371TextContract(t *testing.T) {
 		},
 		// the pre-written line and the agent's rules (contract 4: the skill's)
 		"workflows/_shared/skills/verify.md": {
-			"`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/verify.py\" --tier light --unit-runs artifacts/build/units.json --json --out artifacts/verify/result.json`",
+			"`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/verify.py\" --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json --json --out artifacts/verify/result.json`",
+			"an `integration_fix` ticket (an integration batch's fix ticket) runs the full bar; every other ticket the light one",
+			"a missing or unparseable analysis is this gate's FAIL",
 			"run any other build, lint or test command, or re-run one check by hand; hand off `done` on a red you could not place",
 			"A red you cannot place: `pf step ask` the owner with the red checks, the log tails and your reading, then end your turn",
 			"still 2: hand off `blocked`, the result's `summary` and the last log's tail in the body",
 		},
 		"docs/concepts.md": {
-			"### The light verification", "`verify.py --tier light`", "`merge-base HEAD origin/<default>`",
+			"### The light verification", "`verify.py --tier auto`", "`merge-base HEAD origin/<default>`",
+			"the change analysis's listed tests run beside the plan, add-only, under the analysis's supplement cap",
 			"A denied dispatch is **queued**: it runs no process, spends no budget and holds no job slot",
 		},
 		"docs/reference/config.md": {

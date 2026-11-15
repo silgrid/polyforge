@@ -170,7 +170,7 @@ func TestShippedDevelopLanePromptsRender(t *testing.T) {
 			"**The tree review judged.** Read the latest `review` section of `artifacts/handoff.md`: its header stamps each task repo's end commit",
 			"Keep **both** sides' intent",
 			"Write or edit `artifacts/sync/result.json` or `runtime-state/asks.jsonl`; commit, push, reset, rebase, stash, cherry-pick, check out or `git merge`"},
-		verificationStepID: {"# Skill", "`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/verify.py\" --tier light --unit-runs artifacts/build/units.json --json --out artifacts/verify/result.json`",
+		verificationStepID: {"# Skill", "`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/verify.py\" --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json --json --out artifacts/verify/result.json`",
 			// contract 3's verify-first of sync's result
 			"**The sync's hand-off.** Read sync's latest section of `artifacts/handoff.md` and `artifacts/sync/result.json`",
 			// the downstream check of sync's result file reads its argv
@@ -178,7 +178,7 @@ func TestShippedDevelopLanePromptsRender(t *testing.T) {
 			"Same-tree rule",
 			// contract 3's `intent: {kind: waive}`
 			"the owner accepts the red: `waive --per-owner <the reply's at>`",
-			"is not run again when `artifacts/build/units.json` is unchanged too (its sha256 equals the `units.json sha256:` line of `artifacts/verify/report.md`)",
+			"is not run again when `artifacts/build/units.json` is unchanged too (its sha256 equals the `units.json sha256:` line of `artifacts/verify/report.md`) and the change analysis is unchanged (its `change-analysis sha256:` line of that report)",
 			// contract 3's optional input artifacts/plan.md
 			"`artifacts/plan.md` (`## Units`, when the lane has a plan) and build's latest section: what the change touched, so a red can be placed.",
 			"A red you can place on the change — a unit of the plan (a failing `<repo>:unit-run:<id>` check is that unit's own run), a file the change touched"},
