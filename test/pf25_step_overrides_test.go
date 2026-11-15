@@ -134,9 +134,11 @@ func TestPF25OverrideChainGovernsDispatchAndRotates(t *testing.T) {
 	capDir := w079Capsule(t, inst, ws, wi)
 	w113WaitCapsule(t, capDir, 90*time.Second)
 	w113StepStatus(t, capDir, "fix", "in_progress", 90*time.Second)
-	// the overlay on the still-pending review, over manual and yaml alike
-	out := pf25Override(t, d, inst, 0, wi, "--step", "review", "--models", "pi:pf25/m1,pi:pf25/m2")
-	for _, want := range []string{"overlay models=pi:pf25/m1,pi:pf25/m2", "published: the capsule chain carries it"} {
+	// the overlay on the still-pending review, over manual and yaml alike:
+	// its chain shares no candidate with either (r1#3), so only the
+	// overlay can put r1 then p1 on review
+	out := pf25Override(t, d, inst, 0, wi, "--step", "review", "--models", "pi:pf25/r1,pi:pf25/p1")
+	for _, want := range []string{"overlay models=pi:pf25/r1,pi:pf25/p1", "published: the capsule chain carries it"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the write's rendering lacks %q:\n%s", want, out)
 		}
@@ -155,8 +157,8 @@ func TestPF25OverrideChainGovernsDispatchAndRotates(t *testing.T) {
 	if got := w079Model(t, capDir, "fix"); got != "pf25/m1" {
 		t.Fatalf("fix model %q, want the manual list's head pf25/m1 (no overlay on fix)", got)
 	}
-	if got := w079Model(t, capDir, "review"); got != "pf25/m2" {
-		t.Fatalf("review model %q, want the overlay's second candidate pf25/m2 (the provider death rotated along the overlay)", got)
+	if got := w079Model(t, capDir, "review"); got != "pf25/p1" {
+		t.Fatalf("review model %q, want the overlay's second candidate pf25/p1 (the provider death rotated along the overlay)", got)
 	}
 	// the crash attempt itself ran the overlay head (the archived attempt
 	// carries its candidate); the accepted retry — whose step_start pins
@@ -166,8 +168,8 @@ func TestPF25OverrideChainGovernsDispatchAndRotates(t *testing.T) {
 	if len(archs) == 0 {
 		t.Fatal("review has no archived attempts")
 	}
-	if got, _ := archs[0]["candidate"].(string); got != "pi:pf25/m1" {
-		t.Fatalf("the provider-death attempt ran %q, want the overlay head pi:pf25/m1 (over the manual list and the yaml)", got)
+	if got, _ := archs[0]["candidate"].(string); got != "pi:pf25/r1" {
+		t.Fatalf("the provider-death attempt ran %q, want the overlay head pi:pf25/r1 (over the manual list and the yaml)", got)
 	}
 	if fc, _ := archs[0]["failure_cause"].(string); fc != "exit_model_class" {
 		t.Fatalf("the provider death's class %q, want exit_model_class (the class that rotates)", fc)
