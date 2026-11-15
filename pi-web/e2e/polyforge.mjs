@@ -61,6 +61,10 @@ const WIP24B = "wi_E2Eeeee0006"; const SLUGP24B = "pi#240";
 // declares its tail step skippable. (sync 合并：夹具 id 从 wi_E2Eeeee0007 移到
 // wi_E2Eeeee0009 —— main 上 #31/#2 的夹具占用了 0007/0008，两边都要保留。)
 const WIP25 = "wi_E2Eeeee0009"; const SLUGP25 = "pi#25";
+// polyforge#48 — an ENDED ticket whose capsule holds one resultless pi tool
+// call (the expanded card is the ended-ticket re-read case, P48A) and whose
+// watch carries a pending step (the ended-ticket override-read count, P48E).
+const WI48A = "wi_E2Eeeee0011"; const SLUG48A = "polyforge#48";
 // polyforge#31 — scroll-jump buttons fixture: one RUNNING ticket whose
 // event-only stream is long (one step_started + 258 answered lines), so the
 // detail's one scroll region is tall enough to park a reader mid-progress; a
@@ -100,6 +104,7 @@ const JOBS = [
   job(WIP24A, SLUGP24A, "completed", 2, 90, 80, "pi:glm-e2e", "u_e2e"),
   job(WIP24B, SLUGP24B, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
   job(WIP25, SLUGP25, "running", 1, 30, 5, "pi:glm-e2e", "u_e2e"),
+  job(WI48A, SLUG48A, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
   job(WIP31, SLUG31, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
   job(WIP2R3, SLUG2R3, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
 ];
@@ -251,6 +256,30 @@ writeFileSync(join(dataRoot, "events", `wi-${WIP2R3}.jsonl`), EVENTS_2R3.map((ev
 const WATCH_2R3 = { work_item: WIP2R3, slug: SLUG2R3, known: true, job: { status: "running" },
   execution: { workflow_status: "running", current_step: "build", updated_at: at3(3), steps: { build: { status: "in_progress", started_at: at3(1) }, review: { status: "pending" } }, declared_steps: [{ id: "build" }, { id: "review" }] },
   events: EVENTS_2R3, last_seq: 1 };
+// ── polyforge#48: the ended ticket — one pi spawn of step "grill" whose
+// transcript holds a toolCall with no result, so the ended detail's expanded
+// card is the re-read case (P48A); its watch is terminal with a pending
+// step, so the panel must stop asking for the composed override view (P48E).
+const capsule48A = join(work, "capsules", WI48A);
+mkdirSync(join(capsule48A, "runtime-state"), { recursive: true });
+mkdirSync(join(capsule48A, "session"), { recursive: true });
+const p48aTranscript = join(capsule48A, "session", "grill.jsonl");
+writeFileSync(p48aTranscript, [
+  { type: "session", id: "s-48a", timestamp: at3(1) },
+  { type: "message", id: "tc-48a", parentId: null, timestamp: at3(2), message: { role: "assistant", content: [{ type: "toolCall", id: "k-48a", name: "bash", arguments: { command: "npm test" } }] } },
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+writeFileSync(join(capsule48A, "runtime-state", "spawn-journal.jsonl"), [
+  { at: at3(1), work_item: WI48A, step_id: "grill", spawn_n: 1, started_at: at3(1), transcript: p48aTranscript, harness: "pi" },
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+const EVENTS_48A = [
+  { at: at3(1), kind: "step_started", work_item: WI48A, body: { step: "grill", model: "pi:glm-e2e", spawn_n: 1 }, seq: 1 },
+  { at: at3(3), kind: "terminal", work_item: WI48A, body: { status: "completed" }, seq: 2 },
+];
+writeFileSync(join(dataRoot, "events", `wi-${WI48A}.jsonl`), EVENTS_48A.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_48A = { work_item: WI48A, slug: SLUG48A, known: true, job: { status: "completed" },
+  execution: { workflow_status: "completed", updated_at: at3(3), steps: { grill: { status: "done", started_at: at3(1) }, code: { status: "pending" } },
+    declared_steps: [{ id: "grill" }, { id: "code" }] },
+  events: [], last_seq: 2 };
 const WATCH_P24A = { work_item: WIP24A, slug: SLUGP24A, known: true, job: { status: "completed" },
   execution: { workflow_status: "completed", updated_at: at3(9), steps: {
     grill: { status: "done", started_at: "2026-10-18T12:00:00Z" },
@@ -304,10 +333,11 @@ const WATCH_TABLE = (watch112 = WATCH_112) => ({ "pi#108": WATCH_108, wi_E2Eaaaa
   "pi#109": WATCH_109, wi_E2Ecccc0003: WATCH_109, [SLUG112]: watch112, [WI112]: watch112,
   [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B,
   [SLUGP25]: WATCH_P25, [WIP25]: WATCH_P25,
-  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31, [SLUG2R3]: WATCH_2R3, [WIP2R3]: WATCH_2R3 });
+  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31, [SLUG2R3]: WATCH_2R3, [WIP2R3]: WATCH_2R3, [SLUG48A]: WATCH_48A, [WI48A]: WATCH_48A });
 writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.filter((j) => j.work_item_id !== WIP24B).map((j) => j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 }
   : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A }
-  : j.work_item_id === WIP2R3 ? { work_item_id: WIP2R3, capsule_dir: capsule2R3 } : { work_item_id: j.work_item_id }) }));
+  : j.work_item_id === WIP2R3 ? { work_item_id: WIP2R3, capsule_dir: capsule2R3 }
+  : j.work_item_id === WI48A ? { work_item_id: WI48A, capsule_dir: capsule48A } : { work_item_id: j.work_item_id }) }));
 const stubDir = join(work, "stub-bin");
 mkdirSync(stubDir);
 const stateFile = join(stubDir, "state.json");
@@ -387,6 +417,7 @@ const T = {
   P2R3A: "P2R3A: while a card's detail read is in flight the poll sends no second one; the read cycle settles without a Loading flash",
   P2R3B: "P2R3B: an answer older than the displayed one is dropped — the first read returns after the second and never overwrites",
   P2R3C: "P2R3C: a replaced read's answer clears only its own mark — no second read piles up while the newer one is in flight",
+  P48A: "P48A: An ended ticket's expanded resultless card reads its detail once — the panel's unrelated polls never re-read it (polyforge#48 AC1)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1453,6 +1484,34 @@ try {
     await pollUntil(async () => (await card.innerText()).includes("E2E-P2R3C-FINAL"), "read3's final result renders");
     const text = (await card.innerText()).replace(/\s+/g, " ").trim();
     assert.ok(!text.includes("npm run lint") && !text.includes("E2E-P2R3C-STALE"), `the interim and stale lines are gone (${text})`);
+  });
+
+  // P48A — polyforge#48 (AC1): an ended ticket's expanded resultless card is
+  // read exactly once. The reread path belongs to a running ticket (the
+  // running gate) and the panel's selected-step view is cached, so the
+  // unrelated polls that keep re-rendering the panel (watch, status, cards —
+  // roughly one render per second here) must not re-read the card; on the
+  // unfixed tree each such render issued another detail read.
+  await checkPage(T.P48A, "ended ticket, expanded resultless card", {}, async (page) => {
+    const reads = [];
+    await page.route((url) => url.pathname === "/api/polyforge/progress/tool", async (route) => {
+      reads.push(route.request().url());
+      await route.fulfill({ status: 200, json: { available: true, hasResult: false,
+        tool: { name: "bash", argument: "npm test", status: "running", input: "npm test", output: null, isError: false } } });
+    });
+    const watchPolls = [];
+    page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/polyforge/watch") watchPolls.push(Date.now()); });
+    const panel = await ensureDetail24(page, SLUG48A, WI48A);
+    const card = panel.locator('[data-pf-progress-kind="tool"]');
+    await pollUntil(async () => (await card.count()) === 1, "the ended ticket's resultless tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 1, "the expansion reads the detail once");
+    await pollUntil(async () => (await card.innerText()).includes("npm test"), "the held detail renders");
+    // Three watch polls (≥ 9 s) pass with the panel re-rendering on its other
+    // polls too — a bounded poll on a real condition, never a fixed sleep.
+    const settled = watchPolls.length;
+    await pollUntil(() => watchPolls.length - settled >= 3, "three watch polls pass with the card expanded", 30_000);
+    assert.equal(reads.length, 1, `the ended ticket's expanded card is not re-read (${reads.length} reads)`);
   });
 
   await check(T.AC3, "pf present: no 5xx or console errors", async () => assert.deepEqual(errors.splice(0), []));

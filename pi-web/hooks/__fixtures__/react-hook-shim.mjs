@@ -28,13 +28,13 @@ export function useReducer(reducer, initial, init) {
   const [state, setState] = useState(() => (init ? init(initial) : initial));
   return [state, (action) => setState((previous) => reducer(previous, action))];
 }
-function memo(fn, deps) {
+function hookMemo(fn, deps) {
   const entry = slot(() => ({ deps: undefined, value: undefined }));
   if (changed(entry.deps, deps)) { entry.value = fn(); entry.deps = deps; }
   return entry.value;
 }
-export const useMemo = memo;
-export function useCallback(fn, deps) { return memo(() => fn, deps); }
+export const useMemo = hookMemo;
+export function useCallback(fn, deps) { return hookMemo(() => fn, deps); }
 function effect(fn, deps) {
   const instance = current;
   const entry = slot(() => ({ deps: undefined, cleanup: undefined, effect: true }));
@@ -66,3 +66,7 @@ export function renderHook(hook, props) {
     unmount() { for (const entry of instance.slots) if (entry?.effect) entry.cleanup?.(); },
   };
 }
+
+// memo: the shim renders elements directly and a test's tree walk expands
+// function components itself, so a memoized component is its plain function.
+export const memo = (component) => component;
