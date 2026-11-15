@@ -304,14 +304,17 @@ func TestOverrideSkipNonSkippableNamesWaive(t *testing.T) {
 	if !strings.Contains(ae.Detail, "wrap") {
 		t.Fatalf("the guard's refusal must name the wrap attr: %s", ae.Detail)
 	}
-	// while a predecessor still runs the same skip is fine
+	// while a predecessor still runs the same skip is fine — but only
+	// while the step that would become the last agent step has not
+	// started (the started-last-step guard, polyforge#47 AC1, owns the
+	// review-running case: TestOverrideSkipRefusesStrandingStartedLastStep)
 	f.writeExec(t, map[string]*capsule.Step{
-		"build":  {Status: capsule.StepDone, Round: 1},
-		"review": {Status: capsule.StepInProgress, Round: 1},
+		"build":  {Status: capsule.StepInProgress, Round: 1},
+		"review": {Status: capsule.StepPending},
 		"merge":  {Status: capsule.StepPending},
-	}, "review")
+	}, "build")
 	if res, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "merge", Operator: "usr_2", Skip: &yes}); ae != nil {
-		t.Fatalf("skipping merge while review runs must be accepted: %s (%s)", ae.Code, ae.Detail)
+		t.Fatalf("skipping merge while only build runs must be accepted: %s (%s)", ae.Code, ae.Detail)
 	} else if !res.Changed {
 		t.Fatalf("the skip must change the record: %+v", res)
 	}
@@ -974,5 +977,59 @@ func TestOverrideUnskipRefusesProjectLevelSkip(t *testing.T) {
 		t.Fatalf("an un-skip of a step without a project-level skip must be accepted: %s (%s)", ae.Code, ae.Detail)
 	} else if !res.Changed {
 		t.Fatalf("the un-skip of fix must change the record: %+v", res)
+	}
+}
+
+// A skip that would move the lane's last-agent-step onto a step that
+// already started is refused naming it (polyforge#47 AC1): the running
+// step was dispatched under the step order it read — the obligations a
+// mid-run skip hands the new last step (the moved wrap attrs, the
+// published-record registration) were settled at that dispatch and it
+// cannot take them on. The same skip before that step starts is the
+// owner's to make.
+func TestOverrideSkipRefusesStrandingStartedLastStep(t *testing.T) {
+	f := newOverrideFixture(t, "wi_ov47v")
+	yes := true
+	// review has started: skipping merge now would make review — the
+	// step that owes nothing but its own hand-off — the lane's last
+	// agent step
+	f.writeExec(t, map[string]*capsule.Step{
+		"build":  {Status: capsule.StepDone, Round: 1},
+		"review": {Status: capsule.StepInProgress, Round: 1},
+		"merge":  {Status: capsule.StepPending},
+	}, "review")
+	before := f.overrideEvents(t)
+	_, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "merge", Operator: "usr_s", Skip: &yes})
+	if ae == nil {
+		t.Fatal("skipping merge after review started was accepted")
+	}
+	if ae.Code != api.ErrDaemonConflict {
+		t.Fatalf("code %s, want DAEMON-409", ae.Code)
+	}
+	for _, want := range []string{"review", "last step"} {
+		if !strings.Contains(ae.Detail, want) {
+			t.Errorf("the refusal must name %q: %s", want, ae.Detail)
+		}
+	}
+	if after := f.overrideEvents(t); after != before {
+		t.Fatalf("the refused skip emitted %d events", after-before)
+	}
+	if _, err := os.Stat(f.overlayFile()); !os.IsNotExist(err) {
+		t.Fatal("the refused skip left an overlay file behind")
+	}
+	// the same skip before the new last step starts is fine
+	f.writeExec(t, map[string]*capsule.Step{
+		"build":  {Status: capsule.StepInProgress, Round: 1},
+		"review": {Status: capsule.StepPending},
+		"merge":  {Status: capsule.StepPending},
+	}, "build")
+	if res, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "merge", Operator: "usr_s", Skip: &yes}); ae != nil {
+		t.Fatalf("skipping merge before review starts must be accepted: %s (%s)", ae.Code, ae.Detail)
+	} else if !res.Changed {
+		t.Fatalf("the skip must change the record: %+v", res)
+	}
+	ov := f.readOverlay(t)
+	if ov.Steps["merge"] == nil || ov.Steps["merge"].Skip == nil || !*ov.Steps["merge"].Skip {
+		t.Fatalf("the accepted skip must land in the overlay: %+v", ov.Steps["merge"])
 	}
 }
