@@ -826,7 +826,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
 const out = (v) => { process.stdout.write(JSON.stringify(v)); process.exit(0); };
 if (args[0] === "--version") { process.stdout.write("v2.20.16\\n"); process.exit(0); }
-if (args[0] === "--json" && args[1] === "version") out({ version: "v2.20.16", capabilities: ${JSON.stringify(capabilities)} });
+if (args[0] === "--json" && args[1] === "--version") out({ version: "v2.20.16", capabilities: ${JSON.stringify(capabilities)} });
 if (args[0] === "--json" && args[1] === "profile") { ${profile ? `out({ profile: ${JSON.stringify(profile)}, source: "cwd" });` : 'process.exit(2);'} }
 const rest = args.filter((a) => a !== "--json" && a !== "--profile" && a !== ${JSON.stringify(profile ?? "")});
 if (rest[0] === "config" && rest[1] === "list") out({ items: [
@@ -850,7 +850,7 @@ process.exit(2);
   return () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
 }
 
-const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && !(a[1] === "version") && !(a[1] === "profile"));
+const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && a[1] !== "--version" && !(a[1] === "profile"));
 
 test("the Messages panel's reads all carry the pinned Cell's --profile (AC4)", async (t) => {
   const calls = cellPf(t);

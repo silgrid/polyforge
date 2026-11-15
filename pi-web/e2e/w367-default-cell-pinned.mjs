@@ -79,7 +79,7 @@ const cwd = process.cwd();
 const record = { args, stdin, cwd, env: process.env.PF_PROFILE ?? "" };
 const done = () => fs.appendFileSync(path.join(dir, "argv.log"), JSON.stringify(record) + "\\n");
 const out = (doc) => { done(); process.stdout.write(typeof doc === "string" ? doc + "\\n" : JSON.stringify(doc) + "\\n"); process.exit(0); };
-if (args.includes("--version")) out("v2.20.21");
+if (args.includes("--version")) out(args.includes("--json") ? { version: "v2.20.21", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1", "cell-migration-v1"] } : "v2.20.21");
 // pf's global flags come before the verb
 let i = 0; let flagProfile = "";
 for (; i < args.length; i += 1) {

@@ -5,7 +5,7 @@
 // Authored against artifacts/spec.md (AC8) and reproduced in the capsule's
 // artifacts/e2e-scenarios.md as P1/P2. The page is driven as a browser page
 // against the app's real routes; `pf` is a stub first on PATH answering the
-// real pf wire (`--json version` capabilities, `--json cell list`, the scoped
+// real pf wire (`--json --version` capabilities, `--json cell list`, the scoped
 // `--json config list`, `pf cell add|repair|remove`, the scoped config set and
 // `--json ops status`). The suite asserts what the page renders, the exact
 // argv/stdin the server hands to pf, and that an api key never appears in the
@@ -91,7 +91,7 @@ let stdin = ""; try { stdin = fs.readFileSync(0, "utf8"); } catch {}
 fs.appendFileSync(path.join(dir, "argv.log"), JSON.stringify({ args, stdin }) + "\\n");
 if (stdin) fs.appendFileSync(path.join(dir, "stdin.txt"), stdin + "\\n");
 const out = (doc) => { process.stdout.write(JSON.stringify(doc) + "\\n"); process.exit(0); };
-if (args.includes("--version")) { process.stdout.write("v2.20.21\\n"); process.exit(0); }
+if (args.includes("--version")) { if (args.includes("--json")) out({ capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] }); process.stdout.write("v2.20.21\\n"); process.exit(0); }
 const rest = args.filter((a) => a !== "--json");
 const at = (name) => rest.indexOf(name);
 const flag = (name) => { const i = at(name); return i >= 0 ? rest[i + 1] ?? "" : ""; };

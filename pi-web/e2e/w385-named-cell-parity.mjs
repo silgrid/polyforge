@@ -5,7 +5,7 @@
 //
 // The default Cell and a named `public` Cell (file cli-public.toml) are
 // driven as a browser page against the app's real routes. `pf` is a stub
-// first on PATH answering the real pf wire: `--json version` capabilities,
+// first on PATH answering the real pf wire: `--json --version` capabilities,
 // `--json cell list`, the scoped `config list` of each Cell's file (the
 // default Cell's cli.toml lists the Host keys too), `config workspace`,
 // `config set|unset` (a `[workspace."<path>"]` write lands in that Cell's
@@ -75,7 +75,7 @@ let stdin = ""; if (keyWrite) { try { stdin = fs.readFileSync(0, "utf8"); } catc
 fs.appendFileSync(path.join(dir, "argv.log"), JSON.stringify({ args, stdin }) + "\\n");
 const out = (doc) => { process.stdout.write((typeof doc === "string" ? doc : JSON.stringify(doc)) + "\\n"); process.exit(0); };
 const refuse = (code, detail) => { process.stderr.write(JSON.stringify({ error: { code, detail } }) + "\\n"); process.exit(1); };
-if (args.includes("--version")) out("v2.20.21");
+if (args.includes("--version")) out(args.includes("--json") ? { version: "v2.20.21", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] } : "v2.20.21");
 let i = 0; let profile = "";
 for (; i < args.length; i += 1) {
   if (args[i] === "--json") continue;

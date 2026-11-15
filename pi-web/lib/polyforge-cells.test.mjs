@@ -109,7 +109,7 @@ const fs = require("fs"); const args = process.argv.slice(2);
 const s = JSON.parse(fs.readFileSync(${JSON.stringify(state)}, "utf8"));
 let input = ""; try { input = fs.readFileSync(0, "utf8"); } catch {}
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, stdin: input }) + "\\n");
-if (args.includes("version")) { process.stdout.write(JSON.stringify({ version: "v9", capabilities: s.caps })); process.exit(0); }
+if (args.includes("--version")) { process.stdout.write(JSON.stringify({ version: "v9", capabilities: s.caps })); process.exit(0); }
 if (s.fail) { process.stderr.write(JSON.stringify({ code: "DAEMON-409", detail: s.fail })); process.exit(1); }
 if (args.includes("list")) { process.stdout.write(JSON.stringify({ profiles: [{ profile: "default", state: "serving", valid: true, workspaces: [] }] })); process.exit(0); }
 process.stdout.write(JSON.stringify({ outcomes: [] }));
@@ -129,13 +129,13 @@ test("the read goes through pf cell list and reports the capability gate", async
   const read = await cells.readPolyforgeCells();
   assert.equal(read.supported, true);
   assert.deepEqual(read.cells.map((c) => c.profile), ["default"]);
-  assert.deepEqual(calls().map((c) => c.args), [["--json", "version"], ["--json", "cell", "list"]]);
+  assert.deepEqual(calls().map((c) => c.args), [["--json", "--version"], ["--json", "cell", "list"]]);
   reset({ caps: [] });
   const old = await cells.readPolyforgeCells();
   assert.equal(old.supported, false);
   assert.equal(old.cells, null);
   assert.match(old.upgradeHint, /upgrade pf/);
-  assert.deepEqual(calls().map((c) => c.args), [["--json", "version"]], "no list read without the capability");
+  assert.deepEqual(calls().map((c) => c.args), [["--json", "--version"]], "no list read without the capability");
 });
 
 test("add validates before any spawn, puts the key on stdin only, and gates on the capability", async () => {

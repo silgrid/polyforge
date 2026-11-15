@@ -2369,7 +2369,7 @@ configuration cards; `aria-label` 「工作流」 / Workflow):
 
 One pf daemon is a Host serving one Cell per AIHub profile (`default` from
 `cli.toml`, one `cli-<profile>.toml` per named Cell). pi-web reads the
-registry only through pf: `lib/polyforge-cells.ts` runs `pf --json version`
+registry only through pf: `lib/polyforge-cells.ts` runs `pf --json --version`
 (its `capabilities`) and `pf --json cell list` (the daemon's
 `GET /profiles`), sanitized by `lib/polyforge-cells-pure.ts` to `profile`,
 `state`, `valid`, `reason`, `server`, `workspaces`, `dataDir`, `machineId`,
@@ -2379,11 +2379,18 @@ carried.
 
 - **Capability gate.** Every multi-Cell write (a Cell lifecycle write, a
   Host- or Cell-scoped config write or reload) needs `cells-v1`,
-  `config-host-cell-v1` and `cell-lifecycle-v1` in `pf --json version`'s
+  `config-host-cell-v1` and `cell-lifecycle-v1` in `pf --json --version`'s
   `capabilities`; without them the write is refused 400 with the upgrade
   hint and nothing is spawned, and `GET /api/polyforge/cells` answers
   `supported: false` + `upgradeHint`. There is no dual old/new path.
   `detectPolyforge` reports `capabilities` and `cellsSupported`.
+- **Read discipline (S194-10).** The capability read runs as `pf --json
+  --version` — the `--version` flag's machine line under `--json`, the same
+  bytes the `version` verb answers (`internal/polyforge/cli/verbs_version.go`)
+  — never as `pf --json version`: the task-report ledger whitelists the pf
+  verbs the dock may spawn (`e2e/polyforge-task-report-194.mjs` S194-10) and
+  admits the `--version` flag but not a `version` verb, so the verb form
+  broke the whitelist once (polyforge#18, fixed as #44) and would again.
 - **Routes.** `GET /api/polyforge/cells` (200 degradation, never 5xx);
   `POST /api/polyforge/cells` `{profile, server, apiKey, modelSource?}` →
   `pf cell add` with the key on stdin only (validated before any spawn:
@@ -2408,7 +2415,7 @@ carried.
   default Cell's pane. So no settings call reaches pf unscoped: a request
   without `host`/`profile` (the default pane's read, write, Reload, a history
   entry without a scope) is the default Cell's, and `pinPolyforgeScope`
-  (`lib/polyforge-config-scope.ts`, one `pf --json version` read) turns the
+  (`lib/polyforge-config-scope.ts`, one `pf --json --version` read) turns the
   scope into argv — `--profile default` for the default Cell too, `--profile
   NAME`, `--host` — for `config list|set|unset|reload|workspace`, and the
   workflow card's reads and step writes are the default Cell's
@@ -2421,7 +2428,7 @@ carried.
   `PF_PROFILE` or the cwd say: `pf --json ops status` (the Host aggregate,
   which starts from the default Cell's own facts — except a named Cell's
   read and reload, which read that Cell's status with `--profile NAME`),
-  `pf cell …` (its Cell positional) and `pf --json version`. Every write's
+  `pf cell …` (its Cell positional) and `pf --json --version`. Every write's
   history entry records its scope (`profile: "default"` too).
   `e2e/w367-default-cell-pinned.mjs` runs the server with `PF_PROFILE` and
   its cwd in a named Cell and asserts the exact argv.

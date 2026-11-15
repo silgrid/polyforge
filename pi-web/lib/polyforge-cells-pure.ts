@@ -3,11 +3,12 @@
  * Polyforge. One pf daemon is a Host serving one Cell per
  * AIHub profile; the Cell registry is read through `pf --json cell list`
  * (the daemon's GET /profiles) — never by parsing config files. Multi-Cell
- * writes are gated on the protocol capabilities `pf --json version`
- * reports, never on a bare version compare.
+ * writes are gated on the protocol capabilities `pf --json --version`
+ * reports (the `--version` flag's machine line; the `version` verb answers
+ * the same bytes), never on a bare version compare.
  */
 
-/** The protocol capabilities a multi-Cell write needs (pf `--json version`). */
+/** The protocol capabilities a multi-Cell write needs (pf `--json --version`). */
 export const POLYFORGE_CELL_CAPABILITIES = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] as const;
 
 /** The upgrade hint shown when a multi-Cell capability is missing. */
@@ -100,7 +101,7 @@ export interface PolyforgeScopeArgv {
 }
 
 /** the argv one pf call needs to address `scope` on a pf that
- *  reports `capabilities` (`pf --json version`), or null when that pf cannot
+ *  reports `capabilities` (`pf --json --version`), or null when that pf cannot
  *  address it. A multi-Cell pf always gets the explicit scope — the default
  *  Cell `--profile default` too — so its profile resolver (flag, PF_PROFILE,
  *  cwd, default) never sees an unscoped call. A pf without the multi-Cell
@@ -181,7 +182,7 @@ export function sanitizePolyforgeCells(machine: unknown): PolyforgeCell[] | null
   return out;
 }
 
-/** Sanitize `pf --json version`'s capabilities (absent on an older pf → []). */
+/** Sanitize `pf --json --version`'s capabilities (absent on an older pf → []). */
 export function sanitizePolyforgeCapabilities(machine: unknown): string[] {
   if (typeof machine !== "object" || machine === null) return [];
   const caps = (machine as { capabilities?: unknown }).capabilities;

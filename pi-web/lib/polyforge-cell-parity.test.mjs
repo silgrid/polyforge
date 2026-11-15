@@ -6,7 +6,7 @@
 // reads and writes its own workspaces with `--profile <name>`, and a mapping
 // the Host refuses (a path equal to or nested under another Cell's workspace)
 // comes back with the Host's own message. The stub answers the real pf wire:
-// `--json version` capabilities, the scoped `config list`, `config
+// `--json --version` capabilities, the scoped `config list`, `config
 // workspace`, `config set|unset` (a mapping write notifies the daemon, which
 // refuses an overlapping Cell with DAEMON-409 "Cell … was not changed"), and
 // `workflows`.
@@ -73,7 +73,7 @@ const opt = (name) => { const at = verb.indexOf(name); return at >= 0 ? verb[at 
 const save = () => fs.writeFileSync(${JSON.stringify(stateFile)}, JSON.stringify(s));
 const section = (path) => '[workspace."' + path + '"]';
 const nested = (a, b) => a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
-if (verb[0] === "version") out({ version: "v2.20.21", capabilities: ${JSON.stringify(MULTI)} });
+if (verb[0] === "--version") out({ version: "v2.20.21", capabilities: ${JSON.stringify(MULTI)} });
 if (verb[0] === "config" && verb[1] === "list") {
   if (host) out({ file: { sha256: "sha-host", exists: true }, items: [{ key: "max_concurrent_jobs", value: 6, source: "file", class: "live" }] });
   out({ file: { sha256: "sha-" + cell + "-" + file.sha, exists: true }, items: [
@@ -211,7 +211,7 @@ test("a named Cell's workflow card reads its own mapping and writes its own work
   assert.equal(doc.capable, true, doc.reason);
   assert.deepEqual(doc.workspaces.map((entry) => entry.workspace), [publicWs], "the public Cell's mapping, not the default's");
   assert.deepEqual(argvs(), [
-    ["--json", "version"],
+    ["--json", "--version"],
     ["--profile", "public", "--json", "config", "list"],
     ["--profile", "public", "--json", "config", "workspace", "--cwd", publicWs],
     ["--profile", "public", "--json", "workflows", "--cwd", publicWs],
@@ -237,7 +237,7 @@ test("a named Cell with no workspace says so and never reads the settings cwd un
   assert.equal(doc.capable, true);
   assert.deepEqual(doc.workspaces, [], "no workspace is read");
   assert.match(doc.reason ?? "", /Cell empty maps no workspace/);
-  assert.deepEqual(argvs(), [["--json", "version"], ["--profile", "empty", "--json", "config", "list"]]);
+  assert.deepEqual(argvs(), [["--json", "--version"], ["--profile", "empty", "--json", "config", "list"]]);
 });
 
 test("the workflows route passes the page's Cell through", () => {
