@@ -772,8 +772,13 @@ until this machine's resume or claim publishes the capsule chain — a
 paused ticket's kept scene carries it into the resume's own publishes; a
 blocked ticket's claim merges the pending record into the fresh capsule,
 publishes it at once and deletes the record only once that publish
-succeeded (a failed publish keeps it for the next claim's idempotent
-merge). A re-claim or `pf resume` on another machine does not see it;
+succeeded (a failed publish keeps it for the next claim). The merge
+compares each aspect's time: a pending chain, clear or skip applies only
+when it is not earlier than the capsule's same aspect, so a newer change
+the capsule carries (a later paused or running write, a running clear —
+a clear records its own time) is never overwritten by an older pending
+record; `pf override` and `pf watch` show a pending aspect only where it
+would apply. A re-claim or `pf resume` on another machine does not see it;
 aihub refuses pushes while the ticket is not running. A blocked
 `--clear-models` also clears a chain the sealed scene carries (a pending
 clear the claim applies). A ticket in a terminal state (wrapped,
