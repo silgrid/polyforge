@@ -24,7 +24,7 @@ func w47Order() []StepOrderLine {
 	return []StepOrderLine{
 		{ID: "build"},
 		{ID: "review", Gate: true, OnFail: "build", Waivable: true},
-		{ID: "publish"},
+		{ID: "publish", Last: true},
 		{ID: "merge", Skipped: true},
 	}
 }
