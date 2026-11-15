@@ -261,6 +261,7 @@ def collect(args):
                    % (wi, ", ".join(fixes), h["reason"], sources, wi))
         ops.append({"verb": "file", "key": key, "lane": "develop", "goal": "integrate: a new fix for %s, which still holds the green tag" % h.get("name", wi),
                     "content": content, "priority": "high", "labels": ["integration-fix"]})
+        ops.append({"verb": "attrs", "target": "key:" + key, "name": "integration_fix", "value": True})
         ops.append({"item": wi, "fix": ["key:" + key]})
         rulings.append({"item": wi, "ruling": "fix", "words": words, "at": at})
     for wi in flag(args, "--clear"):
@@ -372,6 +373,7 @@ def fullgate(args):
         content += "\n## Acceptance\n" + "".join("- %s%s%s passes on the fixed head (the full gate, %s, sh tests/check.sh)\n" % (BT, n, BT, us[0]["repo"]) for n in names)
         files.append({"verb": "file", "key": key, "lane": "develop", "goal": "%s: %s fails since %s" % (us[0]["repo"], ", ".join(names), item),
                       "content": content, "priority": "high", "labels": ["integration-fix"]})
+        files.append({"verb": "attrs", "target": "key:" + key, "name": "integration_fix", "value": True})
         moves.append({"item": item, "blame": ["key:" + key]})
     decision("red")
     if files:
@@ -844,6 +846,11 @@ func TestW404IntegrateLaneEndToEnd(t *testing.T) {
 	if c := *ticket.Content; !strings.Contains(c, "## Acceptance\n- `TestBroken` passes on the fixed head") {
 		t.Fatalf("the fix ticket's acceptance names the red check: %s", c)
 	}
+	// polyforge#52 AC4: the ticket carries the structured integration_fix
+	// marker — its own develop verification runs the full bar on it
+	if ticket.Attrs["integration_fix"] != true {
+		t.Fatalf("the fix ticket carries the integration_fix attr: %+v", ticket.Attrs)
+	}
 	if tags := strings.TrimSpace(gitRun(t, w.origin, "tag", "--points-at", main2)); tags != "" {
 		t.Fatalf("a red head is never tagged: %q", tags)
 	}
@@ -858,8 +865,10 @@ func TestW404IntegrateLaneEndToEnd(t *testing.T) {
 	if len(files) != 1 || files[0].Ref != fixRef {
 		t.Fatalf("the fix ticket's file write made on the call ledger, filing the ticket the item names: %+v", files)
 	}
-	if len(moves) != 1 || moves[0].Seq < files[0].Seq {
-		t.Fatalf("the attribution's move made after the ticket: %+v", moves)
+	// the marker write is an attrs op too: file, then integration_fix, then
+	// the attribution's move — in the records file's order
+	if len(moves) != 2 || files[0].Seq > moves[0].Seq || moves[1].Seq < moves[0].Seq {
+		t.Fatalf("the marker and the attribution's move made after the ticket, in order: %+v after %+v", moves, files)
 	}
 	fmt.Println("PASS I2 red gate triaged and attributed, fix ticket filed by a hub write with its acceptance, the round recorded")
 
@@ -920,8 +929,14 @@ func TestW404IntegrateLaneEndToEnd(t *testing.T) {
 		!strings.Contains(*nt.Content, "integration-ticket-key: hold-fix/"+r+"/1") || !strings.Contains(*nt.Content, "## Acceptance\n- the full gate is green") {
 		t.Fatalf("the hold's fix ticket: develop, high, queued, its acceptance and its stable key: %+v %v", nt, err)
 	}
+	if nt.Attrs["integration_fix"] != true {
+		t.Fatalf("the hold's fix ticket carries the integration_fix attr: %+v", nt.Attrs)
+	}
 	if files := w404Made(t, d.capsuleDir(b4a), "collect", stepcall.HubFile); len(files) != 1 || files[0].Ref != newFix {
 		t.Fatalf("collect's file write made on the call ledger, filing the ticket the hold names: %+v", files)
+	}
+	if marks := w404Made(t, d.capsuleDir(b4a), "collect", stepcall.HubAttrs); len(marks) != 2 {
+		t.Fatalf("collect's marker and fix-registration writes made on the call ledger: %+v", marks)
 	}
 	if rec := w.record(t, b4a); rec["result"] != "empty" || rec["hold_rulings"].(map[string]any)[r].(map[string]any)["ruling"] != "fix" ||
 		rec["hold_rulings"].(map[string]any)[r].(map[string]any)["words"] != "fix "+r+" — file another ticket" {

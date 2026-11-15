@@ -76,6 +76,9 @@ through the registration below.
           "priority": "high", "labels": ["integration-fix"]}` (`n` counting the item's
           tickets from 0; the acceptance is never empty and names every unit the ticket
           covers — that is what makes the ticket claimable; no attributed unit, no file);
+          right after each file write, one
+          `{"verb": "attrs", "target": "key:<this ticket's key>", "name": "integration_fix", "value": true}`
+          — the structured marker that makes the fix ticket's own develop verification run the full bar (a ticket without it runs the light tier);
           then per blamed item one `{"item": "<item>", "blame": ["key:<each of the item's
           keys above>"]}` — `integrate.py records` turns it into the item's record write:
           landed, this batch, one red round more, `revert.json`'s heads as its red heads,

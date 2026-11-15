@@ -210,17 +210,18 @@ def run_verify(
     env: Optional[Mapping[str, str]] = None,
     runtime: Optional[ContainerRuntime] = None,
     out: Optional[str] = None,
+    tier: str = "light",
 ) -> Run:
-    """verify.py --tier light over capsule, in-process; the result file at
-    out (default <capsule>/artifacts/verify/result.json). A repo carrying
-    .polyforge/Dockerfile.verify runs in its container on runtime (default
-    a fake engine running every container command on the host:
-    tests/fakebox.py)."""
+    """verify.py --tier <tier> (default light) over capsule, in-process; the
+    result file at out (default <capsule>/artifacts/verify/result.json). A
+    repo carrying .polyforge/Dockerfile.verify runs in its container on
+    runtime (default a fake engine running every container command on the
+    host: tests/fakebox.py)."""
     out = out or os.path.join(capsule, "artifacts", "verify", "result.json")
     if runtime is None:
         # never the host's docker: a test's run neither probes nor sweeps it
         runtime = FakeRuntime(os.path.join(os.path.dirname(capsule), "box-tmp"))
-    argv: List[str] = ["--tier", "light", "--capsule", capsule, "--engine", engine, "--out", out, *extra]
+    argv: List[str] = ["--tier", tier, "--capsule", capsule, "--engine", engine, "--out", out, *extra]
     so, se = io.StringIO(), io.StringIO()
     with redirect_stdout(so), redirect_stderr(se):
         code = verify.main(argv, step_env(env), runtime=runtime)

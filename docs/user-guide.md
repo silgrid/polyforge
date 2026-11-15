@@ -184,7 +184,8 @@ The order the system actually runs:
    reads a verification report), the default branch is synced in (on both
    lanes the `sync` step's agent runs `sync.py` and resolves a real conflict
    in place), and the lane's verifying step proves the synced tree:
-   develop's verification runs the project's light tier (`verify.py`),
+   develop's verification runs the project's light tier — the full bar on an
+   integration batch's fix ticket — (`verify.py`),
    micro's evidence step re-runs the repository's fast evidence
    (`run.py --plan-from`, on the host). You watch and answer; you do not drive the steps.
 6. **Deliver.** The workflow's own last steps finish the run: `publish`
@@ -262,8 +263,9 @@ The lane runs build, then review, sync, verification, publish and merge:
   agent resolves a real conflict in place, or asks you when it is not its to
   resolve.
 - **verification** runs the light tier (`verify.py`: the fast gates, the
-  affected unit tests and the e2e suites the change added, changed or
-  carries); a red it can place on the change rewinds the run to build, one it
+  affected unit tests, the e2e suites the change added, changed or carries,
+  and the change analysis's listed tests, add-only) — or, on an integration
+  batch's fix ticket, the full bar; a red it can place on the change rewinds the run to build, one it
   cannot is asked — you may waive it. The full bar runs once per batch, in
   the integration lane, over what landed.
 - **publish** pushes the branch and opens the PR; **merge** merges it into

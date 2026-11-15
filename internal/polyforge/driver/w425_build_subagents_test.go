@@ -24,7 +24,8 @@ func TestDevelopBuildPromptDelegatesToSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	def, err := readStepDefinition(filepath.Join(shippedWorkflowsDir, developBundle), "build", nil)
+	def, err := readStepDefinition(filepath.Join(shippedWorkflowsDir, developBundle), "build",
+		shippedVars(t, filepath.Join(shippedWorkflowsDir, developBundle), "build"))
 	if err != nil {
 		t.Fatal(err)
 	}

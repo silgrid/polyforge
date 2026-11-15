@@ -302,6 +302,7 @@ func (r *Runtime) writeWorkItemDoc(j *job, item *api.WorkItem) error {
 		Priority:   item.Priority,
 		Milestone:  item.Milestone,
 		BundleName: j.bundleName,
+		Attrs:      item.Attrs,
 		UpdatedAt:  nowStamp(),
 	}
 	if doc.Labels == nil {

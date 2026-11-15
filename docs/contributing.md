@@ -160,13 +160,22 @@ defaults. The report of a diff and the commands to run:
 ```
 
 **The light tier (develop).** The develop lane's
-verification runs `verify.py --tier light`:
+verification runs `verify.py --tier auto` — the light tier over every
+ticket but an integration batch's fix (its attrs carry the
+`integration_fix` marker the batch's full-gate writes; such a ticket runs
+the full bar, the engine planning `--full`, everything the light tier runs
+and the rest):
 `workflows/_shared/scripts/verify-scope --light` in each touched repo and in every nested engine root the diff
 reaches (a subdirectory with its own tracked `.polyforge/verify-scope.conf`,
 such as `pi-web/`; its commands run behind `cd <root> &&`), so the bar is
 the fast gates, the affected unit tests, the e2e suites the change added or
 changed or whose `carries:` meet it, plus the build's unit runs
-(`--unit-runs`). Under
+(`--unit-runs`) and the change analysis's listed tests
+(`--analysis artifacts/build/change-analysis.json`, the file develop's
+build writes at its close; the union is add-only — the engine's selection
+is never narrowed — under the analysis's `supplement_limit`, the lane's
+cap, cut in listed order past it and named in the result; a listed test
+that does not exist fails its check naming it). Under
 `--light` the conf's `forced_full=` globs and the `module_root=` spanning
 rule force nothing, a changed path no `carries:` declaration covers is
 diagnosed (the fast gates still cover it) instead of forcing full, and at a
