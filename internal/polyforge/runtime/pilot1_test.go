@@ -121,7 +121,8 @@ func TestWorkItemFileMaterializedAtStart(t *testing.T) {
 	hub.items = map[string]*api.WorkItem{
 		"wi_goal9": {ID: "wi_goal9", Slug: "proj#9", ProjectName: "proj",
 			Goal: goal, Content: &bg, Labels: []string{"pilot"},
-			Priority: api.PriorityHigh, Milestone: nil},
+			Priority: api.PriorityHigh, Milestone: nil,
+			Attrs: map[string]any{"integration_fix": true}},
 	}
 	sp := &scriptedSpawner{}
 	r, _, _ := newTestRuntime(t, hub, sp)
@@ -146,6 +147,12 @@ func TestWorkItemFileMaterializedAtStart(t *testing.T) {
 	}
 	if len(doc.Labels) != 1 || doc.Labels[0] != "pilot" || doc.Priority != api.PriorityHigh {
 		t.Fatalf("work-item.json must carry labels/priority: %+v", doc)
+	}
+	// the structured attrs ride the materialization: a step reads its own
+	// ticket's markers from them (an integration_fix ticket's verification
+	// runs the full bar)
+	if doc.Attrs["integration_fix"] != true {
+		t.Fatalf("work-item.json must carry the work item's attrs: %+v", doc)
 	}
 	if doc.BundleName != "demo-bundle" {
 		t.Fatalf("work-item.json must carry the bundle name: %+v", doc)
