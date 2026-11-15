@@ -1020,8 +1020,10 @@ func TestW079SkillTeachesModelsYaml(t *testing.T) {
 
 // TestW079RepoInventoryComesFromTheRegistry: SKILL.md teaches that the
 // repo inventory (and clone URLs) come from the aihub project registry and
-// that the cli.toml [workspace] mapping is the only placement source —
-// never the yaml. Any verb fragment that names repos/<name> worktrees must
+// that the [workspace] mapping of the Cell the invocation routes to
+// (cli.toml for the default Cell, cli-<profile>.toml for a named one;
+// polyforge#17) is the only placement source — never the yaml. Any verb
+// fragment that names repos/<name> worktrees must
 // say the same. (The ship fragment used to be the one that did; pf ship is
 // gone — polyforge#166 — so the SKILL.md sentence is the pinned subject.)
 func TestW079RepoInventoryComesFromTheRegistry(t *testing.T) {
