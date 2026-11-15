@@ -86,9 +86,13 @@ func TestW501NamedConfigGetShowsInheritedAgentLanguage(t *testing.T) {
 		t.Fatalf("named Cell get --json did not show inherited language from default Cell: %v", doc)
 	}
 
-	// both Cells unset: the effective default, like list.
-	emptyHost := writeFile(t, dir+"/cli.toml", "")
-	if got := getConfigGet(t, emptyHost, named, "alpha", false); got != "agent_language = en (source: default)\n" {
+	// both Cells unset: the effective default, like list. Its own
+	// directory, so the case rewrites no file the cases below read
+	// (review r1#9: the first cut reused the host's path).
+	emptyDir := t.TempDir()
+	emptyHost := writeFile(t, emptyDir+"/cli.toml", "")
+	emptyNamed := writeFile(t, emptyDir+"/cli-alpha.toml", "server = \"http://hub:1\"\napi_key = \"key\"\n")
+	if got := getConfigGet(t, emptyHost, emptyNamed, "alpha", false); got != "agent_language = en (source: default)\n" {
 		t.Fatalf("both unset must show the effective default:\n%q", got)
 	}
 
