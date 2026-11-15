@@ -1,3 +1,4 @@
+# carries: workflows/_shared/scripts/verify.py, workflows/_shared/scripts/tests/verifyfix.py
 """verify.py's tier: the line's --tier auto reads the work item's attrs —
 an integration_fix ticket (the marker an integration batch's full-gate
 writes) runs the FULL bar (the engine asked --full, its fast and full

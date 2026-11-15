@@ -1,3 +1,4 @@
+# carries: workflows/_shared/scripts/verify.py, workflows/_shared/scripts/pfstep/analysis.py
 """verify.py's change analysis (--analysis): the engine's plan runs whole
 and the analysis's tests run beside it — the union is add-only — under the
 analysis's supplement cap (the first entries in listed order, the rest cut
