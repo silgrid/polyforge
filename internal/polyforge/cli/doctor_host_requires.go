@@ -137,7 +137,7 @@ func hostRequiresRow(workspaces []string, engine, stepPath string, timeout time.
 // HEAD` leaves the diff empty, so the engine only reads its conf.
 func hostRequiresOf(engine, clone string) ([]hostRequire, error) {
 	var stdout, stderr bytes.Buffer
-	err := runBounded(hostRequiresProbeTimeout, clone, nil, &stdout, &stderr, "sh", engine, "--json", "--base", "HEAD")
+	err := runBounded(hostRequiresProbeTimeout, clone, nil, &stdout, &stderr, "python3", engine, "--json", "--base", "HEAD")
 	if err != nil {
 		if msg := lastLine(stderr.String()); msg != "" {
 			return nil, fmt.Errorf("%w: %s", err, msg)

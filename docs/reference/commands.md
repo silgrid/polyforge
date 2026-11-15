@@ -104,6 +104,10 @@ refusing with exit 1 and nothing claimed:
   section with content; a dated 「免分析」 the session writes on the owner's
   explicit skip counts as content; `pf submit <id> --allow-no-analysis`
   submits the ticket anyway. The check never judges what the section says.
+  A ticket that already made release progress — its event history carries
+  a session lifecycle event or a resume — is past the check: the
+  `pf ops end-session` takeover resubmits exactly such a ticket with a
+  plain `pf submit`, which the check no longer blocks (polyforge#47).
 
 The daemon's auto-pull skips a ticket either check would refuse: it stays
 queued, and `pf queue` marks it in the STATUS cell —
@@ -837,13 +841,16 @@ the lane's own identity.
   merged`; or, merged outside the lane, its merge commit is on the default
   branch and contains the verified head, `how: merged_elsewhere`); an open
   one must target the default branch, head the published branch and stand
-  at the verified head. No PR branch is updated with the default branch:
-  a forge refusal (a conflict with a default branch that moved) is the
-  sync step's again. Details: `repos[{name, pr_url, branch, head,
+  at the verified head, and origin's default branch must still be at the
+  base the verification result records (`details.repos[].base`, when it
+  records one). No PR branch is updated with the default branch: a default
+  branch that advanced after verification, or a forge refusal, is the sync
+  step's again. Details: `repos[{name, pr_url, branch, head,
   published, merge_commit, how, branch_side, by_this_run, why}]`,
   `merge_commits`. Exit 0: every PR landed; 1: a PR moved, is closed or
-  retargeted, was merged elsewhere off the verified head, or the forge
-  refused (the later PRs stay open; the merged ones are landed and a
+  retargeted, was merged elsewhere off the verified head, the default
+  branch advanced after the verified version (origin's default branch is no
+  longer the verified base), or the forge refused (the later PRs stay open; the merged ones are landed and a
   re-run takes them); 2: not judged (an unreadable file, a published repo
   the verification names no head for, gh or git unreachable). On exit 0
   `--landing-out` gets the landing record (`{state: landed, repos[{repo,
@@ -931,7 +938,10 @@ hold no credential.
   `.polyforge/Dockerfile.verify`), neither: the container when HEAD
   carries one, else the host; a replay is red only when its run failed
   on its assertions — one that could not run there, a build, setup,
-  compile or import error or a missing module or test runner dependency preflight (`node_modules/` or Playwright Chromium missing) in its output, is reported
+  compile or import error, a missing module, or a line the repository
+  itself declares as its toolchain's own (`not_runnable_rule=` in the
+  `.polyforge/verify-scope.conf` governing the replayed run's cwd — its
+  browser preflight's text, for example), in its output, is reported
   `not_runnable`, a difference to class (exit 1), never red), `carries` (every e2e suite the build added
   or changed declares a `carries:` that covers it) and `micro-bounds
   --plan <evidence.json>` (every changed path inside the repo's
@@ -981,7 +991,7 @@ hold no credential.
 The verification-scope engine is the workflow's too:
 `workflows/_shared/scripts/verify-scope`, with its dependency-audit helper
 `audit-deps` beside it. A step finds it in its lane snapshot,
-`$PF_SHARED_DIR/scripts/verify-scope` (read-only there: `sh <path>`) —
+`$PF_SHARED_DIR/scripts/verify-scope` (read-only there: `python3 <path>`) —
 `verify.py`'s only engine when `--engine` names none; a hand run uses the
 release checkout's copy.
 

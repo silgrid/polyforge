@@ -54,12 +54,10 @@ with `url`, `subdir` or `base` is refused.
 
 ### Choosing the project
 
-The project follows the work, not the repo: team work — anything the team
-itself changes, features, fixes, docs, config — and **external contributions**
-alike file to the **public project** (`polyforge`), the development mainline;
-the internal project carries only the internal layer (config defaults, guards)
-and the absorption of public changes. The rule lives in the routing skill
-(`SKILL.md` §Project routing).
+The project follows the work, not the repo — and which project a given
+work files to is not this skill's to hardcode: the workspace's or the
+repository's AGENTS.md states the routing rule; read it and follow it.
+The skill routes by intent only (`SKILL.md` §Project routing).
 
 ### Choosing the lane (`--bundle`)
 
@@ -171,8 +169,11 @@ clear. Then each item is a verifiable criterion written in the `Acceptance
  carrier` slot's shape (above): its proof — the command that shows the
 criterion holds and the directory that command runs in — before the carrier,
 for example `- AC1 the timeout is gone (proof: <the command that shows it>,
-run in <its directory>) — carried by build`, so the ticket can be submitted
-directly.
+run in <its directory>) — carried by build`, so the ticket passes the
+submit-time acceptance check. It is submitted once it passes both the
+acceptance and the analysis checks: the pre-submit analysis (below,
+`verbs/submit.md`) still has to be in the ticket — or the owner's dated
+「免分析」 — before `pf submit` takes it.
 Otherwise file it as usual without the section and write no guessed criteria:
 the submit-time acceptance check (`verbs/submit.md`) brings the interaction that
 settles them. Claiming a follow-up item (`verbs/followup.md`, Claim) whose

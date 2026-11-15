@@ -90,6 +90,21 @@ func w25engCommit(t *testing.T, dir, msg string) string {
 	return w25engGit(t, dir, "rev-parse", "HEAD")
 }
 
+// w25engCopyLib writes the engine's library (pfstep, top level) beside the
+// engine copy a fixture carries: the shipped engine imports it, so a
+// fixture modeling "a repo with the shipped engine" needs it too.
+func w25engCopyLib(t *testing.T, dir string) {
+	t.Helper()
+	lib := filepath.Join(w25engEnginePath(t), "..", "pfstep")
+	files, err := filepath.Glob(filepath.Join(lib, "*.py"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("the engine's library (workflows/_shared/scripts/pfstep): %v %v", files, err)
+	}
+	for _, src := range files {
+		w25engCopy(t, src, filepath.Join(dir, "workflows", "_shared", "scripts", "pfstep", filepath.Base(src)), 0o644)
+	}
+}
+
 // w25engClone builds a git fixture with the shipped engine (and optionally
 // the repo conf and a frozen seed script), commits a base, records
 // origin/main, and answers the clone dir and base SHA.
@@ -109,6 +124,7 @@ func w25engClone(t *testing.T, files map[string]string, conf string, frozen stri
 		w25engWrite(t, dir, ".polyforge/verify-scope.conf", conf)
 	}
 	w25engCopy(t, w25engEnginePath(t), filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), 0o755)
+	w25engCopyLib(t, dir)
 	if frozen != "" {
 		w25engCopy(t, frozen, filepath.Join(dir, ".polyforge", "verify-scope.sh"), 0o755)
 	}
@@ -1114,6 +1130,7 @@ func TestW25NpmByteContrast(t *testing.T) {
 			w25engWrite(t, dir, ".polyforge/verify-scope.conf", conf)
 			w25engCopy(t, frozen, filepath.Join(dir, ".polyforge", "verify-scope.sh"), 0o755)
 			w25engCopy(t, w25engEnginePath(t), filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), 0o755)
+			w25engCopyLib(t, dir)
 			frozenOut, frozenErr, frozenCode := w25engRun(t, dir, filepath.Join(dir, ".polyforge", "verify-scope.sh"), nil, "--base", base)
 			if frozenCode != 0 {
 				t.Fatalf("frozen seed exited %d: %s", frozenCode, frozenErr)

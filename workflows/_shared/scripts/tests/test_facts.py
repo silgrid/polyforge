@@ -520,5 +520,63 @@ class CarriesTest(GitCase):
         self.assertEqual(facts.js_imports("a/s.mjs", ["import\u2003'./x.mjs'"], have), [])
 
 
+class NotRunnableRuleTest(unittest.TestCase):
+    """The repository-declared not-runnable rules (polyforge#50 AC5): a
+    replay's classification hears the `not_runnable_rule=` lines of the
+    conf governing its cwd — a repository's own toolchain text is the
+    repository's to declare, not the lane script's to hardcode. Expected
+    values are derived from the declared pattern text itself and the Go
+    table of the generic rules, independent of the implementation."""
+
+    def test_declared_rule_classifies_not_runnable(self) -> None:
+        rules = [("demo", "custom-boom", r"^BOOM ")]
+        got = facts.replay_verdict(1, False, "noise\nBOOM from the build\n", rules)
+        self.assertEqual(got, ("not_runnable", {"toolchain": "demo", "rule": "custom-boom", "line": "BOOM from the build"}))
+
+    def test_undeclared_pattern_stays_red(self) -> None:
+        rules = [("demo", "custom-boom", r"^BOOM ")]
+        self.assertEqual(facts.replay_verdict(1, False, "unrelated failure\n"), ("red", None))
+        # a line the declared pattern does not anchor stays an assertion red
+        self.assertEqual(facts.replay_verdict(1, False, "later BOOM from nowhere\n", rules), ("red", None))
+
+    def test_generic_rules_still_apply(self) -> None:
+        # the generic builtin rules keep classifying with no declaration
+        self.assertEqual(facts.replay_verdict(1, False, "FAIL\tgithub.com/x/y [build failed]\n"),
+                         ("not_runnable", {"toolchain": "go", "rule": "build-failed", "line": "FAIL\tgithub.com/x/y [build failed]"}))
+        # a pi-web-shaped output is red unless the repository declares it
+        self.assertEqual(facts.replay_verdict(1, False, "node_modules/ is missing: run npm ci first\n"), ("red", None))
+
+    def test_rules_of_the_nearest_conf(self) -> None:
+        import tempfile
+        import shutil
+        tree = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(tree, ".polyforge"))
+            os.makedirs(os.path.join(tree, "pi-web", ".polyforge"))
+            with open(os.path.join(tree, ".polyforge", "verify-scope.conf"), "w") as f:
+                f.write("# comment\nnot_runnable_rule=root|R1|^ONE \nnot_runnable_rule=bad-line\n")
+            with open(os.path.join(tree, "pi-web", ".polyforge", "verify-scope.conf"), "w") as f:
+                f.write("not_runnable_rule=node|node-browser-preflight|^(?:node_modules/ is missing:|Playwright Chromium is missing: )\n")
+            self.assertEqual(facts.not_runnable_rules_of(tree, "pi-web"),
+                             [("node", "node-browser-preflight", r"^(?:node_modules/ is missing:|Playwright Chromium is missing: )")])
+            # the root's cwd reads the root's conf; a malformed line is skipped
+            self.assertEqual(facts.not_runnable_rules_of(tree, "."), [("root", "R1", "^ONE ")])
+            # a cwd under the root reads the root's conf when no nearer one exists
+            self.assertEqual(facts.not_runnable_rules_of(tree, "elsewhere"), [("root", "R1", "^ONE ")])
+            # a tree with no conf anywhere declares nothing
+            empty = tempfile.mkdtemp()
+            try:
+                self.assertEqual(facts.not_runnable_rules_of(empty, "."), [])
+            finally:
+                shutil.rmtree(empty)
+        finally:
+            shutil.rmtree(tree)
+
+    def test_declared_rule_applies_after_base_setup_too(self) -> None:
+        rules = [("demo", "custom-boom", r"^BOOM ")]
+        self.assertEqual(facts.replay_verdict(1, False, "prefix\nBOOM after the setup\n", rules),
+                         ("not_runnable", {"toolchain": "demo", "rule": "custom-boom", "line": "BOOM after the setup"}))
+
+
 if __name__ == "__main__":
     unittest.main()

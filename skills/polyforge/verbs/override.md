@@ -20,7 +20,7 @@ pf override <id>                                        # the view: every step, 
 pf override <id> --step <step-id> --models <h:m[:e],...>   # set the step's overlay chain (comma-separated, in order)
 pf override <id> --step <step-id> --clear-models         # clear it (the step composes from its usual sources again)
 pf override <id> --step <step-id> --skip                 # switch a lane-declared skippable step off (never dispatched, records skipped)
-pf override <id> --step <step-id> --unskip               # clear the skip switch
+pf override <id> --step <step-id> --unskip               # clear the overlay's own skip switch (a project-level skip is refused — see Skip rules)
 ```
 
 `--by <user>` records the operator (default: config `user_id` /
@@ -56,6 +56,20 @@ it hands off `waive` citing your words (waivable gates only). The skip needs a s
 skipped tail's wrap attrs move to the last running step exactly as the
 claim-time skip does.
 
+`--unskip` clears the overlay's own switch only. A step skipped at the
+**project level** — the workspace yaml's skip switch, fixed in the
+capsule at the ticket's first claim — is refused naming that skip: the
+overlay cannot restore a dispatch the project switched off (the driver
+honors the union of the two sets), and the project's own switch governs
+the claims made after it changes, never a ticket already claimed.
+
+A skip that would move the lane's last agent step onto a step that has
+**already started** is refused naming it: the running step was
+dispatched under the step order it read, and the obligations a mid-run
+skip hands the new last step (the moved wrap attrs, the
+published-record registration) were settled at that dispatch. Skip
+the tail before that step starts, or let it run.
+
 ## Success
 
 `step <id>: overlay models=… (posture running, by <user>)` plus
@@ -69,7 +83,7 @@ parked ticket). Every change is one `pf watch` event (`override_set` /
 |---|---|---|
 | `DAEMON-400` | a candidate without a harness prefix, an unknown harness, an effort its harness refuses | Quote the daemon's text; the shape is `<pi\|claude>:<model>[:<effort>]`. |
 | `DAEMON-400` | a pi model the Cell's step-agent `models.json` does not declare | Add the model there first (the operator agent dir's `models.json`), then retry; claude candidates are not file-checked. |
-| `DAEMON-409` | the step holds a live dispatch, already ran, or is not declared skippable | Set it on a step that has not started, or while the ticket is parked; for a gate that must pass, use the waive. |
+| `DAEMON-409` | the step holds a live dispatch, already ran, is not declared skippable, or is skipped at the project level (`--unskip` refused naming it) | Set it on a step that has not started, or while the ticket is parked; for a gate that must pass, use the waive; a project-level skip is the project's switch, not this ticket's. |
 | `DAEMON-403` | a step or task agent's process tree called | The overlay is the owner's move; call it from a human session. |
 | `DAEMON-404` | this daemon holds neither a job nor a capsule of the ticket | Set the overlay on the machine that runs (or last ran) the ticket. |
 

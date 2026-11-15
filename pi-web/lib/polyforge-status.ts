@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { isPolyforgeProfileName } from "./polyforge-cells-pure";
+import { isPolyforgeProfileName, sanitizePolyforgeCapabilities } from "./polyforge-cells-pure";
 import { isPolyforgeWorkItemId } from "./polyforge-cards-pure";
 import { execFileAsync } from "./exec-file";
 import { polyforgePfBin } from "./polyforge-pf-bin";
@@ -14,7 +14,8 @@ import type { PolyforgeOverrideView } from "./polyforge-overrides";
  * HTTP faces in `app/api/polyforge/**` only degrade and answer.
  *
  * Subprocess contract (pf CLI, verified live 2026-10-18):
- * - presence probe: `pf --version` (exit 0, no daemon needed)
+ * - presence probe: `pf --json --version` (exit 0, no daemon needed) → machine
+ *   `{ version, capabilities[] }`; an older pf answers a plain version line
  * - ops: `pf --json ops status` → machine `{ env_names, workspaces,
  *   workflows_dir, machine_id, jobs[], queue: { pending, running,
  *   max_concurrent }, … }`
@@ -374,53 +375,58 @@ export interface PolyforgePendingQuestion {
 
 // ---- transport ----
 
-/** Cached presence probe: `pf` reachable on PATH plus the version it
- *  reported. Cached server-side for 60s when present and for 5s when absent
- *  (a CLI installed while the server runs, or one a single
- *  timeout misjudged, reads present again on the first probe after those 5s).
- *  Any probe failure (ENOENT, timeout, kill) reads as absent — the UI
- *  affordance is gated on presence, never on daemon reachability. */
-let presenceCache: { present: boolean; version: string | null; expiresAt: number } | null = null;
+/** Cached presence probe: `pf` reachable on PATH plus the version and
+ *  protocol capabilities it reported. Cached server-side for 60s when present
+ *  and for 5s when absent (a CLI installed while the server runs, or one a
+ *  single timeout misjudged, reads present again on the first probe after
+ *  those 5s). Any probe failure (ENOENT, timeout, kill) reads as absent — the
+ *  UI affordance is gated on presence, never on daemon reachability. */
+let presenceCache: (PolyforgePresence & { expiresAt: number }) | null = null;
 
 export interface PolyforgePresence {
   present: boolean;
-  /** The version `pf --version` reported, verbatim; null when absent or unparseable. */
+  /** The version pf reported, verbatim; null when absent or unparseable. */
   version: string | null;
+  /** The protocol capabilities pf reported; [] when absent or an older pf
+   *  (a plain-text version line carries none). */
+  capabilities: string[];
+  /** The probe that answered: advances on every real spawn (a forced probe
+   *  or an expired cache), so a reader can key what it derived on it. */
+  window: number;
 }
 
 /** `pf` reachable on PATH (pi#108's original probe, boolean contract kept for
  *  its callers — the status route and the decision feed route). Same single
- *  `pf --version` spawn and cache (60s present, 5s absent) as
+ *  `pf --json --version` spawn and cache (60s present, 5s absent) as
  *  `probePolyforgeVersion`. */
 export async function probePolyforgePresent(): Promise<boolean> {
   return (await probePolyforgeVersion()).present;
 }
 
-/** The one `pf --version` spawn (presence + the reported version), cached
- *  module-side for 60s when present and 5s when absent. `force` bypasses the
- *  cache read (the settings section's 「重新检测」, pi#122) but still
- *  refreshes it — one spawn per probe, never a second detection
- *  implementation. */
+/** The one `pf --json --version` spawn (presence, the reported version and
+ *  the protocol capabilities), cached module-side for 60s when present and 5s
+ *  when absent. `force` bypasses the cache read (the settings section's
+ *  「重新检测」, pi#122) but still refreshes it — one spawn per probe, never a
+ *  second detection implementation. */
 export async function probePolyforgeVersion(force = false): Promise<PolyforgePresence> {
   const now = Date.now();
   if (!force && presenceCache && now < presenceCache.expiresAt) {
-    return { present: presenceCache.present, version: presenceCache.version };
+    const { present, version, capabilities, window } = presenceCache;
+    return { present, version, capabilities, window };
   }
-  let present = false;
-  let version: string | null = null;
+  let answer: Omit<PolyforgePresence, "window"> = { present: false, version: null, capabilities: [] };
   try {
-    const stdout = await runPfVersion(PRESENCE_PROBE_TIMEOUT_MS);
-    present = true;
-    version = parsePolyforgeVersion(stdout);
+    answer = { present: true, ...parsePolyforgeVersionLine(await runPfVersion(PRESENCE_PROBE_TIMEOUT_MS)) };
   } catch {
-    present = false;
+    // absent
   }
-  presenceCache = { present, version, expiresAt: now + (present ? PRESENCE_TTL_MS : ABSENCE_TTL_MS) };
-  return { present, version };
+  const presence: PolyforgePresence = { ...answer, window: (presenceCache?.window ?? 0) + 1 };
+  presenceCache = { ...presence, expiresAt: now + (presence.present ? PRESENCE_TTL_MS : ABSENCE_TTL_MS) };
+  return presence;
 }
 
 
-/** The one `pf --version` spawn. stdin is ignored (a pf that reads stdin must
+/** The one `pf --json --version` spawn. stdin is ignored (a pf that reads stdin must
  *  not turn a version probe into a timeout); stdout is collected, stderr is
  *  discarded, and the timeout kills a child that is still running.
  *
@@ -432,10 +438,10 @@ export async function probePolyforgeVersion(force = false): Promise<PolyforgePre
  *  only a child genuinely still running is killed and judged absent. */
 function runPfVersion(timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(polyforgePfBin(), ["--version"], { shell: false, stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn(polyforgePfBin(), ["--json", "--version"], { shell: false, stdio: ["ignore", "pipe", "ignore"] });
     let stdout = "";
     let settled = false;
-    const timedOut = () => new Error("pf --version timed out");
+    const timedOut = () => new Error("pf --json --version timed out");
     const timer = setTimeout(() => {
       setImmediate(() => {
         if (settled) return;
@@ -458,14 +464,30 @@ function runPfVersion(timeoutMs: number): Promise<string> {
       settled = true;
       clearTimeout(timer);
       if (code === 0) resolve(stdout);
-      else reject(new Error(`pf --version exited ${code ?? 1}`));
+      else reject(new Error(`pf --json --version exited ${code ?? 1}`));
     });
   });
 }
 
 const VERSION_VALUE_PATTERN = /^v?\d+\.\d+\.\d+(?:[-+][^\s]+)?$/;
 
-/** Version parse (pure): `pf --version` stdout verbatim when it is a
+/** The probe's stdout (pure): pf's machine line `{ version, capabilities }`,
+ *  or an older pf's plain version line (version only, no capabilities). */
+function parsePolyforgeVersionLine(stdout: string): Pick<PolyforgePresence, "version" | "capabilities"> {
+  let machine: unknown;
+  try {
+    machine = JSON.parse(stdout);
+  } catch {
+    return { version: parsePolyforgeVersion(stdout), capabilities: [] };
+  }
+  const version = (machine as { version?: unknown } | null)?.version;
+  return {
+    version: typeof version === "string" ? parsePolyforgeVersion(version) : null,
+    capabilities: sanitizePolyforgeCapabilities(machine),
+  };
+}
+
+/** Version parse (pure): a reported version verbatim when it is a
  *  semver-ish `v?X.Y.Z` line (a prerelease/build suffix tolerated — the
  *  reported string is the point); anything else → null (version absent,
  *  still present), never an error. */

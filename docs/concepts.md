@@ -356,9 +356,10 @@ that bar in a container of its own; one without it runs on
 the host as above. The image is built from that file alone — an empty build
 context, so the file must be self-contained: public base images, every tool
 at an exact pinned version — and must carry what the scope engine itself
-runs as well as the bar: `sh`, `bash`, `git`, `python3`, `awk` and the
-POSIX tools, plus every toolchain the conf's commands call (`go` for a Go
-repository's `go list`, `node`/`npm`, …). It is tagged
+runs as well as the bar: `python3` (the engine is a python3 program), `sh`,
+`bash` and `git` (its audit helper and the conf's commands are shell), plus
+every toolchain the conf's commands call (`go` for a Go repository's
+`go list`, `node`/`npm`, …). It is tagged
 `pf-verify-<repo>:<hash of the file>`, built only when the tag is missing
 (once, however many runs ask at the same moment; its log is
 `runtime-state/verify/<n>/<repo>/image-build.log`).
@@ -521,10 +522,13 @@ rewind — and reads no content, and no agent merges by hand:
   (`merged_elsewhere`); an open one must target the default branch, head the
   published branch and stand on origin at the verified head — and merges each
   open PR with `gh pr merge --merge --match-head-commit <verified head>`. A
-  moved default branch is **not** verified again and never merged into the
-  branch here: a conflict with it is the forge's refusal. A PR that moved,
-  closed, was retargeted, merged elsewhere off the verified head or refused
-  by the forge is exit 1: the gate FAILs back to `sync` naming it (counted in
+  default branch that moved after verification (origin's default branch no
+  longer at the base the verification result records in `details.repos[].base`)
+  is never merged into the branch here and never merged over: the merge
+  refuses it, and `sync` merges it, then the lane verifies and publishes again.
+  A PR that moved, closed, was retargeted, merged elsewhere off the verified
+  head or refused by the forge, or a default branch that advanced after the
+  verified base, is exit 1: the gate FAILs back to `sync` naming it (counted in
   `max_rewinds`); the merged ones stay landed and the re-run takes them by
   the landing rules. gh or git unreachable is `blocked`: fix it, then
   tell the step (or `pf resume`). The integration lane's revert takes the same lock.
@@ -803,8 +807,9 @@ setting:
   reply its words do not support, is `guarantee`, and an e2e scenario timed by a
   fixed delay, measuring before its state settles or carrying a wrong
   `carries:` is `test_weakened`, and so are a unit without its test-quality
-  record (`workflows/_shared/test_quality.md`: the behaviour its test observes,
-  why its red is expected, the change it catches), a test that only asserts
+  record (`workflows/_shared/test_quality.md`: the behaviour its test observes, how its
+  expected values are derived independently of the implementation, the change it
+  catches), a test that only asserts
   source text exists, a replayed red that contradicts the recorded reason, and an
   asynchronously settling state asserted on one read right after the action instead
   of a bounded poll (the bar's settle duty);

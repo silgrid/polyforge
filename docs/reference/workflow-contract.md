@@ -444,9 +444,13 @@ Every dispatch's prompt is six parts, in this order, and nothing else:
 
 1. **Identity and facts**: the work item, step, round and dispatch; the
    language to work in; the capsule root; the facts of this dispatch (a
-   pi step cannot start subagents; where downloads go). The language is
-   `[daemon] agent_language` (`en` or `zh-CN`), fixed per dispatch: a new
-   conversation takes the value in effect when it is dispatched; a
+   pi step cannot start subagents; where downloads go); the lane's step
+   order as it stands for this dispatch, its skipped steps and the last
+   step that runs marked — the opening of `artifacts/handoff.md`
+   carries the claim-time copy, so a mid-run `pf override --step <s>
+   --skip` reaches the restated order only (polyforge#47). The language
+   is `[daemon] agent_language` (`en` or `zh-CN`), fixed per dispatch: a
+   new conversation takes the value in effect when it is dispatched; a
    dispatch that resumes the previous conversation keeps that
    conversation's language. The dispatch's spawn-journal line records it
    (`language`).
@@ -690,8 +694,10 @@ never dispatched: its execution status is `skipped`, the event log records
 (a rewind that resets it to pending skips it again, with another event); a
 name the snapshot does not declare skippable is dispatched as usual. The
 work item completes when every step is `done` or `skipped`. The last step
-that runs is the lane's last step: the opening of `handoff.md` notes it so,
-and the `wrap_attrs` of the skipped steps at the lane's end pass to it — it
+that runs is the lane's last step: the step order a dispatch's header
+restates notes it (the opening of `handoff.md` carries the claim-time
+copy), and the `wrap_attrs` of the skipped steps at the lane's end pass
+to it — it
 is granted `wrap-attrs` and its `done` is refused until it registered them
 (develop's `publish`, when its project skips `merge`, registers the record
 `published.py` writes, `integration: {state: published, …}`).
@@ -702,10 +708,17 @@ switches a lane-declared skippable step off for THIS one work item without
 touching the file above: the driver re-reads the effective set (the claim's
 file union the overlay) before every step, so a skip set while the ticket
 runs governs the next step boundary — the step is never dispatched,
-records `skipped` with its `step_skipped` event, and the wrap attrs of a
-skipped tail move to the last running step exactly as above. The switch
+records `skipped` with its `step_skipped` event, the next dispatch's
+header restates the new step order (the opening of `handoff.md` keeps
+the claim-time copy), and the wrap attrs of a skipped tail move to the
+last running step exactly as above. The switch
 asks for a step that never started, and a step the lane does not declare
-skippable is refused with the waive as the alternative. The model-chain
+skippable is refused with the waive as the alternative. Two more skips
+are refused `DAEMON-409` (polyforge#47): a `--unskip` of a step the
+project switched off (the claim's file above — the per-ticket overlay
+cannot restore it), and a `--skip` that would move the lane's last step
+onto a step that has already started (its last-step obligations were
+settled at its dispatch). The model-chain
 half of the same overlay (`--models`) outranks every candidate source of
 that step's dispatches for the whole ticket; see
 [config.md](config.md#pf-override--the-per-step-overlay).

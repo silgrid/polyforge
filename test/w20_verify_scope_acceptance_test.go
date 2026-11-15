@@ -99,6 +99,18 @@ func w20Fixture(t *testing.T, initial map[string]string) (dir, base string) {
 	if err := os.Chmod(filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// the engine imports its library (pfstep), which ships beside it
+	libFiles, err := filepath.Glob(filepath.Join(src, "..", "pfstep", "*.py"))
+	if err != nil || len(libFiles) == 0 {
+		t.Fatalf("the engine's library (workflows/_shared/scripts/pfstep): %v %v", libFiles, err)
+	}
+	for _, lib := range libFiles {
+		libRaw, err := os.ReadFile(lib)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w20Write(t, dir, filepath.Join("workflows/_shared/scripts/pfstep", filepath.Base(lib)), string(libRaw))
+	}
 	w20Write(t, dir, ".polyforge/verify-scope.conf", string(confRaw))
 	w20Git(t, dir, "add", "-A")
 	w20Git(t, dir, "commit", "-q", "-m", "w20 base")
@@ -466,11 +478,24 @@ func TestW20PolyforgeRunExecutesReportedCommands(t *testing.T) {
 	logPath := filepath.Join(stub, "calls.log")
 	body := "#!/bin/sh\nprintf '%s\\n' \"$(basename \"$0\")\" >> \"$W20_LOG\"\n" +
 		"if [ -n \"${W20_FAIL_ARG:-}\" ] && printf '%s' \"$*\" | grep -q -- \"$W20_FAIL_ARG\"; then exit 1; fi\nexit 0\n"
-	for _, tool := range []string{"go", "gofmt", "python3", "npm"} {
+	for _, tool := range []string{"go", "gofmt", "npm"} {
 		p := filepath.Join(stub, tool)
 		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// the engine itself is a python3 program: its own invocation passes
+	// through to the real interpreter; a reported python3 command is still
+	// stubbed (logged, and able to fail).
+	realPython, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skipf("python3 is not installed: the engine needs it (%v)", err)
+	}
+	pyBody := "#!/bin/sh\ncase \"$1\" in\n*verify-scope) exec " + realPython + " \"$@\";;\nesac\n" +
+		"printf '%s\\n' \"python3\" >> \"$W20_LOG\"\n" +
+		"if [ -n \"${W20_FAIL_ARG:-}\" ] && printf '%s' \"$*\" | grep -q -- \"$W20_FAIL_ARG\"; then exit 1; fi\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(stub, "python3"), []byte(pyBody), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	env := []string{"PATH=" + stub + ":" + os.Getenv("PATH"), "W20_LOG=" + logPath}
 

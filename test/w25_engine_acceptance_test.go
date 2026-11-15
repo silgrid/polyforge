@@ -254,11 +254,24 @@ func TestW25E2EEngineShipsAndReportContract(t *testing.T) {
 	logPath := filepath.Join(stub, "calls.log")
 	body := "#!/bin/sh\nprintf '%s\\n' \"$(basename \"$0\")\" >> \"$W25E2E_LOG\"\n" +
 		"if [ -n \"${W25E2E_FAIL_ARG:-}\" ] && printf '%s' \"$*\" | grep -q -- \"$W25E2E_FAIL_ARG\"; then exit 1; fi\nexit 0\n"
-	for _, tool := range []string{"go", "gofmt", "python3"} {
+	for _, tool := range []string{"go", "gofmt"} {
 		p := filepath.Join(stub, tool)
 		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// the engine itself is a python3 program: its own invocation passes
+	// through to the real interpreter; a reported python3 command is still
+	// stubbed (logged, and able to fail).
+	realPython, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skipf("python3 is not installed: the engine needs it (%v)", err)
+	}
+	pyBody := "#!/bin/sh\ncase \"$1\" in\n*verify-scope) exec " + realPython + " \"$@\";;\nesac\n" +
+		"printf '%s\\n' \"python3\" >> \"$W25E2E_LOG\"\n" +
+		"if [ -n \"${W25E2E_FAIL_ARG:-}\" ] && printf '%s' \"$*\" | grep -q -- \"$W25E2E_FAIL_ARG\"; then exit 1; fi\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(stub, "python3"), []byte(pyBody), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	env := []string{"PATH=" + stub + ":" + os.Getenv("PATH"), "W25E2E_LOG=" + logPath}
 	out, _, code := w25e2eRun(t, dir, env, "--base", "HEAD")

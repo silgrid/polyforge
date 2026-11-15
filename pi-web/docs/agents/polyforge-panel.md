@@ -1229,7 +1229,7 @@ helpers, `directRows`, the flat direct area's row sequence,
   `isApiRequestAllowed` gate, 403). JSON-only `{message_id}`, validated
   before any spawn. pf below the **prompt floor**
   (`POLYFORGE_PROMPT_MINIMUM_PF_VERSION = "2.20.20"`, the release shipping
-  `pf msg prompt`; checked with a fresh `pf --version` per click) answers 400
+  `pf msg prompt`; checked with a forced presence probe per click) answers 400
   `{error, upgrade: true}` and spawns nothing. Then exactly one
   `pf --json msg prompt <id>` — one read-only pf task (5 min / 100000 tokens)
   that restates the message, its ≤10 most recent earlier messages, its
@@ -2238,7 +2238,9 @@ fallback.
 - All pf reads go through `execFileAsync` from `lib/exec-file.ts` (no shell);
   the ref is one closed argv positional, validated by `isPolyforgeWiRef`
   BEFORE any spawn.
-- Presence probe: `pf --version`, 3 s timeout, cached module-side for 60 s
+- Presence probe: `pf --json --version` (pf's machine line `{version,
+  capabilities}`; an older pf's plain version line reads as version-only with
+  no capabilities), 3 s timeout, cached module-side for 60 s
   when present and for 5 s when absent (one failed probe never
   hides pf for a minute; a CLI installed while the server runs, or one a
   single timeout misjudged, reads present on the first probe after those
@@ -2248,13 +2250,17 @@ fallback.
   result — the child is not killed and its own exit settles the probe; only a
   child still running at the bound is killed and reads as absent. The UI affordance is gated on presence, never on daemon
   reachability. **One detection implementation (pi#122):** the cache carries
-  `{present, version}` — `probePolyforgeVersion(force?)` returns both from the
-  single `pf --version` spawn (`force` bypasses the cache read; every probe
-  refreshes it), `probePolyforgePresent()` keeps its boolean contract by
+  `{present, version, capabilities, window}` — `probePolyforgeVersion(force?)`
+  returns them from the single `pf --json --version` spawn (`force` bypasses
+  the cache read; every probe refreshes it; `window` advances on every real
+  spawn, so a reader can key what it derived on it), `probePolyforgePresent()` keeps its boolean contract by
   delegating to it (its callers — the status route and the decision feed
   route — use the boolean), and `parsePolyforgeVersion`
   (pure) passes a semver-ish `v?X.Y.Z` line verbatim and reads anything else as
-  version-absent-but-present. No other module spawns `pf --version`.
+  version-absent-but-present. No other module spawns `pf --version` in any
+  spelling: the capability read (`readPolyforgeCapabilities`), the Settings
+  detection and the Cell scope pin all take the probe's answer
+  (polyforge#46; `e2e/polyforge-settings.mjs` S3 scans for a second spawn).
 - Ops: `pf --json ops status`, 10 s timeout, through one shared server-side
   reader (`getPolyforgeOpsStatus`): concurrent calls share the
   in-flight read, a completed read is reused for 1 s (`OPS_STATUS_REUSE_MS`)
@@ -2377,8 +2383,8 @@ configuration cards; `aria-label` 「工作流」 / Workflow):
 
 One pf daemon is a Host serving one Cell per AIHub profile (`default` from
 `cli.toml`, one `cli-<profile>.toml` per named Cell). pi-web reads the
-registry only through pf: `lib/polyforge-cells.ts` runs `pf --json --version`
-(its `capabilities`) and `pf --json cell list` (the daemon's
+registry only through pf: `lib/polyforge-cells.ts` reads the presence
+probe's `capabilities` and runs `pf --json cell list` (the daemon's
 `GET /profiles`), sanitized by `lib/polyforge-cells-pure.ts` to `profile`,
 `state`, `valid`, `reason`, `server`, `workspaces`, `dataDir`, `machineId`,
 `heartbeat`, `executionDisabled`, `cellMaxConcurrentJobs`, `maxConcurrent`,
@@ -2387,13 +2393,15 @@ carried.
 
 - **Capability gate.** Every multi-Cell write (a Cell lifecycle write, a
   Host- or Cell-scoped config write or reload) needs `cells-v1`,
-  `config-host-cell-v1` and `cell-lifecycle-v1` in `pf --json --version`'s
-  `capabilities`; without them the write is refused 400 with the upgrade
+  `config-host-cell-v1` and `cell-lifecycle-v1` in the presence probe's
+  `capabilities` (`pf --json --version`); every write gate, the Cell list
+  read and a config reload force the probe first, so they see the pf
+  installed now, while the polled reads take its 60 s cache; without them the write is refused 400 with the upgrade
   hint and nothing is spawned, and `GET /api/polyforge/cells` answers
   `supported: false` + `upgradeHint`. There is no dual old/new path.
   `detectPolyforge` reports `capabilities` and `cellsSupported`.
-- **Read discipline (S194-10).** The capability read runs as `pf --json
-  --version` — the `--version` flag's machine line under `--json`, the same
+- **Read discipline (S194-10).** The capabilities ride the presence probe's
+  one `pf --json --version` — the `--version` flag's machine line under `--json`, the same
   bytes the `version` verb answers (`internal/polyforge/cli/verbs_version.go`)
   — never as `pf --json version`: the task-report ledger whitelists the pf
   verbs the dock may spawn (`e2e/polyforge-task-report-194.mjs` S194-10) and
@@ -2423,7 +2431,7 @@ carried.
   default Cell's pane. So no settings call reaches pf unscoped: a request
   without `host`/`profile` (the default pane's read, write, Reload, a history
   entry without a scope) is the default Cell's, and `pinPolyforgeScope`
-  (`lib/polyforge-config-scope.ts`, one `pf --json --version` read) turns the
+  (`lib/polyforge-config-scope.ts`, the presence probe's capabilities) turns the
   scope into argv — `--profile default` for the default Cell too, `--profile
   NAME`, `--host` — for `config list|set|unset|reload|workspace`, and the
   workflow card's reads and step writes are the default Cell's
@@ -2581,6 +2589,11 @@ presentation):
   it: the Memory scope read, the Tasks list and the Messages list answer
   `cell` from a local `pf --json profile` (Memory in the tab's cwd), shown
   as `polyforge.tabCell` (`data-pf-tab-cell`). No per-tab selector.
+  `resolvePolyforgeCellScope` resolves that Cell once per presence-probe
+  `window` and cwd (polyforge#46): the polled Messages routes reuse it
+  instead of spawning `pf --json profile` and a capability read on every
+  request; the window's expiry (60 s present, 5 s absent) or a forced probe
+  (Re-detect) resolves it again.
 
 ## Settings detection (pi#122)
 

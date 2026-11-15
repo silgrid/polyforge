@@ -192,9 +192,10 @@ The order the system actually runs:
    PR, and the `merge` step merges it under the repo's merge lock and lands
    the work item (its agent runs `merge.py`); the integration lane later
    runs the full gate over what landed. The PR merges at the head the
-   verifying step ran over; a PR that moved, closed or that the forge
-   refused (a default branch that moved with a real conflict) sends the run
-   back to `sync`. When the work item declared an `owner-review:` artifact
+   verifying step ran over; a PR that moved or closed, a default branch that
+   advanced after the verified version (with or without a conflict), or a
+   merge the forge refused sends the run back to `sync`, which merges the
+   default branch again before the lane verifies and publishes anew. When the work item declared an `owner-review:` artifact
    (a screenshot matrix, a proof set), publish first shows it to you as a
    question (a `pf step ask`) and the merge waits until you answer 「过目通过」; a work item
    that declares none asks you nothing extra. Completion rides the merge; it

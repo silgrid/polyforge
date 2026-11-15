@@ -149,7 +149,8 @@ among them — find it) and in the release checkout,
 `<data-dir>/release/current/workflows/_shared/scripts/verify-scope`
 (`<data-dir>` is `$POLYFORGE_DATA_DIR` when set, else
 `~/.local/share/polyforge`), where a hand run finds it. A
-snapshot's copy is read-only, never executable: run it as `sh <path>`. This
+snapshot's copy is read-only, never executable: run it as `python3 <path>` (the
+engine is a python3 program). This
 repository declares its specifics in `.polyforge/verify-scope.conf`; a
 repository without that file gets the engine's conservative zero-config
 defaults. The report of a diff and the commands to run:
@@ -254,7 +255,7 @@ items that merged.
 - **The declarative conf.** `.polyforge/verify-scope.conf` is line-oriented
   (`#` comments and blank lines ignored; a value runs to the end of its line,
   so there is no trailing comment on a value line) and is never
-  shell-evaluated. Its keys, each with its exact form, are listed once in
+  evaluated. Its keys, each with its exact form, are listed once in
   [the config reference](reference/config.md#polyforgeverify-scopeconf--the-verification-bar):
   the analyzer pin `stack=go|npm|python|rust|none`, `go_harness=`, the commands
   (anonymous `fast_gate=` / `full_command=` lines, named
@@ -686,13 +687,20 @@ declaration.
   full-tier selection above an uncovered path is listed instead, and every
   other reason here selects the full tail.
 - **The conf keys.** `e2e_runner=` (the runner the selected suites are
-  appended to), `e2e_start_threshold=` (a positive light-tier count that
-  prefixes `E2E_SERVER_MODE=start` only when the selected count is strictly
-  greater and `e2e_runner=` is present), `suite_glob=` (replaces discovery),
+  appended to), `e2e_start_threshold=` together with `e2e_start_prefix=` (a
+  positive light-tier count and the prefix its strict excess puts before the
+  runner: each is the repository's own declaration, so the engine names no
+  repository's environment variable), `suite_glob=` (replaces discovery),
   `e2e_map=<glob>=<suite>` (replaces one suite's header outright) and
   `smoke_suite=<suite>` (the
   full-tier opt-in above), each with its exact form in [the
   config reference](reference/config.md#polyforgeverify-scopeconf--the-verification-bar).
+  The same table's `not_runnable_rule=` is the replay judge's sibling: a
+  repository declares the lines of its own toolchain's output that mean a
+  run never reached its tests' assertions (`facts.py build --replay` reads
+  them from the conf governing the replayed run's cwd), so the lane script
+  itself names no repository's error text — the stack-generic rules (a
+  build, setup, compile or import failure, a missing module) stay built in.
 - **Authored suites.** On `develop`, `build` writes a suite as one of its
   units, and review's `facts.py carries` lists a suite it adds or whose run
   a unit records whose `carries:` is missing, malformed, or matches none of

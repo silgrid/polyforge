@@ -121,6 +121,18 @@ func newBatchFixture(t *testing.T) *batchFixture {
 	} {
 		writeFile(t, f.seed, rel, body)
 	}
+	// the engine imports its library (pfstep), which ships beside it
+	libFiles, err := filepath.Glob(filepath.Join("..", "..", "..", "workflows", "_shared", "scripts", "pfstep", "*.py"))
+	if err != nil || len(libFiles) == 0 {
+		t.Fatalf("the engine's library (workflows/_shared/scripts/pfstep): %v %v", libFiles, err)
+	}
+	for _, lib := range libFiles {
+		libRaw, err := os.ReadFile(lib)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, f.seed, filepath.Join("workflows", "_shared", "scripts", "pfstep", filepath.Base(lib)), string(libRaw))
+	}
 	if err := os.Chmod(filepath.Join(f.seed, "workflows", "_shared", "scripts", "verify-scope"), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ const jiti = createJiti(import.meta.url);
 const lib = await jiti.import("./polyforge-messages.ts");
 const pure = await jiti.import("./polyforge-messages-pure.ts");
 const cells = await jiti.import("./polyforge-cells.ts");
+const status = await jiti.import("./polyforge-status.ts");
 
 test("the Messages floor is 2.20.12 and below it the capability rep says upgrade", async () => {
   // the contact list needs `pf msg contacts` (2.20.12).
@@ -815,7 +816,7 @@ test("the prompt read is one `pf --json msg prompt <id>` behind its own floor", 
 
 /** A stub pf that reports the multi-Cell capabilities and resolves the
  *  public Cell, logging every argv, answering the Messages panel's reads. */
-function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public" } = {}) {
+async function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pf-cellmsg-"));
   const log = join(dir, "calls.log");
   writeFileSync(log, "");
@@ -847,13 +848,15 @@ process.exit(2);
     else process.env.PF_BIN = previous;
     rmSync(dir, { recursive: true, force: true });
   });
+  // A new stub is a new pf: refresh the presence probe so its capabilities are read.
+  await status.probePolyforgeVersion(true);
   return () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
 }
 
 const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && a[1] !== "--version" && !(a[1] === "profile"));
 
 test("the Messages panel's reads all carry the pinned Cell's --profile (AC4)", async (t) => {
-  const calls = cellPf(t);
+  const calls = await cellPf(t);
   const scope = await cells.resolvePolyforgeCellScope();
   assert.equal(scope.cell, "public");
   assert.deepEqual(scope.pin.prefix, ["--profile", "public"]);
@@ -876,7 +879,7 @@ test("the Messages panel's reads all carry the pinned Cell's --profile (AC4)", a
 });
 
 test("a pf without the multi-Cell protocol keeps today's unflagged Messages reads", async (t) => {
-  const calls = cellPf(t, { capabilities: [], profile: "" });
+  const calls = await cellPf(t, { capabilities: [], profile: "" });
   const scope = await cells.resolvePolyforgeCellScope();
   assert.deepEqual(scope.pin.prefix, []);
   const read = await lib.readPolyforgeMessages({ withGroups: true, pin: scope.pin.prefix });
