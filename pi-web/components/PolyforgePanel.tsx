@@ -460,7 +460,7 @@ export function rereadToolIds(
   return out;
 }
 
-export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, allLines, scrollRef, emptyMessage, resetKey }: {
+export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, allLines, scrollRef, emptyMessage, resetKey, resetFollow }: {
   wi: string | null;
   profile?: string;
   running: boolean;
@@ -473,6 +473,12 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   scrollRef: RefObject<HTMLDivElement | null>;
   emptyMessage?: string;
   resetKey?: string;
+  /** What a reset does with the follow (polyforge#48 AC5): "bottom" (the
+   *  default, every selection and the automatic step follow) pins the region
+   *  to its bottom; "step" — the panel's, for a MANUAL DAG choice — unpins
+   *  and scrolls the selected step's first block head into view with the
+   *  least scrolling, so the DAG above stays on screen whenever it fits. */
+  resetFollow?: "bottom" | "step";
 }) {
   const { t, locale } = useI18n();
   const [visibleCount, setVisibleCount] = useState(PROGRESS_RENDER_CHUNK);
@@ -496,7 +502,16 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   const layout = progressBlocks(lines);
   const lastBlockId = layout.blocks.length > 0 ? lines[layout.blocks[layout.blocks.length - 1].start]?.id ?? null : null;
   const streamed = Boolean(snapshot?.available && lines.length > 0);
-  useEffect(() => {
+  // polyforge#48 (AC5): the reset is a LAYOUT effect on purpose — it must
+  // set the follow state before the follow effect below reads it in the
+  // same commit, so a manual DAG choice never flashes through the bottom
+  // first. resetFollow "step" unpins and scrolls the selected step's first
+  // block head into view with the least scrolling (already in view: nothing;
+  // below: the head lands at the region's bottom edge; above: back up to
+  // align tops) — the DAG above stays on screen whenever the geometry
+  // allows, and the unfixed tree's jump to the very bottom is gone. With no
+  // block to show yet (the records still loading) the bottom follow holds.
+  useLayoutEffect(() => {
     selection.current = wi;
     setVisibleCount(PROGRESS_RENDER_CHUNK);
     setFolded(new Map());
@@ -504,10 +519,32 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setDetails(new Map());
     openTools.current = new Set();
     inFlight.current = new Set();
-    pinned.current = true;
-    setAtBottom(true);
     setAtTop(true);
-  }, [wi, resetKey]);
+    const region = scrollRef.current;
+    const head = region?.querySelector<HTMLElement>("[data-pf-progress-block]") ?? null;
+    if (resetFollow !== "step" || !region || !head) {
+      pinned.current = true;
+      setAtBottom(true);
+      return;
+    }
+    pinned.current = false;
+    const hr = head.getBoundingClientRect();
+    const rr = region.getBoundingClientRect();
+    const graph = region.querySelector<HTMLElement>("[data-pf-detail-graph]");
+    const graphTop = graph ? graph.getBoundingClientRect().top - rr.top + region.scrollTop : -1;
+    const headTop = hr.top - rr.top + region.scrollTop;
+    const graphIn = graph ? graph.getBoundingClientRect().bottom <= rr.bottom && graph.getBoundingClientRect().top >= rr.top : false;
+    if (!(hr.top >= rr.top && hr.bottom <= rr.bottom) || !graphIn) {
+      // The clicked step's records start in view with the least scrolling,
+      // the DAG above them kept on screen whenever the two fit in one
+      // viewport (the DAG's top becomes the region's top); when they do not
+      // fit, the head alone aligns to the top — the records win.
+      const target = graphTop >= 0 && headTop - graphTop <= rr.height ? graphTop : headTop;
+      region.scrollTop = Math.max(0, target);
+    }
+    setAtBottom(isProgressPinnedToBottom(region));
+    setAtTop(isProgressAtTop(region));
+  }, [wi, resetKey, resetFollow]);
   useEffect(() => {
     const total = snapshot?.lines.length ?? 0;
     if (visibleCount >= total) return;
@@ -2158,7 +2195,7 @@ export function PolyforgePanel({
                               onApplied={onRefresh}
                             />
                           )}
-                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? ""} echoes={detailEchoes} allLines={progressSnapshot?.lines ?? EMPTY_PROGRESS_LINES} scrollRef={detailScrollRef} />
+                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? ""} resetFollow={selectedStepManual ? "step" : "bottom"} echoes={detailEchoes} allLines={progressSnapshot?.lines ?? EMPTY_PROGRESS_LINES} scrollRef={detailScrollRef} />
                         </>
                       ) : (
                       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>{t("polyforge.selectJob")}</div>
