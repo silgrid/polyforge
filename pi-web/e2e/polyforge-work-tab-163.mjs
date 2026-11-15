@@ -871,7 +871,7 @@ try {
     // read names its Cell; polyforge#44: through the whitelisted --version
     // face), paired with the profile read the tab already makes — also not a
     // state detection.
-    const stateCalls = calls().filter((argv) => argv[0] !== "--version" && argv[0] !== "version");
+    const stateCalls = calls().filter((argv) => argv[0] !== "--version");
     assert.equal(stateCalls.filter((argv) => !verbs.has(argv[0])).length, 0,
       `no new pf verb was spawned to detect the state ${JSON.stringify(stateCalls.filter((argv) => !verbs.has(argv[0])))}`);
   }); });
