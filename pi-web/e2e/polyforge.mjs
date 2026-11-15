@@ -1642,6 +1642,34 @@ try {
     assert.equal(await controls.locator("[data-pf-step-controls-model]").inputValue(), "", "the previous step's typed model is gone");
     assert.equal(await controls.locator("[data-pf-step-controls-applied]").count(), 0, "the previous step's applied feedback is gone");
     assert.equal(await controls.locator("[data-pf-step-controls-error]").count(), 0, "no error line carries over");
+    // review r1#7: the ERROR half — a refused write's typed words must not
+    // carry to the next step either.
+    setState({ overrideView: OVERRIDE_VIEW_P25, overrideRefuse: { code: "DAEMON-409", detail: "step alpha-plan has a live dispatch (its status is in_progress): the overlay is for steps without one" } });
+    await controls.locator("[data-pf-step-controls-model]").fill("ovr/p48-refused");
+    await controls.locator("[data-pf-step-controls-apply]").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-error]").count()) === 1, "the refused write's typed words show on this step");
+    assert.ok((await controls.locator("[data-pf-step-controls-error]").innerText()).includes("live dispatch"), "the refusal's detail shows verbatim");
+    // the browser logs this scenario's own refused write as a network console
+    // entry (a 409 the assertion above demanded) — it leaves the collection
+    // here, like P25C's.
+    const entry = errors.findIndex((line) => line.includes("409"));
+    if (entry >= 0) errors.splice(entry, 1);
+    setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
+    await node("bravo-code").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-skip]").count()) === 1, "the skippable step's controls render again");
+    assert.equal(await controls.locator("[data-pf-step-controls-error]").count(), 0, "the previous step's error line is gone");
+    assert.equal(await controls.locator("[data-pf-step-controls-model]").inputValue(), "", "the refused step's typed model is gone too");
+    // review r1#7: the TICKET half of the key — a switch to another ticket
+    // and back starts the controls fresh as well.
+    await panel.locator(`[data-pf-card-wi="${WIP2R3}"]`).click();
+    await pollUntil(async () => (await panel.locator("[data-pf-detail-title]").getByText(SLUG2R3, { exact: true }).count()) > 0, "the other ticket's detail opens");
+    await panel.locator(`[data-pf-card-wi="${WIP25}"]`).click();
+    await pollUntil(async () => (await panel.locator("[data-pf-detail-title]").getByText(SLUGP25, { exact: true }).count()) > 0, "the first ticket's detail reopens");
+    await node("bravo-code").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-skip]").count()) === 1, "the controls render after the ticket round-trip");
+    assert.equal(await controls.locator("[data-pf-step-controls-model]").inputValue(), "", "the ticket round-trip leaves the controls fresh");
+    assert.equal(await controls.locator("[data-pf-step-controls-applied]").count(), 0, "no applied feedback survives the ticket round-trip");
+    assert.equal(await controls.locator("[data-pf-step-controls-error]").count(), 0, "no error line survives the ticket round-trip");
   });
 
   // P48C — polyforge#48 (AC5): a manual DAG choice brings the clicked step's
