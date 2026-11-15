@@ -11,6 +11,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/polyforge/gitops"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
@@ -279,6 +281,78 @@ func TestPendingOverrideClearTombstoneDropsCapsuleChain(t *testing.T) {
 	}
 	if e := ov.Steps["fix"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/fix-chain" {
 		t.Fatalf("the chain the clear did not name must survive the merge: %+v", e)
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishWrapped); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+// The claim merges the pending record into the fresh capsule first and
+// deletes it only after that capsule's first publish succeeded (the
+// owner ruling of 2026-11-15, row 2): a publish that fails — or a crash
+// before it — leaves the record for the next claim, whose merge is
+// idempotent.
+func TestPendingOverrideKeptUntilFirstPublish(t *testing.T) {
+	r, _ := pendingEnv(t)
+	const wi = "wi_ov14"
+	if err := r.savePendingOverrides(wi, map[string]*capsule.StepOverride{
+		"fix": {Models: []string{"pi:ov/kept"}, ModelsBy: "usr_1"},
+	}); err != nil {
+		t.Fatalf("save pending: %v", err)
+	}
+	real := pendingPublishFn
+	t.Cleanup(func() { pendingPublishFn = real })
+	// the first claim's publish fails
+	pendingPublishFn = func(ctx context.Context, o gitops.Opts, msg string) (string, bool, gitops.PushTimings, error) {
+		return "", false, gitops.PushTimings{}, errors.New("injected: the hub is unreachable")
+	}
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	j := r.jobOf(wi)
+	if j == nil {
+		t.Fatal("a failed publish of the merged record must not fail the claim")
+	}
+	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := ov.Steps["fix"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/kept" {
+		t.Fatalf("the claim must merge the pending record first: %+v", e)
+	}
+	if pend := readPendingFile(t, r); pend == nil || pend[wi] == nil {
+		t.Fatal("the pending record must survive a claim whose first publish failed")
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("blocked Stop: %v", err)
+	}
+	// the next claim merges it again (idempotent) and, its publish
+	// succeeding, deletes it
+	published := false
+	pendingPublishFn = func(ctx context.Context, o gitops.Opts, msg string) (string, bool, gitops.PushTimings, error) {
+		sha, pushed, tm, err := real(ctx, o, msg)
+		published = err == nil && pushed
+		return sha, pushed, tm, err
+	}
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("re-claim: %v", err)
+	}
+	j = r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the re-claim must run to a live agent")
+	}
+	if !published {
+		t.Fatal("the re-claim must publish the merged capsule before deleting the record")
+	}
+	ov, err = capsule.ReadStepOverrides(j.capsuleDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := ov.Steps["fix"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/kept" {
+		t.Fatalf("the re-claim's merge: %+v", e)
+	}
+	if pend := readPendingFile(t, r); pend != nil && pend[wi] != nil {
+		t.Fatalf("a published claim must delete the record: %+v", pend[wi])
 	}
 	if err := r.Stop(context.Background(), wi, protocol.FinishWrapped); err != nil {
 		t.Fatalf("Stop: %v", err)
