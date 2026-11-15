@@ -2,6 +2,11 @@
 // carries: app/api/polyforge/polyforge-progress-tool-routes*
 // — job-detail execution progress as structured rendering.
 //
+// (owner-intentional change, polyforge#24 by ruling — not a regression): the
+// detail's execution progress renders the SELECTED step's records (default:
+// the current step; a DAG click switches it), so the block scenarios select
+// their step on the DAG before asserting its blocks and lines (polyforge#41).
+//
 // Authored PRE-CODE against artifacts/spec.md (Acceptance criteria + `####
 // Scenario` blocks); it never reads `code`'s implementation. It drives only
 // the interfaces the spec and `artifacts/plan.md` pin: the existing Jobs tab
@@ -504,6 +509,10 @@ try {
       eventLine("lone-done", "00:00:16 ■ grill +15s", "step_done", "dim", eventBase + 15_000),
     ]);
     await openDetail(page);
+    // (owner-intentional change, polyforge#24 by ruling): the detail's execution
+    // progress renders the selected step's blocks — select the step on the DAG
+    // first (the default selection is the current step, code, which ran nothing).
+    await dagStep(page, "grill").click();
     const blocks = progressBlock(page).locator("[data-pf-progress-block]");
     await waitFor(async () => (await blocks.count()) === 1, "a lone step/spawn block still renders as a block");
     const head = blocks.first().locator("[data-pf-progress-block-toggle]").first();
@@ -523,12 +532,17 @@ try {
       eventLine("h1", "00:00:01 ▶ grill #1 · pi:e2e/model", "step_started", "accent", at),
       line("h1-body", "narration", "E2E-S271-HEAD-BODY"),
       eventLine("h1-done", "00:00:16 ■ grill +15s", "step_done", "dim", at + 15_000),
-      eventLine("h2", "00:00:30 ▶ spec #1 · pi:e2e/model", "step_started", "accent"),
+      eventLine("h2", "00:00:30 ▶ grill #2 · pi:e2e/model", "step_started", "accent"),
       line("h2-body", "narration", "E2E-S271-NO-TIMES"),
     ]);
     await openDetail(page);
+    // (owner-intentional change, polyforge#24 by ruling): the progress renders
+    // the selected step's blocks, and the second spawn is a rerun of the same
+    // step, so selecting grill renders both rounds — the same-step
+    // multi-block guarantee #24 keeps.
+    await dagStep(page, "grill").click();
     const blocks = progressBlock(page).locator("[data-pf-progress-block]");
-    await waitFor(async () => (await blocks.count()) === 2, "two blocks render");
+    await waitFor(async () => (await blocks.count()) === 2, "two rounds of the selected step render two blocks");
     const timedHead = blocks.nth(0).locator("[data-pf-progress-block-toggle]").first();
     await timedHead.click();
     await waitFor(async () => (await timedHead.getAttribute("aria-expanded")) === "true", "the older block expands");
