@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
@@ -332,12 +333,24 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 				writeErrOf(w, err)
 				return
 			}
-		} else if status == capsule.StepInProgress || status == capsule.StepDone {
-			// the un-skip is the cleanup of the switch itself: a step the
-			// switch already turned off (skipped) or one that never
-			// started (pending) may un-skip; a step that RAN cannot
-			writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has started (its status is %s): the skip switch is for steps that never started", req.Step, status))
-			return
+		} else {
+			// an un-skip the effective set would keep anyway is refused
+			// naming what it is (polyforge#47 AC2): the step is skipped at
+			// the project level — the workspace yaml's switch the daemon
+			// fixed in the capsule at its first claim — and the per-ticket
+			// overlay cannot restore it (the driver honors the union of the
+			// two). Accepting it reported a change that never took effect.
+			if slices.Contains(driver.ReadSkippedSteps(scene.capsuleDir), req.Step) {
+				writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s is skipped at the project level (the workspace yaml's skip switch, fixed in this capsule at its first claim), so the per-ticket overlay cannot un-skip it: the project's switch governs the claims made after it changes — skip it on another step, or change the project's switch and file a new ticket", req.Step))
+				return
+			}
+			if status == capsule.StepInProgress || status == capsule.StepDone {
+				// the un-skip is the cleanup of the switch itself: a step the
+				// switch already turned off (skipped) or one that never
+				// started (pending) may un-skip; a step that RAN cannot
+				writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has started (its status is %s): the skip switch is for steps that never started", req.Step, status))
+				return
+			}
 		}
 	} else if status == capsule.StepInProgress && scene.live && scene.posture == runtime.OverridePostureRunning {
 		writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has a live dispatch (its status is %s): the overlay is for steps without one — set it while the work item is parked, or on another step", req.Step, status))
