@@ -16,6 +16,12 @@
 // asserted, none weakened; the over-bound omitted marker is the authored
 // e2e/polyforge-238.mjs suite's (S238-10). Absence checks settle on a probe
 // request the page issues after the fact (N8), never a fixed sleep.
+// (owner-intentional change, polyforge#24 by ruling — not a regression): the
+// detail's execution progress renders the SELECTED step's records — the
+// default selection follows the current step, a DAG click switches it — so
+// S210-06 selects a step on the DAG before asserting its blocks and lines
+// (polyforge#41: same-step rerun blocks all stay, the unselected step's lines
+// stay out).
 //
 // Originally authored PRE-CODE against artifacts/spec.md (Acceptance criteria + `####
 // Scenario` blocks). The suite drives the panel through the existing Jobs tab
@@ -356,23 +362,37 @@ try {
     const startHead = progressBlock(page).locator("[data-pf-progress-block-toggle]").first();
     const startTitle = await startHead.getAttribute("title");
     assert.ok(startTitle.includes("step_started") && startTitle.includes("00:00:01 ▶ step-code #1 · pi:e2e/model"), `the head carries the absorbed start line: ${startTitle}`);
-    // (reverses #210's current-step-only tail by ruling): a later
-    // step's lines join the stream and the earlier step's lines stay.
-    page.__progress.body = snapshot([...CODE_LINES, eventLine(8, "00:00:20 ▶ step-review #1 · pi:e2e/model", "step_started", "accent"), entry(9, "E2E-STEP-REVIEW-NARRATION"),
-      eventLine(10, "00:00:21 ? step-review", "needs_input", "amber")]);
+    // (owner-intentional change, polyforge#24 by ruling): the execution progress
+    // renders the selected step's records. The default selection follows the
+    // current step (step-code here); a rerun of the selected step keeps every
+    // round's block, and a later step's lines render once its step is selected
+    // on the DAG — the unselected step's lines stay out of the stream.
+    page.__progress.body = snapshot([...CODE_LINES,
+      eventLine(8, "00:00:20 ▶ step-code #2 · pi:e2e/model", "step_started", "accent"),
+      entry(9, "E2E-STEP-CODE-RERUN-NARRATION"),
+      eventLine(10, "00:00:25 ▶ step-review #1 · pi:e2e/model", "step_started", "accent"),
+      entry(11, "E2E-STEP-REVIEW-NARRATION"),
+      eventLine(12, "00:00:26 ? step-review", "needs_input", "amber")]);
     await tick(page, 2000);
-    await waitFor(async () => /E2E-STEP-REVIEW-NARRATION/.test(await progressBlock(page).innerText()), "the later step's lines join");
-    assert.equal(await progressBlock(page).locator('[data-pf-progress-kind="event"]').getAttribute("data-pf-progress-tone"), "amber", "a lifecycle line carries its tone");
-    // (owner intentional change): two spawns form two folded
-    // blocks and only the newest is expanded, so the earlier block's lines are
-    // one click away rather than silently dropped. Expand it, then assert the
-    // stream order is unchanged.
+    await waitFor(async () => (await dagStep(page, "step-code").getAttribute("data-pf-step-selected")) === "true", "the default selection follows the current step");
+    await waitFor(async () => /E2E-STEP-CODE-RERUN-NARRATION/.test(await progressBlock(page).innerText()), "the selected step's later round joins");
+    assert.ok(!(await progressBlock(page).innerText()).includes("E2E-STEP-REVIEW-NARRATION"), "the unselected step's lines stay out");
+    // two rounds of the selected step form two folded blocks and only the
+    // newest is expanded, so the earlier round's lines are one click away
+    // rather than silently dropped. Expand it, then assert the order unchanged.
     const firstBlock = progressBlock(page).locator("[data-pf-progress-block-toggle]").first();
-    assert.match(await firstBlock.innerText(), /code #1 · 3 lines/, "the earlier block's header names its step, spawn and count");
+    assert.match(await firstBlock.innerText(), /code #1 · 3 lines/, "the earlier round's header names its step, spawn and count");
     await firstBlock.evaluate((el) => el.click());
-    await waitFor(async () => /E2E-STEP-CODE-NARRATION/.test(await progressBlock(page).innerText()), "the earlier step's lines expand");
+    await waitFor(async () => /E2E-STEP-CODE-NARRATION/.test(await progressBlock(page).innerText()), "the earlier round's lines expand");
     const text = await progressBlock(page).innerText();
-    assert.ok(text.indexOf("E2E-STEP-CODE-NARRATION") >= 0 && text.indexOf("E2E-STEP-CODE-NARRATION") < text.indexOf("E2E-STEP-REVIEW-NARRATION"), `the earlier step's lines stay, in order: ${text}`);
+    assert.ok(text.indexOf("E2E-STEP-CODE-NARRATION") >= 0 && text.indexOf("E2E-STEP-CODE-NARRATION") < text.indexOf("E2E-STEP-CODE-RERUN-NARRATION"), `the earlier round's lines stay, in order: ${text}`);
+    // the later step's lines render once its step is selected on the DAG
+    await dagStep(page, "step-review").click();
+    await waitFor(async () => /E2E-STEP-REVIEW-NARRATION/.test(await progressBlock(page).innerText()), "the later step's lines render when its step is selected");
+    assert.equal(await progressBlock(page).locator('[data-pf-progress-kind="event"]').getAttribute("data-pf-progress-tone"), "amber", "a lifecycle line carries its tone");
+    // and the earlier step's lines are still there, one DAG click away
+    await dagStep(page, "step-code").click();
+    await waitFor(async () => /E2E-STEP-CODE-RERUN-NARRATION/.test(await progressBlock(page).innerText()), "the earlier step's lines stay through the switch");
   }));
 
   await check("S210-07", () => withPage({}, async (page) => {
