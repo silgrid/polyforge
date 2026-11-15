@@ -61,7 +61,8 @@ type overrideScene struct {
 
 // resolveOverrideScene resolves the work item's posture on this daemon:
 // a live running job, a retained paused record, or the sealed scene of
-// a work item this daemon no longer holds (parked blocked). A work item
+// a work item this daemon no longer holds (parked blocked, or paused
+// with its record gone); a terminal work item answers 409. A work item
 // this daemon holds in a transient state (claiming, closing) answers
 // the try-again 409; one with no scene here answers 404.
 func (d *Daemon) resolveOverrideScene(wi string, item *api.WorkItem) (*overrideScene, error) {
@@ -84,6 +85,18 @@ func (d *Daemon) resolveOverrideScene(wi string, item *api.WorkItem) (*overrideS
 	if dir == "" {
 		return nil, &api.Error{Code: api.ErrDaemonNotFound,
 			Detail: fmt.Sprintf("%s is not running on this daemon and holds no capsule of it here; set the overlay on the machine that runs it", wi)}
+	}
+	// only a work item that will be claimed again takes the change: a
+	// blocked one (or a paused one whose record went); a terminal one
+	// (wrapped, canceled, failed, …) never runs again, so its change
+	// would neither land nor ever be consumed
+	if item == nil || (item.Status != api.StatusBlocked && item.Status != api.StatusPaused) {
+		status := "unknown to aihub"
+		if item != nil {
+			status = item.Status
+		}
+		return nil, &api.Error{Code: api.ErrDaemonConflict,
+			Detail: fmt.Sprintf("%s is %s: the overlay is for a work item that runs again (running, paused or blocked)", wi, status)}
 	}
 	idn := capsuleIdentityOf(dir)
 	return &overrideScene{posture: runtime.OverridePostureBlocked, capsuleDir: dir,
