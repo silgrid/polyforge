@@ -787,7 +787,13 @@ canceled, failed, …) refuses every override `DAEMON-409`. The pi candidates mu
 candidates are not file-checked. The skip switch is the per-ticket
 runtime twin of the `skip` key below: only a step the lane snapshot
 declares `skippable`, only while it has not started, and a skipped
-tail's wrap attrs move to the last running step the same way.
+tail's wrap attrs move to the last running step the same way. Two skips
+are refused `DAEMON-409` (polyforge#47): a `--unskip` of a step the
+project's `skip` key switched off (fixed in the claim's
+`runtime-state/skipped-steps.json`; the per-ticket overlay cannot
+restore it), and a `--skip` that would move the lane's last step onto a
+step that has already started (its last-step obligations were settled at
+its dispatch).
 
 ### `steps.<project>.<step-id>.skip` — switching off a skippable step
 
