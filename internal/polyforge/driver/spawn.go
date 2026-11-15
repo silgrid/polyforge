@@ -139,6 +139,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		SpawnN:                  sp.SpawnN,
 		Round:                   sp.Round,
 		CapsuleRoot:             a.WI.CapsuleDir,
+		StepOrder:               sp.StepOrder,
 		StepHeader:              header,
 		Definition:              def,
 		PriorEndedWithoutResult: sp.PriorEndedWithoutResult,
@@ -527,6 +528,10 @@ type promptParts struct {
 	// CapsuleRoot is the capsule's absolute root: every capsule-relative
 	// path the prompt names resolves against it (polyforge#244).
 	CapsuleRoot string
+	// StepOrder is the lane's step order as it stands for this dispatch
+	// (StepSpawn.StepOrder); the dispatch part restates it, marking the
+	// skipped steps and the last step an agent runs. nil = none.
+	StepOrder []StepOrderLine
 	// StepHeader is the lane snapshot's _shared/step-header.md followed by
 	// its _shared/handoff.md (the hand-off body template), verbatim
 	// (stepHeader).
@@ -661,6 +666,16 @@ func dispatchPart(p promptParts) string {
 	fmt.Fprintf(&b, "Raw downloads (CI artifacts, traces, screenshots and video bundles) go under `%s/`, which the capsule chain never commits; "+
 		"`%s/` keeps conclusions and small excerpts. A file over %d MiB elsewhere is left out of the chain too and listed in `%s`.\n",
 		capsule.DirDownloads, capsule.DirArtifacts, capsule.MaxBlobBytes>>20, capsule.OversizeManifest)
+	// The lane's step order as it stands for this dispatch (AC1,
+	// polyforge#47): a mid-run override skip changes it, and the opening of
+	// artifacts/handoff.md — written once at claim — never reflects that;
+	// the step reading its order here is the mechanism the ticket chose.
+	// The notes are the labels' own words (skipped, the last step an
+	// agent runs), the same rendering the opening carries.
+	if len(p.StepOrder) > 0 {
+		b.WriteString("\nThe lane's step order as it stands for this dispatch — a step marked skipped never dispatches, and the last-step note marks the step that owes the work item's wrap summary and the published delivery. The opening of `artifacts/handoff.md` carries the claim-time copy; this one is current:\n\n")
+		b.WriteString(renderStepOrderLines(p.StepOrder, stepcall.LabelsOf(dispatchLanguage(p.Language))))
+	}
 	if p.NoSubagents != "" {
 		// the harness this dispatch runs on (PR #869 review, blocking 2)
 		b.WriteString("\n")

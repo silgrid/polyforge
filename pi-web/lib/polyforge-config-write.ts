@@ -250,7 +250,9 @@ export interface ConfigWriteResult {
 }
 
 /** The write surface stays unavailable below the configuration panel's
- *  capability floor. A read only: it never spawns a write/workspace verb. */
+ *  capability floor. A read only: it never spawns a write/workspace verb.
+ *  It forces the presence probe, so the scope pins that follow (a write's,
+ *  a rollback's CAS pre-read and its write) read the pf installed now. */
 async function assertPanelFloor(): Promise<void> {
   const presence = await probePolyforgeVersion(true);
   if (!presence.present) throw new ConfigWriteError("polyforge is not installed on this machine", 400);
@@ -385,8 +387,8 @@ function writeMessage(cls: string, reachable: boolean): { outcome: "applied" | "
   }
 }
 
+/** The write itself, after the caller's `assertPanelFloor`. */
 async function executeWrite(body: ConfigWriteRequest): Promise<ConfigWriteResult> {
-  await assertPanelFloor();
   const key = typeof body.key === "string" ? body.key : "";
   if (IDENTITY_KEYS.includes(key)) {
     throw new ConfigWriteError(`${key} is a Cell's identity: a different AIHub server or user is a new profile — add a Cell (pf cell add) instead of editing this one`, 400);
@@ -456,6 +458,7 @@ async function executeWrite(body: ConfigWriteRequest): Promise<ConfigWriteResult
 }
 
 export async function writePolyforgeConfig(body: ConfigWriteRequest): Promise<ConfigWriteResult> {
+  await assertPanelFloor();
   return executeWrite(body);
 }
 
@@ -470,7 +473,8 @@ export interface ConfigRollbackRequest {
 /** Rollback is a fresh read followed by the SAME CAS write path; it appends
  *  a new entry and never touches api_key (non-rollbackable). The entry's own
  *  workspace is used, never the panel's current cwd, and an entry with no old
- *  value rolls back to `unset` as the spec says. */
+ *  value rolls back to `unset` as the spec says. One floor check (one forced
+ *  probe) before the pre-read serves the pre-read's pin and the write's. */
 export async function rollbackPolyforgeConfig(body: ConfigRollbackRequest): Promise<ConfigWriteResult> {
   const entry = body.entry;
   const key = typeof body.key === "string" ? body.key : entry?.key ?? "";
@@ -485,6 +489,7 @@ export async function rollbackPolyforgeConfig(body: ConfigRollbackRequest): Prom
   try { cellScope = parsePolyforgeScope({ host: entry?.host, profile: entry?.profile }); } catch (error) {
     throw new ConfigWriteError(error instanceof Error ? error.message : "bad scope", 400);
   }
+  await assertPanelFloor();
   const current = await readCurrentValue(key, workspace, await pinOrRefuse(cellScope));
   const expectState: Record<string, unknown> = { file_sha256: current.hash };
   const target = body.old !== undefined ? body.old : entry?.old;
@@ -497,8 +502,10 @@ export async function rollbackPolyforgeConfig(body: ConfigRollbackRequest): Prom
 /** `pf config reload` of one scope (the default Cell pinned
  *  `--profile default`), then the daemon's own facts read independently —
  *  the Host aggregate for the Host and the default Cell, a named Cell's own
- *  status for it. */
+ *  status for it. The scope is pinned by a forced presence probe: the pf
+ *  installed now. */
 export async function reloadPolyforgeConfig(cellScope: PolyforgeConfigScope): Promise<{ reloaded: unknown; daemon: unknown }> {
+  await probePolyforgeVersion(true);
   const pin = await pinOrRefuse(cellScope);
   const run = await runPf([...pin.prefix, "--json", "config", "reload", ...pin.suffix]);
   if (run.code !== 0) {

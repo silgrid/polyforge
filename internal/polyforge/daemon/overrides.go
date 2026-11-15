@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
@@ -332,12 +333,28 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 				writeErrOf(w, err)
 				return
 			}
-		} else if status == capsule.StepInProgress || status == capsule.StepDone {
-			// the un-skip is the cleanup of the switch itself: a step the
-			// switch already turned off (skipped) or one that never
-			// started (pending) may un-skip; a step that RAN cannot
-			writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has started (its status is %s): the skip switch is for steps that never started", req.Step, status))
-			return
+			if err := d.guardStartedLastStep(scene, wf, spec); err != nil {
+				writeErrOf(w, err)
+				return
+			}
+		} else {
+			// an un-skip the effective set would keep anyway is refused
+			// naming what it is (polyforge#47 AC2): the step is skipped at
+			// the project level — the workspace yaml's switch the daemon
+			// fixed in the capsule at its first claim — and the per-ticket
+			// overlay cannot restore it (the driver honors the union of the
+			// two). Accepting it reported a change that never took effect.
+			if slices.Contains(driver.ReadSkippedSteps(scene.capsuleDir), req.Step) {
+				writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s is skipped at the project level (the workspace yaml's skip switch, fixed in this capsule at its first claim), so the per-ticket overlay cannot un-skip it: the project's switch governs the claims made after it changes — skip it on another step, or change the project's switch and file a new ticket", req.Step))
+				return
+			}
+			if status == capsule.StepInProgress || status == capsule.StepDone {
+				// the un-skip is the cleanup of the switch itself: a step the
+				// switch already turned off (skipped) or one that never
+				// started (pending) may un-skip; a step that RAN cannot
+				writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has started (its status is %s): the skip switch is for steps that never started", req.Step, status))
+				return
+			}
 		}
 	} else if status == capsule.StepInProgress && scene.live && scene.posture == runtime.OverridePostureRunning {
 		writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has a live dispatch (its status is %s): the overlay is for steps without one — set it while the work item is parked, or on another step", req.Step, status))
@@ -411,6 +428,48 @@ func (d *Daemon) guardWrapAttrs(scene *overrideScene, wf *driver.Workflow, spec 
 	}
 	return &api.Error{Code: api.ErrDaemonConflict,
 		Detail: fmt.Sprintf("skipping step %s now would strand its wrap attrs (%s): everything before it already finished, so no later step can register them — skip it earlier, or let it run", spec.ID, spec.WrapAttrs[0])}
+}
+
+// lastAgentStepOf answers the last step the workflow still dispatches
+// (nil when the workflow is empty or everything is skipped).
+func lastAgentStepOf(wf *driver.Workflow) *driver.StepSpec {
+	if wf == nil {
+		return nil
+	}
+	for i := len(wf.Steps) - 1; i >= 0; i-- {
+		if !wf.Steps[i].Skipped {
+			return &wf.Steps[i]
+		}
+	}
+	return nil
+}
+
+// guardStartedLastStep refuses a skip that would move the lane's
+// last-agent-step onto a step that already started (polyforge#47 AC1):
+// the running step was dispatched under the step order it read, and the
+// obligations a mid-run skip hands the new last step — the moved wrap
+// attrs, the published-record registration — were settled at that
+// dispatch. The same skip before that step starts is the owner's to
+// make; a skip that moves no tail obligation (the last agent step
+// stays the last agent step) is none of this guard's business.
+func (d *Daemon) guardStartedLastStep(scene *overrideScene, wf *driver.Workflow, spec *driver.StepSpec) error {
+	base := lastAgentStepOf(wf.WithSkipped(driver.EffectiveSkips(scene.capsuleDir)))
+	if base == nil {
+		return nil // an empty lane: nothing runs, guardWrapAttrs owns the attrs
+	}
+	set := driver.EffectiveSkips(scene.capsuleDir)
+	if !slices.Contains(set, spec.ID) {
+		set = append(append([]string(nil), set...), spec.ID)
+	}
+	after := lastAgentStepOf(wf.WithSkipped(set))
+	if after == nil || after.ID == base.ID {
+		return nil // the skip strands no last-step obligation
+	}
+	if st := scene.statusOf(after.ID); st == capsule.StepInProgress || st == capsule.StepDone {
+		return &api.Error{Code: api.ErrDaemonConflict,
+			Detail: fmt.Sprintf("skipping step %s now would make step %s the lane's last step, but %s already started (its status is %s): the last-step obligations were settled at its dispatch — skip %s before %s starts, or let %s run", spec.ID, after.ID, after.ID, st, spec.ID, after.ID, spec.ID)}
+	}
+	return nil
 }
 
 // wfStep answers the workflow's step spec by id (nil when absent).

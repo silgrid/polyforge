@@ -11,6 +11,7 @@ const jiti = createJiti(import.meta.url);
 const lib = await jiti.import("./polyforge-memory.ts");
 const pure = await jiti.import("./polyforge-memory-pure.ts");
 const cells = await jiti.import("./polyforge-cells.ts");
+const status = await jiti.import("./polyforge-status.ts");
 
 test("the Memory floor is 2.20.12 (browse-mode recall) and the boundary is inclusive", async () => {
   assert.equal(lib.POLYFORGE_MEMORY_MINIMUM_PF_VERSION, "2.20.12");
@@ -216,7 +217,7 @@ test("the shared UTF-8 cap cuts on a code-point boundary and passes a text at th
 
 /** A stub pf that reports the multi-Cell capabilities and resolves the
  *  public Cell, logging every argv. answers holds the data verbs. */
-function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public", answers = {} } = {}) {
+async function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public", answers = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pf-cellmem-"));
   const log = join(dir, "calls.log");
   writeFileSync(log, "");
@@ -250,6 +251,8 @@ process.exit(2);
     else process.env.PF_BIN = previous;
     rmSync(dir, { recursive: true, force: true });
   });
+  // A new stub is a new pf: refresh the presence probe so its capabilities are read.
+  await status.probePolyforgeVersion(true);
   return () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
 }
 
@@ -257,7 +260,7 @@ process.exit(2);
 const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && a[1] !== "--version" && !(a[1] === "profile"));
 
 test("resolvePolyforgeCellScope names the resolved Cell and pins every call to it (AC4)", async (t) => {
-  const calls = cellPf(t);
+  const calls = await cellPf(t);
   const cwd = mkdtempSync(join(tmpdir(), "pf-cwd-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const scope = await cells.resolvePolyforgeCellScope(cwd);
@@ -277,7 +280,7 @@ test("resolvePolyforgeCellScope names the resolved Cell and pins every call to i
 });
 
 test("a pf without the multi-Cell protocol keeps today's unflagged calls", async (t) => {
-  const calls = cellPf(t, { capabilities: [], profile: "" });
+  const calls = await cellPf(t, { capabilities: [], profile: "" });
   const cwd = mkdtempSync(join(tmpdir(), "pf-cwd-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const scope = await cells.resolvePolyforgeCellScope(cwd);
@@ -290,7 +293,7 @@ test("a pf without the multi-Cell protocol keeps today's unflagged calls", async
 });
 
 test("a multi-Cell pf that cannot resolve a Cell pins the default Cell explicitly", async (t) => {
-  const calls = cellPf(t, { profile: "" });
+  const calls = await cellPf(t, { profile: "" });
   const cwd = mkdtempSync(join(tmpdir(), "pf-cwd-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const scope = await cells.resolvePolyforgeCellScope(cwd);

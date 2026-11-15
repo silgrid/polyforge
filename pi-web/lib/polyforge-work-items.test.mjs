@@ -12,6 +12,7 @@ const jiti = createJiti(import.meta.url);
 const lib = await jiti.import("./polyforge-work-items.ts");
 const detect = await jiti.import("./polyforge-detect.ts");
 const cells = await jiti.import("./polyforge-cells.ts");
+const status = await jiti.import("./polyforge-status.ts");
 
 // The real merged `pf --json queue` row shape (artifacts/real-queue-snapshot.json),
 // with every dropped field carrying a sentinel.
@@ -197,7 +198,7 @@ test("the modules never log, read env, or name a write verb", async () => {
 
 /** A stub pf that reports the multi-Cell capabilities and resolves the
  *  public Cell, logging every argv, answering the queue and file verbs. */
-function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public" } = {}) {
+async function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pf-cellwi-"));
   const log = join(dir, "calls.log");
   writeFileSync(log, "");
@@ -223,13 +224,15 @@ process.exit(2);
     else process.env.PF_BIN = previous;
     rmSync(dir, { recursive: true, force: true });
   });
+  // A new stub is a new pf: refresh the presence probe so its capabilities are read.
+  await status.probePolyforgeVersion(true);
   return () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
 }
 
 const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && a[1] !== "--version" && !(a[1] === "profile"));
 
 test("the work-item list and detail reads carry the pinned Cell's --profile (AC4)", async (t) => {
-  const calls = cellPf(t);
+  const calls = await cellPf(t);
   const scope = await cells.resolvePolyforgeCellScope();
   assert.equal(scope.cell, "public");
   assert.deepEqual(scope.pin.prefix, ["--profile", "public"]);
@@ -243,7 +246,7 @@ test("the work-item list and detail reads carry the pinned Cell's --profile (AC4
 });
 
 test("a pf without the multi-Cell protocol keeps today's unflagged work-item reads", async (t) => {
-  const calls = cellPf(t, { capabilities: [], profile: "" });
+  const calls = await cellPf(t, { capabilities: [], profile: "" });
   const scope = await cells.resolvePolyforgeCellScope();
   assert.deepEqual(scope.pin.prefix, []);
   await lib.listPolyforgeWorkItems(scope.pin.prefix);

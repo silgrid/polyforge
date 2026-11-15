@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
-import { hasPolyforgeCellCapabilities, sanitizePolyforgeCapabilities } from "./polyforge-cells-pure";
+import { hasPolyforgeCellCapabilities } from "./polyforge-cells-pure";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { type PackageSource } from "@earendil-works/pi-coding-agent";
 import { execFileAsync } from "./exec-file";
-import { polyforgePfBin } from "./polyforge-pf-bin";
 import { getGlobalSettingsPath, readGlobalSettings } from "./global-settings-file";
 import { getPackageSource, isDisabledPackage } from "./package-settings";
 import { probePolyforgeVersion, readPolyforgeOpsStatus } from "./polyforge-status";
@@ -14,7 +13,8 @@ import { probePolyforgeVersion, readPolyforgeOpsStatus } from "./polyforge-statu
  * Server-side machine-level detection for the Settings Polyforge section
  * (pi#122). The presence/version probe is the dock's own single
  * implementation (`probePolyforgeVersion` in `lib/polyforge-status.ts` — the
- * only `pf --version` spawn site); this module assembles the flat
+ * only presence spawn site, whose machine line also carries the protocol
+ * capabilities); this module assembles the flat
  * booleans/labels the section renders and nothing else: no `api_key`, no
  * server address, no `user_id`, no `cli.toml` contents, no absolute home
  * paths, never `process.env` values (R8). The resolved clone root, the
@@ -61,7 +61,7 @@ export interface PolyforgeDetectStatus {
   claudeSessionStartHook: boolean;
   /** null = 「不适用」 — pf absent, no probe attempted. */
   daemon: PolyforgeDaemonStatus | null;
-  /** the protocol capabilities `pf --json version` reports
+  /** the protocol capabilities the presence probe reports
    *  ([] for an older pf or pf absent); multi-Cell writes gate on them. */
   capabilities: string[];
   cellsSupported: boolean;
@@ -326,17 +326,10 @@ export async function detectPolyforge(force = false): Promise<PolyforgeDetectSta
   const claudeDir = join(homedir(), ".claude");
   const claudeSkillsSymlink = claudeSkillsSymlinkExists(claudeDir);
   const claudeSessionStartHook = claudeSettingsHookExists(claudeDir);
-  const { present, version } = await probePolyforgeVersion(force);
+  const { present, version, capabilities } = await probePolyforgeVersion(force);
   const pfVersion = present ? version : null;
   let daemon: PolyforgeDaemonStatus | null = null;
-  let capabilities: string[] = [];
   if (present) {
-    try {
-      const { stdout } = await execFileAsync(polyforgePfBin(), ["--json", "version"], { timeout: GIT_TIMEOUT_MS });
-      capabilities = sanitizePolyforgeCapabilities(JSON.parse(stdout));
-    } catch {
-      capabilities = [];
-    }
     try {
       await readPolyforgeOpsStatus();
       daemon = { reachable: true };

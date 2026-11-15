@@ -12,7 +12,9 @@ Before anything else, read `artifacts/handoff.md` (capsule-relative), top to bot
 only ever grows; nobody rewrites it.
 
 - **The opening** (the daemon's, written at claim): the work item, its goal, its
-  acceptance list verbatim and the lane's step order.
+  acceptance list verbatim and the lane's step order — the claim-time copy of it; your
+  dispatch's header restates the step order as it stands for your dispatch (a mid-run
+  override skip reaches the restated order, never the opening).
 - **One section per hand-off**, oldest first. Its header is the daemon's stamp — step,
   round, dispatch, start, end, duration, model, status, token usage (input, cache read,
   cache write, output and context peak), whether sub-agent usage is included, the owner
@@ -120,7 +122,7 @@ message exists; it never reads it.
 Write memories only as `runtime-state/memory-policy.json` says: what fits a `record` entry,
 nothing that fits a `skip` entry, never a secret or credential value (name where it lives
 instead). A step writes no memory of its own, with one exception: **the last step of the
-lane's step order** (the opening lists it), when it is about to hand off `done`, first
+lane's step order** (your dispatch's header marks it), when it is about to hand off `done`, first
 writes the work item's one wrap summary:
 
 1. A body of at most 2 KB in a temporary file (`mktemp`, outside the capsule): 做了什么,

@@ -566,7 +566,7 @@ test("watch transport validates the ref before argv and builds the once/demand/4
 
 // ---------------------------------------------------------------------------
 // pi#122: the presence cache carries the version; probePolyforgeVersion
-// shares the one `pf --version` spawn + cache (60s present, 5s absent),
+// shares the one `pf --json --version` spawn + cache (60s present, 5s absent),
 // force bypasses the read.
 // ---------------------------------------------------------------------------
 
@@ -585,15 +585,114 @@ test("the presence cache carries the version and force bypasses the cache read",
   const source = await (await import("node:fs/promises")).readFile(new URL("./polyforge-status.ts", import.meta.url), "utf8");
   // One cache, one spawn: probePolyforgePresent keeps its boolean contract by
   // delegating to probePolyforgeVersion (no second detection implementation).
-  assert.match(source, /let presenceCache: \{ present: boolean; version: string \| null; expiresAt: number \}/);
+  assert.match(source, /let presenceCache: \(PolyforgePresence & \{ expiresAt: number \}\) \| null/, "the cache holds the whole presence answer");
   assert.match(source, /export async function probePolyforgeVersion\(force = false\)/);
   assert.match(source, /if \(!force && presenceCache && now < presenceCache\.expiresAt\)/, "force bypasses the cache read");
   assert.match(source, /return \(await probePolyforgeVersion\(\)\)\.present;/, "probePolyforgePresent delegates to the same spawn");
-  assert.match(source, /version = parsePolyforgeVersion\(stdout\)/, "the probe parses the version out of the same stdout");
+  assert.equal(source.match(/spawn\(polyforgePfBin\(\), \["--json", "--version"\]/g)?.length, 1, "the one probe spawn is the --version flag's machine line");
   assert.ok(
     source.indexOf("export async function probePolyforgePresent") < source.indexOf("export async function probePolyforgeVersion"),
     "probePolyforgePresent delegates; it does not re-implement the spawn",
   );
+});
+
+// polyforge#46: the probe's one spawn is `pf --json --version`, whose machine
+// line answers the version and the protocol capabilities together; a plain
+// text line (an older pf) is version-only with no capabilities. Every real
+// spawn opens a new cache window.
+async function probePf(t, initial) {
+  const { mkdtempSync, writeFileSync, chmodSync, readFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const work = mkdtempSync(join(tmpdir(), "pf-presence-probe-"));
+  const log = join(work, "argv.log");
+  const answer = join(work, "answer.json");
+  writeFileSync(log, "");
+  const set = (next) => writeFileSync(answer, JSON.stringify(next));
+  set(initial);
+  writeFileSync(join(work, "pf"), `#!${process.execPath}
+const fs = require("fs");
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+const a = JSON.parse(fs.readFileSync(${JSON.stringify(answer)}, "utf8"));
+process.stdout.write(a.stdout);
+process.exit(a.code ?? 0);
+`);
+  chmodSync(join(work, "pf"), 0o755);
+  const previous = process.env.PF_BIN;
+  process.env.PF_BIN = join(work, "pf");
+  t.after(() => { if (previous === undefined) delete process.env.PF_BIN; else process.env.PF_BIN = previous; rmSync(work, { force: true, recursive: true }); });
+  const calls = () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  return { calls, set };
+}
+
+test("polyforge#46: one `pf --json --version` spawn answers presence, version and capabilities; the window serves them without a second spawn", async (t) => {
+  const { probePolyforgeVersion, probePolyforgePresent } = await loadSubject();
+  const { calls } = await probePf(t, { stdout: JSON.stringify({ version: "v2.21.3", capabilities: ["cells-v1", 7, "config-host-cell-v1"] }) + "\n" });
+  const first = await probePolyforgeVersion(true);
+  assert.equal(first.present, true);
+  assert.equal(first.version, "v2.21.3", "the machine line's version");
+  assert.deepEqual(first.capabilities, ["cells-v1", "config-host-cell-v1"], "the machine line's capabilities, sanitized");
+  assert.equal(typeof first.window, "number");
+  assert.deepEqual(calls(), [["--json", "--version"]], "the probe's one argv is the --version flag under --json");
+  const second = await probePolyforgeVersion();
+  assert.deepEqual(second, first, "inside the window the cached answer comes back whole");
+  assert.equal(await probePolyforgePresent(), true);
+  assert.equal(calls().length, 1, "no second spawn inside the window");
+});
+
+test("polyforge#46: a plain-text version line (an older pf) keeps the version and reports no capabilities", async (t) => {
+  const { probePolyforgeVersion } = await loadSubject();
+  const { calls } = await probePf(t, { stdout: "v2.20.16\n" });
+  const presence = await probePolyforgeVersion(true);
+  assert.equal(presence.present, true);
+  assert.equal(presence.version, "v2.20.16");
+  assert.deepEqual(presence.capabilities, []);
+  assert.deepEqual(calls(), [["--json", "--version"]]);
+});
+
+test("polyforge#46: an unparseable machine version reads present with a null version; a failing pf reads absent with no capabilities", async (t) => {
+  const { probePolyforgeVersion } = await loadSubject();
+  const { set } = await probePf(t, { stdout: JSON.stringify({ version: "dev", capabilities: ["cells-v1"] }) });
+  const dev = await probePolyforgeVersion(true);
+  assert.equal(dev.present, true);
+  assert.equal(dev.version, null, "the machine version passes the same semver-ish parse");
+  assert.deepEqual(dev.capabilities, ["cells-v1"]);
+  set({ stdout: "", code: 1 });
+  const absent = await probePolyforgeVersion(true);
+  assert.equal(absent.present, false);
+  assert.equal(absent.version, null);
+  assert.deepEqual(absent.capabilities, []);
+});
+
+test("polyforge#46: force re-spawns and advances the window; the window also rolls at the 60 s present / 5 s absent expiry", async (t) => {
+  const { probePolyforgeVersion } = await loadSubject();
+  const { calls, set } = await probePf(t, { stdout: JSON.stringify({ version: "v2.21.3", capabilities: ["cells-v1"] }) });
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const first = await probePolyforgeVersion(true);
+  set({ stdout: JSON.stringify({ version: "v2.21.4", capabilities: ["cells-v1", "cell-lifecycle-v1"] }) });
+  const forced = await probePolyforgeVersion(true);
+  assert.equal(calls().length, 2, "force spawns again");
+  assert.ok(forced.window > first.window, "a forced probe opens a new window");
+  assert.equal(forced.version, "v2.21.4");
+  assert.deepEqual(forced.capabilities, ["cells-v1", "cell-lifecycle-v1"], "the fresh spawn's capabilities replace the cached ones");
+  t.mock.timers.tick(59_999);
+  assert.equal((await probePolyforgeVersion()).window, forced.window, "a present answer serves for 60 s");
+  assert.equal(calls().length, 2);
+  t.mock.timers.tick(1);
+  set({ stdout: "", code: 1 });
+  const absent = await probePolyforgeVersion();
+  assert.equal(calls().length, 3, "the expired window spawns again");
+  assert.equal(absent.present, false);
+  assert.ok(absent.window > forced.window);
+  t.mock.timers.tick(4_999);
+  assert.equal((await probePolyforgeVersion()).window, absent.window, "an absent answer serves for 5 s");
+  assert.equal(calls().length, 3);
+  t.mock.timers.tick(1);
+  set({ stdout: "v2.20.16\n" });
+  const back = await probePolyforgeVersion();
+  assert.equal(calls().length, 4);
+  assert.equal(back.present, true);
+  assert.ok(back.window > absent.window);
 });
 
 // ---- shared ops status reader ----

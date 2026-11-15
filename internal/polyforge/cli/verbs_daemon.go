@@ -190,6 +190,11 @@ func submitAcceptanceCheck(ctx *Context, wi *api.WorkItem, name string) error {
 // `acceptance` declaration; a lane that cannot be read requires one):
 // it needs interaction first. The flow and the report format are the
 // session's (the routing skill's submit fragment, the analysis check).
+// A ticket that already made release progress is past the check
+// (polyforge#47 AC6): its event history shows a session lifecycle event
+// or a resume, and the `pf ops end-session` takeover flow resubmits
+// exactly such a ticket with a plain `pf submit` — which the check used
+// to block.
 func submitAnalysisCheck(ctx *Context, wi *api.WorkItem, name string) error {
 	if wi.BundleName == nil || strings.TrimSpace(*wi.BundleName) == "" {
 		return nil
@@ -201,12 +206,38 @@ func submitAnalysisCheck(ctx *Context, wi *api.WorkItem, name string) error {
 	if workflow.HasAnalysis(content) || !laneOf(ctx, wi.ProjectName, *wi.BundleName).RequiresAcceptance() {
 		return nil
 	}
+	if wiHasReleaseProgress(ctx, name) {
+		return nil
+	}
 	return fmt.Errorf("submit: %s has no analysis section (no content under `## 分析` or `## Analysis`), "+
 		"and its lane requires acceptance (workflow.yaml `acceptance`, default required), so it was not submitted.\n"+
 		"This ticket needs interaction first: analyze it (a read-only `pf task spawn` errand; the report format in the routing skill's submit fragment) "+
 		"and write the report into its `## 分析` section (pf file edit %s --content @file), "+
 		"or have the owner explicitly waive it (「免分析」 with its date, written the same way).\n"+
 		"To submit it without analysis anyway: pf submit %s --allow-no-analysis", name, name, name)
+}
+
+// wiHasReleaseProgress reports whether the work item already made
+// release progress: its aihub event history carries a session lifecycle
+// event (a claim, an attach, a pause, an end, a supersession — the record
+// of a ticket that ran before) or a resume. The pre-submit analysis
+// check does not re-apply to such a ticket (polyforge#47 AC6: the
+// end-session takeover flow resubmits it as is). A history that cannot
+// be read counts as progress: the check is a fresh-ticket nudge, and a
+// takeover must never wait on a flaky read — the daemon's claim stays
+// the authority either way.
+func wiHasReleaseProgress(ctx *Context, name string) bool {
+	events, err := ctx.aihub().GetWorkItemEvents(name)
+	if err != nil {
+		return true
+	}
+	for _, e := range events {
+		switch e.Type {
+		case "session_claimed", "session_attached", "session_paused", "session_ended", "session_superseded", "wi_resumed":
+			return true
+		}
+	}
+	return false
 }
 
 // wiDisplayName answers the display name (slug) of a work item for a
