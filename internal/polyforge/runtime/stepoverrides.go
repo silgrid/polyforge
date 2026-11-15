@@ -4,14 +4,16 @@ package runtime
 // per-work-item actor turn per change, three postures:
 //
 //   - a RUNNING job: the overlay file in its capsule is rewritten
-//     (read-modify-write), the change is tapped as an event, and the
-//     capsule chain is committed and pushed at once (a failed push keeps
-//     the local commit, exactly like commit-dirty-on-recover);
+//     (read-modify-write), the capsule chain is committed and pushed at
+//     once (a failed push keeps the local commit, exactly like
+//     commit-dirty-on-recover), and the change is tapped as an event
+//     marked published or not;
 //   - a PAUSED record: the same write into the kept scene (a pause seals
 //     nothing — stopOp's read-only seal is the terminal closes' — so the
-//     scene stays writable); aihub refuses pushes for a non-running work
-//     item, so a failed push is expected, the local commit stands and
-//     the resume's own publishes carry it;
+//     scene stays writable), not published: a parked write governs this
+//     machine only until its resume here, whose own publishes carry it
+//     (the owner ruling of 2026-11-15; aihub refuses pushes for a
+//     non-running work item anyway);
 //   - no job (the work item parked blocked): the change lands in the
 //     daemon-local pending record (like the manual `--models` list),
 //     and the next claim's scene preparation merges it into the fresh
@@ -78,11 +80,10 @@ type OverrideOutcome struct {
 	// Changed is false when a clear found nothing (the idempotent
 	// success: nothing written, no event).
 	Changed bool
-	// Published: the chain commit reached the server. A pause holds the
-	// push (aihub refuses pushes for a non-running work item; the local
-	// commit stands and the resume's own publishes carry it) and a
-	// blocked change rides the daemon-local pending record into the next
-	// claim's fresh capsule.
+	// Published: the chain commit reached the server. A paused change
+	// stays in the kept scene until the resume's own publishes carry it,
+	// and a blocked change rides the daemon-local pending record into
+	// the next claim's fresh capsule — neither is published.
 	Published bool
 	// Note explains an unpublished change (and anything else the caller
 	// should surface).
@@ -154,10 +155,9 @@ func stepLive(ex capsule.Execution, step string) bool {
 }
 
 // applyOverrideScene writes the change into the live or paused job's
-// capsule (the read-modify-write), taps the event and commits+pushes the
-// chain. The paused posture's push is expected to fail (aihub refuses
-// pushes for a non-running work item): the local commit stands and the
-// answer says so.
+// capsule (the read-modify-write); a running job's chain is committed
+// and pushed at once, a paused one's waits for the resume's publishes.
+// The event comes last and says whether the change was published.
 func (r *Runtime) applyOverrideScene(j *job, ch OverrideChange, posture string) (OverrideOutcome, error) {
 	j.mu.Lock()
 	capDir := j.capsuleDir
@@ -170,23 +170,25 @@ func (r *Runtime) applyOverrideScene(j *job, ch OverrideChange, posture string) 
 	if !changed {
 		return OverrideOutcome{Posture: posture, Entry: entry}, nil
 	}
-	r.tapOverride(j.wi, ch, posture)
+	// the publish first, the event after: the event says whether the
+	// change reached the chain (the event log is the daemon's, not the
+	// capsule's — the commit carries nothing of it)
 	out := OverrideOutcome{Posture: posture, Changed: true, Entry: entry, Published: true}
+	if posture == OverridePosturePaused {
+		out.Published = false
+		out.Note = "recorded in the kept scene, not published: it governs this machine's resume, whose own publishes carry it into the capsule chain"
+		r.tapOverride(j.wi, ch, posture, false)
+		return out, nil
+	}
 	_, pushed, _, perr := gitops.CommitPush(context.Background(), git, "step override: "+ch.Step)
 	if perr != nil {
 		out.Published = false
-		if posture == OverridePosturePaused {
-			// expected: the hub refuses pushes while the work item is
-			// paused; the local commit stands and the resume's own
-			// publishes carry it
-			out.Note = "recorded in the kept scene; the chain commit stays local while the work item is paused (aihub refuses pushes for it) — the resume's own publishes carry it"
-		} else {
-			out.Note = fmt.Sprintf("the overlay is written and its commit stands locally, but the chain push failed: %v — the next publish retries it", perr)
-		}
+		out.Note = fmt.Sprintf("the overlay is written and its commit stands locally, but the chain push failed: %v — the next publish retries it", perr)
 	} else if !pushed {
 		out.Published = false
 		out.Note = "the overlay is written and committed; the push reported nothing sent"
 	}
+	r.tapOverride(j.wi, ch, posture, out.Published)
 	return out, nil
 }
 
@@ -201,7 +203,7 @@ func (r *Runtime) applyOverrideBlocked(wi string, ch OverrideChange) (OverrideOu
 	if !changed {
 		return OverrideOutcome{Posture: OverridePostureBlocked, Entry: entry}, nil
 	}
-	r.tapOverride(wi, ch, OverridePostureBlocked)
+	r.tapOverride(wi, ch, OverridePostureBlocked, false)
 	return OverrideOutcome{Posture: OverridePostureBlocked, Changed: true, Entry: entry,
 		Published: false,
 		Note:      "recorded locally; it lands with the next claim of the work item here (pf resume), which carries it into the fresh capsule"}, nil
@@ -297,8 +299,11 @@ func (r *Runtime) mutateOverlay(capDir string, ch OverrideChange) (bool, *capsul
 }
 
 // tapOverride records the change as one event: the operator, the step
-// and the new value (the chain, or the skip switch's new state).
-func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string) {
+// and the new value (the chain, or the skip switch's new state), and
+// whether the change reached the capsule chain (published: false for a
+// parked posture — the change governs only this machine until its wake
+// or claim here publishes it — and for a failed push).
+func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string, published bool) {
 	kind, aspect, value := EventOverrideSet, "", ""
 	switch {
 	case ch.Models != nil:
@@ -312,13 +317,14 @@ func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string) {
 		}
 	}
 	r.tap(wi, kind, map[string]any{
-		"step":     ch.Step,
-		"aspect":   aspect,
-		"value":    value,
-		"operator": ch.Operator,
-		"posture":  posture,
-		"models":   ch.Models,
-		"note":     "the step overlay changed; it governs the step's next dispatch",
+		"step":      ch.Step,
+		"aspect":    aspect,
+		"value":     value,
+		"operator":  ch.Operator,
+		"posture":   posture,
+		"published": published,
+		"models":    ch.Models,
+		"note":      "the step overlay changed; it governs the step's next dispatch",
 	})
 }
 
