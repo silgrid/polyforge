@@ -87,3 +87,32 @@ func TestW50EngineIsPython(t *testing.T) {
 		}
 	}
 }
+
+// TestW50EngineAcceptsTheReplayRuleKey pins the conf contract's reader split
+// (polyforge#50 AC5): `not_runnable_rule=` is facts.py's key — the engine
+// reads none of it, so it accepts the line without the unknown-key
+// diagnostic (a conf may declare the key; no reader diagnoses a key
+// another tool owns), like the workflow's other conf readers.
+func TestW50EngineAcceptsTheReplayRuleKey(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	w25e2eGit(t, dir, "init", "-q", "-b", "main")
+	w25e2eWrite(t, dir, ".polyforge/verify-scope.conf",
+		"stack=none\nfast_gate=true\nnot_runnable_rule=demo|rule|^x \n")
+	w25e2eWrite(t, dir, "a.txt", "a\n")
+	base := w25e2eCommit(t, dir, "base")
+	out, errb, code := w25e2eRun(t, dir, nil, "--json", "--base", base)
+	if code != 0 {
+		t.Fatalf("engine exited %d: %s", code, errb)
+	}
+	for _, diag := range strings.Split(errb.String(), "\n") {
+		if strings.Contains(diag, "not_runnable_rule") {
+			t.Fatalf("the engine must not diagnose a conf key another tool owns: %s", diag)
+		}
+	}
+	if !strings.Contains(out, `"fast_gate"`) && !strings.Contains(out, `"cmd": "true"`) {
+		t.Fatalf("the conf's own commands still report: %s", out)
+	}
+}
