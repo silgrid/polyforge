@@ -28,5 +28,33 @@ class DecodeReportTest(unittest.TestCase):
                     engine.decode_report(bad.encode())
 
 
+class ArgvOfTest(unittest.TestCase):
+    """How the engine runs (polyforge#50): itself when it is executable,
+    else under `python3` — resolved on the PATH of whatever runs the argv
+    (a lane snapshot's files are mode 0444; the argv reaches a verification
+    container as `docker exec`, where the image's PATH must hold python3,
+    never the step host's own interpreter path)."""
+
+    def test_executable_engine_runs_itself(self) -> None:
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            e = os.path.join(d, "verify-scope")
+            with open(e, "w") as f:
+                f.write("#!/usr/bin/env python3\n")
+            os.chmod(e, 0o755)
+            self.assertEqual(engine.argv_of(e), [e])
+
+    def test_read_only_engine_runs_under_python3(self) -> None:
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            e = os.path.join(d, "verify-scope")
+            with open(e, "w") as f:
+                f.write("#!/usr/bin/env python3\n")
+            os.chmod(e, 0o444)
+            self.assertEqual(engine.argv_of(e), ["python3", e])
+
+
 if __name__ == "__main__":
     unittest.main()
