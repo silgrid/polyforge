@@ -107,7 +107,7 @@ func TestW50EngineAcceptsTheReplayRuleKey(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("engine exited %d: %s", code, errb)
 	}
-	for _, diag := range strings.Split(errb.String(), "\n") {
+	for _, diag := range strings.Split(errb, "\n") {
 		if strings.Contains(diag, "not_runnable_rule") {
 			t.Fatalf("the engine must not diagnose a conf key another tool owns: %s", diag)
 		}
