@@ -327,14 +327,18 @@ try {
     seed(); const panel = await tasksTab(page);
     await panel.getByText(T1).waitFor({ timeout: 30_000 });
     // the state filter offers a 全部 option and the project
-    // filter 全部项目, both above the sections; the 全部 heading is the last
-    // exact 全部 on the surface. The geometry is read only once it has
-    // settled: two consecutive reads agree (polyforge#43 — an async state
-    // is polled to stability, never read once on a guess).
+    // filter 全部项目, both above the sections. polyforge#22 renamed Work's
+    // third sub-tab to 全部 and the tab rail follows the main area in the
+    // DOM, so the last exact 全部 on the whole panel is that sub-tab, not
+    // the section heading: the sections resolve inside the Work main area
+    // (polyforge#43). The geometry is read only once it has settled: two
+    // consecutive reads agree (an async state is polled to stability, never
+    // read once on a guess).
+    const main = panel.locator("[data-pf-work-main]");
     const tops = async () => {
-      const running = await topOf(panel, "正在运行");
-      const all = await panel.getByText("全部", { exact: true }).last().boundingBox().then((b) => b?.y ?? -1);
-      const t1 = await topOf(panel, T1), t2 = await topOf(panel, T2), t3 = await topOf(panel, T3);
+      const running = await topOf(main, "正在运行");
+      const all = await main.getByText("全部", { exact: true }).last().boundingBox().then((b) => b?.y ?? -1);
+      const t1 = await topOf(main, T1), t2 = await topOf(main, T2), t3 = await topOf(main, T3);
       return { running, all, t1, t2, t3 };
     };
     let prev = null;
