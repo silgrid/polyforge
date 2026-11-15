@@ -114,6 +114,13 @@ function setup(overrides = {}) {
     hook.rerender(current);
     hook.flush();
   };
+  // Re-render with arbitrary prop overrides (the panel can flip resetFollow
+  // while the step stays selected — review r1#9's case).
+  const rerenderProps = (extra) => {
+    current = { ...current, ...extra };
+    hook.rerender(current);
+    hook.flush();
+  };
   // Answer every read the re-renders issued, so the next one is never
   // deduplicated by the in-flight mark (the panel's unrelated polls render
   // between answers in the browser; the red tree reads on each of them).
@@ -130,6 +137,7 @@ function setup(overrides = {}) {
     answer,
     expand,
     rerender,
+    rerenderProps,
     rerenderFreshAnswered,
     tree: () => walk(hook.result),
     restore() { globalThis.fetch = originalFetch; },
@@ -195,5 +203,26 @@ test("polyforge#48 AC2: a delivered echo is judged on every line of the job, not
     assert.match(String(notes[0].props.children), /resume/, "the note shows how far the delivery got");
   } finally {
     pending.restore();
+  }
+});
+
+test("polyforge#48 r1#9: a manual click on the already-selected step resets nothing", async () => {
+  // review r1#9: resetFollow riding in the reset effect's dependencies made
+  // a manual click on the step that is ALREADY selected (the automatic
+  // selection's own step) re-run the whole reset — folds opened, held tool
+  // details cleared — though neither the ticket nor the step changed. The
+  // reset must fire on a selection or step change alone.
+  const state = setup({ running: false, resetKey: "build", resetFollow: "bottom" });
+  try {
+    state.expand();
+    await state.answer(0, RESULTLESS);
+    const held = () => state.tree().find((node) => node.props?.line?.id === "t1")?.props?.detail;
+    assert.equal(held()?.input, "run t1", "the expanded card holds its read detail");
+    // The manual flag flips while the step stays selected: resetFollow
+    // changes, the ticket and step do not — nothing resets.
+    state.rerenderProps({ resetFollow: "step" });
+    assert.equal(held()?.input, "run t1", "the held detail survives resetFollow flipping on an unchanged step");
+  } finally {
+    state.restore();
   }
 });
