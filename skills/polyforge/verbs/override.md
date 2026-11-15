@@ -63,6 +63,13 @@ overlay cannot restore a dispatch the project switched off (the driver
 honors the union of the two sets), and the project's own switch governs
 the claims made after it changes, never a ticket already claimed.
 
+A skip that would move the lane's last agent step onto a step that has
+**already started** is refused naming it: the running step was
+dispatched under the step order it read, and the obligations a mid-run
+skip hands the new last step (the moved wrap attrs, the
+published-record registration) were settled at that dispatch. Skip
+the tail before that step starts, or let it run.
+
 ## Success
 
 `step <id>: overlay models=… (posture running, by <user>)` plus
