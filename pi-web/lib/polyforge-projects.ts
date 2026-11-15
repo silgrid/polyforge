@@ -16,10 +16,12 @@ import { polyforgePfBin } from "./polyforge-pf-bin";
  *   never leave the server. The default is TRANSITION CODE for the
  *   v0.2.1 move (the repo rule: no compat code without a deletion
  *   condition) — DELETE IT when the oldest pf this pi-web supports is
- *   2.21.0, the v0.2.1 release whose `projects get` answers carry
- *   `status`; until then it keeps the view readable against a v0.2.0
- *   pf, whose projects are all active by construction (the only state
- *   a pre-v0.2.1 database can hold).
+ *   v0.2.1 (the pf binary `0.2.1`, the first release whose `projects
+ *   get` answers carry `status`; the v0.2.x product line's pf versions
+ *   are 0.2.x — see .polyforge/deploy.sh's VLINE_AWK and
+ *   lib/polyforge-detect.ts's versionLineRank); until then it keeps the
+ *   view readable against a v0.2.0 pf, whose projects are all active by
+ *   construction (the only state a pre-v0.2.1 database can hold).
  * The one write:
  * - `pf --json projects restore <p>` — the reversible door; a failure
  *   throws pf's typed failure (capped), the route answers it as the
@@ -59,7 +61,7 @@ export function isPolyforgeProjectToken(value: unknown): value is string {
 /** The project's global state, through the one parse path: the status
  *  string when the answer carries one, else active — the pre-v0.2.1
  *  transition default (the header names its deletion condition: delete
- *  when the supported pf floor reaches 2.21.0, whose answers carry
+ *  when the supported pf floor reaches v0.2.1, whose answers carry
  *  `status`). A pf older than the status column answers nothing for it,
  *  and any value other than "deactivated" is the active line — the only
  *  other state a project has. */
