@@ -138,3 +138,28 @@ check for the `projects.status` migration. Until the migration has run,
 the requests that touch the missing column fail with SQLite's own errors
 (no typed refusal); serve traffic only after the migration, which an
 unattended `deploy.sh` applies inside its switch window.
+
+## v0.2.2, the scope engine is a Python program
+
+The release-shipped verification-scope engine,
+`workflows/_shared/scripts/verify-scope`, is rewritten in Python: the same
+path, the same command line and the same report, with one implementation of
+the `carries:` header parse shared with the step scripts' `pfstep` library —
+the shell implementation is gone, with no forwarding stub. The upgrade
+impact: a host that runs a repository's bar on the host (a tree without
+`.polyforge/Dockerfile.verify`) now needs `python3` for every engine run,
+not only for `--json` — the documented `pf doctor` prerequisite already
+names python3, and a bar in a container is unaffected (the verification
+image provides it).
+
+Two rules that lived in the workflow's own text become declarations of each
+repository's `.polyforge/verify-scope.conf`: the light-tier prefix an
+exceeded `e2e_start_threshold` puts before `e2e_runner=` is the declared
+`e2e_start_prefix=` (pi-web declares its current
+`E2E_SERVER_MODE=start`), and `facts.py build --replay` classifies by the
+repository-declared `not_runnable_rule=<toolchain>|<rule>|<pattern>` lines
+(pi-web declares its browser preflight's text). An engine or a facts.py
+older than this section reading a conf that declares the keys diagnoses
+them as unknown and ignores them, so a conf may declare them before the
+release ships; after the upgrade the older hardcodes are gone, so a
+repository that wants the behavior declares the key.

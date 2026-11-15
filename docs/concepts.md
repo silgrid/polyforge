@@ -356,9 +356,10 @@ that bar in a container of its own; one without it runs on
 the host as above. The image is built from that file alone — an empty build
 context, so the file must be self-contained: public base images, every tool
 at an exact pinned version — and must carry what the scope engine itself
-runs as well as the bar: `sh`, `bash`, `git`, `python3`, `awk` and the
-POSIX tools, plus every toolchain the conf's commands call (`go` for a Go
-repository's `go list`, `node`/`npm`, …). It is tagged
+runs as well as the bar: `python3` (the engine is a python3 program), `sh`,
+`bash` and `git` (its audit helper and the conf's commands are shell), plus
+every toolchain the conf's commands call (`go` for a Go repository's
+`go list`, `node`/`npm`, …). It is tagged
 `pf-verify-<repo>:<hash of the file>`, built only when the tag is missing
 (once, however many runs ask at the same moment; its log is
 `runtime-state/verify/<n>/<repo>/image-build.log`).

@@ -255,7 +255,7 @@ items that merged.
 - **The declarative conf.** `.polyforge/verify-scope.conf` is line-oriented
   (`#` comments and blank lines ignored; a value runs to the end of its line,
   so there is no trailing comment on a value line) and is never
-  shell-evaluated. Its keys, each with its exact form, are listed once in
+  evaluated. Its keys, each with its exact form, are listed once in
   [the config reference](reference/config.md#polyforgeverify-scopeconf--the-verification-bar):
   the analyzer pin `stack=go|npm|python|rust|none`, `go_harness=`, the commands
   (anonymous `fast_gate=` / `full_command=` lines, named
