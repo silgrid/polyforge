@@ -358,3 +358,70 @@ func TestPendingOverrideKeptUntilFirstPublish(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 }
+
+// A pending entry left by a claim whose publish failed is residue the
+// running job never drops by itself; a running-posture write whose chain
+// push succeeds carries the claim's merge (committed into this capsule at
+// claim) and the new change, so it drops the record — a later block and
+// re-claim here must not merge the stale value over the owner's newer
+// change (polyforge#25 u16, review #4/#5).
+func TestPendingOverrideResidueDroppedByPublishedRunningWrite(t *testing.T) {
+	r, _ := pendingEnv(t)
+	const wi = "wi_ov16"
+	if err := r.savePendingOverrides(wi, map[string]*capsule.StepOverride{
+		"release": {Models: []string{"pi:ov/stale"}, ModelsBy: "usr_1"},
+	}); err != nil {
+		t.Fatalf("save pending: %v", err)
+	}
+	real := pendingPublishFn
+	t.Cleanup(func() { pendingPublishFn = real })
+	// the claim's publish of the merged record fails: the record stays
+	pendingPublishFn = func(ctx context.Context, o gitops.Opts, msg string) (string, bool, gitops.PushTimings, error) {
+		return "", false, gitops.PushTimings{}, errors.New("injected: the hub is unreachable")
+	}
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if r.jobOf(wi) == nil {
+		t.Fatal("the claim must run to a live agent")
+	}
+	if pend := readPendingFile(t, r); pend == nil || pend[wi] == nil {
+		t.Fatal("precondition: the failed claim publish must leave the pending record")
+	}
+	pendingPublishFn = real
+	// the owner's newer change of the same aspect of the same step, while
+	// the job runs; its chain push succeeds
+	out, err := r.ApplyStepOverride(context.Background(), wi, OverrideChange{
+		Step: "release", Operator: "usr_2", Models: []string{"pi:ov/newer"},
+	})
+	if err != nil {
+		t.Fatalf("the running write: %v", err)
+	}
+	if !out.Changed || out.Posture != OverridePostureRunning || !out.Published {
+		t.Fatalf("precondition: a changed, published running write: %+v", out)
+	}
+	if pend := readPendingFile(t, r); pend != nil && pend[wi] != nil {
+		t.Fatalf("a published running write must drop the pending residue: %+v", pend[wi])
+	}
+	// the ticket blocks and is re-claimed here: the newer chain stands
+	if err := r.Stop(context.Background(), wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("blocked Stop: %v", err)
+	}
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("re-claim: %v", err)
+	}
+	j := r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the re-claim must run to a live agent")
+	}
+	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := ov.Steps["release"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/newer" || e.ModelsBy != "usr_2" {
+		t.Fatalf("the re-claim merged the stale pending value over the newer chain: %+v", e)
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishWrapped); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
