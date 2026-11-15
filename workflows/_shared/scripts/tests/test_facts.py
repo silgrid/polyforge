@@ -536,7 +536,8 @@ class NotRunnableRuleTest(unittest.TestCase):
     def test_undeclared_pattern_stays_red(self) -> None:
         rules = [("demo", "custom-boom", r"^BOOM ")]
         self.assertEqual(facts.replay_verdict(1, False, "unrelated failure\n"), ("red", None))
-        self.assertEqual(facts.replay_verdict(1, False, "BOOM from nowhere\n", rules), ("red", None))
+        # a line the declared pattern does not anchor stays an assertion red
+        self.assertEqual(facts.replay_verdict(1, False, "later BOOM from nowhere\n", rules), ("red", None))
 
     def test_generic_rules_still_apply(self) -> None:
         # the generic builtin rules keep classifying with no declaration
@@ -550,6 +551,7 @@ class NotRunnableRuleTest(unittest.TestCase):
         import shutil
         tree = tempfile.mkdtemp()
         try:
+            os.makedirs(os.path.join(tree, ".polyforge"))
             os.makedirs(os.path.join(tree, "pi-web", ".polyforge"))
             with open(os.path.join(tree, ".polyforge", "verify-scope.conf"), "w") as f:
                 f.write("# comment\nnot_runnable_rule=root|R1|^ONE \nnot_runnable_rule=bad-line\n")
