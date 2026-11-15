@@ -118,6 +118,10 @@ const failures = [];
 const check = createCheck({ failures });
 let base;
 const progressBlock = (page) => dock(page).locator("[data-pf-progress]").first();
+// The DAG's step node (the listitem whose aria-label begins "<id> · "), the
+// deterministic handle e2e/polyforge.mjs P24A–C drives the step selection
+// through: the detail's execution progress renders the selected step's records.
+const dagStep = (page, id) => dock(page).getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
 const entries = (page) => progressBlock(page).locator('[data-pf-progress-kind="subagent"]');
 const h = createHarness({
   viewport: { width: 1280, height: 900 },
