@@ -105,3 +105,19 @@ func TestW52BuildWritesTheChangeAnalysis(t *testing.T) {
 		t.Error("workflows/develop/workflow.yaml: the build step must carry the lane's supplement cap (vars.supplement_limit, rendered into the step's text)")
 	}
 }
+
+// TestW52ReviewChecksTheChangeAnalysis (AC3): review's judgment states
+// the analysis check — an obviously missing test (an existing test that
+// already pins a named change, unlisted), an uncovered list that does not
+// match the engine's report, a listed test that does not exist — is a
+// blocking test_weakened finding naming the entry.
+func TestW52ReviewChecksTheChangeAnalysis(t *testing.T) {
+	w52Wants(t, "workflows/develop/fragments/review-judge.md", []string{
+		"6. **The change analysis (`test_weakened`)**",
+		"`artifacts/build/change-analysis.json`",
+		"an existing test already pins, one the analysis does not list, is a blocking `test_weakened` finding",
+		"an `uncovered` list that does not match that report",
+		"a listed test that does not exist (its file or name)",
+		"each finding names the missing or wrong entry",
+	})
+}
