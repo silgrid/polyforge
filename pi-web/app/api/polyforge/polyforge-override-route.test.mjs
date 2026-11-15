@@ -97,7 +97,7 @@ test("the watch route composes the override view into the same response (polyfor
   assert.equal(body.status?.wi, "wi_A1");
   assert.deepEqual(body.status?.declared_steps, [{ id: "build" }, { id: "merge" }]);
   assert.deepEqual(body.status?.skippableSteps, ["merge"]);
-  assert.deepEqual(body.status?.override, {
+  assert.deepEqual(body.status?.overrideView, {
     wi: "wi_A1", posture: "running",
     steps: [
       { id: "build", status: "in_progress", skippable: false },
@@ -127,7 +127,7 @@ test("a garbage or refused view read degrades to a snapshot without it — the w
     assert.equal(response.status, 200, m);
     const body = await response.json();
     assert.equal(body.status?.wi, "wi_A1", `${m}: the watch snapshot survives`);
-    assert.equal(body.status?.override, undefined, `${m}: the view degrades to absent`);
+    assert.equal(body.status?.overrideView, undefined, `${m}: the view degrades to absent`);
   }
 });
 
@@ -143,7 +143,7 @@ test("a hung view read times out on the read bound — the watch answer still re
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.status?.wi, "wi_A1", "the snapshot itself survives the hung view read");
-  assert.equal(body.status?.override, undefined, "the hung view read degrades to absent");
+  assert.equal(body.status?.overrideView, undefined, "the hung view read degrades to absent");
   assert.ok(Date.now() - started < 14_000, `the answer arrived inside the bound (${Date.now() - started} ms)`);
 });
 

@@ -341,13 +341,15 @@ export interface PolyforgeWatchStatus extends PolyforgeSummary {
    *  step id — absent when no step carries an aspect. */
   overrides?: Record<string, PolyforgeStepOverride>;
   /** (polyforge#42 G11, additive): the per-step overlay view the watch
-   *  route composes into this same response (`status.override` — the
+   *  route composes into this same response (`status.overrideView` — the
    *  effective chains and their sources, one row per declared step), so
    *  the selected unstarted step's controls read the snapshot and fetch
    *  nothing on selection. Absent when the view read failed or answered
    *  nothing; the values above (`overrides`, `skippableSteps`) still ride
-   *  the watch read itself. */
-  override?: PolyforgeOverrideView;
+   *  the watch read itself. Named `overrideView`, not `override`, so it
+   *  never reads as the values block `overrides` one letter away
+   *  (review r1#2). */
+  overrideView?: PolyforgeOverrideView;
   events: PolyforgeEvent[];
   progress?: PolyforgeProgress;
   origin?: PolyforgeOrigin;

@@ -16,7 +16,8 @@ export const dynamic = "force-dynamic";
  * snapshot. No 5xx path.
  *
  * polyforge#42 (G11): the same response also carries the per-step overlay
- * view (`status.override`, `pf [--profile p] --json override <wi>`) — the
+ * view (`status.overrideView`, `pf [--profile p] --json override <wi>`,
+ * bounded by the one pf read timeout) — the
  * panel's snapshot is the one read surface, and the selected unstarted
  * step's controls fetch nothing on selection (a click-caused read broke
  * the graph suite's G11). The view is composed only when the watch read
@@ -46,11 +47,11 @@ export async function GET(request: Request) {
   }
   try {
     const status = await getPolyforgeWatch(wi, profile);
-    let override: PolyforgeOverrideView | undefined;
+    let overrideView: PolyforgeOverrideView | undefined;
     if (status) {
-      override = await getPolyforgeOverride(wi, profile).catch(() => undefined) ?? undefined;
+      overrideView = await getPolyforgeOverride(wi, profile).catch(() => undefined) ?? undefined;
     }
-    return NextResponse.json({ status: status ? { ...status, ...(override ? { override } : {}) } : status });
+    return NextResponse.json({ status: status ? { ...status, ...(overrideView ? { overrideView } : {}) } : status });
   } catch (error) {
     if (error instanceof PolyforgeError) {
       return NextResponse.json({ status: null, error: error.message });

@@ -43,6 +43,8 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   re-probes this route, every 30 s and on window focus); daemon down / auth failure / hang answer `{pfPresent:true,status:null,error}`.
 - `GET /api/polyforge/watch?wi=<slug|wi_id>` → 200 `{status:{wi,slug,workflowStatus,
   currentStep,updatedAt,steps:[{name,status,startedAt?}],declared_steps:[{id}]|null,
+  skippableSteps?:[id],overrides?:{[id]:{models?,skip?,pending?}},
+  overrideView?:{wi,posture,steps:[{id,status,skippable,models?,modelsBy?,skip?,skipBy?,pending?,effective?,source?}]},
   events:[{at,kind,step?,…,question?,question_id?,by?,disposition?,intent?}],progress?:{command,command_age_sec,tool_calls,
   recent_files},origin?:{kind:"chat",owner},summary?,summary_age_sec?,
   summary_error?,summary_capped?,blocked?:{kind,step?,reason,requiredAction?},
@@ -634,7 +636,7 @@ click-caused request): everything they render rides the watch snapshot —
 the declarations and the overlay's values (`skippableSteps`, `overrides`),
 and the effective chains with their source labels (`step overlay`, `pf
 submit --models`, the yaml/bundle level) through the view the watch route
-composes into its own response (`status.override`, one
+composes into its own response (`status.overrideView`, one
 `pf --json override <wi>` read per watch answer; a failed view read
 degrades to a snapshot without it, and the override route's GET face is
 gone with its last caller). The write is one action per POST (`models`,

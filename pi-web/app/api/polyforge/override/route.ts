@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * polyforge#25's per-step overlay face. polyforge#42 (G11): the view read
- * moved into the watch route's response (`status.override`, composed
+ * moved into the watch route's response (`status.overrideView`, composed
  * server-side there), so this route is the WRITE face only — the GET
  * handler that answered the view per selection is gone with its last
  * caller. The view itself (`pf [--profile p] --json override <wi>`, one
