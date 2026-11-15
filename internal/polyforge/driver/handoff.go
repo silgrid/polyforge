@@ -345,7 +345,7 @@ func renderStepOrderLines(lines []StepOrderLine, l stepcall.Labels) string {
 		if s.Gate {
 			note := "gate"
 			if s.OnFail != "" {
-			note += fmt.Sprintf(l.GateRewindsTo, s.OnFail)
+				note += fmt.Sprintf(l.GateRewindsTo, s.OnFail)
 			}
 			if s.Waivable {
 				note += l.Waivable

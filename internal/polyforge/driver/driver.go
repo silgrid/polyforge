@@ -888,7 +888,12 @@ func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
 	sp := &StepSpawn{
 		StepID: stepID,
 		WIID:   d.wi.ID,
-		Resume: st != nil && st.Status == capsule.StepInProgress,
+		// the order as it stands for this dispatch: the plan pass has
+		// re-derived d.workflow from the effective skips, so a mid-run
+		// override skip is what the next dispatch reads (AC1,
+		// polyforge#47)
+		StepOrder: stepOrderLines(d.workflow),
+		Resume:    st != nil && st.Status == capsule.StepInProgress,
 	}
 	if st != nil {
 		if sp.Resume && st.Supervision != nil && st.Supervision.NextDispatch == capsule.NextDispatchFresh {

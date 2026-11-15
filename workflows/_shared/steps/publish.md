@@ -13,6 +13,7 @@ passed, then push the feature branch, open or update the PR, write the delivery 
 the owner-review question when one is declared, and leave `artifacts/publish.json` for the
 merge step. **You do not merge, merge nothing into the branch and run no test**: when the
 lane's merge step runs after you, it merges the PR with the merge script (`merge.py`), and
-the integration lane later runs the full gate over what landed; when the opening notes you
+the integration lane later runs the full gate over what landed; when the step order of your
+dispatch header notes you
 as the lane's last step (the merge step skipped), nobody in the lane merges it — you
 register the published record (`published.py`) and the PR awaits a human review.

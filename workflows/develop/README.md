@@ -95,8 +95,9 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   `## Follow-up` with every non-blocking finding), writes `artifacts/publish.json` and
   `artifacts/delivery.md`, and holds for the owner's 「过目通过」 when an `owner-review:`
   line is declared (「不通过」 is a FAIL citing the owner, charged to nothing). When the
-  project skips `merge`, publish is the lane's last step (the opening of
-  `artifacts/handoff.md` notes it so): the PR body says "This lane does not merge this PR —
+  project skips `merge`, publish is the lane's last step (the step order of its dispatch
+  header notes it so; the opening of `artifacts/handoff.md` is the claim-time copy): the PR
+  body says "This lane does not merge this PR —
   it awaits a human review.", the step runs `published.py`, registers its record —
   `pf step hub wrap-attrs integration @artifacts/publish/integration.json` — and writes the
   wrap summary (below, **Skipping merge**).
@@ -159,8 +160,10 @@ verification → publish and ends:
 - `merge` is never dispatched — its execution record says `skipped` and the event log
   carries `step_skipped`; nothing merges the PRs, they stay open and await a human review
   (the PR body says so);
-- `publish` is the lane's last step: the step order in the opening of
-  `artifacts/handoff.md` notes it as the last step and `merge` as skipped, and merge's
+- `publish` is the lane's last step: the step order of its dispatch header notes it as the
+  last step and `merge` as skipped (the opening of
+  `artifacts/handoff.md` carries the claim-time copy; a mid-run `pf override --skip` of
+  `merge` updates the dispatch header's order, never the opening), and merge's
   `wrap_attrs: [integration]` moves to it — its `done` is refused until it registered the
   record `published.py` wrote (`artifacts/publish/integration.json`:
   `{state: published, repos: [{repo, pr, head, light_verified_head}]}`, each PR's link and

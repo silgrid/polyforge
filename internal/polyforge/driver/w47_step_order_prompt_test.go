@@ -51,7 +51,7 @@ func TestW47DispatchHeaderRestatesStepOrder(t *testing.T) {
 			WIID: "wi_x", StepID: "publish", SpawnN: 1, Round: 1,
 			CapsuleRoot: "/ws/capsules/demo-47", Language: tc.lang,
 			StepHeader: "How a step runs.", Definition: "Do the step.",
-			StepOrder:   w47Order(),
+			StepOrder: w47Order(),
 		})
 		flat := strings.Join(strings.Fields(prompt), " ")
 		for _, want := range tc.want {
