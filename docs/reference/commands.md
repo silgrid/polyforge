@@ -841,13 +841,16 @@ the lane's own identity.
   merged`; or, merged outside the lane, its merge commit is on the default
   branch and contains the verified head, `how: merged_elsewhere`); an open
   one must target the default branch, head the published branch and stand
-  at the verified head. No PR branch is updated with the default branch:
-  a forge refusal (a conflict with a default branch that moved) is the
-  sync step's again. Details: `repos[{name, pr_url, branch, head,
+  at the verified head, and origin's default branch must still be at the
+  base the verification result records (`details.repos[].base`, when it
+  records one). No PR branch is updated with the default branch: a default
+  branch that advanced after verification, or a forge refusal, is the sync
+  step's again. Details: `repos[{name, pr_url, branch, head,
   published, merge_commit, how, branch_side, by_this_run, why}]`,
   `merge_commits`. Exit 0: every PR landed; 1: a PR moved, is closed or
-  retargeted, was merged elsewhere off the verified head, or the forge
-  refused (the later PRs stay open; the merged ones are landed and a
+  retargeted, was merged elsewhere off the verified head, the default
+  branch advanced after the verified version (origin's default branch is no
+  longer the verified base), or the forge refused (the later PRs stay open; the merged ones are landed and a
   re-run takes them); 2: not judged (an unreadable file, a published repo
   the verification names no head for, gh or git unreachable). On exit 0
   `--landing-out` gets the landing record (`{state: landed, repos[{repo,

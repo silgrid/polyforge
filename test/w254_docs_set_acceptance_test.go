@@ -438,13 +438,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // upgrade-sections:begin
 // - the first public release's section (v0.2.0, workflow contract 1; the move from v0.1.x: drain, the aihub read-cursor split SQL, the installer and Pi Web, the per-Cell data dir migration, pf config migrate and stale per-step keys, the removed lanes and the user-lane rewrite)
 // - the v0.2.1 section (the project deactivation status column; the SQL a v0.2.0 database needs, applied by the deploy's own switch window)
+// - the second v0.2.1 section (the pre-submit analysis check: queued develop and micro tickets need `## 分析` or a dated 免分析 before `pf submit` or the auto-claim takes them; corrects the one above — the projects.status migration has no startup check, requests touching the missing column fail with SQLite errors)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "3812496adc21cb74f16514df71962a067e488ce6f6dc11a17c9486f628474d13" {
+	if got := hex.EncodeToString(sum[:]); got != "140fc8bf74d10e920521a38132cdcb7ad077367d2b5776ee0acb030beb8a4e96" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section
