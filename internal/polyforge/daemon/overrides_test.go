@@ -612,3 +612,39 @@ func TestOverrideBlockedClearOfSealedChain(t *testing.T) {
 		t.Fatalf("the merge row must show the chain cleared, pending: %+v", row)
 	}
 }
+
+// A work item in a terminal status (here wrapped) takes no overlay
+// write: it will never be claimed again, so the change would neither
+// land nor ever be consumed (r1#6). DAEMON-409, nothing recorded.
+func TestOverrideWriteTerminalRefused(t *testing.T) {
+	f := newOverrideFixture(t, "wi_ov12")
+	if err := f.td.rt.Stop(context.Background(), f.wi, protocol.FinishWrapped); err != nil {
+		t.Fatalf("wrapped close: %v", err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, ok := f.td.rt.Info(f.wi); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the wrapped close never dropped the job")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	no := false
+	for _, req := range []protocol.OverrideWriteRequest{
+		{Step: "merge", Operator: "usr_t", Models: []string{"pi:ovtest/m-ok"}},
+		{Step: "merge", Operator: "usr_t", Skip: &no},
+	} {
+		res, ae := f.td.ovPost(t, f.wi, req)
+		if ae == nil {
+			t.Fatalf("the wrapped work item accepted %+v: %+v", req, res)
+		}
+		if ae.Code != api.ErrDaemonConflict || !strings.Contains(ae.Detail, "wrapped") {
+			t.Fatalf("the refusal must be DAEMON-409 naming the status: %s (%s)", ae.Code, ae.Detail)
+		}
+	}
+	if pend := f.td.rt.PendingStepOverrides(f.wi); len(pend) != 0 {
+		t.Fatalf("a refused terminal write left a pending record: %+v", pend)
+	}
+}

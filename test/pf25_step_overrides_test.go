@@ -267,11 +267,12 @@ func TestPF25SkipToggleSkipsStepAndRefusesNonSkippable(t *testing.T) {
 	if !strings.Contains(watch, "override_set") {
 		t.Fatalf("`pf watch --once` must show the override_set event:\n%s", watch)
 	}
-	// the un-skip of the skipped step is accepted (a later rewind would
-	// dispatch it again) and idempotent when repeated
-	out = pf25Override(t, d, inst, 0, wi, "--step", "merge", "--unskip")
-	if !strings.Contains(out, "nothing to change") && !strings.Contains(out, "overlay skip=false") {
-		t.Fatalf("the un-skip's rendering:\n%s", out)
+	// the work item is wrapped: it will never run again, so even the
+	// un-skip of its own skipped step is refused (r1#6 — a terminal work
+	// item takes no overlay write)
+	out = pf25Override(t, d, inst, 1, wi, "--step", "merge", "--unskip")
+	if !strings.Contains(out, "DAEMON-409") || !strings.Contains(out, "wrapped") {
+		t.Fatalf("the wrapped work item's un-skip must be refused DAEMON-409 naming its status:\n%s", out)
 	}
 }
 
