@@ -755,7 +755,9 @@ composes exactly as before, re-reading this yaml at every dispatch. The
 overlay holds for the whole ticket — a gate FAIL's rewind re-dispatch
 included — until cleared (`--clear-models`; the step composes from its
 usual sources again), and it travels with the capsule chain: a write on a
-running ticket commits and pushes the chain at once.
+running ticket commits and pushes the chain at once — only the running
+posture is published at once and holds on another machine's re-claim or
+`pf resume`.
 
 Writability: a step with a live dispatch (a running ticket's current
 `in_progress` step) and a step that already ran refuse every action; a
@@ -763,9 +765,19 @@ Writability: a step with a live dispatch (a running ticket's current
 its frozen current step included, the change-before-wake window — and a
 **blocked** ticket's change rides the daemon's local pending record into
 the fresh capsule of its next `pf resume` there (the sealed scene of the
-blocked close is never written; the chain commit of a paused ticket
-lands with the resume, aihub refusing pushes while the ticket is not
-running). The pi candidates must exist in this Cell's step-agent
+blocked close is never written). A parked (paused or blocked) ticket's
+change **holds on this machine only**: it is not published (the answer
+and the `override_set`/`override_clear` event say `published: false`)
+until this machine's resume or claim publishes the capsule chain — a
+paused ticket's kept scene carries it into the resume's own publishes; a
+blocked ticket's claim merges the pending record into the fresh capsule,
+publishes it at once and deletes the record only once that publish
+succeeded (a failed publish keeps it for the next claim's idempotent
+merge). A re-claim or `pf resume` on another machine does not see it;
+aihub refuses pushes while the ticket is not running. A blocked
+`--clear-models` also clears a chain the sealed scene carries (a pending
+clear the claim applies). A ticket in a terminal state (wrapped,
+canceled, failed, …) refuses every override `DAEMON-409`. The pi candidates must exist in this Cell's step-agent
 `models.json` (`<provider>/<id>` or a globally unique bare id); claude
 candidates are not file-checked. The skip switch is the per-ticket
 runtime twin of the `skip` key below: only a step the lane snapshot

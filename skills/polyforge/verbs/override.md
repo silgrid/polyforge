@@ -38,11 +38,14 @@ included) until cleared.
 - A step that **already ran** (done/skipped): refused for every action.
 - A **paused** ticket: every step that has not finished accepts a chain —
   including the frozen current step (the change-before-wake window); the
-  chain commit stays local until the resume (aihub refuses pushes while
-  the ticket is not running).
+  change stays in the kept scene, not published, until the resume here
+  publishes the chain.
 - A **blocked** ticket (this machine's capsule): the change lands in the
   daemon's local pending record and enters the fresh capsule of the next
-  `pf resume` here — the sealed scene is never written.
+  `pf resume` here, published at once — the sealed scene is never written.
+- A parked change holds on **this machine only** (`published: false` in
+  the answer and the event); a resume elsewhere does not see it.
+- A **terminal** ticket (wrapped, canceled, failed): refused `DAEMON-409`.
 
 ## Skip rules
 
