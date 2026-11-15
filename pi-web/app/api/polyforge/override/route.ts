@@ -2,41 +2,23 @@ import { NextResponse } from "next/server";
 import { isApiRequestAllowed, hasJsonContentType } from "@/lib/request-security";
 import { isPolyforgeProfileName } from "@/lib/polyforge-cells-pure";
 import { isPolyforgeWiRef, PolyforgeError } from "@/lib/polyforge-status";
-import { getPolyforgeOverride, overrideActionArgv, sendPolyforgeOverrideAction, type PolyforgeOverrideAction } from "@/lib/polyforge-overrides";
+import { overrideActionArgv, sendPolyforgeOverrideAction, type PolyforgeOverrideAction } from "@/lib/polyforge-overrides";
 
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/polyforge/override?wi=<slug|id>&profile=<cell> — polyforge#25's
- * per-step overlay view: `pf [--profile p] --json override <wi>`, one row
- * per declared step (its status, the lane's skippable declaration, the
- * overlay aspects and the effective model chain's source). The ref is
- * validated BEFORE any subprocess argv; every failure answers 200 JSON
- * with `status: null`, so the client keeps its last view. No 5xx path.
- * Reach: pi-web's authenticated surface only — a step agent has no
- * browser session and cannot reach it (and the daemon refuses its
+ * polyforge#25's per-step overlay face. polyforge#42 (G11): the view read
+ * moved into the watch route's response (`status.override`, composed
+ * server-side there), so this route is the WRITE face only — the GET
+ * handler that answered the view per selection is gone with its last
+ * caller. The view itself (`pf [--profile p] --json override <wi>`, one
+ * row per declared step: its status, the lane's skippable declaration, the
+ * overlay aspects and the effective model chain's source) is still
+ * `getPolyforgeOverride` in lib/polyforge-overrides.ts, now called by the
+ * watch route. Reach: pi-web's authenticated surface only — a step agent
+ * has no browser session and cannot reach it (and the daemon refuses its
  * process tree besides).
  */
-export async function GET(request: Request) {
-  if (!isApiRequestAllowed(request)) return NextResponse.json({ status: null, error: "Forbidden" }, { status: 403 });
-  const searchParams = new URL(request.url).searchParams;
-  const wi = searchParams.get("wi");
-  const profile = searchParams.get("profile") ?? undefined;
-  if (profile !== undefined && !isPolyforgeProfileName(profile)) {
-    return NextResponse.json({ status: null, error: "profile must match [a-z0-9][a-z0-9-]{0,31}" }, { status: 400 });
-  }
-  if (!isPolyforgeWiRef(wi)) {
-    return NextResponse.json({ status: null, error: "wi must be a slug (pi#107) or id (wi_…)" }, { status: 400 });
-  }
-  try {
-    const status = await getPolyforgeOverride(wi, profile);
-    return NextResponse.json({ status });
-  } catch (error) {
-    if (error instanceof PolyforgeError) return NextResponse.json({ status: null, error: error.message }, { status: 200 });
-    return NextResponse.json({ status: null, error: "polyforge is unavailable" }, { status: 200 });
-  }
-}
-
 /**
  * POST /api/polyforge/override { wi, profile?, action } — one overlay
  * change through `pf [--profile p] --json override <wi> --step …`:

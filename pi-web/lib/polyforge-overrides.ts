@@ -37,8 +37,10 @@ function profileArgv(profile: string | undefined): string[] {
 }
 
 /** The capability floor: the first release whose pf carries the override
- *  verb. Documentation only — the panel does not gate on it; an older pf
- *  refuses the unknown verb and the controls show that refusal. */
+ *  verb. Documentation only — nothing gates on it; an older pf refuses the
+ *  unknown verb and the watch route's composed view degrades to absent
+ *  (the controls show the none-source line; the switch still renders from
+ *  the snapshot's own fields). */
 export const POLYFORGE_OVERRIDE_MINIMUM_PF_VERSION = "2.21.0";
 
 /** One step row of the view. */
@@ -191,7 +193,10 @@ const STDERR_CAP = 512;
 /** getPolyforgeOverride reads one work item's override view:
  *  `pf [--profile p] --json override <wi>`. Null on an unreadable body
  *  (a garbage answer is no view, never a 5xx); throws PolyforgeError on
- *  pf's refusal (its typed envelope) or a spawn failure. */
+ *  pf's refusal (its typed envelope) or a spawn failure. polyforge#42
+ *  (G11): the caller is the watch route, which composes the view into its
+ *  response and degrades a failed read to a snapshot without the field —
+ *  the client's only read face for the view. */
 export async function getPolyforgeOverride(wi: string, profile?: string): Promise<PolyforgeOverrideView | null> {
   let stdout: string;
   try {

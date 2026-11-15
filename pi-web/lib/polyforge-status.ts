@@ -3,6 +3,9 @@ import { isPolyforgeProfileName } from "./polyforge-cells-pure";
 import { isPolyforgeWorkItemId } from "./polyforge-cards-pure";
 import { execFileAsync } from "./exec-file";
 import { polyforgePfBin } from "./polyforge-pf-bin";
+// type-only: the override view rides the watch response (polyforge#42
+// G11); the spawn face stays in polyforge-overrides.ts.
+import type { PolyforgeOverrideView } from "./polyforge-overrides";
 
 /**
  * Server-side pf reads for the Polyforge dock panel (pi#108). The transport
@@ -333,6 +336,14 @@ export interface PolyforgeWatchStatus extends PolyforgeSummary {
   /** (polyforge#25, additive): the per-step overlay's values, keyed by
    *  step id — absent when no step carries an aspect. */
   overrides?: Record<string, PolyforgeStepOverride>;
+  /** (polyforge#42 G11, additive): the per-step overlay view the watch
+   *  route composes into this same response (`status.override` — the
+   *  effective chains and their sources, one row per declared step), so
+   *  the selected unstarted step's controls read the snapshot and fetch
+   *  nothing on selection. Absent when the view read failed or answered
+   *  nothing; the values above (`overrides`, `skippableSteps`) still ride
+   *  the watch read itself. */
+  override?: PolyforgeOverrideView;
   events: PolyforgeEvent[];
   progress?: PolyforgeProgress;
   origin?: PolyforgeOrigin;

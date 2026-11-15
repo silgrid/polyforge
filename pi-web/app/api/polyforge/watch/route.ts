@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { isApiRequestAllowed } from "@/lib/request-security";
 import { getPolyforgeWatch, isPolyforgeWiRef, PolyforgeError } from "@/lib/polyforge-status";
 import { isPolyforgeProfileName } from "@/lib/polyforge-cells-pure";
+import { getPolyforgeOverride } from "@/lib/polyforge-overrides";
+import type { PolyforgeOverrideView } from "@/lib/polyforge-overrides";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +14,18 @@ export const dynamic = "force-dynamic";
  * spawns pf); every other failure — pf absent, daemon down, unknown ref, a
  * hang — answers 200 JSON with `status: null`, so the client keeps its last
  * snapshot. No 5xx path.
+ *
+ * polyforge#42 (G11): the same response also carries the per-step overlay
+ * view (`status.override`, `pf [--profile p] --json override <wi>`) — the
+ * panel's snapshot is the one read surface, and the selected unstarted
+ * step's controls fetch nothing on selection (a click-caused read broke
+ * the graph suite's G11). The view is composed only when the watch read
+ * itself answered a snapshot; a failed, refused or unparseable view read
+ * (an older pf without the verb among them) degrades to a snapshot without
+ * the field — the controls still render the switch (skippable, the
+ * overlay's values) and only the effective-model source line falls back to
+ * its none text. Writes keep their own POST face
+ * (app/api/polyforge/override/route.ts).
  */
 export async function GET(request: Request) {
   if (!isApiRequestAllowed(request)) {
@@ -32,7 +46,11 @@ export async function GET(request: Request) {
   }
   try {
     const status = await getPolyforgeWatch(wi, profile);
-    return NextResponse.json({ status });
+    let override: PolyforgeOverrideView | undefined;
+    if (status) {
+      override = await getPolyforgeOverride(wi, profile).catch(() => undefined) ?? undefined;
+    }
+    return NextResponse.json({ status: status ? { ...status, ...(override ? { override } : {}) } : status });
   } catch (error) {
     if (error instanceof PolyforgeError) {
       return NextResponse.json({ status: null, error: error.message });

@@ -2122,6 +2122,7 @@ export function PolyforgePanel({
                               step={selectedStep}
                               skippable={watchStatus.skippableSteps?.includes(selectedStep) ?? false}
                               overlay={watchStatus.overrides?.[selectedStep]}
+                              row={watchStatus.override?.steps.find((r) => r.id === selectedStep)}
                               onApplied={onRefresh}
                             />
                           )}
