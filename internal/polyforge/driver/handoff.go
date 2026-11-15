@@ -291,13 +291,61 @@ func (d *Driver) writeHandoffOpening() {
 		b.WriteString(l.NoAcceptance + "\n")
 	}
 	fmt.Fprintf(&b, "\n## %s\n\n", l.StepOrder)
-	for i, s := range d.workflow.Steps {
+	b.WriteString(renderStepOrderLines(stepOrderLines(d.workflow), l))
+	b.WriteString("\n" + fmt.Sprintf(l.MaxRewinds, d.workflow.MaxRewinds) + "\n")
+	if err := stepcall.AppendHandoff(d.wi.CapsuleDir, b.String()); err != nil {
+		fmt.Fprintf(os.Stderr, "driver: %s: the hand-off document's opening could not be written: %v\n", d.wi.ID, err)
+	}
+}
+
+// StepOrderLine is one line of a lane's step order as the hand-off
+// document's opening and a dispatch's header restate it: the step's
+// identity and the notes that render beside it (gate, its fail target,
+// waivable, skipped, the last step an agent runs).
+type StepOrderLine struct {
+	ID       string
+	Gate     bool
+	OnFail   string
+	Waivable bool
+	Skipped  bool
+	Last     bool
+}
+
+// stepOrderLines answers the workflow's step order as structured lines:
+// one per step, in declaration order, with the last-agent-step note
+// computed on the workflow as it stands (WithSkipped applied) — the same
+// facts the hand-off document's opening renders at claim time and every
+// dispatch's header renders at dispatch time (polyforge#47 AC1).
+func stepOrderLines(wf *Workflow) []StepOrderLine {
+	if wf == nil {
+		return nil
+	}
+	out := make([]StepOrderLine, 0, len(wf.Steps))
+	for _, s := range wf.Steps {
+		line := StepOrderLine{ID: s.ID, Gate: s.Gate, Waivable: s.Waivable, Skipped: s.Skipped}
+		if s.OnFail != nil {
+			line.OnFail = s.OnFail.Target
+		}
+		if !s.Skipped {
+			line.Last = wf.lastAgentStep(s.ID)
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// renderStepOrderLines renders the lines as the numbered list the opening
+// and the dispatch header carry, in the labels' language. One fact, one
+// place: both faces render through this.
+func renderStepOrderLines(lines []StepOrderLine, l stepcall.Labels) string {
+	var b strings.Builder
+	for i, s := range lines {
 		fmt.Fprintf(&b, "%d. `%s`", i+1, s.ID)
 		var notes []string
 		if s.Gate {
 			note := "gate"
-			if s.OnFail != nil && s.OnFail.Target != "" {
-				note += fmt.Sprintf(l.GateRewindsTo, s.OnFail.Target)
+			if s.OnFail != "" {
+			note += fmt.Sprintf(l.GateRewindsTo, s.OnFail)
 			}
 			if s.Waivable {
 				note += l.Waivable
@@ -306,7 +354,7 @@ func (d *Driver) writeHandoffOpening() {
 		}
 		if s.Skipped {
 			notes = append(notes, l.Skipped)
-		} else if d.workflow.lastAgentStep(s.ID) {
+		} else if s.Last {
 			notes = append(notes, l.LastStep)
 		}
 		if len(notes) > 0 {
@@ -314,10 +362,7 @@ func (d *Driver) writeHandoffOpening() {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n" + fmt.Sprintf(l.MaxRewinds, d.workflow.MaxRewinds) + "\n")
-	if err := stepcall.AppendHandoff(d.wi.CapsuleDir, b.String()); err != nil {
-		fmt.Fprintf(os.Stderr, "driver: %s: the hand-off document's opening could not be written: %v\n", d.wi.ID, err)
-	}
+	return b.String()
 }
 
 // appendHandoffEvent appends one daemon event section, titled title in

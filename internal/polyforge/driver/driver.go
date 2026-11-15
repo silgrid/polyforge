@@ -1092,6 +1092,13 @@ type StepSpawn struct {
 	StepID string
 	// WIID is the parent work item.
 	WIID string
+	// StepOrder is the lane's step order as it stands for this dispatch
+	// (stepOrderLines of the driver's current workflow — skips applied):
+	// the dispatch's header restates it so a mid-run override skip reaches
+	// the steps dispatched after it (polyforge#47 AC1). nil = none in
+	// effect (the prompt then carries no order; the hand-off document's
+	// opening keeps its claim-time copy either way).
+	StepOrder []StepOrderLine
 	// SpawnN is this derivation's ordinal — the step process's fence
 	// identity; its hand-off is recorded under it.
 	SpawnN int64

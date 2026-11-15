@@ -527,6 +527,10 @@ type promptParts struct {
 	// CapsuleRoot is the capsule's absolute root: every capsule-relative
 	// path the prompt names resolves against it (polyforge#244).
 	CapsuleRoot string
+	// StepOrder is the lane's step order as it stands for this dispatch
+	// (StepSpawn.StepOrder); the dispatch part restates it, marking the
+	// skipped steps and the last step an agent runs. nil = none.
+	StepOrder []StepOrderLine
 	// StepHeader is the lane snapshot's _shared/step-header.md followed by
 	// its _shared/handoff.md (the hand-off body template), verbatim
 	// (stepHeader).
