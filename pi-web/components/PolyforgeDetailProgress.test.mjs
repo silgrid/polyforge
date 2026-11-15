@@ -17,7 +17,10 @@ import { createJiti } from "jiti";
 const fixture = (name) => fileURLToPath(new URL(`../hooks/__fixtures__/${name}`, import.meta.url));
 const shimPath = fixture("react-hook-shim.mjs");
 const jsxRuntimePath = fixture("react-jsx-runtime.mjs");
-const stubsPath = fixture("polyforge-panel-progress-stubs.mjs");
+// The panel-progress stubs live under a test path (hooks/__tests__/, review
+// r1#1): a unit's test commit carries the test side alone, so the fixtures it
+// owns must not sit outside the recognized test paths.
+const stubsPath = fileURLToPath(new URL("../hooks/__tests__/polyforge-panel-progress-stubs.mjs", import.meta.url));
 const modulePath = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
 // jiti's own aliases, not tsconfig paths (the precedent's rationale): each
 // "@/…" and stubbed relative specifier the panel module makes is aliased
