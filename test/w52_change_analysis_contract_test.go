@@ -167,9 +167,9 @@ func TestW52TheReferencesStateTheTierAndTheUnion(t *testing.T) {
 	w52Stale(t, "docs/reference/commands.md", []string{"the only tier it runs"})
 	w52Wants(t, "workflows/_shared/scripts/verify.py", []string{
 		"verify.py — the mechanical verification of a capsule's task repos as the sync step left them (develop's verification step)",
-		"\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/verify.py\" --tier auto|light|full \\\"",
+		"\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/verify.py\" --tier auto|light|full \\\\",
 		"[--unit-runs FILE] [--analysis FILE] [--capsule DIR]",
-		"The tier: `--tier auto` (the lane's line) reads the capsule's work item",
+		"The tier: ``--tier auto`` (the lane's line) reads the capsule's work item",
 		"Each task repo's tree is verified at its HEAD: no fetch, no merge (a merge in progress makes the run not judged); the base",
 	})
 	w52Stale(t, "workflows/_shared/scripts/verify.py", []string{"the light verification of a capsule's task repos"})

@@ -1,20 +1,10 @@
-"""verify.py — the light verification of a capsule's task repos as the sync
+"""verify.py — the mechanical verification of a capsule's task repos as the sync
 step left them (develop's verification step).
 
-    "$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify.py" --tier light \\
-        [--unit-runs FILE] [--capsule DIR] [--engine PATH] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
+    "$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify.py" --tier auto|light|full \\
+        [--unit-runs FILE] [--analysis FILE] [--capsule DIR] [--engine PATH] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
 
 Each task repo's tree is verified at its HEAD: no fetch, no merge (a merge in
-The tier: ``--tier auto`` (the lane's line) reads the capsule's work item
-(``runtime-state/work-item.json``) — a ticket carrying a truthy
-``integration_fix`` attr (the marker an integration batch's full-gate
-writes on its fix tickets) runs the **full** bar: the engine plans ``--full``
-(a forced-full path, a full tail — everything the light tier runs and the
-rest), with no nested-root light planning, and the whole run's window is
-the budget. Every other ticket runs the **light** tier, exactly as before.
-``--tier light`` and ``--tier full`` are the hand run's explicit overrides
-(an explicit light stays light on a marked ticket).
-
 progress makes the run not judged); the base, and the baseline a still-red
 unit is proven pre-existing on, is ``merge-base HEAD origin/<default>``. The
 scope engine plans each touched repo ``--light`` and every nested engine root
@@ -29,6 +19,16 @@ step's progress file (``pfstep.progress``): each plan command opens with
 ``FAIL - exit <n> (<duration>), log <path>``, ``SKIP - <why>`` or ``not
 started - <why>`` (gate.py's format), so a reader watching the capsule
 follows a command that has not ended.
+
+The tier: ``--tier auto`` (the lane's line) reads the capsule's work item
+(``runtime-state/work-item.json``) — a ticket carrying a truthy
+``integration_fix`` attr (the marker an integration batch's full-gate
+writes on its fix tickets) runs the **full** bar: the engine plans ``--full``
+(a forced-full path, a full tail — everything the light tier runs and the
+rest), with no nested-root light planning, and the whole run's window is
+the budget. Every other ticket runs the **light** tier, exactly as before.
+``--tier light`` and ``--tier full`` are the hand run's explicit overrides
+(an explicit light stays light on a marked ticket).
 
 Where a repo's bar runs is the repo's: one whose HEAD carries
 ``.polyforge/Dockerfile.verify`` runs its engine and bar in a verification

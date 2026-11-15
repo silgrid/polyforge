@@ -57,7 +57,8 @@ reference](reference/workflow-contract.md#user-lanes)'s.
 The shipped bundles: `develop` (the default delivery lane: `build` →
 `review` → `sync` (`sync.py` merges the default branch into the branch; the
 sync agent resolves a real conflict in place) → `verification` (`verify.py`,
-the light tier; the lane's one waivable gate) → `publish`, which opens the
+the tier the work item's attrs decide: the light tier, or the full bar on an
+integration batch's fix ticket; the lane's one waivable gate) → `publish`, which opens the
 PR → `merge` (`merge.py` merges it into the default branch under the
 per-repo merge lock; a project may skip it, `steps.<project>.merge.skip:
 true`, and its work items then end after `publish`, wrapped `published`
@@ -91,9 +92,7 @@ to re-file the work on `develop` and cancels the work item on the owner's
 word.
 Their own `README.md` files carry each lane's narrative. Every step of
 every lane is an agent step (the daemon runs no step
-itself); develop's verification runs `verify.py --tier light --unit-runs
-artifacts/build/units.json` through its skill (the build's recorded unit runs
-ride along); there is no per-work-item tier. develop's `build` and `review`
+itself); develop's verification runs `verify.py --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json` through its skill (the build's recorded unit runs ride along; the tier is the work item's own — an integration batch's fix ticket runs the full bar, every other ticket the light one). The change analysis's listed tests run beside the plan, add-only, under its supplement cap. develop's `build` and `review`
 follow skills too: build records each unit's red-then-green run in
 `artifacts/build/units.json`, and review runs the workflow's `facts.py` (the units' red runs
 replayed at their test commits) under the heavy-run admission.

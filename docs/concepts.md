@@ -500,13 +500,17 @@ rewind — and reads no content, and no agent merges by hand:
   section), or its own earlier `after` when merge's FAIL
   sent the lane back here — a commit made outside the lane is asked about,
   never silently merged.
-- **verification** (gate, `waivable: true`; `verify.py --tier light
-  --unit-runs artifacts/build/units.json --json --out
-  artifacts/verify/result.json`, under the heavy-run admission; each unit
-  build recorded runs again as written beside the light plan)
+- **verification** (gate, `waivable: true`; `verify.py --tier auto
+  --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json
+  --json --out artifacts/verify/result.json`, under the heavy-run admission; each unit
+  build recorded runs again as written beside the plan)
   verifies first that the sync's result lists no conflict and that each
-  repo's HEAD is its `after`, then runs the light tier over the tree as it
-  stands — the default branch already merged in by `sync`; a conflicting
+  repo's HEAD is its `after`, then runs the tier the work item's attrs decide over the
+  tree as it stands — the light tier, or the full bar on an integration batch's fix
+  ticket (its `integration_fix` attr) — and beside the plan the change analysis's
+  listed tests run beside the plan, add-only, under the analysis's supplement cap
+  (a listed test that does not exist fails its check naming it); the default branch
+  already merged in by `sync`; a conflicting
   default branch never reaches it. The result file's `verdict` is the exit
   code's alone and its `heads` name the tree it ran over; a red the agent can
   place on the change FAILs to `build`, a red it cannot place is asked
@@ -638,8 +642,10 @@ with its own credentials (a step agent holds none) once the step hands off
   way a hold is cleared; a cleared hold fixes nothing — a red still on
   the default branch keeps failing every later batch until it is fixed or
   reverted) or fix (a `file` write on the develop lane, with its acceptance,
-  registered on the held item by an `attrs` write — the hold reads its
-  registered tickets, so it is open again while the new one can release it).
+  registered on the held item by an `attrs` write — the ticket itself carries
+  the `integration_fix` attr that makes its own verification run the full bar —
+  the hold reads its registered tickets, so it is open again while the new one
+  can release it).
 - `revert` (`revert.py`, the cheap tier; the merge lock) — carries out the
   reverts the owner ruled, collect's and a red gate's (the ones a full-gate
   FAIL names in its hand-off): each item and its landed fix tickets reverted
@@ -672,7 +678,10 @@ with its own credentials (a step agent holds none) once the step hands off
   agent decides on the triage: one fix ticket per root cause, a `file`
   write whose acceptance names each red unit that passes on the fixed head
   (filed on the develop lane at high priority under a stable key, so a
-  resumed batch never files twice) and, per blamed source, an `attrs` write
+  resumed batch never files twice) — each fix ticket filed with the
+  `integration_fix` attr, an `attrs` write beside the file, the marker that
+  makes the ticket's own develop verification run the full bar — and, per
+  blamed source, an `attrs` write
   (its round, the gated heads as `red_heads`, the ticket, named `key:<k>`
   until it is filed); the batch's result is then `red`. A source whose fix
   tickets failed two rounds, a pre-existing or an unattributed red goes to
