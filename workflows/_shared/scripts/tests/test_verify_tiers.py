@@ -103,6 +103,21 @@ class TiersTest(unittest.TestCase):
         self.assertTrue(any(("--light" in ln and "--full" not in ln) for ln in engine_args(eng)),
                         engine_args(eng))
 
+    def test_a_string_marker_does_not_switch(self) -> None:
+        """The marker is the boolean the batch writes, never any string: a
+        string value (even a truthy-looking one) leaves the ticket light."""
+        for name, attrs in (("a string", {"integration_fix": "yes"}),
+                            ("a number", {"integration_fix": 1}),
+                            ("false", {"integration_fix": False})):
+            with self.subTest(name):
+                d = os.path.join(self.root, name.replace(" ", "-"))
+                os.makedirs(d)
+                fx, eng = tier_fixture(d)
+                work_item(fx, attrs)
+                r = run_verify(fx.capsule, eng, tier="auto")
+                self.assertEqual(r.exit, 0, r.result.get("summary"))
+                self.assertEqual(self.doc(r)["tier"]["effective"], "light", self.doc(r)["tier"])
+
     def test_no_work_item_doc_is_light(self) -> None:
         fx, eng = tier_fixture(self.root)
         r = run_verify(fx.capsule, eng, tier="auto")
