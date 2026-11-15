@@ -11,8 +11,10 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
@@ -166,5 +168,51 @@ func TestTerminalCloseClearsPendingRecord(t *testing.T) {
 	}
 	if pend := readPendingFile(t, r); pend != nil && pend["wi_ov4n"] != nil {
 		t.Fatalf("a terminal close must clear the pending record: %+v", pend["wi_ov4n"])
+	}
+}
+
+// The pending record is one daemon-global file that different work
+// items' actors read-modify-write: concurrent blocked writes of many
+// work items must each survive (r1#4 — no write may lose another's
+// entry).
+func TestPendingOverrideConcurrentWritersKeepEveryEntry(t *testing.T) {
+	r, _ := pendingEnv(t)
+	const n = 48
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wi := fmt.Sprintf("wi_ov10_%02d", i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			out, err := r.ApplyStepOverride(context.Background(), wi, OverrideChange{
+				Step: "fix", Operator: "usr_1", Models: []string{"pi:ov/" + wi},
+			})
+			if err == nil && (!out.Changed || out.Posture != OverridePostureBlocked) {
+				err = fmt.Errorf("%s: outcome %+v, want a changed blocked write", wi, out)
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("a concurrent blocked write failed: %v", err)
+		}
+	}
+	pend := readPendingFile(t, r)
+	lost := 0
+	for i := 0; i < n; i++ {
+		wi := fmt.Sprintf("wi_ov10_%02d", i)
+		if e := pend[wi]["fix"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/"+wi {
+			lost++
+		}
+	}
+	if lost != 0 {
+		t.Fatalf("%d of %d concurrent blocked writes lost their pending entry (the record's read-modify-write must be serialized)", lost, n)
 	}
 }
