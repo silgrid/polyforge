@@ -6,12 +6,16 @@ package stepcall
 // early return used to leave the descriptor open: the daemon is
 // long-lived, so every read of a poisoned session file leaked one fd).
 // The scan error still zeroes the whole summary (the established
-// semantics); the leak is what the fix removes, so the test calls
-// ReadUsage in a loop and counts /proc/self/fd.
+// semantics). The leak is pinned on the descriptor itself: with the
+// garbage collector paused (the os.File finalizer that would close a
+// stray fd cannot run without one), one read of the poisoned file must
+// leave no open descriptor to it.
 
 import (
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -28,14 +32,24 @@ func overlongUsageFile(t *testing.T) string {
 	return p
 }
 
-// fdCount answers how many file descriptors this process holds.
-func fdCount(t *testing.T) int {
+// fdTargets answers the fd number → readlink target map of this process.
+func fdTargets(t *testing.T) map[int]string {
 	t.Helper()
 	entries, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
-		t.Skipf("this platform has no /proc/self/fd to count: %v", err)
+		t.Skipf("this platform has no /proc/self/fd to read: %v", err)
 	}
-	return len(entries)
+	out := map[int]string{}
+	for _, e := range entries {
+		n, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		if target, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name())); err == nil {
+			out[n] = target
+		}
+	}
+	return out
 }
 
 func TestUsageScanErrorClosesEveryFile(t *testing.T) {
@@ -49,17 +63,19 @@ func TestUsageScanErrorClosesEveryFile(t *testing.T) {
 		t.Fatalf("a scan error must keep the summary unknown: %+v", got)
 	}
 
-	// The leak: reading the poisoned file over and over must not grow
-	// the descriptor count (before the fix each read left one open).
-	ReadUsage([]string{poisoned}, false) // warm up: one lazy fd is the tolerance
-	before := fdCount(t)
-	const rounds = 40
-	for i := 0; i < rounds; i++ {
-		if got := ReadUsage([]string{poisoned}, false); got.Known {
-			t.Fatalf("round %d: the poisoned file must stay unknown: %+v", i, got)
+	// The leak: with GC paused (no finalizer can close a stray os.File),
+	// one read of the poisoned file must leave no open fd to it.
+	old := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(old)
+	before := fdTargets(t)
+	ReadUsage([]string{poisoned}, false)
+	after := fdTargets(t)
+	for fd, target := range after {
+		if _, had := before[fd]; had {
+			continue
 		}
-	}
-	if grew := fdCount(t) - before; grew > 2 {
-		t.Fatalf("%d reads of the scan-error file grew the fd count by %d (before %d, after %d): the file is not closed on the error path", rounds, grew, before, fdCount(t))
+		if strings.HasSuffix(target, "poisoned.jsonl") {
+			t.Fatalf("fd %d to %s survived ReadUsage: the scan-error path does not close the file", fd, target)
+		}
 	}
 }
