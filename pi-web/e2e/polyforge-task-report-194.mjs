@@ -1,4 +1,5 @@
 // carries: components/PolyforgeTasks*, lib/polyforge-tasks*, app/api/polyforge/tasks/*
+// carries: lib/polyforge-scope-read-discipline*
 // — Polyforge Tasks: the card's report tail line and the reporter filter.
 //
 // Authored pre-code against artifacts/spec.md (Requirement "The authored e2e
