@@ -198,8 +198,8 @@ test("an unscoped reload is the default Cell's, then the Host aggregate", async 
   await reset();
   const result = await write.reloadPolyforgeConfig(DEFAULT());
   assert.deepEqual(result.reloaded, { reloaded: ["default"] });
-  // the pin reads the probe's cached capabilities: no pf --json --version of its own
-  assert.deepEqual(argvs(), [["--profile", "default", "--json", "config", "reload"], ["--json", "ops", "status"]]);
+  // a reload forces the presence probe (the one pf --json --version) before it pins: it sees the pf installed now
+  assert.deepEqual(argvs(), [["--json", "--version"], ["--profile", "default", "--json", "config", "reload"], ["--json", "ops", "status"]]);
 });
 
 test("a rollback of an entry without a scope writes the default Cell's file back", async () => {
