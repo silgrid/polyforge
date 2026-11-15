@@ -314,12 +314,14 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Skip != nil {
+		// both directions of the switch are the lane's skippable
+		// declaration's: a non-skippable step neither skips nor un-skips
+		if !spec.Skippable {
+			writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("the lane does not declare step %s skippable, so its skip switch cannot be set or cleared mid-run; to let a failed gate of it pass waive it instead (pf answer — the step hands off waive citing your words; waivable gates only)", req.Step))
+			return
+		}
 		setting := *req.Skip
 		if setting {
-			if !spec.Skippable {
-				writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("the lane does not declare step %s skippable, so it cannot be switched off mid-run; to let a failed gate of it pass waive it instead (pf answer — the step hands off waive citing your words; waivable gates only)", req.Step))
-				return
-			}
 			if status != "" && status != capsule.StepPending {
 				writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has started (its status is %s): the skip switch is for steps that never started", req.Step, status))
 				return
