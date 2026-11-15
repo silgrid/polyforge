@@ -655,8 +655,11 @@ try {
 
   // review s10#1: a thinking narration renders dim as well as
   // italic — the Markdown body's own `color: var(--text)` must not win over the
-  // dim treatment (#251). Computed colours, not source.
-  await check("S238-26", () => withPage({}, async (page) => {
+  // dim treatment (#251). Computed colours, not source. polyforge#53: the
+  // thinking row now renders through the session's shared fold (collapsed by
+  // default), so the scenario seeds the 「默认展开思考块」 preference — the
+  // row is expanded without a click and the colour assertions are unchanged.
+  await check("S238-26", () => withPage({ storage: { "pi-thinking-expanded": "true" } }, async (page) => {
     page.__progress.body = progressBody([
       line("c1", "narration", "E2E-S238-PLAIN-PARA"),
       line("c2", "narration", "E2E-S238-THINK-PARA **E2E-S238-THINK-STRONG**", { variant: "thinking" }),
