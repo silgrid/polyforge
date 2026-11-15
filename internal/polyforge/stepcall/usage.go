@@ -69,10 +69,13 @@ func ReadUsage(paths []string, includesSubagents bool, start ...string) UsageSum
 				out.add(usageValues{u.Input, u.CacheRead, u.CacheWrite, u.Output})
 			}
 		}
+		// a scan error (a line over the 16 MiB token bound) closes the
+		// file too — the daemon is long-lived, and this path used to leak
+		// one descriptor per read of a poisoned session file (the summary
+		// is still discarded whole: a file that does not scan proves
+		// nothing about its usage; a close error stays ignored as before).
 		if err := sc.Err(); err != nil {
-			return UsageSummary{IncludesSubagents: includesSubagents}
-		}
-		if err := sc.Err(); err != nil {
+			_ = f.Close()
 			return UsageSummary{IncludesSubagents: includesSubagents}
 		}
 		_ = f.Close()
