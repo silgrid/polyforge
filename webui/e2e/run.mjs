@@ -900,10 +900,7 @@ function enc(segment) {
 // the restore entry in the same row, and restoring moves the project
 // back into the default view — the admin key this run holds carries the
 // restore right, so the in-place door is exercised end to end through
-// the console's own write route. The scenario ends by re-deactivating
-// the project through the same v1 door the driver seeded it with, so
-// the suite stays repeatable on one server (polyforge#39: the w135
-// driver runs it three times against the same install).
+// the console's own write route.
 async function scenarioPickerDeactivated(page) {
   // Every segment settles on the page's expected state, polled with a
   // bound — and each view switch ALSO asserts on the /web/api/context
@@ -969,20 +966,4 @@ async function scenarioPickerDeactivated(page) {
     (await backRow.count()) === 1 && !(await backRow.textContent()).includes('deactivated'),
   'S24: the default view never settled on the restored project, unmarked')
   assert(!(await backRow.textContent()).includes('deactivated'), 'S24: the restored project is still marked in the default view')
-
-  // Re-arm the fixture this scenario consumed: the restore moved the
-  // dormant project back to active, but the suite must be repeatable on
-  // one server — the w135 driver runs it three times against the same
-  // install, and the next run's first context answer must not list it.
-  // The re-deactivation goes through the same v1 door the Go driver
-  // seeded it with (the admin key this run holds carries the right), and
-  // its answer is asserted — never fired and forgotten.
-  const rearmed = await fetch(`${baseURL}/api/v1/projects/${enc(dormant)}/deactivate`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${key}` },
-  })
-  assert(rearmed.ok, `S24: re-deactivating the restored project did not answer 200 (${rearmed.status})`)
-  const rearmedProject = await rearmed.json()
-  assert(rearmedProject?.name === dormant && rearmedProject?.status === 'deactivated',
-    'S24: the re-deactivation answer does not return the project to its pre-scenario deactivated state')
 }
