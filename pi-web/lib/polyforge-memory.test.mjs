@@ -227,7 +227,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
 const out = (v) => { process.stdout.write(JSON.stringify(v)); process.exit(0); };
 if (args[0] === "--version") { process.stdout.write("v2.20.16\\n"); process.exit(0); }
-if (args[0] === "--json" && args[1] === "version") out({ version: "v2.20.16", capabilities: ${JSON.stringify(capabilities)} });
+if (args[0] === "--json" && args[1] === "--version") out({ version: "v2.20.16", capabilities: ${JSON.stringify(capabilities)} });
 if (args[0] === "--json" && args[1] === "profile") { ${profile ? `out({ profile: ${JSON.stringify(profile)}, source: "cwd" });` : 'process.exit(2);'} }
 const rest = args.filter((a) => a !== "--json");
 const pi = rest.indexOf("--profile"); if (pi >= 0) rest.splice(pi, 2);
@@ -254,7 +254,7 @@ process.exit(2);
 }
 
 /** The data calls only: the probe, capability and resolution reads dropped. */
-const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && !(a[1] === "version") && !(a[1] === "profile"));
+const dataCalls = (calls) => calls().filter((a) => a[0] !== "--version" && a[1] !== "--version" && !(a[1] === "profile"));
 
 test("resolvePolyforgeCellScope names the resolved Cell and pins every call to it (AC4)", async (t) => {
   const calls = cellPf(t);

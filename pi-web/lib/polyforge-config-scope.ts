@@ -16,22 +16,26 @@ import {
  * cannot see. So every per-Cell config read and write the page's routes make
  * names its Cell here (the default Cell included), and a Host config call
  * names the Host. Host commands (`pf ops status`, `pf cell …`,
- * `pf --json version`) need no pin: pf scopes them to the Host unless an
+ * `pf --json --version`) need no pin: pf scopes them to the Host unless an
  * explicit `--profile` targets a Cell. Reach: pi-web's own server routes only;
  * nothing here is a daemon or AIHub entry point.
  */
 
 const VERSION_TIMEOUT_MS = 15000;
 
-/** The protocol capabilities of the installed pf (`pf --json version`:
- *  local, answerable with the daemon down); [] when pf is absent, fails or
- *  reports none (an older pf). Fresh on every call, so an upgrade shows on
- *  the next read. Never throws. */
+/** The protocol capabilities of the installed pf (`pf --json --version`:
+ *  the `--version` flag's machine line under `--json`, same source and same
+ *  bytes as the `version` verb — local, answerable with the daemon down);
+ *  [] when pf is absent, fails or reports none (an older pf). Fresh on every
+ *  call, so an upgrade shows on the next read. Never throws. The flag
+ *  spelling, not the verb, is the read discipline of the dock's authored
+ *  ledgers (S194-10): `--version` is whitelisted, a `version` verb is not
+ *  (polyforge#44). */
 export function readPolyforgeCapabilities(): Promise<string[]> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(polyforgePfBin(), ["--json", "version"], { shell: false, stdio: ["ignore", "pipe", "ignore"] });
+      child = spawn(polyforgePfBin(), ["--json", "--version"], { shell: false, stdio: ["ignore", "pipe", "ignore"] });
     } catch {
       resolve([]);
       return;
@@ -65,7 +69,7 @@ export function readPolyforgeCapabilities(): Promise<string[]> {
 /** One scope pinned for this pf: the argv, or why this pf cannot address it. */
 export type PinnedPolyforgeScope = ({ ok: true } & PolyforgeScopeArgv) | { ok: false; reason: string };
 
-/** Pin `scope` for the installed pf (one `pf --json version` read): a
+/** Pin `scope` for the installed pf (one `pf --json --version` read): a
  *  multi-Cell pf gets `--profile NAME` / `--host` on every call; a pf without
  *  the multi-Cell protocol addresses only the default Cell (its one file,
  *  unflagged) and refuses the Host or a named Cell with the upgrade hint

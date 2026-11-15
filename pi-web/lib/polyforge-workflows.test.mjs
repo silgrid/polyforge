@@ -96,7 +96,7 @@ test("with no cli.toml mapping, every read spawns the cwd's two pf reads afresh 
   const reads = calls().filter((line) => line !== "--version");
   // one capability read per call pins the default Cell (this
   // stub reports none: a pre-Cell pf, so the reads stay unflagged)
-  assert.equal(reads.filter((line) => line === "--json version").length, 2, "one capability read per call");
+  assert.equal(reads.filter((line) => line === "--json --version").length, 2, "one capability read per call");
   assert.equal(reads.filter((line) => line === "--json workflows --cwd /ws/sub").length, 2, "one fresh pf workflows per call");
   assert.equal(reads.filter((line) => line === "--json config workspace --cwd /ws/sub").length, 2, "one fresh workspace read per call");
   assert.equal(reads.filter((line) => line === "--json config list").length, 2, "one mapping read per call (this stub has none)");
@@ -206,7 +206,7 @@ test("the union reads 1 mapping + 2 per mapped workspace, fresh each call, never
   assert.equal(read.reason, undefined);
   await lib.readPolyforgeWorkflows("/w/b/sub", DEFAULT_CELL);
   const reads = calls();
-  assert.equal(reads.filter((line) => line === "--json version").length, 2, "one capability read per call");
+  assert.equal(reads.filter((line) => line === "--json --version").length, 2, "one capability read per call");
   assert.equal(reads.filter((line) => line === "--json config list").length, 2);
   for (const path of Object.keys(MAPPED)) {
     assert.equal(reads.filter((line) => line === `--json workflows --cwd ${path}`).length, 2, path);

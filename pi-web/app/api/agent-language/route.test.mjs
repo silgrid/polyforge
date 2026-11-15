@@ -109,7 +109,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(path.join(dir, "argv.log"), JSON.stringify(args) + "\\n");
 const rest = args.filter((a) => a !== "--json");
 const out = (doc) => { process.stdout.write(JSON.stringify(doc) + "\\n"); process.exit(0); };
-if (args.includes("--version")) { process.stdout.write("v2.30.0\\n"); process.exit(0); }
+if (args.includes("--version")) { if (args.includes("--json")) out({ version: "v2.30.0", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] }); process.stdout.write("v2.30.0\\n"); process.exit(0); }
 if (rest[0] === "version") out({ version: "v2.30.0", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] });
 const scoped = rest[0] === "--profile" && rest[1] === "default";
 const verb = scoped ? rest.slice(2) : rest;

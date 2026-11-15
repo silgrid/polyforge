@@ -72,7 +72,7 @@ const resolved = s.caps ? flagProfile || process.env.PF_PROFILE || Object.keys(s
 record.cell = host ? "host" : resolved;
 const file = s.files[host ? "default" : resolved];
 const opt = (name) => { const at = verb.indexOf(name); return at >= 0 ? verb[at + 1] : ""; };
-if (verb[0] === "version") { if (!s.caps) refuse("pf: unknown command version"); out({ version: "v2.20.21", capabilities: s.caps }); }
+if (verb[0] === "--version") { if (!s.caps) { fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(record) + "\\n"); process.stdout.write("v2.20.21\\n"); process.exit(0); } out({ version: "v2.20.21", capabilities: s.caps }); }
 if (verb[0] === "config" && verb[1] === "list") {
   if (host) out({ file: { sha256: "sha-host", exists: true }, items: [{ key: "max_concurrent_jobs", value: 6, source: "file", class: "live" }] });
   out({ file: { sha256: file.sha, exists: true }, items: [
@@ -143,7 +143,7 @@ test("the default pane's read is the default Cell's, every config verb pinned, o
   assert.equal(doc.items.find((item) => item.key === "step_timeout").value, "30m0s", "the default Cell's value, not alpha's 45m0s");
   assert.equal(doc.mapped, true, "the workspace read matched the default Cell's mapping");
   assert.deepEqual(argvs(), [
-    ["--json", "version"],
+    ["--json", "--version"],
     ["--profile", "default", "--json", "config", "list"],
     ["--json", "ops", "status"],
     ["--profile", "default", "--json", "config", "workspace", "--cwd", project],
@@ -156,11 +156,11 @@ test("the Host and a named Cell keep their own scope; only a named Cell reads it
   reset();
   const host = await read.readPolyforgeConfig("", { host: true });
   assert.equal(host.file.sha256, "sha-host");
-  assert.deepEqual(argvs(), [["--json", "version"], ["--json", "config", "list", "--host"], ["--json", "ops", "status"]]);
+  assert.deepEqual(argvs(), [["--json", "--version"], ["--json", "config", "list", "--host"], ["--json", "ops", "status"]]);
   reset();
   const alpha = await read.readPolyforgeConfig("", { profile: "alpha" });
   assert.equal(alpha.items.find((item) => item.key === "step_timeout").daemon.value, "45m0s", "alpha's own live value");
-  assert.deepEqual(argvs(), [["--json", "version"], ["--profile", "alpha", "--json", "config", "list"], ["--profile", "alpha", "--json", "ops", "status"]]);
+  assert.deepEqual(argvs(), [["--json", "--version"], ["--profile", "alpha", "--json", "config", "list"], ["--profile", "alpha", "--json", "ops", "status"]]);
 });
 
 test("an unscoped write lands in the default Cell's file with that file's old value and CAS hash", async () => {
@@ -193,7 +193,7 @@ test("an unscoped reload is the default Cell's, then the Host aggregate", async 
   reset();
   const result = await write.reloadPolyforgeConfig(DEFAULT());
   assert.deepEqual(result.reloaded, { reloaded: ["default"] });
-  assert.deepEqual(argvs(), [["--json", "version"], ["--profile", "default", "--json", "config", "reload"], ["--json", "ops", "status"]]);
+  assert.deepEqual(argvs(), [["--json", "--version"], ["--profile", "default", "--json", "config", "reload"], ["--json", "ops", "status"]]);
 });
 
 test("a rollback of an entry without a scope writes the default Cell's file back", async () => {
@@ -213,7 +213,7 @@ test("the workflow card reads and writes the default Cell's workspaces", async (
   const doc = await workflows.readPolyforgeWorkflows(project, DEFAULT());
   assert.deepEqual(doc.workspaces.map((entry) => entry.workspace), [project], "the default Cell's mapping, not alpha's");
   assert.deepEqual(argvs(), [
-    ["--json", "version"],
+    ["--json", "--version"],
     ["--profile", "default", "--json", "config", "list"],
     ["--profile", "default", "--json", "config", "workspace", "--cwd", project],
     ["--profile", "default", "--json", "workflows", "--cwd", project],
@@ -237,7 +237,7 @@ test("a pf without the multi-Cell protocol: the default Cell unflagged, the Host
   const doc = await read.readPolyforgeConfig(project, DEFAULT());
   assert.equal(doc.capable, true, doc.reason);
   assert.deepEqual(argvs(), [
-    ["--json", "version"],
+    ["--json", "--version"],
     ["--json", "config", "list"],
     ["--json", "ops", "status"],
     ["--json", "config", "workspace", "--cwd", project],

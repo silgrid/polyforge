@@ -7,7 +7,7 @@
 // settings, a Cell's pane holds that Cell's own settings, and a narrow
 // viewport keeps the list above the detail on one screen. Driven as a
 // browser page against the app's real routes with a `pf` stub first on PATH
-// answering the real pf wire (the w348 suite's stub: `--json version`
+// answering the real pf wire (the w348 suite's stub: `--json --version`
 // capabilities, `--json cell list`, the scoped `--json config list`, the
 // lifecycle and config writes, `--json ops status`).
 //
@@ -110,7 +110,7 @@ const keyWrite = (args.includes("set") && args.includes("api_key")) || (args.inc
 let stdin = ""; if (keyWrite) { try { stdin = fs.readFileSync(0, "utf8"); } catch {} }
 fs.appendFileSync(path.join(dir, "argv.log"), JSON.stringify({ args, stdin }) + "\\n");
 const out = (doc) => { process.stdout.write(JSON.stringify(doc) + "\\n"); process.exit(0); };
-if (args.includes("--version")) { process.stdout.write("v2.20.21\\n"); process.exit(0); }
+if (args.includes("--version")) { if (args.includes("--json")) out({ capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] }); process.stdout.write("v2.20.21\\n"); process.exit(0); }
 const rest = args.filter((a) => a !== "--json");
 const flag = (name) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] ?? "" : ""; };
 const profile = flag("--profile");

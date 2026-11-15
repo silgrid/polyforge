@@ -362,7 +362,7 @@ test(" (review s17#2): a scoped region write records its file in the history ent
   withPath(tree, t);
   const pf = readFileSync(join(tree.bin, "pf"), "utf8")
     .replace('const rest = args.filter((a) => a !== "--json");', 'const rest = args.filter((a, i) => a !== "--json" && a !== "--profile" && args[i - 1] !== "--profile");')
-    .replace('if (rest[0] === "workflows")', 'if (rest[0] === "version") { process.stdout.write(JSON.stringify({ version: "v9", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] }) + "\\n"); process.exit(0); }\nif (rest[0] === "workflows")')
+    .replace('if (args.includes("--version"))', 'if (args.includes("--version") && args.includes("--json")) { process.stdout.write(JSON.stringify({ version: "v9", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] }) + "\\n"); process.exit(0); }\nif (args.includes("--version"))')
     .replace('{ key: "api_key", set: true, source: "file", class: "restart-only" },', '{ key: "api_key", set: true, source: "file", class: "restart-only" },\n    { key: "daemon_socket", value: "/old.sock", source: "file", class: "restart-only" },\n    { key: "user_id", value: "u_old", source: "file", class: "cli-only" },');
   writeFileSync(join(tree.bin, "pf"), pf);
   const lib = await jiti.import("./polyforge-config-write.ts");
