@@ -174,6 +174,11 @@ func (r *Runtime) applyOverrideScene(j *job, ch OverrideChange, posture string) 
 	// change reached the chain (the event log is the daemon's, not the
 	// capsule's — the commit carries nothing of it)
 	out := OverrideOutcome{Posture: posture, Changed: true, Entry: entry, Published: true}
+	// the claim's merge ran before this job did, so this write is newer
+	// than any residue a failed claim publish left of the same step's
+	// aspect: drop it, whatever the publish below does (a later re-claim
+	// must not merge the stale value over this change)
+	r.dropPendingAspect(j.wi, ch)
 	if posture == OverridePosturePaused {
 		out.Published = false
 		out.Note = "recorded in the kept scene, not published: it governs this machine's resume, whose own publishes carry it into the capsule chain"
@@ -445,7 +450,9 @@ var pendingPublishFn = gitops.CommitPush
 // carried), the capsule is published at once, and only that publish's
 // success deletes the record's key. A failed publish — or a crash before
 // it — keeps the record for the next claim, whose merge is idempotent
-// (the claim goes on: the job's own publishes carry the merge). A record
+// (the claim goes on: the job's own publishes carry the merge); a later
+// scene write of the job drops the aspect it supersedes from that
+// residue (dropPendingAspect), so the re-merge never undoes it. A record
 // that cannot be read or merged fails the claim loudly (the operator's
 // recorded change must not silently vanish). Only wi's own actor writes
 // wi's key, so the record is not held locked across the publish.
@@ -502,6 +509,50 @@ func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.S
 		}
 	}
 	return ov
+}
+
+// dropPendingAspect deletes the change's aspect of the change's step from
+// work item wi's pending entry (models: the chain and its clear
+// tombstone; skip: the switch), under pendingMu — a scene write that
+// changed that aspect supersedes it. An entry left with no aspect goes,
+// and an emptied work item key with it; nothing is written when nothing
+// pending matched.
+func (r *Runtime) dropPendingAspect(wi string, ch OverrideChange) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	m, err := r.readPendingOverrides()
+	if err != nil {
+		// the scene write stands; the next claim fails loudly on the record
+		fmt.Fprintf(os.Stderr, "runtime: %s: dropping the superseded pending step override failed: %v\n", wi, err)
+		return
+	}
+	e := m[wi][ch.Step]
+	if e == nil {
+		return
+	}
+	switch {
+	case ch.Models != nil || ch.ClearModels:
+		if e.Models == nil && !e.ModelsCleared {
+			return
+		}
+		e.Models, e.ModelsBy, e.ModelsAt, e.ModelsCleared = nil, "", "", false
+	case ch.Skip != nil:
+		if e.Skip == nil {
+			return
+		}
+		e.Skip, e.SkipBy, e.SkipAt = nil, "", ""
+	default:
+		return
+	}
+	if e.Models == nil && !e.ModelsCleared && e.Skip == nil {
+		delete(m[wi], ch.Step)
+	}
+	if len(m[wi]) == 0 {
+		delete(m, wi)
+	}
+	if err := r.writePendingOverrides(m); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: %s: dropping the superseded pending step override failed: %v\n", wi, err)
+	}
 }
 
 // clearPendingOverrides drops work item wi's pending entries (a terminal
