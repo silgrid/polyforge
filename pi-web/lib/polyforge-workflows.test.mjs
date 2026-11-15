@@ -68,7 +68,7 @@ function fakePf(t, { version = "v2.20.16", workflows = WORKFLOWS, workspace = WO
   writeFileSync(bin, `#!/bin/sh
 echo "$*" >> "${log}"
 case "$*" in
-  --version) echo "${version}" ;;
+  "--json --version") echo '{"version":"${version}","capabilities":[]}' ;;
   *" workflows"*) ${failWorkflows ? 'echo "pf: boom" >&2; exit 1' : `cat "${dir}/workflows.json"`} ;;
   *"config workspace"*) cat "${dir}/workspace.json" ;;
   *) exit 2 ;;
@@ -93,21 +93,22 @@ test("with no cli.toml mapping, every read spawns the cwd's two pf reads afresh 
   assert.equal(first.workflows.bundles[0].name, "feature-full");
   assert.equal(first.workspace.steps.alpha.grill.declared, true);
   await lib.readPolyforgeWorkflows("/ws/sub", DEFAULT_CELL);
-  const reads = calls().filter((line) => line !== "--version");
-  // one capability read per call pins the default Cell (this
-  // stub reports none: a pre-Cell pf, so the reads stay unflagged)
-  assert.equal(reads.filter((line) => line === "--json --version").length, 2, "one capability read per call");
+  const reads = calls();
+  // per call: the forced presence probe, then one capability read that pins
+  // the default Cell (this stub reports none: a pre-Cell pf, so the reads
+  // stay unflagged) — both on the `--json --version` machine line
+  assert.equal(reads.filter((line) => line === "--json --version").length, 4, "one presence probe and one capability read per call");
   assert.equal(reads.filter((line) => line === "--json workflows --cwd /ws/sub").length, 2, "one fresh pf workflows per call");
   assert.equal(reads.filter((line) => line === "--json config workspace --cwd /ws/sub").length, 2, "one fresh workspace read per call");
   assert.equal(reads.filter((line) => line === "--json config list").length, 2, "one mapping read per call (this stub has none)");
-  assert.equal(reads.length, 8);
+  assert.equal(reads.length, 10);
   assert.equal(first.workspaces.length, 1, "the cwd alone is the one workspace");
 });
 
 test("below the floor the read is a capable:false field and spawns no read verb", async (t) => {
   const calls = fakePf(t, { version: "v2.20.14" });
   const old = await lib.readPolyforgeWorkflows("/ws", DEFAULT_CELL);
-  assert.deepEqual(calls(), ["--version"]);
+  assert.deepEqual(calls(), ["--json --version"]);
   assert.equal(old.capable, false);
   assert.match(old.reason, /2\.20\.15/);
   assert.equal(old.workflows, null);
@@ -164,7 +165,7 @@ fs.appendFileSync(${JSON.stringify(log)}, args.join(" ") + "\\n");
 const mapped = ${JSON.stringify(MAPPED)};
 const at = args.indexOf("--cwd"); const cwd = at >= 0 ? args[at + 1] : "";
 const out = (doc) => { process.stdout.write(JSON.stringify(doc)); process.exit(0); };
-if (args[0] === "--version") { process.stdout.write("v2.20.17\\n"); process.exit(0); }
+if (args.join(" ") === "--json --version") out({ version: "v2.20.17", capabilities: [] });
 if (args.includes("list")) out(${JSON.stringify(list)});
 if (args.includes("workflows")) {
   if (cwd === ${JSON.stringify(fail)}) { process.stderr.write("pf: cannot read " + cwd + "/.polyforge.yaml: permission denied"); process.exit(1); }
@@ -184,7 +185,7 @@ process.exit(2);
     else process.env.PF_BIN = previous;
     rmSync(dir, { recursive: true, force: true });
   });
-  return () => readFileSync(log, "utf8").trim().split("\n").filter((line) => line && line !== "--version");
+  return () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean);
 }
 
 test("the mapping parser keeps absolute [workspace] paths in pf's order, once", () => {
@@ -206,13 +207,13 @@ test("the union reads 1 mapping + 2 per mapped workspace, fresh each call, never
   assert.equal(read.reason, undefined);
   await lib.readPolyforgeWorkflows("/w/b/sub", DEFAULT_CELL);
   const reads = calls();
-  assert.equal(reads.filter((line) => line === "--json --version").length, 2, "one capability read per call");
+  assert.equal(reads.filter((line) => line === "--json --version").length, 4, "one presence probe and one capability read per call");
   assert.equal(reads.filter((line) => line === "--json config list").length, 2);
   for (const path of Object.keys(MAPPED)) {
     assert.equal(reads.filter((line) => line === `--json workflows --cwd ${path}`).length, 2, path);
     assert.equal(reads.filter((line) => line === `--json config workspace --cwd ${path}`).length, 2, path);
   }
-  assert.equal(reads.length, 2 * (1 + 1 + 2 * 3), "no per-project spawn, nothing cached");
+  assert.equal(reads.length, 2 * (2 + 1 + 2 * 3), "no per-project spawn, nothing cached");
 });
 
 test("a failed workspace degrades alone: its reason, no project; the others stay readable", async (t) => {

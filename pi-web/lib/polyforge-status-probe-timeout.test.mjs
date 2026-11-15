@@ -42,21 +42,27 @@ function blockEventLoop(ms) {
 }
 
 test("a probe whose child exited during a blocked event loop past the 3 s bound reads present", async (t) => {
-  await fakePf(t, "echo v9.9.9");
+  await fakePf(t, `echo '{"version":"v9.9.9","capabilities":["cells-v1"]}'`);
   const { probePolyforgeVersion } = await loadSubject();
   // The spawn and the 3 s timer are armed synchronously here.
   const pending = probePolyforgeVersion(true);
   // The child exits within milliseconds; its exit is only processed after
   // the block, by which time the bound has expired.
   blockEventLoop(3500);
-  assert.deepEqual(await pending, { present: true, version: "v9.9.9" });
+  const presence = await pending;
+  assert.equal(presence.present, true);
+  assert.equal(presence.version, "v9.9.9");
+  assert.deepEqual(presence.capabilities, ["cells-v1"]);
 });
 
 test("a child genuinely still running at the 3 s bound is killed and reads absent", async (t) => {
   await fakePf(t, "exec sleep 10");
   const { probePolyforgeVersion } = await loadSubject();
   const started = Date.now();
-  assert.deepEqual(await probePolyforgeVersion(true), { present: false, version: null });
+  const presence = await probePolyforgeVersion(true);
+  assert.equal(presence.present, false);
+  assert.equal(presence.version, null);
+  assert.deepEqual(presence.capabilities, []);
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 2900 && elapsed < 9000, `the bound killed the child after about 3 s (took ${elapsed} ms)`);
 });
