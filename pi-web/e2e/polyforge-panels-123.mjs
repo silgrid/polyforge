@@ -328,10 +328,22 @@ try {
     await panel.getByText(T1).waitFor({ timeout: 30_000 });
     // the state filter offers a 全部 option and the project
     // filter 全部项目, both above the sections; the 全部 heading is the last
-    // exact 全部 on the surface.
-    const running = await topOf(panel, "正在运行");
-    const all = await panel.getByText("全部", { exact: true }).last().boundingBox().then((b) => b?.y ?? -1);
-    const t1 = await topOf(panel, T1), t2 = await topOf(panel, T2), t3 = await topOf(panel, T3);
+    // exact 全部 on the surface. The geometry is read only once it has
+    // settled: two consecutive reads agree (polyforge#43 — an async state
+    // is polled to stability, never read once on a guess).
+    const tops = async () => {
+      const running = await topOf(panel, "正在运行");
+      const all = await panel.getByText("全部", { exact: true }).last().boundingBox().then((b) => b?.y ?? -1);
+      const t1 = await topOf(panel, T1), t2 = await topOf(panel, T2), t3 = await topOf(panel, T3);
+      return { running, all, t1, t2, t3 };
+    };
+    let prev = null;
+    const { running, all, t1, t2, t3 } = await waitFor(async () => {
+      const now = await tops();
+      const settled = prev !== null && JSON.stringify(now) === JSON.stringify(prev);
+      prev = now;
+      return settled ? now : null;
+    }, "the Tasks section geometry settles (two equal consecutive reads)");
     assert.ok(running >= 0 && all > running, `the running and all sections render in order (running ${running}, all ${all})`);
     assert.ok(t1 > running && t1 < all, `正在运行 holds the running task ${T1} (t1 ${t1})`);
     assert.ok(t2 > all && t3 > all, `全部 holds the terminal tasks (t2 ${t2}, t3 ${t3}, all ${all})`);
