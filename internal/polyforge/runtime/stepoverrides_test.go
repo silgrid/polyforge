@@ -541,3 +541,32 @@ func TestPendingOverrideResidueYieldsToFailedPushRunningWrite(t *testing.T) {
 	}
 	assertNewerChainSurvivesReclaim(t, r, wi)
 }
+
+// A pending record that does not parse fails the claim loudly — the
+// operator's recorded change must not silently vanish — and the claim
+// never rewrites the torn file (polyforge#25 u18, review r2#2).
+func TestPendingOverrideTornRecordFailsClaim(t *testing.T) {
+	r, _ := pendingEnv(t)
+	const wi = "wi_ov18"
+	torn := []byte(`{"wi_ov18": {"release": {"models": ["pi:ov/torn"`)
+	if err := os.MkdirAll(filepath.Dir(r.pendingOverridesPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.pendingOverridesPath(), torn, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := r.Start(context.Background(), wi, StartOpts{})
+	if j := r.jobOf(wi); err == nil && j != nil {
+		_ = r.Stop(context.Background(), wi, protocol.FinishWrapped)
+	}
+	if err == nil {
+		t.Fatal("a claim over a torn pending record must fail, not skip the recorded change")
+	}
+	got, rerr := os.ReadFile(r.pendingOverridesPath())
+	if rerr != nil {
+		t.Fatalf("the torn record must stay in place: %v", rerr)
+	}
+	if string(got) != string(torn) {
+		t.Fatalf("the claim rewrote the torn record: %q", got)
+	}
+}
