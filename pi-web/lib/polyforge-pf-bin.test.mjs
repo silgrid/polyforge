@@ -158,7 +158,9 @@ test("a valid PF_BIN outside PATH is used by every pf call site", async (t) => {
   const configWrite = await jiti.import("./polyforge-config-write.ts");
 
   const presence = await status.probePolyforgeVersion(true);
-  assert.deepEqual(presence, { present: true, version: "v2.20.13" }, "the presence probe must execute PF_BIN");
+  assert.equal(presence.present, true, "the presence probe must execute PF_BIN");
+  assert.equal(presence.version, "v2.20.13", "the presence probe must execute PF_BIN");
+  assert.deepEqual(presence.capabilities, [], "a plain version line carries no capabilities");
 
   const ops = await status.readPolyforgeOpsStatus();
   assert.equal(ops?.queue.max, 4, "the ops read must execute PF_BIN");
@@ -224,7 +226,10 @@ test("PF_BIN pointing at a missing file reads as not installed, with a readable 
   const messages = await jiti.import("./polyforge-messages.ts");
   const config = await jiti.import("./polyforge-config.ts");
 
-  assert.deepEqual(await status.probePolyforgeVersion(true), { present: false, version: null });
+  const absence = await status.probePolyforgeVersion(true);
+  assert.equal(absence.present, false);
+  assert.equal(absence.version, null);
+  assert.deepEqual(absence.capabilities, []);
 
   const configRead = await config.readPolyforgeConfig(tree.work, { profile: "default" });
   assert.equal(configRead.pfPresent, false);
@@ -243,6 +248,9 @@ test("without PF_BIN the old PATH lookup is unchanged", async (t) => {
   const tree = stubTree();
   useStub(t, tree, { pfBin: undefined, path: `${tree.bin}${delimiter}${tree.emptyPath}${delimiter}/usr/bin${delimiter}/bin` });
   const status = await jiti.import("./polyforge-status.ts");
-  assert.deepEqual(await status.probePolyforgeVersion(true), { present: true, version: "v2.20.13" });
+  const presence = await status.probePolyforgeVersion(true);
+  assert.equal(presence.present, true);
+  assert.equal(presence.version, "v2.20.13");
+  assert.deepEqual(presence.capabilities, []);
   assert.equal(calls(tree).length, 1, "the PATH-resolved stub answered the one presence probe");
 });
