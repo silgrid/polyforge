@@ -210,6 +210,16 @@ func (r *Runtime) applyOverrideBlocked(wi string, ch OverrideChange) (OverrideOu
 // wi's entry for the change's step, under pendingMu (the record is
 // daemon-global: other work items' actors write it too).
 func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.StepOverride, error) {
+	// a clear also reaches the chain the sealed capsule carries (read
+	// before the lock: no I/O beyond the record's own under it)
+	sealedChain := false
+	if ch.ClearModels && ch.SealedDir != "" {
+		ov, err := capsule.ReadStepOverrides(ch.SealedDir)
+		if err != nil {
+			return false, nil, conflict("the sealed capsule's overlay record does not read: %v", err)
+		}
+		sealedChain = ov.Steps[ch.Step] != nil && ov.Steps[ch.Step].Models != nil
+	}
 	r.pendingMu.Lock()
 	defer r.pendingMu.Unlock()
 	entries, err := r.readPendingOverrides()
@@ -220,7 +230,7 @@ func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.St
 	if cur == nil {
 		cur = map[string]*capsule.StepOverride{}
 	}
-	changed, entry := applyAspect(cur, ch)
+	changed, entry := applyAspect(cur, ch, sealedChain)
 	if !changed {
 		return false, entry, nil
 	}
@@ -233,7 +243,10 @@ func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.St
 
 // applyAspect applies the change's one aspect to the step's entry (nil =
 // none yet), answering whether anything changed and the entry after.
-func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange) (bool, *capsule.StepOverride) {
+// sealedChain (the pending record only) says the sealed capsule below
+// carries a chain for the step: a clear then leaves the tombstone the
+// claim merge applies, unless one already stands.
+func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, sealedChain bool) (bool, *capsule.StepOverride) {
 	e := entries[ch.Step]
 	if e == nil {
 		e = &capsule.StepOverride{}
@@ -246,12 +259,13 @@ func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange) (b
 			return false, e
 		}
 		e.Models = append([]string(nil), ch.Models...)
-		e.ModelsBy, e.ModelsAt = ch.Operator, now
+		e.ModelsBy, e.ModelsAt, e.ModelsCleared = ch.Operator, now, false
 	case ch.ClearModels:
-		if e.Models == nil {
+		if e.Models == nil && (!sealedChain || e.ModelsCleared) {
 			return false, e
 		}
 		e.Models, e.ModelsBy, e.ModelsAt = nil, "", ""
+		e.ModelsCleared = sealedChain
 	case ch.Skip != nil:
 		if e.Skip != nil && *e.Skip == *ch.Skip {
 			return false, e
@@ -271,7 +285,7 @@ func (r *Runtime) mutateOverlay(capDir string, ch OverrideChange) (bool, *capsul
 	if err != nil {
 		return false, nil, conflict("the overlay record of this capsule does not read: %v", err)
 	}
-	changed, entry := applyAspect(ov.Steps, ch)
+	changed, entry := applyAspect(ov.Steps, ch, false)
 	if !changed {
 		return false, entry, nil
 	}
@@ -437,7 +451,8 @@ func (r *Runtime) writePendingStepOverrides(j *job) error {
 // mergePendingAspects merges pending entries over the capsule's overlay
 // record, per aspect: a pending aspect replaces the capsule entry's same
 // aspect and leaves the others (an older chain the capsule already
-// carries survives a pending skip, and vice versa).
+// carries survives a pending skip, and vice versa); a clear tombstone
+// drops the capsule's chain.
 func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.StepOverride) capsule.StepOverrides {
 	if ov.Steps == nil {
 		ov.Steps = map[string]*capsule.StepOverride{}
@@ -453,6 +468,9 @@ func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.S
 		}
 		if p.Models != nil {
 			e.Models, e.ModelsBy, e.ModelsAt = append([]string(nil), p.Models...), p.ModelsBy, p.ModelsAt
+		}
+		if p.ModelsCleared {
+			e.Models, e.ModelsBy, e.ModelsAt = nil, "", ""
 		}
 		if p.Skip != nil {
 			skip := *p.Skip

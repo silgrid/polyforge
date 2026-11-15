@@ -209,6 +209,10 @@ func fillRow(row *protocol.OverrideStepView, e *capsule.StepOverride) {
 	if e.Models != nil {
 		row.Models, row.ModelsBy, row.ModelsAt = e.Models, e.ModelsBy, e.ModelsAt
 	}
+	if e.ModelsCleared {
+		// the pending clear tombstone: the sealed chain no longer governs
+		row.Models, row.ModelsBy, row.ModelsAt = nil, "", ""
+	}
 	if e.Skip != nil {
 		row.Skip, row.SkipBy, row.SkipAt = e.Skip, e.SkipBy, e.SkipAt
 	}
@@ -341,9 +345,13 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		models = norm
 	}
-	out, err := d.rt.ApplyStepOverride(r.Context(), wi, runtime.OverrideChange{
+	ch := runtime.OverrideChange{
 		Step: req.Step, Operator: operator, Models: models, ClearModels: req.ClearModels, Skip: req.Skip,
-	})
+	}
+	if !scene.live {
+		ch.SealedDir = scene.capsuleDir // a clear reaches the chain the sealed scene carries
+	}
+	out, err := d.rt.ApplyStepOverride(r.Context(), wi, ch)
 	if err != nil {
 		writeErrOf(w, err)
 		return
@@ -354,10 +362,13 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	if out.Entry != nil {
 		fillRow(&row, out.Entry)
 	}
+	if out.Changed && out.Posture == runtime.OverridePostureBlocked {
+		row.Pending = true
+	}
 	if out.Changed && row.Models != nil {
 		row.Effective, row.Source = row.Models, overrideSource
-		if out.Posture == runtime.OverridePostureBlocked {
-			row.Pending, row.Source = true, overrideSourcePend
+		if row.Pending {
+			row.Source = overrideSourcePend
 		}
 	}
 	writeJSON(w, http.StatusOK, protocol.OverrideWriteResult{
