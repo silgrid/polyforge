@@ -92,15 +92,15 @@ type Identity struct {
 // claim answer is its only source, and recovery re-materializes it from
 // aihub when a legacy capsule predates it.
 type WorkItemDoc struct {
-	ID         string         `json:"id"`
-	Slug       string         `json:"slug,omitempty"`
-	Project    string         `json:"project"`
-	Goal       string         `json:"goal"`
-	Content    *string        `json:"content"`
-	Labels     []string       `json:"labels"`
-	Priority   string         `json:"priority"`
-	Milestone  *string        `json:"milestone"`
-	BundleName string         `json:"bundle_name"`
+	ID         string   `json:"id"`
+	Slug       string   `json:"slug,omitempty"`
+	Project    string   `json:"project"`
+	Goal       string   `json:"goal"`
+	Content    *string  `json:"content"`
+	Labels     []string `json:"labels"`
+	Priority   string   `json:"priority"`
+	Milestone  *string  `json:"milestone"`
+	BundleName string   `json:"bundle_name"`
 	// Attrs is the work item's structured attrs as aihub holds them (a
 	// step reads its own ticket's markers from them: an integration_fix
 	// ticket's verification runs the full bar). Empty (omitted) when the
