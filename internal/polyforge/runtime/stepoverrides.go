@@ -118,7 +118,7 @@ func (r *Runtime) ApplyStepOverride(ctx context.Context, wi string, ch OverrideC
 			return err2
 		}
 		var err2 error
-		out, err2 = r.applyOverrideJob(j, ch)
+		out, err2 = r.applyOverrideJob(ctx, j, ch)
 		return err2
 	})
 	return out, err
@@ -126,7 +126,7 @@ func (r *Runtime) ApplyStepOverride(ctx context.Context, wi string, ch OverrideC
 
 // applyOverrideJob applies the change to a job the daemon holds, by its
 // state.
-func (r *Runtime) applyOverrideJob(j *job, ch OverrideChange) (OverrideOutcome, error) {
+func (r *Runtime) applyOverrideJob(ctx context.Context, j *job, ch OverrideChange) (OverrideOutcome, error) {
 	j.mu.Lock()
 	st, capDir := j.state, j.capsuleDir
 	j.mu.Unlock()
@@ -138,7 +138,7 @@ func (r *Runtime) applyOverrideJob(j *job, ch OverrideChange) (OverrideOutcome, 
 		if stepLive(ex, ch.Step) {
 			return OverrideOutcome{}, conflict("step %s has a live dispatch (its status is %s): the overlay is for steps without one — set it on a step that has not started, or while the work item is parked", ch.Step, ex.Steps[ch.Step].Status)
 		}
-		return r.applyOverrideScene(j, ch, OverridePostureRunning)
+		return r.applyOverrideScene(ctx, j, ch, OverridePostureRunning)
 	case StatePaused:
 		// the frozen current step (in_progress, no process) accepts a
 		// model chain — the owner's change-before-wake window; the skip
@@ -147,7 +147,7 @@ func (r *Runtime) applyOverrideJob(j *job, ch OverrideChange) (OverrideOutcome, 
 		if ch.Skip != nil && *ch.Skip && ex.CurrentStep == ch.Step {
 			return OverrideOutcome{}, conflict("step %s has started (its status is %s): the skip switch is for steps that never started", ch.Step, ex.Steps[ch.Step].Status)
 		}
-		return r.applyOverrideScene(j, ch, OverridePosturePaused)
+		return r.applyOverrideScene(ctx, j, ch, OverridePosturePaused)
 	default:
 		return OverrideOutcome{}, conflict("work item is %s here; try again in a moment", st)
 	}
@@ -165,7 +165,7 @@ func stepLive(ex capsule.Execution, step string) bool {
 // capsule (the read-modify-write); a running job's chain is committed
 // and pushed at once, a paused one's waits for the resume's publishes.
 // The event comes last and says whether the change was published.
-func (r *Runtime) applyOverrideScene(j *job, ch OverrideChange, posture string) (OverrideOutcome, error) {
+func (r *Runtime) applyOverrideScene(ctx context.Context, j *job, ch OverrideChange, posture string) (OverrideOutcome, error) {
 	j.mu.Lock()
 	capDir := j.capsuleDir
 	git := j.git
@@ -187,7 +187,14 @@ func (r *Runtime) applyOverrideScene(j *job, ch OverrideChange, posture string) 
 		r.tapOverride(j.wi, ch, posture, false)
 		return out, nil
 	}
-	_, pushed, _, perr := gitops.CommitPush(context.Background(), git, "step override: "+ch.Step)
+	// the chain push is bounded by the pending write's deadline
+	// (protocol.PushTimeout): a push that outlives it gives up — the
+	// overlay's commit stands locally and the next publish retries it —
+	// so a stuck remote never pins the work item's actor (the pause and
+	// wrap closes wait on it, polyforge#47 AC3).
+	pctx, cancel := context.WithTimeout(ctx, overridePushTimeout)
+	defer cancel()
+	_, pushed, _, perr := gitops.CommitPush(pctx, git, "step override: "+ch.Step)
 	if perr != nil {
 		out.Published = false
 		out.Note = fmt.Sprintf("the overlay is written and its commit stands locally, but the chain push failed: %v — the next publish retries it", perr)
