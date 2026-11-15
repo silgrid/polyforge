@@ -545,7 +545,7 @@ test("reload and the rollback's pre-read pin by the pf installed now: an upgrade
 
   await swap(CAPS, null);
   await lib.rollbackPolyforgeConfig({ key: "user_id", entry: defaultEntry });
-  assert.deepEqual(argvOf("list").map((args) => args.includes("--profile")), [false, false], "neither the CAS pre-read nor the write's list read names a Cell on a pre-Cell pf");
+  assert.deepEqual(argvOf("list").map((args) => args.includes("--profile")), [false, false, false], "no list read names a Cell on a pre-Cell pf: the CAS pre-read, the write's shape check and its old-value read");
   assert.equal(argvOf("set")[0]?.includes("--profile"), false);
   assert.equal(versionReads(), 1, "the pre-read and the write share one forced probe");
 
