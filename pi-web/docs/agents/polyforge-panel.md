@@ -631,7 +631,7 @@ write), a harness + model-id setter and — for a step the lane snapshot
 declares `skippable` — the skip switch; any other step shows the waive
 hint in the switch's place, and a refused write shows the daemon's typed
 words inline. The watch snapshot carries the declarations and the
-overlay's values (`declared_steps[].skippable`, `overrides`); the write
+overlay's values (`skippableSteps`, `overrides`); the write
 is one action per POST (`models`, `clearModels`, `skip`), the effective
 source labels (`step overlay`, `pf submit --models`, the yaml/bundle
 level) come from the view. Files:

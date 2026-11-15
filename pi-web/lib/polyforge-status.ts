@@ -223,15 +223,13 @@ export interface PolyforgeStep {
   startedAt?: string;
 }
 
-/** Sanitized workflow declaration entry (pi#114): id only — `on_fail` and
- *  every other declared field are dropped server-side and never reach a
- *  response. */
+/** Sanitized workflow declaration entry (pi#114, polyforge#42 G14): id
+ *  only — `on_fail`, the lane's `skippable` declaration and every other
+ *  declared field are dropped server-side and never reach a response; the
+ *  skippable ids leave through `sanitizeSkippableSteps` as the snapshot's
+ *  own `skippableSteps` field. */
 export interface PolyforgeDeclaredStep {
   id: string;
-  /** polyforge#25: the lane's `skippable` declaration — the step may be
-   *  switched off mid-run through the override face. False when the
-   *  daemon did not send it. */
-  skippable: boolean;
 }
 
 /** One step's overlay aspects as the watch snapshot carries them
@@ -327,6 +325,11 @@ export interface PolyforgeWatchStatus extends PolyforgeSummary {
   updatedAt?: string;
   steps: PolyforgeStep[];
   declared_steps: PolyforgeDeclaredStep[] | null;
+  /** (polyforge#42 G14): the ids of the lane-declared skippable steps, in
+   *  declaration order — `declared_steps` stays the pure ordered `{id}`
+   *  list pi#114 pinned, and the skip switch reads this field instead.
+   *  Absent when the declaration is unusable or nothing is skippable. */
+  skippableSteps?: string[];
   /** (polyforge#25, additive): the per-step overlay's values, keyed by
    *  step id — absent when no step carries an aspect. */
   overrides?: Record<string, PolyforgeStepOverride>;
@@ -640,9 +643,12 @@ export function orderPolyforgeSteps(
 }
 
 /**
- * Sanitize `execution.declared_steps` (pi#114). Keeps each entry's trimmed
- * non-empty `id`, in declaration order; `on_fail` and every other field are
- * dropped server-side (raw shape is proposed to companion WI #213). Absent,
+ * Sanitize `execution.declared_steps` (pi#114, polyforge#42 G14). Keeps
+ * each entry's trimmed non-empty `id`, in declaration order; `on_fail`,
+ * the lane's `skippable` declaration and every other field are dropped
+ * server-side (raw shape is proposed to companion WI #213) — the pure
+ * ordered `{id}` list the graph suite's G14 pins, with skippable on its
+ * own field (`sanitizeSkippableSteps`). Absent,
  * null, non-array, empty, or any entry without a valid id → null — the
  * client then falls back to started-at ordering. Pure, never throws, so the
  * route's 2xx degradation contract is untouched.
@@ -653,10 +659,30 @@ export function sanitizeDeclaredSteps(value: unknown): PolyforgeDeclaredStep[] |
   for (const entry of value) {
     const id = entry && typeof entry === "object" ? toTrimmedString((entry as { id?: unknown }).id) : "";
     if (!id) return null;
-    const skippable = (entry as { skippable?: unknown }).skippable === true;
-    steps.push({ id, skippable });
+    steps.push({ id });
   }
   return steps;
+}
+
+/**
+ * The lane's `skippable` declarations (polyforge#25 on the wire,
+ * polyforge#42 on the response): the ids of the steps the lane declares
+ * skippable, in declaration order — the snapshot's own field, so
+ * `declared_steps` stays the pure ordered `{id}` list pi#114 pinned and the
+ * skip switch reads `skippableSteps` instead (G14). The same
+ * all-or-nothing rule as the id list — an unusable declaration (absent,
+ * null, non-array, empty, any entry without a valid id) carries no field;
+ * a lane with nothing skippable carries none either. Pure, never throws.
+ */
+export function sanitizeSkippableSteps(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const ids: string[] = [];
+  for (const entry of value) {
+    const id = entry && typeof entry === "object" ? toTrimmedString((entry as { id?: unknown }).id) : "";
+    if (!id) return undefined;
+    if ((entry as { skippable?: unknown }).skippable === true) ids.push(id);
+  }
+  return ids.length > 0 ? ids : undefined;
 }
 
 /**
@@ -987,6 +1013,7 @@ export function sanitizeWatch(machine: unknown): PolyforgeWatchStatus | null {
   const wi = toTrimmedString(m.work_item);
   const slug = toTrimmedString(m.slug);
   if (!wi || !slug) return null;
+  const skippableSteps = sanitizeSkippableSteps(ex.declared_steps);
   return {
     wi,
     slug,
@@ -995,6 +1022,7 @@ export function sanitizeWatch(machine: unknown): PolyforgeWatchStatus | null {
     updatedAt: toOptionalTrimmedString(ex.updated_at),
     steps: orderPolyforgeSteps(ex.steps as Record<string, { status?: unknown; started_at?: unknown }>),
     declared_steps: sanitizeDeclaredSteps(ex.declared_steps),
+    ...(skippableSteps ? { skippableSteps } : {}),
     ...(sanitizeStepOverrides(ex.overrides) ? { overrides: sanitizeStepOverrides(ex.overrides) } : {}),
     events: tailPolyforgeEvents(Array.isArray(m.events) ? m.events : [], EVENT_TAIL),
     progress: sanitizeProgress(m.progress),

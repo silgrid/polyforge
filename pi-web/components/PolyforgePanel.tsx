@@ -2120,7 +2120,7 @@ export function PolyforgePanel({
                               wi={progressWi}
                               profile={selectedJob?.profile ?? selectedProfile}
                               step={selectedStep}
-                              skippable={watchStatus.declared_steps?.find((d) => d.id === selectedStep)?.skippable ?? false}
+                              skippable={watchStatus.skippableSteps?.includes(selectedStep) ?? false}
                               overlay={watchStatus.overrides?.[selectedStep]}
                               onApplied={onRefresh}
                             />
