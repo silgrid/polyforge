@@ -17,9 +17,9 @@ package runtime
 //   - no job (the work item parked blocked): the change lands in the
 //     daemon-local pending record (like the manual `--models` list),
 //     and the next claim's scene preparation merges it into the fresh
-//     capsule's overlay file — the sealed scene of the last close is
-//     read-only and abandoned by the re-claim's fresh clone, so writing
-//     it would lose the change.
+//     capsule's overlay file, per aspect, the newer time winning — the
+//     sealed scene of the last close is read-only and abandoned by the
+//     re-claim's fresh clone, so writing it would lose the change.
 //
 // The step-status rule is re-checked under the actor (the one thing that
 // can move between the route's validation and this turn): a step with a
@@ -246,9 +246,12 @@ func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.St
 
 // applyAspect applies the change's one aspect to the step's entry (nil =
 // none yet), answering whether anything changed and the entry after.
-// sealedChain (the pending record only) says the sealed capsule below
-// carries a chain for the step: a clear then leaves the tombstone the
-// claim merge applies, unless one already stands.
+// Every change records its operator and time — a clear too: it leaves
+// the models aspect with no chain and the clear's ModelsBy/ModelsAt, so
+// the claim's merge (mergePendingAspects) can tell it from an older
+// chain. sealedChain (the pending record only) says the sealed capsule
+// below carries a chain for the step: a clear then leaves the tombstone
+// the claim merge applies, unless one already stands.
 func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, sealedChain bool) (bool, *capsule.StepOverride) {
 	e := entries[ch.Step]
 	if e == nil {
@@ -267,7 +270,7 @@ func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, se
 		if e.Models == nil && (!sealedChain || e.ModelsCleared) {
 			return false, e
 		}
-		e.Models, e.ModelsBy, e.ModelsAt = nil, "", ""
+		e.Models, e.ModelsBy, e.ModelsAt = nil, ch.Operator, now
 		e.ModelsCleared = sealedChain
 	case ch.Skip != nil:
 		if e.Skip != nil && *e.Skip == *ch.Skip {
@@ -436,8 +439,12 @@ var pendingPublishFn = gitops.CommitPush
 // the pending entries (aspect merge over what the chain already
 // carried), the capsule is published at once, and only that publish's
 // success deletes the record's key. A failed publish — or a crash before
-// it — keeps the record for the next claim, whose merge is idempotent
-// (the claim goes on: the job's own publishes carry the merge). A record
+// it — keeps the record for the next claim (the claim goes on: the job's
+// own publishes carry the merge). That residue is merged again then, per
+// aspect by time (mergePendingAspects), so a later write the capsule
+// chain carries of the same aspect — a running or paused write, a clear —
+// is never undone by the stale pending value (the owner ruling of
+// 2026-11-15T01:37:30Z, review r2#1). A record
 // that cannot be read or merged fails the claim loudly (the operator's
 // recorded change must not silently vanish). Only wi's own actor writes
 // wi's key, so the record is not held locked across the publish.
@@ -471,10 +478,15 @@ func (r *Runtime) writePendingStepOverrides(ctx context.Context, j *job) error {
 }
 
 // mergePendingAspects merges pending entries over the capsule's overlay
-// record, per aspect: a pending aspect replaces the capsule entry's same
-// aspect and leaves the others (an older chain the capsule already
-// carries survives a pending skip, and vice versa); a clear tombstone
-// drops the capsule's chain.
+// record, per aspect (models, skip), by time: a pending aspect replaces
+// the capsule entry's same aspect only when its time is not earlier than
+// the capsule's (pendingAspectApplies), and leaves the other aspect (an
+// older chain the capsule already carries survives a pending skip, and
+// vice versa). A pending clear tombstone (ModelsCleared) carries its time
+// like a chain: applied, it leaves the capsule entry with no chain and the
+// clear's operator and time (never the tombstone flag, which is the
+// pending record's alone), so a later merge of an older chain cannot
+// resurrect it.
 func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.StepOverride) capsule.StepOverrides {
 	if ov.Steps == nil {
 		ov.Steps = map[string]*capsule.StepOverride{}
@@ -488,18 +500,38 @@ func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.S
 			e = &capsule.StepOverride{}
 			ov.Steps[id] = e
 		}
-		if p.Models != nil {
-			e.Models, e.ModelsBy, e.ModelsAt = append([]string(nil), p.Models...), p.ModelsBy, p.ModelsAt
+		if (p.Models != nil || p.ModelsCleared) && pendingAspectApplies(p.ModelsAt, e.ModelsAt) {
+			if p.ModelsCleared {
+				e.Models, e.ModelsBy, e.ModelsAt = nil, p.ModelsBy, p.ModelsAt
+			} else {
+				e.Models, e.ModelsBy, e.ModelsAt = append([]string(nil), p.Models...), p.ModelsBy, p.ModelsAt
+			}
 		}
-		if p.ModelsCleared {
-			e.Models, e.ModelsBy, e.ModelsAt = nil, "", ""
-		}
-		if p.Skip != nil {
+		if p.Skip != nil && pendingAspectApplies(p.SkipAt, e.SkipAt) {
 			skip := *p.Skip
 			e.Skip, e.SkipBy, e.SkipAt = &skip, p.SkipBy, p.SkipAt
 		}
 	}
 	return ov
+}
+
+// pendingAspectApplies compares one aspect's recorded times, parsed
+// (RFC 3339, never as strings): the pending aspect applies unless it is
+// earlier than the capsule's. A capsule aspect with no or an unparseable
+// time counts as older (the pending one applies); a pending aspect with
+// no or an unparseable time — every pending write records one, so only a
+// hand-edited record lacks it — counts as older than any timed capsule
+// aspect (the capsule's time is the evidence of a later write).
+func pendingAspectApplies(pendingAt, capsuleAt string) bool {
+	c, err := time.Parse(time.RFC3339Nano, capsuleAt)
+	if err != nil {
+		return true
+	}
+	p, err := time.Parse(time.RFC3339Nano, pendingAt)
+	if err != nil {
+		return false
+	}
+	return !p.Before(c)
 }
 
 // clearPendingOverrides drops work item wi's pending entries (a terminal

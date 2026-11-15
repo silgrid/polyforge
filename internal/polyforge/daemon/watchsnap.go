@@ -340,7 +340,9 @@ func watchOverrides(d *Daemon, wi, capsuleDir string) map[string]protocol.WatchO
 	}
 	out := map[string]protocol.WatchOverride{}
 	for id, e := range ov.Steps {
-		if e == nil {
+		// a cleared chain (Models nil, its clear's time kept) is no chain:
+		// an entry left with no aspect carries nothing to show
+		if e == nil || (e.Models == nil && e.Skip == nil) {
 			continue
 		}
 		out[id] = protocol.WatchOverride{Models: e.Models, Skip: e.Skip}
@@ -356,6 +358,11 @@ func watchOverrides(d *Daemon, wi, capsuleDir string) map[string]protocol.WatchO
 		w.Pending = true
 		if e.Models != nil {
 			w.Models = e.Models
+		}
+		if e.ModelsCleared {
+			// the pending clear tombstone: the sealed chain no longer
+			// governs (as the overlay view's fillRow reads it)
+			w.Models = nil
 		}
 		if e.Skip != nil {
 			w.Skip = e.Skip
