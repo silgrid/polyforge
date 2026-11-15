@@ -373,8 +373,8 @@ func TestVerifyRefusesUnusableInvocations(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"full tier", []string{"--tier", "full", "--capsule", f.dir, "--engine", engine}, "light tier only"},
-		{"no tier", []string{"--capsule", f.dir, "--engine", engine}, "--tier light is required"},
+		{"unknown tier", []string{"--tier", "scoped", "--capsule", f.dir, "--engine", engine}, "light, full or auto"},
+		{"no tier", []string{"--capsule", f.dir, "--engine", engine}, "--tier is required"},
 		{"no engine", []string{"--tier", "light", "--capsule", f.dir, "--engine", engine + ".nope"}, "no scope engine at"},
 		{"argument", []string{"--tier", "light", "--capsule", f.dir, "--engine", engine, "extra"}, "unrecognized arguments"},
 		{"single-dash flag", []string{"-tier", "light", "--capsule", f.dir, "--engine", engine}, "unrecognized arguments"},
