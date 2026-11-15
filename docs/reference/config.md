@@ -772,7 +772,7 @@ until this machine's resume or claim publishes the capsule chain — a
 paused ticket's kept scene carries it into the resume's own publishes; a
 blocked ticket's claim merges the pending record into the fresh capsule,
 publishes it at once and deletes the record only once that publish
-succeeded (a failed publish keeps it for the next claim). The merge
+succeeded (a failed publish keeps it for a later claim here). The merge
 compares each aspect's time: a pending chain, clear or skip applies only
 when it is not earlier than the capsule's same aspect, so a newer change
 the capsule carries (a later paused or running write, a running clear —
