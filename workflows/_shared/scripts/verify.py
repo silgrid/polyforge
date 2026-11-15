@@ -26,6 +26,18 @@ container of its own (the ``pf.verify.*`` labels, the deadline label and a
 keep-alive ending five minutes after the deadline; removed when the run
 ends); any other runs on the host under the step's PATH.
 
+``--analysis`` names the build's change analysis
+(``artifacts/build/change-analysis.json``): the tests it lists run beside
+the plan — the union is add-only, the engine's selection never narrowed.
+The analysis's ``supplement_limit`` (the script's default when it names
+none) caps the supplemented runs: the first entries in listed order run,
+the tail is cut and named in the result and the report. Each entry names
+an existing test — its ``file`` must be a tracked file of its task repo at
+HEAD and its ``name`` (when given) must appear in it — and the run that
+shows it passing, judged by its marker under ``--unit-runs``' own rules;
+a listed test that does not exist fails its check naming it. A missing or
+malformed analysis file is the invocation's (exit 2).
+
 ``--unit-runs`` names the build's units.json (``[{id, test_commit,
 impl_commit, run{repo, cwd, argv}, marker}]``): every unit's green run is run
 again as written beside the plan, each its own check
@@ -88,6 +100,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pfstep  # noqa: E402
 from pfstep import container, duration, git, gostr, jsonout, result, runner, stepenv, tmpdir  # noqa: E402
 from pfstep import progress  # noqa: E402
+from pfstep.analysis import Analysis, AnalysisDecl, read_analysis  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
@@ -137,6 +150,8 @@ GIT_TIMEOUT = 600.0
 ORIGIN_PLAN = "plan"
 ORIGIN_UNIT_RUN = "unit-run"
 KIND_UNIT_RUN = "unit_run"
+ORIGIN_ANALYSIS = "analysis"
+KIND_ANALYSIS = "analysis"
 
 PLAN_PLANNED = "planned"
 PLAN_EMPTY = "empty"
@@ -270,6 +285,14 @@ class UnitRunState:
 
 
 @dataclass
+class AnalysisState(UnitRunState):
+    """One listed test's supplement run: the same run, marker and flaky
+    policy as a unit run, on the analysis's own declaration."""
+
+    decl: AnalysisDecl  # type: ignore[assignment]
+
+
+@dataclass
 class UntrackedScan:
     files: List[str] = field(default_factory=list)
     err: str = ""
@@ -287,6 +310,7 @@ class RepoRun:
     plan: Optional[RepoPlan] = None
     runs: List[CmdRun] = field(default_factory=list)
     unit_runs: List[UnitRunState] = field(default_factory=list)
+    analysis_runs: List[AnalysisState] = field(default_factory=list)
     untracked_before: UntrackedScan = field(default_factory=UntrackedScan)
     untracked_after: UntrackedScan = field(default_factory=UntrackedScan)
     box: Optional[container.Box] = None
@@ -380,11 +404,18 @@ class Verification:
         env: Dict[str, str],
         say: Callable[[str], None],
         co: Optional[container.ContainerOptions],
+        analysis: Optional[Analysis] = None,
     ) -> None:
         self.capsule = capsule
         self.engine = engine
         self.deadline = deadline  # ns: the whole run's
         self.unit_run_decls = unit_runs
+        # the analysis's listed tests: the first `limit` run beside the
+        # plan, the tail cut and named (the union is add-only)
+        an = analysis or Analysis()
+        self.analysis_taken = an.decls[: an.limit]
+        self.analysis_cut = an.decls[an.limit:]
+        self.analysis_limit = an.limit
         self.env = env
         self.say = say
         self.co = co
@@ -490,6 +521,7 @@ class Verification:
                     for rr in repos:
                         self.run_bar(rr)
                         self.run_unit_runs(rr)
+                        self.run_analysis_runs(rr)
                     # 4. pre-existing base runs, then the confirming re-runs
                     for rr in repos:
                         self.pre_existing_phase(rr)
@@ -773,7 +805,7 @@ class Verification:
             rerun_flaky(us, RERUNS, rr.dir, self.rerun_runner(rr, cr.timeout), self.budget_left, self.budget_note(),
                         self.r.deadline_note(), report_note)
 
-    # -- the build's unit runs
+    # -- the build's unit runs and the analysis's supplements
 
     def prepare_unit_run(self, s: UnitRunState, rr: RepoRun) -> str:
         """Why s cannot run as written in rr ("" = it can)."""
@@ -788,6 +820,50 @@ class Verification:
             return "its cwd %s is no directory of repos/%s at HEAD" % (cwd, rr.name)
         return marker_problem(d.marker)
 
+    def prepare_analysis_run(self, s: AnalysisState, rr: RepoRun) -> None:
+        """Why the listed test cannot run or does not exist ("" = it can):
+        the unit-run shape rules, then the test itself — its file tracked at
+        HEAD, its name inside it."""
+        d = s.decl
+        s.problem = self.prepare_unit_run(s, rr)
+        if s.problem:
+            return
+        p = gostr.clean_rel(d.file)
+        if p == "" or p.startswith("/") or p == ".." or p.startswith("../"):
+            s.problem = "its file %s is not a repo-relative path" % gostr.quote(d.file)
+            return
+        try:
+            git_quiet(rr.dir, "cat-file", "-e", "HEAD:" + p)
+        except git.GitError:
+            s.problem = ("its file %s is not a tracked file of repos/%s at HEAD: the analysis lists a"
+                         " test that does not exist" % (gostr.quote(p), rr.name))
+            return
+        if d.name != "":
+            try:
+                body = git_quiet(rr.dir, "show", "HEAD:" + p)
+            except git.GitError:
+                body = ""
+            if d.name not in body:
+                s.problem = ("its name %s appears nowhere in %s at HEAD: the analysis lists a test"
+                             " that does not exist" % (gostr.quote(d.name), gostr.quote(p)))
+
+    def recorded_reruns(self, rr: RepoRun, s: UnitRunState) -> None:
+        """A failed recorded run is re-run once at HEAD (RERUNS): a pass on
+        the re-run is flaky; a re-run the budget never started leaves it a
+        failure with not_rerun."""
+        i = 1
+        while not s.passed and s.ran and i <= RERUNS:
+            runs = s.runs
+            if self.budget_left():
+                self.exec_unit_run(rr, s)
+            if s.runs == runs:
+                # not started: the budget spent or the deadline passed
+                s.not_rerun = i == 1
+                break
+            if s.passed:
+                s.flaky = True
+            i += 1
+
     def run_unit_runs(self, rr: RepoRun) -> None:
         if rr.merge is None:
             return
@@ -800,18 +876,24 @@ class Verification:
             if s.problem:
                 continue
             self.exec_unit_run(rr, s)
-            i = 1
-            while not s.passed and s.ran and i <= RERUNS:
-                runs = s.runs
-                if self.budget_left():
-                    self.exec_unit_run(rr, s)
-                if s.runs == runs:
-                    # not started: the budget spent or the deadline passed
-                    s.not_rerun = i == 1
-                    break
-                if s.passed:
-                    s.flaky = True
-                i += 1
+            self.recorded_reruns(rr, s)
+
+    def run_analysis_runs(self, rr: RepoRun) -> None:
+        """The analysis's taken entries of rr: each runs beside the plan,
+        one check per entry, the same marker and flaky policy as a unit
+        run."""
+        if rr.merge is None:
+            return
+        for d in self.analysis_taken:
+            if d.repo != rr.name:
+                continue
+            s = AnalysisState(decl=d)
+            rr.analysis_runs.append(s)
+            self.prepare_analysis_run(s, rr)
+            if s.problem:
+                continue
+            self.exec_unit_run(rr, s)
+            self.recorded_reruns(rr, s)
 
     def exec_unit_run(self, rr: RepoRun, s: UnitRunState) -> None:
         er = self.exec(rr, list(s.decl.argv), os.path.join(rr.dir, s.cwd), gostr.path_join(rr.cwd_rel, s.cwd),
@@ -1038,6 +1120,7 @@ class Verification:
         checks: List[Dict[str, Any]] = []
         units: List[Dict[str, Any]] = []
         unit_runs: List[Dict[str, Any]] = []
+        analysis_runs: List[Dict[str, Any]] = []
         pre_existing: List[str] = []
         merges = {rr.name: rr.merge for rr in repos if rr.merge is not None}
         conf_changed: Dict[str, bool] = {}
@@ -1118,6 +1201,12 @@ class Verification:
                     units.append(ur)
                     unit_runs.append(rec)
                     commands.append(crep)
+                for s in rr.analysis_runs:
+                    c, ur, rec, crep = self.analysis_assembly(s)
+                    checks.append(c)
+                    units.append(ur)
+                    analysis_runs.append(rec)
+                    commands.append(crep)
                 checks.extend(test_file_checks(rr))
                 rep["commands"] = commands
                 reports.append(rep)
@@ -1130,6 +1219,20 @@ class Verification:
                     checks.append(c)
                     units.append(ur)
                     unit_runs.append(rec)
+            for ad in self.analysis_taken:
+                if ad.repo not in have:
+                    st = AnalysisState(decl=ad, problem="repos/%s is not a task repo of this capsule (capsule.json"
+                                       " names it not, or it is not cloned under repos/)" % ad.repo)
+                    c, ur, rec, _ = self.analysis_assembly(st)
+                    checks.append(c)
+                    units.append(ur)
+                    analysis_runs.append(rec)
+            for ad in self.analysis_cut:
+                checks.append(check(ad.check(), "skipped", cap_text(
+                    "listed after the analysis's first %d (its supplement cap): not run — the engine's"
+                    " selection is unchanged" % self.analysis_limit)))
+                analysis_runs.append({"id": ad.id, "check": ad.check(), "repo": ad.repo, "status": "cut",
+                                      "why": ad.why, "file": ad.file, "name": ad.name})
             if effective_light and light_repos > 0:
                 tier["effective"] = TIER_LIGHT
             else:
@@ -1161,12 +1264,25 @@ class Verification:
         doc["units"] = units
         if unit_runs:
             doc["unit_runs"] = unit_runs
+        if analysis_runs:
+            doc["analysis_runs"] = analysis_runs
         doc["scope"] = scope
         doc["conf_changed_in_diff"] = {k: conf_changed[k] for k in sorted(conf_changed)}
         return doc
 
     def unit_run_assembly(self, s: UnitRunState) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
         """One unit run's check, unit, record and command report."""
+        return self.recorded_assembly(s, KIND_UNIT_RUN, ORIGIN_UNIT_RUN, "unit-run", "unit")
+
+    def analysis_assembly(self, s: AnalysisState) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+        """One listed test's check, unit, record and command report."""
+        return self.recorded_assembly(s, KIND_ANALYSIS, ORIGIN_ANALYSIS, "analysis", "the analysis entry")
+
+    def recorded_assembly(
+        self, s: UnitRunState, kind: str, origin: str, crep_name: str, noun: str
+    ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+        """One recorded run's check, unit, record and command report (a unit
+        run or an analysis supplement; the wording names the noun)."""
         d = s.decl
         name = d.check()
         line = " ".join(d.argv)
@@ -1178,7 +1294,7 @@ class Verification:
         exit_code: Optional[int] = None
         log = ""
         if s.problem:
-            c_status, detail = "fail", "unit %s cannot run as written: %s" % (d.id, s.problem)
+            c_status, detail = "fail", "%s %s cannot run as written: %s" % (noun, d.id, s.problem)
         elif not s.ran:
             c_status, detail = "fail", "`%s` %s (the bar was not run in full: never a pass)" % (line, s.why)
         else:
@@ -1194,7 +1310,7 @@ class Verification:
                     detail += "; " + BROWSER_CRASH_NOTE
         detail = cap_text(detail)
         c = check(name, c_status, detail)
-        unit = omit_empty({"repo": d.repo, "check": name, "kind": KIND_UNIT_RUN, "name": d.id, "status": status,
+        unit = omit_empty({"repo": d.repo, "check": name, "kind": kind, "name": d.id, "status": status,
                            "protected": True, "marker": cap_text(d.marker), "detail": detail,
                            "failure": failure_of(s.crashed) if status != "pass" else "", "not_rerun": s.not_rerun},
                           keep=("repo", "check", "kind", "name", "status"))
@@ -1212,7 +1328,7 @@ class Verification:
             rec["log"] = log
         if detail:
             rec["detail"] = detail
-        crep: Dict[str, Any] = {"check": name, "name": "unit-run:" + d.id, "phase": ORIGIN_UNIT_RUN, "origin": ORIGIN_UNIT_RUN,
+        crep: Dict[str, Any] = {"check": name, "name": crep_name + ":" + d.id, "phase": origin, "origin": origin,
                                 "command": line}
         if d.argv:
             crep["argv"] = list(d.argv)
@@ -1558,6 +1674,22 @@ def render_report(res: Dict[str, Any]) -> str:
                 b.append("  - e2e selection (smoke_suite opt-in): mode **%s**; suites %s; uncovered paths %s; carried full command(s) %s\n" % (
                     s["mode"], _code_list(s.get("suites")), _code_list(s.get("uncovered_paths")), _code_list(s.get("full_commands"))))
         b.append("\n")
+    supplements = res.get("analysis_runs") or []
+    if supplements:
+        cut = [a for a in supplements if a.get("status") == "cut"]
+        b.append("### The change analysis's supplements\n\n")
+        b.append("Listed tests run beside the plan (the union is add-only; the engine's selection is unchanged).")
+        if cut:
+            b.append(" Over the supplement cap the tail was cut, in listed order, and named here.\n\n")
+        else:
+            b.append("\n\n")
+        for a in supplements:
+            what = a.get("file", "") + (": " + a["name"] if a.get("name") else "")
+            line = "- `%s` (%s) — %s" % (a["id"], what, a.get("why", ""))
+            if a.get("status") == "cut":
+                line += " — cut over the cap, not run"
+            b.append(line + "\n")
+        b.append("\n")
     if res["checks"]:
         b.append("### Checks\n\n| check | status | detail |\n| --- | --- | --- |\n")
         for c in res["checks"]:
@@ -1626,6 +1758,9 @@ def details_of(res: Dict[str, Any]) -> Dict[str, Any]:
             "failure": u.get("failure", ""), "not_rerun": u.get("not_rerun", False),
         }, keep=("unit", "kind", "status", "flaky", "pre_existing")))
     unit_runs = {ur["check"]: ur for ur in res.get("unit_runs", [])}
+    for ar in res.get("analysis_runs", []):
+        if ar.get("argv"):
+            unit_runs[ar["check"]] = ar
     checks: List[Dict[str, Any]] = []
     for c in res["checks"]:
         vc: Dict[str, Any] = {"id": c["name"]}
@@ -1685,6 +1820,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--engine", default="", help="the scope engine (default: the shared tree's scripts/verify-scope)")
     p.add_argument("--unit-runs", default="", help="the build's units.json: every unit's recorded run, run again as"
                    " written beside the plan")
+    p.add_argument("--analysis", default="", help="the build's change analysis (artifacts/build/change-analysis.json):"
+                   " the tests it lists run beside the plan under its supplement cap, add-only")
     p.add_argument("--deadline", default="", help="the whole run's deadline, a Go duration (default: derived from the"
                    " step's tool window, two minutes under it)")
     p.add_argument("--log-dir", default="", help="where the logs go (default: logs/ beside --out, else the capsule's"
@@ -1761,6 +1898,12 @@ def run(
             decls = read_unit_runs(a.unit_runs)
         except ValueError as err:
             raise Usage("--unit-runs: %s" % err) from None
+    analysis = Analysis()
+    if a.analysis:
+        try:
+            analysis = read_analysis(a.analysis)
+        except ValueError as err:
+            raise Usage("--analysis: %s" % err) from None
     if a.deadline:
         try:
             window = duration.parse(a.deadline)
@@ -1788,7 +1931,7 @@ def run(
         return 2
     cmd_env = dict(env)
     try:
-        v = Verification(capsule, eng, window, logs, decls, cmd_env, say, co)
+        v = Verification(capsule, eng, window, logs, decls, cmd_env, say, co, analysis=analysis)
     except OSError as err:
         res.summary = "the verification could not run: %s" % err
         return 2
