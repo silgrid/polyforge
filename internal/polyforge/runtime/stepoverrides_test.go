@@ -575,3 +575,208 @@ func TestPendingOverrideTornRecordFailsClaim(t *testing.T) {
 		t.Fatalf("the claim rewrote the torn record: %q", got)
 	}
 }
+
+// blockedWrite records a change while wi is held by no job (the blocked
+// posture): the pending record gains it with the daemon's own time.
+func blockedWrite(t *testing.T, r *Runtime, wi string, ch OverrideChange) {
+	t.Helper()
+	out, err := r.ApplyStepOverride(context.Background(), wi, ch)
+	if err != nil {
+		t.Fatalf("the blocked write: %v", err)
+	}
+	if !out.Changed || out.Posture != OverridePostureBlocked {
+		t.Fatalf("precondition: a changed blocked write: %+v", out)
+	}
+}
+
+// claimWithFailedPublish claims wi with the claim's publish of the merged
+// pending record failing: the record stays as residue.
+func claimWithFailedPublish(t *testing.T, r *Runtime, wi string) {
+	t.Helper()
+	real := pendingPublishFn
+	t.Cleanup(func() { pendingPublishFn = real })
+	pendingPublishFn = func(ctx context.Context, o gitops.Opts, msg string) (string, bool, gitops.PushTimings, error) {
+		return "", false, gitops.PushTimings{}, errors.New("injected: the hub is unreachable")
+	}
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pendingPublishFn = real
+	if r.jobOf(wi) == nil {
+		t.Fatal("the claim must run to a live agent")
+	}
+	if pend := readPendingFile(t, r); pend == nil || pend[wi] == nil {
+		t.Fatal("precondition: the failed claim publish must leave the pending record")
+	}
+}
+
+// blockAndReclaim closes wi blocked, re-claims it here and answers the
+// fresh capsule's overlay record.
+func blockAndReclaim(t *testing.T, r *Runtime, wi string) capsule.StepOverrides {
+	t.Helper()
+	if err := r.Stop(context.Background(), wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("blocked Stop: %v", err)
+	}
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("re-claim: %v", err)
+	}
+	j := r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the re-claim must run to a live agent")
+	}
+	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Stop(context.Background(), wi, protocol.FinishWrapped) })
+	return ov
+}
+
+// The owner's sequence (review r2#1, owner ruling 2026-11-15T01:37:30Z):
+// the claim's publish of the merged pending record fails, the ticket
+// pauses, a paused write records a newer chain of the same step, the
+// ticket resumes in place, closes blocked and is re-claimed here — the
+// newer chain governs (the claim's merge compares the aspect's times),
+// and an untouched pending step still merges.
+func TestPendingOverrideMergeKeepsNewerCapsuleAspect(t *testing.T) {
+	r, _ := pendingEnv(t)
+	const wi = "wi_ov19k"
+	blockedWrite(t, r, wi, OverrideChange{Step: "release", Operator: "usr_1", Models: []string{"pi:ov/stale"}})
+	blockedWrite(t, r, wi, OverrideChange{Step: "fix", Operator: "usr_1", Models: []string{"pi:ov/fix-pending"}})
+	claimWithFailedPublish(t, r, wi)
+	if err := r.Stop(context.Background(), wi, protocol.FinishPaused); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	out, err := r.ApplyStepOverride(context.Background(), wi, OverrideChange{
+		Step: "release", Operator: "usr_2", Models: []string{"pi:ov/newer"},
+	})
+	if err != nil {
+		t.Fatalf("the paused write: %v", err)
+	}
+	if !out.Changed || out.Posture != OverridePosturePaused || out.Published {
+		t.Fatalf("precondition: a changed, unpublished paused write: %+v", out)
+	}
+	// the operator's pf resume: clean_pause cleared at the hub, the
+	// paused record resumed in place
+	hub := r.hub.(*fakeHub)
+	hub.mu.Lock()
+	hub.cleanPause[wi] = false
+	hub.mu.Unlock()
+	if res, err := r.ResumePaused(context.Background(), wi); err != nil || res != ResumeAttached {
+		t.Fatalf("ResumePaused = %q, %v", res, err)
+	}
+	ov := blockAndReclaim(t, r, wi)
+	if e := ov.Steps["release"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/newer" || e.ModelsBy != "usr_2" {
+		t.Fatalf("the re-claim merged the older pending chain over the newer one: %+v", e)
+	}
+	if e := ov.Steps["fix"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/fix-pending" {
+		t.Fatalf("the untouched pending entry must still merge: %+v", e)
+	}
+}
+
+// A clear carries its own time: a pending chain merged at a claim whose
+// publish failed, then cleared by a running write, must not come back at
+// the re-claim (review r2#1, owner ruling 2026-11-15T01:37:30Z).
+func TestPendingOverrideMergeDoesNotResurrectClearedChain(t *testing.T) {
+	r, _ := pendingEnv(t)
+	const wi = "wi_ov19c"
+	blockedWrite(t, r, wi, OverrideChange{Step: "release", Operator: "usr_1", Models: []string{"pi:ov/x"}})
+	claimWithFailedPublish(t, r, wi)
+	out, err := r.ApplyStepOverride(context.Background(), wi, OverrideChange{
+		Step: "release", Operator: "usr_2", ClearModels: true,
+	})
+	if err != nil {
+		t.Fatalf("the running clear: %v", err)
+	}
+	if !out.Changed || out.Posture != OverridePostureRunning {
+		t.Fatalf("precondition: a changed running clear: %+v", out)
+	}
+	ov := blockAndReclaim(t, r, wi)
+	if e := ov.Steps["release"]; e != nil && e.Models != nil {
+		t.Fatalf("the re-claim resurrected the cleared chain: %+v", e)
+	}
+}
+
+// mergePendingAspects compares each aspect's times (parsed, never as
+// strings): a pending aspect not older than the capsule's same aspect
+// applies, an older one leaves the capsule's; a clear tombstone carries
+// its time like a chain; an untimed capsule aspect counts as older, an
+// untimed pending one as older than any timed capsule aspect.
+func TestMergePendingAspectsComparesAspectTimes(t *testing.T) {
+	yes, no := true, false
+	// t1 < t2 by instant; as strings t1Str > t2Str (offset), and the
+	// fractional second sorts before "Z"
+	const (
+		t1    = "2026-11-15T01:00:00+08:00" // 2026-11-14T17:00:00Z
+		t1Utc = "2026-11-14T17:00:00Z"      // the same instant
+		t2    = "2026-11-14T18:00:00Z"
+		t2f   = "2026-11-14T18:00:00.5Z" // later than t2
+	)
+	capsuleOv := capsule.StepOverrides{Steps: map[string]*capsule.StepOverride{
+		"newer":        {Models: []string{"cap"}, ModelsBy: "usr_0", ModelsAt: t2},
+		"equal":        {Models: []string{"cap"}, ModelsBy: "usr_0", ModelsAt: t1Utc},
+		"older":        {Models: []string{"cap"}, ModelsBy: "usr_0", ModelsAt: t2},
+		"untimedCap":   {Models: []string{"cap"}, ModelsBy: "usr_0"},
+		"untimedPend":  {Models: []string{"cap"}, ModelsBy: "usr_0", ModelsAt: t1},
+		"tombOlder":    {Models: []string{"cap"}, ModelsBy: "usr_0", ModelsAt: t2},
+		"tombNewer":    {Models: []string{"cap"}, ModelsBy: "usr_0", ModelsAt: t2},
+		"clearedCap":   {ModelsBy: "usr_0", ModelsAt: t2},
+		"skipOlder":    {Skip: &yes, SkipBy: "usr_0", SkipAt: t2},
+		"skipNewer":    {Skip: &no, SkipBy: "usr_0", SkipAt: t2},
+		"mixedAspects": {Models: []string{"cap"}, ModelsBy: "usr_0", ModelsAt: t2, Skip: &no, SkipBy: "usr_0", SkipAt: t1},
+	}}
+	pending := map[string]*capsule.StepOverride{
+		"newer":        {Models: []string{"pend"}, ModelsBy: "usr_1", ModelsAt: t2f},
+		"equal":        {Models: []string{"pend"}, ModelsBy: "usr_1", ModelsAt: t1},
+		"older":        {Models: []string{"pend"}, ModelsBy: "usr_1", ModelsAt: t1},
+		"untimedCap":   {Models: []string{"pend"}, ModelsBy: "usr_1", ModelsAt: t1},
+		"untimedPend":  {Models: []string{"pend"}, ModelsBy: "usr_1"},
+		"tombOlder":    {ModelsCleared: true, ModelsBy: "usr_1", ModelsAt: t1},
+		"tombNewer":    {ModelsCleared: true, ModelsBy: "usr_1", ModelsAt: t2f},
+		"clearedCap":   {Models: []string{"pend"}, ModelsBy: "usr_1", ModelsAt: t1},
+		"skipOlder":    {Skip: &no, SkipBy: "usr_1", SkipAt: t1},
+		"skipNewer":    {Skip: &yes, SkipBy: "usr_1", SkipAt: t2f},
+		"mixedAspects": {Models: []string{"pend"}, ModelsBy: "usr_1", ModelsAt: t1, Skip: &yes, SkipBy: "usr_1", SkipAt: t2},
+	}
+	out := mergePendingAspects(capsuleOv, pending)
+	chain := func(id string) string {
+		e := out.Steps[id]
+		if e == nil || e.Models == nil {
+			return "<none>"
+		}
+		return e.Models[0] + "/" + e.ModelsBy
+	}
+	skip := func(id string) string {
+		e := out.Steps[id]
+		if e == nil || e.Skip == nil {
+			return "<none>"
+		}
+		return fmt.Sprintf("%v/%s", *e.Skip, e.SkipBy)
+	}
+	for _, c := range []struct{ id, got, want string }{
+		{"newer", chain("newer"), "pend/usr_1"},
+		{"equal", chain("equal"), "pend/usr_1"},
+		{"older", chain("older"), "cap/usr_0"},
+		{"untimedCap", chain("untimedCap"), "pend/usr_1"},
+		{"untimedPend", chain("untimedPend"), "cap/usr_0"},
+		{"tombOlder", chain("tombOlder"), "cap/usr_0"},
+		{"tombNewer", chain("tombNewer"), "<none>"},
+		{"clearedCap", chain("clearedCap"), "<none>"},
+		{"skipOlder", skip("skipOlder"), "true/usr_0"},
+		{"skipNewer", skip("skipNewer"), "true/usr_1"},
+		{"mixedAspects models", chain("mixedAspects"), "cap/usr_0"},
+		{"mixedAspects skip", skip("mixedAspects"), "true/usr_1"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s after the merge: %s, want %s", c.id, c.got, c.want)
+		}
+	}
+	// the applied tombstone records the clear's operator and time, so a
+	// later merge of an older chain cannot resurrect it
+	if e := out.Steps["tombNewer"]; e == nil || e.ModelsAt != t2f || e.ModelsBy != "usr_1" || e.ModelsCleared {
+		t.Errorf("the applied tombstone must leave a timed clear in the capsule record: %+v", e)
+	}
+	if e := out.Steps["clearedCap"]; e == nil || e.ModelsAt != t2 || e.ModelsBy != "usr_0" {
+		t.Errorf("the capsule's newer clear must stand with its time: %+v", e)
+	}
+}
