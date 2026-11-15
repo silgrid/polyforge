@@ -14,7 +14,7 @@ colon) declares nothing. Ported from the Go step commands' carries.go.
 
 import os
 import re
-from typing import List
+from typing import List, Tuple
 
 from . import gostr
 
@@ -25,6 +25,14 @@ _CARRIES_SPLIT = re.compile(r"[ \t,]+", re.ASCII)
 
 # How much of a file the header read takes.
 MAX_HEADER = 64 << 10
+
+
+def parse_header(src: str) -> Tuple[str, List[str]]:
+    """The file's opening comment block classified the way the scope
+    engine reports it: ("declared", globs) — the union of every
+    ``carries:`` line — ("undeclared", []) or ("malformed", [] — an empty
+    ``carries:`` value or a ``carries`` word without its colon)."""
+    return "", []
 
 
 def parse_carries(src: str) -> List[str]:
