@@ -1616,24 +1616,35 @@ def replay_end_line(unit_id: str, rr: Mapping[str, Any]) -> str:
     return "unit %s: replay %s (exit %d, %s)" % (unit_id, word, rr["exit_code"], took)
 
 
-def replay_verdict(exit_code: int, timed_out: bool, output: str) -> Tuple[str, Optional[Dict[str, str]]]:
+def replay_verdict(exit_code: int, timed_out: bool, output: str,
+                   rules: Sequence[Tuple[str, str, str]] = ()) -> Tuple[str, Optional[Dict[str, str]]]:
     """A replayed run judged: ("pass", None) for exit 0; ("not_judged",
     None) when its time limit killed it or the command never ran
     (NOT_RUN_EXITS); ("not_runnable", {toolchain, rule, line}) when a line
-    of its output matches a NOT_RUNNABLE_RULES pattern (the first such
-    line) — also when another package's assertions failed beside it, as
-    nothing then shows the unit's own test ran; else ("red", None)."""
+    of its output matches a NOT_RUNNABLE_RULES pattern or one of rules — the
+    repository-declared not_runnable_rule= lines of the tree the run is
+    judged on (the first such line) — also when another package's
+    assertions failed beside it, as nothing then shows the unit's own test
+    ran; else ("red", None)."""
     if timed_out or not_run(exit_code):
         return "not_judged", None
     if exit_code == 0:
         return "pass", None
-    compiled = [(t, r, re.compile(p)) for t, r, p in NOT_RUNNABLE_RULES]
+    compiled = [(t, r, re.compile(p)) for t, r, p in list(NOT_RUNNABLE_RULES) + list(rules)]
     for line in output.split("\n"):
         line = line.rstrip("\r")
         for toolchain, rule, rx in compiled:
             if rx.search(line):
                 return "not_runnable", {"toolchain": toolchain, "rule": rule, "line": line}
     return "red", None
+
+
+def not_runnable_rules_of(tree: str, cwd: str) -> List[Tuple[str, str, str]]:
+    """The repository-declared not-runnable rules of the tree at cwd: the
+    `not_runnable_rule=<toolchain>|<rule>|<pattern>` lines of the nearest
+    `.polyforge/verify-scope.conf` at cwd or above (the root's without a
+    nearer one) — [] when it declares none; a malformed line is skipped."""
+    return []
 
 
 # BASE_SETUP_RULE: the not-runnable rule of a replay whose base_setup= line
