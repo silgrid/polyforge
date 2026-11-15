@@ -149,7 +149,11 @@ class ReplaySetupTest(GitCase):
 
     @unittest.skipUnless(HAVE_NODE, "node not installed")
     def test_node_browser_preflight_runs_after_setup_and_is_red(self) -> None:
-        cap = self.capsule("stack=npm\nbase_setup=cd web2 && sh setup.sh\n", NODE_BASE, BROWSER_NODE_TEST, NODE_IMPL,
+        # the preflight's own output text is the repository's to declare
+        # (polyforge#50: not_runnable_rule= replaced the builtin rule)
+        cap = self.capsule("stack=npm\nbase_setup=cd web2 && sh setup.sh\n"
+                           "not_runnable_rule=node|node-browser-preflight|^(?:node_modules/ is missing:|Playwright Chromium is missing: )\n",
+                           NODE_BASE, BROWSER_NODE_TEST, NODE_IMPL,
                            "web2", ["node", "--test", "t.test.mjs"])
         code, res, err = self.replay(cap)
         r = self.unit_replay(res)

@@ -5,6 +5,7 @@ container engine; the gate script run in-process as the skill runs it."""
 
 import io
 import json
+import glob
 import os
 import shutil
 import subprocess
@@ -67,6 +68,11 @@ def gate_tree(directory: str, conf: str, dockerfile: bool = True) -> None:
     and (when dockerfile) the Dockerfile."""
     with open(ENGINE_SRC, encoding="utf-8") as f:
         write_files(directory, {gate.GATE_ENGINE_REL: f.read()}, 0o755)
+    # the engine imports its library (pfstep), which ships beside it
+    for lib in sorted(glob.glob(os.path.join(os.path.dirname(ENGINE_SRC), "pfstep", "*.py"))):
+        rel = os.path.join("workflows", "_shared", "scripts", "pfstep", os.path.basename(lib))
+        with open(lib, encoding="utf-8") as f:
+            write_files(directory, {rel: f.read()})
     with open(GATE_ID_SRC, encoding="utf-8") as f:
         write_files(directory, {"tools/gate-id": f.read()}, 0o755)
     write_files(directory, {".polyforge/verify-scope.conf": conf, "README": "x\n"})

@@ -938,7 +938,10 @@ hold no credential.
   `.polyforge/Dockerfile.verify`), neither: the container when HEAD
   carries one, else the host; a replay is red only when its run failed
   on its assertions — one that could not run there, a build, setup,
-  compile or import error or a missing module or test runner dependency preflight (`node_modules/` or Playwright Chromium missing) in its output, is reported
+  compile or import error, a missing module, or a line the repository
+  itself declares as its toolchain's own (`not_runnable_rule=` in the
+  `.polyforge/verify-scope.conf` governing the replayed run's cwd — its
+  browser preflight's text, for example), in its output, is reported
   `not_runnable`, a difference to class (exit 1), never red), `carries` (every e2e suite the build added
   or changed declares a `carries:` that covers it) and `micro-bounds
   --plan <evidence.json>` (every changed path inside the repo's
@@ -988,7 +991,7 @@ hold no credential.
 The verification-scope engine is the workflow's too:
 `workflows/_shared/scripts/verify-scope`, with its dependency-audit helper
 `audit-deps` beside it. A step finds it in its lane snapshot,
-`$PF_SHARED_DIR/scripts/verify-scope` (read-only there: `sh <path>`) —
+`$PF_SHARED_DIR/scripts/verify-scope` (read-only there: `python3 <path>`) —
 `verify.py`'s only engine when `--engine` names none; a hand run uses the
 release checkout's copy.
 

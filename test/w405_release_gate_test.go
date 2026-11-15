@@ -42,7 +42,7 @@ func w405GateWorld(t *testing.T) *relWorld {
 // commands of the fast and full phases, in order.
 func w405Plan(t *testing.T, dir string) []string {
 	t.Helper()
-	c := exec.Command("sh", "workflows/_shared/scripts/verify-scope", "--json", "--full", "--base", "HEAD")
+	c := exec.Command("python3", "workflows/_shared/scripts/verify-scope", "--json", "--full", "--base", "HEAD")
 	c.Dir = dir
 	raw, err := c.Output()
 	if err != nil {

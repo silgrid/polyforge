@@ -395,6 +395,12 @@ class LightTierTest(unittest.TestCase):
         os.makedirs(tools)
         engine = os.path.join(tools, "verify-scope")
         shutil.copy2(REAL_ENGINE, engine)
+        # the engine imports its library (pfstep), which ships beside it
+        pfstep_dir = os.path.join(tools, "pfstep")
+        os.makedirs(pfstep_dir, exist_ok=True)
+        for name in os.listdir(os.path.join(os.path.dirname(REAL_ENGINE), "pfstep")):
+            if name.endswith(".py"):
+                shutil.copy2(os.path.join(os.path.dirname(REAL_ENGINE), "pfstep", name), os.path.join(pfstep_dir, name))
         f = self.pi_web_fixture("stack=npm\nfast_gate=echo ROOT-FAST\n",
                                 {"package.json": '{"name": "root", "private": true, "scripts": {}}\n'})
         home = os.path.join(f.root, "home")
