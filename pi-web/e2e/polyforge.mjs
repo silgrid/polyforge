@@ -71,6 +71,11 @@ const WI48A = "wi_E2Eeeee0011"; const SLUG48A = "polyforge#48";
 // manually selected; the daemon's own owner_message line then lands in the
 // RUNNING step's block, outside the selected step's lines.
 const WI48D = "wi_E2Eeeee0012"; const SLUG48D = "polyforge#481";
+// polyforge#48 P48C — a running ticket whose two steps each hold a long
+// event-only record block: the default follow parks the region at the current
+// step's bottom, and a manual DAG click must bring the clicked step's records
+// into view from their start instead.
+const WI48C = "wi_E2Eeeee0013"; const SLUG48C = "polyforge#482";
 // polyforge#31 — scroll-jump buttons fixture: one RUNNING ticket whose
 // event-only stream is long (one step_started + 258 answered lines), so the
 // detail's one scroll region is tall enough to park a reader mid-progress; a
@@ -112,6 +117,7 @@ const JOBS = [
   job(WIP25, SLUGP25, "running", 1, 30, 5, "pi:glm-e2e", "u_e2e"),
   job(WI48A, SLUG48A, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
   job(WI48D, SLUG48D, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
+  job(WI48C, SLUG48C, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
   job(WIP31, SLUG31, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
   job(WIP2R3, SLUG2R3, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
 ];
@@ -305,6 +311,27 @@ const WATCH_48D = { work_item: WI48D, slug: SLUG48D, known: true, job: { status:
   execution: { workflow_status: "running", current_step: "build", updated_at: at3(17), steps: { grill: { status: "done", started_at: at3(11) }, build: { status: "in_progress", started_at: at3(15) } },
     declared_steps: [{ id: "grill" }, { id: "build" }] },
   events: [], last_seq: 7 };
+// ── polyforge#48 P48C: two long steps. early (done) holds ~120 answered
+// lines, late (in_progress, current) another ~120 — the manual click's
+// geometry: the clicked step's block head sits just under the DAG, and its
+// block is taller than the region, so a bottom jump (the unfixed tree) puts
+// the head out of view while the minimal scroll keeps both the head and the
+// DAG on screen.
+const at48C = (n) => `2026-10-18T${String(Math.floor((n - 1) / 60)).padStart(2, "0")}:${String((n - 1) % 60).padStart(2, "0")}:00Z`;
+const ev48C = (n, kind, body) => ({ at: at48C(n), kind, work_item: WI48C, body, seq: n });
+const LINES_48C = 120;
+const EVENTS_48C = [
+  ev48C(1, "step_started", { step: "early", model: "pi:glm-e2e", spawn_n: 1 }),
+  ...Array.from({ length: LINES_48C }, (_, i) => ev48C(2 + i, "answered", { step: "early" })),
+  ev48C(2 + LINES_48C, "step_done", { step: "early", spawn_n: 1 }),
+  ev48C(3 + LINES_48C, "step_started", { step: "late", model: "pi:glm-e2e", spawn_n: 1 }),
+  ...Array.from({ length: LINES_48C }, (_, i) => ev48C(4 + LINES_48C + i, "answered", { step: "late" })),
+];
+writeFileSync(join(dataRoot, "events", `wi-${WI48C}.jsonl`), EVENTS_48C.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_48C = { work_item: WI48C, slug: SLUG48C, known: true, job: { status: "running" },
+  execution: { workflow_status: "running", current_step: "late", updated_at: at48C(4 + 2 * LINES_48C), steps: { early: { status: "done", started_at: at48C(1) }, late: { status: "in_progress", started_at: at48C(3 + LINES_48C) } },
+    declared_steps: [{ id: "early" }, { id: "late" }] },
+  events: [], last_seq: 4 + 2 * LINES_48C };
 const WATCH_P24A = { work_item: WIP24A, slug: SLUGP24A, known: true, job: { status: "completed" },
   execution: { workflow_status: "completed", updated_at: at3(9), steps: {
     grill: { status: "done", started_at: "2026-10-18T12:00:00Z" },
@@ -359,7 +386,7 @@ const WATCH_TABLE = (watch112 = WATCH_112) => ({ "pi#108": WATCH_108, wi_E2Eaaaa
   [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B,
   [SLUGP25]: WATCH_P25, [WIP25]: WATCH_P25,
   [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31, [SLUG2R3]: WATCH_2R3, [WIP2R3]: WATCH_2R3, [SLUG48A]: WATCH_48A, [WI48A]: WATCH_48A,
-  [SLUG48D]: WATCH_48D, [WI48D]: WATCH_48D });
+  [SLUG48D]: WATCH_48D, [WI48D]: WATCH_48D, [SLUG48C]: WATCH_48C, [WI48C]: WATCH_48C });
 writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.filter((j) => j.work_item_id !== WIP24B).map((j) => j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 }
   : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A }
   : j.work_item_id === WIP2R3 ? { work_item_id: WIP2R3, capsule_dir: capsule2R3 }
@@ -451,6 +478,7 @@ const T = {
   P48D: "P48D: An owner echo hides once its owner line lands in any step's block — the selected step's lines alone never decide delivery (polyforge#48 AC2)",
   P48E: "P48E: An ended ticket's watch poll never reads the composed override view — at most the one transitional read of a fresh selection (polyforge#48 AC3)",
   P48B: "P48B: The step controls reset per ticket and step — a switch shows neither the previous step's input nor its result or error (polyforge#48 AC4)",
+  P48C: "P48C: A manual DAG choice scrolls the clicked step's records into view from their start — never to the region's bottom, the DAG stays on screen (polyforge#48 AC5)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1614,6 +1642,36 @@ try {
     assert.equal(await controls.locator("[data-pf-step-controls-model]").inputValue(), "", "the previous step's typed model is gone");
     assert.equal(await controls.locator("[data-pf-step-controls-applied]").count(), 0, "the previous step's applied feedback is gone");
     assert.equal(await controls.locator("[data-pf-step-controls-error]").count(), 0, "no error line carries over");
+  });
+
+  // P48C — polyforge#48 (AC5): a manual DAG choice brings the clicked step's
+  // records into view from their start with the least scrolling — the DAG the
+  // reader just clicked stays on screen — and never jumps to the region's
+  // bottom (the unfixed tree re-pinned on the step switch and scrolled the
+  // clicked DAG away). The automatic follow keeps its bottom behaviour
+  // (asserted first, and pinned by P24C for the no-manual-choice path).
+  await checkPage(T.P48C, "manual DAG choice scrolls to the step's records", {}, async (page) => {
+    const panel = await ensureDetail24(page, SLUG48C, WI48C);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    await pollUntil(async () => (await node("late").getAttribute("data-pf-step-selected")) === "true", "the current step starts selected");
+    const region = panel.locator("[data-pf-detail-scroll]");
+    const atBottom = () => region.evaluate((el) => Math.abs(el.scrollTop + el.clientHeight - el.scrollHeight) < 2);
+    await pollUntil(atBottom, "the automatic follow parks the region at the bottom");
+    await node("early").click();
+    const head = panel.locator('[data-pf-progress-block-step="early"]').first();
+    await pollUntil(async () => (await head.count()) === 1, "the clicked step's records render");
+    // One atomic read of the settled state: the block head inside the
+    // region's viewport, the DAG still on screen, the region not at bottom.
+    await pollUntil(() => region.evaluate((el) => {
+      const head = el.querySelector('[data-pf-progress-block-step="early"]');
+      const dag = el.querySelector("[data-pf-detail-graph]");
+      if (!head || !dag) return false;
+      const hr = head.getBoundingClientRect(); const rr = el.getBoundingClientRect();
+      const dr = dag.getBoundingClientRect();
+      return hr.top >= rr.top && hr.bottom <= rr.bottom
+        && dr.bottom > rr.top && dr.top < rr.bottom
+        && el.scrollTop + el.clientHeight < el.scrollHeight - 2;
+    }), "the clicked step's records start in view, the DAG stays on screen and the region is not at its bottom");
   });
 
   await check(T.AC3, "pf present: no 5xx or console errors", async () => assert.deepEqual(errors.splice(0), []));
