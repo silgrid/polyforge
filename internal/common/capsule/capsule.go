@@ -85,23 +85,28 @@ type Identity struct {
 
 // WorkItemDoc is runtime-state/work-item.json: the daemon-materialized
 // copy of the work item's task definition (goal, content, labels,
-// priority, milestone, bundle pin and project name). v1 has NO
+// priority, milestone, bundle pin, project name and structured attrs). v1 has NO
 // agent→server read path (v1 ruling C3 (archive/v1-architecture-spec.md): the whole agent contact surface is
 // the capsule), so this file is the ONE
 // authoritative statement of what the WI agent is working on — the
 // claim answer is its only source, and recovery re-materializes it from
 // aihub when a legacy capsule predates it.
 type WorkItemDoc struct {
-	ID         string   `json:"id"`
-	Slug       string   `json:"slug,omitempty"`
-	Project    string   `json:"project"`
-	Goal       string   `json:"goal"`
-	Content    *string  `json:"content"`
-	Labels     []string `json:"labels"`
-	Priority   string   `json:"priority"`
-	Milestone  *string  `json:"milestone"`
-	BundleName string   `json:"bundle_name"`
-	UpdatedAt  string   `json:"updated_at"`
+	ID         string         `json:"id"`
+	Slug       string         `json:"slug,omitempty"`
+	Project    string         `json:"project"`
+	Goal       string         `json:"goal"`
+	Content    *string        `json:"content"`
+	Labels     []string       `json:"labels"`
+	Priority   string         `json:"priority"`
+	Milestone  *string        `json:"milestone"`
+	BundleName string         `json:"bundle_name"`
+	// Attrs is the work item's structured attrs as aihub holds them (a
+	// step reads its own ticket's markers from them: an integration_fix
+	// ticket's verification runs the full bar). Empty (omitted) when the
+	// item carries none.
+	Attrs     map[string]any `json:"attrs,omitempty"`
+	UpdatedAt string         `json:"updated_at"`
 }
 
 // The workflow_status vocabulary (reference.md §7.3): the closed status set the
