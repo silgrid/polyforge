@@ -112,7 +112,7 @@ func TestW50EngineAcceptsTheReplayRuleKey(t *testing.T) {
 			t.Fatalf("the engine must not diagnose a conf key another tool owns: %s", diag)
 		}
 	}
-	if !strings.Contains(out, `"fast_gate"`) && !strings.Contains(out, `"cmd": "true"`) {
-		t.Fatalf("the conf's own commands still report: %s", out)
+	if !strings.Contains(out, `"cmd": "true"`) {
+		t.Fatalf("the conf's own fast_gate command still reports: %s", out)
 	}
 }

@@ -158,8 +158,9 @@ exceeded `e2e_start_threshold` puts before `e2e_runner=` is the declared
 `e2e_start_prefix=` (pi-web declares its current
 `E2E_SERVER_MODE=start`), and `facts.py build --replay` classifies by the
 repository-declared `not_runnable_rule=<toolchain>|<rule>|<pattern>` lines
-(pi-web declares its browser preflight's text). An engine or a facts.py
-older than this section reading a conf that declares the keys diagnoses
-them as unknown and ignores them, so a conf may declare them before the
-release ships; after the upgrade the older hardcodes are gone, so a
-repository that wants the behavior declares the key.
+(pi-web declares its browser preflight's text). An engine older than
+this section reading a conf that declares the keys diagnoses them as
+unknown and ignores them, and an older facts.py simply skips keys it does
+not read, so a conf may declare them before the release ships; after the
+upgrade the older hardcodes are gone, so a repository that wants the
+behavior declares the key.
