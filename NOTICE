@@ -14,3 +14,35 @@ This repository is licensed by path:
 The MIT license of pi-web/ is not changed by its location in this
 repository, and the PolyForm Noncommercial license of the rest of the
 repository does not extend to pi-web/.
+
+Third-party material outside pi-web/
+
+- workflows/_shared/test_quality.md (the "What counts as a test" rule)
+  is adapted from spec-superflow's
+  skills/build-executor/writing-good-tests.md
+  (https://github.com/MageByte-Zero/spec-superflow, commit fb5d4d5),
+  rewritten for this workflow's steps. The adapted material is used under
+  the MIT License of spec-superflow; that notice is reproduced here:
+
+    MIT License
+
+    Copyright (c) 2026 MageByte
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

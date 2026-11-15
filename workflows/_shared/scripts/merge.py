@@ -2,7 +2,7 @@
 at the heads the lane verified (the successor of the Go step command
 pf-merge: the same ``gh pr merge --merge --match-head-commit`` and the same
 landing rules, written to a result file; no update of the PR branch — a
-default branch that moved and conflicts is the sync step's again).
+default branch that moved since verification is the sync step's again).
 
 Usage (from the capsule root, or with --capsule)::
 
@@ -20,7 +20,11 @@ view``); one MERGED already is taken as the landing by the landing rules
 outside the lane, its merge commit is on the default branch and contains
 the verified head — ``how: merged_elsewhere``), refused otherwise; one OPEN
 must target the default branch, head the published branch and stand, on
-origin, at the verified head; any other state is refused. A refusal merges
+origin, at the verified head, and — when the verified result records the
+default branch's base (``details.repos[].base``, develop's verification) —
+origin's default branch must still be at that base: one that gained commits
+after verification is refused (sync, verify and publish again); any other
+state is refused. A refusal merges
 nothing (exit 1). Then each open PR is merged with ``gh pr merge --merge
 --match-head-commit <verified head>``; a refused merge is read back once —
 merged after all (the landing rules again), its branch moved, or the

@@ -1,6 +1,6 @@
 package test
 
-// carries: workflows/_shared/test_quality.md, workflows/_shared/steps/review.md, workflows/develop/steps/build.md, workflows/micro/steps/fix.md, workflows/develop/README.md, workflows/micro/README.md, workflows/develop/fragments/review-judge.md, docs/concepts.md, docs/contributing.md, docs/design/polyforge-vnext/reference.md
+// carries: workflows/_shared/test_quality.md, workflows/_shared/steps/review.md, workflows/develop/steps/build.md, workflows/micro/steps/fix.md, workflows/develop/README.md, workflows/micro/README.md, workflows/develop/fragments/review-judge.md, docs/concepts.md, docs/contributing.md, docs/design/polyforge-vnext/reference.md, test/test_quality_fragment_contract_test.go
 
 // test_quality_fragment_contract_test.go: text contract for the shared
 // test-quality bar (polyforge#28; adapted from spec-superflow's
@@ -126,20 +126,26 @@ func TestTestQualityFragmentReachesItsSteps(t *testing.T) {
 func TestBuildPlanUnitsCarryTheTestQualityRecord(t *testing.T) {
 	// the plan spec: every ## Units entry carries the record the bar names
 	build := w68Flat(t, "workflows/develop/steps/build.md")
-	const record = "its test-quality record (the behaviour its test observes, why its red is expected, the change it catches — the bar below)"
+	// polyforge#49 (AC2): the record's three items are the rule's three
+	// (test_quality.md:10-18) — the behaviour, the expected values derived
+	// independently of the implementation, the change it catches; why the
+	// red is expected stays the bar's own first-red duty, not a recorded
+	// fourth item.
+	const record = "its test-quality record (the behaviour its test observes, how its expected values are derived independently of the implementation, the change it catches — the bar below)"
 	if !strings.Contains(build, record) {
 		t.Errorf("the build step's plan spec must require %q", record)
 	}
 	// the lane README describes the same record where it describes the plan
 	readme := w68Flat(t, "workflows/develop/README.md")
-	const readmeRecord = "each `## Units` entry recording the behaviour its test observes, why its red is expected and the change it catches (`workflows/_shared/test_quality.md`)"
+	const readmeRecord = "each `## Units` entry recording the behaviour its test observes, how its expected values are derived independently of the implementation and the change it catches (`workflows/_shared/test_quality.md`)"
 	if !strings.Contains(readme, readmeRecord) {
 		t.Errorf("the develop README must state %q", readmeRecord)
 	}
 	// and the record's home is the fragment itself, not a second copy
 	frag := testQualityFlat(testQualityFragment(t))
-	if !strings.Contains(frag, "Every unit of the plan carries the three statements above as its test-quality record, in its `## Units` entry") {
-		t.Error("the test_quality fragment no longer names the per-unit record duty")
+	const recordSentence = "Every unit of the plan carries the three statements above as its test-quality record, in its `## Units` entry: the behaviour its test observes, how its expected values are derived independently of the implementation, the change it catches"
+	if !strings.Contains(frag, recordSentence) {
+		t.Error("the test_quality fragment no longer names the per-unit record duty with the rule's own three items (the behaviour, the independently derived expected values, the change it catches)")
 	}
 }
 
