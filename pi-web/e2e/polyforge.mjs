@@ -1,5 +1,6 @@
 // carries: components/PolyforgePanel*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*, components/PolyforgeStepControls*, app/api/polyforge/override/*, lib/polyforge-overrides*
 // carries: components/AppShell*, app/api/polyforge/polyforge-routes*, app/api/polyforge/polyforge-status-route*, lib/i18n/*, docs/agents/polyforge-panel.md
+// carries: components/PolyforgeDetailProgress*, hooks/__fixtures__/react-hook-shim.mjs, hooks/__tests__/polyforge-panel-progress-stubs.mjs, app/api/polyforge/polyforge-override-route*
 // pi#108 (wi_y3y9SMz4IXKg) — Polyforge dock panel: end-to-end acceptance pass.
 //
 // Authored pre-code against artifacts/spec.md (AC1–AC10; AC11's e2e half is this
@@ -61,6 +62,20 @@ const WIP24B = "wi_E2Eeeee0006"; const SLUGP24B = "pi#240";
 // declares its tail step skippable. (sync 合并：夹具 id 从 wi_E2Eeeee0007 移到
 // wi_E2Eeeee0009 —— main 上 #31/#2 的夹具占用了 0007/0008，两边都要保留。)
 const WIP25 = "wi_E2Eeeee0009"; const SLUGP25 = "pi#25";
+// polyforge#48 — an ENDED ticket whose capsule holds one resultless pi tool
+// call (the expanded card is the ended-ticket re-read case, P48A) and whose
+// watch carries a pending step (the ended-ticket override-read count, P48E).
+const WI48A = "wi_E2Eeeee0011"; const SLUG48A = "polyforge#48";
+// polyforge#48 P48D — a running two-step ticket for the owner-echo flow: the
+// composer's accepted message echoes into the flow while the DONE step is
+// manually selected; the daemon's own owner_message line then lands in the
+// RUNNING step's block, outside the selected step's lines.
+const WI48D = "wi_E2Eeeee0012"; const SLUG48D = "polyforge#481";
+// polyforge#48 P48C — a running ticket whose two steps each hold a long
+// event-only record block: the default follow parks the region at the current
+// step's bottom, and a manual DAG click must bring the clicked step's records
+// into view from their start instead.
+const WI48C = "wi_E2Eeeee0013"; const SLUG48C = "polyforge#482";
 // polyforge#31 — scroll-jump buttons fixture: one RUNNING ticket whose
 // event-only stream is long (one step_started + 258 answered lines), so the
 // detail's one scroll region is tall enough to park a reader mid-progress; a
@@ -100,6 +115,9 @@ const JOBS = [
   job(WIP24A, SLUGP24A, "completed", 2, 90, 80, "pi:glm-e2e", "u_e2e"),
   job(WIP24B, SLUGP24B, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
   job(WIP25, SLUGP25, "running", 1, 30, 5, "pi:glm-e2e", "u_e2e"),
+  job(WI48A, SLUG48A, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
+  job(WI48D, SLUG48D, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
+  job(WI48C, SLUG48C, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
   job(WIP31, SLUG31, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
   job(WIP2R3, SLUG2R3, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
 ];
@@ -251,6 +269,69 @@ writeFileSync(join(dataRoot, "events", `wi-${WIP2R3}.jsonl`), EVENTS_2R3.map((ev
 const WATCH_2R3 = { work_item: WIP2R3, slug: SLUG2R3, known: true, job: { status: "running" },
   execution: { workflow_status: "running", current_step: "build", updated_at: at3(3), steps: { build: { status: "in_progress", started_at: at3(1) }, review: { status: "pending" } }, declared_steps: [{ id: "build" }, { id: "review" }] },
   events: EVENTS_2R3, last_seq: 1 };
+// ── polyforge#48: the ended ticket — one pi spawn of step "grill" whose
+// transcript holds a toolCall with no result, so the ended detail's expanded
+// card is the re-read case (P48A); its watch is terminal with a pending
+// step, so the panel must stop asking for the composed override view (P48E).
+const capsule48A = join(work, "capsules", WI48A);
+mkdirSync(join(capsule48A, "runtime-state"), { recursive: true });
+mkdirSync(join(capsule48A, "session"), { recursive: true });
+const p48aTranscript = join(capsule48A, "session", "grill.jsonl");
+writeFileSync(p48aTranscript, [
+  { type: "session", id: "s-48a", timestamp: at3(1) },
+  { type: "message", id: "tc-48a", parentId: null, timestamp: at3(2), message: { role: "assistant", content: [{ type: "toolCall", id: "k-48a", name: "bash", arguments: { command: "npm test" } }] } },
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+writeFileSync(join(capsule48A, "runtime-state", "spawn-journal.jsonl"), [
+  { at: at3(1), work_item: WI48A, step_id: "grill", spawn_n: 1, started_at: at3(1), transcript: p48aTranscript, harness: "pi" },
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+const EVENTS_48A = [
+  { at: at3(1), kind: "step_started", work_item: WI48A, body: { step: "grill", model: "pi:glm-e2e", spawn_n: 1 }, seq: 1 },
+  { at: at3(3), kind: "terminal", work_item: WI48A, body: { status: "completed" }, seq: 2 },
+];
+writeFileSync(join(dataRoot, "events", `wi-${WI48A}.jsonl`), EVENTS_48A.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_48A = { work_item: WI48A, slug: SLUG48A, known: true, job: { status: "completed" },
+  execution: { workflow_status: "completed", updated_at: at3(3), steps: { grill: { status: "done", started_at: at3(1) }, code: { status: "pending" } },
+    declared_steps: [{ id: "grill" }, { id: "code" }] },
+  events: [], last_seq: 2 };
+// ── polyforge#48 P48D: the running two-step ticket — an event-only stream
+// (grill done with lines, build running with lines) so the composer is open
+// and the owner_message line the scenario appends lands in build's block.
+const ev48D = (n, kind, body) => ({ at: at3(n + 10), kind, work_item: WI48D, body, seq: n });
+const EVENTS_48D = [
+  ev48D(1, "step_started", { step: "grill", model: "pi:glm-e2e", spawn_n: 1 }),
+  ev48D(2, "answered", { step: "grill" }),
+  ev48D(3, "answered", { step: "grill" }),
+  ev48D(4, "step_done", { step: "grill", spawn_n: 1 }),
+  ev48D(5, "step_started", { step: "build", model: "pi:glm-e2e", spawn_n: 1 }),
+  ev48D(6, "answered", { step: "build" }),
+  ev48D(7, "answered", { step: "build" }),
+];
+writeFileSync(join(dataRoot, "events", `wi-${WI48D}.jsonl`), EVENTS_48D.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_48D = { work_item: WI48D, slug: SLUG48D, known: true, job: { status: "running" },
+  execution: { workflow_status: "running", current_step: "build", updated_at: at3(17), steps: { grill: { status: "done", started_at: at3(11) }, build: { status: "in_progress", started_at: at3(15) } },
+    declared_steps: [{ id: "grill" }, { id: "build" }] },
+  events: [], last_seq: 7 };
+// ── polyforge#48 P48C: two long steps. early (done) holds ~120 answered
+// lines, late (in_progress, current) another ~120 — the manual click's
+// geometry: the clicked step's block head sits just under the DAG, and its
+// block is taller than the region, so a bottom jump (the unfixed tree) puts
+// the head out of view while the minimal scroll keeps both the head and the
+// DAG on screen.
+const at48C = (n) => `2026-10-18T${String(Math.floor((n - 1) / 60)).padStart(2, "0")}:${String((n - 1) % 60).padStart(2, "0")}:00Z`;
+const ev48C = (n, kind, body) => ({ at: at48C(n), kind, work_item: WI48C, body, seq: n });
+const LINES_48C = 120;
+const EVENTS_48C = [
+  ev48C(1, "step_started", { step: "early", model: "pi:glm-e2e", spawn_n: 1 }),
+  ...Array.from({ length: LINES_48C }, (_, i) => ev48C(2 + i, "answered", { step: "early" })),
+  ev48C(2 + LINES_48C, "step_done", { step: "early", spawn_n: 1 }),
+  ev48C(3 + LINES_48C, "step_started", { step: "late", model: "pi:glm-e2e", spawn_n: 1 }),
+  ...Array.from({ length: LINES_48C }, (_, i) => ev48C(4 + LINES_48C + i, "answered", { step: "late" })),
+];
+writeFileSync(join(dataRoot, "events", `wi-${WI48C}.jsonl`), EVENTS_48C.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_48C = { work_item: WI48C, slug: SLUG48C, known: true, job: { status: "running" },
+  execution: { workflow_status: "running", current_step: "late", updated_at: at48C(4 + 2 * LINES_48C), steps: { early: { status: "done", started_at: at48C(1) }, late: { status: "in_progress", started_at: at48C(3 + LINES_48C) } },
+    declared_steps: [{ id: "early" }, { id: "late" }] },
+  events: [], last_seq: 4 + 2 * LINES_48C };
 const WATCH_P24A = { work_item: WIP24A, slug: SLUGP24A, known: true, job: { status: "completed" },
   execution: { workflow_status: "completed", updated_at: at3(9), steps: {
     grill: { status: "done", started_at: "2026-10-18T12:00:00Z" },
@@ -304,10 +385,12 @@ const WATCH_TABLE = (watch112 = WATCH_112) => ({ "pi#108": WATCH_108, wi_E2Eaaaa
   "pi#109": WATCH_109, wi_E2Ecccc0003: WATCH_109, [SLUG112]: watch112, [WI112]: watch112,
   [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B,
   [SLUGP25]: WATCH_P25, [WIP25]: WATCH_P25,
-  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31, [SLUG2R3]: WATCH_2R3, [WIP2R3]: WATCH_2R3 });
+  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31, [SLUG2R3]: WATCH_2R3, [WIP2R3]: WATCH_2R3, [SLUG48A]: WATCH_48A, [WI48A]: WATCH_48A,
+  [SLUG48D]: WATCH_48D, [WI48D]: WATCH_48D, [SLUG48C]: WATCH_48C, [WI48C]: WATCH_48C });
 writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.filter((j) => j.work_item_id !== WIP24B).map((j) => j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 }
   : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A }
-  : j.work_item_id === WIP2R3 ? { work_item_id: WIP2R3, capsule_dir: capsule2R3 } : { work_item_id: j.work_item_id }) }));
+  : j.work_item_id === WIP2R3 ? { work_item_id: WIP2R3, capsule_dir: capsule2R3 }
+  : j.work_item_id === WI48A ? { work_item_id: WI48A, capsule_dir: capsule48A } : { work_item_id: j.work_item_id }) }));
 const stubDir = join(work, "stub-bin");
 mkdirSync(stubDir);
 const stateFile = join(stubDir, "state.json");
@@ -338,6 +421,10 @@ const run = () => {
       out(s.overrideWrite);
     }
     out(s.overrideView);
+  }
+  if (rest[0] === "answer") {
+    if (s.answerRefuse) { process.stderr.write(JSON.stringify(s.answerRefuse) + "\\n"); process.exit(1); }
+    out(s.answerAck ?? { kind: "message", at: "2026-10-18T14:00:00Z", disposition: "resume" });
   }
   process.stderr.write("pf: unknown command\\n"); process.exit(2);
 };
@@ -387,6 +474,11 @@ const T = {
   P2R3A: "P2R3A: while a card's detail read is in flight the poll sends no second one; the read cycle settles without a Loading flash",
   P2R3B: "P2R3B: an answer older than the displayed one is dropped — the first read returns after the second and never overwrites",
   P2R3C: "P2R3C: a replaced read's answer clears only its own mark — no second read piles up while the newer one is in flight",
+  P48A: "P48A: An ended ticket's expanded resultless card reads its detail once — the panel's unrelated polls never re-read it (polyforge#48 AC1)",
+  P48D: "P48D: An owner echo hides once its owner line lands in any step's block — the selected step's lines alone never decide delivery (polyforge#48 AC2)",
+  P48E: "P48E: An ended ticket's watch poll never reads the composed override view — at most the one transitional read of a fresh selection (polyforge#48 AC3)",
+  P48B: "P48B: The step controls reset per ticket and step — a switch shows neither the previous step's input nor its result or error (polyforge#48 AC4)",
+  P48C: "P48C: A manual DAG choice scrolls the clicked step's records into view from their start — never to the region's bottom, the DAG stays on screen (polyforge#48 AC5)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1453,6 +1545,164 @@ try {
     await pollUntil(async () => (await card.innerText()).includes("E2E-P2R3C-FINAL"), "read3's final result renders");
     const text = (await card.innerText()).replace(/\s+/g, " ").trim();
     assert.ok(!text.includes("npm run lint") && !text.includes("E2E-P2R3C-STALE"), `the interim and stale lines are gone (${text})`);
+  });
+
+  // P48A — polyforge#48 (AC1): an ended ticket's expanded resultless card is
+  // read exactly once. The reread path belongs to a running ticket (the
+  // running gate) and the panel's selected-step view is cached, so the
+  // unrelated polls that keep re-rendering the panel (watch, status, cards —
+  // roughly one render per second here) must not re-read the card; on the
+  // unfixed tree each such render issued another detail read.
+  await checkPage(T.P48A, "ended ticket, expanded resultless card", {}, async (page) => {
+    const reads = [];
+    await page.route((url) => url.pathname === "/api/polyforge/progress/tool", async (route) => {
+      reads.push(route.request().url());
+      await route.fulfill({ status: 200, json: { available: true, hasResult: false,
+        tool: { name: "bash", argument: "npm test", status: "running", input: "npm test", output: null, isError: false } } });
+    });
+    const watchPolls = [];
+    page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/polyforge/watch") watchPolls.push(Date.now()); });
+    const panel = await ensureDetail24(page, SLUG48A, WI48A);
+    const card = panel.locator('[data-pf-progress-kind="tool"]');
+    await pollUntil(async () => (await card.count()) === 1, "the ended ticket's resultless tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 1, "the expansion reads the detail once");
+    await pollUntil(async () => (await card.innerText()).includes("npm test"), "the held detail renders");
+    // Three watch polls (≥ 9 s) pass with the panel re-rendering on its other
+    // polls too — a bounded poll on a real condition, never a fixed sleep.
+    const settled = watchPolls.length;
+    await pollUntil(() => watchPolls.length - settled >= 3, "three watch polls pass with the card expanded", 30_000);
+    assert.equal(reads.length, 1, `the ended ticket's expanded card is not re-read (${reads.length} reads)`);
+  });
+
+  // P48D — polyforge#48 (AC2): the owner echo's delivery is judged against
+  // every line of the job's whole stream, never the selected step's lines.
+  // The DONE step is manually selected; the message's owner line then lands
+  // in the RUNNING step's block — outside the selected step's lines — and
+  // the echo must still hide (the unfixed tree re-showed it as pending).
+  await checkPage(T.P48D, "echo judged on the whole stream", {}, async (page) => {
+    const panel = await ensureDetail24(page, SLUG48D, WI48D);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    await pollUntil(async () => (await node("build").getAttribute("data-pf-step-selected")) === "true", "the current step starts selected");
+    await node("grill").click();
+    await pollUntil(async () => (await node("grill").getAttribute("data-pf-step-selected")) === "true", "the manual choice selects the done step");
+    const echoRow = panel.locator("[data-pf-progress-owner-note]");
+    await panel.locator("[data-pf-chat-input]").fill("E2E-P48D-OWNER-WORDS");
+    await panel.locator("[data-pf-chat-input]").press("Enter");
+    await pollUntil(async () => (await echoRow.count()) === 1, "the accepted message echoes into the flow");
+    // The daemon records it: the event log's own owner line (msgAt = the ack's
+    // at) lands in build's block, the step that is NOT selected.
+    appendFileSync(join(dataRoot, "events", `wi-${WI48D}.jsonl`),
+      JSON.stringify({ at: at3(20), kind: "owner_message", work_item: WI48D, body: { at: "2026-10-18T14:00:00Z", text: "E2E-P48D-OWNER-WORDS", by: "u_e2e" }, seq: 8 }) + "\n");
+    await pollUntil(async () => (await echoRow.count()) === 0, "the delivered echo hides once its owner line lands in another step's block");
+  });
+
+  // P48E — polyforge#48 (AC3): an ended ticket's watch poll never reads the
+  // composed override view. The panel asks (?overrides=1) exactly while its
+  // held snapshot does not say the work item ended, and the route never
+  // composes for a terminal answer — so after the selection's first read
+  // (the one transitional ask, before the panel knows) the stub's argv log
+  // holds no further `--json override <wi>` line; the unfixed tree read the
+  // view on every 3 s poll.
+  await checkPage(T.P48E, "ended ticket, override view reads", {}, async (page) => {
+    const watchPolls = [];
+    page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/polyforge/watch") watchPolls.push(Date.now()); });
+    const panel = await ensureDetail24(page, SLUG48A, WI48A);
+    await pollUntil(() => watchPolls.length >= 1, "the selection's first watch read landed");
+    // The panel addresses the selection by either ref (a card click stores the
+    // slug), so both count.
+    const viewReads = () => readFileSync(argvLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((argv) => argv[1] === "override" && (argv[2] === WI48A || argv[2] === SLUG48A)).length;
+    const before = viewReads();
+    await pollUntil(() => watchPolls.length >= 4, "three more watch polls pass", 30_000);
+    const grown = viewReads() - before;
+    assert.ok(grown <= 1, `an ended ticket's watch poll never reads the override view (${grown} reads after the first)`);
+  });
+
+  // P48B — polyforge#48 (AC4): the per-step overlay controls reset on a step
+  // switch (the mount's key is the ticket + step): the next step's controls
+  // show neither the previous step's typed model, nor its applied feedback or
+  // error line. The unfixed tree kept the component's state across the
+  // switch.
+  await checkPage(T.P48B, "controls reset per ticket and step", {}, async (page) => {
+    setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
+    const panel = await ensureDetail24(page, SLUGP25, WIP25);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    const controls = panel.locator("[data-pf-step-controls]");
+    await node("bravo-code").click();
+    await pollUntil(async () => (await controls.count()) === 1, "the skippable tail's controls render");
+    await controls.locator("[data-pf-step-controls-model]").fill("ovr/p48-model");
+    await controls.locator("[data-pf-step-controls-apply]").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-applied]").count()) === 1, "the applied feedback shows on the first step");
+    // The switch to another unstarted step: a fresh control block — the
+    // previous step's input, result and error must not carry over.
+    await node("alpha-plan").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-source]").innerText()).includes("steps.e2e.alpha-plan.models"),
+      "the switched step's own row renders");
+    assert.equal(await controls.locator("[data-pf-step-controls-model]").inputValue(), "", "the previous step's typed model is gone");
+    assert.equal(await controls.locator("[data-pf-step-controls-applied]").count(), 0, "the previous step's applied feedback is gone");
+    assert.equal(await controls.locator("[data-pf-step-controls-error]").count(), 0, "no error line carries over");
+    // review r1#7: the ERROR half — a refused write's typed words must not
+    // carry to the next step either.
+    setState({ overrideView: OVERRIDE_VIEW_P25, overrideRefuse: { code: "DAEMON-409", detail: "step alpha-plan has a live dispatch (its status is in_progress): the overlay is for steps without one" } });
+    const saw409 = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/polyforge/override" && r.status() === 409, { timeout: 5000 });
+    await controls.locator("[data-pf-step-controls-model]").fill("ovr/p48-refused");
+    await controls.locator("[data-pf-step-controls-apply]").click();
+    await saw409;
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-error]").count()) === 1, "the refused write's typed words show on this step");
+    assert.ok((await controls.locator("[data-pf-step-controls-error]").innerText()).includes("live dispatch"), "the refusal's detail shows verbatim");
+    // the browser logs this scenario's own refused write as a network console
+    // entry (a 409 the assertion above demanded) — it leaves the collection
+    // here, like P25C's. The response is awaited first and the error text is
+    // polled, so the entry has landed; splice every 409 line (the console
+    // event may ride one turn behind the response).
+    for (let index = errors.length - 1; index >= 0; index--) if (errors[index].includes("409")) errors.splice(index, 1);
+    setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
+    await node("bravo-code").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-skip]").count()) === 1, "the skippable step's controls render again");
+    assert.equal(await controls.locator("[data-pf-step-controls-error]").count(), 0, "the previous step's error line is gone");
+    assert.equal(await controls.locator("[data-pf-step-controls-model]").inputValue(), "", "the refused step's typed model is gone too");
+    // review r1#7: the TICKET half of the key — a switch to another ticket
+    // and back starts the controls fresh as well.
+    await panel.locator(`[data-pf-card-wi="${WIP2R3}"]`).click();
+    await pollUntil(async () => (await panel.locator("[data-pf-detail-title]").getByText(SLUG2R3, { exact: true }).count()) > 0, "the other ticket's detail opens");
+    await panel.locator(`[data-pf-card-wi="${WIP25}"]`).click();
+    await pollUntil(async () => (await panel.locator("[data-pf-detail-title]").getByText(SLUGP25, { exact: true }).count()) > 0, "the first ticket's detail reopens");
+    await node("bravo-code").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-skip]").count()) === 1, "the controls render after the ticket round-trip");
+    assert.equal(await controls.locator("[data-pf-step-controls-model]").inputValue(), "", "the ticket round-trip leaves the controls fresh");
+    assert.equal(await controls.locator("[data-pf-step-controls-applied]").count(), 0, "no applied feedback survives the ticket round-trip");
+    assert.equal(await controls.locator("[data-pf-step-controls-error]").count(), 0, "no error line survives the ticket round-trip");
+  });
+
+  // P48C — polyforge#48 (AC5): a manual DAG choice brings the clicked step's
+  // records into view from their start with the least scrolling — the DAG the
+  // reader just clicked stays on screen — and never jumps to the region's
+  // bottom (the unfixed tree re-pinned on the step switch and scrolled the
+  // clicked DAG away). The automatic follow keeps its bottom behaviour
+  // (asserted first, and pinned by P24C for the no-manual-choice path).
+  await checkPage(T.P48C, "manual DAG choice scrolls to the step's records", {}, async (page) => {
+    const panel = await ensureDetail24(page, SLUG48C, WI48C);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    await pollUntil(async () => (await node("late").getAttribute("data-pf-step-selected")) === "true", "the current step starts selected");
+    const region = panel.locator("[data-pf-detail-scroll]");
+    const atBottom = () => region.evaluate((el) => Math.abs(el.scrollTop + el.clientHeight - el.scrollHeight) < 2);
+    await pollUntil(atBottom, "the automatic follow parks the region at the bottom");
+    await node("early").click();
+    const head = panel.locator('[data-pf-progress-block-step="early"]').first();
+    await pollUntil(async () => (await head.count()) === 1, "the clicked step's records render");
+    // One atomic read of the settled state: the block head inside the
+    // region's viewport, the DAG still on screen, the region not at bottom.
+    await pollUntil(() => region.evaluate((el) => {
+      const head = el.querySelector('[data-pf-progress-block-step="early"]');
+      const dag = el.querySelector("[data-pf-detail-graph]");
+      if (!head || !dag) return false;
+      const hr = head.getBoundingClientRect(); const rr = el.getBoundingClientRect();
+      const dr = dag.getBoundingClientRect();
+      return hr.top >= rr.top && hr.bottom <= rr.bottom
+        && dr.bottom > rr.top && dr.top < rr.bottom
+        && el.scrollTop + el.clientHeight < el.scrollHeight - 2;
+    }), "the clicked step's records start in view, the DAG stays on screen and the region is not at its bottom");
   });
 
   await check(T.AC3, "pf present: no 5xx or console errors", async () => assert.deepEqual(errors.splice(0), []));

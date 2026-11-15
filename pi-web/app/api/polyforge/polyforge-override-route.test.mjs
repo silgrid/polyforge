@@ -1,9 +1,14 @@
-// carries: app/api/polyforge/override/*, app/api/polyforge/watch/*, lib/polyforge-overrides*
-// polyforge-override-route.test.mjs (u8, polyforge#25; polyforge#42 u2): the
-// override face over the pf subprocess — the per-step view now rides the
+// carries: app/api/polyforge/override/*, app/api/polyforge/watch/*, lib/polyforge-overrides*, hooks/usePolyforge*, lib/polyforge-conversation-pure*
+// polyforge-override-route.test.mjs (u8, polyforge#25; polyforge#42 u2; polyforge#48 u3): the
+// override face over the pf subprocess — the per-step view rides the
 // watch route's response (`pf [--profile p] --json override <wi>` composed
 // into the same answer, G11: the controls fetch nothing on selection), and
-// the override route itself is POST-only (one action's argv); a refusal
+// polyforge#48 makes that composition opt-in (`?overrides=1`, the panel's ask
+// while its held snapshot does not say the work item ended), the view read
+// concurrent with the watch read (each bounded by its own read timeout, so a
+// hung view read degrades to absent inside the watch read's own bound) and
+// never composed for an ended ticket; the override route itself is POST-only
+// (one action's argv); a refusal
 // answers 409 {ok:false, error} with pf's typed words, never 5xx; the wi
 // and profile are validated before any spawn and the host gate refuses
 // first.
@@ -32,18 +37,32 @@ const out = (v) => { process.stdout.write(JSON.stringify(v) + "\\n"); process.ex
 if (args.includes("watch")) {
   const wi = args[args.indexOf("watch") + 1];
   if (mode === "unknown") out({ work_item: wi, known: false, events: [], last_seq: 0 });
-  out({ work_item: "wi_A1", slug: "pi#42", known: true, job: { status: "running" },
-    execution: { workflow_status: "running", current_step: "build", updated_at: "2026-11-15T00:00:00Z",
+  const answer = (workflowStatus) => out({ work_item: "wi_A1", slug: "pi#42", known: true, job: { status: "running" },
+    execution: { workflow_status: workflowStatus, current_step: "build", updated_at: "2026-11-15T00:00:00Z",
       steps: { build: { status: "in_progress", started_at: "2026-11-15T00:00:01Z" }, merge: { status: "pending" } },
       declared_steps: [{ id: "build", skippable: false }, { id: "merge", skippable: true }] },
     events: [], last_seq: 3 });
+  if (mode === "ended") answer("completed");
+  // polyforge#48 AC3: the watch handler waits (bounded, deadline-polled) for
+  // the override argv to appear in the log before it answers — only a
+  // route that starts the view read TOGETHER WITH the watch read lets it
+  // answer quickly; a serial route answers at the deadline (~3 s).
+  if (mode === "wait-view") {
+    const deadline = Date.now() + 3000;
+    const check = () => {
+      if (fs.readFileSync(${JSON.stringify(log)}, "utf8").includes("override") || Date.now() >= deadline) answer("running");
+      else setTimeout(check, 25);
+    };
+    return check();
+  }
+  answer("running");
 }
 if (args.includes("override")) {
   if (mode === "hang-view") { setTimeout(() => process.exit(0), 30000); return; }
   if (mode === "refuse-409") { process.stderr.write(JSON.stringify({ code: "DAEMON-409", detail: "step merge has a live dispatch (its status is in_progress): the overlay is for steps without one" }) + "\\n"); process.exit(1); }
   if (mode === "refuse-400") { process.stderr.write(JSON.stringify({ code: "DAEMON-400", detail: "models: the pi model \\"absent\\" is not in this Cell's step-agent models.json" }) + "\\n"); process.exit(1); }
   if (mode === "garbage") { process.stdout.write("not json\\n"); process.exit(0); }
-  if (mode === "view") {
+  if (mode === "view" || mode === "ended" || mode === "wait-view") {
     out({ work_item: "wi_A1", posture: "running", steps: [
       { id: "build", status: "in_progress", skippable: false },
       { id: "merge", status: "pending", skippable: true, models: ["pi:pf25/m-1"], models_by: "usr_1", effective: ["pi:pf25/m-1"], source: "step override" },
@@ -91,7 +110,7 @@ test("both routes re-check the host/origin gate in-route; the override route is 
 
 test("the watch route composes the override view into the same response (polyforge#42 G11: the snapshot carries it, the controls fetch nothing on selection)", async () => {
   reset("view");
-  const response = await WATCH_GET(watchGet("?wi=wi_A1"));
+  const response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.status?.wi, "wi_A1");
@@ -104,26 +123,59 @@ test("the watch route composes the override view into the same response (polyfor
       { id: "merge", status: "pending", skippable: true, models: ["pi:pf25/m-1"], modelsBy: "usr_1", effective: ["pi:pf25/m-1"], source: "step override" },
     ],
   });
-  assert.deepEqual(argv(), [
-    ["--json", "watch", "wi_A1", "--once", "--demand", "--events", "40"],
+  assert.deepEqual([...argv()].sort(), [
     ["--json", "override", "wi_A1"],
-  ], "one watch read, then the view read it composes");
+    ["--json", "watch", "wi_A1", "--once", "--demand", "--events", "40"],
+  ], "one watch read and the view read it composes (polyforge#48: the spawn order is not pinned — they start together)");
+});
+
+test("polyforge#48 AC3: without overrides=1 the watch route never reads the view", async () => {
+  reset("view");
+  const response = await WATCH_GET(watchGet("?wi=wi_A1"));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.status?.wi, "wi_A1", "the watch snapshot itself survives");
+  assert.equal(body.status?.overrideView, undefined, "no composed view without the ask");
+  assert.ok(!argv().some((a) => a.includes("override")), "no override read is spawned at all");
+});
+
+test("polyforge#48 AC3: the view read runs concurrently with the watch read", async () => {
+  reset("wait-view");
+  const started = Date.now();
+  const response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
+  const elapsed = Date.now() - started;
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.status?.overrideView?.wi, "wi_A1", "the view composed while the watch read ran");
+  // The stub's watch handler answers only once the override argv is in the
+  // log (else at its 3 s deadline): a serial route — watch first, view after —
+  // can never answer inside this bound.
+  assert.ok(elapsed < 2500, `the watch read and the view read started together (${elapsed} ms)`);
+});
+
+test("polyforge#48 AC3: an ended ticket's answer never carries the view", async () => {
+  reset("ended");
+  const response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.status?.workflowStatus, "completed");
+  assert.equal(body.status?.overrideView, undefined, "the composed view never rides an ended ticket's answer");
 });
 
 test("the composed view read names the Cell exactly like the watch read (a slug is a valid ref)", async () => {
   reset("view");
-  const response = await WATCH_GET(watchGet("?wi=demo%231&profile=lab"));
+  const response = await WATCH_GET(watchGet("?wi=demo%231&profile=lab&overrides=1"));
   await response.json();
-  assert.deepEqual(argv(), [
-    ["--profile", "lab", "--json", "watch", "demo#1", "--once", "--demand", "--events", "40"],
+  assert.deepEqual([...argv()].sort(), [
     ["--profile", "lab", "--json", "override", "demo#1"],
+    ["--profile", "lab", "--json", "watch", "demo#1", "--once", "--demand", "--events", "40"],
   ]);
 });
 
 test("a garbage or refused view read degrades to a snapshot without it — the watch answer itself never fails", async () => {
   for (const m of ["garbage", "refuse-409"]) {
     reset(m);
-    const response = await WATCH_GET(watchGet("?wi=wi_A1"));
+    const response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
     assert.equal(response.status, 200, m);
     const body = await response.json();
     assert.equal(body.status?.wi, "wi_A1", `${m}: the watch snapshot survives`);
@@ -135,10 +187,12 @@ test("a hung view read times out on the read bound — the watch answer still re
   reset("hang-view");
   const started = Date.now();
   // The test's own bound (a real condition raced against a deadline, not a
-  // sleep): the route must answer inside it — on the fixed tree the view
-  // read's own timeout degrades it, on a regression the answer never comes.
+  // sleep): the route must answer inside it — the view read's own timeout
+  // degrades it, on a regression the answer never comes. The parallel start
+  // (polyforge#48) keeps the answer inside the watch read's own bound even
+  // while the view read hangs: never the sum of both.
   const deadline = new Promise((resolve) => { const timer = setTimeout(() => resolve(null), 14_000); timer.unref?.(); });
-  const response = await Promise.race([WATCH_GET(watchGet("?wi=wi_A1")), deadline]);
+  const response = await Promise.race([WATCH_GET(watchGet("?wi=wi_A1&overrides=1")), deadline]);
   assert.ok(response, "the watch answer did not arrive within the view read's bound");
   assert.equal(response.status, 200);
   const body = await response.json();

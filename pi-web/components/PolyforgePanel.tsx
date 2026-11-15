@@ -294,11 +294,14 @@ export const PROGRESS_RENDER_CHUNK = 200;
 const EMPTY_PROGRESS_LINES: PolyforgeProgressLine[] = [];
 
 /**
- * The job detail's execution progress, whole-job,
+ * The job detail's execution progress, the SELECTED step's
+ * records (polyforge#24: one spawn block set per selected step; an
+ * unstarted step shows the empty message),
  * full lines, spawn blocks and the open-at-bottom follow
  * and structured rendering:
  * a heading, the omitted-lines marker when a snapshot still carries one,
- * then the selected job's stream — every spawn of every step, oldest first,
+ * then the selected job's stream — the selected step's every spawn, oldest
+ * first,
  * inline in the detail's one scroll region (no overflowY of its own, pi#120).
  * Each entry renders by kind: narration through the
  * transcript's SafeMarkdownBody (paragraphs, lists, code; a `thinking` one
@@ -347,9 +350,13 @@ const EMPTY_PROGRESS_LINES: PolyforgeProgressLine[] = [];
  * wrapped text); `delivered`, `intent` and
  * `blocked` events are status rows like the other lifecycle lines. The
  * owner's messages the route just accepted (`echoes`, the panel's) render
- * as bubbles after the stream until the event log's own line arrives. The
- * snapshot is the panel's (`usePolyforgeProgress` is called there, so the
- * composer under the scroll region reads the same stream).
+ * as bubbles after the stream until the event log's own line arrives —
+ * judged against `allLines`, every line of the job's whole stream
+ * (polyforge#48 AC2): a line naming the record may sit in another step's
+ * block, so switching the selected step must not make a delivered message
+ * read as pending again. The snapshot is the panel's
+ * (`usePolyforgeProgress` is called there, so the composer under the scroll
+ * region reads the same stream).
  *
  * Follow (reversed at the owner's ruling):
  * `scrollRef` is the detail's one scroll region. `pinned` starts true for
@@ -371,14 +378,29 @@ const EMPTY_PROGRESS_LINES: PolyforgeProgressLine[] = [];
  * leaves the bottom, unpins, and the buttons appear). A tool card's
  * expand/collapse and its detail settling are folds too.
  */
+/** The selected-step view's cache (polyforge#48 AC1): the panel calls
+ *  selectProgressStep on every render and the reread effect below the
+ *  progress depends on the view's identity, so one (snapshot, step) pair
+ *  computes one object, returned again until the snapshot itself changes —
+ *  an unrelated re-render (another surface's poll) cannot retrigger the
+ *  effect. Weakly keyed: a snapshot the panel no longer holds is collected. */
+const selectProgressStepCache = new WeakMap<PolyforgeProgressSnapshot, Map<string, PolyforgeProgressSnapshot | null>>();
 export function selectProgressStep(snapshot: PolyforgeProgressSnapshot | null, step: string | null): PolyforgeProgressSnapshot | null {
   if (!snapshot || !step || !snapshot.available) return snapshot;
+  let perSnapshot = selectProgressStepCache.get(snapshot);
+  if (perSnapshot === undefined) {
+    perSnapshot = new Map();
+    selectProgressStepCache.set(snapshot, perSnapshot);
+  }
+  const cached = perSnapshot.get(step);
+  if (cached !== undefined) return cached;
   const lines = snapshot.lines;
   const layout = progressBlocks(lines);
   const blocks = layout.blocks.filter((block) => block.step === step);
-  if (layout.blocks.length === 0) return snapshot;
-  const selectedLines = blocks.flatMap((block) => lines.slice(block.first ?? block.start, (block.first ?? block.start) + block.count));
-  return { ...snapshot, lines: selectedLines };
+  const selected = layout.blocks.length === 0 ? snapshot
+    : { ...snapshot, lines: blocks.flatMap((block) => lines.slice(block.first ?? block.start, (block.first ?? block.start) + block.count)) };
+  perSnapshot.set(step, selected);
+  return selected;
 }
 
 /** What a detail read does with the card's held state. `skip`: a read
@@ -441,15 +463,25 @@ export function rereadToolIds(
   return out;
 }
 
-export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef, emptyMessage, resetKey }: {
+export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, allLines, scrollRef, emptyMessage, resetKey, resetFollow }: {
   wi: string | null;
   profile?: string;
   running: boolean;
   snapshot: PolyforgeProgressSnapshot | null;
   echoes: readonly PolyforgeOwnerEcho[];
+  /** Every line of the job's whole stream (the unfiltered snapshot's lines):
+   *  the echo delivery judgement's set — an `owner` line naming the record
+   *  may sit in any step's block, not only the selected step's. */
+  allLines: readonly PolyforgeProgressLine[];
   scrollRef: RefObject<HTMLDivElement | null>;
   emptyMessage?: string;
   resetKey?: string;
+  /** What a reset does with the follow (polyforge#48 AC5): "bottom" (the
+   *  default, every selection and the automatic step follow) pins the region
+   *  to its bottom; "step" — the panel's, for a MANUAL DAG choice — unpins
+   *  and scrolls the selected step's first block head into view with the
+   *  least scrolling, so the DAG above stays on screen whenever it fits. */
+  resetFollow?: "bottom" | "step";
 }) {
   const { t, locale } = useI18n();
   const [visibleCount, setVisibleCount] = useState(PROGRESS_RENDER_CHUNK);
@@ -473,7 +505,25 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   const layout = progressBlocks(lines);
   const lastBlockId = layout.blocks.length > 0 ? lines[layout.blocks[layout.blocks.length - 1].start]?.id ?? null : null;
   const streamed = Boolean(snapshot?.available && lines.length > 0);
-  useEffect(() => {
+  // polyforge#48 (AC5): the reset is a LAYOUT effect on purpose — it must
+  // set the follow state before the follow effect below reads it in the
+  // same commit, so a manual DAG choice never flashes through the bottom
+  // first. resetFollow "step" unpins and scrolls so the selected step's
+  // first block head is in view with the least scrolling: when the DAG
+  // above it fits in one viewport together with the head, the DAG's top
+  // becomes the region's top (both stay on screen); when they do not fit,
+  // the head alone aligns to the top — the records win. With no block to
+  // show yet (the records still loading) the bottom follow holds.
+  // r1#9: the reset fires on a selection or step change alone — resetFollow
+  // riding in the dependencies must not re-run it (a manual click on the
+  // step that is already selected only marks the choice manual: folds,
+  // expanded cards and their held details survive).
+  const resetSeen = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const resetKeyOf = `${wi ?? ""}\u0000${resetKey ?? ""}`;
+    const changed = resetSeen.current !== resetKeyOf;
+    resetSeen.current = resetKeyOf;
+    if (!changed) return;
     selection.current = wi;
     setVisibleCount(PROGRESS_RENDER_CHUNK);
     setFolded(new Map());
@@ -481,10 +531,32 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setDetails(new Map());
     openTools.current = new Set();
     inFlight.current = new Set();
-    pinned.current = true;
-    setAtBottom(true);
     setAtTop(true);
-  }, [wi, resetKey]);
+    const region = scrollRef.current;
+    const head = region?.querySelector<HTMLElement>("[data-pf-progress-block]") ?? null;
+    if (resetFollow !== "step" || !region || !head) {
+      pinned.current = true;
+      setAtBottom(true);
+      return;
+    }
+    pinned.current = false;
+    const hr = head.getBoundingClientRect();
+    const rr = region.getBoundingClientRect();
+    const graph = region.querySelector<HTMLElement>("[data-pf-detail-graph]");
+    const graphTop = graph ? graph.getBoundingClientRect().top - rr.top + region.scrollTop : -1;
+    const headTop = hr.top - rr.top + region.scrollTop;
+    const graphIn = graph ? graph.getBoundingClientRect().bottom <= rr.bottom && graph.getBoundingClientRect().top >= rr.top : false;
+    if (!(hr.top >= rr.top && hr.bottom <= rr.bottom) || !graphIn) {
+      // The clicked step's records start in view with the least scrolling,
+      // the DAG above them kept on screen whenever the two fit in one
+      // viewport (the DAG's top becomes the region's top); when they do not
+      // fit, the head alone aligns to the top — the records win.
+      const target = graphTop >= 0 && headTop - graphTop <= rr.height ? graphTop : headTop;
+      region.scrollTop = Math.max(0, target);
+    }
+    setAtBottom(isProgressPinnedToBottom(region));
+    setAtTop(isProgressAtTop(region));
+  }, [wi, resetKey, resetFollow]);
   useEffect(() => {
     const total = snapshot?.lines.length ?? 0;
     if (visibleCount >= total) return;
@@ -505,7 +577,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     region.addEventListener("scroll", onScroll, { passive: true });
     return () => region.removeEventListener("scroll", onScroll);
   }, [scrollRef]);
-  const shownEchoes = pendingOwnerEchoes(echoes, lines);
+  const shownEchoes = pendingOwnerEchoes(echoes, allLines);
   useLayoutEffect(() => {
     const region = scrollRef.current;
     if (region && streamed && pinned.current) region.scrollTop = region.scrollHeight;
@@ -582,15 +654,19 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     }
     setFoldVersion((current) => current + 1);
   }, [loadDetail]);
-  // polyforge#2: every poll re-reads the expanded cards whose detail still
-  // has no result (each poll's snapshot is a new object, so this runs on the
-  // 2 s cadence while the job runs — no timer of its own; a subagent's
-  // lines are in the set too, review r1#2).
+  // polyforge#2 (the re-reads) with polyforge#48 AC1: while the job runs,
+  // every poll's fresh snapshot re-reads the expanded cards whose detail
+  // still has no result — the cached selected-step view keeps this effect's
+  // dependency stable across unrelated renders, and a ticket that is not
+  // running (ended, or waiting on its one read) never re-reads: its expanded
+  // card keeps the detail its own click read. A subagent's lines are in the
+  // set too (review r1#2). The effect re-runs but reads nothing when `running`
+  // flips — the marks and held details are the click path's own.
   useEffect(() => {
-    if (!wi) return;
+    if (!wi || !running) return;
     const lineIds = progressLineIds(snapshot?.lines ?? EMPTY_PROGRESS_LINES);
     for (const id of rereadToolIds(detailsRef.current, openTools.current, lineIds)) loadDetail(id);
-  }, [wi, snapshot, loadDetail]);
+  }, [wi, running, snapshot, loadDetail]);
   const message = !wi || snapshot?.available === false ? t("polyforge.progress.unavailable")
     : !snapshot ? t("polyforge.loading")
       : snapshot.lines.length === 0 ? (emptyMessage ?? t("polyforge.progress.empty")) : null;
@@ -2115,8 +2191,13 @@ export function PolyforgePanel({
                               lane-declared skippable step (the waive hint for
                               any other). A step with a live dispatch or one
                               that already ran never shows them. */}
+                          {/* polyforge#48 AC4: the key is the ticket + step —
+                              React remounts the controls on either change, so
+                              a switch starts from a fresh state and never
+                              shows the previous step's input, result or error. */}
                           {watchStatus && selectedStep && stepUnstarted(watchStatus, selectedStep) && (
                             <PolyforgeStepControls
+                              key={`${progressWi ?? "none"}:${selectedStep}`}
                               wi={progressWi}
                               profile={selectedJob?.profile ?? selectedProfile}
                               step={selectedStep}
@@ -2126,7 +2207,7 @@ export function PolyforgePanel({
                               onApplied={onRefresh}
                             />
                           )}
-                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? ""} echoes={detailEchoes} scrollRef={detailScrollRef} />
+                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? ""} resetFollow={selectedStepManual ? "step" : "bottom"} echoes={detailEchoes} allLines={progressSnapshot?.lines ?? EMPTY_PROGRESS_LINES} scrollRef={detailScrollRef} />
                         </>
                       ) : (
                       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>{t("polyforge.selectJob")}</div>

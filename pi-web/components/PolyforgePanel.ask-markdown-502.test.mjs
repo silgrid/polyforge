@@ -26,7 +26,7 @@ const AT = Date.UTC(2026, 10, 12, 1, 2, 3);
 const renderAsk = (text) => {
   const lines = [{ id: "a1", kind: "ask", event: "awaiting_owner", tone: "amber", at: AT, text }];
   const html = renderToStaticMarkup(React.createElement(I18nProvider, null,
-    React.createElement(panel.PolyforgeDetailProgress, { wi: "wi_E2E502", running: false, snapshot: { available: true, lines }, echoes: [], scrollRef: { current: null } })));
+    React.createElement(panel.PolyforgeDetailProgress, { wi: "wi_E2E502", running: false, snapshot: { available: true, lines }, echoes: [], allLines: lines, scrollRef: { current: null } })));
   const start = html.indexOf('data-pf-progress-kind="ask"');
   assert.ok(start >= 0, "the ask block is rendered");
   return html.slice(html.lastIndexOf("<div", start));

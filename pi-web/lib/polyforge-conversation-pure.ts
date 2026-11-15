@@ -63,8 +63,10 @@ export type PolyforgeConversationState =
 
 /** The status face's terminal job states (`pf ops status` jobs[].status
  *  after the daemon sealed the run) and the hub's final statuses the watch
- *  snapshot reports once no job exists. */
-const FINISHED_STATUSES = new Set(["completed", "failed", "cancelled", "canceled", "wrapped", "failed_gate", "done"]);
+ *  snapshot reports once no job exists. Exported since polyforge#48: the
+ *  panel's watch read asks for the composed override view exactly while its
+ *  held snapshot's workflow status is not one of these. */
+export const FINISHED_STATUSES = new Set(["completed", "failed", "cancelled", "canceled", "wrapped", "failed_gate", "done"]);
 
 /** The runtime's transient job states (the status face's jobs[].status):
  *  no agent to talk to, no park, nothing to do but wait. */

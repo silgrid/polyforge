@@ -1016,7 +1016,7 @@ test("the detail order is summary (title row, goal, facts, narration, pi#117 fac
     "{/* pi#119 summarize narration",
     "{/* pi#117 facts, moved into the summary",
     "data-pf-detail-graph",
-    "<PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? \"\"} echoes={detailEchoes} scrollRef={detailScrollRef} />",
+    "<PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? \"\"} resetFollow={selectedStepManual ? \"step\" : \"bottom\"} echoes={detailEchoes} allLines={progressSnapshot?.lines ?? EMPTY_PROGRESS_LINES} scrollRef={detailScrollRef} />",
   ].map((needle) => detail.indexOf(needle));
   assert.ok(marks.every((index, i) => index >= 0 && (i === 0 || index > marks[i - 1])), `detail order: ${marks}`);
   const after = detail.slice(detail.indexOf("<PolyforgeDetailProgress"));
@@ -1212,7 +1212,11 @@ test(" DAG: a skipped step is grayed", () => {
 });
 
 test("polyforge#24: selectProgressStep keeps every matching rerun block and empties unstarted steps", () => {
-  const helper = source.slice(source.indexOf("export function selectProgressStep"), source.indexOf("\n}\n", source.indexOf("export function selectProgressStep")) + 2).replace(/export /g, "");
+  // The extraction starts at the cache declaration (polyforge#48 AC1): the
+  // function reads the module-level WeakMap beside it.
+  const cacheAt = source.indexOf("const selectProgressStepCache");
+  assert.ok(cacheAt >= 0, "selectProgressStepCache exists beside selectProgressStep");
+  const helper = source.slice(cacheAt, source.indexOf("\n}\n", source.indexOf("export function selectProgressStep", cacheAt)) + 2).replace(/export /g, "");
   const context = vm.createContext({ progressBlocks: (lines) => {
     const starts = lines.map((line, index) => line.event === "step_started" ? index : -1).filter((index) => index >= 0);
     return { blocks: starts.map((start, index) => {
@@ -1233,6 +1237,48 @@ test("polyforge#24: selectProgressStep keeps every matching rerun block and empt
   const snapshot = { available: true, lines, omitted: 0 };
   assert.deepEqual(context.selectProgressStep(snapshot, "spec").lines.map((line) => line.id), ["s1", "r1", "s2", "r2"]);
   assert.deepEqual(context.selectProgressStep(snapshot, "review").lines, []);
+});
+
+test("polyforge#48 AC1: the selected-step view is cached — one (snapshot, step) pair, one object", () => {
+  // The panel calls selectProgressStep on every render; the cache keeps the
+  // answer's identity stable until the snapshot itself changes, so the reread
+  // effect below the progress cannot fire on an unrelated re-render. The
+  // cache lives beside the function (a module-level WeakMap), so the
+  // extraction starts at its declaration.
+  const cacheAt = source.indexOf("const selectProgressStepCache");
+  assert.ok(cacheAt >= 0, "selectProgressStepCache exists beside selectProgressStep");
+  const start = source.indexOf("export function selectProgressStep", cacheAt);
+  assert.ok(start > cacheAt, "the cache precedes the function");
+  const helper = source.slice(cacheAt, source.indexOf("\n}\n", start) + 2).replace(/export /g, "");
+  const context = vm.createContext({ progressBlocks: (lines) => {
+    const starts = lines.map((line, index) => line.event === "step_started" ? index : -1).filter((index) => index >= 0);
+    return { blocks: starts.map((start2, index) => {
+      const end = starts[index + 1] ?? lines.length;
+      const match = /▶ ([^ #]+) /.exec(lines[start2].text);
+      return { start: start2, count: end - start2, step: match?.[1] };
+    }) };
+  }});
+  vm.runInContext(stripTypeScriptTypes(helper), context);
+  const lines = [
+    { id: "s1", kind: "event", event: "step_started", text: "▶ spec #1 · pi" },
+    { id: "r1", kind: "narration", text: "round one" },
+    { id: "c1", kind: "event", event: "step_started", text: "▶ code #1 · pi" },
+    { id: "r2", kind: "narration", text: "code round" },
+  ];
+  const snapshot = { available: true, lines, omitted: 0 };
+  const spec = context.selectProgressStep(snapshot, "spec");
+  assert.ok(spec === context.selectProgressStep(snapshot, "spec"), "the same (snapshot, step) pair returns the same object");
+  assert.deepEqual(spec.lines.map((line) => line.id), ["s1", "r1"], "the cached answer keeps the step's blocks");
+  const empty = context.selectProgressStep(snapshot, "review");
+  assert.ok(empty === context.selectProgressStep(snapshot, "review"), "an empty selection is cached too");
+  assert.ok(empty !== spec, "another step is another cache entry");
+  const code = context.selectProgressStep(snapshot, "code");
+  assert.ok(code !== spec && code !== empty, "a third step is its own entry");
+  const snapshot2 = { available: true, lines: [...lines, { id: "r3", kind: "narration", text: "later" }], omitted: 0 };
+  assert.ok(context.selectProgressStep(snapshot2, "spec") !== spec, "a new snapshot is a new answer");
+  assert.equal(context.selectProgressStep(null, "spec"), null, "a null snapshot passes through");
+  assert.equal(context.selectProgressStep(snapshot, null), snapshot, "a null step passes the snapshot through");
+  assert.equal(context.selectProgressStep(snapshot, undefined), snapshot, "no step passes the snapshot through");
 });
 
 test("polyforge#24: DAG selection wiring follows current step until a manual choice", () => {
