@@ -687,9 +687,10 @@ declaration.
   full-tier selection above an uncovered path is listed instead, and every
   other reason here selects the full tail.
 - **The conf keys.** `e2e_runner=` (the runner the selected suites are
-  appended to), `e2e_start_threshold=` (a positive light-tier count that
-  prefixes `E2E_SERVER_MODE=start` only when the selected count is strictly
-  greater and `e2e_runner=` is present), `suite_glob=` (replaces discovery),
+  appended to), `e2e_start_threshold=` together with `e2e_start_prefix=` (a
+  positive light-tier count and the prefix its strict excess puts before the
+  runner: each is the repository's own declaration, so the engine names no
+  repository's environment variable), `suite_glob=` (replaces discovery),
   `e2e_map=<glob>=<suite>` (replaces one suite's header outright) and
   `smoke_suite=<suite>` (the
   full-tier opt-in above), each with its exact form in [the

@@ -314,7 +314,8 @@ package's own conf, used when the engine runs from `pi-web/`, has
 `full_command=E2E_SERVER_MODE=start npm run test:e2e:all` and keeps
 `e2e_runner=npm run test:e2e:all --` unprefixed at or below its
 `e2e_start_threshold`; when a light selection exceeds that threshold, the
-engine adds `E2E_SERVER_MODE=start` before the runner. The engine
+engine adds the conf's declared `e2e_start_prefix=E2E_SERVER_MODE=start`
+before the runner. The engine
 recognizes the runner file only in a value that begins `npm run <script>`
 (a prefixed one would make `e2e/all.mjs` an undeclared suite and force the
 full tier), so the prefix is the engine's to add: a light selection at or

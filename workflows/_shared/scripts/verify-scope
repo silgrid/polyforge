@@ -360,6 +360,7 @@ class Engine:
         self.conf_runner = ""
         self.conf_e2e_runner = ""
         self.conf_e2e_start_threshold = ""
+        self.conf_e2e_start_prefix = ""
         self.anon_fast = 0
         self.anon_full = 0
         self.anon_micro = 0
@@ -821,6 +822,17 @@ class Engine:
                     self.diag("conf ignores a second e2e_start_threshold: %s" % line)
                 else:
                     self.conf_e2e_start_threshold = val
+            elif key == "e2e_start_prefix":
+                val = c_rstrip(val)
+                if val == "":
+                    self.diag("conf rejects an empty e2e_start_prefix")
+                elif val.startswith("$(") or val.startswith("`"):
+                    self.diag("conf lint: e2e_start_prefix value begins with a command substitution"
+                              " (lint diagnostic only; command values run as reported command: lines): %s" % line)
+                elif self.conf_e2e_start_prefix != "":
+                    self.diag("conf ignores a second e2e_start_prefix: %s" % line)
+                else:
+                    self.conf_e2e_start_prefix = val
             elif key == "suite_glob":
                 val = c_rstrip(val)
                 if val == "":
@@ -1399,8 +1411,9 @@ class Engine:
             return []
         prefix = ""
         if (self.light and self.conf_e2e_start_threshold != ""
-                and len(suites) > int(self.conf_e2e_start_threshold)):
-            prefix = "E2E_SERVER_MODE=start "
+                and len(suites) > int(self.conf_e2e_start_threshold)
+                and self.conf_e2e_start_prefix != ""):
+            prefix = self.conf_e2e_start_prefix + " "
         if self.conf_e2e_runner != "":
             return ["%s%s %s" % (prefix, self.conf_e2e_runner, " ".join(suites))]
         return [self.cr_suite_cmd(s) for s in suites]
