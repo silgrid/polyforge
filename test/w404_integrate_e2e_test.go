@@ -426,6 +426,13 @@ func newW404World(t *testing.T) *w404World {
 	engine, _ := os.ReadFile(filepath.Join(root, "workflows", "_shared", "scripts", "verify-scope"))
 	gateID, _ := os.ReadFile(filepath.Join(root, "tools", "gate-id"))
 	up := "# upgrade\n"
+	// the engine imports its library (pfstep), which ships beside it
+	libFiles, _ := filepath.Glob(filepath.Join(root, "workflows", "_shared", "scripts", "pfstep", "*.py"))
+	lib := map[string]string{}
+	for _, f := range libFiles {
+		raw, _ := os.ReadFile(f)
+		lib[filepath.Join("workflows/_shared/scripts/pfstep", filepath.Base(f))] = string(raw)
+	}
 	w.write(map[string]string{
 		"workflows/_shared/scripts/verify-scope": string(engine),
 		"tools/gate-id":                          string(gateID),
@@ -438,6 +445,9 @@ func newW404World(t *testing.T) *w404World {
 		"pin.txt":                                w404Sha(up) + "\n",
 		"code.txt":                               "one\n",
 	})
+	for k, v := range lib {
+		w.write(map[string]string{k: v})
+	}
 	_ = os.Chmod(filepath.Join(w.seed, "workflows", "_shared", "scripts", "verify-scope"), 0o755)
 	gitRun(t, w.seed, "add", "-A")
 	gitRun(t, w.seed, "commit", "-q", "-m", "the gate tree")

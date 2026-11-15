@@ -25,7 +25,7 @@ class HostRequiresTest(GitCase):
     def report(self, body: str) -> Dict[str, Any]:
         d = os.path.join(self.tmp, "r%d" % len(os.listdir(self.tmp)))
         Repo(d, {CONF: "stack=none\nfast_gate=true\n" + body, "a.txt": "a\n"})
-        c = subprocess.run(["sh", ENGINE, "--json", "--base", "HEAD"], cwd=d,
+        c = subprocess.run(["python3", ENGINE, "--json", "--base", "HEAD"], cwd=d,
                            capture_output=True, text=True, stdin=subprocess.DEVNULL)
         self.assertEqual(c.returncode, 0, c.stderr)
         doc = json.loads(c.stdout)

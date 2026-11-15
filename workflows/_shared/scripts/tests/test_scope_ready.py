@@ -142,7 +142,7 @@ class EngineParityTest(GitCase):
     ]
 
     def engine(self, d: str, *args: str) -> Dict[str, Any]:
-        c = subprocess.run(["sh", ENGINE, *args, "--json"], cwd=d, capture_output=True, text=True)
+        c = subprocess.run(["python3", ENGINE, *args, "--json"], cwd=d, capture_output=True, text=True)
         self.assertEqual(c.returncode, 0, c.stderr)
         doc = json.loads(c.stdout)
         self.assertIsInstance(doc, dict)

@@ -181,8 +181,9 @@ def choose(rep: EngineReport, tier: str) -> Tuple[List[EngineCommand], str]:
 
 def argv_of(engine: str) -> List[str]:
     """How the engine at path engine runs: itself when it is executable,
-    else through sh (a lane snapshot's files are mode 0444)."""
-    return [engine] if os.access(engine, os.X_OK) else ["sh", engine]
+    else under the step's python (a lane snapshot's files are mode 0444;
+    the engine is a python3 program)."""
+    return [engine] if os.access(engine, os.X_OK) else [stepenv.read().python, engine]
 
 
 def nested_roots(repo_dir: str) -> List[str]:

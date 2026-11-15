@@ -984,7 +984,7 @@ hold no credential.
 The verification-scope engine is the workflow's too:
 `workflows/_shared/scripts/verify-scope`, with its dependency-audit helper
 `audit-deps` beside it. A step finds it in its lane snapshot,
-`$PF_SHARED_DIR/scripts/verify-scope` (read-only there: `sh <path>`) —
+`$PF_SHARED_DIR/scripts/verify-scope` (read-only there: `python3 <path>`) —
 `verify.py`'s only engine when `--engine` names none; a hand run uses the
 release checkout's copy.
 

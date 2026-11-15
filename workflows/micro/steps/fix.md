@@ -40,7 +40,7 @@ acceptance here is itself text, the one exemption it names.
 In every repo you changed, after your last commit, run the micro evidence from the repo
 clone:
 
-    sh "$PF_SHARED_DIR/scripts/verify-scope" --micro --run
+    "$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify-scope" --micro --run
 
 (the engine in this lane's snapshot). It reads the base declaration and runs the repository's fast-phase commands, then its
 declared `micro_check` commands, in order from the repository root, stopping at the first

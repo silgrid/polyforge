@@ -109,6 +109,18 @@ func w27Fixture(t *testing.T) (dir, base string) {
 	if err := os.Chmod(filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// the engine imports its library (pfstep), which ships beside it
+	libFiles, err := filepath.Glob(filepath.Join(src, "..", "pfstep", "*.py"))
+	if err != nil || len(libFiles) == 0 {
+		t.Fatalf("the engine's library (workflows/_shared/scripts/pfstep): %v %v", libFiles, err)
+	}
+	for _, lib := range libFiles {
+		libRaw, err := os.ReadFile(lib)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w27Write(t, dir, filepath.Join("workflows/_shared/scripts/pfstep", filepath.Base(lib)), string(libRaw))
+	}
 	w27Write(t, dir, ".polyforge/verify-scope.conf", string(confRaw))
 	w27Git(t, dir, "add", "-A")
 	w27Git(t, dir, "commit", "-q", "-m", "w27 base")

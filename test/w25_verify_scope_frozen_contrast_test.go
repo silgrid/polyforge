@@ -100,6 +100,9 @@ func TestW25FrozenContrastOnRealRanges(t *testing.T) {
 			// The engine is new in this change, so an older range's worktree does
 			// not carry it; install the current release tree's engine there.
 			w25engCopy(t, filepath.Join(root, "workflows", "_shared", "scripts", "verify-scope"), filepath.Join(dir, "workflows", "_shared", "scripts", "verify-scope"), 0o755)
+			// the current engine's library travels with it, like the release
+			// tree's: an older range's worktree carries an older pfstep.
+			w25engCopyLib(t, dir)
 			frozenOut, frozenErr, frozenCode := w25engRun(t, dir, filepath.Join(dir, ".polyforge", "verify-scope.sh"), nil, "--base", base)
 			if frozenCode != 0 {
 				t.Fatalf("frozen seed exited %d: %s", frozenCode, frozenErr)

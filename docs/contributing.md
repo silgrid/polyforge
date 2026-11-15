@@ -149,7 +149,8 @@ among them — find it) and in the release checkout,
 `<data-dir>/release/current/workflows/_shared/scripts/verify-scope`
 (`<data-dir>` is `$POLYFORGE_DATA_DIR` when set, else
 `~/.local/share/polyforge`), where a hand run finds it. A
-snapshot's copy is read-only, never executable: run it as `sh <path>`. This
+snapshot's copy is read-only, never executable: run it as `python3 <path>` (the
+engine is a python3 program). This
 repository declares its specifics in `.polyforge/verify-scope.conf`; a
 repository without that file gets the engine's conservative zero-config
 defaults. The report of a diff and the commands to run:
