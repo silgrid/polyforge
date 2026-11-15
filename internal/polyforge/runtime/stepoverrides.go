@@ -488,6 +488,42 @@ func (r *Runtime) writePendingStepOverrides(ctx context.Context, j *job) error {
 // pending record's alone), so a later merge of an older chain cannot
 // resurrect it.
 func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.StepOverride) capsule.StepOverrides {
+	merged, _ := mergePendingMarked(ov, pending)
+	return merged
+}
+
+// PendingAspects says which aspects of a step's merged overlay entry the
+// pending record supplied (the claim's merge applied them over the
+// capsule's).
+type PendingAspects struct {
+	Models bool
+	Skip   bool
+}
+
+// MergedStepOverrides answers the overlay the work item's next claim here
+// would carry: a copy of the capsule's record ov (ov itself is not
+// written) with the pending entries merged by the claim's own rule
+// (mergePendingAspects — a pending aspect older than the capsule's same
+// aspect does not apply), and per step which aspects came from pending
+// (only steps with an applied aspect are keyed). The read face of the
+// overrides view and the watch snapshot (polyforge#25 u20, AC8): they show
+// what will govern, never a residue the re-claim will discard.
+func MergedStepOverrides(ov capsule.StepOverrides, pending map[string]*capsule.StepOverride) (capsule.StepOverrides, map[string]PendingAspects) {
+	cp := capsule.StepOverrides{Steps: make(map[string]*capsule.StepOverride, len(ov.Steps))}
+	for id, e := range ov.Steps {
+		if e == nil {
+			continue
+		}
+		c := *e
+		cp.Steps[id] = &c
+	}
+	return mergePendingMarked(cp, pending)
+}
+
+// mergePendingMarked is mergePendingAspects answering, per step, which
+// aspects the pending record supplied.
+func mergePendingMarked(ov capsule.StepOverrides, pending map[string]*capsule.StepOverride) (capsule.StepOverrides, map[string]PendingAspects) {
+	applied := map[string]PendingAspects{}
 	if ov.Steps == nil {
 		ov.Steps = map[string]*capsule.StepOverride{}
 	}
@@ -500,19 +536,25 @@ func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.S
 			e = &capsule.StepOverride{}
 			ov.Steps[id] = e
 		}
+		var a PendingAspects
 		if (p.Models != nil || p.ModelsCleared) && pendingAspectApplies(p.ModelsAt, e.ModelsAt) {
 			if p.ModelsCleared {
 				e.Models, e.ModelsBy, e.ModelsAt = nil, p.ModelsBy, p.ModelsAt
 			} else {
 				e.Models, e.ModelsBy, e.ModelsAt = append([]string(nil), p.Models...), p.ModelsBy, p.ModelsAt
 			}
+			a.Models = true
 		}
 		if p.Skip != nil && pendingAspectApplies(p.SkipAt, e.SkipAt) {
 			skip := *p.Skip
 			e.Skip, e.SkipBy, e.SkipAt = &skip, p.SkipBy, p.SkipAt
+			a.Skip = true
+		}
+		if a.Models || a.Skip {
+			applied[id] = a
 		}
 	}
-	return ov
+	return ov, applied
 }
 
 // pendingAspectApplies compares one aspect's recorded times, parsed

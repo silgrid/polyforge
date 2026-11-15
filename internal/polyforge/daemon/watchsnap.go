@@ -330,44 +330,30 @@ func declaredSteps(wf *driver.Workflow) []protocol.WatchDeclaredStep {
 
 // watchOverrides answers the step-overlay values the snapshot carries
 // (polyforge#25): the capsule's record, with the pending record of a work
-// item this daemon holds no job of merged on top (its aspects marked
-// pending — they land with the next claim here). nil when nothing carries
-// an aspect.
+// item this daemon holds no job of merged on top by the claim's own rule
+// (runtime.MergedStepOverrides: a pending aspect older than the capsule's
+// same aspect does not apply); a step whose aspect came from pending is
+// marked pending — it lands with the next claim here. nil when nothing
+// carries an aspect.
 func watchOverrides(d *Daemon, wi, capsuleDir string) map[string]protocol.WatchOverride {
 	ov, err := capsule.ReadStepOverrides(capsuleDir)
 	if err != nil {
 		ov = capsule.StepOverrides{}
 	}
+	// the pending record of a work item this daemon holds no job of; a
+	// live job consumed it at its claim, so this reads empty there
+	ov, applied := runtime.MergedStepOverrides(ov, d.rt.PendingStepOverrides(wi))
 	out := map[string]protocol.WatchOverride{}
 	for id, e := range ov.Steps {
+		a := applied[id]
+		pending := a.Models || a.Skip
 		// a cleared chain (Models nil, its clear's time kept) is no chain:
-		// an entry left with no aspect carries nothing to show
-		if e == nil || (e.Models == nil && e.Skip == nil) {
+		// an entry left with no aspect carries nothing to show — unless a
+		// pending clear left it so (the sealed chain no longer governs)
+		if e == nil || (e.Models == nil && e.Skip == nil && !pending) {
 			continue
 		}
-		out[id] = protocol.WatchOverride{Models: e.Models, Skip: e.Skip}
-	}
-	// the pending record of a work item this daemon holds no job of (its
-	// aspects land with the next claim here); a live job consumed it at
-	// its claim, so this reads empty there
-	for id, e := range d.rt.PendingStepOverrides(wi) {
-		if e == nil {
-			continue
-		}
-		w := out[id]
-		w.Pending = true
-		if e.Models != nil {
-			w.Models = e.Models
-		}
-		if e.ModelsCleared {
-			// the pending clear tombstone: the sealed chain no longer
-			// governs (as the overlay view's fillRow reads it)
-			w.Models = nil
-		}
-		if e.Skip != nil {
-			w.Skip = e.Skip
-		}
-		out[id] = w
+		out[id] = protocol.WatchOverride{Models: e.Models, Skip: e.Skip, Pending: pending}
 	}
 	if len(out) == 0 {
 		return nil

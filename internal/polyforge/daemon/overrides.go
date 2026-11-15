@@ -174,15 +174,19 @@ func (d *Daemon) overrideView(wi string, item *api.WorkItem) (*protocol.Override
 	if err != nil {
 		return nil, err
 	}
-	// the capsule's overlay record, and (parked) the pending entries
+	// the capsule's overlay record, and (parked) the pending entries merged
+	// over it by the claim's own rule — a pending aspect older than the
+	// capsule's same aspect does not apply, so the row shows what the
+	// re-claim will run (AC8)
 	ov, oerr := capsule.ReadStepOverrides(scene.capsuleDir)
 	if oerr != nil {
 		ov = capsule.StepOverrides{}
 	}
-	pending := map[string]*capsule.StepOverride{}
+	var pending map[string]*capsule.StepOverride
 	if !scene.live {
 		pending = d.rt.PendingStepOverrides(wi)
 	}
+	ov, applied := runtime.MergedStepOverrides(ov, pending)
 	// the sources below the overlay, for the effective labels
 	var sources map[string]workspace.StepModelSource
 	if lane := laneSnapshotOf(scene); lane != nil {
@@ -195,12 +199,10 @@ func (d *Daemon) overrideView(wi string, item *api.WorkItem) (*protocol.Override
 		if e := ov.Steps[spec.ID]; e != nil {
 			fillRow(&row, e)
 		}
-		if p := pending[spec.ID]; p != nil {
-			row.Pending = true
-			fillRow(&row, p)
-		}
+		a := applied[spec.ID]
+		row.Pending = a.Models || a.Skip
 		switch {
-		case row.Models != nil && row.Pending:
+		case row.Models != nil && a.Models:
 			row.Effective, row.Source = row.Models, overrideSourcePend
 		case row.Models != nil:
 			row.Effective, row.Source = row.Models, overrideSource
