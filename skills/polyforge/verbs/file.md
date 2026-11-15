@@ -54,12 +54,10 @@ with `url`, `subdir` or `base` is refused.
 
 ### Choosing the project
 
-The project follows the work, not the repo: team work — anything the team
-itself changes, features, fixes, docs, config — and **external contributions**
-alike file to the **public project** (`polyforge`), the development mainline;
-the internal project carries only the internal layer (config defaults, guards)
-and the absorption of public changes. The rule lives in the routing skill
-(`SKILL.md` §Project routing).
+The project follows the work, not the repo — and which project a given
+work files to is not this skill's to hardcode: the workspace's or the
+repository's AGENTS.md states the routing rule; read it and follow it.
+The skill routes by intent only (`SKILL.md` §Project routing).
 
 ### Choosing the lane (`--bundle`)
 

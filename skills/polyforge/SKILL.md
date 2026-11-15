@@ -149,13 +149,13 @@ release or deploy procedure from this skill directly.
 
 When the user repeatedly walks the same flow, read the docs' bundle-authoring chapter ([docs/bundles.md](../../docs/bundles.md)) and propose sedimenting it into a custom workflow bundle.
 
-## Project routing (team work vs external contributions)
+## Project routing
 
-Team work — features, fixes, docs, config — and **external contributions** (an
-outside contributor's PR) both file to the **public project** (`polyforge`):
-this repository is the development mainline. The internal project carries only the
-internal layer (config defaults, guards) and the work of absorbing public changes
-into the internal line.
+Which project a filing goes to is not this skill's to decide: the
+workspace's or the repository's AGENTS.md states the routing rule — read
+it and follow it (this repository's own AGENTS.md states its team's rule
+in its Scope). The skill itself routes by intent only — execution work,
+release, registration (the sections above); it hardcodes no project.
 
 ## Human decisions: Pi Web's Polyforge panel
 
