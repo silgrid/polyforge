@@ -1028,7 +1028,7 @@ func TestW079SkillTeachesModelsYaml(t *testing.T) {
 // gone — polyforge#166 — so the SKILL.md sentence is the pinned subject.)
 func TestW079RepoInventoryComesFromTheRegistry(t *testing.T) {
 	skill := strings.Join(strings.Fields(w079Doc(t, "skills", "polyforge", "SKILL.md")), " ")
-	const rule = "The repo inventory and clone URLs always come from the aihub project registry; the cli.toml `[workspace]` mapping is the only placement source."
+	const rule = "The repo inventory and clone URLs always come from the aihub project registry; the `[workspace]` mapping of the Cell the invocation routes to (cli.toml for the default Cell, `cli-<profile>.toml` for a named one; polyforge#17) is the only placement source."
 	if !strings.Contains(skill, rule) {
 		t.Fatalf("SKILL.md no longer teaches the registry rule: %q", rule)
 	}
