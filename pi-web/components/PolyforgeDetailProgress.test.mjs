@@ -48,10 +48,24 @@ const jiti = createJiti(import.meta.url, {
     "@/lib/polyforge-panel-preferences": modulePath("lib/polyforge-panel-preferences.ts"),
     "@/hooks/useIsMobile": modulePath("hooks/useIsMobile.ts"),
     "@/hooks/usePolyforgeProgress": modulePath("hooks/usePolyforgeProgress.ts"),
+    // polyforge#53: the shared ThinkingFold's own dependencies resolve to
+    // the real pure modules (the preview and the preference), with
+    // react-markdown stubbed in the stubs file below.
+    "@/lib/message-display": modulePath("lib/message-display.ts"),
+    "@/lib/thinking-expansion-preference": modulePath("lib/thinking-expansion-preference.ts"),
+    "react-markdown": stubsPath,
   },
 });
 const { renderHook } = await import(pathToFileURL(shimPath).href);
 const { PolyforgeDetailProgress } = await jiti.import("./PolyforgePanel.tsx");
+// The shared session treatment and its icon: the same module instances the
+// panel's own import chain loads, so an element's type compares by identity.
+const { ThinkingFold } = await jiti.import("./ThinkingFold.tsx");
+const { ThinkingIcon } = await jiti.import("./ThinkingIcon.tsx");
+const { THINKING_EXPANDED_EVENT } = await jiti.import("@/lib/thinking-expansion-preference");
+const stubs = await import(pathToFileURL(stubsPath).href);
+const { SafeMarkdownBody } = stubs;
+const ReactMarkdown = stubs.default;
 
 const WI = "wi_E2Euuuu0001";
 const toolLine = (id) => ({ id, kind: "tool", text: `bash: run ${id}`, tool: { name: "bash", argument: `run ${id}`, status: "running" } });
@@ -224,5 +238,143 @@ test("polyforge#48 r1#9: a manual click on the already-selected step resets noth
     assert.equal(held()?.input, "run t1", "the held detail survives resetFollow flipping on an unchanged step");
   } finally {
     state.restore();
+  }
+});
+
+// ── polyforge#53 ─────────────────────────────────────────────────────────────
+// The progress's thinking narration renders through the session's own
+// collapsible thinking treatment (the shared ThinkingFold): collapsed to one
+// line (the same ThinkingIcon + first-line preview) unless the
+// 「默认展开思考块」 preference expands it, click toggles, and the preference's
+// broadcast updates an already-rendered row. The window is stubbed: the
+// preference read and the event listener are the row's own hooks' to drive.
+const THINK_TEXT = "E2E-P53-THINK-P1\n\nE2E-P53-THINK-P2";
+const thinkingLine = (id, text = THINK_TEXT) => ({ id, kind: "narration", text, variant: "thinking" });
+
+// A stubbed window whose localStorage answers one mutable value and whose
+// addEventListener captures the listeners (the broadcast the row registers).
+const stubWindow = () => {
+  const previousWindow = globalThis.window;
+  let stored = null;
+  const listeners = [];
+  globalThis.window = {
+    localStorage: { getItem: () => stored },
+    addEventListener: (name, listener) => listeners.push([name, listener]),
+    removeEventListener: () => {},
+  };
+  return {
+    listeners,
+    set stored(value) { stored = value; },
+    restore() {
+      if (previousWindow === undefined) delete globalThis.window;
+      else globalThis.window = previousWindow;
+    },
+  };
+};
+
+// The thinking line's row element: a function component carrying the line.
+// The tree walk never expands it — its hooks are driven through a nested
+// renderHook below, exactly as the browser mounts it.
+const thinkingRow = (state) => state.tree().find((node) => typeof node.type === "function" && node.props?.line?.id === "th1");
+
+test("polyforge#53 AC1: a thinking narration renders collapsed through the shared fold; click expands, click collapses", () => {
+  const window = stubWindow();
+  try {
+    const state = setup({ snapshot: snapshotOf([thinkingLine("th1")]) });
+    try {
+      const rowElement = thinkingRow(state);
+      assert.ok(rowElement, "the thinking line renders as its own fold row (the shared session treatment)");
+      const row = renderHook(rowElement.type, rowElement.props);
+      try {
+        const fold = () => walk(row.result).find((node) => node.type === ThinkingFold);
+        let view = fold();
+        assert.ok(view, "the row renders through the shared ThinkingFold");
+        assert.equal(view.props.text, THINK_TEXT, "the fold carries the whole thinking text");
+        assert.equal(view.props.expanded, false, "collapsed by default (the preference off)");
+        // Collapsed: one toggle button — the session's own icon and the
+        // first-line preview in its label; the Markdown body is absent.
+        let out = walk(renderHook(ThinkingFold, view.props).result);
+        const button = out.find((node) => node.props?.["aria-expanded"] === false);
+        assert.ok(button, "the collapsed row is one toggle button");
+        assert.ok(out.some((node) => node.type === ThinkingIcon), "the same thinking icon as the session's blocks");
+        assert.equal(button.props["aria-label"], `i18n.thinking: E2E-P53-THINK-P1`, "the label carries the first-line preview");
+        assert.equal(out.some((node) => node.type === ReactMarkdown && node.props.children === "E2E-P53-THINK-P1"), true, "the preview is the first line only");
+        assert.equal(out.some((node) => node.type === SafeMarkdownBody), false, "the body is not rendered while collapsed");
+        // Click → expanded: the full text renders as the row's Markdown body.
+        button.props.onClick();
+        row.flush();
+        view = fold();
+        assert.equal(view.props.expanded, true, "a click expands the row");
+        out = walk(renderHook(ThinkingFold, view.props).result);
+        const body = out.find((node) => node.type === SafeMarkdownBody);
+        assert.ok(body, "the expanded row renders the thinking text as Markdown");
+        assert.equal(body.props.children, THINK_TEXT, "the body carries the whole thinking text");
+        // Click again → collapsed.
+        out.find((node) => node.props?.["aria-expanded"] === true).props.onClick();
+        row.flush();
+        assert.equal(fold().props.expanded, false, "a second click collapses the row");
+      } finally {
+        row.unmount();
+      }
+    } finally {
+      state.restore();
+    }
+  } finally {
+    window.restore();
+  }
+});
+
+test("polyforge#53 AC2: the 「默认展开思考块」 preference expands a thinking row by default", () => {
+  const window = stubWindow();
+  window.stored = "true";
+  try {
+    const state = setup({ snapshot: snapshotOf([thinkingLine("th1")]) });
+    try {
+      const rowElement = thinkingRow(state);
+      assert.ok(rowElement, "the thinking line renders as its own fold row");
+      const row = renderHook(rowElement.type, rowElement.props);
+      try {
+        const view = walk(row.result).find((node) => node.type === ThinkingFold);
+        assert.ok(view, "the row renders through the shared ThinkingFold");
+        assert.equal(view.props.expanded, true, "the preference expands the row by default");
+        const out = walk(renderHook(ThinkingFold, view.props).result);
+        assert.equal(out.some((node) => node.type === SafeMarkdownBody && node.props.children === THINK_TEXT), true, "the body renders without a click");
+      } finally {
+        row.unmount();
+      }
+    } finally {
+      state.restore();
+    }
+  } finally {
+    window.restore();
+  }
+});
+
+test("polyforge#53 AC2: the preference's broadcast updates an already-rendered thinking row", () => {
+  const window = stubWindow();
+  try {
+    const state = setup({ snapshot: snapshotOf([thinkingLine("th1")]) });
+    try {
+      const rowElement = thinkingRow(state);
+      assert.ok(rowElement, "the thinking line renders as its own fold row");
+      const row = renderHook(rowElement.type, rowElement.props);
+      try {
+        const fold = () => walk(row.result).find((node) => node.type === ThinkingFold);
+        assert.equal(fold()?.props.expanded, false, "collapsed before the change");
+        // The settings panel toggles the preference and broadcasts the event
+        // the row registered a listener for.
+        window.stored = "true";
+        assert.equal(window.listeners.some(([name]) => name === THINKING_EXPANDED_EVENT), true, "the row listens to the preference's broadcast");
+        for (const [name, listener] of window.listeners) if (name === THINKING_EXPANDED_EVENT) listener();
+        row.flush();
+        assert.equal(fold()?.props.expanded, true, "the rendered row follows the broadcast");
+      } finally {
+        row.unmount();
+      }
+    } finally {
+      state.restore();
+    }
+  } finally {
+    window.restore();
   }
 });
