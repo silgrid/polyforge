@@ -45,6 +45,11 @@ const (
 	webBodyNotFound   = "{\"error\":\"not found\"}\n"
 	webBodyMethod     = "{\"error\":\"method not allowed\"}\n"
 	webBodyBadRequest = "{\"error\":\"bad request\"}\n"
+	// The one write route's refusal for a request that is not the
+	// console's own (polyforge#30): the same bytes for a missing custom
+	// header and an unauthorized caller alike — no existence or right
+	// leaks through the write door.
+	webBodyWriteRefused = "{\"error\":\"forbidden\"}\n"
 )
 
 // setWebSecurityHeaders applies the strict header set to EVERY /web/
@@ -108,13 +113,25 @@ func (s *Server) webAuthenticate(w http.ResponseWriter, r *http.Request) *identi
 	return idn
 }
 
-// web is the /web/ subtree entry: headers → authentication → method
-// gate → route. Server.ServeHTTP hands it every raw path under /web
-// (never the cleaned one).
+// web is the /web/ subtree entry: headers → authentication → the one
+// write route → method gate → route. Server.ServeHTTP hands it every raw
+// path under /web (never the cleaned one).
 func (s *Server) web(w http.ResponseWriter, r *http.Request) {
 	setWebSecurityHeaders(w)
 	idn := s.webAuthenticate(w, r)
 	if idn == nil {
+		return
+	}
+	// polyforge#30: the console's ONE write route — POST /web/api/
+	// projects/{name}/restore — is dispatched BEFORE the method gate,
+	// authenticated like every other route. The custom-header guard
+	// keeps it the SPA's own door: a cross-site form cannot set a custom
+	// header (and a cross-site fetch carrying one meets a CORS preflight
+	// this face never answers), so the write cannot ride the browser's
+	// ambient Basic credential from another origin.
+	if segments := webSegments(r); r.Method == http.MethodPost &&
+		len(segments) == 4 && segments[0] == "api" && segments[1] == "projects" && segments[3] == "restore" {
+		s.webAPIProjectRestore(w, r, idn, segments[2])
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {

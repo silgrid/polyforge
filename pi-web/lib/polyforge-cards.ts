@@ -654,9 +654,13 @@ export interface PolyforgeProgressToolDetail extends PolyforgeProgressTool {
   isError: boolean;
 }
 
-/** `GET /api/polyforge/progress/tool` — one call's detail, or why not. */
+/** `GET /api/polyforge/progress/tool` — one call's detail, or why not. A
+ *  resultless answer also carries `progress`: the newest lines of the
+ *  step's progress file (`runtime-state/progress/<step>.log`, written by
+ *  the scripts' say), masked, the card's interim view while the call
+ *  runs. */
 export type PolyforgeProgressToolAnswer =
-  | { available: true; hasResult: boolean; tool: PolyforgeProgressToolDetail }
+  | { available: true; hasResult: boolean; tool: PolyforgeProgressToolDetail; progress?: string[] }
   | { available: false; error: string };
 
 interface ProgressCall {
@@ -1080,21 +1084,21 @@ function subagentDirOf(transcript: string): string {
  * capsule>/<session>/subagents/` (newer while the step runs; the capsule
  * copy is what remains once claude-config is pruned).
  */
-function subagentDirs(root: string, capsuleDir: string, spawns: PolyforgeSpawn[]): { dirs: string[]; harness: PolyforgeHarness }[] {
-  const out: { dirs: string[]; harness: PolyforgeHarness }[] = [];
+function subagentDirs(root: string, capsuleDir: string, spawns: PolyforgeSpawn[]): { dirs: string[]; harness: PolyforgeHarness; step?: string }[] {
+  const out: { dirs: string[]; harness: PolyforgeHarness; step?: string }[] = [];
   const seen = new Set<string>();
   for (const spawn of spawns) {
     if (spawn.harness === "pi") {
       if (!spawn.transcript || !isAbsolute(spawn.transcript) || seen.has(spawn.transcript)) continue;
       seen.add(spawn.transcript);
-      out.push({ dirs: [subagentDirOf(spawn.transcript)], harness: "pi" });
+      out.push({ dirs: [subagentDirOf(spawn.transcript)], harness: "pi", ...(spawn.step ? { step: spawn.step } : {}) });
     } else if (spawn.harness === "claude") {
       const session = spawn.harnessSession;
       if (!session || !HARNESS_SESSION_PATTERN.test(session) || seen.has(`claude\0${session}`)) continue;
       seen.add(`claude\0${session}`);
       const dirs = [join(root, "claude-config", "projects", encodeClaudeProjectDir(capsuleDir), session, "subagents")];
       if (spawn.transcript && isAbsolute(spawn.transcript)) dirs.push(subagentDirOf(spawn.transcript));
-      out.push({ dirs, harness: "claude" });
+      out.push({ dirs, harness: "claude", ...(spawn.step ? { step: spawn.step } : {}) });
     }
   }
   return out;
@@ -1104,10 +1108,12 @@ function subagentDirs(root: string, capsuleDir: string, spawns: PolyforgeSpawn[]
  *  then file name), the first directory of a conversation winning a name
  *  both hold. Each resolves inside the capsule or the data root; one
  *  without a readable meta naming its parent call is not attachable and
- *  is skipped. */
+ *  is skipped. Each source carries its conversation's spawn's step: a
+ *  subagent inherits PF_STEP, so its say appends to the same step progress
+ *  file its parent's card reads (polyforge#2, review r1#3). */
 async function progressSubagentSources(root: string, capsuleDir: string, spawns: PolyforgeSpawn[]): Promise<SubagentSource[]> {
   const sources: SubagentSource[] = [];
-  for (const { dirs, harness } of subagentDirs(root, capsuleDir, spawns)) {
+  for (const { dirs, harness, step } of subagentDirs(root, capsuleDir, spawns)) {
     const taken = new Set<string>();
     for (const dir of dirs) {
       const real = await realInside(dir, [capsuleDir, root]);
@@ -1130,7 +1136,7 @@ async function progressSubagentSources(root: string, capsuleDir: string, spawns:
         const index = typeof meta.index === "number" && Number.isSafeInteger(meta.index) ? meta.index : 0;
         const agent = asString(meta.agentType);
         sources.push({
-          source: { path, harness },
+          source: { path, harness, ...(step ? { step } : {}) },
           callId,
           index,
           name,
@@ -1372,6 +1378,28 @@ function toolInputText(input: unknown): string {
 
 const unavailableTool = (error: string): PolyforgeProgressToolAnswer => ({ available: false, error });
 
+/** The step's progress file's bounds: the last `PROGRESS_FILE_TAIL_BYTES`
+ *  bytes are read, the newest `PROGRESS_FILE_LINES` complete lines of them
+ *  are answered (each masked) — enough to see which command runs and how
+ *  long the last one took, never the whole log. */
+const PROGRESS_FILE_TAIL_BYTES = 64 * 1024;
+const PROGRESS_FILE_LINES = 10;
+/** A step id as the workflow names one: the file name stays inside the
+ *  progress directory (the journal's step_id is input like any other). */
+const PROGRESS_FILE_STEP = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** The step's progress file (`<capsule>/runtime-state/progress/<step>.log`,
+ *  appended by the scripts' say — pfstep.progress): its newest lines,
+ *  credential-masked, for a call that has no result yet. Undefined when
+ *  the step names no file or nothing is readable. */
+async function progressFileLines(capsuleDir: string, step: string | undefined): Promise<string[] | undefined> {
+  if (!step || !PROGRESS_FILE_STEP.test(step)) return undefined;
+  const lines = await readWholeLines(join(capsuleDir, "runtime-state", "progress", `${step}.log`), PROGRESS_FILE_TAIL_BYTES);
+  if (!lines || lines.length === 0) return undefined;
+  const tail = lines.slice(-PROGRESS_FILE_LINES).map((line) => maskPolyforgeCredentials(line.text));
+  return tail.length > 0 ? tail : undefined;
+}
+
 /**
  * One tool call's full detail for the expanded progress card,
  * read on demand: `id` is the tool line's id from `readProgressSnapshot`.
@@ -1405,10 +1433,15 @@ export async function readProgressToolDetail(root: string, capsuleDir: string | 
       if (!call) return unavailableTool("the tool call is no longer in its transcript");
       const tool = call.line.tool!;
       const output = call.result ? toolResultText(call.result.content) : null;
+      // no result yet: the step's progress file's newest lines ride along,
+      // the card's interim view (a spawn's transcript source carries its
+      // step; a subagent's does not)
+      const progress = call.result === undefined ? await progressFileLines(capsuleDir, source.step) : undefined;
       return {
         available: true,
         hasResult: call.result !== undefined,
         tool: { ...tool, input: toolInputText(call.input), output, isError: call.result?.isError ?? false },
+        ...(progress ? { progress } : {}),
       };
     }
     return unavailableTool("the tool call's transcript is no longer readable");

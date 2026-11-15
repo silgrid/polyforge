@@ -111,11 +111,14 @@ func TestUpgradeV2140ProbeRunOnce(t *testing.T) {
 }
 
 // TestUpgradeV2140RoundTrip: v2.13.x data -> upgrade -> the memory row
-// keeps its document and the current code claims -> rollback -> the
-// v2.13.x claim cache write and memory columns work again.
+// keeps its document and the current code claims (the current code needs
+// the whole chain, so the fixture applies every later deploy/sql version
+// before that leg) -> the chain rolled back, v2.14.0's own rollback
+// last -> the v2.13.x claim cache write and memory columns work again.
 func TestUpgradeV2140RoundTrip(t *testing.T) {
 	dataDir, raw := v213SchemaDB(t)
 	applySQLText(t, raw, loadSQLFileOf(t, sqlVer2140, "upgrade.sql"))
+	applyUpgradesAfter(t, raw, sqlVer2140)
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +148,7 @@ func TestUpgradeV2140RoundTrip(t *testing.T) {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	applySQLText(t, db, loadSQLFileOf(t, sqlVer2140, "rollback.sql"))
+	rollbackThrough(t, db, sqlVer2140)
 	assertV213Shape(t, db)
 	if _, err := db.Exec(`INSERT INTO claim_idempotency(idempotency_key, work_item_id, caller_identity, response_json, created_at)
 		VALUES('k-rt',?1,'u-old','{}',?2)`, id, Now()); err != nil {

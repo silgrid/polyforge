@@ -7,6 +7,7 @@ import {
   cardRunningMinutes,
   formatCardDuration,
   formatProgressClock,
+  isProgressAtTop,
   isProgressPinnedToBottom,
   polyforgeCardKey,
   polyforgeContextDetailText,
@@ -35,6 +36,7 @@ import { PolyforgeMemory } from "./PolyforgeMemory";
 import { PolyforgeIntegrate } from "./PolyforgeIntegrate";
 import { PolyforgeTasks } from "./PolyforgeTasks";
 import { PolyforgeWorkItems } from "./PolyforgeWorkItems";
+import { PolyforgeProjects } from "./PolyforgeProjects";
 import { MAX_MARKDOWN_CHARS, SafeMarkdownBody } from "./SafeMarkdownBody";
 import {
   attentionItems,
@@ -287,6 +289,10 @@ function progressBlockDurationSec(block: PolyforgeProgressBlock): number | undef
  *  a large transcript is rendered in bounded chunks, never truncated). */
 export const PROGRESS_RENDER_CHUNK = 200;
 
+/** The progress lines of a snapshot with none (a stable array, so the poll
+ *  re-read effect depends on the snapshot alone). */
+const EMPTY_PROGRESS_LINES: PolyforgeProgressLine[] = [];
+
 /**
  * The job detail's execution progress, whole-job,
  * full lines, spawn blocks and the open-at-bottom follow
@@ -301,9 +307,10 @@ export const PROGRESS_RENDER_CHUNK = 200;
  * wrapped text (the guard's click-to-reveal box would be a per-entry gate
  * and a nested scroller here); a tool call as one
  * PolyforgeProgressToolCard on the transcript's ToolCallCard shell (header
- * from the poll's light fields, the full detail fetched only when that card
- * is expanded, at most once per call per selection, a failed read leaving
- * only that card unavailable); every other lifecycle event a restrained
+ * from the poll's light fields, the full detail fetched when that card is
+ * expanded and re-read on every poll while it still has no result — the
+ * step's progress lines while the command runs, the final result once it
+ * ends; a failed read leaving only that card unavailable); every other lifecycle event a restrained
  * marker row in its tone, wrapping in full, its raw kind and text on hover.
  * A snapshot renders the first PROGRESS_RENDER_CHUNK lines at once, then
  * appends the rest one chunk per animation frame, so a large stream stays
@@ -351,13 +358,17 @@ export const PROGRESS_RENDER_CHUNK = 200;
  * scroll listener keeps `pinned` — whether the reader is at its bottom
  * (isProgressPinnedToBottom); loading, empty and unavailable states force
  * nothing. A new snapshot or chunk follows growth only while pinned. The
- * `↓ Latest` button (`[data-pf-detail-latest]`) floats over the region's
- * bottom-right whenever it is not at its bottom (overlay, no in-flow
- * height); one click jumps to the bottom immediately and restores
- * following. Folding never treats its own click as a scroll: collapsing
+ * two jump buttons (polyforge#31) float stacked over the region's bottom,
+ * horizontally centered, both reusing the chat session's
+ * `chat-scroll-to-bottom` style: `↓ Latest` (`[data-pf-detail-latest]`)
+ * whenever the region is not at its bottom — one click jumps to the bottom
+ * immediately and restores following — and `↑ Top` (`[data-pf-detail-top]`)
+ * one button higher whenever it is scrolled away from its top
+ * (isProgressAtTop), one smooth scroll to the very top. Folding never treats
+ * its own click as a scroll: collapsing
  * while pinned clamps the region to its new bottom and stays pinned,
  * expanding an older block leaves `scrollTop` untouched (so the reader
- * leaves the bottom, unpins, and the button appears). A tool card's
+ * leaves the bottom, unpins, and the buttons appear). A tool card's
  * expand/collapse and its detail settling are folds too.
  */
 export function selectProgressStep(snapshot: PolyforgeProgressSnapshot | null, step: string | null): PolyforgeProgressSnapshot | null {
@@ -368,6 +379,66 @@ export function selectProgressStep(snapshot: PolyforgeProgressSnapshot | null, s
   if (layout.blocks.length === 0) return snapshot;
   const selectedLines = blocks.flatMap((block) => lines.slice(block.first ?? block.start, (block.first ?? block.start) + block.count));
   return { ...snapshot, lines: selectedLines };
+}
+
+/** What a detail read does with the card's held state. `skip`: a read
+ *  is already in flight, or the held answer carries the final result.
+ *  `keep`: a re-read of a resultless answer — the held detail (the step's
+ *  progress lines) stays on screen, never a Loading flash while its
+ *  command runs (review r1#1). `loading`: the first read of an expansion
+ *  (nothing held, or the last read answered unavailable). Pure. */
+export function detailAsk(held: PolyforgeProgressToolDetailState | undefined, inFlight: boolean): "skip" | "keep" | "loading" {
+  if (inFlight) return "skip";
+  if (!held || held.status === "unavailable") return "loading";
+  if (held.status === "loading") return "skip";
+  return held.output === null ? "keep" : "skip";
+}
+
+/** Two detail states a re-read cannot tell apart: the poll's settle
+ *  writes nothing (and re-measures nothing) when the answer repeats the
+ *  held one. Pure. */
+export function sameProgressToolDetail(a: PolyforgeProgressToolDetailState, b: PolyforgeProgressToolDetailState): boolean {
+  if (a.status !== b.status) return false;
+  if (a.status === "available" && b.status === "available") {
+    return a.input === b.input && a.output === b.output && a.isError === b.isError
+      && (a.progress ?? []).join("\n") === (b.progress ?? []).join("\n");
+  }
+  return true;
+}
+
+/** Every progress line id of the snapshot, a subagent's lines included
+ *  (nested subagents too, review r1#2): the poll's re-read set — an
+ *  expanded subagent card re-reads like any other. Pure. */
+export function progressLineIds(lines: readonly PolyforgeProgressLine[]): Set<string> {
+  const ids = new Set<string>();
+  const walk = (ls: readonly PolyforgeProgressLine[]) => {
+    for (const line of ls) {
+      ids.add(line.id);
+      const subs = line.subagents;
+      if (subs) for (const sub of subs) walk(sub.lines);
+    }
+  };
+  walk(lines);
+  return ids;
+}
+
+/** The expanded tool cards the poll re-reads (polyforge#2): one whose held
+ *  detail still has no result — its step's progress lines while its command
+ *  runs, the final result once it ends — and whose line is still in the
+ *  snapshot. A loading, unavailable or settled detail and a card whose line
+ *  is gone (another selection, a folded-away step) is not re-read. Pure. */
+export function rereadToolIds(
+  details: ReadonlyMap<string, PolyforgeProgressToolDetailState | undefined>,
+  expanded: ReadonlySet<string>,
+  lineIds: ReadonlySet<string>,
+): string[] {
+  const out: string[] = [];
+  for (const id of expanded) {
+    if (!lineIds.has(id)) continue;
+    const held = details.get(id);
+    if (held && held.status === "available" && held.output === null) out.push(id);
+  }
+  return out;
 }
 
 export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef, emptyMessage, resetKey }: {
@@ -388,8 +459,16 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   const detailsRef = useRef(details);
   detailsRef.current = details;
   const selection = useRef(wi);
+  // polyforge#2: the tool cards the reader expanded (their onToggle said
+  // so); the poll re-reads the ones whose detail still has no result.
+  // The reads in flight, keyed the same way (detailAsk's dedup), and every
+  // id's read sequence number (an answer of a replaced read is dropped).
+  const openTools = useRef<Set<string>>(new Set());
+  const inFlight = useRef<Set<string>>(new Set());
+  const readSeq = useRef<Map<string, number>>(new Map());
   const pinned = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
+  const [atTop, setAtTop] = useState(true);
   const lines = snapshot?.lines ?? [];
   const layout = progressBlocks(lines);
   const lastBlockId = layout.blocks.length > 0 ? lines[layout.blocks[layout.blocks.length - 1].start]?.id ?? null : null;
@@ -400,8 +479,11 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     setFolded(new Map());
     setFoldVersion(0);
     setDetails(new Map());
+    openTools.current = new Set();
+    inFlight.current = new Set();
     pinned.current = true;
     setAtBottom(true);
+    setAtTop(true);
   }, [wi, resetKey]);
   useEffect(() => {
     const total = snapshot?.lines.length ?? 0;
@@ -418,6 +500,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
       const at = isProgressPinnedToBottom(region);
       pinned.current = at;
       setAtBottom(at);
+      setAtTop(isProgressAtTop(region));
     };
     region.addEventListener("scroll", onScroll, { passive: true });
     return () => region.removeEventListener("scroll", onScroll);
@@ -429,7 +512,10 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   }, [snapshot, visibleCount, streamed, shownEchoes.length, scrollRef]);
   useLayoutEffect(() => {
     const region = scrollRef.current;
-    if (region) setAtBottom(isProgressPinnedToBottom(region));
+    if (region) {
+      setAtBottom(isProgressPinnedToBottom(region));
+      setAtTop(isProgressAtTop(region));
+    }
   }, [snapshot, visibleCount, foldVersion, scrollRef]);
   useLayoutEffect(() => {
     // A fold click is not a scroll: measure the position the toggle left
@@ -442,31 +528,69 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     const at = isProgressPinnedToBottom(region);
     pinned.current = at;
     setAtBottom(at);
+    setAtTop(isProgressAtTop(region));
   }, [foldVersion, scrollRef]);
-  // One tool card's detail, read when that card is expanded:
-  // a call already loading or loaded is never asked again; an unavailable one
-  // is asked again on its next expansion. An answer for another selection
-  // writes nothing.
+  // One tool card's detail, read when that card is expanded: a read in
+  // flight or a settled result is never asked again (detailAsk — the mark
+  // is added before the fetch and cleared only in its answer, so the poll
+  // skips while a read is pending); an unavailable one is asked again on
+  // its next expansion, and a resultless one is re-read by the poll while
+  // its card stays expanded — keeping the held detail on screen (never a
+  // Loading flash, review r1#1) until the answer changes it. Every read
+  // carries its id's next sequence number and an answer of a read a later
+  // one replaced is dropped (review r2#1: a step switch resets the detail
+  // without unmounting it, so a re-expanded card can read again while an
+  // orphaned answer is still on its way — the older answer must never
+  // overwrite the newer result). An answer for another selection writes
+  // nothing; a repeat answer writes nothing either.
   const loadDetail = useCallback((id: string) => {
     const held = detailsRef.current.get(id);
-    if (!wi || (held && held.status !== "unavailable")) return;
+    const ask = detailAsk(held, inFlight.current.has(id));
+    if (!wi || ask === "skip") return;
     const asked = wi;
+    // the mark set this read captured: a reset replaces inFlight.current,
+    // and an answer of a read the reset replaced must clear only its own
+    // set — never a newer read's mark (review r3#1)
+    const marks = inFlight.current;
+    marks.add(id);
+    const seq = (readSeq.current.get(id) ?? 0) + 1;
+    readSeq.current.set(id, seq);
     const settle = (state: PolyforgeProgressToolDetailState) => {
       if (selection.current !== asked) return;
+      if (readSeq.current.get(id) !== seq) return;  // a later read replaced this one
+      const heldNow = detailsRef.current.get(id);
+      if (heldNow !== undefined && sameProgressToolDetail(heldNow, state)) return;
       setDetails((current) => new Map(current).set(id, state));
       setFoldVersion((current) => current + 1);
     };
-    settle({ status: "loading" });
-    void fetchProgressToolDetail(asked, id, profile).then(settle);
+    if (ask === "loading") settle({ status: "loading" });
+    void fetchProgressToolDetail(asked, id, profile).then((state) => {
+      marks.delete(id);
+      settle(state);
+    });
   }, [wi, profile]);
   // A tool card's expand/collapse is a fold like a block's: it
   // and its detail settling re-measure through foldVersion, so an expansion
   // that leaves the view off the bottom unpins (↓ Latest, no pull on the next
   // poll) and a collapse at the bottom stays pinned.
   const toggleTool = useCallback((id: string, open: boolean) => {
-    if (open) loadDetail(id);
+    if (open) {
+      openTools.current.add(id);
+      loadDetail(id);
+    } else {
+      openTools.current.delete(id);
+    }
     setFoldVersion((current) => current + 1);
   }, [loadDetail]);
+  // polyforge#2: every poll re-reads the expanded cards whose detail still
+  // has no result (each poll's snapshot is a new object, so this runs on the
+  // 2 s cadence while the job runs — no timer of its own; a subagent's
+  // lines are in the set too, review r1#2).
+  useEffect(() => {
+    if (!wi) return;
+    const lineIds = progressLineIds(snapshot?.lines ?? EMPTY_PROGRESS_LINES);
+    for (const id of rereadToolIds(detailsRef.current, openTools.current, lineIds)) loadDetail(id);
+  }, [wi, snapshot, loadDetail]);
   const message = !wi || snapshot?.available === false ? t("polyforge.progress.unavailable")
     : !snapshot ? t("polyforge.loading")
       : snapshot.lines.length === 0 ? (emptyMessage ?? t("polyforge.progress.empty")) : null;
@@ -487,6 +611,15 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     if (region) region.scrollTop = region.scrollHeight;
     pinned.current = true;
     setAtBottom(true);
+    setAtTop(region ? isProgressAtTop(region) : false);
+  };
+  // polyforge#31: the up button's one smooth scroll to the very top. The
+  // passive scroll listener keeps atBottom/atTop as the animation settles —
+  // no optimistic state here, and the follow only ever resumes through
+  // jumpToLatest.
+  const jumpToTop = () => {
+    const region = scrollRef.current;
+    if (region) region.scrollTo({ top: 0, behavior: "smooth" });
   };
   // a subagent entry's expand/collapse is a fold too; a
   // subagent is live only inside a running spawn block (one still marked
@@ -628,16 +761,40 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
               : echo.ack.disposition === "resume" ? t("polyforge.chat.echo.resume")
                 : echo.ack.disposition === "wake" ? t("polyforge.chat.echo.wake")
                   : t("polyforge.chat.echo.pending")))}
-      {!atBottom && (
-        <div data-pf-detail-latest="" style={{ position: "sticky", bottom: 8, alignSelf: "flex-end", width: 0, height: 0, marginTop: -2, zIndex: 1 }}>
+      {/* polyforge#31: the two jump buttons, stacked over the region's bottom,
+          horizontally centered — the same chat-scroll-to-bottom style the
+          interactive session uses, no pill and no second style. Each rides a
+          zero-height sticky anchor (overlay, no in-flow height): the up button
+          one button-height above the latest (8 + 32 + 4 = 44), shown while the
+          region is scrolled away from its top; the latest while it is away
+          from its bottom. */}
+      {!atTop && (
+        <div data-pf-detail-top="" style={{ position: "sticky", bottom: 44, alignSelf: "stretch", height: 0, marginTop: -4, zIndex: 1, display: "flex", justifyContent: "center", alignItems: "flex-end", pointerEvents: "none" }}>
           <button
             type="button"
+            className="chat-scroll-to-bottom is-visible"
+            onClick={jumpToTop}
+            title={t("polyforge.progress.top")}
+            aria-label={t("polyforge.progress.top")}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 19V5M5 12l7-7 7 7" />
+            </svg>
+          </button>
+        </div>
+      )}
+      {!atBottom && (
+        <div data-pf-detail-latest="" style={{ position: "sticky", bottom: 8, alignSelf: "stretch", height: 0, marginTop: -4, zIndex: 1, display: "flex", justifyContent: "center", alignItems: "flex-end", pointerEvents: "none" }}>
+          <button
+            type="button"
+            className="chat-scroll-to-bottom is-visible"
             onClick={jumpToLatest}
             title={t("polyforge.progress.latest")}
             aria-label={t("polyforge.progress.latest")}
-            style={{ position: "absolute", right: 0, bottom: 0, whiteSpace: "nowrap", padding: "3px 8px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text)", fontSize: 11, lineHeight: "16px", cursor: "pointer", boxShadow: "0 1px 4px rgba(0,0,0,0.25)" }}
           >
-            {t("polyforge.progress.latest")}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14M5 12l7 7 7-7" />
+            </svg>
           </button>
         </div>
       )}
@@ -1037,6 +1194,8 @@ const WORK_TAB_ICONS = {
   tasks: workTabIcon(<><rect x="4" y="4" width="16" height="16" rx="2" /><path d="m9 12 2 2 4-4" /></>),
   // 工单列表: a bulleted list.
   items: workTabIcon(<><path d="M9 6h11" /><path d="M9 12h11" /><path d="M9 18h11" /><path d="M4 6h.01" /><path d="M4 12h.01" /><path d="M4 18h.01" /></>),
+  // 项目 (polyforge#30): a folder of projects.
+  projects: workTabIcon(<><path d="M4 5a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /><path d="M4 9h16" /></>),
   // 待集成: branches merging into one line.
   integrate: workTabIcon(<><circle cx="6" cy="5" r="2" /><circle cx="18" cy="5" r="2" /><circle cx="12" cy="19" r="2" /><path d="M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7" /><path d="M12 12v5" /></>),
 } as const;
@@ -1507,6 +1666,12 @@ export function PolyforgePanel({
                 // change of queue.running or the terminal-job count while
                 // mounted (null without a snapshot); none elsewhere.
                 <PolyforgeWorkItems itemCountKey={itemCountKey} onRunningCount={onWorkItemsRunningChange} renderDetail={renderWorkDetail} onDetailOpenChange={setSubDetailOpen} />
+              ) : workTab === "projects" ? (
+                // one read per opening (polyforge#30): the mapped projects
+                // with their global states; the view hides the deactivated
+                // ones by default and restores in place through the route's
+                // one write.
+                <PolyforgeProjects />
               ) : workTab === "integrate" ? (
                 // its own read per opening, ↻, accepted answer
                 // and status change of a listed batch's job row
@@ -1602,7 +1767,7 @@ export function PolyforgePanel({
                 ? { flex: "0 0 40px", width: 40, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border)", overflowY: "auto" }
                 : { flex: "0 0 72px", width: 72, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border)", overflowY: "auto" }}
             >
-              {(["jobs", "tasks", "items", "integrate"] as const).map((tab) => {
+              {(["jobs", "tasks", "items", "projects", "integrate"] as const).map((tab) => {
                 const active = workTab === tab;
                 // The running count rides the existing status snapshot (no
                 // timer of its own): queue.running for Jobs, tasks.running
@@ -1611,9 +1776,10 @@ export function PolyforgePanel({
                 // the last list read's running count, absent before the first.
                 // 待集成 shows no badge.
                 const count = tab === "items" ? workItemsRunning
+                  : tab === "projects" ? null
                   : opsStatus ? (tab === "jobs" ? opsStatus.queue.running : (opsStatus.tasks?.running ?? 0)) : null;
                 const label = tab === "jobs" ? t("polyforge.messages.jobsTab") : tab === "tasks" ? t("polyforge.tasks.tab")
-                  : tab === "items" ? t("polyforge.work.itemsTab") : t("polyforge.work.integrateTab");
+                  : tab === "items" ? t("polyforge.work.itemsTab") : tab === "projects" ? t("polyforge.work.projectsTab") : t("polyforge.work.integrateTab");
                 return (
                   <button key={tab} type="button" role="tab" aria-selected={active}
                     onClick={() => onWorkTab(tab)}
@@ -1632,7 +1798,7 @@ export function PolyforgePanel({
                       color: active ? "var(--text)" : "var(--text-muted)", cursor: "pointer", fontSize: 12,
                     }}>
                     {isMobile ? WORK_TAB_ICONS[tab] : <span>{label}</span>}
-                    {count !== null && tab !== "integrate" && (
+                    {count !== null && (tab === "jobs" || tab === "tasks" || tab === "items") && (
                       <span
                         data-pf-work-badge={tab}
                         aria-label={t(WORK_TAB_BADGES[tab], { count })}

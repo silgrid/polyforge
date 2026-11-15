@@ -42,7 +42,9 @@ it starts one.
 
 Without ``--capsule`` the gate judges the clone at the working directory
 (the release's and an operator's run): progress on stdout, the green tag's
-name on the last stdout line (both on stderr with ``--json``). Exit 0 pass,
+name on the last stdout line (both on stderr with ``--json``); inside a
+step the same progress lines are also appended to the step's progress file
+(``pfstep.progress``). Exit 0 pass,
 1 a command failed, 2 not judged or the invocation unusable, 3 the gate
 passed but its green tag was not written. ``--plan-only`` runs no command
 of the plan: it prints the plan the gate would run, its digest and the
@@ -114,6 +116,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pfstep  # noqa: E402
 from pfstep import container, duration, git, gostr, hub, jsonout, proc, result, runner, stepenv  # noqa: E402
+from pfstep import progress as step_progress  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
@@ -1907,7 +1910,7 @@ def main(
     inv.as_json = bool(a.json)
 
     def say(msg: str) -> None:
-        print("%s: %s" % (COMMAND, msg), file=err)
+        step_progress.emit("%s: %s" % (COMMAND, msg), err, env)
 
     try:
         code = run(a, env, inv, runtime)
@@ -1952,7 +1955,7 @@ def run(a: argparse.Namespace, env: Dict[str, str], inv: Invocation, runtime: Op
     progress = inv.stderr if (a.json or a.plan_only) else inv.stdout
 
     def say(msg: str) -> None:
-        print(msg, file=progress, flush=True)
+        step_progress.emit(msg, progress, env)
 
     until = time.time() + window / duration.SECOND
     # one option set for every container of the invocation: the gate's own

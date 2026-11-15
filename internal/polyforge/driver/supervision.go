@@ -429,28 +429,41 @@ var textClasses = []struct {
 	{allowanceText, FailExitModel, false},
 	// rate limit (D7): ONLY transient throttling. Another model would be
 	// throttled just the same, so these never advance the candidate
-	// pointer. Allowance problems are the row above.
-	{regexp.MustCompile(`(?i)(\b429\b|rate.?limit|too many requests|overloaded|` +
+	// pointer. Allowance problems are the row above. "overload" is a
+	// substring: it also carries "overloaded"/"overloading" and the
+	// gateways' "due to server overload. Please retry later." text
+	// (polyforge#34).
+	{regexp.MustCompile(`(?i)(\b429\b|rate.?limit|too many requests|overload|` +
 		`并发[^，。；,.;\n]{0,6}(过高|过大|过多|超限|超出|超过)|请求(过于|太)?频繁|请求频率|请求过多|并发超额|限流|速率限制|繁忙|负载过高)`),
 		FailRateLimited, false},
 	// upstream transient: ONLY a corrupted upstream return or a drop of the
 	// upstream stream — malformed/incomplete/truncated tool-call arguments
 	// or JSON, an empty (0-token) reply, a reset/refused/closed/EOF upstream
-	// connection or an upstream stream that ended before completion
-	// (polyforge#202), or a gateway reply naming an upstream error AND
-	// inviting a retry ("400: {"message":"The model request failed due to
-	// an upstream error. Please retry.",...}", polyforge#227 — keyed on the
-	// conjunction, never on the 4xx status or invalid_request_error). The
-	// stream-drop verbs need an upstream/provider/stream/connection
-	// subject: a bare "the model ended the turn" stays model-class. A bare
-	// "invalid ..." (tool name, request, argument), a plain 4xx, an
-	// upstream error without a retry invitation (or the reverse), a
-	// context-length error or a local I/O error is NOT here.
+	// connection or an upstream stream that ended or was interrupted
+	// before completion (polyforge#202, the interrupted verb polyforge#34),
+	// or a gateway reply naming an upstream error AND inviting a retry
+	// ("400: {"message":"The model request failed due to an upstream error.
+	// Please retry.",...}", polyforge#227 — keyed on the conjunction, never
+	// on the 4xx status or invalid_request_error), or a gateway-layer
+	// transient of polyforge#34: a gateway naming itself or its upstream
+	// "temporarily unavailable" (the upstream/gateway subject keeps "The
+	// model is temporarily unavailable" model-class), a gateway with "no
+	// available accounts" (its upstream pool is dry), and the upstream
+	// model reporting an error after output had started (the turn's
+	// delivered output is partial). The stream-drop verbs need an
+	// upstream/provider/stream/connection subject: a bare "the model ended
+	// the turn" stays model-class. A bare "invalid ..." (tool name,
+	// request, argument), a plain 4xx, an upstream error without a retry
+	// invitation (or the reverse), a context-length error or a local I/O
+	// error is NOT here.
 	{regexp.MustCompile(`(?i)(` +
 		`tool\W{0,3}calls?\W.{0,60}\b(incomplete|truncated|malformed|unterminated)\b|` +
 		`\b(incomplete|truncated|malformed|unterminated)\W{1,3}(json|arguments|tool\W{0,3}calls?)\b|` +
 		`\bempty\W(response|reply|completion)\b|\b(0|zero)\W?(output\W)?tokens?\b|` +
-		`\b(upstream|provider|stream|connection)\W.{0,30}\b(reset|refused|dropped|closed|aborted|ended|eof)\b|` +
+		`\b(upstream|provider|stream|connection)\W.{0,30}\b(reset|refused|dropped|closed|aborted|ended|interrupted|eof)\b|` +
+		`\b(upstream|gateway)\W.{0,40}\btemporarily\W+unavailable\b|` +
+		`\bno\W+available\W+accounts\b|` +
+		`\bupstream\W+model\W+reported\W+an\W+error\b|` +
 		`\bupstream\W.{0,40}\bplease\W+retry\b)`),
 		FailUpstreamTransient, true},
 	// model name (model-class, F4): a pinned model that cannot resolve must
@@ -522,11 +535,12 @@ func classifyWaitFailure(err error) (cause string, exitCode int, detail string) 
 // text (allowanceText) or a model name that does not resolve
 // (unresolvedModel) is archived exit_model_class, as on an exited
 // process — it switches the candidate at once. Any other text — a gateway
-// 5xx, a "model ... temporarily unavailable" or "invalid response" outage,
-// an unnamed provider error — keeps model_error: model-class, but its
-// first death on a candidate resumes the same candidate
-// (ModelErrorRotationThreshold). The split lands in the archived cause,
-// so the pointer never re-reads the text.
+// 5xx naming no recognized gateway-layer transient (polyforge#34), a
+// "model ... temporarily unavailable" or "invalid response" outage,
+// an unnamed provider error — keeps model_error: model-class, and every
+// model-class death switches to the next candidate at once (design
+// #483 §7, 约定 4: no same-candidate resume on a first death). The split
+// lands in the archived cause, so the pointer never re-reads the text.
 func verdictCause(v supervise.StepDead) string {
 	if v.Cause != supervise.CauseModelError || strings.TrimSpace(v.TurnError) == "" {
 		return string(v.Cause)

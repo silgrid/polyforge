@@ -46,10 +46,14 @@ func (s *Server) webProject(idn *identity, name string) (string, bool, error) {
 }
 
 // webContextProjects answers the caller's readable projects with their
-// ids and names, sorted by name (the picker and the /web/api/context
-// answer): every project for an unscoped admin (readable == nil), the
-// named set otherwise, nothing for an empty readable set.
-func (s *Server) webContextProjects(idn *identity) ([]webContextProject, error) {
+// ids, names, statuses and the caller's restore right, sorted by name
+// (the picker and the /web/api/context answer): every project for an
+// unscoped admin (readable == nil), the named set otherwise, nothing for
+// an empty readable set. A deactivated project is left out unless
+// includeDeactivated is set (polyforge#30: the default lists hide it);
+// the restore right follows the core rule — a global admin or one of
+// the project's maintainers.
+func (s *Server) webContextProjects(idn *identity, includeDeactivated bool) ([]webContextProject, error) {
 	readable, err := s.readableProjects(idn)
 	if err != nil {
 		return nil, err
@@ -57,21 +61,29 @@ func (s *Server) webContextProjects(idn *identity) ([]webContextProject, error) 
 	if readable != nil && len(readable) == 0 {
 		return []webContextProject{}, nil
 	}
+	statusFilter := ""
+	if !includeDeactivated {
+		statusFilter = " AND status='active'"
+	}
 	var (
 		rows *sql.Rows
 		qerr error
 	)
 	if readable == nil {
-		rows, qerr = s.DB.Query(`SELECT id, name FROM projects ORDER BY name`)
+		rows, qerr = s.DB.Query(`SELECT id, name, status,
+			EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=projects.id AND pm.user_id=?1 AND pm.role='maintainer')
+			FROM projects WHERE 1=1`+statusFilter+` ORDER BY name`, idn.UserID)
 	} else {
 		ph := make([]string, len(readable))
-		args := make([]any, len(readable))
+		args := make([]any, 0, len(readable)+1)
+		args = append(args, idn.UserID)
 		for i, p := range readable {
-			ph[i] = "?" + strconv.Itoa(i+1)
-			args[i] = p
+			ph[i] = "?" + strconv.Itoa(i+2)
+			args = append(args, p)
 		}
-		rows, qerr = s.DB.Query(`SELECT id, name FROM projects WHERE id IN (`+
-			strings.Join(ph, ",")+`) ORDER BY name`, args...)
+		rows, qerr = s.DB.Query(`SELECT id, name, status,
+			EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=projects.id AND pm.user_id=?1 AND pm.role='maintainer')
+			FROM projects WHERE id IN (`+strings.Join(ph, ",")+`)`+statusFilter+` ORDER BY name`, args...)
 	}
 	if qerr != nil {
 		return nil, qerr
@@ -80,8 +92,11 @@ func (s *Server) webContextProjects(idn *identity) ([]webContextProject, error) 
 	out := []webContextProject{}
 	for rows.Next() {
 		var p webContextProject
-		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Status, &p.CanRestore); err != nil {
 			return nil, err
+		}
+		if idn.Role == "admin" {
+			p.CanRestore = true
 		}
 		out = append(out, p)
 	}

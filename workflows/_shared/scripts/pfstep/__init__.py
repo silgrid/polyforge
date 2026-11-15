@@ -18,6 +18,10 @@ every script needs the same way:
 - ``atomic``: temp file + fsync + rename + directory fsync;
 - ``jsonout``: JSON in the order the value was built, never sorted;
 - ``stepenv``: the step environment the daemon starts every step with;
+- ``progress``: the step's progress file — every progress line a script
+  says is appended to ``runtime-state/progress/<step>.log`` of the capsule
+  as it is printed, so a reader watching the capsule follows a command
+  that has not ended (outside a step nothing is written);
 - ``deadline``: a script's deadline from the step's tool window;
 - ``duration``: Go duration strings, parsed and formatted as Go does;
 - ``proc``: a command in its own process group, killed whole;

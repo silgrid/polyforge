@@ -476,9 +476,16 @@ func (c *Client) CreateProject(req ProjectCreateRequest) (json.RawMessage, error
 	return c.raw("POST", "/api/v1/projects", req)
 }
 
-// ListProjects lists visible projects (M3).
-func (c *Client) ListProjects() (json.RawMessage, error) {
-	return c.raw("GET", "/api/v1/projects", nil)
+// ListProjects lists projects (M3). The default view carries the
+// active line only; includeDeactivated adds the deactivated projects
+// (polyforge#30's lists-hide rule; a caller probing reachability passes
+// false and reads only whether the server answered).
+func (c *Client) ListProjects(includeDeactivated bool) (json.RawMessage, error) {
+	path := "/api/v1/projects"
+	if includeDeactivated {
+		path += "?include_deactivated=1"
+	}
+	return c.raw("GET", path, nil)
 }
 
 // GetProject reads one project by id or name (M3).
@@ -500,6 +507,22 @@ func (c *Client) DeleteProject(idOrName string, dryRun bool) (json.RawMessage, e
 		path += "?dry_run=1"
 	}
 	return c.raw("DELETE", path, nil)
+}
+
+// DeactivateProject moves a project to the deactivated state
+// (polyforge#30, POST /api/v1/projects/{id}/deactivate): from then on
+// the server refuses every write that does work on the project while
+// its reads keep answering; nothing is deleted. The answer is the
+// whole project (status deactivated).
+func (c *Client) DeactivateProject(idOrName string) (json.RawMessage, error) {
+	return c.raw("POST", "/api/v1/projects/"+url.PathEscape(idOrName)+"/deactivate", nil)
+}
+
+// RestoreProject moves a deactivated project back to active
+// (POST /api/v1/projects/{id}/restore): every refused write is accepted
+// again immediately.
+func (c *Client) RestoreProject(idOrName string) (json.RawMessage, error) {
+	return c.raw("POST", "/api/v1/projects/"+url.PathEscape(idOrName)+"/restore", nil)
 }
 
 // Backup triggers the on-demand snapshot (M4).

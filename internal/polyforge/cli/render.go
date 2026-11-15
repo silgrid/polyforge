@@ -689,11 +689,17 @@ func renderMachines(w io.Writer, list *aihubclient.MachinesList) {
 	printTable(w, []string{"ID", "ROLE", "LAUNCHER", "MODE", "RUNTIME", "LIVE WI", "HEARTBEAT AGE", "LAST HEARTBEAT", "STATE"}, rows)
 }
 
-// renderProjects renders the M3 list.
+// renderProjects renders the M3 list; a deactivated project carries
+// its marker beside the name (polyforge#30) so the --show-deactivated
+// view keeps the default view's column shape.
 func renderProjects(w io.Writer, items []api.Project) {
 	rows := make([][]string, 0, len(items))
 	for _, it := range items {
-		rows = append(rows, []string{it.ID, it.Name})
+		name := it.Name
+		if it.Status == api.ProjectStatusDeactivated {
+			name += "  (deactivated)"
+		}
+		rows = append(rows, []string{it.ID, name})
 	}
 	printTable(w, []string{"ID", "NAME"}, rows)
 }

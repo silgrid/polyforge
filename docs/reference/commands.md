@@ -187,6 +187,22 @@ has no read API — inspect it with sqlite directly. On a terminal the CLI
 prompts for the project name after a dry-run preview; without `--yes` on a
 pipe it refuses outright.
 
+`pf projects deactivate <id-or-name>` and `pf projects restore <id-or-name>`
+(`POST /api/v1/projects/{id}/deactivate|restore`) move a project's global
+state: deactivated, the whole project is read-only on the server (creating or
+modifying work items, comments, submits and claims — the daemon's auto-claim
+included — resume execution, dependency writes and memory writes answer
+`CORE-403 PROJECT_DEACTIVATED`; reads keep answering under the existing
+permissions) and every default list hides it. Neither door deletes anything;
+only `pf projects delete` below removes data. Deactivation is refused
+(`CORE-409 NON_TERMINAL_WORK_ITEMS`, every blocker listed) while the project
+still has queued, running, paused or blocked work items — settle the work
+first. Both doors need a project maintainer or an admin; the console's
+project picker and Pi Web's Work › 项目 view restore in place from the
+marked row. `pf projects list [--show-deactivated]` lists the active line by
+default; the flag adds the deactivated projects with their marker.
+
+
 Human moves: continue = `pf resume <id>` (a paused or blocked
 work item), abandon = `pf cancel <id>` (queued, paused or blocked); to send
 the work back to an earlier step or waive a gate's FAIL, tell the step's
@@ -347,7 +363,13 @@ command's private `TMPDIR` is named, with its length in bytes, under its
 repo's plan in `report-mechanical.md`, and carried as `tmp_dir` in
 `result.json`'s `repos[].commands[]` and in the result file's
 `details.checks[]`, to check the path and length behind the `<tmp>` the
-failure output shows (failure signatures keep `<tmp>`). Failing tests are re-run at HEAD with
+failure output shows (failure signatures keep `<tmp>`). Every progress
+line is said on stderr and, inside a step, appended to the step's progress
+file (`pfstep.progress`, docs/reference/workflow-contract.md "Scripts";
+Pi Web's progress card reads it while a command has not ended): each plan
+command opens with `[i/n] <name> (<phase>): <cmd>` and closes with
+`PASS (<duration>)`, `FAIL - exit <n> (<duration>), log <path>`,
+`SKIP - <why>` or `not started - <why>` — gate.py's format. Failing tests are re-run at HEAD with
 the command's own flags (a pass there is recorded `flaky n/m`); a failure
 that exists on the base and fails there the same way on every base run, in
 a throwaway worktree outside the capsule, is pre-existing. A command whose
@@ -1392,7 +1414,14 @@ problem: the next candidate at once, and none left parks the work item
 the same session resumes with the reminder to end with a hand-off, and
 the third in a row parks. `rate_limited` and `upstream_transient` retry
 the same model after a backoff of 1 s, doubling to at most 3 min, never
-counted; `tool_hung` resumes the same session once with Y doubled (a
+counted. The transient texts the classification recognizes include the
+throttles (429 / rate limit / `overloaded` / the gateways' `server
+overload. Please retry later.` and concurrency texts) and the upstream
+transients: a response stream that ended or was interrupted before
+completion, an upstream/gateway named `temporarily unavailable`, a
+gateway's `no available accounts`, and the upstream model reporting an
+error after output had started (the output so far is partial);
+`tool_hung` resumes the same session once with Y doubled (a
 second timeout parks); any other exit (`exit_other`, `exit_host_class`,
 `harness_silent`) resumes once, and the second in a row parks. A
 restarted daemon serves only what is left of a backoff, and `pf ops

@@ -307,7 +307,13 @@ expression is `re.ASCII`, so `\b`, `\d` and `\w` are ASCII as in Go's RE2
 does the same way: the result file (`result`) and the atomic write under
 it (`atomic`: a temp file, fsync, rename, the directory's fsync), JSON in
 the order it was built (`jsonout`), the step environment and its defaults
-(`stepenv`), the deadline (`deadline`), Go duration strings (`duration`),
+(`stepenv`), the step's progress file (`progress`: every progress line a
+script says — `Invocation.say`, `gate.py`'s and `verify.py`'s own say —
+appended to `runtime-state/progress/<step>.log` of the capsule as it is
+printed, one line per say, so a reader watching the capsule — Pi Web's
+progress card — follows a command that has not ended; outside a step
+nothing is written, and a write that fails is dropped), the deadline
+(`deadline`), Go duration strings (`duration`),
 one command in its own process group (`proc`: the group killed whole at
 the timeout, exit 124; a signal death 128+n), one hardened git call
 (`git`: `-c core.fsmonitor=false -c core.hooksPath=/dev/null

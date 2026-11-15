@@ -91,15 +91,30 @@ const (
 	PriorityLow    = "low"
 )
 
+// Project statuses (polyforge#30): the project's global state. A
+// deactivated project is read-only on the server and hidden from the
+// default lists; restore brings it back. Only the hard delete removes
+// data.
+const (
+	ProjectStatusActive      = "active"
+	ProjectStatusDeactivated = "deactivated"
+)
+
 // Project (reference.md §4.1).
 type Project struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Repos       []ProjectRepo   `json:"repos"`
-	Members     []ProjectMember `json:"members"`
-	CreatedAt   string          `json:"created_at"`
-	UpdatedAt   string          `json:"updated_at"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// Status is the project's global state: "active" (the only state a
+	// pre-v0.2.1 database ever had) or "deactivated" (polyforge#30: the
+	// whole project is read-only on the server and hidden from the default
+	// lists; restore brings it back — the hard delete stays the only way
+	// to lose data).
+	Status    string          `json:"status"`
+	Repos     []ProjectRepo   `json:"repos"`
+	Members   []ProjectMember `json:"members"`
+	CreatedAt string          `json:"created_at"`
+	UpdatedAt string          `json:"updated_at"`
 }
 
 type ProjectRepo struct {

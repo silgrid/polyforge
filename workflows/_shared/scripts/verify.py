@@ -13,6 +13,12 @@ the diff reaches (a subdirectory with its own tracked
 the whole plan runs, never stopping at the first failure; a failing unit is
 re-run once at HEAD and, still red, run on the baseline; a command whose
 every failure was explained is re-run whole (or its suite proven complete).
+Every progress line is said on stderr and, inside a step, appended to the
+step's progress file (``pfstep.progress``): each plan command opens with
+``[i/n] <name> (<phase>): <cmd>`` and closes with ``PASS (<duration>)``,
+``FAIL - exit <n> (<duration>), log <path>``, ``SKIP - <why>`` or ``not
+started - <why>`` (gate.py's format), so a reader watching the capsule
+follows a command that has not ended.
 
 Where a repo's bar runs is the repo's: one whose HEAD carries
 ``.polyforge/Dockerfile.verify`` runs its engine and bar in a verification
@@ -81,6 +87,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pfstep  # noqa: E402
 from pfstep import container, duration, git, gostr, jsonout, result, runner, stepenv, tmpdir  # noqa: E402
+from pfstep import progress  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
@@ -343,6 +350,21 @@ def read_go_harness(repo_dir: str) -> str:
 
 
 # ---- the run ---------------------------------------------------------------
+
+
+def bar_end_line(at: str, cr: CmdRun) -> str:
+    """The end line of one bar command, gate.py's format: PASS with its
+    duration, FAIL with its exit code, duration and log, SKIP / not started
+    with why (the start line already named the command)."""
+    if cr.skipped:
+        return "%s SKIP - %s" % (at, cr.skipped)
+    if cr.not_started:
+        return "%s not started - %s" % (at, cr.not_started)
+    took = duration.format((cr.dur_ms * duration.MILLISECOND + duration.SECOND // 2) // duration.SECOND * duration.SECOND)
+    if cr.exit == 0:
+        return "%s PASS (%s)" % (at, took)
+    what = "killed at its timeout" if cr.timed_out else "exit %d" % cr.exit
+    return "%s FAIL - %s (%s), log %s" % (at, what, took, cr.log_path)
 
 
 class Verification:
@@ -672,15 +694,19 @@ class Verification:
         rr.untracked_before = self.untracked_test_files(rr)
         if not (rr.touched and rr.plan is not None and rr.plan.planned()):
             return
-        for c in rr.plan.commands:
+        for i, c in enumerate(rr.plan.commands):
+            at = "[%d/%d] %s" % (i + 1, len(rr.plan.commands), c.name)
             cr = CmdRun(repo=rr.name, check=rr.name + ":" + c.name, name=c.name, phase=c.phase, cmd=c.cmd,
                         origin=ORIGIN_PLAN, timeout=self.timeout_of(c), report=c.report, rerun_tmpl=c.rerun,
                         dir=c.dir, inner=c.inner)
+            self.say("%s (%s): %s" % (at, c.phase, c.cmd))
             why = self.unmet(c, rr)
             if why:
                 cr.skipped = why
+                self.say("%s SKIP - %s" % (at, why))
             else:
                 self.run_command(rr, cr)
+                self.say(bar_end_line(at, cr))
             rr.runs.append(cr)
 
     def unmet(self, c: EngineCommand, rr: RepoRun) -> str:
@@ -1685,7 +1711,7 @@ def main(
         return int(e.code or 0)
 
     def say(msg: str) -> None:
-        print("%s: %s" % (COMMAND, msg), file=sys.stderr)
+        progress.emit("%s: %s" % (COMMAND, msg), sys.stderr, env)
 
     try:
         code = run(a, env, res, say, runtime)

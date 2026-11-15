@@ -65,13 +65,20 @@ found it (publish lists it in the PR body).
   on the old code; an e2e scenario waiting by a fixed delay instead of polling (a bounded
   poll deadline is fine) or asserting before the awaited state settles; a suite the
   verification-scope engine discovers (by default or `suite_glob=`) whose `carries:` header
-  is missing or does not name the paths it exercises.
+  is missing or does not name the paths it exercises; a unit that misses or contradicts
+  its test-quality record — the behaviour its test observes, why its red is expected, the
+  change it catches — or a test that only asserts that some source text exists (the bar
+  below names the one exemption); a test that asserts an asynchronously settling state on
+  one read right after the action instead of a bounded poll for it (the bar below, its
+  settle duty).
 - **`guarantee`** — a feature removed or a guarantee weakened without an owner ruling, a
   manual-gate bypass, a spec-forced invention, user-visible wording that contradicts the
   behaviour; a deviation from the ticket, or an acceptance list the build wrote itself,
   with no owner reply on record, or a reading of the owner's reply its words do not
   support (develop: the build's 关键决定和理由 against the owner's quoted replies) — a
   decision the build took for the owner.
+
+{{test_quality}}
 
 {{review_security}}
 

@@ -26,7 +26,7 @@
 //
 //   node e2e/polyforge.mjs
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -58,8 +58,19 @@ const WI112 = "wi_E2Edddd0004";
 const WIP24A = "wi_E2Eeeee0005"; const SLUGP24A = "pi#24";
 const WIP24B = "wi_E2Eeeee0006"; const SLUGP24B = "pi#240";
 // polyforge#25 — the step-override fixtures: a running ticket whose lane
-// declares its tail step skippable.
-const WIP25 = "wi_E2Eeeee0007"; const SLUGP25 = "pi#25";
+// declares its tail step skippable. (sync 合并：夹具 id 从 wi_E2Eeeee0007 移到
+// wi_E2Eeeee0009 —— main 上 #31/#2 的夹具占用了 0007/0008，两边都要保留。)
+const WIP25 = "wi_E2Eeeee0009"; const SLUGP25 = "pi#25";
+// polyforge#31 — scroll-jump buttons fixture: one RUNNING ticket whose
+// event-only stream is long (one step_started + 258 answered lines), so the
+// detail's one scroll region is tall enough to park a reader mid-progress; a
+// later appended intent line proves the latest click restored the follow.
+const WIP31 = "wi_E2Eeeee0007"; const SLUG31 = "polyforge#31";
+// polyforge#2 r2#1 (owner ruling 2026-11-14) — one RUNNING ticket whose single
+// pi tool call has no result yet: the expanded card's detail read is the
+// unit under test (at most one read in flight per card, an answer older
+// than the displayed one dropped).
+const WIP2R3 = "wi_E2Eeeee0008"; const SLUG2R3 = "polyforge#2";
 const MODEL112 = "example-gateway/model-a-extended-thinking-very-long-e2e-suffix-abcdef0123456789abcdef0123456789";
 const SHORT_MODEL112 = "pi:glm-5.3-short";
 const FROM112 = "pi:glm-e2e-old-777";
@@ -89,6 +100,8 @@ const JOBS = [
   job(WIP24A, SLUGP24A, "completed", 2, 90, 80, "pi:glm-e2e", "u_e2e"),
   job(WIP24B, SLUGP24B, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
   job(WIP25, SLUGP25, "running", 1, 30, 5, "pi:glm-e2e", "u_e2e"),
+  job(WIP31, SLUG31, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
+  job(WIP2R3, SLUG2R3, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
 ];
 // owner-intended change: the selected job's progress read looks the wi up in the daemon's own job
 // record; a throwaway data root lists every fixture job (no capsule → 200 `available:false`), as a real
@@ -217,6 +230,27 @@ writeFileSync(join(dataRoot, "events", `wi-${WIP24A}.jsonl`), EVENTS_P24A.map((e
 // P24B is deliberately NOT in the job index (runtime-state below): only its
 // event log answers, terminal line only.
 writeFileSync(join(dataRoot, "events", `wi-${WIP24B}.jsonl`), [{ at: at3(9), kind: "terminal", work_item: WIP24B, body: { status: "completed" }, seq: 9 }].map((event) => JSON.stringify(event)).join("\n") + "\n");
+// ── polyforge#2 r2#1 fixture: the running job's capsule — one pi spawn of
+// step "build" whose transcript holds a toolCall with no result (the
+// running card P2R3A/P2R3B expand). The detail route is intercepted per
+// scenario; the progress route reads these real files.
+const capsule2R3 = join(work, "capsules", WIP2R3);
+mkdirSync(join(capsule2R3, "runtime-state"), { recursive: true });
+mkdirSync(join(capsule2R3, "session"), { recursive: true });
+const p2r3Transcript = join(capsule2R3, "session", "build.jsonl");
+writeFileSync(p2r3Transcript, [
+  { type: "session", id: "s-2r3", timestamp: at3(1) },
+  { type: "message", id: "n-2r3", parentId: null, timestamp: at3(2), message: { role: "assistant", content: [{ type: "text", text: "E2E-P2R3-NARRATION" }] } },
+  { type: "message", id: "tc-2r3", parentId: null, timestamp: at3(3), message: { role: "assistant", content: [{ type: "toolCall", id: "k-2r3", name: "bash", arguments: { command: "npm test" } }] } },
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+writeFileSync(join(capsule2R3, "runtime-state", "spawn-journal.jsonl"), [
+  { at: at3(1), work_item: WIP2R3, step_id: "build", spawn_n: 1, started_at: at3(1), transcript: p2r3Transcript, harness: "pi" },
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+const EVENTS_2R3 = [{ at: at3(1), kind: "step_started", work_item: WIP2R3, body: { step: "build", model: "pi:glm-e2e", spawn_n: 1 }, seq: 1 }];
+writeFileSync(join(dataRoot, "events", `wi-${WIP2R3}.jsonl`), EVENTS_2R3.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_2R3 = { work_item: WIP2R3, slug: SLUG2R3, known: true, job: { status: "running" },
+  execution: { workflow_status: "running", current_step: "build", updated_at: at3(3), steps: { build: { status: "in_progress", started_at: at3(1) }, review: { status: "pending" } }, declared_steps: [{ id: "build" }, { id: "review" }] },
+  events: EVENTS_2R3, last_seq: 1 };
 const WATCH_P24A = { work_item: WIP24A, slug: SLUGP24A, known: true, job: { status: "completed" },
   execution: { workflow_status: "completed", updated_at: at3(9), steps: {
     grill: { status: "done", started_at: "2026-10-18T12:00:00Z" },
@@ -252,12 +286,28 @@ const OVERRIDE_VIEW_P25 = { work_item: WIP25, posture: "running", steps: [
 ] };
 const OVERRIDE_WRITE_P25 = { work_item: WIP25, changed: true, posture: "running", published: true,
   step: { id: "bravo-code", status: "pending", skippable: true } };
+// ── polyforge#31: the long event-only stream (at3 caps at minute 59, so the
+// 259 fixtures run over the whole day: hour = floor((n-1)/60)).
+const atP31 = (n) => `2026-10-18T${String(Math.floor((n - 1) / 60)).padStart(2, "0")}:${String((n - 1) % 60).padStart(2, "0")}:00Z`;
+const evP31 = (n, kind, body) => ({ at: atP31(n), kind, work_item: WIP31, body, seq: n });
+const EVENTS_P31 = [
+  evP31(1, "step_started", { step: "scroll", model: "pi:glm-e2e", spawn_n: 1 }),
+  ...Array.from({ length: 258 }, (_, i) => evP31(2 + i, "answered", { step: "scroll" })),
+];
+writeFileSync(join(dataRoot, "events", `wi-${WIP31}.jsonl`), EVENTS_P31.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_P31 = { work_item: WIP31, slug: SLUG31, known: true, job: { status: "running" },
+  execution: { workflow_status: "running", current_step: "scroll", updated_at: atP31(259), steps: {
+    scroll: { status: "in_progress", started_at: atP31(1) } },
+    declared_steps: [{ id: "scroll" }] },
+  events: [], last_seq: 259 };
 const WATCH_TABLE = (watch112 = WATCH_112) => ({ "pi#108": WATCH_108, wi_E2Eaaaa0001: WATCH_108,
   "pi#109": WATCH_109, wi_E2Ecccc0003: WATCH_109, [SLUG112]: watch112, [WI112]: watch112,
   [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B,
-  [SLUGP25]: WATCH_P25, [WIP25]: WATCH_P25 });
+  [SLUGP25]: WATCH_P25, [WIP25]: WATCH_P25,
+  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31, [SLUG2R3]: WATCH_2R3, [WIP2R3]: WATCH_2R3 });
 writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.filter((j) => j.work_item_id !== WIP24B).map((j) => j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 }
-  : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A } : { work_item_id: j.work_item_id }) }));
+  : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A }
+  : j.work_item_id === WIP2R3 ? { work_item_id: WIP2R3, capsule_dir: capsule2R3 } : { work_item_id: j.work_item_id }) }));
 const stubDir = join(work, "stub-bin");
 mkdirSync(stubDir);
 const stateFile = join(stubDir, "state.json");
@@ -333,6 +383,10 @@ const T = {
   P25A: "P25A: The selected unstarted step offers the model-chain controls and the skippable tail's skip switch (polyforge#25 AC8)",
   P25B: "P25B: A non-skippable unstarted step shows no skip switch, only the waive hint (polyforge#25 AC8)",
   P25C: "P25C: A refused write shows pf's typed words inline; the view's source line names where the chain comes from (polyforge#25 AC8)",
+  P31A: "P31A: Mid-progress both centered jump buttons show; up reaches the top, latest the bottom and restores the follow (AC1 AC2 AC4)",
+  P2R3A: "P2R3A: while a card's detail read is in flight the poll sends no second one; the read cycle settles without a Loading flash",
+  P2R3B: "P2R3B: an answer older than the displayed one is dropped — the first read returns after the second and never overwrites",
+  P2R3C: "P2R3C: a replaced read's answer clears only its own mark — no second read piles up while the newer one is in flight",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1197,11 +1251,210 @@ try {
     setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
   });
 
+  // P31A — polyforge#31 (AC1, AC2, AC4): over a long execution progress the
+  // two jump buttons float stacked at the region's bottom, horizontally
+  // centered, reusing the chat session's chat-scroll-to-bottom style; the up
+  // button smooth-scrolls to the top (and hides there), the latest button
+  // jumps to the bottom (and hides there) and restores the follow, so the
+  // next poll's line keeps the region pinned. Every wait is a bounded poll on
+  // a real condition — never a fixed delay.
+  await checkPage(T.P31A, "scroll jump buttons", {}, async (page) => {
+    const panel = await ensureDetail24(page, SLUG31, WIP31);
+    const scroll = panel.locator("[data-pf-detail-scroll]");
+    const latest = panel.locator("[data-pf-detail-latest]");
+    const top = panel.locator("[data-pf-detail-top]");
+    const atBottom = () => scroll.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 8);
+    await pollUntil(async () => (await panel.locator("[data-pf-progress] [data-pf-progress-kind]").count()) >= 200, "the long progress renders");
+    await pollUntil(atBottom, "the detail opens at its bottom");
+    assert.equal(await latest.count(), 0, "the latest control is hidden at the bottom");
+    assert.equal(await top.count(), 1, "away from the top, the up control shows");
+    // Park mid-progress: both buttons show, centered on their anchors.
+    await scroll.evaluate((el) => { el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) / 2); });
+    await pollUntil(async () => (await latest.count()) === 1 && (await top.count()) === 1, "both jump buttons show mid-progress");
+    const geometry = await panel.evaluate((root) => {
+      const center = (el) => { const r = el.getBoundingClientRect(); return (r.left + r.right) / 2; };
+      const progress = root.querySelector("[data-pf-progress]");
+      const region = root.querySelector("[data-pf-detail-scroll]");
+      const latestAnchor = root.querySelector("[data-pf-detail-latest]");
+      const topAnchor = root.querySelector("[data-pf-detail-top]");
+      const latestBtn = latestAnchor?.querySelector("button");
+      const topBtn = topAnchor?.querySelector("button");
+      const latestBox = latestBtn?.getBoundingClientRect();
+      const topBox = topBtn?.getBoundingClientRect();
+      const latestStyle = latestBtn && getComputedStyle(latestBtn);
+      const topStyle = topBtn && getComputedStyle(topBtn);
+      const regionBox = region && region.getBoundingClientRect();
+      const inside = (box) => Boolean(box && regionBox && box.top >= regionBox.top - 0.5 && box.bottom <= regionBox.bottom + 0.5 && box.left >= regionBox.left - 0.5 && box.right <= regionBox.right + 0.5);
+      return {
+        progress: center(progress),
+        latestAnchor: latestAnchor && center(latestAnchor), topAnchor: topAnchor && center(topAnchor),
+        latestBtn: latestBtn && center(latestBtn), topBtn: topBtn && center(topBtn),
+        latestClass: latestBtn?.className ?? "", topClass: topBtn?.className ?? "",
+        latestShape: latestStyle && [latestStyle.width, latestStyle.height, latestStyle.borderRadius],
+        topShape: topStyle && [topStyle.width, topStyle.height, topStyle.borderRadius],
+        stacked: Boolean(latestBox && topBox && latestBox.top >= topBox.bottom),
+        latestInView: inside(latestBox), topInView: inside(topBox),
+      };
+    });
+    for (const [name, btn, anchor] of [["latest", geometry.latestBtn, geometry.latestAnchor], ["top", geometry.topBtn, geometry.topAnchor]]) {
+      assert.ok(btn != null && anchor != null, `the ${name} button and its anchor render`);
+      assert.ok(Math.abs(btn - anchor) <= 1.5, `the ${name} button centers on its anchor (Δ ${Math.abs(btn - anchor).toFixed(2)}px)`);
+      assert.ok(Math.abs(anchor - geometry.progress) <= 2, `the ${name} anchor spans the progress block's width (Δ ${Math.abs(anchor - geometry.progress).toFixed(2)}px)`);
+    }
+    assert.match(geometry.latestClass, /(^|\s)chat-scroll-to-bottom(\s|$)/, "the latest button reuses the chat's style class");
+    assert.match(geometry.latestClass, /(^|\s)is-visible(\s|$)/, "the latest button is visible");
+    assert.match(geometry.topClass, /(^|\s)chat-scroll-to-bottom(\s|$)/, "the top button reuses the chat's style class");
+    assert.match(geometry.topClass, /(^|\s)is-visible(\s|$)/, "the top button is visible");
+    assert.deepEqual(geometry.latestShape, ["32px", "32px", "999px"], `the latest button is the chat's 32px round control: ${JSON.stringify(geometry.latestShape)}`);
+    assert.deepEqual(geometry.topShape, ["32px", "32px", "999px"], `the top button is the chat's 32px round control: ${JSON.stringify(geometry.topShape)}`);
+    assert.ok(geometry.stacked, "the up button floats above the latest button");
+    assert.ok(geometry.latestInView, "the latest button sits inside the region's visible box");
+    assert.ok(geometry.topInView, "the up button sits inside the region's visible box");
+    // The up click reaches the top; the control hides there, the latest stays.
+    await top.locator("button").click();
+    await pollUntil(async () => await scroll.evaluate((el) => el.scrollTop <= 8), "the up button scrolls the region to its top");
+    // r1#1: the hiding rides scroll events → the passive listener → a React
+    // continuous-priority commit, so the removed control is itself polled —
+    // never asserted straight off the scroll-position proxy.
+    await pollUntil(async () => (await top.count()) === 0, "the up control hides at the top");
+    assert.equal(await latest.count(), 1, "the latest control stays away from the bottom");
+    // The latest click jumps to the bottom; the control hides there, and the
+    // follow is restored: a later poll's appended line keeps the region pinned.
+    await latest.locator("button").click();
+    await pollUntil(atBottom, "the latest button returns the region to its bottom");
+    assert.equal(await latest.count(), 0, "the latest control hides at the bottom");
+    assert.equal(await top.count(), 1, "the up control shows away from the top");
+    appendFileSync(join(dataRoot, "events", `wi-${WIP31}.jsonl`), JSON.stringify({ at: atP31(260), kind: "intent", work_item: WIP31, body: { step: "scroll", kind: "wake", to: WIP31, reason: "E2E-P31-FOLLOW-MARKER" }, seq: 260 }) + "\n");
+    await pollUntil(async () => (await panel.locator("[data-pf-progress]").innerText()).includes("E2E-P31-FOLLOW-MARKER"), "the follow-marker line arrives");
+    await pollUntil(atBottom, "the latest click restored the follow: the new line keeps the region at its bottom");
+  });
+
   // N11 — DELETED before completion: "N11: Unknown kind renders its raw kind
   // string" PASSED on the pre-implementation tree (pi#108's eventKindLabel
   // already passes unknown kinds through raw) — existing behaviour, recorded
   // as already_satisfied. Its never-a-raw-polyforge.*-key half stays guarded
   // by the AC10 locale checks, which now also cover the pi#112 kinds.
+  // P2R3A — polyforge#2 r2#1 (owner ruling 2026-11-14): at most one detail
+  // read per card is in flight — while a re-read is held unanswered, the
+  // 2 s poll skips instead of piling reads — and the read cycle settles
+  // from the held answer (the interim progress lines, then the final result)
+  // without a Loading flash.
+  await checkPage(T.P2R3A, "one in-flight read per card while polling", {}, async (page) => {
+    const reads = [];
+    await page.route((url) => url.pathname === "/api/polyforge/progress/tool", async (route) => {
+      reads.push(route);
+    });
+    const progressPolls = [];
+    page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/polyforge/progress") progressPolls.push(Date.now()); });
+    const panel = await ensureDetail24(page, SLUG2R3, WIP2R3);
+    const card = panel.locator('[data-pf-progress-kind="tool"]');
+    await pollUntil(async () => (await card.count()) === 1, "the running call's tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 1, "the expansion reads the detail once");
+    // the first read answers with the step's interim progress lines
+    await reads[0].fulfill({ status: 200, json: { available: true, hasResult: false, progress: ["verify.py: [1/2] lint (fast): npm run lint"],
+      tool: { name: "bash", argument: "npm test", status: "running", input: "npm test", output: null, isError: false } } });
+    await pollUntil(async () => (await card.innerText()).includes("npm run lint"), "the held answer's progress lines render — no Loading flash between reads");
+    // the next poll re-reads the resultless card; that read is held
+    await pollUntil(() => reads.length === 2, "the poll re-reads the resultless card");
+    const pollsAtSecond = progressPolls.length;
+    await pollUntil(() => progressPolls.length - pollsAtSecond >= 3, "three more progress polls pass while the re-read is in flight", 30_000);
+    assert.equal(reads.length, 2, `one in-flight read per card: the polls skip while a read is pending (${reads.length} reads)`);
+    await reads[1].fulfill({ status: 200, json: { available: true, hasResult: true,
+      tool: { name: "bash", argument: "npm test", status: "ok", durationMs: 3000, input: "npm test", output: "E2E-P2R3-FINAL", isError: false } } });
+    await pollUntil(async () => (await card.innerText()).includes("E2E-P2R3-FINAL"), "the final result renders");
+    assert.ok(!(await card.innerText()).includes("npm run lint"), "the interim lines leave with the final result");
+  });
+
+  // P2R3B — polyforge#2 r2#1 (owner ruling 2026-11-14): an answer older
+  // than the displayed one is dropped. The first read is held; the DAG's
+  // step selection switches away and back (the reset clears the in-flight
+  // mark without unmounting, so the card reads again and the first read's
+  // closure is still live), the new read answers first with the final
+  // result — then the held, older answer arrives late and must not
+  // overwrite it.
+  await checkPage(T.P2R3B, "a stale answer never overwrites the newer result", {}, async (page) => {
+    const reads = [];
+    await page.route((url) => url.pathname === "/api/polyforge/progress/tool", async (route) => {
+      reads.push(route);
+    });
+    const progressPolls = [];
+    page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/polyforge/progress") progressPolls.push(Date.now()); });
+    const panel = await ensureDetail24(page, SLUG2R3, WIP2R3);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    const card = panel.locator('[data-pf-progress-kind="tool"]');
+    await pollUntil(async () => (await card.count()) === 1, "the running call's tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 1, "the expansion's read is captured — held unanswered");
+    // switching the DAG step resets the detail's state while it stays
+    // mounted: the in-flight mark clears, the card folds away; switching
+    // back re-renders it collapsed — expanding reads anew
+    await node("review").click();
+    await pollUntil(async () => (await card.count()) === 0, "the unselected step's record leaves");
+    await node("build").click();
+    await pollUntil(async () => (await card.count()) === 1, "the switched-back step's tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 2, "the re-expanded card reads again (the step switch cleared the in-flight mark)");
+    await reads[1].fulfill({ status: 200, json: { available: true, hasResult: true,
+      tool: { name: "bash", argument: "npm test", status: "ok", durationMs: 3000, input: "npm test", output: "E2E-P2R3-FINAL", isError: false } } });
+    await pollUntil(async () => (await card.innerText()).includes("E2E-P2R3-FINAL"), "the newer read's final result renders");
+    // the first, older read answers late with a resultless state — dropped
+    await reads[0].fulfill({ status: 200, json: { available: true, hasResult: false, progress: ["verify.py: [1/2] lint (fast): E2E-P2R3-STALE"],
+      tool: { name: "bash", argument: "npm test", status: "running", input: "npm test", output: null, isError: false } } });
+    const pollsBeforeStale = progressPolls.length;
+    await pollUntil(() => progressPolls.length - pollsBeforeStale >= 2, "two poll cycles pass after the older answer arrived", 30_000);
+    const text = (await card.innerText()).replace(/\s+/g, " ").trim();
+    assert.ok(text.includes("E2E-P2R3-FINAL"), `the final result stays (${text})`);
+    assert.ok(!text.includes("E2E-P2R3-STALE"), "the older answer never reaches the card");
+  });
+
+  // P2R3C — polyforge#2 r3#1: a replaced read's answer clears only the
+  // mark set its own read captured. read1 is held; the step switch resets
+  // the detail (the mark set is replaced) and the re-expanded card reads
+  // anew (read2, answered resultless with progress lines); the poll then
+  // issues read3 and holds it; releasing read1 must not clear read3's mark
+  // (the old tree deleted from the new set: a read4 piled up, and read3's
+  // answer was then seq-dropped too) — the read count must not grow, and
+  // read3's eventual final result must render.
+  await checkPage(T.P2R3C, "a replaced read's answer clears only its own mark", {}, async (page) => {
+    const reads = [];
+    await page.route((url) => url.pathname === "/api/polyforge/progress/tool", async (route) => {
+      reads.push(route);
+    });
+    const progressPolls = [];
+    page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/polyforge/progress") progressPolls.push(Date.now()); });
+    const panel = await ensureDetail24(page, SLUG2R3, WIP2R3);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    const card = panel.locator('[data-pf-progress-kind="tool"]');
+    await pollUntil(async () => (await card.count()) === 1, "the running call's tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 1, "read1 is captured — held unanswered");
+    await node("review").click();
+    await pollUntil(async () => (await card.count()) === 0, "the unselected step's record leaves");
+    await node("build").click();
+    await pollUntil(async () => (await card.count()) === 1, "the switched-back step's tool card renders");
+    await card.locator("button[aria-expanded]").click();
+    await pollUntil(() => reads.length === 2, "the re-expanded card reads anew (read2)");
+    // read2 answers resultless (the command still runs): the poll re-reads
+    await reads[1].fulfill({ status: 200, json: { available: true, hasResult: false, progress: ["verify.py: [1/2] lint (fast): npm run lint"],
+      tool: { name: "bash", argument: "npm test", status: "running", input: "npm test", output: null, isError: false } } });
+    await pollUntil(async () => (await card.innerText()).includes("npm run lint"), "read2's interim progress lines render");
+    await pollUntil(() => reads.length === 3, "the poll re-reads the resultless card (read3) — held");
+    // read1 finally answers: a stale resultless state, dropped by seq — and
+    // it must clear only its own mark set, never read3's
+    await reads[0].fulfill({ status: 200, json: { available: true, hasResult: false, progress: ["verify.py: [1/2] lint (fast): E2E-P2R3C-STALE"],
+      tool: { name: "bash", argument: "npm test", status: "running", input: "npm test", output: null, isError: false } } });
+    const pollsAtStale = progressPolls.length;
+    await pollUntil(() => progressPolls.length - pollsAtStale >= 2, "two poll cycles pass while read3 is in flight", 30_000);
+    assert.equal(reads.length, 3, `a replaced read's answer clears only its own mark — no second read piled up (${reads.length} reads)`);
+    assert.ok(!(await card.innerText()).includes("E2E-P2R3C-STALE"), "the stale answer never reaches the card");
+    await reads[2].fulfill({ status: 200, json: { available: true, hasResult: true,
+      tool: { name: "bash", argument: "npm test", status: "ok", durationMs: 3000, input: "npm test", output: "E2E-P2R3C-FINAL", isError: false } } });
+    await pollUntil(async () => (await card.innerText()).includes("E2E-P2R3C-FINAL"), "read3's final result renders");
+    const text = (await card.innerText()).replace(/\s+/g, " ").trim();
+    assert.ok(!text.includes("npm run lint") && !text.includes("E2E-P2R3C-STALE"), `the interim and stale lines are gone (${text})`);
+  });
+
   await check(T.AC3, "pf present: no 5xx or console errors", async () => assert.deepEqual(errors.splice(0), []));
   await h.stop();
   await check(T.AC8, "no env value in server logs", async () => {

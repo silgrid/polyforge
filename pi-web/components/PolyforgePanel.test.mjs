@@ -597,11 +597,45 @@ test("the detail opens at its bottom, offers ↓ Latest and folds spawn blocks",
 });
 
 test("the latest label and line-count wording exist in all three locales", () => {
-  const latest = { en: "↓ Latest", "zh-CN": "↓ 最新", "zh-TW": "↓ 最新" };
+  // polyforge#31: the two jump buttons are icon-only round controls, so the
+  // labels are their aria-labels/titles — no "↓" prefix any more — and the
+  // up button gets its own key in every locale (AC3).
+  const latest = { en: "Scroll to latest", "zh-CN": "回到最新", "zh-TW": "回到最新" };
+  const top = { en: "Scroll to top", "zh-CN": "回到顶部", "zh-TW": "回到頂部" };
   for (const [name, localeSource] of [["en", enSource], ["zh-CN", zhCNSource], ["zh-TW", zhTWSource]]) {
     assert.match(localeSource, new RegExp(`"polyforge\\.progress\\.latest": "${latest[name]}"`), `${name} latest label`);
+    assert.match(localeSource, new RegExp(`"polyforge\\.progress\\.top": "${top[name]}"`), `${name} top label`);
     assert.match(localeSource, /"polyforge\.progress\.lines": "\{count\} \S/, `${name} line-count wording`);
   }
+});
+
+test("polyforge#31: the progress jump buttons reuse the chat style, centered, one down one up", () => {
+  // AC1/AC2: two floating buttons stacked over the region's bottom, both
+  // horizontally centered and reusing the chat session's chat-scroll-to-bottom
+  // style; the old right-aligned text pill is gone. The down button keeps its
+  // instant jump and follow restore; the up button smooth-scrolls to the top.
+  assert.match(source, /data-pf-detail-top=""/);
+  assert.match(source, /!atTop && \(/);
+  assert.match(source, /!atBottom && \(/);
+  for (const anchor of ["data-pf-detail-top", "data-pf-detail-latest"]) {
+    const at = source.indexOf(`${anchor}=""`);
+    assert.ok(at >= 0, `${anchor} exists`);
+    const style = source.slice(at, at + 400);
+    assert.match(style, /position: "sticky", bottom: (8|44), alignSelf: "stretch"/, `${anchor} is a full-width sticky anchor`);
+    assert.match(style, /justifyContent: "center"/, `${anchor} centers its button`);
+    assert.match(style, /pointerEvents: "none"/, `${anchor} never eats the lines' clicks`);
+  }
+  assert.equal((source.match(/chat-scroll-to-bottom is-visible/g) ?? []).length, 2, "both buttons reuse the chat's style class");
+  assert.doesNotMatch(source, /bottom: 8, alignSelf: "flex-end"/, "the old right-aligned pill anchor is gone");
+  assert.doesNotMatch(source, /borderRadius: 10/, "the old pill button style is gone");
+  assert.match(source, /title=\{t\("polyforge\.progress\.latest"\)\}/);
+  assert.match(source, /aria-label=\{t\("polyforge\.progress\.latest"\)\}/);
+  assert.match(source, /title=\{t\("polyforge\.progress\.top"\)\}/);
+  assert.match(source, /aria-label=\{t\("polyforge\.progress\.top"\)\}/);
+  assert.match(source, /const jumpToTop = \(\) => \{/);
+  assert.match(source, /region\.scrollTo\(\{ top: 0, behavior: "smooth" \}\)/);
+  assert.match(source, /region\.scrollTop = region\.scrollHeight;\n\s*pinned\.current = true;/);
+  assert.match(source, /isProgressAtTop/, "the at-top read is the pure helper's");
 });
 
 test("the dock adds Jobs | Messages tabs with an unread dot of its own", () => {
@@ -867,11 +901,12 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
   assert.ok(source.indexOf('data-pf-tabstrip="work"') > source.indexOf(") : workTab === \"tasks\" ? ("), "the sub-tab controls follow the main area in the DOM");
   // (intentional 2026-10-31 third-segment change): jobs, tasks, items in that order
   // (the 决策 sub-tab is gone again: owner ruling 2026-11-09, every interaction is the work item's).
-  // intentional fourth sub-tab: 待集成 (`integrate`) last.
-  assert.match(work, /\(\["jobs", "tasks", "items", "integrate"\] as const\)\.map\(\(tab\) =>/);
+  // intentional fourth sub-tab: 待集成 (`integrate`) last; polyforge#30 adds
+  // the fifth segment 项目 (`projects`) between 全部 and 待集成.
+  assert.match(work, /\(\["jobs", "tasks", "items", "projects", "integrate"\] as const\)\.map\(\(tab\) =>/);
   assert.match(work, /role="tab" aria-selected=\{active\}\s*onClick=\{\(\) => onWorkTab\(tab\)\}/);
-  assert.match(work, /const label = tab === "jobs" \? t\("polyforge\.messages\.jobsTab"\) : tab === "tasks" \? t\("polyforge\.tasks\.tab"\)\s*: tab === "items" \? t\("polyforge\.work\.itemsTab"\) : t\("polyforge\.work\.integrateTab"\);/,
-    "作业 / 任务 / 全部 / 待集成 labels ( adds the third; intentional fourth sub-tab; 全部 renamed by polyforge#22)");
+  assert.match(work, /const label = tab === "jobs" \? t\("polyforge\.messages\.jobsTab"\) : tab === "tasks" \? t\("polyforge\.tasks\.tab"\)\s*: tab === "items" \? t\("polyforge\.work\.itemsTab"\) : tab === "projects" \? t\("polyforge\.work\.projectsTab"\)\s*: t\("polyforge\.work\.integrateTab"\);/,
+    "作业 / 任务 / 全部 / 项目 / 待集成 labels ( adds the third; intentional fourth sub-tab; 全部 renamed by polyforge#22; polyforge#30 adds 项目)");
   // owner-intended change（重立自 #209）: desktop keeps the ~72px text rail;
   // ≤640px is a 40px vertical icon rail on the right (was a three-segment bar
   // above the main area). owner-intended change: Work is two
@@ -923,10 +958,11 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
 test("the sub-tab badges show running counts from the one status snapshot; zero greyed, none on Work", () => {
   const work = source.slice(source.indexOf('data-pf-tabstrip="work"'));
   // (intentional 2026-10-31 third-segment change): the items badge is the last list read's count.
-  assert.match(work, /const count = tab === "items" \? workItemsRunning\s*: opsStatus \? \(tab === "jobs" \? opsStatus\.queue\.running : \(opsStatus\.tasks\?\.running \?\? 0\)\) : null;/,
+  assert.match(work, /const count = tab === "items" \? workItemsRunning\s*: tab === "projects" \? null\s*: opsStatus \? \(tab === "jobs" \? opsStatus\.queue\.running : \(opsStatus\.tasks\?\.running \?\? 0\)\) : null;/,
     "queue.running on Jobs, tasks.running on Tasks, no badge without a snapshot; the items badge from the last list read (absent before it)");
-  // intentional fourth sub-tab: 待集成 carries no badge.
-  assert.match(work, /\{count !== null && tab !== "integrate" && \(/);
+  // intentional fourth sub-tab: 待集成 carries no badge; polyforge#30's 项目
+  // segment carries none either (its list has no running count).
+  assert.match(work, /\{count !== null && \(tab === "jobs" \|\| tab === "tasks" \|\| tab === "items"\) && \(/);
   assert.match(work, /color: count > 0 \? "var\(--accent\)" : "var\(--text-dim\)"/, "zero renders greyed, never hidden");
   assert.match(work, /aria-label=\{t\(WORK_TAB_BADGES\[tab\], \{ count \}\)\}/, "the badge has an accessible name");
   assert.match(source, /const WORK_TAB_BADGES = \{ jobs: "polyforge\.work\.jobsRunning", tasks: "polyforge\.work\.tasksRunning", items: "polyforge\.work\.itemsRunning" \} as const;/);
@@ -1054,10 +1090,11 @@ test(" (owner intentional change, reversing #238): the detail opens at its botto
   assert.match(block, /const streamed = Boolean\(snapshot\?\.available && lines\.length > 0\);/, "nothing is forced while loading, empty or unavailable");
   assert.match(block, /useLayoutEffect\(\(\) => \{\s*const region = scrollRef\.current;\s*if \(region && streamed && pinned\.current\) region\.scrollTop = region\.scrollHeight;\s*\}, \[snapshot, visibleCount, streamed, shownEchoes\.length, scrollRef\]\);/, "the first stream, every later chunk and an echoed owner message end at the whole region's bottom while pinned");
   assert.match(block, /setVisibleCount\(PROGRESS_RENDER_CHUNK\);/, "another job re-chunks its stream");
-  assert.match(block, /const onScroll = \(\) => \{\s*const at = isProgressPinnedToBottom\(region\);\s*pinned\.current = at;\s*setAtBottom\(at\);\s*\};/, "a passive listener tracks the follow state and the control's visibility");
+  assert.match(block, /const onScroll = \(\) => \{\s*const at = isProgressPinnedToBottom\(region\);\s*pinned\.current = at;\s*setAtBottom\(at\);\s*setAtTop\(isProgressAtTop\(region\)\);\s*\};/, "a passive listener tracks the follow state and both controls' visibility (the at-top read since polyforge#31)");
   assert.match(block, /if \(region\) region\.scrollTop = region\.scrollHeight;\s*pinned\.current = true;/, "a click on ↓ Latest jumps immediately and restores following");
-  assert.match(block, /!atBottom && \(/, "the control is visible exactly while the region is off its bottom");
-  assert.doesNotMatch(block, /scrollTo\(|smooth/i, "the jump is not animated");
+  assert.match(block, /!atBottom && \(/, "the latest control is visible exactly while the region is off its bottom");
+  assert.match(block, /!atTop && \(/, "the top control is visible exactly while the region is off its top (polyforge#31)");
+  assert.match(block, /const jumpToTop = \(\) => \{\s*const region = scrollRef\.current;\s*if \(region\) region\.scrollTo\(\{ top: 0, behavior: "smooth" \}\);\s*\};/, "the up button's one click smooth-scrolls to the very top (polyforge#31 — the latest jump stays instant)");
   assert.doesNotMatch(block, /unread/i, "the control carries no unread count");
 });
 
@@ -1087,13 +1124,19 @@ test("every block has a group head with step, status mark, duration and count; t
   assert.match(helper, /return undefined;/, "no times: no invented duration");
 });
 
-test("a tool card's detail is read only on its expansion, once per call per selection, through the card module", () => {
+test("a tool card's detail is read on its expansion and re-read by the poll while it still has no result, through the card module", () => {
   const start = source.indexOf("function PolyforgeDetailProgress(");
   const block = source.slice(start, source.indexOf("\n}\n", start));
-  assert.match(block, /const loadDetail = useCallback\(\(id: string\) => \{\s*const held = detailsRef\.current\.get\(id\);\s*if \(!wi \|\| \(held && held\.status !== "unavailable"\)\) return;/, "loading or loaded: never asked again; unavailable: asked again on the next expansion");
-  assert.match(block, /if \(selection\.current !== asked\) return;\s*setDetails\(\(current\) => new Map\(current\)\.set\(id, state\)\);\s*setFoldVersion\(\(current\) => current \+ 1\);/, "an answer for another selection writes nothing; a settled detail re-measures the follow state like a fold (review s10#2)");
-  assert.match(block, /const toggleTool = useCallback\(\(id: string, open: boolean\) => \{\s*if \(open\) loadDetail\(id\);\s*setFoldVersion\(\(current\) => current \+ 1\);\s*\}, \[loadDetail\]\);/, "a card toggle is a fold: it re-measures the follow state and only an expansion asks for the detail (review s10#2)");
-  assert.match(block, /void fetchProgressToolDetail\(asked, id, profile\)\.then\(settle\);/);
+  assert.match(block, /const ask = detailAsk\(held, inFlight\.current\.has\(id\)\);\s*if \(!wi \|\| ask === "skip"\) return;/,
+    "a read in flight or a settled result is never asked again (detailAsk, r1#1)");
+  assert.match(block, /if \(ask === "loading"\) settle\(\{ status: "loading" \}\);/, "only a first read replaces the card's body with the loading note (r1#1: a re-read keeps the held detail)");
+  assert.match(block, /const marks = inFlight\.current;\s*marks\.add\(id\);\s*const seq = \(readSeq\.current\.get\(id\) \?\? 0\) \+ 1;\s*readSeq\.current\.set\(id, seq\);/, "the id is marked in flight — on the mark set this read captured (r3#1) — and its read numbered before anything is sent (r2#1)");
+  assert.match(block, /if \(selection\.current !== asked\) return;\s*if \(readSeq\.current\.get\(id\) !== seq\) return;[^\n]*\s*const heldNow = detailsRef\.current\.get\(id\);\s*if \(heldNow !== undefined && sameProgressToolDetail\(heldNow, state\)\) return;\s*setDetails\(\(current\) => new Map\(current\)\.set\(id, state\)\);\s*setFoldVersion\(\(current\) => current \+ 1\);/,
+    "an answer for another selection writes nothing; an answer of a replaced read is dropped (r2#1); a repeat answer writes nothing either; a settled detail re-measures the follow state like a fold (review s10#2)");
+  assert.match(block, /const toggleTool = useCallback\(\(id: string, open: boolean\) => \{\s*if \(open\) \{\s*openTools\.current\.add\(id\);\s*loadDetail\(id\);\s*\} else \{\s*openTools\.current\.delete\(id\);\s*\}\s*setFoldVersion\(\(current\) => current \+ 1\);\s*\}, \[loadDetail\]\);/,
+    "a card toggle is a fold: it re-measures the follow state and only an expansion opens (and registers) the card's detail read (review s10#2)");
+  assert.match(block, /for \(const id of rereadToolIds\(detailsRef\.current, openTools\.current, lineIds\)\) loadDetail\(id\);/, "every poll re-reads the expanded resultless cards");
+  assert.match(block, /void fetchProgressToolDetail\(asked, id, profile\)\.then\(\(state\) => \{\s*marks\.delete\(id\);\s*settle\(state\);\s*\}\);/, "the mark clears only in the fetch's answer, and only from the set this read captured — a replaced read's answer never clears a newer read's mark (r3#1); the synchronous loading settle cannot (r2#1)");
   assert.match(block, /setDetails\(new Map\(\)\);/, "the cache resets per selection, never persisted");
   assert.doesNotMatch(source, /fetch\(/, "the panel itself still adds no read");
 });
@@ -1206,3 +1249,73 @@ test("polyforge#24: DAG selection wiring follows current step until a manual cho
   assert.match(source, /title=\{`\$\{node\.id\} · \$\{stepStatusLabel\(node\.status\)\}\$\{timing \? ` · \$\{formatEventTime\(timing\.startedAt\)\}` : ""\}`\}/);
 });
 
+
+test("polyforge#2: the poll re-reads an expanded tool card whose held detail still has no result; the settled, loading, unavailable and gone are not", () => {
+  const context = vm.createContext({});
+  vm.runInContext(stripTypeScriptTypes(extractPureFunction("rereadToolIds").replace(/export /g, "")), context);
+  const detail = (over) => ({ status: "available", input: "", output: null, isError: false, ...over });
+  const details = new Map([
+    ["running", detail({})],
+    ["settled", detail({ output: "DONE" })],
+    ["loading", { status: "loading" }],
+    ["unavailable", { status: "unavailable" }],
+  ]);
+  const lineIds = new Set(["running", "settled", "loading"]);
+  const expanded = new Set(["running", "settled", "loading", "unavailable", "gone"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.rereadToolIds(details, expanded, lineIds))), ["running"],
+    "only the expanded card whose detail still has no result is re-read (its id must still be in the snapshot)");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.rereadToolIds(details, new Set(), lineIds))), [], "nothing expanded: nothing re-read");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.rereadToolIds(new Map(), expanded, lineIds))), [], "nothing held yet: the first read comes from the card's expansion");
+  // wiring: the panel keeps the expanded ids and feeds the poll's snapshot into it
+  assert.match(source, /const openTools = useRef<Set<string>>\(new Set\(\)\);/);
+  assert.match(source, /const lineIds = progressLineIds\(snapshot\?\.lines \?\? EMPTY_PROGRESS_LINES\);/, "the re-read set is every line of the snapshot, a subagent's lines included (r1#2)");
+  assert.match(source, /for \(const id of rereadToolIds\(detailsRef\.current, openTools\.current, lineIds\)\) loadDetail\(id\);/);
+  assert.match(source, /held && held\.status === "available" && held\.output === null/, "loadDetail re-asks a resultless held detail");
+});
+
+test("polyforge#2 r1#1: a re-read never flashes Loading — detailAsk keeps the held resultless detail; a repeat answer writes nothing", () => {
+  const context = vm.createContext({});
+  vm.runInContext(stripTypeScriptTypes(
+    extractPureFunction("detailAsk").replace(/export /g, "")
+    + "\n" + stripTypeScriptTypes(extractPureFunction("sameProgressToolDetail").replace(/export /g, "")),
+  ), context);
+  const detail = (over) => ({ status: "available", input: "I", output: null, isError: false, ...over });
+  assert.equal(context.detailAsk(detail({ progress: ["verify.py: [1/2] lint PASS (12s)"] }), false), "keep",
+    "the re-read keeps the held resultless detail on screen — never a Loading flash every 2 s");
+  assert.equal(context.detailAsk(detail({ output: "DONE" }), false), "skip", "a settled result is not asked again");
+  assert.equal(context.detailAsk({ status: "loading" }, false), "skip", "a read already in flight is not asked again");
+  assert.equal(context.detailAsk(detail({}), true), "skip", "in flight: no duplicate read");
+  assert.equal(context.detailAsk(undefined, false), "loading", "the first read of an expansion shows Loading");
+  assert.equal(context.detailAsk({ status: "unavailable" }, false), "loading", "an unavailable answer is asked again on its next expansion");
+  assert.equal(context.sameProgressToolDetail(detail({ progress: ["a", "b"] }), detail({ progress: ["a", "b"] })), true, "a repeat answer");
+  assert.equal(context.sameProgressToolDetail(detail({ progress: ["a"] }), detail({ progress: ["a", "b"] })), false, "new progress lines are written");
+  assert.equal(context.sameProgressToolDetail(detail({ output: "x" }), detail({ output: "y" })), false, "a changed result is written");
+  assert.equal(context.sameProgressToolDetail({ status: "unavailable" }, { status: "unavailable" }), true, "unavailable states compare equal too");
+  assert.equal(context.sameProgressToolDetail(detail({}), { status: "unavailable" }), false, "different states never compare equal");
+});
+
+test("polyforge#2 r1#2: the poll's line-id set includes a subagent's lines, nested ones too — its expanded card re-reads like any other", () => {
+  const context = vm.createContext({});
+  vm.runInContext(stripTypeScriptTypes(
+    extractPureFunction("progressLineIds").replace(/export /g, "")
+    + "\n" + stripTypeScriptTypes(extractPureFunction("rereadToolIds").replace(/export /g, "")),
+  ), context);
+  const line = (id, tool, over) => ({ id, kind: "tool", text: id, ...(tool ? { tool } : {}), ...over });
+  const snapshot = [
+    line("top-1", { name: "bash", argument: "top-1", status: "running" }),
+    line("parent", { name: "Agent", argument: "run the units", status: "running" }, { subagents: [
+      { id: "sub-1", description: "the unit task", status: "running", lines: [
+        line("sub-tool"),
+        line("sub-parent", { name: "Agent", argument: "nested", status: "running" }, { subagents: [
+          { id: "sub-2", description: "nested task", status: "running", lines: [line("nested-tool")] },
+        ] }),
+      ] },
+    ] }),
+  ];
+  const ids = new Set(context.progressLineIds(snapshot));
+  assert.deepEqual([...ids].sort(), ["nested-tool", "parent", "sub-parent", "sub-tool", "top-1"],
+    "every line's id, the subagents' lines and the nested ones included");
+  const details = new Map([["sub-tool", { status: "available", input: "", output: null, isError: false }]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.rereadToolIds(details, new Set(["sub-tool"]), ids))), ["sub-tool"],
+    "an expanded subagent card with no result is re-read (the defect review r1#2 sent back)");
+});

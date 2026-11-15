@@ -6,6 +6,8 @@
 export interface ProjectRef {
   id: string
   name: string
+  status: string
+  can_restore: boolean
 }
 
 export interface Context {

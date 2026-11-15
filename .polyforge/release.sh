@@ -37,7 +37,12 @@
 # previous release (the PR-only and contract checks, the notes) is the highest
 # -<name>.N tag below the version on origin, else the public base tag itself,
 # each with the commit its own ls-remote reports. Resume and --verify judge
-# the same shape the same way (the cutover exceptions do not apply).
+# the same shape the same way (the cutover exceptions do not apply). The
+# generated notes of the line's FIRST release (whose previous release is the
+# public base tag) list only the absorption's descendants (git log
+# --ancestry-path): the history before that point belongs to no version of
+# this line; between the line's own versions the plain range stands,
+# unchanged.
 # Bump guard (version line, CONTRIBUTING.md): only patch is released - with no
 # argument the bump is patch. minor and major are refused before anything runs
 # (zero side effects): a middle-number (minor) jump needs an explicit owner
@@ -52,7 +57,10 @@
 #      preflight (step 1b''' below: tools, node major, the ghcr.io push
 #      credential - every problem in one message); refuse unless every commit that entered
 #      main since the previous release tag came through a merged PR or is an
-#      allowlisted owner-direct commit (the PR-only check below); the
+#      allowlisted owner-direct commit (the PR-only check below); a
+#      committed docs/release-notes/<tag>.md over GitHub's 125000-character
+#      release-notes limit refuses right here, before the gates (never
+#      truncated - see the notes step below); the
 #      workflow-contract check (step 1d below): refuse while
 #      internal/common/workflow/contract-pending.md registers an incompatible
 #      change and ContractVersion is still the previous release's, refuse a
@@ -101,7 +109,14 @@
 #      notes from docs/release-notes/<tag>.md (generated from git log when
 #      absent), followed by a "Test gate" section naming how the gate passed
 #      (the green tag reused, or the gate run in its container, with the gate
-#      id; the committed notes file itself is never changed). The aihub image
+#      id; the committed notes file itself is never changed); the notes never
+#      exceed GitHub's 125000-character release-body limit, counted in bytes
+#      (>= the character count under UTF-8) and checked BEFORE the version is
+#      claimed: the generated commit list is cut to the newest commits within
+#      a byte budget and ends with a 「还有 N 个提交」 notice and a compare
+#      link on the previous release's commit id (never its tag name), and a
+#      committed notes file over the limit refuses the release (never
+#      truncated). The aihub image
 #      and the pf binaries are published with the
 #      same tag before tools/install.sh can consume the release (aihub
 #      first); the pi-web tarball rides the same release, so there is no
@@ -307,6 +322,17 @@ CUTOVER_FROM='v2.20.'   # the retired internal line's tag prefix
 CUTOVER_PUBLIC_FROM='v0.1.' # the public baseline's pre-unification line
 CUTOVER_TAG='v0.2.0'    # the unified product line's first release
 CUTOVER_LINE='v0.2.'    # the line CUTOVER_TAG opens
+# GitHub rejects a release body over 125000 characters (gh release create
+# fails on it); counted in BYTES here - under UTF-8 that is the character
+# count or more, the conservative side - and always before the version is
+# claimed: nothing is published towards a limit the release would die on
+# later. The generated commit list is cut to NOTES_LIST_BUDGET bytes at
+# whole lines, keeping the newest commits (a notice and a compare link name
+# what was dropped); a committed docs/release-notes/<tag>.md over NOTES_MAX
+# refuses the release instead - never truncated, a human's text is the
+# human's to shorten (see notes_commit_list and the notes step below).
+NOTES_MAX=125000
+NOTES_LIST_BUDGET=120000
 # Owner-direct allowlist (polyforge#240; see the PR-only check above): author
 # emails, space-separated, whose direct commits pass the PR-only check. Empty
 # by default - every change goes through PR-review-merge. Forks carrying
@@ -464,6 +490,38 @@ manifest_of() {
   printf '  "artifacts": [\n'
   awk 'NF == 2 { sub(/^\*/, "", $2); printf "%s    {\"name\": \"%s\", \"sha256\": \"%s\"}", (n++ ? ",\n" : ""), $2, $1 } END { print "" }' "$3"
   printf '  ]\n}\n'
+}
+# notes_commit_list: the generated notes' commit list for the range
+# $PREVCOMMIT..HEAD, newest first. The first release of a suffixed line
+# (its previous release the public base tag) lists only the absorption's
+# descendants: the history before that point belongs to no version of this
+# line, and --ancestry-path keeps the commits that descend from the base,
+# so the replacement commit's other side - the line absorbed away - is
+# never listed; between the line's own versions the plain range stands,
+# unchanged. The list must leave room for the header and the sections
+# appended after it, so it is cut to NOTES_LIST_BUDGET bytes at whole
+# lines, keeping the NEWEST commits; when lines were dropped, the list ends
+# with a notice naming their count and a compare link built on the
+# previous release's COMMIT id (never its tag name: a downstream origin
+# may carry an older tag of the same name on another commit). Bytes, not
+# characters: LC_ALL=C makes awk's length count bytes (>= the character
+# count under UTF-8, the conservative side), and the cut lands on whole
+# lines, never inside a character.
+notes_commit_list() {
+  _anc=""
+  if [ -n "$SUFFIX" ]; then
+    case "$PREVTAG" in
+      *-"$SUFFIX".*) ;;
+      *) _anc="--ancestry-path" ;;
+    esac
+  fi
+  git log $_anc --oneline "$PREVCOMMIT..HEAD" >"$WORK/notes.log"
+  LC_ALL=C awk -v max="$NOTES_LIST_BUDGET" -v repo="$GH_REPO" -v base="$PREVCOMMIT" -v tip="$COMMIT" '
+    { _l = length($0) + 3
+      if (_n + _l <= max) { print "- " $0; _n += _l } else _drop++ }
+    END { if (_drop > 0)
+      printf "还有 %d 个提交未列出（GitHub 发版说明上限 %d 字节，保留最新的提交）：https://github.com/%s/compare/%s...%s\n", _drop, max, repo, base, tip }
+  ' "$WORK/notes.log"
 }
 # rank_against <semver tags> <tag>: how <tag> ranks among the OTHER tags (the
 # monotonicity rule --verify judges and a resumed release must satisfy): sets
@@ -1014,6 +1072,17 @@ fi
 # one stays claimed, resumable).
 if [ -n "$RESUME" ]; then NOCLAIM="$TAG stays claimed and resumable"; else NOCLAIM="no version claimed ($TAG is still free)"; fi
 
+# polyforge#14: a committed notes file is published as it is, so it must
+# respect GitHub's release-notes limit itself; refusing here, before the
+# gates and the build, costs no test-gate run. Over the limit the release
+# refuses - never truncated: a human's text is the human's to shorten. A
+# resume whose release already exists skips this (its notes are never
+# regenerated).
+if [ -z "$REL_EXISTS" ] && [ -s "docs/release-notes/$TAG.md" ]; then
+  _sz=$(wc -c <"docs/release-notes/$TAG.md")
+  [ "$_sz" -le "$NOTES_MAX" ] || die "docs/release-notes/$TAG.md is $_sz bytes, over the $NOTES_MAX-byte GitHub release-notes limit - shorten the file and run again (a committed notes file is never truncated); nothing built or published, $NOCLAIM"
+fi
+
 # 1d. the workflow contract: ContractVersion moves only on an
 # incompatible change, at most once per release, and an incompatible change
 # is registered in the pending list when it merges. Read the version of the
@@ -1186,6 +1255,8 @@ fi
 NOTES="docs/release-notes/$TAG.md"
 if [ -z "$REL_EXISTS" ]; then
   if [ -s "$NOTES" ]; then
+    # polyforge#14: over the limit the file already refused before the
+    # gates (nothing built or published); here it only rides along.
     cp "$NOTES" "$WORK/notes.md"
   else
     {
@@ -1193,7 +1264,7 @@ if [ -z "$REL_EXISTS" ]; then
       echo
       if [ -n "$PREVTAG" ] && git cat-file -e "$PREVCOMMIT^{commit}" 2>/dev/null; then
         echo "Changes since $PREVTAG:"; echo
-        git log "$PREVCOMMIT..HEAD" --oneline | sed 's/^/- /'
+        notes_commit_list
       elif [ -n "$PREVTAG" ]; then
         echo "Changes since $PREVTAG:"; echo
         git log --oneline -n 50 | sed 's/^/- /'
@@ -1209,6 +1280,12 @@ if [ -z "$REL_EXISTS" ]; then
       for _a in $ALLOW_COMMITS; do printf -- '- %s %s\n' "$_a" "$(git log -1 --format=%s "$_a")"; done
     } >>"$WORK/notes.md"
   fi
+  # polyforge#14: the assembled notes (list or committed file plus the
+  # sections above) must respect the limit too - a release never dies on
+  # it after the claim (the generated list is cut by its budget; this
+  # catches a committed file that only the appended sections push over).
+  _sz=$(wc -c <"$WORK/notes.md")
+  [ "$_sz" -le "$NOTES_MAX" ] || die "the release notes of $TAG assemble to $_sz bytes, over the $NOTES_MAX-byte GitHub release-notes limit - shorten docs/release-notes/$TAG.md (a committed notes file is never truncated; the generated list keeps the newest commits within the budget); nothing published, $NOCLAIM"
   NOTES="$WORK/notes.md"
 fi
 

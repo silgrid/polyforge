@@ -118,7 +118,9 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   (the masked primary argument in full, the status from the
   paired result, the duration only when the call and its result both carry a
   timestamp) — a call's full input and output never ride this 2 s poll, they
-  are read on demand from `GET /api/polyforge/progress/tool`; a tool line whose
+  are read on demand from `GET /api/polyforge/progress/tool` (and re-read on
+  every poll while the call still has no result: the step's progress-file
+  lines while the command runs, the final result once it ends); a tool line whose
   call ran subagents also carries `subagents`: one
   `{id, description, agent?, status:"running"|"done"|"error", startAt?,
   durationMs?, lines, omitted?}` per subagent — the "Subagents" paragraph of
@@ -157,13 +159,28 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   result's text blocks joined by a newline, any other block a neutral
   `[image]` / `[<type>]` placeholder) both complete and masked by
   `maskPolyforgeCredentials`, `output: null` and `hasResult:false` while no
-  result is paired — or 200 `{available:false, error}` (a fixed reason) when
+  result is paired, and then also `progress`: the newest lines (at most ten,
+  masked) of the step's progress file `runtime-state/progress/<step>.log`
+  (the step scripts' say appends every progress line there — the daemon keeps
+  no partial output of a running call), the expanded card's interim view of
+  which command runs and how long the last one took — a subagent's card
+  reads its parent spawn's step file (a subagent inherits PF_STEP, so its
+  own say appends there too) — or 200 `{available:false, error}` (a fixed reason) when
   the job index, the capsule, the transcript (moved, replaced — a new inode is
   a new identity — or over the 128 MiB bound) or the call is no longer
   readable. Never 5xx; no answer names a path. The read
   (`readProgressToolDetail`) resolves the same spawns and transcripts as the
   progress read (same realpath containment), reads only the transcript whose
-  identity the id names, and keeps only that call's input and result.
+  identity the id names, and keeps only that call's input and result. The
+  panel reads a card's detail on its expansion and re-reads it on every
+  progress poll while it still has no result — a subagent's card like any
+  other, its lines are in the poll's set: the step's progress lines while
+  the command runs, the final result once it ends; at most one read of a
+  card is in flight at a time (the poll skips while one is pending), an
+  answer of a read a later one replaced is dropped, a re-read keeps the
+  held detail on screen (no interim Loading), a repeat answer writes
+  nothing, and a card expanded during a run never stays on 尚无结果 after
+  the command ends.
 - `GET /api/polyforge/config?cwd=…` → 200
   `{pfPresent, pfVersion, capable, reason?, file?:{sha256,exists},
   items:[{key,value?,set?,source?,class,schema?,daemon?,stale_reason?}],
@@ -838,9 +855,13 @@ the Work tab carries no count. The former Jobs and Tasks tabs are Work's
 first two sub-tabs (作业/任务 in zh-CN, 作業/任務 in zh-TW, so the workflow jobs
 and the one-shot tasks read apart from pi's own background-tasks surface),
 followed by the read-only work item list (全部 / 全部 /
-All — 工单列表 / 工單列表 / Work items before polyforge#22, `polyforge.work.itemsTab`) and the integration view (
+All — 工单列表 / 工單列表 / Work items before polyforge#22, `polyforge.work.itemsTab`), the
+project list (项目 / 專案 / Projects, `polyforge.work.projectsTab`,
+polyforge#30: the mapped projects with their global states — deactivated ones
+hidden by default behind a「显示已停用」toggle, marked, restorable in place
+through the route's one write) and the integration view (
 待集成 / 待整合 / Integration, `polyforge.work.integrateTab`) — order 作业,
-任务, 全部, 待集成 — in their
+任务, 全部, 项目, 待集成 — in their
 own tablist (`data-pf-tabstrip="work"`) placed after the main area in the
 DOM, beside it on the right (`aria-orientation="vertical"`): on desktop (viewport ≥ 641px,
 `useIsMobile`, whatever the dock width) a ~72px text rail (`flex: 0 0 72px`,
@@ -854,8 +875,8 @@ icon-only buttons — a 16px stroke icon in the panel's 24-viewBox style
 (`WORK_TAB_ICONS`, `aria-hidden`) with the running badge under it, each
 button named by its existing tab copy (`aria-label` and `title` =
 `polyforge.messages.jobsTab` / `polyforge.tasks.tab` /
-`polyforge.work.itemsTab` / `polyforge.work.integrateTab`; 待集成's icon is
-branches merging into one line).
+`polyforge.work.itemsTab` / `polyforge.work.projectsTab` / `polyforge.work.integrateTab`; 待集成's icon is
+branches merging into one line; 项目's is a folder).
 
 **Two parts stacked (owner 2026-11-09).** At every width
 (the 460px and 340px docks, the ≤640px 40px icon rail, the 375px sheet) Work
@@ -2833,13 +2854,25 @@ than the viewport; unreadable numbers never pin). After every new snapshot
 or added chunk the region scrolls to the bottom only while pinned; a reader
 parked anywhere else is never moved by a poll.
 
-**↓ Latest (`[data-pf-detail-latest]`).** A floating button at
-the region's bottom-right, an overlay with no in-flow height, visible
-whenever the region is not at its bottom (including while the reader is at
-the summary) and hidden once it is. One click jumps to the bottom
-immediately (no smooth animation) and restores following, so the next
-snapshot or chunk keeps it there. It carries no unread/new-line count. The
-label is translated: `polyforge.progress.latest` = ↓ 最新 / ↓ Latest / ↓ 最新.
+**The two jump buttons (`[data-pf-detail-top]` above, `[data-pf-detail-latest]`
+below).** Two floating buttons stacked over the region's bottom, horizontally
+centered — both reuse the interactive session's `.chat-scroll-to-bottom`
+style from `app/globals.css` verbatim (one 32px round control, an SVG arrow,
+no label text, no second style of their own); each rides a zero-height sticky
+anchor that spans the progress block's width, an overlay with no in-flow
+height that never eats the lines' clicks. ↓ Latest
+(`[data-pf-detail-latest]`) is visible whenever the region is not at its
+bottom (including while the reader is at the summary) and hidden once it is;
+one click jumps to the bottom immediately (no smooth animation) and restores
+following, so the next snapshot or chunk keeps it there. It carries no
+unread/new-line count. ↑ Top (`[data-pf-detail-top]`) sits one button-height
+above it (a 4px gap) and is visible whenever the region is scrolled away from
+its top (`isProgressAtTop`, the same 8 px threshold the bottom pin uses) and
+hidden at the top; one click smooth-scrolls to the very top (`scrollTo({
+top: 0, behavior: "smooth" })`), and only the latest click ever resumes the
+follow. Both buttons carry translated aria-labels and titles:
+`polyforge.progress.latest` = 回到最新 / Scroll to latest / 回到最新 and
+`polyforge.progress.top` = 回到顶部 / Scroll to top / 回到頂部.
 
 ## Job detail layout and execution progress
 
