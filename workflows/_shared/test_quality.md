@@ -33,5 +33,7 @@ Three duties follow, for every test a step writes:
   weakening an exact expectation to "at least".
 
 Every unit of the plan carries the three statements above as its test-quality record, in
-its `## Units` entry: the behaviour its test observes, why its red is expected, the change
-the test catches. The steps that judge the change read that record.
+its `## Units` entry: the behaviour its test observes, how its expected values are derived
+independently of the implementation, the change it catches — and, when its red is
+expected, which assertion fails and why (the first-red duty above, a requirement of its
+own beside the record). The steps that judge the change read that record.

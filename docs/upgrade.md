@@ -113,3 +113,28 @@ rewritten or lost. The same directory's `probe.sql` answers 0 once the
 column exists (the run-once guard), and its `rollback.sql` drops the
 column again — deactivation state is operational, not durable data; a
 retry upgrade re-adds it with every project `active`.
+
+## v0.2.1, the pre-submit analysis check
+
+v0.2.1 also adds the pre-submit analysis check (the `pf submit` one, the
+`verbs/submit.md` skill): an execution ticket on a lane that requires
+acceptance — `develop` and `micro` — carries a `## 分析` (or `## Analysis`)
+section with content before it can be submitted, the daemon's
+auto-claim skips a ticket without one the same way it skips a ticket
+without acceptance, and `pf queue` marks it 需要交互：未分析.
+
+The upgrade impact: a develop or micro work item filed before v0.2.1 has
+no `## 分析` section. After the upgrade `pf submit` refuses such a ticket
+(exit 1, nothing claimed; `--allow-no-analysis` bypasses it only on the
+owner's explicit word), and the auto-claim does not take it. Before turning the auto-claim back on
+(`pf ops auto on`), run `pf queue` and settle every queued execution
+ticket: write the analysis report into its `## 分析` section, or the
+owner's dated 「免分析（<date>, <who>）」 line, or cancel the ticket. A
+ticket already in flight is untouched — the check runs at submit and
+claim, never mid-run.
+
+This section also corrects the one above: the server runs no startup
+check for the `projects.status` migration. Until the migration has run,
+the requests that touch the missing column fail with SQLite's own errors
+(no typed refusal); serve traffic only after the migration, which an
+unattended `deploy.sh` applies inside its switch window.
