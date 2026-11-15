@@ -514,7 +514,16 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   // becomes the region's top (both stay on screen); when they do not fit,
   // the head alone aligns to the top — the records win. With no block to
   // show yet (the records still loading) the bottom follow holds.
+  // r1#9: the reset fires on a selection or step change alone — resetFollow
+  // riding in the dependencies must not re-run it (a manual click on the
+  // step that is already selected only marks the choice manual: folds,
+  // expanded cards and their held details survive).
+  const resetSeen = useRef<string | null>(null);
   useLayoutEffect(() => {
+    const resetKeyOf = `${wi ?? ""}\u0000${resetKey ?? ""}`;
+    const changed = resetSeen.current !== resetKeyOf;
+    resetSeen.current = resetKeyOf;
+    if (!changed) return;
     selection.current = wi;
     setVisibleCount(PROGRESS_RENDER_CHUNK);
     setFolded(new Map());
