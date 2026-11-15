@@ -60,6 +60,13 @@ const (
 	OverridePostureBlocked = "blocked"
 )
 
+// overridePushTimeout bounds the running posture's chain push (the same
+// deadline the claim's pending-record publish uses, protocol.PushTimeout;
+// a var so a test can shrink it). A push that outlives it gives up: the
+// overlay's commit stands locally and the next publish retries it — the
+// same failed-push shape a refused push takes (polyforge#47 AC3).
+var overridePushTimeout = protocol.PushTimeout
+
 // OverrideChange is one overlay write as the daemon's route validated it:
 // exactly one action, the candidate chain already parsed and normalized.
 type OverrideChange struct {
