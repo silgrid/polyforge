@@ -80,7 +80,7 @@ const job = { wi: UI, slug: "task#271", status: "running", stepAgeSec: 5, idleAg
 const status = { pfPresent: true, status: { queue: { running: 1, max: 4 }, jobs: [job], tasks: { running: 0, completed: 0 } } };
 const cards = [{ job, goal: " progress rendering", startedAt: new Date().toISOString(), steps: [{ id: "code", state: "running", runs: 1 }], currentStep: "code", progress: { available: false, entries: [] } }];
 const watch = { status: { wi: UI, slug: job.slug, workflowStatus: "running", currentStep: "code", updatedAt: new Date().toISOString(),
-  steps: [{ name: "code", status: "in_progress", startedAt: new Date().toISOString() }], declared_steps: [{ id: "code" }], events: [] } };
+  steps: [{ name: "grill", status: "done", startedAt: new Date().toISOString() }, { name: "code", status: "in_progress", startedAt: new Date().toISOString() }], declared_steps: [{ id: "grill" }, { id: "code" }], events: [] } };
 
 const line = (id, kind, text, extra = {}) => ({ id, kind, text, ...extra });
 const eventLine = (id, text, event, tone, at) => line(id, "event", text, { event, ...(tone ? { tone } : {}), ...(at !== undefined ? { at } : {}) });
@@ -152,6 +152,10 @@ const failures = [];
 const check = createCheck({ failures });
 let base;
 const progressBlock = (page) => dock(page).locator("[data-pf-progress]").first();
+// The DAG's step node (the listitem whose aria-label begins "<id> · "), the
+// deterministic handle e2e/polyforge.mjs P24A–C drives the step selection
+// through: the detail's execution progress renders the selected step's records.
+const dagStep = (page, id) => dock(page).getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
 const kindRows = (page, kind) => progressBlock(page).locator(`[data-pf-progress-kind="${kind}"]`);
 const detailAnswer = (page, id, body, statusCode = 200) => { page.__detail.answers[id] = { status: statusCode, body }; };
 const h = createHarness({
