@@ -450,6 +450,7 @@ const T = {
   P48A: "P48A: An ended ticket's expanded resultless card reads its detail once — the panel's unrelated polls never re-read it (polyforge#48 AC1)",
   P48D: "P48D: An owner echo hides once its owner line lands in any step's block — the selected step's lines alone never decide delivery (polyforge#48 AC2)",
   P48E: "P48E: An ended ticket's watch poll never reads the composed override view — at most the one transitional read of a fresh selection (polyforge#48 AC3)",
+  P48B: "P48B: The step controls reset per ticket and step — a switch shows neither the previous step's input nor its result or error (polyforge#48 AC4)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1588,6 +1589,31 @@ try {
     await pollUntil(() => watchPolls.length >= 4, "three more watch polls pass", 30_000);
     const grown = viewReads() - before;
     assert.ok(grown <= 1, `an ended ticket's watch poll never reads the override view (${grown} reads after the first)`);
+  });
+
+  // P48B — polyforge#48 (AC4): the per-step overlay controls reset on a step
+  // switch (the mount's key is the ticket + step): the next step's controls
+  // show neither the previous step's typed model, nor its applied feedback or
+  // error line. The unfixed tree kept the component's state across the
+  // switch.
+  await checkPage(T.P48B, "controls reset per ticket and step", {}, async (page) => {
+    setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
+    const panel = await ensureDetail24(page, SLUGP25, WIP25);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    const controls = panel.locator("[data-pf-step-controls]");
+    await node("bravo-code").click();
+    await pollUntil(async () => (await controls.count()) === 1, "the skippable tail's controls render");
+    await controls.locator("[data-pf-step-controls-model]").fill("ovr/p48-model");
+    await controls.locator("[data-pf-step-controls-apply]").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-applied]").count()) === 1, "the applied feedback shows on the first step");
+    // The switch to another unstarted step: a fresh control block — the
+    // previous step's input, result and error must not carry over.
+    await node("alpha-plan").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-source]").innerText()).includes("steps.e2e.alpha-plan.models"),
+      "the switched step's own row renders");
+    assert.equal(await controls.locator("[data-pf-step-controls-model]").inputValue(), "", "the previous step's typed model is gone");
+    assert.equal(await controls.locator("[data-pf-step-controls-applied]").count(), 0, "the previous step's applied feedback is gone");
+    assert.equal(await controls.locator("[data-pf-step-controls-error]").count(), 0, "no error line carries over");
   });
 
   await check(T.AC3, "pf present: no 5xx or console errors", async () => assert.deepEqual(errors.splice(0), []));
