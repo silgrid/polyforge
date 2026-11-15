@@ -1,4 +1,4 @@
-// carries: components/ToolCallCard*, components/SafeMarkdownBody*, components/PolyforgeProgressToolCard*, app/api/polyforge/progress/tool/*
+// carries: components/ToolCallCard*, components/SafeMarkdownBody*, components/PolyforgeProgressToolCard*, components/ThinkingFold*, app/api/polyforge/progress/tool/*
 // carries: app/api/polyforge/polyforge-progress-tool-routes*
 // — job-detail execution progress as structured rendering.
 //
@@ -271,13 +271,20 @@ try {
   await check("S271-02", () => withPage(async (page) => {
     page.__progress = snapshotBody([line("th1", "narration", "E2E-S271-THINK-P1\n\nE2E-S271-THINK-P2", { variant: "thinking" }), line("md2", "narration", "E2E-S271-PLAIN")]);
     await openDetail(page);
+    // polyforge#53: the thinking line renders through the session's shared
+    // fold — collapsed to one line by default (the icon + first-line
+    // preview), the paragraph tail out of the DOM until a click expands it.
     const row = await rowByText(page, "narration", "E2E-S271-THINK-P1");
+    assert.equal(await toggle(row).count(), 1, "the thinking row exposes one fold toggle");
+    assert.equal(await toggle(row).getAttribute("aria-expanded"), "false", "the thinking row renders collapsed by default");
+    assert.ok(!(await text(row)).includes("E2E-S271-THINK-P2"), "the collapsed row keeps the thinking tail out of view");
+    await toggle(row).click();
+    await waitFor(async () => (await toggle(row).getAttribute("aria-expanded")) === "true", "the click expands the thinking row");
     const shape = await markdownShape(row);
     assert.ok(shape.paragraphs >= 2, `thinking renders as markdown paragraphs (${shape.paragraphs})`);
     assert.ok(shape.italic, "the thinking treatment is italic");
     assert.ok(shape.text.includes("E2E-S271-THINK-P2"), "the whole thinking text is present");
-    assert.ok(shape.height > 0, "the thinking entry is visible without a click");
-    assert.equal(await row.locator('[aria-expanded="false"]').count(), 0, "thinking is not folded behind a click");
+    assert.ok(shape.height > 0, "the expanded thinking entry is visible");
   }));
 
   await check("S271-03", async () => {

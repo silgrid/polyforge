@@ -2888,7 +2888,13 @@ A passive `scroll` listener keeps `pinned` =
 `isProgressPinnedToBottom` (within 8 px of the bottom, or content no taller
 than the viewport; unreadable numbers never pin). After every new snapshot
 or added chunk the region scrolls to the bottom only while pinned; a reader
-parked anywhere else is never moved by a poll.
+parked anywhere else is never moved by a poll. A MANUAL DAG choice
+(polyforge#48) scrolls the clicked step's first block head into view with
+the least scrolling — the DAG above kept on screen whenever the two fit —
+and only that scroll interrupts the follow: a choice whose records' start
+is already on screen scrolls nothing and leaves the follow untouched, so
+the region still opens at its bottom (polyforge#53 r3, S238-24's rule;
+P48C's mid-stream choice still scrolls and unpins).
 
 **The two jump buttons (`[data-pf-detail-top]` above, `[data-pf-detail-latest]`
 below).** Two floating buttons stacked over the region's bottom, horizontally
@@ -2973,8 +2979,16 @@ per-line length cap; earlier it was one nowrap/ellipsized
 line. Each entry renders by kind: narration
 through the transcript's own Markdown guard (`components/SafeMarkdownBody.tsx`,
 shared with `MessageView.tsx`; paragraphs, lists, code blocks, two pixels under
-the chat's 14px), a `thinking` one in the same Markdown, dim italic and never
-folded — a narration over the guard's `MAX_MARKDOWN_CHARS` (100 000) skips
+the chat's 14px); a `thinking` one through the session's own collapsible
+thinking treatment — the shared `components/ThinkingFold.tsx` (polyforge#53):
+collapsed to a single row by default (the session's thinking icon + the
+first-line preview, `aria-expanded` toggle), the 「默认展开思考块」 preference
+(`pi-thinking-expanded`, the settings panel's switch) deciding the default and
+its broadcast updating already-mounted rows, one click toggling, and the
+expanded body the same Markdown in the thinking line's dim italic treatment;
+the row's keyed instance keeps a manual choice across the poll's re-renders,
+and its toggle rides the panel's fold measurement like a tool card's — a
+narration over the guard's `MAX_MARKDOWN_CHARS` (100 000) skips
 Markdown and renders inline, in full, as plain `pre-wrap` text in its line
 style, never the guard's click-to-reveal button and height-bounded scrolling
 box (that would be a per-entry gate and a nested scroller here; pin S238-28 in
@@ -3114,20 +3128,24 @@ too: the card reports each toggle (`onToggle`) and the panel
 bumps the same `foldVersion` measurement, so expanding a card at the bottom
 leaves `scrollTop` where it was, unpins and shows ↓ Latest (a later poll does
 not pull the reader off the opened card), and collapsing at the bottom stays
-pinned (pin S238-27 in `e2e/polyforge-238.mjs`).
+pinned (pin S238-27 in `e2e/polyforge-238.mjs`). A thinking row's fold toggle
+rides the same measurement (polyforge#53), like a subagent entry's.
 
 Narration is
-`var(--text)`; thinking narration is `var(--text-dim)` italic (an owner ruling)
-— its row also rebinds `--text` to `var(--text-dim)`, because
+`var(--text)`; thinking narration's expanded body is `var(--text-dim)` italic
+(an owner ruling) — the shared fold's expanded content also rebinds `--text` to
+`var(--text-dim)`, because
 the Markdown body sets its own `color: var(--text)` and would otherwise
 render thinking at full text colour (computed-colour pin S238-26 in
-`e2e/polyforge-238.mjs`); a tool line is its card; an event line mono, in its tone
+`e2e/polyforge-238.mjs`; the scenario seeds the 「默认展开思考块」 preference so
+the row is expanded); a tool line is its card; an event line mono, in its tone
 (`[data-pf-progress-tone]`: accent `var(--accent)`, dim `var(--text-dim)`, red
 #dc2626, amber #d97706, green #16a34a, `neutral` `var(--text-muted)`). An
 event row's hover `title` is its raw daemon kind and its full text (pi#112's
 "raw kind one hover away"; an absorbed start/terminal line's is on its head),
-a tool card's is the full masked header; narration shows its full text
-itself. States:
+a tool card's is the full masked header; plain narration shows its full text
+itself, a thinking row's fold shows the first-line preview collapsed and the
+full text as its expanded body (polyforge#53). States:
 `polyforge.loading` only until the first read settles,
 `polyforge.progress.empty` (暂无进度 / No progress yet / 暫無進度) for an
 available snapshot with no line, `polyforge.progress.unavailable` (进度不可用 /

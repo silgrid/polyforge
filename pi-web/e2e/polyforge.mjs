@@ -1,4 +1,4 @@
-// carries: components/PolyforgePanel*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*, components/PolyforgeStepControls*, app/api/polyforge/override/*, lib/polyforge-overrides*
+// carries: components/PolyforgePanel*, components/ThinkingFold*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*, components/PolyforgeStepControls*, app/api/polyforge/override/*, lib/polyforge-overrides*
 // carries: components/AppShell*, app/api/polyforge/polyforge-routes*, app/api/polyforge/polyforge-status-route*, lib/i18n/*, docs/agents/polyforge-panel.md
 // carries: components/PolyforgeDetailProgress*, hooks/__fixtures__/react-hook-shim.mjs, hooks/__tests__/polyforge-panel-progress-stubs.mjs, app/api/polyforge/polyforge-override-route*
 // pi#108 (wi_y3y9SMz4IXKg) — Polyforge dock panel: end-to-end acceptance pass.
@@ -86,6 +86,11 @@ const WIP31 = "wi_E2Eeeee0007"; const SLUG31 = "polyforge#31";
 // unit under test (at most one read in flight per card, an answer older
 // than the displayed one dropped).
 const WIP2R3 = "wi_E2Eeeee0008"; const SLUG2R3 = "polyforge#2";
+// polyforge#53 — one RUNNING single-step ticket whose transcript holds two
+// thinking blocks (one multi-paragraph, so the collapsed preview hides its
+// tail) beside a plain narration: the progress's thinking rows render through
+// the session's shared fold (P53A).
+const WIP53 = "wi_E2Eeeee0014"; const SLUG53 = "polyforge#53";
 const MODEL112 = "example-gateway/model-a-extended-thinking-very-long-e2e-suffix-abcdef0123456789abcdef0123456789";
 const SHORT_MODEL112 = "pi:glm-5.3-short";
 const FROM112 = "pi:glm-e2e-old-777";
@@ -120,6 +125,7 @@ const JOBS = [
   job(WI48C, SLUG48C, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
   job(WIP31, SLUG31, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
   job(WIP2R3, SLUG2R3, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
+  job(WIP53, SLUG53, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
 ];
 // owner-intended change: the selected job's progress read looks the wi up in the daemon's own job
 // record; a throwaway data root lists every fixture job (no capsule → 200 `available:false`), as a real
@@ -381,15 +387,43 @@ const WATCH_P31 = { work_item: WIP31, slug: SLUG31, known: true, job: { status: 
     scroll: { status: "in_progress", started_at: atP31(1) } },
     declared_steps: [{ id: "scroll" }] },
   events: [], last_seq: 259 };
+// ── polyforge#53: the thinking-fold ticket — one RUNNING spawn of step
+// "author" whose transcript holds two thinking blocks (the first
+// multi-paragraph, so a collapsed preview shows only its first line) and a
+// plain narration between them, so the scenario pins each thinking row's own
+// fold state, the plain narration's unchanged rendering, and the manual
+// state's survival across a real progress poll.
+const capsule53 = join(work, "capsules", WIP53);
+mkdirSync(join(capsule53, "runtime-state"), { recursive: true });
+mkdirSync(join(capsule53, "session"), { recursive: true });
+const p53Transcript = join(capsule53, "session", "author.jsonl");
+writeFileSync(p53Transcript, [
+  { type: "session", id: "s-53", timestamp: at3(1) },
+  { type: "message", id: "m-53", parentId: null, timestamp: at3(2), message: { role: "assistant", content: [
+    { type: "thinking", thinking: "E2E-P53-THINK-P1\n\nE2E-P53-THINK-P2" },
+    { type: "text", text: "E2E-P53-NARRATION" },
+    { type: "thinking", thinking: "E2E-P53-THINK-SECOND" },
+  ] } },
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+writeFileSync(join(capsule53, "runtime-state", "spawn-journal.jsonl"), [
+  { at: at3(1), work_item: WIP53, step_id: "author", spawn_n: 1, started_at: at3(1), transcript: p53Transcript, harness: "pi" },
+].map((record) => JSON.stringify(record)).join("\n") + "\n");
+const EVENTS_53 = [{ at: at3(1), kind: "step_started", work_item: WIP53, body: { step: "author", model: "pi:glm-e2e", spawn_n: 1 }, seq: 1 }];
+writeFileSync(join(dataRoot, "events", `wi-${WIP53}.jsonl`), EVENTS_53.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_53 = { work_item: WIP53, slug: SLUG53, known: true, job: { status: "running" },
+  execution: { workflow_status: "running", current_step: "author", updated_at: at3(3), steps: { author: { status: "in_progress", started_at: at3(1) } },
+    declared_steps: [{ id: "author" }] },
+  events: EVENTS_53, last_seq: 1 };
 const WATCH_TABLE = (watch112 = WATCH_112) => ({ "pi#108": WATCH_108, wi_E2Eaaaa0001: WATCH_108,
   "pi#109": WATCH_109, wi_E2Ecccc0003: WATCH_109, [SLUG112]: watch112, [WI112]: watch112,
   [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B,
   [SLUGP25]: WATCH_P25, [WIP25]: WATCH_P25,
   [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31, [SLUG2R3]: WATCH_2R3, [WIP2R3]: WATCH_2R3, [SLUG48A]: WATCH_48A, [WI48A]: WATCH_48A,
-  [SLUG48D]: WATCH_48D, [WI48D]: WATCH_48D, [SLUG48C]: WATCH_48C, [WI48C]: WATCH_48C });
+  [SLUG48D]: WATCH_48D, [WI48D]: WATCH_48D, [SLUG48C]: WATCH_48C, [WI48C]: WATCH_48C, [SLUG53]: WATCH_53, [WIP53]: WATCH_53 });
 writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.filter((j) => j.work_item_id !== WIP24B).map((j) => j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 }
   : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A }
   : j.work_item_id === WIP2R3 ? { work_item_id: WIP2R3, capsule_dir: capsule2R3 }
+  : j.work_item_id === WIP53 ? { work_item_id: WIP53, capsule_dir: capsule53 }
   : j.work_item_id === WI48A ? { work_item_id: WI48A, capsule_dir: capsule48A } : { work_item_id: j.work_item_id }) }));
 const stubDir = join(work, "stub-bin");
 mkdirSync(stubDir);
@@ -479,6 +513,7 @@ const T = {
   P48E: "P48E: An ended ticket's watch poll never reads the composed override view — at most the one transitional read of a fresh selection (polyforge#48 AC3)",
   P48B: "P48B: The step controls reset per ticket and step — a switch shows neither the previous step's input nor its result or error (polyforge#48 AC4)",
   P48C: "P48C: A manual DAG choice scrolls the clicked step's records into view from their start — never to the region's bottom, the DAG stays on screen (polyforge#48 AC5)",
+  P53A: "P53A: The progress's thinking blocks render collapsed by default; a click expands one, its manual state survives a poll refresh and the other rows stay collapsed (polyforge#53 AC1 AC4 AC5)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1703,6 +1738,44 @@ try {
         && dr.bottom > rr.top && dr.top < rr.bottom
         && el.scrollTop + el.clientHeight < el.scrollHeight - 2;
     }), "the clicked step's records start in view, the DAG stays on screen and the region is not at its bottom");
+  });
+
+  // P53A — polyforge#53 (AC1, AC4, AC5's e2e face): the running ticket's
+  // two thinking rows render through the session's shared fold — each
+  // collapsed to one line by default (icon + first-line preview, the
+  // paragraph tail out of the DOM), the plain narration between them
+  // unchanged; a click expands the first row, a real progress poll re-read
+  // the stream (the panel polls while the job runs), and the manual state
+  // survives it while the untouched row keeps its own collapsed state.
+  await checkPage(T.P53A, "progress thinking folded", {}, async (page) => {
+    const panel = await ensureDetail24(page, SLUG53, WIP53);
+    const progress = panel.locator("[data-pf-progress]");
+    const thinkingRow = progress.locator('[data-pf-progress-variant="thinking"]');
+    await pollUntil(async () => (await thinkingRow.count()) === 2, "the step's two thinking rows render");
+    const first = thinkingRow.first();
+    const second = thinkingRow.nth(1);
+    const firstToggle = () => first.locator("button[aria-expanded]");
+    // Collapsed by default: each row is one toggle line whose preview shows
+    // the first line only; the thinking tail is not in the DOM.
+    await pollUntil(async () => (await firstToggle().getAttribute("aria-expanded")) === "false" && (await second.locator("button[aria-expanded]").getAttribute("aria-expanded")) === "false", "both thinking rows render collapsed");
+    assert.ok((await first.innerText()).includes("E2E-P53-THINK-P1"), "the collapsed row shows the first-line preview");
+    assert.equal(await first.getByText("E2E-P53-THINK-P2").count(), 0, "the collapsed row hides the thinking tail");
+    assert.ok((await progress.innerText()).includes("E2E-P53-NARRATION"), "the plain narration between them still renders in full");
+    // A click expands the row and its whole thinking renders as Markdown.
+    await firstToggle().click();
+    await pollUntil(async () => (await firstToggle().getAttribute("aria-expanded")) === "true", "the click expands the thinking row");
+    await first.getByText("E2E-P53-THINK-P2").waitFor({ timeout: 10_000 });
+    // A poll whose ANSWER has landed and rendered: the appended transcript
+    // record only reaches the stream through a poll snapshot that was read
+    // after the click and applied to the tree (a request count alone would
+    // prove one was sent, never that its answer arrived). The manual state
+    // survives that refresh (AC4) and the untouched row keeps its own
+    // collapsed state.
+    appendFileSync(p53Transcript, JSON.stringify({ type: "message", id: "m-53b", parentId: null, timestamp: at3(4), message: { role: "assistant", content: [{ type: "text", text: "E2E-P53-AFTER-POLL" }] } }) + "\n");
+    await pollUntil(async () => (await progress.innerText()).includes("E2E-P53-AFTER-POLL"), "a post-click poll snapshot rendered the appended record");
+    assert.equal(await firstToggle().getAttribute("aria-expanded"), "true", "the manual expansion survives the poll refresh");
+    assert.ok((await first.innerText()).includes("E2E-P53-THINK-P2"), "the expanded body is still in the DOM after the poll");
+    assert.equal(await second.locator("button[aria-expanded]").getAttribute("aria-expanded"), "false", "the untouched row keeps its own collapsed state");
   });
 
   await check(T.AC3, "pf present: no 5xx or console errors", async () => assert.deepEqual(errors.splice(0), []));

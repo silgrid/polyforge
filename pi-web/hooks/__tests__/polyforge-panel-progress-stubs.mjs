@@ -56,3 +56,12 @@ export function PolyforgeProjects() {
 export function PolyforgeJobComposer() {
   return null;
 }
+
+// react-markdown, aliased here for the shimmed behaviour tests: the shared
+// ThinkingFold renders the collapsed preview's markdown stripped to text; a
+// walked element tree never renders past the element, so the children pass
+// through untouched and a test reads them off the element (the real package
+// renders the same text for `allowedElements: []` + `unwrapDisallowed`).
+export default function ReactMarkdown({ children }) {
+  return children;
+}

@@ -1,23 +1,21 @@
 "use client";
 
 import { Fragment, memo, useContext, useState, useRef, useEffect, useMemo, type CSSProperties } from "react";
-import ReactMarkdown from "react-markdown";
 import { MarkdownBody } from "./MarkdownBody";
 import { SafeMarkdownBody } from "./SafeMarkdownBody";
 import { TOOL_DURATION_MIN_MS, ToolCallCard, ToolCallCardStat, formatToolDuration } from "./ToolCallCard";
 import { ImagePreview } from "./ImagePreview";
-import { ThinkingIcon } from "./ThinkingIcon";
+import { ThinkingFold, useThinkingExpansion } from "./ThinkingFold";
 import { copyText } from "@/lib/clipboard";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
-import { getAssistantErrorMessage, getThinkingPreview, hasAssistantAnswer, isAssistantTruncated, isEmptyThinkingBlock, splitThinkingPieces } from "@/lib/message-display";
+import { getAssistantErrorMessage, hasAssistantAnswer, isAssistantTruncated, isEmptyThinkingBlock, splitThinkingPieces } from "@/lib/message-display";
 import { formatTurnDuration } from "@/lib/turn-duration";
 import { diffGapLabel, parseUnifiedPatch, unifiedDiffLines, type SplitDiffCell, type SplitDiffFile, type SplitDiffGap, type UnifiedDiffLine } from "@/lib/patch";
 import { applyPatchPreviewToFiles, applyPatchResultHasFailures, extractApplyPatchPaths, getApplyPatchInputText, parseApplyPatchInput } from "@/lib/apply-patch";
 import { isApplyPatchToolName, isEditToolName, isWriteToolName } from "@/lib/tool-names";
 import { isToolCallExpanded, setToolCallExpanded } from "@/lib/tool-call-expansion";
-import { isThinkingExpandedByDefault, THINKING_EXPANDED_EVENT } from "@/lib/thinking-expansion-preference";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 import type { WrittenFile } from "@/lib/turn-written-files";
 import { skillExpansionContent, skillExpansionToCommand } from "@/lib/slash-display";
@@ -999,7 +997,9 @@ export function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex 
   blockIndex: number;
 }) {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(isThinkingExpandedByDefault);
+  // The shared fold's own state (polyforge#53): the 「默认展开思考块」 preference
+  // decides the default and its broadcast updates this block in place.
+  const [expanded, setExpanded] = useThinkingExpansion();
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1015,14 +1015,6 @@ export function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex 
   }
   const tRef = useRef(t);
   tRef.current = t;
-  const preview = getThinkingPreview(block.thinking);
-
-  // Keep already-mounted blocks in sync when the preference changes.
-  useEffect(() => {
-    const onChange = () => setExpanded(isThinkingExpandedByDefault());
-    window.addEventListener(THINKING_EXPANDED_EVENT, onChange);
-    return () => window.removeEventListener(THINKING_EXPANDED_EVENT, onChange);
-  }, []);
 
   // Load deferred history content whenever the block is expanded.
   // loadThinkingContent() memoizes in-flight promises and drops failed ones
@@ -1056,63 +1048,16 @@ export function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex 
   }, [expanded, block.deferred, content, sessionId, entryId, blockIndex]);
 
   return (
-    <div style={{
-      display: "flex", alignItems: "flex-start", gap: 6, minWidth: 0,
-      border: "1px solid var(--border)",
-      borderRadius: 7,
-      padding: "6px 10px",
-      background: "var(--bg)",
-      fontFamily: "var(--font-mono)",
-      fontSize: "calc(11px + var(--chat-font-size-offset, 0px))",
-      lineHeight: 1.5,
-    }}>
-      <button
-        type="button"
-        aria-expanded={expanded}
-        aria-label={`${t("i18n.thinking")}${preview ? `: ${preview}` : ""}`}
-        title={t("i18n.thinking")}
-        onClick={() => setExpanded((v) => !v)}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          width: expanded ? 14 : "100%",
-          flexShrink: expanded ? 0 : 1,
-          minWidth: 0,
-          minHeight: "1.5em",
-          padding: 0,
-          background: "transparent",
-          border: "none",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          font: "inherit",
-          textAlign: "left",
-        }}
-      >
-        <ThinkingIcon active={expanded} />
-        {!expanded && (
-          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {preview ? <ReactMarkdown allowedElements={[]} unwrapDisallowed skipHtml>{preview}</ReactMarkdown> : "..."}
-          </span>
-        )}
-      </button>
-      {expanded && (
-        <div
-          style={{
-            flex: 1,
-            minWidth: 0,
-            color: error ? "#f87171" : "var(--text-muted)",
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
-          }}
-        >
-           {loading ? t("i18n.loadingThinking") : error ?? <ThinkingText text={(block.deferred ? content : block.thinking) ?? ""} />}
-        </div>
-      )}
-      {duration !== undefined && (
-        <span style={{ flexShrink: 0, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{duration}s</span>
-      )}
-    </div>
+    <ThinkingFold
+      text={block.thinking}
+      label={t("i18n.thinking")}
+      expanded={expanded}
+      onToggle={setExpanded}
+      contentStyle={{ color: error ? "#f87171" : "var(--text-muted)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+      trailing={duration !== undefined ? <span style={{ flexShrink: 0, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{duration}s</span> : undefined}
+    >
+      {loading ? t("i18n.loadingThinking") : error ?? <ThinkingText text={(block.deferred ? content : block.thinking) ?? ""} />}
+    </ThinkingFold>
   );
 }
 
