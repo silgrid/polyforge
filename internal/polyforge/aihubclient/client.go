@@ -189,6 +189,33 @@ func (c *Client) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
 	return &wi, nil
 }
 
+// WorkItemEvent is one entry of a work item's aihub event history
+// (the `?include=events` read of the work item's route: the events ride
+// the answer's attrs, presentation-only, never persisted there).
+type WorkItemEvent struct {
+	ID        int64           `json:"id"`
+	CreatedAt string          `json:"created_at"`
+	Actor     string          `json:"actor,omitempty"`
+	Type      string          `json:"type"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+// GetWorkItemEvents answers the work item's event history (the one
+// durable record of whether a ticket has run before: a session
+// lifecycle event or a resume marks release progress, polyforge#47
+// AC6).
+func (c *Client) GetWorkItemEvents(idOrSlug string) ([]WorkItemEvent, error) {
+	var v struct {
+		Attrs struct {
+			Events []WorkItemEvent `json:"events"`
+		} `json:"attrs"`
+	}
+	if err := c.Do("GET", "/api/v1/work-items/"+escapeWorkItemRef(idOrSlug)+"?include=events", nil, &v); err != nil {
+		return nil, err
+	}
+	return v.Attrs.Events, nil
+}
+
 // Queue returns the ready queue's executable items for autonomous
 // claiming (the daemon auto-pull).
 func (c *Client) Queue(project string) ([]api.WorkItem, error) {
