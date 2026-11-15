@@ -21,7 +21,7 @@ started - <why>`` (gate.py's format), so a reader watching the capsule
 follows a command that has not ended.
 
 The tier: ``--tier auto`` (the lane's line) reads the capsule's work item
-(``runtime-state/work-item.json``) — a ticket carrying a truthy
+(``runtime-state/work-item.json``) — a ticket carrying a true
 ``integration_fix`` attr (the marker an integration batch's full-gate
 writes on its fix tickets) runs the **full** bar: the engine plans ``--full``
 (a forced-full path, a full tail — everything the light tier runs and the
@@ -1407,8 +1407,9 @@ WORK_ITEM_DOC = "runtime-state/work-item.json"
 
 def resolve_tier(capsule: str, requested: str) -> Tuple[str, str]:
     """The tier the line's request resolves to, and why a full run is full
-    ("" = light): auto reads the capsule's work item — a truthy
-    integration_fix attr runs the full bar; light and full are the hand
+    ("" = light): auto reads the capsule's work item — a true
+    integration_fix attr (the boolean the batch's skills write) runs the
+    full bar; light and full are the hand
     run's explicit overrides."""
     if requested != TIER_AUTO:
         return (requested, "" if requested == TIER_LIGHT else "the full tier was requested")
@@ -1419,7 +1420,7 @@ def resolve_tier(capsule: str, requested: str) -> Tuple[str, str]:
         return TIER_LIGHT, ""
     attrs = doc.get("attrs") if isinstance(doc, dict) else None
     v = attrs.get("integration_fix") if isinstance(attrs, dict) else None
-    if v is True or (isinstance(v, str) and v not in ("", "false")):
+    if v is True:  # the boolean the integration batch's skills write
         return TIER_FULL, FULL_TIER_REASON
     return TIER_LIGHT, ""
 
