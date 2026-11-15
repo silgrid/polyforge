@@ -99,6 +99,33 @@ func TestOverrideWatchSnapshotMergesPending(t *testing.T) {
 	}
 }
 
+// The watch snapshot of a blocked work item applies the claim's merge
+// rule too (polyforge#25 u20): a pending aspect older than the sealed
+// capsule's same aspect is not shown (nor marked pending); a newer
+// pending chain is, marked pending.
+func TestOverrideWatchHonoursMergeTimes(t *testing.T) {
+	f := ovStaleResidue(t, "wi_ov20b")
+	snap, err := ovWatchGet(t, f.td, f.wi)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	ovr := snap.Execution.Overrides["merge"]
+	if ovr.Pending || len(ovr.Models) != 1 || ovr.Models[0] != "pi:ovtest/m-two" || ovr.Skip == nil || *ovr.Skip {
+		t.Errorf("an older pending residue must not show over the capsule's newer aspects: %+v", ovr)
+	}
+	if _, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "merge", Operator: "usr_newer", Models: []string{"claude:any-model"}}); ae != nil {
+		t.Fatalf("the newer blocked write: %s (%s)", ae.Code, ae.Detail)
+	}
+	snap, err = ovWatchGet(t, f.td, f.wi)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	ovr = snap.Execution.Overrides["merge"]
+	if !ovr.Pending || len(ovr.Models) != 1 || ovr.Models[0] != "claude:any-model" || ovr.Skip == nil || *ovr.Skip {
+		t.Errorf("a newer pending chain must show pending (the skip stays the capsule's): %+v", ovr)
+	}
+}
+
 // `pf watch --once` names the override events' step, aspect, value and
 // operator on the event lines (the render half of AC6).
 func TestOverrideEventRender(t *testing.T) {

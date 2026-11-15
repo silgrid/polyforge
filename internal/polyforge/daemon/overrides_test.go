@@ -613,6 +613,123 @@ func TestOverrideBlockedClearOfSealedChain(t *testing.T) {
 	}
 }
 
+// ovStaleResidue builds a blocked work item whose pending record holds
+// an older residue of step merge (chain pi:ovtest/m-ok and skip on, both
+// recorded while blocked) and whose sealed capsule carries newer values
+// of both aspects (chain pi:ovtest/m-two, skip off) — the state the
+// owner's sequence leaves (a failed claim publish keeps the residue, a
+// later paused write lands in the capsule, the work item blocks again;
+// the ruling of 2026-11-15T01:37:30Z). The re-claim keeps the capsule's.
+func ovStaleResidue(t *testing.T, wi string) *ovFixture {
+	t.Helper()
+	f := newOverrideFixture(t, wi)
+	if err := f.td.rt.Stop(context.Background(), f.wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("blocked close: %v", err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, ok := f.td.rt.Info(f.wi); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the blocked close never dropped the job")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	yes := true
+	for _, req := range []protocol.OverrideWriteRequest{
+		{Step: "merge", Operator: "usr_old", Models: []string{"pi:ovtest/m-ok"}},
+		{Step: "merge", Operator: "usr_old", Skip: &yes},
+	} {
+		if _, ae := f.td.ovPost(t, f.wi, req); ae != nil {
+			t.Fatalf("the blocked write %+v: %s (%s)", req, ae.Code, ae.Detail)
+		}
+	}
+	pend := f.td.rt.PendingStepOverrides(f.wi)
+	if p := pend["merge"]; p == nil || p.ModelsAt == "" || p.SkipAt == "" {
+		t.Fatalf("the pending residue: %+v", p)
+	}
+	time.Sleep(2 * time.Millisecond)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	no := false
+	ovSealedOverlay(t, f, capsule.StepOverrides{Steps: map[string]*capsule.StepOverride{
+		"merge": {Models: []string{"pi:ovtest/m-two"}, ModelsBy: "usr_new", ModelsAt: now,
+			Skip: &no, SkipBy: "usr_new", SkipAt: now},
+	}})
+	return f
+}
+
+// ovSealedOverlay writes the sealed capsule's overlay record (the seal
+// lifted for the write and restored).
+func ovSealedOverlay(t *testing.T, f *ovFixture, ov capsule.StepOverrides) {
+	t.Helper()
+	dir := filepath.Dir(f.overlayFile())
+	if err := os.Chmod(f.capDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := capsule.WriteStepOverrides(f.capDir, ov); err != nil {
+		t.Fatalf("writing the sealed overlay: %v", err)
+	}
+	for _, d := range []string{dir, f.capDir} {
+		if err := os.Chmod(d, 0o555); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// ovViewRow answers the view's row of step id (fails when absent).
+func ovViewRow(t *testing.T, f *ovFixture, id string) protocol.OverrideStepView {
+	t.Helper()
+	v, ae := f.td.ovView(t, f.wi)
+	if ae != nil {
+		t.Fatalf("view: %s (%s)", ae.Code, ae.Detail)
+	}
+	for _, s := range v.Steps {
+		if s.ID == id {
+			return s
+		}
+	}
+	t.Fatalf("the view has no %s row: %+v", id, v.Steps)
+	return protocol.OverrideStepView{}
+}
+
+// The overrides view of a blocked work item answers what the re-claim
+// will run (AC8): a pending aspect older than the sealed capsule's same
+// aspect does not apply (the claim's merge keeps the capsule's), so the
+// row shows the capsule's chain and skip, not pending; a newer pending
+// chain applies and shows pending over the capsule's still-newer skip
+// (polyforge#25 u20).
+func TestOverrideViewHonoursMergeTimes(t *testing.T) {
+	f := ovStaleResidue(t, "wi_ov20a")
+	row := ovViewRow(t, f, "merge")
+	if row.Pending || len(row.Models) != 1 || row.Models[0] != "pi:ovtest/m-two" ||
+		row.Source != "step override" || len(row.Effective) != 1 || row.Effective[0] != "pi:ovtest/m-two" {
+		t.Errorf("an older pending chain must not show over the capsule's newer one: %+v", row)
+	}
+	if row.Skip == nil || *row.Skip {
+		t.Errorf("an older pending skip must not show over the capsule's newer skip off: %+v", row.Skip)
+	}
+	// a newer pending chain applies: shown pending; the skip stays the
+	// capsule's (its pending aspect is still older)
+	if _, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "merge", Operator: "usr_newer", Models: []string{"claude:any-model"}}); ae != nil {
+		t.Fatalf("the newer blocked write: %s (%s)", ae.Code, ae.Detail)
+	}
+	row = ovViewRow(t, f, "merge")
+	if !row.Pending || len(row.Models) != 1 || row.Models[0] != "claude:any-model" ||
+		row.Source != "step override (pending)" || len(row.Effective) != 1 || row.Effective[0] != "claude:any-model" {
+		t.Errorf("a newer pending chain must show pending and effective: %+v", row)
+	}
+	if row.Skip == nil || *row.Skip {
+		t.Errorf("the older pending skip must still yield to the capsule's skip off: %+v", row.Skip)
+	}
+}
+
 // A work item in a terminal status (here wrapped) takes no overlay
 // write: it will never be claimed again, so the change would neither
 // land nor ever be consumed (r1#6). DAEMON-409, nothing recorded.
