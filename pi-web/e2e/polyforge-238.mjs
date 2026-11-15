@@ -1,4 +1,4 @@
-// carries: hooks/usePolyforgeProgress*, app/api/polyforge/progress/route.ts
+// carries: hooks/usePolyforgeProgress*, components/ThinkingFold*, app/api/polyforge/progress/route.ts
 // — Polyforge job detail v2: summary → DAG → whole-job execution progress.
 //
 // Authored PRE-CODE against artifacts/spec.md (Acceptance criteria + `####

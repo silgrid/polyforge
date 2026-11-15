@@ -1,4 +1,4 @@
-// carries: components/ToolCallCard*, components/SafeMarkdownBody*, components/PolyforgeProgressToolCard*, app/api/polyforge/progress/tool/*
+// carries: components/ToolCallCard*, components/SafeMarkdownBody*, components/PolyforgeProgressToolCard*, components/ThinkingFold*, app/api/polyforge/progress/tool/*
 // carries: app/api/polyforge/polyforge-progress-tool-routes*
 // — job-detail execution progress as structured rendering.
 //

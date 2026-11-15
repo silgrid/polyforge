@@ -1,4 +1,4 @@
-// carries: components/PolyforgePanel*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*, components/PolyforgeStepControls*, app/api/polyforge/override/*, lib/polyforge-overrides*
+// carries: components/PolyforgePanel*, components/ThinkingFold*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*, components/PolyforgeStepControls*, app/api/polyforge/override/*, lib/polyforge-overrides*
 // carries: components/AppShell*, app/api/polyforge/polyforge-routes*, app/api/polyforge/polyforge-status-route*, lib/i18n/*, docs/agents/polyforge-panel.md
 // carries: components/PolyforgeDetailProgress*, hooks/__fixtures__/react-hook-shim.mjs, hooks/__tests__/polyforge-panel-progress-stubs.mjs, app/api/polyforge/polyforge-override-route*
 // pi#108 (wi_y3y9SMz4IXKg) — Polyforge dock panel: end-to-end acceptance pass.
@@ -1748,8 +1748,6 @@ try {
   // the stream (the panel polls while the job runs), and the manual state
   // survives it while the untouched row keeps its own collapsed state.
   await checkPage(T.P53A, "progress thinking folded", {}, async (page) => {
-    const progressRequests = [];
-    page.on("request", (request) => { if (new URL(request.url()).pathname === "/api/polyforge/progress") progressRequests.push(Date.now()); });
     const panel = await ensureDetail24(page, SLUG53, WIP53);
     const progress = panel.locator("[data-pf-progress]");
     const thinkingRow = progress.locator('[data-pf-progress-variant="thinking"]');
@@ -1767,10 +1765,14 @@ try {
     await firstToggle().click();
     await pollUntil(async () => (await firstToggle().getAttribute("aria-expanded")) === "true", "the click expands the thinking row");
     await first.getByText("E2E-P53-THINK-P2").waitFor({ timeout: 10_000 });
-    // A real progress poll re-read the stream; the manual state survives it
-    // (AC4) and the untouched row keeps its own collapsed state.
-    const reads = progressRequests.length;
-    await pollUntil(async () => progressRequests.length > reads, "a later progress poll re-read the stream");
+    // A poll whose ANSWER has landed and rendered: the appended transcript
+    // record only reaches the stream through a poll snapshot that was read
+    // after the click and applied to the tree (a request count alone would
+    // prove one was sent, never that its answer arrived). The manual state
+    // survives that refresh (AC4) and the untouched row keeps its own
+    // collapsed state.
+    appendFileSync(p53Transcript, JSON.stringify({ type: "message", id: "m-53b", parentId: null, timestamp: at3(4), message: { role: "assistant", content: [{ type: "text", text: "E2E-P53-AFTER-POLL" }] } }) + "\n");
+    await pollUntil(async () => (await progress.innerText()).includes("E2E-P53-AFTER-POLL"), "a post-click poll snapshot rendered the appended record");
     assert.equal(await firstToggle().getAttribute("aria-expanded"), "true", "the manual expansion survives the poll refresh");
     assert.ok((await first.innerText()).includes("E2E-P53-THINK-P2"), "the expanded body is still in the DOM after the poll");
     assert.equal(await second.locator("button[aria-expanded]").getAttribute("aria-expanded"), "false", "the untouched row keeps its own collapsed state");
