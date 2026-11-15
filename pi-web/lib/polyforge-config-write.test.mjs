@@ -492,3 +492,64 @@ test("a write's capability gate is fresh: one forced probe per write, the pin re
   assert.ok(!calls(tree).some((call) => call.args.includes("set")), "nothing written");
   assert.deepEqual(versionReads().map((call) => call.args), [["--json", "--version"]]);
 });
+
+// polyforge#46 u4: a reload and a rollback pin their scope before any write
+// gate runs (the rollback's CAS pre-read, the reload itself), so each forces
+// the presence probe first — a pf upgraded or downgraded inside the 60 s
+// window is pinned by what it is now, with one `pf --json --version` per call.
+test("reload and the rollback's pre-read pin by the pf installed now: an upgrade or downgrade inside the probe window", async (t) => {
+  const tree = stubTree({ version: "v2.20.21" });
+  withPath(tree, t);
+  const capsFile = join(tree.bin, "caps.json");
+  const CAPS = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"];
+  writeFileSync(capsFile, "null");
+  const pf = readFileSync(join(tree.bin, "pf"), "utf8")
+    .replace('const rest = args.filter((a) => a !== "--json");', 'const rest = args.filter((a, i) => a !== "--json" && a !== "--profile" && args[i - 1] !== "--profile");')
+    .replace('if (args.includes("--version"))', `const caps = JSON.parse(fs.readFileSync(${JSON.stringify(capsFile)}, "utf8"));\nif (args.includes("--version") && args.includes("--json") && caps) { process.stdout.write(JSON.stringify({ version: "v2.20.21", capabilities: caps }) + "\\n"); process.exit(0); }\nif (args.includes("--version"))`)
+    .replace('if (rest[0] === "ops" && rest[1] === "status")', 'if (rest[0] === "config" && rest[1] === "reload") { process.stdout.write(JSON.stringify({ outcome: "reloaded" }) + "\\n"); process.exit(0); }\nif (rest[0] === "ops" && rest[1] === "status")')
+    .replace('{ key: "api_key", set: true, source: "file", class: "restart-only" },', '{ key: "api_key", set: true, source: "file", class: "restart-only" },\n    { key: "user_id", value: "u_old", source: "file", class: "cli-only" },');
+  writeFileSync(join(tree.bin, "pf"), pf);
+  const lib = await jiti.import("./polyforge-config-write.ts");
+  const status = await jiti.import("./polyforge-status.ts");
+  const versionReads = () => calls(tree).filter((call) => call.args.includes("--version")).length;
+  const argvOf = (verb) => calls(tree).filter((call) => call.args.includes(verb)).map((call) => call.args);
+  /** The probe window holds `held`; pf is then swapped to `now` without a probe. */
+  const swap = async (held, now) => {
+    writeFileSync(capsFile, JSON.stringify(held));
+    await status.probePolyforgeVersion(true);
+    writeFileSync(capsFile, JSON.stringify(now));
+    reset(tree);
+  };
+  const alphaEntry = { id: "e1", at: "2026-11-15T00:00:00Z", scope: "cli", cwd: "", key: "user_id", old: "u_old", new: "u_new", secret: false, rollbackable: true, profile: "alpha" };
+  const defaultEntry = { ...alphaEntry, id: "e2", profile: "default" };
+
+  // upgrade inside the window: the named Cell is addressable at once
+  await swap(null, CAPS);
+  const upgradedReload = await lib.reloadPolyforgeConfig({ profile: "alpha" }).catch((error) => error);
+  assert.equal(upgradedReload instanceof Error, false, `the upgraded pf reloads the named Cell (${upgradedReload?.message})`);
+  assert.deepEqual(argvOf("reload"), [["--profile", "alpha", "--json", "config", "reload"]]);
+  assert.equal(versionReads(), 1, "one forced probe per reload");
+
+  await swap(null, CAPS);
+  const upgradedRollback = await lib.rollbackPolyforgeConfig({ key: "user_id", entry: alphaEntry }).catch((error) => error);
+  assert.equal(upgradedRollback instanceof Error, false, `the upgraded pf rolls the named Cell back (${upgradedRollback?.message})`);
+  assert.deepEqual(argvOf("list")[0]?.slice(0, 2), ["--profile", "alpha"], "the CAS pre-read reads alpha's file");
+  assert.deepEqual(argvOf("set")[0]?.slice(0, 2), ["--profile", "alpha"]);
+  assert.equal(versionReads(), 1, "the pre-read and the write share one forced probe");
+
+  // downgrade inside the window: the default Cell is unflagged again, at once
+  await swap(CAPS, null);
+  await lib.reloadPolyforgeConfig({ profile: "default" });
+  assert.deepEqual(argvOf("reload"), [["--json", "config", "reload"]], "a pre-Cell pf reloads unflagged");
+  assert.equal(versionReads(), 1);
+
+  await swap(CAPS, null);
+  await lib.rollbackPolyforgeConfig({ key: "user_id", entry: defaultEntry });
+  assert.deepEqual(argvOf("list").map((args) => args.includes("--profile")), [false, false], "neither the CAS pre-read nor the write's list read names a Cell on a pre-Cell pf");
+  assert.equal(argvOf("set")[0]?.includes("--profile"), false);
+  assert.equal(versionReads(), 1, "the pre-read and the write share one forced probe");
+
+  await swap(CAPS, null);
+  await assert.rejects(lib.rollbackPolyforgeConfig({ key: "user_id", entry: alphaEntry }), (error) => error.status === 400 && /upgrade pf/.test(error.message));
+  assert.deepEqual(argvOf("list"), [], "a named Cell on the downgraded pf is refused before the pre-read");
+});
