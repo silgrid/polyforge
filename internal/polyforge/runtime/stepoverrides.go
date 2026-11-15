@@ -188,6 +188,14 @@ func (r *Runtime) applyOverrideScene(j *job, ch OverrideChange, posture string) 
 		out.Published = false
 		out.Note = "the overlay is written and committed; the push reported nothing sent"
 	}
+	if out.Published {
+		// the chain now carries the claim's merge (committed into this
+		// capsule at claim) and this write: a pending residue a failed
+		// claim publish left is redundant, and a later re-claim must not
+		// merge it over this newer change. A failed push keeps it (a
+		// crash would re-claim from a chain lacking the merge).
+		r.clearPendingOverrides(j.wi)
+	}
 	r.tapOverride(j.wi, ch, posture, out.Published)
 	return out, nil
 }
