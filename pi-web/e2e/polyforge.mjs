@@ -1645,15 +1645,18 @@ try {
     // review r1#7: the ERROR half — a refused write's typed words must not
     // carry to the next step either.
     setState({ overrideView: OVERRIDE_VIEW_P25, overrideRefuse: { code: "DAEMON-409", detail: "step alpha-plan has a live dispatch (its status is in_progress): the overlay is for steps without one" } });
+    const saw409 = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/polyforge/override" && r.status() === 409, { timeout: 5000 });
     await controls.locator("[data-pf-step-controls-model]").fill("ovr/p48-refused");
     await controls.locator("[data-pf-step-controls-apply]").click();
+    await saw409;
     await pollUntil(async () => (await controls.locator("[data-pf-step-controls-error]").count()) === 1, "the refused write's typed words show on this step");
     assert.ok((await controls.locator("[data-pf-step-controls-error]").innerText()).includes("live dispatch"), "the refusal's detail shows verbatim");
     // the browser logs this scenario's own refused write as a network console
     // entry (a 409 the assertion above demanded) — it leaves the collection
-    // here, like P25C's.
-    const entry = errors.findIndex((line) => line.includes("409"));
-    if (entry >= 0) errors.splice(entry, 1);
+    // here, like P25C's. The response is awaited first and the error text is
+    // polled, so the entry has landed; splice every 409 line (the console
+    // event may ride one turn behind the response).
+    for (let index = errors.length - 1; index >= 0; index--) if (errors[index].includes("409")) errors.splice(index, 1);
     setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
     await node("bravo-code").click();
     await pollUntil(async () => (await controls.locator("[data-pf-step-controls-skip]").count()) === 1, "the skippable step's controls render again");
