@@ -454,3 +454,41 @@ test(" the skip switch's unset records the old value and rolls back to set", asy
   const setCall = calls(tree).find((call) => call.args.includes("set"));
   assert.deepEqual(setCall.args.slice(0, 5), ["--json", "config", "set", "steps.alpha.merge.skip", "true"]);
 });
+
+// polyforge#46: the scope pin reads the dock's cached presence probe, and
+// every write forces that probe first — so a pf upgraded or downgraded
+// inside the 60 s window is what the write gate sees, with one
+// `pf --json --version` per write.
+test("a write's capability gate is fresh: one forced probe per write, the pin reads its answer", async (t) => {
+  const tree = stubTree({ version: "v2.20.21" });
+  withPath(tree, t);
+  const capsFile = join(tree.bin, "caps.json");
+  writeFileSync(capsFile, "null");
+  const pf = readFileSync(join(tree.bin, "pf"), "utf8")
+    .replace('const rest = args.filter((a) => a !== "--json");', 'const rest = args.filter((a, i) => a !== "--json" && a !== "--profile" && args[i - 1] !== "--profile");')
+    .replace('if (args.includes("--version"))', `const caps = JSON.parse(fs.readFileSync(${JSON.stringify(capsFile)}, "utf8"));\nif (args.includes("--version") && args.includes("--json") && caps) { process.stdout.write(JSON.stringify({ version: "v2.20.21", capabilities: caps }) + "\\n"); process.exit(0); }\nif (args.includes("--version"))`)
+    .replace('{ key: "api_key", set: true, source: "file", class: "restart-only" },', '{ key: "api_key", set: true, source: "file", class: "restart-only" },\n    { key: "user_id", value: "u_old", source: "file", class: "cli-only" },');
+  writeFileSync(join(tree.bin, "pf"), pf);
+  const lib = await jiti.import("./polyforge-config-write.ts");
+  const status = await jiti.import("./polyforge-status.ts");
+  const versionReads = () => calls(tree).filter((call) => call.args.includes("--version"));
+
+  await status.probePolyforgeVersion(true);
+  assert.deepEqual((await status.probePolyforgeVersion()).capabilities, [], "the window holds a pre-Cell pf");
+  writeFileSync(capsFile, JSON.stringify(["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"]));
+  reset(tree);
+  const written = await lib.writePolyforgeConfig({ action: "set", key: "user_id", value: "u_new", profile: "alpha", expect_state: { file_sha256: null } });
+  assert.equal(written.entry.profile, "alpha", "the upgraded pf inside the window addresses the named Cell");
+  assert.deepEqual(calls(tree).find((call) => call.args.includes("set")).args.slice(0, 2), ["--profile", "alpha"]);
+  assert.deepEqual(versionReads().map((call) => call.args), [["--json", "--version"]], "one forced probe per write; the pin reads its answer");
+
+  writeFileSync(capsFile, "null");
+  reset(tree);
+  await assert.rejects(
+    lib.writePolyforgeConfig({ action: "set", key: "user_id", value: "u_newer", profile: "alpha", expect_state: { file_sha256: null } }),
+    (error) => error.status === 400 && /upgrade pf/.test(error.message),
+    "a pf downgraded inside the window is refused the named Cell",
+  );
+  assert.ok(!calls(tree).some((call) => call.args.includes("set")), "nothing written");
+  assert.deepEqual(versionReads().map((call) => call.args), [["--json", "--version"]]);
+});

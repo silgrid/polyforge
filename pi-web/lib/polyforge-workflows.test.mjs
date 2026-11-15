@@ -94,14 +94,14 @@ test("with no cli.toml mapping, every read spawns the cwd's two pf reads afresh 
   assert.equal(first.workspace.steps.alpha.grill.declared, true);
   await lib.readPolyforgeWorkflows("/ws/sub", DEFAULT_CELL);
   const reads = calls();
-  // per call: the forced presence probe, then one capability read that pins
-  // the default Cell (this stub reports none: a pre-Cell pf, so the reads
-  // stay unflagged) — both on the `--json --version` machine line
-  assert.equal(reads.filter((line) => line === "--json --version").length, 4, "one presence probe and one capability read per call");
+  // per call: the forced presence probe — its `--json --version` machine line
+  // also carries the capabilities the default Cell's pin reads from its cache
+  // (this stub reports none: a pre-Cell pf, so the reads stay unflagged)
+  assert.equal(reads.filter((line) => line === "--json --version").length, 2, "one presence probe per call, its capabilities pin the scope");
   assert.equal(reads.filter((line) => line === "--json workflows --cwd /ws/sub").length, 2, "one fresh pf workflows per call");
   assert.equal(reads.filter((line) => line === "--json config workspace --cwd /ws/sub").length, 2, "one fresh workspace read per call");
   assert.equal(reads.filter((line) => line === "--json config list").length, 2, "one mapping read per call (this stub has none)");
-  assert.equal(reads.length, 10);
+  assert.equal(reads.length, 8);
   assert.equal(first.workspaces.length, 1, "the cwd alone is the one workspace");
 });
 
@@ -207,13 +207,13 @@ test("the union reads 1 mapping + 2 per mapped workspace, fresh each call, never
   assert.equal(read.reason, undefined);
   await lib.readPolyforgeWorkflows("/w/b/sub", DEFAULT_CELL);
   const reads = calls();
-  assert.equal(reads.filter((line) => line === "--json --version").length, 4, "one presence probe and one capability read per call");
+  assert.equal(reads.filter((line) => line === "--json --version").length, 2, "one presence probe per call, its capabilities pin the scope");
   assert.equal(reads.filter((line) => line === "--json config list").length, 2);
   for (const path of Object.keys(MAPPED)) {
     assert.equal(reads.filter((line) => line === `--json workflows --cwd ${path}`).length, 2, path);
     assert.equal(reads.filter((line) => line === `--json config workspace --cwd ${path}`).length, 2, path);
   }
-  assert.equal(reads.length, 2 * (2 + 1 + 2 * 3), "no per-project spawn, nothing cached");
+  assert.equal(reads.length, 2 * (1 + 1 + 2 * 3), "no per-project spawn, nothing cached");
 });
 
 test("a failed workspace degrades alone: its reason, no project; the others stay readable", async (t) => {

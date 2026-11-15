@@ -42,7 +42,10 @@ const setState = (caps) => writeFileSync(stateFile, JSON.stringify(freshState(ca
 const state = () => JSON.parse(readFileSync(stateFile, "utf8"));
 const calls = () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 const argvs = () => calls().map((call) => call.args).filter((args) => args.join(" ") !== "--version");
-const reset = (caps = MULTI) => { setState(caps); writeFileSync(log, ""); };
+// The dock's presence probe (one `pf --json --version`, cached) answers every
+// capability read, so a state flip is followed by a forced probe — as a write
+// gate or 「重新检测」 does — before the ledger starts.
+const reset = async (caps = MULTI) => { setState(caps); await status.probePolyforgeVersion(true); writeFileSync(log, ""); };
 
 writeFileSync(stub, `#!${process.execPath}
 const fs = require("fs");
@@ -115,6 +118,8 @@ after(() => {
   rmSync(work, { recursive: true, force: true });
 });
 
+const status = await jiti.import("./polyforge-status.ts");
+const scope = await jiti.import("./polyforge-config-scope.ts");
 const pure = await jiti.import("./polyforge-cells-pure.ts");
 const read = await jiti.import("./polyforge-config.ts");
 const write = await jiti.import("./polyforge-config-write.ts");
@@ -123,8 +128,8 @@ const DEFAULT = () => pure.parsePolyforgeScope({});
 const expectState = (args) => JSON.parse(args[args.indexOf("--expect-state") + 1]);
 const withoutState = (args) => args.slice(0, args.includes("--expect-state") ? args.indexOf("--expect-state") : args.length);
 
-test("the stub resolves an unscoped call to alpha here, so the assertions below discriminate", () => {
-  reset();
+test("the stub resolves an unscoped call to alpha here, so the assertions below discriminate", async () => {
+  await reset();
   const unscoped = spawnSync(stub, ["--json", "config", "list"], { cwd: inAlpha, env: { ...process.env, PF_PROFILE: "" }, encoding: "utf8" });
   assert.equal(JSON.parse(unscoped.stdout).file.sha256, "sha-alpha", "the cwd alone resolves alpha");
   const byEnv = spawnSync(stub, ["--json", "config", "list"], { cwd: project, env: { ...process.env, PF_PROFILE: "alpha" }, encoding: "utf8" });
@@ -136,7 +141,7 @@ test("the stub resolves an unscoped call to alpha here, so the assertions below 
 });
 
 test("the default pane's read is the default Cell's, every config verb pinned, ops status the Host's", async () => {
-  reset();
+  await reset();
   const doc = await read.readPolyforgeConfig(project, DEFAULT());
   assert.equal(doc.capable, true, doc.reason);
   assert.equal(doc.file.sha256, "sha-default");
@@ -153,18 +158,18 @@ test("the default pane's read is the default Cell's, every config verb pinned, o
 });
 
 test("the Host and a named Cell keep their own scope; only a named Cell reads its own status", async () => {
-  reset();
+  await reset();
   const host = await read.readPolyforgeConfig("", { host: true });
   assert.equal(host.file.sha256, "sha-host");
   assert.deepEqual(argvs(), [["--json", "--version"], ["--json", "config", "list", "--host"], ["--json", "ops", "status"]]);
-  reset();
+  await reset();
   const alpha = await read.readPolyforgeConfig("", { profile: "alpha" });
   assert.equal(alpha.items.find((item) => item.key === "step_timeout").daemon.value, "45m0s", "alpha's own live value");
   assert.deepEqual(argvs(), [["--json", "--version"], ["--profile", "alpha", "--json", "config", "list"], ["--profile", "alpha", "--json", "ops", "status"]]);
 });
 
 test("an unscoped write lands in the default Cell's file with that file's old value and CAS hash", async () => {
-  reset();
+  await reset();
   const result = await write.writePolyforgeConfig({ action: "set", key: "step_timeout", value: "31m", expect_state: { file_sha256: "sha-default", values: {} } });
   assert.equal(result.entry.old, "30m0s", "old is the default Cell's value");
   assert.equal(result.entry.profile, "default", "the history entry names its Cell");
@@ -179,7 +184,7 @@ test("an unscoped write lands in the default Cell's file with that file's old va
 });
 
 test("an unscoped api_key write: the default Cell, the key on stdin only", async () => {
-  reset();
+  await reset();
   await write.writePolyforgeConfig({ action: "set", key: "api_key", value: KEY, expect_state: { file_sha256: "sha-default" } });
   const set = calls().find((call) => call.args.includes("set"));
   assert.deepEqual(withoutState(set.args), ["--profile", "default", "--json", "config", "set", "api_key"]);
@@ -190,14 +195,15 @@ test("an unscoped api_key write: the default Cell, the key on stdin only", async
 });
 
 test("an unscoped reload is the default Cell's, then the Host aggregate", async () => {
-  reset();
+  await reset();
   const result = await write.reloadPolyforgeConfig(DEFAULT());
   assert.deepEqual(result.reloaded, { reloaded: ["default"] });
-  assert.deepEqual(argvs(), [["--json", "--version"], ["--profile", "default", "--json", "config", "reload"], ["--json", "ops", "status"]]);
+  // the pin reads the probe's cached capabilities: no pf --json --version of its own
+  assert.deepEqual(argvs(), [["--profile", "default", "--json", "config", "reload"], ["--json", "ops", "status"]]);
 });
 
 test("a rollback of an entry without a scope writes the default Cell's file back", async () => {
-  reset();
+  await reset();
   const legacy = { id: "legacy", at: "2026-11-01T00:00:00.000Z", scope: "cli", cwd: "", key: "step_timeout", old: "29m", new: "30m", secret: false, rollbackable: true };
   const rolled = await write.rollbackPolyforgeConfig({ id: legacy.id, key: legacy.key, old: legacy.old, entry: legacy });
   assert.equal(rolled.entry.profile, "default");
@@ -209,7 +215,7 @@ test("a rollback of an entry without a scope writes the default Cell's file back
 });
 
 test("the workflow card reads and writes the default Cell's workspaces", async () => {
-  reset();
+  await reset();
   const doc = await workflows.readPolyforgeWorkflows(project, DEFAULT());
   assert.deepEqual(doc.workspaces.map((entry) => entry.workspace), [project], "the default Cell's mapping, not alpha's");
   assert.deepEqual(argvs(), [
@@ -218,7 +224,7 @@ test("the workflow card reads and writes the default Cell's workspaces", async (
     ["--profile", "default", "--json", "config", "workspace", "--cwd", project],
     ["--profile", "default", "--json", "workflows", "--cwd", project],
   ]);
-  reset();
+  await reset();
   await write.writePolyforgeConfig({ action: "set", key: "steps.acme.grill.models", value: ["pi:new"], cwd: project, expect_state: { file_sha256: "yaml-default", values: {} } });
   assert.deepEqual(state().writes, [{ cell: "default", key: "steps.acme.grill.models", value: JSON.stringify(["pi:new"]), cwd: project }]);
   const set = argvs().find((args) => args.includes("set"));
@@ -226,14 +232,14 @@ test("the workflow card reads and writes the default Cell's workspaces", async (
   assert.ok(argvs().some((args) => args.join(" ") === `--profile default --json workflows --cwd ${project}`), "the capability read is the default Cell's too");
   // a named Cell's workflow card writes its own workspace's
   // yaml, pinned to that Cell (its mapping resolves the --cwd), never the default's.
-  reset();
+  await reset();
   await write.writePolyforgeConfig({ action: "set", key: "steps.acme.grill.models", value: ["pi:new"], cwd: alphaWs, profile: "alpha", expect_state: { file_sha256: "yaml-alpha", values: {} } });
   assert.deepEqual(state().writes, [{ cell: "alpha", key: "steps.acme.grill.models", value: JSON.stringify(["pi:new"]), cwd: alphaWs }], "a named-Cell workspace write lands in that Cell's workspace only");
   assert.ok(argvs().filter((args) => args.includes("config") || args.includes("workflows")).every((args) => args[0] === "--profile" && args[1] === "alpha"), "every verb of a named-Cell yaml write is pinned to it");
 });
 
 test("a pf without the multi-Cell protocol: the default Cell unflagged, the Host and named Cells refused with nothing scoped spawned", async () => {
-  reset(null);
+  await reset(null);
   const doc = await read.readPolyforgeConfig(project, DEFAULT());
   assert.equal(doc.capable, true, doc.reason);
   assert.deepEqual(argvs(), [
@@ -244,7 +250,7 @@ test("a pf without the multi-Cell protocol: the default Cell unflagged, the Host
   ]);
   await write.writePolyforgeConfig({ action: "set", key: "step_timeout", value: "31m" });
   assert.deepEqual(state().writes, [{ cell: "default", key: "step_timeout", value: "31m", cwd: "" }]);
-  reset(null);
+  await reset(null);
   const host = await read.readPolyforgeConfig("", { host: true });
   assert.equal(host.capable, false);
   assert.match(host.reason, /upgrade pf/);
@@ -258,4 +264,25 @@ test("no unscoped config verb is left in the server libraries", () => {
     const source = readFileSync(new URL(`./${name}`, import.meta.url), "utf8");
     assert.doesNotMatch(source, /\[\s*"--json",\s*"(config|workflows)"/, `${name} spawns a config verb without its scope`);
   }
+});
+
+test("capability reads come from the dock's cached presence probe: config-scope spawns no pf of its own", () => {
+  const source = readFileSync(new URL("./polyforge-config-scope.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /\bspawn\(/, "polyforge-config-scope.ts spawns pf itself (one detection implementation)");
+  assert.doesNotMatch(source, /"--version"/, "polyforge-config-scope.ts names the presence probe's flag (one detection implementation)");
+});
+
+test("two capability reads in one probe window spawn one pf --json --version; a forced probe refreshes them", async () => {
+  setState(MULTI);
+  writeFileSync(log, "");
+  await status.probePolyforgeVersion(true);
+  assert.deepEqual(await scope.readPolyforgeCapabilities(), MULTI);
+  assert.deepEqual(await scope.readPolyforgeCapabilities(), MULTI);
+  assert.deepEqual(argvs(), [["--json", "--version"]], "the probe's one spawn answers both capability reads");
+  setState(null);
+  assert.deepEqual(await scope.readPolyforgeCapabilities(), MULTI, "inside the probe window the cached answer stands");
+  assert.deepEqual(argvs(), [["--json", "--version"]], "a cached read spawns nothing");
+  await status.probePolyforgeVersion(true);
+  assert.deepEqual(await scope.readPolyforgeCapabilities(), [], "a forced probe (a write gate, 「重新检测」) is what the next read sees");
+  assert.deepEqual(argvs(), [["--json", "--version"], ["--json", "--version"]]);
 });

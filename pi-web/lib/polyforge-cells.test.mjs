@@ -9,6 +9,7 @@ import { join } from "node:path";
 const jiti = createJiti(import.meta.url);
 const pure = await jiti.import("./polyforge-cells-pure.ts");
 const cells = await jiti.import("./polyforge-cells.ts");
+const status = await jiti.import("./polyforge-status.ts");
 
 // ---- pure ----
 
@@ -122,24 +123,27 @@ after(() => {
   rmSync(work, { recursive: true, force: true });
 });
 const calls = () => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
-const reset = (patch = {}) => { setState(patch); rmSync(log, { force: true }); };
+// The capability gate reads the dock's cached presence probe (one
+// `pf --json --version`); a state flip is followed by a forced probe before
+// the ledger starts.
+const reset = async (patch = {}) => { setState(patch); await status.probePolyforgeVersion(true); rmSync(log, { force: true }); };
 
 test("the read goes through pf cell list and reports the capability gate", async () => {
-  reset();
+  await reset();
   const read = await cells.readPolyforgeCells();
   assert.equal(read.supported, true);
   assert.deepEqual(read.cells.map((c) => c.profile), ["default"]);
-  assert.deepEqual(calls().map((c) => c.args), [["--json", "--version"], ["--json", "cell", "list"]]);
-  reset({ caps: [] });
+  assert.deepEqual(calls().map((c) => c.args), [["--json", "cell", "list"]], "the capability gate is the probe's cached answer: no version spawn of its own");
+  await reset({ caps: [] });
   const old = await cells.readPolyforgeCells();
   assert.equal(old.supported, false);
   assert.equal(old.cells, null);
   assert.match(old.upgradeHint, /upgrade pf/);
-  assert.deepEqual(calls().map((c) => c.args), [["--json", "--version"]], "no list read without the capability");
+  assert.deepEqual(calls().map((c) => c.args), [], "no list read without the capability");
 });
 
 test("add validates before any spawn, puts the key on stdin only, and gates on the capability", async () => {
-  reset();
+  await reset();
   await assert.rejects(cells.addPolyforgeCell({ profile: "default", server: "http://h:1", apiKey: "k" }), /not be default/);
   await assert.rejects(cells.addPolyforgeCell({ profile: "alpha", server: "ftp://h", apiKey: "k" }), /http/);
   await assert.rejects(cells.addPolyforgeCell({ profile: "alpha", server: "http://h:1", apiKey: "" }), /apiKey/);
@@ -149,17 +153,17 @@ test("add validates before any spawn, puts the key on stdin only, and gates on t
   assert.deepEqual(add.args, ["--json", "cell", "add", "alpha", "--server", "http://h:1", "--model-source", "shared-default"]);
   assert.ok(!add.args.join(" ").includes("K-SECRET"), "the key never rides argv");
   assert.equal(add.stdin, "K-SECRET\n");
-  reset({ caps: ["cells-v1"] });
+  await reset({ caps: ["cells-v1"] });
   await assert.rejects(cells.addPolyforgeCell({ profile: "alpha", server: "http://h:1", apiKey: "k" }), /upgrade pf/);
   assert.ok(!calls().some((c) => c.args.includes("add")), "no write on a pf without the capability");
 });
 
 test("update/repair/remove spawn pf cell; default cannot be removed; pf's refusal keeps its code", async () => {
-  reset();
+  await reset();
   await cells.changePolyforgeCell("alpha", "repair");
   assert.ok(calls().some((c) => c.args.join(" ") === "--json cell repair alpha"));
   await assert.rejects(cells.changePolyforgeCell("default", "remove"), /cannot be removed/);
   await assert.rejects(cells.changePolyforgeCell("../x", "update"), /profile/);
-  reset({ fail: "Cell alpha still holds work" });
+  await reset({ fail: "Cell alpha still holds work" });
   await assert.rejects(cells.changePolyforgeCell("alpha", "remove"), (error) => error.status === 409 && /holds work/.test(error.message));
 });
