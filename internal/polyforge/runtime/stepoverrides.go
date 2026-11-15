@@ -457,7 +457,13 @@ var pendingPublishFn = gitops.CommitPush
 // recorded change must not silently vanish). Only wi's own actor writes
 // wi's key, so the record is not held locked across the publish.
 func (r *Runtime) writePendingStepOverrides(ctx context.Context, j *job) error {
-	entries := r.PendingStepOverrides(j.wi)
+	r.pendingMu.Lock()
+	all, err := r.readPendingOverrides()
+	r.pendingMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("reading the recorded step overrides of %s: %w", j.wi, err)
+	}
+	entries := all[j.wi]
 	if len(entries) == 0 {
 		return nil
 	}
