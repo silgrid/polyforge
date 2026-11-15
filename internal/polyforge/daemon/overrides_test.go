@@ -658,3 +658,25 @@ func TestOverrideWriteTerminalRefused(t *testing.T) {
 		t.Fatalf("a refused terminal write left a pending record: %+v", pend)
 	}
 }
+
+// The un-skip is bound by the lane's skippable declaration exactly like
+// the skip: a non-skippable step's un-skip is refused DAEMON-409 naming
+// the waive door, with no event and no overlay written (r1#7, AC5).
+func TestOverrideUnskipNonSkippableNamesWaive(t *testing.T) {
+	f := newOverrideFixture(t, "wi_ov13")
+	before := len(f.events(t))
+	no := false
+	_, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "review", Operator: "usr_u", Skip: &no})
+	if ae == nil {
+		t.Fatal("a non-skippable step accepted the un-skip")
+	}
+	if ae.Code != api.ErrDaemonConflict || !strings.Contains(ae.Detail, "waive") {
+		t.Fatalf("the refusal must be DAEMON-409 pointing at the waive door: %s (%s)", ae.Code, ae.Detail)
+	}
+	if after := len(f.events(t)); after != before {
+		t.Fatalf("the refused un-skip emitted %d events", after-before)
+	}
+	if _, err := os.Stat(f.overlayFile()); !os.IsNotExist(err) {
+		t.Fatal("the refused un-skip left an overlay file behind")
+	}
+}
