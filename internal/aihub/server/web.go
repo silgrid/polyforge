@@ -1,14 +1,21 @@
 package server
 
-// web.go: the /web/ console wrapper — the aihub server's read-only web
-// face. One wrapper owns the whole response of every /web/ route in a
+// web.go: the /web/ console wrapper — the aihub server's web face,
+// read-only except for ONE write route: POST /web/api/projects/{name}/
+// restore (polyforge#30), gated in order by the Basic authentication
+// below, the X-PF-Console-Write: 1 custom header (403 without it — no
+// cross-site form can set it and no CORS preflight is answered), the
+// project read gate (404 as for an unknown name) and the restore right
+// (a global admin or a project maintainer, else 403); it is dispatched
+// before the method gate (Server.web), webAPIProjectRestore serves it.
+// One wrapper owns the whole response of every /web/ route in a
 // fixed order: the strict security header set first, then Basic
 // authentication (401 + one static zero-information body; the username
 // is ignored, the password is resolved through the one api-key query
 // the Bearer face uses, so every key kind meets the same read gates),
-// then the GET/HEAD method gate (405 + Allow) — so an unauthenticated
-// POST answers the 401 challenge and an authenticated non-GET/HEAD
-// request does no page or data work. Nothing is persisted: no cookie,
+// then the GET/HEAD method gate (405 + Allow) for every other route —
+// so an unauthenticated POST answers the 401 challenge and an
+// authenticated non-GET/HEAD request does no page or data work. Nothing is persisted: no cookie,
 // no session, every request re-authenticates.
 //
 // The wrapper is reached from Server.ServeHTTP, which intercepts every
