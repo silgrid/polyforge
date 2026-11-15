@@ -2888,7 +2888,13 @@ A passive `scroll` listener keeps `pinned` =
 `isProgressPinnedToBottom` (within 8 px of the bottom, or content no taller
 than the viewport; unreadable numbers never pin). After every new snapshot
 or added chunk the region scrolls to the bottom only while pinned; a reader
-parked anywhere else is never moved by a poll.
+parked anywhere else is never moved by a poll. A MANUAL DAG choice
+(polyforge#48) scrolls the clicked step's first block head into view with
+the least scrolling — the DAG above kept on screen whenever the two fit —
+and only that scroll interrupts the follow: a choice whose records' start
+is already on screen scrolls nothing and leaves the follow untouched, so
+the region still opens at its bottom (polyforge#53 r3, S238-24's rule;
+P48C's mid-stream choice still scrolls and unpins).
 
 **The two jump buttons (`[data-pf-detail-top]` above, `[data-pf-detail-latest]`
 below).** Two floating buttons stacked over the region's bottom, horizontally

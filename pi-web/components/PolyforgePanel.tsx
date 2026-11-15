@@ -514,9 +514,11 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   resetKey?: string;
   /** What a reset does with the follow (polyforge#48 AC5): "bottom" (the
    *  default, every selection and the automatic step follow) pins the region
-   *  to its bottom; "step" — the panel's, for a MANUAL DAG choice — unpins
-   *  and scrolls the selected step's first block head into view with the
-   *  least scrolling, so the DAG above stays on screen whenever it fits. */
+   *  to its bottom; "step" — the panel's, for a MANUAL DAG choice — scrolls
+   *  the selected step's first block head into view with the least scrolling,
+   *  so the DAG above stays on screen whenever it fits, and only that scroll
+   *  unpins — a choice whose start is already on screen leaves the follow
+   *  untouched (the region still parks at its bottom). */
   resetFollow?: "bottom" | "step";
 }) {
   const { t, locale } = useI18n();
@@ -544,11 +546,14 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   // polyforge#48 (AC5): the reset is a LAYOUT effect on purpose — it must
   // set the follow state before the follow effect below reads it in the
   // same commit, so a manual DAG choice never flashes through the bottom
-  // first. resetFollow "step" unpins and scrolls so the selected step's
+  // first. resetFollow "step" scrolls so the selected step's
   // first block head is in view with the least scrolling: when the DAG
   // above it fits in one viewport together with the head, the DAG's top
   // becomes the region's top (both stay on screen); when they do not fit,
-  // the head alone aligns to the top — the records win. With no block to
+  // the head alone aligns to the top — the records win. Only that scroll
+  // unpins (r3): a choice whose start is already on screen interrupts
+  // nothing, and the follow keeps opening the region at its bottom
+  // (S238-24). With no block to
   // show yet (the records still loading) the bottom follow holds.
   // r1#9: the reset fires on a selection or step change alone — resetFollow
   // riding in the dependencies must not re-run it (a manual click on the
@@ -575,7 +580,6 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
       setAtBottom(true);
       return;
     }
-    pinned.current = false;
     const hr = head.getBoundingClientRect();
     const rr = region.getBoundingClientRect();
     const graph = region.querySelector<HTMLElement>("[data-pf-detail-graph]");
@@ -588,6 +592,13 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
       // viewport (the DAG's top becomes the region's top); when they do not
       // fit, the head alone aligns to the top — the records win.
       const target = graphTop >= 0 && headTop - graphTop <= rr.height ? graphTop : headTop;
+      // The scroll itself is the interruption: only it unpins, so a later
+      // poll never pulls the reader off the position it left behind. A
+      // choice whose records' start is already on screen (r3, the
+      // verification FAIL on S238-24) scrolls nothing and leaves the follow
+      // alone — the region still opens at its bottom, never dumped at the
+      // top of content that just grew.
+      pinned.current = false;
       region.scrollTop = Math.max(0, target);
     }
     setAtBottom(isProgressPinnedToBottom(region));
