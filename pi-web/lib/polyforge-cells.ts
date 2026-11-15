@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 import { ConfigWriteError, parsePfError } from "./polyforge-config-write";
-import { readPolyforgeCapabilities } from "./polyforge-config-scope";
+import { probePolyforgeVersion } from "./polyforge-status";
 import {
   POLYFORGE_CELLS_UPGRADE_HINT,
   hasPolyforgeCellCapabilities,
@@ -75,9 +75,12 @@ export interface PolyforgeCellsRead {
   error?: string;
 }
 
-/** The Cell registry; degradation as fields (never throws). */
+/** The Cell registry; degradation as fields (never throws). The capability
+ *  gate forces the presence probe: the registry is read on the page's own
+ *  actions (opening the tab, 重新检测, after an install or a Cell write),
+ *  never polled, and shows the upgrade hint, so it sees an upgrade at once. */
 export async function readPolyforgeCells(): Promise<PolyforgeCellsRead> {
-  const capabilities = await readPolyforgeCapabilities();
+  const { capabilities } = await probePolyforgeVersion(true);
   const supported = hasPolyforgeCellCapabilities(capabilities);
   if (!supported) return { capabilities, supported, upgradeHint: POLYFORGE_CELLS_UPGRADE_HINT, cells: null };
   try {
@@ -90,9 +93,11 @@ export async function readPolyforgeCells(): Promise<PolyforgeCellsRead> {
   }
 }
 
-/** Refuse a multi-Cell write on a pf without the capabilities (nothing spawned). */
+/** Refuse a multi-Cell write on a pf without the capabilities (nothing
+ *  spawned). The gate forces the presence probe, so a write sees the pf
+ *  installed now, never a cached answer. */
 export async function assertPolyforgeCellCapabilities(): Promise<void> {
-  if (!hasPolyforgeCellCapabilities(await readPolyforgeCapabilities())) {
+  if (!hasPolyforgeCellCapabilities((await probePolyforgeVersion(true)).capabilities)) {
     throw new ConfigWriteError(POLYFORGE_CELLS_UPGRADE_HINT, 400);
   }
 }
@@ -175,19 +180,31 @@ export interface PolyforgeResolvedCellScope {
   pin: PolyforgeScopeArgv;
 }
 
+/** The scopes resolved in the presence probe's current window, per cwd. */
+let scopeCache: { window: number; scopes: Map<string, Promise<PolyforgeResolvedCellScope>> } | null = null;
+
 /** Resolve the dock tabs' pinned scope: one `pf --json profile` read (the
- *  tab's cwd when there is one) plus one capability read, answered as the
- *  explicit scope — `polyforgeScopeArgv`, so a multi-Cell pf names even the
- *  default Cell and a pre-Cell pf keeps today's unflagged calls (a resolved
- *  named Cell it cannot address cannot happen: the pf that resolved it
- *  reports the capabilities; a failed capability read degrades to the
- *  unflagged default). Never throws. */
+ *  tab's cwd when there is one) with the capabilities of the dock's cached
+ *  presence probe, answered as the explicit scope — `polyforgeScopeArgv`, so
+ *  a multi-Cell pf names even the default Cell and a pre-Cell pf keeps
+ *  today's unflagged calls (a resolved named Cell it cannot address cannot
+ *  happen: the pf that resolved it reports the capabilities; an absent pf
+ *  degrades to the unflagged default). The answer, a fallback included, is
+ *  reused per cwd for the probe's window (60 s present, 5 s absent, or until
+ *  a forced probe — 「重新检测」, a write's floor check): the polling routes
+ *  spawn no `pf --json profile` per request. Never throws. */
 export async function resolvePolyforgeCellScope(cwd?: string): Promise<PolyforgeResolvedCellScope> {
-  const [cell, capabilities] = await Promise.all([
-    readPolyforgeResolvedCell(cwd),
-    readPolyforgeCapabilities(),
-  ]);
-  const pin = polyforgeScopeArgv(cell ? { profile: cell } : polyforgeDefaultScope(), capabilities)
-    ?? polyforgeDefaultScopeArgv(capabilities);
-  return { cell, pin };
+  const { capabilities, window } = await probePolyforgeVersion();
+  if (scopeCache?.window !== window) scopeCache = { window, scopes: new Map() };
+  const key = cwd && cwd.startsWith("/") ? cwd : "";
+  let scope = scopeCache.scopes.get(key);
+  if (!scope) {
+    scope = readPolyforgeResolvedCell(key || undefined).then((cell) => ({
+      cell,
+      pin: polyforgeScopeArgv(cell ? { profile: cell } : polyforgeDefaultScope(), capabilities)
+        ?? polyforgeDefaultScopeArgv(capabilities),
+    }));
+    scopeCache.scopes.set(key, scope);
+  }
+  return scope;
 }
