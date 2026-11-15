@@ -39,6 +39,7 @@ if (args.includes("watch")) {
     events: [], last_seq: 3 });
 }
 if (args.includes("override")) {
+  if (mode === "hang-view") { setTimeout(() => process.exit(0), 30000); return; }
   if (mode === "refuse-409") { process.stderr.write(JSON.stringify({ code: "DAEMON-409", detail: "step merge has a live dispatch (its status is in_progress): the overlay is for steps without one" }) + "\\n"); process.exit(1); }
   if (mode === "refuse-400") { process.stderr.write(JSON.stringify({ code: "DAEMON-400", detail: "models: the pi model \\"absent\\" is not in this Cell's step-agent models.json" }) + "\\n"); process.exit(1); }
   if (mode === "garbage") { process.stdout.write("not json\\n"); process.exit(0); }
@@ -128,6 +129,22 @@ test("a garbage or refused view read degrades to a snapshot without it — the w
     assert.equal(body.status?.wi, "wi_A1", `${m}: the watch snapshot survives`);
     assert.equal(body.status?.override, undefined, `${m}: the view degrades to absent`);
   }
+});
+
+test("a hung view read times out on the read bound — the watch answer still returns the snapshot (polyforge#42 r1#1)", async () => {
+  reset("hang-view");
+  const started = Date.now();
+  // The test's own bound (a real condition raced against a deadline, not a
+  // sleep): the route must answer inside it — on the fixed tree the view
+  // read's own timeout degrades it, on a regression the answer never comes.
+  const deadline = new Promise((resolve) => { const timer = setTimeout(() => resolve(null), 14_000); timer.unref?.(); });
+  const response = await Promise.race([WATCH_GET(watchGet("?wi=wi_A1")), deadline]);
+  assert.ok(response, "the watch answer did not arrive within the view read's bound");
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.status?.wi, "wi_A1", "the snapshot itself survives the hung view read");
+  assert.equal(body.status?.override, undefined, "the hung view read degrades to absent");
+  assert.ok(Date.now() - started < 14_000, `the answer arrived inside the bound (${Date.now() - started} ms)`);
 });
 
 test("an unknown ref answers status null and never spawns the view read", async () => {
