@@ -124,7 +124,7 @@ fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
 const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
 const out = (value) => { process.stdout.write(JSON.stringify(value)); process.exit(0); };
 const same = (expected) => expected.length === args.length && expected.every((arg, i) => arg === args[i]);
-if (same(["--version"])) { process.stdout.write("pf version v2.21.0\\n"); process.exit(0); }
+if (same(["--json", "--version"])) out({ version: "v2.21.0", capabilities: [] });
 if (same(["--json", "config", "list"])) out(state.config);
 if (args[1] === "queue") {
   const project = args[3];
@@ -219,7 +219,7 @@ test("a batch that is not terminal carries its watch's steps, current step and p
 test("the argv ledger holds only the config, queue and watch reads — never ops status, ops integrate or integration=1", () => {
   const seen = ledger.map((argv) => JSON.stringify(argv)).sort();
   const expected = [
-    ["--version"],
+    ["--json", "--version"],
     ["--json", "config", "list"],
     ["--json", "queue", "--project", "alpha", "--attr", "integration.state=landed"],
     ["--json", "queue", "--project", "alpha", "--bundle", "integrate", "--limit", "5"],

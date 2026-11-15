@@ -208,7 +208,12 @@ const fs = require("fs"); const path = require("path");
 const dir = path.dirname(fs.realpathSync(__filename)); const args = process.argv.slice(2);
 fs.appendFileSync(path.join(dir, "argv.log"), JSON.stringify(args) + "\\n");
 const s = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8"));
-if (args.includes("--version")) { process.stdout.write(String(s.version) + "\\n"); process.exit(0); }
+// pf's machine line under --json (the --version flag and the version verb
+// answer the same bytes); without capabilities the stub is an older pf's
+// plain version line
+const machine = () => { process.stdout.write(JSON.stringify({ version: s.version, capabilities: s.caps }) + "\\n"); process.exit(0); };
+if (args.includes("--version")) { if (s.caps) machine(); process.stdout.write(String(s.version) + "\\n"); process.exit(0); }
+if (args[0] === "--json" && args[1] === "version" && s.caps) machine();
 if (s.mode === "down") { process.stderr.write(s.stderr + "\\n"); process.exit(1); }
 process.stdout.write(JSON.stringify(s.ops) + "\\n");
 `);
@@ -428,6 +433,33 @@ test("the presence cache carries the version; force bypasses it, non-force reads
     assert.equal((await detectPolyforge(true)).pfVersion, "v2.20.0-e2e", "force bypasses the cache");
     setStub({});
   } finally {
+    restoreEnv();
+  }
+});
+test("detect's capabilities are the presence probe's: one pf --json --version, never a version verb", async () => {
+  const MULTI = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"];
+  resetFixtures();
+  setStub({ caps: MULTI });
+  withEnv("stub");
+  const { readFile } = await import("node:fs/promises");
+  const versionReads = async () => (await readFile(join(stubDir, "argv.log"), "utf8")).trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((call) => call.includes("version") || call.includes("--version"));
+  try {
+    writeFileSync(join(stubDir, "argv.log"), "");
+    const status = await detectPolyforge(true);
+    assert.deepEqual(status.capabilities, MULTI);
+    assert.equal(status.cellsSupported, true);
+    assert.deepEqual(await versionReads(), [["--json", "--version"]], "the probe's one spawn answers version and capabilities");
+    setStub({});
+    writeFileSync(join(stubDir, "argv.log"), "");
+    const cached = await detectPolyforge(false);
+    assert.deepEqual(cached.capabilities, MULTI, "inside the probe window the cached capabilities answer");
+    assert.deepEqual(await versionReads(), [], "a cached detect spawns no version read");
+    const forced = await detectPolyforge(true);
+    assert.deepEqual(forced.capabilities, [], "「重新检测」 refreshes the capabilities with the version");
+    assert.equal(forced.cellsSupported, false);
+  } finally {
+    setStub({});
     restoreEnv();
   }
 });
