@@ -121,3 +121,56 @@ func TestW52ReviewChecksTheChangeAnalysis(t *testing.T) {
 		"each finding names the missing or wrong entry",
 	})
 }
+
+// w52Stale checks each stale phrase is gone (folded) from rel.
+func w52Stale(t *testing.T, rel string, stale []string) {
+	t.Helper()
+	flat := w52Flat(t, rel)
+	for _, s := range stale {
+		if strings.Contains(flat, strings.Join(strings.Fields(s), " ")) {
+			t.Errorf("%s still states %q (the tier/analysis contract moved on)", rel, s)
+		}
+	}
+}
+
+// TestW52TheReferencesStateTheTierAndTheUnion (review r1 #1–#4, AC6 and
+// the stale references): the lane narratives and the references state the
+// new contract — develop's verification entry runs --tier auto with
+// --analysis, the integrate entries name the integration_fix attr their
+// fix tickets carry, bundles.md no longer denies a per-work-item tier,
+// commands.md no longer calls light "the only tier it runs", and
+// verify.py's --help states the tier and the union without breaking a
+// sentence in half.
+func TestW52TheReferencesStateTheTierAndTheUnion(t *testing.T) {
+	w52Wants(t, "docs/concepts.md", []string{
+		// the develop lane's verification entry (the Shipped lanes list)
+		"`verify.py --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json --json --out artifacts/verify/result.json`",
+		"then runs the tier the work item's attrs decide over the tree as it stands",
+		"the change analysis's listed tests run beside the plan, add-only",
+		// the integrate lane's collect: a stuck hold's fix ticket carries the marker
+		"a `file` write on the develop lane, with its acceptance, registered on the held item by an `attrs` write",
+		"carries the `integration_fix` attr that makes its own verification run the full bar",
+		// the integrate lane's full-gate: every fix ticket carries the marker
+		"each fix ticket filed with the `integration_fix` attr",
+	})
+	w52Stale(t, "docs/concepts.md", []string{"runs the light tier over the tree as it stands"})
+	w52Wants(t, "docs/bundles.md", []string{
+		"develop's verification runs `verify.py --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json` through its skill (the build's recorded unit runs ride along; the tier is the work item's own — an integration batch's fix ticket runs the full bar, every other ticket the light one)",
+		"→ `verification` (`verify.py`, the tier the work item's attrs decide: the light tier, or the full bar on an integration batch's fix ticket; the lane's one waivable gate)",
+	})
+	w52Stale(t, "docs/bundles.md", []string{"there is no per-work-item tier", "`verify.py`, the light tier"})
+	w52Wants(t, "docs/reference/commands.md", []string{
+		"`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/verify.py\" --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json --json --out artifacts/verify/result.json`",
+		"the tier the work item's attrs decide — an integration batch's fix ticket (its `integration_fix` marker) runs the full bar; every other ticket the light tier",
+		"the change analysis's listed tests run beside the plan, add-only, under the analysis's supplement cap",
+	})
+	w52Stale(t, "docs/reference/commands.md", []string{"the only tier it runs"})
+	w52Wants(t, "workflows/_shared/scripts/verify.py", []string{
+		"verify.py — the mechanical verification of a capsule's task repos as the sync step left them (develop's verification step)",
+		"\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/verify.py\" --tier auto|light|full \\\"",
+		"[--unit-runs FILE] [--analysis FILE] [--capsule DIR]",
+		"The tier: `--tier auto` (the lane's line) reads the capsule's work item",
+		"Each task repo's tree is verified at its HEAD: no fetch, no merge (a merge in progress makes the run not judged); the base",
+	})
+	w52Stale(t, "workflows/_shared/scripts/verify.py", []string{"the light verification of a capsule's task repos"})
+}
