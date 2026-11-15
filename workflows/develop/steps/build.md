@@ -89,6 +89,33 @@ $(git merge-base HEAD origin/HEAD)..HEAD`) as `review` will, against its five bl
 `bug`, `ac_gap`, `project_rule`, `test_weakened`, `guarantee`; write each hit and its disposition
 to `artifacts/self-review.md` and fix what you can now (a new unit for a behaviour fix).
 
+Write the change analysis — `artifacts/build/change-analysis.json`, the structured file
+verification supplements the engine's own selection with (`verify.py --analysis`, add-only,
+never narrowing it), in this shape. Its keys are the machine's contract — `supplement_limit`,
+`changed`, `uncovered` and `tests`; each listed test's `why` and `evidence` are review's to
+judge:
+
+```json
+{"supplement_limit": <the lane's cap, {{supplement_limit}} test runs — verification's own default applies when the file names none>,
+ "changed": ["<each behavior, component and interface the change altered, one line each>"],
+ "uncovered": {"<repo>": ["<each changed path that repo's --light report leaves covered by no `carries:` declaration>"]},
+ "tests": [{"id": "a1", "repo": "<name under repos/>", "file": "<the test's repo-relative file>",
+            "name": "<its test name, when one test is meant>", "cwd": "<directory inside the repo>",
+            "argv": ["<the run that shows it passing>"], "marker": "<a line only its passing run prints>",
+            "why": "<what of the change it pins>",
+            "evidence": "<how you found it: the selector, route, copy key or test name you searched, and where it led>"}]}
+```
+
+Find the tests that already pin what you changed — the e2e suites through the selectors, routes
+and copy keys the diff touches (a shared file the engine hands to at most 3 suites is the blind
+spot this file closes), the unit tests through the packages and names — and list every one you
+find: run each where you found it and list only a test that passes at HEAD. Take `uncovered`
+from the engine's own `--light` report of each touched repo
+(`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify-scope" --light --json`, or the report the
+fast-checks command logged): its `e2e_selection.uncovered_paths`, else its
+`--light: carries: changed path …` diagnostics. `review` judges the analysis for obviously
+missing tests.
+
 ## If you cannot finish
 
 Never hand off `done` on a build that is not green: a real blocker — the machine, not a choice —

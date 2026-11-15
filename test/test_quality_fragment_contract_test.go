@@ -61,6 +61,21 @@ func testQualityFragment(t *testing.T) string {
 	return string(raw)
 }
 
+// testQualityStepVars answers the shipped step's own vars (develop's build
+// renders {{supplement_limit}} from its workflow.yaml, polyforge#52), so a
+// raw render of a shipped definition is the shipped one.
+func testQualityStepVars(t *testing.T, bundle, step string) map[string]string {
+	t.Helper()
+	lane, err := workflow.LoadStrict(filepath.Join(v1Root(t), "workflows", bundle))
+	if err != nil {
+		t.Fatalf("load workflows/%s: %v", bundle, err)
+	}
+	if s := lane.Step(step); s != nil {
+		return s.Vars
+	}
+	return nil
+}
+
 // testQualityOnce asserts one rendered definition carries every
 // operative line exactly once and no unresolved placeholder.
 func testQualityOnce(t *testing.T, rel, def string) {
@@ -85,7 +100,7 @@ func TestTestQualityFragmentReachesItsSteps(t *testing.T) {
 		}
 	}
 	// the authoring steps include the fragment once and render it once
-	// (they declare no vars, so the raw render is the shipped one)
+	// (each renders with its own vars, so the render is the shipped one)
 	for _, bs := range [][2]string{{"develop", "build"}, {"micro", "fix"}} {
 		bundle, step := bs[0], bs[1]
 		rel := "workflows/" + bundle + "/steps/" + step + ".md"
@@ -96,7 +111,7 @@ func TestTestQualityFragmentReachesItsSteps(t *testing.T) {
 		if strings.Contains(raw, frag) {
 			t.Errorf("%s carries a second copy of the test_quality fragment", rel)
 		}
-		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, nil)
+		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, testQualityStepVars(t, bundle, step))
 		if err != nil {
 			t.Fatalf("render %s: %v", rel, err)
 		}
@@ -206,7 +221,7 @@ func TestAsyncSettleDutyReachesItsSteps(t *testing.T) {
 	}
 	renders := map[string]string{}
 	for _, bs := range [][2]string{{"develop", "build"}, {"micro", "fix"}} {
-		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bs[0]), bs[1], nil)
+		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bs[0]), bs[1], testQualityStepVars(t, bs[0], bs[1]))
 		if err != nil {
 			t.Fatalf("render %s/%s: %v", bs[0], bs[1], err)
 		}

@@ -40,6 +40,27 @@ class VerifySkillTextTest(unittest.TestCase):
         self.assertIn("run any other build, lint or test command, or re-run one check by hand; hand off `done` on a"
                       " red you could not place", skill)
 
+    def test_the_line_runs_the_tier_and_the_analysis_the_ticket_names(self) -> None:
+        """polyforge#52: the line asks --tier auto (the work item's own
+        attrs decide — an integration_fix ticket runs the full bar) and
+        passes the build's change analysis; a missing or unparseable one
+        is the gate's FAIL to build, and the same-tree rule covers the
+        analysis too."""
+        skill = folded(VERIFY_SKILL)
+        for want in (
+            "`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/verify.py\" --tier auto --unit-runs"
+            " artifacts/build/units.json --analysis artifacts/build/change-analysis.json"
+            " --json --out artifacts/verify/result.json`",
+            "`--tier auto` reads the work item's own attrs: an `integration_fix` ticket (an integration batch's"
+            " fix ticket) runs the full bar; every other ticket the light one",
+            "the change analysis's listed tests run beside the engine's plan, add-only, under its supplement cap",
+            "a missing or unparseable analysis is this gate's FAIL",
+            "`change-analysis sha256: <digest>`",
+        ):
+            self.assertIn(want, skill)
+        # the pre-check names what a red of a listed test is
+        self.assertIn("a failing `<repo>:analysis:<id>` check is a test the analysis listed", skill)
+
 
 if __name__ == "__main__":
     unittest.main()

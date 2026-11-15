@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=../_schema/workflow-1.schema.json
 contract: 1
 name: develop
-description: The default development lane - build → review → sync → verification → publish → merge. One build session plans against the work item's acceptance criteria, writes each unit's test red before its implementation turns it green, records each unit's run in artifacts/build/units.json and reviews itself; review judges the change in a fresh context against five blocking classes on the facts the workflow's facts.py computes (the units' red runs replayed at their test commits); sync, verification, publish and merge are mechanical agent steps on the cheap tier, each following a shared skill that runs one pre-written command (sync.py, verify.py, merge.py) and checking what the step before it handed off first - sync merges the default branch in and resolves a real conflict in place, verification runs the light tier, publish pushes the branch and opens the PR, merge merges it into the default branch and registers the landing record, and the integration lane runs the full gate over what landed. No release slot.
+description: The default development lane - build → review → sync → verification → publish → merge. One build session plans against the work item's acceptance criteria, writes each unit's test red before its implementation turns it green, records each unit's run in artifacts/build/units.json and reviews itself; review judges the change in a fresh context against five blocking classes on the facts the workflow's facts.py computes (the units' red runs replayed at their test commits); sync, verification, publish and merge are mechanical agent steps on the cheap tier, each following a shared skill that runs one pre-written command (sync.py, verify.py, merge.py) and checking what the step before it handed off first - sync merges the default branch in and resolves a real conflict in place, verification runs the tier the work item's own attrs decide (the light tier, or the full bar on an integration batch's fix ticket) beside the change analysis's listed tests, add-only, publish pushes the branch and opens the PR, merge merges it into the default branch and registers the landing record, and the integration lane runs the full gate over what landed. No release slot.
 max_rewinds: 3
 defaults:
   model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
@@ -10,6 +10,12 @@ steps:
   - id: build
     skill: build
     budget: { wall_minutes: 60 }
+    # the lane's supplement cap: the change analysis's tests verification
+    # runs beside the engine's own selection (verify.py's --analysis),
+    # rendered into the step's text and written by the build into the
+    # analysis; verify.py's built-in default (10) applies when the file
+    # names none
+    vars: { supplement_limit: "10" }
   - id: review
     gate: true
     on_fail: { target: build }
@@ -34,7 +40,10 @@ steps:
     skill: verify
     model_tier: cheap
     resources: { admission: heavy }
-    budget: { wall_minutes: 45, tool_minutes: 35 }
+    # the window fits the full bar an integration batch's fix ticket runs
+    # (its attrs carry the integration_fix marker): a light run ends in its
+    # own time, the window is a bound, never a spend
+    budget: { wall_minutes: 150, tool_minutes: 90 }
   - id: publish
     gate: true
     on_fail: { target: build }

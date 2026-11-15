@@ -26,7 +26,7 @@ import (
 // file bytes, which now carry only the include).
 func w58Step(t *testing.T, bundle, step string) string {
 	t.Helper()
-	raw, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, nil)
+	raw, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, testQualityStepVars(t, bundle, step))
 	if err != nil {
 		t.Fatalf("render %s/%s: %v", bundle, step, err)
 	}

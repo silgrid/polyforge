@@ -80,11 +80,16 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   resolution is not the agent's to make, it asks the owner, and hands the work back to
   `build` (or cancels) only on the owner's word, after the skill's abort line.
 - **verification** (gate, `waivable: true`; skill `verify`, `verify.py`, heavy-run
-  admission, tool window 35 minutes) — checks the sync's result, then runs `verify.py
-  --tier light --unit-runs artifacts/build/units.json` (in each repo's verification
-  container when it declares one, else on the host; each unit's green run again,
-  beside the light plan: the fast gates, the affected unit tests, the e2e suites the change
-  touched). Exit 0 passes; a red it can place on the change FAILs to `build`; a red it
+  admission, tool window 90 minutes) — checks the sync's result, then runs `verify.py
+  --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json`
+  (in each repo's verification container when it declares one, else on the host; each unit's
+  green run again, beside the light plan and the change analysis's listed tests — the union
+  is add-only, the engine's selection never narrowed: the fast gates, the affected unit
+  tests, the e2e suites the change touched, the tests build's analysis listed under its
+  supplement cap). The tier is the work item's own: an integration batch's fix ticket (its
+  attrs carry the `integration_fix` marker) runs the full bar — everything the light tier
+  runs and the rest, the whole tool window its budget; every other ticket runs the light
+  tier. Exit 0 passes; a red it can place on the change FAILs to `build`; a red it
   cannot place is the owner's call — run again, have it fixed, or accept it (`waive`,
   citing the owner's message). Exit 2 is retried, then `blocked`. The heavy-run admission
   is the daemon's: a denied dispatch waits in the daemon's queue, no process, no budget.
@@ -191,8 +196,9 @@ asks instead.
 ## Budget
 
 `build` declares `budget.wall_minutes: 60`, `review` `wall_minutes: 30` with a tool window
-of 20 minutes (the replays), `verification` `wall_minutes: 45` with a tool window of 35
-minutes, `publish` `wall_minutes: 15`: the daemon's step bound T is the larger of its
+of 20 minutes (the replays), `verification` `wall_minutes: 150` with a tool window of 90
+minutes (a window that fits the full bar an integration batch's fix ticket runs; a light run
+ends in its own time — the window is a bound, never a spend), `publish` `wall_minutes: 15`: the daemon's step bound T is the larger of its
 global default and three times the estimate. `sync` and `merge` declare a tool window only
 (20 and 10 minutes): each pre-written command derives its own deadline from the window
 (two minutes under it) and ends — its result written — before the harness's shell call and

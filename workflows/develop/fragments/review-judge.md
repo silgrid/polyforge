@@ -2,6 +2,7 @@
    (`## Acceptance` or `## 验收`, quoted in the opening of `artifacts/handoff.md`), or,
    when it had none, the list in `artifacts/plan.md` `## Acceptance` the owner's
    recorded reply answered; `artifacts/plan.md` (units, coverage);
+   `artifacts/build/change-analysis.json` (the change analysis);
    `artifacts/self-review.md`; build's latest section of `artifacts/handoff.md`; the
    facts your skill writes under `artifacts/facts/`; and the full diff, tests
    included — in each task repo `git diff $(git merge-base HEAD origin/HEAD)..HEAD`
@@ -68,3 +69,12 @@
    blocking only inside a class — an obligation the repo's `AGENTS.md` names is
    `project_rule`, an undeclared change that removes or weakens a guarantee is
    `guarantee`; anything else is recorded non-blocking.
+
+6. **The change analysis (`test_weakened`)** — read `artifacts/build/change-analysis.json`
+   (build's close wrote it): the analysis is review's to judge for obviously missing tests —
+   a changed behavior, component or interface it names (or the diff shows) that an existing
+   test already pins, one the analysis does not list, is a blocking `test_weakened` finding:
+   find them the way build should have (the selectors, routes, copy keys and test names the
+   diff touches; the engine's `--light` report and its `carries:` declarations). So is an
+   `uncovered` list that does not match that report, or a listed test that does not exist
+   (its file or name) — each finding names the missing or wrong entry.

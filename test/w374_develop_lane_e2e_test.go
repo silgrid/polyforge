@@ -121,9 +121,13 @@ const w374Unit = `cd repos/demo && mkdir -p tests && printf '#!/bin/sh\ngrep -q 
 	`printf 'T=%s\nC=%s\n' "$T" "$C" > ../../artifacts/u1.env`
 
 // w374Units records u1 in artifacts/build/units.json (the build skill's
-// shape): the run exactly as it ran red and green, and its marker.
+// shape): the run exactly as it ran red and green, and its marker — and the
+// change analysis beside it (polyforge#52: the close writes
+// artifacts/build/change-analysis.json; this scripted change lists no
+// existing test and leaves nothing uncovered).
 const w374Units = `. artifacts/u1.env && mkdir -p artifacts/build && ` +
-	`printf '[{"id":"u1","test_commit":"%s","impl_commit":"%s","run":{"repo":"demo","cwd":".","argv":["sh","tests/answer.sh"]},"marker":"^ANSWER-PASS$"}]' "$T" "$C" > artifacts/build/units.json`
+	`printf '[{"id":"u1","test_commit":"%s","impl_commit":"%s","run":{"repo":"demo","cwd":".","argv":["sh","tests/answer.sh"]},"marker":"^ANSWER-PASS$"}]' "$T" "$C" > artifacts/build/units.json && ` +
+	`printf '{"supplement_limit": 10, "changed": ["answer.txt: the answer"], "uncovered": {"demo": []}, "tests": []}' > artifacts/build/change-analysis.json`
 
 // w374Output writes build's output (its coverage and summary).
 func w374Output(summary string) string {
@@ -144,7 +148,7 @@ const w374BuildOut = "artifacts/build-out.json"
 const (
 	w374SyncLine     = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/sync.py" --json --out artifacts/sync/result.json`
 	w374SyncContinue = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/sync.py" --continue --json --out artifacts/sync/result.json`
-	w374VerifyLine   = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify.py" --tier light --unit-runs artifacts/build/units.json --json --out artifacts/verify/result.json`
+	w374VerifyLine   = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify.py" --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json --json --out artifacts/verify/result.json`
 	w374MergeLine    = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/merge.py" --publish artifacts/publish.json --verified artifacts/verify/result.json --landing-out artifacts/merge/landing.json --json --out artifacts/merge/result.json`
 	// the merge skill's registration of the landing record merge.py wrote
 	// (merge declares wrap_attrs: [integration]: its done is refused

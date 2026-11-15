@@ -341,13 +341,20 @@ its four columns.
 `verify.py` — the workflow script `workflows/_shared/scripts/verify.py`
 (the step command `pf-verify` before it), which the develop
 lane's verification step runs from its lane snapshot as the verify skill
-writes it, `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify.py" --tier light
---unit-runs artifacts/build/units.json --json --out
+writes it, `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify.py" --tier auto
+--unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json
+--json --out
 artifacts/verify/result.json` (docs/reference/workflow-contract.md,
-"Scripts"; `--help` is its full reference) — runs the mechanical bar over
+"Scripts"; `--help` is its full reference) — runs the tier the work item's
+attrs decide — an integration batch's fix ticket (its `integration_fix`
+marker) runs the full bar; every other ticket the light tier — over the
 the task repos as the sync step left them: no fetch, no merge — a merge in progress
 (`MERGE_HEAD`) or an unresolvable default branch makes the run incomplete
-— and it skips a repo with no commit beyond its default branch. (The
+— and it skips a repo with no commit beyond its default branch. The union
+with the build's change analysis is add-only: the change analysis's listed
+tests run beside the plan, add-only, under the analysis's supplement cap —
+a listed test that does not exist fails its check naming it, and the
+entries past the cap are cut in listed order and named in the result. (The
 daemon's `verify` action, which ran the same bar in-process after fetching
 and merging the default branch itself, left with the daemon actions.)
 For each touched repo it asks the
@@ -396,7 +403,8 @@ that reported a race, a template without `-race` is no re-run); an aggregate
 e2e runner's closing summary (every settled suite listed, the tally matching
 it and the suite count the runner announced, `e2e/all: <N> suite(s)`) proves
 its command complete the way the harness trailer does. The light tier
-(`verify.py --tier light`, the only tier it runs) is the develop lane's
+(`verify.py --tier auto`: light over every ticket but an integration batch's
+fix, which runs the full bar) is the develop lane's
 light verification: the engine is asked `--light` in each
 touched
 repo and in every nested engine root the diff reaches (a subdirectory with

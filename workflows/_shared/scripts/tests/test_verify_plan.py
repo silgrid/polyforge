@@ -129,18 +129,18 @@ class PlanTest(unittest.TestCase):
         reasons = d["tier"].get("reasons") or [""]
         self.assertTrue(reasons[0].startswith("repos/app: "), "want why the run is full: %s" % d["tier"])
 
-    def test_run_refuses_any_tier_but_light(self) -> None:
-        """Port of TestRunRefusesAnyTierButLight (plan_test.go): the full tier
-        is the gate's; the light tier alone runs and any other is refused
-        before anything runs (exit 2, the reason on stderr)."""
+    def test_run_refuses_an_unnamed_or_unknown_tier(self) -> None:
+        """The tier is named before anything runs (exit 2, the reason on
+        stderr): none, or one that is neither light, full nor auto
+        (polyforge#52: the full tier is verify.py's own too — an
+        integration-fix ticket runs it --tier auto)."""
         fx = touched(self.root)
-        for tier in ("", "full", "scoped"):
+        for tier, want in (("", "--tier is required"), ("scoped", "want light, full or auto")):
             with self.subTest(tier=tier):
                 r = run_verify(fx.capsule, "/x", "--tier", tier)
                 self.assertEqual(r.exit, 2, r.stderr)
-                # Go: "the full tier is pf-gate's"; verify.py names the gate step "the gate"
-                self.assertIn("the full tier is the gate's", r.stderr)
-                self.assertIn("the full tier is the gate's", r.result.get("summary", ""), r.result)
+                self.assertIn(want, r.stderr)
+                self.assertIn(want, r.result.get("summary", ""), r.result)
                 self.assertFalse(os.path.exists(os.path.join(fx.capsule, "runtime-state")), "nothing runs")
                 self.assertIsNone(r.doc)
 

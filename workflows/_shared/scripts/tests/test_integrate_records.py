@@ -99,6 +99,32 @@ class RecordsFixAndClearTest(RecordsCase):
         self.assertEqual(res["details"]["writes"], [{"item": "wi_n", "kind": "fix", "state": "landed"}, {"item": "wi_h", "kind": "clear", "state": "merged"}])
         self.assertIn("list --bundle integrate --limit 200", self.hub.calls, "the clear read the lane's batches")
 
+    def test_an_attrs_write_rides_the_records_file(self) -> None:
+        """polyforge#52: an `attrs` hub write passes on as written, in its
+        place — the integration_fix marker the lane's skills put beside
+        each fix ticket's file write (the ticket a key:<K> names)."""
+        self.hub.items[1] = held_item("wi_n", "p#3", red_rounds=2)
+        marker = {"verb": "attrs", "target": "key:hold-fix/wi_n/0", "name": "integration_fix", "value": True}
+        ticket = {"verb": "file", "key": "hold-fix/wi_n/0", "lane": "develop", "goal": "fix it",
+                  "content": "c", "priority": "high", "labels": ["integration-fix"]}
+        code, ops, res = self.run_records([ticket, marker, {"item": "wi_n", "fix": ["key:hold-fix/wi_n/0"]}])
+        self.assertEqual(code, 0, res.get("summary"))
+        assert ops is not None
+        self.assertEqual(ops[0], ticket, "a file write is passed on as written, in its place")
+        self.assertEqual(ops[1], marker, "an attrs write is passed on as written, in its place")
+        self.assertEqual(ops[2]["verb"], "attrs", ops[2])
+        self.assertEqual(ops[2]["value"]["fix_tickets"], ["key:hold-fix/wi_n/0"], ops[2])
+
+    def test_an_empty_attrs_write_is_refused(self) -> None:
+        """An attrs entry without its target or name is not passed on
+        (the daemon would refuse it at the batch; records names it here)."""
+        for name, entry in (("no target", {"verb": "attrs", "name": "integration_fix", "value": True}),
+                            ("no name", {"verb": "attrs", "target": "key:k", "value": True})):
+            with self.subTest(name):
+                code, ops, res = self.run_records([entry])
+                self.assertEqual(code, 2, res.get("summary"))
+                self.assertIsNone(ops)
+
     def test_a_fix_adds_to_the_holds_tickets(self) -> None:
         code, ops, res = self.run_records([{"item": "wi_h", "fix": ["p#9", "key:hold-fix/wi_h/1"]}])
         self.assertEqual(code, 0, res.get("summary"))
