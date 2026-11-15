@@ -181,9 +181,12 @@ def choose(rep: EngineReport, tier: str) -> Tuple[List[EngineCommand], str]:
 
 def argv_of(engine: str) -> List[str]:
     """How the engine at path engine runs: itself when it is executable,
-    else under the step's python (a lane snapshot's files are mode 0444;
-    the engine is a python3 program)."""
-    return [engine] if os.access(engine, os.X_OK) else [stepenv.read().python, engine]
+    else under ``python3`` (a lane snapshot's files are mode 0444; the
+    engine is a python3 program). The interpreter is resolved on the PATH
+    of whatever runs the argv — the step's PATH on the host, the
+    verification image's inside a container (``docker exec``), never the
+    step host's own interpreter path."""
+    return [engine] if os.access(engine, os.X_OK) else ["python3", engine]
 
 
 def nested_roots(repo_dir: str) -> List[str]:
