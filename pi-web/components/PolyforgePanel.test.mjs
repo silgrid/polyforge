@@ -1016,7 +1016,7 @@ test("the detail order is summary (title row, goal, facts, narration, pi#117 fac
     "{/* pi#119 summarize narration",
     "{/* pi#117 facts, moved into the summary",
     "data-pf-detail-graph",
-    "<PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? \"\"} echoes={detailEchoes} scrollRef={detailScrollRef} />",
+    "<PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? \"\"} echoes={detailEchoes} allLines={progressSnapshot?.lines ?? EMPTY_PROGRESS_LINES} scrollRef={detailScrollRef} />",
   ].map((needle) => detail.indexOf(needle));
   assert.ok(marks.every((index, i) => index >= 0 && (i === 0 || index > marks[i - 1])), `detail order: ${marks}`);
   const after = detail.slice(detail.indexOf("<PolyforgeDetailProgress"));

@@ -87,7 +87,7 @@ function setup(overrides = {}) {
     requests.push(request);
     return request.promise;
   };
-  const props = () => ({ wi: WI, running: false, snapshot: snapshotOf([toolLine("t1")]), echoes: [], scrollRef: { current: null }, ...overrides });
+  const props = () => ({ wi: WI, running: false, snapshot: snapshotOf([toolLine("t1")]), echoes: [], allLines: [], scrollRef: { current: null }, ...overrides });
   let current = props();
   const hook = renderHook(PolyforgeDetailProgress, current);
   const answer = async (index, body) => {

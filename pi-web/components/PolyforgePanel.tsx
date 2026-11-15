@@ -347,9 +347,13 @@ const EMPTY_PROGRESS_LINES: PolyforgeProgressLine[] = [];
  * wrapped text); `delivered`, `intent` and
  * `blocked` events are status rows like the other lifecycle lines. The
  * owner's messages the route just accepted (`echoes`, the panel's) render
- * as bubbles after the stream until the event log's own line arrives. The
- * snapshot is the panel's (`usePolyforgeProgress` is called there, so the
- * composer under the scroll region reads the same stream).
+ * as bubbles after the stream until the event log's own line arrives —
+ * judged against `allLines`, every line of the job's whole stream
+ * (polyforge#48 AC2): a line naming the record may sit in another step's
+ * block, so switching the selected step must not make a delivered message
+ * read as pending again. The snapshot is the panel's
+ * (`usePolyforgeProgress` is called there, so the composer under the scroll
+ * region reads the same stream).
  *
  * Follow (reversed at the owner's ruling):
  * `scrollRef` is the detail's one scroll region. `pinned` starts true for
@@ -456,12 +460,16 @@ export function rereadToolIds(
   return out;
 }
 
-export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, scrollRef, emptyMessage, resetKey }: {
+export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes, allLines, scrollRef, emptyMessage, resetKey }: {
   wi: string | null;
   profile?: string;
   running: boolean;
   snapshot: PolyforgeProgressSnapshot | null;
   echoes: readonly PolyforgeOwnerEcho[];
+  /** Every line of the job's whole stream (the unfiltered snapshot's lines):
+   *  the echo delivery judgement's set — an `owner` line naming the record
+   *  may sit in any step's block, not only the selected step's. */
+  allLines: readonly PolyforgeProgressLine[];
   scrollRef: RefObject<HTMLDivElement | null>;
   emptyMessage?: string;
   resetKey?: string;
@@ -520,7 +528,7 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     region.addEventListener("scroll", onScroll, { passive: true });
     return () => region.removeEventListener("scroll", onScroll);
   }, [scrollRef]);
-  const shownEchoes = pendingOwnerEchoes(echoes, lines);
+  const shownEchoes = pendingOwnerEchoes(echoes, allLines);
   useLayoutEffect(() => {
     const region = scrollRef.current;
     if (region && streamed && pinned.current) region.scrollTop = region.scrollHeight;
@@ -2145,7 +2153,7 @@ export function PolyforgePanel({
                               onApplied={onRefresh}
                             />
                           )}
-                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? ""} echoes={detailEchoes} scrollRef={detailScrollRef} />
+                          <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? ""} echoes={detailEchoes} allLines={progressSnapshot?.lines ?? EMPTY_PROGRESS_LINES} scrollRef={detailScrollRef} />
                         </>
                       ) : (
                       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>{t("polyforge.selectJob")}</div>

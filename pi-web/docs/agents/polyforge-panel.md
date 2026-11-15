@@ -691,7 +691,10 @@ skippable declaration and the `overrides` block in
   the same record arrives from the event log (`pendingOwnerEchoes`: the
   echo's `at` is the ack's `at`, the asks.jsonl record's stamp, matched
   against the line's `msgAt` — never the line's `at`, which the event log
-  stamps later, after the record's fsync; review r1); echoes
+  stamps later, after the record's fsync; review r1 — and against every
+  line of the job's whole stream, never the selected step's lines alone
+  (polyforge#48): a step switch cannot make a delivered message read as
+  pending again); echoes
   belong to one selection; they render after the stream, an empty or
   still-loading one too. The follow keeps the region at its bottom when an
   echo is added.
