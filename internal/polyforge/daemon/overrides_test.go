@@ -618,6 +618,16 @@ func TestOverrideBlockedClearOfSealedChain(t *testing.T) {
 // land nor ever be consumed (r1#6). DAEMON-409, nothing recorded.
 func TestOverrideWriteTerminalRefused(t *testing.T) {
 	f := newOverrideFixture(t, "wi_ov12")
+	// the control while it runs: a done step refuses the overlay as a
+	// step that already ran (not as a terminal work item)
+	f.writeExec(t, map[string]*capsule.Step{
+		"build":  {Status: capsule.StepDone, Round: 1},
+		"review": {Status: capsule.StepInProgress, Round: 1},
+		"merge":  {Status: capsule.StepPending},
+	}, "review")
+	if _, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "build", ClearModels: true}); ae == nil || ae.Code != api.ErrDaemonConflict || !strings.Contains(ae.Detail, "already ran") {
+		t.Fatalf("a running work item's done step must refuse the overlay as already ran: %+v", ae)
+	}
 	if err := f.td.rt.Stop(context.Background(), f.wi, protocol.FinishWrapped); err != nil {
 		t.Fatalf("wrapped close: %v", err)
 	}

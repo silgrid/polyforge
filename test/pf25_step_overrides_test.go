@@ -223,11 +223,12 @@ func TestPF25OverrideSurvivesRewindAndClearRestoresSource(t *testing.T) {
 	if got := w079Model(t, capDir, "review"); got != "pf25/r1" {
 		t.Fatalf("the re-dispatched review model %q, want the overlay pf25/r1 (the overlay survived the rewind)", got)
 	}
-	// a clear on the now-done step is refused (the overlay is for steps
-	// that have not started) — the clear's restoration was pinned above,
-	// in the pending window
-	if out := pf25Override(t, d, inst, 1, wi, "--step", "review", "--clear-models"); !strings.Contains(out, "already ran") {
-		t.Fatalf("a clear on a done step must be refused:\n%s", out)
+	// the work item is wrapped: a clear on its (done) review is refused
+	// as a terminal work item's write (r1#6; the done-step refusal of a
+	// live work item is pinned by the daemon's TestOverrideWriteTerminalRefused)
+	// — the clear's restoration was pinned above, in the pending window
+	if out := pf25Override(t, d, inst, 1, wi, "--step", "review", "--clear-models"); !strings.Contains(out, "DAEMON-409") || !strings.Contains(out, "wrapped") {
+		t.Fatalf("a clear on a wrapped work item must be refused DAEMON-409 naming its status:\n%s", out)
 	}
 }
 
