@@ -695,6 +695,12 @@ declaration.
   `smoke_suite=<suite>` (the
   full-tier opt-in above), each with its exact form in [the
   config reference](reference/config.md#polyforgeverify-scopeconf--the-verification-bar).
+  The same table's `not_runnable_rule=` is the replay judge's sibling: a
+  repository declares the lines of its own toolchain's output that mean a
+  run never reached its tests' assertions (`facts.py build --replay` reads
+  them from the conf governing the replayed run's cwd), so the lane script
+  itself names no repository's error text — the stack-generic rules (a
+  build, setup, compile or import failure, a missing module) stay built in.
 - **Authored suites.** On `develop`, `build` writes a suite as one of its
   units, and review's `facts.py carries` lists a suite it adds or whose run
   a unit records whose `carries:` is missing, malformed, or matches none of

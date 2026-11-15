@@ -1568,6 +1568,11 @@ def micro_bounds_of(repos_dir: str, evidence: Sequence[Dict[str, str]]) -> Dict[
 # command itself never ran: not judged (exit 2).
 NOT_RUN_EXITS = (126, 127)
 
+# The stack-generic rules only: a repository's own toolchain text
+# (pi-web's browser preflight) is the repository's to declare, as a
+# `not_runnable_rule=` line of its .polyforge/verify-scope.conf — read by
+# not_runnable_rules_of from the tree a run is judged on.
+#
 # NOT_RUNNABLE_RULES: (toolchain, rule, one-line pattern) — a line of a
 # replayed run's output by which the run is known not to have reached its
 # tests' assertions (a package that did not build or set up, a compile or
@@ -1585,7 +1590,6 @@ NOT_RUNNABLE_RULES: Tuple[Tuple[str, str, str], ...] = (
     ("go", "compile-error", r"^(\./)?[^\s:]+\.go:\d+:\d+: "),
     ("go", "missing-package", r"^(go: |\S+\.go:\d+:\d+: |\s+imports \S+: )(.*: )?(cannot find package|no required module provides package)"),
     ("node", "module-not-found", r"^\s*Error \[ERR_MODULE_NOT_FOUND\]: "),
-    ("node", "node-browser-preflight", r"^(?:node_modules/ is missing:|Playwright Chromium is missing: )"),
     ("node", "cannot-find", r"^\s*Error: Cannot find (module|package) '"),
     ("python", "import-error", r"^(ModuleNotFoundError|ImportError): "),
 )
@@ -1644,7 +1648,35 @@ def not_runnable_rules_of(tree: str, cwd: str) -> List[Tuple[str, str, str]]:
     `not_runnable_rule=<toolchain>|<rule>|<pattern>` lines of the nearest
     `.polyforge/verify-scope.conf` at cwd or above (the root's without a
     nearer one) — [] when it declares none; a malformed line is skipped."""
-    return []
+    d = "" if cwd in ("", ".") else cwd
+    rules: List[Tuple[str, str, str]] = []
+    while True:
+        conf = os.path.join(tree, d, VERIFY_SCOPE_CONF)
+        if os.path.isfile(conf):
+            try:
+                text = read_text(conf)
+            except OSError:
+                return []
+            for raw in text.split("\n"):
+                line = raw.lstrip(" \t")
+                if line == "" or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                if key != "not_runnable_rule":
+                    continue
+                toolchain, sep1, rest = val.partition("|")
+                rule, sep2, pattern = rest.partition("|")
+                if not (sep1 and sep2) or "" in (toolchain, rule, pattern):
+                    continue
+                try:
+                    re.compile(pattern)
+                except re.error:
+                    continue
+                rules.append((toolchain, rule, pattern))
+            return rules
+        if d == "":
+            return []
+        d = os.path.dirname(d)
 
 
 # BASE_SETUP_RULE: the not-runnable rule of a replay whose base_setup= line
@@ -1774,7 +1806,8 @@ def replay(capsule_dir: str, unit: Unit, run: Dict[str, Any], deadline_at: float
                 raise ReplayError(str(err)) from None
 
         res = run_in(line, workdir, log_dir, timeout)
-        verdict, hit = replay_verdict(res.exit, res.timed_out, run_output(capsule_dir, res.log))
+        declared = not_runnable_rules_of(wt, cwd)
+        verdict, hit = replay_verdict(res.exit, res.timed_out, run_output(capsule_dir, res.log), declared)
         setup: Optional[Dict[str, Any]] = None
         lines = base_setup_lines(wt) if verdict == "not_runnable" else []
         if hit is not None and lines:
@@ -1799,7 +1832,7 @@ def replay(capsule_dir: str, unit: Unit, run: Dict[str, Any], deadline_at: float
                     break
             else:
                 res = run_in(line, workdir, log_dir, until - time.time())
-                verdict, hit = replay_verdict(res.exit, res.timed_out, run_output(capsule_dir, res.log))
+                verdict, hit = replay_verdict(res.exit, res.timed_out, run_output(capsule_dir, res.log), declared)
     finally:
         run_git(repo_dir, "worktree", "remove", "--force", wt, timeout=WORKTREE_TIMEOUT)
         shutil.rmtree(wt, ignore_errors=True)
