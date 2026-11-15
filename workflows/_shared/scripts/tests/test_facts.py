@@ -561,8 +561,14 @@ class NotRunnableRuleTest(unittest.TestCase):
                              [("node", "node-browser-preflight", r"^(?:node_modules/ is missing:|Playwright Chromium is missing: )")])
             # the root's cwd reads the root's conf; a malformed line is skipped
             self.assertEqual(facts.not_runnable_rules_of(tree, "."), [("root", "R1", "^ONE ")])
-            # a missing conf declares nothing
-            self.assertEqual(facts.not_runnable_rules_of(tree, "elsewhere"), [])
+            # a cwd under the root reads the root's conf when no nearer one exists
+            self.assertEqual(facts.not_runnable_rules_of(tree, "elsewhere"), [("root", "R1", "^ONE ")])
+            # a tree with no conf anywhere declares nothing
+            empty = tempfile.mkdtemp()
+            try:
+                self.assertEqual(facts.not_runnable_rules_of(empty, "."), [])
+            finally:
+                shutil.rmtree(empty)
         finally:
             shutil.rmtree(tree)
 
