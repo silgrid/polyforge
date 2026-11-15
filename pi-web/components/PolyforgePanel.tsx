@@ -508,12 +508,12 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
   // polyforge#48 (AC5): the reset is a LAYOUT effect on purpose — it must
   // set the follow state before the follow effect below reads it in the
   // same commit, so a manual DAG choice never flashes through the bottom
-  // first. resetFollow "step" unpins and scrolls the selected step's first
-  // block head into view with the least scrolling (already in view: nothing;
-  // below: the head lands at the region's bottom edge; above: back up to
-  // align tops) — the DAG above stays on screen whenever the geometry
-  // allows, and the unfixed tree's jump to the very bottom is gone. With no
-  // block to show yet (the records still loading) the bottom follow holds.
+  // first. resetFollow "step" unpins and scrolls so the selected step's
+  // first block head is in view with the least scrolling: when the DAG
+  // above it fits in one viewport together with the head, the DAG's top
+  // becomes the region's top (both stay on screen); when they do not fit,
+  // the head alone aligns to the top — the records win. With no block to
+  // show yet (the records still loading) the bottom follow holds.
   useLayoutEffect(() => {
     selection.current = wi;
     setVisibleCount(PROGRESS_RENDER_CHUNK);
