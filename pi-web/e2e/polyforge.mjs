@@ -1,5 +1,6 @@
 // carries: components/PolyforgePanel*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*, components/PolyforgeStepControls*, app/api/polyforge/override/*, lib/polyforge-overrides*
 // carries: components/AppShell*, app/api/polyforge/polyforge-routes*, app/api/polyforge/polyforge-status-route*, lib/i18n/*, docs/agents/polyforge-panel.md
+// carries: components/PolyforgeDetailProgress*, hooks/__fixtures__/react-hook-shim.mjs, hooks/__fixtures__/polyforge-panel-progress-stubs.mjs
 // pi#108 (wi_y3y9SMz4IXKg) — Polyforge dock panel: end-to-end acceptance pass.
 //
 // Authored pre-code against artifacts/spec.md (AC1–AC10; AC11's e2e half is this

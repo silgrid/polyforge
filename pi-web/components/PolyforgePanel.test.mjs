@@ -1212,7 +1212,11 @@ test(" DAG: a skipped step is grayed", () => {
 });
 
 test("polyforge#24: selectProgressStep keeps every matching rerun block and empties unstarted steps", () => {
-  const helper = source.slice(source.indexOf("export function selectProgressStep"), source.indexOf("\n}\n", source.indexOf("export function selectProgressStep")) + 2).replace(/export /g, "");
+  // The extraction starts at the cache declaration (polyforge#48 AC1): the
+  // function reads the module-level WeakMap beside it.
+  const cacheAt = source.indexOf("const selectProgressStepCache");
+  assert.ok(cacheAt >= 0, "selectProgressStepCache exists beside selectProgressStep");
+  const helper = source.slice(cacheAt, source.indexOf("\n}\n", source.indexOf("export function selectProgressStep", cacheAt)) + 2).replace(/export /g, "");
   const context = vm.createContext({ progressBlocks: (lines) => {
     const starts = lines.map((line, index) => line.event === "step_started" ? index : -1).filter((index) => index >= 0);
     return { blocks: starts.map((start, index) => {

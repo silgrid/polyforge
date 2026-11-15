@@ -371,14 +371,29 @@ const EMPTY_PROGRESS_LINES: PolyforgeProgressLine[] = [];
  * leaves the bottom, unpins, and the buttons appear). A tool card's
  * expand/collapse and its detail settling are folds too.
  */
+/** The selected-step view's cache (polyforge#48 AC1): the panel calls
+ *  selectProgressStep on every render and the reread effect below the
+ *  progress depends on the view's identity, so one (snapshot, step) pair
+ *  computes one object, returned again until the snapshot itself changes —
+ *  an unrelated re-render (another surface's poll) cannot retrigger the
+ *  effect. Weakly keyed: a snapshot the panel no longer holds is collected. */
+const selectProgressStepCache = new WeakMap<PolyforgeProgressSnapshot, Map<string, PolyforgeProgressSnapshot | null>>();
 export function selectProgressStep(snapshot: PolyforgeProgressSnapshot | null, step: string | null): PolyforgeProgressSnapshot | null {
   if (!snapshot || !step || !snapshot.available) return snapshot;
+  let perSnapshot = selectProgressStepCache.get(snapshot);
+  if (perSnapshot === undefined) {
+    perSnapshot = new Map();
+    selectProgressStepCache.set(snapshot, perSnapshot);
+  }
+  const cached = perSnapshot.get(step);
+  if (cached !== undefined) return cached;
   const lines = snapshot.lines;
   const layout = progressBlocks(lines);
   const blocks = layout.blocks.filter((block) => block.step === step);
-  if (layout.blocks.length === 0) return snapshot;
-  const selectedLines = blocks.flatMap((block) => lines.slice(block.first ?? block.start, (block.first ?? block.start) + block.count));
-  return { ...snapshot, lines: selectedLines };
+  const selected = layout.blocks.length === 0 ? snapshot
+    : { ...snapshot, lines: blocks.flatMap((block) => lines.slice(block.first ?? block.start, (block.first ?? block.start) + block.count)) };
+  perSnapshot.set(step, selected);
+  return selected;
 }
 
 /** What a detail read does with the card's held state. `skip`: a read
@@ -582,15 +597,19 @@ export function PolyforgeDetailProgress({ wi, profile, running, snapshot, echoes
     }
     setFoldVersion((current) => current + 1);
   }, [loadDetail]);
-  // polyforge#2: every poll re-reads the expanded cards whose detail still
-  // has no result (each poll's snapshot is a new object, so this runs on the
-  // 2 s cadence while the job runs — no timer of its own; a subagent's
-  // lines are in the set too, review r1#2).
+  // polyforge#2 (the re-reads) with polyforge#48 AC1: while the job runs,
+  // every poll's fresh snapshot re-reads the expanded cards whose detail
+  // still has no result — the cached selected-step view keeps this effect's
+  // dependency stable across unrelated renders, and a ticket that is not
+  // running (ended, or waiting on its one read) never re-reads: its expanded
+  // card keeps the detail its own click read. A subagent's lines are in the
+  // set too (review r1#2). The effect re-runs but reads nothing when `running`
+  // flips — the marks and held details are the click path's own.
   useEffect(() => {
-    if (!wi) return;
+    if (!wi || !running) return;
     const lineIds = progressLineIds(snapshot?.lines ?? EMPTY_PROGRESS_LINES);
     for (const id of rereadToolIds(detailsRef.current, openTools.current, lineIds)) loadDetail(id);
-  }, [wi, snapshot, loadDetail]);
+  }, [wi, running, snapshot, loadDetail]);
   const message = !wi || snapshot?.available === false ? t("polyforge.progress.unavailable")
     : !snapshot ? t("polyforge.loading")
       : snapshot.lines.length === 0 ? (emptyMessage ?? t("polyforge.progress.empty")) : null;
