@@ -13,7 +13,7 @@ steps:
     skill: collect
     model_tier: mid
     budget: { wall_minutes: 20, tool_minutes: 10 }
-    hub: { verbs: [get, list, batch, file], attrs: [integration] }
+    hub: { verbs: [get, list, batch, file], attrs: [integration, integration_fix] }
   - id: revert
     skill: revert
     model_tier: cheap
@@ -26,7 +26,7 @@ steps:
     skill: full-gate
     budget: { wall_minutes: 150, tool_minutes: 90 }
     resources: { admission: heavy }
-    hub: { verbs: [get, list, batch, file], attrs: [integration] }
+    hub: { verbs: [get, list, batch, file], attrs: [integration, integration_fix] }
   - id: close
     skill: close
     model_tier: cheap

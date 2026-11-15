@@ -76,7 +76,9 @@ records turns a step's decisions on the integration records into the hub
 writes it registers, each built under the lane's rules
 (pfstep.integration) from the record the step's hub reads now (`pf step
 hub get`). --in is a JSON array, in order, of `file` hub writes (passed on
-as written, for a `key:<K>` to name) and record entries:
+as written, for a `key:<K>` to name), `attrs` hub writes (passed on as
+written — the integration_fix marker a fix ticket's file write is
+followed by) and record entries:
   {"item": <wi>, "fix": [<ref>, ...]}    a hold's new fix tickets (collect's
                                          fix ruling): added to its
                                          fix_tickets;
@@ -113,7 +115,7 @@ import json  # noqa: E402
 import re  # noqa: E402
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple  # noqa: E402
 
-from pfstep import atomic, git, gotext, jsonout, result, stepenv  # noqa: E402
+from pfstep import atomic, git, gotext, gostr, jsonout, result, stepenv  # noqa: E402
 from pfstep import integration as rules  # noqa: E402
 from pfstep import godecode as gd  # noqa: E402
 from pfstep.hub import HubError  # noqa: E402
@@ -1395,9 +1397,9 @@ def owner_message(capsule_root: str, at: str, step: str) -> Optional[Dict[str, s
 
 
 def read_records_in(path: str) -> List[Dict[str, Any]]:
-    """The records file: a JSON array of `file` hub writes (passed on as
-    written) and record entries {item, fix|clear|blame}; InputError naming
-    a malformed entry."""
+    """The records file: a JSON array of `file` and `attrs` hub writes
+    (passed on as written) and record entries {item, fix|clear|blame};
+    InputError naming a malformed entry."""
     try:
         doc = loads(read_text(path))
     except OSError as err:
@@ -1412,6 +1414,17 @@ def read_records_in(path: str) -> List[Dict[str, Any]]:
         if not isinstance(e, dict):
             raise InputError("%s is no JSON object" % at)
         if e.get("verb") == "file":
+            continue
+        if e.get("verb") == "attrs":
+            # an attrs hub write rides the records file as written — the
+            # integration_fix marker a fix ticket's file write is followed
+            # by (the daemon judges its shape and whitelist at the batch)
+            if not isinstance(e.get("target"), str) or not gostr.trim_space(e["target"]):
+                raise InputError("%s is an attrs write naming no work item (target)" % at)
+            if not isinstance(e.get("name"), str) or not gostr.trim_space(e["name"]):
+                raise InputError("%s is an attrs write naming no attrs key (name)" % at)
+            if "value" not in e:
+                raise InputError("%s is an attrs write carrying no value" % at)
             continue
         item = e.get("item")
         kinds = [k for k in RECORD_KINDS if k in e]
@@ -1489,7 +1502,7 @@ def _records_run(inv: Invocation, ns: argparse.Namespace, environ: Mapping[str, 
     refused: List[Dict[str, str]] = []
     now = now_stamp()
     for e in entries:
-        if e.get("verb") == "file":
+        if e.get("verb") in ("file", "attrs"):
             ops.append(e)
             continue
         ref = e["item"]

@@ -103,6 +103,7 @@ class RecordsFixAndClearTest(RecordsCase):
         """polyforge#52: an `attrs` hub write passes on as written, in its
         place — the integration_fix marker the lane's skills put beside
         each fix ticket's file write (the ticket a key:<K> names)."""
+        self.hub.items[1] = held_item("wi_n", "p#3", red_rounds=2)
         marker = {"verb": "attrs", "target": "key:hold-fix/wi_n/0", "name": "integration_fix", "value": True}
         ticket = {"verb": "file", "key": "hold-fix/wi_n/0", "lane": "develop", "goal": "fix it",
                   "content": "c", "priority": "high", "labels": ["integration-fix"]}

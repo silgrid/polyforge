@@ -68,7 +68,11 @@ batch clears one.
      `fix_tickets` (the same key for the same ruling in any batch, so a ticket filed by a
      batch that died before registering it is found, not filed twice); the background
      names what the blaming gate found red, the acceptance that it passes on the fixed
-     head — then `{"item": "<item>", "fix": ["key:hold-fix/<item>/<n>"]}` (added to the
+     head — then, right after the file write, one
+     `{"verb": "attrs", "target": "key:<the ticket's key>", "name": "integration_fix", "value": true}`
+     — the structured marker an integration batch's fix ticket carries, which makes the
+     ticket's own develop verification run the full bar instead of the light tier —
+     then `{"item": "<item>", "fix": ["key:hold-fix/<item>/<n>"]}` (added to the
      hold's fix tickets; the `key:` reference becomes the filed ticket's id when the writes
      are made: the hold reads it, and stays open while the new ticket can still release it);
    - per `clear`: `{"item": "<item>", "clear": "<that message's at>"}` — the stamp of the

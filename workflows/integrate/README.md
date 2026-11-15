@@ -81,13 +81,17 @@ integration_batch`). What a later step's command needs travels in files, never i
   writes each reverted item's move to `reverted` (`artifacts/integrate/revert-ops.json`),
   which the step registers. A revert the forge refuses is put to the owner.
 - **full-gate** (the script `gate.py --isolation container --capsule --pins`, no tier;
-  heavy admission; a gate; hub `get list batch file`, attrs `integration`) — runs the release's test gate
+  heavy admission; a gate; hub `get list batch file`, attrs `integration, integration_fix`) — runs the release's test gate
   once on every gated repo's pinned head, inside its verification container, with
   `--mark-green`, so a pass writes the green tag itself. Nothing gated → result
   `empty`. Green → `green`. Red → `gate.py --triage` (re-runs, the baseline, attribution,
   bisection); the agent decides one fix ticket per root cause (filed on `develop`, high
   priority, under its stable key, so a resumed batch never files twice) and an attribution
-  per blamed source, registered as hub writes, then `red`. A source red after two fix
+  per blamed source, registered as hub writes, then `red` — every fix ticket it files carries
+  the integration_fix attr (an attrs hub write beside the file) — the full gate's own
+  tickets and the hold rulings' collect ones alike — so the ticket's own develop
+  verification runs the full bar instead of the light tier, because a fix that passes
+  light may still break something only the full bar catches. A source red after two fix
   rounds, or a pre-existing or unattributed red, goes to the owner: revert (a `fail`
   citing the owner — back to revert, charged to nothing), rerun, or close red. It writes
   `artifacts/integrate/gate-decision.json` (`result`, `reverts`) before every hand-off.
