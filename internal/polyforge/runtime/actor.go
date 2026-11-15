@@ -9,7 +9,7 @@ package runtime
 // own mutex, so status and watch never wait on an actor.
 //
 // Lock order: the I/O leaf locks (gitops' per-work-item lock, claimMu,
-// manualMu, persistMu — none nested in another), then the job-table lock
+// manualMu, pendingMu, persistMu — none nested in another), then the job-table lock
 // mu, then a job's mu. Neither of the last two is held across hub, git or
 // disk I/O, an EventTap call or a send.
 

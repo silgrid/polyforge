@@ -624,6 +624,22 @@ flow in `components/PolyforgePanel.tsx` (`PolyforgeDetailProgress`), the two
 line kinds in `lib/polyforge-cards-pure.ts`, the `pendingQuestion` and the
 event fields in `lib/polyforge-status.ts`.
 
+The job detail's selected UNSTARTED step also carries the per-step overlay
+controls (polyforge#25): the effective-model source line (one
+`GET /api/polyforge/override` read per selection, and again after each
+write), a harness + model-id setter and — for a step the lane snapshot
+declares `skippable` — the skip switch; any other step shows the waive
+hint in the switch's place, and a refused write shows the daemon's typed
+words inline. The watch snapshot carries the declarations and the
+overlay's values (`declared_steps[].skippable`, `overrides`); the write
+is one action per POST (`models`, `clearModels`, `skip`), the effective
+source labels (`step overlay`, `pf submit --models`, the yaml/bundle
+level) come from the view. Files:
+`components/PolyforgeStepControls.tsx` (the controls; the panel mounts
+them and keeps no read of its own), `lib/polyforge-overrides.ts` (the
+spawn face), `app/api/polyforge/override/route.ts`, the skippable
+declaration and the `overrides` block in `lib/polyforge-status.ts`.
+
 - **The flow.** The whole-job progress stream ([Job detail layout and
   execution progress](#job-detail-layout-and-execution-progress-workbench210-workbench238))
   gains two line kinds composed from the event log

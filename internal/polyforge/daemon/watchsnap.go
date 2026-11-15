@@ -309,20 +309,54 @@ func (d *Daemon) loadExecution(wi string, item *api.WorkItem) (*capsule.Executio
 
 // declaredSteps answers the step sequence of the workflow the capsule's
 // driver executes (capsuleWorkflow: its pinned bundle, parsed by the
-// driver's own loader) in frontmatter order. nil when that workflow is
-// unreadable: the snapshot then omits the field and nothing else changes.
+// driver's own loader) in frontmatter order, with the lane's skippable
+// declarations (polyforge#25). nil when that workflow is unreadable: the
+// snapshot then omits the field and nothing else changes.
 func declaredSteps(wf *driver.Workflow) []protocol.WatchDeclaredStep {
 	if wf == nil {
 		return nil
 	}
 	out := make([]protocol.WatchDeclaredStep, 0, len(wf.Steps))
 	for _, s := range wf.Steps {
-		ds := protocol.WatchDeclaredStep{ID: s.ID}
+		ds := protocol.WatchDeclaredStep{ID: s.ID, Skippable: s.Skippable}
 		if s.OnFail != nil {
 			target := s.OnFail.Target
 			ds.OnFail = &target
 		}
 		out = append(out, ds)
+	}
+	return out
+}
+
+// watchOverrides answers the step-overlay values the snapshot carries
+// (polyforge#25): the capsule's record, with the pending record of a work
+// item this daemon holds no job of merged on top by the claim's own rule
+// (runtime.MergedStepOverrides: a pending aspect older than the capsule's
+// same aspect does not apply); a step whose aspect came from pending is
+// marked pending — it lands with the next claim here. nil when nothing
+// carries an aspect.
+func watchOverrides(d *Daemon, wi, capsuleDir string) map[string]protocol.WatchOverride {
+	ov, err := capsule.ReadStepOverrides(capsuleDir)
+	if err != nil {
+		ov = capsule.StepOverrides{}
+	}
+	// the pending record of a work item this daemon holds no job of; a
+	// live job consumed it at its claim, so this reads empty there
+	ov, applied := runtime.MergedStepOverrides(ov, d.rt.PendingStepOverrides(wi))
+	out := map[string]protocol.WatchOverride{}
+	for id, e := range ov.Steps {
+		a := applied[id]
+		pending := a.Models || a.Skip
+		// a cleared chain (Models nil, its clear's time kept) is no chain:
+		// an entry left with no aspect carries nothing to show — unless a
+		// pending clear left it so (the sealed chain no longer governs)
+		if e == nil || (e.Models == nil && e.Skip == nil && !pending) {
+			continue
+		}
+		out[id] = protocol.WatchOverride{Models: e.Models, Skip: e.Skip, Pending: pending}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -348,10 +382,11 @@ func capsuleWorkflow(capsuleDir string) *driver.Workflow {
 // capsuleLaneGraph is capsuleWorkflow for the `pf step` checks: the
 // snapshot's step graph (its workflow.yaml), readable even when a step
 // definition is broken (driver.LoadWorkflowGraph); nil when workflow.yaml
-// itself cannot be read or judged. The work item's skipped-step set (fixed
-// at the first claim) is applied as the driver applies it
-// (driver.Workflow.WithSkipped): the wrap attrs of a skipped tail are the
-// last running step's to register.
+// itself cannot be read or judged. The work item's effective skip set —
+// the set fixed at the first claim unioned with the overlay's skip
+// switches (driver.EffectiveSkips, polyforge#25) — is applied as the
+// driver applies it (driver.Workflow.WithSkipped): the wrap attrs of a
+// skipped tail are the last running step's to register.
 func capsuleLaneGraph(capsuleDir string) *driver.Workflow {
 	raw, err := os.ReadFile(filepath.Join(capsuleDir, capsule.CapsuleJSON))
 	if err != nil {
@@ -365,7 +400,7 @@ func capsuleLaneGraph(capsuleDir string) *driver.Workflow {
 	if err != nil {
 		return nil
 	}
-	return wf.WithSkipped(driver.ReadSkippedSteps(capsuleDir))
+	return wf.WithSkipped(driver.EffectiveSkips(capsuleDir))
 }
 
 // readExecutionFile parses one execution.json; nil when absent or torn.
@@ -433,6 +468,7 @@ func (d *Daemon) readExecution(wi string, item *api.WorkItem) *protocol.WatchExe
 	out := &protocol.WatchExecution{
 		WorkflowStatus: ex.WorkflowStatus, CurrentStep: ex.CurrentStep, UpdatedAt: ex.UpdatedAt,
 		Steps: map[string]protocol.WatchStep{}, DeclaredSteps: declaredSteps(wf),
+		Overrides: watchOverrides(d, wi, dir),
 	}
 	// the rewind tally: the automatic rewinds and the owner's apart
 	if wf != nil {

@@ -108,11 +108,28 @@ type WatchExecution struct {
 	// is a map and carries no order. Omitted when that workflow.yaml is
 	// missing or unparseable.
 	DeclaredSteps []WatchDeclaredStep `json:"declared_steps,omitempty"`
+	// Overrides is the WI's step-overlay record (polyforge#25): one entry
+	// per step that carries at least one aspect, merged with the pending
+	// record of a work item this daemon holds no job of. Omitted when no
+	// overlay exists.
+	Overrides map[string]WatchOverride `json:"overrides,omitempty"`
 	// Rewinds counts the rewinds on record, kept apart:
 	// the automatic ones a gate's on_fail spent (counted toward the lane's
 	// max_rewinds) and the owner's (a hand-off citing the owner, charged
 	// to no budget). Absent when the workflow is unreadable.
 	Rewinds *WatchRewinds `json:"rewinds,omitempty"`
+}
+
+// WatchOverride is one step's overlay aspects as the watch snapshot
+// carries them (the values only; the view face carries the operators and
+// times too).
+type WatchOverride struct {
+	Models []string `json:"models,omitempty"`
+	Skip   *bool    `json:"skip,omitempty"`
+	// Pending marks aspects that ride the daemon-local pending record of
+	// a work item this daemon no longer holds (they land with its next
+	// claim here).
+	Pending bool `json:"pending,omitempty"`
 }
 
 // WatchRewinds is the rewind tally: Agent of MaxRewinds (the lane's one
@@ -128,6 +145,10 @@ type WatchRewinds struct {
 type WatchDeclaredStep struct {
 	ID     string  `json:"id"`
 	OnFail *string `json:"on_fail"`
+	// Skippable mirrors the lane snapshot's `skippable` declaration
+	// (polyforge#25): the step may be switched off mid-run through the
+	// override face (only while it has not started).
+	Skippable bool `json:"skippable"`
 }
 
 // WatchStep is one step's status and start moment.

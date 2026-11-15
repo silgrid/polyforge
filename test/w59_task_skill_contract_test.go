@@ -49,7 +49,7 @@ func TestW59TaskSkillContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%s's frontmatter must parse as strict YAML (the description carries the task advertising): %v", w59SkillRel, err)
 	}
-	for _, tok := range []string{"15 routing verbs", "task"} {
+	for _, tok := range []string{"16 routing verbs", "task"} {
 		if !strings.Contains(desc, tok) {
 			t.Errorf("the skill description must advertise the task verb — the marker %q is missing; the description is the only text a harness loads unconditionally, so without it a session never discovers `pf task`", tok)
 		}
@@ -64,8 +64,8 @@ func TestW59TaskSkillContract(t *testing.T) {
 			t.Errorf("%s must route the task intent to `verbs/task.md` — the marker %q is missing; without the intent-table row \"起个任务 / 派个只读跑腿\" matches nothing", w59SkillRel, tok)
 		}
 	}
-	if !strings.Contains(skill, "decide which of the 15 routing verbs") {
-		t.Errorf("%s's body must say 15 routing verbs — the description and the body sentence must not disagree on the verb count", w59SkillRel)
+	if !strings.Contains(skill, "decide which of the 16 routing verbs") {
+		t.Errorf("%s's body must say 16 routing verbs — the description and the body sentence must not disagree on the verb count", w59SkillRel)
 	}
 
 	// 3. The fragment exists and carries the shipped surface's facts: the

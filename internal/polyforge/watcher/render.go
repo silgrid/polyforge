@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -115,10 +116,33 @@ func FormatOnce(s *protocol.WatchSnapshot, now time.Time, maxEvents int) string 
 	if len(evs) > 0 {
 		b.WriteString("events:\n")
 		for _, e := range evs {
-			fmt.Fprintf(&b, "  #%d %s %s\n", e.Seq, clean(e.At), clean(e.Kind))
+			fmt.Fprintf(&b, "  #%d %s %s%s\n", e.Seq, clean(e.At), clean(e.Kind), overrideEventSuffix(e))
 		}
 	}
 	return b.String()
+}
+
+// overrideEventSuffix is the overlay events' inline summary (polyforge#25):
+// the operator, the step and the new value ride the event line, so
+// `pf watch --once` shows WHAT changed without the --json body. A body
+// that carries none of it (or another kind entirely) answers "".
+func overrideEventSuffix(e protocol.EventEntry) string {
+	if e.Kind != "override_set" && e.Kind != "override_clear" {
+		return ""
+	}
+	var body struct {
+		Step     string `json:"step"`
+		Aspect   string `json:"aspect"`
+		Value    string `json:"value"`
+		Operator string `json:"operator"`
+	}
+	if e.Body == nil || json.Unmarshal(e.Body, &body) != nil {
+		return ""
+	}
+	if body.Step == "" && body.Aspect == "" && body.Value == "" && body.Operator == "" {
+		return ""
+	}
+	return fmt.Sprintf(" step=%s aspect=%s value=%s by=%s", body.Step, body.Aspect, body.Value, body.Operator)
 }
 
 func ageSince(ts string, now time.Time) (time.Duration, bool) {

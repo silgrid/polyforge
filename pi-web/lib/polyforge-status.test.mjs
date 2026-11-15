@@ -97,6 +97,9 @@ test("event tail exposes only the per-kind whitelisted body fields", async () =>
     { at: "2026-10-18T10:00:11Z", kind: "owner_message", body: { step: "build", spawn_n: 4, kind: "reply", ask_at: "2026-10-18T10:00:10Z", by: "usr_1", text: "E2E-SECRET-OWNER-WORDS" } },
     { at: "2026-10-18T10:00:12Z", kind: "delivered", body: { step: "build", spawn_n: 4, msg_at: "2026-10-18T10:00:11Z", kind: "reply", disposition: "started", confirmed_by: "E2E-SECRET-EVENT-BODY" } },
     { at: "2026-10-18T10:00:13Z", kind: "intent", body: { step: "review", spawn_n: 4, kind: "rewind", to: "build", reply_at: "2026-10-18T10:00:11Z", reason: "E2E-SECRET-EVENT-BODY", by: "usr_1" } },
+    // polyforge#25: the overlay change's own fields — and nothing else
+    { at: "2026-10-18T10:00:14Z", kind: "override_set", body: { step: "merge", aspect: "models", value: "pi:pf25/m-1", operator: "usr_2", posture: "running", note: "E2E-SECRET-EVENT-BODY", models: ["pi:pf25/m-1"] } },
+    { at: "2026-10-18T10:00:15Z", kind: "override_clear", body: { step: "merge", aspect: "skip", value: "cleared", operator: "usr_2", note: "E2E-SECRET-EVENT-BODY" } },
   ]);
   const byKind = Object.fromEntries(tail.map((event) => [event.kind, event]));
   assert.equal(byKind.step_started.step, "grill");
@@ -123,6 +126,8 @@ test("event tail exposes only the per-kind whitelisted body fields", async () =>
   assert.deepEqual(byKind.owner_message, { at: "2026-10-18T10:00:11Z", kind: "owner_message", step: "build", by: "usr_1" }, "the owner's words ride the progress stream, never the watch tail");
   assert.deepEqual(byKind.delivered, { at: "2026-10-18T10:00:12Z", kind: "delivered", step: "build", disposition: "started" });
   assert.deepEqual(byKind.intent, { at: "2026-10-18T10:00:13Z", kind: "intent", step: "review", intent: "rewind", to: "build" }, "the intent's kind rides as `intent`: the event kind stays");
+  assert.deepEqual(byKind.override_set, { at: "2026-10-18T10:00:14Z", kind: "override_set", step: "merge", aspect: "models", value: "pi:pf25/m-1", operator: "usr_2" }, "polyforge#25: the overlay change carries its step, aspect, value and operator — nothing else");
+  assert.deepEqual(byKind.override_clear, { at: "2026-10-18T10:00:15Z", kind: "override_clear", step: "merge", aspect: "skip", value: "cleared", operator: "usr_2" });
   const text = JSON.stringify(tail.filter((event) => event.kind !== "needs_input" && event.kind !== "awaiting_owner"));
   assert.ok(!text.includes("E2E-SECRET-OWNER-WORDS"), "an owner message's text never reaches the tail");
   assert.ok(!JSON.stringify(byKind.needs_input).includes("E2E-SECRET-EVENT-BODY"), "needs_input passes no other body field");
@@ -464,7 +469,11 @@ test("declared_steps sanitize to ordered ids only; on_fail and extras never leak
     { id: "spec", on_fail: null },
     { id: "code" },
   ];
-  assert.deepEqual(sanitizeDeclaredSteps(raw), [{ id: "grill" }, { id: "spec" }, { id: "code" }], "order preserved, ids trimmed");
+  assert.deepEqual(sanitizeDeclaredSteps(raw), [
+    { id: "grill", skippable: false }, { id: "spec", skippable: false }, { id: "code", skippable: false },
+  ], "order preserved, ids trimmed, the lane's skippable declaration kept (polyforge#25)");
+  assert.deepEqual(sanitizeDeclaredSteps([{ id: "merge", skippable: true }]), [{ id: "merge", skippable: true }],
+    "a skippable step carries its declaration");
   const text = JSON.stringify(sanitizeDeclaredSteps(raw));
   for (const leak of ["on_fail", "path", "/srv/e2e-secret-workspace"]) {
     assert.ok(!text.includes(leak), `declared step leaked ${leak}`);
@@ -501,7 +510,15 @@ test("malformed declared_steps degrades to null without disturbing steps/events"
     assert.deepEqual(snapshot.events, [{ at: "2026-10-18T10:00:00Z", kind: "step_started", step: "grill" }], "events unaffected");
   }
   const ok = sanitizeWatch({ ...base, execution: { ...base.execution, declared_steps: [{ id: "grill" }, { id: "code", on_fail: "plan" }] } });
-  assert.deepEqual(ok?.declared_steps, [{ id: "grill" }, { id: "code" }], "well-formed declared_steps pass with ids only");
+  assert.deepEqual(ok?.declared_steps, [{ id: "grill", skippable: false }, { id: "code", skippable: false }], "well-formed declared_steps pass with the skippable declaration only");
+  const withOverrides = sanitizeWatch({ ...base, execution: { ...base.execution, overrides: {
+    merge: { models: ["pi:pf25/m-1"], models_by: "usr_1", skip: true, skip_by: "usr_2", pending: true, secret: "E2E-SECRET" },
+    "  ": { models: [] },
+    review: "nope",
+  } } });
+  assert.deepEqual(withOverrides?.overrides, { merge: { models: ["pi:pf25/m-1"], skip: true, pending: true } },
+    "the overrides block keeps the values only (no operators, no secrets, junk rows drop)");
+  assert.equal(sanitizeWatch({ ...base, execution: { ...base.execution, overrides: [] } })?.overrides, undefined, "no overrides → undefined");
 });
 
 test("watch snapshot reads null for daemon-unknown refs and unusable shapes", async () => {

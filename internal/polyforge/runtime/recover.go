@@ -355,7 +355,18 @@ func (r *Runtime) composeFor(capsuleDir, project, bundle string, manual []string
 		if err != nil {
 			return nil, err
 		}
-		return workspace.ComposeCandidates(fm, wcfg, project, manual), nil
+		// the step-overlay record (polyforge#25) sits above every source:
+		// a step whose overlay names a model chain runs that chain as its
+		// whole effective list. Read fresh at every composition — a torn
+		// record is tolerated as no overlay (the write path validates and
+		// the file is daemon-written, so a torn one is a scene defect, not
+		// a reason to block the dispatch); the candidate pointer then
+		// falls to the list head exactly as an owner edit does.
+		ov, oerr := capsule.ReadStepOverrides(capsuleDir)
+		if oerr != nil {
+			ov = capsule.StepOverrides{}
+		}
+		return workspace.ComposeCandidatesWithOverlay(fm, wcfg, project, manual, ov), nil
 	}
 }
 

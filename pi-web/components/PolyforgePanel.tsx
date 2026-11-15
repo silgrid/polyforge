@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import type { PolyforgeJob, PolyforgeOpsStatus, PolyforgeVerifyQueue, PolyforgeWatchStatus } from "@/lib/polyforge-status";
+import type { PolyforgeJob, PolyforgeOpsStatus, PolyforgeVerifyQueue } from "@/lib/polyforge-status";
 import {
   cardRunningMinutes,
   formatCardDuration,
@@ -24,7 +24,7 @@ import {
   type PolyforgeProgressSnapshot,
   type PolyforgeProgressTone,
 } from "@/lib/polyforge-cards-pure";
-import type { PolyforgeContextUsage } from "@/lib/polyforge-status";
+import type { PolyforgeContextUsage, PolyforgeWatchStatus } from "@/lib/polyforge-status";
 import { POLYFORGE_BLOCK_STYLE } from "@/lib/panel-layout";
 import { usePolyforgePanelPreferences } from "@/hooks/usePolyforgePanelPreferences";
 import type { PolyforgeContact, PolyforgeConversation, PolyforgeMessage, PolyforgeProjectGroup } from "@/lib/polyforge-messages-pure";
@@ -58,6 +58,7 @@ import {
 import { PolyforgeProgressToolCard, fetchProgressToolDetail, type PolyforgeProgressToolDetailState } from "./PolyforgeProgressToolCard";
 import { PolyforgeProgressSubagentEntry } from "./PolyforgeProgressSubagent";
 import { PolyforgeJobComposer } from "./PolyforgeJobComposer";
+import { PolyforgeStepControls, stepUnstarted } from "./PolyforgeStepControls";
 import { useI18n } from "@/hooks/useI18n";
 
 const STEP_STATUS_COLORS: Record<string, string> = {
@@ -2108,6 +2109,22 @@ export function PolyforgePanel({
                               finished job from the status/cards lists, so the
                               wi falls back to the selection's watch snapshot
                               (reset per selection) and the last stream stays. */}
+                          {/* polyforge#25: the selected unstarted step's overlay
+                              controls — the effective-model source line, the
+                              single-candidate setter and the skip switch of a
+                              lane-declared skippable step (the waive hint for
+                              any other). A step with a live dispatch or one
+                              that already ran never shows them. */}
+                          {watchStatus && selectedStep && stepUnstarted(watchStatus, selectedStep) && (
+                            <PolyforgeStepControls
+                              wi={progressWi}
+                              profile={selectedJob?.profile ?? selectedProfile}
+                              step={selectedStep}
+                              skippable={watchStatus.declared_steps?.find((d) => d.id === selectedStep)?.skippable ?? false}
+                              overlay={watchStatus.overrides?.[selectedStep]}
+                              onApplied={onRefresh}
+                            />
+                          )}
                           <PolyforgeDetailProgress wi={progressWi} profile={selectedJob?.profile} running={progressLive} snapshot={selectedProgressSnapshot} emptyMessage={progressEmptyMessage} resetKey={selectedStep ?? ""} echoes={detailEchoes} scrollRef={detailScrollRef} />
                         </>
                       ) : (

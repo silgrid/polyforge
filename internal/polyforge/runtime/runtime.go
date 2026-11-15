@@ -239,6 +239,11 @@ type Runtime struct {
 	aliases map[string]string
 	// manualMu guards the daemon-local manual-models.json (manualmodels.go).
 	manualMu sync.Mutex
+	// pendingMu guards the daemon-local pending-step-overrides.json
+	// (stepoverrides.go): different work items' actors read-modify-write
+	// that one file. An I/O leaf lock like manualMu, never nested in
+	// another.
+	pendingMu sync.Mutex
 	// claimMu serializes the claiming journal's read-modify-writes: its
 	// writers are different work items' actors.
 	claimMu sync.Mutex
@@ -1604,9 +1609,11 @@ func (r *Runtime) stopOp(ctx context.Context, j *job, reason string, alreadySeal
 	}
 	r.dropJob(j)
 	if finalReason != protocol.FinishBlocked {
-		// terminal on this daemon: the manual --models list dies with it
-		// (a blocked end keeps it for the re-claim)
+		// terminal on this daemon: the manual --models list and an
+		// unconsumed pending step-overlay record (polyforge#25) die with
+		// it (a blocked end keeps both for the re-claim)
 		r.clearManualModels(j.wi)
+		r.clearPendingOverrides(j.wi)
 	}
 	r.persistLog(j.wi)
 	r.send(protocol.RTMsg{Kind: protocol.RTFinished, WorkItem: j.wi, Reason: finalReason})

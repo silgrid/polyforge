@@ -157,6 +157,11 @@ func (d *Daemon) routes() *http.ServeMux {
 	// peer may make; the dismiss POST sits behind refuseStepOrigin, so a
 	// step or task process tree is refused DAEMON-403.
 	mux.HandleFunc("GET /jobs/{wi}/watch", d.watchSnapshotRoute)
+	// the step-overlay face (polyforge#25): the view is a read any local
+	// peer may make; the write sits behind refuseStepOrigin like every
+	// POST here, so a step or task process tree is refused DAEMON-403.
+	mux.HandleFunc("GET /jobs/{wi}/overrides", d.overrideViewRoute)
+	mux.HandleFunc("POST /jobs/{wi}/overrides", d.overrideWriteRoute)
 	mux.HandleFunc("GET /jobs/{wi}/artifact", d.artifactRoute)
 	mux.HandleFunc("GET /decisions", d.decisionsRoute)
 	mux.HandleFunc("POST /decisions/dismiss", d.decisionsDismissRoute)

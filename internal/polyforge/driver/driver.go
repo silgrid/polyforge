@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -181,6 +182,14 @@ type InterruptedDispatch struct {
 type Driver struct {
 	wi       WIInfo
 	workflow *Workflow
+	// lane is the loaded graph BEFORE the skipped-set is applied: the
+	// base a plan pass re-derives the graph from when the effective
+	// skip set moves (polyforge#25 — the overlay's skip may change
+	// between steps). Never mutated.
+	lane *Workflow
+	// skips is the skip-set id list currently applied to workflow
+	// (guarded by mu; recomputed by each plan pass).
+	skips    []string
 	exec     *capsule.Execution
 	execPath string
 
@@ -276,9 +285,15 @@ func New(cfg Config) (*Driver, error) {
 	if len(wf.Steps) == 0 {
 		return nil, fmt.Errorf("driver: workflow has no steps")
 	}
-	// the steps the claim fixed as skipped (the capsule's
-	// file, never the workspace yaml) that the lane declares skippable.
-	wf = wf.WithSkipped(ReadSkippedSteps(cfg.WI.CapsuleDir))
+	// the steps the work item skips: the claim-fixed set
+	// (capsule.SkippedStepsJSON) UNION the overlay's skip switches
+	// (capsule.StepOverridesJSON, polyforge#25) — both read at start, and
+	// the plan loop re-reads the union before every step. Only steps the
+	// lane declares skippable are ever skipped (WithSkipped applies the
+	// declaration).
+	lane := wf
+	skips := EffectiveSkips(cfg.WI.CapsuleDir)
+	wf = lane.WithSkipped(skips)
 
 	exec, existed, err := loadExecution(execPath, cfg.WI, wf)
 	if err != nil {
@@ -297,6 +312,8 @@ func New(cfg Config) (*Driver, error) {
 	return &Driver{
 		wi:          cfg.WI,
 		workflow:    wf,
+		lane:        lane,
+		skips:       skips,
 		exec:        exec,
 		execPath:    execPath,
 		spawnN:      spawnN,
@@ -778,6 +795,21 @@ func (d *Driver) settle(ctx context.Context, stepID string, n int64, res *StepRe
 // stops.
 func (d *Driver) plan(ctx context.Context) (stop bool, stepID string, err error) {
 	for {
+		// The overlay's skip switch may change between steps (polyforge#25,
+		// the daemon's override route): every plan pass re-reads the
+		// effective set — file reads, outside the mutex — and re-derives
+		// the graph when it moved, so a skip set mid-run governs this pass
+		// and the wrap attrs of a skipped tail re-move with it. A torn
+		// overlay record reads as no overlay (the write path is the
+		// daemon's atomic one; the read side stays fail-open like
+		// ReadSkippedSteps).
+		set := EffectiveSkips(d.cfg.WI.CapsuleDir)
+		d.mu.Lock()
+		if !slices.Equal(set, d.skips) {
+			d.skips = append([]string(nil), set...)
+			d.workflow = d.lane.WithSkipped(set)
+		}
+		d.mu.Unlock()
 		d.mu.Lock()
 		if d.failed != nil {
 			err := d.failed
