@@ -137,7 +137,9 @@ checked server-side), ends the running/paused session without the holder's
 secret, and returns the work item to `queued`; the old holder is fenced (its
 secret no longer matches). Then any daemon claims it with a plain
 `pf submit <wi>` — progress is restored from the aihub capsule revision chain
-and the driver continues from the recorded current step. Failures: `AUTH-403`
+and the driver continues from the recorded current step; the pre-submit
+analysis check does not re-apply to such a ticket (its history shows it
+already ran, polyforge#47). Failures: `AUTH-403`
 (not admin/maintainer), `CORE-409` (`NOT_HELD`: not running/paused, nothing to
 end), `CORE-410` (terminal).
 

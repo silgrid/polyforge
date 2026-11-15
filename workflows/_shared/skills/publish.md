@@ -7,8 +7,9 @@ commands: [published.py]
 
 You publish a change the lane verified: push its feature branch, open or update the PR,
 say what it is. When the lane's merge step runs after you, it merges the PR with a
-pre-written command; when the opening of `artifacts/handoff.md` notes you as the last step
-(the steps after you `skipped`), nobody in the lane merges it — the PR awaits a human
+pre-written command; when the step order of your dispatch header notes you as the last step
+(the steps after you `skipped`; the opening of `artifacts/handoff.md` is the claim-time copy of
+the same order), nobody in the lane merges it — the PR awaits a human
 review (step 5). Either way you never merge anything, merge nothing into the branch and run
 no test. "The verifying
 gate" below is develop's `verification` (result file `artifacts/verify/result.json`),
@@ -66,8 +67,8 @@ the source and what did not hold (the lane goes back to the step that makes the 
    neither, its acceptance is the ticket's goal; a **`## Follow-up`** section listing every
    non-blocking finding of `artifacts/review.md` and every pre-flight hit (or "none") — the
    owner decides which become tickets, no step files them; and the line "The lane's merge
-   step merges this PR — do not merge it by hand." — or, when the opening notes you as the
-   last step (step 5), the line "This lane does not merge this PR — it awaits a human
+   step merges this PR — do not merge it by hand." — or, when the step order of your dispatch
+   header notes you as the last step (step 5), the line "This lane does not merge this PR — it awaits a human
    review."
 3. **Owner review.** An `owner-review: <paths> — <description>` line in `artifacts/plan.md`
    or in the latest hand-off of the step that makes the change holds the publication: once
@@ -80,8 +81,12 @@ the source and what did not hold (the lane goes back to the step that makes the 
 4. **Write** `artifacts/publish.json` — `{"repos": [{name, branch, pr_url, head,
    skipped_reason}]}`, `head` the sha you pushed (what the merge step matches) — and
    `artifacts/delivery.md` (the PR body's content plus the owner-review record).
-5. **The last step.** Only when the opening's step order notes you as the last step (the
-   steps after you `skipped`; develop's merge is skipped per project, micro's never is):
+5. **The last step.** Only when the step order of your dispatch header notes you as the last
+   step (the
+   steps after you `skipped`; develop's merge is skipped per project, micro's never is; the
+   opening of `artifacts/handoff.md` carries the claim-time copy, the dispatch header the
+   order as it stands for your dispatch — a mid-run `pf override --skip` updates only the
+   latter):
    after 4, run exactly this line (no argument added or removed, no Bash timeout):
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/published.py" --publish artifacts/publish.json --verified artifacts/verify/result.json --record-out artifacts/publish/integration.json --json --out artifacts/publish/record.json`
    — it checks every published head against the verified one, touches no forge, and on

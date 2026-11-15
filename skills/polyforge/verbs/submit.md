@@ -113,7 +113,10 @@ without one (exit 1, nothing is claimed) and names the way out;
 owner explicitly says to submit without analysis, never on your own. The
 check applies on exactly the lanes the acceptance check does (a lane
 declaring `acceptance: none` is submitted as is), and it never judges what
-the section says: content is enough.
+the section says: content is enough. A ticket that already made release
+progress (its event history carries a session lifecycle event or a resume)
+is past the check: the `pf ops end-session` takeover resubmits exactly
+such a ticket with a plain `pf submit` (polyforge#47).
 
 - **When to run it**: right after an execution ticket is filed, or when the
   submit check refuses a ticket for the missing analysis, propose the

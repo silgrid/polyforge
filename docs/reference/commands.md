@@ -104,6 +104,10 @@ refusing with exit 1 and nothing claimed:
   section with content; a dated 「免分析」 the session writes on the owner's
   explicit skip counts as content; `pf submit <id> --allow-no-analysis`
   submits the ticket anyway. The check never judges what the section says.
+  A ticket that already made release progress — its event history carries
+  a session lifecycle event or a resume — is past the check: the
+  `pf ops end-session` takeover resubmits exactly such a ticket with a
+  plain `pf submit`, which the check no longer blocks (polyforge#47).
 
 The daemon's auto-pull skips a ticket either check would refuse: it stays
 queued, and `pf queue` marks it in the STATUS cell —
