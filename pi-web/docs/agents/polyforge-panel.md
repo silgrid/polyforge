@@ -652,7 +652,8 @@ face), `app/api/polyforge/watch/route.ts` (the composed view), the
 skippable declaration and the `overrides` block in
 `lib/polyforge-status.ts`.
 
-- **The flow.** The whole-job progress stream ([Job detail layout and
+- **The flow.** The selected-step progress stream (polyforge#24: the panel's
+  step filter over the whole-job read; [Job detail layout and
   execution progress](#job-detail-layout-and-execution-progress-workbench210-workbench238))
   gains two line kinds composed from the event log
   (`composeProgressEventLine`): `ask` — an `awaiting_owner` event's

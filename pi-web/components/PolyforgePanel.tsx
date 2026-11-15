@@ -294,11 +294,14 @@ export const PROGRESS_RENDER_CHUNK = 200;
 const EMPTY_PROGRESS_LINES: PolyforgeProgressLine[] = [];
 
 /**
- * The job detail's execution progress, whole-job,
+ * The job detail's execution progress, the SELECTED step's
+ * records (polyforge#24: one spawn block set per selected step; an
+ * unstarted step shows the empty message),
  * full lines, spawn blocks and the open-at-bottom follow
  * and structured rendering:
  * a heading, the omitted-lines marker when a snapshot still carries one,
- * then the selected job's stream — every spawn of every step, oldest first,
+ * then the selected job's stream — the selected step's every spawn, oldest
+ * first,
  * inline in the detail's one scroll region (no overflowY of its own, pi#120).
  * Each entry renders by kind: narration through the
  * transcript's SafeMarkdownBody (paragraphs, lists, code; a `thinking` one
