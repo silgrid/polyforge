@@ -449,6 +449,7 @@ const T = {
   P2R3C: "P2R3C: a replaced read's answer clears only its own mark — no second read piles up while the newer one is in flight",
   P48A: "P48A: An ended ticket's expanded resultless card reads its detail once — the panel's unrelated polls never re-read it (polyforge#48 AC1)",
   P48D: "P48D: An owner echo hides once its owner line lands in any step's block — the selected step's lines alone never decide delivery (polyforge#48 AC2)",
+  P48E: "P48E: An ended ticket's watch poll never reads the composed override view — at most the one transitional read of a fresh selection (polyforge#48 AC3)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1565,6 +1566,28 @@ try {
     appendFileSync(join(dataRoot, "events", `wi-${WI48D}.jsonl`),
       JSON.stringify({ at: at3(20), kind: "owner_message", work_item: WI48D, body: { at: "2026-10-18T14:00:00Z", text: "E2E-P48D-OWNER-WORDS", by: "u_e2e" }, seq: 8 }) + "\n");
     await pollUntil(async () => (await echoRow.count()) === 0, "the delivered echo hides once its owner line lands in another step's block");
+  });
+
+  // P48E — polyforge#48 (AC3): an ended ticket's watch poll never reads the
+  // composed override view. The panel asks (?overrides=1) exactly while its
+  // held snapshot does not say the work item ended, and the route never
+  // composes for a terminal answer — so after the selection's first read
+  // (the one transitional ask, before the panel knows) the stub's argv log
+  // holds no further `--json override <wi>` line; the unfixed tree read the
+  // view on every 3 s poll.
+  await checkPage(T.P48E, "ended ticket, override view reads", {}, async (page) => {
+    const watchPolls = [];
+    page.on("request", (r) => { if (new URL(r.url()).pathname === "/api/polyforge/watch") watchPolls.push(Date.now()); });
+    const panel = await ensureDetail24(page, SLUG48A, WI48A);
+    await pollUntil(() => watchPolls.length >= 1, "the selection's first watch read landed");
+    // The panel addresses the selection by either ref (a card click stores the
+    // slug), so both count.
+    const viewReads = () => readFileSync(argvLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((argv) => argv[1] === "override" && (argv[2] === WI48A || argv[2] === SLUG48A)).length;
+    const before = viewReads();
+    await pollUntil(() => watchPolls.length >= 4, "three more watch polls pass", 30_000);
+    const grown = viewReads() - before;
+    assert.ok(grown <= 1, `an ended ticket's watch poll never reads the override view (${grown} reads after the first)`);
   });
 
   await check(T.AC3, "pf present: no 5xx or console errors", async () => assert.deepEqual(errors.splice(0), []));
