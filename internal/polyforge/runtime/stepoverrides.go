@@ -39,6 +39,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/gitops"
 )
 
@@ -425,19 +426,18 @@ func (r *Runtime) ManualModels(wi string) []string {
 var pendingPublishFn = gitops.CommitPush
 
 // writePendingStepOverrides is the claim's consumption of the pending
-// record: the fresh capsule's overlay file gains the pending entries
-// (aspect merge over what the chain already carried) and the record's
-// key goes. A record that cannot be read or merged fails the claim
-// loudly (the operator's recorded change must not silently vanish).
-func (r *Runtime) writePendingStepOverrides(j *job) error {
-	r.pendingMu.Lock()
-	defer r.pendingMu.Unlock()
-	pend, err := r.readPendingOverrides()
-	if err != nil {
-		return err
-	}
-	entries, ok := pend[j.wi]
-	if !ok || len(entries) == 0 {
+// record, intent before action: the fresh capsule's overlay file gains
+// the pending entries (aspect merge over what the chain already
+// carried), the capsule is published at once, and only that publish's
+// success deletes the record's key. A failed publish — or a crash before
+// it — keeps the record for the next claim, whose merge is idempotent
+// (the claim goes on: the job's own publishes carry the merge). A record
+// that cannot be read or merged fails the claim loudly (the operator's
+// recorded change must not silently vanish). Only wi's own actor writes
+// wi's key, so the record is not held locked across the publish.
+func (r *Runtime) writePendingStepOverrides(ctx context.Context, j *job) error {
+	entries := r.PendingStepOverrides(j.wi)
+	if len(entries) == 0 {
 		return nil
 	}
 	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
@@ -448,8 +448,14 @@ func (r *Runtime) writePendingStepOverrides(j *job) error {
 	if err := capsule.WriteStepOverrides(j.capsuleDir, merged); err != nil {
 		return fmt.Errorf("writing the fresh capsule's step overrides: %w", err)
 	}
-	delete(pend, j.wi)
-	return r.writePendingOverrides(pend)
+	pctx, cancel := context.WithTimeout(ctx, protocol.PushTimeout)
+	defer cancel()
+	if _, pushed, _, perr := pendingPublishFn(pctx, j.git, "step override: the pending record merged at claim"); perr != nil || !pushed {
+		fmt.Fprintf(os.Stderr, "runtime: %s: the claim's publish of the merged step overrides failed (the pending record stays for the next claim; the job's publishes carry the merge): %v\n", j.wi, perr)
+		return nil
+	}
+	r.clearPendingOverrides(j.wi)
+	return nil
 }
 
 // mergePendingAspects merges pending entries over the capsule's overlay
@@ -485,7 +491,8 @@ func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.S
 }
 
 // clearPendingOverrides drops work item wi's pending entries (a terminal
-// close; a blocked close keeps them for the re-claim).
+// close, or the claim whose publish carried them; a blocked close keeps
+// them for the re-claim).
 func (r *Runtime) clearPendingOverrides(wi string) {
 	r.pendingMu.Lock()
 	defer r.pendingMu.Unlock()
