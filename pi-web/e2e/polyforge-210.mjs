@@ -221,6 +221,10 @@ const tick = (page, ms) => (ms > 0 ? page.clock.runFor(ms) : Promise.resolve());
 // so every earlier request of the page has been dispatched and observed.
 const settle = (page) => page.evaluate((probe) => fetch(probe).then((response) => response.text()), PROBE);
 const detail = (page) => dock(page).locator("[data-pf-detail-title]").first();
+// The DAG's step node (the listitem whose aria-label begins "<id> · "), the
+// deterministic handle polyforge#24's own suite (e2e/polyforge.mjs P24A–C)
+// drives the step selection through.
+const dagStep = (page, id) => dock(page).getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
 const progressBlock = (page) => dock(page).locator("[data-pf-progress]").first();
 const timing = (page, id) => dock(page).locator(`[data-pf-step-timing="${id}"]`).first();
 const titleText = async (page) => (await detail(page).innerText()).replace(/\s+/g, " ").trim();
