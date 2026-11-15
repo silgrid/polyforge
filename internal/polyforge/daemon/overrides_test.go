@@ -186,6 +186,21 @@ func (f *ovFixture) events(t *testing.T) []protocol.EventEntry {
 	return f.td.obs.Events().SinceAfter(f.wi, 0)
 }
 
+// overrideEvents counts the work item's override events only: the
+// fixture's running job writes events of its own asynchronously
+// (job_started from observe, published from the monitor), so a count of
+// every event races them.
+func (f *ovFixture) overrideEvents(t *testing.T) int {
+	t.Helper()
+	n := 0
+	for _, e := range f.events(t) {
+		if e.Kind == runtime.EventOverrideSet || e.Kind == runtime.EventOverrideClear {
+			n++
+		}
+	}
+	return n
+}
+
 func (f *ovFixture) gitLog(t *testing.T) string {
 	t.Helper()
 	ji, _ := f.td.rt.Info(f.wi)
@@ -353,7 +368,7 @@ func TestOverrideWriteAppendsEventAndPublishes(t *testing.T) {
 	}
 
 	// the idempotent clear: nothing to clear, no change, no event
-	before := len(f.events(t))
+	before := f.overrideEvents(t)
 	res, ae = f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "review", Operator: "usr_9", ClearModels: true})
 	if ae != nil {
 		t.Fatalf("the idempotent clear was refused: %s", ae.Detail)
@@ -361,7 +376,7 @@ func TestOverrideWriteAppendsEventAndPublishes(t *testing.T) {
 	if res.Changed {
 		t.Fatal("clearing a models aspect that was never set must answer changed=false")
 	}
-	if after := len(f.events(t)); after != before {
+	if after := f.overrideEvents(t); after != before {
 		t.Fatalf("the idempotent clear emitted %d events", after-before)
 	}
 }
@@ -781,7 +796,7 @@ func TestOverrideWriteTerminalRefused(t *testing.T) {
 // the waive door, with no event and no overlay written (r1#7, AC5).
 func TestOverrideUnskipNonSkippableNamesWaive(t *testing.T) {
 	f := newOverrideFixture(t, "wi_ov13")
-	before := len(f.events(t))
+	before := f.overrideEvents(t)
 	no := false
 	_, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "review", Operator: "usr_u", Skip: &no})
 	if ae == nil {
@@ -790,7 +805,7 @@ func TestOverrideUnskipNonSkippableNamesWaive(t *testing.T) {
 	if ae.Code != api.ErrDaemonConflict || !strings.Contains(ae.Detail, "waive") {
 		t.Fatalf("the refusal must be DAEMON-409 pointing at the waive door: %s (%s)", ae.Code, ae.Detail)
 	}
-	if after := len(f.events(t)); after != before {
+	if after := f.overrideEvents(t); after != before {
 		t.Fatalf("the refused un-skip emitted %d events", after-before)
 	}
 	if _, err := os.Stat(f.overlayFile()); !os.IsNotExist(err) {
