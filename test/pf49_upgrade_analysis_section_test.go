@@ -5,8 +5,12 @@ package test
 // pf49_upgrade_analysis_section_test.go: docs/upgrade.md's appended
 // second v0.2.1 section (polyforge#49, AC4). The file is append-only and
 // byte-pinned (test/w254_docs_set_acceptance_test.go moves the pin in the
-// same commit), so the section lands at the file's end and rewrites no
-// earlier byte. It states the pre-submit analysis check's upgrade impact
+// same commit), so the section landed at the file's end and rewrote no
+// earlier byte. A later change may append newer sections after it
+// (polyforge#50 appended the scope engine's Python rewrite of the same
+// v0.2.1 release), so the section is located by its heading, never
+// assumed to be the file's last; the file's last `## ` section still has
+// to name the release it belongs to. It states the pre-submit analysis check's upgrade impact
 // and operation (polyforge#27: an execution ticket on develop or micro
 // needs `## 分析` content before `pf submit` takes it or the auto-claim
 // pulls it — older queued tickets have none), and corrects the first
@@ -46,13 +50,24 @@ func pf49UpgradeSections(t *testing.T) [][2]string {
 
 func TestPF49UpgradeAnalysisSection(t *testing.T) {
 	sections := pf49UpgradeSections(t)
-	// the analysis section is the file's last `## ` section — the file is
-	// append-only, so a new section can only land at its end.
+	// whatever was appended last, the file's last `## ` section names the
+	// release it belongs to (`v<version>, …`).
 	last := sections[len(sections)-1]
-	if !strings.Contains(last[0], "v0.2.1") {
-		t.Fatalf("docs/upgrade.md's appended section is its last `## ` section — its heading must name the release it belongs to (v0.2.1), got %q", last[0])
+	if !strings.HasPrefix(last[0], "v") || !strings.Contains(last[0], ".") {
+		t.Fatalf("docs/upgrade.md's last `## ` section must name the release it belongs to (a `v<version>, …` heading), got %q", last[0])
 	}
-	body := last[1]
+	// the appended analysis section, located by its heading — a later
+	// change may append newer sections of the same release after it.
+	analysis := -1
+	for i, s := range sections {
+		if strings.Contains(s[0], "the pre-submit analysis check") {
+			analysis = i
+		}
+	}
+	if analysis < 0 || !strings.Contains(sections[analysis][0], "v0.2.1") {
+		t.Fatalf("docs/upgrade.md's appended analysis section (its heading names v0.2.1) must stay, whole: %v", sections)
+	}
+	body := sections[analysis][1]
 	for _, want := range []string{
 		// the check itself: an execution ticket on develop or micro
 		// needs `## 分析` content; submit refuses, the auto-claim skips
@@ -77,16 +92,12 @@ func TestPF49UpgradeAnalysisSection(t *testing.T) {
 	// and it follows the deactivation section (the append rewrote no
 	// earlier byte, so the first v0.2.1 section is still there, whole).
 	deactivation := -1
-	analysis := -1
 	for i, s := range sections {
 		if strings.Contains(s[0], "the project deactivation status") {
 			deactivation = i
 		}
-		if strings.Contains(s[0], "v0.2.1") && i != deactivation {
-			analysis = i
-		}
 	}
-	if deactivation < 0 || analysis < 0 || analysis < deactivation {
+	if deactivation < 0 || analysis < deactivation {
 		t.Fatalf("the appended analysis section must follow the first v0.2.1 section (the project deactivation status): sections %v", sections)
 	}
 }

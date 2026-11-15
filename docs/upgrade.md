@@ -139,7 +139,7 @@ the requests that touch the missing column fail with SQLite's own errors
 (no typed refusal); serve traffic only after the migration, which an
 unattended `deploy.sh` applies inside its switch window.
 
-## v0.2.2, the scope engine is a Python program
+## v0.2.1, the scope engine in Python
 
 The release-shipped verification-scope engine,
 `workflows/_shared/scripts/verify-scope`, is rewritten in Python: the same
