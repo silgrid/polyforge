@@ -1434,8 +1434,10 @@ export async function readProgressToolDetail(root: string, capsuleDir: string | 
       const tool = call.line.tool!;
       const output = call.result ? toolResultText(call.result.content) : null;
       // no result yet: the step's progress file's newest lines ride along,
-      // the card's interim view (a spawn's transcript source carries its
-      // step; a subagent's does not)
+      // the card's interim view. The source carries its step either way
+      // (#251): a spawn's transcript source from its own spawn, a
+      // subagent's inherited from its conversation spawn — both read the
+      // same step file.
       const progress = call.result === undefined ? await progressFileLines(capsuleDir, source.step) : undefined;
       return {
         available: true,

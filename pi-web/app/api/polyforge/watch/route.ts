@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { isApiRequestAllowed } from "@/lib/request-security";
 import { getPolyforgeWatch, isPolyforgeWiRef, PolyforgeError } from "@/lib/polyforge-status";
 import { isPolyforgeProfileName } from "@/lib/polyforge-cells-pure";
+import { FINISHED_STATUSES } from "@/lib/polyforge-conversation-pure";
 import { getPolyforgeOverride } from "@/lib/polyforge-overrides";
 import type { PolyforgeOverrideView } from "@/lib/polyforge-overrides";
 
@@ -20,12 +21,19 @@ export const dynamic = "force-dynamic";
  * bounded by the one pf read timeout) — the
  * panel's snapshot is the one read surface, and the selected unstarted
  * step's controls fetch nothing on selection (a click-caused read broke
- * the graph suite's G11). The view is composed only when the watch read
- * itself answered a snapshot; a failed, refused or unparseable view read
- * (an older pf without the verb among them) degrades to a snapshot without
- * the field — the controls still render the switch (skippable, the
- * overlay's values) and only the effective-model source line falls back to
- * its none text. Writes keep their own POST face
+ * the graph suite's G11). polyforge#48 (AC3): the composition is opt-in —
+ * `?overrides=1`, the panel's ask exactly while its held snapshot does not
+ * say the work item ended, so a terminal ticket's 3 s poll never spawns the
+ * read (the one transitional ask of a fresh selection — before the panel
+ * knows — is the only one). The view read STARTS TOGETHER WITH the watch
+ * read (parallel, not after it), each bounded by its own 10 s read timeout:
+ * a failed, refused, hung or unparseable view read (an older pf without the
+ * verb among them) degrades to a snapshot without the field inside the
+ * watch read's own bound — never the sum of both — and the view is composed
+ * only when the watch answer itself says the work item is not finished (the
+ * overlay is a live or parked ticket's move). The controls still render the
+ * switch (skippable, the overlay's values) and only the effective-model
+ * source line falls back to its none text. Writes keep their own POST face
  * (app/api/polyforge/override/route.ts).
  */
 export async function GET(request: Request) {
@@ -46,10 +54,16 @@ export async function GET(request: Request) {
     );
   }
   try {
+    // polyforge#48 (AC3): the view read starts here, together with the watch
+    // read — never after it. The catch keeps the floating promise settled
+    // (an un-awaited read of a terminal answer cannot reject unhandled).
+    const overrideRead = searchParams.get("overrides") === "1"
+      ? getPolyforgeOverride(wi, profile).catch(() => null)
+      : null;
     const status = await getPolyforgeWatch(wi, profile);
     let overrideView: PolyforgeOverrideView | undefined;
-    if (status) {
-      overrideView = await getPolyforgeOverride(wi, profile).catch(() => undefined) ?? undefined;
+    if (status && overrideRead && !FINISHED_STATUSES.has(status.workflowStatus)) {
+      overrideView = await overrideRead ?? undefined;
     }
     return NextResponse.json({ status: status ? { ...status, ...(overrideView ? { overrideView } : {}) } : status });
   } catch (error) {

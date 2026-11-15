@@ -4,8 +4,14 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
+import { createJiti } from "jiti";
 
 const source = await readFile(new URL("./usePolyforge.ts", import.meta.url), "utf8");
+
+// The conversation vocabulary's own terminal set (polyforge#48): imported from
+// the lib that owns it, never restated here.
+const jiti = createJiti(import.meta.url);
+const { FINISHED_STATUSES } = await jiti.import("../lib/polyforge-conversation-pure.ts");
 
 function extractPureFunction(name) {
   const start = source.indexOf(`export function ${name}`);
@@ -281,4 +287,30 @@ test("PR #860 review: the decision read is single-flight and bounded; the walk's
   assert.match(read, /if \(feed\) setDecisionsFeed\(feed\);/, "a failed read keeps the last feed");
   assert.match(source, /const clearTaskRequest = useCallback\(\(\) => setTaskRequest\(null\), \[\]\);/, "minor 1");
   assert.match(source, /\n    clearTaskRequest,\n/);
+});
+
+test("polyforge#48 AC3: the watch read asks for the composed view exactly while the held snapshot does not say the work item ended", () => {
+  const helper = extractPureFunction("watchOverridesAsked");
+  // The real terminal vocabulary, imported from the lib that owns it — the
+  // test never restates the set.
+  const context = vm.createContext({ FINISHED_STATUSES });
+  vm.runInContext(stripTypeScriptTypes(helper.replace(/export /g, "")), context);
+  assert.equal(context.watchOverridesAsked(null), true, "no snapshot yet: ask — the route's own watch answer decides");
+  assert.equal(context.watchOverridesAsked({ workflowStatus: "running" }), true);
+  assert.equal(context.watchOverridesAsked({ workflowStatus: "needs_input" }), true);
+  assert.equal(context.watchOverridesAsked({ workflowStatus: "blocked" }), true, "a parked ticket still asks (the overlay is its move)");
+  assert.equal(context.watchOverridesAsked({ workflowStatus: "completed" }), false);
+  assert.equal(context.watchOverridesAsked({ workflowStatus: "failed" }), false);
+  assert.equal(context.watchOverridesAsked({ workflowStatus: "cancelled" }), false);
+  assert.equal(context.watchOverridesAsked({ workflowStatus: "done" }), false);
+  // The wiring: the ask rides the watch URL, and the panel-side terminal set
+  // is the conversation vocabulary's own.
+  assert.match(source, /import \{ FINISHED_STATUSES, needsInputJobs \} from "@\/lib\/polyforge-conversation-pure";/);
+  assert.match(source, /watchOverridesAsked\(watchStatusRef\.current\) \? "&overrides=1" : ""/);
+});
+
+test("polyforge#48 AC3: refreshWatch keeps at most one read in flight — a slow answer never piles requests", () => {
+  const read = source.slice(source.indexOf("const refreshWatch = useCallback"), source.indexOf("// The conversation list rides"));
+  assert.match(read, /if \(watchInFlight\.current\) return;/, "a tick while a read is in flight skips instead of stacking");
+  assert.match(read, /\.finally\(\(\) => \{ watchInFlight\.current = false; \}\);/, "the slot frees when the read settles either way");
 });

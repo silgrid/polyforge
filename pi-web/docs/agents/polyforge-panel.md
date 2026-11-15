@@ -637,9 +637,13 @@ the declarations and the overlay's values (`skippableSteps`, `overrides`),
 and the effective chains with their source labels (`step overlay`, `pf
 submit --models`, the yaml/bundle level) through the view the watch route
 composes into its own response (`status.overrideView`, one
-`pf --json override <wi>` read per watch answer; a failed view read
+`pf --json override <wi>` read per asked watch answer; a failed view read
 degrades to a snapshot without it, and the override route's GET face is
-gone with its last caller). The write is one action per POST (`models`,
+gone with its last caller; polyforge#48: the view is opt-in — `?overrides=1`,
+the panel's ask exactly while its held snapshot does not say the work item
+ended — and the view read starts together with the watch read, each bounded
+by its own read timeout, never composed for a terminal answer; the panel's
+watch poll keeps at most one read in flight). The write is one action per POST (`models`,
 `clearModels`, `skip`), and the next watch poll carries the fresh row.
 Files: `components/PolyforgeStepControls.tsx` (the controls; the panel
 mounts them and passes the snapshot's row), `lib/polyforge-overrides.ts`
@@ -648,7 +652,8 @@ face), `app/api/polyforge/watch/route.ts` (the composed view), the
 skippable declaration and the `overrides` block in
 `lib/polyforge-status.ts`.
 
-- **The flow.** The whole-job progress stream ([Job detail layout and
+- **The flow.** The selected-step progress stream (polyforge#24: the panel's
+  step filter over the whole-job read; [Job detail layout and
   execution progress](#job-detail-layout-and-execution-progress-workbench210-workbench238))
   gains two line kinds composed from the event log
   (`composeProgressEventLine`): `ask` — an `awaiting_owner` event's
@@ -691,7 +696,10 @@ skippable declaration and the `overrides` block in
   the same record arrives from the event log (`pendingOwnerEchoes`: the
   echo's `at` is the ack's `at`, the asks.jsonl record's stamp, matched
   against the line's `msgAt` — never the line's `at`, which the event log
-  stamps later, after the record's fsync; review r1); echoes
+  stamps later, after the record's fsync; review r1 — and against every
+  line of the job's whole stream, never the selected step's lines alone
+  (polyforge#48): a step switch cannot make a delivered message read as
+  pending again); echoes
   belong to one selection; they render after the stream, an empty or
   still-loading one too. The follow keeps the region at its bottom when an
   echo is added.
