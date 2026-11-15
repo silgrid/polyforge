@@ -43,6 +43,8 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   re-probes this route, every 30 s and on window focus); daemon down / auth failure / hang answer `{pfPresent:true,status:null,error}`.
 - `GET /api/polyforge/watch?wi=<slug|wi_id>` → 200 `{status:{wi,slug,workflowStatus,
   currentStep,updatedAt,steps:[{name,status,startedAt?}],declared_steps:[{id}]|null,
+  skippableSteps?:[id],overrides?:{[id]:{models?,skip?,pending?}},
+  overrideView?:{wi,posture,steps:[{id,status,skippable,models?,modelsBy?,skip?,skipBy?,pending?,effective?,source?}]},
   events:[{at,kind,step?,…,question?,question_id?,by?,disposition?,intent?}],progress?:{command,command_age_sec,tool_calls,
   recent_files},origin?:{kind:"chat",owner},summary?,summary_age_sec?,
   summary_error?,summary_capped?,blocked?:{kind,step?,reason,requiredAction?},
@@ -625,20 +627,26 @@ line kinds in `lib/polyforge-cards-pure.ts`, the `pendingQuestion` and the
 event fields in `lib/polyforge-status.ts`.
 
 The job detail's selected UNSTARTED step also carries the per-step overlay
-controls (polyforge#25): the effective-model source line (one
-`GET /api/polyforge/override` read per selection, and again after each
-write), a harness + model-id setter and — for a step the lane snapshot
-declares `skippable` — the skip switch; any other step shows the waive
-hint in the switch's place, and a refused write shows the daemon's typed
-words inline. The watch snapshot carries the declarations and the
-overlay's values (`declared_steps[].skippable`, `overrides`); the write
-is one action per POST (`models`, `clearModels`, `skip`), the effective
-source labels (`step overlay`, `pf submit --models`, the yaml/bundle
-level) come from the view. Files:
-`components/PolyforgeStepControls.tsx` (the controls; the panel mounts
-them and keeps no read of its own), `lib/polyforge-overrides.ts` (the
-spawn face), `app/api/polyforge/override/route.ts`, the skippable
-declaration and the `overrides` block in `lib/polyforge-status.ts`.
+controls (polyforge#25): the effective-model source line, a harness +
+model-id setter and — for a step the lane snapshot declares `skippable` —
+the skip switch; any other step shows the waive hint in the switch's place,
+and a refused write shows the daemon's typed words inline. The controls
+keep no read of their own (polyforge#42 G11: a read per selection was a
+click-caused request): everything they render rides the watch snapshot —
+the declarations and the overlay's values (`skippableSteps`, `overrides`),
+and the effective chains with their source labels (`step overlay`, `pf
+submit --models`, the yaml/bundle level) through the view the watch route
+composes into its own response (`status.overrideView`, one
+`pf --json override <wi>` read per watch answer; a failed view read
+degrades to a snapshot without it, and the override route's GET face is
+gone with its last caller). The write is one action per POST (`models`,
+`clearModels`, `skip`), and the next watch poll carries the fresh row.
+Files: `components/PolyforgeStepControls.tsx` (the controls; the panel
+mounts them and passes the snapshot's row), `lib/polyforge-overrides.ts`
+(the spawn face), `app/api/polyforge/override/route.ts` (the POST write
+face), `app/api/polyforge/watch/route.ts` (the composed view), the
+skippable declaration and the `overrides` block in
+`lib/polyforge-status.ts`.
 
 - **The flow.** The whole-job progress stream ([Job detail layout and
   execution progress](#job-detail-layout-and-execution-progress-workbench210-workbench238))

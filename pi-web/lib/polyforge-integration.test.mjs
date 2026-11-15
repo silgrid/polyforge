@@ -205,7 +205,7 @@ test("a batch that is not terminal carries its watch's steps, current step and p
         { name: "full-gate", status: "running", startedAt: "2026-11-13T01:29:00Z" },
         { name: "close", status: "pending" },
       ],
-      declared_steps: [{ id: "collect", skippable: false }, { id: "revert", skippable: false }, { id: "full-gate", skippable: false }, { id: "close", skippable: false }],
+      declared_steps: [{ id: "collect" }, { id: "revert" }, { id: "full-gate" }, { id: "close" }],
       pendingQuestion: { id: "q-30-1", step: "full-gate", question: "The gate is red twice; retry it?", askedAt: "2026-11-13T01:31:00Z" },
     },
     { id: "wi_BatchLost31", slug: "alpha#31", status: "paused", error: "watch: daemon unreachable" },

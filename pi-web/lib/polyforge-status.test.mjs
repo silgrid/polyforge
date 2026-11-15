@@ -462,20 +462,20 @@ test("summary fields pass verbatim through the whitelist; malformed fields degra
   assert.deepEqual(both.steps.map((step) => step.name), STEP_ORDER, "steps unaffected by the summary fields");
 });
 
-test("declared_steps sanitize to ordered ids only; on_fail and extras never leak", async () => {
-  const { sanitizeDeclaredSteps } = await loadSubject();
+test("declared_steps sanitize to ordered ids only; on_fail, skippable and extras never leak", async () => {
+  const { sanitizeDeclaredSteps, sanitizeSkippableSteps } = await loadSubject();
   const raw = [
     { id: " grill ", on_fail: "spec", path: "/srv/e2e-secret-workspace" },
     { id: "spec", on_fail: null },
     { id: "code" },
   ];
   assert.deepEqual(sanitizeDeclaredSteps(raw), [
-    { id: "grill", skippable: false }, { id: "spec", skippable: false }, { id: "code", skippable: false },
-  ], "order preserved, ids trimmed, the lane's skippable declaration kept (polyforge#25)");
-  assert.deepEqual(sanitizeDeclaredSteps([{ id: "merge", skippable: true }]), [{ id: "merge", skippable: true }],
-    "a skippable step carries its declaration");
+    { id: "grill" }, { id: "spec" }, { id: "code" },
+  ], "order preserved, ids trimmed, the pure {id} list pi#114 pinned (polyforge#42 G14)");
+  assert.deepEqual(sanitizeDeclaredSteps([{ id: "merge", skippable: true }]), [{ id: "merge" }],
+    "the lane's skippable declaration stays off the declared list (it leaves through sanitizeSkippableSteps)");
   const text = JSON.stringify(sanitizeDeclaredSteps(raw));
-  for (const leak of ["on_fail", "path", "/srv/e2e-secret-workspace"]) {
+  for (const leak of ["on_fail", "path", "/srv/e2e-secret-workspace", "skippable"]) {
     assert.ok(!text.includes(leak), `declared step leaked ${leak}`);
   }
   // Absent / null / non-array / empty / entries without ids → null.
@@ -488,6 +488,18 @@ test("declared_steps sanitize to ordered ids only; on_fail and extras never leak
   assert.equal(sanitizeDeclaredSteps([{ id: "grill" }, { id: "  " }]), null, "blank id → null");
   assert.equal(sanitizeDeclaredSteps([{ id: 42 }]), null, "non-string id → null");
   assert.equal(sanitizeDeclaredSteps([null]), null, "null entry → null");
+  // polyforge#42 (G14): the lane's skippable declaration leaves through its
+  // own snapshot field — the ids of the skippable steps, in declaration
+  // order. An unusable declaration (the same all-or-nothing rule as the
+  // id list) or a lane with nothing skippable carries no field.
+  assert.deepEqual(sanitizeSkippableSteps([{ id: "grill" }, { id: " merge ", skippable: true }, { id: "code", skippable: false }]),
+    ["merge"], "the skippable ids, trimmed, in declaration order");
+  assert.equal(sanitizeSkippableSteps([{ id: "merge", skippable: "true" }]), undefined, "only skippable === true declares");
+  assert.equal(sanitizeSkippableSteps([{ id: "grill" }, { id: "spec" }]), undefined, "nothing skippable → no field");
+  assert.equal(sanitizeSkippableSteps(undefined), undefined);
+  assert.equal(sanitizeSkippableSteps([]), undefined);
+  assert.equal(sanitizeSkippableSteps([{ id: "grill" }, { name: "plan" }]), undefined,
+    "an unusable declaration carries no skippable set either");
 });
 
 test("malformed declared_steps degrades to null without disturbing steps/events", async () => {
@@ -506,11 +518,13 @@ test("malformed declared_steps degrades to null without disturbing steps/events"
     const snapshot = sanitizeWatch({ ...base, execution: { ...base.execution, declared_steps: declared } });
     assert.ok(snapshot, `declared_steps ${JSON.stringify(declared)} must not nuke the snapshot`);
     assert.equal(snapshot.declared_steps, null, `declared_steps ${JSON.stringify(declared)} → null`);
+    assert.equal(snapshot.skippableSteps, undefined, `an unusable declaration ${JSON.stringify(declared)} carries no skippable field`);
     assert.deepEqual(snapshot.steps.map((step) => step.name), STEP_ORDER, "steps unaffected by malformed declared_steps");
     assert.deepEqual(snapshot.events, [{ at: "2026-10-18T10:00:00Z", kind: "step_started", step: "grill" }], "events unaffected");
   }
-  const ok = sanitizeWatch({ ...base, execution: { ...base.execution, declared_steps: [{ id: "grill" }, { id: "code", on_fail: "plan" }] } });
-  assert.deepEqual(ok?.declared_steps, [{ id: "grill", skippable: false }, { id: "code", skippable: false }], "well-formed declared_steps pass with the skippable declaration only");
+  const ok = sanitizeWatch({ ...base, execution: { ...base.execution, declared_steps: [{ id: "grill", skippable: false }, { id: "code", on_fail: "plan", skippable: true }] } });
+  assert.deepEqual(ok?.declared_steps, [{ id: "grill" }, { id: "code" }], "well-formed declared_steps pass as the pure ordered {id} list (G14)");
+  assert.deepEqual(ok?.skippableSteps, ["code"], "the skippable declaration rides its own snapshot field");
   const withOverrides = sanitizeWatch({ ...base, execution: { ...base.execution, overrides: {
     merge: { models: ["pi:pf25/m-1"], models_by: "usr_1", skip: true, skip_by: "usr_2", pending: true, secret: "E2E-SECRET" },
     "  ": { models: [] },

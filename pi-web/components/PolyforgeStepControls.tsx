@@ -4,43 +4,37 @@
 // overlay controls of the Polyforge dock panel's job detail. The spawn face
 // stays server-side (the route); this client component talks to it with
 // plain fetch, exactly like the job composer.
+//
+// polyforge#42 (G11): the component keeps NO read of its own. The
+// effective-model source line renders from the overlay view row the watch
+// route composes into the panel's snapshot (`row`), the skip switch state
+// and the pending mark from the snapshot's own `overrides` values — so
+// selecting a step issues no request (a click-caused /api/polyforge/override
+// read broke the graph suite's G11). The write still goes through the
+// override route's POST, and the next watch poll (the snapshot's own 3 s
+// cadence) carries the fresh row.
 
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import type { PolyforgeStepOverride, PolyforgeWatchStatus } from "@/lib/polyforge-status";
 // type-only: the spawn face stays server-side (the route).
-import type { PolyforgeOverrideView } from "@/lib/polyforge-overrides";
+import type { PolyforgeOverrideStepRow } from "@/lib/polyforge-overrides";
 import { useI18n } from "@/hooks/useI18n";
 
-export function PolyforgeStepControls({ wi, profile, step, skippable, overlay, onApplied }: {
+export function PolyforgeStepControls({ wi, profile, step, skippable, overlay, row, onApplied }: {
   wi: string | null;
   profile?: string;
   step: string;
   skippable: boolean;
   overlay?: PolyforgeStepOverride;
+  row?: PolyforgeOverrideStepRow;
   onApplied: () => void | Promise<void>;
 }) {
   const { t } = useI18n();
-  const [view, setView] = useState<PolyforgeOverrideView | null>(null);
-  const [viewSeq, setViewSeq] = useState(0);
   const [harness, setHarness] = useState<"pi" | "claude">("pi");
   const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [applied, setApplied] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // one view read per (wi, step) selection, and again after each write: the
-  // route runs `pf --json override` server-side; a failure keeps the last view
-  const readView = useCallback(() => {
-    if (!wi) return;
-    let cancelled = false;
-    setView(null);
-    fetch(`/api/polyforge/override?wi=${encodeURIComponent(wi)}${profile && profile !== "default" ? `&profile=${encodeURIComponent(profile)}` : ""}`)
-      .then((response) => response.json().catch(() => null))
-      .then((body: { status?: PolyforgeOverrideView | null } | null) => { if (!cancelled && body?.status) setView(body.status); })
-      .catch(() => undefined);
-    return () => { cancelled = true; };
-  }, [wi, profile]);
-  useEffect(() => readView(), [readView, step, viewSeq]);
-  const row = view?.steps.find((r) => r.id === step) ?? null;
   const write = (action: { kind: "models"; step: string; models: string[] } | { kind: "clearModels"; step: string } | { kind: "skip"; step: string; value: boolean }) => {
     if (!wi) return;
     setBusy(true);
@@ -59,7 +53,6 @@ export function PolyforgeStepControls({ wi, profile, step, skippable, overlay, o
         }
         setApplied(true);
         setModel("");
-        setViewSeq((n) => n + 1);
         void Promise.resolve(onApplied()).catch(() => undefined);
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
@@ -132,4 +125,3 @@ export function stepUnstarted(watch: PolyforgeWatchStatus, step: string): boolea
   const record = watch.steps.find((s) => s.name === step);
   return !record || record.status === "pending";
 }
-
