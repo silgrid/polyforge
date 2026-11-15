@@ -65,6 +65,9 @@ type OverrideChange struct {
 	Models      []string // non-nil = set the chain
 	ClearModels bool
 	Skip        *bool // non-nil = set the switch (true/false)
+	// SealedDir is the sealed scene the route resolved for a work item
+	// held by no job: a clear reads the chain its overlay carries.
+	SealedDir string
 }
 
 // OverrideOutcome is what the actor turn did.

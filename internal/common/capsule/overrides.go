@@ -45,6 +45,11 @@ type StepOverride struct {
 	Models   []string `json:"models,omitempty"`
 	ModelsBy string   `json:"models_by,omitempty"`
 	ModelsAt string   `json:"models_at,omitempty"`
+	// ModelsCleared is the daemon-local pending record's clear tombstone
+	// (never in a capsule's own record): a clear recorded while the work
+	// item was held by no job, of a chain its sealed capsule already
+	// carries — the next claim's merge drops that chain.
+	ModelsCleared bool `json:"models_cleared,omitempty"`
 	// Skip is tri-state: nil = no skip aspect set (a pointer so absent and
 	// false stay distinct on the wire).
 	Skip   *bool  `json:"skip,omitempty"`
