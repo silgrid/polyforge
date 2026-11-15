@@ -680,3 +680,84 @@ func TestOverrideUnskipNonSkippableNamesWaive(t *testing.T) {
 		t.Fatal("the refused un-skip left an overlay file behind")
 	}
 }
+
+// ovLastOverrideEvent answers the newest override event's body fields
+// the published mark is read from.
+func ovLastOverrideEvent(t *testing.T, f *ovFixture) (step, posture string, published *bool) {
+	t.Helper()
+	var body struct {
+		Step      string `json:"step"`
+		Posture   string `json:"posture"`
+		Published *bool  `json:"published"`
+	}
+	found := false
+	for _, e := range f.events(t) {
+		if e.Kind != "override_set" && e.Kind != "override_clear" {
+			continue
+		}
+		body.Published = nil
+		if err := json.Unmarshal(e.Body, &body); err != nil {
+			t.Fatalf("event body: %v", err)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("no override event: %v", f.events(t))
+	}
+	return body.Step, body.Posture, body.Published
+}
+
+// The override event says truthfully whether the change reached the
+// capsule chain (the owner ruling of 2026-11-15, row 1): a running write
+// whose push succeeded is published; a paused one (aihub refuses the
+// push) and a blocked one (the daemon-local pending record) are not.
+func TestOverrideEventMarksPublished(t *testing.T) {
+	f := newOverrideFixture(t, "wi_ov15a")
+	if _, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "merge", Operator: "usr_1", Models: []string{"pi:ovtest/m-ok"}}); ae != nil {
+		t.Fatalf("the running write: %s (%s)", ae.Code, ae.Detail)
+	}
+	if step, posture, pub := ovLastOverrideEvent(t, f); step != "merge" || posture != "running" || pub == nil || !*pub {
+		t.Fatalf("the running write's event: step=%s posture=%s published=%v, want merge/running/true", step, posture, pub)
+	}
+	if _, err := f.td.client.Pause(f.wi); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if ji, ok := f.td.rt.Info(f.wi); ok && ji.State == runtime.StatePaused {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the work item never reached the paused state")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	res, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "review", Operator: "usr_p", Models: []string{"pi:ovtest/m-two"}})
+	if ae != nil {
+		t.Fatalf("the paused write: %s (%s)", ae.Code, ae.Detail)
+	}
+	if step, posture, pub := ovLastOverrideEvent(t, f); step != "review" || posture != "paused" || pub == nil || *pub != res.Published || *pub {
+		t.Fatalf("the paused write's event: step=%s posture=%s published=%v (answer published=%v), want review/paused/false", step, posture, pub, res.Published)
+	}
+
+	b := newOverrideFixture(t, "wi_ov15b")
+	if err := b.td.rt.Stop(context.Background(), b.wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("blocked close: %v", err)
+	}
+	deadline = time.Now().Add(15 * time.Second)
+	for {
+		if _, ok := b.td.rt.Info(b.wi); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the blocked close never dropped the job")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, ae := b.td.ovPost(t, b.wi, protocol.OverrideWriteRequest{Step: "review", Operator: "usr_b", Models: []string{"pi:ovtest/m-ok"}}); ae != nil {
+		t.Fatalf("the blocked write: %s (%s)", ae.Code, ae.Detail)
+	}
+	if step, posture, pub := ovLastOverrideEvent(t, b); step != "review" || posture != "blocked" || pub == nil || *pub {
+		t.Fatalf("the blocked write's event: step=%s posture=%s published=%v, want review/blocked/false", step, posture, pub)
+	}
+}
