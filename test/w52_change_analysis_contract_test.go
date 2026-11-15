@@ -74,3 +74,34 @@ func TestW52FixTicketsCarryTheMarker(t *testing.T) {
 		"every fix ticket it files carries the integration_fix attr",
 	})
 }
+
+// TestW52BuildWritesTheChangeAnalysis (AC1): develop's build says so at
+// its close — the structured analysis names what the change altered, the
+// existing tests that already pin it (with the evidence that found them),
+// the engine report's paths no carries: declaration covers, and the
+// lane's supplement cap; the hand-off names the file.
+func TestW52BuildWritesTheChangeAnalysis(t *testing.T) {
+	w52Wants(t, "workflows/develop/steps/build.md", []string{
+		"Write the change analysis — `artifacts/build/change-analysis.json`",
+		"`supplement_limit`",
+		"{{supplement_limit}} test runs",
+		"`changed`",
+		"`uncovered`",
+		"`tests`",
+		"`evidence`",
+		"covered by no `carries:` declaration",
+		"run each where you found it and list only a test that passes at HEAD",
+		"`verify.py --analysis`, add-only, never narrowing it",
+	})
+	w52Wants(t, "workflows/_shared/skills/build.md", []string{
+		"`artifacts/plan.md`, `artifacts/build/units.json`, `artifacts/build/change-analysis.json` and `artifacts/self-review.md`",
+		"`artifacts/plan.md`, `artifacts/build/units.json`, `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`",
+	})
+	raw, err := os.ReadFile(filepath.Join(v1Root(t), "workflows", "develop", "workflow.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `supplement_limit: "10"`) {
+		t.Error("workflows/develop/workflow.yaml: the build step must carry the lane's supplement cap (vars.supplement_limit, rendered into the step's text)")
+	}
+}
