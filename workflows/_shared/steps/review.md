@@ -66,8 +66,8 @@ found it (publish lists it in the PR body).
   poll deadline is fine) or asserting before the awaited state settles; a suite the
   verification-scope engine discovers (by default or `suite_glob=`) whose `carries:` header
   is missing or does not name the paths it exercises; a unit that misses or contradicts
-  its test-quality record — the behaviour its test observes, why its red is expected, the
-  change it catches — or a test that only asserts that some source text exists (the bar
+  its test-quality record — the behaviour its test observes, how its expected values are
+  derived independently of the implementation, the change it catches — or a test that only asserts that some source text exists (the bar
   below names the one exemption); a test that asserts an asynchronously settling state on
   one read right after the action instead of a bounded poll for it (the bar below, its
   settle duty).
