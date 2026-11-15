@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
@@ -359,17 +360,18 @@ func TestPendingOverrideKeptUntilFirstPublish(t *testing.T) {
 	}
 }
 
-// A pending entry left by a claim whose publish failed is residue the
-// running job never drops by itself; a running-posture write whose chain
-// push succeeds carries the claim's merge (committed into this capsule at
-// claim) and the new change, so it drops the record — a later block and
-// re-claim here must not merge the stale value over the owner's newer
-// change (polyforge#25 u16, review #4/#5).
+// A pending entry left by a claim whose publish failed stays as residue;
+// a running-posture write of the same step's same aspect whose chain push
+// succeeds is newer than it, so a later block and re-claim here must not
+// merge the stale value over the owner's newer change (polyforge#25 u16,
+// review #4/#5). The test pins the behaviour only — the fresh capsule of
+// the re-claim carries the newer chain — not how the residue yields
+// (review r2#1, owner ruling 2026-11-15T01:37:30Z).
 func TestPendingOverrideResidueDroppedByPublishedRunningWrite(t *testing.T) {
 	r, _ := pendingEnv(t)
 	const wi = "wi_ov16"
 	if err := r.savePendingOverrides(wi, map[string]*capsule.StepOverride{
-		"release": {Models: []string{"pi:ov/stale"}, ModelsBy: "usr_1"},
+		"release": {Models: []string{"pi:ov/stale"}, ModelsBy: "usr_1", ModelsAt: residueAt()},
 	}); err != nil {
 		t.Fatalf("save pending: %v", err)
 	}
@@ -400,9 +402,6 @@ func TestPendingOverrideResidueDroppedByPublishedRunningWrite(t *testing.T) {
 	if !out.Changed || out.Posture != OverridePostureRunning || !out.Published {
 		t.Fatalf("precondition: a changed, published running write: %+v", out)
 	}
-	if pend := readPendingFile(t, r); pend != nil && pend[wi] != nil {
-		t.Fatalf("a published running write must drop the pending residue: %+v", pend[wi])
-	}
 	// the ticket blocks and is re-claimed here: the newer chain stands
 	if err := r.Stop(context.Background(), wi, protocol.FinishBlocked); err != nil {
 		t.Fatalf("blocked Stop: %v", err)
@@ -426,14 +425,21 @@ func TestPendingOverrideResidueDroppedByPublishedRunningWrite(t *testing.T) {
 	}
 }
 
+// residueAt is a pending residue's recorded time: every pending write
+// carries one (the record is the daemon's, written at the change), and the
+// residue is older than any write the test makes after the claim.
+func residueAt() string {
+	return time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+}
+
 // residueAfterFailedClaimPublish claims wi with a pending record whose
 // claim publish fails: the record stays as residue (release's stale chain,
 // and fix's chain the later write does not touch).
 func residueAfterFailedClaimPublish(t *testing.T, r *Runtime, wi string) {
 	t.Helper()
 	if err := r.savePendingOverrides(wi, map[string]*capsule.StepOverride{
-		"release": {Models: []string{"pi:ov/stale"}, ModelsBy: "usr_1"},
-		"fix":     {Models: []string{"pi:ov/fix-pending"}, ModelsBy: "usr_1"},
+		"release": {Models: []string{"pi:ov/stale"}, ModelsBy: "usr_1", ModelsAt: residueAt()},
+		"fix":     {Models: []string{"pi:ov/fix-pending"}, ModelsBy: "usr_1", ModelsAt: residueAt()},
 	}); err != nil {
 		t.Fatalf("save pending: %v", err)
 	}
@@ -454,15 +460,14 @@ func residueAfterFailedClaimPublish(t *testing.T, r *Runtime, wi string) {
 	}
 }
 
-// assertNewerChainSurvivesReclaim checks the residue lost only the
-// written step's aspect, then blocks the ticket, re-claims it here and
-// checks the fresh capsule carries the newer chain.
+// assertNewerChainSurvivesReclaim checks the residue entry the write did
+// not touch is still recorded, then blocks the ticket, re-claims it here
+// and checks the fresh capsule carries the newer chain and the untouched
+// pending entry — the behaviour, not how the residue yields (review r2#1,
+// owner ruling 2026-11-15T01:37:30Z).
 func assertNewerChainSurvivesReclaim(t *testing.T, r *Runtime, wi string) {
 	t.Helper()
 	pend := readPendingFile(t, r)
-	if e := pend[wi]["release"]; e != nil && e.Models != nil {
-		t.Fatalf("the scene write must drop the same step's same aspect from the pending residue: %+v", e)
-	}
 	if e := pend[wi]["fix"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/fix-pending" {
 		t.Fatalf("a residue entry the write did not touch must stay: %+v", e)
 	}
