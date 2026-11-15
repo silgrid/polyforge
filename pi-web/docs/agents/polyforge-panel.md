@@ -637,9 +637,13 @@ the declarations and the overlay's values (`skippableSteps`, `overrides`),
 and the effective chains with their source labels (`step overlay`, `pf
 submit --models`, the yaml/bundle level) through the view the watch route
 composes into its own response (`status.overrideView`, one
-`pf --json override <wi>` read per watch answer; a failed view read
+`pf --json override <wi>` read per asked watch answer; a failed view read
 degrades to a snapshot without it, and the override route's GET face is
-gone with its last caller). The write is one action per POST (`models`,
+gone with its last caller; polyforge#48: the view is opt-in — `?overrides=1`,
+the panel's ask exactly while its held snapshot does not say the work item
+ended — and the view read starts together with the watch read, each bounded
+by its own read timeout, never composed for a terminal answer; the panel's
+watch poll keeps at most one read in flight). The write is one action per POST (`models`,
 `clearModels`, `skip`), and the next watch poll carries the fresh row.
 Files: `components/PolyforgeStepControls.tsx` (the controls; the panel
 mounts them and passes the snapshot's row), `lib/polyforge-overrides.ts`

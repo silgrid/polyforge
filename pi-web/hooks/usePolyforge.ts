@@ -20,7 +20,7 @@ import {
   type PolyforgeCard,
   type PolyforgeCardsResponse,
 } from "@/lib/polyforge-cards-pure";
-import { needsInputJobs } from "@/lib/polyforge-conversation-pure";
+import { FINISHED_STATUSES, needsInputJobs } from "@/lib/polyforge-conversation-pure";
 import {
   attentionItems,
   attentionTarget,
@@ -138,6 +138,16 @@ export function nextWatchSnapshot(
   return body?.status ?? previous;
 }
 
+/** The watch read's overrides ask (polyforge#48 AC3): the composed override
+ *  view is requested exactly while the held snapshot does not say the work
+ *  item ended — a fresh selection holds nothing yet (the panel asks; the
+ *  route's own watch answer decides), and it stops asking the moment the
+ *  held snapshot says terminal, so an ended ticket's 3 s poll reads nothing
+ *  but the watch itself. Pure. */
+export function watchOverridesAsked(snapshot: PolyforgeWatchStatus | null): boolean {
+  return !(snapshot !== null && FINISHED_STATUSES.has(snapshot.workflowStatus));
+}
+
 /** The dock's top-level tabs, in DOM order
  *  Work | Memory | Messages. Work hosts the former Jobs and Tasks tabs as its two
  *  sub-tabs (`PolyforgeWorkTab`). The Tasks and Memory surfaces own their
@@ -179,6 +189,15 @@ export function usePolyforge(panelOpen: boolean) {
   // from the selection (an anchor), then the job list's first match.
   const [selectedCell, setSelectedCell] = useState<string | undefined>(undefined);
   const [watchStatus, setWatchStatus] = useState<PolyforgeWatchStatus | null>(null);
+  // polyforge#48 (AC3): the watch read's own view of the held snapshot — the
+  // stable refreshWatch callback reads the ref, never the state, so the
+  // poll's interval is not re-created on every landing.
+  const watchStatusRef = useRef<PolyforgeWatchStatus | null>(null);
+  watchStatusRef.current = watchStatus;
+  // polyforge#48 (AC3): at most one watch read in flight — a slow or hung
+  // answer never stacks requests (the route bounds each answer itself; this
+  // bounds how many of them the cadence may hold open at once).
+  const watchInFlight = useRef(false);
 
   // Messages state.
   const [activeTab, setActiveTabState] = useState<PolyforgeTab>("work");
@@ -343,10 +362,20 @@ export function usePolyforge(panelOpen: boolean) {
   }, []);
 
   const refreshWatch = useCallback((wi: string, profile?: string) => {
+    // polyforge#48 (AC3): a tick while a read is still in flight skips — the
+    // snapshot follows the cadence the server answers at, never a stack of
+    // overlapping requests.
+    if (watchInFlight.current) return;
+    watchInFlight.current = true;
     const seq = ++watchSeq.current;
     // the row's Cell is addressed explicitly (never the cwd)
     const cell = profile ? `&profile=${encodeURIComponent(profile)}` : "";
-    fetch(`/api/polyforge/watch?wi=${encodeURIComponent(wi)}${cell}`)
+    // polyforge#48 (AC3): the composed override view is asked exactly while
+    // the held snapshot does not say the work item ended (the route runs the
+    // view read in parallel with the watch read and never composes it for a
+    // terminal answer).
+    const overrides = watchOverridesAsked(watchStatusRef.current) ? "&overrides=1" : "";
+    fetch(`/api/polyforge/watch?wi=${encodeURIComponent(wi)}${cell}${overrides}`)
       .then(async (response) => {
         const body = await response.json() as WatchResponse;
         if (seq !== watchSeq.current) return;
@@ -355,7 +384,8 @@ export function usePolyforge(panelOpen: boolean) {
       })
       .catch(() => {
         // A network blip keeps the previous snapshot too.
-      });
+      })
+      .finally(() => { watchInFlight.current = false; });
   }, []);
 
   // The conversation list rides the same dock cadence: one read at mount and

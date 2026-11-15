@@ -62,7 +62,7 @@ if (args.includes("override")) {
   if (mode === "refuse-409") { process.stderr.write(JSON.stringify({ code: "DAEMON-409", detail: "step merge has a live dispatch (its status is in_progress): the overlay is for steps without one" }) + "\\n"); process.exit(1); }
   if (mode === "refuse-400") { process.stderr.write(JSON.stringify({ code: "DAEMON-400", detail: "models: the pi model \\"absent\\" is not in this Cell's step-agent models.json" }) + "\\n"); process.exit(1); }
   if (mode === "garbage") { process.stdout.write("not json\\n"); process.exit(0); }
-  if (mode === "view" || mode === "ended") {
+  if (mode === "view" || mode === "ended" || mode === "wait-view") {
     out({ work_item: "wi_A1", posture: "running", steps: [
       { id: "build", status: "in_progress", skippable: false },
       { id: "merge", status: "pending", skippable: true, models: ["pi:pf25/m-1"], models_by: "usr_1", effective: ["pi:pf25/m-1"], source: "step override" },

@@ -305,7 +305,7 @@ test("polyforge#48 AC3: the watch read asks for the composed view exactly while 
   assert.equal(context.watchOverridesAsked({ workflowStatus: "done" }), false);
   // The wiring: the ask rides the watch URL, and the panel-side terminal set
   // is the conversation vocabulary's own.
-  assert.match(source, /import \{ FINISHED_STATUSES \} from "@\/lib\/polyforge-conversation-pure";/);
+  assert.match(source, /import \{ FINISHED_STATUSES, needsInputJobs \} from "@\/lib\/polyforge-conversation-pure";/);
   assert.match(source, /watchOverridesAsked\(watchStatusRef\.current\) \? "&overrides=1" : ""/);
 });
 
