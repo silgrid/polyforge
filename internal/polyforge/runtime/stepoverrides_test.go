@@ -425,3 +425,119 @@ func TestPendingOverrideResidueDroppedByPublishedRunningWrite(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 }
+
+// residueAfterFailedClaimPublish claims wi with a pending record whose
+// claim publish fails: the record stays as residue (release's stale chain,
+// and fix's chain the later write does not touch).
+func residueAfterFailedClaimPublish(t *testing.T, r *Runtime, wi string) {
+	t.Helper()
+	if err := r.savePendingOverrides(wi, map[string]*capsule.StepOverride{
+		"release": {Models: []string{"pi:ov/stale"}, ModelsBy: "usr_1"},
+		"fix":     {Models: []string{"pi:ov/fix-pending"}, ModelsBy: "usr_1"},
+	}); err != nil {
+		t.Fatalf("save pending: %v", err)
+	}
+	real := pendingPublishFn
+	t.Cleanup(func() { pendingPublishFn = real })
+	pendingPublishFn = func(ctx context.Context, o gitops.Opts, msg string) (string, bool, gitops.PushTimings, error) {
+		return "", false, gitops.PushTimings{}, errors.New("injected: the hub is unreachable")
+	}
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pendingPublishFn = real
+	if r.jobOf(wi) == nil {
+		t.Fatal("the claim must run to a live agent")
+	}
+	if pend := readPendingFile(t, r); pend == nil || pend[wi]["release"] == nil {
+		t.Fatal("precondition: the failed claim publish must leave the pending record")
+	}
+}
+
+// assertNewerChainSurvivesReclaim checks the residue lost only the
+// written step's aspect, then blocks the ticket, re-claims it here and
+// checks the fresh capsule carries the newer chain.
+func assertNewerChainSurvivesReclaim(t *testing.T, r *Runtime, wi string) {
+	t.Helper()
+	pend := readPendingFile(t, r)
+	if e := pend[wi]["release"]; e != nil && e.Models != nil {
+		t.Fatalf("the scene write must drop the same step's same aspect from the pending residue: %+v", e)
+	}
+	if e := pend[wi]["fix"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/fix-pending" {
+		t.Fatalf("a residue entry the write did not touch must stay: %+v", e)
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("blocked Stop: %v", err)
+	}
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("re-claim: %v", err)
+	}
+	j := r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the re-claim must run to a live agent")
+	}
+	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := ov.Steps["release"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/newer" || e.ModelsBy != "usr_2" {
+		t.Fatalf("the re-claim merged the stale pending value over the newer chain: %+v", e)
+	}
+	if e := ov.Steps["fix"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/fix-pending" {
+		t.Fatalf("the untouched pending entry must still merge: %+v", e)
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishWrapped); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+// A residue a failed claim publish left yields to a newer paused-posture
+// write of the same step's same aspect: the write lands in the kept scene
+// (unpublished), the ticket closes blocked (its seal carries the scene
+// into the chain), and the re-claim here must not merge the stale value
+// over it (polyforge#25 u17, review r2#1).
+func TestPendingOverrideResidueYieldsToNewerSceneWrite(t *testing.T) {
+	r, _ := pendingEnv(t)
+	const wi = "wi_ov17p"
+	residueAfterFailedClaimPublish(t, r, wi)
+	if err := r.Stop(context.Background(), wi, protocol.FinishPaused); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	out, err := r.ApplyStepOverride(context.Background(), wi, OverrideChange{
+		Step: "release", Operator: "usr_2", Models: []string{"pi:ov/newer"},
+	})
+	if err != nil {
+		t.Fatalf("the paused write: %v", err)
+	}
+	if !out.Changed || out.Posture != OverridePosturePaused || out.Published {
+		t.Fatalf("precondition: a changed, unpublished paused write: %+v", out)
+	}
+	assertNewerChainSurvivesReclaim(t, r, wi)
+}
+
+// The same with a running-posture write whose chain push fails: the local
+// commit stands (the blocked close's seal pushes it), and the residue
+// must still yield to it.
+func TestPendingOverrideResidueYieldsToFailedPushRunningWrite(t *testing.T) {
+	r, _ := pendingEnv(t)
+	const wi = "wi_ov17r"
+	residueAfterFailedClaimPublish(t, r, wi)
+	hub := r.hub.(*fakeHub)
+	refuse := filepath.Join(hub.capsuleRepoBase, wi+".git", "hooks", "pre-receive")
+	if err := os.WriteFile(refuse, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.ApplyStepOverride(context.Background(), wi, OverrideChange{
+		Step: "release", Operator: "usr_2", Models: []string{"pi:ov/newer"},
+	})
+	if err != nil {
+		t.Fatalf("the running write: %v", err)
+	}
+	if !out.Changed || out.Posture != OverridePostureRunning || out.Published {
+		t.Fatalf("precondition: a changed running write whose push failed: %+v", out)
+	}
+	if err := os.Remove(refuse); err != nil {
+		t.Fatal(err)
+	}
+	assertNewerChainSurvivesReclaim(t, r, wi)
+}
