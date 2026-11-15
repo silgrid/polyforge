@@ -315,12 +315,18 @@ inconsistent never merges unattended.
 
 ### Verification tier
 
-Verification runs the tier its step declares: develop's `verification`
-runs the **light tier** through its skill's `verify.py --tier light`
-(the result file's `heads` name the tree it ran
-over); the **full** bar is the integration lane's gate (`gate.py`). There is
-no per-work-item tier: the scoped tier and its
-content marker are gone (workflow contract 1).
+Verification runs the tier the work item's own attrs decide: develop's
+`verification` runs `verify.py --tier auto`, which reads the claimed work
+item (`runtime-state/work-item.json`) — a ticket carrying the
+`integration_fix` attr (the marker an integration batch's full-gate writes
+on its fix tickets) runs the **full** bar: everything the light tier runs
+and the rest, the engine planning `--full` with the whole tool window as
+the run's budget; every other ticket runs the **light tier** (the result
+file's `heads` name the tree it ran
+over). No ticket chooses its tier — the integration batch's marker is the
+one switch, and the scoped tier with its
+content marker is gone (workflow contract 1). The integration lane's gate
+(`gate.py`) still runs the full bar over what landed.
 
 `verify.py` verifies the tree as it stands: `sync` merged the latest origin
 default branch into the branch before it, and a conflict is the sync
@@ -334,13 +340,21 @@ branch itself before its bar ran, left with the daemon actions.)
 
 ### The light verification
 
-`verify.py --tier light` (develop's `verification` step,
-skill `verify`) runs the **light tier** — `workflows/_shared/scripts/verify-scope --light` in
+`verify.py --tier auto` (develop's `verification` step,
+skill `verify`) runs the **light tier** over every ticket but an
+integration batch's fix — `workflows/_shared/scripts/verify-scope --light` in
 each touched repo and in every nested engine root the diff reaches, i.e.
 the fast gates, the affected unit tests, the e2e suites the change added
 or changed or whose `carries:` meet it, and the build's unit runs
 (`--unit-runs artifacts/build/units.json`), with the conf's forced-full
-paths not applying (the full bar is the integration lane's `gate.py`). A failing unit is re-run once — one suite of an
+paths not applying (the full bar is the integration lane's `gate.py`, or
+this step's own run on a marked fix ticket). Beside the plan the change
+analysis's listed tests run beside the plan, add-only, under the analysis's
+supplement cap (`--analysis artifacts/build/change-analysis.json`, the
+file develop's build writes at its close): the union is the engine's
+selection plus the tests the analysis lists, never less — a listed test
+that does not exist fails its check naming it, and the entries past the
+cap are cut in listed order and named in the result. A failing unit is re-run once — one suite of an
 aggregate e2e command through the conf's `rerun=` template — and a unit
 still red runs once on the baseline: the default branch's commit the
 tested tree carries, `merge-base HEAD origin/<default>` — a red the

@@ -21,7 +21,14 @@ call, and a pass is the command's, not yours.
    is this gate's FAIL: hand off `fail`, the body naming "sync hand-off mismatch: <repo, or
    argv>: <what differs>".
 2. **Where a red could come from.** `artifacts/plan.md` (`## Units`, when the lane has a
-   plan) and build's latest section: what the change touched, so a red can be placed.
+   plan), build's change analysis `artifacts/build/change-analysis.json` (what the change
+   altered and which existing tests already pin it) and build's latest section: what the
+   change touched, so a red can be placed.
+   **Build's change analysis holds:** the file exists and parses — its `tests` name existing
+   tests of the task repos, each with its run and a marker a passing run prints (build's
+   latest section names it among its evidence); a missing or unparseable analysis is this
+   gate's FAIL: hand off `fail`, the body naming "build hand-off mismatch: change analysis:
+   <what is missing or wrong>".
 3. **An earlier round of this gate.** When `artifacts/handoff.md` carries an earlier
    `verification` section, read it and the 回退 that followed: what failed then, and what
    the build did about it.
@@ -34,17 +41,24 @@ call, and a pass is the command's, not yours.
    judge this round on an earlier round's result. **Same-tree rule:** an earlier round's
    result whose `heads` equal every repo's current HEAD and whose `verdict` is `fail` is not
    run again when `artifacts/build/units.json` is unchanged too (its sha256 equals the
-   `units.json sha256:` line of `artifacts/verify/report.md`) — nothing changed, so it would
-   fail the same way: `pf step ask` the owner with that round's red checks (run again /
+   `units.json sha256:` line of `artifacts/verify/report.md`) and the change analysis is
+   unchanged (its `change-analysis sha256:` line of that report) — nothing changed, so it
+   would fail the same way: `pf step ask` the owner with that round's red checks (run again /
    accept the red / cancel), then end your turn.
 2. **Run this line as written** — no argument added or removed, no Bash timeout:
-   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify.py" --tier light --unit-runs artifacts/build/units.json --json --out artifacts/verify/result.json`
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify.py" --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json --json --out artifacts/verify/result.json`
    (a repo carrying `.polyforge/Dockerfile.verify` runs its bar in its verification
    container, any other on the host; `--unit-runs` runs each unit's green run as the build
-   recorded it, beside the light plan: one check `<repo>:unit-run:<id>` per unit; `--help`
-   is the script's full reference), then write the line `units.json
-   sha256: <digest>` (`sha256sum artifacts/build/units.json`) as the first line of
-   `artifacts/verify/report.md`, whatever the exit.
+   recorded it, beside the light plan: one check `<repo>:unit-run:<id>` per unit;
+   `--tier auto` reads the work item's own attrs: an `integration_fix` ticket (an integration
+   batch's fix ticket) runs the full bar; every other ticket the light one — the result names
+   the requested tier, the effective one and why; under `--analysis` the change analysis's
+   listed tests run beside the engine's plan, add-only, under its supplement cap — a listed
+   test that does not exist fails its check naming it; `--help` is the script's full
+   reference),
+   then write the lines `units.json sha256: <digest>` (`sha256sum artifacts/build/units.json`)
+   and `change-analysis sha256: <digest>` (`sha256sum artifacts/build/change-analysis.json`)
+   as the first lines of `artifacts/verify/report.md`, whatever the exit.
 3. **Route on the exit code.**
    - **0** — add to `artifacts/verify/report.md` the verdict and each check of
      `details.checks[]` (id, repo, status) in a few lines; hand off `done`.
@@ -56,7 +70,9 @@ call, and a pass is the command's, not yours.
      log; still red, it is a red you cannot place. A unit with `not_rerun` is neither a
      proven red nor flaky (its re-run never started): `pf step ask` the owner with those
      units by check (usually: run again). A red you can place on the change — a unit of the plan (a
-     failing `<repo>:unit-run:<id>` check is that unit's own run), a file the change
+     failing `<repo>:unit-run:<id>` check is that unit's own run), a listed test of the
+     change analysis (a failing `<repo>:analysis:<id>` check is a test the analysis listed
+     as already pinning this change: the change's, on build's own word), a file the change
      touched (`git -C repos/<name> diff --stat origin/<default>...HEAD`), a suite whose
      check names what the change touched — is the change's: hand off `fail` (the lane goes
      back to `build`). A red you cannot place: `pf step ask` the owner with the red checks,

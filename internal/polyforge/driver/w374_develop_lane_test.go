@@ -90,8 +90,11 @@ func TestShippedDevelopLaneShape(t *testing.T) {
 	if sync := lane.Step("sync"); sync.Gate || sync.OnFailTarget != "" || sync.ToolMinutes != 20 {
 		t.Fatalf("develop/sync must be a non-gate with a 20-minute tool window: %+v", sync)
 	}
-	if v := lane.Step(verificationStepID); !v.Waivable || v.Resources == nil || !v.Resources.Heavy() || len(v.Resources.Locks) != 0 || v.ToolMinutes != 35 || v.WallMinutes != 45 {
-		t.Fatalf("develop/%s must be waivable, take the heavy admission and no lock (tool 35 / wall 45): %+v", verificationStepID, v)
+	// polyforge#52: the window fits the full bar an integration batch's fix
+	// ticket runs (its attrs carry the integration_fix marker); a light run
+	// ends in its own time — the window is a bound, never a spend
+	if v := lane.Step(verificationStepID); !v.Waivable || v.Resources == nil || !v.Resources.Heavy() || len(v.Resources.Locks) != 0 || v.ToolMinutes != 90 || v.WallMinutes != 150 {
+		t.Fatalf("develop/%s must be waivable, take the heavy admission and no lock (tool 90 / wall 150): %+v", verificationStepID, v)
 	}
 	if p := lane.Step(publishStepID); p.Waivable || p.Resources != nil {
 		t.Fatalf("develop/%s must be a non-waivable gate taking no resource: %+v", publishStepID, p)
@@ -180,8 +183,9 @@ func TestShippedDevelopLanePromptsRender(t *testing.T) {
 			"the owner accepts the red: `waive --per-owner <the reply's at>`",
 			"is not run again when `artifacts/build/units.json` is unchanged too (its sha256 equals the `units.json sha256:` line of `artifacts/verify/report.md`) and the change analysis is unchanged (its `change-analysis sha256:` line of that report)",
 			// contract 3's optional input artifacts/plan.md
-			"`artifacts/plan.md` (`## Units`, when the lane has a plan) and build's latest section: what the change touched, so a red can be placed.",
-			"A red you can place on the change — a unit of the plan (a failing `<repo>:unit-run:<id>` check is that unit's own run), a file the change touched"},
+			"`artifacts/plan.md` (`## Units`, when the lane has a plan), build's change analysis `artifacts/build/change-analysis.json` (what the change altered and which existing tests already pin it) and build's latest section: what the change touched, so a red can be placed.",
+			"a missing or unparseable analysis is this gate's FAIL",
+			"A red you can place on the change — a unit of the plan (a failing `<repo>:unit-run:<id>` check is that unit's own run), a listed test of the change analysis (a failing `<repo>:analysis:<id>` check is a test the analysis listed as already pinning this change: the change's, on build's own word), a file the change touched"},
 		"merge": {"# Skill", "`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/merge.py\" --publish artifacts/publish.json --verified artifacts/verify/result.json --landing-out artifacts/merge/landing.json --json --out artifacts/merge/result.json`",
 			"**The verified result file is the gate's line's.** Its `argv` is exactly the arguments",
 			// contract 3's verify-first of publish's repos against the verified heads
