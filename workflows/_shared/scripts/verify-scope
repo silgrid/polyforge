@@ -880,6 +880,11 @@ class Engine:
                     self.diag("conf ignores an empty go_harness")
                     continue
                 self.conf_harness.append(val)
+            elif key == "not_runnable_rule":
+                # facts.py's replay key: the engine reads none of it, so it
+                # accepts the line without the unknown-key diagnostic — no
+                # conf reader diagnoses a key another tool owns.
+                continue
             else:
                 self.diag("conf rejects unknown key '%s'" % key)
 
