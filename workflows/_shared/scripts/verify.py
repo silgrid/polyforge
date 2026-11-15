@@ -5,6 +5,16 @@ step left them (develop's verification step).
         [--unit-runs FILE] [--capsule DIR] [--engine PATH] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
 
 Each task repo's tree is verified at its HEAD: no fetch, no merge (a merge in
+The tier: ``--tier auto`` (the lane's line) reads the capsule's work item
+(``runtime-state/work-item.json``) — a ticket carrying a truthy
+``integration_fix`` attr (the marker an integration batch's full-gate
+writes on its fix tickets) runs the **full** bar: the engine plans ``--full``
+(a forced-full path, a full tail — everything the light tier runs and the
+rest), with no nested-root light planning, and the whole run's window is
+the budget. Every other ticket runs the **light** tier, exactly as before.
+``--tier light`` and ``--tier full`` are the hand run's explicit overrides
+(an explicit light stays light on a marked ticket).
+
 progress makes the run not judged); the base, and the baseline a still-red
 unit is proven pre-existing on, is ``merge-base HEAD origin/<default>``. The
 scope engine plans each touched repo ``--light`` and every nested engine root
@@ -405,10 +415,20 @@ class Verification:
         say: Callable[[str], None],
         co: Optional[container.ContainerOptions],
         analysis: Optional[Analysis] = None,
+        tier: str = TIER_LIGHT,
+        tier_requested: str = "",
+        tier_reason: str = "",
     ) -> None:
         self.capsule = capsule
         self.engine = engine
         self.deadline = deadline  # ns: the whole run's
+        # the tier as resolved: light (the default) or full (an
+        # integration-fix ticket); tier_requested is what the line asked
+        # (auto names the work item's own decision) and tier_reason why a
+        # full run is full
+        self.tier_light = tier == TIER_LIGHT
+        self.tier_requested = tier_requested or tier
+        self.tier_reason = tier_reason
         self.unit_run_decls = unit_runs
         # the analysis's listed tests: the first `limit` run beside the
         # plan, the tail cut and named (the union is add-only)
@@ -421,7 +441,12 @@ class Verification:
         self.co = co
         self.n, self.run_dir = self._run_dir(run_dir)
         start = time.time()
-        self.budget_until = start + BUDGET / duration.SECOND
+        # the light tier's rerun budget is its own knob; a full run is
+        # bounded by the whole run's window (the bar itself is long)
+        if self.tier_light:
+            self.budget_until = start + BUDGET / duration.SECOND
+        else:
+            self.budget_until = start + deadline / duration.SECOND
         self.hard = start + deadline / duration.SECOND - WRITE_MARGIN
         self.r = runner.Runner(
             capsule, self.hard, env=env,
@@ -478,7 +503,9 @@ class Verification:
         return self.r.remaining() > d
 
     def budget_note(self) -> str:
-        return "verify-run's budget (%s)" % duration.format(BUDGET)
+        if self.tier_light:
+            return "verify-run's budget (%s)" % duration.format(BUDGET)
+        return "the whole run's window (%s)" % duration.format(self.deadline)
 
     def rel(self, p: str) -> str:
         return self.r.rel(p) if p else ""
@@ -633,11 +660,12 @@ class Verification:
 
     # -- the plan
 
-    def ask_engine(self, rr: RepoRun, directory: str, cwd: str, base: str) -> Tuple[Optional[EngineReport], str, str]:
-        """The engine's light report with directory as its root: (report,
+    def ask_engine(self, rr: RepoRun, directory: str, cwd: str, base: str, light: bool = True) -> Tuple[Optional[EngineReport], str, str]:
+        """The engine's report with directory as its root (the light one
+        under the light tier, the full one under the full tier): (report,
         the invocation, why there is none)."""
         engine = rr.box.engine if rr.box is not None else self.engine
-        argv = engine_argv_of(engine) + ["--json", "--light"]
+        argv = engine_argv_of(engine) + ["--json", "--light" if light else "--full"]
         if base:
             argv += ["--base", base]
         ref = " ".join(argv)
@@ -652,9 +680,27 @@ class Verification:
             return None, ref, "the engine's report is unreadable: %s" % err
 
     def plan_repo(self, rr: RepoRun) -> None:
-        """rr's light plan: its own report's commands and, when that is
-        light, every nested engine root's the diff reaches."""
+        """rr's plan: the light tier's own report's commands and, when that
+        is light, every nested engine root's the diff reaches; the full
+        tier's one full report (a forced-full path, a full tail — the conf's
+        full plan covers the nested roots too, as gate.py's does)."""
         base = rr.merge.base if rr.merge is not None else ""
+        if not self.tier_light:
+            rep, ref, why = self.ask_engine(rr, rr.dir, rr.cwd_rel, base, light=False)
+            p = RepoPlan(engine_ref=ref, report=rep)
+            rr.plan = p
+            if rep is None:
+                p.status, p.reason = PLAN_ENGINE_FAILED, why
+                return
+            chosen, mode = choose(rep, TIER_FULL)
+            p.mode = mode
+            p.base_setup = append_new([], rep.base_setup)
+            if not chosen:
+                p.status = PLAN_EMPTY
+                p.reason = "the engine planned no command (stack %s, conf %s)" % (gostr.quote(rep.stack), rep.conf)
+                return
+            p.status, p.commands = PLAN_PLANNED, chosen
+            return
         rep, ref, why = self.ask_engine(rr, rr.dir, rr.cwd_rel, base)
         p = RepoPlan(engine_ref=ref, report=rep)
         rr.plan = p
@@ -1124,7 +1170,7 @@ class Verification:
         pre_existing: List[str] = []
         merges = {rr.name: rr.merge for rr in repos if rr.merge is not None}
         conf_changed: Dict[str, bool] = {}
-        tier: Dict[str, Any] = {"requested": TIER_LIGHT, "effective": TIER_FULL}
+        tier: Dict[str, Any] = {"requested": self.tier_requested, "effective": TIER_FULL}
         doc: Dict[str, Any] = {
             "schema": 1, "run": self.n, "out_dir": self.rel(self.run_dir), "log_dir": self.rel(self.run_dir),
         }
@@ -1233,7 +1279,11 @@ class Verification:
                     " selection is unchanged" % self.analysis_limit)))
                 analysis_runs.append({"id": ad.id, "check": ad.check(), "repo": ad.repo, "status": "cut",
                                       "why": ad.why, "file": ad.file, "name": ad.name})
-            if effective_light and light_repos > 0:
+            if not self.tier_light:
+                # a full run is full by its own decision, never by a
+                # report's fallback
+                tier["reasons"] = [self.tier_reason or "the full tier was requested"]
+            elif effective_light and light_repos > 0:
                 tier["effective"] = TIER_LIGHT
             else:
                 if not full_why:
@@ -1346,6 +1396,32 @@ class Verification:
 
 
 # ---- the pure rules ----------------------------------------------------------
+
+
+# The tier names the line may ask for.
+TIER_AUTO = "auto"
+FULL_TIER_REASON = ("the work item carries the integration_fix attr (an integration batch's fix"
+                    " ticket): the full bar runs — it includes every light check")
+WORK_ITEM_DOC = "runtime-state/work-item.json"
+
+
+def resolve_tier(capsule: str, requested: str) -> Tuple[str, str]:
+    """The tier the line's request resolves to, and why a full run is full
+    ("" = light): auto reads the capsule's work item — a truthy
+    integration_fix attr runs the full bar; light and full are the hand
+    run's explicit overrides."""
+    if requested != TIER_AUTO:
+        return (requested, "" if requested == TIER_LIGHT else "the full tier was requested")
+    try:
+        with open(os.path.join(capsule, WORK_ITEM_DOC), "rb") as f:
+            doc = json.loads(f.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return TIER_LIGHT, ""
+    attrs = doc.get("attrs") if isinstance(doc, dict) else None
+    v = attrs.get("integration_fix") if isinstance(attrs, dict) else None
+    if v is True or (isinstance(v, str) and v not in ("", "false")):
+        return TIER_FULL, FULL_TIER_REASON
+    return TIER_LIGHT, ""
 
 
 def check(name: str, status: str, detail: str = "") -> Dict[str, Any]:
@@ -1815,7 +1891,8 @@ def logs_of(res: Dict[str, Any], d: Dict[str, Any]) -> List[str]:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog=COMMAND, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
-    p.add_argument("--tier", default="", help="the verification tier: light (the only one; the full tier is the gate's)")
+    p.add_argument("--tier", default="", help="the verification tier: auto (the work item's attrs decide — an"
+                   " integration fix ticket runs the full bar), light or full (a hand run's explicit tier)")
     p.add_argument("--capsule", default=".", help="the capsule root (capsule.json, repos/)")
     p.add_argument("--engine", default="", help="the scope engine (default: the shared tree's scripts/verify-scope)")
     p.add_argument("--unit-runs", default="", help="the build's units.json: every unit's recorded run, run again as"
@@ -1884,9 +1961,10 @@ def run(
     runtime: Optional[container.ContainerRuntime] = None,
 ) -> int:
     if a.tier == "":
-        raise Usage("--tier light is required (the full tier is the gate's)")
-    if a.tier != TIER_LIGHT:
-        raise Usage("--tier %s: verify.py runs the light tier only (the full tier is the gate's)" % gostr.quote(a.tier))
+        raise Usage("--tier is required (light, full or auto: the lane's line says auto — the work item's attrs decide)")
+    if a.tier not in (TIER_LIGHT, TIER_FULL, TIER_AUTO):
+        raise Usage("--tier %s: want light, full or auto (auto reads the work item's attrs — an integration"
+                    " fix ticket runs the full bar)" % gostr.quote(a.tier))
     capsule = os.path.abspath(a.capsule)
     eng = os.path.abspath(a.engine or default_engine(env))
     if not os.path.isfile(eng):
@@ -1931,7 +2009,9 @@ def run(
         return 2
     cmd_env = dict(env)
     try:
-        v = Verification(capsule, eng, window, logs, decls, cmd_env, say, co, analysis=analysis)
+        tier, tier_reason = resolve_tier(capsule, a.tier)
+        v = Verification(capsule, eng, window, logs, decls, cmd_env, say, co, analysis=analysis,
+                         tier=tier, tier_requested=a.tier, tier_reason=tier_reason)
     except OSError as err:
         res.summary = "the verification could not run: %s" % err
         return 2
@@ -1960,7 +2040,8 @@ def run(
         res.summary = "%d check(s) failed: %s" % (fails, doc.get("fail_reason", "").split("\n", 1)[0])
         return 1
     over = ", ".join("repos/" + r["name"] for r in doc["repos"] or [])
-    res.summary = "light verification passed: %d check(s) over %s (tier %s)" % (len(doc["checks"]), over, doc["tier"]["effective"])
+    res.summary = "%s verification passed: %d check(s) over %s (tier %s)" % (
+        doc["tier"]["effective"], len(doc["checks"]), over, doc["tier"]["effective"])
     return 0
 
 
