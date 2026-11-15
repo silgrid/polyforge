@@ -16,6 +16,7 @@ import {
   PolyforgeError,
   maskPolyforgeCredentials,
   parseOwnerMessageRefusal,
+  READ_TIMEOUT_MS,
 } from "@/lib/polyforge-status";
 
 /** toTrimmedString keeps a string's trimmed form ("" for anything else). */
@@ -191,20 +192,24 @@ const OVERRIDE_TIMEOUT_MS = 120_000;
 const STDERR_CAP = 512;
 
 /** getPolyforgeOverride reads one work item's override view:
- *  `pf [--profile p] --json override <wi>`. Null on an unreadable body
- *  (a garbage answer is no view, never a 5xx); throws PolyforgeError on
- *  pf's refusal (its typed envelope) or a spawn failure. polyforge#42
- *  (G11): the caller is the watch route, which composes the view into its
- *  response and degrades a failed read to a snapshot without the field —
- *  the client's only read face for the view. */
+ *  `pf [--profile p] --json override <wi>`, bounded by the one read
+ *  timeout every pf read shares (`READ_TIMEOUT_MS`) — polyforge#42 (r1#1):
+ *  the read now rides the watch route's answer path, so a hung pf must
+ *  degrade within that bound, never freeze the snapshot. Null on an
+ *  unreadable body (a garbage answer is no view, never a 5xx); throws
+ *  PolyforgeError on pf's refusal (its typed envelope) or a spawn failure
+ *  (a timeout included). polyforge#42 (G11): the caller is the watch route,
+ *  which composes the view into its response and degrades a failed read to
+ *  a snapshot without the field — the client's only read face for the
+ *  view. */
 export async function getPolyforgeOverride(wi: string, profile?: string): Promise<PolyforgeOverrideView | null> {
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync(polyforgePfBin(), [...profileArgv(profile), "--json", "override", wi]));
+    ({ stdout } = await execFileAsync(polyforgePfBin(), [...profileArgv(profile), "--json", "override", wi], { timeout: READ_TIMEOUT_MS }));
   } catch (error) {
     if (error instanceof PolyforgeError) throw error;
     if (error && typeof error === "object" && (error as { killed?: unknown }).killed === true) {
-      throw new PolyforgeError(`pf did not answer within ${Math.round(OVERRIDE_TIMEOUT_MS / 1000)} s`);
+      throw new PolyforgeError(`pf did not answer within ${Math.round(READ_TIMEOUT_MS / 1000)} s`);
     }
     const refusal = error instanceof Error ? parseOwnerMessageRefusal(String((error as { stderr?: unknown }).stderr ?? "")) : null;
     if (refusal) throw new PolyforgeError(refusal.text, refusal.reason);

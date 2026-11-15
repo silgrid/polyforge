@@ -47,7 +47,11 @@ import type { PolyforgeOverrideView } from "./polyforge-overrides";
  */
 
 const PRESENCE_PROBE_TIMEOUT_MS = 3000;
-const READ_TIMEOUT_MS = 10000;
+/** Every pf read's one spawn bound (the watch read, the ops read, the
+ *  override view read — polyforge#42 r1#1): a hung pf degrades within it,
+ *  never freezes its caller. Exported for the override view's read, which
+ *  shares the bound (one fact, one place). */
+export const READ_TIMEOUT_MS = 10000;
 const PRESENCE_TTL_MS = 60000;
 /** A failed presence probe is cached only this long: one
  *  timeout must not hide pf for a minute. */
