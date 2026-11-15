@@ -17,6 +17,11 @@
 // call, lib/__fixtures__/subagents-424/). The rendering scenarios drive the
 // documented wire shape through a stubbed progress read, as
 // e2e/polyforge-271.mjs does. Each scenario prints `PASS S424-<n>`.
+//
+// (owner-intentional change, polyforge#24 by ruling — not a regression): the
+// detail's execution progress renders the SELECTED step's records (default:
+// the current step), so S424-05 asserts that default selection instead of the
+// pre-#24 expand click (polyforge#41).
 import assert from "node:assert/strict";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -249,8 +254,14 @@ try {
       started("e.3", "review", now - 10_000),
     ] };
     await openDetail(page);
-    await dock(page).locator('[data-pf-progress-block-step="build"]').click();
+    // (owner-intentional change, polyforge#24 by ruling): the default selection
+    // is the current step (build), so the ended block is the selection's only —
+    // expanded — block and its entry renders without a click (the pre-#24 click
+    // on the block head folded it); the later step's start line stays out of the
+    // selected step's stream.
+    await waitFor(async () => (await dagStep(page, "build").getAttribute("data-pf-step-selected")) === "true", "the current step starts selected");
     const entry = await waitFor(async () => (await entries(page).count()) === 1 && entries(page).first(), "the ended block's entry renders");
+    assert.ok(!(await text(progressBlock(page))).includes("review"), "the unselected step's start line stays out");
     assert.equal(await entry.getAttribute("data-pf-progress-subagent-status"), "stopped");
     const header = await text(entry.locator("[data-pf-progress-subagent-toggle]"));
     assert.ok(header.includes("stopped") && !/\d+\.\ds/.test(header), header);
