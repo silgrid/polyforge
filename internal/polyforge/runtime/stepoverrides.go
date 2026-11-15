@@ -190,9 +190,28 @@ func (r *Runtime) applyOverrideScene(j *job, ch OverrideChange, posture string) 
 // record: the sealed scene of the last close is read-only and abandoned
 // by the re-claim's fresh clone, so the change must ride the claim.
 func (r *Runtime) applyOverrideBlocked(wi string, ch OverrideChange) (OverrideOutcome, error) {
-	entries, err := r.readPendingOverrides()
+	changed, entry, err := r.mutatePending(wi, ch)
 	if err != nil {
 		return OverrideOutcome{Posture: OverridePostureBlocked}, err
+	}
+	if !changed {
+		return OverrideOutcome{Posture: OverridePostureBlocked, Entry: entry}, nil
+	}
+	r.tapOverride(wi, ch, OverridePostureBlocked)
+	return OverrideOutcome{Posture: OverridePostureBlocked, Changed: true, Entry: entry,
+		Published: false,
+		Note:      "recorded locally; it lands with the next claim of the work item here (pf resume), which carries it into the fresh capsule"}, nil
+}
+
+// mutatePending is the pending record's read-modify-write of work item
+// wi's entry for the change's step, under pendingMu (the record is
+// daemon-global: other work items' actors write it too).
+func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.StepOverride, error) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	entries, err := r.readPendingOverrides()
+	if err != nil {
+		return false, nil, err
 	}
 	cur := entries[wi]
 	if cur == nil {
@@ -200,16 +219,13 @@ func (r *Runtime) applyOverrideBlocked(wi string, ch OverrideChange) (OverrideOu
 	}
 	changed, entry := applyAspect(cur, ch)
 	if !changed {
-		return OverrideOutcome{Posture: OverridePostureBlocked, Entry: entry}, nil
+		return false, entry, nil
 	}
 	entries[wi] = cur
 	if err := r.writePendingOverrides(entries); err != nil {
-		return OverrideOutcome{Posture: OverridePostureBlocked}, err
+		return false, nil, err
 	}
-	r.tapOverride(wi, ch, OverridePostureBlocked)
-	return OverrideOutcome{Posture: OverridePostureBlocked, Changed: true, Entry: entry,
-		Published: false,
-		Note:      "recorded locally; it lands with the next claim of the work item here (pf resume), which carries it into the fresh capsule"}, nil
+	return true, entry, nil
 }
 
 // applyAspect applies the change's one aspect to the step's entry (nil =
@@ -316,6 +332,7 @@ func (r *Runtime) pendingOverridesPath() string {
 
 // readPendingOverrides answers the whole pending record (an empty map
 // when none); a torn file is a loud error, never silently overwritten.
+// The caller holds pendingMu (as for writePendingOverrides).
 func (r *Runtime) readPendingOverrides() (map[string]map[string]*capsule.StepOverride, error) {
 	raw, err := os.ReadFile(r.pendingOverridesPath())
 	if os.IsNotExist(err) {
@@ -352,6 +369,8 @@ func (r *Runtime) writePendingOverrides(m map[string]map[string]*capsule.StepOve
 
 // savePendingOverrides records work item wi's pending overlay entries.
 func (r *Runtime) savePendingOverrides(wi string, entries map[string]*capsule.StepOverride) error {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
 	m, err := r.readPendingOverrides()
 	if err != nil {
 		return err
@@ -368,6 +387,8 @@ func (r *Runtime) PendingStepOverrides(wi string) map[string]*capsule.StepOverri
 	if id == "" {
 		id = wi
 	}
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
 	m, err := r.readPendingOverrides()
 	if err != nil {
 		return nil
@@ -388,6 +409,8 @@ func (r *Runtime) ManualModels(wi string) []string {
 // key goes. A record that cannot be read or merged fails the claim
 // loudly (the operator's recorded change must not silently vanish).
 func (r *Runtime) writePendingStepOverrides(j *job) error {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
 	pend, err := r.readPendingOverrides()
 	if err != nil {
 		return err
@@ -439,6 +462,8 @@ func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.S
 // clearPendingOverrides drops work item wi's pending entries (a terminal
 // close; a blocked close keeps them for the re-claim).
 func (r *Runtime) clearPendingOverrides(wi string) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
 	m, err := r.readPendingOverrides()
 	if err != nil {
 		return

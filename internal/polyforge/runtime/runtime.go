@@ -239,6 +239,11 @@ type Runtime struct {
 	aliases map[string]string
 	// manualMu guards the daemon-local manual-models.json (manualmodels.go).
 	manualMu sync.Mutex
+	// pendingMu guards the daemon-local pending-step-overrides.json
+	// (stepoverrides.go): different work items' actors read-modify-write
+	// that one file. An I/O leaf lock like manualMu, never nested in
+	// another.
+	pendingMu sync.Mutex
 	// claimMu serializes the claiming journal's read-modify-writes: its
 	// writers are different work items' actors.
 	claimMu sync.Mutex
