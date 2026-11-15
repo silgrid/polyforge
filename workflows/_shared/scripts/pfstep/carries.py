@@ -32,12 +32,6 @@ def parse_header(src: str) -> Tuple[str, List[str]]:
     engine reports it: ("declared", globs) — the union of every
     ``carries:`` line — ("undeclared", []) or ("malformed", [] — an empty
     ``carries:`` value or a ``carries`` word without its colon)."""
-    return "", []
-
-
-def parse_carries(src: str) -> List[str]:
-    """The globs a file's opening comment block declares ([] = none, or a
-    malformed declaration)."""
     globs: List[str] = []
     for line in src.split("\n"):
         t = gostr.trim_space(line)
@@ -49,12 +43,19 @@ def parse_carries(src: str) -> List[str]:
         if _CARRIES_KEY.match(c):
             v = gostr.trim_space(_CARRIES_KEY.sub("", c, count=1))
             if v == "":
-                return []
+                return "malformed", []
             globs.extend(g for g in _CARRIES_SPLIT.split(v) if g != "")
             continue
         if _CARRIES_BAD.match(c):
-            return []
-    return globs
+            return "malformed", []
+    return ("declared", globs) if globs else ("undeclared", [])
+
+
+def parse_carries(src: str) -> List[str]:
+    """The globs a file's opening comment block declares ([] = none, or a
+    malformed declaration)."""
+    status, globs = parse_header(src)
+    return globs if status == "declared" else []
 
 
 def engine_root_of(repo_dir: str, rel: str) -> str:
