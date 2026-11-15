@@ -116,7 +116,9 @@ automatically.
    none). Nothing is written to the ledger before the ticket exists. When the
    item's completion standard can be settled from the wrap's evidence, write
    the ticket's `## Acceptance` at creation (`verbs/file.md`, "Acceptance at
-   creation"), so it can be submitted directly; otherwise file it without one.
+   creation"), so it passes the submit-time acceptance check; it is submitted
+   once the pre-submit analysis (`verbs/submit.md`) is in it too, after both
+   the acceptance and the analysis checks pass. Otherwise file it without one.
 3. Store a superseding record of the owning ledger (the record that holds the
    row's state, never a pointer record) with the row at `state=claimed`,
    `claim=<new slug>`. The slug is the back-link; tell the owner both.
