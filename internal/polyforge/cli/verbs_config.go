@@ -410,6 +410,14 @@ func runConfigGet(ctx *Context, args []string) error {
 		src := "default"
 		if v.hasDaemonKey(k.name) {
 			src = "file"
+		} else if k.name == "agent_language" && ctx.cfgScope.profile != "" && ctx.cfgScope.profile != cellcfg.DefaultProfile {
+			// A named Cell's unset agent_language is a live projection of
+			// the default Cell (polyforge#21): get shows the same value and
+			// the same source label list does (polyforge#47 AC4).
+			if v.defaultAgentLanguage != "" {
+				val = v.defaultAgentLanguage
+				src = "default Cell"
+			}
 		}
 		if val == "" {
 			val = daemonDefault(k.name)
