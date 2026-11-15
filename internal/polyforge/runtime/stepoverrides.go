@@ -420,6 +420,10 @@ func (r *Runtime) ManualModels(wi string) []string {
 	return r.loadManualModels(wi)
 }
 
+// pendingPublishFn is the claim's publish of the merged pending record
+// (a seam for the failed-publish test).
+var pendingPublishFn = gitops.CommitPush
+
 // writePendingStepOverrides is the claim's consumption of the pending
 // record: the fresh capsule's overlay file gains the pending entries
 // (aspect merge over what the chain already carried) and the record's
