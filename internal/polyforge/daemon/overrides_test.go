@@ -565,3 +565,50 @@ func TestOverrideStepOriginRefused(t *testing.T) {
 		t.Fatalf("the plain caller's write changed nothing: %+v", res)
 	}
 }
+
+// A blocked clear of the chain the sealed capsule already carries (set
+// while running, published with the chain) is a change: the answer says
+// changed, and the view shows the step's chain cleared, pending — the
+// overlay no longer governs it (r1#5).
+func TestOverrideBlockedClearOfSealedChain(t *testing.T) {
+	f := newOverrideFixture(t, "wi_ov11d")
+	if _, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "merge", Operator: "usr_1", Models: []string{"pi:ovtest/m-two"}}); ae != nil {
+		t.Fatalf("the running write: %s (%s)", ae.Code, ae.Detail)
+	}
+	if err := f.td.rt.Stop(context.Background(), f.wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("blocked close: %v", err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, ok := f.td.rt.Info(f.wi); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the blocked close never dropped the job")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	res, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "merge", Operator: "usr_b", ClearModels: true})
+	if ae != nil {
+		t.Fatalf("the blocked clear was refused: %s (%s)", ae.Code, ae.Detail)
+	}
+	if !res.Changed || res.Posture != "blocked" || res.Published {
+		t.Fatalf("the blocked clear of the sealed chain must be an unpublished blocked change: %+v", res)
+	}
+	if res.Step.Models != nil {
+		t.Fatalf("the answer's row still carries a chain: %+v", res.Step)
+	}
+	v, ae := f.td.ovView(t, f.wi)
+	if ae != nil {
+		t.Fatalf("view: %s", ae.Detail)
+	}
+	var row *protocol.OverrideStepView
+	for i := range v.Steps {
+		if v.Steps[i].ID == "merge" {
+			row = &v.Steps[i]
+		}
+	}
+	if row == nil || !row.Pending || row.Models != nil || row.Source == "step override" || row.Source == "step override (pending)" {
+		t.Fatalf("the merge row must show the chain cleared, pending: %+v", row)
+	}
+}

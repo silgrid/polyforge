@@ -216,3 +216,71 @@ func TestPendingOverrideConcurrentWritersKeepEveryEntry(t *testing.T) {
 		t.Fatalf("%d of %d concurrent blocked writes lost their pending entry (the record's read-modify-write must be serialized)", lost, n)
 	}
 }
+
+// A clear recorded while the work item is held by no job, of a chain its
+// sealed capsule already carries, is a change: the pending record keeps
+// a clear tombstone and the next claim's merge drops the chain the
+// fresh capsule cloned (r1#5 — the clear restores the source below in
+// the blocked posture too). A sibling chain the clear did not name
+// survives the merge.
+func TestPendingOverrideClearTombstoneDropsCapsuleChain(t *testing.T) {
+	r, _ := pendingEnv(t)
+	const wi = "wi_ov11"
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	j := r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the claim must run to a live agent")
+	}
+	capDir := j.capsuleDir
+	// the chains the running posture published into the capsule
+	if err := capsule.WriteStepOverrides(capDir, capsule.StepOverrides{Steps: map[string]*capsule.StepOverride{
+		"review": {Models: []string{"pi:ov/review-chain"}, ModelsBy: "usr_0"},
+		"fix":    {Models: []string{"pi:ov/fix-chain"}, ModelsBy: "usr_0"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("blocked Stop: %v", err)
+	}
+	out, err := r.ApplyStepOverride(context.Background(), wi, OverrideChange{
+		Step: "review", Operator: "usr_1", ClearModels: true, SealedDir: capDir,
+	})
+	if err != nil {
+		t.Fatalf("the blocked clear: %v", err)
+	}
+	if !out.Changed || out.Posture != OverridePostureBlocked {
+		t.Fatalf("clearing the chain the sealed capsule carries must be a blocked change: %+v", out)
+	}
+	if p := r.PendingStepOverrides(wi)["review"]; p == nil || !p.ModelsCleared || p.Models != nil {
+		t.Fatalf("the pending record must keep the clear tombstone: %+v", p)
+	}
+	// a repeated clear is the idempotent no-op
+	if again, err := r.ApplyStepOverride(context.Background(), wi, OverrideChange{
+		Step: "review", Operator: "usr_1", ClearModels: true, SealedDir: capDir,
+	}); err != nil || again.Changed {
+		t.Fatalf("a repeated blocked clear must change nothing: %+v %v", again, err)
+	}
+	// the re-claim merges the tombstone: the cloned chain goes, fix's stays
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("re-claim: %v", err)
+	}
+	j = r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the re-claim must run to a live agent")
+	}
+	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
+	if err != nil {
+		t.Fatalf("read the fresh capsule's overlay: %v", err)
+	}
+	if e := ov.Steps["review"]; e != nil && e.Models != nil {
+		t.Fatalf("the fresh capsule still carries the cleared review chain: %+v", e)
+	}
+	if e := ov.Steps["fix"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ov/fix-chain" {
+		t.Fatalf("the chain the clear did not name must survive the merge: %+v", e)
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishWrapped); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
