@@ -66,6 +66,11 @@ const WIP25 = "wi_E2Eeeee0009"; const SLUGP25 = "pi#25";
 // call (the expanded card is the ended-ticket re-read case, P48A) and whose
 // watch carries a pending step (the ended-ticket override-read count, P48E).
 const WI48A = "wi_E2Eeeee0011"; const SLUG48A = "polyforge#48";
+// polyforge#48 P48D — a running two-step ticket for the owner-echo flow: the
+// composer's accepted message echoes into the flow while the DONE step is
+// manually selected; the daemon's own owner_message line then lands in the
+// RUNNING step's block, outside the selected step's lines.
+const WI48D = "wi_E2Eeeee0012"; const SLUG48D = "polyforge#481";
 // polyforge#31 — scroll-jump buttons fixture: one RUNNING ticket whose
 // event-only stream is long (one step_started + 258 answered lines), so the
 // detail's one scroll region is tall enough to park a reader mid-progress; a
@@ -106,6 +111,7 @@ const JOBS = [
   job(WIP24B, SLUGP24B, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
   job(WIP25, SLUGP25, "running", 1, 30, 5, "pi:glm-e2e", "u_e2e"),
   job(WI48A, SLUG48A, "completed", 1, 900, 880, "pi:glm-e2e", "u_e2e"),
+  job(WI48D, SLUG48D, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
   job(WIP31, SLUG31, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
   job(WIP2R3, SLUG2R3, "running", 1, 61, 5, "pi:glm-e2e", "u_e2e"),
 ];
@@ -281,6 +287,24 @@ const WATCH_48A = { work_item: WI48A, slug: SLUG48A, known: true, job: { status:
   execution: { workflow_status: "completed", updated_at: at3(3), steps: { grill: { status: "done", started_at: at3(1) }, code: { status: "pending" } },
     declared_steps: [{ id: "grill" }, { id: "code" }] },
   events: [], last_seq: 2 };
+// ── polyforge#48 P48D: the running two-step ticket — an event-only stream
+// (grill done with lines, build running with lines) so the composer is open
+// and the owner_message line the scenario appends lands in build's block.
+const ev48D = (n, kind, body) => ({ at: at3(n + 10), kind, work_item: WI48D, body, seq: n });
+const EVENTS_48D = [
+  ev48D(1, "step_started", { step: "grill", model: "pi:glm-e2e", spawn_n: 1 }),
+  ev48D(2, "answered", { step: "grill" }),
+  ev48D(3, "answered", { step: "grill" }),
+  ev48D(4, "step_done", { step: "grill", spawn_n: 1 }),
+  ev48D(5, "step_started", { step: "build", model: "pi:glm-e2e", spawn_n: 1 }),
+  ev48D(6, "answered", { step: "build" }),
+  ev48D(7, "answered", { step: "build" }),
+];
+writeFileSync(join(dataRoot, "events", `wi-${WI48D}.jsonl`), EVENTS_48D.map((event) => JSON.stringify(event)).join("\n") + "\n");
+const WATCH_48D = { work_item: WI48D, slug: SLUG48D, known: true, job: { status: "running" },
+  execution: { workflow_status: "running", current_step: "build", updated_at: at3(17), steps: { grill: { status: "done", started_at: at3(11) }, build: { status: "in_progress", started_at: at3(15) } },
+    declared_steps: [{ id: "grill" }, { id: "build" }] },
+  events: [], last_seq: 7 };
 const WATCH_P24A = { work_item: WIP24A, slug: SLUGP24A, known: true, job: { status: "completed" },
   execution: { workflow_status: "completed", updated_at: at3(9), steps: {
     grill: { status: "done", started_at: "2026-10-18T12:00:00Z" },
@@ -334,7 +358,8 @@ const WATCH_TABLE = (watch112 = WATCH_112) => ({ "pi#108": WATCH_108, wi_E2Eaaaa
   "pi#109": WATCH_109, wi_E2Ecccc0003: WATCH_109, [SLUG112]: watch112, [WI112]: watch112,
   [SLUGP24A]: WATCH_P24A, [WIP24A]: WATCH_P24A, [SLUGP24B]: WATCH_P24B, [WIP24B]: WATCH_P24B,
   [SLUGP25]: WATCH_P25, [WIP25]: WATCH_P25,
-  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31, [SLUG2R3]: WATCH_2R3, [WIP2R3]: WATCH_2R3, [SLUG48A]: WATCH_48A, [WI48A]: WATCH_48A });
+  [SLUG31]: WATCH_P31, [WIP31]: WATCH_P31, [SLUG2R3]: WATCH_2R3, [WIP2R3]: WATCH_2R3, [SLUG48A]: WATCH_48A, [WI48A]: WATCH_48A,
+  [SLUG48D]: WATCH_48D, [WI48D]: WATCH_48D });
 writeFileSync(join(dataRoot, "runtime-state.json"), JSON.stringify({ version: 1, jobs: JOBS.filter((j) => j.work_item_id !== WIP24B).map((j) => j.work_item_id === WI112 ? { work_item_id: WI112, capsule_dir: capsule112 }
   : j.work_item_id === WIP24A ? { work_item_id: WIP24A, capsule_dir: capsuleP24A }
   : j.work_item_id === WIP2R3 ? { work_item_id: WIP2R3, capsule_dir: capsule2R3 }
@@ -369,6 +394,10 @@ const run = () => {
       out(s.overrideWrite);
     }
     out(s.overrideView);
+  }
+  if (rest[0] === "answer") {
+    if (s.answerRefuse) { process.stderr.write(JSON.stringify(s.answerRefuse) + "\\n"); process.exit(1); }
+    out(s.answerAck ?? { kind: "message", at: "2026-10-18T14:00:00Z", disposition: "resume" });
   }
   process.stderr.write("pf: unknown command\\n"); process.exit(2);
 };
@@ -419,6 +448,7 @@ const T = {
   P2R3B: "P2R3B: an answer older than the displayed one is dropped — the first read returns after the second and never overwrites",
   P2R3C: "P2R3C: a replaced read's answer clears only its own mark — no second read piles up while the newer one is in flight",
   P48A: "P48A: An ended ticket's expanded resultless card reads its detail once — the panel's unrelated polls never re-read it (polyforge#48 AC1)",
+  P48D: "P48D: An owner echo hides once its owner line lands in any step's block — the selected step's lines alone never decide delivery (polyforge#48 AC2)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1513,6 +1543,28 @@ try {
     const settled = watchPolls.length;
     await pollUntil(() => watchPolls.length - settled >= 3, "three watch polls pass with the card expanded", 30_000);
     assert.equal(reads.length, 1, `the ended ticket's expanded card is not re-read (${reads.length} reads)`);
+  });
+
+  // P48D — polyforge#48 (AC2): the owner echo's delivery is judged against
+  // every line of the job's whole stream, never the selected step's lines.
+  // The DONE step is manually selected; the message's owner line then lands
+  // in the RUNNING step's block — outside the selected step's lines — and
+  // the echo must still hide (the unfixed tree re-showed it as pending).
+  await checkPage(T.P48D, "echo judged on the whole stream", {}, async (page) => {
+    const panel = await ensureDetail24(page, SLUG48D, WI48D);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    await pollUntil(async () => (await node("build").getAttribute("data-pf-step-selected")) === "true", "the current step starts selected");
+    await node("grill").click();
+    await pollUntil(async () => (await node("grill").getAttribute("data-pf-step-selected")) === "true", "the manual choice selects the done step");
+    const echoRow = panel.locator("[data-pf-progress-owner-note]");
+    await panel.locator("[data-pf-chat-input]").fill("E2E-P48D-OWNER-WORDS");
+    await panel.locator("[data-pf-chat-input]").press("Enter");
+    await pollUntil(async () => (await echoRow.count()) === 1, "the accepted message echoes into the flow");
+    // The daemon records it: the event log's own owner line (msgAt = the ack's
+    // at) lands in build's block, the step that is NOT selected.
+    appendFileSync(join(dataRoot, "events", `wi-${WI48D}.jsonl`),
+      JSON.stringify({ at: at3(20), kind: "owner_message", work_item: WI48D, body: { at: "2026-10-18T14:00:00Z", text: "E2E-P48D-OWNER-WORDS", by: "u_e2e" }, seq: 8 }) + "\n");
+    await pollUntil(async () => (await echoRow.count()) === 0, "the delivered echo hides once its owner line lands in another step's block");
   });
 
   await check(T.AC3, "pf present: no 5xx or console errors", async () => assert.deepEqual(errors.splice(0), []));

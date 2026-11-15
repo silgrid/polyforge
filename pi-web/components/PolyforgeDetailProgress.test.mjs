@@ -166,3 +166,31 @@ test("polyforge#48 AC1: a running ticket re-reads once per real snapshot change,
     state.restore();
   }
 });
+
+test("polyforge#48 AC2: a delivered echo is judged on every line of the job, not the selected step's", async () => {
+  // The owner line naming the echo's msgAt sits in ANOTHER step's block: the
+  // selected step's lines (the snapshot prop) carry no owner line, the whole
+  // stream (allLines) does. A step switch must not make a delivered message
+  // read as pending again.
+  const ECHO = { at: "2026-11-15T10:00:00Z", text: "the owner's words", ack: { kind: "message", delivered: false, disposition: "resume" } };
+  const selectedLines = [narration("b1", "step B's line")];
+  const wholeLines = [narration("b1", "step B's line"),
+    { id: "o1", kind: "owner", text: "the owner's words", msgAt: ECHO.at }];
+  const delivered = setup({ running: true, snapshot: snapshotOf(selectedLines), allLines: wholeLines, echoes: [ECHO] });
+  try {
+    const notes = delivered.tree().filter((node) => "data-pf-progress-owner-note" in node.props);
+    assert.equal(notes.length, 0, `a delivered echo (its owner line in another step's block) does not render (${notes.length} echo rows)`);
+  } finally {
+    delivered.restore();
+  }
+  // Before the event log's own line arrives, the echo is the only record:
+  // it renders with its delivery note (the pending case must not over-hide).
+  const pending = setup({ running: true, snapshot: snapshotOf(selectedLines), allLines: selectedLines, echoes: [ECHO] });
+  try {
+    const notes = pending.tree().filter((node) => "data-pf-progress-owner-note" in node.props);
+    assert.equal(notes.length, 1, "an echo whose owner line has not landed yet renders");
+    assert.match(String(notes[0].props.children), /resume/, "the note shows how far the delivery got");
+  } finally {
+    pending.restore();
+  }
+});
