@@ -2142,8 +2142,13 @@ export function PolyforgePanel({
                               lane-declared skippable step (the waive hint for
                               any other). A step with a live dispatch or one
                               that already ran never shows them. */}
+                          {/* polyforge#48 AC4: the key is the ticket + step —
+                              React remounts the controls on either change, so
+                              a switch starts from a fresh state and never
+                              shows the previous step's input, result or error. */}
                           {watchStatus && selectedStep && stepUnstarted(watchStatus, selectedStep) && (
                             <PolyforgeStepControls
+                              key={`${progressWi ?? "none"}:${selectedStep}`}
                               wi={progressWi}
                               profile={selectedJob?.profile ?? selectedProfile}
                               step={selectedStep}
