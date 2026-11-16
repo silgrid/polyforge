@@ -1,3 +1,4 @@
+// carries: .polyforge/deploy.sh
 package test
 
 // Fake-environment tests for .polyforge/deploy.sh's image-pull swap: the
@@ -356,7 +357,10 @@ c.commit()`
 	d.git("add", "-A")
 	d.git("commit", "-q", "-m", "deployer")
 	d.script = filepath.Join(d.repo, ".polyforge", "deploy.sh")
-	d.env = append(os.Environ(),
+	// the step env's Cell facts never leak from the test process into a
+	// deploy world (polyforge#75): a case sets them itself when it means
+	// them, and the manual path stays hermetic
+	d.env = append(withoutEnv(os.Environ(), "PF_CELL", "PF_CELL_SERVER", "PF_DEPLOY_ENV"),
 		"PATH="+d.path, "FAKE_W="+w, "TMPDIR="+w,
 		"HOME="+filepath.Join(w, "home"), "DOCKER_CONFIG="+filepath.Join(w, "home", ".docker"),
 		"AIHUB_HOST=fakehost", "AIHUB_DATA="+data,
