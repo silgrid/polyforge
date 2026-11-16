@@ -67,7 +67,8 @@ func TestOwnerReviewDeclarationReachesAuthoringSteps(t *testing.T) {
 		if strings.Contains(raw, frag) {
 			t.Errorf("%s carries a second copy of the owner_review fragment", rel)
 		}
-		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, testQualityStepVars(t, bundle, step))
+		vars, params := testQualityStepVars(t, bundle, step)
+		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, vars, params)
 		if err != nil {
 			t.Fatalf("render %s: %v", rel, err)
 		}

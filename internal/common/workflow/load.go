@@ -157,16 +157,27 @@ type Step struct {
 	// round registers (`pf step hub wrap-attrs <name>`) before it may hand
 	// off done — the daemon refuses that hand-off otherwise.
 	WrapAttrs []string
+	// Params is `params` (nil = none): the step's declared parameters,
+	// each name to its lane-default value (a single-line string). The
+	// final value is composed at every dispatch (lane default, the
+	// project's steps.<project>.<step>.params, the work item's pf
+	// override) and fills the definition's {{<name>}} placeholders and the
+	// step's PF_PARAM_<NAME> environment variable; a parameter the
+	// definition never uses is allowed (a script may read it).
+	Params map[string]string
 
 	// varLines are the workflow.yaml lines of the vars' keys (a
 	// vars_files var's: its vars_files key) and path the
 	// step's YAML path (a definition's var defect points back at them);
-	// fileVars marks the vars read through vars_files; nodes are the
+	// fileVars marks the vars read through vars_files; paramLines are the
+	// workflow.yaml lines of the params' keys (a param defect points back
+	// at them); nodes are the
 	// step's known keys' value nodes.
-	varLines map[string]int
-	fileVars map[string]bool
-	path     string
-	nodes    map[string]*yaml.Node
+	varLines   map[string]int
+	fileVars   map[string]bool
+	paramLines map[string]int
+	path       string
+	nodes      map[string]*yaml.Node
 }
 
 // Step answers the step with id (nil when absent).
@@ -995,7 +1006,7 @@ func (l *loader) definition(s *Step) *Definition {
 			s.ID, "steps/"+s.ID+".md", l.sharedRel("steps/"+s.ID+".md"), err)
 		return nil
 	}
-	rendered, problems := renderDefinition(l.shared, raw, s.Vars)
+	rendered, problems := renderDefinition(l.shared, raw, s.Vars, s.Params)
 	// a placeholder problem leaves the placeholder text in place; the
 	// frontmatter is still judged, so one load reports both
 	for _, p := range problems {
@@ -1033,12 +1044,13 @@ type placeholderProblem struct {
 	varName, msg string
 }
 
-// renderDefinition renders one definition with vars and the fragments of
-// the shared tree at shared its other placeholders name, answering every
-// placeholder problem: a placeholder no var or fragment resolves, a var
-// nothing uses, a var shadowing a fragment. Fragments are inserted
-// verbatim and never re-scanned.
-func renderDefinition(shared string, raw []byte, vars map[string]string) ([]byte, []placeholderProblem) {
+// renderDefinition renders one definition with vars, the step's params
+// and the fragments of the shared tree at shared its other placeholders
+// name, answering every placeholder problem: a placeholder no var, param
+// or fragment resolves, a var nothing uses, a var shadowing a fragment.
+// Fragments are inserted verbatim and never re-scanned.
+func renderDefinition(shared string, raw []byte, vars, params map[string]string) ([]byte, []placeholderProblem) {
+	_ = params // the params ride the same resolution once the loader parses them
 	var problems []placeholderProblem
 	lineOf := func(name string) int {
 		idx := strings.Index(string(raw), "{{"+name+"}}")
@@ -1180,21 +1192,23 @@ func parseDefinition(path, id string, raw []byte) (*Definition, []ContractError)
 }
 
 // RenderDefinition reads the definition id of the lane at dir (its own
-// steps/<id>.md, else the shared one) and renders it with vars and its
-// fragments: the whole file, frontmatter included. A placeholder problem
-// is an error; a missing file answers an error os.IsNotExist holds for.
-func RenderDefinition(dir, id string, vars map[string]string) ([]byte, error) {
-	return renderDefinitionFile(dir, SiblingShared(dir), id, vars)
+// steps/<id>.md, else the shared one) and renders it with vars, params and
+// its fragments: the whole file, frontmatter included. A placeholder
+// problem is an error; a missing file answers an error os.IsNotExist
+// holds for. The params are the step's FINAL values at a dispatch (the
+// loader's own read passes the lane defaults).
+func RenderDefinition(dir, id string, vars, params map[string]string) ([]byte, error) {
+	return renderDefinitionFile(dir, SiblingShared(dir), id, vars, params)
 }
 
 // renderDefinitionFile is RenderDefinition over an explicit shared tree.
-func renderDefinitionFile(dir, shared, id string, vars map[string]string) ([]byte, error) {
+func renderDefinitionFile(dir, shared, id string, vars, params map[string]string) ([]byte, error) {
 	path := stepDefinitionPath(dir, shared, id)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	rendered, problems := renderDefinition(shared, raw, vars)
+	rendered, problems := renderDefinition(shared, raw, vars, params)
 	if len(problems) > 0 {
 		msgs := make([]string, 0, len(problems))
 		for _, p := range problems {
@@ -1210,13 +1224,13 @@ func renderDefinitionFile(dir, shared, id string, vars map[string]string) ([]byt
 // the dispatch-time read of what Load judged. A placeholder problem or a
 // frontmatter that does not parse is an error; a missing file answers an
 // error os.IsNotExist holds for.
-func ReadDefinition(dir, id string, vars map[string]string) (*Definition, error) {
-	return readDefinition(dir, SiblingShared(dir), id, vars)
+func ReadDefinition(dir, id string, vars, params map[string]string) (*Definition, error) {
+	return readDefinition(dir, SiblingShared(dir), id, vars, params)
 }
 
 // readDefinition is ReadDefinition over an explicit shared tree.
-func readDefinition(dir, shared, id string, vars map[string]string) (*Definition, error) {
-	rendered, err := renderDefinitionFile(dir, shared, id, vars)
+func readDefinition(dir, shared, id string, vars, params map[string]string) (*Definition, error) {
+	rendered, err := renderDefinitionFile(dir, shared, id, vars, params)
 	if err != nil {
 		return nil, err
 	}

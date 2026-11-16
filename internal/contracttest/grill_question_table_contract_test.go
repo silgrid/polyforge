@@ -28,7 +28,8 @@ const grillTableHeader = "| 问题 | 推荐选项 | 理由 | 重点关注程度 
 // definition the step agent sees, the include rendered in).
 func grillStepDef(t *testing.T, bundle, step string) string {
 	t.Helper()
-	raw, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, testQualityStepVars(t, bundle, step))
+	vars, params := testQualityStepVars(t, bundle, step)
+	raw, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, vars, params)
 	if err != nil {
 		t.Fatalf("render %s/%s: %v", bundle, step, err)
 	}

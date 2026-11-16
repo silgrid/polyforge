@@ -160,7 +160,7 @@ func writeRenderedDefinitions(laneDir, dir string, steps []workflow.Step) error 
 		return err
 	}
 	for _, s := range steps {
-		raw, err := workflow.RenderDefinition(laneDir, s.ID, s.Vars)
+		raw, err := workflow.RenderDefinition(laneDir, s.ID, s.Vars, s.Params)
 		if err != nil {
 			return fmt.Errorf("rendering step %s: %w", s.ID, err)
 		}

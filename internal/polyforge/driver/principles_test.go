@@ -158,22 +158,25 @@ func TestPolyforgeOnlyRulesInAgentsMD(t *testing.T) {
 func shippedStepDef(t *testing.T, bundle, step string) string {
 	t.Helper()
 	dir := filepath.Join(workflowsRootFor(t, bundle), bundle)
-	raw, err := workflow.RenderDefinition(dir, step, shippedVars(t, dir, step))
+	vars, params := shippedVars(t, dir, step)
+	raw, err := workflow.RenderDefinition(dir, step, vars, params)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(raw)
 }
 
-// shippedVars answers the vars a shipped bundle's step entry declares.
-func shippedVars(t *testing.T, bundleDir, step string) map[string]string {
+// shippedVars answers the vars and params a shipped bundle's step entry
+// declares (the render inputs of its dispatched definition at the lane
+// defaults).
+func shippedVars(t *testing.T, bundleDir, step string) (vars, params map[string]string) {
 	t.Helper()
 	wf, err := LoadWorkflow(bundleDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s := wf.step(step); s != nil {
-		return s.Vars
+		return s.Vars, s.Params
 	}
-	return nil
+	return nil, nil
 }

@@ -125,7 +125,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 	if spec == nil {
 		return nil, fmt.Errorf("driver: step %q is not in the workflow bundle", sp.StepID)
 	}
-	def, err := readStepDefinition(a.BundleDir, sp.StepID, spec.Vars)
+	def, err := readStepDefinition(a.BundleDir, sp.StepID, spec.Vars, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -793,10 +793,10 @@ func stepHeader(bundleDir string) (string, error) {
 // readStepDefinition reads the step's definition through the one
 // definition read (workflow.ReadDefinition: the lane's own
 // steps/<id>.md, else workflows/_shared/steps/<id>.md, rendered with the
-// step entry's vars) and answers its body: the step's instruction of
+// step entry's vars and params) and answers its body: the step's instruction of
 // record.
-func readStepDefinition(bundleDir, stepID string, vars map[string]string) (string, error) {
-	def, err := workflow.ReadDefinition(bundleDir, stepID, vars)
+func readStepDefinition(bundleDir, stepID string, vars, params map[string]string) (string, error) {
+	def, err := workflow.ReadDefinition(bundleDir, stepID, vars, params)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", fmt.Errorf("driver: step definition for %q unreadable (expected %s under the bundle, or %s beside it): %w",
