@@ -43,6 +43,11 @@ func TestW80TargetBranchCreateOnlyNeverFastForwards(t *testing.T) {
 	carrierGit(t, src, "commit", "-m", "the clone's tip, a descendant of M1")
 	m2 := carrierGit(t, src, "rev-parse", "main")
 	j.repos = []api.ProjectRepo{{Name: "app", URL: "file://" + src}}
+	// the side clone the test pushes the ancestor tip from once the claim
+	// is about to push (the branch must not exist when the claim clones,
+	// or the claim would take the remote's branch without any push)
+	other := t.TempDir()
+	carrierGit(t, other, "clone", "--quiet", "--", src, ".")
 
 	// park the push: the origin gains the branch at the ANCESTOR tip M1
 	// only once the clone is about to push its descendant tip.
@@ -64,7 +69,7 @@ func TestW80TargetBranchCreateOnlyNeverFastForwards(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("the claim never reached the branch push (30s)")
 	}
-	carrierGit(t, src, "push", "-q", "origin", m1+":refs/heads/epic/12")
+	carrierGit(t, other, "push", "--quiet", src, m1+":refs/heads/epic/12") // the origin's branch appears at the ancestor tip while the parked push waits
 	unpark()
 	if err := <-done; err != nil {
 		t.Fatalf("materialize %s: %v", j.wi, err)
