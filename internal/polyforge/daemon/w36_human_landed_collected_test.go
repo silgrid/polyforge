@@ -5,12 +5,15 @@ package daemon
 // flag — a person's squash or rebase landing, polyforge#36) is in the
 // integrate lane's pool beside a pre-#36 string-shaped one: collect's
 // pool read, through the step's hub on the real aihub fixture, takes
-// every landed record whatever shape named its landed commits.
+// every landed record whatever shape named its landed commits (the
+// batch's take_batch — the step that drops a record naming no merge
+// commit — is the stepscripts package's own test, u7).
 
 import (
 	"encoding/json"
 	"os/exec"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
@@ -72,6 +75,7 @@ func TestW36HumanLandedRecordIsCollected(t *testing.T) {
 			t.Fatalf("collect's pool took a %v record: %v", it.Integration["state"], it)
 		}
 	}
+	sort.Strings(ids)
 	if !reflect.DeepEqual(ids, []string{"wi_lane", "wi_rebase", "wi_squash"}) {
 		t.Fatalf("SYMPTOM: collect's pool is every landed record, the object shapes no less than the strings: %v", ids)
 	}

@@ -99,12 +99,10 @@ func (x *w374DevelopWorld) w36MergeRunAction() map[string]any {
 // marks the PR MERGED at the forge's mergeCommit. Answers the squash.
 func w36HumanSquash(t *testing.T, x *w374DevelopWorld, branch string) string {
 	t.Helper()
-	tmp := filepath.Join(x.w.root, "human-squash")
-	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	origin := x.w.origin("demo")
-	gitRun(t, tmp, "clone", "-q", origin, tmp)
+	tmp := filepath.Join(t.TempDir(), "human-squash")
+	// the bare origin itself (w.origin would re-seed its clone)
+	origin := filepath.Join(x.w.root, "demo.git")
+	gitRun(t, "", "clone", "-q", origin, tmp)
 	gitRun(t, tmp, "fetch", "-q", "origin")
 	gitRun(t, tmp, "checkout", "-q", "-B", "main", "origin/main")
 	gitRun(t, tmp, "merge", "-q", "--squash", "origin/"+branch)
@@ -227,7 +225,7 @@ func TestW36DevelopHumanMergeEndsLanded(t *testing.T) {
 		t.Fatalf("SYMPTOM: pf watch must show the human-merge question with the PR link: %s", out)
 	}
 	// the claim froze the step modes; publish's PR body closed on them
-	if mode := v1ReadString(filepath.Join(capDir, "runtime-state", "step-modes.json")); !strings.Contains(mode, `"merge": "human"`) {
+	if mode := v1ReadString(filepath.Join(capDir, "runtime-state", "step-modes.json")); !strings.Contains(mode, `"merge":"human"`) {
 		t.Fatalf("SYMPTOM: the capsule's frozen step modes must name merge human: %s", mode)
 	}
 	body := v1ReadString(filepath.Join(w.state, "demo", "prs", "1", "body"))
