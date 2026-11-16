@@ -385,6 +385,10 @@ func TestW72AnalysisQueuedWhenSlotsFull(t *testing.T) {
 	if of := analysisOf(t, td, ids[3]); of != "wi_w72_b" {
 		t.Fatalf("the second follows, got %q (order %v)", of, ids)
 	}
+	// the head entry leaves the queue right after its spawn: poll for it
+	for qd := time.Now().Add(5 * time.Second); time.Now().Before(qd) && len(readW72Queue(t, td)) != 0; {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if entries := readW72Queue(t, td); len(entries) != 0 {
 		t.Fatalf("a dispatched queue empties: %+v", entries)
 	}
