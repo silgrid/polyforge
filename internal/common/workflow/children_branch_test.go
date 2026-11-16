@@ -39,8 +39,8 @@ func TestW80ChildrenBranchLoads(t *testing.T) {
 	// the key is optional: a lane without it loads with the zero value
 	plain, errs := workflow.Load(workflowtest.WriteLane(t, t.TempDir(), "demo",
 		"steps:\n  - { id: fix }\n"))
-	if len(errs) != 0 || plain == nil || plain.ChildrenBranch != "" {
-		t.Fatalf("a lane declaring no children_branch loads with the zero value, got %q, %v", plain, errs)
+	if plain == nil || plain.ChildrenBranch != "" || len(errs) != 0 {
+		t.Fatalf("a lane declaring no children_branch loads with the zero value, got %v, %v", plain, errs)
 	}
 }
 
