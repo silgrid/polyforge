@@ -115,8 +115,10 @@ type WatchExecution struct {
 	Overrides map[string]WatchOverride `json:"overrides,omitempty"`
 	// Rewinds counts the rewinds on record, kept apart:
 	// the automatic ones a gate's on_fail spent (counted toward the lane's
-	// max_rewinds) and the owner's (a hand-off citing the owner, charged
-	// to no budget). Absent when the workflow is unreadable.
+	// max_rewinds), the owner's (a hand-off citing the owner, charged
+	// to no budget) and the lane-declared uncounted class's (charged
+	// to no budget, counted toward its own cap). Absent when the
+	// workflow is unreadable.
 	Rewinds *WatchRewinds `json:"rewinds,omitempty"`
 }
 

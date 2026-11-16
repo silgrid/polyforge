@@ -797,6 +797,18 @@ func TestW374DevelopLaneEndToEnd(t *testing.T) {
 	if n, _ := x2.RewindStats["count"].(float64); n != 3 || len(rewinds) != 3 {
 		t.Fatalf("three rewinds (review FAIL and publish's verify-first FAIL charged, merge's refused FAIL the lane's declared uncounted class), got rewind_stats %v, rewinds %v", x2.RewindStats, rewinds)
 	}
+	// review r1#4: the third rewind is the lane's declared uncounted class
+	// (merge.py's default-branch-moved FAIL spends no max_rewinds), the
+	// first two charged
+	if rws, _ := x2.RewindStats["rewinds"].([]any); len(rws) != 3 {
+		t.Fatalf("the ledger carries the three rewinds: %v", x2.RewindStats)
+	} else {
+		for i, want := range []string{"charged", "charged", "uncounted"} {
+			if m, _ := rws[i].(map[string]any); m["class"] != want {
+				t.Fatalf("rewind %d's class: %v, want %s (the ledger: %v)", i, m["class"], want, rws)
+			}
+		}
+	}
 	if !strings.Contains(rewinds[1], `"gate":"publish"`) || !strings.Contains(rewinds[1], `"target":"build"`) {
 		t.Fatalf("the second rewind must be publish's verify-first FAIL back to build: %s", rewinds[1])
 	}
