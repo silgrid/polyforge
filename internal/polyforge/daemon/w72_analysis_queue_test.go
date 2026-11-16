@@ -13,6 +13,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,10 +142,12 @@ func w72RawBody(body any) []byte {
 // w72Runner gates every task on one channel and records the task ids in
 // run order (the FIFO the queue must keep).
 type w72Runner struct {
-	mu    sync.Mutex
-	gate  chan struct{}
-	calls []string
-	specs []task.RunSpec
+	mu     sync.Mutex
+	gate   chan struct{}
+	fail   bool // set mid-flight: the next released call answers an error
+	capped bool // set mid-flight: the next released call answers a token cap
+	calls  []string
+	specs  []task.RunSpec
 }
 
 func newW72Runner() *w72Runner {
@@ -160,6 +163,15 @@ func (r *w72Runner) Run(ctx context.Context, spec task.RunSpec, progress func(in
 	case <-r.gate:
 	case <-ctx.Done():
 		return task.RunResult{}, ctx.Err()
+	}
+	r.mu.Lock()
+	fail, capped := r.fail, r.capped
+	r.mu.Unlock()
+	if fail {
+		return task.RunResult{}, errors.New("the model exploded")
+	}
+	if capped {
+		return task.RunResult{Report: "half a draft", Tokens: 5, TokenCapped: true}, nil
 	}
 	if progress != nil {
 		progress(5)
