@@ -249,6 +249,30 @@ func quoteList(items []string) string {
 	return strings.Join(parts, ", ")
 }
 
+// quoteRegexList renders the inner body of a failure-classification
+// pattern array (polyforge#51): an item holding a backslash is a
+// SINGLE-QUOTED literal — the parser refuses backslashes in double quotes
+// (Q2: the parser stays strict, the writer adapts) — an item holding both
+// ' and a backslash is refused (write the quote as \x27), and a line break
+// never fits the one-line syntax.
+func quoteRegexList(key string, items []string) (string, error) {
+	parts := make([]string, len(items))
+	for i, s := range items {
+		switch {
+		case strings.ContainsAny(s, "\n\r"):
+			return "", fmt.Errorf("config set %s: pattern %q holds a line break — the cli.toml syntax is one line", key, s)
+		case strings.ContainsRune(s, '\\'):
+			if strings.ContainsRune(s, '\'') {
+				return "", fmt.Errorf("config set %s: pattern %q holds both ' and a backslash, which the cli.toml syntax cannot express — write the quote as \\x27 in the regex", key, s)
+			}
+			parts[i] = "'" + s + "'"
+		default:
+			parts[i] = strconv.Quote(s)
+		}
+	}
+	return strings.Join(parts, ", "), nil
+}
+
 // ---------------------------------------------------------------------------
 // The [summarize] table and the [memory_policy."<path>".<entry>] family
 // a set replaces exactly the addressed key's statement

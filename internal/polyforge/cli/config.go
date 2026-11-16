@@ -29,6 +29,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -345,6 +346,45 @@ func parseDaemonTable(file string, kvs []daemonKV) (DaemonSettings, error) {
 				return s, refuse(fmt.Sprintf(`must be "%s" or "%s" (quoted), got %s`, stepcall.LangEN, stepcall.LangZhCN, kv.val))
 			}
 			s.AgentLanguage = v
+		case "transient_error_patterns", "model_error_patterns":
+			// polyforge#51: the additional failure-classification lists. Every
+			// item is one RE2 regex, validated here so a bad pattern refuses
+			// the whole load (a write lands only after this same parse accepts
+			// the proposed bytes). A backslash pattern is written by the editor
+			// as a single-quoted literal; the parser accepts either quote.
+			items, aerr := parseQuotedArray(kv.val, kv.line)
+			if aerr != nil {
+				return s, refuse(fmt.Sprintf("must be an array of quoted regex strings, e.g. ['\\b402\\b', \"over quota\"]: %v", aerr))
+			}
+			for _, item := range items {
+				if item == "" {
+					return s, refuse("an empty pattern matches every failure — remove it")
+				}
+				if _, cerr := regexp.Compile(item); cerr != nil {
+					return s, refuse(fmt.Sprintf("pattern %q is not a compilable RE2 regex: %v", item, cerr))
+				}
+			}
+			if kv.key == "transient_error_patterns" {
+				s.TransientErrorPatterns = items
+			} else {
+				s.ModelErrorPatterns = items
+			}
+		case "slow_model_median_latency", "slow_model_p90_latency":
+			// polyforge#51: the slow-model judgement's two single-call latency
+			// bounds (the median and the p90); unset = the supervise default.
+			v, err := parseQuotedValue(kv.val, kv.line)
+			if err != nil {
+				return s, refuse(`must be a quoted Go duration, e.g. "60s"`)
+			}
+			d, derr := time.ParseDuration(v)
+			if derr != nil || d <= 0 {
+				return s, refuse(fmt.Sprintf(`%q is not a positive Go duration (e.g. "60s", "3m")`, v))
+			}
+			if kv.key == "slow_model_median_latency" {
+				s.SlowModelMedianLatency = d
+			} else {
+				s.SlowModelP90Latency = d
+			}
 		default:
 			if coreFlatKeys[kv.key] {
 				return s, refuse("a top-level key: move it above the [daemon] header (every key below the header belongs to the table)")
@@ -1021,6 +1061,12 @@ func LoadCellFile(host Config, path string) (Config, error) {
 	cfg.Daemon.BarLoadThreshold = host.Daemon.BarLoadThreshold
 	cfg.Daemon.HarnessRoot = host.Daemon.HarnessRoot
 	cfg.Daemon.OperatorAgentDir = host.Daemon.OperatorAgentDir
+	// the Host's failure-classification lists and slow-model thresholds are
+	// Host-only keys a named Cell inherits (polyforge#51)
+	cfg.Daemon.TransientErrorPatterns = host.Daemon.TransientErrorPatterns
+	cfg.Daemon.ModelErrorPatterns = host.Daemon.ModelErrorPatterns
+	cfg.Daemon.SlowModelMedianLatency = host.Daemon.SlowModelMedianLatency
+	cfg.Daemon.SlowModelP90Latency = host.Daemon.SlowModelP90Latency
 	return cfg, nil
 }
 

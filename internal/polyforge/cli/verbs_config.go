@@ -22,6 +22,7 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
@@ -329,6 +330,14 @@ func daemonValue(d DaemonSettings, key string) string {
 		}
 	case "agent_language":
 		return d.AgentLanguage
+	case "slow_model_median_latency":
+		if d.SlowModelMedianLatency != 0 {
+			return d.SlowModelMedianLatency.String()
+		}
+	case "slow_model_p90_latency":
+		if d.SlowModelP90Latency != 0 {
+			return d.SlowModelP90Latency.String()
+		}
 	}
 	return ""
 }
@@ -336,6 +345,12 @@ func daemonValue(d DaemonSettings, key string) string {
 // daemonListValue answers one [daemon] list key's effective value (nil =
 // unset): the failure-classification pattern lists of polyforge#51.
 func daemonListValue(d DaemonSettings, key string) []string {
+	switch key {
+	case "transient_error_patterns":
+		return d.TransientErrorPatterns
+	case "model_error_patterns":
+		return d.ModelErrorPatterns
+	}
 	return nil
 }
 
@@ -352,6 +367,10 @@ func daemonDefault(key string) string {
 		return strconv.FormatFloat(DefaultBarLoadThreshold(), 'g', -1, 64)
 	case "agent_language":
 		return stepcall.DefaultLanguage
+	case "slow_model_median_latency":
+		return supervise.DefaultSlowModelMedianLatency.String()
+	case "slow_model_p90_latency":
+		return supervise.DefaultSlowModelP90Latency.String()
 	}
 	return ""
 }
@@ -531,6 +550,9 @@ func runConfigList(ctx *Context) error {
 		value := strValue(val)
 		if n, err := strconv.Atoi(val); err == nil && ConfigSchema(key)["kind"] == "int" {
 			value = n // an integer key's value is a JSON number (like summarize.interval_sec)
+		}
+		if ConfigSchema(key)["kind"] == "regex-list" {
+			value = daemonListValue(v.eff.Daemon, key) // a pattern list's value is a JSON array
 		}
 		items = append(items, configListItem{Key: key, Value: value, Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)})
 	}
@@ -847,6 +869,19 @@ func configSetValue(ctx *Context, k configKey, args []string) (string, []string,
 	}
 	if k.kind == keyDaemon {
 		switch k.name {
+		case "transient_error_patterns", "model_error_patterns":
+			// polyforge#51: the value is a JSON list of regex strings (the
+			// same shape memory_policy lists take); the writer adapts the
+			// quoting per item so a backslash pattern reads back verbatim.
+			var items []string
+			if err := json.Unmarshal([]byte(val), &items); err != nil {
+				return "", nil, fmt.Errorf("config set %s: the value is a JSON list of regex strings, e.g. '[\"\\\\b402\\\\b\", \"over quota\"]': %v", k.raw, err)
+			}
+			body, err := quoteRegexList(k.raw, items)
+			if err != nil {
+				return "", nil, err
+			}
+			return "[" + body + "]", nil, nil
 		case "max_concurrent_jobs", "max_concurrent_tasks", "max_concurrent_bars", "bar_load_threshold", "cell_max_concurrent_jobs":
 			return strings.TrimSpace(val), nil, nil
 		default:

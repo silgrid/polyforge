@@ -65,6 +65,10 @@ var configKeyDefs = []configKeyDef{
 	{"machine_id", keyDaemon, ConfigRestartOnly},
 	{"heartbeat_every", keyDaemon, ConfigLive},
 	{"agent_language", keyDaemon, ConfigLive},
+	{"transient_error_patterns", keyDaemon, ConfigLive},
+	{"model_error_patterns", keyDaemon, ConfigLive},
+	{"slow_model_median_latency", keyDaemon, ConfigLive},
+	{"slow_model_p90_latency", keyDaemon, ConfigLive},
 	{"summarize.models", keySummarize, ConfigLive},
 	{"summarize.language", keySummarize, ConfigLive},
 	{"summarize.interval_sec", keySummarize, ConfigLive},
@@ -106,6 +110,10 @@ func ConfigSchema(name string) map[string]any {
 		return map[string]any{"kind": "duration", "min_exclusive": 0}
 	case "agent_language":
 		return map[string]any{"kind": "enum", "values": []string{stepcall.LangEN, stepcall.LangZhCN}}
+	case "transient_error_patterns", "model_error_patterns":
+		return map[string]any{"kind": "regex-list"}
+	case "slow_model_median_latency", "slow_model_p90_latency":
+		return map[string]any{"kind": "duration", "min_exclusive": 0}
 	case "model.source":
 		return map[string]any{"kind": "model-source"}
 	case "summarize.models":
