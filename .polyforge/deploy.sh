@@ -302,6 +302,23 @@ if [ -z "$DRY" ] && [ -z "$CONFIRM_SET" ] && [ -z "$PREFLIGHT" ]; then
   exit 1
 fi
 
+# tc_mismatch ("" = the target matches): the deploy target a step
+# process must reach is its work item's Cell's server - PF_CELL_SERVER
+# (polyforge#75). The target compared is the MERGED AIHUB_HOST (the
+# environment wins over the file, above) with its user part dropped, any
+# ssh alias resolved LOCALLY - ssh -G reads the configuration, never the
+# network. The answer is the full refusal text naming both sides.
+_tc_mismatch() {
+  _tc_host="${AIHUB_HOST#*@}"
+  _tc_resolved="$(ssh -G "$_tc_host" 2>/dev/null | sed -n 's/^hostname //p' | head -n 1)"
+  [ -n "$_tc_resolved" ] || _tc_resolved="$_tc_host"
+  _tc_cell="$(printf '%s' "$PF_CELL_SERVER" | sed -n 's#^[a-zA-Z][a-zA-Z0-9+.-]*://\([^:/@]*\).*#\1#p' | tr '[:upper:]' '[:lower:]')"
+  if [ "$(printf '%s' "$_tc_resolved" | tr '[:upper:]' '[:lower:]')" != "$_tc_cell" ]; then
+    printf "the deploy target %s (AIHUB_HOST %s) is not this work item's Cell server %s (PF_CELL_SERVER %s)" \
+      "$_tc_resolved" "$AIHUB_HOST" "$_tc_cell" "$PF_CELL_SERVER"
+  fi
+}
+
 # ------------------------------------------------------------- the targets
 # (polyforge#76) One release work item deploys every target of this
 # machine at once. The daemon states every serving Cell's facts as
@@ -329,6 +346,46 @@ EOF
   _mt_n="$(printf '%s' "$_mt_rows" | grep -c . || true)"
   if [ "$_mt_n" -ge 2 ]; then
     printf 'deploy: targets (%s): %s\n' "$_mt_n" "$(printf '%s' "$_mt_rows" | awk '{printf "%s ", $1}')"
+    # (polyforge#76, AC2) The multi-target checks run BEFORE any network
+    # work - a real deploy, --dry-run and --preflight alike - and every
+    # refusal names both sides. _mt_host answers a target's MERGED
+    # AIHUB_HOST (the environment wins over the file, the rule the run
+    # below applies), read in a subshell so nothing leaks into this
+    # process; the comparison is polyforge#75's own (_tc_mismatch, ssh -G
+    # resolving an alias locally - never a network call).
+    _mt_host() {
+      ( _mt_snap="$(export -p)"
+        [ -f "$1" ] && { set -a; . "$1"; set +a; eval "$_mt_snap"; }
+        printf '%s' "${AIHUB_HOST:-}" )
+    }
+    # the work item's own Cell must be one of the targets: a release work
+    # item never deploys targets its Cell does not own
+    _mt_mine=""
+    while read -r _mt_p _mt_s _mt_e; do
+      [ -n "$_mt_p" ] || continue
+      [ "$_mt_p" = "${PF_CELL:-}" ] && _mt_mine=1
+    done <<MTROWS
+$_mt_rows
+MTROWS
+    if [ -z "$_mt_mine" ]; then
+      echo "deploy: REFUSED - the work item's Cell ${PF_CELL:-<none stated>} is not among this machine's deploy targets ($(printf '%s' "$_mt_rows" | awk '{printf "%s ", $1}')); a release work item never deploys targets its Cell does not own. Nothing was touched." >&2
+      exit 1
+    fi
+    # every target's deploy configuration must point at ITS OWN Cell's
+    # server - the #60 shape (one Cell's file naming another Cell's host)
+    # is refused here, before the first child runs
+    while read -r _mt_p _mt_s _mt_e; do
+      [ -n "$_mt_p" ] || continue
+      _mt_h="$(_mt_host "$_mt_e")"
+      [ -n "$_mt_h" ] || continue
+      _mt_refusal="$(AIHUB_HOST="$_mt_h" PF_CELL_SERVER="$_mt_s" _tc_mismatch)"
+      if [ -n "$_mt_refusal" ]; then
+        echo "deploy: REFUSED - target $_mt_p: $_mt_refusal. Nothing was touched." >&2
+        exit 1
+      fi
+    done <<MTROWS
+$_mt_rows
+MTROWS
     _mt_rc=0
     while read -r _mt_p _mt_s _mt_e; do
       [ -n "$_mt_p" ] || continue
@@ -365,22 +422,6 @@ if [ -n "${HOME:-}" ] && [ -f "$DEPLOY_ENV" ]; then
 fi
 GH_REPO="${GH_REPO:-silgrid/polyforge}"
 
-# tc_mismatch ("" = the target matches): the deploy target a step
-# process must reach is its work item's Cell's server - PF_CELL_SERVER
-# (polyforge#75). The target compared is the MERGED AIHUB_HOST (the
-# environment wins over the file, above) with its user part dropped, any
-# ssh alias resolved LOCALLY - ssh -G reads the configuration, never the
-# network. The answer is the full refusal text naming both sides.
-_tc_mismatch() {
-  _tc_host="${AIHUB_HOST#*@}"
-  _tc_resolved="$(ssh -G "$_tc_host" 2>/dev/null | sed -n 's/^hostname //p' | head -n 1)"
-  [ -n "$_tc_resolved" ] || _tc_resolved="$_tc_host"
-  _tc_cell="$(printf '%s' "$PF_CELL_SERVER" | sed -n 's#^[a-zA-Z][a-zA-Z0-9+.-]*://\([^:/@]*\).*#\1#p' | tr '[:upper:]' '[:lower:]')"
-  if [ "$(printf '%s' "$_tc_resolved" | tr '[:upper:]' '[:lower:]')" != "$_tc_cell" ]; then
-    printf "the deploy target %s (AIHUB_HOST %s) is not this work item's Cell server %s (PF_CELL_SERVER %s)" \
-      "$_tc_resolved" "$AIHUB_HOST" "$_tc_cell" "$PF_CELL_SERVER"
-  fi
-}
 # target_check: the Cell's target gate - refuse naming both sides before any
 # network work, or say the check was skipped (a run without the Cell facts:
 # a human running the script by hand, whose behavior is unchanged).
