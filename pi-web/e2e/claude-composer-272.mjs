@@ -179,6 +179,20 @@ const triggerText = async () => (await modelTrigger().innerText()).trim();
 const effortTrigger = () => bottomBar().locator('button[aria-label="Change reasoning level"]').first();
 const compactTrigger = () => bottomBar().locator('button[aria-label="Compact context"]').first();
 const stopCompactTrigger = () => bottomBar().locator('button[aria-label="Stop compaction"]').first();
+
+/**
+ * Clicks the compact control past the run-end click guard (RUN_END_CLICK_GUARD_MS,
+ * 600 ms — polyforge#71 now guards a claude session's clicks too): the scenario
+ * has already waited the turn out, so one fixed beat after the control is
+ * enabled is the same idiom e2e/context-after-compact-368.mjs uses.
+ */
+async function clickCompact() {
+  const control = compactTrigger();
+  await control.waitFor({ state: "visible", timeout: NAV_MS });
+  await waitFor(() => control.isEnabled(), NAV_MS, "the Compact control stays disabled");
+  await delay(1_000);
+  await control.click({ timeout: ACTION_MS });
+}
 const moreTrigger = () => bottomBar().locator('button[aria-label="More controls"]').first();
 const collapseTrigger = () => bottomBar().locator('button[aria-label="Collapse controls"]').first();
 const effortOptions = () => page.locator('[role="option"]');
@@ -693,7 +707,7 @@ try {
     await waitFor(async () => (await getJson(`/api/agent/${encodeURIComponent(id)}`)).state?.isStreaming === false, 60_000, "the creation prompt's turn never ended", 400);
     const launchesBefore = launchesFor(id).length;
     assert.ok(await compactTrigger().count() > 0, "the claude composer has no compact control");
-    await compactTrigger().click({ timeout: ACTION_MS });
+    await clickCompact();
     const line = await waitFor(() => userLines().find((text) => text === "/compact"), 30_000, "no bare /compact user line reached the child's stdin");
     assert.equal(line, "/compact", `the compact command carried more than claude's own /compact: ${JSON.stringify(line)}`);
     assert.equal(launchesFor(id).length, launchesBefore, "compaction restarted the conversation");
@@ -707,7 +721,7 @@ try {
     // polyforge#71 (AC5): the compact control hides while a turn runs.
     await waitFor(async () => (await getJson(`/api/agent/${encodeURIComponent(id)}`)).state?.isStreaming === false, 60_000, "the creation prompt's turn never ended", 400);
     assert.ok(await compactTrigger().count() > 0, "the claude composer has no compact control");
-    await compactTrigger().click({ timeout: ACTION_MS });
+    await clickCompact();
     const line = await waitFor(async () => {
       const matches = await composer().getByText(COMPACT_RESULT_EN).allInnerTexts().catch(() => []);
       return matches.map((text) => text.trim()).find((text) => COMPACT_RESULT_EN.test(text)) ?? false;
@@ -717,6 +731,8 @@ try {
     // so in zh-CN it is found by its zh label, and the locale is restored whatever happens.
     await setLocale("zh-CN");
     try {
+      await bottomBar().locator('button[aria-label="压缩上下文"]').first().waitFor({ state: "visible", timeout: NAV_MS });
+      await delay(1_000);
       await bottomBar().locator('button[aria-label="压缩上下文"]').first().click({ timeout: ACTION_MS });
       await waitFor(async () => (await composer().getByText(COMPACT_RESULT_ZH_CN).count()) > 0, 60_000, "the zh-CN compact result line is not 「已压缩：压缩前 N tokens」", 500);
       const zh = (await composer().getByText(COMPACT_RESULT_ZH_CN).first().innerText()).trim();
@@ -734,7 +750,7 @@ try {
     // polyforge#71 (AC5): the compact control hides while a turn runs.
     await waitFor(async () => (await getJson(`/api/agent/${encodeURIComponent(done)}`)).state?.isStreaming === false, 60_000, "the creation prompt's turn never ended", 400);
     assert.ok(await compactTrigger().count() > 0, "the claude composer has no compact control");
-    await compactTrigger().click({ timeout: ACTION_MS });
+    await clickCompact();
     await waitFor(() => transcriptLines(done).some((entry) => entry.type === "custom" && entry.customType === "compaction") || transcriptLines(done).some((entry) => entry.subtype === "compact_boundary"), 60_000, "claude's transcript recorded no compaction boundary", 500);
     await openSession(done);
     await waitFor(async () => (await page.getByText("compaction", { exact: true }).count()) > 0, 30_000, "a reload does not show the compaction marker in the history");
@@ -746,7 +762,7 @@ try {
     await openSession(stopped);
     await waitFor(() => isRunning(stopped), 30_000, "the hold stub child was not started");
     assert.ok(await compactTrigger().count() > 0, "the claude composer has no compact control");
-    await compactTrigger().click({ timeout: ACTION_MS });
+    await clickCompact();
     await waitFor(async () => (await stopCompactTrigger().count()) > 0, 30_000, "compaction never became a running turn with a Stop control");
     // Amendment 3 (owner-approved, code-272-authored-defects), rewritten for #71: a
     // compaction is a running turn, so the composer row holds Steer and Stop — there is
