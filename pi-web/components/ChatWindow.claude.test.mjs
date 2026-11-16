@@ -37,6 +37,9 @@ test("a claude session gets claude's model, effort and compact handlers and pi's
     /onSteer=\{isActivePane && agentRunning \? handleSteer : undefined\}/,
     /onRecallQueue=\{isClaudeSession \? undefined : handleRecallQueue\}/,
     /onFollowUp=\{isActivePane && agentRunning && !isClaudeSession \? handleFollowUp : undefined\}/,
+    // polyforge#71 (AC4): a `/` message sent while a turn runs takes the same
+    // entry on both harnesses — ChatWindow no longer branches on the harness here.
+    /onPromptWithStreamingBehavior=\{isActivePane && agentRunning \? handlePromptWithStreamingBehavior : undefined\}/,
     /onBuiltinCommand=\{isClaudeSession \? undefined : handleBuiltinSlashCommand\}/,
     /claude=\{claudeComposer\}/,
   ]) assert.match(chatWindow, pattern);
