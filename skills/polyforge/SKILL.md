@@ -299,9 +299,11 @@ Eight standing rules, binding on every polyforge session:
    Filing does not grill: a ticket may be filed as a bare idea. Before `pf submit`, run
    the acceptance check of `verbs/submit.md` — and, beside it, its analysis check: no
    criterion under `## Acceptance` / `## 验收` means stop and grill the acceptance in
-   the session; no content under `## 分析` means run the pre-submit analysis first —
-   a read-only `pf task spawn` errand whose report the session writes into the
-   ticket's `## 分析` section, or the owner's dated 「免分析」.
+   the session; no content under `## 分析` means the pre-submit analysis is not in yet —
+   the daemon schedules it at `pf file create` (the analysis task writes the section
+   itself; the owner confirms the draft with `pf file analysis confirm <id>`), else a
+   read-only `pf task spawn` errand whose report the session writes in, or the owner's
+   dated 「免分析」.
 8. **Sync the session clone before reading it as fact (session-layer clone sync).**
    Nothing keeps `<workspace>/.repo/<repo>` current: a claim clones fresh into the
    capsule, but the session's reading copy can sit hundreds of commits behind origin's

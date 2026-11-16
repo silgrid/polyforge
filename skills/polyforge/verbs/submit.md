@@ -118,12 +118,25 @@ progress (its event history carries a session lifecycle event or a resume)
 is past the check: the `pf ops end-session` takeover resubmits exactly
 such a ticket with a plain `pf submit` (polyforge#47).
 
-- **When to run it**: right after an execution ticket is filed, or when the
-  submit check refuses a ticket for the missing analysis, propose the
-  analysis to the owner: a read-only `pf task spawn` errand over the ticket
-  and the code it touches. The task cannot write the ticket, so the session
-  writes what it reports. For a small ticket the owner may instead explicitly
-  waive the analysis.
+- **Who runs it (polyforge#72's mechanism)**: `pf file create` of a ticket
+  whose lane requires acceptance and whose body has no `## 分析` section
+  asks this machine's daemon to schedule one analysis task at once — the
+  create's output names the task id, or says 已排队 when the task lane is
+  full (the daemon queues what it cannot dispatch, survives its own
+  restart, and re-queues an interrupted analysis at most twice). The task
+  writes its draft itself, as it analyzes, through the ONE write a task may
+  make: `pf task analysis-write --content <text|@file|->`, which replaces
+  only the analyzed ticket's `## 分析` section; everything else a task
+  writes is still refused. The section the mechanism writes carries the
+  unconfirmed marker until the owner confirms: until
+  `pf file analysis confirm <id>` runs, the daemon's auto-pull skips the
+  ticket and `pf queue` marks it 需要交互：分析待确认. A stopped analysis leaves a
+  comment on the ticket; what it wrote stays. If no analysis was scheduled
+  (the create's notice said 未安排分析), the fallback is the session's own
+  errand — a read-only `pf task spawn` over the ticket and the code it
+  touches, the session writing its report with
+  `pf file edit <id> --content @file` — and on the owner's explicit skip
+  the dated line below.
 - **The report's fixed format — 7 items, defined here and here only** (the
   filing, task and execute-intent fragments reference this list):
   1. 改动范围（文件 / 模块）；
@@ -133,9 +146,13 @@ such a ticket with a plain `pf submit` (polyforge#47).
   5. 相关记忆（`pf recall` 命中）；
   6. 风险；
   7. 待决问题（每条给选项和推荐，不拍板）。
-- **Writing it in**: the session writes the report — or, on the owner's
-  explicit skip, one dated line 「免分析（<date>，<who>）」 — into the ticket's
-  `## 分析` section (`pf file edit <id> --content @file`), then submits.
+- **Writing it in**: the auto-scheduled analysis task writes the report
+  into the ticket's `## 分析` section itself (`pf task analysis-write`);
+  the owner then confirms it with `pf file analysis confirm`
+  (`pf file analysis confirm <id>`). A session errand writes with
+  `pf file edit` (`pf file edit <id> --content @file`); on the owner's
+  explicit skip, one dated line 「免分析（<date>，<who>）」 goes in that
+  section. Then submit.
 - **The boundary against grilling**: the analysis only establishes facts —
   what the code does, what memory answers, which existing tests and docs
   assert the old behavior — and lists the open questions with a

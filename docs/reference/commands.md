@@ -115,10 +115,33 @@ The daemon's auto-pull skips a ticket either check would refuse: it stays
 queued, and `pf queue` marks it in the STATUS cell —
 `queued (需要交互：缺验收)` (no acceptance criterion),
 `queued (需要交互：未分析)` (no analysis section), and both marks when both
-are missing. The merged `--json` document (`pf queue` without `--project`)
-carries `"acceptance_missing": true` and `"analysis_missing": true` on such
-items (absent on every other); the `--project` `--json` body is the
-server's raw answer and carries neither.
+are missing. It also skips a ticket whose analysis the daemon's analysis
+task wrote and the owner has not yet confirmed (the section still carries
+the unconfirmed marker): `queued (需要交互：分析待确认)`. The merged `--json`
+document (`pf queue` without `--project`) carries
+`"acceptance_missing": true`, `"analysis_missing": true` and
+`"analysis_unconfirmed": true` on such items (absent on every other); the
+`--project` `--json` body is the server's raw answer and carries none.
+
+**The analysis mechanism (polyforge#72).** `pf file create` of an execution
+ticket on a lane that requires acceptance, whose content has no `## 分析`
+section, asks this machine's daemon (`POST /analysis/enqueue`) to schedule
+one analysis task: the output names the task id, says 分析已排队 (the task lane
+is full — the request is persisted, survives a daemon restart, and an
+interrupted analysis is re-queued at most twice), or says 未安排分析 with the
+reason (no daemon reachable, or the daemon refused) — the ticket is filed
+either way. The analysis task follows the 7-item report format and writes
+its draft with `pf task analysis-write`
+(`pf task analysis-write --content <text|@file|->`), which replaces only
+the analyzed ticket's `## 分析` section (a compare-and-swap on the ticket's
+`updated_at`, retried on a concurrent edit) and marks it unconfirmed; it is
+the one write a task may make. A task carries its idle and tool windows like
+a step: a silent or stuck candidate is killed and the next candidate model
+starts from the ticket as it stands; a stopped analysis leaves a comment
+naming the cause and the last item written. `pf file analysis confirm`
+(`pf file analysis confirm <id>`) strips the unconfirmed marker — the
+owner's word that the draft is the ticket's analysis — and the ticket
+becomes claimable.
 
 ## `pf msg` — user-to-user messages
 
@@ -245,6 +268,7 @@ pf task spawn --project <p> [--max-duration D] [--max-tokens N] "<prompt>"
 pf task list [--json]
 pf task show <id> [--json]
 pf task cancel <id>
+pf task analysis-write --content <text|@file|->   (a running analysis task only)
 ```
 
 A task is ONE fresh harness agent started from a free-text prompt (no session
@@ -292,7 +316,9 @@ its four columns.
   `DAEMON-403` on EVERY mutating request to its Unix socket (spawning or
   cancelling a task, `/step/call`, job lifecycle, shutdown included) and
   `pf` refuses it every write verb locally before any config read or network
-  call. Its reads stay open: `pf recall` and `pf memory show` go through the
+  call. The one exception is `pf task analysis-write` from a running analysis
+  task: `POST /task/analysis-write` replaces only its own ticket's `## 分析`
+  section (`docs/reference/uds-routes.md`). Its reads stay open: `pf recall` and `pf memory show` go through the
   daemon's `/task/memories` face, scoped to the task's own project, so that
   face needs no aihub key. The aihub-direct verbs (`file create/edit/dep`,
   `remember`, `msg send`) never reach the daemon: the spawn env carries no
@@ -323,7 +349,11 @@ its four columns.
   resumed).
 - **Limit.** At most `max_concurrent_tasks` one-off tasks run per Host
   (`[daemon]`, default 2, live on reload — every Cell's spawns share it);
-  a spawn beyond it is refused `DAEMON-409`, never queued. Tasks take no
+  a spawn beyond it is refused `DAEMON-409`, never queued. The analysis
+  tasks the daemon schedules itself (polyforge#72, `pf submit` above) share
+  the same limit but are queued instead: the daemon persists the request and
+  dispatches it when a slot frees, and re-queues an analysis a restart
+  interrupted at most twice. Tasks take no
   `max_concurrent_jobs` slot (polyforge#74). A Cell whose execution is disabled
   (`execution_disabled` on `pf cell list`) refuses every spawn `DAEMON-409`
   `execution is disabled on this Cell: <reason>`: no record, slot or run.
