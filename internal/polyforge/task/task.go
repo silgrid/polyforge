@@ -71,8 +71,8 @@ const (
 	MaxDuration = 60 * time.Minute
 	MaxTokens   = 1000000
 
-// ReportCapBytes is the maximum captured assistant text a report
-// keeps; bytes dropped by the cap mark the report truncated.
+	// ReportCapBytes is the maximum captured assistant text a report
+	// keeps; bytes dropped by the cap mark the report truncated.
 	ReportCapBytes = 2 << 20
 
 	// SummaryTailChars is the maximum length of the chat/watcher summary
