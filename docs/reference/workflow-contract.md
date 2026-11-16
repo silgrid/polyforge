@@ -108,6 +108,7 @@ process runs.
 | `on_fail` | `{target}`, only on a gate (`WFC-140`) |
 | `waivable` | bool, default false; only a gate declaring `waivable: true` may hand off `waive` (`WFC-112` on a non-gate) |
 | `skippable` | bool, default false (`WFC-112` otherwise): a project may switch the step off with `steps.<project>.<step>.skip: true` in its workspace yaml ([config.md](config.md)); the switch is fixed when the work item is first claimed, and a switched-off step is never dispatched (its execution status is `skipped`). A step not declaring it always runs |
+| `human_mergeable` | bool, default false (`WFC-112` otherwise): a project may declare the step's work done by a person with `steps.<project>.<step>.by: human` in its workspace yaml ([config.md](config.md)); the declaration is fixed when the work item is first claimed, and a claim of a lane that does not declare the step `human_mergeable` is refused naming it — the mode never reaches a lane that does not ask for it |
 | `budget` | `{wall_minutes, tool_minutes}` |
 | `model_candidates` | the step's candidates (`WFC-198`); exclusive with `model_tier` (`WFC-112`) |
 | `model_tier` | a tier of the lane's `defaults.tiers` (`WFC-198` when the table lacks it; `WFC-112` beside `model_candidates`) |
