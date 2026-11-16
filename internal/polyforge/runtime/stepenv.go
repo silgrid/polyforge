@@ -57,9 +57,17 @@ type StepEnv struct {
 
 // Vars answers the harness-neutral entries of the step env: PF_PYTHON (an
 // empty value included: a set name with an empty value is still the
-// daemon's answer).
+// daemon's answer) and the step's Cell facts (polyforge#75): PF_CELL,
+// PF_CELL_SERVER and PF_DEPLOY_ENV, in that order — empty values included
+// the same way, so a step can always tell a stated fact from an inherited
+// copy (the sanitize point strips those).
 func (e StepEnv) Vars() []string {
-	return []string{spawn.EnvPython + "=" + e.Python}
+	return []string{
+		spawn.EnvPython + "=" + e.Python,
+		spawn.EnvCell + "=" + e.Cell,
+		spawn.EnvCellServer + "=" + e.CellServer,
+		spawn.EnvDeployEnv + "=" + e.DeployEnv,
+	}
 }
 
 // StepPath answers the PATH a step process of the harness binary

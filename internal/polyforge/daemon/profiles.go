@@ -92,10 +92,7 @@ func (d *Daemon) profilesRoute(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, api.ErrDaemonForbidden, reason)
 		return
 	}
-	file := d.cfg.ConfigPath
-	if file == "" {
-		file = cli.DefaultConfigPath()
-	}
+	file := d.configFile()
 	info := d.profileInfo(cellcfg.DefaultProfile, file)
 	var idx []cellcfg.IndexEntry
 	for _, ws := range info.Workspaces {

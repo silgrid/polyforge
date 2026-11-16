@@ -18,18 +18,46 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
+	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
 
 // stepEnv answers the daemon-owned step environment (runtime.StepEnv,
 // bound as the runtime's Config.StepEnv): the live command_path ("" =
 // unset), this daemon's pf directory and the Python interpreter the daemon
-// resolved at its start (Config.Python), the step scripts' PF_PYTHON.
+// resolved at its start (Config.Python), the step scripts' PF_PYTHON — and
+// the step's Cell facts (polyforge#75): this Cell's name (d.profile),
+// its server as configured (Config.Server) and the deploy configuration
+// file that Cell's deploys read (deployEnvPath). All are read live at
+// every derivation, so a reload moves them with it.
 func (d *Daemon) stepEnv() runtime.StepEnv {
 	d.reloadMu.Lock()
 	p := d.commandPath
 	d.reloadMu.Unlock()
-	return runtime.StepEnv{CommandPath: p, PfDir: d.pfDir, Python: d.cfg.Python}
+	return runtime.StepEnv{CommandPath: p, PfDir: d.pfDir, Python: d.cfg.Python,
+		Cell: d.profile(), CellServer: d.cfg.Server, DeployEnv: d.deployEnvPath()}
+}
+
+// configFile answers the Cell file this daemon loaded — the --config flag
+// when it stated one, else the documented default — the one file a reload
+// re-reads (reload.go) and the row GET /profiles reports (profiles.go).
+// It is also the anchor of the Host configuration directory, where this
+// Cell's deploy configuration file lives beside it.
+func (d *Daemon) configFile() string {
+	if d.cfg.ConfigPath != "" {
+		return d.cfg.ConfigPath
+	}
+	return cli.DefaultConfigPath()
+}
+
+// deployEnvPath answers the deploy configuration file this Cell's deploys
+// read: cellcfg.DeployEnvFileName under the Host configuration directory
+// (the directory of the Cell file this daemon loaded, the documented
+// default's when it stated none) — deploy.env for the default Cell,
+// deploy-<profile>.env for a named one, always an absolute path.
+func (d *Daemon) deployEnvPath() string {
+	return filepath.Join(filepath.Dir(d.configFile()), cellcfg.DeployEnvFileName(d.profile()))
 }
 
 // selfDir answers the directory of this process's executable, symlinks
