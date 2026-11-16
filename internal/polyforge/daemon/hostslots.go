@@ -13,7 +13,7 @@ package daemon
 // ceilings like work-item jobs: a task spawn reserves a slot of its Cell
 // through admitTask (refused, nothing queued, at either ceiling) and a job
 // start counts every Cell's running tasks. The task lanes of every Cell
-// also share one background-model-call bound of task.Limit (task.Slots);
+// also share one background-model-call bound of task.DefaultLimit (task.Slots);
 // a summarize call takes none of it (the summarize lane keeps its own
 // per-work-item in-flight and interval guards).
 

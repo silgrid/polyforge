@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-// TestSlotsBoundIsShared: the shared bound admits Limit holders in total,
+// TestSlotsBoundIsShared: the shared bound admits DefaultLimit holders in total,
 // whichever manager asks, and a nil Slots never refuses.
 func TestSlotsBoundIsShared(t *testing.T) {
 	s := &Slots{}
-	for i := 0; i < Limit; i++ {
+	for i := 0; i < DefaultLimit; i++ {
 		if !s.acquire() {
 			t.Fatalf("slot %d refused below the bound", i)
 		}
@@ -21,7 +21,7 @@ func TestSlotsBoundIsShared(t *testing.T) {
 		t.Fatal("the shared bound was passed")
 	}
 	s.release()
-	if s.Running() != Limit-1 || !s.acquire() {
+	if s.Running() != DefaultLimit-1 || !s.acquire() {
 		t.Fatal("a released slot must be reusable")
 	}
 	var none *Slots

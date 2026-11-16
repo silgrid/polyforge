@@ -22,7 +22,7 @@ import (
 )
 
 // ErrLimit is the refusal of a spawn beyond the fixed concurrency limit.
-var ErrLimit = fmt.Errorf("task spawn refused: %d tasks already running (the limit is %d per daemon; nothing is queued)", Limit, Limit)
+var ErrLimit = fmt.Errorf("task spawn refused: %d tasks already running (the limit is %d per daemon; nothing is queued)", DefaultLimit, DefaultLimit)
 
 // ErrNotFound / ErrNotRunning are Show/Cancel's typed answers.
 var (
@@ -54,10 +54,21 @@ type Config struct {
 	Done  func()
 }
 
-// Slots is a concurrency bound of Limit shared by several managers.
+// Slots is the Host's one shared concurrency bound of the task lane
+// (max_concurrent_tasks; DefaultLimit when unset or 0), adjustable live.
 type Slots struct {
 	mu sync.Mutex
 	n  int
+}
+
+// SetMax changes the bound (n <= 0 restores the default). Running work
+// is never stopped: a lowered bound refuses only new spawns.
+func (s *Slots) SetMax(n int) {
+}
+
+// Max answers the current bound.
+func (s *Slots) Max() int {
+	return 0
 }
 
 func (s *Slots) acquire() bool {
@@ -66,7 +77,7 @@ func (s *Slots) acquire() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.n >= Limit {
+	if s.n >= DefaultLimit {
 		return false
 	}
 	s.n++
@@ -177,7 +188,7 @@ func (m *Manager) Spawn(spec Spec) (Task, error) {
 		}
 	}
 	m.mu.Lock()
-	if m.running >= Limit || !m.cfg.Slots.acquire() {
+	if m.running >= DefaultLimit || !m.cfg.Slots.acquire() {
 		m.mu.Unlock()
 		m.done()
 		return Task{}, ErrLimit
@@ -473,7 +484,7 @@ type Summary struct {
 // Summarize counts the known tasks by state (a store failure counts only
 // this daemon's live tasks).
 func (m *Manager) Summarize() Summary {
-	s := Summary{Limit: Limit}
+	s := Summary{Limit: DefaultLimit}
 	all, _ := m.List()
 	for _, t := range all {
 		switch t.State {

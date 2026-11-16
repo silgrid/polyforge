@@ -105,7 +105,7 @@ func TestTaskSpawnRefusals(t *testing.T) {
 			t.Fatalf("%s = %d %s, want a refusal naming %q", tc.body, code, body, tc.want)
 		}
 	}
-	for i := 0; i < task.Limit; i++ {
+	for i := 0; i < task.DefaultLimit; i++ {
 		if code, body := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"x"}`); code != 200 {
 			t.Fatalf("spawn %d = %d %s", i, code, body)
 		}

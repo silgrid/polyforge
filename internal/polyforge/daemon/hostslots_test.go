@@ -146,12 +146,12 @@ func TestSummarizeRunsWithTheTaskBoundFull(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, workspace.FileName), []byte(taskYaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < task.Limit; i++ {
+	for i := 0; i < task.DefaultLimit; i++ {
 		if code, body := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"x"}`); code != 200 {
 			t.Fatalf("spawn %d = %d %s", i, code, body)
 		}
 	}
-	if n := slots.Running(); n != task.Limit {
+	if n := slots.Running(); n != task.DefaultLimit {
 		t.Fatalf("premise: every task slot is taken, running=%d", n)
 	}
 	if code, body := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"x"}`); code != 409 {
