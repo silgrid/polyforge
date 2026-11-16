@@ -374,7 +374,8 @@ func TestV29ReleaseLaneRunsTheProceduresItself(t *testing.T) {
 		}
 	}
 	// the tool windows: release its own 120 minutes, verify the daemon's
-	// global window, deploy its own 30
+	// global window, deploy its own 60 (polyforge#76: one run deploys every
+	// target of the machine)
 	if got := calls[0]["tool_window_ms"]; got != v29WindowMS(120*time.Minute) {
 		t.Errorf("the release procedure ran under PF_TOOL_WINDOW_MS=%s, want %s (budget.tool_minutes: 120)", got, v29WindowMS(120*time.Minute))
 	}
@@ -385,8 +386,8 @@ func TestV29ReleaseLaneRunsTheProceduresItself(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deploy's environment record: %v", err)
 	}
-	if got := strings.TrimSpace(string(raw)); got != v29WindowMS(30*time.Minute) {
-		t.Errorf("deploy ran under PF_TOOL_WINDOW_MS=%s, want %s (budget.tool_minutes: 30)", got, v29WindowMS(30*time.Minute))
+	if got := strings.TrimSpace(string(raw)); got != v29WindowMS(60*time.Minute) {
+		t.Errorf("deploy ran under PF_TOOL_WINDOW_MS=%s, want %s (budget.tool_minutes: 60)", got, v29WindowMS(60*time.Minute))
 	}
 	// the procedure's output is the step's log, as the step text tees it
 	if log, err := os.ReadFile(filepath.Join(capDir, "artifacts", "release.log")); err != nil || !strings.Contains(string(log), "version="+v29Version) {
