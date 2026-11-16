@@ -116,7 +116,8 @@ root's `.polyforge/` scripts, tested there).
   sensitive to the suites' page-load timeouts; lower `E2E_JOBS` if a loaded
   machine times out.
 - The suites' scaffolding lives in one helper module, `e2e/harness.mjs`:
-  the scenario runner (`createCheck`), the bounded polls
+  the scenario runner (`createCheck`), the E2E_ONLY scenario selection
+  (`e2eOnlySelection`), the bounded polls
   (`createWaitFor`, `createWaitUntil`, `eventually`), one suite's browser and
   server (`createHarness`: `launchBrowser`, `openPage`, `withPage`,
   `startServer`, `close`), the `/api/polyforge/*` route mock (`mockPolyforge`) and the context-usage mock,
@@ -246,16 +247,23 @@ root's `.polyforge/` scripts, tested there).
   and reuse an installed `node_modules` when `package-lock.json` is unchanged
   rather than running `npm ci` per reproduction (`cp -al` the directory; a
   symlinked `node_modules` is rejected by Turbopack).
-- Run only some scenarios of one suite: `E2E_ONLY=<id>[,<id>…]`, the
-  scenario ids a suite names in its own scenario table. `e2e/polyforge.mjs`
-  (polyforge#63) and `e2e/polyforge-messages-prompt-281.mjs`
-  support it: `E2E_ONLY=AC1,P24A node e2e/polyforge.mjs` runs only those
-  scenarios, unset or empty runs every one as before (the selection parses
-  the same way in both, through the shared `e2e/harness.mjs`). An id the
-  suite does not know fails the run at once — before any server starts —
-  naming the id and the suite's ids, so a typo never silently runs zero
-  scenarios. This is the unit red-green switch for the big suites: a change
-  that touches one scenario re-runs just that one instead of the whole suite.
+- Run only some scenarios of one suite: `E2E_ONLY=<id>[,<id>…]`, comma
+  separated. `e2e/polyforge.mjs` (polyforge#63) takes the ids of its own
+  scenario table, parsed through the shared `e2e/harness.mjs` selection:
+  `E2E_ONLY=AC1,P24A node e2e/polyforge.mjs` runs only those scenarios, unset
+  or empty runs every one as before, and an id the table does not hold fails
+  the run at once — before any server starts — naming the id and the suite's
+  ids, so a typo never silently runs zero scenarios. A filtered run still
+  pays the suite's whole setup (fixtures, browser, both server phases), and
+  its scenarios share that setup: a scenario that relies on state an earlier
+  scenario leaves behind needs those companions listed too (verified with
+  single-scenario selections).
+  `e2e/polyforge-messages-prompt-281.mjs` filters the same variable its own
+  way: locally, by check label, with no id validation — an id that matches
+  nothing is simply never run, and an all-unknown selection only surfaces at
+  the end as `suite: no scenario ran`. This is the unit red-green switch for
+  the big suites: a change that touches one scenario re-runs just that one
+  instead of the whole suite.
 
 ## Build-once mode
 
