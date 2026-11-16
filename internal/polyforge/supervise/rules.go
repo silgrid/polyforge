@@ -96,6 +96,13 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 	return nil
 }
 
+// JudgeTask applies the task lane's subset of the rules (polyforge#72,
+// AC9/ruling 15): 0 (harness_silent), 2 (model_hung), 3 (tool_hung)
+// only. Rules 1/1b (a step's turn-end grace) and 4 (the cumulative step
+// bound T) are step-only — a task's one turn ends with its process and
+// its bound is its own wall/token budget. Stub (build u3, red first).
+func JudgeTask(s Snapshot, now time.Time) *StepDead { return nil }
+
 // slowModelOwnsTimeout is rule 4's attribution (D1, changing
 // polyforge#147 D6): T is CUMULATIVE over the whole step, so the dispatch
 // running when it runs out may have spent only a sliver of it. That
