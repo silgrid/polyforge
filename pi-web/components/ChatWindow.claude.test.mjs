@@ -46,9 +46,8 @@ test("a claude session gets claude's model, effort and compact handlers and pi's
     /onBuiltinCommand=\{handleBuiltinSlashCommand\}/,
     /claude=\{claudeComposer\}/,
   ]) assert.match(chatWindow, pattern);
-  // polyforge#71 (AC2): a claude session's bare /mcp goes to claude as text —
-  // Settings › MCP belongs to pi's built-in MCP extension, never to a claude session.
-  assert.match(hook, /if \(isClaudeSession \|\| args \|\| !onOpenSettings\) return \{ handled: false \};/);
+  // polyforge#71 r1#3: the claude routing gate (only /compact and /session reach pi's
+  // handler) is pinned as behaviour in hooks/mcp-slash-command.test.mjs — no source pin here.
 });
 
 test("a fresh composer passes the harness switch (with its model reset), the claude model and effort; an open claude session switches model and effort, never the harness", () => {
