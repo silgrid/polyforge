@@ -297,26 +297,26 @@ func w74WriteConfig(t *testing.T, path, ws string, tasks int) {
 	}
 }
 
-// w74TaskID answers the id of the running task whose prompt is prompt.
+// w74TaskID answers the id of the running task whose prompt summary is
+// prompt (the list row carries no full prompt — only its bounded summary).
 func w74TaskID(t *testing.T, sock, prompt string) string {
 	t.Helper()
 	code, body := w74Do(t, sock, "", "GET", "/task/list", "")
 	if code != 200 {
 		t.Fatalf("task list = %d %s", code, body)
 	}
-	type row struct {
-		ID    string `json:"id"`
-		State string `json:"state"`
-		Spec  struct {
-			Prompt string `json:"prompt"`
-		} `json:"spec"`
+	var page struct {
+		Tasks []struct {
+			ID            string `json:"id"`
+			State         string `json:"state"`
+			PromptSummary string `json:"prompt_summary"`
+		} `json:"tasks"`
 	}
-	var rows []row
-	if err := json.Unmarshal([]byte(body), &rows); err != nil {
+	if err := json.Unmarshal([]byte(body), &page); err != nil {
 		t.Fatalf("task list: %v", err)
 	}
-	for _, r := range rows {
-		if r.Spec.Prompt == prompt && r.State == string(task.StateRunning) {
+	for _, r := range page.Tasks {
+		if r.PromptSummary == prompt && r.State == string(task.StateRunning) {
 			return r.ID
 		}
 	}
