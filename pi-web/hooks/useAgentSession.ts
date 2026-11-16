@@ -799,6 +799,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [liveModel, setLiveModel] = useState<{ provider: string; modelId: string } | null>(null);
   const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string } | null>(null);
   const [modelSwitching, setModelSwitching] = useState(false);
+  // polyforge#71 (AC6): an open claude session's model switch shows pi's spinner
+  // while claude answers; the effort switch shows none (owner ruling Q3=A).
+  const [claudeModelSwitching, setClaudeModelSwitching] = useState(false);
   const [isCompacting, setIsCompacting] = useState(false);
   const [autoCompactionEnabled, setAutoCompactionEnabled] = useState(true);
   const [compactError, setCompactError] = useState<string | null>(null);
@@ -3676,6 +3679,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current;
     if (!sid) return;
     const prefix = command.type === "set_model" ? "claude.switchModelError" : command.type === "set_effort" ? "claude.effortError" : "claude.permissionModeError";
+    // polyforge#71 (AC6): only a model switch turns the selector's spinner on.
+    const modelSwitch = command.type === "set_model";
+    if (modelSwitch) setClaudeModelSwitching(true);
     try {
       const result = await sendAgentCommand<ClaudeSwitchResult | null>(sid, command);
       if (result?.rejected) {
@@ -3694,6 +3700,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }));
     } catch (e) {
       setClaudeSwitchError({ sessionId: sid, message: translateRef.current(prefix, { error: e instanceof Error ? e.message : String(e) }) });
+    } finally {
+      if (modelSwitch) setClaudeModelSwitching(false);
     }
   }, []);
 
@@ -4299,7 +4307,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     data, loading, error, activeLeafId, messages, activeToolResults, entryIds, messageKeys, historyCursor, hasEarlierMessages, earlierTurnCount, streamingStore,
     agentRunning, modelNames, modelList, modelError, missingCwd, modelScopeWarnings, isModelScopeActive, allModelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
-    isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats, autoCompactionEnabled,
+    isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, claudeModelSwitching, sessionStats, autoCompactionEnabled,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     isAutoModelSelection: isNew && newSessionModel === null,

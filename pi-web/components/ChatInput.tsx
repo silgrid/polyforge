@@ -177,6 +177,8 @@ export interface ClaudeComposerState {
   switchError?: string | null;
   /** An open session: its event stream has said whether a turn runs. Until then its controls stay disabled. */
   stateKnown?: boolean;
+  /** polyforge#71 (AC6): a live model switch is under way — the selector shows pi's spinner. */
+  modelSwitching?: boolean;
 }
 
 /**
@@ -2165,6 +2167,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       value={{ provider: CLAUDE_PROVIDER, modelId: claude.model }}
       onChange={(_provider, modelId) => { if (isClaudeModelName(modelId) && modelId !== claude.model) claude.onModelChange?.(modelId); }}
       disabled={claudeBusy}
+      busy={claude?.modelSwitching === true}
       confirmSwitch={confirmModelSwitch}
     />
   ) : null;

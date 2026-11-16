@@ -336,7 +336,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     loadContext, activeLeafId, scrollToBottom, scrollToMessage, scrollToOffset,
     refreshFromDisk,
     manualFetch, manualFetching, manualFetchAvailable,
-    isClaudeSession, claudeSessionChoices, newSessionHarness, chooseNewSessionHarness,
+    isClaudeSession, claudeSessionChoices, claudeModelSwitching, newSessionHarness, chooseNewSessionHarness,
     newSessionClaudeEffort, handleClaudeModelChange, handleClaudeEffortChange, handleClaudeLaunchPermissionModeChange, claudeSwitchError, claudeStateKnown,
     relayToClaudeSubagent,
     claudeBackgroundTasks, claudeForceStopWork, stopClaudeBackgroundTask, readClaudeTaskOutput, forceStopClaudeTurn, dismissClaudeForceStop,
@@ -389,10 +389,12 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       onLaunchPermissionModeChange: handleClaudeLaunchPermissionModeChange,
       // r3: plan is offered unless the session's approvals are on deny.
       planAvailable: claudeSessionChoices?.planAvailable !== false,
+      // polyforge#71 (AC6): the selector's spinner while a live model switch is under way.
+      modelSwitching: claudeModelSwitching,
       switchError: claudeSwitchError,
       stateKnown: claudeStateKnown,
     };
-  }, [isNew, isClaudeSession, claudeSessionChoices, newSessionHarness, newSessionClaudeModel, newSessionClaudeEffort, claudeAvailability, chooseNewSessionHarness, setNewSessionClaudeModel, handleClaudeModelChange, handleClaudeEffortChange, handleClaudeLaunchPermissionModeChange, claudeSwitchError, claudeStateKnown]);
+  }, [isNew, isClaudeSession, claudeSessionChoices, claudeModelSwitching, newSessionHarness, newSessionClaudeModel, newSessionClaudeEffort, claudeAvailability, chooseNewSessionHarness, setNewSessionClaudeModel, handleClaudeModelChange, handleClaudeEffortChange, handleClaudeLaunchPermissionModeChange, claudeSwitchError, claudeStateKnown]);
   // External-write signal: each new key reloads the mounted session from disk
   // exactly once, and only when it targets the session this window shows.
   const externalSessionChangeKeyRef = useRef<number | null>(null);
