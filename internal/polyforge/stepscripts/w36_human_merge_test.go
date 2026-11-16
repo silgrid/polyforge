@@ -76,6 +76,7 @@ func w36HumanLands(t *testing.T, w *gitWorld, repo, method string, amend map[str
 		for rel, body := range amend {
 			writeFile(t, tmp, rel, body)
 		}
+		w36Git(t, tmp, "add", "-A")
 		w36Git(t, tmp, "commit", "-q", "-m", w.branch+" (#1)")
 	}
 	w36Git(t, tmp, "push", "-q", "origin", "HEAD:refs/heads/main")
