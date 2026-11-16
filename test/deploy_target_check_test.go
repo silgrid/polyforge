@@ -13,6 +13,7 @@ package test
 // its problems, so a release lane fails before a version is claimed.
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -94,6 +95,70 @@ func TestDeployCellTargetCheckPreflight(t *testing.T) {
 	if err != nil || !strings.Contains(out, "preflight OK for component aihub (target fakehost)") {
 		t.Fatalf("a matching target must keep the preflight OK, got %v\n%s", err, out)
 	}
+}
+
+// TestDeployCellTargetCheckFileSourcedTarget (review r1#3): the target a
+// step-driven deploy of a named Cell reaches comes from that Cell's own
+// deploy configuration - the PF_DEPLOY_ENV file's AIHUB_HOST - while the
+// daemon states the server (PF_CELL_SERVER): the check compares THAT
+// value (the #60 path: the configuration file carried the wrong host),
+// and the environment still wins over the file, so the comparison is on
+// the merged value.
+func TestDeployCellTargetCheckFileSourcedTarget(t *testing.T) {
+	// worldDeployFile answers a ready world whose AIHUB_HOST comes from a
+	// PF_DEPLOY_ENV file only (removed from the environment), the rest of
+	// the topology staying in the environment.
+	worldDeployFile := func(host string) *deployWorld {
+		d := newReadyWorld(t)
+		d.env = withoutEnv(d.env, "AIHUB_HOST")
+		cellEnv := filepath.Join(d.w, "cfg", "deploy-cell.env")
+		wf(t, cellEnv, "AIHUB_HOST="+host+"\n", 0o600)
+		d.env = append(d.env, "PF_DEPLOY_ENV="+cellEnv, "PF_CELL=public")
+		return d
+	}
+	t.Run("file-sourced mismatch refuses", func(t *testing.T) {
+		for name, args := range map[string][]string{
+			"real deploy": {"v2.3.0", "--confirm", "v2.3.0"},
+			"dry-run":     {"v2.3.0", "--dry-run"},
+		} {
+			d := worldDeployFile("root@fakehost")
+			d.env = append(d.env, "PF_CELL_SERVER=http://other.example:8080")
+			out, err := d.run("", args...)
+			if exitCode(err) != 1 || !strings.Contains(out, "REFUSED") {
+				t.Fatalf("%s: want exit 1 + REFUSED, got %v\n%s", name, err, out)
+			}
+			for _, want := range []string{"fakehost", "other.example"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("%s: the refusal must name both sides, missing %q:\n%s", name, want, out)
+				}
+			}
+			if got := d.logOf("log-ssh") + d.logOf("log-gh") + d.logOf("log-docker"); got != "" {
+				t.Errorf("%s: network/tool work happened before the refusal:\n%s", name, got)
+			}
+			d.assertNothingMutated("v2.2.1")
+		}
+	})
+	t.Run("file-sourced match lets the dry-run run", func(t *testing.T) {
+		d := worldDeployFile("root@fakehost")
+		d.env = append(d.env, "PF_CELL_SERVER=http://fakehost:8080")
+		out, err := d.run("", "v2.3.0", "--dry-run")
+		if err != nil || !strings.Contains(out, "dry-run: steps 0-1 ran read-only") {
+			t.Fatalf("a matching Cell file must let the dry-run run: %v\n%s", err, out)
+		}
+		d.assertNothingMutated("v2.2.1")
+	})
+	t.Run("the environment still wins over the file", func(t *testing.T) {
+		d := worldDeployFile("root@fakehost")
+		d.env = append(d.env, "PF_CELL_SERVER=http://fakehost:8080", "AIHUB_HOST=root@mismatch.example")
+		out, err := d.run("", "v2.3.0", "--dry-run")
+		if exitCode(err) != 1 || !strings.Contains(out, "REFUSED") || !strings.Contains(out, "mismatch.example") {
+			t.Fatalf("the merged AIHUB_HOST (the environment's) is what the check compares, got %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "fakehost") {
+			t.Errorf("the refusal names the Cell's server side too:\n%s", out)
+		}
+		d.assertNothingMutated("v2.2.1")
+	})
 }
 
 // TestDeployCellTargetCheckSkippedWithoutCell: without the Cell facts (a
