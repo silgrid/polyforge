@@ -503,6 +503,8 @@ try {
     const id = await createClaudeSession({ message: "E2E 272 switch one", model: "claude-opus-5-5" });
     await openSession(id);
     await waitFor(() => launchesFor(id).length > 0, 30_000, "the claude child was not launched");
+    // The creation prompt's turn ends first (the selector stays disabled while it runs).
+    await waitFor(async () => (await getJson(`/api/agent/${encodeURIComponent(id)}`)).state?.isStreaming === false, 60_000, "the creation prompt's turn never ended", 400);
     const launchesBefore = launchesFor(id).length;
     await chooseModel("sonnet");
     await waitFor(() => /"sonnet"/.test(stdinJson()) && stdinEvents().some((event) => event.type === "control_request"), 30_000, "no claude control request carrying the new model reached the child's stdin");
@@ -764,10 +766,8 @@ try {
     assert.ok(await compactTrigger().count() > 0, "the claude composer has no compact control");
     await clickCompact();
     await waitFor(async () => (await stopCompactTrigger().count()) > 0, 30_000, "compaction never became a running turn with a Stop control");
-    // Amendment 3 (owner-approved, code-272-authored-defects), rewritten for #71: a
-    // compaction is a running turn, so the composer row holds Steer and Stop — there is
-    // no Send button to disable (the send paths are blocked at their entry instead).
-    assert.equal(await composer().locator('button[aria-label="Send"]').count(), 0, "a Send button is rendered while a compaction runs");
+    // Amendment 3 (owner-approved, code-272-authored-defects): Send sits in the textarea row, not the bottom bar.
+    assert.ok(await composer().locator('button[aria-label="Send"]').first().isDisabled(), "Send is not disabled while a compaction runs");
     assert.ok((await page.getByText("E2E 272 stop compact", { exact: false }).count()) > 0, "the history is not visible while the compaction runs");
     await stopCompactTrigger().click({ timeout: ACTION_MS });
     await waitFor(async () => (await stopCompactTrigger().count()) === 0, 30_000, "Stop did not end the compaction turn");
