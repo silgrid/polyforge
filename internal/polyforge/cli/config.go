@@ -153,6 +153,10 @@ type DaemonSettings struct {
 	// overrides it, and a reload that changes max_concurrent_jobs overrides
 	// `pf ops max` (last action wins).
 	MaxConcurrentJobs int
+	// MaxConcurrentTasks is the task lane's Host-wide concurrency bound
+	// (>= 1; 0 = unset, task.DefaultLimit): every Cell's one-off tasks
+	// share it; a reload applies it live. Host-only.
+	MaxConcurrentTasks int
 	// MaxConcurrentBars is the daemon-wide heavy-run slot count (>= 1;
 	// 0 = unset, DefaultMaxConcurrentBars): how many heavy runs run at
 	// once. Host-only, live.
