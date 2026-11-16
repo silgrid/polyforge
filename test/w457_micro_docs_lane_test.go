@@ -198,13 +198,16 @@ func TestW457MicroRunFailsOnABrokenPinnedDoc(t *testing.T) {
 		t.Fatalf("copy webui/dist (build it first: cd webui && npm ci && npm run build): %v", err)
 	}
 
-	// The fast gates read no doc and every other bar proves them; dropping
-	// them keeps the fixture off the network and the npm cache.
+	// The fast phase reads no doc and every other bar proves them; dropping
+	// the fast gates and the named fast checks (both are fast-phase conf
+	// lines) keeps the fixture off the network, the npm cache and this
+	// repository's test/ package, which a fixture clone does not carry.
 	var kept []string
 	for _, ln := range strings.SplitAfter(w25engShippedConf(t), "\n") {
-		if !strings.HasPrefix(ln, "fast_gate=") {
-			kept = append(kept, ln)
+		if strings.HasPrefix(ln, "fast_gate=") || strings.HasPrefix(ln, "check=") {
+			continue
 		}
+		kept = append(kept, ln)
 	}
 	w25e2eWrite(t, dir, ".polyforge/verify-scope.conf", strings.Join(kept, ""))
 	w25e2eGit(t, dir, "add", ".polyforge/verify-scope.conf")
