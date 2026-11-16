@@ -5,7 +5,8 @@ package daemon
 // spawns one task in the message's project with the read-only tool
 // profile, the fixed 5m/100000 budget and the human caller as reporter,
 // blocks until that task is terminal and answers the structured result.
-// There is no analyzer-wide single-flight: the lane's two slots are the
+// There is no analyzer-wide single-flight: the lane's one Host bound
+// (max_concurrent_tasks) is the
 // only bound.
 
 import (

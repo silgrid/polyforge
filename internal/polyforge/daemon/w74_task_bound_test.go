@@ -218,7 +218,7 @@ func TestW74TaskBoundReloadLive(t *testing.T) {
 	if got := slots.Running(); got != 3 {
 		t.Fatalf("a lowered bound must not stop running tasks, running %d", got)
 	}
-	if code, body := w74Spawn(t, td.sock, "", "4"); code != 409 || !strings.Contains(body, "the limit is 2") || !strings.Contains(body, "3 tasks already running") {
+	if code, body := w74Spawn(t, td.sock, "", "4"); code != 409 || !strings.Contains(body, fmt.Sprintf("the limit is %d", 2)) || !strings.Contains(body, "3 tasks already running") {
 		t.Fatalf("the fourth spawn at the lowered bound = %d %q", code, body)
 	}
 	// release to 1 running: two cancels, then one new spawn is admitted
@@ -256,7 +256,7 @@ func TestW74UnhostedTaskBoundReloadLive(t *testing.T) {
 			t.Fatalf("spawn %d = %d %s", i, code, body)
 		}
 	}
-	if code, body := w74Spawn(t, td.sock, "", "2"); code != 409 || !strings.Contains(body, "the limit is 2") {
+	if code, body := w74Spawn(t, td.sock, "", "2"); code != 409 || !strings.Contains(body, fmt.Sprintf("the limit is %d", task.DefaultLimit)) {
 		t.Fatalf("the third spawn before the reload = %d %q, want 409 at the default 2", code, body)
 	}
 	resp, err := td.reloadConfig()

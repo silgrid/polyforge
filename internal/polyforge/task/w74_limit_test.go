@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -109,7 +110,7 @@ func TestW74ManagerSharedBoundAndRefusal(t *testing.T) {
 	if !errors.Is(err, ErrLimit) {
 		t.Fatalf("the third spawn at the default bound must refuse with ErrLimit: %v", err)
 	}
-	for _, want := range []string{"2 tasks already running", "the limit is 2", "max_concurrent_tasks", "nothing is queued"} {
+	for _, want := range []string{fmt.Sprintf("%d tasks already running", DefaultLimit), fmt.Sprintf("the limit is %d", DefaultLimit), "max_concurrent_tasks", "nothing is queued"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("the refusal must name %q: %q", want, err.Error())
 		}
@@ -127,7 +128,7 @@ func TestW74ManagerSharedBoundAndRefusal(t *testing.T) {
 	if !errors.Is(err, ErrLimit) {
 		t.Fatalf("a lowered bound must refuse new spawns with ErrLimit: %v", err)
 	}
-	for _, want := range []string{"3 tasks already running", "the limit is 2"} {
+	for _, want := range []string{"3 tasks already running", fmt.Sprintf("the limit is %d", DefaultLimit)} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("the refusal must name %q: %q", want, err.Error())
 		}

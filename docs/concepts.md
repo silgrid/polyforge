@@ -149,12 +149,13 @@ never changes a Cell's identity: a new server or user is a new profile; a
 same-identity key rotation is **pending** and the Cell **drains** — no new
 submits or automatic claims, nothing killed — until it is **safe idle** (no
 job record of any state, nothing queued), then switches by itself. Concurrency is two-level: the Host ceiling bounds
-the sum of every Cell's running jobs and one-off tasks, a Cell's optional
-ceiling bounds its own (a task at a taken ceiling is refused, nothing
-queued); Cells with queued work start round-robin (no weights, no
-preemption), a job waiting for a human with no live process releases its
-slot, and every Cell's one-off tasks share one Host background-model-call
-bound of 2 (summarize calls take none of it: each work item runs at most one
+the sum of every Cell's running jobs, a Cell's optional
+ceiling bounds its own; Cells with queued work start round-robin (no
+weights, no preemption), a job waiting for a human with no live process
+releases its slot, and every Cell's one-off tasks share their own Host
+bound — `[daemon] max_concurrent_tasks`, default 2, live on reload
+(polyforge#74: tasks take no job slot; summarize calls take none of it
+either: each work item runs at most one
 at a time, spaced by the summarize interval).
 A named Cell's execution plane opens only with a usable `[model] source`
 declaration (credential material only is shared); otherwise it stays

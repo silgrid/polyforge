@@ -59,8 +59,9 @@ pf msg contacts
   `project` and `task_id`. A report that is not that JSON shape degrades to
   `type` `other` with the report text as the summary. The task shows in
   `pf task list` and the Tasks tab; `pf task show <task_id>` reads it. There
-  is no analyzer-wide lock — two analyses may run at once — but the task
-  lane's two slots are shared, and nothing is queued. The list row's
+  is no analyzer-wide lock — two analyses may run at once — but every
+  analysis shares the task lane's one Host bound (`max_concurrent_tasks`,
+  default 2), and nothing is queued. The list row's
   `prompt_summary` is only `Analyze message <id>`; the **whole prompt,
   message body included, is readable through `pf task show` by any local
   unix-socket peer** for the task store's unchanged retention (newest 50
@@ -146,7 +147,7 @@ never becomes an address (`--to` stays a human user id).
 | `AUTH-403` | `ack` of a conversation you are not a member of (admins included — an admin cannot acknowledge for someone else) | Only its members can acknowledge it — ask a member. An admin can still read it through `list --conversation` / `show`; reading never moves anyone's read cursor. |
 | `CORE-400` | `ack --seq` that is `0`/negative or past the conversation's newest message | Acknowledge a sequence the conversation actually has; without `--seq` the CLI uses the newest one. Nothing was written. |
 | `CORE-404` | `--to` names no existing human user, or an unknown message / conversation id (`ack` included) | Check the user id (a chat id, work item, machine or broadcast is not an address), the message id or the conversation id. |
-| `DAEMON-409` | `analyze` / `prompt` while both task slots are busy (2 tasks already running; nothing is queued, no task was created) | The machine is busy — retry once a running task ends (`pf task list`). |
+| `DAEMON-409` | `analyze` / `prompt` while the task lane's Host bound (`max_concurrent_tasks`) is full (N tasks already running, the limit is N; nothing is queued, no task was created) | The machine is busy — retry once a running task ends (`pf task list`). |
 | `DAEMON-400` | `analyze` / `prompt` for a project with no task model chain (neither `steps.<project>.task.models` nor `steps.<project>.default.models`) — no task was created | Configure `steps.<project>.task.models` in the workspace yaml, then retry. |
 | `DAEMON-412` | `analyze` / `prompt` of a message whose project is not mapped on this daemon (or no project is mapped at all) — no task was created | Map the project in `cli.toml` (`pf doctor` checks the mapping). |
 | `DAEMON-500` | the analysis task ended `failed`, `capped` (its 5-minute / 100000-token budget ran out) or `interrupted` without a usable report; the detail names the state and the task id | Read it with `pf task show <task_id>`; retry once — a retry starts a new task. |

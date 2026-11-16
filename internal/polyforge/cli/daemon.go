@@ -316,7 +316,8 @@ type StatusResponse struct {
 	// availability, negotiated role, supersession. Additive.
 	MachineFace map[string]any `json:"machine_face,omitempty"`
 	// Tasks is the one-shot task agent summary: running
-	// count, the fixed limit and the terminal-state counts. Tasks run
+	// count, the concurrency bound (max_concurrent_tasks) and the
+	// terminal-state counts. Tasks run
 	// outside the job slots, so queue.running never counts them. Absent on
 	// an older daemon.
 	Tasks *task.Summary `json:"tasks,omitempty"`
