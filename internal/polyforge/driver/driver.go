@@ -578,7 +578,7 @@ func (d *Driver) Run(ctx context.Context) error {
 			// to see its step_failed too (the acceptance contract) without
 			// delaying the verdict behind the D7 backoff sleep.
 			vc, vsrc := verdictCauseWith(*verdict, d.textRules())
-			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, vc, -1, verdict.Evidence, verdict, vsrc, verdict.TurnError); stop {
+			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, vc, -1, verdict.Evidence, verdict, vsrc, strings.TrimSpace(verdict.TurnError)); stop {
 				return err
 			}
 			continue
