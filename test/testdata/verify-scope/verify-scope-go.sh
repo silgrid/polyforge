@@ -34,7 +34,7 @@
 #   7. GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./...
 #   8. cd workflows/_shared/scripts && python3 -m mypy --strict --python-version 3.9 pfstep tests *.py
 #      (pf CI's python-types job)
-#   9. GOWORK=off go test ./internal/contract/test/ -count=1
+#   9. GOWORK=off go test ./internal/contracttest/ -count=1
 #      (the conf's named contract-scan fast check: the contract package's
 #       tests that scan repository files run in every tier, the package
 #       selected whole)
@@ -397,7 +397,7 @@ add_cmd "python3 -I docs/design/polyforge-vnext/tools/check-xrefs.py"
 add_cmd "GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./..."
 add_cmd "GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./..."
 add_cmd "cd workflows/_shared/scripts && python3 -m mypy --strict --python-version 3.9 pfstep tests *.py"
-add_cmd "GOWORK=off go test ./internal/contract/test/ -count=1"
+add_cmd "GOWORK=off go test ./internal/contracttest/ -count=1"
 if [ "$mode" = "full" ]; then
 	add_cmd 'GOWORK=off go test $(GOWORK=off go list ./... | grep -v '"'"'/test$'"'"') -count=1'
 	add_cmd "GOWORK=off go test -race -count=1 -timeout 30m ./internal/polyforge/daemon/"

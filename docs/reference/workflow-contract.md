@@ -878,7 +878,7 @@ of the daemon, the driver, the runtime, the CLI, the daemon's aihub client,
 the step call ledger, the pending writes, the workspace yaml,
 `internal/common` or `internal/aihub` mentions the integrate lane —
 `integrat` in any case mix, comments included
-(`test/c5_lane_neutral_go_contract_test.go`). Its exceptions are a list of
+(`internal/contracttest/c5_lane_neutral_go_contract_test.go`). Its exceptions are a list of
 lines, per file each line shape that may still mention it with the reason,
 so a new mention elsewhere in an exempt file is red; an exception no line
 matches any more is red too, so the list only shrinks.

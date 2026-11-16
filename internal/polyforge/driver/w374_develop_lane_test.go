@@ -116,9 +116,9 @@ func TestShippedDevelopLaneShape(t *testing.T) {
 func TestShippedDevelopLanePromptsRender(t *testing.T) {
 	for step, wants := range map[string][]string{
 		// (what build.md, its skill and its fragments state that
-		// test/w374_develop_driver_contract_test.go,
-		// test/w403_develop_grill_e2e_contract_test.go and
-		// test/owner_review_gate_contract_test.go pin — confirm_plan, the
+		// internal/contracttest/w374_develop_driver_contract_test.go,
+		// internal/contracttest/w403_develop_grill_e2e_contract_test.go and
+		// internal/contracttest/owner_review_gate_contract_test.go pin — confirm_plan, the
 		// `carries:` header, the owner-review section, units.json and its
 		// replay/verify commands, when build asks, the owner-replied plan —
 		// is pinned there once)
@@ -147,7 +147,7 @@ func TestShippedDevelopLanePromptsRender(t *testing.T) {
 			"Coverage, criterion by criterion (`ac_gap`)", "Tests after their red commit (`test_weakened`)",
 			"the work item's acceptance criteria (or the plan's owner-confirmed `## Acceptance` list)",
 			// workflow contract v2 PR 12: the review skill's facts (its three
-			// facts.py lines are test/w374_develop_driver_contract_test.go's)
+			// facts.py lines are internal/contracttest/w374_develop_driver_contract_test.go's)
 			"# Skill",
 			"artifacts/build/units.json",
 			// contract 3's verifies of build's plan, units, summary and answers

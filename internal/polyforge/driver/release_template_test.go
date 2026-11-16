@@ -221,7 +221,7 @@ func TestReleaseBundleShape(t *testing.T) {
 		"120 minutes", "heavy-run admission",
 		// the preflight runs under the same PATH (the resume-path audit's
 		// and the already-released guard's text is
-		// test/release_adoption_contract_test.go's)
+		// internal/contracttest/release_adoption_contract_test.go's)
 		"`.polyforge/deploy.sh --preflight` in that repo now", "under your own `PATH`, the command PATH the procedures run under",
 	} {
 		if !strings.Contains(rel, needle) {
