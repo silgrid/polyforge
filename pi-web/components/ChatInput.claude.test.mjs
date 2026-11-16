@@ -1,13 +1,17 @@
 import "#test-env";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { Script } from "node:vm";
 import test from "node:test";
 import { createJiti } from "jiti";
+import ts from "typescript";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { ChatInput, ClaudeComposerControls, CLAUDE_EFFORT_ENTRIES, claudeModelOptions, filterComposerImageFiles } = await jiti.import("./ChatInput.tsx");
+const { ChatInput, ClaudeComposerControls, CLAUDE_EFFORT_ENTRIES, builtinSlashCommands, canRunBuiltinSlashCommandWhileStreaming, claudeModelOptions, filterComposerImageFiles, filterSlashCommands, offersBuiltinSlashCommandWhileStreaming } = await jiti.import("./ChatInput.tsx");
 const { clearDraft, setDraft } = await jiti.import("@/lib/draft-store");
+const { isBareMcpCommand } = await jiti.import("@/lib/mcp-command");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 const { enLocale } = await jiti.import("@/lib/i18n/messages/en");
 const { zhCNLocale } = await jiti.import("@/lib/i18n/messages/zh-CN");
@@ -34,6 +38,31 @@ function split(html) {
   const start = html.indexOf('class="chat-input-controls"');
   assert.ok(start >= 0, "no bottom bar");
   return { before: html.slice(0, start), after: html.slice(start) };
+}
+
+/**
+ * The same extractor ChatInput.test.mjs's `chatInputCallback` is: the named
+ * callback's source, transpiled and run in a bare scope — so a claude
+ * compaction's send blocking is asserted as behaviour, not as source text
+ * (polyforge#71 r1#2).
+ */
+function claudeInputCallback(name, context) {
+  const sourceText = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const source = ts.createSourceFile("ChatInput.tsx", sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let found;
+  const visit = (node) => {
+    if (found) return;
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === name) {
+      found = node.initializer.arguments[0];
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  assert.ok(found, `callback ${name} not found`);
+  return new Script(ts.transpileModule(found.getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText).runInNewContext(context);
 }
 
 test("a fresh composer: the harness selector and the model selector side by side in the bottom bar, no <select>", () => {
@@ -96,23 +125,117 @@ test("an open claude session shows the model selector, the effort control and th
   assert.doesNotMatch(html, /fixed for this session|claude-fixed-line/);
 });
 
-test("a running claude turn (or a state not known yet) disables the model, effort and compact controls (rendered, not hidden); Stop stays", () => {
-  const open = { ...base, choosing: false, harness: "claude", model: "claude-sonnet-5-5", onModelChange() {}, onEffortChange() {} };
-  for (const [state, extra] of [[open, { isStreaming: true }], [open, { isCompacting: true }], [{ ...open, stateKnown: false }, {}]]) {
-    const html = composer(state, { onCompact() {}, ...extra });
-    assert.match(html, /class="model-selector[^"]*is-disabled/, JSON.stringify(extra));
-    assert.match(html, /<button[^>]*disabled=""[^>]*aria-label="Change reasoning level"/, JSON.stringify(extra));
+// polyforge#71 (AC5) rewrites the earlier "rendered, not hidden" rule: a claude
+// session's compact control follows pi's — hidden while a turn runs (it returns as
+// the turn ends), Stop compaction while claude's own compaction runs, disabled
+// only while the stream has not said whether the session is idle — and it takes
+// pi's run-end stray-click guard. Model and effort stay rendered, disabled.
+// polyforge#71 (AC6): a claude session's model switch shows pi's own spinner
+// (ModelSelector busy), and nothing else — the effort control never spins (Q3=A).
+// polyforge#71 (AC7), rewritten as behaviour per review r1#2: a claude compaction
+// takes no message — Enter (handleSend), a menu submit and the Steer button's
+// queued send (sendQueued) all stop at the send functions' entry, the draft kept.
+// pi's compaction still queues (the guard is claude's alone).
+test("claude's compaction blocks every send path at its entry and keeps the draft", async () => {
+  const blocked = (value) => {
+    const calls = { sent: [], steered: [], queuedPrompts: [], builtins: [], cleared: 0, unlocked: 0 };
+    const scope = {
+      value, attachedImages: [],
+      claudeComposer: true, isCompacting: true, isStreaming: false,
+      onAudioUnlock() { calls.unlocked += 1; },
+      offersBuiltinSlashCommandWhileStreaming, canRunBuiltinSlashCommandWhileStreaming, isBareMcpCommand,
+      runBuiltinCommand: async (message) => { calls.builtins.push(message); return false; },
+      clearInput() { calls.cleared += 1; },
+      onSend: (message) => calls.sent.push(message),
+      onSteer: (message) => calls.steered.push(message),
+      onFollowUp() { throw new Error("claude has no follow-up queue"); },
+      onPromptWithStreamingBehavior: (message, behavior) => calls.queuedPrompts.push([message, behavior]),
+      onBuiltinCommand: async () => ({ handled: false }),
+    };
+    return { calls, handleSend: claudeInputCallback("handleSend", scope), sendQueued: claudeInputCallback("sendQueued", scope) };
+  };
+  for (const text of ["kept draft", "/compact focus", "/deep-research x"]) {
+    const { calls, handleSend, sendQueued } = blocked(text);
+    await handleSend();
+    sendQueued("steer");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, { sent: [], steered: [], queuedPrompts: [], builtins: [], cleared: 0, unlocked: 0 },
+      `${text}: the compaction blocked every send path and kept the draft`);
   }
-  assert.match(composer(open, { onCompact() {}, isStreaming: true }), /<button[^>]*disabled=""[^>]*aria-label="Compact context"/);
-  assert.match(composer({ ...open, stateKnown: false }, { onCompact() {} }), /<button[^>]*disabled=""[^>]*aria-label="Compact context"/, "not before the stream said the session is idle");
-  assert.match(composer(open, { onCompact() {}, isStreaming: true }), /aria-label="Stop agent"/);
-  const compacting = composer(open, { onCompact() {}, onAbortCompaction() {}, isCompacting: true });
-  assert.match(compacting, /placeholder="claude is compacting; send when it ends\."/, "the #70 compacting placeholder");
+  // pi's compaction queues the message as before: the guard is claude's alone.
+  const piCalls = { steered: [], cleared: 0 };
+  const piScope = {
+    value: "queued message", attachedImages: [], claudeComposer: false, isCompacting: true,
+    onAudioUnlock() {}, clearInput() { piCalls.cleared += 1; },
+    canRunBuiltinSlashCommandWhileStreaming, isBareMcpCommand,
+    onBuiltinCommand: async () => ({ handled: false }),
+    onPromptWithStreamingBehavior() { throw new Error("a plain message never takes the / entry"); },
+    onSteer: (message) => piCalls.steered.push(message),
+    onFollowUp() {},
+    runBuiltinCommand: async () => false,
+  };
+  claudeInputCallback("sendQueued", piScope)("steer");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(piCalls.steered, ["queued message"], "pi's compaction queues the message");
+  assert.equal(piCalls.cleared, 1, "pi's queue clears the composer as before");
+
+  // The composer keeps its text while compacting.
+  const draftKey = "claude:/tmp/claude-compaction-guard";
+  setDraft(draftKey, { value: "kept", images: [] });
+  try {
+    const html = composer({ ...base, choosing: false, harness: "claude" }, { isCompacting: true, draftKey });
+    assert.doesNotMatch(html, /<textarea[^>]*\bdisabled\b/, "the composer stays editable");
+    assert.ok(html.includes(">kept</textarea>"), "the draft stays in the composer");
+  } finally {
+    clearDraft(draftKey);
+  }
+});
+
+test("a claude session's model switch shows pi's spinner on the model selector only", () => {
+  const open = { ...base, choosing: false, harness: "claude", model: "claude-sonnet-5-5", onModelChange() {}, onEffortChange() {} };
+  const switching = composer({ ...open, modelSwitching: true }, {});
+  assert.match(switching, /aria-busy="true"/, "the selector is busy while claude takes the switch");
+  assert.match(switching, /style="[^"]*animation:spin 0\.8s linear infinite/, "pi's spinner");
+  assert.match(switching, /title="Switching model"/, "pi's busy tooltip");
+  const idle = composer(open, {});
+  assert.doesNotMatch(idle, /aria-busy="true"/, "no spinner while idle");
+  assert.doesNotMatch(idle, /animation:spin/, "no stray spinner");
+  for (const [name, html] of [["switching", switching], ["idle", idle]]) {
+    const effort = html.match(/<button[^>]*aria-label="Change reasoning level"[^>]*>/)?.[0] ?? "";
+    assert.doesNotMatch(effort, /aria-busy/, `the effort control never spins (${name})`);
+  }
+});
+
+test("a running claude turn hides the compact control (pi's rule); a compaction shows Stop compaction; an unknown state keeps it disabled", () => {
+  const open = { ...base, choosing: false, harness: "claude", model: "claude-sonnet-5-5", onModelChange() {}, onEffortChange() {} };
+  const running = composer(open, { onCompact() {}, isStreaming: true });
+  assert.match(running, /class="model-selector[^"]*is-disabled/, "the model selector stays rendered, disabled");
+  assert.match(running, /<button[^>]*disabled=""[^>]*aria-label="Change reasoning level"/, "the effort control stays rendered, disabled");
+  assert.doesNotMatch(running, /aria-label="Compact context"/, "the compact control is hidden while a turn runs, as on pi");
+  assert.doesNotMatch(running, /aria-label="Stop compaction"/);
+  assert.match(running, /aria-label="Stop agent"/, "Stop stays");
+  // pi's run-end stray-click guard now covers claude too (the earlier code excluded it).
+  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  assert.match(source, /const isStrayClick = \(e: React\.MouseEvent\) => isRunEndStrayClick\(e\.detail, performance\.now\(\) - runEndedAtRef\.current\);/, "claude takes pi's stray-click guard");
+  assert.doesNotMatch(source, /!claudeSession && isRunEndStrayClick/, "the claude exclusion is gone");
+  // Not before the stream said the session is idle: rendered, disabled.
+  const unknown = composer({ ...open, stateKnown: false }, { onCompact() {} });
+  assert.match(unknown, /<button[^>]*disabled=""[^>]*aria-label="Compact context"/, "an unknown state keeps the control disabled");
+  // claude's compaction is a turn: the control stays, as Stop compaction.
+  const compacting = composer(open, { onCompact() {}, onAbortCompaction() {}, isStreaming: true, isCompacting: true });
   assert.match(compacting, /aria-label="Stop compaction"/);
-  assert.match(compacting, /<button[^>]*disabled=""[^>]*aria-label="Send"/, "nothing is sent during claude's compaction");
+  assert.doesNotMatch(compacting, /aria-label="Compact context"/);
+  assert.match(compacting, /placeholder="claude is compacting; send when it ends\."/, "the #70 compacting placeholder");
+  const compactingIdleComposer = composer(open, { onCompact() {}, onAbortCompaction() {}, isCompacting: true });
+  assert.match(compactingIdleComposer, /aria-label="Stop compaction"/, "the control is Stop compaction however the compaction is shown");
+  assert.match(compactingIdleComposer, /<button[^>]*disabled=""[^>]*aria-label="Send"/, "nothing is sent during claude's compaction");
   const idle = composer(open, { onCompact() {} });
-  assert.doesNotMatch(idle, /<button[^>]*disabled=""[^>]*aria-label="Change reasoning level"/);
-  assert.doesNotMatch(idle, /<button[^>]*disabled=""[^>]*aria-label="Compact context"/);
+  assert.match(idle, /aria-label="Compact context"/, "an idle claude session offers compaction");
+  assert.doesNotMatch(idle, /<button[^>]*disabled=""[^>]*aria-label="Compact context"/, "idle is enabled");
+  // A fresh composer of either harness offers no compact control (AC5: ChatWindow
+  // passes onCompact only for an open session; the pin on that line is in ChatWindow.claude.test.mjs).
+  assert.doesNotMatch(composer({ ...base, harness: "claude" }, {}), /aria-label="Compact context"/, "a fresh claude composer has none");
+  assert.doesNotMatch(composer(base, {}), /aria-label="Compact context"/, "a fresh pi composer has none either");
 });
 
 test("a fresh claude composer offers model and effort, no compact, and keeps the system-claude hint", () => {
@@ -213,10 +336,53 @@ test("every claude string exists in en, zh-CN and zh-TW; the retired alias, pres
   }
 });
 
-test("while a claude turn runs, Send stays visible but disabled, and the composer says why", () => {
-  const html = composer({ ...base, choosing: false, harness: "claude" }, { isStreaming: true });
-  assert.match(html, /<button type="button" disabled="" aria-label="Send"/);
-  assert.match(html, /placeholder="claude is answering; send when this turn ends\."/);
+// polyforge#71 rewrites #219's text-only claude composer rule: while a claude
+// turn runs the composer offers pi's own streaming controls — Steer and Stop — and
+// no disabled Send button; Send returns once the turn ends. pi's own streaming
+// composer never had a Send button, so the two harnesses now match.
+// polyforge#71 (AC2): a claude composer's `/` menu lists only the pi built-ins a
+// claude session's server really answers — `/compact` (the guarded compaction,
+// the same handler the compact button takes) and `/session` — and neither the
+// other pi built-ins nor a bare `/mcp` are routed to pi's built-in handler there;
+// pi's own menu and routing are unchanged.
+test("a claude session's slash menu lists only /compact and /session of pi's built-ins; pi keeps all seven", () => {
+  assert.deepEqual(builtinSlashCommands(true).map((command) => command.name), ["compact", "session"]);
+  assert.deepEqual(builtinSlashCommands(false).map((command) => command.name),
+    ["compact", "auto-compact", "reload", "name", "session", "copy", "clone"]);
+  assert.equal(canRunBuiltinSlashCommandWhileStreaming("/session", true), true, "/session runs while a claude turn streams, as on pi");
+  assert.equal(canRunBuiltinSlashCommandWhileStreaming("/compact", true), false, "/compact waits for the turn to end, as on pi");
+  assert.equal(offersBuiltinSlashCommandWhileStreaming("/mcp", true), false, "claude's /mcp is sent to claude as text, never pi's Settings › MCP");
+  assert.equal(canRunBuiltinSlashCommandWhileStreaming("/mcp", true), false);
+  assert.equal(offersBuiltinSlashCommandWhileStreaming("/mcp"), true, "pi's own routing is unchanged");
+  assert.equal(canRunBuiltinSlashCommandWhileStreaming("/copy", true), false, "pi-only built-ins never reach pi's handler in a claude session");
+
+  // The palette's list is exactly the built-ins the composer's harness offers —
+  // streamed through the component's own combiner (builtinSlashCommands, its
+  // availableWhileStreaming filter, then filterSlashCommands) — plus the session's
+  // extension commands. Static markup never runs the effect that opens the
+  // palette, so the combiner is asserted directly (filterSlashCommands orders
+  // by name, not declaration order).
+  const claudeIdle = filterSlashCommands(builtinSlashCommands(true), "", t);
+  assert.deepEqual(claudeIdle.map((command) => command.name), ["compact", "session"]);
+  const claudeStreaming = filterSlashCommands(builtinSlashCommands(true).filter((command) => command.availableWhileStreaming), "", t);
+  assert.deepEqual(claudeStreaming.map((command) => command.name), ["session"], "while a turn runs only /session is offered, as on pi");
+  const piIdle = filterSlashCommands(builtinSlashCommands(false), "", t);
+  assert.deepEqual(piIdle.map((command) => command.name),
+    ["auto-compact", "clone", "compact", "copy", "name", "reload", "session"]);
+  const claudeWithOwn = filterSlashCommands([...builtinSlashCommands(true), { name: "deep-research", source: "extension", description: "claude's own" }], "", t);
+  assert.deepEqual(claudeWithOwn.map((command) => command.name), ["compact", "session", "deep-research"],
+    "claude's own commands (AC3) arrive beside the two built-ins through the session's command list");
+});
+
+test("while a claude turn runs the composer offers only Steer and Stop, no Send; Send returns when it ends", () => {
+  const open = { ...base, choosing: false, harness: "claude" };
+  const html = composer(open, { isStreaming: true, onSteer() {} });
+  assert.doesNotMatch(html, /aria-label="Send"/, "a running claude turn still shows a Send button");
+  assert.match(html, /aria-label="Deliver after the current response and its tool calls finish \(Stop interrupts them\)"/, "the composer offers pi's Steer");
+  assert.match(html, /aria-label="Stop agent"/, "the composer offers Stop");
+  assert.match(html, /placeholder="claude is answering; messages join this turn or wait for the next\."/, "the composer says what a message sent now does");
+  const idle = composer({ ...base, choosing: false, harness: "claude" }, {});
+  assert.match(idle, /aria-label="Send"/, "an idle claude session gets its Send button back");
   const pi = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ChatInput, {
     onSend() {}, onAbort() {}, isStreaming: true,
   })));

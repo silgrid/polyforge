@@ -44,6 +44,7 @@ import {
   CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT,
   CLAUDE_LAUNCH_PERMISSION_MODES,
   CLAUDE_PROVIDER,
+  CLAUDE_SESSION_BUILTIN_COMMANDS,
   isClaudeModelName,
   type ClaudeEffort,
   type ClaudeLaunchPermissionMode,
@@ -177,6 +178,8 @@ export interface ClaudeComposerState {
   switchError?: string | null;
   /** An open session: its event stream has said whether a turn runs. Until then its controls stay disabled. */
   stateKnown?: boolean;
+  /** polyforge#71 (AC6): a live model switch is under way — the selector shows pi's spinner. */
+  modelSwitching?: boolean;
 }
 
 /**
@@ -493,24 +496,35 @@ const BUILTIN_SLASH_COMMANDS: BuiltinSlashCommand[] = [
   { name: "clone", description: "chat.commandClone", source: "builtin" },
 ];
 
-function getBuiltinSlashCommand(message: string): BuiltinSlashCommand | undefined {
-  const match = message.trim().match(/^\/([^\s]+)(?:\s|$)/);
-  if (!match) return undefined;
-  return BUILTIN_SLASH_COMMANDS.find((command) => command.name === match[1]);
+/**
+ * The pi built-in slash commands a composer offers (polyforge#71): every one on
+ * pi; a claude composer only the two a claude session's server answers —
+ * `/compact` (the guarded compaction, the same handler the compact button
+ * takes) and `/session` — so the others are neither listed nor routed there.
+ */
+export function builtinSlashCommands(claude: boolean): BuiltinSlashCommand[] {
+  return claude ? BUILTIN_SLASH_COMMANDS.filter((command) => CLAUDE_SESSION_BUILTIN_COMMANDS.includes(command.name)) : BUILTIN_SLASH_COMMANDS;
 }
 
-export function canRunBuiltinSlashCommandWhileStreaming(message: string): boolean {
-  return getBuiltinSlashCommand(message)?.availableWhileStreaming === true;
+function getBuiltinSlashCommand(message: string, claude = false): BuiltinSlashCommand | undefined {
+  const match = message.trim().match(/^\/([^\s]+)(?:\s|$)/);
+  if (!match) return undefined;
+  return builtinSlashCommands(claude).find((command) => command.name === match[1]);
+}
+
+export function canRunBuiltinSlashCommandWhileStreaming(message: string, claude = false): boolean {
+  return getBuiltinSlashCommand(message, claude)?.availableWhileStreaming === true;
 }
 
 /**
  * Whether a message sent while a run streams goes to the built-in handler
  * first: a built-in that may run then, or a bare `/mcp`, which opens
  * Settings › MCP when pi's built-in MCP extension owns it (useAgentSession)
- * and is otherwise sent as before.
+ * and is otherwise sent as before. Never on claude: its own `/mcp` is sent to
+ * claude as text (polyforge#71).
  */
-export function offersBuiltinSlashCommandWhileStreaming(message: string): boolean {
-  return canRunBuiltinSlashCommandWhileStreaming(message) || isBareMcpCommand(message);
+export function offersBuiltinSlashCommandWhileStreaming(message: string, claude = false): boolean {
+  return canRunBuiltinSlashCommandWhileStreaming(message, claude) || (!claude && isBareMcpCommand(message));
 }
 
 export function isExactSlashCommand(message: string, command: SlashCommandPaletteItem): boolean {
@@ -535,12 +549,13 @@ export function isRunEndStrayClick(detail: number, msSinceRunEnd: number): boole
  * streams, only one that may run then), or a bare `/mcp` on pi's built-in
  * `/mcp`, which opens Settings › MCP at once, as it does before the command
  * list has loaded. Every other extension command still takes a second Enter.
+ * A claude session never submits a bare `/mcp` this way (polyforge#71).
  */
-export function submitsSlashCommandOnEnter(message: string, command: SlashCommandPaletteItem, isStreaming: boolean): boolean {
+export function submitsSlashCommandOnEnter(message: string, command: SlashCommandPaletteItem, isStreaming: boolean, claude = false): boolean {
   if (command.source === "builtin") {
     return isExactSlashCommand(message, command) && (!isStreaming || command.availableWhileStreaming === true);
   }
-  return isBuiltinMcpCommand(command) && isBareMcpCommand(message);
+  return !claude && isBuiltinMcpCommand(command) && isBareMcpCommand(message);
 }
 
 export function canClearBuiltinCommandInput(message: string, imageCount: number, submittedMessage: string): boolean {
@@ -1402,15 +1417,19 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   }, [attachedImages.length, clearInput, onBuiltinCommand]);
 
   const handleSend = useCallback(async () => {
+    // polyforge#71 (AC7): a claude compaction is a turn that takes no message.
+    // The block sits at the send entry, so Enter, a menu submit and every other
+    // caller stop here and the draft is kept (pi's compaction queues instead).
+    if (claudeComposer && isCompacting) return;
     const msg = value.trim();
     if (!msg && !attachedImages.length) return;
     onAudioUnlock?.();
-    const builtinAllowed = !isStreaming || offersBuiltinSlashCommandWhileStreaming(msg);
+    const builtinAllowed = !isStreaming || offersBuiltinSlashCommandWhileStreaming(msg, claudeComposer);
     if (builtinAllowed && await runBuiltinCommand(msg)) return;
     if (isStreaming) return;
     clearInput();
     onSend(msg, attachedImages.length ? attachedImages : undefined);
-  }, [value, attachedImages, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock]);
+  }, [value, attachedImages, isStreaming, isCompacting, claudeComposer, runBuiltinCommand, onSend, clearInput, onAudioUnlock]);
 
   const slashQuery = !compact && value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -1418,9 +1437,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
 
   const filteredSlashCommands = (() => {
     if (slashQuery === null) return [];
+    // polyforge#71: a claude composer offers only /compact and /session of pi's built-ins.
+    const claudeBuiltins = builtinSlashCommands(claudeComposer);
     const builtinCommands = isStreaming
-      ? BUILTIN_SLASH_COMMANDS.filter((command) => command.availableWhileStreaming)
-      : BUILTIN_SLASH_COMMANDS;
+      ? claudeBuiltins.filter((command) => command.availableWhileStreaming)
+      : claudeBuiltins;
     const commands = [...builtinCommands, ...(slashCommands ?? [])];
     return filterSlashCommands(commands, slashQuery, t);
   })();
@@ -1617,6 +1638,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
 
 
   const sendQueued = useCallback((mode: "steer" | "followup") => {
+    // polyforge#71 (AC7): the same block at the queued entry — the Steer button
+    // and a queued submit reach this too, and the draft is kept.
+    if (claudeComposer && isCompacting) return;
     const msg = value.trim();
     if (!msg && !attachedImages.length) return;
     onAudioUnlock?.();
@@ -1635,20 +1659,21 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         onFollowUp(msg, images);
       }
     };
-    if (!attachedImages.length && onBuiltinCommand && canRunBuiltinSlashCommandWhileStreaming(msg)) {
+    if (!attachedImages.length && onBuiltinCommand && canRunBuiltinSlashCommandWhileStreaming(msg, claudeComposer)) {
       void runBuiltinCommand(msg);
       return;
     }
-    if (!attachedImages.length && onBuiltinCommand && isBareMcpCommand(msg)) {
+    if (!attachedImages.length && !claudeComposer && onBuiltinCommand && isBareMcpCommand(msg)) {
       // Settings › MCP opens when pi's built-in MCP extension owns /mcp; another
       // extension's /mcp is queued as before. The composer is disabled meanwhile.
+      // A claude session's /mcp is claude's own command (polyforge#71): sent as text.
       void runBuiltinCommand(msg).then((handled) => {
         if (!handled) queue();
       }, () => queue());
       return;
     }
     queue();
-  }, [value, attachedImages, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand]);
+  }, [value, attachedImages, isCompacting, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand, claudeComposer]);
 
   const getNextSlashIndex = useCallback((direction: "up" | "down" | "left" | "right") => {
     const lastIndex = displayedSlashCommands.length - 1;
@@ -1772,7 +1797,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }
         if (acceptShortcut && selectedCommand) {
           e.preventDefault();
-          if (sendShortcut && submitsSlashCommandOnEnter(value, selectedCommand, isStreaming)) {
+          if (sendShortcut && submitsSlashCommandOnEnter(value, selectedCommand, isStreaming, claudeComposer)) {
             setSlashMenuOpen(false);
             void handleSend();
           } else {
@@ -1832,7 +1857,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }
       }
     },
-    [isMobile, enterSendMode, isStreaming, onSteer, onFollowUp, onAbort, slashMenuOpen, slashQuery, displayedSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value]
+    [isMobile, enterSendMode, isStreaming, claudeComposer, onSteer, onFollowUp, onAbort, slashMenuOpen, slashQuery, displayedSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value]
   );
 
   const handleInput = useCallback(() => {
@@ -2030,10 +2055,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!isStreaming) return;
     return () => { runEndedAtRef.current = performance.now(); };
   }, [isStreaming]);
-  // The guard is for pi's Compact (and tools) taking Stop's place as a run ends. An open claude
-  // session's compact control stays in place, disabled while a turn runs, so a
-  // click on it is always meant.
-  const isStrayClick = (e: React.MouseEvent) => !claudeSession && isRunEndStrayClick(e.detail, performance.now() - runEndedAtRef.current);
+  // The guard is for pi's Compact (and tools) taking Stop's place as a run ends.
+  // polyforge#71 (AC5): an open claude session's compact control takes the same
+  // slot the same way, so its clicks are guarded alike.
+  const isStrayClick = (e: React.MouseEvent) => isRunEndStrayClick(e.detail, performance.now() - runEndedAtRef.current);
 
   useEffect(() => {
     if (!isMobile) setControlsMenuOpen(false);
@@ -2150,6 +2175,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       value={{ provider: CLAUDE_PROVIDER, modelId: claude.model }}
       onChange={(_provider, modelId) => { if (isClaudeModelName(modelId) && modelId !== claude.model) claude.onModelChange?.(modelId); }}
       disabled={claudeBusy}
+      busy={claude?.modelSwitching === true}
       confirmSwitch={confirmModelSwitch}
     />
   ) : null;
@@ -2847,17 +2873,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
               {isMobile && renderStopButton(true)}
               {!isNarrowMobile && renderSteerFollowUpButtons(!isMobile, false)}
-              {/* claude takes one message per turn (no queue, no steer): Send stays, disabled. */}
-              {claude?.harness === CLAUDE_HARNESS && (
-                <button
-                  type="button"
-                  disabled
-                  aria-label={t("chat.send")}
-                  style={{ flexShrink: 0, padding: isMobile ? 0 : "7px 14px", width: isMobile ? 36 : undefined, height: isMobile ? 36 : undefined, background: "var(--bg-panel)", border: "none", borderRadius: 8, color: "var(--text-dim)", cursor: "not-allowed", fontSize: 13, fontWeight: 600 }}
-                >
-                  {isMobile ? "→" : t("chat.send")}
-                </button>
-              )}
             </div>
           ) : (
             sendButton
@@ -3291,12 +3306,14 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               </div>
             )}
 
-            {/* claude's compact control stays in place while a turn runs, disabled. */}
-            {(claudeSession || !isStreaming || isCompacting) && onCompact && (
+            {/* pi's rule, claude's too (#71): the compact control hides while a
+                turn runs and returns as it ends; a compaction keeps it as Stop
+                compaction; an unknown stream state keeps it disabled. */}
+            {(!isStreaming || isCompacting) && onCompact && (
               <div>
                 <button
                   onClick={isCompacting ? onAbortCompaction : (e) => { if (!isStrayClick(e)) onCompact(); }}
-                  disabled={claudeSession && !isCompacting && (isStreaming || claude?.stateKnown === false)}
+                  disabled={claudeSession && !isCompacting && claude?.stateKnown === false}
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                     padding: isMobile ? "0 10px" : "8px 12px",

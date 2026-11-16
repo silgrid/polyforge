@@ -31,7 +31,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createCheck, createHarness, createWaitUntil, errorText, pidAlive, readJsonLines, seedStorage, setupFailed } from "./harness.mjs";
+import { createCheck, createHarness, createWaitUntil, e2eOnlySelection, errorText, pidAlive, readJsonLines, seedStorage, setupFailed } from "./harness.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const distDir = process.env.PI_WEB_DIST_DIR || ".next";
@@ -77,6 +77,18 @@ const TITLES = {
   S5: "Idle expiry then reopen resumes the conversation",
   S6: "No dedicated config dir, no injected CLAUDE_CONFIG_DIR, and no PI_WEB_PASSWORD/CLAUDECODE in the child",
 };
+// polyforge#71 — `E2E_ONLY=<id>[,<id>…]` runs only the named scenarios
+// (e2e/harness.mjs's e2eOnlySelection, after polyforge.mjs); unset keeps every
+// one. An unknown id throws here, before any browser or server starts, naming
+// the id and this suite's ids — and the throwaway scratch tree is removed first
+// (polyforge#63 r1#3), since the suite-level try/finally has not started yet.
+let ONLY;
+try {
+  ONLY = e2eOnlySelection(TITLES);
+} catch (error) {
+  rmSync(scratch, { recursive: true, force: true });
+  throw error;
+}
 
 const h = createHarness();
 let browser;
@@ -88,7 +100,8 @@ let firstLaunch;
 
 const failures = [];
 const scenario = createCheck({ failures, message: errorText, record: ([id], text) => `${id}: ${text}`,
-  pass: ([id]) => console.log(`PASS ${id} ${TITLES[id]}`), fail: ([id], text) => console.log(`FAIL ${id} ${TITLES[id]}: ${text}`) });
+  pass: ([id]) => console.log(`PASS ${id} ${TITLES[id]}`), fail: ([id], text) => console.log(`FAIL ${id} ${TITLES[id]}: ${text}`),
+  skip: ([id]) => ONLY.skip(TITLES[id]) });
 
 const stubRecords = () => readJsonLines(stubLog);
 const stubLaunches = () => stubRecords().filter((entry) => entry.kind === "launch");
@@ -141,11 +154,44 @@ async function assertReopenedTurn(message) {
 
 const sendButton = () => page.getByRole("button", { name: "Send", exact: true });
 const stopButton = () => page.getByRole("button", { name: "Stop agent", exact: true });
+// The composer's Steer button: pi's own control, whose accessible name is its hint.
+const steerButton = () => page.getByRole("button", { name: "Deliver after the current response and its tool calls finish (Stop interrupts them)", exact: true });
 
 async function sendMessage(text) {
   const textarea = page.locator(".chat-input-textarea");
   await textarea.fill(text);
   await sendButton().click();
+}
+
+/**
+ * The one claude session every scenario works on (polyforge#71): created once,
+ * on demand, so `E2E_ONLY=S3` (and any other single scenario) is self-sufficient.
+ * The first child's launch is waited for here — S1 asserts on it, S6 reads it.
+ */
+async function ensureClaudeSession() {
+  if (sessionId) return sessionId;
+  const response = await fetch(`${base}/api/agent/new`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      cwd: project,
+      type: "prompt",
+      message: FIRST,
+      harness: "claude",
+      model: "claude-sonnet-5-5",
+    }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const body = await response.json().catch(() => ({}));
+  assert.ok(response.ok, `POST /api/agent/new with harness "claude" failed: ${response.status} ${JSON.stringify(body).slice(0, 400)}`);
+  sessionId = body.sessionId ?? body.id;
+  assert.ok(typeof sessionId === "string" && sessionId.length > 0, "the create route returned no session id for the claude session");
+  firstLaunch = await waitFor(
+    () => stubLaunches()[0] ?? false,
+    30_000,
+    "no claude child process was launched: the PATH stub recorded no launch (harness claude not wired to a child process)",
+  );
+  return sessionId;
 }
 
 // Owner intentional change the claude row's marker is exactly `claude`
@@ -228,28 +274,7 @@ try {
   // S1 — rewritten: a claude session is created by harness and
   // full model name, with no preset, and its child carries the reduced argv.
   await scenario("S1", async () => {
-    const response = await fetch(`${base}/api/agent/new`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cwd: project,
-        type: "prompt",
-        message: FIRST,
-        harness: "claude",
-        model: "claude-sonnet-5-5",
-      }),
-      signal: AbortSignal.timeout(120_000),
-    });
-    const body = await response.json().catch(() => ({}));
-    assert.ok(response.ok, `POST /api/agent/new with harness "claude" and a full model name failed: ${response.status} ${JSON.stringify(body).slice(0, 400)}`);
-    sessionId = body.sessionId ?? body.id;
-    assert.ok(typeof sessionId === "string" && sessionId.length > 0, "the create route returned no session id for the claude session");
-
-    firstLaunch = await waitFor(
-      () => stubLaunches()[0] ?? false,
-      30_000,
-      "no claude child process was launched: the PATH stub recorded no launch (harness claude not wired to a child process)",
-    );
+    await ensureClaudeSession();
     const joined = firstLaunch.argv.join(" ");
     assert.equal(argvValue(firstLaunch.argv, "--model"), "claude-sonnet-5-5", `the claude child's argv carries no "--model claude-sonnet-5-5": ${joined}`);
     // The default permission mode is ask: claude's prompts come to Pi Web over stdio.
@@ -278,7 +303,7 @@ try {
   // exactly `claude` and flush with the title line's right edge, while a pi row
   // still has no marker.
   await scenario("S2", async () => {
-    assert.ok(sessionId, "prerequisite: S1 did not create a claude session");
+    await ensureClaudeSession();
     await openSession();
     const showSidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
     if (await showSidebar.isVisible().catch(() => false)) await showSidebar.click();
@@ -301,15 +326,20 @@ try {
   });
 
   // S3 — message round trip through the adapter: user message, streamed
-  // assistant text, tool call/result rows, send unavailable while the turn runs.
+  // assistant text, tool call/result rows, and — polyforge#71 — while the turn
+  // runs the composer offers only pi's Steer and Stop, no disabled Send.
   await scenario("S3", async () => {
-    assert.ok(sessionId, "prerequisite: S1 did not create a claude session");
+    await ensureClaudeSession();
     if (!page) await newPage();
+    await openSession();
     const streamed = `E2E streamed reply to ${SECOND}`;
     await sendMessage(SECOND);
     await stopButton().waitFor({ state: "visible", timeout: 30_000 });
-    const sendUsable = await sendButton().isEnabled().catch(() => false);
-    assert.ok(!sendUsable, "Send stays usable while a claude turn runs (no queue, no steer)");
+    // #71: claude matches pi — no Send button while the turn runs, only Steer and Stop.
+    await waitFor(async () => {
+      const [sends, steers] = await Promise.all([sendButton().count(), steerButton().count()]);
+      return sends === 0 && steers > 0 ? true : false;
+    }, 30_000, "while a claude turn runs the composer still shows a Send button, or no Steer", 250);
     await page.waitForFunction((prefix) => document.body.innerText.includes(prefix), streamed.slice(0, 20), { timeout: 20_000, polling: 50 });
     assert.equal(await stopButton().isVisible(), true, "the reply's partial text arrived only after the turn ended (no token-level streaming)");
     await page.getByText(streamed, { exact: true }).first().waitFor({ timeout: 30_000 });
@@ -318,6 +348,8 @@ try {
     // (owner-approved rebaseline, answer verify1-s3-rebaseline A).
     await page.getByText(`E2E final reply to ${SECOND}`, { exact: true }).first().waitFor({ timeout: 30_000 });
     await stopButton().waitFor({ state: "hidden", timeout: 30_000 });
+    // The ended turn hands the composer back its Send button.
+    await sendButton().waitFor({ state: "visible", timeout: 30_000 });
     const folded = page.locator('button[aria-expanded="false"][aria-label^="Process details"]');
     await waitFor(() => folded.count(), 30_000, "the answered turn shows no process-details toggle", 250);
     for (let i = 0; i < 10 && (await folded.count()); i++) await folded.first().click({ timeout: 5_000 });
@@ -338,7 +370,7 @@ try {
   // S4 — reopening renders history from claude's own jsonl transcript, and no
   // parallel pi session file is stored for the claude session.
   await scenario("S4", async () => {
-    assert.ok(sessionId, "prerequisite: S1 did not create a claude session");
+    await ensureClaudeSession();
     await page.reload({ waitUntil: "domcontentloaded", timeout: 180_000 });
     await page.locator(".chat-input-textarea").waitFor({ state: "visible", timeout: 180_000 });
     await page.getByText(FIRST, { exact: true }).first().waitFor({ timeout: 60_000 });
@@ -355,7 +387,7 @@ try {
   // `--resume <id from the first launch>`, history rendered, conversation
   // continued. The oracle is the stub's recorded argv plus the browser render.
   await scenario("S5", async () => {
-    assert.ok(sessionId, "prerequisite: S1 did not create a claude session");
+    await ensureClaudeSession();
     assert.ok(stubLaunches().length > 0, "no claude child process was ever launched, so the forced-exit-then-resume flow does not exist");
     assert.ok(firstLaunch, "prerequisite: the first claude launch was not recorded by S1");
     if (page) await page.screenshot({ path: join(artifacts, "claude-219-before-exit.png") });
@@ -388,7 +420,7 @@ try {
   // CLAUDE_CONFIG_DIR is injected, and PI_WEB_PASSWORD/CLAUDECODE stay out
   // while the inherited ANTHROPIC_*/CLAUDE_* environment reaches the child.
   await scenario("S6", async () => {
-    assert.ok(firstLaunch, "prerequisite: no claude child process was launched, so its environment cannot be checked");
+    await ensureClaudeSession();
     assert.ok(!existsSync(claudeDir), `the first claude session created the retired dedicated config dir ${claudeDir}`);
     assert.ok(!existsSync(join(homeDir, ".pi", "agent", "claude")), "the first claude session created ~/.pi/agent/claude");
     assert.equal(argvValue(firstLaunch.argv, "--model"), "claude-sonnet-5-5", "prerequisite: the recorded first launch is not the claude session's child");

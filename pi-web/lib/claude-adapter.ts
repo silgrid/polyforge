@@ -724,6 +724,13 @@ export class ClaudeStreamTranslator {
    * retried request streams or the turn ends; null when none is open.
    */
   private retryAttempt: number | null = null;
+  /**
+   * The terminal-only command names claude itself reported in the latest init
+   * frame's `terminal_slash_commands` (polyforge#71, AC3): the runtime half of
+   * the `/` menu's claude-own exclusions, never hardcoded. Null until a frame
+   * claimed any; a frame without the field keeps the last known list.
+   */
+  terminalSlashCommands: string[] | null = null;
   /** claude's own compaction: open from its `compacting` status to the boundary, a failure or the turn's end. */
   private compacting = false;
   /** A hook status line is shown: the turn's end clears it. */
@@ -910,6 +917,11 @@ export class ClaudeStreamTranslator {
         return { events: this.hookResponse(raw) };
       case "init": {
         if (typeof raw.model === "string") this.model = raw.model;
+        // claude re-reports its terminal-only commands every init frame: keep the
+        // latest list (polyforge#71, AC3); a frame without the field changes nothing.
+        if (Array.isArray(raw.terminal_slash_commands) && raw.terminal_slash_commands.every((name) => typeof name === "string")) {
+          this.terminalSlashCommands = [...raw.terminal_slash_commands as string[]];
+        }
         this.inTurn = true;
         const userTurn = this.userTurnStarting;
         this.userTurnStarting = false;

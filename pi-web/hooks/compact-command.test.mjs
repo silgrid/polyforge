@@ -59,6 +59,8 @@ function hook() {
   const compact = deferred();
   const scope = {
     sessionIdRef: { current: "session-1" },
+    isClaudeSession: false,
+    CLAUDE_SESSION_BUILTIN_COMMANDS: ["compact", "session"],
     ensureNewSession: async () => "session-1",
     addNotice: (notice) => calls.notices.push(notice),
     isCompacting: false,

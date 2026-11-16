@@ -64,6 +64,7 @@ import {
   CLAUDE_PROVIDER,
   claudeFirstMessage,
   claudePlanModeAllowed,
+  claudeSlashCommands,
   isClaudeEffort,
   isClaudeModelName,
   isClaudeLaunchPermissionMode,
@@ -71,7 +72,7 @@ import {
   type ClaudeLaunchPermissionMode,
   type ClaudePermissionMode,
 } from "./claude-shared";
-import { claudeResolvedModel } from "./claude-probe";
+import { claudeResolvedModel, probeClaude } from "./claude-probe";
 import type { ClaudeSubagentRun } from "./claude-subagent-view";
 import type { ContextUsage } from "./pi-types";
 import { resolveSessionIdleTimeoutMs } from "./rpc-manager";
@@ -534,6 +535,8 @@ export function claudeRestartRefusal(action: string, work: readonly ClaudeBackgr
 export class ClaudeSession {
   readonly sessionId: string;
   readonly record: ClaudeSessionRecord;
+  /** The claude binary this child runs (also the probe's, AC3's menu source). */
+  readonly binary: string;
   readonly configDir: string;
   readonly argv: readonly string[];
   /**
@@ -591,6 +594,7 @@ export class ClaudeSession {
   constructor(record: ClaudeSessionRecord, binary: string, options: { resume: boolean; configDir: string; resumeAt?: string }) {
     this.sessionId = record.id;
     this.record = record;
+    this.binary = binary;
     this.configDir = options.configDir;
     this.resumeAt = options.resume && options.resumeAt ? options.resumeAt : null;
     this.tasksOwed = options.resume;
@@ -781,7 +785,17 @@ export class ClaudeSession {
         // claude's tools are the user's claude config's, not pi-web's to select or describe.
         return [];
       case "get_commands":
-        return { commands: [] };
+        // polyforge#71 (AC3): claude's own commands, like pi's extension commands.
+        // The startup probe reads the initialize answer's `commands` (cached per
+        // binary, the same cache GET /api/claude warms); the terminal-only names
+        // come from the frames this child's translator has seen (null before the
+        // first frame: claude re-reports them every init); the exclusion table and
+        // `compact` are claudeSlashCommands' own. A failed probe lists nothing.
+        return probeClaude(this.binary).then((probed) => ({
+          commands: "error" in probed ? [] : claudeSlashCommands(probed.commands, this.translator.terminalSlashCommands ?? []).map(
+            (command) => ({ name: command.name, ...(command.description ? { description: command.description } : {}), source: "extension" }),
+          ),
+        }));
       case "get_session_stats": {
         const { file, messages } = readClaudeHistory(this.sessionId);
         const record = this.currentRecord();
