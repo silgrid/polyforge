@@ -41,6 +41,16 @@ func TestW36SkillsCarryTheHumanMergeBranches(t *testing.T) {
 			t.Errorf("skills/publish.md must carry %q (the human-merge branch beside the default one)", want)
 		}
 	}
+	// the mode's condition names the MERGE step's entry of the frozen
+	// modes — publish's own step is never in the file (r1#1: a
+	// "your step" condition can never be true, and the human PR body
+	// would never be written)
+	if strings.Contains(publishSkill, "name your step `human`") {
+		t.Errorf("skills/publish.md must not condition the human body on its own step's entry (the frozen modes carry the merge step's, never publish's)")
+	}
+	if !strings.Contains(w111Flat(publishSkill), w111Flat("name the `merge` step `human`")) {
+		t.Errorf("skills/publish.md must condition the human body on the frozen modes naming the `merge` step `human`")
+	}
 	if !strings.Contains(publishStep, "by: human") && !strings.Contains(publishStep, "step-modes.json") {
 		t.Errorf("steps/publish.md must name the mode its skill branches on")
 	}
