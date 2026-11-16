@@ -1,4 +1,4 @@
-// carries: internal/aihub/core/owner.go, internal/aihub/core/queue.go, internal/aihub/core/session.go
+// carries: internal/aihub/core/owner.go, internal/aihub/core/queue.go, internal/aihub/core/session.go, internal/aihub/core/workitem.go
 
 package core
 
@@ -200,5 +200,95 @@ func TestBoundParentWaitsForChildren(t *testing.T) {
 	}
 	if w := pwWaiting(t, env, r); len(w) != 0 {
 		t.Fatalf("unbound parent waiting_for = %v, want none", w)
+	}
+}
+
+// TestChildParentDependencyCycle (polyforge#77, AC3): cycle detection
+// walks the child → bound-parent wait too. Refused CORE-409
+// DEPENDENCY_CYCLE, nothing written: the parent ordered before its own
+// child (AddDependency and create --after), a child filed after a work
+// item its parent (via other edges) blocks, and an edge closing the loop
+// through the implicit child → parent wait. Legal edges still land.
+func TestChildParentDependencyCycle(t *testing.T) {
+	env := newEnv(t)
+	cycle := func(label string, err error) {
+		t.Helper()
+		if !IsCode(err, api.ErrCoreConflict) || ErrorReason(err) != "DEPENDENCY_CYCLE" {
+			t.Fatalf("%s: want CORE-409/DEPENDENCY_CYCLE, got %v", label, err)
+		}
+	}
+	count := func() int {
+		t.Helper()
+		all, err := env.WIs.List(ListFilters{Project: "alpha"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		return len(all)
+	}
+	blockedBy := func(id string) int {
+		t.Helper()
+		deps, err := env.WIs.Dependencies(id)
+		if err != nil {
+			t.Fatalf("deps: %v", err)
+		}
+		return len(deps.BlockedBy)
+	}
+
+	p := mustCreateExecWI(t, env, "bound parent", nil, "")
+	c := pwChild(t, env, p, "child")
+
+	// The parent ordered before its own child.
+	cycle("parent blocks its child", env.WIs.AddDependency(p, c, "blocks"))
+	if n := blockedBy(c); n != 0 {
+		t.Fatalf("refused edge landed: child blocked by %d", n)
+	}
+	before := count()
+	_, err := env.WIs.Create(CreateRequest{
+		Project: "alpha", Goal: "child after its own parent", Reporter: env.UserID,
+		ParentID: strPtrTest(p), BundleName: strPtrTest("demo-bundle"), After: []string{p},
+	})
+	cycle("create child --after its parent", err)
+
+	// The parent blocks x (a legal edge: x is not its child) ...
+	x := mustCreateExecWI(t, env, "after the parent", nil, "")
+	if err := env.WIs.AddDependency(p, x, "blocks"); err != nil {
+		t.Fatalf("parent blocks an unrelated ticket: %v", err)
+	}
+	// ... so a child filed --after x would wait on x, which waits on the parent.
+	_, err = env.WIs.Create(CreateRequest{
+		Project: "alpha", Goal: "child after the parent's dependent", Reporter: env.UserID,
+		ParentID: strPtrTest(p), BundleName: strPtrTest("demo-bundle"), After: []string{x},
+	})
+	cycle("create child --after a ticket its parent blocks", err)
+	if n := count(); n != before+1 {
+		t.Fatalf("refused creates persisted rows: %d rows, want %d", n, before+1)
+	}
+	// ... and an existing child ordered after x closes the same loop.
+	cycle("child after the parent's dependent", env.WIs.AddDependency(x, c, "blocks"))
+	// One more hop: y after x, the child after y.
+	y := mustCreateExecWI(t, env, "after x", nil, "")
+	if err := env.WIs.AddDependency(x, y, "blocks"); err != nil {
+		t.Fatalf("x blocks y: %v", err)
+	}
+	cycle("child two hops behind its parent", env.WIs.AddDependency(y, c, "blocks"))
+	if n := blockedBy(c); n != 0 {
+		t.Fatalf("refused edges landed: child blocked by %d", n)
+	}
+
+	// Legal edges still land: child-to-child, a child after an unrelated
+	// ticket, the parent's own create-time blocker.
+	c2 := pwChild(t, env, p, "second child")
+	if err := env.WIs.AddDependency(c, c2, "blocks"); err != nil {
+		t.Fatalf("child-to-child edge: %v", err)
+	}
+	z := mustCreateExecWI(t, env, "unrelated", nil, "")
+	if _, err := env.WIs.Create(CreateRequest{
+		Project: "alpha", Goal: "child after an unrelated ticket", Reporter: env.UserID,
+		ParentID: strPtrTest(p), BundleName: strPtrTest("demo-bundle"), After: []string{z},
+	}); err != nil {
+		t.Fatalf("child --after an unrelated ticket: %v", err)
+	}
+	if err := env.WIs.AddDependency(z, p, "blocks"); err != nil {
+		t.Fatalf("an unrelated ticket blocks the parent: %v", err)
 	}
 }

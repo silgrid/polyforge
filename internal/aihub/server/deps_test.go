@@ -182,6 +182,22 @@ func TestDependencyBlockerMustBeExecutionTicket(t *testing.T) {
 	if _, err := c.AddBlocksDependency(epic.Slug, child.Slug); !isWire(err, "CORE-400", "BLOCKER_NOT_EXECUTABLE") {
 		t.Fatalf("child after epic: %v", err)
 	}
+	// polyforge#77: a bundle-bound parent is an execution ticket, but it
+	// waits for its children — ordering it before its own child is a
+	// cycle (CORE-409 DEPENDENCY_CYCLE).
+	var bound, boundChild struct {
+		ID   string `json:"id"`
+		Slug string `json:"slug"`
+	}
+	e.do(t, "POST", "/api/v1/work-items", e.key, map[string]any{"project": "alpha", "goal": "bound parent",
+		"bundle_name": "demo-bundle"}, &bound)
+	if code, raw := e.do(t, "POST", "/api/v1/work-items", e.key, map[string]any{"project": "alpha", "goal": "bound child",
+		"parent_id": bound.ID, "bundle_name": "demo-bundle"}, &boundChild); code != 201 {
+		t.Fatalf("child under bound parent: %d %s", code, raw)
+	}
+	if _, err := c.AddBlocksDependency(bound.Slug, boundChild.Slug); !isWire(err, "CORE-409", "DEPENDENCY_CYCLE") {
+		t.Fatalf("child after its bound parent: %v", err)
+	}
 }
 
 // --after in the create body is atomic: the edges land with the work
