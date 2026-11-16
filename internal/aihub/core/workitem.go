@@ -188,9 +188,9 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 		return nil, err
 	}
 	if req.ParentID != nil && *req.ParentID != "" {
-		var parentProject, parentBundle, grandParent sql.NullString
-		err = tx.QueryRow(`SELECT project_id, bundle_name, parent_id FROM work_items WHERE id=?1`, *req.ParentID).
-			Scan(&parentProject, &parentBundle, &grandParent)
+		var parentProject, grandParent sql.NullString
+		err = tx.QueryRow(`SELECT project_id, parent_id FROM work_items WHERE id=?1`, *req.ParentID).
+			Scan(&parentProject, &grandParent)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, Fail(api.ErrCoreBadInput, "PARENT_NOT_FOUND", "parent %q", *req.ParentID)
 		}
@@ -200,12 +200,13 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 		if parentProject.String != projectID {
 			return nil, Fail(api.ErrCoreBadInput, "PARENT_PROJECT_MISMATCH", "parent belongs to another project")
 		}
-		if parentBundle.Valid && parentBundle.String != "" {
-			return nil, Fail(api.ErrCoreBadInput, "PARENT_NOT_REGISTRY", "parent is an execution ticket, not a registry ticket")
-		}
+		// polyforge#77 deleted PARENT_NOT_REGISTRY: a bundle-bound ticket may
+		// be a parent (it executes its own workflow and, once bound, waits
+		// for its children to merge before it is claimable).
+		//
 		// Depth is one level (wi-kind-contract.md §2): the parent may not itself have
-		// a parent. parent_id is immutable after create, so this create
-		// check is the whole rule.
+		// a parent. parent_id is immutable after create (PATCH clears it only),
+		// so this create check is the whole rule.
 		if grandParent.Valid && grandParent.String != "" {
 			return nil, Fail(api.ErrCoreBadInput, "PARENT_DEPTH", "parent %q is itself a child; work items nest one level only", *req.ParentID)
 		}
@@ -310,9 +311,12 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 // checkBlockerTx enforces the blocker-side rules of a `blocks` edge
 // (polyforge#161): the blocker exists, lives in projectID (dependency
 // edges never cross projects) and is an execution ticket — a ticket with
-// no bundle (registration ticket or epic) runs nothing: it closes only
-// when someone runs `pf wrap` on it once done (an epic only after its
-// children are terminal), so nothing would release the edge on its own.
+// no bundle runs nothing: it closes only when someone runs `pf wrap` on
+// it once done (a parent only after its children are terminal), so
+// nothing would release the edge on its own. A bundle-bound parent is
+// an ordinary execution ticket here (polyforge#77 deleted the
+// registry-only parent rule); its waiting on children is the shared
+// unfinished-blockers judgment, not this check.
 // ref is the caller's spelling for errors.
 func checkBlockerTx(q queryRower, blockingID, ref, projectID string) error {
 	var proj string
@@ -591,25 +595,6 @@ func parseBundlePatch(fields map[string]json.RawMessage) (*bundlePatch, error) {
 	return &bp, nil
 }
 
-// refuseBundleWithChildrenTx is the symmetric children-side rule (w140,
-// spec R-对称-1): a ticket WITH children must never GAIN a bundle —
-// children count in any status (terminal included). The PATCH bind entry
-// runs it inside its transaction and re-validates it in the guarded
-// write; the create entry cannot violate it (a created row is childless
-// by construction) but runs the mirror rule instead: a bundle-bound
-// ticket is never a parent (PARENT_NOT_REGISTRY, below).
-func refuseBundleWithChildrenTx(q queryRower, wiID string) error {
-	var n int
-	if err := q.QueryRow(`SELECT COUNT(*) FROM work_items WHERE parent_id=?1`, wiID).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return Fail(api.ErrCoreBadInput, "HAS_CHILDREN_NO_BUNDLE",
-			"work item has %d child ticket(s); a ticket with children cannot bind a workflow bundle", n)
-	}
-	return nil
-}
-
 // diagnoseR2Window is the R2 bundle-PATCH gate's error face (w140). The
 // window is status==queued AND never claimed; "never claimed" uses the
 // claim judgment (spec Assumption 4): no live session row AND no
@@ -800,21 +785,18 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 		}
 	}
 	if bp != nil {
-		// R2 window and the symmetric child rule, judged on this
-		// transaction's snapshot; the store has a single connection (Open:
-		// SetMaxOpenConns(1)), so no claim or child create interleaves
-		// before the write below.
+		// R2 window, judged on this transaction's snapshot; the store has a
+		// single connection (Open: SetMaxOpenConns(1)), so no claim or child
+		// create interleaves before the write below. polyforge#77 deleted the
+		// symmetric child rule: a parent with children may bind a bundle.
 		if err := diagnoseR2Window(tx, id); err != nil {
 			return nil, err
 		}
-		if bp.binding() {
-			// Symmetric child rule, inside the same transaction (w140).
-			if err := refuseBundleWithChildrenTx(tx, id); err != nil {
+		if !bp.binding() {
+			// polyforge#161: an unbound blocker runs nothing to release its dependents.
+			if err := refuseUnbindWhileBlockingTx(tx, id); err != nil {
 				return nil, err
 			}
-		} else if err := refuseUnbindWhileBlockingTx(tx, id); err != nil {
-			// polyforge#161: an unbound blocker runs nothing to release its dependents.
-			return nil, err
 		}
 		name := bundleRef(bp.Name)
 		sets = append(sets, "bundle_name=?")
