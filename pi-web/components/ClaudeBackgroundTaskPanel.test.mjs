@@ -91,7 +91,9 @@ test("an ended task hides stop and shows its final status and time under close i
   const statusLabel = side.indexOf('data-claude-task-status-label=""');
   assert.ok(statusLabel > close, `the final status is not below close: ${side}`);
   assert.match(side.slice(statusLabel), />Stopped</, "the ended panel shows no final status");
-  assert.match(side, />2s</, "the ended panel shows no final duration");
+  // The final duration is the fixture's hand-computed run: started 9s before the
+  // fixed now, ended 2s before it, so the task ran 7s.
+  assert.match(side, />7s</, "the ended panel shows no final duration");
 
   assert.match(render({ status: "completed", endedAt: NOW - 2_000 }), />Completed</, "a completed task shows no Completed status");
 
