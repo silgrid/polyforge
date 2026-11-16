@@ -28,7 +28,7 @@ import type { PolyforgeContextUsage, PolyforgeWatchStatus } from "@/lib/polyforg
 import { POLYFORGE_BLOCK_STYLE } from "@/lib/panel-layout";
 import { usePolyforgePanelPreferences } from "@/hooks/usePolyforgePanelPreferences";
 import type { PolyforgeContact, PolyforgeConversation, PolyforgeMessage, PolyforgeProjectGroup } from "@/lib/polyforge-messages-pure";
-import type { PolyforgeTab, PolyforgeWorkTab } from "@/hooks/usePolyforge";
+import type { PolyforgeTab, PolyforgeTaskRequest, PolyforgeWorkTab } from "@/hooks/usePolyforge";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { usePolyforgeProgress } from "@/hooks/usePolyforgeProgress";
 import { PolyforgeMessages, type PolyforgeMessagesProps } from "./PolyforgeMessages";
@@ -1404,7 +1404,7 @@ export function PolyforgePanel({
   decisionsSurface: {
     feed: PolyforgeDecisionFeed | null;
     onDismiss: (ids: number[]) => Promise<void>;
-    taskRequest: { id: string; seq: number } | null;
+    taskRequest: PolyforgeTaskRequest | null;
     /** The request was handed to the Tasks surface: the hook drops it, so a
      *  dock reopen does not reopen the task (PR #860 minor 1). */
     onTaskRequestHandled: () => void;
@@ -1458,12 +1458,15 @@ export function PolyforgePanel({
   const renderWorkDetail = useCallback((detail: ReactNode) => (workDetailSlot ? createPortal(detail, workDetailSlot) : null), [workDetailSlot]);
   const workDetailOpen = workTab === "jobs" ? Boolean(opsStatus) : subDetailOpen;
 
-  // an analysis card's task link switches to Work › Tasks and
-  // hands that sub-tab the one task id to open (its existing detail read);
-  // the Tasks surface clears it once handled. Component memory only.
-  const [taskToOpen, setTaskToOpen] = useState<string | null>(null);
-  const openTask = useCallback((taskId: string) => {
-    setTaskToOpen(taskId);
+  // an analysis card's task link (or the walk's task) switches to
+  // Work › Tasks and hands that sub-tab the one task to open (its existing
+  // detail read), the task's own Cell included (polyforge#73: the analysis
+  // card's task belongs to the Messages pane's pinned Cell, the walk's to
+  // its entry); the Tasks surface clears it once handled. Component memory
+  // only.
+  const [taskToOpen, setTaskToOpen] = useState<{ id: string; cell?: string } | null>(null);
+  const openTask = useCallback((taskId: string, cell?: string | null) => {
+    setTaskToOpen(cell ? { id: taskId, cell } : { id: taskId });
     onWorkTab("tasks");
     onActiveTab("work");
   }, [onActiveTab, onWorkTab]);
@@ -1474,7 +1477,7 @@ export function PolyforgePanel({
   const onTaskRequestHandled = decisionsSurface.onTaskRequestHandled;
   useEffect(() => {
     if (!taskRequest) return;
-    setTaskToOpen(taskRequest.id);
+    setTaskToOpen(taskRequest.profile ? { id: taskRequest.id, cell: taskRequest.profile } : { id: taskRequest.id });
     onTaskRequestHandled();
   }, [taskRequest, onTaskRequestHandled]);
 
@@ -1811,7 +1814,7 @@ export function PolyforgePanel({
                 // while this sub-page is visible; none elsewhere (it unmounts).
                 <PolyforgeTasks
                   taskCountKey={opsStatus ? `${opsStatus.tasks?.running ?? 0}:${opsStatus.tasks?.completed ?? 0}` : null}
-                  openTaskId={taskToOpen}
+                  openTask={taskToOpen}
                   onOpenTaskHandled={clearTaskToOpen}
                   decisions={decisionsSurface.feed?.decisions ?? []}
                   onDismissDecisions={decisionsSurface.onDismiss}

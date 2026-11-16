@@ -33,17 +33,6 @@ const jiti = createJiti(import.meta.url, {
 const { renderHook } = await import(pathToFileURL(shimPath).href);
 const { PolyforgeTasks } = await jiti.import("./PolyforgeTasks.tsx");
 
-const ROW = (id, cell) => ({
-  id,
-  project: "workbench",
-  state: "completed",
-  prompt_summary: `prompt of ${id}`,
-  ended_at: "2026-11-16T00:00:00Z",
-  wall_consumed_ns: 60e9,
-  report_tail: "",
-  reporter: "alice",
-  ...(cell ? { cell } : {}),
-});
 const DETAIL = {
   id: "task_1111111111111111", project: "workbench", state: "completed", candidates: ["pi:m/one"],
   max_duration_ns: 1, max_tokens: 1, wall_consumed_ns: 1, tokens_consumed: 1, created_at: "2026-11-16T00:00:00Z",

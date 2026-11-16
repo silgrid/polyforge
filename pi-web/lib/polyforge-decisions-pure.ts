@@ -198,7 +198,7 @@ export function decisionSourceShown(decision: Pick<PolyforgeDecision, "kind" | "
 
 export type PolyforgeDecisionTarget =
   | { kind: "job"; ref: string; profile?: string }
-  | { kind: "task"; id: string };
+  | { kind: "task"; id: string; profile?: string };
 
 function jobMatches(job: Pick<PolyforgeJob, "wi" | "slug" | "profile">, decision: Pick<PolyforgeDecision, "wi" | "slug" | "profile">): boolean {
   const named = (decision.wi && job.wi === decision.wi) || (!decision.wi && decision.slug && job.slug === decision.slug);
@@ -210,9 +210,14 @@ function jobMatches(job: Pick<PolyforgeJob, "wi" | "slug" | "profile">, decision
  *  Work › Jobs — the live job of the last status read (its Cell), else the
  *  work item by id in the entry's own Cell (a job the daemon dropped still
  *  has a detail: the watch snapshot and the event-log progress); a task →
- *  Work › Tasks; null when it names nothing openable. */
+ *  Work › Tasks, in the entry's own Cell (polyforge#73: the detail read is
+ *  pinned to it); null when it names nothing openable. */
 export function decisionJumpTarget(decision: PolyforgeDecision, jobs: readonly PolyforgeJob[]): PolyforgeDecisionTarget | null {
-  if (decision.kind === "task") return decision.task_id ? { kind: "task", id: decision.task_id } : null;
+  if (decision.kind === "task") {
+    return decision.task_id
+      ? { kind: "task", id: decision.task_id, ...(decision.profile ? { profile: decision.profile } : {}) }
+      : null;
+  }
   const job = jobs.find((candidate) => jobMatches(candidate, decision));
   if (job) return { kind: "job", ref: job.wi || job.slug, ...(job.profile ? { profile: job.profile } : {}) };
   return decision.wi ? { kind: "job", ref: decision.wi, profile: profileOf(decision) } : null;
@@ -340,11 +345,11 @@ export function droppedItemAttention(
 
 /** Where the attention walk sends an item: a waiting job or a work item
  *  entry → its job detail (selected; nothing else opens); a
- *  task entry → Work › Tasks on that task; null when the entry names nothing
- *  openable. */
+ *  task entry → Work › Tasks on that task, in its own Cell (polyforge#73);
+ *  null when the entry names nothing openable. */
 export type PolyforgeAttentionTarget =
   | { kind: "job"; ref: string; profile?: string }
-  | { kind: "task"; id: string };
+  | { kind: "task"; id: string; profile?: string };
 
 export function attentionTarget(item: PolyforgeAttentionItem, jobs: readonly PolyforgeJob[]): PolyforgeAttentionTarget | null {
   if (item.kind === "job") return { kind: "job", ref: item.job.wi || item.job.slug, ...(item.job.profile ? { profile: item.job.profile } : {}) };

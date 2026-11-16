@@ -104,7 +104,7 @@ function formatNs(ns: number): string {
 
 export function PolyforgeTasks({
   taskCountKey,
-  openTaskId = null,
+  openTask = null,
   onOpenTaskHandled,
   decisions = [],
   onDismissDecisions,
@@ -115,9 +115,10 @@ export function PolyforgeTasks({
    *  (null without a snapshot). A change while this surface is mounted
    *  re-reads the list exactly once; the mount value never does. */
   taskCountKey: string | null;
-  /** a task to open from outside (an analysis card's task
-   *  link) — its existing detail read runs once, then onOpenTaskHandled. */
-  openTaskId?: string | null;
+  /** a task to open from outside (an analysis card's task link, the
+   *  attention walk's target) — its existing detail read runs once, pinned
+   *  to the handed Cell, then onOpenTaskHandled (polyforge#73). */
+  openTask?: { id: string; cell?: string | null } | null;
   onOpenTaskHandled?: () => void;
   /** the decision feed's entries (the hook's read); a task's
    *  terminal summary entries are matched to its row by task id. */
@@ -146,7 +147,8 @@ export function PolyforgeTasks({
   // a count change or the button). Only that newest read clears it.
   const [listRefreshing, setListRefreshing] = useState(false);
 
-  const [selected, setSelected] = useState<string | null>(null);
+  // the selected task: its id and its Cell together (polyforge#73).
+  const [selected, setSelected] = useState<{ id: string; cell?: string } | null>(null);
   const [detail, setDetail] = useState<PolyforgeTaskDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -217,14 +219,20 @@ export function PolyforgeTasks({
     return () => clearInterval(clock);
   }, [hasRunning]);
 
-  const openDetail = (id: string) => {
+  const openDetail = (id: string, cell?: string | null) => {
     if (!isPolyforgeTaskId(id)) return;
     const seq = ++detailSeqRef.current;
-    setSelected(id);
+    // the selection is the id and its Cell together — the same id in two
+    // Cells is two tasks (polyforge#73)
+    setSelected(cell ? { id, cell } : { id });
     setDetail(null);
     setDetailError(null);
     setExpanded(false);
-    fetch(`/api/polyforge/tasks/${encodeURIComponent(id)}`)
+    // the detail reads the row's own Cell (pf --profile <cell> --json task
+    // show); a Cell-less row keeps the unflagged read
+    fetch(cell
+      ? `/api/polyforge/tasks/${encodeURIComponent(id)}?profile=${encodeURIComponent(cell)}`
+      : `/api/polyforge/tasks/${encodeURIComponent(id)}`)
       .then(async (response) => {
         const body = await response.json() as ShowResponse;
         if (seq !== detailSeqRef.current) return;
@@ -239,14 +247,15 @@ export function PolyforgeTasks({
       });
   };
 
-  // an external open (the analysis card's task link) is the
-  // same one detail read a row click makes, once per handed id.
+  // an external open (the analysis card's link, the walk's
+  // target) is the same one detail read a row click makes, once per handed
+  // task, its Cell included.
   useEffect(() => {
-    if (!openTaskId) return;
-    openDetail(openTaskId);
+    if (!openTask) return;
+    openDetail(openTask.id, openTask.cell ?? undefined);
     onOpenTaskHandled?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one detail read per handed id; openDetail is a plain closure
-  }, [openTaskId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one detail read per handed task; openDetail is a plain closure
+  }, [openTask]);
 
   const back = () => {
     detailSeqRef.current += 1;
@@ -278,7 +287,7 @@ export function PolyforgeTasks({
   // the detail no longer replaces the list — it is handed
   // to renderDetail, which shows it below Work's top part, full width.
   const detailView = selected ? (() => {
-    const selectedDecisions = taskDecisions(decisions, selected);
+    const selectedDecisions = taskDecisions(decisions, selected.id);
     const reportCapped = detail ? isMemoryBodyTruncated(detail.report, detail.report_len) || detail.truncated : false;
     const collapsible = detail ? detail.report_len > MEMORY_COLLAPSE_BYTES : false;
     const meta = (label: string, value: string) => (
@@ -294,7 +303,7 @@ export function PolyforgeTasks({
             style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 11, padding: 0 }}>
             ← {t("polyforge.tasks.back")}
           </button>
-          <span data-pf-task={selected} style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{selected}</span>
+          <span data-pf-task={selected.id} style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{selected.id}</span>
         </div>
         {detailError && <div style={{ padding: "8px 12px", color: "#dc2626", fontSize: 12 }}>{detailError}</div>}
         {!detail && !detailError && notice(t("polyforge.loading"))}
