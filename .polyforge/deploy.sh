@@ -198,7 +198,12 @@
 # Environment, required (no defaults - the deployment's topology is not in
 # this repo). Set them in the environment or in the operator-owned, untracked
 # ~/.config/polyforge/deploy.env (shell assignments, read when the file exists;
-# a variable the environment already set wins over the file). Any one missing
+# a variable the environment already set wins over the file). A step process
+# carries the deploy configuration of its work item's Cell as PF_DEPLOY_ENV
+# (an absolute path: deploy.env for the default Cell, deploy-<profile>.env for
+# a named one); the script reads it when set and REFUSES before any work when
+# that file does not exist - a Cell never falls back to another Cell's
+# configuration. Any one missing
 # is a usage error (exit 2, the missing NAMES listed) before any network work,
 # --dry-run included. Placeholder example:
 #   AIHUB_HOST=root@<aihub-host>                      (ssh target of the server)
@@ -297,8 +302,19 @@ fi
 # The deployment's topology is operator-owned, never in this repo: the five
 # required variables come from the environment or from DEPLOY_ENV (shell
 # assignments, read when the file exists); a variable the environment already
-# set wins over the file. Checked before ANY network work, --dry-run included.
+# set wins over the file. The file itself is PF_DEPLOY_ENV's when the daemon
+# of the work item's Cell started the step (that Cell's deploy configuration);
+# it must exist or the deploy REFUSES here - before ANY network work, --dry-run
+# and --preflight included, both components alike: a Cell never falls back to
+# another Cell's configuration.
 DEPLOY_ENV="${HOME:-}/.config/polyforge/deploy.env"
+if [ -n "${PF_DEPLOY_ENV:-}" ]; then
+  if [ ! -f "$PF_DEPLOY_ENV" ]; then
+    echo "deploy: REFUSED - PF_DEPLOY_ENV names $PF_DEPLOY_ENV, which does not exist - this Cell's deploy configuration is missing; nothing was touched." >&2
+    exit 1
+  fi
+  DEPLOY_ENV="$PF_DEPLOY_ENV"
+fi
 if [ -n "${HOME:-}" ] && [ -f "$DEPLOY_ENV" ]; then
   ENV_SNAPSHOT="$(export -p)"
   set -a
