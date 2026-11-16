@@ -98,6 +98,19 @@ func TestW36StepModesFrozenAtFirstClaim(t *testing.T) {
 		!strings.Contains(err.Error(), "steps.proj.b.by") || !strings.Contains(err.Error(), "demo-bare") {
 		t.Fatalf("a by on a step of a lane that declares no human_mergeable refuses the claim naming the lane: %v", err)
 	}
+
+	// a by on a step the lane does not carry governs nothing (a skip's
+	// rule): the project's integrate and release batches run on lanes
+	// with no merge step, and their claims succeed with no mode — the
+	// refusal is only for a step the lane carries (polyforge#36 r1#2)
+	workflowtest.WriteLane(t, lanes, "demo-pool", "steps:\n  - { id: collect }\n  - { id: close }\n")
+	capPool, err := w36Claim(t, r, "wi_w36pool", "demo-pool")
+	if err != nil {
+		t.Fatalf("a by on a step the lane does not carry must not refuse the claim: %v", err)
+	}
+	if got := w36Modes(t, capPool); len(got) != 0 {
+		t.Fatalf("a lane that carries no such step takes no mode: modes = %v, want {}", got)
+	}
 }
 
 // w36Modes reads the capsule's step modes (the file must exist and be a
