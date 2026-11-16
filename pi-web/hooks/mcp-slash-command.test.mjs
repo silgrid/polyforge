@@ -58,6 +58,7 @@ function hook({ commands = [], pending = null, getCommands = async () => ({ comm
   const calls = { notices: [], opened: [], requests: [], lists: [], errors: [], loading: [] };
   const scope = {
     sessionIdRef: { current: "session-1" },
+    isClaudeSession: false,
     ensureNewSession: async () => "session-1",
     addNotice: (notice) => calls.notices.push(notice),
     onOpenSettings: openSettings ? (section) => calls.opened.push(section) : undefined,
