@@ -197,6 +197,12 @@ type WIView struct {
 	// while its lane requires one — the same lane gate as
 	// AcceptanceMissing (polyforge#27): the auto-pull wave skips it too.
 	AnalysisMissing bool `json:"analysis_missing,omitempty"`
+	// AnalysisUnconfirmed is set by pf queue (never by the server) on a
+	// queued execution ticket whose analysis section still carries the
+	// unconfirmed auto-analysis marker (polyforge#72): the auto-pull wave
+	// skips it until the owner confirms (`pf file analysis confirm`).
+	// Stub (build u10, red first).
+	AnalysisUnconfirmed bool `json:"analysis_unconfirmed,omitempty"`
 }
 
 // acceptanceMissingLabel is the STATUS-cell mark of an AcceptanceMissing
