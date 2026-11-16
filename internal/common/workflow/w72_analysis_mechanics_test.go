@@ -36,7 +36,7 @@ func TestW72AnalysisUnconfirmed(t *testing.T) {
 	}{
 		{"unconfirmed marker inside the section", w72Ticket, true},
 		{"marker confirmed away", strings.Replace(w72Ticket, AutoAnalysisMarker("task_0123456789abcdef")+"\n", "", 1), false},
-		{"marker outside the section is not the section's", "## 分析\n\nsome text\n\n<!-- pf:auto-analysis task_0123456789abcdef unconfirmed -->\n\n## 背景\n\nx\n", false},
+		{"marker outside the section is not the section's", "## 分析\n\nsome text\n\n## 背景\n\n" + AutoAnalysisMarker("task_0123456789abcdef") + "\n", false},
 		{"no marker at all", "## 分析\n\n免分析（2026-11-16，owner）\n", false},
 		{"no section", "## 背景\n\nx\n", false},
 	}
