@@ -76,6 +76,12 @@ each runs at the worktree's root, in order, the way the run does (same
 isolation, environment and time limit), the first run's logs kept under
 first/, each line's under setup/<k>/; the run replayed again decides. A
 line that fails makes the unit `not_runnable` by rule `base-setup`.
+Every structural check — the units file's shape, a unit's resolution,
+its commits' test-first shape and, with --replay, its run declaration
+(a run that is missing or records no argv, or one naming a repo other
+than the one holding its commits) and a pre_existing_red unit's change
+base — runs to completion before any replay: any failure among them
+exits before a replay is made, whatever other units are sound.
 Exit 0: every unit resolves, its commits are test-first and, when
 replayed, its run is red at the test commit. Exit 1: no unit is reported,
 a unit does not resolve, its commits are not test-first, or its replay
@@ -2077,6 +2083,7 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
     repos: Dict[str, Repo] = {}
     problems: List[str] = []
     entries: List[Tuple[Unit, Dict[str, Any]]] = []
+    bases: Dict[int, str] = {}
     for i, u in enumerate(resolved):
         bu = u.as_dict()
         commits = ""
@@ -2091,6 +2098,22 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
                 commits = repos[u.repo].check_unit_commits(u.test_commit, u.impl_commit)
             if commits:
                 problems.append("unit %s (repos/%s): %s" % (quote(clip_text(u.id)), u.repo, commits))
+            elif ns.replay:
+                # the run declaration and a pre_existing_red unit's base
+                # are judged without any replay too, so a defect in
+                # either fails before one is made (r1#1: a sound unit
+                # was replayed first — the #53 waste under another name)
+                run = decls[i]["run"]
+                if run is None or not run["argv"]:
+                    problems.append("unit %s: reports no run (units.json run.argv is empty), so its red run cannot be replayed" % quote(clip_text(u.id)))
+                elif run["repo"] != u.repo:
+                    problems.append("unit %s: its run names repos/%s, its commits are in repos/%s" % (quote(clip_text(u.id)), clip_text(run["repo"]), u.repo))
+                elif u.pre_existing_red:
+                    base, why = change_base(os.path.join(c.repos_dir, u.repo))
+                    if why:
+                        problems.append("unit %s: the change's base is unknown, so where it was already red cannot be replayed: %s" % (quote(clip_text(u.id)), why))
+                    else:
+                        bases[i] = base
         if commits:
             bu["commits"] = commits
         run = decls[i]["run"]
@@ -2102,6 +2125,13 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
     d["test_weakened"] = weakened
     if not decls:
         inv.summary = "no unit is reported in %s — a build without a red-then-green unit proves nothing" % units_file
+        return 1
+    if problems:
+        # every structural check is complete before any replay: one
+        # failure among them stops the run here, nothing is replayed
+        # (polyforge#53 paid five replay minutes to learn its
+        # test_commit had 2 parents; the structure refusal is instant)
+        inv.summary = "%d of %d unit(s) fail the test-first check: %s" % (len(problems), len(units), "; ".join(clip_list(problems, 3)))
         return 1
     if ns.replay:
         logs = ns.log_dir
@@ -2126,22 +2156,10 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
         inv.details = d = {"units_file": d["units_file"], "replay": d["replay"], "units": units, "test_weakened": d["test_weakened"]}
         env = dict(environ)
         for i, (u, bu) in enumerate(entries):
-            if u.why or bu.get("commits"):
-                continue  # nothing sound to replay
-            run = decls[i]["run"] or {"repo": "", "cwd": "", "argv": None}
-            if not run["argv"]:
-                problems.append("unit %s: reports no run (units.json run.argv is empty), so its red run cannot be replayed" % quote(clip_text(u.id)))
-                continue
-            if run["repo"] != u.repo:
-                problems.append("unit %s: its run names repos/%s, its commits are in repos/%s" % (quote(clip_text(u.id)), clip_text(run["repo"]), u.repo))
-                continue
+            run = decls[i]["run"]
             commit, where = u.test_commit, "test commit"
             if u.pre_existing_red:
-                base, why = change_base(os.path.join(c.repos_dir, u.repo))
-                if why:
-                    problems.append("unit %s: the change's base is unknown, so where it was already red cannot be replayed: %s" % (quote(clip_text(u.id)), why))
-                    continue
-                commit, where = base, "the change's base"
+                commit, where = bases[i], "the change's base"
             inv.say("unit %s: replaying `%s` at %s %s (%d/%d)" % (u.id, gotext.shell_join(run["argv"]), where, short_sha(commit), i + 1, len(entries)))
             try:
                 rr = replay(c.dir, u, run, commit, where, deadline_at, ns.unit_timeout / duration.SECOND,

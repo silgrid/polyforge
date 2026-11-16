@@ -23,7 +23,13 @@ what it claims before you build on it or report it.
   disjoint, each working in a different repo clone and none needing another task's code, may run at
   the same time (a red or green run counts only on a clean tree, and one clone holds one
   implementer's uncommitted work). A task's write set is its units' `(write)` paths: it writes
-  nothing else and commits only them (`git add <path>`, never `-A`). Each task returns, per unit,
+  nothing else and commits only them (`git add <path>`, never `-A`); the run is that unit's
+  test alone (the test runner's own name filter; a suite without one is named in the task's
+  answer and runs once, in the scoped command), the red is taken once, at the test commit — no
+  manual worktree replay: the facts engine's replay is the record — a flaky failure re-runs only
+  the suite that failed, once, and a long command writes its output to a log file with its exit
+  code (`> log 2>&1; echo exit=$?`) and the log is searched after the run — never piped straight
+  into grep, head or tail. Each task returns, per unit,
   `test_commit`, `impl_commit`, the run that went red then green (`repo`, `cwd`, `argv`) with both
   exit codes, its marker and the files it changed (a unit declared `pre_existing_red` returns no
   `test_commit` — its reproduction test predates the change and its red evidence is the engine's

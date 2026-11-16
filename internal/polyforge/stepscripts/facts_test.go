@@ -257,12 +257,10 @@ func TestFactsBuildReplayRedAtTheTestCommit(t *testing.T) {
 	}
 }
 
-func TestFactsBuildReplayNotRedFailsAndNoRunIsAProblem(t *testing.T) {
+func TestFactsBuildReplayNotRedFails(t *testing.T) {
 	f, tc, ic := replayCapsule(t)
 	writeUnits(t, f, []factsUnitDecl{
 		{ID: "u1", TestCommit: tc, ImplCommit: ic, Run: &factsUnitRun{Repo: "app", Argv: []string{"true"}}},
-		{ID: "u2", TestCommit: tc, ImplCommit: ic},
-		{ID: "u3", TestCommit: tc, ImplCommit: ic, Run: &factsUnitRun{Repo: "other", Argv: []string{"true"}}},
 	})
 	exit, res, _ := factsRun(t, f, newFakeRuntime(t), FactsBuild, "--replay")
 	var d buildDetails
@@ -273,10 +271,37 @@ func TestFactsBuildReplayNotRedFailsAndNoRunIsAProblem(t *testing.T) {
 	if r := d.Units[0].Replay; r == nil || r.Red || r.Exit != 0 {
 		t.Fatalf("u1 passes before its implementation: %+v", r)
 	}
-	if d.Units[1].Replay != nil || d.Units[2].Replay != nil {
-		t.Fatalf("a unit without a usable run is not replayed: %+v %+v", d.Units[1], d.Units[2])
+	if !strings.Contains(res.Summary, "exited 0 on the tree of test_commit") {
+		t.Fatalf("summary lacks the not-red refusal: %s", res.Summary)
 	}
-	for _, want := range []string{"3 of 3 unit(s) fail", "exited 0 on the tree of test_commit", "reports no run", "its run names repos/other"} {
+	if extra := replayWorktrees(t, f); len(extra) != 0 {
+		t.Fatalf("worktrees left behind: %v", extra)
+	}
+}
+
+// A unit whose run declaration is defective (no run, a run naming another
+// repo) fails the structural check before any replay is made (AC4, r2#1):
+// the sound unit beside it is not replayed either, so no unit carries a
+// replay record and the summary names the declaration refusals alone.
+func TestFactsBuildReplayRunDeclarationDefectsStopBeforeAnyReplay(t *testing.T) {
+	f, tc, ic := replayCapsule(t)
+	writeUnits(t, f, []factsUnitDecl{
+		{ID: "u1", TestCommit: tc, ImplCommit: ic, Run: &factsUnitRun{Repo: "app", Argv: []string{"sh", "test/run.sh"}}},
+		{ID: "u2", TestCommit: tc, ImplCommit: ic},
+		{ID: "u3", TestCommit: tc, ImplCommit: ic, Run: &factsUnitRun{Repo: "other", Argv: []string{"true"}}},
+	})
+	exit, res, _ := factsRun(t, f, newFakeRuntime(t), FactsBuild, "--replay")
+	var d buildDetails
+	detailsOf(t, res, &d)
+	if exit != 1 || res.Verdict != VerdictFail {
+		t.Fatalf("exit %d %s", exit, res.Summary)
+	}
+	for i, u := range d.Units {
+		if u.Replay != nil {
+			t.Fatalf("unit %d replayed though the run declarations are defective: %+v", i, u)
+		}
+	}
+	for _, want := range []string{"2 of 3 unit(s) fail", "reports no run", "its run names repos/other"} {
 		if !strings.Contains(res.Summary, want) {
 			t.Fatalf("summary lacks %q: %s", want, res.Summary)
 		}
