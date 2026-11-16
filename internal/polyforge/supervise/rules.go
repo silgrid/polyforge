@@ -6,6 +6,7 @@ package supervise
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -167,7 +168,7 @@ func medianDuration(l []time.Duration) time.Duration {
 		return 0
 	}
 	s := append([]time.Duration(nil), l...)
-	sortDurations(s)
+	slices.Sort(s)
 	n := len(s)
 	if n%2 == 1 {
 		return s[n/2]
@@ -182,18 +183,9 @@ func p90Duration(l []time.Duration) time.Duration {
 		return 0
 	}
 	s := append([]time.Duration(nil), l...)
-	sortDurations(s)
+	slices.Sort(s)
 	idx := (len(s)*9+9)/10 - 1 // nearest rank: ceil(0.9·n) - 1, in ints
 	return s[idx]
-}
-
-// sortDurations sorts in place, smallest first.
-func sortDurations(s []time.Duration) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
 }
 
 // percentOf answers part as an integer percentage of whole (0 when whole
