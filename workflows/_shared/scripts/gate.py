@@ -1194,6 +1194,9 @@ class Session:
         templates); raises TriageError naming why it could not be had."""
         directory = os.path.abspath(directory)
         os.makedirs(log_dir, exist_ok=True)
+        if select_engine(directory)[0] == "":
+            raise TriageError("neither the tree nor the lane carries a scope engine: the gate's plan is one's"
+                              " (%s in the tree, %s in the lane)" % (GATE_ENGINE_REL, LANE_ENGINE))
         if not container.has_dockerfile_at(directory, "HEAD"):
             raise TriageError("HEAD carries no %s: the gate runs only inside that container" % container.DOCKERFILE_VERIFY)
         o, why = gate.open(directory, repo, log_dir)
