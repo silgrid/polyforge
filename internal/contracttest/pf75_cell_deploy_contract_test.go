@@ -14,7 +14,6 @@ package test
 // host or Cell.
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 )
