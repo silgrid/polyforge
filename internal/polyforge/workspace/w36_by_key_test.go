@@ -51,8 +51,8 @@ func TestW36StepByHumanKey(t *testing.T) {
 	// the leaf takes the one mode this release knows
 	for name, body := range map[string]string{
 		"another mode": "steps:\n  p:\n    merge: { by: lane }\n",
-		"a bool":      "steps:\n  p:\n    merge: { by: true }\n",
-		"empty":       "steps:\n  p:\n    merge: { by: \"\" }\n",
+		"a bool":       "steps:\n  p:\n    merge: { by: true }\n",
+		"empty":        "steps:\n  p:\n    merge: { by: \"\" }\n",
 	} {
 		_, err := Load(writeYaml(t, body), nil)
 		if err == nil || !strings.Contains(err.Error(), "steps.p.merge.by") || !strings.Contains(err.Error(), "takes `human`") {
@@ -81,3 +81,5 @@ func TestW36StepByHumanKey(t *testing.T) {
 		t.Fatalf("StaleKeys names the by on the step no lane carries: %v", stale)
 	}
 }
+
+// (u1: the by leaf red runs on this tree; the loader parses it in C_1.)
