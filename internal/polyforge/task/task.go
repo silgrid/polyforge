@@ -7,11 +7,13 @@
 // The task lane is deliberately small: a human spawns one fresh harness
 // agent from a free-text prompt against a project's readable source trees,
 // it runs under a hard wall/token budget, and it ends in exactly one of
-// four terminal states. There is no queue, no resume, no retry, no task
-// type and no spawn-level model override. The only capability gate is the
-// write-verb guard: the task process carries PF_TASK_ID, so the daemon
-// refuses it every write and the CLI refuses it every write verb — the
-// lane's one real gate. There is no OS-level isolation (owner ruling
+// four terminal states. A spawn is never queued or retried (only the
+// daemon's own analysis tasks are queued and re-queued, polyforge#72);
+// there is no resume, no task type and no spawn-level model override. The
+// only capability gate is the write-verb guard: the task process carries
+// PF_TASK_ID, so the daemon refuses it every write and the CLI refuses it
+// every write verb — except a running analysis task's one write of its own
+// ticket's `## 分析` section (`pf task analysis-write`). There is no OS-level isolation (owner ruling
 // 2026-10-26, mem_TdI0isaGmTgG): a task agent's filesystem/network trust is
 // a session agent's, and platform-level isolation is a separate concern.
 package task
@@ -206,7 +208,7 @@ type Spec struct {
 	AnalysisOf string `json:"analysis_of,omitempty"`
 	// AnalysisRetries is how often a restarted daemon has re-queued this
 	// analysis (ruling 13's cap of 2): it rides the record so the count
-	// survives the restarts themselves. Stub (build u9, red first).
+	// survives the restarts themselves.
 	AnalysisRetries int `json:"analysis_retries,omitempty"`
 }
 

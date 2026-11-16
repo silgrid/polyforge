@@ -2,8 +2,9 @@
 
 Execution-plane verb: the whole `pf task` face lives on the local daemon's
 unix-socket face. A task is ONE fresh harness agent started from a free-text
-prompt — no session reuse, no resume, no retry, no queue — running under a
-hard wall-clock and token budget in a mapped project's workspace. It is the
+prompt — no session reuse, no resume; a spawn is never queued or retried
+(only the daemon's own analysis tasks are, below) — running under a hard
+wall-clock and token budget in a mapped project's workspace. It is the
 read-only-errand face: hand it research, analysis, a report or a pre-review,
 never a code change.
 

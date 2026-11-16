@@ -3,10 +3,11 @@ package workflow
 // analysis.go: the one definition of a work item's pre-submit analysis
 // section — its heading and its presence — shared by the CLI (`pf
 // submit`'s check), the daemon (the auto-pull wave's skip) and `pf
-// queue`'s mark (polyforge#27). The analysis a session runs before
-// submitting (the read-only `pf task spawn` errand; the routing skill's
-// submit fragment) lands in this section, and so does an owner's
-// explicit skip, written by the session as 「免分析」 with its date.
+// queue`'s mark (polyforge#27). The analysis the daemon schedules at
+// `pf file create` lands in this section, written by the analysis task
+// itself through the narrow write path and marked unconfirmed until the
+// owner confirms it (polyforge#72); so does a session errand's report,
+// and an owner's explicit skip, 「免分析」 with its date.
 // Like HasAcceptance, HasAnalysis never judges what the section says.
 
 import (
@@ -53,8 +54,8 @@ func analysisSection(doc string) (text string, found bool) {
 
 // HasAnalysis reports whether content's analysis section carries text
 // — the one presence check `pf submit`, the auto-pull wave and the
-// queue display share. 「免分析」 written by the session on the owner's
-// explicit skip (with its date) is one such text; a missing section, or
+// queue display share. 「免分析」 written on the owner's explicit skip
+// (with its date) is one such text; a missing section, or
 // a heading with no content, is not.
 func HasAnalysis(content string) bool {
 	text, found := analysisSection(content)
@@ -194,7 +195,6 @@ func ConfirmAnalysisSection(content string) (string, bool) {
 		if !changed {
 			return content, false
 		}
-		// collapse the blank run the removed marker line left behind
 		return strings.Join(out, "\n"), true
 	}
 	return content, false

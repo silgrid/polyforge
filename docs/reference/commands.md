@@ -133,7 +133,8 @@ interrupted is re-queued at most twice, one the owner ended with
 `pf task cancel` is not, and an entry whose ticket the daemon can no longer
 read is dropped), or says 未安排分析 with the
 reason (no daemon reachable, or the daemon refused) — the ticket is filed
-either way. The analysis task follows the 7-item report format and writes
+either way. Only `pf file create` asks: a ticket a workflow step files
+(`pf step hub file`) gets no automatic analysis. The analysis task follows the 7-item report format and writes
 its draft with `pf task analysis-write`
 (`pf task analysis-write --content <text|@file|->`), which replaces only
 the analyzed ticket's `## 分析` section (a compare-and-swap on the ticket's

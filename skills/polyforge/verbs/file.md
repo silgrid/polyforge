@@ -188,7 +188,8 @@ a ticket with no `## 分析` section, the daemon schedules the analysis at
 once — an analysis task that writes its draft into the ticket's
 `## 分析` section itself (`pf task analysis-write`); the create's output
 names the task, says it is queued, or says 未安排分析 (no daemon reachable —
-fall back to a session errand). The draft stays unconfirmed until the owner
+fall back to a session errand). A ticket a workflow step files
+(`pf step hub file`) gets no automatic analysis. The draft stays unconfirmed until the owner
 runs `pf file analysis confirm <id>`; the owner may instead explicitly waive
 the analysis with one dated line 「免分析」. The flow, the 7-item report
 format, the boundary against grilling and the pre-submit confirmation rule
