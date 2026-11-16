@@ -466,7 +466,8 @@ class HumanLandingTest(unittest.TestCase):
             # fast-forward GitHub's rebase button never makes
             fork = git(seed, "merge-base", "origin/main", "origin/" + branch)
             for c in git(seed, "rev-list", "--reverse", "--no-merges", fork + "..origin/" + branch).split():
-                e = env(GIT_COMMITTER_DATE="2005-04-05T22:13:13 +0000")
+                e = env(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@invalid", GIT_COMMITTER_NAME="t",
+                        GIT_COMMITTER_EMAIL="t@invalid", GIT_COMMITTER_DATE="2005-04-05T22:13:13 +0000")
                 picked = subprocess.run(["git", "cherry-pick", c], cwd=seed, env=e,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 assert picked.returncode == 0, picked.stdout.decode()
