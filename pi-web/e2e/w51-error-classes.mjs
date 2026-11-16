@@ -1,4 +1,4 @@
-// carries: components/PolyforgeConfig*, lib/polyforge-config-schema*, lib/polyforge-config-write*, lib/polyforge-unclassified*, app/api/polyforge/config/*, app/api/polyforge/unclassified/*
+// carries: lib/polyforge-unclassified*, app/api/polyforge/unclassified/*
 // — polyforge#51, end-to-end: the Host region's additional
 // failure-classification pattern lists, the two slow-model latency bounds
 // and the unclassified-error list (the last 7 days' fallback texts), driven
@@ -6,6 +6,12 @@
 // on PATH (the Host-scoped `--json config list --host`, `--json ops
 // unclassified`, `config set … --host`), so the suite asserts both what
 // the page renders and the argv the server hands to pf.
+//
+// components/PolyforgeConfig*, lib/polyforge-config-schema* and
+// lib/polyforge-config-write* are deliberately NOT carried: three suites
+// already declare each of them (the e2e-carries cap is three per tracked
+// path); this suite's own surface — the unclassified read and its panel —
+// is what it uniquely pins.
 //
 //   node e2e/w51-error-classes.mjs
 import assert from "node:assert/strict";
