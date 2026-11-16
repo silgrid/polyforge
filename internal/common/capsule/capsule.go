@@ -102,9 +102,9 @@ type WorkItemDoc struct {
 	Milestone  *string  `json:"milestone"`
 	BundleName string   `json:"bundle_name"`
 	// Attrs is the work item's structured attrs as aihub holds them (a
-	// step reads its own ticket's markers from them: an integration_fix
-	// ticket's verification runs the full bar). Empty (omitted) when the
-	// item carries none.
+	// step reads its own ticket's markers from them: a ticket filed on a
+	// batch's full-gate regression runs the full verification bar). Empty
+	// (omitted) when the item carries none.
 	Attrs     map[string]any `json:"attrs,omitempty"`
 	UpdatedAt string         `json:"updated_at"`
 }
