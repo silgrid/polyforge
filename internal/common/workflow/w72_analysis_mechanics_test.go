@@ -117,3 +117,30 @@ func TestW72AnalysisItemCount(t *testing.T) {
 		}
 	}
 }
+
+func TestW72ConfirmAnalysisStripsMarker(t *testing.T) {
+	doc := "## 背景\n\nthe idea\n\n## 分析\n\n" + AutoAnalysisMarker("task_0123456789abcdef") +
+		"\n\n### 1. 改动范围\n\n- a\n\n## Acceptance\n\n- AC1 — carried by build\n"
+	got, changed := ConfirmAnalysisSection(doc)
+	if !changed {
+		t.Fatal("a section carrying the unconfirmed marker must change")
+	}
+	if strings.Contains(got, "pf:auto-analysis") {
+		t.Fatalf("the confirmed section must carry no marker:\n%s", got)
+	}
+	if !strings.Contains(got, "### 1. 改动范围") || !strings.Contains(got, "the idea") ||
+		!strings.Contains(got, "- AC1 — carried by build") {
+		t.Fatalf("everything but the marker line must survive:\n%s", got)
+	}
+	if AnalysisUnconfirmed(got) {
+		t.Fatalf("the confirmed doc must no longer be unconfirmed:\n%s", got)
+	}
+	// a section without a marker is confirmed already: unchanged.
+	if got, changed := ConfirmAnalysisSection(doc0NoMarker()); changed || got != doc0NoMarker() {
+		t.Fatalf("an already-confirmed doc must come back unchanged: %v", changed)
+	}
+}
+
+func doc0NoMarker() string {
+	return "## 分析\n\n免分析（2026-11-16，owner）\n"
+}
