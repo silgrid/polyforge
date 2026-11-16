@@ -90,7 +90,7 @@ func TestW80TargetBranchFixedAtFirstClaim(t *testing.T) {
 	hub.items = map[string]*api.WorkItem{parent: {
 		ID: parent, Slug: slug, Seq: 1, ProjectName: "proj", BundleName: &epic,
 	}}
-	item := &api.WorkItem{ID: child, ProjectName: "proj", ParentID: &parent, Slug: "polyforge#2"}
+	item := &api.WorkItem{ID: child, ProjectName: "proj", ParentID: w80StrPtr(parent), Slug: "polyforge#2"}
 	capDir := w80Claim(t, r, child, item)
 	if target, p := w80TargetBranch(t, capDir); target != "epic/1" || p != slug {
 		t.Fatalf("first claim fixed {target:%q parent:%q}, want {epic/1 %s}", target, p, slug)
