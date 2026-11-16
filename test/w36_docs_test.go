@@ -74,7 +74,7 @@ func TestW36DocsTeachTheThreeMergeRoutes(t *testing.T) {
 		"Create a merge commit", "Rebase and merge", "Squash and merge",
 	)
 	need("docs/concepts.md", w254Read(t, "docs/concepts.md"),
-		"enters the batch like the lane's own merges do",
+		"enter the batch like the lane's own merges do",
 	)
 
 	// the concepts page: the person's merge among the lane's ends

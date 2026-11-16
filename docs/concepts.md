@@ -583,8 +583,11 @@ accepted?}], merge_commits}` — as a wrap attr (`pf step hub wrap-attrs
 integration @artifacts/merge/landing.json`; the step declares
 `wrap_attrs: [integration]`, so its `done` is refused until it did), and the
 daemon's wrapped close merges it into the work item's attrs: one `repos`
-entry per merge; `merge_commits` maps each repo to its merge commits,
-oldest first (`{repo: [sha, …]}`). The owner's waivers ride beside it in
+entry per merge; `merge_commits` maps each repo to the commit set the
+change landed as, oldest first, each entry `{sha, merge}` naming the commit
+and whether it is a merge commit (`{repo: [{sha, merge}, …]}` — the lane's
+own merges are merge commits; a person's squash lands one plain commit and a
+rebase the replayed ones). The owner's waivers ride beside it in
 `attrs.waivers`, written by the daemon, never by the agent (aihub merges a
 wrapped session-end's `attrs`; no new work-item status).
 The landing record carries no `waived`: the integration lane reads an

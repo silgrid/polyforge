@@ -880,6 +880,19 @@ the bundle-less keys is a load error, as a `skip` is.
   develop's merge waits for the person, while micro's `merge`, which
   declares no `human_mergeable`, is refused the claim.
 
+**The three routes of a develop work item's merge, and which of them
+reaches the integration lane.** The lane's own merge (no `by`, no `skip`)
+lands the work item `landed`, into the integration lane's pool. The
+person's merge (`steps.<project>.merge.by: human`) lands it `landed` the
+same way — the person merges on GitHub with any of the three methods,
+**Create a merge commit**, **Rebase and merge** or **Squash and merge**,
+and the lane takes the landing by the patch-id fingerprint — so it enters
+the integration lane's pool like the lane's own merge does. The skipped
+merge (`steps.<project>.merge.skip: true`) ends the work item `published`
+with the PRs open, and it never enters an integration batch
+([workflows/develop/README.md](../../workflows/develop/README.md),
+"Merging by a person" and "Skipping merge").
+
 `pf workflows --cwd` reports each step's `human_mergeable` and the mapped
 projects' declared modes ([commands](commands.md)).
 
