@@ -78,8 +78,8 @@ version, and it reports which.
   `deployed` — hand off `done` (as the lane's last step, after the wrap summary of the
   step header's Memory section). With several targets that is every target
   `deployed` or `already_deployed` (it served `V` before the run) in the last line.
-- Several targets, nonzero exit, and at least one target `deployed` before the
-  failed one: production state `partial` — some targets serve `V`, the failed one
+- Several targets, nonzero exit, and at least one target serving `V` before the
+  failed one (`deployed` or `already_deployed`): production state `partial` — some targets serve `V`, the failed one
   is in the state its `target:` line names, the rest are `not_attempted`. It is
   still a `fail`: name every target's state from its `target:` line.
 - Nonzero exit: hand off `fail`. Name production's state from what the procedure
