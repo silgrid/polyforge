@@ -591,7 +591,7 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   detail in Work › 作业, selected — nothing else opens (
   re-selecting the shown job keeps its snapshot; the waiting job's question sits in its card's
   conversation above the input box); a task entry → Work › 任务 on that task
-  (`taskRequest`, handed to `openTaskId`). Every other click toggles the
+  (`taskRequest`, its Cell included, handed to `openTask`). Every other click toggles the
   dock, so closing it with the button and opening it again walks to the
   next item.
 - The e2e is `e2e/polyforge-decisions-415.mjs` (no 交互 button and no
@@ -919,8 +919,9 @@ lower part hides, never unmounts), so switching a sub-tab never remounts them.
 
 **Badges.** Jobs and Tasks carry their running count from the one status
 snapshot the existing 3 s/30 s status poll already reads — `queue.running` on
-Jobs, `tasks.running` on Tasks (see the status route contract); no timer, no
-task-list read. 全部 carries the count of `status ===
+Jobs, `tasks.running` on Tasks (the Host aggregate's task counts, summed over
+every serving Cell since polyforge#73 — see the status route contract); no
+timer, no task-list read. 全部 carries the count of `status ===
 "running"` rows of its last list read (`workItemsRunning` in the hook): absent
 until the first read in the page session, then kept — also while the surface
 is unmounted — until the next list answer; it costs no read of its own. A
@@ -1385,8 +1386,9 @@ memory. The action row always carries 【建票】 and 【回复】: the suggest
 (`primarySuggestedAction`: `reply` when suggested, else `file_ticket`) is the
 primary (accent) button, the other secondary, and both are secondary for
 `note_only` or no suggestion. The task link switches the dock to Work › Tasks
-and runs that task's existing detail read once (`openTaskId` handed to
-`PolyforgeTasks`, whose detail header then names the task).
+and runs that task's existing detail read once, pinned to this pane's Cell
+(`openTask` handed to `PolyforgeTasks`, whose detail header then names the
+task).
 
 【建票】 opens a confirmation dialog (`components/PolyforgeFileTicketDialog.tsx`):
 the goal prefilled with the summary's first sentence (the analysis's suggested
@@ -2072,7 +2074,8 @@ other surface keep rendering.
 
 ## Tasks tab
 
-A read-only view of every task of the local daemon (no project filter).
+A read-only view of every task of every serving Cell (polyforge#73; no
+project filter, no per-Cell filter — the search matches the Cell name).
 `lib/polyforge-tasks-pure.ts` is the client-safe model (the list row
 `PolyforgeTaskRow` id/project/state/prompt_summary + the optional timing facts
 and report_tail?/reporter?, the detail
@@ -2080,16 +2083,26 @@ and report_tail?/reporter?, the detail
 `splitTaskSections`: 正在运行 is exactly `state === "running"`, 全部 the rest,
 both in pf's order, so every task is listed exactly once with the running ones
 on top — `taskMatches`: a case-insensitive substring of the id,
-project, state or prompt summary — and `taskReporterOptions`:
+project, state, prompt summary or the row's Cell — and `taskReporterOptions`:
 the distinct non-empty human `reporter` names of the whole list sorted
 ascending plus whether any row is `TASK_REPORTER_MACHINE` (`machine`), with
 `filterTaskRows`'s `reporter` term — `null`/absent matches every row, a value
 an exact `row.reporter`); `lib/polyforge-tasks.ts` is the server
 module.
 
-**Routes.** `GET /api/polyforge/tasks` is one `pf --json task list`;
-`GET /api/polyforge/tasks/[id]` is one `pf --json task show <id>`, the id
-validated before any spawn (a malformed one answers 400). Both export GET
+**Routes.** `GET /api/polyforge/tasks` is, on a multi-Cell pf, one
+`pf --profile <cell> --json task list` per valid, in-service Cell of the Host
+aggregate — the same shared cached `pf --json ops status` read the Jobs tab
+polls (no new pf probe), each row named with its Cell by the route's outer
+layer (`cell`, the tenth field; the nine-key row passport is unchanged), a
+Cell whose read fails degrading to one `cellErrors` entry while the rest
+list; a pf without the multi-Cell protocol — and an aggregate that cannot be
+read, or one with no serving Cell — keeps the single unflagged
+`pf --json task list` of a pre-Cell pf. `GET /api/polyforge/tasks/[id]` is
+one `pf --json task show <id>`, pinned to the row's Cell when `?profile=`
+names it (`pf --profile <cell> --json task show <id>`; a malformed profile is
+a 400 before any spawn; a pre-Cell pf ignores it — one Cell, one unflagged
+read), the id validated before any spawn (a malformed one answers 400). Both export GET
 only — there is no spawn or cancel route or control, and any other method is
 Next's 405 — re-check `isApiRequestAllowed` in-route (403), are
 `force-dynamic`, and answer 200 JSON on every failure (pf absent →
@@ -2129,7 +2142,8 @@ search bar's ↻ action (slot) and one detail read
 per selection; searching, clearing the search, filtering and going back read
 nothing. The one automatic exception: `PolyforgePanel` passes
 `taskCountKey` = the status snapshot's `` `${tasks.running}:${tasks.completed}` ``
-(null without a snapshot), and while the sub-page stays mounted each change
+(null without a snapshot; the aggregate's counts cover every serving Cell
+since polyforge#73, so a task change in any Cell re-reads the list), and while the sub-page stays mounted each change
 of that key re-reads the list exactly once (a ref holds the mount value, so
 entering the sub-tab still reads once; a null on either side is no change;
 only the newest read writes). Nothing reads while Work › Jobs, another tab or
@@ -2585,8 +2599,8 @@ presentation):
   malformed one is 400). The Cell dirs are found on disk under
   the layout `pf migrate cell-layout` writes, not through `GET /profiles`
   (no extra pf spawn on the 2 s poll).
-- **Memory, Tasks, Messages** keep reading the CLI-resolved Cell and name
-  it: the Memory scope read, the Tasks list and the Messages list answer
+- **Memory, Messages** stay pinned to the CLI-resolved Cell and name
+  it: the Memory scope read and the Messages list answer
   `cell` from a local `pf --json profile` (Memory in the tab's cwd), shown
   as `polyforge.tabCell` (`data-pf-tab-cell`). No per-tab selector.
   `resolvePolyforgeCellScope` resolves that Cell once per presence-probe
@@ -2594,6 +2608,13 @@ presentation):
   instead of spawning `pf --json profile` and a capability read on every
   request; the window's expiry (60 s present, 5 s absent) or a forced probe
   (Re-detect) resolves it again.
+- **Tasks reads every serving Cell** (polyforge#73): the list route reads one
+  `pf --profile <cell> --json task list` per valid, in-service Cell of the
+  Host aggregate and names each row's Cell on the outer layer — no top
+  single-Cell annotation, each row carries its own; the detail read is pinned
+  to the row's Cell; a Cell that fails shows its error while the rest list.
+  Still no per-tab selector, and no per-Cell filter (the search matches the
+  Cell name).
 
 ## Settings detection (pi#122)
 
