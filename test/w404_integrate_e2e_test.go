@@ -326,7 +326,7 @@ def fullgate(args):
         write("full-gate-output.json", {"summary": "nothing gated"}); return
     g = load("gate.json")
     if not (fresh("gate.json") and g.get("heads") == heads):
-        run("\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/gate.py\" --isolation container --capsule . --pins artifacts/integrate/revert.json --mark-green --summary \"integration batch $PF_WI_ID\" --json --out artifacts/integrate/gate.json")
+        run("\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/gate.py\" --isolation container --keep-going --capsule . --pins artifacts/integrate/revert.json --mark-green --summary \"integration batch $PF_WI_ID\" --json --out artifacts/integrate/gate.json")
         g = load("gate.json")
     if g["exit_code"] == 0:
         decision("green")
@@ -335,7 +335,7 @@ def fullgate(args):
         raise SystemExit("gate exit %d: %s" % (g["exit_code"], g["summary"]))
     t = load("triage.json")
     if not (fresh("triage.json") and t.get("heads") == heads):
-        run("\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/gate.py\" --isolation container --triage --capsule . --pins artifacts/integrate/revert.json --gate artifacts/integrate/gate.json --batch artifacts/integrate/batch.json --mark-green --summary \"integration batch $PF_WI_ID\" --json --out artifacts/integrate/triage.json")
+        run("\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/gate.py\" --isolation container --triage --keep-going --capsule . --pins artifacts/integrate/revert.json --gate artifacts/integrate/gate.json --batch artifacts/integrate/batch.json --mark-green --summary \"integration batch $PF_WI_ID\" --json --out artifacts/integrate/triage.json")
         t = load("triage.json")
     if "--ask" in args and t["exit_code"] == 1:
         units = ["%s %s (%s, %s)" % (u["repo"], u["unit"], u["class"], u.get("item", "")) for u in t["details"]["units"]]

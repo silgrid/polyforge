@@ -661,7 +661,9 @@ with its own credentials (a step agent holds none) once the step hands off
   gated repo's pinned head — never the live tip, which keeps moving (what
   `.polyforge/release.sh` runs; never the daemon's
   verification run) — and on a pass writes the green tag itself
-  (`--mark-green`). A red gate is triaged by `gate.py --triage`: each
+  (`--mark-green`). The gate runs with `--keep-going`: every command runs,
+  never stopping at the first failing one, so one red batch records every
+  failing command and its triage sees them all at once. A red gate is triaged by `gate.py --triage`: each
   failing unit re-run once (the conf's `rerun=` template for an aggregate
   command; every failure flaky → the gate once more), a unit still red run
   at the baseline (the newest green tag merged into the gated head, else
