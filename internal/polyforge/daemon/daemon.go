@@ -144,6 +144,12 @@ type Config struct {
 	// AgentLanguageFallback supplies the default Cell's live language to a
 	// named Cell when its own [daemon] agent_language is unset.
 	AgentLanguageFallback func() string
+	// HostLive answers the default Cell's live state to a named Cell, read
+	// at each judgement (nil = this Cell's own state): the Host-only keys
+	// transient_error_patterns, model_error_patterns and the two
+	// slow_model_*_latency bounds reload on the Host only, so a named Cell
+	// reads them there rather than from its startup copy.
+	HostLive func() *liveconfig.State
 	// LoadFile reads this Cell's file config for a reload (nil = parse
 	// ConfigPath on its own): the Host binds the Host file for default and
 	// the named file over the Host keys for a named Cell.
@@ -585,6 +591,17 @@ func New(cfg Config) (*Daemon, error) {
 	live.SetSlowModelP90Latency(cfg.StartupFile.Daemon.SlowModelP90Latency)
 	live.SetAgentLanguageFallback(cfg.AgentLanguageFallback)
 	live.SetMemoryPolicy(cfg.StartupFile.MemoryPolicy)
+	// hostLive answers the state the Host-only keys are read from: the
+	// default Cell's for a named Cell (a Host reload updates only that
+	// one), this Cell's own otherwise.
+	hostLive := func() *liveconfig.State {
+		if cfg.HostLive != nil {
+			if h := cfg.HostLive(); h != nil {
+				return h
+			}
+		}
+		return live
+	}
 
 	// liveLimits answers the current supervision defaults (a live reload's
 	// step_timeout / stall_window folded in). A zero duration means unset
@@ -599,17 +616,18 @@ func New(cfg Config) (*Daemon, error) {
 			ModelErrorGrace: cfg.Supervision.ModelErrorGrace,
 			AskWarmWindow:   cfg.Supervision.AskWarmWindow,
 			// polyforge#51: the slow-model judgement's live bounds
-			SlowModelMedianLatency: live.SlowModelMedianLatency(),
-			SlowModelP90Latency:    live.SlowModelP90Latency(),
+			SlowModelMedianLatency: hostLive().SlowModelMedianLatency(),
+			SlowModelP90Latency:    hostLive().SlowModelP90Latency(),
 		}
 	}
 
 	// textRules answers the live additional classification rules
 	// (polyforge#51).
 	textRules := func() driver.TextRules {
+		h := hostLive()
 		return driver.TextRules{
-			Transient: live.TransientErrorRules(),
-			Model:     live.ModelErrorRules(),
+			Transient: h.TransientErrorRules(),
+			Model:     h.ModelErrorRules(),
 		}
 	}
 

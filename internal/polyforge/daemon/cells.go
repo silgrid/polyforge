@@ -216,18 +216,15 @@ func (h *Host) build(profile string, c cli.Config) (Config, error) {
 		// Resolve the default Cell at read time so a live reload is visible
 		// to the next named Cell dispatch without rebuilding this closure.
 		cfg.AgentLanguageFallback = func() string {
-			h.mu.Lock()
-			def := h.cells[cellcfg.DefaultProfile]
-			var live *liveconfig.State
-			if def != nil && def.d != nil {
-				live = def.d.live
-			}
-			h.mu.Unlock()
+			live := h.defaultLive()
 			if live == nil {
 				return ""
 			}
 			return live.AgentLanguage()
 		}
+		// polyforge#51: the Host-only classification rules and slow-model
+		// bounds, read from the default Cell at each judgement.
+		cfg.HostLive = h.defaultLive
 	}
 	if profile == cellcfg.DefaultProfile {
 		cfg.LoadFile = func() (cli.Config, error) { return cli.LoadFileConfig(hostPath) }
@@ -242,6 +239,18 @@ func (h *Host) build(profile string, c cli.Config) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// defaultLive answers the default Cell's live state (nil while it has no
+// daemon): the pointer is taken under the registry lock, its values are
+// read by the caller after the lock is released.
+func (h *Host) defaultLive() *liveconfig.State {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if def := h.cells[cellcfg.DefaultProfile]; def != nil && def.d != nil {
+		return def.d.live
+	}
+	return nil
 }
 
 // Run starts every Cell, serves the one socket, and returns when the Host
