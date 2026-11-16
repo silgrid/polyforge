@@ -246,6 +246,16 @@ root's `.polyforge/` scripts, tested there).
   and reuse an installed `node_modules` when `package-lock.json` is unchanged
   rather than running `npm ci` per reproduction (`cp -al` the directory; a
   symlinked `node_modules` is rejected by Turbopack).
+- Run only some scenarios of one suite: `E2E_ONLY=<id>[,<id>…]`, the
+  scenario ids a suite names in its own scenario table. `e2e/polyforge.mjs`
+  (35 scenarios, polyforge#63) and `e2e/polyforge-messages-prompt-281.mjs`
+  support it: `E2E_ONLY=AC1,P24A node e2e/polyforge.mjs` runs only those
+  scenarios, unset or empty runs every one as before (the selection parses
+  the same way in both, through the shared `e2e/harness.mjs`). An id the
+  suite does not know fails the run at once — before any server starts —
+  naming the id and the suite's ids, so a typo never silently runs zero
+  scenarios. This is the unit red-green switch for the big suites: a change
+  that touches one scenario re-runs just that one instead of all 35.
 
 ## Build-once mode
 
