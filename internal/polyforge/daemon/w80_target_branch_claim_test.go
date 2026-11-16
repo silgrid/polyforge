@@ -108,7 +108,7 @@ func TestW80TargetBranchDaemonTwoClaimsOneBranch(t *testing.T) {
 		}
 	}
 	// the remote: exactly main and the one epic branch, at the default tip
-	if out := strings.TrimSpace(w80Git(t, src, "ls-remote", "--heads", ".")); out != tip+"\trefs/heads/main\n"+tip+"\trefs/heads/epic/10" {
+	if out := strings.TrimSpace(w80Git(t, src, "ls-remote", "--heads", ".")); out != tip+"\trefs/heads/epic/10\n"+tip+"\trefs/heads/main" {
 		t.Fatalf("the origin must carry exactly main and the one epic/10 at %s, got %q", tip, out)
 	}
 }

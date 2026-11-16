@@ -67,8 +67,8 @@ func TestW80TargetBranchCreatesFromDefaultTip(t *testing.T) {
 	if head := carrierGit(t, repoDir, "rev-parse", "HEAD"); head != tip {
 		t.Fatalf("the created branch stands on %q, want the default branch tip %q", head, tip)
 	}
-	if out := strings.TrimSpace(carrierGit(t, repoDir, "ls-remote", "--heads", "origin")); out != tip+"\trefs/heads/epic/8" {
-		t.Fatalf("the origin must carry exactly the created branch at the default tip, got %q", out)
+	if out := strings.TrimSpace(carrierGit(t, repoDir, "ls-remote", "--heads", "origin")); out != tip+"\trefs/heads/epic/8\n"+tip+"\trefs/heads/main" {
+		t.Fatalf("the origin must carry exactly main and the created epic/8 at the default tip, got %q", out)
 	}
 }
 
@@ -130,11 +130,13 @@ func TestW80TargetBranchPushRejectedUsesRemote(t *testing.T) {
 		}(i, ji)
 	}
 	deadline := time.Now().Add(30 * time.Second)
-	for len(arrived) < 2 {
+	parked := 0
+	for parked < 2 {
 		select {
 		case <-arrived:
+			parked++
 		case <-time.After(time.Until(deadline)):
-			t.Fatal("both claims never reached the branch push (30s)")
+			t.Fatalf("both claims never reached the branch push (30s; %d parked)", parked)
 		}
 	}
 	carrierGit(t, other, "push", src, "HEAD:refs/heads/epic/7") // the origin gains the other copy
@@ -154,7 +156,7 @@ func TestW80TargetBranchPushRejectedUsesRemote(t *testing.T) {
 			t.Fatalf("claim %s: HEAD names %q, want epic/7", wi, b)
 		}
 	}
-	if out := strings.TrimSpace(carrierGit(t, other, "ls-remote", "--heads", "origin")); out != tip+"\trefs/heads/main\n"+winner+"\trefs/heads/epic/7" {
+	if out := strings.TrimSpace(carrierGit(t, other, "ls-remote", "--heads", "origin")); out != winner+"\trefs/heads/epic/7\n"+tip+"\trefs/heads/main" {
 		t.Fatalf("the origin must carry exactly main and the one epic/7, got %q", out)
 	}
 }
