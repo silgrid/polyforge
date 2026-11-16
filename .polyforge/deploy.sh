@@ -245,6 +245,9 @@ PREFLIGHT=""
 FORCE=""
 CONFIRM=""
 CONFIRM_SET=""
+# the original command line, kept for the per-target subprocesses (the
+# parse loop below shifts the arguments away)
+_mt_argv="$*"
 while [ $# -gt 0 ]; do
   a="$1"; shift
   case "$a" in
@@ -297,6 +300,44 @@ if [ -z "$DRY" ] && [ -z "$CONFIRM_SET" ] && [ -z "$PREFLIGHT" ]; then
   echo "deploy: REFUSED - a real deploy needs --confirm $TAG (no prompt, no --yes). Nothing was touched." >&2
   echo "$USAGE" >&2
   exit 1
+fi
+
+# ------------------------------------------------------------- the targets
+# (polyforge#76) One release work item deploys every target of this
+# machine at once. The daemon states every serving Cell's facts as
+# PF_CELL_TARGETS lines - "<profile>\t<server>\t<deploy configuration
+# file>" - and every Cell whose deploy configuration file EXISTS is one
+# deploy target (a Cell with no deploy configuration, a client only, is
+# not). With fewer than two targets this whole block is a no-op and the
+# run below is exactly polyforge#75's single-target path, unchanged (a
+# work item whose own Cell has no deploy configuration still refuses
+# there, before any work). A multi-target run never sources a
+# configuration into itself: each target is ONE CLEAN SUBPROCESS of this
+# script (PF_DEPLOY_ONE=1 marks it) that carries only its own Cell's
+# facts (PF_CELL, PF_CELL_SERVER, PF_DEPLOY_ENV) and reads only its own
+# Cell's configuration - one target's values can never reach another's.
+if [ "$COMPONENT" = aihub ] && [ -n "${PF_CELL_TARGETS:-}" ] && [ -z "${PF_DEPLOY_ONE:-}" ]; then
+  _mt_rows=""
+  while IFS='	' read -r _mt_p _mt_s _mt_e; do
+    [ -n "$_mt_p" ] || continue
+    [ -f "$_mt_e" ] || continue
+    _mt_rows="$_mt_rows$_mt_p $_mt_s $_mt_e
+"
+  done <<EOF
+$PF_CELL_TARGETS
+EOF
+  _mt_n="$(printf '%s' "$_mt_rows" | grep -c . || true)"
+  if [ "$_mt_n" -ge 2 ]; then
+    printf 'deploy: targets (%s): %s\n' "$_mt_n" "$(printf '%s' "$_mt_rows" | awk '{printf "%s ", $1}')"
+    _mt_rc=0
+    while read -r _mt_p _mt_s _mt_e; do
+      [ -n "$_mt_p" ] || continue
+      env PF_DEPLOY_ONE=1 PF_CELL="$_mt_p" PF_CELL_SERVER="$_mt_s" PF_DEPLOY_ENV="$_mt_e" sh "$0" $_mt_argv || _mt_rc=$?
+    done <<EOF
+$_mt_rows
+EOF
+    exit "$_mt_rc"
+  fi
 fi
 
 # The deployment's topology is operator-owned, never in this repo: the five
