@@ -139,7 +139,9 @@ its draft with `pf task analysis-write`
 (`pf task analysis-write --content <text|@file|->`), which replaces only
 the analyzed ticket's `## 分析` section (a compare-and-swap on the ticket's
 `updated_at`, retried on a concurrent edit) and marks it unconfirmed; it is
-the one write a task may make. A task carries its idle and tool windows like
+the one write a task may make. A draft with a line that would end the section (one that,
+trimmed, starts with `# ` or `## ` — a code-block comment included) is
+refused `DAEMON-400` and the ticket is unchanged: items use `###` headings. A task carries its idle and tool windows like
 a step: a silent or stuck candidate is killed and the next candidate model
 starts from the ticket as it stands; a stopped analysis leaves a comment
 naming the cause and the last item written. `pf file analysis confirm`

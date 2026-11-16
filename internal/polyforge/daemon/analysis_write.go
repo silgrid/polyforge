@@ -30,6 +30,7 @@ package daemon
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -59,6 +60,10 @@ func (d *Daemon) taskAnalysisWriteRoute(w http.ResponseWriter, r *http.Request) 
 	}
 	if strings.TrimSpace(req.Content) == "" {
 		writeErr(w, api.ErrDaemonBadInput, "analysis-write: the draft content is required (the CLI's --content takes text, @file or -)")
+		return
+	}
+	if line, bad := workflow.SectionEndingLine(req.Content); bad {
+		writeErr(w, api.ErrDaemonBadInput, "analysis-write: the draft line "+strconv.Quote(line)+" would end the `## 分析` section — use ### or deeper headings, and no line (a code-block comment included) may start with \"# \" or \"## \"; the ticket is unchanged")
 		return
 	}
 	if err := d.writeAnalysisSection(tk.ID, tk.Spec.AnalysisOf, req.Content); err != nil {

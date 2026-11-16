@@ -25,6 +25,26 @@ var analysisHeadingRe = regexp.MustCompile(`(?i)^##\s+(?:analysis\b|分析)`)
 // isAnalysisHeading reports whether line (trimmed) opens an analysis
 // section: `## Analysis` or `## 分析`, case-insensitive, prefix match.
 // Un-exported (review r1#8): no consumer outside the package needs it.
+// endsSection reports whether the trimmed line t ends the analysis
+// section: a heading of level one or two.
+func endsSection(t string) bool {
+	return strings.HasPrefix(t, "# ") || strings.HasPrefix(t, "## ")
+}
+
+// SectionEndingLine answers the first line of draft that would end the
+// analysis section once written into it (ok=false when none does) — the
+// narrow write path refuses such a draft, since the next whole-section
+// replace would stop at that line and leave the rest outside the section
+// (polyforge#72, review r1#2).
+func SectionEndingLine(draft string) (line string, ok bool) {
+	for _, l := range strings.Split(draft, "\n") {
+		if t := strings.TrimSpace(l); endsSection(t) {
+			return t, true
+		}
+	}
+	return "", false
+}
+
 func isAnalysisHeading(line string) bool {
 	return analysisHeadingRe.MatchString(strings.TrimSpace(line))
 }
@@ -41,7 +61,7 @@ func analysisSection(doc string) (text string, found bool) {
 			found = isAnalysisHeading(t)
 			continue
 		}
-		if strings.HasPrefix(t, "# ") || strings.HasPrefix(t, "## ") {
+		if endsSection(t) {
 			break
 		}
 		b.WriteString(strings.TrimRight(line, " \t\r") + "\n")
@@ -108,7 +128,7 @@ func ReplaceAnalysisSection(doc, body string) (string, bool) {
 		j := i + 1
 		for j < len(lines) {
 			t := strings.TrimSpace(lines[j])
-			if strings.HasPrefix(t, "# ") || strings.HasPrefix(t, "## ") {
+			if endsSection(t) {
 				break
 			}
 			j++
@@ -176,7 +196,7 @@ func ConfirmAnalysisSection(content string) (string, bool) {
 		j := i + 1
 		for j < len(lines) {
 			t := strings.TrimSpace(lines[j])
-			if strings.HasPrefix(t, "# ") || strings.HasPrefix(t, "## ") {
+			if endsSection(t) {
 				break
 			}
 			j++
