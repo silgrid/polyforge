@@ -183,6 +183,22 @@ type DaemonSettings struct {
 	// "zh-CN"; "" = unset, "en"). Live; a dispatch keeps the language it
 	// started with.
 	AgentLanguage string
+	// TransientErrorPatterns is the Host-configured additional
+	// failure-classification list (polyforge#51): every item an RE2 regex;
+	// a text match (after the allowance/auth row, before the built-in rows)
+	// classifies the failure upstream_transient. Host-only, live.
+	TransientErrorPatterns []string
+	// ModelErrorPatterns is the Host-configured additional list whose
+	// matches classify a failure model-class (exit_model_class). Host-only,
+	// live.
+	ModelErrorPatterns []string
+	// SlowModelMedianLatency is the single-call median bound of the
+	// slow-model judgement (0 = unset, the supervise default 60s).
+	// Host-only, live.
+	SlowModelMedianLatency time.Duration
+	// SlowModelP90Latency is the single-call p90 bound of the slow-model
+	// judgement (0 = unset, the supervise default 180s). Host-only, live.
+	SlowModelP90Latency time.Duration
 }
 
 // DaemonKeyError is the typed refusal of one [daemon] entry: it names

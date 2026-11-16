@@ -333,6 +333,12 @@ func daemonValue(d DaemonSettings, key string) string {
 	return ""
 }
 
+// daemonListValue answers one [daemon] list key's effective value (nil =
+// unset): the failure-classification pattern lists of polyforge#51.
+func daemonListValue(d DaemonSettings, key string) []string {
+	return nil
+}
+
 // daemonDefault renders the value a [daemon] key takes when the file
 // leaves it unset, for the keys whose default `pf config` shows ("" =
 // shown as <unset>).
