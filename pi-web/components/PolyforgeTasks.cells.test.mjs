@@ -39,6 +39,17 @@ const DETAIL = {
   started_at: "2026-11-16T00:00:01Z", ended_at: "2026-11-16T00:10:00Z", prompt: "the prompt",
   report: "**done**", report_len: 8, truncated: false,
 };
+const ROW = (id, cell) => ({
+  id,
+  project: "workbench",
+  state: "completed",
+  prompt_summary: `prompt of ${id}`,
+  ended_at: "2026-11-16T00:00:00Z",
+  wall_consumed_ns: 60e9,
+  report_tail: "",
+  reporter: "alice",
+  ...(cell ? { cell } : {}),
+});
 const TASK_PUBLIC = "task_1111111111111111";
 
 const settle = async () => {
@@ -105,6 +116,41 @@ test("polyforge#73 u5: an external open without a Cell keeps the plain detail re
   const { requests, restore } = setup({ openTask: { id: TASK_PUBLIC } });
   try {
     assert.equal(requests[1]?.url, `/api/polyforge/tasks/${TASK_PUBLIC}`, "no ?profile without a Cell");
+  } finally {
+    restore();
+  }
+});
+
+test("polyforge#73 u6: every row names its Cell; a row click reads that task's detail pinned to it", async () => {
+  const { hook, requests, answer, restore } = setup({});
+  try {
+    await answer(0, { pfPresent: true, capable: true, tasks: [ROW("task_00000000000000d1", "default"), ROW(TASK_PUBLIC, "public")] });
+    // each row names its own Cell; the top single-Cell annotation is gone
+    const cells = props(hook, "data-pf-task-cell").map((p) => p["data-pf-task-cell"]);
+    assert.deepEqual(cells, ["default", "public"], "a chip per row, in the list's order");
+    assert.equal(props(hook, "data-pf-tab-cell").length, 0, "the retired top single-Cell annotation renders nothing");
+    // a row click reads that task's detail in its own Cell
+    const row = nodes(hook).find(({ node }) => node.type === "button" && node.props["data-pf-task"] === TASK_PUBLIC)?.node;
+    assert.ok(row, "the public row renders");
+    row.props.onClick();
+    hook.flush();
+    assert.equal(requests.at(-1)?.url, `/api/polyforge/tasks/${TASK_PUBLIC}?profile=public`, "the detail read is pinned to the clicked row's Cell");
+  } finally {
+    restore();
+  }
+});
+
+test("polyforge#73 u6: a Cell that failed to list shows its error while the rest list", async () => {
+  const { hook, answer, restore } = setup({});
+  try {
+    await answer(0, {
+      pfPresent: true, capable: true,
+      tasks: [ROW("task_00000000000000d1", "default")],
+      cellErrors: [{ cell: "public", error: "pf: cell public is unreachable" }],
+    });
+    const errors = props(hook, "data-pf-cell-error").map((p) => p["data-pf-cell-error"]);
+    assert.deepEqual(errors, ["public"], "the failed Cell is named on the list");
+    assert.equal(props(hook, "data-pf-task-cell").length, 1, "the default Cell's row still lists");
   } finally {
     restore();
   }

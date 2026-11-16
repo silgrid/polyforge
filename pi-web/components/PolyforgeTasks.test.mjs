@@ -65,7 +65,10 @@ test("the list is a responsive grid of discrete blocks with state dot + text, du
   assert.doesNotMatch(source, /minmax\(112px, 1fr\)/, "the old 112px Tasks minimum is gone");
   assert.match(source, /import \{ POLYFORGE_BLOCK_STYLE \} from "@\/lib\/panel-layout";/);
   const row = source.slice(source.indexOf("const renderRow = (row: PolyforgeTaskRow) => {"), source.indexOf("const grid = ("));
-  assert.match(row, /<button key=\{row\.id\} type="button" data-pf-task=\{row\.id\}[^>]*onClick=\{\(\) => openDetail\(row\.id\)\}/, "the whole block is the (keyboard-reachable) click target");
+  assert.match(row, /<button key=\{`\$\{row\.cell \?\? ""\}\/\$\{row\.id\}`\} type="button" data-pf-task=\{row\.id\}[^>]*onClick=\{\(\) => openDetail\(row\.id, row\.cell\)\}/,
+    "the whole block is the (keyboard-reachable) click target, keyed by its Cell and id, opening the detail in its own Cell (polyforge#73)");
+  assert.match(row, /<span data-pf-task-cell=\{row\.cell\}[^>]*>\{row\.cell\}<\/span>/, "each row names its Cell (polyforge#73)");
+  assert.match(row, /\{row\.cell && \(/, "a Cell-less fallback row carries no chip");
   assert.match(row, /\}\}>\{row\.id\}<\/span>/, "the id stays visible as a secondary label");
   assert.match(row, /\.\.\.POLYFORGE_BLOCK_STYLE,/, "the shared block style");
   assert.match(row, /<span aria-hidden="true" style=\{stateDotStyle\(row\.state\)\} \/>/, "the state dot");
@@ -104,11 +107,17 @@ test("two sections — running and all — filtered by the client-side search ov
     "the search (and the filters) apply on the client and both sections render the filtered rows");
   assert.match(source, /t\("polyforge\.tasks\.running"\)[\s\S]*grid\(sections\.running\)[\s\S]*t\("polyforge\.tasks\.all"\)[\s\S]*grid\(sections\.all\)/,
     "正在运行 renders above 全部");
+  // polyforge#73: the retired top single-Cell annotation is gone; a failed
+  // Cell shows its error while the rest list.
+  assert.doesNotMatch(source, /data-pf-tab-cell/, "no top single-Cell annotation (polyforge#73)");
+  assert.doesNotMatch(source, /polyforge\.tabCell/, "the component no longer reads the tabCell key");
+  assert.match(source, /data-pf-cell-error=\{entry\.cell\}/, "a failed Cell's error renders on the list");
+  assert.match(enSource, /"polyforge\.tasks\.cellError": "\S/, "en translates the failed-Cell error");
   // owner-intended change: the search box renders through the shared
   // search bar; its state and client-side filter are unchanged.
   assert.match(source, /<PolyforgeSearchBar[\s\S]*value=\{search\}[\s\S]*onChange=\{setSearch\}/,
     "the search box is the shared bar's search input");
-  for (const field of ["row.project", "row.state", "row.prompt_summary", "row.id"]) assert.ok(source.includes(field), `a row shows ${field}`);
+  for (const field of ["row.project", "row.state", "row.prompt_summary", "row.id", "row.cell"]) assert.ok(source.includes(field), `a row shows ${field}`);
 });
 
 test("project and state selects filter the already-read list in component memory, with no read on change", () => {
