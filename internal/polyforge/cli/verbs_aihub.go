@@ -370,10 +370,11 @@ func errorReason(ae *api.Error) string {
 	return m.Reason
 }
 
-// depErr renders a dependency write failure with the server's reason
-// (DEPENDENCY_CYCLE ...) next to the code, which the plain envelope
+// reasonErr renders a write failure — a dependency write
+// (DEPENDENCY_CYCLE ...), a file edit (CHILD_RUNNING, IMMUTABLE ...) —
+// with the server's reason next to the code, which the plain envelope
 // line would otherwise drop.
-func depErr(err error) error {
+func reasonErr(err error) error {
 	var ae *api.Error
 	if !errors.As(err, &ae) {
 		return err
@@ -419,7 +420,7 @@ func fileDep(ctx *Context, args []string) error {
 			if ctx.JSON {
 				return err
 			}
-			return depErr(err)
+			return reasonErr(err)
 		}
 		self = blocked
 	case "list":
@@ -451,6 +452,7 @@ func fileEdit(ctx *Context, args []string) error {
 		milestone optString
 		waitingOn optString
 		bundle    optString
+		parent    optString
 		useStdin  = f.Bool("stdin", false, "read the full PATCH-body JSON from stdin")
 	)
 	f.Var(&bundle, "bundle", "bundle_name (empty string unbinds); aihub accepts it only while the work item is queued and never claimed")
@@ -460,6 +462,7 @@ func fileEdit(ctx *Context, args []string) error {
 	f.Var(&priority, "priority", "low|normal|high|urgent")
 	f.Var(&milestone, "milestone", "milestone (empty string clears it)")
 	f.Var(&waitingOn, "waiting-on", "waiting_on value")
+	f.Var(&parent, "parent", `only "" — detaches the work item from its parent (aihub refuses a running one; re-parenting is not supported)`)
 	// No --attr: attrs are set at create only — aihub's PATCH whitelist
 	// (core patchableFields) refuses the key with CORE-400 IMMUTABLE.
 	rest, err := parseCommandArgs(f, args)
@@ -491,6 +494,11 @@ func fileEdit(ctx *Context, args []string) error {
 	if id == "" {
 		return fmt.Errorf("file edit: work item id required")
 	}
+	// polyforge#77: aihub only clears parent_id (re-parenting is
+	// IMMUTABLE); a non-empty value is refused here, before the wire.
+	if parent.IsSet() && parent.Val() != "" {
+		return fmt.Errorf(`file edit: --parent only detaches (--parent ""); re-parenting %s under %s is not supported`, id, parent.Val())
+	}
 	if goal.IsSet() {
 		body["goal"] = goal.Val()
 	}
@@ -520,9 +528,15 @@ func fileEdit(ctx *Context, args []string) error {
 			body["bundle_name"] = bundle.Val()
 		}
 	}
+	if parent.IsSet() {
+		body["parent_id"] = nil // JSON null detaches the child
+	}
 	raw, err := ctx.aihub().PatchWorkItem(id, body)
 	if err != nil {
-		return err
+		if ctx.JSON {
+			return err // --json keeps the server envelope verbatim
+		}
+		return reasonErr(err)
 	}
 	finishAs(ctx, raw, func(wi *WIView) {
 		fmt.Fprintln(ctx.Stdout)

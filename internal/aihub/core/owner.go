@@ -58,6 +58,21 @@ func (m *OwnerManager) CheckSessionCredential(wiID, username, secret string) err
 	return nil
 }
 
+// waitEdgesSQL is the ONE "runs after" relation every waiting judgment
+// reads (polyforge#77): the claim gate (unfinishedBlockers), the ready
+// queue, waiting_for (waitingForBatch) and cycle detection (reachesTx).
+// A row is (blocked_id, blocker_id, via): a `blocks` dependency edge
+// (via "") or a child of a bundle-bound parent (via "child" — the parent
+// waits for its children to merge; an unbound parent runs nothing and
+// closes by a hand `pf wrap`, so it gains no edge). Consumers apply the
+// release predicate: only a WRAPPED blocker releases (polyforge#161).
+const waitEdgesSQL = `SELECT d.blocked_wi_id AS blocked_id, d.blocking_wi_id AS blocker_id, '' AS via
+	FROM wi_dependencies d WHERE d.kind='blocks'
+	UNION ALL
+	SELECT c.parent_id, c.id, 'child' FROM work_items c
+	JOIN work_items par ON par.id = c.parent_id
+	WHERE par.bundle_name IS NOT NULL AND par.bundle_name <> ''`
+
 // unfinishedBlockers is the shared query (owner must not depend on the
 // WIManager instance; both reach the same single-writer connection, and
 // the queryRower surface lets the session claim recheck it inside its own
@@ -65,13 +80,13 @@ func (m *OwnerManager) CheckSessionCredential(wiID, username, secret string) err
 //
 // polyforge#161: only a WRAPPED blocker releases its dependent. A failed
 // or canceled blocker keeps the dependent waiting — "B runs after A
-// succeeded" — until a human removes the edge (`pf file dep rm`).
+// succeeded" — until a human removes the edge (`pf file dep rm`) or, for
+// a child, detaches it from the parent.
 func unfinishedBlockers(q queryRower, wiID string) (bool, error) {
 	var n int
-	err := q.QueryRow(`SELECT COUNT(*) FROM wi_dependencies d
-		JOIN work_items b ON b.id = d.blocking_wi_id
-		WHERE d.blocked_wi_id=?1 AND d.kind='blocks'
-		AND b.status <> 'wrapped'`, wiID).Scan(&n)
+	err := q.QueryRow(`SELECT COUNT(*) FROM (`+waitEdgesSQL+`) e
+		JOIN work_items b ON b.id = e.blocker_id
+		WHERE e.blocked_id=?1 AND b.status <> 'wrapped'`, wiID).Scan(&n)
 	return n > 0, err
 }
 

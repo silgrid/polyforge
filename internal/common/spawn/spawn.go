@@ -161,10 +161,18 @@ const (
 // for the default Cell, deploy-<profile>.env for a named one). The daemon
 // is the one source of all three; a step's own copy of any of them never
 // reaches it (the sanitize point strips inherited PF_* names).
+//
+// PF_CELL_TARGETS (polyforge#76) extends the same daemon ownership to the
+// whole machine: every serving Cell's target facts, one line per Cell —
+// "<profile>\t<server>\t<deploy-env-path>" — from which a deploy procedure
+// derives its deploy targets (every Cell whose deploy configuration file
+// exists is one) and checks each target against its own row. A step's own
+// copy never reaches it (the sanitize point strips inherited PF_* names).
 const (
-	EnvCell       = "PF_CELL"
-	EnvCellServer = "PF_CELL_SERVER"
-	EnvDeployEnv  = "PF_DEPLOY_ENV"
+	EnvCell        = "PF_CELL"
+	EnvCellServer  = "PF_CELL_SERVER"
+	EnvDeployEnv   = "PF_DEPLOY_ENV"
+	EnvCellTargets = "PF_CELL_TARGETS"
 )
 
 // EnvParamPrefix starts the name a step param reaches the step process

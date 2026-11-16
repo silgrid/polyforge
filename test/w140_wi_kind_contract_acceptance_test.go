@@ -1,3 +1,5 @@
+// carries: internal/aihub/core/workitem.go, internal/aihub/core/owner.go, internal/aihub/core/queue.go, internal/aihub/core/session.go
+
 package test
 
 // w140_wi_kind_contract_acceptance_test.go: the polyforge#140
@@ -19,8 +21,11 @@ package test
 //     an HTTP-status / JSON-shape / typed-error-reason / filesystem
 //     assertion. They go green when the change lands the spec.
 //   - Kept-face guards are green BOTH before and after the change
-//     (NOT_CLAIMABLE claim gate, bound-parent create refusal, old
-//     queue/CLI shape, race invariants that already hold).
+//     (NOT_CLAIMABLE claim gate, old queue/CLI shape, race invariants
+//     that already hold). polyforge#77 (AC1) rewrote the symmetric-rules
+//     scenarios: the parent/bundle refusal gate is gone — a parent
+//     WITH children binds a bundle and a BOUND ticket accepts children —
+//     and the bind/create race scenario asserts both sides now land.
 //
 import (
 	"bytes"
@@ -388,64 +393,58 @@ func TestW140WaitingOnNotRefused(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC 5 + 6 (symmetric parent/bundle rules).
+// AC 5 + 6 — rewritten by polyforge#77 (AC1): the symmetric parent/bundle
+// gate is deleted.
 // ---------------------------------------------------------------------------
 
-// TestW140SymmetricRules: a ticket WITH children never gains a bundle
-// (PATCH side, children in any status); a BOUND ticket is never a
-// parent (create side, PARENT_NOT_REGISTRY semantics — literal left to
-// the implementation per spec Assumption 1, so only the semantics and
-// the no-write outcome are asserted); a bound child under an unbound
-// parent is legitimate; an unbound parent accepts new children.
-func TestW140SymmetricRules(t *testing.T) {
+// TestW140BoundParentAcceptsChildren: a parent WITH children binds a
+// bundle (PATCH side, a terminal child included); a BOUND ticket accepts
+// children (create side, parent_id lands); a bound child under an
+// unbound parent stays legitimate; an unbound parent accepts new
+// children (kept face).
+func TestW140BoundParentAcceptsChildren(t *testing.T) {
 	inst := w140Setup(t, "w140-sym")
 
-	// PATCH side: parent with children cannot bind.
+	// PATCH side: parent with children binds.
 	p := w140Create(t, inst, "w140-sym", "w140 parent", nil, nil)
 	c1 := w140Create(t, inst, "w140-sym", "w140 child one", nil, strPtr(p))
-	if err := w140Patch(inst, p, map[string]any{"bundle_name": "w140-sym-p"}); err == nil {
-		t.Fatalf("PATCH bundle on parent with children: accepted, want refusal")
+	if err := w140Patch(inst, p, map[string]any{"bundle_name": "w140-sym-p"}); err != nil {
+		t.Fatalf("PATCH bundle on parent with children: refused, want accepted (%v)", err)
 	}
-	// ... and a terminal child still counts as a child.
+	if got := w140View(t, inst, p)["bundle_name"]; got != "w140-sym-p" {
+		t.Fatalf("accepted bind did not land: bundle_name = %v, want w140-sym-p", got)
+	}
+	// ... and a terminal child never gated the bind: rename still accepted.
 	if _, err := inst.client.CancelWorkItem(c1); err != nil {
 		t.Fatalf("cancel child %s: %v", c1, err)
 	}
-	if err := w140Patch(inst, p, map[string]any{"bundle_name": "w140-sym-p"}); err == nil {
-		t.Fatalf("PATCH bundle on parent whose (only) child is terminal: accepted, want refusal (children count in any status)")
+	if err := w140Patch(inst, p, map[string]any{"bundle_name": "w140-sym-p2"}); err != nil {
+		t.Fatalf("PATCH bundle on parent whose (only) child is terminal: refused, want accepted (%v)", err)
 	}
-	if got := w140View(t, inst, p)["bundle_name"]; got != nil {
-		t.Fatalf("refused PATCH wrote: bundle_name = %v, want null", got)
-	}
-
-	// create side: a bound child under the unbound parent is fine.
-	c2 := w140Create(t, inst, "w140-sym", "w140 bound child under unbound parent", strPtr("w140-sym-c2"), strPtr(p))
-	if got := w140View(t, inst, c2)["parent_id"]; got != p {
-		t.Fatalf("bound child parent_id = %v, want %s", got, p)
-	}
-	// ... but the parent NOW has children again, so it still cannot bind.
-	if err := w140Patch(inst, p, map[string]any{"bundle_name": "w140-sym-p"}); err == nil {
-		t.Fatalf("PATCH bundle on parent with the new bound child: accepted, want refusal")
+	if got := w140View(t, inst, p)["bundle_name"]; got != "w140-sym-p2" {
+		t.Fatalf("accepted rename did not land: bundle_name = %v, want w140-sym-p2", got)
 	}
 
-	// create side: a bound ticket is refused as a parent.
+	// create side: a bound ticket accepts children (parent_id lands).
 	q := w140Create(t, inst, "w140-sym", "w140 bound parent", strPtr("w140-sym-q"), nil)
 	before := w140ProjectIDs(t, inst, "w140-sym")
-	if _, err := inst.client.CreateWorkItem(aihubclient.CreateWorkItemRequest{
-		Project: "w140-sym", Goal: "w140 child under bound parent", ParentID: strPtr(q),
-	}); err == nil {
-		t.Fatalf("create child under bundle-bound parent: accepted, want refusal (PARENT_NOT_REGISTRY semantics)")
-	} else if ae := w140Typed(err); ae == nil {
-		t.Fatalf("create child under bound parent: refusal is not a typed error: %v", err)
+	qc := w140Create(t, inst, "w140-sym", "w140 child under bound parent", nil, strPtr(q))
+	if got := w140View(t, inst, qc)["parent_id"]; got != q {
+		t.Fatalf("child parent_id = %v, want %s", got, q)
 	}
-	after := w140ProjectIDs(t, inst, "w140-sym")
-	if len(after) != len(before) {
-		t.Fatalf("refused create persisted a row: %d work items before, %d after", len(before), len(after))
+	if after := w140ProjectIDs(t, inst, "w140-sym"); len(after) != len(before)+1 {
+		t.Fatalf("accepted create did not land: %d work items before, %d after", len(before), len(after))
 	}
 
-	// create side: an unbound parent accepts children (parent_id lands).
+	// create side: a bound child under the unbound parent is fine (kept).
 	r := w140Create(t, inst, "w140-sym", "w140 unbound parent", nil, nil)
-	rc := w140Create(t, inst, "w140-sym", "w140 child under unbound parent", nil, strPtr(r))
-	if got := w140View(t, inst, rc)["parent_id"]; got != r {
+	c2 := w140Create(t, inst, "w140-sym", "w140 bound child under unbound parent", strPtr("w140-sym-c2"), strPtr(r))
+	if got := w140View(t, inst, c2)["parent_id"]; got != r {
+		t.Fatalf("bound child parent_id = %v, want %s", got, r)
+	}
+	// ... and the unbound parent accepts another child too (kept).
+	rd := w140Create(t, inst, "w140-sym", "w140 child under unbound parent", nil, strPtr(r))
+	if got := w140View(t, inst, rd)["parent_id"]; got != r {
 		t.Fatalf("child parent_id = %v, want %s", got, r)
 	}
 }
@@ -525,13 +524,13 @@ func TestW140RacePatchBundleVsClaim(t *testing.T) {
 	t.Logf("w140 race1: PATCH serialized first %d, claim first %d of %d rounds", patchWins, claimFirst, rounds)
 }
 
-// TestW140RaceBindBundleVsNewChild: PATCH bundle (NULL→X) vs create of a
-// child under the same ticket — exactly one wins, and the final state
-// never shows children ∧ bound bundle at once.
-func TestW140RaceBindBundleVsNewChild(t *testing.T) {
+// TestW140BindBundleAndNewChildBothLand: PATCH bundle (NULL→X) and the
+// create of a child under the same ticket BOTH succeed now
+// (polyforge#77 AC1 deleted the symmetric gate) — the end state shows
+// children ∧ a non-empty bundle together.
+func TestW140BindBundleAndNewChildBothLand(t *testing.T) {
 	inst := w140Setup(t, "w140-race2")
 	const rounds = 6
-	patchWins, createWins := 0, 0
 	for i := 0; i < rounds; i++ {
 		id := w140Create(t, inst, "w140-race2", fmt.Sprintf("w140 race2 parent %d", i), nil, nil)
 		newBundle := fmt.Sprintf("w140-r2-%d-x", i)
@@ -546,42 +545,26 @@ func TestW140RaceBindBundleVsNewChild(t *testing.T) {
 				return err
 			},
 		)
-		if (patchErr == nil) == (createErr == nil) {
-			t.Fatalf("round %d: exactly one of bind-bundle / new-child must win (patchErr=%v createErr=%v)", i, patchErr, createErr)
+		if patchErr != nil {
+			t.Fatalf("round %d: bind on parent with children must succeed: %v", i, patchErr)
+		}
+		if createErr != nil {
+			t.Fatalf("round %d: create child under bound parent must succeed: %v", i, createErr)
 		}
 		v := w140View(t, inst, id)
+		if got := v["bundle_name"]; got != newBundle {
+			t.Fatalf("round %d: the bind did not land: bundle_name = %v, want %s", i, got, newBundle)
+		}
 		children := 0
 		for _, wid := range w140ProjectIDs(t, inst, "w140-race2") {
 			if w140View(t, inst, wid)["parent_id"] == id {
 				children++
 			}
 		}
-		bound := v["bundle_name"] != nil
-		if createErr == nil {
-			createWins++
-			if ae := w140Typed(patchErr); ae == nil {
-				t.Fatalf("round %d: losing PATCH was not a typed refusal: %v", i, patchErr)
-			}
-			if bound {
-				t.Fatalf("round %d: create won but the parent is ALSO bundle-bound (children ∧ bundle must not coexist)", i)
-			}
-			if children == 0 {
-				t.Fatalf("round %d: create won but no child row landed", i)
-			}
-		} else {
-			patchWins++
-			if ae := w140Typed(createErr); ae == nil {
-				t.Fatalf("round %d: losing create was not a typed refusal: %v", i, createErr)
-			}
-			if !bound {
-				t.Fatalf("round %d: PATCH won but the parent has no bundle", i)
-			}
-			if children != 0 {
-				t.Fatalf("round %d: PATCH won but a child landed anyway (children ∧ bundle must not coexist)", i)
-			}
+		if children != 1 {
+			t.Fatalf("round %d: children = %d, want 1 (children ∧ bundle coexist now)", i, children)
 		}
 	}
-	t.Logf("w140 race2: PATCH won %d, create won %d of %d rounds", patchWins, createWins, rounds)
 }
 
 // ---------------------------------------------------------------------------

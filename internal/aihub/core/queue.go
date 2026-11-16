@@ -34,7 +34,9 @@ func queueLess(a, b *WIView) bool {
 
 // ReadyQueue builds the queue for a project (name or id). A WI is
 // executable when: status queued, waiting_on empty, no unfinished
-// `blocks` dependency edge (only a wrapped blocker releases, #161), and every repo its inventory names is still
+// blocker in waitEdgesSQL — a `blocks` dependency edge, or a child of a
+// bundle-bound parent (polyforge#77); only a wrapped blocker releases,
+// #161 — and every repo its inventory names is still
 // one of the project's repos (reference.md §2.1; else its claim would be refused
 // INVENTORY_REPO_GONE on every drain wave).
 func (m *WIManager) ReadyQueue(project string) (*ReadyQueue, error) {
@@ -74,11 +76,11 @@ func (m *WIManager) ReadyQueue(project string) (*ReadyQueue, error) {
 		inProject[pr.Name] = true
 	}
 	// One read of every candidate: the WorkItem, its public session block
-	// (m4), the unfinished blockers flag (#161) and the frozen inventory
-	// (reference.md §2.1).
-	rows, err := m.db.Query(wiSelect+`, EXISTS(SELECT 1 FROM wi_dependencies d
-		JOIN work_items b ON b.id=d.blocking_wi_id
-		WHERE d.blocked_wi_id=w.id AND d.kind='blocks' AND b.status <> 'wrapped')`+wiFrom+`
+	// (m4), the unfinished blockers flag (#161, #77: unfinishedBlockers'
+	// relation and predicate) and the frozen inventory (reference.md §2.1).
+	rows, err := m.db.Query(wiSelect+`, EXISTS(SELECT 1 FROM (`+waitEdgesSQL+`) e
+		JOIN work_items b ON b.id=e.blocker_id
+		WHERE e.blocked_id=w.id AND b.status <> 'wrapped')`+wiFrom+`
 		WHERE w.project_id=? AND w.status IN ('queued','running','paused') ORDER BY w.rowid`, projectID)
 	if err != nil {
 		return nil, err

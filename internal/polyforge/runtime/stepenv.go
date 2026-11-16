@@ -27,6 +27,18 @@ import (
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
+// CellTarget is one serving Cell's target facts (polyforge#76): its
+// profile, its AIHub base URL as configured and the deploy configuration
+// file that Cell's deploys read. One row of the all-Cells list a step's
+// deploy procedure derives its deploy targets from and checks each target
+// against - every serving Cell of this machine, never only the work
+// item's own.
+type CellTarget struct {
+	Profile   string
+	Server    string
+	DeployEnv string
+}
+
 // StepEnv is the daemon-owned step environment.
 type StepEnv struct {
 	// CommandPath is the live [daemon] command_path ("" = unset: a step
@@ -52,23 +64,41 @@ type StepEnv struct {
 	CellServer string
 	// DeployEnv is the deploy configuration file this Cell's deploys read
 	// (spawn.EnvDeployEnv): an absolute path in the Host configuration
-	// directory — deploy.env for the default Cell, deploy-<profile>.env for
+	// directory - deploy.env for the default Cell, deploy-<profile>.env for
 	// a named one (cellcfg.DeployEnvFileName, the Cell file naming).
 	DeployEnv string
+	// CellTargets is every serving Cell's target facts
+	// (spawn.EnvCellTargets; polyforge#76), the default Cell first then the
+	// named ones by profile: a deploy procedure derives its deploy targets
+	// from this list - every Cell of this machine that has a deploy
+	// configuration file is one - and checks each target against its own
+	// row. The daemon's source is the Host registry, read live at every
+	// derivation (a Cell added, removed or turned invalid moves the next
+	// step derivation with it); a bare Config names no source and answers
+	// none.
+	CellTargets []CellTarget
 }
 
 // Vars answers the harness-neutral entries of the step env: PF_PYTHON (an
 // empty value included: a set name with an empty value is still the
-// daemon's answer) and the step's Cell facts (polyforge#75): PF_CELL,
-// PF_CELL_SERVER and PF_DEPLOY_ENV, in that order — empty values included
-// the same way, so a step can always tell a stated fact from an inherited
-// copy (the sanitize point strips those).
+// daemon's answer), the step's Cell facts (polyforge#75) - PF_CELL,
+// PF_CELL_SERVER and PF_DEPLOY_ENV - and the all-Cells target facts
+// (polyforge#76): PF_CELL_TARGETS, one line per serving Cell of this
+// machine, "<profile>\t<server>\t<deploy configuration file>" in the
+// registry's order (default first, then by profile). Empty values are
+// included the same way, so a step can always tell a stated fact from an
+// inherited copy (the sanitize point strips those).
 func (e StepEnv) Vars() []string {
+	var lines []string
+	for _, t := range e.CellTargets {
+		lines = append(lines, t.Profile+"\t"+t.Server+"\t"+t.DeployEnv)
+	}
 	return []string{
 		spawn.EnvPython + "=" + e.Python,
 		spawn.EnvCell + "=" + e.Cell,
 		spawn.EnvCellServer + "=" + e.CellServer,
 		spawn.EnvDeployEnv + "=" + e.DeployEnv,
+		spawn.EnvCellTargets + "=" + strings.Join(lines, "\n"),
 	}
 }
 

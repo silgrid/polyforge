@@ -180,8 +180,9 @@ type WIView struct {
 	SessionMachine     string `json:"session_machine,omitempty"`
 	SessionStartedAt   string `json:"session_started_at,omitempty"`
 	CleanPause         bool   `json:"clean_pause,omitempty"`
-	// WaitingFor is the server-derived list of unfinished `blocks`
-	// blockers of a queued work item (polyforge#161).
+	// WaitingFor is the server-derived list of unfinished blockers of a
+	// queued work item: its `blocks` blockers (polyforge#161) and, for a
+	// bundle-bound parent, its children (via "child", polyforge#77).
 	WaitingFor []waitingBlocker `json:"waiting_for,omitempty"`
 	// Comments is the work item's append-only comment thread in time
 	// order.
@@ -197,21 +198,29 @@ type WIView struct {
 	// while its lane requires one — the same lane gate as
 	// AcceptanceMissing (polyforge#27): the auto-pull wave skips it too.
 	AnalysisMissing bool `json:"analysis_missing,omitempty"`
+	// ChildFailed is set by pf queue (never by the server) on a queued
+	// parent one of whose children it waits for (waiting_for via "child")
+	// failed or was canceled (polyforge#77): only a wrapped child
+	// releases, so the parent waits until a human retries or detaches
+	// the child — it needs interaction.
+	ChildFailed bool `json:"child_failed,omitempty"`
 }
 
 // acceptanceMissingLabel is the STATUS-cell mark of an AcceptanceMissing
-// row; analysisMissingLabel of an AnalysisMissing one (both marks show
-// when both are missing).
+// row; analysisMissingLabel of an AnalysisMissing one; childFailedLabel
+// of a ChildFailed one (every mark that applies shows).
 const (
 	acceptanceMissingLabel = "需要交互：缺验收"
 	analysisMissingLabel   = "需要交互：未分析"
+	childFailedLabel       = "需要交互：子票失败"
 )
 
 // markNeedsInteraction sets AcceptanceMissing and AnalysisMissing on
 // each queued execution ticket (one with a bundle) of items whose lane
 // requires acceptance (the lane's `acceptance` declaration; a nil lane,
 // one that cannot be read, does) — the checks pf submit and the
-// auto-pull wave apply; the ticket needs interaction first.
+// auto-pull wave apply; the ticket needs interaction first. ChildFailed
+// is read off the waiting_for list alone (a lane-independent mark).
 func markNeedsInteraction(items []WIView, laneOf func(project, bundle string) *workflow.Lane) {
 	for i := range items {
 		it := &items[i]
@@ -224,21 +233,50 @@ func markNeedsInteraction(items []WIView, laneOf func(project, bundle string) *w
 			laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance()
 		it.AcceptanceMissing = laneRequires && !workflow.HasAcceptance(content)
 		it.AnalysisMissing = laneRequires && !workflow.HasAnalysis(content)
+		it.ChildFailed = false
+		for _, b := range it.WaitingFor {
+			if b.Via == waitingViaChild && (b.Status == api.StatusFailed || b.Status == api.StatusCanceled) {
+				it.ChildFailed = true
+			}
+		}
 	}
 }
 
+// waitingBlocker is one waiting_for entry; Via is "child" for a child of
+// a bundle-bound parent and empty for a `blocks` edge (polyforge#77).
 type waitingBlocker struct {
 	Slug   string `json:"slug"`
 	Status string `json:"status"`
+	Via    string `json:"via,omitempty"`
 }
 
-// waitingText renders a waiting_for list: "polyforge#3 (running), ...".
+const waitingViaChild = "child"
+
+// waitingText renders a waiting_for list: "polyforge#3 (running),
+// polyforge#5 (child, failed), ...".
 func waitingText(list []waitingBlocker) string {
 	parts := make([]string, 0, len(list))
 	for _, b := range list {
+		if b.Via == waitingViaChild {
+			parts = append(parts, fmt.Sprintf("%s (child, %s)", b.Slug, b.Status))
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%s (%s)", b.Slug, b.Status))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// waitingSplit answers the slugs of a waiting_for list's `blocks`
+// blockers and of its children, each in list order.
+func waitingSplit(list []waitingBlocker) (edges, children []string) {
+	for _, b := range list {
+		if b.Via == waitingViaChild {
+			children = append(children, b.Slug)
+		} else {
+			edges = append(edges, b.Slug)
+		}
+	}
+	return edges, children
 }
 
 // depsView is the two-sided dependency view (GET
@@ -304,6 +342,9 @@ func wiRow(it WIView) []string {
 	if it.AnalysisMissing {
 		status += " (" + analysisMissingLabel + ")"
 	}
+	if it.ChildFailed {
+		status += " (" + childFailedLabel + ")"
+	}
 	return []string{
 		slug, orDash(it.ProjectName), status, sess, it.Priority, nullable(it.BundleName), truncate(it.Goal, 60),
 	}
@@ -362,7 +403,15 @@ func renderWIDetail(w io.Writer, wi *WIView) {
 		fmt.Fprintf(w, "  waiting:  %s\n", *wi.WaitingOn)
 	}
 	if len(wi.WaitingFor) > 0 {
-		fmt.Fprintf(w, "  waiting-for: %s (only a wrapped blocker releases; `pf file dep rm` removes an edge)\n", waitingText(wi.WaitingFor))
+		edges, children := waitingSplit(wi.WaitingFor)
+		var ways []string
+		if len(edges) > 0 {
+			ways = append(ways, "`pf file dep rm` removes an edge")
+		}
+		if len(children) > 0 {
+			ways = append(ways, "`pf file edit <child> --parent \"\"` detaches a child")
+		}
+		fmt.Fprintf(w, "  waiting-for: %s (only a wrapped blocker releases; %s)\n", waitingText(wi.WaitingFor), strings.Join(ways, ", "))
 	}
 	if wi.SessionFingerprint != "" {
 		fmt.Fprintf(w, "  session:  %s", wi.SessionFingerprint)

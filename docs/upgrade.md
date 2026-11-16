@@ -298,3 +298,40 @@ value. A spawn without budget flags now gets 40 minutes and 1000000 tokens
 (the token default is the ceiling, so `--max-tokens` can only lower it);
 the ceilings (60m / 1000000) are unchanged. Raising the bound needs no
 restart: `pf config set max_concurrent_tasks 8 --host` and a reload.
+
+## v0.2.1, a bundle-bound ticket can be a parent
+
+aihub no longer refuses a bundle-bound ticket as a parent
+(`PARENT_NOT_REGISTRY`) nor a bundle bound to a ticket with children
+(`HAS_CHILDREN_NO_BUNDLE`); work items still nest one level. A bundle-bound
+parent waits for its children to merge: until every child is wrapped its
+claim is refused `DEPENDENCY_BLOCKED`, it stays out of the ready queue, and
+its `waiting_for` lists each child with `"via": "child"`; a failed or
+canceled child keeps it waiting. Cycle detection follows that wait. A child
+is detached with `pf file edit <child> --parent ""` (aihub only clears
+`parent_id`; a running child is refused `CHILD_RUNNING`; the write records
+`wi_detached`), and once a child was claimed the parent's bundle is frozen
+(`PARENT_BUNDLE_FROZEN`). `pf queue` shows a child as `<slug> (child,
+<status>)` in WAITING-FOR and marks a parent waiting for a failed or
+canceled child (the merged `--json` carries `"child_failed": true`). An
+unbound parent behaves as before: `pf wrap` once its children are terminal
+(`OPEN_CHILDREN` otherwise), never claimable.
+
+Deploy the new aihub first, then upgrade the pf clients. An older pf
+against the new aihub ignores `via`: it lists a child as a plain blocker and
+its refused-submit guidance names `pf file dep rm`, which finds no edge for
+a child; a new pf against an older aihub cannot detach (`parent_id` is not
+updatable there). There is no schema change. Before deploying, query the
+target aihub once, read-only, for work items that already have a bundle and
+children: they start waiting for their unwrapped children as soon as the new
+aihub runs.
+
+Rollback is still swapping the aihub binary, with one new limit: once a
+bundle-bound parent with children exists, the old aihub loses the wait —
+the parent becomes claimable and enters the ready queue before its children
+merge — and its rules refuse new writes on that data (another child under
+the bound parent, `PARENT_NOT_REGISTRY`; a bundle bound to a ticket with
+children, `HAS_CHILDREN_NO_BUNDLE`; a detach, `CORE-400`). Before rolling
+back, list the bound parents with unwrapped children and either accept that,
+or keep each one waiting with an explicit edge from each bundle-bound child
+(`pf file dep add <child> <parent>`), which both aihubs honor.

@@ -102,8 +102,8 @@ own daemon. `end_pending`, `recovering`, `sealing`, `claiming` are
 ### 2.2 Dependencies, parents, ready queue <!-- §2.2 -->
 
 - Edge kinds `blocks` (default), `supersedes`, `related` (`core/workitem.go` `AddDependency`); same project only; no self-edge; a `blocks` blocker must be an execution ticket (`CORE-400 BLOCKER_NOT_EXECUTABLE`); non-`related` edges refuse cycles (`CORE-409 DEPENDENCY_CYCLE`). Only a **wrapped** blocker releases a `blocks` edge (`core/owner.go`, #161).
-- Parent/child and bundle binding rules: `wi-kind-contract.md#§2` (one nesting level, `PARENT_NOT_REGISTRY`, `HAS_CHILDREN_NO_BUNDLE`, bundle frozen at first claim).
-- Ready queue `GET /projects/{p}/ready-queue` (`core/queue.go`): `{project, items, running, paused}`; `items` = the project is active (a deactivated project contributes NOTHING — polyforge#30's auto-claim source; the claim door answers `PROJECT_DEACTIVATED` in any case) ∧ queued ∧ `waiting_on` empty ∧ no unfinished `blocks` edge ∧ has a bundle ∧ inventory repos still exist; ordered priority (`urgent high normal low`) then `created_at`. No `blocked` segment.
+- Parent/child and bundle binding rules: `wi-kind-contract.md#§2` (one nesting level `PARENT_DEPTH`, bundle frozen at first claim; polyforge#77: any ticket may be a parent, and a bundle-bound parent waits for its unwrapped children — the claim gate, the ready queue and `waiting_for` (entries with `via: "child"`) read one relation, `waitEdgesSQL` in `core/owner.go`, `blocks` edges ∪ those children, and `DEPENDENCY_CYCLE` walks it too; a child is detached by clearing `parent_id`; a claimed child freezes the parent's bundle, `PARENT_BUNDLE_FROZEN`).
+- Ready queue `GET /projects/{p}/ready-queue` (`core/queue.go`): `{project, items, running, paused}`; `items` = the project is active (a deactivated project contributes NOTHING — polyforge#30's auto-claim source; the claim door answers `PROJECT_DEACTIVATED` in any case) ∧ queued ∧ `waiting_on` empty ∧ no unfinished `blocks` edge or unwrapped child of a bound parent ∧ has a bundle ∧ inventory repos still exist; ordered priority (`urgent high normal low`) then `created_at`. No `blocked` segment.
 
 ### 2.3 attrs: no execution state <!-- §2.3 -->
 
@@ -200,7 +200,7 @@ health route. All paths under `/api/v1` except `/git/` and the read-only web con
 | POST | `/work-items` | key + project writer | create (`bundle_name`, `repo_inventory`, `parent_id`, `exclusive`, …); `exclusive: true` → `CORE-409 OPEN_ON_BUNDLE` while the project has an unfinished work item on the same bundle (§2.1 table) |
 | GET | `/work-items` | key; rows filtered by the caller's readable project set, pushed into the SQL **before** the limit (`total` = returned count, admin and non-admin alike) | `limit` (default 500, max 1000), `project`, `status`, `assignee`, `priority`, `milestone`, `bundle`, and `attr=<path>:<value>` (repeatable, all must hold: the attr at the dot path — `^[a-z0-9_]+(\.[a-z0-9_]+)*$`, else `CORE-400` — is that string, read with `json_extract`; workflow contract 1); `?project=<non-member>` stays empty |
 | GET | `/work-items/{id}` | key + read | `include=events` (anything else `CORE-400`); the answer always carries the append-only `comments` list |
-| PATCH | `/work-items/{id}` | key + writer | `goal content labels priority milestone waiting_on clean_pause`, `bundle_name` in the R2 window (`patchableFields`; `attrs` only at create) |
+| PATCH | `/work-items/{id}` | key + writer | `goal content labels priority milestone waiting_on clean_pause`, `bundle_name` in the R2 window (a bound parent's bundle also refused `PARENT_BUNDLE_FROZEN` once a child was claimed), `parent_id` clear-only (`null` or `""`, re-parenting `IMMUTABLE`, a running child `CORE-409 CHILD_RUNNING`, event `wi_detached`) (`patchableFields`; `attrs` only at create) |
 | PATCH | `/work-items/{id}/attrs` | signed machine + writer | workflow contract 1 (`core/attrs.go`): body `{key, value, if?, owner_message?}` writes the one top-level attrs key `key` (`^[a-z][a-z0-9_]{0,63}$`; Core's own `blocked_seal` is `CORE-400`) whole with the JSON `value` (`null` deletes it), on a work item of any status, terminal included. `if` maps attrs paths to JSON values, a compare-and-swap fence checked in the write's transaction (an absent path reads as `null`): any mismatch is `CORE-409` reason `ATTRS_IF_MISMATCH` and writes nothing. Every write appends `attrs_written` `{key, machine_id, owner_message?}` (`owner_message` `{words, by, at}`, copied verbatim). aihub keeps no lane's rules on the record. Reach: the daemon's machine key only — a step reaches it solely as a pending `pf step hub attrs` write the daemon makes |
 | POST | `/work-items/{id}/cancel` | reporter/maintainer/admin; a blocked work item also its holder operator (writer/maintainer) | §2.1 |
 | POST | `/work-items/{id}/wrap` | reporter/maintainer/admin | §2.1; work items with no bundle only |
@@ -365,10 +365,10 @@ Registry `internal/common/api/errors.go`; HTTP status = numeric suffix. `core.Fa
 
 | Code | Meaning (as raised) |
 |---|---|
-| `CORE-400` | Validation. Reasons incl. `IMMUTABLE`, `HAS_CHILDREN_NO_BUNDLE`, `PARENT_*`, `INVENTORY_*`, `BLOCKER_*`, `EXECUTION_STATE_REJECTED` |
+| `CORE-400` | Validation. Reasons incl. `IMMUTABLE`, `PARENT_*` (e.g. `PARENT_DEPTH`, `PARENT_BUNDLE_FROZEN`), `INVENTORY_*`, `BLOCKER_*`, `EXECUTION_STATE_REJECTED` |
 | `CORE-403` | `STALE_SESSION`: the presented session is not the holder (attach/end/pause/idempotent replay) |
 | `CORE-404` | WI/project/user missing, or hidden by the read gate |
-| `CORE-409` | State conflict: `ALREADY_HELD NOT_CLAIMABLE DEPENDENCY_BLOCKED RACE_LOST NOT_ATTACHABLE NOT_HELD NOT_RUNNING NOT_BLOCKED SESSION_HELD DEPENDENCY_CYCLE INVENTORY_REPO_GONE OPEN_ON_BUNDLE`; without a reason: cancel of a running WI, project already exists, state changed concurrently |
+| `CORE-409` | State conflict: `ALREADY_HELD NOT_CLAIMABLE DEPENDENCY_BLOCKED RACE_LOST NOT_ATTACHABLE NOT_HELD NOT_RUNNING NOT_BLOCKED SESSION_HELD DEPENDENCY_CYCLE INVENTORY_REPO_GONE OPEN_ON_BUNDLE CHILD_RUNNING`; without a reason: cancel of a running WI, project already exists, state changed concurrently |
 | `CORE-410` | `TERMINAL_STATE`; also the cross-machine holder is deregistered / the WI has no holder machine |
 | `CORE-413` | message text over 4096 bytes / artifact over 4 MiB |
 | `CORE-422` | secret-shaped message content (nothing stored) |
