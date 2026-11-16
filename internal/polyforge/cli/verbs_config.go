@@ -437,6 +437,20 @@ func runConfigGet(ctx *Context, args []string) error {
 		fmt.Fprintf(ctx.Stdout, "%s projects = [%s] (source: file)\n", k.raw, quoteList(projects))
 		return nil
 	}
+	if k.kind == keyDaemon && ConfigSchema(k.name)["kind"] == "regex-list" {
+		// a pattern list (polyforge#51) reads back as written: an array
+		// under --json, the text form `pf config list` renders
+		list := daemonListValue(v.eff.Daemon, k.name)
+		src := "default"
+		if v.hasDaemonKey(k.name) {
+			src = "file"
+		}
+		if ctx.JSON {
+			return emitJSON(ctx, map[string]any{"key": k.name, "value": list, "source": src})
+		}
+		fmt.Fprintf(ctx.Stdout, "%s = [%s] (source: %s)\n", k.name, quoteList(list), src)
+		return nil
+	}
 	if k.kind == keyDaemon {
 		val := daemonValue(v.eff.Daemon, k.name)
 		src := "default"
