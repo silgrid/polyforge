@@ -51,6 +51,8 @@ const UNCLASSIFIED = {
   ],
 };
 const stateFile = join(stubDir, "state.json");
+const hostItemsFile = join(stubDir, "host-items.json");
+writeFileSync(hostItemsFile, JSON.stringify(HOST_ITEMS));
 const writeFileAtomic = (path, data) => writeFileSync(path, data);
 const saveState = (state) => writeFileAtomic(stateFile, JSON.stringify(state));
 saveState({ refuse: "" });
@@ -66,13 +68,21 @@ const flag = (name) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 
 const out = (doc) => { process.stdout.write(JSON.stringify(doc) + "\\n"); process.exit(0); };
 if (args.includes("--version")) out({ version: "v9.9.9", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] });
 if (rest[0] === "cell" && rest[1] === "list") out({ dir: path.join(dir, "cfg"), profiles: [{ profile: "default", file: "cli.toml", state: "serving", valid: true, workspaces: [] }] });
-if (rest[0] === "config" && rest[1] === "list") out({ file: { sha256: "e2e-sha", exists: true }, items: rest.includes("--host") ? ${JSON.stringify(HOST_ITEMS)} : ${JSON.stringify(CELL_ITEMS)} });
+if (rest[0] === "config" && rest[1] === "list") out({ file: { sha256: "e2e-sha", exists: true }, items: rest.includes("--host") ? JSON.parse(fs.readFileSync(path.join(dir, "host-items.json"), "utf8")) : ${JSON.stringify(CELL_ITEMS)} });
 if (rest[0] === "config" && rest[1] === "workspace") out({ mapped: false, workspace: null, yaml: null, steps: null });
 if (rest[0] === "ops" && rest[1] === "status") out({ queue: { pending: 0, running: 0, max_concurrent: 6, max_configured: 6 }, supervision: { step_timeout: "30m0s", stall_window: "10m0s" }, reload: { pending: [], overridden: [] } });
 if (rest[0] === "ops" && rest[1] === "unclassified") out(${JSON.stringify(UNCLASSIFIED)});
 if (rest[0] === "config" && (rest[1] === "set" || rest[1] === "unset")) {
   const key = rest[2];
-  if (state.refuse === key) { process.stderr.write(JSON.stringify({ error: { code: "CORE-400", detail: key + " pattern \\\\( is not a compilable RE2 regex" } }) + "\\n"); process.exit(4); }
+  if (state.refuse === key) { process.stderr.write(JSON.stringify({ error: { code: "CORE-400", detail: key + " pattern ( is not a compilable RE2 regex" } }) + "\\n"); process.exit(4); }
+  if (rest.includes("--host") && rest[1] === "set") {
+    const itemsFile = path.join(dir, "host-items.json");
+    const items = JSON.parse(fs.readFileSync(itemsFile, "utf8"));
+    const item = items.find((entry) => entry.key === key);
+    const value = rest.find((arg, i) => i > rest.indexOf(key) && (arg.startsWith("[") || !arg.startsWith("-")));
+    if (item && value) { item.value = item.schema && item.schema.kind === "regex-list" ? JSON.parse(value) : value; }
+    fs.writeFileSync(itemsFile, JSON.stringify(items));
+  }
   out({ ok: true, key, class: "live", outcome: "applied" });
 }
 if (rest[0] === "config" && rest[1] === "reload") out({ reloaded: [], pending: [] });
@@ -130,7 +140,14 @@ try {
     // one-regex-per-line editors; none of the four leaks into a Cell's card.
     const median = host.locator('input[aria-label="slow_model_median_latency (host)"]').first();
     await median.waitFor({ state: "visible", timeout: 20_000 });
-    assert.equal(await median.inputValue(), "45s", "the median bound shows its file value");
+    const waitForValue = async (locator, want, ms = 20_000) => {
+      for (const deadline = Date.now() + ms; Date.now() < deadline;) {
+        if ((await locator.inputValue()) === want) return true;
+        await delay(100);
+      }
+      return false;
+    };
+    assert.ok(await waitForValue(median, "45s"), "the median bound shows its file value");
     assert.equal(await host.locator('input[aria-label="slow_model_p90_latency (host)"]').first().inputValue(), "3m0s", "the p90 bound shows its file value");
     const transient = host.locator('textarea[aria-label="transient_error_patterns (host)"]').first();
     await transient.waitFor({ state: "visible", timeout: 20_000 });
@@ -160,9 +177,18 @@ try {
     assert.equal(value, JSON.stringify(["\\b402\\b", "payment retry"]), "the value is one JSON array, blank lines trimmed");
     assert.ok(hit.args.includes("--host"), "the write is pinned to the Host scope");
     assert.ok(!hit.args.includes("--profile"), "a Host key write carries no --profile");
-    // the save cleared the draft: the shown value is the editor's own
-    await delay(400);
-    assert.equal(await transient.inputValue(), "\\b402\\b\npayment retry", "the draft survives only until the next read");
+    // the save cleared the draft and the region re-read: the editor shows
+    // the applied file value (the stub applies the write to its fixture)
+    for (const deadline = Date.now() + 20_000; Date.now() < deadline;) {
+      const value = await transient.inputValue();
+      if (value === "\\b402\\b\npayment retry") break;
+      if (Date.now() > deadline - 100) {
+        const status = await host.locator("[role=status], [role=alert]").allInnerTexts().catch(() => []);
+        throw new Error(`the re-read did not settle: value ${JSON.stringify(value)}, status ${JSON.stringify(status)}`);
+      }
+      await delay(100);
+    }
+    assert.equal(await transient.inputValue(), "\\b402\\b\npayment retry", "the re-read shows the applied list");
   });
 
   await check("W3", async () => {
@@ -194,14 +220,14 @@ try {
   failures.push(`crash: ${error instanceof Error ? error.stack : String(error)}`);
   console.log(`FAIL crash: ${error instanceof Error ? error.message : String(error)}`);
 } finally {
-  await h.stop();
-  if (page) await page.close().catch(() => {});
+  await h.close();
   rmSync(work, { recursive: true, force: true });
 }
 
 if (failures.length > 0) {
   console.log(joinedLines(4));
   console.log(`FAIL e2e/w51-error-classes: ${failures.length} scenario(s) red`);
-  process.exit(1);
+  process.exitCode = 1;
+} else {
+  console.log(`PASS e2e/w51-error-classes: all ${check.count} scenario(s) green`);
 }
-console.log("PASS e2e/w51-error-classes: every scenario green");
