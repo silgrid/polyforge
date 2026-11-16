@@ -499,6 +499,16 @@ function getBuiltinSlashCommand(message: string): BuiltinSlashCommand | undefine
   return BUILTIN_SLASH_COMMANDS.find((command) => command.name === match[1]);
 }
 
+/**
+ * The pi built-in slash commands a composer offers (polyforge#71): every one on
+ * pi; a claude composer only the two a claude session's server answers —
+ * `/compact` (the guarded compaction, the same handler the compact button
+ * takes) and `/session` — so the others are neither listed nor routed there.
+ */
+export function builtinSlashCommands(claude: boolean): BuiltinSlashCommand[] {
+  return BUILTIN_SLASH_COMMANDS;
+}
+
 export function canRunBuiltinSlashCommandWhileStreaming(message: string): boolean {
   return getBuiltinSlashCommand(message)?.availableWhileStreaming === true;
 }
