@@ -44,6 +44,12 @@ export const CLI_WRITABLE_KEYS: readonly string[] = [...CLI_COMMON_KEYS, ...CLI_
   .filter((key) => !IDENTITY_KEYS.includes(key));
 /** the Host-only keys — a named Cell's file never carries them. */
 export const HOST_ONLY_KEYS: readonly string[] = ["max_concurrent_jobs", "daemon_socket", "harness_root", "operator_agent_dir"];
+/** the Host-only keys the Host region edits one line each (polyforge#51:
+ *  the two slow-model latency bounds join the scalar rows). */
+export const HOST_SCALAR_KEYS: readonly string[] = ["max_concurrent_jobs", "daemon_socket", "harness_root", "operator_agent_dir", "slow_model_median_latency", "slow_model_p90_latency"];
+/** the Host-only pattern-list keys (polyforge#51): the Host region edits
+ *  each as one regex per line. */
+export const HOST_LIST_KEYS: readonly string[] = ["transient_error_patterns", "model_error_patterns"];
 /** The connection/credential keys: a save needs a second confirmation, since
  *  the panel's next pf call uses the new value while the running daemon keeps
  *  the old one until it restarts. narrowed to same-identity
