@@ -96,10 +96,12 @@ it" of an existing work item → `verbs/submit.md`.
    target workspace differs from the session cwd or a repo clone is
    missing under `<workspace>/.repo/<name>` ("this ticket will land in
    X": machine + workspace), and submit only after the owner agrees.
-   Before that submit, run the ticket's pre-submit analysis — a read-only
-   `pf task spawn` errand proposed right after filing, its report written
-   by the session into the ticket's `## 分析` section, or the owner's
-   dated 「免分析」 — and the acceptance and analysis checks of
+   Before that submit, the ticket needs its pre-submit analysis — on
+   `pf file create` the daemon schedules an analysis task that writes the
+   ticket's `## 分析` section itself, and the owner confirms the draft
+   (`pf file analysis confirm <id>`); when the create said 未安排分析, a
+   read-only `pf task spawn` errand whose report the session writes in; or
+   the owner's dated 「免分析」 — and the acceptance and analysis checks of
    `verbs/submit.md` (the analysis check there owns the 7-item report
    format, the boundary against grilling and the pre-submit confirmation
    rule). Then watch and answer needs_input (`verbs/answer.md`); the publish

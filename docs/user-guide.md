@@ -233,13 +233,20 @@ pf queue --project demo
 pf file create --project demo --bundle develop --goal "Fix the login timeout under load" --content @login-timeout.md
 ```
 
-Before submitting, the session runs the pre-submit analysis: a read-only
-`pf task spawn` errand over the ticket and the code it touches, its report
-written into the ticket's `## 分析` section (`pf file edit demo#7 --content
-@login-timeout.md`) — or the owner explicitly waives it with one dated line
-「免分析」 in that section. On a lane that requires acceptance, `pf submit`
-refuses a ticket without it (`--allow-no-analysis` bypasses, on the owner's
-say-so). Then submit and watch:
+When the content carries no `## 分析` section, the daemon schedules the
+pre-submit analysis as soon as the ticket is filed: `pf file create` names
+the analysis task (or says it is queued), and that task writes its 7-item
+report into the ticket's `## 分析` section itself (`pf task analysis-write`).
+Read the draft (`pf file show demo#7`); `pf queue` marks the ticket
+需要交互：分析待确认 until the owner confirms it with
+`pf file analysis confirm demo#7`. When the create says 未安排分析 (no daemon
+reachable), the session runs it instead: a read-only `pf task spawn` errand
+over the ticket and the code it touches, its report written in with
+`pf file edit demo#7 --content @login-timeout.md` — or the owner explicitly
+waives it with one dated line 「免分析」 in that section. On a lane that
+requires acceptance, `pf submit` refuses a ticket without it
+(`--allow-no-analysis` bypasses, on the owner's say-so). Then submit and
+watch:
 
 ```
 pf submit demo#7

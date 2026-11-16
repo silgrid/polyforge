@@ -198,6 +198,11 @@ type WIView struct {
 	// while its lane requires one — the same lane gate as
 	// AcceptanceMissing (polyforge#27): the auto-pull wave skips it too.
 	AnalysisMissing bool `json:"analysis_missing,omitempty"`
+	// AnalysisUnconfirmed is set by pf queue (never by the server) on a
+	// queued execution ticket whose analysis section still carries the
+	// unconfirmed auto-analysis marker (polyforge#72): the auto-pull wave
+	// skips it until the owner confirms (`pf file analysis confirm`).
+	AnalysisUnconfirmed bool `json:"analysis_unconfirmed,omitempty"`
 	// ChildFailed is set by pf queue (never by the server) on a queued
 	// parent one of whose children it waits for (waiting_for via "child")
 	// failed or was canceled (polyforge#77): only a wrapped child
@@ -207,20 +212,24 @@ type WIView struct {
 }
 
 // acceptanceMissingLabel is the STATUS-cell mark of an AcceptanceMissing
-// row; analysisMissingLabel of an AnalysisMissing one; childFailedLabel
+// row; analysisMissingLabel of an AnalysisMissing one;
+// analysisUnconfirmedLabel of an AnalysisUnconfirmed one; childFailedLabel
 // of a ChildFailed one (every mark that applies shows).
 const (
-	acceptanceMissingLabel = "需要交互：缺验收"
-	analysisMissingLabel   = "需要交互：未分析"
-	childFailedLabel       = "需要交互：子票失败"
+	acceptanceMissingLabel   = "需要交互：缺验收"
+	analysisMissingLabel     = "需要交互：未分析"
+	analysisUnconfirmedLabel = "需要交互：分析待确认"
+	childFailedLabel         = "需要交互：子票失败"
 )
 
-// markNeedsInteraction sets AcceptanceMissing and AnalysisMissing on
-// each queued execution ticket (one with a bundle) of items whose lane
-// requires acceptance (the lane's `acceptance` declaration; a nil lane,
-// one that cannot be read, does) — the checks pf submit and the
-// auto-pull wave apply; the ticket needs interaction first. ChildFailed
-// is read off the waiting_for list alone (a lane-independent mark).
+// markNeedsInteraction sets AcceptanceMissing, AnalysisMissing and
+// AnalysisUnconfirmed on each queued execution ticket (one with a bundle)
+// of items whose lane requires acceptance (the lane's `acceptance`
+// declaration; a nil lane, one that cannot be read, does) — the checks
+// `pf submit` and the auto-pull wave apply, plus the unconfirmed gate
+// (polyforge#72: the machine never claims its own unconfirmed report);
+// the ticket needs interaction first. ChildFailed is read off the
+// waiting_for list alone (a lane-independent mark).
 func markNeedsInteraction(items []WIView, laneOf func(project, bundle string) *workflow.Lane) {
 	for i := range items {
 		it := &items[i]
@@ -233,6 +242,8 @@ func markNeedsInteraction(items []WIView, laneOf func(project, bundle string) *w
 			laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance()
 		it.AcceptanceMissing = laneRequires && !workflow.HasAcceptance(content)
 		it.AnalysisMissing = laneRequires && !workflow.HasAnalysis(content)
+		it.AnalysisUnconfirmed = laneRequires && workflow.HasAnalysis(content) &&
+			workflow.AnalysisUnconfirmed(content)
 		it.ChildFailed = false
 		for _, b := range it.WaitingFor {
 			if b.Via == waitingViaChild && (b.Status == api.StatusFailed || b.Status == api.StatusCanceled) {
@@ -341,6 +352,9 @@ func wiRow(it WIView) []string {
 	}
 	if it.AnalysisMissing {
 		status += " (" + analysisMissingLabel + ")"
+	}
+	if it.AnalysisUnconfirmed {
+		status += " (" + analysisUnconfirmedLabel + ")"
 	}
 	if it.ChildFailed {
 		status += " (" + childFailedLabel + ")"

@@ -63,6 +63,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
 )
 
@@ -73,8 +74,11 @@ const (
 
 // newTaskManager assembles the daemon's task manager: live candidate
 // resolution, the project's workspace as the runner's working directory,
-// and the exec runner (Config.TaskRunner swaps it for tests).
-func (d *Daemon) newTaskManager(rtCfg *runtime.Config) *task.Manager {
+// the exec runner (Config.TaskRunner swaps it for tests), the step lane's
+// live supervision windows as every dispatch's stuck-detection bounds
+// (polyforge#72 AC9: the thresholds' existing source) and the analysis
+// task's per-candidate prompt (analysisPromptFor, AC10).
+func (d *Daemon) newTaskManager(rtCfg *runtime.Config, limits func() supervise.Defaults) *task.Manager {
 	runner := d.cfg.TaskRunner
 	if runner == nil {
 		runner = &task.ExecRunner{
@@ -95,8 +99,18 @@ func (d *Daemon) newTaskManager(rtCfg *runtime.Config) *task.Manager {
 		Admit:   d.admitTask,
 		Done:    d.taskDone,
 		// a finished task's summary goes to the decision feed
-		OnTerminal: d.recordTask,
+		OnTerminal: d.taskTerminal,
+		Limits:     limits,
+		PromptFor:  d.analysisPromptFor,
 	})
+}
+
+// taskTerminal is task.Config.OnTerminal: the decision feed's record
+// (recordTask) plus the analysis half (onAnalysisTaskTerminal, the
+// polyforge#72 failure comment and re-queue).
+func (d *Daemon) taskTerminal(t task.Task) {
+	d.recordTask(t)
+	d.onAnalysisTaskTerminal(t)
 }
 
 // taskSlots answers the task lane's concurrency bound: the Host's one
@@ -135,6 +149,11 @@ func (d *Daemon) admitTask() error {
 // taskDone returns the admission admitTask counted.
 func (d *Daemon) taskDone() {
 	d.tasksHeld.Add(-1)
+	// a slot freed is Host-wide (polyforge#72): try this Cell's queued
+	// analyses at once; every other Cell's queue wakes on its own tick.
+	if d.analysisQ != nil {
+		d.dispatchAnalysis()
+	}
 }
 
 // taskWorkDir answers the directory one task's harness runs in: the

@@ -106,9 +106,12 @@ declaring `acceptance: none` is pulled without either. Others stay queued,
 and `pf queue` marks them
 需要交互：缺验收 (settle the acceptance with the owner and write it in:
 `pf file edit <id> --content @file`) or
-需要交互：未分析 (run the pre-submit analysis — a `pf task spawn` errand
-whose report the session writes into the ticket's `## 分析` section — or the
-owner's dated 免分析), or submit by hand
+需要交互：未分析 (the pre-submit analysis — the daemon's analysis task, or
+a `pf task spawn` errand whose report the session writes into the ticket's
+`## 分析` section — or the owner's dated 免分析). A ticket whose analysis
+the analysis task wrote is skipped too until the owner confirms it —
+`pf queue` marks it 需要交互：分析待确认 (`pf file analysis confirm <id>`).
+Or submit by hand
 (`verbs/submit.md`).
 
 To see what is ready before turning auto on (or to submit by hand), use

@@ -293,7 +293,7 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// guard) and is not treated as a task.
 	taskID := taskProcessID()
 	if taskID != "" && stepWorkItem() == "" {
-		if err := taskRefusal(cmd); err != nil {
+		if err := taskRefusal(cmd, args); err != nil {
 			renderError(&Context{JSON: *jsonFlag, Stdout: stdout, Stderr: stderr}, err)
 			return exitCode(err)
 		}

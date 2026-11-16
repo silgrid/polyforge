@@ -2,19 +2,20 @@
 
 package test
 
-// pf27_pre_submit_analysis_skill_contract_test.go (polyforge#27,
-// AC4–AC8): a text contract. The routing skill owns the pre-submit
-// analysis: after an execution ticket is filed, or when `pf submit`'s
-// check refuses it, the session proposes a read-only `pf task spawn`
-// errand and writes the report into the ticket's `## 分析` section; the
-// 7-item report format is defined once (submit.md) and referenced by the
-// filing, execute-intent and task fragments; the boundary against
-// grilling (facts and recommendations, never decisions) and the
-// pre-submit confirmation rule (a small ticket submitted directly, every
-// other ticket explained in plain words) live there too; the acceptance
-// item's writing names its proof command and run directory; the
-// Down-lane check names no specific project's components; commands.md
-// documents --allow-no-analysis and the queue's analysis mark.
+// pf27_pre_submit_analysis_skill_contract_test.go (polyforge#27, AC4–AC8;
+// rewritten for polyforge#72's mechanism): a text contract. The
+// pre-submit analysis is a MECHANISM now (polyforge#72): `pf file create`
+// asks the local daemon to schedule one analysis task, the task writes
+// its draft itself through the ONE write a task may make
+// (`pf task analysis-write`), the section carries the unconfirmed marker
+// until the owner confirms (`pf file analysis confirm`) and the
+// auto-pull skips an unconfirmed ticket. The 7-item report format stays
+// defined once (submit.md) and referenced by the filing, execute-intent
+// and task fragments; the boundary against grilling and the pre-submit
+// confirmation rule live there too; the acceptance item's writing names
+// its proof command and run directory; the Down-lane check names no
+// specific project's components; commands.md documents the flags, the
+// marks and the confirm command.
 
 import (
 	"os"
@@ -53,7 +54,7 @@ func pf27Flat(doc string) string {
 }
 
 func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
-	// verbs/submit.md owns the analysis check, once.
+	// verbs/submit.md owns the analysis check, once — and its mechanism.
 	submitRel := filepath.Join("skills", "polyforge", "verbs", "submit.md")
 	submit := pf27Read(t, submitRel)
 	const heading = "## Before submitting: the analysis check"
@@ -69,7 +70,15 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 		"`## 分析` (or `## Analysis`)",
 		"免分析",
 		"--allow-no-analysis",
+		// the mechanism (polyforge#72): the daemon schedules, the task
+		// writes itself, the owner confirms
+		"`pf file create`",
+		"`pf task analysis-write`",
+		"`pf file analysis confirm`",
+		"分析待确认",
+		// the session-errand fallback and the waiver stay named
 		"`pf task spawn`",
+		"`pf file edit`",
 		// the 7-item report format, defined here and here only
 		"7 items, defined here and here only",
 		"改动范围",
@@ -92,7 +101,7 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 		"never unattended",
 	} {
 		if !strings.Contains(section, want) {
-			t.Errorf("%s's analysis-check section must carry %q — the flow, the 7-item report format, the grill boundary and the confirmation rule are defined once here", submitRel, want)
+			t.Errorf("%s's analysis-check section must carry %q — the mechanism, the flow, the 7-item report format, the grill boundary and the confirmation rule are defined once here", submitRel, want)
 		}
 	}
 
@@ -107,7 +116,7 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 
 	// verbs/file.md: the acceptance item names its proof; the Down-lane
 	// check names no specific project's components; the filing side
-	// references the analysis without restating it.
+	// references the mechanism without restating it.
 	fileRel := filepath.Join("skills", "polyforge", "verbs", "file.md")
 	file := pf27Read(t, fileRel)
 	fileFlat := pf27Flat(file)
@@ -137,23 +146,23 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 		t.Errorf("%s's Down-lane check must describe the risk surface project-independently as the project's core runtime parts (AC8)", fileRel)
 	}
 	pre := pf27Section(file, "### Pre-submit analysis")
-	for _, want := range []string{"`pf task spawn`", "`## 分析`", "免分析", "defined once in `verbs/submit.md`"} {
+	for _, want := range []string{"`## 分析`", "免分析", "defined once in `verbs/submit.md`", "the daemon schedules"} {
 		if !strings.Contains(pre, want) {
-			t.Errorf("%s's \"Pre-submit analysis\" must carry %q — the filing side proposes the errand and references the one definition (AC4)", fileRel, want)
+			t.Errorf("%s's \"Pre-submit analysis\" must carry %q — the filing side names the auto-scheduled mechanism and references the one definition (AC4/AC8)", fileRel, want)
 		}
 	}
 
 	// The other fragments reference, never restate.
 	intent := pf27Flat(pf27Read(t, filepath.Join("skills", "polyforge", "verbs", "execute-intent.md")))
-	for _, want := range []string{"pre-submit analysis", "`pf task spawn`", "`## 分析`", "`verbs/submit.md`", "riding before the carrier"} {
+	for _, want := range []string{"pre-submit analysis", "`## 分析`", "`verbs/submit.md`", "riding before the carrier", "the daemon schedules"} {
 		if !strings.Contains(intent, want) {
-			t.Errorf("skills/polyforge/verbs/execute-intent.md must carry %q — the routing action references the analysis check (AC4) and the slot's proof shape (AC6)", want)
+			t.Errorf("skills/polyforge/verbs/execute-intent.md must carry %q — the routing action references the mechanism and the analysis check (AC4/AC8), and the slot's proof shape (AC6)", want)
 		}
 	}
 	task := pf27Flat(pf27Read(t, filepath.Join("skills", "polyforge", "verbs", "task.md")))
-	for _, want := range []string{"pre-submit analysis", "7-item report", "`verbs/submit.md`", "`## 分析`"} {
+	for _, want := range []string{"pre-submit analysis", "7-item report", "`verbs/submit.md`", "`## 分析`", "`pf task analysis-write`"} {
 		if !strings.Contains(task, want) {
-			t.Errorf("skills/polyforge/verbs/task.md must carry %q — the errand's shape references the one report format (AC4)", want)
+			t.Errorf("skills/polyforge/verbs/task.md must carry %q — the analysis task's own write path and the one report format it follows (AC4/AC8)", want)
 		}
 	}
 	skill := pf27Flat(pf27Read(t, filepath.Join("skills", "polyforge", "SKILL.md")))
@@ -167,32 +176,32 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 		}
 	}
 
-	// The queue and ops surfaces name the new mark; commands.md documents
-	// the flag and the marks.
+	// The queue and ops surfaces name the marks; commands.md documents
+	// the flag, the marks and the confirm command.
 	queue := pf27Flat(pf27Read(t, filepath.Join("skills", "polyforge", "verbs", "queue.md")))
-	for _, want := range []string{"需要交互：未分析", "`\"analysis_missing\": true`", "「免分析」 with its date counts as content"} {
+	for _, want := range []string{"需要交互：未分析", "`\"analysis_missing\": true`", "「免分析」 with its date counts as content", "需要交互：分析待确认", "`\"analysis_unconfirmed\": true`", "`pf file analysis confirm`"} {
 		if !strings.Contains(queue, want) {
-			t.Errorf("skills/polyforge/verbs/queue.md must carry %q — the missing-analysis mark, its json field and its way out (AC3)", want)
+			t.Errorf("skills/polyforge/verbs/queue.md must carry %q — the missing-analysis and unconfirmed marks, their json fields and their ways out (AC3/AC6)", want)
 		}
 	}
 	ops := pf27Flat(pf27Read(t, filepath.Join("skills", "polyforge", "verbs", "ops.md")))
-	for _, want := range []string{"需要交互：缺验收", "需要交互：未分析", "pre-submit analysis section"} {
+	for _, want := range []string{"需要交互：缺验收", "需要交互：未分析", "pre-submit analysis section", "分析待确认"} {
 		if !strings.Contains(ops, want) {
-			t.Errorf("skills/polyforge/verbs/ops.md must carry %q — the auto-pull skips a ticket without analysis too", want)
+			t.Errorf("skills/polyforge/verbs/ops.md must carry %q — the auto-pull skips a ticket without analysis, and one not yet confirmed, too", want)
 		}
 	}
 	commands := pf27Flat(pf27Read(t, filepath.Join("docs", "reference", "commands.md")))
-	for _, want := range []string{"--allow-no-acceptance", "--allow-no-analysis", "需要交互：未分析", "\"analysis_missing\": true", "both marks when both are missing"} {
+	for _, want := range []string{"--allow-no-acceptance", "--allow-no-analysis", "需要交互：未分析", "\"analysis_missing\": true", "both marks when both are missing", "需要交互：分析待确认", "\"analysis_unconfirmed\": true", "`pf file analysis confirm`", "`pf task analysis-write`"} {
 		if !strings.Contains(commands, want) {
-			t.Errorf("docs/reference/commands.md must carry %q — the reference documents the prechecks and the queue's interaction marks (AC7)", want)
+			t.Errorf("docs/reference/commands.md must carry %q — the reference documents the prechecks, the queue's interaction marks, the confirm command and the task's one write (AC7)", want)
 		}
 	}
 	// review r1#3: the guide's develop example and the bundles reference
 	// state the analysis check beside the acceptance check.
 	guide := pf27Flat(pf27Read(t, filepath.Join("docs", "user-guide.md")))
-	for _, want := range []string{"a `## 分析` section", "`pf task spawn`", "--allow-no-analysis", "免分析"} {
+	for _, want := range []string{"a `## 分析` section", "`pf task spawn`", "--allow-no-analysis", "免分析", "the daemon schedules"} {
 		if !strings.Contains(guide, want) {
-			t.Errorf("docs/user-guide.md's develop example must carry %q — the worked example survives the analysis check (review r1#3)", want)
+			t.Errorf("docs/user-guide.md's develop example must carry %q — the worked example states the mechanism and survives the analysis check (review r1#3, AC8)", want)
 		}
 	}
 	bundles := pf27Flat(pf27Read(t, filepath.Join("docs", "bundles.md")))
@@ -202,9 +211,9 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 		}
 	}
 	contrib := pf27Flat(pf27Read(t, filepath.Join("docs", "contributing.md")))
-	for _, want := range []string{"--allow-no-analysis", "需要交互：未分析", "`pf task spawn`"} {
+	for _, want := range []string{"--allow-no-analysis", "需要交互：未分析", "the daemon schedules"} {
 		if !strings.Contains(contrib, want) {
-			t.Errorf("docs/contributing.md must carry %q — the develop-lane gates paragraph states the analysis check", want)
+			t.Errorf("docs/contributing.md's develop-lane gates paragraph must state the mechanism and the analysis check (AC8): %q", want)
 		}
 	}
 }
