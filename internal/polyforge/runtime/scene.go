@@ -191,6 +191,14 @@ func (r *Runtime) materialize(ctx context.Context, j *job) error {
 	if err := writeCapsuleGitignore(j.capsuleDir); err != nil {
 		return err
 	}
+	// The target branch is fixed BEFORE the task repos are cloned
+	// (targetbranch.go): the first claim computes it from the parent and
+	// the parent's lane, and every (re-)claim checks the fixed value out.
+	target, err := r.fixTargetBranch(j)
+	if err != nil {
+		return err
+	}
+	j.targetBranch = target
 	// Task repos land before capsule.json so the identity below can
 	// record their claim-time HEAD SHAs. The clones carry their own
 	// independent .git directories and repos/ is capsule-gitignored,

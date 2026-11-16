@@ -350,6 +350,11 @@ type job struct {
 	// task repos are restored from there, not from aihub's carriers.
 	// Claim lane only; "" otherwise.
 	sealedScene string
+	// targetBranch is the work item's fixed target branch
+	// (targetbranch.go): the branch this claim's task repos are checked
+	// out on and the carrier restore lands on — "" when the work item
+	// has none (the claim behaves as before).
+	targetBranch string
 
 	agent          AgentHandle
 	agentPID       int
