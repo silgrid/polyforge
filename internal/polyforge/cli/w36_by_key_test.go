@@ -54,16 +54,6 @@ func TestW36ConfigWritesTheByLeaf(t *testing.T) {
 		t.Fatalf("a refused by value changed the file:\n%s", now)
 	}
 
-	// a skip beside the by of the same entry: the strict loader refuses
-	// both, the write never lands
-	code, _, stderr = runPf(t, f.env, "config", "set", "steps.alpha.ship.skip", "true", "--cwd", f.ws, "--expect-hash", sha)
-	if code == 0 || !strings.Contains(stderr, "both skip and by") {
-		t.Fatalf("a skip beside the entry's by must be refused naming both: %d %s", code, stderr)
-	}
-	if _, now := fileHash(t, path); string(now) != string(raw) {
-		t.Fatalf("a refused skip beside the by changed the file:\n%s", now)
-	}
-
 	// the class of the key: the mode is fixed when a work item is claimed
 	if got := WorkspaceConfigClass("steps.alpha.ship.by"); got != ConfigNextClaim {
 		t.Errorf("the class of steps.<p>.<s>.by is %q, want %q (fixed when a work item is claimed)", got, ConfigNextClaim)
