@@ -271,6 +271,41 @@ class GateRunTest(unittest.TestCase):
         self.assertEqual(plan("/one/app", "pf-verify-app:0123456789abcdef0123456789abcdef"),
                          plan("/elsewhere/other-name", "pf-verify-other-name:0123456789abcdef0123456789abcdef"))
 
+    def test_a_fallbacks_plan_digest_ignores_where_the_lane_snapshot_lives(self) -> None:
+        from pfstep.engine import EngineCommand
+
+        def plan(lane: str) -> str:
+            rep = container.ContainerReport(image="pf-verify-app:0123456789abcdef0123456789abcdef", built=False,
+                                            build_log="", name="n", cpus="8", memory="8g", pids=4096)
+            cmds = [EngineCommand(name="audit", phase="full",
+                                  cmd="sh '" + lane + "/audit-deps' --go --ledger '/one/app/.polyforge/audit-exemptions.conf'")]
+            p = gate.plan_of("/one/app", rep, cmds, lambda c: duration.MINUTE, lane_dir=lane)
+            self.assertEqual(p["commands"][0]["cmd"],
+                             "sh '<engine>/audit-deps' --go --ledger '<clone>/.polyforge/audit-exemptions.conf'",
+                             "the fallback's audit names <engine>, not the lane snapshot's path")
+            return gate.plan_digest(p)
+
+        # the same commit in two batch capsules: the lane snapshot lives at
+        # another path in each, the digest is one
+        self.assertEqual(plan("/capsule-one/workflows/_shared/scripts"),
+                         plan("/capsule-two/elsewhere/_shared/scripts"))
+
+    def test_a_fallbacks_audit_names_the_engine_not_the_snapshot(self) -> None:
+        # stack=go (a real analyzer — stack=none pins none and no audit is
+        # appended): the go module makes the engine append its audit, whose
+        # command names the engine's own directory
+        d = gate_clone(self.root, "stack=go\nfast_gate=echo one\n", name="audit-fallback", engine=False, gate_id=False)
+        write_files(d, {"go.mod": "module example.invalid/app\n\ngo 1.21\n", "main.go": "package main\n\nfunc main() {}\n"})
+        commit_all(d, "go module")
+        r = run_gate(d, FakeRuntime(os.path.join(self.root, "t-audit")), os.path.join(self.root, "l-audit"), plan_only=True)
+        res = r.res
+        self.assertEqual(res.incomplete, "", r.progress)
+        assert res.plan is not None
+        audit = [c for c in res.plan["commands"] if c["name"] == "audit"]
+        self.assertEqual(len(audit), 1, "the lane's engine appended its dependency audit for the go module")
+        self.assertEqual(audit[0]["cmd"], "sh '<engine>/audit-deps' --go")
+        self.assertNotIn(SCRIPTS, json.dumps(res.plan), "the lane snapshot's path never enters the plan")
+
     def test_a_dirty_tree_is_recorded(self) -> None:
         d = self.clone("stack=none\nfast_gate=echo one\n")
         write_files(d, {"stray.txt": "x\n"})
