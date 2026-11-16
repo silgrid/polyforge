@@ -225,6 +225,15 @@ export interface ClaudeSettings {
 }
 
 /**
+ * The pi built-in slash commands a claude session's server answers (polyforge#71,
+ * AC2): the `/` menu offers exactly these, and only these reach pi's built-in
+ * handler on a claude session — every other `/` text goes to claude verbatim.
+ * `builtinSlashCommands()` (components/ChatInput.tsx) and the hook's routing
+ * gate (hooks/useAgentSession.ts) both read this one list.
+ */
+export const CLAUDE_SESSION_BUILTIN_COMMANDS: readonly string[] = ["compact", "session"];
+
+/**
  * One of claude's own commands as its `initialize` answer lists it
  * (polyforge#71): the fields pi-web reads for the `/` menu.
  */

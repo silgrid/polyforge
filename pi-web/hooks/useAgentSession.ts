@@ -24,6 +24,7 @@ import {
   type ClaudeEffort,
   type ClaudeLaunchPermissionMode,
   type SessionHarness,
+  CLAUDE_SESSION_BUILTIN_COMMANDS,
 } from "@/lib/claude-shared";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { claudeSubagentRelayText, mergeClaudeSubagentHistory, mergeClaudeSubagentRuns, type ClaudeSubagentRun, type ClaudeSubagentRuns } from "@/lib/claude-subagent-view";
@@ -3441,6 +3442,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!match) return { handled: false };
 
     const [, commandName, rawArgs = ""] = match;
+    // polyforge#71 r1#3 (AC2/AC8): a claude session hands only the two pi built-ins
+    // its server answers to pi's handler; every other `/` text — pi's other built-ins
+    // typed by hand, claude's own commands, /mcp — comes back unhandled, so the
+    // composer sends it to claude verbatim (the menu lists the same two).
+    if (isClaudeSession && !CLAUDE_SESSION_BUILTIN_COMMANDS.includes(commandName)) return { handled: false };
     const args = rawArgs.trim();
     const sid = sessionIdRef.current ?? await ensureNewSession();
     const complete = (result: BuiltinSlashCommandResult): BuiltinSlashCommandResult => {
@@ -3527,11 +3533,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           // nothing does (lib/mcp-command.ts): another extension's /mcp is sent as
           // before, and so is every subcommand, since `/mcp login`, `logout` and
           // `reconnect` act on this session's own connections. A claude session's
-          // /mcp is claude's own command (polyforge#71's exclusion table): it is
-          // sent to claude as text, and Settings › MCP never opens for it.
+          // /mcp never reaches here (the routing gate above keeps it claude's own).
           // Returning before onSend leaves no "/mcp" bubble and no sidebar row for a
           // new chat; a streaming run is not touched.
-          if (isClaudeSession || args || !onOpenSettings) return { handled: false };
+          if (args || !onOpenSettings) return { handled: false };
           const commands = await slashCommandsForMcp();
           if (!commands || !bareMcpOpensSettings(commands)) return { handled: false };
           onOpenSettings("mcp");

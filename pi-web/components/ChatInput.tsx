@@ -44,6 +44,7 @@ import {
   CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT,
   CLAUDE_LAUNCH_PERMISSION_MODES,
   CLAUDE_PROVIDER,
+  CLAUDE_SESSION_BUILTIN_COMMANDS,
   isClaudeModelName,
   type ClaudeEffort,
   type ClaudeLaunchPermissionMode,
@@ -502,7 +503,7 @@ const BUILTIN_SLASH_COMMANDS: BuiltinSlashCommand[] = [
  * takes) and `/session` — so the others are neither listed nor routed there.
  */
 export function builtinSlashCommands(claude: boolean): BuiltinSlashCommand[] {
-  return claude ? BUILTIN_SLASH_COMMANDS.filter((command) => command.name === "compact" || command.name === "session") : BUILTIN_SLASH_COMMANDS;
+  return claude ? BUILTIN_SLASH_COMMANDS.filter((command) => CLAUDE_SESSION_BUILTIN_COMMANDS.includes(command.name)) : BUILTIN_SLASH_COMMANDS;
 }
 
 function getBuiltinSlashCommand(message: string, claude = false): BuiltinSlashCommand | undefined {
