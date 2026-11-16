@@ -920,7 +920,7 @@ lower part hides, never unmounts), so switching a sub-tab never remounts them.
 **Badges.** Jobs and Tasks carry their running count from the one status
 snapshot the existing 3 s/30 s status poll already reads — `queue.running` on
 Jobs, `tasks.running` on Tasks (the Host aggregate's task counts, summed over
-every serving Cell since polyforge#73 — see the status route contract); no
+every valid Cell since polyforge#73 — see the status route contract); no
 timer, no task-list read. 全部 carries the count of `status ===
 "running"` rows of its last list read (`workItemsRunning` in the hook): absent
 until the first read in the page session, then kept — also while the surface
@@ -2074,7 +2074,7 @@ other surface keep rendering.
 
 ## Tasks tab
 
-A read-only view of every task of every serving Cell (polyforge#73; no
+A read-only view of every task of every valid Cell (polyforge#73; no
 project filter, no per-Cell filter — the search matches the Cell name).
 `lib/polyforge-tasks-pure.ts` is the client-safe model (the list row
 `PolyforgeTaskRow` id/project/state/prompt_summary + the optional timing facts
@@ -2091,13 +2091,15 @@ an exact `row.reporter`); `lib/polyforge-tasks.ts` is the server
 module.
 
 **Routes.** `GET /api/polyforge/tasks` is, on a multi-Cell pf, one
-`pf --profile <cell> --json task list` per valid, in-service Cell of the Host
-aggregate — the same shared cached `pf --json ops status` read the Jobs tab
+`pf --profile <cell> --json task list` per valid Cell of the Host aggregate
+(a degraded one too, r2#1: a valid Cell whose AIHub is unreachable still runs
+its daemon and answers its local reads — the same set the Host's task sum and
+the Jobs list count) — the same shared cached `pf --json ops status` read the Jobs tab
 polls (no new pf probe), each row named with its Cell by the route's outer
 layer (`cell`, the tenth field; the nine-key row passport is unchanged), a
 Cell whose read fails degrading to one `cellErrors` entry while the rest
 list; a pf without the multi-Cell protocol — and an aggregate that cannot be
-read, or one with no serving Cell — keeps the single unflagged
+read, or one with no valid Cell — keeps the single unflagged
 `pf --json task list` of a pre-Cell pf. `GET /api/polyforge/tasks/[id]` is
 one `pf --json task show <id>`, pinned to the row's Cell when `?profile=`
 names it (`pf --profile <cell> --json task show <id>`; a malformed profile is
@@ -2142,7 +2144,7 @@ search bar's ↻ action (slot) and one detail read
 per selection; searching, clearing the search, filtering and going back read
 nothing. The one automatic exception: `PolyforgePanel` passes
 `taskCountKey` = the status snapshot's `` `${tasks.running}:${tasks.completed}` ``
-(null without a snapshot; the aggregate's counts cover every serving Cell
+(null without a snapshot; the aggregate's counts cover every valid Cell
 since polyforge#73, so a task change in any Cell re-reads the list), and while the sub-page stays mounted each change
 of that key re-reads the list exactly once (a ref holds the mount value, so
 entering the sub-tab still reads once; a null on either side is no change;
@@ -2608,9 +2610,11 @@ presentation):
   instead of spawning `pf --json profile` and a capability read on every
   request; the window's expiry (60 s present, 5 s absent) or a forced probe
   (Re-detect) resolves it again.
-- **Tasks reads every serving Cell** (polyforge#73): the list route reads one
-  `pf --profile <cell> --json task list` per valid, in-service Cell of the
-  Host aggregate and names each row's Cell on the outer layer — no top
+- **Tasks reads every valid Cell** (polyforge#73): the list route reads one
+  `pf --profile <cell> --json task list` per valid Cell of the Host aggregate
+  (a degraded one too, r2#1 — its local read face still answers; the same set
+  the Host's task sum and the Jobs list count) and names each row's Cell on
+  the outer layer — no top
   single-Cell annotation, each row carries its own; the detail read is pinned
   to the row's Cell; a Cell that fails shows its error while the rest list.
   Still no per-tab selector, and no per-Cell filter (the search matches the

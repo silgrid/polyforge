@@ -8,8 +8,10 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/polyforge/tasks — the Tasks tab's list read: on a multi-Cell pf
- * one `pf --profile <cell> --json task list` per valid, in-service Cell of
- * the Host aggregate — the same `pf --json ops status` read the Jobs tab
+ * one `pf --profile <cell> --json task list` per valid Cell of the Host
+ * aggregate (a degraded one too, r2#1: its daemon still runs and answers
+ * its local reads, the same set the Host's task sum and the Jobs list
+ * count) — the same `pf --json ops status` read the Jobs tab
  * polls (its shared cached reader; no new pf probe, polyforge#73) — each row
  * named with its Cell by this outer layer (`cell`, the tenth field; the
  * nine-key row passport itself is unchanged). A Cell whose read fails
@@ -38,7 +40,10 @@ export async function GET(request: Request) {
   }
   try {
     // The pre-Cell fallback is also the daemon-down degradation: one config
-    // file, one unflagged read — exactly the pre-polyforge#73 behaviour.
+    // file, one unflagged read — exactly the pre-polyforge#73 behaviour. It
+    // is deleted with polyforgeScopeArgv's own pre-Cell branch
+    // (lib/polyforge-cells-pure.ts), once the oldest pf pi-web supports
+    // reports the multi-Cell capabilities.
     if (cells.length === 0) {
       const tasks = await listPolyforgeTasks();
       return NextResponse.json({ ...capability, tasks });

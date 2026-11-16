@@ -26,9 +26,9 @@ import { taskDecisions, taskNeedsAttention, type PolyforgeDecision } from "@/lib
 import { POLYFORGE_SEARCH_CONTROL_CLASS, PolyforgeRefreshButton, PolyforgeSearchBar } from "./PolyforgeSearchBar";
 
 /**
- * The dock's read-only Tasks surface: every task of every serving Cell
+ * The dock's read-only Tasks surface: every task of every valid Cell
  * (polyforge#73 — the list route reads one `pf --profile <cell> --json task
- * list` per valid, in-service Cell and names each row's Cell; a pre-Cell pf's
+ * list` per valid Cell, a degraded one too, and names each row's Cell; a pre-Cell pf's
  * fallback rows carry none), listed once, in two sections — 正在运行
  * (`running`) on top and 全部 (the rest) below — with a
  * client-side search over the id, project, state, prompt summary and Cell

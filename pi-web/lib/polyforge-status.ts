@@ -237,11 +237,15 @@ export interface PolyforgeOpsCell {
   valid: boolean;
 }
 
-/** The Cells a Cell-scoped read may address (polyforge#73): the Host
- *  aggregate's per-Cell rows cut to the valid, in-service ones — an
- *  invalid, removed or otherwise degraded Cell is never read. Pure. */
+/** The Cells a Cell-scoped read may address (polyforge#73): every valid
+ *  Cell of the Host aggregate — its daemon is running, the same set the
+ *  Host's own task sum (polyforge#73 u1) and the Jobs list count. A valid
+ *  Cell whose AIHub is unreachable or credentials are missing reports
+ *  `state: "degraded"` but still answers its local reads (r2#1): dropping
+ *  it would make its tasks silently vanish while the badge counts them.
+ *  `invalid` and `removed` Cells never are read. Pure. */
 export function servingPolyforgeCells(cells: readonly PolyforgeOpsCell[] | undefined): string[] {
-  return (cells ?? []).filter((cell) => cell.valid && cell.state === "serving").map((cell) => cell.profile);
+  return (cells ?? []).filter((cell) => cell.valid).map((cell) => cell.profile);
 }
 
 export interface PolyforgeStep {
