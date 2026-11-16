@@ -2847,17 +2847,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
               {isMobile && renderStopButton(true)}
               {!isNarrowMobile && renderSteerFollowUpButtons(!isMobile, false)}
-              {/* claude takes one message per turn (no queue, no steer): Send stays, disabled. */}
-              {claude?.harness === CLAUDE_HARNESS && (
-                <button
-                  type="button"
-                  disabled
-                  aria-label={t("chat.send")}
-                  style={{ flexShrink: 0, padding: isMobile ? 0 : "7px 14px", width: isMobile ? 36 : undefined, height: isMobile ? 36 : undefined, background: "var(--bg-panel)", border: "none", borderRadius: 8, color: "var(--text-dim)", cursor: "not-allowed", fontSize: 13, fontWeight: 600 }}
-                >
-                  {isMobile ? "→" : t("chat.send")}
-                </button>
-              )}
             </div>
           ) : (
             sendButton
