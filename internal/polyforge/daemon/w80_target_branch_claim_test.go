@@ -63,8 +63,8 @@ func TestW80TargetBranchDaemonTwoClaimsOneBranch(t *testing.T) {
 	td.hub.mu.Lock()
 	td.hub.items = map[string]*api.WorkItem{
 		parent: {ID: parent, Slug: "polyforge#10", Seq: 10, ProjectName: "proj", BundleName: strp("epic-lane")},
-		c1:     {ID: c1, ProjectName: "proj", BundleName: strp("demo-bundle"), ParentID: &parent},
-		c2:     {ID: c2, ProjectName: "proj", BundleName: strp("demo-bundle"), ParentID: &parent},
+		c1:     {ID: c1, ProjectName: "proj", BundleName: strp("demo-bundle"), ParentID: strp(parent)},
+		c2:     {ID: c2, ProjectName: "proj", BundleName: strp("demo-bundle"), ParentID: strp(parent)},
 	}
 	td.hub.claimRepos = map[string][]api.ProjectRepo{
 		c1: {{Name: "app", URL: "file://" + src}},

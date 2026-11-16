@@ -145,7 +145,7 @@ func TestW80TargetBranchPushRejectedUsesRemote(t *testing.T) {
 			t.Fatalf("claim %s: %v", claims[i], err)
 		}
 	}
-	for i, wi := range claims {
+	for _, wi := range claims {
 		repoDir := filepath.Join(testCapsuleDir(r, wi), capsule.DirRepos, "app")
 		if head := carrierGit(t, repoDir, "rev-parse", "HEAD"); head != winner {
 			t.Fatalf("claim %s stands on %q, want the remote's copy %q", wi, head, winner)
