@@ -104,6 +104,27 @@ test("an open claude session shows the model selector, the effort control and th
 // pi's run-end stray-click guard. Model and effort stay rendered, disabled.
 // polyforge#71 (AC6): a claude session's model switch shows pi's own spinner
 // (ModelSelector busy), and nothing else — the effort control never spins (Q3=A).
+// polyforge#71 (AC7): a claude compaction takes no message — Enter, a menu
+// submit, the Steer button, every send path is blocked at the send functions'
+// entry and the draft is kept. pi's compaction still queues (ChatInput.test.mjs
+// pins that path; it is untouched).
+test("claude's compaction blocks every send path at its entry and keeps the draft", () => {
+  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const handleSendBody = source.slice(source.indexOf("const handleSend = useCallback"), source.indexOf("const slashQuery ="));
+  assert.match(handleSendBody, /if \(claudeComposer && isCompacting\) return;/, "handleSend's entry carries the guard");
+  const sendQueuedBody = source.slice(source.indexOf("const sendQueued = useCallback"), source.indexOf("const getNextSlashIndex"));
+  assert.match(sendQueuedBody, /if \(claudeComposer && isCompacting\) return;/, "sendQueued's entry carries the guard");
+  const draftKey = "claude:/tmp/claude-compaction-guard";
+  setDraft(draftKey, { value: "kept", images: [] });
+  try {
+    const html = composer({ ...base, choosing: false, harness: "claude" }, { isCompacting: true, draftKey });
+    assert.doesNotMatch(html, /<textarea[^>]*\bdisabled\b/, "the composer stays editable");
+    assert.ok(html.includes(">kept</textarea>"), "the draft stays in the composer");
+  } finally {
+    clearDraft(draftKey);
+  }
+});
+
 test("a claude session's model switch shows pi's spinner on the model selector only", () => {
   const open = { ...base, choosing: false, harness: "claude", model: "claude-sonnet-5-5", onModelChange() {}, onEffortChange() {} };
   const switching = composer({ ...open, modelSwitching: true }, {});
