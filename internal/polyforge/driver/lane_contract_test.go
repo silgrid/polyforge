@@ -82,7 +82,7 @@ func TestShippedMicroLaneShape(t *testing.T) {
 	// fix recalls (contract 4: the {{recall}} fragment its definition
 	// includes, not a `memory: recall` input).
 	dir := filepath.Join(shippedWorkflowsDir, "micro")
-	def, err := readStepDefinition(dir, "fix", shippedVars(t, dir, "fix"))
+	def, err := readShippedDefinition(t, dir, "fix")
 	if err != nil {
 		t.Fatal(err)
 	}

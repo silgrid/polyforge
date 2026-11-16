@@ -51,7 +51,7 @@ func TestW138BackgroundProcessRule(t *testing.T) {
 	for bundle, steps := range principledSteps {
 		dir := filepath.Join(shippedWorkflowsDir, bundle)
 		for _, step := range steps {
-			rendered, err := readStepDefinition(dir, step, shippedVars(t, dir, step))
+			rendered, err := readShippedDefinition(t, dir, step)
 			if err != nil {
 				t.Fatalf("render %s/%s: %v", bundle, step, err)
 			}

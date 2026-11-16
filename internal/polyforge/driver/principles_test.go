@@ -72,7 +72,7 @@ func TestShippedPrinciplesRenderedOnce(t *testing.T) {
 	seen := 0
 	for _, bs := range shippedDefinitions(t) {
 		key := filepath.Base(bs[0]) + "/" + bs[1]
-		def, err := readStepDefinition(bs[0], bs[1], shippedVars(t, bs[0], bs[1]))
+		def, err := readShippedDefinition(t, bs[0], bs[1])
 		if err != nil {
 			t.Fatalf("%s: %v", key, err)
 		}
@@ -179,4 +179,12 @@ func shippedVars(t *testing.T, bundleDir, step string) (vars, params map[string]
 		return s.Vars, s.Params
 	}
 	return nil, nil
+}
+
+// readShippedDefinition renders a shipped bundle's step definition with
+// the vars and params (at their lane defaults) its step entry declares.
+func readShippedDefinition(t *testing.T, bundleDir, step string) (string, error) {
+	t.Helper()
+	vars, params := shippedVars(t, bundleDir, step)
+	return readStepDefinition(bundleDir, step, vars, params)
 }

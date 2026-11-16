@@ -47,7 +47,7 @@ func TestShippedDevelopLaneShape(t *testing.T) {
 	// its definition includes; what it hands off — units.json among it — is
 	// its skill's, TestShippedDevelopLanePromptsRender)
 	b := lane.Step("build")
-	def, err := readStepDefinition(dir, "build", shippedVars(t, dir, "build"))
+	def, err := readShippedDefinition(t, dir, "build")
 	if err != nil {
 		t.Fatal(err)
 	}

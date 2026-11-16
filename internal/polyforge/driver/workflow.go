@@ -70,6 +70,9 @@ type StepSpec struct {
 	// the lane-specific facts a shared workflows/_shared/steps/<id>.md
 	// leaves to each lane.
 	Vars map[string]string
+	// Params mirrors `params`: each declared parameter's lane default
+	// (nil = none declared); a dispatch composes its final value.
+	Params map[string]string
 	// Hub mirrors `hub.verbs`, HubAttrs `hub.attrs` and WrapAttrs
 	// `wrap_attrs` (workflow contracts 4 and 5): the `pf step hub` verbs
 	// the step may call, the attrs keys it may write, and the wrap attrs
@@ -324,6 +327,7 @@ func workflowOf(lane *workflow.Lane) *Workflow {
 			Skill:       s.Skill,
 			Resources:   s.Resources,
 			Vars:        s.Vars,
+			Params:      s.Params,
 			Hub:         s.Hub,
 			HubAttrs:    s.HubAttrs,
 			WrapAttrs:   s.WrapAttrs,

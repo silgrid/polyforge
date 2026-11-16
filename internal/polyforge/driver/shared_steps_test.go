@@ -136,7 +136,7 @@ func TestShippedStepDefinitionsResolve(t *testing.T) {
 			t.Errorf("%s/%s: no step definition (own or shared): %v", filepath.Base(bs[0]), bs[1], err)
 		}
 		used[filepath.Clean(p)] = true
-		if _, err := readStepDefinition(bs[0], bs[1], shippedVars(t, bs[0], bs[1])); err != nil {
+		if _, err := readShippedDefinition(t, bs[0], bs[1]); err != nil {
 			t.Errorf("%s/%s: %v", filepath.Base(bs[0]), bs[1], err)
 		}
 	}
@@ -427,7 +427,7 @@ func TestSharedFragmentRendersOncePerDefinition(t *testing.T) {
 		text := strings.TrimSpace(string(raw))
 		for _, bs := range targets {
 			bundle, step := bs[0], bs[1]
-			def, err := readStepDefinition(filepath.Join(shippedWorkflowsDir, bundle), step, shippedVars(t, filepath.Join(shippedWorkflowsDir, bundle), step))
+			def, err := readShippedDefinition(t, filepath.Join(shippedWorkflowsDir, bundle), step)
 			if err != nil {
 				t.Fatalf("%s/%s: %v", bundle, step, err)
 			}
