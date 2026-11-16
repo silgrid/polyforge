@@ -459,9 +459,17 @@ class HumanLandingTest(unittest.TestCase):
         if how == "merge":
             git(seed, "merge", "-q", "--no-ff", "-m", "Merge pull request #1 from x/" + branch, "origin/" + branch)
         elif how == "rebase":
+            # the replays carry a fixed committer date: a cherry-pick of
+            # the very commits made seconds ago in the same environment
+            # would otherwise answer the ORIGINAL shas (an identical
+            # parent, tree, message and date is an identical commit), a
+            # fast-forward GitHub's rebase button never makes
             fork = git(seed, "merge-base", "origin/main", "origin/" + branch)
             for c in git(seed, "rev-list", "--reverse", "--no-merges", fork + "..origin/" + branch).split():
-                git(seed, "cherry-pick", c)
+                e = env(GIT_COMMITTER_DATE="2005-04-05T22:13:13 +0000")
+                picked = subprocess.run(["git", "cherry-pick", c], cwd=seed, env=e,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                assert picked.returncode == 0, picked.stdout.decode()
         else:
             git(seed, "merge", "-q", "--squash", "origin/" + branch)
             if amend is not None:
