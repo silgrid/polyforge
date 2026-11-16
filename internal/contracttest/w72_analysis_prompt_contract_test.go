@@ -65,7 +65,7 @@ func TestW72AnalysisPromptTemplateContract(t *testing.T) {
 		"升级 epic 建议",
 		"建议升级",
 		"不建议",
-		"3 个组件",
+		"≥ 3 个",
 		"> 8 个",
 		"> 30 个文件",
 		"批量修改不算",
