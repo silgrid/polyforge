@@ -134,6 +134,14 @@ and YAML path, before a claim ever meets it. The keys:
   `0` makes every gate FAIL an owner's call. With the budget spent a gate
   cannot hand off a plain FAIL: it asks the owner first (`pf step ask`)
   and hands off what the owner decided.
+- `uncounted_rewinds:` — the lane's declared class of FAILs charged to no
+  budget (`{reason_contains, max}`, develop declares merge's
+  default-branch-moved FAIL): a gate FAIL whose one-line hand-off reason
+  carries `reason_contains` rewinds spending neither `max_rewinds` nor the
+  owner's tally — it counts on its own toward `max` (the default 2), a
+  tally `pf watch` shows apart, and past it the same FAIL asks the owner
+  first exactly like a spent `max_rewinds`. Allowed only when a step
+  declares `on_fail`.
 - `exclusive:` — `true` holds the lane to one unfinished work item per
   project (the shipped `integrate` declares it): the daemon forwards a
   create on the lane to aihub exclusive, and aihub refuses it `CORE-409`

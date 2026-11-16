@@ -577,7 +577,10 @@ command's face.
 - `handoff` ends the dispatch, once. The daemon checks on the spot and
   refuses non-zero with nothing written: a second hand-off of the
   dispatch; `fail` from a step that is no gate (hand off `blocked`), or
-  without `--per-owner` once the lane's `max_rewinds` is spent (ask the
+  without `--per-owner` once the budget the FAIL's reason spends is
+  spent — the lane-declared uncounted class's own cap
+  (`uncounted_rewinds`) when the reason falls in that class, else the
+  lane's `max_rewinds` (ask the
   owner first); `waive` from a gate the lane does not declare waivable;
   `rewind` without `--to` (a step at or before this one; this step's own
   id re-runs it); `cancel`, `waive` and `rewind` without `--per-owner` —

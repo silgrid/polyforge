@@ -531,8 +531,10 @@ are wrong exits non-zero at once, naming why. The command's flags are
 - `--per-owner <at>` names a message of `runtime-state/asks.jsonl` sent to
   this step in this round; the daemon checks that it exists, never what it
   says, and copies it verbatim into the section's header;
-- `fail` from a non-gate is refused (use `blocked`); with `max_rewinds`
-  spent, a `fail` without `--per-owner` is refused: ask the owner first
+- `fail` from a non-gate is refused (use `blocked`); with the budget the
+  FAIL's reason spends — the lane-declared uncounted class's own cap when
+  the reason falls in it, else `max_rewinds` — a `fail` without
+  `--per-owner` is refused: ask the owner first
   (`pf step ask`) — so no work item parks on a spent budget;
 - the body carries the template's seven sections ([handoff.md](#handoffmd))
   in the language the dispatch was told (its spawn-journal line; a line
@@ -600,7 +602,7 @@ body. Every step, the owner and the panel read it (the daemon's
 | opening | the daemon, at the claim | the work item, its goal, the acceptance list verbatim, the lane's step order (each step the work item skips noted `skipped`, the last step that runs noted as the last step) |
 | section header | the daemon | step, round, dispatch, start, end, duration, model, status; the events of the step's round (a model switch, a re-dispatch); the owner's messages to the step this round, verbatim; the message `--per-owner` cites, verbatim; each task repo's start and end commit and diff stat; the evidence paths |
 | section body | the step, `--body` | the template's seven sections in the dispatch's language, plus the re-entry heading on a re-run |
-| event | the daemon | a rewind (the steps to redo, why, the count n/`max_rewinds`); an owner command; the wrap |
+| event | the daemon | a rewind (the steps to redo, why, the count n/`max_rewinds`, and the lane-declared uncounted class's own n/cap beside it once it has a rewind); an owner command; the wrap |
 
 **Stamp language** (`[daemon] agent_language`, `en` or `zh-CN`). Every
 label the daemon writes is in one language, English or Simplified
@@ -644,7 +646,7 @@ with a reason not to change it says so in its body).
 | Event | The daemon |
 |---|---|
 | `handoff --status done` | makes the pending writes, marks the step done, dispatches the next; after the last step, wraps |
-| `fail` (a gate) | appends a rewind event and rewinds to `on_fail.target`, charged to `max_rewinds` unless `--per-owner`; a gate with no `on_fail` (the release lane's three) ends the work item `failed_gate` |
+| `fail` (a gate) | appends a rewind event and rewinds to `on_fail.target`, charged to `max_rewinds` unless `--per-owner` or the reason falls in the lane's `uncounted_rewinds` class (charged to nothing, counted on its own); a gate with no `on_fail` (the release lane's three) ends the work item `failed_gate` |
 | `blocked` | parks the work item blocked |
 | `cancel` / `waive` / `rewind` | ends the work item canceled / accepts the gate as passed and goes on, recording the waiver / appends a rewind event and rewinds to `--to` (charged to nothing) |
 | `pf step ask` | releases the slot and resources and waits; the reply resumes the same session |
@@ -685,7 +687,8 @@ step, which hands off with `--per-owner`.
 
 The daemon does not park a rewound step whose tree did not change: the
 review skill judges that from the stamped commits, and `max_rewinds`
-bounds the loop.
+bounds the loop (the lane-declared uncounted class bounds its own loop
+by its cap).
 
 **`runtime-state/execution.json`** is the daemon's own record — the
 current step and status, why it parked or ended, a cancel request, each
