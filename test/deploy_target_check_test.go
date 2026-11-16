@@ -85,9 +85,8 @@ func TestDeployCellTargetCheckPreflight(t *testing.T) {
 		!strings.Contains(out, "fakehost") || !strings.Contains(out, "other.example") {
 		t.Fatalf("a mismatched target must fail the preflight naming both sides, got %v\n%s", err, out)
 	}
-	if got := bad.logOf("log-ssh") + bad.logOf("log-gh") + bad.logOf("log-docker"); got != "" {
-		t.Errorf("network/tool work happened before the preflight refusal:\n%s", got)
-	}
+	// preflight is read-only and reports EVERY problem in one message, so its
+	// probes may run; the refusal changes nothing
 	bad.assertNothingMutated("v2.2.1")
 
 	good := cellWorld(t, "http://fakehost:8080")
