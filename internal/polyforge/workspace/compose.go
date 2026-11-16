@@ -195,6 +195,86 @@ type StepModelSource struct {
 	Source string
 }
 
+// ComposeStepParams answers, per step of lane that declares params, the
+// step's params of one claim of project: each declared name to its lane
+// default, overridden by the project's steps.<project>.<step>.params value
+// of that name. A project value of a name the step does not declare
+// governs nothing. A step that declares no params is absent.
+func ComposeStepParams(lane *workflow.Lane, cfg *Config, project string) map[string]map[string]string {
+	src := StepParamSources("", lane, cfg, project)
+	if src == nil {
+		return nil
+	}
+	out := make(map[string]map[string]string, len(src))
+	for id, params := range src {
+		out[id] = make(map[string]string, len(params))
+		for name, p := range params {
+			out[id][name] = p.Value
+		}
+	}
+	return out
+}
+
+// ComposeStepParamsWithOverlay is ComposeStepParams with the work item's
+// step-overlay record (polyforge#25/#78) on top: a param the overlay sets
+// takes the overlay's value; a cleared one keeps the level below. An
+// overlay value of a param the step does not declare governs nothing.
+// The dispatch's final values.
+func ComposeStepParamsWithOverlay(lane *workflow.Lane, cfg *Config, project string, ov capsule.StepOverrides) map[string]map[string]string {
+	out := ComposeStepParams(lane, cfg, project)
+	for id, params := range out {
+		e := ov.Steps[id]
+		if e == nil {
+			continue
+		}
+		for name, p := range e.Params {
+			if _, declared := params[name]; declared && p != nil && !p.Cleared {
+				params[name] = p.Value
+			}
+		}
+	}
+	return out
+}
+
+// StepParamSources is ComposeStepParams naming, per param, the level its
+// value came from (the model chain's labels: steps.<project>.<step>.params.<name>
+// for the project, `bundle <lane> step <step> params.<name>` for the lane
+// default) — `pf workflows`' view.
+func StepParamSources(bundle string, lane *workflow.Lane, cfg *Config, project string) map[string]map[string]StepParamSource {
+	if lane == nil {
+		return nil
+	}
+	var pp map[string]map[string]string
+	if cfg != nil {
+		pp = cfg.Params[project]
+	}
+	var out map[string]map[string]StepParamSource
+	for _, s := range lane.Steps {
+		if len(s.Params) == 0 {
+			continue
+		}
+		params := make(map[string]StepParamSource, len(s.Params))
+		for name, def := range s.Params {
+			if v, ok := pp[s.ID][name]; ok {
+				params[name] = StepParamSource{Value: v, Source: fmt.Sprintf("steps.%s.%s.params.%s", project, s.ID, name)}
+			} else {
+				params[name] = StepParamSource{Value: def, Source: fmt.Sprintf("bundle %s step %s params.%s", bundle, s.ID, name)}
+			}
+		}
+		if out == nil {
+			out = map[string]map[string]StepParamSource{}
+		}
+		out[s.ID] = params
+	}
+	return out
+}
+
+// StepParamSource is one param's value and the level it came from.
+type StepParamSource struct {
+	Value  string
+	Source string
+}
+
 // projectLists answers the claimed project's yaml lists: its step entries
 // (steps.<project>) and its tier lists (tiers.<project>); nil when the
 // yaml declares none.

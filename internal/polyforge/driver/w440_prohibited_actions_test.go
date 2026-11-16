@@ -182,7 +182,7 @@ func TestW440ReviewsDoNoSecurityProbing(t *testing.T) {
 	if r := strings.Join(strings.Fields(sk.Body), " "); strings.Contains(r, "correctness, security, data-integrity") || !strings.Contains(r, "a `bug` anywhere in the change") {
 		t.Error("the later-round contract's `bug` must be the blocking class, never a class of its own that blocks on every security defect")
 	}
-	def, err := readStepDefinition(dir, reviewStepID, shippedVars(t, dir, reviewStepID))
+	def, err := readShippedDefinition(t, dir, reviewStepID)
 	if err != nil {
 		t.Fatal(err)
 	}

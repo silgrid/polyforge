@@ -26,7 +26,9 @@ package runtime
 // live dispatch is refused; a parked work item's frozen current step
 // (in_progress, no process) accepts a model chain — the owner's
 // change-before-wake window — while the skip switch stays for steps
-// that never started.
+// that never started. A step param (polyforge#78) follows the model
+// chain's rule: one param per change, each with its own operator and
+// time, a clear kept as a tombstone so no older value comes back.
 
 import (
 	"context"
@@ -75,6 +77,10 @@ type OverrideChange struct {
 	Models      []string // non-nil = set the chain
 	ClearModels bool
 	Skip        *bool // non-nil = set the switch (true/false)
+	// Param (non-nil) sets one declared step param; ClearParam names one
+	// to clear.
+	Param      *protocol.OverrideParam
+	ClearParam string
 	// SealedDir is the sealed scene the route resolved for a work item
 	// held by no job: a clear reads the chain its overlay carries.
 	SealedDir string
@@ -227,15 +233,22 @@ func (r *Runtime) applyOverrideBlocked(wi string, ch OverrideChange) (OverrideOu
 // wi's entry for the change's step, under pendingMu (the record is
 // daemon-global: other work items' actors write it too).
 func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.StepOverride, error) {
-	// a clear also reaches the chain the sealed capsule carries (read
-	// before the lock: no I/O beyond the record's own under it)
-	sealedChain := false
-	if ch.ClearModels && ch.SealedDir != "" {
+	// a clear also reaches the chain or param the sealed capsule carries
+	// (read before the lock: no I/O beyond the record's own under it)
+	sealed := false
+	if (ch.ClearModels || ch.ClearParam != "") && ch.SealedDir != "" {
 		ov, err := capsule.ReadStepOverrides(ch.SealedDir)
 		if err != nil {
 			return false, nil, conflict("the sealed capsule's overlay record does not read: %v", err)
 		}
-		sealedChain = ov.Steps[ch.Step] != nil && ov.Steps[ch.Step].Models != nil
+		if e := ov.Steps[ch.Step]; e != nil {
+			if ch.ClearModels {
+				sealed = e.Models != nil
+			} else {
+				p := e.Params[ch.ClearParam]
+				sealed = p != nil && !p.Cleared
+			}
+		}
 	}
 	r.pendingMu.Lock()
 	defer r.pendingMu.Unlock()
@@ -247,7 +260,7 @@ func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.St
 	if cur == nil {
 		cur = map[string]*capsule.StepOverride{}
 	}
-	changed, entry := applyAspect(cur, ch, sealedChain)
+	changed, entry := applyAspect(cur, ch, sealed)
 	if !changed {
 		return false, entry, nil
 	}
@@ -263,10 +276,14 @@ func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.St
 // Every change records its operator and time — a clear too: it leaves
 // the models aspect with no chain and the clear's ModelsBy/ModelsAt, so
 // the claim's merge (mergePendingAspects) can tell it from an older
-// chain. sealedChain (the pending record only) says the sealed capsule
-// below carries a chain for the step: a clear then leaves the tombstone
+// chain. A param keeps the same history per name: a set records its
+// value, operator and time; a clear leaves the param's tombstone
+// (Cleared, with the clear's operator and time) — in the capsule's record
+// and the pending one alike, since an empty value is a legal set. sealed
+// (the pending record only) says the sealed capsule below carries the
+// cleared chain or param for the step: a clear then leaves the tombstone
 // the claim merge applies, unless one already stands.
-func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, sealedChain bool) (bool, *capsule.StepOverride) {
+func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, sealed bool) (bool, *capsule.StepOverride) {
 	e := entries[ch.Step]
 	if e == nil {
 		e = &capsule.StepOverride{}
@@ -281,11 +298,11 @@ func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, se
 		e.Models = append([]string(nil), ch.Models...)
 		e.ModelsBy, e.ModelsAt, e.ModelsCleared = ch.Operator, now, false
 	case ch.ClearModels:
-		if e.Models == nil && (!sealedChain || e.ModelsCleared) {
+		if e.Models == nil && (!sealed || e.ModelsCleared) {
 			return false, e
 		}
 		e.Models, e.ModelsBy, e.ModelsAt = nil, ch.Operator, now
-		e.ModelsCleared = sealedChain
+		e.ModelsCleared = sealed
 	case ch.Skip != nil:
 		if e.Skip != nil && *e.Skip == *ch.Skip {
 			return false, e
@@ -293,6 +310,23 @@ func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, se
 		skip := *ch.Skip
 		e.Skip = &skip
 		e.SkipBy, e.SkipAt = ch.Operator, now
+	case ch.Param != nil:
+		if p := e.Params[ch.Param.Name]; p != nil && !p.Cleared && p.Value == ch.Param.Value {
+			return false, e
+		}
+		if e.Params == nil {
+			e.Params = map[string]*capsule.ParamOverride{}
+		}
+		e.Params[ch.Param.Name] = &capsule.ParamOverride{Value: ch.Param.Value, By: ch.Operator, At: now}
+	case ch.ClearParam != "":
+		p := e.Params[ch.ClearParam]
+		if (p == nil && !sealed) || (p != nil && p.Cleared) {
+			return false, e
+		}
+		if e.Params == nil {
+			e.Params = map[string]*capsule.ParamOverride{}
+		}
+		e.Params[ch.ClearParam] = &capsule.ParamOverride{By: ch.Operator, At: now, Cleared: true}
 	}
 	return true, e
 }
@@ -316,12 +350,13 @@ func (r *Runtime) mutateOverlay(capDir string, ch OverrideChange) (bool, *capsul
 }
 
 // tapOverride records the change as one event: the operator, the step
-// and the new value (the chain, or the skip switch's new state), and
+// and the new value (the chain, the skip switch's new state, or the
+// param's name and value), and
 // whether the change reached the capsule chain (published: false for a
 // parked posture — the change governs only this machine until its wake
 // or claim here publishes it — and for a failed push).
 func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string, published bool) {
-	kind, aspect, value := EventOverrideSet, "", ""
+	kind, aspect, value, param := EventOverrideSet, "", "", ""
 	switch {
 	case ch.Models != nil:
 		aspect, value = "models", strings.Join(ch.Models, ",")
@@ -332,8 +367,12 @@ func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string, publ
 		if !*ch.Skip {
 			kind = EventOverrideClear
 		}
+	case ch.Param != nil:
+		aspect, param, value = "param", ch.Param.Name, ch.Param.Value
+	case ch.ClearParam != "":
+		kind, aspect, param, value = EventOverrideClear, "param", ch.ClearParam, "cleared"
 	}
-	r.tap(wi, kind, map[string]any{
+	body := map[string]any{
 		"step":      ch.Step,
 		"aspect":    aspect,
 		"value":     value,
@@ -342,7 +381,11 @@ func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string, publ
 		"published": published,
 		"models":    ch.Models,
 		"note":      "the step overlay changed; it governs the step's next dispatch",
-	})
+	}
+	if param != "" {
+		body["param"] = param
+	}
+	r.tap(wi, kind, body)
 }
 
 // equalCandidates reports whether two chains name the same candidates in
@@ -492,7 +535,7 @@ func (r *Runtime) writePendingStepOverrides(ctx context.Context, j *job) error {
 }
 
 // mergePendingAspects merges pending entries over the capsule's overlay
-// record, per aspect (models, skip), by time: a pending aspect replaces
+// record, per aspect (models, skip, each param by name), by time: a pending aspect replaces
 // the capsule entry's same aspect only when its time is not earlier than
 // the capsule's (pendingAspectApplies), and leaves the other aspect (an
 // older chain the capsule already carries survives a pending skip, and
@@ -500,7 +543,8 @@ func (r *Runtime) writePendingStepOverrides(ctx context.Context, j *job) error {
 // like a chain: applied, it leaves the capsule entry with no chain and the
 // clear's operator and time (never the tombstone flag, which is the
 // pending record's alone), so a later merge of an older chain cannot
-// resurrect it.
+// resurrect it. A param's clear is its tombstone in both records (an
+// empty value is a legal set), merged by its time like a value.
 func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.StepOverride) capsule.StepOverrides {
 	merged, _ := mergePendingMarked(ov, pending)
 	return merged
@@ -512,6 +556,7 @@ func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.S
 type PendingAspects struct {
 	Models bool
 	Skip   bool
+	Params bool // some param of the step
 }
 
 // MergedStepOverrides answers the overlay the work item's next claim here
@@ -529,6 +574,15 @@ func MergedStepOverrides(ov capsule.StepOverrides, pending map[string]*capsule.S
 			continue
 		}
 		c := *e
+		if e.Params != nil {
+			c.Params = make(map[string]*capsule.ParamOverride, len(e.Params))
+			for name, p := range e.Params {
+				if p != nil {
+					pc := *p
+					c.Params[name] = &pc
+				}
+			}
+		}
 		cp.Steps[id] = &c
 	}
 	return mergePendingMarked(cp, pending)
@@ -564,7 +618,25 @@ func mergePendingMarked(ov capsule.StepOverrides, pending map[string]*capsule.St
 			e.Skip, e.SkipBy, e.SkipAt = &skip, p.SkipBy, p.SkipAt
 			a.Skip = true
 		}
-		if a.Models || a.Skip {
+		for name, pp := range p.Params {
+			if pp == nil {
+				continue
+			}
+			capAt := ""
+			if cur := e.Params[name]; cur != nil {
+				capAt = cur.At
+			}
+			if !pendingAspectApplies(pp.At, capAt) {
+				continue
+			}
+			if e.Params == nil {
+				e.Params = map[string]*capsule.ParamOverride{}
+			}
+			pc := *pp
+			e.Params[name] = &pc
+			a.Params = true
+		}
+		if a.Models || a.Skip || a.Params {
 			applied[id] = a
 		}
 	}

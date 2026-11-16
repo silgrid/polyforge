@@ -277,6 +277,11 @@ type AgentStartInput struct {
 	// governs the next dispatch (the manual `pf submit --models` list stays
 	// frozen). Every candidate is `<harness>:<model>` (polyforge#175).
 	Compose func() (map[string][]string, error)
+	// Params is the dispatch-time param composition (polyforge#78): each
+	// step's declared params at their final values — the ticket overlay
+	// over the project's yaml over the lane default — read fresh at every
+	// dispatch like Compose, with the same failure decision.
+	Params func() (map[string]map[string]string, error)
 	// InterruptedCause is the recovery lane's cause string when THIS
 	// derivation is a recovery re-derivation ("" on a fresh claim): the
 	// driver archives the interrupted dispatch's infra attempt from it.

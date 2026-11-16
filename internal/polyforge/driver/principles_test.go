@@ -72,7 +72,7 @@ func TestShippedPrinciplesRenderedOnce(t *testing.T) {
 	seen := 0
 	for _, bs := range shippedDefinitions(t) {
 		key := filepath.Base(bs[0]) + "/" + bs[1]
-		def, err := readStepDefinition(bs[0], bs[1], shippedVars(t, bs[0], bs[1]))
+		def, err := readShippedDefinition(t, bs[0], bs[1])
 		if err != nil {
 			t.Fatalf("%s: %v", key, err)
 		}
@@ -158,22 +158,33 @@ func TestPolyforgeOnlyRulesInAgentsMD(t *testing.T) {
 func shippedStepDef(t *testing.T, bundle, step string) string {
 	t.Helper()
 	dir := filepath.Join(workflowsRootFor(t, bundle), bundle)
-	raw, err := workflow.RenderDefinition(dir, step, shippedVars(t, dir, step))
+	vars, params := shippedVars(t, dir, step)
+	raw, err := workflow.RenderDefinition(dir, step, vars, params)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(raw)
 }
 
-// shippedVars answers the vars a shipped bundle's step entry declares.
-func shippedVars(t *testing.T, bundleDir, step string) map[string]string {
+// shippedVars answers the vars and params a shipped bundle's step entry
+// declares (the render inputs of its dispatched definition at the lane
+// defaults).
+func shippedVars(t *testing.T, bundleDir, step string) (vars, params map[string]string) {
 	t.Helper()
 	wf, err := LoadWorkflow(bundleDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s := wf.step(step); s != nil {
-		return s.Vars
+		return s.Vars, s.Params
 	}
-	return nil
+	return nil, nil
+}
+
+// readShippedDefinition renders a shipped bundle's step definition with
+// the vars and params (at their lane defaults) its step entry declares.
+func readShippedDefinition(t *testing.T, bundleDir, step string) (string, error) {
+	t.Helper()
+	vars, params := shippedVars(t, bundleDir, step)
+	return readStepDefinition(bundleDir, step, vars, params)
 }

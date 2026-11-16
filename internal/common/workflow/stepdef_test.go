@@ -140,7 +140,7 @@ func TestReadStepDefinitionSharedFragments(t *testing.T) {
 // ReadDefinitionBody is the rendered body of one definition (the test
 // face of ReadDefinition).
 func ReadDefinitionBody(dir, id string, vars map[string]string) (string, error) {
-	d, err := ReadDefinition(dir, id, vars)
+	d, err := ReadDefinition(dir, id, vars, nil)
 	if err != nil {
 		return "", err
 	}

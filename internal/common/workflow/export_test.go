@@ -7,11 +7,11 @@ package workflow
 
 // ReadDefinitionIn renders and decodes definition id of the loaded lane.
 func ReadDefinitionIn(lane *Lane, id string) (*Definition, error) {
-	var vars map[string]string
+	var vars, params map[string]string
 	if s := lane.Step(id); s != nil {
-		vars = s.Vars
+		vars, params = s.Vars, s.Params
 	}
-	return readDefinition(lane.Dir, lane.Shared, id, vars)
+	return readDefinition(lane.Dir, lane.Shared, id, vars, params)
 }
 
 // The contract-version rule's judges (compat.go): the incompatible

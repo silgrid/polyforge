@@ -273,12 +273,41 @@ func (s LaneSet) HumanMergeableSteps() (map[string]bool, error) {
 	return s.stepIDs(func(st Step) bool { return st.HumanMergeable })
 }
 
-// stepIDs answers the ids of the steps of the set's lanes that keep says.
-func (s LaneSet) stepIDs(keep func(Step) bool) (map[string]bool, error) {
+// DeclaredParams answers, per step id, the param names some lane of the
+// set declares on that step (`params`) — the workspace yaml's
+// steps.<project>.<step>.params names a write may set and a stale-key
+// check keeps. Its errors are StepIDs'.
+func (s LaneSet) DeclaredParams() (map[string]map[string]bool, error) {
+	lanes, uerr := s.keyLanes()
+	if lanes == nil && uerr != nil && !isUserLanesError(uerr) {
+		return nil, uerr
+	}
+	out := map[string]map[string]bool{}
+	for _, lane := range lanes {
+		for _, st := range lane.Steps {
+			for name := range st.Params {
+				if out[st.ID] == nil {
+					out[st.ID] = map[string]bool{}
+				}
+				out[st.ID][name] = true
+			}
+		}
+	}
+	return out, uerr
+}
+
+// keyLanes answers the lanes the workspace yaml's per-step keys are
+// judged over: runnable's, after the built-in lanes root reads at all.
+func (s LaneSet) keyLanes() ([]*Lane, error) {
 	if _, err := LaneDirs(s.Builtin); err != nil {
 		return nil, err
 	}
-	lanes, uerr := s.runnable()
+	return s.runnable()
+}
+
+// stepIDs answers the ids of the steps of the set's lanes that keep says.
+func (s LaneSet) stepIDs(keep func(Step) bool) (map[string]bool, error) {
+	lanes, uerr := s.keyLanes()
 	if lanes == nil && uerr != nil && !isUserLanesError(uerr) {
 		return nil, uerr
 	}
