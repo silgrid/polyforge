@@ -95,8 +95,16 @@ func (d *Daemon) newTaskManager(rtCfg *runtime.Config) *task.Manager {
 		Admit:   d.admitTask,
 		Done:    d.taskDone,
 		// a finished task's summary goes to the decision feed
-		OnTerminal: d.recordTask,
+		OnTerminal: d.taskTerminal,
 	})
+}
+
+// taskTerminal is task.Config.OnTerminal: the decision feed's record
+// (recordTask) plus the analysis half (onAnalysisTaskTerminal, the
+// polyforge#72 failure comment and re-queue).
+func (d *Daemon) taskTerminal(t task.Task) {
+	d.recordTask(t)
+	d.onAnalysisTaskTerminal(t)
 }
 
 // taskSlots answers the task lane's concurrency bound: the Host's one

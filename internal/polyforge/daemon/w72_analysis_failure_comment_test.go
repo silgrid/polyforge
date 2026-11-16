@@ -188,8 +188,13 @@ func TestW72InterruptedAnalysisRequeuedOnRestart(t *testing.T) {
 	runner2 := newW72Runner()
 	td2, runDone2 := w72RestartWorld(t, dir, wf, hub, runner2, 2)
 	t.Cleanup(func() {
+		// the body shuts down and drains runDone2 itself; the backstop
+		// only makes sure a failed body leaves the daemon stopped.
 		_ = td2.Shutdown(context.Background(), DirectShutdownCause())
-		<-runDone2
+		select {
+		case <-runDone2:
+		default:
+		}
 	})
 	waitFor(t, "the re-queued analysis running", 10*time.Second, func() bool { return len(runner2.taskIDs()) > 0 })
 	secondTask := runner2.taskIDs()[0]
@@ -221,7 +226,10 @@ func TestW72InterruptedAnalysisRequeuedOnRestart(t *testing.T) {
 	td3, runDone3 := w72RestartWorld(t, dir, wf, hub, runner3, 3)
 	t.Cleanup(func() {
 		_ = td3.Shutdown(context.Background(), DirectShutdownCause())
-		<-runDone3
+		select {
+		case <-runDone3:
+		default:
+		}
 	})
 	waitFor(t, "the second re-queue's analysis running", 10*time.Second, func() bool { return len(runner3.taskIDs()) > 0 })
 	if err := td3.Shutdown(context.Background(), DirectShutdownCause()); err != nil {

@@ -136,22 +136,6 @@ func (q *analysisQueue) dropHead(reason string) {
 	q.mu.Unlock()
 }
 
-// bumpRequeue raises wi's entry's retry count (ruling 13's cap: at most
-// `cap` re-queues per ticket); it answers whether the cap still allows
-// the re-queue (the entry stays in the queue either way — the caller
-// drops it when the answer is false).
-func (q *analysisQueue) bumpRequeue(wi string, cap int) bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	for i := range q.entries {
-		if q.entries[i].WorkItemID == wi {
-			q.entries[i].Retries++
-			return q.entries[i].Retries <= cap
-		}
-	}
-	return false
-}
-
 // head answers the oldest queued entry (nil = none).
 func (q *analysisQueue) head() *analysisEntry {
 	q.mu.Lock()
@@ -215,7 +199,7 @@ func (d *Daemon) analysisPrompt(item *api.WorkItem) (string, error) {
 // (already read and judged by the caller). It answers the spawned task
 // (the zero value with errNotNeeded = the ticket no longer needs one;
 // the zero value with another err = why the caller may retry).
-func (d *Daemon) analysisSpawn(item *api.WorkItem) (task.Task, error) {
+func (d *Daemon) analysisSpawn(item *api.WorkItem, retries int) (task.Task, error) {
 	if !d.analysisNeeds(item) {
 		return task.Task{}, errNotNeeded
 	}
@@ -224,9 +208,10 @@ func (d *Daemon) analysisSpawn(item *api.WorkItem) (task.Task, error) {
 		return task.Task{}, err
 	}
 	tk, err := d.tasks.Spawn(task.Spec{
-		Project:    item.ProjectName,
-		Prompt:     prompt,
-		AnalysisOf: item.ID,
+		Project:         item.ProjectName,
+		Prompt:          prompt,
+		AnalysisOf:      item.ID,
+		AnalysisRetries: retries,
 	})
 	if err != nil {
 		return task.Task{}, err
@@ -295,7 +280,7 @@ func (d *Daemon) dispatchAnalysis() {
 		if slots.Running() >= slots.Max() {
 			return
 		}
-		_, err = d.analysisSpawn(item)
+		_, err = d.analysisSpawn(item, head.Retries)
 		if err == nil || errors.Is(err, errNotNeeded) {
 			// dispatched — or the ticket changed between the two reads:
 			// the head entry is gone either way
@@ -310,6 +295,60 @@ func (d *Daemon) dispatchAnalysis() {
 		// exactly once.
 		fmt.Fprintf(os.Stderr, "daemon: analysis of %s dropped: %v\n", head.WorkItemID, err)
 		q.dropHead("dropped: " + err.Error())
+	}
+}
+
+// analysisRequeueCap is ruling 13's per-ticket cap: an interrupted
+// analysis is re-queued at most twice; the third interrupt comments and
+// stops.
+const analysisRequeueCap = 2
+
+// onAnalysisTaskTerminal is the analysis half of task.Config.OnTerminal
+// (AC5): a stopped analysis never disappears silently — capped, failed
+// and interrupted analyses leave ONE comment on the ticket naming the
+// task id, the state and the draft's item count (the top-level 1–7
+// numbers of the section as it stands); an interrupted one is re-queued
+// (ruling 13), its retry count on the record so the restarts themselves
+// survive. A completed analysis comments nothing — its gate is the
+// unconfirmed marker (u10). Comment and re-queue failures are loud on
+// stderr, never a failure of the task's own terminal record.
+func (d *Daemon) onAnalysisTaskTerminal(t task.Task) {
+	if t.Spec.AnalysisOf == "" || t.Spec.Synchronous {
+		return
+	}
+	switch t.State {
+	case task.StateCapped, task.StateFailed, task.StateInterrupted:
+	default:
+		return
+	}
+	state := "截停"
+	if t.State == task.StateFailed {
+		state = "失败"
+	} else if t.State == task.StateInterrupted {
+		state = "被中断"
+	}
+	items := 0
+	if item, err := d.hub.GetWorkItem(t.Spec.AnalysisOf); err == nil && item.Content != nil {
+		items = workflow.AnalysisItemCount(*item.Content)
+	}
+	body := fmt.Sprintf("分析任务 %s %s：已写到第 %d 项（按 1–7 编号），已写部分保留在 `## 分析`。", t.ID, state, items)
+	if t.State == task.StateInterrupted {
+		n := t.Spec.AnalysisRetries + 1
+		if n <= analysisRequeueCap {
+			d.analysisQ.add(analysisEntry{
+				WorkItemID: t.Spec.AnalysisOf,
+				Project:    t.Spec.Project,
+				EnqueuedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				Retries:    n,
+			})
+			body += fmt.Sprintf("已重新入队，接着已写的部分继续（第 %d/%d 次重试）。", n, analysisRequeueCap)
+		} else {
+			body += "重试已达上限（2 次），不再自动重派；需要时请手动分析并写入。"
+		}
+	}
+	if err := d.hub.Do("POST", "/api/v1/work-items/"+t.Spec.AnalysisOf+"/comments",
+		api.AddCommentRequest{Body: body}, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: analysis %s of %s: the failure comment failed: %v\n", t.ID, t.Spec.AnalysisOf, err)
 	}
 }
 
@@ -342,7 +381,7 @@ func (d *Daemon) analysisEnqueueRoute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"state": "not_needed"})
 		return
 	}
-	tk, err := d.analysisSpawn(item)
+	tk, err := d.analysisSpawn(item, 0)
 	if err == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"state": "scheduled", "task_id": tk.ID})
 		return
