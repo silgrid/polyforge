@@ -87,7 +87,7 @@ test("the probe reads the initialize answer's commands: all 48, names, descripti
 });
 
 test("claudeSlashCommands subtracts the init frames' terminal names and the exclusion table: 48 − 4 − 16 − 1 = 27", () => {
-  const commands = probe.claudeInitializeInfo(recordedInitializeAnswer()).commands;
+  const commands = probe.claudeInitializeInfo(recordedInitializeAnswer()).commands ?? [];
   const terminal = recordedTerminalSlashCommands();
   assert.deepEqual(terminal, ["doctor", "color", "focus", "reload-plugins"], "the recorded init frames' own list");
   const offered = shared.claudeSlashCommands(commands, terminal);
