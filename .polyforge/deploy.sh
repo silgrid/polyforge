@@ -411,7 +411,10 @@ MTROWS
     while read -r _mt_p _mt_s _mt_e; do
       [ -n "$_mt_p" ] || continue
       _mt_h="$(_mt_host "$_mt_e")"
-      [ -n "$_mt_h" ] || continue
+      if [ -z "$_mt_h" ]; then
+        echo "deploy: REFUSED - target $_mt_p: its deploy configuration $_mt_e sets no AIHUB_HOST (nor does the environment), so it does not point at its own Cell $_mt_p's server $_mt_s (PF_CELL_TARGETS row $_mt_p). Nothing was touched." >&2
+        exit 1
+      fi
       if _tc_differs "$_mt_h" "$_mt_s"; then
         echo "deploy: REFUSED - target $_mt_p: its deploy configuration $_mt_e points at $_tc_resolved (AIHUB_HOST $_mt_h), not at its own Cell $_mt_p's server $_tc_cell (PF_CELL_TARGETS row $_mt_p: $_mt_s). Nothing was touched." >&2
         exit 1
