@@ -242,7 +242,22 @@ Eight standing rules, binding on every polyforge session:
    review); it is fixed when a work item is first claimed, so it reaches the
    work items claimed after the change, never a running one — set it with
    `pf config set steps.<project>.<step-id>.skip true`, which refuses a step
-   no lane declares skippable. Schema, syntax and precedence: the
+   no lane declares skippable. A step's entry may also carry `params`
+   (`steps.<project>.<step-id>.params.<name>`), the project's values of the
+   parameters the step's lane declares in its workflow.yaml
+   (`params: { <name>: <default> }` on the step entry; a value is one line
+   of at most 256 bytes). A param has three layers, the higher winning:
+   the lane's default < the project's `steps.<project>.<step-id>.params.<name>` < the work item's `pf override <id> --step <step-id> --param <name>=<value>`;
+   a project value applies only on a lane that declares that param on the
+   step. The final value is composed at every dispatch (an edit or an
+   override reaches the step's next dispatch, never a running one) and
+   fills the step definition's `{{<name>}}` and the step's scripts'
+   `PF_PARAM_<NAME>` environment variable — unlike `vars`, which are fixed
+   text of the lane no project or work item changes. Set the project's
+   value with `pf config set steps.<project>.<step-id>.params.<name> <value>`,
+   which refuses a param no lane declares on the step; `pf workflows
+   --cwd <dir>` shows each param's final value and its level (lane default
+   or project). Schema, syntax and precedence: the
    "Model candidates" subsection of docs/extending.md, routing to
    docs/reference/config.md's `steps:` section (via `verbs/init.md`).
    The memory policy — what the last step puts into the work item's

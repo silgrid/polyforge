@@ -246,7 +246,10 @@ At the claim, each step's definition, rendered with its vars, params and
 fragments as the step's own prompt carries it, is written to the capsule's
 `workflows/_rendered/<id>.md` (read-only, recorded in the snapshot's
 marker): the copy a step's sub-agent reads. Each dispatch rewrites it with
-the parameters' final values of that dispatch.
+the parameters' final values of that dispatch, so the snapshot marker's
+content hash vouches for the claim's rendering only (at the lane
+defaults); a rewritten file no longer matches it, and nothing re-checks
+it after the claim.
 
 ## Skills
 
