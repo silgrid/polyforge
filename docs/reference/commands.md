@@ -499,8 +499,9 @@ of the capsule chain. A red bar is data; when the tree could not be judged
 
 `gate.py` — the workflow script `workflows/_shared/scripts/gate.py`
 (the step command `pf-gate` before it) — is the full test
-gate: the tree's own scope-engine plan
-(`workflows/_shared/scripts/verify-scope --json --full --base HEAD`) with every command, the engine included, in the container of
+gate: the scope-engine plan — the engine the gated tree carries
+(`workflows/_shared/scripts/verify-scope`), else the lane's own copy —
+with every command, the engine included, in the container of
 the tree's `.polyforge/Dockerfile.verify`. The integrate lane's full-gate
 step runs it from its lane snapshot as its skill writes it, `"$PF_PYTHON"
 "$PF_SHARED_DIR/scripts/gate.py" --isolation container --keep-going --capsule . --pins

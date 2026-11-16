@@ -210,3 +210,30 @@ flags — the flag package answers their `-h`/`--help` with an error before
 any call — or takes strict positionals. ask's own semantics (one open
 question per dispatch, the size and UTF-8 bounds) and the daemon's checks
 are unchanged.
+
+## v0.2.1, the gate falls back to the lane's scope engine
+
+The integrate lane's full gate used to judge only a repository whose
+tree carries its own scope engine (workflows/_shared/scripts/verify-scope)
+and tools/gate-id: every other repository was not judged, exit 2 — the
+lane was unusable for anyone but polyforge itself. The gate now falls
+back: the engine the tree carries plans the gate when there is one, else
+the lane's own copy, mounted read-only beside the clone, and the green
+tag's gate id comes from tools/gate-id, else the lane's own
+implementation over the same bytes. A repository needs to provide only
+.polyforge/verify-scope.conf and .polyforge/Dockerfile.verify; the image
+must carry python3 (>= 3.9), git, bash and sh beside the repository's own
+toolchain — a Go repository also govulncheck, one with an npm lockfile
+also npm, the container reaching the vulnerability databases (the audit
+gate never skips). A tree without the Dockerfile at HEAD is still not
+judged: that one the lane cannot provide.
+
+Which source served a run is recorded in the result and in the green
+tag's message (engine_source and gate_id_source, "tree" or "lane"),
+never in the plan digest — a fallback's plan names the lane snapshot's
+directory <engine>, so the same commit digests the same in every batch
+capsule, and a repository with its own engine keeps its digest and
+runner version byte for byte. A green tag is reused only for a record of
+the same sources; one written before the fields existed is the tree's by
+construction. The batch record does not aggregate the sources: each
+repository's result carries its own.

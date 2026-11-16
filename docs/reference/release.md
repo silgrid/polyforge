@@ -287,8 +287,10 @@ own versions the plain range stands, unchanged.
 One gate definition serves both the integrate workflow's full verification
 and the release:
 
-- **What runs.** The tree's own scope-engine plan, `workflows/_shared/scripts/verify-scope
-  --json --full --base HEAD` — the conf's fast gates, its full commands and
+- **What runs.** The scope-engine plan — the engine the gated tree
+  carries (`workflows/_shared/scripts/verify-scope`), else the lane's own
+  copy beside the gate script, mounted read-only beside the clone — asked
+  `--json --full --base HEAD`: the conf's fast gates, its full commands and
   the engine-appended dependency audit, in that order — with every command,
   the engine included, inside the container built from
   `.polyforge/Dockerfile.verify`. The tree's own workflow script runs it,
@@ -296,7 +298,8 @@ and the release:
   (`cmd/pf-gate` before), through the workflow scripts'
   container executor (`pfstep.container`): the image tag
   `pf-verify-<clone name>:<hash>` (an image a verification built is
-  reused), the clone mounted alone at its own path, the repository's cache
+  reused), the clone mounted at its own path (on that fallback, the lane's
+  engine directory mounted read-only beside it), the repository's cache
   volume, the environment allowlist, the limits and the 20-minute
   per-command timeout. The container is the only isolation a gate has: a
   tree without `.polyforge/Dockerfile.verify` at HEAD is not judged (exit
@@ -318,6 +321,18 @@ and the release:
   client the container does not, while the containerized full bar of the
   same tree passed. `make test` stays a developer target; no release step
   runs it.
+- **What a project provides.** A repository the integrate workflow gates
+  needs only `.polyforge/verify-scope.conf` and
+  `.polyforge/Dockerfile.verify`: the scope engine and the gate id come
+  from the lane when the tree carries neither, whichever the tree lacks
+  on its own (which served recorded in the result and the green tag as
+  `engine_source` / `gate_id_source`, `tree` or `lane`). The image must
+  carry the gate's own needs — `python3` (≥ 3.9), `git`, `bash` and `sh` —
+  beside the repository's own toolchain; a Go repository also needs
+  `govulncheck` (the engine-appended dependency audit runs it), a
+  repository with an npm lockfile also `npm`, and the container must reach
+  the vulnerability databases. A tree without the Dockerfile at HEAD is
+  not judged: that one the lane cannot provide.
 - **Its container's life.** The gate removes its container when it ends,
   at its deadline and on an interrupt. A gate killed outright (SIGKILL)
   cannot, so the container carries its deadline (label
@@ -345,7 +360,9 @@ and the release:
   ending in a newline, both files read from that commit (default `HEAD`);
   `--show` prints the hashed text. Comments and every other key leave it
   unchanged; the engine, the tests and the code are pinned by the commit a
-  green tag names, not by the id.
+  green tag names, not by the id. A tree without `tools/gate-id` is served
+  by the lane's own copy (`pfstep/gateid.py`), byte-identical with this
+  one by a consistency test, which the gate uses for its green tag.
 - **The plan digest.** A gate run records the sha256 of the plan as
   executed (its compact JSON encoding, the keys in the order below,
   non-ASCII as UTF-8): the image's content hash
@@ -353,7 +370,11 @@ and the release:
   every command in order with its name, phase, command line, declared
   `requires_env` / `requires_cmd` and the timeout it runs under; the
   clone's own path inside a command line (the engine's appended audit names
-  it) reads `<clone>`, so where a clone lives never changes the digest.
+  it) reads `<clone>`, so where a clone lives never changes the digest; on
+  the lane's engine the snapshot's engine directory (the appended audit
+  names it too) reads `<engine>`, so the same commit digests the same in
+  every batch capsule, and a tree's own engine names its directory inside
+  the clone — its digest byte for byte what it was.
   The runner identity beside it is `gate.py` and its
   `GATE_RUNNER_VERSION` (`2`; the Go runner's was `pf-gate` `1`, whose
   digests were of another encoding: a green tag it wrote is never reused), bumped
@@ -364,13 +385,16 @@ and the release:
   every name under `refs/tags/green/<YYYYMMDD>-` on the remote — a
   lightweight or malformed one included), whose message is one line of
   JSON:
-  `{"commit":"<sha>","gate_id":"<id>","runner":"gate.py","runner_version":"<v>","plan_digest":"<sha256>","verified_at":"<YYYY-MM-DDTHH:MM:SSZ>","summary":"<text>"}`.
+  `{"commit":"<sha>","gate_id":"<id>","runner":"gate.py","runner_version":"<v>","plan_digest":"<sha256>","engine_source":"<tree|lane>","gate_id_source":"<tree|lane>","verified_at":"<YYYY-MM-DDTHH:MM:SSZ>","summary":"<text>"}`.
   Only the gate writes one: `gate.py --isolation container --mark-green
   --summary <text> [--remote <r>]` refuses a dirty worktree, a missing committer identity or
   an unreadable remote before it runs, and after a pass pushes the tag for
   HEAD — the only ref it writes on the remote is `refs/tags/green/…`,
   never a branch, never forced; a commit already carrying a tag of the same
-  record is not tagged again; a pass whose tag could not be written exits 3.
+  record is not tagged again — the record includes the run's
+  `engine_source` and `gate_id_source`, so a tag another source wrote is
+  never reused, and a record written before the fields existed is the
+  tree's by construction; a pass whose tag could not be written exits 3.
   `tools/green-tag` only reads: `tools/green-tag check <commit>` (the
   commit must be HEAD, the worktree clean) exits 0, printing the tag, iff
   the commit carries a green tag on the remote that records that commit,

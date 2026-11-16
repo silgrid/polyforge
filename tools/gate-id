@@ -18,6 +18,15 @@
 # green tag is written only by that gate after a pass (the integrate
 # workflow's full gate, or a human's gate.py --mark-green).
 #
+# A tree without this script is served by the lane's own copy,
+# workflows/_shared/scripts/pfstep/gateid.py — the integrate workflow's
+# gate falls back to it (with the lane's scope engine) so a repo that
+# provides only .polyforge/verify-scope.conf and
+# .polyforge/Dockerfile.verify is gated; the two implementations must
+# stay byte-identical, and the consistency test
+# (workflows/_shared/scripts/tests/test_gateid.py) runs both over the
+# same commits to pin it. This script stays the release's.
+#
 # What is hashed: sha256 over this text, every line ending in "\n":
 #
 #   polyforge-gate-id 1
