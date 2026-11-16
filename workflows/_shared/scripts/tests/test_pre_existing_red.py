@@ -26,11 +26,11 @@ FACTS = os.path.join(os.path.dirname(HERE), "facts.py")
 
 
 class PreExistingRedReplayTest(GitCase):
-    def capsule(self, base: Dict[str, str], changes: List[Tuple[str, Dict[str, str]]],
-                units: List[Dict[str, Any]]) -> Tuple[str, str, Dict[str, str]]:
+    def capsule(self, base: Dict[str, str], changes: List[Tuple[str, Dict[str, str]]]) -> Tuple[str, str, Dict[str, str]]:
         """A capsule whose repos/app holds base (origin/main at that
-        commit) and then one commit per change, each answering its head
-        by its message; the capsule's units.json is units."""
+        commit) and then one commit per change, each answering its head by
+        its message; the capsule's units.json is written separately, once
+        the test knows the heads."""
         cap = self.new_dir("capsule")
         repo = Repo(os.path.join(cap, "repos", "app"), base)
         repo.git("update-ref", "refs/remotes/origin/main", repo.head())
@@ -40,9 +40,11 @@ class PreExistingRedReplayTest(GitCase):
             heads[msg] = repo.commit(msg, files)
         write(cap, {
             "capsule.json": json.dumps({"work_item_id": "wi_59", "bundle_name": "develop", "repos": {"app": "app"}}),
-            "artifacts/build/units.json": json.dumps(units),
         })
         return cap, base_head, heads
+
+    def units_file(self, cap: str, units: List[Dict[str, Any]]) -> None:
+        write(cap, {"artifacts/build/units.json": json.dumps(units)})
 
     def run_facts(self, cap: str) -> Tuple[int, Dict[str, Any], str]:
         out = os.path.join(cap, "artifacts", "facts", "build.json")
@@ -68,11 +70,12 @@ class PreExistingRedReplayTest(GitCase):
             {"app.go": "package app\n", "test/run.sh": "test -f impl.txt\n"},
             [("the unit's test commit", {"test/notes_test.sh": "test -f notes-impl.txt\n"}),
              ("the unit's implementation", {"notes-impl.txt": "x\n"}),
-             ("the fix", {"impl.txt": "done\n"})],
-            [{"id": "u1", "test_commit": heads["the unit's test commit"], "impl_commit": heads["the unit's implementation"],
-              "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/notes_test.sh"]}, "marker": "^NOTES$"},
-             {"id": "u2", "pre_existing_red": True, "impl_commit": heads["the fix"],
-              "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/run.sh"]}, "marker": "^IMPL$"}])
+             ("the fix", {"impl.txt": "done\n"})])
+        self.units_file(cap, [
+            {"id": "u1", "test_commit": heads["the unit's test commit"], "impl_commit": heads["the unit's implementation"],
+             "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/notes_test.sh"]}, "marker": "^NOTES$"},
+            {"id": "u2", "pre_existing_red": True, "impl_commit": heads["the fix"],
+             "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/run.sh"]}, "marker": "^IMPL$"}])
         code, res, err = self.run_facts(cap)
         self.assertEqual(code, 0, res["summary"] + err)
         u2 = self.unit_of(res, "u2")
@@ -90,9 +93,10 @@ class PreExistingRedReplayTest(GitCase):
         # unit has no red evidence and the engine says why
         cap, base, heads = self.capsule(
             {"impl.txt": "x\n", "test/run.sh": "test -f impl.txt\n"},
-            [("the fix", {"impl.txt": "y\n"})],
-            [{"id": "u1", "pre_existing_red": True, "impl_commit": heads["the fix"],
-              "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/run.sh"]}, "marker": "^IMPL$"}])
+            [("the fix", {"impl.txt": "y\n"})])
+        self.units_file(cap, [
+            {"id": "u1", "pre_existing_red": True, "impl_commit": heads["the fix"],
+             "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/run.sh"]}, "marker": "^IMPL$"}])
         code, res, err = self.run_facts(cap)
         self.assertEqual(code, 1, res["summary"] + err)
         self.assertEqual(res["verdict"], "fail")
@@ -106,9 +110,10 @@ class PreExistingRedReplayTest(GitCase):
     def test_no_base_to_replay_on_names_the_unit_problem(self) -> None:
         cap, base, heads = self.capsule(
             {"test/run.sh": "test -f impl.txt\n"},
-            [("the fix", {"impl.txt": "done\n"})],
-            [{"id": "u1", "pre_existing_red": True, "impl_commit": heads["the fix"],
-              "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/run.sh"]}, "marker": "^IMPL$"}])
+            [("the fix", {"impl.txt": "done\n"})])
+        self.units_file(cap, [
+            {"id": "u1", "pre_existing_red": True, "impl_commit": heads["the fix"],
+             "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/run.sh"]}, "marker": "^IMPL$"}])
         repo = os.path.join(cap, "repos", "app")
         for ref in ("refs/remotes/origin/main", "refs/remotes/origin/master"):
             subprocess.run(["git", "-C", repo, "update-ref", "-d", ref],
