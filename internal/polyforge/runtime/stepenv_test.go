@@ -52,6 +52,41 @@ func TestClaudeBashDefaultEqualsMaxForDeclaredToolWindow(t *testing.T) {
 	}
 }
 
+// TestStepEnvVarsEncodeAllCellTargets (polyforge#76): every step process
+// carries the target facts of every serving Cell of this machine -
+// PF_CELL_TARGETS, one line per Cell in the Host registry's order
+// (default first, then by profile): "<profile>\t<server>\t<deploy
+// configuration file>" - beside the work item's own Cell facts. An empty
+// list stays a stated fact with an empty value, like every Cell fact:
+// the sanitize point strips an inherited copy, so the set name with the
+// empty value is the daemon's own answer.
+func TestStepEnvVarsEncodeAllCellTargets(t *testing.T) {
+	e := StepEnv{
+		Python: "/usr/bin/python3", Cell: "public",
+		CellServer: "http://pub.example:8080", DeployEnv: "/cfg/deploy-public.env",
+		CellTargets: []CellTarget{
+			{Profile: "default", Server: "http://in.example:8080", DeployEnv: "/cfg/deploy.env"},
+			{Profile: "public", Server: "http://pub.example:8080", DeployEnv: "/cfg/deploy-public.env"},
+		},
+	}
+	want := []string{
+		spawn.EnvPython + "=/usr/bin/python3",
+		spawn.EnvCell + "=public",
+		spawn.EnvCellServer + "=http://pub.example:8080",
+		spawn.EnvDeployEnv + "=/cfg/deploy-public.env",
+		spawn.EnvCellTargets + "=default\thttp://in.example:8080\t/cfg/deploy.env" +
+			"\npublic\thttp://pub.example:8080\t/cfg/deploy-public.env",
+	}
+	if got := e.Vars(); !slices.Equal(got, want) {
+		t.Fatalf("step env vars %q\nwant %q", got, want)
+	}
+	e.CellTargets = nil
+	got := e.Vars()
+	if len(got) != 5 || got[4] != spawn.EnvCellTargets+"=" {
+		t.Fatalf("an empty target list stays a stated fact with an empty value: %q", got)
+	}
+}
+
 // PF_TOOL_WINDOW_MS is the step's own window on both harnesses when one
 // is declared, the daemon's global one otherwise.
 func TestToolWindowEnvFollowsDeclaredWindow(t *testing.T) {

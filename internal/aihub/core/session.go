@@ -113,9 +113,10 @@ type WIView struct {
 	SessionPublic
 	RepoInventory []RepoDecl `json:"repo_inventory,omitempty"`
 	// WaitingFor (polyforge#161) is read-only and derived: the unfinished
-	// `blocks` blockers (status other than wrapped) of a QUEUED work item
-	// — who it is waiting for. Never persisted, not a state; omitted
-	// when the WI waits on nobody.
+	// blockers (status other than wrapped) of a QUEUED work item — its
+	// `blocks` blockers and, for a bundle-bound parent, its children
+	// (polyforge#77, via "child") — who it is waiting for. Never
+	// persisted, not a state; omitted when the WI waits on nobody.
 	WaitingFor []WaitingBlocker `json:"waiting_for,omitempty"`
 	// Comments is the append-only comment thread of this
 	// work item in time (insertion) order. It rides every detail read;
@@ -125,16 +126,20 @@ type WIView struct {
 	inv string
 }
 
-// WaitingBlocker is one entry of the derived waiting_for list.
+// WaitingBlocker is one entry of the derived waiting_for list. Via
+// (polyforge#77, additive) says why it waits: "child" for a child of a
+// bundle-bound parent; omitted for a `blocks` dependency edge.
 type WaitingBlocker struct {
 	Slug   string `json:"slug"`
 	Status string `json:"status"`
+	Via    string `json:"via,omitempty"`
 }
 
 // waitingForBatch derives the waiting_for lists of many WIs in ONE query.
 // Only queued dependents carry one (the only status a claim starts
-// from); the release predicate is unfinishedBlockers' (only wrapped
-// releases).
+// from); the relation and the release predicate are unfinishedBlockers'
+// (waitEdgesSQL; only wrapped releases). A child that is also a `blocks`
+// blocker of its bound parent is listed once, as the child.
 func (db *DB) waitingForBatch(ids []string) (map[string][]WaitingBlocker, error) {
 	out := map[string][]WaitingBlocker{}
 	if len(ids) == 0 {
@@ -146,27 +151,29 @@ func (db *DB) waitingForBatch(ids []string) (map[string][]WaitingBlocker, error)
 		placeholders = append(placeholders, "?"+strconv.Itoa(i+1))
 		args = append(args, id)
 	}
-	rows, err := db.Query(`SELECT d.blocked_wi_id, p.name, b.seq, b.status
-		FROM wi_dependencies d
-		JOIN work_items w ON w.id = d.blocked_wi_id
-		JOIN work_items b ON b.id = d.blocking_wi_id
+	rows, err := db.Query(`SELECT e.blocked_id, p.name, b.seq, b.status, e.via
+		FROM (`+waitEdgesSQL+`) e
+		JOIN work_items w ON w.id = e.blocked_id
+		JOIN work_items b ON b.id = e.blocker_id
 		JOIN projects p ON p.id = b.project_id
-		WHERE d.kind='blocks' AND w.status='queued' AND b.status <> 'wrapped'
-		AND d.blocked_wi_id IN (`+strings.Join(placeholders, ",")+`)
-		ORDER BY b.seq`, args...)
+		WHERE w.status='queued' AND b.status <> 'wrapped'
+		AND e.blocked_id IN (`+strings.Join(placeholders, ",")+`)
+		ORDER BY b.seq, e.via DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var blocked, project, status string
+		var blocked, project, status, via string
 		var seq int64
-		if err := rows.Scan(&blocked, &project, &seq, &status); err != nil {
+		if err := rows.Scan(&blocked, &project, &seq, &status, &via); err != nil {
 			return nil, err
 		}
-		out[blocked] = append(out[blocked], WaitingBlocker{
-			Slug: project + "#" + strconv.FormatInt(seq, 10), Status: status,
-		})
+		slug := project + "#" + strconv.FormatInt(seq, 10)
+		if list := out[blocked]; len(list) > 0 && list[len(list)-1].Slug == slug {
+			continue // the same blocker by both relations: the child entry came first
+		}
+		out[blocked] = append(out[blocked], WaitingBlocker{Slug: slug, Status: status, Via: via})
 	}
 	return out, rows.Err()
 }
@@ -358,9 +365,11 @@ func sessionClaimedBefore(q queryRower, wiID, fp string) (bool, error) {
 }
 
 // dependencyBlockedDetail is the DEPENDENCY_BLOCKED refusal text
-// (polyforge#161: failed/canceled blockers keep the dependent waiting).
-const dependencyBlockedDetail = "work item has an unfinished blocking dependency " +
-	"(only a wrapped blocker releases; remove the edge with `pf file dep rm` to proceed)"
+// (polyforge#161: failed/canceled blockers keep the dependent waiting;
+// polyforge#77: a bundle-bound parent waits for its children).
+const dependencyBlockedDetail = "work item has an unfinished blocking dependency or child " +
+	"(only a wrapped blocker releases; see waiting_for: remove an edge with `pf file dep rm`, " +
+	"detach a child with `pf file edit <child> --parent \"\"`)"
 
 // diagnoseClaimGate is the M1 joint CAS gate's error face. Order matters:
 // terminal first (CORE-410), then session-held (the precise double-claim

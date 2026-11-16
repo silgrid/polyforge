@@ -29,14 +29,28 @@ import (
 // resolved at its start (Config.Python), the step scripts' PF_PYTHON — and
 // the step's Cell facts (polyforge#75): this Cell's name (d.profile),
 // its server as configured (Config.Server) and the deploy configuration
-// file that Cell's deploys read (deployEnvPath). All are read live at
+// file that Cell's deploys read (deployEnvPath), beside the all-Cells
+// target facts (polyforge#76, cellTargets). All are read live at
 // every derivation, so a reload moves them with it.
 func (d *Daemon) stepEnv() runtime.StepEnv {
 	d.reloadMu.Lock()
 	p := d.commandPath
 	d.reloadMu.Unlock()
 	return runtime.StepEnv{CommandPath: p, PfDir: d.pfDir, Python: d.cfg.Python,
-		Cell: d.profile(), CellServer: d.cfg.Server, DeployEnv: d.deployEnvPath()}
+		Cell: d.profile(), CellServer: d.cfg.Server, DeployEnv: d.deployEnvPath(),
+		CellTargets: d.cellTargets()}
+}
+
+// cellTargets answers the all-Cells target facts (polyforge#76): the live
+// source the Host binds (Config.CellTargetsSrc — the registry lookup, read
+// at every derivation, so a Cell added, removed or turned invalid at
+// runtime moves the next step derivation with it); a daemon without a
+// source (the unhosted test seam) answers none.
+func (d *Daemon) cellTargets() []runtime.CellTarget {
+	if d.cfg.CellTargetsSrc == nil {
+		return nil
+	}
+	return d.cfg.CellTargetsSrc()
 }
 
 // configFile answers the Cell file this daemon loaded — the --config flag

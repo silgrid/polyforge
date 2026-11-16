@@ -207,9 +207,15 @@ or the requester's own say-so. The four points and the full procedure live in
 `edit` flags (only the flags you pass are sent; `--label` replaces the whole
 set): `--goal`, `--content`, `--label`, `--priority`, `--milestone` (an empty
 string clears it), `--waiting-on`, `--bundle` (switch the work
-item's workflow bundle, e.g. `--bundle release`; an empty string unbinds it).
+item's workflow bundle, e.g. `--bundle release`; an empty string unbinds it),
+`--parent ""` (detaches the work item from its parent — see Parents and
+children; only the empty value is accepted: re-parenting is not supported,
+and a non-empty value is refused locally before any call).
 aihub accepts a bundle change only while the work item is queued and has
-never been claimed — once a daemon has claimed it, the bundle is fixed.
+never been claimed — once a daemon has claimed it, the bundle is fixed;
+the bundle of a bound parent is also fixed once any of its children was
+claimed (`PARENT_BUNDLE_FROZEN`). A refused edit names aihub's reason
+beside the code (`CORE-409 CHILD_RUNNING: …`).
 There is no `--attr` on `edit`: business attrs are set at create only (aihub
 does not accept `attrs` in a PATCH).
 
@@ -257,10 +263,10 @@ body and an optional `reply_to`.
 ## Dependencies
 
 A dependency is a `blocks` edge inside one project: "B runs after A". A
-must be an execution ticket (a bundle is bound) — a registration ticket or
-an epic runs nothing: it closes only when someone runs `pf wrap` on it once
-done (an epic only after its children are terminal), so aihub refuses it
-as a blocker. B
+must be an execution ticket (a bundle is bound) — a registration ticket
+(an unbound parent included) runs nothing: it closes only when someone runs
+`pf wrap` on it once done (an unbound parent only after its children are
+terminal), so aihub refuses it as a blocker. B
 stays queued — out of the ready queue, its claim refused — until A is
 **wrapped**. A failed or canceled A keeps B waiting; nobody releases it
 automatically. When only the order mattered, remove the edge (`pf file
@@ -299,6 +305,36 @@ for `--project` (never a silent pick); a cwd matching no mapped workspace
 keeps the #113 required-flag error. An explicit `--project` always
 bypasses inference byte-for-byte.
 
+### Parents and children
+
+`--parent ID` at create makes the new work item a child; work items nest
+one level only (`PARENT_DEPTH`). Any work item may be a parent — a
+registration ticket or an execution ticket (polyforge#77) — and a work
+item with children may bind a bundle.
+
+- An unbound parent (no bundle) runs nothing: it is closed by hand with
+  `pf wrap` once every child is terminal (`verbs/wrap.md`).
+- A bundle-bound parent waits for its children: every child that is not
+  wrapped holds it like a `blocks` blocker — out of the ready queue, its
+  claim refused `DEPENDENCY_BLOCKED`, the child listed in `waiting-for:` /
+  WAITING-FOR as `pf-2 (child, running)`. Only a wrapped child releases; a
+  failed or canceled child keeps it waiting (`pf queue` marks the parent
+  `需要交互：子票失败`), and a child filed later joins the wait. The parent
+  runs its own workflow once all its children merged.
+- `pf file edit <child> --parent ""` detaches a child: the parent stops
+  waiting for it, and aihub records a `wi_detached` event naming the old
+  parent. A running child is refused (`CHILD_RUNNING`); a failed or
+  canceled one may be detached. Detaching is the way out for a parent held
+  by a child that will never merge — never `pf file dep rm`, which removes
+  only an edge.
+- An order that would make a bound parent and its child wait for each
+  other — the parent ordered before its own child, or a loop through other
+  edges, on `dep add` and on `create --after` alike — is refused
+  `DEPENDENCY_CYCLE`.
+- Once any child was claimed, a bound parent's bundle can no longer be
+  renamed or unbound (`PARENT_BUNDLE_FROZEN`): the children work against
+  the parent's lane.
+
 ## Success
 
 `--json`: the server's record raw (`comment` answers the stored comment
@@ -320,14 +356,16 @@ it never changes the request, the exit code or the `--json` stdout.
 |---|---|---|
 | `AUTH-401` | api key missing or invalid | The AIHub credential is rejected — check the Cell's `api_key` (`pf [--profile NAME] config set api_key`). |
 | `CORE-400` | Invalid field or type; a lane (workflow.yaml) rule failed at create (`detail` names the rule); an `--attr` key hit the execution-state blacklist | The request body is wrong — read `detail` for the exact field/rule and fix the flags. |
-| `CORE-400` `PARENT_DEPTH` | `--parent` names a work item that is itself a child — work items nest one level only | Use the top-level work item (the epic) as the parent instead. |
+| `CORE-400` `PARENT_DEPTH` | `--parent` names a work item that is itself a child — work items nest one level only | Use the top-level work item (the parent) as the parent instead. |
 | `CORE-400` `REPO_NOT_IN_PROJECT` | A `--repo` name is not one of the project's repos | Name a repo the project has (`pf projects get <project>` lists them); a maintainer adds new repos to the project. |
 | `CORE-400` `INVENTORY_DUPLICATE_NAME` / `INVENTORY_URL_NOT_ALLOWED` / `INVENTORY_SUBDIR_UNSUPPORTED` / `INVENTORY_BASE_UNSUPPORTED` | The same repo named twice; a `--stdin` entry carrying `url`, `subdir` or any key other than `name`; a `--stdin` body carrying the removed `repo_inventory_base` array | Drop the duplicate; give names only. |
 | `CORE-400` (dependency) | An edge across two projects, or a work item depending on itself | Dependencies stay inside one project; name a work item of the same project. |
 | `CORE-400` `BLOCKER_STILL_BLOCKS` | `pf file edit <id> --bundle ""` (unbind) on a work item that still blocks others (`detail` names them) | Without a bundle it runs nothing, so nothing would release them — remove those edges first (`pf file dep rm`), or rebind to another bundle instead (allowed). |
-| `CORE-400` `BLOCKER_NOT_EXECUTABLE` | The blocker (`--after` / the first `dep add` argument) has no bundle: a registration ticket or an epic | It runs nothing (it closes only by a hand `pf wrap`) — name the execution ticket that does the work, or bind a bundle to it first (`pf file edit <id> --bundle NAME`). |
+| `CORE-400` `BLOCKER_NOT_EXECUTABLE` | The blocker (`--after` / the first `dep add` argument) has no bundle: a registration ticket (an unbound parent included) | It runs nothing (it closes only by a hand `pf wrap`) — name the execution ticket that does the work, or bind a bundle to it first (`pf file edit <id> --bundle NAME`). |
 | `CORE-404` | Unknown or invisible work item id, unknown project; `dep rm` of an edge that does not exist; `comment --reply-to` naming no comment on THIS work item (missing, or on another ticket) | No such work item (or you cannot see it) — check the `wi_` id or slug and the project name; for `--reply-to`, reply only to a comment on the same ticket (`pf file show` lists the ids). Nothing is written. |
-| `CORE-409` `DEPENDENCY_CYCLE` | The new edge would close a loop (B already waits, directly or not, for the other side) | Refused — the order you asked for contradicts an existing one; `pf file dep list` shows the chain. |
+| `CORE-400` `PARENT_BUNDLE_FROZEN` | `pf file edit <parent> --bundle …` on a bundle-bound parent one of whose children was already claimed | The parent's lane is fixed once its children started — nothing was changed; keep the bundle, and ask the owner if the lane really must change. |
+| `CORE-409` `CHILD_RUNNING` | `pf file edit <child> --parent ""` on a running child | A running child cannot be detached — wait for its session to end (or pause it), then detach. Nothing was changed. |
+| `CORE-409` `DEPENDENCY_CYCLE` | The new edge would close a loop (B already waits, directly or not, for the other side — a bound parent waits for its unwrapped children, so ordering a parent before its own child counts) | Refused — the order you asked for contradicts an existing one; `pf file dep list` shows the chain. |
 | `CORE-409` `OPEN_ON_BUNDLE` | `--bundle` names a lane declaring `exclusive: true` (the shipped `integrate`) and another work item of the project on it is not wrapped, failed or canceled; `detail` names it and its status | One at a time: nothing was filed. Follow the open one (`pf watch`); one still `queued` that no machine ever claimed is yours to run (`pf submit <wi>`) or drop (`pf cancel <wi>`), as `detail` says. |
 | `CORE-409` | Create-time conflict (e.g. duplicate) | The state machine refuses this write — read `detail`. |
 | `CORE-410` | PATCH of a terminal work item (wrapped/failed/canceled) | This work item is closed and can no longer be edited — file a new one instead. |
