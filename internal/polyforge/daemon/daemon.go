@@ -567,6 +567,17 @@ func New(cfg Config) (*Daemon, error) {
 	// file-only startup baseline; a reload swaps them.
 	live.SetSummarize(cfg.StartupFile.Summarize)
 	live.SetAgentLanguage(cfg.StartupFile.Daemon.AgentLanguage)
+	// polyforge#51: the Host's additional classification rules and the
+	// slow-model thresholds are live from the startup file; a reload of
+	// either key swaps them (reload.go).
+	if err := live.SetTransientErrorPatterns(cfg.StartupFile.Daemon.TransientErrorPatterns); err != nil {
+		return nil, fmt.Errorf("startup: %v", err)
+	}
+	if err := live.SetModelErrorPatterns(cfg.StartupFile.Daemon.ModelErrorPatterns); err != nil {
+		return nil, fmt.Errorf("startup: %v", err)
+	}
+	live.SetSlowModelMedianLatency(cfg.StartupFile.Daemon.SlowModelMedianLatency)
+	live.SetSlowModelP90Latency(cfg.StartupFile.Daemon.SlowModelP90Latency)
 	live.SetAgentLanguageFallback(cfg.AgentLanguageFallback)
 	live.SetMemoryPolicy(cfg.StartupFile.MemoryPolicy)
 
@@ -582,6 +593,9 @@ func New(cfg Config) (*Daemon, error) {
 			DriverStall:     live.StallWindow(),
 			ModelErrorGrace: cfg.Supervision.ModelErrorGrace,
 			AskWarmWindow:   cfg.Supervision.AskWarmWindow,
+			// polyforge#51: the slow-model judgement's live bounds
+			SlowModelMedianLatency: live.SlowModelMedianLatency(),
+			SlowModelP90Latency:    live.SlowModelP90Latency(),
 		}
 	}
 
@@ -660,6 +674,15 @@ func New(cfg Config) (*Daemon, error) {
 				// the next threshold judgement, including in-flight steps
 				//
 				LimitsFunc: func() supervise.Defaults { return liveLimits() },
+				// polyforge#51: the live additional classification
+				// rules — the next text classification reads them, so a
+				// reload reaches the next judgement without a restart.
+				TextRulesFunc: func() driver.TextRules {
+					return driver.TextRules{
+						Transient: live.TransientErrorRules(),
+						Model:     live.ModelErrorRules(),
+					}
+				},
 				// the heavy-run admission a step declaring it is admitted by
 				Admission: cellAdmission{d},
 				// workflow contract 4: the pending `pf step hub` writes a

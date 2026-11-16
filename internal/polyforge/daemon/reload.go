@@ -281,6 +281,15 @@ func (d *Daemon) applyLive(key string, cfg cli.Config) error {
 		// a new conversation dispatched from now on takes it; a running
 		// dispatch keeps the language it started with
 		d.live.SetAgentLanguage(cfg.Daemon.AgentLanguage)
+	case "transient_error_patterns":
+		// polyforge#51: the next text classification reads the new rules
+		return d.live.SetTransientErrorPatterns(cfg.Daemon.TransientErrorPatterns)
+	case "model_error_patterns":
+		return d.live.SetModelErrorPatterns(cfg.Daemon.ModelErrorPatterns)
+	case "slow_model_median_latency":
+		d.live.SetSlowModelMedianLatency(cfg.Daemon.SlowModelMedianLatency)
+	case "slow_model_p90_latency":
+		d.live.SetSlowModelP90Latency(cfg.Daemon.SlowModelP90Latency)
 	case "summarize.models", "summarize.language", "summarize.interval_sec":
 		// the table is one value: any changed key swaps the whole table
 		d.live.SetSummarize(cfg.Summarize)
@@ -398,6 +407,14 @@ func configValueChanged(newCfg, baseline cli.Config, key string) bool {
 		return newCfg.Daemon.CellMaxConcurrentJobs != baseline.Daemon.CellMaxConcurrentJobs
 	case "agent_language":
 		return newCfg.Daemon.AgentLanguage != baseline.Daemon.AgentLanguage
+	case "transient_error_patterns":
+		return !reflect.DeepEqual(newCfg.Daemon.TransientErrorPatterns, baseline.Daemon.TransientErrorPatterns)
+	case "model_error_patterns":
+		return !reflect.DeepEqual(newCfg.Daemon.ModelErrorPatterns, baseline.Daemon.ModelErrorPatterns)
+	case "slow_model_median_latency":
+		return newCfg.Daemon.SlowModelMedianLatency != baseline.Daemon.SlowModelMedianLatency
+	case "slow_model_p90_latency":
+		return newCfg.Daemon.SlowModelP90Latency != baseline.Daemon.SlowModelP90Latency
 	case "summarize.models", "summarize.language", "summarize.interval_sec":
 		a, b := summarizeKeyValue(newCfg, key), summarizeKeyValue(baseline, key)
 		return !reflect.DeepEqual(a, b)
@@ -484,7 +501,8 @@ func keySectionOf(key string) string {
 	switch key {
 	case "step_timeout", "stall_window", "harness_root", "operator_agent_dir", "python",
 		"max_concurrent_jobs", "max_concurrent_tasks", "max_concurrent_bars", "bar_load_threshold",
-		"command_path", "cell_max_concurrent_jobs", "machine_id", "heartbeat_every", "agent_language":
+		"command_path", "cell_max_concurrent_jobs", "machine_id", "heartbeat_every", "agent_language",
+		"transient_error_patterns", "model_error_patterns", "slow_model_median_latency", "slow_model_p90_latency":
 		return "daemon"
 	}
 	return ""
