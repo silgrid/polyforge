@@ -204,6 +204,10 @@ type Spec struct {
 	// is set in process only — never a wire field of POST /task/spawn, so
 	// no caller can ask for it. Empty = an ordinary task, no write path.
 	AnalysisOf string `json:"analysis_of,omitempty"`
+	// AnalysisRetries is how often a restarted daemon has re-queued this
+	// analysis (ruling 13's cap of 2): it rides the record so the count
+	// survives the restarts themselves. Stub (build u9, red first).
+	AnalysisRetries int `json:"analysis_retries,omitempty"`
 }
 
 // ReporterMachine is the task list's reporter for every task whose caller
