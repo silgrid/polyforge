@@ -161,10 +161,10 @@ type pinnedHead struct {
 // commits by repo, oldest first, and the owner's waivers on the delivery
 // record — and nothing else.
 type landingRecord struct {
-	State        string              `json:"state"`
-	Repos        []landingRepo       `json:"repos"`
-	MergeCommits map[string][]string `json:"merge_commits,omitempty"`
-	Waived       []landingWaiver     `json:"waived,omitempty"`
+	State        string                    `json:"state"`
+	Repos        []landingRepo             `json:"repos"`
+	MergeCommits map[string][]landedCommit `json:"merge_commits,omitempty"`
+	Waived       []landingWaiver           `json:"waived,omitempty"`
 }
 
 // landingRepo is one merge of the landing record: its repo, its PR, the
