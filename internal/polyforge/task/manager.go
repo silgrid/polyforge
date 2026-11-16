@@ -291,13 +291,23 @@ func (m *Manager) done() {
 }
 
 // run walks the candidates in order inside the one shared budget and
-// finishes the task in exactly one terminal state.
+// finishes the task in exactly one terminal state. A candidate the stuck
+// detection ends (a *StuckError: rules 0/2/3, AC9) is recorded as an
+// Attempt and the walk goes on to the next candidate — its tokens stay
+// spent, the shared budget is the one that was fixed at spawn.
 func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 	t := e.t
 	var report strings.Builder
 	var tokens int64
 	var lastErr error
 	capped, completed := false, false
+	var attempts []Attempt
+	limits := func() supervise.Defaults {
+		if m.cfg.Limits != nil {
+			return m.cfg.Limits()
+		}
+		return supervise.Defaults{}
+	}
 	prompt := dispatchedPrompt(t.Prompt, dir)
 	for _, cand := range t.Candidates {
 		if ctx.Err() != nil {
@@ -309,13 +319,24 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 		m.mu.Unlock()
 		res, err := m.cfg.Runner.Run(ctx, RunSpec{
 			Candidate: c, Prompt: prompt, MaxTokens: t.MaxTokens - tokens, WorkDir: dir, TaskID: t.ID,
-			ReadOnlyTools: t.ReadOnlyTools,
+			ReadOnlyTools: t.ReadOnlyTools, Limits: limits(),
 		}, func(n int64) {
 			m.mu.Lock()
 			e.t.TokensConsumed = tokens + n
 			m.mu.Unlock()
 		})
 		tokens += res.Tokens
+		var stuck *StuckError
+		if errors.As(err, &stuck) && ctx.Err() == nil {
+			attempts = append(attempts, Attempt{Candidate: cand, Cause: string(stuck.Cause), Evidence: stuck.Evidence})
+			m.mu.Lock()
+			e.t.Attempts = append([]Attempt(nil), attempts...)
+			m.mu.Unlock()
+			if lastErr == nil {
+				lastErr = fmt.Errorf("%s judged stuck (%s): %s", cand, stuck.Cause, stuck.Evidence)
+			}
+			continue // the next candidate, inside the same budget
+		}
 		report.Reset()
 		report.WriteString(res.Report)
 		if res.TokenCapped || tokens >= t.MaxTokens {
@@ -329,7 +350,7 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 		completed = err == nil && ctx.Err() == nil
 		break
 	}
-	m.finish(ctx, e, report.String(), tokens, capped, completed, lastErr)
+	m.finish(ctx, e, report.String(), tokens, capped, completed, lastErr, attempts)
 }
 
 // dispatchedPrompt answers what one run's harness reads: the shared
@@ -342,11 +363,14 @@ func dispatchedPrompt(prompt, dir string) string {
 	return harness.TaskProhibitedActions(dir) + "\n# Task\n\n" + prompt
 }
 
-func (m *Manager) finish(ctx context.Context, e *entry, report string, tokens int64, capped, completed bool, lastErr error) {
+func (m *Manager) finish(ctx context.Context, e *entry, report string, tokens int64, capped, completed bool, lastErr error, attempts []Attempt) {
 	m.mu.Lock()
 	user := e.userCancel
 	m.mu.Unlock()
 	t := e.t
+	if len(attempts) > 0 {
+		t.Attempts = append([]Attempt(nil), attempts...)
+	}
 	switch {
 	case completed:
 		t.State = StateCompleted

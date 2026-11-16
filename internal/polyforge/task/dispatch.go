@@ -171,8 +171,11 @@ func (r *ExecRunner) innerArgv(c harness.Candidate, readOnlyTools bool) ([]strin
 			return nil, err
 		}
 		args := append([]string{bin, "-p"}, runtime.ClaudeIsolationArgs()...)
+		// --include-partial-messages (polyforge#72, ruling 14): token
+		// deltas stream while the model thinks, exactly like a step's
+		// dispatch, so the silence bound judges at token granularity.
 		args = append(args, "--output-format", "stream-json", "--verbose", "--no-session-persistence",
-			"--model", c.Model)
+			"--include-partial-messages", "--model", c.Model)
 		args = append(args, c.EffortArgs()...)
 		return append(args, runtime.ClaudeToolArgs(claudeTools)...), nil
 	}
@@ -229,7 +232,12 @@ func (r *ExecRunner) command(ctx context.Context, spec RunSpec) (*exec.Cmd, erro
 	return cmd, nil
 }
 
-// Run runs one candidate to completion, a token cap, or ctx's end.
+// Run runs one candidate to completion, a token cap, a stuck verdict, or
+// ctx's end. The stdout loop feeds both consumers: the usage parser (the
+// token cap) and the step lane's supervision translator + Tracker
+// (rules 0/2/3, polyforge#72 AC9), whose JudgeTask ticker runs beside it;
+// a verdict cancels the run (the process group dies) and answers
+// *StuckError — the manager switches to the next candidate.
 func (r *ExecRunner) Run(ctx context.Context, spec RunSpec, progress func(tokens int64)) (RunResult, error) {
 	h := harness.Of(spec.Candidate.Harness)
 	if !SupportsUsage(h) {
@@ -255,12 +263,57 @@ func (r *ExecRunner) Run(ctx context.Context, spec RunSpec, progress func(tokens
 		return RunResult{}, fmt.Errorf("start %s: %w", argv[0], err)
 	}
 	parser := NewStreamParser(h)
+	// The stuck detection: the tracker the step lane's translator feeds,
+	// and the judge beside it. The thresholds are the injected limits
+	// (zero silence = the harness's own granularity default).
+	limits := spec.Limits.Fill()
+	link := supervise.NewLink("task:" + spec.TaskID)
+	tracker := link.Tracker(1)
+	var translator supervise.Translator
+	if h == harness.Claude {
+		translator = supervise.NewClaude(tracker)
+	} else {
+		translator = supervise.NewPi(tracker)
+	}
+	tracker.Begin(supervise.StepStarted{Step: "task", SpawnN: 1, Model: spec.Candidate.Model,
+		Harness: string(h), StartedAt: time.Now(),
+		Thresholds: supervise.Thresholds{Silence: limits.SilenceFor(translator.Granularity()), Tool: limits.Tool}})
+	verdicts := make(chan supervise.StepDead, 1)
+	judgeCtx, judgeStop := context.WithCancel(context.Background())
+	go func() {
+		defer judgeStop()
+		tick := limits.SilenceFor(translator.Granularity()) / 4
+		if tick > time.Second {
+			tick = time.Second
+		}
+		if tick < 50*time.Millisecond {
+			tick = 50 * time.Millisecond
+		}
+		t := time.NewTicker(tick)
+		defer t.Stop()
+		for {
+			select {
+			case <-judgeCtx.Done():
+				return
+			case <-t.C:
+				if v := supervise.JudgeTask(tracker.Snapshot(time.Now()), time.Now()); v != nil {
+					select {
+					case verdicts <- *v:
+					default:
+					}
+					cancel() // the verdict kills the candidate's process group
+					return
+				}
+			}
+		}
+	}()
 	capped := false
 	br := bufio.NewReaderSize(stdout, 64<<10)
 	for {
 		line, rerr := br.ReadBytes('\n')
 		if len(line) > 0 {
 			parser.Feed(line)
+			translator.Feed(line)
 			if progress != nil {
 				progress(parser.Tokens())
 			}
@@ -277,7 +330,15 @@ func (r *ExecRunner) Run(ctx context.Context, spec RunSpec, progress func(tokens
 			break
 		}
 	}
+	judgeStop()
 	werr := cmd.Wait()
+	if !capped && ctx.Err() == nil {
+		select {
+		case v := <-verdicts:
+			return RunResult{Report: parser.Text(), Tokens: parser.Tokens()}, &StuckError{Cause: v.Cause, Evidence: v.Evidence}
+		default:
+		}
+	}
 	res := RunResult{Report: parser.Text(), Tokens: parser.Tokens(), TokenCapped: capped}
 	if capped || ctx.Err() != nil {
 		return res, nil

@@ -92,6 +92,13 @@ func TestClaudeTaskInitToolsEqualDeclared(t *testing.T) {
 				t.Fatalf("%s %s: %v", mode.name, p.name, err)
 			}
 			argv, env := claudeinit.Profile(cmd)
+			// polyforge#72 (ruling 14): the task argv gained
+			// --include-partial-messages after these recordings were made.
+			// The flag only streams token deltas to the stuck detection — it
+			// does not shape the tool surface the recordings pin, so the
+			// replay matches the profile without it; the next live probe
+			// re-pins the exact argv.
+			argv = slices.DeleteFunc(slices.Clone(argv), func(a string) bool { return a == "--include-partial-messages" })
 			matched := claudeinit.Matching(recs, argv, env)
 			for _, rec := range matched {
 				in, err := claudeinit.Decode(rec.Init)

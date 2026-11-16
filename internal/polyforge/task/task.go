@@ -312,8 +312,10 @@ func ReportTail(report string) string {
 
 // Summary answers the chat/watcher summary of a terminal task: the trailing
 // ≤SummaryTailChars of the report on one line plus the `pf task show <id>`
-// pointer. A truncated report is marked as such. It is never sent to aihub
-// or memory.
+// pointer. A truncated report is marked as such, and the candidates the
+// stuck detection ended are named with their causes (AC9: the judgement
+// and its reason are visible in the decision feed). It is never sent to
+// aihub or memory.
 func (t Task) Summary() string {
 	body := strings.TrimSpace(t.Report)
 	if len(body) > SummaryTailChars {
@@ -327,6 +329,13 @@ func (t Task) Summary() string {
 	}
 	if t.Truncated {
 		body += " [truncated]"
+	}
+	if len(t.Attempts) > 0 {
+		parts := make([]string, 0, len(t.Attempts))
+		for _, a := range t.Attempts {
+			parts = append(parts, a.Candidate+" ("+a.Cause+")")
+		}
+		body += " [stuck: " + strings.Join(parts, "; ") + "]"
 	}
 	return fmt.Sprintf("task %s %s: %s — see `pf task show %s`", t.ID, t.State, body, t.ID)
 }

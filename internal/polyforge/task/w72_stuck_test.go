@@ -112,8 +112,8 @@ func TestW72ManagerRotatesCandidateOnStuck(t *testing.T) {
 		!strings.Contains(done.Attempts[0].Evidence, "no work-class signal") {
 		t.Fatalf("the stuck attempt must be recorded on the task: %+v", done.Attempts)
 	}
-	if r.calls != 2 || len(r.specs) != 2 || r.specs[1].Candidate.Model != "two" {
-		t.Fatalf("the run must switch to the next candidate: calls=%d specs=%+v", r.calls, r.specs)
+	if r.calls != 2 || len(r.specs) != 2 || r.specs[1].Candidate.String() != "pi:b/two" {
+		t.Fatalf("the run must switch to the next candidate: calls=%d specs=%v", r.calls, r.specs)
 	}
 	if done.TokensConsumed != 8 {
 		t.Fatalf("the stuck candidate's tokens stay spent: %d", done.TokensConsumed)
