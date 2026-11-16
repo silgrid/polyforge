@@ -200,6 +200,10 @@
 # The exit code is the failed target's own, 0 when none failed. A target
 # already running the version is already_deployed and skipped (exit 0;
 # the single-target run still refuses it without --force).
+# Two targets with the same BACKUP_ROOT are REFUSED before any network
+# work. Every run (one target or several) REFUSES a target whose running
+# version carries a pre-release suffix with no tag in this repo - a
+# foreign version line, handled by hand (exit 1, not_changed).
 #
 # Deploy lock: `flock -n` on the server (DEPLOY_LOCK_FILE, required) taken
 # through a long-lived background ssh session that runs
@@ -374,10 +378,12 @@ EOF
     # below applies), read in a subshell so nothing leaks into this
     # process; the comparison is polyforge#75's own (_tc_mismatch, ssh -G
     # resolving an alias locally - never a network call).
-    _mt_host() {
+    _mt_host() { _mt_var "$1" AIHUB_HOST; }
+    # _mt_var <file> <NAME>: NAME's merged value for that target
+    _mt_var() {
       ( _mt_snap="$(export -p)"
         [ -f "$1" ] && { set -a; . "$1"; set +a; eval "$_mt_snap"; }
-        printf '%s' "${AIHUB_HOST:-}" )
+        eval "printf '%s' \"\${$2:-}\"" )
     }
     # the work item's own Cell must be one of the targets: a release work
     # item never deploys targets its Cell does not own
@@ -407,6 +413,23 @@ MTROWS
     done <<MTROWS
 $_mt_rows
 MTROWS
+    # (polyforge#76, AC4) every target backs up into its own BACKUP_ROOT
+    # (the merged value, the run's default included): two targets sharing
+    # one would mix - and prune - each other's backups
+    _mt_roots=""
+    while read -r _mt_p _mt_s _mt_e; do
+      [ -n "$_mt_p" ] || continue
+      _mt_b="$(_mt_var "$_mt_e" BACKUP_ROOT)"
+      _mt_roots="$_mt_roots${_mt_b:-/data/polyforge-backups} $_mt_p
+"
+    done <<MTROWS
+$_mt_rows
+MTROWS
+    _mt_dup="$(printf '%s' "$_mt_roots" | awk 'NF { n[$1]++; t[$1] = t[$1] " " $2 } END { for (r in n) if (n[r] > 1) print r ":" t[r] }' | head -n 1)"
+    if [ -n "$_mt_dup" ]; then
+      echo "deploy: REFUSED - the targets${_mt_dup#*:} share one BACKUP_ROOT (${_mt_dup%%:*}); every target needs its own backup directory. Nothing was touched." >&2
+      exit 1
+    fi
     # (polyforge#76, AC3) One target after another: the work item's own
     # Cell first, the rest by name. Each target is one clean subprocess
     # (stdin closed, its output passed through as it runs); the first
@@ -1603,6 +1626,15 @@ OLDVER="$GOT"; OLD_LAYOUT="$GOT_LAYOUT"
 [ -n "$OLDVER" ] || die "could not read the running version: neither docker exec $AIHUB_CONTAINER /pf aihub -version nor /aihub -version (a pre-consolidation image) printed a release tag; probe output: $PROBE_RAW"
 if [ "$OLD_LAYOUT" = pf ]; then OLD_VCMD="/pf aihub -version"; else OLD_VCMD="/aihub -version"; fi
 note "container: running, version $OLDVER ($OLD_VCMD) -> $TAG"
+# (polyforge#76, AC4) a running version with a pre-release suffix this
+# repo has no tag for is a foreign version line (another fork's build):
+# its schema and its rollback path are unknown here - never deployed over
+# automatically, single target or one of several
+case "$OLDVER" in
+  v[0-9]*.[0-9]*.[0-9]*-*)
+    git -C "$SCRIPT_DIR" rev-parse -q --verify "refs/tags/$OLDVER^{commit}" >/dev/null \
+      || die "REFUSED: $AIHUB_HOST runs $OLDVER, a foreign version line (a pre-release suffix with no tag $OLDVER in this repo) - its schema and rollback are unknown here; handle this target by hand (nothing was changed)" ;;
+esac
 cmp="$(vcmp "$TAG" "$OLDVER")"
 if [ "$TAG" = "$OLDVER" ] || [ "$cmp" = "0" ]; then
   # (polyforge#76) a target of a multi-target run that already runs the
