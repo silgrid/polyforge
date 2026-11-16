@@ -83,7 +83,9 @@ integration_batch`). What a later step's command needs travels in files, never i
 - **full-gate** (the script `gate.py --isolation container --capsule --pins`, no tier;
   heavy admission; a gate; hub `get list batch file`, attrs `integration, integration_fix`) — runs the release's test gate
   once on every gated repo's pinned head, inside its verification container, with
-  `--mark-green`, so a pass writes the green tag itself. Nothing gated → result
+  `--mark-green` and `--keep-going` (the gate runs every command, never
+  stopping at the first failing one, so one red batch records every failing
+  command and none is left `not_run`), so a pass writes the green tag itself. Nothing gated → result
   `empty`. Green → `green`. Red → `gate.py --triage` (re-runs, the baseline, attribution,
   bisection); the agent decides one fix ticket per root cause (filed on `develop`, high
   priority, under its stable key, so a resumed batch never files twice) and an attribution

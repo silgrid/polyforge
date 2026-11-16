@@ -503,8 +503,10 @@ gate: the tree's own scope-engine plan
 (`workflows/_shared/scripts/verify-scope --json --full --base HEAD`) with every command, the engine included, in the container of
 the tree's `.polyforge/Dockerfile.verify`. The integrate lane's full-gate
 step runs it from its lane snapshot as its skill writes it, `"$PF_PYTHON"
-"$PF_SHARED_DIR/scripts/gate.py" --isolation container --capsule . --pins
-…`; `.polyforge/release.sh` and `tools/green-tag` run the tree's own with
+"$PF_SHARED_DIR/scripts/gate.py" --isolation container --keep-going --capsule . --pins
+…` — the lane's gate runs every command, never stopping at the first
+failing one, so a red batch records every failing command at once (its
+triage, and the regate a fully flaky one triggers, the same); `.polyforge/release.sh` and `tools/green-tag` run the tree's own with
 `python3` (docs/reference/release.md, "The test gate"; `--help` is the
 script's full reference). `--isolation container` is required and the only
 isolation a gate has: a tree without the Dockerfile at HEAD, or a machine
