@@ -45,7 +45,7 @@ func TestShippedStepsSayWhatTheyReadAndHandOff(t *testing.T) {
 				}
 				text = string(raw)
 			} else {
-				def, err := workflow.ReadDefinition(dir, s.ID, s.Vars)
+				def, err := workflow.ReadDefinition(dir, s.ID, s.Vars, s.Params)
 				if err != nil {
 					t.Fatalf("%s/%s: definition: %v", name, s.ID, err)
 				}

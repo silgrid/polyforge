@@ -85,6 +85,12 @@ type Config struct {
 	// candidate's dispatch runs on (a malformed one blocks like a compose
 	// failure).
 	Compose func() (map[string][]string, error)
+	// Params answers the per-step param values (polyforge#78): each
+	// declared param of a step at its final value — the ticket overlay over
+	// the project's yaml over the lane default. Called at EVERY dispatch
+	// beside Compose (outside the mutex) with the same failure decision: a
+	// failure blocks the workflow. Nil means the lane defaults (tests).
+	Params func() (map[string]map[string]string, error)
 	// Interrupted, when set, archives ONE infra_failure attempt on the
 	// current in_progress step before the loop re-dispatches (the
 	// recovery path's write, performed by the single
@@ -214,6 +220,11 @@ type Driver struct {
 	// start): composed at that dispatch, read by its failure decision,
 	// replaced by the next one (polyforge#33; guarded by mu).
 	cands map[string][]string
+	// params are the per-step param values of the dispatch in flight (or
+	// about to start): composed at that dispatch beside cands
+	// (Config.Params, polyforge#78), read by its spawn order; nil = no
+	// composition bound (the lane defaults govern). Guarded by mu.
+	params map[string]map[string]string
 	// failed is set when a transition's persist failed: memory may be
 	// ahead of execution.json. Every further transition answers it and
 	// Run returns it; the restart reloads the file (transition.go).
@@ -497,6 +508,7 @@ func (d *Driver) Run(ctx context.Context) error {
 			Model:     spawn.Model,
 			Effort:    spawn.Effort,
 			Candidate: spawn.Candidate,
+			Params:    spawn.Params,
 			SpawnN:    n,
 			// the task repos' HEADs, read outside the lock: the round's
 			// start commits when this dispatch opens the step's round
@@ -955,8 +967,22 @@ func (d *Driver) prepareDispatch(stepID string) (*StepSpawn, int64, error) {
 		}
 	}
 	sp.ToolWindow = d.workflow.step(stepID).toolWindow()
+	sp.Params = d.paramsForLocked(stepID)
 	sp.SpawnN = d.spawnN + 1
 	return sp, sp.SpawnN, nil
+}
+
+// paramsForLocked answers the step's params for the dispatch about to
+// start: the values the dispatch's composition answered for it, else —
+// no composition bound, or none for this step — its lane defaults.
+func (d *Driver) paramsForLocked(stepID string) map[string]string {
+	if p, ok := d.params[stepID]; ok {
+		return p
+	}
+	if spec := d.workflow.step(stepID); spec != nil {
+		return spec.Params
+	}
+	return nil
 }
 
 // stepRound answers the step's current round (capsule.Step.Round; 0 before
@@ -970,14 +996,16 @@ func (d *Driver) stepRound(stepID string) int64 {
 	return 0
 }
 
-// composeDispatch composes the candidate lists for the dispatch about to
-// start (polyforge#33) — file reads, so outside the mutex — and holds them
-// for it. A composition that fails (an unreadable or invalid yaml or
-// bundle, a malformed candidate) blocks the workflow through TransBlocked:
-// the owner fixes the config and `pf resume` re-dispatches from the
+// composeDispatch composes the candidate lists and the step params for
+// the dispatch about to start (polyforge#33, polyforge#78) — file reads,
+// so outside the mutex — and holds them for it. A composition that fails
+// (an unreadable or invalid yaml or bundle, a malformed candidate, an
+// illegal param value) blocks the workflow through TransBlocked: the
+// owner fixes the config and `pf resume` re-dispatches from the
 // checkpoint. It answers blocked=true when it parked the workflow.
 func (d *Driver) composeDispatch(stepID string) (blocked bool, err error) {
 	var m map[string][]string
+	var params map[string]map[string]string
 	var cerr error
 	if d.cfg.Compose != nil {
 		m, cerr = d.cfg.Compose()
@@ -986,6 +1014,11 @@ func (d *Driver) composeDispatch(stepID string) (blocked bool, err error) {
 		}
 		if cerr != nil {
 			cerr = fmt.Errorf("the candidate composition failed at dispatch time: %w", cerr)
+		}
+	}
+	if cerr == nil && d.cfg.Params != nil {
+		if params, cerr = d.cfg.Params(); cerr != nil {
+			cerr = fmt.Errorf("the param composition failed at dispatch time: %w", cerr)
 		}
 	}
 	if cerr != nil {
@@ -997,6 +1030,7 @@ func (d *Driver) composeDispatch(stepID string) (blocked bool, err error) {
 	}
 	d.mu.Lock()
 	d.cands = m
+	d.params = params
 	d.mu.Unlock()
 	return false, nil
 }
@@ -1184,6 +1218,11 @@ type StepSpawn struct {
 	// question already); a resume that degrades to a new conversation,
 	// or a dispatch after a death, sends the full prompt with them.
 	MessageResume bool
+	// Params are the step's params at their final values for this
+	// dispatch (Config.Params; polyforge#78): the definition's {{name}}
+	// placeholders, the PF_PARAM_<NAME> environment and the journal line
+	// take them. nil = the step declares none.
+	Params map[string]string
 }
 
 // StepRun is one spawned step execution awaiting its hand-off.

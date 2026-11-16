@@ -24,6 +24,7 @@ id: string, required, ^[a-z][a-z0-9-]{0,39}$, unique
 model_candidates: []<harness>:<model>[:<effort>]; exclusive with model_tier
 model_tier: a tier of defaults.tiers; exclusive with model_candidates
 on_fail: map {target}, gate only
+params: map <name> -> a single-line string (the lane default): the step's declared parameters. <name> is ^[a-z][a-z0-9_]{0,63}$, collides with no var or fragment (WFC-195), and a parameter the definition's placeholders never use is allowed (a script reads it); a value is one line of at most 256 bytes (WFC-112). The final value is composed at EVERY dispatch — lane default < the project's steps.<project>.<step-id>.params.<name> in its workspace yaml < the work item's pf override — fills the definition's {{<name>}} and reaches the step's scripts as PF_PARAM_<NAME>
 resources: map {admission, locks}: what the daemon takes for the step's dispatch
 skill: skill name: <lane>/skills/<name>.md, else _shared/skills/<name>.md, rendered into the prompt
 skippable: bool (default false): a project may switch the step off with `steps.<project>.<step>.skip: true` in its workspace yaml, fixed when the work item is first claimed; a switched-off step is never dispatched (its execution status is skipped), and the wrap_attrs of skipped steps at the lane's end pass to the last step that runs
@@ -73,6 +74,7 @@ exclusive: one unfinished work item per project on the lane: the daemon's data-p
 
 [placeholders]
 {{<var>}}: the step's vars (vars, vars_files)
+{{<param>}}: the step's params (params), at the dispatch's final value
 {{<fragment>}}: _shared/<fragment>.md, inserted verbatim
 
 [error codes]
@@ -90,7 +92,7 @@ WFC-130: step id malformed or duplicated
 WFC-140: `on_fail` on a non-gate step, or a target that is not an earlier step
 WFC-190: a step's definition file is missing
 WFC-191: a definition file's frontmatter is missing, unparsable, carries an unknown key, or its `name`/`description` is wrong
-WFC-195: a placeholder no var or fragment resolves, a var nothing uses, or a var shadowing a fragment
+WFC-195: a placeholder no var, param or fragment resolves; a var nothing uses; a name held by both a var and a param, or a var or param shadowing a fragment
 WFC-198: a model candidate is not `<harness>:<model>[:<effort>]`, or `model_tier` names no tier of `defaults.tiers`
 WFC-200: `skill` resolves to no file (<lane>/skills/<name>.md, else _shared/skills/<name>.md), or its frontmatter is not {name == the file name, description, commands: []string} over a non-empty body
 

@@ -68,6 +68,7 @@ var stepKeys = map[string]keySpec{
 	"budget":           {Type: "map {wall_minutes, tool_minutes}", Schema: object(budgetKeys)},
 	"model_candidates": {Type: "[]<harness>:<model>[:<effort>]; exclusive with model_tier", Schema: candidates()},
 	"model_tier":       {Type: "a tier of defaults.tiers; exclusive with model_candidates", Schema: pattern(`\S`)},
+	"params":           {Type: "map <name> -> a single-line string (the lane default): the step's declared parameters. <name> is ^[a-z][a-z0-9_]{0,63}$, collides with no var or fragment (WFC-195), and a parameter the definition's placeholders never use is allowed (a script reads it); a value is one line of at most 256 bytes (WFC-112). The final value is composed at EVERY dispatch — lane default < the project's steps.<project>.<step-id>.params.<name> in its workspace yaml < the work item's pf override — fills the definition's {{<name>}} and reaches the step's scripts as PF_PARAM_<NAME>", Schema: jsonSchema{"type": "object", "propertyNames": pattern(wrapAttrName.String()), "additionalProperties": jsonSchema{"type": "string"}}},
 	"vars":             {Type: "map[string]string", Schema: jsonSchema{"type": "object", "additionalProperties": jsonSchema{"type": "string"}}},
 	"vars_files":       {Type: "map <var> -> a file of the lane (fragments/<name>.md), relative to the lane directory and inside it: the var's value is the file's text, exactly as if written in vars; a var is declared in vars or in vars_files, not both", Schema: jsonSchema{"type": "object", "additionalProperties": jsonSchema{"type": "string", "minLength": 1}}},
 	"skill":            {Type: "skill name: <lane>/skills/<name>.md, else _shared/skills/<name>.md, rendered into the prompt", Schema: pattern(idPattern.String())},
@@ -122,6 +123,11 @@ const DefaultUncountedRewinds = 2
 // wrap-attrs` name the daemon's step-call check takes) and of an attrs key
 // a step may write (`hub.attrs`, aihub's own key shape).
 var wrapAttrName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// ParamName is the shape of a step parameter's name (the `params` key of
+// a step entry): the wrap-attr shape, so a name maps onto a legal
+// PF_PARAM_<NAME> environment variable.
+var ParamName = wrapAttrName
 
 // HubVerbs are the `pf step hub` verbs a step's `hub.verbs` may name
 // (design #483 §5.2; workflow contract 1): two reads and the writes made
@@ -224,6 +230,7 @@ func RegistryDump() string {
 	}
 	b.WriteString("\n[placeholders]\n")
 	b.WriteString("{{<var>}}: the step's vars (vars, vars_files)\n")
+	b.WriteString("{{<param>}}: the step's params (params), at the dispatch's final value\n")
 	b.WriteString("{{<fragment>}}: " + SharedDir + "/<fragment>.md, inserted verbatim\n")
 	b.WriteString("\n[error codes]\n")
 	for _, c := range sortedKeys(Codes) {

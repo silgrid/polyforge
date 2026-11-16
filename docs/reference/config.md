@@ -384,7 +384,9 @@ The workspace `.polyforge.yaml` keys report the same classes on the
 workspace read (`pf config workspace`): every
 `steps.<project>.<step-id>.models` key is `live` (read
 fresh at the next step dispatch; a running step keeps what its dispatch
-read); every `steps.<project>.<step-id>.skip` key is `next-claim` (fixed
+read); every `steps.<project>.<step-id>.params.<name>` key is `live` too
+(composed at every dispatch,
+[below](#stepsprojectstep-idparams--a-steps-parameter-values)); every `steps.<project>.<step-id>.skip` key is `next-claim` (fixed
 into a work item's capsule when it is first claimed; a claimed work item
 keeps the set it was claimed with —
 [below](#stepsprojectstep-idskip--switching-off-a-skippable-step)), and
@@ -447,11 +449,17 @@ an undeclared one is `declared:false` with no list), `source` (`file` or
 `default`) and `class` (`live`: the driver composes the chain at every
 dispatch). When the file declares a `skip` for the step the entry also
 carries `skip` (a boolean); an entry the file only gives a `skip` is listed
-too, as `declared:false`, `source: default`, with that `skip`. Every mapped
+too, as `declared:false`, `source: default`, with that `skip`. When the
+file declares `params` for the step the entry also carries `params` (each
+declared name to its value) — the file's own values, never composed with a
+lane default; an entry the file only gives `params` is listed the same way
+as a skip-only one. Every mapped
 project always has a `default` and a `task` row besides the installed step
 ids and the file's own keys.
 
-`pf config set|unset steps.<project>.<step-id>.models|skip` writes the
+`pf config set|unset steps.<project>.<step-id>.models|skip|by` (and
+`steps.<project>.<step-id>.params.<name>`,
+[below](#stepsprojectstep-idparams--a-steps-parameter-values)) writes the
 [`steps:`](#steps--model-candidates-per-project-and-step) keys with the
 `--workspace <path>` or `--cwd <dir>` (exactly one; `--workspace` must name a
 `[workspace."<path>"]` already mapped in cli.toml), the CAS options, the
@@ -462,14 +470,17 @@ the expectation says `absent`; an unset with no file to edit is a no-op.
 list is a declared-empty level), `skip` takes `true` or `false` (any other
 value is refused) and is refused for a step no lane of the workspace's lane
 set declares `skippable: true`
-([below](#stepsprojectstep-idskip--switching-off-a-skippable-step)). The write is a
+([below](#stepsprojectstep-idskip--switching-off-a-skippable-step)); a
+param takes its value as one string and is refused when no lane of the
+workspace's lane set declares the param on the step. The write is a
 byte-preserving line edit: only the addressed line changes; a missing
 `steps:` section, project or step entry is created in block style, and a
 flow-style entry on the path is expanded once into block style keeping every
 value it declares. A stale `--expect-hash` / `--expect-state` is refused with
 `CORE-409`, and a malformed candidate is refused by the loader — the
 file stays byte-identical. `unset …models` removes the chain line (`unset
-…skip` the switch line), then the
+…skip` the switch line, `unset …params.<name>` the value line and then a
+`params` block left empty), then the
 step entry when it declares nothing else (so the chain falls back one
 level), then a project or `steps:` section the removal left empty. Before
 reading the file, a step write asks the running daemon's `GET /status`; an
@@ -483,7 +494,10 @@ read: the installed bundles (from the daemon-reported `workflows_dir`,
 parsed on every call), each step's `model_candidates`, and — with
 `--cwd` — every mapped project's effective chain per
 step with the level it came from, resolved by the precedence chain of
-[`steps:`](#steps--model-candidates-per-project-and-step) (the
+[`steps:`](#steps--model-candidates-per-project-and-step), and each
+param a lane declares on a step with its final value and the level it came
+from — the project's yaml value or the lane default; a work item's `pf
+override --param` is no part of it (the `pf override` view lists those) (the
 [commands page](commands.md) has the document shape and its
 degradations). Its `write_capable` is the running daemon's own fact
 (`write_reason` names why not).
@@ -762,10 +776,10 @@ keeps `:8b` in the model id; pi gets it as `--thinking <effort>` (all
 seven), claude as `--effort <effort>` (`low`…`max`; `off`/`minimal`
 refuse); no effort, no flag.
 
-A step entry's keys are `models` and `skip`, at least one declared (an
-entry declaring neither is refused as empty); a leftover `attrs` is refused naming
+A step entry's keys are `models`, `skip`, `by` and `params`, at least one
+declared (an entry declaring none is refused as empty); a leftover `attrs` is refused naming
 its removal. An entry declaring only
-`skip` is no level of the chain below. For a step of the claimed project
+`skip`, `by` or `params` is no level of the chain below. For a step of the claimed project
 the list is, highest first: the work item's per-step **overlay**
 (`pf override <id> --step <s> --models …`, polyforge#25 —
 `runtime-state/step-overrides.json` in the capsule; see
@@ -785,7 +799,7 @@ clone URLs always come from the aihub project registry.
 
 A running ticket's per-step overlay (polyforge#25): the capsule file
 `runtime-state/step-overrides.json` records, per step of this one work
-item, a model chain and a skip switch with the operator and time of each
+item, a model chain, a skip switch and param values with the operator and time of each
 change — written only through the daemon (`pf override`; a step agent's
 process tree is refused `DAEMON-403`), never by an agent. The model chain
 is the whole effective list of that step's next dispatch (its first
@@ -834,6 +848,17 @@ project's `skip` key switched off (fixed in the claim's
 restore it), and a `--skip` that would move the lane's last step onto a
 step that has already started (its last-step obligations were settled at
 its dispatch).
+
+A param value (`--param <name>=<value>`, polyforge#78) is the top layer of
+the step's param ([below](#stepsprojectstep-idparams--a-steps-parameter-values)):
+it outranks the project's yaml value and the lane default from the step's
+next dispatch until cleared (`--clear-param <name>`). Only a param the
+capsule's lane snapshot declares on the step is accepted (any other is
+refused `DAEMON-400`, as is a value that is not one line of at most 256
+bytes), one action per call, and it follows the writability above (a live
+dispatch or a step that already ran refuses it `DAEMON-409`). The view
+lists the param overrides only, never the final value (`pf workflows
+--cwd` shows the lane and project layers).
 
 ### `steps.<project>.<step-id>.skip` — switching off a skippable step
 
@@ -933,6 +958,56 @@ with the PRs open, and it never enters an integration batch
 
 `pf workflows --cwd` reports each step's `human_mergeable` and the mapped
 projects' declared modes ([commands](commands.md)).
+
+### `steps.<project>.<step-id>.params` — a step's parameter values
+
+```yaml
+# Precedence (params): pf override --param > steps.<project>.<step-id>.params.<name> > the lane's default
+steps:
+  <project>:
+    <step-id>:
+      params: { <name>: <value> }   # one value per param the step's lane declares
+```
+
+A lane step may declare `params` in its workflow.yaml — each parameter
+name (`^[a-z][a-z0-9_]{0,63}$`) to its lane default
+([workflow contract](workflow-contract.md#step-keys)); a project sets its
+own value of one under the step's entry here. A value is one string: one
+line of at most 256 bytes (no newline; empty is legal), the one rule the
+lane, this file and `pf override` share. `default` and `task` take no
+`params` (they are no step; a load error).
+
+- **Per lane, by step id.** The key names a step id, as `models` does, and
+  a value applies only on a lane that declares the param on the step: on a
+  lane whose step does not declare the name it governs nothing. A name no
+  lane of the workspace's lane set declares on the step is stale: `pf
+  doctor`'s `workspace yaml` row warns naming it.
+- **Class `live`.** Unlike `skip` and `by`, a param value is never fixed at
+  the claim: like `models`, it is read fresh and composed at every dispatch
+  — the lane default, overridden by this file's value, overridden by the
+  work item's `pf override <id> --step <step-id> --param <name>=<value>`
+  ([the overlay section](#pf-override--the-per-step-overlay)). An edit
+  reaches a running work item's next dispatch of the step; a running
+  dispatch keeps the values it started with.
+- **Written through `pf config set steps.<project>.<step-id>.params.<name> <value>`**
+  and removed with `pf config unset steps.<project>.<step-id>.params.<name>`
+  (the write above); a write naming a param no lane of the set declares on
+  the step, or a value off the rule above, is refused and nothing is
+  written.
+- **What the step sees.** The final value fills the step definition's
+  `{{<name>}}` placeholder (the capsule's `workflows/_rendered/<step-id>.md`
+  is rewritten at each dispatch's values) and reaches the step's scripts as
+  the environment variable `PF_PARAM_<NAME>` (the name upper-cased); the
+  `step_started` event and the spawn journal record the dispatch's values,
+  and a dispatch that continues an earlier conversation of the step after
+  a value changed tells the agent so in a `## Step params changed` section.
+
+A param is the per-project, per-ticket value of a step, unlike a lane's
+`vars`, which are fixed text of the lane no project or work item changes
+([bundles](../bundles.md)). `pf workflows --cwd` reports each declared
+param's final value per mapped project and its level — the project's
+value or the lane default ([commands](commands.md)); `pf config workspace`
+lists the file's own values.
 
 ### `steps.<project>.task` — the one-shot task agent
 

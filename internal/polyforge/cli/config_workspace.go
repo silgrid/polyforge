@@ -132,7 +132,9 @@ func workspaceCandidateScope(ctx *Context) (dir string, complete bool, reason st
 // every key the file declares, and always the project-level
 // `default` and the bundle-less `task` rows. Each entry carries
 // `declared` + `models` (a declared-empty list stays declared, never
-// absent), `skip` when the file declares one, its `source` (`file` | `default`) and `class` (`live`).
+// absent), `skip` when the file declares one, `params` (name → value)
+// when the file declares any, its `source` (`file` | `default`) and
+// `class` (`live`).
 func declaredStepCandidates(cfg *workspace.Config, projects []string, set workflow.LaneSet, complete bool) map[string]any {
 	steps := map[string]any{}
 	var ids map[string]bool
@@ -142,9 +144,11 @@ func declaredStepCandidates(cfg *workspace.Config, projects []string, set workfl
 	for _, project := range projects {
 		var declared map[string][]string
 		var skips map[string]bool
+		var params map[string]map[string]string
 		if cfg != nil {
 			declared = cfg.Models[project]
 			skips = cfg.Skip[project]
+			params = cfg.Params[project]
 		}
 		keys := map[string]bool{workspace.DefaultKey: true, workspace.TaskKey: true}
 		for id := range ids {
@@ -156,16 +160,19 @@ func declaredStepCandidates(cfg *workspace.Config, projects []string, set workfl
 		for id := range skips {
 			keys[id] = true
 		}
+		for id := range params {
+			keys[id] = true
+		}
 		entry := map[string]any{}
 		for id := range keys {
-			entry[id] = stepEntryRead(project, id, declared, skips)
+			entry[id] = stepEntryRead(project, id, declared, skips, params)
 		}
 		steps[project] = entry
 	}
 	return steps
 }
 
-func stepEntryRead(project, id string, declared map[string][]string, skips map[string]bool) map[string]any {
+func stepEntryRead(project, id string, declared map[string][]string, skips map[string]bool, params map[string]map[string]string) map[string]any {
 	models, ok := declared[id]
 	e := map[string]any{"declared": ok, "models": nil, "source": sourceIf(ok), "class": WorkspaceConfigClass("steps." + project + "." + id + ".models")}
 	if ok {
@@ -174,6 +181,10 @@ func stepEntryRead(project, id string, declared map[string][]string, skips map[s
 	// the entry's `skip`, only when the file declares one.
 	if skip, set := skips[id]; set {
 		e["skip"] = skip
+	}
+	// the entry's param values, only when the file declares any.
+	if values, set := params[id]; set {
+		e["params"] = values
 	}
 	return e
 }

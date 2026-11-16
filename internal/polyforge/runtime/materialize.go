@@ -13,8 +13,10 @@ package runtime
 //     exactly the shared files it was judged with;
 //   - every step's definition, rendered by the one definition render the
 //     driver reads it through (workflow.RenderDefinition, the step's
-//     vars), lands under workflows/_rendered/<step>.md: the text a step's
-//     sub-agent is pointed at, the same the step's own prompt carries;
+//     vars and its params at their lane defaults), lands under
+//     workflows/_rendered/<step>.md: the text a step's sub-agent is
+//     pointed at, the same the step's own prompt carries — each dispatch
+//     rewrites it at that dispatch's final param values (polyforge#78);
 //   - the completion marker sync/materialized.json records the pinned
 //     bundle identity (name), the workflow contract version the snapshot
 //     targets, its source and content hash, and the full targets list,
@@ -154,13 +156,14 @@ func (r *Runtime) materializeBundle(j *job) error {
 
 // writeRenderedDefinitions writes each step's definition, rendered as the
 // driver reads it (workflow.RenderDefinition over the capsule's lane
-// snapshot with the step's vars), read-only to dir/<step>.md.
+// snapshot with the step's vars and its params' lane defaults), read-only
+// to dir/<step>.md; a dispatch rewrites it at its final param values.
 func writeRenderedDefinitions(laneDir, dir string, steps []workflow.Step) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	for _, s := range steps {
-		raw, err := workflow.RenderDefinition(laneDir, s.ID, s.Vars)
+		raw, err := workflow.RenderDefinition(laneDir, s.ID, s.Vars, s.Params)
 		if err != nil {
 			return fmt.Errorf("rendering step %s: %w", s.ID, err)
 		}

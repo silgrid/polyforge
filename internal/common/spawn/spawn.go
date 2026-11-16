@@ -4,6 +4,7 @@ package spawn
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -46,7 +47,11 @@ type Params struct {
 	// daemon's global window applies. A declared window is also what the
 	// claude adapter sizes the Bash tool's default timeout to (the max).
 	ToolWindow time.Duration
-	Journal    func(pid int, startedAt string) error
+	// Params are the step's params at their final values for this
+	// derivation (polyforge#78: lane default, project, ticket overlay),
+	// exported as EnvParamName(name) each; nil = the step declares none.
+	Params  map[string]string
+	Journal func(pid int, startedAt string) error
 	// OnRecord, when set, receives every raw stdout record line the
 	// process emits (the harness translator's input). It runs on the
 	// stdout reader: it must be cheap and must never block.
@@ -169,3 +174,14 @@ const (
 	EnvDeployEnv   = "PF_DEPLOY_ENV"
 	EnvCellTargets = "PF_CELL_TARGETS"
 )
+
+// EnvParamPrefix starts the name a step param reaches the step process
+// under (polyforge#78): EnvParamName.
+const EnvParamPrefix = "PF_PARAM_"
+
+// EnvParamName answers the environment variable of the step param name
+// (Params.Params): EnvParamPrefix and the name upper-cased — the name's
+// shape (workflow.ParamName) keeps the result a legal variable name. The
+// sanitize point strips every inherited PF_* name, so the step's value is
+// always the daemon's.
+func EnvParamName(name string) string { return EnvParamPrefix + strings.ToUpper(name) }

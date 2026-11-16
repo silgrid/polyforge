@@ -303,6 +303,7 @@ func (r *Runtime) startEngine(ctx context.Context, j *job, interruptedCause stri
 		Spawner:          r.spawner,
 		StepEnded:        r.stepEnded(j.wi),
 		Compose:          r.composeFor(j.capsuleDir, project, bundle, manual),
+		Params:           r.paramsFor(j.capsuleDir, project, bundle),
 		InterruptedCause: interruptedCause,
 		OwnerWait: func(waiting bool) {
 			j.mu.Lock()
@@ -344,30 +345,67 @@ func (r *Runtime) startEngine(ctx context.Context, j *job, interruptedCause stri
 // a bundle has no list.
 func (r *Runtime) composeFor(capsuleDir, project, bundle string, manual []string) func() (map[string][]string, error) {
 	return func() (map[string][]string, error) {
-		if bundle == "" {
-			return nil, nil
-		}
-		fm, err := snapshotLane(capsuleDir, bundle)
-		if err != nil {
+		fm, wcfg, ov, err := r.dispatchSources(capsuleDir, project, bundle)
+		if err != nil || fm == nil {
 			return nil, err
-		}
-		wcfg, err := r.dispatchWorkspace(project)
-		if err != nil {
-			return nil, err
-		}
-		// the step-overlay record (polyforge#25) sits above every source:
-		// a step whose overlay names a model chain runs that chain as its
-		// whole effective list. Read fresh at every composition — a torn
-		// record is tolerated as no overlay (the write path validates and
-		// the file is daemon-written, so a torn one is a scene defect, not
-		// a reason to block the dispatch); the candidate pointer then
-		// falls to the list head exactly as an owner edit does.
-		ov, oerr := capsule.ReadStepOverrides(capsuleDir)
-		if oerr != nil {
-			ov = capsule.StepOverrides{}
 		}
 		return workspace.ComposeCandidatesWithOverlay(fm, wcfg, project, manual, ov), nil
 	}
+}
+
+// paramsFor builds the dispatch-time param composition of one job
+// (polyforge#78) over the same sources composeFor reads, read again at
+// every call: each declared param of a step at its final value — the
+// overlay's over the project yaml's over the lane default
+// (workspace.ComposeStepParamsWithOverlay). It fails as composeFor does
+// (the driver blocks), and also on a final value that is not a legal
+// param value (workflow.ParamValueProblem): the overlay record lives in
+// the capsule, so its values are judged again before they reach a prompt
+// or an environment.
+func (r *Runtime) paramsFor(capsuleDir, project, bundle string) func() (map[string]map[string]string, error) {
+	return func() (map[string]map[string]string, error) {
+		fm, wcfg, ov, err := r.dispatchSources(capsuleDir, project, bundle)
+		if err != nil || fm == nil {
+			return nil, err
+		}
+		out := workspace.ComposeStepParamsWithOverlay(fm, wcfg, project, ov)
+		for id, params := range out {
+			for name, v := range params {
+				if p := workflow.ParamValueProblem(v); p != "" {
+					return nil, fmt.Errorf("step %s param %s: %s", id, name, p)
+				}
+			}
+		}
+		return out, nil
+	}
+}
+
+// dispatchSources reads what a dispatch-time composition composes from:
+// the capsule's lane snapshot (nil when the WI has no bundle or the
+// capsule no snapshot — nothing to compose), the workspace yaml
+// (dispatchWorkspace) and the step-overlay record. The overlay
+// (polyforge#25) sits above every source; a torn record is tolerated as
+// no overlay (the write path validates and the file is daemon-written,
+// so a torn one is a scene defect, not a reason to block the dispatch);
+// the candidate pointer then falls to the list head exactly as an owner
+// edit does.
+func (r *Runtime) dispatchSources(capsuleDir, project, bundle string) (*workflow.Lane, *workspace.Config, capsule.StepOverrides, error) {
+	if bundle == "" {
+		return nil, nil, capsule.StepOverrides{}, nil
+	}
+	fm, err := snapshotLane(capsuleDir, bundle)
+	if err != nil {
+		return nil, nil, capsule.StepOverrides{}, err
+	}
+	wcfg, err := r.dispatchWorkspace(project)
+	if err != nil {
+		return nil, nil, capsule.StepOverrides{}, err
+	}
+	ov, oerr := capsule.ReadStepOverrides(capsuleDir)
+	if oerr != nil {
+		ov = capsule.StepOverrides{}
+	}
+	return fm, wcfg, ov, nil
 }
 
 // dispatchWorkspace is the dispatch-time read of project's workspace

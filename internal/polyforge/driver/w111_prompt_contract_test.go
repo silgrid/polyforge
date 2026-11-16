@@ -124,7 +124,7 @@ func TestW111WaitingPrincipleInEveryPrincipledPrompt(t *testing.T) {
 			continue
 		}
 		principled++
-		rendered, err := readStepDefinition(bs[0], step, shippedVars(t, bs[0], step))
+		rendered, err := readShippedDefinition(t, bs[0], step)
 		if err != nil {
 			t.Fatalf("render %s/%s: %v", bundle, step, err)
 		}
@@ -168,7 +168,7 @@ func TestW111ReleaseStepsAwaitInsideOneCall(t *testing.T) {
 		{"release", `set -o pipefail; cd repos/<owner> && .polyforge/release.sh [<bump>] 2>&1 | tee ../../artifacts/release.log`, "120 minutes"},
 	} {
 		bundle := filepath.Join(shippedWorkflowsDir, "release")
-		def, err := readStepDefinition(bundle, c.step, shippedVars(t, bundle, c.step))
+		def, err := readShippedDefinition(t, bundle, c.step)
 		if err != nil {
 			t.Fatalf("read release/%s: %v", c.step, err)
 		}
@@ -222,7 +222,7 @@ func TestW111BuildStepsRunTheScopedReport(t *testing.T) {
 		{"develop", "build"},
 	} {
 		bundle := filepath.Join(shippedWorkflowsDir, bs[0])
-		def, err := readStepDefinition(bundle, bs[1], shippedVars(t, bundle, bs[1]))
+		def, err := readShippedDefinition(t, bundle, bs[1])
 		if err != nil {
 			t.Fatalf("read %s/%s: %v", bs[0], bs[1], err)
 		}

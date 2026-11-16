@@ -2,7 +2,8 @@ package cli
 
 // config_yaml_edit.go: the byte-preserving `.polyforge.yaml` editor.
 // A step write
-// (steps.<project>.<step-id>.models|skip) touches only the addressed line
+// (steps.<project>.<step-id>.models|skip|by, or
+// steps.<project>.<step-id>.params.<name>) touches only the addressed line
 // inside the `steps:` block, creating a missing section, project or step
 // entry in block style and expanding a flow-style entry once. Every other
 // byte — comments, ordering, the other sections — survives. The proposed
@@ -34,9 +35,10 @@ func isWorkspaceKey(key string) bool {
 }
 
 // stepKey is one addressed step key: steps.<project>.<step>.<leaf>, the
-// leaf `models`, `skip` or `by`; the zero leaf is `models`.
+// leaf `models`, `skip` or `by` (the zero leaf is `models`), or
+// steps.<project>.<step>.params.<param>, the leaf `params` naming param.
 type stepKey struct {
-	project, step, leaf string
+	project, step, leaf, param string
 }
 
 // leafName answers the addressed leaf's yaml key.
@@ -52,6 +54,7 @@ const (
 	stepLeafModels = "models"
 	stepLeafSkip   = "skip"
 	stepLeafBy     = "by"
+	stepLeafParams = "params"
 )
 
 func parseStepKey(key string) (stepKey, bool) {
@@ -67,6 +70,9 @@ func parseStepKey(key string) (stepKey, bool) {
 	if len(parts) == 4 && (parts[3] == stepLeafModels || parts[3] == stepLeafSkip || parts[3] == stepLeafBy) {
 		return stepKey{project: parts[1], step: parts[2], leaf: parts[3]}, true
 	}
+	if len(parts) == 5 && parts[3] == stepLeafParams {
+		return stepKey{project: parts[1], step: parts[2], leaf: stepLeafParams, param: parts[4]}, true
+	}
 	return stepKey{}, false
 }
 
@@ -80,7 +86,7 @@ func runWorkspaceWrite(ctx *Context, set bool, pos []string, exp configExpectati
 	}
 	sk, isStep := parseStepKey(key)
 	if !isStep {
-		return fmt.Errorf("config: unknown workspace key %q (steps.<project>.<step-id>.models|skip)", key)
+		return fmt.Errorf("config: unknown workspace key %q (steps.<project>.<step-id>.models|skip|by, or steps.<project>.<step-id>.params.<name>)", key)
 	}
 	ws, err := resolveWorkspaceTarget(ctx, key, wsFlag, cwdFlag)
 	if err != nil {
@@ -135,6 +141,18 @@ func runWorkspaceWrite(ctx *Context, set bool, pos []string, exp configExpectati
 			}
 			if !human[sk.step] {
 				return fmt.Errorf("config set %s: no lane of this workspace declares step %s human_mergeable (`human_mergeable: true` in its workflow.yaml); a step its lane does not declare human_mergeable always runs itself", key, sk.step)
+			}
+		}
+		if sk.leaf == stepLeafParams {
+			// a param value governs only a step whose lane declares the
+			// param: a write needs one lane of the set that does (the
+			// key is shared by step id across lanes, owner ruling 6)
+			declared, err := workflow.ForWorkspace(workflowsDir, ws).DeclaredParams()
+			if err != nil && !errors.As(err, &ule) {
+				return fmt.Errorf("config set %s: the installed workflows are unreadable, so the param cannot be checked: %w", key, err)
+			}
+			if !declared[sk.step][sk.param] {
+				return fmt.Errorf("config set %s: no lane of this workspace declares the param %s on step %s (`params: { %s: <default> }` in its workflow.yaml), so the value would govern nothing", key, sk.param, sk.step, sk.param)
 			}
 		}
 	}
@@ -242,8 +260,16 @@ func resolveWorkspaceTarget(ctx *Context, key, wsFlag, cwdFlag string) (string, 
 
 // stepLeafValue renders the yaml text of the value of the step key named
 // key: a skip is the literal true or false, a by is the mode name the
-// loader takes (the one `human`), a models list is stepValue's.
+// loader takes (the one `human`), a param value the quoted string (one
+// line, within the bound: workflow.ParamValueProblem), a models list is
+// stepValue's.
 func stepLeafValue(key, leaf, raw string) (string, error) {
+	if leaf == stepLeafParams {
+		if why := workflow.ParamValueProblem(raw); why != "" {
+			return "", fmt.Errorf("config set %s: %s", key, why)
+		}
+		return strconv.Quote(raw), nil
+	}
 	if leaf == stepLeafBy {
 		if v := strings.TrimSpace(raw); v == workspace.ByHuman {
 			return v, nil
@@ -470,11 +496,12 @@ func hasChildren(lines []string, i int) bool {
 }
 
 // editStepsYAML applies one step-key write: set replaces (or inserts) the
-// addressed leaf line (models or skip), creating the steps section, the project and the
-// step entry in block style when absent; unset removes the line and then
-// every entry the removal left empty (a step entry that declares nothing,
-// a project with no entry, an empty steps section), so a cleared chain
-// falls back one level.
+// addressed leaf line (models, skip, by, or a param under the entry's
+// params), creating the steps section, the project, the step entry and its
+// params block in block style when absent; unset removes the line and then
+// every entry the removal left empty (a params block with no value, a step
+// entry that declares nothing, a project with no entry, an empty steps
+// section), so a cleared chain falls back one level.
 func editStepsYAML(text string, sk stepKey, value string, set bool) string {
 	lines := strings.Split(text, "\n")
 	trailingNL := strings.HasSuffix(text, "\n")
@@ -496,6 +523,10 @@ func editStepsYAML(text string, sk stepKey, value string, set bool) string {
 		lines, s = ensureChild(lines, -1, "steps")
 		lines, p = ensureChild(lines, s, sk.project)
 		lines, st = ensureChild(lines, p, sk.step)
+		if sk.leaf == stepLeafParams {
+			lines, st = ensureChild(lines, st, stepLeafParams)
+			return join(setLeaf(lines, st, sk.param, value))
+		}
 		return join(setLeaf(lines, st, sk.leafName(), value))
 	}
 	s := findChild(lines, -1, "steps")
@@ -516,6 +547,17 @@ func editStepsYAML(text string, sk stepKey, value string, set bool) string {
 	m := findChild(lines, st, sk.leafName())
 	if m < 0 {
 		return text
+	}
+	if sk.leaf == stepLeafParams {
+		lines = expandFlow(lines, m)
+		v := findChild(lines, m, sk.param)
+		if v < 0 {
+			return text
+		}
+		lines = dropNode(lines, v)
+		if hasChildren(lines, m) {
+			return join(lines)
+		}
 	}
 	lines = dropNode(lines, m)
 	if !hasChildren(lines, st) {

@@ -61,19 +61,20 @@ func testQualityFragment(t *testing.T) string {
 	return string(raw)
 }
 
-// testQualityStepVars answers the shipped step's own vars (develop's build
-// renders {{supplement_limit}} from its workflow.yaml, polyforge#52), so a
-// raw render of a shipped definition is the shipped one.
-func testQualityStepVars(t *testing.T, bundle, step string) map[string]string {
+// testQualityStepVars answers the loaded shipped step's vars and params
+// (develop's build renders {{supplement_limit}} from its workflow.yaml,
+// polyforge#52; params at their lane defaults), so a raw render of a
+// shipped definition is the shipped one.
+func testQualityStepVars(t *testing.T, bundle, step string) (vars, params map[string]string) {
 	t.Helper()
 	lane, err := workflow.LoadStrict(filepath.Join(v1Root(t), "workflows", bundle))
 	if err != nil {
 		t.Fatalf("load workflows/%s: %v", bundle, err)
 	}
 	if s := lane.Step(step); s != nil {
-		return s.Vars
+		return s.Vars, s.Params
 	}
-	return nil
+	return nil, nil
 }
 
 // testQualityOnce asserts one rendered definition carries every
@@ -111,7 +112,8 @@ func TestTestQualityFragmentReachesItsSteps(t *testing.T) {
 		if strings.Contains(raw, frag) {
 			t.Errorf("%s carries a second copy of the test_quality fragment", rel)
 		}
-		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, testQualityStepVars(t, bundle, step))
+		vars, params := testQualityStepVars(t, bundle, step)
+		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, vars, params)
 		if err != nil {
 			t.Fatalf("render %s: %v", rel, err)
 		}
@@ -131,7 +133,7 @@ func TestTestQualityFragmentReachesItsSteps(t *testing.T) {
 	if n := strings.Count(w149CarrierRead(t, rel), "{{test_quality}}"); n != 1 {
 		t.Errorf("%s includes {{test_quality}} %d times, want exactly 1", rel, n)
 	}
-	out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", "develop"), "review", s.Vars)
+	out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", "develop"), "review", s.Vars, s.Params)
 	if err != nil {
 		t.Fatalf("render %s: %v", rel, err)
 	}
@@ -221,7 +223,8 @@ func TestAsyncSettleDutyReachesItsSteps(t *testing.T) {
 	}
 	renders := map[string]string{}
 	for _, bs := range [][2]string{{"develop", "build"}, {"micro", "fix"}} {
-		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bs[0]), bs[1], testQualityStepVars(t, bs[0], bs[1]))
+		vars, params := testQualityStepVars(t, bs[0], bs[1])
+		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bs[0]), bs[1], vars, params)
 		if err != nil {
 			t.Fatalf("render %s/%s: %v", bs[0], bs[1], err)
 		}
@@ -235,7 +238,7 @@ func TestAsyncSettleDutyReachesItsSteps(t *testing.T) {
 	if s == nil {
 		t.Fatal("the develop lane declares no review step")
 	}
-	out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", "develop"), "review", s.Vars)
+	out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", "develop"), "review", s.Vars, s.Params)
 	if err != nil {
 		t.Fatalf("render review: %v", err)
 	}

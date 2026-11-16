@@ -48,7 +48,7 @@ func TestW131WaitingRuleReachesLongRunSteps(t *testing.T) {
 		if stray := w111StraySleeps(filepath.ToSlash(rel), string(raw)); len(stray) > 0 {
 			t.Errorf("%s repeats sleep wording outside the shared rule: %q", key, stray)
 		}
-		def, err := readStepDefinition(dir, step, shippedVars(t, dir, step))
+		def, err := readShippedDefinition(t, dir, step)
 		if err != nil {
 			t.Fatalf("render %s: %v", key, err)
 		}
