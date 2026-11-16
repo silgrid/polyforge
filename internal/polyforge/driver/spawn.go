@@ -793,11 +793,33 @@ func changedParams(prev, cur map[string]string) map[string]string {
 	return out
 }
 
+// toolNameCorrection is the tool-name correction rule every step
+// instruction carries (polyforge#82 / cpm-for-legal#382): a step agent
+// session runs no MCP server — the pi step agent dir's minimal set keeps
+// mcp.json out, claude runs under --strict-mcp-config — so a `Tool …
+// not found` reply means the model wrote a wrong (often `mcp__…`-shaped)
+// name: retry with the real one, never read it as an environment fault
+// (the misreading that ends a turn without `pf step handoff` and loops
+// the step). The step prompt's copy is the `## Tool names` section of
+// workflows/_shared/step-header.md (part 3 of every prompt); this one
+// reaches the short EWR reminder, which re-sends no part of that file.
+// The two copies are one fact in two places, pinned folded-equal by
+// TestW82EwrReminderCarriesToolNameCorrection.
+const toolNameCorrection = "This environment runs no MCP server: no `mcp__…`-shaped tool name exists. " +
+	"The tools available to you are exactly the built-ins your harness opened this conversation with — " +
+	"on a pi dispatch `bash`, `read`, `edit`, `write` (plus `subagent`, when the operator's agent dir " +
+	"carries the sub-agent extension); on a claude dispatch `Bash`, `Read`, `Edit`, `Write`, `Glob`, " +
+	"`Grep`, `TodoWrite`, `Agent`. A `Tool … not found` reply means you wrote a wrong name: retry with " +
+	"the exact name from that list. It is not an environment fault, and never a reason to stop working " +
+	"or to end your turn without `pf step handoff`."
+
 // ewrResumeReminder is the whole instruction of the first retry after a
 // turn that ended without `pf step handoff`, when it resumes the same
 // harness session: the resumed conversation already holds
 // every part of the prompt, so re-sending it would restart the work. The
-// reminder carries only the hand-off duty.
+// reminder carries the hand-off duty and the tool-name correction (the
+// one sentence of the step header the loop this reminder breaks feeds
+// on: a misread `Tool … not found`).
 func ewrResumeReminder(p promptParts) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are resuming step `%s` of polyforge work item `%s` (round %d, dispatch %d).\n\n", p.StepID, p.WIID, p.Round, p.SpawnN)
@@ -805,6 +827,7 @@ func ewrResumeReminder(p promptParts) string {
 	b.WriteString("- If the work is already done, hand off now with `pf step handoff` and end your turn.\n")
 	b.WriteString("- Otherwise finish only the remaining work, then hand off.\n")
 	b.WriteString("- Do not start over and do not redo work you already completed.\n\n")
+	b.WriteString(toolNameCorrection + "\n\n")
 	b.WriteString("The instructions you already have still apply.\n")
 	return b.String()
 }
