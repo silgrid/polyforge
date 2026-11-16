@@ -401,7 +401,9 @@ items that merged.
   clone's root), reused by the release when the released commit
   carries a green tag — written only by `gate.py --mark-green` after a
   pass — for the same gate id and plan digest (`tools/gate-id`,
-  `tools/green-tag check`). A change to a gate line of this conf or to the
+  `tools/green-tag check`). This repository gates itself: its tree
+  carries the engine and the gate id the gate falls back to for a
+  repository that carries neither. A change to a gate line of this conf or to the
   Dockerfile is a change to the release gate. `make test` is a developer
   subset and gates nothing. The contract is in
   [docs/reference/release.md](reference/release.md#the-test-gate).

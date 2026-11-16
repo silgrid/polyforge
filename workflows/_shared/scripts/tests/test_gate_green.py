@@ -1,7 +1,12 @@
 """gate.py's green tag: written only for a pass of this runner on a clean
 tree at the commit HEAD still is, as one annotated tag on the remote whose
-message is the record; the same record never tagged twice; a name another
-writer took first moves to the next number, never forced over. The Go
+message is the record; the same record never tagged twice — the sources
+count as part of the record: a tag another source wrote (the tree's vs the
+lane's engine and gate id) is never reused, a pre-change record without
+the source fields is the tree's by construction and is; a name another
+writer took first moves to the next number, never forced over; a clone
+without tools/gate-id is tagged with the lane's pfstep.gateid, its id the
+one tools/gate-id computes over the same commit. The Go
 side's twin was verifyrun/w405_gate_green_test.go (the tag half)."""
 
 import dataclasses
@@ -17,7 +22,7 @@ import gate
 from pfstep import proc
 
 from .fakebox import FakeRuntime
-from .gatefix import HAVE_BASH, HAVE_GIT, HAVE_PY, IDENT, git_t, green_clone, run_gate, write_files
+from .gatefix import GATE_ID_SRC, HAVE_BASH, HAVE_GIT, HAVE_PY, IDENT, git_t, green_clone, run_gate, write_files
 
 NOW = datetime.datetime(2026, 11, 8, 9, 30, 0, tzinfo=datetime.timezone.utc)
 
@@ -57,10 +62,13 @@ class GreenTagTest(unittest.TestCase):
         rec = self.record(name)
         gid = subprocess.run(["sh", "tools/gate-id", self.head], cwd=self.dir, check=True, stdout=subprocess.PIPE).stdout.decode().strip()
         want = {"commit": self.head, "gate_id": gid, "runner": gate.GATE_RUNNER, "runner_version": gate.GATE_RUNNER_VERSION,
-                "plan_digest": self.res.plan_digest, "verified_at": "2026-11-08T09:30:00Z"}
+                "plan_digest": self.res.plan_digest, "engine_source": "tree", "gate_id_source": "tree",
+                "verified_at": "2026-11-08T09:30:00Z"}
         for k, v in want.items():
             self.assertEqual(rec[k], v, k)
-        self.assertEqual(list(rec), ["commit", "gate_id", "runner", "runner_version", "plan_digest", "verified_at", "summary"])
+        self.assertEqual(list(rec),
+                         ["commit", "gate_id", "runner", "runner_version", "plan_digest", "engine_source",
+                          "gate_id_source", "verified_at", "summary"])
         self.assertIn("1 commands passed", rec["summary"])
         self.assertTrue(rec["summary"].endswith("by hand"), rec["summary"])
         self.assertEqual(git_t(self.origin, "for-each-ref", "--format=%(taggername)", "refs/tags/" + name), IDENT["GIT_COMMITTER_NAME"],
@@ -69,6 +77,55 @@ class GreenTagTest(unittest.TestCase):
         again, created = gate.mark_green(self.g, self.dir, "origin", "again", self.res, now=NOW + datetime.timedelta(hours=1))
         self.assertEqual((again, created), (name, False))
         self.assertEqual(len(git_t(self.origin, "tag", "-l", "green/*").split()), 3)
+
+    def push_tag(self, name: str, rec_text: str) -> None:
+        """An annotated tag planted on this test's head, pushed to its origin —
+        through git_t's bare subprocess with the test's identity, never the
+        gate's hardened Git (pfstep.git drops the GIT_* identity variables, so
+        a tag it plants has whatever identity the host's git config happens to
+        give — none in a verification container)."""
+        git_t(self.dir, "tag", "-a", "-m", rec_text, name, self.head)
+        git_t(self.dir, "push", "--quiet", "origin", "refs/tags/" + name)
+
+    def base_record(self) -> Dict[str, str]:
+        gid = subprocess.run(["sh", "tools/gate-id", self.head], cwd=self.dir, check=True,
+                             stdout=subprocess.PIPE).stdout.decode().strip()
+        return {"commit": self.head, "gate_id": gid, "runner": gate.GATE_RUNNER,
+                "runner_version": gate.GATE_RUNNER_VERSION, "plan_digest": self.res.plan_digest}
+
+    def test_a_tag_of_another_source_is_never_reused(self) -> None:
+        # the same commit, gate id, runner and plan digest — but the
+        # lane's sources: another writer's record, never this one's
+        rec = dict(self.base_record(), engine_source="lane", gate_id_source="lane",
+                   verified_at="2026-11-08T08:00:00Z", summary="the lane's")
+        self.push_tag("green/20261108-1", json.dumps(rec, separators=(",", ":")))
+        name, created = gate.mark_green(self.g, self.dir, "origin", "s", self.res, now=NOW)
+        self.assertEqual((name, created), ("green/20261108-2", True))
+
+    def test_a_pre_change_tag_without_the_sources_is_read_as_the_trees(self) -> None:
+        # before the sources existed only the tree's engine and gate id
+        # could write a tag: a record without the fields is the tree's
+        rec = dict(self.base_record(), verified_at="2026-11-07T08:00:00Z", summary="pre-change")
+        self.push_tag("green/20261108-1", json.dumps(rec, separators=(",", ":")))
+        name, created = gate.mark_green(self.g, self.dir, "origin", "s", self.res, now=NOW)
+        self.assertEqual((name, created), ("green/20261108-1", False), "the tree's own record, reused")
+
+    def test_a_clone_without_tools_gate_id_is_tagged_with_the_lanes(self) -> None:
+        root = os.path.join(self.root, "bare")
+        d = green_clone(root, "stack=none\nfast_gate=echo one\n", engine=False, gate_id=False)
+        r = run_gate(d, FakeRuntime(os.path.join(root, "box-tmp")), os.path.join(root, "logs"))
+        self.assertTrue(r.res.passed, r.progress)
+        self.assertEqual((r.res.engine_source, r.res.gate_id_source), ("lane", "lane"))
+        name, created = gate.mark_green(self.g, d, "origin", "s", r.res, now=NOW)
+        self.assertEqual((name, created), ("green/20261108-1", True))
+        body = git_t(os.path.join(root, "origin.git"), "for-each-ref", "--format=%(contents)", "refs/tags/" + name)
+        rec = json.loads(body)
+        # the id is the one tools/gate-id computes for this commit — the
+        # oracle run with the repository's own script in the fixture
+        gid = subprocess.run(["sh", GATE_ID_SRC, git_t(d, "rev-parse", "HEAD")], cwd=d, check=True,
+                             stdout=subprocess.PIPE).stdout.decode().strip()
+        self.assertEqual(rec["gate_id"], gid)
+        self.assertEqual((rec["engine_source"], rec["gate_id_source"]), ("lane", "lane"))
 
     def test_the_lanes_tagger(self) -> None:
         name, _ = gate.mark_green(self.g, self.dir, "origin", "batch", self.res, tagger=gate.LANE_TAGGER, now=NOW)
