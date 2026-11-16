@@ -372,17 +372,17 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 	m.finish(ctx, e, report.String(), tokens, capped, completed, lastErr, attempts)
 }
 
+// ErrorCancelled is the Error of a task the owner ended with `pf task
+// cancel` — an interrupted task that no daemon stop interrupted (the
+// analysis re-queue tells the two apart, polyforge#72).
+const ErrorCancelled = "cancelled by `pf task cancel`"
+
 // dispatchedPrompt answers what one run's harness reads: the shared
 // prohibited-actions section (harness.TaskProhibitedActions,
 // — the list every step carries, scoped to the task's
 // working directory, its exception naming the task alone) ahead of the
 // task's own prompt. The record keeps the prompt as given: list, show and
 // the prompt summary never carry the section.
-// ErrorCancelled is the Error of a task the owner ended with `pf task
-// cancel` — an interrupted task that no daemon stop interrupted (the
-// analysis re-queue tells the two apart, polyforge#72).
-const ErrorCancelled = "cancelled by `pf task cancel`"
-
 func dispatchedPrompt(prompt, dir string) string {
 	return harness.TaskProhibitedActions(dir) + "\n# Task\n\n" + prompt
 }
