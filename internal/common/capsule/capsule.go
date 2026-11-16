@@ -312,7 +312,9 @@ type Budget struct {
 // guard, held when a gate hands off fail (`pf step handoff` refuses a fail
 // not citing the owner once it is spent); RewindOwner (a rewind the
 // owner's word routed: a gate's fail or a rewind --to citing the owner)
-// counts toward nothing.
+// counts toward nothing; RewindUncounted (a gate FAIL whose one-line
+// reason falls in the lane's `uncounted_rewinds` class) counts toward
+// nothing but its own cap.
 //
 // By, At and Reason are set on a rewind --to citing the owner only: who
 // ordered it, when (RFC3339Nano) and the reason verbatim; Gate is then the

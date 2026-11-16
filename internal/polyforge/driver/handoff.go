@@ -423,6 +423,9 @@ func (d *Driver) handoffEvents(stepID string, res *StepResult, before, after *ca
 		if own := OwnerRewindCount(after.RewindStats.Rewinds); own > 0 {
 			count += fmt.Sprintf(l.OwnerRewinds, own)
 		}
+		if un := UncountedRewindCount(after.RewindStats.Rewinds); un > 0 {
+			count += fmt.Sprintf(l.UncountedRewinds, un, MaxUncountedRewinds(d.workflow))
+		}
 		if h.PerOwner != "" || h.Status == stepcall.StatusRewind {
 			count += l.PerOwnerUncounted
 		}

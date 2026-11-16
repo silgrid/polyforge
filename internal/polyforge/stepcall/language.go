@@ -72,9 +72,9 @@ type Labels struct {
 	StatStartUnknown, StatNoCommits, StatUnavailable, StatNoChanges          string
 	RoundEvents, OwnerMessages, None, PerOwner, Body                         string
 	// The event sections (回退 / Rewind, 收尾 / Close).
-	Event, Rewind, Close, EventNote, Trigger, TriggerText, TriggerPerOwner string
-	EventReason, ReasonSeeBody, ResultEnded, ResultCanceled, Redo, Rewinds string
-	OwnerRewinds, PerOwnerUncounted, HowToRead, ResultCompleted            string
+	Event, Rewind, Close, EventNote, Trigger, TriggerText, TriggerPerOwner        string
+	EventReason, ReasonSeeBody, ResultEnded, ResultCanceled, Redo, Rewinds        string
+	OwnerRewinds, UncountedRewinds, PerOwnerUncounted, HowToRead, ResultCompleted string
 }
 
 var labels = map[string]Labels{
@@ -140,6 +140,7 @@ var labels = map[string]Labels{
 		Redo:              "要重做的步骤（按顺序）：%s",
 		Rewinds:           "回退次数：%d/%d",
 		OwnerRewinds:      "（另有 owner 的回退 %d 次，不计次数）",
+		UncountedRewinds:  "（另有不计数类回退 %d/%d 次）",
 		PerOwnerUncounted: "；本次依据 owner 的话，不计次数",
 		HowToRead:         "读法：被点名的步骤逐条回应上一轮（正文加「回应上一轮」）；它们之前的段落仍然有效、可以参考",
 		ResultCompleted:   "结果：车道的每一步都已 done，daemon 收尾（wrap）工单",
@@ -206,6 +207,7 @@ var labels = map[string]Labels{
 		Redo:              "Steps to redo (in order): %s",
 		Rewinds:           "Rewinds: %d/%d",
 		OwnerRewinds:      " (plus %d owner rewinds, not counted)",
+		UncountedRewinds:  " (plus %d/%d lane-declared uncounted rewinds)",
 		PerOwnerUncounted: "; this one rests on the owner's word and is not counted",
 		HowToRead:         "How to read: each named step answers the previous round point by point (its body adds the re-entry heading); the sections before it still stand as reference",
 		ResultCompleted:   "Result: every step of the lane is done; the daemon wraps the work item",
