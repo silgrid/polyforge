@@ -76,8 +76,8 @@ type Lane struct {
 	// the parent's project name; "" when the lane declares none, which
 	// leaves such a sub-ticket's claim untouched).
 	ChildrenBranch string
-	Defaults   *Defaults
-	Steps      []Step
+	Defaults       *Defaults
+	Steps          []Step
 }
 
 // UncountedRewinds is the lane's declared uncounted rewind class
