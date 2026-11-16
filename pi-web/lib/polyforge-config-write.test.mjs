@@ -128,11 +128,13 @@ test("a Host pattern-list write carries the --host pin and reaches pf as one JSO
   });
   const setCall = calls(tree).find((call) => call.args.includes("set"));
   assert.ok(setCall, "the write reached pf");
-  const keyIdx = setCall.args.indexOf("transient_error_patterns");
-  assert.ok(keyIdx > 0, "the key is on the argv");
-  const valueIdx = setCall.args.findIndex((arg, i) => i > keyIdx && arg.startsWith("["));
-  assert.equal(setCall.args[valueIdx], JSON.stringify(["\\b402\\b", "payment retry"]), "the value is one JSON array");
-  assert.ok(setCall.args.includes("--host"), "the write is pinned to the Host scope");
+  // the exact Host write: the scope suffix `--host` follows the key, then
+  // the value as one JSON array, then the CAS expectation
+  assert.deepEqual(setCall.args.slice(setCall.args.indexOf("--json")), [
+    "--json", "config", "set", "transient_error_patterns", "--host",
+    JSON.stringify(["\\b402\\b", "payment retry"]),
+    "--expect-state", JSON.stringify({ file_sha256: tree.sha(tree.cliToml) }),
+  ], "the write is pinned to the Host scope and the value is one JSON array");
   assert.ok(!setCall.args.includes("--cwd") && !setCall.args.includes("--workspace"), "a Host key carries no path flag");
 
   reset(tree);
