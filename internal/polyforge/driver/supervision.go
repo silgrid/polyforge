@@ -739,7 +739,15 @@ func (d *Driver) limits() supervise.Defaults {
 // zeroes it.
 func (d *Driver) effectiveThresholdsLocked(stepID string, gran supervise.Granularity) supervise.Thresholds {
 	tool, wall := d.stepBases(stepID)
-	th := supervise.Thresholds{Silence: d.limits().SilenceFor(gran), Tool: tool, StepTimeout: wall}
+	lim := d.limits()
+	th := supervise.Thresholds{
+		Silence: lim.SilenceFor(gran), Tool: tool, StepTimeout: wall,
+		// polyforge#51: the slow-model judgement's live bounds (the
+		// monitor replays them every tick; a zero here would be filled
+		// by the documented default at the judge).
+		SlowModelMedianLatency: lim.SlowModelMedianLatency,
+		SlowModelP90Latency:    lim.SlowModelP90Latency,
+	}
 	// The step's own floor: its wall estimate and any persisted relaxed
 	// bound, WITHOUT the current global T. The supervisor replays
 	// T = max(live step_timeout, floor) every tick, so a live reload of

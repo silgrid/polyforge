@@ -228,12 +228,15 @@ func TestJudgeRuleTable(t *testing.T) {
 		}
 		// polyforge#51: the slow-model cause reads the completed calls'
 		// single-call latencies — six calls of 14m each, the dispatch
-		// itself past half of T.
+		// itself past half of T. Each call closes with a tool's start (an
+		// error-ended turn would make rule 1 outrank rule 4).
 		tr2 := newTrackerAt(c, Thresholds{Silence: time.Hour * 10, Tool: time.Hour, StepTimeout: T})
 		for i := 0; i < 6; i++ {
 			tr2.WaitingModel()
 			c.advance(14 * time.Minute)
-			tr2.TurnEnded(false, "")
+			id := "c" + string(rune('0'+i))
+			tr2.ToolStart(id, "bash", "")
+			tr2.ToolEnd(id, "bash")
 		}
 		c.advance(7 * time.Minute) // past T, in tool/idle time
 		if v := judge(c, tr2); v == nil || v.Cause != CauseStepTimeoutSlowModel {

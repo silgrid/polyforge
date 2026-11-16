@@ -29,9 +29,11 @@ import (
 // Cause is the supervisor's judgement of why a dispatch is dead
 // (v2-converge 2.3). The numeric prefix in the comments is the rule
 // priority: when several rules fire at once the lowest number wins. Rule 4
-// splits a cumulative-T expiry by the dying dispatch's own share
-// (slowModelOwnsTimeout): 4b only when it ran at least half of T and waited
-// on the model for at least half of its runtime, 4a otherwise.
+// splits a cumulative-T expiry by the dying dispatch's own share and its
+// completed calls' single-call latencies (slowModelOwnsTimeout, polyforge#51):
+// 4b only when it ran at least half of T and its completed model calls were
+// individually slow (the median or the p90 over their bounds, from at
+// least MinSlowModelCalls calls), 4a otherwise.
 type Cause string
 
 const (

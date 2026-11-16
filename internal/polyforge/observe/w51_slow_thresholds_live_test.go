@@ -4,7 +4,9 @@ package observe
 // bounds are live — a dispatch in flight is judged by the bounds the
 // LiveLimits closure reads at the tick, not the ones its step_started
 // announced, so a reload of slow_model_median_latency reaches it without a
-// restart.
+// restart. The waiting share alone decides nothing (polyforge#25): a
+// dispatch that spent the whole clock waiting still expires as a long task
+// once its completed calls were individually fast.
 
 import (
 	"sync/atomic"
@@ -20,36 +22,35 @@ func TestW51LiveSlowThresholdsReachTheInFlightDispatch(t *testing.T) {
 	median.Store(int64(time.Hour))
 	m, _ := newTestMonitor(t, h, func(c *monitorCfg) {
 		c.LiveLimits = func() supervise.Defaults {
-			return supervise.Defaults{StepTimeout: time.Hour, SlowModelMedianLatency: time.Duration(median.Load())}
+			return supervise.Defaults{StepTimeout: 500 * time.Millisecond, SlowModelMedianLatency: time.Duration(median.Load())}
 		}
 	})
-	// The dispatch announces slow bounds far above anything this test
-	// produces; the live closure starts at the same far value.
-	median.Store(int64(time.Hour))
+	// The dispatch announced slow bounds of 10ms; the operator RAISES the
+	// live median to an hour before the expiry, so the tick must judge
+	// with the live bound and the expiry stays a long task.
 	tr := startDispatch(m, 1, "fix", supervise.Thresholds{
 		Silence: time.Hour, Tool: time.Hour,
 		StepTimeout:            500 * time.Millisecond,
-		SlowModelMedianLatency: time.Hour,
-		SlowModelP90Latency:    time.Hour,
+		SlowModelMedianLatency: 10 * time.Millisecond,
+		SlowModelP90Latency:    10 * time.Millisecond,
 	})
-	// five completed calls, individually ~70ms — slow once the operator
-	// lowers the live median bound to 10ms. Each call is closed by a
-	// tool's start (never an error turn: rule 1 outranks rule 4).
+	// five completed calls of ~30ms (slow under the announced 10ms bound,
+	// fast under the raised one), closed by a tool's start — never an
+	// error turn (rule 1 outranks rule 4) — and then one call in progress
+	// that carries the rest of the clock.
 	for i := 0; i < 5; i++ {
 		tr.WaitingModel()
-		time.Sleep(70 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond)
 		id := "c" + string(rune('0'+i))
 		tr.ToolStart(id, "bash", "")
 		tr.ToolEnd(id, "bash")
 	}
-	median.Store(int64(10 * time.Millisecond))
-	// run the clock past T (the calls already put the dispatch past half
-	// of it); the tick judges with the LIVE bound -> slow model
-	time.Sleep(200 * time.Millisecond)
+	tr.WaitingModel()
+	time.Sleep(400 * time.Millisecond)
 	v := nextVerdict(t, m, "the live slow threshold")
 	dead, ok := v.(supervise.StepDead)
-	if !ok || dead.Cause != supervise.CauseStepTimeoutSlowModel {
-		t.Fatalf("verdict %+v, want %s — the live median bound must reach the in-flight dispatch",
-			v, supervise.CauseStepTimeoutSlowModel)
+	if !ok || dead.Cause != supervise.CauseStepTimeoutLongTask {
+		t.Fatalf("verdict %+v, want %s — the RAISED live median bound must reach the in-flight dispatch (the waiting share alone decides nothing)",
+			v, supervise.CauseStepTimeoutLongTask)
 	}
 }

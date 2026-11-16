@@ -44,6 +44,11 @@ type ToolRun struct {
 type closedPhase struct {
 	model      bool
 	start, end time.Time
+	// latIdx is the model call's index in callLatencies (-1 when the
+	// phase is a tool's or the latency list was not recorded), so the
+	// observation-gap correction can forgive the same span in the
+	// recorded latency as it does in the cumulative split.
+	latIdx int
 }
 
 // maxClosedSinceTick bounds the pending list for a tracker whose monitor
@@ -74,6 +79,10 @@ type Tracker struct {
 	waitingSince time.Time
 	lastOutput   time.Time
 	modelDur     time.Duration // closed model phases
+	// callLatencies are the COMPLETED model calls' durations, in close
+	// order (polyforge#51): one entry per closed model phase, never the
+	// call in progress — rule 4's median/p90 read them.
+	callLatencies []time.Duration
 
 	tools   map[string]*ToolRun
 	toolDur time.Duration // closed tool runs
@@ -171,8 +180,13 @@ func (t *Tracker) addClosedLocked(model bool, start, end time.Time) {
 	if d < 0 {
 		d = 0
 	}
+	latIdx := -1
+	if model {
+		t.callLatencies = append(t.callLatencies, d)
+		latIdx = len(t.callLatencies) - 1
+	}
 	if len(t.closedSinceTick) < maxClosedSinceTick {
-		t.closedSinceTick = append(t.closedSinceTick, closedPhase{model: model, start: start, end: end})
+		t.closedSinceTick = append(t.closedSinceTick, closedPhase{model: model, start: start, end: end, latIdx: latIdx})
 	}
 	if model {
 		t.modelDur += d
@@ -439,6 +453,9 @@ func (t *Tracker) ObserveTick(cutoff time.Time, shift time.Duration) {
 			}
 			if c.model {
 				t.modelDur = max(t.modelDur-shift, 0)
+				if c.latIdx >= 0 && c.latIdx < len(t.callLatencies) {
+					t.callLatencies[c.latIdx] = max(t.callLatencies[c.latIdx]-shift, 0)
+				}
 			} else {
 				t.toolDur = max(t.toolDur-shift, 0)
 			}
@@ -523,11 +540,12 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 		LastWork:    t.lastWork,
 		LastNoise:   t.lastNoise,
 
-		Waiting:      t.waiting,
-		WaitingSince: t.waitingSince,
-		LastOutput:   t.lastOutput,
-		ModelTime:    t.modelDur,
-		ToolTime:     t.toolDur,
+		Waiting:            t.waiting,
+		WaitingSince:       t.waitingSince,
+		LastOutput:         t.lastOutput,
+		ModelTime:          t.modelDur,
+		ModelCallLatencies: append([]time.Duration(nil), t.callLatencies...),
+		ToolTime:           t.toolDur,
 
 		TurnEnded:   t.turnEnded,
 		TurnEndedAt: t.turnEndedAt,
