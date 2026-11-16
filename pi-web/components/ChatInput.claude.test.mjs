@@ -102,6 +102,23 @@ test("an open claude session shows the model selector, the effort control and th
 // the turn ends), Stop compaction while claude's own compaction runs, disabled
 // only while the stream has not said whether the session is idle — and it takes
 // pi's run-end stray-click guard. Model and effort stay rendered, disabled.
+// polyforge#71 (AC6): a claude session's model switch shows pi's own spinner
+// (ModelSelector busy), and nothing else — the effort control never spins (Q3=A).
+test("a claude session's model switch shows pi's spinner on the model selector only", () => {
+  const open = { ...base, choosing: false, harness: "claude", model: "claude-sonnet-5-5", onModelChange() {}, onEffortChange() {} };
+  const switching = composer({ ...open, modelSwitching: true }, {});
+  assert.match(switching, /aria-busy="true"/, "the selector is busy while claude takes the switch");
+  assert.match(switching, /style="[^"]*animation:spin 0\.8s linear infinite/, "pi's spinner");
+  assert.match(switching, /title="Switching model"/, "pi's busy tooltip");
+  const idle = composer(open, {});
+  assert.doesNotMatch(idle, /aria-busy="true"/, "no spinner while idle");
+  assert.doesNotMatch(idle, /animation:spin/, "no stray spinner");
+  for (const [name, html] of [["switching", switching], ["idle", idle]]) {
+    const effort = html.match(/<button[^>]*aria-label="Change reasoning level"[^>]*>/)?.[0] ?? "";
+    assert.doesNotMatch(effort, /aria-busy/, `the effort control never spins (${name})`);
+  }
+});
+
 test("a running claude turn hides the compact control (pi's rule); a compaction shows Stop compaction; an unknown state keeps it disabled", () => {
   const open = { ...base, choosing: false, harness: "claude", model: "claude-sonnet-5-5", onModelChange() {}, onEffortChange() {} };
   const running = composer(open, { onCompact() {}, isStreaming: true });
