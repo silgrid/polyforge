@@ -1,3 +1,4 @@
+# carries: workflows/integrate/skills/full-gate.md, workflows/_shared/scripts/tests/test_gate_keep_going.py
 """The integrate lane's full gate runs every command: the skill's two
 gate.py lines (the gate and its --triage) carry --keep-going, and the
 lines as the lane runs them show every red of one batch at once — a gate
