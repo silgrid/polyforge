@@ -155,7 +155,7 @@ func TestW51ErrorPatternsWriteRefusals(t *testing.T) {
 func TestW51ErrorPatternsListRendering(t *testing.T) {
 	s := DaemonSettings{
 		TransientErrorPatterns: []string{`\b402\b`},
-		SlowModelMedianLatency:  61 * time.Second,
+		SlowModelMedianLatency: 61 * time.Second,
 	}
 	if got := daemonListValue(s, "transient_error_patterns"); len(got) != 1 || got[0] != `\b402\b` {
 		t.Fatalf("daemonListValue(transient) = %q", got)
