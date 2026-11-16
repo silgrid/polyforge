@@ -76,7 +76,9 @@ import {
  * created slug is named under the card), its 【回复】 sets that message as the
  * reply target and fills the composer with the analysis's reply draft when
  * there is one — never overwriting the composer without one, never sending —
- * and its task link opens the task's detail in Work › Tasks (onOpenTask).
+ * and its task link opens the task's detail in Work › Tasks (onOpenTask),
+ * handed the Messages pane's pinned Cell beside the id (polyforge#73: the
+ * analyzed task belongs to the Cell the analyze read was pinned to).
  *
  * The 「@」 action: every message row — received and own —
  * carries a visible 「@」 button beside Analyze (never inside the analysis
@@ -156,8 +158,9 @@ export interface PolyforgeMessagesProps {
   /** The page-memory analyses by message id (the hook drops them on close). */
   analyses: Record<string, PolyforgeAnalysis>;
   onOpenAnchor: (ref: string) => void;
-  /** The analysis card's task link: open that task in Work › Tasks. */
-  onOpenTask: (taskId: string) => void;
+  /** The analysis card's task link: open that task in Work › Tasks, its Cell
+   *  (this pane's pinned Cell) handed along (polyforge#73). */
+  onOpenTask: (taskId: string, cell?: string | null) => void;
   /** The total unread count (the panel's own sum): the collapsed strip's dot. */
   unreadTotal: number;
   /** the 「@」 action's click-time binding of its fill target
@@ -1110,7 +1113,7 @@ export function PolyforgeMessages({
                   onToggle={() => toggleCard(message.id)}
                   onFileTicket={() => setTicketFor(message.id)}
                   onReply={() => replyFromAnalysis(message.id, analyses[message.id])}
-                  onOpenTask={onOpenTask}
+                  onOpenTask={(taskId) => onOpenTask(taskId, cell)}
                 />
               )}
               {!message.mine && ticketNotices[message.id] && (

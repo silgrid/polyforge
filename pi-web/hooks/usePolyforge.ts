@@ -91,8 +91,9 @@ type DecisionsResponse = { pfPresent?: boolean; feed?: unknown; error?: string }
 type DismissResponse = { ok?: boolean; dismissed?: number; error?: string };
 
 /** a task the attention walk opens in Work › Tasks; `seq`
- *  makes a repeated open a new request. */
-export type PolyforgeTaskRequest = { id: string; seq: number };
+ *  makes a repeated open a new request. `profile` is the task's own Cell
+ *  (the entry's), so the detail read is pinned to it (polyforge#73). */
+export type PolyforgeTaskRequest = { id: string; seq: number; profile?: string };
 type WatchResponse = { status?: PolyforgeWatchStatus | null; error?: string };
 type MessagesResponse = {
   pfPresent?: boolean;
@@ -856,7 +857,7 @@ export function usePolyforge(panelOpen: boolean) {
     setActiveTabState("work");
     if (target.kind === "task") {
       setWorkTab("tasks");
-      setTaskRequest({ id: target.id, seq: ++taskRequestSeq.current });
+      setTaskRequest({ id: target.id, seq: ++taskRequestSeq.current, ...(target.profile ? { profile: target.profile } : {}) });
       return;
     }
     setWorkTab("jobs");

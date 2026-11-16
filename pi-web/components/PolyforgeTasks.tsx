@@ -26,12 +26,14 @@ import { taskDecisions, taskNeedsAttention, type PolyforgeDecision } from "@/lib
 import { POLYFORGE_SEARCH_CONTROL_CLASS, PolyforgeRefreshButton, PolyforgeSearchBar } from "./PolyforgeSearchBar";
 
 /**
- * The dock's read-only Tasks surface: every task of the local
- * daemon, listed once, in two sections — 正在运行 (`running`) on top and 全部
- * (the rest) below — with a
- * client-side search over the id, project, state and prompt summary (plus
- * project and state filters over the same rows), and a
- * detail read (`pf task show`) on selection. Reads follow gestures only: one
+ * The dock's read-only Tasks surface: every task of every valid Cell
+ * (polyforge#73 — the list route reads one `pf --profile <cell> --json task
+ * list` per valid Cell, a degraded one too, and names each row's Cell; a pre-Cell pf's
+ * fallback rows carry none), listed once, in two sections — 正在运行
+ * (`running`) on top and 全部 (the rest) below — with a
+ * client-side search over the id, project, state, prompt summary and Cell
+ * (plus project and state filters over the same rows), and a
+ * detail read (`pf task show`, pinned to the row's Cell) on selection. Reads follow gestures only: one
  * list read each time the tab is opened (this component mounts), one detail
  * read per selection, plus one list re-read when the status snapshot's task
  * counts change while the tab is open; searching, filtering
@@ -40,6 +42,9 @@ import { POLYFORGE_SEARCH_CONTROL_CLASS, PolyforgeRefreshButton, PolyforgeSearch
  * refresh while the count key holds); moves it into the shared
  * search-bar action slot without changing the read or busy contract. No poll,
  * no storage, and no spawn or cancel control: the tab is a read surface.
+ * A Cell whose list read failed shows its error above the grid while the
+ * rest list (polyforge#73); the top single-Cell annotation is gone — each
+ * row names its own Cell.
  *
  * the list is a responsive grid of discrete blocks (state
  * dot + text, duration, project, a two-line prompt summary). A running
@@ -66,10 +71,13 @@ interface ListResponse {
   pfPresent?: boolean;
   capable?: boolean;
   reason?: string;
-  tasks?: PolyforgeTaskRow[];
+  /** the wire rows: the nine-key passport rows with the route's outer-layer
+   *  `cell` attached (polyforge#73); a fallback (pre-Cell pf) row has none. */
+  tasks?: (PolyforgeTaskRow & { cell?: string })[];
   error?: string;
-  /** the Cell this list is read from. */
-  cell?: string;
+  /** a Cell whose list read failed, with pf's own bounded error
+   *  (polyforge#73): the rest of the list still renders. */
+  cellErrors?: { cell: string; error: string }[];
 }
 
 interface ShowResponse {
@@ -104,7 +112,7 @@ function formatNs(ns: number): string {
 
 export function PolyforgeTasks({
   taskCountKey,
-  openTaskId = null,
+  openTask = null,
   onOpenTaskHandled,
   decisions = [],
   onDismissDecisions,
@@ -115,9 +123,10 @@ export function PolyforgeTasks({
    *  (null without a snapshot). A change while this surface is mounted
    *  re-reads the list exactly once; the mount value never does. */
   taskCountKey: string | null;
-  /** a task to open from outside (an analysis card's task
-   *  link) — its existing detail read runs once, then onOpenTaskHandled. */
-  openTaskId?: string | null;
+  /** a task to open from outside (an analysis card's task link, the
+   *  attention walk's target) — its existing detail read runs once, pinned
+   *  to the handed Cell, then onOpenTaskHandled (polyforge#73). */
+  openTask?: { id: string; cell?: string | null } | null;
   onOpenTaskHandled?: () => void;
   /** the decision feed's entries (the hook's read); a task's
    *  terminal summary entries are matched to its row by task id. */
@@ -146,7 +155,8 @@ export function PolyforgeTasks({
   // a count change or the button). Only that newest read clears it.
   const [listRefreshing, setListRefreshing] = useState(false);
 
-  const [selected, setSelected] = useState<string | null>(null);
+  // the selected task: its id and its Cell together (polyforge#73).
+  const [selected, setSelected] = useState<{ id: string; cell?: string } | null>(null);
   const [detail, setDetail] = useState<PolyforgeTaskDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -217,14 +227,20 @@ export function PolyforgeTasks({
     return () => clearInterval(clock);
   }, [hasRunning]);
 
-  const openDetail = (id: string) => {
+  const openDetail = (id: string, cell?: string | null) => {
     if (!isPolyforgeTaskId(id)) return;
     const seq = ++detailSeqRef.current;
-    setSelected(id);
+    // the selection is the id and its Cell together — the same id in two
+    // Cells is two tasks (polyforge#73)
+    setSelected(cell ? { id, cell } : { id });
     setDetail(null);
     setDetailError(null);
     setExpanded(false);
-    fetch(`/api/polyforge/tasks/${encodeURIComponent(id)}`)
+    // the detail reads the row's own Cell (pf --profile <cell> --json task
+    // show); a Cell-less row keeps the unflagged read
+    fetch(cell
+      ? `/api/polyforge/tasks/${encodeURIComponent(id)}?profile=${encodeURIComponent(cell)}`
+      : `/api/polyforge/tasks/${encodeURIComponent(id)}`)
       .then(async (response) => {
         const body = await response.json() as ShowResponse;
         if (seq !== detailSeqRef.current) return;
@@ -239,14 +255,15 @@ export function PolyforgeTasks({
       });
   };
 
-  // an external open (the analysis card's task link) is the
-  // same one detail read a row click makes, once per handed id.
+  // an external open (the analysis card's link, the walk's
+  // target) is the same one detail read a row click makes, once per handed
+  // task, its Cell included.
   useEffect(() => {
-    if (!openTaskId) return;
-    openDetail(openTaskId);
+    if (!openTask) return;
+    openDetail(openTask.id, openTask.cell ?? undefined);
     onOpenTaskHandled?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one detail read per handed id; openDetail is a plain closure
-  }, [openTaskId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one detail read per handed task; openDetail is a plain closure
+  }, [openTask]);
 
   const back = () => {
     detailSeqRef.current += 1;
@@ -278,7 +295,7 @@ export function PolyforgeTasks({
   // the detail no longer replaces the list — it is handed
   // to renderDetail, which shows it below Work's top part, full width.
   const detailView = selected ? (() => {
-    const selectedDecisions = taskDecisions(decisions, selected);
+    const selectedDecisions = taskDecisions(decisions, selected.id);
     const reportCapped = detail ? isMemoryBodyTruncated(detail.report, detail.report_len) || detail.truncated : false;
     const collapsible = detail ? detail.report_len > MEMORY_COLLAPSE_BYTES : false;
     const meta = (label: string, value: string) => (
@@ -294,7 +311,7 @@ export function PolyforgeTasks({
             style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 11, padding: 0 }}>
             ← {t("polyforge.tasks.back")}
           </button>
-          <span data-pf-task={selected} style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{selected}</span>
+          <span data-pf-task={selected.id} style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{selected.id}</span>
         </div>
         {detailError && <div style={{ padding: "8px 12px", color: "#dc2626", fontSize: 12 }}>{detailError}</div>}
         {!detail && !detailError && notice(t("polyforge.loading"))}
@@ -346,7 +363,7 @@ export function PolyforgeTasks({
   const projects = taskProjectOptions(rows);
   const reporters = taskReporterOptions(rows);
   const stateLabel = (state: string) => (TASK_STATE_KEYS.has(state) ? t(`polyforge.tasks.state.${state}`) : state);
-  const renderRow = (row: PolyforgeTaskRow) => {
+  const renderRow = (row: PolyforgeTaskRow & { cell?: string }) => {
     const duration = taskDurationSeconds(row, now);
     // an open entry of the task (failed / capped /
     // interrupted) marks its row; the entry itself is in the detail.
@@ -354,7 +371,7 @@ export function PolyforgeTasks({
     const attention = taskNeedsAttention(rowDecisions);
     const endedAgo = row.state === "running" ? undefined : taskEndedAgo(row, now);
     return (
-      <button key={row.id} type="button" data-pf-task={row.id} onClick={() => openDetail(row.id)}
+      <button key={`${row.cell ?? ""}/${row.id}`} type="button" data-pf-task={row.id} onClick={() => openDetail(row.id, row.cell)}
         style={{
           ...POLYFORGE_BLOCK_STYLE,
           display: "flex", flexDirection: "column", alignItems: "stretch", gap: 4, minWidth: 0, width: "100%",
@@ -363,6 +380,9 @@ export function PolyforgeTasks({
         <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           <span aria-hidden="true" style={stateDotStyle(row.state)} />
           <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>{stateLabel(row.state)}</span>
+          {row.cell && (
+            <span data-pf-task-cell={row.cell} title={row.cell} style={{ flexShrink: 0, maxWidth: 96, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)" }}>{row.cell}</span>
+          )}
           {attention && (
             <span data-pf-task-attention="" title={t("polyforge.tasks.needsAttention")} aria-label={t("polyforge.tasks.needsAttention")}
               style={{ width: 8, height: 8, borderRadius: 4, background: "var(--accent)", flexShrink: 0 }} />
@@ -393,7 +413,7 @@ export function PolyforgeTasks({
   // cards share: two blocks side by side at the 460px dock and
   // the 375px sheet (beside its 40px rail), one at the 340px dock, more as the
   // main area widens, separated by the gap.
-  const grid = (rowsInSection: PolyforgeTaskRow[]) => (
+  const grid = (rowsInSection: (PolyforgeTaskRow & { cell?: string })[]) => (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8, padding: 8, flexShrink: 0 }}>
       {rowsInSection.map(renderRow)}
     </div>
@@ -404,9 +424,6 @@ export function PolyforgeTasks({
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-        {list?.cell && (
-          <div data-pf-tab-cell={list.cell} style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>{t("polyforge.tabCell", { cell: list.cell })}</div>
-        )}
         <PolyforgeSearchBar
           value={search}
           onChange={setSearch}
@@ -444,6 +461,11 @@ export function PolyforgeTasks({
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
         {listError && <div style={{ padding: "8px 12px", color: "#dc2626", fontSize: 12 }}>{listError}</div>}
+        {(list.cellErrors ?? []).map((entry) => (
+          <div key={entry.cell} data-pf-cell-error={entry.cell} style={{ padding: "8px 12px", color: "#dc2626", fontSize: 12 }}>
+            {t("polyforge.tasks.cellError", { cell: entry.cell, error: entry.error })}
+          </div>
+        ))}
         {rows.length === 0 ? (
           // the machine has no task at all — say so, and why.
           notice(t("polyforge.tasks.empty"), t("polyforge.tasks.emptyHint"))

@@ -20,12 +20,14 @@ test("every task route is GET-only, gated in-route and dynamic", () => {
 
 test("the id check and the floor gate run before the show spawn; the floor gate before the list spawn", () => {
   const idCheck = show.indexOf("isPolyforgeTaskId(id)");
+  const profileCheck = show.indexOf("isPolyforgeProfileName(profile)");
   const showCapability = show.indexOf("readPolyforgeTasksCapability()");
-  const showSpawn = show.indexOf("showPolyforgeTask(id)");
-  assert.ok(idCheck >= 0 && showCapability > idCheck && showSpawn > showCapability, "id check, then floor, then the one spawn");
+  const showSpawn = show.indexOf("showPolyforgeTask(id");
+  assert.ok(idCheck >= 0 && profileCheck > idCheck && showCapability > profileCheck && showSpawn > showCapability,
+    "id check, then the profile check, then the floor, then the one spawn");
   const listCapability = list.indexOf("readPolyforgeTasksCapability()");
   const listSpawn = list.indexOf("listPolyforgeTasks()");
-  assert.ok(listCapability >= 0 && listSpawn > listCapability, "floor, then the one list spawn");
+  assert.ok(listCapability >= 0 && listSpawn > listCapability, "floor, then the list spawn");
 });
 
 test("no task route answers 5xx, logs, reads env or exposes a write action", () => {
@@ -42,14 +44,19 @@ test("no task route answers 5xx, logs, reads env or exposes a write action", () 
 });
 
 test("the list route answers only the sanitized rows, timing facts included, never a raw pf row", async () => {
-  // contract extension, not a relaxation: beside the passport
-  // rows the answer names the resolved Cell (a profile name from `pf profile`),
-  // never a raw pf row.
-  assert.match(list, /const tasks = await listPolyforgeTasks\(\);[\s\S]{0,200}?const cell = await readPolyforgeResolvedCell\(\);\s*return NextResponse\.json\(\{ \.\.\.capability, tasks, \.\.\.\(cell \? \{ cell \} : \{\}\) \}\);/, "the rows come from the one passport");
+  // polyforge#73 contract extension: on a multi-Cell pf the answer names each
+  // row's Cell on the route's outer layer (`{ ...row, cell }`) — the nine-key
+  // row passport itself is unchanged — and a failed Cell degrades to its
+  // `cellErrors` entry. The retired top-level single-Cell annotation is gone.
+  assert.doesNotMatch(list, /readPolyforgeResolvedCell/, "no local Cell resolution spawn");
+  assert.doesNotMatch(list, /\{ cell \} : \{\}/, "no top-level single-Cell field");
+  assert.match(list, /\.map\(\(row\) => \(\{ \.\.\.row, cell \}\)\)/, "each row's Cell is attached by the outer layer");
+  assert.match(list, /read\.error === undefined \? \[\] : \[\{ cell: read\.cell, error: read\.error \}\]/, "a failed Cell degrades to its cellErrors entry");
   const libSource = await read("../../../lib/polyforge-tasks.ts");
   const passport = libSource.slice(libSource.indexOf("export function sanitizeTaskRow("), libSource.indexOf("export function sanitizeTaskListAnswer("));
   // / owner-intended 2026-10-30 contract extension, not a relaxation:
   // report_tail and reporter join the forwarded set; the full report stays unread.
   for (const field of ["started_at", "ended_at", "wall_consumed_ns", "report_tail", "reporter"]) assert.match(passport, new RegExp(`sanitized\\.${field} =`), `the row passport forwards ${field}`);
   assert.doesNotMatch(passport.replace(/\breport_tail\b|\breporter\b/g, ""), /report|created_at|origin|delivered|tokens_consumed/, "no other raw field is read by the row passport");
+  assert.doesNotMatch(passport, /\bcell\b/, "the passport itself carries no Cell — the route's outer layer names it");
 });
