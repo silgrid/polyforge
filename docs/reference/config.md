@@ -57,6 +57,11 @@ process.
   is another Cell.
 - An `instances/` directory next to `cli.toml` is not a configuration form
   and is refused by name.
+- The Cell's deploy configuration file lives in the same directory,
+  named `deploy.env` for the default Cell and `deploy-<profile>.env` for a
+  named one (the Cell file naming; the daemon states it to every step
+  process as `PF_DEPLOY_ENV` — [release.md](release.md), the deploy
+  configuration section).
 - `--config PATH` addresses one local file for configuration and repair; it
   never selects a Cell.
 
@@ -284,7 +289,14 @@ re-dispatch and an owner's answer stay in the round. `PF_STEP` and
 (the spawn journal's `spawn_n`) — the identity `pf step ask` records its
 question under in the capsule's `runtime-state/asks.jsonl`, so the daemon
 knows which dispatch asked (a question belongs to one dispatch: a later
-dispatch of the step never inherits it). The variables are
+dispatch of the step never inherits it). Every step also carries its work
+item's Cell facts: `PF_CELL` is the Cell's name (`default` for the Host's
+own, else the named Cell's profile), `PF_CELL_SERVER` is that Cell's
+server as configured, and `PF_DEPLOY_ENV` is the deploy configuration
+file that Cell's deploys read (`deploy.env` for the default Cell,
+`deploy-<profile>.env` for a named one, in the Host configuration
+directory — [release.md](release.md), the deploy configuration section).
+The variables are
 set by the daemon; a step's own copy never reaches the step.
 
 ### Writing `cli.toml` — `pf config`

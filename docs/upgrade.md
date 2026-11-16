@@ -210,3 +210,19 @@ flags — the flag package answers their `-h`/`--help` with an error before
 any call — or takes strict positionals. ask's own semantics (one open
 question per dispatch, the size and UTF-8 bounds) and the daemon's checks
 are unchanged.
+
+## v0.2.2, the deploy configuration follows the work item's Cell
+
+A machine that runs more than one Cell no longer deploys everything
+through the one `~/.config/polyforge/deploy.env`: the daemon states to
+every step process its work item's Cell facts — `PF_CELL` (the Cell's
+name), `PF_CELL_SERVER` (that Cell's server) and `PF_DEPLOY_ENV` (the
+deploy configuration file that Cell's deploys read, in the Host
+configuration directory) — and `.polyforge/deploy.sh` reads that file,
+refusing before any work when it does not exist (both components alike),
+and checks the deploy target against the Cell's server before any network
+work, `--dry-run` and `--preflight` included. After upgrading, an
+operator of a named Cell creates its `deploy-<profile>.env` before that
+Cell's next step-driven deploy, or the deploy refuses naming the missing
+file — the default Cell keeps `deploy.env`. A run by hand, without the
+Cell facts, keeps the old behavior and says the target check was skipped.

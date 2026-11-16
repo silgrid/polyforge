@@ -138,6 +138,14 @@ contract — never cutting a second one.
 - `.polyforge/deploy.sh <version> --confirm <version>` - deploys that published version
   and ends with production either on that version or rolled back to the previous one;
   a rollback must exit non-zero.
+- A step process runs with its work item's Cell facts, and its deploy follows
+  them: it carries its Cell's facts (`PF_CELL`, `PF_CELL_SERVER`, `PF_DEPLOY_ENV` —
+  `PF_DEPLOY_ENV` the deploy configuration file that Cell's deploys read,
+  `deploy.env` for the default Cell, `deploy-<profile>.env` for a named one) —
+  and the procedure reads that file, refusing before any work when it does not
+  exist, and checks the deploy target against the Cell's server before any
+  network work. A run by hand, without the Cell facts, skips the target check
+  and says so.
 - `.polyforge/deploy.sh --preflight` (optional) - a read-only check of the deploy
   machine and target that reports every problem in one message and exits 0 only
   when the deploy could run. When it exists, the `release` step runs it before

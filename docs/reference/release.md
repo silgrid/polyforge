@@ -196,6 +196,19 @@ release's assets, the Pi Web tarball included, is `release.sh --verify
 <tag>`). A Pi Web-only change publishes the unified release but need
 not redeploy AIHub.
 
+The deploy configuration follows the work item's Cell: the daemon gives
+every step process its Cell's facts — `PF_CELL` (the Cell's name),
+`PF_CELL_SERVER` (that Cell's server) and `PF_DEPLOY_ENV` (the deploy
+configuration file its deploys read: `deploy.env` for the default Cell,
+`deploy-<profile>.env` for a named one, in the Host configuration
+directory) — and `deploy.sh` reads that file when it is set, refusing,
+before any work and both components alike, when it does not exist — a Cell
+never falls back to another Cell's configuration — and checks, before
+any network work, that the merged `AIHUB_HOST` names that Cell's server
+(`ssh -G` resolves an alias locally), refusing with both values otherwise;
+`--dry-run` and `--preflight` run the same check. A run without the Cell
+facts (a human operator) skips the target check and says so.
+
 Both procedures check their machine before anything is published.
 `release.sh` runs a preflight after computing the version and before its
 gates — the tools, the node major against `.nvmrc`, and the `ghcr.io` push
