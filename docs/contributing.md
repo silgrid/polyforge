@@ -306,7 +306,9 @@ items that merged.
   3.9 pfstep tests *.py` (pf CI's python-types job, the same
   command, so the light and full tiers catch a type error before a merge;
   mypy `>=1.20,<2` is required — without it the gate fails loudly, it is
-  never skipped; the verification image ships it); every `go` command carries
+  never skipped; the verification image ships it); plus the named fast
+  check `check=contract-scan|fast|…`, which runs the `test/` package's
+  whole-repo contract tests (the bullet below); every `go` command carries
   `GOWORK=off`.
   Its full tail is `make test` split into its two commands — the unit
   packages' `go test` and `sh test/e2e-parallel.sh`, so a pre-existing
@@ -325,6 +327,23 @@ items that merged.
   spanning roots are `cmd`, `internal/aihub`, `internal/polyforge` and
   `internal/common`, and it declares
   `go_harness=test/e2e-parallel.sh`.
+- **Always-run contract checks.** Contract tests that scan the whole
+  tree — they read only repository files, start no process and need no
+  built artifact — are not served by diff-driven selection: no package
+  analysis maps a change to a file such a test reads, so only the widest
+  bar reaches them, and a change that breaks one lands as a red on the
+  branch that merges it. The conf's named fast checks carry them instead:
+  a `check=<name>|fast|<command>` line that runs the whole set makes the
+  fast phase — which every tier runs, the light tier's included —
+  execute them on every change, whatever the diff; the micro lane's fast
+  phase, before its `micro_check=` lines, does the same. Declare the
+  selection as plain test names in the command's `-run` alternation and
+  pin it with a guard test that fails when a new such test is neither
+  registered in the alternation nor excluded with a stated reason (and
+  when a registered name matches no test), so the list cannot drift; the
+  same guard keeps the `micro_check=` lines from repeating what the check
+  already runs, and a `micro_check=` line that carried such a test before
+  drops it in the change that declares the check.
 - **This repository's micro lane.** The root conf opts the docs into the
   micro lane: its `micro_path=` lines (the conf holds the exact list) cover
   the top-level guides one by one, `docs/reference/*.md`, and the design
@@ -333,12 +352,16 @@ items that merged.
   changed moves that pin in the same commit) and the design directory's
   `tools/` (the xrefs check is a fast gate, which a micro change must not
   rewrite).
-  Its two `micro_check=` lines run the contract tests that read those docs
-  (well under a minute with the fast gates; about 35 s measured on a 32-core
-  host, longer on smaller ones), so a micro change that breaks a pinned
-  sentence fails `--micro --run` itself rather than the integration run's
-  full bar. A new test that reads an in-scope doc, or a new docs directory,
-  joins those lines in the same change.
+  Its `micro_check=` lines run the doc-reading tests that the
+  whole-repo contract check does not already carry — the contract tests
+  that read those docs joined `contract-scan`, the named fast check
+  above, which the micro lane runs in its fast phase — (well under a
+  minute in all; about 35 s measured on a 32-core host, longer on smaller
+  ones), so a micro change that breaks a pinned sentence still fails
+  `--micro --run` itself rather than the integration run's full bar. A new
+  test that reads an in-scope doc, or a new docs directory, joins those
+  lines in the same change — a `*_contract_test.go` test joins the
+  `contract-scan` check instead.
 - **The pi-web gate boundary.** `pi-web/` is the web workbench's own npm
   package inside this repository. `pi-web/go.mod` is a marker module with no
   packages: it ends the root module at that directory, so `go build ./...`,
