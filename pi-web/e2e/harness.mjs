@@ -128,7 +128,7 @@ export function e2eOnlySelection(scenarios, env = process.env) {
     throw new Error(`E2E_ONLY names unknown scenario id(s) ${unknown.join(", ")}; this suite's ids are: ${[...valid].join(", ")}`);
   }
   const wanted = new Set(ids);
-  const idByTitle = new Map(entries);
+  const idByTitle = new Map(entries.map(([id, title]) => [title, id]));
   return {
     ids,
     titles: (ids.length ? entries.filter(([id]) => wanted.has(id)) : entries).map(([, title]) => title),

@@ -33,7 +33,7 @@ test("unset or empty E2E_ONLY keeps every scenario", () => {
 test("E2E_ONLY=<id>[,<id>…] selects exactly the listed scenarios", () => {
   const only = e2eOnlySelection(SCENARIOS, { E2E_ONLY: "N1,AC1" });
   assert.deepEqual(only.ids, ["N1", "AC1"], "the parsed selection, in the order written");
-  assert.deepEqual(only.titles, [SCENARIOS.N1, SCENARIOS.AC1], "only the listed scenarios' titles, in table order");
+  assert.deepEqual(only.titles, [SCENARIOS.AC1, SCENARIOS.N1], "only the listed scenarios' titles, in table order");
   assert.equal(only.skip(SCENARIOS.N1), false, "a listed scenario's check runs");
   assert.equal(only.skip(SCENARIOS.AC1), false, "a listed scenario's check runs (second id)");
   assert.equal(only.skip(SCENARIOS.AC2), true, "an unlisted scenario's check is skipped");
