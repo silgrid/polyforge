@@ -353,6 +353,7 @@ class Unit:
         self.repo = ""
         self.test_commit = ""
         self.impl_commit = ""
+        self.pre_existing_red = False
         self.test_files: List[str] = []
         self.why = ""
 
@@ -542,6 +543,10 @@ class Repo:
         if bad:
             return "test_commit %s touches non-test paths %s (test paths here: %s) — the test commit holds the unit's test files alone" % (
                 short_sha(t), ", ".join(clip_list(bad, 5)), rules.describe())
+        return ""
+
+    def check_pre_existing_commits(self, i: str) -> str:
+        """A pre_existing_red unit's single commit judged ("" = fine)."""
         return ""
 
     # carries -------------------------------------------------------------
