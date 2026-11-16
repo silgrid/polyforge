@@ -213,10 +213,19 @@ test("every claude string exists in en, zh-CN and zh-TW; the retired alias, pres
   }
 });
 
-test("while a claude turn runs, Send stays visible but disabled, and the composer says why", () => {
-  const html = composer({ ...base, choosing: false, harness: "claude" }, { isStreaming: true });
-  assert.match(html, /<button type="button" disabled="" aria-label="Send"/);
-  assert.match(html, /placeholder="claude is answering; send when this turn ends\."/);
+// polyforge#71 rewrites #219's text-only claude composer rule: while a claude
+// turn runs the composer offers pi's own streaming controls — Steer and Stop — and
+// no disabled Send button; Send returns once the turn ends. pi's own streaming
+// composer never had a Send button, so the two harnesses now match.
+test("while a claude turn runs the composer offers only Steer and Stop, no Send; Send returns when it ends", () => {
+  const open = { ...base, choosing: false, harness: "claude" };
+  const html = composer(open, { isStreaming: true, onSteer() {} });
+  assert.doesNotMatch(html, /aria-label="Send"/, "a running claude turn still shows a Send button");
+  assert.match(html, /aria-label="Deliver after the current response and its tool calls finish \(Stop interrupts them\)"/, "the composer offers pi's Steer");
+  assert.match(html, /aria-label="Stop agent"/, "the composer offers Stop");
+  assert.match(html, /placeholder="claude is answering; messages join this turn or wait for the next\."/, "the composer says what a message sent now does");
+  const idle = composer({ ...base, choosing: false, harness: "claude" }, {});
+  assert.match(idle, /aria-label="Send"/, "an idle claude session gets its Send button back");
   const pi = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ChatInput, {
     onSend() {}, onAbort() {}, isStreaming: true,
   })));
