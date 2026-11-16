@@ -152,6 +152,11 @@ type fakeHub struct {
 	// claimRepos maps a canonical id to the task-repo inventory its
 	// claim answer serves (B-8 tests: a hanging remote); unmapped = none.
 	claimRepos map[string][]api.ProjectRepo
+	// items maps a canonical id to a full WorkItem the hub answers as
+	// itself — the GetWorkItem, claim and attach answers — overriding the
+	// built-from-fields record (the #80 target-branch tests: a parent
+	// with its own lane and sub-tickets with parent_id).
+	items map[string]*api.WorkItem
 	// endFails, when > 0, makes the next N SessionEnd calls fail with a
 	// transport-class error and no effect (a hub blip at the close).
 	endFails int
@@ -280,6 +285,10 @@ func (h *fakeHub) SessionClaim(req api.SessionClaimRequest) (*api.SessionClaimRe
 		h.claimLost--
 		return nil, errors.New("context deadline exceeded (Client.Timeout exceeded while awaiting headers)")
 	}
+	work := api.WorkItem{ID: id, Slug: h.slugs[id], ProjectName: "proj"}
+	if it, ok := h.items[id]; ok && it != nil {
+		work = *it
+	}
 	return &api.SessionClaimResponse{
 		Claim: api.SessionClaim{
 			WorkItemID:         id,
@@ -287,7 +296,7 @@ func (h *fakeHub) SessionClaim(req api.SessionClaimRequest) (*api.SessionClaimRe
 			BundleName:         "demo-bundle",
 			Repos:              h.claimRepos[id],
 		},
-		WorkItem: api.WorkItem{ID: id, Slug: h.slugs[id], ProjectName: "proj"},
+		WorkItem: work,
 	}, nil
 }
 
@@ -396,6 +405,13 @@ func (h *fakeHub) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
 	st := h.status[id]
 	if st == "" {
 		st = api.StatusRunning
+	}
+	if it, ok := h.items[id]; ok && it != nil {
+		wi := *it
+		if wi.Status == "" {
+			wi.Status = st
+		}
+		return &wi, nil
 	}
 	wi := &api.WorkItem{ID: id, Slug: h.slugs[id], Status: st, ProjectName: "proj", Reporter: h.reporters[id],
 		UpdatedAt: h.updatedAt[id]}

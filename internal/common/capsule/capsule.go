@@ -55,6 +55,16 @@ const (
 	// declared by is refused naming it; the steps' skills and merge.py
 	// read it, never the yaml.
 	StepModesJSON = "runtime-state/step-modes.json"
+	// TargetBranchJSON is the work item's fixed target branch: a JSON
+	// object {"target", "parent"} the daemon writes at the first claim of
+	// a sub-ticket whose parent's lane declares children_branch — the
+	// branch its task repos are checked out on, and the parent it was
+	// computed from. A re-claim or a resume clones the capsule chain,
+	// which carries the first claim's file, and keeps it as it is, so a
+	// parent re-bound or a lane changed while the sub-ticket runs never
+	// reaches it. The claim's repo checkout and carrier restore read the
+	// file, never the lane (polyforge#80).
+	TargetBranchJSON = "runtime-state/target-branch.json"
 	// OversizeManifest lists the files the daemon left out of the chain
 	// because each is over MaxBlobBytes: path, size and sha256 (gitops'
 	// commit guard writes it).

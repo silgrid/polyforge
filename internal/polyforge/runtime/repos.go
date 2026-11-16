@@ -104,6 +104,16 @@ func (r *Runtime) cloneTaskRepos(ctx context.Context, j *job) (map[string]string
 		if err := gitClone(ctx, pr.URL, dir); err != nil {
 			return nil, repoCloneErr(j.wi, pr, "clone failed: %v", err)
 		}
+		// The fixed target branch (targetbranch.go): the fresh clone moves
+		// onto it before anything reads the tree — a branch the origin
+		// carries is checked out at its tip; creating one is the
+		// create-on-push half (below, the claim's own shape).
+		if j.targetBranch != "" {
+			if err := checkoutTargetBranch(ctx, j, dir); err != nil {
+				_ = os.RemoveAll(dir)
+				return nil, repoCloneErr(j.wi, pr, "the fixed target branch %s could not be checked out: %v", j.targetBranch, err)
+			}
+		}
 		// A clone of a history-less remote succeeds with no HEAD: the
 		// baseline is then empty, which is honest — there is no commit
 		// to stand on.
@@ -198,7 +208,9 @@ var (
 // the WI's commits (principle: never silently lose or rebuild work), and
 // a carrier that cannot be read is not evidence there is none.
 //
-// The branch is the clone's checked-out branch when HEAD is symbolic; a
+// The branch is the work item's fixed target branch when it has one
+// (targetbranch.go: the carried head lands on the branch the work item
+// works on); else the clone's checked-out branch when HEAD is symbolic; a
 // clone sourced from a detached-HEAD checkout (a remote whose HEAD is detached)
 // has none, so the carrier tip lands on the deterministic branch
 // carrierFallbackBranch. Non-destructive by construction: the worktree
@@ -231,7 +243,12 @@ func (r *Runtime) restoreTaskRepoState(ctx context.Context, j *job, store gitops
 		return "", fmt.Errorf("carrier %s names %s, which is not a readable commit: %v: %s", ref, sha, err, strings.TrimSpace(out))
 	}
 	branch := carrierFallbackBranch
-	if b, err := gitTask(ctx, dir, "symbolic-ref", "--short", "HEAD"); err == nil && strings.TrimSpace(b) != "" {
+	if j.targetBranch != "" {
+		// the fixed target branch (targetbranch.go): the carried head
+		// lands on the branch the work item works on, never on the clone's
+		// default branch name.
+		branch = j.targetBranch
+	} else if b, err := gitTask(ctx, dir, "symbolic-ref", "--short", "HEAD"); err == nil && strings.TrimSpace(b) != "" {
 		branch = strings.TrimSpace(b)
 	}
 	// checkout --force -B: attaches HEAD to the branch (a detached or
@@ -337,6 +354,73 @@ func checkoutWIPTree(ctx context.Context, dir, head, wip string) error {
 // carrierFallbackBranch names the local branch a carrier is restored onto
 // when the fresh clone has no checked-out branch (detached-HEAD source).
 const carrierFallbackBranch = "pf-carrier"
+
+// checkoutTargetBranch moves a FRESH task-repo clone onto the work
+// item's fixed target branch (targetbranch.go). The branch the origin
+// carries is checked out at its tip. A branch the origin does not carry
+// is created at the default branch tip (the clone's HEAD) and pushed
+// non-forced — the daemon's one outward write to the task repos' origin
+// (polyforge#80), so the branch the parent's sub-tickets share exists
+// before any of them opens a PR against it; a push another claim won
+// (the branch already exists at another tip) loses to the remote's copy:
+// the clone fetches it and stands on it — two claims of the one parent
+// never end up on two different branches. Non-destructive by
+// construction: the worktree is a just-created clone with no local
+// state.
+func checkoutTargetBranch(ctx context.Context, j *job, dir string) error {
+	name := j.targetBranch
+	if _, err := gitTask(ctx, dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/"+name); err == nil {
+		// the origin carries the branch: check out at its tip
+		if out, err := gitTask(ctx, dir, "checkout", "--force", "--quiet", "-B", name, "refs/remotes/origin/"+name); err != nil {
+			return fmt.Errorf("checkout %s failed: %v: %s", name, err, strings.TrimSpace(out))
+		}
+		return nil
+	}
+	// the origin carries no such branch: create it from the default
+	// branch tip and push it non-forced.
+	if out, err := gitTask(ctx, dir, "checkout", "--force", "--quiet", "-B", name, "HEAD"); err != nil {
+		return fmt.Errorf("branch %s could not be created at the default branch tip: %v: %s", name, err, strings.TrimSpace(out))
+	}
+	if err := pushTargetBranchFn(ctx, dir, name); err != nil {
+		// rejected: the remote may carry the branch another claim created
+		// and pushed first — its copy wins.
+		if _, ferr := gitTask(ctx, dir, "fetch", "--quiet", "origin", "refs/heads/"+name); ferr == nil {
+			if _, verr := gitTask(ctx, dir, "rev-parse", "-q", "--verify", "FETCH_HEAD"); verr == nil {
+				if out, cerr := gitTask(ctx, dir, "checkout", "--force", "--quiet", "-B", name, "FETCH_HEAD"); cerr != nil {
+					return fmt.Errorf("checkout %s of the remote's copy failed: %v: %s", name, cerr, strings.TrimSpace(out))
+				}
+				return nil // the remote's branch wins
+			}
+		}
+		return fmt.Errorf("push failed: %v (and the origin carries no readable branch %s)", err, name)
+	}
+	return nil
+}
+
+// pushTargetBranch pushes the locally created target branch to the
+// origin as a CREATE-ONLY, non-forced push (polyforge#80; owner ruling
+// 2026-11-16T17:05:35Z over review r1#6): --force-with-lease with an
+// empty expectation is rejected when the remote already carries the
+// branch, whatever the tips' relation, so the daemon never moves the
+// shared branch a first claim created — a plain non-forced push would
+// fast-forward it in the window where a later clone's default tip
+// descends from it — and the caller falls back to the remote's copy
+// (the ticket's 「被拒（已存在）就用远端已有的的那条」). The push runs
+// in the clone's own credential context (cloneGitEnv — the same one
+// that cloned), so nothing is injected the clone itself could not do.
+// pushTargetBranchFn is the seam the race tests park claims' pushes at.
+func pushTargetBranch(ctx context.Context, dir, name string) error {
+	if out, err := gitTaskEnv(ctx, cloneGitEnv(), dir, "push",
+		"--force-with-lease=refs/heads/"+name+":", "origin",
+		"refs/heads/"+name+":refs/heads/"+name); err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
+// pushTargetBranchFn is pushTargetBranch as a seam (the two-claims race
+// test parks both pushes and lets the remote's other copy win).
+var pushTargetBranchFn = pushTargetBranch
 
 // gitTask runs one git command inside a task-repo worktree through
 // taskrepo.Command: the worktree's OWN git-dir (never the capsule's

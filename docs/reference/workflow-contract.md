@@ -86,6 +86,7 @@ at once, each with its code, file, line and YAML path.
 | `uncounted_rewinds` | a map holding `reason_contains` and `max` ([uncounted_rewinds keys](#uncounted_rewinds-keys)): the lane-declared class of gate-FAIL rewinds charged to no budget — a gate FAIL whose one-line hand-off `--reason` carries `reason_contains` rewinds without spending `max_rewinds`, counted on its own toward `max` (the default 2 when the lane declares none; `0` = every matching FAIL asks the owner first, exactly like a spent `max_rewinds`); allowed only when a step declares `on_fail`, refused otherwise (`WFC-112`) |
 | `exclusive` | bool, default `false` ([Properties](#properties)): `true` holds the lane to one unfinished work item per project — a create on it reaches aihub exclusive, refused `CORE-409` `OPEN_ON_BUNDLE` while another work item of the project on the lane is not wrapped, failed or canceled; a built-in lane and a user lane alike; any other value is `WFC-112` |
 | `acceptance` | `required` or `none`, default `required` ([Properties](#properties)): whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs; `none` is a lane with no criterion to list — the shipped integrate and release lanes declare it, develop and micro do not; a built-in lane and a user lane alike; any other value is `WFC-112` |
+| `children_branch` | a branch-name template, one string (`WFC-112` any other shape): it must carry `{seq}` (the parent's seq — polyforge#1 → `epic/1`), may carry `{project}` (the parent's project name); the rest is literal and the substituted name must be a legal git branch ref ([Properties](#properties)). A sub-ticket of a work item whose parent runs on the lane has its task repos checked out on the substituted branch: the first claim fixes it into `runtime-state/target-branch.json`, every (re-)claim checks the fixed value out, and a claim that cannot read the parent or its lane is refused |
 | `defaults` | a map holding `model_candidates` and `tiers` |
 | `steps` | a non-empty list of step entries, in execution order (`WFC-113` missing or empty) |
 
@@ -217,6 +218,7 @@ refused for its version (`WFC-101`).
 | Property | Read by |
 |---|---|
 | `acceptance` | whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs (absent = required; none = the lane has no criterion to list): pf submit refuses an item without one only on a lane that requires it, the daemon's auto claim skips such an item only there, pf queue (and the Pi Web list, which reads its acceptance_missing) marks it only there, and pf file create prints the carried-by hint only there; the pre-submit analysis check (a `## 分析` / `## Analysis` section with content) applies on the same lanes — refused by pf submit, skipped by the auto claim, marked 需要交互：未分析 by pf queue; a lane the reader cannot load counts as required |
+| `children_branch` | the branch-name template the daemon's claim of a sub-ticket reads from the PARENT's lane (the lane of the work item its `parent_id` names — never the sub-ticket's own): {seq} is the parent's seq and {project} its project name; the sub-ticket's first claim fixes the substituted branch into runtime-state/target-branch.json before the task repos are cloned, every (re-)claim checks the fixed value out (the carrier restore included) and the daemon creates the branch on each origin from the default branch tip with a non-forced push when the remote does not carry it; a claim that cannot read the parent or its lane is refused naming why; a parent whose lane declares none leaves the sub-ticket untouched |
 | `exclusive` | one unfinished work item per project on the lane: the daemon's data-plane proxy reads it in the lane set of the project's workspace and forwards a work-item create on the lane (`pf file create --bundle <lane>`) to aihub exclusive, refused CORE-409 OPEN_ON_BUNDLE while another work item of the project on the lane is not wrapped, failed or canceled; nothing else reads it |
 
 A property is a declaration the code reads, never a lane's name: nothing
@@ -788,6 +790,26 @@ settled at its dispatch). The model-chain
 half of the same overlay (`--models`) outranks every candidate source of
 that step's dispatches for the whole ticket; see
 [config.md](config.md#pf-override--the-per-step-overlay).
+
+**A sub-ticket's target branch (polyforge#80).** A lane may declare
+`children_branch`, a branch-name template over `{seq}` (the parent's
+seq) and `{project}` (the parent's project name) ([Lane
+keys](#lane-keys)). A sub-ticket — a work item whose `parent_id` names a
+work item whose lane declares it — has its task repos checked out on
+the substituted branch: the first claim fixes it into
+`runtime-state/target-branch.json` (exactly the skipped-step set's rule:
+the first claim writes it, a re-claim or `pf resume` keeps it, and the
+repo checkout and the carrier restore read the file, never the lane),
+BEFORE the task repos are cloned; every (re-)claim checks the fixed
+value out and the carrier restore lands on it. The daemon creates the
+branch on each task repo's origin from the default branch tip with a
+non-forced push when the remote does not carry it — its one outward
+write to the task repos' origin (a push another claim won loses to the
+remote's copy), so the branch exists before a sub-ticket opens a PR
+against it. A claim that cannot read the parent, or the parent's lane,
+is refused naming why (`DAEMON-507`, the blocked note carries the
+reason), never a silent fall-back to the default branch; a parent whose
+lane declares none leaves the sub-ticket untouched.
 
 ## Error codes
 

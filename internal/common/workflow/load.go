@@ -70,8 +70,14 @@ type Lane struct {
 	// AcceptanceNone; "" when the lane does not declare it, which is
 	// required): RequiresAcceptance answers it.
 	Acceptance string
-	Defaults   *Defaults
-	Steps      []Step
+	// ChildrenBranch is the lane's `children_branch`: the branch-name
+	// template the daemon checks a sub-ticket of a work item whose parent
+	// runs on this lane out on (`{seq}` = the parent's seq, `{project}` =
+	// the parent's project name; "" when the lane declares none, which
+	// leaves such a sub-ticket's claim untouched).
+	ChildrenBranch string
+	Defaults       *Defaults
+	Steps          []Step
 }
 
 // UncountedRewinds is the lane's declared uncounted rewind class
@@ -323,6 +329,14 @@ func (l *loader) load() *Lane {
 				lane.Acceptance = v
 			default:
 				l.at(CodeInvalidValue, file, off, n, "acceptance", "%q is not an acceptance (want %s or %s)", v, AcceptanceRequired, AcceptanceNone)
+			}
+		}
+	}
+	if n, ok := keys["children_branch"]; ok {
+		if v, good := l.stringValue(file, off, n, "children_branch"); good {
+			lane.ChildrenBranch = v
+			if msg := childrenBranchDefect(v); msg != "" {
+				l.at(CodeInvalidValue, file, off, n, "children_branch", "%s", msg)
 			}
 		}
 	}
