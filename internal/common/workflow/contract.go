@@ -91,7 +91,7 @@ var Codes = map[string]string{
 	CodeOnFail:            "`on_fail` on a non-gate step, or a target that is not an earlier step",
 	CodeDefinitionMissing: "a step's definition file is missing",
 	CodeDefinitionFront:   "a definition file's frontmatter is missing, unparsable, carries an unknown key, or its `name`/`description` is wrong",
-	CodePlaceholder:       "a placeholder no var or fragment resolves, a var nothing uses, or a var shadowing a fragment",
+	CodePlaceholder:       "a placeholder no var, param or fragment resolves; a var nothing uses; a name held by both a var and a param, or a var or param shadowing a fragment",
 	CodeModelCandidate:    "a model candidate is not `<harness>:<model>[:<effort>]`, or `model_tier` names no tier of `defaults.tiers`",
 	CodeSkill:             "`skill` resolves to no file (<lane>/skills/<name>.md, else _shared/skills/<name>.md), or its frontmatter is not {name == the file name, description, commands: []string} over a non-empty body",
 }

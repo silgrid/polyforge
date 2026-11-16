@@ -87,6 +87,9 @@ type StartConfig struct {
 	// (polyforge#33; `<harness>:<model>` each): the driver's only
 	// candidate source, called at every dispatch.
 	Compose func() (map[string][]string, error)
+	// Params is the runtime's dispatch-time param composition
+	// (polyforge#78), called at every dispatch beside Compose.
+	Params func() (map[string]map[string]string, error)
 	// Interrupted archives the dispatch the previous derivation left
 	// without a result (nil on a fresh claim or a deliberate stop).
 	Interrupted *InterruptedDispatch
@@ -167,6 +170,7 @@ func Start(ctx context.Context, cfg StartConfig) (*Handle, error) {
 		Limits:      cfg.Limits,
 		LimitsFunc:  cfg.LimitsFunc,
 		Compose:     cfg.Compose,
+		Params:      cfg.Params,
 		Interrupted: cfg.Interrupted,
 		StepEnded:   cfg.StepEnded,
 		Admission:   cfg.Admission,

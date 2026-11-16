@@ -512,7 +512,9 @@ func daemonStatus(sock string, timeout time.Duration, harnesses bool) (StatusRes
 // lanes, whose defects are the `workflow lanes` row's). A per-step key
 // that names no step of a lane of the workspace's set — the retired
 // `verify-judge` among them — is stale: it governs nothing and is a warn
-// naming the key and the rewrite. Without the daemon's workflows dir the
+// naming the key and the rewrite; a project param value
+// (steps.<project>.<step>.params.<name>) no lane of the set declares for
+// its step is a warn of its own, naming the param. Without the daemon's workflows dir the
 // per-step keys cannot be judged: a yaml that otherwise loads is a warn,
 // never a pass. It also answers every step with a `claude:` candidate (the
 // "harness claude" check's subject).
@@ -526,7 +528,7 @@ func workspaceYamlCheck(m *mapping.Plan, workflowsDir string, daemonUp bool) (st
 	}
 	sort.Strings(badBundles)
 	present, withSteps := 0, 0
-	var stale, unjudged, placeholders []string
+	var stale, staleParams, unjudged, placeholders []string
 	for _, ws := range m.Workspaces() {
 		_, serr := os.Stat(workspace.PathFor(ws))
 		if serr == nil {
@@ -557,6 +559,12 @@ func workspaceYamlCheck(m *mapping.Plan, workflowsDir string, daemonUp bool) (st
 			continue
 		}
 		for _, k := range keys {
+			// a steps.<project>.<step>.params.<name> key names a step that
+			// exists; what no lane declares is the param (polyforge#78)
+			if parts := strings.SplitN(k, ".", 5); len(parts) == 5 && parts[3] == "params" {
+				staleParams = append(staleParams, workspace.PathFor(ws)+": "+k)
+				continue
+			}
 			stale = append(stale, workspace.PathFor(ws)+": "+k)
 		}
 		bundles, _, _ := workspace.Bundles(set, "")
@@ -589,6 +597,12 @@ func workspaceYamlCheck(m *mapping.Plan, workflowsDir string, daemonUp bool) (st
 	staleNote := ""
 	if len(stale) > 0 {
 		staleNote = fmt.Sprintf("%d stale key(s) name no step of an installed lane and govern nothing: %s — rename or delete each (%s)", len(stale), strings.Join(stale, ", "), workspace.StaleKeyHint)
+	}
+	if len(staleParams) > 0 {
+		if staleNote != "" {
+			staleNote += "; "
+		}
+		staleNote += fmt.Sprintf("%d param value(s) set a param no lane of the set declares for its step and govern nothing: %s — declare the param in the lane's step entry (params) or delete each", len(staleParams), strings.Join(staleParams, ", "))
 	}
 	if len(unjudged) > 0 {
 		if staleNote != "" {

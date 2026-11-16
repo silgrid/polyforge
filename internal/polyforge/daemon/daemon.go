@@ -655,6 +655,7 @@ func New(cfg Config) (*Daemon, error) {
 				SpawnN:        in.SpawnN,
 				Spawner:       in.Spawner,
 				Compose:       in.Compose,
+				Params:        in.Params,
 				Interrupted:   interruptedFromCause(in.InterruptedCause),
 				StepEnded:     in.StepEnded,
 				// polyforge#171: the resume decision for claude dispatches

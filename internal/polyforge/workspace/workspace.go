@@ -13,6 +13,7 @@
 //	      models: [...]                  # in every bundle (fix, code, review, ...)
 //	      skip: true|false               # optional: switch the step off
 //	      by: human                      # optional: the step's takeover mode
+//	      params: { <name>: <value> }    # optional: the step's param values
 //	tiers:                               # optional section (workflow contract 2)
 //	  <project-name>:                    # one entry per project of this workspace
 //	    <tier>: { models: [...] }        # the list of a step's model_tier
@@ -27,7 +28,7 @@
 // hint, IntegrateRemovedHint: the daemon's automatic batch trigger is
 // gone, a person files a batch.
 //
-// A step entry has three keys, at least one declared: `models`, a list of
+// A step entry has four keys, at least one declared: `models`, a list of
 // model candidates, each `<harness>:<model>` (polyforge#175 — harness ∈
 // pi | claude, split on the first `:`; the prefix is mandatory and is the
 // whole truth of where the candidate runs); `skip`, a bool
@@ -39,10 +40,18 @@
 // step's work is done by a person, only where its lane declares the
 // step `human_mergeable: true` (a claim of a lane that does not is
 // refused naming it; HumanMergeSteps), fixed when a work item is claimed
-// exactly as `skip` is. A step entry declares `by` or `skip`, never
-// both: a step is either switched off or taken over. A skip-only entry is no
-// level of the model chain. `default` and `task` take neither `skip` nor
-// `by`. Any key not shown here — at any level — is a load
+// exactly as `skip` is; and `params`, the project's values of the step's
+// params (polyforge#78): each name of the param-name shape
+// (workflow.ParamName) to a string value that is one line of at most
+// workflow.MaxParamValueBytes bytes (workflow.ParamValueProblem, the rule
+// the lane and pf override share). The key is shared by step id across
+// lanes, so a value governs only a step whose lane declares that param
+// (ComposeStepParams) and is composed at every dispatch like `models`; a
+// name no lane of the set declares on the step is stale (StaleKeys). A
+// step entry declares `by` or `skip`, never both: a step is either
+// switched off or taken over. A skip-only or params-only entry is no level
+// of the model chain. `default` and `task` take none of `skip`, `by` and
+// `params`. Any key not shown here — at any level — is a load
 // error, as are duplicate keys, type mismatches, an empty project entry,
 // an unprefixed / unknown-prefix / empty-model candidate, and the retired
 // `harness` key and the removed `attrs` key (each refused with a rewrite
@@ -128,6 +137,11 @@ type Config struct {
 	// `human`). A lane takes the mode only where it declares the step
 	// human_mergeable (HumanMergeSteps). nil when no entry declares by.
 	By map[string]map[string]string
+	// Params is project name → step id → param name → value:
+	// steps.<project>.<step>.params (polyforge#78). A value governs only
+	// a step whose lane declares the param (ComposeStepParams); nil when
+	// no entry declares params.
+	Params map[string]map[string]map[string]string
 	// Tiers is project name → tier name → candidate list:
 	// tiers.<project>.<tier>.models (workflow contract 2), the list of
 	// every bundle step whose model_tier names that tier — above the
@@ -294,10 +308,13 @@ func parse(raw []byte, projects []string) (*Config, string) {
 			if reason != "" {
 				return nil, reason
 			}
-			if (e.skip != nil || e.by != nil) && BundlelessKey(ekv.key) {
+			if (e.skip != nil || e.by != nil || e.params != nil) && BundlelessKey(ekv.key) {
 				leaf, noun := "skip", "skip switches off one step a lane declares skippable"
-				if e.by != nil {
+				switch {
+				case e.by != nil:
 					leaf, noun = "by", "by names a step's takeover mode, and only a step a lane declares human_mergeable takes `human`"
+				case e.params != nil:
+					leaf, noun = "params", "params sets the values of the params a lane declares on a step"
 				}
 				return nil, fmt.Sprintf("%s.%s.%s: not allowed (`%s` is no step: %s)", where, ekv.key, leaf, ekv.key, noun)
 			}
@@ -321,6 +338,15 @@ func parse(raw []byte, projects []string) (*Config, string) {
 					cfg.By[project] = map[string]string{}
 				}
 				cfg.By[project][ekv.key] = *e.by
+			}
+			if e.params != nil {
+				if cfg.Params == nil {
+					cfg.Params = map[string]map[string]map[string]string{}
+				}
+				if cfg.Params[project] == nil {
+					cfg.Params[project] = map[string]map[string]string{}
+				}
+				cfg.Params[project][ekv.key] = e.params
 			}
 		}
 	}
@@ -393,13 +419,14 @@ func tiersSection(n *yaml.Node, projects []string) (map[string]map[string][]stri
 }
 
 // stepEntryVal is one decoded step entry: its models list when declared
-// (hasModels; a declared empty list governs), its skip when declared and
-// its takeover mode when declared (by).
+// (hasModels; a declared empty list governs), its skip when declared, its
+// takeover mode when declared (by) and its param values when declared.
 type stepEntryVal struct {
 	models    []string
 	hasModels bool
 	skip      *bool
 	by        *string
+	params    map[string]string
 }
 
 // ByHuman is the one takeover mode a step entry's `by` key knows this
@@ -408,9 +435,9 @@ type stepEntryVal struct {
 // by the human merge's landing rules, polyforge#36).
 const ByHuman = "human"
 
-// stepEntry reads one `{ models: [...], skip: <bool>, by: <mode> }` step
-// entry at path where: `models`, `skip` and `by` are its keys, at least
-// one declared, `by` never beside `skip` (a step is either switched off
+// stepEntry reads one `{ models: [...], skip: <bool>, by: <mode>, params:
+// {...} }` step entry at path where: `models`, `skip`, `by` and `params`
+// are its keys, at least one declared, `by` never beside `skip` (a step is either switched off
 // or taken over). The retired `harness` key and the removed `attrs` key
 // refuse with their rewrite hints.
 func stepEntry(en *yaml.Node, where string) (stepEntryVal, string) {
@@ -442,26 +469,61 @@ func stepEntry(en *yaml.Node, where string) (stepEntryVal, string) {
 				return e, fmt.Sprintf("%s.by: takes `%s`, not %q (the one takeover mode this release knows)", where, ByHuman, s)
 			}
 			e.by = &s
+		case "params":
+			if e.params, reason = paramValues(kv.val, where+".params"); reason != "" {
+				return e, reason
+			}
 		case "attrs":
 			return e, where + ".attrs: " + AttrsRemovedHint
 		case "harness":
 			return e, where + ".harness: " + workflow.RetiredHarnessHint
 		default:
-			return e, fmt.Sprintf("%s.%s: not allowed (a step entry's keys are `models`, beside its `skip` switch and `by` mode)", where, kv.key)
+			return e, fmt.Sprintf("%s.%s: not allowed (a step entry's keys are `models`, beside its `skip` switch, `by` mode and `params` values)", where, kv.key)
 		}
 	}
 	if e.skip != nil && e.by != nil {
 		return e, fmt.Sprintf("%s: declares both skip and by — a step is either switched off (skip: true) or taken over by a person (by: human), never both", where)
 	}
 	if mn == nil {
-		if e.skip == nil && e.by == nil {
-			return e, where + ": entry is empty — declare `models`, `skip` or `by`, or remove it"
+		if e.skip == nil && e.by == nil && e.params == nil {
+			return e, where + ": entry is empty — declare `models`, `skip`, `by` or `params`, or remove it"
 		}
 		return e, ""
 	}
 	e.models, reason = modelsList(mn, where)
 	e.hasModels = reason == ""
 	return e, reason
+}
+
+// paramValues reads a step entry's `params` at path where: a non-empty
+// mapping of param name (workflow.ParamName) to a string value that
+// passes workflow.ParamValueProblem.
+func paramValues(n *yaml.Node, where string) (map[string]string, string) {
+	if n.Kind != yaml.MappingNode {
+		return nil, where + ": must be a mapping of param name → value"
+	}
+	keys, reason := mapping(n, where)
+	if reason != "" {
+		return nil, reason
+	}
+	if len(keys) == 0 {
+		return nil, where + ": is empty — declare a param value, or remove it"
+	}
+	out := make(map[string]string, len(keys))
+	for _, kv := range keys {
+		p := where + "." + kv.key
+		if !workflow.ParamName.MatchString(kv.key) {
+			return nil, fmt.Sprintf("%s: %q is not a param name (%s)", p, kv.key, workflow.ParamName)
+		}
+		if kv.val.Kind != yaml.ScalarNode || kv.val.Tag != "!!str" {
+			return nil, p + ": must be a string (quote it)"
+		}
+		if why := workflow.ParamValueProblem(kv.val.Value); why != "" {
+			return nil, p + ": " + why
+		}
+		out[kv.key] = kv.val.Value
+	}
+	return out, ""
 }
 
 // AttrsRemovedHint is the rewrite of a step entry's `attrs` key: step
@@ -577,11 +639,19 @@ func contains(list []string, s string) bool {
 // makes every step key stale. An unreadable user lane root is the
 // *workflow.UserLanesError and names no key: a key no built-in lane
 // carries may be a step of a user lane nobody can read, so none is judged.
+// A param value of a step the set carries is stale, as
+// `steps.<project>.<key>.params.<name>`, when no lane of the set declares
+// that param on the step (a step no lane carries is named once, as its
+// key).
 func StaleKeys(cfg *Config, set workflow.LaneSet) ([]string, error) {
 	if cfg == nil {
 		return nil, nil
 	}
 	steps, err := set.StepIDs()
+	if err != nil {
+		return nil, err
+	}
+	declared, err := set.DeclaredParams()
 	if err != nil {
 		return nil, err
 	}
@@ -607,6 +677,19 @@ func StaleKeys(cfg *Config, set workflow.LaneSet) ([]string, error) {
 	for project, keys := range cfg.By {
 		for key := range keys {
 			note(project, key)
+		}
+	}
+	for project, keys := range cfg.Params {
+		for key, values := range keys {
+			if !steps[key] {
+				note(project, key)
+				continue
+			}
+			for name := range values {
+				if !declared[key][name] {
+					stale = append(stale, fmt.Sprintf("steps.%s.%s.params.%s", project, key, name))
+				}
+			}
 		}
 	}
 	sort.Strings(stale)

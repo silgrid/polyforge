@@ -787,7 +787,7 @@ func configWritePath(ctx *Context, verb string, k configKey, wsFlag, cwdFlag str
 		return resolveWorkspaceTarget(ctx, k.raw, wsFlag, cwdFlag)
 	}
 	if wsFlag != "" || cwdFlag != "" {
-		return "", fmt.Errorf("config %s %s: --workspace/--cwd apply only to memory_policy.<entry>.record|skip and the workspace .polyforge.yaml keys (steps.<project>.<step-id>.models|skip); %s is one machine-level cli.toml key", verb, k.raw, k.raw)
+		return "", fmt.Errorf("config %s %s: --workspace/--cwd apply only to memory_policy.<entry>.record|skip and the workspace .polyforge.yaml keys (steps.<project>.<step-id>.models|skip|by, or steps.<project>.<step-id>.params.<name>); %s is one machine-level cli.toml key", verb, k.raw, k.raw)
 	}
 	return "", nil
 }

@@ -137,6 +137,9 @@ type TransitionRequest struct {
 	Candidate string      // step_start: the dispatch's full `<harness>:<model>[:effort]` candidate ("" = none in effect; polyforge#33)
 	Status    string      // terminal: the target workflow_status
 	Reason    string      // terminal/rewind reason
+	// Params (step_start) are the step's params at the dispatch's final
+	// values (polyforge#78): recorded on the step_started event.
+	Params map[string]string
 	// Failure carries a step_failed write's failed-dispatch record.
 	Failure *StepFailure
 	// WallMs is the finished dispatch's wall time folded into the step's
@@ -903,6 +906,9 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 		body["resume"] = info.resume
 		if req.Candidate != "" {
 			body["candidate"] = req.Candidate
+		}
+		if len(req.Params) > 0 {
+			body["params"] = req.Params
 		}
 	case TransStepResult:
 		if req.Result == nil {

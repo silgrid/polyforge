@@ -222,6 +222,21 @@ and YAML path, before a claim ever meets it. The keys:
     file (relative to the lane directory, inside it) as the var's value,
     exactly as if it were written in `vars`. A var is declared in one of
     the two, never both (`WFC-112`).
+  - `params:` — the step's parameters: each name
+    (`^[a-z][a-z0-9_]{0,63}$`) to its lane default, one line of at most
+    256 bytes (empty is legal). The difference from `vars`: a var is fixed
+    text of the lane, the same for every project and work item; a param's
+    value is taken at every dispatch — lane default < project < work item
+    (the project's `steps.<project>.<step-id>.params.<name>` in its
+    workspace yaml, then the work item's `pf override <id> --step
+    <step-id> --param <name>=<value>`; the [config
+    reference](reference/config.md#stepsprojectstep-idparams--a-steps-parameter-values)).
+    The step's scripts read the final value as `PF_PARAM_<NAME>` (the name
+    upper-cased). A name both a var and a param hold, or a param shadowing
+    a fragment, is a load error (`WFC-195`); a param no placeholder uses is
+    allowed (a script reads it). Use a param for a value a project or a
+    work item must be able to change (an image tag, a switch), a var for
+    everything else.
   - `budget: { wall_minutes: N }` — the step's wall-budget estimate;
     the step-timeout bound T becomes `max(3 x wall_minutes, T)`.
 
@@ -250,10 +265,16 @@ error (`WFC-195`), never a dispatch failure:
   and never re-scanned. A declared var that shadows a fragment file is a
   load error.
 - `{{<name>}}` — any other placeholder renders with the workflow.yaml
-  step entry's `vars` (and `vars_files`). Rendering fails closed both ways: a
-  placeholder with neither a var nor a fragment file, and a var no
-  placeholder uses, are both load errors — a typo cannot ship a
-  half-rendered prompt.
+  step entry's `vars` (and `vars_files`) or `params`. Rendering fails
+  closed both ways: a placeholder with neither a var, a param nor a
+  fragment file, and a var no placeholder uses, are both load errors — a
+  typo cannot ship a half-rendered prompt.
+
+A var and a fragment render once, when the lane loads; a placeholder
+naming a param renders with the param's final value of the dispatch: the
+load checks it with the lane default, and each dispatch renders the
+definition again at its own final values — the step's prompt and the
+capsule's `workflows/_rendered/<step-id>.md` its sub-agents read alike.
 
 ## The worked example: a custom `apidocs` bundle
 

@@ -157,6 +157,14 @@ type Step struct {
 	// round registers (`pf step hub wrap-attrs <name>`) before it may hand
 	// off done — the daemon refuses that hand-off otherwise.
 	WrapAttrs []string
+	// Params is `params` (nil = none): the step's declared parameters,
+	// each name to its lane-default value (a single-line string). The
+	// final value is composed at every dispatch (lane default, the
+	// project's steps.<project>.<step>.params, the work item's pf
+	// override) and fills the definition's {{<name>}} placeholders and the
+	// step's PF_PARAM_<NAME> environment variable; a parameter the
+	// definition never uses is allowed (a script may read it).
+	Params map[string]string
 
 	// varLines are the workflow.yaml lines of the vars' keys (a
 	// vars_files var's: its vars_files key) and path the
@@ -761,7 +769,81 @@ func (l *loader) step(file string, off int, n *yaml.Node, path string, seen map[
 	if v, ok := keys["vars_files"]; ok {
 		l.varsFiles(file, off, v, join(path, "vars_files"), &s)
 	}
+	if v, ok := keys["params"]; ok {
+		s.Params = l.stepParams(file, off, v, join(path, "params"), &s)
+	}
 	return s
+}
+
+// MaxParamValueBytes bounds one parameter's value (a step entry's `params`
+// default, and every layer that overrides it): a value is one line — no
+// newline — of at most this many bytes. A value is inserted verbatim into
+// the step's prompt and exported as PF_PARAM_<NAME>, so the bound keeps
+// both surfaces small (owner ruling 2026-11-16).
+const MaxParamValueBytes = 256
+
+// ParamValueProblem answers why value is not a legal parameter value (""
+// when it is): one line, at most MaxParamValueBytes bytes. The one rule
+// every layer shares — the lane loader (WFC-112), the workspace yaml's
+// parse and the pf override write — so a value cannot grow a new meaning
+// on its way to the prompt or the environment.
+func ParamValueProblem(value string) string {
+	if strings.ContainsAny(value, "\n\r") {
+		return "a param value is one line (no newline)"
+	}
+	if len(value) > MaxParamValueBytes {
+		return fmt.Sprintf("a param value is at most %d bytes", MaxParamValueBytes)
+	}
+	return ""
+}
+
+// stepParams decodes a step's `params`: each name to its lane-default
+// value, a single-line string of at most MaxParamValueBytes bytes. A
+// name takes the param-name shape, collides with no var of the step
+// (vars or vars_files) and shadows no fragment of the shared tree; a
+// parameter the definition never uses is allowed (a script may read it).
+func (l *loader) stepParams(file string, off int, n *yaml.Node, path string, s *Step) map[string]string {
+	if n.Kind != yaml.MappingNode {
+		l.at(CodeInvalidValue, file, off, n, path, "want a mapping of param name to its default value")
+		return nil
+	}
+	out := map[string]string{}
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		p := join(path, k.Value)
+		if seen[k.Value] {
+			l.at(CodeLaneFile, file, off, k, p, "duplicate key")
+			continue
+		}
+		seen[k.Value] = true
+		if !ParamName.MatchString(k.Value) {
+			l.at(CodeInvalidValue, file, off, k, p, "%q is not a param name (%s)", k.Value, ParamName)
+			continue
+		}
+		val, ok := l.stringValue(file, off, v, p)
+		if !ok {
+			continue
+		}
+		if why := ParamValueProblem(val); why != "" {
+			l.at(CodeInvalidValue, file, off, v, p, "%s", why)
+			continue
+		}
+		if _, varDeclared := s.varLines[k.Value]; varDeclared {
+			key := "vars"
+			if s.fileVars[k.Value] {
+				key = "vars_files"
+			}
+			l.at(CodePlaceholder, file, off, k, p, "param %q collides with the var declared in %s.%s: a name is a var's or a param's, never both", k.Value, key, k.Value)
+			continue
+		}
+		if _, err := os.Stat(sharedFragment(l.shared, k.Value)); err == nil {
+			l.at(CodePlaceholder, file, off, k, p, "param %q shadows the fragment %s/%s.md", k.Value, SharedDir, k.Value)
+			continue
+		}
+		out[k.Value] = val
+	}
+	return out
 }
 
 // varsFiles decodes a step's `vars_files` into its vars: each var's value
@@ -995,7 +1077,7 @@ func (l *loader) definition(s *Step) *Definition {
 			s.ID, "steps/"+s.ID+".md", l.sharedRel("steps/"+s.ID+".md"), err)
 		return nil
 	}
-	rendered, problems := renderDefinition(l.shared, raw, s.Vars)
+	rendered, problems := renderDefinition(l.shared, raw, s.Vars, s.Params)
 	// a placeholder problem leaves the placeholder text in place; the
 	// frontmatter is still judged, so one load reports both
 	for _, p := range problems {
@@ -1033,12 +1115,12 @@ type placeholderProblem struct {
 	varName, msg string
 }
 
-// renderDefinition renders one definition with vars and the fragments of
-// the shared tree at shared its other placeholders name, answering every
-// placeholder problem: a placeholder no var or fragment resolves, a var
-// nothing uses, a var shadowing a fragment. Fragments are inserted
-// verbatim and never re-scanned.
-func renderDefinition(shared string, raw []byte, vars map[string]string) ([]byte, []placeholderProblem) {
+// renderDefinition renders one definition with vars, the step's params
+// and the fragments of the shared tree at shared its other placeholders
+// name, answering every placeholder problem: a placeholder no var, param
+// or fragment resolves, a var nothing uses, a var shadowing a fragment.
+// Fragments are inserted verbatim and never re-scanned.
+func renderDefinition(shared string, raw []byte, vars, params map[string]string) ([]byte, []placeholderProblem) {
 	var problems []placeholderProblem
 	lineOf := func(name string) int {
 		idx := strings.Index(string(raw), "{{"+name+"}}")
@@ -1061,6 +1143,9 @@ func renderDefinition(shared string, raw []byte, vars map[string]string) ([]byte
 			used[name] = true
 			return []byte(strings.TrimRight(v, "\n"))
 		}
+		if v, ok := params[name]; ok {
+			return []byte(v)
+		}
 		if v, ok := values[name]; ok {
 			return []byte(v)
 		}
@@ -1073,7 +1158,7 @@ func renderDefinition(shared string, raw []byte, vars map[string]string) ([]byte
 		return []byte(values[name])
 	})
 	for _, name := range sortedKeys(missing) {
-		problems = append(problems, placeholderProblem{line: lineOf(name), msg: fmt.Sprintf("{{%s}} resolves to no var of the step and no fragment %s/%s.md", name, SharedDir, name)})
+		problems = append(problems, placeholderProblem{line: lineOf(name), msg: fmt.Sprintf("{{%s}} resolves to no var or param of the step and no fragment %s/%s.md", name, SharedDir, name)})
 	}
 	for _, name := range sortedKeys(vars) {
 		if !used[name] {
@@ -1180,21 +1265,23 @@ func parseDefinition(path, id string, raw []byte) (*Definition, []ContractError)
 }
 
 // RenderDefinition reads the definition id of the lane at dir (its own
-// steps/<id>.md, else the shared one) and renders it with vars and its
-// fragments: the whole file, frontmatter included. A placeholder problem
-// is an error; a missing file answers an error os.IsNotExist holds for.
-func RenderDefinition(dir, id string, vars map[string]string) ([]byte, error) {
-	return renderDefinitionFile(dir, SiblingShared(dir), id, vars)
+// steps/<id>.md, else the shared one) and renders it with vars, params and
+// its fragments: the whole file, frontmatter included. A placeholder
+// problem is an error; a missing file answers an error os.IsNotExist
+// holds for. The params are the step's FINAL values at a dispatch (the
+// loader's own read passes the lane defaults).
+func RenderDefinition(dir, id string, vars, params map[string]string) ([]byte, error) {
+	return renderDefinitionFile(dir, SiblingShared(dir), id, vars, params)
 }
 
 // renderDefinitionFile is RenderDefinition over an explicit shared tree.
-func renderDefinitionFile(dir, shared, id string, vars map[string]string) ([]byte, error) {
+func renderDefinitionFile(dir, shared, id string, vars, params map[string]string) ([]byte, error) {
 	path := stepDefinitionPath(dir, shared, id)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	rendered, problems := renderDefinition(shared, raw, vars)
+	rendered, problems := renderDefinition(shared, raw, vars, params)
 	if len(problems) > 0 {
 		msgs := make([]string, 0, len(problems))
 		for _, p := range problems {
@@ -1210,13 +1297,13 @@ func renderDefinitionFile(dir, shared, id string, vars map[string]string) ([]byt
 // the dispatch-time read of what Load judged. A placeholder problem or a
 // frontmatter that does not parse is an error; a missing file answers an
 // error os.IsNotExist holds for.
-func ReadDefinition(dir, id string, vars map[string]string) (*Definition, error) {
-	return readDefinition(dir, SiblingShared(dir), id, vars)
+func ReadDefinition(dir, id string, vars, params map[string]string) (*Definition, error) {
+	return readDefinition(dir, SiblingShared(dir), id, vars, params)
 }
 
 // readDefinition is ReadDefinition over an explicit shared tree.
-func readDefinition(dir, shared, id string, vars map[string]string) (*Definition, error) {
-	rendered, err := renderDefinitionFile(dir, shared, id, vars)
+func readDefinition(dir, shared, id string, vars, params map[string]string) (*Definition, error) {
+	rendered, err := renderDefinitionFile(dir, shared, id, vars, params)
 	if err != nil {
 		return nil, err
 	}

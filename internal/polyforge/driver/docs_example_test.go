@@ -151,7 +151,7 @@ func TestDocsBundleExampleLoadsThroughTheDaemonPath(t *testing.T) {
 		// step (spec.Vars) are the render's only input: a placeholder
 		// without a var, and a var no placeholder uses, are both load
 		// errors — a documented mismatch fails here.
-		if _, err := readStepDefinition(bundle, s.ID, s.Vars); err != nil {
+		if _, err := readStepDefinition(bundle, s.ID, s.Vars, nil); err != nil {
 			t.Fatalf("docs/bundles.md's documented step definition for %s must render with the vars its workflow.yaml entry declares (%v) — it does not: %v", s.ID, s.Vars, err)
 		}
 		// workflow contract 4: a definition's frontmatter is its name and

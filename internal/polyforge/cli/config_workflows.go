@@ -134,6 +134,20 @@ type workflowStep struct {
 	// when --cwd maps a workspace.
 	HumanMergeable bool              `json:"human_mergeable,omitempty"`
 	By             map[string]string `json:"by,omitempty"`
+	// Params names, per mapped project, each param the lane declares on
+	// the step with its final value and level (polyforge#78): the
+	// project's steps.<project>.<step>.params value, else the lane default
+	// — through workspace.StepParamSources, so a project value of a param
+	// the lane does not declare never shows. A work item's pf override
+	// is no part of it (the pf override view). Set only when --cwd maps a
+	// workspace.
+	Params map[string]map[string]stepParam `json:"params,omitempty"`
+}
+
+// stepParam is one param's final value and the level it came from.
+type stepParam struct {
+	Value string `json:"value"`
+	From  string `json:"from"`
 }
 
 type effectiveChain struct {
@@ -230,7 +244,8 @@ func fillWorkflows(doc *workflowsDoc, facts daemonFacts, ws string) map[string]*
 // step that declares no list of its own) and the bundle-less task lane.
 // An entry is absent when no level governs (the harness default runs).
 // It also marks the steps each project skips through
-// workspace.SkippedSteps, the judgment the claim fixes.
+// workspace.SkippedSteps, the judgment the claim fixes, and each step's
+// param values through workspace.StepParamSources.
 func fillEffective(doc *workflowsDoc, fms map[string]*workflow.Lane, cfg *workspace.Config) {
 	set := func(m *map[string]effectiveChain, project string, list []string, from string) {
 		if from == "" {
@@ -261,6 +276,18 @@ func fillEffective(doc *workflowsDoc, fms map[string]*workflow.Lane, cfg *worksp
 						b.Steps[j].Skip = map[string]bool{}
 					}
 					b.Steps[j].Skip[project] = true
+				}
+			}
+			params := workspace.StepParamSources(b.Name, fm, cfg, project)
+			for j := range b.Steps {
+				for name, p := range params[b.Steps[j].ID] {
+					if b.Steps[j].Params == nil {
+						b.Steps[j].Params = map[string]map[string]stepParam{}
+					}
+					if b.Steps[j].Params[project] == nil {
+						b.Steps[j].Params[project] = map[string]stepParam{}
+					}
+					b.Steps[j].Params[project][name] = stepParam{Value: p.Value, From: p.Source}
 				}
 			}
 			// the project's declared step modes (a by its lane cannot

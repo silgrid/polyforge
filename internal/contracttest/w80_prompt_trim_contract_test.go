@@ -95,7 +95,8 @@ func TestW80SharedFragmentsAreTheOneSource(t *testing.T) {
 			// rel is workflows/<bundle>/steps/<id>.md; the users carry no vars
 			parts := strings.Split(rel, "/")
 			bundle, step := parts[1], strings.TrimSuffix(parts[3], ".md")
-			out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, testQualityStepVars(t, bundle, step))
+			vars, params := testQualityStepVars(t, bundle, step)
+			out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bundle), step, vars, params)
 			if err != nil {
 				t.Fatalf("render %s: %v", rel, err)
 			}

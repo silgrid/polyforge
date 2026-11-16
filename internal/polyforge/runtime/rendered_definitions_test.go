@@ -66,7 +66,7 @@ func TestMaterializeWritesRenderedStepDefinitions(t *testing.T) {
 					t.Errorf("%s: no frontmatter", rel)
 					continue
 				}
-				def, err := workflow.ReadDefinition(laneDir, s.ID, s.Vars)
+				def, err := workflow.ReadDefinition(laneDir, s.ID, s.Vars, s.Params)
 				if err != nil {
 					t.Fatalf("ReadDefinition(%s): %v", s.ID, err)
 				}

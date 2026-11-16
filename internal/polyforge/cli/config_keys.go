@@ -122,7 +122,9 @@ func ConfigSchema(name string) map[string]any {
 // class — the same class table the cli.toml keys use, never a UI copy. The
 // driver composes every step's chain fresh at every dispatch, so every
 // steps.<project>.<step>.models key is live (a running step keeps what its
-// dispatch read); a steps.<project>.<step>.skip key is next-claim: the
+// dispatch read), and so is every steps.<project>.<step>.params.<name> key
+// (a step's params are composed at every dispatch too, polyforge#78); a
+// steps.<project>.<step>.skip key is next-claim: the
 // claim fixes the work item's skipped steps and step modes into its
 // capsule, which a running work item keeps (a steps.<project>.<step>.by
 // key alike: the mode is the claim's to fix).
