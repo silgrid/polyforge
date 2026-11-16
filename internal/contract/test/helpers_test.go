@@ -4,7 +4,8 @@ package test
 // readers its suites share with the acceptance package's staying files
 // (a directory of _test.go files exports nothing, so each package keeps
 // its own copy; the names and behaviour mirror test/v1_harness_test.go,
-// test/w68_build_step_rules_contract_test.go — which moved here — and
+// the former test/w68_build_step_rules_contract_test.go — whose only
+// content was this reader and which dissolved into this file — and
 // test/w246_skill_execution_intent_guard_test.go, whose users moved).
 
 import (

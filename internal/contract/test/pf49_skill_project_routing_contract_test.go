@@ -1,6 +1,6 @@
 package test
 
-// carries: skills/polyforge/SKILL.md, skills/polyforge/verbs/file.md, AGENTS.md, test/pf49_skill_project_routing_contract_test.go
+// carries: skills/polyforge/SKILL.md, skills/polyforge/verbs/file.md, AGENTS.md, internal/contract/test/pf49_skill_project_routing_contract_test.go
 
 // pf49_skill_project_routing_contract_test.go: the routing skill and the
 // filing verb hardcode no specific project's routing (polyforge#49, AC7).
