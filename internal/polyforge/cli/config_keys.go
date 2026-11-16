@@ -57,6 +57,7 @@ var configKeyDefs = []configKeyDef{
 	{"operator_agent_dir", keyDaemon, ConfigRestartOnly},
 	{"python", keyDaemon, ConfigRestartOnly},
 	{"max_concurrent_jobs", keyDaemon, ConfigLive},
+	{"max_concurrent_tasks", keyDaemon, ConfigLive},
 	{"max_concurrent_bars", keyDaemon, ConfigLive},
 	{"bar_load_threshold", keyDaemon, ConfigLive},
 	{"command_path", keyDaemon, ConfigLive},
@@ -95,7 +96,7 @@ func ConfigSchema(name string) map[string]any {
 		return map[string]any{"kind": "duration", "min_exclusive": 0}
 	case "stall_window":
 		return map[string]any{"kind": "duration", "nonzero": true, "allow_negative": true}
-	case "max_concurrent_jobs", "max_concurrent_bars", "cell_max_concurrent_jobs":
+	case "max_concurrent_jobs", "max_concurrent_tasks", "max_concurrent_bars", "cell_max_concurrent_jobs":
 		return map[string]any{"kind": "int", "min": 1}
 	case "bar_load_threshold":
 		return map[string]any{"kind": "number", "min_exclusive": 0}

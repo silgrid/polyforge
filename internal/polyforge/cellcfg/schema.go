@@ -35,6 +35,7 @@ type Key struct {
 var Keys = []Key{
 	{"daemon_socket", "", ScopeHost, ClassRestartOnly},
 	{"max_concurrent_jobs", "daemon", ScopeHost, ClassLive},
+	{"max_concurrent_tasks", "daemon", ScopeHost, ClassLive},
 	{"max_concurrent_bars", "daemon", ScopeHost, ClassLive},
 	{"bar_load_threshold", "daemon", ScopeHost, ClassLive},
 	{"harness_root", "daemon", ScopeHost, ClassRestartOnly},

@@ -275,7 +275,7 @@ func parseDaemonTable(file string, kvs []daemonKV) (DaemonSettings, error) {
 				return s, refuse(fmt.Sprintf("%q is not an absolute path (no ~ or $HOME expansion; remove the key for python3 on the daemon's PATH)", v))
 			}
 			s.Python = v
-		case "max_concurrent_jobs", "max_concurrent_bars", "cell_max_concurrent_jobs":
+		case "max_concurrent_jobs", "max_concurrent_tasks", "max_concurrent_bars", "cell_max_concurrent_jobs":
 			n, err := strconv.Atoi(kv.val)
 			if err != nil {
 				return s, refuse(fmt.Sprintf("must be an unquoted integer >= 1, got %s", kv.val))
@@ -286,6 +286,8 @@ func parseDaemonTable(file string, kvs []daemonKV) (DaemonSettings, error) {
 			switch kv.key {
 			case "max_concurrent_jobs":
 				s.MaxConcurrentJobs = n
+			case "max_concurrent_tasks":
+				s.MaxConcurrentTasks = n
 			case "cell_max_concurrent_jobs":
 				s.CellMaxConcurrentJobs = n
 			default:
@@ -998,6 +1000,7 @@ func LoadCellFile(host Config, path string) (Config, error) {
 	}
 	cfg.DaemonSocket = host.DaemonSocket
 	cfg.Daemon.MaxConcurrentJobs = host.Daemon.MaxConcurrentJobs
+	cfg.Daemon.MaxConcurrentTasks = host.Daemon.MaxConcurrentTasks
 	cfg.Daemon.MaxConcurrentBars = host.Daemon.MaxConcurrentBars
 	cfg.Daemon.BarLoadThreshold = host.Daemon.BarLoadThreshold
 	cfg.Daemon.HarnessRoot = host.Daemon.HarnessRoot
