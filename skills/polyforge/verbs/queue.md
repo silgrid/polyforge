@@ -49,8 +49,12 @@ document (`items`, `total`). Human mode: `N work item(s)` + a table
 (SLUG, PROJECT, STATUS, SESSION, PRIORITY, BUNDLE, GOAL). When a queued row waits for an
 unfinished blocker, a WAITING-FOR column (before GOAL) names it (`polyforge#164
 (running)`; a failed or canceled blocker keeps it waiting until the edge
-is removed — `verbs/file.md`, Dependencies). Waiting rows never appear
-under `--ready`.
+is removed — `verbs/file.md`, Dependencies). A bundle-bound parent waits
+for its children the same way: an entry with `via: "child"` renders as
+`polyforge#165 (child, running)` — the shape is `<slug> (child, <status>)`
+— and is released by the child's wrap, or by detaching it (`pf file edit
+<child> --parent ""`, `verbs/file.md`, Parents and children), never by `pf
+file dep rm`. Waiting rows never appear under `--ready`.
 
 A queued execution ticket (one with a bundle) whose content lists no
 acceptance criterion (under `## Acceptance` or `## 验收` — the check `pf
@@ -75,6 +79,17 @@ out is `verbs/submit.md`'s analysis check: a `pf task spawn` errand whose
 report the session writes into the ticket's `## 分析` section, or the
 owner's dated 「免分析」.
 
+A queued parent that waits for a child (a `via: "child"` entry) which
+failed or was canceled has the STATUS cell `queued (需要交互：子票失败)`:
+only a wrapped child releases, so it would wait forever. The mark is read
+off `waiting_for` alone, whatever the lane, and shows beside the other marks
+(`queued (需要交互：缺验收) (需要交互：子票失败)`). The merged `--json` document
+carries `"child_failed": true` on such an item (absent on every other; the
+`--project` `--json` body is the server's and does not). The way out is the
+owner's call: detach the failed child with `pf file edit <child> --parent
+""` (and, when its work is still needed, file a new child under the
+parent).
+
 ### Presenting a queue result
 
 The CLI's terminal table truncates the GOAL column (60 runes), so read the
@@ -91,8 +106,9 @@ bundle (the lane table in `verbs/file.md`). A row with
 `acceptance_missing: true` (set only when its lane requires acceptance) is presented with STATUS 「需要交互：缺验收」
 (needs interaction: no acceptance), never as a plain `queued`; a row with
 `analysis_missing: true` likewise with STATUS 「需要交互：未分析」
-(needs interaction: no analysis), and a row carrying both marks presents
-both.
+(needs interaction: no analysis), a row with `child_failed: true` with
+STATUS 「需要交互：子票失败」 (needs interaction: a child failed), and a row
+carrying several marks presents them all.
 
 The complete per-row list remains mandatory: present every row of the
 requested scope (the status filter asked for, or all rows). Classification,
