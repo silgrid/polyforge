@@ -110,6 +110,19 @@ export function createCheck({
   return check;
 }
 
+/**
+ * `e2eOnlySelection(scenarios, env = process.env)` — the E2E_ONLY switch a
+ * titled suite uses to run only some scenarios
+ * (`E2E_ONLY=<id>[,<id>…] node e2e/<suite>.mjs`, after
+ * polyforge-messages-prompt-281.mjs): `scenarios` maps each scenario id to
+ * its check title. Unset or empty keeps every scenario; an id the table
+ * does not hold throws naming it and the valid ids — a typo fails loudly,
+ * never a silent zero-scenario run.
+ */
+export function e2eOnlySelection() {
+  return { ids: [], titles: [], skip: () => false };
+}
+
 // Bounded polls
 
 /**
