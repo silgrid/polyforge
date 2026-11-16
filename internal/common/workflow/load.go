@@ -70,6 +70,12 @@ type Lane struct {
 	// AcceptanceNone; "" when the lane does not declare it, which is
 	// required): RequiresAcceptance answers it.
 	Acceptance string
+	// ChildrenBranch is the lane's `children_branch`: the branch-name
+	// template the daemon checks a sub-ticket of a work item whose parent
+	// runs on this lane out on (`{seq}` = the parent's seq, `{project}` =
+	// the parent's project name; "" when the lane declares none, which
+	// leaves such a sub-ticket's claim untouched).
+	ChildrenBranch string
 	Defaults   *Defaults
 	Steps      []Step
 }
