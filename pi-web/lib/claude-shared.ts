@@ -223,3 +223,34 @@ export interface ClaudeSettings {
   /** `--include-hook-events`: hook activity shown in the session. */
   includeHookEvents: boolean;
 }
+
+/**
+ * One of claude's own commands as its `initialize` answer lists it
+ * (polyforge#71): the fields pi-web reads for the `/` menu.
+ */
+export interface ClaudeCommandEntry {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+  builtin?: boolean;
+}
+
+/**
+ * The claude commands pi-web's `/` menu never lists (polyforge#71, AC3's
+ * exclusion table), each with its reason. Every entry would either derail
+ * pi-web's own bookkeeping or hide its output: claude answers these as
+ * `<local-command-stdout>` bookkeeping the adapter hides, so a listed command
+ * would "do nothing"; the rest duplicate or fight controls pi-web owns.
+ */
+export const CLAUDE_COMMAND_EXCLUSIONS: ReadonlyMap<string, string> = new Map();
+
+/**
+ * The claude-own commands pi-web's `/` menu offers (polyforge#71, AC3):
+ * claude's `initialize` answer, minus the terminal-only names claude itself
+ * reports in every init frame's `terminal_slash_commands` (read at runtime,
+ * never hardcoded), minus the exclusion table above, minus `compact` — pi's
+ * built-in `/compact` already runs the guarded compaction path (AC2).
+ */
+export function claudeSlashCommands(commands: readonly ClaudeCommandEntry[], terminalSlashCommands: readonly string[]): ClaudeCommandEntry[] {
+  return [...commands];
+}
