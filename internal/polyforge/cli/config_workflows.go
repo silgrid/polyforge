@@ -127,6 +127,13 @@ type workflowStep struct {
 	// shows. Skip is set only when --cwd maps a workspace.
 	Skippable bool            `json:"skippable,omitempty"`
 	Skip      map[string]bool `json:"skip,omitempty"`
+	// HumanMergeable: the lane declares the step `human_mergeable: true`;
+	// By names each mapped project whose yaml declares its mode — through
+	// workspace.HumanMergeSteps, so a by the yaml writes for a step its
+	// lane does not declare human_mergeable never shows. By is set only
+	// when --cwd maps a workspace.
+	HumanMergeable bool              `json:"human_mergeable,omitempty"`
+	By             map[string]string `json:"by,omitempty"`
 }
 
 type effectiveChain struct {
