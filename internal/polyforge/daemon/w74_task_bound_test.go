@@ -182,6 +182,9 @@ func TestW74TaskBoundReloadLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(ws, workspace.FileName), []byte(taskYaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(t.TempDir(), "cli.toml")
 	daemon := func(tasks int) string {
 		return "[workspace.\"" + ws + "\"]\nprojects = [\"proj\"]\n\n[daemon]\nmax_concurrent_tasks = " + fmt.Sprint(tasks) + "\n"
