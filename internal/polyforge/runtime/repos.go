@@ -104,6 +104,16 @@ func (r *Runtime) cloneTaskRepos(ctx context.Context, j *job) (map[string]string
 		if err := gitClone(ctx, pr.URL, dir); err != nil {
 			return nil, repoCloneErr(j.wi, pr, "clone failed: %v", err)
 		}
+		// The fixed target branch (targetbranch.go): the fresh clone moves
+		// onto it before anything reads the tree — a branch the origin
+		// carries is checked out at its tip; creating one is the
+		// create-on-push half (below, the claim's own shape).
+		if j.targetBranch != "" {
+			if err := checkoutTargetBranch(ctx, j, dir); err != nil {
+				_ = os.RemoveAll(dir)
+				return nil, repoCloneErr(j.wi, pr, "the fixed target branch %s could not be checked out: %v", j.targetBranch, err)
+			}
+		}
 		// A clone of a history-less remote succeeds with no HEAD: the
 		// baseline is then empty, which is honest — there is no commit
 		// to stand on.
@@ -198,7 +208,9 @@ var (
 // the WI's commits (principle: never silently lose or rebuild work), and
 // a carrier that cannot be read is not evidence there is none.
 //
-// The branch is the clone's checked-out branch when HEAD is symbolic; a
+// The branch is the work item's fixed target branch when it has one
+// (targetbranch.go: the carried head lands on the branch the work item
+// works on); else the clone's checked-out branch when HEAD is symbolic; a
 // clone sourced from a detached-HEAD checkout (a remote whose HEAD is detached)
 // has none, so the carrier tip lands on the deterministic branch
 // carrierFallbackBranch. Non-destructive by construction: the worktree
@@ -231,7 +243,12 @@ func (r *Runtime) restoreTaskRepoState(ctx context.Context, j *job, store gitops
 		return "", fmt.Errorf("carrier %s names %s, which is not a readable commit: %v: %s", ref, sha, err, strings.TrimSpace(out))
 	}
 	branch := carrierFallbackBranch
-	if b, err := gitTask(ctx, dir, "symbolic-ref", "--short", "HEAD"); err == nil && strings.TrimSpace(b) != "" {
+	if j.targetBranch != "" {
+		// the fixed target branch (targetbranch.go): the carried head
+		// lands on the branch the work item works on, never on the clone's
+		// default branch name.
+		branch = j.targetBranch
+	} else if b, err := gitTask(ctx, dir, "symbolic-ref", "--short", "HEAD"); err == nil && strings.TrimSpace(b) != "" {
 		branch = strings.TrimSpace(b)
 	}
 	// checkout --force -B: attaches HEAD to the branch (a detached or
@@ -337,6 +354,23 @@ func checkoutWIPTree(ctx context.Context, dir, head, wip string) error {
 // carrierFallbackBranch names the local branch a carrier is restored onto
 // when the fresh clone has no checked-out branch (detached-HEAD source).
 const carrierFallbackBranch = "pf-carrier"
+
+// checkoutTargetBranch moves a FRESH task-repo clone onto the work
+// item's fixed target branch (targetbranch.go): the origin's copy of the
+// branch — refs/remotes/origin/<name>, the plain clone's own fetch — is
+// checked out at its tip. Non-destructive by construction: the worktree
+// is a just-created clone with no local state. (The daemon's create of a
+// branch the origin does not carry is the remote half, u4.)
+func checkoutTargetBranch(ctx context.Context, j *job, dir string) error {
+	name := j.targetBranch
+	if _, err := gitTask(ctx, dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/"+name); err != nil {
+		return fmt.Errorf("the origin carries no branch %s", name)
+	}
+	if out, err := gitTask(ctx, dir, "checkout", "--force", "--quiet", "-B", name, "refs/remotes/origin/"+name); err != nil {
+		return fmt.Errorf("checkout %s failed: %v: %s", name, err, strings.TrimSpace(out))
+	}
+	return nil
+}
 
 // gitTask runs one git command inside a task-repo worktree through
 // taskrepo.Command: the worktree's OWN git-dir (never the capsule's
