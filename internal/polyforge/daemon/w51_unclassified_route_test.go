@@ -86,9 +86,10 @@ func TestW51ScanUnclassifiedWindowDedup(t *testing.T) {
 // with both counts), newest-first among equals, count-first overall.
 func TestW51UnclassifiedRouteAggregatesCells(t *testing.T) {
 	th := newTestHost(t, hostCell{profile: "default", machineID: "m-def"}, hostCell{profile: "alpha", machineID: "m-alpha"})
-	at := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	newest := time.Now().Add(-24 * time.Hour)
+	at := newest.UTC().Format(time.RFC3339Nano)
 	w51SeedEvents(t, th.cellDataDir("default"), "wi_d1",
-		w51StepFailed(time.Now().Add(-24*time.Hour), "model_error", "fallback", "gateway tantrum A"))
+		w51StepFailed(newest, "model_error", "fallback", "gateway tantrum A"))
 	w51SeedEvents(t, th.cellDataDir("alpha"), "wi_a1",
 		w51StepFailed(time.Now().Add(-25*time.Hour), "exit_model_class", "fallback", "gateway tantrum A"),
 		w51StepFailed(time.Now().Add(-26*time.Hour), "model_error", "fallback", "upstream wailed mysteriously"))
