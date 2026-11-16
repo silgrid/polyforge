@@ -34,7 +34,7 @@ Exit 1: a difference to class. Exit 2: the plan is unreadable or the diff
 could not be read (`unavailable` says why).
 
 build — the units resolved against the task repos (the one repo holding
-both commits; the test commit's files), each commit pair's test-first
+their commits; the test commit's files), each commit pair's test-first
 shape (test_commit one commit of test paths alone, a proper ancestor of
 impl_commit, which HEAD holds), the `test_weakened` hunks (a unit's test
 files changed after its test commit) and, with --replay, each unit's run
@@ -42,16 +42,23 @@ replayed on the tree of its test commit — a detached worktree under the
 clone's .git, removed afterwards — each bounded by --unit-timeout (10m)
 under the whole deadline (--deadline, else the step's tool window less two
 minutes); each unit's ``replaying`` start line is closed by an end line
-(``unit <id>: replay <verdict> (exit <n>, <duration>)``). Where it replays: --isolation container (the repo's verification
+(``unit <id>: replay <verdict> (exit <n>, <duration>)``). A unit declared
+``pre_existing_red: true`` (no test_commit, no test-first shape) resolves
+on its implementation commit alone and replays on the tree of the
+change's base (merge-base HEAD origin/<default>): red there is its red
+evidence — the details' replay records the commit it ran on — and a run
+that exited 0 there fails the unit (the test was green before the change,
+so it was not already red). Where it replays: --isolation container (the repo's verification
 container: its HEAD must carry .polyforge/Dockerfile.verify, else exit 2),
 --isolation host (the host, under the step's PATH), or, without the flag,
 the container when the repo's HEAD carries the Dockerfile, else the host.
 Logs go to --log-dir, else logs/ beside --out, else the capsule's
 runtime-state/facts/<n>. Details:
   {units_file, replay: {unit_timeout, deadline}, units: [{id, repo,
-   test_commit, impl_commit, test_files, unresolved, commits, run: {repo,
-   cwd, argv}, replay: {exit_code, red, not_runnable: {toolchain, rule,
-   line}, setup: {because, first_log, commands: [{command, exit_code,
+   pre_existing_red, test_commit, impl_commit, test_files, unresolved,
+   commits, run: {repo,
+   cwd, argv}, replay: {exit_code, red, commit, not_runnable: {toolchain,
+   rule, line}, setup: {because, first_log, commands: [{command, exit_code,
    timed_out, log}]}, timed_out, not_started, duration_ms, log, image,
    container, host, worktree, cwd, line, output_tail}, replay_error}],
    test_weakened: [{unit, repo, path, reason, hunk}]}
@@ -72,7 +79,9 @@ line that fails makes the unit `not_runnable` by rule `base-setup`.
 Exit 0: every unit resolves, its commits are test-first and, when
 replayed, its run is red at the test commit. Exit 1: no unit is reported,
 a unit does not resolve, its commits are not test-first, or its replay
-exited 0 or was not runnable. Exit 2: units.json is unreadable, or a
+exited 0 (for a pre_existing_red unit: on the tree of the change's base —
+the test was green before the change, so it was not already red) or was
+not runnable. Exit 2: units.json is unreadable, or a
 replay could not run (a container not had, a worktree not added, the
 deadline, an exit 126/127) — `replay_error` names it. A `test_weakened`
 hunk moves no exit code.
@@ -233,6 +242,22 @@ def origin_default_ref(directory: str) -> str:
         if err is None:
             return "refs/remotes/origin/" + b
     return ""
+
+
+def change_base(directory: str) -> Tuple[str, str]:
+    """The tree a unit declared pre_existing_red was already red on: the
+    repo's change base (merge-base HEAD origin/<default>), or why it
+    cannot be read."""
+    ref = origin_default_ref(directory)
+    if not ref:
+        return "", "the fetched origin default branch (origin/HEAD, origin/main, origin/master) is unknown"
+    out, err = run_git(directory, "merge-base", "HEAD", ref)
+    if err is not None:
+        return "", "git merge-base HEAD %s failed: %s" % (ref, err)
+    base = trim_space(out)
+    if not base:
+        return "", "git merge-base HEAD %s names no commit" % ref
+    return base, ""
 
 
 def repo_head(directory: str) -> str:
@@ -1797,11 +1822,12 @@ _REPLAY_TOKEN = re.compile(r"[^A-Za-z0-9._-]+", re.ASCII)
 REPLAY_DIR = "pf-replay"
 
 
-def replay(capsule_dir: str, unit: Unit, run: Dict[str, Any], deadline_at: float, unit_timeout: float,
+def replay(capsule_dir: str, unit: Unit, run: Dict[str, Any], commit: str, where: str, deadline_at: float, unit_timeout: float,
            log_dir: str, seq: int, env: Mapping[str, str], co: container.ContainerOptions,
            isolation: str) -> Dict[str, Any]:
-    """The unit's run on the tree of its test commit; its ReplayResult as
-    the details carry it. ReplayError for an infrastructure failure."""
+    """The unit's run on the tree of one commit — its test commit, or a
+    pre_existing_red unit's change base; its ReplayResult as the details
+    carry it. ReplayError for an infrastructure failure."""
     if unit.why:
         raise ReplayError("unit %s is unresolved: %s" % (clip_text(unit.id), unit.why))
     if not run["argv"]:
@@ -1827,15 +1853,15 @@ def replay(capsule_dir: str, unit: Unit, run: Dict[str, Any], deadline_at: float
         os.makedirs(os.path.dirname(wt), exist_ok=True)
     except OSError as err:
         raise ReplayError("repos/%s: %s" % (unit.repo, err)) from None
-    _, why = run_git(repo_dir, "worktree", "add", "--detach", wt, unit.test_commit, timeout=WORKTREE_TIMEOUT)
+    _, why = run_git(repo_dir, "worktree", "add", "--detach", wt, commit, timeout=WORKTREE_TIMEOUT)
     if why is not None:
-        raise ReplayError("repos/%s: the worktree of test_commit %s could not be added: %s" % (unit.repo, short_sha(unit.test_commit), why))
+        raise ReplayError("repos/%s: the worktree of %s %s could not be added: %s" % (unit.repo, where, short_sha(commit), why))
     try:
         workdir = wt
         if cwd != ".":
             workdir = os.path.join(wt, cwd)
             if not os.path.isdir(workdir):
-                raise ReplayError("unit %s: its run's cwd %s is no directory of test_commit %s" % (clip_text(unit.id), cwd, short_sha(unit.test_commit)))
+                raise ReplayError("unit %s: its run's cwd %s is no directory of %s %s" % (clip_text(unit.id), cwd, where, short_sha(commit)))
         line = gotext.shell_join(run["argv"])
         until = deadline_at
         if unit_timeout > 0:
@@ -1889,6 +1915,7 @@ def replay(capsule_dir: str, unit: Unit, run: Dict[str, Any], deadline_at: float
         "exit_code": res.exit,
         "red": verdict == "red",
         "timed_out": res.timed_out,
+        "commit": commit,
     }
     if verdict == "not_runnable" and hit is not None:
         out["not_runnable"] = hit
@@ -2108,9 +2135,16 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
             if run["repo"] != u.repo:
                 problems.append("unit %s: its run names repos/%s, its commits are in repos/%s" % (quote(clip_text(u.id)), clip_text(run["repo"]), u.repo))
                 continue
-            inv.say("unit %s: replaying `%s` at test commit %s (%d/%d)" % (u.id, gotext.shell_join(run["argv"]), short_sha(u.test_commit), i + 1, len(entries)))
+            commit, where = u.test_commit, "test commit"
+            if u.pre_existing_red:
+                base, why = change_base(os.path.join(c.repos_dir, u.repo))
+                if why:
+                    problems.append("unit %s: the change's base is unknown, so where it was already red cannot be replayed: %s" % (quote(clip_text(u.id)), why))
+                    continue
+                commit, where = base, "the change's base"
+            inv.say("unit %s: replaying `%s` at %s %s (%d/%d)" % (u.id, gotext.shell_join(run["argv"]), where, short_sha(commit), i + 1, len(entries)))
             try:
-                rr = replay(c.dir, u, run, deadline_at, ns.unit_timeout / duration.SECOND,
+                rr = replay(c.dir, u, run, commit, where, deadline_at, ns.unit_timeout / duration.SECOND,
                             os.path.join(logs, "replay", str(i + 1)), i + 1, env, co, ns.isolation)
             except (KeyboardInterrupt, runner.Interrupted) as err:
                 inv.summary = "interrupted while replaying unit %s (%s): nothing is proven" % (u.id, err or "interrupt")
@@ -2137,23 +2171,27 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
                 inv.summary = "unit %s's replay was killed at its time limit (%s): not judged" % (u.id, duration.format(ns.unit_timeout))
                 return 2
             if not_run(rr["exit_code"]):
-                inv.summary = "unit %s's run `%s` could not run at its test commit (exit %d: the command is missing or not executable there): not judged" % (
-                    u.id, rr["line"], rr["exit_code"])
+                inv.summary = "unit %s's run `%s` could not run at %s (exit %d: the command is missing or not executable there): not judged" % (
+                    u.id, rr["line"], where, rr["exit_code"])
                 return 2
             hit = rr.get("not_runnable")
             if hit is not None:
-                problems.append("unit %s: its run `%s` could not run at test_commit %s (not runnable — %s %s: `%s`): no red evidence"
-                                % (quote(clip_text(u.id)), rr["line"], short_sha(u.test_commit), hit["toolchain"], hit["rule"], clip_text(hit["line"])))
+                problems.append("unit %s: its run `%s` could not run at %s %s (not runnable — %s %s: `%s`): no red evidence"
+                                % (quote(clip_text(u.id)), rr["line"], where, short_sha(commit), hit["toolchain"], hit["rule"], clip_text(hit["line"])))
                 continue
             if not rr["red"]:
-                problems.append("unit %s: its run `%s` exited 0 on the tree of test_commit %s — the test passes before its implementation (never red, or weakened since)"
-                                % (quote(clip_text(u.id)), rr["line"], short_sha(u.test_commit)))
+                if u.pre_existing_red:
+                    problems.append("unit %s: its run `%s` exited 0 on the tree of the change's base %s — the test was green before the change, so it was not already red (pre_existing_red is wrong) and the unit has no red evidence"
+                                    % (quote(clip_text(u.id)), rr["line"], short_sha(commit)))
+                else:
+                    problems.append("unit %s: its run `%s` exited 0 on the tree of test_commit %s — the test passes before its implementation (never red, or weakened since)"
+                                    % (quote(clip_text(u.id)), rr["line"], short_sha(commit)))
     if problems:
         inv.summary = "%d of %d unit(s) fail the test-first check: %s" % (len(problems), len(units), "; ".join(clip_list(problems, 3)))
         return 1
     how = "resolve with test-first commits"
     if ns.replay:
-        how = "resolve with test-first commits and replay red at their test commits"
+        how = "resolve with test-first commits and replay red at their test commits (a unit declared pre_existing_red at the change's base)"
     inv.summary = "%d unit(s) %s (%d test_weakened hunk(s) to read)" % (len(units), how, len(d["test_weakened"]))
     return 0
 

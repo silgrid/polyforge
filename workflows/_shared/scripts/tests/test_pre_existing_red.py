@@ -59,7 +59,8 @@ class PreExistingRedReplayTest(GitCase):
     def unit_of(self, res: Dict[str, Any], uid: str) -> Dict[str, Any]:
         for u in res["details"]["units"]:
             if u["id"] == uid:
-                return u
+                got: Dict[str, Any] = u
+                return got
         self.fail("no unit %s in the details: %s" % (uid, res["details"]["units"]))
 
     def test_a_pre_existing_red_unit_replays_red_at_the_change_base(self) -> None:
