@@ -455,22 +455,36 @@ def plan_digest(plan: Mapping[str, Any]) -> str:
 
 
 def plan_of(directory: str, report: container.ContainerReport, cmds: Sequence[EngineCommand],
-            timeout_of: Callable[[EngineCommand], int]) -> Dict[str, Any]:
+            timeout_of: Callable[[EngineCommand], int], lane_dir: str = "") -> Dict[str, Any]:
     """The plan as a gate executes it — what its digest, the identity a green
     tag records and the release compares, is made of: the image's content
     half (the Dockerfile's hash), the container's limits, and every command
     in order with its phase, its declared prerequisites and the timeout it
-    runs under. A command naming the clone's path names it as <clone>, so
-    where a clone lives never splits the digest."""
+    runs under. A command naming the clone's path names it as <clone>, and
+    one a fallback's engine names the lane snapshot's directory (its audit
+    names the engine's own) reads <engine>, so where either lives never
+    splits the digest — the <engine> half only when lane_dir names the
+    lane's engine directory, so a tree's own engine keeps its plan byte for
+    byte."""
     olds = [directory]
     resolved = os.path.realpath(directory)
     if resolved != directory:
         olds.append(resolved)
-    pat = re.compile("|".join(re.escape(o) for o in olds))
+    lanes = []
+    if lane_dir:
+        lanes.append(lane_dir)
+        lane = os.path.realpath(lane_dir)
+        if lane != lane_dir:
+            lanes.append(lane)
+    pat = re.compile("|".join(re.escape(o) for o in sorted(olds, key=len, reverse=True)))
+    lane_pat = re.compile("|".join(re.escape(o) for o in sorted(set(lanes), key=len, reverse=True))) if lanes else None
     commands = []
     for c in cmds:
+        cmd = pat.sub("<clone>", c.cmd)
+        if lane_pat is not None:
+            cmd = lane_pat.sub("<engine>", cmd)
         commands.append({
-            "name": c.name, "phase": c.phase, "cmd": pat.sub("<clone>", c.cmd),
+            "name": c.name, "phase": c.phase, "cmd": cmd,
             "requires_env": list(c.requires_env), "requires_cmd": list(c.requires_cmd),
             "timeout": duration.format(timeout_of(c)),
         })
@@ -595,6 +609,10 @@ class Opened:
     box: container.Box
     directory: str
     log_dir: str
+    # lane_dir: the lane snapshot's engine directory when this is a
+    # fallback ("" when the tree's own engine served) — what the plan's
+    # digest normalizes as <engine>
+    lane_dir: str = ""
 
 
 class Gate:
@@ -657,7 +675,7 @@ class Gate:
             self.swept = True
             container.sweep_run(self.co, self.say)
         r = self.runner_for(directory)
-        engine, _, _ = select_engine(directory)
+        engine, _, lane_dir = select_engine(directory)
         self.say("building or finding the image of %s (log %s)"
                  % (container.DOCKERFILE_VERIFY, os.path.join(log_dir, runner.IMAGE_BUILD_LOG)))
         try:
@@ -675,7 +693,7 @@ class Gate:
         if why:
             box.remove()
             return None, why
-        return Opened(r=r, box=box, directory=directory, log_dir=log_dir), ""
+        return Opened(r=r, box=box, directory=directory, log_dir=log_dir, lane_dir=lane_dir), ""
 
     def ask_engine(self, o: Opened, base: str, full: bool) -> Tuple[Optional[EngineReport], str, str]:
         """The engine asked in the container (--full, or a scoped
@@ -792,7 +810,7 @@ class Gate:
         if not cmds:
             res.incomplete = "the scope engine planned no command (stack %s, conf %s)" % (gostr.quote(rep.stack), rep.conf)
             return
-        res.plan = plan_of(o.directory, box.report, cmds, self.timeout_of)
+        res.plan = plan_of(o.directory, box.report, cmds, self.timeout_of, o.lane_dir)
         res.plan_digest = plan_digest(res.plan)
         if plan_only:
             return
