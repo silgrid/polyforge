@@ -9,7 +9,9 @@
 // One session runs the four scenarios in order, each building on the last:
 //   R443a  both tasks appear in the running list's grid (kind, command, running, a
 //          ticking elapsed time), never as subagent items; the session is not marked
-//          subagentsActive; a reload keeps them; the shell task's panel shows its output.
+//          subagentsActive; a reload keeps them; the shell task's panel shows its output,
+//          and its header keeps the command area clear of the right column (close, stop,
+//          the time), which hugs the panel's right edge and survives a narrow panel.
 //   R443b  the panel's Stop stops that one task (claude's `stop_task`): it leaves the
 //          list, the panel shows it stopped, the monitor and its child run on.
 //   R443c  Stop mid-turn sends the interrupt that spares background work: the turn
@@ -167,6 +169,36 @@ try {
     const header = (await taskPanel(dev.taskId).textContent()) ?? "";
     assert.ok(header.includes(DEV), `the task panel does not name the command: ${header.slice(0, 200)}`);
     assert.ok(controlRequests("get_task_output").some((request) => request.task_id === dev.taskId), "the panel's output did not come from claude's get_task_output");
+
+    // polyforge#69 AC4: the command area and the header's right column (close, stop,
+    // the elapsed time) share no horizontal overlap, the column hugs the panel's
+    // right edge, and a narrow panel never squeezes it out. Every read that depends
+    // on the layout polls a real condition (the narrow reflow reaching the panel),
+    // never a fixed delay.
+    const panel = taskPanel(dev.taskId);
+    const side = panel.locator("[data-claude-task-side]");
+    const commandArea = panel.locator("[data-claude-task-command]");
+    const sideBox = await waitFor(async () => await side.boundingBox(), 10_000, "the panel header has no right column");
+    const panelBox = await panel.boundingBox();
+    const commandBox = await commandArea.boundingBox();
+    assert.ok(panelBox, "the panel has no box");
+    assert.ok(commandBox, "the panel shows no command area");
+    assert.ok(commandBox.x + commandBox.width <= sideBox.x + 0.5, `the command area overlaps the right column: ${JSON.stringify({ commandBox, sideBox })}`);
+    const panelRightEdge = panelBox.x + panelBox.width - 8; // the header's 8px right padding
+    assert.ok(Math.abs(sideBox.x + sideBox.width - panelRightEdge) <= 2, `the right column is not at the panel's right edge: ${JSON.stringify({ sideBox, panelBox })}`);
+    // A narrow panel, still the desktop layout (the mobile breakpoint is 640px).
+    await page.setViewportSize({ width: 560, height: 900 });
+    const narrowPanel = await waitFor(async () => {
+      const box = await panel.boundingBox();
+      return box && box.width < 600 ? box : undefined;
+    }, 10_000, "the narrow viewport never reached the panel");
+    const narrowSide = await side.boundingBox();
+    const narrowCommand = await commandArea.boundingBox();
+    assert.ok(narrowSide, "a narrow panel lost the right column");
+    assert.ok(narrowCommand, "a narrow panel lost the command area");
+    assert.ok(narrowSide.x >= narrowPanel.x && narrowSide.x + narrowSide.width <= narrowPanel.x + narrowPanel.width, `a narrow panel squeezed the right column out: ${JSON.stringify({ narrowPanel, narrowSide })}`);
+    assert.ok(narrowCommand.x + narrowCommand.width <= narrowSide.x + 0.5, `a narrow panel overlaps the command area and the right column: ${JSON.stringify({ narrowCommand, narrowSide })}`);
+    await page.setViewportSize({ width: 1280, height: 900 });
   });
 
   await scenario("R443b", async () => {
