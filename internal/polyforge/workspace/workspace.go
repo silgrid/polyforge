@@ -635,13 +635,12 @@ func SkippedSteps(cfg *Config, lane *workflow.Lane, project string) []string {
 // lane that the project's yaml declares `steps.<project>.<step>.by`, the
 // mode — only where the lane declares the step `human_mergeable: true`.
 // A by on a step the lane does not carry governs nothing (a skip's rule;
-// the loader guarantees the mode itself is `human`): the integrate and
-// release lanes carry no merge step, and a project declaring
-// `steps.<project>.merge.by: human` still opens its batches on them. A
-// by on a step the lane carries without declaring it human_mergeable is
-// the refusal (micro never accepts the mode; polyforge#36), so a claim
-// of such a lane fails with the reason. An absent by set answers (nil,
-// "").
+// the loader guarantees the mode itself is `human`): a lane that carries
+// no such step takes none of it, so a project's work items on every lane
+// without the step claim as usual. A by on a step the lane carries
+// without declaring it human_mergeable is the refusal (polyforge#36: a
+// lane that never takes the mode), so a claim of such a lane fails with
+// the reason. An absent by set answers (nil, "").
 func HumanMergeSteps(cfg *Config, lane *workflow.Lane, project string) (map[string]string, string) {
 	if cfg == nil || lane == nil || cfg.By[project] == nil {
 		return nil, ""
