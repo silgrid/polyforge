@@ -35,7 +35,7 @@ const streamEndedBeforeCompletion = "Upstream response stream ended before compl
 // cause, which never advances the candidate chain.
 func TestStreamEndedBeforeCompletionClassifiesTransient(t *testing.T) {
 	for _, turnErr := range []bool{false, true} {
-		got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: streamEndedBeforeCompletion, TurnError: turnErr})
+		got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: streamEndedBeforeCompletion, TurnError: turnErr}, nil)
 		if got != FailUpstreamTransient {
 			t.Errorf("REPORTED FAILURE (polyforge#202): %q (turn error %v) classified %q, want %q — an upstream stream that ends before completion is an upstream transient, not a model fault", streamEndedBeforeCompletion, turnErr, got, FailUpstreamTransient)
 		}
@@ -43,7 +43,7 @@ func TestStreamEndedBeforeCompletionClassifiesTransient(t *testing.T) {
 	// the live path's shape: rule 1 hands down a model_error verdict
 	// with the incident text as the turn error; verdictCause must
 	// re-classify it into the backoff-retry class.
-	if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: streamEndedBeforeCompletion}); got != FailUpstreamTransient {
+	if got, _ := verdictCauseWith(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: streamEndedBeforeCompletion}, nil); got != FailUpstreamTransient {
 		t.Errorf("REPORTED FAILURE (polyforge#202): verdictCause(model_error, %q) = %q, want %q — the live error turn burns a candidate instead of backing off", streamEndedBeforeCompletion, got, FailUpstreamTransient)
 	}
 }

@@ -80,7 +80,7 @@ func TestClaudeD7Table(t *testing.T) {
 			}
 			tl.Exit(supervise.ExitInfo{Code: c.code})
 			run := &stepRun{sp: StepSpawn{StepID: "fix", SpawnN: 1}, handle: exitedHandle{spawn.ExitInfo{Code: c.code}}, sink: tr}
-			cause, _, detail := classifyWaitFailure(run.exited())
+			cause, _, detail, _, _ := classifyWaitFailureWith(run.exited(), nil)
 			if cause != c.want {
 				t.Fatalf("cause %q, want %q (detail %s)", cause, c.want, detail)
 			}
@@ -90,7 +90,7 @@ func TestClaudeD7Table(t *testing.T) {
 
 // An executable that does not exist is a host fault whatever the harness.
 func TestClaudeMissingBinaryIsHost(t *testing.T) {
-	cause, _, _ := classifyWaitFailure(errString(`driver: step fix spawn 1 derivation failed: runtime: harness start failed: exec: "claude": executable file not found in $PATH`))
+	cause, _, _, _, _ := classifyWaitFailureWith(errString(`driver: step fix spawn 1 derivation failed: runtime: harness start failed: exec: "claude": executable file not found in $PATH`), nil)
 	if cause != FailExitHost {
 		t.Fatalf("cause %q", cause)
 	}

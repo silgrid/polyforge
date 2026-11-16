@@ -36,8 +36,8 @@ func TestClaudeErrorTurnClassifiesTheSameLiveOrExited(t *testing.T) {
 		{"500 upstream", "server_error", 500, "", "Server error mid-response", FailUpstreamTransient},
 	} {
 		text := supervise.ClaudeCanonicalError(tc.category, tc.status, tc.terminal, tc.message)
-		live := verdictCause(supervise.StepDead{Step: "fix", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text})
-		exit, _, _ := classifyWaitFailure(&ExitedError{Step: "fix", SpawnN: 1, ExitCode: 1, LastError: text, TurnError: true})
+		live, _ := verdictCauseWith(supervise.StepDead{Step: "fix", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}, nil)
+		exit, _, _, _, _ := classifyWaitFailureWith(&ExitedError{Step: "fix", SpawnN: 1, ExitCode: 1, LastError: text, TurnError: true}, nil)
 		if exit != tc.want {
 			t.Errorf("%s: the exit path classified %q as %q, want %q", tc.name, text, exit, tc.want)
 		}
@@ -51,7 +51,7 @@ func TestClaudeErrorTurnClassifiesTheSameLiveOrExited(t *testing.T) {
 		"claude-code error: model endpoint not found, retrying",
 		"claude-code upstream connection dropped (HTTP 5xx): the model server returned unknown status",
 	} {
-		if got := verdictCause(supervise.StepDead{Step: "fix", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}); got == FailExitModel {
+		if got, _ := verdictCauseWith(supervise.StepDead{Step: "fix", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}, nil); got == FailExitModel {
 			t.Errorf("verdictCause(%q) = %q: an outage-shaped text must not switch at once", text, got)
 		}
 	}

@@ -373,7 +373,7 @@ var hostPatterns = regexp.MustCompile(`(?i)(no space left|enospc|disk quota|edqu
 // "402 Payment Required" with no balance wording is an allowance failure
 // all the same, and this row is judged before every added rule, so no
 // Host-configured pattern can pull an allowance failure out of model class
-// (AC2). verdictCause promotes a live error turn naming it to
+// (AC2). verdictCauseWith promotes a live error turn naming it to
 // exit_model_class.
 var allowanceText = regexp.MustCompile(`(?i)(\b401\b|\b402\b|\b403\b|payment required|unauthori[sz]ed|authentication|invalid api key|incorrect api key|api key|quota|insufficient|billing|credit|` +
 	`余额不足|欠费|(额度|配额)[^，。；,.;\n]{0,6}(用尽|用完|耗尽|不足|超出|超限)|(超出|超过)了?(额度|配额)|` +
@@ -381,7 +381,7 @@ var allowanceText = regexp.MustCompile(`(?i)(\b401\b|\b402\b|\b403\b|payment req
 	`(无权限|没有权限|权限不足)[^，。；,.;\n]{0,6}(模型|接口|API|服务)|(模型|接口|API|服务)[^，。；,.;\n]{0,6}(无权限|没有权限|权限不足))`)
 
 // The name-resolution forms of a live error turn: the pinned model does
-// not exist for the provider. verdictCause promotes such a turn to
+// not exist for the provider. verdictCauseWith promotes such a turn to
 // exit_model_class (resuming the same unresolvable model cannot help).
 // Only ADJACENT forms count — "unknown/unresolved/unsupported/no such
 // model", the model_not_found code, the Claude translator's canonical
@@ -511,18 +511,13 @@ type TextRules struct {
 	Model     []*regexp.Regexp
 }
 
-// classifyText answers the first textClasses cause matching text ("" for
-// none); exited selects the exit-only rows too.
-func classifyText(text string, exited bool) string {
-	cause, _ := classifyTextWith(text, exited, nil)
-	return cause
-}
-
-// classifyTextWith is classifyText with the additional Host-configured
-// rules and the classification source: the allowance/auth row is judged
-// first (no added rule can pull an allowance failure out of model class),
-// then the added transient list, then the added model list, then the
-// remaining built-in rows. rules == nil judges the built-in rows only.
+// classifyTextWith answers the first textClasses cause matching text ("" for
+// none; exited selects the exit-only rows too), with the additional
+// Host-configured rules and the classification source: the allowance/auth
+// row is judged first (no added rule can pull an allowance failure out of
+// model class), then the added transient list, then the added model list,
+// then the remaining built-in rows. rules == nil judges the built-in rows
+// only.
 func classifyTextWith(text string, exited bool, rules *TextRules) (cause, source string) {
 	// row 0, the allowance/auth row, is judged first and alone: no added
 	// rule re-classifies an allowance or auth failure (AC2).
@@ -549,14 +544,8 @@ func classifyTextWith(text string, exited bool, rules *TextRules) (cause, source
 	return "", ""
 }
 
-// classifyWaitFailure maps a Wait error (not a cancellation) onto a
-// failure cause.
-func classifyWaitFailure(err error) (cause string, exitCode int, detail string) {
-	cause, exitCode, detail, _, _ = classifyWaitFailureWith(err, nil)
-	return cause, exitCode, detail
-}
-
-// classifyWaitFailureWith is classifyWaitFailure over the additional rules,
+// classifyWaitFailureWith maps a Wait error (not a cancellation) onto a
+// failure cause over the additional rules (nil = the built-in rows only),
 // answering also the classification source ("builtin" / "added" /
 // "fallback", "" when no text classification decided) and the raw text it
 // read ("" likewise). The added rules apply only to a process's own text —
@@ -608,7 +597,7 @@ func classifyWaitFailureWith(err error, rules *TextRules) (cause string, exitCod
 	return cause, -1, err.Error(), source, errText
 }
 
-// verdictCause answers the failure cause a supervisor verdict records. A
+// verdictCauseWith answers the failure cause a supervisor verdict records. A
 // model_error verdict is an error-ended turn of a harness that stayed
 // ALIVE (pi --mode rpc idles after a provider error): its text gets the
 // exit path's classification (polyforge#162), so a throttle or an
@@ -622,13 +611,8 @@ func classifyWaitFailureWith(err error, rules *TextRules) (cause string, exitCod
 // model-class death switches to the next candidate at once (design
 // #483 §7, 约定 4: no same-candidate resume on a first death). The split
 // lands in the archived cause, so the pointer never re-reads the text.
-func verdictCause(v supervise.StepDead) string {
-	cause, _ := verdictCauseWith(v, nil)
-	return cause
-}
-
-// verdictCauseWith is verdictCause over the additional rules, answering
-// also the classification source. A model_error verdict that stays
+// Over the additional rules (nil = the built-in rows only) it answers also
+// the classification source. A model_error verdict that stays
 // model_error (no row, or only the loose model-name row, matched) records
 // which rule judged the text: builtin, added or — the live-path fallback
 // (polyforge#51) — no rule at all.
