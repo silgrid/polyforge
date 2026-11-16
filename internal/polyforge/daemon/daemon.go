@@ -473,7 +473,7 @@ type Daemon struct {
 	reloadApplyMu sync.Mutex
 	// drainGate pairs every admission of new work — a submit's pending
 	// check + enqueue, the auto wave's check + enqueue, a task's check +
-	// slot reservation (admitTask) — with the drain switch's pending +
+	// held count (admitTask) — with the drain switch's pending +
 	// safe-idle decision (drain.go), so either the admission is refused
 	// or the switch sees it and waits. Held only across in-memory
 	// bookkeeping, never across file I/O or a Hub/AIHub round trip: a

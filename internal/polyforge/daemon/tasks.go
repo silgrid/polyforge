@@ -113,11 +113,12 @@ func (d *Daemon) taskSlots() *task.Slots {
 // admitTask is the one admission of every one-off task (task.Manager's
 // Admit hook: the spawn route, the analyze/prompt spawns, every path that
 // creates a task): refused while the Cell's execution is disabled or a
-// connection rotation is pending (drain.go), else it reserves an
-// execution slot at both ceilings (hostslots.go; unhosted, the manager's
-// own limit only) and counts the task as held work of the Cell. The
-// pending check and the reservation are one step under drainGate. A
-// refusal leaves no record, slot or run.
+// connection rotation is pending (drain.go), else it counts the task as
+// held work of the Cell (the drain switch's safe-idle waits for it). A
+// task takes NO execution slot (polyforge#74): the job ceilings never
+// judge a spawn, and the task lane's own bound (max_concurrent_tasks) is
+// the manager's check, never this one. The pending check and the count
+// are one step under drainGate. A refusal leaves no record, slot or run.
 func (d *Daemon) admitTask() error {
 	if err := d.execDisabledRefusal(); err != nil {
 		return err
@@ -127,21 +128,13 @@ func (d *Daemon) admitTask() error {
 	if err := d.drainRefusal(); err != nil {
 		return err
 	}
-	if d.cfg.HostSlots != nil {
-		if err := d.cfg.HostSlots.admitTask(d); err != nil {
-			return err
-		}
-	}
 	d.tasksHeld.Add(1)
 	return nil
 }
 
-// taskDone returns the reservation admitTask took.
+// taskDone returns the admission admitTask counted.
 func (d *Daemon) taskDone() {
 	d.tasksHeld.Add(-1)
-	if d.cfg.HostSlots != nil {
-		d.cfg.HostSlots.taskDone(d)
-	}
 }
 
 // taskWorkDir answers the directory one task's harness runs in: the
