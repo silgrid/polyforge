@@ -9,9 +9,11 @@ import { createJiti } from "jiti";
 
 // polyforge#73 AC1–AC3, pinned at unit level with a stub pf (PF_BIN) that
 // logs every argv: on a multi-Cell pf the Tasks list read becomes one
-// `pf --profile <cell> --json task list` per valid, in-service Cell of the
-// Host aggregate (the same `pf --json ops status` the Jobs tab polls — no
-// new probe), each row named with its Cell by the route's outer layer (the
+// `pf --profile <cell> --json task list` per valid Cell of the Host
+// aggregate (a degraded one too, r2#1: its daemon still runs and its local
+// read face answers, the same set the Host's task sum and the Jobs list
+// count; the same `pf --json ops status` the Jobs tab polls — no new
+// probe), each row named with its Cell by the route's outer layer (the
 // nine-key row passport unchanged); a Cell that fails degrades to its
 // cellErrors entry while the rest list; a pf without the multi-Cell
 // protocol (and an aggregate that cannot be read) keeps the one unflagged
@@ -47,6 +49,7 @@ if (rest[0] === "ops" && rest[1] === "status") {
     tasks: { running: 1, completed: 1 },
     cells: [
       { profile: "default", state: "serving", valid: true },
+      { profile: "lab", state: "degraded", valid: true, reason: "AIHub unreachable or refusing: connection refused" },
       { profile: "public", state: "serving", valid: true },
       { profile: "broken", state: "invalid", valid: false, reason: "config cli-broken.toml: line 1: boom" },
     ] });
@@ -57,7 +60,8 @@ const ROW = (id) => ({ id, spec: { project: "workbench", max_duration_ns: 1, max
   report_tail: "the tail", reporter: "alice" });
 if (rest[0] === "task" && rest[1] === "list") {
   if (profile === "public" && s.failPublic) { process.stderr.write("pf: cell public is unreachable (connection refused)\\n"); process.exit(1); }
-  out({ tasks: [ROW(profile === "public" ? "task_1111111111111111" : "task_00000000000000d1")] });
+  const id = profile === "public" ? "task_1111111111111111" : profile === "lab" ? "task_2222222222222222" : "task_00000000000000d1";
+  out({ tasks: [ROW(id)] });
 }
 if (rest[0] === "task" && rest[1] === "show") {
   if (profile === "public" && s.failPublicShow) { process.stderr.write("pf: cell public is unreachable (connection refused)\\n"); process.exit(1); }
@@ -100,9 +104,9 @@ test("polyforge#73 u3: the Tasks list reads every serving Cell of the Host aggre
   assert.equal(response.status, 200, "no 5xx");
   const body = await response.json();
   assert.ok(!("cell" in body), "the retired top-level single-Cell annotation is gone");
-  assert.equal(body.cellErrors, undefined, "every serving Cell answered");
-  assert.equal(body.tasks.length, 2, "one row per serving Cell (the ticket's two-Cell oracle)");
-  for (const [id, cell] of [["task_00000000000000d1", "default"], ["task_1111111111111111", "public"]]) {
+  assert.equal(body.cellErrors, undefined, "every valid Cell answered");
+  assert.equal(body.tasks.length, 3, "one row per valid Cell — a degraded one too (r2#1), plus the ticket's two-Cell oracle");
+  for (const [id, cell] of [["task_00000000000000d1", "default"], ["task_2222222222222222", "lab"], ["task_1111111111111111", "public"]]) {
     const row = body.tasks.find((entry) => entry.id === id);
     assert.ok(row, `the row of ${cell} is listed`);
     assert.equal(row.cell, cell, "the route names the row's Cell on the outer layer");
@@ -113,8 +117,9 @@ test("polyforge#73 u3: the Tasks list reads every serving Cell of the Host aggre
   // The per-Cell reads run in parallel, so the log's arrival order is not
   // asserted — only its set; the response's row order below is the deterministic one.
   assert.equal(opsReads().length, 1, "the Cell list comes from the one Host aggregate read");
-  assert.deepEqual(profilesOf(taskLists()).sort(), ["default", "public"], "one `pf --profile <cell> --json task list` per serving Cell");
-  assert.deepEqual(body.tasks.map((row) => row.cell), ["default", "public"], "the rows keep the aggregate's Cell order");
+  assert.deepEqual(profilesOf(taskLists()).sort(), ["default", "lab", "public"],
+    "one `pf --profile <cell> --json task list` per valid Cell — the degraded lab included, the invalid broken never");
+  assert.deepEqual(body.tasks.map((row) => row.cell), ["default", "lab", "public"], "the rows keep the aggregate's Cell order");
   for (const argv of taskLists()) {
     assert.ok(argv.indexOf("--profile") < argv.indexOf("--json"), "--profile precedes --json (global flags before the verb)");
   }
@@ -128,7 +133,7 @@ test("polyforge#73 u3: a Cell that fails to list degrades to its cellErrors entr
   const response = await GET(get("/api/polyforge/tasks"));
   assert.equal(response.status, 200, "no 5xx");
   const body = await response.json();
-  assert.equal(body.tasks.length, 1, "the default Cell's task still lists");
+  assert.equal(body.tasks.length, 2, "the default and lab Cells' tasks still list");
   assert.equal(body.tasks[0].cell, "default");
   assert.equal(Array.isArray(body.cellErrors) && body.cellErrors.length, 1, "the failed Cell is named");
   assert.equal(body.cellErrors[0].cell, "public");

@@ -200,9 +200,9 @@ test("ops snapshot forwards exactly tasks.running/completed", async () => {
   }
 });
 
-test("polyforge#73: the ops snapshot keeps the Host aggregate's per-Cell rows minimal, and the serving filter keeps the valid, in-service Cells", async () => {
+test("polyforge#73: the ops snapshot keeps the Host aggregate's per-Cell rows minimal, and the readable filter keeps every valid Cell (a degraded one too)", async () => {
   const { sanitizeOpsStatus, servingPolyforgeCells } = await loadSubject();
-  assert.equal(typeof servingPolyforgeCells, "function", "the serving filter exists");
+  assert.equal(typeof servingPolyforgeCells, "function", "the readable filter exists");
   const base = { queue: { running: 0, max_concurrent: 2 }, jobs: [] };
   const machine = {
     ...base,
@@ -210,6 +210,11 @@ test("polyforge#73: the ops snapshot keeps the Host aggregate's per-Cell rows mi
       { profile: "default", state: "serving", valid: true, reason: "", server: "http://hub:1", data_dir: "/srv/e2e-secret-cells/default", machine_id: "m-cell", workspaces: ["/srv/e2e-secret-ws"], running: 2, pending: 0, draining: false, pending_change: "" },
       { profile: "public", state: "serving", valid: true },
       { profile: "drained", state: "serving", valid: true, draining: true },
+      // r2#1: a valid Cell whose AIHub is unreachable still reports state
+      // "degraded" (daemon/profiles.go) — its local read face answers, and
+      // the Host's own task sum and Jobs list count it, so its tasks must
+      // not silently vanish from the Tasks list.
+      { profile: "lab", state: "degraded", valid: true, reason: "AIHub unreachable or refusing: connection refused" },
       { profile: "broken", state: "invalid", valid: false, reason: "config cli-broken.toml: line 1: boom" },
       { profile: "gone", state: "removed", valid: false },
       { profile: "Bad Name", state: "serving", valid: true },
@@ -222,11 +227,12 @@ test("polyforge#73: the ops snapshot keeps the Host aggregate's per-Cell rows mi
     { profile: "default", state: "serving", valid: true },
     { profile: "public", state: "serving", valid: true },
     { profile: "drained", state: "serving", valid: true },
+    { profile: "lab", state: "degraded", valid: true },
     { profile: "broken", state: "invalid", valid: false },
     { profile: "gone", state: "removed", valid: false },
   ], "each row keeps only profile/state/valid; an illegal name and a non-row drop");
-  assert.deepEqual(servingPolyforgeCells(snapshot.cells), ["default", "public", "drained"],
-    "only the valid, in-service Cells serve Cell-scoped reads");
+  assert.deepEqual(servingPolyforgeCells(snapshot.cells), ["default", "public", "drained", "lab"],
+    "every valid Cell serves Cell-scoped reads — a degraded one (its daemon still runs) included, an invalid or removed one never");
   assert.deepEqual(servingPolyforgeCells(undefined), [], "no cells block reads as none");
   const without = sanitizeOpsStatus(base);
   assert.ok(without && without.cells === undefined, "a machine without a cells block carries no field");
