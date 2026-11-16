@@ -23,7 +23,10 @@ func TestStates(t *testing.T) {
 }
 
 func TestBudgets(t *testing.T) {
-	if DefaultMaxDuration != 20*time.Minute || DefaultMaxTokens != 300000 {
+	// polyforge#74: an unprompted spawn's budgets are 40m / 1000000 (the
+	// owner's 2026-11-16 ruling; the token default is the ceiling); the
+	// ceilings themselves are unchanged code constants.
+	if DefaultMaxDuration != 40*time.Minute || DefaultMaxTokens != 1000000 {
 		t.Fatalf("defaults changed: %s / %d", DefaultMaxDuration, DefaultMaxTokens)
 	}
 	if MaxDuration != 60*time.Minute || MaxTokens != 1000000 {
@@ -172,7 +175,7 @@ func TestJSONDurationFieldsNameTheirUnit(t *testing.T) {
 		t.Fatalf("duration JSON names must state the unit (nanoseconds): %s", raw)
 	}
 	if got, want := *doc.Spec.MaxDurationNS, int64(DefaultMaxDuration); got != want {
-		t.Fatalf("max_duration_ns = %d, want %d (20m in ns)", got, want)
+		t.Fatalf("max_duration_ns = %d, want %d (the default in ns)", got, want)
 	}
 	if got, want := *doc.WallConsumedNS, int64(wall); got != want {
 		t.Fatalf("wall_consumed_ns = %d, want %d", got, want)
