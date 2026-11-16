@@ -145,3 +145,45 @@ func TestContractScanRegistryCoversEveryContractTest(t *testing.T) {
 		}
 	}
 }
+
+// TestMicroCheckKeepsNothingTheContractScanCheckRuns: the micro lane
+// runs the fast phase (the contract-scan check among it) before its
+// micro_check= commands, so a micro_check= -run case that repeats what
+// the check already runs is a duplicate run, not coverage — it left the
+// lines when the check took the contract tests over.
+func TestMicroCheckKeepsNothingTheContractScanCheckRuns(t *testing.T) {
+	listedList := contractScanAlternation(t)
+	raw, err := os.ReadFile(filepath.Join(v1Root(t), ".polyforge", "verify-scope.conf"))
+	if err != nil {
+		t.Fatalf("the repository conf must exist: %v", err)
+	}
+	micro := 0
+	for _, ln := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(ln, "micro_check=") {
+			continue
+		}
+		micro++
+		cmd := strings.TrimPrefix(ln, "micro_check=")
+		i := strings.Index(cmd, " -run '")
+		if i < 0 {
+			continue // a command that names no test cannot repeat one
+		}
+		rest := cmd[i+len(" -run '"):]
+		j := strings.Index(rest, "'")
+		if j < 0 {
+			t.Fatalf("micro_check line %d carries an unterminated -run pattern: %q", micro, ln)
+		}
+		re, err := regexp.Compile("^(?:" + rest[:j] + ")$")
+		if err != nil {
+			t.Fatalf("micro_check line %d carries a pattern that is not a Go regexp: %v", micro, err)
+		}
+		for _, n := range listedList {
+			if re.MatchString(n) {
+				t.Errorf("micro_check line %d runs %s, which the %s fast check already runs (the micro lane runs the fast phase first): drop it from micro_check=", micro, n, contractScanName)
+			}
+		}
+	}
+	if micro == 0 {
+		t.Fatal("the conf declares no micro_check= line to compare against the contract-scan check")
+	}
+}
