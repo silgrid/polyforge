@@ -302,6 +302,9 @@ and `--help` is its full reference: a skill does not repeat it.
 | `PF_LANE_DIR` | `<capsule>/workflows/<lane>`: the lane snapshot the step runs |
 | `PF_SHARED_DIR` | `<capsule>/workflows/_shared`: the shared tree beside it |
 | `PF_PYTHON` | the interpreter's absolute path: `[daemon] python` ([config.md](config.md)), else `python3` on the daemon's `PATH`, resolved once at the daemon's start; a missing one or one older than 3.9 refuses the start, naming why (`pf doctor`'s `python3` row judges the same rule) |
+| `PF_CELL` | the Cell the work item belongs to: `default`, else the named Cell's profile |
+| `PF_CELL_SERVER` | that Cell's server as configured |
+| `PF_DEPLOY_ENV` | the deploy configuration file that Cell's deploys read |
 
 **Python.** A script is Python 3.9 or newer and the standard library
 only: no third-party package, no virtual environment. An entry script
@@ -450,7 +453,11 @@ The daemon starts every step process with `PF_WI_ID`, `PF_DAEMON_ID`,
 `PF_DAEMON_SOCKET`, `PF_ROUND`, `PF_STEP`, `PF_SPAWN` and
 `PF_TOOL_WINDOW_MS` ([config.md](config.md), "the step environment"), with
 the four a step's scripts run from: `PF_CAPSULE`, `PF_LANE_DIR`,
-`PF_SHARED_DIR` and `PF_PYTHON` ([Scripts](#scripts)). With `[daemon]
+`PF_SHARED_DIR` and `PF_PYTHON` ([Scripts](#scripts)), and with the work
+item's Cell facts: `PF_CELL`, `PF_CELL_SERVER` and `PF_DEPLOY_ENV` (the
+deploy configuration file that Cell's deploys read; a deploy procedure
+reads it when set, refusing when it is missing —
+[release.md](release.md), the deploy configuration section). With `[daemon]
 command_path` set, its `PATH` is the daemon's own `pf` directory, its
 harness binary's directory and that command PATH — the one the daemon's
 own git and gh run under — each entry once, so a script's commands

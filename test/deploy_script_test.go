@@ -1,3 +1,4 @@
+// carries: .polyforge/deploy.sh
 package test
 
 // Safety-rail tests for .polyforge/deploy.sh: mandatory --confirm, the
@@ -783,4 +784,64 @@ func TestDeployEnvFileReadEnvWins(t *testing.T) {
 		t.Errorf("the file's COMPOSE_FILE was used although the environment set it\n%s", out)
 	}
 	d.assertNothingMutated("v2.2.1")
+}
+
+// TestDeployEnvFileFollowsPFDeployEnv (polyforge#75): with PF_DEPLOY_ENV
+// set, deploy.sh reads the deploy configuration from the file it names
+// (the one the work item's Cell selects) — four of the five required
+// values come from that file, the environment keeps only COMPOSE_FILE and
+// wins over the file's wrong value for it; the dry-run passes its
+// read-only preflight only if both hold.
+func TestDeployEnvFileFollowsPFDeployEnv(t *testing.T) {
+	d := newReadyWorld(t)
+	cellEnv := filepath.Join(d.w, "cfg", "deploy-public.env")
+	var file strings.Builder
+	file.WriteString("# this Cell's deploy topology\n")
+	for _, v := range deployRequiredVars {
+		if v == "COMPOSE_FILE" {
+			file.WriteString("COMPOSE_FILE=" + filepath.Join(d.w, "no-such", "docker-compose.yml") + "\n")
+			continue
+		}
+		file.WriteString(v + "=" + envValue(d.env, v) + "\n")
+	}
+	wf(t, cellEnv, file.String(), 0o600)
+	d.env = withoutEnv(d.env, "AIHUB_HOST", "AIHUB_DATA", "COMPOSE_PROJECT", "DEPLOY_LOCK_FILE")
+	d.env = append(d.env, "PF_DEPLOY_ENV="+cellEnv)
+	out, err := d.run("", "v2.3.0", "--dry-run")
+	if err != nil || !strings.Contains(out, "dry-run: steps 0-1 ran read-only") {
+		t.Fatalf("the dry-run must take four values from the Cell's deploy.env and COMPOSE_FILE from the environment: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "no-such") {
+		t.Errorf("the file's COMPOSE_FILE was used although the environment set it\n%s", out)
+	}
+	d.assertNothingMutated("v2.2.1")
+}
+
+// TestDeployEnvFileMissingRefused (polyforge#75): PF_DEPLOY_ENV pointing
+// at a file that does not exist is a REFUSED deploy (exit 1) — before any
+// network or tool work, --dry-run and --preflight included, on both
+// components: a Cell never falls back to another Cell's deploy
+// configuration. Unset, the behavior is unchanged (the refusal points at
+// the operator's own deploy.env; TestDeployRequiredVars* above).
+func TestDeployEnvFileMissingRefused(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "deploy-public.env")
+	for name, args := range map[string][]string{
+		"real deploy":      {"v2.3.0", "--confirm", "v2.3.0"},
+		"dry-run":          {"v2.3.0", "--dry-run"},
+		"preflight":        {"--preflight"},
+		"pi-web component": {"v2.3.0", "--confirm", "v2.3.0", "--component", "pi-web"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newReadyWorld(t)
+			d.env = append(d.env, "PF_DEPLOY_ENV="+missing)
+			out, err := d.run("", args...)
+			if exitCode(err) != 1 || !strings.Contains(out, "REFUSED") || !strings.Contains(out, missing) {
+				t.Fatalf("want exit 1 + REFUSED naming %s, got %v\n%s", missing, err, out)
+			}
+			if got := d.logOf("log-ssh") + d.logOf("log-gh") + d.logOf("log-docker") + d.logOf("log-login"); got != "" {
+				t.Errorf("network/tool work happened before the refusal:\n%s", got)
+			}
+			d.assertNothingMutated("v2.2.1")
+		})
+	}
 }
