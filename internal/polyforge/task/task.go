@@ -61,9 +61,10 @@ const (
 	DefaultLimit = 2
 
 	// DefaultMaxDuration / DefaultMaxTokens are the budgets a spawn
-	// without budget flags gets.
-	DefaultMaxDuration = 20 * time.Minute
-	DefaultMaxTokens   = 300000
+	// without budget flags gets (polyforge#74: 40 minutes; the token
+	// default IS the MaxTokens ceiling, so --max-tokens can only lower it).
+	DefaultMaxDuration = 40 * time.Minute
+	DefaultMaxTokens   = 1000000
 
 	// MaxDuration / MaxTokens are the code-constant ceilings; a spawn
 	// above either is refused naming the ceiling.

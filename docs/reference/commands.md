@@ -309,7 +309,8 @@ its four columns.
 - **Models.** `steps.<project>.task.models` (the only key under `task`), else
   `steps.<project>.default.models`, else the spawn is refused naming those keys.
   There is no `--models`, `--wait` or `--type`; each is refused.
-- **Budgets.** Wall clock 20m (ceiling 60m) and 300000 tokens (ceiling 1000000),
+- **Budgets.** Wall clock 40m (ceiling 60m) and 1000000 tokens (the
+  ceiling — a spawn can only lower the token budget),
   hard-killed on crossing; a larger `--max-duration`/`--max-tokens` is refused
   naming the ceiling. No yaml key changes them. The token budget counts
   **fresh tokens** per model call — uncached input, cache creation/write and

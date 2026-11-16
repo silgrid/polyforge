@@ -49,8 +49,8 @@ var cmdTask = &Command{
 		"       pf task cancel <id>",
 	Setup: func(fs *flag.FlagSet) {
 		fs.String("project", "", "spawn: the mapped project whose workspace the task runs in (a name, never a path)")
-		fs.String("max-duration", "", "spawn: wall-clock cap (default 20m, ceiling 60m)")
-		fs.String("max-tokens", "", "spawn: token cap (default 300000, ceiling 1000000)")
+		fs.String("max-duration", "", "spawn: wall-clock cap (default 40m, ceiling 60m)")
+		fs.String("max-tokens", "", "spawn: token cap (default 1000000, the ceiling — can only be lowered)")
 		// refused, never swallowed: the lane has no spawn-level model
 		// override, no wait mode and no task type
 		fs.String("models", "", "refused: the task's candidates come from steps.<project>.task.models / default.models")

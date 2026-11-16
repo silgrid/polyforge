@@ -29,8 +29,9 @@ pf task cancel <id>
   `pf task show <id>`.
 - `--project` is required and is the only selector: a project **name** mapped
   on this daemon, never a filesystem path.
-- Budgets: `--max-duration` defaults to `20m` (ceiling `60m`) and
-  `--max-tokens` to `300000` (ceiling `1000000`). The token budget counts
+- Budgets: `--max-duration` defaults to `40m` (ceiling `60m`) and
+  `--max-tokens` to `1000000` — the token default IS the ceiling, so the
+  token budget can only be lowered, never raised. The token budget counts
   **fresh tokens** per model call: uncached input + cache creation/write +
   output. Context re-sent from the prompt cache (a cache read) is not charged
   again. Both are hard caps — a value above its ceiling, or one that is not a
@@ -55,8 +56,9 @@ spawn only after the owner approves:
 - **范围** — which sources, trees or topics are in scope, and explicitly what
   is out of scope.
 - **预算** — a wall-clock/token proposal with its reason: start from the
-  defaults `20m` / `300000` and raise it only when the errand needs it, never
-  above the ceilings.
+  defaults `40m` / `1000000` — the duration may be raised up to the `60m`
+  ceiling when the errand needs it, the token budget already sits at its
+  ceiling and can only be lowered.
 
 Name the model-config requirement in the same breath, so a missing
 `steps.<project>.task.models` (and missing project default) is fixed before
