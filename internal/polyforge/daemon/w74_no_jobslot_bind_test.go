@@ -27,16 +27,17 @@ func TestW74TasksTakeNoJobSlots(t *testing.T) {
 	if e := s.take(alpha); e == nil || e.WorkItemID != "wi_a1" {
 		t.Fatalf("alpha's turn must start (the Host ceiling fills): %+v", e)
 	}
-	d := &Daemon{cfg: Config{Profile: "default", HostSlots: s}}
-	if err := d.admitTask(); err != nil {
+	def.cfg.HostSlots = s
+	if err := def.admitTask(); err != nil {
 		t.Fatalf("a task must not be refused by the job ceilings: %v", err)
 	}
 
 	// the reverse bind: tasks fill the task bound — a job start passes
 	s2 := &hostSlots{max: 2, tasks: &task.Slots{}, cells: cells}
-	d2 := &Daemon{cfg: Config{Profile: "default", HostSlots: s2}}
+	def2 := slotCell("default", 4)
+	def2.cfg.HostSlots = s2
 	for i := 0; i < task.DefaultLimit; i++ {
-		if err := d2.admitTask(); err != nil {
+		if err := def2.admitTask(); err != nil {
 			t.Fatalf("admit %d: %v", i, err)
 		}
 	}
@@ -50,8 +51,8 @@ func TestW74TasksTakeNoJobSlots(t *testing.T) {
 	if e := s3.take(beta); e == nil {
 		t.Fatal("beta's job must start and take its own ceiling of 1")
 	}
-	db := &Daemon{cfg: Config{Profile: "beta", HostSlots: s3}}
-	if err := db.admitTask(); err != nil {
+	beta.cfg.HostSlots = s3
+	if err := beta.admitTask(); err != nil {
 		t.Fatalf("a task must not be refused by its Cell's job ceiling: %v", err)
 	}
 }
