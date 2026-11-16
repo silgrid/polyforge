@@ -226,3 +226,76 @@ func TestDeployTargetsNoDeployEnvRefusesAsPolyforge75(t *testing.T) {
 	}
 	d.assertNothingMutated("v2.2.1")
 }
+
+// TestDeployTargetsCellNotInListRefused (polyforge#76, AC2): the work
+// item's own Cell must be one of the deploy targets - a release work item
+// never deploys targets its Cell does not own - and the refusal names the
+// Cell and every target, before any network work, in all three modes.
+func TestDeployTargetsCellNotInListRefused(t *testing.T) {
+	for name, args := range map[string][]string{
+		"real deploy": {"v2.3.0", "--confirm", "v2.3.0"},
+		"dry-run":     {"v2.3.0", "--dry-run"},
+		"preflight":   {"--preflight"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newReadyWorld(t)
+			d.twoTargetEnv(t, "staging", "http://stage.example:8080")
+			out, err := d.run("", args...)
+			if exitCode(err) != 1 || !strings.Contains(out, "REFUSED") {
+				t.Fatalf("want exit 1 + REFUSED, got %v\n%s", err, out)
+			}
+			for _, want := range []string{"staging", "default", "public"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("the refusal must name the work item's Cell and every target, missing %q:\n%s", want, out)
+				}
+			}
+			if got := d.logOf("log-ssh") + d.logOf("log-gh") + d.logOf("log-docker") +
+				d.logOf2("log-ssh") + d.logOf2("log-gh") + d.logOf2("log-docker"); got != "" {
+				t.Errorf("the refusal came after network/tool work:\n%s", got)
+			}
+			d.assertNothingMutated("v2.2.1")
+			d.assertSecondUntouched("v2.2.1")
+		})
+	}
+}
+
+// TestDeployTargetsWrongServerRefused (polyforge#76, AC2): every target's
+// deploy configuration must point at ITS OWN Cell's server - the #60
+// shape, one Cell's file naming another Cell's host, is refused naming
+// both values before ANY network work (a per-target child's own check
+// would refuse too, but only after the wrapper had started walking the
+// list: the preflight row shows the difference - no ssh, gh or docker
+// call happens at all).
+func TestDeployTargetsWrongServerRefused(t *testing.T) {
+	for name, args := range map[string][]string{
+		"real deploy": {"v2.3.0", "--confirm", "v2.3.0"},
+		"dry-run":     {"v2.3.0", "--dry-run"},
+		"preflight":   {"--preflight"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newReadyWorld(t)
+			d.twoTargetEnv(t, "default", "http://fakehost:8080")
+			pubEnv := filepath.Join(d.w, "cfg", "deploy-public.env")
+			b, err := os.ReadFile(pubEnv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wf(t, pubEnv, strings.Replace(string(b), "AIHUB_HOST=root@fakehost2", "AIHUB_HOST=root@fakehost", 1), 0o600)
+			out, err := d.run("", args...)
+			if exitCode(err) != 1 || !strings.Contains(out, "REFUSED") {
+				t.Fatalf("want exit 1 + REFUSED, got %v\n%s", err, out)
+			}
+			for _, want := range []string{"public", "root@fakehost", "fakehost2"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("the refusal must name the target and both sides, missing %q:\n%s", want, out)
+				}
+			}
+			if got := d.logOf("log-ssh") + d.logOf("log-gh") + d.logOf("log-docker") +
+				d.logOf2("log-ssh") + d.logOf2("log-gh") + d.logOf2("log-docker"); got != "" {
+				t.Errorf("the refusal came after network/tool work:\n%s", got)
+			}
+			d.assertNothingMutated("v2.2.1")
+			d.assertSecondUntouched("v2.2.1")
+		})
+	}
+}
