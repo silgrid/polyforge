@@ -178,6 +178,12 @@ func (d *Daemon) routes() *http.ServeMux {
 	mux.HandleFunc("POST /task/cancel/{id}", d.taskCancelRoute)
 	mux.HandleFunc("GET "+taskMemSearchPath, d.taskSearchRoute)
 	mux.HandleFunc("GET "+taskMemPrefix+"{id}", d.taskMemoryRoute)
+	// the analysis scheduler (analysis_queue.go, polyforge#72): a fresh
+	// execution ticket's auto-scheduled pre-submit analysis. Behind
+	// refuseStepOrigin like every POST here — a step or task process
+	// tree is refused DAEMON-403; only a human session's `pf file create`
+	// asks for one.
+	mux.HandleFunc("POST /analysis/enqueue", d.analysisEnqueueRoute)
 	return mux
 }
 

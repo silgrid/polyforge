@@ -246,7 +246,8 @@ func TestW72AnalysisEnqueueSpawnsImmediately(t *testing.T) {
 	// nothing stays queued
 	if entries := readW72Queue(t, td); len(entries) != 0 {
 		t.Fatalf("a scheduled analysis leaves nothing queued: %+v", entries)
-	}}
+	}
+}
 
 func TestW72AnalysisQueuedWhenSlotsFull(t *testing.T) {
 	td, hub, runner := w72World(t, nil)
@@ -309,6 +310,9 @@ func TestW72AnalysisQueueSurvivesRestart(t *testing.T) {
 	hub.contents["wi_w72_r"] = c
 	hub.mu.Lock()
 	hub.status["wi_w72_r"] = api.StatusQueued
+	if hub.bundles == nil {
+		hub.bundles = map[string]string{}
+	}
 	bundle := "develop"
 	hub.bundles["wi_w72_r"] = bundle
 	hub.mu.Unlock()

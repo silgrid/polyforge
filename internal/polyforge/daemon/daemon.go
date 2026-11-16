@@ -313,6 +313,12 @@ type Daemon struct {
 	hub   Hub
 	modes *ModeCtl
 	q     *jobQueue
+	// analysisQ is the Cell's persisted pending-analysis queue
+	// (analysis_queue.go, polyforge#72); analysisDispatch lets one
+	// dispatch walk run at a time (the tick, a task's end and the
+	// enqueue route all arrive at it).
+	analysisQ        *analysisQueue
+	analysisDispatch sync.Mutex
 
 	rt  *runtime.Runtime
 	obs *observe.Observe
@@ -730,6 +736,11 @@ func New(cfg Config) (*Daemon, error) {
 		stepHubAllow: laneHubAllow,
 		stepHubAttrs: laneHubAttrs,
 	}
+	// polyforge#72: the Cell's persisted pending-analysis queue — loaded
+	// before the face serves, so a restart's entries replay (the dispatch
+	// tick and every task end re-try them).
+	d.analysisQ = newAnalysisQueue(filepath.Join(cfg.DataDir, analysisQueueFile))
+	d.analysisQ.load()
 	if d.verifyQ == nil {
 		// unhosted: this daemon's own heavy-run admission
 		d.verifyQ = newVerifyQueue(cfg.StartupFile.Daemon.MaxConcurrentBars, cfg.StartupFile.Daemon.BarLoadThreshold)
@@ -1018,6 +1029,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 			// a queued heavy dispatch the gates now allow
 			// starts here
 			d.verifyQ.Tick()
+			// the pending-analysis queue's wake (polyforge#72): every Cell
+			// re-tries its own head, so any Cell's queued analysis dispatches
+			// within one tick of a Host slot freeing.
+			d.dispatchAnalysis()
 		case <-drain.C:
 			d.fetchAutoWave()
 		}

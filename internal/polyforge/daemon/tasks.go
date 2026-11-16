@@ -135,6 +135,11 @@ func (d *Daemon) admitTask() error {
 // taskDone returns the admission admitTask counted.
 func (d *Daemon) taskDone() {
 	d.tasksHeld.Add(-1)
+	// a slot freed is Host-wide (polyforge#72): try this Cell's queued
+	// analyses at once; every other Cell's queue wakes on its own tick.
+	if d.analysisQ != nil {
+		d.dispatchAnalysis()
+	}
 }
 
 // taskWorkDir answers the directory one task's harness runs in: the
