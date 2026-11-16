@@ -110,8 +110,11 @@ test("polyforge#73 u3: the Tasks list reads every serving Cell of the Host aggre
   }
   // argv: the one shared ops read (no new probe), then one pinned list read
   // per serving Cell — `--profile` before `--json`, the broken Cell never read.
+  // The per-Cell reads run in parallel, so the log's arrival order is not
+  // asserted — only its set; the response's row order below is the deterministic one.
   assert.equal(opsReads().length, 1, "the Cell list comes from the one Host aggregate read");
-  assert.deepEqual(profilesOf(taskLists()), ["default", "public"], "one `pf --profile <cell> --json task list` per serving Cell, in the aggregate's order");
+  assert.deepEqual(profilesOf(taskLists()).sort(), ["default", "public"], "one `pf --profile <cell> --json task list` per serving Cell");
+  assert.deepEqual(body.tasks.map((row) => row.cell), ["default", "public"], "the rows keep the aggregate's Cell order");
   for (const argv of taskLists()) {
     assert.ok(argv.indexOf("--profile") < argv.indexOf("--json"), "--profile precedes --json (global flags before the verb)");
   }
