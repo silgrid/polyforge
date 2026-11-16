@@ -54,17 +54,24 @@ const ALIASES = [
 const CAPABILITIES = ["ui_surface_v1", "mcp_call_result_not_for_model_v1", "mcp_call_check_permissions_v1"];
 
 test("the recorded 2.1.322 initialize answer yields the version, claude's alias list with resolved names and its capabilities", () => {
-  assert.deepEqual(probe.claudeInitializeInfo(recordedAnswer()), { version: "2.1.322", models: ALIASES, capabilities: CAPABILITIES, recorded: true });
+  // polyforge#71 (AC3): the commands field is asserted in lib/claude-commands-71.test.mjs;
+  // here it is enough that the recorded answer yields exactly the 48 names.
+  const info = probe.claudeInitializeInfo(recordedAnswer());
+  assert.deepEqual({ version: info.version, models: info.models, capabilities: info.capabilities, recorded: info.recorded },
+    { version: "2.1.322", models: ALIASES, capabilities: CAPABILITIES, recorded: true });
+  assert.equal(info.commands.length, 48, "the recorded answer's own commands are read whole");
   // Tolerant: a malformed answer is no version, no model, no capability — never a throw.
   for (const value of [undefined, null, "x", {}, { models: "x", capabilities: [1], claude_code_version: 7 }, { models: [{ value: "-bad name" }, { value: 3 }, null] }]) {
-    assert.deepEqual(probe.claudeInitializeInfo(value), { version: null, models: [], capabilities: [], recorded: false }, JSON.stringify(value));
+    assert.deepEqual(probe.claudeInitializeInfo(value), { version: null, models: [], commands: [], capabilities: [], recorded: false }, JSON.stringify(value));
   }
 });
 
 test("a probe runs one claude with no prompt, answers from its initialize response and caches it per binary", async () => {
   const binary = installStub("probe-bin");
   const answer = await probe.probeClaude(binary);
-  assert.deepEqual(answer, { version: "2.1.322", models: ALIASES, capabilities: CAPABILITIES, recorded: true });
+  assert.deepEqual({ version: answer.version, models: answer.models, capabilities: answer.capabilities, recorded: answer.recorded },
+    { version: "2.1.322", models: ALIASES, capabilities: CAPABILITIES, recorded: true });
+  assert.equal(answer.commands.length, 48, "the probe's answer carries claude's own commands (polyforge#71)");
   const records = readStubLog(stubLog);
   const launches = records.filter((entry) => entry.kind === "probe");
   assert.equal(launches.length, 1, "one claude");

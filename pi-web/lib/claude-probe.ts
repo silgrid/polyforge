@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { buildClaudeEnv } from "./claude-argv";
 import {
   CLAUDE_FEATURE_MIN_VERSION,
+  ClaudeCommandEntry,
   compareClaudeVersions,
   isClaudeModelName,
   isClaudeRecordedVersion,
@@ -30,6 +31,8 @@ export interface ClaudeAliasModel {
 export interface ClaudeProbeInfo {
   version: string | null;
   models: ClaudeAliasModel[];
+  /** claude's own slash commands (polyforge#71, AC3): the `/` menu's source. */
+  commands: ClaudeCommandEntry[];
   /** claude's own capability names, verbatim (never mapped to Pi Web features). */
   capabilities: string[];
   /** Whether `version` is one of CLAUDE_RECORDED_VERSIONS (the fixtures cover it). */
@@ -70,7 +73,25 @@ export function claudeInitializeInfo(response: unknown): ClaudeProbeInfo {
   const capabilities = Array.isArray(answer.capabilities) && answer.capabilities.every((name) => typeof name === "string")
     ? [...answer.capabilities as string[]]
     : [];
-  return { version, models, capabilities, recorded: isClaudeRecordedVersion(version) };
+  // claude's own slash commands (polyforge#71, AC3): each entry's name,
+  // description, argument hint and builtin flag, malformed ones skipped.
+  const commands: ClaudeCommandEntry[] = [];
+  if (Array.isArray(answer.commands)) {
+    for (const entry of answer.commands) {
+      if (!entry || typeof entry !== "object") continue;
+      const command = entry as Record<string, unknown>;
+      if (typeof command.name !== "string" || !command.name || commands.some((known) => known.name === command.name)) continue;
+      const description = text(command.description);
+      const argumentHint = text(command.argumentHint);
+      commands.push({
+        name: command.name,
+        ...(description ? { description } : {}),
+        ...(argumentHint !== undefined ? { argumentHint } : {}),
+        ...(command.builtin === true ? { builtin: true } : {}),
+      });
+    }
+  }
+  return { version, models, commands, capabilities, recorded: isClaudeRecordedVersion(version) };
 }
 
 interface ProbeCache {
