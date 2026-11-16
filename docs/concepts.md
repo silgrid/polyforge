@@ -691,7 +691,9 @@ with its own credentials (a step agent holds none) once the step hands off
   the project default; heavy admission; the lane's gate) — runs the release's test gate once on every
   gated repo's pinned head — never the live tip, which keeps moving (what
   `.polyforge/release.sh` runs; never the daemon's
-  verification run) — and on a pass writes the green tag itself
+  verification run) — with the repo's own scope engine, else the lane's
+  copy (a repo that provides only `.polyforge/verify-scope.conf` and
+  `.polyforge/Dockerfile.verify` is gated too) — and on a pass writes the green tag itself
   (`--mark-green`). The gate runs with `--keep-going`: every command runs,
   never stopping at the first failing one, so one red batch records every
   failing command and its triage sees them all at once. A red gate is triaged by `gate.py --triage`: each
