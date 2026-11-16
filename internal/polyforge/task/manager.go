@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 // ErrLimit is the sentinel of a spawn refused at the task lane's
@@ -64,6 +65,11 @@ type Config struct {
 	// Both are called with no manager lock held.
 	Admit func() error
 	Done  func()
+	// Limits (optional) answers the stuck-detection bounds of every
+	// dispatch (AC9: the step lane's rule 0/2/3 thresholds, injected
+	// live — the daemon's liveLimits); nil = the documented defaults
+	// (10m silence for token-level harnesses, 30m tool window).
+	Limits func() supervise.Defaults
 }
 
 // Slots is the Host's one shared concurrency bound of the task lane

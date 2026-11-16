@@ -30,6 +30,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 // RunSpec is one runner call: one candidate, one prompt, the remaining
@@ -45,6 +46,26 @@ type RunSpec struct {
 	TaskID    string
 	// ReadOnlyTools selects the read/search-only tool profile.
 	ReadOnlyTools bool
+	// Limits are the stuck-detection bounds of this attempt (AC9: the
+	// step lane's rule 0/2/3 thresholds, injected by the manager); a
+	// zero Silence resolves per the harness's output granularity, a zero
+	// Tool to the 30m default (supervise.Defaults.Fill / SilenceFor).
+	Limits supervise.Defaults
+}
+
+// StuckError is the runner's stuck verdict: the supervision rules that
+// apply to a task (rule 0 harness_silent, 2 model_hung, 3 tool_hung)
+// fired, the runner killed the candidate's process, and the manager
+// switches to the next candidate inside the task's remaining budget.
+// It is never a failure of the task itself: the run continues on the
+// next candidate (AC9).
+type StuckError struct {
+	Cause    supervise.Cause
+	Evidence string
+}
+
+func (e *StuckError) Error() string {
+	return fmt.Sprintf("judged stuck (%s): %s", e.Cause, e.Evidence)
 }
 
 // RunResult is what one run observed. TokenCapped is true when the runner

@@ -71,8 +71,8 @@ const (
 	MaxDuration = 60 * time.Minute
 	MaxTokens   = 1000000
 
-	// ReportCapBytes is the maximum captured assistant text a report
-	// keeps; bytes dropped by the cap mark the report truncated.
+// ReportCapBytes is the maximum captured assistant text a report
+// keeps; bytes dropped by the cap mark the report truncated.
 	ReportCapBytes = 2 << 20
 
 	// SummaryTailChars is the maximum length of the chat/watcher summary
@@ -204,6 +204,17 @@ type Spec struct {
 // did not resolve to a human member of its project at spawn.
 const ReporterMachine = "machine"
 
+// Attempt is one candidate a task judged stuck (polyforge#72, AC9): the
+// candidate, the supervision rule that fired (rule 0 harness_silent, 2
+// model_hung, 3 tool_hung — the task lane's subset of the step rules)
+// and the evidence line. Attempts ride the record: `pf task show` and
+// the decision feed's summary make the judgement and its cause visible.
+type Attempt struct {
+	Candidate string `json:"candidate,omitempty"`
+	Cause     string `json:"cause,omitempty"`
+	Evidence  string `json:"evidence,omitempty"`
+}
+
 // Task is one task record: its spec plus the observed outcome. Report is
 // the captured assistant text (up to ReportCapBytes); Truncated is true
 // when the cap or a budget cut bytes off. Error carries the harness's raw
@@ -223,6 +234,10 @@ type Task struct {
 	Report         string        `json:"report,omitempty"`
 	Truncated      bool          `json:"truncated,omitempty"`
 	Error          string        `json:"error,omitempty"`
+	// Attempts are the candidates the stuck detection ended (AC9), in
+	// order; the run switched to the next candidate inside the same
+	// budget each time.
+	Attempts []Attempt `json:"attempts,omitempty"`
 }
 
 // Clone answers a copy of t (no shared slices) suitable for handing out
