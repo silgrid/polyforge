@@ -28,7 +28,7 @@ func w371Read(t *testing.T, rel string) string {
 func TestW371TextContract(t *testing.T) {
 	for rel, wants := range map[string][]string{
 		"workflows/develop/workflow.yaml": {
-			// (its heavy admission: test/w403_develop_grill_e2e_contract_test.go)
+			// (its heavy admission: internal/contracttest/w403_develop_grill_e2e_contract_test.go)
 			"skill: verify", "waivable: true",
 		},
 		"workflows/develop/README.md": {

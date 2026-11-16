@@ -63,7 +63,7 @@ var c5IntegratAllowed = map[string][]c5Allowed{
 var c5Integrat = regexp.MustCompile(`(?i)integrat`)
 
 func TestC5GoCodeNamesNoIntegrateLane(t *testing.T) {
-	root := ".."
+	root := v1Root(t)
 	used := map[string]bool{} // file + "\x00" + pattern → matched a line
 	var bad []string
 	for _, r := range c5IntegratRoots {

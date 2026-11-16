@@ -7,7 +7,7 @@ package test
 // unchanged: it still runs npm audit over production dependencies at the high
 // threshold. The old boundary wording ("the test bar never runs it") is red.
 //
-// Run (targeted): GOWORK=off go test ./test/ -run '^TestW320ReleaseBoundary' -count=1
+// Run (targeted): GOWORK=off go test ./internal/contracttest/ -run '^TestW320ReleaseBoundary' -count=1
 
 import (
 	"os"
@@ -19,7 +19,7 @@ import (
 
 func w320rbScript(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", ".polyforge", "release.sh"))
+	raw, err := os.ReadFile(filepath.Join(v1Root(t), ".polyforge", "release.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}

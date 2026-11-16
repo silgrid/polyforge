@@ -133,7 +133,7 @@ func TestShippedMicroLanePrompts(t *testing.T) {
 			// contract 3's `pf ask`: the out-of-bounds question to the owner
 			"`pf step ask` the owner — the refused repos and paths verbatim from `reason`",
 			// contract 3's declared artifacts: what fix hands off as evidence
-			// (its owner-review section: test/owner_review_gate_contract_test.go)
+			// (its owner-review section: internal/contracttest/owner_review_gate_contract_test.go)
 			"**Evidence**: `artifacts/fix/evidence.json`, `artifacts/facts/micro-bounds.json`"},
 		reviewStepID: {"`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/facts.py\" micro-bounds --plan artifacts/fix/evidence.json --json --out artifacts/review/micro-bounds.json`",
 			"artifacts/facts/micro-bounds.json",

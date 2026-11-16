@@ -307,8 +307,8 @@ items that merged.
   command, so the light and full tiers catch a type error before a merge;
   mypy `>=1.20,<2` is required — without it the gate fails loudly, it is
   never skipped; the verification image ships it); plus the named fast
-  check `check=contract-scan|fast|…`, which runs the `test/` package's
-  whole-repo contract tests (the bullet below); every `go` command carries
+  check `check=contract-scan|fast|…`, which runs the whole-repo
+  contract package's tests (the bullet below); every `go` command carries
   `GOWORK=off`.
   Its full tail is `make test` split into its two commands — the unit
   packages' `go test` and `sh test/e2e-parallel.sh`, so a pre-existing
@@ -337,10 +337,15 @@ items that merged.
   fast phase — which every tier runs, the light tier's included —
   execute them on every change, whatever the diff; the micro lane's fast
   phase, before its `micro_check=` lines, does the same. Declare the
-  selection as plain test names in the command's `-run` alternation and
-  pin it with a guard test that fails when a new such test is neither
-  registered in the alternation nor excluded with a stated reason (and
-  when a registered name matches no test), so the list cannot drift; the
+  selection as the whole test package — a dedicated package every such
+  test lives in, run without a `-run` filter — or as one shared name
+  prefix the command's `-run` selects: one place, so adding such a test
+  is that one change and needs no registration — neither the command
+  nor anything that copies it verbatim changes with a test. Pin the
+  convention with a guard test that fails when such a test appears
+  outside the package (or without the prefix) and is not excluded with
+  a stated reason, when an exclusion names no such test, and when the
+  selection names tests by hand again; the
   same guard keeps the `micro_check=` lines from repeating what the check
   already runs, and a `micro_check=` line that carried such a test before
   drops it in the change that declares the check.
@@ -360,8 +365,9 @@ items that merged.
   ones), so a micro change that breaks a pinned sentence still fails
   `--micro --run` itself rather than the integration run's full bar. A new
   test that reads an in-scope doc, or a new docs directory, joins those
-  lines in the same change — a `*_contract_test.go` test joins the
-  `contract-scan` check instead.
+  lines in the same change — a `*_contract_test.go` test goes in the
+  whole-repo contract package instead (the `contract-scan` check runs
+  it).
 - **The pi-web gate boundary.** `pi-web/` is the web workbench's own npm
   package inside this repository. `pi-web/go.mod` is a marker module with no
   packages: it ends the root module at that directory, so `go build ./...`,

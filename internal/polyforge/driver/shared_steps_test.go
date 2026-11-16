@@ -323,8 +323,8 @@ func TestSharedStepPromptsKeepLaneFacts(t *testing.T) {
 			// unit tests after their red commit — since workflow contract
 			// v2 PR 12 on the facts its skill's facts.py lines write (the
 			// owner-replies check and the facts.py lines themselves are
-			// test/w403_develop_grill_e2e_contract_test.go's and
-			// test/w374_develop_driver_contract_test.go's)
+			// internal/contracttest/w403_develop_grill_e2e_contract_test.go's and
+			// internal/contracttest/w374_develop_driver_contract_test.go's)
 			"develop": {[]string{"**Coverage, criterion by criterion (`ac_gap`).**", "**Tests after their red commit (`test_weakened`).**",
 				"concepts the work item's acceptance criteria (or the plan's owner-confirmed `## Acceptance` list) did not request"}},
 		},
