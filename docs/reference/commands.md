@@ -550,7 +550,7 @@ tag's `runner` is `gate.py`, its `runner_version` `2`.
 ```
 pf step handoff --status <done|fail|blocked|cancel|waive|rewind> --body @file
                 [--evidence <path>]... [--to <step>] [--per-owner <at>] [--reason "<one line>"]
-pf step ask "<question>"
+pf step ask "<question>" | pf step ask - (stdin)
 pf step recall [--type T] [--tags a,b] [--limit N] [--any] <query>
 pf step memory show <id>
 pf step remember --type experience.wrap --title S [--tags a,b] <content | - | @file>
@@ -565,7 +565,7 @@ pf step hub batch <@ops.json | ->
 Inside a workflow step only: the step's one way to
 reach the daemon, and through it aihub. Outside a step (no `PF_WI_ID` +
 `PF_DAEMON_ID`) it refuses with exit 1 before any request. Every
-subcommand is one `POST /step/call` to the daemon
+subcommand that sends is one `POST /step/call` to the daemon
 ([uds-routes.md](uds-routes.md)), which resolves the calling step from its
 process tree, refuses any other caller `DAEMON-403`, and appends the call
 to the capsule's call ledger `runtime-state/step-calls.jsonl` **before** it
@@ -603,7 +603,12 @@ command's face.
   recorded.
 - `ask` records the dispatch's question in `runtime-state/asks.jsonl`
   (`{at, step, spawn, kind: "ask", text}`) under the dispatch the daemon
-  resolved; the command prints **now end your turn**.
+  resolved; the command prints **now end your turn**. `ask` registers no
+  flags: `-h` and `--help` print its usage on stdout and exit 0 with no
+  call, and a question whose first word starts with `-` (the lone `-`
+  stdin marker excepted) is refused locally, exit 1, before any call —
+  the refusal hints to put the `-` word in quotes inside the question, or
+  to read the question from stdin with `-`.
 - `recall`, `memory show` and `remember` are the calling step's own
   project's memories through the daemon (the step holds no aihub key);
   `remember` is the wrap-summary write.

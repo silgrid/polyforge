@@ -1,5 +1,7 @@
 package cli
 
+// carries: internal/polyforge/cli/verbs_step.go
+
 // verbs_step_test.go: `pf step` — outside a step it
 // refuses non-zero before any request; inside one every subcommand is one
 // POST /step/call carrying its verb and args (the hand-off's body read
@@ -176,6 +178,74 @@ func TestStepAskChecksTheQuestion(t *testing.T) {
 	}
 	if verb, args := lastCall(t, drec); verb != "ask" || args["text"] != "line one\nline two" {
 		t.Fatalf("the stdin question = %s %v", verb, args)
+	}
+}
+
+// polyforge#68: `pf step ask --help` used to post the literal "--help"
+// to the owner as the question (the step stalled waiting for an answer
+// to a word its agent only wanted explained). ask registers no flags, so
+// -h/--help now print ask's usage locally — exit 0, no call — and a
+// question whose first word starts with "-" (the lone "-" stdin marker
+// excepted) is refused before any call, naming the quoting and stdin
+// escapes.
+func TestStepAskHelpAndFlagLikeBody(t *testing.T) {
+	env, drec, _ := stepCallEnv(t)
+	for _, flag := range []string{"-h", "--help"} {
+		code, stdout, stderr := runPf(t, env, "step", "ask", flag)
+		if code != 0 || !strings.Contains(stdout, `pf step ask "<question>" | pf step ask - (stdin)`) {
+			t.Fatalf("step ask %s: exit %d, stdout %q, stderr %q — want ask's usage and exit 0", flag, code, stdout, stderr)
+		}
+	}
+	// a flag-like first word is refused before any call, naming the
+	// quoting and the stdin escapes
+	for _, argv := range [][]string{
+		{"step", "ask", "--json", "为什么"},
+		{"step", "ask", "-x"},
+	} {
+		code, _, stderr := runPf(t, env, argv...)
+		// "from stdin: pf step ask -" is the stdin hint's own fragment:
+		// the usage hint's "pf step ask --help" contains the bare
+		// "pf step ask -", so the bare form asserted nothing (review r1#1).
+		if code != 1 || !strings.Contains(stderr, "in quotes") || !strings.Contains(stderr, "from stdin: pf step ask -") {
+			t.Fatalf("%v: exit %d, stderr %q — want the quoting/stdin hint and exit 1", argv, code, stderr)
+		}
+	}
+	if n := len(drec.all()); n != 0 {
+		t.Fatalf("a help or flag-like question reached the daemon %d time(s)", n)
+	}
+}
+
+// polyforge#68, the audit pin: every other `pf step` sub-action already
+// answers -h/--help with no call — those that register flags (handoff,
+// recall, memory show, remember, hub list/file/attrs/wrap-attrs) through
+// the flag package's ErrHelp, the flag-less positional ones (step itself,
+// hub, hub get/batch) through ErrHelp or an argument error — because ask
+// was the only sub-action that joined unparsed rest args into a body.
+// This keeps it that way: a regression that turns any of them into a
+// posted call goes red.
+func TestStepSubactionHelpReachesNoDaemon(t *testing.T) {
+	env, drec, _ := stepCallEnv(t)
+	for _, argv := range [][]string{
+		{"step", "-h"},
+		{"step", "--help"},
+		{"step", "handoff", "-h"},
+		{"step", "handoff", "--help"},
+		{"step", "recall", "--help"},
+		{"step", "memory", "show", "-h"},
+		{"step", "remember", "--help"},
+		{"step", "hub", "-h"},
+		{"step", "hub", "get", "-h"},
+		{"step", "hub", "list", "--help"},
+		{"step", "hub", "wrap-attrs", "-h"},
+		{"step", "hub", "batch", "-h"},
+	} {
+		code, _, _ := runPf(t, env, argv...)
+		if code == 0 {
+			t.Fatalf("%v: -h/--help exits 0 — it must not pose as a successful call", argv)
+		}
+	}
+	if n := len(drec.all()); n != 0 {
+		t.Fatalf("a sub-action's -h/--help reached the daemon %d time(s)", n)
 	}
 }
 
