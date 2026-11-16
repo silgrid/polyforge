@@ -130,7 +130,6 @@ export function e2eOnlySelection(scenarios, env = process.env) {
   const wanted = new Set(ids);
   const idByTitle = new Map(entries.map(([id, title]) => [title, id]));
   return {
-    ids,
     titles: (ids.length ? entries.filter(([id]) => wanted.has(id)) : entries).map(([, title]) => title),
     skip: (title) => ids.length > 0 && !wanted.has(idByTitle.get(title)),
   };

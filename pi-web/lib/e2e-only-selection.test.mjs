@@ -23,7 +23,6 @@ const VALID_IDS = ["AC1", "AC2", "N1"];
 test("unset or empty E2E_ONLY keeps every scenario", () => {
   for (const env of [{}, { E2E_ONLY: "" }, { E2E_ONLY: "," }]) {
     const only = e2eOnlySelection(SCENARIOS, env);
-    assert.deepEqual(only.ids, [], `${JSON.stringify(env)}: no id parsed`);
     assert.deepEqual(only.titles, Object.values(SCENARIOS), `${JSON.stringify(env)}: every scenario's title`);
     for (const title of Object.values(SCENARIOS)) {
       assert.equal(only.skip(title), false, `${JSON.stringify(env)}: ${title} is not skipped`);
@@ -33,7 +32,6 @@ test("unset or empty E2E_ONLY keeps every scenario", () => {
 
 test("E2E_ONLY=<id>[,<id>…] selects exactly the listed scenarios", () => {
   const only = e2eOnlySelection(SCENARIOS, { E2E_ONLY: "N1,AC1" });
-  assert.deepEqual(only.ids, ["N1", "AC1"], "the parsed selection, in the order written");
   assert.deepEqual(only.titles, [SCENARIOS.AC1, SCENARIOS.N1], "only the listed scenarios' titles, in table order");
   assert.equal(only.skip(SCENARIOS.N1), false, "a listed scenario's check runs");
   assert.equal(only.skip(SCENARIOS.AC1), false, "a listed scenario's check runs (second id)");
