@@ -79,13 +79,13 @@ class GreenTagTest(unittest.TestCase):
         self.assertEqual(len(git_t(self.origin, "tag", "-l", "green/*").split()), 3)
 
     def push_tag(self, name: str, rec_text: str) -> None:
-        """An annotated tag planted on this test's head, pushed to its origin."""
-        c = self.g.run(self.dir, "tag", "-a", "-m", rec_text, name, self.head)
-        if c.exit_code != 0:
-            self.fail("planting %s: %s" % (name, c.stderr.decode("utf-8", "replace").strip()))
-        c = self.g.run(self.dir, "push", "--quiet", "origin", "refs/tags/" + name)
-        if c.exit_code != 0:
-            self.fail("pushing %s: %s" % (name, c.stderr.decode("utf-8", "replace").strip()))
+        """An annotated tag planted on this test's head, pushed to its origin —
+        through git_t's bare subprocess with the test's identity, never the
+        gate's hardened Git (pfstep.git drops the GIT_* identity variables, so
+        a tag it plants has whatever identity the host's git config happens to
+        give — none in a verification container)."""
+        git_t(self.dir, "tag", "-a", "-m", rec_text, name, self.head)
+        git_t(self.dir, "push", "--quiet", "origin", "refs/tags/" + name)
 
     def base_record(self) -> Dict[str, str]:
         gid = subprocess.run(["sh", "tools/gate-id", self.head], cwd=self.dir, check=True,
