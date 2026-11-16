@@ -518,8 +518,15 @@ const T = {
 // polyforge#63 — `E2E_ONLY=<id>[,<id>…]` runs only the named scenarios;
 // unset keeps every one (as before). An unknown id throws here, before any
 // browser or server starts, naming the id and this suite's ids — never a
-// silent zero-scenario run.
-const ONLY = e2eOnlySelection(T);
+// silent zero-scenario run — with the throwaway work dir removed first
+// (r1#3: the throw is outside the try/finally that cleans up on failure).
+let ONLY;
+try {
+  ONLY = e2eOnlySelection(T);
+} catch (error) {
+  rmSync(work, { recursive: true, force: true });
+  throw error;
+}
 const failures = new Map(ONLY.titles.map((title) => [title, []]));
 const ran = new Set();
 const check = createCheck({ failures: ([title, label], text) => failures.get(title).push(`${label}: ${text}`), before: ([title]) => ran.add(title), pass: null, fail: null, skip: ([title]) => ONLY.skip(title) });
