@@ -132,6 +132,11 @@ type Step struct {
 	// Skippable is `skippable` (default false): a project may switch the
 	// step off (`steps.<project>.<step>.skip` in its workspace yaml).
 	Skippable bool
+	// HumanMergeable is `human_mergeable` (default false): a project may
+	// declare the step's work done by a person
+	// (`steps.<project>.<step>.by: human` in its workspace yaml,
+	// polyforge#36).
+	HumanMergeable bool
 	// ToolMinutes is `budget.tool_minutes` (0 = none declared).
 	ToolMinutes int
 	// ModelTier is `model_tier` ("" = none): a tier of the lane's
