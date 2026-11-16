@@ -203,7 +203,10 @@ func TestStepAskHelpAndFlagLikeBody(t *testing.T) {
 		{"step", "ask", "-x"},
 	} {
 		code, _, stderr := runPf(t, env, argv...)
-		if code != 1 || !strings.Contains(stderr, "in quotes") || !strings.Contains(stderr, "pf step ask -") {
+		// "from stdin: pf step ask -" is the stdin hint's own fragment:
+		// the usage hint's "pf step ask --help" contains the bare
+		// "pf step ask -", so the bare form asserted nothing (review r1#1).
+		if code != 1 || !strings.Contains(stderr, "in quotes") || !strings.Contains(stderr, "from stdin: pf step ask -") {
 			t.Fatalf("%v: exit %d, stderr %q — want the quoting/stdin hint and exit 1", argv, code, stderr)
 		}
 	}
