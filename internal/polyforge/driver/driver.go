@@ -117,6 +117,11 @@ type Config struct {
 	// judgement, so a daemon reload of step_timeout/stall_window takes
 	// effect without a restart. nil keeps Limits.
 	LimitsFunc func() supervise.Defaults
+	// TextRulesFunc, when set, answers the CURRENT Host-configured
+	// additional classification rules (polyforge#51), so a reload of
+	// transient_error_patterns / model_error_patterns reaches the next
+	// classification without a restart. nil = no additional rules.
+	TextRulesFunc func() TextRules
 	// MaxStepFailures is the per-step failure counter bound (default 3).
 	MaxStepFailures int
 	// Now overrides the clock (tests).

@@ -100,6 +100,9 @@ type StartConfig struct {
 	// LimitsFunc, when set, is consulted at every judgement so a live
 	// daemon reload changes the bounds without a restart.
 	LimitsFunc func() supervise.Defaults
+	// TextRulesFunc (polyforge#51): the current Host-configured additional
+	// classification rules, consulted at every text classification.
+	TextRulesFunc func() TextRules
 	// Admission is the daemon's heavy-run admission queue
 	// (Config.Admission).
 	Admission VerifyAdmission
@@ -157,23 +160,24 @@ func Start(ctx context.Context, cfg StartConfig) (*Handle, error) {
 		cfg.Link.Reset() // a new driver epoch: no fence or verdict of a predecessor leaks in
 	}
 	drv, err := New(Config{
-		WI:          wi,
-		BundleDir:   adapter.BundleDir,
-		Workflow:    adapter.Workflow,
-		Spawner:     adapter,
-		SpawnN:      int64(stepSeed),
-		Log:         cfg.Log,
-		Link:        cfg.Link,
-		Limits:      cfg.Limits,
-		LimitsFunc:  cfg.LimitsFunc,
-		Compose:     cfg.Compose,
-		Interrupted: cfg.Interrupted,
-		StepEnded:   cfg.StepEnded,
-		Admission:   cfg.Admission,
-		Forge:       cfg.Forge,
-		OwnerWait:   cfg.OwnerWait,
-		HubWrites:   cfg.HubWrites,
-		Language:    cfg.Language,
+		WI:            wi,
+		BundleDir:     adapter.BundleDir,
+		Workflow:      adapter.Workflow,
+		Spawner:       adapter,
+		SpawnN:        int64(stepSeed),
+		Log:           cfg.Log,
+		Link:          cfg.Link,
+		Limits:        cfg.Limits,
+		LimitsFunc:    cfg.LimitsFunc,
+		TextRulesFunc: cfg.TextRulesFunc,
+		Compose:       cfg.Compose,
+		Interrupted:   cfg.Interrupted,
+		StepEnded:     cfg.StepEnded,
+		Admission:     cfg.Admission,
+		Forge:         cfg.Forge,
+		OwnerWait:     cfg.OwnerWait,
+		HubWrites:     cfg.HubWrites,
+		Language:      cfg.Language,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("driver: %w", err)

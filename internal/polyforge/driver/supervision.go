@@ -341,8 +341,17 @@ type StepFailure struct {
 	Cause    string
 	Detail   string
 	ExitCode int
-	WallMs   int64         // the dispatch's wall time, added to the step's T
-	Backoff  time.Duration // filled by the decision (D7): the wait owed before the next dispatch, booked into T
+	// ClassifiedBy names which rule judged the failure's text
+	// (polyforge#51): "builtin" (a built-in classification row),
+	// "added" (a Host-configured pattern) or "fallback" (no rule
+	// matched); "" when no text classification decided the cause.
+	ClassifiedBy string
+	// ErrorText is the raw text the classification read (the turn's
+	// error text or the exited process's last error), the payload the
+	// daemon's unclassified list dedupes on. Bounded when recorded.
+	ErrorText string
+	WallMs    int64         // the dispatch's wall time, added to the step's T
+	Backoff   time.Duration // filled by the decision (D7): the wait owed before the next dispatch, booked into T
 	// TreeHash is the capsule tree hash as of this death,
 	// computed by failDispatch BEFORE the transition takes the driver's
 	// lock and archived on the attempt in the same atomic write. Empty
@@ -476,6 +485,27 @@ var textClasses = []struct {
 		FailExitModel, false},
 }
 
+// The classification sources of a text-judged failure (polyforge#51):
+// which rule owned the verdict, recorded on the failure and the
+// step_failed event.
+const (
+	ClassifiedByBuiltin  = "builtin"
+	ClassifiedByAdded    = "added"
+	ClassifiedByFallback = "fallback"
+)
+
+// TextRules are the Host-configured additional classification rules
+// (polyforge#51, [daemon] transient_error_patterns / model_error_patterns):
+// Transient patterns classify a matching failure upstream_transient,
+// Model patterns exit_model_class. They are judged AFTER the
+// allowance/auth row and BEFORE every other built-in row (AC2), on the
+// text of an exited process and of a live error turn — never on the
+// driver's own error (Q7).
+type TextRules struct {
+	Transient []*regexp.Regexp
+	Model     []*regexp.Regexp
+}
+
 // classifyText answers the first textClasses cause matching text ("" for
 // none); exited selects the exit-only rows too.
 func classifyText(text string, exited bool) string {
@@ -485,6 +515,29 @@ func classifyText(text string, exited bool) string {
 		}
 	}
 	return ""
+}
+
+// classifyTextWith is classifyText with the additional Host-configured
+// rules and the classification source: the allowance/auth row is judged
+// first (no added rule can pull an allowance failure out of model class),
+// then the added transient list, then the added model list, then the
+// remaining built-in rows. rules == nil judges the built-in rows only.
+func classifyTextWith(text string, exited bool, rules *TextRules) (cause, source string) {
+	return "", ""
+}
+
+// classifyWaitFailureWith is classifyWaitFailure over the additional rules,
+// answering also the classification source and the raw text it read. The
+// rules apply only to a process's own text (an exited dispatch's last
+// error, a live error turn) — never to the driver's own error.
+func classifyWaitFailureWith(err error, rules *TextRules) (cause string, exitCode int, detail string, source string, errText string) {
+	return "", 0, "", "", ""
+}
+
+// verdictCauseWith is verdictCause over the additional rules, answering
+// also the classification source.
+func verdictCauseWith(v supervise.StepDead, rules *TextRules) (cause, source string) {
+	return "", ""
 }
 
 // classifyWaitFailure maps a Wait error (not a cancellation) onto a
