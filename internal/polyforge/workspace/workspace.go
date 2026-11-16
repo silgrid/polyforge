@@ -631,6 +631,42 @@ func SkippedSteps(cfg *Config, lane *workflow.Lane, project string) []string {
 	return out
 }
 
+// HumanMergeSteps answers the work item's step modes: for each step of
+// lane that the project's yaml declares `steps.<project>.<step>.by`, the
+// mode — only where the lane declares the step `human_mergeable: true` —
+// beside the refusal naming every by the lane cannot honor (a step it
+// does not carry, or one it does not declare human_mergeable; the loader
+// guarantees the mode itself is `human`): the
+// mode is the lane's to accept (micro never does; polyforge#36), never
+// silently ignored, so a claim of a lane that cannot honor it fails
+// with the reason. An absent by set answers (nil, "").
+func HumanMergeSteps(cfg *Config, lane *workflow.Lane, project string) (map[string]string, string) {
+	if cfg == nil || lane == nil || cfg.By[project] == nil {
+		return nil, ""
+	}
+	var modes map[string]string
+	for _, st := range lane.Steps {
+		mode, declared := cfg.By[project][st.ID]
+		if !declared {
+			continue
+		}
+		if !st.HumanMergeable {
+			return nil, fmt.Sprintf("steps.%s.%s.by: the %s lane declares no `human_mergeable: true` on step `%s`, so it cannot take the human mode — remove the by key or run the work item on a lane that declares it", project, st.ID, lane.Name, st.ID)
+		}
+		if modes == nil {
+			modes = map[string]string{}
+		}
+		modes[st.ID] = mode
+	}
+	for key := range cfg.By[project] {
+		if _, carried := modes[key]; carried {
+			continue
+		}
+		return nil, fmt.Sprintf("steps.%s.%s.by: the %s lane carries no step `%s`, so it cannot take the human mode — remove the by key or run the work item on a lane that carries it", project, key, lane.Name, key)
+	}
+	return modes, ""
+}
+
 // StaleKeyHint is the rewrite a stale key's warning carries: what a key
 // names, and the docs/upgrade.md section that tells a deployment moving
 // onto this release what to do with a stale key.

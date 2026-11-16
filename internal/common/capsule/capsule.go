@@ -46,6 +46,15 @@ const (
 	// re-claim or a resume keeps the one the capsule chain carries — and
 	// the driver reads it, never the yaml.
 	SkippedStepsJSON = "runtime-state/skipped-steps.json"
+	// StepModesJSON is the work item's step modes: a JSON object of
+	// each step id its lane snapshot declares human_mergeable that the
+	// project's workspace yaml declares `by: human` → the mode (polyforge#36:
+	// the develop lane's merge done by a person). The daemon writes it at
+	// the first claim only — a re-claim or a resume keeps the one the
+	// capsule chain carries — and a claim of a lane that cannot honor a
+	// declared by is refused naming it; the steps' skills and merge.py
+	// read it, never the yaml.
+	StepModesJSON = "runtime-state/step-modes.json"
 	// OversizeManifest lists the files the daemon left out of the chain
 	// because each is over MaxBlobBytes: path, size and sha256 (gitops'
 	// commit guard writes it).
