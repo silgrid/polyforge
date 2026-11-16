@@ -180,6 +180,27 @@
 #   11  deploy failed AND the rollback failed: production state is uncertain;
 #       loud manual instructions are printed.  deployed=UNKNOWN previous=<old> attempted=<version>
 #
+# Several deploy targets (polyforge#76, --component aihub only): a step
+# process carries PF_CELL_TARGETS, one "<profile>\t<server>\t<deploy
+# configuration file>" line per serving Cell of this machine. Every Cell
+# whose deploy configuration file exists is one deploy target; with fewer
+# than two the run is the single-target one above, unchanged. With two or
+# more, before any network work (a real deploy, --dry-run and --preflight
+# alike): the work item's Cell (PF_CELL) must be a target, and every
+# target's configuration must point at its own Cell's server - else
+# REFUSED naming both values (exit 1). Then each target runs as one clean
+# subprocess of this script (PF_DEPLOY_ONE=1, its own Cell's facts only),
+# the work item's Cell first and the rest by name; the first failure stops
+# the walk (later targets: not_attempted; a target that succeeded is never
+# rolled back). Per target one line
+#     target: <profile> status=<status> exit=<code> server=<server>
+# (status deployed | already_deployed | ok | rolled_back |
+# rollback_failed | not_changed | not_attempted), and the LAST line is
+#     targets: <profile>=<status> ...
+# The exit code is the failed target's own, 0 when none failed. A target
+# already running the version is already_deployed and skipped (exit 0;
+# the single-target run still refuses it without --force).
+#
 # Deploy lock: `flock -n` on the server (DEPLOY_LOCK_FILE, required) taken
 # through a long-lived background ssh session that runs
 # `flock -n <file> sh -c 'echo LOCKED; exec cat'`. The lock lives exactly as
@@ -386,13 +407,53 @@ MTROWS
     done <<MTROWS
 $_mt_rows
 MTROWS
+    # (polyforge#76, AC3) One target after another: the work item's own
+    # Cell first, the rest by name. Each target is one clean subprocess
+    # (stdin closed, its output passed through as it runs); the first
+    # target that fails stops the walk - every later one is
+    # not_attempted, and a target that already succeeded is never rolled
+    # back. Each target's result is one "target:" line, the run's last
+    # line sums every target up, and the exit code is the failed
+    # target's own (0 when none failed). A target's status follows from
+    # its exit code and its machine-readable last line: 0 + deployed= is
+    # deployed, 0 + already_deployed= is already_deployed (it ran the
+    # version already: skipped, not a failure), any other 0 is ok (a
+    # --dry-run or --preflight), 10 rolled_back, 11 rollback_failed,
+    # anything else not_changed (refused or failed before its swap).
+    _mt_order="$(printf '%s' "$_mt_rows" | awk -v me="${PF_CELL:-}" '$1 == me')
+$(printf '%s' "$_mt_rows" | awk -v me="${PF_CELL:-}" 'NF && $1 != me' | sort -k1,1)"
+    _mt_tmp="$(mktemp -d "${TMPDIR:-/tmp}/pf-deploy-targets.XXXXXX")"
+    trap 'rm -rf "$_mt_tmp"' EXIT
     _mt_rc=0
+    _mt_sum=""
     while read -r _mt_p _mt_s _mt_e; do
       [ -n "$_mt_p" ] || continue
-      env PF_DEPLOY_ONE=1 PF_CELL="$_mt_p" PF_CELL_SERVER="$_mt_s" PF_DEPLOY_ENV="$_mt_e" sh "$0" $_mt_argv || _mt_rc=$?
+      if [ "$_mt_rc" -ne 0 ]; then
+        _mt_st=not_attempted
+        echo "target: $_mt_p status=$_mt_st server=$_mt_s"
+        _mt_sum="$_mt_sum $_mt_p=$_mt_st"
+        continue
+      fi
+      echo "deploy: ---- target $_mt_p ($_mt_s, $_mt_e) ----"
+      { env PF_DEPLOY_ONE=1 PF_CELL="$_mt_p" PF_CELL_SERVER="$_mt_s" PF_DEPLOY_ENV="$_mt_e" sh "$0" $_mt_argv </dev/null \
+          && echo 0 >"$_mt_tmp/rc" || echo "$?" >"$_mt_tmp/rc"; } | tee "$_mt_tmp/out"
+      _mt_one="$(cat "$_mt_tmp/rc")"
+      _mt_last="$(tail -n 1 "$_mt_tmp/out")"
+      case "$_mt_one:$_mt_last" in
+        0:deployed=*) _mt_st=deployed ;;
+        0:already_deployed=*) _mt_st=already_deployed ;;
+        0:*) _mt_st=ok ;;
+        10:*) _mt_st=rolled_back ;;
+        11:*) _mt_st=rollback_failed ;;
+        *) _mt_st=not_changed ;;
+      esac
+      [ "$_mt_one" -eq 0 ] || _mt_rc="$_mt_one"
+      echo "target: $_mt_p status=$_mt_st exit=$_mt_one server=$_mt_s"
+      _mt_sum="$_mt_sum $_mt_p=$_mt_st"
     done <<EOF
-$_mt_rows
+$_mt_order
 EOF
+    echo "targets:$_mt_sum"
     exit "$_mt_rc"
   fi
 fi
@@ -1544,6 +1605,13 @@ if [ "$OLD_LAYOUT" = pf ]; then OLD_VCMD="/pf aihub -version"; else OLD_VCMD="/a
 note "container: running, version $OLDVER ($OLD_VCMD) -> $TAG"
 cmp="$(vcmp "$TAG" "$OLDVER")"
 if [ "$TAG" = "$OLDVER" ] || [ "$cmp" = "0" ]; then
+  # (polyforge#76) a target of a multi-target run that already runs the
+  # version is skipped, not failed: nothing was changed, the run goes on
+  if [ -n "${PF_DEPLOY_ONE:-}" ] && [ -z "$FORCE" ]; then
+    note "$OLDVER is already running on $AIHUB_HOST - this target is skipped (nothing was changed)"
+    echo "already_deployed=$TAG"
+    exit 0
+  fi
   [ -n "$FORCE" ] || die "$OLDVER is already running (use --force to redeploy it)"
   note "WARNING: redeploying the running version (--force)"
 elif [ "$cmp" = "-1" ]; then
