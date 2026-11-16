@@ -50,7 +50,8 @@ package test
 //     publish pushes the branch and opens the PR; main then moves again,
 //     conflicting with the branch's NOTES.md: `merge.py` refuses before the
 //     forge — the default branch moved since verification — exits 1 and
-//     merge hands off `fail` to sync (charged);
+//     merge hands off `fail` to sync (the lane's declared uncounted class:
+//     charged to nothing, counted on its own);
 //   - sync (its own earlier after — not the reviewed head) resolves
 //     NOTES.md in place and continues, verification (u1's run green:
 //     `demo:unit-run:u1`) and publish run again (the PR body lists
@@ -61,7 +62,8 @@ package test
 //     before its `done`, and the wrap carries it: aihub's attrs
 //     `integration: {state: landed, repos: [{repo, pr, head,
 //     light_verified_head, merge_commit}], merge_commits}`, which pf watch
-//     shows; max_rewinds (3) exactly spent.
+//     shows; max_rewinds 2/3 spent (the third rewind is the lane's
+//     declared uncounted class: 1/2 on its own, pf watch shows it apart).
 //
 // TestV2DevelopVerificationRedAskedThenWaived: a red the agent cannot
 // place — origin's main brought a failing check — makes the verification
@@ -618,7 +620,8 @@ func TestW374DevelopLaneEndToEnd(t *testing.T) {
 		x.publishAction(branch, notes),
 		// 13. merge: the default branch moved since verification (main
 		// brought a conflicting NOTES.md): merge.py refuses before asking
-		// the forge, exit 1, fail to sync (rewind 3)
+		// the forge, exit 1, fail to sync (rewind 3 — the lane's declared
+		// uncounted class, charged to nothing)
 		x.mergeAction(),
 		// 14-16. sync (its check on its own earlier after; the real
 		// conflict in NOTES.md resolved in place and continued),
@@ -792,7 +795,19 @@ func TestW374DevelopLaneEndToEnd(t *testing.T) {
 		}
 	}
 	if n, _ := x2.RewindStats["count"].(float64); n != 3 || len(rewinds) != 3 {
-		t.Fatalf("three charged rewinds (review FAIL, publish's verify-first FAIL, merge's refused FAIL), got rewind_stats %v, rewinds %v", x2.RewindStats, rewinds)
+		t.Fatalf("three rewinds (review FAIL and publish's verify-first FAIL charged, merge's refused FAIL the lane's declared uncounted class), got rewind_stats %v, rewinds %v", x2.RewindStats, rewinds)
+	}
+	// review r1#4: the third rewind is the lane's declared uncounted class
+	// (merge.py's default-branch-moved FAIL spends no max_rewinds), the
+	// first two charged
+	if rws, _ := x2.RewindStats["rewinds"].([]any); len(rws) != 3 {
+		t.Fatalf("the ledger carries the three rewinds: %v", x2.RewindStats)
+	} else {
+		for i, want := range []string{"charged", "charged", "uncounted"} {
+			if m, _ := rws[i].(map[string]any); m["class"] != want {
+				t.Fatalf("rewind %d's class: %v, want %s (the ledger: %v)", i, m["class"], want, rws)
+			}
+		}
 	}
 	if !strings.Contains(rewinds[1], `"gate":"publish"`) || !strings.Contains(rewinds[1], `"target":"build"`) {
 		t.Fatalf("the second rewind must be publish's verify-first FAIL back to build: %s", rewinds[1])
@@ -824,7 +839,7 @@ func TestW374DevelopLaneEndToEnd(t *testing.T) {
 	}
 	// the conflicting main (the seed's last push) is merged into the landed head
 	gitRun(t, repo, "merge-base", "--is-ancestor", strings.TrimSpace(gitRun(t, x.seed, "rev-parse", "HEAD")), "HEAD")
-	// merge failed once (charged), then registered the landing record
+	// merge failed once (the lane's declared uncounted class), then registered the landing record
 	// merge.py wrote — once, in the round it handed off done, before its
 	// done (merge declares wrap_attrs: [integration])
 	mh := stepcall.StepHandoffs(ledger, "merge")

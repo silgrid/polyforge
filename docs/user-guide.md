@@ -133,7 +133,11 @@ forms.
   [execution section](design/polyforge-vnext/reference.md#7-execution-).
 - **Rewind** -- a gate FAIL sending the run back to an earlier step to redo;
   bounded per bundle by one total budget (`max_rewinds`), and past it the
-  gate asks you before it FAILs again. The rules are the [workflow
+  gate asks you before it FAILs again — save for one class the bundle
+  may declare uncounted (`uncounted_rewinds`): merge's
+  default-branch-moved FAIL on develop, another lane's landing rather
+  than the change's defect, rewinds on its own count (its own cap, past
+  which the same FAIL asks you) without spending `max_rewinds`. The rules are the [workflow
   contract](reference/workflow-contract.md#the-daemons-reactions)'s.
 - **Capsule** -- the work item's private workspace directory (`artifacts/`,
   `repos/`, `runtime-state/`) that the daemon creates, drives, and commits to

@@ -259,7 +259,12 @@ every gate→target edge ([workflow
 contract](reference/workflow-contract.md#the-daemons-reactions)). A FAIL
 the owner asked for — the gate hands it off with `--per-owner` citing the
 owner's message, as publish does on the owner-review 「不通过」 — counts
-toward nothing. With the budget spent, a gate cannot hand off a plain FAIL
+toward nothing; and a lane may declare one class of FAILs uncounted
+(`uncounted_rewinds`, a reason substring with its own cap): develop
+declares merge's default-branch-moved FAIL — another lane's landing, not
+this change's defect — so it spends no `max_rewinds` and counts on its
+own, with `pf watch` showing the count apart and the cap asking the
+owner exactly like a spent budget once reached. With the budget spent, a gate cannot hand off a plain FAIL
 (the call is refused): it asks the owner first (`pf step ask`) and hands
 off what the owner decided, citing the reply — one more round (`fail
 --per-owner`, uncharged), `waive` (a gate the lane declares `waivable:
@@ -546,8 +551,9 @@ rewind — and reads no content, and no agent merges by hand:
   refuses it, and `sync` merges it, then the lane verifies and publishes again.
   A PR that moved, closed, was retargeted, merged elsewhere off the verified
   head or refused by the forge, or a default branch that advanced after the
-  verified base, is exit 1: the gate FAILs back to `sync` naming it (counted in
-  `max_rewinds`); the merged ones stay landed and the re-run takes them by
+  verified base, is exit 1: the gate FAILs back to `sync` naming it — the
+  default-branch-moved FAIL is the lane's declared uncounted class, the
+  others count in `max_rewinds`; the merged ones stay landed and the re-run takes them by
   the landing rules. gh or git unreachable is `blocked`: fix it, then
   tell the step (or `pf resume`). The integration lane's revert takes the same lock.
 
@@ -817,7 +823,9 @@ setting:
   and its reading, and review checks the reading against the words; a defect it
   cannot reproduce goes to the owner; once the lane's 3 rewinds
   (`max_rewinds: 3`) are spent, `pf step handoff` refuses a gate's `fail`
-  that cites no owner message, so the gate's agent asks the owner first; sync blocks on
+  that cites no owner message, so the gate's agent asks the owner first (the
+  declared uncounted class has its own cap: a FAIL whose reason falls in
+  it spends that, not `max_rewinds`); sync blocks on
   the environment (not a question; `pf resume` once fixed) when it cannot
   merge the default branch three times in a row; publish asks the owner (`pf step ask`) when an `owner-review:` artifact
   is declared; and merge blocks on the forge (not a question) for a PR it cannot take. Its review
