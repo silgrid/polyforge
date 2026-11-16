@@ -94,9 +94,13 @@ A green tag (``--mark-green``, after a pass only) is an annotated tag
 ``green/<YYYYMMDD>-<n>`` on the judged commit, pushed without force (a
 name another writer took first: the next number, at most five tries; a
 commit already carrying a tag of the same record: that one, nothing
-pushed), its message one line of JSON ``{commit, gate_id, runner,
-runner_version, plan_digest, verified_at, summary}`` (``gate_id``: the
-tree's ``tools/gate-id``). The result files' ``command`` and a green tag's
+pushed — the record includes the run's sources), its message one line of
+JSON ``{commit, gate_id, runner, runner_version, plan_digest,
+engine_source, gate_id_source, verified_at, summary}`` (``gate_id``: the
+tree's ``tools/gate-id``, else the lane's ``pfstep.gateid`` over the same
+bytes; ``engine_source`` / ``gate_id_source``: which of the two homes
+served the run, ``tree`` or ``lane`` — a pre-change record without the
+fields is the tree's by construction). The result files' ``command`` and a green tag's
 ``runner`` are ``gate.py``, this script's file name.
 
 The deadline is ``--deadline``, else derived from the step's tool window,
@@ -121,7 +125,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pfstep  # noqa: E402
-from pfstep import container, duration, git, gostr, hub, jsonout, proc, result, runner, stepenv  # noqa: E402
+from pfstep import container, duration, gateid, git, gostr, hub, jsonout, proc, result, runner, stepenv  # noqa: E402
 from pfstep import progress as step_progress  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
@@ -940,8 +944,10 @@ def next_green_number(refs: GreenRefs, day: str) -> int:
 
 def same_green(g: Git, directory: str, remote: str, refs: GreenRefs, rec: Mapping[str, str]) -> str:
     """The name of a green tag on the remote that points at rec's commit and
-    records the same commit, gate id, runner, runner version and plan digest
-    ("" = none)."""
+    records the same commit, gate id, runner, runner version, plan digest
+    and sources ("" = none). A record without the source fields — one
+    written before the sources existed, when only the tree's engine and
+    gate id could serve a gate — is the tree's by construction."""
     for name in sorted(refs):
         obj, peeled = refs[name]
         if peeled != rec["commit"] or not _GREEN_NAME.fullmatch(name):
@@ -959,13 +965,24 @@ def same_green(g: Git, directory: str, remote: str, refs: GreenRefs, rec: Mappin
             got = json.loads(body.strip())
         except ValueError:
             continue
-        if isinstance(got, dict) and all(got.get(k) == rec[k] for k in ("commit", "gate_id", "runner", "runner_version", "plan_digest")):
+        if isinstance(got, dict) and all(got.get(k) == rec[k] for k in ("commit", "gate_id", "runner", "runner_version", "plan_digest")) \
+                and all((got.get(k) or ENGINE_SOURCE_TREE) == rec[k] for k in ("engine_source", "gate_id_source")):
             return name
     return ""
 
 
-def gate_id(directory: str, commit: str, environ: Mapping[str, str]) -> str:
-    """tools/gate-id of commit, run from the clone's tree (raises GreenError)."""
+def gate_id(directory: str, commit: str, environ: Mapping[str, str], lane: bool = False) -> str:
+    """The gate id of commit — the tree's tools/gate-id run from the
+    clone's tree, else (lane) the lane's pfstep.gateid over the same
+    bytes (raises GreenError)."""
+    if lane:
+        try:
+            gid = gostr.trim_space(gateid.gate_id(directory, commit, environ))
+        except gateid.GateIdError as err:
+            raise GreenError("the lane's gate id of %s: %s" % (commit, err)) from None
+        if not _GATE_ID.fullmatch(gid):
+            raise GreenError("the lane's gate id of %s printed %s, not a gate id" % (commit, gostr.quote(gid)))
+        return gid
     c = proc.run(["sh", "tools/gate-id", commit], cwd=directory, env=dict(environ), timeout=GIT_TIMEOUT)
     if c.exit_code != 0 or c.error:
         why = c.error or "exit %d" % c.exit_code
@@ -1023,7 +1040,7 @@ def mark_green(g: Git, directory: str, remote: str, summary: str, res: GateResul
         raise GreenError(str(err)) from None
     if head != res.commit:
         raise GreenError("HEAD is %s, the gate judged %s" % (head, res.commit))
-    gid = gate_id(directory, res.commit, g.environ)
+    gid = gate_id(directory, res.commit, g.environ, lane=(res.gate_id_source == ENGINE_SOURCE_LANE))
     t = (now or datetime.datetime.now(datetime.timezone.utc)).astimezone(datetime.timezone.utc)
     if gostr.trim_space(tagger):
         ident = "%s %d +0000" % (gostr.trim_space(tagger), int(t.timestamp()))
@@ -1033,7 +1050,8 @@ def mark_green(g: Git, directory: str, remote: str, summary: str, res: GateResul
     if gostr.trim_space(summary):
         line += "; " + gostr.trim_space(summary)
     rec = {"commit": res.commit, "gate_id": gid, "runner": res.runner, "runner_version": res.runner_version,
-           "plan_digest": res.plan_digest, "verified_at": t.strftime("%Y-%m-%dT%H:%M:%SZ"), "summary": line}
+           "plan_digest": res.plan_digest, "engine_source": res.engine_source, "gate_id_source": res.gate_id_source,
+           "verified_at": t.strftime("%Y-%m-%dT%H:%M:%SZ"), "summary": line}
     msg = json.dumps(rec, ensure_ascii=False, separators=(",", ":"))
     day = t.strftime("%Y%m%d")
     refs = remote_green_refs(g, directory, remote)
