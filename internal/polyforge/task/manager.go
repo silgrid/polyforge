@@ -70,6 +70,12 @@ type Config struct {
 	// live — the daemon's liveLimits); nil = the documented defaults
 	// (10m silence for token-level harnesses, 30m tool window).
 	Limits func() supervise.Defaults
+	// PromptFor (optional) answers the prompt ONE candidate runs with,
+	// consulted before every candidate dispatch (polyforge#72, AC10: the
+	// daemon re-reads the ticket and rebuilds the prompt so the next
+	// candidate continues what the previous one already wrote into
+	// `## 分析`); nil = dispatchedPrompt, the one prompt the spec carried.
+	PromptFor func(t Task) string
 }
 
 // Slots is the Host's one shared concurrency bound of the task lane

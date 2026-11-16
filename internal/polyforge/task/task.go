@@ -198,6 +198,12 @@ type Spec struct {
 	// answer, so the daemon's decision feed records no background-task
 	// decision for it. Not a wire field of POST /task/spawn.
 	Synchronous bool `json:"synchronous,omitempty"`
+	// AnalysisOf is the work item a daemon-scheduled analysis task
+	// analyzes (polyforge#72): the one ticket whose `## 分析` section its
+	// narrow write path may touch. Like ReadOnlyTools and Synchronous it
+	// is set in process only — never a wire field of POST /task/spawn, so
+	// no caller can ask for it. Empty = an ordinary task, no write path.
+	AnalysisOf string `json:"analysis_of,omitempty"`
 }
 
 // ReporterMachine is the task list's reporter for every task whose caller
