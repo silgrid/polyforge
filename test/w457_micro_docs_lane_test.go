@@ -8,7 +8,10 @@ package test
 //   - `workflows/_shared/scripts/verify-scope --micro --json` reports that set and the
 //     micro_check= commands, run after the fast phase;
 //   - breaking a sentence a contract test pins, in an in-scope doc, makes
-//     `workflows/_shared/scripts/verify-scope --micro --run` exit non-zero through a micro_check.
+//     `workflows/_shared/scripts/verify-scope --micro --run` exit non-zero
+//     through the fast check that runs the whole-repo contract tests
+//     (contract-scan, which took the doc-pinning contract tests over from
+//     the micro_check= lines; those keep the remaining doc tests).
 //
 // `--micro` reads the conf at the diff base, so each test commits this
 // tree's conf as the base of a fixture instead of reading the real repo,
@@ -199,7 +202,10 @@ func TestW457MicroRunFailsOnABrokenPinnedDoc(t *testing.T) {
 	}
 
 	// The fast gates read no doc and every other bar proves them; dropping
-	// them keeps the fixture off the network and the npm cache.
+	// them keeps the fixture off the network and the npm cache. The named
+	// contract-scan check stays: the fixture clone carries test/ and the
+	// copied dist tree, and the planted sentence below must reach its
+	// pinning contract test through it.
 	var kept []string
 	for _, ln := range strings.SplitAfter(w25engShippedConf(t), "\n") {
 		if !strings.HasPrefix(ln, "fast_gate=") {
@@ -220,7 +226,7 @@ func TestW457MicroRunFailsOnABrokenPinnedDoc(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), pinned) {
-		t.Fatalf("docs/concepts.md no longer carries %q: pick another sentence a micro_check pins", pinned)
+		t.Fatalf("docs/concepts.md no longer carries %q: pick another sentence the contract-scan check's pinning contract tests pin", pinned)
 	}
 	w25e2eWrite(t, dir, "docs/concepts.md", strings.Replace(string(raw), pinned, "changing things the ticket leaves alone", 1))
 	w25e2eGit(t, dir, "commit", "-q", "-am", "w457 break a pinned sentence")
@@ -229,7 +235,16 @@ func TestW457MicroRunFailsOnABrokenPinnedDoc(t *testing.T) {
 	if jcode != 0 {
 		t.Fatalf("--micro --json exit %d\nstderr: %s", jcode, jerr)
 	}
-	checks := w457Parse(t, jout).MicroChecks
+	report := w457Parse(t, jout)
+	var scanCmd string
+	for _, c := range report.Commands {
+		if c.Phase == "fast" && c.Name == "contract-scan" {
+			scanCmd = c.Cmd
+		}
+	}
+	if scanCmd == "" {
+		t.Fatalf("the fast phase must carry the contract-scan check, which runs the doc-pinning contract tests: %+v", report.Commands)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -251,13 +266,7 @@ func TestW457MicroRunFailsOnABrokenPinnedDoc(t *testing.T) {
 	if !strings.Contains(both, "--- FAIL: TestLaneRuleTextsContract") {
 		t.Fatalf("--micro --run failed, but not on the pinning contract test\n%s", both)
 	}
-	named := false
-	for _, c := range checks {
-		if strings.Contains(both, "verify-scope: reported command failed: "+c) {
-			named = true
-		}
-	}
-	if !named {
-		t.Fatalf("the failure must be a micro_check (%q)\n%s", checks, both)
+	if !strings.Contains(both, "verify-scope: reported command failed: "+scanCmd) {
+		t.Fatalf("the failure must be the contract-scan fast check (%q), which took the doc-pinning contract tests over from micro_check=\n%s", scanCmd, both)
 	}
 }
