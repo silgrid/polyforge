@@ -115,6 +115,11 @@ type Config struct {
 	// A step is skipped only where its lane declares it
 	// skippable (SkippedSteps). nil when no entry declares skip.
 	Skip map[string]map[string]bool
+	// By is project name → step id → mode: steps.<project>.<step>.by
+	// (the step's takeover mode; the one value this release knows is
+	// `human`). A lane takes the mode only where it declares the step
+	// human_mergeable (HumanMergeSteps). nil when no entry declares by.
+	By map[string]map[string]string
 	// Tiers is project name → tier name → candidate list:
 	// tiers.<project>.<tier>.models (workflow contract 2), the list of
 	// every bundle step whose model_tier names that tier — above the
