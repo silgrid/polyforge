@@ -1232,9 +1232,10 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       onAbort={isActivePane ? handleAbort : (() => {}) as () => void}
       // A claude session steers too: claude takes the message into the running
       // turn or queues it as its next one; it has no follow-up queue of pi's.
+      // polyforge#71 (AC4): a `/` command takes the same entry on both harnesses.
       onSteer={isActivePane && agentRunning ? handleSteer : undefined}
       onFollowUp={isActivePane && agentRunning && !isClaudeSession ? handleFollowUp : undefined}
-      onPromptWithStreamingBehavior={isActivePane && agentRunning && !isClaudeSession ? handlePromptWithStreamingBehavior : undefined}
+      onPromptWithStreamingBehavior={isActivePane && agentRunning ? handlePromptWithStreamingBehavior : undefined}
       isStreaming={sessionBusy}
       model={displayModelValue}
       isAutoModelSelection={isAutoModelSelection}
