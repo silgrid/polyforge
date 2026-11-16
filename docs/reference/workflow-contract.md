@@ -496,7 +496,10 @@ Every dispatch's prompt is six parts, in this order, and nothing else:
    handoff` and when to use each status; where the claim's recalled
    memories are (`recalled-memories.json`) and the memory policy to write
    by (`runtime-state/memory-policy.json`); take values for scripts from
-   result files; never read `runtime-state/execution.json`.
+   result files; never read `runtime-state/execution.json`; the tool-name
+   rule — no MCP server exists, the available tools are the built-in list
+   (named per harness), and a `Tool … not found` reply means a wrong name
+   to retry with the exact one, not an environment fault.
 4. **The step definition** (vars and fragments rendered at load).
 5. **The skill**.
 6. **On a resumed dispatch only**: the owner's undelivered messages, or
