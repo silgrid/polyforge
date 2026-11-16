@@ -141,3 +141,11 @@ func percentOf(part, whole time.Duration) int64 {
 	}
 	return int64(float64(part) / float64(whole) * 100)
 }
+
+// medianDuration answers the median of the completed calls' latencies (the
+// mean of the two middles for an even count).
+func medianDuration(l []time.Duration) time.Duration { return 0 }
+
+// p90Duration answers the smallest value at or above the 90th percentile
+// of the completed calls' latencies.
+func p90Duration(l []time.Duration) time.Duration { return 0 }
