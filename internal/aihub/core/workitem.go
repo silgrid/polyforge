@@ -187,6 +187,7 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 		}
 		return nil, err
 	}
+	parentID := ""
 	if req.ParentID != nil && *req.ParentID != "" {
 		var parentProject, grandParent sql.NullString
 		err = tx.QueryRow(`SELECT project_id, parent_id FROM work_items WHERE id=?1`, *req.ParentID).
@@ -210,6 +211,7 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 		if grandParent.Valid && grandParent.String != "" {
 			return nil, Fail(api.ErrCoreBadInput, "PARENT_DEPTH", "parent %q is itself a child; work items nest one level only", *req.ParentID)
 		}
+		parentID = *req.ParentID
 	} else {
 		req.ParentID = nil
 	}
@@ -228,6 +230,19 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 		}
 		if err := checkBlockerTx(tx, bid, ref, projectID); err != nil {
 			return nil, err
+		}
+		// polyforge#77: the new work item gains an outgoing wait toward a
+		// bundle-bound parent (waitEdgesSQL), so a blocker its parent
+		// reaches — or the parent itself — would close a cycle.
+		if parentID != "" {
+			reaches, err := reachesTx(tx, parentID, bid, "blocks")
+			if err != nil {
+				return nil, err
+			}
+			if reaches {
+				return nil, Fail(api.ErrCoreConflict, "DEPENDENCY_CYCLE",
+					"after %s would close a dependency cycle: the parent waits for this child", ref)
+			}
 		}
 		if !seenBlocker[bid] {
 			seenBlocker[bid] = true
@@ -295,7 +310,8 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 	if err := appendEventTx(tx, id, now, req.Reporter, "work_item_filed", nil); err != nil {
 		return nil, err
 	}
-	// The new work item has no outgoing edge yet, so no cycle is possible.
+	// Cycle-checked above: the new work item's only outgoing wait is the
+	// one toward its parent.
 	for _, bid := range blockers {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO wi_dependencies(blocking_wi_id, blocked_wi_id, kind, created_at)
 			VALUES (?1,?2,'blocks',?3)`, bid, id, now); err != nil {
@@ -1279,8 +1295,10 @@ func (m *WIManager) Dependencies(wiID string) (*Deps, error) {
 
 // AddDependency creates a dependency edge with the v0 write-path rules:
 // same-project hard boundary, no self edge, cycle detection for
-// blocks/supersedes; a `blocks` blocker must be an execution ticket
-// (polyforge#161). Adding an existing edge is idempotent.
+// blocks/supersedes (a `blocks` cycle may run through a child's implicit
+// wait on its bundle-bound parent, polyforge#77 — reachesTx); a `blocks`
+// blocker must be an execution ticket (polyforge#161). Adding an
+// existing edge is idempotent.
 func (m *WIManager) AddDependency(blocking, blocked, kind string) error {
 	if kind == "" {
 		kind = "blocks"
@@ -1352,8 +1370,18 @@ func (m *WIManager) RemoveDependency(blocking, blocked, kind string) error {
 	return nil
 }
 
-// reachesTx reports whether src can reach dst over `blocks` edges.
+// reachesTx reports whether src can reach dst over kind edges, walking
+// from blocker to blocked. For `blocks` the walk follows waitEdgesSQL
+// (polyforge#77): explicit edges in any status, plus the implicit wait of
+// an unwrapped child on its bundle-bound parent (a wrapped child no
+// longer holds its parent, so it can close no deadlock).
 func reachesTx(tx *sql.Tx, src, dst, kind string) (bool, error) {
+	next, extra := `SELECT blocked_wi_id FROM wi_dependencies WHERE blocking_wi_id=?1 AND kind=?2`, []any{kind}
+	if kind == "blocks" {
+		next, extra = `SELECT e.blocked_id FROM (`+waitEdgesSQL+`) e
+			JOIN work_items b ON b.id = e.blocker_id
+			WHERE e.blocker_id=?1 AND (e.via='' OR b.status <> 'wrapped')`, nil
+	}
 	seen := map[string]bool{}
 	queue := []string{src}
 	for len(queue) > 0 {
@@ -1366,18 +1394,17 @@ func reachesTx(tx *sql.Tx, src, dst, kind string) (bool, error) {
 			continue
 		}
 		seen[cur] = true
-		rows, err := tx.Query(`SELECT blocked_wi_id FROM wi_dependencies WHERE blocking_wi_id=?1 AND kind=?2`,
-			cur, kind)
+		rows, err := tx.Query(next, append([]any{cur}, extra...)...)
 		if err != nil {
 			return false, err
 		}
 		for rows.Next() {
-			var next string
-			if err := rows.Scan(&next); err != nil {
+			var n string
+			if err := rows.Scan(&n); err != nil {
 				rows.Close()
 				return false, err
 			}
-			queue = append(queue, next)
+			queue = append(queue, n)
 		}
 		rows.Close()
 	}
