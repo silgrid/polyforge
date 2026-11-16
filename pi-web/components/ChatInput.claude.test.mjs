@@ -1,5 +1,6 @@
 import "#test-env";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -96,23 +97,41 @@ test("an open claude session shows the model selector, the effort control and th
   assert.doesNotMatch(html, /fixed for this session|claude-fixed-line/);
 });
 
-test("a running claude turn (or a state not known yet) disables the model, effort and compact controls (rendered, not hidden); Stop stays", () => {
+// polyforge#71 (AC5) rewrites the earlier "rendered, not hidden" rule: a claude
+// session's compact control follows pi's — hidden while a turn runs (it returns as
+// the turn ends), Stop compaction while claude's own compaction runs, disabled
+// only while the stream has not said whether the session is idle — and it takes
+// pi's run-end stray-click guard. Model and effort stay rendered, disabled.
+test("a running claude turn hides the compact control (pi's rule); a compaction shows Stop compaction; an unknown state keeps it disabled", () => {
   const open = { ...base, choosing: false, harness: "claude", model: "claude-sonnet-5-5", onModelChange() {}, onEffortChange() {} };
-  for (const [state, extra] of [[open, { isStreaming: true }], [open, { isCompacting: true }], [{ ...open, stateKnown: false }, {}]]) {
-    const html = composer(state, { onCompact() {}, ...extra });
-    assert.match(html, /class="model-selector[^"]*is-disabled/, JSON.stringify(extra));
-    assert.match(html, /<button[^>]*disabled=""[^>]*aria-label="Change reasoning level"/, JSON.stringify(extra));
-  }
-  assert.match(composer(open, { onCompact() {}, isStreaming: true }), /<button[^>]*disabled=""[^>]*aria-label="Compact context"/);
-  assert.match(composer({ ...open, stateKnown: false }, { onCompact() {} }), /<button[^>]*disabled=""[^>]*aria-label="Compact context"/, "not before the stream said the session is idle");
-  assert.match(composer(open, { onCompact() {}, isStreaming: true }), /aria-label="Stop agent"/);
-  const compacting = composer(open, { onCompact() {}, onAbortCompaction() {}, isCompacting: true });
-  assert.match(compacting, /placeholder="claude is compacting; send when it ends\."/, "the #70 compacting placeholder");
+  const running = composer(open, { onCompact() {}, isStreaming: true });
+  assert.match(running, /class="model-selector[^"]*is-disabled/, "the model selector stays rendered, disabled");
+  assert.match(running, /<button[^>]*disabled=""[^>]*aria-label="Change reasoning level"/, "the effort control stays rendered, disabled");
+  assert.doesNotMatch(running, /aria-label="Compact context"/, "the compact control is hidden while a turn runs, as on pi");
+  assert.doesNotMatch(running, /aria-label="Stop compaction"/);
+  assert.match(running, /aria-label="Stop agent"/, "Stop stays");
+  // pi's run-end stray-click guard now covers claude too (the earlier code excluded it).
+  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  assert.match(source, /const isStrayClick = \(e: React\.MouseEvent\) => isRunEndStrayClick\(e\.detail, performance\.now\(\) - runEndedAtRef\.current\);/, "claude takes pi's stray-click guard");
+  assert.doesNotMatch(source, /!claudeSession && isRunEndStrayClick/, "the claude exclusion is gone");
+  // Not before the stream said the session is idle: rendered, disabled.
+  const unknown = composer({ ...open, stateKnown: false }, { onCompact() {} });
+  assert.match(unknown, /<button[^>]*disabled=""[^>]*aria-label="Compact context"/, "an unknown state keeps the control disabled");
+  // claude's compaction is a turn: the control stays, as Stop compaction.
+  const compacting = composer(open, { onCompact() {}, onAbortCompaction() {}, isStreaming: true, isCompacting: true });
   assert.match(compacting, /aria-label="Stop compaction"/);
+  assert.doesNotMatch(compacting, /aria-label="Compact context"/);
+  assert.match(compacting, /placeholder="claude is compacting; send when it ends\."/, "the #70 compacting placeholder");
   assert.match(compacting, /<button[^>]*disabled=""[^>]*aria-label="Send"/, "nothing is sent during claude's compaction");
+  const compactingIdleComposer = composer(open, { onCompact() {}, onAbortCompaction() {}, isCompacting: true });
+  assert.match(compactingIdleComposer, /aria-label="Stop compaction"/, "the control is Stop compaction however the compaction is shown");
   const idle = composer(open, { onCompact() {} });
-  assert.doesNotMatch(idle, /<button[^>]*disabled=""[^>]*aria-label="Change reasoning level"/);
-  assert.doesNotMatch(idle, /<button[^>]*disabled=""[^>]*aria-label="Compact context"/);
+  assert.match(idle, /aria-label="Compact context"/, "an idle claude session offers compaction");
+  assert.doesNotMatch(idle, /<button[^>]*disabled=""[^>]*aria-label="Compact context"/, "idle is enabled");
+  // A fresh composer of either harness offers no compact control (AC5: ChatWindow
+  // passes onCompact only for an open session; the pin on that line is in ChatWindow.claude.test.mjs).
+  assert.doesNotMatch(composer({ ...base, harness: "claude" }, {}), /aria-label="Compact context"/, "a fresh claude composer has none");
+  assert.doesNotMatch(composer(base, {}), /aria-label="Compact context"/, "a fresh pi composer has none either");
 });
 
 test("a fresh claude composer offers model and effort, no compact, and keeps the system-claude hint", () => {

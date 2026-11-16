@@ -371,7 +371,7 @@ try {
 
   // S272-02 — criterion: a fresh claude composer offers model and effort, no
   // compaction, and the claude hint line stays as it is.
-  await scenario("S272-02", "A fresh claude composer offers model and effort, not compaction", async () => {
+  await scenario("S272-02", "A fresh composer — claude or pi — offers model and effort, not compaction", async () => {
     await openFreshComposer();
     await chooseHarness("claude");
     assert.ok(await bottomBar().locator(".model-selector").count() > 0, "the fresh claude composer offers no model selector");
@@ -380,6 +380,10 @@ try {
     assert.ok((await composer().innerText()).includes(HINT_EN), "the system-claude hint line changed or disappeared");
     await effortTrigger().click({ timeout: ACTION_MS });
     await effortOptions().first().waitFor({ state: "visible", timeout: 10_000 });
+    // polyforge#71 (AC5): a fresh pi composer offers none either — both harnesses
+    // start with nothing to compact.
+    await chooseHarness("pi");
+    assert.equal(await compactTrigger().count(), 0, "the fresh pi composer offers a compact control although there is no conversation yet");
   });
 
   // S272-03 — criterion (owner-intended change 2026-11-04: this

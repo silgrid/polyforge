@@ -30,7 +30,10 @@ test("a claude session forks at a user message and edits it in place, never whil
 test("a claude session gets claude's model, effort and compact handlers and pi's Steer; still no pi model, reasoning, tools, follow-up, queue recall or built-in commands", () => {
   for (const pattern of [
     /onModelChange=\{isClaudeSession \? undefined : handleModelChange\}/,
-    /onCompact=\{\(session \|\| isNew\) && !\(isNew && isClaudeSession\) \? handleCompact : undefined\}/,
+    // polyforge#71 (AC5): an open session of either harness compacts; a fresh
+    // composer of either harness has no compact control (there is nothing to
+    // compact yet) — the earlier (session || isNew) rule showed a dead button.
+    /onCompact=\{session \? handleCompact : undefined\}/,
     /onAbortCompaction=\{isClaudeSession \? handleAbort : handleAbortCompaction\}/,
     /onToolPresetChange=\{\(session \|\| isNew\) && !isClaudeSession \? handleToolPresetChange : undefined\}/,
     /onThinkingLevelChange=\{\(session \|\| isNew\) && !isClaudeSession \? handleThinkingLevelChange : undefined\}/,
