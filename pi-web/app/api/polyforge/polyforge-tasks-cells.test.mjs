@@ -75,9 +75,10 @@ test.after(() => {
 
 const setState = (patch) => writeFileSync(stateFile, JSON.stringify({ caps: true, failPublic: false, opsFails: false, failPublicShow: false, ...patch }));
 /** A fresh module graph per scenario: the presence probe's 60 s cache and
- *  the ops reader's 1 s reuse window never leak between scenarios. */
+ *  the ops reader's 1 s reuse window never leak between scenarios (jiti's
+ *  module cache is off). */
 const loadRoutes = async () => {
-  const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true });
+  const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, moduleCache: false });
   return {
     list: (await jiti.import("./tasks/route.ts")).GET,
     show: (await jiti.import("./tasks/[id]/route.ts")).GET,

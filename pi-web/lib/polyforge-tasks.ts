@@ -11,7 +11,10 @@ import { isPolyforgeTaskId, type PolyforgeTaskDetail, type PolyforgeTaskRow } fr
  * Server-side reads for the dock's read-only Tasks tab.
  * Exactly two pf verbs, through `execFileAsync` (no shell): `pf --json task
  * list` and `pf --json task show <id>` (the id validated by
- * `isPolyforgeTaskId` before any spawn). There is no spawn and no cancel: the
+ * `isPolyforgeTaskId` before any spawn), each optionally pinned to one Cell
+ * by a `--profile <cell>` prefix before `--json` (polyforge#73: the Tasks
+ * route reads once per valid, in-service Cell; an empty prefix is the
+ * unflagged read of a pre-Cell pf). There is no spawn and no cancel: the
  * tab is a read surface. The HTTP faces under `app/api/polyforge/tasks/**`
  * only degrade and answer.
  *
@@ -189,10 +192,12 @@ export async function readPolyforgeTasksCapability(): Promise<PolyforgeTasksCapa
   return { pfPresent: true, pfVersion: presence.version, capable: true };
 }
 
-/** The list face: exactly one `pf --json task list` (every task of the local
- *  daemon, no project filter). */
-export async function listPolyforgeTasks(): Promise<PolyforgeTaskRow[]> {
-  return sanitizeTaskListAnswer(await runPfJson(["--json", "task", "list"]));
+/** The list face: exactly one `pf --json task list` per call — every task
+ *  of the one Cell the pin addresses (no project filter); an empty pin is
+ *  the unflagged read of a pre-Cell pf. The Tasks route calls this once per
+ *  valid, in-service Cell (polyforge#73). */
+export async function listPolyforgeTasks(pin: readonly string[] = []): Promise<PolyforgeTaskRow[]> {
+  return sanitizeTaskListAnswer(await runPfJson([...pin, "--json", "task", "list"]));
 }
 
 /** The detail face: exactly one `pf --json task show <id>`; the caller has
