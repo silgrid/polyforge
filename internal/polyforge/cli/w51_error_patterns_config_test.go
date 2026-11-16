@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -196,5 +198,42 @@ func TestW51ErrorPatternsInheritHost(t *testing.T) {
 	}
 	if cell.Daemon.SlowModelP90Latency != 3*time.Minute {
 		t.Fatalf("the Cell must inherit the Host's slow threshold: %s", cell.Daemon.SlowModelP90Latency)
+	}
+}
+
+// TestW51ConfigGetListKey: `pf config get` reads a pattern list back as
+// written — `--json` as an array of the exact patterns, the text form as
+// `pf config list` renders the list (AC1: 原样读回). Expected values are the
+// patterns the test writes.
+func TestW51ConfigGetListKey(t *testing.T) {
+	xdg := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(xdg, "polyforge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(xdg, "polyforge", "cli.toml"), []byte("server = \"http://w51-get.invalid:1\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"XDG_CONFIG_HOME": xdg}
+	code, _, stderr := runPf(t, env, "config", "set", "transient_error_patterns", `["\\b402\\b", "payment required"]`)
+	if code != 0 {
+		t.Fatalf("config set exited %d: %s", code, stderr)
+	}
+	code, stdout, stderr := runPf(t, env, "--json", "config", "get", "transient_error_patterns")
+	if code != 0 {
+		t.Fatalf("config get --json exited %d: %s", code, stderr)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("config get --json did not print JSON: %v\n%s", err, stdout)
+	}
+	if want := []any{`\b402\b`, "payment required"}; !reflect.DeepEqual(doc["value"], want) || doc["source"] != "file" {
+		t.Fatalf("config get --json = %v, want value %q from source file", doc, want)
+	}
+	code, stdout, stderr = runPf(t, env, "config", "get", "transient_error_patterns")
+	if code != 0 {
+		t.Fatalf("config get exited %d: %s", code, stderr)
+	}
+	if want := `transient_error_patterns = ["\\b402\\b", "payment required"] (source: file)` + "\n"; stdout != want {
+		t.Fatalf("config get = %q, want %q (the list's own rendering)", stdout, want)
 	}
 }
