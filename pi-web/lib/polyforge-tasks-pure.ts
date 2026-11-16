@@ -13,7 +13,10 @@
  * lives here, so both the server module and the client panel can use it.
  */
 
-/** One `pf task list` row, exactly the field set the sanitizer forwards. */
+/** One `pf task list` row, exactly the field set the sanitizer forwards.
+ *  The route's outer layer attaches the row's Cell (`cell`, polyforge#73) —
+ *  a wire row is a `PolyforgeTaskRow` plus that optional field; the
+ *  sanitizer's nine keys themselves are unchanged. */
 export interface PolyforgeTaskRow {
   id: string;
   project: string;
@@ -66,7 +69,7 @@ export function isPolyforgeTaskId(value: unknown): value is string {
 /** The two sections of the one list: 正在运行 holds exactly the `running`
  *  tasks and 全部 the rest, both in pf's order — every task is listed exactly
  *  once, the running ones on top. Pure. */
-export function splitTaskSections(rows: PolyforgeTaskRow[]): { running: PolyforgeTaskRow[]; all: PolyforgeTaskRow[] } {
+export function splitTaskSections<T extends PolyforgeTaskRow>(rows: T[]): { running: T[]; all: T[] } {
   return {
     running: rows.filter((row) => row.state === "running"),
     all: rows.filter((row) => row.state !== "running"),
@@ -74,11 +77,14 @@ export function splitTaskSections(rows: PolyforgeTaskRow[]): { running: Polyforg
 }
 
 /** The client-side search: a case-insensitive substring of the id, project,
- *  state or prompt summary; an empty needle matches every row. Pure. */
-export function taskMatches(row: PolyforgeTaskRow, needle: string): boolean {
+ *  state, prompt summary or the row's Cell (polyforge#73: no per-Cell
+ *  filter — the search is the one way to narrow by Cell); an empty needle
+ *  matches every row. A wire row (with `cell`) and a passport row both fit.
+ *  Pure. */
+export function taskMatches(row: PolyforgeTaskRow & { cell?: string }, needle: string): boolean {
   const wanted = needle.trim().toLowerCase();
   if (!wanted) return true;
-  return [row.id, row.project, row.state, row.prompt_summary].some((field) => field.toLowerCase().includes(wanted));
+  return [row.id, row.project, row.state, row.prompt_summary, row.cell ?? ""].some((field) => field.toLowerCase().includes(wanted));
 }
 
 // ---- filters ----

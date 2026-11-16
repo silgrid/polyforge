@@ -111,6 +111,14 @@ test("spawn facts are read only under spec and a stray report_len is not an inpu
   assert.equal(flat.report_len, 3, "report_len is the measured length of the report pf sent");
 });
 
+test("polyforge#73: the client-side search also matches the row's Cell", () => {
+  const row = (cell) => ({ id: "task_1111111111111111", project: "workbench", state: "running", prompt_summary: "ALPHA job", ...(cell ? { cell } : {}) });
+  assert.deepEqual(["public"].filter((needle) => pure.taskMatches(row("public"), needle)), ["public"], "the Cell name, exact");
+  assert.equal(pure.taskMatches(row("public"), "PUB"), true, "the Cell name, case-insensitive");
+  assert.equal(pure.taskMatches(row("public"), "default"), false, "another Cell's name does not match");
+  assert.equal(pure.taskMatches(row(), "public"), false, "a Cell-less row never matches a Cell needle");
+});
+
 test("sections list running tasks on top and the rest under all, and the search matches id, project, state and summary case-insensitively", () => {
   const rows = [
     { id: "task_1111111111111111", project: "workbench", state: "running", prompt_summary: "ALPHA job" },

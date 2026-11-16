@@ -73,7 +73,9 @@ else `PF_PROFILE`, else the cwd's mapped Cell, else `default`.
 
 **Host-scope commands.** `pf ops status`, `pf ops max` and `pf ops auto`
 address the Host aggregate (the Host ceiling, every Cell's jobs and one
-block per Cell); `PF_PROFILE` and the cwd never change their scope — only
+block per Cell; the aggregate's `tasks` counts — running, completed and the
+terminal states — sum every Cell with a running daemon, so the Tasks badge
+and re-read trigger cover all of them); `PF_PROFILE` and the cwd never change their scope — only
 an explicit `--profile NAME` targets one Cell. `pf ops shutdown` is always
 Host-level: it stops every Cell and refuses `--profile`.
 

@@ -275,7 +275,8 @@ test("the decision feed rides every status read that finds pf; the reminder walk
   // owner ruling 2026-11-09, the walk selects the work item's job detail (nothing else opens), or the task in Tasks.
   const walk = source.slice(source.indexOf("const openNextAttention = useCallback"));
   assert.match(walk, /const target = attentionTarget\(item, opsStatus\?\.jobs \?\? \[\]\);/);
-  assert.match(walk, /setWorkTab\("tasks"\);\s*setTaskRequest\(\{ id: target\.id, seq: \+\+taskRequestSeq\.current \}\);/);
+  assert.match(walk, /setWorkTab\("tasks"\);\s*setTaskRequest\(\{ id: target\.id, seq: \+\+taskRequestSeq\.current, \.\.\.\(target\.profile \? \{ profile: target\.profile \} : \{\}\) \}\);/,
+    "polyforge#73: the walk's task request carries the entry's Cell");
   assert.match(walk, /setWorkTab\("jobs"\);\s*if \(target\.ref !== selectedWi \|\| target\.profile !== selectedCell\) select\(target\.ref, target\.profile\);\s*\}, \[/, "the walk selects the job, nothing more");
   assert.match(source, /setWatchStatus\(null\);\s*\}, \[\]\);/, "a new selection starts from a clean snapshot");
 });

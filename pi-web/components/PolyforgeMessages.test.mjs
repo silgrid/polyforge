@@ -303,7 +303,7 @@ test("【建票】 opens the dialog over the mapped projects and names the creat
   assert.match(source, /onFileTicket=\{\(\) => setTicketFor\(message\.id\)\}/);
   assert.match(source, /projects=\{groups\.map\(\(group\) => group\.project\)\}/);
   assert.match(source, /t\("polyforge\.messages\.ticketCreated", \{ slug: ticketNotices\[message\.id\] \}\)/);
-  assert.match(source, /onOpenTask=\{onOpenTask\}/);
+  assert.match(source, /onOpenTask=\{\(taskId\) => onOpenTask\(taskId, cell\)\}/, "polyforge#73: the task link hands the Messages pane's pinned Cell along");
 });
 
 test("the contact column folds at every width — desktop 28px, ≤640px a 40px strip with 40×40 controls in a 40px 单聊 header row (owner-intended change, reversing the earlier mobile-unchanged rule)", () => {

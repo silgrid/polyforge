@@ -894,7 +894,7 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
     "the 全部 sub-tab renders the work-item surface with the count key, the badge reporter and the lower-part detail");
   // the external task open rides beside the count key.
   // the task summaries (decision-feed entries) ride beside it.
-  assert.match(source, /<PolyforgeTasks\s+taskCountKey=\{opsStatus \? `\$\{opsStatus\.tasks\?\.running \?\? 0\}:\$\{opsStatus\.tasks\?\.completed \?\? 0\}` : null\}\s+openTaskId=\{taskToOpen\}\s+onOpenTaskHandled=\{clearTaskToOpen\}\s+decisions=\{decisionsSurface\.feed\?\.decisions \?\? \[\]\}\s+onDismissDecisions=\{decisionsSurface\.onDismiss\}\s+renderDetail=\{renderWorkDetail\}\s+onDetailOpenChange=\{setSubDetailOpen\}\s+\/>/,
+  assert.match(source, /<PolyforgeTasks\s+taskCountKey=\{opsStatus \? `\$\{opsStatus\.tasks\?\.running \?\? 0\}:\$\{opsStatus\.tasks\?\.completed \?\? 0\}` : null\}\s+openTask=\{taskToOpen\}\s+onOpenTaskHandled=\{clearTaskToOpen\}\s+decisions=\{decisionsSurface\.feed\?\.decisions \?\? \[\]\}\s+onDismissDecisions=\{decisionsSurface\.onDismiss\}\s+renderDetail=\{renderWorkDetail\}\s+onDetailOpenChange=\{setSubDetailOpen\}\s+\/>/,
     "the Tasks surface re-reads on the status snapshot's running:completed key (null without a snapshot)");
   // The sub-tab controls: their own named tablist, after the main area.
   const work = source.slice(source.indexOf('role="tablist"\n              data-pf-tabstrip="work"'), source.indexOf('<div data-pf-work-detail=""'));
@@ -1109,12 +1109,13 @@ test(" (owner intentional change, reversing #238): the detail opens at its botto
   assert.doesNotMatch(block, /unread/i, "the control carries no unread count");
 });
 
-test("an analysis card's task link switches to Work › Tasks and hands the id to the Tasks surface", () => {
+test("an analysis card's task link switches to Work › Tasks and hands the id — and the handed Cell — to the Tasks surface", () => {
   const start = source.indexOf("const openTask = useCallback(");
   const body = source.slice(start, source.indexOf("}, [onActiveTab, onWorkTab]);", start));
-  assert.match(body, /setTaskToOpen\(taskId\);\s*onWorkTab\("tasks"\);\s*onActiveTab\("work"\);/);
+  assert.match(body, /setTaskToOpen\(cell \? \{ id: taskId, cell \} : \{ id: taskId \}\);\s*onWorkTab\("tasks"\);\s*onActiveTab\("work"\);/,
+    "polyforge#73: the handed task open carries the Cell when there is one");
   assert.match(source, /onOpenTask=\{openTask\}/);
-  assert.match(source, /openTaskId=\{taskToOpen\}\s*onOpenTaskHandled=\{clearTaskToOpen\}/);
+  assert.match(source, /openTask=\{taskToOpen\}\s*onOpenTaskHandled=\{clearTaskToOpen\}/);
 });
 
 test("every block has a group head with step, status mark, duration and count; the head absorbs the start and terminal lines", () => {
@@ -1166,7 +1167,7 @@ test("/#499: no 决策 sub-tab and no 交互 button; the walk's task reaches Tas
   assert.doesNotMatch(source, /"decisions"|PolyforgeDecisions\b|decisionsTab/, "the Decisions sub-tab is gone");
   const frame = source.slice(source.indexOf('data-pf-detail-frame=""'));
   assert.doesNotMatch(frame, /position: "absolute", right: 8, bottom: 8/, "no floating button over the detail");
-  assert.match(source, /setTaskToOpen\(taskRequest\.id\);/, "a walk's task reaches the Tasks surface through the existing hand-off");
+  assert.match(source, /setTaskToOpen\(taskRequest\.profile \? \{ id: taskRequest\.id, cell: taskRequest\.profile \} : \{ id: taskRequest\.id \}\);/, "a walk's task reaches the Tasks surface through the existing hand-off, with its Cell (polyforge#73)");
   assert.match(source, /decisions=\{decisionsSurface\.feed\?\.decisions \?\? \[\]\}\s*onDismissDecisions=\{decisionsSurface\.onDismiss\}/, "task summaries ride to the Tasks tab");
   for (const [name, localeSource] of [["en", enSource], ["zh-CN", zhCNSource], ["zh-TW", zhTWSource]]) {
     assert.doesNotMatch(localeSource, /polyforge\.work\.decisionsTab/, `${name} has no Decisions tab key`);
@@ -1178,7 +1179,7 @@ test("/#499: no 决策 sub-tab and no 交互 button; the walk's task reaches Tas
 });
 
 test("PR #860 review: the walk's task request is dropped once handed; every blocked kind is labelled", () => {
-  assert.match(source, /if \(!taskRequest\) return;\s*setTaskToOpen\(taskRequest\.id\);\s*onTaskRequestHandled\(\);/, "minor 1: handed once, then cleared — a dock reopen does not reopen the task");
+  assert.match(source, /if \(!taskRequest\) return;\s*setTaskToOpen\(taskRequest\.profile \? \{ id: taskRequest\.id, cell: taskRequest\.profile \} : \{ id: taskRequest\.id \}\);\s*onTaskRequestHandled\(\);/, "minor 1: handed once, then cleared — a dock reopen does not reopen the task");
   for (const [name, localeSource] of [["en", enSource], ["zh-CN", zhCNSource], ["zh-TW", zhTWSource]]) {
     for (const kind of ["incomplete", "driver", "contract", "write_failed"]) assert.match(localeSource, new RegExp(`"polyforge\\.blocked\\.kind\\.${kind}": "\\S`), `${name} labels the ${kind} block`);
   }

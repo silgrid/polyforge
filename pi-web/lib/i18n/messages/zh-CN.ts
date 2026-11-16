@@ -2216,6 +2216,7 @@ export const zhCNLocale: LocalePlugin = {
     "polyforge.tasks.filterAllReporters": "全部发起人",
     "polyforge.tasks.reporterMachine": "机器发起",
     "polyforge.tasks.error": "任务读取失败。",
+    "polyforge.tasks.cellError": "Cell {cell} 读取失败：{error}",
     "polyforge.tasks.notInstalled": "本机未安装 Polyforge。",
     "polyforge.tasks.upgrade": "需要升级 pf",
     "polyforge.tasks.upgradeReason": "请更新 pf 后再使用任务标签页。",
