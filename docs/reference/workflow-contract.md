@@ -791,6 +791,26 @@ half of the same overlay (`--models`) outranks every candidate source of
 that step's dispatches for the whole ticket; see
 [config.md](config.md#pf-override--the-per-step-overlay).
 
+**A sub-ticket's target branch (polyforge#80).** A lane may declare
+`children_branch`, a branch-name template over `{seq}` (the parent's
+seq) and `{project}` (the parent's project name) ([Lane
+keys](#lane-keys)). A sub-ticket — a work item whose `parent_id` names a
+work item whose lane declares it — has its task repos checked out on
+the substituted branch: the first claim fixes it into
+`runtime-state/target-branch.json` (exactly the skipped-step set's rule:
+the first claim writes it, a re-claim or `pf resume` keeps it, and the
+repo checkout and the carrier restore read the file, never the lane),
+BEFORE the task repos are cloned; every (re-)claim checks the fixed
+value out and the carrier restore lands on it. The daemon creates the
+branch on each task repo's origin from the default branch tip with a
+non-forced push when the remote does not carry it — its one outward
+write to the task repos' origin (a push another claim won loses to the
+remote's copy), so the branch exists before a sub-ticket opens a PR
+against it. A claim that cannot read the parent, or the parent's lane,
+is refused naming why (`DAEMON-507`, the blocked note carries the
+reason), never a silent fall-back to the default branch; a parent whose
+lane declares none leaves the sub-ticket untouched.
+
 ## Error codes
 
 | Code | Meaning |
