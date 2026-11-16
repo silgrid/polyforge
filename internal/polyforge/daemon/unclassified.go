@@ -65,7 +65,7 @@ func scanUnclassifiedEvents(dataDir string, window time.Duration, now time.Time)
 			}
 			if it := out[body.ErrorText]; it != nil {
 				it.Count++
-				if e.At > it.LastAt {
+				if laterAt(e.At, it.LastAt) {
 					it.LastAt = e.At
 				}
 			} else {
@@ -75,6 +75,16 @@ func scanUnclassifiedEvents(dataDir string, window time.Duration, now time.Time)
 		f.Close()
 	}
 	return out
+}
+
+// laterAt answers whether the RFC3339Nano stamp a is later than b, by
+// time: the format drops trailing zeros, so "…:30Z" sorts after
+// "…:30.1Z" as text though it is earlier. Every stamp here passed the
+// scan's own parse.
+func laterAt(a, b string) bool {
+	ta, _ := time.Parse(time.RFC3339Nano, a)
+	tb, _ := time.Parse(time.RFC3339Nano, b)
+	return ta.After(tb)
 }
 
 // unclassifiedRoute serves GET /ops/unclassified (Host-level, read-only).
@@ -90,13 +100,18 @@ func (h *Host) unclassifiedRoute(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	byText := map[string]*cli.UnclassifiedItem{}
 	for _, e := range h.sortedCells() {
-		if e.d == nil {
+		// the Cell's daemon is read under the registry lock (a Cell is
+		// invalidated under it); the scan's file I/O runs after release
+		h.mu.Lock()
+		d := e.d
+		h.mu.Unlock()
+		if d == nil {
 			continue // an invalid Cell's stale logs are not part of the report
 		}
 		for text, it := range scanUnclassifiedEvents(h.cellDataDir(e.profile), cli.UnclassifiedWindow, now) {
 			if agg := byText[text]; agg != nil {
 				agg.Count += it.Count
-				if it.LastAt > agg.LastAt {
+				if laterAt(it.LastAt, agg.LastAt) {
 					agg.LastAt = it.LastAt
 				}
 			} else {
@@ -113,7 +128,7 @@ func (h *Host) unclassifiedRoute(w http.ResponseWriter, r *http.Request) {
 		if items[i].Count != items[j].Count {
 			return items[i].Count > items[j].Count
 		}
-		return items[i].LastAt > items[j].LastAt
+		return laterAt(items[i].LastAt, items[j].LastAt)
 	})
 	writeJSON(w, http.StatusOK, cli.UnclassifiedReport{
 		WindowDays: int(cli.UnclassifiedWindow / (24 * time.Hour)),

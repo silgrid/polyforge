@@ -618,8 +618,11 @@ func (h *Host) agentOwner(r *http.Request) (profile, who string, ok bool) {
 func (h *Host) machineIDs() []string {
 	var out []string
 	for _, e := range h.sortedCells() {
-		if e.d != nil {
-			out = append(out, e.d.cfg.MachineID)
+		h.mu.Lock() // a Cell is invalidated under the registry lock
+		d := e.d
+		h.mu.Unlock()
+		if d != nil {
+			out = append(out, d.cfg.MachineID)
 		}
 	}
 	return out
