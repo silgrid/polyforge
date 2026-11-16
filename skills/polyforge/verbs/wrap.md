@@ -15,8 +15,10 @@ queued, paused or blocked, AIHub records the verdict: `wrapped` (or
 with the actor and `--note`. The same people as `pf cancel` may do this
 (the reporter, a project maintainer or an admin). Use `wrap` for "it is
 done"; `pf cancel` records *canceled* (abandoned). A work item with a
-bundle is never closed this way, and an epic only once all its children
-are terminal.
+bundle is never closed this way, and an unbound parent only once all its
+children are terminal; a bundle-bound parent is an execution ticket like
+any other: it waits for its children to merge, runs its own workflow
+and is closed by its daemon (`verbs/file.md`, Parents and children).
 
 **Closes arbitrate.** The human path is this verb (or `pause`); the
 workflow's own terminal exit is closed by the daemon's recovery engine.
@@ -89,7 +91,7 @@ list is empty).
 | `DAEMON-500` | The close failed on the daemon side | The job is left mid-seal, recorded as such; the next daemon start finishes the close. Check the daemon log before retrying. |
 | `dial unix …` | Daemon not running | Nothing is executing here — run `pf daemon ensure`, then retry once (or check `--socket`). A work item with no bundle needs no daemon. |
 | `AUTH-403` | A work item with no bundle, and you are not its reporter, a project maintainer or an admin | Ask one of them to wrap it. |
-| `CORE-409` `OPEN_CHILDREN` | A work item with no bundle that has child tickets not yet terminal (an epic) | Wrap, fail or cancel the children first, then wrap the epic. |
+| `CORE-409` `OPEN_CHILDREN` | A work item with no bundle that has child tickets not yet terminal (an unbound parent) | Wrap, fail or cancel the children first, then wrap the parent. |
 | `CORE-409` / `CORE-410` | A work item with no bundle changed between the read and the wrap: a bundle was bound to it, or it became terminal | Check `pf file show <id>`: with a bundle it is an execution ticket (its daemon wraps it); if terminal, there is nothing to do. |
 | `HTTP-404` `… upgrade aihub first` | A work item with no bundle, and the AIHub is older than this `pf` (no wrap route for it) | AIHub must be upgraded first (it ships before the CLI); until then the ticket cannot be wrapped. |
 
