@@ -31,7 +31,13 @@ export interface PolyforgeConfigSchema {
  *  keys the panel may hand to `pf config set`. */
 export const CLI_COMMON_KEYS: readonly string[] = ["max_concurrent_jobs", "step_timeout", "stall_window", "claude_bin", "api_key"];
 export const CLI_ADVANCED_TOP_LEVEL_KEYS: readonly string[] = ["server", "daemon_socket", "user_id"];
-export const CLI_ADVANCED_DAEMON_KEYS: readonly string[] = ["harness_root", "operator_agent_dir"];
+export const CLI_ADVANCED_DAEMON_KEYS: readonly string[] = [
+  "harness_root", "operator_agent_dir",
+  // polyforge#51: the Host-only classification pattern lists and the
+  // slow-model latency bounds (Host region rows; a Cell's card excludes
+  // them via HOST_ONLY_KEYS).
+  "transient_error_patterns", "model_error_patterns", "slow_model_median_latency", "slow_model_p90_latency",
+];
 /** the Cell-only keys of a named Cell's `cli-<profile>.toml`
  *  (written with the Cell scope): the optional Cell ceiling and the
  *  model-credential declaration (`shared-default` or an absolute dir). */
@@ -42,14 +48,15 @@ export const CELL_KEYS: readonly string[] = ["cell_max_concurrent_jobs", "model.
 export const IDENTITY_KEYS: readonly string[] = ["server"];
 export const CLI_WRITABLE_KEYS: readonly string[] = [...CLI_COMMON_KEYS, ...CLI_ADVANCED_TOP_LEVEL_KEYS, ...CLI_ADVANCED_DAEMON_KEYS, ...CELL_KEYS]
   .filter((key) => !IDENTITY_KEYS.includes(key));
-/** the Host-only keys — a named Cell's file never carries them. */
-export const HOST_ONLY_KEYS: readonly string[] = ["max_concurrent_jobs", "daemon_socket", "harness_root", "operator_agent_dir"];
 /** the Host-only keys the Host region edits one line each (polyforge#51:
  *  the two slow-model latency bounds join the scalar rows). */
 export const HOST_SCALAR_KEYS: readonly string[] = ["max_concurrent_jobs", "daemon_socket", "harness_root", "operator_agent_dir", "slow_model_median_latency", "slow_model_p90_latency"];
 /** the Host-only pattern-list keys (polyforge#51): the Host region edits
  *  each as one regex per line. */
 export const HOST_LIST_KEYS: readonly string[] = ["transient_error_patterns", "model_error_patterns"];
+/** the Host-only keys — a named Cell's file never carries them, the
+ *  cli.toml card excludes them, the Host region owns them. */
+export const HOST_ONLY_KEYS: readonly string[] = [...HOST_SCALAR_KEYS, ...HOST_LIST_KEYS];
 /** The connection/credential keys: a save needs a second confirmation, since
  *  the panel's next pf call uses the new value while the running daemon keeps
  *  the old one until it restarts. narrowed to same-identity
@@ -100,6 +107,11 @@ export function configValueError(key: string, value: unknown, schema: PolyforgeC
     if (!Array.isArray(value) || value.length === 0) return "at least one model candidate is required";
     if (value.some((item) => typeof item !== "string" || item.trim() === "")) return "model candidates must be non-empty strings";
     return null;
+  }
+  if (kind === "regex-list") {
+    if (!Array.isArray(value)) return "a list of regex strings is required";
+    if (value.some((item) => typeof item !== "string" || item.trim() === "")) return "patterns must be non-empty strings";
+    return null; // the regex dialect is pf's to judge (RE2 — a JS-only syntax passes the form and pf refuses it)
   }
   if (kind === "int") {
     const n = typeof value === "number" ? value : Number(String(value).trim());

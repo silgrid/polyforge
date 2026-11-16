@@ -2431,6 +2431,7 @@ export const zhTWLocale: LocalePlugin = {
     "polyforge.settings.configDaemonValue": "守護程序",
     "polyforge.settings.configDaemonDown": "守護程序未執行",
     "polyforge.settings.configSave": "儲存",
+    "polyforge.settings.hostPatternsHint": "每行一條 RE2 正則；pf 在儲存時校驗，編譯不過的會整單拒絕。",
     "polyforge.settings.configSaved": "已儲存；執行中的守護程序會重新讀取即時值。",
     "polyforge.settings.configReloaded": "已重新載入；守護程序值已重新讀取。",
     "polyforge.settings.configRolledBack": "已透過同一寫入路徑回復。",

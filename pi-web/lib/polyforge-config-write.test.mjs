@@ -111,10 +111,15 @@ test("a cli write records the file's real old value, not the previous history va
 // bad shape is refused before any write spawn.
 test("a Host pattern-list write carries the --host pin and reaches pf as one JSON list; bad shapes never spawn", async (t) => {
   const tree = stubTree({ version: "v2.20.21" });
+  // the Host scope needs the multi-Cell protocol: patch the stub's version
+  // probe to report the capabilities (the scoped-region test's shape)
+  const pf = readFileSync(join(tree.bin, "pf"), "utf8")
+    .replace('if (args.includes("--version"))', 'if (args.includes("--version") && args.includes("--json")) { process.stdout.write(JSON.stringify({ version: "v9", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] }) + "\\n"); process.exit(0); }\nif (args.includes("--version"))');
+  writeFileSync(join(tree.bin, "pf"), pf);
   withPath(tree, t);
   const lib = await jiti.import("./polyforge-config-write.ts");
 
-  const write = await lib.writePolyforgeConfig({
+  await lib.writePolyforgeConfig({
     action: "set",
     key: "transient_error_patterns",
     value: ["\\b402\\b", "payment retry"],
@@ -125,7 +130,8 @@ test("a Host pattern-list write carries the --host pin and reaches pf as one JSO
   assert.ok(setCall, "the write reached pf");
   const keyIdx = setCall.args.indexOf("transient_error_patterns");
   assert.ok(keyIdx > 0, "the key is on the argv");
-  assert.equal(setCall.args[keyIdx + 1], JSON.stringify(["\\b402\\b", "payment retry"]), "the value is one JSON array");
+  const valueIdx = setCall.args.findIndex((arg, i) => i > keyIdx && arg.startsWith("["));
+  assert.equal(setCall.args[valueIdx], JSON.stringify(["\\b402\\b", "payment retry"]), "the value is one JSON array");
   assert.ok(setCall.args.includes("--host"), "the write is pinned to the Host scope");
   assert.ok(!setCall.args.includes("--cwd") && !setCall.args.includes("--workspace"), "a Host key carries no path flag");
 

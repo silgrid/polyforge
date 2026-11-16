@@ -2431,6 +2431,7 @@ export const zhCNLocale: LocalePlugin = {
     "polyforge.settings.configDaemonValue": "守护进程",
     "polyforge.settings.configDaemonDown": "守护进程未运行",
     "polyforge.settings.configSave": "保存",
+    "polyforge.settings.hostPatternsHint": "每行一条 RE2 正则；pf 在保存时校验，编译不过的会整单拒绝。",
     "polyforge.settings.configSaved": "已保存；运行中的守护进程会重新读取实时值。",
     "polyforge.settings.configReloaded": "已重载；守护进程值已重新读取。",
     "polyforge.settings.configRolledBack": "已通过同一写入路径回滚。",

@@ -13,6 +13,8 @@ import {
   CONNECTION_KEYS,
   configValueError,
   HOST_ONLY_KEYS,
+  HOST_LIST_KEYS,
+  HOST_SCALAR_KEYS,
   IDENTITY_KEYS,
   parseWorkspaceWriteKey,
   POLYFORGE_CONFIG_SUMMARIZE_MINIMUM_PF_VERSION,
@@ -1903,6 +1905,21 @@ function HostSettingsRegion({ title }: { title: string }) {
 
   const items = read?.items ?? [];
   const itemOf = (key: string) => items.find((item) => item.key === key);
+  // a pattern list's shown value: one regex per line (polyforge#51)
+  const hostPatternsShownValue = (item: { key: string; value?: unknown; source?: string } | undefined): string => {
+    if (!item || item.source !== "file" || !Array.isArray(item.value)) return "";
+    return (item.value as unknown[]).filter((v) => typeof v === "string").join("\n");
+  };
+  const savePatternList = (key: string) => {
+    const raw = drafts[key] ?? hostPatternsShownValue(itemOf(key));
+    const value = raw.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+    const invalid = configValueError(key, value, itemOf(key)?.schema);
+    if (invalid) {
+      setMessage({ tone: "error", text: `${key}: ${invalid}` });
+      return;
+    }
+    write({ action: "set", key, value });
+  };
   const save = (key: string) => {
     const raw = drafts[key] ?? regionShownValue(itemOf(key));
     const value = formValue(key, raw);
@@ -1928,13 +1945,29 @@ function HostSettingsRegion({ title }: { title: string }) {
   return (
     <div className="polyforge-config-region" data-pf-settings-region="host" role="group" aria-label={title} style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
       <p className="polyforge-config-card-title">{title}</p>
-      {HOST_ONLY_KEYS.map((key) => (
+      {HOST_SCALAR_KEYS.map((key) => (
         <div key={key} className="polyforge-config-region-row" data-pf-region-key={key} style={REGION_ROW_STYLE}>
           <span className="polyforge-config-key"><BreakableToken text={key} /></span>
           <input aria-label={`${key} (host)`} value={drafts[key] ?? regionShownValue(itemOf(key))} onChange={(event) => setDrafts((current) => ({ ...current, [key]: event.target.value }))} />
           <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null} onClick={() => save(key)}>{t("polyforge.settings.configSave")}</ConfigButton>
           <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null || itemOf(key)?.source !== "file"} onClick={() => write({ action: "unset", key })}>{t("polyforge.cells.unset")}</ConfigButton>
           {renderNotice(key)}
+        </div>
+      ))}
+      {HOST_LIST_KEYS.map((key) => (
+        <div key={key} className="polyforge-config-region-row" data-pf-region-key={key} data-pf-pattern-list={key} style={{ ...REGION_ROW_STYLE, flexDirection: "column", alignItems: "stretch" }}>
+          <span className="polyforge-config-key"><BreakableToken text={key} /></span>
+          <textarea
+            aria-label={`${key} (host)`}
+            rows={4}
+            value={drafts[key] ?? hostPatternsShownValue(itemOf(key))}
+            onChange={(event) => setDrafts((current) => ({ ...current, [key]: event.target.value }))}
+          />
+          <p className="polyforge-config-card-hint">{t("polyforge.settings.hostPatternsHint")}</p>
+          <div style={{ display: "flex", gap: 6 }}>
+            <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null} onClick={() => savePatternList(key)}>{t("polyforge.settings.configSave")}</ConfigButton>
+            <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null || itemOf(key)?.source !== "file"} onClick={() => write({ action: "unset", key })}>{t("polyforge.cells.unset")}</ConfigButton>
+          </div>
         </div>
       ))}
       {confirming && (

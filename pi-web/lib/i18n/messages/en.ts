@@ -2431,6 +2431,7 @@ export const enLocale: LocalePlugin = {
     "polyforge.settings.configDaemonValue": "daemon",
     "polyforge.settings.configDaemonDown": "daemon is not running",
     "polyforge.settings.configSave": "Save",
+    "polyforge.settings.hostPatternsHint": "One RE2 regex per line; pf validates and refuses a pattern it cannot compile.",
     "polyforge.settings.configSaved": "Saved; the running daemon re-reads live values.",
     "polyforge.settings.configReloaded": "Reloaded; the daemon value was re-read.",
     "polyforge.settings.configRolledBack": "Rolled back through the same write path.",
