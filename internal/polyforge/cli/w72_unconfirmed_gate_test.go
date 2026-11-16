@@ -49,8 +49,8 @@ func TestW72QueueMarksAnalysisUnconfirmed(t *testing.T) {
 }
 
 func TestW72FileAnalysisConfirmRemovesMarker(t *testing.T) {
-	var patched []map[string]any
-	srv := newFakeAihub(t, &reqRecorder{}, func(w http.ResponseWriter, r *http.Request) {
+	rec := &reqRecorder{}
+	srv := newFakeAihub(t, rec, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			c := w72MarkedContent()
 			io.WriteString(w, `{"id":"wi_abc","slug":"pf-42","project":"polyforge","status":"queued",
@@ -58,9 +58,6 @@ func TestW72FileAnalysisConfirmRemovesMarker(t *testing.T) {
 			return
 		}
 		if r.Method == "PATCH" {
-			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			patched = append(patched, body)
 			io.WriteString(w, `{"id":"wi_abc","slug":"pf-42"}`)
 		}
 	})
@@ -71,18 +68,33 @@ func TestW72FileAnalysisConfirmRemovesMarker(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("confirm = %d: %s", code, stderr)
 	}
-	if len(patched) != 1 {
-		t.Fatalf("confirm must PATCH exactly once, got %d", len(patched))
+	// the recorder is the one that saw the body (it drains it before the
+	// handler runs)
+	var patch *capturedRequest
+	for i := range rec.reqs {
+		if rec.reqs[i].Method == "PATCH" {
+			if patch != nil {
+				t.Fatalf("confirm must PATCH exactly once; saw two:\n%v", rec.reqs)
+			}
+			patch = &rec.reqs[i]
+		}
 	}
-	content, _ := patched[0]["content"].(string)
+	if patch == nil {
+		t.Fatalf("confirm never PATCHed; requests: %v", rec.reqs)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(patch.Body), &body); err != nil {
+		t.Fatalf("the PATCH body: %v (%s)", err, patch.Body)
+	}
+	content, _ := body["content"].(string)
 	if strings.Contains(content, "pf:auto-analysis") {
 		t.Fatalf("the confirmed content must carry no marker:\n%s", content)
 	}
 	if !strings.Contains(content, "### 1. 改动范围") {
 		t.Fatalf("the draft must survive the confirm:\n%s", content)
 	}
-	if got, _ := patched[0]["expected_updated_at"].(string); got != "2026-11-16T00:00:00Z" {
-		t.Fatalf("the confirm must ride the content CAS (expected_updated_at), got %v", patched[0])
+	if got, _ := body["expected_updated_at"].(string); got != "2026-11-16T00:00:00Z" {
+		t.Fatalf("the confirm must ride the content CAS (expected_updated_at), got %v", body)
 	}
 }
 
@@ -100,5 +112,3 @@ func w72JSONStr(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
-
-

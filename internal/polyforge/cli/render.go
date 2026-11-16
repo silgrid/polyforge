@@ -201,23 +201,26 @@ type WIView struct {
 	// queued execution ticket whose analysis section still carries the
 	// unconfirmed auto-analysis marker (polyforge#72): the auto-pull wave
 	// skips it until the owner confirms (`pf file analysis confirm`).
-	// Stub (build u10, red first).
 	AnalysisUnconfirmed bool `json:"analysis_unconfirmed,omitempty"`
 }
 
 // acceptanceMissingLabel is the STATUS-cell mark of an AcceptanceMissing
-// row; analysisMissingLabel of an AnalysisMissing one (both marks show
-// when both are missing).
+// row; analysisMissingLabel of an AnalysisMissing one; the
+// analysisUnconfirmedLabel of an AnalysisUnconfirmed one (the marks show
+// when several are missing).
 const (
-	acceptanceMissingLabel = "需要交互：缺验收"
-	analysisMissingLabel   = "需要交互：未分析"
+	acceptanceMissingLabel   = "需要交互：缺验收"
+	analysisMissingLabel     = "需要交互：未分析"
+	analysisUnconfirmedLabel = "需要交互：分析待确认"
 )
 
-// markNeedsInteraction sets AcceptanceMissing and AnalysisMissing on
-// each queued execution ticket (one with a bundle) of items whose lane
-// requires acceptance (the lane's `acceptance` declaration; a nil lane,
-// one that cannot be read, does) — the checks pf submit and the
-// auto-pull wave apply; the ticket needs interaction first.
+// markNeedsInteraction sets AcceptanceMissing, AnalysisMissing and
+// AnalysisUnconfirmed on each queued execution ticket (one with a bundle)
+// of items whose lane requires acceptance (the lane's `acceptance`
+// declaration; a nil lane, one that cannot be read, does) — the checks
+// `pf submit` and the auto-pull wave apply, plus the unconfirmed gate
+// (polyforge#72: the machine never claims its own unconfirmed report);
+// the ticket needs interaction first.
 func markNeedsInteraction(items []WIView, laneOf func(project, bundle string) *workflow.Lane) {
 	for i := range items {
 		it := &items[i]
@@ -230,6 +233,8 @@ func markNeedsInteraction(items []WIView, laneOf func(project, bundle string) *w
 			laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance()
 		it.AcceptanceMissing = laneRequires && !workflow.HasAcceptance(content)
 		it.AnalysisMissing = laneRequires && !workflow.HasAnalysis(content)
+		it.AnalysisUnconfirmed = laneRequires && workflow.HasAnalysis(content) &&
+			workflow.AnalysisUnconfirmed(content)
 	}
 }
 
@@ -309,6 +314,9 @@ func wiRow(it WIView) []string {
 	}
 	if it.AnalysisMissing {
 		status += " (" + analysisMissingLabel + ")"
+	}
+	if it.AnalysisUnconfirmed {
+		status += " (" + analysisUnconfirmedLabel + ")"
 	}
 	return []string{
 		slug, orDash(it.ProjectName), status, sess, it.Priority, nullable(it.BundleName), truncate(it.Goal, 60),

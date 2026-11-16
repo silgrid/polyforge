@@ -57,10 +57,50 @@ var cmdFile = &Command{
 			return fileShow(ctx, rest)
 		case "dep":
 			return fileDep(ctx, rest)
+		case "analysis":
+			return fileAnalysis(ctx, rest)
 		default:
 			return fmt.Errorf("file: unknown action %q", sub)
 		}
 	},
+}
+
+// fileAnalysis serves the analysis section's owner gate:
+//
+//	pf file analysis confirm <id>
+//
+// — the one command that removes an unconfirmed auto-analysis marker
+// (polyforge#72, ruling 9): after it the auto-pull wave may claim the
+// ticket again. The draft itself is untouched; the write carries the
+// content CAS so a concurrent edit elsewhere is never overwritten.
+func fileAnalysis(ctx *Context, args []string) error {
+	if len(args) != 2 || args[0] != "confirm" {
+		return fmt.Errorf("file analysis: expected `confirm <id>` — the owner's confirmation of the auto-scheduled analysis (see `pf help file`)")
+	}
+	name := args[1]
+	wi, err := ctx.aihub().GetWorkItem(name)
+	if err != nil {
+		return err
+	}
+	content := ""
+	if wi.Content != nil {
+		content = *wi.Content
+	}
+	confirmed, changed := workflow.ConfirmAnalysisSection(content)
+	if !changed {
+		return fmt.Errorf("file analysis confirm %s: no unconfirmed auto-analysis marker on the ticket — nothing to confirm (`pf file show %s` to read the section)", api.DisplayName(wi.Slug, wi.ID), name)
+	}
+	raw, err := ctx.aihub().PatchWorkItem(wi.ID, map[string]any{
+		"content":             confirmed,
+		"expected_updated_at": wi.UpdatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	finishAs(ctx, raw, func(v *WIView) {
+		fmt.Fprintf(ctx.Stdout, "已确认分析（标记已去除；自动领取放行）：%s\n", api.DisplayName(v.Slug, v.ID))
+	})
+	return nil
 }
 
 // osGetwd is the file-create inference's cwd seam: the production value

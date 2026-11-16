@@ -1477,12 +1477,14 @@ func (d *Daemon) fetchAutoWave() {
 		if it.Content != nil {
 			content = *it.Content
 		}
-		if (!workflow.HasAcceptance(content) || !workflow.HasAnalysis(content)) && d.laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance() {
+		if (!workflow.HasAcceptance(content) || !workflow.HasAnalysis(content) || workflow.AnalysisUnconfirmed(content)) && d.laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance() {
 			// an execution ticket that lists no acceptance criterion, or
 			// carries no analysis section (polyforge#27), needs interaction
-			// first (the predicates pf submit applies) when its lane
-			// requires one — the lane's `acceptance` declaration; it stays
-			// queued and pf queue marks it
+			// first (the predicates `pf submit` applies) when its lane
+			// requires one — and so does one whose analysis the machine
+			// wrote and the owner has not confirmed yet (polyforge#72 AC6:
+			// the machine never claims its own unconfirmed report); it
+			// stays queued and pf queue marks it
 			continue
 		}
 		if berr, bad := badBundles[it.ProjectName+" "+*it.BundleName]; bad {

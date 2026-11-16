@@ -164,6 +164,38 @@ func AnalysisItemCount(content string) int {
 
 // ConfirmAnalysisSection answers content with every unconfirmed
 // auto-analysis marker line removed from its analysis section (changed =
-// one was there) — the one edit `pf file analysis confirm` makes. Stub
-// (build u10, red first).
-func ConfirmAnalysisSection(content string) (string, bool) { return content, false }
+// one was there) — the one edit `pf file analysis confirm` makes. Every
+// other byte of the section (the draft itself) survives.
+func ConfirmAnalysisSection(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if !isAnalysisHeading(strings.TrimSpace(line)) {
+			continue
+		}
+		j := i + 1
+		for j < len(lines) {
+			t := strings.TrimSpace(lines[j])
+			if strings.HasPrefix(t, "# ") || strings.HasPrefix(t, "## ") {
+				break
+			}
+			j++
+		}
+		out := make([]string, 0, len(lines))
+		out = append(out, lines[:i+1]...)
+		changed := false
+		for _, l := range lines[i+1 : j] {
+			if autoAnalysisMarkerRe.MatchString(strings.TrimSpace(l)) {
+				changed = true
+				continue
+			}
+			out = append(out, l)
+		}
+		out = append(out, lines[j:]...)
+		if !changed {
+			return content, false
+		}
+		// collapse the blank run the removed marker line left behind
+		return strings.Join(out, "\n"), true
+	}
+	return content, false
+}
