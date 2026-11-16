@@ -1,6 +1,6 @@
 ---
 name: merge
-description: Merge the published PRs at the verified heads with one pre-written script and register the landing record it writes for the work item's wrap (pf step hub wrap-attrs integration); a PR that moved, the default branch gained commits after verification when the verified result records a base, closed or was refused is this gate's FAIL back to sync.
+description: Merge the published PRs at the verified heads with one pre-written script and register the landing record it writes for the work item's wrap (pf step hub wrap-attrs integration); a PR that moved, the default branch gained commits after verification when the verified result records a base, closed or was refused is this gate's FAIL back to sync. In the human-merge mode (the capsule's frozen step modes name this step human) the script never merges — the step asks the owner over the PRs, takes the person's landing by the human landing rules and asks again (exit 3, never a FAIL back to sync) while the PRs are not landed.
 commands: [merge.py]
 ---
 # merge
@@ -14,6 +14,17 @@ only by the landing rules (its branch side the verified head, or a merge commit 
 default branch containing it). On a pass it also writes the landing record the work item
 is wrapped with. You never merge by hand, and you never write the landing record yourself.
 
+**The human-merge mode** (polyforge#36): read `runtime-state/step-modes.json` — the step
+modes the claim froze from `steps.<project>.merge.by: human`; when it names your step
+(`PF_STEP`) `human`, the project declared this merge done by a person, and this step
+never merges anything itself: the script asks the forge for nothing, the default branch's
+freshness is never judged (the person's landing is the integrate lane's full gate to
+judge), and a PR that is closed without merging, merged with content that does not match
+the verified change, or still open is the script's exit 3 — the step stops and 问 owner,
+never this gate's FAIL back to sync (and 不记 `landed`). The mode is the lane's to accept: only
+a lane declaring the step `human_mergeable` ever sees it (micro never does), so a step
+whose frozen modes name no mode runs the default of this skill unchanged.
+
 | Lane | The line, run exactly as written (no argument added or removed, no Bash timeout) |
 |---|---|
 | develop | `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/merge.py" --publish artifacts/publish.json --verified artifacts/verify/result.json --landing-out artifacts/merge/landing.json --json --out artifacts/merge/result.json` |
@@ -21,31 +32,49 @@ is wrapped with. You never merge by hand, and you never write the landing record
 
 ## 开工前读什么、核对什么 — before you start: what you read and check
 
-1. **publish's hand-off against the verified heads.** Read publish's latest section and
+1. **The step's mode.** Read `runtime-state/step-modes.json`: when it names your step
+   `human`, the human-merge mode of this skill governs the whole dispatch (the ask first,
+   the exit-3 route, never a merge by this lane); a capsule whose modes name no mode for
+   the step (micro's claims, every pre-#36 work item) runs the default.
+2. **publish's hand-off against the verified heads.** Read publish's latest section and
    `artifacts/publish.json`. For every entry of `repos[]` without a `skipped_reason`: its
    `head` equals that repo's entry in the `heads` of the verified result file (waived or
    not, those are the heads the verifying gate ran over). A mismatch is this gate's FAIL:
    hand off `fail`, the body naming "publish hand-off mismatch: <repo>: published <sha> but
    verified <sha>" (the lane goes back to `sync`).
-2. **The verified result file is the gate's line's.** Its `argv` is exactly the arguments
+3. **The verified result file is the gate's line's.** Its `argv` is exactly the arguments
    of the line the verifying gate's skill writes out (develop's `verify`, micro's
    `evidence`: the words after the script's or command's own name, in order). A result
    written by any other line proves nothing: hand off `fail`, the body naming "verified
    result mismatch: argv <the result's argv>, the gate's line <its arguments>".
-3. **A later round.** When a 回退 sent the lane back through `sync` after an earlier `merge`
+4. **A later round.** When a 回退 sent the lane back through `sync` after an earlier `merge`
    section, read that section: what the forge refused then.
 
 ## Procedure
 
-1. **Reuse or run.** An `artifacts/merge/result.json` whose `round` equals `$PF_ROUND` and
+1. **The human-merge mode asks first.** When `runtime-state/step-modes.json` names your
+   step `human`, begin the dispatch with `pf step ask` — before any check of 2 below —
+   the question naming every repo's PR 链接 and the head the lane verified (of
+   `artifacts/publish.json` and the verified result file), e.g.
+   「本工单的 merge 步在等人合模式：请人工审查并合并以下 PR，合并完成后回复本车道；如需修改，请回复修改意见。<per repo>: <PR 链接>（验证过的 head <sha>）」 —
+   then end your turn. The owner's reply is your next turn: a revision request you carry
+   out with `pf step handoff --status rewind --to build --per-owner <at>` (the owner's
+   word, so it spends no rewind of the lane's budget — the build redoes the change, publish
+   re-opens the PRs); anything else continues at 2. While a question stands, the waiting is
+   the owner's — the ask releases the step's process and stops its clocks (the same ask
+   mechanism every step has).
+2. **Reuse or run.** An `artifacts/merge/result.json` whose `round` equals `$PF_ROUND` and
    whose `verdict` is `pass`, with `artifacts/merge/landing.json` beside it, is this round's:
-   go to 3. Otherwise 2 (a run that refused merges nothing; a re-run takes what landed by
-   the landing rules).
-2. **Run your lane's line** (the table above).
-3. **Route on the exit code.**
+   go to 4. Otherwise 3 (a run that refused merges nothing; a re-run takes what landed by
+   the landing rules — in the human mode, by the human landing rules).
+3. **Run your lane's line** (the table above).
+4. **Route on the exit code.**
    - **0** — every published PR is landed, and the script wrote the landing record
      (`artifacts/merge/landing.json`: `{state: landed, repos: [{repo, pr, head,
-     light_verified_head, merge_commit, accepted?}], merge_commits}`). Register it for the
+     light_verified_head, merge_commit, accepted?}], merge_commits}` — `merge_commits`
+     naming, per repo, the commit set the change landed as, each with its merge flag:
+     the lane's own merges are merge commits, a person's rebase lands plain replayed
+     commits and a squash one plain commit). Register it for the
      wrap, exactly this line: `pf step hub wrap-attrs integration @artifacts/merge/landing.json`
      — the work item is wrapped with it as its `integration` attr, awaiting the integration
      lane's full gate; without it the work item never reaches that lane, so the step
@@ -53,14 +82,23 @@ is wrapped with. You never merge by hand, and you never write the landing record
      until the line was accepted. Then, as the lane's
      last step, write the wrap summary (the step header's Memory section), then hand off
      `done`.
+   - **3** (the human-merge mode only) — a PR is not landed and the owner is asked: it is
+     closed without merging, merged with content that does not match the verified change
+     (the person added a commit to the branch or changed the content on the way), or still
+     open. `pf step ask` the result's `summary` verbatim, then end your turn; the reply
+     routes as 1 does (a revision request is the owner rewind to build, a word that the
+     PRs are merged continues at 2). Never hand off `fail` over an exit 3: 不记 `landed`,
+     the lane stays on this step, and the summary is never the `uncounted_rewinds`
+     substring's to match.
    - **1** — a PR moved (its head is not the verified one), the default branch gained commits after verification when the verified result includes `details.repos[].base` (develop verification; micro evidence has no base and does not run this check), closed, retargeted, merged
      elsewhere off the verified head, or the forge refused the merge: hand off `fail`, the
      result's `summary` as `--reason` (the one-line reason is what a lane's declared
      uncounted rewind class, `uncounted_rewinds`, matches, when it declares one) — the
      lane goes back to `sync`, which merges the default branch again. The check compares
-     the current `origin/<default>` with the verifying result's recorded base.
+     the current `origin/<default>` with the verifying result's recorded base. The
+     human-merge mode never exits 1.
    - **2** — not judged (a file unreadable, a head missing, gh or git unreachable, the
-     deadline). Wait one minute and run 2 again, at most twice more; still 2: hand off
+     deadline). Wait one minute and run 3 again, at most twice more; still 2: hand off
      `blocked`, the result's `summary` in the body and what the forge or the machine needs
      as `--reason`.
 
@@ -79,7 +117,10 @@ is wrapped with. You never merge by hand, and you never write the landing record
 
 ## Never
 
-Run `gh pr merge`, `gh api`, `git merge`, `git push` or any history change yourself; write
+In the human-merge mode, execute the lane's merge line before the owner answered, or hand
+off `fail` over the script's exit 3 — the human mode never asks the forge to merge and
+never FAILs back to sync over an unlanded PR; run `gh pr merge`, `gh api`, `git merge`,
+`git push` or any history change yourself; write
 or edit `artifacts/merge/result.json` or `artifacts/merge/landing.json`; register any
 `wrap-attrs` but the line above; run any merge line but your lane's; resolve a conflict
 with the default branch here (that is

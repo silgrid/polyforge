@@ -117,8 +117,9 @@ class Git:
             return p
         return shutil.which(name) or name
 
-    def cmd(self, cwd: str, name: str, *args: str) -> bytes:
-        """Run name with args in cwd; its stdout, or CmdError."""
+    def cmd(self, cwd: str, name: str, *args: str, stdin: Optional[bytes] = None) -> bytes:
+        """Run name with args in cwd (stdin fed when given); its stdout, or
+        CmdError."""
         what = name + " " + " ".join(args)
         why = self.ctx.err()
         if why is not None:
@@ -138,7 +139,7 @@ class Git:
         env["GH_PROMPT_DISABLED"] = "1"
         argv[0] = self._resolve(name)
         try:
-            c = proc.run(argv, cwd=cwd, env=env, timeout=max(timeout, 0.001))
+            c = proc.run(argv, cwd=cwd, env=env, timeout=max(timeout, 0.001), input=stdin)
         except (KeyboardInterrupt, Interrupted):
             # the interrupt cancels the run: the command was killed with its
             # group, every later call fails at once
@@ -167,6 +168,26 @@ class Git:
     def rev(self, cwd: str, rev: str) -> str:
         """The commit a revision names."""
         return self.git(cwd, "rev-parse", "--verify", "--quiet", rev + "^{commit}").strip()
+
+    def patch_id(self, cwd: str, *diff_args: str) -> str:
+        """The stable patch-id of `git diff-tree -p <diff_args>`'s output
+        ("" when the diff is empty or unreadable): the fingerprint `git
+        cherry` compares — two diffs with an equal patch-id carry the
+        same change, blind to the commits' authors, dates and shas. One
+        commit answers its own change's id, two commits the diff between
+        them."""
+        try:
+            diff = self.cmd(cwd, "git", "diff-tree", "-p", *diff_args)
+        except GoError:
+            return ""
+        if not diff.strip():
+            return ""
+        try:
+            out = self.cmd(cwd, "git", "patch-id", "--stable", stdin=diff)
+        except GoError:
+            return ""
+        fields = _text(out).split()
+        return fields[0] if fields else ""
 
     def is_ancestor(self, cwd: str, a: str, b: str) -> bool:
         try:

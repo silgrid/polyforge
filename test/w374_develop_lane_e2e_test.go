@@ -873,9 +873,10 @@ func TestW374DevelopLaneEndToEnd(t *testing.T) {
 	}()
 	commits, _ := in["merge_commits"].(map[string]any)
 	demo, _ := commits["demo"].([]any)
+	landed, _ := demo[0].(map[string]any)
 	if in["state"] != "landed" || r0 == nil || !strings.HasSuffix(fmt.Sprint(r0["pr"]), "/pull/1") || r0["head"] != head || r0["light_verified_head"] != head || r0["accepted"] != nil ||
-		len(demo) != 1 || demo[0] != strings.TrimSpace(string(mc)) || r0["merge_commit"] != demo[0] || in["waived"] != nil || got.Attrs["waivers"] != nil {
-		t.Fatalf("the wrap must carry the landing (state landed, the PR, head %s = the light-verified head, the merge commit %s, no waiver): attrs %v", head, mc, got.Attrs)
+		len(demo) != 1 || landed == nil || landed["sha"] != strings.TrimSpace(string(mc)) || landed["merge"] != true || r0["merge_commit"] != landed["sha"] || in["waived"] != nil || got.Attrs["waivers"] != nil {
+		t.Fatalf("the wrap must carry the landing (state landed, the PR, head %s = the light-verified head, the merge commit %s with its merge flag, no waiver): attrs %v", head, mc, got.Attrs)
 	}
 	fmt.Println("PASS D6 published, merged by the merge step's merge.py, landed")
 }

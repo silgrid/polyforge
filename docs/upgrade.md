@@ -238,6 +238,34 @@ the same sources; one written before the fields existed is the tree's by
 construction. The batch record does not aggregate the sources: each
 repository's result carries its own.
 
+## v0.2.1, the develop merge done by a person (`steps.<project>.merge.by: human`)
+
+A project whose GitHub requires an approving review the lane cannot give
+may now declare its develop merges done by a person:
+`pf config set steps.<project>.merge.by human` (the workspace yaml's
+`steps.<project>.merge.by`, the one mode this release knows; the lane's
+step declares `human_mergeable: true` — develop's `merge` does, micro's
+does not, and a claim of a lane that cannot honor the declaration is
+refused naming it; a step entry declares `by` or `skip`, never both). The
+claim fixes the mode into the capsule's
+`runtime-state/step-modes.json`, exactly as the skipped-step set. For
+such a work item publish's PR body awaits the person's merge (and asks
+for GitHub's *Require branches to be up to date before merging*) instead
+of forbidding the hand merge, and the merge step asks the owner over the
+PR links and the verified heads instead of merging; the owner's revision
+request rewinds to build charged to nothing. `merge.py` takes the
+person's landing by the patch-id fingerprint — GitHub's three merge
+methods all count (a merge commit carrying the verified head as its
+branch side, a rebase's replayed commits, a squash's whole diff); a
+landing that does not match the verified change, a closed PR or one
+still open is the script's exit 3: the step asks the owner again, never a
+FAIL back to `sync` and never a lane's `uncounted_rewinds` class's to
+match. The landing record's `merge_commits` now name each landed commit
+with its merge flag (`{sha, merge}`; a pre-#36 record's bare string reads
+as a merge commit), so the integration lane's `revert.py` reverts a
+squash or a rebase landing too — the mainline flag `-m 1` is asked of the
+commit itself (its second parent), never of the record's word.
+
 ## v0.2.2, the deploy configuration follows the work item's Cell
 
 A machine that runs more than one Cell no longer deploys everything

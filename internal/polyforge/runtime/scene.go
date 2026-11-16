@@ -244,6 +244,11 @@ func (r *Runtime) materialize(ctx context.Context, j *job) error {
 	if err := r.writeSkippedSteps(j); err != nil {
 		return err
 	}
+	// the step modes are fixed over the lane snapshot at the first claim
+	// only (stepmodes.go): a by the lane cannot honor refuses the claim.
+	if err := r.writeStepModes(j); err != nil {
+		return err
+	}
 	return r.writePendingStepOverrides(ctx, j)
 }
 

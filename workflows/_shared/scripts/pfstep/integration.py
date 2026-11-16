@@ -67,6 +67,38 @@ BATCH_RUNNING = "BATCH_RUNNING"
 BATCH_NOT_RUNNING = "BATCH_NOT_RUNNING"
 
 
+def merge_commits_of(integration: Optional[Mapping[str, Any]]) -> Dict[str, List[str]]:
+    """A hand-off's merge_commits (repo -> the shas of the commits the
+    change landed as, oldest first); a record of any other shape names
+    none. Since polyforge#36 each entry is an object naming the commit
+    and whether it is a merge commit (``{"sha": ..., "merge": ...}``) —
+    a bare string is a pre-#36 record's entry, a merge commit (the lane
+    merged with ``--merge`` only); read the flag of a record's entry from
+    the record, never here — a commit's merge-ness is the commit's own
+    (its second parent), and this decode answers the shas only.
+    Delete the string leg when no hub record predating polyforge#36
+    remains (the one-time read of the retired shape)."""
+    v = (integration or {}).get("merge_commits")
+    if not isinstance(v, dict):
+        return {}
+    out: Dict[str, List[str]] = {}
+    for repo, cs in v.items():
+        if not isinstance(repo, str) or not repo or not isinstance(cs, list):
+            return {}
+        for c in cs:
+            if isinstance(c, str):
+                if c:
+                    out.setdefault(repo, []).append(c)
+                continue
+            if not isinstance(c, dict):
+                return {}
+            sha, merge = c.get("sha"), c.get("merge")
+            if not (isinstance(sha, str) and sha and isinstance(merge, bool)):
+                return {}
+            out.setdefault(repo, []).append(sha)
+    return out
+
+
 class RuleError(ValueError):
     """A write the lane's rules refuse; reason names the rule."""
 

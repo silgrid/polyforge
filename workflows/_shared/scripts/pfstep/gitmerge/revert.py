@@ -1,7 +1,10 @@
 """Reverting a source item's merges on the default branch (the owner's
 ``revert`` ruling), mechanically and resumably.
 
-- ``revert_merge`` reverts one merge (``git revert -m 1``) with the conf's
+- ``revert_merge`` reverts one landed commit (``git revert -m 1`` on a
+  merge commit, no mainline flag on a plain commit — a human squash or
+  rebase landing's, polyforge#36; the flag is the commit's own second
+  parent, never the record's word) with the conf's
   mechanical rules turned to a revert: an append-only file keeps the default
   branch's bytes (a revert never rewrites the log), a holder's conflicting
   pin lines and declared list lines keep the default branch's side, and
@@ -145,11 +148,17 @@ def keep_log(g: Git, cwd: str, conf: Conf, main: str, m: str, files: List[str]) 
 
 
 def revert_merge(g: Git, cwd: str, conf: Optional[Conf], main: str, m: str) -> None:
-    """The merge commit m reverted onto HEAD and committed (the module's
+    """The landed commit m reverted onto HEAD and committed (the module's
     rules), every in-tree merge attribute overridden; main is the default
-    branch's commit."""
+    branch's commit. ``-m 1`` is the merge commit's — asked of the commit
+    itself (its second parent), so a plain landed commit (a human squash
+    or rebase landing) reverts with no mainline flag."""
     if conf is None:
         conf = Conf()
+    try:
+        side = g.rev(cwd, m + "^2")
+    except GoError:
+        side = ""
     g.pin_attributes(cwd)
     try:
         subject = g.git(cwd, "log", "-1", "--format=%s", m)
@@ -157,8 +166,11 @@ def revert_merge(g: Git, cwd: str, conf: Optional[Conf], main: str, m: str) -> N
         subject = ""
     msg = "Revert %s\n\nThis reverts commit %s.\n" % (quote(trim_text(subject)), m)
     rerr: Optional[GoError] = None
+    revert_args = ["revert", "--no-commit"]
+    if side != "":
+        revert_args += ["-m", "1"]
     try:
-        g.git(cwd, "revert", "--no-commit", "-m", "1", m)
+        g.git(cwd, *(revert_args + [m]))
     except GoError as err:
         rerr = err
     files = conflicted(g, cwd)

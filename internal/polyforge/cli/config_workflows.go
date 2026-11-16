@@ -127,6 +127,13 @@ type workflowStep struct {
 	// shows. Skip is set only when --cwd maps a workspace.
 	Skippable bool            `json:"skippable,omitempty"`
 	Skip      map[string]bool `json:"skip,omitempty"`
+	// HumanMergeable: the lane declares the step `human_mergeable: true`;
+	// By names each mapped project whose yaml declares its mode — through
+	// workspace.HumanMergeSteps, so a by the yaml writes for a step its
+	// lane does not declare human_mergeable never shows. By is set only
+	// when --cwd maps a workspace.
+	HumanMergeable bool              `json:"human_mergeable,omitempty"`
+	By             map[string]string `json:"by,omitempty"`
 }
 
 type effectiveChain struct {
@@ -207,7 +214,7 @@ func fillWorkflows(doc *workflowsDoc, facts daemonFacts, ws string) map[string]*
 			b.Defaults.ModelCandidates = fm.Defaults.ModelCandidates
 		}
 		for _, s := range fm.Steps {
-			b.Steps = append(b.Steps, workflowStep{ID: s.ID, ModelCandidates: s.ModelCandidates, Skippable: s.Skippable})
+			b.Steps = append(b.Steps, workflowStep{ID: s.ID, ModelCandidates: s.ModelCandidates, Skippable: s.Skippable, HumanMergeable: s.HumanMergeable})
 		}
 		doc.Bundles = append(doc.Bundles, b)
 	}
@@ -254,6 +261,18 @@ func fillEffective(doc *workflowsDoc, fms map[string]*workflow.Lane, cfg *worksp
 						b.Steps[j].Skip = map[string]bool{}
 					}
 					b.Steps[j].Skip[project] = true
+				}
+			}
+			// the project's declared step modes (a by its lane cannot
+			// honor shows nothing: the claim and the doctor name it)
+			if modes, refused := workspace.HumanMergeSteps(cfg, fm, project); refused == "" {
+				for j := range b.Steps {
+					if mode, ok := modes[b.Steps[j].ID]; ok {
+						if b.Steps[j].By == nil {
+							b.Steps[j].By = map[string]string{}
+						}
+						b.Steps[j].By[project] = mode
+					}
 				}
 			}
 		}
