@@ -123,6 +123,16 @@ carries `"acceptance_missing": true` and `"analysis_missing": true` on such
 items (absent on every other); the `--project` `--json` body is the
 server's raw answer and carries neither.
 
+A third mark is lane-independent (polyforge#77): a bundle-bound parent waits
+for each child that is not wrapped (aihub's `waiting_for` entries with
+`via: "child"`, shown in WAITING-FOR as `<slug> (child, <status>)`), and a
+queued parent waiting for a failed or canceled child — which never releases
+it — has `queued (需要交互：子票失败)` beside any other mark; the merged
+`--json` document carries `"child_failed": true` on it. The way out is
+detaching the child, `pf file edit <child> --parent ""` (a running child is
+refused `CHILD_RUNNING`); a refused `pf submit` of such a parent names the
+same command beside `pf file dep rm` for an edge.
+
 ## `pf msg` — user-to-user messages
 
 `pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]`

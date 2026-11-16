@@ -142,22 +142,35 @@ func submitRefusal(ctx *Context, name string, err error) error {
 }
 
 // submitBlockedGuidance names the unmerged blockers of name, read with
-// the caller's own key (its waiting_for list), and what to do; the
-// generic guidance alone when the read fails or names none.
+// the caller's own key (its waiting_for list), and what to do by each
+// entry's via (polyforge#77): an edge is removed with `pf file dep rm`, a
+// child detached with `pf file edit <child> --parent ""`. The generic
+// edge guidance alone when the read fails or names none.
 func submitBlockedGuidance(ctx *Context, name string) string {
-	blocker := "<blocker>"
 	waiting := ""
+	var edges, children []string
 	if raw, err := ctx.aihub().GetWorkItemRaw(name); err == nil {
 		var v WIView
 		if json.Unmarshal(raw, &v) == nil && len(v.WaitingFor) > 0 {
 			waiting = "waiting for " + waitingText(v.WaitingFor) + " — "
-			if len(v.WaitingFor) == 1 {
-				blocker = v.WaitingFor[0].Slug
-			}
+			edges, children = waitingSplit(v.WaitingFor)
 		}
 	}
-	return fmt.Sprintf("%swait until the blocker is merged (wrapped), then pf submit %s again, or remove the edge: pf file dep rm %s %s",
-		waiting, name, blocker, name)
+	one := func(slugs []string, placeholder string) string {
+		if len(slugs) == 1 {
+			return slugs[0]
+		}
+		return placeholder
+	}
+	var ways []string
+	if len(edges) > 0 || len(children) == 0 {
+		ways = append(ways, fmt.Sprintf("remove the edge: pf file dep rm %s %s", one(edges, "<blocker>"), name))
+	}
+	if len(children) > 0 {
+		ways = append(ways, fmt.Sprintf(`detach the child: pf file edit %s --parent ""`, one(children, "<child>")))
+	}
+	return fmt.Sprintf("%swait until the blocker is merged (wrapped), then pf submit %s again, or %s",
+		waiting, name, strings.Join(ways, ", or "))
 }
 
 // submitAcceptanceCheck refuses an execution ticket (one with a bundle)
