@@ -98,8 +98,15 @@ func (d *deployWorld) defaultCellDeployEnv(t *testing.T) string {
 // can never reach another's (the polyforge#60 leak).
 func (d *deployWorld) twoTargetEnv(t *testing.T, cell, cellServer string) *deployWorld {
 	t.Helper()
+	return d.twoTargetEnvAt(t, cell, cellServer, "v2.2.1")
+}
+
+// twoTargetEnvAt is twoTargetEnv with the second target (public,
+// fakehost2) running secondOld.
+func (d *deployWorld) twoTargetEnvAt(t *testing.T, cell, cellServer, secondOld string) *deployWorld {
+	t.Helper()
 	defEnv := d.defaultCellDeployEnv(t)
-	pubEnv := d.secondTarget(t, "v2.2.1")
+	pubEnv := d.secondTarget(t, secondOld)
 	d.env = withoutEnv(d.env, "AIHUB_HOST", "AIHUB_DATA", "COMPOSE_FILE", "COMPOSE_PROJECT", "DEPLOY_LOCK_FILE", "BACKUP_ROOT", "PF_DEPLOY_ENV", "PF_CELL", "PF_CELL_SERVER", "PF_CELL_TARGETS")
 	d.env = append(d.env,
 		"PF_CELL="+cell, "PF_CELL_SERVER="+cellServer,
@@ -297,5 +304,142 @@ func TestDeployTargetsWrongServerRefused(t *testing.T) {
 			d.assertNothingMutated("v2.2.1")
 			d.assertSecondUntouched("v2.2.1")
 		})
+	}
+}
+
+// targetLines answers the output's per-target result lines ("target: ..."),
+// in the order they were printed.
+func targetLines(out string) []string {
+	var got []string
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.HasPrefix(ln, "target: ") {
+			got = append(got, ln)
+		}
+	}
+	return got
+}
+
+// lastLine answers the output's last non-empty line.
+func lastLine(out string) string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	return lines[len(lines)-1]
+}
+
+// secondCompose answers the second target's compose file text.
+func (d *deployWorld) secondCompose() string {
+	b, _ := os.ReadFile(filepath.Join(d.secondWorld(), "srv", "compose", "docker-compose.yml"))
+	return string(b)
+}
+
+// TestDeployTargetsSequentialTwoHosts (polyforge#76, AC3): two deploy
+// targets, the work item's Cell (public) first, the rest by name; each
+// target is deployed by its own clean subprocess reading only its own
+// Cell's configuration (the second world's data, compose file and backup
+// root - nothing of the first target's leaks into it), each reports one
+// "target:" line, and the last line sums every target up.
+func TestDeployTargetsSequentialTwoHosts(t *testing.T) {
+	d := newReadyWorld(t)
+	d.twoTargetEnv(t, "public", "http://fakehost2:8080")
+	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
+	if err != nil {
+		t.Fatalf("a two-target deploy failed: %v\n%s", err, out)
+	}
+	tl := targetLines(out)
+	if len(tl) != 2 || !strings.HasPrefix(tl[0], "target: public ") || !strings.HasPrefix(tl[1], "target: default ") {
+		t.Fatalf("want one target line each, the work item's Cell (public) first then default, got %q\n%s", tl, out)
+	}
+	for i, want := range []string{"status=deployed", "status=deployed"} {
+		if !strings.Contains(tl[i], want) {
+			t.Errorf("target line %q lacks %q", tl[i], want)
+		}
+	}
+	if got, want := lastLine(out), "targets: public=deployed default=deployed"; got != want {
+		t.Errorf("last line = %q, want %q", got, want)
+	}
+	if !strings.Contains(d.composeText(), "image: polyforge/aihub:v2.3.0") {
+		t.Errorf("the default target's compose is not on v2.3.0:\n%s", d.composeText())
+	}
+	if !strings.Contains(d.secondCompose(), "image: polyforge/aihub2:v2.3.0") {
+		t.Errorf("the public target's compose is not on v2.3.0 (its own IMAGE_REPO):\n%s", d.secondCompose())
+	}
+	// each target backs up into its own BACKUP_ROOT - one backup each
+	for _, root := range []string{filepath.Join(d.w, "backups"), filepath.Join(d.secondWorld(), "backups")} {
+		if baks, _ := filepath.Glob(filepath.Join(root, "aihub-backup-*")); len(baks) != 1 {
+			t.Errorf("backups under %s = %v, want one", root, baks)
+		}
+	}
+	// the public target went first: its server's lock was taken before
+	// the default target's server saw any mutation
+	if !strings.Contains(d.logOf2("log-ssh"), "flock -n") || !strings.Contains(d.logOf("log-ssh"), "flock -n") {
+		t.Errorf("each target must take its own server's lock")
+	}
+}
+
+// TestDeployTargetsFailureStopsAndMarksRest (polyforge#76, AC3): the
+// first target (the work item's Cell, public) fails after its swap and
+// rolls back - the run stops there: default is not_attempted and its
+// server untouched, the summary names both, and the exit code is the
+// failed target's (10, rolled back).
+func TestDeployTargetsFailureStopsAndMarksRest(t *testing.T) {
+	d := newReadyWorld(t)
+	d.twoTargetEnv(t, "public", "http://fakehost2:8080")
+	d.env = append(d.env, "FAKE_FAIL_UP_IMG=polyforge/aihub2:v2.3.0")
+	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
+	if exitCode(err) != 10 {
+		t.Fatalf("want exit 10 (the failed target's), got %v\n%s", err, out)
+	}
+	if got, want := lastLine(out), "targets: public=rolled_back default=not_attempted"; got != want {
+		t.Errorf("last line = %q, want %q", got, want)
+	}
+	tl := targetLines(out)
+	if len(tl) != 2 || !strings.Contains(tl[0], "public") || !strings.Contains(tl[0], "status=rolled_back") ||
+		!strings.Contains(tl[1], "default") || !strings.Contains(tl[1], "status=not_attempted") {
+		t.Errorf("target lines = %q", tl)
+	}
+	d.assertNothingMutated("v2.2.1")
+	if got := d.logOf("log-ssh"); got != "" {
+		t.Errorf("a target after the failed one was contacted:\n%s", got)
+	}
+}
+
+// TestDeployTargetsSuccessNotRolledBackOnLaterFailure (polyforge#76, AC3):
+// the first target deploys, the second fails before its swap (exit 1) -
+// the first stays on the new version (no rollback of a target that
+// succeeded), the second is not_changed, the exit code is 1.
+func TestDeployTargetsSuccessNotRolledBackOnLaterFailure(t *testing.T) {
+	d := newReadyWorld(t)
+	d.twoTargetEnv(t, "default", "http://fakehost:8080")
+	// the second target's container is gone: its preflight fails before any change
+	if err := os.Remove(filepath.Join(d.secondWorld(), "dk-server", "container")); err != nil {
+		t.Fatal(err)
+	}
+	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
+	if exitCode(err) != 1 {
+		t.Fatalf("want exit 1 (the failed target's), got %v\n%s", err, out)
+	}
+	if got, want := lastLine(out), "targets: default=deployed public=not_changed"; got != want {
+		t.Errorf("last line = %q, want %q", got, want)
+	}
+	if !strings.Contains(d.composeText(), "image: polyforge/aihub:v2.3.0") {
+		t.Errorf("the target that succeeded was rolled back:\n%s", d.composeText())
+	}
+}
+
+// TestDeployTargetsAlreadyDeployedSkip (polyforge#76, AC3): in the
+// multi-target mode a target already running the version is recorded
+// already_deployed and skipped - no failure, nothing changed on it.
+func TestDeployTargetsAlreadyDeployedSkip(t *testing.T) {
+	d := newReadyWorld(t)
+	d.twoTargetEnvAt(t, "default", "http://fakehost:8080", "v2.3.0")
+	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
+	if err != nil {
+		t.Fatalf("an already-deployed target must not fail the run: %v\n%s", err, out)
+	}
+	if got, want := lastLine(out), "targets: default=deployed public=already_deployed"; got != want {
+		t.Errorf("last line = %q, want %q", got, want)
+	}
+	d.assertSecondUntouched("v2.3.0")
+	if strings.Contains(d.logOf2("log-ssh"), "flock -n") {
+		t.Errorf("an already-deployed target took its deploy lock:\n%s", d.logOf2("log-ssh"))
 	}
 }
