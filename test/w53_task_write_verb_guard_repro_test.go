@@ -87,10 +87,10 @@ func w53DaemonProbes() []w53DaemonProbe {
 		{"POST", "/task/spawn", `{"project":"e2e","prompt":"x"}`},
 		// polyforge#72's one exception (AC3): /task/analysis-write is the
 		// narrow write path a TASK peer may reach — the route itself still
-			// refuses this fake task (it is no running analysis task of this
-			// daemon) with the same DAEMON-403 envelope, never the guard's
-			// wording: the refusal comes from the route's own binding check,
-			// which is exactly the counter-example AC3 asks for.
+		// refuses this fake task (it is no running analysis task of this
+		// daemon) with the same DAEMON-403 envelope, never the guard's
+		// wording: the refusal comes from the route's own binding check,
+		// which is exactly the counter-example AC3 asks for.
 		{"POST", "/task/analysis-write", `{"content":"hijack"}`},
 		// last: the pre-guard daemon accepts it and stops serving, which
 		// is exactly the observed baseline this file records
