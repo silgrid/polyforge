@@ -41,10 +41,8 @@ func TestW51SlowModelJudgesSingleCallLatency(t *testing.T) {
 		name string
 		// prior is the runtime earlier dispatches of the step spent (T is
 		// cumulative); age is this dispatch's own runtime.
-		prior time.Duration
-		age   time.Duration
-		// share of the clock spent waiting (the OLD rule's input)
-		model   time.Duration
+		prior   time.Duration
+		age     time.Duration
 		calls   []time.Duration
 		want    Cause
 		wantNil bool
@@ -53,38 +51,37 @@ func TestW51SlowModelJudgesSingleCallLatency(t *testing.T) {
 		// the waiting share over half — an ordinary ticket's workload,
 		// not a slow model. The cumulative bound expires: long task.
 		{"polyforge#25: many fast calls, over half the clock waiting",
-			0, T, 50 * time.Minute, w51P25(), CauseStepTimeoutLongTask, false},
+			0, T, w51P25(), CauseStepTimeoutLongTask, false},
 		// a handful of individually slow calls is the slow model, even
 		// when the waiting share of the clock is tiny
 		{"five calls of 70s, waiting share 5m of 90m",
-			0, T, 5 * time.Minute, w51Latencies(5, 70*time.Second), CauseStepTimeoutSlowModel, false},
+			0, T, w51Latencies(5, 70*time.Second), CauseStepTimeoutSlowModel, false},
 		// the p90 bound alone is enough: most calls fast, the tail past 180s
 		{"median 10s but the p90 tail over 180s",
-			0, T, 10 * time.Minute, append(w51Latencies(4, 10*time.Second), 200*time.Second), CauseStepTimeoutSlowModel, false},
+			0, T, append(w51Latencies(4, 10*time.Second), 200*time.Second), CauseStepTimeoutSlowModel, false},
 		// fewer than MinSlowModelCalls completed calls: no judgement
 		// however slow they were (a median of four calls is noise)
 		{"four slow calls, mostly waiting",
-			0, T, 80 * time.Minute, w51Latencies(4, 20*time.Minute), CauseStepTimeoutLongTask, false},
+			0, T, w51Latencies(4, 20*time.Minute), CauseStepTimeoutLongTask, false},
 		// a long ongoing call counts nowhere: only the four completed
 		// ones are judged
 		{"one call still in progress, four completed fast calls",
-			0, T, 89 * time.Minute, w51Latencies(4, 30*time.Second), CauseStepTimeoutLongTask, false},
+			0, T, w51Latencies(4, 30*time.Second), CauseStepTimeoutLongTask, false},
 		// many fast calls with a high waiting share: still a long task
 		{"fifty calls of 40s, waiting share 80m of 90m",
-			0, T, 80 * time.Minute, w51Latencies(50, 40*time.Second), CauseStepTimeoutLongTask, false},
+			0, T, w51Latencies(50, 40*time.Second), CauseStepTimeoutLongTask, false},
 		// the kept half-of-T condition: the dying dispatch ran less than
 		// half of the bound, so the step's history owns the expiry
 		{"slow calls, but the dispatch ran 12m38s of the 90m bound",
-			77*time.Minute + 22*time.Second, 12*time.Minute + 38*time.Second, 12 * time.Minute, w51Latencies(5, 12*time.Minute), CauseStepTimeoutLongTask, false},
+			77*time.Minute + 22*time.Second, 12*time.Minute + 38*time.Second, w51Latencies(5, 12*time.Minute), CauseStepTimeoutLongTask, false},
 		// exactly half of T is on the blamed side, as before
 		{"exactly half of T, six calls of 7m",
-			45 * time.Minute, 45 * time.Minute, 42 * time.Minute, w51Latencies(6, 7*time.Minute), CauseStepTimeoutSlowModel, false},
+			45 * time.Minute, 45 * time.Minute, w51Latencies(6, 7*time.Minute), CauseStepTimeoutSlowModel, false},
 	}
 	for _, tc := range cases {
 		s := Snapshot{
 			Step: "code", SpawnN: 4, Begun: true, StartedAt: now.Add(-tc.age),
 			Thresholds:         Thresholds{StepTimeout: T, PriorRuntime: tc.prior},
-			ModelTime:          tc.model,
 			ModelCallLatencies: tc.calls,
 		}
 		v := Judge(s, now, 0)
@@ -129,11 +126,8 @@ func TestW51TrackerRecordsCompletedCallLatencies(t *testing.T) {
 	if len(s.ModelCallLatencies) != 3 {
 		t.Fatalf("the in-progress call must not count: %v", s.ModelCallLatencies)
 	}
-	if s.ModelTime < 2*time.Minute {
-		t.Fatalf("the in-progress wait still shows in ModelTime: %s", s.ModelTime)
-	}
 	// close it, then declare an observation gap over its whole span: the
-	// recorded entry loses the gap like the cumulative split does
+	// recorded entry loses the gap
 	c.advance(1 * time.Minute)
 	tr.TurnEnded(false, "")
 	// the monitor's shape: cutoff in the past, shift the unwatched span
@@ -144,9 +138,6 @@ func TestW51TrackerRecordsCompletedCallLatencies(t *testing.T) {
 	}
 	if got := s.ModelCallLatencies[3]; got != 0 {
 		t.Fatalf("the gap-forgiven call keeps %s, want the 3m gap removed (0s)", got)
-	}
-	if s.ModelTime >= 2*time.Minute {
-		t.Fatalf("the cumulative split must lose the gap too: %s", s.ModelTime)
 	}
 }
 

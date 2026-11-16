@@ -394,8 +394,8 @@ func w51D6Slow(n int, d time.Duration) []time.Duration {
 func TestD6CumulativeTimeoutRotatesOnlyForTheDyingDispatch(t *testing.T) {
 	const T = 90 * time.Minute
 	cases := []struct {
-		name                     string
-		prior, age, tools, model time.Duration
+		name       string
+		prior, age time.Duration
 		// calls are the dying dispatch's COMPLETED model-call latencies
 		// (polyforge#51: the slow-model attribution reads them, not the
 		// waiting share — this case's share, 59m of 90m, no longer
@@ -407,10 +407,9 @@ func TestD6CumulativeTimeoutRotatesOnlyForTheDyingDispatch(t *testing.T) {
 		wantLongTask int
 	}{
 		{" code attempt 4", 77*time.Minute + 22*time.Second, 12*time.Minute + 38*time.Second,
-			30 * time.Second, 12*time.Minute + 2*time.Second,
 			w51D6Slow(5, 12*time.Minute),
 			FailStepTimeoutLongTask, []string{"a", "a"}, true, 1},
-		{" code attempt 1", 0, 90 * time.Minute, 31 * time.Minute, 59*time.Minute + time.Second,
+		{" code attempt 1", 0, 90 * time.Minute,
 			w51D6Slow(5, 70*time.Second),
 			FailStepTimeoutSlowModel, []string{"a", "b"}, false, 0},
 	}
@@ -419,8 +418,7 @@ func TestD6CumulativeTimeoutRotatesOnlyForTheDyingDispatch(t *testing.T) {
 			now := time.Unix(10_000_000, 0)
 			verdict := supervise.Judge(supervise.Snapshot{
 				Step: "s", SpawnN: 1, Begun: true, StartedAt: now.Add(-tc.age),
-				Thresholds: supervise.Thresholds{StepTimeout: T, PriorRuntime: tc.prior},
-				ModelTime:  tc.model, ToolTime: tc.tools,
+				Thresholds:         supervise.Thresholds{StepTimeout: T, PriorRuntime: tc.prior},
 				ModelCallLatencies: tc.calls,
 			}, now, 0)
 			if verdict == nil {

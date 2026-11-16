@@ -36,18 +36,14 @@ type ToolRun struct {
 	waitCall *WaitCall
 }
 
-// closedPhase is one model/tool phase the tracker closed since the last
+// closedPhase is one model call the tracker closed since the last
 // supervisor tick. It is kept only until that tick, so a declared
 // observation gap can remove the span the supervisor never watched from
-// the cumulative model/tool split (a phase open at the freeze that closed
-// after the resume but before the tick).
+// the call's recorded latency (a call open at the freeze that closed after
+// the resume but before the tick).
 type closedPhase struct {
-	model      bool
 	start, end time.Time
-	// latIdx is the model call's index in callLatencies (-1 when the
-	// phase is a tool's or the latency list was not recorded), so the
-	// observation-gap correction can forgive the same span in the
-	// recorded latency as it does in the cumulative split.
+	// latIdx is the call's index in callLatencies.
 	latIdx int
 }
 
@@ -78,14 +74,12 @@ type Tracker struct {
 	waiting      bool
 	waitingSince time.Time
 	lastOutput   time.Time
-	modelDur     time.Duration // closed model phases
 	// callLatencies are the COMPLETED model calls' durations, in close
 	// order (polyforge#51): one entry per closed model phase, never the
 	// call in progress — rule 4's median/p90 read them.
 	callLatencies []time.Duration
 
-	tools   map[string]*ToolRun
-	toolDur time.Duration // closed tool runs
+	tools map[string]*ToolRun
 
 	// live progress of the dispatch (the watch face): how many tools ran,
 	// and the last few files edit/write tools touched.
@@ -165,33 +159,24 @@ func (t *Tracker) Noise() {
 
 func (t *Tracker) closeModelLocked(now time.Time) {
 	if t.waiting {
-		t.addClosedLocked(true, t.waitingSince, now)
+		t.recordCallLocked(t.waitingSince, now)
 		t.waiting = false
 	}
 }
 
-// addClosedLocked folds one finished phase into the cumulative split and
-// keeps it pending for this tick's observation-gap correction. A phase
-// open when the gap was declared has already had its start shifted by
-// ObserveTick, so it is never corrected twice; a phase that closed after
-// the previous tick but straddles the cutoff loses the gap span here.
-func (t *Tracker) addClosedLocked(model bool, start, end time.Time) {
+// recordCallLocked records one completed model call's latency and keeps it
+// pending for this tick's observation-gap correction. A call open when the
+// gap was declared has already had its start shifted by ObserveTick, so it
+// is never corrected twice; a call that closed after the previous tick but
+// straddles the cutoff loses the gap span there.
+func (t *Tracker) recordCallLocked(start, end time.Time) {
 	d := end.Sub(start)
 	if d < 0 {
 		d = 0
 	}
-	latIdx := -1
-	if model {
-		t.callLatencies = append(t.callLatencies, d)
-		latIdx = len(t.callLatencies) - 1
-	}
+	t.callLatencies = append(t.callLatencies, d)
 	if len(t.closedSinceTick) < maxClosedSinceTick {
-		t.closedSinceTick = append(t.closedSinceTick, closedPhase{model: model, start: start, end: end, latIdx: latIdx})
-	}
-	if model {
-		t.modelDur += d
-	} else {
-		t.toolDur += d
+		t.closedSinceTick = append(t.closedSinceTick, closedPhase{start: start, end: end, latIdx: len(t.callLatencies) - 1})
 	}
 }
 
@@ -351,7 +336,6 @@ func (t *Tracker) ToolEnd(id, name string) {
 		id = name
 	}
 	if run, ok := t.tools[id]; ok {
-		t.addClosedLocked(false, run.Since, now)
 		t.foldWaitFormLocked(run, now)
 		delete(t.tools, id)
 	}
@@ -426,9 +410,9 @@ func (t *Tracker) ProcessExit(info ExitInfo) {
 // ObserveTick records one supervisor observation. shift > 0 declares an
 // observation gap: every instant stamped at or before cutoff is moved
 // forward by shift (the span the supervisor did not watch), and the
-// cumulative model/tool split loses the same span for each phase that
-// straddles the cutoff. A zero shift just closes the window (the phases
-// closed since the previous tick were fully observed).
+// recorded latency of each model call that straddles the cutoff loses the
+// same span. A zero shift just closes the window (the calls closed since
+// the previous tick were fully observed).
 func (t *Tracker) ObserveTick(cutoff time.Time, shift time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -451,13 +435,8 @@ func (t *Tracker) ObserveTick(cutoff time.Time, shift time.Duration) {
 			if c.start.After(cutoff) || !c.end.After(cutoff) {
 				continue
 			}
-			if c.model {
-				t.modelDur = max(t.modelDur-shift, 0)
-				if c.latIdx >= 0 && c.latIdx < len(t.callLatencies) {
-					t.callLatencies[c.latIdx] = max(t.callLatencies[c.latIdx]-shift, 0)
-				}
-			} else {
-				t.toolDur = max(t.toolDur-shift, 0)
+			if c.latIdx < len(t.callLatencies) {
+				t.callLatencies[c.latIdx] = max(t.callLatencies[c.latIdx]-shift, 0)
 			}
 		}
 	}
@@ -486,14 +465,12 @@ type Snapshot struct {
 	Waiting      bool
 	WaitingSince time.Time
 	LastOutput   time.Time
-	ModelTime    time.Duration // closed + current model phase
 	// ModelCallLatencies are the COMPLETED model calls' durations, in
 	// close order (polyforge#51): the call in progress is absent, so rule
 	// 4's median/p90 read only calls that finished. The gap correction of
 	// ObserveTick adjusts the entries of phases it forgives.
 	ModelCallLatencies []time.Duration
-	Tools              []ToolRun     // running tools, oldest first
-	ToolTime           time.Duration // closed + running tool time
+	Tools              []ToolRun // running tools, oldest first
 
 	TurnEnded   bool
 	TurnEndedAt time.Time
@@ -543,9 +520,7 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 		Waiting:            t.waiting,
 		WaitingSince:       t.waitingSince,
 		LastOutput:         t.lastOutput,
-		ModelTime:          t.modelDur,
 		ModelCallLatencies: append([]time.Duration(nil), t.callLatencies...),
-		ToolTime:           t.toolDur,
 
 		TurnEnded:   t.turnEnded,
 		TurnEndedAt: t.turnEndedAt,
@@ -567,12 +542,8 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 	if !t.begun {
 		s.StartedAt = t.born
 	}
-	if t.waiting {
-		s.ModelTime += now.Sub(t.waitingSince)
-	}
 	for _, run := range t.tools {
 		s.Tools = append(s.Tools, *run)
-		s.ToolTime += now.Sub(run.Since)
 	}
 	// oldest first
 	for i := 1; i < len(s.Tools); i++ {

@@ -344,8 +344,8 @@ func (m *Monitor) onTick() {
 // stopped, so the wall span in between was never watched and must not be
 // charged to the dispatch as inactivity. Every instant stamped at or
 // before the pause is moved forward, which leaves the observed age intact
-// and lets a real hang re-arm in observed time; the cumulative model/tool
-// split is corrected by the tracker. One event per gap names its length.
+// and lets a real hang re-arm in observed time; the recorded model-call
+// latencies are corrected by the tracker. One event per gap names its length.
 func (m *Monitor) observeGap() {
 	now := m.now()
 	last := m.lastTick
