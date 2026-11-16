@@ -46,7 +46,11 @@ type Params struct {
 	// daemon's global window applies. A declared window is also what the
 	// claude adapter sizes the Bash tool's default timeout to (the max).
 	ToolWindow time.Duration
-	Journal    func(pid int, startedAt string) error
+	// Params are the step's params at their final values for this
+	// derivation (polyforge#78: lane default, project, ticket overlay),
+	// exported as EnvParamName(name) each; nil = the step declares none.
+	Params  map[string]string
+	Journal func(pid int, startedAt string) error
 	// OnRecord, when set, receives every raw stdout record line the
 	// process emits (the harness translator's input). It runs on the
 	// stdout reader: it must be cheap and must never block.

@@ -85,6 +85,12 @@ type Config struct {
 	// candidate's dispatch runs on (a malformed one blocks like a compose
 	// failure).
 	Compose func() (map[string][]string, error)
+	// Params answers the per-step param values (polyforge#78): each
+	// declared param of a step at its final value — the ticket overlay over
+	// the project's yaml over the lane default. Called at EVERY dispatch
+	// beside Compose (outside the mutex) with the same failure decision: a
+	// failure blocks the workflow. Nil means the lane defaults (tests).
+	Params func() (map[string]map[string]string, error)
 	// Interrupted, when set, archives ONE infra_failure attempt on the
 	// current in_progress step before the loop re-dispatches (the
 	// recovery path's write, performed by the single
@@ -1176,6 +1182,11 @@ type StepSpawn struct {
 	// question already); a resume that degrades to a new conversation,
 	// or a dispatch after a death, sends the full prompt with them.
 	MessageResume bool
+	// Params are the step's params at their final values for this
+	// dispatch (Config.Params; polyforge#78): the definition's {{name}}
+	// placeholders, the PF_PARAM_<NAME> environment and the journal line
+	// take them. nil = the step declares none.
+	Params map[string]string
 }
 
 // StepRun is one spawned step execution awaiting its hand-off.

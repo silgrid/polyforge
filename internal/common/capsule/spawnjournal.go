@@ -34,6 +34,11 @@ type SpawnJournalEntry struct {
 	// told in its prompt (`en`, `zh-CN`); an entry without one predates
 	// #501.
 	Language string `json:"language,omitempty"`
+	// Params are the step's params at the final values the dispatch ran
+	// with (polyforge#78; absent = the step declares none, or the line
+	// predates #78): the audit record, and what a resume of the same
+	// conversation compares the current values against.
+	Params map[string]string `json:"params,omitempty"`
 }
 
 // ReadSpawnJournal is the one reader of the capsule spawn journal. It is
