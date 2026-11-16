@@ -7,11 +7,13 @@
 // The task lane is deliberately small: a human spawns one fresh harness
 // agent from a free-text prompt against a project's readable source trees,
 // it runs under a hard wall/token budget, and it ends in exactly one of
-// four terminal states. There is no queue, no resume, no retry, no task
-// type and no spawn-level model override. The only capability gate is the
-// write-verb guard: the task process carries PF_TASK_ID, so the daemon
-// refuses it every write and the CLI refuses it every write verb — the
-// lane's one real gate. There is no OS-level isolation (owner ruling
+// four terminal states. A spawn is never queued or retried (only the
+// daemon's own analysis tasks are queued and re-queued, polyforge#72);
+// there is no resume, no task type and no spawn-level model override. The
+// only capability gate is the write-verb guard: the task process carries
+// PF_TASK_ID, so the daemon refuses it every write and the CLI refuses it
+// every write verb — except a running analysis task's one write of its own
+// ticket's `## 分析` section (`pf task analysis-write`). There is no OS-level isolation (owner ruling
 // 2026-10-26, mem_TdI0isaGmTgG): a task agent's filesystem/network trust is
 // a session agent's, and platform-level isolation is a separate concern.
 package task
@@ -198,11 +200,32 @@ type Spec struct {
 	// answer, so the daemon's decision feed records no background-task
 	// decision for it. Not a wire field of POST /task/spawn.
 	Synchronous bool `json:"synchronous,omitempty"`
+	// AnalysisOf is the work item a daemon-scheduled analysis task
+	// analyzes (polyforge#72): the one ticket whose `## 分析` section its
+	// narrow write path may touch. Like ReadOnlyTools and Synchronous it
+	// is set in process only — never a wire field of POST /task/spawn, so
+	// no caller can ask for it. Empty = an ordinary task, no write path.
+	AnalysisOf string `json:"analysis_of,omitempty"`
+	// AnalysisRetries is how often a restarted daemon has re-queued this
+	// analysis (ruling 13's cap of 2): it rides the record so the count
+	// survives the restarts themselves.
+	AnalysisRetries int `json:"analysis_retries,omitempty"`
 }
 
 // ReporterMachine is the task list's reporter for every task whose caller
 // did not resolve to a human member of its project at spawn.
 const ReporterMachine = "machine"
+
+// Attempt is one candidate a task judged stuck (polyforge#72, AC9): the
+// candidate, the supervision rule that fired (rule 0 harness_silent, 2
+// model_hung, 3 tool_hung — the task lane's subset of the step rules)
+// and the evidence line. Attempts ride the record: `pf task show` and
+// the decision feed's summary make the judgement and its cause visible.
+type Attempt struct {
+	Candidate string `json:"candidate,omitempty"`
+	Cause     string `json:"cause,omitempty"`
+	Evidence  string `json:"evidence,omitempty"`
+}
 
 // Task is one task record: its spec plus the observed outcome. Report is
 // the captured assistant text (up to ReportCapBytes); Truncated is true
@@ -223,6 +246,10 @@ type Task struct {
 	Report         string        `json:"report,omitempty"`
 	Truncated      bool          `json:"truncated,omitempty"`
 	Error          string        `json:"error,omitempty"`
+	// Attempts are the candidates the stuck detection ended (AC9), in
+	// order; the run switched to the next candidate inside the same
+	// budget each time.
+	Attempts []Attempt `json:"attempts,omitempty"`
 }
 
 // Clone answers a copy of t (no shared slices) suitable for handing out
@@ -297,8 +324,10 @@ func ReportTail(report string) string {
 
 // Summary answers the chat/watcher summary of a terminal task: the trailing
 // ≤SummaryTailChars of the report on one line plus the `pf task show <id>`
-// pointer. A truncated report is marked as such. It is never sent to aihub
-// or memory.
+// pointer. A truncated report is marked as such, and the candidates the
+// stuck detection ended are named with their causes (AC9: the judgement
+// and its reason are visible in the decision feed). It is never sent to
+// aihub or memory.
 func (t Task) Summary() string {
 	body := strings.TrimSpace(t.Report)
 	if len(body) > SummaryTailChars {
@@ -312,6 +341,13 @@ func (t Task) Summary() string {
 	}
 	if t.Truncated {
 		body += " [truncated]"
+	}
+	if len(t.Attempts) > 0 {
+		parts := make([]string, 0, len(t.Attempts))
+		for _, a := range t.Attempts {
+			parts = append(parts, a.Candidate+" ("+a.Cause+")")
+		}
+		body += " [stuck: " + strings.Join(parts, "; ") + "]"
 	}
 	return fmt.Sprintf("task %s %s: %s — see `pf task show %s`", t.ID, t.State, body, t.ID)
 }

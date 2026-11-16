@@ -47,8 +47,13 @@ func TestW161DependenciesEndToEnd(t *testing.T) {
 	aSlug := w161Slug(t, inst, a)
 
 	// pf file create --after <slug>: B waits for A.
+	// the fixture's ticket carries its own analysis section (免分析): this
+	// scenario exercises the dependency edges, not polyforge#72's
+	// auto-scheduled analysis, whose notice would otherwise ride the
+	// create's combined output.
 	out := w113PfWant(t, inst, -1, jsonEnv, "file", "create", "--project", project,
-		"--goal", "w161 after the blocker", "--bundle", "w161-b", "--after", aSlug)
+		"--goal", "w161 after the blocker", "--bundle", "w161-b", "--after", aSlug,
+		"--content", "## 分析\n\n免分析（2026-11-16，fixture）\n")
 	var b struct {
 		ID         string `json:"id"`
 		Slug       string `json:"slug"`

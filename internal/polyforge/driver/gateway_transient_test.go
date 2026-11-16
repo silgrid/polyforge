@@ -47,12 +47,12 @@ var gatewayTransientSamples = []struct {
 func TestGatewayTransientSamplesClassifyTransient(t *testing.T) {
 	for _, s := range gatewayTransientSamples {
 		for _, turnErr := range []bool{false, true} {
-			got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: s.text, TurnError: turnErr})
+			got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: s.text, TurnError: turnErr}, nil)
 			if got != s.want {
 				t.Errorf("%q (turn error %v) classified %q, want %q", s.text, turnErr, got, s.want)
 			}
 		}
-		live := verdictCause(supervise.StepDead{Step: "fix", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: s.text})
+		live, _ := verdictCauseWith(supervise.StepDead{Step: "fix", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: s.text}, nil)
 		if live != s.want {
 			t.Errorf("the live path classified %q as %q, want %q (the exit path's class)", s.text, live, s.want)
 		}
@@ -66,7 +66,7 @@ func TestGatewayTransientSamplesClassifyTransient(t *testing.T) {
 		if s.want != FailUpstreamTransient {
 			continue
 		}
-		if got, _, _ := classifyWaitFailure(errWithText("read transcript: " + s.text)); got == FailUpstreamTransient {
+		if got, _, _, _, _ := classifyWaitFailureWith(errWithText("read transcript: "+s.text), nil); got == FailUpstreamTransient {
 			t.Errorf("driver-local %q classified %q, want not transient", s.text, got)
 		}
 	}
@@ -101,11 +101,11 @@ func TestGatewayWideningKeepsTheEstablishedClasses(t *testing.T) {
 		{`the model ended the turn`, FailExitModel, FailModelError, true},
 		{`The model is temporarily unavailable, please try again`, FailExitModel, FailModelError, true},
 	} {
-		got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: tc.text, TurnError: true})
+		got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: tc.text, TurnError: true}, nil)
 		if got != tc.exitWant {
 			t.Errorf("%q classified %q on the exit path, want %q", tc.text, got, tc.exitWant)
 		}
-		live := verdictCause(supervise.StepDead{Step: "fix", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: tc.text})
+		live, _ := verdictCauseWith(supervise.StepDead{Step: "fix", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: tc.text}, nil)
 		if live != tc.liveWant {
 			t.Errorf("%q classified %q on the live path, want %q", tc.text, live, tc.liveWant)
 		}

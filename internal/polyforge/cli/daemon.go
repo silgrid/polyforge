@@ -549,6 +549,13 @@ func (d *DaemonClient) Models() (json.RawMessage, error) {
 	return d.do("GET", "/models", "", nil, nil)
 }
 
+// Unclassified is GET /ops/unclassified (polyforge#51): the Host's
+// fallback-classified error texts over the recent window. Host-level: no
+// profile is sent (the CLI refuses --profile for the action).
+func (d *DaemonClient) Unclassified() (json.RawMessage, error) {
+	return d.do("GET", "/ops/unclassified", "", nil, nil)
+}
+
 // StatusWithHarnesses is GET /status?harnesses=1: the status plus the
 // daemon's view of the step harness binaries (polyforge#159; pf doctor).
 func (d *DaemonClient) StatusWithHarnesses() (json.RawMessage, error) {

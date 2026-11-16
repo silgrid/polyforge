@@ -77,7 +77,10 @@ block per Cell; the aggregate's `tasks` counts — running, completed and the
 terminal states — sum every Cell with a running daemon, so the Tasks badge
 and re-read trigger cover all of them); `PF_PROFILE` and the cwd never change their scope — only
 an explicit `--profile NAME` targets one Cell. `pf ops shutdown` is always
-Host-level: it stops every Cell and refuses `--profile`.
+Host-level: it stops every Cell and refuses `--profile`. `pf ops
+unclassified` is always Host-level too: it lists the last 7 days'
+fallback-classified error texts of every Cell, deduplicated with counts,
+and refuses `--profile`.
 
 ## The verb index
 
@@ -115,10 +118,39 @@ The daemon's auto-pull skips a ticket either check would refuse: it stays
 queued, and `pf queue` marks it in the STATUS cell —
 `queued (需要交互：缺验收)` (no acceptance criterion),
 `queued (需要交互：未分析)` (no analysis section), and both marks when both
-are missing. The merged `--json` document (`pf queue` without `--project`)
-carries `"acceptance_missing": true` and `"analysis_missing": true` on such
-items (absent on every other); the `--project` `--json` body is the
-server's raw answer and carries neither.
+are missing. It also skips a ticket whose analysis the daemon's analysis
+task wrote and the owner has not yet confirmed (the section still carries
+the unconfirmed marker): `queued (需要交互：分析待确认)`. The merged `--json`
+document (`pf queue` without `--project`) carries
+`"acceptance_missing": true`, `"analysis_missing": true` and
+`"analysis_unconfirmed": true` on such items (absent on every other); the
+`--project` `--json` body is the server's raw answer and carries none.
+
+**The analysis mechanism (polyforge#72).** `pf file create` of an execution
+ticket on a lane that requires acceptance, whose content has no `## 分析`
+section, asks this machine's daemon (`POST /analysis/enqueue`) to schedule
+one analysis task: the output names the task id, says 分析已排队 (the task lane
+is full, or older requests still wait — the request is persisted, survives
+a daemon restart, and dispatches in enqueue order; an analysis a daemon stop
+interrupted is re-queued at most twice, one the owner ended with
+`pf task cancel` is not, and an entry whose ticket the daemon can no longer
+read is dropped), or says 未安排分析 with the
+reason (no daemon reachable, or the daemon refused) — the ticket is filed
+either way. Only `pf file create` asks: a ticket a workflow step files
+(`pf step hub file`) gets no automatic analysis. The analysis task follows the 7-item report format and writes
+its draft with `pf task analysis-write`
+(`pf task analysis-write --content <text|@file|->`), which replaces only
+the analyzed ticket's `## 分析` section (a compare-and-swap on the ticket's
+`updated_at`, retried on a concurrent edit) and marks it unconfirmed; it is
+the one write a task may make. A draft with a line that would end the section (one that,
+trimmed, starts with `# ` or `## ` — a code-block comment included) is
+refused `DAEMON-400` and the ticket is unchanged: items use `###` headings. A task carries its idle and tool windows like
+a step: a silent or stuck candidate is killed and the next candidate model
+starts from the ticket as it stands; a stopped analysis leaves a comment
+naming the cause and the last item written. `pf file analysis confirm`
+(`pf file analysis confirm <id>`) strips the unconfirmed marker — the
+owner's word that the draft is the ticket's analysis — and the ticket
+becomes claimable.
 
 A third mark is lane-independent (polyforge#77): a bundle-bound parent waits
 for each child that is not wrapped (aihub's `waiting_for` entries with
@@ -255,6 +287,7 @@ pf task spawn --project <p> [--max-duration D] [--max-tokens N] "<prompt>"
 pf task list [--json]
 pf task show <id> [--json]
 pf task cancel <id>
+pf task analysis-write --content <text|@file|->   (a running analysis task only)
 ```
 
 A task is ONE fresh harness agent started from a free-text prompt (no session
@@ -302,7 +335,9 @@ its four columns.
   `DAEMON-403` on EVERY mutating request to its Unix socket (spawning or
   cancelling a task, `/step/call`, job lifecycle, shutdown included) and
   `pf` refuses it every write verb locally before any config read or network
-  call. Its reads stay open: `pf recall` and `pf memory show` go through the
+  call. The one exception is `pf task analysis-write` from a running analysis
+  task: `POST /task/analysis-write` replaces only its own ticket's `## 分析`
+  section (`docs/reference/uds-routes.md`). Its reads stay open: `pf recall` and `pf memory show` go through the
   daemon's `/task/memories` face, scoped to the task's own project, so that
   face needs no aihub key. The aihub-direct verbs (`file create/edit/dep`,
   `remember`, `msg send`) never reach the daemon: the spawn env carries no
@@ -327,13 +362,24 @@ its four columns.
   output. Context the harness re-sends and the provider serves from its prompt
   cache (a cache read) was already paid for once and is not charged again, so
   the budget tracks the work a task does, not the turns x context it resends.
+- **Stuck detection.** Every task runs under the step lane's silence and
+  tool-hang rules that apply to a task (rules 0, 2 and 3), with the
+  daemon's supervision windows as thresholds. A candidate judged stuck is
+  killed and the next candidate runs inside the remaining budget; each ended
+  candidate is an `attempts` entry (`candidate`, `cause`, `evidence`) in
+  `task show --json`, one `stuck: <candidate> (<cause>): <evidence>` line in
+  the human `task show`, and is named in the decision feed's task summary.
 - **States.** `running`, then exactly one of `completed`, `capped` (a budget was
   hit; the partial report is kept and marked `truncated`), `failed` (every
   candidate errored) or `interrupted` (`cancel` or a daemon restart; never
   resumed).
 - **Limit.** At most `max_concurrent_tasks` one-off tasks run per Host
   (`[daemon]`, default 2, live on reload — every Cell's spawns share it);
-  a spawn beyond it is refused `DAEMON-409`, never queued. Tasks take no
+  a spawn beyond it is refused `DAEMON-409`, never queued. The analysis
+  tasks the daemon schedules itself (polyforge#72, `pf submit` above) share
+  the same limit but are queued instead: the daemon persists the request and
+  dispatches it when a slot frees, and re-queues an analysis a restart
+  interrupted at most twice. Tasks take no
   `max_concurrent_jobs` slot (polyforge#74). A Cell whose execution is disabled
   (`execution_disabled` on `pf cell list`) refuses every spawn `DAEMON-409`
   `execution is disabled on this Cell: <reason>`: no record, slot or run.
@@ -1473,9 +1519,14 @@ long it has run in total (a harness heartbeat for a running call is no
 such record); T
 (`--step-timeout`) ends a step as `step_timeout_long_task` (the same
 session resumed once with T doubled; a second timeout parks) or — only
-when the dispatch that hit T itself ran at least half of it and spent at
-least half of its own time waiting on the model — `step_timeout_slow_model`
-(model class: the next candidate, T doubled); N (`--stall-window`) ends the driver between
+when the dispatch that hit T itself ran at least half of it and at least
+five of its COMPLETED model calls were individually slow: the median over
+`[daemon] slow_model_median_latency` (default 60s) or the p90 over
+`slow_model_p90_latency` (default 180s); the call in progress counts
+nowhere — `step_timeout_slow_model` (model class: the next candidate, T
+doubled). A dispatch of many fast calls — single-call median 6s, p90 15s,
+polyforge#25's 652-call session — is a long task however long it waited:
+the waiting share alone decides nothing; N (`--stall-window`) ends the driver between
 steps as `driver_stalled`. While a dispatch of a step
 declaring `resources: { admission: heavy }` waits for the heavy-run
 admission (`max_concurrent_bars`, `bar_load_threshold`) no
@@ -1489,13 +1540,28 @@ problem: the next candidate at once, and none left parks the work item
 the same session resumes with the reminder to end with a hand-off, and
 the third in a row parks. `rate_limited` and `upstream_transient` retry
 the same model after a backoff of 1 s, doubling to at most 3 min, never
-counted. The transient texts the classification recognizes include the
+counted. The classification is configurable on the Host (polyforge#51):
+the `[daemon] transient_error_patterns` and `model_error_patterns` lists
+hold additional RE2 regexes, judged after the allowance/auth row (which
+also covers the bare 402 and `payment required`) and before the other
+built-in rows, on an exited dispatch's text and on a live error turn
+alike — never on the driver's own error; no added pattern can pull an
+allowance or auth failure (402/401, quota, insufficient balance) out of
+model class. Both lists are live on reload and editable in Pi Web's
+configuration page (Host region). The transient texts the classification
+recognizes include the
 throttles (429 / rate limit / `overloaded` / the gateways' `server
 overload. Please retry later.` and concurrency texts) and the upstream
 transients: a response stream that ended or was interrupted before
 completion, an upstream/gateway named `temporarily unavailable`, a
 gateway's `no available accounts`, and the upstream model reporting an
-error after output had started (the output so far is partial);
+error after output had started (the output so far is partial). Every
+`step_failed` event records which rule judged its text
+(`classified_by`: `builtin`, `added` or `fallback` — no rule named it) and
+the raw text under `error_text`; `pf ops unclassified` lists the fallback
+texts of the last 7 days, deduplicated with counts, aggregated across
+every Cell of the Host (the daemon route serves a human session only — a
+step or task agent's process tree is refused `DAEMON-403`);
 `tool_hung` resumes the same session once with Y doubled (a
 second timeout parks); any other exit (`exit_other`, `exit_host_class`,
 `harness_silent`) resumes once, and the second in a row parks. A

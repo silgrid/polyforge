@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 // ErrLimit is the sentinel of a spawn refused at the task lane's
@@ -64,6 +65,18 @@ type Config struct {
 	// Both are called with no manager lock held.
 	Admit func() error
 	Done  func()
+	// Limits (optional) answers the stuck-detection bounds of every
+	// dispatch (AC9: the step lane's rule 0/2/3 thresholds, injected
+	// live — the daemon's liveLimits); nil = the documented defaults
+	// (10m silence for token-level harnesses, 30m tool window).
+	Limits func() supervise.Defaults
+	// PromptFor (optional) answers the prompt ONE candidate runs with,
+	// consulted before every candidate dispatch (polyforge#72, AC10: the
+	// daemon re-reads the ticket and rebuilds the prompt so the next
+	// candidate continues what the previous one already wrote into
+	// `## 分析`); nil, or an empty answer, = dispatchedPrompt, the one
+	// prompt the spec carried.
+	PromptFor func(t Task) string
 }
 
 // Slots is the Host's one shared concurrency bound of the task lane
@@ -285,14 +298,36 @@ func (m *Manager) done() {
 }
 
 // run walks the candidates in order inside the one shared budget and
-// finishes the task in exactly one terminal state.
+// finishes the task in exactly one terminal state. A candidate the stuck
+// detection ends (a *StuckError: rules 0/2/3, AC9) is recorded as an
+// Attempt and the walk goes on to the next candidate — its tokens stay
+// spent, the shared budget is the one that was fixed at spawn.
 func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 	t := e.t
 	var report strings.Builder
 	var tokens int64
 	var lastErr error
 	capped, completed := false, false
-	prompt := dispatchedPrompt(t.Prompt, dir)
+	var attempts []Attempt
+	limits := func() supervise.Defaults {
+		if m.cfg.Limits != nil {
+			return m.cfg.Limits()
+		}
+		return supervise.Defaults{}
+	}
+	// The prompt of ONE candidate: the spec's own text behind the
+	// prohibited-actions section, or — for an analysis task (AC10) — the
+	// hook's answer, consulted before EVERY dispatch so a candidate that
+	// takes over continues from the section its predecessor already wrote
+	// (the daemon re-reads the ticket there).
+	promptOf := func() string {
+		if m.cfg.PromptFor != nil {
+			if p := m.cfg.PromptFor(t); p != "" {
+				return p
+			}
+		}
+		return dispatchedPrompt(t.Prompt, dir)
+	}
 	for _, cand := range t.Candidates {
 		if ctx.Err() != nil {
 			break
@@ -302,14 +337,25 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 		e.t.Candidate = cand
 		m.mu.Unlock()
 		res, err := m.cfg.Runner.Run(ctx, RunSpec{
-			Candidate: c, Prompt: prompt, MaxTokens: t.MaxTokens - tokens, WorkDir: dir, TaskID: t.ID,
-			ReadOnlyTools: t.ReadOnlyTools,
+			Candidate: c, Prompt: promptOf(), MaxTokens: t.MaxTokens - tokens, WorkDir: dir, TaskID: t.ID,
+			ReadOnlyTools: t.ReadOnlyTools, Limits: limits(),
 		}, func(n int64) {
 			m.mu.Lock()
 			e.t.TokensConsumed = tokens + n
 			m.mu.Unlock()
 		})
 		tokens += res.Tokens
+		var stuck *StuckError
+		if errors.As(err, &stuck) && ctx.Err() == nil {
+			attempts = append(attempts, Attempt{Candidate: cand, Cause: string(stuck.Cause), Evidence: stuck.Evidence})
+			m.mu.Lock()
+			e.t.Attempts = append([]Attempt(nil), attempts...)
+			m.mu.Unlock()
+			if lastErr == nil {
+				lastErr = fmt.Errorf("%s judged stuck (%s): %s", cand, stuck.Cause, stuck.Evidence)
+			}
+			continue // the next candidate, inside the same budget
+		}
 		report.Reset()
 		report.WriteString(res.Report)
 		if res.TokenCapped || tokens >= t.MaxTokens {
@@ -323,8 +369,13 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 		completed = err == nil && ctx.Err() == nil
 		break
 	}
-	m.finish(ctx, e, report.String(), tokens, capped, completed, lastErr)
+	m.finish(ctx, e, report.String(), tokens, capped, completed, lastErr, attempts)
 }
+
+// ErrorCancelled is the Error of a task the owner ended with `pf task
+// cancel` — an interrupted task that no daemon stop interrupted (the
+// analysis re-queue tells the two apart, polyforge#72).
+const ErrorCancelled = "cancelled by `pf task cancel`"
 
 // dispatchedPrompt answers what one run's harness reads: the shared
 // prohibited-actions section (harness.TaskProhibitedActions,
@@ -336,17 +387,20 @@ func dispatchedPrompt(prompt, dir string) string {
 	return harness.TaskProhibitedActions(dir) + "\n# Task\n\n" + prompt
 }
 
-func (m *Manager) finish(ctx context.Context, e *entry, report string, tokens int64, capped, completed bool, lastErr error) {
+func (m *Manager) finish(ctx context.Context, e *entry, report string, tokens int64, capped, completed bool, lastErr error, attempts []Attempt) {
 	m.mu.Lock()
 	user := e.userCancel
 	m.mu.Unlock()
 	t := e.t
+	if len(attempts) > 0 {
+		t.Attempts = append([]Attempt(nil), attempts...)
+	}
 	switch {
 	case completed:
 		t.State = StateCompleted
 	case user:
 		t.State = StateInterrupted
-		t.Error = "cancelled by `pf task cancel`"
+		t.Error = ErrorCancelled
 	case capped:
 		t.State = StateCapped
 		t.Truncated = true

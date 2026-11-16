@@ -378,22 +378,39 @@ func TestD6PausedDispatchNeverBookedByALaterRelaunch(t *testing.T) {
 // disposes of that verdict. The shape (a 12m38s tail of a step
 // that spent 1h17m22s before it) must NOT switch the model — it is the
 // step's length, so the same candidate resumes its conversation under the
-// doubled T; the shape (the whole T in one dispatch, mostly
-// waiting on the model) MUST switch, fresh.
+// doubled T; the shape (the whole T in one dispatch whose completed calls
+// were individually slow — polyforge#51's latency attribution) MUST
+// switch, fresh.
+// w51D6Slow answers n completed calls of the one latency (the dying
+// dispatch's recorded model calls).
+func w51D6Slow(n int, d time.Duration) []time.Duration {
+	out := make([]time.Duration, n)
+	for i := range out {
+		out[i] = d
+	}
+	return out
+}
+
 func TestD6CumulativeTimeoutRotatesOnlyForTheDyingDispatch(t *testing.T) {
 	const T = 90 * time.Minute
 	cases := []struct {
-		name                     string
-		prior, age, tools, model time.Duration
-		wantCause                string
-		wantModels               []string
-		wantResume               bool
-		wantLongTask             int
+		name       string
+		prior, age time.Duration
+		// calls are the dying dispatch's COMPLETED model-call latencies
+		// (polyforge#51: the slow-model attribution reads them, not the
+		// waiting share — this case's share, 59m of 90m, no longer
+		// decides).
+		calls        []time.Duration
+		wantCause    string
+		wantModels   []string
+		wantResume   bool
+		wantLongTask int
 	}{
 		{" code attempt 4", 77*time.Minute + 22*time.Second, 12*time.Minute + 38*time.Second,
-			30 * time.Second, 12*time.Minute + 2*time.Second,
+			w51D6Slow(5, 12*time.Minute),
 			FailStepTimeoutLongTask, []string{"a", "a"}, true, 1},
-		{" code attempt 1", 0, 90 * time.Minute, 31 * time.Minute, 59*time.Minute + time.Second,
+		{" code attempt 1", 0, 90 * time.Minute,
+			w51D6Slow(5, 70*time.Second),
 			FailStepTimeoutSlowModel, []string{"a", "b"}, false, 0},
 	}
 	for _, tc := range cases {
@@ -401,8 +418,8 @@ func TestD6CumulativeTimeoutRotatesOnlyForTheDyingDispatch(t *testing.T) {
 			now := time.Unix(10_000_000, 0)
 			verdict := supervise.Judge(supervise.Snapshot{
 				Step: "s", SpawnN: 1, Begun: true, StartedAt: now.Add(-tc.age),
-				Thresholds: supervise.Thresholds{StepTimeout: T, PriorRuntime: tc.prior},
-				ModelTime:  tc.model, ToolTime: tc.tools,
+				Thresholds:         supervise.Thresholds{StepTimeout: T, PriorRuntime: tc.prior},
+				ModelCallLatencies: tc.calls,
 			}, now, 0)
 			if verdict == nil {
 				t.Fatal("setup: rule 4 did not fire on an expired T")

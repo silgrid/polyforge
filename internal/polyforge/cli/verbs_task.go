@@ -7,6 +7,7 @@ package cli
 //	pf task list [--json]
 //	pf task show <id> [--json]
 //	pf task cancel <id>
+//	pf task analysis-write --content <text|@file|->   (a running analysis task only)
 //
 // A spawn returns the task id immediately; the task runs in a fresh harness
 // agent, hard-capped on wall clock and tokens. There is no `--wait`, no
@@ -39,6 +40,13 @@ func (d *DaemonClient) TaskCancel(id string) (json.RawMessage, error) {
 	return d.do("POST", "/task/cancel/"+id, "", map[string]any{}, nil)
 }
 
+// TaskAnalysisWrite is the running analysis task's one write: its
+// current draft of the analyzed ticket's `## 分析` section
+// (polyforge#72 AC3; the daemon binds the ticket, never the request).
+func (d *DaemonClient) TaskAnalysisWrite(content string) (json.RawMessage, error) {
+	return d.do("POST", "/task/analysis-write", "", map[string]any{"content": content}, nil)
+}
+
 var cmdTask = &Command{
 	Name:    "task",
 	Group:   GroupExec,
@@ -46,7 +54,8 @@ var cmdTask = &Command{
 	Usage: "pf task spawn --project <p> [--max-duration D] [--max-tokens N] \"<prompt>\"\n" +
 		"       pf task list [--json]\n" +
 		"       pf task show <id> [--json]\n" +
-		"       pf task cancel <id>",
+		"       pf task cancel <id>\n" +
+		"       pf task analysis-write --content <text|@file|->   (a running analysis task only)",
 	Setup: func(fs *flag.FlagSet) {
 		fs.String("project", "", "spawn: the mapped project whose workspace the task runs in (a name, never a path)")
 		fs.String("max-duration", "", "spawn: wall-clock cap (default 40m, ceiling 60m)")
@@ -56,6 +65,9 @@ var cmdTask = &Command{
 		fs.String("models", "", "refused: the task's candidates come from steps.<project>.task.models / default.models")
 		fs.Bool("wait", false, "refused: a task never blocks the caller; poll `pf task show`")
 		fs.String("type", "", "refused: there is one task kind")
+		// the analysis task's one write (polyforge#72): the current draft of
+		// its ticket's `## 分析` section
+		fs.String("content", "", "analysis-write: the current draft of the analyzed ticket's `## 分析` section (<text|@file|->; each write replaces the section with the latest draft)")
 		// --json also works in the post-position form (`pf task show <id>
 		// --json`): the flag is mirrored into ctx.JSON before dispatch.
 		fs.Bool("json", false, "machine-readable output")
@@ -87,9 +99,36 @@ var cmdTask = &Command{
 			}
 			ctx.finish(raw, func() { fmt.Fprintf(ctx.Stdout, "cancelling %s\n", args[1]) })
 			return nil
+		case "analysis-write":
+			return taskAnalysisWrite(ctx, fs, args[1:])
 		}
-		return fmt.Errorf("task: unknown action %q (expected spawn|list|show|cancel)", args[0])
+		return fmt.Errorf("task: unknown action %q (expected spawn|list|show|cancel|analysis-write)", args[0])
 	},
+}
+
+// taskAnalysisWrite (polyforge#72, AC3): the running analysis task's ONE
+// write — its current draft of the analyzed ticket's `## 分析` section.
+// The daemon binds the ticket from the task's own record; the CLI sends
+// the draft only. The content flag reads text, @file or stdin, exactly
+// like file create's.
+func taskAnalysisWrite(ctx *Context, fs *flag.FlagSet, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("task analysis-write takes flags only (--content <text|@file|->)")
+	}
+	content := strings.TrimSpace(stringFlag(fs, "content"))
+	if content == "" {
+		return fmt.Errorf("task analysis-write: --content <text|@file|-> is required (the current draft of the `## 分析` section — each write replaces the section with your latest draft)")
+	}
+	draft, err := readValueOrStdin(ctx, content)
+	if err != nil {
+		return fmt.Errorf("task analysis-write: %w", err)
+	}
+	raw, err := ctx.daemon().TaskAnalysisWrite(draft)
+	if err != nil {
+		return err
+	}
+	ctx.finish(raw, func() { fmt.Fprintf(ctx.Stdout, "已写入 ## 分析（整节替换为最新草稿）\n") })
+	return nil
 }
 
 func taskSpawn(ctx *Context, fs *flag.FlagSet, args []string) error {
@@ -179,6 +218,10 @@ func taskShow(ctx *Context, id string) error {
 		}
 		if t.Error != "" {
 			fmt.Fprintf(w, "error: %s\n", t.Error)
+		}
+		// the candidates the stuck detection ended (polyforge#72 AC9)
+		for _, a := range t.Attempts {
+			fmt.Fprintf(w, "stuck: %s (%s): %s\n", a.Candidate, a.Cause, a.Evidence)
 		}
 		if t.Truncated {
 			fmt.Fprintln(w, "truncated: true")

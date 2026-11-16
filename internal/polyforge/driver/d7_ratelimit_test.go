@@ -27,7 +27,7 @@ func TestD7ThrottleTextsAreRateLimitedNotModelClass(t *testing.T) {
 		"upstream error: the model is overloaded",
 	} {
 		for _, turnErr := range []bool{false, true} {
-			got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: text, TurnError: turnErr})
+			got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: text, TurnError: turnErr}, nil)
 			if got != FailRateLimited {
 				t.Errorf("%q (turn error %v) classified %q, want %q", text, turnErr, got, FailRateLimited)
 			}
@@ -41,12 +41,12 @@ func TestD7ThrottleTextsAreRateLimitedNotModelClass(t *testing.T) {
 		"401 unauthorized",
 	} {
 		for _, turnErr := range []bool{false, true} {
-			got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: text, TurnError: turnErr})
+			got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: text, TurnError: turnErr}, nil)
 			if got != FailExitModel {
 				t.Errorf("%q (turn error %v) classified %q, want %q", text, turnErr, got, FailExitModel)
 			}
 		}
-		if got, _, _ := classifyWaitFailure(errors.New("write prompt: broken pipe: " + text)); got != FailExitModel {
+		if got, _, _, _, _ := classifyWaitFailureWith(errors.New("write prompt: broken pipe: "+text), nil); got != FailExitModel {
 			t.Errorf("startup %q classified %q, want %q", text, got, FailExitModel)
 		}
 	}
@@ -54,7 +54,7 @@ func TestD7ThrottleTextsAreRateLimitedNotModelClass(t *testing.T) {
 		t.Fatalf("a throttle must never advance the candidate pointer")
 	}
 	// A genuine model fault stays model-class.
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: `model "x/y" not found`}); got != FailExitModel {
+	if got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: `model "x/y" not found`}, nil); got != FailExitModel {
 		t.Fatalf("model-class classification regressed: %q", got)
 	}
 }

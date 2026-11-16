@@ -1,0 +1,217 @@
+package daemon
+
+// w51_unclassified_route_test.go (polyforge#51): the Host-level list of
+// fallback-classified error texts — the scan's window, dedup and
+// classification filter, the cross-Cell aggregation of the route, and the
+// user-only reach (a step or task agent's process tree is refused).
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/polyforge/cli"
+)
+
+// w51StepFailed is one step_failed event line carrying the classification
+// the driver recorded.
+func w51StepFailed(at time.Time, cause, classifiedBy, errorText string) protocol.EventEntry {
+	body, _ := json.Marshal(map[string]any{
+		"step": "build", "cause": cause, "detail": "driver: ...",
+		"classified_by": classifiedBy, "error_text": errorText,
+	})
+	return protocol.EventEntry{At: at.UTC().Format(time.RFC3339Nano), Kind: "step_failed", WI: "wi_x", Body: body}
+}
+
+// w51SeedEvents writes one work item's event log in a Cell's data dir.
+func w51SeedEvents(t *testing.T, dataDir string, wi string, entries ...protocol.EventEntry) {
+	t.Helper()
+	dir := filepath.Join(dataDir, "events")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(filepath.Join(dir, "wi-"+wi+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for _, e := range entries {
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(append(b, '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestW51ScanUnclassifiedWindowDedup: only fallback-classified
+// step_failed events of the window count, deduplicated by the raw error
+// text; a step-agent-relevant field never appears (the texts are all the
+// report carries).
+func TestW51ScanUnclassifiedWindowDedup(t *testing.T) {
+	now := time.Now()
+	dir := t.TempDir()
+	twoDaysAgo := now.Add(-2 * 24 * time.Hour)
+	nineDaysAgo := now.Add(-9 * 24 * time.Hour)
+	w51SeedEvents(t, dir, "wi_1",
+		w51StepFailed(twoDaysAgo, "model_error", "fallback", "gateway tantrum A"),
+		w51StepFailed(twoDaysAgo.Add(time.Hour), "exit_model_class", "fallback", "gateway tantrum A"),
+		w51StepFailed(twoDaysAgo, "rate_limited", "builtin", "429 Too Many Requests"),
+		w51StepFailed(twoDaysAgo, "upstream_transient", "added", "gateway hiccup"),
+		w51StepFailed(twoDaysAgo, "model_error", "fallback", ""), // no text: nothing to list
+		w51StepFailed(nineDaysAgo, "model_error", "fallback", "old gateway tantrum"),
+	)
+	items := scanUnclassifiedEvents(dir, cli.UnclassifiedWindow, now)
+	if len(items) != 1 {
+		t.Fatalf("fallback texts of the window = %v, want exactly the one deduplicated text", items)
+	}
+	it := items["gateway tantrum A"]
+	if it == nil || it.Count != 2 || it.Text != "gateway tantrum A" || it.LastAt == "" {
+		t.Fatalf("the item must count both occurrences: %+v", it)
+	}
+	// an empty events dir is an empty report, not an error
+	if items := scanUnclassifiedEvents(t.TempDir(), cli.UnclassifiedWindow, now); len(items) != 0 {
+		t.Fatalf("no events = no items: %v", items)
+	}
+}
+
+// TestW51UnclassifiedRouteAggregatesCells: the Host route sums every
+// serving Cell's fallback texts (the same text in two Cells is one row
+// with both counts), newest-first among equals, count-first overall.
+func TestW51UnclassifiedRouteAggregatesCells(t *testing.T) {
+	th := newTestHost(t, hostCell{profile: "default", machineID: "m-def"}, hostCell{profile: "alpha", machineID: "m-alpha"})
+	newest := time.Now().Add(-24 * time.Hour)
+	at := newest.UTC().Format(time.RFC3339Nano)
+	w51SeedEvents(t, th.cellDataDir("default"), "wi_d1",
+		w51StepFailed(newest, "model_error", "fallback", "gateway tantrum A"))
+	w51SeedEvents(t, th.cellDataDir("alpha"), "wi_a1",
+		w51StepFailed(time.Now().Add(-25*time.Hour), "exit_model_class", "fallback", "gateway tantrum A"),
+		w51StepFailed(time.Now().Add(-26*time.Hour), "model_error", "fallback", "upstream wailed mysteriously"))
+	raw, err := th.client("").Unclassified()
+	if err != nil {
+		t.Fatalf("ops unclassified: %v", err)
+	}
+	var rep cli.UnclassifiedReport
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		t.Fatalf("the answer: %v (%s)", err, raw)
+	}
+	if rep.WindowDays != 7 {
+		t.Fatalf("window_days = %d, want 7", rep.WindowDays)
+	}
+	if len(rep.Items) != 2 {
+		t.Fatalf("items %+v, want the two deduplicated texts", rep.Items)
+	}
+	if rep.Items[0].Text != "gateway tantrum A" || rep.Items[0].Count != 2 {
+		t.Fatalf("the cross-Cell text must count both Cells: %+v", rep.Items[0])
+	}
+	if rep.Items[0].LastAt != at {
+		t.Fatalf("last_at = %s, want the newest occurrence %s", rep.Items[0].LastAt, at)
+	}
+	if rep.Items[1].Text != "upstream wailed mysteriously" || rep.Items[1].Count != 1 {
+		t.Fatalf("the second row: %+v", rep.Items[1])
+	}
+}
+
+// TestW51UnclassifiedRouteRefusesAgents: the route serves a human session
+// only — a caller the Host resolves to a step process tree is refused
+// DAEMON-403 (AC4: step agents cannot reach it).
+func TestW51UnclassifiedRouteRefusesAgents(t *testing.T) {
+	th := newTestHost(t, hostCell{profile: "default", machineID: "m-def"}, hostCell{profile: "alpha", machineID: "m-alpha"})
+	restore := runtimeStepOrigin
+	runtimeStepOrigin = func(pid int, id string) (string, bool) { return "wi_a#7", true }
+	t.Cleanup(func() { runtimeStepOrigin = restore })
+	_, err := th.client("").Unclassified()
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("a step agent's process tree must be refused, got %v", err)
+	}
+}
+
+// TestW51UnclassifiedLastAtByTime: last_at is the newest occurrence by
+// TIME. RFC3339Nano drops trailing zeros, so a whole second renders
+// "…:30Z" and 100ms later renders "…:30.1Z" — the later one is the
+// expected last_at (self#NB8: a string compare ranks "Z" above ".").
+func TestW51UnclassifiedLastAtByTime(t *testing.T) {
+	th := newTestHost(t, hostCell{profile: "default", machineID: "m-def"}, hostCell{profile: "alpha", machineID: "m-alpha"})
+	whole := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
+	later := whole.Add(100 * time.Millisecond)
+	want := later.UTC().Format(time.RFC3339Nano)
+	if !strings.HasSuffix(want, ".1Z") || !strings.HasSuffix(whole.UTC().Format(time.RFC3339Nano), ":"+whole.UTC().Format("05")+"Z") {
+		t.Fatalf("premise: the two stamps are …:ssZ and …:ss.1Z: %s / %s", whole.UTC().Format(time.RFC3339Nano), want)
+	}
+	w51SeedEvents(t, th.cellDataDir("default"), "wi_d1",
+		w51StepFailed(later, "model_error", "fallback", "gateway tantrum B"))
+	w51SeedEvents(t, th.cellDataDir("alpha"), "wi_a1",
+		w51StepFailed(whole, "model_error", "fallback", "gateway tantrum B"))
+	raw, err := th.client("").Unclassified()
+	if err != nil {
+		t.Fatalf("ops unclassified: %v", err)
+	}
+	var rep cli.UnclassifiedReport
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		t.Fatalf("the answer: %v (%s)", err, raw)
+	}
+	if len(rep.Items) != 1 || rep.Items[0].Count != 2 {
+		t.Fatalf("items %+v, want the one text counted twice", rep.Items)
+	}
+	if rep.Items[0].LastAt != want {
+		t.Fatalf("last_at = %s, want the later occurrence %s", rep.Items[0].LastAt, want)
+	}
+	// within one Cell's log too: the scan keeps the later stamp
+	dir := t.TempDir()
+	w51SeedEvents(t, dir, "wi_1",
+		w51StepFailed(later, "model_error", "fallback", "gateway tantrum C"),
+		w51StepFailed(whole, "model_error", "fallback", "gateway tantrum C"))
+	if it := scanUnclassifiedEvents(dir, cli.UnclassifiedWindow, time.Now())["gateway tantrum C"]; it == nil || it.LastAt != want {
+		t.Fatalf("one Cell's scan: %+v, want last_at %s", it, want)
+	}
+}
+
+// TestW51UnclassifiedRouteRacesCellInvalidation: the route reads each
+// Cell's daemon under the registry lock — a Cell invalidated (its daemon
+// pointer written under h.mu) while the route runs is no data race. Run
+// under -race (self#B4).
+func TestW51UnclassifiedRouteRacesCellInvalidation(t *testing.T) {
+	th := newTestHost(t, hostCell{profile: "default", machineID: "m-def"}, hostCell{profile: "alpha", machineID: "m-alpha"})
+	alpha := th.cell("alpha")
+	th.mu.Lock()
+	d := alpha.d
+	th.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 20; i++ {
+			if _, err := th.client("").Unclassified(); err != nil {
+				t.Errorf("ops unclassified: %v", err)
+				return
+			}
+		}
+	}()
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case <-done:
+			th.mu.Lock()
+			alpha.d, alpha.invalid = d, ""
+			th.mu.Unlock()
+			return
+		case <-deadline:
+			th.mu.Lock()
+			alpha.d, alpha.invalid = d, ""
+			th.mu.Unlock()
+			t.Fatal("the route never answered")
+		default:
+		}
+		th.mu.Lock()
+		alpha.d, alpha.invalid = nil, "w51 test: invalidated"
+		th.mu.Unlock()
+		th.mu.Lock()
+		alpha.d, alpha.invalid = d, ""
+		th.mu.Unlock()
+	}
+}

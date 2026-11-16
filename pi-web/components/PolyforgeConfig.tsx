@@ -13,6 +13,8 @@ import {
   CONNECTION_KEYS,
   configValueError,
   HOST_ONLY_KEYS,
+  HOST_LIST_KEYS,
+  HOST_SCALAR_KEYS,
   IDENTITY_KEYS,
   parseWorkspaceWriteKey,
   POLYFORGE_CONFIG_SUMMARIZE_MINIMUM_PF_VERSION,
@@ -1903,6 +1905,37 @@ function HostSettingsRegion({ title }: { title: string }) {
 
   const items = read?.items ?? [];
   const itemOf = (key: string) => items.find((item) => item.key === key);
+  // polyforge#51: the unclassified fallback errors under the pattern
+  // editors — the operator's candidates for the next pattern.
+  const [unclassified, setUnclassified] = useState<{ windowDays: number; items: { text: string; count: number; lastAt: string }[] } | null>(null);
+  const [unclassifiedError, setUnclassifiedError] = useState<string | null>(null);
+  const runUnclassified = useCallback(async () => {
+    try {
+      const response = await fetch("/api/polyforge/unclassified");
+      const body = await response.json() as { pfPresent?: boolean; report?: { windowDays: number; items: { text: string; count: number; lastAt: string }[] } | null; error?: string };
+      if (!response.ok || body.error) throw new Error(body.error ?? `HTTP ${response.status}`);
+      setUnclassified(body.report ?? null);
+      setUnclassifiedError(null);
+    } catch (error) {
+      setUnclassifiedError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+  useEffect(() => { void runUnclassified(); }, [runUnclassified]);
+  // a pattern list's shown value: one regex per line (polyforge#51)
+  const hostPatternsShownValue = (item: { key: string; value?: unknown; source?: string } | undefined): string => {
+    if (!item || item.source !== "file" || !Array.isArray(item.value)) return "";
+    return (item.value as unknown[]).filter((v) => typeof v === "string").join("\n");
+  };
+  const savePatternList = (key: string) => {
+    const raw = drafts[key] ?? hostPatternsShownValue(itemOf(key));
+    const value = raw.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+    const invalid = configValueError(key, value, itemOf(key)?.schema);
+    if (invalid) {
+      setMessage({ tone: "error", text: `${key}: ${invalid}` });
+      return;
+    }
+    write({ action: "set", key, value });
+  };
   const save = (key: string) => {
     const raw = drafts[key] ?? regionShownValue(itemOf(key));
     const value = formValue(key, raw);
@@ -1928,7 +1961,7 @@ function HostSettingsRegion({ title }: { title: string }) {
   return (
     <div className="polyforge-config-region" data-pf-settings-region="host" role="group" aria-label={title} style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
       <p className="polyforge-config-card-title">{title}</p>
-      {HOST_ONLY_KEYS.map((key) => (
+      {HOST_SCALAR_KEYS.map((key) => (
         <div key={key} className="polyforge-config-region-row" data-pf-region-key={key} style={REGION_ROW_STYLE}>
           <span className="polyforge-config-key"><BreakableToken text={key} /></span>
           <input aria-label={`${key} (host)`} value={drafts[key] ?? regionShownValue(itemOf(key))} onChange={(event) => setDrafts((current) => ({ ...current, [key]: event.target.value }))} />
@@ -1937,6 +1970,33 @@ function HostSettingsRegion({ title }: { title: string }) {
           {renderNotice(key)}
         </div>
       ))}
+      {HOST_LIST_KEYS.map((key) => (
+        <div key={key} className="polyforge-config-region-row" data-pf-region-key={key} data-pf-pattern-list={key} style={{ ...REGION_ROW_STYLE, flexDirection: "column", alignItems: "stretch" }}>
+          <span className="polyforge-config-key"><BreakableToken text={key} /></span>
+          <textarea
+            aria-label={`${key} (host)`}
+            rows={4}
+            value={drafts[key] ?? hostPatternsShownValue(itemOf(key))}
+            onChange={(event) => setDrafts((current) => ({ ...current, [key]: event.target.value }))}
+          />
+          <p className="polyforge-config-card-hint">{t("polyforge.settings.hostPatternsHint")}</p>
+          <div style={{ display: "flex", gap: 6 }}>
+            <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null} onClick={() => savePatternList(key)}>{t("polyforge.settings.configSave")}</ConfigButton>
+            <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null || itemOf(key)?.source !== "file"} onClick={() => write({ action: "unset", key })}>{t("polyforge.cells.unset")}</ConfigButton>
+          </div>
+        </div>
+      ))}
+      <div className="polyforge-config-unclassified" data-pf-unclassified="host" role="group" aria-label={t("polyforge.settings.unclassifiedTitle")} style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+        <p className="polyforge-config-card-title">{t("polyforge.settings.unclassifiedTitle")}</p>
+        <p className="polyforge-config-card-hint">{t("polyforge.settings.unclassifiedHint")}</p>
+        {unclassifiedError && <p className="config-add-source-error" role="alert">{unclassifiedError}</p>}
+        {unclassified && unclassified.items.length === 0 && <p className="polyforge-config-card-hint">{t("polyforge.settings.unclassifiedEmpty")}</p>}
+        {unclassified?.items.map((item) => (
+          <p key={item.text} className="polyforge-config-unclassified-row" data-pf-unclassified-text={item.text}>
+            <span>{item.count}×</span> <span>{item.text}</span> <span>{item.lastAt}</span>
+          </p>
+        ))}
+      </div>
       {confirming && (
         <div role="alertdialog" aria-label={confirming.key} className="polyforge-config-confirm" data-pf-region-confirm={confirming.key}>
           <p className="polyforge-config-confirm-text">{t("polyforge.settings.configConfirmConnection", { key: confirming.key })}</p>

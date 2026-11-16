@@ -57,10 +57,50 @@ var cmdFile = &Command{
 			return fileShow(ctx, rest)
 		case "dep":
 			return fileDep(ctx, rest)
+		case "analysis":
+			return fileAnalysis(ctx, rest)
 		default:
 			return fmt.Errorf("file: unknown action %q", sub)
 		}
 	},
+}
+
+// fileAnalysis serves the analysis section's owner gate:
+//
+//	pf file analysis confirm <id>
+//
+// — the one command that removes an unconfirmed auto-analysis marker
+// (polyforge#72, ruling 9): after it the auto-pull wave may claim the
+// ticket again. The draft itself is untouched; the write carries the
+// content CAS so a concurrent edit elsewhere is never overwritten.
+func fileAnalysis(ctx *Context, args []string) error {
+	if len(args) != 2 || args[0] != "confirm" {
+		return fmt.Errorf("file analysis: expected `confirm <id>` — the owner's confirmation of the auto-scheduled analysis (see `pf help file`)")
+	}
+	name := args[1]
+	wi, err := ctx.aihub().GetWorkItem(name)
+	if err != nil {
+		return err
+	}
+	content := ""
+	if wi.Content != nil {
+		content = *wi.Content
+	}
+	confirmed, changed := workflow.ConfirmAnalysisSection(content)
+	if !changed {
+		return fmt.Errorf("file analysis confirm %s: no unconfirmed auto-analysis marker on the ticket — nothing to confirm (`pf file show %s` to read the section)", api.DisplayName(wi.Slug, wi.ID), name)
+	}
+	raw, err := ctx.aihub().PatchWorkItem(wi.ID, map[string]any{
+		"content":             confirmed,
+		"expected_updated_at": wi.UpdatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	finishAs(ctx, raw, func(v *WIView) {
+		fmt.Fprintf(ctx.Stdout, "已确认分析（标记已去除；自动领取放行）：%s\n", api.DisplayName(v.Slug, v.ID))
+	})
+	return nil
 }
 
 // osGetwd is the file-create inference's cwd seam: the production value
@@ -277,11 +317,112 @@ func fileCreate(ctx *Context, args []string) error {
 	if err != nil {
 		return openOnBundleRefusal(ctx, req, err)
 	}
+	var createdID string
 	finishAs(ctx, raw, func(wi *WIView) {
 		fmt.Fprintln(ctx.Stdout)
 		renderWIDetail(ctx.Stdout, wi)
 	})
+	// the created id is decoded from the answer itself: --json mode
+	// runs no human renderer, and the notice must ride in both modes.
+	var idDoc struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &idDoc) == nil {
+		createdID = idDoc.ID
+	}
+	// polyforge#72 (ruling 2): a fresh execution ticket whose lane
+	// requires acceptance and whose body carries no analysis section
+	// gets one auto-scheduled by THIS machine's daemon — never a failed
+	// create; the notice rides stderr in both modes (stdout is the
+	// server's answer).
+	scheduleAnalysisNotice(ctx, req, createdID)
 	return nil
+}
+
+// scheduleAnalysisNotice asks the local daemon to schedule the created
+// ticket's pre-submit analysis (AC1) and prints what came of it: the
+// task id, the queued state, or the explicit 「未安排分析」 notice when
+// the daemon cannot be reached or refused. Warn-only: the request, the
+// created work item, the exit code and stdout stay untouched. In --json
+// mode the notice is one machine-readable JSON line on stderr.
+func scheduleAnalysisNotice(ctx *Context, req aihubclient.CreateWorkItemRequest, wiID string) {
+	if wiID == "" || req.BundleName == nil || *req.BundleName == "" {
+		return
+	}
+	if !laneOfCreate(ctx, req.Project, *req.BundleName).RequiresAcceptance() {
+		return
+	}
+	content := ""
+	if req.Content != nil {
+		content = *req.Content
+	}
+	if workflow.HasAnalysis(content) {
+		return
+	}
+	state, taskID, detail := "failed", "", ""
+	raw, err := ctx.daemon().do("POST", "/analysis/enqueue", "",
+		map[string]any{"work_item_id": wiID, "project": req.Project}, nil)
+	if err != nil {
+		detail = err.Error()
+	} else {
+		var res struct {
+			State  string `json:"state"`
+			TaskID string `json:"task_id"`
+			Detail string `json:"detail"`
+		}
+		if jerr := json.Unmarshal(raw, &res); jerr != nil {
+			state, detail = "failed", "the daemon's answer is unreadable: "+jerr.Error()
+		} else {
+			state, taskID, detail = res.State, res.TaskID, res.Detail
+		}
+	}
+	switch state {
+	case "scheduled":
+		fmt.Fprintf(ctx.Stderr, "file create: 分析已安排：%s（daemon 的分析任务；完成后确认，见 `pf file analysis confirm`）\n", taskID)
+	case "queued":
+		fmt.Fprintf(ctx.Stderr, "file create: 分析已排队（任务槽满或执行暂停中），daemon 会在有空位时自动派出\n")
+	case "not_needed":
+		return
+	default:
+		if detail == "" {
+			detail = "the daemon refused"
+		}
+		fmt.Fprintf(ctx.Stderr, "file create: 未安排分析：%s\n", detail)
+	}
+	if ctx.JSON {
+		note := struct {
+			Analysis struct {
+				State  string `json:"state"`
+				TaskID string `json:"task_id,omitempty"`
+				Detail string `json:"detail,omitempty"`
+			} `json:"analysis"`
+		}{}
+		note.Analysis.State, note.Analysis.TaskID, note.Analysis.Detail = state, taskID, detail
+		if b, jerr := json.Marshal(note); jerr == nil {
+			fmt.Fprintln(ctx.Stderr, string(b))
+		}
+	}
+}
+
+// laneOfCreate answers the bundle's lane as file create reads it —
+// the one read the acceptance-carrier advisory and the analysis
+// scheduling decision share (a silent skip on every unreadable shape,
+// exactly the advisory's conventions). nil = not readable.
+func laneOfCreate(ctx *Context, project, bundle string) *workflow.Lane {
+	dir, ok, _ := workspaceCandidateScope(ctx)
+	if !ok {
+		return nil
+	}
+	plan, _, err := ctx.routedCellMapping()
+	if err != nil {
+		return nil
+	}
+	ws, _ := plan.WorkspaceFor(project)
+	fms, _, err := workspace.Bundles(workflow.ForWorkspace(dir, ws), bundle)
+	if err != nil || fms[bundle] == nil {
+		return nil
+	}
+	return fms[bundle]
 }
 
 // warnAcceptanceCarrier puts the chosen bundle's step table in front of
@@ -299,21 +440,12 @@ func warnAcceptanceCarrier(ctx *Context, req aihubclient.CreateWorkItemRequest) 
 		return
 	}
 	bundle := *req.BundleName
-	dir, ok, _ := workspaceCandidateScope(ctx)
-	if !ok {
+	fm := laneOfCreate(ctx, req.Project, bundle)
+	if fm == nil || len(fm.Steps) == 0 || !fm.RequiresAcceptance() {
 		return
 	}
-	plan, _, err := ctx.routedCellMapping()
-	if err != nil {
-		return
-	}
-	ws, _ := plan.WorkspaceFor(req.Project)
-	fms, _, err := workspace.Bundles(workflow.ForWorkspace(dir, ws), bundle)
-	if err != nil || fms[bundle] == nil || len(fms[bundle].Steps) == 0 || !fms[bundle].RequiresAcceptance() {
-		return
-	}
-	ids := make([]string, 0, len(fms[bundle].Steps))
-	for _, st := range fms[bundle].Steps {
+	ids := make([]string, 0, len(fm.Steps))
+	for _, st := range fm.Steps {
 		ids = append(ids, st.ID)
 	}
 	fmt.Fprintf(ctx.Stderr, "file create: bundle steps: %s = %s; every acceptance criterion must name the step that carries it, written as <criterion> — carried by <step id>\n", bundle, strings.Join(ids, " -> "))

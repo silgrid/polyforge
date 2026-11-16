@@ -884,7 +884,14 @@ test("the page is layered — a Host region of Host-only keys, each Cell's file 
   assert.ok(region.length > 0, "the Host region component exists");
   assert.match(region, /fetch\(HOST_REGION_READ_URL\)/, "the region reads the Host scope, never the cwd's Cell");
   assert.match(region, /body: JSON\.stringify\(hostRegionWriteBody\(action, key, value, read\?\.file\?\.sha256 \?\? null\)\)/, "writes go through the scoped writer with the file CAS");
-  assert.match(region, /HOST_ONLY_KEYS\.map\(\(key\) => \(/);
+  // polyforge#51: the scalar Host-only keys stay one-line rows; the two
+  // pattern lists are one-regex-per-line textareas; the slow bounds are
+  // scalar rows.
+  assert.match(region, /HOST_SCALAR_KEYS\.map\(\(key\) => \(/, "the scalar Host keys keep the one-line row");
+  assert.match(region, /HOST_LIST_KEYS\.map\(\(key\) => \(/, "the pattern lists render their own editor");
+  assert.match(region, /data-pf-pattern-list=\{key\}/, "the list editor is addressable");
+  assert.match(region, /split\("\\n"\)/, "the list is edited one pattern per line");
+  assert.match(source, /polyforge\.settings\.hostPatternsHint/, "the list editor carries its hint");
   assert.doesNotMatch(source, /ScopedSettingsRegion|CELL_REGION_KEYS|regionEditableKeys/, "no Cell region is left");
   // a Cell's api_key: write-only in its file card — a password input, its set state, never its value
   const cell = source.slice(source.indexOf("function CellSettings("), source.indexOf("function HostSettingsRegion("));
@@ -997,4 +1004,14 @@ test(" config card: a skippable step row shows a skip switch that writes", async
   assert.match(control, /title=\{t\("polyforge\.settings\.workflowSkipHint"\)\}/, "the hint says when a change applies");
   const css = await readFile(new URL("../app/settings.css", import.meta.url), "utf8");
   assert.match(css, /\n\.polyforge-workflow-skip \{/, "the switch is styled");
+});
+
+test("polyforge#51: the Host region lists the unclassified fallback errors under the pattern editors", () => {
+  const region = source.slice(source.indexOf("function HostSettingsRegion("), source.indexOf("function AddCellPane("));
+  assert.ok(region.length > 0, "the Host region component exists");
+  assert.match(region, /\/api\/polyforge\/unclassified/, "the region reads its own route");
+  assert.match(region, /data-pf-unclassified/, "the list is addressable");
+  assert.match(region, /polyforge\.settings\.unclassifiedTitle/, "the section is titled");
+  assert.match(region, /polyforge\.settings\.unclassifiedEmpty/, "the empty state says so");
+  assert.match(region, /\.text\}.*\.count\}|\.count.*\.text/, "a row shows the text and its count");
 });

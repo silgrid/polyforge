@@ -344,8 +344,8 @@ func (m *Monitor) onTick() {
 // stopped, so the wall span in between was never watched and must not be
 // charged to the dispatch as inactivity. Every instant stamped at or
 // before the pause is moved forward, which leaves the observed age intact
-// and lets a real hang re-arm in observed time; the cumulative model/tool
-// split is corrected by the tracker. One event per gap names its length.
+// and lets a real hang re-arm in observed time; the recorded model-call
+// latencies are corrected by the tracker. One event per gap names its length.
 func (m *Monitor) observeGap() {
 	now := m.now()
 	last := m.lastTick
@@ -610,6 +610,11 @@ func (m *Monitor) judge() {
 			// T = max(the live global, the step's own floor) every tick.
 			global := supervise.Defaults{StepTimeout: live.StepTimeout}.Fill().StepTimeout
 			snap.Thresholds.StepTimeout = max(global, snap.Thresholds.StepTimeoutFloor)
+			// polyforge#51: the slow-model bounds are global (no per-step
+			// floor), so the live values replace the announced ones whole.
+			slow := supervise.Defaults{SlowModelMedianLatency: live.SlowModelMedianLatency, SlowModelP90Latency: live.SlowModelP90Latency}.Fill()
+			snap.Thresholds.SlowModelMedianLatency = slow.SlowModelMedianLatency
+			snap.Thresholds.SlowModelP90Latency = slow.SlowModelP90Latency
 		}
 		v := supervise.Judge(snap, now, m.cfg.ModelErrorGrace)
 		if v == nil {

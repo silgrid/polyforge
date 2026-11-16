@@ -216,18 +216,15 @@ func (h *Host) build(profile string, c cli.Config) (Config, error) {
 		// Resolve the default Cell at read time so a live reload is visible
 		// to the next named Cell dispatch without rebuilding this closure.
 		cfg.AgentLanguageFallback = func() string {
-			h.mu.Lock()
-			def := h.cells[cellcfg.DefaultProfile]
-			var live *liveconfig.State
-			if def != nil && def.d != nil {
-				live = def.d.live
-			}
-			h.mu.Unlock()
+			live := h.defaultLive()
 			if live == nil {
 				return ""
 			}
 			return live.AgentLanguage()
 		}
+		// polyforge#51: the Host-only classification rules and slow-model
+		// bounds, read from the default Cell at each judgement.
+		cfg.HostLive = h.defaultLive
 	}
 	// The all-Cells target facts (polyforge#76): every Cell's daemon injects
 	// the whole registry's target rows beside its own Cell facts, read live
@@ -246,6 +243,18 @@ func (h *Host) build(profile string, c cli.Config) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// defaultLive answers the default Cell's live state (nil while it has no
+// daemon): the pointer is taken under the registry lock, its values are
+// read by the caller after the lock is released.
+func (h *Host) defaultLive() *liveconfig.State {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if def := h.cells[cellcfg.DefaultProfile]; def != nil && def.d != nil {
+		return def.d.live
+	}
+	return nil
 }
 
 // Run starts every Cell, serves the one socket, and returns when the Host
@@ -544,6 +553,9 @@ func (h *Host) cellPath(profile string) string {
 func (h *Host) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /profiles", h.profilesRoute)
+	// polyforge#51: the Host-wide list of fallback-classified error
+	// texts (user-only; a step or task process tree is refused).
+	mux.HandleFunc("GET /ops/unclassified", h.unclassifiedRoute)
 	mux.HandleFunc("GET /status", h.statusRoute)
 	mux.HandleFunc("POST /ops/config", h.opsConfigRoute)
 	mux.HandleFunc("POST /shutdown", h.shutdownRoute)
@@ -643,8 +655,11 @@ func (h *Host) agentOwner(r *http.Request) (profile, who string, ok bool) {
 func (h *Host) machineIDs() []string {
 	var out []string
 	for _, e := range h.sortedCells() {
-		if e.d != nil {
-			out = append(out, e.d.cfg.MachineID)
+		h.mu.Lock() // a Cell is invalidated under the registry lock
+		d := e.d
+		h.mu.Unlock()
+		if d != nil {
+			out = append(out, d.cfg.MachineID)
 		}
 	}
 	return out

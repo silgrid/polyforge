@@ -123,6 +123,11 @@ type Config struct {
 	// judgement, so a daemon reload of step_timeout/stall_window takes
 	// effect without a restart. nil keeps Limits.
 	LimitsFunc func() supervise.Defaults
+	// TextRulesFunc, when set, answers the CURRENT Host-configured
+	// additional classification rules (polyforge#51), so a reload of
+	// transient_error_patterns / model_error_patterns reaches the next
+	// classification without a restart. nil = no additional rules.
+	TextRulesFunc func() TextRules
 	// MaxStepFailures is the per-step failure counter bound (default 3).
 	MaxStepFailures int
 	// Now overrides the clock (tests).
@@ -537,8 +542,10 @@ func (d *Driver) Run(ctx context.Context) error {
 			// prompt I/O, ...): a dispatch that never produced a process is
 			// a failed dispatch like any other — classified, counted,
 			// retried or blocked.
-			cause, code, detail := classifyWaitFailure(fmt.Errorf("driver: step %s spawn %d failed: %w", stepID, n, err))
-			if stop, err := d.failDispatch(ctx, stepID, n, dispatchedAt, d.now(), cause, code, detail, nil); stop {
+			// the driver's own error is judged by the built-in rows alone
+			// (Q7): no additional rule matches it.
+			cause, code, detail, src, etext := classifyWaitFailureWith(fmt.Errorf("driver: step %s spawn %d failed: %w", stepID, n, err), nil)
+			if stop, err := d.failDispatch(ctx, stepID, n, dispatchedAt, d.now(), cause, code, detail, nil, src, etext); stop {
 				return err
 			}
 			continue
@@ -582,7 +589,8 @@ func (d *Driver) Run(ctx context.Context) error {
 			// step_failed write, so a reader that sees step_dead is guaranteed
 			// to see its step_failed too (the acceptance contract) without
 			// delaying the verdict behind the D7 backoff sleep.
-			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, verdictCause(*verdict), -1, verdict.Evidence, verdict); stop {
+			vc, vsrc := verdictCauseWith(*verdict, d.textRules())
+			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, vc, -1, verdict.Evidence, verdict, vsrc, strings.TrimSpace(verdict.TurnError)); stop {
 				return err
 			}
 			continue
@@ -599,8 +607,8 @@ func (d *Driver) Run(ctx context.Context) error {
 				d.announceEnd(stepID, n, supervise.OutcomeExitedWithoutResult, -1, "cancelled")
 				return fmt.Errorf("driver: step %s dispatch %d ended without a result: %w", stepID, n, werr)
 			}
-			cause, code, detail := classifyWaitFailure(werr)
-			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, cause, code, detail, nil); stop {
+			cause, code, detail, src, etext := classifyWaitFailureWith(werr, d.textRules())
+			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, cause, code, detail, nil, src, etext); stop {
 				return err
 			}
 			continue

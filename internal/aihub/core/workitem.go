@@ -16,6 +16,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -734,7 +735,24 @@ func refuseUnbindWhileBlockingTx(tx *sql.Tx, wiID string) error {
 // (the event's actor is who PATCHed, read back through
 // GET /work-items/{id}?include=events; the payload stays empty and
 // historical events are not backfilled).
+//
+// expected_updated_at (optional, not a field): the `updated_at` the
+// writer read — a value that no longer matches the row is refused
+// CORE-409 CONTENT_STALE, the one concurrency check a content write
+// carries (polyforge#72 AC4: the daemon's analysis write re-reads and
+// rewrites only its section, so an owner edit elsewhere never gets
+// overwritten). Without the key the write behaves exactly as before.
 func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, actor string) (*WIView, error) {
+	expected := ""
+	if raw, ok := fields["expected_updated_at"]; ok {
+		delete(fields, "expected_updated_at")
+		if json.Unmarshal(raw, &expected) != nil || strings.TrimSpace(expected) == "" {
+			return nil, Fail(api.ErrCoreBadInput, "", "expected_updated_at must be the `updated_at` the writer read (an RFC3339 timestamp)")
+		}
+		if _, err := time.Parse(time.RFC3339, expected); err != nil {
+			return nil, Fail(api.ErrCoreBadInput, "", "expected_updated_at %q is not an RFC3339 timestamp", expected)
+		}
+	}
 	// Bundle fields (w140): parsed up front (pure — no DB access); the R2
 	// window gate and the CAS write run inside the transaction later on.
 	// Concurrency with Claim needs no extra arbitration: the single-writer
@@ -770,9 +788,9 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 	}
 	defer tx.Rollback()
 
-	var status string
+	var status, updatedAt string
 	var oldParent sql.NullString
-	if err := tx.QueryRow(`SELECT status, parent_id FROM work_items WHERE id=?1`, id).Scan(&status, &oldParent); err != nil {
+	if err := tx.QueryRow(`SELECT status, parent_id, updated_at FROM work_items WHERE id=?1`, id).Scan(&status, &oldParent, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, Fail(api.ErrCoreNotFound, "", "work item %s", id)
 		}
@@ -782,6 +800,10 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 	// holds its bundle-bound parent until it is detached (polyforge#77).
 	if isTerminal(status) && !(detach && len(fields) == 1) {
 		return nil, Fail(api.ErrCoreGone, "TERMINAL_STATE", "work item is in terminal state %s", status)
+	}
+	if expected != "" && !w72SameVersion(expected, updatedAt) {
+		return nil, Fail(api.ErrCoreConflict, "CONTENT_STALE",
+			"work item %s changed since it was read (updated_at is now %s): re-read and write again", id, updatedAt)
 	}
 	if detach && status == api.StatusRunning {
 		return nil, Fail(api.ErrCoreConflict, "CHILD_RUNNING",
@@ -899,6 +921,20 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 		return nil, err
 	}
 	return m.load(id)
+}
+
+// w72SameVersion answers whether the CAS value a writer carried still
+// matches the row's updated_at: both sides parse as RFC3339 timestamps
+// and name the same instant (the wire format is RFC3339Nano but any
+// valid RFC3339 spelling of the same instant is accepted); a value that
+// does not parse falls back to the exact string.
+func w72SameVersion(expected, updatedAt string) bool {
+	te, e1 := time.Parse(time.RFC3339, expected)
+	tu, e2 := time.Parse(time.RFC3339, updatedAt)
+	if e1 == nil && e2 == nil {
+		return te.Equal(tu)
+	}
+	return expected == updatedAt
 }
 
 // validWaitingOn accepts the two LIVE values (the rewind-fix retention:

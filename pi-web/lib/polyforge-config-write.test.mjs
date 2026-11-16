@@ -106,6 +106,53 @@ test("a cli write records the file's real old value, not the previous history va
 
 // summarize.* is a flat cli.toml key — no workspace, the
 // cli.toml CAS, the real old value from `pf config list`.
+// polyforge#51: the Host region's pattern lists and slow thresholds are
+// Host-scoped cli.toml writes; a list reaches pf as one JSON array and a
+// bad shape is refused before any write spawn.
+test("a Host pattern-list write carries the --host pin and reaches pf as one JSON list; bad shapes never spawn", async (t) => {
+  const tree = stubTree({ version: "v2.20.21" });
+  // the Host scope needs the multi-Cell protocol: patch the stub's version
+  // probe to report the capabilities (the scoped-region test's shape)
+  const pf = readFileSync(join(tree.bin, "pf"), "utf8")
+    .replace('if (args.includes("--version"))', 'if (args.includes("--version") && args.includes("--json")) { process.stdout.write(JSON.stringify({ version: "v9", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] }) + "\\n"); process.exit(0); }\nif (args.includes("--version"))');
+  writeFileSync(join(tree.bin, "pf"), pf);
+  withPath(tree, t);
+  const lib = await jiti.import("./polyforge-config-write.ts");
+
+  await lib.writePolyforgeConfig({
+    action: "set",
+    key: "transient_error_patterns",
+    value: ["\\b402\\b", "payment retry"],
+    host: true,
+    expect_state: { file_sha256: tree.sha(tree.cliToml) },
+  });
+  const setCall = calls(tree).find((call) => call.args.includes("set"));
+  assert.ok(setCall, "the write reached pf");
+  // the exact Host write: the scope suffix `--host` follows the key, then
+  // the value as one JSON array, then the CAS expectation
+  assert.deepEqual(setCall.args.slice(setCall.args.indexOf("--json")), [
+    "--json", "config", "set", "transient_error_patterns", "--host",
+    JSON.stringify(["\\b402\\b", "payment retry"]),
+    "--expect-state", JSON.stringify({ file_sha256: tree.sha(tree.cliToml) }),
+  ], "the write is pinned to the Host scope and the value is one JSON array");
+  assert.ok(!setCall.args.includes("--cwd") && !setCall.args.includes("--workspace"), "a Host key carries no path flag");
+
+  reset(tree);
+  for (const bad of [undefined, "boom", ["ok", ""], [7]]) {
+    await assert.rejects(
+      () => lib.writePolyforgeConfig({ action: "set", key: "model_error_patterns", value: bad, host: true }),
+      (error) => error.status === 400,
+      `refused before any spawn: ${JSON.stringify(bad)}`,
+    );
+  }
+  assert.ok(!calls(tree).some((call) => call.args.includes("set")), "no write spawn for a bad shape");
+  await assert.rejects(
+    () => lib.writePolyforgeConfig({ action: "set", key: "slow_model_median_latency", value: "", host: true }),
+    (error) => error.status === 400,
+    "an empty duration string is refused",
+  );
+});
+
 test("a summarize write is a cli.toml write: no --cwd, the cli.toml hash, the list's old value, and a rollback the same way", async (t) => {
   const tree = stubTree({ version: "v2.20.21" });
   withPath(tree, t);

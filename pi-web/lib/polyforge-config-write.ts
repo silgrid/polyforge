@@ -173,6 +173,16 @@ function assertShape(key: string, value: unknown): void {
     if (typeof value !== "string" || value.trim() === "") throw new ConfigWriteError("summarize.language must be a non-empty string");
     return;
   }
+  if (key === "transient_error_patterns" || key === "model_error_patterns") {
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+      throw new ConfigWriteError(`${key} must be a list of non-empty regex strings (one per line)`);
+    }
+    return;
+  }
+  if (key === "slow_model_median_latency" || key === "slow_model_p90_latency") {
+    if (typeof value !== "string" || value.trim() === "") throw new ConfigWriteError(`${key} must be a duration string`);
+    return;
+  }
   if (key === "summarize.interval_sec" || key === "max_concurrent_jobs" || key === "cell_max_concurrent_jobs") {
     const okNumber = typeof value === "number" && Number.isInteger(value);
     const okString = typeof value === "string" && /^-?\d+$/.test(value.trim());
@@ -198,7 +208,7 @@ function assertShape(key: string, value: unknown): void {
 function valueArg(key: string, value: unknown): string {
   // a mapping section is pf's `projects=a,b`
   if (parseWorkspaceWriteKey(key)) return `projects=${(workspaceProjectsValue(value) ?? []).join(",")}`;
-  if (key === "summarize.models" || (parseStepWriteKey(key) && Array.isArray(value))) return JSON.stringify(value);
+  if (key === "summarize.models" || key === "transient_error_patterns" || key === "model_error_patterns" || (parseStepWriteKey(key) && Array.isArray(value))) return JSON.stringify(value);
   return String(value);
 }
 

@@ -178,6 +178,20 @@ func (d *Daemon) routes() *http.ServeMux {
 	mux.HandleFunc("POST /task/cancel/{id}", d.taskCancelRoute)
 	mux.HandleFunc("GET "+taskMemSearchPath, d.taskSearchRoute)
 	mux.HandleFunc("GET "+taskMemPrefix+"{id}", d.taskMemoryRoute)
+	// the analysis scheduler (analysis_queue.go, polyforge#72): a fresh
+	// execution ticket's auto-scheduled pre-submit analysis. Behind
+	// refuseStepOrigin like every POST here — a step or task process
+	// tree is refused DAEMON-403; only a human session's `pf file create`
+	// asks for one.
+	mux.HandleFunc("POST /analysis/enqueue", d.analysisEnqueueRoute)
+	// the narrow write path of a running analysis task (analysis_write.go,
+	// polyforge#72): the ONE write a task agent may make — its own ticket's
+	// `## 分析` section. The task-origin guard above admits a task peer on
+	// exactly this path (taskOriginRefusal's one exception); the route
+	// itself still refuses every caller that is not a running analysis
+	// task of this daemon, so a step tree and a human session alike get
+	// their 403 here.
+	mux.HandleFunc("POST "+taskAnalysisWritePath, d.taskAnalysisWriteRoute)
 	return mux
 }
 
@@ -946,7 +960,14 @@ func (d *Daemon) taskOriginRefusal(r *http.Request) string {
 		return "" // the step guard refuses the unidentifiable peer (fail closed)
 	}
 	if id, isTask := runtime.TaskProcessOrigin(cred.pid, d.cfg.MachineID); isTask {
-		return fmt.Sprintf("%s %s refused: the caller (pid %d) belongs to the task process tree of %s — a task agent reads memories and watch snapshots only and never drives the daemon; only a human session may", r.Method, r.URL.Path, cred.pid, id)
+		// polyforge#72 (AC3): the ONE exception — a task peer may reach the
+		// narrow write path, and only it. The route binds the ticket from
+		// the task's own record (never from the request) and refuses
+		// everything that is not a running analysis task.
+		if r.URL.Path == taskAnalysisWritePath {
+			return ""
+		}
+		return fmt.Sprintf("%s %s refused: the caller (pid %d) belongs to the task process tree of %s — a task agent reads memories and watch snapshots only and never drives the daemon; its one write is POST %s, which binds its own ticket; only a human session may", r.Method, r.URL.Path, cred.pid, id, taskAnalysisWritePath)
 	}
 	return ""
 }
