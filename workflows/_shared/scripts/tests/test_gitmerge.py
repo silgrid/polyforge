@@ -297,6 +297,23 @@ class RevertTest(unittest.TestCase):
         self.assertTrue(gr.reverted(g, work, ma, "HEAD"))
         self.assertFalse(gr.reverted(g, work, ma, main))
 
+    def test_revert_merge_of_a_plain_commit(self) -> None:
+        """A plain landed commit — a human squash or rebase landing
+        (polyforge#36) — reverts without the mainline flag: ``-m 1`` is
+        the merge commit's, asked of the commit itself (its second
+        parent), never of the record that named it."""
+        w = World(self)
+        git(w.seed, "fetch", "-q", "origin")
+        git(w.seed, "checkout", "-q", "-B", "main", "origin/main")
+        write(w.seed, "code.go", "package x\n\nfunc F() int { return 2 }\n")
+        sq = w.commit_push("a squash landing", "main")
+        work, g, c = w.work(), lane(), read_conf(w.seed)
+        main = git(work, "rev-parse", "origin/main")
+        g.checkout(work, main)
+        gr.revert_merge(g, work, c, main, sq)
+        self.assertIn("return 1", read(work, "code.go"))
+        self.assertTrue(gr.reverted(g, work, sq, "HEAD"))
+
     def test_revert_keeps_the_list(self) -> None:
         w = World(self)
         write(w.seed, CONF_REL, "append_only=docs/upgrade.md\npin=docs/upgrade.md h.go\nlist=h.go // sections:begin sections:end\n")

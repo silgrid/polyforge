@@ -897,3 +897,56 @@ func TestIntegrateCloseRerunAfterAFailedRegateClosesGreen(t *testing.T) {
 		t.Fatalf("the rerun's green gate closes the batch green: exit %d %q %v\n%s", exit, res.Summary, cd2.IntegrationBatch, errb)
 	}
 }
+
+// landHuman lands the item's change on origin's main the way a person's
+// squash does (one plain commit, polyforge#36) and records the item in
+// the pool with the #36 record shape — merge_commits entries naming each
+// landed commit with its merge flag; it answers the landed commit.
+func (f *batchFixture) landHuman(id, slug string, files map[string]string) string {
+	t := f.t
+	t.Helper()
+	gitT(t, f.seed, "checkout", "-q", "main")
+	for rel, body := range files {
+		writeFile(t, f.seed, rel, body)
+	}
+	commitAll(t, f.seed, id+" (#1)")
+	sha := gitT(t, f.seed, "rev-parse", "HEAD")
+	gitT(t, f.seed, "push", "-q", "origin", "main")
+	f.items = append(f.items, poolItem{ID: id, Slug: slug, Landed: "2026-11-10T00:00:00Z", Integration: map[string]any{
+		"state":         "landed",
+		"repos":         []any{map[string]any{"repo": "app", "pr": "https://forge.invalid/pr/" + id, "merge_commit": sha}},
+		"merge_commits": map[string]any{"app": []any{map[string]any{"sha": sha, "merge": false}}},
+	}})
+	return sha
+}
+
+// TestW36IntegrateTakesObjectShapedMergeCommits: a landed record whose
+// merge_commits entries are the #36 objects (each landed commit with its
+// merge flag — a person's squash or rebase landing) is collected exactly
+// as the pre-#36 string-shaped one is: the batch item names the landed
+// shas, whatever shape named them (polyforge#36).
+func TestW36IntegrateTakesObjectShapedMergeCommits(t *testing.T) {
+	f := newBatchFixture(t)
+	sq := f.landHuman("wi_sq", "p#1", map[string]string{"pkg/sq.go": "package pkg\n"})
+	mB := f.land("wi_b", "p#2", map[string]string{"pkg/b.go": "package pkg\n"})
+	if _, err := os.Stat(filepath.Join(f.repo(), "pkg", "sq.go")); err != nil {
+		t.Fatal(err)
+	}
+	exit, res, errb := f.collect(f.pool(nil))
+	if exit != 0 || res == nil || res.Verdict != VerdictPass {
+		t.Fatalf("exit %d result %+v\n%s", exit, res, errb)
+	}
+	var d collectDetails
+	detailsOf(t, res, &d)
+	if len(d.Items) != 2 {
+		t.Fatalf("items: %+v (skipped %+v)", d.Items, d.Skipped)
+	}
+	for _, it := range d.Items {
+		if len(it.MergeCommits["app"]) != 1 {
+			t.Fatalf("%s: the batch item names its landed sha: %+v", it.ID, it.MergeCommits)
+		}
+	}
+	if d.Items[0].ID != "wi_sq" || d.Items[0].MergeCommits["app"][0] != sq || d.Items[1].ID != "wi_b" || d.Items[1].MergeCommits["app"][0] != mB {
+		t.Fatalf("items: %+v", d.Items)
+	}
+}

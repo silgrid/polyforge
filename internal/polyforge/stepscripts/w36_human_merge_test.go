@@ -273,3 +273,77 @@ func TestW36HumanMergeNeedsTheModeFile(t *testing.T) {
 	}
 	fmt.Println("the human mode's routes are its own; the default mode's are unchanged")
 }
+
+// w36PlainLands lands plain commits on origin's main of repo (a person's
+// squash or rebase landing: no merge commit) and answers their shas,
+// oldest first.
+func w36PlainLands(t *testing.T, w *gitWorld, repo string, commits []map[string]string) []string {
+	t.Helper()
+	seed := w.seeds[repo]
+	gitT(t, seed, "fetch", "-q", "origin")
+	gitT(t, seed, "checkout", "-q", "-B", "main", "origin/main")
+	var out []string
+	for i, files := range commits {
+		for rel, body := range files {
+			writeFile(t, seed, rel, body)
+		}
+		out = append(out, commitAll(t, seed, fmt.Sprintf("plain landing %d", i)))
+	}
+	gitT(t, seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+	return out
+}
+
+// w36BatchWithObjects writes the collect result at path with items whose
+// merge_commits are the #36 record's object entries (each sha with its
+// merge flag) beside one legacy string-shaped item.
+func w36BatchWithObjects(t *testing.T, w *gitWorld, path string, pins map[string]string, squash, rebase []string, legacy string) {
+	t.Helper()
+	squashEntries, rebaseEntries, legacyEntries := []any{}, []any{}, []any{}
+	for _, sha := range squash {
+		squashEntries = append(squashEntries, map[string]any{"sha": sha, "merge": false})
+	}
+	for _, sha := range rebase {
+		rebaseEntries = append(rebaseEntries, map[string]any{"sha": sha, "merge": false})
+	}
+	legacyEntries = append(legacyEntries, legacy)
+	raw, _ := json.MarshalIndent(map[string]any{
+		"schema": Schema, "command": "integrate.py", "verdict": "pass", "exit_code": 0,
+		"heads": pins,
+		"details": map[string]any{
+			"batch": "wi_batch", "gated": []string{"app"},
+			"items": []any{
+				map[string]any{"id": "wi_sq", "slug": "p#1", "merge_commits": map[string]any{"app": squashEntries}},
+				map[string]any{"id": "wi_rb", "slug": "p#2", "merge_commits": map[string]any{"app": rebaseEntries}},
+				map[string]any{"id": "wi_m", "slug": "p#3", "merge_commits": map[string]any{"app": legacyEntries}},
+			},
+		},
+	}, "", "  ")
+	writeFile(t, filepath.Dir(path), filepath.Base(path), string(raw))
+}
+
+// TestW36RevertRollsBackSquashAndRebaseLandings: the record's object
+// entries (a squash landing's one plain commit, a rebase landing's two —
+// each named with its merge flag, polyforge#36) and a legacy string entry
+// all revert: revert.py asks the mainline flag of the commit itself, so
+// the plain commits revert without -m 1 and the merge commit as before.
+func TestW36RevertRollsBackSquashAndRebaseLandings(t *testing.T) {
+	w := newGitWorld(t, "app")
+	squash := w36PlainLands(t, w, "app", []map[string]string{{"squash.txt": "s\n"}})
+	rebase := w36PlainLands(t, w, "app", []map[string]string{{"rebase1.txt": "r1\n"}, {"rebase2.txt": "r2\n"}})
+	legacy := w.land("app", "wi/legacy", map[string]string{"legacy.txt": "l\n"}, "legacy-section")
+	batch := filepath.Join(w.capsule, "artifacts", "integrate", "batch.json")
+	w36BatchWithObjects(t, w, batch, map[string]string{"app": w.originMain("app")}, squash, rebase, legacy)
+	out := filepath.Join(w.capsule, "artifacts", "integrate", "revert.json")
+	exit, res, _, errb := runRevert(w, out, "--item", "p#1", "--item", "p#2", "--item", "p#3")
+	if exit != 0 || res.Verdict != VerdictPass {
+		t.Fatalf("exit %d, %+v\n%s", exit, res, errb)
+	}
+	// the squash and the rebase landings are gone, the merge landing's
+	// change with them, the upgrade log untouched
+	gitT(t, w.dir("app"), "checkout", "-q", "--detach", w.originMain("app"))
+	for _, rel := range []string{"squash.txt", "rebase1.txt", "rebase2.txt", "legacy.txt"} {
+		if _, err := os.Stat(filepath.Join(w.dir("app"), rel)); !os.IsNotExist(err) {
+			t.Fatalf("%s is reverted", rel)
+		}
+	}
+}
