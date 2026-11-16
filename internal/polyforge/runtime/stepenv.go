@@ -25,6 +25,18 @@ import (
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
+// CellTarget is one serving Cell's target facts (polyforge#76): its
+// profile, its AIHub base URL as configured and the deploy configuration
+// file that Cell's deploys read. One row of the all-Cells list a step's
+// deploy procedure derives its deploy targets from and checks each target
+// against - every serving Cell of this machine, never only the work
+// item's own.
+type CellTarget struct {
+	Profile   string
+	Server    string
+	DeployEnv string
+}
+
 // StepEnv is the daemon-owned step environment.
 type StepEnv struct {
 	// CommandPath is the live [daemon] command_path ("" = unset: a step
@@ -50,9 +62,19 @@ type StepEnv struct {
 	CellServer string
 	// DeployEnv is the deploy configuration file this Cell's deploys read
 	// (spawn.EnvDeployEnv): an absolute path in the Host configuration
-	// directory — deploy.env for the default Cell, deploy-<profile>.env for
+	// directory - deploy.env for the default Cell, deploy-<profile>.env for
 	// a named one (cellcfg.DeployEnvFileName, the Cell file naming).
 	DeployEnv string
+	// CellTargets is every serving Cell's target facts
+	// (spawn.EnvCellTargets; polyforge#76), the default Cell first then the
+	// named ones by profile: a deploy procedure derives its deploy targets
+	// from this list - every Cell of this machine that has a deploy
+	// configuration file is one - and checks each target against its own
+	// row. The daemon's source is the Host registry, read live at every
+	// derivation (a Cell added, removed or turned invalid moves the next
+	// step derivation with it); a bare Config names no source and answers
+	// none.
+	CellTargets []CellTarget
 }
 
 // Vars answers the harness-neutral entries of the step env: PF_PYTHON (an
