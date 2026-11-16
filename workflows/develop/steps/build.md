@@ -65,16 +65,30 @@ later callback recomputes (a width a ResizeObserver sets after a resize) is read
 changing. The test is red on an assertion when run targeted (a test needing a symbol that does not
 exist yet gets the signature with a zero-value body in an ordinary commit first, so the red is never
 a compile error); (2) commit the test files alone (T_i, `test_commit`) and run the unit's targeted
-command on that clean commit: red; (3) implement until it is green, then run the fast checks:
+command on that clean commit: red. The targeted command runs only that unit's test, filtered
+by the test runner's own name filter (`go test -run`, `pytest -k`, or the suite's own scenario
+whitelist); a suite that offers no filter is named in the hand-off, and the whole suite runs
+once, in the scoped command, and nowhere else. (3) implement until it is green, then run the
+fast checks:
 {{fast_checks}}
 {{fast_checks_build}}
-(4) commit the implementation (C_i, `impl_commit`), run the same command from the same directory
-on that clean commit: green; (5) record the unit in `artifacts/build/units.json` as your skill
+(4) commit the implementation (C_i, `impl_commit`) — the tree is the one the green run of (3)
+saw, and a bare commit changes no tree, so the command is not run again on it; (5) record the
+unit in `artifacts/build/units.json` as your skill
 says — the run exactly as it ran red and green, and its marker. A unit is not recorded until
 the written check has passed it: `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py"
 --check-units artifacts/build/units.json --unit <id> --json --out artifacts/build/units-check.json`
 right after adding it (verification's own rules: a red names the unit, its marker and the
 closest output line — fix the record and re-check).
+
+Three rules hold over the whole session, the close included, each command alike. A command's
+result already in hand on one tree (the same tree hash) is not re-run: a bare commit changes no
+tree, and a differently spelled command proves nothing new on it. The test-first red run is the
+build's own red evidence — beside it no manual worktree replay is made, the facts engine's
+replay is the record. A flaky failure re-runs only the suite that failed, once. A long command
+writes its output to a log file and records its exit code (`> log 2>&1; echo exit=$?`), and the
+log is searched after the run; a long command is never piped straight into grep, head or tail —
+the pipe eats the failure detail and the exit code.
 
 A defect ticket's first unit is the reproduction test, red on the reported failure before any fix;
 cannot reproduce it → 3a's case (a). A reproduction test that already exists and is red before

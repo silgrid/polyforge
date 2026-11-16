@@ -59,14 +59,23 @@ record exactly what ran.
    list only you wrote. A reply that calls the work off: hand off `cancel` citing it.
 3. **Each unit red, then green, then recorded.** Commit the unit's test files alone
    (`test_commit`) and run its targeted command on that clean commit yourself: it fails on
-   an assertion. Implement, commit (`impl_commit`), run the same command from the same
-   directory: exit 0. Never amend (`git commit --amend`) or otherwise rewrite a commit you
-   have made — no rebase, no reset past it: the daemon backs every commit up to aihub and
-   cannot back up a rewritten history over it; a fix is a new commit. To check an earlier
-   commit's red again, check it out in a separate directory (`git worktree add <dir> <sha>`,
-   then `git worktree remove <dir>`), never by switching your working directory to that
-   commit. Then add the unit to `artifacts/build/units.json` — a JSON array, one
-   object per unit in commit order, cumulative across rounds:
+   an assertion. The targeted command runs only that unit's test, filtered by the test
+   runner's own name filter (`go test -run`, `pytest -k`, or the suite's own scenario
+   whitelist); a suite that offers no filter is named in the hand-off, and the whole suite
+   runs once, in the scoped command, and nowhere else. Implement until it is green, then
+   commit the implementation (`impl_commit`): the tree is the one the green run saw (a bare
+   commit changes no tree), so the command is not run again on it. Never amend (`git
+   commit --amend`) or otherwise rewrite a commit you have made — no rebase, no reset past
+   it: the daemon backs every commit up to aihub and cannot back up a rewritten history
+   over it; a fix is a new commit. The red run just made is the build's own red evidence —
+   beside it no manual worktree replay is made (the facts engine's replay is the record),
+   and a command's result already in hand on one tree (the same tree hash) is not re-run: a
+   differently spelled command proves nothing new on it. A flaky failure re-runs only the
+   suite that failed, once. A long command writes its output to a log file and records its
+   exit code (`> log 2>&1; echo exit=$?`), and the log is searched after the run; a long
+   command is never piped straight into grep, head or tail — the pipe eats the failure
+   detail and the exit code. Then add the unit to `artifacts/build/units.json` — a JSON
+   array, one object per unit in commit order, cumulative across rounds:
 
    ```json
    [{"id": "u1", "test_commit": "<full sha>", "impl_commit": "<full sha>",
@@ -86,9 +95,9 @@ record exactly what ran.
    integration fix ticket: the test came with the batch, only the fix is this change —
    is not rewritten: it declares `"pre_existing_red": true` and reports no
    `test_commit`; its `impl_commit`, `run` and `marker` are the ordinary ones. Run its
-   targeted command yourself on the tree of the change's base (`git worktree add <dir>
-   <the merge-base with origin/HEAD>`, then remove the worktree): red there, green at
-   the head. The facts engine replays its run on the tree of that base and takes its
+   targeted command yourself at the head: green — its red evidence is the facts engine's
+   replay on the tree of the change's base, and no manual worktree replay is made. The
+   facts engine replays its run on the tree of that base and takes its
    red evidence from there; a run that is green there means the test was not already
    red — fix the record or the fix.
    A unit is not recorded until the written check has passed it: right after adding it to
