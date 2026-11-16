@@ -25,7 +25,10 @@ func TestW74TasksTakeNoJobSlots(t *testing.T) {
 		t.Fatal("default must wait its round-robin turn")
 	}
 	if e := s.take(alpha); e == nil || e.WorkItemID != "wi_a1" {
-		t.Fatalf("alpha's turn must start (the Host ceiling fills): %+v", e)
+		t.Fatalf("alpha's turn must start: %+v", e)
+	}
+	if e := s.take(def); e == nil || e.WorkItemID != "wi_d1" {
+		t.Fatalf("default's turn must start (the Host ceiling fills): %+v", e)
 	}
 	def.cfg.HostSlots = s
 	if err := def.admitTask(); err != nil {
