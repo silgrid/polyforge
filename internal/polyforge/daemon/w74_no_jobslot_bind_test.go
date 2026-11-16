@@ -21,11 +21,11 @@ func TestW74TasksTakeNoJobSlots(t *testing.T) {
 
 	// jobs fill the Host ceiling of 2 — a task spawn passes it anyway
 	s := &hostSlots{max: 2, tasks: &task.Slots{}, cells: cells}
-	if e := s.take(def); e == nil {
-		t.Fatal("default's first job must start")
+	if e := s.take(def); e != nil {
+		t.Fatal("default must wait its round-robin turn")
 	}
-	if e := s.take(alpha); e == nil {
-		t.Fatal("alpha's turn must start (the Host ceiling fills)")
+	if e := s.take(alpha); e == nil || e.WorkItemID != "wi_a1" {
+		t.Fatalf("alpha's turn must start (the Host ceiling fills): %+v", e)
 	}
 	d := &Daemon{cfg: Config{Profile: "default", HostSlots: s}}
 	if err := d.admitTask(); err != nil {
@@ -40,7 +40,7 @@ func TestW74TasksTakeNoJobSlots(t *testing.T) {
 			t.Fatalf("admit %d: %v", i, err)
 		}
 	}
-	if e := s2.take(def); e == nil {
+	if e := s2.take(alpha); e == nil {
 		t.Fatal("a job must start while every task slot is taken")
 	}
 
