@@ -180,6 +180,31 @@
 #   11  deploy failed AND the rollback failed: production state is uncertain;
 #       loud manual instructions are printed.  deployed=UNKNOWN previous=<old> attempted=<version>
 #
+# Several deploy targets (polyforge#76, --component aihub only): a step
+# process carries PF_CELL_TARGETS, one "<profile>\t<server>\t<deploy
+# configuration file>" line per serving Cell of this machine. Every Cell
+# whose deploy configuration file exists is one deploy target; with fewer
+# than two the run is the single-target one above, unchanged. With two or
+# more, before any network work (a real deploy, --dry-run and --preflight
+# alike): the work item's Cell (PF_CELL) must be a target, and every
+# target's configuration must point at its own Cell's server - else
+# REFUSED naming both values (exit 1). Then each target runs as one clean
+# subprocess of this script (PF_DEPLOY_ONE=1, its own Cell's facts only),
+# the work item's Cell first and the rest by name; the first failure stops
+# the walk (later targets: not_attempted; a target that succeeded is never
+# rolled back). Per target one line
+#     target: <profile> status=<status> exit=<code> server=<server>
+# (status deployed | already_deployed | ok | rolled_back |
+# rollback_failed | not_changed | not_attempted), and the LAST line is
+#     targets: <profile>=<status> ...
+# The exit code is the failed target's own, 0 when none failed. A target
+# already running the version is already_deployed and skipped (exit 0;
+# the single-target run still refuses it without --force).
+# Two targets with the same BACKUP_ROOT are REFUSED before any network
+# work. Every run (one target or several) REFUSES a target whose running
+# version carries a pre-release suffix with no tag in this repo - a
+# foreign version line, handled by hand (exit 1, not_changed).
+#
 # Deploy lock: `flock -n` on the server (DEPLOY_LOCK_FILE, required) taken
 # through a long-lived background ssh session that runs
 # `flock -n <file> sh -c 'echo LOCKED; exec cat'`. The lock lives exactly as
@@ -245,6 +270,9 @@ PREFLIGHT=""
 FORCE=""
 CONFIRM=""
 CONFIRM_SET=""
+# the original command line, kept for the per-target subprocesses (the
+# parse loop below shifts the arguments away)
+_mt_argv="$*"
 while [ $# -gt 0 ]; do
   a="$1"; shift
   case "$a" in
@@ -299,6 +327,169 @@ if [ -z "$DRY" ] && [ -z "$CONFIRM_SET" ] && [ -z "$PREFLIGHT" ]; then
   exit 1
 fi
 
+# tc_mismatch ("" = the target matches): the deploy target a step
+# process must reach is its work item's Cell's server - PF_CELL_SERVER
+# (polyforge#75). The target compared is the MERGED AIHUB_HOST (the
+# environment wins over the file, above) with its user part dropped, any
+# ssh alias resolved LOCALLY - ssh -G reads the configuration, never the
+# network. The answer is the full refusal text naming both sides.
+_tc_mismatch() {
+  if _tc_differs "$AIHUB_HOST" "$PF_CELL_SERVER"; then
+    printf "the deploy target %s (AIHUB_HOST %s) is not this work item's Cell server %s (PF_CELL_SERVER %s)" \
+      "$_tc_resolved" "$AIHUB_HOST" "$_tc_cell" "$PF_CELL_SERVER"
+  fi
+}
+# _tc_differs <AIHUB_HOST> <server URL>: succeeds when the host does NOT
+# name that server, leaving both compared sides in _tc_resolved and
+# _tc_cell (the one comparison polyforge#75's check and polyforge#76's
+# per-target check share; each words its own refusal).
+_tc_differs() {
+  _tc_host="${1#*@}"
+  _tc_resolved="$(ssh -G "$_tc_host" 2>/dev/null | sed -n 's/^hostname //p' | head -n 1)"
+  [ -n "$_tc_resolved" ] || _tc_resolved="$_tc_host"
+  _tc_cell="$(printf '%s' "$2" | sed -n 's#^[a-zA-Z][a-zA-Z0-9+.-]*://\([^:/@]*\).*#\1#p' | tr '[:upper:]' '[:lower:]')"
+  [ "$(printf '%s' "$_tc_resolved" | tr '[:upper:]' '[:lower:]')" != "$_tc_cell" ]
+}
+
+# ------------------------------------------------------------- the targets
+# (polyforge#76) One release work item deploys every target of this
+# machine at once. The daemon states every serving Cell's facts as
+# PF_CELL_TARGETS lines - "<profile>\t<server>\t<deploy configuration
+# file>" - and every Cell whose deploy configuration file EXISTS is one
+# deploy target (a Cell with no deploy configuration, a client only, is
+# not). With fewer than two targets this whole block is a no-op and the
+# run below is exactly polyforge#75's single-target path, unchanged (a
+# work item whose own Cell has no deploy configuration still refuses
+# there, before any work). A multi-target run never sources a
+# configuration into itself: each target is ONE CLEAN SUBPROCESS of this
+# script (PF_DEPLOY_ONE=1 marks it) that carries only its own Cell's
+# facts (PF_CELL, PF_CELL_SERVER, PF_DEPLOY_ENV) and reads only its own
+# Cell's configuration - one target's values can never reach another's.
+if [ "$COMPONENT" = aihub ] && [ -n "${PF_CELL_TARGETS:-}" ] && [ -z "${PF_DEPLOY_ONE:-}" ]; then
+  _mt_rows=""
+  while IFS='	' read -r _mt_p _mt_s _mt_e; do
+    [ -n "$_mt_p" ] || continue
+    [ -f "$_mt_e" ] || continue
+    _mt_rows="$_mt_rows$_mt_p $_mt_s $_mt_e
+"
+  done <<EOF
+$PF_CELL_TARGETS
+EOF
+  _mt_n="$(printf '%s' "$_mt_rows" | grep -c . || true)"
+  if [ "$_mt_n" -ge 2 ]; then
+    printf 'deploy: targets (%s): %s\n' "$_mt_n" "$(printf '%s' "$_mt_rows" | awk '{printf "%s ", $1}')"
+    # (polyforge#76, AC2) The multi-target checks run BEFORE any network
+    # work - a real deploy, --dry-run and --preflight alike - and every
+    # refusal names both sides. _mt_host answers a target's MERGED
+    # AIHUB_HOST (the environment wins over the file, the rule the run
+    # below applies), read in a subshell so nothing leaks into this
+    # process; the comparison is polyforge#75's own (_tc_mismatch, ssh -G
+    # resolving an alias locally - never a network call).
+    _mt_host() { _mt_var "$1" AIHUB_HOST; }
+    # _mt_var <file> <NAME>: NAME's merged value for that target
+    _mt_var() {
+      ( _mt_snap="$(export -p)"
+        [ -f "$1" ] && { set -a; . "$1"; set +a; eval "$_mt_snap"; }
+        eval "printf '%s' \"\${$2:-}\"" )
+    }
+    # the work item's own Cell must be one of the targets: a release work
+    # item never deploys targets its Cell does not own
+    _mt_mine=""
+    while read -r _mt_p _mt_s _mt_e; do
+      [ -n "$_mt_p" ] || continue
+      [ "$_mt_p" = "${PF_CELL:-}" ] && _mt_mine=1
+    done <<MTROWS
+$_mt_rows
+MTROWS
+    if [ -z "$_mt_mine" ]; then
+      echo "deploy: REFUSED - the work item's Cell ${PF_CELL:-<none stated>} is not among this machine's deploy targets ($(printf '%s' "$_mt_rows" | awk '{printf "%s ", $1}')); a release work item never deploys targets its Cell does not own. Nothing was touched." >&2
+      exit 1
+    fi
+    # every target's deploy configuration must point at ITS OWN Cell's
+    # server - the #60 shape (one Cell's file naming another Cell's host)
+    # is refused here, before the first child runs
+    while read -r _mt_p _mt_s _mt_e; do
+      [ -n "$_mt_p" ] || continue
+      _mt_h="$(_mt_host "$_mt_e")"
+      if [ -z "$_mt_h" ]; then
+        echo "deploy: REFUSED - target $_mt_p: its deploy configuration $_mt_e sets no AIHUB_HOST (nor does the environment), so it does not point at its own Cell $_mt_p's server $_mt_s (PF_CELL_TARGETS row $_mt_p). Nothing was touched." >&2
+        exit 1
+      fi
+      if _tc_differs "$_mt_h" "$_mt_s"; then
+        echo "deploy: REFUSED - target $_mt_p: its deploy configuration $_mt_e points at $_tc_resolved (AIHUB_HOST $_mt_h), not at its own Cell $_mt_p's server $_tc_cell (PF_CELL_TARGETS row $_mt_p: $_mt_s). Nothing was touched." >&2
+        exit 1
+      fi
+    done <<MTROWS
+$_mt_rows
+MTROWS
+    # (polyforge#76, AC4) every target backs up into its own BACKUP_ROOT
+    # (the merged value, the run's default included): two targets sharing
+    # one would mix - and prune - each other's backups
+    _mt_roots=""
+    while read -r _mt_p _mt_s _mt_e; do
+      [ -n "$_mt_p" ] || continue
+      _mt_b="$(_mt_var "$_mt_e" BACKUP_ROOT)"
+      _mt_roots="$_mt_roots${_mt_b:-/data/polyforge-backups} $_mt_p
+"
+    done <<MTROWS
+$_mt_rows
+MTROWS
+    _mt_dup="$(printf '%s' "$_mt_roots" | awk 'NF { n[$1]++; t[$1] = t[$1] " " $2 } END { for (r in n) if (n[r] > 1) print r ":" t[r] }' | head -n 1)"
+    if [ -n "$_mt_dup" ]; then
+      echo "deploy: REFUSED - the targets${_mt_dup#*:} share one BACKUP_ROOT (${_mt_dup%%:*}); every target needs its own backup directory. Nothing was touched." >&2
+      exit 1
+    fi
+    # (polyforge#76, AC3) One target after another: the work item's own
+    # Cell first, the rest by name. Each target is one clean subprocess
+    # (stdin closed, its output passed through as it runs); the first
+    # target that fails stops the walk - every later one is
+    # not_attempted, and a target that already succeeded is never rolled
+    # back. Each target's result is one "target:" line, the run's last
+    # line sums every target up, and the exit code is the failed
+    # target's own (0 when none failed). A target's status follows from
+    # its exit code and its machine-readable last line: 0 + deployed= is
+    # deployed, 0 + already_deployed= is already_deployed (it ran the
+    # version already: skipped, not a failure), any other 0 is ok (a
+    # --dry-run or --preflight), 10 rolled_back, 11 rollback_failed,
+    # anything else not_changed (refused or failed before its swap).
+    _mt_order="$(printf '%s' "$_mt_rows" | awk -v me="${PF_CELL:-}" '$1 == me')
+$(printf '%s' "$_mt_rows" | awk -v me="${PF_CELL:-}" 'NF && $1 != me' | sort -k1,1)"
+    _mt_tmp="$(mktemp -d "${TMPDIR:-/tmp}/pf-deploy-targets.XXXXXX")"
+    trap 'rm -rf "$_mt_tmp"' EXIT
+    _mt_rc=0
+    _mt_sum=""
+    while read -r _mt_p _mt_s _mt_e; do
+      [ -n "$_mt_p" ] || continue
+      if [ "$_mt_rc" -ne 0 ]; then
+        _mt_st=not_attempted
+        echo "target: $_mt_p status=$_mt_st server=$_mt_s"
+        _mt_sum="$_mt_sum $_mt_p=$_mt_st"
+        continue
+      fi
+      echo "deploy: ---- target $_mt_p ($_mt_s, $_mt_e) ----"
+      { env PF_DEPLOY_ONE=1 PF_CELL="$_mt_p" PF_CELL_SERVER="$_mt_s" PF_DEPLOY_ENV="$_mt_e" sh "$0" $_mt_argv </dev/null \
+          && echo 0 >"$_mt_tmp/rc" || echo "$?" >"$_mt_tmp/rc"; } | tee "$_mt_tmp/out"
+      _mt_one="$(cat "$_mt_tmp/rc")"
+      _mt_last="$(tail -n 1 "$_mt_tmp/out")"
+      case "$_mt_one:$_mt_last" in
+        0:deployed=*) _mt_st=deployed ;;
+        0:already_deployed=*) _mt_st=already_deployed ;;
+        0:*) _mt_st=ok ;;
+        10:*) _mt_st=rolled_back ;;
+        11:*) _mt_st=rollback_failed ;;
+        *) _mt_st=not_changed ;;
+      esac
+      [ "$_mt_one" -eq 0 ] || _mt_rc="$_mt_one"
+      echo "target: $_mt_p status=$_mt_st exit=$_mt_one server=$_mt_s"
+      _mt_sum="$_mt_sum $_mt_p=$_mt_st"
+    done <<EOF
+$_mt_order
+EOF
+    echo "targets:$_mt_sum"
+    exit "$_mt_rc"
+  fi
+fi
+
 # The deployment's topology is operator-owned, never in this repo: the five
 # required variables come from the environment or from DEPLOY_ENV (shell
 # assignments, read when the file exists); a variable the environment already
@@ -324,22 +515,6 @@ if [ -n "${HOME:-}" ] && [ -f "$DEPLOY_ENV" ]; then
 fi
 GH_REPO="${GH_REPO:-silgrid/polyforge}"
 
-# tc_mismatch ("" = the target matches): the deploy target a step
-# process must reach is its work item's Cell's server - PF_CELL_SERVER
-# (polyforge#75). The target compared is the MERGED AIHUB_HOST (the
-# environment wins over the file, above) with its user part dropped, any
-# ssh alias resolved LOCALLY - ssh -G reads the configuration, never the
-# network. The answer is the full refusal text naming both sides.
-_tc_mismatch() {
-  _tc_host="${AIHUB_HOST#*@}"
-  _tc_resolved="$(ssh -G "$_tc_host" 2>/dev/null | sed -n 's/^hostname //p' | head -n 1)"
-  [ -n "$_tc_resolved" ] || _tc_resolved="$_tc_host"
-  _tc_cell="$(printf '%s' "$PF_CELL_SERVER" | sed -n 's#^[a-zA-Z][a-zA-Z0-9+.-]*://\([^:/@]*\).*#\1#p' | tr '[:upper:]' '[:lower:]')"
-  if [ "$(printf '%s' "$_tc_resolved" | tr '[:upper:]' '[:lower:]')" != "$_tc_cell" ]; then
-    printf "the deploy target %s (AIHUB_HOST %s) is not this work item's Cell server %s (PF_CELL_SERVER %s)" \
-      "$_tc_resolved" "$AIHUB_HOST" "$_tc_cell" "$PF_CELL_SERVER"
-  fi
-}
 # target_check: the Cell's target gate - refuse naming both sides before any
 # network work, or say the check was skipped (a run without the Cell facts:
 # a human running the script by hand, whose behavior is unchanged).
@@ -1460,8 +1635,24 @@ OLDVER="$GOT"; OLD_LAYOUT="$GOT_LAYOUT"
 [ -n "$OLDVER" ] || die "could not read the running version: neither docker exec $AIHUB_CONTAINER /pf aihub -version nor /aihub -version (a pre-consolidation image) printed a release tag; probe output: $PROBE_RAW"
 if [ "$OLD_LAYOUT" = pf ]; then OLD_VCMD="/pf aihub -version"; else OLD_VCMD="/aihub -version"; fi
 note "container: running, version $OLDVER ($OLD_VCMD) -> $TAG"
+# (polyforge#76, AC4) a running version with a pre-release suffix this
+# repo has no tag for is a foreign version line (another fork's build):
+# its schema and its rollback path are unknown here - never deployed over
+# automatically, single target or one of several
+case "$OLDVER" in
+  v[0-9]*.[0-9]*.[0-9]*-*)
+    git -C "$SCRIPT_DIR" rev-parse -q --verify "refs/tags/$OLDVER^{commit}" >/dev/null \
+      || die "REFUSED: $AIHUB_HOST runs $OLDVER, a foreign version line (a pre-release suffix with no tag $OLDVER in this repo) - its schema and rollback are unknown here; handle this target by hand (nothing was changed)" ;;
+esac
 cmp="$(vcmp "$TAG" "$OLDVER")"
 if [ "$TAG" = "$OLDVER" ] || [ "$cmp" = "0" ]; then
+  # (polyforge#76) a target of a multi-target run that already runs the
+  # version is skipped, not failed: nothing was changed, the run goes on
+  if [ -n "${PF_DEPLOY_ONE:-}" ] && [ -z "$FORCE" ]; then
+    note "$OLDVER is already running on $AIHUB_HOST - this target is skipped (nothing was changed)"
+    echo "already_deployed=$TAG"
+    exit 0
+  fi
   [ -n "$FORCE" ] || die "$OLDVER is already running (use --force to redeploy it)"
   note "WARNING: redeploying the running version (--force)"
 elif [ "$cmp" = "-1" ]; then
