@@ -93,6 +93,21 @@ class SessionTest(unittest.TestCase):
                 s.close()
             self.assertEqual(fb.removes, ["cid-1", "cid-2"], "the session removes its container")
 
+    def test_no_engine_anywhere_is_a_triage_error(self) -> None:
+        # neither the tree nor the lane carries an engine: the session is
+        # refused before any container is spent, naming both homes
+        import unittest.mock
+        with tempfile.TemporaryDirectory() as td:
+            root = os.path.realpath(td)
+            d = gate_clone(root, "stack=none\nfull_command=echo one\n", engine=False)
+            fb = FakeRuntime(os.path.join(root, "box-tmp"))
+            g = new_gate(fb)
+            with unittest.mock.patch.object(gate, "LANE_ENGINE", os.path.join(root, "no-such-engine")):
+                with self.assertRaises(gate.TriageError) as got:
+                    gate.Session.open(g, d, "app", os.path.join(root, "triage"))
+            self.assertIn("neither the tree nor the lane", str(got.exception))
+            self.assertEqual(fb.starts, [], "no container was started for a tree no engine can judge")
+
     def test_a_command_whose_output_locates_nothing_is_one_unit_rerun_whole(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = os.path.realpath(td)
