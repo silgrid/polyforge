@@ -67,6 +67,15 @@ func TestW36DocsTeachTheThreeMergeRoutes(t *testing.T) {
 		"micro",
 		"skip",
 	)
+	// AC8: the config reference names the three routes' integrate reach
+	// and the GitHub methods the person's merge may use (r1#3)
+	need("docs/reference/config.md (by section, the routes' reach)", bySec,
+		"landed", "integration", "published",
+		"Create a merge commit", "Rebase and merge", "Squash and merge",
+	)
+	need("docs/concepts.md", w254Read(t, "docs/concepts.md"),
+		"enters the batch like the lane's own merges do",
+	)
 
 	// the concepts page: the person's merge among the lane's ends
 	need("docs/concepts.md", w254Read(t, "docs/concepts.md"),
