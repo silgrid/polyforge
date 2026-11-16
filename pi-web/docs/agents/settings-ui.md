@@ -49,7 +49,9 @@ are described in
 
 **Order and disclosure.** Each pane keeps the confirmed order
 of its part of the page (split it into two homes). The Host
-pane, top to bottom: the machine-status card, the Host region, the
+pane, top to bottom: the machine-status card, the Host region (the
+Host-only keys' rows, the two failure-classification pattern editors and
+the unclassified-fallback list of the last 7 days, polyforge#51), the
 package-switch card, the Jobs card stream card, then the read-outs — recent
 panel writes, the install/upgrade command. Every Cell's pane (
 the default Cell's and each named Cell's alike, one `CellSettings`): the

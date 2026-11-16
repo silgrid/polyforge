@@ -984,6 +984,11 @@ live in the config's [daemon] table, which the daemon reads itself from
   max_concurrent_jobs = 6       # --max-concurrent-jobs (pf ops max N
                                 #   overrides it; a reload that changes
                                 #   it wins last)
+  transient_error_patterns = ['\\btemporarily\\ down\\b']  # additional
+                                #   failure-classification regexes (RE2);
+                                #   slow_model_median_latency /
+                                #   slow_model_p90_latency bound the
+                                #   slow-model judgement
 
 Every pf command, ensure and the daemon validate the table on load (a bad
 value names the file, line and key). Change a key with pf config set;
