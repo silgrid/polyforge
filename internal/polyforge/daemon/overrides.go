@@ -10,11 +10,14 @@ package daemon
 // skippable declaration, the overlay aspects, the effective model chain
 // and its source); the write applies one change through the runtime's
 // per-work-item actor (stepoverrides.go), one action per request:
-// models (set the chain), clear_models, skip (true/false). The write
-// validates here — the step's declaration and status in the scene the
-// posture resolves to, the candidate shape, the step-agent models.json
-// membership of every pi model — and the actor turn re-checks the step
-// status (the one thing that can move before its turn).
+// models (set the chain), clear_models, skip (true/false), param (set
+// one step param) or clear_param (polyforge#78). The write validates
+// here — the step's declaration and status in the scene the posture
+// resolves to, the candidate shape, the step-agent models.json
+// membership of every pi model, a param's declaration in the capsule's
+// lane snapshot and its value (workflow.ParamValueProblem) — and the
+// actor turn re-checks the step status (the one thing that can move
+// before its turn).
 //
 // Reach: the write sits behind refuseStepOrigin like every POST (a step
 // or task process tree is refused DAEMON-403); the view is a read any
@@ -30,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
@@ -201,7 +205,7 @@ func (d *Daemon) overrideView(wi string, item *api.WorkItem) (*protocol.Override
 			fillRow(&row, e)
 		}
 		a := applied[spec.ID]
-		row.Pending = a.Models || a.Skip
+		row.Pending = a.Models || a.Skip || a.Params
 		switch {
 		case row.Models != nil && a.Models:
 			row.Effective, row.Source = row.Models, overrideSourcePend
@@ -232,6 +236,14 @@ func fillRow(row *protocol.OverrideStepView, e *capsule.StepOverride) {
 	if e.Skip != nil {
 		row.Skip, row.SkipBy, row.SkipAt = e.Skip, e.SkipBy, e.SkipAt
 	}
+	// the param overrides only (a cleared param overrides nothing), by
+	// name — never the final value, which the lower layers compose
+	for name, p := range e.Params {
+		if p != nil && !p.Cleared {
+			row.Params = append(row.Params, protocol.OverrideParamView{Name: name, Value: p.Value, By: p.By, At: p.At})
+		}
+	}
+	sort.Slice(row.Params, func(i, j int) bool { return row.Params[i].Name < row.Params[j].Name })
 }
 
 // laneSnapshotOf parses the scene's lane (workflow.yaml) for the source
@@ -284,8 +296,14 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	if req.Skip != nil {
 		actions++
 	}
+	if req.Param != nil {
+		actions++
+	}
+	if req.ClearParam != "" {
+		actions++
+	}
 	if actions != 1 {
-		writeErr(w, api.ErrDaemonBadInput, "exactly one action per request: models (set), clear_models, or skip (true/false)")
+		writeErr(w, api.ErrDaemonBadInput, "exactly one action per request: models (set), clear_models, skip (true/false), param (set) or clear_param")
 		return
 	}
 	operator := req.Operator
@@ -306,6 +324,23 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	if spec == nil {
 		writeErr(w, api.ErrDaemonBadInput, fmt.Sprintf("the lane declares no step %q", req.Step))
 		return
+	}
+	// a param is one the capsule's lane snapshot declares on the step,
+	// its value one line within the bound every layer shares
+	if name := req.ClearParam; req.Param != nil || name != "" {
+		if req.Param != nil {
+			name = req.Param.Name
+		}
+		if _, ok := spec.Params[name]; !ok {
+			writeErr(w, api.ErrDaemonBadInput, fmt.Sprintf("the capsule's lane snapshot declares no step param %q on step %s: a param is set only where the lane declares it", name, req.Step))
+			return
+		}
+		if req.Param != nil {
+			if why := workflow.ParamValueProblem(req.Param.Value); why != "" {
+				writeErr(w, api.ErrDaemonBadInput, fmt.Sprintf("param %s: %s", name, why))
+				return
+			}
+		}
 	}
 	status := scene.statusOf(req.Step)
 	// the write's step-status rule, by posture: a live dispatch is
@@ -381,6 +416,7 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	ch := runtime.OverrideChange{
 		Step: req.Step, Operator: operator, Models: models, ClearModels: req.ClearModels, Skip: req.Skip,
+		Param: req.Param, ClearParam: req.ClearParam,
 	}
 	if !scene.live {
 		ch.SealedDir = scene.capsuleDir // a clear reaches the chain the sealed scene carries

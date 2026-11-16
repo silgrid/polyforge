@@ -2,13 +2,15 @@ package capsule
 
 // overrides.go: the work item's step-overlay record
 // (capsule.StepOverridesJSON) — the capsule-scoped layer that overrides,
-// per step of this one work item, the model chain and the skip switch of
-// a step the lane declares skippable (polyforge#25). It is written only
+// per step of this one work item, the model chain, the skip switch of
+// a step the lane declares skippable (polyforge#25) and the values of the
+// params the lane declares on it (polyforge#78). It is written only
 // through the daemon (never by a step agent), travels with the capsule
 // chain and outranks every other candidate source at dispatch time; the
 // driver and the daemon read it, the lane snapshot stays untouched.
-// One entry per step, one aspect record per aspect (models, skip), each
-// carrying the operator and the time of its last change.
+// One entry per step, one aspect record per aspect (models, skip, and
+// each param by name), each carrying the operator and the time of its
+// last change.
 
 import (
 	"encoding/json"
@@ -114,7 +116,7 @@ func WriteStepOverrides(capsuleDir string, ov StepOverrides) error {
 		ov.Steps = map[string]*StepOverride{}
 	}
 	for id, e := range ov.Steps {
-		if e == nil || (len(e.Models) == 0 && e.ModelsBy == "" && e.ModelsAt == "" && e.Skip == nil && e.SkipBy == "" && e.SkipAt == "") {
+		if e == nil || (len(e.Models) == 0 && e.ModelsBy == "" && e.ModelsAt == "" && e.Skip == nil && e.SkipBy == "" && e.SkipAt == "" && len(e.Params) == 0) {
 			delete(ov.Steps, id)
 		}
 	}
