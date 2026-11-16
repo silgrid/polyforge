@@ -161,3 +161,9 @@ func AnalysisItemCount(content string) int {
 	}
 	return best
 }
+
+// ConfirmAnalysisSection answers content with every unconfirmed
+// auto-analysis marker line removed from its analysis section (changed =
+// one was there) — the one edit `pf file analysis confirm` makes. Stub
+// (build u10, red first).
+func ConfirmAnalysisSection(content string) (string, bool) { return content, false }
