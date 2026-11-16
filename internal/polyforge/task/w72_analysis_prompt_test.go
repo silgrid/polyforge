@@ -46,9 +46,11 @@ func TestW72PromptRebuiltPerCandidate(t *testing.T) {
 		return fmt.Sprintf("# 分析任务（第 %d 次重读）\n已写进 ## 分析 的部分：草稿 v%d", reads, reads)
 	}
 	m := NewManager(Config{
-		Store:     NewStore(t.TempDir()),
-		Runner:    r,
-		Resolve:   func(string) ([]string, string, error) { return []string{"pi:a/one", "pi:b/two"}, "steps.p.task.models", nil },
+		Store:  NewStore(t.TempDir()),
+		Runner: r,
+		Resolve: func(string) ([]string, string, error) {
+			return []string{"pi:a/one", "pi:b/two"}, "steps.p.task.models", nil
+		},
 		WorkDir:   func(string) (string, error) { return t.TempDir(), nil },
 		PromptFor: promptFor,
 	})

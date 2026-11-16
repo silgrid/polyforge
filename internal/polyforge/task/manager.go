@@ -314,7 +314,17 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 		}
 		return supervise.Defaults{}
 	}
-	prompt := dispatchedPrompt(t.Prompt, dir)
+	// The prompt of ONE candidate: the spec's own text behind the
+	// prohibited-actions section, or — for an analysis task (AC10) — the
+	// hook's answer, consulted before EVERY dispatch so a candidate that
+	// takes over continues from the section its predecessor already wrote
+	// (the daemon re-reads the ticket there).
+	promptOf := func() string {
+		if m.cfg.PromptFor != nil {
+			return m.cfg.PromptFor(t)
+		}
+		return dispatchedPrompt(t.Prompt, dir)
+	}
 	for _, cand := range t.Candidates {
 		if ctx.Err() != nil {
 			break
@@ -324,7 +334,7 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 		e.t.Candidate = cand
 		m.mu.Unlock()
 		res, err := m.cfg.Runner.Run(ctx, RunSpec{
-			Candidate: c, Prompt: prompt, MaxTokens: t.MaxTokens - tokens, WorkDir: dir, TaskID: t.ID,
+			Candidate: c, Prompt: promptOf(), MaxTokens: t.MaxTokens - tokens, WorkDir: dir, TaskID: t.ID,
 			ReadOnlyTools: t.ReadOnlyTools, Limits: limits(),
 		}, func(n int64) {
 			m.mu.Lock()
