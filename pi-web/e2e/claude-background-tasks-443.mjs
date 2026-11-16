@@ -186,18 +186,28 @@ try {
     assert.ok(commandBox.x + commandBox.width <= sideBox.x + 0.5, `the command area overlaps the right column: ${JSON.stringify({ commandBox, sideBox })}`);
     const panelRightEdge = panelBox.x + panelBox.width - 8; // the header's 8px right padding
     assert.ok(Math.abs(sideBox.x + sideBox.width - panelRightEdge) <= 2, `the right column is not at the panel's right edge: ${JSON.stringify({ sideBox, panelBox })}`);
-    // A narrow panel, still the desktop layout (the mobile breakpoint is 640px).
+    // A narrow viewport takes the panel below the 640px mobile breakpoint, so
+    // isMobile must flip (matchMedia → React) and the panel's container loses its
+    // 24px minimap inset. That flip settles asynchronously: poll until the mobile
+    // layout has taken effect — the panel's right edge at the viewport's right edge
+    // minus the container's 12px horizontal padding (the desktop layout keeps the
+    // minimap inset on top of it) — and read all three rectangles in the same
+    // evaluate, never between two reads of a layout still settling (r1#2).
     await page.setViewportSize({ width: 560, height: 900 });
-    const narrowPanel = await waitFor(async () => {
-      const box = await panel.boundingBox();
-      return box && box.width < 600 ? box : undefined;
-    }, 10_000, "the narrow viewport never reached the panel");
-    const narrowSide = await side.boundingBox();
-    const narrowCommand = await commandArea.boundingBox();
-    assert.ok(narrowSide, "a narrow panel lost the right column");
-    assert.ok(narrowCommand, "a narrow panel lost the command area");
-    assert.ok(narrowSide.x >= narrowPanel.x && narrowSide.x + narrowSide.width <= narrowPanel.x + narrowPanel.width, `a narrow panel squeezed the right column out: ${JSON.stringify({ narrowPanel, narrowSide })}`);
-    assert.ok(narrowCommand.x + narrowCommand.width <= narrowSide.x + 0.5, `a narrow panel overlaps the command area and the right column: ${JSON.stringify({ narrowCommand, narrowSide })}`);
+    const narrow = await waitFor(async () => {
+      const boxes = await panel.evaluate((node) => {
+        const rect = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, right: r.right, width: r.width }; };
+        const sideEl = node.querySelector("[data-claude-task-side]");
+        const commandEl = node.querySelector("[data-claude-task-command]");
+        if (!sideEl || !commandEl) return undefined;
+        return { panel: rect(node), side: rect(sideEl), command: rect(commandEl), viewportRight: window.innerWidth };
+      });
+      if (!boxes) return undefined;
+      if (Math.abs(boxes.panel.right - (boxes.viewportRight - 12)) > 2) return undefined;
+      return boxes;
+    }, 10_000, "the narrow viewport's mobile layout never reached the panel");
+    assert.ok(narrow.side.x >= narrow.panel.x && narrow.side.x + narrow.side.width <= narrow.panel.x + narrow.panel.width, `a narrow panel squeezed the right column out: ${JSON.stringify(narrow)}`);
+    assert.ok(narrow.command.x + narrow.command.width <= narrow.side.x + 0.5, `a narrow panel overlaps the command area and the right column: ${JSON.stringify(narrow)}`);
     await page.setViewportSize({ width: 1280, height: 900 });
   });
 
