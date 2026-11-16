@@ -107,6 +107,7 @@ test("follow-up shortcuts preserve newline, IME, mobile and completion behavior"
       COMPOSITION_END_ENTER_GRACE_MS: 100,
       isMobile: false, isStreaming: true, enterSendMode: "enter",
       isComposingRef: { current: false }, lastCompositionEndAtRef: { current: 0 },
+      claudeComposer: false,
       historyMenuOpen: false, inputHistory: ["previous"], historyActiveIndex: 0,
       slashMenuOpen: false, slashQuery: null, displayedSlashCommands: [{}], slashActiveIndex: 0,
       atMenuOpen: false, atQuery: null, atMatches: [{}], atActiveIndex: 0,
@@ -736,6 +737,7 @@ test("while a run streams, a bare /mcp opens Settings or is queued as before", a
     const sendQueued = chatInputCallback("sendQueued", {
       value,
       attachedImages: images,
+      claudeComposer: false,
       onAudioUnlock() {},
       clearInput() { calls.cleared += 1; },
       onBuiltinCommand: async () => ({ handled }),
@@ -769,6 +771,7 @@ test("handleSend lets a handled /mcp through while streaming and sends an unowne
     const handleSend = chatInputCallback("handleSend", {
       value,
       attachedImages: [],
+      claudeComposer: false,
       onAudioUnlock() {},
       isStreaming,
       offersBuiltinSlashCommandWhileStreaming,
