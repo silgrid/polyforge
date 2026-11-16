@@ -1416,6 +1416,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   }, [attachedImages.length, clearInput, onBuiltinCommand]);
 
   const handleSend = useCallback(async () => {
+    // polyforge#71 (AC7): a claude compaction is a turn that takes no message.
+    // The block sits at the send entry, so Enter, a menu submit and every other
+    // caller stop here and the draft is kept (pi's compaction queues instead).
+    if (claudeComposer && isCompacting) return;
     const msg = value.trim();
     if (!msg && !attachedImages.length) return;
     onAudioUnlock?.();
@@ -1424,7 +1428,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (isStreaming) return;
     clearInput();
     onSend(msg, attachedImages.length ? attachedImages : undefined);
-  }, [value, attachedImages, isStreaming, claudeComposer, runBuiltinCommand, onSend, clearInput, onAudioUnlock]);
+  }, [value, attachedImages, isStreaming, isCompacting, claudeComposer, runBuiltinCommand, onSend, clearInput, onAudioUnlock]);
 
   const slashQuery = !compact && value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -1633,6 +1637,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
 
 
   const sendQueued = useCallback((mode: "steer" | "followup") => {
+    // polyforge#71 (AC7): the same block at the queued entry — the Steer button
+    // and a queued submit reach this too, and the draft is kept.
+    if (claudeComposer && isCompacting) return;
     const msg = value.trim();
     if (!msg && !attachedImages.length) return;
     onAudioUnlock?.();
@@ -1665,7 +1672,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       return;
     }
     queue();
-  }, [value, attachedImages, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand, claudeComposer]);
+  }, [value, attachedImages, isCompacting, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand, claudeComposer]);
 
   const getNextSlashIndex = useCallback((direction: "up" | "down" | "left" | "right") => {
     const lastIndex = displayedSlashCommands.length - 1;
