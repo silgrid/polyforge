@@ -440,13 +440,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.1 section (the project deactivation status column; the SQL a v0.2.0 database needs, applied by the deploy's own switch window)
 // - the second v0.2.1 section (the pre-submit analysis check: queued develop and micro tickets need `## 分析` or a dated 免分析 before `pf submit` or the auto-claim takes them; corrects the one above — the projects.status migration has no startup check, requests touching the missing column fail with SQLite errors)
 // - the v0.2.1 section appended with the scope engine's Python rewrite (every host-run engine needs python3, and the light e2e prefix and the replay's not-runnable text become the repository's e2e_start_prefix= and not_runnable_rule= conf keys)
+// - the v0.2.1 section appended with the integrate full gate running every command (the full-gate step's gate and --triage lines pass --keep-going, so one red batch records every failing command; gate.py's default and the develop and micro lanes' verification are unchanged)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "fc7ae539dd3c177a6491bad692ab4a01e38c8dbfc360935836d0880dc0ebf0b7" {
+	if got := hex.EncodeToString(sum[:]); got != "156dcb271125b57a68add09087fd6c48351b5d51735c206af2e939280b6bdcb2" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section

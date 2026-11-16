@@ -164,3 +164,17 @@ unknown and ignores them, and an older facts.py simply skips keys it does
 not read, so a conf may declare them before the release ships; after the
 upgrade the older hardcodes are gone, so a repository that wants the
 behavior declares the key.
+
+## v0.2.1, the integrate full gate runs every command
+
+The integrate lane's full-gate step gates a batch with `--keep-going`:
+the gate runs every command of the full bar, never stopping at the first
+failing one, so one red batch records every failing command — none is
+left `not_run` — and the triage names each command's own failed units at
+once. A red that used to wait a whole round behind the first one (the
+commands after it never ran) now shows in the same batch; the cost is the
+longer red run, the commands after the first red running too. The
+script's default is unchanged — every other caller of `gate.py` (the
+release's, an operator's run) still stops at the first failing command
+unless it passes `--keep-going` itself — and the develop and micro
+lanes' verification, which never stopped at a red, is untouched.
