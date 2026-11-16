@@ -6,7 +6,7 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { ChatInput, ClaudeComposerControls, CLAUDE_EFFORT_ENTRIES, claudeModelOptions, filterComposerImageFiles } = await jiti.import("./ChatInput.tsx");
+const { ChatInput, ClaudeComposerControls, CLAUDE_EFFORT_ENTRIES, builtinSlashCommands, canRunBuiltinSlashCommandWhileStreaming, claudeModelOptions, filterComposerImageFiles, offersBuiltinSlashCommandWhileStreaming } = await jiti.import("./ChatInput.tsx");
 const { clearDraft, setDraft } = await jiti.import("@/lib/draft-store");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 const { enLocale } = await jiti.import("@/lib/i18n/messages/en");
@@ -217,6 +217,42 @@ test("every claude string exists in en, zh-CN and zh-TW; the retired alias, pres
 // turn runs the composer offers pi's own streaming controls — Steer and Stop — and
 // no disabled Send button; Send returns once the turn ends. pi's own streaming
 // composer never had a Send button, so the two harnesses now match.
+// polyforge#71 (AC2): a claude composer's `/` menu lists only the pi built-ins a
+// claude session's server really answers — `/compact` (the guarded compaction,
+// the same handler the compact button takes) and `/session` — and neither the
+// other pi built-ins nor a bare `/mcp` are routed to pi's built-in handler there;
+// pi's own menu and routing are unchanged.
+test("a claude session's slash menu lists only /compact and /session of pi's built-ins; pi keeps all seven", () => {
+  assert.deepEqual(builtinSlashCommands(true).map((command) => command.name), ["compact", "session"]);
+  assert.deepEqual(builtinSlashCommands(false).map((command) => command.name),
+    ["compact", "auto-compact", "reload", "name", "session", "copy", "clone"]);
+  assert.equal(canRunBuiltinSlashCommandWhileStreaming("/session", true), true, "/session runs while a claude turn streams, as on pi");
+  assert.equal(canRunBuiltinSlashCommandWhileStreaming("/compact", true), false, "/compact waits for the turn to end, as on pi");
+  assert.equal(offersBuiltinSlashCommandWhileStreaming("/mcp", true), false, "claude's /mcp is sent to claude as text, never pi's Settings › MCP");
+  assert.equal(canRunBuiltinSlashCommandWhileStreaming("/mcp", true), false);
+  assert.equal(offersBuiltinSlashCommandWhileStreaming("/mcp"), true, "pi's own routing is unchanged");
+  assert.equal(canRunBuiltinSlashCommandWhileStreaming("/copy", true), false, "pi-only built-ins never reach pi's handler in a claude session");
+
+  const draftKey = "claude:/tmp/claude-slash-menu";
+  setDraft(draftKey, { value: "/", images: [] });
+  try {
+    const open = { ...base, choosing: false, harness: "claude" };
+    const claudeHtml = composer(open, { draftKey });
+    for (const name of ["/compact", "/session"]) {
+      assert.ok(claudeHtml.includes(`>${name}<`), `the claude menu must list ${name}`);
+    }
+    for (const name of ["/auto-compact", "/reload", "/name", "/copy", "/clone"]) {
+      assert.ok(!claudeHtml.includes(`>${name}<`), `the claude menu must not list ${name}`);
+    }
+    const piHtml = composer(base, { draftKey });
+    for (const name of ["/compact", "/auto-compact", "/reload", "/name", "/session", "/copy", "/clone"]) {
+      assert.ok(piHtml.includes(`>${name}<`), `the pi menu still lists ${name}`);
+    }
+  } finally {
+    clearDraft(draftKey);
+  }
+});
+
 test("while a claude turn runs the composer offers only Steer and Stop, no Send; Send returns when it ends", () => {
   const open = { ...base, choosing: false, harness: "claude" };
   const html = composer(open, { isStreaming: true, onSteer() {} });

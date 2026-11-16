@@ -40,9 +40,12 @@ test("a claude session gets claude's model, effort and compact handlers and pi's
     // polyforge#71 (AC4): a `/` message sent while a turn runs takes the same
     // entry on both harnesses — ChatWindow no longer branches on the harness here.
     /onPromptWithStreamingBehavior=\{isActivePane && agentRunning \? handlePromptWithStreamingBehavior : undefined\}/,
-    /onBuiltinCommand=\{isClaudeSession \? undefined : handleBuiltinSlashCommand\}/,
+    /onBuiltinCommand=\{handleBuiltinSlashCommand\}/,
     /claude=\{claudeComposer\}/,
   ]) assert.match(chatWindow, pattern);
+  // polyforge#71 (AC2): a claude session's bare /mcp goes to claude as text —
+  // Settings › MCP belongs to pi's built-in MCP extension, never to a claude session.
+  assert.match(hook, /if \(isClaudeSession \|\| args \|\| !onOpenSettings\) return \{ handled: false \};/);
 });
 
 test("a fresh composer passes the harness switch (with its model reset), the claude model and effort; an open claude session switches model and effort, never the harness", () => {
