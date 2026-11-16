@@ -2,9 +2,12 @@
 
 // A claude background task's panel, opened from its button in the running
 // list into the subagent panel's floating slot (one panel open at a time). The header
-// holds the kind badge, the whole command (a monitor's description below it when it
-// differs), the status, the elapsed time, Stop (while running: claude's own stop_task)
-// and Close. The body is the task's recent output as claude reads it (get_task_output,
+// holds the kind badge and the whole command (a monitor's description below it when it
+// differs); its right column is Close on its own top row, then — while the task runs —
+// the stop icon button (claude's own stop_task) and the ticking elapsed time, so the
+// running state shows without any status text (polyforge#69). A task that ended swaps
+// the stop button and the time for its final status and duration, below Close. The
+// body is the task's recent output as claude reads it (get_task_output,
 // its last 8 KiB): read on open, every 2 s while the task runs and the panel is open, and
 // once more after it ends; claude's refusal shows as its text. The panel reads the task
 // it is given on every render, so a task that ends while open keeps its panel, showing
@@ -12,7 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ClaudeTaskKindBadge, CLAUDE_TASK_COLOR, useClaudeSubagentClock } from "./ClaudeSubagentRunningList";
 import { useI18n } from "@/hooks/useI18n";
-import { claudeBackgroundTaskElapsedMs, claudeBackgroundTaskLabel, type ClaudeBackgroundTask, type ClaudeBackgroundTaskStatus } from "@/lib/claude-background-task-view";
+import { claudeBackgroundTaskElapsedMs, claudeBackgroundTaskLabel, type ClaudeBackgroundTask } from "@/lib/claude-background-task-view";
 import { formatTurnDuration } from "@/lib/turn-duration";
 
 /** How often an open panel re-reads a running task's output. */
@@ -30,13 +33,12 @@ export interface ClaudeBackgroundTaskPanelProps {
 
 const HEADER_BUTTON = { flexShrink: 0, padding: "2px 8px", borderRadius: 5, border: "1px solid var(--border)", background: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 12 } as const;
 
-function useStatusLabel(status: ClaudeBackgroundTaskStatus): string {
-  const { t } = useI18n();
-  if (status === "running") return t("claudeSubagent.running");
-  if (status === "completed") return t("claudeSubagent.completed");
-  if (status === "failed") return t("claudeSubagent.failed");
-  return t("claudeSubagent.stopped");
-}
+/** The stop icon button's glyph: the filled square the chat's own Stop uses. */
+const STOP_ICON = (
+  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+    <rect x="1.5" y="1.5" width="7" height="7" rx="1.5" fill="currentColor" />
+  </svg>
+);
 
 type OutputState = { kind: "loading" } | { kind: "output"; output: string; truncated: boolean } | { kind: "error"; message: string };
 
@@ -80,7 +82,12 @@ export function ClaudeBackgroundTaskPanel({ task, onStop, onReadOutput, onClose,
   const output = useTaskOutput(task.taskId, running, onReadOutput);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
-  const status = useStatusLabel(task.status);
+  // A running task shows no status text (the stop button is the state); a settled
+  // one shows its own conclusion below Close.
+  const statusLabel = running ? null
+    : task.status === "completed" ? t("claudeSubagent.completed")
+    : task.status === "failed" ? t("claudeSubagent.failed")
+    : t("claudeSubagent.stopped");
   const label = claudeBackgroundTaskLabel(task);
   const command = task.command || label;
   const description = task.description && task.description !== command ? task.description : null;
@@ -112,27 +119,25 @@ export function ClaudeBackgroundTaskPanel({ task, onStop, onReadOutput, onClose,
             <div data-claude-task-command="" style={{ color: "var(--text)", fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 72, overflowY: "auto" }}>{command}</div>
             {description && <div style={{ color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={description}>{description}</div>}
           </div>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 4, flexShrink: 0 }}>
-            {running && (
-              <button type="button" onClick={() => void stop()} disabled={stopping} style={{ ...HEADER_BUTTON, cursor: stopping ? "default" : "pointer" }}>{t("claudeTask.stop")}</button>
-            )}
+          <div data-claude-task-side="" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
             <button type="button" onClick={onClose} aria-label={t("claudeSubagent.closePanel")} title={t("claudeSubagent.closePanel")} style={{ ...HEADER_BUTTON, padding: "2px 6px", border: "none" }}>
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
                 <line x1="2" y1="2" x2="8" y2="8" />
                 <line x1="8" y1="2" x2="2" y2="8" />
               </svg>
             </button>
+            {running ? (
+              <>
+                <button type="button" onClick={() => void stop()} disabled={stopping} aria-label={t("claudeTask.stop")} title={t("claudeTask.stop")} style={{ ...HEADER_BUTTON, padding: "2px 6px", border: "none", cursor: stopping ? "default" : "pointer" }}>{STOP_ICON}</button>
+                <span data-claude-task-elapsed="" style={{ color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{formatTurnDuration(claudeBackgroundTaskElapsedMs(task, now))}</span>
+              </>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span data-claude-task-status-label="" style={{ color: task.status === "failed" ? "#f87171" : "var(--text-dim)" }}>{statusLabel}</span>
+                <span style={{ color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{formatTurnDuration(claudeBackgroundTaskElapsedMs(task, now))}</span>
+              </div>
+            )}
           </div>
-        </div>
-        <div data-claude-task-meta="" style={{ display: "flex", alignItems: "center", gap: 7, paddingLeft: 0 }}>
-          <span
-            data-claude-task-status-label=""
-            className={running ? "animate-[pulse_1.5s_infinite]" : undefined}
-            style={{ color: running ? CLAUDE_TASK_COLOR : task.status === "failed" ? "#f87171" : "var(--text-dim)" }}
-          >
-            {status}
-          </span>
-          <span style={{ color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{formatTurnDuration(claudeBackgroundTaskElapsedMs(task, now))}</span>
         </div>
       </div>
       {stopError && <div data-claude-task-stop-error="" style={{ flexShrink: 0, padding: "0 10px 6px", color: "#f87171" }}>{t("claudeTask.stopFailed", { error: stopError })}</div>}

@@ -14,7 +14,11 @@ test("the tab reads on gestures only: one list read per opening, one detail read
   assert.match(source, /const clock = setInterval\(\(\) => setNow\(Date\.now\(\)\), 1000\);/, "the clock only reads the time, about once per second");
   assert.doesNotMatch(source, /localStorage|sessionStorage/, "nothing persisted");
   const urls = [...source.matchAll(/fetch\((`[^`]+`|"[^"]+")/g)].map((m) => m[1]);
-  assert.deepEqual(urls, ['"/api/polyforge/tasks"', "`/api/polyforge/tasks/${encodeURIComponent(id)}`"], "only the two GET task routes");
+  // polyforge#73: the detail URL is built per row — its Cell's ?profile= when
+  // it has one — so only the list read stays a literal fetch argument.
+  assert.deepEqual(urls, ['"/api/polyforge/tasks"'], "the one literal list read");
+  assert.match(source, /`\/api\/polyforge\/tasks\/\$\{encodeURIComponent\(id\)\}\?profile=\$\{encodeURIComponent\(cell\)\}`/, "the Cell-pinned detail read (polyforge#73)");
+  assert.match(source, /: `\/api\/polyforge\/tasks\/\$\{encodeURIComponent\(id\)\}`/, "the Cell-less detail read stays");
   assert.doesNotMatch(source, /method:/, "every fetch is a plain GET");
   assert.match(source, /if \(!isPolyforgeTaskId\(id\)\) return;/, "a malformed id is never fetched");
   assert.match(source, /if \(listReadRef\.current\) return;\s*listReadRef\.current = true;\s*readList\(\);/,
@@ -60,8 +64,11 @@ test("the list is a responsive grid of discrete blocks with state dot + text, du
   assert.match(source, /gridTemplateColumns: "repeat\(auto-fill, minmax\(150px, 1fr\)\)", gap: 8/, "the Tasks grid keeps its own 150px column minimum (decoupled from the 180px job cards): two blocks side by side at the 460px dock and the 375px sheet, one at the 340px dock");
   assert.doesNotMatch(source, /minmax\(112px, 1fr\)/, "the old 112px Tasks minimum is gone");
   assert.match(source, /import \{ POLYFORGE_BLOCK_STYLE \} from "@\/lib\/panel-layout";/);
-  const row = source.slice(source.indexOf("const renderRow = (row: PolyforgeTaskRow) => {"), source.indexOf("const grid = ("));
-  assert.match(row, /<button key=\{row\.id\} type="button" data-pf-task=\{row\.id\}[^>]*onClick=\{\(\) => openDetail\(row\.id\)\}/, "the whole block is the (keyboard-reachable) click target");
+  const row = source.slice(source.indexOf("const renderRow = (row: PolyforgeTaskRow & { cell?: string }) => {"), source.indexOf("const grid = ("));
+  assert.match(row, /<button key=\{`\$\{row\.cell \?\? ""\}\/\$\{row\.id\}`\} type="button" data-pf-task=\{row\.id\}[^>]*onClick=\{\(\) => openDetail\(row\.id, row\.cell\)\}/,
+    "the whole block is the (keyboard-reachable) click target, keyed by its Cell and id, opening the detail in its own Cell (polyforge#73)");
+  assert.match(row, /<span data-pf-task-cell=\{row\.cell\}[^>]*>\{row\.cell\}<\/span>/, "each row names its Cell (polyforge#73)");
+  assert.match(row, /\{row\.cell && \(/, "a Cell-less fallback row carries no chip");
   assert.match(row, /\}\}>\{row\.id\}<\/span>/, "the id stays visible as a secondary label");
   assert.match(row, /\.\.\.POLYFORGE_BLOCK_STYLE,/, "the shared block style");
   assert.match(row, /<span aria-hidden="true" style=\{stateDotStyle\(row\.state\)\} \/>/, "the state dot");
@@ -79,7 +86,7 @@ test("the list is a responsive grid of discrete blocks with state dot + text, du
 });
 
 test("the report tail renders as plain text below the summary, clipped to two lines; placeholders are keyed on state", () => {
-  const row = source.slice(source.indexOf("const renderRow = (row: PolyforgeTaskRow) => {"), source.indexOf("const grid = ("));
+  const row = source.slice(source.indexOf("const renderRow = (row: PolyforgeTaskRow & { cell?: string }) => {"), source.indexOf("const grid = ("));
   const summary = row.indexOf("{row.prompt_summary}</span>");
   const tail = row.indexOf('{row.state === "running" ? (');
   assert.ok(summary >= 0 && tail > summary, "the tail line sits directly below the prompt summary");
@@ -100,11 +107,17 @@ test("two sections — running and all — filtered by the client-side search ov
     "the search (and the filters) apply on the client and both sections render the filtered rows");
   assert.match(source, /t\("polyforge\.tasks\.running"\)[\s\S]*grid\(sections\.running\)[\s\S]*t\("polyforge\.tasks\.all"\)[\s\S]*grid\(sections\.all\)/,
     "正在运行 renders above 全部");
+  // polyforge#73: the retired top single-Cell annotation is gone; a failed
+  // Cell shows its error while the rest list.
+  assert.doesNotMatch(source, /data-pf-tab-cell/, "no top single-Cell annotation (polyforge#73)");
+  assert.doesNotMatch(source, /polyforge\.tabCell/, "the component no longer reads the tabCell key");
+  assert.match(source, /data-pf-cell-error=\{entry\.cell\}/, "a failed Cell's error renders on the list");
+  assert.match(enSource, /"polyforge\.tasks\.cellError": "\S/, "en translates the failed-Cell error");
   // owner-intended change: the search box renders through the shared
   // search bar; its state and client-side filter are unchanged.
   assert.match(source, /<PolyforgeSearchBar[\s\S]*value=\{search\}[\s\S]*onChange=\{setSearch\}/,
     "the search box is the shared bar's search input");
-  for (const field of ["row.project", "row.state", "row.prompt_summary", "row.id"]) assert.ok(source.includes(field), `a row shows ${field}`);
+  for (const field of ["row.project", "row.state", "row.prompt_summary", "row.id", "row.cell"]) assert.ok(source.includes(field), `a row shows ${field}`);
 });
 
 test("project and state selects filter the already-read list in component memory, with no read on change", () => {
@@ -160,11 +173,11 @@ test("the read surface has no write action and every string is translated", () =
   }
 });
 
-test("an external task id (the analysis card's link) opens that task's existing detail read once", () => {
-  assert.match(source, /openTaskId = null,\s*onOpenTaskHandled,/);
-  const start = source.indexOf("if (!openTaskId) return;");
+test("an external task (the analysis card's link, the walk's target) opens that task's existing detail read once, pinned to its Cell", () => {
+  assert.match(source, /openTask = null,\s*onOpenTaskHandled,/);
+  const start = source.indexOf("if (!openTask) return;");
   assert.ok(start > 0, "the external open exists");
-  const effect = source.slice(start, source.indexOf("}, [openTaskId]);", start));
-  assert.match(effect, /openDetail\(openTaskId\);\s*onOpenTaskHandled\?\.\(\);/, "the same one detail read a row click makes, then handed back");
-  assert.match(source, /<span data-pf-task=\{selected\}/, "the open detail names its task");
+  const effect = source.slice(start, source.indexOf("}, [openTask]);", start));
+  assert.match(effect, /openDetail\(openTask\.id, openTask\.cell \?\? undefined\);\s*onOpenTaskHandled\?\.\(\);/, "the same one detail read a row click makes, then handed back");
+  assert.match(source, /<span data-pf-task=\{selected\.id\}/, "the open detail names its task");
 });

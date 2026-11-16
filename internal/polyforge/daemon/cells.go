@@ -666,6 +666,11 @@ func (h *Host) statusRoute(w http.ResponseWriter, r *http.Request) {
 	agg.Jobs = []statusJob{}
 	agg.Queue.Pending, agg.Queue.Running = 0, 0
 	agg.Queue.MaxConcurrent = h.slots.Max()
+	// The aggregate's task summary is the sum over every serving Cell
+	// (polyforge#73): the default Cell's own snapshot seeded it, so it starts
+	// from zero (the fixed task.Limit bound stays) and each serving Cell adds
+	// its own counts below. A Cell's own status (a profile header) is its own.
+	agg.Tasks = &task.Summary{Limit: task.Limit}
 	agg.BackgroundModelCalls = &cli.BackgroundCalls{Bound: task.Limit, Running: h.slots.tasks.Running()}
 	for _, e := range h.sortedCells() {
 		row := h.profileRow(e)
@@ -683,6 +688,12 @@ func (h *Host) statusRoute(w http.ResponseWriter, r *http.Request) {
 		agg.Jobs = append(agg.Jobs, jobs...)
 		agg.Queue.Running += running
 		agg.Queue.Pending += d.q.LenPending()
+		s := d.taskSummary()
+		agg.Tasks.Running += s.Running
+		agg.Tasks.Completed += s.Completed
+		agg.Tasks.Capped += s.Capped
+		agg.Tasks.Failed += s.Failed
+		agg.Tasks.Interrupted += s.Interrupted
 	}
 	writeJSON(w, http.StatusOK, agg)
 }

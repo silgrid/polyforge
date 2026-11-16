@@ -2216,6 +2216,7 @@ export const enLocale: LocalePlugin = {
     "polyforge.tasks.filterAllReporters": "All reporters",
     "polyforge.tasks.reporterMachine": "Machine",
     "polyforge.tasks.error": "The task read failed.",
+    "polyforge.tasks.cellError": "Cell {cell} could not be read: {error}",
     "polyforge.tasks.notInstalled": "Polyforge is not installed on this machine.",
     "polyforge.tasks.upgrade": "pf upgrade required",
     "polyforge.tasks.upgradeReason": "Update pf to use the Tasks tab.",
