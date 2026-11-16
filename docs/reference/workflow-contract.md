@@ -733,9 +733,12 @@ the declared step modes into the capsule
 (`runtime-state/step-modes.json`, exactly the skipped-step set's rule:
 the first claim writes it, a re-claim or `pf resume` keeps it, and the
 steps' skills and scripts read it, never the yaml). The claim of a lane
-that cannot honor a declared `by` — a step it does not carry, or one its
-workflow.yaml does not declare `human_mergeable` — is refused naming it,
-so the mode never reaches a lane that does not ask for it. The develop
+that carries a declared `by`'s step without declaring it `human_mergeable`
+is refused naming it, so the mode never reaches a lane that does not ask
+for it; a `by` on a step the lane does not carry governs nothing (a
+skip's rule — the integrate and release lanes carry no `merge` step, and
+a project declaring `steps.<project>.merge.by: human` still opens its
+batches). The develop
 lane declares its `merge` human_mergeable: such a work item's merge step
 asks the owner over the PRs and takes the person's GitHub landing by the
 human landing rules (the three merge methods all count, by the patch-id

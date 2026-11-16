@@ -633,13 +633,15 @@ func SkippedSteps(cfg *Config, lane *workflow.Lane, project string) []string {
 
 // HumanMergeSteps answers the work item's step modes: for each step of
 // lane that the project's yaml declares `steps.<project>.<step>.by`, the
-// mode — only where the lane declares the step `human_mergeable: true` —
-// beside the refusal naming every by the lane cannot honor (a step it
-// does not carry, or one it does not declare human_mergeable; the loader
-// guarantees the mode itself is `human`): the
-// mode is the lane's to accept (micro never does; polyforge#36), never
-// silently ignored, so a claim of a lane that cannot honor it fails
-// with the reason. An absent by set answers (nil, "").
+// mode — only where the lane declares the step `human_mergeable: true`.
+// A by on a step the lane does not carry governs nothing (a skip's rule;
+// the loader guarantees the mode itself is `human`): the integrate and
+// release lanes carry no merge step, and a project declaring
+// `steps.<project>.merge.by: human` still opens its batches on them. A
+// by on a step the lane carries without declaring it human_mergeable is
+// the refusal (micro never accepts the mode; polyforge#36), so a claim
+// of such a lane fails with the reason. An absent by set answers (nil,
+// "").
 func HumanMergeSteps(cfg *Config, lane *workflow.Lane, project string) (map[string]string, string) {
 	if cfg == nil || lane == nil || cfg.By[project] == nil {
 		return nil, ""
@@ -657,12 +659,6 @@ func HumanMergeSteps(cfg *Config, lane *workflow.Lane, project string) (map[stri
 			modes = map[string]string{}
 		}
 		modes[st.ID] = mode
-	}
-	for key := range cfg.By[project] {
-		if _, carried := modes[key]; carried {
-			continue
-		}
-		return nil, fmt.Sprintf("steps.%s.%s.by: the %s lane carries no step `%s`, so it cannot take the human mode — remove the by key or run the work item on a lane that carries it", project, key, lane.Name, key)
 	}
 	return modes, ""
 }

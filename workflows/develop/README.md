@@ -208,9 +208,10 @@ step is refused naming `human_mergeable`, and a step entry declares `by` or `ski
 both). The mode is fixed when the work item is claimed
 (`runtime-state/step-modes.json`), exactly as the skipped-step set is: changing it later
 governs the next work item, never one already claimed, and a re-claim or `pf resume`
-keeps it. A claim of a lane that does not declare the step `human_mergeable` — micro's,
-or any step the yaml names that this lane does not — is refused naming it, so the mode
-never reaches a lane that does not ask for it.
+keeps it. A claim of a lane that carries the step without declaring it `human_mergeable`
+— micro's — is refused naming it, so the mode never reaches a lane that does not ask for
+it; a `by` on a step the lane does not carry governs nothing (a skip's rule), so the
+project's integrate and release batches — lanes with no `merge` step — claim as usual.
 
 For such a work item every step still runs, and `merge` waits for the person:
 

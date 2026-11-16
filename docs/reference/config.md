@@ -869,11 +869,13 @@ the bundle-less keys is a load error, as a `skip` is.
   the workspace's lane set declares `human_mergeable` is refused, naming
   `human_mergeable: true` and that such a step always runs itself;
   nothing is written.
-- **Refused at the claim of a lane that cannot honor it.** The loader
-  has no lane at hand, so a hand-written `by` loads; a claim of a lane
-  that does not declare the step `human_mergeable` — micro's, or a step
-  the lane does not carry — is refused naming it. The mode never reaches
-  a lane that does not ask for it.
+- **Refused at the claim of a lane that carries the step undeclared.**
+  The loader has no lane at hand, so a hand-written `by` loads; a claim
+  of a lane that carries the step without declaring it `human_mergeable`
+  — micro's — is refused naming it. A `by` on a step the lane does not
+  carry governs nothing (a skip's rule): the integrate and release lanes
+  carry no `merge` step, and a project declaring
+  `steps.<project>.merge.by: human` still opens its batches on them.
 - **Per lane, by step id.** With `steps.<project>.merge.by: human`
   develop's merge waits for the person, while micro's `merge`, which
   declares no `human_mergeable`, is refused the claim.
