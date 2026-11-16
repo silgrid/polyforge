@@ -7,7 +7,7 @@
 // owns the guarded path, AC2). What survives is offered beside pi's built-ins and
 // sent to claude verbatim as `/<name> <参数>`. Expected values come from the
 // recordings themselves: the 2.1.322 initialize answer (48 commands) and the 2.1.312
-// init frames' terminal list — 48 − 4 terminal − 16 table − 1 compact = 27.
+// init frames' terminal list — 48 − 4 terminal − 15 table − 1 compact = 28.
 import "#test-env";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -93,7 +93,7 @@ test("claudeSlashCommands subtracts the init frames' terminal names and the excl
   assert.deepEqual(terminal, ["doctor", "color", "focus", "reload-plugins"], "the recorded init frames' own list");
   const offered = shared.claudeSlashCommands(commands, terminal);
   // Derived by hand from the recording's order, minus the terminal four, the
-  // sixteen table entries and compact (pi's built-in owns it, AC2).
+  // fifteen table entries and compact (pi's built-in owns it, AC2).
   assert.deepEqual(offered.map((command) => command.name), [
     "deep-research", "design", "design-sync", "dataviz", "update-config", "verify", "debug", "code-review", "simplify",
     "batch", "fewer-permission-prompts", "loop", "claude-api", "workflow-authoring", "run", "run-skill-generator",
