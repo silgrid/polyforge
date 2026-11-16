@@ -16,6 +16,7 @@ import unittest
 from typing import Callable, Dict, List, Optional
 
 from pfstep.gitmerge import conf as gconf
+from pfstep.gitmerge import humanmerge
 from pfstep.gitmerge import landing, project, resolve
 from pfstep.gitmerge import merge as gm
 from pfstep.gitmerge import revert as gr
@@ -427,6 +428,120 @@ class IdentityAndAttributesTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_GIT, "git not installed")
+class HumanLandingTest(unittest.TestCase):
+    """The human merge's landing rules: a PR a person merged on the forge
+    counts as the verified change landed only when what landed is that
+    change — by the patch-id fingerprint, for each of GitHub's three
+    merge methods, and never when the branch gained a commit or the
+    content changed on the way."""
+
+    def commit_file(self, w: World, rel: str, body: str, msg: str, branch: str) -> str:
+        """One more commit on the branch the seed has checked out."""
+        write(w.seed, rel, body)
+        return w.commit_push(msg, branch)
+
+    def land_human(self, w: World, how: str, branch: str, extra: bool = False,
+                   amend: Optional[Tuple[str, str]] = None) -> str:
+        """The human lands branch on origin's main the GitHub way (merge,
+        rebase or squash); extra adds one commit to the branch first (the
+        PR moved), amend changes the landed content (a squash of something
+        else). Answers the forge's mergeCommit: the merge commit, the
+        last replayed commit, the squash commit."""
+        seed = w.seed
+        git(seed, "fetch", "-q", "origin")
+        if extra:
+            git(seed, "checkout", "-q", branch)
+            write(seed, "extra.txt", "extra\n")
+            git(seed, "add", "-A")
+            git(seed, "commit", "-q", "-m", "extra")
+            git(seed, "push", "-q", "-f", "origin", "HEAD:refs/heads/" + branch)
+        git(seed, "checkout", "-q", "--detach", "origin/main")
+        if how == "merge":
+            git(seed, "merge", "-q", "--no-ff", "-m", "Merge pull request #1 from x/" + branch, "origin/" + branch)
+        elif how == "rebase":
+            fork = git(seed, "merge-base", "origin/main", "origin/" + branch)
+            for c in git(seed, "rev-list", "--reverse", "--no-merges", fork + "..origin/" + branch).split():
+                git(seed, "cherry-pick", c)
+        else:
+            git(seed, "merge", "-q", "--squash", "origin/" + branch)
+            if amend is not None:
+                write(seed, amend[0], amend[1])
+            git(seed, "add", "-A")
+            git(seed, "commit", "-q", "-m", branch + " (#1)")
+        git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+        return git(seed, "rev-parse", "HEAD")
+
+    def judged(self, w: World, head: str, merge: str) -> Tuple[List[humanmerge.Landed], str]:
+        work, g = w.work(), lane()
+        return humanmerge.human_landing(g, work, "main", head, merge)
+
+    def test_human_landing_merge_commit(self) -> None:
+        w = World(self)
+        head = w.branch("feat", "a-section", "package x\n\nfunc F() int { return 2 }\n")
+        merge = self.land_human(w, "merge", "feat")
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(refused, "")
+        self.assertEqual(landed, [humanmerge.Landed(merge, True)])
+
+    def test_human_landing_merge_commit_mismatch(self) -> None:
+        w = World(self)
+        head = w.branch("feat", "a-section")
+        merge = self.land_human(w, "merge", "feat", extra=True)
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(landed, [])
+        self.assertIn("not the verified head", refused)
+
+    def test_human_landing_rebase(self) -> None:
+        w = World(self)
+        w.branch("feat", "a-section")
+        head = self.commit_file(w, "code.go", "package x\n\nfunc G() int { return 3 }\n", "second", "feat")
+        merge = self.land_human(w, "rebase", "feat")
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(refused, "")
+        # the two replayed commits, oldest first, none a merge commit
+        self.assertEqual([l.sha for l in landed],
+                         [git(w.seed, "rev-parse", merge + "^"), merge])
+        self.assertEqual([l.merge for l in landed], [False, False])
+
+    def test_human_landing_rebase_mismatch(self) -> None:
+        w = World(self)
+        w.branch("feat", "a-section")
+        head = self.commit_file(w, "code.go", "package x\n\nfunc G() int { return 3 }\n", "second", "feat")
+        merge = self.land_human(w, "rebase", "feat", extra=True)
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(landed, [])
+        self.assertIn("does not match the verified change", refused)
+
+    def test_human_landing_squash(self) -> None:
+        w = World(self)
+        w.branch("feat", "a-section")
+        head = self.commit_file(w, "code.go", "package x\n\nfunc G() int { return 3 }\n", "second", "feat")
+        merge = self.land_human(w, "squash", "feat")
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(refused, "")
+        self.assertEqual(landed, [humanmerge.Landed(merge, False)])
+
+    def test_human_landing_squash_mismatch(self) -> None:
+        w = World(self)
+        w.branch("feat", "a-section")
+        head = self.commit_file(w, "code.go", "package x\n\nfunc G() int { return 3 }\n", "second", "feat")
+        merge = self.land_human(w, "squash", "feat", amend=("code.go", "package x\n\nfunc G() int { return 4 }\n"))
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(landed, [])
+        self.assertIn("does not match the verified change", refused)
+
+    def test_human_landing_refusals(self) -> None:
+        w = World(self)
+        head = w.branch("feat", "a-section")
+        off = w.branch("other", "b-section")
+        work, g = w.work(), lane()
+        for merge, want in [("", "names no merge commit"),
+                            (off, "is not on main")]:
+            landed, refused = humanmerge.human_landing(g, work, "main", head, merge)
+            self.assertEqual(landed, [])
+            self.assertIn(want, refused)
+
+
 class LandingTest(unittest.TestCase):
     def test_merged_from_checks_the_branch_side(self) -> None:
         w = World(self)
