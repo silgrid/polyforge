@@ -1,4 +1,4 @@
-// carries: .polyforge/verify-scope.conf, test/testdata/verify-scope/verify-scope-go.sh, internal/contract/test/pf66_one_place_contract_test.go
+// carries: .polyforge/verify-scope.conf, test/testdata/verify-scope/verify-scope-go.sh, internal/contracttest/pf66_one_place_contract_test.go
 package test
 
 // pf66_one_place_contract_test.go: the one-place convention's own
@@ -12,7 +12,7 @@ package test
 // to the conf's (the polyforge#62 owner ruling: every verbatim copy
 // syncs — the seed drifted once and cost that lane a stop).
 //
-// Run (targeted): GOWORK=off go test ./internal/contract/test/ -run '^TestPF66OnePlaceContract$' -count=1
+// Run (targeted): GOWORK=off go test ./internal/contracttest/ -run '^TestPF66OnePlaceContract$' -count=1
 
 import (
 	"os"

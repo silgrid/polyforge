@@ -1,6 +1,6 @@
 package test
 
-// carries: workflows/develop/steps/build.md, workflows/_shared/skills/build.md, workflows/_shared/build_subagents.md, workflows/develop/README.md, internal/contract/test/pf62_build_dedup_text_contract_test.go
+// carries: workflows/develop/steps/build.md, workflows/_shared/skills/build.md, workflows/_shared/build_subagents.md, workflows/develop/README.md, internal/contracttest/pf62_build_dedup_text_contract_test.go
 
 // pf62_build_dedup_text_contract_test.go: text contract for the build
 // session's verification-dedup rules (polyforge#62): the targeted

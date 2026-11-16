@@ -1,6 +1,6 @@
 package test
 
-// carries: workflows/_shared/test_quality.md, workflows/_shared/steps/review.md, workflows/develop/steps/build.md, workflows/micro/steps/fix.md, workflows/develop/README.md, workflows/micro/README.md, workflows/develop/fragments/review-judge.md, docs/concepts.md, docs/contributing.md, docs/design/polyforge-vnext/reference.md, internal/contract/test/test_quality_fragment_contract_test.go
+// carries: workflows/_shared/test_quality.md, workflows/_shared/steps/review.md, workflows/develop/steps/build.md, workflows/micro/steps/fix.md, workflows/develop/README.md, workflows/micro/README.md, workflows/develop/fragments/review-judge.md, docs/concepts.md, docs/contributing.md, docs/design/polyforge-vnext/reference.md, internal/contracttest/test_quality_fragment_contract_test.go
 
 // test_quality_fragment_contract_test.go: text contract for the shared
 // test-quality bar (polyforge#28; adapted from spec-superflow's

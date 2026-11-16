@@ -6,7 +6,7 @@ package test
 // their own file so that every file using them compiles wherever the
 // test package does, whichever of those test files a copy of this
 // repository carries — including after the whole-repo contract tests
-// moved to their own package (internal/contract/test), which keeps its
+// moved to their own package (internal/contracttest), which keeps its
 // own copy of the flattened reader below.
 
 import (

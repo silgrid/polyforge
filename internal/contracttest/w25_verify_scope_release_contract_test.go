@@ -9,7 +9,7 @@ package test
 // The verify action runs the engine in the
 // daemon: no lane text names it, so the contract is the shipped engine.
 //
-// Run (targeted): GOWORK=off go test ./internal/contract/test/ -run '^TestW25ReleaseTree' -count=1
+// Run (targeted): GOWORK=off go test ./internal/contracttest/ -run '^TestW25ReleaseTree' -count=1
 
 import (
 	"os"

@@ -10,7 +10,7 @@ package test
 // section is red. (The agent verification step that recorded the readings as
 // named checks was deleted.)
 //
-// Run (targeted): GOWORK=off go test ./internal/contract/test/ -run '^TestW320StepText' -count=1
+// Run (targeted): GOWORK=off go test ./internal/contracttest/ -run '^TestW320StepText' -count=1
 
 import (
 	"os"

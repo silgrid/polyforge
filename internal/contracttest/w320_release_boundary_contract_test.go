@@ -7,7 +7,7 @@ package test
 // unchanged: it still runs npm audit over production dependencies at the high
 // threshold. The old boundary wording ("the test bar never runs it") is red.
 //
-// Run (targeted): GOWORK=off go test ./internal/contract/test/ -run '^TestW320ReleaseBoundary' -count=1
+// Run (targeted): GOWORK=off go test ./internal/contracttest/ -run '^TestW320ReleaseBoundary' -count=1
 
 import (
 	"os"

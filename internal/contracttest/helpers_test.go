@@ -19,15 +19,15 @@ import (
 )
 
 // v1Root is the module root (the tests run with cwd = the contract
-// package, three levels below it).
+// package, two levels below it).
 func v1Root(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("the module root is not three levels above the contract package: %v", err)
+		t.Fatalf("the module root is not two levels above the contract package: %v", err)
 	}
 	return root
 }

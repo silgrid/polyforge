@@ -1,6 +1,6 @@
 package test
 
-// carries: workflows/_shared/skills/build.md, workflows/_shared/skills/review.md, workflows/_shared/steps/review.md, workflows/develop/steps/build.md, workflows/develop/fragments/review-judge.md, workflows/develop/README.md, workflows/_shared/build_subagents.md, internal/contract/test/pf59_pre_existing_red_text_contract_test.go
+// carries: workflows/_shared/skills/build.md, workflows/_shared/skills/review.md, workflows/_shared/steps/review.md, workflows/develop/steps/build.md, workflows/develop/fragments/review-judge.md, workflows/develop/README.md, workflows/_shared/build_subagents.md, internal/contracttest/pf59_pre_existing_red_text_contract_test.go
 
 // pf59_pre_existing_red_text_contract_test.go: text contract for the
 // units.json shape polyforge#59 adds — a unit whose reproduction test

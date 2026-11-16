@@ -1,4 +1,4 @@
-// carries: .polyforge/verify-scope.conf, test/*_contract_test.go, internal/contract/test/*_contract_test.go
+// carries: .polyforge/verify-scope.conf, test/*_contract_test.go, internal/contracttest/*_contract_test.go
 package test
 
 // contract_scan_registry_contract_test.go: the whole-repo contract
@@ -22,16 +22,18 @@ package test
 // a built artifact), an exclusion that names no outside test is stale,
 // the package must hold the tests the check runs, and a micro_check=
 // line must not repeat one. The package sits outside test/ and its
-// import path ends in /test on purpose: the verify-scope engine and the
-// frozen seed run every test/*.go file's tests through the acceptance
-// harness (E2E_RUN), which compiles package test only, and a contract
-// test under test/ would turn a text-reference selection into an
-// E2E_RUN naming a test that package no longer defines; and the full
-// tier's unit command keeps the whole test tree out with its existing
-// grep -v '/test$', which an import path ending in /test stays behind
-// without touching a line.
+// import path does not end in /test on purpose: the verify-scope engine
+// and the frozen seed run every test/*.go file's tests through the
+// acceptance harness (E2E_RUN), which compiles package test only, and a
+// contract test under test/ would turn a text-reference selection into
+// an E2E_RUN naming a test that package no longer defines; and the full
+// tier's unit command — `go test $(go list ./... | grep -v
+// '/test$')`, the one `make test` and the CI full-bar mirror — carries
+// every package whose import path does not end in /test, so the
+// contract tests stay in the full bar exactly as they were, beside
+// the check that runs them in every tier's fast phase.
 //
-// Run (targeted): GOWORK=off go test ./internal/contract/test/ -count=1
+// Run (targeted): GOWORK=off go test ./internal/contracttest/ -count=1
 
 import (
 	"fmt"
@@ -49,14 +51,14 @@ import (
 // in the same change.
 const (
 	contractScanName = "contract-scan"
-	contractScanCmd  = `^GOWORK=off go test \./internal/contract/test/ -count=1$`
+	contractScanCmd  = `^GOWORK=off go test \./internal/contracttest/ -count=1$`
 )
 
 // contractScanPkg is the contract package's repository-relative
 // directory; contractScanOutside is the directory a contract test may
 // leave only through the exclusion register.
 const (
-	contractScanPkg     = `internal/contract/test`
+	contractScanPkg     = `internal/contracttest`
 	contractScanOutside = `test`
 )
 
