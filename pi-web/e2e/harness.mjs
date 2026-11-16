@@ -110,6 +110,31 @@ export function createCheck({
   return check;
 }
 
+/**
+ * `e2eOnlySelection(scenarios, env = process.env)` — the E2E_ONLY switch a
+ * titled suite uses to run only some scenarios
+ * (`E2E_ONLY=<id>[,<id>…] node e2e/<suite>.mjs`, after
+ * polyforge-messages-prompt-281.mjs): `scenarios` maps each scenario id to
+ * its check title. Unset or empty keeps every scenario; an id the table
+ * does not hold throws naming it and the valid ids — a typo fails loudly,
+ * never a silent zero-scenario run.
+ */
+export function e2eOnlySelection(scenarios, env = process.env) {
+  const entries = Object.entries(scenarios);
+  const ids = (env.E2E_ONLY ?? "").split(",").filter(Boolean);
+  const valid = new Set(entries.map(([id]) => id));
+  const unknown = ids.filter((id) => !valid.has(id));
+  if (unknown.length) {
+    throw new Error(`E2E_ONLY names unknown scenario id(s) ${unknown.join(", ")}; this suite's ids are: ${[...valid].join(", ")}`);
+  }
+  const wanted = new Set(ids);
+  const idByTitle = new Map(entries.map(([id, title]) => [title, id]));
+  return {
+    titles: (ids.length ? entries.filter(([id]) => wanted.has(id)) : entries).map(([, title]) => title),
+    skip: (title) => ids.length > 0 && !wanted.has(idByTitle.get(title)),
+  };
+}
+
 // Bounded polls
 
 /**
