@@ -396,7 +396,11 @@ try {
     const id = await createClaudeSession({ message: "E2E 272 phone", model: "claude-opus-5-5" });
     page = await mobileContext.newPage();
     page.setDefaultTimeout(ACTION_MS);
+    try {
     await openSession(id);
+    // polyforge#71 (AC5): the compact control hides while a turn runs, and this
+    // scenario's DOM checks need it present — wait for the creation turn to end.
+    await waitFor(async () => (await getJson(`/api/agent/${encodeURIComponent(id)}`)).state?.isStreaming === false, 60_000, "the creation prompt's turn never ended", 400);
     assert.ok(await moreTrigger().count() > 0, "no More controls button at 390 px");
     assert.ok(await modelTrigger().isVisible(), "the model selector is not visible in the bottom bar before opening More controls at 390 px");
     assert.equal(await triggerText(), "claude-opus-5-5", "the bottom bar's model selector does not show the session's current model");
@@ -437,12 +441,17 @@ try {
     assert.equal(await triggerText(), before.model, "opening and closing the menu changed the session's model");
     assert.equal(launches().length, before.launches, "opening and closing the menu spawned a child");
     await page.close();
-    page = desktopPage;
+    } finally {
+      // A failure above must not leave the next scenarios on the phone viewport:
+      // their desktop clicks would time out one after another.
+      if (page !== desktopPage) await page.close().catch(() => {});
+      page = desktopPage;
+    }
   });
 
   // S272-04 — criterion: a running turn disables the three controls and the server
   // refuses a switch that would apply mid-turn.
-  await scenario("S272-04", "A running turn disables the three controls and the server refuses a mid-turn switch", async () => {
+  await scenario("S272-04", "A running turn disables the model and effort controls, hides compact, and the server refuses a mid-turn switch", async () => {
     const id = await createClaudeSession({ message: "E2E 272 running", model: "claude-opus-5-5" });
     await killChild(id);
     installHoldStub();
@@ -450,10 +459,13 @@ try {
     await waitFor(() => isRunning(id), 30_000, "the hold stub child was not started");
     await sendPrompt("E2E 272 hold turn");
     await waitFor(async () => (await textarea().getAttribute("placeholder").catch(() => ""))?.includes("answering"), 30_000, "the turn never started (no claude answering state)");
-    for (const [name, control] of [["model", modelTrigger()], ["effort", effortTrigger()], ["compact", compactTrigger()]]) {
+    // polyforge#71 (AC5): the compact control hides while a turn runs (pi's
+    // rule); the model and effort controls stay rendered, disabled.
+    for (const [name, control] of [["model", modelTrigger()], ["effort", effortTrigger()]]) {
       assert.ok(await control.count() > 0, `the ${name} control is not rendered while a turn runs`);
       assert.ok(await control.isDisabled(), `the ${name} control is not disabled while a turn runs`);
     }
+    assert.equal(await compactTrigger().count(), 0, "the compact control is not hidden while a turn runs");
     const model = indexRecord(id)?.model;
     const stdinBefore = stdinJson().length;
     for (const command of [{ type: "set_model", model: "claude-haiku-5-5" }, { type: "compact" }]) {
@@ -463,7 +475,8 @@ try {
     assert.equal(stdinJson().length, stdinBefore, "a mid-turn switch reached the child's stdin");
     await bottomBar().locator('button[aria-label="Stop agent"]').first().click({ timeout: ACTION_MS });
     await waitFor(async () => !(await textarea().getAttribute("placeholder").catch(() => ""))?.includes("answering"), 30_000, "Stop did not end the turn");
-    await waitFor(async () => await effortTrigger().isEnabled(), 30_000, "the three controls did not come back when the turn ended");
+    await waitFor(async () => await effortTrigger().isEnabled(), 30_000, "the controls did not come back when the turn ended");
+    assert.ok(await compactTrigger().count() > 0, "the compact control did not come back when the turn ended");
     const launchesAfter = launches().length;
     assert.equal(indexRecord(id)?.model, model, "ending the turn changed the model");
     assert.equal(launches().length, launchesAfter, "ending the turn spawned a child");
@@ -676,6 +689,8 @@ try {
     const id = await createClaudeSession({ message: "E2E 272 compact one", model: "claude-opus-5-5" });
     await openSession(id);
     await waitFor(() => launchesFor(id).length > 0, 30_000, "the claude child was not launched");
+    // polyforge#71 (AC5): the compact control hides while a turn runs.
+    await waitFor(async () => (await getJson(`/api/agent/${encodeURIComponent(id)}`)).state?.isStreaming === false, 60_000, "the creation prompt's turn never ended", 400);
     const launchesBefore = launchesFor(id).length;
     assert.ok(await compactTrigger().count() > 0, "the claude composer has no compact control");
     await compactTrigger().click({ timeout: ACTION_MS });
@@ -689,6 +704,8 @@ try {
   await scenario("S272-14", "A compact_boundary produces one localized result line with only claude's number", async () => {
     const id = await createClaudeSession({ message: "E2E 272 compact result", model: "claude-opus-5-5" });
     await openSession(id);
+    // polyforge#71 (AC5): the compact control hides while a turn runs.
+    await waitFor(async () => (await getJson(`/api/agent/${encodeURIComponent(id)}`)).state?.isStreaming === false, 60_000, "the creation prompt's turn never ended", 400);
     assert.ok(await compactTrigger().count() > 0, "the claude composer has no compact control");
     await compactTrigger().click({ timeout: ACTION_MS });
     const line = await waitFor(async () => {
@@ -714,6 +731,8 @@ try {
   await scenario("S272-15", "Compaction is a guarded turn, Stop works, and a reload shows the marker", async () => {
     const done = await createClaudeSession({ message: "E2E 272 marker before", model: "claude-opus-5-5" });
     await openSession(done);
+    // polyforge#71 (AC5): the compact control hides while a turn runs.
+    await waitFor(async () => (await getJson(`/api/agent/${encodeURIComponent(done)}`)).state?.isStreaming === false, 60_000, "the creation prompt's turn never ended", 400);
     assert.ok(await compactTrigger().count() > 0, "the claude composer has no compact control");
     await compactTrigger().click({ timeout: ACTION_MS });
     await waitFor(() => transcriptLines(done).some((entry) => entry.type === "custom" && entry.customType === "compaction") || transcriptLines(done).some((entry) => entry.subtype === "compact_boundary"), 60_000, "claude's transcript recorded no compaction boundary", 500);
@@ -729,8 +748,10 @@ try {
     assert.ok(await compactTrigger().count() > 0, "the claude composer has no compact control");
     await compactTrigger().click({ timeout: ACTION_MS });
     await waitFor(async () => (await stopCompactTrigger().count()) > 0, 30_000, "compaction never became a running turn with a Stop control");
-    // Amendment 3 (owner-approved, code-272-authored-defects): Send sits in the textarea row, not the bottom bar.
-    assert.ok(await composer().locator('button[aria-label="Send"]').first().isDisabled(), "Send is not disabled while a compaction runs");
+    // Amendment 3 (owner-approved, code-272-authored-defects), rewritten for #71: a
+    // compaction is a running turn, so the composer row holds Steer and Stop — there is
+    // no Send button to disable (the send paths are blocked at their entry instead).
+    assert.equal(await composer().locator('button[aria-label="Send"]').count(), 0, "a Send button is rendered while a compaction runs");
     assert.ok((await page.getByText("E2E 272 stop compact", { exact: false }).count()) > 0, "the history is not visible while the compaction runs");
     await stopCompactTrigger().click({ timeout: ACTION_MS });
     await waitFor(async () => (await stopCompactTrigger().count()) === 0, 30_000, "Stop did not end the compaction turn");
