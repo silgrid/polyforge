@@ -133,11 +133,18 @@ type WatchOverride struct {
 }
 
 // WatchRewinds is the rewind tally: Agent of MaxRewinds (the lane's one
-// rewind budget) spent by the automatic loops, Owner charged to no budget.
+// rewind budget) spent by the automatic loops, Owner charged to no
+// budget, Uncounted of MaxUncountedRewinds — the lane-declared
+// uncounted class's own tally and cap (both 0 when the lane declares
+// no class), shown apart like the ledger classes.
 type WatchRewinds struct {
 	Agent      int64 `json:"agent"`
 	MaxRewinds int   `json:"max_rewinds"`
 	Owner      int64 `json:"owner"`
+	// Uncounted is the lane-declared uncounted class's own count
+	// (polyforge#67: `uncounted_rewinds`); MaxUncountedRewinds its cap.
+	Uncounted           int64 `json:"uncounted"`
+	MaxUncountedRewinds int   `json:"max_uncounted_rewinds"`
 }
 
 // WatchDeclaredStep is one declared workflow step: its id and its gate
