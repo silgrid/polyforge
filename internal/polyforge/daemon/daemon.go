@@ -460,6 +460,11 @@ type Daemon struct {
 	// bounds) behind a mutex; the daemon and the runtime read them at their
 	// use sites, so a reload takes effect without a restart.
 	live *liveconfig.State
+	// liveLimitsFn answers the current supervision defaults (liveLimits,
+	// bound once in New): the single closure the driver's LimitsFunc and
+	// the supervisor's LiveLimits share, read here by tests that assert a
+	// live reload reached the values the next judgement reads.
+	liveLimitsFn func() supervise.Defaults
 	// reloadMu guards the reload BOOKKEEPING (pending/overridden/status),
 	// which GET /status reads. It is only ever held for an in-memory
 	// publish — never across file I/O (AGENTS.md runtime locking).
@@ -699,18 +704,19 @@ func New(cfg Config) (*Daemon, error) {
 		}
 	}
 	d = &Daemon{
-		feed:     feed,
-		cfg:      cfg,
-		hub:      cfg.Hub,
-		live:     live,
-		modes:    NewModeCtl(),
-		q:        NewJobQueue(cfg.MaxConcurrent, func() map[string]bool { return d.occupiedSlots() }),
-		shutDone: make(chan struct{}),
-		obsDone:  make(chan struct{}),
-		ready:    make(chan struct{}),
-		sup:      supervise.NewRegistry(),
-		merges:   newMergeLocks(),
-		verifyQ:  cfg.SharedAdmission,
+		liveLimitsFn: liveLimits,
+		feed:         feed,
+		cfg:          cfg,
+		hub:          cfg.Hub,
+		live:         live,
+		modes:        NewModeCtl(),
+		q:            NewJobQueue(cfg.MaxConcurrent, func() map[string]bool { return d.occupiedSlots() }),
+		shutDone:     make(chan struct{}),
+		obsDone:      make(chan struct{}),
+		ready:        make(chan struct{}),
+		sup:          supervise.NewRegistry(),
+		merges:       newMergeLocks(),
+		verifyQ:      cfg.SharedAdmission,
 		// the Cell's own command_path (a reload moves it)
 		commandPath: cfg.StartupFile.Daemon.CommandPath,
 		pfDir:       selfDir(),

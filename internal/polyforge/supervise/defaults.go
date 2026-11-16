@@ -29,6 +29,12 @@ type Defaults struct {
 	// (workflow contract v2 §5.2; default DefaultAskWarmWindow; [daemon]
 	// ask_warm_window).
 	AskWarmWindow time.Duration
+	// SlowModelMedianLatency and SlowModelP90Latency are the slow-model
+	// judgement's single-call bounds (polyforge#51, [daemon]
+	// slow_model_median_latency / slow_model_p90_latency; zero = the
+	// documented defaults).
+	SlowModelMedianLatency time.Duration
+	SlowModelP90Latency    time.Duration
 }
 
 // DefaultAskWarmWindow is the documented warm window of a step awaiting
@@ -71,6 +77,12 @@ func (d Defaults) Fill() Defaults {
 	}
 	if d.AskWarmWindow <= 0 {
 		d.AskWarmWindow = DefaultAskWarmWindow
+	}
+	if d.SlowModelMedianLatency <= 0 {
+		d.SlowModelMedianLatency = DefaultSlowModelMedianLatency
+	}
+	if d.SlowModelP90Latency <= 0 {
+		d.SlowModelP90Latency = DefaultSlowModelP90Latency
 	}
 	return d
 }

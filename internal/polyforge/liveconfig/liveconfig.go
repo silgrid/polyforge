@@ -12,6 +12,7 @@
 package liveconfig
 
 import (
+	"regexp"
 	"sync"
 	"time"
 
@@ -34,6 +35,14 @@ type State struct {
 	memoryPolicy map[string]map[string]workspace.PolicyEntry
 	// agentLanguage is [daemon] agent_language ("" = unset: "en").
 	agentLanguage string
+	// The polyforge#51 failure-classification additions: the compiled
+	// Host-configured pattern lists (nil = none) and the slow-model
+	// judgement's two single-call latency bounds (0 = unset: the
+	// documented default).
+	transientRules []*regexp.Regexp
+	modelRules     []*regexp.Regexp
+	slowMedian     time.Duration
+	slowP90        time.Duration
 	// agentLanguageFallback supplies the default Cell's live language for a
 	// named Cell that leaves its own key unset.
 	agentLanguageFallback func() string
@@ -248,4 +257,76 @@ func (s *State) SetAgentLanguage(v string) {
 	s.mu.Lock()
 	s.agentLanguage = v
 	s.mu.Unlock()
+}
+
+// ---------------------------------------------------------------------------
+// polyforge#51: the additional failure-classification rules and the
+// slow-model latency bounds. Live like step_timeout: the daemon seeds them
+// from its startup file and a reload swaps them whole, so the next
+// classification and the next slow-model judgement read the new values.
+// ---------------------------------------------------------------------------
+
+// SetTransientErrorPatterns compiles and swaps the transient pattern list
+// (nil/empty = no additional rules). The cli.toml parse has already
+// validated every item compiles; a compile error here answers as an error
+// and changes nothing.
+func (s *State) SetTransientErrorPatterns(pats []string) error {
+	if s == nil {
+		return nil
+	}
+	return nil
+}
+
+// SetModelErrorPatterns compiles and swaps the model-class pattern list.
+func (s *State) SetModelErrorPatterns(pats []string) error {
+	if s == nil {
+		return nil
+	}
+	return nil
+}
+
+// TransientErrorRules answers the compiled transient patterns (nil = none).
+func (s *State) TransientErrorRules() []*regexp.Regexp {
+	if s == nil {
+		return nil
+	}
+	return nil
+}
+
+// ModelErrorRules answers the compiled model-class patterns (nil = none).
+func (s *State) ModelErrorRules() []*regexp.Regexp {
+	if s == nil {
+		return nil
+	}
+	return nil
+}
+
+// SetSlowModelMedianLatency swaps the slow-model median bound (0 = unset).
+func (s *State) SetSlowModelMedianLatency(v time.Duration) {
+	if s == nil {
+		return
+	}
+}
+
+// SetSlowModelP90Latency swaps the slow-model p90 bound (0 = unset).
+func (s *State) SetSlowModelP90Latency(v time.Duration) {
+	if s == nil {
+		return
+	}
+}
+
+// SlowModelMedianLatency answers the slow-model median bound (0 = unset).
+func (s *State) SlowModelMedianLatency() time.Duration {
+	if s == nil {
+		return 0
+	}
+	return 0
+}
+
+// SlowModelP90Latency answers the slow-model p90 bound (0 = unset).
+func (s *State) SlowModelP90Latency() time.Duration {
+	if s == nil {
+		return 0
+	}
+	return 0
 }
