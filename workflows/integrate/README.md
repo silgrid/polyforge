@@ -85,7 +85,14 @@ integration_batch`). What a later step's command needs travels in files, never i
   once on every gated repo's pinned head, inside its verification container, with
   `--mark-green` and `--keep-going` (the gate runs every command, never
   stopping at the first failing one, so one red batch records every failing
-  command and none is left `not_run`), so a pass writes the green tag itself. Nothing gated → result
+  command and none is left `not_run`), so a pass writes the green tag itself.
+  A gated repo needs only `.polyforge/verify-scope.conf` and
+  `.polyforge/Dockerfile.verify`: the scope engine and the gate id each
+  come from the lane when the tree lacks its own, and the image must carry `python3` (≥ 3.9), `git`, `bash` and `sh`
+  beside the repo's own toolchain (a Go repo also `govulncheck`, one with
+  an npm lockfile also `npm`, the container reaching the vulnerability
+  databases — docs/reference/release.md, "The test gate"); which source
+  served is in each repo's result and green tag. Nothing gated → result
   `empty`. Green → `green`. Red → `gate.py --triage` (re-runs, the baseline, attribution,
   bisection); the agent decides one fix ticket per root cause (filed on `develop`, high
   priority, under its stable key, so a resumed batch never files twice) and an attribution
