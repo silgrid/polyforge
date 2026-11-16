@@ -95,11 +95,12 @@ def gate_clone(root: str, conf: str, dockerfile: bool = True, name: str = "app",
     return d
 
 
-def green_clone(root: str, conf: str) -> str:
+def green_clone(root: str, conf: str, engine: bool = True, gate_id: bool = True) -> str:
     """gate_clone with a bare origin it pushed main to (origin.git beside it)."""
+    os.makedirs(root, exist_ok=True)
     origin = os.path.join(root, "origin.git")
     git_t(root, "init", "-q", "--bare", "-b", "main", origin)
-    d = gate_clone(root, conf)
+    d = gate_clone(root, conf, engine=engine, gate_id=gate_id)
     git_t(d, "remote", "add", "origin", origin)
     git_t(d, "push", "-q", "origin", "main")
     return d
