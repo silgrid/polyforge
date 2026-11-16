@@ -183,10 +183,7 @@ func p90Duration(l []time.Duration) time.Duration {
 	}
 	s := append([]time.Duration(nil), l...)
 	sortDurations(s)
-	idx := (len(s)*9 + 9) / 10 // ceil(0.9·n) - 1, in ints
-	if idx >= len(s) {
-		idx = len(s) - 1
-	}
+	idx := (len(s)*9+9)/10 - 1 // nearest rank: ceil(0.9·n) - 1, in ints
 	return s[idx]
 }
 
