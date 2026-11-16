@@ -5,8 +5,8 @@ lines as the lane runs them show every red of one batch at once — a gate
 whose two full commands both fail records both failed with no command
 left not_run, and the triage of such a result reports each command's own
 failed unit. The develop and micro lanes' verification commands carry no
---keep-going (they never stopped at a red to begin with: verify.py and
-run.py run the whole plan). Compared with whitespace folded, as the
+--keep-going (the ticket leaves them as they are: verify.py runs its
+whole plan, run.py stops at its first failing line). Compared with whitespace folded, as the
 lane's other text contracts are."""
 
 import json
@@ -85,7 +85,7 @@ class GateKeepGoingSkillTextTest(unittest.TestCase):
         for path, line in ((VERIFY_SKILL, VERIFY_LINE), (EVIDENCE_SKILL, EVIDENCE_LINE)):
             text = folded(path)
             self.assertIn(line, text)
-            self.assertNotIn("--keep-going", text, "the delivery lanes' verification never stops at a red")
+            self.assertNotIn("--keep-going", text, "the delivery lanes' verification commands stay as they are, without --keep-going")
 
 
 @unittest.skipUnless(HAVE_GIT and HAVE_BASH and HAVE_PY, "git, bash and python3 needed")
