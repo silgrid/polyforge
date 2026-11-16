@@ -64,7 +64,7 @@ test("the list is a responsive grid of discrete blocks with state dot + text, du
   assert.match(source, /gridTemplateColumns: "repeat\(auto-fill, minmax\(150px, 1fr\)\)", gap: 8/, "the Tasks grid keeps its own 150px column minimum (decoupled from the 180px job cards): two blocks side by side at the 460px dock and the 375px sheet, one at the 340px dock");
   assert.doesNotMatch(source, /minmax\(112px, 1fr\)/, "the old 112px Tasks minimum is gone");
   assert.match(source, /import \{ POLYFORGE_BLOCK_STYLE \} from "@\/lib\/panel-layout";/);
-  const row = source.slice(source.indexOf("const renderRow = (row: PolyforgeTaskRow) => {"), source.indexOf("const grid = ("));
+  const row = source.slice(source.indexOf("const renderRow = (row: PolyforgeTaskRow & { cell?: string }) => {"), source.indexOf("const grid = ("));
   assert.match(row, /<button key=\{`\$\{row\.cell \?\? ""\}\/\$\{row\.id\}`\} type="button" data-pf-task=\{row\.id\}[^>]*onClick=\{\(\) => openDetail\(row\.id, row\.cell\)\}/,
     "the whole block is the (keyboard-reachable) click target, keyed by its Cell and id, opening the detail in its own Cell (polyforge#73)");
   assert.match(row, /<span data-pf-task-cell=\{row\.cell\}[^>]*>\{row\.cell\}<\/span>/, "each row names its Cell (polyforge#73)");
@@ -86,7 +86,7 @@ test("the list is a responsive grid of discrete blocks with state dot + text, du
 });
 
 test("the report tail renders as plain text below the summary, clipped to two lines; placeholders are keyed on state", () => {
-  const row = source.slice(source.indexOf("const renderRow = (row: PolyforgeTaskRow) => {"), source.indexOf("const grid = ("));
+  const row = source.slice(source.indexOf("const renderRow = (row: PolyforgeTaskRow & { cell?: string }) => {"), source.indexOf("const grid = ("));
   const summary = row.indexOf("{row.prompt_summary}</span>");
   const tail = row.indexOf('{row.state === "running" ? (');
   assert.ok(summary >= 0 && tail > summary, "the tail line sits directly below the prompt summary");

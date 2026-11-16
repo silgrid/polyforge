@@ -26,12 +26,14 @@ import { taskDecisions, taskNeedsAttention, type PolyforgeDecision } from "@/lib
 import { POLYFORGE_SEARCH_CONTROL_CLASS, PolyforgeRefreshButton, PolyforgeSearchBar } from "./PolyforgeSearchBar";
 
 /**
- * The dock's read-only Tasks surface: every task of the local
- * daemon, listed once, in two sections — 正在运行 (`running`) on top and 全部
- * (the rest) below — with a
- * client-side search over the id, project, state and prompt summary (plus
- * project and state filters over the same rows), and a
- * detail read (`pf task show`) on selection. Reads follow gestures only: one
+ * The dock's read-only Tasks surface: every task of every serving Cell
+ * (polyforge#73 — the list route reads one `pf --profile <cell> --json task
+ * list` per valid, in-service Cell and names each row's Cell; a pre-Cell pf's
+ * fallback rows carry none), listed once, in two sections — 正在运行
+ * (`running`) on top and 全部 (the rest) below — with a
+ * client-side search over the id, project, state, prompt summary and Cell
+ * (plus project and state filters over the same rows), and a
+ * detail read (`pf task show`, pinned to the row's Cell) on selection. Reads follow gestures only: one
  * list read each time the tab is opened (this component mounts), one detail
  * read per selection, plus one list re-read when the status snapshot's task
  * counts change while the tab is open; searching, filtering
@@ -40,6 +42,9 @@ import { POLYFORGE_SEARCH_CONTROL_CLASS, PolyforgeRefreshButton, PolyforgeSearch
  * refresh while the count key holds); moves it into the shared
  * search-bar action slot without changing the read or busy contract. No poll,
  * no storage, and no spawn or cancel control: the tab is a read surface.
+ * A Cell whose list read failed shows its error above the grid while the
+ * rest list (polyforge#73); the top single-Cell annotation is gone — each
+ * row names its own Cell.
  *
  * the list is a responsive grid of discrete blocks (state
  * dot + text, duration, project, a two-line prompt summary). A running
@@ -66,10 +71,13 @@ interface ListResponse {
   pfPresent?: boolean;
   capable?: boolean;
   reason?: string;
-  tasks?: PolyforgeTaskRow[];
+  /** the wire rows: the nine-key passport rows with the route's outer-layer
+   *  `cell` attached (polyforge#73); a fallback (pre-Cell pf) row has none. */
+  tasks?: (PolyforgeTaskRow & { cell?: string })[];
   error?: string;
-  /** the Cell this list is read from. */
-  cell?: string;
+  /** a Cell whose list read failed, with pf's own bounded error
+   *  (polyforge#73): the rest of the list still renders. */
+  cellErrors?: { cell: string; error: string }[];
 }
 
 interface ShowResponse {
@@ -355,7 +363,7 @@ export function PolyforgeTasks({
   const projects = taskProjectOptions(rows);
   const reporters = taskReporterOptions(rows);
   const stateLabel = (state: string) => (TASK_STATE_KEYS.has(state) ? t(`polyforge.tasks.state.${state}`) : state);
-  const renderRow = (row: PolyforgeTaskRow) => {
+  const renderRow = (row: PolyforgeTaskRow & { cell?: string }) => {
     const duration = taskDurationSeconds(row, now);
     // an open entry of the task (failed / capped /
     // interrupted) marks its row; the entry itself is in the detail.
@@ -363,7 +371,7 @@ export function PolyforgeTasks({
     const attention = taskNeedsAttention(rowDecisions);
     const endedAgo = row.state === "running" ? undefined : taskEndedAgo(row, now);
     return (
-      <button key={row.id} type="button" data-pf-task={row.id} onClick={() => openDetail(row.id)}
+      <button key={`${row.cell ?? ""}/${row.id}`} type="button" data-pf-task={row.id} onClick={() => openDetail(row.id, row.cell)}
         style={{
           ...POLYFORGE_BLOCK_STYLE,
           display: "flex", flexDirection: "column", alignItems: "stretch", gap: 4, minWidth: 0, width: "100%",
@@ -372,6 +380,9 @@ export function PolyforgeTasks({
         <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           <span aria-hidden="true" style={stateDotStyle(row.state)} />
           <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>{stateLabel(row.state)}</span>
+          {row.cell && (
+            <span data-pf-task-cell={row.cell} title={row.cell} style={{ flexShrink: 0, maxWidth: 96, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)" }}>{row.cell}</span>
+          )}
           {attention && (
             <span data-pf-task-attention="" title={t("polyforge.tasks.needsAttention")} aria-label={t("polyforge.tasks.needsAttention")}
               style={{ width: 8, height: 8, borderRadius: 4, background: "var(--accent)", flexShrink: 0 }} />
@@ -402,7 +413,7 @@ export function PolyforgeTasks({
   // cards share: two blocks side by side at the 460px dock and
   // the 375px sheet (beside its 40px rail), one at the 340px dock, more as the
   // main area widens, separated by the gap.
-  const grid = (rowsInSection: PolyforgeTaskRow[]) => (
+  const grid = (rowsInSection: (PolyforgeTaskRow & { cell?: string })[]) => (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8, padding: 8, flexShrink: 0 }}>
       {rowsInSection.map(renderRow)}
     </div>
@@ -413,9 +424,6 @@ export function PolyforgeTasks({
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-        {list?.cell && (
-          <div data-pf-tab-cell={list.cell} style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>{t("polyforge.tabCell", { cell: list.cell })}</div>
-        )}
         <PolyforgeSearchBar
           value={search}
           onChange={setSearch}
@@ -453,6 +461,11 @@ export function PolyforgeTasks({
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
         {listError && <div style={{ padding: "8px 12px", color: "#dc2626", fontSize: 12 }}>{listError}</div>}
+        {(list.cellErrors ?? []).map((entry) => (
+          <div key={entry.cell} data-pf-cell-error={entry.cell} style={{ padding: "8px 12px", color: "#dc2626", fontSize: 12 }}>
+            {t("polyforge.tasks.cellError", { cell: entry.cell, error: entry.error })}
+          </div>
+        ))}
         {rows.length === 0 ? (
           // the machine has no task at all — say so, and why.
           notice(t("polyforge.tasks.empty"), t("polyforge.tasks.emptyHint"))
