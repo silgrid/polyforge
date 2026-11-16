@@ -77,7 +77,10 @@ right after adding it (verification's own rules: a red names the unit, its marke
 closest output line — fix the record and re-check).
 
 A defect ticket's first unit is the reproduction test, red on the reported failure before any fix;
-cannot reproduce it → 3a's case (a). A doc-type criterion gets no red test and no unit: commit the
+cannot reproduce it → 3a's case (a). A reproduction test that already exists and is red before
+the change is not rewritten: the unit declares `pre_existing_red` and reports no `test_commit`
+— your skill says how its red evidence is taken (the facts engine replays it on the tree of the
+change's base). A doc-type criterion gets no red test and no unit: commit the
 change, run its validator and name it in its `## Coverage` row.
 
 ## 3c. Close and 3d. Self-review

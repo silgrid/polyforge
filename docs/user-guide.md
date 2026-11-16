@@ -258,7 +258,8 @@ The lane runs build, then review, sync, verification, publish and merge:
   summary states what you decided and how it read your words.
 - **review** judges the change in a fresh context against the five blocking
   classes, on the facts the workflow's `facts.py` computes — each unit's run replayed red
-  at its test commit among them; a FAIL rewinds the run to build.
+  at its test commit (or at the change's base for a unit declared `pre_existing_red`)
+  among them; a FAIL rewinds the run to build.
 - **sync** merges the latest default branch into the branch (`sync.py`); its
   agent resolves a real conflict in place, or asks you when it is not its to
   resolve.

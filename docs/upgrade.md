@@ -164,3 +164,18 @@ unknown and ignores them, and an older facts.py simply skips keys it does
 not read, so a conf may declare them before the release ships; after the
 upgrade the older hardcodes are gone, so a repository that wants the
 behavior declares the key.
+
+## v0.2.1, units already red before the change
+
+`facts.py build --replay` understands a unit whose reproduction test
+already exists and is red before the change (an integration fix ticket:
+the test came with the batch, the fix is the change): the unit declares
+`"pre_existing_red": true` in `artifacts/build/units.json` and reports no
+`test_commit`; the engine replays its recorded run on the tree of the
+change's base (the merge-base with the fetched default branch) — red
+there is the unit's red evidence, which the result records, and a run
+that exited 0 there fails the unit (the test was green before the
+change, so it was not already red; review classes that `test_weakened`).
+Everything else is unchanged: an ordinary unit keeps its test commit and
+the four requirements of the test-first shape, and verification still
+runs every recorded run green on the final tree.

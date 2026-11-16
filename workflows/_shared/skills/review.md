@@ -51,7 +51,12 @@ definition's judgment.
    - `build.json`: a unit that does not resolve, whose `commits` names a test-first problem,
      or whose `replay` is not red (it exited 0 on the tree of its `test_commit`: the test
      passes on the code before its implementation) is blocking `test_weakened`, naming the
-     unit; read every `test_weakened[]` hunk against build's 关键决定和理由. A unit whose
+     unit; read every `test_weakened[]` hunk against build's 关键决定和理由.
+     A unit declared `pre_existing_red` (its reproduction test already exists and is red
+     before the change) carries no `test_commit`: its `replay` runs on the tree of the
+     change's base, and red there is its red evidence — a replay that exited 0 there (the
+     test was green before the change, so it was not already red) is blocking
+     `test_weakened` too. A unit whose
      `replay` carries `not_runnable` has no red evidence: its run could not run on the tree
      of its `test_commit` (a build, setup, compile or import error, a missing module or
      package — `[setup failed]`, `ERR_MODULE_NOT_FOUND` — the matched line and its `rule`

@@ -940,7 +940,11 @@ hold no credential.
   delivered tree: `plan-conformance` (the plan's `## Units` declarations
   against the diff both ways), `build` (each unit resolved, its commit
   pair test-first, its `test_weakened` hunks and, with `--replay`, its run
-  replayed on the tree of its test commit — `--isolation host` on the
+  replayed on the tree of its test commit — a unit declared `pre_existing_red`
+  (its reproduction test already exists and is red before the change, so it
+  reports no `test_commit`) replays on the tree of the change's base: red
+  there is its red evidence, and a run that exited 0 there fails the unit —
+  where it replays: `--isolation host` on the
   host under the step's `PATH`, `--isolation container` in the
   repo's verification container (exit 2 when its HEAD carries no
   `.polyforge/Dockerfile.verify`), neither: the container when HEAD
