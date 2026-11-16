@@ -103,6 +103,13 @@ const LockBarRemovedHint = contract4 + "the bar lock is gone; delete `bar` from 
 // MaxToolMinutes bounds a step's budget.tool_minutes.
 const MaxToolMinutes = 180
 
+// DefaultUncountedRewinds is `uncounted_rewinds.max`'s default: the
+// lane-declared uncounted class's own budget when the lane declares the
+// class without a max. The class's rewinds are cheap (each is another
+// lane's landing), but an ever-moving default branch would loop a work
+// item for ever, so the default asks the owner after two.
+const DefaultUncountedRewinds = 2
+
 // wrapAttrName is the shape of a wrap attr's name (the `pf step hub
 // wrap-attrs` name the daemon's step-call check takes) and of an attrs key
 // a step may write (`hub.attrs`, aihub's own key shape).

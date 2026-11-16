@@ -57,6 +57,11 @@ type Lane struct {
 	// MaxRewinds is the lane-wide automatic rewind budget (0 when the
 	// lane declares no on_fail, which is also when it may not declare one).
 	MaxRewinds int
+	// UncountedRewinds is the lane's `uncounted_rewinds`: the lane-declared
+	// class of gate-FAIL rewinds charged to no budget — a FAIL whose
+	// one-line hand-off reason contains ReasonContains — counted on its
+	// own toward Max (nil when the lane declares none).
+	UncountedRewinds *UncountedRewinds
 	// Exclusive is the lane's `exclusive: true`: the daemon's proxy
 	// forwards a work-item create on the lane exclusive, so aihub refuses
 	// it while another work item of its project on the lane is unfinished.
@@ -67,6 +72,23 @@ type Lane struct {
 	Acceptance string
 	Defaults   *Defaults
 	Steps      []Step
+}
+
+// UncountedRewinds is the lane's declared uncounted rewind class
+// (`uncounted_rewinds`): a gate FAIL whose one-line hand-off reason
+// carries ReasonContains falls in it. Its rewinds are charged to no
+// budget and counted on their own, toward Max.
+type UncountedRewinds struct {
+	// ReasonContains is the substring a gate FAIL's one-line reason
+	// carries when its rewind falls in the class (a stable prefix of the
+	// failing step's script summary; the rest of the line varies).
+	ReasonContains string
+	// Max is the class's own budget: once the class's uncounted rewinds
+	// reach it, a matching FAIL without the owner's word is refused, so
+	// the gate asks the owner first — exactly like a spent max_rewinds.
+	// The loader fills DefaultUncountedRewinds when the lane declares
+	// no max; 0 is a valid budget: every matching FAIL asks the owner.
+	Max int
 }
 
 // Defaults carries the workflow-level fallback model candidates and the
