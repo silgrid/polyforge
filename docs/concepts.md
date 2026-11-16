@@ -851,8 +851,11 @@ setting:
   e2e scenario is a unit, red before its implementation like any other.
   No daemon check judges what `build` reports: it
   runs each unit red then green itself and records it in
-  `artifacts/build/units.json` (`[{id, test_commit, impl_commit, run{repo,
-  cwd, argv}, marker}]`, the run exactly as it ran red and green; the
+  `artifacts/build/units.json` (`[{id, pre_existing_red?, test_commit?, impl_commit,
+  run{repo, cwd, argv}, marker}]`, the run exactly as it ran red and green; a unit
+  whose reproduction test already exists and is red before the change — an
+  integration fix ticket — declares `pre_existing_red: true` and reports no
+  `test_commit`, its red evidence a replay on the tree of the change's base; the
   daemon checks only that the file parses), and the steps after it verify
   it. Review runs three pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way

@@ -25,7 +25,9 @@ what it claims before you build on it or report it.
   implementer's uncommitted work). A task's write set is its units' `(write)` paths: it writes
   nothing else and commits only them (`git add <path>`, never `-A`). Each task returns, per unit,
   `test_commit`, `impl_commit`, the run that went red then green (`repo`, `cwd`, `argv`) with both
-  exit codes, its marker and the files it changed: check both commits are in the repo's history and
+  exit codes, its marker and the files it changed (a unit declared `pre_existing_red` returns no
+  `test_commit` — its reproduction test predates the change and its red evidence is the engine's
+  base replay): check both commits are in the repo's history and
   the diff stays inside the write set before the next unit builds on them; a unit that fails the
   check goes back once, then you build it. You write `artifacts/build/units.json` from what the
   tasks return (a task never writes it).

@@ -47,8 +47,10 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   catches (`workflows/_shared/test_quality.md`)); per unit, a test — a
   unit-level test, or an e2e scenario whose suite declares `carries:` — committed red
   before the implementation that turns it green, both runs the session's own, recorded in
-  `artifacts/build/units.json` (`[{id, test_commit, impl_commit, run{repo, cwd, argv},
-  marker}]`); fast checks plus every new test; a self-review against review's five
+  `artifacts/build/units.json` (`[{id, pre_existing_red?, test_commit?, impl_commit,
+  run{repo, cwd, argv}, marker}]`; a unit whose reproduction test already exists red
+  before the change declares `pre_existing_red: true` and carries no `test_commit`); fast
+  checks plus every new test; a self-review against review's five
   blocking classes (`artifacts/self-review.md`). It asks the owner (`pf step ask`) only
   when the code reveals something the ticket did not decide, when the plan diverges from
   the ticket, when the ticket carries `confirm_plan: true`, or when it has no acceptance
@@ -60,8 +62,9 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
 - **review** (fresh, gate; skill `review`, heavy-run admission, tool window 20 minutes) —
   the shared review (`workflows/_shared/steps/review.md`), on the facts of three
   pre-written lines of the workflow's script `facts.py`: `plan-conformance`, `build
-  --replay --isolation host` (each unit's run replayed on the tree of its test commit, on
-  the host: it must be red) and `carries`. A
+  --replay --isolation host` (each unit's run replayed on the tree of its test commit
+  (or of the change's base for a unit declared `pre_existing_red`, whose red evidence
+  that replay is), on the host: it must be red) and `carries`. A
   blocking finding names one of five classes: `bug`, `ac_gap`, `project_rule`,
   `test_weakened`, `guarantee`; everything else is non-blocking. A unit that misses its
   test-quality record (`workflows/_shared/test_quality.md`), or whose replayed red

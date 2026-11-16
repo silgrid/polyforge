@@ -82,6 +82,15 @@ record exactly what ran.
    the red run also prints, never one a filter that matched no test prints (`ok  ` alone is
    not a marker: `go test -run NoSuchTest` prints it), never one the empty string matches
    (`.*`, `^`, `a*`: verification fails such a unit without running it).
+   A unit whose reproduction test already exists and is red before the change — an
+   integration fix ticket: the test came with the batch, only the fix is this change —
+   is not rewritten: it declares `"pre_existing_red": true` and reports no
+   `test_commit`; its `impl_commit`, `run` and `marker` are the ordinary ones. Run its
+   targeted command yourself on the tree of the change's base (`git worktree add <dir>
+   <the merge-base with origin/HEAD>`, then remove the worktree): red there, green at
+   the head. The facts engine replays its run on the tree of that base and takes its
+   red evidence from there; a run that is green there means the test was not already
+   red — fix the record or the fix.
    A unit is not recorded until the written check has passed it: right after adding it to
    `artifacts/build/units.json`, run
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --check-units artifacts/build/units.json --unit <id> --json --out artifacts/build/units-check.json`

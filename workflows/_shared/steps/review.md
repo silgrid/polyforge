@@ -35,7 +35,8 @@ Then, on every lane:
 **Do not run tests or builds.** This step reads and judges; it never runs the build,
 the test suite (`go test ./...`, `make test`, the full `./test`, `npm test`) or an
 e2e suite — the one exception is the pre-written commands your skill names, which
-compute the facts (the units' red runs replayed at their test commits included).
+compute the facts (the units' red runs replayed at their test commits, or at the
+change's base for a unit declared `pre_existing_red`, included).
 The machine gate is `verification`, the step AFTER you (after `sync`): it runs the bar its
 tier declares on the tree you judged merged with the latest origin default branch, and
 `publish` pushes exactly the head it verified — no step re-runs it. You have no

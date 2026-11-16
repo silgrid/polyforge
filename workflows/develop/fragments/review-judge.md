@@ -36,7 +36,12 @@
    the evidence) and every hunk of `git diff <test_commit>..HEAD -- <its test files>`
    (`test_weakened[]`). A unit whose commits are not test first, or whose replay
    exited 0 — a test that passes on the old code, never red or weakened since — is
-   blocking `test_weakened`. A unit whose `replay` carries `not_runnable` has no red
+   blocking `test_weakened`. A unit declared `pre_existing_red` (its reproduction
+   test already exists and is red before the change) has no `test_commit`: its
+   replay runs on the tree of the change's base, and red there is its red
+   evidence; a replay that exited 0 there (the test was green before the
+   change) is blocking `test_weakened` — the unit has no red evidence. A
+   unit whose `replay` carries `not_runnable` has no red
    evidence (its run could not run there: a build, setup, compile or import error, a
    missing module) — neither red nor a pass: blocking `test_weakened`, naming the unit and
    its `rule`, never made up for by reading the code. So is a deleted or relaxed assertion, a new skip, a

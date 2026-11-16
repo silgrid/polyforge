@@ -48,8 +48,8 @@ shows it passing, judged by its marker under ``--unit-runs``' own rules;
 a listed test that does not exist fails its check naming it. A missing or
 malformed analysis file is the invocation's (exit 2).
 
-``--unit-runs`` names the build's units.json (``[{id, test_commit,
-impl_commit, run{repo, cwd, argv}, marker}]``): every unit's green run is run
+``--unit-runs`` names the build's units.json (``[{id, [pre_existing_red,]
+[test_commit,] impl_commit, run{repo, cwd, argv}, marker}]``): every unit's green run is run
 again as written beside the plan, each its own check
 ``<repo>:unit-run:<id>``. It passes when it exits 0 and one output line
 matches its marker — a Python regular expression (``re.ASCII``, searched in

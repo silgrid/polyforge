@@ -37,7 +37,7 @@ def read_unit_runs(path: str) -> List[UnitRunDecl]:
             raw = f.read()
     except OSError as err:
         raise ValueError(str(err)) from None
-    shape = "a JSON array of {id, test_commit, impl_commit, run{repo, cwd, argv}}"
+    shape = "a JSON array of {id, [pre_existing_red,] [test_commit,] impl_commit, run{repo, cwd, argv}}"
     try:
         doc = json.loads(raw.decode("utf-8", "replace"))
     except ValueError as err:
