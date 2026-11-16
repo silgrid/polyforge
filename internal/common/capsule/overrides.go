@@ -60,6 +60,21 @@ type StepOverride struct {
 	Skip   *bool  `json:"skip,omitempty"`
 	SkipBy string `json:"skip_by,omitempty"`
 	SkipAt string `json:"skip_at,omitempty"`
+	// Params is the step's per-ticket param overrides by param name (nil
+	// = none set), each with its own operator and time (polyforge#78).
+	Params map[string]*ParamOverride `json:"params,omitempty"`
+}
+
+// ParamOverride is one step param's overlay record: the value it sets,
+// with the operator and time of its last change. A clear keeps its
+// operator and time with Cleared set (Value empty) — an empty string is
+// a legal value, so the flag is what tells a clear from a set — and the
+// claim's merge reads that time, so an older value cannot come back.
+type ParamOverride struct {
+	Value   string `json:"value"`
+	By      string `json:"by,omitempty"`
+	At      string `json:"at,omitempty"`
+	Cleared bool   `json:"cleared,omitempty"`
 }
 
 // emptyStepOverrides answers the record's empty shape (a non-nil steps

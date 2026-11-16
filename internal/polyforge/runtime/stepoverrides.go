@@ -75,6 +75,10 @@ type OverrideChange struct {
 	Models      []string // non-nil = set the chain
 	ClearModels bool
 	Skip        *bool // non-nil = set the switch (true/false)
+	// Param (non-nil) sets one declared step param; ClearParam names one
+	// to clear.
+	Param      *protocol.OverrideParam
+	ClearParam string
 	// SealedDir is the sealed scene the route resolved for a work item
 	// held by no job: a clear reads the chain its overlay carries.
 	SealedDir string
@@ -512,6 +516,7 @@ func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.S
 type PendingAspects struct {
 	Models bool
 	Skip   bool
+	Params bool
 }
 
 // MergedStepOverrides answers the overlay the work item's next claim here

@@ -30,6 +30,10 @@ type OverrideStepView struct {
 	Skip   *bool  `json:"skip,omitempty"`
 	SkipBy string `json:"skip_by,omitempty"`
 	SkipAt string `json:"skip_at,omitempty"`
+	// Params is the step's per-ticket param overrides (the overlay layer
+	// only, never the final value), sorted by name; a cleared param is
+	// no override and is not listed.
+	Params []OverrideParamView `json:"params,omitempty"`
 	// Pending marks the aspects as riding the daemon-local pending
 	// record of a work item this daemon no longer holds (its blocked
 	// capsule is sealed read-only and abandoned by the next claim's
@@ -42,6 +46,15 @@ type OverrideStepView struct {
 	// level (e.g. steps.<project>.<step>.models), or "" (no list: the
 	// harness adapter's default model).
 	Source string `json:"source,omitempty"`
+}
+
+// OverrideParamView is one step param's overlay override: the value it
+// sets, with the operator and time of the change.
+type OverrideParamView struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	By    string `json:"by,omitempty"`
+	At    string `json:"at,omitempty"`
 }
 
 // OverrideView is the GET answer: the work item's posture on this daemon
@@ -64,6 +77,17 @@ type OverrideWriteRequest struct {
 	Models      []string `json:"models,omitempty"`
 	ClearModels bool     `json:"clear_models,omitempty"`
 	Skip        *bool    `json:"skip,omitempty"`
+	// Param sets one step param the capsule's lane snapshot declares;
+	// ClearParam names one to clear.
+	Param      *OverrideParam `json:"param,omitempty"`
+	ClearParam string         `json:"clear_param,omitempty"`
+}
+
+// OverrideParam is a param write: the declared name and its value (one
+// line, at most workflow.MaxParamValueBytes bytes; empty is legal).
+type OverrideParam struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // OverrideWriteResult is the POST answer.
