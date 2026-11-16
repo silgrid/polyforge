@@ -1,7 +1,9 @@
 package task
 
 // manager.go: the in-memory task manager (carried from #40).
-// It owns the fixed two-slot limiter (outside the job slots), the spawn
+// It owns the task lane's concurrency bound (the Host's
+// max_concurrent_tasks, DefaultLimit when unset — outside the job
+// slots), the spawn
 // path (live candidate resolution, the project's working directory, a
 // background runner goroutine), candidate rotation inside ONE shared
 // wall/token budget, the four terminal states, truncated-output capture and
@@ -21,8 +23,18 @@ import (
 	"github.com/silgrid/polyforge/internal/common/harness"
 )
 
-// ErrLimit is the refusal of a spawn beyond the fixed concurrency limit.
-var ErrLimit = fmt.Errorf("task spawn refused: %d tasks already running (the limit is %d per daemon; nothing is queued)", DefaultLimit, DefaultLimit)
+// ErrLimit is the sentinel of a spawn refused at the task lane's
+// concurrency bound: every refusal wraps it (errLimit), so
+// errors.Is(err, ErrLimit) keeps holding — the daemon maps it to 409.
+var ErrLimit = errors.New("nothing is queued")
+
+// errLimit answers the typed refusal at the bound: it names the running
+// count, the configured key and its current value, keeps `limit` and
+// `nothing is queued` (the words the daemon's clients and mocks match),
+// and wraps the sentinel.
+func errLimit(running, max int) error {
+	return fmt.Errorf("task spawn refused: %d tasks already running (the limit is %d, max_concurrent_tasks on this Host): %w", running, max, ErrLimit)
+}
 
 // ErrNotFound / ErrNotRunning are Show/Cancel's typed answers.
 var (
@@ -43,12 +55,12 @@ type Config struct {
 	OnTerminal func(Task)
 	Now        func() time.Time
 	// Slots is the bound several managers share (the Host's one
-	// background-model-call bound over all its Cells); nil = this
-	// manager's own Limit only.
+	// max_concurrent_tasks bound over all its Cells); nil = this
+	// manager's own check reads the default only.
 	Slots *Slots
-	// Admit (optional) reserves one execution slot for a spawn — the
-	// Host's two-level ceiling counts one-off tasks with work-item jobs —
-	// or refuses it; Done returns the reservation when the task ends.
+	// Admit (optional) is a spawn-time refusal seam outside the bound
+	// (the daemon's execution-plane and connection-rotation checks)
+	// or nil; Done returns the reservation when the task ends.
 	// Both are called with no manager lock held.
 	Admit func() error
 	Done  func()
@@ -57,18 +69,41 @@ type Config struct {
 // Slots is the Host's one shared concurrency bound of the task lane
 // (max_concurrent_tasks; DefaultLimit when unset or 0), adjustable live.
 type Slots struct {
-	mu sync.Mutex
-	n  int
+	mu  sync.Mutex
+	n   int
+	max int // 0 = DefaultLimit
 }
 
 // SetMax changes the bound (n <= 0 restores the default). Running work
 // is never stopped: a lowered bound refuses only new spawns.
 func (s *Slots) SetMax(n int) {
+	if s == nil {
+		return
+	}
+	if n < 0 {
+		n = 0
+	}
+	s.mu.Lock()
+	s.max = n
+	s.mu.Unlock()
 }
 
-// Max answers the current bound.
+// Max answers the current bound (DefaultLimit for a nil or unset Slots).
 func (s *Slots) Max() int {
-	return 0
+	if s == nil {
+		return DefaultLimit
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.limitLocked()
+}
+
+// limitLocked answers the bound; s.mu held.
+func (s *Slots) limitLocked() int {
+	if s.max <= 0 {
+		return DefaultLimit
+	}
+	return s.max
 }
 
 func (s *Slots) acquire() bool {
@@ -77,7 +112,7 @@ func (s *Slots) acquire() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.n >= DefaultLimit {
+	if s.n >= s.limitLocked() {
 		return false
 	}
 	s.n++
@@ -188,10 +223,11 @@ func (m *Manager) Spawn(spec Spec) (Task, error) {
 		}
 	}
 	m.mu.Lock()
-	if m.running >= DefaultLimit || !m.cfg.Slots.acquire() {
+	if m.running >= m.limit() || !m.cfg.Slots.acquire() {
+		own := m.running
 		m.mu.Unlock()
 		m.done()
-		return Task{}, ErrLimit
+		return Task{}, m.refuseLimit(own)
 	}
 	m.running++
 	m.mu.Unlock()
@@ -220,6 +256,25 @@ func (m *Manager) Spawn(spec Spec) (Task, error) {
 		m.run(ctx, e, dir)
 	}()
 	return t.Clone(), nil
+}
+
+// limit answers the concurrency bound this manager's own check reads:
+// the shared bound when one is wired, else the default (the Host's
+// reload sets the shared Slots; without one there is nothing to set).
+func (m *Manager) limit() int {
+	return m.cfg.Slots.Max()
+}
+
+// refuseLimit answers the spawn refusal at the bound: the running count
+// (own when no shared Slots is wired, else the Host-wide count it read)
+// and the bound's current value come from the same source the check
+// read, never a second copy.
+func (m *Manager) refuseLimit(own int) error {
+	running := own
+	if s := m.cfg.Slots; s != nil {
+		running = s.Running()
+	}
+	return errLimit(running, m.limit())
 }
 
 // done returns an Admit reservation.
@@ -484,7 +539,7 @@ type Summary struct {
 // Summarize counts the known tasks by state (a store failure counts only
 // this daemon's live tasks).
 func (m *Manager) Summarize() Summary {
-	s := Summary{Limit: DefaultLimit}
+	s := Summary{Limit: m.limit()}
 	all, _ := m.List()
 	for _, t := range all {
 		switch t.State {
