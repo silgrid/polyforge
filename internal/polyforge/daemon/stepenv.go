@@ -55,9 +55,15 @@ func (d *Daemon) configFile() string {
 // read: cellcfg.DeployEnvFileName under the Host configuration directory
 // (the directory of the Cell file this daemon loaded, the documented
 // default's when it stated none) — deploy.env for the default Cell,
-// deploy-<profile>.env for a named one, always an absolute path.
+// deploy-<profile>.env for a named one. The answer is absolute even when
+// the loaded config file was named relatively (filepath.Abs); a path that
+// cannot be made absolute keeps the joined spelling.
 func (d *Daemon) deployEnvPath() string {
-	return filepath.Join(filepath.Dir(d.configFile()), cellcfg.DeployEnvFileName(d.profile()))
+	joined := filepath.Join(filepath.Dir(d.configFile()), cellcfg.DeployEnvFileName(d.profile()))
+	if abs, err := filepath.Abs(joined); err == nil {
+		return abs
+	}
+	return joined
 }
 
 // selfDir answers the directory of this process's executable, symlinks
