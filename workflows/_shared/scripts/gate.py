@@ -116,6 +116,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pfstep  # noqa: E402
 from pfstep import container, duration, git, gostr, hub, jsonout, proc, result, runner, stepenv  # noqa: E402
+from pfstep import integration as rules  # noqa: E402
 from pfstep import progress as step_progress  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
@@ -1368,24 +1369,6 @@ def bisect(base: str, commits: Sequence[str], fails: Callable[[str], bool]) -> i
     return hi
 
 
-def merge_commits_of(integration: Mapping[str, Any]) -> Dict[str, List[str]]:
-    """A hand-off's merge_commits (repo -> its merges, oldest first); any
-    other shape names none."""
-    mc = integration.get("merge_commits")
-    out: Dict[str, List[str]] = {}
-    if not isinstance(mc, dict):
-        return out
-    for repo, cs in mc.items():
-        if not isinstance(cs, list):
-            return {}
-        for c in cs:
-            if not isinstance(c, str):
-                return {}
-            if repo and c:
-                out.setdefault(repo, []).append(c)
-    return out
-
-
 def strings_of(v: Any) -> List[str]:
     return [s for s in v if isinstance(s, str) and s] if isinstance(v, list) else []
 
@@ -1500,7 +1483,7 @@ def changes_in(g: Git, sess: SessionLike, repo: str, directory: str, window: Seq
         integ = integration_of(it)
         if integ.get("state") != "landed":
             continue
-        for c in merge_commits_of(integ).get(repo, []):
+        for c in rules.merge_commits_of(integ).get(repo, []):
             if c not in pos:
                 continue
             ch = Change(item=str(it.get("id") or ""), slug=str(it.get("slug") or ""), repo=repo, merge=c,

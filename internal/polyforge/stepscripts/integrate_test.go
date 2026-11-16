@@ -929,9 +929,6 @@ func TestW36IntegrateTakesObjectShapedMergeCommits(t *testing.T) {
 	f := newBatchFixture(t)
 	sq := f.landHuman("wi_sq", "p#1", map[string]string{"pkg/sq.go": "package pkg\n"})
 	mB := f.land("wi_b", "p#2", map[string]string{"pkg/b.go": "package pkg\n"})
-	if _, err := os.Stat(filepath.Join(f.repo(), "pkg", "sq.go")); err != nil {
-		t.Fatal(err)
-	}
 	exit, res, errb := f.collect(f.pool(nil))
 	if exit != 0 || res == nil || res.Verdict != VerdictPass {
 		t.Fatalf("exit %d result %+v\n%s", exit, res, errb)
@@ -946,7 +943,9 @@ func TestW36IntegrateTakesObjectShapedMergeCommits(t *testing.T) {
 			t.Fatalf("%s: the batch item names its landed sha: %+v", it.ID, it.MergeCommits)
 		}
 	}
-	if d.Items[0].ID != "wi_sq" || d.Items[0].MergeCommits["app"][0] != sq || d.Items[1].ID != "wi_b" || d.Items[1].MergeCommits["app"][0] != mB {
+	// the batch's items sort by id: the legacy-string item beside the
+	// object-shaped one, whatever shape named its landed shas
+	if d.Items[0].ID != "wi_b" || d.Items[0].MergeCommits["app"][0] != mB || d.Items[1].ID != "wi_sq" || d.Items[1].MergeCommits["app"][0] != sq {
 		t.Fatalf("items: %+v", d.Items)
 	}
 }

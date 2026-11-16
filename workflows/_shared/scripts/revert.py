@@ -324,12 +324,13 @@ def _strs(v: Any, key: str) -> List[str]:
 
 
 def _commits(v: Any, key: str) -> Dict[str, List[str]]:
+    # the record's merge_commits name each landed commit with its merge
+    # flag since polyforge#36 (a bare string before it): the rules
+    # module's decode reads both shapes and answers the shas
     m = _get(v, key, dict) or {}
-    out: Dict[str, List[str]] = {}
-    for repo, cs in m.items():
-        if cs is not None and (not isinstance(cs, list) or any(not isinstance(c, str) for c in cs)):
-            raise _Bad("json: cannot unmarshal %s into the field %s" % (type(cs).__name__, key))
-        out[repo] = list(cs or [])
+    out = rules.merge_commits_of({key: m})
+    if out == {} and any(cs for cs in m.values() if isinstance(cs, list)):
+        raise _Bad("json: cannot unmarshal the field %s" % key)
     return out
 
 
